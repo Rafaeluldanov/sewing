@@ -730,6 +730,71 @@ export class OrderRouteAlreadyStartedException extends BusinessException {
 }
 
 // ---------------------------------------------------------------------------
+// Tech cards (MVP, ADR-0022)
+// ---------------------------------------------------------------------------
+
+/**
+ * Шаблон техкарты не найден — отдаётся `/admin/tech-cards/:id`,
+ * `OrdersService` (при выборе несуществующего `techCardId`),
+ * админскими PATCH/DELETE.
+ */
+export class TechCardNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'TECH_CARD_NOT_FOUND',
+      'Техкарта не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Дубликат `TechCardTemplate.code`. Уникальность гарантирована БД, но
+ * перехватываем P2002 в `TechCardsService` и отдаём бизнес-ошибку с
+ * понятным текстом — UI подсветит поле «Код».
+ */
+export class TechCardCodeTakenException extends BusinessException {
+  constructor() {
+    super(
+      'TECH_CARD_CODE_TAKEN',
+      'Техкарта с таким кодом уже существует',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Менеджер пытается выбрать неактивную техкарту при создании/обновлении
+ * заказа. На MVP это soft-error на API-уровне (UI не показывает
+ * неактивные в селекте), но мы блокируем явный bypass через прямой
+ * POST/PATCH с произвольным `techCardId`.
+ */
+export class TechCardInactiveException extends BusinessException {
+  constructor() {
+    super(
+      'TECH_CARD_INACTIVE',
+      'Техкарта деактивирована — выбрать её нельзя.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * `techCardId` уже зафиксирован в snapshot-ах (`materialRequirements` /
+ * `outsourceRequirements`): заказ запущен, техкарта «застыла», менять
+ * привязку нельзя. Аналог `OrderRouteAlreadyStartedException`.
+ */
+export class OrderTechCardAlreadyStartedException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_TECH_CARD_ALREADY_STARTED',
+      'У заказа уже зафиксирован snapshot техкарты — переназначить шаблон нельзя.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Auth (MVP 1.1, ADR-0014)
 // ---------------------------------------------------------------------------
 

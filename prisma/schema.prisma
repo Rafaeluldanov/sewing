@@ -490,15 +490,26 @@ model Order {
   routeTemplateId String?
   routeTemplate   RouteTemplate? @relation(fields: [routeTemplateId], references: [id])
 
-  items           OrderItem[]
-  passports       Passport[]
-  closureRequests CuttingClosureRequest[]
-  routeSteps      OrderRouteStep[]
+  /// Tech-card MVP (см. `TechCardTemplate` ниже и `docs/domain.md
+  /// §«Техкарты»`, ADR-0022). Опциональная ссылка на шаблон техкарты,
+  /// который фиксируется snapshot-ами `OrderMaterialRequirement[]` и
+  /// `OrderOutsourceRequirement[]` при `OrdersService.start()`.
+  /// Параллельная ось маршруту: техкарта и маршрут независимы.
+  techCardId String?
+  techCard   TechCardTemplate? @relation(fields: [techCardId], references: [id])
+
+  items                 OrderItem[]
+  passports             Passport[]
+  closureRequests       CuttingClosureRequest[]
+  routeSteps            OrderRouteStep[]
+  materialRequirements  OrderMaterialRequirement[]
+  outsourceRequirements OrderOutsourceRequirement[]
 
   @@index([status])
   @@index([orderDate])
   @@index([createdAt])
   @@index([routeTemplateId])
+  @@index([techCardId])
 }
 
 model OrderItem {
@@ -1117,4 +1128,148 @@ model OrderRouteStep {
   @@unique([orderId, index])
   @@index([orderId])
   @@index([operationId])
+}
+
+// ---------------------------------------------------------------------------
+// Tech cards (MVP, ADR-0022)
+//
+// «Техкарта» (TechCardTemplate) = справочный шаблон потребностей на одно
+// изделие: список материалов и список внешних подрядных размещений
+// (OUTSOURCED_SERVICE). Это управленческий справочник, аналогичный
+// `RouteTemplate`, но независимый от маршрута:
+//   - менеджер заводит техкарты в `/admin/tech-cards`;
+//   - при создании заказа можно опционально привязать `techCardId`;
+//   - при `OrdersService.start()` строки фиксируются в snapshot-ы
+//     `OrderMaterialRequirement[]` и `OrderOutsourceRequirement[]`
+//     (поздняя правка шаблона не меняет уже запущенные заказы);
+//   - никакого enforcement, никаких формул, никаких размеров —
+//     `totalQty = qtyPerUnit * Σ qtyPlan` по строкам заказа.
+//
+// См. `docs/domain.md §«Техкарты»`, `docs/erd.md §«Tech cards»`, ADR-0022.
+// ---------------------------------------------------------------------------
+
+model TechCardTemplate {
+  id        String   @id @default(cuid())
+  /// Человекочитаемый код техкарты (например, "TSHIRT-MAT"). Уникален
+  /// глобально — это управленческий идентификатор, как `RouteTemplate.code`.
+  code      String   @unique
+  name      String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  materialLines  TechCardMaterialLine[]
+  outsourceLines TechCardOutsourceLine[]
+  orders         Order[]
+
+  @@index([isActive])
+}
+
+/// Строка материала в шаблоне техкарты. На MVP — простая линейная
+/// норма «qtyPerUnit на 1 единицу изделия»; никаких формул или
+/// зависимостей от размеров (см. ADR-0022).
+model TechCardMaterialLine {
+  id         String   @id @default(cuid())
+  techCardId String
+  /// Порядок отображения. Backend нормализует как `(i + 1) * 10` при
+  /// записи (см. `TechCardsService.replaceMaterialLines`).
+  sortOrder  Int
+  /// Свободное человекочитаемое имя материала (на MVP без справочника).
+  name       String
+  /// Единица измерения (м, шт, г, и т.п.). Свободная строка.
+  unit       String
+  /// Норма расхода на одну единицу изделия. Положительное число,
+  /// валидируется в DTO/сервисе (без БД-check).
+  qtyPerUnit Decimal  @db.Decimal(12, 4)
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  techCard          TechCardTemplate           @relation(fields: [techCardId], references: [id], onDelete: Cascade)
+  orderRequirements OrderMaterialRequirement[]
+
+  @@index([techCardId, sortOrder])
+}
+
+/// Строка внешнего подрядного размещения (OUTSOURCED_SERVICE) в шаблоне
+/// техкарты. Сознательно НЕ моделируется как операция и НЕ как материал —
+/// это отдельная управленческая ось (см. ADR-0022).
+model TechCardOutsourceLine {
+  id         String   @id @default(cuid())
+  techCardId String
+  sortOrder  Int
+  /// Свободное человекочитаемое описание услуги/размещения.
+  name       String
+  /// Единица измерения опциональна: иногда подряд считается «за партию»
+  /// без явной нормы.
+  unit       String?
+  /// Норма на одну единицу изделия. Если не задана — totalQty в snapshot
+  /// тоже остаётся null (см. `OrdersService.start`).
+  qtyPerUnit Decimal? @db.Decimal(12, 4)
+  /// Опциональный подрядчик (на MVP — свободная строка, без справочника
+  /// vendor-ов; см. ADR-0022 §«vendor directory postponed»).
+  vendorName String?
+  note       String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  techCard          TechCardTemplate            @relation(fields: [techCardId], references: [id], onDelete: Cascade)
+  orderRequirements OrderOutsourceRequirement[]
+
+  @@index([techCardId, sortOrder])
+}
+
+/// Snapshot строки материала на конкретном заказе. Создаётся в
+/// `OrdersService.start()` из текущих `TechCardMaterialLine` шаблона.
+/// После snapshot-а заказ живёт независимо от того, что менеджер
+/// сделает с шаблоном (правка строк / деактивация / удаление строки):
+/// `sourceTechCardLineId` имеет `onDelete: SetNull`, поэтому snapshot
+/// никогда не удаляется вместе с источником.
+model OrderMaterialRequirement {
+  id                   String   @id @default(cuid())
+  orderId              String
+  /// Ссылка на исходную строку шаблона (для аудита). Nullable: если
+  /// строку шаблона потом удалили, snapshot заказа продолжает жить с
+  /// `null`-ом тут (см. ADR-0022 §«snapshot independence»).
+  sourceTechCardLineId String?
+  sortOrder            Int
+  name                 String
+  unit                 String
+  /// Норма на единицу изделия — копия `TechCardMaterialLine.qtyPerUnit`
+  /// в момент snapshot-а.
+  qtyPerUnit           Decimal  @db.Decimal(12, 4)
+  /// Полная потребность по заказу: `qtyPerUnit * Σ OrderItem.qtyPlan`.
+  totalQty             Decimal  @db.Decimal(12, 4)
+  note                 String?
+  createdAt            DateTime @default(now())
+
+  order              Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sourceTechCardLine TechCardMaterialLine? @relation(fields: [sourceTechCardLineId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, sortOrder])
+  @@index([sourceTechCardLineId])
+}
+
+/// Snapshot строки внешнего подрядного размещения на конкретном заказе.
+/// Создаётся в `OrdersService.start()` из `TechCardOutsourceLine` шаблона.
+/// `qtyPerUnit`/`totalQty` могут быть `null` — это нормально для подряда,
+/// который считается «за партию» без явной нормы.
+model OrderOutsourceRequirement {
+  id                   String   @id @default(cuid())
+  orderId              String
+  sourceTechCardLineId String?
+  sortOrder            Int
+  name                 String
+  unit                 String?
+  qtyPerUnit           Decimal? @db.Decimal(12, 4)
+  totalQty             Decimal? @db.Decimal(12, 4)
+  vendorName           String?
+  note                 String?
+  createdAt            DateTime @default(now())
+
+  order              Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  sourceTechCardLine TechCardOutsourceLine? @relation(fields: [sourceTechCardLineId], references: [id], onDelete: SetNull)
+
+  @@index([orderId, sortOrder])
+  @@index([sourceTechCardLineId])
 }

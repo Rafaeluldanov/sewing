@@ -4,6 +4,7 @@ import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
 import type { ProductDto, SizeDto } from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
+import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { createOrderAction, type FormActionState } from '../actions';
 
 interface Props {
@@ -16,6 +17,12 @@ interface Props {
    * (полный backward-compatibility со старым flow).
    */
   routeTemplates: RouteTemplateSummaryDto[];
+  /**
+   * Активные шаблоны техкарт (см. `docs/domain.md §«Техкарты»`,
+   * ADR-0022). Список может быть пустым — тогда select скрыт и заказ
+   * создаётся без snapshot материалов/внешних потребностей.
+   */
+  techCards: TechCardTemplateSummaryDto[];
   today: string;
 }
 
@@ -30,7 +37,13 @@ function SubmitButton() {
   );
 }
 
-export function NewOrderForm({ sizes, products, routeTemplates, today }: Props) {
+export function NewOrderForm({
+  sizes,
+  products,
+  routeTemplates,
+  techCards,
+  today,
+}: Props) {
   const [state, formAction] = useFormState(createOrderAction, initialState);
   const [productId, setProductId] = useState(products[0]?.id ?? '');
 
@@ -122,6 +135,28 @@ export function NewOrderForm({ sizes, products, routeTemplates, today }: Props) 
               заказа в производство — UI на /work будет подсказывать швее
               текущий и следующий шаг. Это «мягкий» маршрут: scan «не туда»
               не блокируется.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {techCards.length > 0 && (
+        <div className="form-row">
+          <label htmlFor="techCardId">Техкарта</label>
+          <div>
+            <select id="techCardId" name="techCardId" defaultValue="">
+              <option value="">— без техкарты —</option>
+              {techCards.map((tc) => (
+                <option key={tc.id} value={tc.id}>
+                  {tc.name} ({tc.code})
+                </option>
+              ))}
+            </select>
+            <div className="hint">
+              Опционально. Строки материалов и внешних подрядных размещений
+              зафиксируются snapshot-ом при запуске заказа в производство —
+              план потребностей на карточке заказа станет read-only и
+              перестанет зависеть от поздних правок шаблона.
             </div>
           </div>
         </div>

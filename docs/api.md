@@ -569,6 +569,14 @@ ADR-0021):
   привязку можно `PATCH /api/orders/:id` ровно до запуска и пока
   snapshot не создан; в `PATCH` поле принимает `string | null`
   (передача `null` снимает привязку).
+- `techCardId` — опционально, **MVP техкарт** (см. §18 ниже и
+  `docs/domain.md §19`, ADR-0022). Ссылается на активный
+  `TechCardTemplate`. При `POST /api/orders/:id/start` строки
+  техкарты копируются snapshot-ом в `OrderMaterialRequirement[]` и
+  `OrderOutsourceRequirement[]` (`totalQty = qtyPerUnit *
+  Σ OrderItem.qtyPlan`). В `PATCH` принимается `string | null`,
+  правки разрешены только пока snapshot не создан (т.е. пока
+  `DRAFT`).
 
 Сервер автогенерирует `number = O-YYYYMMDD-NNNN`. Заказ создаётся в статусе
 `DRAFT`.
@@ -627,6 +635,26 @@ ADR-0021):
 - `routeSteps: OrderRouteStepDto[]` — snapshot маршрута (заполняется в
   `start()`; до запуска / без шаблона — пустой массив). Каждый
   шаг — `{ id, index, operationId, operationCode, operationName }`.
+  **Сортировка строго по `index ASC`** — это контракт для UI карточки
+  заказа (`/orders/[id]`, см. `docs/screens.md §7.3`), который рендерит
+  read-only список шагов из этого snapshot. Источник истины — именно
+  `OrderRouteStep`, а **не** живой `RouteTemplate`: после запуска
+  заказа правка шаблона на карточку не влияет.
+- `techCardId`, `techCardCode`, `techCardName` — `null` для заказов
+  без техкарты.
+- `materialRequirements: OrderMaterialRequirementDto[]` — snapshot
+  потребностей материалов, отсортирован `sortOrder ASC`. Поля:
+  `{ id, sortOrder, name, unit, qtyPerUnit, totalQty, note }`. До
+  `start()` / без техкарты — пустой массив.
+- `outsourceRequirements: OrderOutsourceRequirementDto[]` — snapshot
+  внешних потребностей, отсортирован `sortOrder ASC`. Поля:
+  `{ id, sortOrder, name, unit?, qtyPerUnit?, totalQty?, vendorName?,
+  note? }`.
+
+> Источник истины для блоков «Материалы» и «Внешние потребности» на
+> `/orders/[id]` — именно snapshot заказа. Карточка **не** ходит за
+> live-шаблоном. Правка шаблона техкарты после `start()` на старые
+> заказы не влияет (см. ADR-0022, §«Edit-after-start»).
 
 На **Шаге 4** поля факта в `summary` / `sizeBreakdown` возвращаются как
 нули — будут заполняться с появлением паспортов (Шаг 5+). Структура DTO
@@ -648,6 +676,9 @@ ADR-0021):
 | `ROUTE_TEMPLATE_NOT_FOUND`   | 400  | `routeTemplateId` указывает на несуществующий шаблон    |
 | `ROUTE_TEMPLATE_INACTIVE`    | 400  | шаблон существует, но `isActive = false`                |
 | `ORDER_ROUTE_ALREADY_STARTED` | 409 | попытка сменить `routeTemplateId` после `start()` (snapshot уже есть) |
+| `TECH_CARD_NOT_FOUND`        | 400  | `techCardId` указывает на несуществующий шаблон         |
+| `TECH_CARD_INACTIVE`         | 400  | шаблон техкарты существует, но `isActive = false`       |
+| `ORDER_TECH_CARD_ALREADY_STARTED` | 409 | попытка сменить `techCardId` после `start()` (snapshot уже есть) |
 
 ---
 
@@ -794,6 +825,13 @@ ADR-0021):
 Ответ — `PassportDetailDto` (тот же, что `GET /api/passports/:id`).
 Ошибка: 404 `PASSPORT_NOT_FOUND`.
 
+Soft-route MVP (STEP 8 ТЗ, см. §17 ниже): для `by-code` backend
+дополнительно подтягивает активную смену сотрудника (`@CurrentUser`)
+и заполняет в ответе `routeHint.routeMismatchWithActiveShift` /
+`activeShiftOperation*`. Это используется модалкой проверки паспорта
+на `/work` для read-only warning. Никаких 409 за «не туда сканировал»
+— hint остаётся подсказкой.
+
 ### Ответ `GET /api/passports/:id`
 
 ```json
@@ -816,9 +854,49 @@ ADR-0021):
   "productId": "clx...", "productName": "Футболка белая",
   "cutterId": "clx...", "cutterName": "Демо Раскройщик",
   "creatorId": "clx...", "creatorName": "Демо Помощник раскройщика",
-  "currentCell": { "id": "clx...", "code": "A1" }
+  "currentCell": { "id": "clx...", "code": "A1" },
+  "currentRouteStepIndex": 0,
+  "routeHint": {
+    "currentRouteStep": {
+      "index": 0,
+      "operationId": "clx...",
+      "operationCode": "SEW_OVERLOCK_1",
+      "operationName": "Оверлок 1"
+    },
+    "nextRouteStep": {
+      "index": 1,
+      "operationId": "clx...",
+      "operationCode": "QC",
+      "operationName": "ОТК"
+    },
+    "expectedOperationId": "clx...",
+    "expectedOperationName": "Оверлок 1",
+    "activeShiftOperationId": null,
+    "activeShiftOperationName": null,
+    "routeMismatchWithActiveShift": false
+  }
 }
 ```
+
+Поле `routeHint` (soft-route MVP, STEP 8 ТЗ — см. §17):
+
+- `null`, если у заказа нет snapshot маршрута (`OrderRouteStep` пуст);
+- `currentRouteStep` — текущий шаг (по `Passport.currentRouteStepIndex`),
+  `null`, если у паспорта `currentRouteStepIndex = null` либо индекс
+  вне snapshot;
+- `nextRouteStep` — `step[currentRouteStepIndex + 1]` или `step[0]`,
+  если `currentRouteStepIndex = null`; `null` после последнего шага;
+- `expectedOperation*` — то же, что `currentRouteStep.operation`
+  (единая конвенция MVP, см. `docs/screens.md §10e`);
+- `activeShiftOperation*` — операция активной смены сотрудника, если
+  она открыта, иначе `null`. Заполняется только теми эндпоинтами, где
+  сервер знает «от чьего имени» строится hint (например,
+  `POST /api/passports/by-code`); в `GET /api/passports/:id` остаётся
+  `null`;
+- `routeMismatchWithActiveShift` — `true` тогда и только тогда, когда
+  есть и `expectedOperationId`, и `activeShiftOperationId`, и они
+  отличаются. Backend никогда не использует это поле для блокировок —
+  только для UI-подсказки (см. §17 «No enforcement on MVP»).
 
 ### Ответ `GET /api/orders/:id/passports`
 
@@ -2745,3 +2823,194 @@ FORBIDDEN_ROLE`.
 `POST /api/orders/:id/start` создаёт snapshot `OrderRouteStep[]`.
 После `start()` менять `routeTemplateId` нельзя:
 `ORDER_ROUTE_ALREADY_STARTED` (409).
+
+### Soft-route hint в DTO паспорта (STEP 8 ТЗ MVP)
+
+`PassportDetailDto.routeHint` — read-only подсказка для UI на `/work`
+(модалка `PassportConfirmModal` и блок «Сейчас в работе»). Полная схема
+поля — в §5 «Ответ `GET /api/passports/:id`». Ключевые свойства:
+
+- источник истины — `OrderRouteStep` snapshot заказа, **не**
+  `RouteTemplate` (snapshot самодостаточен и переживает удаление
+  шаблона);
+- `currentRouteStep` берётся по `Passport.currentRouteStepIndex`;
+- `nextRouteStep` = `step[currentRouteStepIndex + 1]` (или `step[0]`,
+  если индекс ещё `null`);
+- единая конвенция MVP: `expectedOperation = currentRouteStep.operation`
+  (та же, что в `current-work-card.tsx` — см. `docs/screens.md §10e`);
+- `routeMismatchWithActiveShift` populated только теми эндпоинтами,
+  где сервер знает «от чьего имени» строит hint:
+  - `POST /api/passports/by-code` — да (берёт активную смену
+    `@CurrentUser`);
+  - `GET /api/passports/:id` — нет (mismatch=false, активная смена не
+    подтягивается).
+
+**No enforcement on MVP.** Backend никогда не возвращает 409 за «не туда
+сканировал» и не использует `routeHint` для бизнес-логики
+`scanOnOperation` / `issueToEmployee` / `completeOperationByEmployee`.
+Hint существует исключительно ради UI-подсказки оператору.
+
+## §18. Техкарты (`/api/tech-cards`)
+
+> Реализовано вместе с MVP техкарт (см. `docs/domain.md §19`,
+> ADR-0022, `apps/api/src/modules/tech-cards`). Контракт повторяет
+> «soft-route» pattern: каталог шаблонов + опциональная привязка к
+> заказу + snapshot потребностей при `OrdersService.start()`.
+
+| Метод  | Путь                       | Роли                | Описание                                                                  |
+|--------|----------------------------|---------------------|---------------------------------------------------------------------------|
+| GET    | `/api/tech-cards`          | любой залогин.      | Список шаблонов (`TechCardTemplateSummaryDto[]`). `?isActive=true|false`, `?search=` по `code`/`name`. |
+| GET    | `/api/tech-cards/:id`      | любой залогин.      | Детальный DTO (`TechCardTemplateDetailDto`) с `materialLines` и `outsourceLines`, отсортированными `sortOrder ASC`. |
+| POST   | `/api/tech-cards`          | ADMIN, SHOP_MANAGER | Создать шаблон. Тело — `CreateTechCardSchema`.                             |
+| PATCH  | `/api/tech-cards/:id`      | ADMIN, SHOP_MANAGER | Частичный апдейт. Передача `materialLines` / `outsourceLines` — **полная замена** соответствующего списка строк. |
+
+> `DELETE` сознательно не реализован. Деактивация — через
+> `PATCH { isActive: false }` (snapshot-ы заказов остаются
+> независимыми).
+
+### Тело `POST /api/tech-cards`
+
+```json
+{
+  "code": "TSHIRT-BASIC",
+  "name": "Базовая футболка — потребности",
+  "isActive": true,
+  "materialLines": [
+    { "name": "Кулирка 180 г/м²", "unit": "м",  "qtyPerUnit": "0.55", "note": null },
+    { "name": "Нитки 40/2 белые", "unit": "м",  "qtyPerUnit": "120",  "note": null }
+  ],
+  "outsourceLines": [
+    {
+      "name": "Шелкография — лого спереди",
+      "unit": "шт",
+      "qtyPerUnit": "1",
+      "vendorName": "Print&Co",
+      "note": null
+    },
+    {
+      "name": "Печать этикеток (за партию)",
+      "unit": null,
+      "qtyPerUnit": null,
+      "vendorName": null,
+      "note": null
+    }
+  ]
+}
+```
+
+- `code` — уникальный, валидируется по тому же стилю, что и
+  `RouteTemplate.code`.
+- `name` — обязателен, trim.
+- `isActive` — опционален (default `true`).
+- `materialLines` — массив; пустой допустим.
+  - `name`, `unit` — обязательны.
+  - `qtyPerUnit` — строка с положительным числом (Decimal-семантика).
+  - `note` — опционален (`null`/`""` нормализуется в `null`).
+- `outsourceLines` — массив; пустой допустим.
+  - `name` — обязателен.
+  - `unit`, `qtyPerUnit`, `vendorName`, `note` — опциональны
+    (`qtyPerUnit`, если задан, должен быть положительным).
+- `sortOrder` из формы **не принимается**: backend расставляет его
+  как `(index + 1) * 10` по порядку массива.
+
+### Тело `PATCH /api/tech-cards/:id`
+
+```json
+{
+  "name": "Новое имя",
+  "isActive": false,
+  "materialLines": [ /* full-replace */ ],
+  "outsourceLines": [ /* full-replace */ ]
+}
+```
+
+- Любое подмножество полей. `code`, `name`, `isActive` обновляются
+  по принципу «передал — заменил».
+- Передача `materialLines` или `outsourceLines` — **full-replace
+  pattern** (как `RouteTemplateService.replaceSteps` /
+  `EquipmentOperation`): в одной транзакции выкидываем все строки
+  соответствующего типа и пересоздаём из тела с новыми
+  `sortOrder = (index + 1) * 10`. Если хочется оставить строки
+  как есть — поле просто не передаётся.
+- Snapshot уже запущенных заказов **не меняется**: они физически
+  лежат в `OrderMaterialRequirement[]` / `OrderOutsourceRequirement[]`
+  и не зависят от `TechCardMaterialLine.id` после
+  `ON DELETE SET NULL`.
+
+### Ответ
+
+`TechCardTemplateDetailDto`:
+
+```json
+{
+  "id": "clx...",
+  "code": "TSHIRT-BASIC",
+  "name": "Базовая футболка — потребности",
+  "isActive": true,
+  "createdAt": "...",
+  "updatedAt": "...",
+  "materialLines": [
+    {
+      "id": "clx...",
+      "sortOrder": 10,
+      "name": "Кулирка 180 г/м²",
+      "unit": "м",
+      "qtyPerUnit": "0.55",
+      "note": null
+    }
+  ],
+  "outsourceLines": [
+    {
+      "id": "clx...",
+      "sortOrder": 10,
+      "name": "Шелкография — лого спереди",
+      "unit": "шт",
+      "qtyPerUnit": "1",
+      "vendorName": "Print&Co",
+      "note": null
+    }
+  ]
+}
+```
+
+`GET /api/tech-cards` отдаёт массив `TechCardTemplateSummaryDto`
+(без `materialLines`/`outsourceLines`, но с `materialLinesCount` и
+`outsourceLinesCount`) — этого достаточно для admin-списка и для
+select-а на форме создания заказа.
+
+### Ошибки
+
+| Код                               | HTTP | Когда                                                                 |
+|-----------------------------------|------|-----------------------------------------------------------------------|
+| `VALIDATION_ERROR`                | 400  | Zod (тело/query): пустой `name`, не-положительный `qtyPerUnit`, и т.п.|
+| `TECH_CARD_NOT_FOUND`             | 404  | `:id` не существует.                                                  |
+| `TECH_CARD_CODE_TAKEN`            | 409  | `code` уже используется другим шаблоном (Prisma `P2002`).             |
+| `TECH_CARD_INACTIVE`              | 409  | Попытка использовать `isActive=false` шаблон в `POST/PATCH /api/orders`. |
+| `ORDER_TECH_CARD_ALREADY_STARTED` | 409  | Попытка сменить `techCardId` на заказе, у которого snapshot уже зафиксирован. |
+
+### Использование из заказов
+
+См. §4:
+
+- `POST /api/orders` принимает `techCardId` (опц.). Сервер вызывает
+  `assertTechCardUsable(id)` — 404/409 при отсутствии/деактивации.
+- `PATCH /api/orders/:id` пускает смену `techCardId` пока заказ в
+  `DRAFT` и snapshot не создан (т.е. до `start()`); иначе 409
+  `ORDER_TECH_CARD_ALREADY_STARTED`.
+- `POST /api/orders/:id/start` в одной транзакции:
+  - переводит статус `DRAFT → IN_PRODUCTION`;
+  - копирует `RouteTemplateStep[]` → `OrderRouteStep[]` (если
+    выбран `routeTemplateId`);
+  - копирует `TechCardMaterialLine[]` → `OrderMaterialRequirement[]`
+    и `TechCardOutsourceLine[]` → `OrderOutsourceRequirement[]`,
+    если выбран `techCardId`;
+  - `totalQty = qtyPerUnit * Σ OrderItem.qtyPlan` (`Prisma.Decimal`).
+    Для outsource без `qtyPerUnit` снапшот хранит `totalQty = null`.
+  - идемпотентен: если snapshot уже есть — повторно не создаёт.
+- `GET /api/orders/:id` отдаёт `techCardId/Code/Name` и оба массива
+  snapshot-ов. См. §4 «Ответ `GET /api/orders/:id`».
+
+> Контракт: **источник истины для блоков «Материалы» и «Внешние
+> потребности» на `/orders/[id]` — snapshot заказа, не live-шаблон.**
+> Карточка не ходит в `/api/tech-cards/:id`; правка шаблона после
+> `start()` на запущенный заказ не влияет.

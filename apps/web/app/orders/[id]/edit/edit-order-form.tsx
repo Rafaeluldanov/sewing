@@ -9,6 +9,7 @@ import type {
   SizeDto,
 } from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
+import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { updateOrderAction, type FormActionState } from '../../actions';
 
 interface Props {
@@ -21,6 +22,12 @@ interface Props {
    * попадёт → action оставит значение как есть).
    */
   routeTemplates: RouteTemplateSummaryDto[];
+  /**
+   * Активные шаблоны техкарт. Семантика и UX идентичны
+   * `routeTemplates`. Текущая привязка `order.techCardId` всегда
+   * показывается в селекте, даже если шаблон уже деактивирован.
+   */
+  techCards: TechCardTemplateSummaryDto[];
 }
 
 const initialState: FormActionState = {};
@@ -39,6 +46,7 @@ export function EditOrderForm({
   sizes,
   products,
   routeTemplates,
+  techCards,
 }: Props) {
   const action = updateOrderAction.bind(null, order.id);
   const [state, formAction] = useFormState(action, initialState);
@@ -144,6 +152,44 @@ export function EditOrderForm({
             <div className="hint">
               Менять шаблон можно только до запуска заказа в производство —
               после `start()` маршрут фиксируется snapshot-ом.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(techCards.length > 0 || order.techCardId) && (
+        <div className="form-row">
+          <label htmlFor="techCardId">Техкарта</label>
+          <div>
+            <select
+              id="techCardId"
+              name="techCardId"
+              defaultValue={order.techCardId ?? ''}
+            >
+              <option value="">— без техкарты —</option>
+              {/*
+                Если у заказа уже выбрана техкарта, которой нет в списке
+                активных (например, её деактивировали), всё равно
+                показываем её как опцию — иначе при сохранении формы
+                привязка пропадёт без явного действия пользователя.
+              */}
+              {order.techCardId &&
+                !techCards.some((t) => t.id === order.techCardId) && (
+                  <option value={order.techCardId}>
+                    {order.techCardName ?? 'Текущая техкарта'} (
+                    {order.techCardCode ?? '—'}) — неактивна
+                  </option>
+                )}
+              {techCards.map((tc) => (
+                <option key={tc.id} value={tc.id}>
+                  {tc.name} ({tc.code})
+                  {tc.isActive ? '' : ' — неактивна'}
+                </option>
+              ))}
+            </select>
+            <div className="hint">
+              Менять техкарту можно только до запуска заказа в производство —
+              после `start()` план потребностей фиксируется snapshot-ом.
             </div>
           </div>
         </div>

@@ -26,6 +26,8 @@
     "./costs": "./src/costs.ts",
     "./dashboard": "./src/dashboard.ts",
     "./printers": "./src/printers.ts",
+    "./routes": "./src/routes.ts",
+    "./tech-cards": "./src/tech-cards.ts",
     "./config": "./src/config.ts"
   },
   "scripts": {

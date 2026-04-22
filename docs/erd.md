@@ -208,19 +208,23 @@ flow на /work и для админ-настройки в `/admin/equipment`.
 
 ### 2.7. `Order`
 
-| Поле      | Тип         | Ограничения                         |
-| --------- | ----------- | ----------------------------------- |
-| id        | cuid        | PK                                  |
-| number    | text        | UNIQUE, автоген `O-YYYYMMDD-NNNN`   |
-| customer  | text        | nullable (на Шаге 4 не обязателен)  |
-| orderDate | timestamp   | NOT NULL — дата заказа              |
-| dueDate   | timestamp   | nullable — срок                     |
-| comment   | text        | nullable                            |
-| status    | OrderStatus | enum (`DRAFT`/`IN_PRODUCTION`/`DONE`/`CANCELLED`) |
-| createdAt | timestamp   |                                     |
-| updatedAt | timestamp   | авто-обновление                     |
+| Поле            | Тип         | Ограничения                         |
+| --------------- | ----------- | ----------------------------------- |
+| id              | cuid        | PK                                  |
+| number          | text        | UNIQUE, автоген `O-YYYYMMDD-NNNN`   |
+| customer        | text        | nullable                            |
+| orderDate       | timestamp   | NOT NULL — дата заказа              |
+| dueDate         | timestamp   | nullable — срок                     |
+| color           | text        | nullable — переопределение цвета изделия |
+| comment         | text        | nullable                            |
+| status          | OrderStatus | enum (`DRAFT`/`IN_PRODUCTION`/`DONE`/`CANCELLED`) |
+| routeTemplateId | FK→RouteTemplate | nullable, soft-route MVP (§18 domain.md) |
+| techCardId      | FK→TechCardTemplate | nullable, MVP техкарт (§19 domain.md, ADR-0022) |
+| createdAt       | timestamp   |                                     |
+| updatedAt       | timestamp   | авто-обновление                     |
 
-Индексы: `(status)`, `(orderDate)`, `(createdAt)`.
+Индексы: `(status)`, `(orderDate)`, `(createdAt)`,
+`(routeTemplateId)`, `(techCardId)`.
 
 ### 2.8. `OrderItem`
 
@@ -524,6 +528,102 @@ UNIQUE `(boxId, passportId)` (исторически, MVP 1.0) **и**
 
 Индексы: `(passportId, createdAt)` — история по паспорту;
 `(defectTypeId, createdAt)` — будущая аналитика причин брака.
+
+### 2.19. `TechCardTemplate` (ADR-0022)
+
+Шаблон «потребностей на единицу изделия». Подробности — `domain.md §19`.
+
+| Поле       | Тип       | Ограничения           |
+| ---------- | --------- | --------------------- |
+| id         | cuid      | PK                    |
+| code       | text      | UNIQUE                |
+| name       | text      | NOT NULL              |
+| isActive   | bool      | default true          |
+| createdAt  | timestamp |                       |
+| updatedAt  | timestamp | @updatedAt            |
+
+Связи: `materialLines: TechCardMaterialLine[]`,
+`outsourceLines: TechCardOutsourceLine[]`, `orders: Order[]`.
+
+### 2.20. `TechCardMaterialLine` (ADR-0022)
+
+Строка материала в шаблоне.
+
+| Поле        | Тип            | Ограничения                          |
+| ----------- | -------------- | ------------------------------------ |
+| id          | cuid           | PK                                   |
+| techCardId  | FK→TechCardTemplate | NOT NULL, ON DELETE CASCADE     |
+| sortOrder   | int            | NOT NULL                             |
+| name        | text           | NOT NULL                             |
+| unit        | text           | NOT NULL (м, кг, шт, …)              |
+| qtyPerUnit  | decimal(12,4)  | > 0 (валидируется DTO/сервисом)      |
+| note        | text           | nullable                             |
+| createdAt   | timestamp      |                                      |
+| updatedAt   | timestamp      | @updatedAt                           |
+
+Индекс: `(techCardId, sortOrder)`. Имена внутри одной техкарты не
+уникализируем.
+
+### 2.21. `TechCardOutsourceLine` (ADR-0022)
+
+Строка внешнего подрядного размещения. Семантически — аналог
+`OUTSOURCED_SERVICE`-операции, но живёт сбоку от маршрута.
+
+| Поле        | Тип            | Ограничения                          |
+| ----------- | -------------- | ------------------------------------ |
+| id          | cuid           | PK                                   |
+| techCardId  | FK→TechCardTemplate | NOT NULL, ON DELETE CASCADE     |
+| sortOrder   | int            | NOT NULL                             |
+| name        | text           | NOT NULL                             |
+| unit        | text           | nullable                             |
+| qtyPerUnit  | decimal(12,4)  | nullable (> 0, если задан)           |
+| vendorName  | text           | nullable, свободный текст            |
+| note        | text           | nullable                             |
+| createdAt   | timestamp      |                                      |
+| updatedAt   | timestamp      | @updatedAt                           |
+
+Индекс: `(techCardId, sortOrder)`.
+
+### 2.22. `OrderMaterialRequirement` (snapshot, ADR-0022)
+
+Read-only план потребностей материалов на конкретном заказе.
+Создаётся в `OrdersService.start()` и больше не меняется.
+
+| Поле                  | Тип            | Ограничения                                          |
+| --------------------- | -------------- | ---------------------------------------------------- |
+| id                    | cuid           | PK                                                   |
+| orderId               | FK→Order       | NOT NULL                                             |
+| sourceTechCardLineId  | FK→TechCardMaterialLine | nullable, **ON DELETE SET NULL**            |
+| sortOrder             | int            | NOT NULL                                             |
+| name                  | text           | NOT NULL — копия имени строки шаблона на момент start |
+| unit                  | text           | NOT NULL                                             |
+| qtyPerUnit            | decimal(12,4)  | > 0                                                  |
+| totalQty              | decimal(12,4)  | = `qtyPerUnit * Σ OrderItem.qtyPlan` (Decimal-math)  |
+| note                  | text           | nullable                                             |
+| createdAt             | timestamp      |                                                      |
+
+Индекс: `(orderId, sortOrder)`. `SET NULL` — это «независимость
+snapshot-а»: старые заказы не ломаются, если строку шаблона удалили.
+
+### 2.23. `OrderOutsourceRequirement` (snapshot, ADR-0022)
+
+Read-only план внешних подрядов на конкретном заказе.
+
+| Поле                  | Тип            | Ограничения                                          |
+| --------------------- | -------------- | ---------------------------------------------------- |
+| id                    | cuid           | PK                                                   |
+| orderId               | FK→Order       | NOT NULL                                             |
+| sourceTechCardLineId  | FK→TechCardOutsourceLine | nullable, **ON DELETE SET NULL**           |
+| sortOrder             | int            | NOT NULL                                             |
+| name                  | text           | NOT NULL                                             |
+| unit                  | text           | nullable                                             |
+| qtyPerUnit            | decimal(12,4)  | nullable (> 0, если задан)                           |
+| totalQty              | decimal(12,4)  | nullable, `null` если в шаблоне `qtyPerUnit == null` |
+| vendorName            | text           | nullable                                             |
+| note                  | text           | nullable                                             |
+| createdAt             | timestamp      |                                                      |
+
+Индекс: `(orderId, sortOrder)`.
 
 ---
 

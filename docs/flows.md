@@ -212,6 +212,14 @@ auth (Шаг 7) UI хранит выбранного демо-сотрудник
    `P-…` или голый id).
 3. Web делает `POST /api/passports/by-code` → получает `passportId`
    и затем `POST /api/passports/:id/issue { employeeId }`.
+   - **Soft-route MVP (STEP 8 ТЗ).** Ответ `by-code` теперь несёт
+     `routeHint` — текущий/следующий шаг маршрута заказа и сравнение
+     с активной сменой. Web показывает блок «маршрут» в модалке
+     `PassportConfirmModal` и, если `routeMismatchWithActiveShift`,
+     рисует жёлтый информационный warning. **Никакой блокировки**:
+     кнопка «Принять» остаётся доступной, backend не возвращает 409
+     за «не туда сканировал». См. `docs/api.md §17` и `§5` (поле
+     `routeHint`).
 
 **Транзакция `PassportService.issueToEmployee`:**
 

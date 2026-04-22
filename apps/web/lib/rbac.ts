@@ -127,6 +127,38 @@ export function canSeePacking(role: string | undefined | null): boolean {
   return !!role && (PACKING_ALLOWED_ROLES as readonly string[]).includes(role);
 }
 
+/**
+ * Видимость пунктов терминальных разделов (`/qc`, `/wto`, `/packing`)
+ * в навигации (header + mobile-nav + плитки на `/`).
+ *
+ * Отделены от технических `canSeeQc` / `canSeeWto` / `canSeePacking`
+ * по той же логике, что и `canSeeOrdersMenu` vs `canSeeOrders`:
+ *
+ *   - SHOP_MANAGER формально имеет read/write доступ к страницам
+ *     терминалов (см. `*_ALLOWED_ROLES` выше и backend `@Roles(...)`),
+ *     и должен сохранить возможность открыть их по прямой ссылке —
+ *     `/qc/layout.tsx`, `/wto/layout.tsx`, `/packing/layout.tsx`
+ *     продолжают пускать его, как раньше;
+ *   - но в UI-меню начальник цеха работает через дашборды и
+ *     admin-разделы, а пункты «Рабочее место» / «ОТК» / «ВТО» /
+ *     «Упаковка» — это scan-driven терминалы операторов, в навигации
+ *     менеджера они только засоряют шапку.
+ *
+ * ADMIN остаётся в матрице — у админа в шапке должен быть полный
+ * набор разделов для отладки и поддержки.
+ */
+export function canSeeQcMenu(role: string | undefined | null): boolean {
+  return canSeeQc(role) && role !== 'SHOP_MANAGER';
+}
+
+export function canSeeWtoMenu(role: string | undefined | null): boolean {
+  return canSeeWto(role) && role !== 'SHOP_MANAGER';
+}
+
+export function canSeePackingMenu(role: string | undefined | null): boolean {
+  return canSeePacking(role) && role !== 'SHOP_MANAGER';
+}
+
 export function canSeeOrders(role: string | undefined | null): boolean {
   return !!role && (ORDERS_ALLOWED_ROLES as readonly string[]).includes(role);
 }
@@ -327,9 +359,14 @@ export function canSeeHome(role: string | undefined | null): boolean {
  * (SEAMSTRESS, CUTTER_ASSISTANT, CUTTER) — иначе получается
  * дублирующая вкладка. Скрываем и у QC/IRONING/PACKING — их рабочий
  * экран другой (`/qc`, `/wto`, `/packing`), на `/work` им заходить
- * незачем. Менеджерам и админам пункт оставляем.
+ * незачем.
+ *
+ * SHOP_MANAGER тоже скрыт: терминал швеи начальнику цеха в меню не
+ * нужен (работа идёт через дашборды и admin-разделы). Технический
+ * доступ к `/work` у роли остаётся — backend и страница режут
+ * операции по своим guards, а не по этому UI-флагу. Полный набор
+ * пунктов сохраняем только за ADMIN — для отладки и поддержки.
  */
 export function canSeeWorkTab(role: string | undefined | null): boolean {
-  if (!role) return false;
-  return role === 'ADMIN' || role === 'SHOP_MANAGER';
+  return role === 'ADMIN';
 }

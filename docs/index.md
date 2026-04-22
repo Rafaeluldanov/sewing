@@ -63,6 +63,7 @@ Seed-данные (справочники MVP): `prisma/seed.ts`
 - [ADR-0019 Склады как управленческая группировка ячеек](./adr/0019-warehouses.md)
 - [ADR-0020 Управленческий блок «Операции» и единая модель тарифов](./adr/0020-operation-pricing-model.md)
 - [ADR-0021 Дневной оклад от факта смены (`SalaryEntry`)](./adr/0021-shift-day-salary.md)
+- [ADR-0022 Техкарты и snapshot потребностей на заказе](./adr/0022-tech-cards-and-order-snapshot.md)
 
 ---
 

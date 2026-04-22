@@ -163,6 +163,51 @@ export interface PassportBoxLiteDto {
   status: 'OPEN' | 'CLOSED';
 }
 
+/**
+ * Soft-route MVP: компактный шаг маршрута для UI-подсказки на /work.
+ * Дублирует часть `OrderRouteStepDto`, но без `id` — этого достаточно
+ * фронту, чтобы отрисовать «Шаг N: Название» и сравнить `operationId`
+ * с операцией активной смены. См. `docs/domain.md §«Маршруты производства»`.
+ */
+export interface PassportRouteStepLiteDto {
+  index: number;
+  operationId: string;
+  operationCode: string;
+  operationName: string;
+}
+
+/**
+ * Soft-route MVP: подсказка по маршруту для отображения в /work
+ * (модалка `PassportConfirmModal` и карточка активного кроя).
+ *
+ * Поля заполняются при наличии у заказа snapshot маршрута
+ * (`OrderRouteStep[]`). Если snapshot пустой — `routeHint = null`.
+ *
+ * Семантика «expected» (зафиксировано в STEP 8 ТЗ MVP, см. также
+ * `docs/flows.md §F4` и `docs/domain.md §18`):
+ *   `expectedOperation = currentRouteStep.operation`. То же правило
+ *   уже используется в `current-work-card.tsx` и оставлено единым,
+ *   чтобы UI везде давал одну и ту же подсказку.
+ *
+ * `routeMismatchWithActiveShift` = `true` тогда и только тогда, когда:
+ *   - есть `currentRouteStep` (паспорт реально стоит на каком-то шаге);
+ *   - есть `activeShiftOperationId` (у сотрудника открыта смена);
+ *   - они не совпадают.
+ *
+ * Backend НИКОГДА не использует `routeHint` для блокировок —
+ * это исключительно read-only подсказка для оператора (без 409,
+ * без disable-кнопок). См. ТЗ MVP §STEP 8.
+ */
+export interface PassportRouteHintDto {
+  currentRouteStep: PassportRouteStepLiteDto | null;
+  nextRouteStep: PassportRouteStepLiteDto | null;
+  expectedOperationId: string | null;
+  expectedOperationName: string | null;
+  activeShiftOperationId: string | null;
+  activeShiftOperationName: string | null;
+  routeMismatchWithActiveShift: boolean;
+}
+
 export interface PassportDetailDto extends PassportListItemDto {
   qrCode: string;
   /** Готовая ссылка для печати (HTML). См. ADR-0010. */
@@ -178,6 +223,15 @@ export interface PassportDetailDto extends PassportListItemDto {
   creatorName: string;
   /** Коробка, в которую паспорт был упакован (Шаг 8). `null` — ещё нет. */
   box: PassportBoxLiteDto | null;
+  /**
+   * Soft-route MVP: подсказка по маршруту заказа. `null`, если у
+   * заказа нет snapshot маршрута. Поле справочное, без enforcement
+   * (см. `PassportRouteHintDto`). Заполняется только в эндпоинтах,
+   * где это уместно (`/passports/by-code`, `/passports/:id`); в
+   * остальных DTO (issue/scan/complete) тоже отдаём — фронт может
+   * безопасно игнорировать.
+   */
+  routeHint: PassportRouteHintDto | null;
 }
 
 /** Компактный ответ `POST /api/passports/:id/place`. */

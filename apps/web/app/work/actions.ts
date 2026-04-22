@@ -133,6 +133,11 @@ export async function lookupPassportAction(
         color: p.color,
         status: p.status,
         rollNumber: p.rollNumber,
+        // Soft-route MVP (STEP 8 ТЗ): прокидываем route hint в UI
+        // модалку проверки. Backend заполнил `routeHint`, сравнив
+        // активную смену сотрудника с ожидаемым шагом маршрута.
+        // Если у заказа нет snapshot маршрута — здесь будет null.
+        routeHint: p.routeHint ?? null,
       },
     };
   } catch (e) {

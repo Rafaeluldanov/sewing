@@ -1,8 +1,10 @@
 import { redirect } from 'next/navigation';
 import type { ProductDto, SizeDto } from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
+import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { listProducts, listSizes } from '@/lib/orders-api';
 import { listRouteTemplates } from '@/lib/routes-api';
+import { listTechCards } from '@/lib/tech-cards-api';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { NewOrderForm } from './new-order-form';
@@ -20,21 +22,25 @@ export default async function NewOrderPage() {
   let sizes: SizeDto[] = [];
   let products: ProductDto[] = [];
   let routeTemplates: RouteTemplateSummaryDto[] = [];
+  let techCards: TechCardTemplateSummaryDto[] = [];
   let error: string | null = null;
   try {
-    // routes идут через `Promise.allSettled` отдельной веткой, чтобы
-    // отсутствие/недоступность модуля routes не валило форму создания
-    // заказа целиком (backward compatibility со старым flow).
-    const [sz, pr, rt] = await Promise.allSettled([
+    // routes/tech-cards идут через `Promise.allSettled` отдельными
+    // ветками, чтобы отсутствие/недоступность опциональных модулей не
+    // валило форму создания заказа целиком (backward compatibility со
+    // старым flow). См. ADR-0006 для маршрутов и ADR-0022 для техкарт.
+    const [sz, pr, rt, tc] = await Promise.allSettled([
       listSizes(),
       listProducts(),
       listRouteTemplates({ isActive: true }),
+      listTechCards({ isActive: true }),
     ]);
     if (sz.status === 'fulfilled') sizes = sz.value;
     else throw sz.reason;
     if (pr.status === 'fulfilled') products = pr.value;
     else throw pr.reason;
     routeTemplates = rt.status === 'fulfilled' ? rt.value : [];
+    techCards = tc.status === 'fulfilled' ? tc.value : [];
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -53,6 +59,7 @@ export default async function NewOrderPage() {
         sizes={sizes}
         products={products}
         routeTemplates={routeTemplates}
+        techCards={techCards}
         today={today}
       />
     </div>

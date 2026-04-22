@@ -10,6 +10,7 @@
 
 import { useEffect } from 'react';
 import type { ShiftSessionDto } from '@sewing/shared/shifts';
+import type { PassportRouteHintDto } from '@sewing/shared/passports';
 
 export interface PassportConfirmData {
   id: string;
@@ -21,6 +22,13 @@ export interface PassportConfirmData {
   qtyGood: number;
   rollNumber: string;
   status: string;
+  /**
+   * Soft-route MVP (STEP 8 ТЗ): подсказка по маршруту (`OrderRouteStep`
+   * snapshot) + сравнение с активной сменой. `null` — у заказа нет
+   * маршрута, блок просто не рендерим. См. `docs/domain.md §«Маршруты
+   * производства»`.
+   */
+  routeHint: PassportRouteHintDto | null;
 }
 
 interface Props {
@@ -142,6 +150,10 @@ export function PassportConfirmModal({
           </div>
         </div>
 
+        {passport.routeHint && (
+          <PassportRouteHintBlock hint={passport.routeHint} />
+        )}
+
         <div className="passport-confirm__actions">
           <button
             type="button"
@@ -161,6 +173,68 @@ export function PassportConfirmModal({
           </button>
         </div>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Soft-route MVP (STEP 8 ТЗ): компактный блок «маршрут» в модалке
+ * сверки паспорта. Показывает:
+ *   - текущий шаг (`hint.currentRouteStep`);
+ *   - следующий шаг (`hint.nextRouteStep`) или «последний шаг», если
+ *     маршрут уже на конце;
+ *   - предупреждение, если активная смена сотрудника не совпадает с
+ *     ожидаемым шагом маршрута (`hint.routeMismatchWithActiveShift`).
+ *
+ * Все надписи — read-only, никаких блокировок и disabled-кнопок.
+ * Стили — общие с `current-work-card.tsx`, чтобы оператор видел один
+ * и тот же визуальный язык что в карточке активного кроя, что в модалке.
+ */
+function PassportRouteHintBlock({ hint }: { hint: PassportRouteHintDto }) {
+  const { currentRouteStep, nextRouteStep, routeMismatchWithActiveShift } =
+    hint;
+  return (
+    <div className="active-passport__route" aria-label="Маршрут заказа">
+      <div className="active-passport__route-row">
+        <span className="active-passport__route-label">Сейчас</span>
+        <span className="active-passport__route-value">
+          {currentRouteStep ? (
+            <>
+              Шаг {currentRouteStep.index + 1}: {currentRouteStep.operationName}
+              <span className="active-passport__route-code">
+                {' '}
+                {currentRouteStep.operationCode}
+              </span>
+            </>
+          ) : (
+            '— ещё не начат'
+          )}
+        </span>
+      </div>
+      <div className="active-passport__route-row">
+        <span className="active-passport__route-label">Далее</span>
+        <span className="active-passport__route-value">
+          {nextRouteStep ? (
+            <>
+              Шаг {nextRouteStep.index + 1}: {nextRouteStep.operationName}
+              <span className="active-passport__route-code">
+                {' '}
+                {nextRouteStep.operationCode}
+              </span>
+            </>
+          ) : (
+            '— последний шаг маршрута'
+          )}
+        </span>
+      </div>
+      {routeMismatchWithActiveShift && (
+        <p className="active-passport__route-warn" role="status">
+          <strong>Внимание:</strong> ваша смена идёт на операции{' '}
+          <em>{hint.activeShiftOperationName ?? '—'}</em>, а маршрут заказа
+          ожидает <em>{hint.expectedOperationName ?? '—'}</em>. Это
+          подсказка, паспорт не блокируется.
+        </p>
+      )}
     </div>
   );
 }

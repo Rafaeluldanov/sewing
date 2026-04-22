@@ -16,6 +16,8 @@ import {
   type PassportDetailDto,
   type PassportListItemDto,
   type PassportPlacementResultDto,
+  type PassportRouteHintDto,
+  type PassportRouteStepLiteDto,
   type PlacePassportDto,
 } from '@sewing/shared/passports';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -54,6 +56,18 @@ type PassportRow = Prisma.PassportGetPayload<{
     boxItems: { include: { box: true } };
   };
 }>;
+
+/**
+ * Опции `getOne(...)`. На MVP единственная — `employeeIdForRouteHint`:
+ * если передан, сервис подтянет активную смену сотрудника и заполнит
+ * `routeHint.routeMismatchWithActiveShift` / `activeShiftOperation*`.
+ *
+ * Без этой опции `routeHint` всё равно может быть непустым (current/next
+ * шаги маршрута), просто без сравнения с активной сменой.
+ */
+interface GetOneOptions {
+  employeeIdForRouteHint?: string;
+}
 
 @Injectable()
 export class PassportsService {
@@ -239,7 +253,10 @@ export class PassportsService {
   // GET ONE
   // -------------------------------------------------------------------------
 
-  async getOne(id: string): Promise<PassportDetailDto> {
+  async getOne(
+    id: string,
+    options?: GetOneOptions,
+  ): Promise<PassportDetailDto> {
     const row = await this.prisma.passport.findUnique({
       where: { id },
       include: {
@@ -259,7 +276,8 @@ export class PassportsService {
         message: 'Паспорт не найден',
       });
     }
-    return this.toDetailDto(row);
+    const routeHint = await this.buildRouteHint(row, options);
+    return this.toDetailDto(row, routeHint);
   }
 
   // -------------------------------------------------------------------------
@@ -690,7 +708,10 @@ export class PassportsService {
    *   - `P-YYYYMMDD-NNNN` — номер паспорта;
    *   - голый `id` — на случай, когда код уже распарсен на клиенте.
    */
-  async findByCode(code: string): Promise<PassportDetailDto> {
+  async findByCode(
+    code: string,
+    options?: GetOneOptions,
+  ): Promise<PassportDetailDto> {
     const trimmed = code.trim();
     const idFromQr = trimmed.startsWith('passport:')
       ? trimmed.slice('passport:'.length)
@@ -713,7 +734,7 @@ export class PassportsService {
         message: `Паспорт не найден по коду «${trimmed}»`,
       });
     }
-    return this.getOne(row.id);
+    return this.getOne(row.id, options);
   }
 
   // -------------------------------------------------------------------------
@@ -807,7 +828,10 @@ export class PassportsService {
     return cell;
   }
 
-  private toDetailDto(row: PassportRow): PassportDetailDto {
+  private toDetailDto(
+    row: PassportRow,
+    routeHint: PassportRouteHintDto | null,
+  ): PassportDetailDto {
     // На MVP `BoxItem(boxId, passportId)` уникален и однонаправлен:
     // паспорт лежит максимум в одной коробке (см. ADR-0011 §3).
     const boxItem = row.boxItems[0];
@@ -847,6 +871,115 @@ export class PassportsService {
             status: boxItem.box.closedAt ? 'CLOSED' : 'OPEN',
           }
         : null,
+      routeHint,
+    };
+  }
+
+  /**
+   * Собирает `PassportRouteHintDto` для UI-подсказки на /work
+   * (см. STEP 8 ТЗ MVP, `docs/domain.md §«Маршруты производства»`).
+   *
+   * Контракт:
+   *   - источник истины — `OrderRouteStep` snapshot заказа, НЕ
+   *     `RouteTemplate` (snapshot самодостаточный, см. ADR / domain.md);
+   *   - если у заказа нет snapshot маршрута → возвращаем `null`,
+   *     UI скроет блок;
+   *   - если `currentRouteStepIndex === null` → шагов считать ещё
+   *     нечего: возвращаем «пустой» hint с `currentRouteStep = null`,
+   *     `nextRouteStep = step[0]` (если он есть), без warning;
+   *   - если `currentRouteStepIndex` вне диапазона snapshot
+   *     (например, маршрут укоротили) → возвращаем «пустой» hint без
+   *     warning, чтобы не падать;
+   *   - `expectedOperation = currentRouteStep.operation` — единое
+   *     правило с `current-work-card.tsx` (см. STEP 8 ТЗ);
+   *   - `routeMismatchWithActiveShift = true` только когда у швеи
+   *     есть активная смена И её `operationId` ≠ expected.
+   *
+   * Безопасность: метод НИКОГДА не кидает — любые ошибки чтения
+   * маршрута/смены превращаются в null/false. Hint должен оставаться
+   * read-only подсказкой (см. ТЗ MVP §STEP 5).
+   */
+  private async buildRouteHint(
+    row: PassportRow,
+    options?: GetOneOptions,
+  ): Promise<PassportRouteHintDto | null> {
+    let steps: Array<{
+      index: number;
+      operation: { id: string; code: string; name: string };
+    }>;
+    try {
+      steps = await this.prisma.orderRouteStep.findMany({
+        where: { orderId: row.orderId },
+        orderBy: { index: 'asc' },
+        select: {
+          index: true,
+          operation: { select: { id: true, code: true, name: true } },
+        },
+      });
+    } catch {
+      return null;
+    }
+    if (steps.length === 0) return null;
+
+    const toLite = (
+      s: (typeof steps)[number],
+    ): PassportRouteStepLiteDto => ({
+      index: s.index,
+      operationId: s.operation.id,
+      operationCode: s.operation.code,
+      operationName: s.operation.name,
+    });
+
+    const currentIndex = row.currentRouteStepIndex;
+    const currentStep =
+      currentIndex !== null
+        ? steps.find((s) => s.index === currentIndex) ?? null
+        : null;
+    const nextStep =
+      currentIndex !== null
+        ? steps.find((s) => s.index === currentIndex + 1) ?? null
+        : steps[0] ?? null;
+
+    let activeShiftOperationId: string | null = null;
+    let activeShiftOperationName: string | null = null;
+    if (options?.employeeIdForRouteHint) {
+      try {
+        const session = await this.prisma.shiftSession.findFirst({
+          where: {
+            employeeId: options.employeeIdForRouteHint,
+            endedAt: null,
+          },
+          select: {
+            operation: { select: { id: true, name: true } },
+          },
+        });
+        if (session) {
+          activeShiftOperationId = session.operation.id;
+          activeShiftOperationName = session.operation.name;
+        }
+      } catch {
+        // fail-soft: подсказка по mismatch необязательна
+      }
+    }
+
+    const expectedOperationId = currentStep ? currentStep.operation.id : null;
+    const expectedOperationName = currentStep
+      ? currentStep.operation.name
+      : null;
+
+    const routeMismatchWithActiveShift =
+      !!expectedOperationId &&
+      !!activeShiftOperationId &&
+      expectedOperationId !== activeShiftOperationId;
+
+    return {
+      currentRouteStep: currentStep ? toLite(currentStep) : null,
+      nextRouteStep: nextStep ? toLite(nextStep) : null,
+      expectedOperationId,
+      expectedOperationName,
+      activeShiftOperationId,
+      activeShiftOperationName,
+      routeMismatchWithActiveShift,
     };
   }
 

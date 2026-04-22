@@ -3,9 +3,10 @@ import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import {
   canSeeOrdersMenu,
-  canSeePacking,
-  canSeeQc,
-  canSeeWto,
+  canSeePackingMenu,
+  canSeeQcMenu,
+  canSeeWorkTab,
+  canSeeWtoMenu,
   getPrimaryWorkspace,
   isWorkingRole,
 } from '@/lib/rbac';
@@ -71,10 +72,15 @@ export default async function HomePage() {
   const roleLabel = ROLE_LABELS[role] ?? role;
   const isManager = role === 'SHOP_MANAGER' || role === 'ADMIN';
   // Тайлы скрываются по той же матрице, что и навигация в шапке —
-  // см. `apps/web/lib/rbac.ts`.
-  const showQc = canSeeQc(role);
-  const showWto = canSeeWto(role);
-  const showPacking = canSeePacking(role);
+  // см. `apps/web/lib/rbac.ts`. Для терминалов используем `*Menu`-
+  // хелперы, чтобы SHOP_MANAGER не видел плитки «Рабочее место» /
+  // «ОТК» / «ВТО» / «Упаковка»: технический доступ к страницам у
+  // роли остаётся (через прямую ссылку), но на главной начальника
+  // цеха scan-driven терминалы операторов как точки входа не нужны.
+  const showWork = canSeeWorkTab(role);
+  const showQc = canSeeQcMenu(role);
+  const showWto = canSeeWtoMenu(role);
+  const showPacking = canSeePackingMenu(role);
   // Тайл «Заказы» на главной — entry point в admin-раздел заказов.
   // Для CUTTER_ASSISTANT технический read-доступ к `/orders/*` сохранён
   // (нужен для flow «Выпустить паспорт»: `/work` → `/work/cut-orders` →
@@ -175,13 +181,15 @@ export default async function HomePage() {
             hint="Склады и ячейки, печать QR"
           />
         )}
-        <MobileActionCard
-          href="/work"
-          variant="primary"
-          icon={<Icon name="work" size={20} />}
-          title="Рабочее место"
-          hint="Сканировать паспорт, получить крой"
-        />
+        {showWork && (
+          <MobileActionCard
+            href="/work"
+            variant="primary"
+            icon={<Icon name="work" size={20} />}
+            title="Рабочее место"
+            hint="Сканировать паспорт, получить крой"
+          />
+        )}
         {showQc && (
           <MobileActionCard
             href="/qc"

@@ -329,6 +329,74 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
     expect(afterQc?.currentRouteStepIndex).toBe(1);
   });
 
+  test('B4. GET /api/orders/:id: routeSteps[] отсортированы по index ASC и пусты без snapshot', async () => {
+    // Фиксируем контракт UI карточки заказа: даже при «обратном»
+    // порядке создания шагов в шаблоне snapshot всё равно приходит
+    // в `index ASC` (sort на стороне бэка), а заказ без routeTemplateId
+    // отдаёт `routeSteps: []` — нейтральный empty-state на фронте.
+    const tpl = await createTemplate(t, cookies.manager, 'BASIC-ORDER-CARD', [
+      seed.operations.SEW_OVERLOCK_1.id,
+      seed.operations.QC.id,
+      seed.operations.PACKING.id,
+    ]);
+
+    // Заказ БЕЗ маршрута → пустой snapshot и до, и после start().
+    const noRouteCreate = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookies.manager)
+      .send({
+        orderDate: '2026-04-15T00:00:00.000Z',
+        productId: seed.product.id,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 1 }],
+      })
+      .expect(201);
+    const noRouteId: string = noRouteCreate.body.id;
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${noRouteId}/start`)
+      .set('Cookie', cookies.manager)
+      .expect(201);
+    const noRouteDetail = await request(t.app.getHttpServer())
+      .get(`/api/orders/${noRouteId}`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    expect(noRouteDetail.body.routeTemplateId).toBeNull();
+    expect(noRouteDetail.body.routeSteps).toEqual([]);
+
+    // Заказ СО маршрутом → после start() snapshot отсортирован ASC.
+    const orderId = await createOrderWithRoute(
+      t,
+      seed,
+      cookies.manager,
+      [{ sizeId: seed.sizes.M, qtyPlan: 1 }],
+      tpl.id,
+    );
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/start`)
+      .set('Cookie', cookies.manager)
+      .expect(201);
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    const indexes: number[] = detail.body.routeSteps.map(
+      (s: { index: number }) => s.index,
+    );
+    expect(indexes).toEqual([...indexes].sort((a, b) => a - b));
+    expect(indexes[0]).toBe(0);
+    // Минимальный набор полей для UI карточки заказа.
+    for (const step of detail.body.routeSteps) {
+      expect(step).toEqual(
+        expect.objectContaining({
+          id: expect.any(String),
+          index: expect.any(Number),
+          operationId: expect.any(String),
+          operationCode: expect.any(String),
+          operationName: expect.any(String),
+        }),
+      );
+    }
+  });
+
   test('D. Backward-compat: заказ без шаблона → currentRouteStepIndex = null, scan не ломается', async () => {
     // Старый flow: routeTemplateId не передан, snapshot пустой,
     // паспорт ходит как раньше — ровно то, что обещает ТЗ
@@ -394,6 +462,140 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
   // ---------------------------------------------------------------------------
   // /work подсказка
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // Soft-route hint в `/api/passports/by-code` (STEP 8 ТЗ MVP)
+  // ---------------------------------------------------------------------------
+
+  test('F. /api/passports/by-code: отдаёт routeHint с current/next + mismatch с активной сменой', async () => {
+    const tpl = await createTemplate(t, cookies.manager, 'BASIC-HINT', [
+      seed.operations.SEW_OVERLOCK_1.id,
+      seed.operations.QC.id,
+      seed.operations.PACKING.id,
+    ]);
+    const orderId = await createOrderWithRoute(
+      t,
+      seed,
+      cookies.manager,
+      [{ sizeId: seed.sizes.M, qtyPlan: 1 }],
+      tpl.id,
+    );
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/start`)
+      .set('Cookie', cookies.manager)
+      .expect(201);
+    const passport = await request(t.app.getHttpServer())
+      .post('/api/passports')
+      .set('Cookie', cookies.manager)
+      .send({
+        orderId,
+        sizeId: seed.sizes.M,
+        rollNumber: 'R-RT-HINT',
+        cutDate: '2026-04-15T00:00:00.000Z',
+        qtyCut: 1,
+      })
+      .expect(201);
+    await placePassport(t, cookies.manager, passport.body.id, seed.cells.A1.id);
+
+    // Кейс 1: швея на SEW_OVERLOCK_1 (= step[0]) сканирует код
+    // паспорта. Backend сравнит активную смену с ожидаемым шагом
+    // (currentRouteStep), mismatch должен быть false.
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.seamstress)
+      .send({
+        equipmentId: seed.equipment['overlock-01'].id,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+      })
+      .expect(201);
+    const lookupOk = await request(t.app.getHttpServer())
+      .post('/api/passports/by-code')
+      .set('Cookie', cookies.seamstress)
+      .send({ code: passport.body.number })
+      .expect(201);
+    expect(lookupOk.body.routeHint).toBeTruthy();
+    expect(lookupOk.body.routeHint.currentRouteStep?.operationCode).toBe(
+      'SEW_OVERLOCK_1',
+    );
+    expect(lookupOk.body.routeHint.nextRouteStep?.operationCode).toBe('QC');
+    expect(lookupOk.body.routeHint.expectedOperationId).toBe(
+      seed.operations.SEW_OVERLOCK_1.id,
+    );
+    expect(lookupOk.body.routeHint.activeShiftOperationId).toBe(
+      seed.operations.SEW_OVERLOCK_1.id,
+    );
+    expect(lookupOk.body.routeHint.routeMismatchWithActiveShift).toBe(false);
+
+    // Кейс 2: ОТК на QC (= step[1]) сканирует тот же паспорт. По
+    // соглашению STEP 8 expected = currentRouteStep (= overlock).
+    // Активная смена — QC, поэтому mismatch=true (warning подсветится).
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.qc)
+      .send({
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+      })
+      .expect(201);
+    const lookupMismatch = await request(t.app.getHttpServer())
+      .post('/api/passports/by-code')
+      .set('Cookie', cookies.qc)
+      .send({ code: passport.body.number })
+      .expect(201);
+    expect(lookupMismatch.body.routeHint.routeMismatchWithActiveShift).toBe(
+      true,
+    );
+    expect(lookupMismatch.body.routeHint.activeShiftOperationId).toBe(
+      seed.operations.QC.id,
+    );
+    expect(lookupMismatch.body.routeHint.expectedOperationId).toBe(
+      seed.operations.SEW_OVERLOCK_1.id,
+    );
+  });
+
+  test('F2. /api/passports/by-code: routeHint = null, если у заказа нет snapshot маршрута', async () => {
+    // Заказ без routeTemplateId → snapshot пуст → routeHint = null,
+    // фронт спокойно скрывает блок без падения (см. STEP 3 ТЗ).
+    const create = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookies.manager)
+      .send({
+        orderDate: '2026-04-15T00:00:00.000Z',
+        productId: seed.product.id,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 1 }],
+      })
+      .expect(201);
+    const orderId: string = create.body.id;
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/start`)
+      .set('Cookie', cookies.manager)
+      .expect(201);
+    const passport = await request(t.app.getHttpServer())
+      .post('/api/passports')
+      .set('Cookie', cookies.manager)
+      .send({
+        orderId,
+        sizeId: seed.sizes.M,
+        rollNumber: 'R-NO-ROUTE',
+        cutDate: '2026-04-15T00:00:00.000Z',
+        qtyCut: 1,
+      })
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.seamstress)
+      .send({
+        equipmentId: seed.equipment['overlock-01'].id,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+      })
+      .expect(201);
+    const lookup = await request(t.app.getHttpServer())
+      .post('/api/passports/by-code')
+      .set('Cookie', cookies.seamstress)
+      .send({ code: passport.body.number })
+      .expect(201);
+    expect(lookup.body.routeHint).toBeNull();
+  });
 
   test('E. /api/shifts/current-work: отдаёт routeCurrentStep / routeNextStep', async () => {
     const tpl = await createTemplate(t, cookies.manager, 'BASIC-WORK', [

@@ -27,3 +27,4 @@ export * from './costs';
 export * from './dashboard';
 export * from './printers';
 export * from './routes';
+export * from './tech-cards';

@@ -1,6 +1,12 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import type { OrderSizeBreakdownRow, OrderSummary } from '@sewing/shared/orders';
+import type {
+  OrderMaterialRequirementDto,
+  OrderOutsourceRequirementDto,
+  OrderRouteStepDto,
+  OrderSizeBreakdownRow,
+  OrderSummary,
+} from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 import { ApiRequestError } from '@/lib/api';
 import { getOrder } from '@/lib/orders-api';
@@ -124,6 +130,10 @@ export default async function OrderDetailPage({
           </>
         )}
       </div>
+
+      <RouteSnapshotCard steps={order.routeSteps} />
+      <MaterialsSnapshotCard items={order.materialRequirements} />
+      <OutsourceSnapshotCard items={order.outsourceRequirements} />
 
       {isManager && <OrderActions id={order.id} status={order.status} />}
 
@@ -274,6 +284,125 @@ function ClosureRequestsBanner({
             ))}
           </ul>
         </>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Tech card MVP (ADR-0022): read-only snapshot строк материалов на
+ * заказе. Источник истины — `OrderMaterialRequirement` (его создаёт
+ * `OrdersService.start()`). Здесь UI НЕ догружает live-строки шаблона —
+ * это позволило бы поздним правкам техкарты «протекать» в карточку
+ * запущенного заказа.
+ */
+function MaterialsSnapshotCard({
+  items,
+}: {
+  items: OrderMaterialRequirementDto[];
+}) {
+  return (
+    <div className="card" style={{ marginBottom: '1rem' }}>
+      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>Материалы</h2>
+      {items.length === 0 ? (
+        <div className="meta-line">
+          Материалы для заказа не зафиксированы
+        </div>
+      ) : (
+        <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
+          {items.map((m) => (
+            <li key={m.id}>
+              <strong>{m.name}</strong>{' '}
+              <span className="meta-line">
+                — {m.totalQty} {m.unit}
+              </span>
+              <div className="meta-line">
+                Норма: {m.qtyPerUnit} {m.unit} / 1 шт
+                {m.note ? <> · {m.note}</> : null}
+              </div>
+            </li>
+          ))}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Tech card MVP (ADR-0022): read-only snapshot строк внешних подрядных
+ * размещений (OUTSOURCED_SERVICE) на заказе. Источник истины —
+ * `OrderOutsourceRequirement`. Семантика та же, что у
+ * `MaterialsSnapshotCard`.
+ */
+function OutsourceSnapshotCard({
+  items,
+}: {
+  items: OrderOutsourceRequirementDto[];
+}) {
+  return (
+    <div className="card" style={{ marginBottom: '1rem' }}>
+      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>
+        Внешние потребности
+      </h2>
+      {items.length === 0 ? (
+        <div className="meta-line">
+          Внешние потребности для заказа не зафиксированы
+        </div>
+      ) : (
+        <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
+          {items.map((o) => {
+            const showTotal = o.totalQty != null && o.unit != null;
+            const showNorm = o.qtyPerUnit != null && o.unit != null;
+            return (
+              <li key={o.id}>
+                <strong>{o.name}</strong>
+                {showTotal ? (
+                  <span className="meta-line">
+                    {' '}
+                    — {o.totalQty} {o.unit}
+                  </span>
+                ) : null}
+                {o.vendorName ? (
+                  <div className="meta-line">Подрядчик: {o.vendorName}</div>
+                ) : null}
+                {showNorm ? (
+                  <div className="meta-line">
+                    Норма: {o.qtyPerUnit} {o.unit} / 1 шт
+                  </div>
+                ) : null}
+                {o.note ? (
+                  <div className="meta-line">{o.note}</div>
+                ) : null}
+              </li>
+            );
+          })}
+        </ol>
+      )}
+    </div>
+  );
+}
+
+function RouteSnapshotCard({ steps }: { steps: OrderRouteStepDto[] }) {
+  // Snapshot маршрута на заказе (источник истины — `OrderRouteStep`).
+  // Read-only представление: никакого редактирования, drag/drop или
+  // прогресса паспортов — только зафиксированный план шагов.
+  // Шаги уже отсортированы бэкендом по `index ASC`.
+  return (
+    <div className="card" style={{ marginBottom: '1rem' }}>
+      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>
+        Маршрут производства
+      </h2>
+      {steps.length === 0 ? (
+        <div className="meta-line">Маршрут для заказа не зафиксирован</div>
+      ) : (
+        <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
+          {steps.map((s) => (
+            <li key={s.id}>
+              {s.operationName}{' '}
+              <span className="meta-line">({s.operationCode})</span>
+            </li>
+          ))}
+        </ol>
       )}
     </div>
   );

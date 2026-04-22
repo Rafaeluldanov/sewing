@@ -109,12 +109,20 @@ export class PassportsController {
    * номер `P-…`, или голый id). Используется UI `/work`, когда
    * сотрудник сканирует/вводит код, а нам нужен сам паспорт до
    * `issue/scan`. См. ADR-0008.
+   *
+   * STEP 8 ТЗ MVP (soft-route hint): передаём `user.employeeId` в
+   * сервис, чтобы он мог сравнить активную смену сотрудника с
+   * ожидаемым шагом маршрута и проставить `routeHint.routeMismatchWithActiveShift`.
+   * Это исключительно read-only подсказка, без 409 и без блокировки.
    */
   @Post('by-code')
   byCode(
     @Body(new ZodValidationPipe(PassportByCodeSchema)) dto: PassportByCodeDto,
+    @CurrentUser() user: AuthPrincipal,
   ) {
-    return this.passports.findByCode(dto.code);
+    return this.passports.findByCode(dto.code, {
+      employeeIdForRouteHint: user.employeeId,
+    });
   }
 
   /**

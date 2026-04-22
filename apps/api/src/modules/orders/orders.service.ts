@@ -3,7 +3,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import type { Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { OrderStatus } from '@prisma/client';
 import type {
   CreateOrderDto,
@@ -18,12 +18,14 @@ import {
   OrderInvalidTransitionException,
   OrderLockedException,
   OrderRouteAlreadyStartedException,
+  OrderTechCardAlreadyStartedException,
   RouteTemplateInactiveException,
   RouteTemplateNotFoundException,
 } from '../../common/errors.js';
 import { aggregateOrder } from './order-aggregator.js';
 import { OrderNumberService } from './order-number.service.js';
 import { RoutesService } from '../routes/routes.service.js';
+import { TechCardsService } from '../tech-cards/tech-cards.service.js';
 
 type OrderWithItems = Prisma.OrderGetPayload<{
   include: {
@@ -31,6 +33,9 @@ type OrderWithItems = Prisma.OrderGetPayload<{
     passports: true;
     routeTemplate: true;
     routeSteps: { include: { operation: true } };
+    techCard: true;
+    materialRequirements: true;
+    outsourceRequirements: true;
   };
 }>;
 
@@ -42,6 +47,7 @@ export class OrdersService {
     private readonly prisma: PrismaService,
     private readonly numbers: OrderNumberService,
     private readonly routes: RoutesService,
+    private readonly techCards: TechCardsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -95,6 +101,11 @@ export class OrdersService {
     if (dto.routeTemplateId) {
       await this.assertRouteTemplateUsable(dto.routeTemplateId);
     }
+    // Tech card MVP (ADR-0022): аналогично route — soft-protection
+    // против UI, который раздаёт неактивные значения.
+    if (dto.techCardId) {
+      await this.techCards.assertTechCardUsable(dto.techCardId);
+    }
 
     const order = await this.prisma.$transaction(async (tx) => {
       const number = await this.numbers.nextNumber(tx);
@@ -110,6 +121,7 @@ export class OrdersService {
           comment: dto.comment ?? null,
           status: OrderStatus.DRAFT,
           routeTemplateId: dto.routeTemplateId ?? null,
+          techCardId: dto.techCardId ?? null,
           items: {
             create: dto.items.map((i) => ({
               productId: dto.productId,
@@ -123,6 +135,9 @@ export class OrdersService {
           passports: true,
           routeTemplate: true,
           routeSteps: { include: { operation: true } },
+          techCard: true,
+          materialRequirements: true,
+          outsourceRequirements: true,
         },
       });
     });
@@ -218,6 +233,9 @@ export class OrdersService {
           orderBy: { index: 'asc' },
           include: { operation: true },
         },
+        techCard: true,
+        materialRequirements: { orderBy: { sortOrder: 'asc' } },
+        outsourceRequirements: { orderBy: { sortOrder: 'asc' } },
       },
     });
     if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Заказ не найден' });
@@ -307,6 +325,23 @@ export class OrdersService {
       }
     }
 
+    // Tech card MVP (ADR-0022): аналогичная защита по snapshot-у
+    // материалов/внешних потребностей. В DRAFT snapshot-а быть не
+    // должно, но делаем явный guard, чтобы будущее «PAUSED → DRAFT» не
+    // молча затирало старый план.
+    if (dto.techCardId !== undefined) {
+      const [matCount, outsCount] = await this.prisma.$transaction([
+        this.prisma.orderMaterialRequirement.count({ where: { orderId: id } }),
+        this.prisma.orderOutsourceRequirement.count({ where: { orderId: id } }),
+      ]);
+      if (matCount + outsCount > 0) {
+        throw new OrderTechCardAlreadyStartedException();
+      }
+      if (dto.techCardId !== null) {
+        await this.techCards.assertTechCardUsable(dto.techCardId);
+      }
+    }
+
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id },
@@ -327,6 +362,8 @@ export class OrdersService {
             dto.routeTemplateId === undefined
               ? undefined
               : dto.routeTemplateId, // null = очистка, string = смена
+          techCardId:
+            dto.techCardId === undefined ? undefined : dto.techCardId,
         },
       });
 
@@ -395,6 +432,20 @@ export class OrdersService {
       );
     }
 
+    // Tech card MVP (ADR-0022): фиксируем snapshot строк техкарты в
+    // той же транзакции, что смена статуса. baseQty = Σ qtyPlan по
+    // OrderItem. Никаких формул/коэффициентов: totalQty = qtyPerUnit *
+    // baseQty (см. `docs/domain.md §«Техкарты»`).
+    const baseQty = order.items.reduce((s, it) => s + it.qtyPlan, 0);
+    let techCardLines: Awaited<
+      ReturnType<TechCardsService['getLinesForSnapshot']>
+    > | null = null;
+    if (order.techCardId) {
+      techCardLines = await this.techCards.getLinesForSnapshot(
+        order.techCardId,
+      );
+    }
+
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id },
@@ -413,6 +464,47 @@ export class OrdersService {
               orderId: id,
               index: s.index,
               operationId: s.operationId,
+            })),
+          });
+        }
+      }
+
+      if (techCardLines) {
+        const baseDecimal = new Prisma.Decimal(baseQty);
+        // Аналогичный idempotent-guard, как у route snapshot.
+        const existingMat = await tx.orderMaterialRequirement.count({
+          where: { orderId: id },
+        });
+        if (existingMat === 0 && techCardLines.materialLines.length > 0) {
+          await tx.orderMaterialRequirement.createMany({
+            data: techCardLines.materialLines.map((l) => ({
+              orderId: id,
+              sourceTechCardLineId: l.id,
+              sortOrder: l.sortOrder,
+              name: l.name,
+              unit: l.unit,
+              qtyPerUnit: l.qtyPerUnit,
+              totalQty: l.qtyPerUnit.mul(baseDecimal),
+              note: l.note,
+            })),
+          });
+        }
+        const existingOuts = await tx.orderOutsourceRequirement.count({
+          where: { orderId: id },
+        });
+        if (existingOuts === 0 && techCardLines.outsourceLines.length > 0) {
+          await tx.orderOutsourceRequirement.createMany({
+            data: techCardLines.outsourceLines.map((l) => ({
+              orderId: id,
+              sourceTechCardLineId: l.id,
+              sortOrder: l.sortOrder,
+              name: l.name,
+              unit: l.unit,
+              qtyPerUnit: l.qtyPerUnit,
+              totalQty:
+                l.qtyPerUnit == null ? null : l.qtyPerUnit.mul(baseDecimal),
+              vendorName: l.vendorName,
+              note: l.note,
             })),
           });
         }
@@ -497,6 +589,9 @@ export class OrdersService {
       routeTemplateId: order.routeTemplateId,
       routeTemplateCode: order.routeTemplate?.code ?? null,
       routeTemplateName: order.routeTemplate?.name ?? null,
+      techCardId: order.techCardId,
+      techCardCode: order.techCard?.code ?? null,
+      techCardName: order.techCard?.name ?? null,
       items: order.items.map((it) => {
         const s = sizes.find((x) => x.id === it.sizeId);
         return {
@@ -518,6 +613,31 @@ export class OrdersService {
           operationId: s.operationId,
           operationCode: s.operation.code,
           operationName: s.operation.name,
+        })),
+      materialRequirements: order.materialRequirements
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          id: r.id,
+          sortOrder: r.sortOrder,
+          name: r.name,
+          unit: r.unit,
+          qtyPerUnit: r.qtyPerUnit.toString(),
+          totalQty: r.totalQty.toString(),
+          note: r.note,
+        })),
+      outsourceRequirements: order.outsourceRequirements
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((r) => ({
+          id: r.id,
+          sortOrder: r.sortOrder,
+          name: r.name,
+          unit: r.unit,
+          qtyPerUnit: r.qtyPerUnit ? r.qtyPerUnit.toString() : null,
+          totalQty: r.totalQty ? r.totalQty.toString() : null,
+          vendorName: r.vendorName,
+          note: r.note,
         })),
     };
   }

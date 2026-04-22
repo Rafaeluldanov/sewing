@@ -18,6 +18,51 @@ import { z } from 'zod';
 
 import type { OrderRouteStepDto } from './routes';
 
+/**
+ * Re-export snapshot-шага маршрута, чтобы консьюмеры `OrderDetailDto`
+ * могли импортировать оба типа из одного модуля
+ * (`@sewing/shared/orders`) — это backward-compatible расширение
+ * поверхности модуля «Заказы».
+ */
+export type { OrderRouteStepDto };
+
+// ---------------------------------------------------------------------------
+// Tech card snapshot DTO (см. `docs/domain.md §«Техкарты»`, ADR-0022)
+// ---------------------------------------------------------------------------
+
+/**
+ * Snapshot строки материала на конкретном заказе. Источник истины —
+ * `OrderMaterialRequirement` (см. `prisma/schema.prisma`). Поля копируют
+ * `TechCardMaterialLine` в момент `OrdersService.start()` плюс
+ * посчитанный `totalQty = qtyPerUnit * Σ qtyPlan` по строкам заказа.
+ */
+export interface OrderMaterialRequirementDto {
+  id: string;
+  sortOrder: number;
+  name: string;
+  unit: string;
+  /** Decimal как строка (см. `Prisma.Decimal`). */
+  qtyPerUnit: string;
+  totalQty: string;
+  note: string | null;
+}
+
+/**
+ * Snapshot строки внешнего подрядного размещения на конкретном заказе.
+ * `qtyPerUnit`/`totalQty`/`unit` могут быть null — это нормально для
+ * подряда, который считается «за партию» без явной нормы.
+ */
+export interface OrderOutsourceRequirementDto {
+  id: string;
+  sortOrder: number;
+  name: string;
+  unit: string | null;
+  qtyPerUnit: string | null;
+  totalQty: string | null;
+  vendorName: string | null;
+  note: string | null;
+}
+
 // ---------------------------------------------------------------------------
 // Enums
 // ---------------------------------------------------------------------------
@@ -71,6 +116,13 @@ export const CreateOrderSchema = z.object({
    * (полная backward compatibility со старым flow).
    */
   routeTemplateId: z.string().min(1).optional(),
+  /**
+   * Tech card MVP (ADR-0022): опциональная привязка к шаблону техкарты.
+   * Строки техкарты фиксируются snapshot-ами `materialRequirements[]` /
+   * `outsourceRequirements[]` при `OrdersService.start()`. Не задан —
+   * заказ запускается «без техкарты», snapshot-ы остаются пустыми.
+   */
+  techCardId: z.string().min(1).optional(),
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -113,6 +165,13 @@ export const UpdateOrderSchema = z.object({
    * уже зафиксирован.
    */
   routeTemplateId: z.string().min(1).nullable().optional(),
+  /**
+   * Tech card MVP (ADR-0022): смена/сброс шаблона техкарты до запуска
+   * заказа (status = DRAFT). После `start()` snapshot материалов и
+   * внешних потребностей зафиксирован, и поле здесь оставлять можно
+   * только без изменений.
+   */
+  techCardId: z.string().min(1).nullable().optional(),
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -243,6 +302,27 @@ export interface OrderDetailDto extends OrderListItemDto {
    * фиксировался» (заказ либо ещё не запущен, либо запущен без шаблона).
    */
   routeSteps: OrderRouteStepDto[];
+  /**
+   * Tech card MVP (ADR-0022): привязка к шаблону техкарты. Хранится id
+   * + краткое имя для UI карточки заказа, чтобы не делать
+   * дополнительный запрос за деталями. `null` означает «техкарта не
+   * выбрана» — snapshot будет пуст и после `start()`.
+   */
+  techCardId: string | null;
+  techCardCode: string | null;
+  techCardName: string | null;
+  /**
+   * Snapshot строк материалов на заказе. Заполняется в
+   * `OrdersService.start()` по шаблону `techCardId`; пустой массив =
+   * «техкарта не фиксировалась» (заказ либо ещё не запущен, либо
+   * запущен без техкарты).
+   */
+  materialRequirements: OrderMaterialRequirementDto[];
+  /**
+   * Snapshot строк внешних подрядных размещений на заказе. Семантика
+   * аналогична `materialRequirements`.
+   */
+  outsourceRequirements: OrderOutsourceRequirementDto[];
 }
 
 export interface Paginated<T> {

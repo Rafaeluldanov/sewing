@@ -53,7 +53,18 @@ function buildCreateDto(form: FormData): CreateOrderDto {
   const comment = String(form.get('comment') ?? '').trim() || undefined;
   const routeTemplateId =
     String(form.get('routeTemplateId') ?? '').trim() || undefined;
-  return { orderDate, productId, color, comment, items, routeTemplateId };
+  // Tech card MVP (ADR-0022): пустой select = «без техкарты».
+  const techCardId =
+    String(form.get('techCardId') ?? '').trim() || undefined;
+  return {
+    orderDate,
+    productId,
+    color,
+    comment,
+    items,
+    routeTemplateId,
+    techCardId,
+  };
 }
 
 function buildUpdateDto(form: FormData): UpdateOrderDto {
@@ -75,6 +86,17 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     const v = String(routeRaw).trim();
     routeTemplateId = v === '' ? null : v;
   }
+  // Tech card MVP (ADR-0022): семантика идентична routeTemplateId —
+  // отсутствие поля = не трогать, пустая строка = очистить, иначе =
+  // переустановить.
+  const techCardRaw = form.get('techCardId');
+  let techCardId: string | null | undefined;
+  if (techCardRaw === null) {
+    techCardId = undefined;
+  } else {
+    const v = String(techCardRaw).trim();
+    techCardId = v === '' ? null : v;
+  }
   const dto: UpdateOrderDto = {
     orderDate: String(form.get('orderDate') ?? '').trim() || undefined,
     productId: String(form.get('productId') ?? '').trim() || undefined,
@@ -82,6 +104,7 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     comment: optionalString(form.get('comment')),
     items: items.length > 0 ? items : undefined,
     routeTemplateId,
+    techCardId,
   };
   return dto;
 }

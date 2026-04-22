@@ -23,6 +23,7 @@ import { CostsModule } from './modules/costs/costs.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { PrintersModule } from './modules/printers/printers.module.js';
 import { RoutesModule } from './modules/routes/routes.module.js';
+import { TechCardsModule } from './modules/tech-cards/tech-cards.module.js';
 
 @Module({
   imports: [
@@ -50,6 +51,7 @@ import { RoutesModule } from './modules/routes/routes.module.js';
     DashboardModule,
     PrintersModule,
     RoutesModule,
+    TechCardsModule,
   ],
 })
 export class AppModule {}

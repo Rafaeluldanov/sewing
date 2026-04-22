@@ -487,9 +487,8 @@ mixed split/merge паспортов, event sourcing сверх уже прин�
 1. Один заказ = **одно изделие + один цвет + много размеров.** Технически
    `OrderItem.productId` хранит продукт для каждой строки, и сервер
    валидирует, что все строки относятся к одному `productId` (см.
-   `OrdersService`). Цвет берётся из `Product.color`; поле `color` на
-   самом `Order` не хранится — это сознательное упрощение (минимум
-   изменений схемы).
+   `OrdersService`). Цвет хранится в `Order.color` (свободный текст,
+   опционально); если не задан, fallback — `Product.color`.
 2. Строка заказа: `qtyPlan > 0`, размер уникален в рамках заказа
    (`@@unique(orderId, productId, sizeId)`).
 3. Редактировать `OrderItem[]` и шапку можно **только в статусе `DRAFT`**.
@@ -1640,3 +1639,101 @@ Snapshot создаётся в **транзакции** внутри `OrdersServ
 
 См. `api.md §17 (routes)`, `screens.md §«Маршруты»`,
 `apps/api/src/modules/routes/`.
+
+## §19. Техкарты (tech cards, MVP)
+
+См. ADR-0022. Техкарта — справочный шаблон **«потребностей на единицу
+изделия»**: какие материалы нужны и какие внешние подрядные размещения
+(шелкография, печать этикеток, вышивка — `OUTSOURCED_SERVICE` из
+терминологии операций). Техкарта и маршрут — **независимые** оси:
+маршрут отвечает «что делает швея», техкарта — «что нужно положить в
+этот заказ». Привязка к заказу опциональна: можно создать заказ без
+техкарты (полная backward compatibility со старым flow).
+
+### Сущности
+
+#### `TechCardTemplate`
+
+- `id`, `code` (уникален), `name`, `isActive`.
+- Имеет связи `materialLines: TechCardMaterialLine[]` и
+  `outsourceLines: TechCardOutsourceLine[]`.
+- Деактивированный шаблон скрыт в селекте при создании заказа, но
+  остаётся виден в редактировании уже привязанного DRAFT-заказа
+  (тот же UX, что и `RouteTemplate`).
+
+#### `TechCardMaterialLine`
+
+- `name`, `unit` (обязательно), `qtyPerUnit Decimal(12,4)` (> 0,
+  валидируется DTO/сервисом, не DB-check), `note?`, `sortOrder`.
+- Cascade-FK на `TechCardTemplate`. Имена внутри одной техкарты не
+  уникализируем (бывают одинаковые ткани разного назначения).
+
+#### `TechCardOutsourceLine`
+
+- `name`, `unit?`, `qtyPerUnit Decimal(12,4)?`, `vendorName?`,
+  `note?`, `sortOrder`.
+- `unit`/`qtyPerUnit` опциональны: часть подрядов считается «за
+  партию» без явной нормы.
+- `vendorName` — свободный текст, vendor-directory мы НЕ строим.
+
+#### `Order.techCardId`
+
+- Опциональная FK, аналог `routeTemplateId`. На MVP менеджер
+  выбирает техкарту вручную (`Product.defaultTechCardId` отложен).
+
+#### `OrderMaterialRequirement` / `OrderOutsourceRequirement` (snapshot)
+
+- Read-only план потребностей конкретного заказа. Создаётся в
+  `OrdersService.start()` и больше не меняется при правках техкарты.
+- Поля копируют шаблон + добавляется `totalQty Decimal(12,4)`
+  (для outsource — nullable).
+- FK `sourceTechCardLineId` — nullable, **`ON DELETE SET NULL`**.
+  Это и есть «независимость snapshot-а»: даже если позже строку
+  шаблона удалят, snapshot заказа продолжает работать со
+  скопированным именем/нормой/итогом, просто без обратной ссылки.
+
+### Жизненный цикл
+
+1. **Менеджер заводит техкарту** в `/admin/tech-cards/new`: код,
+   название, активность; добавляет строки материалов и/или внешних
+   потребностей (без drag-and-drop, порядок строк = порядок в
+   форме).
+2. **Менеджер создаёт заказ** в `/orders/new` и опционально
+   выбирает техкарту в селекте «Техкарта». До запуска заказ живёт
+   в `DRAFT` — `techCardId` можно сменить через
+   `PATCH /api/orders/:id`. После `start()` поменять нельзя
+   (`409 ORDER_TECH_CARD_ALREADY_STARTED`).
+3. **Менеджер запускает заказ** (`POST /api/orders/:id/start`).
+   В одной транзакции: статус → `IN_PRODUCTION`, snapshot
+   маршрута (если выбран `routeTemplateId`), snapshot техкарты
+   (если выбран `techCardId`).
+4. **Расчёт `totalQty`**:
+   - `baseQty = Σ OrderItem.qtyPlan` по всем строкам заказа;
+   - для материалов: `totalQty = qtyPerUnit * baseQty`
+     (`Prisma.Decimal`-математика, без округлений);
+   - для outsource: `totalQty = qtyPerUnit * baseQty`, если
+     `qtyPerUnit != null`; иначе snapshot хранит `totalQty = null`.
+5. **Карточка заказа** (`/orders/:id`) отдаёт snapshot read-only:
+   блоки «Материалы» и «Внешние потребности». Источник истины —
+   snapshot заказа, а не live-шаблон. Если `techCardId == null` или
+   заказ ещё в `DRAFT`, оба блока показывают спокойный empty-state
+   «не зафиксированы».
+
+### Что специально НЕ делаем на MVP
+
+- **Никаких формул/размерных коэффициентов/процентов отходов** —
+  только плоский `qtyPerUnit * baseQty`.
+- **Не enforce-им «нельзя стартовать без техкарты»** — техкарта
+  опциональна, как `routeTemplateId`.
+- **Не строим `Product.defaultTechCardId`** — менеджер выбирает
+  руками. Это сахар, который добавится без breaking-changes.
+- **Не строим vendor-directory** — `vendorName` свободный текст.
+- **Не учитываем snapshot потребностей в `CostsService` /
+  dashboard** — material-cost остаётся как есть (см. ADR-0022,
+  «Отложено»).
+- **Не трогаем shopfloor / display / паспорта / QC / WTO / packing
+  flow** — техкарта живёт сбоку и не влияет на пайплайн
+  производства.
+
+См. `api.md §«tech-cards»`, `screens.md §«Техкарты»`, ADR-0022,
+`apps/api/src/modules/tech-cards/`.

@@ -36,9 +36,13 @@ import {
   canSeeOrders,
   canSeeOrdersMenu,
   canSeePacking,
+  canSeePackingMenu,
   canSeeQc,
+  canSeeQcMenu,
   canSeeShopfloorMenu,
   canSeeWorkTab,
+  canSeeWto,
+  canSeeWtoMenu,
   getPrimaryWorkspace,
   isSingleWorkspaceRole,
   isWorkingRole,
@@ -88,6 +92,37 @@ describe('frontend rbac matrix', () => {
     // У роли остаётся технический read-доступ для flow «Выпустить паспорт».
     expect(canSeeOrders('CUTTER_ASSISTANT')).toBe(true);
     expect(canSeeOrdersMenu('CUTTER_ASSISTANT')).toBe(false);
+  });
+
+  test('canSee{Qc,Wto,Packing}Menu: SHOP_MANAGER исключён, операторы остаются, технический доступ сохранён', () => {
+    // По матрице из ТЗ начальник цеха не должен видеть в навигации
+    // scan-driven терминалы операторов — но прямой доступ к страницам
+    // (через URL) у роли остаётся, как и у `canSeeOrdersMenu` vs
+    // `canSeeOrders`.
+    expect(canSeeQc('SHOP_MANAGER')).toBe(true);
+    expect(canSeeWto('SHOP_MANAGER')).toBe(true);
+    expect(canSeePacking('SHOP_MANAGER')).toBe(true);
+    expect(canSeeQcMenu('SHOP_MANAGER')).toBe(false);
+    expect(canSeeWtoMenu('SHOP_MANAGER')).toBe(false);
+    expect(canSeePackingMenu('SHOP_MANAGER')).toBe(false);
+
+    // Профильные роли по-прежнему видят свой пункт.
+    expect(canSeeQcMenu('QC')).toBe(true);
+    expect(canSeeWtoMenu('IRONING')).toBe(true);
+    expect(canSeePackingMenu('PACKING')).toBe(true);
+
+    // ADMIN сохраняет полный набор пунктов в меню (для отладки/поддержки).
+    expect(canSeeQcMenu('ADMIN')).toBe(true);
+    expect(canSeeWtoMenu('ADMIN')).toBe(true);
+    expect(canSeePackingMenu('ADMIN')).toBe(true);
+
+    // Роли, которым раздел вообще недоступен, и через menu-хелпер не пройдут.
+    expect(canSeeQcMenu('SEAMSTRESS')).toBe(false);
+    expect(canSeeWtoMenu('CUTTER')).toBe(false);
+    expect(canSeePackingMenu('IRONING')).toBe(false);
+    expect(canSeeQcMenu(undefined)).toBe(false);
+    expect(canSeeWtoMenu(null)).toBe(false);
+    expect(canSeePackingMenu('')).toBe(false);
   });
 
   test('canSeeShopfloorMenu: показываем всем кроме CUTTER_ASSISTANT', () => {
@@ -484,6 +519,22 @@ describe('homepage tile visibility', () => {
     expect(src).toMatch(/showOrders && \(/);
     expect(src).toMatch(/title="Заказы"/);
   });
+
+  test('app/page.tsx прячет терминальные тайлы у SHOP_MANAGER через *Menu-хелперы', () => {
+    const src = readSrc('apps/web/app/page.tsx');
+    // Те же *Menu-хелперы, что в header/mobile-nav: тайлы
+    // «Рабочее место» / «ОТК» / «ВТО» / «Упаковка» у начальника
+    // цеха в навигации не показываем (см. `canSeeQcMenu` и т.д.).
+    expect(src).toMatch(/canSeeQcMenu/);
+    expect(src).toMatch(/canSeeWtoMenu/);
+    expect(src).toMatch(/canSeePackingMenu/);
+    expect(src).toMatch(/canSeeWorkTab/);
+    // Тайл «Рабочее место» теперь под флагом `showWork`, а не
+    // безусловный — иначе SHOP_MANAGER снова увидит точку входа в
+    // терминал швеи на главной.
+    expect(src).toMatch(/showWork && \(/);
+    expect(src).toMatch(/title="Рабочее место"/);
+  });
 });
 
 describe('frontend nav-visibility helpers fed into layout / mobile-nav', () => {
@@ -596,9 +647,13 @@ describe('primary workspace per role (one terminal per role)', () => {
     expect(canSeeHome(undefined)).toBe(false);
   });
 
-  test('canSeeWorkTab — скрыт у всех ролей, для которых /work primary либо неактуален', () => {
+  test('canSeeWorkTab — только ADMIN (рабочее место в меню не показываем менеджеру)', () => {
     const allowed = ALL_ROLES.filter((r) => canSeeWorkTab(r));
-    expect(allowed.sort()).toEqual(['ADMIN', 'SHOP_MANAGER']);
+    // SHOP_MANAGER исключён сознательно: терминал швеи в меню
+    // начальника цеха не нужен. Технический доступ к `/work`
+    // у роли остаётся (страница и backend не закрыты этим UI-флагом).
+    expect(allowed.sort()).toEqual(['ADMIN']);
+    expect(canSeeWorkTab('SHOP_MANAGER')).toBe(false);
     // У SEAMSTRESS и CUTTER_ASSISTANT нет дублирующей вкладки «Работа».
     expect(canSeeWorkTab('SEAMSTRESS')).toBe(false);
     expect(canSeeWorkTab('CUTTER_ASSISTANT')).toBe(false);
@@ -606,6 +661,7 @@ describe('primary workspace per role (one terminal per role)', () => {
     expect(canSeeWorkTab('IRONING')).toBe(false);
     expect(canSeeWorkTab('QC')).toBe(false);
     expect(canSeeWorkTab('PACKING')).toBe(false);
+    expect(canSeeWorkTab(undefined)).toBe(false);
   });
 });
 

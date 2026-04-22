@@ -5,12 +5,12 @@ import { getCurrentUserOrNull } from '@/lib/auth-api';
 import {
   canSeeHome,
   canSeeOrdersMenu,
-  canSeePacking,
+  canSeePackingMenu,
   canSeeProductionCost,
-  canSeeQc,
+  canSeeQcMenu,
   canSeeShopfloorMenu,
   canSeeWorkTab,
-  canSeeWto,
+  canSeeWtoMenu,
   isSingleWorkspaceRole,
 } from '@/lib/rbac';
 import { LogoutButton } from '@/components/logout-button';
@@ -56,15 +56,20 @@ export default async function RootLayout({
   //     редиректит в их primary workspace (см. `app/page.tsx`);
   //   - дублирующая вкладка «Работа» скрыта у тех, у кого `/work` уже
   //     primary workspace (CUTTER_ASSISTANT, SEAMSTRESS, CUTTER,
-  //     IRONING) и у тех, кому `/work` не нужен (QC, PACKING).
+  //     IRONING) и у тех, кому `/work` не нужен (QC, PACKING,
+  //     SHOP_MANAGER).
+  // Для пунктов терминалов (`/qc`, `/wto`, `/packing`) используем
+  // `canSee*Menu`, а не технические `canSee*`: SHOP_MANAGER сохраняет
+  // доступ к страницам по прямой ссылке (см. `/qc/layout.tsx` и т.д.),
+  // но в меню начальника цеха эти scan-driven терминалы не нужны.
   // У SEAMSTRESS и CUTTER_ASSISTANT (`isSingleWorkspaceRole`) ниже
   // целиком прячем `MobileNav` — экран должен выглядеть как один
   // сфокусированный терминал, без глобальной навигации.
   const showHome = canSeeHome(role);
   const showWork = canSeeWorkTab(role);
-  const showQc = canSeeQc(role);
-  const showWto = canSeeWto(role);
-  const showPacking = canSeePacking(role);
+  const showQc = canSeeQcMenu(role);
+  const showWto = canSeeWtoMenu(role);
+  const showPacking = canSeePackingMenu(role);
   const showOrders = canSeeOrdersMenu(role);
   const showShopfloor = canSeeShopfloorMenu(role);
   const showProductionCost = canSeeProductionCost(role);
@@ -99,6 +104,8 @@ export default async function RootLayout({
                 <Link href="/admin/equipment"><Icon name="equipment" /><span>Оборудование</span></Link>
                 <Link href="/admin/warehouses"><Icon name="warehouses" /><span>Склад</span></Link>
                 <Link href="/admin/operations"><Icon name="operations" /><span>Операции</span></Link>
+                <Link href="/admin/routes"><Icon name="arrow-right" /><span>Маршруты</span></Link>
+                <Link href="/admin/tech-cards"><Icon name="orders" /><span>Техкарты</span></Link>
                 <Link href="/admin/employees"><Icon name="employees" /><span>Сотрудники</span></Link>
                 <Link href="/admin/printers"><Icon name="equipment" /><span>Принтеры</span></Link>
               </>
