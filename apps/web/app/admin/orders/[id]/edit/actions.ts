@@ -160,6 +160,12 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     clientId: optionalNullableString(form.get('clientId')),
     dueDate: optionalNullableString(form.get('dueDate')),
     division: parseDivision(form),
+    // PHASE 1 «CompanyDivision как master-справочник» (см.
+    // `docs/domain.md §«Подразделения заказа»`,
+    // `OrdersService.resolveCompanyDivisionForOrder`): UI новой
+    // edit-формы шлёт `companyDivisionId` (FK на справочник).
+    // Семантика та же, что у `routeTemplateId` / `techCardId`.
+    companyDivisionId: optionalNullableString(form.get('companyDivisionId')),
     status: parseStatus(form),
     customerUnitPrice,
     customerCurrency,

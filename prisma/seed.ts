@@ -594,6 +594,63 @@ async function seedDefectTypes() {
 }
 
 // ---------------------------------------------------------------------------
+// COMPANY DIVISIONS (master-справочник подразделений заказа / display screens)
+// ---------------------------------------------------------------------------
+
+/**
+ * PHASE 1 «CompanyDivision как master-справочник» (см.
+ * `docs/domain.md §«Подразделения заказа»`,
+ * `docs/erd.md §«CompanyDivision»`): идемпотентно создаёт базовые
+ * карточки `MARKETPLACE` и `OTHER` (B2B), на которые ссылаются
+ * `Order.companyDivisionId` и `DisplayScreenConfig.companyDivisionId`.
+ *
+ * `code` уникален и используется как ключ синхронизации с legacy
+ * `enum OrderDivision`. Имена (`Маркетплейс`, `B2B`) уже выровнены с
+ * лейблами `ORDER_DIVISION_LABELS` (см.
+ * `packages/shared/src/orders.ts`).
+ *
+ * Re-seed аккуратен с менеджерскими правками: если карточка уже есть,
+ * обновляются только `name`/`sortOrder`/`isActive` к каноничным
+ * значениям, а `description` сохраняется (`undefined` в `update`
+ * — Prisma не трогает колонку).
+ */
+const COMPANY_DIVISIONS: ReadonlyArray<{
+  code: string;
+  name: string;
+  sortOrder: number;
+}> = [
+  { code: 'MARKETPLACE', name: 'Маркетплейс', sortOrder: 10 },
+  { code: 'OTHER', name: 'B2B', sortOrder: 20 },
+];
+
+async function seedCompanyDivisions() {
+  let created = 0;
+  let updated = 0;
+  for (const d of COMPANY_DIVISIONS) {
+    const existing = await prisma.companyDivision.findUnique({
+      where: { code: d.code },
+    });
+    await prisma.companyDivision.upsert({
+      where: { code: d.code },
+      create: {
+        code: d.code,
+        name: d.name,
+        sortOrder: d.sortOrder,
+        isActive: true,
+      },
+      update: {
+        name: d.name,
+        sortOrder: d.sortOrder,
+        isActive: true,
+      },
+    });
+    if (existing) updated += 1;
+    else created += 1;
+  }
+  return { created, updated, total: COMPANY_DIVISIONS.length };
+}
+
+// ---------------------------------------------------------------------------
 // MAIN
 // ---------------------------------------------------------------------------
 
@@ -614,6 +671,8 @@ async function main() {
   const rates = await seedOperationRatesBySize(ops.byCode);
   console.log('→ Seeding defect types…');
   const defects = await seedDefectTypes();
+  console.log('→ Seeding company divisions…');
+  const divisions = await seedCompanyDivisions();
 
   console.log('\n================ SEED SUMMARY ================');
   console.log(`Sizes:       total=${sizes.total}      created=${sizes.created}  updated=${sizes.updated}`);
@@ -624,6 +683,7 @@ async function main() {
   console.log(`Cells:       total=${cells.total}      created=${cells.created}  updated=${cells.updated}`);
   console.log(`OperationRatesBySize: total=${rates.total} created=${rates.created} updated=${rates.updated}`);
   console.log(`DefectTypes: total=${defects.total}    created=${defects.created}  updated=${defects.updated}`);
+  console.log(`CompanyDivisions: total=${divisions.total} created=${divisions.created} updated=${divisions.updated}`);
   console.log('==============================================\n');
   console.log('Demo password for all demo logins:', DEMO_PASSWORD);
   console.log('Demo logins:', EMPLOYEES.map((e) => e.login).join(', '));

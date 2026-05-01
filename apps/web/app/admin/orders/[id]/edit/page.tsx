@@ -19,6 +19,7 @@
 import { notFound, redirect } from 'next/navigation';
 import { Pencil } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
+import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type {
   OrderDetailDto,
   SizeDto,
@@ -32,6 +33,10 @@ import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getClient, listClients } from '@/lib/clients-api';
+import {
+  getCompanyDivision,
+  listCompanyDivisions,
+} from '@/lib/company-settings-api';
 import { getOrder, listSizes } from '@/lib/orders-api';
 import { getPattern, listPatterns } from '@/lib/patterns-api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
@@ -68,16 +73,22 @@ export default async function AdminOrderEditPage({ params }: Params) {
   let techCards: TechCardTemplateSummaryDto[] = [];
   let clients: ClientDto[] = [];
   let patterns: PatternListItemDto[] = [];
+  let companyDivisions: CompanyDivisionDto[] = [];
   let error: string | null = null;
   try {
     // Этап «Номенклатура = Лекала»: список Product больше не нужен —
     // в admin-форме его нет. См. `admin-edit-order-form.tsx`.
-    const [sz, rt, tc, cl, pt] = await Promise.allSettled([
+    //
+    // PHASE 1 «CompanyDivision как master-справочник»: подгружаем
+    // активные карточки подразделений вместе с остальными
+    // справочниками.
+    const [sz, rt, tc, cl, pt, cd] = await Promise.allSettled([
       listSizes(),
       listRouteTemplates({ isActive: true }),
       listTechCards({ isActive: true }),
       listClients(),
       listPatterns({ status: 'ACTIVE' }),
+      listCompanyDivisions(),
     ]);
     if (sz.status === 'fulfilled') sizes = sz.value;
     else throw sz.reason;
@@ -85,6 +96,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
     techCards = tc.status === 'fulfilled' ? tc.value : [];
     clients = cl.status === 'fulfilled' ? cl.value : [];
     patterns = pt.status === 'fulfilled' ? pt.value : [];
+    companyDivisions = cd.status === 'fulfilled' ? cd.value : [];
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -190,6 +202,23 @@ export default async function AdminOrderEditPage({ params }: Params) {
     }
   }
 
+  // PHASE 1 «CompanyDivision как master-справочник»: если у заказа
+  // привязана карточка, которой нет в активном списке (архивная или
+  // удалённая) — догружаем тёплым отдельным запросом, иначе селект
+  // потеряет привязку при сохранении формы. Тот же приём, что для
+  // patterns/route/tech-card/client выше.
+  if (
+    order.companyDivisionId &&
+    !companyDivisions.some((d) => d.id === order.companyDivisionId)
+  ) {
+    try {
+      const detail = await getCompanyDivision(order.companyDivisionId);
+      companyDivisions = [...companyDivisions, detail];
+    } catch {
+      // graceful — UI покажет fallback-опцию «архивное» из формы.
+    }
+  }
+
   // Превью маршрутов: подтягиваем шаги для каждого активного шаблона
   // (плюс текущего шаблона заказа, если он есть в списке выше). На
   // MVP это N запросов, но шаблонов десятки максимум.
@@ -239,6 +268,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
         techCards={techCards}
         clients={clients}
         patterns={patterns}
+        companyDivisions={companyDivisions}
         today={today}
       />
     </AdminPageShell>

@@ -637,30 +637,44 @@ export class ShopfloorService {
     // в режиме ALL_ACTIVE. Defect tally и stage-buckets считает
     // `projectShopfloorDisplay`.
     //
-    // Решение по division:
-    //   1) явный `query.division` всегда побеждает (backward-
-    //      compatibility со старыми URL-закладками + удобно для
-    //      ручного дебага DISPLAY-экраном);
-    //   2) иначе, если запрос пришёл от роли `DISPLAY` — пытаемся
+    // Решение по division (PHASE 1 «CompanyDivision как
+    // master-справочник»):
+    //   1) явный `query.divisionCode` побеждает всё. Это новый
+    //      параметр — `CompanyDivision.code`, может быть любой
+    //      пользовательской строкой;
+    //   2) иначе явный legacy `query.division` (`MARKETPLACE` /
+    //      `OTHER`) — backward-compatibility со старыми
+    //      `?division=…` URL-закладками. Семантически эквивалентен
+    //      `divisionCode` с тем же значением;
+    //   3) иначе, если запрос пришёл от роли `DISPLAY` — пытаемся
     //      найти `DisplayScreenConfig` по `employeeId` и применить
-    //      `division` оттуда. Это и есть «дисплей сам знает своё
-    //      подразделение» (см. `docs/screens.md §10e`,
-    //      `docs/api.md §11`). Конфиг с `isActive = false`
-    //      сознательно игнорируем — мягкий выключатель экрана,
-    //      менеджер временно сделал ему «общий» агрегат;
-    //   3) иначе — никакого фильтра по division (как раньше).
+    //      привязанное подразделение оттуда (приоритет —
+    //      `companyDivision.code`, fallback на legacy `division`).
+    //      Это и есть «дисплей сам знает своё подразделение»
+    //      (см. `docs/screens.md §10e`, `docs/api.md §11`). Конфиг
+    //      с `isActive = false` сознательно игнорируем — мягкий
+    //      выключатель экрана, менеджер временно сделал ему
+    //      «общий» агрегат;
+    //   4) иначе — никакого фильтра по division (как раньше).
+    //
+    // Filter применяется через `Order.companyDivision.code = …`,
+    // что покрывает и заказы только с FK (исторические — миграция
+    // backfill-ит совпадение `division::text → code`), и заказы,
+    // которые backend пишет синхронно с обоими полями.
     //
     // Equipment status (`listEquipmentStatus`) сознательно НЕ
     // фильтруем по division: оборудование не принадлежит подразделению,
     // и одни и те же станки могут шить разные заказы между сменами.
-    const division = await this.resolveDisplayDivision(query, user);
+    const divisionCode = await this.resolveDisplayDivisionCode(query, user);
 
     const orderFilter: Prisma.PassportWhereInput = {
       order: {
         status: {
           notIn: [OrderStatus.DONE, OrderStatus.CANCELLED],
         },
-        ...(division ? { division } : {}),
+        ...(divisionCode
+          ? buildOrderDivisionFilter(divisionCode)
+          : {}),
       },
     };
 
@@ -835,7 +849,9 @@ export class ShopfloorService {
     const activeOrdersPromise = this.prisma.order.findMany({
       where: {
         status: { notIn: [OrderStatus.DONE, OrderStatus.CANCELLED] },
-        ...(division ? { division } : {}),
+        ...(divisionCode
+          ? buildOrderDivisionFilter(divisionCode)
+          : {}),
       },
       select: {
         id: true,
@@ -1088,34 +1104,46 @@ export class ShopfloorService {
   // -------------------------------------------------------------------------
 
   /**
-   * Возвращает `OrderDivision`, по которому нужно сузить выборку
-   * `getDisplaySummary`, либо `null` — «не фильтровать».
+   * PHASE 1 «CompanyDivision как master-справочник» (см.
+   * `docs/domain.md §«Подразделения заказа»`,
+   * `docs/display-board.md`): возвращает строку-код подразделения
+   * для фильтра `getDisplaySummary`, либо `null` — «не фильтровать».
    *
    * Приоритеты (см. док-комментарий вызывающего):
-   *   1) `query.division` — явная воля клиента (старый поведенческий
-   *      контракт, query-param-based);
-   *   2) `user.role = DISPLAY` → ищем `DisplayScreenConfig` по
-   *      `employeeId`. Учитываем только `isActive = true` — мягкий
-   *      выключатель экрана даёт «общий» агрегат без удаления
-   *      записи;
-   *   3) иначе — `null`.
+   *   1) `query.divisionCode` — новый параметр, любое значение
+   *      `CompanyDivision.code` (PHASE 1 источник истины);
+   *   2) `query.division` — legacy enum (`MARKETPLACE`/`OTHER`),
+   *      backward-compatibility со старыми URL-закладками. Кладём
+   *      сразу в `divisionCode`, потому что у legacy enum значения
+   *      и `code` карточек намеренно совпадают;
+   *   3) `user.role = DISPLAY` → ищем `DisplayScreenConfig` по
+   *      `employeeId`. Приоритет — `companyDivision.code`, fallback
+   *      на legacy `config.division`. Конфиг с `isActive = false`
+   *      сознательно игнорируем — мягкий выключатель экрана даёт
+   *      «общий» агрегат без удаления записи;
+   *   4) иначе — `null`.
    *
-   * Запрос в БД делаем только в случае (2): для не-DISPLAY-ролей и
-   * для запросов с явным `query.division` лишний round-trip не
-   * нужен. Это держит latency polling-а большого монитора прежним.
+   * Запрос в БД делаем только в случае (3): для не-DISPLAY-ролей и
+   * для запросов с явным фильтром лишний round-trip не нужен. Это
+   * держит latency polling-а большого монитора прежним.
    */
-  private async resolveDisplayDivision(
+  private async resolveDisplayDivisionCode(
     query: ShopfloorDisplayQuery,
     user: AuthPrincipal | undefined,
-  ): Promise<OrderDivision | null> {
-    if (query.division) return query.division as OrderDivision;
+  ): Promise<string | null> {
+    if (query.divisionCode) return query.divisionCode;
+    if (query.division) return String(query.division);
     if (!user || user.role !== Role.DISPLAY) return null;
     const config = await this.prisma.displayScreenConfig.findUnique({
       where: { employeeId: user.employeeId },
-      select: { division: true, isActive: true },
+      select: {
+        division: true,
+        isActive: true,
+        companyDivision: { select: { code: true } },
+      },
     });
     if (!config || !config.isActive) return null;
-    return config.division;
+    return config.companyDivision?.code ?? String(config.division);
   }
 
   // -------------------------------------------------------------------------
@@ -1147,6 +1175,31 @@ export class ShopfloorService {
       };
     });
   }
+}
+
+/**
+ * PHASE 1 «CompanyDivision как master-справочник» (см.
+ * `docs/domain.md §«Подразделения заказа»`,
+ * `docs/display-board.md`): собирает Prisma-фильтр для
+ * `Order` по строке-коду подразделения. Покрывает оба варианта:
+ *   - заказы с FK `companyDivision` (новый источник истины);
+ *   - исторические заказы только с legacy enum `Order.division`,
+ *     если код входит в whitelist `MARKETPLACE`/`OTHER`.
+ *
+ * Фильтр — `OR`, потому что после миграции оба поля синхронизированы
+ * сервисами `OrdersService.create/update`, но история (заказы до
+ * миграции, не попавшие под backfill) может иметь только enum.
+ */
+function buildOrderDivisionFilter(
+  divisionCode: string,
+): Prisma.OrderWhereInput {
+  const orFilters: Prisma.OrderWhereInput[] = [
+    { companyDivision: { code: divisionCode } },
+  ];
+  if (divisionCode === 'MARKETPLACE' || divisionCode === 'OTHER') {
+    orFilters.push({ division: divisionCode as OrderDivision });
+  }
+  return { OR: orFilters };
 }
 
 /**

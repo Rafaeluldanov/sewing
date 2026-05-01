@@ -107,6 +107,10 @@ describe('admin/orders/[id]/edit — страница и форма редакт
     // Этап «Номенклатура = Лекала»: вместо `productId` — `patternItemId`.
     expect(src).toMatch(/name="patternItemId"/);
     expect(src).not.toMatch(/name="productId"/);
+    // PHASE 1 «CompanyDivision как master-справочник»: новый
+    // приоритетный select. Legacy `name="division"` остался как
+    // hidden-input для backend-fallback.
+    expect(src).toMatch(/name="companyDivisionId"/);
     expect(src).toMatch(/name="division"/);
     expect(src).toMatch(/name="color"/);
     expect(src).toMatch(/name="comment"/);
@@ -155,6 +159,9 @@ describe('admin/orders/[id]/edit — страница и форма редакт
       'clientId',
       'dueDate',
       'division',
+      // PHASE 1 «CompanyDivision как master-справочник»: action
+      // обязан читать новый ключ FormData.
+      'companyDivisionId',
       'status',
     ]) {
       expect(src).toMatch(new RegExp(`['"]${key}['"]`));

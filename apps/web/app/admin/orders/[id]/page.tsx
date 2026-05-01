@@ -133,16 +133,19 @@ export default async function AdminOrderDetailPage({
 
   const clientName = order.client?.name ?? order.customer ?? null;
   const canIssuePassport = order.status === 'IN_PRODUCTION';
+  // PHASE 1 «CompanyDivision как master-справочник» (см.
+  // `docs/domain.md §«Подразделения заказа»`): UI предпочитает live-
+  // имя `companyDivision.name`, fallback на legacy
+  // `ORDER_DIVISION_LABELS[order.division]` оставляем для исторических
+  // заказов до миграции (PHASE 2 уберёт fallback).
+  const divisionLabel =
+    order.companyDivision?.name ?? ORDER_DIVISION_LABELS[order.division];
 
   return (
     <AdminPageShell
       icon={<Package size={22} strokeWidth={1.6} aria-hidden />}
       title="Заказы"
-      subtitle={
-        clientName
-          ? `${ORDER_DIVISION_LABELS[order.division]} · ${clientName}`
-          : ORDER_DIVISION_LABELS[order.division]
-      }
+      subtitle={clientName ? `${divisionLabel} · ${clientName}` : divisionLabel}
     >
       <OrderWorkspaceLayout
         mode="view"

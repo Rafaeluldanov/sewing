@@ -121,7 +121,12 @@
 - **`Order`** — заказ покупателя.
   - **Поля плана**: `number` (uniq), `customer` (legacy),
     `clientId? → Client`, `orderDate`, `dueDate?`, `color?`,
-    `comment?`, `division: OrderDivision @default(OTHER)`,
+    `comment?`, `division: OrderDivision @default(OTHER)` (legacy
+    enum, см. PHASE 1 ниже),
+    `companyDivisionId? → CompanyDivision` (`onDelete: SetNull`,
+    PHASE 1 master-связка с справочником подразделений, см.
+    «CompanyDivision» в §2.7 и `docs/domain.md §«Подразделения
+    заказа»`),
     `status: OrderStatus @default(DRAFT)`,
     `routeTemplateId? → RouteTemplate`,
     `techCardId? → TechCardTemplate`,
@@ -139,9 +144,16 @@
     `WorkshopNeed[]` (cascade), `PurchaseOrder[]` (`SetNull` со стороны
     PO), `PurchaseReceipt[]` (`SetNull`), `OrderApplication[]` (cascade),
     `OrderCostEstimate[]`, `OrderMaterialArrivalOverride[]` (cascade),
-    `CuttingClosureRequest[]`.
+    `CuttingClosureRequest[]`, `companyDivision? → CompanyDivision`.
   - Индексы: `status`, `orderDate`, `createdAt`, `routeTemplateId`,
-    `techCardId`, `patternItemId`, `division`, `clientId`, `dueDate`.
+    `techCardId`, `patternItemId`, `division`, `clientId`, `dueDate`,
+    `companyDivisionId`.
+  - **PHASE 1 «CompanyDivision как master-справочник»**: legacy
+    `division` enum остаётся как backward-compat fallback для
+    earnings (`getCutterCompensationSchemeForDivision`) и
+    shopfloor-фильтра. `OrdersService.create`/`update`
+    синхронизируют пару `(companyDivisionId, division)` по
+    `code`. PHASE 2 удалит и колонку, и enum.
 - **`OrderItem`** — позиция заказа `(orderId, productId, sizeId)` uniq,
   `qtyPlan: Int`. Один заказ — один `productId` (инвариант ADR-0009).
 - **`Client`** — справочник клиентов: `name`, `phone?`, `email?`,
@@ -303,9 +315,17 @@
 ### 2.10 Shopfloor / display
 
 - **`DisplayScreenConfig`** — конфиг большого монитора цеха.
-  `name`, `division: OrderDivision`, `employeeId String @unique →
+  `name`, `division: OrderDivision` (legacy enum, см. PHASE 1 ниже),
+  `companyDivisionId? → CompanyDivision` (`onDelete: SetNull`,
+  PHASE 1 master-связка), `employeeId String @unique →
   Employee` (cascade), `isActive`. Один экран = одна DISPLAY-учётка.
-  Индексы: `division`, `isActive`. См. `docs/screens.md` (OUTDATED)
+  Индексы: `division`, `isActive`, `companyDivisionId`.
+  - **PHASE 1**: backend (`DisplayScreensService.create`)
+    синхронизирует `(companyDivisionId, division)` по `code`.
+    `ShopfloorService.resolveDisplayDivisionCode` берёт
+    `companyDivision.code` с fallback на legacy `division`.
+    PHASE 2 удалит legacy колонку.
+  См. `docs/screens.md` (OUTDATED)
   и будущий `docs/display-board.md`.
 - **`MasterCall`** *(новый контур)* — вызов мастера цеха.
   `employeeId → Employee` (autor), `equipmentId? → Equipment`,
@@ -498,17 +518,25 @@
     `@sewing/shared/company-settings`, а не БД.
   - сервис `CompanySettingsService.getOrCreate()` идемпотентно создаёт
     запись с дефолтами при первом обращении.
-- **`CompanyDivision`** *(новый контур)* — soft-delete справочник
-  «Подразделения компании» (структурные подразделения).
+- **`CompanyDivision`** *(master-справочник, PHASE 1)* — soft-delete
+  справочник подразделений заказа и display screens.
   - `code String @unique`, `name String`, `description String?`,
     `isActive Boolean @default(true)`, `sortOrder Int @default(100)`.
   - индексы: `isActive`, `sortOrder`.
-  - НЕ связан с `enum OrderDivision` (`MARKETPLACE` / `OTHER`):
-    последний — фильтр shopfloor-display, эта таблица — структурные
-    подразделения компании. На MVP справочник стоит сам по себе и
-    ничем из orders / production-flow / display-board не читается
-    (см. JSDoc на модели в `prisma/schema.prisma` и
-    `docs/domain.md §«Настройки компании»`).
+  - **PHASE 1 «CompanyDivision как master-справочник»**: на этот
+    справочник теперь ссылаются `Order.companyDivisionId` и
+    `DisplayScreenConfig.companyDivisionId`. Базовые карточки
+    `MARKETPLACE` / `OTHER` гарантированно созданы миграцией
+    `…_link_company_divisions_to_orders` и `prisma/seed.ts` /
+    `tests/utils/seed.ts` (`code` совпадает с legacy
+    `enum OrderDivision`). Backend синхронизирует
+    `code ↔ legacy enum` сервисами `OrdersService` /
+    `DisplayScreensService` до PHASE 2 (см.
+    `docs/domain.md §«Подразделения заказа»`).
+  - Inverse relations: `orders Order[]`, `displayScreens
+    DisplayScreenConfig[]` — оба `onDelete: SetNull` со стороны
+    привязки, чтобы деактивация/удаление карточки не сносило
+    заказ или экран.
 - Audit под `entityType = COMPANY_SETTINGS` / `COMPANY_DIVISION`
   (см. `docs/events.md §3.2`).
 

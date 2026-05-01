@@ -111,11 +111,22 @@
   единицу (управленческое поле, на расчёт себестоимости не
   влияет).
 
+`Order.companyDivisionId? → CompanyDivision` (PHASE 1, см.
+`docs/domain.md §«Подразделения заказа»») — master-связка с
+управленческим справочником подразделений. UI-форма заказа
+выбирает подразделение из активных карточек `CompanyDivision`.
+`OrdersService.create`/`update` синхронизируют пару
+`(companyDivisionId, legacy Order.division)` по `code`:
+если фронт передал `companyDivisionId` — backend подкладывает
+legacy enum по `CompanyDivision.code` (whitelist
+`MARKETPLACE`/`OTHER`). Меняется только в `DRAFT`, после
+`IN_PRODUCTION` блокируется общим guard-ом `ORDER_LOCKED`.
+
 `Order.division` (`OrderDivision = MARKETPLACE | OTHER`,
-default `OTHER`) — управленческая ось для фильтра
-`/api/shopfloor/display?division=…` (см. `display-board.md`).
-Меняется только в `DRAFT`, после `IN_PRODUCTION` блокируется
-общим guard-ом `ORDER_LOCKED`.
+default `OTHER`) — legacy enum, оставлен как backward-compat
+для earnings (`getCutterCompensationSchemeForDivision`) и для
+URL `/api/shopfloor/display?division=…` (см. `display-board.md`).
+Удалится в PHASE 2.
 
 ---
 

@@ -66,6 +66,29 @@ function parseDivision(form: FormData): OrderDivision | undefined {
 }
 
 /**
+ * PHASE 1 «CompanyDivision как master-справочник» (см.
+ * `docs/domain.md §«Подразделения заказа»`,
+ * `OrdersService.resolveCompanyDivisionForOrder`): UI новой формы
+ * шлёт `companyDivisionId` (FK на справочник). Старые формы
+ * продолжают слать legacy `division` enum — backend их синхронизирует.
+ *
+ * Семантика парсинга:
+ *   - поля нет в FormData → `undefined` → backend не трогает колонку
+ *     (актуально для legacy `/orders/new` без селекта подразделения);
+ *   - есть и пустое → `null` → backend снимает привязку (только в
+ *     update-flow, на create эквивалентно «не задан»);
+ *   - есть и непустое → строка с id.
+ */
+function parseCompanyDivisionId(
+  form: FormData,
+): string | null | undefined {
+  const raw = form.get('companyDivisionId');
+  if (raw === null) return undefined;
+  const v = String(raw).trim();
+  return v === '' ? null : v;
+}
+
+/**
  * Этап «Нанесение на заказе покупателя»: на `/admin/orders/new`
  * редактор `OrderApplicationsEditor` пишет в FormData hidden input
  * `applicationsJson` со своим локальным state-ом
@@ -216,6 +239,14 @@ function buildCreateDto(form: FormData): CreateOrderDto {
     clientId,
     dueDate,
     division: parseDivision(form),
+    // PHASE 1: на create достаточно проставить `companyDivisionId`
+    // если он пришёл — backend подкладывает legacy `division` по
+    // `code`. `null` на create равносилен «не задан» (создание не
+    // знает «снять»).
+    companyDivisionId:
+      parseCompanyDivisionId(form) === null
+        ? undefined
+        : parseCompanyDivisionId(form),
     applications,
     customerUnitPrice,
     customerCurrency,
@@ -297,6 +328,10 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     clientId,
     dueDate,
     division: parseDivision(form),
+    // PHASE 1: новый источник истины подразделения. Семантика та же,
+    // что у `routeTemplateId` / `techCardId`: поля нет = не трогать,
+    // пустая строка = снять, иначе = переустановить.
+    companyDivisionId: parseCompanyDivisionId(form),
     customerUnitPrice,
     customerCurrency,
   };

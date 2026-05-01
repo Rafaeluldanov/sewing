@@ -16,6 +16,16 @@ export interface SeedResult {
   equipment: Record<string, { id: string; code: string; qrCode: string }>;
   cells: Record<string, { id: string; code: string; qrCode: string }>;
   defectType: { id: string };
+  /**
+   * PHASE 1 «CompanyDivision как master-справочник» (см.
+   * `docs/domain.md §«Подразделения заказа»`,
+   * `prisma/seed.ts::seedCompanyDivisions`): идемпотентно
+   * созданные базовые карточки `MARKETPLACE` / `OTHER`. Тесты могут
+   * брать `companyDivisions.MARKETPLACE.id` для PATCH-проверки
+   * через `companyDivisionId`, не дёргая дополнительный
+   * findUnique.
+   */
+  companyDivisions: Record<'MARKETPLACE' | 'OTHER', { id: string; code: string }>;
 }
 
 const SIZE_CODES: Array<{ code: string; sortOrder: number }> = [
@@ -290,6 +300,31 @@ export async function seedMinimal(prisma: PrismaClient): Promise<SeedResult> {
     update: { name: 'Пятно', sortOrder: 10, isActive: true },
   });
 
+  // PHASE 1 «CompanyDivision как master-справочник»: базовые карточки
+  // подразделений заказа / display screens — те же `code`, что
+  // legacy enum `OrderDivision`. Сидим идемпотентно по `code`, имена
+  // выровнены с `ORDER_DIVISION_LABELS` (`Маркетплейс` / `B2B`).
+  const marketplaceDivision = await prisma.companyDivision.upsert({
+    where: { code: 'MARKETPLACE' },
+    create: {
+      code: 'MARKETPLACE',
+      name: 'Маркетплейс',
+      sortOrder: 10,
+      isActive: true,
+    },
+    update: { name: 'Маркетплейс', sortOrder: 10, isActive: true },
+  });
+  const otherDivision = await prisma.companyDivision.upsert({
+    where: { code: 'OTHER' },
+    create: {
+      code: 'OTHER',
+      name: 'B2B',
+      sortOrder: 20,
+      isActive: true,
+    },
+    update: { name: 'B2B', sortOrder: 20, isActive: true },
+  });
+
   return {
     sizes,
     product: { id: product.id, name: product.name, color: product.color },
@@ -298,6 +333,13 @@ export async function seedMinimal(prisma: PrismaClient): Promise<SeedResult> {
     equipment,
     cells,
     defectType: { id: defectType.id },
+    companyDivisions: {
+      MARKETPLACE: {
+        id: marketplaceDivision.id,
+        code: marketplaceDivision.code,
+      },
+      OTHER: { id: otherDivision.id, code: otherDivision.code },
+    },
   };
 }
 

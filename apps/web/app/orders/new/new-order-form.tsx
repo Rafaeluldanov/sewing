@@ -2,9 +2,11 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
+import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import {
   ORDER_DIVISIONS,
   ORDER_DIVISION_LABELS,
+  type OrderDivision,
   type ProductDto,
   type SizeDto,
 } from '@sewing/shared/orders';
@@ -28,6 +30,13 @@ interface Props {
    * создаётся без snapshot материалов/внешних потребностей.
    */
   techCards: TechCardTemplateSummaryDto[];
+  /**
+   * PHASE 1 «CompanyDivision как master-справочник» (см.
+   * `docs/domain.md §«Подразделения заказа»`): активные карточки
+   * подразделений для select-а. Если список пуст (новая инсталляция
+   * без миграции/seed) — UI fallback-ит на legacy enum-select.
+   */
+  companyDivisions: CompanyDivisionDto[];
   today: string;
 }
 
@@ -47,10 +56,27 @@ export function NewOrderForm({
   products,
   routeTemplates,
   techCards,
+  companyDivisions,
   today,
 }: Props) {
   const [state, formAction] = useFormState(createOrderAction, initialState);
   const [productId, setProductId] = useState(products[0]?.id ?? '');
+  // PHASE 1: дефолт — карточка с `code = OTHER` (B2B).
+  const defaultCompanyDivisionId =
+    companyDivisions.find((d) => d.code === 'OTHER')?.id ??
+    companyDivisions[0]?.id ??
+    '';
+  const [companyDivisionId, setCompanyDivisionId] = useState<string>(
+    defaultCompanyDivisionId,
+  );
+  const [division, setDivision] = useState<OrderDivision>('OTHER');
+
+  const handleCompanyDivisionChange = (id: string): void => {
+    setCompanyDivisionId(id);
+    const code = companyDivisions.find((d) => d.id === id)?.code;
+    if (code === 'MARKETPLACE') setDivision('MARKETPLACE');
+    else if (code === 'OTHER') setDivision('OTHER');
+  };
 
   const selectedProduct = useMemo(
     () => products.find((p) => p.id === productId),
@@ -99,18 +125,51 @@ export function NewOrderForm({
       </div>
 
       <div className="form-row">
-        <label htmlFor="division">Подразделение</label>
+        <label htmlFor="companyDivisionId">Подразделение</label>
         <div>
-          <select id="division" name="division" defaultValue="OTHER" required>
-            {ORDER_DIVISIONS.map((d) => (
-              <option key={d} value={d}>
-                {ORDER_DIVISION_LABELS[d]}
-              </option>
-            ))}
-          </select>
+          {companyDivisions.length > 0 ? (
+            <select
+              id="companyDivisionId"
+              name="companyDivisionId"
+              value={companyDivisionId}
+              onChange={(e) => handleCompanyDivisionChange(e.target.value)}
+              required
+            >
+              {companyDivisions.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <select
+              id="division-legacy"
+              name="division"
+              value={division}
+              onChange={(e) => setDivision(e.target.value as OrderDivision)}
+              required
+            >
+              {ORDER_DIVISIONS.map((d) => (
+                <option key={d} value={d}>
+                  {ORDER_DIVISION_LABELS[d]}
+                </option>
+              ))}
+            </select>
+          )}
+          {/*
+            PHASE 1: hidden legacy `division` enum — backend читает
+            его как fallback, если карточка с произвольным `code`
+            (`MAIN_SHOP`, …) не входит в whitelist `MARKETPLACE`/
+            `OTHER`. Когда нет companyDivisions, мы выводим legacy
+            select явно (см. выше) — этот input в таком случае не
+            нужен.
+          */}
+          {companyDivisions.length > 0 && (
+            <input type="hidden" name="division" value={division} />
+          )}
           <div className="hint">
             Определяет, на каком экране /shopfloor/display будет видно
-            заказ. По умолчанию — «Другое».
+            заказ. По умолчанию — «B2B».
           </div>
         </div>
       </div>

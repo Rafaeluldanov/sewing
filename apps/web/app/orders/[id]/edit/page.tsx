@@ -5,9 +5,11 @@ import { getOrder, listProducts, listSizes } from '@/lib/orders-api';
 import { listRouteTemplates } from '@/lib/routes-api';
 import { listTechCards, getTechCard } from '@/lib/tech-cards-api';
 import { listClients, getClient } from '@/lib/clients-api';
+import { listCompanyDivisions } from '@/lib/company-settings-api';
 import { getPattern, listPatterns } from '@/lib/patterns-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import type { ClientDto } from '@sewing/shared/clients';
+import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
@@ -157,6 +159,17 @@ export default async function EditOrderPage({
     }
   }
 
+  // PHASE 1 «CompanyDivision как master-справочник» (см.
+  // `docs/domain.md §«Подразделения заказа»`): подгружаем активные
+  // карточки подразделений; пустой список → форма fallback-ит на
+  // legacy enum-select.
+  let companyDivisions: CompanyDivisionDto[] = [];
+  try {
+    companyDivisions = await listCompanyDivisions();
+  } catch {
+    companyDivisions = [];
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -170,6 +183,7 @@ export default async function EditOrderPage({
         techCards={techCards}
         clients={clients}
         patterns={patterns}
+        companyDivisions={companyDivisions}
       />
     </div>
   );

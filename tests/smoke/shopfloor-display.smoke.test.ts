@@ -1698,15 +1698,19 @@ describe('Backend: /api/shopfloor/display + equipment kind', () => {
     expect(ctrl).toMatch(/ZodValidationPipe\(ShopfloorDisplayQuerySchema\)/);
 
     const svc = readSrc('apps/api/src/modules/shopfloor/shopfloor.service.ts');
-    // Backend filter — `order.division = <resolved>` (никакой
-    // постфактум-фильтрации в проекции / на клиенте быть не должно).
-    // С момента §11a (display-screens admin) приоритет резолвится через
-    // helper `resolveDisplayDivision`: `query.division` всегда побеждает,
-    // дальше — auto-division по DISPLAY-учётке.
+    // Backend filter — никакой постфактум-фильтрации в проекции /
+    // на клиенте быть не должно.
+    //
+    // PHASE 1 «CompanyDivision как master-справочник»: helper
+    // переименован в `resolveDisplayDivisionCode` и кладёт строку
+    // в `divisionCode`, фильтр Prisma собирается через
+    // `buildOrderDivisionFilter` (`OR: [companyDivision.code,
+    // legacy division]`). `query.divisionCode` побеждает,
+    // legacy `query.division` остаётся для backward-compat.
+    expect(svc).toMatch(/query\.divisionCode/);
     expect(svc).toMatch(/query\.division/);
-    expect(svc).toMatch(/resolveDisplayDivision/);
-    // helper кладёт результат в `division`, который уезжает в Prisma where.
-    expect(svc).toMatch(/division \? \{ division \}/);
+    expect(svc).toMatch(/resolveDisplayDivisionCode/);
+    expect(svc).toMatch(/buildOrderDivisionFilter/);
   });
 
   test('Web shopfloor-api пробрасывает division в запрос', () => {

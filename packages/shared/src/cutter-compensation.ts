@@ -63,29 +63,40 @@ export const CUTTER_COMPENSATION_SCHEME_LABELS: Record<
 // ---------------------------------------------------------------------------
 
 /**
- * Возвращает схему начисления закройщика для конкретного
- * подразделения заказа. Источник истины маппинга «division → scheme».
+ * Возвращает схему начисления закройщика по коду подразделения
+ * заказа. Источник истины маппинга «code → scheme».
  *
  * - `MARKETPLACE` → `MARKETPLACE_FIXED` (старая фиксированная схема,
  *   marketplace-flow не меняется);
  * - `OTHER` → `B2B_SEWING_PERCENT` (legacy technical value для B2B,
  *   см. recon §4: Prisma enum мы сознательно не переименовываем);
  * - `B2B` → `B2B_SEWING_PERCENT` (на случай, если в будущем появится
- *   явное значение `B2B` в Prisma enum / shared `ORDER_DIVISIONS`).
+ *   явное значение `B2B` в Prisma enum / shared `ORDER_DIVISIONS`);
+ * - любое другое непустое значение (произвольный
+ *   `CompanyDivision.code`) → `B2B_SEWING_PERCENT` как безопасный
+ *   default — все «новые» подразделения по-умолчанию идут по
+ *   B2B-схеме, marketplace остаётся единственным whitelist'ом.
  *
- * Перебираем строкой, а не `OrderDivision`-narrow'ом, потому что в
- * `Order.division` Prisma может прислать значение, которое ещё не
- * попало в `ORDER_DIVISIONS` (например, новое значение enum,
- * добавленное миграцией, до пересборки shared-пакета). В таком
- * случае даём безопасный fallback на `B2B_SEWING_PERCENT` — это
- * корректнее, чем тихо считать всё marketplace-ом.
+ * Контракт по входу — строка-код. Это либо `OrderDivision` legacy
+ * enum, либо `CompanyDivision.code` (PHASE 1 «CompanyDivision как
+ * master-справочник», см. `docs/payroll-cutter-compensation-recon.md
+ * §4`, `EarningsService.createImmediateForCutter`). Backend
+ * предпочитает `passport.order.companyDivision?.code`, fallback —
+ * legacy `Order.division` (узкий перечень `MARKETPLACE`/`OTHER`).
+ *
+ * Перебираем строкой, а не `OrderDivision`-narrow'ом, потому что
+ * `CompanyDivision.code` может содержать произвольное значение
+ * (`MAIN_SHOP`, `SEWING_FLOOR_2`, …), и Prisma может прислать
+ * `Order.division`-значение, которого ещё нет в `ORDER_DIVISIONS`.
+ * В таком случае даём безопасный fallback на `B2B_SEWING_PERCENT` —
+ * это корректнее, чем тихо считать всё marketplace-ом.
  */
 export function getCutterCompensationSchemeForDivision(
   division: OrderDivision | string | null | undefined,
 ): CutterCompensationScheme {
   if (division === 'MARKETPLACE') return 'MARKETPLACE_FIXED';
-  // Все остальные значения (`OTHER`, будущий `B2B`, неизвестные —
-  // см. JSDoc) трактуются как B2B. Marketplace — единственный
-  // «whitelist» из этого правила.
+  // Все остальные значения (`OTHER`, будущий `B2B`, любой свой
+  // `CompanyDivision.code`, неизвестные — см. JSDoc) трактуются
+  // как B2B. Marketplace — единственный «whitelist» из этого правила.
   return 'B2B_SEWING_PERCENT';
 }

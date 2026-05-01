@@ -14,17 +14,31 @@ import {
 import { AuditService } from '../audit/audit.service.js';
 
 /**
- * Сервис «Подразделения компании» — soft-delete справочник
- * структурных подразделений (см. `prisma/schema.prisma::CompanyDivision`,
- * `docs/domain.md §«Настройки компании»`).
+ * Сервис «Подразделения компании» — master-справочник подразделений
+ * заказа и display screens (см. `prisma/schema.prisma::CompanyDivision`,
+ * `docs/domain.md §«Подразделения заказа»`,
+ * `docs/erd.md §«CompanyDivision»`).
  *
  * Скоуп MVP — list/get/create/update. Удаление out-of-scope: менеджер
  * мягко гасит карточку через PATCH `{ isActive: false }`. По умолчанию
  * `list` отдаёт только активных — селекты не должны видеть «зомби».
  *
- * **Не путать** с `enum OrderDivision`: это другая ось. Никаких связей
- * с заказами/сотрудниками сервис не делает; справочник стоит сам по
- * себе.
+ * PHASE 1: на этот справочник ссылаются `Order.companyDivisionId` и
+ * `DisplayScreenConfig.companyDivisionId`. Базовые карточки
+ * `MARKETPLACE` / `OTHER` (`code` совпадает с legacy
+ * `enum OrderDivision`) гарантированно существуют в БД — их
+ * upsert-ит миграция `…_link_company_divisions_to_orders` и
+ * `prisma/seed.ts` / `tests/utils/seed.ts`. Backend синхронизирует
+ * `code ↔ legacy enum` сервисами `OrdersService` /
+ * `DisplayScreensService` до PHASE 2 (см.
+ * `OrdersService.resolveCompanyDivisionForOrder`).
+ *
+ * Hard-delete не делаем: на FK с `Order.companyDivisionId` стоит
+ * `ON DELETE SET NULL`, и физическое удаление карточки `MARKETPLACE`/
+ * `OTHER` оставило бы заказы без привязки и сломало бы
+ * `getCutterCompensationSchemeForDivision` для legacy-fallback. Soft-
+ * delete через `isActive=false` безопасен — заказы остаются
+ * привязанными.
  */
 @Injectable()
 export class CompanyDivisionsService {

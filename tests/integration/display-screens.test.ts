@@ -133,6 +133,59 @@ describeWithDb('integration — display screens', () => {
       isActive: true,
       employeeLogin: 'display-cut',
     });
+    // PHASE 1: список содержит привязку к карточке `CompanyDivision`.
+    expect(list.body[0].companyDivisionId).toBe(
+      seed.companyDivisions.OTHER.id,
+    );
+    expect(list.body[0].companyDivision).toMatchObject({
+      id: seed.companyDivisions.OTHER.id,
+      code: 'OTHER',
+      name: 'B2B',
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // PHASE 1 «CompanyDivision как master-справочник»
+  // ---------------------------------------------------------------------------
+
+  test('PHASE 1: создание экрана через companyDivisionId синхронизирует legacy division', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/display-screens')
+      .set('Cookie', cookies.manager)
+      .send({
+        name: 'PHASE1 экран',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+        login: 'display-phase1',
+        pin: 'pin-1234',
+        isActive: true,
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
+    expect(res.body.division).toBe('MARKETPLACE');
+    expect(res.body.companyDivision).toMatchObject({
+      code: 'MARKETPLACE',
+      name: 'Маркетплейс',
+    });
+  });
+
+  test('PHASE 1: legacy `division` без `companyDivisionId` находит карточку по `code`', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/display-screens')
+      .set('Cookie', cookies.manager)
+      .send({
+        name: 'Legacy экран',
+        division: 'OTHER',
+        login: 'display-legacy',
+        pin: 'pin-1234',
+        isActive: true,
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.division).toBe('OTHER');
+    expect(res.body.companyDivisionId).toBe(
+      seed.companyDivisions.OTHER.id,
+    );
   });
 
   // ---------------------------------------------------------------------------

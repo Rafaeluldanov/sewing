@@ -102,6 +102,156 @@ describeWithDb('integration — order division & shopfloor display filter', () =
   });
 
   // ---------------------------------------------------------------------------
+  // PHASE 1 «CompanyDivision как master-справочник»
+  // (см. `docs/domain.md §«Подразделения заказа»`)
+  // ---------------------------------------------------------------------------
+
+  test('POST /api/orders с legacy division=MARKETPLACE заполняет companyDivisionId по соответствию code', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookie)
+      .send({
+        orderDate: new Date().toISOString(),
+        productId: seed.product.id,
+        division: 'MARKETPLACE',
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 3 }],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.division).toBe('MARKETPLACE');
+    // PHASE 1: backend синхронно подкладывает FK по `code`.
+    expect(res.body.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
+    expect(res.body.companyDivision).toMatchObject({
+      id: seed.companyDivisions.MARKETPLACE.id,
+      code: 'MARKETPLACE',
+      name: 'Маркетплейс',
+    });
+  });
+
+  test('POST /api/orders с companyDivisionId синхронизирует legacy division по code', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookie)
+      .send({
+        orderDate: new Date().toISOString(),
+        productId: seed.product.id,
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 4 }],
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.division).toBe('MARKETPLACE');
+    expect(res.body.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
+  });
+
+  test('PATCH /api/orders/:id меняет companyDivisionId и синхронизирует legacy division', async () => {
+    const created = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookie)
+      .send({
+        orderDate: new Date().toISOString(),
+        productId: seed.product.id,
+        division: 'OTHER',
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 2 }],
+      });
+    expect(created.status).toBe(201);
+    expect(created.body.companyDivisionId).toBe(
+      seed.companyDivisions.OTHER.id,
+    );
+
+    const updated = await request(t.app.getHttpServer())
+      .patch(`/api/orders/${created.body.id}`)
+      .set('Cookie', cookie)
+      .send({ companyDivisionId: seed.companyDivisions.MARKETPLACE.id });
+    expect(updated.status).toBe(200);
+    expect(updated.body.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
+    // PHASE 1: legacy enum синхронизируется по `code`.
+    expect(updated.body.division).toBe('MARKETPLACE');
+  });
+
+  test('GET /api/shopfloor/display?divisionCode=MARKETPLACE фильтрует так же, как legacy ?division=', async () => {
+    const today = new Date();
+    const orderMp = await t.prisma.order.create({
+      data: {
+        number: 'O-DIV-CD-MP',
+        orderDate: today,
+        color: 'Чёрный',
+        status: 'IN_PRODUCTION',
+        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+        items: {
+          create: [
+            { productId: seed.product.id, sizeId: seed.sizes.S, qtyPlan: 5 },
+          ],
+        },
+      },
+    });
+    await t.prisma.passport.create({
+      data: {
+        number: 'P-DIV-CD-MP-S',
+        qrCode: 'passport:div-cd-mp-s',
+        orderId: orderMp.id,
+        productId: seed.product.id,
+        sizeId: seed.sizes.S,
+        color: 'Чёрный',
+        rollNumber: 'R-CD-MP',
+        cutDate: today,
+        qtyPlan: 5,
+        qtyCut: 5,
+        qtyGood: 5,
+        cutterId: seed.employees.cutter.id,
+        creatorId: seed.employees.cutter.id,
+        status: 'CREATED',
+      },
+    });
+
+    const byCode = await request(t.app.getHttpServer())
+      .get('/api/shopfloor/display?divisionCode=MARKETPLACE')
+      .set('Cookie', cookie);
+    expect(byCode.status).toBe(200);
+    expect(byCode.body.kpi.waiting).toBe(5);
+
+    // Legacy URL продолжает работать как раньше.
+    const byLegacy = await request(t.app.getHttpServer())
+      .get('/api/shopfloor/display?division=MARKETPLACE')
+      .set('Cookie', cookie);
+    expect(byLegacy.status).toBe(200);
+    expect(byLegacy.body.kpi.waiting).toBe(5);
+  });
+
+  test('audit ORDER_CREATED содержит companyDivisionId и companyDivisionCode', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookie)
+      .send({
+        orderDate: new Date().toISOString(),
+        productId: seed.product.id,
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 1 }],
+      });
+    expect(res.status).toBe(201);
+
+    const audit = await t.prisma.auditLog.findFirst({
+      where: {
+        entityType: 'ORDER',
+        entityId: res.body.id,
+        event: 'ORDER_CREATED',
+      },
+    });
+    expect(audit).not.toBeNull();
+    const payload = audit!.payload as Record<string, unknown>;
+    expect(payload.division).toBe('MARKETPLACE');
+    expect(payload.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
+    expect(payload.companyDivisionCode).toBe('MARKETPLACE');
+  });
+
+  // ---------------------------------------------------------------------------
   // SHOPFLOOR DISPLAY: фильтр по division
   // ---------------------------------------------------------------------------
 

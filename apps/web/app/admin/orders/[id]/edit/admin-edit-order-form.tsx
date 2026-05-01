@@ -49,6 +49,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
+import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import {
   ORDER_DIVISIONS,
   ORDER_DIVISION_LABELS,
@@ -98,6 +99,13 @@ interface Props {
   techCards: TechCardTemplateSummaryDto[];
   clients: ClientDto[];
   patterns: PatternListItemDto[];
+  /**
+   * PHASE 1 «CompanyDivision как master-справочник» (см.
+   * `docs/domain.md §«Подразделения заказа»`): активные карточки
+   * подразделений. Текущая привязка заказа всегда добавляется
+   * отдельной опцией ниже, даже если карточка архивирована.
+   */
+  companyDivisions: CompanyDivisionDto[];
   today: string;
 }
 
@@ -142,6 +150,7 @@ export function AdminEditOrderForm({
   techCards,
   clients,
   patterns,
+  companyDivisions,
   today,
 }: Props) {
   const action = updateAdminOrderAction.bind(null, order.id);
@@ -198,6 +207,21 @@ export function AdminEditOrderForm({
 
   const [clientId, setClientId] = useState<string>(currentClient?.id ?? '');
   const [division, setDivision] = useState<OrderDivision>(order.division);
+  // PHASE 1 «CompanyDivision как master-справочник»: новый источник
+  // истины подразделения через FK на справочник.
+  const [companyDivisionId, setCompanyDivisionId] = useState<string>(
+    order.companyDivisionId ?? '',
+  );
+  const handleCompanyDivisionChange = (id: string): void => {
+    setCompanyDivisionId(id);
+    const code = companyDivisions.find((d) => d.id === id)?.code;
+    if (code === 'MARKETPLACE') setDivision('MARKETPLACE');
+    else if (code === 'OTHER') setDivision('OTHER');
+  };
+  const showCurrentDivisionArchivedOption = Boolean(
+    order.companyDivisionId &&
+      !companyDivisions.some((d) => d.id === order.companyDivisionId),
+  );
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>(
     order.customerUnitPrice == null ? '' : String(order.customerUnitPrice),
   );
@@ -308,23 +332,42 @@ export function AdminEditOrderForm({
             basics={
               <div className="order-hero-card__basic-grid">
                 <div className="order-hero-card__field">
-                  <label htmlFor="division">Подразделение</label>
+                  <label htmlFor="companyDivisionId">Подразделение</label>
                   <select
-                    id="division"
-                    name="division"
-                    value={division}
+                    id="companyDivisionId"
+                    name="companyDivisionId"
+                    value={companyDivisionId}
                     onChange={(e) =>
-                      setDivision(e.target.value as OrderDivision)
+                      handleCompanyDivisionChange(e.target.value)
                     }
-                    required
                     disabled={!isDraft}
                   >
-                    {ORDER_DIVISIONS.map((d) => (
-                      <option key={d} value={d}>
-                        {ORDER_DIVISION_LABELS[d]}
+                    <option value="">— без подразделения —</option>
+                    {/*
+                      PHASE 1: архивная карточка отображается, чтобы
+                      сохранение формы не обнулило FK без явного
+                      действия пользователя.
+                    */}
+                    {showCurrentDivisionArchivedOption &&
+                      order.companyDivision && (
+                        <option value={order.companyDivision.id}>
+                          {order.companyDivision.name} — архивное
+                        </option>
+                      )}
+                    {companyDivisions.map((d) => (
+                      <option key={d.id} value={d.id}>
+                        {d.name}
+                        {d.isActive ? '' : ' — архив'}
                       </option>
                     ))}
                   </select>
+                  {/*
+                    PHASE 1: hidden legacy `division` — backend читает
+                    его как fallback на случай, если у выбранного
+                    подразделения произвольный `code`. handleChange
+                    синхронизирует enum для known codes.
+                  */}
+                  <input type="hidden" name="division" value={division} />
                   {!isDraft && (
                     <span className="order-hero-card__field-hint">
                       Менять подразделение можно только в DRAFT.

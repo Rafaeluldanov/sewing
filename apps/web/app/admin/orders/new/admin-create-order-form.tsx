@@ -48,6 +48,7 @@ import {
   Workflow,
 } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
+import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import {
   ORDER_DIVISIONS,
   ORDER_DIVISION_LABELS,
@@ -107,6 +108,13 @@ interface Props {
   techCards: TechCardTemplateSummaryDto[];
   clients: ClientDto[];
   patterns: PatternListItemDto[];
+  /**
+   * PHASE 1 «CompanyDivision как master-справочник» (см.
+   * `docs/domain.md §«Подразделения заказа»`): активные карточки
+   * подразделений для select-а. Backend шлёт только активных, чтобы
+   * менеджер не выбирал «зомби»-карточки.
+   */
+  companyDivisions: CompanyDivisionDto[];
   today: string;
 }
 
@@ -137,6 +145,7 @@ export function AdminCreateOrderForm({
   techCards,
   clients,
   patterns,
+  companyDivisions,
   today,
 }: Props) {
   const [state, formAction] = useFormState(createOrderAction, initialState);
@@ -166,6 +175,16 @@ export function AdminCreateOrderForm({
   // том же `<form>` (см. JSX), а в state хранятся для KPI и
   // productSummary в hero (без round-trip-а).
   const [clientId, setClientId] = useState<string>('');
+  // PHASE 1: новый источник истины подразделения. Дефолт — карточка
+  // с `code = OTHER` (B2B), которую гарантированно создаёт миграция/
+  // seed. Если её каким-то образом нет в списке — пустая строка.
+  const defaultCompanyDivisionId =
+    companyDivisions.find((d) => d.code === 'OTHER')?.id ??
+    companyDivisions[0]?.id ??
+    '';
+  const [companyDivisionId, setCompanyDivisionId] = useState<string>(
+    defaultCompanyDivisionId,
+  );
   const [division, setDivision] = useState<OrderDivision>('OTHER');
   const [dueDate, setDueDate] = useState<string>('');
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>('');
@@ -329,6 +348,9 @@ export function AdminCreateOrderForm({
                 clientId={clientId}
                 onClientIdChange={setClientId}
                 clients={clients}
+                companyDivisionId={companyDivisionId}
+                onCompanyDivisionIdChange={setCompanyDivisionId}
+                companyDivisions={companyDivisions}
                 division={division}
                 onDivisionChange={setDivision}
                 dueDate={dueDate}
@@ -423,6 +445,9 @@ function BasicsCreateFields({
   clientId,
   onClientIdChange,
   clients,
+  companyDivisionId,
+  onCompanyDivisionIdChange,
+  companyDivisions,
   division,
   onDivisionChange,
   dueDate,
@@ -439,6 +464,19 @@ function BasicsCreateFields({
   clientId: string;
   onClientIdChange: (v: string) => void;
   clients: ClientDto[];
+  /**
+   * PHASE 1 «CompanyDivision как master-справочник»: новый выбор
+   * подразделения через FK на справочник.
+   */
+  companyDivisionId: string;
+  onCompanyDivisionIdChange: (v: string) => void;
+  companyDivisions: CompanyDivisionDto[];
+  /**
+   * Legacy `OrderDivision` — синхронизируется backend-ом по
+   * `CompanyDivision.code`, hidden-input ниже передаёт его как
+   * fallback (на случай, если карточки `MARKETPLACE`/`OTHER` нет
+   * и backend не сможет подкласть legacy `division` сам).
+   */
   division: OrderDivision;
   onDivisionChange: (v: OrderDivision) => void;
   dueDate: string;
@@ -452,23 +490,57 @@ function BasicsCreateFields({
   onCommentChange: (v: string) => void;
   fieldError: (key: string) => string | undefined;
 }) {
+  // PHASE 1: legacy `division` синхронизируем с выбранной карточкой
+  // справочника по `code` (`MARKETPLACE`/`OTHER`). Для произвольных
+  // подразделений оставляем `OTHER` — backend всё равно подкладывает
+  // legacy enum по `companyDivision.code`, если код in whitelist.
+  const selectedDivisionCard = companyDivisions.find(
+    (d) => d.id === companyDivisionId,
+  );
+  const handleCompanyDivisionChange = (id: string): void => {
+    onCompanyDivisionIdChange(id);
+    const code = companyDivisions.find((d) => d.id === id)?.code;
+    if (code === 'MARKETPLACE') onDivisionChange('MARKETPLACE');
+    else if (code === 'OTHER') onDivisionChange('OTHER');
+  };
   return (
     <div className="order-hero-card__basic-grid">
       <div className="order-hero-card__field">
-        <label htmlFor="division">Подразделение</label>
+        <label htmlFor="companyDivisionId">Подразделение</label>
         <select
-          id="division"
-          name="division"
-          value={division}
-          onChange={(e) => onDivisionChange(e.target.value as OrderDivision)}
+          id="companyDivisionId"
+          name="companyDivisionId"
+          value={companyDivisionId}
+          onChange={(e) => handleCompanyDivisionChange(e.target.value)}
           required
         >
-          {ORDER_DIVISIONS.map((d) => (
-            <option key={d} value={d}>
-              {ORDER_DIVISION_LABELS[d]}
+          {companyDivisions.length === 0 && (
+            <option value="">— нет подразделений —</option>
+          )}
+          {companyDivisions.map((d) => (
+            <option key={d.id} value={d.id}>
+              {d.name}
             </option>
           ))}
         </select>
+        {/*
+          PHASE 1: legacy `division` enum как hidden — backend читает
+          его как fallback. Для known codes (MARKETPLACE/OTHER)
+          синхронизируется с выбранной карточкой; для произвольных
+          подразделений отдаём `OTHER` (см. ORDER_DIVISIONS).
+        */}
+        <input type="hidden" name="division" value={division} />
+        {selectedDivisionCard?.code &&
+          selectedDivisionCard.code !== 'MARKETPLACE' &&
+          selectedDivisionCard.code !== 'OTHER' && (
+            <span
+              className="order-hero-card__field-hint"
+              style={{ fontSize: '0.78rem' }}
+            >
+              Для подразделения «{selectedDivisionCard.name}» дисплей
+              работает по той же логике, что B2B.
+            </span>
+          )}
       </div>
 
       <div className="order-hero-card__field">

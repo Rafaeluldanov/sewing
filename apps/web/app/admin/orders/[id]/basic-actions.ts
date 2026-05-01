@@ -105,6 +105,11 @@ function buildBasicsDto(form: FormData): UpdateOrderDto {
   const { customerUnitPrice, customerCurrency } = parseCustomerPrice(form);
   return {
     division: parseDivision(form),
+    // PHASE 1 «CompanyDivision как master-справочник» (см.
+    // `docs/domain.md §«Подразделения заказа»`): UI новой hero-формы
+    // отдаёт `companyDivisionId` через `<select>`. Backend
+    // синхронизирует пару `(companyDivisionId, division)`.
+    companyDivisionId: parseNullableString(form, 'companyDivisionId'),
     dueDate: parseNullableString(form, 'dueDate'),
     clientId: parseNullableString(form, 'clientId'),
     customer: parseNullableString(form, 'customer'),

@@ -1,6 +1,8 @@
 /**
- * Контракты модуля «Подразделения компании» (управленческий справочник,
- * добавлено вместе с UI `/admin/company-settings`).
+ * Контракты модуля «Подразделения компании» (master-справочник
+ * подразделений заказа и display screens, см.
+ * `docs/domain.md §«Подразделения заказа»`,
+ * `docs/erd.md §«CompanyDivision»`).
  *
  * Дизайн сознательно простой:
  *   - один справочник: код (uniq) + имя + комментарий + активность;
@@ -9,15 +11,16 @@
  *   - порядок задаётся вручную (`sortOrder`), новые карточки уходят в
  *     конец списка (default `100`).
  *
- * **Не путать** с `enum OrderDivision` (`MARKETPLACE` / `OTHER`) —
- * это две разные оси:
- *   - `OrderDivision` — управленческий фильтр shopfloor-display, enum
- *     в Prisma, расширяется миграцией (см. `prisma/schema.prisma`,
- *     `docs/domain.md §«Подразделения заказа»`).
- *   - `CompanyDivision` (этот модуль) — структурное подразделение
- *     компании (цех, склад, бухгалтерия), расширяется через UI без
- *     миграции и сознательно НЕ связан ни с `Order` ни с `Employee`
- *     на MVP.
+ * PHASE 1 «CompanyDivision как master-справочник»: на этот справочник
+ * ссылаются `Order.companyDivisionId` и
+ * `DisplayScreenConfig.companyDivisionId`. Базовые карточки
+ * `MARKETPLACE` / `OTHER` (`code` совпадает с legacy
+ * `enum OrderDivision`) гарантированно существуют в БД — их
+ * upsert-ит миграция `…_link_company_divisions_to_orders` и
+ * каждый re-seed (`prisma/seed.ts`, `tests/utils/seed.ts`).
+ * Backend синхронизирует `companyDivision.code` ↔ legacy
+ * `Order.division` / `DisplayScreenConfig.division` сервисами
+ * `OrdersService` / `DisplayScreensService` до PHASE 2.
  *
  * Источник истины — backend (`CompanyDivisionsService` + контроллер).
  *

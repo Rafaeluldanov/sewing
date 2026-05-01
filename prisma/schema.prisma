@@ -818,7 +818,37 @@ model Order {
   /// фильтр для `/api/shopfloor/display?division=…`. Не nullable:
   /// безопасный дефолт — `OTHER`. Менять можно только в `DRAFT`,
   /// после `IN_PRODUCTION` блокируется общим ORDER_LOCKED guard.
+  ///
+  /// PHASE 1 (см. `docs/domain.md §«Подразделения заказа»`,
+  /// `docs/erd.md §«Order»`): legacy enum-поле остаётся как
+  /// backward-compatibility источник для earnings/shopfloor-фильтра,
+  /// пока во всех точках чтения не появится fallback на
+  /// `companyDivision.code`. PHASE 2 удалит и колонку, и enum.
   division OrderDivision @default(OTHER)
+
+  /// PHASE 1 «CompanyDivision как master-справочник подразделений
+  /// заказа» (см. `docs/domain.md §«Подразделения заказа»`,
+  /// `docs/erd.md §«Order»`).
+  ///
+  /// Новый FK на `CompanyDivision` — теперь это источник истины
+  /// «к какому подразделению относится заказ». Нullable, потому что:
+  ///   - миграция backfill-ит существующие заказы по соответствию
+  ///     `Order.division::text → CompanyDivision.code`, но если по
+  ///     какой-то причине справочной карточки нет (history без
+  ///     MARKETPLACE/OTHER), заказ остаётся с `null` — это
+  ///     корректное deferred-state, который чинится в админке;
+  ///   - `onDelete: SetNull` — деактивация/удаление карточки
+  ///     `CompanyDivision` не сносит заказ; live-связь обнуляется,
+  ///     legacy `division` enum остаётся читаем (backward-compat
+  ///     до PHASE 2).
+  ///
+  /// Записывается синхронно с `division` в `OrdersService.create` и
+  /// `update`: если фронт прислал `companyDivisionId` — берём его и
+  /// синхронизируем legacy `division` по `code`; если пришёл только
+  /// legacy `division` — backend находит/upsert-ит карточку
+  /// `CompanyDivision` по `code = division`.
+  companyDivisionId String?
+  companyDivision   CompanyDivision? @relation(fields: [companyDivisionId], references: [id], onDelete: SetNull)
 
   /// Soft-route MVP: опциональная ссылка на шаблон маршрута производства
   /// (см. `RouteTemplate` ниже и `docs/domain.md §«Маршруты»`). На MVP
@@ -1045,6 +1075,7 @@ model Order {
   @@index([division])
   @@index([clientId])
   @@index([dueDate])
+  @@index([companyDivisionId])
 }
 
 /// Карточка клиента (управленческий справочник, см. `docs/domain.md
@@ -2063,7 +2094,26 @@ model DisplayScreenConfig {
   name       String
   /// Подразделение, которое экран показывает без `?division=` в URL.
   /// Источник истины — Prisma enum `OrderDivision`.
+  ///
+  /// PHASE 1 (см. `docs/domain.md §«Подразделения заказа»»,
+  /// `docs/erd.md §«DisplayScreenConfig»`): legacy enum-поле
+  /// остаётся как backward-compatibility для существующих экранов и
+  /// для старых ссылок `?division=…`, пока `ShopfloorService` не
+  /// перейдёт целиком на `companyDivision.code`. PHASE 2 удалит
+  /// колонку и enum.
   division   OrderDivision
+  /// PHASE 1 «CompanyDivision как master-справочник подразделений
+  /// для display screens» (см. `docs/display-board.md`,
+  /// `docs/screens.md §10e`). Новый FK на `CompanyDivision` —
+  /// теперь это источник истины подразделения экрана.
+  ///
+  /// Nullable + `onDelete: SetNull` по тем же соображениям, что у
+  /// `Order.companyDivisionId`: миграция backfill-ит конфиги по
+  /// соответствию `division::text → CompanyDivision.code`, а
+  /// удаление справочной карточки не сносит экран — он временно
+  /// возвращается к legacy `division` (backward-compat до PHASE 2).
+  companyDivisionId String?
+  companyDivision   CompanyDivision? @relation(fields: [companyDivisionId], references: [id], onDelete: SetNull)
   /// FK на `Employee.id` под этой DISPLAY-учёткой. UNIQUE — один
   /// экран = ровно одна учётка. На delete сотрудника каскадно
   /// удаляется и конфиг (учётку DISPLAY мы заводим строго под этот
@@ -2082,6 +2132,7 @@ model DisplayScreenConfig {
 
   @@index([division])
   @@index([isActive])
+  @@index([companyDivisionId])
 }
 
 /// Вызов мастера цеха (MVP, см. `docs/domain.md §«Мастер цеха»`,
@@ -3832,26 +3883,36 @@ model CompanySettings {
 }
 
 // ---------------------------------------------------------------------------
-// CompanyDivision — управленческий справочник «Подразделения компании».
+// CompanyDivision — master-справочник «Подразделения компании».
 // ---------------------------------------------------------------------------
 //
-// Простой soft-delete справочник, аналогичный `Client` / `DefectType`.
-// Ровно НЕ связан с `enum OrderDivision` (`MARKETPLACE` / `OTHER`) — это
-// две разные оси:
-//   - `OrderDivision` — управленческий филь shopfloor-display, фиксированный
-//     enum, расширяется миграцией;
-//   - `CompanyDivision` — структурное подразделение компании (цех, склад,
-//     бухгалтерия), расширяется через UI без миграции.
+// PHASE 1 «CompanyDivision как master-справочник подразделений заказа и
+// display screens» (см. `docs/domain.md §«Подразделения заказа»`,
+// `docs/erd.md §«CompanyDivision»`): этот справочник теперь является
+// источником истины «к какому подразделению относится заказ / экран
+// цеха». На него ссылаются `Order.companyDivisionId` и
+// `DisplayScreenConfig.companyDivisionId` (см. модели выше).
 //
-// На MVP справочник сознательно «висит сам по себе»: ничто в orders /
-// production-flow / display-board от него не зависит. Это позволяет завести
-// раздел «Подразделения» в `Настройках компании` и впоследствии (после
-// этого этапа) аккуратно подключить его к карточкам заказа / сотрудника /
-// печатным формам — но это уже out-of-scope.
+// Backward-compatibility до PHASE 2: legacy `enum OrderDivision`
+// (`MARKETPLACE` / `OTHER`) и колонки `Order.division` /
+// `DisplayScreenConfig.division` пока остаются — они синхронизируются
+// с `CompanyDivision.code` сервисами `OrdersService` /
+// `DisplayScreensService` и используются как fallback в earnings и
+// shopfloor-фильтре. PHASE 2 удалит и enum, и legacy-колонки, и
+// оставит только FK на этот справочник.
 //
-// Soft-delete: `isActive = false` через `PATCH`, hard-delete не делаем.
-// `code` уникален глобально, чтобы можно было ссылаться на подразделение
-// строкой (как `Operation.code`/`Equipment.code`).
+// Базовые карточки `MARKETPLACE` / `OTHER` (b2b) гарантированно
+// существуют в БД: миграция `…_link_company_divisions_to_orders` их
+// upsert-ит вместе с FK, а `prisma/seed.ts` / `tests/utils/seed.ts`
+// идемпотентно создают их при каждом re-seed. Менеджер может
+// переименовать их и завести дополнительные подразделения — на
+// расчёт начислений / фильтр дисплея это не влияет, потому что
+// связки идут по `code`.
+//
+// Soft-delete: `isActive = false` через `PATCH`, hard-delete сознательно
+// не делаем. `code` уникален глобально — на него ссылаются и
+// `Order.companyDivision`, и helper-ы вроде
+// `getCutterCompensationSchemeForDivision`.
 //
 // Audit: `COMPANY_DIVISION_CREATED` / `COMPANY_DIVISION_UPDATED` под
 // `entityType = COMPANY_DIVISION`.
@@ -3860,11 +3921,17 @@ model CompanySettings {
 model CompanyDivision {
   id          String  @id @default(cuid())
   /// Технический slug подразделения — должен быть глобально уникален
-  /// (например, `MAIN_SHOP`, `SEWING_FLOOR_2`). Менеджер задаёт сам;
-  /// дубль ловится partial-unique индексом в БД и через
+  /// (например, `MARKETPLACE`, `OTHER`, `MAIN_SHOP`). Менеджер задаёт
+  /// сам; дубль ловится partial-unique индексом в БД и через
   /// `P2002` → `409 COMPANY_DIVISION_CODE_TAKEN`.
+  ///
+  /// PHASE 1: код используется как ключ синхронизации с legacy
+  /// `Order.division` / `DisplayScreenConfig.division`. Карточки
+  /// `MARKETPLACE` / `OTHER` создаются миграцией / seed-ом и не
+  /// должны переименовываться, пока legacy enum жив (PHASE 2 уберёт
+  /// эту жёсткость).
   code        String  @unique
-  /// Человекочитаемое имя («Цех №1», «Склад готовой продукции»).
+  /// Человекочитаемое имя («Маркетплейс», «B2B», «Цех №1»).
   name        String
   description String?
   /// Soft-delete: при отключении менеджер ставит `isActive = false`,
@@ -3877,6 +3944,12 @@ model CompanyDivision {
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  /// PHASE 1: обратные связи. Заказы и display-экраны, привязанные к
+  /// этому подразделению. `onDelete: SetNull` со стороны Order /
+  /// DisplayScreenConfig — здесь только ради читаемости схемы.
+  orders         Order[]
+  displayScreens DisplayScreenConfig[]
 
   @@index([isActive])
   @@index([sortOrder])

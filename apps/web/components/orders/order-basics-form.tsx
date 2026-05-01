@@ -35,6 +35,7 @@ import { useFormState, useFormStatus } from 'react-dom';
 import { useEffect, useState } from 'react';
 import { Save } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
+import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import {
   ORDER_DIVISIONS,
   ORDER_DIVISION_LABELS,
@@ -56,6 +57,16 @@ interface Props {
   status: OrderStatus;
   initial: {
     division: OrderDivision;
+    /**
+     * PHASE 1 «CompanyDivision как master-справочник»: текущая
+     * привязка заказа. `null` — историческая запись без FK.
+     */
+    companyDivisionId: string | null;
+    /**
+     * Чтобы UI мог отрисовать архивную / уже невидимую в активном
+     * списке карточку, передаём её краткие реквизиты сюда.
+     */
+    companyDivision: { id: string; code: string; name: string } | null;
     dueDate: string | null;
     clientId: string | null;
     customer: string | null;
@@ -64,6 +75,13 @@ interface Props {
     comment: string | null;
   };
   clients: ClientDto[];
+  /**
+   * PHASE 1: активные карточки `CompanyDivision` для select-а. Если
+   * у заказа уже привязана архивная карточка (нет в активном списке),
+   * UI добавит её отдельной опцией ниже — иначе при сохранении
+   * привязка пропала бы без явного действия пользователя.
+   */
+  companyDivisions: CompanyDivisionDto[];
 }
 
 const initialState: UpdateOrderBasicsActionState = {};
@@ -82,7 +100,13 @@ function SubmitButton({ disabled }: { disabled: boolean }) {
   );
 }
 
-export function OrderBasicsForm({ orderId, status, initial, clients }: Props) {
+export function OrderBasicsForm({
+  orderId,
+  status,
+  initial,
+  clients,
+  companyDivisions,
+}: Props) {
   const action = updateOrderBasicsAction.bind(null, orderId);
   const [state, formAction] = useFormState(action, initialState);
 
@@ -90,6 +114,9 @@ export function OrderBasicsForm({ orderId, status, initial, clients }: Props) {
 
   const dueDateInitial = initial.dueDate ? initial.dueDate.slice(0, 10) : '';
   const [division, setDivision] = useState<OrderDivision>(initial.division);
+  const [companyDivisionId, setCompanyDivisionId] = useState<string>(
+    initial.companyDivisionId ?? '',
+  );
   const [dueDate, setDueDate] = useState<string>(dueDateInitial);
   const [clientId, setClientId] = useState<string>(initial.clientId ?? '');
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>(
@@ -114,6 +141,21 @@ export function OrderBasicsForm({ orderId, status, initial, clients }: Props) {
     initial.clientId &&
     !clients.some((c) => c.id === initial.clientId);
 
+  const showCurrentDivisionArchivedOption =
+    initial.companyDivisionId &&
+    !companyDivisions.some((d) => d.id === initial.companyDivisionId);
+
+  // PHASE 1: при смене подразделения через select подкладываем
+  // legacy `division` enum по `code`, чтобы hidden-input ниже
+  // оставался согласован с FK даже если backend не сможет
+  // восстановить пару (карточка с произвольным `code`).
+  const handleCompanyDivisionChange = (id: string): void => {
+    setCompanyDivisionId(id);
+    const code = companyDivisions.find((d) => d.id === id)?.code;
+    if (code === 'MARKETPLACE') setDivision('MARKETPLACE');
+    else if (code === 'OTHER') setDivision('OTHER');
+  };
+
   const fieldError = (key: string): string | undefined =>
     state.fieldErrors?.[key];
 
@@ -131,21 +173,42 @@ export function OrderBasicsForm({ orderId, status, initial, clients }: Props) {
 
       <div className="order-hero-card__basic-grid">
         <div className="order-hero-card__field">
-          <label htmlFor="basics-division">Подразделение</label>
+          <label htmlFor="basics-companyDivisionId">Подразделение</label>
           <select
-            id="basics-division"
-            name="division"
-            value={division}
-            onChange={(e) => setDivision(e.target.value as OrderDivision)}
+            id="basics-companyDivisionId"
+            name="companyDivisionId"
+            value={companyDivisionId}
+            onChange={(e) => handleCompanyDivisionChange(e.target.value)}
             disabled={isTerminal}
-            required
           >
-            {ORDER_DIVISIONS.map((d) => (
-              <option key={d} value={d}>
-                {ORDER_DIVISION_LABELS[d]}
+            <option value="">— без подразделения —</option>
+            {/*
+              PHASE 1 «CompanyDivision как master-справочник»: если
+              у заказа уже привязана архивная (или не входящая в
+              активный список) карточка — показываем её отдельной
+              опцией, иначе при сохранении формы FK обнулится без
+              явного действия пользователя.
+            */}
+            {showCurrentDivisionArchivedOption &&
+              initial.companyDivision && (
+                <option value={initial.companyDivision.id}>
+                  {initial.companyDivision.name} — архивный
+                </option>
+              )}
+            {companyDivisions.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
+                {d.isActive ? '' : ' — архив'}
               </option>
             ))}
           </select>
+          {/*
+            PHASE 1: legacy `division` enum в hidden-input — backend
+            читает его как fallback на случай отсутствия карточки с
+            таким `code`. handleCompanyDivisionChange синхронизирует
+            это значение, если код карточки распознан.
+          */}
+          <input type="hidden" name="division" value={division} />
         </div>
 
         <div className="order-hero-card__field">

@@ -138,6 +138,14 @@ export async function resetDatabase(prisma: {
     // (с `ON DELETE SET NULL`). Truncate здесь нужен, чтобы тесты,
     // создающие клиентов в `beforeEach`, начинали с чистой таблицы.
     'Client',
+    // PHASE 1 «CompanyDivision как master-справочник» (см.
+    // `prisma/schema.prisma::CompanyDivision`,
+    // `tests/utils/seed.ts::seedMinimal`): справочник подразделений,
+    // на который ссылаются `Order.companyDivisionId` и
+    // `DisplayScreenConfig.companyDivisionId`. Truncate явный, чтобы
+    // повторный seed `MARKETPLACE`/`OTHER` шёл с пустой таблицы и
+    // FK с предыдущего теста не «висел» на освобождённом id.
+    'CompanyDivision',
   ];
   await prisma.$executeRawUnsafe(
     `TRUNCATE TABLE ${tables.map((t) => (t.startsWith('"') ? t : `"${t}"`)).join(', ')} RESTART IDENTITY CASCADE`,

@@ -399,9 +399,25 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   `domain.md §16`, `erd.md §2.15`, `api.md §42`). Pinned-ссылка
   «Настройки» в футере sidebar рядом с «Выйти». Audit —
   `COMPANY_SETTINGS_UPDATED` / `COMPANY_DIVISION_CREATED` /
-  `COMPANY_DIVISION_UPDATED`. Сознательная граница: `CompanyDivision`
-  **не** связан с `enum OrderDivision` — это разные оси
-  (структура компании vs. фильтр shopfloor-display).
+  `COMPANY_DIVISION_UPDATED`.
+
+- [x] **PHASE 1 «CompanyDivision как master-справочник».**
+  Подразделения компании теперь являются источником истины для
+  поля «Подразделение» в карточках заказа и в конфиге display-
+  экранов. Добавлены FK `Order.companyDivisionId` и
+  `DisplayScreenConfig.companyDivisionId` (`onDelete: SetNull`),
+  inverse-связи на `CompanyDivision`. Базовые карточки
+  `MARKETPLACE` / `OTHER` гарантированно созданы миграцией
+  `…_link_company_divisions_to_orders` и каждым re-seed.
+  Backend (`OrdersService` / `DisplayScreensService`) синхронно
+  пишет пару `(companyDivisionId, legacy division)` по `code`;
+  earnings (`getCutterCompensationSchemeForDivision`) и
+  shopfloor-фильтр (`?divisionCode=…` приоритетнее `?division=…`)
+  работают через `CompanyDivision.code` с fallback на legacy
+  enum. Legacy `enum OrderDivision`, `Order.division` и
+  `DisplayScreenConfig.division` сохранены до PHASE 2 ради
+  backward-compat. См. `docs/domain.md §«Подразделения заказа»`,
+  `docs/display-board.md`, `docs/erd.md §«CompanyDivision»`.
 
 ---
 

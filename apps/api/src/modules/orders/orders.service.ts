@@ -4,7 +4,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { OrderOutsourceExecutionStatus, OrderStatus, PassportStatus } from '@prisma/client';
+import {
+  OrderDivision,
+  OrderOutsourceExecutionStatus,
+  OrderStatus,
+  PassportStatus,
+} from '@prisma/client';
 import type {
   CreateOrderDto,
   ListOrdersQuery,
@@ -74,6 +79,13 @@ type OrderWithItems = Prisma.OrderGetPayload<{
     client: true;
     patternItem: true;
     applications: true;
+    /**
+     * PHASE 1 «CompanyDivision как master-справочник» (см.
+     * `prisma/schema.prisma::Order.companyDivisionId`,
+     * `OrdersService.toDetailDto`): подгружаем краткие
+     * реквизиты карточки подразделения для DTO-ответа.
+     */
+    companyDivision: true;
   };
 }>;
 
@@ -201,6 +213,26 @@ export class OrdersService {
         ? await this.ensureLegacyProductForPattern(dto.patternItemId, tx)
         : (dto.productId as string);
 
+      // PHASE 1 «CompanyDivision как master-справочник» (см.
+      // `docs/domain.md §«Подразделения заказа»»): резолвим пару
+      // `(companyDivisionId, division)` в одной точке, чтобы дальше
+      // в `tx.order.create` оба поля писались синхронно.
+      // - `companyDivisionId` приоритетнее: backend читает карточку
+      //   справочника и подкладывает legacy `division` по `code` для
+      //   backward-compat shopfloor-фильтра / earnings;
+      // - если `companyDivisionId` не передан, но передан legacy
+      //   `division` — `ensureCompanyDivisionFromLegacy` найдёт/
+      //   upsert-нет карточку с `code = division`;
+      // - если оба пусты — оставляем `companyDivisionId = null` и
+      //   legacy `division = OTHER` (Prisma default).
+      const resolvedDivision = await this.resolveCompanyDivisionForOrder(
+        tx,
+        {
+          companyDivisionId: dto.companyDivisionId ?? undefined,
+          legacyDivision: dto.division ?? null,
+        },
+      );
+
       // Цвет заказа: предпочитаем явный input.color. Если его нет —
       // в legacy product-only flow подставляем `Product.color` (как
       // раньше, см. `docs/domain.md §5a`); в pattern-flow цвета по
@@ -240,7 +272,12 @@ export class OrdersService {
           // подставит default `OTHER` (см. schema.prisma и
           // `docs/domain.md §«Подразделения заказа»`). Веб-форма
           // всегда шлёт явное значение из select-а.
-          division: dto.division ?? undefined,
+          //
+          // PHASE 1: значения резолвлены выше через
+          // `resolveCompanyDivisionForOrder` — пишем оба поля
+          // синхронно, FK + legacy enum.
+          division: resolvedDivision.legacyDivision ?? undefined,
+          companyDivisionId: resolvedDivision.companyDivisionId,
           routeTemplateId: dto.routeTemplateId ?? null,
           techCardId: dto.techCardId ?? null,
           patternItemId: dto.patternItemId ?? null,
@@ -307,6 +344,9 @@ export class OrdersService {
           // массив всегда пуст; добавляем include для строгого
           // соответствия `OrderWithItems`-типу (см. выше).
           applications: true,
+          // PHASE 1: подгружаем краткие реквизиты `CompanyDivision`
+          // для того же DTO-контракта, что и `getOne`.
+          companyDivision: true,
         },
       });
       // Этап 2 «План операций на заказе» (см.
@@ -364,7 +404,14 @@ export class OrdersService {
           payload: {
             number: created.number,
             productId: productIdForItems,
+            // PHASE 1: пишем сразу обе оси подразделения. По
+            // журналу должно быть видно, попал ли заказ на новый
+            // FK (`companyDivisionId` + `companyDivisionCode`) или
+            // только в legacy `division`. После PHASE 2 поле
+            // `division` уйдёт.
             division: created.division,
+            companyDivisionId: created.companyDivisionId,
+            companyDivisionCode: created.companyDivision?.code ?? null,
             qtyPlanTotal: dto.items.reduce((s, i) => s + i.qtyPlan, 0),
             sizeIds: dto.items.map((i) => i.sizeId),
             routeTemplateId: created.routeTemplateId,
@@ -531,6 +578,12 @@ export class OrdersService {
             previewImageUrl: true,
           },
         },
+        // PHASE 1: краткие реквизиты карточки подразделения для
+        // `OrderListItemDto.companyDivision`. Snapshot нам тут не
+        // нужен — UI рисует current `name`/`code` из live-карточки.
+        companyDivision: {
+          select: { id: true, code: true, name: true },
+        },
         // Тонкий select по паспортам: только то, что нужно для
         // qtyFinishedTotal. Полный include паспортов сюда не нужен.
         passports: { select: { qtyGood: true, status: true } },
@@ -584,6 +637,13 @@ export class OrdersService {
     client: { id: string; name: string } | null;
     dueDate: Date | null;
     division: OrderListItemDto['division'];
+    /**
+     * PHASE 1 «CompanyDivision как master-справочник»: краткие
+     * реквизиты карточки подразделения (`null` для исторических
+     * заказов до миграции).
+     */
+    companyDivisionId: string | null;
+    companyDivision: { id: string; code: string; name: string } | null;
     routeTemplateId: string | null;
     routeTemplate: { code: string; name: string } | null;
     patternItemId: string | null;
@@ -643,6 +703,19 @@ export class OrdersService {
       qtyFinishedTotal,
       deadline,
       division: o.division,
+      // PHASE 1 «CompanyDivision как master-справочник»: краткие
+      // реквизиты подразделения для UI (см.
+      // `OrderListItemDto.companyDivision`). UI должен предпочитать
+      // `companyDivision?.name`, fallback на legacy `division` —
+      // только если карточка не привязана.
+      companyDivisionId: o.companyDivisionId,
+      companyDivision: o.companyDivision
+        ? {
+            id: o.companyDivision.id,
+            code: o.companyDivision.code,
+            name: o.companyDivision.name,
+          }
+        : null,
       routeTemplateId: o.routeTemplateId,
       routeTemplateCode: o.routeTemplate?.code ?? null,
       routeTemplateName: o.routeTemplate?.name ?? null,
@@ -709,6 +782,9 @@ export class OrdersService {
         // мог отрендерить блок «Нанесение» без отдельного запроса.
         // Сортировка по `createdAt` — стабильная для UI порядок строк.
         applications: { orderBy: { createdAt: 'asc' } },
+        // PHASE 1: краткие реквизиты карточки подразделения для
+        // `OrderDetailDto.companyDivision`. См. `toDetailDto`.
+        companyDivision: true,
       },
     });
     if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Заказ не найден' });
@@ -1008,13 +1084,22 @@ export class OrdersService {
       (dto.patternItemId ?? null) !== (current.patternItemId ?? null);
     const wantsDivisionChange =
       dto.division !== undefined && dto.division !== current.division;
+    // PHASE 1: смена FK подразделения через `companyDivisionId` —
+    // та же «опасная» категория, что и legacy `division`. Считаем
+    // изменением только если значение действительно отличается от
+    // текущего, чтобы повторная отправка того же id не срабатывала
+    // как unsafe-change.
+    const wantsCompanyDivisionChange =
+      dto.companyDivisionId !== undefined &&
+      (dto.companyDivisionId ?? null) !== (current.companyDivisionId ?? null);
     const wantsUnsafeChange =
       wantsItemsChange ||
       wantsProductChange ||
       wantsRouteChange ||
       wantsTechCardChange ||
       wantsPatternChange ||
-      wantsDivisionChange;
+      wantsDivisionChange ||
+      wantsCompanyDivisionChange;
 
     const isDraft = current.status === OrderStatus.DRAFT;
 
@@ -1154,6 +1239,14 @@ export class OrdersService {
     trackScalar('customer', current.customer, dto.customer);
     trackScalar('color', current.color, dto.color);
     trackScalar('division', current.division, dto.division);
+    // PHASE 1: фиксируем смену FK подразделения отдельным полем —
+    // помогает отделить «менеджер сменил division через legacy enum»
+    // от «менеджер сменил companyDivisionId через новый select».
+    trackScalar(
+      'companyDivisionId',
+      current.companyDivisionId,
+      dto.companyDivisionId,
+    );
     trackScalar('productId', currentProductId ?? null, dto.productId);
     trackScalar('routeTemplateId', current.routeTemplateId, dto.routeTemplateId);
     trackScalar('techCardId', current.techCardId, dto.techCardId);
@@ -1213,8 +1306,46 @@ export class OrdersService {
         dto.patternItemId !== undefined ||
         dto.clientId !== undefined ||
         dto.division !== undefined ||
+        dto.companyDivisionId !== undefined ||
         dto.customerUnitPrice !== undefined ||
         dto.customerCurrency !== undefined;
+
+      // PHASE 1: резолвим пару `(companyDivisionId, division)` если
+      // меняется хотя бы одно из них. Не вызываем helper, когда оба
+      // поля `undefined` — иначе одного PATCH-запроса по комментарию
+      // хватило бы, чтобы пере-проставить пару (`undefined` =
+      // «Prisma не трогает колонку»).
+      //
+      // ВАЖНО про приоритет: helper трактует «передан
+      // `companyDivisionId`» как доминирующий сигнал. Если в DTO
+      // пришёл только legacy `division`, мы НЕ передаём текущий
+      // `current.companyDivisionId` в helper — иначе helper
+      // вернётся на старую карточку и проигнорирует новый enum.
+      // Это покрывает legacy PATCH `{ division: 'MARKETPLACE' }`,
+      // который должен переключать обе колонки.
+      let resolvedDivisionForUpdate:
+        | {
+            companyDivisionId: string | null;
+            legacyDivision: OrderDivision | null;
+          }
+        | undefined;
+      if (dto.companyDivisionId !== undefined || dto.division !== undefined) {
+        resolvedDivisionForUpdate = await this.resolveCompanyDivisionForOrder(
+          tx,
+          {
+            companyDivisionId: dto.companyDivisionId,
+            legacyDivision:
+              dto.division === undefined ? current.division : dto.division,
+          },
+        );
+      }
+      const divisionForPrisma: OrderDivision | undefined = resolvedDivisionForUpdate
+        ? resolvedDivisionForUpdate.legacyDivision ?? undefined
+        : undefined;
+      const companyDivisionIdForPrisma: string | null | undefined =
+        resolvedDivisionForUpdate
+          ? resolvedDivisionForUpdate.companyDivisionId
+          : undefined;
 
       if (hasOrderUpdates) {
         await tx.order.update({
@@ -1248,7 +1379,12 @@ export class OrdersService {
               dto.patternItemId === undefined ? undefined : dto.patternItemId,
             clientId:
               dto.clientId === undefined ? undefined : dto.clientId,
-            division: dto.division ?? undefined,
+            // PHASE 1: пара полей подразделения пишется синхронно,
+            // если `resolveCompanyDivisionForOrder` запускался; иначе
+            // `undefined` и Prisma колонки не трогает. `legacyDivision`
+            // уже narrow-нут helper-ом до `OrderDivision | null`.
+            division: divisionForPrisma,
+            companyDivisionId: companyDivisionIdForPrisma,
             customerUnitPrice: customerPriceForPrisma,
             customerCurrency: customerCurrencyForPrisma,
           },
@@ -2106,6 +2242,19 @@ export class OrdersService {
       qtyFinishedTotal,
       deadline,
       division: order.division,
+      // PHASE 1 «CompanyDivision как master-справочник»: краткие
+      // реквизиты подразделения. UI карточки заказа должен
+      // предпочитать `companyDivision?.name`, fallback на
+      // `ORDER_DIVISION_LABELS[order.division]` оставляем до PHASE 2
+      // (для исторических заказов до миграции).
+      companyDivisionId: order.companyDivisionId,
+      companyDivision: order.companyDivision
+        ? {
+            id: order.companyDivision.id,
+            code: order.companyDivision.code,
+            name: order.companyDivision.name,
+          }
+        : null,
       routeTemplateId: order.routeTemplateId,
       routeTemplateCode: order.routeTemplate?.code ?? null,
       routeTemplateName: order.routeTemplate?.name ?? null,
@@ -2430,6 +2579,138 @@ export class OrdersService {
       },
     });
     return this.getOne(orderId);
+  }
+
+  /**
+   * PHASE 1 «CompanyDivision как master-справочник» (см.
+   * `prisma/schema.prisma::Order.companyDivisionId`,
+   * `docs/domain.md §«Подразделения заказа»`).
+   *
+   * Резолвит пару `(companyDivisionId, legacyDivision)` для
+   * `Order.companyDivisionId` + `Order.division` синхронно, чтобы
+   * на запись оба поля шли согласованно.
+   *
+   * Контракт:
+   *   - если задан `companyDivisionId` — ищем карточку
+   *     `CompanyDivision` (NOT_FOUND → 400, чтобы UI получил
+   *     адресную ошибку, а не FK-сбой). Backfill-им legacy
+   *     `division` по `code`, если код распознан как
+   *     `MARKETPLACE`/`OTHER`. Иначе оставляем legacy `division`
+   *     как есть (текущее значение либо переданный enum-fallback);
+   *   - если `companyDivisionId === null` — снимаем привязку, но
+   *     legacy `division` оставляем (`null` в БД нельзя — поле NOT
+   *     NULL, и downstream-консьюмеры опираются на enum до PHASE 2);
+   *   - если `companyDivisionId` не задан, но задан legacy
+   *     `division` — ищем (или мягко создаём) карточку
+   *     `CompanyDivision` по `code = division`. Это нужно, чтобы
+   *     старый POST/PATCH без `companyDivisionId` всё равно подцепил
+   *     заказ к справочнику. Создаём только для known enum-значений
+   *     (`MARKETPLACE`/`OTHER`) — для произвольной строки upsert не
+   *     делаем (валидация happens on Zod-уровне), просто оставляем
+   *     `companyDivisionId = null`;
+   *   - оба `undefined`/`null` без явных триггеров → возвращаем
+   *     текущие значения (`undefined`-семантику Prisma — «не
+   *     трогать колонку»).
+   *
+   * Возвращает `null` для `companyDivisionId`, если карточки нет.
+   * `legacyDivision` возвращается строкой-кодом (`MARKETPLACE`/
+   * `OTHER`) либо `null`, чтобы вызывающий мог пометить enum как
+   * «не трогать» (`undefined` в Prisma `update`).
+   */
+  private async resolveCompanyDivisionForOrder(
+    tx: Prisma.TransactionClient,
+    input: {
+      companyDivisionId: string | null | undefined;
+      legacyDivision: OrderDivision | string | null | undefined;
+    },
+  ): Promise<{
+    companyDivisionId: string | null;
+    legacyDivision: OrderDivision | null;
+  }> {
+    const KNOWN_LEGACY_CODES = new Set<OrderDivision>([
+      OrderDivision.MARKETPLACE,
+      OrderDivision.OTHER,
+    ]);
+
+    function asLegacyEnum(value: unknown): OrderDivision | null {
+      if (typeof value !== 'string') return null;
+      if (value === 'MARKETPLACE') return OrderDivision.MARKETPLACE;
+      if (value === 'OTHER') return OrderDivision.OTHER;
+      return null;
+    }
+
+    // Случай 1: явно передан `companyDivisionId`.
+    if (input.companyDivisionId !== undefined) {
+      if (input.companyDivisionId === null) {
+        // Снять привязку. Legacy `division` оставляем как есть —
+        // вызывающий передаёт текущее значение.
+        return {
+          companyDivisionId: null,
+          legacyDivision: asLegacyEnum(input.legacyDivision),
+        };
+      }
+      const card = await tx.companyDivision.findUnique({
+        where: { id: input.companyDivisionId },
+        select: { id: true, code: true, isActive: true },
+      });
+      if (!card) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'COMPANY_DIVISION_NOT_FOUND',
+          message: 'Подразделение не найдено',
+        });
+      }
+      // Если код карточки совпадает с known legacy enum — пишем
+      // его в `Order.division`. Иначе оставляем legacy enum как
+      // есть: PHASE 1 не запрещает «дополнительные» подразделения,
+      // но legacy enum их не знает.
+      const legacyFromCard = asLegacyEnum(card.code);
+      const legacyForFk =
+        legacyFromCard !== null
+          ? legacyFromCard
+          : asLegacyEnum(input.legacyDivision);
+      return {
+        companyDivisionId: card.id,
+        legacyDivision: legacyForFk,
+      };
+    }
+
+    // Случай 2: пришёл только legacy `division` (старый flow).
+    if (input.legacyDivision) {
+      const code = String(input.legacyDivision);
+      const legacyEnum = asLegacyEnum(code);
+      if (legacyEnum && KNOWN_LEGACY_CODES.has(legacyEnum)) {
+        // Пытаемся найти карточку с этим code (миграция/seed её
+        // гарантировали). Если её каким-то образом нет — мягко
+        // создаём, чтобы заказ всё равно мог записаться.
+        const card = await tx.companyDivision.upsert({
+          where: { code: legacyEnum },
+          create: {
+            code: legacyEnum,
+            name: legacyEnum === OrderDivision.MARKETPLACE ? 'Маркетплейс' : 'B2B',
+            sortOrder: legacyEnum === OrderDivision.MARKETPLACE ? 10 : 20,
+            isActive: true,
+          },
+          update: {},
+          select: { id: true },
+        });
+        return {
+          companyDivisionId: card.id,
+          legacyDivision: legacyEnum,
+        };
+      }
+      return {
+        companyDivisionId: null,
+        legacyDivision: legacyEnum,
+      };
+    }
+
+    // Случай 3: ничего нового не пришло — возвращаем текущие
+    // значения (вызывающий сам решит, нужен ли write).
+    return {
+      companyDivisionId: input.companyDivisionId ?? null,
+      legacyDivision: asLegacyEnum(input.legacyDivision),
+    };
   }
 
   /**

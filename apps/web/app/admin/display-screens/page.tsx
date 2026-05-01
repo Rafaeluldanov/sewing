@@ -93,7 +93,14 @@ function DisplayScreensTable({
     {
       key: 'division',
       header: 'Подразделение',
-      render: (s) => ORDER_DIVISION_LABELS[s.division as OrderDivision],
+      // PHASE 1 «CompanyDivision как master-справочник» (см.
+      // `docs/domain.md §«Подразделения заказа»»): UI предпочитает
+      // live-имя `companyDivision.name`, fallback на legacy
+      // `ORDER_DIVISION_LABELS[s.division]` оставляем для исторических
+      // конфигов до миграции (PHASE 2 уберёт fallback).
+      render: (s) =>
+        s.companyDivision?.name ??
+        ORDER_DIVISION_LABELS[s.division as OrderDivision],
     },
     {
       key: 'login',

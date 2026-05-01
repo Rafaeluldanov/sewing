@@ -59,6 +59,11 @@ describe('admin/display-screens/new — отдельная страница со
     // Поля собраны строго по DTO POST /api/display-screens
     // (см. `packages/shared/src/display-screens.ts`).
     expect(src).toMatch(/name="name"/);
+    // PHASE 1 «CompanyDivision как master-справочник»: новый
+    // приоритетный select. Legacy `name="division"` остаётся как
+    // fallback (рендерится, если в инсталляции нет
+    // `companyDivisions`).
+    expect(src).toMatch(/name="companyDivisionId"/);
     expect(src).toMatch(/name="division"/);
     expect(src).toMatch(/name="login"/);
     expect(src).toMatch(/name="pin"/);
@@ -240,10 +245,14 @@ describe('shopfloor — auto-division для DISPLAY-роли (контракт 
 
   test('shopfloor.service.ts резолвит division по DisplayScreenConfig для роли DISPLAY', () => {
     const src = readSrc('apps/api/src/modules/shopfloor/shopfloor.service.ts');
-    expect(src).toMatch(/resolveDisplayDivision/);
+    // PHASE 1 «CompanyDivision как master-справочник»: helper
+    // переименован в `resolveDisplayDivisionCode` и читает
+    // `companyDivision.code` с fallback на legacy `division`.
+    expect(src).toMatch(/resolveDisplayDivisionCode/);
     expect(src).toMatch(/displayScreenConfig\.findUnique/);
     expect(src).toMatch(/Role\.DISPLAY/);
-    // query.division всегда побеждает — это тоже часть контракта.
+    // PHASE 1: оба query-параметра приоритетнее автодетектора.
+    expect(src).toMatch(/if \(query\.divisionCode\)/);
     expect(src).toMatch(/if \(query\.division\)/);
   });
 });

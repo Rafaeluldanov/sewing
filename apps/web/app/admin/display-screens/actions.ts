@@ -33,6 +33,13 @@ function isOrderDivision(v: string): v is OrderDivision {
  * `POST /api/display-screens`. При успехе — `revalidate
  * ('/admin/display-screens')` и redirect обратно на список (карточки
  * экрана на MVP нет, см. `docs/screens.md §10e`).
+ *
+ * PHASE 1 «CompanyDivision как master-справочник» (см.
+ * `docs/domain.md §«Подразделения заказа»`,
+ * `DisplayScreensService.create`): UI новой формы шлёт
+ * `companyDivisionId`. Старая legacy-форма (без подразделения в
+ * справочнике) шлёт legacy `division` — backend ищет/upsert-ит
+ * карточку по `code`. Хотя бы одно поле обязано прийти.
  */
 export async function createDisplayScreenAction(
   _prev: CreateDisplayScreenState,
@@ -40,6 +47,9 @@ export async function createDisplayScreenAction(
 ): Promise<CreateDisplayScreenState> {
   const name = String(form.get('name') ?? '').trim();
   const divisionRaw = String(form.get('division') ?? '').trim();
+  const companyDivisionIdRaw = String(
+    form.get('companyDivisionId') ?? '',
+  ).trim();
   const login = String(form.get('login') ?? '').trim().toLowerCase();
   const pin = String(form.get('pin') ?? '');
   const isActive = form.get('isActive') === 'on';
@@ -47,7 +57,10 @@ export async function createDisplayScreenAction(
   if (name.length < 2) {
     return { error: 'Название экрана должно быть не короче 2 символов' };
   }
-  if (!isOrderDivision(divisionRaw)) {
+  // PHASE 1: либо `companyDivisionId`, либо legacy `division` обязан
+  // быть валидным. Backend перепроверит, но local-validation даёт
+  // чистое сообщение без round-trip.
+  if (!companyDivisionIdRaw && !isOrderDivision(divisionRaw)) {
     return { error: 'Выберите подразделение' };
   }
   if (login.length < 2) {
@@ -59,7 +72,10 @@ export async function createDisplayScreenAction(
 
   const dto: CreateDisplayScreenDto = {
     name,
-    division: divisionRaw,
+    // PHASE 1: оба поля опциональны на уровне DTO, backend
+    // синхронизирует пару `(companyDivisionId, division)` по `code`.
+    division: isOrderDivision(divisionRaw) ? divisionRaw : undefined,
+    companyDivisionId: companyDivisionIdRaw || undefined,
     login,
     pin,
     isActive,

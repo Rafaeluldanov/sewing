@@ -1,10 +1,12 @@
 import Link from 'next/link';
 import { ArrowLeft, MonitorSmartphone } from 'lucide-react';
+import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import {
   AdminCard,
   AdminPageShell,
   AdminSectionHeader,
 } from '@/components/admin';
+import { listCompanyDivisions } from '@/lib/company-settings-api';
 import { CreateDisplayScreenForm } from '../create-form';
 
 export const dynamic = 'force-dynamic';
@@ -12,10 +14,20 @@ export const dynamic = 'force-dynamic';
 /**
  * Создание display-экрана (Admin UI 2.5).
  *
- * Backend / DTO не меняем. Создаёт пару «DISPLAY-учётка + конфиг
- * подразделения» одной транзакцией.
+ * PHASE 1 «CompanyDivision как master-справочник» (см.
+ * `docs/domain.md §«Подразделения заказа»»): подгружаем активные
+ * карточки подразделений, чтобы форма выводила select по
+ * `CompanyDivision`. Если список пуст (новая инсталляция без seed-а),
+ * форма fallback-ит на legacy enum-select.
  */
-export default function AdminDisplayScreenNewPage() {
+export default async function AdminDisplayScreenNewPage() {
+  let companyDivisions: CompanyDivisionDto[] = [];
+  try {
+    companyDivisions = await listCompanyDivisions();
+  } catch {
+    companyDivisions = [];
+  }
+
   return (
     <AdminPageShell
       icon={<MonitorSmartphone size={22} strokeWidth={1.6} aria-hidden />}
@@ -36,7 +48,7 @@ export default function AdminDisplayScreenNewPage() {
           title="Параметры"
           hint="PIN не восстановить — запишите сразу"
         />
-        <CreateDisplayScreenForm />
+        <CreateDisplayScreenForm companyDivisions={companyDivisions} />
       </AdminCard>
     </AdminPageShell>
   );

@@ -2722,12 +2722,16 @@ RBAC — `SHOP_MANAGER` / `ADMIN` (на backend), плюс `app/admin/layout.tsx
 Доменные правила — `docs/domain.md §16`, контракт API —
 `docs/api.md §42`, ER — `docs/erd.md §2.15`.
 
-> **Граница** этого экрана. Подразделения тут — это структурные
-> подразделения компании (цех, склад, бухгалтерия). Ось `OrderDivision`
-> (`MARKETPLACE` / `OTHER`), управляющая фильтром
-> `/shopfloor/display`, остаётся отдельным enum в Prisma и сюда **не**
-> мигрирует. Связки `CompanyDivision` с заказами/сотрудниками — out-
-> of-scope этого этапа.
+> **PHASE 1 «CompanyDivision как master-справочник»**. Подразделения,
+> заведённые здесь, теперь являются источником истины для поля
+> «Подразделение» в карточках заказа (`Order.companyDivisionId`)
+> и в конфиге display-экранов (`DisplayScreenConfig.companyDivisionId`).
+> Базовые карточки `MARKETPLACE` / `OTHER` (`code` совпадает с
+> legacy enum `OrderDivision`) гарантированно созданы миграцией и
+> seed-ом — менеджер их видит и может переименовать, но `code`
+> менять нельзя пока legacy enum жив (PHASE 2 уберёт эту
+> жёсткость). См. `docs/domain.md §«Подразделения заказа»` и
+> `docs/erd.md §«CompanyDivision»`.
 
 ---
 

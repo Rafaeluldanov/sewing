@@ -149,18 +149,34 @@ export class EarningsService {
     // Если раскрой переведён на оклад — никаких сдельных начислений.
     if (op.pricingMode === 'SALARY_ONLY') return;
 
-    // Source of truth для выбора схемы — `Order.division` (см.
-    // `getCutterCompensationSchemeForDivision`). Marketplace
-    // продолжает старый путь 1-в-1; всё остальное (`OTHER` legacy
-    // B2B + будущий явный `B2B`) идёт через процент от пошива.
+    // PHASE 1 «CompanyDivision как master-справочник» (см.
+    // `docs/payroll-cutter-compensation-recon.md §4`,
+    // `docs/domain.md §«Подразделения заказа»»).
+    //
+    // Source of truth для выбора схемы — теперь
+    // `passport.order.companyDivision.code`. Fallback на legacy
+    // `Order.division` оставляем до PHASE 2: он покрывает
+    // исторические заказы, у которых FK не проставлен (миграция
+    // backfill-ит только совпадения с known legacy code, но
+    // отдельные заказы могли попасть с `companyDivision = null`).
+    // Marketplace продолжает старый путь 1-в-1; всё остальное идёт
+    // через процент от пошива.
     const passport = await tx.passport.findUnique({
       where: { id: args.passportId },
-      select: { orderId: true, order: { select: { division: true } } },
+      select: {
+        orderId: true,
+        order: {
+          select: {
+            division: true,
+            companyDivision: { select: { code: true } },
+          },
+        },
+      },
     });
     if (!passport) return;
-    const scheme = getCutterCompensationSchemeForDivision(
-      passport.order.division,
-    );
+    const divisionCode =
+      passport.order.companyDivision?.code ?? passport.order.division;
+    const scheme = getCutterCompensationSchemeForDivision(divisionCode);
 
     if (scheme === 'MARKETPLACE_FIXED') {
       await this.createImmediateForCutterMarketplace(tx, {
@@ -550,7 +566,11 @@ export class EarningsService {
         order: {
           select: {
             id: true,
+            // PHASE 1: legacy `division` оставлен для журнала /
+            // диагностики, фактическая схема выбирается через
+            // `companyDivision.code` в `createImmediateForCutter`.
             division: true,
+            companyDivision: { select: { code: true } },
             routeSteps: {
               select: {
                 index: true,
