@@ -44,6 +44,7 @@ import {
   Printer,
   Scissors,
   Search,
+  Settings,
   ShoppingCart,
   Truck,
   Users,
@@ -294,6 +295,40 @@ function SidebarLogout() {
   );
 }
 
+/**
+ * Pinned-ссылка на «Настройки компании» в футере sidebar — рядом с
+ * кнопкой «Выйти». Сознательно вынесена из основного списка
+ * `SECTIONS`: это редко-используемая, но «всегда под рукой»
+ * управленческая страница (реквизиты + подразделения), которой не
+ * место в общем потоке доменных разделов.
+ *
+ * Подсветка активного состояния — по тому же `usePathname` шаблону,
+ * что у обычных ссылок sidebar.
+ */
+function SidebarSettingsLink({ active }: { active: boolean }) {
+  return (
+    <Link
+      href="/admin/company-settings"
+      className={
+        'admin-sidebar__link' + (active ? ' admin-sidebar__link--active' : '')
+      }
+      aria-current={active ? 'page' : undefined}
+    >
+      <span className="admin-sidebar__icon" aria-hidden>
+        <Settings size={18} strokeWidth={1.6} />
+      </span>
+      <span className="admin-sidebar__label">Настройки</span>
+    </Link>
+  );
+}
+
+function isSettingsActive(pathname: string): boolean {
+  return (
+    pathname === '/admin/company-settings' ||
+    pathname.startsWith('/admin/company-settings/')
+  );
+}
+
 export function AdminSidebar() {
   const pathname = usePathname() ?? '/admin';
   return (
@@ -330,6 +365,7 @@ export function AdminSidebar() {
         </ul>
       </nav>
       <div className="admin-sidebar__footer">
+        <SidebarSettingsLink active={isSettingsActive(pathname)} />
         <SidebarLogout />
       </div>
     </aside>
@@ -375,6 +411,7 @@ export function AdminSidebarMobileToggle() {
           })}
         </ul>
         <div className="admin-sidebar-mobile__footer">
+          <SidebarSettingsLink active={isSettingsActive(pathname)} />
           <SidebarLogout />
         </div>
       </nav>

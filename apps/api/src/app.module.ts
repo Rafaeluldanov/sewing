@@ -31,6 +31,7 @@ import { MasterCallsModule } from './modules/master-calls/master-calls.module.js
 import { MasterActionsModule } from './modules/master-actions/master-actions.module.js';
 import { CutReleasePolicyModule } from './modules/cut-release-policy/cut-release-policy.module.js';
 import { ClientsModule } from './modules/clients/clients.module.js';
+import { CompanySettingsModule } from './modules/company-settings/company-settings.module.js';
 import { PatternsModule } from './modules/patterns/patterns.module.js';
 import { PatternCategoriesModule } from './modules/pattern-categories/pattern-categories.module.js';
 import { WorkshopNeedsModule } from './modules/workshop-needs/workshop-needs.module.js';
@@ -76,6 +77,7 @@ import { SizesModule } from './modules/sizes/sizes.module.js';
     MasterActionsModule,
     CutReleasePolicyModule,
     ClientsModule,
+    CompanySettingsModule,
     PatternsModule,
     PatternCategoriesModule,
     WorkshopNeedsModule,

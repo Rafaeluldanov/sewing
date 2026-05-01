@@ -43,6 +43,7 @@
 - [13. Мастер / MasterCall / MasterActions](#13-master)
 - [14. Печать / PrintJob / Agent](#14-printing)
 - [15. Audit / Events](#15-audit-events)
+- [16. Настройки компании](#16-company-settings)
 
 ---
 
@@ -2165,7 +2166,8 @@ WORKSHOP_NEED | SUPPLIER |
 PURCHASE_ORDER | PURCHASE_RECEIPT |
 ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
-SIZE
+SIZE |
+COMPANY_SETTINGS | COMPANY_DIVISION
 ```
 
 ### 15.2 Атомарность `AuditLog` с операцией
@@ -2292,6 +2294,83 @@ PO `→ RECEIVED / PARTIALLY_RECEIVED` через
   должна быть дешёвой. Согласованность поддерживается code review.
 - UI/API над журналом — out-of-scope MVP. Чтение пока — задача
   поддержки/админа через БД.
+
+---
+
+<a id="16-company-settings"></a>
+## 16. Настройки компании
+
+Источник: `prisma/schema.prisma::CompanySettings` /
+`CompanyDivision`,
+`apps/api/src/modules/company-settings/*`,
+`apps/web/app/admin/company-settings/page.tsx`,
+`docs/api.md §42`, `docs/erd.md §2.15`.
+
+### 16.1 Назначение
+
+Управленческий блок «Настройки компании» закрывает две независимые
+сущности:
+
+- **Реквизиты организации** (`CompanySettings`) — singleton-карточка
+  с юридическими и банковскими реквизитами (legal/short name, ИНН,
+  КПП, ОГРН, юр./факт. адрес, телефон, email, ФИО директора и
+  главбуха, банк, БИК, корреспондентский счёт, расчётный счёт). На
+  MVP подразумевается одна компания на инсталляцию.
+- **Подразделения компании** (`CompanyDivision`) — soft-delete
+  справочник структурных подразделений (цех, склад, бухгалтерия).
+  Карточка несёт `code` (уникальный slug), `name`, `description?`,
+  `isActive`, `sortOrder`.
+
+UI — одна страница `/admin/company-settings` (см. `docs/screens.md
+§10g`), pinned-ссылка «Настройки» в футере sidebar рядом с «Выйти».
+RBAC — `SHOP_MANAGER` / `ADMIN`.
+
+### 16.2 Singleton-инвариант `CompanySettings`
+
+- `id String @id @default("default")` + `singleton Boolean @unique
+  @default(true)` — двойная защита: гарантирует на уровне БД, что в
+  таблице не больше одной строки.
+- `CompanySettingsService.getOrCreate()` идемпотентно создаёт строку
+  при первом GET (`/api/company-settings`); параллельный create
+  словит P2002 на `singleton`-unique и сделает повторное чтение.
+- PATCH `/api/company-settings` принимает любое подмножество полей
+  (`undefined` ⇒ не трогать; `null` / пустая строка ⇒ очистить поле).
+  Если ни одно поле реально не поменялось — UPDATE и `AuditLog` не
+  пишутся (idempotent PATCH).
+
+### 16.3 Soft-delete `CompanyDivision`
+
+- Hard-delete не делаем: «отключение» — это PATCH
+  `{ isActive: false }`. UI рисует кнопку «Отключить» в строке
+  таблицы; обратное действие — «Включить».
+- `code` глобально уникален; дубликат → `409
+  COMPANY_DIVISION_CODE_TAKEN` (`P2002` транслируется в сервисе).
+- `sortOrder` управляется руками (default `100`); list-эндпоинт
+  сортирует `[isActive desc, sortOrder asc, name asc]` — активные
+  всегда сверху, отключённые тонут вниз.
+
+### 16.4 `CompanyDivision` ≠ `enum OrderDivision`
+
+Это две разные оси, путать их нельзя:
+
+| Ось                | Источник истины                                | Где используется                                 |
+| ------------------ | ---------------------------------------------- | ------------------------------------------------ |
+| `enum OrderDivision` (`MARKETPLACE`/`OTHER`) | `prisma/schema.prisma::OrderDivision` | Поле `Order.division` + фильтр `/shopfloor/display?division=…`. Расширяется миграцией. |
+| `CompanyDivision`  | `prisma/schema.prisma::CompanyDivision`        | Структурное подразделение компании. Сейчас НЕ читается ни order-flow, ни production-flow, ни display-board. Расширяется через UI без миграции. |
+
+Сознательная граница MVP: `CompanyDivision` — это «настройка
+компании» (как реквизиты). Его связки с `Order` / `Employee` /
+печатными формами — следующий этап.
+
+### 16.5 Audit
+
+- `COMPANY_SETTINGS_UPDATED` — `entityType = COMPANY_SETTINGS`,
+  `entityId = "default"`, payload `{ changed: { <field>: { before,
+  after }, … } }`.
+- `COMPANY_DIVISION_CREATED` / `COMPANY_DIVISION_UPDATED` —
+  `entityType = COMPANY_DIVISION`, `entityId = CompanyDivision.id`.
+
+См. также `docs/events.md §3.2` / §3.3.
 
 ---
 

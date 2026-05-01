@@ -26,6 +26,8 @@ export * from './salary';
 export * from './employees';
 export * from './cutter-compensation';
 export * from './clients';
+export * from './company-settings';
+export * from './company-divisions';
 export * from './costs';
 export * from './dashboard';
 export * from './printers';

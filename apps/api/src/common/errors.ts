@@ -2114,3 +2114,39 @@ export class PurchaseReceiptCellNotFoundException extends BusinessException {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Company settings & divisions (управленческий справочник «Настройки
+// компании», см. `apps/api/src/modules/company-settings/*`,
+// `prisma/schema.prisma::CompanySettings` / `CompanyDivision`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Подразделение компании не найдено. Бросается из
+ * `CompanyDivisionsService.get/update`.
+ */
+export class CompanyDivisionNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'COMPANY_DIVISION_NOT_FOUND',
+      'Подразделение не найдено',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Дубликат `CompanyDivision.code`. Уникальность гарантирована БД, но
+ * перехватываем P2002 в `CompanyDivisionsService` и отдаём бизнес-
+ * ошибку с понятным текстом и стабильным `code`, чтобы UI мог
+ * подсветить именно поле «Код».
+ */
+export class CompanyDivisionCodeTakenException extends BusinessException {
+  constructor() {
+    super(
+      'COMPANY_DIVISION_CODE_TAKEN',
+      'Подразделение с таким кодом уже существует',
+      HttpStatus.CONFLICT,
+    );
+  }
+}

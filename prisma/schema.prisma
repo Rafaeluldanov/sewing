@@ -3765,3 +3765,119 @@ model OrderMaterialArrivalOverride {
   @@index([status])
   @@index([materialRole])
 }
+
+// ---------------------------------------------------------------------------
+// CompanySettings — реквизиты организации (singleton).
+// ---------------------------------------------------------------------------
+//
+// Хранит юридические/банковские реквизиты компании, телефон/email/руководителей.
+// Предположение MVP: одна компания на инсталляцию → singleton-таблица:
+//   - `id` всегда `"default"` (фиксированная константа), `singleton = true`
+//     с `@unique` — гарантирует на уровне БД, что строк не больше одной.
+//   - сервис `CompanySettingsService.getOrCreate()` идемпотентно создаёт
+//     запись с дефолтами при первом обращении (пустые строки → `null`).
+//   - расширение «много компаний/филиалов» вне scope MVP: специально
+//     отдельной осью введена `CompanyDivision` (см. ниже), а реквизиты
+//     остаются у одного юрлица.
+//
+// Все поля реквизитов — `String?` без жёсткой длины: формат
+// (10/12 цифр для INN и т.п.) валидируется в Zod-схемах
+// `@sewing/shared/company-settings.ts`, а не в БД, чтобы не плодить
+// миграцию при поправках формата.
+//
+// Audit: события `COMPANY_SETTINGS_UPDATED` пишутся `AuditService`-ом с
+// `entityType = COMPANY_SETTINGS`, `entityId = "default"`.
+// ---------------------------------------------------------------------------
+
+model CompanySettings {
+  /// Всегда `"default"` — singleton singleton-таблицы. Прибит вручную, чтобы
+  /// можно было ссылаться на запись без отдельного lookup-а.
+  id String @id @default("default")
+
+  /// Marker singleton-инварианта: `true` + `@unique` ⇒ в таблице может быть
+  /// максимум одна запись (вторая `INSERT` валится на уровне БД, без race-window).
+  singleton Boolean @unique @default(true)
+
+  /// Полное название организации («ООО „Швейная фабрика“»).
+  legalName String?
+  /// Краткое название организации («ШФ-1») — для шапок/печатных форм.
+  shortName String?
+
+  /// ИНН: 10 или 12 цифр (Zod проверяет формат).
+  inn      String?
+  /// КПП: 9 цифр.
+  kpp      String?
+  /// ОГРН: 13 или 15 цифр.
+  ogrn     String?
+
+  legalAddress  String?
+  actualAddress String?
+
+  phone           String?
+  email           String?
+  directorName    String?
+  accountantName  String?
+
+  /// Банковские реквизиты. Все поля свободные — формат проверяет Zod.
+  bankName             String?
+  /// БИК: 9 цифр.
+  bik                  String?
+  /// Корреспондентский счёт: 20 цифр.
+  correspondentAccount String?
+  /// Расчётный счёт: 20 цифр.
+  settlementAccount    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
+// CompanyDivision — управленческий справочник «Подразделения компании».
+// ---------------------------------------------------------------------------
+//
+// Простой soft-delete справочник, аналогичный `Client` / `DefectType`.
+// Ровно НЕ связан с `enum OrderDivision` (`MARKETPLACE` / `OTHER`) — это
+// две разные оси:
+//   - `OrderDivision` — управленческий филь shopfloor-display, фиксированный
+//     enum, расширяется миграцией;
+//   - `CompanyDivision` — структурное подразделение компании (цех, склад,
+//     бухгалтерия), расширяется через UI без миграции.
+//
+// На MVP справочник сознательно «висит сам по себе»: ничто в orders /
+// production-flow / display-board от него не зависит. Это позволяет завести
+// раздел «Подразделения» в `Настройках компании` и впоследствии (после
+// этого этапа) аккуратно подключить его к карточкам заказа / сотрудника /
+// печатным формам — но это уже out-of-scope.
+//
+// Soft-delete: `isActive = false` через `PATCH`, hard-delete не делаем.
+// `code` уникален глобально, чтобы можно было ссылаться на подразделение
+// строкой (как `Operation.code`/`Equipment.code`).
+//
+// Audit: `COMPANY_DIVISION_CREATED` / `COMPANY_DIVISION_UPDATED` под
+// `entityType = COMPANY_DIVISION`.
+// ---------------------------------------------------------------------------
+
+model CompanyDivision {
+  id          String  @id @default(cuid())
+  /// Технический slug подразделения — должен быть глобально уникален
+  /// (например, `MAIN_SHOP`, `SEWING_FLOOR_2`). Менеджер задаёт сам;
+  /// дубль ловится partial-unique индексом в БД и через
+  /// `P2002` → `409 COMPANY_DIVISION_CODE_TAKEN`.
+  code        String  @unique
+  /// Человекочитаемое имя («Цех №1», «Склад готовой продукции»).
+  name        String
+  description String?
+  /// Soft-delete: при отключении менеджер ставит `isActive = false`,
+  /// hard-delete сознательно не делаем.
+  isActive    Boolean @default(true)
+  /// Управленческий порядок в селектах/таблицах. По умолчанию `100`,
+  /// чтобы новые карточки попадали в конец списка, не ломая ручной
+  /// порядок старых.
+  sortOrder   Int     @default(100)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([isActive])
+  @@index([sortOrder])
+}

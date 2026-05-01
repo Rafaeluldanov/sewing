@@ -386,6 +386,23 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
 
 - [x] **Шаг 11 (MVP 1.1, Stabilization).** Реальная авторизация (`/api/auth/login`/`logout`/`me`), session-cookie с подписью HMAC-SHA256 и `Domain=.teeon.ru`, RBAC через `AuthGuard` + `@Roles()` (см. [ADR-0014](./adr/0014-auth-and-sessions.md)). Критические инварианты на уровне БД: partial-unique для активной смены, глобальный unique на `BoxItem.passportId`, фиксация уникальности номеров и QR (см. [ADR-0015](./adr/0015-db-invariants.md)). Интеграционные/smoke-тесты на ключевой производственный поток (orders → passports → shifts → qc → packing → earnings); тесты автоматически skip-аются без `TEST_DATABASE_URL` (см. [ADR-0016](./adr/0016-test-strategy.md)). Health/Ready endpoints (`/api/health`, `/api/ready`) и `GlobalExceptionFilter` (нормализация ошибок). UI: страница `/login`, route protection через `middleware.ts`, индикация текущего пользователя и logout-action в шапке. Подробнее в `domain.md §0a`, `api.md §1`, `flows.md §F0`.
 
+- [x] **Company settings (post-RECON).** Управленческий блок «Настройки
+  компании» — singleton-реквизиты организации (`CompanySettings`) и
+  soft-delete справочник «Подразделения компании» (`CompanyDivision`).
+  Backend как источник истины: `CompanySettingsModule` с двумя
+  контроллерами (`/api/company-settings` GET/PATCH, `/api/company-divisions`
+  GET/POST/GET:id/PATCH:id) под `SHOP_MANAGER`/`ADMIN`. Singleton —
+  `CompanySettings.id = "default"` + `singleton @unique`, race-safe
+  идемпотентный `getOrCreate`. UI — единый экран
+  `/admin/company-settings` (см. `screens.md §10h`) с тремя
+  карточками реквизитов и inline-таблицей подразделений (см.
+  `domain.md §16`, `erd.md §2.15`, `api.md §42`). Pinned-ссылка
+  «Настройки» в футере sidebar рядом с «Выйти». Audit —
+  `COMPANY_SETTINGS_UPDATED` / `COMPANY_DIVISION_CREATED` /
+  `COMPANY_DIVISION_UPDATED`. Сознательная граница: `CompanyDivision`
+  **не** связан с `enum OrderDivision` — это разные оси
+  (структура компании vs. фильтр shopfloor-display).
+
 ---
 
 ## PR gate / Docs consistency

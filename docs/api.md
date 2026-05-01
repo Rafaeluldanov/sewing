@@ -98,6 +98,7 @@
 - [39. Printers](#39-printers)
 - [40. Print jobs](#40-print-jobs)
 - [41. Printers agent](#41-printers-agent)
+- [42. Company settings](#42-company-settings)
 
 ---
 
@@ -901,6 +902,46 @@ DTO: `packages/shared/src/printers.ts`. ADR: 0008, 0010.
 | POST  | `/api/printers/agent/windows-printers`            | AgentAuthGuard                    | Body `AgentWindowsPrintersDto` (`{ hostName, printers: string[] }`). Сохраняет список Windows-принтеров и возвращает `selectedWindowsPrinter`. |
 
 DTO: `packages/shared/src/printers.ts`.
+
+---
+
+<a id="42-company-settings"></a>
+## 42. Company settings
+
+Источник:
+- `company-settings/company-settings.controller.ts`
+- `company-settings/company-divisions.controller.ts`
+
+Класс-уровень `@Roles('SHOP_MANAGER', 'ADMIN')` на обоих контроллерах.
+
+### 42.1 Реквизиты организации (singleton)
+
+| Метод | Путь                       | RBAC                | Описание |
+| ----- | -------------------------- | ------------------- | -------- |
+| GET   | `/api/company-settings`    | SHOP_MANAGER, ADMIN | Текущие реквизиты. Backend идемпотентно создаёт singleton-строку, если её ещё нет (`CompanySettingsService.getOrCreate`). |
+| PATCH | `/api/company-settings`    | SHOP_MANAGER, ADMIN | `UpdateCompanySettingsDto` (любое подмножество полей: legalName/shortName/INN/КПП/ОГРН/адреса/телефон/email/руководители/банк/БИК/р/с/к/с). Audit `COMPANY_SETTINGS_UPDATED`. |
+
+DTO: `packages/shared/src/company-settings.ts`. Audit:
+`COMPANY_SETTINGS_UPDATED` (`entityType = COMPANY_SETTINGS`,
+`entityId = "default"`).
+
+### 42.2 Подразделения компании
+
+| Метод | Путь                                | RBAC                | Описание |
+| ----- | ----------------------------------- | ------------------- | -------- |
+| GET   | `/api/company-divisions`            | SHOP_MANAGER, ADMIN | List `ListCompanyDivisionsQuery` (по умолчанию `isActive = true`, `search` по `name`/`code`). |
+| POST  | `/api/company-divisions`            | SHOP_MANAGER, ADMIN | `CreateCompanyDivisionDto`. 409 `COMPANY_DIVISION_CODE_TAKEN` при дубликате `code`. |
+| GET   | `/api/company-divisions/:id`        | SHOP_MANAGER, ADMIN | Карточка. 404 `COMPANY_DIVISION_NOT_FOUND`. |
+| PATCH | `/api/company-divisions/:id`        | SHOP_MANAGER, ADMIN | `UpdateCompanyDivisionDto` (включая `isActive` для мягкой деактивации). Hard-delete нет. |
+
+DTO: `packages/shared/src/company-divisions.ts`. Audit:
+`COMPANY_DIVISION_CREATED` / `COMPANY_DIVISION_UPDATED`
+(`entityType = COMPANY_DIVISION`).
+
+> **Не путать с `enum OrderDivision`** (`MARKETPLACE` / `OTHER`).
+> `CompanyDivision` — это структурное подразделение компании (цех,
+> склад, бухгалтерия), отдельная ось от фильтра shopfloor-display.
+> На MVP справочник стоит сам по себе и не привязан к заказам.
 
 ---
 

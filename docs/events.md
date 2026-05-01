@@ -348,7 +348,8 @@ WORKSHOP_NEED | SUPPLIER |
 PURCHASE_ORDER | PURCHASE_RECEIPT |
 ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
-SIZE
+SIZE |
+COMPANY_SETTINGS | COMPANY_DIVISION
 ```
 
 ### 3.3. Что именно логируется (собрано по `rg "event:\\s*'" apps/api/src`)
@@ -479,6 +480,19 @@ runtime-коде (не из комментариев/документации). 
 - `CLIENT`, `PATTERN`, `PATTERN_CATEGORY`, `WORKSHOP_NEED`,
   `SUPPLIER`, `ORDER_APPLICATION`, `ORDER_MATERIAL_ARRIVAL_OVERRIDE`,
   `SIZE`, `CUT_RELEASE_POLICY` — см. соответствующие сервисы.
+- `COMPANY_SETTINGS` — `CompanySettingsService.update`
+  (`apps/api/src/modules/company-settings/company-settings.service.ts`):
+  `COMPANY_SETTINGS_UPDATED` с `entityId = "default"` (singleton-id) и
+  payload-снимком `{ changed: { <field>: { before, after }, … } }`.
+  Пишется только когда реально что-то изменилось (idempotent PATCH с
+  тем же значением аудит-строку не плодит).
+- `COMPANY_DIVISION` —
+  `CompanyDivisionsService.create` / `update`
+  (`apps/api/src/modules/company-settings/company-divisions.service.ts`):
+  `COMPANY_DIVISION_CREATED` / `COMPANY_DIVISION_UPDATED` с
+  `entityId = CompanyDivision.id` и `before`/`after`-payload (для
+  update). Soft-delete тоже идёт `COMPANY_DIVISION_UPDATED`
+  (`isActive: false`), отдельного `*_DELETED` события нет.
 - `CUT_RELEASE_POLICY_CONSUMED` — пишется в транзакции
   `PassportsService.issueToEmployee` (через
   `consumeCutReleasePolicyInTx`, `passports.service.ts:1223`) при

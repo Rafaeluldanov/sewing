@@ -167,7 +167,31 @@ export type AuditEntityType =
    *     пишет — мы фиксируем только реальные изменения справочника.
    * `entityId` — `Size.id`.
    */
-  | 'SIZE';
+  | 'SIZE'
+  /**
+   * Реквизиты организации (singleton-настройки, см.
+   * `apps/api/src/modules/company-settings/*`,
+   * `prisma/schema.prisma::CompanySettings`). События:
+   *   - `COMPANY_SETTINGS_UPDATED` — менеджер сохранил блок реквизитов
+   *     (юр. название / ИНН / адрес / банк / руководитель / …).
+   *     `entityId` всегда `"default"` (singleton-id), payload содержит
+   *     `before`/`after`-снимок изменённых полей.
+   */
+  | 'COMPANY_SETTINGS'
+  /**
+   * Подразделения компании (управленческий справочник, см.
+   * `apps/api/src/modules/company-settings/company-divisions.*`,
+   * `prisma/schema.prisma::CompanyDivision`). События:
+   *   - `COMPANY_DIVISION_CREATED` — менеджер завёл новое
+   *     подразделение, `entityId = CompanyDivision.id`;
+   *   - `COMPANY_DIVISION_UPDATED` — правка карточки (включая мягкое
+   *     отключение через `isActive = false`), `entityId = CompanyDivision.id`.
+   *
+   * **Не путать** с `entityType = ORDER` для оси `OrderDivision`
+   * (фильтр shopfloor-display): это разные сущности, см. JSDoc на
+   * модели в `prisma/schema.prisma`.
+   */
+  | 'COMPANY_DIVISION';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

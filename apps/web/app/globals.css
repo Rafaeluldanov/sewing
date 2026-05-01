@@ -7071,11 +7071,19 @@ body:has(.admin-layout) .app-header { display: none !important; }
   padding-top: 0.6rem;
   margin-top: 0.4rem;
   flex: 0 0 auto;
+  /* Stack pinned link (Настройки) и кнопку «Выйти» с тем же gap-ом,
+     что у nav-ссылок выше — чтобы футер визуально продолжал список. */
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .admin-sidebar-mobile__footer {
   border-top: 1px solid var(--admin-border);
   margin-top: 0.5rem;
   padding-top: 0.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
 .admin-sidebar__logout-form { width: 100%; }
 .admin-sidebar__logout {

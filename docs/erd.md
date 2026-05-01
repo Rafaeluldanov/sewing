@@ -35,6 +35,7 @@
   - [2.12 Workshop needs / procurement](#212-workshop-needs--procurement)
   - [2.13 Printers / print jobs](#213-printers--print-jobs)
   - [2.14 Audit](#214-audit)
+  - [2.15 Company settings](#215-company-settings)
 - [3. Новые контуры (детальные карточки)](#3-new-contours)
 
 ---
@@ -482,6 +483,34 @@
   `createdAt / updatedAt`. На MVP единовременно максимум одна
   активная (enforcement в сервисе). Используется
   `PassportsService.issueToEmployee`.
+
+<a id="215-company-settings"></a>
+### 2.15 Company settings
+
+- **`CompanySettings`** *(новый контур)* — singleton-настройки
+  организации (юр. название / ИНН / банковские реквизиты / директор).
+  - `id String @id @default("default")` + `singleton Boolean @unique
+    @default(true)` гарантируют, что в таблице не больше одной строки
+    (вторая `INSERT` валится на уровне БД).
+  - все поля реквизитов — `String?` без жёсткой длины; формат
+    (10/12 цифр для ИНН, 9 — БИК/КПП, 13/15 — ОГРН, 20 —
+    settlement/correspondent) валидируется Zod-ом в
+    `@sewing/shared/company-settings`, а не БД.
+  - сервис `CompanySettingsService.getOrCreate()` идемпотентно создаёт
+    запись с дефолтами при первом обращении.
+- **`CompanyDivision`** *(новый контур)* — soft-delete справочник
+  «Подразделения компании» (структурные подразделения).
+  - `code String @unique`, `name String`, `description String?`,
+    `isActive Boolean @default(true)`, `sortOrder Int @default(100)`.
+  - индексы: `isActive`, `sortOrder`.
+  - НЕ связан с `enum OrderDivision` (`MARKETPLACE` / `OTHER`):
+    последний — фильтр shopfloor-display, эта таблица — структурные
+    подразделения компании. На MVP справочник стоит сам по себе и
+    ничем из orders / production-flow / display-board не читается
+    (см. JSDoc на модели в `prisma/schema.prisma` и
+    `docs/domain.md §«Настройки компании»`).
+- Audit под `entityType = COMPANY_SETTINGS` / `COMPANY_DIVISION`
+  (см. `docs/events.md §3.2`).
 
 ---
 
