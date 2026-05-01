@@ -1,0 +1,51 @@
+export interface WorkFormState {
+  error?: string;
+  /**
+   * Сквозной идентификатор запроса (Шаг 12, Pilot Rollout).
+   * Если у ошибки есть `requestId`, /work показывает его рядом с
+   * сообщением — оператор называет его поддержке (см. `docs/pilot/faq.md`).
+   */
+  errorRequestId?: string;
+  info?: string;
+  passport?: {
+    id: string;
+    number: string;
+    sizeCode: string;
+    qtyCut: number;
+    qtyGood: number;
+    productName: string;
+    color: string;
+    status: string;
+    rollNumber?: string;
+  };
+}
+
+/**
+ * Результат «найти паспорт по коду» (используется в seamstress flow для
+ * визуальной сверки перед issue/scan). Это узкий контракт без побочных
+ * эффектов — отдельно от `WorkFormState`, чтобы не путать с finalize-формами.
+ */
+export interface PassportLookupResult {
+  ok: true;
+  passport: {
+    id: string;
+    number: string;
+    sizeCode: string;
+    qtyCut: number;
+    qtyGood: number;
+    productName: string;
+    color: string;
+    status: string;
+    rollNumber: string;
+  };
+}
+
+export interface PassportLookupError {
+  ok: false;
+  error: string;
+  errorRequestId?: string;
+}
+
+export type PassportLookupResponse = PassportLookupResult | PassportLookupError;
+
+export const initialWorkFormState: WorkFormState = {};

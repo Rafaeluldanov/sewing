@@ -1,0 +1,13 @@
+# Сборочный артефакт (раздаётся через /api/printers/agent-download/...).
+# Не коммитим — собирается из исходников: `npm run build:win`.
+dist/
+
+# Локальный runtime-стейт агента (создаётся после --pair и в работе):
+agent-config.json
+spool/
+printed/
+failed/
+
+# Стандартное.
+node_modules/
+*.log

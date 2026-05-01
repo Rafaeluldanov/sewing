@@ -1,0 +1,29 @@
+{
+  "name": "@sewing/web",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Next.js 14 PWA — клиент для MVP швейного производства.",
+  "scripts": {
+    "dev": "next dev -p 3000",
+    "build": "next build",
+    "start": "next start -p 3000",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "lint": "next lint"
+  },
+  "dependencies": {
+    "@sewing/shared": "*",
+    "html5-qrcode": "^2.3.8",
+    "next": "^14.2.15",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/react": "^18.3.11",
+    "@types/react-dom": "^18.3.0",
+    "eslint": "^8.57.1",
+    "eslint-config-next": "^14.2.15",
+    "typescript": "^5.5.4"
+  }
+}

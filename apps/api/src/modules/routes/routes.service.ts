@@ -1,0 +1,308 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+import type {
+  CreateRouteTemplateDto,
+  ListRouteTemplatesQuery,
+  RouteTemplateDetailDto,
+  RouteTemplateStepDto,
+  RouteTemplateStepInputDto,
+  RouteTemplateSummaryDto,
+  UpdateRouteTemplateDto,
+} from '@sewing/shared/routes';
+
+import { PrismaService } from '../../prisma/prisma.service.js';
+import {
+  OperationNotFoundException,
+  RouteTemplateCodeTakenException,
+  RouteTemplateNotFoundException,
+} from '../../common/errors.js';
+
+/**
+ * CRUD шаблонов маршрутов. На MVP это «soft route»: сервис сохраняет
+ * упорядоченный набор операций, никаких сложных правил (ветвлений,
+ * параллельных шагов, дедлайнов) — см. `docs/domain.md §«Маршруты
+ * производства»`. Snapshot на заказе создаёт `OrdersService.start()`,
+ * этот сервис заказы не трогает.
+ *
+ * Конвенции:
+ *   - `index` шагов нормализуется по позиции в массиве (0-based) —
+ *     UI достаточно отдать упорядоченный список без ручной нумерации;
+ *   - PATCH со `steps` целиком заменяет набор (атомарно, в одной
+ *     транзакции — UI никогда не увидит «полупустой» шаблон);
+ *   - DELETE всегда hard-delete: `RouteTemplateStep` уезжает по
+ *     каскаду, на запущенных заказах остаётся snapshot
+ *     `OrderRouteStep[]`, который не зависит от существования шаблона.
+ */
+@Injectable()
+export class RoutesService {
+  private readonly logger = new Logger(RoutesService.name);
+
+  constructor(private readonly prisma: PrismaService) {}
+
+  // -------------------------------------------------------------------------
+  // LIST
+  // -------------------------------------------------------------------------
+
+  async list(
+    query: ListRouteTemplatesQuery,
+  ): Promise<RouteTemplateSummaryDto[]> {
+    const where: Prisma.RouteTemplateWhereInput = {};
+    if (query.isActive !== undefined) where.isActive = query.isActive;
+    if (query.search) {
+      where.OR = [
+        { code: { contains: query.search, mode: 'insensitive' } },
+        { name: { contains: query.search, mode: 'insensitive' } },
+      ];
+    }
+
+    const rows = await this.prisma.routeTemplate.findMany({
+      where,
+      orderBy: [{ isActive: 'desc' }, { code: 'asc' }],
+      include: { _count: { select: { steps: true } } },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      isActive: row.isActive,
+      stepsCount: row._count.steps,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // DETAIL
+  // -------------------------------------------------------------------------
+
+  async getOne(id: string): Promise<RouteTemplateDetailDto> {
+    const row = await this.prisma.routeTemplate.findUnique({
+      where: { id },
+      include: {
+        steps: {
+          orderBy: { index: 'asc' },
+          include: { operation: true },
+        },
+      },
+    });
+    if (!row) throw new RouteTemplateNotFoundException();
+    return this.toDetailDto(row);
+  }
+
+  /**
+   * Используется `OrdersService.start()` для построения snapshot-а:
+   * возвращает упорядоченный список операций активного шаблона. Если
+   * шаблон не найден — кидаем 404 (ловится в orders.service); если
+   * шагов нет, отдаём пустой массив, и orders.service просто пропустит
+   * snapshot (см. `OrdersService.snapshotRouteIfNeeded`).
+   */
+  async getActiveStepsForSnapshot(
+    templateId: string,
+  ): Promise<{ index: number; operationId: string }[]> {
+    const template = await this.prisma.routeTemplate.findUnique({
+      where: { id: templateId },
+      include: {
+        steps: {
+          orderBy: { index: 'asc' },
+          select: { index: true, operationId: true },
+        },
+      },
+    });
+    if (!template) throw new RouteTemplateNotFoundException();
+    return template.steps.map((s) => ({
+      index: s.index,
+      operationId: s.operationId,
+    }));
+  }
+
+  // -------------------------------------------------------------------------
+  // CREATE
+  // -------------------------------------------------------------------------
+
+  async create(dto: CreateRouteTemplateDto): Promise<RouteTemplateDetailDto> {
+    if (dto.steps.length > 0) {
+      await this.assertOperationsExist(dto.steps.map((s) => s.operationId));
+    }
+
+    let createdId: string;
+    try {
+      createdId = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.routeTemplate.create({
+          data: {
+            code: dto.code,
+            name: dto.name,
+            isActive: dto.isActive,
+          },
+        });
+        if (dto.steps.length > 0) {
+          await tx.routeTemplateStep.createMany({
+            data: dto.steps.map((s, i) => ({
+              templateId: created.id,
+              index: i,
+              operationId: s.operationId,
+              isOptional: s.isOptional ?? false,
+            })),
+          });
+        }
+        return created.id;
+      });
+    } catch (e) {
+      this.translateUniqueError(e);
+      throw e;
+    }
+
+    this.logger.log(
+      `event=route_template.create id=${createdId} code=${dto.code} steps=${dto.steps.length}`,
+    );
+    return this.getOne(createdId);
+  }
+
+  // -------------------------------------------------------------------------
+  // UPDATE (точечное)
+  // -------------------------------------------------------------------------
+
+  async update(
+    id: string,
+    dto: UpdateRouteTemplateDto,
+  ): Promise<RouteTemplateDetailDto> {
+    const existing = await this.prisma.routeTemplate.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!existing) throw new RouteTemplateNotFoundException();
+
+    if (dto.steps && dto.steps.length > 0) {
+      await this.assertOperationsExist(dto.steps.map((s) => s.operationId));
+    }
+
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const data: Prisma.RouteTemplateUpdateInput = {};
+        if (dto.code !== undefined) data.code = dto.code;
+        if (dto.name !== undefined) data.name = dto.name;
+        if (dto.isActive !== undefined) data.isActive = dto.isActive;
+        if (Object.keys(data).length > 0) {
+          await tx.routeTemplate.update({ where: { id }, data });
+        }
+
+        if (dto.steps !== undefined) {
+          await this.replaceSteps(tx, id, dto.steps);
+        }
+      });
+    } catch (e) {
+      this.translateUniqueError(e);
+      throw e;
+    }
+
+    this.logger.log(
+      `event=route_template.update id=${id} fields=${Object.keys(dto).join(',')}`,
+    );
+    return this.getOne(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // DELETE
+  // -------------------------------------------------------------------------
+
+  async remove(id: string): Promise<void> {
+    const existing = await this.prisma.routeTemplate.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!existing) throw new RouteTemplateNotFoundException();
+
+    // Cascade удалит RouteTemplateStep. На запущенных заказах
+    // OrderRouteStep остаётся (FK на Operation, не на template) —
+    // snapshot самодостаточный и не зависит от существования шаблона.
+    await this.prisma.routeTemplate.delete({ where: { id } });
+    this.logger.log(`event=route_template.delete id=${id}`);
+  }
+
+  // -------------------------------------------------------------------------
+  // INTERNAL
+  // -------------------------------------------------------------------------
+
+  /**
+   * Полная замена набора шагов. Простой и предсказуемый алгоритм —
+   * удалить всё, вставить заново с пересчитанным `index`. Транзакция
+   * гарантирует, что UI/последующие чтения не увидят промежуточное
+   * состояние. Использует `Prisma.TransactionClient`, чтобы вызывать
+   * из `update()` без вложенных $transaction.
+   */
+  private async replaceSteps(
+    tx: Prisma.TransactionClient,
+    templateId: string,
+    steps: RouteTemplateStepInputDto[],
+  ): Promise<void> {
+    await tx.routeTemplateStep.deleteMany({ where: { templateId } });
+    if (steps.length === 0) return;
+    await tx.routeTemplateStep.createMany({
+      data: steps.map((s, i) => ({
+        templateId,
+        index: i,
+        operationId: s.operationId,
+        isOptional: s.isOptional ?? false,
+      })),
+    });
+  }
+
+  private async assertOperationsExist(operationIds: string[]): Promise<void> {
+    const uniqueIds = Array.from(new Set(operationIds));
+    if (uniqueIds.length === 0) return;
+    const found = await this.prisma.operation.findMany({
+      where: { id: { in: uniqueIds } },
+      select: { id: true },
+    });
+    if (found.length !== uniqueIds.length) {
+      throw new OperationNotFoundException();
+    }
+  }
+
+  private toDetailDto(
+    row: Prisma.RouteTemplateGetPayload<{
+      include: {
+        steps: { include: { operation: true } };
+      };
+    }>,
+  ): RouteTemplateDetailDto {
+    const steps: RouteTemplateStepDto[] = row.steps.map((s) => ({
+      id: s.id,
+      index: s.index,
+      operationId: s.operationId,
+      operationCode: s.operation.code,
+      operationName: s.operation.name,
+      isOptional: s.isOptional,
+    }));
+    return {
+      id: row.id,
+      code: row.code,
+      name: row.name,
+      isActive: row.isActive,
+      stepsCount: steps.length,
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+      steps,
+    };
+  }
+
+  private translateUniqueError(e: unknown): void {
+    if (
+      e instanceof Prisma.PrismaClientKnownRequestError &&
+      e.code === 'P2002'
+    ) {
+      const target = (e.meta?.target as string[] | string | undefined) ?? [];
+      const fields = Array.isArray(target) ? target : [target];
+      if (fields.some((f) => String(f).includes('code'))) {
+        throw new RouteTemplateCodeTakenException();
+      }
+      // Уникальные индексы по `(templateId, index)` и `(templateId,
+      // operationId)` мы не должны словить: `replaceSteps` сначала
+      // удаляет всё, потом вставляет с уникальными `index`-ами;
+      // дубликаты `operationId` отсекает Zod (см. `StepsField`).
+      // Если P2002 всё-таки прилетит — это инвариант сломали в коде,
+      // отдадим тот же CODE_TAKEN, чтобы UI не падал в 500.
+      throw new RouteTemplateCodeTakenException();
+    }
+  }
+}

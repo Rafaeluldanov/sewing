@@ -1,0 +1,4493 @@
+/* =============================================================================
+   Sewing — mobile-first clean design (Шаг 13 / Pilot UX polish)
+   ----------------------------------------------------------------------------
+   Цели:
+   - белый фон, светлые карточки, мягкие синие акценты;
+   - крупные тач-цели и много воздуха для цеха;
+   - mobile-first, но без поломки уже существующих desktop-экранов
+     (admin, shopfloor, orders, earnings) — поэтому базовые токены и
+     служебные классы (.card, .btn, .data-table, .status-badge,
+     .form-row, .meta-line, .summary-card, .toolbar, .error-box и т.д.)
+     сохранены; они только заиграли в новой палитре.
+   ============================================================================= */
+
+:root {
+  /* Палитра ----------------------------------------------------------------- */
+  --color-bg: #ffffff;
+  --color-bg-soft: #f5f7fb;        /* фон страницы на мобиле */
+  --color-bg-card: #ffffff;
+  --color-bg-muted: #f1f4f9;       /* карточки/чипсы */
+  --color-bg-tint: #eef3ff;        /* мягкий синий акцент-фон */
+
+  --color-fg: #0f172a;             /* основной текст */
+  --color-fg-strong: #0b1220;
+  --color-fg-muted: #64748b;       /* вторичный текст */
+  --color-fg-subtle: #94a3b8;
+
+  --color-border: #e6ebf2;
+  --color-border-strong: #d3dae4;
+
+  --color-accent: #2563eb;         /* мягкий синий */
+  --color-accent-hover: #1d4ed8;
+  --color-accent-soft: #dbe6ff;
+  --color-accent-fg: #1e3a8a;
+
+  --color-ok: #16a34a;
+  --color-ok-soft: #dcfce7;
+  --color-ok-fg: #166534;
+
+  --color-warn: #b45309;
+  --color-warn-soft: #fef3c7;
+  --color-warn-fg: #92400e;
+
+  --color-danger: #dc2626;
+  --color-danger-soft: #fee2e2;
+  --color-danger-fg: #991b1b;
+
+  /* Геометрия -------------------------------------------------------------- */
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 22px;
+  --radius-pill: 999px;
+
+  --shadow-xs: 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-sm: 0 1px 3px rgba(15, 23, 42, 0.06), 0 1px 2px rgba(15, 23, 42, 0.04);
+  --shadow-md: 0 6px 18px rgba(15, 23, 42, 0.06);
+  --shadow-lg: 0 12px 28px rgba(15, 23, 42, 0.10);
+
+  /* Размер текста / UI ----------------------------------------------------- */
+  --font-base: 16px;
+  --tap-min: 48px;
+
+  /* Алиасы для совместимости со старыми правилами -------------------------- */
+  --fg: var(--color-fg);
+  --fg-muted: var(--color-fg-muted);
+  --bg: var(--color-bg-soft);
+  --bg-card: var(--color-bg-card);
+  --border: var(--color-border);
+  --border-strong: var(--color-border-strong);
+  --accent: var(--color-accent);
+  --accent-hover: var(--color-accent-hover);
+  --danger: var(--color-danger);
+  --warn: var(--color-warn);
+  --ok: var(--color-ok);
+
+  --status-draft-bg: #e6ebf2;
+  --status-draft-fg: #334155;
+  --status-in-production-bg: #dbe6ff;
+  --status-in-production-fg: #1d4ed8;
+  --status-done-bg: #dcfce7;
+  --status-done-fg: #166534;
+  --status-cancelled-bg: #fee2e2;
+  --status-cancelled-fg: #991b1b;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  padding: 0;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  font-size: var(--font-base);
+  background: var(--color-bg);
+  color: var(--color-fg);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+}
+
+a { color: var(--color-accent); text-decoration: none; }
+a:hover { color: var(--color-accent-hover); }
+
+/* =============================================================
+   App shell: header + main + (mobile) bottom nav
+   ============================================================= */
+
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.65rem 1.25rem;
+  background: #0f172a;            /* фирменный тёмно-синий — оставлен */
+  color: #f8fafc;
+  position: sticky;
+  top: 0;
+  z-index: 30;
+  box-shadow: 0 1px 0 rgba(15, 23, 42, 0.08);
+}
+.app-header a { color: #cbd5e1; transition: color 0.15s; }
+.app-header a:hover { color: #fff; }
+
+.app-header__brand {
+  font-weight: 700;
+  font-size: 1.05rem;
+  letter-spacing: 0.01em;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.app-header__brand a { color: #fff; }
+
+.app-header__nav {
+  display: flex;
+  gap: 0.25rem;
+  flex-wrap: wrap;
+  font-size: 0.92rem;
+}
+.app-header__nav a {
+  padding: 0.4rem 0.7rem;
+  border-radius: var(--radius-pill);
+  transition: background 0.15s, color 0.15s;
+}
+.app-header__nav a:hover { background: rgba(255, 255, 255, 0.08); }
+
+.app-header__user {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-size: 0.85rem;
+}
+.app-header__user-name {
+  font-weight: 600;
+  color: #f1f5f9;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.app-header__user-role {
+  background: rgba(255, 255, 255, 0.08);
+  color: #e2e8f0;
+  padding: 0.15rem 0.55rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.app-header__login {
+  background: var(--color-accent);
+  color: #fff !important;
+  padding: 0.4rem 0.85rem;
+  border-radius: var(--radius-pill);
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.app-header__login .app-icon { width: 14px; height: 14px; }
+.app-header__logout {
+  background: transparent;
+  color: #cbd5e1;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  padding: 0.35rem 0.75rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.app-header__logout .app-icon { width: 14px; height: 14px; }
+.app-header__logout:hover {
+  background: rgba(255, 255, 255, 0.08);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.28);
+}
+
+.app-main {
+  max-width: 1280px;
+  margin: 0 auto;
+  padding: 1.25rem 1.25rem calc(1.25rem + env(safe-area-inset-bottom, 0px));
+  background: var(--color-bg);
+  min-height: calc(100vh - 56px);
+}
+
+/* Нижняя мобильная навигация ----------------------------------------------- */
+.mobile-nav {
+  display: none;
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 25;
+  background: #ffffff;
+  border-top: 1px solid var(--color-border);
+  padding: 0.35rem 0.5rem calc(0.35rem + env(safe-area-inset-bottom, 0px));
+  box-shadow: 0 -6px 18px rgba(15, 23, 42, 0.06);
+}
+.mobile-nav__list {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 0.25rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+.mobile-nav__link {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  padding: 0.4rem 0.25rem;
+  border-radius: var(--radius-md);
+  color: var(--color-fg-muted) !important;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-align: center;
+  min-height: var(--tap-min);
+}
+.mobile-nav__icon {
+  font-size: 1.15rem;
+  line-height: 1;
+}
+.mobile-nav__link:hover { background: var(--color-bg-muted); }
+
+/* =============================================================
+   Заголовки страниц / общие блоки
+   ============================================================= */
+.page-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 1.25rem;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.page-header h1 { margin: 0; font-size: 1.5rem; letter-spacing: -0.01em; }
+
+/* =============================================================
+   Карточки
+   ============================================================= */
+.card {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1.1rem 1.25rem;
+  box-shadow: var(--shadow-xs);
+}
+
+/* Универсальная мягкая карточка — фон как у бледно-серой плашки. */
+.section-card {
+  background: var(--color-bg-muted);
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.1rem;
+}
+.section-card__title {
+  margin: 0 0 0.75rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  letter-spacing: -0.005em;
+}
+.section-card__hint {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  margin: 0 0 0.75rem;
+  line-height: 1.45;
+}
+
+/* =============================================================
+   Кнопки
+   ============================================================= */
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.6rem 1.05rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-strong);
+  background: #fff;
+  color: var(--color-fg);
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 0.15s, border-color 0.15s, color 0.15s,
+    box-shadow 0.15s, transform 0.05s;
+  min-height: 44px;
+  line-height: 1.2;
+}
+.btn:hover { background: #f8fafc; border-color: var(--color-fg-subtle); }
+.btn:active { transform: translateY(1px); }
+.btn-primary {
+  background: var(--color-accent);
+  color: #fff;
+  border-color: var(--color-accent);
+  box-shadow: 0 4px 14px -6px rgba(37, 99, 235, 0.55);
+}
+.btn-primary:hover {
+  background: var(--color-accent-hover);
+  border-color: var(--color-accent-hover);
+  color: #fff;
+}
+.btn-danger {
+  color: var(--color-danger);
+  border-color: #fecaca;
+  background: #fff;
+}
+.btn-danger:hover { background: #fef2f2; }
+.btn-ghost {
+  border: 1px solid transparent;
+  background: transparent;
+}
+.btn-ghost:hover { background: var(--color-bg-muted); }
+.btn[disabled],
+.btn[aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+.btn-block { width: 100%; }
+.btn-lg { min-height: 56px; font-size: 1.05rem; padding: 0.85rem 1.25rem; }
+
+/* =============================================================
+   Формы
+   ============================================================= */
+.form-row {
+  display: grid;
+  grid-template-columns: 180px 1fr;
+  gap: 0.75rem;
+  align-items: start;
+  margin-bottom: 0.75rem;
+}
+.form-row label {
+  font-weight: 600;
+  padding-top: 0.5rem;
+  color: var(--color-fg-muted);
+}
+.form-row .hint {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  margin-top: 0.3rem;
+}
+
+input[type="date"],
+input[type="text"],
+input[type="number"],
+input[type="search"],
+input[type="password"],
+textarea,
+select {
+  width: 100%;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  font-size: 1rem;
+  background: #fff;
+  color: var(--color-fg);
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+input:focus,
+textarea:focus,
+select:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+}
+textarea { min-height: 80px; resize: vertical; }
+
+/* =============================================================
+   Таблицы (desktop / админ-экраны)
+   ============================================================= */
+table.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+}
+table.data-table th,
+table.data-table td {
+  padding: 0.65rem 0.85rem;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border);
+  font-size: 0.92rem;
+}
+table.data-table th {
+  background: #f8fafc;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+}
+table.data-table tr:last-child td { border-bottom: none; }
+table.data-table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+table.data-table th.num { text-align: right; }
+
+/* =============================================================
+   Status badges + новые pill'ы
+   ============================================================= */
+.status-badge {
+  display: inline-block;
+  padding: 0.2rem 0.65rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.status-badge.draft       { background: var(--status-draft-bg); color: var(--status-draft-fg); }
+.status-badge.in_production { background: var(--status-in-production-bg); color: var(--status-in-production-fg); }
+.status-badge.done        { background: var(--status-done-bg); color: var(--status-done-fg); }
+.status-badge.cancelled   { background: var(--status-cancelled-bg); color: var(--status-cancelled-fg); }
+.status-badge.created     { background: var(--status-draft-bg); color: var(--status-draft-fg); }
+.status-badge.in_progress { background: var(--status-in-production-bg); color: var(--status-in-production-fg); }
+.status-badge.packed      { background: var(--status-done-bg); color: var(--status-done-fg); }
+/* Cutting closure request statuses (ADR-0018). */
+.status-badge.requested   { background: var(--status-in-production-bg); color: var(--status-in-production-fg); }
+.status-badge.approved    { background: var(--status-done-bg); color: var(--status-done-fg); }
+.status-badge.rejected    { background: var(--status-cancelled-bg); color: var(--status-cancelled-fg); }
+
+/* Универсальный pill (новые экраны). */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.25rem 0.7rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  font-weight: 600;
+  background: var(--color-bg-muted);
+  color: var(--color-fg);
+}
+.pill--accent  { background: var(--color-accent-soft); color: var(--color-accent-fg); }
+.pill--ok      { background: var(--color-ok-soft); color: var(--color-ok-fg); }
+.pill--warn    { background: var(--color-warn-soft); color: var(--color-warn-fg); }
+.pill--danger  { background: var(--color-danger-soft); color: var(--color-danger-fg); }
+.pill--ghost   { background: transparent; color: var(--color-fg-muted); border: 1px solid var(--color-border); }
+
+/* =============================================================
+   Summary cards / counters / meta
+   ============================================================= */
+.summary-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0.75rem;
+  margin: 1rem 0 1.5rem;
+}
+.summary-card {
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 1rem;
+}
+.summary-card__label {
+  font-size: 0.72rem;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+.summary-card__value {
+  font-size: 1.5rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.summary-card.delta .summary-card__value { color: var(--color-fg-muted); }
+.summary-card.delta .summary-card__value.positive { color: var(--color-ok); }
+.summary-card.delta .summary-card__value.negative { color: var(--color-danger); }
+
+.toolbar {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-bottom: 1rem;
+}
+.toolbar input,
+.toolbar select { width: auto; }
+
+.error-box {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+}
+.error-box__msg {
+  font-weight: 600;
+  font-size: 1.05rem;
+  line-height: 1.35;
+}
+.error-box__hint {
+  margin-top: 0.3rem;
+  font-size: 0.92rem;
+  font-weight: 500;
+  line-height: 1.35;
+  opacity: 0.85;
+}
+.error-box__rid {
+  margin-top: 0.4rem;
+  font-size: 0.8rem;
+  color: #7f1d1d;
+  opacity: 0.85;
+  user-select: all;
+}
+.error-box__rid code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.8rem;
+  background: rgba(127, 29, 29, 0.08);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+.info-box {
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
+  border: 1px solid #a7f3d0;
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+}
+.empty {
+  color: var(--color-fg-muted);
+  padding: 2rem;
+  text-align: center;
+}
+
+/* =============================================================
+   Size picker — крупные кнопки выбора размера (passport create)
+   -------------------------------------------------------------
+   Семантически радио-группа, визуально набор больших тач-кнопок.
+   Реальные <input type="radio"> скрыты визуально, но остаются
+   доступны клавиатурой и a11y-стеком.
+   ============================================================= */
+.size-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  gap: 0.5rem;
+}
+.size-picker__option {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.15rem;
+  min-height: 56px;
+  padding: 0.55rem 0.6rem;
+  background: #fff;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  color: var(--color-fg);
+  cursor: pointer;
+  text-align: center;
+  user-select: none;
+  transition: background 0.15s, border-color 0.15s, color 0.15s,
+    box-shadow 0.15s, transform 0.05s;
+}
+.size-picker__option:hover {
+  border-color: var(--color-accent);
+  background: var(--color-bg-tint);
+}
+.size-picker__option:active { transform: translateY(1px); }
+.size-picker__option.is-active {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
+  box-shadow: 0 6px 16px -8px rgba(37, 99, 235, 0.55);
+}
+.size-picker__option.is-disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+  background: var(--color-bg-muted);
+  color: var(--color-fg-muted);
+  border-color: var(--color-border);
+  box-shadow: none;
+}
+.size-picker__option.is-disabled:hover {
+  background: var(--color-bg-muted);
+  border-color: var(--color-border);
+}
+.size-picker__input {
+  position: absolute;
+  opacity: 0;
+  width: 1px;
+  height: 1px;
+  pointer-events: none;
+}
+.size-picker__input:focus-visible + .size-picker__code,
+.size-picker__option:focus-within {
+  outline: none;
+}
+.size-picker__option:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.25);
+}
+.size-picker__code {
+  font-size: 1.15rem;
+  font-weight: 700;
+  line-height: 1.1;
+  letter-spacing: -0.01em;
+}
+.size-picker__meta {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.size-picker__option.is-active .size-picker__meta { color: rgba(255, 255, 255, 0.85); }
+.size-picker__option.is-disabled .size-picker__meta { color: var(--color-fg-subtle); }
+
+@media (max-width: 640px) {
+  .size-picker { grid-template-columns: repeat(auto-fill, minmax(84px, 1fr)); }
+  .size-picker__option { min-height: 60px; }
+  .size-picker__code { font-size: 1.2rem; }
+}
+
+.size-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(120px, 1fr));
+  gap: 0.5rem;
+}
+.size-grid input { width: 100%; text-align: right; }
+.size-grid label {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.3rem 0.55rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+.size-grid label span { flex: 1; font-weight: 500; color: var(--color-fg-muted); }
+
+.meta-line {
+  color: var(--color-fg-muted);
+  font-size: 0.9rem;
+}
+.meta-line strong { color: var(--color-fg); }
+.meta-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 0.5rem 1.5rem;
+  margin-bottom: 1rem;
+}
+.actions-row {
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin: 1rem 0;
+}
+
+/* =============================================================
+   Admin overview (legacy блок — оставляем как есть, только палитра)
+   ============================================================= */
+.admin-overview { display: grid; gap: 1.5rem; }
+.admin-overview__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+.admin-overview__header h1 { margin: 0; font-size: 1.6rem; }
+.admin-overview__counters {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.75rem;
+}
+.admin-overview__counter {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 0.95rem 1rem;
+  text-align: center;
+}
+.admin-overview__counter-value {
+  font-size: 1.9rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+.admin-overview__counter-label {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  margin-top: 0.25rem;
+}
+.admin-overview .empty-hint {
+  color: var(--color-fg-muted);
+  font-style: italic;
+  padding: 0.5rem 0;
+}
+
+/* =============================================================
+   /admin/equipment — настройка операций оборудования (ADR-0017)
+   ============================================================= */
+.admin-equipment-form { display: grid; gap: 1rem; }
+.admin-equipment-form__meta {
+  display: flex;
+  gap: 1rem;
+  flex-wrap: wrap;
+  align-items: baseline;
+}
+.meta-line--warn { color: var(--color-danger, #b91c1c); }
+.success-box {
+  background: #ecfdf5;
+  border: 1px solid #a7f3d0;
+  color: #065f46;
+  border-radius: var(--radius-lg);
+  padding: 0.6rem 0.85rem;
+  font-size: 0.95rem;
+}
+/* Чекбокс-карточка с заголовком и подсказкой. Используется в форме
+   выпуска паспорта (опция «Подать заявку на закрытие раскроя» для
+   CUTTER_ASSISTANT, ADR-0018). Сделана крупной и mobile-friendly:
+   тап-таргет ≥ 44 px, выделение активного состояния синей рамкой. */
+.checkbox-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.65rem;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-card);
+  cursor: pointer;
+  min-height: 56px;
+}
+.checkbox-card.is-active {
+  border-color: var(--color-accent, #2563eb);
+  background: #eff6ff;
+}
+.checkbox-card input[type='checkbox'] {
+  margin-top: 0.2rem;
+  width: 20px;
+  height: 20px;
+  flex: 0 0 auto;
+}
+.checkbox-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.checkbox-card__title {
+  font-weight: 600;
+  font-size: 1rem;
+  color: var(--color-fg);
+  line-height: 1.25;
+}
+.checkbox-card__hint {
+  color: var(--color-fg-muted);
+  font-size: 0.875rem;
+  line-height: 1.35;
+}
+.admin-equipment-form__list {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.admin-equipment-form__row {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 0.6rem 0.9rem;
+}
+.admin-equipment-form__row label {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.6rem;
+  cursor: pointer;
+}
+.admin-equipment-form__op-name { font-weight: 600; color: var(--color-fg); }
+.admin-equipment-form__op-meta { color: var(--color-fg-muted); font-size: 0.85rem; }
+
+/* =============================================================
+   /login — вход (mobile clean)
+   ============================================================= */
+.auth-page {
+  min-height: calc(100vh - 56px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem 1rem 2rem;
+  background: var(--color-bg-soft);
+}
+.auth-card {
+  width: 100%;
+  max-width: 420px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 1.75rem;
+  box-shadow: var(--shadow-md);
+}
+.auth-card__brand {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  font-weight: 700;
+  font-size: 1rem;
+  color: var(--color-fg-muted);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  margin-bottom: 0.85rem;
+}
+.auth-card__brand-mark {
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--color-accent), #60a5fa);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+.auth-card__title {
+  margin: 0 0 0.35rem;
+  font-size: 1.45rem;
+  letter-spacing: -0.01em;
+  color: var(--color-fg-strong);
+}
+.auth-card__hint {
+  margin: 0 0 1.25rem;
+  color: var(--color-fg-muted);
+  font-size: 0.92rem;
+  line-height: 1.5;
+}
+.auth-card__hint code {
+  background: var(--color-bg-muted);
+  padding: 0 0.3rem;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.85rem;
+  color: var(--color-fg);
+}
+.auth-card__footer {
+  margin-top: 1.25rem;
+  text-align: center;
+  font-size: 0.9rem;
+  color: var(--color-fg-muted);
+}
+
+.auth-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.auth-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.auth-form__field span {
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+  letter-spacing: 0.01em;
+}
+.auth-form__field input {
+  padding: 0.85rem 0.95rem;
+  font-size: 1.05rem;
+}
+.auth-form__error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-md);
+  padding: 0.65rem 0.85rem;
+  font-size: 0.92rem;
+}
+.auth-form__submit {
+  margin-top: 0.35rem;
+  width: 100%;
+  min-height: 52px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 18px -8px rgba(37, 99, 235, 0.6);
+  transition: background 0.15s, transform 0.05s;
+}
+.auth-form__submit:hover { background: var(--color-accent-hover); }
+.auth-form__submit:active { transform: translateY(1px); }
+.auth-form__submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+  box-shadow: none;
+}
+
+/* =============================================================
+   /work — рабочий мобильный кабинет
+   ============================================================= */
+
+.work {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  position: relative;
+}
+.work-hint { color: var(--color-fg-muted); }
+
+/* Mobile-clean режим швеи: убираем тяжёлый header, экран должен
+   начинаться сразу с RoleHeaderCard. Добавляем безопасный отступ
+   сверху под status bar (env(safe-area-inset-top)) и оставляем
+   место под три-точечное меню действий справа. */
+.work--seamstress {
+  padding-top: calc(env(safe-area-inset-top, 0px));
+}
+
+/* Шапка-профиль (RoleHeaderCard) ------------------------------- */
+.role-header {
+  background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 100%);
+  color: #fff;
+  border-radius: var(--radius-xl);
+  padding: 1.1rem 1.2rem;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  position: relative;
+  overflow: hidden;
+}
+.role-header::after {
+  content: "";
+  position: absolute;
+  right: -40px;
+  top: -40px;
+  width: 180px;
+  height: 180px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  pointer-events: none;
+}
+.role-header__top {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  position: relative;
+  z-index: 1;
+}
+.role-header__brand {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.7);
+  font-weight: 700;
+}
+.role-header__name {
+  margin: 0.1rem 0 0;
+  font-size: 1.35rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: #fff;
+}
+.role-header__role {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.role-header__shift {
+  display: grid;
+  gap: 0.5rem 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  position: relative;
+  z-index: 1;
+}
+.role-header__shift > div {
+  display: flex;
+  flex-direction: column;
+}
+.role-header__shift-label {
+  font-size: 0.7rem;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.7);
+  margin-bottom: 0.1rem;
+  font-weight: 600;
+}
+.role-header__shift-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #fff;
+  line-height: 1.25;
+}
+.role-header__shift-meta {
+  font-size: 0.78rem;
+  color: rgba(255, 255, 255, 0.7);
+}
+.role-header__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.85rem;
+  color: rgba(255, 255, 255, 0.85);
+}
+.role-header__status-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+.role-header__status--active .role-header__status-dot {
+  background: #34d399;
+  box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.6);
+  animation: role-pulse 1.8s ease-out infinite;
+}
+@keyframes role-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0.55); }
+  70% { box-shadow: 0 0 0 7px rgba(52, 211, 153, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(52, 211, 153, 0); }
+}
+
+/* Сетка крупных action-карточек -------------------------------- */
+.action-grid {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: repeat(2, 1fr);
+}
+.action-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 1rem 1.1rem;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  color: var(--color-fg);
+  text-decoration: none;
+  min-height: 110px;
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s,
+    background 0.15s;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+}
+.action-card:hover {
+  border-color: var(--color-accent);
+  box-shadow: 0 8px 24px -14px rgba(37, 99, 235, 0.45);
+  background: #fff;
+}
+.action-card:active { transform: translateY(1px); }
+.action-card--primary {
+  background: linear-gradient(135deg, var(--color-accent) 0%, #3b82f6 100%);
+  color: #fff;
+  border-color: transparent;
+  box-shadow: 0 12px 28px -16px rgba(37, 99, 235, 0.7);
+}
+.action-card--primary:hover { color: #fff; background: linear-gradient(135deg, #1d4ed8 0%, #2563eb 100%); }
+.action-card--danger { color: var(--color-danger); }
+.action-card--danger:hover { border-color: #fecaca; }
+
+.action-card__icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--color-bg-tint);
+  color: var(--color-accent);
+  font-size: 1.15rem;
+}
+.action-card--primary .action-card__icon {
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+}
+.action-card--danger .action-card__icon {
+  background: var(--color-danger-soft);
+  color: var(--color-danger);
+}
+.action-card__title {
+  font-size: 1rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.action-card__hint {
+  font-size: 0.82rem;
+  color: var(--color-fg-muted);
+  line-height: 1.35;
+}
+.action-card--primary .action-card__hint { color: rgba(255, 255, 255, 0.85); }
+
+/* Скан-блок ---------------------------------------------------- */
+.scan-card {
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 1.1rem 1.15rem;
+  box-shadow: var(--shadow-sm);
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+.scan-card__title {
+  margin: 0;
+  font-size: 1.1rem;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  letter-spacing: -0.005em;
+  letter-spacing: -0.005em;
+  color: var(--color-fg);
+}
+.scan-card__hint {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--color-fg-muted);
+  line-height: 1.45;
+}
+.scan-card__input {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.scan-card__input-label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-fg-muted);
+}
+.scan-card__input input {
+  font-size: 1.15rem;
+  padding: 1rem 1.1rem;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-soft);
+  border: 1.5px dashed var(--color-border-strong);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+.scan-card__input input:focus {
+  background: #fff;
+  border-style: solid;
+  border-color: var(--color-accent);
+}
+
+/* Tabs «Получить крой / Сканировать» --------------------------- */
+.work-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.5rem;
+  background: var(--color-bg-muted);
+  padding: 0.3rem;
+  border-radius: var(--radius-pill);
+}
+.work-tab {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0.7rem 0.9rem;
+  border-radius: var(--radius-pill);
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  min-height: 44px;
+  transition: background 0.15s, color 0.15s, box-shadow 0.15s;
+}
+.work-tab:hover { color: var(--color-fg); }
+.work-tab.is-active {
+  background: #fff;
+  color: var(--color-accent);
+  box-shadow: var(--shadow-xs);
+}
+
+/* Result cards (success/scan/error) ---------------------------- */
+.result-card {
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: var(--color-bg-soft);
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+}
+.result-card--issue { background: var(--color-ok-soft); border-color: #bbf7d0; }
+.result-card--scan  { background: var(--color-bg-tint); border-color: #c5d8ff; }
+.result-card__header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+.result-card__row {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.6rem;
+  font-size: 0.95rem;
+  align-items: baseline;
+  border-bottom: 1px dashed rgba(15, 23, 42, 0.08);
+  padding: 0.25rem 0;
+}
+.result-card__row:last-child { border-bottom: none; }
+.result-card__row span:first-child {
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+}
+.result-card__row strong { font-weight: 700; }
+
+/* Совместимость со старыми классами .work-* (на случай, если где-то ещё используются) */
+.work-employee__label,
+.work-section__title { /* keep */ }
+.work-section__title { margin: 0 0 0.75rem; font-size: 1.1rem; font-weight: 700; }
+.work-big-btn { min-height: 56px; font-size: 1.05rem; padding: 0.85rem 1.25rem; }
+
+/* =============================================================
+   Passport detail (mobile cards)
+   ============================================================= */
+.passport-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.passport-hero {
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-xl);
+  padding: 1.1rem 1.15rem;
+  display: flex;
+  gap: 1.25rem;
+  align-items: center;
+  flex-wrap: wrap;
+  box-shadow: var(--shadow-sm);
+}
+.passport-hero__qr {
+  flex: 0 0 auto;
+  width: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.4rem;
+}
+.passport-hero__qr img {
+  width: 200px;
+  height: 200px;
+  image-rendering: pixelated;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.4rem;
+}
+.passport-hero__qr-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+  word-break: break-all;
+  text-align: center;
+}
+.passport-hero__info {
+  flex: 1 1 240px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.passport-hero__title {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+  margin: 0;
+  font-size: 1.5rem;
+  letter-spacing: -0.01em;
+}
+.passport-hero__sub {
+  color: var(--color-fg-muted);
+  font-size: 0.92rem;
+}
+
+.passport-fields {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+  gap: 0.55rem 1rem;
+}
+.passport-field__label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-fg-muted);
+  font-weight: 600;
+  margin-bottom: 0.15rem;
+}
+.passport-field__value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-fg);
+}
+
+.passport-section { display: flex; flex-direction: column; gap: 0.55rem; }
+.passport-section__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  letter-spacing: -0.005em;
+  color: var(--color-fg);
+}
+
+.qc-summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+}
+.qc-summary__cell {
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.9rem;
+}
+.qc-summary__cell--defect { background: var(--color-danger-soft); }
+.qc-summary__cell--good   { background: var(--color-ok-soft); }
+.qc-summary__label {
+  font-size: 0.72rem;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+  font-weight: 600;
+  margin-bottom: 0.2rem;
+}
+.qc-summary__value {
+  font-size: 1.4rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg);
+}
+.qc-summary__cell--defect .qc-summary__value { color: var(--color-danger); }
+.qc-summary__cell--good .qc-summary__value { color: var(--color-ok); }
+
+/* =============================================================
+   Mobile breakpoints
+   ============================================================= */
+@media (max-width: 900px) {
+  .app-header__nav { display: none; }
+  .mobile-nav { display: block; }
+  .app-main { padding-bottom: calc(96px + env(safe-area-inset-bottom, 0px)); }
+}
+
+@media (max-width: 640px) {
+  .app-header { padding: 0.55rem 0.85rem; gap: 0.6rem; }
+  .app-header__brand { font-size: 1rem; }
+  .app-header__user-name { max-width: 8rem; font-size: 0.82rem; }
+  .app-header__user-role { display: none; }
+  .app-main { padding-left: 0.85rem; padding-right: 0.85rem; padding-top: 0.85rem; }
+
+  .page-header { gap: 0.5rem; margin-bottom: 0.85rem; }
+  .page-header h1 { font-size: 1.3rem; }
+
+  .form-row { grid-template-columns: 1fr; }
+  .form-row label { padding-top: 0; }
+
+  .action-grid { grid-template-columns: 1fr 1fr; }
+
+  .passport-hero { padding: 1rem; gap: 1rem; }
+  .passport-hero__qr,
+  .passport-hero__qr img { width: 180px; height: auto; }
+  .passport-hero__qr img { height: 180px; }
+  .passport-hero__title { font-size: 1.25rem; }
+
+  .qc-summary { grid-template-columns: repeat(3, 1fr); }
+  .qc-summary > .actions-row,
+  .qc-summary > a { grid-column: 1 / -1; justify-content: stretch; }
+
+  table.data-table th,
+  table.data-table td { font-size: 0.85rem; padding: 0.55rem 0.65rem; }
+}
+
+/* =============================================================
+   /shopfloor (Шаг 10) — оставлено как было, только палитра
+   подтянулась через переменные.
+   ============================================================= */
+
+/* =============================================================
+   Modern visual refresh (UI v2) — единый design system layer.
+   Эти классы добавляют новое, не ломая старые .card / .btn /
+   .data-table / .summary-card / .status-badge / .pill /
+   .action-card. См. docs/screens.md §«UI refresh».
+   ============================================================= */
+
+.app-icon {
+  flex-shrink: 0;
+  display: inline-block;
+  vertical-align: -0.18em;
+  color: currentColor;
+}
+
+/* Заголовок страницы с иконкой и подсказкой. Альтернатива .page-header
+   для современных экранов (главная, дашборд, цеховые таблицы). */
+.page-shell {
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+.page-eyebrow {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.74rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-fg-muted);
+}
+.page-eyebrow .app-icon { width: 14px; height: 14px; }
+.page-title {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  margin: 0.2rem 0 0.35rem;
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  color: var(--color-fg-strong);
+  line-height: 1.15;
+}
+.page-title .app-icon {
+  width: 28px;
+  height: 28px;
+  color: var(--color-accent);
+}
+.page-subtitle {
+  margin: 0;
+  font-size: 0.95rem;
+  color: var(--color-fg-muted);
+  line-height: 1.5;
+  max-width: 64ch;
+}
+.section-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  margin: 0 0 0.85rem;
+  flex-wrap: wrap;
+}
+.section-header h2 {
+  margin: 0;
+  font-size: 1.1rem;
+  letter-spacing: -0.005em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--color-fg-strong);
+}
+.section-header h2 .app-icon {
+  width: 18px;
+  height: 18px;
+  color: var(--color-fg-muted);
+}
+.section-header__hint {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+}
+
+/* KPI / stat card — крупный показатель с иконкой и trend-подписью.
+   Используется в production-dashboard и production-cost. */
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 0.85rem;
+}
+.kpi-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 1rem 1.15rem 1.05rem;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-xs);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.05s;
+}
+.kpi-card:hover {
+  border-color: var(--color-border-strong);
+  box-shadow: var(--shadow-md);
+}
+.kpi-card__head {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.kpi-card__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 10px;
+  background: var(--color-bg-tint);
+  color: var(--color-accent);
+}
+.kpi-card__icon .app-icon { width: 18px; height: 18px; }
+.kpi-card__value {
+  font-size: 1.7rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-strong);
+  line-height: 1.1;
+}
+.kpi-card__sub {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  line-height: 1.35;
+}
+.kpi-card--ok    { border-color: #bbf7d0; }
+.kpi-card--ok    .kpi-card__icon { background: var(--color-ok-soft); color: var(--color-ok-fg); }
+.kpi-card--ok    .kpi-card__value { color: var(--color-ok-fg); }
+.kpi-card--warn  { border-color: #fde68a; }
+.kpi-card--warn  .kpi-card__icon { background: var(--color-warn-soft); color: var(--color-warn-fg); }
+.kpi-card--warn  .kpi-card__value { color: var(--color-warn-fg); }
+.kpi-card--danger{ border-color: #fecaca; }
+.kpi-card--danger .kpi-card__icon { background: var(--color-danger-soft); color: var(--color-danger-fg); }
+.kpi-card--danger .kpi-card__value { color: var(--color-danger-fg); }
+.kpi-card--accent{ border-color: #c5d8ff; }
+.kpi-card--accent .kpi-card__icon { background: var(--color-accent-soft); color: var(--color-accent-fg); }
+.kpi-card--accent .kpi-card__value { color: var(--color-accent-fg); }
+
+/* Pipeline stage card (production dashboard §2). */
+.stage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 0.65rem;
+}
+.stage-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.8rem 0.9rem;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s, background 0.15s;
+}
+.stage-card__head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.stage-card__head .app-icon { width: 14px; height: 14px; }
+.stage-card__value {
+  font-size: 1.45rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg-strong);
+}
+.stage-card__value-unit {
+  font-size: 0.85rem;
+  font-weight: 500;
+  color: var(--color-fg-muted);
+  margin-left: 0.2rem;
+}
+.stage-card__meta {
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+}
+.stage-card--bottleneck {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+.stage-card--bottleneck .stage-card__head { color: var(--color-danger-fg); }
+.stage-card--bottleneck .stage-card__value { color: var(--color-danger-fg); }
+.stage-card--ghost {
+  border-style: dashed;
+  background: transparent;
+}
+
+/* Alert stack — единый язык severity для дашборда и менеджерских
+   экранов. Совместим с .info-box / .error-box, не вытесняет их. */
+.alert-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.alert-row {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  padding: 0.65rem 0.85rem;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-left: 3px solid var(--color-fg-subtle);
+  border-radius: var(--radius-md);
+  text-decoration: none;
+  color: var(--color-fg);
+  font-size: 0.95rem;
+  line-height: 1.35;
+  transition: background 0.15s, border-color 0.15s, transform 0.05s;
+}
+.alert-row:hover {
+  background: var(--color-bg-soft);
+}
+.alert-row__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--color-bg-muted);
+  color: var(--color-fg-muted);
+  flex-shrink: 0;
+}
+.alert-row__icon .app-icon { width: 16px; height: 16px; }
+.alert-row__msg { flex-grow: 1; min-width: 0; }
+.alert-row__value {
+  font-weight: 700;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.alert-row--info    { border-left-color: var(--color-accent); }
+.alert-row--info    .alert-row__icon { background: var(--color-accent-soft); color: var(--color-accent-fg); }
+.alert-row--warn    { border-left-color: #f59e0b; }
+.alert-row--warn    .alert-row__icon { background: var(--color-warn-soft); color: var(--color-warn-fg); }
+.alert-row--warn    .alert-row__value { color: var(--color-warn-fg); }
+.alert-row--crit    { border-left-color: var(--color-danger); background: #fff7f7; }
+.alert-row--crit    .alert-row__icon { background: var(--color-danger-soft); color: var(--color-danger-fg); }
+.alert-row--crit    .alert-row__value { color: var(--color-danger-fg); }
+.alert-row--success { border-left-color: var(--color-ok); }
+.alert-row--success .alert-row__icon { background: var(--color-ok-soft); color: var(--color-ok-fg); }
+
+/* Quick links — современные shortcut-карточки в дашборде. */
+.quick-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.6rem;
+}
+.quick-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.7rem 0.9rem;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  color: var(--color-fg);
+  text-decoration: none;
+  font-weight: 600;
+  font-size: 0.95rem;
+  transition: border-color 0.15s, background 0.15s, color 0.15s,
+    box-shadow 0.15s;
+  min-height: 48px;
+}
+.quick-link:hover {
+  border-color: var(--color-accent);
+  color: var(--color-accent);
+  box-shadow: 0 6px 16px -12px rgba(37, 99, 235, 0.55);
+}
+.quick-link__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  background: var(--color-bg-tint);
+  color: var(--color-accent);
+  flex-shrink: 0;
+}
+.quick-link__icon .app-icon { width: 18px; height: 18px; }
+.quick-link__label { flex-grow: 1; }
+.quick-link__chev { color: var(--color-fg-subtle); }
+.quick-link__chev .app-icon { width: 16px; height: 16px; }
+
+/* action-card иконка как SVG (а не emoji). */
+.action-card__icon .app-icon { width: 20px; height: 20px; }
+.action-card__icon-svg { width: 20px; height: 20px; }
+.action-card--primary .action-card__icon .app-icon { color: #fff; }
+
+/* Header brand-mark — крупная цветная плашка с инициалом или
+   иконкой. Используется в шапке и на login-карточке. */
+.brand-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--color-accent), #60a5fa);
+  color: #fff;
+  font-weight: 700;
+  font-size: 0.9rem;
+  flex-shrink: 0;
+  box-shadow: 0 4px 10px -6px rgba(37, 99, 235, 0.6);
+}
+.brand-mark .app-icon { width: 16px; height: 16px; color: #fff; }
+
+/* Header nav — иконка + текст. Cтильно деградирует на мобиле. */
+.app-header__nav a {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+}
+.app-header__nav .app-icon {
+  width: 14px;
+  height: 14px;
+  color: rgba(255, 255, 255, 0.65);
+}
+.app-header__nav a:hover .app-icon { color: #fff; }
+.mobile-nav__icon .app-icon { width: 22px; height: 22px; }
+
+/* Tab/period toggle pill (production dashboard period switcher и др.) */
+.toggle-group {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  padding: 0.25rem;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-pill);
+}
+.toggle-group__item {
+  appearance: none;
+  border: none;
+  background: transparent;
+  padding: 0.4rem 0.85rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+  border-radius: var(--radius-pill);
+  cursor: pointer;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-height: 36px;
+  transition: background 0.15s, color 0.15s;
+}
+.toggle-group__item:hover { color: var(--color-fg); }
+.toggle-group__item.is-active {
+  background: #fff;
+  color: var(--color-accent);
+  box-shadow: var(--shadow-xs);
+}
+
+/* Empty state — единый стиль для пустых разделов. */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 0.45rem;
+  padding: 2rem 1rem;
+  color: var(--color-fg-muted);
+  background: var(--color-bg-soft);
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+}
+.empty-state__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--color-bg-muted);
+  color: var(--color-fg-subtle);
+}
+.empty-state__icon .app-icon { width: 22px; height: 22px; }
+.empty-state__title {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+.empty-state__hint {
+  font-size: 0.9rem;
+  color: var(--color-fg-muted);
+  max-width: 40ch;
+}
+
+/* Improved data-table look — мягкий hover, аккуратная типографика.
+   Применяется поверх существующего `.data-table` без слома схемы. */
+table.data-table tbody tr { transition: background 0.12s; }
+table.data-table tbody tr:hover td,
+table.data-table tbody tr:hover th { background: var(--color-bg-soft); }
+table.data-table th .app-icon {
+  width: 14px;
+  height: 14px;
+  vertical-align: -2px;
+  margin-right: 0.25rem;
+  color: var(--color-fg-subtle);
+}
+table.data-table td code {
+  background: var(--color-bg-muted);
+  border-radius: 4px;
+  padding: 0 0.3rem;
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+}
+
+/* Toolbar пилюля для filter-блоков (production-cost, earnings). */
+.filter-card {
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 1rem 1.15rem;
+  margin-bottom: 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.85rem;
+  align-items: flex-end;
+}
+.filter-card__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.filter-card__field label {
+  font-size: 0.75rem;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.filter-card__field input,
+.filter-card__field select {
+  min-width: 160px;
+}
+.filter-card__actions {
+  display: inline-flex;
+  gap: 0.45rem;
+  margin-left: auto;
+}
+
+/* =============================================================
+   Detail page shell (UI v2.1) — единый стандарт detail-страниц.
+   -------------------------------------------------------------
+   Используется на /admin/employees/[id], /admin/operations/[id],
+   /admin/warehouses/[id], /admin/equipment/[id], /passports/[id].
+   Поверх .page-shell даёт унифицированную шапку (eyebrow / title /
+   subtitle / status / actions) и набор мелких primitives для
+   повторяющихся блоков внутри карточек: data-list (label/value),
+   detail-form (form-row + actions-row + сообщения), inline-table,
+   danger-zone.
+   ============================================================= */
+
+.detail-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1.25rem;
+  flex-wrap: wrap;
+}
+.detail-header__main { min-width: 0; flex: 1 1 320px; }
+.detail-header__back {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  text-decoration: none;
+  margin-bottom: 0.4rem;
+}
+.detail-header__back:hover { color: var(--color-accent); }
+.detail-header__back .app-icon { width: 14px; height: 14px; }
+.detail-header__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  align-items: center;
+  margin-top: 0.55rem;
+  color: var(--color-fg-muted);
+  font-size: 0.9rem;
+}
+.detail-header__meta code {
+  background: var(--color-bg-muted);
+  border-radius: 4px;
+  padding: 0 0.35rem;
+  font-size: 0.82rem;
+}
+.detail-header__badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.45rem;
+}
+.detail-header__aside {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 0.55rem;
+  flex-shrink: 0;
+}
+.detail-header__actions {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.45rem;
+  justify-content: flex-end;
+}
+
+/* Универсальная сетка label / value для реквизитов внутри секции. */
+.data-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 0.85rem 1.4rem;
+}
+.data-list__item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.data-list__label {
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.data-list__value {
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--color-fg);
+  line-height: 1.3;
+  word-break: break-word;
+}
+.data-list__value code {
+  background: var(--color-bg-muted);
+  border-radius: 4px;
+  padding: 0 0.35rem;
+  font-size: 0.85rem;
+  color: var(--color-fg);
+}
+.data-list__value--muted { color: var(--color-fg-muted); font-weight: 500; }
+
+/* Унифицированная форма detail-страницы. Поверх существующих
+   .form-row / .btn — даёт собственный gap и зону кнопок «Сохранить /
+   Отменить» снизу. Сообщения success/error лежат под формой. */
+.detail-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.detail-form__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.85rem 1.1rem;
+}
+.detail-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  min-width: 0;
+}
+.detail-form__field > label,
+.detail-form__field > .detail-form__label {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.detail-form__field--inline {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.55rem;
+  min-height: 44px;
+}
+.detail-form__field--inline > label {
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 600;
+  color: var(--color-fg);
+  font-size: 0.95rem;
+}
+.detail-form__field--inline input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+.detail-form__hint {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  line-height: 1.4;
+}
+.detail-form__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+  align-items: center;
+}
+.detail-form__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  align-items: center;
+  padding-top: 0.4rem;
+  border-top: 1px dashed var(--color-border);
+}
+.detail-form__success,
+.detail-form__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  border-radius: var(--radius-md);
+  padding: 0.7rem 0.85rem;
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+.detail-form__success {
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
+  border: 1px solid #a7f3d0;
+}
+.detail-form__error {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+  border: 1px solid #fecaca;
+}
+.detail-form__error .app-icon,
+.detail-form__success .app-icon {
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.detail-form__error-rid {
+  display: block;
+  font-size: 0.78rem;
+  margin-top: 0.25rem;
+  opacity: 0.8;
+}
+.detail-form__error-rid code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  background: rgba(127, 29, 29, 0.08);
+  padding: 0 4px;
+  border-radius: 3px;
+}
+
+/* Inline-table — таблица внутри detail-секции. Тонкая обводка,
+   внутренний padding согласован с .data-table, hover из v2. */
+.inline-table-wrap {
+  margin: 0;
+  overflow-x: auto;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--color-border);
+  background: #fff;
+}
+.inline-table-wrap > table.data-table { border: none; border-radius: 0; }
+
+/* Полоска действий рядом со строкой таблицы (печать QR, отвязать). */
+.table-actions {
+  display: inline-flex;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+/* Danger-zone — выделенный блок для опасных действий (отвязка ячейки,
+   архив, и т.п.). Не используется как самостоятельная секция, кладётся
+   внутрь существующих .card / .section-card. */
+.danger-zone {
+  margin-top: 1rem;
+  padding: 0.85rem 1rem;
+  background: #fff7f7;
+  border: 1px dashed #fecaca;
+  border-radius: var(--radius-md);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.danger-zone__title {
+  font-size: 0.85rem;
+  font-weight: 700;
+  color: var(--color-danger-fg);
+  letter-spacing: 0.02em;
+}
+.danger-zone__hint {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  margin: 0;
+  line-height: 1.4;
+}
+
+/* Pricing-mode highlight (operations detail). Делает FIXED / BY_SIZE /
+   SALARY_ONLY мгновенно считываемым в шапке. */
+.pricing-mode {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.3rem 0.7rem;
+  border-radius: var(--radius-pill);
+  font-size: 0.8rem;
+  font-weight: 700;
+  background: var(--color-bg-muted);
+  color: var(--color-fg);
+  letter-spacing: 0.02em;
+}
+.pricing-mode .app-icon { width: 14px; height: 14px; }
+.pricing-mode--fixed       { background: var(--color-accent-soft); color: var(--color-accent-fg); }
+.pricing-mode--by-size     { background: #fef3c7; color: var(--color-warn-fg); }
+.pricing-mode--salary-only { background: var(--color-bg-muted); color: var(--color-fg-muted); }
+
+/* Rate table for operations BY_SIZE — крупные ячейки, выровненные
+   столбцы, акцентные плейсхолдеры. */
+.rate-table-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: 0.5rem;
+}
+.rate-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.55rem 0.65rem;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.rate-cell:focus-within {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.18);
+}
+.rate-cell__size {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.rate-cell__input {
+  border: none;
+  background: transparent;
+  padding: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg);
+  text-align: right;
+}
+.rate-cell__input:focus { outline: none; box-shadow: none; }
+
+/* Унифицированный список «attachable items» (operations checklist
+   на equipment detail). Используется поверх существующих
+   .admin-equipment-form__row, но с подсветкой выбранного. */
+.option-list {
+  display: grid;
+  gap: 0.5rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.option-list__row {
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: 0.6rem 0.9rem;
+  transition: border-color 0.15s, background 0.15s;
+}
+.option-list__row.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-bg-tint);
+}
+.option-list__row label {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.65rem;
+  cursor: pointer;
+  margin: 0;
+  font-weight: 500;
+}
+.option-list__row label input[type='checkbox'] {
+  width: 20px;
+  height: 20px;
+  margin: 0;
+  accent-color: var(--color-accent);
+}
+.option-list__row-name {
+  font-weight: 600;
+  color: var(--color-fg);
+  font-size: 0.95rem;
+}
+.option-list__row-meta {
+  color: var(--color-fg-muted);
+  font-size: 0.82rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+
+/* Hero passport — уточняем верхний блок, оставляя совместимым. */
+.passport-hero__badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin-top: 0.15rem;
+}
+
+/* ==== /Detail page shell ==== */
+
+/* ==== /Modern visual refresh ==== */
+
+.shopfloor { display: flex; flex-direction: column; gap: 1rem; }
+.shopfloor-board { display: flex; flex-direction: column; gap: 1rem; }
+
+.shopfloor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  align-items: center;
+  justify-content: space-between;
+}
+.shopfloor-title { display: flex; align-items: baseline; gap: 1rem; flex-wrap: wrap; }
+.shopfloor-title h1 {
+  margin: 0;
+  font-size: 1.75rem;
+  display: inline-flex;
+  align-items: center;
+  letter-spacing: -0.015em;
+}
+.shopfloor-title h1 .app-icon { color: var(--color-accent); }
+.shopfloor-scope {
+  color: var(--color-fg-muted);
+  font-size: 1rem;
+  font-weight: 500;
+}
+.shopfloor-controls {
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.shopfloor-control {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.shopfloor-control select { min-width: 220px; }
+.shopfloor-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.9rem;
+  color: var(--color-fg-muted);
+  user-select: none;
+}
+.shopfloor-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.shopfloor-status__dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #94a3b8;
+}
+.shopfloor-status--on .shopfloor-status__dot {
+  background: var(--color-ok);
+  box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5);
+  animation: shopfloor-pulse 1.6s ease-out infinite;
+}
+.shopfloor-poll-error { margin: 0; }
+
+@keyframes shopfloor-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0.5); }
+  70% { box-shadow: 0 0 0 8px rgba(22, 163, 74, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(22, 163, 74, 0); }
+}
+
+.shopfloor-summary {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.75rem;
+}
+.shopfloor-summary__card {
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  padding: 0.85rem 1rem;
+  transition: background 0.15s, border-color 0.15s;
+}
+.shopfloor-summary__card--defect {
+  border-color: #fecaca;
+  background: #fff7f7;
+}
+.shopfloor-summary__label {
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 0.25rem;
+}
+.shopfloor-summary__value {
+  font-size: 2rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg);
+}
+.shopfloor-summary__value.is-zero { color: #cbd5e1; }
+.shopfloor-summary__card--defect .shopfloor-summary__value { color: var(--color-danger); }
+.shopfloor-summary__card--defect .shopfloor-summary__value.is-zero { color: #fecaca; }
+
+.shopfloor-table-wrap { overflow-x: auto; }
+.shopfloor-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  font-variant-numeric: tabular-nums;
+}
+.shopfloor-table th,
+.shopfloor-table td {
+  padding: 0.85rem 1rem;
+  border-bottom: 1px solid var(--color-border);
+  text-align: center;
+  font-size: 1.7rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  background: #fff;
+  transition: background 0.2s, color 0.2s, box-shadow 0.2s;
+}
+.shopfloor-table thead th {
+  background: #0f172a;
+  color: #e2e8f0;
+  font-size: 0.85rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 0.55rem 1rem;
+}
+.shopfloor-table tbody tr:last-child td,
+.shopfloor-table tbody tr:last-child th { border-bottom: none; }
+.shopfloor-table tbody tr:nth-child(even) td,
+.shopfloor-table tbody tr:nth-child(even) th { background: #f8fafc; }
+.shopfloor-table__size {
+  font-size: 1.4rem;
+  background: #f1f5f9 !important;
+  color: var(--color-fg-muted);
+  text-align: left;
+  width: 1%;
+  white-space: nowrap;
+}
+.shopfloor-cell.is-zero { color: #cbd5e1; }
+.shopfloor-cell--defect { color: var(--color-danger); }
+.shopfloor-cell--defect.is-zero { color: #fecaca; }
+
+.shopfloor-cell--flash-up,
+.shopfloor-summary__card.shopfloor-cell--flash-up {
+  animation: shopfloor-flash-up 1100ms ease-out;
+}
+.shopfloor-cell--flash-down,
+.shopfloor-summary__card.shopfloor-cell--flash-down {
+  animation: shopfloor-flash-down 1100ms ease-out;
+}
+
+@keyframes shopfloor-flash-up {
+  0%   { background: #bbf7d0; box-shadow: inset 0 0 0 4px #16a34a; }
+  60%  { background: #dcfce7; box-shadow: inset 0 0 0 2px #86efac; }
+  100% { background: inherit; box-shadow: none; }
+}
+@keyframes shopfloor-flash-down {
+  0%   { background: #fecaca; box-shadow: inset 0 0 0 4px #dc2626; }
+  60%  { background: #fee2e2; box-shadow: inset 0 0 0 2px #fca5a5; }
+  100% { background: inherit; box-shadow: none; }
+}
+
+.shopfloor-empty {
+  text-align: center;
+  color: var(--color-fg-muted);
+  padding: 3rem 1rem;
+  font-size: 1.05rem;
+}
+
+@media (max-width: 900px) {
+  .shopfloor-table th,
+  .shopfloor-table td { font-size: 1.3rem; padding: 0.65rem 0.6rem; }
+  .shopfloor-table__size { font-size: 1.1rem; }
+  .shopfloor-summary__value { font-size: 1.6rem; }
+}
+@media (min-width: 1500px) {
+  .shopfloor-table th,
+  .shopfloor-table td { font-size: 2.1rem; padding: 1rem 1.25rem; }
+  .shopfloor-table__size { font-size: 1.6rem; }
+  .shopfloor-summary__value { font-size: 2.4rem; }
+}
+
+/* =============================================================
+   QR-сканер на /work (модальное окно поверх формы)
+   ============================================================= */
+.qr-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: stretch;
+  justify-content: center;
+  padding: 0;
+  overscroll-behavior: contain;
+}
+.qr-modal__card {
+  background: #fff;
+  width: 100%;
+  max-width: 520px;
+  margin: auto;
+  border-radius: var(--radius-xl);
+  padding: 1rem 1rem 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  box-shadow: 0 20px 50px -10px rgba(15, 23, 42, 0.35);
+  max-height: 100dvh;
+  overflow: auto;
+}
+.qr-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.qr-modal__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+.qr-modal__close {
+  appearance: none;
+  background: transparent;
+  border: none;
+  font-size: 1.6rem;
+  line-height: 1;
+  width: 40px;
+  height: 40px;
+  border-radius: var(--radius-md);
+  cursor: pointer;
+  color: var(--color-fg-muted);
+}
+.qr-modal__close:hover { background: var(--color-bg-muted); color: var(--color-fg); }
+.qr-modal__hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-fg-muted);
+  line-height: 1.4;
+}
+.qr-modal__hint--mono {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.78rem;
+  color: var(--color-fg-subtle);
+  word-break: break-word;
+}
+.qr-modal__viewport {
+  width: 100%;
+  aspect-ratio: 1 / 1;
+  background: #0f172a;
+  border-radius: var(--radius-lg);
+  overflow: hidden;
+  position: relative;
+}
+.qr-modal__viewport :global(video),
+.qr-modal__viewport video {
+  width: 100% !important;
+  height: 100% !important;
+  object-fit: cover;
+}
+.qr-modal__error {
+  background: var(--color-danger-soft, #fef2f2);
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-md);
+  padding: 0.75rem 0.85rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.qr-modal__error-title {
+  margin: 0;
+  font-weight: 700;
+  color: var(--color-danger, #b91c1c);
+}
+.qr-modal__cancel { min-height: 52px; }
+.scan-card__camera { min-height: 48px; font-weight: 600; }
+
+/* Упрощённый /work для роли SEAMSTRESS ------------------------- */
+.seamstress-work {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+}
+/* Cutter-assistant /work теперь имеет два action-card одного уровня
+   (см. `active-shift-panel.tsx` → `CutterAssistantWorkPanel`). На
+   мобильном они идут вертикальной колонкой как и у швеи; gap 1rem
+   достаточно, чтобы кнопки не сливались, но и не давали лишнего
+   воздуха. Никаких grid/2-col — mobile-first. */
+.cutter-assistant-work {
+  gap: 1rem;
+}
+/* Shelf-placement session-режим: компактный заголовок с кодом ячейки
+   крупно (helper не должен ошибиться, в какую ячейку он сейчас кладёт)
+   и спокойная лента «Размещено» снизу. */
+.shelf-placement__cell-label {
+  display: block;
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-weight: 700;
+  margin-bottom: 0.15rem;
+}
+.shelf-placement__cell-code {
+  font-size: 1.6rem;
+  letter-spacing: 0.02em;
+  margin: 0 0 0.2rem;
+}
+/* Read-out режима после confirm-cell. Цель — за полсекунды показать
+   помощнику, что больше QR ячейки сканировать не нужно: на пилоте
+   видели, как оператор по привычке снова наводит камеру на стеллаж
+   и упирается в общий PASSPORT_NOT_FOUND (см. `docs/flows.md §F3b`).
+   Поэтому даём не подсказку курсивом, а явный inline-баннер. */
+.shelf-placement__mode-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  margin-top: 0.6rem;
+  padding: 0.6rem 0.8rem;
+  background: var(--color-ok-soft, #ecfdf5);
+  color: var(--color-ok-fg, #065f46);
+  border: 1px solid #a7f3d0;
+  border-radius: var(--radius-md);
+}
+.shelf-placement__mode-title {
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0.005em;
+}
+.shelf-placement__mode-sub {
+  font-size: 0.85rem;
+  opacity: 0.85;
+}
+.shelf-placement__recent {
+  padding: 0.9rem 1rem;
+}
+.shelf-placement__recent-title {
+  margin: 0 0 0.5rem;
+  font-size: 0.9rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--color-fg-muted);
+}
+.shelf-placement__recent-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.shelf-placement__recent-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  font-size: 0.95rem;
+}
+.shelf-placement__recent-meta {
+  display: block;
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  margin-top: 0.1rem;
+}
+.shelf-placement__recent-qty {
+  font-weight: 700;
+  white-space: nowrap;
+}
+.shelf-cell__qr {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 0.85rem;
+  word-break: break-all;
+}
+.scan-card--simple {
+  padding: 1.25rem 1.15rem;
+  gap: 1rem;
+}
+.scan-card--simple .scan-card__title {
+  font-size: 1.25rem;
+}
+.scan-card__primary-camera {
+  min-height: 64px;
+  font-size: 1.1rem;
+  letter-spacing: 0.005em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Вторичная «Завершить операцию» (ТЗ §5): крупная, но визуально
+   тише primary — та же высота и типографика, спокойная поверхность
+   без акцентного заливания, чтобы не перетягивать внимание от
+   главного действия «Взять крой». */
+.scan-card__secondary-camera {
+  min-height: 60px;
+  font-size: 1.05rem;
+  letter-spacing: 0.005em;
+  font-weight: 600;
+}
+.scan-card__manual-toggle {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0.4rem 0.5rem;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-accent);
+  cursor: pointer;
+  align-self: center;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.scan-card__manual-toggle:hover { color: var(--color-accent-hover); }
+.seamstress-work__switch {
+  appearance: none;
+  background: transparent;
+  border: none;
+  padding: 0.5rem 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 500;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  align-self: center;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.seamstress-work__switch:hover { color: var(--color-fg); }
+/* Три-точечное меню действий швеи (заменило большую красную кнопку
+   «Завершить смену»). Кнопка-тригер прижата к правому верхнему углу
+   страницы /work и не конкурирует с RoleHeaderCard визуально. */
+.seamstress-actions {
+  position: absolute;
+  top: calc(env(safe-area-inset-top, 0px) + 0.4rem);
+  right: 0.4rem;
+  z-index: 6;
+}
+.seamstress-actions__trigger {
+  appearance: none;
+  background: rgba(255, 255, 255, 0.18);
+  color: #fff;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  width: 40px;
+  height: 40px;
+  border-radius: 999px;
+  font-size: 1.25rem;
+  line-height: 1;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.15s, border-color 0.15s;
+}
+.seamstress-actions__trigger:hover,
+.seamstress-actions__trigger:focus-visible {
+  background: rgba(255, 255, 255, 0.28);
+  border-color: rgba(255, 255, 255, 0.45);
+  outline: none;
+}
+.seamstress-actions__menu {
+  position: absolute;
+  top: calc(100% + 0.35rem);
+  right: 0;
+  min-width: 200px;
+  background: #fff;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-md);
+  padding: 0.35rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.seamstress-actions__item {
+  appearance: none;
+  background: transparent;
+  border: none;
+  text-align: left;
+  width: 100%;
+  padding: 0.65rem 0.75rem;
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--color-fg);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  min-height: 44px;
+}
+.seamstress-actions__item:hover,
+.seamstress-actions__item:focus-visible {
+  background: var(--color-bg-muted);
+  outline: none;
+}
+.seamstress-actions__item--danger { color: var(--color-danger); }
+.seamstress-actions__item--danger:hover,
+.seamstress-actions__item--danger:focus-visible {
+  background: rgba(220, 38, 38, 0.08);
+}
+.seamstress-actions__item:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+.seamstress-actions__error {
+  padding: 0.4rem 0.75rem;
+  font-size: 0.8rem;
+  color: var(--color-danger);
+}
+
+/* =============================================================
+   /work/cut-orders — упрощённый выбор заказа для CUTTER_ASSISTANT
+   ============================================================= */
+.cut-orders {
+  display: flex;
+  flex-direction: column;
+  gap: 1.1rem;
+  padding-top: calc(env(safe-area-inset-top, 0px));
+}
+.cut-orders__head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-height: 44px;
+}
+.cut-orders__back {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 44px;
+  height: 44px;
+  border-radius: 999px;
+  background: var(--color-bg-muted);
+  color: var(--color-fg);
+  font-size: 1.25rem;
+  text-decoration: none;
+  border: 1px solid var(--color-border);
+}
+.cut-orders__back:hover,
+.cut-orders__back:focus-visible {
+  background: var(--color-bg-tint);
+  outline: none;
+}
+.cut-orders__title {
+  margin: 0;
+  font-size: 1.25rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  color: var(--color-fg);
+}
+.cut-orders__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.cut-orders__card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1rem 1.1rem;
+  min-height: 72px;
+  background: #fff;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  text-decoration: none;
+  color: var(--color-fg);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(15, 23, 42, 0.04));
+  transition: border-color 0.15s, background 0.15s, transform 0.05s;
+}
+.cut-orders__card:hover,
+.cut-orders__card:focus-visible {
+  border-color: var(--color-accent);
+  background: var(--color-bg-tint);
+  outline: none;
+}
+.cut-orders__card:active {
+  transform: scale(0.998);
+}
+.cut-orders__card-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  line-height: 1.2;
+}
+.cut-orders__card-meta {
+  display: inline-flex;
+  gap: 0.4rem;
+  align-items: baseline;
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+}
+.cut-orders__card-number {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-weight: 600;
+}
+.cut-orders__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 1.5rem 1.25rem;
+  background: #fff;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+.cut-orders__empty-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+.cut-orders__empty-hint {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--color-fg-muted);
+}
+
+/* Старт смены: сводка по выбранному оборудованию + список операций */
+.seamstress-start__manual {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.seamstress-start__equipment {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.75rem 0.95rem;
+  background: var(--color-bg-tint);
+  border: 1px solid #c5d8ff;
+  border-radius: var(--radius-md);
+}
+.seamstress-start__equipment-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--color-accent-fg);
+}
+.seamstress-start__equipment-name {
+  font-size: 1.1rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  line-height: 1.2;
+}
+.seamstress-start__equipment-meta {
+  font-size: 0.8rem;
+  color: var(--color-fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+.seamstress-start__ops {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.seamstress-start__op {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.65rem;
+  padding: 0.85rem 1rem;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: #fff;
+  cursor: pointer;
+  min-height: 56px;
+  transition: border-color 0.15s, background 0.15s, box-shadow 0.15s;
+}
+.seamstress-start__op:hover {
+  border-color: var(--color-accent);
+}
+.seamstress-start__op input[type="radio"] {
+  width: 22px;
+  height: 22px;
+  accent-color: var(--color-accent);
+  margin: 0;
+}
+.seamstress-start__op-name {
+  font-weight: 600;
+  color: var(--color-fg);
+  font-size: 1rem;
+}
+.seamstress-start__op-meta {
+  font-size: 0.75rem;
+  color: var(--color-fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+.seamstress-start__op.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-bg-tint);
+  box-shadow: 0 6px 16px -10px rgba(37, 99, 235, 0.45);
+}
+
+/* Success-state «Крой принят» */
+.seamstress-success {
+  background: #fff;
+  border: 1.5px solid #bbf7d0;
+  box-shadow: 0 10px 24px -16px rgba(22, 163, 74, 0.45);
+}
+.seamstress-success__head {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+.seamstress-success__check {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+  background: var(--color-ok);
+  color: #fff;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 1.3rem;
+  font-weight: 700;
+}
+.seamstress-success__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+  gap: 0.5rem 1rem;
+  margin: 0;
+}
+.seamstress-success__grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.seamstress-success__grid dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-fg-muted);
+  font-weight: 700;
+  margin: 0;
+}
+.seamstress-success__grid dd {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+
+/* =========================================================================
+   Блок «Текущий крой» / «Сейчас в работе» (CurrentWorkCard)
+   -------------------------------------------------------------------------
+   Mobile-first. Используется на /work для SEAMSTRESS, чтобы у швеи был
+   устойчивый рабочий контекст после приёма кроя (см. docs/screens.md §3.3
+   и docs/flows.md §F3a). Без таблиц, крупные значения, приглушённые
+   labels — единый язык с .seamstress-success и .passport-confirm.
+   ========================================================================= */
+.current-work {
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+  padding: 0.95rem 1rem 1.1rem;
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 22px -18px rgba(15, 23, 42, 0.35);
+}
+.current-work--empty {
+  background: var(--color-bg-muted);
+  border-style: dashed;
+  border-color: var(--color-border-strong);
+  box-shadow: none;
+}
+.current-work__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.current-work__title {
+  margin: 0;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-fg-muted);
+}
+.current-work__summary {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+}
+.current-work__summary-units {
+  font-size: 1rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+.current-work__summary-sep {
+  color: var(--color-fg-muted);
+  font-weight: 500;
+}
+.current-work__summary-passports {
+  font-size: 0.95rem;
+  font-weight: 500;
+  color: var(--color-fg-muted);
+}
+.current-work__empty-text {
+  margin: 0;
+  color: var(--color-fg-muted);
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+.current-work__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.active-passport {
+  display: flex;
+  flex-direction: column;
+  gap: 0.55rem;
+  padding: 0.85rem 0.95rem 0.95rem;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+.active-passport__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.active-passport__number {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  text-decoration: none;
+  word-break: break-all;
+}
+.active-passport__number:hover {
+  color: var(--color-accent);
+}
+.active-passport__accepted {
+  flex-shrink: 0;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+  text-transform: lowercase;
+  font-variant-numeric: tabular-nums;
+}
+.active-passport__product {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-fg);
+  line-height: 1.3;
+}
+.active-passport__color {
+  color: var(--color-fg-muted);
+  font-weight: 500;
+}
+.active-passport__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.55rem 1rem;
+  margin: 0;
+}
+.active-passport__grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.active-passport__grid dt {
+  margin: 0;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+}
+.active-passport__grid dd {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--color-fg);
+  line-height: 1.25;
+  word-break: break-word;
+}
+.active-passport__size {
+  font-size: 1.2rem !important;
+  font-weight: 700 !important;
+}
+.active-passport__qty { font-variant-numeric: tabular-nums; font-size: 1.05rem; }
+.active-passport__qty-meta { color: var(--color-fg-muted); font-weight: 500; font-size: 0.85rem; }
+.active-passport__op { font-size: 0.95rem; }
+.active-passport__op-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+  font-weight: 500;
+}
+
+@media (max-width: 380px) {
+  .active-passport__grid { grid-template-columns: 1fr; }
+}
+
+/* Soft-route hint (см. docs/domain.md §«Маршруты производства»):
+   текущий и следующий шаг маршрута, плюс warning при mismatch с
+   операцией смены. На MVP — без блокировки. */
+.active-passport__route {
+  margin-top: 0.6rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.55rem 0.7rem;
+  background: var(--color-bg-tint, #f6f8ff);
+  border: 1px solid var(--color-border-subtle, #dbe3f3);
+  border-radius: var(--radius-md, 8px);
+}
+.active-passport__route-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: baseline;
+  font-size: 0.92rem;
+  line-height: 1.25;
+}
+.active-passport__route-label {
+  flex: 0 0 3.4rem;
+  font-size: 0.75rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+  font-weight: 600;
+}
+.active-passport__route-value {
+  color: var(--color-fg);
+  font-weight: 500;
+  word-break: break-word;
+}
+.active-passport__route-code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+  font-weight: 500;
+}
+.active-passport__route-warn {
+  margin: 0.2rem 0 0;
+  padding: 0.4rem 0.55rem;
+  background: #fff7e0;
+  border: 1px solid #f0d27a;
+  border-radius: 6px;
+  font-size: 0.88rem;
+  color: #6b4d00;
+  line-height: 1.3;
+}
+.active-passport__route-warn strong { font-weight: 700; }
+.active-passport__route-warn em { font-style: normal; font-weight: 600; }
+
+/* Модалка проверки паспорта (PassportConfirmModal) */
+.passport-confirm__card { gap: 0.85rem; padding: 1.1rem 1.1rem 1.2rem; }
+.passport-confirm__number {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.85rem 1rem;
+  background: var(--color-bg-tint);
+  border: 1px solid #c5d8ff;
+  border-radius: var(--radius-md);
+}
+.passport-confirm__number-label {
+  font-size: 0.72rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  font-weight: 700;
+  color: var(--color-accent-fg);
+}
+.passport-confirm__number-value {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 1.45rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  word-break: break-all;
+  line-height: 1.15;
+}
+.passport-confirm__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.7rem 1rem;
+  margin: 0;
+}
+.passport-confirm__grid > div { display: flex; flex-direction: column; gap: 0.1rem; }
+.passport-confirm__grid dt {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+  margin: 0;
+}
+.passport-confirm__grid dd {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--color-fg);
+}
+.passport-confirm__size { font-size: 1.4rem !important; font-weight: 700 !important; }
+.passport-confirm__qty { font-variant-numeric: tabular-nums; }
+.passport-confirm__qty-meta { color: var(--color-fg-muted); font-weight: 500; font-size: 0.85rem; }
+.passport-confirm__shift {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.5rem 1rem;
+  padding: 0.7rem 0.85rem;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
+}
+.passport-confirm__shift > div { display: flex; flex-direction: column; gap: 0.1rem; }
+.passport-confirm__shift-label {
+  font-size: 0.65rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+}
+.passport-confirm__shift-value {
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--color-fg);
+  line-height: 1.2;
+}
+.passport-confirm__shift-meta {
+  font-size: 0.72rem;
+  color: var(--color-fg-muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+}
+.passport-confirm__actions {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr;
+  gap: 0.5rem;
+}
+.passport-confirm__actions .btn { min-height: 52px; }
+
+@media (max-width: 380px) {
+  .passport-confirm__grid { grid-template-columns: 1fr; }
+  .passport-confirm__shift { grid-template-columns: 1fr; }
+  .passport-confirm__actions { grid-template-columns: 1fr; }
+}
+
+@media (min-width: 600px) {
+  .qr-modal { padding: 1.5rem; }
+  .qr-modal__card { max-height: calc(100dvh - 3rem); }
+}
+
+/* ----------------------------------------------------------------- */
+/* QC role-terminal: рабочая карточка паспорта на /qc                */
+/* (см. apps/web/app/qc/qc-work-card.tsx, scan-driven flow F5).      */
+/* Стилизация повторяет .active-passport, чтобы UX ОТК и швеи        */
+/* визуально совпадал.                                               */
+/* ----------------------------------------------------------------- */
+.qc-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+  padding: 0.95rem 1rem 1.05rem;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+.qc-card__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.qc-card__label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+}
+.qc-card__number {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 1.2rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  word-break: break-all;
+}
+.qc-card__grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 0.55rem 1rem;
+  margin: 0;
+}
+.qc-card__grid > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.qc-card__grid dt {
+  margin: 0;
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+}
+.qc-card__grid dd {
+  margin: 0;
+  font-size: 0.98rem;
+  font-weight: 600;
+  color: var(--color-fg);
+  line-height: 1.25;
+  word-break: break-word;
+}
+.qc-card__size { font-size: 1.2rem !important; font-weight: 700 !important; }
+.qc-card__qty {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.4rem;
+  padding: 0.55rem 0.6rem;
+  background: var(--color-bg-tint);
+  border-radius: var(--radius-md);
+  font-variant-numeric: tabular-nums;
+}
+.qc-card__qty > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.1rem;
+}
+.qc-card__qty-label {
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-weight: 700;
+  color: var(--color-fg-muted);
+}
+.qc-card__qty-value { font-size: 1.25rem; font-weight: 700; color: var(--color-fg); }
+.qc-card__qty-value--danger { color: #b00020; }
+.qc-card__qty-value--success { color: #137333; }
+.qc-card__defect-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed var(--color-border);
+}
+.qc-card__defect-empty {
+  padding: 0.6rem 0.7rem;
+  font-size: 0.9rem;
+  color: var(--color-fg-muted);
+}
+.qc-card__section-title {
+  margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+.qc-card__history { font-size: 0.9rem; }
+.qc-card__history summary {
+  cursor: pointer;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+}
+.qc-card__history ul {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.qc-card__history-meta { color: var(--color-fg-muted); font-size: 0.85rem; }
+.qc-card__history-comment {
+  margin-top: 0.15rem;
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+}
+.qc-card__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding-top: 0.4rem;
+  border-top: 1px dashed var(--color-border);
+}
+
+@media (max-width: 380px) {
+  .qc-card__grid { grid-template-columns: 1fr; }
+}
+
+/* QC role-terminal: компактная строка «Проверено ОТК» (см.
+   apps/web/app/qc/qc-completed-row.tsx). Появляется после нажатия
+   «Проверка выполнена» вместо большой рабочей карточки и исчезает,
+   когда backend отдаёт `removedFromQc=true` (паспорт ушёл дальше). */
+.qc-done-row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.55rem 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border: 1px solid var(--color-border);
+  border-left: 4px solid #137333;
+  border-radius: var(--radius-md);
+  background: #fff;
+}
+.qc-done-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+}
+.qc-done-row__number {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  word-break: break-all;
+}
+.qc-done-row__meta {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.qc-done-row__size { font-weight: 700; color: var(--color-fg); }
+.qc-done-row__qty { font-weight: 600; color: var(--color-fg); }
+.qc-done-row__sep { color: var(--color-border); }
+.qc-done-row__badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.55rem;
+  border-radius: 999px;
+  background: #e6f4ea;
+  color: #0f5132;
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+/* QC role-terminal: компактная кнопка «Выйти» в правом верхнем углу
+   (глобальная шапка на /qc спрятана у роли QC, нужен запасной выход
+   из аккаунта — см. apps/web/app/qc/qc-terminal.tsx). */
+.qc-logout {
+  align-self: flex-end;
+  margin: 0;
+}
+.qc-logout__btn {
+  appearance: none;
+  background: transparent;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.75rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+.qc-logout__btn:hover { color: var(--color-fg); border-color: var(--color-fg-muted); }
+
+/* =============================================================
+   Bulk print «Печать всех ячеек» (см. apps/web/app/admin/warehouses/[id]/bulk-print-panel.tsx,
+   docs/screens.md §10b). Модалка использует базовые `.qr-modal*`
+   стили, плюс свои блоки настроек/превью/итогов.
+   ============================================================= */
+.section-header__actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.65rem;
+  flex-wrap: wrap;
+}
+.bulk-print-modal__card {
+  max-width: 720px;
+  gap: 1rem;
+  padding: 1rem 1.1rem 1.25rem;
+}
+.bulk-print-modal__form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.bulk-print-modal__settings {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.6fr) minmax(180px, 1.2fr) 110px;
+  gap: 0.85rem;
+}
+.bulk-print-modal__settings .detail-form__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.bulk-print-modal__settings label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-fg-muted);
+}
+.bulk-print-modal__settings select,
+.bulk-print-modal__settings input {
+  width: 100%;
+  font-size: 0.95rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: #fff;
+  color: var(--color-fg);
+}
+.bulk-print-modal__summary {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0.5rem;
+  padding: 0.75rem 0.85rem;
+  background: var(--color-bg-muted, #f7f8fa);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+.bulk-print-modal__summary > div {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.bulk-print-modal__summary-label {
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--color-fg-muted);
+  font-weight: 600;
+}
+.bulk-print-modal__summary-value {
+  font-size: 1.25rem;
+  font-weight: 800;
+  color: var(--color-fg-strong, var(--color-fg));
+  font-variant-numeric: tabular-nums;
+}
+.bulk-print-modal__preview {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.bulk-print-modal__preview-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  font-weight: 600;
+  color: var(--color-fg);
+}
+.bulk-print-modal__preview-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 0.55rem;
+  max-height: 32vh;
+  overflow-y: auto;
+  padding: 0.4rem;
+  background: #f1f3f7;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border);
+}
+/* Плитка-этикетка повторяет пропорции 58:38 ≈ 1.53 — глаз менеджера
+   сразу узнаёт реальную термоэтикетку. Чёрно-белая, минимум декора. */
+.bulk-print-modal__label {
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  background: #fff;
+  color: #000;
+  border: 1px solid #d4d8df;
+  border-radius: 6px;
+  aspect-ratio: 58 / 38;
+  overflow: hidden;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.06);
+}
+.bulk-print-modal__label-qr {
+  flex: 1 1 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 4px;
+  background: #fff;
+}
+.bulk-print-modal__label-qr img {
+  width: 100%;
+  height: 100%;
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  image-rendering: pixelated;
+}
+.bulk-print-modal__label-code {
+  flex: 1 1 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-weight: 900;
+  font-size: 1.5rem;
+  letter-spacing: -0.02em;
+  word-break: break-word;
+  text-align: center;
+  padding: 0 4px;
+  line-height: 1;
+}
+.bulk-print-modal__actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.bulk-print-modal__actions .btn-ghost {
+  background: transparent;
+  border: 1px solid var(--color-border);
+  color: var(--color-fg);
+}
+.bulk-print-modal__actions .btn-ghost:hover {
+  background: var(--color-bg-muted, #f1f3f7);
+}
+@media (max-width: 640px) {
+  .bulk-print-modal__settings {
+    grid-template-columns: 1fr;
+  }
+  .bulk-print-modal__summary {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* ============================================================================
+   Shopfloor display screen — большой монитор в зале (Production Board, Шаг 10b).
+   Цели:
+   - светлая тема, аккуратный «дашборд»-look (бывшая тёмная тема ушла,
+     см. историю: `apps/web/app/shopfloor/display/display-board.tsx`);
+   - layout: header → KPI-row → grid (production matrix 2/3 + equipment 1/3);
+   - производственная матрица — главный блок: «цвет × размер × stage»;
+   - equipment — компактные плитки с иконкой типа и номером (≈ 30 шт.
+     помещаются без скролла на 1080p);
+   - никаких hover/focus-состояний и интерактива — экран read-only.
+   ============================================================================ */
+.display-screen {
+  /* Light dashboard palette — намеренно изолировано от глобальной темы
+     приложения (только под `.display-screen`), чтобы остальной UI не
+     переключался в светлый режим. */
+  --display-bg: #f1f5f9;
+  --display-bg-soft: #f8fafc;
+  --display-bg-card: #ffffff;
+  --display-fg: #0f172a;
+  --display-fg-muted: #475569;
+  --display-fg-subtle: #94a3b8;
+  --display-accent: #2563eb;
+  --display-accent-soft: #dbeafe;
+  --display-ok: #16a34a;
+  --display-ok-soft: #dcfce7;
+  --display-warn: #f59e0b;
+  --display-warn-soft: #fef3c7;
+  --display-crit: #dc2626;
+  --display-crit-soft: #fee2e2;
+  --display-border: #e2e8f0;
+  --display-border-strong: #cbd5e1;
+  --display-shadow: 0 1px 2px rgba(15, 23, 42, 0.04),
+    0 4px 12px rgba(15, 23, 42, 0.04);
+  position: fixed;
+  inset: 0;
+  /* Высота: сначала `100vh` как fallback, потом `100dvh` поверх него.
+     Зачем именно две строки в таком порядке:
+       - старые embedded WebView (TV / Tizen / WebKit < 108) НЕ
+         понимают `dvh`-юнит, и без fallback'а правило целиком
+         игнорировалось бы — `position: fixed; inset: 0` всё равно
+         даёт высоту через bottom:0, но на некоторых TV-сборках
+         браузер при этом всё-таки берёт `height: auto` и схлопывает
+         board-row до content-height (видны только заголовки);
+       - современные браузеры просто перезаписывают первую строку
+         второй — поведение `100dvh` сохраняется как раньше
+         (стабильно при появлении/уходе address-bar/UI overlay).
+     Важно: cascade'е порядок имеет значение — `100dvh` ДОЛЖЕН идти
+     после `100vh`, иначе fallback перезатрёт прогрессивное правило. */
+  width: 100vw;
+  height: 100vh;
+  height: 100dvh;
+  display: grid;
+  /* header (auto) → KPI (auto) → board (1fr, занимает остаток).
+     `minmax(0, 1fr)` гарантирует, что board строка может «сжиматься»
+     до своего min-content, а не раздувать grid выше viewport — это
+     ключ к надёжному внутреннему overflow матрицы. */
+  grid-template-rows: auto auto minmax(0, 1fr);
+  gap: 1rem;
+  padding: 1.25rem 1.5rem 1.5rem;
+  background: var(--display-bg);
+  color: var(--display-fg);
+  font-family: 'Inter', system-ui, sans-serif;
+  /* Сама обёртка ничего не скроллит — скроллятся только внутренние
+     зоны (`.display-matrix__scroll` и `.display-equipment-grid`). */
+  overflow: hidden;
+  z-index: 10;
+}
+.display-screen--light {
+  /* Селектор-флаг: вариант светлой темы по умолчанию (другие варианты
+     не предусмотрены, но изолируем класс на случай будущего toggle). */
+  color-scheme: light;
+}
+.display-screen__header {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.25rem 0;
+}
+.display-screen__brand {
+  font-size: clamp(1.2rem, 1.6vw, 1.6rem);
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--display-fg);
+}
+.display-screen__brand-mark {
+  color: var(--display-accent);
+  font-size: 1.5em;
+  line-height: 1;
+}
+.display-screen__clock {
+  font-size: clamp(2rem, 3.4vw, 3.4rem);
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+  letter-spacing: 0.05em;
+  color: var(--display-fg);
+}
+.display-screen__meta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  font-size: clamp(0.85rem, 1vw, 1rem);
+  color: var(--display-fg-muted);
+}
+.display-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-weight: 600;
+}
+.display-status__dot {
+  width: 0.65rem;
+  height: 0.65rem;
+  border-radius: 50%;
+  background: currentColor;
+}
+.display-status--online {
+  color: var(--display-ok);
+}
+/* «Обновление замедлено» — есть soft-ошибки, но snapshot жив и
+   polling переведён на degraded-cadence (см. POLL_INTERVAL_DEGRADED_MS
+   в `display-board.tsx`). Жёлтый = «осторожно, но не критично». */
+.display-status--degraded {
+  color: var(--display-warn);
+}
+.display-status--offline {
+  color: var(--display-crit);
+}
+/* Auth-проблема (HTTP 401/403). Сигнал визуально близок к
+   degraded — корень проблемы в сессии, а не в сети, но snapshot
+   на экране остаётся валидным. */
+.display-status--auth {
+  color: var(--display-warn);
+}
+.display-screen__updated {
+  font-variant-numeric: tabular-nums;
+}
+
+/* KPI row ------------------------------------------------------------------ */
+.display-kpi {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 0.75rem;
+}
+@media (max-width: 1399px) {
+  .display-kpi {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+.display-kpi__card {
+  background: var(--display-bg-card);
+  border: 1px solid var(--display-border);
+  border-radius: 0.85rem;
+  padding: 0.85rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  box-shadow: var(--display-shadow);
+}
+.display-kpi__value {
+  font-size: clamp(1.6rem, 2.4vw, 2.4rem);
+  font-weight: 800;
+  line-height: 1.05;
+  font-variant-numeric: tabular-nums;
+  color: var(--display-fg);
+}
+.display-kpi__label {
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--display-fg-muted);
+  font-weight: 600;
+}
+.display-kpi__card--ok .display-kpi__value {
+  color: var(--display-ok);
+}
+.display-kpi__card--ok {
+  background: linear-gradient(180deg, var(--display-ok-soft), #ffffff 70%);
+  border-color: #bbf7d0;
+}
+.display-kpi__card--accent .display-kpi__value {
+  color: var(--display-accent);
+}
+.display-kpi__card--accent {
+  background: linear-gradient(180deg, var(--display-accent-soft), #ffffff 70%);
+  border-color: #bfdbfe;
+}
+.display-kpi__card--warn .display-kpi__value {
+  color: var(--display-warn);
+}
+.display-kpi__card--crit .display-kpi__value {
+  color: var(--display-crit);
+}
+.display-kpi__card--crit {
+  background: linear-gradient(180deg, var(--display-crit-soft), #ffffff 70%);
+  border-color: #fecaca;
+}
+
+/* Production board: матрица слева (растягивается), оборудование справа.
+   Оба блока — независимые grid items, чтобы матрица могла внутри себя
+   скроллиться без ломания equipment-плиток. */
+.display-board {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(320px, 1fr);
+  gap: 1rem;
+  /* Цепочка `min-height: 0` (display-screen → display-board →
+     production/equipment → display-block → scroll-area) ОБЯЗАТЕЛЬНА:
+     иначе flex/grid items получают неявный `min-height: auto`,
+     равный intrinsic height содержимого (длинная таблица), и тогда
+     внешние `overflow: hidden` срезают матрицу так, что на экране
+     остаются только заголовки. */
+  min-height: 0;
+  /* `min-width: 0` — симметричный fix для горизонтального overflow
+     длинных рядов матрицы; без него grid item раздувается по
+     content-width и ломает правую колонку equipment. */
+  min-width: 0;
+}
+.display-board__production,
+.display-board__equipment {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+}
+.display-board__production > .display-block,
+.display-board__equipment > .display-block {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+}
+@media (max-width: 1199px) {
+  .display-board {
+    grid-template-columns: 1fr;
+  }
+}
+
+.display-block {
+  background: var(--display-bg-card);
+  border: 1px solid var(--display-border);
+  border-radius: 1rem;
+  padding: 1rem 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+  min-height: 0;
+  overflow: hidden;
+  box-shadow: var(--display-shadow);
+}
+.display-block__title {
+  margin: 0;
+  font-size: clamp(1rem, 1.2vw, 1.3rem);
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  color: var(--display-fg-muted);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.75rem;
+}
+.display-block__title-badge {
+  font-size: 0.78em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 0.1rem 0.55rem;
+  border-radius: 999px;
+  background: var(--display-bg);
+  color: var(--display-fg);
+  border: 1px solid var(--display-border);
+}
+.display-block__title-sub {
+  font-size: 0.75em;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-transform: none;
+  color: var(--display-fg-subtle);
+}
+.display-empty {
+  font-size: clamp(1.1rem, 1.4vw, 1.5rem);
+  font-weight: 600;
+  color: var(--display-fg-subtle);
+  text-align: center;
+  /* Когда `display-empty` — единственный «контентный» ребёнок
+     `.display-block` (нет матрицы / нет оборудования), он должен
+     забрать всю остаточную высоту и центрировать сообщение, а не
+     схлопываться в одну строку у заголовка. */
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem 0;
+}
+
+/* Production matrix -------------------------------------------------------- */
+.display-matrix__scroll {
+  /* Главный фикс TV/fullscreen geometry: scroll-область матрицы
+     ОБЯЗАНА явно занимать остаток высоты внутри `.display-block` и
+     иметь `min-height: 0`, иначе flex-item получает неявный
+     `min-height: auto` = высоте таблицы → таблица не «помещается»
+     в block, а сам block огорожен `overflow: hidden`, и на экране
+     остаются только заголовки. */
+  flex: 1 1 auto;
+  min-height: 0;
+  /* Явно ставим `display: block`: scroll-ancestor для sticky `<th>`
+     должен быть устойчивым block-formatting контекстом, а не
+     случайно унаследованным flex/grid (см. ниже про sticky). */
+  display: block;
+  overflow: auto;
+  /* Изолируем repaint и контейн-границы: на TV WebKit это даёт
+     более предсказуемый sticky без «прыгающих» заголовков. */
+  contain: layout paint;
+}
+.display-matrix {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-variant-numeric: tabular-nums;
+}
+.display-matrix__th {
+  position: sticky;
+  top: 0;
+  /* Непрозрачный фон + `background-clip: padding-box` обязательны для
+     sticky `<th>`: иначе при скролле под ним просвечивают строки.
+     `z-index: 2` поднимает sticky выше color-row (z-index: 1, см.
+     ниже) — без этого блочный заголовок цвета может «налазить»
+     поверх sticky на TV/WebKit. */
+  background: var(--display-bg-soft);
+  background-clip: padding-box;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-weight: 700;
+  color: var(--display-fg-muted);
+  padding: 0.65rem 0.6rem;
+  text-align: center;
+  border-bottom: 1px solid var(--display-border-strong);
+  white-space: nowrap;
+  z-index: 2;
+}
+.display-matrix__th--first {
+  text-align: left;
+  padding-left: 1rem;
+}
+.display-matrix__th-icon {
+  display: inline-flex;
+  width: 1.1rem;
+  height: 1.1rem;
+  vertical-align: -0.2rem;
+  margin-right: 0.35rem;
+  color: var(--display-fg-muted);
+}
+.display-matrix__th-icon svg {
+  width: 100%;
+  height: 100%;
+}
+.display-matrix__th--ok {
+  color: var(--display-ok);
+}
+.display-matrix__th--ok .display-matrix__th-icon {
+  color: var(--display-ok);
+}
+.display-matrix__th--ok-soft {
+  color: var(--display-ok);
+}
+.display-matrix__th--accent {
+  color: var(--display-accent);
+}
+.display-matrix__th--accent .display-matrix__th-icon {
+  color: var(--display-accent);
+}
+.display-matrix__th--defect {
+  color: var(--display-crit);
+}
+.display-matrix__th--defect .display-matrix__th-icon {
+  color: var(--display-crit);
+}
+.display-matrix__cell {
+  padding: 0.55rem 0.6rem;
+  text-align: center;
+  font-size: clamp(1.1rem, 1.4vw, 1.5rem);
+  font-weight: 600;
+  color: var(--display-fg);
+  border-bottom: 1px solid var(--display-border);
+  /*
+   * Нужен только для ::after-оверлея flash-анимации (см.
+   * `.display-cell--changed::after`). Без `position: relative` оверлей
+   * с `position: absolute; inset: 0` ушёл бы к ближайшему позиционированному
+   * предку (целому table'у/scroll-контейнеру) и красная заливка растянулась
+   * бы по всей ширине экрана. Стоимость — 0: это чистый CSS-флаг,
+   * никакой layout-работы он не вызывает.
+   */
+  position: relative;
+}
+/*
+ * «Мигание красным» при изменении значения ячейки между двумя
+ * успешными polling-snapshot'ами (см. `computeChangedCellKeys` и
+ * `FlashCell` в display-board.tsx).
+ *
+ * Реализация через ::after-оверлей, а не через `background-color` на
+ * самой td — намеренно. Прямая анимация bg перетёрла бы базовые
+ * фоны total-row'ов (`.display-matrix__total-row` = #f8fafc,
+ * `--grand` = var(--display-fg)) и в моменты 0%/100% keyframes
+ * (когда альфа = 0) показывала бы прозрачный td поверх таблицы —
+ * визуально это «отрубило» бы фон до окончания анимации.
+ *
+ * Оверлей же:
+ *   - живёт ПОВЕРХ background'а ячейки (включая «итоговые» ряды),
+ *     поэтому сам фон td не страдает;
+ *   - имеет `pointer-events: none`, чтобы не мешать hover'у на
+ *     `.display-matrix__row` и не «съедать» клики (актуально, если
+ *     дисплей в будущем станет интерактивным);
+ *   - содержимое td в normal-flow остаётся внизу под оверлеем;
+ *     при alpha = 0.4 цифры читаются нормально на короткий промежуток
+ *     1.2 c (две итерации × 0.6 c).
+ *
+ * Сама анимация навешана на ::after, который существует только при
+ * добавленном классе `display-cell--changed`. Класс вычисляется на
+ * каждом render'е из diff'а snapshot'ов (см. `FlashCell`), поэтому
+ * никакого setState/setTimeout «внутри ячейки» нет — это чистый
+ * css transition по факту изменения className.
+ *
+ * Перезапуск анимации на двух подряд изменениях одной и той же
+ * ячейки обеспечивается ключом `key={'…|v=${value}'}` на td в
+ * `FlashCell`: при смене value React пересоздаёт DOM-узел td
+ * (а вместе с ним и ::after), и keyframes гарантированно играют
+ * заново. На «спокойных» ячейках key стабилен → remount'ов нет.
+ */
+.display-cell--changed::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-color: rgba(255, 0, 0, 0);
+  animation: display-cell-flash-red 0.6s ease-in-out 2;
+}
+@keyframes display-cell-flash-red {
+  0% {
+    background-color: rgba(255, 0, 0, 0);
+  }
+  50% {
+    background-color: rgba(255, 0, 0, 0.4);
+  }
+  100% {
+    background-color: rgba(255, 0, 0, 0);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  /*
+   * На системах с включённой опцией «уменьшить анимацию» (актуально
+   * в первую очередь для пользователей с вестибулярными расстройствами,
+   * но также часто включается на реальных TV/embedded WebView, чтобы
+   * сэкономить GPU) выключаем flash полностью. Контракт продукта —
+   * «мигание красным», без него ячейка просто молча обновится; это
+   * лучше, чем игнорировать системные настройки доступности.
+   */
+  .display-cell--changed::after {
+    animation: none;
+  }
+}
+.display-matrix__cell--ok {
+  color: var(--display-ok);
+  font-weight: 700;
+}
+.display-matrix__cell--ok-soft {
+  color: var(--display-ok);
+}
+.display-matrix__cell--accent {
+  color: var(--display-accent);
+  font-weight: 700;
+}
+.display-matrix__cell--defect {
+  color: var(--display-crit);
+}
+.display-matrix__row-label {
+  text-align: left;
+  padding: 0.55rem 0.6rem 0.55rem 1rem;
+  font-size: clamp(0.95rem, 1.1vw, 1.15rem);
+  font-weight: 600;
+  color: var(--display-fg-muted);
+  border-bottom: 1px solid var(--display-border);
+  white-space: nowrap;
+}
+.display-matrix__row:hover .display-matrix__cell,
+.display-matrix__row:hover .display-matrix__row-label {
+  background: var(--display-bg-soft);
+}
+.display-matrix__color-row .display-matrix__color-label {
+  text-align: left;
+  padding: 0.65rem 0.6rem 0.55rem 1rem;
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-weight: 700;
+  color: var(--display-fg-muted);
+  background: var(--display-bg-soft);
+  border-top: 1px solid var(--display-border-strong);
+  border-bottom: 1px solid var(--display-border);
+}
+.display-matrix__color-swatch {
+  display: inline-block;
+  width: 0.85rem;
+  height: 0.85rem;
+  border-radius: 0.2rem;
+  margin-right: 0.55rem;
+  vertical-align: -0.1rem;
+  border: 1px solid var(--display-border-strong);
+}
+.display-matrix__color-swatch--black {
+  background: #0f172a;
+}
+.display-matrix__color-swatch--white {
+  background: #ffffff;
+}
+.display-matrix__total-row .display-matrix__cell,
+.display-matrix__total-row .display-matrix__row-label {
+  font-weight: 700;
+  background: #f8fafc;
+  border-bottom: 1px solid var(--display-border-strong);
+}
+.display-matrix__total-row--grand .display-matrix__cell,
+.display-matrix__total-row--grand .display-matrix__row-label {
+  background: var(--display-fg);
+  color: #f8fafc;
+  font-size: clamp(1.15rem, 1.5vw, 1.6rem);
+  border-top: 2px solid var(--display-fg);
+  border-bottom: 0;
+}
+.display-matrix__total-row--grand .display-matrix__cell--ok,
+.display-matrix__total-row--grand .display-matrix__cell--ok-soft {
+  color: #86efac;
+}
+.display-matrix__total-row--grand .display-matrix__cell--accent {
+  color: #93c5fd;
+}
+.display-matrix__total-row--grand .display-matrix__cell--defect {
+  color: #fecaca;
+}
+
+/* Equipment panel ---------------------------------------------------------- */
+.display-equipment__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--display-fg-muted);
+}
+.display-equipment__legend-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  background: var(--display-bg-soft);
+  border: 1px solid var(--display-border);
+  font-weight: 600;
+}
+.display-equipment__legend-chip--online {
+  color: var(--display-ok);
+}
+.display-equipment__legend-chip--warning {
+  color: var(--display-warn);
+}
+.display-equipment__legend-chip--offline {
+  color: var(--display-crit);
+}
+.display-equipment-grid {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  /* ~30 рабочих мест: 5–6 в строке на ≥1080p, плиточный layout. */
+  grid-template-columns: repeat(auto-fill, minmax(64px, 1fr));
+  gap: 0.5rem;
+  /* Та же история, что и у `.display-matrix__scroll`: грид-плитки
+     должны жить внутри собственной scroll-зоны и НЕ выталкивать
+     соседей (легенду/totals) за пределы блока. Без `flex: 1 1 auto`
+     + `min-height: 0` плитки занимали бы intrinsic height грида и
+     срезались бы внешним `overflow: hidden` блока. */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  align-content: flex-start;
+}
+.display-equipment-tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.2rem;
+  aspect-ratio: 1 / 1;
+  padding: 0.45rem 0.3rem;
+  border-radius: 0.65rem;
+  background: var(--display-bg-soft);
+  border: 1px solid var(--display-border);
+  color: var(--display-fg);
+  font-variant-numeric: tabular-nums;
+  transition: none;
+}
+.display-equipment-tile__icon {
+  width: 1.4rem;
+  height: 1.4rem;
+  display: inline-flex;
+}
+.display-equipment-tile__icon svg {
+  width: 100%;
+  height: 100%;
+}
+.display-equipment-tile__num {
+  font-size: 0.95rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.display-equipment-tile--online {
+  background: var(--display-ok-soft);
+  border-color: #86efac;
+  color: #14532d;
+}
+.display-equipment-tile--online .display-equipment-tile__icon {
+  color: var(--display-ok);
+}
+.display-equipment-tile--warning {
+  background: var(--display-warn-soft);
+  border-color: #fcd34d;
+  color: #78350f;
+}
+.display-equipment-tile--warning .display-equipment-tile__icon {
+  color: var(--display-warn);
+}
+.display-equipment-tile--offline {
+  background: var(--display-bg-card);
+  border-color: var(--display-border);
+  color: var(--display-fg-subtle);
+}
+.display-equipment-tile--offline .display-equipment-tile__icon {
+  color: var(--display-fg-subtle);
+}
+.display-equipment__totals {
+  display: flex;
+  justify-content: space-between;
+  gap: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--display-border);
+  font-size: 0.85rem;
+  color: var(--display-fg-muted);
+}
+.display-equipment__total {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.3rem;
+}
+.display-equipment__total strong {
+  font-size: 1.1rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.display-equipment__total--online strong {
+  color: var(--display-ok);
+}
+.display-equipment__total--warning strong {
+  color: var(--display-warn);
+}
+.display-equipment__total--offline strong {
+  color: var(--display-crit);
+}
+
+/* Скрываем основной layout (`.app-main` padding) под этой страницей —
+   `.display-screen` уже позиционируется `fixed; inset: 0`. Дополнительно
+   убираем `max-width` и `min-height`, чтобы под fixed-обёрткой не
+   возникало случайного scrollbar'а у `<body>` на TV/embedded WebView,
+   где `:has()` поддерживается, но layout перезаписывается агрессивнее.
+   На браузерах без `:has()` экран всё равно работает: `.display-screen`
+   накрывает страницу `position: fixed` и не зависит от `.app-main`. */
+body:has(.display-screen) .app-main {
+  padding: 0;
+  max-width: none;
+  min-height: 0;
+}
+body:has(.display-screen) {
+  /* Страховка от случайного скролла body на TV: вся геометрия
+     дисплея сидит внутри `.display-screen` (fixed) и сама управляет
+     своими внутренними scroll-зонами. */
+  overflow: hidden;
+}
+
+/* TV / large-display layer ------------------------------------------------- */
+/* Цели:
+     - читаемость с расстояния 3-7 м на 44" мониторе (1920×1080 fullscreen);
+     - KPI остаётся в одну строку из 8 карточек (никакого wrap'а в 4×2);
+     - board остаётся двухколоночным (production + equipment);
+     - матрица и плитки оборудования — крупнее, но НЕ ломают chain
+       overflow (только font-size / padding / icon-size, layout цепочка
+       выше остаётся прежней).
+   Брейкпоинт `min-width: 1600px` намеренно выше десктопного (≥1199),
+   чтобы laptop/desktop-вид (1280-1440) не перерастал в TV-режим.
+   Все правила скоупаны под `.display-screen` — на остальные страницы
+   приложения этот слой не влияет. */
+@media (min-width: 1600px) {
+  .display-screen {
+    padding: 1.5rem 1.75rem 1.75rem;
+    gap: 1.25rem;
+  }
+  .display-screen__brand {
+    font-size: 1.8rem;
+  }
+  .display-screen__clock {
+    font-size: 4rem;
+  }
+  .display-screen__meta {
+    font-size: 1.1rem;
+  }
+  .display-kpi {
+    gap: 1rem;
+  }
+  .display-kpi__card {
+    padding: 1rem 1.15rem;
+  }
+  .display-kpi__value {
+    font-size: 2.8rem;
+  }
+  .display-kpi__label {
+    font-size: 0.95rem;
+  }
+  .display-block__title {
+    font-size: 1.35rem;
+  }
+  .display-matrix__th {
+    font-size: 1rem;
+    padding: 0.85rem 0.7rem;
+  }
+  .display-matrix__cell {
+    font-size: 1.7rem;
+    padding: 0.7rem 0.7rem;
+  }
+  .display-matrix__row-label {
+    font-size: 1.25rem;
+    padding: 0.7rem 0.7rem 0.7rem 1.1rem;
+  }
+  .display-matrix__total-row--grand .display-matrix__cell,
+  .display-matrix__total-row--grand .display-matrix__row-label {
+    font-size: 1.85rem;
+  }
+  .display-equipment-grid {
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 0.6rem;
+  }
+  .display-equipment-tile__icon {
+    width: 1.7rem;
+    height: 1.7rem;
+  }
+  .display-equipment-tile__num {
+    font-size: 1.15rem;
+  }
+  .display-equipment__totals {
+    font-size: 1rem;
+  }
+  .display-equipment__total strong {
+    font-size: 1.3rem;
+  }
+}
+
+/* 4K / большие панели (≥ 2400px). Только дополнительный апскейл шрифтов
+   и плиток; layout остаётся таким же двухколоночным. */
+@media (min-width: 2400px) {
+  .display-screen__clock {
+    font-size: 5rem;
+  }
+  .display-kpi__value {
+    font-size: 3.4rem;
+  }
+  .display-matrix__cell {
+    font-size: 2rem;
+  }
+  .display-matrix__total-row--grand .display-matrix__cell,
+  .display-matrix__total-row--grand .display-matrix__row-label {
+    font-size: 2.2rem;
+  }
+  .display-equipment-grid {
+    grid-template-columns: repeat(auto-fill, minmax(96px, 1fr));
+  }
+  .display-equipment-tile__icon {
+    width: 2rem;
+    height: 2rem;
+  }
+  .display-equipment-tile__num {
+    font-size: 1.4rem;
+  }
+}

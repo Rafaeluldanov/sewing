@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 ### AL ###
 #Template for AL projects for Dynamics 365 Business Central
 #launch.json folder
@@ -21,3 +22,27 @@ rad.json
 *.flf
 #Test results file
 TestResults.xml
+=======
+node_modules/
+dist/
+.next/
+coverage/
+.DS_Store
+*.log
+
+# env
+.env
+.env.*
+!.env.example
+
+# prisma
+prisma/*.db
+prisma/*.db-journal
+
+# storage
+storage/
+
+# editor
+.idea/
+.vscode/
+>>>>>>> fec938a (initial checkpoint: sewing project)

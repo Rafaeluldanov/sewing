@@ -1,0 +1,40 @@
+{
+  "name": "@sewing/shared",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Общие типы и Zod-схемы (DTO) для web и api.",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts",
+    "./orders": "./src/orders.ts",
+    "./passports": "./src/passports.ts",
+    "./shifts": "./src/shifts.ts",
+    "./equipment": "./src/equipment.ts",
+    "./qc": "./src/qc.ts",
+    "./wto": "./src/wto.ts",
+    "./packing": "./src/packing.ts",
+    "./earnings": "./src/earnings.ts",
+    "./shopfloor": "./src/shopfloor.ts",
+    "./admin": "./src/admin.ts",
+    "./cutting-closure": "./src/cutting-closure.ts",
+    "./warehouses": "./src/warehouses.ts",
+    "./operations": "./src/operations.ts",
+    "./salary": "./src/salary.ts",
+    "./employees": "./src/employees.ts",
+    "./costs": "./src/costs.ts",
+    "./dashboard": "./src/dashboard.ts",
+    "./printers": "./src/printers.ts",
+    "./config": "./src/config.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit -p tsconfig.json"
+  },
+  "dependencies": {
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  }
+}
