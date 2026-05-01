@@ -58,7 +58,6 @@ describeWithDb('integration — warehouses (ADR-0019)', () => {
         login: 'rbac-admin',
         fullName: 'RBAC Admin',
         role: 'ADMIN',
-        paymentType: 'SALARY',
         active: true,
         pinHash: adminPin,
       },

@@ -1,6 +1,5 @@
 import { Injectable } from '@nestjs/common';
 import {
-  CompensationType,
   OperationCategory,
   OrderStatus,
   PassportEventType,
@@ -29,6 +28,7 @@ import {
 } from '../shopfloor/shopfloor-projection.js';
 import { CostsService } from '../costs/costs.service.js';
 import { PassportDurationsService } from '../costs/passport-durations.service.js';
+import { isSalaryEligible } from '../employees/compensation.js';
 
 /**
  * Сервис управленческого дашборда «Дашборд начальника производства»
@@ -210,6 +210,7 @@ export class DashboardService {
         qtyGood: true,
         qtyDefect: true,
         status: true,
+        currentEmployeeId: true,
         currentOperation: { select: { category: true } },
         boxItems: {
           select: { box: { select: { closedAt: true } } },
@@ -286,6 +287,7 @@ export class DashboardService {
         qtyDefect: p.qtyDefect,
         status: p.status,
         currentOperationCategory: p.currentOperation?.category ?? null,
+        currentEmployeeId: p.currentEmployeeId,
         hasOpenBox: p.boxItems.some((bi) => bi.box.closedAt === null),
         hasFreshQcPassed: freshQcPassedSet.has(p.id),
         hasFreshWtoPassed: freshWtoPassedSet.has(p.id),
@@ -400,12 +402,7 @@ export class DashboardService {
       if (!role) continue;
       // В salaried-мн-во кладём только окладных — у `PIECEWORK` ставки
       // нет, простой ему не считаем (см. CostsService.idleCost логика).
-      if (
-        emp.compensationType !== CompensationType.SALARY &&
-        emp.compensationType !== CompensationType.MIXED
-      ) {
-        continue;
-      }
+      if (!isSalaryEligible(emp.compensationType)) continue;
       acc.get(role)!.salariedEmps.add(emp.id);
     }
 
@@ -581,12 +578,7 @@ export class DashboardService {
     let best: { employeeId: string; fullName: string; idleMinutes: number } | null =
       null;
     for (const e of employees) {
-      if (
-        e.compensationType !== CompensationType.SALARY &&
-        e.compensationType !== CompensationType.MIXED
-      ) {
-        continue;
-      }
+      if (!isSalaryEligible(e.compensationType)) continue;
       const tracked = trackedByEmployee.get(e.id) ?? 0;
       const idle = Math.max(0, SHIFT_MINUTES - tracked);
       if (!best || idle > best.idleMinutes) {

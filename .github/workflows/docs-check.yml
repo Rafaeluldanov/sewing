@@ -1,0 +1,27 @@
+name: Docs consistency
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: ["**"]
+
+jobs:
+  docs-check:
+    name: docs-check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+
+      - name: Install root dependencies (no postinstall)
+        run: npm ci --ignore-scripts
+
+      - name: Run docs:check
+        run: npm run docs:check

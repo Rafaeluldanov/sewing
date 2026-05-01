@@ -3,13 +3,18 @@
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
-import type {
-  OrderDetailDto,
-  ProductDto,
-  SizeDto,
+import {
+  ORDER_DIVISIONS,
+  ORDER_DIVISION_LABELS,
+  type OrderDetailDto,
+  type ProductDto,
+  type SizeDto,
 } from '@sewing/shared/orders';
+import type { ClientDto } from '@sewing/shared/clients';
+import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
+import { AdminDateField } from '@/components/admin/admin-date-field';
 import { updateOrderAction, type FormActionState } from '../../actions';
 
 interface Props {
@@ -28,6 +33,19 @@ interface Props {
    * показывается в селекте, даже если шаблон уже деактивирован.
    */
   techCards: TechCardTemplateSummaryDto[];
+  /**
+   * Активные карточки клиентов (см. `model Client`). Селект клиента
+   * показывается только если массив непустой; текущая привязка
+   * заказа всегда добавляется отдельной опцией, даже если клиент
+   * уже архивирован.
+   */
+  clients: ClientDto[];
+  /**
+   * Soft-pattern MVP (этап 2 «Лекала»): активные карточки лекал
+   * (плюс автоматически добавленная архивная карточка, если она
+   * уже привязана к заказу). См. `page.tsx` рядом.
+   */
+  patterns: PatternListItemDto[];
 }
 
 const initialState: FormActionState = {};
@@ -47,6 +65,8 @@ export function EditOrderForm({
   products,
   routeTemplates,
   techCards,
+  clients,
+  patterns,
 }: Props) {
   const action = updateOrderAction.bind(null, order.id);
   const [state, formAction] = useFormState(action, initialState);
@@ -64,6 +84,10 @@ export function EditOrderForm({
   }, [order.items]);
 
   const orderDateValue = order.orderDate.slice(0, 10);
+  const dueDateValue = order.dueDate ? order.dueDate.slice(0, 10) : '';
+
+  const currentClient = order.client;
+  const showClientSelect = clients.length > 0 || Boolean(currentClient);
 
   return (
     <form action={formAction} className="card">
@@ -72,15 +96,66 @@ export function EditOrderForm({
       <div className="form-row">
         <label htmlFor="orderDate">Дата заказа</label>
         <div>
-          <input
+          <AdminDateField
             id="orderDate"
             name="orderDate"
-            type="date"
             required
             defaultValue={orderDateValue}
           />
         </div>
       </div>
+
+      <div className="form-row">
+        <label htmlFor="dueDate">Срок сдачи</label>
+        <div>
+          <AdminDateField
+            id="dueDate"
+            name="dueDate"
+            defaultValue={dueDateValue}
+          />
+          <div className="hint">
+            Когда заказ должен быть готов. Поле опциональное.
+          </div>
+        </div>
+      </div>
+
+      {showClientSelect && (
+        <div className="form-row">
+          <label htmlFor="clientId">Клиент</label>
+          <div>
+            <select
+              id="clientId"
+              name="clientId"
+              defaultValue={currentClient?.id ?? ''}
+            >
+              <option value="">— без клиента —</option>
+              {/*
+                Если у заказа уже привязан клиент, которого нет в
+                списке активных (архивирован), всё равно показываем
+                его опцией — иначе при сохранении формы привязка
+                пропадёт без явного действия пользователя.
+              */}
+              {currentClient &&
+                !clients.some((c) => c.id === currentClient.id) && (
+                  <option value={currentClient.id}>
+                    {currentClient.name} — архивный
+                  </option>
+                )}
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                  {c.isActive ? '' : ' — архивный'}
+                </option>
+              ))}
+            </select>
+            <div className="hint">
+              Поле опциональное. Если клиент не выбран, в карточке
+              заказа отображается «свободный» заказчик из
+              `customer`.
+            </div>
+          </div>
+        </div>
+      )}
 
       <div className="form-row">
         <label htmlFor="productId">Изделие</label>
@@ -98,6 +173,27 @@ export function EditOrderForm({
               </option>
             ))}
           </select>
+        </div>
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="division">Подразделение</label>
+        <div>
+          <select
+            id="division"
+            name="division"
+            defaultValue={order.division}
+            required
+          >
+            {ORDER_DIVISIONS.map((d) => (
+              <option key={d} value={d}>
+                {ORDER_DIVISION_LABELS[d]}
+              </option>
+            ))}
+          </select>
+          <div className="hint">
+            Менять можно только пока заказ в DRAFT.
+          </div>
         </div>
       </div>
 
@@ -190,6 +286,48 @@ export function EditOrderForm({
             <div className="hint">
               Менять техкарту можно только до запуска заказа в производство —
               после `start()` план потребностей фиксируется snapshot-ом.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/*
+        Soft-pattern MVP (этап 2 «Лекала»): селект лекала. Семантика
+        и UX идентичны techCard / routeTemplate. Поле опциональное —
+        старые заказы без лекала остаются валидными.
+      */}
+      {(patterns.length > 0 || order.patternItemId) && (
+        <div className="form-row">
+          <label htmlFor="patternItemId">Лекало</label>
+          <div>
+            <select
+              id="patternItemId"
+              name="patternItemId"
+              defaultValue={order.patternItemId ?? ''}
+            >
+              <option value="">— без лекала —</option>
+              {order.patternItemId &&
+                !patterns.some((p) => p.id === order.patternItemId) && (
+                  <option value={order.patternItemId}>
+                    {order.patternName ??
+                      order.patternNameSnapshot ??
+                      'Текущее лекало'}
+                    {order.patternArticle ?? order.patternArticleSnapshot
+                      ? ` (${order.patternArticle ?? order.patternArticleSnapshot})`
+                      : ''}{' '}
+                    — архивное
+                  </option>
+                )}
+              {patterns.map((pt) => (
+                <option key={pt.id} value={pt.id}>
+                  {pt.name} ({pt.article})
+                  {pt.status !== 'ACTIVE' ? ` — ${pt.status}` : ''}
+                </option>
+              ))}
+            </select>
+            <div className="hint">
+              Менять лекало можно только до запуска заказа в производство —
+              после `start()` поля лекала фиксируются snapshot-ом.
             </div>
           </div>
         </div>

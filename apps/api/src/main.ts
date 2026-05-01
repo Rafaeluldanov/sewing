@@ -1,13 +1,15 @@
 import 'reflect-metadata';
 import { Logger, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
+import { join, resolve } from 'node:path';
 import { AppModule } from './app.module.js';
 import { API_PREFIX } from '@sewing/shared/config';
 import { GlobalExceptionFilter } from './common/global-exception.filter.js';
 import { requestIdMiddleware } from './common/request-id.middleware.js';
 
 async function bootstrap(): Promise<void> {
-  const app = await NestFactory.create(AppModule, {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     logger: ['log', 'error', 'warn'],
   });
 
@@ -21,6 +23,21 @@ async function bootstrap(): Promise<void> {
     }),
   );
   app.useGlobalFilters(new GlobalExceptionFilter());
+
+  // Раздача загруженных пользовательских файлов (модуль «Лекала», MVP-1).
+  // Storage сервис пишет в `<uploadsRoot>/patterns/...` и возвращает URL вида
+  // `/uploads/patterns/...`; здесь Express serves тот же префикс. Каталог
+  // НЕ внутри `setGlobalPrefix('api')`: это не Nest-route, а статический
+  // mount, и менеджеру удобно открывать `/uploads/...` напрямую без `/api`.
+  // На stage/prod каталог должен быть persisted (NFS / docker volume).
+  const uploadsRoot = resolve(
+    process.env.PATTERNS_UPLOADS_DIR ?? join(process.cwd(), 'apps/api/uploads'),
+  );
+  app.useStaticAssets(uploadsRoot, {
+    prefix: '/uploads',
+    fallthrough: true,
+  });
+  Logger.log(`Static uploads root: ${uploadsRoot} → /uploads`, 'Bootstrap');
 
   // CORS (MVP 1.1): разрешаем сконфигурированный APP_URL и
   // дополнительный список из CORS_ALLOWED_ORIGINS (через запятую).

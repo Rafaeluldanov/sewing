@@ -1,9 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import {
   ApprovalMode,
   EarningSource,
   EntryStatus,
-  PaymentType,
+  OperationCategory,
   Prisma,
 } from '@prisma/client';
 import type {
@@ -13,10 +13,29 @@ import type {
   EarningsSummaryQuery,
   ListEarningsQuery,
 } from '@sewing/shared/earnings';
+import {
+  CUTTER_COMPENSATION_SCHEME_LABELS,
+  getCutterCompensationSchemeForDivision,
+  type CutterCompensationScheme,
+} from '@sewing/shared/cutter-compensation';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OperationsService } from '../operations/operations.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { isPieceworkEligible } from '../employees/compensation.js';
 import { isEarningsManager } from './earnings.constants.js';
+
+/**
+ * Имя ENV-переменной с fallback-процентом B2B-начисления закройщика.
+ * Используется, когда у конкретного сотрудника `Employee.
+ * cutterB2bSewingPercent IS NULL` — см. recon
+ * `docs/payroll-cutter-compensation-recon.md`. Значение читается
+ * из `process.env`, нормализуется (запятая/точка, два знака после
+ * запятой) и валидируется в `[0; 100]`. Если ENV пустой / битый —
+ * возвращается `null` и `EarningsService` тихо пропускает создание
+ * B2B-начисления (audit warning «Не задан процент…»).
+ */
+export const CUTTER_B2B_SEWING_PERCENT_ENV = 'CUTTER_B2B_SEWING_PERCENT';
 
 /**
  * Сервис сдельных начислений (Шаг 9 MVP).
@@ -29,8 +48,11 @@ import { isEarningsManager } from './earnings.constants.js';
  *    - deferred-начисление швее за предыдущую операцию в
  *      `PassportsService.scanOnOperation` (`createPendingForPreviousOperation`).
  *
- * 2. Подтверждает все pending-начисления паспорта в момент упаковки
- *    (`approvePendingForPassport`, вызывается из `PackingService.addPassport`).
+ * 2. Подтверждает все pending-начисления паспорта в момент закрытия
+ *    коробки (`approvePendingForPassport`, вызывается из
+ *    `PackingService.close()` после `box.update({ closedAt })` и
+ *    проходит по `BoxItem.passportId` в той же транзакции; см.
+ *    `docs/events.md §9.6`, `docs/production-flow.md §10.4`/`§11.3`).
  *
  * 3. Отдаёт три read-метода под минимальный API/UI просмотра
  *    (`list`, `summary`, `listByPassport`).
@@ -45,9 +67,12 @@ import { isEarningsManager } from './earnings.constants.js';
  */
 @Injectable()
 export class EarningsService {
+  private readonly logger = new Logger(EarningsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly operations: OperationsService,
+    private readonly audit: AuditService,
   ) {}
 
   // ===========================================================================
@@ -61,9 +86,33 @@ export class EarningsService {
    *   `operationId = CUT_CUT`, `qty = passport.qtyCut`,
    *   `status = APPROVED`, `approvedAt = now()`.
    *
-   * Если у раскройщика `paymentType ≠ PIECEWORK` — ничего не создаём.
-   * Это покрывает кейс, когда демо-раскройщик случайно посажен на
-   * оклад (на проде раскройщик-сдельщик — норма).
+   * Получает ли раскройщик сдельщину — спрашиваем у `isPieceworkEligible`
+   * (ADR-0021): `PIECEWORK`/`MIXED` ⇒ да, чистый `SALARY` ⇒ silent skip
+   * (на проде раскройщик-сдельщик — норма; кейс с раскройщиком на
+   * окладе мы сознательно поддерживаем без падения).
+   *
+   * Со схемы `B2B cutter compensation` (см.
+   * `docs/payroll-cutter-compensation-recon.md`) метод выбирает одну
+   * из двух схем по `Order.division`:
+   *
+   *   - `MARKETPLACE_FIXED` (default для `division = MARKETPLACE`):
+   *     старая схема `amount = Operation(CUT_CUT).fixedRate ×
+   *     passport.qtyCut`. Marketplace-flow не меняется ни по
+   *     `operationId`, ни по `sourceEventType`, ни по
+   *     `approvalMode`/`status` — только продолжаем эту ветку 1-в-1.
+   *
+   *   - `B2B_SEWING_PERCENT` (для `division = OTHER`/`B2B`):
+   *     `amount = base × percent / 100`, где
+   *     `base = Σ rate(SEWING-операция, размер) × qtyForCompensation`,
+   *     `percent = employee.cutterB2bSewingPercent ?? ENV
+   *     CUTTER_B2B_SEWING_PERCENT`. `ratePerUnit` для UI считается как
+   *     `amount / qtyForCompensation`.
+   *
+   * Триггер начисления (`PassportsService.create`) и ключ
+   * идемпотентности (`@@unique([passportId, operationId, employeeId,
+   * sourceEventType])`) сознательно остаются прежними. Повторный
+   * trigger приводит к `P2002` и тихому skip в `safeCreate` — даже
+   * между двумя схемами начисления.
    *
    * Должен вызываться из той же транзакции, что и
    * `passport.create`, чтобы зарплата и паспорт жили атомарно.
@@ -82,10 +131,15 @@ export class EarningsService {
 
     const employee = await tx.employee.findUnique({
       where: { id: args.cutterId },
-      select: { id: true, paymentType: true, active: true },
+      select: {
+        id: true,
+        compensationType: true,
+        active: true,
+        cutterB2bSewingPercent: true,
+      },
     });
     if (!employee || !employee.active) return;
-    if (employee.paymentType !== PaymentType.PIECEWORK) return;
+    if (!isPieceworkEligible(employee.compensationType)) return;
 
     const op = await tx.operation.findUnique({
       where: { code: 'CUT_CUT' },
@@ -95,14 +149,70 @@ export class EarningsService {
     // Если раскрой переведён на оклад — никаких сдельных начислений.
     if (op.pricingMode === 'SALARY_ONLY') return;
 
-    const rate = await this.operations.resolveRate(op.id, args.sizeId, tx);
+    // Source of truth для выбора схемы — `Order.division` (см.
+    // `getCutterCompensationSchemeForDivision`). Marketplace
+    // продолжает старый путь 1-в-1; всё остальное (`OTHER` legacy
+    // B2B + будущий явный `B2B`) идёт через процент от пошива.
+    const passport = await tx.passport.findUnique({
+      where: { id: args.passportId },
+      select: { orderId: true, order: { select: { division: true } } },
+    });
+    if (!passport) return;
+    const scheme = getCutterCompensationSchemeForDivision(
+      passport.order.division,
+    );
+
+    if (scheme === 'MARKETPLACE_FIXED') {
+      await this.createImmediateForCutterMarketplace(tx, {
+        passportId: args.passportId,
+        orderId: passport.orderId,
+        operationId: op.id,
+        employeeId: employee.id,
+        sizeId: args.sizeId,
+        qty: args.qty,
+      });
+      return;
+    }
+
+    await this.createImmediateForCutterB2b(tx, {
+      passportId: args.passportId,
+      orderId: passport.orderId,
+      operationId: op.id,
+      employeeId: employee.id,
+      employeePercent: employee.cutterB2bSewingPercent,
+      sizeId: args.sizeId,
+      qty: args.qty,
+    });
+  }
+
+  /**
+   * Marketplace-схема (старая): `amount = Operation.fixedRate × qty`
+   * (через `OperationsService.resolveRate`, который умеет и BY_SIZE).
+   * Контракт прежний — см. `createImmediateForCutter` JSDoc.
+   */
+  private async createImmediateForCutterMarketplace(
+    tx: Prisma.TransactionClient,
+    args: {
+      passportId: string;
+      orderId: string;
+      operationId: string;
+      employeeId: string;
+      sizeId: string;
+      qty: number;
+    },
+  ): Promise<void> {
+    const rate = await this.operations.resolveRate(
+      args.operationId,
+      args.sizeId,
+      tx,
+    );
     if (!rate) return;
 
     const amount = roundMoney(rate.times(args.qty));
-    await this.safeCreate(tx, {
+    const created = await this.safeCreate(tx, {
       passportId: args.passportId,
-      operationId: op.id,
-      employeeId: employee.id,
+      operationId: args.operationId,
+      employeeId: args.employeeId,
       qty: args.qty,
       ratePerUnit: rate,
       amount,
@@ -112,6 +222,471 @@ export class EarningsService {
       sourceEventId: null,
       approvedAt: new Date(),
     });
+
+    if (created) {
+      // Audit пишем только когда реально создали запись (а не получили
+      // P2002 на повторном trigger). Это спасает от шума в журнале при
+      // идемпотентных повторных вызовах.
+      await this.logCutterAudit(tx, 'MARKETPLACE_FIXED', {
+        passportId: args.passportId,
+        orderId: args.orderId,
+        employeeId: args.employeeId,
+        amount: roundMoneyNumber(amount),
+        ratePerUnit: roundMoneyNumber(rate),
+        qty: args.qty,
+      });
+    }
+  }
+
+  /**
+   * B2B-схема: `amount = base × percent / 100`. База берётся из
+   * `calculateB2bSewingOperationBaseForPassport` — суммы плановых
+   * операций пошива заказа по маршруту. Процент — из
+   * `Employee.cutterB2bSewingPercent` или fallback из ENV
+   * `CUTTER_B2B_SEWING_PERCENT`. Если процент не задан вообще,
+   * начисление сознательно НЕ создаётся (audit warning) — это
+   * безопаснее, чем тихо записать 0 ₽ и сбить с толку менеджера.
+   */
+  private async createImmediateForCutterB2b(
+    tx: Prisma.TransactionClient,
+    args: {
+      passportId: string;
+      orderId: string;
+      operationId: string;
+      employeeId: string;
+      employeePercent: Prisma.Decimal | null;
+      sizeId: string;
+      qty: number;
+    },
+  ): Promise<void> {
+    const percent = this.resolveCutterB2bPercent(args.employeePercent);
+    if (!percent) {
+      this.logger.warn(
+        `event=earnings.cutter.b2b.skip reason=no-percent passportId=${args.passportId} orderId=${args.orderId} employeeId=${args.employeeId}`,
+      );
+      await this.audit.log(
+        {
+          event: 'CUTTER_B2B_PERCENT_MISSING',
+          entityType: 'PASSPORT',
+          entityId: args.passportId,
+          employeeId: args.employeeId,
+          payload: {
+            scheme: 'B2B_SEWING_PERCENT' satisfies CutterCompensationScheme,
+            schemeLabel: CUTTER_COMPENSATION_SCHEME_LABELS.B2B_SEWING_PERCENT,
+            orderId: args.orderId,
+            warning: 'Не задан процент начисления закройщика для B2B',
+          },
+        },
+        tx,
+      );
+      return;
+    }
+
+    const base = await this.calculateB2bSewingOperationBaseForPassport(
+      tx,
+      args.passportId,
+    );
+    const baseAmountRub = base.baseAmountRub;
+    const qtyForCompensation = base.qtyForCompensation;
+
+    const amount = roundMoney(
+      baseAmountRub.times(percent).dividedBy(new Prisma.Decimal(100)),
+    );
+
+    if (qtyForCompensation <= 0 || amount.isZero()) {
+      // На MVP не создаём «нулевое» начисление — это и для UI
+      // прозрачнее («не было начисления» → не было), и не плодит
+      // лишних строк. Маршрут не назначен / нет ставок — попадает
+      // сюда же; warning'и из base уже в audit.
+      this.logger.warn(
+        `event=earnings.cutter.b2b.skip reason=zero-amount passportId=${args.passportId} base=${roundMoneyNumber(baseAmountRub)} percent=${percent.toString()} qtyForCompensation=${qtyForCompensation}`,
+      );
+      await this.audit.log(
+        {
+          event: 'CUTTER_B2B_AMOUNT_ZERO',
+          entityType: 'PASSPORT',
+          entityId: args.passportId,
+          employeeId: args.employeeId,
+          payload: {
+            scheme: 'B2B_SEWING_PERCENT' satisfies CutterCompensationScheme,
+            schemeLabel: CUTTER_COMPENSATION_SCHEME_LABELS.B2B_SEWING_PERCENT,
+            orderId: args.orderId,
+            baseAmountRub: roundMoneyNumber(baseAmountRub),
+            percent: Number(percent.toFixed(2)),
+            qtyForCompensation,
+            operationsCount: base.operations.length,
+            operations: base.operations.map((o) => ({
+              operationId: o.operationId,
+              operationCode: o.operationCode,
+              operationName: o.operationName,
+              pricingMode: o.pricingMode,
+              rate: roundMoneyNumber(o.rate),
+              qty: o.qty,
+              amount: roundMoneyNumber(o.amount),
+            })),
+            warnings: base.warnings,
+          },
+        },
+        tx,
+      );
+      return;
+    }
+
+    // ratePerUnit = amount / qtyForCompensation. Хранится в
+    // `Decimal(12, 2)` — round half-up, как и `amount`.
+    const ratePerUnit = roundMoney(
+      amount.dividedBy(new Prisma.Decimal(qtyForCompensation)),
+    );
+
+    const created = await this.safeCreate(tx, {
+      passportId: args.passportId,
+      operationId: args.operationId,
+      employeeId: args.employeeId,
+      // qty в `OperationEntry` оставляем = `passport.qtyCut` (тот же
+      // `args.qty`, что приходит снаружи). Это сохраняет UI
+      // начислений: «начисление за N единиц». Истинное `qty` для
+      // расчёта суммы (qtyForCompensation) для UI не критично —
+      // оно фигурирует только в audit-payload.
+      qty: args.qty,
+      ratePerUnit,
+      amount,
+      status: EntryStatus.APPROVED,
+      approvalMode: ApprovalMode.IMMEDIATE,
+      sourceEventType: EarningSource.PASSPORT_CREATED,
+      sourceEventId: null,
+      approvedAt: new Date(),
+    });
+
+    if (created) {
+      await this.logCutterAudit(tx, 'B2B_SEWING_PERCENT', {
+        passportId: args.passportId,
+        orderId: args.orderId,
+        employeeId: args.employeeId,
+        amount: roundMoneyNumber(amount),
+        ratePerUnit: roundMoneyNumber(ratePerUnit),
+        qty: args.qty,
+        baseAmountRub: roundMoneyNumber(baseAmountRub),
+        percent: Number(percent.toFixed(2)),
+        qtyForCompensation,
+        operationsCount: base.operations.length,
+        operations: base.operations.map((o) => ({
+          operationId: o.operationId,
+          operationCode: o.operationCode,
+          operationName: o.operationName,
+          pricingMode: o.pricingMode,
+          rate: roundMoneyNumber(o.rate),
+          qty: o.qty,
+          amount: roundMoneyNumber(o.amount),
+        })),
+        warnings: base.warnings,
+      });
+    }
+  }
+
+  /**
+   * Резолвит процент B2B-начисления для конкретного сотрудника.
+   * Приоритет:
+   *
+   *   1. `Employee.cutterB2bSewingPercent` (если задан и валиден);
+   *   2. ENV `CUTTER_B2B_SEWING_PERCENT` (string, normalize запятой,
+   *      валидируется в `[0; 100]`);
+   *   3. `null` — процент не задан, B2B-начисление не создаётся.
+   *
+   * Если значение из БД или ENV вне диапазона `(0; 100]` — возвращаем
+   * `null` (тот же эффект «не задан»). 0 % трактуем как «не задано» —
+   * нет смысла создавать начисление на 0 ₽.
+   */
+  private resolveCutterB2bPercent(
+    employeePercent: Prisma.Decimal | null,
+  ): Prisma.Decimal | null {
+    if (employeePercent !== null && employeePercent !== undefined) {
+      const num = Number(employeePercent);
+      if (Number.isFinite(num) && num > 0 && num <= 100) {
+        return new Prisma.Decimal(num.toFixed(2));
+      }
+    }
+
+    const raw = process.env[CUTTER_B2B_SEWING_PERCENT_ENV];
+    if (!raw) return null;
+    const normalized = raw.trim().replace(',', '.');
+    if (normalized === '') return null;
+    const parsed = Number(normalized);
+    if (!Number.isFinite(parsed) || parsed <= 0 || parsed > 100) {
+      this.logger.warn(
+        `event=earnings.cutter.b2b.env_invalid env=${CUTTER_B2B_SEWING_PERCENT_ENV} value=${raw}`,
+      );
+      return null;
+    }
+    return new Prisma.Decimal(parsed.toFixed(2));
+  }
+
+  /**
+   * Запись audit-события успешного создания cutter-начисления.
+   * Вынесено в helper, чтобы оба пути (marketplace / b2b) писали
+   * единый формат payload (`scheme`, `schemeLabel`, `amount`,
+   * `ratePerUnit`, `qty`) и расширения шли в одном месте.
+   */
+  private async logCutterAudit(
+    tx: Prisma.TransactionClient,
+    scheme: CutterCompensationScheme,
+    payload: {
+      passportId: string;
+      orderId: string;
+      employeeId: string;
+      amount: number;
+      ratePerUnit: number;
+      qty: number;
+      // Дополнительные поля для B2B (необязательные):
+      baseAmountRub?: number;
+      percent?: number;
+      qtyForCompensation?: number;
+      operationsCount?: number;
+      operations?: Array<Record<string, unknown>>;
+      warnings?: string[];
+    },
+  ): Promise<void> {
+    // `Prisma.InputJsonValue` не пропускает `undefined`, поэтому
+    // собираем payload без spread-а опциональных полей и аккуратно
+    // выкидываем `undefined`.
+    const auditPayload: Record<string, unknown> = {
+      scheme,
+      schemeLabel: CUTTER_COMPENSATION_SCHEME_LABELS[scheme],
+      orderId: payload.orderId,
+      amount: payload.amount,
+      ratePerUnit: payload.ratePerUnit,
+      qty: payload.qty,
+    };
+    if (payload.baseAmountRub !== undefined) {
+      auditPayload.baseAmountRub = payload.baseAmountRub;
+    }
+    if (payload.percent !== undefined) {
+      auditPayload.percent = payload.percent;
+    }
+    if (payload.qtyForCompensation !== undefined) {
+      auditPayload.qtyForCompensation = payload.qtyForCompensation;
+    }
+    if (payload.operationsCount !== undefined) {
+      auditPayload.operationsCount = payload.operationsCount;
+    }
+    if (payload.operations !== undefined) {
+      auditPayload.operations = payload.operations;
+    }
+    if (payload.warnings !== undefined) {
+      auditPayload.warnings = payload.warnings;
+    }
+
+    await this.audit.log(
+      {
+        event: 'CUTTER_EARNING_CREATED',
+        entityType: 'PASSPORT',
+        entityId: payload.passportId,
+        employeeId: payload.employeeId,
+        payload: auditPayload as Prisma.InputJsonValue,
+      },
+      tx,
+    );
+  }
+
+  // ===========================================================================
+  // CREATE: cutter (b2b base helper)
+  // ===========================================================================
+
+  /**
+   * Считает плановую сумму операций пошива по маршруту заказа для
+   * конкретного паспорта (см. `docs/payroll-cutter-compensation-recon.md
+   * §6 «Контракт нового метода»`). Используется как `base` в B2B-схеме
+   * начисления закройщика.
+   *
+   * Алгоритм:
+   *
+   *   1. Загружает паспорт + snapshot маршрута заказа
+   *      (`Order.routeSteps[].operation`) и фильтрует шаги по
+   *      `Operation.category = SEWING`.
+   *   2. `qtyForCompensation = passport.qtyCut > 0 ? passport.qtyCut :
+   *      passport.qtyPlan` (на момент создания паспорта совпадают,
+   *      но в будущих повторных trigger'ах qtyCut может уже быть
+   *      зафиксирован).
+   *   3. Для каждой швейной операции резолвит ставку по `pricingMode`:
+   *      - `FIXED` — `Operation.fixedRate`;
+   *      - `BY_SIZE` — `OperationRateBySize` для `passport.sizeId`;
+   *      - `SALARY_ONLY` — пропускает (не попадает в base).
+   *   4. Складывает `Σ rate × qtyForCompensation`. Результат
+   *      округляется до 2 знаков.
+   *
+   * Если ставка отсутствует (нет `OperationRateBySize` для размера,
+   * `FIXED` без `fixedRate`, etc.) — операция в base не попадает,
+   * добавляется warning. Workflow не падает.
+   *
+   * Метод сделан `public`, чтобы его можно было дёргать из тестов
+   * напрямую и из будущих audit-команд (например, «покажи мне base
+   * для этого паспорта без создания начисления»).
+   */
+  async calculateB2bSewingOperationBaseForPassport(
+    tx: Prisma.TransactionClient,
+    passportId: string,
+  ): Promise<{
+    baseAmountRub: Prisma.Decimal;
+    qtyForCompensation: number;
+    operations: Array<{
+      operationId: string;
+      operationCode: string;
+      operationName: string;
+      pricingMode: string;
+      rate: Prisma.Decimal;
+      qty: number;
+      amount: Prisma.Decimal;
+    }>;
+    warnings: string[];
+  }> {
+    const warnings: string[] = [];
+    const passport = await tx.passport.findUnique({
+      where: { id: passportId },
+      select: {
+        id: true,
+        orderId: true,
+        sizeId: true,
+        qtyPlan: true,
+        qtyCut: true,
+        order: {
+          select: {
+            id: true,
+            division: true,
+            routeSteps: {
+              select: {
+                index: true,
+                operationId: true,
+                operation: {
+                  select: {
+                    id: true,
+                    code: true,
+                    name: true,
+                    category: true,
+                    pricingMode: true,
+                    fixedRate: true,
+                  },
+                },
+              },
+              orderBy: { index: 'asc' },
+            },
+          },
+        },
+      },
+    });
+    if (!passport) {
+      // Это «не должно случиться» в нормальном вызове из
+      // `createImmediateForCutter`, но возвращаем безопасный пустой
+      // результат, чтобы вызывающий код не упал.
+      warnings.push('Паспорт не найден');
+      return {
+        baseAmountRub: new Prisma.Decimal(0),
+        qtyForCompensation: 0,
+        operations: [],
+        warnings,
+      };
+    }
+
+    const qtyForCompensation =
+      passport.qtyCut > 0 ? passport.qtyCut : passport.qtyPlan;
+    if (qtyForCompensation <= 0) {
+      warnings.push('qtyForCompensation = 0, base не считается');
+      return {
+        baseAmountRub: new Prisma.Decimal(0),
+        qtyForCompensation: 0,
+        operations: [],
+        warnings,
+      };
+    }
+
+    const sewingSteps = passport.order.routeSteps.filter(
+      (s) => s.operation.category === OperationCategory.SEWING,
+    );
+    if (sewingSteps.length === 0) {
+      warnings.push(
+        'У заказа нет операций категории SEWING (или маршрут не назначен)',
+      );
+      return {
+        baseAmountRub: new Prisma.Decimal(0),
+        qtyForCompensation,
+        operations: [],
+        warnings,
+      };
+    }
+
+    const operations: Array<{
+      operationId: string;
+      operationCode: string;
+      operationName: string;
+      pricingMode: string;
+      rate: Prisma.Decimal;
+      qty: number;
+      amount: Prisma.Decimal;
+    }> = [];
+    let baseAmountRub = new Prisma.Decimal(0);
+
+    for (const step of sewingSteps) {
+      const op = step.operation;
+      // SALARY_ONLY-операции в base не попадают (они не дают
+      // деньги швеям и не должны давать B2B-base закройщику).
+      if (op.pricingMode === 'SALARY_ONLY') {
+        warnings.push(
+          `Операция ${op.code}: pricingMode = SALARY_ONLY, не учитывается в B2B base`,
+        );
+        continue;
+      }
+
+      let rate: Prisma.Decimal | null = null;
+      if (op.pricingMode === 'FIXED') {
+        if (op.fixedRate === null || op.fixedRate === undefined) {
+          warnings.push(
+            `Операция ${op.code}: FIXED без fixedRate, пропущена`,
+          );
+          continue;
+        }
+        rate = op.fixedRate;
+      } else if (op.pricingMode === 'BY_SIZE') {
+        const row = await tx.operationRateBySize.findUnique({
+          where: {
+            OperationRateBySize_operation_size_uniq: {
+              operationId: op.id,
+              sizeId: passport.sizeId,
+            },
+          },
+          select: { rate: true },
+        });
+        if (!row) {
+          warnings.push(
+            `Операция ${op.code}: BY_SIZE без ставки для размера паспорта, пропущена`,
+          );
+          continue;
+        }
+        rate = row.rate;
+      } else {
+        // Неизвестный pricingMode — на будущее. Не падаем.
+        warnings.push(
+          `Операция ${op.code}: неизвестный pricingMode ${op.pricingMode}, пропущена`,
+        );
+        continue;
+      }
+
+      const amount = roundMoney(rate.times(qtyForCompensation));
+      operations.push({
+        operationId: op.id,
+        operationCode: op.code,
+        operationName: op.name,
+        pricingMode: op.pricingMode,
+        rate,
+        qty: qtyForCompensation,
+        amount,
+      });
+      baseAmountRub = baseAmountRub.plus(amount);
+    }
+
+    return {
+      baseAmountRub: roundMoney(baseAmountRub),
+      qtyForCompensation,
+      operations,
+      warnings,
+    };
   }
 
   // ===========================================================================
@@ -166,10 +741,10 @@ export class EarningsService {
 
     const employee = await tx.employee.findUnique({
       where: { id: args.previousEmployeeId },
-      select: { id: true, paymentType: true, active: true },
+      select: { id: true, compensationType: true, active: true },
     });
     if (!employee || !employee.active) return;
-    if (employee.paymentType !== PaymentType.PIECEWORK) return;
+    if (!isPieceworkEligible(employee.compensationType)) return;
 
     const rate = await this.operations.resolveRate(op.id, args.sizeId, tx);
     if (!rate) return;
@@ -474,19 +1049,25 @@ export class EarningsService {
    * `tx.operationEntry.create` обёрнутая в обработку P2002
    * (нарушение `@@unique` на ключе идемпотентности). Любая другая
    * ошибка пробрасывается наружу — это уже не дубль, а реальный сбой.
+   *
+   * Возвращает `true`, если запись была создана; `false` — если
+   * уникальный ключ уже занят (повторный trigger). Это используется
+   * cutter-аудитом, чтобы не плодить лишних строк в `AuditLog` при
+   * идемпотентных повторных вызовах.
    */
   private async safeCreate(
     tx: Prisma.TransactionClient,
     data: Prisma.OperationEntryUncheckedCreateInput,
-  ): Promise<void> {
+  ): Promise<boolean> {
     try {
       await tx.operationEntry.create({ data });
+      return true;
     } catch (err) {
       if (
         err instanceof Prisma.PrismaClientKnownRequestError &&
         err.code === 'P2002'
       ) {
-        return;
+        return false;
       }
       throw err;
     }

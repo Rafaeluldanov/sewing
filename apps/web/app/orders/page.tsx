@@ -8,6 +8,10 @@ import {
 } from '@sewing/shared/orders';
 import { ApiRequestError } from '@/lib/api';
 import { listOrders, ORDER_STATUS_LABELS } from '@/lib/orders-api';
+import {
+  ORDER_NOMENCLATURE_SOURCE_BADGE,
+  resolveOrderNomenclature,
+} from '@/lib/order-nomenclature';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { StatusBadge } from '@/components/status-badge';
 
@@ -133,13 +137,41 @@ export default async function OrdersListPage({ searchParams }: PageProps) {
             </tr>
           </thead>
           <tbody>
-            {data.items.map((o) => (
+            {data.items.map((o) => {
+              // Этап «Номенклатура = Лекала»: legacy-список тоже идёт
+              // через единый resolver — иначе менеджер увидит «Худи»
+              // в списке и «ХУДИ БАЗА (КЕНГУРУ)» в карточке заказа,
+              // потому что после переименования `PatternItem` legacy
+              // `Product.name` сознательно не синхронизируется.
+              const nomenclature = resolveOrderNomenclature(o);
+              return (
               <tr key={o.id}>
                 <td>
                   <Link href={`/orders/${o.id}`}>{o.number}</Link>
                 </td>
                 <td>{formatDate(o.orderDate)}</td>
-                <td>{o.productName ?? '—'}</td>
+                <td>
+                  {nomenclature.name ?? '—'}
+                  {nomenclature.source === 'legacyProduct' && (
+                    <span
+                      className="admin-order-item-card__source-badge"
+                      title="Историческое изделие без карточки лекала"
+                    >
+                      {' '}
+                      {ORDER_NOMENCLATURE_SOURCE_BADGE.legacyProduct}
+                    </span>
+                  )}
+                  {nomenclature.article && (
+                    <div
+                      style={{
+                        fontSize: '0.8rem',
+                        color: 'var(--admin-muted, #777)',
+                      }}
+                    >
+                      арт. {nomenclature.article}
+                    </div>
+                  )}
+                </td>
                 <td>{o.color ?? '—'}</td>
                 <td className="num">{o.qtyPlanTotal}</td>
                 <td>
@@ -158,7 +190,8 @@ export default async function OrdersListPage({ searchParams }: PageProps) {
                 </td>
                 <td>{formatDate(o.createdAt)}</td>
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       )}

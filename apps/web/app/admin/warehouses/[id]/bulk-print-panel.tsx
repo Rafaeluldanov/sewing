@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useState, useTransition } from 'react';
+import { AlertCircle, Check, Printer, Warehouse, X } from 'lucide-react';
 import type { PrinterSummaryDto } from '@sewing/shared/printers';
 import {
   WAREHOUSE_LABEL_SIZES,
@@ -10,7 +11,6 @@ import {
   type WarehouseDetailDto,
   type WarehouseLabelSize,
 } from '@sewing/shared/warehouses';
-import { Icon } from '@/components/icon';
 import { buildCellQrImageUrl } from '@/lib/warehouses-urls';
 import {
   printWarehouseCellsAction,
@@ -25,31 +25,19 @@ interface Props {
 type Phase = 'idle' | 'success' | 'error';
 
 const LABEL_SIZE_LABELS: Record<WarehouseLabelSize, string> = {
-  '38x58': '38 × 58 мм (горизонтально, QR + номер)',
+  '38x58': '38 × 58 мм (QR + номер)',
 };
 
-/** Сколько превью-плиток показываем по умолчанию, чтобы не убить layout. */
 const PREVIEW_LIMIT = 24;
 
 /**
- * Кнопка «Печать всех ячеек» в карточке склада + модальное окно
- * настройки массовой печати (см. `docs/screens.md §10b`,
- * `docs/api.md §15`).
+ * Кнопка «Печать всех ячеек» в карточке склада + модалка
+ * массовой печати (Admin UI 2.6, ADR-0019).
  *
- * UX:
- *   1. Disabled, если на складе нет активных ячеек — пользователь
- *      сразу видит, что печатать нечего.
- *   2. Открывает модалку поверх страницы (тот же CSS-паттерн `.qr-modal`,
- *      что у сканера на /work). Внутри:
- *      — выбор принтера (`<select>` по списку логических принтеров);
- *      — формат этикетки (на MVP — фиксированно `38x58`);
- *      — количество копий (1..50);
- *      — счётчик «N ячеек × M копий = K заданий»;
- *      — превью первых N этикеток.
- *   3. После клика «Печать» вызывает server action, показывает
- *      success/error без закрытия модалки — менеджер видит сводку
- *      и может дать второй залп (например, ещё на другой принтер).
- *   4. Esc / клик по бэкдропу / крестик — закрытие.
+ * Backend / DTO не меняем. UI приведён к admin-стилю: lucide-иконки,
+ * `admin-btn`, `admin-form` / `admin-field` внутри модалки. Сама
+ * модалка остаётся `qr-modal` (общий CSS-паттерн), потому что её
+ * ширина и backdrop поведение завязаны на уже отлаженный layout.
  */
 export function WarehouseBulkPrintPanel({ warehouse, printers }: Props) {
   const [open, setOpen] = useState(false);
@@ -63,7 +51,7 @@ export function WarehouseBulkPrintPanel({ warehouse, printers }: Props) {
     <>
       <button
         type="button"
-        className="btn btn-primary"
+        className="admin-btn admin-btn--primary"
         onClick={() => setOpen(true)}
         disabled={!hasCells}
         title={
@@ -72,7 +60,7 @@ export function WarehouseBulkPrintPanel({ warehouse, printers }: Props) {
             : 'На складе нет активных ячеек для печати'
         }
       >
-        <Icon name="output" size={16} />
+        <Printer size={16} strokeWidth={1.6} aria-hidden />
         Печать всех ячеек
       </button>
       {open && (
@@ -120,14 +108,11 @@ function BulkPrintModal({
     useState<PrintWarehouseCellsActionResult | null>(null);
   const [pending, startTransition] = useTransition();
 
-  // Esc для закрытия — без него модалка ощущается «застрявшей».
-  // Отдельный effect, чтобы не путать с автофокусом.
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === 'Escape') onClose();
     }
     document.addEventListener('keydown', onKey);
-    // Блокируем скролл фона, как и у `.qr-modal` на /work.
     const prevOverflow = document.body.style.overflow;
     document.body.style.overflow = 'hidden';
     return () => {
@@ -186,22 +171,22 @@ function BulkPrintModal({
       <div className="qr-modal__card bulk-print-modal__card">
         <div className="qr-modal__header">
           <h2 className="qr-modal__title" id={titleId}>
-            <Icon name="output" size={18} />
-            Печать всех ячеек: {warehouse.name}
+            <Printer size={18} strokeWidth={1.6} aria-hidden />
+            Печать ячеек: {warehouse.name}
           </h2>
           <button
             type="button"
             className="qr-modal__close"
             onClick={onClose}
-            aria-label="Закрыть окно печати"
+            aria-label="Закрыть"
           >
-            ×
+            <X size={18} strokeWidth={1.6} aria-hidden />
           </button>
         </div>
 
-        <form className="bulk-print-modal__form" onSubmit={handleSubmit}>
-          <div className="bulk-print-modal__settings">
-            <div className="detail-form__field">
+        <form className="bulk-print-modal__form admin-form" onSubmit={handleSubmit}>
+          <div className="admin-form-grid">
+            <div className="admin-field">
               <label htmlFor={printerSelectId}>Принтер</label>
               <select
                 id={printerSelectId}
@@ -223,15 +208,9 @@ function BulkPrintModal({
                   </option>
                 ))}
               </select>
-              {noPrinters && (
-                <span className="detail-form__hint">
-                  Создайте и подключите принтер на странице
-                  «Администрирование → Принтеры».
-                </span>
-              )}
             </div>
 
-            <div className="detail-form__field">
+            <div className="admin-field">
               <label htmlFor={sizeSelectId}>Размер этикетки</label>
               <select
                 id={sizeSelectId}
@@ -248,7 +227,7 @@ function BulkPrintModal({
               </select>
             </div>
 
-            <div className="detail-form__field">
+            <div className="admin-field">
               <label htmlFor={copiesInputId}>Копий каждой</label>
               <input
                 id={copiesInputId}
@@ -264,9 +243,7 @@ function BulkPrintModal({
 
           <div className="bulk-print-modal__summary">
             <div>
-              <span className="bulk-print-modal__summary-label">
-                Ячеек к печати
-              </span>
+              <span className="bulk-print-modal__summary-label">Ячеек</span>
               <span className="bulk-print-modal__summary-value">
                 {cellsCount}
               </span>
@@ -276,9 +253,7 @@ function BulkPrintModal({
               <span className="bulk-print-modal__summary-value">{copies}</span>
             </div>
             <div>
-              <span className="bulk-print-modal__summary-label">
-                Всего заданий
-              </span>
+              <span className="bulk-print-modal__summary-label">Заданий</span>
               <span className="bulk-print-modal__summary-value">
                 {totalJobs}
               </span>
@@ -289,21 +264,17 @@ function BulkPrintModal({
             <div className="bulk-print-modal__preview-header">
               <span>Превью этикеток</span>
               {hiddenInPreview > 0 && (
-                <span className="detail-form__hint">
+                <span className="admin-muted" style={{ fontSize: '0.82rem' }}>
                   Показаны первые {previewCells.length}, ещё{' '}
-                  {hiddenInPreview} ячеек попадёт в печать.
+                  {hiddenInPreview} попадёт в печать.
                 </span>
               )}
             </div>
             {cellsCount === 0 ? (
-              <div className="empty-state">
-                <span className="empty-state__icon">
-                  <Icon name="warehouses" />
-                </span>
-                <span className="empty-state__title">
-                  Нет активных ячеек для печати
-                </span>
-              </div>
+              <p className="admin-muted" style={{ margin: 0 }}>
+                <Warehouse size={14} strokeWidth={1.6} aria-hidden /> Нет
+                активных ячеек для печати.
+              </p>
             ) : (
               <div className="bulk-print-modal__preview-grid">
                 {previewCells.map((cell) => (
@@ -314,34 +285,30 @@ function BulkPrintModal({
           </div>
 
           {phase === 'success' && feedback?.result && (
-            <div className="detail-form__success" role="status">
-              <Icon name="success" size={16} />
-              <span>
-                Поставлено {feedback.result.jobsCreated} заданий в очередь
-                принтера ({feedback.result.cellsCount} ячеек ×{' '}
-                {feedback.result.copies} копий, формат{' '}
-                {LABEL_SIZE_LABELS[feedback.result.labelSize]}).
-              </span>
+            <div className="success-box" role="status">
+              <Check size={14} strokeWidth={1.6} aria-hidden />
+              Поставлено {feedback.result.jobsCreated} заданий (
+              {feedback.result.cellsCount} × {feedback.result.copies}).
             </div>
           )}
           {phase === 'error' && feedback && (
-            <div className="detail-form__error" role="alert">
-              <Icon name="error" size={16} />
-              <span>
+            <div className="error-box" role="alert">
+              <div className="error-box__msg">
+                <AlertCircle size={14} strokeWidth={1.6} aria-hidden />{' '}
                 {feedback.error ?? 'Не удалось поставить задания на печать.'}
-                {feedback.errorRequestId && (
-                  <span className="detail-form__error-rid">
-                    req: <code>{feedback.errorRequestId}</code>
-                  </span>
-                )}
-              </span>
+              </div>
+              {feedback.errorRequestId && (
+                <div className="error-box__rid">
+                  req: <code>{feedback.errorRequestId}</code>
+                </div>
+              )}
             </div>
           )}
 
-          <div className="bulk-print-modal__actions">
+          <div className="admin-actions-row">
             <button
               type="button"
-              className="btn btn-ghost"
+              className="admin-btn admin-btn--ghost"
               onClick={onClose}
               disabled={pending}
             >
@@ -349,10 +316,10 @@ function BulkPrintModal({
             </button>
             <button
               type="submit"
-              className="btn btn-primary"
+              className="admin-btn admin-btn--primary"
               disabled={submitDisabled}
             >
-              <Icon name="output" size={16} />
+              <Printer size={16} strokeWidth={1.6} aria-hidden />
               {pending ? 'Отправляем…' : 'Печать'}
             </button>
           </div>
@@ -363,13 +330,9 @@ function BulkPrintModal({
 }
 
 /**
- * Превью одной этикетки 38×58 мм, повторяющее layout `cell-print.ts`:
- * QR слева, номер справа. Размеры в px подобраны так, чтобы плитка
- * визуально соответствовала пропорциям 58:38 (≈1.53).
- *
- * QR-картинку запрашиваем через `@Public()` endpoint backend-а — не
- * рендерим клиентом, чтобы не тащить qr-библиотеку в bundle и чтобы
- * UI и реальная этикетка были по байтам идентичны.
+ * Превью одной этикетки 38×58 мм (QR слева, номер справа). QR
+ * запрашиваем через @Public()-endpoint backend-а — UI и реальная
+ * этикетка по байтам идентичны.
  */
 function CellLabelPreview({ cell }: { cell: WarehouseCellDto }) {
   const qrUrl = buildCellQrImageUrl(cell.id);

@@ -1,29 +1,113 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
-import { useState } from 'react';
-import type { TechCardTemplateDetailDto } from '@sewing/shared/tech-cards';
-import { Icon } from '@/components/icon';
-import { createTechCardAction, updateTechCardAction } from './actions';
+import { useRef, useState, useTransition } from 'react';
+import { Check, ImageIcon, Plus, Save, Trash2, Upload } from 'lucide-react';
+import type {
+  OutsourceTriggerType,
+  TechCardMaterialColorRule,
+  TechCardTemplateDetailDto,
+} from '@sewing/shared/tech-cards';
+import {
+  TECH_CARD_MATERIAL_COLOR_RULES,
+  TECH_CARD_MATERIAL_COLOR_RULE_LABELS,
+  TECH_CARD_MATERIAL_ROLE_KEYS,
+  getTechCardMaterialRoleLabel,
+  isKnownTechCardMaterialRoleKey,
+} from '@sewing/shared/tech-cards';
+import {
+  createTechCardAction,
+  pullMaterialLinesFromPatternAction,
+  updateTechCardAction,
+  uploadMaterialImageAction,
+} from './actions';
 import {
   initialTechCardFormState,
+  initialUploadMaterialImageState,
   type TechCardFormState,
+  type UploadMaterialImageState,
 } from './form-state';
+import { CODE_PATTERN, CODE_PATTERN_TITLE } from '@/lib/code-pattern';
 
 type Mode = 'create' | 'edit';
+
+/**
+ * Лёгкое представление номенклатуры (PatternItem) для select-а
+ * «Подтянуть из номенклатуры». RSC-страница (new/[id]) подтягивает
+ * список через `listPatterns({ status: 'ACTIVE' })` и прокидывает сюда.
+ * Шаблоны строк тянутся уже из server action
+ * `pullMaterialLinesFromPatternAction(patternItemId)` по конкретной
+ * выбранной номенклатуре — оттуда берутся только реально используемые
+ * параметры через `PatternItemParameterNorm.qtyPerItem > 0`
+ * (см. ТЗ §1, §5).
+ */
+export interface PatternItemOption {
+  id: string;
+  name: string;
+  /** Артикул — показываем рядом с названием для disambiguation. */
+  article: string;
+}
 
 interface Props {
   mode: Mode;
   /** Только в режиме `edit` — текущее состояние техкарты. */
   template?: TechCardTemplateDetailDto;
+  /**
+   * Активные номенклатуры (PatternItem) — id + name + article. Используются
+   * select-ом «Подтянуть из номенклатуры». Пустой список допустим —
+   * кнопка просто не появится. Источник истины — `listPatterns({
+   * status: 'ACTIVE' })`. См. ТЗ §1: тянем из конкретной номенклатуры,
+   * а не из категории.
+   */
+  patternItems?: PatternItemOption[];
 }
 
 interface MaterialRow {
   key: string;
+  /**
+   * id строки материала в БД (`TechCardMaterialLine.id`) — заполнен
+   * только для строк, пришедших из существующего шаблона (`template`)
+   * в режиме `edit`. Для новых, ещё не сохранённых строк остаётся
+   * `null` — UI по этому полю решает, можно ли уже сейчас грузить
+   * изображение материала (см. ТЗ §5: «Для новых несохранённых строк
+   * показать подсказку: Сохраните техкарту, чтобы загрузить
+   * изображение»). Хранится только в client-state, в backend не
+   * передаётся (full-replace при PATCH создаёт новые id).
+   */
+  existingLineId: string | null;
+  // Legacy поля (`name`, `unit`, `qtyPerUnit`, `note`) скрыты от
+  // пользователя в UI, но сохраняются в state для backward-compat:
+  // если строка пришла со старой техкарты со значениями, мы их не
+  // теряем — они уходят в hidden input при submit. Если же строка
+  // создана в новом UI и legacy-полей нет, action в `actions.ts`
+  // сгенерирует безопасный fallback (`fabricType`/role label, `кг`,
+  // `1`, пустая заметка).
   name: string;
   unit: string;
   qtyPerUnit: string;
   note: string;
+  // Этап «Техкарта = материальные требования»: видимые поля строки.
+  // Хранятся строкой в state-е формы, чтобы число можно было «затереть»
+  // в null при сохранении (см. `actions.ts::buildMaterialLines`).
+  // `materialRole` — свободная строка (см. ТЗ §1, источник ролей —
+  // `PATTERN_CATEGORY_PARAMETER_GROUPS`); legacy roleKey-и (например
+  // `APPLICATION` со старых техкарт) сохраняются в state как есть и
+  // отрисовываются как read-only `(legacy)` опция.
+  materialRole: string;
+  fabricType: string;
+  densityGsm: string;
+  plannedWidthCm: string;
+  colorRule: '' | TechCardMaterialColorRule;
+  fixedColorText: string;
+  // Этап «Фурнитура в техкарте» (см. ТЗ §3): видимы только при
+  // `materialRole === 'PACKAGING'` (UI-метка «Фурнитура»). Backend
+  // зачищает hardware* в null для других ролей.
+  hardwareSizeText: string;
+  hardwareMaterialText: string;
+  // Этап «Изображение материала» (см. ТЗ §5): URL картинки + опц.
+  // имя файла (пока без upload-эндпоинта, см. ТЗ §5 «MVP — URL»).
+  materialImageUrl: string;
+  materialImageOriginalFileName: string;
 }
 
 interface OutsourceRow {
@@ -33,6 +117,7 @@ interface OutsourceRow {
   qtyPerUnit: string;
   vendorName: string;
   note: string;
+  triggerType: OutsourceTriggerType;
 }
 
 let __rowKeySeq = 0;
@@ -41,25 +126,94 @@ function nextKey(): string {
   return `r${Date.now().toString(36)}_${__rowKeySeq}`;
 }
 
-function emptyMaterialRow(): MaterialRow {
-  return { key: nextKey(), name: '', unit: '', qtyPerUnit: '', note: '' };
-}
-function emptyOutsourceRow(): OutsourceRow {
+function emptyMaterialRow(seed: Partial<MaterialRow> = {}): MaterialRow {
   return {
     key: nextKey(),
+    existingLineId: null,
     name: '',
     unit: '',
     qtyPerUnit: '',
-    vendorName: '',
     note: '',
+    materialRole: '',
+    fabricType: '',
+    densityGsm: '',
+    plannedWidthCm: '',
+    colorRule: '',
+    fixedColorText: '',
+    hardwareSizeText: '',
+    hardwareMaterialText: '',
+    materialImageUrl: '',
+    materialImageOriginalFileName: '',
+    ...seed,
   };
 }
 
+/**
+ * Нормализует `fabricType` к ключу для dedupe (см. ТЗ §3): trim +
+ * lowercase + единичные пробелы. Это позволяет считать «Молния» и
+ * «  молния  » одной и той же позицией при подтягивании из
+ * номенклатуры. Для пустого fabricType возвращаем пустую строку —
+ * dedupe тогда работает только по `materialRole` (как раньше).
+ */
+function normalizeDedupeFabric(value: string | null | undefined): string {
+  if (value == null) return '';
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+/**
+ * Ключ дедупликации строки материала (см. ТЗ §3). Для PACKAGING это
+ * `PACKAGING + Молния`, `PACKAGING + Кнопки`, `PACKAGING + Люверсы` —
+ * разные строки, их разрешено иметь несколько в одной техкарте. Для
+ * остальных ролей пустой fabricType означает «нет уточнения», и
+ * подтягивание не плодит дубликаты роли.
+ */
+function dedupeKey(roleKey: string, fabricType: string | null): string {
+  return `${roleKey}::${normalizeDedupeFabric(fabricType)}`;
+}
+
+const OUTSOURCE_TRIGGER_LABELS: Record<OutsourceTriggerType, string> = {
+  MANUAL: 'Вручную',
+  CUT_READY: 'Когда крой размещён в ячейки',
+};
+
+const MATERIAL_REQUIREMENTS_HINT =
+  'Техкарта определяет требования к материалам. Нанесение задаётся в заказе, упаковка — в операциях маршрута.';
+
+/**
+ * Текст-подсказка рядом с кнопкой «Подтянуть из номенклатуры»
+ * (см. ТЗ §4). Описывает обоих источников:
+ *   - «Фурнитура и нормы» (`PatternItemParameterNorm.qtyPerItem > 0`);
+ *   - «Погонные метры» (`PatternItemSizeParameterValue` LINEAR_M_BY_SIZE
+ *     с хотя бы одним value > 0).
+ *
+ * Текст сознательно избегает технических имён моделей — менеджер
+ * читает «нормы фурнитуры» и «параметры погонных метров»
+ * (так же названы блоки в карточке номенклатуры).
+ */
+const PULL_FROM_NOMENCLATURE_HINT =
+  'Подтягивает из выбранной номенклатуры заполненные нормы фурнитуры и заполненные параметры погонных метров. Пустые параметры не добавляются.';
+
+/**
+ * Сообщение, когда action отработал, но в номенклатуре по обоим
+ * блокам нет данных (см. ТЗ §4). Текст совпадает по формулировке с
+ * подсказкой выше — менеджер сразу видит, что именно не заполнено.
+ */
+const PULL_FROM_NOMENCLATURE_EMPTY =
+  'В номенклатуре нет заполненных норм или погонных метров. Нечего подтягивать.';
+
+const OUTSOURCE_LEGACY_HINT =
+  'Старые внешние услуги сохранены как legacy. Новые нанесения задаются в заказе покупателя.';
+
 function SubmitButton({ mode }: { mode: Mode }) {
   const { pending } = useFormStatus();
+  const Icon = mode === 'create' ? Plus : Save;
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name={mode === 'create' ? 'plus' : 'success'} size={16} />
+    <button
+      type="submit"
+      className="admin-btn admin-btn--primary"
+      disabled={pending}
+    >
+      <Icon size={16} strokeWidth={1.6} aria-hidden />
       {pending
         ? 'Сохраняем…'
         : mode === 'create'
@@ -70,38 +224,94 @@ function SubmitButton({ mode }: { mode: Mode }) {
 }
 
 /**
- * Универсальная форма техкарты: используется на `/admin/tech-cards/new`
- * и `/admin/tech-cards/[id]`. По UX повторяет `RouteTemplateForm` и
- * `EquipmentOperationsForm`:
- *   - простые поля наверху (`code`, `name`, `isActive`);
- *   - две независимые секции строк (материалы / внешние подряды);
- *   - add row / remove row, без drag-and-drop;
- *   - `sortOrder` НЕ передаётся: backend нормализует его как
- *     `(i + 1) * 10` по позиции в массиве (см. ADR-0022).
+ * Универсальная форма техкарты (`/admin/tech-cards/new` и
+ * `/admin/tech-cards/[id]`).
  *
- * Имена полей `material[<key>][<field>]` сохраняют группировку
- * строк в FormData; server action парсит их в правильном порядке.
+ * Этап «Техкарта = материальные требования» (UI/compatibility refactor):
+ *   - блок переименован в «Материальные требования»;
+ *   - legacy поля строки (`name`, `unit`, `qtyPerUnit`, `note`)
+ *     скрыты от пользователя — они едут как `hidden input`-ы и
+ *     генерируются автоматически в `actions.ts::buildMaterialLines`
+ *     (`fabricType` / role label → name, `кг` → unit, `1` →
+ *     qtyPerUnit-fallback, пустая заметка);
+ *   - в select «Роль материала» больше не предлагаются
+ *     `APPLICATION` и `PACKAGING` (нанесение и упаковка теперь
+ *     живут вне техкарты — в заказе и маршруте соответственно);
+ *   - блок «Внешние потребности» сохранён только для legacy-данных
+ *     (read-only-ish: без кнопки «Добавить», с пояснением, что
+ *     новые нанесения задаются в заказе покупателя).
+ *
+ * Backend / Prisma / shared schema не меняются — это чисто UI и
+ * compatibility-слой в server actions.
  */
-export function TechCardForm({ mode, template }: Props) {
+export function TechCardForm({
+  mode,
+  template,
+  patternItems,
+}: Props) {
+  // Защита от прода: prop `patternItems` ОБЯЗАН быть массивом, иначе
+  // дальше `.map`/`.length` уронит весь рендер формы (и страницу
+  // `/admin/tech-cards/new` в 500). Дефолт `= []` в сигнатуре
+  // срабатывает только когда prop вовсе не передан, а не когда
+  // прокинут `undefined`/не-массив. Нормализуем явно.
+  const safePatternItems: PatternItemOption[] = Array.isArray(patternItems)
+    ? patternItems
+    : [];
+  // Идентификатор техкарты в режиме edit — нужен для upload-эндпоинта
+  // изображения строки материала (см. ТЗ §5). В режиме `create`
+  // techCardId ещё нет, и для всех строк показываем подсказку
+  // «Сохраните техкарту, чтобы загрузить изображение».
+  const techCardId = mode === 'edit' && template ? template.id : null;
   const [materials, setMaterials] = useState<MaterialRow[]>(() => {
     if (mode !== 'edit' || !template) return [];
-    return template.materialLines.map((l) => ({
+    // Защита от prod: если backend по какой-то причине вернёт DTO без
+    // `materialLines` (или не-массивом), не падать .map-ом — рендерим
+    // пустой список, менеджер просто увидит «Пока пусто». На корректных
+    // ответах поведение прежнее.
+    const lines = Array.isArray(template.materialLines)
+      ? template.materialLines
+      : [];
+    return lines.map((l) => ({
       key: nextKey(),
+      existingLineId: l.id,
       name: l.name,
       unit: l.unit,
       qtyPerUnit: l.qtyPerUnit,
       note: l.note ?? '',
+      materialRole: l.materialRole ?? '',
+      fabricType: l.fabricType ?? '',
+      densityGsm: l.densityGsm == null ? '' : String(l.densityGsm),
+      plannedWidthCm:
+        l.plannedWidthCm == null ? '' : String(l.plannedWidthCm),
+      colorRule: l.colorRule ?? '',
+      fixedColorText: l.fixedColorText ?? '',
+      hardwareSizeText: l.hardwareSizeText ?? '',
+      hardwareMaterialText: l.hardwareMaterialText ?? '',
+      materialImageUrl: l.materialImageUrl ?? '',
+      materialImageOriginalFileName: l.materialImageOriginalFileName ?? '',
     }));
   });
+  // «Подтянуть из номенклатуры» (см. ТЗ §1). State для select-а
+  // конкретной номенклатуры (PatternItem) и pending-индикатора
+  // server action-а; ошибки/сводку сохраняем отдельно, чтобы UI мог
+  // подсветить рядом с кнопкой.
+  const [pullPatternId, setPullPatternId] = useState<string>('');
+  const [pullError, setPullError] = useState<string | null>(null);
+  const [pullSummary, setPullSummary] = useState<string | null>(null);
+  const [isPulling, startPullTransition] = useTransition();
   const [outsource, setOutsource] = useState<OutsourceRow[]>(() => {
     if (mode !== 'edit' || !template) return [];
-    return template.outsourceLines.map((l) => ({
+    const lines = Array.isArray(template.outsourceLines)
+      ? template.outsourceLines
+      : [];
+    return lines.map((l) => ({
       key: nextKey(),
       name: l.name,
       unit: l.unit ?? '',
       qtyPerUnit: l.qtyPerUnit ?? '',
       vendorName: l.vendorName ?? '',
       note: l.note ?? '',
+      triggerType: l.triggerType,
     }));
   });
 
@@ -134,301 +344,517 @@ export function TechCardForm({ mode, template }: Props) {
     );
   };
 
+  /**
+   * «Подтянуть из номенклатуры» (см. ТЗ §1, §2, §3) — server action по
+   * выбранной номенклатуре (`PatternItem`) возвращает шаблоны строк
+   * материалов из ДВУХ источников:
+   *   - «Фурнитура и нормы» (`PatternItemParameterNorm` с
+   *     `qtyPerItem > 0`) — `sourceType === 'PARAMETER_NORM'`;
+   *   - «Погонные метры» (`PatternItemSizeParameterValue` с
+   *     `inputTypeSnapshot === 'LINEAR_M_BY_SIZE'` и хотя бы одним
+   *     `value > 0` по любому размеру) — `sourceType ===
+   *     'SIZE_PARAMETER_VALUE'`.
+   *
+   * Клиентская логика дедупликации (см. ТЗ §3):
+   *   1. Ключ существующих/добавленных строк: `materialRole +
+   *      normalized fabricType`.
+   *   2. Если есть строка с тем же materialRole и тем же fabricType —
+   *      пропускаем (skipped).
+   *   3. Если есть строка с тем же materialRole, но ПУСТЫМ fabricType —
+   *      обновляем у неё fabricType из шаблона (updated). Это закрывает
+   *      типичный кейс «менеджер заранее добавил пустую строку
+   *      MAIN_FABRIC, потом нажал Подтянуть» — мы не плодим
+   *      дублирующее «Основное полотно», а заполняем существующее.
+   *   4. Если строки нет — добавляем новую (added).
+   *
+   * Для PACKAGING несколько строк с разным fabricType (Молния /
+   * Кнопки / Люверсы) разрешены: ключ дедупликации различает их.
+   *
+   * Числовые значения нормы / погонных метров В ТЕХКАРТУ НЕ ПЕРЕНОСЯТСЯ
+   * — они хранятся в номенклатуре и используются `WorkshopNeed`-ом.
+   * В техкарту едет только описание материала (см. ТЗ §1).
+   *
+   * Работает и в режиме `create` (`/admin/tech-cards/new`) — никакого
+   * `techCardId` не нужно: action ходит в номенклатуру по её id.
+   */
+  const handlePullFromNomenclature = () => {
+    setPullError(null);
+    setPullSummary(null);
+    // Двойная защита: и кнопка `disabled={pullPatternId === ''}`, и
+    // явный гард тут — server action `pullMaterialLinesFromPatternAction`
+    // НИКОГДА не должен вызываться с пустым id, иначе на backend
+    // полетит `getPattern('')` и UI получит непонятную 404.
+    const trimmedId = pullPatternId.trim();
+    if (trimmedId === '') {
+      setPullError('Выберите номенклатуру');
+      return;
+    }
+    startPullTransition(async () => {
+      const result = await pullMaterialLinesFromPatternAction(trimmedId);
+      if (!result.ok) {
+        setPullError(result.error);
+        return;
+      }
+      // ТЗ §4: пустой список — отдельное сообщение, чтобы менеджер
+      // понял, что в номенклатуре нет ни заполненных норм на изделие,
+      // ни заполненных погонных метров.
+      if (result.lines.length === 0) {
+        setPullSummary(PULL_FROM_NOMENCLATURE_EMPTY);
+        return;
+      }
+      let addedCount = 0;
+      let skippedCount = 0;
+      let updatedCount = 0;
+      setMaterials((prev) => {
+        // Стартовая «карта существующих» — индексируем по дедуп-ключу,
+        // плюс по «частичному» ключу (только roleKey, fabricType
+        // пустой) — последний используется для апдейта пустого
+        // fabricType в существующей строке (см. ТЗ §3 правило 3).
+        const next: MaterialRow[] = prev.map((r) => ({ ...r }));
+        const fullKey = (
+          materialRole: string,
+          fabricType: string | null,
+        ): string => dedupeKey(materialRole, fabricType);
+
+        for (const line of result.lines) {
+          const targetFullKey = fullKey(line.roleKey, line.labelSnapshot);
+          // 1) Точное совпадение → пропускаем.
+          const exactIdx = next.findIndex(
+            (r) => fullKey(r.materialRole, r.fabricType) === targetFullKey,
+          );
+          if (exactIdx >= 0) {
+            skippedCount += 1;
+            continue;
+          }
+          // 2) Тот же materialRole + пустой fabricType → апдейтим
+          //    существующую строку, а не добавляем дубль. Применяем
+          //    только к ОДНОЙ строке (первой подходящей) и сразу
+          //    помечаем её fabricType-ом из шаблона, чтобы следующая
+          //    итерация на этот же materialRole шла по правилу №1
+          //    (skip) или №3 (add new).
+          const emptyIdx = next.findIndex(
+            (r) =>
+              r.materialRole === line.roleKey &&
+              normalizeDedupeFabric(r.fabricType) === '',
+          );
+          if (emptyIdx >= 0) {
+            const existing = next[emptyIdx]!;
+            next[emptyIdx] = {
+              ...existing,
+              fabricType: line.labelSnapshot,
+              // Подставляем unit только если у существующей строки
+              // его не было — не затираем то, что менеджер уже мог
+              // ввести вручную.
+              unit: existing.unit && existing.unit.length > 0
+                ? existing.unit
+                : line.unit,
+            };
+            updatedCount += 1;
+            continue;
+          }
+          // 3) Новая строка. Безопасный дефолт правила цвета зависит
+          //    от роли: для PACKAGING (фурнитура) — «Указать в заказе»
+          //    (см. ТЗ §10 + существующее поведение), для тканевых
+          //    ролей — «Цвет заказа» (Основное полотно / Подкладка /
+          //    Дублерин / Флизелин обычно идут под общий цвет заказа).
+          const isPackaging = line.roleKey === 'PACKAGING';
+          next.push(
+            emptyMaterialRow({
+              materialRole: line.roleKey,
+              // ТЗ §2: `fabricType` = labelSnapshot параметра
+              // номенклатуры. Для PACKAGING это конкретное название
+              // фурнитуры («Молния»/«Кнопки»/«Люверсы»), для
+              // тканевых ролей — название параметра («Основное
+              // полотно» / «Подкладка» / …).
+              fabricType: line.labelSnapshot,
+              unit: line.unit,
+              // qtyPerUnit — legacy-поле обязательной shared schema.
+              // Реальные нормы лежат в источнике в номенклатуре и
+              // считаются `WorkshopNeed`-ом; в техкарте оставляем
+              // sentinel «1», менеджер при необходимости поправит.
+              qtyPerUnit: '1',
+              colorRule: isPackaging
+                ? 'ORDER_SELECTED_COLOR'
+                : 'ORDER_COLOR',
+            }),
+          );
+          addedCount += 1;
+        }
+        return next;
+      });
+
+      // ТЗ §4: формируем итоговое сообщение из трёх компонент. Если
+      // НИЧЕГО не произошло (например, всё уже было добавлено ранее)
+      // — всё равно пишем, что подтягивали (skip-counter).
+      const parts: string[] = [];
+      if (addedCount > 0) parts.push(`Добавлено строк: ${addedCount}`);
+      if (updatedCount > 0) parts.push(`Обновлено строк: ${updatedCount}`);
+      if (skippedCount > 0) parts.push(`Пропущено дублей: ${skippedCount}`);
+      setPullSummary(
+        parts.length > 0
+          ? parts.join('. ') + '.'
+          : PULL_FROM_NOMENCLATURE_EMPTY,
+      );
+    });
+  };
+
   return (
-    <form action={formAction} className="admin-equipment-form">
+    <form action={formAction} className="admin-form">
       {mode === 'edit' && template && (
         <input type="hidden" name="id" value={template.id} />
       )}
 
-      <div className="admin-equipment-form__meta" style={{ flexWrap: 'wrap' }}>
-        <label htmlFor="tc-code" className="meta-line">
-          Код техкарты
-        </label>
-        <input
-          id="tc-code"
-          name="code"
-          type="text"
-          maxLength={48}
-          required
-          autoComplete="off"
-          defaultValue={template?.code ?? ''}
-          placeholder="например, TSHIRT-BASIC"
-          pattern="[A-Z0-9][A-Z0-9_-]*"
-          title="Латинские заглавные буквы, цифры, '-' и '_'"
-          style={{ padding: '6px 10px', minWidth: 220 }}
-        />
-        <label htmlFor="tc-name" className="meta-line">
-          Название
-        </label>
-        <input
-          id="tc-name"
-          name="name"
-          type="text"
-          maxLength={120}
-          required
-          autoComplete="off"
-          defaultValue={template?.name ?? ''}
-          placeholder="например, Базовая футболка"
-          style={{ padding: '6px 10px', minWidth: 280 }}
-        />
-        <label
-          className="meta-line"
-          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-        >
+      <div className="admin-form-grid">
+        <div className="admin-field">
+          <label htmlFor="tc-code">Код</label>
           <input
+            id="tc-code"
+            name="code"
+            type="text"
+            maxLength={48}
+            required
+            autoComplete="off"
+            defaultValue={template?.code ?? ''}
+            placeholder="TSHIRT-BASIC"
+            pattern={CODE_PATTERN}
+            title={CODE_PATTERN_TITLE}
+          />
+        </div>
+        <div className="admin-field">
+          <label htmlFor="tc-name">Название</label>
+          <input
+            id="tc-name"
+            name="name"
+            type="text"
+            maxLength={120}
+            required
+            autoComplete="off"
+            defaultValue={template?.name ?? ''}
+            placeholder="Базовая футболка"
+          />
+        </div>
+        <div className="admin-field admin-field--inline">
+          <input
+            id="tc-active"
             type="checkbox"
             name="isActive"
             value="on"
             defaultChecked={template?.isActive ?? true}
           />
-          Активна
-        </label>
+          <label htmlFor="tc-active">Активна</label>
+        </div>
       </div>
 
-      <section>
-        <div
-          className="meta-line"
-          style={{
-            marginBottom: 8,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
-        >
-          <strong>Материалы</strong>
+      <section className="admin-stack admin-material-requirements">
+        <div className="admin-actions-row admin-actions-row--split">
+          <strong>Материальные требования</strong>
           <button
             type="button"
-            className="btn btn-ghost"
+            className="admin-btn admin-btn--ghost"
             onClick={() => setMaterials((p) => [...p, emptyMaterialRow()])}
           >
-            <Icon name="plus" size={14} />
-            Добавить строку
+            <Plus size={14} strokeWidth={1.6} aria-hidden />
+            Добавить
           </button>
         </div>
-        {materials.length === 0 ? (
-          <div className="meta-line" style={{ marginBottom: '0.5rem' }}>
-            Пока нет строк материалов — добавьте при необходимости.
-          </div>
-        ) : (
-          <table className="data-table" style={{ marginBottom: '0.5rem' }}>
-            <thead>
-              <tr>
-                <th>Название</th>
-                <th>Единица</th>
-                <th className="num">Норма / 1 шт</th>
-                <th>Примечание</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {materials.map((row) => (
-                <tr key={row.key}>
-                  <td>
-                    <input
-                      name={`material[${row.key}][name]`}
-                      type="text"
-                      value={row.name}
-                      onChange={(e) =>
-                        updateMaterial(row.key, { name: e.target.value })
-                      }
-                      placeholder="например, Ткань рибана"
-                      maxLength={200}
-                      style={{ width: '100%' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      name={`material[${row.key}][unit]`}
-                      type="text"
-                      value={row.unit}
-                      onChange={(e) =>
-                        updateMaterial(row.key, { unit: e.target.value })
-                      }
-                      placeholder="м, кг, шт"
-                      maxLength={32}
-                      style={{ width: 80 }}
-                    />
-                  </td>
-                  <td className="num">
-                    <input
-                      name={`material[${row.key}][qtyPerUnit]`}
-                      type="text"
-                      inputMode="decimal"
-                      value={row.qtyPerUnit}
-                      onChange={(e) =>
-                        updateMaterial(row.key, { qtyPerUnit: e.target.value })
-                      }
-                      placeholder="0.5"
-                      style={{ width: 100, textAlign: 'right' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      name={`material[${row.key}][note]`}
-                      type="text"
-                      value={row.note}
-                      onChange={(e) =>
-                        updateMaterial(row.key, { note: e.target.value })
-                      }
-                      maxLength={500}
-                      style={{ width: '100%' }}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() =>
-                        setMaterials((p) =>
-                          p.filter((r) => r.key !== row.key),
-                        )
-                      }
-                      aria-label="Удалить строку"
-                      title="Удалить"
-                    >
-                      ×
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      <section>
-        <div
-          className="meta-line"
-          style={{
-            marginBottom: 8,
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            gap: '0.75rem',
-          }}
+        <p
+          className="admin-muted admin-material-requirements__hint"
+          style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.45 }}
         >
-          <strong>
-            Внешние потребности (подряд / OUTSOURCED_SERVICE)
-          </strong>
-          <button
-            type="button"
-            className="btn btn-ghost"
-            onClick={() => setOutsource((p) => [...p, emptyOutsourceRow()])}
+          {MATERIAL_REQUIREMENTS_HINT}
+        </p>
+        {/*
+          «Подтянуть из номенклатуры» (см. ТЗ §1, §2, §4): отдельный
+          мини-блок с select-ом конкретной номенклатуры (PatternItem)
+          и кнопкой. Источников теперь два:
+            - `PatternItemParameterNorm` (qtyPerItem > 0) —
+              «Фурнитура и нормы»;
+            - `PatternItemSizeParameterValue` LINEAR_M_BY_SIZE
+              с хотя бы одним value > 0 — «Погонные метры».
+          Дедупликация по `materialRole + fabricType`; для PACKAGING
+          разрешены несколько строк (Молния / Кнопки / Люверсы); если
+          в форме уже есть строка с тем же materialRole, но пустым
+          fabricType — заполняем её, а не плодим дубль (см. ТЗ §3).
+          Клик не сохраняет техкарту, а только меняет local state
+          (см. `handlePullFromNomenclature`).
+        */}
+        {safePatternItems.length > 0 ? (
+          <div
+            className="admin-material-requirements__pull"
+            style={{
+              display: 'flex',
+              flexWrap: 'wrap',
+              alignItems: 'center',
+              gap: '0.5rem',
+            }}
           >
-            <Icon name="plus" size={14} />
-            Добавить строку
-          </button>
-        </div>
-        {outsource.length === 0 ? (
-          <div className="meta-line" style={{ marginBottom: '0.5rem' }}>
-            Пока нет строк внешних потребностей — добавьте при необходимости.
+            <label
+              htmlFor="tc-pull-pattern"
+              className="admin-muted"
+              style={{ fontSize: '0.85rem' }}
+            >
+              Номенклатура:
+            </label>
+            <select
+              id="tc-pull-pattern"
+              value={pullPatternId}
+              onChange={(e) => setPullPatternId(e.target.value)}
+              style={{ minWidth: 260 }}
+              disabled={isPulling}
+              data-testid="tech-card-pull-pattern"
+            >
+              <option value="">— выберите номенклатуру —</option>
+              {safePatternItems.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name} · {p.article}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost"
+              onClick={handlePullFromNomenclature}
+              disabled={isPulling || pullPatternId.trim() === ''}
+              data-testid="tech-card-pull-button"
+              title={
+                pullPatternId.trim() === ''
+                  ? 'Сначала выберите номенклатуру в списке слева'
+                  : PULL_FROM_NOMENCLATURE_HINT
+              }
+            >
+              {isPulling ? 'Подтягиваем…' : 'Подтянуть из номенклатуры'}
+            </button>
+            {/*
+              ТЗ §4: рядом с кнопкой видимая подсказка о том, что
+              подтягивается. Текст обязан содержать «заполненные
+              нормы фурнитуры и заполненные параметры погонных
+              метров» (см. smoke-тест). Сделан на всю ширину блока,
+              чтобы разместить под кнопкой/select-ом независимо от
+              переноса строк.
+            */}
+            <p
+              className="admin-muted admin-material-requirements__pull-hint"
+              data-testid="tech-card-pull-hint"
+              style={{
+                margin: 0,
+                fontSize: '0.8rem',
+                lineHeight: 1.45,
+                width: '100%',
+              }}
+            >
+              {PULL_FROM_NOMENCLATURE_HINT}
+            </p>
+            {pullError && (
+              <span
+                className="error-box__msg"
+                role="alert"
+                style={{ fontSize: '0.85rem' }}
+              >
+                {pullError}
+              </span>
+            )}
+            {pullSummary && (
+              <span
+                className="admin-muted"
+                role="status"
+                data-testid="tech-card-pull-summary"
+                style={{ fontSize: '0.85rem' }}
+              >
+                {pullSummary}
+              </span>
+            )}
           </div>
         ) : (
-          <table className="data-table" style={{ marginBottom: '0.5rem' }}>
-            <thead>
-              <tr>
-                <th>Название</th>
-                <th>Единица</th>
-                <th className="num">Норма / 1 шт</th>
-                <th>Подрядчик</th>
-                <th>Примечание</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {outsource.map((row) => (
-                <tr key={row.key}>
-                  <td>
-                    <input
-                      name={`outsource[${row.key}][name]`}
-                      type="text"
-                      value={row.name}
-                      onChange={(e) =>
-                        updateOutsource(row.key, { name: e.target.value })
-                      }
-                      placeholder="например, Шелкография"
-                      maxLength={200}
-                      style={{ width: '100%' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      name={`outsource[${row.key}][unit]`}
-                      type="text"
-                      value={row.unit}
-                      onChange={(e) =>
-                        updateOutsource(row.key, { unit: e.target.value })
-                      }
-                      placeholder="шт"
-                      maxLength={32}
-                      style={{ width: 80 }}
-                    />
-                  </td>
-                  <td className="num">
-                    <input
-                      name={`outsource[${row.key}][qtyPerUnit]`}
-                      type="text"
-                      inputMode="decimal"
-                      value={row.qtyPerUnit}
-                      onChange={(e) =>
-                        updateOutsource(row.key, {
-                          qtyPerUnit: e.target.value,
-                        })
-                      }
-                      placeholder="опц."
-                      style={{ width: 100, textAlign: 'right' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      name={`outsource[${row.key}][vendorName]`}
-                      type="text"
-                      value={row.vendorName}
-                      onChange={(e) =>
-                        updateOutsource(row.key, {
-                          vendorName: e.target.value,
-                        })
-                      }
-                      maxLength={120}
-                      style={{ width: '100%' }}
-                    />
-                  </td>
-                  <td>
-                    <input
-                      name={`outsource[${row.key}][note]`}
-                      type="text"
-                      value={row.note}
-                      onChange={(e) =>
-                        updateOutsource(row.key, { note: e.target.value })
-                      }
-                      maxLength={500}
-                      style={{ width: '100%' }}
-                    />
-                  </td>
-                  <td>
-                    <button
-                      type="button"
-                      className="btn btn-ghost"
-                      onClick={() =>
-                        setOutsource((p) =>
-                          p.filter((r) => r.key !== row.key),
-                        )
-                      }
-                      aria-label="Удалить строку"
-                      title="Удалить"
-                    >
-                      ×
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          // Если активных номенклатур нет — кнопку «Подтянуть из
+          // номенклатуры» отрисовать нечем. Показываем понятное
+          // disabled-сообщение, чтобы менеджер не думал, что страница
+          // сломалась (см. ТЗ §5: «безопасное сообщение, если
+          // номенклатура не выбрана»).
+          <p
+            className="admin-muted"
+            style={{ margin: 0, fontSize: '0.85rem' }}
+            data-testid="tech-card-pull-empty"
+          >
+            Активных номенклатур пока нет — подтягивать материалы не из чего.
+            Заполните хотя бы одну активную номенклатуру с нормами на изделие,
+            и тогда здесь появится кнопка «Подтянуть из номенклатуры».
+          </p>
+        )}
+        {materials.length === 0 ? (
+          <p className="admin-muted" style={{ margin: 0, fontSize: '0.88rem' }}>
+            Пока пусто — добавьте при необходимости.
+          </p>
+        ) : (
+          <div className="admin-stack" style={{ gap: '0.75rem' }}>
+            {materials.map((row) => (
+              <MaterialRowCard
+                key={row.key}
+                row={row}
+                techCardId={techCardId}
+                onChange={(patch) => updateMaterial(row.key, patch)}
+                onImageUploaded={(url, fileName) =>
+                  updateMaterial(row.key, {
+                    materialImageUrl: url,
+                    materialImageOriginalFileName: fileName ?? '',
+                  })
+                }
+                onRemove={() =>
+                  setMaterials((p) => p.filter((r) => r.key !== row.key))
+                }
+              />
+            ))}
+          </div>
         )}
       </section>
 
-      <div className="detail-form__actions">
+      {/*
+        Этап «Техкарта = материальные требования»: блок «Внешние
+        потребности» больше не предлагает создавать новые нанесения
+        в техкарте (нанесение задаётся в заказе покупателя через
+        `OrderApplication`, упаковка — операциями маршрута). Кнопка
+        «Добавить» убрана; сами строки рендерятся ТОЛЬКО если у
+        старой техкарты они уже есть, и помечены как legacy. Backend
+        / Prisma / `TechCardOutsourceLine` не трогаем — это чистый
+        UI/compatibility refactor.
+      */}
+      {outsource.length > 0 && (
+        <section className="admin-stack admin-tech-card-outsource-legacy">
+          <div className="admin-actions-row admin-actions-row--split">
+            <strong>Внешние потребности (legacy)</strong>
+          </div>
+          <p
+            className="admin-muted admin-tech-card-outsource-legacy__hint"
+            style={{ margin: 0, fontSize: '0.85rem', lineHeight: 1.45 }}
+          >
+            {OUTSOURCE_LEGACY_HINT}
+          </p>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Название</th>
+                  <th>Ед.</th>
+                  <th style={{ textAlign: 'right' }}>Норма / шт</th>
+                  <th>Подрядчик</th>
+                  <th>Активация</th>
+                  <th>Примечание</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {outsource.map((row) => (
+                  <tr key={row.key}>
+                    <td>
+                      <input
+                        name={`outsource[${row.key}][name]`}
+                        type="text"
+                        value={row.name}
+                        onChange={(e) =>
+                          updateOutsource(row.key, { name: e.target.value })
+                        }
+                        placeholder="Шелкография"
+                        maxLength={200}
+                        style={{ width: '100%' }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        name={`outsource[${row.key}][unit]`}
+                        type="text"
+                        value={row.unit}
+                        onChange={(e) =>
+                          updateOutsource(row.key, { unit: e.target.value })
+                        }
+                        placeholder="шт"
+                        maxLength={32}
+                        style={{ width: 80 }}
+                      />
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      <input
+                        name={`outsource[${row.key}][qtyPerUnit]`}
+                        type="text"
+                        inputMode="decimal"
+                        value={row.qtyPerUnit}
+                        onChange={(e) =>
+                          updateOutsource(row.key, {
+                            qtyPerUnit: e.target.value,
+                          })
+                        }
+                        placeholder="опц."
+                        style={{ width: 100, textAlign: 'right' }}
+                      />
+                    </td>
+                    <td>
+                      <input
+                        name={`outsource[${row.key}][vendorName]`}
+                        type="text"
+                        value={row.vendorName}
+                        onChange={(e) =>
+                          updateOutsource(row.key, {
+                            vendorName: e.target.value,
+                          })
+                        }
+                        maxLength={120}
+                        style={{ width: '100%' }}
+                      />
+                    </td>
+                    <td>
+                      <select
+                        name={`outsource[${row.key}][triggerType]`}
+                        value={row.triggerType}
+                        onChange={(e) =>
+                          updateOutsource(row.key, {
+                            triggerType: e.target.value as OutsourceTriggerType,
+                          })
+                        }
+                        title="Условие готовности (ADR-0022)"
+                        style={{ minWidth: 200 }}
+                      >
+                        <option value="MANUAL">
+                          {OUTSOURCE_TRIGGER_LABELS.MANUAL}
+                        </option>
+                        <option value="CUT_READY">
+                          {OUTSOURCE_TRIGGER_LABELS.CUT_READY}
+                        </option>
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        name={`outsource[${row.key}][note]`}
+                        type="text"
+                        value={row.note}
+                        onChange={(e) =>
+                          updateOutsource(row.key, { note: e.target.value })
+                        }
+                        maxLength={500}
+                        style={{ width: '100%' }}
+                      />
+                    </td>
+                    <td className="admin-table__actions">
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn--ghost"
+                        onClick={() =>
+                          setOutsource((p) =>
+                            p.filter((r) => r.key !== row.key),
+                          )
+                        }
+                        aria-label="Удалить строку"
+                        title="Удалить"
+                      >
+                        <Trash2 size={14} strokeWidth={1.6} aria-hidden />
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      )}
+
+      <div className="admin-actions-row">
         <SubmitButton mode={mode} />
       </div>
 
@@ -444,9 +870,570 @@ export function TechCardForm({ mode, template }: Props) {
       )}
       {state.ok && state.successMessage && (
         <div className="success-box" role="status">
+          <Check size={14} strokeWidth={1.6} aria-hidden />
           {state.successMessage}
         </div>
       )}
     </form>
+  );
+}
+
+/**
+ * Карточка одной строки материала. Этап «Техкарта = материальные
+ * требования»:
+ *   - видимые поля: роль материала, характеристика полотна,
+ *     плотность, плановая ширина рулона, правило цвета,
+ *     фиксированный цвет;
+ *   - legacy поля (`name`, `unit`, `qtyPerUnit`, `note`) больше
+ *     НЕ показываются пользователю — они уходят как hidden inputs
+ *     и подменяются на безопасные fallback-значения в
+ *     `actions.ts::buildMaterialLines`, если строка создана в
+ *     новом UI и не имеет старых значений.
+ *
+ * Backward-compat: если строка пришла со старой техкарты с
+ * заполненными `name`/`unit`/`qtyPerUnit`/`note`, эти значения
+ * сохраняются в state-е и уходят hidden-ом обратно — они НЕ теряются.
+ *
+ * Поле «Фиксированный цвет» активно только при `colorRule =
+ * FIXED_COLOR`, иначе backend всё равно зачистит значение в null.
+ */
+function MaterialRowCard({
+  row,
+  techCardId,
+  onChange,
+  onImageUploaded,
+  onRemove,
+}: {
+  row: MaterialRow;
+  /**
+   * id уже сохранённой техкарты (мы — режим `edit`). null означает,
+   * что техкарта ещё не сохранена (`create`-страница) — в этом
+   * случае upload изображения недоступен (см. ТЗ §5: «Сохраните
+   * техкарту, чтобы загрузить изображение»).
+   */
+  techCardId: string | null;
+  onChange: (patch: Partial<Omit<MaterialRow, 'key'>>) => void;
+  /**
+   * Колбэк, который форма зовёт после успешной загрузки картинки
+   * через server action — обновляем `materialImageUrl` /
+   * `materialImageOriginalFileName` в local state, чтобы при
+   * следующем submit hidden inputs ушли с актуальным URL.
+   */
+  onImageUploaded: (url: string, fileName: string | null) => void;
+  onRemove: () => void;
+}) {
+  const isFixedColor = row.colorRule === 'FIXED_COLOR';
+  // Этап «Фурнитура в техкарте» (см. ТЗ §3, §7): дополнительные поля
+  // показываем только для PACKAGING (UI-метка «Фурнитура»). Для
+  // PACKAGING также скрываются поля «Плотность, г/м²» и «Ширина
+  // рулона, см» — у фурнитуры этих характеристик нет.
+  const isHardware = row.materialRole === 'PACKAGING';
+  // Legacy roleKey — это значение в state, которого нет в whitelist
+  // `TECH_CARD_MATERIAL_ROLE_KEYS`. Например, APPLICATION со старых
+  // техкарт. Показываем как read-only `(legacy)` опцию, чтобы
+  // менеджер видел текущее значение, но НЕ предлагаем легаси для
+  // новых строк (см. ТЗ §«Совместимость старых техкарт»).
+  const isLegacyRole =
+    row.materialRole !== '' &&
+    !isKnownTechCardMaterialRoleKey(row.materialRole);
+  return (
+    <div
+      className="admin-card admin-material-row"
+      style={{
+        padding: '0.75rem 0.875rem',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.625rem',
+        background: 'var(--admin-card-subtle, transparent)',
+      }}
+    >
+      {/*
+        Скрытые legacy поля (`name`, `unit`, `qtyPerUnit`, `note`).
+        Если строка пришла со старой техкарты с заполненными
+        значениями — они сохраняются и уходят обратно. Если строка
+        создана в новом UI и пустая — `actions.ts::buildMaterialLines`
+        подменит их на безопасный fallback (см. doc-комментарий).
+      */}
+      <input
+        type="hidden"
+        name={`material[${row.key}][name]`}
+        value={row.name}
+      />
+      <input
+        type="hidden"
+        name={`material[${row.key}][unit]`}
+        value={row.unit}
+      />
+      <input
+        type="hidden"
+        name={`material[${row.key}][qtyPerUnit]`}
+        value={row.qtyPerUnit}
+      />
+      <input
+        type="hidden"
+        name={`material[${row.key}][note]`}
+        value={row.note}
+      />
+      {/*
+        Этап «Изображение материала» (см. ТЗ §5): оригинальное имя
+        файла идёт hidden-инпутом — на MVP заполняется только при
+        upload, который сделан отдельной задачей. Само поле
+        materialImageUrl ниже видимое.
+      */}
+      <input
+        type="hidden"
+        name={`material[${row.key}][materialImageOriginalFileName]`}
+        value={row.materialImageOriginalFileName}
+      />
+
+      <div className="admin-material-row__grid">
+        <div className="admin-field">
+          <label htmlFor={`mat-${row.key}-role`}>Роль материала</label>
+          <select
+            id={`mat-${row.key}-role`}
+            name={`material[${row.key}][materialRole]`}
+            value={row.materialRole}
+            onChange={(e) =>
+              onChange({
+                materialRole: e.target.value,
+              })
+            }
+            style={{ width: '100%' }}
+          >
+            <option value="">— не задано —</option>
+            {/*
+              Этап «Доработка UI и контракта техкарты» (см. ТЗ §1):
+              источник ролей — `PATTERN_CATEGORY_PARAMETER_GROUPS`
+              (через re-export `TECH_CARD_MATERIAL_ROLE_KEYS`). UI-
+              лейблы берутся через `getTechCardMaterialRoleLabel`,
+              которая для PACKAGING возвращает «Фурнитура» (см. ТЗ §1
+              «Не возвращать пользователю старый лейбл для PACKAGING»).
+              HARDWARE как отдельный roleKey не вводим — фурнитура
+              остаётся за PACKAGING (см. ТЗ).
+            */}
+            {TECH_CARD_MATERIAL_ROLE_KEYS.map((role) => (
+              <option key={role} value={role}>
+                {getTechCardMaterialRoleLabel(role)}
+              </option>
+            ))}
+            {/*
+              Backward-compat: legacy roleKey (например `APPLICATION`,
+              ad-hoc-строки старых техкарт) показываем как «текущий
+              выбор» с пометкой «(legacy)», чтобы менеджер видел
+              значение и мог переключить на новую роль / убрать.
+              Whitelist для НОВЫХ строк не содержит таких значений.
+            */}
+            {isLegacyRole && (
+              <option value={row.materialRole}>
+                {getTechCardMaterialRoleLabel(row.materialRole)} (legacy)
+              </option>
+            )}
+          </select>
+        </div>
+        <div className="admin-field">
+          <label htmlFor={`mat-${row.key}-fabric`}>
+            Характеристика полотна
+          </label>
+          <input
+            id={`mat-${row.key}-fabric`}
+            name={`material[${row.key}][fabricType]`}
+            type="text"
+            value={row.fabricType}
+            onChange={(e) => onChange({ fabricType: e.target.value })}
+            placeholder="кулирка / двунитка / интерлок"
+            maxLength={120}
+            style={{ width: '100%' }}
+          />
+        </div>
+        {/*
+          Этап «Фурнитура в техкарте» (см. ТЗ §7): для PACKAGING поля
+          «Плотность, г/м²» и «Ширина рулона, см» не имеют смысла —
+          они применимы только к ткани/полотну. Прячем видимые
+          инпуты, чтобы не путать менеджера, и отправляем пустые
+          hidden inputs (backend всё равно зачищает в null для
+          PACKAGING — см. `materialLineCreateData`).
+        */}
+        {isHardware ? (
+          <>
+            <input
+              type="hidden"
+              name={`material[${row.key}][densityGsm]`}
+              value=""
+            />
+            <input
+              type="hidden"
+              name={`material[${row.key}][plannedWidthCm]`}
+              value=""
+            />
+          </>
+        ) : (
+          <>
+            <div className="admin-field">
+              <label htmlFor={`mat-${row.key}-density`}>Плотность, г/м²</label>
+              <input
+                id={`mat-${row.key}-density`}
+                name={`material[${row.key}][densityGsm]`}
+                type="number"
+                min={1}
+                step={1}
+                value={row.densityGsm}
+                onChange={(e) => onChange({ densityGsm: e.target.value })}
+                placeholder="180"
+                style={{ width: '100%', textAlign: 'right' }}
+              />
+            </div>
+            <div className="admin-field">
+              <label htmlFor={`mat-${row.key}-width`}>Ширина рулона, см</label>
+              <input
+                id={`mat-${row.key}-width`}
+                name={`material[${row.key}][plannedWidthCm]`}
+                type="number"
+                min={1}
+                step={1}
+                value={row.plannedWidthCm}
+                onChange={(e) => onChange({ plannedWidthCm: e.target.value })}
+                placeholder="180"
+                style={{ width: '100%', textAlign: 'right' }}
+              />
+            </div>
+          </>
+        )}
+        <div className="admin-field">
+          <label htmlFor={`mat-${row.key}-color-rule`}>Правило цвета</label>
+          <select
+            id={`mat-${row.key}-color-rule`}
+            name={`material[${row.key}][colorRule]`}
+            value={row.colorRule}
+            onChange={(e) =>
+              onChange({
+                colorRule: e.target.value as '' | TechCardMaterialColorRule,
+              })
+            }
+            style={{ width: '100%' }}
+          >
+            <option value="">— не задано —</option>
+            {TECH_CARD_MATERIAL_COLOR_RULES.map((rule) => (
+              <option key={rule} value={rule}>
+                {TECH_CARD_MATERIAL_COLOR_RULE_LABELS[rule]}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="admin-field">
+          <label htmlFor={`mat-${row.key}-fixed-color`}>
+            Фиксированный цвет
+          </label>
+          <input
+            id={`mat-${row.key}-fixed-color`}
+            name={`material[${row.key}][fixedColorText]`}
+            type="text"
+            value={row.fixedColorText}
+            onChange={(e) => onChange({ fixedColorText: e.target.value })}
+            placeholder={isFixedColor ? 'чёрный / графит' : '— не нужно —'}
+            maxLength={120}
+            disabled={!isFixedColor}
+            style={{ width: '100%' }}
+            title={
+              isFixedColor
+                ? 'Заполните цвет, который будет копироваться в snapshot заказа'
+                : 'Активно только при правиле «Фиксированный цвет»'
+            }
+          />
+        </div>
+        {/*
+          Этап «Фурнитура в техкарте» (см. ТЗ §3): дополнительные поля
+          для PACKAGING (UI-метка «Фурнитура»). Для других ролей
+          инпуты hidden — backend всё равно зачищает в null.
+        */}
+        {isHardware ? (
+          <>
+            <div className="admin-field">
+              <label htmlFor={`mat-${row.key}-hw-size`}>
+                Размер / характеристика
+              </label>
+              <input
+                id={`mat-${row.key}-hw-size`}
+                name={`material[${row.key}][hardwareSizeText]`}
+                type="text"
+                value={row.hardwareSizeText}
+                onChange={(e) =>
+                  onChange({ hardwareSizeText: e.target.value })
+                }
+                placeholder="например, 8 мм / люверсы / молния 50 см"
+                maxLength={120}
+                style={{ width: '100%' }}
+                data-testid="material-hardware-size"
+              />
+            </div>
+            <div className="admin-field">
+              <label htmlFor={`mat-${row.key}-hw-material`}>Материал</label>
+              <input
+                id={`mat-${row.key}-hw-material`}
+                name={`material[${row.key}][hardwareMaterialText]`}
+                type="text"
+                value={row.hardwareMaterialText}
+                onChange={(e) =>
+                  onChange({ hardwareMaterialText: e.target.value })
+                }
+                placeholder="например, металл / пластик"
+                maxLength={120}
+                style={{ width: '100%' }}
+                data-testid="material-hardware-material"
+              />
+            </div>
+          </>
+        ) : (
+          <>
+            {/*
+              Не-PACKAGING: hardware* всё равно отправляем hidden-ом,
+              чтобы при переключении роли значения не пропадали из
+              state-а формы (backend всё равно зачистит при сохранении
+              для не-PACKAGING ролей).
+            */}
+            <input
+              type="hidden"
+              name={`material[${row.key}][hardwareSizeText]`}
+              value={row.hardwareSizeText}
+            />
+            <input
+              type="hidden"
+              name={`material[${row.key}][hardwareMaterialText]`}
+              value={row.hardwareMaterialText}
+            />
+          </>
+        )}
+        {/*
+          Этап «Изображение материала» (см. ТЗ §5, §9): upload файла
+          JPG/PNG. URL руками вводить нельзя (см. ТЗ §15 «Не
+          использовать URL как основной upload UX») — для свежих
+          несохранённых строк показываем подсказку, для существующих
+          строк — file input + превью.
+
+          materialImageUrl остаётся в БД (хранит публичный путь
+          файла, см. ТЗ §9 «Не удалять поле materialImageUrl из
+          Prisma»), но в форме передаётся hidden input-ом — менеджер
+          его не редактирует.
+        */}
+        <input
+          type="hidden"
+          name={`material[${row.key}][materialImageUrl]`}
+          value={row.materialImageUrl}
+        />
+        <div className="admin-field admin-material-row__image">
+          <label>Изображение материала</label>
+          <MaterialImageUploader
+            techCardId={techCardId}
+            lineId={row.existingLineId}
+            currentUrl={row.materialImageUrl || null}
+            currentFileName={row.materialImageOriginalFileName || null}
+            onUploaded={onImageUploaded}
+          />
+        </div>
+        <div className="admin-field admin-material-row__remove">
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            onClick={onRemove}
+            aria-label="Удалить строку"
+            title="Удалить"
+          >
+            <Trash2 size={14} strokeWidth={1.6} aria-hidden />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Загрузчик изображения строки материала техкарты (см. ТЗ §5, §9).
+ *
+ * Поведение по состояниям:
+ *   - `techCardId === null` или `lineId === null` → строка ещё не
+ *     сохранена в БД. Показываем disabled-кнопку и подсказку
+ *     «Сохраните техкарту, чтобы загрузить изображение». Это
+ *     сознательный MVP-выбор (см. ТЗ §5): backend-эндпоинт upload-а
+ *     адресует строку по конкретному `lineId`, поэтому загружать
+ *     можно только после первого save техкарты.
+ *   - оба id есть → показываем `<input type="file" accept="...">`
+ *     и кнопку «Загрузить»; после успеха обновляем превью и URL
+ *     через `onUploaded`-колбэк.
+ *
+ * URL руками не редактируется (см. ТЗ §9, §15 — «Не использовать
+ * URL как основной upload UX»). materialImageUrl при этом продолжает
+ * жить в форме hidden-ом, чтобы submit ушёл с актуальным значением
+ * (после upload оно уже изменилось через onUploaded).
+ */
+function MaterialImageUploader({
+  techCardId,
+  lineId,
+  currentUrl,
+  currentFileName,
+  onUploaded,
+}: {
+  techCardId: string | null;
+  lineId: string | null;
+  currentUrl: string | null;
+  currentFileName: string | null;
+  onUploaded: (url: string, fileName: string | null) => void;
+}) {
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const canUpload = techCardId !== null && lineId !== null;
+  const action =
+    canUpload
+      ? uploadMaterialImageAction.bind(null, techCardId!, lineId!)
+      : null;
+  const [state, formAction] = useFormState<UploadMaterialImageState, FormData>(
+    action ?? noopUploadAction,
+    initialUploadMaterialImageState,
+  );
+
+  // После успешного upload — синхронизируем local state строки в
+  // родительском компоненте, чтобы submit формы шёл с новым URL.
+  // useFormState не даёт callback-а на success, поэтому
+  // используем эффект через useState-zero-dep idiom: проверяем
+  // и зовём, не создавая дополнительный re-render.
+  if (state.ok && state.template) {
+    const updatedLine = state.template.materialLines.find(
+      (l) => l.id === lineId,
+    );
+    if (
+      updatedLine &&
+      updatedLine.materialImageUrl &&
+      updatedLine.materialImageUrl !== currentUrl
+    ) {
+      // Defer in microtask to avoid setState-during-render warning.
+      queueMicrotask(() =>
+        onUploaded(
+          updatedLine.materialImageUrl ?? '',
+          updatedLine.materialImageOriginalFileName ?? null,
+        ),
+      );
+    }
+  }
+
+  if (!canUpload) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 4,
+          fontSize: '0.85rem',
+        }}
+        data-testid="material-image-upload-disabled"
+      >
+        <button
+          type="button"
+          className="admin-btn admin-btn--ghost"
+          disabled
+          title="Сохраните техкарту, чтобы загрузить изображение"
+          style={{ alignSelf: 'flex-start' }}
+        >
+          <Upload size={14} strokeWidth={1.6} aria-hidden />
+          Загрузить изображение
+        </button>
+        <span className="admin-muted" style={{ fontSize: '0.8rem' }}>
+          Сохраните техкарту, чтобы загрузить изображение.
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <form
+      action={formAction}
+      style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+      data-testid="material-image-upload-form"
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+        <input
+          ref={fileInputRef}
+          type="file"
+          name="file"
+          accept=".jpg,.jpeg,.png,image/jpeg,image/png"
+          style={{ fontSize: '0.85rem' }}
+          data-testid="material-image-file-input"
+          required
+          // После выбора файла сразу submit — менеджеру не нужно
+          // нажимать дополнительную кнопку.
+          onChange={(e) => {
+            const file = e.target.files?.[0];
+            if (file) {
+              const formEl = e.currentTarget.form;
+              if (formEl) formEl.requestSubmit();
+            }
+          }}
+        />
+        <UploadSubmitButton />
+      </div>
+      {currentUrl ? (
+        <a
+          href={currentUrl}
+          target="_blank"
+          rel="noreferrer"
+          className="admin-material-row__image-preview"
+          title="Открыть изображение в новой вкладке"
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={currentUrl}
+            alt={currentFileName ?? 'Изображение материала'}
+            style={{
+              maxHeight: 64,
+              maxWidth: 96,
+              objectFit: 'contain',
+              border: '1px solid var(--admin-border, #e5e7eb)',
+              borderRadius: 4,
+            }}
+          />
+        </a>
+      ) : (
+        <span
+          className="admin-muted"
+          style={{ fontSize: '0.8rem', display: 'inline-flex', gap: 4 }}
+        >
+          <ImageIcon size={12} strokeWidth={1.6} aria-hidden />
+          превью появится после загрузки JPG/PNG
+        </span>
+      )}
+      {state.error && (
+        <span
+          className="error-box__msg"
+          role="alert"
+          style={{ fontSize: '0.8rem' }}
+        >
+          {state.error}
+        </span>
+      )}
+    </form>
+  );
+}
+
+/**
+ * Заглушка для `useFormState`, когда upload запрещён (новая
+ * несохранённая строка). Хук React требует стабильный action на
+ * каждом рендере, поэтому тут нужен постоянный no-op вместо
+ * условного `null`.
+ */
+async function noopUploadAction(
+  prev: UploadMaterialImageState,
+): Promise<UploadMaterialImageState> {
+  return prev;
+}
+
+function UploadSubmitButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      className="admin-btn admin-btn--ghost"
+      disabled={pending}
+      style={{ fontSize: '0.85rem' }}
+      title="Загрузить выбранный файл (JPG/PNG)"
+      data-testid="material-image-upload-submit"
+    >
+      {pending ? 'Загружаем…' : 'Загрузить'}
+    </button>
   );
 }

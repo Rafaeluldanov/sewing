@@ -47,15 +47,36 @@ Employee.compensationType  CompensationType  default PIECEWORK
 Employee.salaryPerShift    Decimal(12,2)?    // обязателен для SALARY/MIXED
 ```
 
-`enum CompensationType { PIECEWORK | SALARY | MIXED }` — отдельная
-управленческая ось, не путаемая с уже существующим
-`Employee.paymentType` (тот остаётся источником истины для сдельщины
-и не трогается). `MIXED` означает «сотрудник получает и оклад за день,
-и сдельные `OperationEntry` параллельно» — кейс мастера-помощника,
-который иногда сам встаёт на оверлок.
+`enum CompensationType { PIECEWORK | SALARY | MIXED }` — единственная
+ось «как платим». На момент принятия этого ADR в схеме параллельно
+жил `Employee.paymentType` (источник истины для сдельщины), но
+последующая пост-задача его удалила (миграция
+`20260429100000_remove_payment_type`): теперь `compensationType`
+одновременно гейтит и сдельный контур (`PIECEWORK`/`MIXED` ⇒
+`OperationEntry`, `SALARY` ⇒ silent skip), и окладной (`SALARY`/`MIXED`
+⇒ `SalaryEntry`, `PIECEWORK` ⇒ skip). `MIXED` означает «сотрудник
+получает и оклад за день, и сдельные `OperationEntry` параллельно» —
+кейс мастера-помощника, который иногда сам встаёт на оверлок.
+
+После пост-задачи cleanup-а эти три ветки выражены в коде ровно тремя
+pure-функциями `apps/api/src/modules/employees/compensation.ts`:
+
+- `isPieceworkEligible(type)` — `true` для `PIECEWORK`/`MIXED`, gate
+  для `EarningsService` перед созданием `OperationEntry`;
+- `isSalaryEligible(type)` — `true` для `SALARY`/`MIXED`, gate для
+  `SalaryService.syncDailySalary`, `CostsService.minuteRate`,
+  `DashboardService` (role load / idle);
+- `requiresSalaryRate(type)` — тождествен `isSalaryEligible`,
+  используется `EmployeesService.create/update` как guard перед
+  бросанием `EMPLOYEE_SALARY_RATE_REQUIRED`.
+
+Никаких прямых сравнений `compensationType === 'SALARY'` /
+`=== 'PIECEWORK'` в `*.service.ts` нет — это сознательно, чтобы при
+будущем расширении модели (например, появлении `SALARY` без часовой
+ставки) изменить семантику можно было ровно в одном файле.
 
 Инвариант сервиса (`EmployeesService.update`):
-`compensationType ∈ { SALARY, MIXED }` ⇒ `salaryPerShift` обязателен и
+`requiresSalaryRate(compensationType)` ⇒ `salaryPerShift` обязателен и
 `> 0`. Бизнес-ошибка `EMPLOYEE_SALARY_RATE_REQUIRED` (422).
 
 ### 2.2. Сущность `SalaryEntry`
@@ -99,7 +120,8 @@ INDEX  (employeeId, date), (date)
 Алгоритм:
 
 1. Загружаем `Employee.compensationType` + `salaryPerShift`. Если
-   `compensationType = PIECEWORK` или сотрудник неактивен — выходим.
+   `!isSalaryEligible(compensationType)` (т.е. `PIECEWORK`) или
+   сотрудник неактивен — выходим.
 2. Считаем количество `ShiftSession` за этот день. Если 0 — выходим
    (аномальный кейс: вызвали без смены).
 3. Если `salaryPerShift = null` — выходим. Это аномалия (инвариант

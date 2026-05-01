@@ -36,6 +36,7 @@ import {
 import { BoxNumberService } from './box-number.service.js';
 import { getApiUrl } from '../passports/qr.js';
 import { EarningsService } from '../earnings/earnings.service.js';
+import { AuditService } from '../audit/audit.service.js';
 
 type BoxRow = Prisma.BoxGetPayload<{
   include: {
@@ -87,6 +88,7 @@ export class PackingService {
     private readonly prisma: PrismaService,
     private readonly numbers: BoxNumberService,
     private readonly earnings: EarningsService,
+    private readonly audit: AuditService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -323,6 +325,26 @@ export class PackingService {
           qty: fresh.qtyGood,
         },
       });
+      // Audit (см. `docs/domain.md §«Audit log»`): фиксируем
+      // упаковку — это терминальный шаг для паспорта и точка, после
+      // которой меняются денормализованные `Order.qtyFinishedTotal` и
+      // pending-начисления (после close()). entityType=PACKING, чтобы
+      // лента «история коробки» собиралась по `entityId = boxId`.
+      await this.audit.log(
+        {
+          event: 'PASSPORT_PACKED',
+          entityType: 'PACKING',
+          entityId: box.id,
+          employeeId: actorEmployeeId,
+          payload: {
+            boxId: box.id,
+            passportId: fresh.id,
+            sizeId: fresh.sizeId,
+            qty: fresh.qtyGood,
+          },
+        },
+        tx,
+      );
       // Финальный апрув начислений всем участникам цепочки по этому
       // паспорту перенесён на закрытие коробки (см. `close()` ниже и
       // ADR-0005 §«Подтверждение», обновлённое в рамках scan-driven
@@ -376,6 +398,26 @@ export class PackingService {
       for (const item of items) {
         await this.earnings.approvePendingForPassport(tx, item.passportId);
       }
+      // Audit (см. `docs/domain.md §«Audit log»`): закрытие коробки —
+      // финальный completion event цепочки; именно в этот момент
+      // pending-начисления становятся APPROVED и коробка считается
+      // выпущенной. payload содержит totalQty и список упакованных
+      // паспортов — этого достаточно для разбора инцидента «кому
+      // зачислили деньги после такого-то close-а».
+      await this.audit.log(
+        {
+          event: 'BOX_CLOSED',
+          entityType: 'PACKING',
+          entityId: box.id,
+          employeeId: actorEmployeeId,
+          payload: {
+            boxId: box.id,
+            totalQty: box.totalQty,
+            passportIds: items.map((i) => i.passportId),
+          },
+        },
+        tx,
+      );
     });
 
     return this.getOne(boxId);

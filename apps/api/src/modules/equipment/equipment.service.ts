@@ -6,6 +6,10 @@ import type {
   EquipmentSummaryDto,
   UpdateEquipmentDto,
 } from '@sewing/shared/equipment';
+import {
+  OPERATION_CATEGORY_ORDER,
+  type OperationCategory,
+} from '@sewing/shared/operations';
 import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
@@ -47,6 +51,15 @@ export class EquipmentService {
             },
           },
         },
+        // Включение категорий — additive: фронту нужно для группировки
+        // `/admin/equipment` по категориям связанных операций
+        // (см. ТЗ «Единая группировка», §6). Берём только активные
+        // связи с активной операцией, чтобы chip-список совпадал с
+        // тем, что менеджер видит в детали оборудования.
+        allowedOperations: {
+          where: { isActive: true, operation: { active: true } },
+          select: { operation: { select: { category: true } } },
+        },
       },
     });
     return rows.map((eq) => ({
@@ -57,7 +70,29 @@ export class EquipmentService {
       displayNumber: eq.displayNumber,
       active: eq.active,
       allowedOperationsCount: eq._count.allowedOperations,
+      operationCategories: this.collectCategories(
+        eq.allowedOperations.map((l) => l.operation.category),
+      ),
     }));
+  }
+
+  /**
+   * Возвращает уникальные категории операций, отсортированные по
+   * `OPERATION_CATEGORY_ORDER`. Невалидные/легаси-значения отбрасываются —
+   * UI всё равно показывает их через shared-helper как «Без категории»,
+   * но в массиве `operationCategories` мы держим только канон.
+   */
+  private collectCategories(
+    raw: ReadonlyArray<string | null | undefined>,
+  ): string[] {
+    const allowed = new Set<string>(OPERATION_CATEGORY_ORDER);
+    const seen = new Set<OperationCategory>();
+    for (const value of raw) {
+      if (value && allowed.has(value)) {
+        seen.add(value as OperationCategory);
+      }
+    }
+    return OPERATION_CATEGORY_ORDER.filter((c) => seen.has(c));
   }
 
   // -------------------------------------------------------------------------

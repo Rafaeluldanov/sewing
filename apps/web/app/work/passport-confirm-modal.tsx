@@ -29,6 +29,23 @@ export interface PassportConfirmData {
    * производства»`.
    */
   routeHint: PassportRouteHintDto | null;
+  /**
+   * Признак «паспорт в маршрутном потоке» — `currentRouteStepIndex !== null`.
+   * Симметрично серверному правилу route-WIP в
+   * `PassportsService.issueToEmployee` (см. `docs/domain.md §«Маршруты
+   * производства»`, `docs/flows.md §F3a`). UI использует этот флаг,
+   * чтобы поменять copy и не подсвечивать отсутствие ячейки как
+   * проблему. `null` — заказ без маршрута, legacy cell-based flow.
+   */
+  currentRouteStepIndex: number | null;
+  /**
+   * Код текущей ячейки паспорта (`Passport.currentCell.code`). `null` —
+   * ячейки нет: либо паспорт ещё не размещён, либо он в маршрутном
+   * потоке между шагами (route-WIP). Для legacy flow модалка
+   * показывает строку «Ячейка», для route-WIP без ячейки — спокойный
+   * subtext «Ячейка не требуется», а не тревогу.
+   */
+  currentCellCode: string | null;
 }
 
 interface Props {
@@ -70,6 +87,17 @@ export function PassportConfirmModal({
     return () => window.removeEventListener('keydown', onKey);
   }, [onCancel, pending]);
 
+  // Route-WIP UI критерий — единый для всех мест /work (см.
+  // `current-work-card.tsx`, `state.ts`). Симметричен серверному
+  // правилу в `PassportsService.issueToEmployee`.
+  const isRouteWip = passport.currentRouteStepIndex !== null;
+  // «Маршрутный поток без буфера»: паспорт в маршруте и при этом не
+  // лежит в ячейке. Только в этом случае мы заменяем складскую
+  // подсказку на маршрутную («Ячейка не требуется»). Если route-WIP
+  // паспорт временно положили в ячейку как буфер — UI продолжает
+  // показывать обычную строку «Ячейка», без drama.
+  const showRouteOnlyHint = isRouteWip && !passport.currentCellCode;
+
   return (
     <div
       className="qr-modal passport-confirm"
@@ -97,7 +125,25 @@ export function PassportConfirmModal({
         <div className="passport-confirm__number">
           <span className="passport-confirm__number-label">Паспорт</span>
           <span className="passport-confirm__number-value">{passport.number}</span>
+          {isRouteWip && (
+            <span
+              className="passport-confirm__route-badge"
+              aria-label="Паспорт идёт по маршруту"
+            >
+              Из маршрута
+            </span>
+          )}
         </div>
+
+        {showRouteOnlyHint && (
+          <p
+            className="passport-confirm__route-subtext"
+            role="status"
+            aria-live="polite"
+          >
+            Паспорт идёт по маршрутному потоку — ячейка не требуется.
+          </p>
+        )}
 
         <dl className="passport-confirm__grid">
           <div>

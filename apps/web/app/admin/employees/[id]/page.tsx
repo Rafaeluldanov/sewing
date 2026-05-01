@@ -1,24 +1,28 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ArrowLeft, Printer, ScanLine, Users } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
-import { COMPENSATION_LABELS, getEmployee } from '@/lib/employees-api';
-import { listSalary } from '@/lib/salary-api';
-import { Icon } from '@/components/icon';
-import { DetailPageHeader } from '@/components/detail-page-header';
+import { getEmployee } from '@/lib/employees-api';
+import {
+  AdminCard,
+  AdminPageShell,
+  AdminSectionHeader,
+  AdminStatusBadge,
+  AdminTechInfo,
+} from '@/components/admin';
+import {
+  buildEmployeePrintPath,
+  buildEmployeeQrPath,
+} from '@/lib/browser-api-paths';
+import {
+  formatCompensation,
+  formatRole,
+  formatStatus,
+  statusTone,
+} from '@/lib/admin-labels';
 import { EmployeeEditForm } from './edit-form';
 
 export const dynamic = 'force-dynamic';
-
-const ROLE_LABELS: Record<string, string> = {
-  ADMIN: 'Администратор',
-  SHOP_MANAGER: 'Начальник цеха',
-  CUTTER: 'Раскройщик',
-  CUTTER_ASSISTANT: 'Помощник раскройщика',
-  SEAMSTRESS: 'Швея',
-  QC: 'ОТК',
-  IRONING: 'ВТО',
-  PACKING: 'Упаковка',
-};
 
 function formatDateOnly(iso: string): string {
   const d = new Date(iso);
@@ -26,13 +30,22 @@ function formatDateOnly(iso: string): string {
   return d.toLocaleDateString('ru-RU');
 }
 
-function formatMoney(value: number): string {
-  return value.toLocaleString('ru-RU', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  });
-}
-
+/**
+ * Карточка сотрудника (Admin UI 2.5).
+ *
+ * Структура — единый стандарт detail-pages:
+ *   - `AdminPageShell` с именем, ролью/active-бейджами и primary-action
+ *     «Печать QR»;
+ *   - две колонки на desktop, одна на mobile (`.admin-grid-2`):
+ *       Левая: «Основная информация» + «Доступ»
+ *       Правая: «QR сотрудника» + «Техническая информация»
+ *   - длинных описаний и тех. кодов в основном UI больше нет;
+ *     id/login/createdAt спрятаны в collapsible `<AdminTechInfo>`.
+ *
+ * Backend / DTO не меняем — `EmployeeEditForm` остаётся прежним и
+ * по-прежнему правит compensationType/salaryPerShift/active. PIN и
+ * login у Шага 19 остаются read-only management-полями (см. ADR-0021).
+ */
 export default async function AdminEmployeeDetailPage({
   params,
 }: {
@@ -48,212 +61,128 @@ export default async function AdminEmployeeDetailPage({
     throw e;
   }
 
-  // Подтягиваем последние 14 окладных начислений для сводки на карточке.
-  // Не критично если упадёт (например, если БД ещё не мигрирована
-  // полностью) — fail-soft, основная форма всё равно отрисуется.
-  let recentSalary;
-  try {
-    recentSalary = await listSalary({
-      employeeId: employee.id,
-      page: 1,
-      pageSize: 14,
-    });
-  } catch {
-    recentSalary = null;
-  }
-
-  const roleLabel = ROLE_LABELS[employee.role] ?? employee.role;
+  const qrUrl = buildEmployeeQrPath(employee.id);
+  const printUrl = buildEmployeePrintPath(employee.id);
 
   return (
-    <div className="page-shell">
-      <DetailPageHeader
-        eyebrow="Сотрудник"
-        icon="employees"
-        title={employee.fullName}
-        subtitle="Управленческая карточка: тип компенсации, ставка за смену и архив. Поля login / role меняются через seed (см. ADR-0021)."
-        backHref="/admin/employees"
-        backLabel="К списку сотрудников"
-        meta={
-          <>
-            <span>
-              Логин: <code>{employee.login}</code>
-            </span>
-            <span>·</span>
-            <span>{roleLabel}</span>
-            <span>·</span>
-            <span>В системе с {formatDateOnly(employee.createdAt)}</span>
-          </>
-        }
-        badges={
-          <>
-            <span className={`pill ${employee.active ? 'pill--ok' : 'pill--ghost'}`}>
-              <Icon name={employee.active ? 'success' : 'idle'} size={14} />
-              {employee.active ? 'Активен' : 'В архиве'}
-            </span>
-            <span className="pill pill--accent">
-              <Icon name="earnings" size={14} />
-              {COMPENSATION_LABELS[employee.compensationType]}
-            </span>
-          </>
-        }
-      />
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="info" />
-            Основное
-          </h2>
-        </div>
-        <div className="data-list">
-          <div className="data-list__item">
-            <span className="data-list__label">ФИО</span>
-            <span className="data-list__value">{employee.fullName}</span>
-          </div>
-          <div className="data-list__item">
-            <span className="data-list__label">Логин</span>
-            <span className="data-list__value">
-              <code>{employee.login}</code>
-            </span>
-          </div>
-          <div className="data-list__item">
-            <span className="data-list__label">Роль</span>
-            <span className="data-list__value">{roleLabel}</span>
-          </div>
-          <div className="data-list__item">
-            <span className="data-list__label">В системе с</span>
-            <span className="data-list__value">
-              {formatDateOnly(employee.createdAt)}
-            </span>
-          </div>
-        </div>
-      </section>
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="earnings" />
-            Оплата
-          </h2>
-          <span className="section-header__hint">
-            Источник истины — этот блок (см. /earnings и ADR-0021).
-          </span>
-        </div>
-        <div className="data-list" style={{ marginBottom: '1rem' }}>
-          <div className="data-list__item">
-            <span className="data-list__label">Тип компенсации</span>
-            <span className="data-list__value">
-              {COMPENSATION_LABELS[employee.compensationType]}
-            </span>
-          </div>
-          <div className="data-list__item">
-            <span className="data-list__label">Ставка за смену</span>
-            <span className="data-list__value">
-              {employee.salaryPerShift !== null ? (
-                <>{formatMoney(employee.salaryPerShift)} ₽</>
-              ) : (
-                <span className="data-list__value--muted">—</span>
-              )}
-            </span>
-          </div>
-          <div className="data-list__item">
-            <span className="data-list__label">Тип оплаты (legacy)</span>
-            <span className="data-list__value">
-              {employee.paymentType === 'SALARY' ? 'Оклад' : 'Сдельная'}
-              {employee.salaryBase !== null && (
-                <span className="data-list__value--muted">
-                  {' '}· {formatMoney(employee.salaryBase)} ₽/мес
-                </span>
-              )}
-            </span>
-          </div>
-          <div className="data-list__item">
-            <span className="data-list__label">Статус</span>
-            <span className="data-list__value">
-              {employee.active ? (
-                <span className="pill pill--ok">
-                  <Icon name="success" size={14} /> Активен
-                </span>
-              ) : (
-                <span className="pill pill--ghost">
-                  <Icon name="idle" size={14} /> В архиве
-                </span>
-              )}
-            </span>
-          </div>
-        </div>
-        <EmployeeEditForm employee={employee} />
-      </section>
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="output" />
-            Последние начисления
-          </h2>
-          <Link href="/earnings" className="section-header__hint">
-            Открыть «Зарплата» →
+    <AdminPageShell
+      icon={<Users size={22} strokeWidth={1.6} aria-hidden />}
+      title={employee.fullName}
+      subtitle={formatRole(employee.role)}
+      actions={
+        <>
+          <Link
+            href="/admin/employees"
+            className="admin-btn admin-btn--ghost"
+          >
+            <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
+            К списку
           </Link>
+          <AdminStatusBadge tone={statusTone(employee.active)}>
+            {formatStatus(employee.active)}
+          </AdminStatusBadge>
+          <a
+            href={printUrl}
+            className="admin-btn admin-btn--primary"
+            target="_blank"
+            rel="noopener noreferrer"
+          >
+            <Printer size={16} strokeWidth={1.6} aria-hidden />
+            Печать QR
+          </a>
+        </>
+      }
+    >
+      <div className="admin-grid-2">
+        <div className="admin-stack">
+          <AdminCard>
+            <AdminSectionHeader title="Основная информация" />
+            <dl className="admin-deflist">
+              <dt>ФИО</dt>
+              <dd>{employee.fullName}</dd>
+              <dt>Роль</dt>
+              <dd>{formatRole(employee.role)}</dd>
+              <dt>Тип оплаты</dt>
+              <dd>{formatCompensation(employee.compensationType)}</dd>
+              <dt>В системе с</dt>
+              <dd>{formatDateOnly(employee.createdAt)}</dd>
+            </dl>
+          </AdminCard>
+
+          <AdminCard>
+            <AdminSectionHeader title="Доступ" />
+            <dl className="admin-deflist">
+              <dt>PIN</dt>
+              <dd className="admin-muted">скрыт</dd>
+              <dt>Логин</dt>
+              <dd>
+                <code style={{ fontSize: '0.85rem' }}>{employee.login}</code>
+              </dd>
+            </dl>
+            <EmployeeEditForm employee={employee} />
+          </AdminCard>
         </div>
-        {recentSalary && recentSalary.items.length > 0 ? (
-          <div className="inline-table-wrap">
-            <table className="data-table">
-              <thead>
-                <tr>
-                  <th>Дата</th>
-                  <th className="num">Сумма, ₽</th>
-                  <th>Источник</th>
-                  <th>Комментарий</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentSalary.items.map((s) => (
-                  <tr key={s.id}>
-                    <td>{formatDateOnly(s.date)}</td>
-                    <td className="num">
-                      <strong>{formatMoney(s.amount)}</strong>
-                      {s.editedManually && (
-                        <div className="data-list__value--muted" style={{ fontSize: '0.78rem' }}>
-                          исправлено вручную
-                        </div>
-                      )}
-                    </td>
-                    <td>
-                      {s.source === 'SHIFT_DAY' ? (
-                        <span className="pill">
-                          <Icon name="period" size={13} /> смена
-                        </span>
-                      ) : (
-                        <span className="pill pill--accent">
-                          <Icon name="edit" size={13} /> вручную
-                        </span>
-                      )}
-                    </td>
-                    <td>
-                      {s.managerComment ? (
-                        <span>{s.managerComment}</span>
-                      ) : (
-                        <span className="data-list__value--muted">—</span>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        ) : (
-          <div className="empty-state">
-            <span className="empty-state__icon">
-              <Icon name="earnings" />
-            </span>
-            <span className="empty-state__title">Окладных начислений пока нет</span>
-            <span className="empty-state__hint">
-              Они появятся автоматически при старте смены (для SALARY/MIXED).
-              Вручную — через `/earnings`.
-            </span>
-          </div>
-        )}
-      </section>
-    </div>
+
+        <div className="admin-stack">
+          <AdminCard>
+            <AdminSectionHeader title="QR сотрудника" />
+            <div className="admin-qr-card__body">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={qrUrl}
+                alt={`QR сотрудника ${employee.fullName}`}
+                width={160}
+                height={160}
+                className="admin-qr-card__image"
+              />
+              <div className="admin-qr-card__actions">
+                <a
+                  href={qrUrl}
+                  className="admin-btn"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <ScanLine size={16} strokeWidth={1.6} aria-hidden />
+                  Открыть QR
+                </a>
+                <a
+                  href={printUrl}
+                  className="admin-btn admin-btn--primary"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                >
+                  <Printer size={16} strokeWidth={1.6} aria-hidden />
+                  Печать
+                </a>
+              </div>
+            </div>
+          </AdminCard>
+
+          <AdminTechInfo
+            items={[
+              { label: 'ID', value: <code>{employee.id}</code> },
+              { label: 'Логин', value: <code>{employee.login}</code> },
+              { label: 'Роль (enum)', value: <code>{employee.role}</code> },
+              {
+                label: 'Тип оплаты (enum)',
+                value: <code>{employee.compensationType}</code>,
+              },
+              {
+                label: 'Создан',
+                value: new Date(employee.createdAt).toLocaleString('ru-RU'),
+              },
+              ...(employee.salaryBase !== null
+                ? [
+                    {
+                      label: 'salaryBase (legacy)',
+                      value: `${employee.salaryBase} ₽/мес`,
+                    },
+                  ]
+                : []),
+            ]}
+          />
+        </div>
+      </div>
+    </AdminPageShell>
   );
 }

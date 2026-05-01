@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeWto } from '@/lib/rbac';
+import { CallMasterButton } from '@/components/call-master-button';
 
 /**
  * Route-level guard для всего раздела `/wto/*`.
@@ -21,5 +22,11 @@ export default async function WtoSectionLayout({
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/wto');
   if (!canSeeWto(me.user.role)) redirect('/');
-  return <>{children}</>;
+  const showMasterCall = me.user.role === 'IRONING';
+  return (
+    <>
+      {children}
+      {showMasterCall ? <CallMasterButton /> : null}
+    </>
+  );
 }

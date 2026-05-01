@@ -5,34 +5,57 @@
  *
  * Архитектура повторяет паттерн швеи на `/work` (см.
  * `apps/web/app/work/seamstress-active-panel.tsx`) и зеркалит
- * `WtoTerminal` (см. `apps/web/app/wto/wto-terminal.tsx`):
- *   - одна primary-кнопка «Сканировать паспорт» открывает
- *     `QrScannerModal` (та же камера, что у швеи);
- *   - после распознавания QR `lookupQcPassportAction` сначала
- *     «принимает» паспорт скан-сценарием (общий
- *     `POST /api/passports/:id/scan` → `passport.currentOperationId`
- *     переключается на операцию категории QC, и shopfloor-проекция
- *     двигает паспорт в bucket `QC`), а уже потом тянет QC-карточку
- *     (`GET /api/qc/passports/:id`) и показывает `QcWorkCard`;
- *   - в карточке ОТК фиксирует брак (через существующий endpoint
- *     `POST /api/qc/passports/:id/defects`) и/или нажимает
- *     «Проверка выполнена» (`POST /api/qc/passports/:id/complete` →
- *     пишет `PassportEvent(QC_PASSED)`, и shopfloor-проекция
- *     двигает паспорт в bucket `QC_DONE`).
+ * `WtoTerminal` (см. `apps/web/app/wto/wto-terminal.tsx`).
+ *
+ * Состояния (по аналогии с `apps/web/app/packing/packing-terminal.tsx`):
+ *   1. **Нет активной смены** → рендерим reuse-форму
+ *      `SeamstressShiftStart`: тот же mobile-first scan-flow «QR
+ *      оборудования → выбор разрешённой операции → подтверждение»
+ *      (ADR-0017, источник истины — `EquipmentOperation`). Для ОТК
+ *      это типично рабочее место `qc-station-01` с allow-листом из
+ *      одной операции `QC` (см. `prisma/seed.ts`).
+ *   2. **Смена активна, но не на категории `QC`** (например, ОТК
+ *      открыл смену не на том станке) → банер с подсказкой завершить
+ *      смену через меню в правом верхнем углу. Сканирование паспортов
+ *      из такой смены backend всё равно не пропустит дальше: QC
+ *      endpoints доступны по RBAC, но `passports/:id/scan` подсадит
+ *      паспорт в чужой `currentOperationId`, поэтому вход в работу
+ *      скан-режимом — только из смены с операцией категории `QC`.
+ *   3. **Смена активна, категория `QC`** → штатный сценарий:
+ *      одна primary-кнопка «Сканировать паспорт» открывает
+ *      `QrScannerModal` (та же камера, что у швеи); после распознавания
+ *      QR `lookupQcPassportAction` сначала «принимает» паспорт
+ *      скан-сценарием (общий `POST /api/passports/:id/scan` →
+ *      `passport.currentOperationId` переключается на операцию
+ *      категории QC, и shopfloor-проекция двигает паспорт в bucket
+ *      `QC`), а уже потом тянет QC-карточку
+ *      (`GET /api/qc/passports/:id`) и показывает `QcWorkCard`. В
+ *      карточке ОТК фиксирует брак (через существующий endpoint
+ *      `POST /api/qc/passports/:id/defects`) и/или нажимает
+ *      «Проверка выполнена» (`POST /api/qc/passports/:id/complete` →
+ *      пишет `PassportEvent(QC_PASSED)`, и shopfloor-проекция
+ *      двигает паспорт в bucket `QC_DONE`).
  *
  * Никаких списков, переходов между страницами и поиска — это
- * терминал: сканировал → действие → готов к следующему скану. Полный
- * flow зафиксирован в `docs/flows.md §F5` и `docs/screens.md §5`.
+ * терминал: открыл смену → сканировал → действие → готов к
+ * следующему скану. Полный flow зафиксирован в `docs/flows.md §F5`
+ * и `docs/screens.md §5`.
  */
 
 import { useEffect, useState, useTransition } from 'react';
 import type { DefectTypeDto, QcPassportDetailDto } from '@sewing/shared/qc';
+import type {
+  EmployeeLiteDto,
+  ShiftMetaDto,
+  ShiftSessionDto,
+} from '@sewing/shared/shifts';
 import { QrScannerModal } from '@/app/work/qr-scanner-modal';
 import {
   playCutAcceptedSound,
   playOperationCompletedSound,
 } from '@/app/work/feedback';
-import { logoutAction } from '@/app/(auth)/logout-action';
+import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
+import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
 import { Icon } from '@/components/icon';
 import { QcWorkCard } from './qc-work-card';
 import { QcCompletedRow } from './qc-completed-row';
@@ -55,6 +78,20 @@ const QC_REMOVED_POLL_INTERVAL_MS = 10_000;
 
 interface Props {
   defectTypes: DefectTypeDto[];
+  meta: ShiftMetaDto;
+  employee: EmployeeLiteDto;
+  /**
+   * Активная смена сотрудника на момент SSR (`null`, если её нет).
+   * Источник истины — `GET /shifts/current`. Терминал использует это
+   * как первичный сигнал «показывать start-shift форму или scan-flow».
+   */
+  initialShift: ShiftSessionDto | null;
+  /**
+   * Категория операции активной смены. Если `null` — смены нет. Если
+   * не `'QC'` — ОТК открыл смену не на том рабочем месте; показываем
+   * банер и предлагаем завершить смену через меню.
+   */
+  activeOperationCategory: string | null;
 }
 
 interface ErrorState {
@@ -62,7 +99,64 @@ interface ErrorState {
   requestId?: string;
 }
 
-export function QcTerminal({ defectTypes }: Props) {
+export function QcTerminal({
+  defectTypes,
+  meta,
+  employee,
+  initialShift,
+  activeOperationCategory,
+}: Props) {
+  const isShiftActive = !!(initialShift && initialShift.active);
+  const onQcShift = isShiftActive && activeOperationCategory === 'QC';
+
+  // `SeamstressActionsMenu` нужен во всех ветках: на `/qc` для роли QC
+  // глобальный `<AppHeader>` скрыт (см. `components/app-header.tsx`,
+  // `isSingleWorkspaceRole`), поэтому «Завершить смену» / «Выйти» живут
+  // только в этом три-точечном меню.
+  return (
+    <div className="seamstress-work">
+      <SeamstressActionsMenu shiftActive={isShiftActive} />
+      {!isShiftActive ? (
+        <SeamstressShiftStart meta={meta} employee={employee} />
+      ) : !onQcShift ? (
+        <WrongOperationCard operationName={initialShift!.operationName} />
+      ) : (
+        <QcScanTerminal defectTypes={defectTypes} />
+      )}
+    </div>
+  );
+}
+
+function WrongOperationCard({ operationName }: { operationName: string }) {
+  return (
+    <div
+      className="scan-card scan-card--simple"
+      aria-label="Смена не на ОТК"
+    >
+      <h2 className="scan-card__title">
+        <Icon name="warning" size={22} />
+        <span style={{ marginLeft: '0.45rem' }}>Смена не на ОТК</span>
+      </h2>
+      <p className="scan-card__hint">
+        Текущая операция — <strong>{operationName}</strong>. Чтобы
+        принимать паспорты на ОТК, завершите смену через меню в правом
+        верхнем углу и начните новую на рабочем месте ОТК.
+      </p>
+    </div>
+  );
+}
+
+interface ScanTerminalProps {
+  defectTypes: DefectTypeDto[];
+}
+
+/**
+ * Внутренний компонент: «штатный» scan-flow ОТК после старта смены на
+ * операции категории `QC`. Логика и пользовательский опыт остались
+ * как раньше — изменилась только обвязка в `QcTerminal` (start-shift
+ * gate сверху, см. JSDoc файла).
+ */
+function QcScanTerminal({ defectTypes }: ScanTerminalProps) {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
@@ -210,20 +304,12 @@ export function QcTerminal({ defectTypes }: Props) {
     ? 'Сканировать другой паспорт'
     : 'Сканировать паспорт';
 
+  // Logout/«Завершить смену» теперь в общем `SeamstressActionsMenu`
+  // на уровне `QcTerminal`. Внутренний scan-terminal больше не
+  // дублирует logout-форму, иначе на экране висели бы две точки
+  // выхода (в углу и в три-точечном меню).
   return (
-    <div className="seamstress-work">
-      <form action={logoutAction} className="qc-logout">
-        <button
-          type="submit"
-          className="qc-logout__btn"
-          aria-label="Выйти из учётной записи"
-          title="Выйти"
-        >
-          <Icon name="logout" size={14} />
-          <span style={{ marginLeft: '0.35rem' }}>Выйти</span>
-        </button>
-      </form>
-
+    <>
       {detail && !detail.qcCompletedAt && (
         <QcWorkCard
           detail={detail}
@@ -337,6 +423,6 @@ export function QcTerminal({ defectTypes }: Props) {
           onClose={() => setScannerOpen(false)}
         />
       )}
-    </div>
+    </>
   );
 }

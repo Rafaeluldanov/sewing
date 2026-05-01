@@ -181,6 +181,22 @@ export default async function HomePage() {
             hint="Склады и ячейки, печать QR"
           />
         )}
+        {isManager && (
+          <MobileActionCard
+            href="/admin/display-screens"
+            icon={<Icon name="shopfloor" size={20} />}
+            title="Display-экраны"
+            hint="Большие мониторы цеха и их подразделения"
+          />
+        )}
+        {isManager && (
+          <MobileActionCard
+            href="/admin/diagnostics"
+            icon={<Icon name="dashboard" size={20} />}
+            title="Диагностика данных"
+            hint="«Невозможные» состояния БД, read-only"
+          />
+        )}
         {showWork && (
           <MobileActionCard
             href="/work"

@@ -42,6 +42,9 @@ prisma/*.db-journal
 # storage
 storage/
 
+# patterns uploads (модуль «Лекала», MVP-1)
+apps/api/uploads/
+
 # editor
 .idea/
 .vscode/

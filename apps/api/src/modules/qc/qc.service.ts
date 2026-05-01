@@ -14,6 +14,7 @@ import type {
   QcPassportListItemDto,
 } from '@sewing/shared/qc';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
 import {
   DefectExceedsRemainingException,
   DefectTypeInactiveException,
@@ -40,7 +41,10 @@ import {
 export class QcService {
   private readonly logger = new Logger(QcService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // -------------------------------------------------------------------------
   // Defect types
@@ -217,14 +221,36 @@ export class QcService {
     if (!actor) throw new EmployeeNotFoundException();
     if (!actor.active) throw new EmployeeInactiveException();
 
-    await this.prisma.passportEvent.create({
-      data: {
-        passportId,
-        type: PassportEventType.QC_PASSED,
-        employeeId: actorEmployeeId,
-        operationId: passport.currentOperationId,
-        qty: passport.qtyGood,
-      },
+    // Сам event и аудит — в одной транзакции, чтобы инвариант
+    // «либо и QC_PASSED, и AuditLog, либо ничего» соблюдался даже
+    // на уровне БД (см. `docs/domain.md §«Audit log»`). Раньше event
+    // писался одиночным `prisma.passportEvent.create`; обёртка в
+    // `$transaction` бизнес-логику не меняет — это всё ещё ровно один
+    // INSERT в `PassportEvent`.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.passportEvent.create({
+        data: {
+          passportId,
+          type: PassportEventType.QC_PASSED,
+          employeeId: actorEmployeeId,
+          operationId: passport.currentOperationId,
+          qty: passport.qtyGood,
+        },
+      });
+      await this.audit.log(
+        {
+          event: 'QC_COMPLETED',
+          entityType: 'QC',
+          entityId: passportId,
+          employeeId: actorEmployeeId,
+          payload: {
+            passportId,
+            operationId: passport.currentOperationId,
+            qty: passport.qtyGood,
+          },
+        },
+        tx,
+      );
     });
     this.logger.log(
       `event=qc.complete passportId=${passportId} actorId=${actorEmployeeId}`,

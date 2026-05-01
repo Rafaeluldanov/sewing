@@ -5,7 +5,7 @@
  * нужен только подмножество (один продукт, один-два размера, по одному
  * работнику нужной роли). Это и быстрее, и проще читать.
  */
-import { Prisma, type PrismaClient, type Role, type PaymentType } from '@prisma/client';
+import { Prisma, type PrismaClient, type Role } from '@prisma/client';
 import bcrypt from 'bcryptjs';
 
 export interface SeedResult {
@@ -55,13 +55,24 @@ const OP_CODES: Array<{
   { code: 'PACKING', name: 'Упаковка', category: 'PACKING', sortOrder: 140, pricingMode: 'SALARY_ONLY' },
 ];
 
-const EMPLOYEE_SEEDS: Array<{ login: string; fullName: string; role: Role; paymentType: PaymentType }> = [
-  { login: 'shop-chief', fullName: 'Test Shop Manager', role: 'SHOP_MANAGER', paymentType: 'SALARY' },
-  { login: 'cutter', fullName: 'Test Cutter', role: 'CUTTER', paymentType: 'PIECEWORK' },
-  { login: 'seamstress', fullName: 'Test Seamstress', role: 'SEAMSTRESS', paymentType: 'PIECEWORK' },
-  { login: 'qc', fullName: 'Test QC', role: 'QC', paymentType: 'SALARY' },
-  { login: 'ironing', fullName: 'Test Ironing', role: 'IRONING', paymentType: 'SALARY' },
-  { login: 'packer', fullName: 'Test Packer', role: 'PACKING', paymentType: 'SALARY' },
+/**
+ * Тестовые сотрудники. `compensationType` оставляем дефолтным
+ * (`PIECEWORK`) — этого достаточно: сдельный гейт в `EarningsService`
+ * пропускает `PIECEWORK`/`MIXED` и блокирует `SALARY`. Для тестов
+ * окладного контура (`/api/salary`) сотрудник переключается явно
+ * через `prisma.employee.update({ compensationType: 'SALARY', ... })`.
+ */
+const EMPLOYEE_SEEDS: Array<{ login: string; fullName: string; role: Role }> = [
+  { login: 'shop-chief', fullName: 'Test Shop Manager', role: 'SHOP_MANAGER' },
+  { login: 'cutter', fullName: 'Test Cutter', role: 'CUTTER' },
+  { login: 'seamstress', fullName: 'Test Seamstress', role: 'SEAMSTRESS' },
+  { login: 'qc', fullName: 'Test QC', role: 'QC' },
+  { login: 'ironing', fullName: 'Test Ironing', role: 'IRONING' },
+  { login: 'packer', fullName: 'Test Packer', role: 'PACKING' },
+  // Мастер цеха — нужен для интеграционных тестов вызова мастера
+  // (`tests/integration/master-calls.test.ts`). По матрице
+  // `docs/domain.md §10a` он закрывает `OPEN`-вызовы сканом QR.
+  { login: 'master', fullName: 'Test Shopfloor Master', role: 'SHOPFLOOR_MASTER' },
 ];
 
 const EQUIPMENT_SEEDS: ReadonlyArray<{
@@ -161,14 +172,12 @@ export async function seedMinimal(prisma: PrismaClient): Promise<SeedResult> {
         login: e.login,
         fullName: e.fullName,
         role: e.role,
-        paymentType: e.paymentType,
         active: true,
         pinHash,
       },
       update: {
         fullName: e.fullName,
         role: e.role,
-        paymentType: e.paymentType,
         active: true,
         pinHash,
       },

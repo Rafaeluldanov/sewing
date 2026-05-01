@@ -42,6 +42,28 @@ export async function resetDatabase(prisma: {
   // TRUNCATE с CASCADE снимает FK и быстрее, чем serial DELETE.
   // Список таблиц синхронизирован с `prisma/schema.prisma`.
   const tables = [
+    'AuditLog',
+    // Этап «Себестоимость заказа»: история расчётов + строки.
+    // Подчинены `Order` через `ON DELETE CASCADE`, но truncate явный
+    // ради читаемости и стабильности (UNIQUE `(orderId, version)`
+    // — зомби-строки между тестами могли бы конфликтовать с
+    // повторными completeCalculation в одном test-suite).
+    'OrderCostEstimateLine',
+    'OrderCostEstimate',
+    // Этап 6А «Заказы поставщикам»: PO-документ + строки. Truncate
+    // явный, потому что `customerOrderId` стоит `ON DELETE SET NULL`,
+    // и каскад от `Order` сам PO не убил бы (зомби осталось бы между
+    // тестами и ломало UNIQUE-номер `PurchaseOrder.number`).
+    'PurchaseOrderLine',
+    'PurchaseOrder',
+    // Этап 5 «Поставщики»: справочник + каталог + контакты. Truncate
+    // обязателен: на `Supplier.name` стоит UNIQUE, и зомби-строка из
+    // прошлого теста отбила бы повторную вставку с `P2002`.
+    'SupplierCatalogItem',
+    'SupplierContact',
+    'Supplier',
+    'CutReleasePolicy',
+    'MasterCall',
     'PassportDefect',
     'OperationEntry',
     'SalaryEntry',
@@ -54,8 +76,38 @@ export async function resetDatabase(prisma: {
     'OrderRouteStep',
     'OrderMaterialRequirement',
     'OrderOutsourceRequirement',
+    // Этап «Нанесение на заказе покупателя»: заказные нанесения,
+    // подчинены `Order` через `ON DELETE CASCADE`. Truncate явный
+    // ради читаемости и стабильности списка.
+    'OrderApplication',
+    // Этап «Ручная отметка поступления материала» (см.
+    // `apps/api/src/modules/order-material-arrivals/*`,
+    // `prisma/schema.prisma::OrderMaterialArrivalOverride`):
+    // override готовности к крою, подчинён `Order` через
+    // `ON DELETE CASCADE`. Truncate явный ради читаемости.
+    'OrderMaterialArrivalOverride',
+    // Этап 4А «Потребность цеха»: одна строка на материал заказа,
+    // подчинена `Order` через `ON DELETE CASCADE`. Truncate явный
+    // ради читаемости, хотя CASCADE на `"Order"` ниже сделал бы то же.
+    'WorkshopNeed',
     'OrderItem',
     '"Order"',
+    // MVP-1 «Лекала»: справочные таблицы лекала. Truncate обязателен,
+    // потому что у `PatternItem.article` стоит UNIQUE — если оставить
+    // от прошлого теста запись с `P-DEMO-1`, следующий тест получит
+    // `P2002` на повторной вставке.
+    'PatternMaterialArea',
+    // Этап «Погонные метры по размерам»: numeric-by-size значения,
+    // подчинены `PatternItem`/`PatternCategoryParameter`/`Size` через
+    // `ON DELETE CASCADE`, но truncate явный — для читаемости.
+    'PatternItemSizeParameterValue',
+    'PatternSizeFile',
+    'PatternItem',
+    // Этап «Категории номенклатуры»: справочник категорий + параметры.
+    // Параметры удалятся каскадом от `PatternCategory`
+    // (`ON DELETE CASCADE`), но truncate явный ради читаемости.
+    'PatternCategoryParameter',
+    'PatternCategory',
     'TechCardMaterialLine',
     'TechCardOutsourceLine',
     'TechCardTemplate',
@@ -64,6 +116,10 @@ export async function resetDatabase(prisma: {
     'ShiftSession',
     'PieceRate',
     'OperationRateBySize',
+    // Этап 1 «Нормы времени операции» (recon §10): отдельная таблица
+    // для плановых норм времени по размеру. Подчинена `Operation`
+    // через `ON DELETE CASCADE`, но truncate явный ради читаемости.
+    'OperationTimeNormBySize',
     'RouteTemplateStep',
     'RouteTemplate',
     'Cell',
@@ -71,11 +127,17 @@ export async function resetDatabase(prisma: {
     'Warehouse',
     'EquipmentOperation',
     'Equipment',
+    'DisplayScreenConfig',
     'Employee',
     'Operation',
     'Product',
     'Size',
     'DefectType',
+    // Управленческий справочник `Client` живёт независимо от
+    // паспорт-флоу: на него ссылается только `Order.clientId`
+    // (с `ON DELETE SET NULL`). Truncate здесь нужен, чтобы тесты,
+    // создающие клиентов в `beforeEach`, начинали с чистой таблицы.
+    'Client',
   ];
   await prisma.$executeRawUnsafe(
     `TRUNCATE TABLE ${tables.map((t) => (t.startsWith('"') ? t : `"${t}"`)).join(', ')} RESTART IDENTITY CASCADE`,

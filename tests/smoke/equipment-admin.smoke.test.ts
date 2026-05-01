@@ -26,15 +26,18 @@ describe('admin/equipment — список без встроенной форм�
     // при «вернули как было»).
     expect(src).not.toMatch(/CreateEquipmentForm/);
     expect(src).toMatch(/href="\/admin\/equipment\/new"/);
-    expect(src).toMatch(/Добавить оборудование/);
+    // Admin UI 2.5: текст action-кнопки сократили до «Добавить»;
+    // длинный лейбл «Добавить оборудование» остаётся в EmptyState.
+    expect(src).toMatch(/Добавить/);
   });
 
   test('страница /admin/equipment/new рендерит форму создания и back-link', () => {
     const src = readSrc('apps/web/app/admin/equipment/new/page.tsx');
     expect(src).toMatch(/CreateEquipmentForm/);
     expect(src).toMatch(/operations=\{operations\}/);
-    // Back-link к списку — обязательный элемент detail-pages.
-    expect(src).toMatch(/backHref="\/admin\/equipment"/);
+    // Admin UI 2.5: AdminPageShell + back-link через обычный <Link>.
+    expect(src).toMatch(/href="\/admin\/equipment"/);
+    expect(src).toMatch(/AdminPageShell/);
     expect(src).toMatch(/getShiftMeta/);
   });
 
@@ -43,14 +46,11 @@ describe('admin/equipment — список без встроенной форм�
     expect(src).toMatch(/name="name"/);
     expect(src).toMatch(/required/);
     expect(src).toMatch(/name="displayNumber"/);
-    expect(src).toMatch(/name="code"/);
-    // Чек-лист операций — используем тот же шаблон option-list, что
-    // и на detail-странице.
+    // Чек-лист операций — Admin UI 2.6 использует chip-list вместо
+    // option-list; имя поля для submit осталось `operationIds`.
     expect(src).toMatch(/name="operationIds"/);
-    // Submit на отдельной странице создания — «Создать оборудование»
-    // (кнопка «Добавить оборудование» остаётся на списке как ссылка
-    // на /admin/equipment/new).
-    expect(src).toMatch(/Создать оборудование/);
+    // Submit-кнопка — «Создать» (Admin UI 2.6 sokraty).
+    expect(src).toMatch(/Создать/);
   });
 
   test('createEquipmentAction обращается к POST /api/equipment и редиректит на карточку', () => {
@@ -69,7 +69,9 @@ describe('admin/equipment/[id] — переименование оборудов
   test('detail-страница рендерит форму названия отдельной секцией', () => {
     const src = readSrc('apps/web/app/admin/equipment/[id]/page.tsx');
     expect(src).toMatch(/EquipmentNameForm/);
-    expect(src).toMatch(/Название оборудования/);
+    // Admin UI 2.6: «Название» и «Номер» теперь живут в общей карточке
+    // «Основное», секция QR-этикетки осталась рядом.
+    expect(src).toMatch(/title="Основное"/);
     // Старые секции не должны быть удалены — это «do not break»
     // условие из ТЗ §8.
     expect(src).toMatch(/EquipmentDisplayNumberForm/);
@@ -81,7 +83,8 @@ describe('admin/equipment/[id] — переименование оборудов
     expect(src).toMatch(/EquipmentNameForm/);
     expect(src).toMatch(/updateEquipmentNameAction/);
     expect(src).toMatch(/name="name"/);
-    expect(src).toMatch(/Сохранить название/);
+    // Admin UI 2.6: текст кнопки сократили до «Сохранить».
+    expect(src).toMatch(/Сохранить/);
   });
 
   test('updateEquipmentNameAction шлёт PATCH через updateEquipment и валидирует пустое имя', () => {

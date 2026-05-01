@@ -34,6 +34,16 @@ const PUBLIC_PATH_PREFIXES = [
 const DISPLAY_ROLE = 'DISPLAY';
 const DISPLAY_PATH = '/shopfloor/display';
 
+/**
+ * Учётка мастера цеха (MVP) — у неё единственная осмысленная
+ * страница `/master`, см. `apps/web/lib/rbac.ts`
+ * (`SHOPFLOOR_MASTER_ALLOWED_PATH`). Логика та же, что у
+ * `DISPLAY` — мягкий редирект на свой workspace, security всё
+ * равно сидит в API-`AuthGuard`.
+ */
+const SHOPFLOOR_MASTER_ROLE = 'SHOPFLOOR_MASTER';
+const SHOPFLOOR_MASTER_PATH = '/master';
+
 export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
   if (
@@ -63,11 +73,39 @@ export function middleware(req: NextRequest): NextResponse {
     return NextResponse.redirect(url);
   }
 
+  if (
+    role === SHOPFLOOR_MASTER_ROLE &&
+    !isShopfloorMasterPath(pathname) &&
+    !isApiPath(pathname)
+  ) {
+    const url = req.nextUrl.clone();
+    url.pathname = SHOPFLOOR_MASTER_PATH;
+    url.search = '';
+    return NextResponse.redirect(url);
+  }
+
   return NextResponse.next();
 }
 
 function isDisplayPath(pathname: string): boolean {
   return pathname === DISPLAY_PATH || pathname.startsWith(`${DISPLAY_PATH}/`);
+}
+
+function isShopfloorMasterPath(pathname: string): boolean {
+  return (
+    pathname === SHOPFLOOR_MASTER_PATH ||
+    pathname.startsWith(`${SHOPFLOOR_MASTER_PATH}/`)
+  );
+}
+
+/**
+ * `/api/*` проксируется на NestJS-бэкенд через next.config (rewrites).
+ * Middleware не должен редиректить такие запросы — иначе fetch с
+ * `/master` страницы (POST /api/master-calls/resolve-by-employee-qr,
+ * etc.) у мастера цеха ушёл бы на саму себя через 307.
+ */
+function isApiPath(pathname: string): boolean {
+  return pathname === '/api' || pathname.startsWith('/api/');
 }
 
 /**

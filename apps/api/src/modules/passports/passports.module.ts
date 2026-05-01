@@ -7,6 +7,7 @@ import { CellsController } from './cells.controller.js';
 import { EarningsModule } from '../earnings/earnings.module.js';
 import { CuttingClosureModule } from '../cutting-closure/cutting-closure.module.js';
 import { WarehousesModule } from '../warehouses/warehouses.module.js';
+import { CutReleasePolicyModule } from '../cut-release-policy/cut-release-policy.module.js';
 
 /**
  * Импортируем `EarningsModule`, чтобы `PassportsService` мог в одной
@@ -18,7 +19,12 @@ import { WarehousesModule } from '../warehouses/warehouses.module.js';
  * блокировать выпуск (ADR-0018, `docs/domain.md §15`).
  */
 @Module({
-  imports: [EarningsModule, CuttingClosureModule, WarehousesModule],
+  imports: [
+    EarningsModule,
+    CuttingClosureModule,
+    WarehousesModule,
+    CutReleasePolicyModule,
+  ],
   controllers: [PassportsController, OrderPassportsController, CellsController],
   providers: [PassportsService, PassportNumberService],
   exports: [PassportsService],

@@ -6,10 +6,15 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import {
   CreateTechCardSchema,
   ListTechCardsQuerySchema,
+  TECH_CARD_LINE_IMAGE_MAX_SIZE_BYTES,
   UpdateTechCardSchema,
   type CreateTechCardDto,
   type ListTechCardsQuery,
@@ -21,6 +26,7 @@ import {
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { Roles } from '../auth/auth.decorators.js';
 import { TechCardsService } from './tech-cards.service.js';
+import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
 
 /**
  * `/api/tech-cards` — управление шаблонами техкарт (см.
@@ -67,5 +73,35 @@ export class TechCardsController {
     dto: UpdateTechCardDto,
   ): Promise<TechCardTemplateDetailDto> {
     return this.techCards.update(id, dto);
+  }
+
+  /**
+   * Загрузка изображения JPG/JPEG/PNG для конкретной строки материала
+   * техкарты (см. ТЗ §5, §9). Запрос: multipart/form-data, поле `file`.
+   *
+   * Backend сам валидирует расширение и размер
+   * (`TechCardsStorageService`), здесь — только multer-лимит размера
+   * как защита первой линии (multer бросит 413 ещё до сервиса, чтобы
+   * не тянуть в память файл больше лимита).
+   *
+   * Доступно только для уже сохранённой строки — нового несохранённого
+   * lineId здесь быть не может (URL содержит lineId, который backend
+   * отдал при предыдущем GET/save). UI на свежей строке без id рисует
+   * подсказку «Сохраните техкарту, чтобы загрузить изображение».
+   */
+  @Post(':id/material-lines/:lineId/image')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: TECH_CARD_LINE_IMAGE_MAX_SIZE_BYTES },
+    }),
+  )
+  uploadMaterialLineImage(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @UploadedFile() file: UploadedFileLike | undefined,
+  ): Promise<TechCardTemplateDetailDto> {
+    return this.techCards.uploadMaterialImage(id, lineId, file);
   }
 }

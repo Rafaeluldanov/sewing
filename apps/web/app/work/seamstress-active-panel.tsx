@@ -181,8 +181,13 @@ export function SeamstressActivePanel({ shift, currentWork }: Props) {
         <div>
           <h2 className="scan-card__title">{primaryLabel}</h2>
           <p className="scan-card__hint">
-            Сканируйте QR паспорта в ячейке — откроется проверка перед
-            приёмом.
+            {/* Подсказка нейтральная: после soft-route MVP паспорт может
+                прийти как из ячейки (legacy / буфер), так и прямо из
+                маршрутного потока без ячейки. Ветку выбирает backend
+                (`PassportsService.issueToEmployee`); в обоих случаях
+                откроется одна и та же модалка проверки, поэтому хинт
+                не привязываем к складской модели. */}
+            Сканируйте QR паспорта — откроется проверка перед приёмом.
           </p>
         </div>
 

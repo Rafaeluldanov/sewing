@@ -2,9 +2,10 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
+import { ArrowDown, ArrowUp, Plus, Save, X } from 'lucide-react';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
+import { groupOperationsByCategory } from '@sewing/shared/operations';
 import type { RouteTemplateDetailDto } from '@sewing/shared/routes';
-import { Icon } from '@/components/icon';
 import {
   createRouteTemplateAction,
   updateRouteTemplateAction,
@@ -15,6 +16,7 @@ import {
   type CreateRouteTemplateState,
   type UpdateRouteTemplateState,
 } from './form-state';
+import { CODE_PATTERN, CODE_PATTERN_TITLE } from '@/lib/code-pattern';
 
 type Mode = 'create' | 'edit';
 
@@ -33,13 +35,21 @@ interface SelectedStep {
 function SubmitButton({ mode }: { mode: Mode }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name={mode === 'create' ? 'plus' : 'success'} size={16} />
+    <button
+      type="submit"
+      className="admin-btn admin-btn--primary"
+      disabled={pending}
+    >
+      {mode === 'create' ? (
+        <Plus size={16} strokeWidth={1.6} aria-hidden />
+      ) : (
+        <Save size={16} strokeWidth={1.6} aria-hidden />
+      )}
       {pending
         ? 'Сохраняем…'
         : mode === 'create'
-        ? 'Создать шаблон'
-        : 'Сохранить изменения'}
+          ? 'Создать'
+          : 'Сохранить'}
     </button>
   );
 }
@@ -98,6 +108,14 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
     [operations],
   );
 
+  // Пул «добавить операции в маршрут» группируем по категории, чтобы
+  // менеджеру было проще ориентироваться: «вот раздел Раскрой, вот
+  // Пошив, вот ОТК…». Порядок групп — каноничный (см. ТЗ §3, §4).
+  const availableGroups = useMemo(() => {
+    const pool = sortedOperations.filter((op) => !selectedIds.has(op.id));
+    return groupOperationsByCategory(pool);
+  }, [sortedOperations, selectedIds]);
+
   const toggle = (operationId: string) => {
     setSelected((prev) => {
       const exists = prev.some((s) => s.operationId === operationId);
@@ -128,98 +146,72 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
   };
 
   return (
-    <form action={formAction} className="admin-equipment-form">
+    <form action={formAction} className="admin-form">
       {mode === 'edit' && template && (
         <input type="hidden" name="id" value={template.id} />
       )}
 
-      <div className="admin-equipment-form__meta" style={{ flexWrap: 'wrap' }}>
-        <label htmlFor="rt-code" className="meta-line">
-          Код шаблона
-        </label>
-        <input
-          id="rt-code"
-          name="code"
-          type="text"
-          maxLength={48}
-          required
-          autoComplete="off"
-          defaultValue={template?.code ?? ''}
-          placeholder="например, TSHIRT-BASIC"
-          pattern="[A-Z0-9][A-Z0-9_-]*"
-          title="Латинские заглавные буквы, цифры, '-' и '_'"
-          style={{ padding: '6px 10px', minWidth: 220 }}
-        />
-        <label htmlFor="rt-name" className="meta-line">
-          Название
-        </label>
-        <input
-          id="rt-name"
-          name="name"
-          type="text"
-          maxLength={120}
-          required
-          autoComplete="off"
-          defaultValue={template?.name ?? ''}
-          placeholder="например, Базовая футболка"
-          style={{ padding: '6px 10px', minWidth: 280 }}
-        />
-        <label
-          className="meta-line"
-          style={{ display: 'flex', alignItems: 'center', gap: 6 }}
-        >
+      <div className="admin-form-grid">
+        <div className="admin-field">
+          <label htmlFor="rt-code">Код</label>
           <input
+            id="rt-code"
+            name="code"
+            type="text"
+            maxLength={48}
+            required
+            autoComplete="off"
+            defaultValue={template?.code ?? ''}
+            placeholder="TSHIRT-BASIC"
+            pattern={CODE_PATTERN}
+            title={CODE_PATTERN_TITLE}
+          />
+        </div>
+        <div className="admin-field">
+          <label htmlFor="rt-name">Название</label>
+          <input
+            id="rt-name"
+            name="name"
+            type="text"
+            maxLength={120}
+            required
+            autoComplete="off"
+            defaultValue={template?.name ?? ''}
+            placeholder="Базовая футболка"
+          />
+        </div>
+        <div className="admin-field admin-field--inline">
+          <input
+            id="rt-active"
             type="checkbox"
             name="isActive"
             value="on"
             defaultChecked={template?.isActive ?? true}
           />
-          Активен
-        </label>
+          <label htmlFor="rt-active">Активен</label>
+        </div>
       </div>
 
-      <div>
-        <div
-          className="meta-line"
-          style={{ marginBottom: 8, display: 'flex', gap: '0.75rem' }}
-        >
-          <span>
-            <strong>Шаги маршрута</strong> — отметьте операции и расставьте
-            порядок. Эти шаги фиксируются snapshot-ом на заказе при запуске.
+      <div className="admin-field">
+        <label>
+          Шаги маршрута
+          <span className="admin-field__hint" style={{ marginLeft: 8 }}>
+            Выбрано {selected.length} из {sortedOperations.length}
           </span>
-          <span>
-            Выбрано: <strong>{selected.length}</strong> из{' '}
-            {sortedOperations.length}
-          </span>
-        </div>
+        </label>
 
         {selected.length > 0 && (
-          <ol className="option-list" style={{ marginBottom: '0.75rem' }}>
+          <ol className="admin-step-edit">
             {selected.map((step, i) => {
               const op = operationsById.get(step.operationId);
               if (!op) return null;
               return (
-                <li
-                  key={step.operationId}
-                  className="option-list__row is-active"
-                  style={{ gap: '0.5rem' }}
-                >
-                  <span
-                    className="meta-line"
-                    style={{ minWidth: 64, fontWeight: 600 }}
-                  >
-                    Шаг {i + 1}
-                  </span>
-                  <span style={{ flex: 1 }}>
-                    <span className="option-list__row-name">{op.name}</span>
-                    <span className="option-list__row-meta">
-                      <code>{op.code}</code> · {op.category.toLowerCase()}
-                    </span>
-                  </span>
+                <li key={step.operationId} className="admin-step-edit__row">
+                  <span className="admin-step-edit__num">{i + 1}</span>
+                  <span className="admin-step-edit__name">{op.name}</span>
                   <label
-                    className="meta-line"
-                    style={{ display: 'flex', alignItems: 'center', gap: 4 }}
-                    title="UI-подсказка: шаг помечен как опциональный"
+                    className="admin-step-edit__opt"
+                    title="Шаг помечен как опциональный"
                   >
                     <input
                       type="checkbox"
@@ -233,35 +225,29 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
                   </label>
                   <button
                     type="button"
-                    className="btn btn-ghost"
-                    style={{ padding: '2px 8px', minHeight: 0 }}
+                    className="admin-btn admin-btn--ghost admin-btn--icon"
                     onClick={() => move(step.operationId, -1)}
                     disabled={i === 0}
                     aria-label="Поднять шаг выше"
-                    title="Выше"
                   >
-                    ↑
+                    <ArrowUp size={14} strokeWidth={1.6} aria-hidden />
                   </button>
                   <button
                     type="button"
-                    className="btn btn-ghost"
-                    style={{ padding: '2px 8px', minHeight: 0 }}
+                    className="admin-btn admin-btn--ghost admin-btn--icon"
                     onClick={() => move(step.operationId, 1)}
                     disabled={i === selected.length - 1}
                     aria-label="Опустить шаг ниже"
-                    title="Ниже"
                   >
-                    ↓
+                    <ArrowDown size={14} strokeWidth={1.6} aria-hidden />
                   </button>
                   <button
                     type="button"
-                    className="btn btn-ghost"
-                    style={{ padding: '2px 8px', minHeight: 0 }}
+                    className="admin-btn admin-btn--ghost admin-btn--icon"
                     onClick={() => toggle(step.operationId)}
                     aria-label="Удалить шаг"
-                    title="Убрать"
                   >
-                    ×
+                    <X size={14} strokeWidth={1.6} aria-hidden />
                   </button>
                   <input
                     type="hidden"
@@ -279,54 +265,78 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
           </ol>
         )}
 
-        <details>
-          <summary className="meta-line" style={{ cursor: 'pointer' }}>
-            Добавить операции в маршрут
-          </summary>
-          <ul className="option-list" style={{ marginTop: '0.5rem' }}>
-            {sortedOperations
-              .filter((op) => !selectedIds.has(op.id))
-              .map((op) => (
-                <li key={op.id} className="option-list__row">
-                  <label>
-                    <input
-                      type="checkbox"
-                      checked={false}
-                      onChange={() => toggle(op.id)}
-                    />
-                    <span className="option-list__row-name">{op.name}</span>
-                    <span className="option-list__row-meta">
-                      <code>{op.code}</code> · {op.category.toLowerCase()}
-                    </span>
-                  </label>
-                </li>
-              ))}
-            {sortedOperations.filter((op) => !selectedIds.has(op.id))
-              .length === 0 && (
-              <li className="option-list__row meta-line">
+        <details className="admin-step-edit__add">
+          <summary>Добавить операции</summary>
+          {availableGroups.length === 0 ? (
+            <ul className="admin-step-edit__pool">
+              <li className="admin-muted" style={{ fontSize: '0.88rem' }}>
                 Все операции уже добавлены в маршрут.
               </li>
-            )}
-          </ul>
+            </ul>
+          ) : (
+            availableGroups.map((group) => (
+              <section
+                key={group.category}
+                className="admin-step-edit__pool-group"
+                data-category={group.category}
+                style={{ marginTop: '0.5rem' }}
+              >
+                <header
+                  className="admin-step-edit__pool-group-header"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'baseline',
+                    justifyContent: 'space-between',
+                    fontSize: '0.82rem',
+                    fontWeight: 600,
+                    color: 'var(--admin-muted-fg, #6b7280)',
+                    margin: '0.4rem 0 0.2rem',
+                  }}
+                >
+                  <span>{group.label}</span>
+                  <span style={{ fontWeight: 400 }}>
+                    {group.operations.length}
+                  </span>
+                </header>
+                <ul className="admin-step-edit__pool">
+                  {group.operations.map((op) => (
+                    <li key={op.id}>
+                      <label className="admin-step-edit__pool-row">
+                        <input
+                          type="checkbox"
+                          checked={false}
+                          onChange={() => toggle(op.id)}
+                        />
+                        <span>{op.name}</span>
+                      </label>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ))
+          )}
         </details>
       </div>
 
-      <div className="detail-form__actions">
+      <div className="admin-actions-row">
         <SubmitButton mode={mode} />
       </div>
 
       {state.error && (
-        <div className="error-box" role="alert">
-          <div className="error-box__msg">{state.error}</div>
+        <div
+          role="alert"
+          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
+        >
+          {state.error}
           {state.errorRequestId && (
-            <div className="error-box__rid">
+            <span className="admin-muted" style={{ marginLeft: 6 }}>
               req: <code>{state.errorRequestId}</code>
-            </div>
+            </span>
           )}
         </div>
       )}
       {state.ok && state.successMessage && (
-        <div className="success-box" role="status">
+        <div role="status" className="admin-muted" style={{ fontSize: '0.88rem' }}>
           {state.successMessage}
         </div>
       )}

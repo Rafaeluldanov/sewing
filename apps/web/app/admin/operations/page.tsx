@@ -1,65 +1,135 @@
+import { Fragment } from 'react';
 import Link from 'next/link';
+import { ArrowRight, Plus, Scissors } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listOperations } from '@/lib/operations-api';
-import type {
-  OperationSummaryDto,
-  PricingMode,
+import {
+  groupOperationsByCategory,
+  type OperationSummaryDto,
 } from '@sewing/shared/operations';
-import { Icon } from '@/components/icon';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminStatusBadge,
+} from '@/components/admin';
+import {
+  formatPricingMode,
+  formatStatus,
+  statusTone,
+} from '@/lib/admin-labels';
+import { formatDuration } from '@/lib/operations-time-norm';
+import {
+  calculateOperationDailyEconomics,
+  formatEarningsPerDay,
+} from '@/lib/operation-economics';
 
 export const dynamic = 'force-dynamic';
-
-const CATEGORY_LABEL: Record<string, string> = {
-  CUTTING: 'Раскрой',
-  SEWING: 'Пошив',
-  QC: 'ОТК',
-  IRONING: 'ВТО',
-  PACKING: 'Упаковка',
-};
-
-const PRICING_LABEL: Record<PricingMode, string> = {
-  FIXED: 'Фиксированная',
-  BY_SIZE: 'По размерам',
-  SALARY_ONLY: 'Оклад',
-};
 
 function formatRate(op: OperationSummaryDto): React.ReactNode {
   if (op.pricingMode === 'FIXED') {
     return op.fixedRate !== null ? (
       <strong>{op.fixedRate.toFixed(2)} ₽</strong>
     ) : (
-      <span className="meta-line" title="FIXED-операция без ставки — заполните в карточке">
-        —
-      </span>
+      <AdminStatusBadge tone="warning">Не задано</AdminStatusBadge>
     );
   }
   if (op.pricingMode === 'BY_SIZE') {
     return op.ratesBySizeCount > 0 ? (
-      <span title="Ставки заданы по размерам">
+      <span>
         ставок: <strong>{op.ratesBySizeCount}</strong>
       </span>
     ) : (
-      <span className="meta-line" title="BY_SIZE без ставок — заполните в карточке">
-        не задано
-      </span>
+      <AdminStatusBadge tone="warning">Не задано</AdminStatusBadge>
     );
   }
-  return <span className="meta-line">не применяется</span>;
+  return <span className="admin-muted">—</span>;
 }
 
 /**
- * Список операций (см. `docs/screens.md §10c`).
+ * Компактный бейдж «8ч: …» в списке операций — плановый заработок за
+ * 8-часовую смену по текущим ставке/норме времени (см.
+ * `lib/operation-economics.ts`). Это **только справочный расчёт** для
+ * управленческого экрана; payroll/SalaryEntry/OperationEntry он не
+ * подменяет. Подробный расчёт — на карточке операции.
+ *
+ * Что показываем:
+ *   - `pricingMode = FIXED`, `timeNormMode = FIXED` ⇒ «8ч: 5 184 ₽»;
+ *   - `BY_SIZE` хотя бы по одной из осей ⇒ «8ч: по размерам» (без
+ *     детализации, чтобы не раздувать строку — диапазоны считаются
+ *     не на summary-DTO, а только на detail-странице);
+ *   - `SALARY_ONLY` ⇒ «8ч: оклад» (нет сдельной ставки);
+ *   - данных нет / нет ставки / нет нормы ⇒ «8ч: —».
+ */
+function formatDailyEarnings(op: OperationSummaryDto): React.ReactNode {
+  if (op.pricingMode === 'SALARY_ONLY') {
+    return <span className="admin-muted">8ч: оклад</span>;
+  }
+  if (op.pricingMode === 'BY_SIZE' || op.timeNormMode === 'BY_SIZE') {
+    return <span className="admin-muted">8ч: по размерам</span>;
+  }
+  const econ = calculateOperationDailyEconomics({
+    rateRub: op.fixedRate,
+    timeNormSec: op.timeNormSec,
+  });
+  if (econ.earningsPerDayRub === null) {
+    return <span className="admin-muted">8ч: —</span>;
+  }
+  return (
+    <span>
+      8ч: <strong>{formatEarningsPerDay(econ.earningsPerDayRub)}</strong>
+    </span>
+  );
+}
+
+/**
+ * Колонка «Норма времени» в `/admin/operations`. Это **отдельная ось**
+ * от тарифа (рублёвых ставок). Для FIXED показываем `formatDuration`,
+ * для BY_SIZE — счётчик строк по размерам, иначе «Не задана».
+ */
+function formatTimeNorm(op: OperationSummaryDto): React.ReactNode {
+  if (op.timeNormMode === 'FIXED') {
+    return op.timeNormSec !== null && op.timeNormSec > 0 ? (
+      <strong>{formatDuration(op.timeNormSec)}</strong>
+    ) : (
+      <AdminStatusBadge tone="muted">Не задана</AdminStatusBadge>
+    );
+  }
+  if (op.timeNormMode === 'BY_SIZE') {
+    return op.timeNormsBySizeCount > 0 ? (
+      <span>
+        размеров: <strong>{op.timeNormsBySizeCount}</strong>
+      </span>
+    ) : (
+      <AdminStatusBadge tone="muted">Не задана</AdminStatusBadge>
+    );
+  }
+  return <span className="admin-muted">—</span>;
+}
+
+/**
+ * Список операций (Admin UI Polish + ТЗ «Compact grouped table»).
  *
  * Источник истины — `GET /api/operations` (роли `ADMIN`/`SHOP_MANAGER`).
- * Доступ к разделу режется выше — `app/admin/layout.tsx` редиректит
- * всех, кроме `ADMIN`/`SHOP_MANAGER`. Backend дополнительно
- * защищает `/api/operations/*` через `@Roles('SHOP_MANAGER', 'ADMIN')`.
+ * Доступ — `app/admin/layout.tsx`. Backend параллельно защищает
+ * `/api/operations/*` через `@Roles('SHOP_MANAGER', 'ADMIN')`.
  *
- * Создание новой операции вынесено на отдельную страницу
- * `/admin/operations/new` — раньше форма жила прямо в списке и
- * визуально его перегружала. На списке остаётся только заметная
- * primary-кнопка «Добавить операцию» в actions шапки. Тот же UX
- * уже применён к `/admin/equipment` (см. ADR-0017).
+ * Группировка по категориям (ТЗ «Единая группировка»):
+ *   - операции делятся на секции в порядке `OPERATION_CATEGORY_ORDER`
+ *     (Раскрой → Пошив → ОТК → ВТО → Упаковка), пустые группы скрыты;
+ *   - неизвестная/`null` категория уходит в «Без категории» в конце;
+ *   - внутри секции порядок — `sortOrder`, затем `name`.
+ *
+ * Compact layout (ТЗ «compact grouped-table layout»):
+ *   - одна общая AdminCard на всю страницу, один table header;
+ *   - категории внутри одного tbody как тонкие group-row
+ *     разделители (`.admin-compact-group-row`);
+ *   - старая «карточка-секция на каждую категорию» сознательно убрана,
+ *     чтобы не плодить отдельный header на каждую группу — это
+ *     создавало лишний вертикальный воздух (см. ТЗ §1).
+ *
+ * Пагинация отключена сознательно: на одной экранной форме менеджеру
+ * удобнее видеть весь каталог сгруппированным, чем перелистывать.
  */
 export default async function AdminOperationsListPage() {
   let items: OperationSummaryDto[] = [];
@@ -73,83 +143,117 @@ export default async function AdminOperationsListPage() {
         : 'Не удалось загрузить список операций';
   }
 
+  const sortedItems = [...items].sort((a, b) => {
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    return a.name.localeCompare(b.name, 'ru');
+  });
+  const groups = groupOperationsByCategory(sortedItems);
+
   return (
-    <div className="admin-overview page-shell">
-      <header className="admin-overview__header">
-        <div>
-          <div className="page-eyebrow">
-            <Icon name="operations" />
-            Тарифы
-          </div>
-          <h1 className="page-title">
-            <Icon name="operations" />
-            Операции
-          </h1>
-          <p className="page-subtitle">
-            Управленческий блок: тарифные режимы и ставки. Источник истины
-            для зарплаты — этот раздел (см. docs/domain.md §16a). Создание
-            новой операции — на отдельной странице.
-          </p>
+    <AdminPageShell
+      icon={<Scissors size={22} strokeWidth={1.6} aria-hidden />}
+      title="Операции"
+      subtitle={`Всего: ${items.length}`}
+      actions={
+        <Link
+          href="/admin/operations/new"
+          className="admin-btn admin-btn--primary"
+        >
+          <Plus size={16} strokeWidth={1.6} aria-hidden />
+          Добавить
+        </Link>
+      }
+    >
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
         </div>
-        <div className="admin-overview__actions">
-          <Link href="/admin/operations/new" className="btn btn-primary">
-            <Icon name="plus" size={16} />
-            Добавить операцию
-          </Link>
-        </div>
-      </header>
-
-      {error && <div className="error-box">{error}</div>}
-
-      {items.length === 0 && !error ? (
-        <div className="empty-state">
-          <span className="empty-state__icon">
-            <Icon name="operations" />
-          </span>
-          <span className="empty-state__title">Пока нет операций</span>
-          <span className="empty-state__hint">
-            <Link href="/admin/operations/new">Создайте первую операцию</Link> —
-            это займёт меньше минуты.
-          </span>
-        </div>
-      ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Название</th>
-              <th>Код</th>
-              <th>Категория</th>
-              <th>Тариф</th>
-              <th>Ставка</th>
-              <th>Активна</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((op) => (
-              <tr key={op.id}>
-                <td>
-                  <strong>{op.name}</strong>
-                </td>
-                <td>
-                  <code>{op.code}</code>
-                </td>
-                <td>{CATEGORY_LABEL[op.category] ?? op.category}</td>
-                <td>{PRICING_LABEL[op.pricingMode]}</td>
-                <td>{formatRate(op)}</td>
-                <td>
-                  {op.isActive ? 'да' : <span className="meta-line">нет</span>}
-                </td>
-                <td>
-                  <Link href={`/admin/operations/${op.id}`}>
-                    Открыть <Icon name="arrow-right" size={13} />
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       )}
-    </div>
+
+      {groups.length === 0 ? (
+        <AdminCard>
+          <AdminEmptyState
+            icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+            title="Операций пока нет"
+            actions={
+              <Link
+                href="/admin/operations/new"
+                className="admin-btn admin-btn--primary"
+              >
+                <Plus size={16} strokeWidth={1.6} aria-hidden />
+                Добавить операцию
+              </Link>
+            }
+          />
+        </AdminCard>
+      ) : (
+        <AdminCard className="admin-compact-grouped-card admin-operations-compact-card">
+          <div className="admin-compact-table-wrap">
+            <table className="admin-table admin-compact-grouped-table admin-operations-compact-table">
+              <thead>
+                <tr>
+                  <th>Название</th>
+                  <th>Тариф</th>
+                  <th>Ставка</th>
+                  <th>Норма времени</th>
+                  <th>За 8 часов</th>
+                  <th>Статус</th>
+                  <th aria-label="Действия" />
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((group) => (
+                  <Fragment key={group.category}>
+                    <tr
+                      className="admin-compact-group-row admin-operations-group-row"
+                      data-category={group.category}
+                    >
+                      <td colSpan={7}>
+                        <div className="admin-compact-group-row__inner">
+                          <span data-category-title={group.category}>
+                            {group.label}
+                          </span>
+                          <span className="admin-compact-group-row__count">
+                            {group.operations.length}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    {group.operations.map((op) => (
+                      <tr
+                        key={op.id}
+                        className="admin-compact-row admin-operations-row"
+                      >
+                        <td data-label="Название">
+                          <span className="admin-table__primary">{op.name}</span>
+                        </td>
+                        <td data-label="Тариф">{formatPricingMode(op.pricingMode)}</td>
+                        <td data-label="Ставка">{formatRate(op)}</td>
+                        <td data-label="Норма времени">{formatTimeNorm(op)}</td>
+                        <td data-label="За 8 часов">{formatDailyEarnings(op)}</td>
+                        <td data-label="Статус">
+                          <AdminStatusBadge tone={statusTone(op.isActive)}>
+                            {formatStatus(op.isActive)}
+                          </AdminStatusBadge>
+                        </td>
+                        <td className="admin-table__actions admin-compact-row__actions">
+                          <Link
+                            href={`/admin/operations/${op.id}`}
+                            className="admin-table__action-link"
+                          >
+                            Открыть
+                            <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </AdminCard>
+      )}
+    </AdminPageShell>
   );
 }

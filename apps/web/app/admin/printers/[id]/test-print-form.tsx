@@ -1,16 +1,20 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
-import { Icon } from '@/components/icon';
+import { Send, XCircle } from 'lucide-react';
 import { testPrintAction } from '../actions';
 import { initialActionState, type ActionState } from '../form-state';
 
 function TestButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name="output" size={16} />
-      {pending ? 'Создаём задание…' : 'Тестовая печать'}
+    <button
+      type="submit"
+      className="admin-btn admin-btn--primary"
+      disabled={pending}
+    >
+      <Send size={16} strokeWidth={1.6} aria-hidden />
+      {pending ? 'Отправка…' : 'Печать'}
     </button>
   );
 }
@@ -23,22 +27,23 @@ export function TestPrintForm({ printerId }: { printerId: string }) {
   );
 
   return (
-    <form action={formAction} className="detail-form">
+    <form action={formAction} className="admin-form">
+      <div className="admin-actions-row" style={{ justifyContent: 'flex-start' }}>
+        <TestButton />
+      </div>
       {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>{state.error}</span>
+        <div
+          role="alert"
+          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
+        >
+          <XCircle size={14} strokeWidth={1.6} aria-hidden /> {state.error}
         </div>
       )}
       {state.ok && (
-        <div className="detail-form__success" role="status">
-          <Icon name="success" size={16} />
-          <span>Задание создано. Если агент онлайн — напечатает.</span>
+        <div role="status" className="admin-muted" style={{ fontSize: '0.88rem' }}>
+          Задание отправлено.
         </div>
       )}
-      <div className="detail-form__actions">
-        <TestButton />
-      </div>
     </form>
   );
 }

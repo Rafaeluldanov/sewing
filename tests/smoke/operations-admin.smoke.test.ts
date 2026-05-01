@@ -25,7 +25,9 @@ describe('admin/operations — список без встроенной форм
     const src = readSrc('apps/web/app/admin/operations/page.tsx');
     expect(src).not.toMatch(/CreateOperationForm/);
     expect(src).toMatch(/href="\/admin\/operations\/new"/);
-    expect(src).toMatch(/Добавить операцию/);
+    // Admin UI 2.5: текст action-кнопки сократили до «Добавить»;
+    // длинный лейбл «Добавить операцию» остаётся в EmptyState.
+    expect(src).toMatch(/Добавить/);
     // Empty-state теперь зовёт на отдельную страницу, а не «форму выше».
     expect(src).not.toMatch(/форму выше/);
   });
@@ -33,9 +35,9 @@ describe('admin/operations — список без встроенной форм
   test('страница /admin/operations/new рендерит форму создания и back-link', () => {
     const src = readSrc('apps/web/app/admin/operations/new/page.tsx');
     expect(src).toMatch(/CreateOperationForm/);
-    expect(src).toMatch(/DetailPageHeader/);
-    expect(src).toMatch(/backHref="\/admin\/operations"/);
-    expect(src).toMatch(/К списку операций/);
+    // Admin UI 2.5: AdminPageShell вместо DetailPageHeader.
+    expect(src).toMatch(/AdminPageShell/);
+    expect(src).toMatch(/href="\/admin\/operations"/);
     expect(src).toMatch(/Новая операция/);
   });
 
@@ -47,10 +49,8 @@ describe('admin/operations — список без встроенной форм
     expect(src).toMatch(/name="pricingMode"/);
     // Поле fixedRate показывается условно — сам input должен быть в файле.
     expect(src).toMatch(/name="fixedRate"/);
-    expect(src).toMatch(/Создать операцию/);
-    // Раньше форма была плоской через admin-equipment-form__meta —
-    // теперь это аккуратный detail-form layout.
-    expect(src).toMatch(/className="detail-form"/);
+    // Admin UI 2.6: текст кнопки сократили до «Создать».
+    expect(src).toMatch(/Создать/);
     expect(src).not.toMatch(/admin-equipment-form__meta/);
   });
 
@@ -63,12 +63,13 @@ describe('admin/operations — список без встроенной форм
 });
 
 describe('admin/operations/[id] — detail-page остаётся рабочей', () => {
-  test('detail-страница рендерит DetailPageHeader и форму редактирования', () => {
+  test('detail-страница рендерит AdminPageShell и форму редактирования', () => {
     const src = readSrc('apps/web/app/admin/operations/[id]/page.tsx');
-    expect(src).toMatch(/DetailPageHeader/);
+    // Admin UI 2.5: AdminPageShell вместо DetailPageHeader.
+    expect(src).toMatch(/AdminPageShell/);
     expect(src).toMatch(/OperationEditForm/);
-    expect(src).toMatch(/backHref="\/admin\/operations"/);
-    expect(src).toMatch(/К списку операций/);
+    expect(src).toMatch(/href="\/admin\/operations"/);
+    expect(src).toMatch(/К списку/);
   });
 
   test('OperationEditForm сохраняет pricingMode-логику (FIXED/BY_SIZE/SALARY_ONLY)', () => {
@@ -76,10 +77,15 @@ describe('admin/operations/[id] — detail-page остаётся рабочей'
     expect(src).toMatch(/updateOperationAction/);
     expect(src).toMatch(/pricingMode === 'FIXED'/);
     expect(src).toMatch(/pricingMode === 'BY_SIZE'/);
-    expect(src).toMatch(/pricingMode === 'SALARY_ONLY'/);
+    // SALARY_ONLY — переключатель остался в `<select>` (PRICING_LABEL),
+    // явный inline-баннер про SALARY_ONLY убран в Admin UI 2.6
+    // (см. ТЗ — без длинных описаний). Защищаем инвариант через
+    // PRICING_MODES, который содержит SALARY_ONLY.
+    expect(src).toMatch(/PRICING_MODES/);
     // Bulk-helper по размерам и таблица ставок остаются — это часть
-    // обязательного UX по ADR-0020.
-    expect(src).toMatch(/Заполнить всем одну ставку/);
+    // обязательного UX по ADR-0020. Текст кнопки сократили до
+    // «Заполнить всем».
+    expect(src).toMatch(/Заполнить всем/);
     expect(src).toMatch(/rate-\$\{s\.id\}/);
   });
 });

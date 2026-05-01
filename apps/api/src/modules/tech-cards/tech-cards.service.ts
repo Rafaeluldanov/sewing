@@ -1,8 +1,10 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
   CreateTechCardDto,
   ListTechCardsQuery,
+  OutsourceTriggerType,
+  TechCardMaterialColorRule,
   TechCardMaterialLineDto,
   TechCardMaterialLineInputDto,
   TechCardOutsourceLineDto,
@@ -11,13 +13,20 @@ import type {
   TechCardTemplateSummaryDto,
   UpdateTechCardDto,
 } from '@sewing/shared/tech-cards';
+import { isKnownTechCardMaterialRoleKey } from '@sewing/shared/tech-cards';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   TechCardCodeTakenException,
+  TechCardImageUploadMissingFileException,
   TechCardInactiveException,
+  TechCardMaterialLineNotFoundException,
   TechCardNotFoundException,
 } from '../../common/errors.js';
+import {
+  TechCardsStorageService,
+} from './tech-cards-storage.service.js';
+import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
 
 /**
  * CRUD шаблонов техкарт. По духу аналогичен `RoutesService`:
@@ -40,7 +49,10 @@ import {
 export class TechCardsService {
   private readonly logger = new Logger(TechCardsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly storage: TechCardsStorageService,
+  ) {}
 
   // -------------------------------------------------------------------------
   // LIST
@@ -108,6 +120,21 @@ export class TechCardsService {
       unit: string;
       qtyPerUnit: Prisma.Decimal;
       note: string | null;
+      // Этап 3 «Потребности цеха»: копируются в snapshot
+      // `OrderMaterialRequirement.*` без преобразований; `resolvedColorText`
+      // считает уже `OrdersService.start()` по `colorRule` и `Order.color`.
+      materialRole: string | null;
+      fabricType: string | null;
+      densityGsm: number | null;
+      plannedWidthCm: number | null;
+      colorRule: TechCardMaterialColorRule | null;
+      fixedColorText: string | null;
+      // Этап «Фурнитура / изображение материала» (см. ТЗ §3, §5):
+      // snapshot-копии новых полей строки материала техкарты.
+      hardwareSizeText: string | null;
+      hardwareMaterialText: string | null;
+      materialImageUrl: string | null;
+      materialImageOriginalFileName: string | null;
     }[];
     outsourceLines: {
       id: string;
@@ -117,6 +144,9 @@ export class TechCardsService {
       qtyPerUnit: Prisma.Decimal | null;
       vendorName: string | null;
       note: string | null;
+      // MVP-2 (ADR-0022 §«Cut-ready readiness»): копируется в snapshot
+      // `OrderOutsourceRequirement.triggerType`.
+      triggerType: OutsourceTriggerType;
     }[];
   }> {
     const tpl = await this.prisma.techCardTemplate.findUnique({
@@ -135,6 +165,21 @@ export class TechCardsService {
         unit: l.unit,
         qtyPerUnit: l.qtyPerUnit,
         note: l.note,
+        // БД хранит свободной строкой (расширяемость без миграции).
+        // Запись валидируется shared schema (`TECH_CARD_MATERIAL_ROLE_KEYS`),
+        // в snapshot пушим как есть — legacy roleKey-и тоже копируются
+        // без преобразований (snapshot-independent от шаблона).
+        materialRole: l.materialRole,
+        fabricType: l.fabricType,
+        densityGsm: l.densityGsm,
+        plannedWidthCm: l.plannedWidthCm,
+        colorRule: (l.colorRule as TechCardMaterialColorRule | null) ?? null,
+        fixedColorText: l.fixedColorText,
+        // Этап «Фурнитура / изображение материала»: новые snapshot-поля.
+        hardwareSizeText: l.hardwareSizeText,
+        hardwareMaterialText: l.hardwareMaterialText,
+        materialImageUrl: l.materialImageUrl,
+        materialImageOriginalFileName: l.materialImageOriginalFileName,
       })),
       outsourceLines: tpl.outsourceLines.map((l) => ({
         id: l.id,
@@ -144,6 +189,7 @@ export class TechCardsService {
         qtyPerUnit: l.qtyPerUnit,
         vendorName: l.vendorName,
         note: l.note,
+        triggerType: l.triggerType,
       })),
     };
   }
@@ -178,6 +224,8 @@ export class TechCardsService {
           },
         });
         if (dto.materialLines.length > 0) {
+          // Создание новой техкарты — legacy ролей быть не может,
+          // whitelist строгий: TECH_CARD_MATERIAL_ROLE_KEYS.
           await tx.techCardMaterialLine.createMany({
             data: dto.materialLines.map((l, i) =>
               this.materialLineCreateData(created.id, l, i),
@@ -230,13 +278,39 @@ export class TechCardsService {
         }
 
         if (dto.materialLines !== undefined) {
+          // Этап «Доработка UI и контракта техкарты» (см. ТЗ §1):
+          // при PATCH full-replace разрешаем сохранить строки с
+          // legacy roleKey-ами, которые УЖЕ были в старой техкарте
+          // (например, APPLICATION или ad-hoc-строка). Это нужно,
+          // чтобы менеджер мог открыть старую техкарту и сохранить
+          // её без ошибок, даже не редактируя legacy-роль. Полностью
+          // новые невалидные roleKey-и по-прежнему отбрасываются с
+          // 400 `TECH_CARD_MATERIAL_ROLE_INVALID`.
+          const existingLegacyRoleKeys = new Set(
+            (
+              await tx.techCardMaterialLine.findMany({
+                where: { techCardId: id },
+                select: { materialRole: true },
+              })
+            )
+              .map((r) => r.materialRole)
+              .filter(
+                (k): k is string =>
+                  k != null &&
+                  // Whitelist пустой не помещаем — он и так разрешён.
+                  // Сохраняем только то, что уже было в БД.
+                  k.length > 0,
+              ),
+          );
           await tx.techCardMaterialLine.deleteMany({
             where: { techCardId: id },
           });
           if (dto.materialLines.length > 0) {
             await tx.techCardMaterialLine.createMany({
               data: dto.materialLines.map((l, i) =>
-                this.materialLineCreateData(id, l, i),
+                this.materialLineCreateData(id, l, i, {
+                  existingRoleKeys: existingLegacyRoleKeys,
+                }),
               ),
             });
           }
@@ -267,6 +341,70 @@ export class TechCardsService {
   }
 
   // -------------------------------------------------------------------------
+  // MATERIAL LINE IMAGE UPLOAD (см. ТЗ §5, §9)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Сохраняет JPG/JPEG/PNG-изображение для конкретной строки материала
+   * техкарты. Идёт от техкарты, не от строки изолированно: проверяем,
+   * что строка действительно принадлежит указанной техкарте — иначе
+   * можно было бы переписать чужую строку, зная её id.
+   *
+   * НЕ менять другие поля строки — только `materialImageUrl` и
+   * `materialImageOriginalFileName` (см. ТЗ §5 «не меняет другие
+   * поля строки»). Не пересчитывать sortOrder, не сбрасывать
+   * hardware-поля и т.п. В частности, операция работает и для
+   * legacy-строк со старыми roleKey-ами (APPLICATION) — никакой
+   * валидации roleKey тут нет.
+   *
+   * Аналогично `PatternsService.uploadPreview`: сначала пишем файл
+   * на диск, потом обновляем БД. Если БД-обновление упадёт, файл
+   * остаётся «осиротевшим» — на MVP это приемлемо (тот же подход,
+   * что и в модуле «Лекала»).
+   */
+  async uploadMaterialImage(
+    techCardId: string,
+    lineId: string,
+    file: UploadedFileLike | undefined,
+  ): Promise<TechCardTemplateDetailDto> {
+    if (!file) throw new TechCardImageUploadMissingFileException();
+
+    const line = await this.prisma.techCardMaterialLine.findFirst({
+      where: { id: lineId, techCardId },
+      select: { id: true },
+    });
+    if (!line) {
+      // Различаем «техкарты нет» и «строки нет в этой техкарте» — UI
+      // покажет осмысленное сообщение. Для строки в чужой техкарте
+      // это тоже 404, чтобы не утекали id чужих ресурсов.
+      const tpl = await this.prisma.techCardTemplate.findUnique({
+        where: { id: techCardId },
+        select: { id: true },
+      });
+      if (!tpl) throw new TechCardNotFoundException();
+      throw new TechCardMaterialLineNotFoundException();
+    }
+
+    const saved = await this.storage.saveMaterialImage(
+      techCardId,
+      lineId,
+      file,
+    );
+    await this.prisma.techCardMaterialLine.update({
+      where: { id: lineId },
+      data: {
+        materialImageUrl: saved.publicUrl,
+        materialImageOriginalFileName: saved.originalFileName,
+      },
+    });
+    this.logger.log(
+      `event=tech_card.material_line_image_upload techCardId=${techCardId} ` +
+        `lineId=${lineId} url=${saved.publicUrl}`,
+    );
+    return this.getOne(techCardId);
+  }
+
+  // -------------------------------------------------------------------------
   // INTERNAL
   // -------------------------------------------------------------------------
 
@@ -274,7 +412,54 @@ export class TechCardsService {
     techCardId: string,
     line: TechCardMaterialLineInputDto,
     index: number,
+    opts: { existingRoleKeys?: ReadonlySet<string> } = {},
   ): Prisma.TechCardMaterialLineCreateManyInput {
+    // Этап 3 «Потребности цеха»: при `colorRule != FIXED_COLOR` сервис
+    // зачищает `fixedColorText` в null — даже если форма по ошибке
+    // передала непустое значение. Это инвариант на уровне БД-записи:
+    // «фиксированный цвет имеет смысл только при FIXED_COLOR».
+    const colorRule = line.colorRule ?? null;
+    const fixedColorText =
+      colorRule === 'FIXED_COLOR' ? line.fixedColorText ?? null : null;
+    // Этап «Фурнитура в техкарте» (см. ТЗ §3): hardware-поля имеют
+    // смысл только для роли PACKAGING. Сервис принудительно зачищает
+    // их в null для других ролей — это защищает контракт snapshot-а
+    // заказа от «висячих» значений (например, если менеджер сначала
+    // выбрал PACKAGING и заполнил «Размер», а потом сменил роль).
+    const isHardwareRole = line.materialRole === 'PACKAGING';
+    const hardwareSizeText = isHardwareRole
+      ? line.hardwareSizeText ?? null
+      : null;
+    const hardwareMaterialText = isHardwareRole
+      ? line.hardwareMaterialText ?? null
+      : null;
+    // Этап «Фурнитура: скрыть плотность и ширину рулона» (см. ТЗ §7):
+    // densityGsm и plannedWidthCm применимы только к ткани/полотну.
+    // Для PACKAGING принудительно зачищаем в null — иначе после
+    // смены роли с MAIN_FABRIC на PACKAGING случайно остались бы
+    // «висячие» значения, которые потом ушли бы в snapshot заказа.
+    const densityGsm = isHardwareRole ? null : line.densityGsm ?? null;
+    const plannedWidthCm = isHardwareRole
+      ? null
+      : line.plannedWidthCm ?? null;
+    // Этап «Доработка UI и контракта техкарты» (см. ТЗ §1): для НОВЫХ
+    // строк roleKey должен быть из `PATTERN_CATEGORY_PARAMETER_GROUPS`.
+    // Legacy (`existingRoleKeys` приходит из старой техкарты при
+    // PATCH full-replace) — пропускаем без проверки. Если пользователь
+    // явно выбирает невалидную новую роль → 422 на уровне
+    // ZodValidationPipe + сервис не пишет.
+    const role = line.materialRole ?? null;
+    if (role !== null) {
+      const allowed = isKnownTechCardMaterialRoleKey(role);
+      const isLegacyKept = opts.existingRoleKeys?.has(role) ?? false;
+      if (!allowed && !isLegacyKept) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'TECH_CARD_MATERIAL_ROLE_INVALID',
+          message: `Роль материала «${role}» не входит в список доступных. Используйте роли из карточки номенклатуры.`,
+        });
+      }
+    }
     return {
       techCardId,
       sortOrder: (index + 1) * 10,
@@ -285,6 +470,17 @@ export class TechCardsService {
       // проверки.
       qtyPerUnit: new Prisma.Decimal(line.qtyPerUnit ?? '0'),
       note: line.note,
+      materialRole: role,
+      fabricType: line.fabricType ?? null,
+      densityGsm,
+      plannedWidthCm,
+      colorRule,
+      fixedColorText,
+      hardwareSizeText,
+      hardwareMaterialText,
+      materialImageUrl: line.materialImageUrl ?? null,
+      materialImageOriginalFileName:
+        line.materialImageOriginalFileName ?? null,
     };
   }
 
@@ -302,6 +498,10 @@ export class TechCardsService {
         line.qtyPerUnit == null ? null : new Prisma.Decimal(line.qtyPerUnit),
       vendorName: line.vendorName,
       note: line.note,
+      // MVP-2: Zod гарантирует один из двух валидных enum-значений и
+      // подставляет дефолт `MANUAL`, если поле отсутствует — backward-
+      // compat со старыми клиентами/формами (см. ADR-0022).
+      triggerType: line.triggerType,
     };
   }
 
@@ -320,6 +520,22 @@ export class TechCardsService {
         unit: l.unit,
         qtyPerUnit: l.qtyPerUnit.toString(),
         note: l.note,
+        // Этап 3 «Потребности цеха»: новые поля. БД хранит свободной
+        // строкой; DTO отдаёт строку как есть — UI через
+        // `getTechCardMaterialRoleLabel` маппит в человекочитаемый
+        // лейбл (включая legacy roleKey-и).
+        materialRole: l.materialRole,
+        fabricType: l.fabricType,
+        densityGsm: l.densityGsm,
+        plannedWidthCm: l.plannedWidthCm,
+        colorRule:
+          (l.colorRule as TechCardMaterialColorRule | null) ?? null,
+        fixedColorText: l.fixedColorText,
+        // Этап «Фурнитура / изображение материала».
+        hardwareSizeText: l.hardwareSizeText,
+        hardwareMaterialText: l.hardwareMaterialText,
+        materialImageUrl: l.materialImageUrl,
+        materialImageOriginalFileName: l.materialImageOriginalFileName,
       }));
     const outsourceLines: TechCardOutsourceLineDto[] = row.outsourceLines
       .slice()
@@ -332,6 +548,7 @@ export class TechCardsService {
         qtyPerUnit: l.qtyPerUnit ? l.qtyPerUnit.toString() : null,
         vendorName: l.vendorName,
         note: l.note,
+        triggerType: l.triggerType as OutsourceTriggerType,
       }));
     return {
       id: row.id,

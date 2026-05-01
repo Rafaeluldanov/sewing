@@ -52,7 +52,6 @@ describeWithDb('integration — operations management (ADR-0020)', () => {
         login: 'rbac-admin',
         fullName: 'RBAC Admin',
         role: 'ADMIN',
-        paymentType: 'SALARY',
         active: true,
         pinHash: adminPin,
       },
@@ -482,6 +481,12 @@ async function createInProductionOrder(
     .send({
       orderDate: '2026-04-15T00:00:00.000Z',
       productId: seed.product.id,
+      // Эти тесты валидируют marketplace-схему начисления закройщика
+      // (fixedRate × qty / BY_SIZE-ставка). После внедрения второй
+      // схемы (B2B по проценту от пошива, см.
+      // `docs/payroll-cutter-compensation-recon.md`) необходимо явно
+      // сказать «это marketplace», иначе backend выберет B2B-flow.
+      division: 'MARKETPLACE',
       items,
     })
     .expect(201);

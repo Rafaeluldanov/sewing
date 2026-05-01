@@ -1,0 +1,45 @@
+[Unit]
+# SEWING API (NestJS) — слушает 127.0.0.1:3001, nginx проксирует /api/.
+# После рестарта PostgreSQL должен подняться раньше, иначе стартует
+# с ошибкой подключения и улетает в крэшлуп до postgres.ready.
+Description=SEWING API (NestJS) on :3001
+Documentation=https://github.com/teeon/sewing
+After=network-online.target postgresql.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/sewing
+
+# .env читается systemd напрямую. Формат KEY=VALUE с кавычками
+# поддерживается; переменные раскрываются shell-ом приложения, а не
+# systemd. NODE_ENV здесь принудительно production — в .env мы его
+# не выставляем, чтобы dev-режим оставался дефолтом.
+EnvironmentFile=/sewing/.env
+Environment=NODE_ENV=production
+
+ExecStart=/usr/bin/node /sewing/apps/api/dist/main.js
+
+# Restart=always + RestartSec=5 даёт автохилинг при крэше / OOM.
+# StartLimit* отключает «слишком много рестартов — перестаём пытаться»:
+# на stage предпочитаем бесконечно пытаться, чем замолчать.
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+# Логи в journald (journalctl -u sewing-api).
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sewing-api
+
+# Мягкий graceful shutdown: NestJS успевает закрыть HTTP server и
+# Prisma pool, иначе при reload зависают коннекты к Postgres.
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# TODO follow-up: перенести на не-root пользователя (см. docs/ops.md).
+
+[Install]
+WantedBy=multi-user.target

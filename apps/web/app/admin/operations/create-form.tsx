@@ -2,13 +2,17 @@
 
 import { useMemo, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
+import { Plus, XCircle } from 'lucide-react';
 import {
   OPERATION_CATEGORIES,
+  OPERATION_CATEGORY_LABELS,
   PRICING_MODES,
+  TIME_NORM_MODES,
+  TIME_NORM_MODE_LABELS,
   type PricingMode,
+  type TimeNormMode,
 } from '@sewing/shared/operations';
 import type { EquipmentSummaryDto } from '@sewing/shared/equipment';
-import { Icon } from '@/components/icon';
 import { createOperationAction } from './actions';
 import {
   initialCreateOperationState,
@@ -16,66 +20,35 @@ import {
 } from './form-state';
 
 interface CreateOperationFormProps {
-  /**
-   * Список оборудования для опционального чек-листа «привязать сразу
-   * к оборудованию». Если пустой — чек-лист не отрисовывается, форма
-   * остаётся минимальной (так бывает на свежей инсталляции, где
-   * оборудование ещё не заведено).
-   */
   equipment: readonly EquipmentSummaryDto[];
 }
 
-const CATEGORY_LABEL: Record<string, string> = {
-  CUTTING: 'Раскрой',
-  SEWING: 'Пошив',
-  QC: 'ОТК',
-  IRONING: 'ВТО',
-  PACKING: 'Упаковка',
-};
-
 const PRICING_LABEL: Record<PricingMode, string> = {
   FIXED: 'Фиксированная ставка',
-  BY_SIZE: 'По размерам (для оверлока)',
-  SALARY_ONLY: 'Окладная (без сдельной ставки)',
-};
-
-const PRICING_HINT: Record<PricingMode, string> = {
-  FIXED:
-    'Единая ставка за единицу. Подходит для раскроя, киперки, распошива.',
-  BY_SIZE:
-    'Ставки по размерам можно будет заполнить на карточке операции сразу после создания.',
-  SALARY_ONLY:
-    'Сдельная ставка не задаётся — начисление по сделке создаваться не будет, оплата идёт через salaryBase.',
+  BY_SIZE: 'По размерам',
+  SALARY_ONLY: 'Окладная',
 };
 
 function SubmitButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name="plus" size={16} />
-      {pending ? 'Создаём…' : 'Создать операцию'}
+    <button
+      type="submit"
+      className="admin-btn admin-btn--primary"
+      disabled={pending}
+    >
+      <Plus size={16} strokeWidth={1.6} aria-hidden />
+      {pending ? 'Создаём…' : 'Создать'}
     </button>
   );
 }
 
 /**
- * Форма создания операции на `/admin/operations/new` (см. ADR-0020,
- * `docs/screens.md §10c`).
+ * Форма создания операции (Admin UI 2.6).
  *
- * Раньше форма жила прямо в списке `/admin/operations` и была плоской
- * (одна горизонтальная строка из inline-полей). Теперь это отдельный
- * экран с аккуратным `detail-form`-layout'ом: метаданные операции
- * отделены от блока «Тариф», подсказка под `pricingMode` всегда видна.
- *
- * Обязательные поля: `code`, `name`, `category`, `pricingMode`. Если
- * `pricingMode = FIXED` — показываем поле «Ставка»; для `BY_SIZE`
- * ставки заполняются на карточке (одной транзакцией через PATCH);
- * для `SALARY_ONLY` ставка не нужна вообще. Это и есть UX-инвариант
- * блока — менеджер не вводит лишнее. Backend-контракт
- * (`POST /api/operations`) и server action `createOperationAction`
- * не менялись: после успешного создания action редиректит на
- * `/admin/operations/[id]`, чтобы менеджер мог сразу донастроить
- * ставки `BY_SIZE` или `isActive`.
+ * Backend / DTO не меняем. Поля те же, что были, но без длинных
+ * технических подсказок и `Icon name=`. Чек-лист «Привязать к
+ * оборудованию» — компактный, без code в каждой строке.
  */
 export function CreateOperationForm({ equipment }: CreateOperationFormProps) {
   const [state, formAction] = useFormState<CreateOperationState, FormData>(
@@ -83,9 +56,11 @@ export function CreateOperationForm({ equipment }: CreateOperationFormProps) {
     initialCreateOperationState,
   );
   const [pricingMode, setPricingMode] = useState<PricingMode>('FIXED');
-  // Локальный state чек-листа оборудования: form-data всё равно
-  // соберёт `getAll('equipmentIds')`, но контролируемые чекбоксы
-  // дают визуальный счётчик «выбрано N» и подсветку строк.
+  // Норма времени — отдельная ось от тарифа (см.
+  // `docs/operation-time-norms-recon.md §10`). На форме создания
+  // даём только режим FIXED + единая норма (опц.). Поразмерная
+  // матрица BY_SIZE заполняется на карточке после создания.
+  const [timeNormMode, setTimeNormMode] = useState<TimeNormMode>('FIXED');
   const [checkedEquipment, setCheckedEquipment] = useState<
     Record<string, boolean>
   >({});
@@ -95,9 +70,9 @@ export function CreateOperationForm({ equipment }: CreateOperationFormProps) {
   );
 
   return (
-    <form action={formAction} className="detail-form">
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
+    <form action={formAction} className="admin-form">
+      <div className="admin-form-grid">
+        <div className="admin-field">
           <label htmlFor="op-code">Код</label>
           <input
             id="op-code"
@@ -109,13 +84,9 @@ export function CreateOperationForm({ equipment }: CreateOperationFormProps) {
             autoComplete="off"
             style={{ textTransform: 'uppercase' }}
           />
-          <span className="detail-form__hint">
-            UPPER_SNAKE_CASE. Это управленческий ID — pipeline и сиды
-            завязаны на него, потом не меняется.
-          </span>
         </div>
 
-        <div className="detail-form__field">
+        <div className="admin-field">
           <label htmlFor="op-name">Название</label>
           <input
             id="op-name"
@@ -126,28 +97,22 @@ export function CreateOperationForm({ equipment }: CreateOperationFormProps) {
             required
             autoComplete="off"
           />
-          <span className="detail-form__hint">
-            Видно швеям и менеджерам в списках и карточках.
-          </span>
         </div>
 
-        <div className="detail-form__field">
+        <div className="admin-field">
           <label htmlFor="op-category">Категория</label>
           <select id="op-category" name="category" defaultValue="SEWING">
             {OPERATION_CATEGORIES.map((c) => (
               <option key={c} value={c}>
-                {CATEGORY_LABEL[c] ?? c}
+                {OPERATION_CATEGORY_LABELS[c]}
               </option>
             ))}
           </select>
-          <span className="detail-form__hint">
-            Группирует операции по этапу производства.
-          </span>
         </div>
       </div>
 
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
+      <div className="admin-form-grid">
+        <div className="admin-field">
           <label htmlFor="op-pricing-mode">Тип тарифа</label>
           <select
             id="op-pricing-mode"
@@ -161,11 +126,10 @@ export function CreateOperationForm({ equipment }: CreateOperationFormProps) {
               </option>
             ))}
           </select>
-          <span className="detail-form__hint">{PRICING_HINT[pricingMode]}</span>
         </div>
 
         {pricingMode === 'FIXED' && (
-          <div className="detail-form__field">
+          <div className="admin-field">
             <label htmlFor="op-fixed-rate">Ставка за единицу, ₽</label>
             <input
               id="op-fixed-rate"
@@ -176,82 +140,166 @@ export function CreateOperationForm({ equipment }: CreateOperationFormProps) {
               required
               autoComplete="off"
             />
-            <span className="detail-form__hint">
-              Целое или десятичное число; точка или запятая разделителем.
+          </div>
+        )}
+      </div>
+
+      <div className="admin-form-grid">
+        <div className="admin-field">
+          <label htmlFor="op-time-norm-mode">Норма времени · режим</label>
+          <select
+            id="op-time-norm-mode"
+            name="timeNormMode"
+            value={timeNormMode}
+            onChange={(e) =>
+              setTimeNormMode(e.target.value as TimeNormMode)
+            }
+          >
+            {TIME_NORM_MODES.map((m) => (
+              <option key={m} value={m}>
+                {TIME_NORM_MODE_LABELS[m]}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {timeNormMode === 'FIXED' ? (
+          <>
+            <div className="admin-field">
+              <label htmlFor="op-time-norm-min">Минуты</label>
+              <input
+                id="op-time-norm-min"
+                name="timeNormMin"
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+                placeholder="0"
+                autoComplete="off"
+              />
+            </div>
+            <div className="admin-field">
+              <label htmlFor="op-time-norm-sec">Секунды</label>
+              <input
+                id="op-time-norm-sec"
+                name="timeNormSecPart"
+                type="number"
+                min={0}
+                max={59}
+                step={1}
+                inputMode="numeric"
+                placeholder="0"
+                autoComplete="off"
+              />
+            </div>
+          </>
+        ) : (
+          <div
+            className="admin-field"
+            style={{
+              gridColumn: 'span 2',
+              alignSelf: 'end',
+              fontSize: '0.85rem',
+            }}
+          >
+            <span className="admin-muted">
+              Поразмерные нормы заполняются на карточке операции после
+              создания.
             </span>
           </div>
         )}
       </div>
 
-      {pricingMode === 'BY_SIZE' && (
-        <div className="alert-row alert-row--info" role="status">
-          <span className="alert-row__icon">
-            <Icon name="info" />
-          </span>
-          <span className="alert-row__msg">
-            Таблица «размер ↔ ставка» появится на карточке операции
-            сразу после создания — заполнять её на старте необязательно.
-          </span>
+      {/*
+        Плановая окладная стоимость — отдельная ось. Особенно полезно
+        для pricingMode = SALARY_ONLY. На фактическую зарплату не
+        влияет, см. `OrderOperationPlanService`.
+      */}
+      <div className="admin-form-grid">
+        <div className="admin-field">
+          <label htmlFor="op-salary-plan-rub">
+            Плановая стоимость смены, ₽
+          </label>
+          <input
+            id="op-salary-plan-rub"
+            name="salaryPlanRubPerShift"
+            type="text"
+            inputMode="decimal"
+            placeholder="напр. 3200"
+            autoComplete="off"
+          />
         </div>
-      )}
-
-      {pricingMode === 'SALARY_ONLY' && (
-        <div className="alert-row alert-row--info" role="status">
-          <span className="alert-row__icon">
-            <Icon name="info" />
-          </span>
-          <span className="alert-row__msg">
-            Окладная операция: сдельная ставка не используется.
-            Начисление по сделке создаваться не будет — оплата идёт
-            через `salaryBase` сотрудника.
-          </span>
+        <div className="admin-field">
+          <label htmlFor="op-salary-plan-hours">
+            Длительность смены, ч
+          </label>
+          <input
+            id="op-salary-plan-hours"
+            name="salaryPlanShiftHours"
+            type="number"
+            min={0.25}
+            step={0.25}
+            max={48}
+            inputMode="decimal"
+            defaultValue="8"
+            placeholder="8"
+            autoComplete="off"
+          />
         </div>
-      )}
-
-      <fieldset className="detail-form__field" style={{ minWidth: 0 }}>
-        <legend
+        <div
+          className="admin-field"
           style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '0.5rem',
-            fontWeight: 600,
+            gridColumn: 'span 2',
+            alignSelf: 'end',
+            fontSize: '0.85rem',
           }}
         >
-          <Icon name="equipment" size={16} />
-          Привязать к оборудованию
-          {checkedCount > 0 && (
-            <span className="detail-form__hint" style={{ fontWeight: 400 }}>
-              · выбрано: <strong>{checkedCount}</strong>
-            </span>
-          )}
-        </legend>
-        <div className="alert-row alert-row--warn" role="status">
-          <span className="alert-row__icon">
-            <Icon name="warning" />
-          </span>
-          <span className="alert-row__msg">
-            Без привязки к оборудованию операция не появится в выборе
-            на /work после сканирования QR станка. Привязку всегда
-            можно изменить в карточке станка
-            (<code>/admin/equipment/[id]</code>).
+          <span className="admin-muted">
+            Только для плановой себестоимости окладных операций.
+            Фактическая зарплата не меняется.
           </span>
         </div>
-        {equipment.length === 0 ? (
-          <p className="detail-form__hint" style={{ marginTop: '0.5rem' }}>
-            Активного оборудования пока нет. Заведите станок в
-            <code>/admin/equipment</code> и вернитесь сюда, либо отметьте
-            операцию на карточке станка позже.
-          </p>
-        ) : (
-          <ul className="option-list" style={{ marginTop: '0.5rem' }}>
+      </div>
+
+      {equipment.length > 0 && (
+        <fieldset className="admin-field" style={{ minWidth: 0 }}>
+          <legend
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: '0.5rem',
+              fontWeight: 600,
+              fontSize: '0.88rem',
+            }}
+          >
+            Привязать к оборудованию
+            {checkedCount > 0 && (
+              <span className="admin-muted" style={{ fontWeight: 400 }}>
+                · {checkedCount}
+              </span>
+            )}
+          </legend>
+          <ul
+            className="admin-chip-list"
+            style={{ marginTop: '0.4rem' }}
+          >
             {equipment.map((eq) => {
               const isChecked = !!checkedEquipment[eq.id];
               return (
-                <li
-                  key={eq.id}
-                  className={`option-list__row ${isChecked ? 'is-active' : ''}`}
-                >
-                  <label>
+                <li key={eq.id}>
+                  <label
+                    className="admin-chip"
+                    style={{
+                      cursor: 'pointer',
+                      ...(isChecked
+                        ? {
+                            background: 'var(--admin-primary-soft)',
+                            color: 'var(--admin-primary-fg)',
+                            borderColor: 'transparent',
+                          }
+                        : {}),
+                    }}
+                  >
                     <input
                       type="checkbox"
                       name="equipmentIds"
@@ -263,50 +311,43 @@ export function CreateOperationForm({ equipment }: CreateOperationFormProps) {
                           [eq.id]: e.target.checked,
                         }))
                       }
+                      style={{ margin: 0 }}
                     />
-                    <span className="option-list__row-name">
-                      {eq.displayNumber && (
-                        <span style={{ color: 'var(--color-fg-muted)' }}>
-                          №{eq.displayNumber}{' '}
-                        </span>
-                      )}
+                    <span>
+                      {eq.displayNumber ? `№${eq.displayNumber} · ` : ''}
                       {eq.name}
-                    </span>
-                    <span className="option-list__row-meta">
-                      <code>{eq.code}</code> · уже {eq.allowedOperationsCount}{' '}
-                      операций
                     </span>
                   </label>
                 </li>
               );
             })}
           </ul>
-        )}
-      </fieldset>
+        </fieldset>
+      )}
 
-      <div className="detail-form__actions">
+      <div className="admin-actions-row">
         <SubmitButton />
       </div>
 
       {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>
-            {state.error}
-            {state.errorRequestId && (
-              <span className="detail-form__error-rid">
-                req: <code>{state.errorRequestId}</code>
-              </span>
-            )}
-            {state.partialOperationId && (
-              <>
-                {' '}
-                <a href={`/admin/operations/${state.partialOperationId}`}>
-                  Открыть карточку операции →
-                </a>
-              </>
-            )}
-          </span>
+        <div
+          role="alert"
+          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
+        >
+          <XCircle size={14} strokeWidth={1.6} aria-hidden /> {state.error}
+          {state.errorRequestId && (
+            <span className="admin-muted" style={{ marginLeft: 6 }}>
+              req: <code>{state.errorRequestId}</code>
+            </span>
+          )}
+          {state.partialOperationId && (
+            <>
+              {' '}
+              <a href={`/admin/operations/${state.partialOperationId}`}>
+                Открыть карточку операции →
+              </a>
+            </>
+          )}
         </div>
       )}
     </form>

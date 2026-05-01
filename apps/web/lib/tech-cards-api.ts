@@ -14,7 +14,7 @@ import type {
   TechCardTemplateSummaryDto,
   UpdateTechCardDto,
 } from '@sewing/shared/tech-cards';
-import { apiFetch } from './api';
+import { apiFetch, apiFetchMultipart } from './api';
 
 export function listTechCards(
   query: ListTechCardsQuery = {},
@@ -52,5 +52,34 @@ export function updateTechCard(
   return apiFetch<TechCardTemplateDetailDto>(
     `/tech-cards/${encodeURIComponent(id)}`,
     { method: 'PATCH', body },
+  );
+}
+
+/**
+ * Загружает JPG/JPEG/PNG-изображение для конкретной строки материала
+ * техкарты (`POST /api/tech-cards/:techCardId/material-lines/:lineId/image`,
+ * multipart/form-data, поле `file`). Этап «Изображение материала»
+ * (см. ТЗ §5).
+ *
+ * Backend сам валидирует расширение и размер файла; здесь мы просто
+ * форвардим `FormData`. Доступно ТОЛЬКО для уже сохранённой строки
+ * с известным `lineId` — для свежих несохранённых строк UI показывает
+ * подсказку «Сохраните техкарту, чтобы загрузить изображение».
+ */
+export function uploadTechCardMaterialLineImage(
+  techCardId: string,
+  lineId: string,
+  file: File | Blob,
+  fileName?: string,
+): Promise<TechCardTemplateDetailDto> {
+  const fd = new FormData();
+  if (fileName) {
+    fd.append('file', file, fileName);
+  } else {
+    fd.append('file', file);
+  }
+  return apiFetchMultipart<TechCardTemplateDetailDto>(
+    `/tech-cards/${encodeURIComponent(techCardId)}/material-lines/${encodeURIComponent(lineId)}/image`,
+    fd,
   );
 }

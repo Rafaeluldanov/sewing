@@ -16,7 +16,21 @@
 
 import { z } from 'zod';
 
+import type { OrderDeadlineEvaluation, OrderDeadlineStatus } from './order-deadlines';
+import { ORDER_DEADLINE_STATUSES } from './order-deadlines';
+import type { OrderCostEstimateDto } from './order-cost-estimates';
 import type { OrderRouteStepDto } from './routes';
+import type {
+  OutsourceTriggerType,
+  TechCardMaterialColorRule,
+} from './tech-cards';
+import type { MaterialRole } from './material-roles';
+import type { OrderApplicationDto } from './order-applications';
+import {
+  OrderApplicationInputSchema,
+  type OrderApplicationInput,
+} from './order-applications';
+import { MoneyCurrencySchema, type MoneyCurrency } from './money';
 
 /**
  * Re-export snapshot-шага маршрута, чтобы консьюмеры `OrderDetailDto`
@@ -25,6 +39,114 @@ import type { OrderRouteStepDto } from './routes';
  * поверхности модуля «Заказы».
  */
 export type { OrderRouteStepDto };
+
+/**
+ * Re-export типа триггера активации внешней потребности — чтобы UI
+ * карточки заказа мог импортировать всё необходимое из одного
+ * модуля (`@sewing/shared/orders`) и не зависеть напрямую от
+ * `@sewing/shared/tech-cards`.
+ */
+export type { OutsourceTriggerType };
+
+// ---------------------------------------------------------------------------
+// Outsource execution status (MVP-3 техкарт, ADR-0022
+// §«Manual execution status»).
+// ---------------------------------------------------------------------------
+
+/**
+ * Ручной операционный статус выполнения внешней потребности
+ * (`OrderOutsourceRequirement.executionStatus`). Источник истины —
+ * Prisma enum `OrderOutsourceExecutionStatus`.
+ *
+ * - `PLANNED`  — дефолтное состояние, ручной перевод ещё не делался;
+ * - `ORDERED`  — менеджер отметил «отдали подрядчику»;
+ * - `RECEIVED` — менеджер отметил «получено обратно».
+ *
+ * `READY_TO_ORDER` сюда **не входит** — это derived display-state, в
+ * БД не хранится (см. `OrderOutsourceDisplayStatus` ниже).
+ */
+export const ORDER_OUTSOURCE_EXECUTION_STATUSES = [
+  'PLANNED',
+  'ORDERED',
+  'RECEIVED',
+] as const;
+export const OrderOutsourceExecutionStatusSchema = z.enum(
+  ORDER_OUTSOURCE_EXECUTION_STATUSES,
+);
+export type OrderOutsourceExecutionStatus = z.infer<
+  typeof OrderOutsourceExecutionStatusSchema
+>;
+
+/**
+ * Композитный display-статус строки внешней потребности, который
+ * показывает UI карточки заказа. Считается at-read backend-ом в
+ * `OrdersService.getOne()` по правилу:
+ *
+ *   - `executionStatus === 'RECEIVED'` → `RECEIVED`
+ *   - `executionStatus === 'ORDERED'` → `ORDERED`
+ *   - `executionStatus === 'PLANNED'` && `triggerType === 'CUT_READY'`
+ *     && `isReadyToOrder` → `READY_TO_ORDER`
+ *   - иначе → `PLANNED`
+ *
+ * В БД **не хранится** — это read-model. См. ADR-0022, «Почему
+ * READY_TO_ORDER не пишем в БД».
+ */
+export const ORDER_OUTSOURCE_DISPLAY_STATUSES = [
+  'PLANNED',
+  'READY_TO_ORDER',
+  'ORDERED',
+  'RECEIVED',
+] as const;
+export type OrderOutsourceDisplayStatus =
+  (typeof ORDER_OUTSOURCE_DISPLAY_STATUSES)[number];
+
+/**
+ * Этап «Указать в заказе» (см. ТЗ §4): тело
+ * `PATCH /api/orders/:id/material-requirements/:requirementId/color`.
+ *
+ * Допускается:
+ *   - непустая строка длиной ≤ 120 символов — сохранить цвет;
+ *   - пустая строка / `null` — стереть ранее сохранённый цвет.
+ *
+ * Backend сохраняет значение только для строк, у которых
+ * `requiresColorSelection = true` (т.е. в техкарте `colorRule =
+ * ORDER_SELECTED_COLOR`); для прочих строк отвечает 409
+ * `ORDER_MATERIAL_REQUIREMENT_COLOR_NOT_REQUIRED`.
+ */
+export const UpdateOrderMaterialRequirementColorSchema = z.object({
+  selectedColorText: z.preprocess(
+    (v) => {
+      if (v === null || v === undefined) return null;
+      if (typeof v !== 'string') return v;
+      const trimmed = v.trim();
+      return trimmed === '' ? null : trimmed;
+    },
+    z
+      .string()
+      .max(120, 'Цвет: не длиннее 120 символов')
+      .nullable(),
+  ),
+});
+export type UpdateOrderMaterialRequirementColorDto = z.infer<
+  typeof UpdateOrderMaterialRequirementColorSchema
+>;
+
+/**
+ * Zod-схема тела `POST /api/orders/:id/outsource-requirements/:requirementId/status`
+ * (см. `docs/api.md §«orders»`).
+ *
+ * Через action разрешены **только** прямые переходы вперёд:
+ * `PLANNED → ORDERED` и `ORDERED → RECEIVED`. Поэтому `executionStatus`
+ * принимает только два значения; обратный откат в `PLANNED` через
+ * action сознательно запрещён (см. ADR-0022 §«Manual execution
+ * status», «Почему линейные переходы»).
+ */
+export const UpdateOrderOutsourceRequirementStatusSchema = z.object({
+  executionStatus: z.enum(['ORDERED', 'RECEIVED']),
+});
+export type UpdateOrderOutsourceRequirementStatusDto = z.infer<
+  typeof UpdateOrderOutsourceRequirementStatusSchema
+>;
 
 // ---------------------------------------------------------------------------
 // Tech card snapshot DTO (см. `docs/domain.md §«Техкарты»`, ADR-0022)
@@ -45,12 +167,87 @@ export interface OrderMaterialRequirementDto {
   qtyPerUnit: string;
   totalQty: string;
   note: string | null;
+  /**
+   * Этап 3 «Потребности цеха» (см. `docs/recon-soft-integration.md
+   * §«Этап 3»`). Snapshot-копии новых полей `TechCardMaterialLine`,
+   * зафиксированные в `OrdersService.start()`. Все nullable +
+   * backward-compatible: для старых snapshot-строк (созданных до
+   * этапа 3) отдаются `null` — UI на это рассчитан.
+   *
+   * `resolvedColorText` — derived в момент `start()` по `colorRule`:
+   *   - `ORDER_COLOR` → `Order.color` (или null);
+   *   - `FIXED_COLOR` → `fixedColorText` (или null);
+   *   - `NO_COLOR`    → null;
+   *   - null/empty    → null.
+   */
+  /**
+   * `materialRole` хранится в БД свободной строкой (`String?`) — list
+   * ролей расширяется без миграции (см.
+   * `@sewing/shared/pattern-categories::PATTERN_CATEGORY_PARAMETER_GROUPS`).
+   * UI карточки заказа должен через `getTechCardMaterialRoleLabel`
+   * получить человекочитаемую строку, не делая `MATERIAL_ROLE_LABELS[r]`
+   * (последний знает только legacy whitelist).
+   */
+  materialRole: MaterialRole | string | null;
+  fabricType: string | null;
+  densityGsm: number | null;
+  plannedWidthCm: number | null;
+  colorRule: TechCardMaterialColorRule | null;
+  fixedColorText: string | null;
+  resolvedColorText: string | null;
+  /**
+   * Этап «Указать в заказе» (см. ТЗ §4): если строка материала
+   * техкарты создана с `colorRule = ORDER_SELECTED_COLOR`, в snapshot
+   * заказа фиксируется флаг `requiresColorSelection = true` — UI
+   * карточки заказа показывает поле «Цвет» с подсказкой «Цвет нужно
+   * указать в заказе». Менеджер вводит значение через
+   * `PATCH /api/orders/:id/material-requirements/:requirementId/color`.
+   *
+   * `selectedColorText` — введённое менеджером значение; по умолчанию
+   * `null`. Когда оно заполнено, `resolvedColorText` для строки
+   * становится равен `selectedColorText` (см.
+   * `OrdersService.updateMaterialRequirementColor`).
+   *
+   * Оба поля опциональны (`?`) — старые потребители без пересборки
+   * shared-пакета продолжают компилироваться, snapshot-строки до
+   * введения этой фичи отдают `requiresColorSelection = false` и
+   * `selectedColorText = null`.
+   */
+  requiresColorSelection?: boolean;
+  selectedColorText?: string | null;
+  /**
+   * Этап «Фурнитура / изображение» (см. ТЗ §3, §5): snapshot-копии
+   * новых полей `TechCardMaterialLine`. Snapshot-логика прежняя:
+   * заполняются в `OrdersService.start()` из шаблона, дальше живут
+   * независимо. Старые snapshot-строки → `null` по каждому полю.
+   */
+  hardwareSizeText?: string | null;
+  hardwareMaterialText?: string | null;
+  materialImageUrl?: string | null;
+  materialImageOriginalFileName?: string | null;
 }
 
 /**
  * Snapshot строки внешнего подрядного размещения на конкретном заказе.
  * `qtyPerUnit`/`totalQty`/`unit` могут быть null — это нормально для
  * подряда, который считается «за партию» без явной нормы.
+ *
+ * Поля `triggerType`, `isReadyToOrder`, `readinessLabel` относятся к
+ * MVP-2 «Готовность кроя для внешней потребности» (ADR-0022
+ * §«Cut-ready readiness»). Это **derived read-only** поля:
+ *
+ *   - `triggerType` копируется в snapshot из шаблона при
+ *     `OrdersService.start()` и хранится в БД (см. Prisma model
+ *     `OrderOutsourceRequirement.triggerType`);
+ *   - `isReadyToOrder` и `readinessLabel` **не хранятся в БД**, а
+ *     вычисляются на чтении в `OrdersService.getOne()` по правилу
+ *     ALL_PASSPORTS: «у заказа есть паспорта и у каждого
+ *     `Passport.currentCellId != null`». Никаких side-effect / БД-
+ *     статусов / cron-ов на MVP не вводится.
+ *
+ * Для `triggerType = MANUAL` всегда `isReadyToOrder = false` и
+ * `readinessLabel = null` — UI на карточке заказа в этом случае не
+ * рисует индикатор готовности.
  */
 export interface OrderOutsourceRequirementDto {
   id: string;
@@ -61,6 +258,56 @@ export interface OrderOutsourceRequirementDto {
   totalQty: string | null;
   vendorName: string | null;
   note: string | null;
+  /**
+   * Snapshot триггера активации (см. `OutsourceTriggerType` в
+   * `@sewing/shared/tech-cards`). На MVP — `MANUAL` или `CUT_READY`.
+   */
+  triggerType: OutsourceTriggerType;
+  /**
+   * Derived: «потребность готова к заказу». На MVP true только если
+   * `triggerType === 'CUT_READY'` и весь крой заказа размещён в
+   * ячейки. Для `MANUAL` всегда false.
+   */
+  isReadyToOrder: boolean;
+  /**
+   * Derived: человекочитаемая подпись индикатора. Для `CUT_READY` —
+   * `"Готово к заказу"` или `"Ожидает размещения кроя"`; для
+   * `MANUAL` — `null` (UI не показывает индикатор).
+   */
+  readinessLabel: string | null;
+  /**
+   * MVP-3 (ADR-0022 §«Manual execution status»): ручной операционный
+   * статус выполнения внешней потребности (источник истины — БД).
+   * Меняется только через action
+   * `POST /api/orders/:id/outsource-requirements/:requirementId/status`.
+   */
+  executionStatus: OrderOutsourceExecutionStatus;
+  /**
+   * Когда менеджер впервые перевёл строку в `ORDERED` (ISO-string).
+   * `null` пока перехода не было. Не редактируется руками.
+   */
+  orderedAt: string | null;
+  /**
+   * Когда менеджер перевёл строку в `RECEIVED` (ISO-string).
+   * `null` пока перехода не было. Не редактируется руками.
+   */
+  receivedAt: string | null;
+  /**
+   * Композитный display-статус для UI карточки заказа. Считается
+   * at-read backend-ом из `executionStatus` + `triggerType` +
+   * `isReadyToOrder`. В БД **не хранится** (см. ADR-0022).
+   */
+  displayStatus: OrderOutsourceDisplayStatus;
+  /**
+   * Человекочитаемая подпись `displayStatus` для UI:
+   * - `RECEIVED` → "Получено";
+   * - `ORDERED` → "Заказано";
+   * - `READY_TO_ORDER` → "Готово к заказу";
+   * - `PLANNED` + `CUT_READY` → "Ожидает размещения кроя";
+   * - `PLANNED` + `MANUAL` → `null` (UI остаётся нейтральным,
+   *   ничего не дорисовывает).
+   */
+  displayStatusLabel: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -70,14 +317,92 @@ export interface OrderOutsourceRequirementDto {
 /**
  * Статусы заказа. Совпадают с `OrderStatus` в Prisma-схеме.
  *
- * - `DRAFT`          — черновик, план ещё редактируется
- * - `IN_PRODUCTION`  — запущен в производство, план иммутабелен (ADR-0006)
- * - `DONE`           — завершён (ручной перевод на Шаге 4)
- * - `CANCELLED`      — отменён
+ * - `DRAFT`            — черновик, план ещё редактируется
+ * - `CALCULATION`      — менеджер перевёл заказ в расчёт; backend
+ *   автоматически собрал «Потребность цеха»
+ *   (см. `OrdersService.startCalculation`,
+ *   `WorkshopNeedsService.calculateForOrder`).
+ *   Из этого статуса можно либо вернуться к ручному пересчёту
+ *   потребности (force), либо запустить заказ в производство.
+ * - `CALCULATION_DONE` — расчёт себестоимости завершён (см.
+ *   `OrdersService.completeCalculation`,
+ *   `prisma/schema.prisma::OrderCostEstimate`). Закупщик заполнил
+ *   `purchaseQty` / `quotedPrice` / `quotedCurrency` по строкам
+ *   `WorkshopNeed`, нажал «Завершить расчёт» — backend зафиксировал
+ *   `OrderCostEstimate` и snapshot-поля `Order.costEstimate*`.
+ *   Из этого статуса допустимо: (а) запустить заказ в производство
+ *   (`start()` принимает CALCULATION_DONE так же, как CALCULATION /
+ *   DRAFT), (б) вернуть на пересчёт (`reopenCalculation`).
+ * - `IN_PRODUCTION`    — запущен в производство, план иммутабелен (ADR-0006)
+ * - `DONE`             — завершён (ручной перевод на Шаге 4)
+ * - `CANCELLED`        — отменён
+ *
+ * UI-порядок статусов задаётся явно через этот массив (Postgres
+ * enum складывает новые значения «в конец» по `ALTER TYPE … ADD
+ * VALUE`, поэтому БД-порядок и UI-порядок различаются — это
+ * нормально).
  */
-export const ORDER_STATUSES = ['DRAFT', 'IN_PRODUCTION', 'DONE', 'CANCELLED'] as const;
+export const ORDER_STATUSES = [
+  'DRAFT',
+  'CALCULATION',
+  'CALCULATION_DONE',
+  'IN_PRODUCTION',
+  'DONE',
+  'CANCELLED',
+] as const;
 export const OrderStatusSchema = z.enum(ORDER_STATUSES);
 export type OrderStatus = z.infer<typeof OrderStatusSchema>;
+
+/**
+ * Человекочитаемые лейблы статуса заказа. Источник истины для всех
+ * UI: легаси `/orders/*`, новый `/admin/orders/*`, форма
+ * редактирования. Бэкенд лейблы не отдаёт — он отдаёт raw-enum, а
+ * UI приводит к человеческому виду через эту таблицу (см.
+ * `apps/web/lib/orders-api.ts::ORDER_STATUS_LABELS` и
+ * `apps/web/lib/admin-labels.ts::formatOrderStatus`).
+ */
+export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
+  DRAFT: 'Черновик',
+  CALCULATION: 'Расчёт',
+  CALCULATION_DONE: 'Расчёт завершён',
+  IN_PRODUCTION: 'В производстве',
+  DONE: 'Завершён',
+  CANCELLED: 'Отменён',
+};
+
+/**
+ * Подразделение заказа (см. Prisma enum `OrderDivision`,
+ * `docs/domain.md §«Подразделения заказа»`). Используется как фильтр
+ * большого экрана `/shopfloor/display?division=…`. Минимальный MVP:
+ *
+ * - `MARKETPLACE` — заказы маркетплейс-направления, под которые
+ *   выделяется отдельный экран `?division=MARKETPLACE`;
+ * - `OTHER`       — backward-compatible бакет «всё остальное», в
+ *   который попадают все исторические заказы (default в БД).
+ *
+ * Расширение: добавить значение в этот массив + лейбл в
+ * `ORDER_DIVISION_LABELS` + соответствующий вариант в Prisma enum.
+ */
+export const ORDER_DIVISIONS = ['MARKETPLACE', 'OTHER'] as const;
+export const OrderDivisionSchema = z.enum(ORDER_DIVISIONS);
+export type OrderDivision = z.infer<typeof OrderDivisionSchema>;
+
+/**
+ * Человекочитаемые лейблы подразделений для UI (формы заказа,
+ * заголовок display-экрана при необходимости).
+ *
+ * `OTHER` — legacy technical value для B2B-заказов: Prisma enum мы
+ * сознательно НЕ переименовываем destructive-миграцией (см.
+ * `docs/payroll-cutter-compensation-recon.md §4`). Backend
+ * (`EarningsService`) и shared-helper
+ * `getCutterCompensationSchemeForDivision` уже трактуют `OTHER` как
+ * B2B; в UI лейбл показываем как «B2B», чтобы у менеджера не было
+ * двух названий одного и того же бакета.
+ */
+export const ORDER_DIVISION_LABELS: Record<OrderDivision, string> = {
+  MARKETPLACE: 'Маркетплейс',
+  OTHER: 'B2B',
+};
 
 // ---------------------------------------------------------------------------
 // Request DTO
@@ -90,6 +415,74 @@ const DateStringSchema = z
     message: 'Некорректная дата',
   });
 
+/**
+ * Этап «Цена продажи за единицу» (см. `model Order.customerUnitPrice`,
+ * `prisma/migrations/20260521100000_add_order_customer_unit_price`).
+ *
+ * `customerUnitPrice` принимает `string | number | null | undefined`,
+ * нормализует к строке с `.` (без локалей), валидирует как
+ * неотрицательное число с не более чем 2 знаками после запятой
+ * (DECIMAL(14,2)).
+ *
+ * Семантика:
+ *   - `undefined` — поле не передано, backend не трогает колонку;
+ *   - `null` или пустая строка — стирание (UI «Цена продажи не
+ *     указана»);
+ *   - `0` допускаем (бесплатный/демо-заказ), отрицательные — нет.
+ */
+const CustomerUnitPriceField: z.ZodType<string | null | undefined> = z
+  .union([z.string(), z.number(), z.null()])
+  .optional()
+  .transform((v, ctx) => {
+    if (v === undefined) return undefined;
+    if (v === null) return null;
+    const raw =
+      typeof v === 'number' ? String(v) : v.trim().replace(',', '.');
+    if (raw === '') return null;
+    if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Цена продажи: число, не более 2 знаков после точки',
+      });
+      return z.NEVER;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Цена продажи должна быть >= 0',
+      });
+      return z.NEVER;
+    }
+    if (n > 1_000_000_000) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Цена продажи: значение выглядит ошибочным',
+      });
+      return z.NEVER;
+    }
+    return raw;
+  }) as unknown as z.ZodType<string | null | undefined>;
+
+/**
+ * Валюта цены продажи. Та же стратегия, что `WorkshopNeed.quotedCurrency`:
+ * сужено до `MoneyCurrencySchema` (`RUB` / `USD`); пустая строка —
+ * `null` (стирание). На MVP exchange-rate API не подключаем — для
+ * USD-цен UI показывает выручку в долларах и не считает маржу в
+ * рублях без явного курса.
+ */
+const CustomerCurrencyField: z.ZodType<MoneyCurrency | null | undefined> = z
+  .preprocess((v) => {
+    if (v === undefined) return undefined;
+    if (v === null) return null;
+    if (typeof v !== 'string') return v;
+    const trimmed = v.trim();
+    if (trimmed === '') return null;
+    return trimmed.toUpperCase();
+  }, MoneyCurrencySchema.nullable().optional()) as unknown as z.ZodType<
+    MoneyCurrency | null | undefined
+  >;
+
 export const CreateOrderItemSchema = z.object({
   sizeId: z.string().min(1, 'sizeId обязателен'),
   qtyPlan: z
@@ -100,15 +493,41 @@ export const CreateOrderItemSchema = z.object({
 
 export const CreateOrderSchema = z.object({
   orderDate: DateStringSchema,
-  productId: z.string().min(1, 'productId обязателен'),
+  /**
+   * Учётный (legacy) `Product.id`. Этап «Номенклатура = Лекала» (см.
+   * `docs/recon-soft-integration.md §«Номенклатура = Лекала»`):
+   *
+   * - в новой admin-форме (`/admin/orders/new`) поле НЕ заполняется
+   *   и в DTO не приходит — пользователь выбирает только `patternItemId`,
+   *   а backend подставит технический Product через
+   *   `OrdersService.ensureLegacyProductForPattern()`;
+   * - старый flow (CUTTER_ASSISTANT, прямой POST `/api/orders` без
+   *   `patternItemId`) продолжает работать: достаточно прислать
+   *   `productId`, backend сохранит обратную совместимость.
+   *
+   * Хотя бы одно из полей `patternItemId` / `productId` обязано быть
+   * передано — это enforced ниже в `superRefine`. Передать оба тоже
+   * можно: тогда `patternItemId` главный, helper использует его и
+   * пере-привяжет/создаст legacy Product при необходимости.
+   */
+  productId: z.string().min(1).optional(),
   /**
    * Цвет: опционален. На MVP приходит с фронта и может быть перезаписан
-   * сервером значением `Product.color`, если явно не задан.
+   * сервером значением `Product.color`, если явно не задан и заказ
+   * заведён в legacy product-only flow (без `patternItemId`).
    */
   color: z.string().trim().min(1).max(64).optional(),
   comment: z.string().max(2000).optional(),
   customer: z.string().max(200).optional(),
-  dueDate: DateStringSchema.optional(),
+  /**
+   * Управленческая привязка заказа к карточке клиента из справочника
+   * `Client`. Опционально и nullable: `null`/пусто = заказ без явной
+   * связи (старый flow `customer`-free-text всё ещё работает).
+   * Backend дополнительно проверяет, что клиент существует и активен —
+   * иначе 400 `CLIENT_NOT_FOUND` / `CLIENT_INACTIVE`.
+   */
+  clientId: z.string().min(1).nullable().optional(),
+  dueDate: DateStringSchema.nullable().optional(),
   /**
    * Soft-route MVP: опциональная привязка к шаблону маршрута. Шаги
    * шаблона фиксируются в snapshot `OrderRouteStep[]` при первом
@@ -123,6 +542,60 @@ export const CreateOrderSchema = z.object({
    * заказ запускается «без техкарты», snapshot-ы остаются пустыми.
    */
   techCardId: z.string().min(1).optional(),
+  /**
+   * Soft-pattern MVP (этап 2 «Лекала»): опциональная привязка к
+   * карточке лекала (`PatternItem`). Не блокирует запуск заказа без
+   * лекала — поле сознательно nullable. Backend проверяет, что
+   * лекало существует и `status = ACTIVE` (см.
+   * `OrdersService.assertPatternUsable`). При запуске заказа в
+   * производство (`start()`) snapshot полей лекала фиксируется в
+   * `Order.patternNameSnapshot` / `patternArticleSnapshot` /
+   * `patternPreviewSnapshotUrl`.
+   */
+  patternItemId: z.string().min(1).nullable().optional(),
+  /**
+   * Подразделение заказа (см. `OrderDivisionSchema`). Опционально на
+   * уровне DTO: если фронт/интеграция не передал — backend подставит
+   * `OTHER` (Prisma default). Веб-форма всегда подставляет явное
+   * значение из select-а.
+   */
+  division: OrderDivisionSchema.optional(),
+  /**
+   * Этап «Нанесение на заказе покупателя» (см. `model OrderApplication`,
+   * `apps/api/src/modules/order-applications/*`). Опциональный список
+   * заказных нанесений, который backend создаёт в **той же транзакции**,
+   * что и сам заказ (см. `OrdersService.create`). Это нужно, чтобы
+   * пользователь на `/admin/orders/new` мог завести нанесения сразу с
+   * заказом — без второго запроса `PUT /orders/:id/applications`.
+   *
+   * Семантика:
+   *   - поле опционально и nullable; отсутствие или пустой массив =
+   *     «заказ создаётся без нанесений» (legacy-flow `/orders/new`
+   *     ничего не передаёт и продолжает работать как раньше);
+   *   - каждая строка — `OrderApplicationInputSchema` (тот же контракт,
+   *     что у `PUT /orders/:id/applications`), Zod нормализует
+   *     пустые/числовые поля;
+   *   - дефолты на бэке: `unit = "шт"`, `status = PLANNED`,
+   *     `stage = CUT_PARTS` — те же, что в `OrderApplicationsService.
+   *     replaceForOrder`. Менять только в DRAFT — на момент `create`
+   *     заказ только что родился в DRAFT, ограничения нет.
+   *
+   * Маршрут / техкарта / Product / Passport / payroll НЕ затрагиваются:
+   * нанесение хранится отдельной таблицей `OrderApplication`, привязка
+   * только через `orderId`.
+   */
+  applications: z.array(OrderApplicationInputSchema).optional(),
+  /**
+   * Этап «Цена продажи за единицу»: цена и валюта продажи 1 изделия.
+   * Поле опционально и nullable — backend сохранит ровно то, что
+   * пришло, без подстановок default-ов.
+   *
+   * Дефолт валюты «по требованию ТЗ» — если `customerUnitPrice > 0`
+   * пришла без `customerCurrency`, backend проставит `RUB`.
+   * Подробнее — в `OrdersService.create` / `update`.
+   */
+  customerUnitPrice: CustomerUnitPriceField,
+  customerCurrency: CustomerCurrencyField,
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -140,17 +613,51 @@ export const CreateOrderSchema = z.object({
         seen.add(sid);
       }
     }),
+}).superRefine((dto, ctx) => {
+  // Этап «Номенклатура = Лекала»: на уровне DTO заказ должен иметь
+  // хотя бы один источник изделия — новый `patternItemId` (главный
+  // путь, admin-форма) либо legacy `productId` (старый flow). Если
+  // нет ни того, ни другого — отдаём адресную ошибку, чтобы UI
+  // подсветил именно поле «Номенклатура / лекало».
+  const hasPattern =
+    typeof dto.patternItemId === 'string' && dto.patternItemId.length > 0;
+  const hasProduct =
+    typeof dto.productId === 'string' && dto.productId.length > 0;
+  if (!hasPattern && !hasProduct) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['patternItemId'],
+      message: 'Выберите номенклатуру / лекало',
+    });
+  }
 });
 export type CreateOrderDto = z.infer<typeof CreateOrderSchema>;
 export type CreateOrderItemDto = z.infer<typeof CreateOrderItemSchema>;
 
 /**
- * Редактирование заказа. Допускается только пока `status = DRAFT`
- * (см. ADR-0006). При `IN_PRODUCTION` API отдаёт 409 `ORDER_LOCKED`.
+ * Редактирование заказа.
  *
- * Правила:
- * - если передан `items` — полностью заменяет текущий набор строк;
- * - если поле не передано — не меняется.
+ * Поля делятся на два класса (см. `OrdersService.update`):
+ *
+ *   - «безопасные» (`clientId`, `dueDate`, `orderDate`, `comment`,
+ *     `customer`, `color`, `status`) — менеджер может править на
+ *     любом статусе, в том числе после запуска заказа;
+ *   - «потенциально опасные» (`items`, `productId`, `routeTemplateId`,
+ *     `techCardId`, `division`) — допустимы только пока заказ в
+ *     `DRAFT`; на не-DRAFT заказе backend отвечает 409 `ORDER_LOCKED`.
+ *
+ * Дополнительные инварианты остаются:
+ *   - смена `routeTemplateId` блокируется, если уже зафиксирован
+ *     snapshot маршрута (`OrderRouteStep[]`) → 409
+ *     `ORDER_ROUTE_ALREADY_STARTED`;
+ *   - смена `techCardId` блокируется, если уже зафиксированы
+ *     snapshot-ы материалов / внешних потребностей → 409
+ *     `ORDER_TECH_CARD_ALREADY_STARTED`;
+ *   - `status` принимает только безопасные переходы:
+ *       `DRAFT → IN_PRODUCTION` (делегирует `OrdersService.start`),
+ *       `IN_PRODUCTION → DONE` (делегирует `complete`),
+ *       `(DRAFT|IN_PRODUCTION) → CANCELLED` (делегирует `cancel`).
+ *     Любой другой переход возвращает 409 `ORDER_INVALID_TRANSITION`.
  */
 export const UpdateOrderSchema = z.object({
   orderDate: DateStringSchema.optional(),
@@ -158,6 +665,20 @@ export const UpdateOrderSchema = z.object({
   color: z.string().trim().min(1).max(64).nullable().optional(),
   comment: z.string().max(2000).nullable().optional(),
   customer: z.string().max(200).nullable().optional(),
+  /**
+   * Управляемая смена статуса заказа. На уровне DTO допустимы все
+   * значения `OrderStatus`, но backend разрешает только безопасные
+   * переходы (см. описание схемы выше) — остальные → 409
+   * `ORDER_INVALID_TRANSITION`. Поле опциональное: если не передано,
+   * статус не трогается, и сохраняются текущие правила полей.
+   */
+  status: OrderStatusSchema.optional(),
+  /**
+   * Управленческая привязка заказа к карточке клиента (см.
+   * `CreateOrderSchema.clientId`). Меняется только пока заказ в
+   * `DRAFT`; передача `null` сбрасывает связь.
+   */
+  clientId: z.string().min(1).nullable().optional(),
   dueDate: DateStringSchema.nullable().optional(),
   /**
    * Soft-route MVP: смена/сброс шаблона маршрута до запуска заказа
@@ -172,6 +693,31 @@ export const UpdateOrderSchema = z.object({
    * только без изменений.
    */
   techCardId: z.string().min(1).nullable().optional(),
+  /**
+   * Soft-pattern MVP (этап 2 «Лекала»): смена/сброс выбранного лекала
+   * до запуска заказа (status = DRAFT). После запуска поле read-only
+   * (общий ORDER_LOCKED guard) — snapshot полей лекала уже
+   * зафиксирован в `Order.patternNameSnapshot` / `…Article…` /
+   * `…PreviewSnapshotUrl` и описывает «лекало по которому заказ ушёл
+   * в работу». Передача `null` или пустой строки очищает связь
+   * (только в DRAFT).
+   */
+  patternItemId: z.string().min(1).nullable().optional(),
+  /**
+   * Подразделение заказа. Меняется только пока заказ в `DRAFT`
+   * (общий ORDER_LOCKED guard `OrdersService.update`). `null` сюда
+   * передавать не нужно — поле в БД NOT NULL; чтобы «сбросить»,
+   * передаётся явное значение `OTHER`.
+   */
+  division: OrderDivisionSchema.optional(),
+  /**
+   * Этап «Цена продажи за единицу»: то же поле, что в
+   * `CreateOrderSchema`. Меняется на любом статусе заказа — это
+   * управленческое поле, а не «опасное» (см. `OrdersService.update`).
+   * `undefined` — не трогать, `null` или пустая строка — стереть.
+   */
+  customerUnitPrice: CustomerUnitPriceField,
+  customerCurrency: CustomerCurrencyField,
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -206,9 +752,32 @@ export const ORDER_SORTS = [
 export const OrderSortSchema = z.enum(ORDER_SORTS);
 export type OrderSort = z.infer<typeof OrderSortSchema>;
 
+/**
+ * Zod-enum статуса контроля сроков заказа. Источник истины —
+ * `OrderDeadlineStatus` из `./order-deadlines`. Здесь дублируется
+ * как enum для query-валидации фильтра `?deadline=…` на API
+ * (`OrdersService.list`) и web (`/admin/orders`).
+ */
+export const OrderDeadlineStatusSchema = z.enum(ORDER_DEADLINE_STATUSES);
+
 export const ListOrdersQuerySchema = z.object({
   search: z.string().trim().max(100).optional(),
   status: OrderStatusSchema.optional(),
+  /**
+   * Управленческая привязка: фильтр заказов по карточке клиента.
+   * Используется блоком «Заказы клиента» в `/admin/clients/[id]` и
+   * любыми будущими отчётами «по клиенту». На MVP backend честно
+   * фильтрует через `Order.clientId = …`.
+   */
+  clientId: z.string().min(1).optional(),
+  /**
+   * Фильтр по бакету «контроля сроков» (см. `evaluateOrderDeadline`).
+   * Backend применяет фильтр после вычисления `deadline.status` для
+   * каждого заказа в текущем срезе; учитывает все заказы, даже без
+   * dueDate (`NO_DUE_DATE`). Подробнее — комментарий в
+   * `OrdersService.list`.
+   */
+  deadline: OrderDeadlineStatusSchema.optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(200).default(50),
   sort: OrderSortSchema.default('createdAt_desc'),
@@ -268,6 +837,26 @@ export interface OrderItemDto {
   qtyPlan: number;
 }
 
+/**
+ * DTO «контроля сроков» — то же, что вернёт `evaluateOrderDeadline`,
+ * но `tone` ужат до `string`, чтобы фронту не пришлось узко типизироваться
+ * на shared-enum в местах, где он только показывает бейдж. Web
+ * сужает обратно к `OrderDeadlineTone` через `as`/маппинг — это
+ * безопасно, т.к. `evaluateOrderDeadline` всегда отдаёт корректное
+ * значение из `OrderDeadlineTone`.
+ */
+export interface OrderDeadlineDto {
+  status: OrderDeadlineStatus;
+  label: string;
+  tone: string;
+  daysLeft: number | null;
+  progressPercent: number | null;
+  reason: string;
+}
+
+/** Re-export для удобства потребителей `@sewing/shared/orders`. */
+export type { OrderDeadlineEvaluation, OrderDeadlineStatus };
+
 export interface OrderListItemDto {
   id: string;
   number: string;
@@ -280,8 +869,36 @@ export interface OrderListItemDto {
   color: string | null;
   comment: string | null;
   customer: string | null;
+  /**
+   * Управленческая привязка к карточке клиента (см. `model Client`).
+   * `null` — заказ без явной связи (старый flow `customer`-free-text
+   * либо клиент не выбран в новой форме). Краткие поля (`id`/`name`)
+   * приходят отдельно в `client` ниже, чтобы не делать
+   * дополнительный запрос на UI.
+   */
+  clientId: string | null;
+  client: { id: string; name: string } | null;
   dueDate: string | null;
   qtyPlanTotal: number;
+  /**
+   * Σ выпуска по заказу (= `summary.qtyFinishedTotal` на детали).
+   * Считается на бэке из `Passport.qtyGood` по паспортам в статусе
+   * `PACKED`. Нужен на списке, чтобы UI и `evaluateOrderDeadline`
+   * видели прогресс выпуска без дополнительного запроса детали.
+   */
+  qtyFinishedTotal: number;
+  /**
+   * Управленческий «контроль срока». Считается на бэке через общий
+   * `evaluateOrderDeadline` (см. `@sewing/shared/order-deadlines`).
+   * Опционально только для backward-compat: старые потребители без
+   * пересборки shared-пакета продолжают компилироваться.
+   */
+  deadline?: OrderDeadlineDto;
+  /**
+   * Подразделение заказа (см. `OrderDivision`). По нему фильтруется
+   * большой экран `/shopfloor/display?division=…`.
+   */
+  division: OrderDivision;
   /**
    * Soft-route MVP: привязанный шаблон маршрута (или `null`, если заказ
    * запускается без маршрута). Хранится id + краткие поля для UI, чтобы
@@ -290,9 +907,122 @@ export interface OrderListItemDto {
   routeTemplateId: string | null;
   routeTemplateCode: string | null;
   routeTemplateName: string | null;
+  /**
+   * Soft-pattern MVP (этап 2 «Лекала»): краткая ссылка на выбранное
+   * лекало для `/admin/orders` и виджетов превью.
+   *
+   * Правило отображения (UI):
+   *   - если есть `patternPreviewSnapshotUrl` — показываем snapshot
+   *     (заказ уже в работе, лекало «застыло»);
+   *   - иначе если есть live `patternPreviewImageUrl` — показываем
+   *     актуальное превью карточки лекала;
+   *   - иначе показываем placeholder.
+   *
+   * Все четыре поля nullable, чтобы старые/исторические заказы без
+   * лекала отображались корректно.
+   */
+  patternItemId: string | null;
+  patternName: string | null;
+  patternArticle: string | null;
+  patternPreviewImageUrl: string | null;
+  patternNameSnapshot: string | null;
+  patternArticleSnapshot: string | null;
+  patternPreviewSnapshotUrl: string | null;
+
+  /**
+   * Этап «Цена продажи за единицу» (см.
+   * `prisma/schema.prisma::Order.customerUnitPrice`,
+   * `apps/api/src/modules/orders/orders.service.ts::create`/`update`).
+   *
+   * Цена продажи 1 изделия и валюта (`RUB`/`USD`/`null`). Decimal
+   * сериализуется строкой (`Prisma.Decimal.toString()`); либо
+   * строкой, либо числом — `string | number` сохранён для
+   * backward-compat с DTO-консьюмерами, которые могли ожидать
+   * число.
+   *
+   * Поля опциональны (`?`) и nullable — старые потребители без
+   * пересборки shared-пакета продолжают компилироваться, новые
+   * заказы без указанной цены приходят с `null`.
+   */
+  customerUnitPrice?: string | number | null;
+  customerCurrency?: MoneyCurrency | null;
+
+  /**
+   * Этап 2 «План операций на заказе» (см.
+   * `docs/operation-time-norms-recon.md §10/§11`,
+   * `apps/api/src/modules/orders/order-operation-plan.service.ts`,
+   * `prisma/schema.prisma::Order.operationCostPlanRub`).
+   *
+   * Snapshot плановой стоимости операций (₽) и плановое время
+   * выполнения заказа (секунды) — рассчитываются на
+   * `OrdersService.create` / `update` (DRAFT) / `startCalculation`
+   * и замораживаются после `start()`. В отличие от `costEstimateTotalRub`
+   * это плановая оценка операций, а не финансовый документ с
+   * материалами/фурнитурой/курсами.
+   *
+   * Все четыре поля опциональны (`?`) и nullable — старые потребители
+   * без пересборки shared-пакета продолжают компилироваться, новые
+   * заказы без рассчитанного плана приходят с `null` и
+   * `operationPlanWarnings = ['Маршрут не выбран — план операций не
+   * рассчитан']` либо аналогичной причиной.
+   *
+   * Decimal сериализуется строкой (см. `Prisma.Decimal.toString()`).
+   * Поле допускает `string | number` для backward-compat с
+   * DTO-консьюмерами, которые могли ожидать число.
+   */
+  operationCostPlanRub?: string | number | null;
+  operationTimePlanSec?: number | null;
+  /** ISO-string `Order.operationPlanCalculatedAt` или `null`. */
+  operationPlanCalculatedAt?: string | null;
+  /**
+   * Список человекочитаемых warnings, нормализованный в `string[]`
+   * маппером backend-а (`OrdersService.toListItemDto/toDetailDto`).
+   * `null` — warnings нет / план не считался.
+   *
+   * Если в БД (`Json?`) лежит не-массив (например, исторические данные
+   * другого формата) — маппер отдаёт `null` без падения, см.
+   * `normalizeOperationPlanWarnings` в `OrdersService`.
+   */
+  operationPlanWarnings?: string[] | null;
 }
 
-export interface OrderDetailDto extends OrderListItemDto {
+/**
+ * Этап 2 «План операций на заказе» — stale-detection в карточке
+ * заказа (см. `docs/operation-time-norms-recon.md §11`,
+ * `apps/api/src/modules/orders/order-operation-plan.service.ts::getFreshnessForOrder`).
+ *
+ * Поля **computed** в маппере `OrdersService.toDetailDto` — в БД не
+ * хранятся, в `Order` колонок нет. Помогают UI карточки заказа
+ * показать badge «Требует пересчёта» и человекочитаемую причину
+ * («После расчёта менялись операции, ставки или нормы времени» и т.п.).
+ *
+ * Все три поля опциональны (`?`) и nullable, чтобы:
+ *   - старые потребители без пересборки shared-пакета продолжали
+ *     компилироваться;
+ *   - на списке заказов (`OrderListItemDto`) поля сознательно
+ *     отсутствуют — расчёт freshness требует доп.запросов в БД,
+ *     и на MVP мы не хотим грузить им список (см. ТЗ §2 «не делать
+ *     дорогое вычисление в списке заказов, если это тяжело»).
+ */
+export interface OrderOperationPlanFreshness {
+  /** `true` ⇔ источник плана был изменён после snapshot-а либо
+   * snapshot ещё не считался при наличии маршрута и items. */
+  operationPlanIsStale?: boolean | null;
+  /** Человекочитаемая причина для UI badge.
+   * Например:
+   *   - «После расчёта менялись операции, ставки или нормы времени»;
+   *   - «План операций ещё не рассчитан»;
+   *   - `null` — план свежий или маршрут не выбран. */
+  operationPlanStaleReason?: string | null;
+  /** ISO-string max(updatedAt) источников плана: `RouteTemplate`,
+   * `Operation`, `OperationRateBySize`, `OperationTimeNormBySize`.
+   * `null`, если источников нет (заказ без маршрута). */
+  operationPlanSourceUpdatedAt?: string | null;
+}
+
+export interface OrderDetailDto
+  extends OrderListItemDto,
+    OrderOperationPlanFreshness {
   items: OrderItemDto[];
   summary: OrderSummary;
   sizeBreakdown: OrderSizeBreakdownRow[];
@@ -323,6 +1053,53 @@ export interface OrderDetailDto extends OrderListItemDto {
    * аналогична `materialRequirements`.
    */
   outsourceRequirements: OrderOutsourceRequirementDto[];
+  /**
+   * Этап «Нанесение на заказе покупателя» (см. `model OrderApplication`,
+   * `apps/api/src/modules/order-applications/*`,
+   * `packages/shared/src/order-applications.ts`).
+   *
+   * Список заказных нанесений — параметры конкретного заказа
+   * (тип / stage / размер / количество / цвет / описание / файл /
+   * статус). Менять можно только в `DRAFT`. Используется в
+   * `CutReadinessService` для проверки готовности к крою и в
+   * `WorkshopNeedsService` как новый источник `APPLICATION`-потребностей.
+   *
+   * `OrderApplicationDto[]` опционально (`?`) для backward-compat:
+   * старые потребители без пересборки shared-пакета продолжают
+   * компилироваться. Backend всегда отдаёт массив (может быть пустым).
+   */
+  applications?: OrderApplicationDto[];
+
+  /**
+   * Этап «Себестоимость заказа» (см.
+   * `prisma/schema.prisma::OrderCostEstimate`,
+   * `apps/api/src/modules/orders/orders.service.ts::completeCalculation`).
+   *
+   * Snapshot-поля заполняются при `completeCalculation` и
+   * сбрасываются в `null` при `reopenCalculation`. Все поля
+   * опциональны и nullable — старые заказы без завершённого расчёта
+   * остаются валидными.
+   *
+   *   - `costEstimateTotalRub`     — итоговая сумма заказа в рублях;
+   *   - `costEstimateCompletedAt`  — когда расчёт был зафиксирован;
+   *   - `costEstimateVersion`      — порядковый номер расчёта по этому
+   *                                  заказу (растёт на каждый
+   *                                  `completeCalculation`).
+   *
+   * Все поля Decimal сериализуются строкой
+   * (см. `Prisma.Decimal.toString()`); либо строкой, либо числом —
+   * `string | number` сохранён для backward-compat с DTO-консьюмерами,
+   * которые могли ожидать число.
+   */
+  costEstimateTotalRub?: string | number | null;
+  costEstimateCompletedAt?: string | null;
+  costEstimateVersion?: number | null;
+  /**
+   * Полный документ активного расчёта (`status = COMPLETED`). На MVP
+   * backend подгружает его одним include в `getOne`. `null` для
+   * заказов без активного расчёта (DRAFT/CALCULATION/REVOKED-only).
+   */
+  currentCostEstimate?: OrderCostEstimateDto | null;
 }
 
 export interface Paginated<T> {

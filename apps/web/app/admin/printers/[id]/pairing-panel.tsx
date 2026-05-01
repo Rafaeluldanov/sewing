@@ -1,17 +1,17 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
+import { Download, RefreshCw, XCircle } from 'lucide-react';
 import type { PrinterDetailDto } from '@sewing/shared/printers';
-import { Icon } from '@/components/icon';
 import { generatePairingCodeAction } from '../actions';
 import { initialActionState, type ActionState } from '../form-state';
 
 function GenerateButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-secondary" disabled={pending}>
-      <Icon name="refresh" size={16} />
-      {pending ? 'Генерируем…' : 'Сгенерировать код'}
+    <button type="submit" className="admin-btn" disabled={pending}>
+      <RefreshCw size={16} strokeWidth={1.6} aria-hidden />
+      {pending ? 'Генерируем…' : 'Новый код'}
     </button>
   );
 }
@@ -29,14 +29,14 @@ export function PairingPanel({ printer, agentDownloadUrl }: Props) {
   );
 
   return (
-    <div className="detail-form">
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
-          <label>Код подключения</label>
+    <div className="admin-form">
+      <dl className="admin-deflist">
+        <dt>Код</dt>
+        <dd>
           {printer.pairingCode ? (
             <code
               style={{
-                fontSize: '1.4rem',
+                fontSize: '1.1rem',
                 letterSpacing: '0.15em',
                 fontWeight: 700,
               }}
@@ -44,58 +44,38 @@ export function PairingPanel({ printer, agentDownloadUrl }: Props) {
               {printer.pairingCode}
             </code>
           ) : (
-            <span className="meta-line">
-              Код ещё не сгенерирован или уже использован агентом.
-            </span>
+            <span className="admin-muted">не сгенерирован</span>
           )}
-          <span className="detail-form__hint">
-            Передайте код оператору, который установит агент рядом с
-            принтером. После первого подключения код очищается.
-          </span>
-        </div>
-        <div className="detail-form__field">
-          <label>Файл агента</label>
-          <a
-            href={agentDownloadUrl}
-            className="btn btn-primary"
-            download="sewing-print-agent.exe"
-            style={{ alignSelf: 'flex-start' }}
-          >
-            <Icon name="arrow-right" size={16} />
-            Скачать агент (Windows .exe)
-          </a>
-          <span className="detail-form__hint">
-            Сохраните exe на Windows-станцию рядом с принтером и
-            запустите:
-            <br />
-            <code>
-              sewing-print-agent.exe --pair --server &lt;URL&gt; --code{' '}
-              {printer.pairingCode ?? '<code>'}
-            </code>
-            <br />
-            Затем <code>sewing-print-agent.exe</code>. Файлы будут
-            складываться в <code>spool/</code>, <code>printed/</code>,{' '}
-            <code>failed/</code> рядом с exe.
-          </span>
-        </div>
+        </dd>
+      </dl>
+
+      <div className="admin-actions-row" style={{ justifyContent: 'flex-start' }}>
+        <form action={formAction} style={{ display: 'inline-flex' }}>
+          <GenerateButton />
+        </form>
+        <a
+          href={agentDownloadUrl}
+          className="admin-btn"
+          download="sewing-print-agent.exe"
+        >
+          <Download size={16} strokeWidth={1.6} aria-hidden />
+          Скачать агент
+        </a>
       </div>
 
       {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>{state.error}</span>
+        <div
+          role="alert"
+          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
+        >
+          <XCircle size={14} strokeWidth={1.6} aria-hidden /> {state.error}
         </div>
       )}
       {state.ok && (
-        <div className="detail-form__success" role="status">
-          <Icon name="success" size={16} />
-          <span>Новый код сгенерирован.</span>
+        <div role="status" className="admin-muted" style={{ fontSize: '0.88rem' }}>
+          Новый код сгенерирован.
         </div>
       )}
-
-      <form action={formAction} className="detail-form__actions">
-        <GenerateButton />
-      </form>
     </div>
   );
 }

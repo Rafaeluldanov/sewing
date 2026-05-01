@@ -46,13 +46,29 @@ export type Role =
    * никакой навигации, любая попытка зайти в другой раздел
    * редиректится в display-экран (см. `apps/web/middleware.ts`).
    */
-  | 'DISPLAY';
+  | 'DISPLAY'
+  /**
+   * Мастер цеха (MVP, см. `docs/domain.md §«Мастер цеха»`,
+   * `apps/web/app/master/page.tsx`). Мобильный терминал `/master`:
+   * видит очередь открытых вызовов от рабочих, закрывает вызов сканом
+   * QR сотрудника. Доступа к админке/ценам/маршрутам/техкартам/
+   * пользователям на MVP нет — primary workspace и единственная
+   * осмысленная точка входа совпадают.
+   */
+  | 'SHOPFLOOR_MASTER';
 
 /**
  * Единственная страница, на которую пускают роль `DISPLAY`. Хранится
  * в одном месте, чтобы middleware и RBAC-хелперы не разъезжались.
  */
 export const DISPLAY_ALLOWED_PATH = '/shopfloor/display';
+
+/**
+ * Единственная страница, на которую пускают роль `SHOPFLOOR_MASTER`.
+ * Логика та же, что у `DISPLAY_ALLOWED_PATH`, чтобы middleware и
+ * login redirect не разъезжались с RBAC-хелперами.
+ */
+export const SHOPFLOOR_MASTER_ALLOWED_PATH = '/master';
 
 export const QC_ALLOWED_ROLES: readonly Role[] = ['QC', 'SHOP_MANAGER', 'ADMIN'];
 export const WTO_ALLOWED_ROLES: readonly Role[] = [
@@ -94,6 +110,8 @@ export const ORDERS_MENU_ALLOWED_ROLES: readonly Role[] = [
 export const SHOPFLOOR_MENU_HIDDEN_ROLES: readonly Role[] = [
   'CUTTER_ASSISTANT',
   'DISPLAY',
+  // У мастера цеха единственная точка входа — `/master`.
+  'SHOPFLOOR_MASTER',
 ];
 
 /**
@@ -232,6 +250,8 @@ const PRIMARY_WORKSPACE_BY_ROLE: Record<Role, string> = {
   // DISPLAY — учётка под большой монитор, единственная доступная
   // страница совпадает с primary workspace.
   DISPLAY: DISPLAY_ALLOWED_PATH,
+  // SHOPFLOOR_MASTER — мобильный терминал `/master` (MVP).
+  SHOPFLOOR_MASTER: SHOPFLOOR_MASTER_ALLOWED_PATH,
 };
 
 export function getPrimaryWorkspace(role: string | undefined | null): string {
@@ -273,6 +293,8 @@ const SINGLE_WORKSPACE_ROLES: readonly Role[] = [
   // У DISPLAY вообще нет других экранов — большой монитор должен
   // выглядеть только как доска цеха, без header/mobile-nav.
   'DISPLAY',
+  // У мастера цеха одна страница `/master` — мобильный терминал.
+  'SHOPFLOOR_MASTER',
 ];
 
 export function isSingleWorkspaceRole(
@@ -300,6 +322,9 @@ const WORKING_ROLES: readonly Role[] = [
   // механизмом «корневой `/` редиректит в primary workspace», чтобы
   // и аноним при логине, и попадание на `/` уводили в `/shopfloor/display`.
   'DISPLAY',
+  // SHOPFLOOR_MASTER пользуется тем же механизмом: login и `/`
+  // ведут в `/master` (см. `getPrimaryWorkspace`).
+  'SHOPFLOOR_MASTER',
 ];
 
 export function isWorkingRole(role: string | undefined | null): boolean {
@@ -314,6 +339,37 @@ export function isWorkingRole(role: string | undefined | null): boolean {
  */
 export function isDisplayRole(role: string | undefined | null): boolean {
   return role === 'DISPLAY';
+}
+
+/**
+ * Роль «Мастер цеха». Аналог `isDisplayRole` — middleware и login
+ * используют этот хелпер, чтобы редиректить мастера на `/master`,
+ * не пуская его на остальные разделы.
+ */
+export function isShopfloorMasterRole(
+  role: string | undefined | null,
+): boolean {
+  return role === 'SHOPFLOOR_MASTER';
+}
+
+/**
+ * Доступ к мобильному терминалу мастера цеха (`/master`, см.
+ * `apps/web/app/master/page.tsx`). Сама роль — основной
+ * пользователь; ADMIN и SHOP_MANAGER оставлены в матрице, чтобы
+ * менеджер мог открыть тот же экран на своём телефоне без отдельной
+ * учётки. Backend независимо защищает `/api/master-calls/*` через
+ * `@Roles(...)`.
+ */
+export const MASTER_PAGE_ALLOWED_ROLES: readonly Role[] = [
+  'SHOPFLOOR_MASTER',
+  'ADMIN',
+  'SHOP_MANAGER',
+];
+
+export function canSeeMasterPage(role: string | undefined | null): boolean {
+  return (
+    !!role && (MASTER_PAGE_ALLOWED_ROLES as readonly string[]).includes(role)
+  );
 }
 
 /**

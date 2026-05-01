@@ -1,25 +1,49 @@
 import Link from 'next/link';
+import { Activity, ArrowRight, Plus } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
-import { listRouteTemplates } from '@/lib/routes-api';
+import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
+import { getShiftMeta } from '@/lib/shifts-api';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
-import { Icon } from '@/components/icon';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminPagination,
+  AdminRouteSteps,
+  AdminStatusBadge,
+  AdminTable,
+  paginate,
+  type AdminRouteStep,
+  type AdminTableColumn,
+} from '@/components/admin';
+import { formatStatus, statusTone } from '@/lib/admin-labels';
 
 export const dynamic = 'force-dynamic';
 
+interface SearchParams {
+  page?: string;
+  pageSize?: string;
+}
+
+interface RouteRow extends RouteTemplateSummaryDto {
+  steps: AdminRouteStep[];
+}
+
 /**
- * Список шаблонов маршрутов производства (см. `docs/screens.md §«Маршруты»`,
- * `docs/domain.md §«Маршруты производства»`). Источник истины —
- * `GET /api/routes`.
+ * Список шаблонов маршрутов производства (Admin UI 2.6).
  *
- * Доступ ограничен слой выше (`app/admin/layout.tsx` пускает только
- * ADMIN/SHOP_MANAGER); backend независимо защищает запись через
- * `@Roles('ADMIN', 'SHOP_MANAGER')` в `RoutesController`.
- *
- * Создание нового шаблона вынесено на отдельную страницу `/new`,
- * чтобы не перегружать список редактором — тот же паттерн, что
- * у `/admin/equipment`.
+ * Backend / DTO не меняем — `GET /api/routes` отдаёт summary без
+ * шагов, поэтому первые 4 операции по каждому видимому шаблону
+ * подтягиваем параллельно через `getRouteTemplate(id)`. Шаблонов
+ * в системе единицы-десятки, и страница уже `force-dynamic`,
+ * поэтому N+1 здесь приемлемый компромисс ради компактного preview
+ * без правки backend-а.
  */
-export default async function AdminRoutesListPage() {
+export default async function AdminRoutesListPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
   let items: RouteTemplateSummaryDto[] = [];
   let error: string | null = null;
   try {
@@ -31,103 +55,134 @@ export default async function AdminRoutesListPage() {
         : 'Не удалось загрузить список шаблонов маршрутов';
   }
 
+  const { pageItems, page, pageSize, total } = paginate(items, searchParams);
+
+  let opCategoryById = new Map<string, string>();
+  try {
+    const meta = await getShiftMeta();
+    opCategoryById = new Map(meta.operations.map((op) => [op.id, op.category]));
+  } catch {
+    opCategoryById = new Map();
+  }
+
+  const detailedRows: RouteRow[] = await Promise.all(
+    pageItems.map(async (tpl) => {
+      try {
+        const detail = await getRouteTemplate(tpl.id);
+        const steps = detail.steps
+          .slice()
+          .sort((a, b) => a.index - b.index)
+          .map<AdminRouteStep>((s, i) => ({
+            id: s.id,
+            index: i + 1,
+            name: s.operationName,
+            category: opCategoryById.get(s.operationId) ?? null,
+          }));
+        return { ...tpl, steps };
+      } catch {
+        return { ...tpl, steps: [] };
+      }
+    }),
+  );
+
+  const columns: AdminTableColumn<RouteRow>[] = [
+    {
+      key: 'name',
+      header: 'Название',
+      render: (tpl) => <span className="admin-table__primary">{tpl.name}</span>,
+    },
+    {
+      key: 'steps',
+      header: 'Операции',
+      render: (tpl) =>
+        tpl.steps.length === 0 ? (
+          <AdminStatusBadge tone="warning">Пусто</AdminStatusBadge>
+        ) : (
+          <AdminRouteSteps steps={tpl.steps} maxVisible={4} dense />
+        ),
+    },
+    {
+      key: 'updatedAt',
+      header: 'Обновлён',
+      render: (tpl) => (
+        <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
+          {new Date(tpl.updatedAt).toLocaleString('ru-RU')}
+        </span>
+      ),
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      render: (tpl) => (
+        <AdminStatusBadge tone={statusTone(tpl.isActive)}>
+          {formatStatus(tpl.isActive)}
+        </AdminStatusBadge>
+      ),
+    },
+    {
+      key: 'open',
+      header: '',
+      isAction: true,
+      render: (tpl) => (
+        <Link
+          href={`/admin/routes/${tpl.id}`}
+          className="admin-table__action-link"
+        >
+          Открыть
+          <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+        </Link>
+      ),
+    },
+  ];
+
   return (
-    <div className="admin-overview page-shell">
-      <header className="admin-overview__header">
-        <div>
-          <div className="page-eyebrow">
-            <Icon name="operations" />
-            Производственный план
-          </div>
-          <h1 className="page-title">
-            <Icon name="operations" />
-            Маршруты производства
-          </h1>
-          <p className="page-subtitle">
-            Шаблоны последовательности операций. При создании заказа можно
-            привязать шаблон — при запуске заказа маршрут зафиксируется
-            snapshot-ом, и UI на /work будет подсказывать швее текущий и
-            следующий шаг. Это «мягкий» маршрут: scan «не туда» не
-            блокируется, только показывается предупреждение.
-          </p>
+    <AdminPageShell
+      icon={<Activity size={22} strokeWidth={1.6} aria-hidden />}
+      title="Маршруты"
+      subtitle={`Всего: ${items.length}`}
+      actions={
+        <Link href="/admin/routes/new" className="admin-btn admin-btn--primary">
+          <Plus size={16} strokeWidth={1.6} aria-hidden />
+          Новый шаблон
+        </Link>
+      }
+    >
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
         </div>
-        <div className="admin-overview__actions">
-          <Link href="/admin/routes/new" className="btn btn-primary">
-            <Icon name="plus" size={16} />
-            Новый шаблон
-          </Link>
-        </div>
-      </header>
-
-      {error && <div className="error-box">{error}</div>}
-
-      {items.length === 0 && !error ? (
-        <div className="empty-state">
-          <span className="empty-state__icon">
-            <Icon name="operations" />
-          </span>
-          <span className="empty-state__title">
-            Шаблоны маршрутов ещё не заведены
-          </span>
-          <span className="empty-state__hint">
-            <Link href="/admin/routes/new">Создайте первый шаблон</Link> —
-            например, «Базовая футболка» с операциями раскрой → пошив → ОТК →
-            ВТО → упаковка.
-          </span>
-        </div>
-      ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Код</th>
-              <th>Название</th>
-              <th>Активен</th>
-              <th>Шагов</th>
-              <th>Обновлён</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((tpl) => (
-              <tr key={tpl.id}>
-                <td>
-                  <code>{tpl.code}</code>
-                </td>
-                <td>{tpl.name}</td>
-                <td>
-                  {tpl.isActive ? (
-                    'да'
-                  ) : (
-                    <span className="meta-line">нет</span>
-                  )}
-                </td>
-                <td>
-                  {tpl.stepsCount === 0 ? (
-                    <span
-                      className="meta-line"
-                      title="Шаблон без шагов: snapshot не создастся"
-                    >
-                      0 — пусто
-                    </span>
-                  ) : (
-                    tpl.stepsCount
-                  )}
-                </td>
-                <td>
-                  <span className="meta-line">
-                    {new Date(tpl.updatedAt).toLocaleString('ru-RU')}
-                  </span>
-                </td>
-                <td>
-                  <Link href={`/admin/routes/${tpl.id}`}>
-                    Настроить <Icon name="arrow-right" size={13} />
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       )}
-    </div>
+
+      <AdminCard>
+        <AdminTable
+          rows={detailedRows}
+          columns={columns}
+          rowKey={(tpl) => tpl.id}
+          emptyContent={
+            <AdminEmptyState
+              icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}
+              title="Шаблонов маршрутов нет"
+              actions={
+                <Link
+                  href="/admin/routes/new"
+                  className="admin-btn admin-btn--primary"
+                >
+                  <Plus size={16} strokeWidth={1.6} aria-hidden />
+                  Новый шаблон
+                </Link>
+              }
+            />
+          }
+        />
+
+        <AdminPagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          basePath="/admin/routes"
+          label="шаблонов"
+        />
+      </AdminCard>
+    </AdminPageShell>
   );
 }

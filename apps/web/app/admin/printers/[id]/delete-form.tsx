@@ -1,7 +1,7 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
-import { Icon } from '@/components/icon';
+import { Trash2, XCircle } from 'lucide-react';
 import { deletePrinterAction } from '../actions';
 import { initialActionState, type ActionState } from '../form-state';
 
@@ -10,7 +10,7 @@ function DeleteButton() {
   return (
     <button
       type="submit"
-      className="btn btn-secondary"
+      className="admin-btn admin-btn--danger"
       disabled={pending}
       onClick={(e) => {
         if (!confirm('Удалить принтер вместе с историей печати?')) {
@@ -18,8 +18,8 @@ function DeleteButton() {
         }
       }}
     >
-      <Icon name="reset" size={16} />
-      {pending ? 'Удаляем…' : 'Удалить принтер'}
+      <Trash2 size={16} strokeWidth={1.6} aria-hidden />
+      {pending ? 'Удаляем…' : 'Удалить'}
     </button>
   );
 }
@@ -32,16 +32,18 @@ export function DeletePrinterForm({ printerId }: { printerId: string }) {
   );
 
   return (
-    <form action={formAction} className="detail-form">
-      {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>{state.error}</span>
-        </div>
-      )}
-      <div className="detail-form__actions">
+    <form action={formAction} className="admin-form">
+      <div className="admin-actions-row" style={{ justifyContent: 'flex-start' }}>
         <DeleteButton />
       </div>
+      {state.error && (
+        <div
+          role="alert"
+          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
+        >
+          <XCircle size={14} strokeWidth={1.6} aria-hidden /> {state.error}
+        </div>
+      )}
     </form>
   );
 }

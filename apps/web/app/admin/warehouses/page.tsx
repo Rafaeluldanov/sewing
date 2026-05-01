@@ -1,27 +1,37 @@
 import Link from 'next/link';
+import { ArrowRight, Plus, Warehouse } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listWarehouses } from '@/lib/warehouses-api';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
-import { Icon } from '@/components/icon';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminPagination,
+  AdminStatusBadge,
+  AdminTable,
+  paginate,
+  type AdminTableColumn,
+} from '@/components/admin';
+import { formatStatus, statusTone } from '@/lib/admin-labels';
 
 export const dynamic = 'force-dynamic';
 
+interface SearchParams {
+  page?: string;
+  pageSize?: string;
+}
+
 /**
- * Список складов (см. `docs/screens.md §10b`).
+ * Список складов (Admin UI 2.5).
  *
- * Источник истины — `GET /api/warehouses` (роли `ADMIN`/`SHOP_MANAGER`).
- * Доступ к разделу режется выше — `app/admin/layout.tsx` редиректит
- * всех, кроме `ADMIN`/`SHOP_MANAGER`. Backend дополнительно
- * защищает `/api/warehouses/*` через `@Roles('SHOP_MANAGER', 'ADMIN')`.
- *
- * Создание нового склада вынесено на отдельную страницу
- * `/admin/warehouses/new` — раньше форма жила прямо в списке и
- * визуально его перегружала. На списке остаётся только заметная
- * primary-кнопка «Добавить склад» в actions шапки. Тот же UX уже
- * применён к `/admin/equipment` (ADR-0017) и `/admin/operations`
- * (ADR-0020).
+ * Backend / DTO не меняем. Пагинация — клиентская через `paginate()`.
  */
-export default async function AdminWarehousesListPage() {
+export default async function AdminWarehousesListPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
   let items: WarehouseSummaryDto[] = [];
   let error: string | null = null;
   try {
@@ -33,92 +43,102 @@ export default async function AdminWarehousesListPage() {
         : 'Не удалось загрузить список складов';
   }
 
+  const { pageItems, page, pageSize, total } = paginate(items, searchParams);
+
+  const columns: AdminTableColumn<WarehouseSummaryDto>[] = [
+    {
+      key: 'name',
+      header: 'Название',
+      render: (w) => <span className="admin-table__primary">{w.name}</span>,
+    },
+    {
+      key: 'cells',
+      header: 'Ячеек',
+      align: 'right',
+      render: (w) =>
+        w.cellsCount === 0 ? (
+          <span className="admin-muted">0</span>
+        ) : (
+          w.cellsCount
+        ),
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      render: (w) => (
+        <AdminStatusBadge tone={statusTone(w.isActive)}>
+          {formatStatus(w.isActive)}
+        </AdminStatusBadge>
+      ),
+    },
+    {
+      key: 'open',
+      header: '',
+      isAction: true,
+      render: (w) => (
+        <Link
+          href={`/admin/warehouses/${w.id}`}
+          className="admin-table__action-link"
+        >
+          Открыть
+          <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+        </Link>
+      ),
+    },
+  ];
+
   return (
-    <div className="admin-overview page-shell">
-      <header className="admin-overview__header">
-        <div>
-          <div className="page-eyebrow">
-            <Icon name="warehouses" />
-            Хранение
-          </div>
-          <h1 className="page-title">
-            <Icon name="warehouses" />
-            Склады
-          </h1>
-          <p className="page-subtitle">
-            Управленческая группировка ячеек физического хранения. Привязка
-            ячейки к складу и печать QR — на карточке склада. Создание
-            нового склада — на отдельной странице.
-          </p>
+    <AdminPageShell
+      icon={<Warehouse size={22} strokeWidth={1.6} aria-hidden />}
+      title="Склады"
+      subtitle={`Всего: ${items.length}`}
+      actions={
+        <Link
+          href="/admin/warehouses/new"
+          className="admin-btn admin-btn--primary"
+        >
+          <Plus size={16} strokeWidth={1.6} aria-hidden />
+          Добавить
+        </Link>
+      }
+    >
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
         </div>
-        <div className="admin-overview__actions">
-          <Link href="/admin/warehouses/new" className="btn btn-primary">
-            <Icon name="plus" size={16} />
-            Добавить склад
-          </Link>
-        </div>
-      </header>
-
-      {error && <div className="error-box">{error}</div>}
-
-      {items.length === 0 && !error ? (
-        <div className="empty-state">
-          <span className="empty-state__icon">
-            <Icon name="warehouses" />
-          </span>
-          <span className="empty-state__title">Складов пока нет</span>
-          <span className="empty-state__hint">
-            <Link href="/admin/warehouses/new">Создайте первый склад</Link> —
-            это займёт меньше минуты.
-          </span>
-        </div>
-      ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th>Название</th>
-              <th>Код</th>
-              <th>Активен</th>
-              <th>Ячеек</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((w) => (
-              <tr key={w.id}>
-                <td>
-                  <strong>{w.name}</strong>
-                </td>
-                <td>
-                  {w.code ? <code>{w.code}</code> : (
-                    <span className="meta-line">—</span>
-                  )}
-                </td>
-                <td>
-                  {w.isActive ? 'да' : <span className="meta-line">нет</span>}
-                </td>
-                <td>
-                  {w.cellsCount === 0 ? (
-                    <span
-                      className="meta-line"
-                      title="К складу ещё не привязано ни одной ячейки"
-                    >
-                      0
-                    </span>
-                  ) : (
-                    w.cellsCount
-                  )}
-                </td>
-                <td>
-                  <Link href={`/admin/warehouses/${w.id}`}>
-                    Открыть <Icon name="arrow-right" size={13} />
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       )}
-    </div>
+
+      <AdminCard>
+        <AdminTable
+          rows={pageItems}
+          columns={columns}
+          rowKey={(w) => w.id}
+          emptyContent={
+            <AdminEmptyState
+              icon={<Warehouse size={26} strokeWidth={1.6} aria-hidden />}
+              title="Складов пока нет"
+              hint="Создайте первый склад — это займёт меньше минуты."
+              actions={
+                <Link
+                  href="/admin/warehouses/new"
+                  className="admin-btn admin-btn--primary"
+                >
+                  <Plus size={16} strokeWidth={1.6} aria-hidden />
+                  Добавить склад
+                </Link>
+              }
+            />
+          }
+        />
+
+        <AdminPagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          basePath="/admin/warehouses"
+          label="складов"
+        />
+      </AdminCard>
+    </AdminPageShell>
   );
 }

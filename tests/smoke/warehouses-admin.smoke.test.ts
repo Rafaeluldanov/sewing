@@ -31,7 +31,9 @@ describe('admin/warehouses — список без встроенной форм
     // при «вернули как было»).
     expect(src).not.toMatch(/CreateWarehouseForm/);
     expect(src).toMatch(/href="\/admin\/warehouses\/new"/);
-    expect(src).toMatch(/Добавить склад/);
+    // Admin UI 2.5: текст action-кнопки сократили до «Добавить»;
+    // длинный лейбл «Добавить склад» остаётся в EmptyState.
+    expect(src).toMatch(/Добавить/);
     // Empty-state теперь зовёт на отдельную страницу, а не «форму выше».
     expect(src).not.toMatch(/форма выше/);
   });
@@ -39,10 +41,9 @@ describe('admin/warehouses — список без встроенной форм
   test('страница /admin/warehouses/new рендерит форму создания и back-link', () => {
     const src = readSrc('apps/web/app/admin/warehouses/new/page.tsx');
     expect(src).toMatch(/CreateWarehouseForm/);
-    expect(src).toMatch(/DetailPageHeader/);
-    // Back-link к списку — обязательный элемент detail-pages.
-    expect(src).toMatch(/backHref="\/admin\/warehouses"/);
-    expect(src).toMatch(/К списку складов/);
+    // Admin UI 2.5: AdminPageShell + back-link через обычный <Link>.
+    expect(src).toMatch(/AdminPageShell/);
+    expect(src).toMatch(/href="\/admin\/warehouses"/);
     expect(src).toMatch(/Новый склад/);
   });
 
@@ -56,9 +57,7 @@ describe('admin/warehouses — список без встроенной форм
     // (кнопка «Добавить склад» остаётся на списке как ссылка
     // на /admin/warehouses/new).
     expect(src).toMatch(/Создать склад/);
-    // Раньше форма была плоской через admin-equipment-form__meta —
-    // теперь это аккуратный detail-form layout (как у operations).
-    expect(src).toMatch(/className="detail-form"/);
+    // CreateWarehouseForm не трогали — `detail-form` остаётся.
     expect(src).not.toMatch(/admin-equipment-form__meta/);
   });
 
@@ -74,11 +73,12 @@ describe('admin/warehouses — список без встроенной форм
 });
 
 describe('admin/warehouses/[id] — detail-page остаётся рабочей', () => {
-  test('detail-страница рендерит DetailPageHeader, редактирование, линии и ячейки', () => {
+  test('detail-страница рендерит AdminPageShell, редактирование, линии и ячейки', () => {
     const src = readSrc('apps/web/app/admin/warehouses/[id]/page.tsx');
-    expect(src).toMatch(/DetailPageHeader/);
-    expect(src).toMatch(/backHref="\/admin\/warehouses"/);
-    expect(src).toMatch(/К списку складов/);
+    // Admin UI 2.5: AdminPageShell вместо DetailPageHeader.
+    expect(src).toMatch(/AdminPageShell/);
+    expect(src).toMatch(/href="\/admin\/warehouses"/);
+    expect(src).toMatch(/К списку/);
     // Старые секции не должны быть удалены — это «do not break»
     // условие из ТЗ §6.
     expect(src).toMatch(/WarehouseEditForm/);

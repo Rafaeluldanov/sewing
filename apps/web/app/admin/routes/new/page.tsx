@@ -1,17 +1,21 @@
+import Link from 'next/link';
+import { Activity, ArrowLeft } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getShiftMeta } from '@/lib/shifts-api';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
-import { Icon } from '@/components/icon';
-import { DetailPageHeader } from '@/components/detail-page-header';
+import {
+  AdminCard,
+  AdminPageShell,
+  AdminSectionHeader,
+} from '@/components/admin';
 import { RouteTemplateForm } from '../route-template-form';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Страница создания нового шаблона маршрута. Список доступных операций
- * берём из `GET /api/shifts/meta` — там уже отдаются только активные,
- * отсортированные по `sortOrder`. Тот же подход использует
- * `/admin/equipment/new`.
+ * Создание шаблона маршрута (Admin UI 2.5).
+ *
+ * Backend / DTO не меняем. Список операций — из `GET /api/shifts/meta`.
  */
 export default async function AdminRoutesNewPage() {
   let operations: readonly OperationLiteDto[] = [];
@@ -23,36 +27,32 @@ export default async function AdminRoutesNewPage() {
     metaError =
       e instanceof ApiRequestError
         ? `${e.message}${e.code ? ` (${e.code})` : ''}`
-        : 'Не удалось загрузить список операций — можно собрать шаблон позже.';
+        : 'Не удалось загрузить список операций — добавьте шаги позже.';
     operations = [];
   }
 
   return (
-    <div className="page-shell">
-      <DetailPageHeader
-        eyebrow="Маршруты производства"
-        icon="operations"
-        title="Новый шаблон маршрута"
-        subtitle="Минимум — код и название. Шаги можно добавить здесь же или позже на карточке шаблона. Snapshot маршрута фиксируется на заказе при запуске."
-        backHref="/admin/routes"
-        backLabel="К списку шаблонов"
-      />
-
+    <AdminPageShell
+      icon={<Activity size={22} strokeWidth={1.6} aria-hidden />}
+      title="Новый шаблон маршрута"
+      subtitle="Код, название и последовательность шагов"
+      actions={
+        <Link href="/admin/routes" className="admin-btn admin-btn--ghost">
+          <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
+          К списку
+        </Link>
+      }
+    >
       {metaError && (
         <div className="error-box" role="alert">
-          <div className="error-box__msg">{metaError}</div>
+          {metaError}
         </div>
       )}
 
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="plus" />
-            Параметры шаблона
-          </h2>
-        </div>
+      <AdminCard>
+        <AdminSectionHeader title="Параметры" />
         <RouteTemplateForm mode="create" operations={operations} />
-      </section>
-    </div>
+      </AdminCard>
+    </AdminPageShell>
   );
 }

@@ -45,8 +45,12 @@ export function CurrentWorkCard({ items, shiftOperationId }: Props) {
       >
         <h3 className="current-work__title">Сейчас в работе</h3>
         <p className="current-work__empty-text">
-          Сейчас у вас нет кроя в работе. Отсканируйте QR паспорта в
-          ячейке, чтобы взять крой.
+          {/* Нейтральная формулировка: после soft-route MVP крой может
+              приехать из ячейки (legacy/буфер) или из маршрутного потока
+              без ячейки. UX швеи одинаковый — она сканирует QR
+              паспорта и подтверждает. */}
+          Сейчас у вас нет кроя в работе. Отсканируйте QR паспорта,
+          чтобы взять крой.
         </p>
       </section>
     );
@@ -102,6 +106,14 @@ function ActivePassportCard({
     !!p.routeCurrentStep &&
     !!shiftOperationId &&
     p.routeCurrentStep.operationId !== shiftOperationId;
+  /**
+   * Route-WIP UI критерий — единый для всех мест /work (см.
+   * `passport-confirm-modal.tsx`, `state.ts`). Симметричен серверному
+   * правилу route-WIP в `PassportsService.issueToEmployee`: если
+   * `currentRouteStepIndex !== null`, паспорт идёт по маршрутному
+   * потоку и ячейка между шагами не обязательна.
+   */
+  const isRouteWip = p.currentRouteStepIndex !== null;
   return (
     <li className="active-passport">
       <div className="active-passport__head">
@@ -112,9 +124,19 @@ function ActivePassportCard({
         >
           {p.number}
         </Link>
-        {accepted && (
-          <span className="active-passport__accepted">принят {accepted}</span>
-        )}
+        <div className="active-passport__head-meta">
+          {isRouteWip && (
+            <span
+              className="active-passport__route-badge"
+              aria-label="Паспорт идёт по маршруту"
+            >
+              Из маршрута
+            </span>
+          )}
+          {accepted && (
+            <span className="active-passport__accepted">принят {accepted}</span>
+          )}
+        </div>
       </div>
 
       <div className="active-passport__product">

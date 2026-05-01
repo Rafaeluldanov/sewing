@@ -1,23 +1,51 @@
+import { Fragment } from 'react';
 import Link from 'next/link';
+import { ArrowRight, Factory, Plus } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listEquipment } from '@/lib/equipment-api';
 import type { EquipmentSummaryDto } from '@sewing/shared/equipment';
-import { Icon } from '@/components/icon';
+import {
+  getOperationCategoryLabel,
+  groupEquipmentByOperationCategory,
+} from '@sewing/shared/operations';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminStatusBadge,
+} from '@/components/admin';
+import { formatStatus, statusTone } from '@/lib/admin-labels';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Список оборудования с числом включённых операций (см. ADR-0017,
- * `docs/screens.md §10a`). Источник истины — `GET /api/equipment`.
+ * Список оборудования (ADR-0017 + ТЗ «Единая группировка» + ТЗ
+ * «Compact grouped table»).
  *
- * Создание нового станка вынесено на отдельную страницу
- * `/admin/equipment/new` — раньше форма жила прямо в списке и
- * визуально его перегружала. На списке остаётся только заметная
- * кнопка «Добавить оборудование» в actions шапки.
+ * Backend / Prisma не меняем. Категории берутся из additive-поля
+ * `EquipmentSummaryDto.operationCategories` (см. EquipmentService.list).
  *
- * Доступ ограничен слой выше — `app/admin/layout.tsx` редиректит всех,
- * кроме `ADMIN` и `SHOP_MANAGER`. Backend дополнительно защищает
- * `/api/equipment/*` через `@Roles('SHOP_MANAGER', 'ADMIN')`.
+ * Группировка:
+ *   - оборудование делится на секции по primary-категории связанных
+ *     операций — первой по `OPERATION_CATEGORY_ORDER`;
+ *   - оборудование без операций уходит в группу «Без операций»
+ *     (всегда последняя);
+ *   - оборудование с несколькими категориями НЕ дублируется по группам:
+ *     одна строка в primary-группе + chip-список всех категорий.
+ *
+ * Compact layout:
+ *   - одна общая AdminCard на всю страницу, один table header;
+ *   - категории внутри одного tbody как тонкие group-row
+ *     разделители (`.admin-compact-group-row`);
+ *   - старая «карточка-секция на каждую категорию» сознательно убрана —
+ *     лишний header на каждую группу раздувал страницу (см. ТЗ §2);
+ *   - оборудование с несколькими категориями встречается в результате
+ *     ровно один раз (см. `groupEquipmentByOperationCategory`), все
+ *     категории показываются chip-списком в колонке «Категории».
+ *
+ * Технический code, как и раньше, виден только на карточке `[id]`
+ * внутри AdminTechInfo. Здесь — №, название, chip-категории, число
+ * операций, статус.
  */
 export default async function AdminEquipmentListPage() {
   let items: EquipmentSummaryDto[] = [];
@@ -31,103 +59,164 @@ export default async function AdminEquipmentListPage() {
         : 'Не удалось загрузить список оборудования';
   }
 
+  const sortedItems = [...items].sort((a, b) => {
+    const an = a.displayNumber ?? '';
+    const bn = b.displayNumber ?? '';
+    if (an && bn && an !== bn) return an.localeCompare(bn, 'ru');
+    if (an && !bn) return -1;
+    if (!an && bn) return 1;
+    return a.name.localeCompare(b.name, 'ru');
+  });
+
+  // Адаптируем DTO под shape `groupEquipmentByOperationCategory`:
+  // shared-helper ожидает `operations: [{ category }]`, мы строим
+  // фейковые операции из массива категорий — этого достаточно для
+  // primary-категории и chip-списка (см. ТЗ §6).
+  const groupable = sortedItems.map((eq) => ({
+    ...eq,
+    operations: eq.operationCategories.map((category) => ({ category })),
+  }));
+  const groups = groupEquipmentByOperationCategory(groupable);
+
   return (
-    <div className="admin-overview page-shell">
-      <header className="admin-overview__header">
-        <div>
-          <div className="page-eyebrow">
-            <Icon name="equipment" />
-            Производственный парк
-          </div>
-          <h1 className="page-title">
-            <Icon name="equipment" />
-            Оборудование
-          </h1>
-          <p className="page-subtitle">
-            Управление списком оборудования и разрешённых операций по каждому
-            станку. Создание нового станка или рабочего места — на отдельной
-            странице.
-          </p>
+    <AdminPageShell
+      icon={<Factory size={22} strokeWidth={1.6} aria-hidden />}
+      title="Оборудование"
+      subtitle={`Всего: ${items.length}`}
+      actions={
+        <Link
+          href="/admin/equipment/new"
+          className="admin-btn admin-btn--primary"
+        >
+          <Plus size={16} strokeWidth={1.6} aria-hidden />
+          Добавить
+        </Link>
+      }
+    >
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
         </div>
-        <div className="admin-overview__actions">
-          <Link href="/admin/equipment/new" className="btn btn-primary">
-            <Icon name="plus" size={16} />
-            Добавить оборудование
-          </Link>
-        </div>
-      </header>
-
-      {error && <div className="error-box">{error}</div>}
-
-      {items.length === 0 && !error ? (
-        <div className="empty-state">
-          <span className="empty-state__icon">
-            <Icon name="equipment" />
-          </span>
-          <span className="empty-state__title">Оборудование ещё не заведено</span>
-          <span className="empty-state__hint">
-            <Link href="/admin/equipment/new">Добавьте первый станок</Link> —
-            это займёт меньше минуты.
-          </span>
-        </div>
-      ) : (
-        <table className="data-table">
-          <thead>
-            <tr>
-              <th title="Ручной номер для физической маркировки станка">№</th>
-              <th>Код</th>
-              <th>Название</th>
-              <th>Активно</th>
-              <th>Операций</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((eq) => (
-              <tr key={eq.id}>
-                <td>
-                  {eq.displayNumber ? (
-                    <strong
-                      style={{ fontSize: '1.15rem' }}
-                      title="Ручной номер станка"
-                    >
-                      №{eq.displayNumber}
-                    </strong>
-                  ) : (
-                    <span
-                      className="meta-line"
-                      title="Номер не задан — задайте в карточке оборудования"
-                    >
-                      —
-                    </span>
-                  )}
-                </td>
-                <td>
-                  <code>{eq.code}</code>
-                </td>
-                <td>{eq.name}</td>
-                <td>
-                  {eq.active ? 'да' : <span className="meta-line">нет</span>}
-                </td>
-                <td>
-                  {eq.allowedOperationsCount === 0 ? (
-                    <span className="meta-line" title="Швея не сможет открыть смену на этом станке">
-                      0 — не настроено
-                    </span>
-                  ) : (
-                    eq.allowedOperationsCount
-                  )}
-                </td>
-                <td>
-                  <Link href={`/admin/equipment/${eq.id}`}>
-                    Настроить <Icon name="arrow-right" size={13} />
-                  </Link>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       )}
-    </div>
+
+      {groups.length === 0 ? (
+        <AdminCard>
+          <AdminEmptyState
+            icon={<Factory size={26} strokeWidth={1.6} aria-hidden />}
+            title="Оборудования пока нет"
+            hint="Добавьте первый станок — это займёт меньше минуты."
+            actions={
+              <Link
+                href="/admin/equipment/new"
+                className="admin-btn admin-btn--primary"
+              >
+                <Plus size={16} strokeWidth={1.6} aria-hidden />
+                Добавить оборудование
+              </Link>
+            }
+          />
+        </AdminCard>
+      ) : (
+        <AdminCard className="admin-compact-grouped-card admin-equipment-compact-card">
+          <div className="admin-compact-table-wrap">
+            <table className="admin-table admin-compact-grouped-table admin-equipment-compact-table">
+              <thead>
+                <tr>
+                  <th>№</th>
+                  <th>Название</th>
+                  <th>Категории</th>
+                  <th>Операций</th>
+                  <th>Статус</th>
+                  <th aria-label="Действия" />
+                </tr>
+              </thead>
+              <tbody>
+                {groups.map((group) => (
+                  <Fragment key={group.category}>
+                    <tr
+                      className="admin-compact-group-row admin-equipment-group-row"
+                      data-category={group.category}
+                    >
+                      <td colSpan={6}>
+                        <div className="admin-compact-group-row__inner">
+                          <span data-category-title={group.category}>
+                            {group.label}
+                          </span>
+                          <span className="admin-compact-group-row__count">
+                            {group.equipment.length}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    {group.equipment.map((eq) => (
+                      <tr
+                        key={eq.id}
+                        className="admin-compact-row admin-equipment-row"
+                      >
+                        <td data-label="№">
+                          {eq.displayNumber ? (
+                            <strong className="admin-equipment-display-number">
+                              №{eq.displayNumber}
+                            </strong>
+                          ) : (
+                            <span className="admin-muted">—</span>
+                          )}
+                        </td>
+                        <td data-label="Название">
+                          <span className="admin-table__primary">{eq.name}</span>
+                        </td>
+                        <td data-label="Категории">
+                          {eq.operationCategories.length === 0 ? (
+                            <span className="admin-muted">—</span>
+                          ) : (
+                            <ul
+                              className="admin-equipment-category-chips"
+                              aria-label="Категории операций"
+                            >
+                              {eq.operationCategories.map((c) => (
+                                <li
+                                  key={c}
+                                  className="admin-equipment-category-chip"
+                                  data-category-chip={c}
+                                >
+                                  {getOperationCategoryLabel(c)}
+                                </li>
+                              ))}
+                            </ul>
+                          )}
+                        </td>
+                        <td data-label="Операций">
+                          {eq.allowedOperationsCount === 0 ? (
+                            <AdminStatusBadge tone="warning">
+                              Не настроено
+                            </AdminStatusBadge>
+                          ) : (
+                            <span>{eq.allowedOperationsCount}</span>
+                          )}
+                        </td>
+                        <td data-label="Статус">
+                          <AdminStatusBadge tone={statusTone(eq.active)}>
+                            {formatStatus(eq.active)}
+                          </AdminStatusBadge>
+                        </td>
+                        <td className="admin-table__actions admin-compact-row__actions">
+                          <Link
+                            href={`/admin/equipment/${eq.id}`}
+                            className="admin-table__action-link"
+                          >
+                            Настроить
+                            <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+                          </Link>
+                        </td>
+                      </tr>
+                    ))}
+                  </Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </AdminCard>
+      )}
+    </AdminPageShell>
   );
 }

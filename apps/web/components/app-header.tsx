@@ -21,6 +21,16 @@ interface Props {
  *     header только мешает; плюс на `/shopfloor/display` header
  *     прячется у любой роли, чтобы экран можно было раскрыть на весь
  *     монитор без перекрытия (см. `app/shopfloor/display/page.tsx`).
+ *   - SHOPFLOOR_MASTER на любой странице — мобильный терминал
+ *     `/master`, единственная доступная страница совпадает с primary
+ *     workspace (см. `apps/web/lib/rbac.ts`,
+ *     `apps/web/middleware.ts`); глобальный header только мешает
+ *     scan-driven flow «открой вызов → сканируй QR сотрудника».
+ *     Дополнительно header прячется на самом `/master` у любой роли
+ *     (ADMIN/SHOP_MANAGER могут открыть тот же экран на телефоне —
+ *     см. `MASTER_PAGE_ALLOWED_ROLES`), чтобы fullscreen-режим
+ *     работал одинаково (см. `app/master/page.tsx` и `body:has(
+ *     .master-page)` правила в `globals.css`).
  */
   role?: string;
   children: ReactNode;
@@ -51,6 +61,12 @@ const PASSPORT_NEW_RE = /^\/orders\/[^/]+\/passports\/new\/?$/;
  */
 export function AppHeader({ role, children }: Props) {
   const pathname = usePathname() ?? '';
+  // Admin UI 2.5 — на всех `/admin/*` верхний header полностью скрыт.
+  // Sidebar (`AdminSidebar`) — единственная навигация, дублировать
+  // его шапкой не нужно. Скрываем заранее (до проверок ролей), чтобы
+  // header не «мигнул» во время гидрации client-роутинга.
+  const isAdminPath = pathname === '/admin' || pathname.startsWith('/admin/');
+  if (isAdminPath) return null;
   const isWorkPath = pathname === '/work' || pathname.startsWith('/work/');
   const isPassportNewPath = PASSPORT_NEW_RE.test(pathname);
   // QC «терминал» — это ровно `/qc` (без подстраниц `/qc/passports/:id`,
@@ -68,6 +84,13 @@ export function AppHeader({ role, children }: Props) {
   // спотыкаться о навигацию (back-кнопка браузера всегда работает).
   const isShopfloorDisplayPath =
     pathname === '/shopfloor/display' || pathname === '/shopfloor/display/';
+  // Мобильный терминал мастера цеха — fullscreen, по той же модели
+  // что и `/shopfloor/display`: header убираем у любой роли, чтобы
+  // ADMIN/SHOP_MANAGER, открывшие `/master` на своём телефоне (см.
+  // `MASTER_PAGE_ALLOWED_ROLES`), получили тот же опыт без верхней
+  // панели. Подстраницы `/master/*` зарезервированы под будущие
+  // под-экраны мастера и тоже считаются терминалом.
+  const isMasterPath = pathname === '/master' || pathname.startsWith('/master/');
 
   const hideForSeamstress = role === 'SEAMSTRESS' && isWorkPath;
   const hideForCutterAssistant =
@@ -76,6 +99,12 @@ export function AppHeader({ role, children }: Props) {
   const hideForIroning = role === 'IRONING' && isWtoTerminalPath;
   const hideForPacking = role === 'PACKING' && isPackingTerminalPath;
   const hideForDisplay = role === 'DISPLAY' || isShopfloorDisplayPath;
+  // Сама роль SHOPFLOOR_MASTER заперта middleware'ом на `/master`
+  // (см. `apps/web/middleware.ts`), но проверку по роли оставляем
+  // как safety net: если когда-нибудь редирект отвалится, header
+  // у мастера всё равно не появится.
+  const hideForShopfloorMaster =
+    role === 'SHOPFLOOR_MASTER' || isMasterPath;
 
   if (
     hideForSeamstress ||
@@ -83,7 +112,8 @@ export function AppHeader({ role, children }: Props) {
     hideForQc ||
     hideForIroning ||
     hideForPacking ||
-    hideForDisplay
+    hideForDisplay ||
+    hideForShopfloorMaster
   )
     return null;
   return <header className="app-header">{children}</header>;

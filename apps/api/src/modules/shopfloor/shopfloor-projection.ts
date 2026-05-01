@@ -48,6 +48,20 @@ export interface ProjectionPassport {
   qtyDefect: number;
   status: PassportStatus;
   currentOperationCategory: OperationCategory | null;
+  /**
+   * `Passport.currentEmployeeId` — нужен `bucketOf` для разделения
+   * двух почти одинаковых состояний:
+   *   - **issued, ещё не scanned** (CUTTING + employee != null) —
+   *     паспорт уже у швеи, но первый OPERATION_SCAN не прошёл; такой
+   *     должен попадать в SEWING-бакет (route-WIP fallback);
+   *   - **rolled-back to CUT мастером** (CUTTING + employee == null) —
+   *     мастер откатил паспорт назад на CUT_DIVISION и положил в
+   *     ячейку (`MasterActionsService.setRouteStep` backward с
+   *     placement); такой должен попадать в CUT-бакет, иначе крой
+   *     «исчезает» с дисплея.
+   * По умолчанию `null`.
+   */
+  currentEmployeeId: string | null;
   /** `true`, если у паспорта есть `BoxItem` хотя бы в одной OPEN-коробке. */
   hasOpenBox: boolean;
   /**
@@ -55,17 +69,24 @@ export interface ProjectionPassport {
    * свежее, чем последний `PassportEvent(OPERATION_SCAN)`. Иначе
    * говоря — ОТК нажал «Проверка выполнена», а pipeline (швея/
    * упаковщик) ещё не перехватил паспорт следующим скан-сценарием
-   * (см. F4/F5). Используется только для расчёта стадии `QC_DONE` —
+   * (см. F4/F5). Используется для расчёта стадии `QC_DONE` —
    * визуального «движения» крой после ОТК без изменения
-   * `Passport.status`. По умолчанию `false`.
+   * `Passport.status`. На экране `/shopfloor/display` это выводится
+   * как `✔` подколонка ОТК (буфер «проверено, ждёт ВТО»), который
+   * автоматически обнуляется, как только следующий step делает
+   * `OPERATION_SCAN` (см. `display-board.tsx` → `buildProcessSplits`).
+   * По умолчанию `false`.
    */
   hasFreshQcPassed: boolean;
   /**
    * Полный аналог `hasFreshQcPassed` для ВТО: `true`, если у паспорта
    * есть `PassportEvent(WTO_PASSED)`, более свежее, чем последний
-   * `PassportEvent(OPERATION_SCAN)`. Используется только для расчёта
+   * `PassportEvent(OPERATION_SCAN)`. Используется для расчёта
    * derived-стадии `WTO_DONE` (визуальное движение крой после нажатия
    * «Завершить ВТО» на `/wto`, без изменения `Passport.status`).
+   * На экране `/shopfloor/display` это выводится как `✔` подколонка
+   * ВТО (буфер «отглажено, ждёт упаковку»), который очищается, как
+   * только упаковщик скрипит `OPERATION_SCAN`.
    * По умолчанию `false`.
    */
   hasFreshWtoPassed: boolean;
@@ -131,12 +152,23 @@ export function bucketOf(p: ProjectionPassport): ShopfloorStage | null {
       return p.hasFreshWtoPassed ? 'WTO_DONE' : 'WTO';
     }
     if (cat === OperationCategory.PACKING) return 'PACKING';
+    // CUT-rollback edge case: паспорт IN_PROGRESS остался на
+    // CUTTING-операции (CUT_DIVISION) И НЕ закреплён ни за каким
+    // сотрудником — такое возможно только после master-action
+    // `setRouteStep(target=CUT_DIVISION)` с одновременным placement
+    // в ячейку (см. `MasterActionsService.setRouteStep` §«backward»).
+    // Доменно это снова крой в ячейке: следующий issue/place поднимет
+    // его обратно по маршруту. Возвращаем CUT, чтобы он не «застрял»
+    // в SEWING-фолбеке и был виден в правильной колонке.
+    if (cat === OperationCategory.CUTTING && p.currentEmployeeId === null) {
+      return 'CUT';
+    }
     // SEWING-бакет ловит все «живые» паспорта в работе, у которых
     // currentOperation либо в категории SEWING, либо в категории
-    // CUTTING (паспорт уже выдан швее, но первый OPERATION_SCAN
-    // ещё не случился — см. F3a/F4). Если currentOperationId
-    // вообще `null` — тоже считаем «в шитье», т. к. иначе живой
-    // паспорт исчезнет с экрана.
+    // CUTTING с активным сотрудником (паспорт уже выдан швее, но
+    // первый OPERATION_SCAN ещё не случился — см. F3a/F4). Если
+    // currentOperationId вообще `null` — тоже считаем «в шитье»,
+    // т. к. иначе живой паспорт исчезнет с экрана.
     return 'SEWING';
   }
   if (p.status === PassportStatus.PACKED) {

@@ -2,9 +2,10 @@
 
 import { useTransition } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
+import { AlertCircle, Check, Save, Unlink, Warehouse } from 'lucide-react';
 import type { CellDetailDto } from '@sewing/shared/passports';
 import type { WarehouseDetailDto } from '@sewing/shared/warehouses';
-import { Icon } from '@/components/icon';
+import { AdminEmptyState } from '@/components/admin';
 import {
   assignCellToWarehouseAction,
   createWarehouseLineAction,
@@ -23,19 +24,53 @@ import {
 function SaveButton({ label }: { label: string }) {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name="save" size={16} />
+    <button
+      type="submit"
+      className="admin-btn admin-btn--primary"
+      disabled={pending}
+    >
+      <Save size={16} strokeWidth={1.6} aria-hidden />
       {pending ? 'Сохраняем…' : label}
     </button>
   );
 }
 
+function ErrorBox({
+  error,
+  errorRequestId,
+}: {
+  error?: string | null;
+  errorRequestId?: string | null;
+}) {
+  if (!error) return null;
+  return (
+    <div className="error-box" role="alert">
+      <div className="error-box__msg">
+        <AlertCircle size={14} strokeWidth={1.6} aria-hidden /> {error}
+      </div>
+      {errorRequestId && (
+        <div className="error-box__rid">
+          req: <code>{errorRequestId}</code>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function SuccessBox({ message }: { message: string }) {
+  return (
+    <div className="success-box" role="status">
+      <Check size={14} strokeWidth={1.6} aria-hidden /> {message}
+    </div>
+  );
+}
+
 /**
- * Форма редактирования name/code/isActive склада.
+ * Форма редактирования name/code/isActive склада (Admin UI 2.6).
  *
- * Источник истины — `PATCH /api/warehouses/:id`. Уникальность name и
- * code валидируется на backend (бизнес-ошибки `WAREHOUSE_NAME_TAKEN` /
- * `WAREHOUSE_CODE_TAKEN`), фронт лишь показывает текст ошибки.
+ * Backend не меняем — `PATCH /api/warehouses/:id`. Уникальность name и
+ * code валидируется на backend (`WAREHOUSE_NAME_TAKEN` /
+ * `WAREHOUSE_CODE_TAKEN`).
  */
 export function WarehouseEditForm({
   warehouse,
@@ -49,9 +84,9 @@ export function WarehouseEditForm({
   );
 
   return (
-    <form action={formAction} className="detail-form">
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
+    <form action={formAction} className="admin-form">
+      <div className="admin-form-grid">
+        <div className="admin-field">
           <label htmlFor="wh-name">Название</label>
           <input
             id="wh-name"
@@ -64,7 +99,7 @@ export function WarehouseEditForm({
           />
         </div>
 
-        <div className="detail-form__field">
+        <div className="admin-field">
           <label htmlFor="wh-code">Код</label>
           <input
             id="wh-code"
@@ -73,11 +108,11 @@ export function WarehouseEditForm({
             maxLength={32}
             defaultValue={warehouse.code ?? ''}
             autoComplete="off"
-            placeholder="например, MAIN"
+            placeholder="MAIN"
           />
         </div>
 
-        <div className="detail-form__field detail-form__field--inline">
+        <div className="admin-field admin-field--inline">
           <input
             id="wh-active"
             type="checkbox"
@@ -88,53 +123,30 @@ export function WarehouseEditForm({
         </div>
       </div>
 
-      <div className="detail-form__field">
-        <label htmlFor="wh-label-template">
-          Шаблон печатной формы наклейки (опционально)
-        </label>
+      <div className="admin-field">
+        <label htmlFor="wh-label-template">Шаблон этикетки QR (опц.)</label>
         <textarea
           id="wh-label-template"
           name="labelTemplate"
-          rows={4}
+          rows={3}
           maxLength={4000}
           defaultValue={warehouse.labelTemplate ?? ''}
           autoComplete="off"
-          placeholder='Например: {"size":"A6","logo":true} или произвольный шаблон'
+          placeholder='Например: {"size":"A6","logo":true}'
           style={{
             fontFamily:
               'ui-monospace, SFMono-Regular, Menlo, Consolas, monospace',
             fontSize: '0.85rem',
           }}
         />
-        <span className="detail-form__hint">
-          Произвольный текст или JSON. Используется на печатных этикетках QR
-          ячеек.
-        </span>
       </div>
 
-      <div className="detail-form__actions">
-        <SaveButton label="Сохранить склад" />
+      <div className="admin-actions-row">
+        <SaveButton label="Сохранить" />
       </div>
 
-      {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>
-            {state.error}
-            {state.errorRequestId && (
-              <span className="detail-form__error-rid">
-                req: <code>{state.errorRequestId}</code>
-              </span>
-            )}
-          </span>
-        </div>
-      )}
-      {state.ok && (
-        <div className="detail-form__success" role="status">
-          <Icon name="success" size={16} />
-          <span>Склад сохранён.</span>
-        </div>
-      )}
+      <ErrorBox error={state.error} errorRequestId={state.errorRequestId} />
+      {state.ok && <SuccessBox message="Склад сохранён." />}
     </form>
   );
 }
@@ -142,10 +154,6 @@ export function WarehouseEditForm({
 /**
  * Форма привязки ячейки к складу. Список `availableCells` приходит
  * с сервера (страница исключает уже привязанные к этому складу).
- *
- * Если ячейка уже привязана к другому складу, рядом со значением
- * select-а показываем имя того склада — менеджер должен видеть, что
- * привязка явно переедет.
  */
 export function AssignCellForm({
   warehouseId,
@@ -162,77 +170,46 @@ export function AssignCellForm({
 
   if (availableCells.length === 0) {
     return (
-      <div className="empty-state">
-        <span className="empty-state__icon">
-          <Icon name="warehouses" />
-        </span>
-        <span className="empty-state__title">Все ячейки уже здесь</span>
-        <span className="empty-state__hint">
-          Все активные ячейки уже привязаны к этому складу. Создайте новые
-          ячейки в seed/админке БД, либо отвяжите ячейку от другого склада.
-        </span>
-      </div>
+      <AdminEmptyState
+        icon={<Warehouse size={26} strokeWidth={1.6} aria-hidden />}
+        title="Все ячейки уже здесь"
+        hint="Создайте новые ячейки или отвяжите от другого склада."
+      />
     );
   }
 
   return (
-    <form action={formAction} className="detail-form">
-      <div className="detail-form__grid">
-        <div className="detail-form__field" style={{ gridColumn: '1 / -1' }}>
-          <label htmlFor="cell-select">Ячейка</label>
-          <select
-            id="cell-select"
-            name="cellId"
-            required
-            defaultValue=""
-          >
-            <option value="" disabled>
-              — выберите ячейку —
+    <form action={formAction} className="admin-form">
+      <div className="admin-field">
+        <label htmlFor="cell-select">Ячейка</label>
+        <select id="cell-select" name="cellId" required defaultValue="">
+          <option value="" disabled>
+            — выберите ячейку —
+          </option>
+          {availableCells.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.code}
+              {c.warehouse
+                ? ` — переедет из «${c.warehouse.name}»`
+                : ' — без склада'}
             </option>
-            {availableCells.map((c) => (
-              <option key={c.id} value={c.id}>
-                {c.code}
-                {c.warehouse
-                  ? ` — переедет из «${c.warehouse.name}»`
-                  : ' — без склада'}
-              </option>
-            ))}
-          </select>
-        </div>
+          ))}
+        </select>
       </div>
 
-      <div className="detail-form__actions">
+      <div className="admin-actions-row">
         <SaveButton label="Привязать" />
       </div>
 
-      {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>
-            {state.error}
-            {state.errorRequestId && (
-              <span className="detail-form__error-rid">
-                req: <code>{state.errorRequestId}</code>
-              </span>
-            )}
-          </span>
-        </div>
-      )}
-      {state.ok && (
-        <div className="detail-form__success" role="status">
-          <Icon name="success" size={16} />
-          <span>Ячейка привязана.</span>
-        </div>
-      )}
+      <ErrorBox error={state.error} errorRequestId={state.errorRequestId} />
+      {state.ok && <SuccessBox message="Ячейка привязана." />}
     </form>
   );
 }
 
 /**
- * Маленькая кнопка «Отвязать» рядом с ячейкой склада. Использует
- * `useTransition`, чтобы не блокировать UI пока идёт server action.
- * Сама ячейка остаётся существовать — отвязка лишь обнуляет
- * `Cell.warehouseId` (см. ADR-0019).
+ * Маленькая кнопка «Отвязать» рядом с ячейкой склада. Отвязка лишь
+ * обнуляет `Cell.warehouseId` (см. ADR-0019), сама ячейка остаётся.
  */
 export function DetachCellButton({
   warehouseId,
@@ -245,33 +222,26 @@ export function DetachCellButton({
   return (
     <button
       type="button"
-      className="btn btn-danger"
+      className="admin-btn admin-btn--ghost"
       disabled={pending}
       onClick={() => {
         startTransition(async () => {
           await detachCellFromWarehouseAction(warehouseId, cellId);
         });
       }}
-      title="Отвязать ячейку от склада (сама ячейка останется существовать)"
+      title="Отвязать ячейку (сама ячейка останется)"
     >
-      <Icon name="reset" size={14} />
+      <Unlink size={14} strokeWidth={1.6} aria-hidden />
       {pending ? 'Отвязываем…' : 'Отвязать'}
     </button>
   );
 }
 
 /**
- * Форма массового создания ячеек через линию.
- *
- * Менеджер вводит код линии (например, `A`) и количество (например, 20),
- * backend создаёт `WarehouseLine` и в той же транзакции — ячейки
- * `A1..A20`. После успеха показывается короткий summary, страница
- * сама ревалидируется action-ом и подгружает новые ячейки.
- *
- * Источник истины — `POST /api/warehouses/:id/lines`. Уникальность
- * `code` глобальная (см. ADR/миграция), коллизии с уже существующими
- * `Cell.code` тоже валидируются на backend (понятная бизнес-ошибка
- * `WAREHOUSE_LINE_CELL_CODE_TAKEN`).
+ * Форма массового создания ячеек через линию (`POST
+ * /api/warehouses/:id/lines`). Backend сам делает `WarehouseLine` +
+ * `Cell`-серию (`A1..A20`). Уникальность `code` глобальная,
+ * коллизии — `WAREHOUSE_LINE_CELL_CODE_TAKEN`.
  */
 export function CreateLineForm({
   warehouseId,
@@ -285,9 +255,9 @@ export function CreateLineForm({
   );
 
   return (
-    <form action={formAction} className="detail-form">
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
+    <form action={formAction} className="admin-form">
+      <div className="admin-form-grid">
+        <div className="admin-field">
           <label htmlFor="line-code">Код линии</label>
           <input
             id="line-code"
@@ -296,10 +266,10 @@ export function CreateLineForm({
             maxLength={32}
             required
             autoComplete="off"
-            placeholder="например, A"
+            placeholder="A"
           />
         </div>
-        <div className="detail-form__field">
+        <div className="admin-field">
           <label htmlFor="line-count">Кол-во ячеек</label>
           <input
             id="line-count"
@@ -313,28 +283,13 @@ export function CreateLineForm({
         </div>
       </div>
 
-      <div className="detail-form__actions">
+      <div className="admin-actions-row">
         <SaveButton label="Создать линию" />
       </div>
 
-      {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>
-            {state.error}
-            {state.errorRequestId && (
-              <span className="detail-form__error-rid">
-                req: <code>{state.errorRequestId}</code>
-              </span>
-            )}
-          </span>
-        </div>
-      )}
+      <ErrorBox error={state.error} errorRequestId={state.errorRequestId} />
       {state.ok && state.successMessage && (
-        <div className="detail-form__success" role="status">
-          <Icon name="success" size={16} />
-          <span>{state.successMessage}</span>
-        </div>
+        <SuccessBox message={state.successMessage} />
       )}
     </form>
   );

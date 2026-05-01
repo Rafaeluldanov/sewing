@@ -27,7 +27,14 @@ export interface TestApp {
   module: TestingModule;
   prisma: PrismaService;
   auth: AuthService;
-  /** Готовая cookie для admin-сессии — кладём в заголовок `Cookie:`. */
+  /**
+   * Готовая cookie для admin-сессии — кладём в заголовок `Cookie:`.
+   *
+   * Поле перезаписывается `refreshAdminCookie(t)` после `resetDatabase`,
+   * потому что TRUNCATE ON Employee стирает и системного admin'а, и
+   * старая cookie начинает возвращать 401 в `AuthGuard.resolvePrincipal`
+   * (он тянет Employee из БД). См. `tests/utils/db.ts`.
+   */
   adminCookie: string;
   adminEmployeeId: string;
 }
@@ -72,6 +79,30 @@ export async function stopTestApp(t: TestApp): Promise<void> {
 }
 
 /**
+ * Пересоздаёт системного admin'а в БД и обновляет `t.adminCookie` /
+ * `t.adminEmployeeId` под новый `Employee.id`.
+ *
+ * Зачем: `resetDatabase` (см. `tests/utils/db.ts`) делает TRUNCATE
+ * по Employee, и admin, выпущенный в `startTestApp`, исчезает. Старая
+ * `t.adminCookie` после этого возвращает 401, потому что
+ * `AuthGuard.resolvePrincipal` достаёт `Employee` из БД и не находит
+ * id из JWT-payload'а. Помощник делает оба шага атомарно: создаёт
+ * admin'а заново и переиздаёт cookie. Идемпотентно — можно вызывать
+ * в каждом `beforeEach` сразу после `resetDatabase` + `seedMinimal`.
+ */
+export async function refreshAdminCookie(t: TestApp): Promise<void> {
+  const admin = await ensureSystemAdmin(t.prisma);
+  const { cookie } = t.auth.issueSession({
+    id: admin.id,
+    role: admin.role,
+    login: admin.login,
+    fullName: admin.fullName,
+  });
+  t.adminCookie = serializeCookie(cookie.name, cookie.value, cookie.attrs);
+  t.adminEmployeeId = admin.id;
+}
+
+/**
  * Создаёт session-cookie для произвольного сотрудника. Используется в
  * RBAC-сценариях («может ли QC-роль вызвать /orders POST?»).
  */
@@ -98,7 +129,6 @@ async function ensureSystemAdmin(prisma: PrismaService): Promise<{
       pinHash,
       fullName,
       role: 'ADMIN',
-      paymentType: 'SALARY',
       active: true,
     },
     update: { active: true, role: 'ADMIN', fullName, pinHash },

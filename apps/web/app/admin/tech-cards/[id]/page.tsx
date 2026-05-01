@@ -1,8 +1,17 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ArrowLeft, ClipboardList } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
+import { listPatterns } from '@/lib/patterns-api';
 import { getTechCard } from '@/lib/tech-cards-api';
-import { Icon } from '@/components/icon';
-import { DetailPageHeader } from '@/components/detail-page-header';
+import {
+  AdminCard,
+  AdminPageShell,
+  AdminSectionHeader,
+  AdminStatusBadge,
+  AdminTechInfo,
+} from '@/components/admin';
+import { formatStatus, statusTone } from '@/lib/admin-labels';
 import { TechCardForm } from '../tech-card-form';
 
 export const dynamic = 'force-dynamic';
@@ -12,22 +21,12 @@ interface Params {
 }
 
 /**
- * Карточка техкарты. Источник истины — `GET /api/tech-cards/:id`.
+ * Карточка техкарты (Admin UI 2.5, ADR-0022).
  *
- * Все поля (`code`, `name`, `isActive`, `materialLines[]`,
- * `outsourceLines[]`) редактируются в одной форме и сохраняются одним
- * PATCH-ом — backend `TechCardsService.update` обновляет частично, а
- * массивы строк заменяет целиком (full-replace) в одной транзакции,
- * по аналогии с `RoutesService.replaceSteps` и
- * `EquipmentOperationsService`.
- *
- * Удаление шаблона на MVP не выставляется (UI и backend): техкарта
- * может быть зашита в snapshot заказов, и soft-deactivation
- * (isActive=false) закрывает все use-кейсы. Snapshot заказа
- * (`OrderMaterialRequirement[]` / `OrderOutsourceRequirement[]`) живёт
- * независимо от шаблона: FK на `TechCard*Line.sourceTechCardLineId`
- * имеет `ON DELETE SET NULL` — даже после удаления строк snapshot
- * заказа продолжает работать (см. `prisma/schema.prisma`, ADR-0022).
+ * Backend / DTO не меняем — `TechCardForm` остаётся прежним. UI
+ * приведён к единому стандарту: AdminPageShell + AdminCard +
+ * AdminTechInfo, без длинных описаний и technical clutter в основном
+ * экране.
  */
 export default async function AdminTechCardDetailPage({ params }: Params) {
   let template;
@@ -39,54 +38,70 @@ export default async function AdminTechCardDetailPage({ params }: Params) {
     }
     throw e;
   }
+  // Этап «Подтянуть из номенклатуры» (см. ТЗ §1, §4): подгружаем
+  // активные номенклатуры (`PatternItem`) — кнопка «Подтянуть из
+  // номенклатуры» в форме тянет конкретные используемые параметры
+  // выбранной номенклатуры через её `PatternItemParameterNorm`.
+  // Любой fail (API down, 401, не-массив в ответе) → пустой
+  // массив; форма всё равно открывается, просто без блока pull.
+  // Передаём в client component ТОЛЬКО plain `{ id, name, article }`
+  // — без Decimal/Date/BigInt/полного DTO (см. ТЗ «Если page.tsx
+  // передаёт данные в client component»).
+  let patternItems: { id: string; name: string; article: string }[] = [];
+  try {
+    const list = await listPatterns({ status: 'ACTIVE' });
+    if (Array.isArray(list)) {
+      patternItems = list.map((p) => ({
+        id: String(p?.id ?? ''),
+        name: String(p?.name ?? ''),
+        article: String(p?.article ?? ''),
+      }));
+    }
+  } catch {
+    patternItems = [];
+  }
 
   return (
-    <div className="page-shell">
-      <DetailPageHeader
-        eyebrow="Техкарты"
-        icon="orders"
-        title={template.name}
-        subtitle="Редактирование техкарты. Изменения вступают в силу для будущих заказов; уже запущенные заказы продолжают работать со своим snapshot-ом потребностей."
-        backHref="/admin/tech-cards"
-        backLabel="К списку техкарт"
-        meta={
-          <>
-            <span>
-              Код: <code>{template.code}</code>
-            </span>
-            <span>·</span>
-            <span>Материалов: {template.materialLines.length}</span>
-            <span>·</span>
-            <span>Внешних: {template.outsourceLines.length}</span>
-            <span>·</span>
-            <span>
-              Обновлена:{' '}
-              {new Date(template.updatedAt).toLocaleString('ru-RU')}
-            </span>
-          </>
-        }
-        badges={
-          <span
-            className={`pill ${template.isActive ? 'pill--ok' : 'pill--ghost'}`}
-          >
-            <Icon name={template.isActive ? 'success' : 'idle'} size={14} />
-            {template.isActive ? 'Активна' : 'Скрыта'}
-          </span>
-        }
-      />
+    <AdminPageShell
+      icon={<ClipboardList size={22} strokeWidth={1.6} aria-hidden />}
+      title={template.name}
+      subtitle={`${template.materialLines.length} материалов · ${template.outsourceLines.length} внешних`}
+      actions={
+        <>
+          <Link href="/admin/tech-cards" className="admin-btn admin-btn--ghost">
+            <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
+            К списку
+          </Link>
+          <AdminStatusBadge tone={statusTone(template.isActive)}>
+            {formatStatus(template.isActive)}
+          </AdminStatusBadge>
+        </>
+      }
+    >
+      <AdminCard>
+        <AdminSectionHeader
+          title="Параметры и строки техкарты"
+          hint="Snapshot фиксируется на заказе при запуске"
+        />
+        <TechCardForm
+          mode="edit"
+          template={template}
+          patternItems={patternItems}
+        />
+      </AdminCard>
 
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="orders" />
-            Параметры и строки техкарты
-          </h2>
-          <span className="section-header__hint">
-            Snapshot фиксируется на заказе при запуске
-          </span>
-        </div>
-        <TechCardForm mode="edit" template={template} />
-      </section>
-    </div>
+      <AdminTechInfo
+        items={[
+          { label: 'ID', value: <code>{template.id}</code> },
+          { label: 'Код', value: <code>{template.code}</code> },
+          { label: 'Материалов', value: template.materialLines.length },
+          { label: 'Внешних', value: template.outsourceLines.length },
+          {
+            label: 'Обновлена',
+            value: new Date(template.updatedAt).toLocaleString('ru-RU'),
+          },
+        ]}
+      />
+    </AdminPageShell>
   );
 }

@@ -12,10 +12,12 @@ import { Module } from '@nestjs/common';
 import { CostsController } from './costs.controller.js';
 import { CostsService } from './costs.service.js';
 import { PassportDurationsService } from './passport-durations.service.js';
+import { ProductionCostV2Controller } from './production-cost-v2.controller.js';
+import { ProductionCostV2Service } from './production-cost-v2.service.js';
 
 @Module({
-  controllers: [CostsController],
-  providers: [CostsService, PassportDurationsService],
-  exports: [CostsService, PassportDurationsService],
+  controllers: [CostsController, ProductionCostV2Controller],
+  providers: [CostsService, PassportDurationsService, ProductionCostV2Service],
+  exports: [CostsService, PassportDurationsService, ProductionCostV2Service],
 })
 export class CostsModule {}

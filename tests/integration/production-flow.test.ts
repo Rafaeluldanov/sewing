@@ -14,6 +14,7 @@ import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
 import {
   loginAs,
+  refreshAdminCookie,
   startTestApp,
   stopTestApp,
   type TestApp,
@@ -35,6 +36,9 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
   beforeEach(async () => {
     await resetDatabase(t.prisma);
     seed = await seedMinimal(t.prisma);
+    // Без `refreshAdminCookie` системный admin был бы стёрт TRUNCATE'ом,
+    // и `t.adminCookie` ушёл бы в 401.
+    await refreshAdminCookie(t);
     cookies = {
       manager: loginAs(t, seed.employees['shop-chief']),
       cutter: loginAs(t, seed.employees['cutter']),
@@ -82,12 +86,25 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
     expect(start.status).toBe(201);
     expect(start.body.status).toBe('IN_PRODUCTION');
 
-    const editAfter = await request(t.app.getHttpServer())
+    // После запуска заказа PATCH «безопасных» полей по-прежнему
+    // разрешён — комментарий, клиент и срок не зависят от snapshot-а
+    // маршрута и могут править в production. См.
+    // `OrdersService.update`.
+    const safeEdit = await request(t.app.getHttpServer())
       .patch(`/api/orders/${orderId}`)
       .set('Cookie', cookies.manager)
       .send({ comment: 'try edit' });
-    expect(editAfter.status).toBe(409);
-    expect(editAfter.body.code).toBe('ORDER_LOCKED');
+    expect(safeEdit.status).toBe(200);
+    expect(safeEdit.body.comment).toBe('try edit');
+
+    // А вот «опасные» поля (план/изделие) после запуска уже залочены —
+    // это инвариант ADR-0006 «после старта план иммутабелен».
+    const unsafeEdit = await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}`)
+      .set('Cookie', cookies.manager)
+      .send({ items: [{ sizeId: seed.sizes.M, qtyPlan: 99 }] });
+    expect(unsafeEdit.status).toBe(409);
+    expect(unsafeEdit.body.code).toBe('ORDER_LOCKED');
 
     const restricted = await request(t.app.getHttpServer())
       .post('/api/orders')

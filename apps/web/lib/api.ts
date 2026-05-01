@@ -111,6 +111,63 @@ export async function apiFetch<T>(
   return payload as T;
 }
 
+/**
+ * Multipart-вариант `apiFetch` для модулей с upload-эндпоинтами
+ * (на MVP-1 — только «Лекала», `apps/web/lib/patterns-api.ts`).
+ *
+ * Главные отличия от `apiFetch`:
+ *   - принимает готовый `FormData` (поле `file` + опциональные доп. поля),
+ *     ничего не сериализует;
+ *   - НЕ выставляет `content-type` руками — runtime сам добавит
+ *     `multipart/form-data; boundary=...`;
+ *   - всё остальное (cookie-форвардинг, разбор ошибок,
+ *     `requestId`-header) такое же, как у обычного fetch-клиента.
+ *
+ * Делаем именно server-side: server actions Next.js собирают
+ * `FormData` из client-form-а и форвардят сюда — нам не нужен
+ * прямой POST из браузера в API через cross-origin (cookies всё
+ * равно идут через Next.js host).
+ */
+export async function apiFetchMultipart<T>(
+  path: string,
+  formData: FormData,
+  init: { method?: string; returnNullOn401?: boolean } = {},
+): Promise<T> {
+  const base = getServerApiUrl();
+  const url = new URL(
+    path.startsWith('/') ? path.slice(1) : path,
+    `${base}/`,
+  );
+  const headers: Record<string, string> = {
+    accept: 'application/json',
+  };
+  const cookieHeader = readForwardCookie();
+  if (cookieHeader) headers.cookie = cookieHeader;
+  const res = await fetch(url, {
+    method: init.method ?? 'POST',
+    headers,
+    body: formData,
+    cache: 'no-store',
+  });
+  const text = await res.text();
+  const payload: unknown = text ? safeJson(text) : null;
+  if (!res.ok) {
+    const err = (payload ?? {}) as Partial<ApiError>;
+    if (res.status === 401 && init.returnNullOn401) {
+      return null as T;
+    }
+    const headerRequestId = res.headers.get('x-request-id') ?? undefined;
+    throw new ApiRequestError({
+      statusCode: err.statusCode ?? res.status,
+      message: err.message ?? res.statusText,
+      code: err.code,
+      issues: err.issues,
+      requestId: err.requestId ?? headerRequestId,
+    });
+  }
+  return payload as T;
+}
+
 function safeJson(text: string): unknown {
   try {
     return JSON.parse(text);

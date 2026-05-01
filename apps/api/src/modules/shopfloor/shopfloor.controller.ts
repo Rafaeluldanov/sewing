@@ -1,9 +1,13 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import {
+  ShopfloorDisplayQuerySchema,
   ShopfloorStateQuerySchema,
+  type ShopfloorDisplayQuery,
   type ShopfloorStateQuery,
 } from '@sewing/shared/shopfloor';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
+import { CurrentUser } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ShopfloorService } from './shopfloor.service.js';
 
 /**
@@ -60,9 +64,28 @@ export class ShopfloorController {
    * RBAC — общий для всего контроллера: открыто любой авторизованной
    * роли (включая DISPLAY). Никаких мутаций ни здесь, ни в
    * `getDisplaySummary` — только проекция живых данных.
+   *
+   * Опциональный query `division` (см. `OrderDivisionSchema`) сужает
+   * выборку до заказов одного подразделения и используется для
+   * отдельных display-экранов (например, маркетплейса). Если параметр
+   * не передан — поведение определяется ролью пользователя:
+   *
+   *   - роль `DISPLAY` → берём division из привязанного
+   *     `DisplayScreenConfig` (один экран = один Employee = одно
+   *     подразделение, см. `docs/screens.md §10e`);
+   *   - любая другая роль → отдаём прежний агрегат по всем активным
+   *     заказам (backward-compatibility со старыми экранами без
+   *     query-параметра).
+   *
+   * `query.division` всегда перекрывает auto-detection — это удобно
+   * для отладки и для прежних URL-закладок менеджеров.
    */
   @Get('display')
-  display() {
-    return this.shopfloor.getDisplaySummary();
+  display(
+    @Query(new ZodValidationPipe(ShopfloorDisplayQuerySchema))
+    query: ShopfloorDisplayQuery,
+    @CurrentUser() user: AuthPrincipal | undefined,
+  ) {
+    return this.shopfloor.getDisplaySummary(query, user);
   }
 }

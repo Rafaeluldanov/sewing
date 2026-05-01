@@ -182,6 +182,28 @@ export class RoutesService {
         if (dto.code !== undefined) data.code = dto.code;
         if (dto.name !== undefined) data.name = dto.name;
         if (dto.isActive !== undefined) data.isActive = dto.isActive;
+
+        // Этап «edge cases после переноса OrderRouteStep[] snapshot»:
+        // правка только `steps` без `code/name/isActive` обязана
+        // touch-нуть `RouteTemplate.updatedAt`. Это инвариант
+        // `OrderOperationPlanService.getFreshnessForOrder` — он
+        // считает план stale через `RouteTemplate.updatedAt` (а
+        // `RouteTemplateStep.updatedAt` в схеме нет). Без этого
+        // touch-а PATCH `{steps: [...]}` через API не отметил бы
+        // зависимые заказы как stale, и менеджер не получил бы
+        // подсказку «План операций требует пересчёта». Через admin
+        // UI проблема не заметна (форма всегда шлёт всё четвёркой
+        // `code/name/isActive/steps`), но прямой API-вызов раньше
+        // ломал инвариант.
+        //
+        // Используем явный `updatedAt: new Date()` — Prisma
+        // `@updatedAt` обновляет поле автоматически только если в
+        // data передано хотя бы одно поле, поэтому при «голом»
+        // `{steps: [...]}` приходится touch-ить вручную.
+        if (dto.steps !== undefined && Object.keys(data).length === 0) {
+          data.updatedAt = new Date();
+        }
+
         if (Object.keys(data).length > 0) {
           await tx.routeTemplate.update({ where: { id }, data });
         }

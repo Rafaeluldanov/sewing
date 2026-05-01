@@ -2,12 +2,12 @@
 
 import { useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
+import { Save } from 'lucide-react';
 import {
   COMPENSATION_TYPES,
   type CompensationType,
   type EmployeeDetailDto,
 } from '@sewing/shared/employees';
-import { Icon } from '@/components/icon';
 import { updateEmployeeAction } from '../actions';
 import {
   initialUpdateEmployeeState,
@@ -20,20 +20,19 @@ const COMPENSATION_LABEL: Record<CompensationType, string> = {
   MIXED: 'Оклад + сдельная',
 };
 
-const COMPENSATION_HINT: Record<CompensationType, string> = {
-  PIECEWORK:
-    'Окладные начисления автоматически создаваться не будут. Оплата — через сдельные начисления (`/earnings`).',
-  SALARY:
-    'За каждый день, в который у сотрудника есть хотя бы одна смена, автоматически создаётся запись в `/earnings`. Сдельные начисления для этого сотрудника не создаются.',
-  MIXED:
-    'Оклад начисляется за день со сменой, плюс сохраняются обычные сдельные начисления по операциям.',
-};
+/**
+ * Роль закройщика — единственная, для которой имеет смысл
+ * `cutterB2bSewingPercent`. Сравниваем строкой, чтобы не тащить
+ * сюда `EmployeeRole`-enum (поле `Employee.role` приходит как
+ * `string` в DTO и гарантированно совпадает с Prisma enum-значением).
+ */
+const CUTTER_ROLE = 'CUTTER';
 
 function SaveButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name="save" size={16} />
+    <button type="submit" className="admin-btn admin-btn--primary" disabled={pending}>
+      <Save size={16} strokeWidth={1.6} aria-hidden />
       {pending ? 'Сохраняем…' : 'Сохранить'}
     </button>
   );
@@ -45,18 +44,15 @@ interface Props {
 
 /**
  * Форма редактирования management-полей сотрудника
- * (`/admin/employees/[id]`).
+ * (`/admin/employees/[id]`, Admin UI 2.5).
  *
- * Меняем только то, что MVP даёт менеджеру (см. `docs/screens.md §11`,
- * ADR-0021):
+ * Меняет только то, что MVP даёт менеджеру (см. ADR-0021):
  *   - `compensationType` (PIECEWORK | SALARY | MIXED)
  *   - `salaryPerShift`   (обязательна для SALARY/MIXED)
  *   - `active`           (мягкий «архив»)
  *
- * `login`, `pinHash`, `role`, `fullName`, `paymentType` и `salaryBase`
- * на этой форме read-only — их меняет seed/админ через Prisma. Это
- * сознательное ограничение шага 19, чтобы не делать пол-ауф-flow за
- * один спринт.
+ * Backend / DTO не меняем — server action `updateEmployeeAction`
+ * принимает тот же FormData, что и раньше.
  */
 export function EmployeeEditForm({ employee }: Props) {
   const [compensationType, setCompensationType] = useState<CompensationType>(
@@ -67,6 +63,17 @@ export function EmployeeEditForm({ employee }: Props) {
       ? employee.salaryPerShift.toString()
       : '',
   );
+  // B2B-процент закройщика. См.
+  // `docs/payroll-cutter-compensation-recon.md`. Поле имеет смысл
+  // только для роли CUTTER — для остальных ролей UI его не
+  // показывает, в FormData ничего не уходит.
+  const [cutterB2bPercent, setCutterB2bPercent] = useState<string>(
+    employee.cutterB2bSewingPercent !== null &&
+      employee.cutterB2bSewingPercent !== undefined
+      ? String(employee.cutterB2bSewingPercent)
+      : '',
+  );
+  const isCutter = employee.role === CUTTER_ROLE;
 
   const update = updateEmployeeAction.bind(null, employee.id);
   const [state, formAction] = useFormState<UpdateEmployeeState, FormData>(
@@ -78,9 +85,9 @@ export function EmployeeEditForm({ employee }: Props) {
     compensationType === 'SALARY' || compensationType === 'MIXED';
 
   return (
-    <form action={formAction} className="detail-form">
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
+    <form action={formAction} className="admin-form">
+      <div className="admin-form-grid">
+        <div className="admin-field">
           <label htmlFor="emp-comp-type">Тип компенсации</label>
           <select
             id="emp-comp-type"
@@ -98,7 +105,7 @@ export function EmployeeEditForm({ employee }: Props) {
           </select>
         </div>
 
-        <div className="detail-form__field">
+        <div className="admin-field">
           <label htmlFor="emp-salary-per-shift">Ставка за смену, ₽</label>
           <input
             id="emp-salary-per-shift"
@@ -113,7 +120,7 @@ export function EmployeeEditForm({ employee }: Props) {
           />
         </div>
 
-        <div className="detail-form__field detail-form__field--inline">
+        <div className="admin-field admin-field--inline">
           <input
             id="emp-active"
             type="checkbox"
@@ -124,29 +131,63 @@ export function EmployeeEditForm({ employee }: Props) {
         </div>
       </div>
 
-      <p className="detail-form__hint">{COMPENSATION_HINT[compensationType]}</p>
+      {/*
+        Поле «Процент от операций пошива B2B» — только для роли CUTTER.
+        Использует ту же FormData-точку (`cutterB2bSewingPercent`),
+        что и server-action `updateEmployeeAction`. Для остальных
+        ролей поле просто не рендерится — FormData не пишется и
+        backend колонку не трогает (`undefined` ветка в DTO).
+      */}
+      {isCutter && (
+        <div className="admin-form-grid">
+          <div className="admin-field">
+            <label htmlFor="emp-cutter-b2b-percent">
+              Процент от операций пошива B2B, %
+            </label>
+            <input
+              id="emp-cutter-b2b-percent"
+              name="cutterB2bSewingPercent"
+              type="number"
+              step="0.01"
+              min="0"
+              max="100"
+              inputMode="decimal"
+              value={cutterB2bPercent}
+              onChange={(e) => setCutterB2bPercent(e.target.value)}
+              placeholder="—"
+              autoComplete="off"
+              aria-describedby="emp-cutter-b2b-percent-hint"
+            />
+            <span
+              id="emp-cutter-b2b-percent-hint"
+              className="admin-field__hint admin-muted"
+            >
+              Используется только для B2B-заказов. Marketplace продолжает
+              использовать старую схему начисления. Если поле пустое —
+              backend берёт fallback из переменной окружения
+              <code style={{ marginLeft: 4 }}>CUTTER_B2B_SEWING_PERCENT</code>.
+            </span>
+          </div>
+        </div>
+      )}
 
-      <div className="detail-form__actions">
+      <div className="admin-actions-row">
         <SaveButton />
       </div>
 
       {state.successMessage && (
-        <div className="detail-form__success" role="status">
-          <Icon name="success" size={16} />
-          <span>{state.successMessage}</span>
+        <div role="status" className="admin-muted" style={{ fontSize: '0.88rem' }}>
+          {state.successMessage}
         </div>
       )}
       {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>
-            {state.error}
-            {state.errorRequestId && (
-              <span className="detail-form__error-rid">
-                req: <code>{state.errorRequestId}</code>
-              </span>
-            )}
-          </span>
+        <div role="alert" style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}>
+          {state.error}
+          {state.errorRequestId && (
+            <span className="admin-muted" style={{ marginLeft: 6 }}>
+              req: <code>{state.errorRequestId}</code>
+            </span>
+          )}
         </div>
       )}
     </form>

@@ -55,7 +55,6 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
         login: 'salary-admin',
         fullName: 'Salary Admin',
         role: 'ADMIN',
-        paymentType: 'SALARY',
         active: true,
         pinHash: adminPin,
       },

@@ -4,6 +4,7 @@ import type {
   CreateOperationDto,
   OperationDetailDto,
   OperationSummaryDto,
+  TimeNormMode,
   UpdateOperationDto,
 } from '@sewing/shared/operations';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -46,9 +47,15 @@ export class OperationsService {
   async list(): Promise<OperationSummaryDto[]> {
     const rows = await this.prisma.operation.findMany({
       orderBy: [{ active: 'desc' }, { sortOrder: 'asc' }],
-      include: { _count: { select: { ratesBySize: true } } },
+      include: {
+        _count: {
+          select: { ratesBySize: true, timeNormsBySize: true },
+        },
+      },
     });
-    return rows.map((o) => this.toSummary(o, o._count.ratesBySize));
+    return rows.map((o) =>
+      this.toSummary(o, o._count.ratesBySize, o._count.timeNormsBySize),
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -63,6 +70,10 @@ export class OperationsService {
           include: { size: true },
           orderBy: { size: { sortOrder: 'asc' } },
         },
+        timeNormsBySize: {
+          include: { size: true },
+          orderBy: { size: { sortOrder: 'asc' } },
+        },
       },
     });
     if (!row) throw new OperationNotFoundException();
@@ -71,12 +82,18 @@ export class OperationsService {
       orderBy: { sortOrder: 'asc' },
     });
     return {
-      ...this.toSummary(row, row.ratesBySize.length),
+      ...this.toSummary(row, row.ratesBySize.length, row.timeNormsBySize.length),
       ratesBySize: row.ratesBySize.map((r) => ({
         sizeId: r.sizeId,
         sizeCode: r.size.code,
         sizeSortOrder: r.size.sortOrder,
         rate: Number(r.rate.toFixed(2)),
+      })),
+      timeNormsBySize: row.timeNormsBySize.map((r) => ({
+        sizeId: r.sizeId,
+        sizeCode: r.size.code,
+        sizeSortOrder: r.size.sortOrder,
+        seconds: r.seconds,
       })),
       sizes: sizes.map((s) => ({
         id: s.id,
@@ -92,11 +109,35 @@ export class OperationsService {
 
   async create(dto: CreateOperationDto): Promise<OperationDetailDto> {
     this.assertRatesUnique(dto.ratesBySize);
+    this.assertTimeNormsUnique(dto.timeNormsBySize);
     if (dto.ratesBySize && dto.ratesBySize.length > 0) {
       await this.assertSizesExist(dto.ratesBySize.map((r) => r.sizeId));
     }
+    if (dto.timeNormsBySize && dto.timeNormsBySize.length > 0) {
+      await this.assertSizesExist(dto.timeNormsBySize.map((r) => r.sizeId));
+    }
     const sortOrder =
       dto.sortOrder ?? (await this.nextSortOrder());
+
+    const timeNormMode: TimeNormMode = dto.timeNormMode ?? 'FIXED';
+    const timeNormSec =
+      timeNormMode === 'FIXED' && dto.timeNormSec != null
+        ? dto.timeNormSec
+        : null;
+
+    // Плановая окладная стоимость (см. ТЗ «Плановая стоимость
+    // окладных операций»). Это **отдельная ось** от pricingMode/
+    // timeNormMode и от фактического payroll. Если указана ставка,
+    // но не указана длительность смены — подставляем default 28800
+    // (8 часов), чтобы UI сразу мог показать «cost per second».
+    const salaryPlanRubPerShift =
+      dto.salaryPlanRubPerShift != null
+        ? new Prisma.Decimal(dto.salaryPlanRubPerShift)
+        : null;
+    const salaryPlanShiftSeconds = resolveSalaryPlanShiftSeconds(
+      dto.salaryPlanShiftSeconds,
+      salaryPlanRubPerShift !== null,
+    );
 
     let createdId: string;
     try {
@@ -113,6 +154,10 @@ export class OperationsService {
               dto.pricingMode === 'FIXED' && dto.fixedRate !== undefined
                 ? new Prisma.Decimal(dto.fixedRate)
                 : null,
+            timeNormMode,
+            timeNormSec,
+            salaryPlanRubPerShift,
+            salaryPlanShiftSeconds,
           },
         });
         if (dto.pricingMode === 'BY_SIZE' && dto.ratesBySize?.length) {
@@ -124,6 +169,15 @@ export class OperationsService {
             })),
           });
         }
+        if (timeNormMode === 'BY_SIZE' && dto.timeNormsBySize?.length) {
+          await tx.operationTimeNormBySize.createMany({
+            data: dto.timeNormsBySize.map((r) => ({
+              operationId: created.id,
+              sizeId: r.sizeId,
+              seconds: r.seconds,
+            })),
+          });
+        }
         return created.id;
       });
     } catch (e) {
@@ -132,7 +186,8 @@ export class OperationsService {
     }
 
     this.logger.log(
-      `event=operation.create id=${createdId} code=${dto.code} mode=${dto.pricingMode}`,
+      `event=operation.create id=${createdId} code=${dto.code} ` +
+        `mode=${dto.pricingMode} timeMode=${timeNormMode}`,
     );
     return this.getOne(createdId);
   }
@@ -147,18 +202,31 @@ export class OperationsService {
   ): Promise<OperationDetailDto> {
     const exists = await this.prisma.operation.findUnique({
       where: { id },
-      select: { id: true, pricingMode: true },
+      select: {
+        id: true,
+        pricingMode: true,
+        timeNormMode: true,
+        salaryPlanShiftSeconds: true,
+      },
     });
     if (!exists) throw new OperationNotFoundException();
 
     this.assertRatesUnique(dto.ratesBySize);
+    this.assertTimeNormsUnique(dto.timeNormsBySize);
     if (dto.ratesBySize && dto.ratesBySize.length > 0) {
       await this.assertSizesExist(dto.ratesBySize.map((r) => r.sizeId));
+    }
+    if (dto.timeNormsBySize && dto.timeNormsBySize.length > 0) {
+      await this.assertSizesExist(dto.timeNormsBySize.map((r) => r.sizeId));
     }
 
     // Финальный pricingMode: либо явно сменили, либо текущий.
     const nextMode: PricingMode = (dto.pricingMode ??
       exists.pricingMode) as PricingMode;
+    // Финальный timeNormMode: либо явно сменили, либо текущий.
+    // Это **отдельная ось** от pricingMode.
+    const nextTimeMode: TimeNormMode = (dto.timeNormMode ??
+      exists.timeNormMode) as TimeNormMode;
 
     // Доп. валидация переходов и согласованность ставок.
     // Делаем это здесь, а не в Zod, потому что это требует знания
@@ -182,6 +250,7 @@ export class OperationsService {
         if (dto.isActive !== undefined) data.active = dto.isActive;
         if (dto.sortOrder !== undefined) data.sortOrder = dto.sortOrder;
         if (dto.pricingMode !== undefined) data.pricingMode = dto.pricingMode;
+        if (dto.timeNormMode !== undefined) data.timeNormMode = dto.timeNormMode;
 
         // Согласованность fixedRate с pricingMode:
         //   FIXED       → если пришёл fixedRate, ставим его;
@@ -196,6 +265,48 @@ export class OperationsService {
           }
         } else {
           data.fixedRate = null;
+        }
+
+        // Согласованность timeNormSec с timeNormMode:
+        //   FIXED   → если пришёл timeNormSec, ставим его (включая null);
+        //   BY_SIZE → всегда обнуляем timeNormSec.
+        if (nextTimeMode === 'FIXED') {
+          if (dto.timeNormSec !== undefined) {
+            data.timeNormSec = dto.timeNormSec === null ? null : dto.timeNormSec;
+          }
+        } else {
+          data.timeNormSec = null;
+        }
+
+        // Плановая окладная ставка (см. ТЗ «Плановая стоимость
+        // окладных операций»). Это **отдельная ось** от pricingMode/
+        // timeNormMode — поле обновляется независимо. Контракт:
+        //   - `salaryPlanRubPerShift = null` → обнулить;
+        //   - `salaryPlanRubPerShift = number` → проставить;
+        //   - не пришло — не трогать.
+        // Длительность смены: если ставка задана, но shift seconds
+        // в БД ещё `null`, бэкенд проставляет default 28800 в
+        // дополнение, чтобы UI/расчёт плана не упирался в null/0.
+        if (dto.salaryPlanRubPerShift !== undefined) {
+          data.salaryPlanRubPerShift =
+            dto.salaryPlanRubPerShift === null
+              ? null
+              : new Prisma.Decimal(dto.salaryPlanRubPerShift);
+        }
+        if (dto.salaryPlanShiftSeconds !== undefined) {
+          data.salaryPlanShiftSeconds =
+            dto.salaryPlanShiftSeconds === null
+              ? 28800
+              : dto.salaryPlanShiftSeconds;
+        } else if (
+          dto.salaryPlanRubPerShift != null &&
+          (exists as { salaryPlanShiftSeconds: number | null })
+            .salaryPlanShiftSeconds == null
+        ) {
+          // Ставку только что задали, а длительность смены так и не
+          // была проставлена — подставляем default, чтобы расчёт
+          // плана сразу заработал.
+          data.salaryPlanShiftSeconds = 28800;
         }
 
         await tx.operation.update({ where: { id }, data });
@@ -226,6 +337,34 @@ export class OperationsService {
             where: { operationId: id },
           });
         }
+
+        // Согласованность OperationTimeNormBySize по тому же паттерну,
+        // но на отдельной оси `timeNormMode`:
+        //   BY_SIZE с явно переданным timeNormsBySize → replace-all;
+        //   BY_SIZE без timeNormsBySize и смена режима — оставляем
+        //     текущие строки (менеджер заполнит постепенно);
+        //   FIXED — стираем все строки, чтобы инвариант
+        //     «BY_SIZE => есть нормы, FIXED => нет норм» держался.
+        if (nextTimeMode === 'BY_SIZE') {
+          if (dto.timeNormsBySize !== undefined) {
+            await tx.operationTimeNormBySize.deleteMany({
+              where: { operationId: id },
+            });
+            if (dto.timeNormsBySize.length > 0) {
+              await tx.operationTimeNormBySize.createMany({
+                data: dto.timeNormsBySize.map((r) => ({
+                  operationId: id,
+                  sizeId: r.sizeId,
+                  seconds: r.seconds,
+                })),
+              });
+            }
+          }
+        } else {
+          await tx.operationTimeNormBySize.deleteMany({
+            where: { operationId: id },
+          });
+        }
       });
     } catch (e) {
       this.translateUniqueError(e);
@@ -233,9 +372,12 @@ export class OperationsService {
     }
 
     this.logger.log(
-      `event=operation.update id=${id} mode=${nextMode}` +
+      `event=operation.update id=${id} mode=${nextMode} timeMode=${nextTimeMode}` +
         (dto.ratesBySize !== undefined
           ? ` rates=${dto.ratesBySize.length}`
+          : '') +
+        (dto.timeNormsBySize !== undefined
+          ? ` timeNorms=${dto.timeNormsBySize.length}`
           : ''),
     );
     return this.getOne(id);
@@ -306,6 +448,93 @@ export class OperationsService {
   }
 
   // -------------------------------------------------------------------------
+  // RESOLVE SALARY PLAN COST PER SECOND (плановая себестоимость
+  // окладных операций; см. ТЗ «Плановая стоимость окладных операций»)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Возвращает плановую стоимость 1 секунды операции для расчёта
+   * **плановой** себестоимости окладных операций
+   * (`pricingMode = SALARY_ONLY`). Это не фактическая зарплата —
+   * payroll (`SalaryService`, `EarningsService`,
+   * `Employee.salaryPerShift`) этой формулы не использует.
+   *
+   * Контракт:
+   *   - `salaryPlanRubPerShift = null` → `null` (план для окладных
+   *     операций пропускается; `OrderOperationPlanService` ставит
+   *     `cost = 0` + warning);
+   *   - `salaryPlanRubPerShift > 0` и `salaryPlanShiftSeconds > 0` →
+   *     `Decimal(salaryPlanRubPerShift) / salaryPlanShiftSeconds`;
+   *   - `salaryPlanRubPerShift > 0`, но `salaryPlanShiftSeconds`
+   *     `null/0` → fallback на 28800 (default «8-часовая смена»),
+   *     чтобы не блокировать план.
+   *
+   * Возвращает `Prisma.Decimal | null`, чтобы вызывающий код мог
+   * умножить на (timeSec × qty) без потери точности.
+   */
+  resolveSalaryPlanCostPerSecond(operation: {
+    salaryPlanRubPerShift: Prisma.Decimal | null;
+    salaryPlanShiftSeconds: number | null;
+  }): Prisma.Decimal | null {
+    if (operation.salaryPlanRubPerShift == null) return null;
+    const shiftSec =
+      operation.salaryPlanShiftSeconds && operation.salaryPlanShiftSeconds > 0
+        ? operation.salaryPlanShiftSeconds
+        : 28800;
+    return operation.salaryPlanRubPerShift.div(shiftSec);
+  }
+
+  // -------------------------------------------------------------------------
+  // RESOLVE TIME NORM (источник истины для плана времени)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Возвращает плановую норму времени операции в зависимости от её
+   * `timeNormMode`. Это **отдельная ось** от `resolveRate(...)` —
+   * payroll этим методом не пользуется. Контракт сознательно мягче,
+   * чем у `resolveRate`: вместо exception «нормы нет» — возвращаем
+   * `null`. Заказ не должен блокироваться отсутствием плановой нормы
+   * (см. `docs/operation-time-norms-recon.md §11`):
+   *
+   *   - `FIXED`   → `Operation.timeNormSec ?? null`;
+   *   - `BY_SIZE` → `OperationTimeNormBySize.seconds` для пары или `null`.
+   *
+   * Если операции не существует — `OperationNotFoundException`
+   * (по тому же стилю, что и `resolveRate`).
+   *
+   * Принимает опциональный `tx`, чтобы вызываться из той же транзакции,
+   * что и расчёт плана заказа (см. recon §11).
+   */
+  async resolveTimeNormSec(
+    operationId: string,
+    sizeId: string,
+    tx?: Prisma.TransactionClient,
+  ): Promise<number | null> {
+    const client: Prisma.TransactionClient | PrismaService = tx ?? this.prisma;
+    const op = await client.operation.findUnique({
+      where: { id: operationId },
+      select: { id: true, timeNormMode: true, timeNormSec: true },
+    });
+    if (!op) throw new OperationNotFoundException();
+
+    if (op.timeNormMode === 'FIXED') {
+      return op.timeNormSec ?? null;
+    }
+
+    // BY_SIZE
+    const row = await client.operationTimeNormBySize.findUnique({
+      where: {
+        OperationTimeNormBySize_operation_size_uniq: {
+          operationId,
+          sizeId,
+        },
+      },
+      select: { seconds: true },
+    });
+    return row?.seconds ?? null;
+  }
+
+  // -------------------------------------------------------------------------
   // INTERNAL
   // -------------------------------------------------------------------------
 
@@ -321,8 +550,13 @@ export class OperationsService {
       sortOrder: number;
       createdAt: Date;
       updatedAt: Date;
+      timeNormMode: string;
+      timeNormSec: number | null;
+      salaryPlanRubPerShift: Prisma.Decimal | null;
+      salaryPlanShiftSeconds: number | null;
     },
     ratesBySizeCount: number,
+    timeNormsBySizeCount: number,
   ): OperationSummaryDto {
     return {
       id: row.id,
@@ -336,6 +570,13 @@ export class OperationsService {
       sortOrder: row.sortOrder,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
+      timeNormMode: row.timeNormMode as OperationSummaryDto['timeNormMode'],
+      timeNormSec: row.timeNormSec ?? null,
+      timeNormsBySizeCount,
+      salaryPlanRubPerShift: row.salaryPlanRubPerShift
+        ? Number(row.salaryPlanRubPerShift.toFixed(2))
+        : null,
+      salaryPlanShiftSeconds: row.salaryPlanShiftSeconds ?? null,
     };
   }
 
@@ -352,6 +593,19 @@ export class OperationsService {
     if (!rates) return;
     const seen = new Set<string>();
     for (const r of rates) {
+      if (seen.has(r.sizeId)) {
+        throw new OperationRateDuplicateSizeException(r.sizeId);
+      }
+      seen.add(r.sizeId);
+    }
+  }
+
+  private assertTimeNormsUnique(
+    norms: Array<{ sizeId: string }> | undefined,
+  ): void {
+    if (!norms) return;
+    const seen = new Set<string>();
+    for (const r of norms) {
       if (seen.has(r.sizeId)) {
         throw new OperationRateDuplicateSizeException(r.sizeId);
       }
@@ -384,4 +638,33 @@ export class OperationsService {
       }
     }
   }
+}
+
+/**
+ * Привести `salaryPlanShiftSeconds` из DTO к значению, которое уйдёт
+ * в БД на `create()`. Контракт:
+ *   - DTO явно прислал число > 0 → используем его;
+ *   - DTO прислал `null` → `28800` (default; это безопасно даже без
+ *     ставки, потому что shift seconds одиночно не имеет смысла);
+ *   - DTO опустил поле → `28800` если ставка задана, иначе оставим
+ *     `null` — DDL-default (`28800`) сработает в Postgres.
+ *
+ * Прямо в Prisma поле `default(28800)` стоит, но Prisma client при
+ * `data.salaryPlanShiftSeconds = undefined` всё равно опускает
+ * колонку — это тот случай, когда database default сработает
+ * корректно. Возвращаем `null` (а не `undefined`), чтобы Prisma
+ * проинтерпретировала это как «оставь как есть в БД» только когда
+ * нам это нужно — в `create()` мы хотим явный default.
+ */
+function resolveSalaryPlanShiftSeconds(
+  dtoValue: number | null | undefined,
+  hasRate: boolean,
+): number | null {
+  if (dtoValue !== undefined && dtoValue !== null && dtoValue > 0) {
+    return dtoValue;
+  }
+  if (dtoValue === null) return 28800;
+  // dtoValue === undefined: оставляем default БД, но если ставка
+  // указана — лучше явно проставить 28800, чтобы UI не путался.
+  return hasRate ? 28800 : null;
 }

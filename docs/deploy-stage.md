@@ -75,6 +75,30 @@ server {
         proxy_set_header Host $host;
     }
 
+    # --- User uploads (модуль «Лекала» и любые будущие файловые модули) -
+    # `/uploads/*` физически лежат на диске API-хоста (см.
+    # `PATTERNS_UPLOADS_DIR`, по умолчанию `apps/api/uploads`), а раздаются
+    # NestJS через `useStaticAssets('/uploads', uploadsRoot)` (см.
+    # `apps/api/src/main.ts`). Без этого блока nginx по longest-prefix
+    # отдаёт запрос в Next.js (`location /`), Next.js про `/uploads/...`
+    # не знает и возвращает HTML 404 — у пользователя «битая картинка»
+    # в карточке номенклатуры и в форме заказа. Подробнее — см.
+    # `docs/deploy-uploads-static-routing.md`.
+    #
+    # `^~` фиксирует, что любые regex-`location`-ы дальше уже не имеют
+    # значения для этого префикса; в нашем конфиге их сейчас нет, но
+    # маркер дешёвый и бережёт нас от регрессов «кто-то добавил `~ \.jpg$`».
+    # ОБЯЗАТЕЛЬНО объявлять ДО `location /`, иначе longest-prefix
+    # посчитает их равными и порядок объявления решит, кто победит.
+    location ^~ /uploads/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -247,10 +271,16 @@ npm run start --workspace=apps/web    # next start -p 3000
 | 6 | `curl -sSI http://stage.teeon.ru`             | `HTTP/1.1 200 OK` или редирект `/login`    |
 | 7 | Открыть `http://stage.teeon.ru` в браузере    | редирект на `/login`, форма логина рисуется|
 | 8 | См. §2a «health-check после деплоя»           | `200 OK` + `Content-Type: application/javascript` |
+| 9 | См. [`docs/deploy-uploads-static-routing.md`](./deploy-uploads-static-routing.md) — uploads | `200 OK` для существующего файла из `apps/api/uploads/` |
 
 Шаг 8 проверяет, что `/_next/static/*` идёт через nginx, а не через
 Next-процесс. Если этот шаг упал — стопроцентно будет `ChunkLoadError`
 у любого пользователя. Чинить — §2 / §2a.
+
+Шаг 9 проверяет, что `/uploads/*` идёт через nginx → API (NestJS
+`useStaticAssets`), а не через Next.js. Если он падает — превью лекала
+не открывается на `/admin/patterns` и в форме заказа. Чинить — §2 (блок
+`location ^~ /uploads/`) и [`docs/deploy-uploads-static-routing.md`](./deploy-uploads-static-routing.md).
 
 Доп. sanity (опционально):
 

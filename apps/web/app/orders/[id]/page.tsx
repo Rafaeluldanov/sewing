@@ -1,14 +1,23 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import type {
+  OrderDetailDto,
   OrderMaterialRequirementDto,
   OrderOutsourceRequirementDto,
   OrderRouteStepDto,
   OrderSizeBreakdownRow,
   OrderSummary,
 } from '@sewing/shared/orders';
+import {
+  TECH_CARD_MATERIAL_COLOR_RULE_LABELS,
+  getTechCardMaterialRoleLabel,
+} from '@sewing/shared/tech-cards';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 import { ApiRequestError } from '@/lib/api';
+import {
+  ORDER_NOMENCLATURE_SOURCE_BADGE,
+  resolveOrderNomenclature,
+} from '@/lib/order-nomenclature';
 import { getOrder } from '@/lib/orders-api';
 import {
   PASSPORT_STATUS_LABELS,
@@ -17,7 +26,10 @@ import {
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listCuttingClosureRequests } from '@/lib/cutting-closure-api';
 import { StatusBadge } from '@/components/status-badge';
+import { PatternPreviewCard } from '@/components/orders/pattern-preview-card';
+import { MaterialColorForm } from './material-color-form';
 import { OrderActions } from './order-actions';
+import { OutsourceStatusActions } from './outsource-status-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -81,6 +93,13 @@ export default async function OrderDetailPage({
       : [];
   const pendingClosures = closureRequests.filter((r) => r.status === 'REQUESTED');
   const approvedClosures = closureRequests.filter((r) => r.status === 'APPROVED');
+  // Единый resolver «номенклатура заказа» — тот же, что в admin-карточке
+  // и в `PatternPreviewCard`, чтобы менеджер всегда видел одно и то же
+  // название изделия в превью и в мета-блоке (см.
+  // `apps/web/lib/order-nomenclature.ts`). Раньше тут шёл `productName`,
+  // и после переименования `PatternItem` мета-блок «Изделие» расходился
+  // с PatternPreviewCard прямо рядом.
+  const nomenclature = resolveOrderNomenclature(order);
 
   return (
     <div>
@@ -102,38 +121,84 @@ export default async function OrderDetailPage({
         </div>
       </div>
 
-      <div className="card" style={{ marginBottom: '1rem' }}>
-        <div className="meta-grid">
-          <div>
-            <div className="meta-line">Дата заказа</div>
-            <strong>{formatDate(order.orderDate)}</strong>
-          </div>
-          <div>
-            <div className="meta-line">Изделие</div>
-            <strong>{order.productName ?? '—'}</strong>
-          </div>
-          <div>
-            <div className="meta-line">Цвет</div>
-            <strong>{order.color ?? '—'}</strong>
-          </div>
-          <div>
-            <div className="meta-line">Срок (due)</div>
-            <strong>{formatDate(order.dueDate)}</strong>
-          </div>
-        </div>
-        {order.comment && (
-          <>
-            <div className="meta-line" style={{ marginTop: '0.5rem' }}>
-              Комментарий
+      {/*
+        Soft-pattern MVP (этап 2 «Лекала»): мета-карточка слева,
+        превью лекала справа. На широких экранах flex рисует две
+        колонки; на узких — превью лекала уезжает под мета-карточку
+        (`flex-wrap: wrap`). Сетку держим инлайном, чтобы не плодить
+        новые CSS-классы под одну страницу.
+      */}
+      <div
+        style={{
+          display: 'flex',
+          flexWrap: 'wrap',
+          gap: '1rem',
+          marginBottom: '1rem',
+          alignItems: 'flex-start',
+        }}
+      >
+        <div className="card" style={{ flex: '1 1 320px', margin: 0 }}>
+          <div className="meta-grid">
+            <div>
+              <div className="meta-line">Дата заказа</div>
+              <strong>{formatDate(order.orderDate)}</strong>
             </div>
-            <div>{order.comment}</div>
-          </>
-        )}
+            <div>
+              <div className="meta-line">Номенклатура</div>
+              <strong>{nomenclature.name ?? '—'}</strong>
+              {nomenclature.source === 'legacyProduct' && (
+                <span
+                  style={{
+                    display: 'inline-block',
+                    marginLeft: '0.4rem',
+                    padding: '1px 6px',
+                    borderRadius: 999,
+                    background: 'rgba(148, 163, 184, 0.18)',
+                    color: 'rgba(0,0,0,0.55)',
+                    fontSize: '0.7rem',
+                    verticalAlign: 'middle',
+                  }}
+                  title="Историческое изделие без карточки лекала"
+                >
+                  {ORDER_NOMENCLATURE_SOURCE_BADGE.legacyProduct}
+                </span>
+              )}
+            </div>
+            <div>
+              <div className="meta-line">Цвет</div>
+              <strong>{order.color ?? '—'}</strong>
+            </div>
+            <div>
+              <div className="meta-line">Срок (due)</div>
+              <strong>{formatDate(order.dueDate)}</strong>
+            </div>
+          </div>
+          {order.comment && (
+            <>
+              <div className="meta-line" style={{ marginTop: '0.5rem' }}>
+                Комментарий
+              </div>
+              <div>{order.comment}</div>
+            </>
+          )}
+        </div>
+        <div style={{ flex: '0 1 320px', minWidth: 260 }}>
+          <PatternPreviewCard order={order} variant="legacy" />
+        </div>
       </div>
 
       <RouteSnapshotCard steps={order.routeSteps} />
-      <MaterialsSnapshotCard items={order.materialRequirements} />
-      <OutsourceSnapshotCard items={order.outsourceRequirements} />
+      <MaterialsSnapshotCard
+        orderId={order.id}
+        items={order.materialRequirements}
+        canManage={isManager}
+        orderStatus={order.status}
+      />
+      <OutsourceSnapshotCard
+        orderId={order.id}
+        items={order.outsourceRequirements}
+        canManage={isManager}
+      />
 
       {isManager && <OrderActions id={order.id} status={order.status} />}
 
@@ -295,12 +360,36 @@ function ClosureRequestsBanner({
  * `OrdersService.start()`). Здесь UI НЕ догружает live-строки шаблона —
  * это позволило бы поздним правкам техкарты «протекать» в карточку
  * запущенного заказа.
+ *
+ * Этап 3 «Потребности цеха» (см. `docs/recon-soft-integration.md
+ * §«Этап 3»`): к строке добавлены опциональные snapshot-поля
+ * `materialRole` / `fabricType` / `densityGsm` / `plannedWidthCm` /
+ * `colorRule` / `fixedColorText` / `resolvedColorText`. Все nullable,
+ * у старых snapshot-строк (созданных до этапа 3) → пусто. Здесь UI
+ * показывает их одной компактной строкой «meta», ничего не считает —
+ * формула «Потребности цеха» появится позже.
  */
 function MaterialsSnapshotCard({
+  orderId,
   items,
+  canManage,
+  orderStatus,
 }: {
+  orderId: string;
   items: OrderMaterialRequirementDto[];
+  canManage: boolean;
+  orderStatus: OrderDetailDto['status'];
 }) {
+  // Этап «Указать в заказе» (см. ТЗ §7): поле «Цвет» доступно для
+  // редактирования только до запуска производства, чтобы не
+  // расходиться с зафиксированным в работу snapshot-ом. Остальные
+  // статусы — read-only (показываем выбранный цвет / подсказку
+  // без формы).
+  const isColorEditable =
+    canManage &&
+    (orderStatus === 'DRAFT' ||
+      orderStatus === 'CALCULATION' ||
+      orderStatus === 'CALCULATION_DONE');
   return (
     <div className="card" style={{ marginBottom: '1rem' }}>
       <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>Материалы</h2>
@@ -310,18 +399,124 @@ function MaterialsSnapshotCard({
         </div>
       ) : (
         <ol style={{ margin: 0, paddingLeft: '1.25rem' }}>
-          {items.map((m) => (
-            <li key={m.id}>
-              <strong>{m.name}</strong>{' '}
-              <span className="meta-line">
-                — {m.totalQty} {m.unit}
-              </span>
-              <div className="meta-line">
-                Норма: {m.qtyPerUnit} {m.unit} / 1 шт
-                {m.note ? <> · {m.note}</> : null}
-              </div>
-            </li>
-          ))}
+          {items.map((m) => {
+            // Этап 3: собираем «параметры для потребности» в одну
+            // строку, чтобы не раздувать карточку. Показываем только
+            // непустые сегменты — для старых snapshot-строк блок
+            // полностью отсутствует. Для роли используем
+            // `getTechCardMaterialRoleLabel` (он же знает «Фурнитура»
+            // для PACKAGING; см. ТЗ §1).
+            const needsParts: string[] = [];
+            if (m.materialRole) {
+              needsParts.push(
+                `Роль: ${getTechCardMaterialRoleLabel(m.materialRole)}`,
+              );
+            }
+            if (m.fabricType) {
+              needsParts.push(`Полотно: ${m.fabricType}`);
+            }
+            if (m.densityGsm != null) {
+              needsParts.push(`Плотность: ${m.densityGsm} г/м²`);
+            }
+            if (m.plannedWidthCm != null) {
+              needsParts.push(`Ширина: ${m.plannedWidthCm} см`);
+            }
+            // Этап «Фурнитура»: показываем размер/материал, если
+            // заполнено (свойственно PACKAGING).
+            if (m.hardwareSizeText) {
+              needsParts.push(`Размер: ${m.hardwareSizeText}`);
+            }
+            if (m.hardwareMaterialText) {
+              needsParts.push(`Материал: ${m.hardwareMaterialText}`);
+            }
+            // «Цвет» показываем приоритетно: snapshot-цвет
+            // `resolvedColorText` (если посчитан), иначе сырое
+            // правило. Для `ORDER_SELECTED_COLOR` пока цвет не
+            // выбран — показываем подсказку через MaterialColorForm
+            // ниже, в этой строке метка не дублируется.
+            if (m.resolvedColorText) {
+              needsParts.push(`Цвет: ${m.resolvedColorText}`);
+            } else if (
+              m.colorRule &&
+              m.colorRule !== 'ORDER_SELECTED_COLOR'
+            ) {
+              const ruleLabel =
+                TECH_CARD_MATERIAL_COLOR_RULE_LABELS[m.colorRule];
+              needsParts.push(`Цвет: ${ruleLabel}`);
+            }
+            const requiresColor = m.requiresColorSelection === true;
+            return (
+              <li key={m.id}>
+                <strong>{m.name}</strong>{' '}
+                <span className="meta-line">
+                  — {m.totalQty} {m.unit}
+                </span>
+                <div className="meta-line">
+                  Норма: {m.qtyPerUnit} {m.unit} / 1 шт
+                  {m.note ? <> · {m.note}</> : null}
+                </div>
+                {needsParts.length > 0 && (
+                  <div className="meta-line">{needsParts.join(' · ')}</div>
+                )}
+                {/*
+                  Этап «Изображение материала» (см. ТЗ §5): мини-превью
+                  по `materialImageUrl`. Для строк без URL ничего не
+                  отрисовываем — UI остаётся компактным.
+                */}
+                {m.materialImageUrl && (
+                  <div className="meta-line" style={{ marginTop: 4 }}>
+                    <a
+                      href={m.materialImageUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={m.materialImageUrl}
+                        alt={
+                          m.materialImageOriginalFileName ??
+                          'Изображение материала'
+                        }
+                        style={{
+                          maxHeight: 48,
+                          maxWidth: 64,
+                          objectFit: 'contain',
+                          border: '1px solid #e5e7eb',
+                          borderRadius: 4,
+                        }}
+                      />
+                    </a>
+                  </div>
+                )}
+                {/*
+                  Этап «Указать в заказе» (см. ТЗ §4, §7): если по строке
+                  требуется выбрать цвет, показываем inline-форму с
+                  подсказкой «Цвет нужно указать в заказе» и сохранением
+                  через action. Форма видна только менеджерам и только
+                  до запуска производства (DRAFT/CALCULATION/
+                  CALCULATION_DONE). На IN_PRODUCTION/DONE/CANCELLED
+                  показываем read-only метку — snapshot заморожен.
+                */}
+                {requiresColor && isColorEditable && (
+                  <MaterialColorForm
+                    orderId={orderId}
+                    requirementId={m.id}
+                    initialValue={m.selectedColorText ?? null}
+                  />
+                )}
+                {requiresColor && !isColorEditable && (
+                  <div
+                    className="meta-line"
+                    style={{ marginTop: 4, fontStyle: 'italic' }}
+                  >
+                    {m.selectedColorText
+                      ? `Цвет: ${m.selectedColorText}`
+                      : 'Цвет нужно указать в заказе'}
+                  </div>
+                )}
+              </li>
+            );
+          })}
         </ol>
       )}
     </div>
@@ -329,21 +524,51 @@ function MaterialsSnapshotCard({
 }
 
 /**
- * Tech card MVP (ADR-0022): read-only snapshot строк внешних подрядных
+ * Tech card MVP (ADR-0022): snapshot строк внешних подрядных
  * размещений (OUTSOURCED_SERVICE) на заказе. Источник истины —
- * `OrderOutsourceRequirement`. Семантика та же, что у
+ * `OrderOutsourceRequirement`. Семантика данных та же, что у
  * `MaterialsSnapshotCard`.
+ *
+ * MVP-2 (ADR-0022 §«Cut-ready readiness»): для строк с
+ * `triggerType === 'CUT_READY'` показываем индикатор готовности
+ * (`isReadyToOrder` / `readinessLabel`), вычисленный backend-ом по
+ * правилу ALL_PASSPORTS.
+ *
+ * MVP-3 (ADR-0022 §«Manual execution status»): к строке добавлена
+ * композитная подпись `displayStatusLabel` и две action-кнопки
+ * («Отметить как заказано», «Отметить как получено»). Кнопки
+ * показываются только менеджерским ролям (`canManage = true`) и
+ * только когда соответствующий переход допустим. Никаких dropdown/
+ * select-ов и inline-edit полей в этом блоке намеренно нет —
+ * операционная карточка, не ERP.
  */
 function OutsourceSnapshotCard({
+  orderId,
   items,
+  canManage,
 }: {
+  orderId: string;
   items: OrderOutsourceRequirementDto[];
+  canManage: boolean;
 }) {
+  // MVP-2: общая «шапка-заметка» над блоком, если в заказе есть хотя
+  // бы одна строка CUT_READY и крой ещё не готов. Показываем только
+  // когда это действительно даёт менеджеру контекст; в остальных
+  // случаях ничего не дорисовываем.
+  const hasCutReadyAwaiting = items.some(
+    (o) => o.triggerType === 'CUT_READY' && !o.isReadyToOrder,
+  );
   return (
     <div className="card" style={{ marginBottom: '1rem' }}>
       <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>
         Внешние потребности
       </h2>
+      {hasCutReadyAwaiting && (
+        <div className="meta-line" style={{ marginBottom: '0.4rem' }}>
+          Часть внешних потребностей станет доступна после размещения
+          кроя в ячейки.
+        </div>
+      )}
       {items.length === 0 ? (
         <div className="meta-line">
           Внешние потребности для заказа не зафиксированы
@@ -353,6 +578,28 @@ function OutsourceSnapshotCard({
           {items.map((o) => {
             const showTotal = o.totalQty != null && o.unit != null;
             const showNorm = o.qtyPerUnit != null && o.unit != null;
+            // MVP-3: цветовой акцент подписи статуса.
+            //   - RECEIVED — нейтральный «успех» (зелёный)
+            //   - ORDERED — янтарный (внимание: ждём подрядчика)
+            //   - READY_TO_ORDER — зелёный (как у readinessLabel)
+            //   - PLANNED + CUT_READY — янтарный (Ожидает размещения)
+            //   - PLANNED + MANUAL — без подписи (label = null)
+            const statusColor =
+              o.displayStatus === 'RECEIVED'
+                ? '#1f7a1f'
+                : o.displayStatus === 'READY_TO_ORDER'
+                ? '#1f7a1f'
+                : o.displayStatus === 'ORDERED'
+                ? '#9c6a00'
+                : '#9c6a00';
+            const orderedMeta =
+              o.displayStatus === 'ORDERED' && o.orderedAt
+                ? `Отмечено: ${formatDateTime(o.orderedAt)}`
+                : null;
+            const receivedMeta =
+              o.displayStatus === 'RECEIVED' && o.receivedAt
+                ? `Получено: ${formatDateTime(o.receivedAt)}`
+                : null;
             return (
               <li key={o.id}>
                 <strong>{o.name}</strong>
@@ -370,8 +617,33 @@ function OutsourceSnapshotCard({
                     Норма: {o.qtyPerUnit} {o.unit} / 1 шт
                   </div>
                 ) : null}
-                {o.note ? (
-                  <div className="meta-line">{o.note}</div>
+                {o.note ? <div className="meta-line">{o.note}</div> : null}
+                {o.displayStatusLabel ? (
+                  <div
+                    className="meta-line"
+                    style={{
+                      marginTop: '0.2rem',
+                      color: statusColor,
+                      fontWeight: 600,
+                    }}
+                  >
+                    {o.displayStatusLabel}
+                  </div>
+                ) : null}
+                {orderedMeta ? (
+                  <div className="meta-line">{orderedMeta}</div>
+                ) : null}
+                {receivedMeta ? (
+                  <div className="meta-line">{receivedMeta}</div>
+                ) : null}
+                {canManage ? (
+                  <OutsourceStatusActions
+                    orderId={orderId}
+                    requirementId={o.id}
+                    displayStatus={o.displayStatus}
+                    triggerType={o.triggerType}
+                    isReadyToOrder={o.isReadyToOrder}
+                  />
                 ) : null}
               </li>
             );

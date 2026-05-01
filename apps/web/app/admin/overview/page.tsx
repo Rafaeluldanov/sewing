@@ -1,19 +1,22 @@
 import Link from 'next/link';
+import { Activity, RefreshCw } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getAdminOverview } from '@/lib/admin-api';
 import type { AdminOverviewDto } from '@sewing/shared/admin';
+import {
+  AdminCard,
+  AdminPageShell,
+  AdminSectionHeader,
+  AdminStatusBadge,
+} from '@/components/admin';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Operational overview page (Шаг 12 / Pilot Rollout).
+ * Operational overview (Admin UI 2.5, ADR-0014).
  *
- * Простая read-only страница для начальника цеха: какие смены сейчас
- * активны, какие коробки открыты, какие паспорта в работе, плюс
- * счётчики «движения» системы. Без поллинга и без графиков — кнопка
- * «Обновить» просто перезагружает страницу.
- *
- * Контракт API — `docs/api.md §11a`. UI — `docs/screens.md §10`.
+ * Backend / DTO не меняем. Read-only страница: счётчики + три
+ * таблицы. Без поллинга, кнопка «Обновить» делает GET страницы.
  */
 export default async function AdminOverviewPage() {
   let overview: AdminOverviewDto | null = null;
@@ -29,12 +32,17 @@ export default async function AdminOverviewPage() {
 
   if (!overview) {
     return (
-      <div className="admin-overview">
-        <header className="admin-overview__header">
-          <h1>Операционный обзор</h1>
-        </header>
-        {error && <div className="error-box">{error}</div>}
-      </div>
+      <AdminPageShell
+        icon={<Activity size={22} strokeWidth={1.6} aria-hidden />}
+        title="Операционный обзор"
+        subtitle="Состояние производства сейчас"
+      >
+        {error && (
+          <div className="error-box" role="alert">
+            {error}
+          </div>
+        )}
+      </AdminPageShell>
     );
   }
 
@@ -42,18 +50,27 @@ export default async function AdminOverviewPage() {
   const updatedAtLabel = new Date(overview.updatedAt).toLocaleString('ru-RU');
 
   return (
-    <div className="admin-overview">
-      <header className="admin-overview__header">
-        <div>
-          <h1>Операционный обзор</h1>
-          <div className="meta-line">Обновлено: {updatedAtLabel}</div>
-        </div>
+    <AdminPageShell
+      icon={<Activity size={22} strokeWidth={1.6} aria-hidden />}
+      title="Операционный обзор"
+      subtitle={`Обновлено ${updatedAtLabel}`}
+      actions={
         <form action="">
-          <button type="submit" className="btn">↻ Обновить</button>
+          <button type="submit" className="admin-btn">
+            <RefreshCw size={16} strokeWidth={1.6} aria-hidden />
+            Обновить
+          </button>
         </form>
-      </header>
-
-      <section className="admin-overview__counters">
+      }
+    >
+      <section
+        className="admin-overview__counters"
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+          gap: 'var(--admin-space-md)',
+        }}
+      >
         <Counter label="Активные смены" value={c.activeShifts} />
         <Counter label="Открытые коробки" value={c.openBoxes} />
         <Counter label="Паспорта в работе" value={c.passportsInProgress} />
@@ -62,12 +79,17 @@ export default async function AdminOverviewPage() {
         <Counter label="Событий за 24ч" value={c.eventsLast24h} />
       </section>
 
-      <section>
-        <h2>Активные смены</h2>
+      <AdminCard>
+        <AdminSectionHeader
+          title="Активные смены"
+          hint={`${overview.shifts.length}`}
+        />
         {overview.shifts.length === 0 ? (
-          <div className="empty-hint">Нет активных смен.</div>
+          <p className="admin-muted" style={{ margin: 0 }}>
+            Нет активных смен.
+          </p>
         ) : (
-          <table className="data-table">
+          <table className="admin-table">
             <thead>
               <tr>
                 <th>С</th>
@@ -81,27 +103,32 @@ export default async function AdminOverviewPage() {
                 <tr key={s.shiftId}>
                   <td>{new Date(s.startedAt).toLocaleTimeString('ru-RU')}</td>
                   <td>
-                    {s.employeeName} <span className="meta-line">({s.employeeRole})</span>
+                    {s.employeeName}
+                    <span className="admin-muted" style={{ fontSize: '0.8rem' }}>
+                      {' · '}
+                      {s.employeeRole}
+                    </span>
                   </td>
-                  <td>
-                    {s.operationName} <span className="meta-line">{s.operationCode}</span>
-                  </td>
-                  <td>
-                    {s.equipmentName} <span className="meta-line">{s.equipmentCode}</span>
-                  </td>
+                  <td>{s.operationName}</td>
+                  <td>{s.equipmentName}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         )}
-      </section>
+      </AdminCard>
 
-      <section>
-        <h2>Открытые коробки</h2>
+      <AdminCard>
+        <AdminSectionHeader
+          title="Открытые коробки"
+          hint={`${overview.openBoxes.length}`}
+        />
         {overview.openBoxes.length === 0 ? (
-          <div className="empty-hint">Открытых коробок нет.</div>
+          <p className="admin-muted" style={{ margin: 0 }}>
+            Открытых коробок нет.
+          </p>
         ) : (
-          <table className="data-table">
+          <table className="admin-table">
             <thead>
               <tr>
                 <th>Коробка</th>
@@ -117,8 +144,11 @@ export default async function AdminOverviewPage() {
                     <Link href={`/packing/boxes/${b.boxId}`}>{b.number}</Link>
                   </td>
                   <td>
-                    {b.totalQty} / {b.maxQty}{' '}
-                    <span className="meta-line">({b.itemsCount} паспортов)</span>
+                    {b.totalQty} / {b.maxQty}
+                    <span className="admin-muted" style={{ fontSize: '0.8rem' }}>
+                      {' '}
+                      ({b.itemsCount})
+                    </span>
                   </td>
                   <td>
                     {b.productName ? (
@@ -126,7 +156,7 @@ export default async function AdminOverviewPage() {
                         {b.productName} · {b.color} · {b.sizeCode}
                       </>
                     ) : (
-                      <span className="meta-line">—</span>
+                      <span className="admin-muted">—</span>
                     )}
                   </td>
                   <td>{new Date(b.createdAt).toLocaleString('ru-RU')}</td>
@@ -135,14 +165,19 @@ export default async function AdminOverviewPage() {
             </tbody>
           </table>
         )}
-      </section>
+      </AdminCard>
 
-      <section>
-        <h2>Паспорта в работе и в ячейках</h2>
+      <AdminCard>
+        <AdminSectionHeader
+          title="Паспорта в работе и в ячейках"
+          hint={`${overview.passports.length}`}
+        />
         {overview.passports.length === 0 ? (
-          <div className="empty-hint">Сейчас в цехе нет живых паспортов.</div>
+          <p className="admin-muted" style={{ margin: 0 }}>
+            Сейчас в цехе нет живых паспортов.
+          </p>
         ) : (
-          <table className="data-table">
+          <table className="admin-table">
             <thead>
               <tr>
                 <th>Паспорт</th>
@@ -158,37 +193,37 @@ export default async function AdminOverviewPage() {
                 <tr key={p.passportId}>
                   <td>
                     <Link href={`/passports/${p.passportId}`}>{p.number}</Link>{' '}
-                    <span className={`status-badge ${p.status.toLowerCase()}`}>
+                    <AdminStatusBadge
+                      tone={p.status === 'IN_PROGRESS' ? 'info' : 'muted'}
+                    >
                       {p.status === 'IN_PROGRESS' ? 'В работе' : 'Создан'}
-                    </span>
+                    </AdminStatusBadge>
                   </td>
                   <td>
                     {p.productName} · {p.color}
                   </td>
                   <td>{p.sizeCode}</td>
                   <td>
-                    {p.qtyCut}{' '}
+                    {p.qtyCut}
                     {p.qtyGood !== p.qtyCut && (
-                      <span className="meta-line">(годных {p.qtyGood})</span>
+                      <span className="admin-muted" style={{ fontSize: '0.8rem' }}>
+                        {' '}
+                        (годных {p.qtyGood})
+                      </span>
                     )}
                   </td>
                   <td>
                     {p.location === 'EMPLOYEE' && p.currentEmployeeName}
-                    {p.location === 'CELL' && (
-                      <>ячейка {p.currentCellCode}</>
-                    )}
+                    {p.location === 'CELL' && <>ячейка {p.currentCellCode}</>}
                     {p.location === 'UNASSIGNED' && (
-                      <span className="meta-line">—</span>
+                      <span className="admin-muted">—</span>
                     )}
                   </td>
                   <td>
                     {p.currentOperationName ? (
-                      <>
-                        {p.currentOperationName}{' '}
-                        <span className="meta-line">{p.currentOperationCode}</span>
-                      </>
+                      <>{p.currentOperationName}</>
                     ) : (
-                      <span className="meta-line">—</span>
+                      <span className="admin-muted">—</span>
                     )}
                   </td>
                 </tr>
@@ -196,16 +231,26 @@ export default async function AdminOverviewPage() {
             </tbody>
           </table>
         )}
-      </section>
-    </div>
+      </AdminCard>
+    </AdminPageShell>
   );
 }
 
 function Counter({ label, value }: { label: string; value: number }) {
   return (
-    <div className="admin-overview__counter">
-      <div className="admin-overview__counter-value">{value}</div>
-      <div className="admin-overview__counter-label">{label}</div>
+    <div
+      className="admin-card"
+      style={{
+        padding: 'var(--admin-space-md)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 4,
+      }}
+    >
+      <div style={{ fontSize: '1.5rem', fontWeight: 700 }}>{value}</div>
+      <div className="admin-muted" style={{ fontSize: '0.85rem' }}>
+        {label}
+      </div>
     </div>
   );
 }

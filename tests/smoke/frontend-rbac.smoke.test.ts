@@ -351,16 +351,23 @@ describe('legacy /work disabled for QC / IRONING / PACKING', () => {
     expect(src).not.toMatch(/Получить крой/);
   });
 
-  test('QcTerminal не содержит legacy work-tabs «Получить крой / Сканировать паспорт» и кнопки «Завершить смену»', () => {
+  test('QcTerminal не содержит legacy work-tabs «Получить крой» и не использует старый ShiftStartForm', () => {
     const src = readSrc('apps/web/app/qc/qc-terminal.tsx');
     expect(src).not.toMatch(/Получить крой/);
     expect(src).not.toMatch(/work-tab/);
-    expect(src).not.toMatch(/Завершить смену/);
-    // На /qc нет Start Shift form для QC — у QC нет сменной ротации
-    // оборудования (см. `apps/api/src/modules/qc/qc.service.ts` —
-    // никаких `requireShift`).
+    // У ОТК тоже есть смена: нужна для backend-инварианта
+    // `SHIFT_SESSION_REQUIRED` в `PassportsService.scanOnOperation`
+    // (см. `docs/flows.md §F5`). Поэтому терминал реюзает тот же
+    // `SeamstressShiftStart`, что и швея/упаковщик. Кнопка
+    // «Завершить смену» живёт в общем `SeamstressActionsMenu` (как
+    // у `/work` и `/packing`), а не как большая красная кнопка прямо
+    // на терминале — поэтому inline-`<button>Завершить смену</button>`
+    // здесь по-прежнему быть не должно. Но импорт меню легально
+    // упоминает компонент, поэтому regex прижат к JSX-контексту.
+    expect(src).not.toMatch(/<button[^>]*>\s*Завершить смену/);
+    // Старый ShiftStartForm (полный list-pick UI для менеджера) на
+    // /qc не используется — мы реюзаем mobile-first SeamstressShiftStart.
     expect(src).not.toMatch(/ShiftStartForm/);
-    expect(src).not.toMatch(/SeamstressShiftStart/);
   });
 });
 
@@ -403,6 +410,66 @@ describe('cutter-assistant simplified order picker', () => {
     expect(src).toMatch(/На рабочее место/);
     expect(src).toMatch(/getCurrentUserOrNull/);
   });
+
+  test('createPassportAction принимает mode (redirect|inline) и поддерживает closure.kind="skipped"', () => {
+    // Контракт server action: режим post-success-поведения
+    // прокидывается через `bind()` со страницы (а не из FormData),
+    // чтобы клиент не мог его подменить. Для menu-пользователей
+    // mode='redirect' (старое поведение, redirect на
+    // `/passports/[id]`). Для CUTTER_ASSISTANT — mode='inline',
+    // server action возвращает success без редиректа, и UI
+    // показывает компактный пост-релизный блок.
+    const src = readSrc('apps/web/app/orders/[id]/passports/actions.ts');
+    expect(src).toMatch(/export type CreatePassportMode/);
+    expect(src).toMatch(/'redirect'/);
+    expect(src).toMatch(/'inline'/);
+    // Сигнатура action: orderId, productId, mode, _prev, form.
+    expect(src).toMatch(
+      /createPassportAction\([\s\S]*?orderId: string,[\s\S]*?productId: string \| null,[\s\S]*?mode: CreatePassportMode/,
+    );
+    // success теперь несёт snapshot для компактного блока.
+    expect(src).toMatch(/qtyCut: number/);
+    expect(src).toMatch(/rollNumber: string/);
+    // closure ветка 'skipped' — это inline-режим без чекбокса
+    // «Подать заявку на закрытие раскроя».
+    expect(src).toMatch(/kind: 'skipped'/);
+    // Между ветками: для inline без closure НЕ редиректим.
+    expect(src).toMatch(
+      /if \(mode === 'inline'\)[\s\S]*?closure: \{ kind: 'skipped' \}/,
+    );
+  });
+
+  test('NewPassportForm у CUTTER_ASSISTANT показывает компактный пост-релизный блок (печать + Выпустить следующий)', () => {
+    const src = readSrc(
+      'apps/web/app/orders/[id]/passports/new/new-passport-form.tsx',
+    );
+    // Проп `isCutterAssistant` обязателен и приходит сверху —
+    // источник истины для режима. На клиенте также используется как
+    // `mode = isCutterAssistant ? 'inline' : 'redirect'`.
+    expect(src).toMatch(/isCutterAssistant: boolean/);
+    expect(src).toMatch(
+      /isCutterAssistant \? 'inline' : 'redirect'/,
+    );
+    // Компактный success-блок и его тексты — как в ТЗ
+    // («упрощение UX помощника раскройщика», см. docs/screens.md §7.5).
+    expect(src).toMatch(/CutterAssistantSuccessCard/);
+    expect(src).toMatch(/Паспорт \{passport\.number\} выпущен\./);
+    expect(src).toMatch(/label="Распечатать паспорт"/);
+    expect(src).toMatch(/Выпустить следующий/);
+    // «Распечатать» — переиспользуем общий PrintButton (а не свой),
+    // и рассчитываем fallback на печатную HTML-форму так же, как на
+    // /passports/[id].
+    expect(src).toMatch(/import \{ PrintButton \}/);
+    expect(src).toMatch(/sourceType="PASSPORT_PRINT"/);
+    expect(src).toMatch(/buildPassportPrintPath\(passport\.id\)/);
+    // «Выпустить следующий» сбрасывается через key-bump во внешней
+    // обёртке (useFormState reset недоступен иначе).
+    expect(src).toMatch(/onIssueAnother/);
+    expect(src).toMatch(/key=\{iteration\}/);
+    // Большая карточка `/passports/[id]` остаётся доступной по
+    // прямой ссылке — но не как primary action.
+    expect(src).toMatch(/\/passports\/\$\{passport\.id\}/);
+  });
 });
 
 describe('QC scan-driven terminal (/qc)', () => {
@@ -428,8 +495,11 @@ describe('QC scan-driven terminal (/qc)', () => {
     // Звуковой и тактильный фидбек переиспользуем из /work.
     expect(src).toMatch(/playOperationCompletedSound/);
     expect(src).toMatch(/playCutAcceptedSound/);
-    // На терминале есть аварийный «Выйти» — глобальный header скрыт.
-    expect(src).toMatch(/logoutAction/);
+    // «Выйти» / «Завершить смену» теперь живут в общем
+    // SeamstressActionsMenu (как у швеи и упаковщика) — глобальный
+    // header на /qc у роли QC скрыт. Inline-форма logoutAction
+    // больше не нужна.
+    expect(src).toMatch(/SeamstressActionsMenu/);
   });
 
   test('AppHeader скрыт у роли QC на /qc', () => {

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeQc } from '@/lib/rbac';
+import { CallMasterButton } from '@/components/call-master-button';
 
 /**
  * Route-level guard для всего раздела `/qc/*`.
@@ -21,5 +22,15 @@ export default async function QcSectionLayout({
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/qc');
   if (!canSeeQc(me.user.role)) redirect('/');
-  return <>{children}</>;
+  // Кнопка «Мастер» — только для роли терминала (`QC`). Менеджер /
+  // админ заходит сюда наблюдательно и звать мастера со своих
+  // экранов им не нужно (см. `docs/flows.md §«Вызов мастера»`,
+  // backend `@Roles(...)` всё равно отрежет лишних).
+  const showMasterCall = me.user.role === 'QC';
+  return (
+    <>
+      {children}
+      {showMasterCall ? <CallMasterButton /> : null}
+    </>
+  );
 }

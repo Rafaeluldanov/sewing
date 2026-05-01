@@ -28,6 +28,7 @@ import {
   PassportAlreadyPackedException,
   PassportAlreadyPlacedException,
   PassportCancelledException,
+  PassportCompleteBackwardException,
   PassportCuttingClosedException,
   PassportNotInCellException,
   PassportNotInProgressException,
@@ -44,6 +45,8 @@ import { PassportNumberService } from './passport-number.service.js';
 import { buildPassportPrintUrl, buildPassportQrPayload } from './qr.js';
 import { EarningsService } from '../earnings/earnings.service.js';
 import { CuttingClosureService } from '../cutting-closure/cutting-closure.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { CutReleasePolicyService } from '../cut-release-policy/cut-release-policy.service.js';
 
 type PassportRow = Prisma.PassportGetPayload<{
   include: {
@@ -78,6 +81,8 @@ export class PassportsService {
     private readonly numbers: PassportNumberService,
     private readonly earnings: EarningsService,
     private readonly closure: CuttingClosureService,
+    private readonly audit: AuditService,
+    private readonly cutReleasePolicy: CutReleasePolicyService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -389,6 +394,26 @@ export class PassportsService {
           qty: passport.qtyCut,
         },
       });
+      // Audit (см. `docs/domain.md §«Audit log»`): фиксируем ровно
+      // тот срез, который полезен для разбора инцидента — на какую
+      // ячейку поставили и сколько штук физически легло. `employeeId`
+      // на endpoint `/place` явно не приходит (это операция
+      // помощника раскройщика, выполняется без активной смены), —
+      // оставляем `null`, чтобы не угадывать актора.
+      await this.audit.log(
+        {
+          event: 'PASSPORT_PLACED',
+          entityType: 'PASSPORT',
+          entityId: passport.id,
+          payload: {
+            cellId: cell.id,
+            cellCode: cell.code,
+            sizeId: passport.sizeId,
+            qty: passport.qtyCut,
+          },
+        },
+        tx,
+      );
     });
 
     const [detail, cellDetail] = await Promise.all([
@@ -415,6 +440,24 @@ export class PassportsService {
    * перемещение на конкретную операцию. Первый `scan` у швеи на её
    * рабочем месте создаст `OPERATION_SCAN` и переведёт паспорт на
    * `session.operationId`.
+   *
+   * **Route-WIP исключение (soft-route MVP, см. `docs/domain.md §18`,
+   * `docs/flows.md §F3a`).** Если у заказа есть snapshot маршрута и
+   * паспорт уже вошёл в маршрутный поток (`currentRouteStepIndex !==
+   * null` — ставится при создании паспорта, если у заказа есть
+   * `OrderRouteStep[]`), то размещение в ячейке между маршрутными
+   * шагами **не обязательно**: следующий исполнитель может «получить
+   * крой» прямо из руки предыдущего сотрудника / помощника
+   * раскройщика (выпустившего паспорт после CUT_DIVISION). В этом
+   * случае мы:
+   *   - не кидаем `PASSPORT_NOT_IN_CELL`;
+   *   - не кидаем `PASSPORT_ALREADY_ISSUED` за «висящего creator»
+   *     (status=CREATED) и за «свободного» паспорта после
+   *     `complete-operation` (currentEmployeeId=null);
+   *   - не трогаем `CellContent` (нечего вычитать);
+   *   - идемпотентны для того же сотрудника на IN_PROGRESS.
+   * Для немаршрутных заказов и для маршрутных, у которых паспорт
+   * лежит в ячейке как буфер, поведение остаётся прежним (legacy).
    */
   async issueToEmployee(
     passportId: string,
@@ -434,38 +477,140 @@ export class PassportsService {
     this.assertPassportActive(passport.status);
 
     // Активная смена сотрудника обязательна (см. docs/flows.md §F8).
+    // Подтягиваем `operation.category` — нужно для Stage 3 «Мастер цеха»
+    // (политика выдачи кроя проверяется только на ПЕРВОЙ операции
+    // маршрута или операциях категории `CUTTING`).
     const session = await this.prisma.shiftSession.findFirst({
       where: { employeeId, endedAt: null },
+      include: { operation: { select: { category: true } } },
     });
     if (!session) throw new ShiftSessionRequiredException();
 
-    // «Паспорт уже выдан»: закреплён за сотрудником, но не в ячейке.
-    if (passport.currentEmployeeId && !passport.currentCellId) {
+    // Stage 3 «Мастер цеха» — политика выдачи кроя. Сравниваем
+    // снимок паспорта с активной политикой ДО открытия транзакции,
+    // чтобы при reject не плодить пустые audit-записи. Сама конкуренция
+    // по `consumedQty` защищается conditional `updateMany` ниже,
+    // внутри транзакции выдачи. Подробнее — в
+    // `apps/api/src/modules/cut-release-policy/cut-release-policy.service.ts`.
+    const policyEnforcement = await this.evaluateCutReleasePolicyForIssue(
+      passport,
+      session.operation.category,
+    );
+
+    // Soft-route MVP: «паспорт в маршрутном потоке» = у заказа есть
+    // snapshot `OrderRouteStep[]` (а значит и `currentRouteStepIndex`
+    // был проставлен при `Passport.create()`). Это самый дешёвый и
+    // устойчивый признак: дополнительной колонки/таблицы не нужно,
+    // ровно один select по уже загруженным полям паспорта.
+    const isRouteWip = passport.currentRouteStepIndex !== null;
+
+    if (passport.currentCellId) {
+      // Legacy / буферная ветка: паспорт лежит в ячейке (с маршрутом
+      // или без — неважно). Идём по старой транзакции с декрементом
+      // CellContent — это не должно меняться, чтобы заказы без
+      // маршрута и опциональное буферное хранение работали как раньше.
+      await this.prisma.$transaction(async (tx) => {
+        const content = await tx.cellContent.findUnique({
+          where: {
+            cellId_sizeId: {
+              cellId: passport.currentCellId!,
+              sizeId: passport.sizeId,
+            },
+          },
+        });
+        if (content) {
+          const nextQty = Math.max(content.quantity - passport.qtyCut, 0);
+          await tx.cellContent.update({
+            where: { id: content.id },
+            data: { quantity: nextQty },
+          });
+        }
+        await tx.passport.update({
+          where: { id: passport.id },
+          data: {
+            currentCellId: null,
+            currentEmployeeId: employeeId,
+            status: PassportStatus.IN_PROGRESS,
+          },
+        });
+        await tx.passportEvent.create({
+          data: {
+            passportId: passport.id,
+            type: PassportEventType.ISSUED_TO_EMPLOYEE,
+            cellId: passport.currentCellId,
+            operationId: session.operationId,
+            employeeId,
+            qty: passport.qtyCut,
+          },
+        });
+        // Audit (см. `docs/domain.md §«Audit log»`): legacy/буферная
+        // ветка — фиксируем источник (ячейка) и операцию, на которой
+        // швея «получила крой». `mode = FROM_CELL` — простой
+        // дискриминатор для будущей фильтрации по типу выдачи.
+        await this.audit.log(
+          {
+            event: 'PASSPORT_ISSUED',
+            entityType: 'PASSPORT',
+            entityId: passport.id,
+            employeeId,
+            payload: {
+              mode: 'FROM_CELL',
+              fromCellId: passport.currentCellId,
+              operationId: session.operationId,
+              qty: passport.qtyCut,
+            },
+          },
+          tx,
+        );
+        await this.consumeCutReleasePolicyInTx(tx, policyEnforcement, {
+          passportId: passport.id,
+          employeeId,
+          qty: passport.qtyCut,
+          mode: 'FROM_CELL',
+        });
+      });
+
+      this.logger.log(
+        `event=passport.issue passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId}`,
+      );
+      return this.getOne(passportId);
+    }
+
+    // currentCellId === null. Без маршрута — старое поведение: ячейка
+    // обязательна, поэтому либо «уже выдан», либо «не на ячейке».
+    if (!isRouteWip) {
+      if (passport.currentEmployeeId) {
+        throw new PassportAlreadyIssuedException();
+      }
+      throw new PassportNotInCellException();
+    }
+
+    // Route-WIP без ячейки: разрешаем «получить крой» прямо в маршруте.
+    // Идемпотентность: тот же сотрудник на IN_PROGRESS — no-op
+    // (точно так же ведёт себя `scan`, см. ADR-0003 §6).
+    if (
+      passport.status === PassportStatus.IN_PROGRESS &&
+      passport.currentEmployeeId === employeeId
+    ) {
+      return this.getOne(passportId);
+    }
+    // Реальный конфликт: паспорт уже у другого исполнителя в работе.
+    // Только этот случай оставляем как `PASSPORT_ALREADY_ISSUED` —
+    // creator (status=CREATED) и пустой owner после complete-operation
+    // не блокируем, иначе маршрутный поток после CUT_DIVISION /
+    // между sewing-шагами не пойдёт.
+    if (
+      passport.status === PassportStatus.IN_PROGRESS &&
+      passport.currentEmployeeId &&
+      passport.currentEmployeeId !== employeeId
+    ) {
       throw new PassportAlreadyIssuedException();
     }
-    // Можно выдавать только то, что лежит в ячейке.
-    if (!passport.currentCellId) throw new PassportNotInCellException();
 
     await this.prisma.$transaction(async (tx) => {
-      const content = await tx.cellContent.findUnique({
-        where: {
-          cellId_sizeId: {
-            cellId: passport.currentCellId!,
-            sizeId: passport.sizeId,
-          },
-        },
-      });
-      if (content) {
-        const nextQty = Math.max(content.quantity - passport.qtyCut, 0);
-        await tx.cellContent.update({
-          where: { id: content.id },
-          data: { quantity: nextQty },
-        });
-      }
       await tx.passport.update({
         where: { id: passport.id },
         data: {
-          currentCellId: null,
           currentEmployeeId: employeeId,
           status: PassportStatus.IN_PROGRESS,
         },
@@ -474,16 +619,40 @@ export class PassportsService {
         data: {
           passportId: passport.id,
           type: PassportEventType.ISSUED_TO_EMPLOYEE,
-          cellId: passport.currentCellId,
+          // cellId = null — у route-WIP паспорта ячейки нет.
           operationId: session.operationId,
           employeeId,
           qty: passport.qtyCut,
         },
       });
+      // Audit: route-WIP ветка («получили крой» прямо в маршруте,
+      // без ячейки). `mode = ROUTE_WIP` отличает от `FROM_CELL` —
+      // полезно для отчётности «сколько паспортов прошло через
+      // прямую передачу из рук в руки».
+      await this.audit.log(
+        {
+          event: 'PASSPORT_ISSUED',
+          entityType: 'PASSPORT',
+          entityId: passport.id,
+          employeeId,
+          payload: {
+            mode: 'ROUTE_WIP',
+            operationId: session.operationId,
+            qty: passport.qtyCut,
+          },
+        },
+        tx,
+      );
+      await this.consumeCutReleasePolicyInTx(tx, policyEnforcement, {
+        passportId: passport.id,
+        employeeId,
+        qty: passport.qtyCut,
+        mode: 'ROUTE_WIP',
+      });
     });
 
     this.logger.log(
-      `event=passport.issue passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId}`,
+      `event=passport.issue.routed passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId}`,
     );
     return this.getOne(passportId);
   }
@@ -604,6 +773,26 @@ export class PassportsService {
         qty: passport.qtyCut,
         sourceEventId: event.id,
       });
+      // Audit: фиксируем переход на новую операцию — это самое
+      // частое движение паспорта и самый ценный срез для разбора
+      // («куда и от кого ушла партия»). Соблюдаем минимальный
+      // payload: ids операций/предыдущего исполнителя + qty.
+      await this.audit.log(
+        {
+          event: 'PASSPORT_SCANNED',
+          entityType: 'PASSPORT',
+          entityId: passport.id,
+          employeeId,
+          payload: {
+            operationId: session.operationId,
+            fromOperationId: previousOperationId,
+            previousEmployeeId,
+            qty: passport.qtyGood,
+            routeStepIndex: nextRouteStepIndex,
+          },
+        },
+        tx,
+      );
     });
 
     this.logger.log(
@@ -625,20 +814,42 @@ export class PassportsService {
    * pipeline-driven: следующий сотрудник (или упаковщик) перехватит
    * его штатным `scan`/`issue`, и `currentOperationId` поменяется там.
    *
+   * **Источник истины для завершаемой операции — `activeShift.operationId`,
+   * а НЕ `passport.currentOperationId`.** Это критично для route-WIP
+   * сценария «issue без последующего scan»: после `issueToEmployee`
+   * паспорт может остаться с `currentOperationId = CUT_DIVISION`
+   * (issue не двигает шаг маршрута, см. §F3a), и наивная привязка
+   * `OPERATION_FINISHED.operationId = passport.currentOperationId`
+   * даёт абсурдный лог «завершил CUT_DIVISION» после работы на
+   * Оверлоке. Вместо этого мы:
+   *   1) берём `completedOperationId = session.operationId`;
+   *   2) ищем соответствующий `OrderRouteStep` (если у заказа есть
+   *      snapshot маршрута) — это будет `completedStep`;
+   *   3) запрещаем двигать паспорт НАЗАД по маршруту: если
+   *      `completedStep.index < passport.currentRouteStepIndex` —
+   *      бросаем `PASSPORT_COMPLETE_BACKWARD` (откат — прерогатива
+   *      мастера, см. `MasterActionsService.setRouteStep`);
+   *   4) записываем `OPERATION_FINISHED.operationId = completedOperationId`
+   *      и обновляем `passport.currentOperationId` /
+   *      `currentRouteStepIndex` к завершённому шагу;
+   *   5) НЕ перепрыгиваем на следующий шаг — это нужно для семантики
+   *      WIP-buffer'а (complete → ✔ текущей; следующий scan → ▶
+   *      следующей); см. `shopfloor-projection.ts §buildSewingRoute`.
+   *
    * Что делаем в одной транзакции:
    *   - проверяем, что паспорт в `IN_PROGRESS` и закреплён за `employeeId`;
-   *   - снимаем `currentEmployeeId = null` — паспорт мгновенно уходит
-   *     из `current-work` этой швеи (см. `ShiftsService.getCurrentWork`);
-   *   - `currentOperationId` НЕ трогаем: это всё ещё «операция паспорта»,
-   *     просто без активного исполнителя; статус тоже остаётся
-   *     `IN_PROGRESS` — завершение — это ещё не упаковка и не отмена;
+   *   - снимаем `currentEmployeeId = null` и `currentCellId = null` —
+   *     паспорт уходит из `current-work` швеи в WIP-buffer;
+   *   - выставляем `currentOperationId = completedOperationId`,
+   *     `currentRouteStepIndex = completedStep.index` (если шаг найден);
    *   - пишем событие `OPERATION_FINISHED` с `operationId =
-   *     passport.currentOperationId` (если есть) и `qty = qtyGood`.
+   *     completedOperationId` и `qty = qtyGood`.
    *
    * Безопасность (ТЗ §7.2): нельзя завершить чужой паспорт — 409
    * `PASSPORT_NOT_YOURS`. Нельзя завершать паспорт вне `IN_PROGRESS`
    * (например, сразу после `place` или после `PACKED`) — 409
-   * `PASSPORT_NOT_IN_PROGRESS`.
+   * `PASSPORT_NOT_IN_PROGRESS`. Нельзя «завершить» операцию, стоящую
+   * в маршруте раньше текущего шага — 409 `PASSPORT_COMPLETE_BACKWARD`.
    */
   async completeOperationByEmployee(
     passportId: string,
@@ -666,33 +877,98 @@ export class PassportsService {
 
     // Активная смена нужна по тем же причинам, что для `issue`/`scan`:
     // начисления и аудит привязаны к сессии оборудования/операции
-    // (см. `docs/flows.md §F8`).
+    // (см. `docs/flows.md §F8`). Кроме того, именно `session.operationId`
+    // — единственный достоверный источник «что фактически завершалось».
     const session = await this.prisma.shiftSession.findFirst({
       where: { employeeId, endedAt: null },
+      select: { operationId: true },
     });
     if (!session) throw new ShiftSessionRequiredException();
+
+    const completedOperationId = session.operationId;
+
+    // Если у заказа есть snapshot маршрута — ищем шаг, который
+    // соответствует завершаемой операции. Это нужно, чтобы корректно
+    // обновить `currentRouteStepIndex` (для WIP-buffer ✔) и проверить,
+    // что мы не пытаемся откатиться назад.
+    const completedStep = await this.prisma.orderRouteStep.findFirst({
+      where: {
+        orderId: passport.orderId,
+        operationId: completedOperationId,
+      },
+      select: { index: true, operationId: true },
+    });
+
+    // Откат назад запрещён: если завершаемый шаг стоит в маршруте
+    // раньше текущего, это либо ошибочный flow (швея на «прошлой»
+    // операции пытается «завершить» ещё раз), либо попытка обойти
+    // master-action. И то, и другое — 409 PASSPORT_COMPLETE_BACKWARD.
+    if (
+      completedStep &&
+      passport.currentRouteStepIndex !== null &&
+      completedStep.index < passport.currentRouteStepIndex
+    ) {
+      throw new PassportCompleteBackwardException();
+    }
+
+    const beforeSnapshot = {
+      currentOperationId: passport.currentOperationId,
+      currentRouteStepIndex: passport.currentRouteStepIndex,
+      currentEmployeeId: passport.currentEmployeeId,
+      currentCellId: passport.currentCellId,
+    };
+    const nextRouteStepIndex =
+      completedStep?.index ?? passport.currentRouteStepIndex;
+    const afterSnapshot = {
+      currentOperationId: completedOperationId,
+      currentRouteStepIndex: nextRouteStepIndex,
+      currentEmployeeId: null,
+      currentCellId: null,
+    };
 
     await this.prisma.$transaction(async (tx) => {
       await tx.passport.update({
         where: { id: passport.id },
         data: {
           currentEmployeeId: null,
+          currentCellId: null,
+          currentOperationId: completedOperationId,
+          currentRouteStepIndex: nextRouteStepIndex,
         },
       });
       await tx.passportEvent.create({
         data: {
           passportId: passport.id,
           type: PassportEventType.OPERATION_FINISHED,
-          operationId: passport.currentOperationId,
-          fromOperationId: passport.currentOperationId,
+          operationId: completedOperationId,
+          fromOperationId: passport.currentOperationId ?? completedOperationId,
           employeeId,
           qty: passport.qtyGood,
         },
       });
+      // Audit: швея явно завершила свою операцию (см. ТЗ §7.2).
+      // Payload расширен before/after-снэпшотами и `completedOperationId`
+      // — этого достаточно для ретроспективы «кто и какую операцию
+      // завершил, и куда после этого ушёл паспорт».
+      await this.audit.log(
+        {
+          event: 'PASSPORT_OPERATION_COMPLETED',
+          entityType: 'PASSPORT',
+          entityId: passport.id,
+          employeeId,
+          payload: {
+            completedOperationId,
+            qty: passport.qtyGood,
+            before: beforeSnapshot,
+            after: afterSnapshot,
+          },
+        },
+        tx,
+      );
     });
 
     this.logger.log(
-      `event=passport.complete-operation passportId=${passportId} employeeId=${employeeId} operationId=${passport.currentOperationId ?? '-'}`,
+      `event=passport.complete-operation passportId=${passportId} employeeId=${employeeId} completedOperationId=${completedOperationId}`,
     );
     return this.getOne(passportId);
   }
@@ -799,6 +1075,168 @@ export class PassportsService {
   // -------------------------------------------------------------------------
   // INTERNAL
   // -------------------------------------------------------------------------
+
+  /**
+   * Stage 3 «Мастер цеха» — pre-check активной политики выдачи кроя.
+   *
+   * Возвращает `null`, если ограничение к этому issue не применимо:
+   *   - нет активной политики (`isActive = true`);
+   *   - и операция активной смены НЕ из категории `CUTTING`,
+   *     и у паспорта `currentRouteStepIndex !== 0` (см. ТЗ §4: «политика
+   *     действует только на ПЕРВОЙ операции маршрута / категории CUTTING»).
+   *
+   * Иначе сравниваем фильтры политики (`color`, `sizeId`) со снимком
+   * паспорта и проверяем `consumedQty + qtyCut <= limitQty`. При
+   * любом несоответствии бросаем `CutReleasePolicyViolationException`
+   * с текстом, собранным из самой политики (см.
+   * `formatCutReleasePolicyMessage`). При успехе возвращаем «билет»
+   * (`policyId` + лимит/счётчик), который дальше используется внутри
+   * транзакции для атомарного `consumedQty += qtyCut` (см.
+   * `consumeCutReleasePolicyInTx`).
+   *
+   * Гонки: между этим pre-check и `consumeCutReleasePolicyInTx` другая
+   * транзакция может успеть увеличить `consumedQty` — finальный
+   * conditional `updateMany` ниже это поймает и снова бросит
+   * VIOLATION (без записи issue). Таким образом limit держится
+   * инвариантно, и нам не нужен SERIALIZABLE-режим транзакции.
+   */
+  private async evaluateCutReleasePolicyForIssue(
+    passport: { color: string | null; sizeId: string; qtyCut: number; currentRouteStepIndex: number | null },
+    operationCategory: OperationCategory,
+  ): Promise<{
+    policyId: string;
+    limitQty: number;
+    color: string | null;
+    sizeId: string | null;
+    sizeLabel: string | null;
+    consumedBefore: number;
+  } | null> {
+    const policy = await this.prisma.cutReleasePolicy.findFirst({
+      where: { isActive: true },
+      orderBy: { updatedAt: 'desc' },
+    });
+    if (!policy) return null;
+
+    const isFirstRouteStep = passport.currentRouteStepIndex === 0;
+    const isCuttingOperation = operationCategory === OperationCategory.CUTTING;
+    if (!isFirstRouteStep && !isCuttingOperation) {
+      // Stage 3 сознательно не блокирует движение по маршруту дальше —
+      // только первую выдачу кроя. См. ТЗ §11 «НЕ ДЕЛАТЬ».
+      return null;
+    }
+
+    const sizeLabel = policy.sizeId
+      ? (await this.prisma.size.findUnique({
+          where: { id: policy.sizeId },
+          select: { code: true },
+        }))?.code ?? null
+      : null;
+
+    const colorMismatch =
+      policy.color !== null && passport.color !== policy.color;
+    const sizeMismatch =
+      policy.sizeId !== null && passport.sizeId !== policy.sizeId;
+    const limitMismatch =
+      policy.consumedQty + passport.qtyCut > policy.limitQty;
+
+    if (colorMismatch || sizeMismatch || limitMismatch) {
+      throw this.cutReleasePolicy.buildViolation({
+        color: policy.color,
+        sizeLabel,
+        limitQty: policy.limitQty,
+      });
+    }
+
+    return {
+      policyId: policy.id,
+      limitQty: policy.limitQty,
+      color: policy.color,
+      sizeId: policy.sizeId,
+      sizeLabel,
+      consumedBefore: policy.consumedQty,
+    };
+  }
+
+  /**
+   * Stage 3 «Мастер цеха» — атомарная фиксация выдачи в active-политике.
+   *
+   * Делает conditional `updateMany`: инкремент `consumedQty` срабатывает
+   * только если политика всё ещё активна (`isActive = true`) И лимит не
+   * будет превышен (`consumedQty + qty <= limitQty`). Если 0 строк
+   * обновлено, значит между pre-check и transaction'ом политику
+   * выключили или другая транзакция «съела» остаток лимита — бросаем
+   * VIOLATION с актуальным снимком политики, чтобы UI показал
+   * корректный inline-message.
+   *
+   * Audit-событие `CUT_RELEASE_POLICY_CONSUMED` пишется в той же
+   * транзакции — `entityType = CUT_RELEASE_POLICY`, `entityId = policy.id`.
+   * Payload содержит `passportId`, `qty`, `beforeConsumed`,
+   * `afterConsumed` — этого достаточно для разбора «куда ушёл лимит».
+   */
+  private async consumeCutReleasePolicyInTx(
+    tx: Prisma.TransactionClient,
+    enforcement: {
+      policyId: string;
+      limitQty: number;
+      color: string | null;
+      sizeId: string | null;
+      sizeLabel: string | null;
+      consumedBefore: number;
+    } | null,
+    op: {
+      passportId: string;
+      employeeId: string;
+      qty: number;
+      mode: 'FROM_CELL' | 'ROUTE_WIP';
+    },
+  ): Promise<void> {
+    if (!enforcement) return;
+    const incremented = await tx.cutReleasePolicy.updateMany({
+      where: {
+        id: enforcement.policyId,
+        isActive: true,
+        consumedQty: { lte: enforcement.limitQty - op.qty },
+      },
+      data: { consumedQty: { increment: op.qty } },
+    });
+    if (incremented.count === 0) {
+      // Политика поменялась между pre-check'ом и transaction'ом
+      // (выключили / новый создали / гонка по `consumedQty`). Берём
+      // актуальный снимок и бросаем VIOLATION ровно с тем текстом,
+      // который покажем рабочему.
+      const fresh = await tx.cutReleasePolicy.findFirst({
+        where: { isActive: true },
+        orderBy: { updatedAt: 'desc' },
+      });
+      const sizeLabel = fresh?.sizeId
+        ? (await tx.size.findUnique({
+            where: { id: fresh.sizeId },
+            select: { code: true },
+          }))?.code ?? null
+        : null;
+      throw this.cutReleasePolicy.buildViolation({
+        color: fresh?.color ?? enforcement.color,
+        sizeLabel: sizeLabel ?? enforcement.sizeLabel,
+        limitQty: fresh?.limitQty ?? enforcement.limitQty,
+      });
+    }
+    await this.audit.log(
+      {
+        event: 'CUT_RELEASE_POLICY_CONSUMED',
+        entityType: 'CUT_RELEASE_POLICY',
+        entityId: enforcement.policyId,
+        employeeId: op.employeeId,
+        payload: {
+          passportId: op.passportId,
+          qty: op.qty,
+          beforeConsumed: enforcement.consumedBefore,
+          afterConsumed: enforcement.consumedBefore + op.qty,
+          issueMode: op.mode,
+        },
+      },
+      tx,
+    );
+  }
 
   /**
    * Паспорт должен быть в «живом» статусе для выдачи/скана. Терминальные

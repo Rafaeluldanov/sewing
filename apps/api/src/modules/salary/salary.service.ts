@@ -1,9 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import {
-  CompensationType,
-  Prisma,
-  SalaryEntrySource,
-} from '@prisma/client';
+import { Prisma, SalaryEntrySource } from '@prisma/client';
 import type {
   ListSalaryQuery,
   SalaryEntryDto,
@@ -18,6 +14,7 @@ import {
   SalaryReentryWithoutRateException,
 } from '../../common/errors.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
+import { isSalaryEligible } from '../employees/compensation.js';
 import { isSalaryManager } from './salary.constants.js';
 
 /**
@@ -49,7 +46,8 @@ import { isSalaryManager } from './salary.constants.js';
  *     `ShiftSession` с `startedAt::date == date`. Длительность и
  *     закрытие смены не учитываем (см. ADR-0021).
  *   - `compensationType` сотрудника решает, нужно ли вообще
- *     создавать запись. PIECEWORK — никогда; SALARY/MIXED — да.
+ *     создавать запись. Спрашиваем у `isSalaryEligible` (ADR-0021):
+ *     `SALARY`/`MIXED` ⇒ да, `PIECEWORK` ⇒ никогда.
  *   - `editedManually = true` запрещает автоматическую перезапись
  *     `amount`. Менеджер должен сам сбросить флаг (`reset = true`),
  *     если хочет вернуть под автоматику.
@@ -74,7 +72,8 @@ export class SalaryService {
    *
    * Алгоритм:
    * 1. Загружаем `Employee.compensationType` + `salaryPerShift`. Если
-   *    тип `PIECEWORK` или сотрудник неактивен — выходим.
+   *    `!isSalaryEligible(...)` (т.е. `PIECEWORK`) или сотрудник
+   *    неактивен — выходим.
    * 2. Считаем количество `ShiftSession` за этот день. Если 0 —
    *    выходим (синхронизация только «вверх», окладные за дни без
    *    смен мы не создаём, а уже созданные не удаляем — менеджер мог
@@ -109,12 +108,7 @@ export class SalaryService {
       },
     });
     if (!employee || !employee.active) return null;
-    if (
-      employee.compensationType !== CompensationType.SALARY &&
-      employee.compensationType !== CompensationType.MIXED
-    ) {
-      return null;
-    }
+    if (!isSalaryEligible(employee.compensationType)) return null;
     if (employee.salaryPerShift === null) {
       // SALARY/MIXED без ставки — на момент sync это аномалия, но
       // ронять `start/stop shift` нельзя. Просто ничего не делаем.

@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeePacking } from '@/lib/rbac';
+import { CallMasterButton } from '@/components/call-master-button';
 
 /**
  * Route-level guard для всего раздела `/packing/*` (включая
@@ -18,5 +19,11 @@ export default async function PackingSectionLayout({
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/packing');
   if (!canSeePacking(me.user.role)) redirect('/');
-  return <>{children}</>;
+  const showMasterCall = me.user.role === 'PACKING';
+  return (
+    <>
+      {children}
+      {showMasterCall ? <CallMasterButton /> : null}
+    </>
+  );
 }

@@ -75,6 +75,7 @@ export default async function NewPassportPage({
         today={today}
         disabled={blocked}
         canRequestCuttingClosure={isCutterAssistant}
+        isCutterAssistant={isCutterAssistant}
       />
     </div>
   );

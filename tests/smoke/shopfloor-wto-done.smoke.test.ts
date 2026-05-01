@@ -36,6 +36,7 @@ function passport(overrides: Partial<ProjectionPassport>): ProjectionPassport {
     qtyDefect: 0,
     status: PassportStatus.IN_PROGRESS,
     currentOperationCategory: OperationCategory.IRONING,
+    currentEmployeeId: null,
     hasOpenBox: false,
     hasFreshQcPassed: false,
     hasFreshWtoPassed: false,

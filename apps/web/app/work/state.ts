@@ -46,6 +46,23 @@ export interface PassportLookupResult {
     status: string;
     rollNumber: string;
     routeHint: PassportRouteHintDto | null;
+    /**
+     * Soft-route MVP: индекс текущего шага маршрута
+     * (`Passport.currentRouteStepIndex`). Используется UI-логикой /work
+     * как **единственный признак route-WIP паспорта** — backend по тому же
+     * правилу разрешает приём без `currentCell` (см.
+     * `PassportsService.issueToEmployee`, `docs/domain.md §«Маршруты
+     * производства»`). Если `null` — паспорт идёт по legacy cell-based
+     * flow и UI продолжает требовать ячейку, как раньше.
+     */
+    currentRouteStepIndex: number | null;
+    /**
+     * Текущая ячейка паспорта (lite). `null` для route-WIP в маршрутном
+     * потоке (между шагами без буфера) и для свежих CREATED паспортов
+     * до размещения. UI использует это, чтобы не показывать тревожный
+     * текст «ячейка не указана» там, где её и не должно быть.
+     */
+    currentCellCode: string | null;
   };
 }
 

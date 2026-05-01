@@ -5,16 +5,34 @@
  *
  * Архитектура — полная копия `QcTerminal`
  * (см. `apps/web/app/qc/qc-terminal.tsx`):
- *   - одна primary-кнопка «Сканировать паспорт» открывает
- *     `QrScannerModal` (та же камера, что у швеи и ОТК);
- *   - после распознавания QR `acceptOnWtoAction` сначала «принимает»
- *     паспорт скан-сценарием (общий `POST /api/passports/:id/scan`),
- *     а уже потом тянет WTO-карточку;
- *   - в карточке оператор нажимает «Завершить ВТО» (`completeWtoAction`).
  *
- * Никаких списков, фильтров и переходов: сканировал → действие →
- * готов к следующему скану. Полный flow зафиксирован в
- * `docs/flows.md §F6` и `docs/screens.md §10`.
+ * Состояния (выбираются на SSR, см. `apps/web/app/wto/page.tsx`;
+ * страница подтягивает `getShiftMeta()` + `getCurrentShift()` ровно
+ * как `apps/web/app/packing/page.tsx` для упаковщика):
+ *   1. **Нет активной смены** → рендерим reuse-форму
+ *      `SeamstressShiftStart`: тот же mobile-first scan-flow «QR
+ *      оборудования → выбор разрешённой операции → подтверждение»
+ *      (ADR-0017, источник истины — `EquipmentOperation`). Для ВТО
+ *      это типично рабочее место `wto-station-01` с allow-листом из
+ *      одной операции `WTO` (см. `prisma/seed.ts`).
+ *   2. **Смена активна, но не на категории `IRONING`** (например, ВТО
+ *      открыл смену не на том станке) → банер с подсказкой завершить
+ *      смену через меню в правом верхнем углу. Сканирование паспортов
+ *      из такой смены backend всё равно не пропустит дальше: WTO
+ *      endpoints доступны по RBAC, но `passports/:id/scan` подсадит
+ *      паспорт в чужой `currentOperationId`, поэтому вход в работу
+ *      скан-режимом — только из смены с операцией категории `IRONING`.
+ *   3. **Смена активна, категория `IRONING`** → штатный сценарий:
+ *      одна primary-кнопка «Сканировать паспорт» открывает
+ *      `QrScannerModal` (та же камера, что у швеи и ОТК); после
+ *      распознавания QR `acceptOnWtoAction` сначала «принимает»
+ *      паспорт скан-сценарием (общий `POST /api/passports/:id/scan`),
+ *      а уже потом тянет WTO-карточку
+ *      (`GET /api/wto/passports/:id`) и показывает `WtoWorkCard`.
+ *
+ * Никаких списков, фильтров и переходов: открыл смену → сканировал →
+ * действие → готов к следующему скану. Полный flow зафиксирован в
+ * `docs/flows.md §F6` и `docs/screens.md §5a`.
  *
  * Особенности по сравнению с QC:
  *   - входной скан не «открывает карточку, чтобы посмотреть», а
@@ -27,12 +45,18 @@
 
 import { useEffect, useState, useTransition } from 'react';
 import type { WtoPassportDetailDto } from '@sewing/shared/wto';
+import type {
+  EmployeeLiteDto,
+  ShiftMetaDto,
+  ShiftSessionDto,
+} from '@sewing/shared/shifts';
 import { QrScannerModal } from '@/app/work/qr-scanner-modal';
 import {
   playCutAcceptedSound,
   playOperationCompletedSound,
 } from '@/app/work/feedback';
-import { logoutAction } from '@/app/(auth)/logout-action';
+import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
+import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
 import { Icon } from '@/components/icon';
 import { WtoWorkCard } from './wto-work-card';
 import { WtoCompletedRow } from './wto-completed-row';
@@ -50,12 +74,81 @@ import {
  */
 const WTO_REMOVED_POLL_INTERVAL_MS = 10_000;
 
+interface Props {
+  meta: ShiftMetaDto;
+  employee: EmployeeLiteDto;
+  /**
+   * Активная смена сотрудника на момент SSR (`null`, если её нет).
+   * Источник истины — `GET /shifts/current`. Терминал использует это
+   * как первичный сигнал «показывать start-shift форму или scan-flow».
+   */
+  initialShift: ShiftSessionDto | null;
+  /**
+   * Категория операции активной смены. Если `null` — смены нет. Если
+   * не `'IRONING'` — ВТО открыл смену не на том рабочем месте;
+   * показываем банер и предлагаем завершить смену через меню.
+   */
+  activeOperationCategory: string | null;
+}
+
 interface ErrorState {
   message: string;
   requestId?: string;
 }
 
-export function WtoTerminal() {
+export function WtoTerminal({
+  meta,
+  employee,
+  initialShift,
+  activeOperationCategory,
+}: Props) {
+  const isShiftActive = !!(initialShift && initialShift.active);
+  const onWtoShift = isShiftActive && activeOperationCategory === 'IRONING';
+
+  // `SeamstressActionsMenu` нужен во всех ветках: на `/wto` для роли
+  // IRONING глобальный `<AppHeader>` скрыт (см.
+  // `components/app-header.tsx`, `isSingleWorkspaceRole`), поэтому
+  // «Завершить смену» / «Выйти» живут только в этом три-точечном меню.
+  return (
+    <div className="seamstress-work">
+      <SeamstressActionsMenu shiftActive={isShiftActive} />
+      {!isShiftActive ? (
+        <SeamstressShiftStart meta={meta} employee={employee} />
+      ) : !onWtoShift ? (
+        <WrongOperationCard operationName={initialShift!.operationName} />
+      ) : (
+        <WtoScanTerminal />
+      )}
+    </div>
+  );
+}
+
+function WrongOperationCard({ operationName }: { operationName: string }) {
+  return (
+    <div
+      className="scan-card scan-card--simple"
+      aria-label="Смена не на ВТО"
+    >
+      <h2 className="scan-card__title">
+        <Icon name="warning" size={22} />
+        <span style={{ marginLeft: '0.45rem' }}>Смена не на ВТО</span>
+      </h2>
+      <p className="scan-card__hint">
+        Текущая операция — <strong>{operationName}</strong>. Чтобы
+        принимать паспорта на ВТО, завершите смену через меню в правом
+        верхнем углу и начните новую на рабочем месте ВТО.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Внутренний компонент: «штатный» scan-flow ВТО после старта смены на
+ * операции категории `IRONING`. Логика и пользовательский опыт
+ * остались как раньше — изменилась только обвязка в `WtoTerminal`
+ * (start-shift gate сверху, см. JSDoc файла).
+ */
+function WtoScanTerminal() {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
@@ -177,20 +270,12 @@ export function WtoTerminal() {
     ? 'Сканировать другой паспорт'
     : 'Сканировать паспорт';
 
+  // Logout/«Завершить смену» теперь в общем `SeamstressActionsMenu`
+  // на уровне `WtoTerminal`. Внутренний scan-terminal больше не
+  // дублирует logout-форму, иначе на экране висели бы две точки
+  // выхода (в углу и в три-точечном меню).
   return (
-    <div className="seamstress-work">
-      <form action={logoutAction} className="qc-logout">
-        <button
-          type="submit"
-          className="qc-logout__btn"
-          aria-label="Выйти из учётной записи"
-          title="Выйти"
-        >
-          <Icon name="logout" size={14} />
-          <span style={{ marginLeft: '0.35rem' }}>Выйти</span>
-        </button>
-      </form>
-
+    <>
       {detail && !detail.wtoCompletedAt && (
         <WtoWorkCard
           detail={detail}
@@ -301,6 +386,6 @@ export function WtoTerminal() {
           onClose={() => setScannerOpen(false)}
         />
       )}
-    </div>
+    </>
   );
 }

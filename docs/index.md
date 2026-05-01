@@ -1,27 +1,106 @@
 # Документация — Система управления швейным производством
 
-> Документация — источник истины. Код должен соответствовать ей.
-> При несоответствии: правим код.
+> ⚠️ **PHASE 2 — CORE DOCS (2026-Q2)** ⚠️
+>
+> Документация перестраивается. Часть старых документов больше **не
+> является source of truth** — они оставлены для исторического
+> контекста, но новые разработчики и Cursor-агенты должны опираться
+> на код и на новые документы (см. таблицу статусов ниже). При
+> расхождении документ старого статуса (`OUTDATED`/`DRAFT`/`ARCHIVED`)
+> и кода — **верим коду**, а не документу.
+>
+> Источник истины:
+>
+> - REST-контракт — `apps/api/src/modules/**/*.controller.ts`
+>   (карта собрана в `api.md`).
+> - Модель БД — `prisma/schema.prisma` (карта собрана в `erd.md`).
+> - Доменная логика — сервисы `apps/api/src/modules/**/*.service.ts`.
+> - Runtime-flow — три новых документа:
+>   [`docs/order-flow.md`](./order-flow.md),
+>   [`docs/production-flow.md`](./production-flow.md),
+>   [`docs/display-board.md`](./display-board.md).
+>
+> PHASE 1 закрыл `index.md` / `api.md` / `erd.md` / ADR-0022 /
+> `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по трём
+> новым самостоятельным документам (см. ниже). Полное
+> переписывание `flows.md` / `domain.md` / `screens.md` /
+> `events.md` остаётся в плане как PHASE 3 (после ревизии
+> master-actions / audit-events).
 
 ---
 
-## Где что
+## Статусы документов
 
-| Файл              | О чём                                          |
-| ----------------- | ---------------------------------------------- |
-| `architecture.md` | Архитектура, стек, монорепо, слои              |
-| `domain.md`       | Доменная модель, глоссарий, роли, операции     |
-| `erd.md`          | ERD (описание таблиц, ключей, индексов)        |
-| `flows.md`        | Бизнес-потоки (F1…F12)                         |
-| `events.md`       | Событийная модель паспорта и EventBus          |
-| `api.md`          | REST API, эндпоинты, коды ошибок               |
-| `screens.md`      | Карта экранов PWA, навигация по ролям          |
-| `pilot/`          | Pilot Rollout / UAT — план, onboarding, FAQ    |
-| `adr/`            | Архитектурные решения (ADR)                    |
+Каждому документу присвоен один из четырёх статусов:
+
+- **OK** — отражает текущий runtime-код, можно опираться без оглядки.
+- **OUTDATED** — содержит устаревшие утверждения, требует ревизии;
+  в спорных местах верить коду, а не документу.
+- **DRAFT** — частично заполненный/новый документ, заявлен как
+  будущий source of truth, но содержание ещё не финальное.
+- **ARCHIVED** — исторический контекст / roadmap; в новых решениях
+  на него **не опираться**.
+
+| Файл | Статус | Комментарий |
+| --- | --- | --- |
+| `index.md` | **OK** | Перестроен в PHASE 1 — карта документации со статусами. |
+| `api.md` | **OK** | Перестроен в PHASE 1 строго от текущих контроллеров. |
+| `erd.md` | **OK** | Перестроен в PHASE 1 строго от `prisma/schema.prisma`. |
+| `architecture.md` | OUTDATED | Стек/слои описаны до Patterns / Workshop-needs / Suppliers / PurchaseOrder / PurchaseReceipt / Display screens / Master / OrderApplication / OrderCostEstimate. Ревизия — PHASE 2. |
+| `domain.md` | OUTDATED | Большой документ, не покрывает Patterns / WorkshopNeed / Supplier / PurchaseOrder / OrderCostEstimate / cut-readiness / cut-release-policy / master-actions / master-calls. Ревизия — PHASE 2. |
+| `flows.md` | OUTDATED | Описывает старый pipeline `F0..F13`. Будет разнесён по `order-flow.md` / `production-flow.md` / `display-board.md`. Не переписывать в PHASE 1. |
+| `events.md` | OUTDATED | До-Patterns модель `PassportEvent` / `AuditLog`. Не покрывает `OPERATION_SCAN` / `WTO_PASSED` / последние события. Базовая карта `PassportEvent` теперь живёт в `production-flow.md §3` (PHASE 2); этот документ остаётся OUTDATED до полного переписывания. |
+| `screens.md` | OUTDATED | Карта экранов до `/admin/patterns`, `/admin/pattern-categories`, `/admin/clients`, `/admin/suppliers`, `/admin/purchase-orders`, `/admin/purchase-receipts`, `/admin/display-screens`, `/master`, `/admin/workshop-needs`, отдельных дашбордов. Ревизия — PHASE 2. |
+| `ui-mobile.md` | OUTDATED | Описывает только мобильный `/work` MVP-1, без master / shopfloor / display редизайнов. |
+| `ops.md` | OUTDATED | Не покрывает агентскую печатную станцию (`apps/agent`), production-cost-v2, материнские override-ы. |
+| `deploy-stage.md` | OK | Релевантна для stage.teeon.ru, синхронизирована с `.env.example`. |
+| `deploy-uploads-static-routing.md` | OK | nginx-роутинг `/uploads/*` остаётся актуальным. |
+| `recon-soft-integration.md` | OK | Документ-«лестница» этапов внедрения; работающий план. |
+| `prelaunch-cleanup-recon.md` | OK | Cleanup-план перед запуском; рабочий. |
+| `production-cost-v2-recon.md` | OK | Описывает работающий `/api/admin/production-cost/v2`. |
+| `operation-time-norms-recon.md` | OK | Описывает работающую модель норм времени и плана операций. |
+| `payroll-cutter-compensation-recon.md` | OK | Описывает работающий B2B-процент закройщика. |
+| `workshop-needs-recon.md` | OK | Описывает работающий модуль `WorkshopNeed`. |
+| `pilot/*` | OK | Pilot Rollout / UAT-комплект. |
+| `adr/0001..0021` | OK | Принятые ADR, исторические решения. Источник истины внутри своего scope. |
+| `adr/0022-tech-cards-and-order-snapshot.md` | OK | Поправлен в PHASE 1 — снят миф «snapshot создаётся только в `OrdersService.start()`». |
+| `order-flow.md` | **OK** | PHASE 2 — заказ как объект: `OrderStatus`, `startCalculation` / `completeCalculation` / `reopenCalculation` / `start` / `complete` / `cancel`, `syncOrderRouteStepsSnapshot()`, `rebuildMaterialRequirementsSnapshot()`, план операций, `OrderCostEstimate`, `WorkshopNeed`, production balance, cut-readiness, material-arrival overrides, cut-release policy, outsource (`MANUAL` / `CUT_READY`), сводная таблица «что snapshot-ится и когда». |
+| `production-flow.md` | **OK** | PHASE 2 — pipeline паспорта: `PassportStatus`, `PassportEvent` / `PassportEventType`, `OPERATION_SCAN`, `QC_PASSED`, `WTO_PASSED`, `Box` / `BoxItem` / `PACKED`, `OperationEntry` (когда pending, когда APPROVED), `SalaryEntry` (`syncDailySalary`), master actions / master calls, связь с shopfloor buckets. |
+| `display-board.md` | **OK** | PHASE 2 — большой монитор `/shopfloor/display`: `GET /api/shopfloor/display`, `DisplayScreenConfig`, DISPLAY-учётка, polling/degraded/timeout/visibility recovery, bucket mapping, `sewingColumns` / `sewingRoute (▶/✔)`, layout-цепочка `min-height: 0`, breakpoint `max-width: 1199px`, aggregation risks. |
+
+> **Что значит OUTDATED.** Документ всё ещё внутри репозитория и
+> всё ещё ссылается из ADR / комментариев в коде. Часть утверждений
+> в нём корректна, часть — нет. Это **временное** состояние: ревизия
+> запланирована, но вне scope PHASE 1. Не правьте OUTDATED-документ
+> точечно «по дороге» — это плодит внутренние противоречия.
+
+---
+
+## Где что (короткая карта)
+
+| Файл              | О чём                                                     |
+| ----------------- | --------------------------------------------------------- |
+| `index.md`        | Эта страница — карта документации со статусами             |
+| `api.md`          | REST API, ровно те routes, что есть в контроллерах          |
+| `erd.md`          | Модель БД, ровно те `model` / `enum`, что есть в Prisma     |
+| `order-flow.md`   | OK — бизнес-цикл одного заказа (PHASE 2)                    |
+| `production-flow.md` | OK — бизнес-цикл одного паспорта (PHASE 2)               |
+| `display-board.md` | OK — большой экран `/shopfloor/display` (PHASE 2)           |
+| `architecture.md` | OUTDATED — стек / слои / монорепо                          |
+| `domain.md`       | OUTDATED — глоссарий и доменная модель                     |
+| `flows.md`        | OUTDATED — бизнес-потоки `F0..F13`                          |
+| `events.md`       | OUTDATED — событийная модель                               |
+| `screens.md`      | OUTDATED — карта экранов PWA                               |
+| `pilot/`          | OK — Pilot Rollout / UAT                                  |
+| `deploy-stage.md` | OK — развёртывание stage (`stage.teeon.ru`)                 |
+| `deploy-uploads-static-routing.md` | OK — nginx-роутинг `/uploads/*`            |
+| `*-recon.md`      | OK — рабочие планы внедрения отдельных подсистем            |
+| `adr/`            | OK — архитектурные решения (см. ниже)                      |
 
 Техническая схема БД: `prisma/schema.prisma`.
 Seed-данные (справочники MVP): `prisma/seed.ts`
-(запуск — `npm run db:seed`; подробнее — в `README.md`).
+(запуск — `npm run db:seed`; подробнее — в `README.md`,
+помеченном как ARCHIVED roadmap).
 
 ---
 
@@ -64,6 +143,53 @@ Seed-данные (справочники MVP): `prisma/seed.ts`
 - [ADR-0020 Управленческий блок «Операции» и единая модель тарифов](./adr/0020-operation-pricing-model.md)
 - [ADR-0021 Дневной оклад от факта смены (`SalaryEntry`)](./adr/0021-shift-day-salary.md)
 - [ADR-0022 Техкарты и snapshot потребностей на заказе](./adr/0022-tech-cards-and-order-snapshot.md)
+  (поправлен в PHASE 1: snapshot создаётся через
+  `OrdersService.syncOrderRouteStepsSnapshot()` в
+  `create`/`update`/`recalculateOperationPlan`/`startCalculation`,
+  а не только в `start()`; в `start()` остаётся defensive fallback).
+
+---
+
+## Ключевые документы PHASE 2
+
+PHASE 1 закрыл «кровотечение» в `index.md` / `api.md` / `erd.md` /
+ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
+самостоятельным документам — каждый со своим узким scope:
+
+- [`docs/order-flow.md`](./order-flow.md) — **OK** — заказ как
+  объект: `OrderStatus`, переходы (`startCalculation` /
+  `completeCalculation` / `reopenCalculation` / `start` /
+  `complete` / `cancel`), `syncOrderRouteStepsSnapshot()`,
+  `rebuildMaterialRequirementsSnapshot()`, план операций,
+  `OrderCostEstimate`, `WorkshopNeed`, production balance,
+  cut-readiness, material-arrival overrides, cut-release policy,
+  outsource (`MANUAL` / `CUT_READY`), сводная таблица «что
+  snapshot-ится и когда».
+- [`docs/production-flow.md`](./production-flow.md) — **OK** —
+  pipeline паспорта: `PassportStatus`, `PassportEvent` /
+  `PassportEventType`, `OPERATION_SCAN`, `QC_PASSED`,
+  `WTO_PASSED`, `Box` / `BoxItem` / `PACKED`, `OperationEntry`
+  (когда pending, когда APPROVED — финальный апрув на
+  `Box.close()`, не на add-passport), `SalaryEntry`, master
+  actions / master calls, связь с shopfloor buckets.
+- [`docs/display-board.md`](./display-board.md) — **OK** —
+  большой монитор `/shopfloor/display`: `GET /api/shopfloor/display`,
+  `DisplayScreenConfig`, DISPLAY-учётка, polling
+  (`POLL_INTERVAL_MS = 3000` / `POLL_INTERVAL_DEGRADED_MS = 15000`
+  / `FETCH_TIMEOUT_MS = 6000`), degraded/offline/auth/visibility
+  recovery, bucket mapping, `sewingColumns` /
+  `sewingRoute (▶/✔)`, layout-цепочка `min-height: 0`,
+  breakpoint `max-width: 1199px`, aggregation risks.
+- [`docs/api.md`](./api.md) — обновлён, уже OK (PHASE 1).
+- [`docs/erd.md`](./erd.md) — обновлён, уже OK (PHASE 1).
+- [`docs/events.md`](./events.md) — OUTDATED. Базовая карта
+  `PassportEvent` / `AuditLog` теперь живёт в
+  `production-flow.md §3` и `order-flow.md §3`. Полное
+  переписывание `events.md` — после ревизии master-actions и
+  audit-events, отдельным шагом.
+- `docs/deployment.md` (TODO PHASE 3) —
+  сводный документ по deploy (сейчас распылён между
+  `deploy-stage.md` и `deploy-uploads-static-routing.md`).
 
 ---
 
@@ -92,7 +218,7 @@ Seed-данные (справочники MVP): `prisma/seed.ts`
 - [x] **Шаг 6.** Сотрудники, смены, оборудование, перемещения (выбор демо-сотрудника, старт/стоп смены на оборудовании, выдача кроя из ячейки, сканирование паспорта на операции, событие `OPERATION_SCAN`). Начисление пошива остаётся PENDING (см. `flows.md §F3a/F4`).
 - [x] **Шаг 7.** ОТК и фиксация брака (справочник `DefectType`, `PassportDefect`, `qtyDefect/qtyGood` в паспорте, агрегат `qtyDefectTotal` по заказу, событие `DEFECT_RECORDED`, экраны `/qc` и `/qc/passports/[id]`). Виновная операция, возврат брака в производство и split паспорта — за рамками MVP.
 - [x] **Шаг 8.** ВТО + упаковка + выпуск изделия. ВТО — обычный `OPERATION_SCAN` на операцию `WTO` через `/api/passports/:id/scan` (отдельного API нет, см. ADR-0011). Упаковка — `Box`/`BoxItem`, добавление паспорта в коробку = выпуск (`Passport.status = PACKED`, `PassportEvent(PACKED)`, агрегат `qtyFinishedTotal` по заказу). Экраны `/packing` и `/packing/boxes/[id]`. Апрув `OperationEntry(PENDING)`, расчёт зарплаты и сплит коробок — на Шаге 9+.
-- [x] **Шаг 9.** Сдельная зарплата (минимум): модель `OperationEntry` расширена `approvalMode` / `sourceEventType` / уникальным индексом идемпотентности (ADR-0012); раскройщик получает `IMMEDIATE`-начисление в транзакции `PassportsService.create`, пошив — `PENDING_RELEASE` в транзакции `scanOnOperation` и `APPROVED` в транзакции `PackingService.addPassport` (ADR-0005). API `/api/earnings`, `/api/earnings/summary`, `/api/passports/:id/earnings`; UI `/earnings` + блок «Начисления» в `/passports/[id]`. Окладная часть, ведомость за месяц, удержания за брак, экспорт и интеграция с 1С/ЗУП — за рамками MVP.
+- [x] **Шаг 9.** Сдельная зарплата (минимум): модель `OperationEntry` расширена `approvalMode` / `sourceEventType` / уникальным индексом идемпотентности (ADR-0012); раскройщик получает `IMMEDIATE`-начисление в транзакции `PassportsService.create`, пошив — `PENDING_RELEASE` в транзакции `scanOnOperation` и `APPROVED` в транзакции `PackingService.close` (через `EarningsService.approvePendingForPassport` по каждому `BoxItem.passportId`; финальный апрув переехал с `addPassport` на `close` — ADR-0005 §«Подтверждение», ADR-0011 §5, `docs/production-flow.md §10.4`/§11.3). API `/api/earnings`, `/api/earnings/summary`, `/api/passports/:id/earnings`; UI `/earnings` + блок «Начисления» в `/passports/[id]`. Окладная часть, ведомость за месяц, удержания за брак, экспорт и интеграция с 1С/ЗУП — за рамками MVP.
 - [x] **Шаг 10.** Экран «Цех» (`/shopfloor`) — управленческая доска `размер × этап → qty` поверх существующих агрегатов (orders + passports + qc + packing). Серверная проекция `ShopfloorService` (`GET /api/shopfloor/state`), без новой материализованной витрины и без новых событий: stage buckets выведены из `Passport.status`, `Passport.currentOperation.category` и `BoxItem.box.closedAt` (см. [ADR-0013](./adr/0013-shopfloor-stage-mapping.md)). Polling `3 сек` (ADR-0007), на изменении значений в ячейке — короткая flash-подсветка (зелёный = «приехало», красный = «уехало»). Полноценная анимация перелёта паспорта и дашборд начальника — за рамками MVP.
 - [x] **Шаг 12 (Pilot Rollout / UAT / Bugfix Sprint).** Подготовка к
   реальному запуску в цехе. Не вводит новых модулей. Добавлены:
@@ -259,6 +385,161 @@ Seed-данные (справочники MVP): `prisma/seed.ts`
   `tests/smoke/production-dashboard.smoke.test.ts`.
 
 - [x] **Шаг 11 (MVP 1.1, Stabilization).** Реальная авторизация (`/api/auth/login`/`logout`/`me`), session-cookie с подписью HMAC-SHA256 и `Domain=.teeon.ru`, RBAC через `AuthGuard` + `@Roles()` (см. [ADR-0014](./adr/0014-auth-and-sessions.md)). Критические инварианты на уровне БД: partial-unique для активной смены, глобальный unique на `BoxItem.passportId`, фиксация уникальности номеров и QR (см. [ADR-0015](./adr/0015-db-invariants.md)). Интеграционные/smoke-тесты на ключевой производственный поток (orders → passports → shifts → qc → packing → earnings); тесты автоматически skip-аются без `TEST_DATABASE_URL` (см. [ADR-0016](./adr/0016-test-strategy.md)). Health/Ready endpoints (`/api/health`, `/api/ready`) и `GlobalExceptionFilter` (нормализация ошибок). UI: страница `/login`, route protection через `middleware.ts`, индикация текущего пользователя и logout-action в шапке. Подробнее в `domain.md §0a`, `api.md §1`, `flows.md §F0`.
+
+---
+
+## PR gate / Docs consistency
+
+Каждый PR должен проходить локально и в CI:
+
+```bash
+npm run docs:check
+```
+
+Скрипт — `scripts/docs/check-docs.mjs`, без сторонних зависимостей,
+запускается из workflow `Docs consistency`
+(`.github/workflows/docs-check.yml`, job `docs-check`,
+Node 20, `npm ci --ignore-scripts`) на `push` и `pull_request`.
+
+Что проверяется:
+
+- `[docs:critical]` — наличие ключевых документов
+  (`api.md` / `erd.md` / `events.md` / `order-flow.md` /
+  `production-flow.md` / `display-board.md` / `domain.md`).
+- `[docs:erd]` — каждый top-level `enum` и `model` из
+  `prisma/schema.prisma` упомянут в `docs/erd.md`.
+- `[docs:api]` — каждый файл `*.controller.ts` и каждый его
+  HTTP-route (`@Get` / `@Post` / `@Patch` / `@Put` / `@Delete`)
+  упомянут в `docs/api.md`.
+- `[docs:events]` — каждое значение `PassportEventType` (Prisma)
+  и каждый член `AuditEntityType` (TS-union в
+  `apps/api/src/modules/audit/audit.service.ts`) упомянут в
+  `docs/events.md`.
+- `[docs:links]` — все относительные markdown-ссылки и якоря в
+  `README.md` + `docs/**/*.md` существуют. Проверяются:
+  - `[…](path.md)` — файл должен существовать;
+  - `[…](path.md#anchor)` — файл и якорь должны существовать;
+  - `[…](#anchor)` — якорь в текущем файле должен существовать.
+
+  Игнорируются: `http(s)://`, `mailto:`, `tel:`, протокол-relative
+  `//…`, картинки `![…](…)`, ссылки на каталоги и не-`.md` файлы,
+  содержимое fenced-code-blocks и inline-code.
+
+Якори распознаются в двух формах:
+
+- явные HTML: `<a id="role"></a>`, `<a id="role" />`,
+  `<a name="role"></a>` — **рекомендуется для критичных
+  cross-doc ссылок**, не ломаются при ревизии заголовков;
+- GitHub-style heading slug
+  (`## Роль документа` → `#роль-документа`,
+  `## 1. Заказ` → `#1-заказ`).
+
+### Что обновлять при изменении кода
+
+- Добавлен/изменён Prisma `model` или `enum`
+  (`prisma/schema.prisma`) → обновить `docs/erd.md`.
+- Добавлен/изменён `*.controller.ts` или его route в
+  `apps/api/src/modules/**` → обновить `docs/api.md`
+  (как файл-контроллер, так и `METHOD /api/...`).
+- Добавлено новое значение `PassportEventType`
+  (`prisma/schema.prisma`) или новый член `AuditEntityType`
+  (`apps/api/src/modules/audit/audit.service.ts`) →
+  обновить `docs/events.md`.
+- Добавлены новые секции в любой `docs/*.md`, на которые
+  планируется ссылаться из других документов → ставить явный
+  `<a id="..."></a>`, не полагаться только на slug заголовка.
+
+PR без `docs:check OK` не мержится.
+
+---
+
+## Hard enforcement / Branch protection
+
+`docs:check` запускается из CI (`.github/workflows/docs-check.yml`,
+job `docs-check`) на каждом `push` и `pull_request`. Чтобы PR
+**физически не мержился** при красном `docs-check`, статус-чек
+нужно сделать обязательным на уровне репозитория — это делается
+руками в GitHub UI (через API/Terraform — по желанию).
+
+### 1. Branch protection rule для `main`
+
+GitHub → **Settings → Branches → Add branch protection rule**
+
+- **Branch name pattern:** `main`
+- Включить:
+  - ☑ **Require a pull request before merging**
+    - (опционально) `Require approvals` ≥ 1
+    - ☑ **Dismiss stale pull request approvals when new commits are pushed**
+  - ☑ **Require status checks to pass before merging**
+    - ☑ **Require branches to be up to date before merging**
+    - В списке **Status checks that are required** выбрать:
+      - `docs-check` *(имя job-а из `.github/workflows/docs-check.yml`)*
+  - ☑ **Require review from Code Owners**
+    *(только после того, как в `.github/CODEOWNERS` подставлен
+    реальный GitHub username/team вместо плейсхолдера `@OWNER`)*
+  - ☑ **Do not allow bypassing the above settings**
+  - Если в Settings репозитория доступно — отдельно
+    отключить прямой push в `main`
+    (`Restrict who can push to matching branches` → пусто, либо
+    только release-bot).
+
+### 2. То же правило для `dev` (если ветка используется)
+
+Если в проекте есть долгоживущая `dev`-ветка — повторить ту же
+конфигурацию для `Branch name pattern: dev`. Если `dev` не
+используется (всё в `main` через короткоживущие feature-ветки) —
+шаг можно пропустить.
+
+### 3. Важные нюансы
+
+- **`docs-check` появится в списке required checks только после
+  первого запуска GitHub Actions** на этом репозитории. Если в
+  выпадающем списке его пока нет — сделайте любой PR (или push в
+  ветку), дождитесь, пока workflow `Docs consistency` отработает
+  хотя бы один раз, и после этого имя `docs-check` станет
+  доступно для выбора.
+- Имя required-чека должно совпадать с **job name**, а не с
+  workflow name. Сейчас это `docs-check` (см.
+  `.github/workflows/docs-check.yml` → `jobs.docs-check.name`).
+  Если переименуете job — обновите branch protection.
+- `Require review from Code Owners` без валидного хендла в
+  `CODEOWNERS` молча не сработает: GitHub просто проигнорирует
+  несуществующих овнеров. Сначала подставьте реальный
+  username/team (`@your-handle` или `@org/team-slug`) — потом
+  включайте чек-бокс.
+- Hard enforcement распространяется и на администраторов только
+  если включён **`Do not allow bypassing the above settings`**.
+  Без него admin может смержить PR в обход красного `docs-check`.
+
+### 4. Что должно лежать в репозитории
+
+- ✅ `.github/workflows/docs-check.yml` — workflow `Docs consistency`,
+  job `docs-check`, Node 20, `npm ci --ignore-scripts` →
+  `npm run docs:check` (push + pull_request).
+- ✅ `.github/pull_request_template.md` — чек-лист docs-consistency
+  (`docs:check passed`, обновление `erd.md` / `api.md` / `events.md`
+  при правке схемы / контроллеров / событий).
+- ✅ `.github/CODEOWNERS` — карта ответственности за docs / api /
+  prisma / shared. До подстановки реального хендла файл работает
+  как документация, GitHub-овнерство неактивно.
+- ✅ `scripts/docs/check-docs.mjs` — сам скрипт `docs:check`,
+  без сторонних зависимостей.
+
+### 5. Чек-лист «настроил hard enforcement»
+
+- [ ] В `.github/CODEOWNERS` `@OWNER` заменён на реальный
+      GitHub username/team.
+- [ ] На `main` создан branch protection rule с required check
+      `docs-check`.
+- [ ] (если используется) на `dev` создан тот же branch
+      protection rule.
+- [ ] Включён `Require review from Code Owners`.
+- [ ] Включён `Require branches to be up to date before merging`.
+- [ ] Включён `Do not allow bypassing the above settings`
+      (или явно решено, что admin-ы могут байпасить — задокументировать).
+- [ ] Прямой push в `main` запрещён через
+      `Restrict who can push to matching branches` (если доступно
+      на тарифе репозитория).
 
 ---
 

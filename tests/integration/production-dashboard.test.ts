@@ -22,6 +22,7 @@ import request from 'supertest';
 import { Prisma } from '@prisma/client';
 import {
   loginAs,
+  refreshAdminCookie,
   startTestApp,
   stopTestApp,
   type TestApp,
@@ -43,6 +44,10 @@ describeWithDb('integration — production dashboard (Дашборд начал�
   beforeEach(async () => {
     await resetDatabase(t.prisma);
     seed = await seedMinimal(t.prisma);
+    // Без `refreshAdminCookie` системный admin был бы стёрт TRUNCATE'ом,
+    // и `t.adminCookie` ушёл бы в 401 — тест-кейс «ADMIN → 200» в RBAC
+    // падал бы регулярно.
+    await refreshAdminCookie(t);
     cookies = {
       manager: loginAs(t, seed.employees['shop-chief']),
       seamstress: loginAs(t, seed.employees['seamstress']),
@@ -150,20 +155,28 @@ describeWithDb('integration — production dashboard (Дашборд начал�
   // 3. Pipeline: живой паспорт CUT светится в стадии и bottleneck
   // -------------------------------------------------------------------------
 
-  test('3. Живой паспорт без событий → стадия CUT и bottleneck=CUT', async () => {
+  test('3. Живой паспорт без событий → стадия SEWING и bottleneck=SEWING', async () => {
+    // `createPlacedPassport` создаёт паспорт со `status=IN_PROGRESS` и
+    // `currentOperationId=null` — это «выдан в работу, но ни одной
+    // операции ещё не зафиксировано». По доменному контракту
+    // `bucketOf` (см. `shopfloor-projection.ts`, ветка `IN_PROGRESS` с
+    // `currentOperationCategory === null`) такие живые паспорта
+    // попадают в SEWING, а не в CUT. Это сделано осознанно, чтобы
+    // живой паспорт не «исчезал» с экрана между крой → пошив. Стадия
+    // CUT в новой семантике — только для `PassportStatus.CREATED`.
     const today = startOfUtcToday();
-    await createPlacedPassport(t, seed, 7, today); // status=IN_PROGRESS
+    await createPlacedPassport(t, seed, 7, today);
 
     const res = await request(t.app.getHttpServer())
       .get('/api/dashboard/production')
       .set('Cookie', cookies.manager);
     expect(res.status).toBe(200);
-    const cut = res.body.pipeline.stages.find(
-      (s: { stage: string; qty: number }) => s.stage === 'CUT',
+    const sewing = res.body.pipeline.stages.find(
+      (s: { stage: string; qty: number }) => s.stage === 'SEWING',
     );
-    expect(cut).toBeDefined();
-    expect(cut.qty).toBe(7);
-    expect(res.body.pipeline.bottleneckStage).toBe('CUT');
+    expect(sewing).toBeDefined();
+    expect(sewing.qty).toBe(7);
+    expect(res.body.pipeline.bottleneckStage).toBe('SEWING');
     expect(res.body.pipeline.bottleneckQty).toBe(7);
     expect(res.body.kpi.wipUnits).toBe(7);
     expect(res.body.kpi.wipPassports).toBe(1);

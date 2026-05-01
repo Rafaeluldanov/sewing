@@ -1,28 +1,58 @@
 import Link from 'next/link';
+import { ArrowRight, Plus, Printer } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listPrinters } from '@/lib/printers-api';
-import { listEquipment } from '@/lib/equipment-api';
 import type { PrinterSummaryDto } from '@sewing/shared/printers';
-import type { EquipmentSummaryDto } from '@sewing/shared/equipment';
-import { Icon } from '@/components/icon';
-import { CreatePrinterForm } from './create-form';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminPagination,
+  AdminStatusBadge,
+  AdminTable,
+  paginate,
+  type AdminTableColumn,
+} from '@/components/admin';
 
 export const dynamic = 'force-dynamic';
 
+const PRINTER_TYPE_LABEL: Record<string, string> = {
+  DEFAULT: 'По умолчанию',
+  WINDOWS: 'Windows',
+  ZEBRA: 'Zebra',
+};
+
+function formatPrinterType(type: string): string {
+  return PRINTER_TYPE_LABEL[type] ?? type;
+}
+
+interface SearchParams {
+  page?: string;
+  pageSize?: string;
+}
+
 /**
- * Список принтеров (см. `docs/screens.md §18`).
+ * Список принтеров (Admin UI Polish).
  *
- * Показываем имя, привязанное рабочее место, тип, статус online/offline
- * (derived из `lastSeenAt`), сколько pending job-ов в очереди.
- * Создание нового принтера — встроенная форма сверху, чтобы менеджер
- * не уходил со страницы и сразу видел свежесозданный принтер в списке.
+ * Источник истины — `GET /api/printers`. Доступ режется в
+ * `app/admin/layout.tsx` (ADMIN/SHOP_MANAGER); backend параллельно
+ * проверяет `@Roles('ADMIN', 'SHOP_MANAGER')`.
+ *
+ * UI Polish:
+ *   - убрали технический `code` оборудования из колонки «Рабочее место»
+ *     (видим в карточке оборудования);
+ *   - типы (DEFAULT/WINDOWS/ZEBRA) переведены через `PRINTER_TYPE_LABEL`;
+ *   - онлайн/офлайн — `<AdminStatusBadge>` с тоном по статусу.
  */
-export default async function AdminPrintersPage() {
+export default async function AdminPrintersPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
   let items: PrinterSummaryDto[] = [];
-  let equipment: EquipmentSummaryDto[] = [];
   let error: string | null = null;
   try {
-    [items, equipment] = await Promise.all([listPrinters(), listEquipment()]);
+    items = await listPrinters();
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -30,136 +60,140 @@ export default async function AdminPrintersPage() {
         : 'Не удалось загрузить список принтеров';
   }
 
-  return (
-    <div className="admin-overview page-shell">
-      <header className="admin-overview__header">
+  const { pageItems, page, pageSize, total } = paginate(items, searchParams);
+
+  const columns: AdminTableColumn<PrinterSummaryDto>[] = [
+    {
+      key: 'name',
+      header: 'Название',
+      render: (p) => (
         <div>
-          <div className="page-eyebrow">
-            <Icon name="equipment" />
-            Печать рабочих мест
-          </div>
-          <h1 className="page-title">
-            <Icon name="equipment" />
-            Принтеры
-          </h1>
-          <p className="page-subtitle">
-            Один принтер на рабочее место. Агент рядом с принтером ловит
-            задания и печатает автоматически — сотрудник просто жмёт «Печать».
-          </p>
+          <Link
+            href={`/admin/printers/${p.id}`}
+            className="admin-table__primary"
+            style={{ color: 'var(--admin-text)', textDecoration: 'none' }}
+          >
+            {p.name}
+          </Link>
+          {!p.isActive && (
+            <div className="admin-table__hint">Деактивирован</div>
+          )}
         </div>
-      </header>
-
-      {error && <div className="error-box">{error}</div>}
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="orders" />
-            Новый принтер
-          </h2>
-        </div>
-        <p className="detail-form__hint">
-          Введите имя (например, «Принтер ОТК-1») и привяжите к рабочему
-          месту. После создания нажмите «Сгенерировать код» в карточке
-          принтера и передайте код оператору, который запустит агент.
-        </p>
-        <CreatePrinterForm equipment={equipment} />
-      </section>
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="equipment" />
-            Список
-          </h2>
-          <span className="section-header__hint">
-            Всего: {items.length}
-          </span>
-        </div>
-
-        {items.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-state__icon">
-              <Icon name="equipment" />
-            </span>
-            <span className="empty-state__title">Принтеров ещё нет</span>
-          </div>
+      ),
+    },
+    {
+      key: 'type',
+      header: 'Тип',
+      render: (p) => formatPrinterType(p.type),
+    },
+    {
+      key: 'equipment',
+      header: 'Рабочее место',
+      render: (p) =>
+        p.equipmentId ? (
+          <Link
+            href={`/admin/equipment/${p.equipmentId}`}
+            className="admin-table__action-link"
+            style={{ color: 'var(--admin-text)', textDecoration: 'none' }}
+          >
+            {p.equipmentName ?? '—'}
+          </Link>
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Имя</th>
-                <th>Тип</th>
-                <th>Рабочее место</th>
-                <th>Статус</th>
-                <th>В очереди</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {items.map((p) => (
-                <tr key={p.id}>
-                  <td>
-                    <Link href={`/admin/printers/${p.id}`}>
-                      <strong>{p.name}</strong>
-                    </Link>
-                    {!p.isActive && (
-                      <span className="meta-line"> · деактивирован</span>
-                    )}
-                  </td>
-                  <td>{p.type}</td>
-                  <td>
-                    {p.equipmentId ? (
-                      <Link href={`/admin/equipment/${p.equipmentId}`}>
-                        {p.equipmentName ?? '—'}{' '}
-                        <span className="meta-line">
-                          <code>{p.equipmentCode ?? ''}</code>
-                        </span>
-                      </Link>
-                    ) : (
-                      <span className="meta-line">не привязан</span>
-                    )}
-                  </td>
-                  <td>
-                    <span
-                      className={`pill ${
-                        p.isOnline ? 'pill--ok' : 'pill--ghost'
-                      }`}
-                    >
-                      <Icon
-                        name={p.isOnline ? 'success' : 'idle'}
-                        size={14}
-                      />
-                      {p.isOnline ? 'онлайн' : 'офлайн'}
-                    </span>
-                    {p.lastSeenAt && (
-                      <span
-                        className="meta-line"
-                        style={{ marginLeft: '0.5rem' }}
-                        title={p.lastSeenAt}
-                      >
-                        {new Date(p.lastSeenAt).toLocaleString('ru-RU')}
-                      </span>
-                    )}
-                  </td>
-                  <td>
-                    {p.pendingJobsCount === 0 ? (
-                      <span className="meta-line">—</span>
-                    ) : (
-                      <strong>{p.pendingJobsCount}</strong>
-                    )}
-                  </td>
-                  <td>
-                    <Link href={`/admin/printers/${p.id}`}>
-                      Открыть <Icon name="arrow-right" size={13} />
-                    </Link>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-    </div>
+          <span className="admin-muted">Не привязан</span>
+        ),
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      render: (p) =>
+        p.isOnline ? (
+          <AdminStatusBadge tone="success" withDot>
+            Онлайн
+          </AdminStatusBadge>
+        ) : (
+          <AdminStatusBadge tone="muted" withDot>
+            Офлайн
+          </AdminStatusBadge>
+        ),
+    },
+    {
+      key: 'queue',
+      header: 'В очереди',
+      align: 'right',
+      render: (p) =>
+        p.pendingJobsCount === 0 ? (
+          <span className="admin-muted">—</span>
+        ) : (
+          <strong>{p.pendingJobsCount}</strong>
+        ),
+    },
+    {
+      key: 'open',
+      header: '',
+      isAction: true,
+      render: (p) => (
+        <Link
+          href={`/admin/printers/${p.id}`}
+          className="admin-table__action-link"
+        >
+          Открыть
+          <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+        </Link>
+      ),
+    },
+  ];
+
+  return (
+    <AdminPageShell
+      icon={<Printer size={22} strokeWidth={1.6} aria-hidden />}
+      title="Принтеры"
+      subtitle={`Всего: ${items.length}`}
+      actions={
+        <Link
+          href="/admin/printers/new"
+          className="admin-btn admin-btn--primary"
+        >
+          <Plus size={16} strokeWidth={1.6} aria-hidden />
+          Добавить
+        </Link>
+      }
+    >
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
+        </div>
+      )}
+
+      <AdminCard>
+        <AdminTable
+          rows={pageItems}
+          columns={columns}
+          rowKey={(p) => p.id}
+          emptyContent={
+            <AdminEmptyState
+              icon={<Printer size={26} strokeWidth={1.6} aria-hidden />}
+              title="Принтеров ещё нет"
+              actions={
+                <Link
+                  href="/admin/printers/new"
+                  className="admin-btn admin-btn--primary"
+                >
+                  <Plus size={16} strokeWidth={1.6} aria-hidden />
+                  Добавить принтер
+                </Link>
+              }
+            />
+          }
+        />
+
+        <AdminPagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          basePath="/admin/printers"
+          label="принтеров"
+        />
+      </AdminCard>
+    </AdminPageShell>
   );
 }

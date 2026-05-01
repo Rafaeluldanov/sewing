@@ -6,6 +6,7 @@ import type {
   EmployeeLiteDto,
   ShiftMetaDto,
 } from '@sewing/shared/shifts';
+import { groupOperationsByCategory } from '@sewing/shared/operations';
 import { startShiftAction } from './actions';
 import { initialWorkFormState } from './state';
 
@@ -34,6 +35,10 @@ export function ShiftStartForm({ meta, employee }: Props) {
     () =>
       [...meta.operations].sort((a, b) => a.sortOrder - b.sortOrder),
     [meta.operations],
+  );
+  const operationGroups = useMemo(
+    () => groupOperationsByCategory(sortedOps),
+    [sortedOps],
   );
   const sortedEq = useMemo(
     () => [...meta.equipment].sort((a, b) => a.code.localeCompare(b.code)),
@@ -94,10 +99,18 @@ export function ShiftStartForm({ meta, employee }: Props) {
           onChange={(e) => setOperationId(e.target.value)}
         >
           <option value="">— выбрать —</option>
-          {sortedOps.map((o) => (
-            <option key={o.id} value={o.id}>
-              {o.name} · {o.code}
-            </option>
+          {operationGroups.map((group) => (
+            <optgroup
+              key={group.category}
+              label={group.label}
+              data-category={group.category}
+            >
+              {group.operations.map((o) => (
+                <option key={o.id} value={o.id}>
+                  {o.name} · {o.code}
+                </option>
+              ))}
+            </optgroup>
           ))}
         </select>
       </label>

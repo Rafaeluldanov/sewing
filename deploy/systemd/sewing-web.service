@@ -1,0 +1,37 @@
+[Unit]
+# SEWING WEB (Next.js) — слушает 127.0.0.1:3000, nginx проксирует /.
+# Зависит от sewing-api: при холодном старте next делает RSC-fetch к API
+# и без него рендерит ошибки.
+Description=SEWING WEB (Next.js) on :3000
+Documentation=https://github.com/teeon/sewing
+After=network-online.target sewing-api.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+Group=root
+WorkingDirectory=/sewing
+
+EnvironmentFile=/sewing/.env
+Environment=NODE_ENV=production
+
+# next start <dir> -p <port> — `dir` указывает на собранный
+# Next-проект (apps/web/.next), поэтому cwd оставляем /sewing.
+ExecStart=/sewing/node_modules/.bin/next start apps/web -p 3000
+
+Restart=always
+RestartSec=5
+StartLimitIntervalSec=0
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=sewing-web
+
+KillSignal=SIGTERM
+TimeoutStopSec=20
+
+# TODO follow-up: перенести на не-root пользователя (см. docs/ops.md).
+
+[Install]
+WantedBy=multi-user.target

@@ -16,8 +16,24 @@ import {
 } from '@/lib/shifts-api';
 import type { PassportLookupResponse, WorkFormState } from './state';
 
+/**
+ * Список API error-кодов, для которых backend уже формирует
+ * полностью готовый текст для отображения сотруднику — без префикса
+ * `[CODE] ` от UI.
+ *
+ * Stage 3 «Мастер цеха» (`CUT_RELEASE_POLICY_VIOLATION`): backend
+ * присылает строку вида «Сейчас разрешена выдача только: Чёрный XS,
+ * лимит 100 шт.», которую ТЗ требует показать рабочему ровно как
+ * inline-message — без code-префикса, без «обратитесь к мастеру»,
+ * без alert-обёрток (см. также `seamstress-active-panel.tsx`).
+ */
+const RAW_API_ERROR_CODES = new Set(['CUT_RELEASE_POLICY_VIOLATION']);
+
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
+    if (e.code && RAW_API_ERROR_CODES.has(e.code)) {
+      return e.message;
+    }
     const prefix = e.code ? `[${e.code}] ` : '';
     return `${prefix}${e.message}`;
   }
@@ -138,6 +154,14 @@ export async function lookupPassportAction(
         // активную смену сотрудника с ожидаемым шагом маршрута.
         // Если у заказа нет snapshot маршрута — здесь будет null.
         routeHint: p.routeHint ?? null,
+        // Route-WIP UI-критерий: симметричен серверному правилу
+        // `PassportsService.issueToEmployee` — паспорт считается «в
+        // маршрутном потоке», если `currentRouteStepIndex !== null`
+        // (snapshot маршрута проставляется при `Passport.create()`).
+        // UI на основе этого поля решает, требовать ли ячейку и какой
+        // copy показывать в `PassportConfirmModal`.
+        currentRouteStepIndex: p.currentRouteStepIndex,
+        currentCellCode: p.currentCell?.code ?? null,
       },
     };
   } catch (e) {

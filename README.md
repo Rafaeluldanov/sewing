@@ -1,5 +1,34 @@
 # Sewing — система управления швейным производством (MVP)
 
+> ⚠️ **README is HISTORICAL ROADMAP (PHASE 1, 2026-Q2)** ⚠️
+>
+> Текущий `README.md` (≈153 KB) — **исторический roadmap** и
+> летопись MVP-этапов 1..N. Он содержит много устаревших
+> утверждений о структуре потоков, ролей и snapshot-логики
+> заказа, и **не является source of truth** для новых
+> разработчиков и Cursor-агентов.
+>
+> Актуальные источники истины (PHASE 1):
+>
+> - [`docs/index.md`](./docs/index.md) — карта документации
+>   с явными статусами `OK / OUTDATED / DRAFT / ARCHIVED`.
+> - [`docs/api.md`](./docs/api.md) — REST-контракт,
+>   собран строго из текущих контроллеров
+>   `apps/api/src/modules/**/*.controller.ts`.
+> - [`docs/erd.md`](./docs/erd.md) — модель БД,
+>   собрана строго из `prisma/schema.prisma`.
+> - Будущие flow-документы:
+>   - `docs/order-flow.md` (TODO)
+>   - `docs/production-flow.md` (TODO)
+>   - `docs/display-board.md` (TODO)
+>
+> Сам этот README **не переписывается** в PHASE 1. Используйте
+> его только как backlog / historical reference, и при любом
+> расхождении доверяйте документам выше и коду
+> (`apps/api/src/modules/**`, `prisma/schema.prisma`).
+
+---
+
 Центральная сущность — **Паспорт изделия**: описывает партию (размер + цвет
 + рулон), двигается по всем этапам (раскрой → пошив → ОТК → ВТО → упаковка)
 и несёт всю экономику (брак, операции, зарплаты).
@@ -19,6 +48,7 @@
 - [`docs/screens.md`](./docs/screens.md) — карта экранов
 - [`docs/pilot/`](./docs/pilot) — Pilot Rollout / UAT (план, onboarding, FAQ, фидбек)
 - [`docs/deploy-stage.md`](./docs/deploy-stage.md) — развёртывание stage (`stage.teeon.ru`)
+- [`docs/deploy-uploads-static-routing.md`](./docs/deploy-uploads-static-routing.md) — nginx-роутинг `/uploads/*` в API
 - [`docs/adr/`](./docs/adr) — архитектурные решения
 
 Документация — **источник истины**. При расхождении с кодом — правим код.
@@ -550,10 +580,14 @@ UI `apps/web/app/wto`.
 модуль `apps/api/src/modules/earnings`, страница `apps/web/app/earnings`
 и блок «Начисления» в карточке паспорта.
 
-- **Кто считается.** Только `Employee.paymentType = PIECEWORK` на
-  операциях `CUT_CUT`, `SEW_OVERLOCK_1`, `SEW_BINDING`,
-  `SEW_OVERLOCK_2`, `SEW_COVERSTITCH`. Окладные роли (ОТК, помощник
+- **Кто считается.** Только `Employee.compensationType ≠ SALARY`
+  (т.е. `PIECEWORK` или `MIXED`) на операциях `CUT_CUT`,
+  `SEW_OVERLOCK_1`, `SEW_BINDING`, `SEW_OVERLOCK_2`, `SEW_COVERSTITCH`.
+  Окладные сотрудники (`compensationType = SALARY` — ОТК, помощник
   раскройщика, упаковщики, ВТО) в `OperationEntry` не попадают.
+  Историческое `Employee.paymentType` удалено — `compensationType`
+  единственный источник истины «как платим» (см.
+  `docs/domain.md §9a`, миграция `20260429100000_remove_payment_type`).
 - **Раскройщик (immediate).** В транзакции `PassportsService.create`
   после `PassportEvent(CREATED)` создаётся
   `OperationEntry { qty=qtyCut, ratePerUnit, amount, status=APPROVED,
@@ -873,8 +907,9 @@ TEST_DATABASE_URL="postgresql://sewing:sewing@localhost:5432/sewing_test?schema=
 - **Error tagging.** Каждый ответ API теперь содержит
   `requestId` (uuid). Тот же `requestId` пишется в логи
   `GlobalExceptionFilter` и проброшен в красную плашку ошибки на
-  `/work` — сотрудник называет его поддержке. См.
-  [`docs/api.md §13`](./docs/api.md#13-нормализация-ошибок-и-requestid).
+  `/work` — сотрудник называет его поддержке. См. раздел
+  «Ошибки и коды (общие соглашения)» в
+  [`docs/api.md`](./docs/api.md).
 - **Структурированные логи** в ключевых действиях: `auth.login`,
   `passport.create`, `passport.issue`, `passport.scan`, `qc.defect`,
   `packing.add` — формат `{ event, actorId, requestId, ... }`.
@@ -960,7 +995,7 @@ TEST_DATABASE_URL="postgresql://sewing:sewing@localhost:5432/sewing_test?schema=
   же. Это часть модели «одно рабочее окно на роль»: швея и
   помощник раскройщика после логина сразу попадают в `/work`,
   ОТК — в `/qc`, упаковка — в `/packing`. Подробности —
-  [`docs/screens.md §1.1`](./docs/screens.md#11-модель-одно-рабочее-окно-на-роль).
+  [`docs/screens.md §1.1`](./docs/screens.md#role-window-model).
 - **Reusable-компоненты** — `apps/web/components`:
   `mobile-action-card.tsx`, `role-header-card.tsx`, 
   `app-section-card.tsx`, `status-pill.tsx`, `mobile-nav.tsx`.
@@ -1399,10 +1434,12 @@ soft-delete операций (`Operation.code` остаётся стабильн
 
 - **Новые поля `Employee`.** `compensationType`
   (`PIECEWORK` / `SALARY` / `MIXED`, default `PIECEWORK`) и
-  `salaryPerShift Decimal(12,2)?`. Существующее `paymentType`
-  оставлено как источник истины для сдельного контура и **не
-  трогается** — `compensationType` это отдельная управленческая
-  ось «как платим» (см. ADR-0021 §2.1).
+  `salaryPerShift Decimal(12,2)?`. Историческое `paymentType`
+  удалено пост-задачей «remove paymentType» (миграция
+  `20260429100000_remove_payment_type`); теперь `compensationType`
+  одновременно гейтит и сдельный контур (`OperationEntry`), и
+  окладной (`SalaryEntry`) — единственный источник истины «как
+  платим» (см. ADR-0021 §2.1, обновлённую под удаление).
 - **Новая таблица `SalaryEntry`.** Поля `employeeId`, `date` (Postgres
   `DATE`), `amount Decimal(12,2)`, `source` (`SHIFT_DAY` / `MANUAL`,
   на MVP пишем только `SHIFT_DAY`), `editedManually`,
@@ -1798,6 +1835,19 @@ server {
         proxy_set_header Host $host;
     }
 
+    # ОБЯЗАТЕЛЬНО: /uploads/* должен идти в API, не в Next.js — иначе
+    # превью лекал на /admin/patterns и в форме заказа отдаётся как
+    # HTML 404. Подробнее — docs/deploy-uploads-static-routing.md.
+    # Блок объявлен ДО `location /` сознательно (см. там же).
+    location ^~ /uploads/ {
+        proxy_pass http://127.0.0.1:3001;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+
     location / {
         proxy_pass http://127.0.0.1:3000;
         proxy_http_version 1.1;
@@ -1885,6 +1935,16 @@ CHUNK_URL=$(curl -s http://stage.teeon.ru/login \
 curl -sSI "http://stage.teeon.ru${CHUNK_URL}"
 #   ожидаем: 200 OK + Content-Type: application/javascript
 #   если HTML/404 → nginx сломан, будет ChunkLoadError у всех клиентов
+
+# 9. /uploads/* идёт в API, а не в Next.js
+#    Подробнее: docs/deploy-uploads-static-routing.md
+#    Берём произвольный реально существующий файл из apps/api/uploads/:
+SAMPLE=$(find /sewing/apps/api/uploads -type f | head -n 1)
+SAMPLE_URL="/uploads${SAMPLE#/sewing/apps/api/uploads}"
+curl -sSI "http://127.0.0.1:3001${SAMPLE_URL}"           # API: 200
+curl -sSI "https://stage.teeon.ru${SAMPLE_URL}"          # nginx: 200
+#   если nginx → 404/HTML → блок `location ^~ /uploads/` отсутствует
+#   или объявлен ниже `location /` — чинить.
 ```
 
 Если шаг падает — дальше идти бессмысленно, чинить именно его.

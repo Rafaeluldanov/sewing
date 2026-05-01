@@ -28,6 +28,12 @@ enum Role {
   // Аккаунт под этой ролью видит только `/shopfloor/display`, не имеет
   // доступа к мутациям и не используется для расчёта зарплаты/смен.
   DISPLAY
+  /// Мастер цеха (MVP). Мобильный терминал `/master`: видит очередь
+  /// открытых вызовов от рабочих, закрывает вызов сканом QR
+  /// сотрудника. На MVP не имеет доступа к admin-справочникам,
+  /// ценам, маршрутам, техкартам и пользователям. См.
+  /// `docs/domain.md §«Мастер цеха»` и `MasterCall` ниже.
+  SHOPFLOOR_MASTER
 }
 
 enum OperationCategory {
@@ -38,17 +44,11 @@ enum OperationCategory {
   PACKING
 }
 
-enum PaymentType {
-  SALARY
-  PIECEWORK
-}
-
-/// Тип компенсации сотрудника (post-Шаг 18 / Шаг 19, см. ADR-0021,
-/// `docs/domain.md §9a`).
-///
-/// Управленческая характеристика, отвечающая на вопрос «как платим
-/// этому человеку» в рамках временной окладной модели «день со
-/// сменой = отработанный день»:
+/// Тип компенсации сотрудника — единственный источник истины «как
+/// платим» (post-Шаг 18 / Шаг 19, см. ADR-0021, `docs/domain.md §9a`).
+/// Историческое `Employee.paymentType` удалено — `compensationType`
+/// одновременно гейтит и сдельный контур (`EarningsService`), и
+/// окладной (`SalaryService`):
 ///
 /// - `PIECEWORK` — только сдельщина (раскройщик, швея). Окладные
 ///   начисления `SalaryEntry` не создаются.
@@ -56,20 +56,12 @@ enum PaymentType {
 ///   раскройщика). За каждый день, в котором у сотрудника была
 ///   открыта хотя бы одна `ShiftSession`, создаётся одно начисление
 ///   `SalaryEntry { employeeId, date, amount = salaryPerShift, source =
-///   SHIFT_DAY }`.
+///   SHIFT_DAY }`. Сдельные `OperationEntry` для таких сотрудников
+///   `EarningsService` молча пропускает.
 /// - `MIXED` — оклад за смену + сохраняется сдельщина (например,
 ///   универсал, который иногда становится за оверлок). Логика та же,
 ///   что у `SALARY`, плюс отдельные `OperationEntry` по сдельным
 ///   операциям.
-///
-/// Поле `Employee.paymentType` оставлено как есть (источник истины
-/// для существующего сдельного pipeline и `EarningsService`). Новое
-/// поле `Employee.compensationType` — отдельная управленческая ось,
-/// которая на MVP читается только модулем `salary` и блоком
-/// «Сотрудники». Совмещение даёт менеджеру переходный период:
-/// `PIECEWORK + paymentType=PIECEWORK` — старая сдельщина без оклада;
-/// `SALARY + paymentType=SALARY` — старая окладная роль, теперь с
-/// настоящим дневным начислением.
 enum CompensationType {
   PIECEWORK
   SALARY
@@ -86,11 +78,98 @@ enum SalaryEntrySource {
   MANUAL
 }
 
+/// Жизненный цикл вызова мастера цеха (`MasterCall`, MVP).
+///
+/// - `OPEN`      — рабочий нажал кнопку «Мастер», вызов в очереди
+///                 на `/master`. На один сотрудник одновременно может
+///                 быть только один `OPEN` вызов (идемпотентность
+///                 кнопки на рабочих экранах);
+/// - `RESOLVED`  — мастер закрыл вызов (на MVP — сканом QR сотрудника
+///                 на `/master`). Запись `resolvedAt` и `resolvedById`;
+/// - `CANCELLED` — зарезервировано для будущих сценариев (отмена
+///                 рабочим, авто-протухание и т.п.). На MVP не
+///                 используется ни одним продакшен-кодом, оставлен
+///                 для расширения без миграции схемы.
+enum MasterCallStatus {
+  OPEN
+  RESOLVED
+  CANCELLED
+}
+
+/// Жизненный цикл заказа.
+///
+/// - `DRAFT`         — черновик, план ещё редактируется (источник
+///   patternItem / techCard / маршрута / размерной матрицы).
+/// - `CALCULATION`   — менеджер перевёл заказ в расчёт. В этот
+///   момент система автоматически собрала «Потребность цеха» (см.
+///   `apps/api/src/modules/workshop-needs/*`) — закупщик правит
+///   `purchaseQty` / поставщиков, ничего из плана уже не меняется.
+///   Промежуточный статус между DRAFT и IN_PRODUCTION; на
+///   shopfloor / passports не влияет (см. ADR-0006).
+/// - `IN_PRODUCTION` — запущен в производство, план иммутабелен.
+/// - `DONE`          — завершён (ручной перевод).
+/// - `CANCELLED`     — отменён.
+///
+/// Постгрес-enum: добавление CALCULATION выполнено отдельной
+/// миграцией `20260514100000_add_order_status_calculation` через
+/// `ALTER TYPE … ADD VALUE`. Старые статусы сохраняют свои
+/// порядковые позиции — backward-compatibility прежних snapshot-ов.
 enum OrderStatus {
   DRAFT
+  CALCULATION
+  /// Этап «Себестоимость заказа» (см.
+  /// `apps/api/src/modules/orders/orders.service.ts::completeCalculation`,
+  /// `prisma/schema.prisma::OrderCostEstimate`).
+  ///
+  /// Расчёт по заказу завершён: закупщик заполнил `purchaseQty` /
+  /// `quotedPrice` / `quotedCurrency` по строкам `WorkshopNeed`,
+  /// нажал «Завершить расчёт» — backend зафиксировал
+  /// `OrderCostEstimate` (history) и `Order.costEstimateTotalRub`
+  /// (snapshot для UI). Из этого статуса можно либо запустить
+  /// заказ в производство (`OrdersService.start` принимает
+  /// `CALCULATION_DONE` как и `CALCULATION` / `DRAFT`), либо
+  /// вернуть его на пересчёт (`reopenCalculation`).
+  ///
+  /// Postgres enum расширяется только через `ALTER TYPE … ADD VALUE`,
+  /// поэтому новое значение лежит в конце — порядковая позиция в БД
+  /// больше, чем у `IN_PRODUCTION`/`DONE`/`CANCELLED`. Это нормально:
+  /// UI-порядок статусов задаётся явно (см.
+  /// `@sewing/shared/orders::ORDER_STATUSES`).
+  CALCULATION_DONE
   IN_PRODUCTION
   DONE
   CANCELLED
+}
+
+/// Подразделение заказа — управленческая ось, по которой можно
+/// фильтровать большой экран `/shopfloor/display` (см. `docs/domain.md
+/// §«Подразделения заказа»`, `docs/screens.md §9a`, `docs/api.md §11`).
+///
+/// Принципы:
+///   - подразделение определяется на уровне заказа, один заказ
+///     принадлежит ровно одному подразделению;
+///   - значение фиксируется при создании заказа и редактируется
+///     только пока заказ в `DRAFT` (как и остальные поля плана);
+///   - после `IN_PRODUCTION` менять нельзя — действует общий
+///     `ORDER_LOCKED` guard `OrdersService.update`;
+///   - дефолтное значение — `OTHER` (backward-compatible: все
+///     старые заказы получают это значение в миграции).
+///
+/// На MVP в enum только два значения, чтобы первый требуемый кейс —
+/// отдельный экран для `MARKETPLACE` — заработал минимальной
+/// архитектурой:
+///   - `MARKETPLACE` — заказы маркетплейс-направления (первый
+///     обязательный сценарий, под который заведён отдельный
+///     display-экран `/shopfloor/display?division=MARKETPLACE`);
+///   - `OTHER`       — всё остальное (default).
+///
+/// Расширение списка (новые подразделения) сводится к добавлению
+/// значения в этот enum + лейбла в `ORDER_DIVISION_LABELS`. Никакой
+/// отдельной таблицы «экран дисплея» сознательно не вводим — пока
+/// это просто query-фильтр на `/api/shopfloor/display?division=…`.
+enum OrderDivision {
+  MARKETPLACE
+  OTHER
 }
 
 enum PassportStatus {
@@ -222,6 +301,57 @@ enum PrintJobStatus {
   FAILED
 }
 
+/// Триггер активации внешней потребности (`TechCardOutsourceLine` /
+/// `OrderOutsourceRequirement`). Управленческая ось «когда мы понимаем,
+/// что подряд можно отдавать» — на MVP вычисляется на чтении в
+/// `OrdersService.getOne()`, в БД статус не пишем (см. ADR-0022).
+///
+/// - `MANUAL` — обычная внешняя потребность; UI просто показывает её
+///   в snapshot заказа без сигнала готовности. Backward-compat
+///   значение по умолчанию для всех существующих строк.
+/// - `CUT_READY` — потребность считается «готовой к заказу», когда у
+///   заказа есть паспорта и **все** они физически размещены в ячейки
+///   (`Passport.currentCellId != null`). Критерий ALL_PASSPORTS,
+///   ANY_PASSPORTS отложен сознательно.
+///
+/// Никаких других триггеров (route-step, событийные) пока не
+/// заводим — общий trigger-engine отложен. См. ADR-0022 §«Cut-ready
+/// readiness (MVP-2)».
+enum OutsourceTriggerType {
+  MANUAL
+  CUT_READY
+}
+
+/// Ручной операционный статус выполнения внешней потребности заказа
+/// (`OrderOutsourceRequirement.executionStatus`, ADR-0022 §«Manual
+/// execution status (MVP-3)»).
+///
+/// Минимальный, линейный жизненный цикл: менеджер вручную фиксирует
+/// «реально отдали подрядчику» и «получили обратно». Никакого
+/// procurement-модуля, vendor-master, supplier portal, документов или
+/// складского прихода — это лёгкий операционный статус, не закупочный
+/// документ.
+///
+/// - `PLANNED`  — дефолтное состояние, потребность зафиксирована в
+///   snapshot заказа, но менеджер ещё не отметил, что её отдали
+///   подрядчику. Backward-compat для всех существующих строк.
+/// - `ORDERED`  — менеджер отметил, что подряд реально заказан/отдан;
+///   `OrderOutsourceRequirement.orderedAt` фиксируется временем
+///   перехода (если был пуст).
+/// - `RECEIVED` — менеджер отметил, что результат получен;
+///   `receivedAt` фиксируется временем перехода. Это терминальный
+///   статус — откатов в `PLANNED`/`ORDERED` через action нет.
+///
+/// Состояние «READY_TO_ORDER» в этот enum **не входит** и в БД не
+/// хранится: оно по-прежнему derive at-read в `OrdersService.getOne()`
+/// как композиция `executionStatus + triggerType + Passport.currentCellId`
+/// (см. ADR-0022).
+enum OrderOutsourceExecutionStatus {
+  PLANNED
+  ORDERED
+  RECEIVED
+}
+
 /// Тип источника печати — что именно агент должен забрать по
 /// `payloadUrl` (печатная HTML-форма паспорта, QR паспорта,
 /// этикетка коробки, QR ячейки). На MVP это просто метка для UI и
@@ -251,12 +381,25 @@ model Size {
   sortOrder Int
   createdAt DateTime @default(now())
 
-  passports            Passport[]
-  orderItems           OrderItem[]
-  cellContents         CellContent[]
-  pieceRates           PieceRate[]
-  operationRatesBySize OperationRateBySize[]
-  closureRequests      CuttingClosureRequest[]
+  passports                Passport[]
+  orderItems               OrderItem[]
+  cellContents             CellContent[]
+  pieceRates               PieceRate[]
+  operationRatesBySize     OperationRateBySize[]
+  closureRequests          CuttingClosureRequest[]
+  patternSizeFiles         PatternSizeFile[]
+  patternMaterialAreas     PatternMaterialArea[]
+  /// Этап «Погонные метры по размерам»: обратная связь от значений
+  /// `PatternItemSizeParameterValue`, привязанных к этому размеру.
+  /// `onDelete: Cascade` — удаление размера каскадно сносит значения.
+  patternItemSizeParameterValues PatternItemSizeParameterValue[]
+  /// Поразмерные нормы времени операций (см. `OperationTimeNormBySize`).
+  /// Заполняются на `/admin/operations/[id]` для операций с
+  /// `timeNormMode = BY_SIZE`. Источник истины для будущего
+  /// `OperationsService.resolveTimeNormSec(...)`. Payroll (Operation
+  /// rates / OperationEntry) этой связи не использует — это отдельный
+  /// плановый контур (см. `docs/operation-time-norms-recon.md §10`).
+  operationTimeNormsBySize OperationTimeNormBySize[]
 }
 
 model Product {
@@ -270,6 +413,16 @@ model Product {
   orderItems      OrderItem[]
   pieceRates      PieceRate[]
   closureRequests CuttingClosureRequest[]
+  /// Этап «Номенклатура = Лекала» (см. `docs/recon-soft-integration.md
+  /// §«Номенклатура = Лекала»»). Back-relation для авто-создаваемого
+  /// «технического» Product, который OrdersService подставляет в
+  /// `OrderItem.productId`, когда заказ заводится только по
+  /// `PatternItem`. Связь 1:0..1 (см. `PatternItem.legacyProductId
+  /// @unique`). На MVP здесь обычно ровно одна строка на Product —
+  /// при удалении лекала связь обнуляется (`onDelete: SetNull` на
+  /// стороне `PatternItem`), сам Product остаётся в БД (паспорта /
+  /// PieceRate всё ещё на него ссылаются).
+  patternItems    PatternItem[] @relation("PatternLegacyProduct")
 }
 
 model Operation {
@@ -291,21 +444,72 @@ model Operation {
   /// pipeline, но сдельная ставка не применяется. Все существующие
   /// операции получают корректное значение в миграции на основе
   /// текущих `PieceRate` (см. `prisma/migrations/.../migration.sql`).
-  pricingMode PricingMode       @default(SALARY_ONLY)
+  pricingMode  PricingMode       @default(SALARY_ONLY)
   /// Фиксированная ставка для `pricingMode = FIXED`. Для `BY_SIZE` и
   /// `SALARY_ONLY` хранится `null` (валидируется в `OperationsService`).
-  fixedRate   Decimal?          @db.Decimal(12, 2)
+  fixedRate    Decimal?          @db.Decimal(12, 2)
+  /// Режим нормы времени (см. `docs/operation-time-norms-recon.md §10`):
+  ///   - `"FIXED"`   — одна норма на операцию (`timeNormSec`);
+  ///   - `"BY_SIZE"` — поразмерная матрица (`OperationTimeNormBySize`).
+  /// Хранится строкой по тому же паттерну, что `Order.colorRule` и
+  /// `OrderApplication.colorRule` — расширяется без миграции.
+  ///
+  /// Это **отдельная ось** от `pricingMode` (тариф/деньги): операция
+  /// может одновременно быть `pricingMode = SALARY_ONLY` (без сдельной
+  /// ставки), но иметь плановую норму времени. Payroll
+  /// (`OperationsService.resolveRate`, `EarningsService`) этой колонки
+  /// НЕ читает — это плановый, не фактический контур.
+  timeNormMode String            @default("FIXED")
+  /// Фиксированная норма времени в секундах для `timeNormMode = "FIXED"`.
+  /// `null` — норма не задана (UI рисует «—»). Для `timeNormMode =
+  /// "BY_SIZE"` всегда `null`; норма берётся из `OperationTimeNormBySize`.
+  /// Хранится `Int` — точность одной секунды достаточна (ввод в UI —
+  /// «мин:сек»).
+  timeNormSec  Int?
+  /// Плановая стоимость одной смены для расчёта плановой себестоимости
+  /// окладных операций (`pricingMode = SALARY_ONLY`). Используется
+  /// **только** в `OrderOperationPlanService` для оценки себестоимости
+  /// окладных операций в плане заказа: cost = timeSec ×
+  /// (`salaryPlanRubPerShift` / `salaryPlanShiftSeconds`) × qty.
+  ///
+  /// Это **не фактическая зарплата** — `SalaryEntry`, `OperationEntry`,
+  /// `EmployeeCompensation` и payroll-контур (`SalaryService`,
+  /// `EarningsService`) этот столбец не читают. Поле сознательно
+  /// отделено от `Employee.salaryPerShift`: операция привязана к
+  /// «расчётной стоимости часа цеха», а не к конкретному сотруднику.
+  ///
+  /// `null` — плановая ставка не задана; `OrderOperationPlanService`
+  /// в этом случае пишет `cost = 0` и warning «Не задана плановая
+  /// окладная ставка», но заказ не блокирует.
+  ///
+  /// Для `pricingMode = FIXED` / `BY_SIZE` поле тоже допустимо, но
+  /// игнорируется — там цена считается по сдельной ставке.
+  salaryPlanRubPerShift   Decimal? @db.Decimal(14, 2)
+  /// Длительность смены (в секундах), используемая для расчёта
+  /// `costPerSecond = salaryPlanRubPerShift / salaryPlanShiftSeconds`.
+  /// Default `28800` = 8 часов; менеджер может задать иную
+  /// «расчётную смену» (например, 7-часовую), не трогая фактический
+  /// payroll. Только positive int; валидируется в `OperationsService`.
+  salaryPlanShiftSeconds  Int?     @default(28800)
 
-  events              PassportEvent[]       @relation("EventOperation")
-  movedFromEvents     PassportEvent[]       @relation("EventFromOperation")
+  events              PassportEvent[]           @relation("EventOperation")
+  movedFromEvents     PassportEvent[]           @relation("EventFromOperation")
   entries             OperationEntry[]
   pieceRates          PieceRate[]
   ratesBySize         OperationRateBySize[]
-  currentPassports    Passport[]            @relation("PassportCurrentOperation")
+  /// Поразмерная матрица плановых норм времени для `timeNormMode =
+  /// "BY_SIZE"` (см. `OperationTimeNormBySize`). Только для плана —
+  /// payroll эту таблицу не читает.
+  timeNormsBySize     OperationTimeNormBySize[]
+  currentPassports    Passport[]                @relation("PassportCurrentOperation")
   shiftSessions       ShiftSession[]
   equipmentOperations EquipmentOperation[]
   routeTemplateSteps  RouteTemplateStep[]
   orderRouteSteps     OrderRouteStep[]
+  /// Вызовы мастера, для которых известна текущая операция
+  /// сотрудника. Заполняется backend'ом из `ShiftSession.operationId`
+  /// (если есть открытая смена) на момент создания вызова.
+  masterCalls         MasterCall[]
 
   @@index([sortOrder])
   @@index([category])
@@ -346,6 +550,41 @@ model OperationRateBySize {
   @@index([sizeId])
 }
 
+/// Поразмерная плановая норма времени операции (для
+/// `Operation.timeNormMode = "BY_SIZE"`). Это **отдельная ось** от
+/// `OperationRateBySize` — payroll сюда не ходит.
+///
+/// Источник истины для будущего
+/// `OperationsService.resolveTimeNormSec(operationId, sizeId)`.
+/// Заполняется на `/admin/operations/[id]` тем же паттерном, что и
+/// ставки (роли `ADMIN` / `SHOP_MANAGER`).
+///
+/// Сознательные ограничения MVP:
+///   - одна норма на пару `(operationId, sizeId)`, без истории;
+///   - без привязки к продукту / сотруднику — это управленческая
+///     норма цеха целиком.
+///
+/// Для `timeNormMode = "FIXED"` строки не создаются;
+/// `Operation.timeNormSec` хранит единственную норму. См.
+/// `docs/operation-time-norms-recon.md §10`.
+model OperationTimeNormBySize {
+  id          String   @id @default(cuid())
+  operationId String
+  sizeId      String
+  /// Норма времени в СЕКУНДАХ (целое). Хранится `Int` — точность
+  /// одной секунды достаточна; ввод в UI — «мин:сек».
+  seconds     Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  operation Operation @relation(fields: [operationId], references: [id], onDelete: Cascade)
+  size      Size      @relation(fields: [sizeId], references: [id], onDelete: Cascade)
+
+  @@unique([operationId, sizeId], name: "OperationTimeNormBySize_operation_size_uniq")
+  @@index([operationId])
+  @@index([sizeId])
+}
+
 // =========================
 // PEOPLE
 // =========================
@@ -356,17 +595,16 @@ model Employee {
   login            String           @unique
   pinHash          String
   role             Role
-  /// Историческое поле, отвечающее за сдельный pipeline
-  /// (`EarningsService`). Не трогается этой задачей: «оплатная ли
-  /// операция для этого человека» до сих пор смотрит сюда (см.
-  /// `docs/domain.md §9.2`).
-  paymentType      PaymentType
   /// Историческое поле «месячный оклад». На MVP не используется
   /// payroll-движком, оставлено как справочное (см. ADR-0021).
   /// Источник истины для оплаты за смену — `salaryPerShift` ниже.
   salaryBase       Decimal?         @db.Decimal(12, 2)
-  /// Управленческая ось «как платим» (см. `CompensationType`,
-  /// `docs/domain.md §9a`, ADR-0021). Дефолт `PIECEWORK` —
+  /// Единственная ось «как платим» (см. `CompensationType`,
+  /// `docs/domain.md §9a`, ADR-0021). Гейтит и сдельный
+  /// (`EarningsService`), и окладной (`SalaryService`) контуры:
+  /// `PIECEWORK`/`MIXED` — получают сдельные `OperationEntry`,
+  /// `SALARY` — нет; `SALARY`/`MIXED` — получают дневной
+  /// `SalaryEntry`, `PIECEWORK` — нет. Дефолт `PIECEWORK` —
   /// безопасный: ни одной автоматической окладной записи не
   /// создаётся, пока менеджер не переключит сотрудника в `SALARY`
   /// или `MIXED` через `/admin/employees`.
@@ -376,6 +614,24 @@ model Employee {
   /// `PIECEWORK` хранится `null` и игнорируется. Валидируется в
   /// `EmployeesService.update` (см. `apps/api/src/modules/employees`).
   salaryPerShift   Decimal?         @db.Decimal(12, 2)
+  /// Процент начисления закройщика для B2B-заказов (см.
+  /// `docs/payroll-cutter-compensation-recon.md §«Настраиваемый
+  /// процент»`, `packages/shared/src/cutter-compensation.ts`).
+  ///
+  /// Используется только для сотрудников с ролью `CUTTER` и только
+  /// в B2B-схеме (`getCutterCompensationSchemeForDivision(...) →
+  /// B2B_SEWING_PERCENT`). Для marketplace-заказов поле
+  /// игнорируется (там работает старая фиксированная схема через
+  /// `Operation.fixedRate × passport.qtyCut`).
+  ///
+  /// `Decimal(5, 2)` хранит проценты вида `5.00` = 5%. Значение
+  /// валидируется на shared-уровне (`>= 0` и `<= 100`, не более
+  /// двух знаков после точки). `null` — у конкретного сотрудника
+  /// процент не задан; в этом случае `EarningsService` берёт
+  /// fallback из ENV `CUTTER_B2B_SEWING_PERCENT`. Если и его нет —
+  /// сдельное B2B-начисление закройщика не создаётся (audit/log
+  /// warning, workflow не падает).
+  cutterB2bSewingPercent Decimal?   @db.Decimal(5, 2)
   active           Boolean          @default(true)
   createdAt        DateTime         @default(now())
 
@@ -393,6 +649,61 @@ model Employee {
   closureRequestsCreated  CuttingClosureRequest[] @relation("ClosureRequestRequester")
   closureRequestsReviewed CuttingClosureRequest[] @relation("ClosureRequestReviewer")
   salaryEntriesEdited     SalaryEntry[]           @relation("SalaryEntryEditor")
+
+  /// Этап 6А «Заказы поставщикам» (см. `model PurchaseOrder` ниже,
+  /// `apps/api/src/modules/purchase-orders/*`,
+  /// `docs/recon-soft-integration.md §«Этап 6А»`). Заказы, которые
+  /// этот сотрудник создал кнопкой «Создать заказ поставщику».
+  /// `onDelete: SetNull` со стороны `PurchaseOrder.createdById`:
+  /// удаление учётки не сносит закупочный документ.
+  createdPurchaseOrders PurchaseOrder[] @relation("PurchaseOrderCreator")
+
+  /// Этап 7А «Приёмка поставок» (см. `model PurchaseReceipt` ниже,
+  /// `apps/api/src/modules/purchase-receipts/*`,
+  /// `docs/recon-soft-integration.md §«Этап 7А»`). Документы
+  /// фактической приёмки, которые этот сотрудник зарегистрировал
+  /// кнопкой «Принять поступление». `onDelete: SetNull` со
+  /// стороны `PurchaseReceipt.receivedById`: деактивация/удаление
+  /// учётки не сносит документ приёмки.
+  receivedPurchaseReceipts PurchaseReceipt[] @relation("PurchaseReceiptReceiver")
+
+  /// Вызовы мастера, поданные этим сотрудником (любая рабочая роль).
+  /// См. `MasterCall` ниже и `docs/domain.md §«Мастер цеха»`.
+  masterCalls         MasterCall[] @relation("MasterCallEmployee")
+  /// Вызовы, закрытые этим сотрудником (мастер / SHOP_MANAGER / ADMIN).
+  masterCallsResolved MasterCall[] @relation("MasterCallResolver")
+
+  /// Конфигурация display-экрана, привязанного к этой DISPLAY-учётке
+  /// (см. `DisplayScreenConfig`). 1:1 — на один Employee может быть
+  /// заведён максимум один экран; уникальность гарантируется
+  /// `DisplayScreenConfig.employeeId @unique`. Для не-DISPLAY ролей
+  /// связь отсутствует.
+  displayScreen DisplayScreenConfig?
+
+  /// DXF-файлы лекал, загруженные этим сотрудником (`PatternSizeFile.uploadedById`).
+  /// `onDelete: SetNull` со стороны `PatternSizeFile`: удаление учётки
+  /// не сносит файл лекала.
+  patternSizeFilesUploaded PatternSizeFile[] @relation("PatternSizeFileUploader")
+
+  /// Этап «Себестоимость заказа» (см. `model OrderCostEstimate` ниже,
+  /// `apps/api/src/modules/orders/orders.service.ts::completeCalculation`).
+  /// Расчёты, завершённые этим сотрудником (нажал «Завершить расчёт»).
+  /// `onDelete: SetNull` со стороны `OrderCostEstimate.completedById`:
+  /// удаление учётки не сносит исторический документ расчёта.
+  completedOrderCostEstimates OrderCostEstimate[] @relation("OrderCostEstimateCompleter")
+  /// Аналогичная back-relation для «вернувшего на пересчёт»
+  /// (`OrderCostEstimate.revokedById`).
+  revokedOrderCostEstimates   OrderCostEstimate[] @relation("OrderCostEstimateRevoker")
+
+  /// Этап «Ручная отметка поступления материала» (см.
+  /// `model OrderMaterialArrivalOverride` ниже,
+  /// `apps/api/src/modules/order-material-arrivals/*`).
+  /// Override-ы, созданные / отменённые этим сотрудником.
+  /// `onDelete: SetNull` со стороны
+  /// `OrderMaterialArrivalOverride.createdById`/`revokedById` —
+  /// удаление учётки не сносит исторический override.
+  materialArrivalOverridesCreated OrderMaterialArrivalOverride[] @relation("OrderMaterialArrivalOverrideCreatedBy")
+  materialArrivalOverridesRevoked OrderMaterialArrivalOverride[] @relation("OrderMaterialArrivalOverrideRevokedBy")
 
   @@index([role])
   @@index([compensationType])
@@ -417,6 +728,12 @@ model Equipment {
   shiftSessions     ShiftSession[]
   allowedOperations EquipmentOperation[]
   printers          Printer[]
+  /// Вызовы мастера, привязанные к этому оборудованию (когда вызов
+  /// создан в рамках активной смены — backend копирует `equipmentId`
+  /// смены в `MasterCall`). На дисплее `/shopfloor/display` плитка
+  /// такого станка получает класс `display-equipment-tile--master-call`
+  /// и мягкий violet/blue pulse, см. `docs/screens.md §9a`.
+  masterCalls       MasterCall[]
 }
 
 /// Связь «оборудование ↔ разрешённая операция» (M2M через явную модель).
@@ -472,14 +789,36 @@ model ShiftSession {
 model Order {
   id        String      @id @default(cuid())
   number    String      @unique
+  /// Историческое поле «свободный текст клиента» — оставлено как есть
+  /// для backward compatibility со старым flow создания заказа
+  /// (`/orders/new`, легаси-API). На новом UI его место занимает
+  /// связь `clientId` ниже.
   customer  String?
+  /// Управленческая привязка заказа к карточке клиента из справочника
+  /// `Client` (см. `model Client` ниже). Nullable: исторические заказы
+  /// остаются без явной связи, новые могут заводиться без выбора
+  /// клиента (free-text `customer` всё ещё работает). При удалении
+  /// клиента связь обнуляется — сами заказы не удаляются и доступны
+  /// в журналах.
+  clientId  String?
+  client    Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
   orderDate DateTime
+  /// Срок сдачи заказа (управленческое поле — UI «Срок сдачи»). Nullable
+  /// — backward-compat для исторических заказов и для случаев, когда
+  /// менеджер не хочет фиксировать срок.
   dueDate   DateTime?
   color     String?
   comment   String?
   status    OrderStatus @default(DRAFT)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+
+  /// Подразделение заказа (см. enum `OrderDivision` выше и
+  /// `docs/domain.md §«Подразделения заказа»`). Используется как
+  /// фильтр для `/api/shopfloor/display?division=…`. Не nullable:
+  /// безопасный дефолт — `OTHER`. Менять можно только в `DRAFT`,
+  /// после `IN_PRODUCTION` блокируется общим ORDER_LOCKED guard.
+  division OrderDivision @default(OTHER)
 
   /// Soft-route MVP: опциональная ссылка на шаблон маршрута производства
   /// (см. `RouteTemplate` ниже и `docs/domain.md §«Маршруты»`). На MVP
@@ -498,18 +837,237 @@ model Order {
   techCardId String?
   techCard   TechCardTemplate? @relation(fields: [techCardId], references: [id])
 
+  /// Soft-pattern MVP (этап 2 «Лекала», см. `docs/recon-soft-integration.md
+  /// §«План внедрения»`, `model PatternItem` ниже).
+  ///
+  /// Опциональная ссылка на карточку лекала (конструкцию изделия). На
+  /// этом этапе:
+  ///   - поле nullable — все исторические заказы остаются валидными,
+  ///     лекало не обязательно для запуска заказа в производство;
+  ///   - меняется только в `DRAFT` (общий ORDER_LOCKED guard
+  ///     в `OrdersService.update`);
+  ///   - валидация existence/`status = ACTIVE` — `assertPatternUsable`
+  ///     в `OrdersService` (по той же схеме, что `routeTemplateId` /
+  ///     `techCardId`);
+  ///   - `onDelete: SetNull` — удаление карточки лекала не сносит
+  ///     заказ; live-связь обнуляется, но `patternNameSnapshot` /
+  ///     `patternArticleSnapshot` / `patternPreviewSnapshotUrl` уже
+  ///     зафиксированные при `start()` остаются как «исторический
+  ///     слепок».
+  patternItemId String?
+  patternItem   PatternItem? @relation(fields: [patternItemId], references: [id], onDelete: SetNull)
+
+  /// Snapshot-имя лекала, зафиксированное в момент `OrdersService.start()`.
+  /// Заполняется только если на момент запуска у заказа был выбран
+  /// `patternItemId`. Защищает уже запущенные заказы от поздних правок
+  /// карточки лекала: в карточке заказа в работе UI показывает
+  /// snapshot, а не live-значение.
+  patternNameSnapshot       String?
+  /// Snapshot-артикул лекала (см. комментарий к `patternNameSnapshot`).
+  patternArticleSnapshot    String?
+  /// Snapshot URL превью лекала (`PatternItem.previewImageUrl` на
+  /// момент запуска заказа). Для уже запущенных заказов UI отдаёт
+  /// именно этот URL — даже если в карточке лекала позже сменили
+  /// превью или его удалили, заказ продолжает показывать «как было».
+  patternPreviewSnapshotUrl String?
+
   items                 OrderItem[]
   passports             Passport[]
   closureRequests       CuttingClosureRequest[]
   routeSteps            OrderRouteStep[]
   materialRequirements  OrderMaterialRequirement[]
   outsourceRequirements OrderOutsourceRequirement[]
+  /// Этап 4А «Потребность цеха» (см. `model WorkshopNeed` ниже,
+  /// `apps/api/src/modules/workshop-needs/*`,
+  /// `docs/recon-soft-integration.md §«Этап 4А»`). Чистая
+  /// потребность заказа в материалах: один заказ → много строк
+  /// `WorkshopNeed`. Cascade — потому что без заказа потребность
+  /// смысла не имеет (запасов/закупок мы здесь не моделируем).
+  workshopNeeds         WorkshopNeed[]
+  /// Этап 6А «Заказы поставщикам» (см. `model PurchaseOrder` ниже,
+  /// `apps/api/src/modules/purchase-orders/*`). Заказы поставщикам,
+  /// связанные с этим заказом покупателя (на MVP — все строки PO
+  /// относятся к одному customerOrder). `onDelete: SetNull` со
+  /// стороны `PurchaseOrder.customerOrderId`: удаление заказа
+  /// покупателя не сносит закупочный документ — он остаётся в
+  /// журнале, просто без обратной ссылки.
+  purchaseOrders        PurchaseOrder[]
+
+  /// Этап 7А «Приёмка поставок» (см. `model PurchaseReceipt` ниже,
+  /// `apps/api/src/modules/purchase-receipts/*`,
+  /// `docs/recon-soft-integration.md §«Этап 7А»`). Документы
+  /// фактической приёмки, которые относятся к этому заказу
+  /// покупателя (через PO с этим `customerOrderId`). На MVP это
+  /// сводный список «что и куда положили под этот заказ».
+  /// `onDelete: SetNull` со стороны
+  /// `PurchaseReceipt.customerOrderId`: удаление заказа покупателя
+  /// не сносит акт приёмки.
+  purchaseReceipts PurchaseReceipt[]
+
+  /// Этап «Нанесение на заказе покупателя» (см. `model OrderApplication`
+  /// ниже, `apps/api/src/modules/order-applications/*`).
+  ///
+  /// Заказные нанесения (шелкография / DTF / вышивка / термотрансфер /
+  /// сублимация / OTHER) живут на самом заказе покупателя, а не в
+  /// маршруте/техкарте — параметры конкретного заказа не должны
+  /// зависеть от техкарты, по которой его запустили. Используется
+  /// для: (а) проверки готовности к крою (см.
+  /// `CutReadinessService`), (б) расчёта потребности цеха
+  /// (`WorkshopNeedsService.calculateForOrder`).
+  /// Cascade — без заказа смысла у нанесения нет.
+  applications OrderApplication[]
+
+  /// Этап «Себестоимость заказа» (см. `model OrderCostEstimate` ниже,
+  /// `apps/api/src/modules/orders/*::completeCalculation`).
+  ///
+  /// История завершённых расчётов себестоимости (одна — `COMPLETED`,
+  /// прочие — `REVOKED`). Снос заказа сносит и историю — расчёты
+  /// без заказа смысла не имеют.
+  costEstimates OrderCostEstimate[]
+
+  /// Этап «Ручная отметка поступления материала» (см.
+  /// `model OrderMaterialArrivalOverride` ниже,
+  /// `apps/api/src/modules/order-material-arrivals/*`,
+  /// `apps/api/src/modules/cut-readiness/cut-readiness.service.ts`).
+  ///
+  /// Список ручных отметок «материал поступил», созданных кнопкой
+  /// «Материал поступил» в карточке заказа. Cascade — без заказа
+  /// override смысла не имеет (это атрибут готовности к крою
+  /// конкретного заказа, а не складская сущность).
+  materialArrivalOverrides OrderMaterialArrivalOverride[]
+
+  /// Snapshot последнего завершённого расчёта (`COMPLETED`), скопированный
+  /// в Order для быстрой отрисовки бейджей «Себестоимость» в UI и
+  /// списках, без `JOIN` на `OrderCostEstimate`.
+  ///
+  /// Жизненный цикл:
+  ///   - `CALCULATION_DONE` (`completeCalculation`) — заполняем все три
+  ///     поля по только что созданному `OrderCostEstimate`;
+  ///   - `reopenCalculation` — поля сбрасываются в `null` (история
+  ///     остаётся в `OrderCostEstimate`-таблице со статусом `REVOKED`);
+  ///   - все остальные переходы (`start`, `complete`, `cancel`,
+  ///     обычный PATCH `update`) полей не трогают.
+  ///
+  /// FK на конкретный `OrderCostEstimate` сознательно не ставим — это
+  /// плоский snapshot, не «активная» ссылка. Это упрощает migration и
+  /// исключает циклические Prisma-relations (Order ↔ OrderCostEstimate).
+  costEstimateTotalRub    Decimal?  @db.Decimal(14, 2)
+  costEstimateCompletedAt DateTime?
+  costEstimateVersion     Int?
+
+  /// Этап «Цена продажи за единицу» (см.
+  /// `apps/api/src/modules/orders/orders.service.ts::create`/`update`,
+  /// `packages/shared/src/orders.ts`,
+  /// `prisma/migrations/20260521100000_add_order_customer_unit_price`).
+  ///
+  /// Управленческое поле: цена, по которой производство продаёт
+  /// одно изделие заказчику. Используется на детали и в списке
+  /// заказов, чтобы видеть выручку и маржу: `revenue =
+  /// customerUnitPrice × Σ qtyPlan`. Сама себестоимость хранится
+  /// в `costEstimateTotalRub` (см. этап «Себестоимость заказа»).
+  ///
+  /// Дизайн MVP:
+  ///   - оба поля nullable: исторические заказы остаются валидными;
+  ///   - валюта ограничена `RUB`/`USD` на уровне Zod (см.
+  ///     `MoneyCurrencySchema`). В БД остаётся свободным TEXT,
+  ///     чтобы расширить список без миграции;
+  ///   - exchange-rate API намеренно не подключаем: для USD-цен
+  ///     UI показывает выручку в долларах и не считает маржу в
+  ///     рублях без явного курса (тот же подход, что у
+  ///     `OrderCostEstimateLine.lineTotalRub` для USD-строк
+  ///     `WorkshopNeed`).
+  ///
+  /// Меняется через PATCH `/api/orders/:id` (см.
+  /// `OrdersService.update`); попадает в `OrderListItemDto` и
+  /// `OrderDetailDto` как nullable-строка.
+  customerUnitPrice Decimal? @db.Decimal(14, 2)
+  customerCurrency  String?
+
+  /// Этап 2 «План операций на заказе» (см.
+  /// `docs/operation-time-norms-recon.md §10/§11`,
+  /// `apps/api/src/modules/orders/order-operation-plan.service.ts`).
+  ///
+  /// Snapshot плановой стоимости операций по заказу (₽). Заполняется в
+  /// `OrderOperationPlanService.recalculateAndWrite`, который вызывается
+  /// из `OrdersService.create`, `OrdersService.update` (только в DRAFT и
+  /// только при изменении `routeTemplateId` / `items` / `patternItemId`),
+  /// и `OrdersService.startCalculation` (финальный snapshot перед
+  /// расчётом себестоимости). После `start()` план **не пересчитывается**
+  /// — он остаётся «как заказ ушёл в работу».
+  ///
+  /// `null` означает «план не считался»: либо заказ ещё ни разу не
+  /// проходил через перерасчёт (исторический заказ до этой миграции),
+  /// либо у заказа нет `routeTemplateId` / нет items с `qtyPlan > 0`,
+  /// либо все операции — `SALARY_ONLY` без ставок. В этом случае
+  /// `operationPlanWarnings` объясняет причину человекочитаемо.
+  ///
+  /// Сознательно отдельно от `costEstimateTotalRub`: «себестоимость
+  /// заказа» (`OrderCostEstimate`) — это финансовый документ с
+  /// материалами/фурнитурой/нанесениями + (на этапе 3) LABOR-строкой.
+  /// «План операций» — это плановая оценка стоимости и времени
+  /// **до** запуска заказа, без поставщиков и без USD-курса.
+  operationCostPlanRub      Decimal?  @db.Decimal(14, 2)
+  /// Этап 2 «План операций»: суммарное плановое время выполнения
+  /// заказа в **секундах** (целое). Считается тем же helper-ом, что и
+  /// `operationCostPlanRub` (см. `OrderOperationPlanService.calculateForOrder`).
+  /// `null` — план не считался / нет норм времени по выбранным
+  /// операциям. Хранится `Int` — точность одной секунды достаточна,
+  /// в UI форматируется как «2 ч 16 мин» (см.
+  /// `apps/web/lib/operations-time-norm.ts::formatDurationSec`).
+  operationTimePlanSec      Int?
+  /// Этап 2 «План операций»: когда snapshot был посчитан в последний
+  /// раз. Заполняется при каждом вызове `recalculateAndWrite` —
+  /// даже если план получился `null` (нет маршрута / нет норм). UI
+  /// показывает «Рассчитано: …» в карточке заказа.
+  operationPlanCalculatedAt DateTime?
+  /// Этап 2 «План операций»: JSON-массив человекочитаемых warnings
+  /// («Нет ставки операции "Распошив" для размера XL», «Маршрут не
+  /// выбран — план операций не рассчитан» и т.п.). `null` — warnings
+  /// нет (план посчитан без замечаний) или snapshot ещё не считался.
+  /// UI карточки заказа отрисовывает компактный блок «План операций
+  /// неполный» — первые 3 warnings + «ещё N».
+  ///
+  /// Хранится `Json?` (а не отдельной таблицей), потому что:
+  ///   - warnings — derived-сообщения для оператора, без бизнес-семантики
+  ///     (filter/sort/aggregate по ним не нужен);
+  ///   - длина списка ограничена количеством шагов × размеров — для
+  ///     MVP это десятки строк, JSONB хранит компактно;
+  ///   - расширение формата (от `string[]` к `{ message, severity, … }[]`)
+  ///     не требует миграции схемы.
+  operationPlanWarnings     Json?
 
   @@index([status])
   @@index([orderDate])
   @@index([createdAt])
   @@index([routeTemplateId])
   @@index([techCardId])
+  @@index([patternItemId])
+  @@index([division])
+  @@index([clientId])
+  @@index([dueDate])
+}
+
+/// Карточка клиента (управленческий справочник, см. `docs/domain.md
+/// §«Клиенты»`, добавлено вместе с UI `/admin/clients`).
+///
+/// Дизайн сознательно простой: одна таблица, минимум полей, никакой
+/// CRM-логики. Удаление out-of-scope — менеджер мягко гасит карточку
+/// через `isActive = false`. Уникальность `name` НЕ требуется — у двух
+/// разных клиентов вполне может быть одно человеческое имя.
+model Client {
+  id        String   @id @default(cuid())
+  name      String
+  phone     String?
+  email     String?
+  comment   String?
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  orders Order[]
+
+  @@index([isActive])
+  @@index([name])
 }
 
 model OrderItem {
@@ -806,11 +1364,21 @@ model Cell {
   lineIndex   Int?
   createdAt   DateTime @default(now())
 
-  warehouse        Warehouse?      @relation(fields: [warehouseId], references: [id])
-  line             WarehouseLine?  @relation(fields: [lineId], references: [id], onDelete: SetNull)
-  contents         CellContent[]
-  events           PassportEvent[]
-  currentPassports Passport[]      @relation("PassportCurrentCell")
+  warehouse            Warehouse?            @relation(fields: [warehouseId], references: [id])
+  line                 WarehouseLine?        @relation(fields: [lineId], references: [id], onDelete: SetNull)
+  contents             CellContent[]
+  events               PassportEvent[]
+  currentPassports     Passport[]            @relation("PassportCurrentCell")
+  /// Этап 7А «Приёмка поставок» (см. `model PurchaseReceiptLine`
+  /// ниже, `apps/api/src/modules/purchase-receipts/*`).
+  /// Размещение принятой партии материала: одна строка приёмки —
+  /// одна ячейка хранения. Сознательная граница MVP: это «куда
+  /// положили», а НЕ полноценный складской остаток. `CellContent`
+  /// этой связью НЕ затрагивается, движок паспортов / production
+  /// продолжает работать как раньше. `onDelete: SetNull` со
+  /// стороны `PurchaseReceiptLine.cellId`: удаление ячейки
+  /// (на MVP не делается) не сносит документ приёмки.
+  purchaseReceiptLines PurchaseReceiptLine[]
 
   @@unique([lineId, lineIndex], name: "Cell_line_index_uniq")
   @@index([warehouseId])
@@ -1168,50 +1736,116 @@ model TechCardTemplate {
 /// Строка материала в шаблоне техкарты. На MVP — простая линейная
 /// норма «qtyPerUnit на 1 единицу изделия»; никаких формул или
 /// зависимостей от размеров (см. ADR-0022).
+///
+/// Этап 3 «Потребности цеха» (см. `docs/recon-soft-integration.md
+/// §«Этап 3»`): добавлены nullable-поля, которые будут участвовать в
+/// будущем расчёте «чистый вес = площадь × плотность × количество»
+/// без формулы на этом этапе.
+///
+/// - `materialRole` — связка с `PatternMaterialArea.materialRole`
+///   (свободная строка, валидируется списком `MATERIAL_ROLES` из
+///   `@sewing/shared/material-roles`; Prisma enum сознательно НЕ
+///   делаем — список расширяется без миграции).
+/// - `fabricType` — характеристика полотна / материала (кулирка,
+///   двунитка, рибана, футер, пакет, нитки и т.п.). На MVP свободная
+///   строка, без справочника.
+/// - `densityGsm` / `plannedWidthCm` — параметры тканей; для пакетов /
+///   ниток / фурнитуры остаются null.
+/// - `colorRule` — правило выбора цвета для этой строки на конкретном
+///   заказе (`ORDER_COLOR` / `FIXED_COLOR` / `NO_COLOR`). Хранится
+///   строкой по той же причине, что `materialRole`.
+/// - `fixedColorText` — заполняется только при `colorRule = FIXED_COLOR`.
+///   Сервис сам зачищает поле, если правило другое.
+///
+/// Все поля сознательно nullable + backward-compatible: старые
+/// техкарты остаются валидными, заказы по ним стартуют как раньше.
 model TechCardMaterialLine {
-  id         String   @id @default(cuid())
-  techCardId String
+  id             String   @id @default(cuid())
+  techCardId     String
   /// Порядок отображения. Backend нормализует как `(i + 1) * 10` при
   /// записи (см. `TechCardsService.replaceMaterialLines`).
-  sortOrder  Int
+  sortOrder      Int
   /// Свободное человекочитаемое имя материала (на MVP без справочника).
-  name       String
+  name           String
   /// Единица измерения (м, шт, г, и т.п.). Свободная строка.
-  unit       String
+  unit           String
   /// Норма расхода на одну единицу изделия. Положительное число,
   /// валидируется в DTO/сервисе (без БД-check).
-  qtyPerUnit Decimal  @db.Decimal(12, 4)
-  note       String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  qtyPerUnit     Decimal  @db.Decimal(12, 4)
+  note           String?
+  /// Этап 3: роль материала из общего списка `MATERIAL_ROLES` (см.
+  /// `@sewing/shared/material-roles`). Связывается с
+  /// `PatternMaterialArea.materialRole` для будущей «Потребности цеха».
+  materialRole   String?
+  /// Этап 3: характеристика полотна (кулирка, двунитка, …). Свободная
+  /// строка на MVP, без справочника.
+  fabricType     String?
+  /// Этап 3: плотность материала, г/м². Заполняется для тканей; для
+  /// пакетов / ниток / фурнитуры остаётся null.
+  densityGsm     Int?
+  /// Этап 3: плановая ширина рулона, см. Заполняется для тканей; для
+  /// пакетов / ниток / фурнитуры остаётся null.
+  plannedWidthCm Int?
+  /// Этап 3: правило выбора цвета — `ORDER_COLOR` / `FIXED_COLOR` /
+  /// `NO_COLOR`. Хранится строкой; список расширяется без миграции.
+  colorRule      String?
+  /// Этап 3: фиксированный цвет — заполняется только при
+  /// `colorRule = FIXED_COLOR`. Сервис нормализует null/empty в null
+  /// и зачищает поле для других значений `colorRule`.
+  fixedColorText String?
+  /// Этап «Фурнитура в техкарте» (см. ТЗ §3): дополнительные
+  /// характеристики строки фурнитуры. Имеют смысл только для
+  /// `materialRole = PACKAGING` (UI скрывает поля для других ролей,
+  /// сервис зачищает их в null при сохранении). Названы явно через
+  /// префикс `hardware*`, чтобы не перепутать с `Size`/общим `unit`
+  /// и не конфликтовать с другими полями.
+  hardwareSizeText     String?
+  hardwareMaterialText String?
+  /// Этап «Изображение материала» (см. ТЗ §5): URL/относительный путь
+  /// картинки строки материала и опционально оригинальное имя файла.
+  /// Хранение URL на MVP — upload сделан отдельной задачей. Поля
+  /// nullable + backward-compatible.
+  materialImageUrl              String?
+  materialImageOriginalFileName String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
   techCard          TechCardTemplate           @relation(fields: [techCardId], references: [id], onDelete: Cascade)
   orderRequirements OrderMaterialRequirement[]
 
   @@index([techCardId, sortOrder])
+  @@index([materialRole])
 }
 
 /// Строка внешнего подрядного размещения (OUTSOURCED_SERVICE) в шаблоне
 /// техкарты. Сознательно НЕ моделируется как операция и НЕ как материал —
 /// это отдельная управленческая ось (см. ADR-0022).
 model TechCardOutsourceLine {
-  id         String   @id @default(cuid())
-  techCardId String
-  sortOrder  Int
+  id          String               @id @default(cuid())
+  techCardId  String
+  sortOrder   Int
   /// Свободное человекочитаемое описание услуги/размещения.
-  name       String
+  name        String
   /// Единица измерения опциональна: иногда подряд считается «за партию»
   /// без явной нормы.
-  unit       String?
+  unit        String?
   /// Норма на одну единицу изделия. Если не задана — totalQty в snapshot
   /// тоже остаётся null (см. `OrdersService.start`).
-  qtyPerUnit Decimal? @db.Decimal(12, 4)
+  qtyPerUnit  Decimal?             @db.Decimal(12, 4)
   /// Опциональный подрядчик (на MVP — свободная строка, без справочника
   /// vendor-ов; см. ADR-0022 §«vendor directory postponed»).
-  vendorName String?
-  note       String?
-  createdAt  DateTime @default(now())
-  updatedAt  DateTime @updatedAt
+  vendorName  String?
+  note        String?
+  /// Триггер активации этой строки на заказе (см. `OutsourceTriggerType`,
+  /// ADR-0022 §«Cut-ready readiness (MVP-2)»). Дефолт `MANUAL` —
+  /// безопасный, backward-compat: snapshot заказа не получает никакого
+  /// сигнала готовности и поведение остаётся прежним. `CUT_READY`
+  /// означает «потребность готова к заказу, когда весь крой заказа
+  /// размещён в ячейки». Копируется в snapshot
+  /// `OrderOutsourceRequirement.triggerType` при `OrdersService.start()`.
+  triggerType OutsourceTriggerType @default(MANUAL)
+  createdAt   DateTime             @default(now())
+  updatedAt   DateTime             @updatedAt
 
   techCard          TechCardTemplate            @relation(fields: [techCardId], references: [id], onDelete: Cascade)
   orderRequirements OrderOutsourceRequirement[]
@@ -1241,6 +1875,50 @@ model OrderMaterialRequirement {
   /// Полная потребность по заказу: `qtyPerUnit * Σ OrderItem.qtyPlan`.
   totalQty             Decimal  @db.Decimal(12, 4)
   note                 String?
+  /// Этап 3 «Потребности цеха»: snapshot-копии новых полей
+  /// `TechCardMaterialLine` в момент `OrdersService.start()`. Все
+  /// nullable + backward-compatible — старые snapshot-строки остаются
+  /// валидными, новые получают значения, только если они заданы в
+  /// техкарте. См. `docs/recon-soft-integration.md §«Этап 3»`.
+  materialRole         String?
+  fabricType           String?
+  densityGsm           Int?
+  plannedWidthCm       Int?
+  colorRule            String?
+  fixedColorText       String?
+  /// Этап 3: итоговый цвет для конкретного заказа, вычисленный в
+  /// `OrdersService.start()` по `colorRule`:
+  ///   - `ORDER_COLOR`          → `Order.color` (или null, если у заказа нет цвета);
+  ///   - `FIXED_COLOR`          → `fixedColorText` (или null, если он пуст);
+  ///   - `NO_COLOR`             → null;
+  ///   - `ORDER_SELECTED_COLOR` → null на старте; потом синхронизируется с `selectedColorText`,
+  ///                              когда менеджер сохранит цвет через action;
+  ///   - null/empty             → null.
+  /// Хранится как snapshot — поздние правки заказа/техкарты не меняют
+  /// это значение (та же семантика, что у остальных snapshot-полей).
+  resolvedColorText    String?
+  /// Этап «Указать в заказе» (см. ТЗ §4): для строк техкарты с
+  /// `colorRule = ORDER_SELECTED_COLOR` фиксируется true в момент
+  /// `OrdersService.start()`. UI карточки заказа по этому флагу
+  /// рисует поле «Цвет» с подсказкой «Цвет нужно указать в заказе»
+  /// и action «Сохранить цвет». Дефолт `false` обеспечивает
+  /// backward-compat: старые snapshot-строки приходят как
+  /// `requiresColorSelection = false`.
+  requiresColorSelection Boolean @default(false)
+  /// Этап «Указать в заказе»: значение, которое менеджер ввёл для
+  /// конкретной строки заказа. Меняется через
+  /// `PATCH /api/orders/:id/material-requirements/:requirementId/color`
+  /// и одновременно перезаписывается в `resolvedColorText` (см.
+  /// `OrdersService.updateMaterialRequirementColor`). Не считается
+  /// автоматически: для других `colorRule` остаётся null.
+  selectedColorText    String?
+  /// Этап «Фурнитура / изображение» (см. ТЗ §3, §5): snapshot-копии
+  /// новых полей строки техкарты. Заполняются в `OrdersService.start()`
+  /// из шаблона. Все nullable + backward-compatible.
+  hardwareSizeText              String?
+  hardwareMaterialText          String?
+  materialImageUrl              String?
+  materialImageOriginalFileName String?
   createdAt            DateTime @default(now())
 
   order              Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -1248,6 +1926,7 @@ model OrderMaterialRequirement {
 
   @@index([orderId, sortOrder])
   @@index([sourceTechCardLineId])
+  @@index([materialRole])
 }
 
 /// Snapshot строки внешнего подрядного размещения на конкретном заказе.
@@ -1255,21 +1934,1834 @@ model OrderMaterialRequirement {
 /// `qtyPerUnit`/`totalQty` могут быть `null` — это нормально для подряда,
 /// который считается «за партию» без явной нормы.
 model OrderOutsourceRequirement {
-  id                   String   @id @default(cuid())
+  id                   String                        @id @default(cuid())
   orderId              String
   sourceTechCardLineId String?
   sortOrder            Int
   name                 String
   unit                 String?
-  qtyPerUnit           Decimal? @db.Decimal(12, 4)
-  totalQty             Decimal? @db.Decimal(12, 4)
+  qtyPerUnit           Decimal?                      @db.Decimal(12, 4)
+  totalQty             Decimal?                      @db.Decimal(12, 4)
   vendorName           String?
   note                 String?
-  createdAt            DateTime @default(now())
+  /// Snapshot триггера активации (копируется из
+  /// `TechCardOutsourceLine.triggerType` в `OrdersService.start()`).
+  /// Используется только в `OrdersService.getOne()` для derive
+  /// `isReadyToOrder` / `readinessLabel` на чтении (см. ADR-0022
+  /// §«Cut-ready readiness (MVP-2)»). В БД статус готовности не
+  /// храним: derive по этому полю + `Passport.currentCellId`.
+  triggerType          OutsourceTriggerType          @default(MANUAL)
+  /// Ручной операционный статус выполнения внешней потребности
+  /// (см. `OrderOutsourceExecutionStatus`, ADR-0022 §«Manual
+  /// execution status (MVP-3)»). Меняется только через action
+  /// `POST /api/orders/:id/outsource-requirements/:requirementId/status`.
+  /// Дефолт `PLANNED` — backward-compat для всех существующих snapshot-
+  /// строк, поведение карточки заказа без ручных переходов остаётся
+  /// прежним.
+  executionStatus      OrderOutsourceExecutionStatus @default(PLANNED)
+  /// Когда менеджер впервые перевёл строку в `ORDERED`. Лёгкий
+  /// audit-trail без отдельного event-log: одна колонка достаточно
+  /// для UI-метки «Отмечено: …». Не редактируется руками; не
+  /// «обратнозаполняется» при прыжке `PLANNED → RECEIVED` (на MVP
+  /// такой прыжок запрещён, см. сервис).
+  orderedAt            DateTime?
+  /// Когда менеджер перевёл строку в `RECEIVED`. Семантика та же,
+  /// что у `orderedAt`.
+  receivedAt           DateTime?
+  createdAt            DateTime                      @default(now())
 
   order              Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
   sourceTechCardLine TechCardOutsourceLine? @relation(fields: [sourceTechCardLineId], references: [id], onDelete: SetNull)
 
   @@index([orderId, sortOrder])
   @@index([sourceTechCardLineId])
+}
+
+// ---------------------------------------------------------------------------
+// Display screens (большой монитор цеха)
+//
+// Конфигурация конкретного display-экрана, висящего в зале. Раньше
+// `division` для большого монитора задавался руками через query-param
+// (`/shopfloor/display?division=MARKETPLACE`); теперь экран = отдельная
+// сущность, у которой:
+//   - есть собственная DISPLAY-учётка (`Employee` с `role = DISPLAY`)
+//     для логина именно с этого монитора;
+//   - зафиксировано подразделение (`OrderDivision`), которое экран
+//     должен показывать без участия URL;
+//   - есть человекочитаемое имя для админ-листинга.
+//
+// Связь `1:1` с `Employee`: один экран = одна учётка. Это
+// гарантируется `employeeId @unique`, плюс админская форма создания
+// сразу заводит обе сущности в одной транзакции (см.
+// `DisplayScreensService.create`). Менять `Employee.role` руками
+// после этого нельзя — запись бы перестала иметь смысл, но это
+// формально не enforced (на MVP админ просто не редактирует учётки
+// DISPLAY вне этой формы).
+//
+// См. `docs/domain.md §«Подразделения заказа»` (раздел display
+// screen-ов), `docs/api.md §11`, `docs/screens.md §10e`.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Audit log (универсальный журнал управленческих событий)
+//
+// Минимальная универсальная таблица под журнал бизнес-событий, не
+// привязанная к конкретному агрегату. Это явно НЕ замена `PassportEvent`
+// (тот описывает движение партии по pipeline и читается бизнес-логикой);
+// `AuditLog` — это операционный лог «что произошло, кто инициировал, что
+// именно изменилось», который можно безопасно дописывать новыми типами
+// событий без миграции схемы.
+//
+// Дизайн (см. `docs/domain.md §«Audit log»`):
+//   - `event` — короткий код события (`PASSPORT_ISSUED`, `ORDER_CREATED`,
+//     `BOX_CLOSED`, …). Свободная строка, без enum: enum заставлял бы
+//     писать миграцию на каждый новый тип события и блокировал
+//     эволюцию журнала.
+//   - `entityType` — тип агрегата (`PASSPORT`, `ORDER`, `QC`, `WTO`,
+//     `PACKING`). Тоже строкой: один и тот же `entityType = PASSPORT`
+//     может приходить из разных модулей (passports/qc/wto/packing).
+//   - `entityId` — id основного агрегата (passportId / orderId /
+//     boxId). Хранится строкой, без FK: AuditLog должен переживать
+//     удаление/архивирование агрегата.
+//   - `payload` — `Json`, в котором сервис кладёт минимально полезный
+//     срез: ключевые поля действия (operationId, employeeId предыдущего
+//     шага, qty, fromStatus/toStatus и т.п.). Никаких больших dump-ов
+//     паспорта целиком — payload должен оставаться обозримым в UI.
+//   - `employeeId` — кто инициировал действие (`null` для системных
+//     событий). FK не ставим: учётка может быть деактивирована/
+//     удалена, а строка журнала должна уцелеть.
+//   - `createdAt` — момент записи; берётся БД default-ом, чтобы внутри
+//     одной транзакции порядок журналирования совпадал с порядком
+//     операций.
+//   - Индексы: `(entityType, entityId)` для карточки «история
+//     действий по объекту» и `createdAt` для общей ленты/последних
+//     событий.
+//
+// Записывается строго в той же `prisma.$transaction`, что и сама
+// бизнес-операция (см. `AuditService.log`), — это инвариант
+// «либо и операция, и аудит, либо ничего».
+// ---------------------------------------------------------------------------
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  event      String
+  entityType String
+  entityId   String
+  payload    Json
+  employeeId String?
+  createdAt  DateTime @default(now())
+
+  @@index([entityType, entityId])
+  @@index([createdAt])
+}
+
+model DisplayScreenConfig {
+  id         String        @id @default(cuid())
+  /// Человекочитаемое имя экрана: «ТВ маркетплейс на стене у выхода»,
+  /// «Дисплей у раскройщиков». Используется только в админ-листинге
+  /// (`/admin/display-screens`); фронту дисплея не отдаётся.
+  name       String
+  /// Подразделение, которое экран показывает без `?division=` в URL.
+  /// Источник истины — Prisma enum `OrderDivision`.
+  division   OrderDivision
+  /// FK на `Employee.id` под этой DISPLAY-учёткой. UNIQUE — один
+  /// экран = ровно одна учётка. На delete сотрудника каскадно
+  /// удаляется и конфиг (учётку DISPLAY мы заводим строго под этот
+  /// экран и не используем где-то ещё).
+  employeeId String        @unique
+  /// Мягкий выключатель экрана. Если `false` — `ShopfloorService`
+  /// игнорирует конфиг при автоопределении division для DISPLAY-
+  /// пользователя и возвращает «общий» агрегат, как раньше. Сама
+  /// учётка может всё равно жить, поэтому отключить экран временно
+  /// можно без удаления.
+  isActive   Boolean       @default(true)
+  createdAt  DateTime      @default(now())
+  updatedAt  DateTime      @updatedAt
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([division])
+  @@index([isActive])
+}
+
+/// Вызов мастера цеха (MVP, см. `docs/domain.md §«Мастер цеха»`,
+/// `docs/flows.md §«Вызов мастера»`).
+///
+/// Жизненный цикл:
+///   1. Рабочий (SEAMSTRESS / CUTTER / CUTTER_ASSISTANT / QC / IRONING /
+///      PACKING) на своём терминале нажимает кнопку «Мастер» →
+///      `POST /api/master-calls` создаёт запись в статусе `OPEN`.
+///      Идемпотентно: если у сотрудника уже есть `OPEN` вызов —
+///      возвращаем его, а не плодим дубль.
+///   2. Backend в момент создания подтягивает активную
+///      `ShiftSession` сотрудника (если есть) и копирует из неё
+///      `equipmentId` и `operationId` — это нужно, чтобы:
+///        - `/master` показал «оборудование, операцию, размеры»;
+///        - `/shopfloor/display` мягко мигал плиткой именно того
+///          станка (см. `display-equipment-tile--master-call`).
+///   3. Мастер на `/master` сканирует QR сотрудника
+///      (`EMPLOYEE:<employeeId>`) → `POST /api/master-calls/
+///      resolve-by-employee-qr` находит `OPEN` вызов того же
+///      сотрудника, переводит в `RESOLVED`, фиксирует `resolvedAt`
+///      и `resolvedById` (FK на `Employee`).
+///
+/// Сообщение `message` и `CANCELLED`-статус оставлены под будущее
+/// расширение (произвольный текст вызова, авто-протухание и т.п.).
+/// На MVP они не пишутся — но в схеме сразу есть поля, чтобы новые
+/// сценарии не требовали миграции.
+model MasterCall {
+  id           String           @id @default(cuid())
+  employeeId   String
+  equipmentId  String?
+  operationId  String?
+  status       MasterCallStatus @default(OPEN)
+  message      String?
+  createdAt    DateTime         @default(now())
+  resolvedAt   DateTime?
+  resolvedById String?
+
+  employee   Employee   @relation("MasterCallEmployee", fields: [employeeId], references: [id])
+  equipment  Equipment? @relation(fields: [equipmentId], references: [id])
+  operation  Operation? @relation(fields: [operationId], references: [id])
+  resolvedBy Employee?  @relation("MasterCallResolver", fields: [resolvedById], references: [id])
+
+  @@index([status, createdAt])
+  @@index([employeeId, status])
+  @@index([equipmentId, status])
+}
+
+// ---------------------------------------------------------------------------
+// Cut release policy (Stage 3 «Мастер цеха», MVP)
+//
+// Управленческое ограничение выдачи кроя сотрудникам на ПЕРВОЙ операции
+// маршрута (или операции категории `CUTTING`). Мастер цеха задаёт
+// фильтр (цвет / размер / суммарный лимит штук) → бекенд режет
+// `PassportsService.issueToEmployee` для паспортов, не подходящих под
+// фильтр, и инкрементит `consumedQty` для подходящих. Само движение
+// паспорта по маршруту (`scan`/`complete-operation`) НЕ блокируется —
+// ограничение действует только на «получить крой из ячейки» / «получить
+// крой по маршруту-WIP» (см. `apps/api/src/modules/cut-release-policy/*`,
+// `apps/api/src/modules/passports/passports.service.ts`).
+//
+// Инвариант MVP: одновременно активна максимум одна политика
+// (`isActive = true`). Enforce-им на уровне сервиса
+// (`CutReleasePolicyService.create` сначала деактивирует предыдущую
+// активную, потом создаёт новую). Уникальный частичный индекс
+// сознательно НЕ ставим — мастер может «временно отключить»
+// политику, оставить её записью в БД и завести новую с другим
+// фильтром; уникальный индекс заставлял бы удалять старую запись.
+//
+// Лимит штук считается по `passport.qtyCut` (не `qtyGood`): мы
+// ограничиваем «сколько кроя ушло со склада в работу», а не «сколько
+// сшилось». Это устойчиво к последующему браку (`qtyGood < qtyCut`)
+// и совпадает с тем, как считают cell-content движения.
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Patterns (изолированный модуль «Лекала», MVP-1)
+//
+// Цель — завести самостоятельный справочник лекал, которым менеджер сможет
+// управлять независимо от заказа: артикул + превью + загруженные DXF-файлы
+// по размерам + площади материалов по размеру/роли. На этом этапе никакой
+// связи с `Order`/`OrderItem`/`TechCard*` не вводим — лекала живут как
+// отдельная сущность. Soft-интеграция (`Order.patternItemId` и snapshot на
+// заказе) откладывается на следующий этап (см. `docs/recon-soft-integration.md`).
+//
+// Контракт MVP:
+//   - `PatternItem` — карточка лекала: артикул (`article` уникально),
+//     название, категория, статус (`ACTIVE`/`ARCHIVED`/...), превью.
+//     `previewImageUrl`/`fileUrl` хранят публичный URL (`/uploads/...`),
+//     binary в БД не лежит (см. `apps/api/src/modules/patterns/storage`).
+//   - `PatternSizeFile` — версионированный DXF по конкретному размеру.
+//     Версия инкрементится сервисом (`max(version) + 1` по
+//     `(patternItemId, sizeId)`); удаление = архивация (status =
+//     `ARCHIVED`), физический файл с диска не удаляется.
+//   - `PatternMaterialArea` — площадь материала на размере по роли
+//     (`MAIN_FABRIC`/`RIB`/`LINING`/...). Роль — свободная строка с
+//     валидацией по списку в `@sewing/shared/patterns` (без Prisma enum
+//     — ради расширяемости без миграции).
+//
+// RBAC — `ADMIN`/`SHOP_MANAGER` (см. `apps/api/src/modules/patterns`).
+// Аудит — события `PATTERN_*` через универсальный `AuditService`.
+// ---------------------------------------------------------------------------
+
+model PatternItem {
+  id              String   @id @default(cuid())
+  /// Человекочитаемое название лекала (в UI первично). Не уникально:
+  /// в каталоге могут быть два лекала с одинаковым названием, но
+  /// разными артикулами/конструкциями.
+  name            String
+  /// Артикул лекала — уникальный управленческий идентификатор. Видим в
+  /// списке `/admin/patterns` и в карточке. Уникальность гарантируется
+  /// БД, дубликат → 409 `PATTERN_ARTICLE_TAKEN`.
+  article         String   @unique
+  /// Legacy-поле «Опциональный код категории» (свободная строка). Этап
+  /// «Категории номенклатуры» (см. `model PatternCategory`) ввёл
+  /// типизированный справочник `PatternCategory` — новые лекала
+  /// привязываются к нему через `categoryId`. Поле `categoryCode`
+  /// сохранено как fallback для исторических записей: до миграции на
+  /// справочник менеджер набирал категорию руками, и эту строку нам
+  /// нужно показать в списке/карточке как «старая категория». Никаких
+  /// destructive миграций; новый UI создаёт лекала уже без `categoryCode`.
+  categoryCode    String?
+  /// Этап «Категории номенклатуры»: FK на типизированный справочник
+  /// `PatternCategory`. Nullable, потому что:
+  ///   - старые записи остаются без категории (мы не делаем
+  ///     destructive миграцию);
+  ///   - менеджер может временно создать лекало без категории и
+  ///     прицепить её позже.
+  /// `onDelete: SetNull` — архивация / удаление категории не сносит
+  /// карточку лекала. Параметры площадей (см. `PatternCategoryParameter`)
+  /// при отсутствии категории не показываются — UI fallback-ит на
+  /// глобальный `MATERIAL_ROLES`, чтобы старые лекала продолжали
+  /// работать (см. `apps/api/src/modules/patterns/patterns.service.ts`,
+  /// `replaceMaterialAreas`).
+  categoryId      String?
+  /// Публичный URL превью (`/uploads/patterns/<id>/preview/<file>`).
+  /// Хранится только URL — binary в БД не лежит. NULL пока менеджер не
+  /// загрузил превью; UI показывает placeholder.
+  previewImageUrl String?
+  description     String?
+  /// Статус карточки. На MVP свободная строка с дефолтом `ACTIVE`,
+  /// чтобы менеджер мог завести `ARCHIVED`/`DRAFT` без миграции схемы.
+  /// UI отображает только известные значения (см.
+  /// `@sewing/shared/patterns::PATTERN_ITEM_STATUSES`), остальные —
+  /// показывает строкой как есть.
+  status          String   @default("ACTIVE")
+  /// Этап «Номенклатура = Лекала» (см. `docs/recon-soft-integration.md
+  /// §«Номенклатура = Лекала»). Ссылка на «технический» Product,
+  /// который автоматически создаётся `OrdersService.ensureLegacyProductForPattern()`
+  /// для этого лекала и подставляется в `OrderItem.productId` при
+  /// создании заказа из нового admin-UI. Один лекало = один Product
+  /// (UNIQUE), `onDelete: SetNull` — удаление Product не сносит
+  /// карточку лекала, при необходимости helper создаст новый Product
+  /// по требованию. В UI создания заказа Product спрятан: пользователь
+  /// выбирает только лекало, backend сам обеспечивает legacy
+  /// `productId` для паспортов / ставок / старого учётного flow.
+  legacyProductId String?  @unique
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  sizeFiles     PatternSizeFile[]
+  materialAreas PatternMaterialArea[]
+  /// Этап «Фурнитура и нормы» (см. `model PatternItemParameterNorm`
+  /// ниже). Для параметров категории с `inputType = QTY_PER_ITEM`
+  /// карточка лекала хранит «норму на изделие» (Люверсы = 2 шт,
+  /// Шнур = 1 шт, …). Связь 1:N — у одного лекала по одной норме на
+  /// каждый QTY_PER_ITEM параметр его категории. При расчёте
+  /// потребности цеха `WorkshopNeedsService.calculateForOrder`
+  /// раскрывает каждую норму в отдельную строку `WorkshopNeed`
+  /// (`sourceType = PATTERN_PARAMETER_NORM`, `sourceId = norm.id`).
+  parameterNorms PatternItemParameterNorm[]
+  /// Этап «Погонные метры по размерам» (см.
+  /// `model PatternItemSizeParameterValue` ниже). Для параметров
+  /// категории с `inputType = LINEAR_M_BY_SIZE` карточка лекала
+  /// хранит численные значения (м пог.) по каждому размеру. При
+  /// расчёте потребности цеха `WorkshopNeedsService` группирует
+  /// значения по `categoryParameterId` и считает
+  /// `Σ(value × OrderItem.qtyPlan)` по совпадающим размерам.
+  /// `PatternMaterialArea` для погонных метров НЕ используется —
+  /// там семантика про areaM2 (см. ТЗ §5).
+  sizeParameterValues PatternItemSizeParameterValue[]
+  /// Soft-pattern MVP (этап 2 «Лекала»): обратная связь от заказов,
+  /// у которых выбрано это лекало. На API на этапе 2 не используется
+  /// (заказ читает лекало через `Order.patternItem`); связь нужна,
+  /// чтобы Prisma знала о relation-поле и могла поддерживать
+  /// `onDelete: SetNull` на стороне `Order.patternItemId`.
+  orders        Order[]
+  /// Этап «Номенклатура = Лекала»: связь с авто-создаваемым
+  /// «техническим» Product (см. `legacyProductId` выше).
+  legacyProduct Product? @relation("PatternLegacyProduct", fields: [legacyProductId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  /// Этап «Категории номенклатуры»: типизированный справочник
+  /// категорий с параметрами площадей. См. `model PatternCategory`.
+  category      PatternCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@index([status])
+  @@index([categoryId])
+}
+
+/// Справочник категорий номенклатуры (этап «Категории номенклатуры»,
+/// см. `docs/recon-soft-integration.md §«Этап Категории»`).
+///
+/// Категория = тип изделия в каталоге («Худи», «Футболка», «Брюки»),
+/// у каждой свой набор параметров материалов (`PatternCategoryParameter`).
+/// Карточка номенклатуры (`PatternItem`) ссылается на категорию через
+/// `categoryId`, и UI «Площади материалов» строится по параметрам
+/// этой категории — а не по глобальному `MATERIAL_ROLES`. Это даёт
+/// каждому изделию свои колонки м² (например, «Основной материал» +
+/// «Кашкорсе» для худи, без «Подклада» / «Упаковки»).
+///
+/// Удаление = soft-archive: `status = ARCHIVED`. Hard-delete не
+/// поддерживается, чтобы не уронить связанные `PatternItem.categoryId`
+/// (FK `onDelete: SetNull` страхует от ручных удалений в БД).
+///
+/// `slug` — URL-friendly идентификатор для будущих deep-link и
+/// быстрых seed-операций; уникален. `iconKey` — ключ из whitelist
+/// `PATTERN_CATEGORY_ICON_KEYS` (`@sewing/shared/pattern-categories`),
+/// UI рисует иконку lucide по ключу — никаких файлов-иконок.
+model PatternCategory {
+  id          String   @id @default(cuid())
+  /// Человекочитаемое название категории (видим в UI первично).
+  name        String
+  /// URL-friendly идентификатор категории, уникальный. На MVP сервис
+  /// генерирует slug из `name`, если не передан.
+  slug        String   @unique
+  /// Legacy: ключ lucide-иконки (whitelist в `PATTERN_CATEGORY_ICON_KEYS`).
+  /// Хранится строкой — расширение whitelist не требует миграции.
+  /// На MVP «Загружаемая JPEG-иконка категории» поле сохранено как
+  /// fallback для старых записей: если `iconImageUrl` пуст, UI рисует
+  /// lucide по этому ключу (см. `apps/web/lib/pattern-category-icon.tsx`,
+  /// `apps/web/app/admin/patterns/page.tsx::CategoryFilterChip`).
+  iconKey     String
+  /// Публичный URL загруженной JPEG-иконки категории
+  /// (`/uploads/pattern-categories/<id>/icon/<safe-name>.jpg`). Основной
+  /// источник иконки в новых UI: фильтр категорий, чипсы, формы создания
+  /// номенклатуры. Если пуст — fallback на `iconKey` (lucide). См.
+  /// `apps/api/src/modules/pattern-categories/pattern-categories-storage.service.ts`.
+  iconImageUrl         String?
+  /// Оригинальное имя загруженного JPEG-файла иконки (то, что выбрал
+  /// менеджер). На диск записывается безопасное сгенерированное имя
+  /// (см. `PatternCategoriesStorageService.makeStoredFileName`); это
+  /// поле используется только для отображения «исходного» названия в
+  /// карточке категории.
+  iconOriginalFileName String?
+  /// Управленческий порядок сортировки в фильтре каталога. Меньше —
+  /// выше в списке. Default 100, чтобы новые категории не «прыгали»
+  /// в начало.
+  sortOrder   Int      @default(100)
+  /// `ACTIVE` / `ARCHIVED`. Свободная строка ради расширяемости
+  /// (см. `PATTERN_CATEGORY_STATUSES`). Архивные не отдаются в
+  /// дефолтном `GET /api/pattern-categories?status=ACTIVE`.
+  status      String   @default("ACTIVE")
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  patterns    PatternItem[]
+  parameters  PatternCategoryParameter[]
+
+  @@index([status])
+  @@index([sortOrder])
+}
+
+/// Параметр категории номенклатуры — одна позиция «что нужно
+/// замерить/указать у изделия этой категории» (этап «Категории
+/// номенклатуры»).
+///
+/// Главный смысл: `roleKey` — это та же строка, которую
+/// `PatternMaterialArea.materialRole` хранит для конкретного
+/// размера лекала. То есть параметр категории определяет, какие
+/// `materialRole` разрешены при сохранении площадей — backend
+/// валидирует это в `PatternsService.replaceMaterialAreas`.
+///
+/// `inputType` (см. `PATTERN_CATEGORY_PARAMETER_INPUT_TYPES`):
+///   - `AREA_M2_BY_SIZE` — параметр попадает в таблицу «Площади
+///     материалов» как колонка м² (UI этого этапа);
+///   - `QTY_PER_ITEM` — количество на изделие, кладётся в карточке
+///     как информационное поле (UI отдельный, на этом этапе не
+///     рисуем — backend хранит, frontend пока не визуализирует);
+///   - `TEXT_ONLY` — описание / услуга (например «Нанесение»).
+///
+/// Уникальность `(categoryId, roleKey)` НЕ enforced на уровне БД:
+/// для группы «Фурнитура» в одной категории должно быть несколько
+/// параметров с одним и тем же `roleKey = PACKAGING`, но разными
+/// `label` (Люверсы / Молния / Кнопки / Пуговицы / Шнур). Уникальность
+/// внутри `AREA_M2_BY_SIZE` (чтобы расчёт «по какой колонке м²» не
+/// был неоднозначен) валидируется в shared Zod-схеме
+/// `PatternCategoryParameterInputSchema` (`packages/shared/src/pattern-categories.ts`)
+/// и сервисе `PatternCategoriesService`. См. миграцию
+/// `20260518100000_allow_multiple_category_hardware_parameters`.
+model PatternCategoryParameter {
+  id          String   @id @default(cuid())
+
+  categoryId  String
+  category    PatternCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  /// Ключ роли материала (uppercase letters/digits/underscore). Должен
+  /// маппиться 1:1 на строку, которую хранит
+  /// `PatternMaterialArea.materialRole`. Backend валидирует это в
+  /// `PatternsService.replaceMaterialAreas`: при наличии категории
+  /// принимаются только те `materialRole`, которые есть в активных
+  /// параметрах категории; без категории — fallback на глобальный
+  /// `MATERIAL_ROLES`.
+  roleKey     String
+  /// Человекочитаемое название параметра — UI рисует его в шапке
+  /// колонки таблицы «Площади материалов» (например, «Основной
+  /// материал», «Кашкорсе»).
+  label       String
+  /// Тип ввода (см. `PATTERN_CATEGORY_PARAMETER_INPUT_TYPES`).
+  /// На этом этапе в таблицу «Площади материалов» попадают только
+  /// `AREA_M2_BY_SIZE`. Остальные сохраняются и зарезервированы под
+  /// будущий UI.
+  inputType   String   @default("AREA_M2_BY_SIZE")
+  /// Единица измерения (для AREA_M2_BY_SIZE = «м²» по умолчанию,
+  /// для QTY_PER_ITEM = «шт», для TEXT_ONLY может быть пустой).
+  /// На MVP UI берёт строку как есть — никакой нормализации.
+  unit        String   @default("м²")
+  /// Признак «параметр обязателен» — frontend рисует подсказку, но
+  /// на MVP не блокирует сохранение площадей с пустыми ячейками.
+  isRequired  Boolean  @default(false)
+  /// Управленческий порядок параметров в карточке категории и в
+  /// шапке таблицы «Площади материалов».
+  sortOrder   Int      @default(100)
+  /// `ACTIVE` / `ARCHIVED` (см. `PATTERN_CATEGORY_PARAMETER_STATUSES`).
+  /// Архивный параметр не показывается в новых карточках
+  /// номенклатуры, но если в `PatternMaterialArea` уже есть строка с
+  /// таким `roleKey`, она остаётся валидной (backend не подчищает
+  /// исторические данные).
+  status      String   @default("ACTIVE")
+  description String?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  /// Этап «Фурнитура и нормы»: обратная связь от карточек лекал,
+  /// которые сохранили норму «количество на изделие» по этому
+  /// параметру (см. `model PatternItemParameterNorm`). Используется
+  /// `onDelete: Cascade` — если параметр удалён из категории,
+  /// соответствующие нормы уезжают вместе с ним. Backend дополнительно
+  /// архивирует параметры категории через `status = ARCHIVED` —
+  /// архивные параметры не показываются в форме «Фурнитура и нормы»,
+  /// но норма остаётся в БД до явной замены.
+  patternItemNorms PatternItemParameterNorm[]
+  /// Этап «Погонные метры по размерам»: обратная связь от карточек
+  /// лекал, которые сохранили численные значения по размерам по
+  /// этому параметру (см. `model PatternItemSizeParameterValue`).
+  /// `onDelete: Cascade` — если параметр удалён, значения уезжают
+  /// вместе с ним. Архивные параметры (status = ARCHIVED) не
+  /// показываются в UI «Погонные метры», но значения сохраняются
+  /// в БД до явной замены.
+  patternItemSizeValues PatternItemSizeParameterValue[]
+
+  // (categoryId, roleKey) — обычный индекс. В прошлой миграции это было
+  // `@@unique`, но теперь группа «Фурнитура» допускает несколько строк
+  // с roleKey = PACKAGING (Люверсы / Молния / ...). Уникальность внутри
+  // `AREA_M2_BY_SIZE` валидируется приложением (Zod-схема
+  // `PatternCategoryParameterInputSchema`).
+  @@index([categoryId, roleKey])
+  @@index([categoryId])
+  @@index([status])
+  @@index([sortOrder])
+}
+
+/// DXF-файл лекала по конкретному размеру. Один `(patternItemId, sizeId)`
+/// может иметь несколько версий — менеджер загружает новую версию
+/// файла кнопкой «Заменить», старая остаётся как `ACTIVE` с младшим
+/// `version`. Удаление через UI = `status = ARCHIVED` (физически файл
+/// с диска НЕ удаляем — см. `PatternsService.archiveSizeFile`).
+model PatternSizeFile {
+  id               String   @id @default(cuid())
+  patternItemId    String
+  sizeId           String
+  /// Публичный URL DXF-файла (`/uploads/patterns/<patternId>/sizes/<sizeId>/<file>`).
+  fileUrl          String
+  /// Исходное имя файла, как его сохранил менеджер (для UI и
+  /// «скачать» с понятным названием).
+  originalFileName String
+  /// Версия в рамках `(patternItemId, sizeId)`. Считается сервисом как
+  /// `max(version) + 1` при заливке нового файла; уникальность
+  /// `(patternItemId, sizeId, version)` гарантируется БД.
+  version          Int      @default(1)
+  /// Состояние записи. На MVP `ACTIVE`/`ARCHIVED` (свободная строка
+  /// для будущей расширяемости). Архивная запись остаётся в БД и
+  /// показывается в истории файлов карточки.
+  status           String   @default("ACTIVE")
+  /// FK на сотрудника, который загрузил версию. Nullable — на случай,
+  /// когда сессия аудит-нейтральна (системные/seed-инициализации).
+  /// `onDelete: SetNull`, чтобы удаление учётки не сносило файл лекала.
+  uploadedById     String?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  patternItem PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+  size        Size        @relation(fields: [sizeId], references: [id])
+  uploadedBy  Employee?   @relation("PatternSizeFileUploader", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@unique([patternItemId, sizeId, version], name: "PatternSizeFile_pattern_size_version_uniq")
+  @@index([patternItemId])
+}
+
+/// Площадь материала на конкретном размере для конкретной роли
+/// (`MAIN_FABRIC`/`RIB`/`LINING`/...). Хранится в м² с точностью
+/// 4 знака после запятой. На MVP редактируется bulk-replace
+/// (`PUT /api/patterns/:id/material-areas`): сервис в одной
+/// транзакции удаляет старые строки лекала и записывает новые.
+///
+/// `materialRole` — String (без Prisma enum) ради расширения списка
+/// без миграции (см. `@sewing/shared/patterns::MATERIAL_ROLES`).
+/// Уникальность пары `(patternItemId, sizeId, materialRole)` гарантирует,
+/// что одна и та же роль не задана дважды для одного размера.
+model PatternMaterialArea {
+  id            String   @id @default(cuid())
+  patternItemId String
+  sizeId        String
+  materialRole  String
+  areaM2        Decimal  @db.Decimal(10, 4)
+  comment       String?
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  patternItem PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+  size        Size        @relation(fields: [sizeId], references: [id])
+
+  @@unique([patternItemId, sizeId, materialRole], name: "PatternMaterialArea_pattern_size_role_uniq")
+  @@index([patternItemId, materialRole])
+}
+
+/// Этап «Фурнитура и нормы» (см. ТЗ «Карточка номенклатуры — блок
+/// Фурнитура и нормы», `apps/web/app/admin/patterns/[id]/parameter-norms-form.tsx`,
+/// `apps/api/src/modules/patterns/patterns.service.ts::replaceParameterNorms`).
+///
+/// Хранит «норму на изделие» по конкретному параметру категории
+/// (`PatternCategoryParameter`) в карточке лекала
+/// (`PatternItem`). UI показывает блок «Фурнитура и нормы» только
+/// для параметров с `inputType = QTY_PER_ITEM` (`status = ACTIVE`):
+/// Люверсы / Шнур / Наконечники / Молния / Кнопки / Пуговицы.
+///
+/// Хранить нормы по `categoryParameterId`, а не только по `roleKey`,
+/// принципиально: для группы «Фурнитура» в одной категории может
+/// быть несколько параметров с одним и тем же `roleKey = PACKAGING`,
+/// но разными `label`. Уникальность `(patternItemId, categoryParameterId)`
+/// гарантирует, что норма не задана дважды для одного параметра, и
+/// «PUT /patterns/:id/parameter-norms» делает атомарный bulk-replace.
+///
+/// Snapshot-поля (`labelSnapshot`, `inputTypeSnapshot`, `unit`,
+/// `roleKey`) пишутся в момент сохранения и переживают переименование
+/// или удаление параметра категории — `WorkshopNeedsService` использует
+/// snapshot, не текущие значения параметра. `unit` копируется из
+/// параметра категории и используется как `unit` строки `WorkshopNeed`.
+///
+/// `qtyPerItem` — Decimal(14, 4), > 0. Если поле пустое в форме —
+/// норма НЕ сохраняется (см. `replaceParameterNorms` бизнес-логику).
+/// Если norm отсутствует для required параметра, на MVP не блокируем
+/// — `WorkshopNeed` просто не создаётся (см. ТЗ §«Cut readiness»).
+model PatternItemParameterNorm {
+  id                   String   @id @default(cuid())
+
+  patternItemId        String
+  patternItem          PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+
+  categoryParameterId  String
+  categoryParameter    PatternCategoryParameter @relation(fields: [categoryParameterId], references: [id], onDelete: Cascade)
+
+  /// Snapshot `roleKey` параметра категории на момент сохранения нормы.
+  /// Используется `WorkshopNeedsService` для записи `WorkshopNeed.materialRole`.
+  /// Для группы фурнитуры это обычно `PACKAGING`, но в одной категории
+  /// несколько норм могут иметь одинаковый `roleKey` — различаются
+  /// они по `categoryParameterId` (Люверсы / Шнур / Наконечники).
+  roleKey              String
+  /// Snapshot `label` параметра — отображается в `WorkshopNeed.description`
+  /// и `sourceName`. Сохраняется в момент сохранения нормы, чтобы
+  /// переименование параметра категории позже не повлияло на
+  /// исторические `WorkshopNeed`-строки.
+  labelSnapshot        String
+  /// Snapshot `inputType` параметра — на MVP всегда `QTY_PER_ITEM`,
+  /// но поле зарезервировано на случай расширения списка
+  /// `PATTERN_CATEGORY_PARAMETER_INPUT_TYPES`.
+  inputTypeSnapshot    String
+  /// Единица измерения, скопированная из параметра категории
+  /// (`PatternCategoryParameter.unit`). Для QTY_PER_ITEM по умолчанию
+  /// «шт». Используется как `WorkshopNeed.unit`.
+  unit                 String
+
+  /// Норма на изделие. Decimal(14, 4), > 0. Backend валидирует через
+  /// `ReplacePatternItemParameterNormsSchema` (см. `@sewing/shared`).
+  qtyPerItem           Decimal  @db.Decimal(14, 4)
+  /// Опциональный комментарий менеджера (например, «китайские
+  /// люверсы 11 мм»). Хранится строкой как есть.
+  comment              String?
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([patternItemId, categoryParameterId])
+  @@index([patternItemId])
+  @@index([categoryParameterId])
+  @@index([roleKey])
+}
+
+/// Этап «Погонные метры по размерам» (см. ТЗ «Доработать параметры
+/// категорий номенклатуры», `apps/web/app/admin/patterns/[id]/size-parameter-values-form.tsx`,
+/// `apps/api/src/modules/patterns/patterns.service.ts::replaceSizeParameterValues`).
+///
+/// Хранит численное значение по конкретному размеру (`Size`) для
+/// конкретного параметра категории (`PatternCategoryParameter`) в
+/// карточке лекала (`PatternItem`). На MVP таблица используется
+/// только для `inputType = LINEAR_M_BY_SIZE` (погонные метры,
+/// `unit = "м пог."`), но schema допускает любые numeric-by-size
+/// значения — `inputTypeSnapshot` различает их.
+///
+/// Для AREA_M2_BY_SIZE существует отдельная таблица
+/// `PatternMaterialArea` (там семантика про areaM2 м²); для
+/// QTY_PER_ITEM — `PatternItemParameterNorm` (норма на изделие).
+/// Это сознательно: «одна семантика — одна таблица», старые данные
+/// не переводятся, обратная совместимость не нарушается.
+///
+/// Уникальность `(patternItemId, categoryParameterId, sizeId)` —
+/// одно значение на тройку. Bulk-replace
+/// `PUT /api/patterns/:id/size-parameter-values` стирает все старые
+/// LINEAR_M_BY_SIZE-значения лекала по «допустимому окну» параметров
+/// категории и пишет новый набор.
+///
+/// Snapshot-поля (`roleKey`, `labelSnapshot`, `inputTypeSnapshot`,
+/// `unit`) пишутся в момент сохранения и переживают переименование
+/// или архивацию параметра — `WorkshopNeedsService` использует
+/// snapshot, не текущие значения параметра.
+///
+/// `value` — Decimal(14, 4), > 0. Если поле пустое в форме —
+/// значение НЕ сохраняется (см. service `replaceSizeParameterValues`).
+/// Если для required параметра нет значений, на MVP не блокируем
+/// — `WorkshopNeed` просто не создаётся (с warning в `calculationNote`).
+model PatternItemSizeParameterValue {
+  id                   String   @id @default(cuid())
+
+  patternItemId        String
+  patternItem          PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+
+  categoryParameterId  String
+  categoryParameter    PatternCategoryParameter @relation(fields: [categoryParameterId], references: [id], onDelete: Cascade)
+
+  sizeId               String
+  size                 Size @relation(fields: [sizeId], references: [id], onDelete: Cascade)
+
+  /// Snapshot `PatternCategoryParameter.roleKey` на момент сохранения.
+  /// Используется `WorkshopNeedsService` для записи `WorkshopNeed.materialRole`.
+  roleKey              String
+  /// Snapshot `PatternCategoryParameter.label` — отображается в
+  /// `WorkshopNeed.description` и `sourceName`. Сохраняется в момент
+  /// сохранения, чтобы переименование параметра не повлияло на
+  /// исторические `WorkshopNeed`-строки.
+  labelSnapshot        String
+  /// Snapshot `PatternCategoryParameter.inputType` — на MVP всегда
+  /// `LINEAR_M_BY_SIZE`, но поле зарезервировано на случай расширения
+  /// списка `PATTERN_CATEGORY_PARAMETER_INPUT_TYPES`.
+  inputTypeSnapshot    String
+  /// Единица измерения, скопированная из параметра категории
+  /// (`PatternCategoryParameter.unit`). Для LINEAR_M_BY_SIZE по
+  /// умолчанию «м пог.». Используется как `WorkshopNeed.unit`.
+  unit                 String
+
+  /// Численное значение по этому размеру. Decimal(14, 4), > 0.
+  /// Backend валидирует через `ReplacePatternItemSizeParameterValuesSchema`
+  /// (см. `@sewing/shared`).
+  value                Decimal @db.Decimal(14, 4)
+  /// Опциональный комментарий менеджера. Хранится строкой как есть.
+  comment              String?
+
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  @@unique([patternItemId, categoryParameterId, sizeId], name: "PatternItemSizeParameterValue_pattern_param_size_uniq")
+  @@index([patternItemId])
+  @@index([categoryParameterId])
+  @@index([sizeId])
+  @@index([roleKey])
+}
+
+model CutReleasePolicy {
+  id       String  @id @default(cuid())
+  /// Активная политика. На MVP одновременно активна максимум одна
+  /// (enforce — `CutReleasePolicyService.create`). Деактивированные
+  /// записи остаются для аудита и отчётности (сколько штук успели
+  /// выдать в рамках этой политики до её отмены).
+  isActive Boolean @default(true)
+
+  /// Опциональный фильтр по цвету (`Passport.color`). Сравниваем
+  /// строго по равенству строки. NULL = «цвет не ограничен». UI на
+  /// `/master` рендерит select из набора реально используемых цветов;
+  /// backend никакой нормализации не делает.
+  color    String?
+  /// Опциональный фильтр по размеру (`Passport.sizeId`). NULL =
+  /// «размер не ограничен». FK не ставим: размер может быть удалён
+  /// из справочника (на MVP такое не делают, но мы не хотим связи,
+  /// которая блокирует удаление справочной записи). Валидация
+  /// существования размера — на стороне сервиса при `create`.
+  sizeId   String?
+  /// Лимит штук, который сотрудники могут забрать в рамках этой
+  /// политики (`Σ passport.qtyCut`). `0` — формально допустим
+  /// (Zod валидирует `>= 1` со стороны API), но в БД это просто
+  /// запись с лимитом 0 — она будет блокировать любую выдачу,
+  /// что может быть полезно для админских стопов.
+  limitQty Int
+
+  /// Сколько уже выдано в рамках этой политики (накопительно).
+  /// Инкрементится атомарно в той же транзакции, что и issue
+  /// (см. `PassportsService.issueToEmployee`). Не сбрасывается —
+  /// чтобы посмотреть «сколько успели выдать до отмены».
+  consumedQty Int @default(0)
+
+  /// Кто создал политику (мастер / менеджер / админ). Хранится
+  /// строкой без FK — учётка может быть деактивирована, а запись
+  /// политики должна уцелеть для аудита.
+  createdById String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([isActive])
+}
+
+// ---------------------------------------------------------------------------
+// Workshop needs (Этап 4А «Потребность цеха»)
+//
+// Рабочее место закупщика: чистая потребность заказа в материалах,
+// рассчитанная системой по «лекало × техкарта × размерная матрица».
+// См. `apps/api/src/modules/workshop-needs/*`,
+// `docs/recon-soft-integration.md §«Этап 4А»`.
+//
+// Сознательные ограничения MVP:
+//   - НЕ закупочная номенклатура: это описание того, что нужно
+//     найти/купить (`description` человекочитаемой строкой);
+//   - НЕТ справочника поставщиков — `supplierNameText` /
+//     `purchaseItemNameText` свободные строки;
+//   - НЕТ закупочных документов / приёмки / складских ячеек;
+//   - НЕТ потерь / коэффициентов: считается только чистая
+//     потребность;
+//   - `purchaseQty` заполняет закупщик руками (system НЕ копирует
+//     `calculatedQty` в `purchaseQty` автоматически).
+//
+// Источник материала (`sourceType`):
+//   - `TECH_CARD_MATERIAL_LINE` — заказ в DRAFT, считаем по live
+//     техкарте;
+//   - `ORDER_MATERIAL_REQUIREMENT` — заказ запущен, считаем по
+//     snapshot строкам `OrderMaterialRequirement`.
+// `sourceId` — id исходной строки (для аудита). Хранится строкой,
+// без FK — snapshot/строка техкарты могут быть позже удалены, а
+// потребность должна уцелеть.
+//
+// `status` и `calculationMethod` — String (без Prisma enum), список
+// расширяется без миграции (см. `@sewing/shared/workshop-needs`).
+// ---------------------------------------------------------------------------
+
+model WorkshopNeed {
+  id String @id @default(cuid())
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// `TECH_CARD_MATERIAL_LINE` | `ORDER_MATERIAL_REQUIREMENT`. Хранится
+  /// строкой ради расширяемости (см. JSDoc выше).
+  sourceType String?
+  /// `id` исходной строки в источнике (`TechCardMaterialLine.id` или
+  /// `OrderMaterialRequirement.id`). Без FK: исходная строка может
+  /// быть удалена позже, а потребность должна уцелеть для аудита.
+  sourceId   String?
+
+  /// Роль материала (`MAIN_FABRIC`, `RIB`, `LINING`, …). Свободная
+  /// строка по тем же соображениям, что
+  /// `TechCardMaterialLine.materialRole`.
+  materialRole String?
+  /// Имя строки техкарты / snapshot-строки на момент расчёта.
+  /// Используется в `description`-fallback и для UI-таблицы.
+  sourceName   String?
+  /// Готовое человекочитаемое описание потребности — то, что
+  /// закупщик ищет/покупает («Кулирка 180 г/м², чёрный, ширина 180
+  /// см»). Пишется в момент расчёта, в БД хранится «как есть».
+  description  String
+
+  fabricType     String?
+  densityGsm     Int?
+  plannedWidthCm Int?
+
+  /// Snapshot-копии правила цвета и фиксированного цвета — на тот
+  /// случай, если строку техкарты позже отредактируют.
+  colorRule         String?
+  fixedColorText    String?
+  /// Итоговый цвет, выведенный по `colorRule` в момент расчёта.
+  resolvedColorText String?
+
+  /// Суммарная площадь по всем размерам заказа, м² (только для
+  /// `AREA_DENSITY`). Сумма `Σ(areaM2 × qtyPlan)` по
+  /// `PatternMaterialArea` для роли материала. `null` для
+  /// `QTY_PER_UNIT`.
+  totalAreaM2   Decimal? @db.Decimal(14, 4)
+  /// Чистая потребность, рассчитанная системой. Единица — `unit`.
+  /// Для `AREA_DENSITY`: `totalAreaM2 × densityGsm / 1000` (кг).
+  /// Для `QTY_PER_UNIT`: `qtyPerUnit × totalOrderQty` или
+  /// `requirement.totalQty`.
+  calculatedQty Decimal  @db.Decimal(14, 4)
+  /// Сколько закупщик решил реально купить/запросить. `null` пока
+  /// закупщик не заполнил руками. НЕ копируется автоматически из
+  /// `calculatedQty`.
+  purchaseQty   Decimal? @db.Decimal(14, 4)
+  unit          String
+
+  /// `AREA_DENSITY` | `QTY_PER_UNIT`. Свободная строка ради
+  /// расширения списка (см. `@sewing/shared/workshop-needs`).
+  calculationMethod String @default("QTY_PER_UNIT")
+  /// `CALCULATED` | `REVIEWED` | `PURCHASE_PLANNED` | `CANCELLED`.
+  /// Дефолт `CALCULATED` — сразу после расчёта системой. Закупщик
+  /// двигает руками. См. `@sewing/shared/workshop-needs`.
+  status            String @default("CALCULATED")
+
+  /// Текст поставщика, как его записал закупщик. Этап 5 «Поставщики»:
+  /// поле сохранено как fallback, когда поставщика ещё нет в справочнике
+  /// (`selectedSupplierId = null`) или когда закупщик хочет оставить
+  /// «ручную» строку. UI показывает `selectedSupplier?.name` →
+  /// `supplierNameText`. Никогда не перезаписывается при выборе
+  /// `selectedSupplierId`.
+  supplierNameText     String?
+  /// Закупочная номенклатура текстом (например, «Кулирка 180 г/м²
+  /// чёрный, рулон 50 м»). Этап 5: fallback к
+  /// `selectedSupplierCatalogItem.name` (см. JSDoc выше).
+  purchaseItemNameText String?
+  quotedPrice          Decimal?  @db.Decimal(14, 2)
+  quotedCurrency       String?
+  expectedDeliveryDate DateTime?
+
+  /// Этап 5 «Поставщики» (см. `model Supplier` ниже,
+  /// `apps/api/src/modules/suppliers/*`,
+  /// `docs/recon-soft-integration.md §«Этап 5»`).
+  ///
+  /// Опциональная связь с карточкой поставщика из справочника:
+  ///   - `null`  — закупщик ещё не выбрал, работаем по `supplierNameText`;
+  ///   - string — выбран конкретный Supplier (валидируется на сервисе:
+  ///              существует и `status = ACTIVE`).
+  ///
+  /// `onDelete: SetNull` — удаление карточки поставщика не сносит
+  /// потребность, связь обнуляется и UI снова показывает текстовый
+  /// fallback.
+  selectedSupplierId String?
+  selectedSupplier   Supplier? @relation(fields: [selectedSupplierId], references: [id], onDelete: SetNull)
+
+  /// Этап 5: опциональная ссылка на конкретную позицию каталога
+  /// поставщика (артикул/название/единица/цена). Также nullable +
+  /// `onDelete: SetNull` (на самом деле каталог-позиции мы физически
+  /// не удаляем, а архивируем, см. сервис; SetNull — страховка для
+  /// будущих ручных удалений).
+  ///
+  /// Если выбран `selectedSupplierCatalogItemId`, его
+  /// `supplierId` обязан совпадать с `selectedSupplierId` (валидация
+  /// в сервисе). Закупщик может сначала выбрать catalog item — тогда
+  /// сервис подставит `selectedSupplierId = item.supplierId`
+  /// автоматически.
+  selectedSupplierCatalogItemId String?
+  selectedSupplierCatalogItem   SupplierCatalogItem? @relation(fields: [selectedSupplierCatalogItemId], references: [id], onDelete: SetNull)
+
+  comment         String?
+  /// Технический комментарий, который пишет сам алгоритм расчёта:
+  /// предупреждения о неполной площади по размерам, fallback и т.п.
+  /// UI показывает его как warning-строку под `description`.
+  calculationNote String?
+
+  calculatedAt DateTime @default(now())
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  /// Этап 6А «Заказы поставщикам» (см. `model PurchaseOrder` ниже).
+  /// Строки закупочных документов, через которые эта потребность
+  /// «уходит» к поставщику. На MVP закупщик создаёт PO именно из
+  /// `WorkshopNeed`; обратная связь нужна для:
+  ///   - валидации «нет ли уже активной строки PO» при попытке
+  ///     создать новую (см. `PurchaseOrdersService.createFromNeeds`);
+  ///   - возврата `WorkshopNeed.status` в `PURCHASE_PLANNED` при
+  ///     отмене PO, если по этой потребности больше нет активных
+  ///     `PurchaseOrderLine` (см. `PurchaseOrdersService.cancel`).
+  /// `onDelete: SetNull` со стороны `PurchaseOrderLine.workshopNeedId`:
+  /// удаление строки потребности (через cascade от заказа) не сносит
+  /// уже выпущенный PO — он остаётся как закупочный документ с
+  /// item snapshot.
+  purchaseOrderLines PurchaseOrderLine[]
+
+  /// Этап 7А «Приёмка поставок» (см. `model PurchaseReceiptLine`
+  /// ниже). Строки приёмки, фактически закрывающие эту потребность.
+  /// Используется и для списка «уже принято по этой потребности»,
+  /// и для пересчёта `WorkshopNeed.status` (`PARTIALLY_RECEIVED`/
+  /// `RECEIVED`) при создании/отмене приёмки. `onDelete: SetNull`
+  /// со стороны `PurchaseReceiptLine.workshopNeedId`: удаление
+  /// потребности (через cascade от заказа) не сносит акт приёмки.
+  receiptLines PurchaseReceiptLine[]
+
+  /// Этап «Себестоимость заказа» (см. `model OrderCostEstimateLine`
+  /// ниже). Строки расчётов себестоимости, ссылающиеся на эту
+  /// потребность как на источник. `onDelete: SetNull` со стороны
+  /// `OrderCostEstimateLine.workshopNeedId`: удаление потребности
+  /// (через cascade от заказа) не сносит уже завершённый расчёт —
+  /// строка остаётся как исторический срез.
+  costEstimateLines OrderCostEstimateLine[]
+
+  /// Этап «Ручная отметка поступления материала» (см.
+  /// `model OrderMaterialArrivalOverride` ниже). Активные ACTIVE-overrides
+  /// учитываются `CutReadinessService` как «материал поступил» —
+  /// прибавляются к `placedQty` для проверки готовности к крою.
+  /// `onDelete: SetNull` со стороны `OrderMaterialArrivalOverride.workshopNeedId`:
+  /// удаление потребности (через cascade от заказа) не сносит override.
+  materialArrivalOverrides OrderMaterialArrivalOverride[]
+
+  @@index([orderId])
+  @@index([status])
+  @@index([materialRole])
+  @@index([calculationMethod])
+  @@index([selectedSupplierId])
+  @@index([selectedSupplierCatalogItemId])
+}
+
+// ---------------------------------------------------------------------------
+// Suppliers (Этап 5 «Справочник поставщиков»)
+//
+// Управленческий справочник контрагентов и их закупочной номенклатуры.
+// Сознательно изолирован от закупочного контура (нет PurchaseOrder, нет
+// приёмки, нет складских ячеек, нет остатков). На этом этапе цель —
+// дать закупщику место, где можно один раз завести поставщика, его
+// контакты и список регулярно покупаемых позиций, и потом выбирать их
+// в `WorkshopNeed`. Связь с `WorkshopNeed` сознательно мягкая: текстовые
+// `supplierNameText` / `purchaseItemNameText` остаются как fallback,
+// пока справочник пуст.
+//
+// Дизайн:
+//   - `Supplier.status` хранится как String (без Prisma enum), список
+//     валидируется Zod-ом по `SUPPLIER_STATUSES` в
+//     `@sewing/shared/suppliers`. Расширение списка не требует миграции;
+//   - `SupplierContact` — отдельная таблица «контакты менеджеров»
+//     внутри одной карточки поставщика (one-to-many);
+//   - `SupplierCatalogItem` — каталог позиций, которые этот поставщик
+//     продаёт. `lastPrice` и `currency` — последняя предложенная цена
+//     (закупщик руками подтверждает `quotedPrice` в `WorkshopNeed`,
+//     backend lastPrice автоматически НЕ копирует);
+//   - физического удаления Supplier не делаем (`PATCH status = INACTIVE`),
+//     контакты можно удалять физически, catalog item — soft-archive
+//     через `status = INACTIVE` (см. сервис).
+//
+// RBAC — `ADMIN` / `SHOP_MANAGER` (см. `apps/api/src/modules/suppliers/*`).
+// Аудит — события `SUPPLIER_*` через универсальный `AuditService`.
+// ---------------------------------------------------------------------------
+
+model Supplier {
+  id        String   @id @default(cuid())
+  /// Человекочитаемое название поставщика (в UI первично). Не уникально:
+  /// у двух разных юр-лиц вполне может быть одно и то же бытовое имя.
+  name      String
+  phone     String?
+  website   String?
+  address   String?
+  comment   String?
+  /// Статус карточки. Дефолт `ACTIVE`. Хранится строкой, чтобы расширять
+  /// список без миграции (см. `SUPPLIER_STATUSES` в
+  /// `@sewing/shared/suppliers`). UI скрывает не-`ACTIVE` поставщиков
+  /// из селекта в `WorkshopNeed`; backend дополнительно блокирует выбор
+  /// неактивного `Supplier` через `SupplierInactiveException`.
+  status    String   @default("ACTIVE")
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  contacts         SupplierContact[]
+  catalogItems     SupplierCatalogItem[]
+  workshopNeeds    WorkshopNeed[]
+  /// Этап 6А «Заказы поставщикам» (см. `model PurchaseOrder` ниже).
+  /// Закупочные документы, выписанные на этого поставщика. Удаление
+  /// поставщика блокируется RESTRICT-ом со стороны
+  /// `PurchaseOrder.supplierId` — нельзя «потерять» поставщика,
+  /// если есть открытый PO; на MVP мы вообще не удаляем Supplier
+  /// (status = INACTIVE).
+  purchaseOrders   PurchaseOrder[]
+  /// Этап 7А «Приёмка поставок» (см. `model PurchaseReceipt` ниже).
+  /// Документы фактической приёмки, в snapshot которых попал этот
+  /// поставщик. `onDelete: SetNull` со стороны
+  /// `PurchaseReceipt.supplierId`: даже при удалении карточки
+  /// поставщика акт приёмки уцелеет — поля
+  /// `supplierNameSnapshot/...` уже зафиксированы.
+  purchaseReceipts PurchaseReceipt[]
+
+  @@index([status])
+  @@index([name])
+}
+
+/// Контакт менеджера у поставщика (one-to-many от `Supplier`).
+/// Минимально достаточный набор полей для записной книжки закупщика,
+/// без CRM-логики. `isPrimary` — мягкая отметка «основной контакт»;
+/// uniqueness НЕ enforce-им, чтобы менеджер мог временно поставить
+/// флаг на двух людях, если идёт пересменка.
+model SupplierContact {
+  id         String   @id @default(cuid())
+  supplierId String
+  name       String
+  position   String?
+  phone      String?
+  email      String?
+  /// Произвольный мессенджер (Telegram, WhatsApp, ник и т.п.). Свободная
+  /// строка; никаких deeplink-ов на MVP, чтобы не плодить регэкспы.
+  messenger  String?
+  isPrimary  Boolean  @default(false)
+  comment    String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  supplier Supplier @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+
+  @@index([supplierId])
+}
+
+/// Позиция в каталоге поставщика — конкретная номенклатура, которую он
+/// продаёт. Один Supplier → много `SupplierCatalogItem`.
+///
+/// Сознательно много nullable-полей: на старте закупщик может завести
+/// строку с одним именем и единицей, а параметры (плотность/ширина/цена)
+/// дополнить позже.
+///
+/// Уникальность `(supplierId, supplierArticle)` НЕ накладываем:
+/// `supplierArticle` может быть `null` или дублироваться у редких
+/// поставщиков с разнобоем в номенклатуре.
+model SupplierCatalogItem {
+  id              String   @id @default(cuid())
+  supplierId      String
+  /// Человекочитаемое название позиции, как закупщик её называет
+  /// в письмах поставщику.
+  name            String
+  /// Артикул в системе поставщика. Опционально; если задан, должен
+  /// быть уникален в рамках поставщика (валидируется в сервисе мягко).
+  supplierArticle String?
+  category        String?
+  /// Тип полотна / материала (кулирка, двунитка, …) — совпадает
+  /// семантически с `TechCardMaterialLine.fabricType`. Свободная строка.
+  fabricType      String?
+  densityGsm      Int?
+  /// Цвет позиции. Свободная строка (часто это конкретный pantone-код
+  /// или фабричное название цвета).
+  colorText       String?
+  /// Единица измерения, в которой поставщик продаёт позицию (`кг`, `м`,
+  /// `шт`, `рулон`).
+  unit            String
+  /// Последняя предложенная цена за единицу. Backend сюда автоматически
+  /// ничего не копирует — менеджер заносит её при обновлении карточки;
+  /// UI «Потребность цеха» показывает её как подсказку, но в `quotedPrice`
+  /// строки `WorkshopNeed` подставляется только по явному действию
+  /// закупщика.
+  lastPrice       Decimal? @db.Decimal(14, 2)
+  currency        String?
+  /// Минимальная партия заказа в `unit`. На MVP — справочное поле для
+  /// UI; backend не enforce-ит «не покупать меньше».
+  minOrderQty     Decimal? @db.Decimal(14, 4)
+  deliveryDays    Int?
+  comment         String?
+  /// Статус позиции. Дефолт `ACTIVE`. DELETE через UI переводит в
+  /// `INACTIVE` (soft-archive), физического удаления нет — это
+  /// инвариант MVP: уже выбранную в `WorkshopNeed` строку нельзя
+  /// «потерять» из истории.
+  status          String   @default("ACTIVE")
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  supplier           Supplier              @relation(fields: [supplierId], references: [id], onDelete: Cascade)
+  workshopNeeds      WorkshopNeed[]
+  /// Этап 6А «Заказы поставщикам». Строки закупочных документов,
+  /// в которых выбрана эта позиция каталога. `onDelete: SetNull` со
+  /// стороны `PurchaseOrderLine.supplierCatalogItemId`: позицию
+  /// можно физически удалить (на MVP это не делается, только
+  /// архивация), и snapshot строки PO не пропадёт.
+  purchaseOrderLines PurchaseOrderLine[]
+  /// Этап 7А «Приёмка поставок». Строки приёмки, в snapshot
+  /// которых попала эта позиция каталога. `onDelete: SetNull` —
+  /// каталог-позицию мы физически не удаляем (только архивация),
+  /// но даже при ручном удалении строка приёмки уцелеет.
+  receiptLines       PurchaseReceiptLine[]
+
+  @@index([supplierId])
+  @@index([status])
+  @@index([fabricType])
+  @@index([densityGsm])
+}
+
+// ---------------------------------------------------------------------------
+// Purchase orders (Этап 6А «Заказы поставщикам», MVP)
+//
+// Закупочный документ: один заказ поставщику объединяет одну или
+// несколько строк `PurchaseOrderLine`, каждая из которых ссылается
+// на исходную `WorkshopNeed`. Сознательная граница MVP:
+//   - НЕТ приёмки, НЕТ MaterialReceipt / FabricRoll;
+//   - НЕТ связи со складскими ячейками / WMS;
+//   - НЕТ оплаты поставщику / финансовых документов;
+//   - НЕТ закрытия PO по приёмке;
+//   - НЕТ новых ролей (`PURCHASER`/`WAREHOUSE_KEEPER`/...) —
+//     RBAC завязан на существующие `ADMIN`/`SHOP_MANAGER`
+//     (см. `apps/api/src/modules/purchase-orders/*`).
+//
+// Snapshot-инварианты (см. `PurchaseOrdersService.createFromNeeds`):
+//   - в момент создания фиксируем supplier-snapshot
+//     (`supplierNameSnapshot`/`supplierPhoneSnapshot`/
+//     `supplierWebsiteSnapshot`/`supplierAddressSnapshot`),
+//     чтобы карточка PO жила независимо от поздних правок
+//     `Supplier`;
+//   - в момент создания каждой строки фиксируем item-snapshot
+//     (`itemNameSnapshot`/`supplierArticleSnapshot`/
+//     `unitSnapshot`/`catalogLastPriceSnapshot`), чтобы строка
+//     не «теряла» имя/единицу при архивации каталога;
+//   - `qty` копируется из `WorkshopNeed.purchaseQty`,
+//     `price` — из `WorkshopNeed.quotedPrice` (если задан),
+//     `expectedDeliveryDate` — из `WorkshopNeed.expectedDeliveryDate`.
+//
+// Статусы (свободная строка, без Prisma enum — список расширяется
+// без миграции; см. `@sewing/shared/purchase-orders`):
+//   - `DRAFT`     — только что создан, можно редактировать строки;
+//   - `SENT`      — отправлен поставщику (зафиксированы `sentAt`,
+//                   все активные строки → `SENT`);
+//   - `CONFIRMED` — поставщик подтвердил (зафиксированы `confirmedAt`
+//                   и опционально `confirmedQty`/`confirmedPrice`/
+//                   `confirmedDeliveryDate` в строках);
+//   - `CANCELLED` — заказ отменён, строки → `CANCELLED`,
+//                   связанные `WorkshopNeed` возвращаются в
+//                   `PURCHASE_PLANNED`, если по ним больше нет
+//                   активных строк.
+// ---------------------------------------------------------------------------
+
+model PurchaseOrder {
+  id     String @id @default(cuid())
+  /// Уникальный человекочитаемый номер вида `PO-YYYYMMDD-NNNN`.
+  /// Генерация — `PurchaseOrderNumberService` по той же схеме,
+  /// что `OrderNumberService.nextNumber()`.
+  number String @unique
+
+  /// Карточка поставщика. `onDelete: Restrict` — на MVP мы не
+  /// удаляем `Supplier` в принципе (status = INACTIVE), а если
+  /// удаление и появится, оно не должно «потерять» PO.
+  supplierId String
+  supplier   Supplier @relation(fields: [supplierId], references: [id], onDelete: Restrict)
+
+  /// Snapshot полей поставщика на момент создания PO. Защищает
+  /// карточку PO от поздних правок `Supplier`: даже если менеджер
+  /// сменил телефон/адрес, в карточке PO видно «как было».
+  supplierNameSnapshot    String
+  supplierPhoneSnapshot   String?
+  supplierWebsiteSnapshot String?
+  supplierAddressSnapshot String?
+
+  /// Заказ покупателя, к которому относится этот PO (если все
+  /// строки PO взяты из потребностей одного заказа покупателя).
+  /// На MVP мы запрещаем смешивать потребности разных заказов
+  /// в одном PO (см. `PurchaseOrderNeedsDifferentOrdersException`).
+  /// `onDelete: SetNull` — удаление заказа покупателя не сносит
+  /// PO, обратная ссылка просто обнуляется.
+  customerOrderId String?
+  customerOrder   Order?  @relation(fields: [customerOrderId], references: [id], onDelete: SetNull)
+
+  /// Жизненный цикл PO. Свободная строка по той же причине, что и
+  /// `WorkshopNeed.status` / `Supplier.status` — список расширяется
+  /// без миграции БД.
+  status String @default("DRAFT")
+
+  expectedDeliveryDate DateTime?
+  sentAt               DateTime?
+  confirmedAt          DateTime?
+  cancelledAt          DateTime?
+
+  comment String?
+
+  /// Кто создал PO. `onDelete: SetNull` — учётка может быть
+  /// деактивирована/удалена, а закупочный документ должен уцелеть.
+  createdById String?
+  createdBy   Employee? @relation("PurchaseOrderCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines            PurchaseOrderLine[]
+  /// Этап 7А «Приёмка поставок» (см. `model PurchaseReceipt` ниже).
+  /// Документы фактической приёмки, оформленные по этому PO.
+  /// `onDelete: Restrict` со стороны `PurchaseReceipt.purchaseOrderId`:
+  /// нельзя удалить PO, по которому уже есть приёмка (на MVP
+  /// ручного удаления PO нет — только `CANCELLED`).
+  purchaseReceipts PurchaseReceipt[]
+
+  @@index([supplierId])
+  @@index([customerOrderId])
+  @@index([status])
+  @@index([expectedDeliveryDate])
+  @@index([createdAt])
+}
+
+/// Строка закупочного документа: одна `WorkshopNeed` → одна
+/// `PurchaseOrderLine` в транзакции `createFromNeeds`. На MVP
+/// строки PO друг другу не «склеиваются» — даже если две
+/// потребности с одинаковой номенклатурой, мы создаём две
+/// строки, чтобы сохранить связь с исходными `WorkshopNeed`.
+model PurchaseOrderLine {
+  id              String        @id @default(cuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  /// Связь с исходной потребностью цеха (для аудита и для
+  /// возврата `WorkshopNeed.status` в `PURCHASE_PLANNED` при
+  /// отмене PO). `onDelete: SetNull` — потребность может быть
+  /// удалена через cascade от заказа покупателя, а строка PO
+  /// должна уцелеть как закупочный документ.
+  workshopNeedId String?
+  workshopNeed   WorkshopNeed? @relation(fields: [workshopNeedId], references: [id], onDelete: SetNull)
+
+  /// Связь с конкретной позицией каталога поставщика, если она
+  /// была выбрана в момент создания PO. `onDelete: SetNull` —
+  /// каталог-позицию на MVP физически не удаляем, но снимок
+  /// всё равно живёт независимо.
+  supplierCatalogItemId String?
+  supplierCatalogItem   SupplierCatalogItem? @relation(fields: [supplierCatalogItemId], references: [id], onDelete: SetNull)
+
+  /// Snapshot имени позиции (приоритет:
+  /// `selectedSupplierCatalogItem.name` →
+  /// `WorkshopNeed.purchaseItemNameText` → `WorkshopNeed.description`).
+  itemNameSnapshot         String
+  /// Snapshot артикула позиции в каталоге поставщика.
+  supplierArticleSnapshot  String?
+  /// Snapshot единицы измерения (приоритет:
+  /// `selectedSupplierCatalogItem.unit` → `WorkshopNeed.unit`).
+  unitSnapshot             String
+  /// Snapshot последней цены каталога на момент создания PO.
+  /// Хранится отдельно от `price`, чтобы было видно «у поставщика
+  /// в каталоге было X, мы заказали по Y».
+  catalogLastPriceSnapshot Decimal? @db.Decimal(14, 2)
+
+  /// Закупочное количество. Копируется из `WorkshopNeed.purchaseQty`.
+  /// Decimal(14, 4) совпадает с `WorkshopNeed.purchaseQty` —
+  /// snapshot ровно в той же точности.
+  qty                  Decimal   @db.Decimal(14, 4)
+  /// Закупочная цена за единицу. Копируется из
+  /// `WorkshopNeed.quotedPrice`; если не задан — оставляем `null`,
+  /// автоматически из `catalog.lastPrice` НЕ берём (см. ТЗ §6).
+  price                Decimal?  @db.Decimal(14, 2)
+  currency             String?
+  expectedDeliveryDate DateTime?
+
+  /// Подтверждённое поставщиком количество (опционально). Заполняется
+  /// в момент `confirm`, если поставщик прислал реальные цифры.
+  confirmedQty          Decimal?  @db.Decimal(14, 4)
+  confirmedPrice        Decimal?  @db.Decimal(14, 2)
+  confirmedDeliveryDate DateTime?
+
+  /// Жизненный цикл строки. Эволюционирует параллельно с
+  /// `PurchaseOrder.status`, но строка может быть переведена
+  /// руками в `CANCELLED` независимо от заголовка (на MVP UI
+  /// этого не делает, но API позволяет).
+  status String @default("DRAFT")
+
+  comment   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Этап 7А «Приёмка поставок». Строки фактической приёмки,
+  /// привязанные к этой строке PO. По ним пересчитывается
+  /// `PurchaseOrderLine.status` (`PARTIALLY_RECEIVED`/`RECEIVED`) и
+  /// заголовок PO. `onDelete: SetNull` со стороны
+  /// `PurchaseReceiptLine.purchaseOrderLineId`: даже при ручном
+  /// удалении строки PO акт приёмки уцелеет.
+  receiptLines PurchaseReceiptLine[]
+
+  @@index([purchaseOrderId])
+  @@index([workshopNeedId])
+  @@index([supplierCatalogItemId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Purchase receipts (Этап 7А «Приёмка поставок», MVP)
+//
+// Документ фактической приёмки материала/позиции по конкретному
+// `PurchaseOrder`. Сознательная граница MVP:
+//   - НЕТ полноценного складского остатка: размещение хранится
+//     прямо в `PurchaseReceiptLine.cellId` и НЕ создаёт записей
+//     `CellContent` / `MaterialStock` / `FabricRoll`;
+//   - НЕТ перемещений между ячейками, НЕТ списания в крой;
+//   - НЕТ блокировки кроя или паспортов;
+//   - НЕТ оплаты поставщику;
+//   - НЕТ новых ролей (`PURCHASER`/`WAREHOUSE_KEEPER`/...) —
+//     RBAC завязан на существующие `ADMIN`/`SHOP_MANAGER`.
+//
+// Snapshot-инварианты (см. `PurchaseReceiptsService.createFromPurchaseOrder`):
+//   - в момент создания фиксируем supplier-snapshot из снимков PO
+//     (`supplierNameSnapshot` и т.д.);
+//   - по каждой строке фиксируем item-snapshot из строки PO
+//     (`itemNameSnapshot`/`supplierArticleSnapshot`/`unitSnapshot`/
+//     `orderedQtySnapshot`/`confirmedQtySnapshot`/`priceSnapshot`/
+//     `currencySnapshot`).
+//
+// Статусы (свободная строка, без Prisma enum — список расширяется
+// без миграции; см. `@sewing/shared/purchase-receipts`):
+//   - `POSTED`    — нормальный документ приёмки;
+//   - `CANCELLED` — отменён, при отмене строки тоже становятся
+//                   `CANCELLED`, статусы PO/PO-line/WorkshopNeed
+//                   пересчитываются обратно.
+// ---------------------------------------------------------------------------
+
+model PurchaseReceipt {
+  id     String @id @default(cuid())
+  /// Уникальный человекочитаемый номер вида `PR-YYYYMMDD-NNNN`.
+  /// Генерация — `PurchaseReceiptNumberService.nextNumber()` по
+  /// той же схеме, что `PurchaseOrderNumberService`.
+  number String @unique
+
+  /// Закупочный документ, по которому идёт приёмка.
+  /// `onDelete: Restrict` — нельзя физически снести PO, по
+  /// которому уже есть приёмка (на MVP PO не удаляются вовсе,
+  /// только `CANCELLED`).
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Restrict)
+
+  /// Карточка поставщика. Опционально + `onDelete: SetNull`:
+  /// snapshot-поля ниже сохраняются как «было» даже после
+  /// удаления карточки.
+  supplierId String?
+  supplier   Supplier? @relation(fields: [supplierId], references: [id], onDelete: SetNull)
+
+  /// Snapshot-поля поставщика на момент приёмки. Копируются из
+  /// одноимённых полей `PurchaseOrder` (которые сами snapshot-ом
+  /// зафиксированы в момент создания PO).
+  supplierNameSnapshot    String?
+  supplierPhoneSnapshot   String?
+  supplierWebsiteSnapshot String?
+  supplierAddressSnapshot String?
+
+  /// Заказ покупателя, к которому относится PO (если у PO есть
+  /// `customerOrderId`). Денормализуется здесь, чтобы фильтровать
+  /// приёмки по заказу покупателя без join-а через PO.
+  /// `onDelete: SetNull` — удаление заказа покупателя не сносит
+  /// акт приёмки.
+  customerOrderId String?
+  customerOrder   Order?  @relation(fields: [customerOrderId], references: [id], onDelete: SetNull)
+
+  /// Жизненный цикл документа. Свободная строка по той же
+  /// причине, что и `PurchaseOrder.status` — список расширяется
+  /// без миграции БД.
+  status String @default("POSTED")
+
+  /// Когда фактически принят товар. Дефолт — момент создания.
+  receivedAt  DateTime  @default(now())
+  cancelledAt DateTime?
+
+  /// Кто принял (закупщик/кладовщик). `onDelete: SetNull` —
+  /// деактивация/удаление учётки не сносит документ приёмки.
+  receivedById String?
+  receivedBy   Employee? @relation("PurchaseReceiptReceiver", fields: [receivedById], references: [id], onDelete: SetNull)
+
+  comment   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  lines PurchaseReceiptLine[]
+
+  @@index([purchaseOrderId])
+  @@index([supplierId])
+  @@index([customerOrderId])
+  @@index([status])
+  @@index([receivedAt])
+  @@index([createdAt])
+}
+
+/// Строка фактической приёмки. Одна строка `PurchaseReceiptLine`
+/// = одна позиция (рулон/упаковка/партия), уехавшая в одну
+/// `Cell`. На MVP «куда положили» хранится прямо здесь
+/// (`cellId`), без записей в `CellContent`.
+model PurchaseReceiptLine {
+  id String @id @default(cuid())
+
+  purchaseReceiptId String
+  purchaseReceipt   PurchaseReceipt @relation(fields: [purchaseReceiptId], references: [id], onDelete: Cascade)
+
+  /// Связь со строкой закупочного документа. По ней backend
+  /// пересчитывает статус строки PO. `onDelete: SetNull` —
+  /// при ручном удалении строки PO акт приёмки уцелеет.
+  purchaseOrderLineId String?
+  purchaseOrderLine   PurchaseOrderLine? @relation(fields: [purchaseOrderLineId], references: [id], onDelete: SetNull)
+
+  /// Денормализованная связь с потребностью цеха (берётся из
+  /// `purchaseOrderLine.workshopNeedId`). По ней backend
+  /// пересчитывает статус `WorkshopNeed`. `onDelete: SetNull` —
+  /// при удалении строки потребности (cascade от заказа) акт
+  /// приёмки уцелеет.
+  workshopNeedId String?
+  workshopNeed   WorkshopNeed? @relation(fields: [workshopNeedId], references: [id], onDelete: SetNull)
+
+  /// Денормализованная связь с конкретной позицией каталога
+  /// поставщика (берётся из `purchaseOrderLine.supplierCatalogItemId`).
+  /// `onDelete: SetNull` — каталог-позиции мы физически не
+  /// удаляем, но и при ручном удалении строка приёмки уцелеет.
+  supplierCatalogItemId String?
+  supplierCatalogItem   SupplierCatalogItem? @relation(fields: [supplierCatalogItemId], references: [id], onDelete: SetNull)
+
+  /// Snapshot номенклатуры на момент приёмки. Копируется из
+  /// строки PO, чтобы документ приёмки оставался читаемым,
+  /// даже если PO/каталог потом отредактируют.
+  itemNameSnapshot        String
+  supplierArticleSnapshot String?
+  unitSnapshot            String
+  orderedQtySnapshot      Decimal? @db.Decimal(14, 4)
+  confirmedQtySnapshot    Decimal? @db.Decimal(14, 4)
+  priceSnapshot           Decimal? @db.Decimal(14, 2)
+  currencySnapshot        String?
+
+  /// Фактически принятое количество в `unit`. Decimal(14,4)
+  /// совпадает с `PurchaseOrderLine.qty` — snapshot ровно в
+  /// той же точности.
+  receivedQty Decimal @db.Decimal(14, 4)
+  /// Единица фактически принятого количества (обычно совпадает
+  /// с `unitSnapshot`, но допускается отклонение, если поставщик
+  /// прислал в другой фасовке).
+  unit        String
+
+  /// Фактические параметры партии — заполняет приёмщик. Используется
+  /// для прослеживаемости, никаких бизнес-инвариантов на MVP не
+  /// накладывается (но конкретные поля специально оставлены, чтобы
+  /// не плодить free-form JSON).
+  batchNumber      String?
+  rollNumber       String?
+  shade            String?
+  actualWidthCm    Int?
+  actualDensityGsm Int?
+
+  /// Размещение в физической ячейке. Опционально — закупщик может
+  /// принять без выбора ячейки (например, материал ушёл напрямую в
+  /// крой). `onDelete: SetNull` — удаление ячейки (на MVP не
+  /// делается) не сносит акт приёмки.
+  cellId       String?
+  cell         Cell?   @relation(fields: [cellId], references: [id], onDelete: SetNull)
+  /// Free-form подсказка по месту хранения для ситуаций, когда
+  /// конкретной `Cell` ещё нет (например, паллета в проходе).
+  locationNote String?
+
+  /// Жизненный цикл строки. На MVP полностью совпадает со статусом
+  /// заголовка `PurchaseReceipt` — `POSTED` → `CANCELLED` при
+  /// отмене документа.
+  status String @default("POSTED")
+
+  comment   String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([purchaseReceiptId])
+  @@index([purchaseOrderLineId])
+  @@index([workshopNeedId])
+  @@index([supplierCatalogItemId])
+  @@index([cellId])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Order applications (этап «Нанесение на заказе покупателя»)
+//
+// До этого этапа нанесение жило в техкарте (`TechCardOutsourceLine` с
+// ролью «нанесение») и фиксировалось в `OrderOutsourceRequirement` при
+// запуске заказа. На практике параметры конкретного нанесения
+// (тип, размер, количество, цвет, файл макета) — атрибут заказа
+// покупателя, а не шаблона техкарты: один и тот же шаблон может
+// использоваться для заказов с разными нанесениями.
+//
+// Модель сознательно простая (additive, без изменения существующих
+// таблиц / моделей):
+//   - `type` — тип нанесения (SCREEN_PRINT / DTF / EMBROIDERY /
+//     HEAT_TRANSFER / SUBLIMATION / OTHER). Хранится строкой, без
+//     Prisma enum, чтобы расширять список без миграций. Источник
+//     истины для допустимых значений — `@sewing/shared/order-applications`.
+//   - `stage` — когда выполняется (`CUT_PARTS` — на крое / на
+//     деталях до пошива; `FINISHED_ITEM` — на готовом изделии).
+//     От этого зависит логика «Готовность к крою»: CUT_PARTS с
+//     неполными данными блокирует крой, FINISHED_ITEM не блокирует.
+//   - `placement`, `widthMm`, `heightMm`, `colorsCount`, `quantity`,
+//     `unit`, `colorText`, `description`, `comment`, `fileUrl` —
+//     параметры конкретного нанесения. Все nullable: менеджер может
+//     завести «черновик» нанесения (только тип + stage) и постепенно
+//     заполнить остальное.
+//   - `status` — `PLANNED` / `SENT` / `DONE` / `CANCELLED`. Тоже
+//     строкой, без enum.
+//
+// Старые `TechCardOutsourceLine` / `OrderOutsourceRequirement` НЕ
+// удаляются — они остаются legacy-fallback на случай заказов,
+// которые ещё не получили `OrderApplication`. Маршрут не меняется:
+// нанесение НЕ становится новым шагом маршрута, не добавляется в
+// `OrderRouteStep`. Это сознательная граница этапа.
+// ---------------------------------------------------------------------------
+
+model OrderApplication {
+  id String @id @default(cuid())
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Тип нанесения. Список — `ORDER_APPLICATION_TYPES` в
+  /// `@sewing/shared/order-applications`. Хранится строкой
+  /// (без Prisma enum), список расширяется без миграции.
+  type String
+
+  /// Когда выполняется: `CUT_PARTS` (на крое) или `FINISHED_ITEM`
+  /// (на готовом изделии). От `stage` зависит, блокирует ли
+  /// нанесение готовность к крою (см. `CutReadinessService`).
+  stage String @default("CUT_PARTS")
+
+  /// Место нанесения (например, «грудь», «спина», «рукав»).
+  /// Свободная строка.
+  placement String?
+  /// Ширина / высота макета в мм. Для проверки готовности к крою
+  /// и описания потребности цеха.
+  widthMm     Int?
+  heightMm    Int?
+  /// Количество цветов (для шелкографии и т.п.).
+  colorsCount Int?
+
+  /// Количество нанесений. Если null — `WorkshopNeedsService`
+  /// фоллбэчит на `Σ OrderItem.qtyPlan` (всё изделие = одно нанесение).
+  quantity Decimal? @db.Decimal(14, 4)
+  /// Единица измерения (по умолчанию «шт»).
+  unit     String   @default("шт")
+
+  /// Свободное описание цвета («белый», «PMS 185 C», «как на образце»).
+  colorText   String?
+  /// Свободное описание (например, текст принта).
+  description String?
+  /// Комментарий менеджера / для подрядчика.
+  comment     String?
+  /// Опциональный файл макета (PNG / SVG / PDF / DXF). На MVP —
+  /// просто URL, без media-handler-а: загрузка файла может появиться
+  /// в следующих этапах.
+  fileUrl     String?
+
+  /// `PLANNED` (по умолчанию) → `SENT` (отправлено подрядчику) →
+  /// `DONE` (выполнено) | `CANCELLED`. Хранится строкой.
+  status String @default("PLANNED")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([type])
+  @@index([stage])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Order cost estimates (этап «Себестоимость заказа»)
+//
+// См. `apps/api/src/modules/orders/orders.service.ts` —
+// `completeCalculation` / `reopenCalculation`,
+// `packages/shared/src/order-cost-estimates.ts`.
+//
+// Документ «Себестоимость заказа» — снимок цен/количеств/валют, с
+// которыми закупщик завершил расчёт. Строки берутся из
+// `WorkshopNeed` на момент завершения, но НЕ являются их FK-копией:
+// исходные потребности продолжают жить своей жизнью (их редактирует
+// закупщик, по ним создаются `PurchaseOrder`/`PurchaseReceipt`),
+// а `OrderCostEstimate` остаётся неизменным историческим срезом.
+//
+// Дизайн:
+//   - один заказ может иметь много `OrderCostEstimate` (история
+//     «расчёт → reopen → новый расчёт»). Активный — `status =
+//     COMPLETED`; повторное завершение помечает старый как
+//     `REVOKED` и создаёт новый с `version = max + 1` (см.
+//     `@@unique([orderId, version])`);
+//   - `status` хранится строкой, валидация через Zod-enum
+//     `OrderCostEstimateStatusSchema`;
+//   - все цены копируются «как есть» в `OrderCostEstimateLine`
+//     вместе с курсом USD на момент завершения и snapshot-именами
+//     поставщика и номенклатуры — расчёт не должен «плыть» вслед за
+//     поздним переименованием поставщика / номенклатуры.
+// ---------------------------------------------------------------------------
+
+model OrderCostEstimate {
+  id String @id @default(cuid())
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Порядковый номер расчёта по этому заказу (`max(version) + 1` на
+  /// каждом «Завершить расчёт»). Уникальность гарантирует, что два
+  /// конкурирующих completeCalculation не создадут дубликат.
+  version Int
+
+  /// `COMPLETED` | `REVOKED` (см.
+  /// `@sewing/shared/order-cost-estimates::ORDER_COST_ESTIMATE_STATUSES`).
+  status String @default("COMPLETED")
+
+  /// Итог по всем строкам в рублях (после конвертации USD по
+  /// `usdRateRub`). Decimal(14,2) — копейки.
+  totalCostRub Decimal @db.Decimal(14, 2)
+
+  /// Курс USD к рублю, выбранный закупщиком на момент завершения
+  /// расчёта. Заполняется только если хотя бы одна строка в USD;
+  /// иначе `null`. Decimal(14,4) — четыре знака после запятой
+  /// достаточно для бизнес-курсов.
+  usdRateRub Decimal? @db.Decimal(14, 4)
+
+  /// Когда расчёт был завершён.
+  completedAt   DateTime  @default(now())
+  /// Кто завершил (нажал «Завершить расчёт»). `onDelete: SetNull` —
+  /// деактивация/удаление учётки не сносит исторический документ.
+  completedById String?
+  completedBy   Employee? @relation("OrderCostEstimateCompleter", fields: [completedById], references: [id], onDelete: SetNull)
+
+  /// Когда расчёт был отозван (`reopenCalculation`). `null` для
+  /// активных `COMPLETED`-расчётов и для расчётов, которые ни разу
+  /// не отзывали.
+  revokedAt   DateTime?
+  revokedById String?
+  revokedBy   Employee? @relation("OrderCostEstimateRevoker", fields: [revokedById], references: [id], onDelete: SetNull)
+
+  /// Произвольный комментарий: что отличает этот расчёт (см.
+  /// `CompleteOrderCalculationSchema.comment`) или причина reopen
+  /// (см. `ReopenOrderCalculationSchema.reason`).
+  comment String?
+
+  lines OrderCostEstimateLine[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([orderId, version])
+  @@index([orderId])
+  @@index([status])
+}
+
+model OrderCostEstimateLine {
+  id String @id @default(cuid())
+
+  estimateId String
+  estimate   OrderCostEstimate @relation(fields: [estimateId], references: [id], onDelete: Cascade)
+
+  /// Опциональная ссылка на исходную `WorkshopNeed`. На момент
+  /// завершения расчёта она существует, но дальше может быть
+  /// удалена (через cascade от заказа на reopen-snapshot-расчёте
+  /// — невозможно, потому что `OrderCostEstimate` тоже cascade
+  /// от заказа; здесь страховка на случай ручного удаления). При
+  /// SetNull строка остаётся самодостаточной за счёт snapshot-полей.
+  workshopNeedId String?
+  workshopNeed   WorkshopNeed? @relation(fields: [workshopNeedId], references: [id], onDelete: SetNull)
+
+  /// `TECH_CARD_MATERIAL_LINE` | `ORDER_MATERIAL_REQUIREMENT` |
+  /// `ORDER_APPLICATION` | `PATTERN_PARAMETER_NORM` — переписан
+  /// напрямую с `WorkshopNeed.sourceType` (без FK). Хранится
+  /// строкой ради расширяемости.
+  sourceType String?
+  sourceId   String?
+
+  /// `MATERIAL` | `HARDWARE` | `APPLICATION` | `OTHER` — классификация
+  /// для блока «Себестоимость» в карточке заказа (по
+  /// `getWorkshopNeedKind`). Хранится строкой, см.
+  /// `@sewing/shared/order-cost-estimates::ORDER_COST_ESTIMATE_LINE_KINDS`.
+  kind        String
+  description String
+  unit        String
+
+  /// Сколько посчитала система (`WorkshopNeed.calculatedQty`); может
+  /// быть `null`, если система ничего не считала (например, новая
+  /// строка, которую закупщик добавил руками — на этом этапе UI
+  /// этого не делает, но поле nullable «на будущее»).
+  calculatedQty Decimal? @db.Decimal(14, 4)
+  /// Сколько идём покупать (`WorkshopNeed.purchaseQty ?? calculatedQty`).
+  purchaseQty   Decimal  @db.Decimal(14, 4)
+
+  quotedPrice    Decimal @db.Decimal(14, 2)
+  quotedCurrency String
+
+  /// Курс USD на момент завершения расчёта (snapshot из
+  /// `OrderCostEstimate.usdRateRub`). Дублируем в строку, чтобы
+  /// строка была самодостаточной при выгрузке/анализе.
+  usdRateRub Decimal? @db.Decimal(14, 4)
+
+  /// `purchaseQty × quotedPrice` в исходной валюте.
+  lineTotalOriginal Decimal @db.Decimal(14, 2)
+  /// Тот же итог в рублях (для USD = `lineTotalOriginal × usdRateRub`).
+  lineTotalRub      Decimal @db.Decimal(14, 2)
+
+  /// Snapshot-имя поставщика на момент завершения расчёта
+  /// (`Supplier.name` или `WorkshopNeed.supplierNameText`).
+  /// Защищает завершённый расчёт от поздних правок справочника.
+  supplierNameSnapshot     String?
+  /// Snapshot-имя номенклатуры поставщика
+  /// (`SupplierCatalogItem.name` или `WorkshopNeed.purchaseItemNameText`).
+  purchaseItemNameSnapshot String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([estimateId])
+  @@index([workshopNeedId])
+  @@index([kind])
+}
+
+// ---------------------------------------------------------------------------
+// OrderMaterialArrivalOverride (этап «Ручная отметка поступления материала»)
+//
+// См. `apps/api/src/modules/order-material-arrivals/*`,
+// `apps/api/src/modules/cut-readiness/cut-readiness.service.ts`,
+// `apps/web/components/orders/cut-readiness-card.tsx`.
+//
+// Назначение: дать ADMIN/SHOP_MANAGER кнопку «Материал поступил» в
+// карточке заказа, которая разблокирует крой даже если складская
+// приёмка ещё не оформлена. Это сознательно НЕ складская операция:
+//   - PurchaseReceipt / PurchaseReceiptLine не создаются;
+//   - CellContent / складские остатки не меняются;
+//   - WorkshopNeed.status не двигается (PURCHASE_PLANNED / ORDERED
+//     / PARTIALLY_RECEIVED — только настоящая приёмка может перевести
+//     потребность в RECEIVED).
+//
+// Это override готовности к крою, а не складская операция: запись
+// существует исключительно ради учёта факта «менеджер сказал — крой
+// можно начинать». `CutReadinessService` читает ACTIVE-строки и
+// добавляет их `qty` (или, если `qty IS NULL`, считает покрытием
+// `targetQty`) к `placedQty` — если итог >= `targetQty`, материал
+// считается готовым.
+//
+// Дизайн:
+//   - `status` хранится строкой (`ACTIVE`/`REVOKED`), валидация
+//     Zod-листом `ORDER_MATERIAL_ARRIVAL_OVERRIDE_STATUSES` —
+//     расширение списка не требует миграции;
+//   - `comment` обязателен (валидируется Zod-ом) — ручная
+//     разблокировка должна быть объяснена;
+//   - `revokedAt`/`revokedById`/`revokeReason` заполняются при
+//     ручной отмене — позволяет «откатить» override;
+//   - `qty`/`unit` — snapshot из `WorkshopNeed`, чтобы строка была
+//     самодостаточной для аудита, даже если потребность позже
+//     отредактируют/удалят;
+//   - все relation-ы `onDelete: SetNull`/`onDelete: Cascade`
+//     согласованы со снимками: удаление заказа сносит override
+//     (cascade), удаление потребности обнуляет `workshopNeedId`,
+//     удаление учётки сотрудника не сносит исторический override.
+// ---------------------------------------------------------------------------
+
+model OrderMaterialArrivalOverride {
+  id String @id @default(cuid())
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Опциональная привязка к конкретной строке `WorkshopNeed`. На MVP
+  /// override всегда создаётся для конкретной потребности (через POST
+  /// `/api/orders/:id/material-arrived` с `workshopNeedIds`), но поле
+  /// nullable — потребность может быть удалена через cascade от заказа,
+  /// а override остаётся для аудита.
+  workshopNeedId String?
+  workshopNeed   WorkshopNeed? @relation(fields: [workshopNeedId], references: [id], onDelete: SetNull)
+
+  /// Snapshot-роль материала из `WorkshopNeed.materialRole` на момент
+  /// создания override. Хранится строкой ради расширяемости (см.
+  /// `@sewing/shared/material-roles`).
+  materialRole String?
+  /// Snapshot-описание потребности (`WorkshopNeed.description`/`sourceName`)
+  /// — пишется в момент создания, чтобы строка была читаема даже после
+  /// удаления потребности.
+  description  String?
+
+  /// Snapshot целевого количества (`purchaseQty ?? calculatedQty`) на
+  /// момент создания override. Если `null` — считаем «покрытие
+  /// targetQty» (см. `CutReadinessService`).
+  qty  Decimal? @db.Decimal(14, 4)
+  /// Snapshot единицы измерения (`WorkshopNeed.unit`).
+  unit String?
+
+  /// `ACTIVE` (по умолчанию) | `REVOKED`. Хранится строкой.
+  status  String  @default("ACTIVE")
+  /// Обязательный комментарий / причина — почему менеджер вручную
+  /// разблокировал крой. Валидируется Zod-ом (`min(2)`).
+  comment String?
+
+  /// Кто создал. `onDelete: SetNull` со стороны Employee: удаление
+  /// учётки не сносит исторический override.
+  createdById String?
+  createdBy   Employee? @relation("OrderMaterialArrivalOverrideCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+
+  /// Когда отменён (если отменён). `null` для активных override-ов.
+  revokedAt   DateTime?
+  revokedById String?
+  revokedBy   Employee? @relation("OrderMaterialArrivalOverrideRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+  /// Обязательная причина отмены — приходит из тела revoke-эндпоинта.
+  revokeReason String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
+  @@index([workshopNeedId])
+  @@index([status])
+  @@index([materialRole])
 }

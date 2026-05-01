@@ -1,0 +1,24 @@
+-- Этап «Расчёт»: добавляем статус `CALCULATION` в enum `OrderStatus`.
+-- См. `prisma/schema.prisma` (`enum OrderStatus`),
+-- `apps/api/src/modules/orders/orders.service.ts`
+-- (`OrdersService.startCalculation`),
+-- `apps/api/src/modules/orders/orders.controller.ts`
+-- (`POST /api/orders/:id/start-calculation`).
+--
+-- Дизайн миграции:
+--   * Postgres-enum расширяется только через `ALTER TYPE ... ADD VALUE`.
+--     Поэтому миграция additive: старые значения (`DRAFT`,
+--     `IN_PRODUCTION`, `DONE`, `CANCELLED`) сохраняют порядковые позиции,
+--     никаких backfill-ов не требуется.
+--   * Колонку `Order.status` не трогаем: новые заказы по-прежнему
+--     создаются как `DRAFT` (Prisma default). Существующие строки
+--     остаются в своих статусах.
+--   * Никаких CHECK constraint-ов или индексов под новый статус не
+--     заводим — фильтры backend строятся по уже существующим
+--     `notIn: [DONE, CANCELLED]` / `= IN_PRODUCTION`.
+--
+-- ВАЖНО: `ALTER TYPE ... ADD VALUE` нельзя выполнять внутри транзакции
+-- (Postgres ограничение). Prisma запускает каждую миграцию в одной
+-- транзакции, но допускает «raw» миграции с одним `ALTER TYPE`.
+
+ALTER TYPE "OrderStatus" ADD VALUE 'CALCULATION';

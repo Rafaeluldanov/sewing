@@ -1,9 +1,17 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { ArrowLeft, Factory, Printer, ScanLine } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { buildEquipmentPrintUrl, getEquipment } from '@/lib/equipment-api';
 import { getShiftMeta } from '@/lib/shifts-api';
-import { Icon } from '@/components/icon';
-import { DetailPageHeader } from '@/components/detail-page-header';
+import {
+  AdminCard,
+  AdminPageShell,
+  AdminSectionHeader,
+  AdminStatusBadge,
+  AdminTechInfo,
+} from '@/components/admin';
+import { formatStatus, statusTone } from '@/lib/admin-labels';
 import {
   EquipmentDisplayNumberForm,
   EquipmentNameForm,
@@ -17,13 +25,22 @@ interface Params {
 }
 
 /**
- * Карточка оборудования с чек-листом разрешённых операций
- * (см. ADR-0017, `docs/screens.md §10a`).
+ * Карточка оборудования (Admin UI 2.0, ADR-0017).
  *
- * Список доступных операций берём из `GET /api/shifts/meta` —
- * там уже отдаются только активные операции, отсортированные по
- * `sortOrder`. Это позволяет не плодить отдельный
- * `/api/operations` endpoint ради одного экрана.
+ * Структура страницы — единый стандарт для всех admin detail-pages:
+ *   1. Header — back-link, заголовок, статус, главные действия
+ *      (печать QR, и т.д.).
+ *   2. Основная информация — название и ручной номер станка
+ *      (`EquipmentNameForm`, `EquipmentDisplayNumberForm`).
+ *   3. Связи — чек-лист разрешённых операций
+ *      (`EquipmentOperationsEditor`).
+ *   4. QR — карточка с кнопкой «Печать QR» (одна на странице).
+ *   5. Техническая информация — id / code / qrCode внутри
+ *      collapsible-блока (`AdminTechInfo`), чтобы не шумело в списке
+ *      полей, но сохранялось для разбора инцидентов.
+ *
+ * Все формы (`edit-form.tsx`) остались прежними — мы меняем только
+ * раскладку и обёртку, чтобы не трогать server actions и валидацию.
  */
 export default async function AdminEquipmentDetailPage({ params }: Params) {
   let equipment;
@@ -39,114 +56,78 @@ export default async function AdminEquipmentDetailPage({ params }: Params) {
   const meta = await getShiftMeta();
   const printUrl = buildEquipmentPrintUrl(equipment.id);
 
-  const titleNode = (
-    <>
-      {equipment.displayNumber && (
-        <span
-          style={{ marginRight: '0.5rem', color: 'var(--color-fg-muted)' }}
-          title="Ручной номер станка для физической маркировки"
-        >
-          №{equipment.displayNumber}
-        </span>
-      )}
-      {equipment.name}
-    </>
-  );
-
   return (
-    <div className="page-shell">
-      <DetailPageHeader
-        eyebrow="Оборудование"
-        icon="equipment"
-        title={titleNode}
-        subtitle="Карточка станка: ручной номер для физической маркировки и набор операций, доступных швее на /work."
-        backHref="/admin/equipment"
-        backLabel="К списку оборудования"
-        meta={
-          <>
-            <span>
-              Код: <code>{equipment.code}</code>
-            </span>
-            <span>·</span>
-            <span>
-              QR: <code>{equipment.qrCode}</code>
-            </span>
-          </>
-        }
-        badges={
-          <span
-            className={`pill ${equipment.active ? 'pill--ok' : 'pill--ghost'}`}
-          >
-            <Icon name={equipment.active ? 'success' : 'idle'} size={14} />
-            {equipment.active ? 'Активно' : 'Неактивно'}
-          </span>
-        }
-        actions={
+    <AdminPageShell
+      icon={<Factory size={22} strokeWidth={1.6} aria-hidden />}
+      title={
+        equipment.displayNumber
+          ? `№${equipment.displayNumber} · ${equipment.name}`
+          : equipment.name
+      }
+      subtitle={`${equipment.allowedOperations.length} операций`}
+      actions={
+        <>
+          <Link href="/admin/equipment" className="admin-btn admin-btn--ghost">
+            <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
+            К списку
+          </Link>
+          <AdminStatusBadge tone={statusTone(equipment.active)}>
+            {formatStatus(equipment.active)}
+          </AdminStatusBadge>
           <a
             href={printUrl}
-            className="btn btn-primary"
+            className="admin-btn admin-btn--primary"
             target="_blank"
             rel="noopener noreferrer"
-            title="Открыть печатную форму QR-этикетки в новой вкладке"
           >
-            <Icon name="scan" size={16} />
+            <Printer size={16} strokeWidth={1.6} aria-hidden />
             Печать QR
           </a>
-        }
-      />
+        </>
+      }
+    >
+      <div className="admin-grid-2">
+        <div className="admin-stack">
+          <AdminCard>
+            <AdminSectionHeader title="Основное" />
+            <EquipmentNameForm equipment={equipment} />
+            <EquipmentDisplayNumberForm equipment={equipment} />
+          </AdminCard>
 
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="equipment" />
-            Название оборудования
-          </h2>
+          <AdminCard>
+            <AdminSectionHeader title="Разрешённые операции" />
+            <EquipmentOperationsEditor
+              equipment={equipment}
+              operations={meta.operations}
+            />
+          </AdminCard>
         </div>
-        <p className="detail-form__hint">
-          Человекочитаемое название станка/рабочего места. Видно в списке
-          оборудования, на печатной QR-этикетке и в форме старта смены у
-          швеи на /work. Технический код (`{equipment.code}`) и QR-payload
-          не меняются при переименовании.
-        </p>
-        <EquipmentNameForm equipment={equipment} />
-      </section>
 
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="equipment" />
-            Номер станка
-          </h2>
-        </div>
-        <p className="detail-form__hint">
-          Ручной порядковый номер для физической маркировки. Печатается крупно
-          на QR-этикетке, чтобы швея/начальник цеха не путали станки визуально
-          (например, два соседних оверлока). Уникальность по типу — допустима
-          (Оверлок №1 и Распошив №1 могут жить рядом).
-        </p>
-        <EquipmentDisplayNumberForm equipment={equipment} />
-      </section>
+        <div className="admin-stack">
+          <AdminCard>
+            <AdminSectionHeader title="QR-этикетка" />
+            <div className="admin-actions-row" style={{ justifyContent: 'flex-start' }}>
+              <a
+                href={printUrl}
+                className="admin-btn admin-btn--primary"
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <ScanLine size={16} strokeWidth={1.6} aria-hidden />
+                Открыть печатную форму
+              </a>
+            </div>
+          </AdminCard>
 
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="operations" />
-            Разрешённые операции
-          </h2>
-          <span className="section-header__hint">
-            Чек-лист синхронизирован с /work
-          </span>
+          <AdminTechInfo
+            items={[
+              { label: 'ID', value: <code>{equipment.id}</code> },
+              { label: 'Код', value: <code>{equipment.code}</code> },
+              { label: 'QR', value: <code>{equipment.qrCode}</code> },
+            ]}
+          />
         </div>
-        <p className="detail-form__hint">
-          Отметьте операции, которые швея сможет выбрать на этом станке при
-          старте смены. Изменения вступают в силу сразу — на /work новый набор
-          появится при следующем сканировании QR оборудования.
-        </p>
-        <EquipmentOperationsEditor
-          equipment={equipment}
-          operations={meta.operations}
-        />
-      </section>
-    </div>
+      </div>
+    </AdminPageShell>
   );
 }

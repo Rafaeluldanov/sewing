@@ -1,49 +1,61 @@
 import Link from 'next/link';
+import { ArrowRight, Plus, Users } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
-import { COMPENSATION_LABELS, listEmployees } from '@/lib/employees-api';
+import { listEmployees } from '@/lib/employees-api';
 import type { EmployeeListItemDto } from '@sewing/shared/employees';
-import { Icon } from '@/components/icon';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminPagination,
+  AdminSectionHeader,
+  AdminStatusBadge,
+  AdminTable,
+  paginate,
+  type AdminTableColumn,
+} from '@/components/admin';
+import {
+  formatCompensation,
+  formatRole,
+  formatStatus,
+  statusTone,
+} from '@/lib/admin-labels';
 
 export const dynamic = 'force-dynamic';
 
-const ROLE_LABELS: Record<string, string> = {
-  ADMIN: 'Администратор',
-  SHOP_MANAGER: 'Начальник цеха',
-  CUTTER: 'Раскройщик',
-  CUTTER_ASSISTANT: 'Помощник раскройщика',
-  SEAMSTRESS: 'Швея',
-  QC: 'ОТК',
-  IRONING: 'ВТО',
-  PACKING: 'Упаковка',
-};
+interface SearchParams {
+  page?: string;
+  pageSize?: string;
+  tab?: string;
+}
 
 function formatMoney(value: number | null): React.ReactNode {
   if (value === null || value === 0) {
-    return <span className="meta-line">—</span>;
+    return <span className="admin-muted">—</span>;
   }
   return (
     <strong>
       {value.toLocaleString('ru-RU', {
         minimumFractionDigits: 0,
         maximumFractionDigits: 2,
-      })}{' '}
-      ₽
+      })}
+      {' ₽'}
     </strong>
   );
 }
 
 /**
- * Список сотрудников (см. `docs/screens.md §11`).
+ * Список сотрудников (Admin UI 2.5).
  *
- * Источник истины — `GET /api/employees` (роли `ADMIN`/`SHOP_MANAGER`).
- * Доступ к разделу режется выше — `app/admin/layout.tsx` редиректит
- * всех, кроме `ADMIN`/`SHOP_MANAGER`. Backend дополнительно
- * защищает `/api/employees/*` через `@Roles('SHOP_MANAGER', 'ADMIN')`.
- *
- * На MVP экран read-only по структуре (создание/удаление out-of-scope —
- * см. ADR-0021): открываем карточку для правки management-полей.
+ * Backend / DTO не меняем — `GET /api/employees` отдаёт всех. Активные
+ * и архивные показываем в отдельных табах (URL `?tab=archived`),
+ * пагинация считается на клиенте через `paginate()`.
  */
-export default async function AdminEmployeesListPage() {
+export default async function AdminEmployeesListPage({
+  searchParams,
+}: {
+  searchParams?: SearchParams;
+}) {
   let items: EmployeeListItemDto[] = [];
   let error: string | null = null;
   try {
@@ -55,54 +67,67 @@ export default async function AdminEmployeesListPage() {
         : 'Не удалось загрузить список сотрудников';
   }
 
+  const tab = searchParams?.tab === 'archived' ? 'archived' : 'active';
   const active = items.filter((e) => e.active);
   const archived = items.filter((e) => !e.active);
+  const visible = tab === 'archived' ? archived : active;
+
+  const { pageItems, page, pageSize, total } = paginate(visible, searchParams);
 
   return (
-    <div className="admin-overview page-shell">
-      <header className="admin-overview__header">
-        <div>
-          <div className="page-eyebrow">
-            <Icon name="employees" />
-            Справочник
-          </div>
-          <h1 className="page-title">
-            <Icon name="employees" />
-            Сотрудники
-          </h1>
-          <p className="page-subtitle">
-            Управленческий справочник: тип компенсации (сдельная / оклад /
-            смешанная) и ставка за смену. Окладные начисления автоматически
-            создаются для сотрудников SALARY/MIXED при старте смены —
-            см. /earnings и ADR-0021.
-          </p>
+    <AdminPageShell
+      icon={<Users size={22} strokeWidth={1.6} aria-hidden />}
+      title="Сотрудники"
+      subtitle={`Активных: ${active.length} · Архив: ${archived.length}`}
+      actions={
+        <Link
+          href="/admin/employees/new"
+          className="admin-btn admin-btn--primary"
+        >
+          <Plus size={16} strokeWidth={1.6} aria-hidden />
+          Добавить
+        </Link>
+      }
+    >
+      {error && (
+        <div className="error-box" role="alert">
+          {error}
         </div>
-      </header>
-
-      {error && <div className="error-box">{error}</div>}
-
-      <section>
-        <div className="section-header">
-          <h2>
-            <Icon name="success" />
-            Активные ({active.length})
-          </h2>
-        </div>
-        <EmployeesTable items={active} />
-      </section>
-
-      {archived.length > 0 && (
-        <section>
-          <div className="section-header">
-            <h2>
-              <Icon name="idle" />
-              Архив ({archived.length})
-            </h2>
-          </div>
-          <EmployeesTable items={archived} muted />
-        </section>
       )}
-    </div>
+
+      <AdminCard>
+        <AdminSectionHeader
+          title={tab === 'archived' ? 'Архив' : 'Активные'}
+          hint={`${visible.length}`}
+        />
+
+        <div className="admin-tabs" style={{ marginTop: -8 }}>
+          <Link
+            href="/admin/employees"
+            className={`admin-tab ${tab === 'active' ? 'admin-tab--active' : ''}`}
+          >
+            Активные
+          </Link>
+          <Link
+            href="/admin/employees?tab=archived"
+            className={`admin-tab ${tab === 'archived' ? 'admin-tab--active' : ''}`}
+          >
+            Архив
+          </Link>
+        </div>
+
+        <EmployeesTable items={pageItems} muted={tab === 'archived'} />
+
+        <AdminPagination
+          page={page}
+          pageSize={pageSize}
+          total={total}
+          basePath="/admin/employees"
+          preserveParams={{ tab: tab === 'archived' ? 'archived' : undefined }}
+          label="сотрудников"
+        />
+      </AdminCard>
+    </AdminPageShell>
   );
 }
 
@@ -113,50 +138,65 @@ function EmployeesTable({
   items: EmployeeListItemDto[];
   muted?: boolean;
 }) {
-  if (items.length === 0) {
-    return (
-      <div className="empty-state">
-        <span className="empty-state__icon">
-          <Icon name="employees" />
-        </span>
-        <span className="empty-state__title">Пусто</span>
-      </div>
-    );
-  }
+  const columns: AdminTableColumn<EmployeeListItemDto>[] = [
+    {
+      key: 'name',
+      header: 'ФИО',
+      render: (e) => <span className="admin-table__primary">{e.fullName}</span>,
+    },
+    {
+      key: 'role',
+      header: 'Роль',
+      render: (e) => formatRole(e.role),
+    },
+    {
+      key: 'compensation',
+      header: 'Тип оплаты',
+      render: (e) => formatCompensation(e.compensationType),
+    },
+    {
+      key: 'rate',
+      header: 'Ставка за смену',
+      align: 'right',
+      render: (e) => formatMoney(e.salaryPerShift),
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      render: (e) => (
+        <AdminStatusBadge tone={statusTone(e.active)}>
+          {formatStatus(e.active)}
+        </AdminStatusBadge>
+      ),
+    },
+    {
+      key: 'open',
+      header: '',
+      isAction: true,
+      render: (e) => (
+        <Link
+          href={`/admin/employees/${e.id}`}
+          className="admin-table__action-link"
+        >
+          Открыть
+          <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+        </Link>
+      ),
+    },
+  ];
   return (
-    <table className="data-table" style={muted ? { opacity: 0.7 } : undefined}>
-      <thead>
-        <tr>
-          <th>ФИО</th>
-          <th>Логин</th>
-          <th>Роль</th>
-          <th>Тип оплаты</th>
-          <th style={{ textAlign: 'right' }}>Ставка за смену</th>
-          <th>Активен</th>
-          <th></th>
-        </tr>
-      </thead>
-      <tbody>
-        {items.map((e) => (
-          <tr key={e.id}>
-            <td>
-              <strong>{e.fullName}</strong>
-            </td>
-            <td>
-              <code>{e.login}</code>
-            </td>
-            <td>{ROLE_LABELS[e.role] ?? e.role}</td>
-            <td>{COMPENSATION_LABELS[e.compensationType]}</td>
-            <td style={{ textAlign: 'right' }}>{formatMoney(e.salaryPerShift)}</td>
-            <td>{e.active ? 'да' : <span className="meta-line">нет</span>}</td>
-            <td>
-              <Link href={`/admin/employees/${e.id}`}>
-                Открыть <Icon name="arrow-right" size={13} />
-              </Link>
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <div style={muted ? { opacity: 0.7 } : undefined}>
+      <AdminTable
+        rows={items}
+        columns={columns}
+        rowKey={(e) => e.id}
+        emptyContent={
+          <AdminEmptyState
+            icon={<Users size={26} strokeWidth={1.6} aria-hidden />}
+            title="Здесь пока пусто"
+          />
+        }
+      />
+    </div>
   );
 }

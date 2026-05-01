@@ -1,1739 +1,2412 @@
 # Доменная модель
 
-> Все термины здесь — канон. Используются и в коде (en), и в UI (ru).
+> **Статус.** Каноническая доменная карта системы SEWING (PHASE 3.2,
+> 2026-Q2). Документ переписан от кода в одну итерацию.
+>
+> **Источник истины — код**, не этот документ. При расхождении доки и
+> кода всегда верим коду:
+>
+> - `prisma/schema.prisma` — модели и enum-ы;
+> - `apps/api/src/modules/**` — бизнес-логика, валидаторы,
+>   транзакции, идемпотентности;
+> - `packages/shared/src/**` — DTO, Zod-схемы, public-контракты.
+>
+> Производные карты (для глубокого reference):
+>
+> - `docs/erd.md` — список моделей/enum-ов по доменам;
+> - `docs/order-flow.md` — заказы, статусы, snapshot-механика;
+> - `docs/production-flow.md` — паспорта, ОТК/ВТО, упаковка, зарплата;
+> - `docs/events.md` — `PassportEvent` vs `AuditLog`, инварианты;
+> - `docs/api.md` — карта routes от контроллеров.
+>
+> Где поведение не подтверждено кодом — ставится явная пометка
+> **UNKNOWN/TODO**.
 
 ---
 
-## 0a. Аутентификация и сессии (MVP 1.1)
+## Содержание
 
-С MVP 1.1 любая бизнес-операция выполняется от лица конкретного сотрудника:
-
-- сотрудник логинится по `login` + `password` (`Employee.pinHash`, bcrypt);
-- сервер выдаёт подписанную HttpOnly cookie `sewing_session` (HMAC-SHA256
-  на `JWT_SECRET`, срок — `JWT_EXPIRES_IN`, по умолчанию 12 часов);
-- на каждом защищённом endpoint `AuthGuard` проверяет подпись/срок и
-  загружает «свежие» поля Employee из БД (роль/активность не кешируются —
-  деактивация работает мгновенно);
-- роли проверяются декоратором `@Roles(...)` (`SHOP_MANAGER` для управления
-  заказами, `QC` для брака, `PACKING` для упаковки и т.д., `ADMIN`
-  переопределяет всё).
-
-Demo-cookie `demo-employee-id` и явная передача `employeeId` в body/query
-для state-changing endpoint-ов из MVP 1.0 удалены: identity всегда
-берётся из сессии. Подробности — `api.md §1`, `flows.md §F0`,
-[ADR-0014](./adr/0014-auth-and-sessions.md).
-
----
-
-## 1. Глоссарий (en ↔ ru)
-
-| Код (en)          | UI (ru)                       | Описание                               |
-| ----------------- | ----------------------------- | -------------------------------------- |
-| Order             | Заказ                         | Заявка клиента на N изделий            |
-| OrderItem         | Позиция заказа                | Продукт + размер + план (qty_plan)     |
-| Product           | Изделие                       | Футболка белая / черная (MVP)          |
-| Size              | Размер                        | Справочник (104…6XL)                   |
-| Operation         | Операция                      | Этап производства                      |
-| Passport          | Паспорт изделия               | Партия (размер+цвет+рулон), корень     |
-| PassportEvent     | Событие паспорта              | Любое изменение состояния              |
-| OperationEntry    | Начисление                    | Сдельное начисление сотруднику за операцию по паспорту (Шаг 9) |
-| ApprovalMode      | Режим подтверждения           | `IMMEDIATE` (раскройщик) / `AFTER_RELEASE` (пошив)             |
-| EarningSource     | Источник начисления           | `PASSPORT_CREATED` / `OPERATION_TRANSITION` (Шаг 9, ADR-0012)  |
-| CompensationType  | Тип компенсации               | `PIECEWORK` / `SALARY` / `MIXED` (ADR-0021)                    |
-| SalaryEntry       | Окладное начисление за день   | Один день — одна запись на сотрудника (ADR-0021)               |
-| SalaryEntrySource | Источник окладной записи      | `SHIFT_DAY` (был факт смены) / `MANUAL` (ручной день, MVP не пишем) |
-| PieceRate         | Расценка                      | Ставка за единицу                      |
-| Cell              | Ячейка                        | Место хранения кроя                    |
-| CellContent       | Содержимое ячейки             | Размер → количество                    |
-| Box               | Коробка                       | Упаковка (до 100 шт.)                  |
-| Employee          | Сотрудник                     | Работник производства                  |
-| ShiftSession      | Сессия смены                  | Сотрудник + оборудование + операция    |
-| Equipment         | Оборудование                  | Машинка / стол (с QR)                  |
-| EquipmentOperation | Разрешённая операция         | M2M: какие операции допустимы на станке (ADR-0017) |
-| DefectType        | Вид брака                     | Справочник причин брака (Шаг 7)        |
-| PassportDefect    | Запись брака                  | Один акт фиксации (qty, comment)       |
+- [Роль документа](#role)
+- [0. Глоссарий](#0-glossary)
+- [1. Заказ](#1-order)
+- [2. Маршрут и операции](#2-routes-operations)
+- [3. Техкарта и материалы](#3-tech-cards)
+- [4. Лекала / Patterns](#4-patterns)
+- [5. Потребности цеха / WorkshopNeed](#5-workshop-needs)
+- [6. Закупки / Supplier / PurchaseOrder / PurchaseReceipt](#6-procurement)
+- [7. Паспорт производства](#7-passport)
+- [8. ОТК / ВТО / дефекты](#8-qc-wto)
+- [9. Упаковка / коробки](#9-packing)
+- [10. Начисления / зарплата](#10-payroll)
+- [11. Склад / ячейки](#11-warehouse)
+- [12. Экран цеха / Display](#12-shopfloor)
+- [13. Мастер / MasterCall / MasterActions](#13-master)
+- [14. Печать / PrintJob / Agent](#14-printing)
+- [15. Audit / Events](#15-audit-events)
 
 ---
 
-## 2. Продукты и размеры (MVP)
+<a id="role"></a>
 
-**Продукты:**
-- `tshirt_white` — Футболка белая
-- `tshirt_black` — Футболка черная
+## Роль документа
 
-**Размеры** (со `sortOrder`):
+**`domain.md` — это:**
 
-Детские: `104, 110, 116, 122, 128, 134, 140, 146, 152, 158, 164`
-Взрослые: `XS, S, M, L, XL, 2XL, 3XL, 4XL, 5XL, 6XL`
+- обзорная **доменная карта** системы SEWING;
+- единая точка входа, которая связывает между собой:
+  - **модели данных** → `docs/erd.md`,
+  - **процессы заказа и производства** → `docs/order-flow.md`,
+    `docs/production-flow.md`,
+  - **события и аудит** → `docs/events.md`,
+  - **HTTP API** → `docs/api.md`.
 
-Размеры — справочник в БД. Никаких литералов в коде (см. §23 ТЗ).
+**`domain.md` НЕ является:**
 
----
+- источником истины по **API** — см. `docs/api.md`;
+- источником истины по **структуре БД** (моделям, полям, enum-ам,
+  индексам, FK) — см. `docs/erd.md`;
+- источником истины по **событиям** (`PassportEvent`, `AuditLog`,
+  типы, payload, инварианты) — см. `docs/events.md`;
+- источником истины по **пошаговым процессам** (последовательности
+  статусов, переходов, побочных эффектов) — см. `docs/order-flow.md`
+  и `docs/production-flow.md`.
 
-## 3. Роли
+**Правило разрешения конфликтов.**
 
-| Код (en)          | UI (ru)                   | Оплата   |
-| ----------------- | ------------------------- | -------- |
-| `SHOP_MANAGER`    | Начальник цеха            | —        |
-| `CUTTER`          | Раскройщик                | Сдельная |
-| `CUTTER_ASSISTANT`| Помощник раскройщика      | Оклад    |
-| `SEAMSTRESS`      | Швея                      | Сдельная |
-| `QC`              | ОТК                       | Оклад    |
-| `IRONING`         | ВТО                       | Оклад    |
-| `PACKING`         | Упаковка                  | Оклад    |
-| `ADMIN`           | Администратор             | —        |
+При расхождении между `domain.md` и специализированным документом
+(`api.md` / `erd.md` / `events.md` / `order-flow.md` /
+`production-flow.md`) **доверять специализированному документу**.
+`domain.md` в этом случае считается устаревшим и подлежит правке.
 
-Тип оплаты привязан к `Employee`, а не к роли: тот же сотрудник потенциально
-может быть на сдельной или окладной. Но по умолчанию мапится из роли.
+> Источником истины по поведению при этом всё равно остаётся **код**
+> (`prisma/schema.prisma`, `apps/api/src/modules/**`,
+> `packages/shared/src/**`) — см. блок «Статус» в начале файла.
+> Иерархия истины: **код → специализированный документ → `domain.md`**.
 
-> Со Шага 19 (post-ADR-0021) на `Employee` появилась **отдельная**
-> управленческая ось `compensationType`
-> (`PIECEWORK` / `SALARY` / `MIXED`) и `salaryPerShift Decimal?` —
-> ставка за отработанный день. Существующее `paymentType` остаётся
-> источником истины для сдельного контура (`OperationEntry`,
-> ADR-0005/0012/0020) и не трогается. `compensationType` управляет
-> только новым окладным контуром (`SalaryEntry`) — см. §9a и
-> [ADR-0021](./adr/0021-shift-day-salary.md).
+**Цель `domain.md`:**
 
-### 3.1. Видимость рабочих разделов по ролям
+- дать **целостное понимание системы** «сверху»: какие подсистемы
+  существуют, за что отвечают, какими сущностями оперируют;
+- показать **связи между подсистемами** (заказ ↔ маршрут ↔ техкарта
+  ↔ паспорт ↔ ОТК ↔ упаковка ↔ зарплата ↔ склад ↔ аудит);
+- служить навигатором по специализированным документам, а не их
+  заменой.
 
-Backend — единственный источник истины (`@Roles(...)` на контроллерах).
-Frontend дублирует те же правила через `apps/web/lib/rbac.ts` и
-layouts `/qc`, `/packing`, `/orders`, чтобы не показывать пустые
-страницы и `403`.
+**Связанные документы:**
 
-| Раздел     | Роли с доступом                                | Эндпоинты                                    |
-| ---------- | ---------------------------------------------- | -------------------------------------------- |
-| `/qc`      | `QC`, `SHOP_MANAGER` (+ `ADMIN`)               | `/api/qc/*`, `/api/defect-types`             |
-| `/packing` | `PACKING`, `SHOP_MANAGER` (+ `ADMIN`)          | `/api/packing/boxes/*` (кроме `/qr`/`/label` — публичные для печати/сканера) |
-| `/orders`  | `ADMIN`, `SHOP_MANAGER`; read-only — `CUTTER_ASSISTANT` | write: `/api/orders/*`; read: `GET /api/orders[/:id][/passports]` |
-| `/work` для `CUTTER_ASSISTANT` | mobile-clean экран без верхнего тёмного header. Перед стартом — `SeamstressShiftStart` (QR раскройного стола → выбор разрешённой операции → `POST /api/shifts/start`). После старта — `CutterAssistantWorkPanel`: «Выпустить паспорт» (→ `/work/cut-orders`, если заказ один — авто-редирект на `/orders/[id]/passports/new`, иначе короткий список или empty state) и «Разместить на стеллаж» (`ShelfPlacementPanel`). «Завершить смену» и «Выйти» — в три-точечном меню `SeamstressActionsMenu`. | Без активной `ShiftSession` печать падает в `SHIFT_SESSION_REQUIRED` (см. `print-jobs.service.ts:resolvePrinter`), поэтому помощник работает строго в контексте оборудования смены — как и остальные рабочие роли. |
-
-UI работает по модели «одно рабочее окно на роль» (см.
-[`docs/screens.md §1.1`](./screens.md#11-модель-одно-рабочее-окно-на-роль)
-и `apps/web/lib/rbac.ts`): для производственных ролей `/`
-редиректится в их primary workspace (`SEAMSTRESS` /
-`CUTTER_ASSISTANT` / `CUTTER` → `/work`, `QC` → `/qc`,
-`IRONING` → `/wto`, `PACKING` → `/packing`), отдельной «Главной» и
-дублирующей «Работы» в навигации у них нет. Менеджеры и
-админ продолжают видеть многосекционный интерфейс.
-
-`ADMIN` глобально проходит любой `@Roles(...)`. Прочие роли получают
-`403 FORBIDDEN_ROLE` от API; в UI разделы для них не отображаются —
-ни в шапке, ни в `MobileNav`, ни в тайлах главной.
+- [`docs/erd.md`](./erd.md) — модели и enum-ы по доменам.
+- [`docs/order-flow.md`](./order-flow.md) — заказы, статусы,
+  snapshot-механика.
+- [`docs/production-flow.md`](./production-flow.md) — паспорта, ОТК,
+  ВТО, упаковка, зарплата.
+- [`docs/events.md`](./events.md) — `PassportEvent` vs `AuditLog`,
+  инварианты.
+- [`docs/api.md`](./api.md) — карта HTTP-routes от контроллеров.
 
 ---
 
-## 4. Операции
+<a id="0-glossary"></a>
 
-Категории (`OperationCategory`):
+## 0. Глоссарий
 
-- `CUTTING` — раскрой
-- `SEWING` — пошив
-- `QC` — контроль качества
-- `IRONING` — ВТО
-- `PACKING` — упаковка
+Канонические термины (en — в коде, ru — в UI).
 
-Список операций (MVP):
+| Код (en)                | UI (ru)                                | Источник |
+| ----------------------- | -------------------------------------- | -------- |
+| `Order`                 | Заказ                                  | `prisma/schema.prisma::Order` |
+| `OrderItem`             | Позиция заказа (размерная строка)      | `prisma/schema.prisma::OrderItem` |
+| `Client`                | Заказчик                               | `prisma/schema.prisma::Client` |
+| `OrderApplication`      | Нанесение заказа                       | `prisma/schema.prisma::OrderApplication` |
+| `OrderCostEstimate`     | Расчёт себестоимости                   | `prisma/schema.prisma::OrderCostEstimate` |
+| `Operation`             | Операция                               | `prisma/schema.prisma::Operation` |
+| `RouteTemplate`         | Шаблон маршрута                        | `prisma/schema.prisma::RouteTemplate` |
+| `OrderRouteStep`        | Шаг маршрута заказа (snapshot)         | `prisma/schema.prisma::OrderRouteStep` |
+| `TechCardTemplate`      | Шаблон техкарты                        | `prisma/schema.prisma::TechCardTemplate` |
+| `OrderMaterialRequirement` | Потребность материала (snapshot)    | `prisma/schema.prisma::OrderMaterialRequirement` |
+| `OrderOutsourceRequirement` | Внешняя потребность (snapshot)     | `prisma/schema.prisma::OrderOutsourceRequirement` |
+| `PatternItem`           | Лекало (карточка изделия)              | `prisma/schema.prisma::PatternItem` |
+| `WorkshopNeed`          | Потребность цеха (рабочее место закупщика) | `prisma/schema.prisma::WorkshopNeed` |
+| `Supplier`              | Поставщик                              | `prisma/schema.prisma::Supplier` |
+| `PurchaseOrder`         | Заказ поставщику                       | `prisma/schema.prisma::PurchaseOrder` |
+| `PurchaseReceipt`       | Приёмка поставки                       | `prisma/schema.prisma::PurchaseReceipt` |
+| `Passport`              | Паспорт изделия (партия раскроя)       | `prisma/schema.prisma::Passport` |
+| `PassportEvent`         | Событие движения паспорта              | `prisma/schema.prisma::PassportEvent` |
+| `PassportDefect`        | Запись брака                           | `prisma/schema.prisma::PassportDefect` |
+| `Box` / `BoxItem`       | Коробка / содержимое коробки           | `prisma/schema.prisma::Box`/`BoxItem` |
+| `OperationEntry`        | Сдельное начисление                    | `prisma/schema.prisma::OperationEntry` |
+| `SalaryEntry`           | Окладное начисление за день            | `prisma/schema.prisma::SalaryEntry` |
+| `Cell` / `CellContent`  | Ячейка / содержимое ячейки             | `prisma/schema.prisma::Cell`/`CellContent` |
+| `Warehouse` / `WarehouseLine` | Склад / линия (полка)            | `prisma/schema.prisma::Warehouse`/`WarehouseLine` |
+| `Equipment`             | Оборудование (станок, стол с QR)       | `prisma/schema.prisma::Equipment` |
+| `EquipmentOperation`    | Разрешённая операция станка (M2M)      | `prisma/schema.prisma::EquipmentOperation` |
+| `Employee`              | Сотрудник                              | `prisma/schema.prisma::Employee` |
+| `ShiftSession`          | Сессия смены                           | `prisma/schema.prisma::ShiftSession` |
+| `MasterCall`            | Вызов мастера                          | `prisma/schema.prisma::MasterCall` |
+| `DisplayScreenConfig`   | Конфиг большого монитора цеха          | `prisma/schema.prisma::DisplayScreenConfig` |
+| `Printer` / `PrintJob`  | Логический принтер / задание печати    | `prisma/schema.prisma::Printer`/`PrintJob` |
+| `AuditLog`              | Универсальный журнал управленческих действий | `prisma/schema.prisma::AuditLog` |
+| `CutReleasePolicy`      | Политика выдачи кроя                   | `prisma/schema.prisma::CutReleasePolicy` |
+| `CuttingClosureRequest` | Заявка на закрытие раскроя по размеру  | `prisma/schema.prisma::CuttingClosureRequest` |
 
-| Код                  | Название            | Категория | sort | pricingMode (seed) |
-| -------------------- | ------------------- | --------- | ---- | ------------------ |
-| `CUT_PATTERN_PRINT`  | Печать лекал        | CUTTING   | 10   | `SALARY_ONLY`      |
-| `CUT_SPREADING`      | Настил              | CUTTING   | 20   | `SALARY_ONLY`      |
-| `CUT_CUT`            | Раскрой             | CUTTING   | 30   | `FIXED` (10/шт)    |
-| `CUT_DIVISION`       | Деление кроя        | CUTTING   | 40   | `SALARY_ONLY`      |
-| `CUT_BASE_PREP`      | Подготовка основы   | CUTTING   | 50   | `SALARY_ONLY`      |
-| `CUT_RIBANA_PREP`    | Подготовка рибаны   | CUTTING   | 60   | `SALARY_ONLY`      |
-| `CUT_ISSUE`          | Выдача кроя         | SEWING    | 70   | `SALARY_ONLY`      |
-| `SEW_OVERLOCK_1`     | Оверлок 1           | SEWING    | 80   | `BY_SIZE`          |
-| `SEW_BINDING`        | Киперка             | SEWING    | 90   | `SALARY_ONLY`      |
-| `SEW_OVERLOCK_2`     | Оверлок 2           | SEWING    | 100  | `BY_SIZE`          |
-| `SEW_COVERSTITCH`    | Распошив            | SEWING    | 110  | `SALARY_ONLY`      |
-| `QC`                 | ОТК                 | QC        | 120  | `SALARY_ONLY`      |
-| `WTO`                | ВТО                 | IRONING   | 130  | `SALARY_ONLY`      |
-| `PACKING`            | Упаковка            | PACKING   | 140  | `SALARY_ONLY`      |
+Полный список enum-ов и их значений — `docs/erd.md §1`.
 
-> Категории (`OperationCategory` enum) остаются CUTTING/SEWING/QC/IRONING/PACKING.
-> Код операции `WTO` логически означает ВТО (влажно-тепловая обработка) и
-> относится к категории `IRONING`. Выдача кроя (`CUT_ISSUE`) — граница между
-> раскроем и пошивом; на MVP она относится к категории `SEWING`, потому что
-> активируется на стороне пошива (см. `flows.md §F2/§F3`).
+### Роли (`enum Role`)
 
-Правило перехода: **по умолчанию** следующий этап — операция с ближайшим
-бо́льшим `sortOrder`. Но система должна позволять «прыгать» через этапы
-(на MVP достаточно: при сканировании мы принимаем ту операцию, которую
-сотрудник выбрал в `ShiftSession`).
+`SHOP_MANAGER`, `CUTTER`, `CUTTER_ASSISTANT`, `SEAMSTRESS`, `QC`,
+`IRONING`, `PACKING`, `ADMIN`, `DISPLAY`, `SHOPFLOOR_MASTER`
+(`prisma/schema.prisma::Role`). `ADMIN` глобально проходит любой
+`@Roles(...)` (`apps/api/src/modules/auth/roles.guard.ts`).
 
----
+### Аутентификация и сессии
 
-## 4a. Тариф операции (`PricingMode`, ADR-0020)
+С MVP 1.1 любая бизнес-операция выполняется от лица конкретного
+сотрудника:
 
-Со Шага 18 каждая операция несёт явный «тарифный режим», который
-определяет, как для неё считается сдельная зарплата. Источник истины —
-`Operation.pricingMode`, см. `erd.md §2.3`/§2.3a, доменные правила —
-[ADR-0020](./adr/0020-operation-pricing-model.md).
+- `Employee.pinHash` — `bcrypt(password)` (`apps/api/src/modules/auth/auth.service.ts`);
+- HttpOnly cookie `sewing_session` (HMAC-SHA256, ADR-0014);
+- `AuthGuard` загружает «свежие» поля Employee на каждом запросе
+  (роль/активность не кешируются);
+- `@Roles(...)` — RBAC на уровне контроллера/метода.
 
-| Mode          | Источник ставки                                  | Поведение зарплаты                                                                          |
-| ------------- | ------------------------------------------------ | -------------------------------------------------------------------------------------------- |
-| `FIXED`       | `Operation.fixedRate` (Decimal(12,2))            | Одна ставка за единицу независимо от размера. Менеджер вводит одно число.                     |
-| `BY_SIZE`     | `OperationRateBySize.rate` для пары `(operationId, sizeId)` | Цена различается по размеру. `fixedRate` хранится `null`, `OperationRateBySize` — нормализованная таблица с `UNIQUE (operationId, sizeId)`. |
-| `SALARY_ONLY` | —                                                | Операция участвует в pipeline (можно сканировать, она перекидывает паспорт), но **не порождает** `OperationEntry`. Дефолт для новых операций. |
-
-**Единый helper.** `OperationsService.resolveRate(operationId, sizeId,
-tx?)` — единственный источник истины для earnings:
-
-- `FIXED` → `Operation.fixedRate`;
-- `BY_SIZE` → `OperationRateBySize.rate` для `sizeId`; отсутствие
-  ставки → `OPERATION_RATE_MISSING` (422) — менеджер обязан задать
-  ставку для каждого реально используемого размера;
-- `SALARY_ONLY` → `null`. `EarningsService` молча пропускает такую
-  операцию (никакого `OperationEntry`).
-
-`EarningsService.createImmediateForCutter` (раскрой,
-`PASSPORT_CREATED`, ADR-0005/ADR-0012) и
-`EarningsService.createPendingForPreviousOperation` (пошив,
-`OPERATION_TRANSITION`) обе зовут именно `resolveRate`. Старая
-`findRate` поверх `PieceRate` и константа «список piecework-операций»
-(`PIECEWORK_OPERATION_CODES`/`isPieceworkOperationCode`) удалены из
-runtime — «оплатная ли операция» теперь = `op.pricingMode ≠ SALARY_ONLY`.
-
-**Жизненный цикл (RBAC: `SHOP_MANAGER` / `ADMIN`).**
-
-1. Менеджер создаёт операцию (`POST /api/operations`) с явным
-   `pricingMode`. Дефолт сервера — `SALARY_ONLY` (самый безопасный:
-   операция не сломает зарплату, пока менеджер не выберет тариф).
-   Уникальность `Operation.code` — `OPERATION_CODE_TAKEN` (409).
-2. Меняет тариф или ставку (`PATCH /api/operations/:id`). Транзакция
-   чистит несовместимые поля при смене режима (например, `BY_SIZE
-   → SALARY_ONLY` стирает `OperationRateBySize`; `FIXED → BY_SIZE`
-   очищает `fixedRate`). Дубликаты `sizeId` в `ratesBySize` —
-   `OPERATION_RATE_DUPLICATE_SIZE` (400); неизвестный `sizeId` —
-   `OPERATION_RATE_SIZE_NOT_FOUND` (400).
-3. Деактивация — `PATCH /api/operations/:id { isActive: false }`.
-   Операция остаётся в истории (на ней могут существовать
-   `OperationEntry`/`PassportEvent`), но не предлагается в новых
-   формах. API на удаление сознательно не предоставляется —
-   `Operation` — это идентичность, на которую ссылаются исторические
-   данные.
-
-**Что осталось из MVP 1.0.** Таблица `PieceRate` физически сохраняется
-для аудита/rollback, но runtime больше не читает её — миграция
-`20260420100000_operation_pricing_model` бэкфилит соответствующие
-`pricingMode`/`fixedRate`/`OperationRateBySize` из живых строк
-`PieceRate`. Любые правки `PieceRate` через Prisma Studio после Шага
-18 на новые начисления **не повлияют** (см. ADR-0020 §4).
+См. `docs/api.md §1`, ADR-0014.
 
 ---
 
-## 5. Паспорт изделия — агрегат-корень
+<a id="order"></a>
+<a id="1-order"></a>
 
-**Инварианты:**
+## 1. Заказ
 
-1. Один паспорт = один размер + один цвет + один рулон.
-2. Создаётся только на операции `CUT_DIVISION` пользователем с ролью
-   `CUTTER_ASSISTANT`.
-3. `qtyPlan` — плановое количество в партии (напр. 12 шт).
-4. `qtyCut` фиксируется при создании (физически раскроено раскройщиком).
-5. `qtyDefect` ≥ 0; `qtyGood = qtyCut − qtyDefect`.
-6. `currentOperationId` меняется только через `PassportEvent(OPERATION_STARTED)`.
-7. После события `PACKED` паспорт недоступен для перемещений.
+### 1.1 Сущность `Order`
 
-**Поля** (см. `prisma/schema.prisma`):
+Источник: `prisma/schema.prisma::Order`,
+`apps/api/src/modules/orders/orders.service.ts`,
+`apps/api/src/modules/orders/orders.controller.ts`,
+`docs/erd.md §2.2`, `docs/order-flow.md §1`.
 
-- `number`, `qrCode`
-- `orderId`, `productId`, `sizeId`, `color`
-- `rollNumber`, `cutDate`
-- `qtyPlan`, `qtyCut`, `qtyDefect`, `qtyGood`
-- `currentOperationId` — текущая операция. Ставится при `CREATED`
-  (`CUT_DIVISION`), обновляется событием `OPERATION_SCAN` (Шаг 6).
-- `currentEmployeeId` — сотрудник, у которого сейчас находится
-  паспорт. Ставится при `ISSUED_TO_EMPLOYEE` (Шаг 6) и обновляется
-  при `OPERATION_SCAN`.
-- `currentCellId` — текущая ячейка (Шаг 5, см. ADR-0010)
-- `cutterId` (раскройщик-сдельщик), `creatorId` (помощник, создавший паспорт)
-- `status` (`CREATED | IN_PROGRESS | PACKED | CANCELLED`)
-- `pdfUrl`
+Корневой агрегат «план производства». Один заказ = одно изделие × один
+цвет (ADR-0009: `OrderItem.productId` указывает на «технический»
+Product, который автоматически создаётся под лекало через
+`OrdersService.ensureLegacyProductForPattern()`; `Order.color` живёт
+на самом заказе).
 
-**Номер** — автонумерация `P-YYYYMMDD-NNNN` (счётчик в рамках дня).
+Ключевые поля:
 
-### 5.1. Скоуп Шага 5 MVP
+- `number` (uniq, формат `O-YYYYMMDD-NNNN`),
+- `clientId? → Client`, `customer` (legacy свободный текст),
+- `orderDate`, `dueDate?`, `color?`, `comment?`,
+- `division: OrderDivision @default(OTHER)` —
+  `MARKETPLACE | OTHER` (см. §12);
+- `status: OrderStatus @default(DRAFT)` (см. §1.2);
+- `routeTemplateId? → RouteTemplate` (опционально, см. §2);
+- `techCardId? → TechCardTemplate` (опционально, см. §3);
+- `patternItemId? → PatternItem` (`onDelete: SetNull`, см. §4);
+- snapshot-поля лекала: `patternNameSnapshot?`,
+  `patternArticleSnapshot?`, `patternPreviewSnapshotUrl?`;
+- snapshot-поля себестоимости: `costEstimateTotalRub?`,
+  `costEstimateCompletedAt?`, `costEstimateVersion?`;
+- snapshot-поля плана операций: `operationCostPlanRub?`,
+  `operationTimePlanSec?`, `operationPlanCalculatedAt?`,
+  `operationPlanWarnings: Json?`;
+- цена продажи: `customerUnitPrice?`, `customerCurrency?`
+  (управленческое поле, не входит в расчёт себестоимости);
+- индексы: `status`, `orderDate`, `createdAt`, `routeTemplateId`,
+  `techCardId`, `patternItemId`, `division`, `clientId`, `dueDate`.
 
-Реализован выпуск паспорта помощником раскройщика и его размещение в
-ячейке. Конкретно:
+`OrderItem` — строка по размеру:
+`(orderId, productId, sizeId)` UNIQUE, `qtyPlan: Int` (план в
+штуках). Один заказ — один `productId` (валидируется в
+`OrdersService.create/update`, инвариант ADR-0009).
 
-- **Выпуск:** `POST /api/passports` — заказ + размер + дата кроя + кол-во
-  + номер рулона. Сервер находит строку заказа по размеру, проверяет
-  правила (см. ниже), создаёт `Passport(status=CREATED,
-  currentOperationId=CUT_DIVISION, qtyPlan=qtyCut, qtyDefect=0,
-  qtyGood=qtyCut)`, пишет `PassportEvent(CREATED)`, генерирует QR
-  (`passport:{id}` по [ADR-0008](./adr/0008-qr-format.md)) и печатную
-  форму (HTML, см. [ADR-0010](./adr/0010-passport-print-and-placement.md)).
-- **Размещение:** `POST /api/passports/:id/place` — увеличивает
-  `CellContent.quantity` на `qtyCut`, пишет `PassportEvent(CELL_PLACED)`,
-  проставляет `Passport.currentCellId`.
-- **Агрегаты заказа:** `qtyCutFact` по размеру и `qtyCutFactTotal` в
-  summary считаются из `Σ Passport.qtyCut` (статус ≠ CANCELLED) — см.
-  `apps/api/src/modules/orders/order-aggregator.ts`.
+### 1.2 `OrderStatus`
 
-**Правила выпуска (валидация на API):**
-
-1. Заказ существует и в статусе `IN_PRODUCTION` (см. ADR-0010); DRAFT,
-   DONE, CANCELLED → 409 `ORDER_NOT_IN_PRODUCTION`.
-2. Размер из `dto.sizeId` присутствует в `OrderItem` заказа (иначе 400
-   `SIZE_NOT_IN_ORDER`).
-3. `qtyCut > 0` (валидация Zod).
-4. `qtyCut + Σ выпущенных_по_размеру ≤ OrderItem.qtyPlan` (иначе 422
-   `QTY_EXCEEDS_REMAINING_PLAN`).
-5. `rollNumber` непустой.
-6. На паспорт назначаются `cutterId` (демо-раскройщик из seed) и
-   `creatorId` (`cutter-helper`) — на этапе без аутентификации
-   используем фиксированных демо-сотрудников. Когда появится auth
-   (Шаг 7), `creatorId` придёт из активной `ShiftSession`.
-
-**Правила размещения:**
-
-1. Паспорт существует и в статусе `CREATED` (иначе 409
-   `PASSPORT_NOT_PLACEABLE`).
-2. `Passport.currentCellId` ещё не выставлен — повторное размещение
-   запрещено (409 `PASSPORT_ALREADY_PLACED`). Перемещение между
-   ячейками появится позже.
-3. Ячейка существует (`CELL_NOT_FOUND`) и `active = true`
-   (`CELL_INACTIVE`).
-
-**За рамками Шага 5:** выдача кроя швее, пошивные операции, ОТК, ВТО,
-упаковка, экран «Цех», сканирование оборудования, мобильный кабинет
-сотрудника, перемещение паспорта между ячейками, частичное размещение,
-mixed split/merge паспортов, event sourcing сверх уже принятой модели.
-
-> Начисление раскройщику возникает в момент создания паспорта (см.
-> [ADR-0005](./adr/0005-salary-timing.md)). Сам модуль начислений
-> реализован на Шаге 9 — `EarningsService.createImmediateForCutter`
-> вызывается в той же транзакции `PassportsService.create` после
-> `PassportEvent(CREATED)`. См. §9 и `flows.md §F2`.
-
-### 5.2. Скоуп Шага 6 MVP
-
-Реализована сессия смены и первое «живое» движение паспорта. Конкретно:
-
-- **Смена (`ShiftSession`).** Обязательна для любой работы с паспортом
-  швеи/оверлочницы. API: `POST /api/shifts/start | stop`, `GET
-  /api/shifts/current?employeeId=…`. Правило «не более одной активной
-  смены на сотрудника» поддерживается в `ShiftsService` (см.
-  `docs/flows.md §F8`).
-- **Выдача кроя (`POST /api/passports/:id/issue`).** Швея на активной
-  смене снимает паспорт с ячейки, `CellContent.quantity` уменьшается
-  на `qtyCut`, пишется `PassportEvent(ISSUED_TO_EMPLOYEE)`,
-  `passport.status = IN_PROGRESS`, `currentCellId = NULL`,
-  `currentEmployeeId = session.employeeId`. `currentOperationId` **не
-  меняем** — это сделает первый `scan`.
-- **Сканирование на операции (`POST /api/passports/:id/scan`).**
-  Любой скан = переход: `currentOperationId = session.operationId`,
-  `currentEmployeeId = session.employeeId`, `OPERATION_SCAN`.
-  Идемпотентность — по состоянию (ADR-0003 §6).
-- **Resolver `POST /api/passports/by-code`.** Разворачивает QR
-  `passport:{id}`, номер `P-…` или голый id в паспорт. Используется
-  на `/work` перед `issue`/`scan`.
-- **UI `/work`.** Mobile-first экран: выбор демо-сотрудника →
-  старт/стоп смены → две крупные кнопки «Получить крой» /
-  «Сканировать паспорт». См. `docs/screens.md §3`.
-- **«Текущий крой в работе» (`GET /api/shifts/current-work`).**
-  Список паспортов, у которых `currentEmployeeId = me` и
-  `status = IN_PROGRESS`. Источник истины — БД, backend сам режет
-  по сессии (см. ADR-0014, `docs/api.md §3` и `docs/screens.md §3.4`).
-  Это derived view: запись уходит из ответа автоматически после
-  скана следующей операции (другой actor) или упаковки. Никаких
-  дополнительных «возвратов кроя» не вводим.
-
-**Правила выдачи кроя (валидация на API):**
-
-1. Паспорт существует (`PASSPORT_NOT_FOUND`).
-2. Паспорт не в терминальном статусе
-   (`PASSPORT_ALREADY_PACKED` / `PASSPORT_CANCELLED`).
-3. У сотрудника активна смена (`SHIFT_SESSION_REQUIRED`).
-4. Паспорт ещё не выдан
-   (`currentEmployeeId IS NULL OR currentCellId IS NOT NULL`);
-   иначе `PASSPORT_ALREADY_ISSUED`.
-5. Паспорт лежит в ячейке (`currentCellId IS NOT NULL`);
-   иначе `PASSPORT_NOT_IN_CELL`.
-
-**Правила скана на операции:**
-
-1. Паспорт существует и не в терминальном статусе.
-2. У сотрудника активна смена (`SHIFT_SESSION_REQUIRED`).
-3. Дубликат-скан на ту же операцию тем же сотрудником — no-op,
-   возвращаем 200 без нового события.
-
-**За рамками Шага 6:** ОТК, ВТО, упаковка, коробки, реалтайм-
-экран «Цех», полноценная история операций (`OPERATION_STARTED` /
-`OPERATION_FINISHED` / `MOVED`), полный event sourcing, отдельное
-мобильное приложение, аутентификация.
-
-> Сдельные начисления пошива по `OPERATION_SCAN` подключены на Шаге 9 MVP
-> в той же транзакции, что и сам скан (см. §9 и `flows.md §F4`).
-
-### 5.3. Скоуп Шага 7 MVP — ОТК и фиксация брака
-
-Реализована первая контрольная точка качества. Конкретно:
-
-- **Справочник `DefectType`.** Минимальный набор причин брака:
-  `STAIN`, `HOLE`, `CROOKED_SEAM`, `SKEW`, `INCOMPLETE`, `OTHER`.
-  Идемпотентный seed по `code` (см. `prisma/seed.ts → seedDefectTypes`).
-  Расширение и деактивация — через будущий админ-UI; на API уже отдаём
-  только активные виды (`isActive = true`).
-- **Запись брака `PassportDefect`.** Отдельная таблица
-  `(id, passportId, defectTypeId, qty, comment?, createdByEmployeeId?,
-  createdAt)`. Один паспорт может иметь много записей; каждая запись —
-  атомарный акт ОТК, который **не закрывает паспорт** и не переводит
-  его в терминальный статус.
-- **Денормализованные `qtyDefect` / `qtyGood`** хранятся прямо в
-  `Passport` (как и до Шага 7) и поддерживаются в одной транзакции с
-  `PassportDefect`: `qtyDefect += dto.qty`, `qtyGood = qtyCut − qtyDefect`.
-  Это сохраняет инвариант §13 без отдельного чтения «Σ defects» при
-  каждом запросе и не ломает существующий
-  `order-aggregator`.
-- **Событие `DEFECT_RECORDED`.** Появляется в `PassportEvent` с
-  `qty = dto.qty`, `operationId = passport.currentOperationId`,
-  `payload = { defectId, defectTypeId, defectTypeCode, defectTypeName,
-  comment }`. Append-only, в той же транзакции.
-- **Агрегация заказа.** `qtyDefect` по размеру в `sizeBreakdown` =
-  `Σ Passport.qtyDefect` по живым (≠ `CANCELLED`) паспортам этого
-  размера. `summary.qtyDefectTotal` = сумма по всем размерам. Все
-  остальные показатели (`qtyCutFact`, `qtyRemaining`, `qtyDelta`)
-  считаются как раньше.
-
-**Правила фиксации брака (валидация на API, см. `flows.md §F5`):**
-
-1. Паспорт существует (`PASSPORT_NOT_FOUND`).
-2. Паспорт в статусе `IN_PROGRESS` — иначе `PASSPORT_NOT_QCABLE`.
-   Это значит, что выпуск/размещение прошли и крой уже выдан швее
-   или просканирован на операции (Шаг 6 переводит статус в
-   `IN_PROGRESS`). Дополнительно отсекаются терминальные
-   `PACKED` / `CANCELLED`.
-3. `defectType` существует (`DEFECT_TYPE_NOT_FOUND`) и активен
-   (`DEFECT_TYPE_INACTIVE`).
-4. `qty` — целое > 0 (валидация Zod, см. `packages/shared/src/qc.ts`).
-5. `qty ≤ qtyCut − qtyDefect`. Иначе 422 `DEFECT_EXCEEDS_REMAINING`.
-   Инвариант `qtyGood ≥ 0` (см. §13) защищается в коде в одной
-   транзакции с инкрементом.
-6. `employeeId` (если передан) существует и активен. На MVP без
-   аутентификации поле опционально — UI может слать `employeeId`
-   из cookie `demo-employee-id`.
-
-**За рамками Шага 7:** виновная операция (мы пишем
-`operationId = currentOperationId`, но не «виновную» — её определит
-будущий процесс расследования), возврат брака в производство, split
-паспорта на отдельные подпаспорта по браку, экран «Цех», аналитика
-по причинам, начисления ОТК (роль `QC` — оклад, см. §9.1) и
-исправление уже зафиксированной записи. Терминальное
-закрытие паспорта по 100% брака на MVP не предусмотрено: паспорт
-просто продолжит жить с `qtyGood = 0`.
-
-### 5.4. ВТО role-terminal и QC-gate
-
-ВТО на MVP — отдельный scan-driven role-terminal `/wto`, полный аналог
-ОТК. Реализация: модуль `apps/api/src/modules/wto`, frontend
-`apps/web/app/wto/*`. Архитектурное обоснование совпадает с QC_DONE
-(см. ADR-0013 §«WTO_DONE bucket»):
-
-- **Событие `WTO_PASSED`** в `PassportEvent` (см. enum
-  `PassportEventType` в `prisma/schema.prisma`, миграция
-  `20260419130000_wto_passed_event`). Аудит-маркер «ВТО выполнено»,
-  `Passport.status` не меняется. По смыслу симметричен `QC_PASSED`.
-- **QC-gate.** Вход на операцию категории `IRONING` через
-  `PassportsService.scanOnOperation` отказывается записывать
-  `OPERATION_SCAN`, если по паспорту нет ни одного `QC_PASSED`. В
-  ответе — 409 `PASSPORT_NOT_QC_PASSED`. Идемпотентный re-scan на той
-  же операции (`session.operationId === passport.currentOperationId`)
-  специально пропускается без проверки — это no-op по pipeline.
-- **Завершение ВТО (`WtoService.completeWto`).** Транзакция: грузим
-  паспорт (`PASSPORT_NOT_WTOABLE` если статус не `IN_PROGRESS`),
-  double-check `QC_PASSED` (`PASSPORT_NOT_QC_PASSED` для случая, когда
-  кто-то напрямую дёргает `/api/wto/passports/:id/complete`),
-  валидируем актора, пишем `PassportEvent(WTO_PASSED)`. Никаких
-  обновлений `Passport.qty*`/`status`/`currentOperationId`.
-- **Экран «Цех».** Свежий `WTO_PASSED` (новее последнего
-  `OPERATION_SCAN`) переводит паспорт в derived-стадию `WTO_DONE`
-  shopfloor-проекции (см. `shopfloor-projection.ts`,
-  `shopfloor.service.ts`). После следующего `OPERATION_SCAN` паспорт
-  автоматически уходит в обычный bucket по новой категории
-  (`PACKING/...`), т. к. `hasFreshWtoPassed` перестаёт быть «свежим».
-- **Флаг `removedFromWto`.** Полный аналог `removedFromQc` — UI
-  скрывает свернутую строку «ВТО завершено», как только backend
-  возвращает `removedFromWto = true` (есть `OPERATION_SCAN` после
-  `wtoCompletedAt`, либо паспорт в терминальном статусе).
-
-За рамками Шага 7 для ВТО (как и для ОТК): фиксация брака на ВТО
-(брак записывает только ОТК), возврат в производство, расчёт зарплаты
-ВТО (роль `IRONING` — оклад, см. §9.1), split паспорта.
-
----
-
-## 5a. Заказ (Шаг 4 MVP)
-
-**Order** — план производства. Создаётся начальником цеха или админом.
-
-**Поля заказа** (см. `prisma/schema.prisma` / `erd.md §2.7`):
-
-- `number` — автонумер `O-YYYYMMDD-NNNN` (счётчик в рамках дня);
-- `orderDate` — дата заказа (обязательна);
-- `customer` — заказчик (опционально; на MVP не обязательное поле);
-- `dueDate` — срок (опционально);
-- `comment` — комментарий (опционально);
-- `status` — `DRAFT | IN_PRODUCTION | DONE | CANCELLED`;
-- `items: OrderItem[]` — строки заказа по размерам.
-
-**Ограничения MVP (Шаг 4):**
-
-1. Один заказ = **одно изделие + один цвет + много размеров.** Технически
-   `OrderItem.productId` хранит продукт для каждой строки, и сервер
-   валидирует, что все строки относятся к одному `productId` (см.
-   `OrdersService`). Цвет хранится в `Order.color` (свободный текст,
-   опционально); если не задан, fallback — `Product.color`.
-2. Строка заказа: `qtyPlan > 0`, размер уникален в рамках заказа
-   (`@@unique(orderId, productId, sizeId)`).
-3. Редактировать `OrderItem[]` и шапку можно **только в статусе `DRAFT`**.
-   После перевода в `IN_PRODUCTION` приходит 409 `ORDER_LOCKED`
-   (см. ADR-0006).
-4. `DONE` / `CANCELLED` — терминальные статусы; перевод вручную через API.
-
-**Переходы статусов (Шаг 4):**
+Источник: `prisma/schema.prisma::enum OrderStatus`,
+`docs/order-flow.md §2`.
 
 ```
-DRAFT ──(POST /start)──► IN_PRODUCTION ──(POST /complete)──► DONE
-   │                          │
-   └──(POST /cancel)──────────┴──► CANCELLED
+DRAFT → CALCULATION → CALCULATION_DONE → IN_PRODUCTION → DONE
+                                                    ↘ CANCELLED
 ```
 
-Автоматический перевод `IN_PRODUCTION → DONE` (по факту упаковки всех
-паспортов) появится на следующих шагах — сейчас только ручной.
+| Статус              | Семантика                                                                                  | Кто переводит |
+| ------------------- | ------------------------------------------------------------------------------------------ | ------------- |
+| `DRAFT`             | План редактируется (изделие/маршрут/техкарта/лекало/размеры).                              | `OrdersService.create` (default) |
+| `CALCULATION`       | Менеджер запустил расчёт. Backend собирает `WorkshopNeed[]`, snapshot-ы заморожены.        | `OrdersService.startCalculation` |
+| `CALCULATION_DONE`  | Расчёт завершён, активен `OrderCostEstimate(status=COMPLETED)`.                             | `OrderCostEstimatesService.completeCalculation` |
+| `IN_PRODUCTION`     | Запущен в производство. План полностью иммутабелен (ADR-0006).                             | `OrdersService.start` |
+| `DONE`              | Завершён вручную. **`AuditLog` не пишется** (`docs/events.md §5.2`, UNKNOWN/TODO осознанно ли это).  | `OrdersService.complete` |
+| `CANCELLED`         | Отменён вручную. **`AuditLog` не пишется** (`docs/events.md §5.2`, UNKNOWN/TODO).         | `OrdersService.cancel` |
 
----
+Postgres-enum расширяется только через `ALTER TYPE … ADD VALUE`,
+поэтому `CALCULATION_DONE` лежит после `IN_PRODUCTION`/`DONE`/
+`CANCELLED` по порядковому номеру в БД — UI-порядок задаётся явно через
+`ORDER_STATUSES` в `@sewing/shared/orders`.
 
-## 5b. Агрегация по заказу
+`PATCH /api/orders/:id` валидирует «опасные» поля
+(`items`, `productId`, `routeTemplateId`, `techCardId`,
+`patternItemId`, `division`) и допускает их к изменению **только в
+`DRAFT`**. На любом другом статусе — `OrderLockedException` (409
+`ORDER_LOCKED`). Если в DTO передан `status`, сервис делегирует
+переход в соответствующий метод (`startCalculation` / `start` /
+`complete` / `cancel`).
 
-API возвращает для каждого заказа:
+### 1.3 Snapshot-механика заказа
 
-- `OrderSummary` — итоговые значения по заказу:
-  `qtyPlanTotal`, `qtyCutFactTotal`, `qtyInSewingTotal`, `qtyQcTotal`,
-  `qtyWtoTotal`, `qtyPackingTotal`, `qtyFinishedTotal`, `qtyDefectTotal`,
-  `qtyDeltaTotal` (= `qtyCutFactTotal − qtyPlanTotal`).
-- `OrderSizeBreakdownRow[]` — строки по каждому размеру заказа с теми же
-  показателями + `qtyRemaining` и `qtyDelta`.
+Идея (ADR-0006, ADR-0022): после `start()` план иммутабелен. Чтобы UI и
+расчёты (`WorkshopNeed`, `OrderOperationPlan`) видели актуальные
+данные **до** запуска, используются «синхронизаторы», поддерживающие
+snapshot в согласованном виде на каждом важном переходе. Подробная
+сводная таблица — `docs/order-flow.md §12`.
 
-На **Шаге 5** заполнен `qtyCutFact` / `qtyCutFactTotal` — берётся из
-паспортов (`Σ Passport.qtyCut` по тем, у которых статус ≠ `CANCELLED`).
-`qtyRemaining = max(qtyPlan − qtyCutFact, 0)`, `qtyDelta = qtyCutFact − qtyPlan`.
+> **Снятие старого утверждения.** Раньше доменная карта говорила, что
+> snapshot «создаётся в `OrdersService.start()`» — это устаревшая
+> формулировка. В реальности у заказа сейчас **четыре** независимых
+> snapshot-сущности, и каждая фиксируется/синхронизируется в
+> нескольких точках жизненного цикла, не только в `start`. Текущее
+> поведение задокументировано в `docs/order-flow.md §4` и
+> `OrdersService.{create,update,startCalculation,start,recalculateOperationPlan}`.
 
-На **Шаге 7** заполнены `qtyDefect` / `qtyDefectTotal` — `Σ Passport.qtyDefect`
-по тем же живым паспортам. Денормализованные счётчики обновляет
-`QcService.recordDefect()` в одной транзакции с записью `PassportDefect`
-(см. §5.3 и `flows.md §F5`).
+| Snapshot                              | Источник                          | Где впервые фиксируется / пересинхронизируется |
+| ------------------------------------- | --------------------------------- | --------------------------------------------- |
+| `OrderRouteStep[]`                    | `RouteTemplate.steps[]` через `RoutesService.getActiveStepsForSnapshot` | `OrdersService.create` (если есть `routeTemplateId`); `update` в DRAFT при смене items/route/pattern; `recalculateOperationPlan`; `startCalculation`; defensive в `start` (только если `count === 0`). См. `docs/order-flow.md §4.1`. |
+| `OrderMaterialRequirement[]`          | `TechCardMaterialLine[]` через `TechCardsService.getLinesForSnapshot` + `Order.color` | `OrdersService.create` (если есть `techCardId`); `update` в DRAFT при смене items/techCard и в DRAFT/CALCULATION/CALCULATION_DONE при смене `Order.color`; `startCalculation` (`rebuildMaterialRequirementsSnapshot`); defensive в `start`. См. `docs/order-flow.md §4.2`. |
+| `OrderOutsourceRequirement[]`         | `TechCardOutsourceLine[]`         | Только в `start()` (defensive `count === 0`). Точечно правится только `executionStatus` через action-эндпоинт. |
+| `Order.patternNameSnapshot/...`       | `PatternItem` (имя/артикул/превью) | Первый из `startCalculation` или `start`, при `!Order.patternNameSnapshot`. На повторных запусках НЕ перезаписывается. |
+| `Order.operationCostPlanRub/...`      | `OrderOperationPlanService.calculateForOrder` | `create`; `update` в DRAFT при смене items/route/pattern; `recalculateOperationPlan`; `startCalculation`. После `start` immutable. |
+| `Order.costEstimateTotalRub/...`      | Активный `OrderCostEstimate(status=COMPLETED)` | `completeCalculation`. На `reopenCalculation` обнуляется в `null`; на `cancel` сохраняется. |
 
-На **Шаге 8** заполнен `qtyFinished` / `qtyFinishedTotal` — `Σ Passport.qtyGood`
-по паспортам со `status = PACKED`. Источник истины — денормализованные
-`Passport.status` и `Passport.qtyGood`, которые `PackingService.addPassport()`
-обновляет в одной транзакции с созданием `BoxItem` и `PassportEvent(PACKED)`
-(см. `flows.md §F7`, ADR-0011).
+Во время `start()` snapshot-ы материалов и outsource-строк работают
+**только как defensive fallback** для legacy-заказов, у которых ещё
+не материализован snapshot до этого перехода. Основной путь —
+синхронизация в `startCalculation` и предыдущих переходах.
 
-Промежуточные показатели (`qtyInSewing`, `qtyQc`, `qtyWto`, `qtyPacking`)
-пока остаются `0` — раздельный учёт «по этапам» появится после построения
-event-проекции/витрины (Шаг 10).
+### 1.4 `OrderApplication` — нанесения заказа
 
----
+Источник: `prisma/schema.prisma::OrderApplication`,
+`apps/api/src/modules/order-applications/*`,
+`docs/api.md §14`.
 
-## 5c. Оборудование и его разрешённые операции
+Свободный список нанесений на изделие или крой (шелкография / DTF /
+вышивка / термотрансфер / сублимация). Поля: `type` (свободная
+строка), `stage: 'CUT_PARTS' | 'FINISHED_ITEM'`, `placement?`,
+`widthMm?`, `heightMm?`, `colorsCount?`, `quantity?`, `unit`,
+`colorText?`, `description?`, `comment?`, `fileUrl?`, `status:
+'PLANNED' | 'SENT' | 'DONE' | 'CANCELLED'` (свободная строка,
+валидируется Zod).
 
-С MVP «equipment-config» (см. [ADR-0017](./adr/0017-equipment-allowed-operations.md))
-у каждой единицы `Equipment` есть конфигурируемый набор разрешённых
-операций — это явная M2M-связь `EquipmentOperation`:
+Ручка `PUT /api/orders/:id/applications` — full-replace. Разрешено
+**только в `DRAFT`** (общий guard `ORDER_LOCKED`).
+
+`CutReadinessService` использует `OrderApplication(stage='CUT_PARTS')`
+как блокер: если поля нанесения не заполнены
+(`isOrderApplicationDataFilled`), строка попадает в `blockers`
+готовности к крою (см. `docs/order-flow.md §9.1`).
+
+### 1.5 `OrderCostEstimate` (себестоимость)
+
+Источник: `prisma/schema.prisma::OrderCostEstimate` /
+`OrderCostEstimateLine`,
+`apps/api/src/modules/orders/order-cost-estimates.service.ts`,
+`docs/order-flow.md §6`.
+
+Документ «Себестоимость заказа» — снимок цен/количеств на момент
+завершения расчёта. Один заказ может иметь много расчётов
+(`@@unique([orderId, version])`); активный — `status = COMPLETED`.
+
+Lifecycle:
+
+- `completeCalculation` (`CALCULATION → CALCULATION_DONE`) — создаёт
+  COMPLETED-расчёт, копирует строки из `WorkshopNeed[]`, выставляет
+  snapshot-поля `Order.costEstimate*`. Audit:
+  `ORDER_COST_ESTIMATE_CREATED` + `ORDER_CALCULATION_COMPLETED`.
+- `reopenCalculation` (`CALCULATION_DONE → CALCULATION`) — переводит
+  активный расчёт в `REVOKED`, обнуляет snapshot-поля заказа в
+  `null`. `WorkshopNeed`/`PurchaseOrder`/`PurchaseReceipt` НЕ
+  трогаются. Audit: `ORDER_CALCULATION_REOPENED`. **Из
+  `IN_PRODUCTION` reopen запрещён** (production data зависит от
+  утверждённой себестоимости).
+
+Все цены копируются «как есть» (`supplierNameSnapshot`,
+`purchaseItemNameSnapshot`, `usdRateRub`) — расчёт не должен «плыть»
+вслед за поздним переименованием.
+
+### 1.6 `OrderMaterialArrivalOverride` — override готовности к крою
+
+Источник: `prisma/schema.prisma::OrderMaterialArrivalOverride`,
+`apps/api/src/modules/order-material-arrivals/*`,
+`apps/api/src/modules/cut-readiness/cut-readiness.service.ts`,
+`docs/erd.md §3.8`, `docs/order-flow.md §9.2`.
+
+Ручная override-кнопка «Материал поступил» в карточке заказа. Это
+**не** складская операция:
+
+- НЕ создаёт `PurchaseReceipt` / `PurchaseReceiptLine`,
+- НЕ меняет `CellContent` / складские остатки,
+- НЕ двигает `WorkshopNeed.status`,
+- НЕ создаёт `Passport` / `OperationEntry` / `SalaryEntry`.
+
+Только запись «менеджер сказал — крой можно начинать» + audit-log
+(`ORDER_MATERIAL_ARRIVAL_OVERRIDE_CREATED` /
+`ORDER_MATERIAL_ARRIVAL_OVERRIDE_REVOKED`). `CutReadinessService`
+читает ACTIVE-overrides и добавляет их `qty` к `placedQty`.
+
+### 1.7 `CutReleasePolicy` — лимит выдачи кроя
+
+Источник: `prisma/schema.prisma::CutReleasePolicy`,
+`apps/api/src/modules/cut-release-policy/*`,
+`docs/erd.md §3.7`, `docs/order-flow.md §10.1`.
+
+Управленческое ограничение «нельзя выдать больше N штук кроя данного
+цвета/размера». На MVP единовременно активна **максимум одна**
+политика (enforcement в `CutReleasePolicyService.create`). Применяется
+в `PassportsService.issueToEmployee` для первой операции маршрута и
+операций категории `CUTTING` (см. §7.5). Само движение паспорта по
+маршруту (`scan` / `complete-operation`) политикой **не**
+блокируется.
+
+Audit-events: `CUT_RELEASE_POLICY_CREATED` / `_UPDATED` / `_DISABLED`,
+а также `CUT_RELEASE_POLICY_CONSUMED` в транзакции
+`issueToEmployee` (`docs/events.md §3.3`).
+
+### 1.8 `CuttingClosureRequest` — закрытие раскроя по размеру
+
+Источник: `prisma/schema.prisma::CuttingClosureRequest`,
+`apps/api/src/modules/cutting-closure/*`, ADR-0018,
+`docs/order-flow.md §10.2`.
+
+Заявка на тройку `(orderId, productId, sizeId)`:
 
 ```
-Equipment 1 ──< EquipmentOperation >── 1 Operation
+REQUESTED → APPROVED      // выпуск паспортов запрещён
+REQUESTED → REJECTED      // выпуск возможен, заявка закрыта
 ```
 
-Поля `EquipmentOperation`:
-
-- `equipmentId`, `operationId` — пара уникальна
-  (`@@unique([equipmentId, operationId])`);
-- `sortOrder` — порядок отображения операции в списке выбора на /work
-  (меньше — выше);
-- `isActive` — мягкое отключение без удаления связи (на /work не
-  показывается);
-- `createdAt` / `updatedAt` — для аудита.
-
-**Где используется:**
-
-- `GET /api/shifts/meta` отдаёт каждой единице оборудования массив
-  `allowedOperationIds` (отсортированный по `sortOrder`, неактивные
-  и связи с неактивными `Operation` отфильтрованы) — это источник
-  истины для seamstress flow на `/work`.
-- `POST /api/equipment` (роли `ADMIN`, `SHOP_MANAGER`) создаёт новую
-  единицу оборудования. `name` обязателен, `code` опционален (slug
-  автогенерируется из имени), `displayNumber` и `operationIds`
-  опциональны. `qrCode` каноничный `equipment:{id}` ставится
-  автоматически (ADR-0008, scan flow на /work совместим).
-- `PATCH /api/equipment/:id` (роли `ADMIN`, `SHOP_MANAGER`)
-  переименовывает оборудование (`name`) и/или меняет ручной номер
-  (`displayNumber`). `code`, `qrCode`, `active` через эту ручку
-  не меняются — printer-bindings и напечатанные QR-этикетки
-  переживают переименование.
-- `PATCH /api/equipment/:id/operations` (роли `ADMIN`, `SHOP_MANAGER`)
-  полностью заменяет набор разрешённых операций.
-- UI настройки — `/admin/equipment` (список + форма создания) и
-  `/admin/equipment/[id]` (отдельные секции «Название», «Номер»,
-  «Разрешённые операции»).
-
-**Что НЕ делает эта связь (намеренно):**
-
-- не защищает `POST /api/shifts/start` — на сервере сейчас остаётся
-  старая валидация по существованию/активности `Equipment` и `Operation`,
-  без проверки allow-листа. Frontend `/work` показывает только
-  разрешённые операции, поэтому в нормальном flow выбора «не той»
-  операции произойти не может; жёсткая server-side проверка — за
-  пределами MVP «equipment-config»;
-- не используется в payroll или event-логике.
-
-**Seed:** `prisma/seed.ts` идемпотентно создаёт стартовый набор связей
-(`overlock-* → SEW_OVERLOCK_1, SEW_OVERLOCK_2`, `coverstitch-* →
-SEW_COVERSTITCH`, `binding-* → SEW_BINDING`, станции ОТК / ВТО /
-упаковки → соответствующие операции). Связи, добавленные вручную в
-админке, при повторном seed не удаляются.
-
-### `displayNumber` — ручной номер станка для физической маркировки
-
-У каждой единицы `Equipment` есть опциональное поле `displayNumber`
-(`text NULL`). Это **отображаемый порядковый номер**, который
-сотрудник видит на наклейке станка — не путать с серийным номером
-производителя и не равно `Equipment.code` (тот тех. идентификатор).
-
-- Заполняется руками в `/admin/equipment/[id]` (роли `ADMIN`,
-  `SHOP_MANAGER`).
-- Печатается крупно на QR-этикетке `GET /api/equipment/:id/print` —
-  главный визуальный приоритет, чтобы швея/начальник цеха
-  мгновенно различали два соседних оверлока (см. ADR-0017 §«future
-  work» и `docs/screens.md §10a`).
-- Глобальной уникальности нет: «Оверлок №1» и «Распошив №1» —
-  допустимая нормальная ситуация. Уникальность валидируется
-  визуально, по типу станка.
-- Стартовый seed проставляет `displayNumber` для дефолтного
-  оборудования (overlock-01 → «1», overlock-02 → «2», и т. д.).
-  При повторном seed уже заданный вручную номер **не
-  перезаписывается** — переживает re-seed.
-
----
-
-## 6. План/факт
-
-План — это `OrderItem.qtyPlan`. **Не меняется.**
-
-Факты агрегируются из паспортов:
-
-```
-qty_cut_fact      = Σ passport.qtyCut
-qty_finished_fact = Σ passport.qtyGood WHERE status = PACKED
-qty_defect        = Σ passport.qtyDefect
-delta             = qty_cut_fact − qty_plan  // может быть отрицательной
-```
-
-Группировка: по `(orderId, productId, sizeId)` или по `(sizeId)` для дашборда.
-
-> «План иммутабелен» (ADR-0006) означает: если по строке накроили
-> меньше плана и больше не будут — план **не уменьшается**. Это
-> явный недокрой, который закрывается через заявку
-> `CuttingClosureRequest` (см. §15 и [ADR-0018](./adr/0018-cutting-closure-request.md)),
-> а не правкой `qtyPlan`.
-
----
-
-## 7. Ячейки (упрощённо)
-
-- Ячейка имеет `code` и `qrCode`.
-- **Нет** статуса «занято/свободно».
-- **Нет** истории размещения.
-- Есть только срез `CellContent` (уникальный по `(cellId, sizeId)`):
-  `sizeId → quantity`.
-
-Операции:
-
-- **Разместить крой**: скан паспорта + скан ячейки → `quantity += passport.qtyCut`
-  для `(cell, passport.sizeId)`.
-- **Забрать крой**: скан ячейки + выбор размера/кол-ва → `quantity -= N`
-  (не уходим ниже 0).
-
----
-
-## 8. Коробки
-
-Реализовано на **Шаге 8 MVP** (модуль `apps/api/src/modules/packing`,
-экран `/packing`). Архитектурные решения — ADR-0011.
-
-- Коробка создаётся упаковщиком: `Box { number=B-YYYYMMDD-NNNN,
-  qrCode=box:{id}, totalQty=0, maxQty=100, closedAt=NULL }`.
-- На MVP коробка **однородна** по `productId/color/sizeId`
-  (см. ADR-0011 §3); проверка — на уровне сервиса (`BOX_HOMOGENEITY_VIOLATED`).
-- При сканировании паспорта в одной транзакции:
-  `BoxItem(boxId, passportId, qty=passport.qtyGood)`,
-  `Box.totalQty += qtyGood`, `Passport.status = PACKED`,
-  `PassportEvent(PACKED)` (см. `flows.md §F7`).
-- Капасити: `totalQty + qtyGood ≤ maxQty` (`BOX_CAPACITY_EXCEEDED`).
-- Один паспорт — одна коробка (UNIQUE `BoxItem(boxId, passportId)`
-  плюс `assertPassportActive` отсекает `PACKED` на других сервисах).
-- Закрытие коробки только проставляет `closedAt`; повторный выпуск
-  не нужен, т.к. паспорта уже выпущены при добавлении (см. ADR-0011 §2).
-- Этикетка — HTML по `GET /api/packing/boxes/:id/label` (PDF за рамками
-  MVP, см. ADR-0010).
-
-**Упаковка = выпуск изделия.** После `PACKED`:
-- паспорт не перемещается дальше: `issue/scan/place/qc/add-passport`
-  возвращают `PASSPORT_ALREADY_PACKED`;
-- агрегаты заказа сразу видят `qtyFinishedTotal += qtyGood`;
-- апрув всех `OperationEntry{passportId, status=PENDING_RELEASE} → APPROVED`
-  выполняется при **закрытии коробки** — `PackingService.close()`
-  итерируется по `BoxItem[]` и для каждого паспорта дёргает
-  `EarningsService.approvePendingForPassport(passportId)`. Это
-  «final completion event» цепочки, единый момент истины «коробка
-  закрыта = всем начислили» (см. `flows.md §F7`, ADR-0005, ADR-0011 §7).
-  Идемпотентно: повторный close отдаёт `BOX_CLOSED`, сам метод не
-  трогает уже `APPROVED`-строки.
-
----
-
-## 9. Зарплата
-
-### 9.1. Окладная (`SALARY`)
-
-- На Шаге 19 (post-ADR-0021) окладные роли получают **дневное
-  окладное начисление** `SalaryEntry` от факта смены — см. §9a.
-- Месячный payroll/учёт часов/half-day/удержания за брак для
-  окладных ролей — за рамками MVP (см. ограничения ниже и в
-  `flows.md §F9`).
-- Историческое `Employee.salaryBase` (месячная ставка) **на MVP не
-  читается** runtime-логикой — оставлено в схеме как legacy-поле
-  для будущего месячного payroll. Источник истины для оплаты за
-  смену — `Employee.salaryPerShift` (см. §9a).
-- Роли по умолчанию: `CUTTER_ASSISTANT`, `QC`, `IRONING`, `PACKING`
-  — `paymentType = SALARY`. `compensationType` (`PIECEWORK` /
-  `SALARY` / `MIXED`) выставляется отдельно через
-  `/admin/employees/[id]` — см. `screens.md §10d`.
-
-### 9.2. Сдельная (`PIECEWORK`) — Шаг 9 MVP
-
-Запись `OperationEntry { passportId, employeeId, operationId, qty,
-ratePerUnit, amount, status, approvalMode, sourceEventType,
-sourceEventId?, createdAt, approvedAt? }`. См. `erd.md §2.13` и
-`schema.prisma`.
-
-- `amount = qty * ratePerUnit`, округлено до двух знаков
-  (`Decimal(12,2)`). На сервере используется `roundMoney` —
-  `EarningsService`.
-- `qty` — `passport.qtyCut` (и для раскроя, и для пошива). Брак
-  не вычитается из ранее созданных начислений (см. ADR-0012 §3).
-- `ratePerUnit` берётся через единый helper
-  `OperationsService.resolveRate(operationId, sizeId, tx?)` (Шаг 18,
-  [ADR-0020](./adr/0020-operation-pricing-model.md)):
-  - `Operation.pricingMode = FIXED` → `Operation.fixedRate`;
-  - `Operation.pricingMode = BY_SIZE` →
-    `OperationRateBySize.rate` для пары `(operationId, sizeId)`;
-    отсутствие — `OPERATION_RATE_MISSING` (422), транзакция падает;
-  - `Operation.pricingMode = SALARY_ONLY` → `null`,
-    `OperationEntry` **не создаётся** (silent skip).
-
-  Раньше расценка читалась из `PieceRate` по
-  `(operationId, productId?, sizeId?, validFrom..validTo)`. Эта
-  таблица сохранена в БД как исторические данные, но runtime больше
-  не читает её — источник истины перенесён на
-  `Operation`/`OperationRateBySize`. Миграция Шага 18
-  бэкфилит существующие ставки.
-
-**Какие операции попадают в `OperationEntry`.**
-
-«Оплатная ли операция» теперь = `Operation.pricingMode ≠ SALARY_ONLY`.
-Никакой отдельной константы со списком кодов в runtime нет. Конкретно
-для MVP-набора (см. §4):
-
-| Код              | `pricingMode` (seed) | Кто получает                | Когда создаётся                | Статус             |
-| ---------------- | -------------------- | --------------------------- | ------------------------------ | ------------------ |
-| `CUT_CUT`        | `FIXED` (10/шт)      | Раскройщик (`Employee.paymentType=PIECEWORK`) | В транзакции `PassportsService.create` после `PassportEvent(CREATED)` | `APPROVED`, `IMMEDIATE`, `PASSPORT_CREATED` |
-| `SEW_OVERLOCK_1` | `BY_SIZE`            | Предыдущий исполнитель пошива (`PIECEWORK`)  | В транзакции `PassportsService.scanOnOperation` после `PassportEvent(OPERATION_SCAN)` | `PENDING_RELEASE`, `AFTER_RELEASE`, `OPERATION_TRANSITION` |
-| `SEW_OVERLOCK_2` | `BY_SIZE`            | — // —                      | — // —                         | — // —             |
-
-Если менеджер через `/admin/operations` (см. §4a, `screens.md §10c`)
-переведёт ещё одну операцию в `FIXED` или `BY_SIZE`, она автоматически
-попадёт в начисления — без редеплоя backend. Окладные сотрудники
-по-прежнему молча пропускаются (`Employee.paymentType` ≠ `PIECEWORK`
-→ skip), даже если их посадить на сдельную операцию.
-
-### 9.3. Approval mode (`OperationEntry.approvalMode`, см. ADR-0005)
-
-| Mode             | Кто                  | Когда `APPROVED`                  | Зачем                                                      |
-| ---------------- | -------------------- | --------------------------------- | ---------------------------------------------------------- |
-| `IMMEDIATE`      | Раскройщик (`CUT_CUT`) | В момент создания (`approvedAt = createdAt`) | Раскройщик отвечает за факт кроя; качество шитья — не его зона. |
-| `AFTER_RELEASE`  | Пошив                | В транзакции **закрытия коробки** (`PackingService.close` → `EarningsService.approvePendingForPassport` для каждого `BoxItem`) | Защищает от выплат за партии, которые до выпуска так и не дошли. См. ADR-0005, ADR-0011 §7. |
-
-`REVERSED` заложен на будущий flow возврата паспорта в производство;
-на MVP не выставляется.
-
-### 9.4. Источник и идемпотентность (`sourceEventType`, см. ADR-0012)
-
-`OperationEntry.sourceEventType` дискриминирует, *почему* начисление
-возникло:
-
-- `PASSPORT_CREATED` — раскройщик, в `PassportsService.create`;
-- `OPERATION_TRANSITION` — пошив, в `PassportsService.scanOnOperation`
-  для предыдущей операции/исполнителя.
-
-Поверх этого работает уникальный индекс
-`@@unique(passportId, operationId, employeeId, sourceEventType)`
-(`OperationEntry_idem`). Любая повторная попытка создать такое же
-начисление (повторный скан, ретрай транзакции) ловится сервисом как
-`P2002` и трактуется как no-op (без бизнес-ошибки). См. ADR-0012.
-
-`sourceEventId` (опц.) — ссылка на конкретный `PassportEvent.id`,
-который послужил триггером (для пошива). У раскройщика мы не
-заполняем — само событие `CREATED` всегда одно на паспорт, и
-`(passportId, sourceEventType=PASSPORT_CREATED)` уже однозначен.
-
-### 9.5. Что выпустили API/UI (Шаг 9)
-
-- API: `GET /api/earnings`, `GET /api/earnings/summary`,
-  `GET /api/passports/:id/earnings` — см. `docs/api.md §10`.
-- UI: `/earnings` (список + сводка + фильтры) и блок «Начисления» в
-  `/passports/[id]` — см. `docs/screens.md §12`.
-- Бизнес-ошибки: `PIECE_RATE_NOT_FOUND` (422) и зарезервированный
-  `EARNING_NOT_FOUND` (404) — см. `docs/api.md §13`.
-- **RBAC видимости.** `SHOP_MANAGER` и `ADMIN` видят все начисления
-  всех сотрудников; все остальные роли получают ровно свой
-  `employeeId` и только статус `APPROVED`. Принудительное сужение
-  делает `EarningsService` на чтении — backend остаётся источником
-  истины, web-клиент только адаптирует UI (см. `docs/api.md §10`,
-  ADR-0014). Покрыто `tests/integration/earnings-rbac.test.ts`.
-
-### 9.6. Скоуп Шага 10 MVP — экран «Цех»
-
-**Не доменная сущность, а проекция.** Модуль `apps/api/src/modules/shopfloor`
-вычисляет матрицу `размер × этап → qty` поверх уже существующих
-агрегатов (заказы, паспорта, ОТК, упаковка). Никаких новых таблиц,
-событий или мутаций транзакций. Все правила маппинга — в чистой
-функции `projectShopfloor()` и зафиксированы [ADR-0013](./adr/0013-shopfloor-stage-mapping.md).
-
-Зачем выделили в отдельный модуль:
-
-- начальник цеха не должен листать список паспортов как основной
-  сценарий — ему нужно видеть **где сейчас лежит объём**;
-- сводка должна обновляться визуально (polling + flash-подсветка
-  ячеек), не нагружая существующие транзакции;
-- маппинг этапов — компромисс на текущей доменной модели и должен
-  быть явно описан, а не «зашит» в дашборд заказа.
-
-API/UI:
-
-- `GET /api/shopfloor/state[?orderId=…]`, `GET /api/shopfloor/orders` —
-  см. `docs/api.md §11`.
-- `GET /api/shopfloor/equipment` — статусы оборудования (ONLINE/WARNING/OFFLINE +
-  `kind` для иконки) для production board.
-- UI: `/shopfloor` (board + summary strip + selector + flash-анимация) —
-  см. `docs/screens.md §9`.
-- Polling: 3 сек, [ADR-0007](./adr/0007-polling-for-realtime.md).
-
-#### 9.6.1. Большой монитор `/shopfloor/display` (Шаг 10b)
-
-Light-theme дашборд под ТВ/моноблок в самом цеху. Read-only,
-изолированная light-тема, один агрегированный endpoint
-`GET /api/shopfloor/display` (см. `docs/api.md §11` и
-`docs/screens.md §9a`). Доменно — это та же проекция «живых
-паспортов в стадиях», что и `/shopfloor`, плюс два дополнительных
-измерения:
-
-- **цвет** — группировка матрицы по `Passport.color` с
-  нормализацией (`Чёрный` ≡ `чёрный` ≡ `black`); правила в
-  `projectShopfloorDisplay()` + `SHOPFLOOR_DISPLAY_KNOWN_COLORS`;
-- **категория оборудования** — `ShopfloorEquipmentKind`
-  (`SEWING/CUTTING/QC/IRONING/PACKING/OTHER`), выводится backend'ом
-  из `OperationCategory` разрешённых на станке операций; UI
-  использует только для выбора иконки в плитке (см. `pickEquipmentKind`).
-
-Никаких новых таблиц или событий не вводится — это всё ещё
-полностью read-only проекция поверх существующего домена.
-Менеджерский `/shopfloor` остаётся на старом контракте — цветовое
-измерение нужно только большому монитору.
-
----
-
-## 9a. Дневной оклад от факта смены (`SalaryEntry`, ADR-0021)
-
-Параллельный сдельщине контур: «была смена в день → платим ставку за
-день». Источник истины — backend, модуль `apps/api/src/modules/salary`.
-Бизнес-обоснование и альтернативы — [ADR-0021](./adr/0021-shift-day-salary.md).
-
-### 9a.1. Расширение `Employee`
-
-| Поле               | Тип                    | Семантика                                                  |
-| ------------------ | ---------------------- | ---------------------------------------------------------- |
-| `compensationType` | `CompensationType` enum| `PIECEWORK` / `SALARY` / `MIXED`. Default `PIECEWORK`.     |
-| `salaryPerShift`   | `Decimal(12,2)?`       | Ставка за отработанный день. Обязателен для `SALARY`/`MIXED`. |
-
-Существующее `paymentType` оставлено как источник истины для
-сдельного контура (`OperationEntry`) — оно никак **не** влияет на
-`SalaryEntry`. `compensationType` — независимая управленческая ось.
-
-| `compensationType` | Получает `SalaryEntry`? | Получает `OperationEntry`?                          |
-| ------------------ | ----------------------- | --------------------------------------------------- |
-| `PIECEWORK`        | нет                     | да — по обычным правилам ADR-0005/0012/0020         |
-| `SALARY`           | да (за каждый день со сменой) | нет — ОТК/ВТО/упаковка/помощник раскройщика  |
-| `MIXED`            | да                      | да — мастер-помощник, который иногда сам встаёт на оверлок |
-
-Инвариант сервиса (`EmployeesService.update`):
-`compensationType ∈ { SALARY, MIXED }` ⇒ `salaryPerShift > 0`. Ошибка
-`EMPLOYEE_SALARY_RATE_REQUIRED` (422).
-
-### 9a.2. Сущность `SalaryEntry`
-
-```
-SalaryEntry {
-  id, employeeId,
-  date           Postgres DATE,        // одна запись в день на сотрудника
-  amount         Decimal(12,2),
-  source         SalaryEntrySource     // SHIFT_DAY | MANUAL
-                                       // (на MVP пишем только SHIFT_DAY)
-  editedManually Boolean default false,
-  managerComment Text?,
-  editedByEmployeeId String?,          // FK→Employee, кто правил
-  createdAt, updatedAt
-}
-
-UNIQUE (employeeId, date, source)      // ← инвариант «один день — одна запись»
-```
-
-«Один день — одна окладная запись на сотрудника для одного
-`source`» — гарантировано составным `@@unique`. Параллельные
-`start shift` встают на этом индексе и `P2002` ловится сервисом как
-no-op (см. `apps/api/src/modules/salary/salary.service.ts`).
-
-`amount` хранится плоским значением (а не `quantity * rate`):
-на MVP ставка плоская «оклад за смену». Half-day/коэффициенты/часы
-— расширение схемы потом, без миграции бизнес-смысла.
-
-### 9a.3. Auto-sync (`SalaryService.syncDailySalary`)
-
-Источник истины «день отработан» — наличие хотя бы одной
-`ShiftSession` с `startedAt::date == date`. Длительность смены и
-факт её закрытия не учитываются: открытая смена тоже считается
-рабочим днём (защита от «забыл нажать стоп»).
-
-Алгоритм:
-
-1. Загружаем `Employee.compensationType`/`salaryPerShift`. Если тип
-   `PIECEWORK` или сотрудник неактивен — выходим.
-2. Считаем `ShiftSession` за этот день. Если 0 — выходим.
-3. Если `salaryPerShift = null` — выходим (аномалия, но валить
-   `start/stop shift` нельзя).
-4. `upsert` по `(employeeId, date, source = SHIFT_DAY)`:
-   - запись существует и `editedManually = true` → ничего не
-     трогаем (менеджер сказал «1500 за полсмены», автоматика не
-     откатывает);
-   - запись существует и `editedManually = false` → обновляем
-     `amount = salaryPerShift` (ставка могла поменяться);
-   - записи нет → создаём с `amount = salaryPerShift`,
-     `source = SHIFT_DAY`.
-
-**Точки вызова.** `ShiftsService.start` и `ShiftsService.stop`,
-обёрнуты `safeSyncSalary`-логером: ошибка sync-а **не** ронит сам
-`start/stop shift` (бизнес-приоритет — продолжить работу,
-синхронизация догонит на следующем событии).
-
-### 9a.4. Ручная корректировка
-
-`PATCH /api/salary/:id` (роли `SHOP_MANAGER`/`ADMIN`, см.
-`api.md §10a`):
-
-- `amount` (опц.) — новая сумма (≥ 0, до `Decimal(12,2)`);
-- `managerComment` (опц., `null` = очистить) — короткий
-  комментарий («переработка», «полсмены», «ушёл раньше»);
-- `reset = true` — снять ручную правку, вернуть запись под
-  `syncDailySalary` и выставить `amount = employee.salaryPerShift`.
-  Если ставка не задана — `SALARY_RATE_MISSING` (422).
-
-Любая правка ставит `editedManually = true` и
-`editedByEmployeeId = viewer.employeeId`. `employeeId`/`date`/`source`
-в схему `UpdateSalaryEntrySchema` физически не приходят — иначе
-ручная правка могла бы перенести оплату на чужой день/чужого человека
-и сломать инвариант «один день — одна запись».
-
-### 9a.5. RBAC
-
-| Endpoint                                | Роли с правом                           |
-| --------------------------------------- | --------------------------------------- |
-| `GET /api/salary`, `GET /api/salary/summary` | Любая авторизованная (RBAC-скоуп в сервисе: не-менеджер видит только свои) |
-| `PATCH /api/salary/:id`                 | `SHOP_MANAGER`, `ADMIN`                 |
-| `GET /api/employees`, `GET /api/employees/:id`, `PATCH /api/employees/:id` | `SHOP_MANAGER`, `ADMIN` |
-
-Список менеджерских ролей — `SALARY_MANAGER_ROLES`
-(`apps/api/src/modules/salary/salary.constants.ts`), зеркало
-`EARNINGS_MANAGER_ROLES`. Любые попытки обычного сотрудника
-передать чужой `employeeId` в query `/api/salary` молча
-отбрасываются в `applyViewerScope` — backend остаётся источником
-истины (тесты — `tests/integration/salary.test.ts`).
-
-### 9a.6. Что сознательно не делаем (scope)
-
-- расчёт часов, half-day, коэффициенты загрузки;
-- автозакрытие смены по таймауту неактивности;
-- месячный payroll по календарю/норме часов;
-- отпуска/больничные/командировки;
-- удержания за брак для окладных ролей;
-- интеграцию с 1С/ЗУП и экспорт в Excel;
-- историю изменений `amount` (есть только последний `editedBy`).
-
-`SalaryEntrySource = MANUAL` зарезервирован под кейс «оплатить
-день, в который смены физически не было» — на MVP не пишется, но
-контракт уже знает значение.
-
----
-
-## 10. ОТК
-
-- ОТК видит список паспортов **в работе** (`status = IN_PROGRESS`),
-  а не только тех, что физически на операции `QC`. Это компромисс
-  Шага 7: пока не реализован полноценный маршрут операций, ОТК
-  способна проверить любой «живой» паспорт. Подробности и
-  обоснование — в §5.3 и `flows.md §F5`.
-- Фиксирует брак: `qtyDefect += N`, `qtyGood = qtyCut − qtyDefect`.
-- Событие `DEFECT_RECORDED` с `qty = N`,
-  `payload.defectTypeCode/Name`, `payload.comment`.
-- Может пропустить паспорт дальше на ВТО/упаковку — стандартное
-  перемещение, отдельного «ОТК-перехода» на этом шаге нет.
-- Каждый акт ОТК = одна запись `PassportDefect` (см. §5.3).
-  Один паспорт может иметь несколько таких записей, агрегаты
-  заказа их сложат.
-
-### Виды брака (seed Шага 7)
-
-| Код             | UI-название      | sortOrder |
-| --------------- | ---------------- | --------- |
-| `STAIN`         | Пятно            | 10        |
-| `HOLE`          | Дырка            | 20        |
-| `CROOKED_SEAM`  | Неровный шов     | 30        |
-| `SKEW`          | Перекос          | 40        |
-| `INCOMPLETE`    | Недокомплект     | 50        |
-| `OTHER`         | Прочее           | 100       |
-
----
-
-## 11. Сотрудник и смена
-
-При входе:
-
-1. Логин / PIN (Шаг 7).
-2. Сканирование оборудования (QR) → привязка `equipmentId`.
-3. Выбор операции из allow-листа этого `Equipment` (см. §5c —
-   `EquipmentOperation`, ADR-0017) → `operationId`.
-4. Создаётся `ShiftSession { id, employeeId, equipmentId, operationId,
-   startedAt, endedAt? }`.
-
-**Шаг 6 MVP:** auth ещё нет — UI `/work` хранит выбранного демо-
-сотрудника в cookie `demo-employee-id`. `POST /api/shifts/start`
-принимает `employeeId` явно. Правила:
-
-- у сотрудника не более одной активной смены
-  (`endedAt IS NULL`) — проверяется в `ShiftsService`;
-- смена обязательна для `POST /api/passports/:id/issue|scan`; без
-  активной смены — 409 `SHIFT_SESSION_REQUIRED`;
-- `active = (endedAt IS NULL)` — логически derivable, храним только
-  `startedAt`/`endedAt` (без дополнительной булевой колонки).
-
-Все последующие действия выполняются в контексте этой сессии.
-Завершение — по кнопке «Закончить смену» (`POST /api/shifts/stop`)
-или по таймауту неактивности (будущий шаг).
-
-**Side-effect: окладная синхронизация.** Со Шага 19 (post-ADR-0021)
-`ShiftsService.start` и `ShiftsService.stop` дополнительно дёргают
-`SalaryService.syncDailySalary(employeeId, date)`. Для сотрудников с
-`compensationType ∈ { SALARY, MIXED }` это создаёт/обновляет одну
-`SalaryEntry` за день. Вызов обёрнут `safeSyncSalary`-логером:
-ошибка sync-а **не** ронит сам `start/stop shift`. Подробности —
-§9a и [ADR-0021](./adr/0021-shift-day-salary.md).
-
----
-
-## 12. Идентичность и QR-коды
-
-Все QR-коды имеют формат `{kind}:{id}`:
-
-- `passport:{passportId}`
-- `cell:{cellId}`
-- `equipment:{equipmentId}`
-- `box:{boxId}`
-
-Сканер в приложении парсит префикс и направляет в нужный хендлер.
-
----
-
-## 13. Инварианты, защищаемые БД/транзакциями
-
-- `OrderItem(orderId, productId, sizeId)` уникален (DB-level, MVP 1.1).
-- `CellContent(cellId, sizeId)` уникален; `quantity >= 0`.
-- `BoxItem(boxId, passportId)` уникален; вдобавок `BoxItem.passportId`
-  глобально-уникален (MVP 1.1, ADR-0015) — паспорт физически не может
-  оказаться в двух коробках одновременно.
-- `Passport.number`, `Passport.qrCode`, `Box.number`, `Box.qrCode`,
-  `Equipment.code`, `Equipment.qrCode`, `Cell.code`, `Cell.qrCode` —
-  все глобально-уникальные (DB-level).
-- На сотрудника может быть открыта **не более одной** активной смены —
-  partial unique index `shift_session_active_employee_uniq` на
-  `ShiftSession(employeeId) WHERE endedAt IS NULL` (MVP 1.1, ADR-0015).
-  Создаётся через raw SQL при старте API (`PrismaService.onModuleInit`),
-  поскольку Prisma пока не описывает partial-индексы декларативно.
-- `Passport.qtyGood = qtyCut - qtyDefect` (поддерживаем в коде, читаем из БД).
-  Поля `qtyDefect/qtyGood` денормализованы и обновляются в одной
-  транзакции с `PassportDefect`/`PassportEvent(DEFECT_RECORDED)` —
-  см. §5.3.
-- `PassportDefect.qty > 0`, и `Σ PassportDefect.qty per passport ≤ Passport.qtyCut`.
-  Защищается в `QcService.recordDefect()` бизнес-ошибкой
-  `DEFECT_EXCEEDS_REMAINING` (422).
-- Паспорт со `status = PACKED` не принимает новые `PassportEvent`, кроме
-  компенсационных (`CANCELLED` — на будущее). На Шаге 7 фиксация брака
-  разрешена только для `IN_PROGRESS`.
-- На пару `(orderId, productId, sizeId)` существует **не более одной**
-  активной (`status = REQUESTED`) и **не более одной** подтверждённой
-  (`status = APPROVED`) заявки `CuttingClosureRequest` — partial
-  unique indexes `cutting_closure_request_active_uniq` /
-  `_approved_uniq` (ADR-0015, ADR-0018). `REJECTED` копится без
-  ограничений.
-- На пару `(employeeId, date)` существует **не более одной**
-  окладной записи `SalaryEntry` для данного `source` — обычный
-  составной `@@unique(employeeId, date, source)` (ADR-0021, §9a).
-  Параллельные `start shift` ловятся `P2002` в
-  `SalaryService.syncDailySalary` и трактуются как no-op.
-- `Employee.compensationType ∈ { SALARY, MIXED }` ⇒
-  `Employee.salaryPerShift` обязателен и `> 0`. Защищается в
-  `EmployeesService.update` бизнес-ошибкой
-  `EMPLOYEE_SALARY_RATE_REQUIRED` (422).
-
----
-
-## 15. Закрытие раскроя по размеру (CuttingClosureRequest)
-
-Реализовано пост-Шагом 14, см. [ADR-0018](./adr/0018-cutting-closure-request.md).
-Доменная цель — явно зафиксировать «по этой размерной строке больше
-кроить не будут», не трогая иммутабельный `OrderItem.qtyPlan`.
-
-**Сущность.** `CuttingClosureRequest` живёт на тройке
-`(orderId, productId, sizeId)` со статусами:
-
-```
-REQUESTED → APPROVED      // мастер подтвердил, выпуск паспортов запрещён
-REQUESTED → REJECTED      // мастер отклонил, выпуск возможен, заявка закрыта
-```
-
-Поля метаданных: `reason?` (короткая причина от помощника),
-`requestedByEmployeeId` / `requestedAt`, `reviewedByEmployeeId?` /
-`reviewedAt?` / `reviewerNote?`. Полная схема — `erd.md §2.5b`.
-
-**Жизненный цикл.**
-
-1. `CUTTER_ASSISTANT` (или `SHOP_MANAGER` от его имени) подаёт заявку
-   через `POST /api/cutting-close-requests`. Backend проверяет, что
-   заказ в `IN_PRODUCTION` и строка существует; partial unique index
-   запрещает второй `REQUESTED` по той же тройке.
-2. `SHOP_MANAGER` / `ADMIN` подтверждает (`/approve`) или отклоняет
-   (`/reject`). На terminal-статусе повторное решение запрещено
-   (`CUTTING_CLOSURE_REQUEST_NOT_PENDING`, 409).
-3. После `APPROVED` `PassportsService.create` возвращает
-   `CUTTING_CLOSED` (HTTP 409) на любой попытке выпустить новый
-   паспорт по этой строке.
-4. После `REJECTED` помощник может подать новую заявку (например, если
-   потом ещё накроили и снова закрывают).
-
-**RBAC.**
-
-- Подача — `CUTTER_ASSISTANT` (основной флоу), `SHOP_MANAGER`, `ADMIN`.
-- Просмотр (`GET list/detail`, `GET /passports/:id/cutting-closure-request`) —
-  `CUTTER_ASSISTANT`, `SHOP_MANAGER`, `ADMIN`. Прочие роли в раздел не
-  ходят.
+Partial-unique индексы `cutting_closure_request_active_uniq` /
+`_approved_uniq` гарантируют ровно одну активную (`REQUESTED`) и
+максимум одну финальную (`APPROVED`) заявку (ADR-0015). После
+`APPROVED` `PassportsService.create` бросает 409 `CUTTING_CLOSED` на
+любой новый паспорт по этому размеру.
+
+RBAC:
+
+- Подача — `CUTTER_ASSISTANT`, `SHOP_MANAGER`, `ADMIN`.
 - Approve / reject — только `SHOP_MANAGER`, `ADMIN`.
 
-**Где видно в UI.**
-
-- `/passports/[id]` → блок «Закрытие раскроя» (план/факт/остаток,
-  статус, кнопки в зависимости от роли) — см. `screens.md §3`.
-- `/orders/[id]` → баннер «Закрытие раскроя по размерам» с активными
-  и подтверждёнными заявками.
-
-**Что заявка не делает.** Она не уменьшает `qtyPlan`, не закрывает
-сам заказ (статус `Order` мастер по-прежнему ведёт вручную), не
-возвращает уже выпущенные паспорта. Это «стоп на новый выпуск», а не
-изменение факта раскроя.
+UNKNOWN/TODO: переход `APPROVED → REJECTED` (отмена закрытия) — в
+коде не реализован; recover-сценарий пока не описан.
 
 ---
 
-## 16. Склады (Warehouse)
+<a id="2-routes-operations"></a>
 
-Реализовано пост-Шагом 14, см. [ADR-0019](./adr/0019-warehouses.md).
-Доменная цель — дать начальнику цеха управленческую группировку
-ячеек физического хранения, не трогая существующий flow «scan cell →
-place passport».
+## 2. Маршрут и операции
 
-**Сущность.** `Warehouse(id, name UNIQUE, code UNIQUE NULL, isActive,
-createdAt, updatedAt)`. Связь one-to-many: `Warehouse 1..N Cell` через
-nullable `Cell.warehouseId` (FK `ON DELETE SET NULL`). Полная схема —
-`erd.md §2.13a`.
+### 2.1 `Operation` — справочник операций
 
-**Зачем nullable.** Существующие ячейки и ячейки, под которые ещё нет
-описанного склада, остаются без `warehouseId`. Это:
+Источник: `prisma/schema.prisma::Operation`,
+`apps/api/src/modules/operations/*`, ADR-0020,
+`docs/erd.md §2.3`, `docs/api.md §6`.
 
-- не требует data-migration «придумать дефолтный склад»;
-- не ломает `POST /api/passports/:id/place` и
-  `POST /api/cells/by-code` — оба продолжают работать с любой ячейкой,
-  привязана она или нет;
-- честно отражает реальность пилотного цеха («есть тележки, которые
-  мы пока не описывали»).
+Поля:
 
-**Жизненный цикл.**
+- `code` (uniq), `name`, `category: OperationCategory`, `sortOrder`,
+  `active: Boolean`;
+- `pricingMode: PricingMode @default(SALARY_ONLY)` —
+  `FIXED | BY_SIZE | SALARY_ONLY`;
+- `fixedRate: Decimal(12,2)?` (для `FIXED`);
+- `timeNormMode: String @default("FIXED")` (`FIXED | BY_SIZE`,
+  свободная строка с Zod-валидацией),
+  `timeNormSec: Int?`;
+- `salaryPlanRubPerShift: Decimal(14,2)?`,
+  `salaryPlanShiftSeconds: Int? @default(28800)` — плановая
+  окладная стоимость для `OrderOperationPlanService` (только план,
+  не payroll).
 
-1. `SHOP_MANAGER` / `ADMIN` создаёт склад (`POST /api/warehouses`)
-   с понятным именем и опциональным коротким `code`. Имена и коды
-   уникальны, дубль возвращает `WAREHOUSE_NAME_TAKEN` /
-   `WAREHOUSE_CODE_TAKEN` (409).
-2. Менеджер привязывает существующую ячейку к складу:
-   `PATCH /api/cells/:id { warehouseId }`. Перепривязка между складами
-   разрешена явно (никаких блокировок «нельзя двигать ячейку с
-   паспортами» — складская группировка не влияет на flow `place`).
-3. Деактивация — `PATCH /api/warehouses/:id { isActive: false }`.
-   API на удаление склада не предоставляется — менеджер только
-   выключает. Если склад всё-таки удалить через БД, `ON DELETE
-   SET NULL` сохранит ячейки и обнулит ссылку (см. ADR-0019).
+Категории (`enum OperationCategory`):
+`CUTTING`, `SEWING`, `QC`, `IRONING`, `PACKING`.
 
-**Массовая печать этикеток** (`POST /api/warehouses/:id/print-cells`,
-см. `api.md §15`, `screens.md §10b`). Менеджер из карточки склада
-запускает «Печать всех ячеек»: backend создаёт `cellsCount × copies`
-PENDING-`PrintJob`-ов с `sourceType=CELL_LABEL`, по одному на каждую
-копию каждой **активной** ячейки склада. Очередь идёт через тот же
-`PrintJobsService.createBatch`, что и одиночная печать, и тот же
-агент рядом с принтером (см. §17 «Принтеры»). Деактивированные
-ячейки молча исключаются. Контракт payload-а — `GET /api/cells/:id/print`,
-жёсткий формат **38×58 мм горизонтально, QR слева + крупный
-номер справа, без любого иного текста** (стандартная термоэтикетка
-для маркировки полок; см. ADR-0008 для QR и `cell-print.ts` для
-шаблона).
+### 2.2 `PricingMode` — тариф операции
 
-**RBAC.**
+| Mode          | Источник ставки                                              | Поведение зарплаты |
+| ------------- | ------------------------------------------------------------ | ----------------- |
+| `FIXED`       | `Operation.fixedRate`                                        | Одна ставка за единицу независимо от размера. |
+| `BY_SIZE`     | `OperationRateBySize.rate` для пары `(operationId, sizeId)`  | Цена различается по размеру. Отсутствие ставки → 422 `OPERATION_RATE_MISSING`. |
+| `SALARY_ONLY` | —                                                            | Операция участвует в pipeline, но **не** порождает `OperationEntry` (silent skip в `EarningsService`). Дефолт для новых операций. |
 
-- Все ручки `/api/warehouses/*` и `PATCH /api/cells/:id` —
-  `SHOP_MANAGER` / `ADMIN`. Прочие роли получают `403 FORBIDDEN_ROLE`.
-- `GET /api/cells/:id/print` и `GET /api/cells/:id/qr` — `@Public()`,
-  как у passports/equipment (ADR-0010): принтер-станция работает без
-  сессии. QR-payload `cell:{id}` (ADR-0008) не меняется.
+Единый helper — `OperationsService.resolveRate(operationId, sizeId,
+tx?)`. Это **единственный** источник истины для earnings:
+`EarningsService.createImmediateForCutterMarketplace` /
+`createImmediateForCutterB2b` / `createPendingForPreviousOperation`
+ходят через него.
 
-**Где видно в UI.**
+`OperationRateBySize` — нормализованная таблица
+`(operationId, sizeId, rate)` UNIQUE, cascade от `Operation`.
 
-- `/admin/warehouses` — список складов, форма создания (см.
-  `screens.md §10b`).
-- `/admin/warehouses/[id]` — реквизиты склада, ячейки склада с
-  кнопкой «Печать QR» и primary-кнопкой «Печать всех ячеек»
-  (открывает модалку настройки массовой печати — выбор принтера,
-  размер этикетки 38×58, число копий, превью, см. `screens.md §10b`),
-  блок «Линии склада» и блок «Привязать ячейку».
-- Тайл «Склад» на главной и пункт в админ-нав-баре — только для
-  `ADMIN`/`SHOP_MANAGER`.
+`OperationTimeNormBySize` — параллельная таблица для плановой нормы
+времени (`timeNormMode = "BY_SIZE"`). **Payroll не использует** —
+только `OrderOperationPlanService` для snapshot-плана заказа
+(`docs/erd.md §3.6`).
 
-**Что склад не делает.** Он не влияет на размещение паспорта в
-ячейку, не вводит capacity/планирование, не моделирует
-зоны/секции/полки, не пишет audit log перемещений (только
-`Warehouse.updatedAt` + структурный лог `event=warehouse.create` /
-`event=cell.warehouse.assign`). Всё это сознательно за рамками MVP —
-см. ADR-0019 §5.
+`PieceRate` (legacy) — старая модель ставок остаётся в БД для
+аудита/rollback, но runtime больше не читает её
+(`docs/erd.md §2.3`). Источник истины миграции —
+`20260420100000_operation_pricing_model`.
+
+### 2.3 `RouteTemplate` / `RouteTemplateStep`
+
+Источник: `prisma/schema.prisma::RouteTemplate`,
+`apps/api/src/modules/routes/*`, `docs/api.md §7`.
+
+«Шаблон маршрута производства» — упорядоченный список операций.
+`RouteTemplateStep` имеет уникальные `(templateId, index)` и
+`(templateId, operationId)`: операция в шаблоне ровно один раз.
+`isOptional: Boolean` — поле есть в схеме, но в enforcement-е MVP не
+используется.
+
+### 2.4 `OrderRouteStep` — snapshot маршрута на заказе
+
+Источник: `prisma/schema.prisma::OrderRouteStep`,
+`OrdersService.syncOrderRouteStepsSnapshot`
+(`apps/api/src/modules/orders/orders.service.ts` ~785–838),
+`docs/order-flow.md §4.1`.
+
+Поля: `(orderId, index)` UNIQUE, `operationId` (`onDelete:
+RESTRICT` — нельзя случайно удалить операцию, на которую ссылается
+snapshot заказа), cascade от `Order`.
+
+`syncOrderRouteStepsSnapshot(orderId, tx)` — идемпотентный
+синхронизатор, делает atomic `deleteMany + createMany` только если
+состав/порядок шагов отличается от целевого. Точки вызова (`docs/order-flow.md §4.1`):
+
+- `OrdersService.create` (если есть `routeTemplateId`);
+- `OrdersService.update` в DRAFT при изменении items/route/pattern;
+- `OrdersService.recalculateOperationPlan`;
+- `OrdersService.startCalculation` (финальная sync перед
+  `CALCULATION`);
+- defensive в `start()` — только если `OrderRouteStep.count === 0`
+  (для legacy-заказов).
+
+После `start` snapshot **не пересинхронизируется** — гарантирует
+ADR-0006 + общий `ORDER_LOCKED`-guard.
+
+### 2.5 Soft-route MVP — поведение во время скана
+
+Источник: `apps/api/src/modules/passports/passports.service.ts`
+(`scanOnOperation`, `completeOperationByEmployee`),
+`docs/production-flow.md §7`.
+
+Никакого backend enforcement-а порядка маршрута:
+
+- На `POST /api/passports/:id/scan` НЕ проверяется «совпадает ли
+  операция с маршрутом». Если совпадает — обновляется
+  `Passport.currentRouteStepIndex`, если нет — индекс остаётся
+  прежним, scan всё равно проходит.
+- На `POST /api/passports/:id/complete-operation` запрещён только
+  **откат назад по маршруту** —
+  `PassportCompleteBackwardException` (409
+  `PASSPORT_COMPLETE_BACKWARD`) если `OrderRouteStep` с
+  завершаемой операцией стоит раньше `currentRouteStepIndex`.
+  Откат назад — прерогатива мастера через
+  `MasterActionsService.setRouteStep` (см. §13).
+
+UI `/work` подсвечивает несовпадение операции с маршрутом мягким
+warning, но не блокирует приём (`docs/production-flow.md §7.1`).
 
 ---
 
-## 17. Себестоимость выпуска (Production Cost)
+<a id="3-tech-cards"></a>
 
-Управленческий read-only модуль. Доменная цель — дать `SHOP_MANAGER` /
-`ADMIN` ответ на «сколько нам стоила смена и где мы простаивали»,
-не вводя ни новых сущностей в БД, ни новых событий в журнал.
+## 3. Техкарта и материалы
 
-Источники данных — только то, что уже пишется производственным
-процессом:
+### 3.1 `TechCardTemplate`
 
-- `OperationEntry` (статус `APPROVED`) — сдельщина (см. §9);
-- `SalaryEntry` (`SHIFT_DAY` / `MANUAL`) — окладные начисления (см. §9a);
-- `PassportEvent` (`OPERATION_SCAN`, `QC_PASSED`, `WTO_PASSED`,
-  `PACKED`) — длительности стадий и факт упаковки (см. `events.md`);
-- `Employee.compensationType` + `salaryPerShift` — стоимость минуты
-  для окладного сотрудника.
+Источник: `prisma/schema.prisma::TechCardTemplate`,
+`apps/api/src/modules/tech-cards/*`, ADR-0022,
+`docs/erd.md §2.4`, `docs/api.md §8`.
 
-### Стоимость минуты
+Шаблон «потребностей на единицу изделия». Поля: `code` (uniq),
+`name`, `isActive`. Связи: `materialLines: TechCardMaterialLine[]`,
+`outsourceLines: TechCardOutsourceLine[]`, `orders: Order[]`.
 
-Управленческая константа `SHIFT_MINUTES = 480` (8-часовая смена,
-см. ADR-0021). Стоимость минуты сотрудника:
+Техкарта и маршрут — **независимые** оси: маршрут отвечает «что
+делает швея», техкарта — «что нужно положить в этот заказ».
+Привязка к заказу опциональна.
 
-```
-minuteRate = salaryPerShift / SHIFT_MINUTES      // ₽/мин
-```
+### 3.2 `TechCardMaterialLine` / `TechCardOutsourceLine`
 
-Считается только для `compensationType ∈ {SALARY, MIXED}` с
-положительной ставкой. `PIECEWORK` минутной стоимости не имеет —
-его вклад в себестоимость = только сумма `OperationEntry`.
+Источник: `prisma/schema.prisma::TechCardMaterialLine` /
+`TechCardOutsourceLine`, `docs/erd.md §2.4`.
 
-### Длительность стадии (`PassportDurationsService`)
+`TechCardMaterialLine`:
 
-Для каждого паспорта по стадии `QC` / `WTO` / `PACKING` рассчитываем
-пару `acceptedAt → completedAt` из `PassportEvent`:
+- `name`, `unit`, `qtyPerUnit: Decimal(12,4)` (> 0, валидируется
+  DTO/сервисом), `note?`, `sortOrder`;
+- snapshot-поля номенклатуры: `materialRole?` (свободная строка из
+  `MATERIAL_ROLES`), `fabricType?`, `densityGsm: Int?`,
+  `plannedWidthCm: Int?`;
+- цвет: `colorRule?` (`ORDER_COLOR | FIXED_COLOR | NO_COLOR |
+  ORDER_SELECTED_COLOR`), `fixedColorText?`;
+- фурнитура: `hardwareSizeText?`, `hardwareMaterialText?`;
+- картинка: `materialImageUrl?`, `materialImageOriginalFileName?`.
 
-| Стадия | acceptedAt | completedAt | Исполнитель |
-|--------|------------|-------------|-------------|
-| QC | последний `OPERATION_SCAN` категории `QC` до `QC_PASSED` | ближайший `QC_PASSED` после accept | `QC_PASSED.employeeId` |
-| WTO | последний `OPERATION_SCAN` категории `IRONING` до `WTO_PASSED` | ближайший `WTO_PASSED` | `WTO_PASSED.employeeId` |
-| PACKING | предыдущий `PACKED` того же упаковщика в ту же UTC-дату или (если первого нет) `PACKED − 1 минута` | сам `PACKED` | `PACKED.employeeId` |
+`TechCardOutsourceLine`:
 
-Длительность округляется вверх до целой минуты (любая ненулевая
-работа считается минимум 1 минута) и cap-ается сверху константой
-`MAX_STAGE_MINUTES_PER_PASSPORT = 60`. Cap защищает от аномалии
-«сотрудник принял паспорт и забыл закрыть» — без него такая запись
-съела бы весь оклад смены и ушла в минус по простою.
+- `name`, `unit?`, `qtyPerUnit: Decimal(12,4)?` (опц. — часть
+  подрядов считается «за партию»), `vendorName?` (свободный текст,
+  vendor-directory **не строится**), `note?`, `sortOrder`;
+- `triggerType: OutsourceTriggerType @default(MANUAL)` —
+  `MANUAL | CUT_READY` (см. §3.4).
 
-PACKING обрабатывается отдельно: на MVP `PackingService.addPassport`
-не пишет `OPERATION_SCAN` (упаковка — это «scan into box → PACKED»
-в одной транзакции). Поэтому accept-точка для упаковки выводится из
-разрыва между двумя соседними `PACKED` того же упаковщика — это и
-есть «время на одну упаковку». Этот модуль ничего в существующем
-flow упаковки не меняет (см. `flows.md §F7`).
+### 3.3 `OrderMaterialRequirement` (snapshot)
 
-### Себестоимость одного упакованного паспорта
+Источник: `prisma/schema.prisma::OrderMaterialRequirement`,
+`OrdersService.rebuildMaterialRequirementsSnapshot`
+(`apps/api/src/modules/orders/orders.service.ts` ~2519+),
+`docs/order-flow.md §4.2`, `docs/erd.md §2.4`.
 
-```
-totalCost(passport) =
-    Σ OperationEntry.amount [status=APPROVED]                  // piecework
-  + Σ stage.durationMinutes × employee.minuteRate              // оклад tracked
-```
+Read-only план потребностей конкретного заказа. Поля:
 
-Окладная доля распределяется ровно по тем сотрудникам и стадиям, что
-работали на этом паспорте — это и есть «учтённое время».
+- snapshot-копии полей шаблона (`materialRole`, `fabricType`,
+  `densityGsm`, `plannedWidthCm`, `colorRule`, `fixedColorText`,
+  `hardwareSizeText`, `hardwareMaterialText`, `materialImage*`);
+- `qtyPerUnit`, `totalQty: Decimal(12,4) = qtyPerUnit × Σ
+  OrderItem.qtyPlan` (без округлений, `Prisma.Decimal`-математика);
+- `resolvedColorText?` — резолвится через
+  `resolveColorText(colorRule, fixedColorText, Order.color)`;
+- `requiresColorSelection: Boolean` — `true` для
+  `colorRule = ORDER_SELECTED_COLOR`;
+- `selectedColorText?` — выбор менеджера для
+  `ORDER_SELECTED_COLOR`-строк, **preserve-ится** при rebuild
+  (по `sourceTechCardLineId` или композитному ключу);
+- `sourceTechCardLineId?` — `onDelete: SetNull` (см. §1.3:
+  «независимость snapshot-а»).
 
-### Простой (`idleMinutes` / `idleCost`)
+`PATCH /api/orders/:id/material-requirements/:requirementId/color` —
+точечная правка `selectedColorText` (доступна только для
+`requiresColorSelection = true`, иначе 409
+`ORDER_MATERIAL_REQUIREMENT_COLOR_NOT_REQUIRED`).
 
-Считается отдельно по сотруднику-окладнику в день, в который у него
-была хотя бы одна `SalaryEntry`:
+### 3.4 `OrderOutsourceRequirement` (snapshot) и manual execution status
 
-```
-paid     = SHIFT_MINUTES                             // 480 мин
-tracked  = Σ stage.durationMinutes за этот день      // из PassportEvent
-idleMin  = max(0, paid − tracked)
-idleCost = idleMin × minuteRate
-```
+Источник: `prisma/schema.prisma::OrderOutsourceRequirement`,
+`OrdersService.updateOutsourceRequirementStatus`
+(`apps/api/src/modules/orders/orders.service.ts` ~2299+), ADR-0022,
+`docs/order-flow.md §11`, `docs/erd.md §2.4`.
 
-**Простой НЕ распределяется на изделия и не входит в `totalCost`
-изделия.** Это управленческая отдельная строка («сколько мы
-заплатили за то, чтобы человек присутствовал, но ничего не делал
-по нашему производственному пайплайну»).
+Создаётся **defensive в `start()`** (если `count === 0`); в
+отличие от material-requirements, для outsource нет регулярного
+синхронизатора — т.е. изменения техкарты после старта в snapshot
+заказа уже не приедут. Точечно правится только `executionStatus`.
 
-### Дневная агрегация
+#### `OutsourceTriggerType`
 
-`PACKED.createdAt` (UTC) задаёт дату «выпуска» паспорта. Стадии,
-завершившиеся в эту же дату, суммируются в `trackedMinutes` дня;
-`SalaryEntry` за эту дату — в множество окладных сотрудников дня.
-Дни без событий тоже возвращаются в ответе с нулями — чтобы линия
-графика не рвалась (см. `screens.md §17`).
+- `MANUAL` (default, backward-compat) — UI просто показывает строку.
+- `CUT_READY` — потребность считается «готовой к заказу» когда у
+  заказа есть паспорта и **все** они физически размещены в ячейки
+  (`Passport.currentCellId != null`). Read-derived поле
+  `isReadyToOrder` считается на чтении в `OrdersService.getOne`
+  (никакой материализации в БД).
 
-### RBAC и инварианты
+#### `OrderOutsourceExecutionStatus`
 
-- Доступ — `SHOP_MANAGER`, `ADMIN` (см. `api.md §17`). Прочие роли
-  получают `403 FORBIDDEN_ROLE`.
-- Никаких новых таблиц/колонок/событий: модуль read-only поверх
-  существующего журнала.
-- Все суммы в `Decimal(12,2)`, в ответе округлены до двух знаков.
-- Период считается по UTC; пустой query → последние 14 календарных
-  дней.
+Линейный жизненный цикл `PLANNED → ORDERED → RECEIVED`
+(терминальный, откатов через action нет).
 
-См. `api.md §17`, `screens.md §17`.
+`POST /api/orders/:id/outsource-requirements/:requirementId/status`:
 
-### 17a. Дашборд начальника производства
+- `PLANNED → ORDERED`: для `triggerType=CUT_READY` дополнительно
+  проверяет `isReadyToOrder = true`. Если нет —
+  `OrderOutsourceRequirementNotReadyException` (409
+  `OUTSOURCE_NOT_READY_TO_ORDER`).
+- `ORDERED → RECEIVED`: фиксирует `receivedAt = now()`.
+- Идемпотентно: если уже в нужном статусе — no-op без 409 и без
+  перезаписи timestamp-ов.
 
-Управленческая надстройка над §17. Не вводит ни новых сущностей, ни
-новых колонок: backend (`/api/dashboard/production`) собирает один
-ответ из уже работающих источников:
+#### Composite `displayStatus` (read-model)
 
-- pipeline — `Passport` + `Order` + `PassportEvent(QC_PASSED/WTO_PASSED)`,
-  правила маппинга на стадии — те же, что у `/shopfloor`
-  (см. ADR-0013), чтобы цифры по стадиям совпадали 1:1 между двумя
-  экранами;
-- выпуск — `Σ Passport.qtyGood` по `PassportEvent(PACKED)` за UTC-сегодня
-  и за период;
-- WIP — `Passport.status ∈ {CREATED, IN_PROGRESS}`;
-- заказы в производстве — `Order.status = IN_PRODUCTION`;
-- себестоимость и простой по дням — переиспользуем `CostsService`
-  (т.е. ту же логику §17 «Себестоимость выпуска» / `api.md §17`);
-- загрузка по ролям — `PassportDurationsService.listForPeriod` за день
-  «to», агрегированный по `Employee.role` ∈ `{QC, IRONING, PACKING}`
-  с теми же правилами `paid/tracked/idle`, что и в §17 (только
-  сгруппированы не по сотруднику, а по роли);
-- алерты — top-items проблемных зон: bottleneck-стадия, роль с
-  максимальным простоем за день, окладной сотрудник с максимальным
-  `idleMinutes`, день периода с самым дорогим простоем, паспорта,
-  где сработал cap длительности `MAX_STAGE_MINUTES_PER_PASSPORT`.
+В `OrdersService.getOne` собирается композитный display-статус
+(порядок проверок):
 
-Семантика «сегодня vs период» жёсткая: KPI-карточки «сегодня»
-(`producedToday`, `avgCostPerUnitToday`, `idleCostToday`,
-`utilizationToday`) считаются по UTC-сегодня независимо от `?days=`,
-а график (`trend`) и сводки `…Period` — за `[dateTo − days + 1 .. dateTo]`.
-Это сделано сознательно, чтобы UI не перемешивал «KPI дня» и «KPI
-периода» (см. контракт `api.md §11b` и UX-инварианты `screens.md §18`).
+1. `executionStatus = RECEIVED` → `RECEIVED` («Получено»);
+2. `executionStatus = ORDERED` → `ORDERED` («Заказано»);
+3. `triggerType = CUT_READY` и `isReadyToOrder = true` →
+   `READY_TO_ORDER` («Готово к заказу»);
+4. Иначе → `PLANNED`.
 
-Доступ — `SHOP_MANAGER`, `ADMIN`; backend защищён
-`@Roles('SHOP_MANAGER', 'ADMIN')`. См. `api.md §11b`, `screens.md §18`.
+`READY_TO_ORDER` сознательно **не материализуется в БД** — это
+функция от `Passport.currentCellId`. `ORDERED` / `RECEIVED`
+хранятся (это решение менеджера).
 
+### 3.5 Жизненный цикл техкарты
 
-## §17b. Печать через агент рабочего места (MVP)
+1. Менеджер заводит техкарту в `/admin/tech-cards/new`. UI —
+   `apps/web/app/admin/tech-cards/*`.
+2. Менеджер опционально привязывает техкарту к заказу
+   (`Order.techCardId`). До запуска — можно сменить через
+   `PATCH /api/orders/:id`. После `start()` менять нельзя
+   (`ORDER_LOCKED`).
+3. `OrdersService.startCalculation` пересобирает
+   `OrderMaterialRequirement[]` через
+   `rebuildMaterialRequirementsSnapshot`.
+4. `OrdersService.start` копирует `OrderOutsourceRequirement[]`
+   через defensive snapshot.
+5. UI `/orders/:id` отдаёт snapshot read-only.
 
-Печать любых документов (паспорт, QR паспорта, этикетка коробки,
-QR ячейки) делается не из браузера, а через **агент** —
-Node.js-процесс, постоянно живущий рядом с физическим принтером на
-Windows-станции. Сотрудник в системе нажимает «Печать», backend
-кладёт задание в очередь, агент его забирает и печатает.
+### 3.6 Что MVP сознательно НЕ делает
 
-### Сущности
+- Никаких формул / размерных коэффициентов / процентов отходов —
+  только плоский `qtyPerUnit × baseQty`.
+- Не enforce-ит «нельзя стартовать без техкарты» —
+  `Order.techCardId` опционален. Однако `startCalculation` требует
+  `Order.techCardId !== null` (`ORDER_TECH_CARD_REQUIRED`).
+- Не строит vendor-directory — `vendorName` свободный текст.
+- Не использует snapshot потребностей в `CostsService` /
+  dashboard — material-cost остаётся как есть.
+- Не трогает shopfloor / display / passports / QC / WTO / packing
+  flow — техкарта живёт сбоку.
 
-#### `Printer`
+---
 
-| Поле          | Тип                  | Назначение                                                  |
-|---------------|----------------------|-------------------------------------------------------------|
-| `id`          | cuid                 | Постоянный идентификатор.                                   |
-| `name`        | string               | «Принтер ОТК-1» — для UI.                                   |
-| `type`        | `PrinterType` enum   | `PASSPORT`/`QR`/`LABEL`/`DEFAULT`. На MVP — управленческая метка. |
-| `equipmentId` | FK → `Equipment`     | Привязка к рабочему месту. Один принтер на место.           |
-| `isActive`    | bool                 | Менеджерская мягкая деактивация без удаления истории.       |
-| `pairingCode` | string?              | Одноразовый код, выдаваемый кнопкой «Сгенерировать код».    |
-| `agentToken`  | string?              | Постоянный секрет агента (после `pair`). Хранится открытым (внутренняя сеть цеха). |
-| `isOnline`    | bool                 | True после успешного heartbeat.                             |
-| `lastSeenAt`  | timestamp?           | Время последнего контакта агента.                           |
-| `agentHostName`            | string?     | `os.hostname()` Windows-машины, на которой запущен агент. Заполняется агентом, нужен менеджеру, чтобы понимать «какой именно компьютер сейчас представляет этот логический принтер». |
-| `availableWindowsPrinters` | string[]    | Список физических Windows-принтеров, найденных агентом через `Get-Printer`. Хранится как массив строк (Postgres `TEXT[]`), всегда есть значение, по умолчанию `[]`. Перезаписывается целиком при каждой синхронизации. |
-| `windowsPrintersUpdatedAt` | timestamp?  | Когда агент в последний раз прислал `availableWindowsPrinters` — нужно для UI («список устарел»). |
-| `selectedWindowsPrinter`   | string?     | Имя выбранного менеджером физического Windows-принтера из `availableWindowsPrinters`. Это и есть та точка, куда агент реально шлёт печать. `null` = «не выбран» → агент отказывается печатать. |
+<a id="4-patterns"></a>
 
-Логический `Printer` в системе и **физический Windows-принтер** —
-разные сущности:
+## 4. Лекала / Patterns
 
-- логический `Printer` живёт в БД, к нему привязан `Equipment` и
-  `PrintJob`-и; именно его выбирают по «смене сотрудника»;
-- физический Windows-принтер — это драйвер на конкретной Windows-машине
-  (HP LaserJet, Zebra ZD220, Microsoft Print to PDF…). На одной машине
-  их может быть несколько, и без явного выбора печатать в проде
-  небезопасно.
+### 4.1 `PatternItem` — карточка лекала
 
-Связка задаётся именно через `selectedWindowsPrinter` (одно конкретное
-имя из последнего `availableWindowsPrinters`, что прислал агент с
-этого `agentHostName`).
+Источник: `prisma/schema.prisma::PatternItem`,
+`apps/api/src/modules/patterns/*`,
+`apps/api/src/modules/pattern-categories/*`,
+`docs/erd.md §2.11` / §3.1, `docs/api.md §9`-§10.
 
-`PrinterType` сейчас не влияет на выбор принтера: на MVP логика
-работает только по `equipmentId + isActive`. Тип используется для
-UI-различий и заложен на будущее («один QR + один LABEL на место»).
+Конструкция изделия. Поля:
+
+- `name`, `article` (uniq), `categoryCode?` (legacy — свободная
+  строка), `categoryId? → PatternCategory` (`onDelete: SetNull`);
+- `previewImageUrl?`, `description?`,
+  `status: String @default("ACTIVE")` (свободная строка,
+  Zod-валидация);
+- `legacyProductId? @unique → Product` (`onDelete: SetNull`) —
+  совместимость со старым flow «Номенклатура = лекала».
+
+Связи: `sizeFiles`, `materialAreas`, `parameterNorms`,
+`sizeParameterValues`, `orders`.
+
+### 4.2 `PatternCategory` и параметры
+
+Источник: `prisma/schema.prisma::PatternCategory` /
+`PatternCategoryParameter`.
+
+`PatternCategory` — справочник категорий номенклатуры (футболки,
+джемперы, …). Поля: `name`, `slug` (uniq), `iconKey`,
+`iconImageUrl?`, `sortOrder`, `status`.
+
+`PatternCategoryParameter` определяет, какие колонки появятся в
+таблицах редактирования карточки лекала:
+
+- `roleKey`, `label`, `unit @default("м²")`, `isRequired`;
+- `inputType: String @default("AREA_M2_BY_SIZE")` — управляет тем,
+  в какую таблицу пишутся значения параметра:
+  - `AREA_M2_BY_SIZE` → `PatternMaterialArea` (м² по размерам);
+  - `QTY_PER_ITEM` → `PatternItemParameterNorm` (норма «на
+    изделие», например, «Люверсы = 2 шт»);
+  - `LINEAR_M_BY_SIZE` → `PatternItemSizeParameterValue` (погонные
+    метры по размерам).
+
+### 4.3 DXF-файлы (`PatternSizeFile`)
+
+Источник: `prisma/schema.prisma::PatternSizeFile`.
+
+Версионирование `(patternItemId, sizeId, version)` UNIQUE,
+`status: String @default("ACTIVE")`. «Удаление» = смена статуса в
+`ARCHIVED`; физический файл с диска не удаляется.
+
+### 4.4 Snapshot лекала на заказе
+
+Источник: `Order.patternNameSnapshot` /
+`patternArticleSnapshot` / `patternPreviewSnapshotUrl`,
+`OrdersService.start` / `startCalculation`,
+`docs/order-flow.md §4.4`.
+
+- Заполняются один раз — на первом из `startCalculation` /
+  `start`, у которого `!Order.patternNameSnapshot`.
+- На последующих запусках **не перезаписываются**.
+- `PatternItem.onDelete: SetNull` — удаление карточки лекала
+  обнуляет live-связь, snapshot сохраняется.
+
+UNKNOWN/TODO: точный набор `inputType` за пределами трёх
+основных — Zod-схема определяет допустимые значения; новые
+варианты не требуют миграции БД.
+
+---
+
+<a id="5-workshop-needs"></a>
+
+## 5. Потребности цеха / `WorkshopNeed`
+
+Источник: `prisma/schema.prisma::WorkshopNeed`,
+`apps/api/src/modules/workshop-needs/*`,
+`docs/erd.md §2.12` / §3.2, `docs/order-flow.md §7`,
+`docs/api.md §18`.
+
+### 5.1 Назначение
+
+Чистая потребность заказа в материалах, рассчитанная системой по
+«лекало × техкарта × размерная матрица». Это **рабочее место
+закупщика**, **не** закупочный документ и **не** складской остаток.
+
+### 5.2 Источник входных данных (`sourceType`)
+
+- `TECH_CARD_MATERIAL_LINE` — заказ в `DRAFT`, расчёт по live
+  техкарте.
+- `ORDER_MATERIAL_REQUIREMENT` — заказ запущен (или у
+  DRAFT-заказа уже есть snapshot), расчёт по snapshot
+  `OrderMaterialRequirement[]`.
+
+### 5.3 Формулы расчёта (`calculationMethod`)
+
+Свободная строка с Zod-валидацией:
+
+- `AREA_DENSITY`:
+  `totalAreaM2 = Σ (PatternMaterialArea.areaM2 × OrderItem.qtyPlan)`;
+  `calculatedQty = totalAreaM2 × densityGsm / 1000` (кг).
+- `QTY_PER_UNIT`:
+  `calculatedQty = qtyPerUnit × Σ OrderItem.qtyPlan` (live) или
+  `requirement.totalQty` (snapshot).
+
+### 5.4 Поля и статусы
+
+`status: String` (свободная, валидируется Zod) — `CALCULATED`
+(default) → `REVIEWED` → `PURCHASE_PLANNED` → `ORDERED` →
+`PARTIALLY_RECEIVED` / `RECEIVED` либо `CANCELLED`.
+
+Закупщик правит руками через `PATCH /api/workshop-needs/:id`:
+`purchaseQty`, `quotedPrice`, `quotedCurrency`, `expectedDeliveryDate`,
+`selectedSupplierId`, `selectedSupplierCatalogItemId`, `comment`.
+
+Идемпотентный пересчёт `WorkshopNeedsService.calculateForOrder` (с
+параметром `force: false`) сносит только `CALCULATED`-строки и
+сохраняет `REVIEWED` / `PURCHASE_PLANNED`. Если такие строки есть и
+`force` не задан — 409 `WORKSHOP_NEEDS_ALREADY_REVIEWED`.
+
+### 5.5 Триггеры расчёта
+
+- `OrdersService.startCalculation` → `calculateForOrder(id, { force: false })`.
+- `POST /api/orders/:id/workshop-needs/calculate` — ручной пересчёт
+  (`force=true` поддерживается).
+
+### 5.6 Связи и onDelete-политика
+
+- `selectedSupplierId? → Supplier` (`SetNull`),
+- `selectedSupplierCatalogItemId? → SupplierCatalogItem` (`SetNull`),
+- `purchaseOrderLines: PurchaseOrderLine[]` (`SetNull` со стороны PO-line),
+- `receiptLines: PurchaseReceiptLine[]` (тот же паттерн),
+- `costEstimateLines: OrderCostEstimateLine[]` (`SetNull`),
+- `materialArrivalOverrides: OrderMaterialArrivalOverride[]` (`SetNull`).
+
+Cascade при удалении заказа.
+
+### 5.7 Что MVP сознательно НЕ делает
+
+- Не считает потери / отходы.
+- Не ведёт vendor-portal / vendor-каталог как «истину» —
+  `Supplier` / `SupplierCatalogItem` живут сбоку, привязка soft.
+
+---
+
+<a id="6-procurement"></a>
+
+## 6. Закупки / Supplier / PurchaseOrder / PurchaseReceipt
+
+### 6.1 `Supplier` / `SupplierContact` / `SupplierCatalogItem`
+
+Источник: `prisma/schema.prisma::Supplier` (+ contact + catalog),
+`apps/api/src/modules/suppliers/*`,
+`docs/erd.md §2.12`, `docs/api.md §12`.
+
+Изолированный справочник: НЕТ vendor-portal, НЕТ интеграций, НЕТ
+финансовых документов. Только название + контакты + позиции.
+
+`Supplier`:
+
+- `name` (НЕ uniq), `phone? / website? / address? / comment?`;
+- `status: String @default("ACTIVE")` (свободная строка,
+  Zod-валидация: `ACTIVE | INACTIVE`).
+- `onDelete: Restrict` со стороны `PurchaseOrder` —
+  жёсткое удаление поставщика, на которого ссылается PO,
+  блокируется БД.
+
+`SupplierContact` — менеджер у поставщика. Cascade от Supplier.
+
+`SupplierCatalogItem` — позиция каталога. Cascade от Supplier.
+Поля: `name`, `supplierArticle?`, `category?`, `fabricType?`,
+`densityGsm?`, `colorText?`, `unit`, `lastPrice: Decimal(14,2)?`,
+`currency?`, `minOrderQty?`, `deliveryDays?`, `comment?`,
+`status @default("ACTIVE")`.
+
+### 6.2 `PurchaseOrder` (PO)
+
+Источник: `prisma/schema.prisma::PurchaseOrder`,
+`apps/api/src/modules/purchase-orders/*`,
+`docs/erd.md §3.4`, `docs/api.md §19`.
+
+Закупочный документ. Поля:
+
+- `number` (uniq, `PO-YYYYMMDD-NNNN`);
+- `supplierId → Supplier` (`onDelete: Restrict`);
+- `customerOrderId? → Order` (`SetNull`);
+- snapshot полей поставщика (имя/телефон/etc на момент создания
+  документа);
+- `status: String @default("DRAFT")` — свободная строка
+  (`DRAFT | SENT | CONFIRMED | CANCELLED | RECEIVED |
+  PARTIALLY_RECEIVED`), Zod-валидация;
+- timestamps: `expectedDeliveryDate?`, `sentAt?`, `confirmedAt?`,
+  `cancelledAt?`;
+- `comment?`, `createdById?`.
+
+`PurchaseOrderLine` (`docs/erd.md §2.12`):
+
+- `purchaseOrderId → PurchaseOrder` (Cascade);
+- `workshopNeedId? → WorkshopNeed` (`SetNull`);
+- `supplierCatalogItemId? → SupplierCatalogItem` (`SetNull`);
+- snapshot номенклатуры (имя/артикул/unit);
+- `qty: Decimal(14,4)`, `price: Decimal(14,2)?`, `currency?`,
+  `expectedDeliveryDate?`;
+- confirmed-копии: `confirmedQty? / confirmedPrice? / confirmedDeliveryDate?`;
+- `status: String @default("DRAFT")`.
+
+Lifecycle (audit-трейл — `docs/events.md §6.1`):
+
+| Переход                                  | Сервис                       | AuditLog event |
+| ---------------------------------------- | ---------------------------- | -------------- |
+| (insert) `DRAFT`                         | `createFromNeeds`            | `PURCHASE_ORDER_CREATED` |
+| field-level update                       | `update`                     | `PURCHASE_ORDER_UPDATED` |
+| line-level update                        | `updateLine`                 | `PURCHASE_ORDER_LINE_UPDATED` |
+| `DRAFT → SENT`                           | `send`                       | `PURCHASE_ORDER_SENT` |
+| `{DRAFT, SENT} → CONFIRMED`              | `confirm`                    | `PURCHASE_ORDER_CONFIRMED` |
+| `{DRAFT, SENT, CONFIRMED} → CANCELLED`   | `cancel`                     | `PURCHASE_ORDER_CANCELLED` |
+| авто-переход `→ RECEIVED / PARTIALLY_RECEIVED / откат` | `PurchaseReceiptsService.recalcAfterChange` | **нет AuditLog** (UNKNOWN/TODO, см. `docs/events.md §6.2`) |
+
+Side-effects:
+
+- `createFromNeeds` → связанные `WorkshopNeed.status = ORDERED`;
+- `cancel` → строки PO в `CANCELLED`; для каждого `WorkshopNeed`
+  проверяется наличие активных PO-строк, если их нет — статус
+  возвращается в `PURCHASE_PLANNED`.
+
+Один PO — один поставщик; запрещено смешивать строки разных заказов
+покупателя.
+
+### 6.3 `PurchaseReceipt` (PR)
+
+Источник: `prisma/schema.prisma::PurchaseReceipt`,
+`apps/api/src/modules/purchase-receipts/*`,
+`docs/api.md §20`.
+
+Документ приёмки по PO. Поля:
+
+- `number` (uniq, `PR-YYYYMMDD-NNNN`);
+- `purchaseOrderId → PurchaseOrder` (`onDelete: Restrict`);
+- `supplierId? → Supplier` (`SetNull`),
+- `customerOrderId? → Order` (`SetNull`);
+- `status: String @default("POSTED")` — свободная строка
+  (`POSTED | CANCELLED`);
+- `receivedAt @default(now())`, `cancelledAt?`,
+  `receivedById?`.
+
+`PurchaseReceiptLine`:
+
+- cascade от `PurchaseReceipt`;
+- денормализация: `purchaseOrderLineId?`, `workshopNeedId?`,
+  `supplierCatalogItemId?` — все `SetNull`;
+- snapshot номенклатуры (`itemNameSnapshot`,
+  `supplierArticleSnapshot?`, `unitSnapshot`,
+  `orderedQtySnapshot?`, `confirmedQtySnapshot?`, `priceSnapshot?`,
+  `currencySnapshot?`);
+- `receivedQty: Decimal(14,4)`, `unit`, `cellId? → Cell`
+  (`SetNull`), `locationNote?`, `batchNumber?`, `rollNumber?`,
+  `shade?`, `actualWidthCm?`, `actualDensityGsm?`;
+- `status: String @default("POSTED")`.
+
+**Граница MVP.** PR фиксирует размещение в ячейке (`Cell.cellId`)
+**без** записи в `CellContent`. Это сознательная граница: складские
+остатки на ячейках по-прежнему ведутся только через
+`PassportsService.place` (см. §11).
+
+Lifecycle:
+
+| Переход               | Сервис                                | AuditLog event |
+| --------------------- | ------------------------------------- | -------------- |
+| (insert) `POSTED`     | `createFromPurchaseOrder`             | `PURCHASE_RECEIPT_CREATED` |
+| `POSTED → CANCELLED`  | `cancel`                              | `PURCHASE_RECEIPT_CANCELLED` |
+
+Side-effects (`recalcAfterChange`):
+
+- пересчёт `PurchaseOrderLine.status`
+  (`SENT`/`CONFIRMED → PARTIALLY_RECEIVED / RECEIVED`);
+- пересчёт `PurchaseOrder.status` (`RECEIVED / PARTIALLY_RECEIVED`
+  / откат в `SENT`/`CONFIRMED`);
+- пересчёт `WorkshopNeed.status`.
+
+Эти авто-переходы в `AuditLog` **не пишутся** — источник истины
+только `PURCHASE_RECEIPT_CREATED` / `PURCHASE_RECEIPT_CANCELLED`
+(UNKNOWN/TODO осознанно ли это, см. `docs/events.md §6.2`).
+
+### 6.4 RBAC
+
+Все ручки `/api/suppliers/*`, `/api/purchase-orders/*`,
+`/api/purchase-receipts/*` — `SHOP_MANAGER` / `ADMIN`. Подробнее
+`docs/api.md §12`, §19, §20.
+
+---
+
+<a id="production"></a>
+<a id="7-passport"></a>
+
+## 7. Паспорт производства
+
+### 7.1 `Passport` — агрегат-корень
+
+Источник: `prisma/schema.prisma::Passport` (~1092),
+`apps/api/src/modules/passports/passports.service.ts`,
+`docs/erd.md §2.5`, `docs/production-flow.md §1`,
+ADR-0002, ADR-0003.
+
+Один Passport = одна партия раскроя одного `(orderId, productId,
+sizeId)`. Денормализованные поля состояния:
+
+- `qtyPlan` — план в момент выпуска (= `qtyCut` на `create`);
+- `qtyCut` — фактически выпущено раскройщиком; не уменьшается;
+- `qtyDefect` — `Σ PassportDefect.qty` (инкрементится в
+  `QcService.recordDefect`);
+- `qtyGood = qtyCut − qtyDefect` (поддерживается в коде через
+  `decrement`);
+- `status: PassportStatus` (см. §7.2);
+- «текущий след»: `currentOperationId?`, `currentEmployeeId?`,
+  `currentCellId?`;
+- `currentRouteStepIndex Int?` — soft-route индекс шага в snapshot
+  маршрута заказа (см. §2.5).
+
+Уникальные поля: `number` (формат `P-YYYYMMDD-NNNN`,
+`PassportNumberService`), `qrCode` (`passport:{id}`, ADR-0008;
+финальный QR проставляется отдельным `tx.update` после получения
+id).
+
+Связи: `events: PassportEvent[]`, `entries: OperationEntry[]`,
+`boxItems: BoxItem[]`, `defects: PassportDefect[]`.
+
+### 7.2 `PassportStatus` (lifecycle)
+
+Источник: `prisma/schema.prisma::enum PassportStatus`,
+`docs/production-flow.md §2`, `docs/events.md §9.13`.
+
+| Значение      | Семантика                                                                | Кто меняет |
+| ------------- | ------------------------------------------------------------------------ | ---------- |
+| `CREATED`     | Только что выпущен `PassportsService.create`. До `place` — «в воздухе»; после — в `Cell`. | `PassportsService.create` (default) |
+| `IN_PROGRESS` | Швея получила крой (`issueToEmployee`) или паспорт двинулся по операциям (`scanOnOperation` / `transferToEmployee`). | `PassportsService.{issueToEmployee, scanOnOperation}`, `MasterActionsService.{transferToEmployee, setRouteStep}` |
+| `PACKED`      | Добавлен в `Box` через `PackingService.addPassport`. Терминальный для production; `currentEmployeeId` / `currentCellId` обнуляются. | `PackingService.addPassport` |
+| `CANCELLED`   | Снят. **В runtime-коде нет ни одного writer-а** `Passport.status = CANCELLED` (`docs/events.md §9.13`). Только read-guards. **UNKNOWN/TODO**: сценария отмены паспорта на MVP не реализован. |
+
+`assertPassportActive` (private в `PassportsService`) бросает:
+
+- `PassportAlreadyPackedException` для `PACKED`;
+- `PassportCancelledException` для `CANCELLED`.
+
+### 7.3 `PassportEvent` / `PassportEventType`
+
+Источник: `prisma/schema.prisma::PassportEvent` (~1154),
+`enum PassportEventType` (~182–208),
+`docs/events.md §2`.
+
+ADR-0003 (event-sourcing-lite): состояние паспорта
+**денормализовано** в самом `Passport`; `PassportEvent` накапливает
+факты, из которых считаются длительности стадий, derived stage на
+shopfloor, pending-начисления, QC-gate.
+
+Все writer-ы `PassportEvent` обёрнуты в `prisma.$transaction` с
+изменением state (см. инвариант `docs/events.md §9.1`).
+
+| Тип                  | Пишется? | Writer                                              | Меняет state паспорта?            |
+| -------------------- | -------- | --------------------------------------------------- | --------------------------------- |
+| `CREATED`            | ДА       | `PassportsService.create`                           | создаёт `status = CREATED`        |
+| `OPERATION_STARTED`  | НЕТ      | — (зарезервировано в enum)                          | UNKNOWN/TODO                      |
+| `OPERATION_FINISHED` | ДА       | `PassportsService.completeOperationByEmployee`      | нет (остаётся `IN_PROGRESS`)      |
+| `MOVED`              | НЕТ      | — (зарезервировано в enum)                          | UNKNOWN/TODO                      |
+| `DEFECT_RECORDED`    | ДА       | `QcService.recordDefect`                            | меняет `qtyDefect / qtyGood`      |
+| `CELL_PLACED`        | ДА       | `PassportsService.place`                            | нет (остаётся `CREATED`)          |
+| `CELL_REMOVED`       | НЕТ      | — (зарезервировано). Физическое снятие при `ISSUED_TO_EMPLOYEE` без отдельного события. UNKNOWN/TODO. |  — |
+| `ISSUED_TO_EMPLOYEE` | ДА       | `PassportsService.issueToEmployee` (обе ветки)      | `CREATED → IN_PROGRESS`           |
+| `OPERATION_SCAN`     | ДА       | `PassportsService.scanOnOperation`                  | `→ IN_PROGRESS`, обновляет `currentOperationId / currentEmployeeId / currentRouteStepIndex` |
+| `QC_PASSED`          | ДА       | `QcService.completeQc`                              | нет (audit-маркер)                |
+| `WTO_PASSED`         | ДА       | `WtoService.completeWto`                            | нет (audit-маркер)                |
+| `PACKED`             | ДА       | `PackingService.addPassport`                        | `→ PACKED` (терминально)          |
+| `CANCELLED`          | НЕТ      | — (зарезервировано). UNKNOWN/TODO.                  | —                                 |
+
+### 7.4 Создание паспорта (`POST /api/passports`)
+
+Источник: `PassportsService.create`
+(`apps/api/src/modules/passports/passports.service.ts` ~99–255),
+`docs/production-flow.md §4`, `docs/events.md §2.1`.
+
+Контроллер: RBAC `CUTTER` / `CUTTER_ASSISTANT` / `SHOP_MANAGER`
+(+ `ADMIN`).
+
+Предусловия:
+
+- Заказ существует и `status === IN_PRODUCTION` — иначе
+  `PassportOrderNotInProductionException`.
+- `OrderItem` для `dto.sizeId` существует —
+  `PassportSizeNotInOrderException`.
+- Нет APPROVED `CuttingClosureRequest` на
+  `(orderId, orderItem.productId, sizeId)` (см. §1.8) — иначе
+  `PassportCuttingClosedException` (409 `CUTTING_CLOSED`).
+- `dto.qtyCut <= remaining`, где `remaining = orderItem.qtyPlan −
+  Σ qtyCut` по живым (≠ `CANCELLED`) паспортам этого размера —
+  иначе `PassportQtyExceedsRemainingException`.
+- В справочнике должна быть `Operation(code='CUT_DIVISION')`.
+
+В `prisma.$transaction`:
+
+1. `PassportNumberService.nextNumber(tx)`.
+2. `Passport.create({ qrCode = 'passport-pending:<number>', status =
+   CREATED, currentOperationId = CUT_DIVISION.id, currentEmployeeId
+   = creator.id, cutterId = (Employee.login='cutter') ?? creator.id,
+   currentRouteStepIndex = (order.routeSteps.length > 0 ? 0 :
+   null) })`.
+3. `Passport.update { qrCode = 'passport:<id>' }`.
+4. `PassportEvent.create({ type: CREATED, operationId =
+   CUT_DIVISION.id, employeeId = creator.id, qty = qtyCut, payload =
+   { rollNumber, color } })`.
+5. `EarningsService.createImmediateForCutter(tx, ...)` — сдельное
+   начисление раскройщику (см. §10.2).
+
+`creatorId` берётся из сессии (ADR-0014). `cutterId` на MVP — из
+seed-учётки `cutter`, fallback к `creator`. UNKNOWN/TODO: «крой
+бригадой» — отдельный шаг в будущем.
+
+### 7.5 Размещение в ячейку и выдача
+
+`POST /api/passports/:id/place` —
+`PassportsService.place`
+(`apps/api/src/modules/passports/passports.service.ts` ~337–460),
+`docs/production-flow.md §5`.
+
+В транзакции: инкремент `CellContent` по `(cellId, sizeId)` на
+`qtyCut`, `Passport.update { currentCellId, status: остаётся
+CREATED }`, `PassportEvent(CELL_PLACED)`, audit
+`PASSPORT_PLACED` (`employeeId = null` — это управленческое
+действие raw-handler-а).
+
+`POST /api/passports/:id/issue` —
+`PassportsService.issueToEmployee`
+(`apps/api/src/modules/passports/passports.service.ts` ~462–658),
+`docs/production-flow.md §6`. Две ветки:
+
+- **«Из ячейки»** (`currentCellId !== null`): декремент
+  `CellContent`, `Passport.update { currentCellId: null,
+  currentEmployeeId = me, status: IN_PROGRESS }`,
+  `PassportEvent(ISSUED_TO_EMPLOYEE)`, audit
+  `PASSPORT_ISSUED { mode: 'FROM_CELL' }`.
+- **«Route-WIP без ячейки»** (`currentCellId === null` и
+  `currentRouteStepIndex !== null`): идемпотентный no-op для того
+  же сотрудника на `IN_PROGRESS`; `PassportAlreadyIssuedException`
+  при конфликте; иначе обновляем владельца, audit
+  `PASSPORT_ISSUED { mode: 'ROUTE_WIP' }`.
+
+Если у заказа **нет** маршрута и `currentCellId === null` —
+`PassportNotInCellException` (старое поведение «нужно сначала
+разместить в ячейке»).
+
+**Cut release policy** проверяется только для первой операции
+маршрута или операций категории `CUTTING` (`docs/production-flow.md §6.3`):
+
+- `Passport.color !== policy.color` или `Passport.sizeId !==
+  policy.sizeId` (когда заданы) →
+  `CutReleasePolicyViolationException`.
+- `consumedQty + qtyCut > limitQty` → та же ошибка.
+- При успехе `consumeCutReleasePolicyInTx` атомарно инкрементит
+  `CutReleasePolicy.consumedQty` через conditional `updateMany`
+  (защита от race) + audit `CUT_RELEASE_POLICY_CONSUMED`.
+
+### 7.6 Скан и завершение операции
+
+`POST /api/passports/:id/scan` —
+`PassportsService.scanOnOperation`
+(`apps/api/src/modules/passports/passports.service.ts` ~673–802),
+`docs/production-flow.md §7.1`, `docs/events.md §2.9`, §9.5.
+
+Контракт: «любой скан = переход на `session.operationId`».
+
+Идемпотентность (ADR-0003 §6, `docs/events.md §9.8`): если
+`currentOperationId === session.operationId && currentEmployeeId
+=== me && status === IN_PROGRESS` — early-return до открытия
+транзакции, новый event не пишется,
+`createPendingForPreviousOperation` не вызывается.
+
+QC-gate: вход на `OperationCategory.IRONING` без существующего
+`PassportEvent(QC_PASSED)` отбивается
+`PassportNotQcPassedException` (409 `PASSPORT_NOT_QC_PASSED`).
+
+В транзакции:
+
+- запоминаем `previousOperationId` / `previousEmployeeId`;
+- считаем `nextRouteStepIndex` через `OrderRouteStep` lookup
+  (`OPERATION_SCAN` не двигает `currentRouteStepIndex` если шаг
+  не найден в snapshot — soft-route);
+- `Passport.update { currentOperationId, currentEmployeeId, status:
+  IN_PROGRESS, currentRouteStepIndex }`;
+- `PassportEvent.create(OPERATION_SCAN)`;
+- `EarningsService.createPendingForPreviousOperation(tx, ...)` —
+  pending-начисление **предыдущему** исполнителю (см. §10.2);
+- audit `PASSPORT_SCANNED`.
+
+`POST /api/passports/:id/complete-operation` —
+`PassportsService.completeOperationByEmployee`,
+`docs/production-flow.md §7.2`, `docs/events.md §2.3`.
+
+Швея явно завершает свою операцию по паспорту. Source of truth для
+завершаемой операции — `session.operationId` (а **не**
+`passport.currentOperationId`); это критично для route-WIP
+«issue без последующего scan».
+
+Запрещён откат назад по маршруту — `OrderRouteStep` с
+`completedOperationId` стоящий раньше `currentRouteStepIndex` →
+`PassportCompleteBackwardException` (409
+`PASSPORT_COMPLETE_BACKWARD`). Откат — прерогатива мастера через
+`MasterActionsService.setRouteStep`.
+
+В транзакции: `Passport.update { currentEmployeeId: null,
+currentCellId: null, currentOperationId =
+completedOperationId, currentRouteStepIndex }`,
+`PassportEvent(OPERATION_FINISHED)`, audit
+`PASSPORT_OPERATION_COMPLETED`. Status остаётся `IN_PROGRESS` —
+паспорт уходит из «current-work» швеи в WIP-buffer.
+
+### 7.7 Резолверы по коду
+
+`POST /api/passports/by-code` — `PassportsService.findByCode`
+(см. `passports.controller.ts`). Резолв QR `passport:{id}`,
+номера `P-…` или голого id без побочных эффектов. Используется
+`/work` перед `issue` / `scan`.
+
+---
+
+<a id="8-qc-wto"></a>
+
+## 8. ОТК / ВТО / дефекты
+
+### 8.1 `DefectType`
+
+Источник: `prisma/schema.prisma::DefectType`,
+`apps/api/src/modules/qc/defect-types.controller.ts`,
+`docs/api.md §38`.
+
+Справочник видов брака. Поля: `code` (uniq), `name`, `isActive`,
+`sortOrder`. Seed: `STAIN`, `HOLE`, `CROOKED_SEAM`, `SKEW`,
+`INCOMPLETE`, `OTHER` (`prisma/seed.ts → seedDefectTypes`).
+Расширение/деактивация — через будущий админ-UI; на MVP
+write-эндпоинтов нет.
+
+### 8.2 `PassportDefect` и фиксация брака
+
+Источник: `prisma/schema.prisma::PassportDefect`,
+`QcService.recordDefect`
+(`apps/api/src/modules/qc/qc.service.ts`),
+`docs/production-flow.md §8.2`, `docs/events.md §2.5`.
+
+Поля: `passportId → Passport`, `defectTypeId → DefectType`, `qty`,
+`comment?`, `createdByEmployeeId? → Employee`. Индексы:
+`(passportId, createdAt)`, `(defectTypeId, createdAt)`.
+
+`POST /api/qc/passports/:id/defects` (RBAC `QC` / `SHOP_MANAGER`
+(+ `ADMIN`)). Гварды:
+
+- `passport.status === IN_PROGRESS` — иначе
+  `PassportNotQcableException`.
+- `defectType` существует и активен.
+- `dto.qty <= passport.qtyCut − passport.qtyDefect` (под локом
+  внутри tx) — иначе `DefectExceedsRemainingException`.
+
+В одной tx:
+
+- `PassportDefect.create(...)`;
+- `Passport.update { qtyDefect: { increment: qty }, qtyGood: {
+  decrement: qty } }`;
+- `PassportEvent.create({ type: DEFECT_RECORDED, employeeId,
+  operationId = currentOperationId, qty, payload: { defectId,
+  defectTypeId, defectTypeCode, defectTypeName, comment } })`.
+
+**Асимметрия (`docs/events.md §9.12`).** `recordDefect` НЕ пишет
+`AuditLog`. Все остальные «парные» доменные события паспорта
+пишутся `PassportEvent + AuditLog`, кроме `CREATED` и
+`DEFECT_RECORDED`. UNKNOWN/TODO: осознанный это выбор или пропуск
+— код этого не фиксирует явно.
+
+### 8.3 `QC_PASSED` — audit-маркер «ОТК прошло»
+
+Источник: `QcService.completeQc`
+(`apps/api/src/modules/qc/qc.service.ts`),
+`docs/production-flow.md §8.3`, `docs/events.md §9.3`.
+
+`POST /api/qc/passports/:id/complete` (RBAC `QC` / `SHOP_MANAGER`
+(+ `ADMIN`)).
+
+В одной tx:
+
+- `PassportEvent.create({ type: QC_PASSED, employeeId,
+  operationId = passport.currentOperationId, qty: qtyGood })`;
+- audit `QC_COMPLETED`.
+
+**Не меняет** `Passport.status` / `currentOperationId` /
+`currentEmployeeId` / `currentCellId` — это аудит-маркер.
+Идемпотентно: повторное «Проверка выполнена» допустимо, каждое
+нажатие — отдельное событие.
+
+Derived флаги в `QcService.loadDetail`:
+
+- `qcCompletedAt` — `createdAt` самого свежего `QC_PASSED`;
+- `removedFromQc` — `true` если `qcCompletedAt !== null` И
+  (паспорт `PACKED`/`CANCELLED` ИЛИ есть `OPERATION_SCAN` после
+  `qcCompletedAt`).
+
+### 8.4 `WTO_PASSED` — audit-маркер «ВТО прошло»
+
+Источник: `WtoService.completeWto`
+(`apps/api/src/modules/wto/wto.service.ts`),
+`docs/production-flow.md §9.2`, `docs/events.md §9.4`.
+
+`POST /api/wto/passports/:id/complete` (RBAC `IRONING` /
+`SHOP_MANAGER` (+ `ADMIN`)).
+
+Гварды:
+
+- `passport.status === IN_PROGRESS` —
+  `PassportNotWtoableException`;
+- `passport.currentOperation.category === IRONING` — то же
+  exception;
+- существует хотя бы один `PassportEvent(QC_PASSED)`
+  (`assertQcPassed`) — иначе `PassportNotQcPassedException`.
+
+В одной tx: `PassportEvent.create({ type: WTO_PASSED })` + audit
+`WTO_COMPLETED`. Полный аналог `completeQc`: state паспорта не
+меняется. Sub-инвариант «`WTO_PASSED` ⇒ был `QC_PASSED`»
+дополнительно защищён в `PassportsService.scanOnOperation`
+(QC-gate для `IRONING`, см. §7.6).
+
+«Принять паспорт на ВТО» отдельной ручкой не оформлено — это
+обычный `POST /api/passports/:id/scan` с операцией категории
+`IRONING`. Backend сам делает QC-gate (`docs/api.md §28`).
+
+### 8.5 RBAC и доступность для ОТК
+
+`QcService.listForQc` отдаёт все паспорта со
+`status === IN_PROGRESS` (ADR-0013): это компромисс шире, чем
+«после первого `OPERATION_SCAN`», но не требует отдельного
+запроса по событиям.
+
+---
+
+<a id="9-packing"></a>
+
+## 9. Упаковка / коробки
+
+### 9.1 `Box` / `BoxItem`
+
+Источник: `prisma/schema.prisma::Box`/`BoxItem`,
+`apps/api/src/modules/packing/packing.service.ts`,
+`docs/erd.md §2.7`, `docs/production-flow.md §10`,
+ADR-0011, ADR-0015.
+
+`Box`:
+
+- `number` (uniq, формат `B-YYYYMMDD-NNNN`,
+  `BoxNumberService`);
+- `qrCode` (uniq, `box:{id}`, ADR-0008);
+- `totalQty Int @default(0)`, `maxQty Int @default(100)`;
+- `closedAt DateTime?` — `null` пока коробка открыта;
+- `createdById → Employee` (BoxCreator).
+
+`BoxItem`:
+
+- `boxId`, `passportId String @unique` (ГЛОБАЛЬНО уникален —
+  ADR-0015), `(boxId, passportId)` UNIQUE, `qty Int`.
+
+«Packed-флаг» хранится в `Passport.status = PACKED` и в
+`PassportEvent(type = PACKED)`.
+
+### 9.2 `addPassport` — добавление паспорта в коробку
+
+Источник: `PackingService.addPassport`
+(`apps/api/src/modules/packing/packing.service.ts` ~233–355).
+
+`POST /api/packing/boxes/:id/add-passport` (RBAC `PACKING` /
+`SHOP_MANAGER` (+ `ADMIN`)).
+
+Pre-flight:
+
+- `assertPackingActor(actorEmployeeId)` — у актора есть открытая
+  `ShiftSession` на операции категории `PACKING`;
+- резолв паспорта (`resolvePassport`) — по `passportId`,
+  `passportNumber` или QR `passport:{id}`;
+- гварды: `PACKED` → `PassportAlreadyPackedException`,
+  `CANCELLED` → `PassportCancelledException`,
+  `status !== IN_PROGRESS || qtyGood <= 0` →
+  `PassportNotPackableException`.
+
+В транзакции:
+
+- перечитываем Box под локом, проверяем `closedAt === null`
+  (`BoxClosedException`);
+- однородность коробки (ADR-0011 §3): все `BoxItem` должны иметь
+  тот же `(productId, sizeId, color)` что и новый паспорт —
+  иначе `BoxHomogeneityViolatedException`;
+- capacity: `passport.qtyGood > box.maxQty − box.totalQty` →
+  `BoxCapacityExceededException`;
+- `BoxItem.create({ boxId, passportId, qty: qtyGood })`;
+- `Box.update { totalQty: { increment: qtyGood } }`;
+- `Passport.update { status: PACKED, currentEmployeeId: null,
+  currentCellId: null }` (`currentOperationId` оставляется как
+  «последний след»);
+- `PassportEvent(PACKED)`;
+- audit `PASSPORT_PACKED` (`entityType = 'PACKING'`,
+  `entityId = boxId`).
+
+### 9.3 `close` — финальный апрув начислений
+
+> **Снятие старого утверждения.** Финальный апрув начислений
+> происходит **на закрытии коробки**, а **не** на add-passport.
+> Раньше (до scan-driven редизайна `/packing`) апрув был на
+> add-passport, и на это до сих пор могли ссылаться старые версии
+> доки. Источник истины кода — `PackingService.close`
+> (`apps/api/src/modules/packing/packing.service.ts` ~368–424) и
+> комментарий `// Финальный шаг цепочки … перенесено на закрытие
+> коробки`. Подробности — ADR-0005 §«Подтверждение», ADR-0011 §5,
+> `docs/production-flow.md §10.4`/§11.3, `docs/events.md §9.6`.
+
+Источник: `PackingService.close`,
+`docs/production-flow.md §10.4`.
+
+`POST /api/packing/boxes/:id/close` (RBAC `PACKING` /
+`SHOP_MANAGER` (+ `ADMIN`)).
+
+В одной транзакции:
+
+- `assertPackingActor(actor)`;
+- проверяем существование коробки и `closedAt === null`
+  (`BoxClosedException`); `totalQty > 0`
+  (`BoxEmptyCloseException`);
+- `Box.update { closedAt: new Date() }`;
+- для каждого `BoxItem.passportId` —
+  `EarningsService.approvePendingForPassport(tx, passportId)`
+  (см. §10.2);
+- audit `BOX_CLOSED` (`payload: { boxId, totalQty, passportIds }`).
+
+Идемпотентность повторного close — двумя уровнями:
+
+- `BoxClosedException` не даст вызвать апрув повторно;
+- `approvePendingForPassport` фильтрует только
+  `PENDING_RELEASE`/`PENDING` — APPROVED-строки не цепляются.
+
+**Дополнительных начислений упаковщику не создаётся** — упаковка
+на MVP оплачивается окладом (см. §10).
+
+### 9.4 Public-роуты
+
+- `GET /api/packing/boxes/:id/qr` (Public, ADR-0008) — PNG QR
+  `box:{id}`.
+- `GET /api/packing/boxes/:id/label` (Public, ADR-0010) — HTML
+  A6 80×120 мм этикетка.
+
+### 9.5 Связь с агрегатами заказа
+
+`Order.qtyFinishedTotal` — `Σ Passport.qtyGood` по PACKED-паспортам
+заказа, считается через `aggregateOrder`
+(`apps/api/src/modules/orders/order-aggregator.ts`). Отдельной
+записи в `Order` нет.
+
+---
+
+<a id="10-payroll"></a>
+
+## 10. Начисления / зарплата
+
+### 10.1 Ось «как платим» — `Employee.compensationType`
+
+Источник: `prisma/schema.prisma::Employee`,
+`apps/api/src/modules/employees/compensation.ts`,
+ADR-0021, `docs/erd.md §2.1`.
+
+Единственная ось «как платим» —
+`Employee.compensationType: CompensationType` enum
+(`PIECEWORK | SALARY | MIXED`, default `PIECEWORK`). Историческое
+поле `paymentType` удалено из схемы (миграция
+`20260429100000_remove_payment_type`).
+
+| `compensationType` | Получает `SalaryEntry`?         | Получает `OperationEntry`? |
+| ------------------ | ------------------------------- | -------------------------- |
+| `PIECEWORK`        | нет                             | да — по обычным правилам   |
+| `SALARY`           | да (за каждый день со сменой)   | нет (silent skip)          |
+| `MIXED`            | да                              | да                         |
+
+Pure-функции в `apps/api/src/modules/employees/compensation.ts` —
+**единственное** место, где правило выражается прямыми сравнениями
+с enum-значениями:
+
+- `isPieceworkEligible(type)` — `true` для `PIECEWORK`/`MIXED`
+  (используется `EarningsService` как gate перед
+  `OperationEntry`);
+- `isSalaryEligible(type)` — `true` для `SALARY`/`MIXED`
+  (используется `SalaryService.syncDailySalary` как gate перед
+  `SalaryEntry`, а также `CostsService` / `DashboardService`);
+- `requiresSalaryRate(type)` — тождествен `isSalaryEligible`,
+  используется `EmployeesService.create/update` как guard перед
+  `EMPLOYEE_SALARY_RATE_REQUIRED`.
+
+`Employee.salaryPerShift Decimal(12,2)?` — обязателен для
+`SALARY`/`MIXED` (инвариант
+`requiresSalaryRate ⇒ salaryPerShift > 0`).
+`Employee.salaryBase` — legacy, runtime payroll не читает
+(`docs/erd.md §2.1`).
+
+`Employee.cutterB2bSewingPercent: Decimal(5,2)?` — B2B-процент для
+раскройщика (см. §10.2).
+
+### 10.2 Сдельные начисления (`OperationEntry`)
+
+Источник: `prisma/schema.prisma::OperationEntry` (~1184),
+`apps/api/src/modules/earnings/earnings.service.ts`,
+ADR-0005, ADR-0012, ADR-0020,
+`docs/production-flow.md §11`, `docs/erd.md §2.9`,
+`docs/api.md §30`.
+
+Поля: `passportId, operationId, employeeId, qty,
+ratePerUnit: Decimal(12,2), amount: Decimal(12,2), status:
+EntryStatus @default(PENDING_RELEASE), approvalMode: ApprovalMode
+@default(AFTER_RELEASE), sourceEventType: EarningSource
+@default(OPERATION_TRANSITION), sourceEventId?, createdAt,
+approvedAt?`.
+
+`amount = round(qty × ratePerUnit, 2)` — `Decimal(12,2)` через
+`roundMoney`. `qty` берётся как `passport.qtyCut` (для immediate)
+или `passport.qtyCut` (для pending — брак не вычитается из
+ранее созданных начислений, ADR-0012 §3).
+
+Идемпотентность: `@@unique(passportId, operationId, employeeId,
+sourceEventType)` (`OperationEntry_idem`, ADR-0012). Повторный
+trigger → `P2002` тихо проглатывается в `safeCreate`
+(`docs/events.md §9.9`).
+
+#### `ApprovalMode`
+
+| Mode             | Кто                         | Когда `APPROVED`                                         |
+| ---------------- | --------------------------- | -------------------------------------------------------- |
+| `IMMEDIATE`      | Раскройщик (`CUT_CUT`)      | В момент создания (`approvedAt = createdAt`).           |
+| `AFTER_RELEASE`  | Пошив                       | В транзакции **закрытия коробки** (`PackingService.close` → `EarningsService.approvePendingForPassport` для каждого `BoxItem`). |
+
+`REVERSED` / `CANCELLED` — заложены в enum под будущий flow
+возврата паспорта в производство; на MVP write-эндпоинтов под них
+**нет** (UNKNOWN/TODO).
+
+#### `EarningSource`
+
+`PASSPORT_CREATED` (раскройщик) | `OPERATION_TRANSITION` (пошив).
+`sourceEventId` (опц.) — ссылка на конкретный `PassportEvent.id`,
+послуживший триггером (для пошива).
+
+#### Триггеры создания
+
+**`createImmediateForCutter`** — в транзакции
+`PassportsService.create` после `PassportEvent(CREATED)`
+(`docs/production-flow.md §11.1`):
+
+- проверяет `Employee(cutterId).active &&
+  isPieceworkEligible(compensationType)`;
+- `Operation(code='CUT_CUT')`; если `pricingMode = SALARY_ONLY`
+  — silent skip (раскрой переведён на оклад);
+- источник истины для схемы — `Order.division` через
+  `getCutterCompensationSchemeForDivision`
+  (`packages/shared/src/cutter-compensation.ts`):
+  - `MARKETPLACE` → `MARKETPLACE_FIXED`:
+    `amount = Operation.fixedRate × qty` через
+    `OperationsService.resolveRate` (FIXED / BY_SIZE);
+  - `OTHER` → `B2B_SEWING_PERCENT`:
+    `base = Σ rate(SEWING-операция, размер) × qty`,
+    `percent = employee.cutterB2bSewingPercent ?? ENV
+    CUTTER_B2B_SEWING_PERCENT`,
+    `amount = base × percent / 100`.
+- запись: `status: APPROVED, approvalMode: IMMEDIATE,
+  sourceEventType: PASSPORT_CREATED, approvedAt: createdAt`.
+
+**`createPendingForPreviousOperation`** — в транзакции
+`PassportsService.scanOnOperation` для **предыдущей** операции
+(`docs/production-flow.md §11.2`):
+
+- skip если `previousOperationId === null` или
+  `previousEmployeeId === null` (первый scan после CUT_DIVISION
+  без явного previous);
+- skip если `qty <= 0`;
+- `Operation(previousOperationId).pricingMode === SALARY_ONLY` или
+  `code === 'CUT_CUT'` — skip;
+- `Employee(previousEmployeeId)` должен быть `active &&
+  isPieceworkEligible`;
+- `OperationsService.resolveRate(operationId, sizeId, tx)` —
+  единственный источник ставки (FIXED / BY_SIZE; SALARY_ONLY →
+  null/skip);
+- если ставка не найдена — silent skip;
+- запись: `status: PENDING_RELEASE, approvalMode: AFTER_RELEASE,
+  sourceEventType: OPERATION_TRANSITION, sourceEventId =
+  PassportEvent.id, approvedAt: null`.
+
+**`approvePendingForPassport`** — в транзакции
+`PackingService.close` для каждого `BoxItem.passportId`
+(`docs/production-flow.md §11.3`):
+
+- `OperationEntry.updateMany({ where: { passportId, status: { in:
+  [PENDING_RELEASE, PENDING] } }, data: { status: APPROVED,
+  approvedAt: new Date() } })`.
+- Возвращает `count` затронутых записей (для логов).
+- **Единственный** call-site — `PackingService.close`
+  (`docs/events.md §9.6`).
+
+> Устаревший JSDoc в `EarningsService` (`earnings.service.ts:52`)
+> упоминает «вызывается из `PackingService.addPassport`» — это
+> ложный след; реальный call-site только в `close()`. На поведение
+> это не влияет, но зафиксировано как WARNING в
+> `docs/events.md §9.6`.
+
+#### Read-эндпоинты
+
+`GET /api/earnings`, `/api/earnings/summary`,
+`/api/passports/:id/earnings` — RBAC через `applyViewerScope` в
+`EarningsService` (`docs/api.md §30`):
+
+- `SHOP_MANAGER`/`ADMIN` (=`EARNINGS_MANAGER_ROLES`) видят все
+  строки и могут фильтровать `employeeId`/`status`;
+- остальные роли — принудительный скоуп `employeeId =
+  viewer.employeeId` И `status: APPROVED`.
+
+### 10.3 Окладные начисления (`SalaryEntry`)
+
+Источник: `prisma/schema.prisma::SalaryEntry` (~1236),
+`apps/api/src/modules/salary/*`,
+ADR-0021, `docs/production-flow.md §12`, `docs/erd.md §2.9`,
+`docs/api.md §31`.
+
+Поля: `employeeId, date: Date, amount: Decimal(12,2), source:
+SalaryEntrySource @default(SHIFT_DAY), editedManually: Boolean
+@default(false), managerComment?, editedByEmployeeId?,
+createdAt, updatedAt`. Уникальность —
+`@@unique([employeeId, date, source])` (один день — одна запись на
+сотрудника для одного `source`).
+
+#### `SalaryEntrySource`
+
+- `SHIFT_DAY` — автоматическая запись от факта смены (см. ниже).
+- `MANUAL` — зарезервирован под кейс «оплатить день, в который
+  смены физически не было». UNKNOWN/TODO: в `SalaryService` нет
+  явного create-пути под `source = MANUAL`
+  (`docs/production-flow.md §12.1`).
+
+#### `syncDailySalary(employeeId, date, tx?)`
+
+Создаёт/обновляет ровно одну `SalaryEntry` на пару `(employeeId,
+date)` для `source = SHIFT_DAY`. Безопасно вызывать любое
+количество раз. Алгоритм:
+
+1. Грузит `Employee.compensationType`/`salaryPerShift`/`active`.
+   `PIECEWORK` или `!active` → return null.
+2. Считает количество `ShiftSession` за UTC-сутки. 0 → return null.
+3. `salaryPerShift === null` → return null (аномалия, но не валим
+   `start/stop shift`).
+4. `upsert` по `(employeeId, date, source = SHIFT_DAY)`:
+   - update только если `editedManually = false` →
+     `amount = salaryPerShift`;
+   - создание новой → `amount = salaryPerShift, source: SHIFT_DAY`;
+   - если `editedManually = true` — `amount` не трогается.
+
+Точки вызова — `ShiftsService.start` / `ShiftsService.stop` через
+`safeSyncSalary` (fail-soft логер: ошибка sync **не валит** сам
+shift).
+
+#### Ручная корректировка
+
+`PATCH /api/salary/:id` (RBAC `SHOP_MANAGER` / `ADMIN`):
+
+- `amount` (опц.) — новая сумма;
+- `managerComment` (опц., `null` = очистить);
+- `reset = true` — снять ручную правку, вернуть запись под
+  `syncDailySalary` (`amount = employee.salaryPerShift`; если
+  ставка не задана — 422 `SALARY_RATE_MISSING`).
+
+Любая правка ставит `editedManually = true` и `editedByEmployeeId
+= viewer.employeeId`. `employeeId`/`date`/`source` менять через
+PATCH **нельзя**.
+
+### 10.4 RBAC
+
+| Endpoint                                | Роли                                  |
+| --------------------------------------- | ------------------------------------- |
+| `GET /api/earnings`, `/summary`         | Any auth (scope в сервисе)            |
+| `GET /api/salary`, `/summary`           | Any auth (scope в сервисе)            |
+| `PATCH /api/salary/:id`                 | `SHOP_MANAGER`, `ADMIN`               |
+| `GET /api/employees`, `POST/PATCH /:id` | `SHOP_MANAGER`, `ADMIN`               |
+
+Список менеджерских ролей — `SALARY_MANAGER_ROLES`
+(`apps/api/src/modules/salary/salary.constants.ts`,
+зеркало `EARNINGS_MANAGER_ROLES`).
+
+### 10.5 Что MVP сознательно НЕ делает
+
+- Расчёт часов / half-day / коэффициенты загрузки.
+- Месячный payroll по календарю / норме часов.
+- Отпуска / больничные / командировки.
+- Удержания за брак для окладных ролей.
+- Интеграция с 1С/ЗУП и экспорт в Excel.
+- История изменений `SalaryEntry.amount` (только последний
+  `editedBy`).
+
+---
+
+<a id="11-warehouse"></a>
+
+## 11. Склад / ячейки
+
+### 11.1 `Warehouse` / `WarehouseLine`
+
+Источник: `prisma/schema.prisma::Warehouse`,
+`apps/api/src/modules/warehouses/*`, ADR-0019,
+`docs/erd.md §2.6`, `docs/api.md §26`.
+
+`Warehouse`: `name` (uniq), `code? @unique`, `isActive`,
+`labelTemplate?`. Связи: `Cell[]`, `WarehouseLine[]`. Индекс
+`isActive`.
+
+`WarehouseLine` — линия склада (полка/ряд). `code` уникален
+**глобально**. `warehouseId → Warehouse` (Cascade).
+
+### 11.2 `Cell` / `CellContent`
+
+Источник: `prisma/schema.prisma::Cell`/`CellContent`,
+`apps/api/src/modules/passports/cells.controller.ts`,
+ADR-0008, `docs/erd.md §2.6`, `docs/api.md §25`.
+
+`Cell`: `code` (uniq), `qrCode` (uniq, `cell:{id}` — ADR-0008),
+`active`, `warehouseId? → Warehouse`, `lineId? → WarehouseLine`
+(`SetNull`), `lineIndex: Int?`. `(lineId, lineIndex)` UNIQUE.
+
+`CellContent` — `(cellId, sizeId, quantity)`,
+`@@unique([cellId, sizeId])`. Это **лёгкий счётчик**;
+истинный размещённый паспорт хранится в
+`Passport.currentCellId`.
+
+### 11.3 Операции
+
+- **`POST /api/passports/:id/place`** — инкремент
+  `CellContent[size] += qtyCut`, `Passport.currentCellId = cell.id`,
+  `PassportEvent(CELL_PLACED)`. См. §7.5.
+- **`POST /api/passports/:id/issue`** (FROM_CELL ветка) —
+  декремент `CellContent[size]` через `max(quantity − qtyCut, 0)`,
+  `Passport.currentCellId = null`. Отдельного `CELL_REMOVED`
+  события на этом шаге **не пишется** (`docs/events.md §2.7`,
+  `§9.1` WARNING).
+- **`MasterActionsService.returnToCell` / `setRouteStep`
+  (BACKWARD)** — инкремент `CellContent[size]`. Идемпотентно для
+  той же ячейки (`noop = true` в audit).
+
+### 11.4 RBAC и UI
+
+- `GET /api/cells*`, `POST /api/cells/by-code` — Any auth.
+- `PATCH /api/cells/:id` — `SHOP_MANAGER`/`ADMIN`. На MVP правит
+  только `warehouseId` (см. `WarehousesService.setCellWarehouse`).
+- Все `/api/warehouses/*` — `SHOP_MANAGER`/`ADMIN`.
+- `GET /api/cells/:id/print`, `/qr` — `@Public()` (для принтер-станции).
+
+Массовая печать этикеток (`POST /api/warehouses/:id/print-cells`,
+`docs/api.md §26`): backend создаёт `cellsCount × copies`
+PENDING-`PrintJob`-ов с `sourceType=CELL_LABEL` (см. §14).
+
+### 11.5 Что склад НЕ делает
+
+- Не влияет на размещение паспорта в ячейку (любая ячейка
+  пригодна, склад — только группировка).
+- Не вводит capacity/планирование.
+- Не моделирует зоны/секции/полки за пределами `WarehouseLine`.
+
+---
+
+<a id="12-shopfloor"></a>
+
+## 12. Экран цеха / Display
+
+### 12.1 Shopfloor projection (read-only)
+
+Источник: `apps/api/src/modules/shopfloor/shopfloor.service.ts`,
+`apps/api/src/modules/shopfloor/shopfloor-projection.ts`
+(`bucketOf`, `projectShopfloor`, `projectShopfloorDisplay`),
+ADR-0013, `docs/production-flow.md §15`, `docs/api.md §32`.
+
+Не доменная сущность, а **проекция** «размер × этап → qty» поверх
+существующих агрегатов (orders + passports + qc + packing). Никаких
+новых таблиц, событий или мутаций — все правила маппинга в чистой
+функции `bucketOf(p: ProjectionPassport): ShopfloorStage | null`.
+
+### 12.2 ShopfloorStage buckets
+
+| Bucket    | Условие на паспорте                                                                                                          | qty       |
+| --------- | ---------------------------------------------------------------------------------------------------------------------------- | --------- |
+| `CUT`     | `status = CREATED` ИЛИ (rare) `IN_PROGRESS + currentOperationCategory = CUTTING + currentEmployeeId = null` (CUT-rollback мастером). | `qtyCut`  |
+| `SEWING`  | `IN_PROGRESS + currentOperationCategory ∈ {CUTTING, SEWING}` (CUTTING сюда попадает после `issueToEmployee` до первого `OPERATION_SCAN`) ИЛИ `currentOperationCategory = null` (защита от «дыр»). | `qtyCut`  |
+| `QC`      | `IN_PROGRESS + currentOperationCategory = QC + НЕТ свежего QC_PASSED`.                                                       | `qtyCut`  |
+| `QC_DONE` | `IN_PROGRESS + currentOperationCategory = QC + есть свежий QC_PASSED` (`createdAt > max(OPERATION_SCAN.createdAt)`).         | `qtyCut`  |
+| `WTO`     | `IN_PROGRESS + currentOperationCategory = IRONING + НЕТ свежего WTO_PASSED`.                                                 | `qtyCut`  |
+| `WTO_DONE`| `IN_PROGRESS + currentOperationCategory = IRONING + есть свежий WTO_PASSED`.                                                 | `qtyCut`  |
+| `PACKING` | `PACKED + хотя бы один BoxItem в OPEN-коробке (box.closedAt IS NULL)`.                                                       | `qtyGood` |
+| `FINISHED`| `PACKED + PACKING-условие не сработало` (нет `BoxItem` или все коробки закрыты).                                             | `qtyGood` |
+
+`DEFECT` — **не stage**; отдельный показатель
+`Σ Passport.qtyDefect` среди не-`CANCELLED` паспортов.
+`CANCELLED`-паспорта исключаются во всех бакетах.
+
+Источник свежести `QC_PASSED` / `WTO_PASSED`:
+`ShopfloorService.getDisplaySummary` гонит один `groupBy` по
+`PassportEvent`, ограниченный кандидатами (`IN_PROGRESS + category
+∈ {QC, IRONING}`), и сравнивает `max(createdAt)` с
+`max(OPERATION_SCAN.createdAt)`.
+
+### 12.3 `Order.division`
+
+Источник: `prisma/schema.prisma::enum OrderDivision`
+(`MARKETPLACE | OTHER`, default `OTHER`),
+`docs/order-flow.md §1`, `docs/api.md §13`.
+
+Управленческая ось для фильтра
+`/api/shopfloor/display?division=…`. Меняется только в `DRAFT`,
+после `IN_PRODUCTION` блокируется общим guard `ORDER_LOCKED`.
+Индексировано (`@@index([division])`).
+
+Влияет на сдельную схему раскройщика (см. §10.2):
+
+- `MARKETPLACE` → `MARKETPLACE_FIXED`;
+- `OTHER` → `B2B_SEWING_PERCENT`.
+
+### 12.4 `DisplayScreenConfig` и DISPLAY-учётка
+
+Источник: `prisma/schema.prisma::DisplayScreenConfig`,
+`apps/api/src/modules/display-screens/*`,
+`docs/erd.md §2.10`, `docs/api.md §33`.
+
+Управленческая запись «один большой монитор цеха». 1:1 связана с
+`Employee(role = DISPLAY)` через `employeeId @unique`.
+
+Поля: `name`, `division: OrderDivision`,
+`employeeId String UNIQUE → Employee` (`onDelete: Cascade`),
+`isActive`. Индексы: `division`, `isActive`.
+
+Жёсткие правила:
+
+- Создание DISPLAY-учётки идёт только через
+  `DisplayScreensService.create` — одной транзакцией создаёт
+  `Employee(role=DISPLAY, compensationType=SALARY,
+  salaryPerShift=null, active=true)` и `DisplayScreenConfig`.
+- В `/admin/employees/new` роль `DISPLAY` сознательно скрыта
+  (`EMPLOYEE_ROLES`).
+- `compensationType=SALARY, salaryPerShift=null` — DISPLAY-учётки
+  не загрязняют ни `OperationEntry`, ни `SalaryEntry`.
+- `DISPLAY` middleware (`apps/web/middleware.ts`) уводит на
+  `/shopfloor/display`; backend `@Roles` режет её во всех
+  управленческих endpoint-ах.
+
+**Auto-division в `/api/shopfloor/display`.** Без `?division=`
+`ShopfloorService.getDisplaySummary` смотрит на роль вызывающего:
+если `DISPLAY` и есть активный `DisplayScreenConfig` —
+`division`-фильтр берётся из конфига. `?division=` в URL имеет
+приоритет (для отладки и обратной совместимости).
+
+### 12.5 Дашборд начальника производства
+
+Источник: `apps/api/src/modules/dashboard/dashboard.service.ts`,
+`docs/api.md §34`.
+
+`/api/dashboard/production` (RBAC `SHOP_MANAGER`/`ADMIN`/`DISPLAY`)
+— агрегатор поверх существующих источников: `Passport` + `Order` +
+`PassportEvent(QC_PASSED/WTO_PASSED)` + `CostsService` +
+`PassportDurationsService`. Маппинг на стадии — те же правила, что
+у `/shopfloor` (ADR-0013), чтобы цифры совпадали 1:1.
+
+Семантика «сегодня vs период» жёсткая:
+
+- KPI «сегодня» (`producedToday`, `avgCostPerUnitToday`,
+  `idleCostToday`, `utilizationToday`) — UTC-сегодня независимо от
+  `?days=`;
+- график (`trend`) и сводки `…Period` — за `[dateTo − days + 1 .. dateTo]`.
+
+---
+
+<a id="13-master"></a>
+
+## 13. Мастер / MasterCall / MasterActions
+
+### 13.1 `MasterCall` (вызов мастера)
+
+Источник: `prisma/schema.prisma::MasterCall` (~2112),
+`apps/api/src/modules/master-calls/*`,
+`docs/erd.md §2.10` / §3, `docs/production-flow.md §14.1`,
+`docs/api.md §22`, `docs/events.md §4`.
+
+Поля:
+
+- `employeeId → Employee` (инициатор вызова);
+- `equipmentId? → Equipment` — снэпшот оборудования активной
+  смены на момент создания;
+- `operationId? → Operation` — снэпшот операции активной смены;
+- `status: MasterCallStatus @default(OPEN)` —
+  `OPEN | RESOLVED | CANCELLED` (последний зарезервирован, в коде
+  не используется — UNKNOWN/TODO `docs/events.md §4.2`);
+- `message?` — комментарий рабочего (UI пустой на MVP);
+- `createdAt`, `resolvedAt?`, `resolvedById?`.
+
+Индексы: `(status, createdAt)`, `(employeeId, status)`,
+`(equipmentId, status)`.
+
+Lifecycle:
+
+| Переход                  | Сервис                                       | AuditLog event           |
+| ------------------------ | -------------------------------------------- | ------------------------ |
+| (insert) `OPEN`          | `MasterCallsService.create`                  | `MASTER_CALLED` (только при реальном создании; идемпотентный return existing — без audit) |
+| `OPEN → RESOLVED`        | `MasterCallsService.resolveByEmployeeQr`     | `MASTER_CALL_RESOLVED`   |
+
+Идемпотентность: у одного сотрудника не может быть больше одного
+`OPEN`. `MasterCallsService.create` перед `INSERT` ищет существующий
+`OPEN` и возвращает его без создания дубля и без audit-записи.
+
+`PassportEvent` при вызовах мастера **не пишется** — это action над
+сотрудником, не над паспортом (`docs/events.md §4.3`).
+
+RBAC:
+
+- `POST /api/master-calls` — все рабочие роли + `SHOPFLOOR_MASTER`
+  + `SHOP_MANAGER` + `ADMIN`.
+- `GET /api/master-calls`, `POST /resolve-by-employee-qr` —
+  `SHOPFLOOR_MASTER` / `SHOP_MANAGER` / `ADMIN`.
+
+### 13.2 `MasterActions` (действия мастера над паспортами)
+
+Источник: `apps/api/src/modules/master-actions/master-actions.service.ts`,
+`packages/shared/src/master-actions.ts`,
+`docs/production-flow.md §14.2`, `docs/api.md §23`.
+
+Stage 2 «Мастер цеха» — ручной инструментарий «закрытия проблем».
+Все эндпоинты возвращают `MasterActionResultDto({ passport,
+before })` и пишут в `AuditLog` (`MASTER_PASSPORT_*`,
+`entityType = 'PASSPORT'`).
+
+| Действие              | Сервис                              | Что меняется в `Passport`                                                                                                        | AuditLog event |
+| --------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------- |
+| `unassign`            | `MasterActionsService.unassign`     | `currentEmployeeId = null`. `currentOperationId` / `currentRouteStepIndex` сохраняются.                                          | `MASTER_PASSPORT_UNASSIGNED` |
+| `transferToEmployee`  | `MasterActionsService.transferToEmployee` | `currentEmployeeId = target`, `currentCellId = null`, `status = IN_PROGRESS`. Если у target активная смена с операцией из snapshot — двигаем `currentRouteStepIndex` / `currentOperationId`. | `MASTER_PASSPORT_TRANSFERRED` |
+| `returnToCell`        | `MasterActionsService.returnToCell` | `currentCellId = cell.id`, `currentEmployeeId = null`. `CellContent[size] += qtyCut`. Идемпотентно: `noop = true` если уже в этой ячейке. | `MASTER_PASSPORT_RETURNED_TO_CELL` |
+| `setRouteStep`        | `MasterActionsService.setRouteStep` | `currentOperationId = op.id`, `currentRouteStepIndex = idx`, `currentEmployeeId = null`, `status = IN_PROGRESS`. **Forward**: `currentCellId = null`. **Backward**: обязательно требуется placement в ячейку (`MASTER_BACKWARD_ROUTE_REQUIRES_CELL` если нет cellQr/cellId), `currentCellId = cell.id`, `CellContent[size] += qtyCut`. | `MASTER_PASSPORT_ROUTE_STEP_SET` (`payload: { direction: 'FORWARD' | 'BACKWARD', requiredCellPlacement: bool, cellId? }`) |
+
+Каждое действие требует обязательного `reason` (Zod-enum
+`MASTER_ACTION_REASONS = WRONG_SCAN | SHIFT_HANDOVER |
+EMPLOYEE_MISTAKE | ROUTE_CORRECTION | CELL_CORRECTION |
+MANAGER_DECISION | OTHER`) и опциональный `comment` (≤500 символов).
+Без `reason` API возвращает 400 ещё до сервиса (Zod).
+
+Audit-payload содержит `reason`, `comment?`, `before`/`after`-снэпшот
+ключевых полей паспорта (`currentEmployeeId`, `currentCellId`,
+`currentOperationId`, `currentRouteStepIndex`, `status`) +
+target-метаданные (`targetEmployeeId`, `cellId`/`cellCode`,
+`operationId`/`routeStepIndex`, `qtyReturned`/`noop`).
+
+### 13.3 Safety-инварианты
+
+- Запрещено менять терминальные паспорта `PACKED` / `CANCELLED`
+  (`PassportTerminalForMasterException`, 409 `PASSPORT_TERMINAL`).
+- `setRouteStep` принимает только шаг из snapshot
+  `OrderRouteStep` заказа (`MASTER_ROUTE_STEP_NOT_IN_SNAPSHOT`);
+  если у заказа snapshot нет — `MASTER_ORDER_HAS_NO_ROUTE_SNAPSHOT`.
+- `setRouteStep` назад без placement —
+  `MASTER_BACKWARD_ROUTE_REQUIRES_CELL` (400).
+- `transferToEmployee` запрещён для несуществующего/неактивного
+  target (`MASTER_TARGET_EMPLOYEE_NOT_FOUND`/`_INACTIVE`).
+- `returnToCell` запрещён для несуществующей/неактивной ячейки
+  (`CELL_NOT_FOUND` / `CELL_INACTIVE`).
+
+### 13.4 WARNING — нарушение инварианта PassportEvent в одной транзакции
+
+Источник: `docs/events.md §9.1` — частичное нарушение.
+
+`MasterActionsService.{unassign, transferToEmployee, returnToCell,
+setRouteStep}` меняют «горячие» поля паспорта (`currentEmployeeId`,
+`currentOperationId`, `currentCellId`, `currentRouteStepIndex`,
+`status`), но **`PassportEvent` НЕ пишут** — только `AuditLog`.
+
+Это сознательная асимметрия (см. `docs/events.md §8.3`), но
+формально инвариант «PassportEvent атомарен с change of state»
+(`docs/events.md §9.1`) в этих транзакциях не выполняется. Все
+читатели `PassportEvent` (durations, stage derivation,
+shopfloor-projection) этих изменений в потоке событий **не
+увидят**.
+
+UNKNOWN/TODO: переход на пара `PassportEvent + AuditLog` для
+master-actions — отдельная задача; в MVP сознательно отложен.
+
+### 13.5 RBAC
+
+- `SHOPFLOOR_MASTER`, `SHOP_MANAGER`, `ADMIN`.
+- Запрещено: `SEAMSTRESS`, `CUTTER`, `CUTTER_ASSISTANT`, `QC`,
+  `IRONING`, `PACKING`, `DISPLAY`.
+- `SHOPFLOOR_MASTER` сознательно **не** имеет доступа к
+  admin-справочникам, ценам, маршрутам, пользователям, техкартам
+  — это зона менеджера/админа. Его UI ограничен `/master`.
+
+### 13.6 Что master-actions сознательно не делает
+
+- Не вводит ограничения выдачи кроя — `issueToEmployee` не
+  меняется. Ограничение выдачи делается через `CutReleasePolicy`
+  (см. §1.7).
+- Не делает «автомастера» / auto-fix — каждое действие требует
+  явного подтверждения и причины.
+- Не закрывает `MasterCall` автоматически после действия —
+  `MasterCall` закрывается отдельной кнопкой
+  `resolve-by-employee-qr`.
+
+---
+
+<a id="14-printing"></a>
+
+## 14. Печать / PrintJob / Agent
+
+### 14.1 Сущности
+
+Источник: `prisma/schema.prisma::Printer`/`PrintJob`,
+`apps/api/src/modules/printers/*`,
+ADR-0008, ADR-0010, `docs/erd.md §2.13`, `docs/api.md §39`-§41,
+`docs/events.md §7`, `apps/agent/README.md`.
+
+#### `Printer` (логический)
+
+| Поле                           | Тип                  | Назначение                                            |
+| ------------------------------ | -------------------- | ----------------------------------------------------- |
+| `id`                           | cuid                 | Постоянный идентификатор.                             |
+| `name`                         | string               | UI-имя.                                               |
+| `type`                         | `PrinterType` enum   | `PASSPORT`/`QR`/`LABEL`/`DEFAULT`. Управленческая метка. На MVP логика выбора принтера НЕ использует — только `equipmentId + isActive`. |
+| `equipmentId? → Equipment`     | FK (`SetNull`)       | Привязка к рабочему месту.                            |
+| `isActive`                     | bool                 | Менеджерская мягкая деактивация.                      |
+| `pairingCode?`                 | string               | Одноразовый код для агента.                           |
+| `agentToken?`                  | string               | Постоянный секрет агента после `pair`.                |
+| `isOnline`                     | bool                 | True после успешного heartbeat.                       |
+| `lastSeenAt?`                  | timestamp            | Время последнего контакта агента.                     |
+| `agentHostName?`               | string               | `os.hostname()` Windows-машины.                       |
+| `availableWindowsPrinters`     | string[] (`@default([])`) | Список физических Windows-принтеров (от `Get-Printer`). |
+| `windowsPrintersUpdatedAt?`    | timestamp            | Когда агент в последний раз прислал список.           |
+| `selectedWindowsPrinter?`      | string               | Имя выбранного физического Windows-принтера.          |
+
+Индексы: `(equipmentId, isActive)`, `isOnline`, `pairingCode`,
+`agentToken`.
+
+Логический `Printer` (БД) и физический Windows-принтер (драйвер на
+машине) — **разные сущности**. Связка задаётся через
+`selectedWindowsPrinter` (имя из последнего
+`availableWindowsPrinters` от этого `agentHostName`).
 
 #### `PrintJob`
 
 | Поле           | Тип                    | Назначение                                              |
-|----------------|------------------------|---------------------------------------------------------|
-| `printerId`    | FK → `Printer`         | Куда печатаем.                                          |
-| `sourceType`   | `PrintJobSource` enum  | `PASSPORT_QR`/`PASSPORT_PRINT`/`BOX_LABEL`/`CELL_QR`/`CELL_LABEL`/`TEST`. `CELL_LABEL` — готовая 38×58 HTML-этикетка ячейки (`/api/cells/:id/print`), используется массовой печатью «Печать всех ячеек» (см. §16). |
-| `sourceId`     | string?                | Идентификатор объекта-источника (без FK — экономия).    |
-| `payloadUrl`   | string                 | Абсолютный URL существующего печатного endpoint-а API.  |
-| `status`       | `PrintJobStatus` enum  | `PENDING` → `PRINTED` или `FAILED`.                     |
-| `errorMessage` | string?                | Заполняется агентом при `FAILED`.                       |
-| `completedAt`  | timestamp?             | Когда агент закрыл задание.                             |
+| -------------- | ---------------------- | ------------------------------------------------------- |
+| `printerId`    | FK → `Printer` (Cascade) | Куда печатаем.                                        |
+| `sourceType`   | `PrintJobSource` enum  | `PASSPORT_QR | PASSPORT_PRINT | BOX_LABEL | CELL_QR | CELL_LABEL | TEST`. |
+| `sourceId?`    | string                 | ID объекта-источника (без FK).                          |
+| `payloadUrl`   | string                 | Абсолютный URL уже существующего печатного endpoint-а. |
+| `status`       | `PrintJobStatus` enum  | `PENDING → PRINTED | FAILED`.                            |
+| `errorMessage?`| string                 | Заполняется агентом при `FAILED`.                       |
+| `completedAt?` | timestamp              | Когда агент закрыл задание.                             |
 
-Каждый `PrintJobDto`, который backend отдаёт агенту, дополнительно
-несёт `selectedWindowsPrinter` — текущее значение из `Printer`. Это
-сделано, чтобы у агента был «снимок выбора на момент задания»: даже
-если менеджер сменит физический принтер сразу после polling-а, конкретное
-задание уйдёт туда, куда задумывалось при выдаче.
+Индексы: `(printerId, status, createdAt)`, `(status, createdAt)`.
 
-Сознательно простая модель: ретраев и SENT/PROCESSING нет, повторная
-печать = новый job. `payloadUrl` указывает на УЖЕ существующие
-endpoint-ы (`/api/passports/:id/print`, `/api/passports/:id/qr`,
-`/api/packing/boxes/:id/label`, `/api/cells/:id/qr`) — мы НЕ дублируем
-рендер.
+Lifecycle (`docs/events.md §7.2`):
 
-### Логика выбора принтера
+| Переход               | Writer                              | Примечание                                  |
+| --------------------- | ----------------------------------- | ------------------------------------------- |
+| (insert) `PENDING`    | `PrintJobsService.createForUser` / `createBatch` | `payloadUrl` собирается через `buildPayloadUrl` (`sourceType → /api/.../print|qr|label`). |
+| `PENDING → PRINTED`   | `PrintJobsService.updateStatus`     | агент патчит, фиксируется `completedAt`.    |
+| `PENDING → FAILED`    | `PrintJobsService.updateStatus`     | агент сохраняет `errorMessage`.             |
 
-Когда сотрудник нажимает «Печать» (без явного `printerId`):
+Нельзя закрыть закрытый job (`PrintJobAlreadyClosedException`).
+Ретраев нет; повторная печать = новый `PrintJob`. Каждый
+`PrintJobDto`, который backend отдаёт агенту, дополнительно несёт
+`selectedWindowsPrinter` — снимок выбора на момент задания.
+
+`PrintJob` — операционная сущность. Ни `AuditLog`, ни `PassportEvent`
+на его переходы **не пишутся** (`docs/events.md §7.4`).
+
+### 14.2 Логика выбора принтера
+
+При `POST /api/print-jobs` без явного `printerId`
+(`apps/api/src/modules/printers/print-jobs.service.ts:resolvePrinter`):
 
 1. Берём активную смену сотрудника (`ShiftSession.endedAt = null`).
 2. Если смены нет — `409 SHIFT_SESSION_REQUIRED`.
-3. Берём `equipmentId` смены, ищем `Printer` где
-   `equipmentId = ?` и `isActive = true`. Если несколько —
-   первый по `createdAt` (на MVP достаточно).
+3. Берём `equipmentId` смены; ищем `Printer { equipmentId,
+   isActive: true }`. Если несколько — первый по `createdAt`.
 4. Если принтера нет — `409 PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT`.
 
-`PrintButton` на фронтенде при коде `PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT`
-или `SHIFT_SESSION_REQUIRED` открывает `fallbackHref` в новой вкладке —
-это сохраняет печать на тех рабочих местах, где агент ещё не настроен.
+`PrintButton` (`apps/web/`) при коде
+`PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT` или
+`SHIFT_SESSION_REQUIRED` открывает `fallbackHref` в новой вкладке
+— это сохраняет печать на тех рабочих местах, где агент ещё не
+настроен.
 
-### Подключение агента (pair flow)
+Передавать явный `printerId` могут только `SHOP_MANAGER`/`ADMIN`
+(тестовая печать), иначе `403 FORBIDDEN_ROLE`.
 
-1. Менеджер в `/admin/printers` создаёт `Printer`, привязывает к
-   `Equipment`.
-2. Жмёт «Сгенерировать код» → backend пишет `pairingCode` (формат
-   `PAIR-XXXX-XXXX`, алфавит без 0/O/1/I) и возвращает его в UI.
-3. Жмёт «Скачать агент» → ссылка на `GET /api/printers/agent-download/sewing-print-agent.exe`
-   (public-endpoint, отдаёт собранный Windows-exe из
-   `apps/agent/dist/sewing-print-agent.exe`; сборка —
-   `cd apps/agent && npm run build:win`).
-4. На Windows-станции (без установки Node.js):
-   ```
-   sewing-print-agent.exe --pair --server https://api.example --code PAIR-XXXX-XXXX
-   sewing-print-agent.exe
-   ```
-   Pair-команда обменивает `pairingCode` на постоянный `agentToken` и
-   `printerId`, сохраняет их в локальный `agent-config.json`. После
-   `pair`-а `pairingCode` на сервере очищается.
-5. Агент в основном режиме раз в 2-3 секунды бьёт
-   `GET /api/print-jobs/agent` (с `X-Printer-Agent-Token`). Каждый
-   poll обновляет `Printer.lastSeenAt` и `isOnline=true` — так UI
-   `/admin/printers` рисует «онлайн».
-6. При появлении `PrintJob` агент скачивает `payloadUrl`,
-   физически печатает и отправляет `PATCH /api/print-jobs/:id` со
-   статусом `PRINTED` или `FAILED + errorMessage`.
+### 14.3 Подключение агента
 
-### Выбор Windows-принтера (flow)
+Агент — Node.js-процесс, постоянно живущий рядом с физическим
+принтером на Windows-станции. Сборка — `apps/agent/` →
+`sewing-print-agent.exe` (Public-эндпоинт
+`/api/printers/agent-download/sewing-print-agent.exe`).
 
-Полная цепочка `pair → upload printers → manager selects → print`
-выглядит так:
+Pair flow (`docs/api.md §41`):
 
-1. **Pair.** Менеджер делает шаги 1-4 выше (`Printer` создан,
-   `pairingCode` обменян на `agentToken`).
-2. **Upload printers.** Сразу после `pair` (и затем каждые ~60 сек)
-   агент:
-   - читает `os.hostname()`;
-   - на Windows вызывает `Get-Printer | Select-Object -ExpandProperty Name`
-     и получает `availableWindowsPrinters: string[]`;
-   - шлёт `POST /api/printers/agent/windows-printers`
-     с `{ hostName, printers }` под `X-Printer-Agent-Token`.
+1. Менеджер создаёт `Printer` в `/admin/printers` и привязывает
+   к `Equipment`.
+2. Жмёт «Сгенерировать код» — `POST /api/printers/:id/pairing-code`
+   пишет `Printer.pairingCode` (формат `PAIR-XXXX-XXXX`).
+3. На Windows-станции запускается `sewing-print-agent.exe --pair
+   --server <url> --code <pairingCode>`. Pair-команда обменивает
+   `pairingCode` на `agentToken + printerId`, сохраняет в
+   `agent-config.json`. После pair `pairingCode` на сервере
+   очищается.
+4. Агент в основном режиме раз в 2-3 секунды бьёт
+   `GET /api/print-jobs/agent` (`X-Printer-Agent-Token`). Каждый
+   poll обновляет `Printer.lastSeenAt` и `isOnline=true`
+   (`PrintJobsService.pollForAgent` + `printers.heartbeat`).
+5. При появлении `PrintJob` агент скачивает `payloadUrl`,
+   физически печатает и отправляет
+   `PATCH /api/print-jobs/:id { status: 'PRINTED' | 'FAILED',
+   errorMessage? }`.
 
-   Backend сохраняет `agentHostName`, `availableWindowsPrinters`,
-   `windowsPrintersUpdatedAt`, обновляет `isOnline/lastSeenAt`,
-   возвращает текущий `selectedWindowsPrinter` (нужен агенту, чтобы
-   сразу знать, куда печатать).
-3. **Manager selects.** В `/admin/printers/[id]` появляется блок
-   «Физический принтер Windows» с `agentHostName`, статусом «онлайн»
-   и `<select>` по `availableWindowsPrinters`. Сохранение делает
-   `PATCH /api/printers/:id { selectedWindowsPrinter }`.
-   Backend проверяет, что выбранное имя есть в `availableWindowsPrinters`,
-   иначе — `422 WINDOWS_PRINTER_NOT_FOUND_FOR_AGENT`.
-4. **Print.** При выдаче job-а агенту backend кладёт в `PrintJobDto`
-   текущий `selectedWindowsPrinter`. Агент печатает именно туда. Если
-   `selectedWindowsPrinter = null` (менеджер ещё не выбрал) — агент
-   не печатает и сразу закрывает job как `FAILED` с понятным
-   `errorMessage`, чтобы было видно в `/admin/printers/:id` и не
-   терялось в `payload.pdf`-моменте.
+### 14.4 Выбор Windows-принтера
 
-Если агент офлайн, UI всё равно показывает последний известный
-`agentHostName + availableWindowsPrinters + selectedWindowsPrinter` и
-`windowsPrintersUpdatedAt` («список от 2026-04-20 14:32») —
-менеджер видит, с чем работал последний раз.
+После pair агент периодически (~60 сек) шлёт
+`POST /api/printers/agent/windows-printers { hostName, printers:
+string[] }`. Backend сохраняет `agentHostName`,
+`availableWindowsPrinters`, `windowsPrintersUpdatedAt`, обновляет
+`isOnline/lastSeenAt`, возвращает текущий `selectedWindowsPrinter`.
 
-### RBAC
+Менеджер выбирает физический принтер через
+`PATCH /api/printers/:id { selectedWindowsPrinter }`. Backend
+проверяет наличие выбранного имени в
+`availableWindowsPrinters`, иначе —
+`422 WINDOWS_PRINTER_NOT_FOUND_FOR_AGENT`.
+
+Если `selectedWindowsPrinter = null` — агент не печатает и сразу
+закрывает job как `FAILED` с понятным `errorMessage`.
+
+### 14.5 RBAC
 
 - `SHOP_MANAGER`/`ADMIN` — управляют принтерами (CRUD), генерируют
-  pairingCode, видят список и историю заданий, делают тестовую
-  печать на конкретный принтер.
+  `pairingCode`, видят список и историю заданий, делают тестовую
+  печать.
 - Любая залогиненная роль — может вызвать `POST /api/print-jobs`
-  без `printerId` (выбор принтера по своей смене).
-- Передавать явный `printerId` в `POST /api/print-jobs` могут только
-  менеджеры (тестовая печать) — иначе `403 FORBIDDEN_ROLE`.
-- Агент авторизуется заголовком `X-Printer-Agent-Token`. Без
-  токена / с неактивным принтером — `401`.
+  без `printerId`.
+- Агент авторизуется заголовком `X-Printer-Agent-Token`
+  (`AgentAuthGuard`). Без токена / с неактивным принтером — 401.
 
-См. `api.md §16`, `screens.md §18`, `apps/agent/README.md`.
+---
 
+<a id="events"></a>
+<a id="15-audit-events"></a>
 
-## §18. Маршруты производства (production routes, soft-route MVP)
+## 15. Audit / Events
 
-«Шаблон маршрута производства» — упорядоченный список операций, по
-которому идёт партия: например, `Раскрой → Пошив → ОТК → ВТО →
-Упаковка`. На MVP это **«мягкий» маршрут**:
+Источник: `prisma/schema.prisma::PassportEvent` / `AuditLog`,
+`apps/api/src/modules/audit/audit.service.ts`,
+`docs/events.md` целиком, `docs/erd.md §2.5` / §2.14.
 
-- менеджер заводит шаблоны в `/admin/routes`;
-- при создании заказа можно (опционально) привязать `routeTemplateId`;
-- при `OrdersService.start()` шаги шаблона фиксируются в **snapshot**
-  `OrderRouteStep[]` — заказ становится самодостаточным и больше не
-  зависит от того, что менеджер сделает с шаблоном дальше (правка
-  шагов / деактивация / удаление);
-- паспорт хранит подсказку `Passport.currentRouteStepIndex` — индекс
-  текущего шага в snapshot-е заказа;
-- **никакого enforcement**: на `POST /api/passports/:id/scan` мы не
-  проверяем «совпадает ли операция с маршрутом». Если совпадает —
-  обновляем `currentRouteStepIndex`, если нет — оставляем как было,
-  scan всё равно проходит. UI на `/work` подсветит warning, но не
-  заблокирует.
+### 15.1 Две независимые сущности
 
-### Сущности
+В системе сосуществуют **две** независимые сущности «события», и
+важно их не путать:
 
-#### `RouteTemplate`
+#### `PassportEvent` — доменные события движения паспорта
 
-| Поле       | Тип      | Назначение                                                     |
-|------------|----------|----------------------------------------------------------------|
-| `id`       | cuid     | Постоянный идентификатор.                                      |
-| `code`     | string   | Уникальный человекочитаемый код, регистр `[A-Z0-9_-]` (например, `TSHIRT-BASIC`). Используется в API и в селекте при создании заказа. |
-| `name`     | string   | Видимое название («Базовая футболка»).                          |
-| `isActive` | bool     | Менеджерская мягкая деактивация: неактивный шаблон не виден в селекте при создании нового заказа, но snapshot-ы старых заказов продолжают жить. |
-| `createdAt`/`updatedAt` | timestamp | Стандарт. |
+- Schema-level enum `PassportEventType` (нельзя опечататься).
+- Только `Passport`-агрегат (`passportId` FK).
+- **Читается бизнес-логикой**: guard `QC → IRONING`
+  (`PassportsService.scanOnOperation`,
+  `WtoService.assertQcPassed`); derived stage на `/shopfloor` и
+  `/dashboard`; расчёт длительностей стадий
+  (`apps/api/src/modules/costs/passport-durations.service.ts`);
+  pending-начисление через `sourceEventId` (`OPERATION_SCAN.id` ⇢
+  `OperationEntry.sourceEventId`).
+- Пишется только тогда, когда реально меняется физический факт по
+  паспорту.
 
-#### `RouteTemplateStep`
+#### `AuditLog` — универсальный журнал управленческих действий
 
-| Поле          | Тип   | Назначение                                                        |
-|---------------|-------|-------------------------------------------------------------------|
-| `id`          | cuid  | Постоянный идентификатор.                                         |
-| `templateId`  | FK → `RouteTemplate` | `ON DELETE CASCADE`.                                |
-| `index`       | int   | 0-based позиция шага. Уникально в рамках шаблона (`@@unique([templateId, index])`). |
-| `operationId` | FK → `Operation`     | `ON DELETE RESTRICT` — нельзя случайно удалить операцию, на которую ссылается шаблон. Уникально в рамках шаблона (`@@unique([templateId, operationId])`) — операция в шаблоне ровно один раз. |
-| `isOptional`  | bool  | Зафиксировано в данных, но на MVP не используется в enforcement-е (готовим себе пространство для «можно пропустить шаг» в будущем). |
+- Свободная строка `event` (новые коды добавляются без миграции).
+- Любой агрегат через `entityType: String + entityId: String` (без
+  FK).
+- `payload: Json` (произвольный срез контекста; часто
+  `before/after/changedFields`).
+- **Не читается бизнес-логикой** ни в одном месте — только
+  запись (`docs/events.md §8.2`).
 
-#### `OrderRouteStep` (snapshot)
+Допустимые `entityType` (источник истины — тип `AuditEntityType`
+в `audit.service.ts:13-170`):
 
-| Поле          | Тип   | Назначение                                                        |
-|---------------|-------|-------------------------------------------------------------------|
-| `id`          | cuid  | Постоянный идентификатор.                                         |
-| `orderId`     | FK → `Order` | `ON DELETE CASCADE`.                                       |
-| `index`       | int   | 0-based позиция шага в snapshot-е (`@@unique([orderId, index])`). |
-| `operationId` | FK → `Operation` | `ON DELETE RESTRICT`.                                  |
+```
+PASSPORT | ORDER | QC | WTO | PACKING |
+MASTER_CALL | CUT_RELEASE_POLICY |
+CLIENT | PATTERN | PATTERN_CATEGORY |
+WORKSHOP_NEED | SUPPLIER |
+PURCHASE_ORDER | PURCHASE_RECEIPT |
+ORDER_APPLICATION | ORDER_COST_ESTIMATE |
+ORDER_MATERIAL_ARRIVAL_OVERRIDE |
+SIZE
+```
 
-Snapshot создаётся в **транзакции** внутри `OrdersService.start()`:
-если у заказа выставлен `routeTemplateId` И snapshot-а ещё нет —
-читаем активные шаги шаблона и инсертим `OrderRouteStep[]`. Если
-шаблона нет — snapshot не создаётся, заказ идёт по «старому» flow
-без подсказок (полный backward-compatibility).
+### 15.2 Атомарность `AuditLog` с операцией
 
-### Жизненный цикл
+Источник: `AuditService.log(input, tx?)`
+(`audit.service.ts:229-260`), `docs/events.md §3.1`, §9.11.
 
-1. **Менеджер заводит шаблон** в `/admin/routes/new`: код, название,
-   набор операций в нужном порядке (стрелки ↑/↓), флажок
-   «опционально» на отдельных шагах.
-2. **Менеджер создаёт заказ** в `/orders/new` и (опционально)
-   выбирает шаблон в селекте «Шаблон маршрута». До запуска заказ
-   живёт в `DRAFT` — `routeTemplateId` можно сменить через
-   `PATCH /api/orders/:id` (после `start()` менять нельзя).
-3. **Менеджер запускает заказ** (`POST /api/orders/:id/start`).
-   В транзакции: статус → `IN_PRODUCTION`, snapshot
-   `OrderRouteStep[]` инсертится из активных шагов шаблона.
-4. **Создаётся паспорт** (`POST /api/passports`). Если у заказа есть
-   snapshot — `Passport.currentRouteStepIndex = 0`.
-5. **Швея сканирует паспорт на операции** (`POST /api/passports/:id/scan`).
-   Если операция найдена в snapshot-е заказа — индекс паспорта
-   обновляется на найденный. Если нет — не меняется. Scan-у это
-   никак не мешает.
-6. **На `/work` карточка `Сейчас в работе`** показывает
-   «Сейчас: Шаг N: <Op>» и «Далее: Шаг N+1: <Op>». Если операция
-   текущей смены не совпадает с маршрутом — выводится мягкое
-   жёлтое предупреждение «Внимание: ваша смена идёт на другой
-   операции — маршрут заказа сейчас на шаге <X>». Кнопки приёма /
-   завершения остаются доступными.
+- Если передан `tx` — запись идёт в той же транзакции, что и сама
+  бизнес-операция («либо и операция, и аудит, либо ничего»).
+- Без `tx` — fail-soft: ошибка глушится в WARN-лог. Это сознательный
+  legacy-fallback. Все известные сейчас call-сайты передают `tx`.
 
-### Что специально НЕ делаем на MVP
+### 15.3 Парность доменных событий и аудита
 
-- Не проверяем порядок шагов на бэкенде (никаких 409-ов «шаг
-  пропущен» / «не та операция»). См. `STEP 5` ТЗ MVP.
-- Не пересохраняем snapshot при правке шаблона: уже запущенные
-  заказы продолжают идти по своему `OrderRouteStep[]`.
-- Не показываем маршрут на `/orders/:id` UI диаграммой — на MVP
-  достаточно подсказки в `/work`. Snapshot всё равно отдаётся в
-  `OrderDetailDto.routeSteps` и доступен фронту.
+Парные пары (одна транзакция пишет обе записи):
 
-См. `api.md §17 (routes)`, `screens.md §«Маршруты»`,
-`apps/api/src/modules/routes/`.
+| Действие                   | `PassportEvent`        | `AuditLog`                       |
+| -------------------------- | ---------------------- | -------------------------------- |
+| поставить паспорт в ячейку | `CELL_PLACED`          | `PASSPORT_PLACED`                |
+| выдать швее                | `ISSUED_TO_EMPLOYEE`   | `PASSPORT_ISSUED { mode }`       |
+| скан на операции           | `OPERATION_SCAN`       | `PASSPORT_SCANNED`               |
+| швея завершила операцию    | `OPERATION_FINISHED`   | `PASSPORT_OPERATION_COMPLETED`   |
+| ОТК подтвердил             | `QC_PASSED`            | `QC_COMPLETED`                   |
+| ВТО подтвердил             | `WTO_PASSED`           | `WTO_COMPLETED`                  |
+| упаковали в коробку        | `PACKED`               | `PASSPORT_PACKED`                |
 
-## §19. Техкарты (tech cards, MVP)
+Асимметрии (зафиксированы в коде):
 
-См. ADR-0022. Техкарта — справочный шаблон **«потребностей на единицу
-изделия»**: какие материалы нужны и какие внешние подрядные размещения
-(шелкография, печать этикеток, вышивка — `OUTSOURCED_SERVICE` из
-терминологии операций). Техкарта и маршрут — **независимые** оси:
-маршрут отвечает «что делает швея», техкарта — «что нужно положить в
-этот заказ». Привязка к заказу опциональна: можно создать заказ без
-техкарты (полная backward compatibility со старым flow).
+- **Создание паспорта** пишет только `PassportEvent(CREATED)`, без
+  `AuditLog` (`docs/events.md §3.3`).
+- **Фиксация брака** пишет только `PassportEvent(DEFECT_RECORDED)`
+  + `PassportDefect`, без `AuditLog` (`docs/events.md §9.12`).
+- **Закрытие коробки** (`BOX_CLOSED`) и **master-actions**
+  (`MASTER_PASSPORT_*`) пишут только `AuditLog`, без
+  `PassportEvent`.
+- **Вызовы мастера** (`MASTER_CALLED`, `MASTER_CALL_RESOLVED`) пишут
+  только `AuditLog` — паспорт тут не меняется.
+- **Заказы поставщикам и приёмки** живут полностью в `AuditLog` —
+  `PassportEvent` для них не существует.
 
-### Сущности
+### 15.4 Реестр audit-event-кодов (PHASE 2 inventory)
 
-#### `TechCardTemplate`
+Полный, актуальный реестр — `docs/events.md §3.3`. Самые важные
+коды по доменам:
 
-- `id`, `code` (уникален), `name`, `isActive`.
-- Имеет связи `materialLines: TechCardMaterialLine[]` и
-  `outsourceLines: TechCardOutsourceLine[]`.
-- Деактивированный шаблон скрыт в селекте при создании заказа, но
-  остаётся виден в редактировании уже привязанного DRAFT-заказа
-  (тот же UX, что и `RouteTemplate`).
+#### Паспорта (`entityType = PASSPORT`)
 
-#### `TechCardMaterialLine`
+`PASSPORT_PLACED`, `PASSPORT_ISSUED { mode: 'FROM_CELL' |
+'ROUTE_WIP' }`, `PASSPORT_SCANNED`,
+`PASSPORT_OPERATION_COMPLETED`, `MASTER_PASSPORT_UNASSIGNED`,
+`MASTER_PASSPORT_TRANSFERRED`, `MASTER_PASSPORT_RETURNED_TO_CELL`,
+`MASTER_PASSPORT_ROUTE_STEP_SET`.
 
-- `name`, `unit` (обязательно), `qtyPerUnit Decimal(12,4)` (> 0,
-  валидируется DTO/сервисом, не DB-check), `note?`, `sortOrder`.
-- Cascade-FK на `TechCardTemplate`. Имена внутри одной техкарты не
-  уникализируем (бывают одинаковые ткани разного назначения).
+#### Упаковка (`entityType = PACKING`)
 
-#### `TechCardOutsourceLine`
+`PASSPORT_PACKED` (`entityId = boxId`), `BOX_CLOSED`.
 
-- `name`, `unit?`, `qtyPerUnit Decimal(12,4)?`, `vendorName?`,
-  `note?`, `sortOrder`.
-- `unit`/`qtyPerUnit` опциональны: часть подрядов считается «за
-  партию» без явной нормы.
-- `vendorName` — свободный текст, vendor-directory мы НЕ строим.
+#### ОТК / ВТО
 
-#### `Order.techCardId`
+`QC_COMPLETED` (`entityType = QC, entityId = passportId`),
+`WTO_COMPLETED` (`entityType = WTO`).
 
-- Опциональная FK, аналог `routeTemplateId`. На MVP менеджер
-  выбирает техкарту вручную (`Product.defaultTechCardId` отложен).
+#### Заказы (`entityType = ORDER` / `ORDER_COST_ESTIMATE`)
 
-#### `OrderMaterialRequirement` / `OrderOutsourceRequirement` (snapshot)
+`ORDER_CREATED`, `ORDER_UPDATED`, `ORDER_PATTERN_CHANGED`,
+`ORDER_PATTERN_SNAPSHOT_CREATED`, `ORDER_OPERATION_PLAN_RECALCULATED`,
+`ORDER_CALCULATION_STARTED`, `ORDER_CALCULATION_COMPLETED`,
+`ORDER_COST_ESTIMATE_CREATED`, `ORDER_CALCULATION_REOPENED`,
+`ORDER_STARTED`.
 
-- Read-only план потребностей конкретного заказа. Создаётся в
-  `OrdersService.start()` и больше не меняется при правках техкарты.
-- Поля копируют шаблон + добавляется `totalQty Decimal(12,4)`
-  (для outsource — nullable).
-- FK `sourceTechCardLineId` — nullable, **`ON DELETE SET NULL`**.
-  Это и есть «независимость snapshot-а»: даже если позже строку
-  шаблона удалят, snapshot заказа продолжает работать со
-  скопированным именем/нормой/итогом, просто без обратной ссылки.
+UNKNOWN/TODO: `ORDER_COMPLETED` / `ORDER_CANCELLED` коды
+**не пишутся** — `OrdersService.complete` и `cancel` без
+audit-event (`docs/events.md §5.4`).
 
-### Жизненный цикл
+#### Master / Calls (`entityType = MASTER_CALL`)
 
-1. **Менеджер заводит техкарту** в `/admin/tech-cards/new`: код,
-   название, активность; добавляет строки материалов и/или внешних
-   потребностей (без drag-and-drop, порядок строк = порядок в
-   форме).
-2. **Менеджер создаёт заказ** в `/orders/new` и опционально
-   выбирает техкарту в селекте «Техкарта». До запуска заказ живёт
-   в `DRAFT` — `techCardId` можно сменить через
-   `PATCH /api/orders/:id`. После `start()` поменять нельзя
-   (`409 ORDER_TECH_CARD_ALREADY_STARTED`).
-3. **Менеджер запускает заказ** (`POST /api/orders/:id/start`).
-   В одной транзакции: статус → `IN_PRODUCTION`, snapshot
-   маршрута (если выбран `routeTemplateId`), snapshot техкарты
-   (если выбран `techCardId`).
-4. **Расчёт `totalQty`**:
-   - `baseQty = Σ OrderItem.qtyPlan` по всем строкам заказа;
-   - для материалов: `totalQty = qtyPerUnit * baseQty`
-     (`Prisma.Decimal`-математика, без округлений);
-   - для outsource: `totalQty = qtyPerUnit * baseQty`, если
-     `qtyPerUnit != null`; иначе snapshot хранит `totalQty = null`.
-5. **Карточка заказа** (`/orders/:id`) отдаёт snapshot read-only:
-   блоки «Материалы» и «Внешние потребности». Источник истины —
-   snapshot заказа, а не live-шаблон. Если `techCardId == null` или
-   заказ ещё в `DRAFT`, оба блока показывают спокойный empty-state
-   «не зафиксированы».
+`MASTER_CALLED`, `MASTER_CALL_RESOLVED`. UNKNOWN/TODO:
+`MasterCallStatus.CANCELLED` не выставляется ни одним сервисом
+(`docs/events.md §4.2`).
 
-### Что специально НЕ делаем на MVP
+#### Закупки
 
-- **Никаких формул/размерных коэффициентов/процентов отходов** —
-  только плоский `qtyPerUnit * baseQty`.
-- **Не enforce-им «нельзя стартовать без техкарты»** — техкарта
-  опциональна, как `routeTemplateId`.
-- **Не строим `Product.defaultTechCardId`** — менеджер выбирает
-  руками. Это сахар, который добавится без breaking-changes.
-- **Не строим vendor-directory** — `vendorName` свободный текст.
-- **Не учитываем snapshot потребностей в `CostsService` /
-  dashboard** — material-cost остаётся как есть (см. ADR-0022,
-  «Отложено»).
-- **Не трогаем shopfloor / display / паспорта / QC / WTO / packing
-  flow** — техкарта живёт сбоку и не влияет на пайплайн
-  производства.
+`PURCHASE_ORDER_CREATED/_UPDATED/_LINE_UPDATED/_SENT/_CONFIRMED/_CANCELLED`,
+`PURCHASE_RECEIPT_CREATED/_CANCELLED`. UNKNOWN/TODO: авто-переходы
+PO `→ RECEIVED / PARTIALLY_RECEIVED` через
+`PurchaseReceiptsService.recalcAfterChange` идут **без** audit-события
+(`docs/events.md §6.2`).
 
-См. `api.md §«tech-cards»`, `screens.md §«Техкарты»`, ADR-0022,
-`apps/api/src/modules/tech-cards/`.
+#### Cut release / прочее
+
+`CUT_RELEASE_POLICY_CREATED/_UPDATED/_DISABLED/_CONSUMED`,
+`ORDER_MATERIAL_ARRIVAL_OVERRIDE_CREATED/_REVOKED`,
+`CLIENT_*`, `PATTERN_*`, `PATTERN_CATEGORY_*`, `WORKSHOP_NEED_*`,
+`SUPPLIER_*`, `ORDER_APPLICATION_*`, `SIZE_CREATED`,
+`EQUIPMENT_CREATED/_UPDATED/_OPERATIONS_REPLACED`.
+
+### 15.5 Ключевые инварианты (сводная таблица)
+
+Источник: `docs/events.md §9` целиком.
+
+| № | Инвариант                                                       | Где обеспечивается                              | Нарушения / WARNING                                                                                  |
+| - | --------------------------------------------------------------- | ----------------------------------------------- | --------------------------------------------------------------------------------------------------- |
+| 1 | `PassportEvent` в той же tx, что и change of state              | `passports`, `qc`, `wto`, `packing`             | **WARNING.** `MasterActionsService` меняет state без `PassportEvent` (только `AuditLog`, см. §13.4). |
+| 2 | `PACKED ⟺ Passport.status = PACKED`                            | `PackingService.addPassport`                    | нет                                                                                                  |
+| 3 | `QC_PASSED` не меняет state                                     | `QcService.completeQc`                          | нет                                                                                                  |
+| 4 | `WTO_PASSED` не меняет state; sub-инвариант `WTO ⇒ был QC_PASSED` | `WtoService.{completeWto, assertQcPassed}` + `PassportsService.scanOnOperation` IRONING-gate | нет |
+| 5 | `OPERATION_SCAN` не финализирует операцию                       | пара `scanOnOperation` vs `completeOperationByEmployee` | нет                                                                                          |
+| 6 | `approvePendingForPassport` только после `close()`              | `PackingService.close` → единственный call-site | **WARNING.** Устаревший JSDoc `earnings.service.ts:52`.                                              |
+| 7 | `CREATED` — первое событие паспорта                             | `PassportsService.create`                       | нет                                                                                                  |
+| 8 | `OPERATION_SCAN` идемпотентен на (passport, op, employee)      | early-return + `OperationEntry @@unique`        | нет                                                                                                  |
+| 9 | Создание начислений идемпотентно                                | `EarningsService.safeCreate` + schema `@@unique`| нет                                                                                                  |
+| 10| `close()` идемпотентен                                          | `BoxClosedException` + фильтр `approvePending`  | нет                                                                                                  |
+| 11| `AuditLog` атомарен с операцией только при передаче `tx`        | `AuditService.log`                              | **WARNING.** Без `tx` fail-soft (WARN-лог).                                                          |
+| 12| `DEFECT_RECORDED` пишется без `AuditLog`                        | `QcService.recordDefect`                        | **WARNING — асимметрия.**                                                                            |
+| 13| `PassportStatus.CANCELLED` ни одним сервисом не выставляется    | (нет writer-а)                                  | **WARNING — invariant by absence.**                                                                  |
+
+### 15.6 Что MVP сознательно НЕ делает
+
+- `AuditLog` НЕ источник правды для денежных и доменных проекций
+  (для этого есть `PassportEvent`, `OperationEntry`, `SalaryEntry`).
+- Не плодит события ради событий: новый `event` добавляется только
+  если он отвечает на конкретный операционный вопрос.
+- Не enforce-ит схему `payload` на уровне БД — эволюция payload-а
+  должна быть дешёвой. Согласованность поддерживается code review.
+- UI/API над журналом — out-of-scope MVP. Чтение пока — задача
+  поддержки/админа через БД.
+
+---
+
+## UNKNOWN / TODO (сводный список)
+
+Все факты, которые **нельзя** подтвердить только из кода или которые
+зарезервированы в схеме без runtime-write:
+
+1. `PassportStatus.CANCELLED` — ни один сервис в `apps/api/src` не
+   выставляет этот статус. Сценария отмены паспорта на MVP нет
+   (`docs/events.md §9.13`).
+2. `PassportEventType.OPERATION_STARTED` / `MOVED` / `CELL_REMOVED`
+   / `CANCELLED` — зарезервированы в enum, но runtime их не пишет
+   (`docs/events.md §2.2`, §2.4, §2.7, §2.13).
+3. `MasterCallStatus.CANCELLED` — зарезервирован, не выставляется
+   (`docs/events.md §4.2`).
+4. `OrdersService.complete` (`IN_PRODUCTION → DONE`) и `cancel`
+   (`* → CANCELLED`) **не пишут `AuditLog`** —
+   осознанное упрощение или пропуск, из кода однозначно не следует
+   (`docs/events.md §5.4`).
+5. `QcService.recordDefect` пишет `PassportEvent(DEFECT_RECORDED)`
+   без парного `AuditLog` — асимметрия с остальными доменными
+   событиями (`docs/events.md §9.12`).
+6. Авто-переходы `PurchaseOrder.status` (`RECEIVED` /
+   `PARTIALLY_RECEIVED` / откат) внутри
+   `PurchaseReceiptsService.recalcAfterChange` идут без
+   собственного `AuditLog`-события (`docs/events.md §6.2`).
+7. `OperationEntry.status ∈ {CANCELLED, REVERSED}` — заложены
+   в enum под будущий flow возврата паспорта в производство;
+   write-эндпоинтов под них на MVP нет.
+8. `SalaryEntry.source = MANUAL` — есть в schema, в
+   `SalaryService.syncDailySalary` явного create-пути под него
+   нет; пишется только через `PATCH /api/salary/:id` сценарий
+   ручной правки (`docs/production-flow.md §12.1`).
+9. `RouteTemplateStep.isOptional` — поле есть в схеме, но в
+   enforcement-е MVP не используется (см. §2.3).
+10. `CuttingClosureRequest`: переход `APPROVED → REJECTED`
+    (отмена закрытия) — в коде не реализован.
+11. `PurchaseReceiptLine.cellId` фиксирует ячейку приёмки, но
+    `CellContent` при этом **не** обновляется — складские
+    остатки на ячейках на MVP по-прежнему ведутся только через
+    `PassportsService.place` (см. §6.3).
+12. Поведение `PassportEvent.employeeId` при удалении сотрудника:
+    FK без явной директивы `onDelete` (дефолт Prisma) —
+    UNKNOWN/TODO (`docs/events.md §10`).
+13. Точная формулировка set warnings
+    `OrderOperationPlanWarnings[]` — собирается в
+    `OrderOperationPlanService.calculateForOrder`; полный
+    human-readable набор сообщений документируется по факту
+    отдельным разделом после ревизии (`docs/order-flow.md §«Что
+    осталось UNKNOWN/TODO»`).
+
+---
+
+## Использованные исходники
+
+Prisma:
+- `prisma/schema.prisma` — модели и enum-ы (источник истины);
+- `prisma/migrations/**` — DDL.
+
+Сервисы (`apps/api/src/modules/**`):
+- `orders/orders.service.ts`,
+  `orders/order-cost-estimates.service.ts`,
+  `orders/order-operation-plan.service.ts`,
+  `orders/order-production-balance.service.ts`,
+  `orders/order-aggregator.ts`;
+- `routes/routes.service.ts`;
+- `tech-cards/tech-cards.service.ts`;
+- `patterns/patterns.service.ts`,
+  `pattern-categories/pattern-categories.service.ts`;
+- `workshop-needs/workshop-needs.service.ts`;
+- `suppliers/suppliers.service.ts`;
+- `purchase-orders/purchase-orders.service.ts`;
+- `purchase-receipts/purchase-receipts.service.ts`;
+- `passports/passports.service.ts`,
+  `passports/passport-number.service.ts`,
+  `passports/cells.controller.ts`;
+- `qc/qc.service.ts`;
+- `wto/wto.service.ts`;
+- `packing/packing.service.ts`,
+  `packing/box-number.service.ts`;
+- `earnings/earnings.service.ts`;
+- `salary/salary.service.ts`;
+- `shifts/shifts.service.ts`;
+- `shopfloor/shopfloor.service.ts`,
+  `shopfloor/shopfloor-projection.ts`;
+- `display-screens/display-screens.service.ts`;
+- `dashboard/dashboard.service.ts`;
+- `costs/costs.service.ts`,
+  `costs/passport-durations.service.ts`,
+  `costs/production-cost-v2.service.ts`;
+- `master-calls/master-calls.service.ts`;
+- `master-actions/master-actions.service.ts`;
+- `cut-readiness/cut-readiness.service.ts`;
+- `cut-release-policy/cut-release-policy.service.ts`;
+- `cutting-closure/cutting-closure.service.ts`;
+- `order-applications/order-applications.service.ts`;
+- `order-material-arrivals/order-material-arrivals.service.ts`;
+- `printers/printers.service.ts`,
+  `printers/print-jobs.service.ts`,
+  `printers/printers-agent.controller.ts`;
+- `audit/audit.service.ts`;
+- `employees/employees.service.ts`,
+  `employees/compensation.ts`;
+- `equipment/equipment.service.ts`;
+- `warehouses/warehouses.service.ts`;
+- `diagnostics/diagnostics.service.ts`.
+
+Производные доки (карты от того же кода):
+- `docs/erd.md` — модели/enum-ы по доменам;
+- `docs/order-flow.md` — заказы и snapshot-механика;
+- `docs/production-flow.md` — паспорта, ОТК/ВТО, упаковка, payroll;
+- `docs/events.md` — `PassportEvent` vs `AuditLog`, инварианты;
+- `docs/api.md` — карта routes от контроллеров.
+
+ADR (контекст решений): 0002, 0003, 0005, 0006, 0007, 0008, 0009,
+0010, 0011, 0012, 0013, 0014, 0015, 0017, 0018, 0019, 0020, 0021,
+0022 — см. `docs/adr/`.

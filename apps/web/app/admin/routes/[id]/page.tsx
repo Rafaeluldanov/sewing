@@ -1,10 +1,21 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { Activity, ArrowLeft, Trash2 } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getRouteTemplate } from '@/lib/routes-api';
 import { getShiftMeta } from '@/lib/shifts-api';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
-import { Icon } from '@/components/icon';
-import { DetailPageHeader } from '@/components/detail-page-header';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminRouteSteps,
+  AdminSectionHeader,
+  AdminStatusBadge,
+  AdminTechInfo,
+  type AdminRouteStep,
+} from '@/components/admin';
+import { formatStatus, statusTone } from '@/lib/admin-labels';
 import { RouteTemplateForm } from '../route-template-form';
 import { deleteRouteTemplateAction } from '../actions';
 
@@ -15,17 +26,13 @@ interface Params {
 }
 
 /**
- * Карточка шаблона маршрута. Источник истины — `GET /api/routes/:id`.
+ * Карточка шаблона маршрута (Admin UI 2.6).
  *
- * Все поля (`code`, `name`, `isActive`, `steps`) редактируются в одной
- * форме и сохраняются одним PATCH-ом — backend `RoutesService.update`
- * умеет частичный апдейт, но в UI на MVP отдельные секции дробить
- * необязательно: набор полей маленький, а замена steps всё равно идёт
- * целиком (см. `RoutesService.replaceSteps`).
- *
- * Удаление вынесено в отдельную форму ниже — снапшоты маршрутов на
- * запущенных заказах не зависят от шаблона и переживут удаление
- * (см. `OrderRouteStep`).
+ * Backend / DTO не меняем — `RouteTemplateForm` принимает прежний
+ * input. Над формой редактирования теперь отдельная карточка
+ * «Операции маршрута» с компактной цепочкой шагов
+ * (`AdminRouteSteps`) — менеджер сразу видит готовый pipeline без
+ * необходимости разворачивать форму.
  */
 export default async function AdminRouteTemplateDetailPage({ params }: Params) {
   let template;
@@ -47,7 +54,7 @@ export default async function AdminRouteTemplateDetailPage({ params }: Params) {
     metaError =
       e instanceof ApiRequestError
         ? `${e.message}${e.code ? ` (${e.code})` : ''}`
-        : 'Не удалось загрузить список операций — отредактировать шаги нельзя, но код/название/активность доступны.';
+        : 'Не удалось загрузить список операций.';
     operations = template.steps.map((s) => ({
       id: s.operationId,
       code: s.operationCode,
@@ -58,85 +65,86 @@ export default async function AdminRouteTemplateDetailPage({ params }: Params) {
     }));
   }
 
-  return (
-    <div className="page-shell">
-      <DetailPageHeader
-        eyebrow="Маршруты производства"
-        icon="operations"
-        title={template.name}
-        subtitle="Редактирование шаблона маршрута. Изменения вступают в силу для будущих заказов; уже запущенные заказы продолжают идти по своему snapshot-у."
-        backHref="/admin/routes"
-        backLabel="К списку шаблонов"
-        meta={
-          <>
-            <span>
-              Код: <code>{template.code}</code>
-            </span>
-            <span>·</span>
-            <span>Шагов: {template.steps.length}</span>
-            <span>·</span>
-            <span>
-              Обновлён:{' '}
-              {new Date(template.updatedAt).toLocaleString('ru-RU')}
-            </span>
-          </>
-        }
-        badges={
-          <span
-            className={`pill ${template.isActive ? 'pill--ok' : 'pill--ghost'}`}
-          >
-            <Icon name={template.isActive ? 'success' : 'idle'} size={14} />
-            {template.isActive ? 'Активен' : 'Скрыт'}
-          </span>
-        }
-      />
+  const opCategoryById = new Map<string, string>();
+  for (const op of operations) opCategoryById.set(op.id, op.category);
 
+  const routeSteps: AdminRouteStep[] = template.steps
+    .slice()
+    .sort((a, b) => a.index - b.index)
+    .map((s, i) => ({
+      id: s.id,
+      index: i + 1,
+      name: s.operationName,
+      category: opCategoryById.get(s.operationId) ?? null,
+    }));
+
+  return (
+    <AdminPageShell
+      icon={<Activity size={22} strokeWidth={1.6} aria-hidden />}
+      title={template.name}
+      subtitle={`${template.steps.length} шагов`}
+      actions={
+        <>
+          <Link href="/admin/routes" className="admin-btn admin-btn--ghost">
+            <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
+            К списку
+          </Link>
+          <AdminStatusBadge tone={statusTone(template.isActive)}>
+            {formatStatus(template.isActive)}
+          </AdminStatusBadge>
+        </>
+      }
+    >
       {metaError && (
         <div className="error-box" role="alert">
-          <div className="error-box__msg">{metaError}</div>
+          {metaError}
         </div>
       )}
 
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="operations" />
-            Параметры и шаги маршрута
-          </h2>
-          <span className="section-header__hint">
-            Snapshot фиксируется на заказе при запуске
-          </span>
-        </div>
+      <AdminCard>
+        <AdminSectionHeader title="Операции маршрута" />
+        {routeSteps.length === 0 ? (
+          <AdminEmptyState
+            icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}
+            title="Шагов пока нет"
+            hint="Добавьте операции в форме ниже."
+          />
+        ) : (
+          <AdminRouteSteps steps={routeSteps} />
+        )}
+      </AdminCard>
+
+      <AdminCard>
+        <AdminSectionHeader title="Редактирование" />
         <RouteTemplateForm
           mode="edit"
           template={template}
           operations={operations}
         />
-      </section>
+      </AdminCard>
 
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="warning" />
-            Опасная зона
-          </h2>
-        </div>
-        <p className="detail-form__hint">
-          Удаление шаблона убирает его из списка выбора в новых заказах. Уже
-          запущенные заказы продолжат идти по своему snapshot-у —
-          <code>OrderRouteStep[]</code> хранится отдельно от шаблона. Если
-          шаблон просто не нужен больше — лучше снять галочку «Активен»
-          в форме выше: его не будет видно при создании новых заказов, но
-          история сохранится.
-        </p>
-        <form action={deleteRouteTemplateAction} className="detail-form__actions">
+      <AdminCard>
+        <AdminSectionHeader title="Опасная зона" />
+        <form action={deleteRouteTemplateAction} className="admin-actions-row">
           <input type="hidden" name="id" value={template.id} />
-          <button type="submit" className="btn btn-danger">
-            <Icon name="error" size={16} />
+          <button type="submit" className="admin-btn admin-btn--danger">
+            <Trash2 size={16} strokeWidth={1.6} aria-hidden />
             Удалить шаблон
           </button>
         </form>
-      </section>
-    </div>
+      </AdminCard>
+
+      <AdminTechInfo
+        items={[
+          { label: 'ID', value: <code>{template.id}</code> },
+          { label: 'Код', value: <code>{template.code}</code> },
+          { label: 'Шагов', value: template.steps.length },
+          {
+            label: 'Обновлён',
+            value: new Date(template.updatedAt).toLocaleString('ru-RU'),
+          },
+        ]}
+      />
+    </AdminPageShell>
   );
 }

@@ -16,7 +16,6 @@
 
 import {
   OperationCategory,
-  PaymentType,
   Prisma,
   PrismaClient,
   Role,
@@ -213,14 +212,20 @@ type EmployeeSeed = {
   login: string;
   fullName: string;
   role: Role;
-  paymentType: PaymentType;
+  /**
+   * Историческая месячная ставка `Employee.salaryBase`. На MVP runtime
+   * её не читает — оставлена в схеме для будущего месячного payroll
+   * (см. `docs/domain.md §9.1`). Здесь сохраняем на demo-аккаунтах,
+   * чтобы карточка `/admin/employees/[id]` показывала привычные цифры.
+   */
   salaryBase?: number;
   /**
-   * Управленческий тип компенсации (ADR-0021). Если не задан — берём
-   * безопасный дефолт `PIECEWORK`: автогенерация окладных записей не
-   * запустится, пока менеджер сам не переключит сотрудника. На demo
-   * мы явно выставляем SALARY/MIXED для ОТК/ВТО/упаковки —
-   * чтобы UI окладов был «не пустым» сразу после `db:seed`.
+   * Управленческий тип компенсации (ADR-0021) — единая ось «как
+   * платим». Если не задан — берём безопасный дефолт `PIECEWORK`:
+   * автогенерация окладных записей не запустится, пока менеджер сам
+   * не переключит сотрудника. На demo мы явно выставляем SALARY/MIXED
+   * для ОТК/ВТО/упаковки — чтобы UI окладов был «не пустым» сразу
+   * после `db:seed`.
    */
   compensationType?: 'PIECEWORK' | 'SALARY' | 'MIXED';
   /** Ставка за смену; обязательна для SALARY/MIXED. */
@@ -234,23 +239,27 @@ type EmployeeSeed = {
  * перестройки: `login` уже стабильный ключ.
  */
 const EMPLOYEES: readonly EmployeeSeed[] = [
-  { login: 'admin',         fullName: 'Демо Админ',              role: 'ADMIN',             paymentType: 'SALARY',    salaryBase: 0 },
-  { login: 'shop-chief',    fullName: 'Демо Начальник цеха',     role: 'SHOP_MANAGER',      paymentType: 'SALARY',    salaryBase: 120_000 },
-  { login: 'cutter',        fullName: 'Демо Раскройщик',         role: 'CUTTER',            paymentType: 'PIECEWORK', compensationType: 'PIECEWORK' },
-  { login: 'cutter-helper', fullName: 'Демо Помощник раскройщика', role: 'CUTTER_ASSISTANT', paymentType: 'SALARY',    salaryBase: 70_000, compensationType: 'SALARY', salaryPerShift: 3_500 },
-  { login: 'seamstress',    fullName: 'Демо Швея',               role: 'SEAMSTRESS',        paymentType: 'PIECEWORK', compensationType: 'PIECEWORK' },
+  { login: 'admin',         fullName: 'Демо Админ',              role: 'ADMIN',             salaryBase: 0 },
+  { login: 'shop-chief',    fullName: 'Демо Начальник цеха',     role: 'SHOP_MANAGER',      salaryBase: 120_000 },
+  { login: 'cutter',        fullName: 'Демо Раскройщик',         role: 'CUTTER',            compensationType: 'PIECEWORK' },
+  { login: 'cutter-helper', fullName: 'Демо Помощник раскройщика', role: 'CUTTER_ASSISTANT', salaryBase: 70_000, compensationType: 'SALARY', salaryPerShift: 3_500 },
+  { login: 'seamstress',    fullName: 'Демо Швея',               role: 'SEAMSTRESS',        compensationType: 'PIECEWORK' },
   // Вторая демо-швея для отладки сценариев с несколькими швеями на
   // смене (передача паспорта между операциями, очередь /work). Та же
-  // роль / тип оплаты, что и `seamstress` — отличается только login и
-  // fullName. Пароль — общий `DEMO_PASSWORD` (см. ниже).
-  { login: 'seamstress2',   fullName: 'Демо Швея 2',             role: 'SEAMSTRESS',        paymentType: 'PIECEWORK', compensationType: 'PIECEWORK' },
-  { login: 'qc',            fullName: 'Демо ОТК',                role: 'QC',                paymentType: 'SALARY',    salaryBase: 75_000, compensationType: 'SALARY', salaryPerShift: 3_750 },
-  { login: 'wto',           fullName: 'Демо ВТО',                role: 'IRONING',           paymentType: 'SALARY',    salaryBase: 70_000, compensationType: 'SALARY', salaryPerShift: 3_500 },
-  { login: 'packer',        fullName: 'Демо Упаковщик',          role: 'PACKING',           paymentType: 'SALARY',    salaryBase: 65_000, compensationType: 'SALARY', salaryPerShift: 3_250 },
+  // роль / тип компенсации, что и `seamstress` — отличается только
+  // login и fullName. Пароль — общий `DEMO_PASSWORD` (см. ниже).
+  { login: 'seamstress2',   fullName: 'Демо Швея 2',             role: 'SEAMSTRESS',        compensationType: 'PIECEWORK' },
+  { login: 'qc',            fullName: 'Демо ОТК',                role: 'QC',                salaryBase: 75_000, compensationType: 'SALARY', salaryPerShift: 3_750 },
+  { login: 'wto',           fullName: 'Демо ВТО',                role: 'IRONING',           salaryBase: 70_000, compensationType: 'SALARY', salaryPerShift: 3_500 },
+  { login: 'packer',        fullName: 'Демо Упаковщик',          role: 'PACKING',           salaryBase: 65_000, compensationType: 'SALARY', salaryPerShift: 3_250 },
+  // Мастер цеха (MVP «Мастер цеха», см. `docs/domain.md §10a`).
+  // Окладная роль: ставка за смену, без сдельных начислений. Логин
+  // короткий, чтобы быстро вводить на телефоне.
+  { login: 'master',        fullName: 'Демо Мастер цеха',        role: 'SHOPFLOOR_MASTER',  salaryBase: 80_000, compensationType: 'SALARY', salaryPerShift: 4_000 },
   // Аккаунт под большой экран цеха (shopfloor display). Роль read-only:
-  // не считается ни в зарплате, ни в окладах — `paymentType: SALARY`
-  // и `salaryBase: 0`, `compensationType: PIECEWORK` (без авто-окладов).
-  { login: 'display',       fullName: 'Экран цеха',              role: 'DISPLAY',           paymentType: 'SALARY',    salaryBase: 0 },
+  // не считается ни в зарплате, ни в окладах — `compensationType: PIECEWORK`
+  // (без авто-окладов), `salaryBase: 0`.
+  { login: 'display',       fullName: 'Экран цеха',              role: 'DISPLAY',           salaryBase: 0 },
 ];
 
 async function seedUsersEmployees() {
@@ -263,7 +272,6 @@ async function seedUsersEmployees() {
     const data = {
       fullName: e.fullName,
       role: e.role,
-      paymentType: e.paymentType,
       salaryBase:
         e.salaryBase !== undefined ? new Prisma.Decimal(e.salaryBase) : null,
       compensationType: e.compensationType ?? 'PIECEWORK',

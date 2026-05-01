@@ -1,0 +1,2249 @@
+import {
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
+import { Prisma, type WorkshopNeed } from '@prisma/client';
+import type {
+  CalculateWorkshopNeedsDto,
+  CalculateWorkshopNeedsResultDto,
+  ListWorkshopNeedsQuery,
+  UpdateWorkshopNeedDto,
+  WorkshopNeedDto,
+  WorkshopNeedListItemDto,
+} from '@sewing/shared/workshop-needs';
+import {
+  ORDER_APPLICATION_STAGE_LABELS,
+  ORDER_APPLICATION_TYPE_LABELS,
+  type OrderApplicationStage,
+  type OrderApplicationType,
+} from '@sewing/shared/order-applications';
+
+import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import {
+  SupplierCatalogItemInactiveException,
+  SupplierCatalogItemNotFoundException,
+  SupplierCatalogItemSupplierMismatchException,
+  SupplierInactiveException,
+  SupplierNotFoundException,
+  WorkshopNeedCalculationSourceException,
+  WorkshopNeedNotFoundException,
+  WorkshopNeedOrderItemsRequiredException,
+  WorkshopNeedsAlreadyReviewedException,
+} from '../../common/errors.js';
+
+/**
+ * Реализация модуля «Потребность цеха» (Этап 4А, см.
+ * `docs/recon-soft-integration.md §«Этап 4А»`).
+ *
+ * Бизнес-логика:
+ *   - расчёт чистой потребности заказа, без потерь и закупочных
+ *     номенклатур;
+ *   - источник материалов: live `TechCardMaterialLine` для DRAFT-
+ *     заказа, snapshot `OrderMaterialRequirement` для запущенного
+ *     (или DRAFT-заказа, у которого snapshot уже есть);
+ *   - формула AREA_DENSITY:
+ *       totalAreaM2 = Σ (PatternMaterialArea.areaM2 × OrderItem.qtyPlan)
+ *       calculatedQty = totalAreaM2 × densityGsm / 1000
+ *   - fallback QTY_PER_UNIT:
+ *       calculatedQty = qtyPerUnit × Σ qtyPlan (live)
+ *                     | requirement.totalQty (snapshot);
+ *   - закупщик правит `purchaseQty` / `status` и
+ *     `supplierNameText`/`purchaseItemNameText` руками;
+ *   - идемпотентный пересчёт: сносим только `CALCULATED`-строки,
+ *     `REVIEWED`/`PURCHASE_PLANNED` сохраняем (если не передан
+ *     `force`).
+ *
+ * Этот модуль НЕ создаёт заказы поставщикам, НЕ ведёт справочник
+ * поставщиков и НЕ считает потери — это сознательная граница MVP
+ * (см. ТЗ Этапа 4А).
+ */
+@Injectable()
+export class WorkshopNeedsService {
+  private readonly logger = new Logger(WorkshopNeedsService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
+
+  // -------------------------------------------------------------------------
+  // LIST / GET
+  // -------------------------------------------------------------------------
+
+  async list(
+    query: ListWorkshopNeedsQuery,
+  ): Promise<WorkshopNeedListItemDto[]> {
+    const where: Prisma.WorkshopNeedWhereInput = {};
+    if (query.orderId) where.orderId = query.orderId;
+    if (query.status) where.status = query.status;
+
+    // -----------------------------------------------------------------------
+    // Управленческий фильтр «Статус расчёта» (см. ТЗ
+    // `/admin/workshop-needs?orderCalculationStatus=...`).
+    //
+    // Default зависит от того, ходим ли мы за конкретным заказом:
+    //   - без `orderId` — общий список, показываем только
+    //     `Order.status = CALCULATION` (то, что закупщик сейчас ведёт).
+    //     Завершённые расчёты прячутся, чтобы не мешать в работе;
+    //   - c `orderId` — карточка заказа, default = `ALL`. Иначе сразу
+    //     после `completeCalculation` карточка теряла бы свои
+    //     потребности.
+    //
+    // Фильтр по `WorkshopNeed.status` (поле `query.status` выше)
+    // оставлен как технический и работает поверх — например,
+    // `?orderCalculationStatus=ALL&status=CALCULATED` отдаст все
+    // CALCULATED-строки независимо от статуса заказа.
+    // -----------------------------------------------------------------------
+    const effectiveOrderCalculationStatus =
+      query.orderCalculationStatus ?? (query.orderId ? 'ALL' : 'ACTIVE');
+    if (effectiveOrderCalculationStatus !== 'ALL') {
+      const orderStatus =
+        effectiveOrderCalculationStatus === 'ACTIVE'
+          ? 'CALCULATION'
+          : 'CALCULATION_DONE';
+      where.order = mergeOrderWhere(where.order, { status: orderStatus });
+    }
+
+    if (query.search && query.search.length > 0) {
+      const s = query.search;
+      where.OR = [
+        { description: { contains: s, mode: 'insensitive' } },
+        { sourceName: { contains: s, mode: 'insensitive' } },
+        { supplierNameText: { contains: s, mode: 'insensitive' } },
+        { purchaseItemNameText: { contains: s, mode: 'insensitive' } },
+        { order: { number: { contains: s, mode: 'insensitive' } } },
+        // Этап 5: поиск по имени связанного поставщика и его номенклатуре,
+        // чтобы закупщик мог быстро найти строки конкретного контрагента.
+        { selectedSupplier: { name: { contains: s, mode: 'insensitive' } } },
+        {
+          selectedSupplierCatalogItem: {
+            name: { contains: s, mode: 'insensitive' },
+          },
+        },
+      ];
+    }
+
+    const rows = await this.prisma.workshopNeed.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
+      include: WORKSHOP_NEED_INCLUDE,
+    });
+    return rows.map((r) => this.toDto(r));
+  }
+
+  async getOne(id: string): Promise<WorkshopNeedDto> {
+    const row = await this.prisma.workshopNeed.findUnique({
+      where: { id },
+      include: WORKSHOP_NEED_INCLUDE,
+    });
+    if (!row) throw new WorkshopNeedNotFoundException();
+    return this.toDto(row);
+  }
+
+  // -------------------------------------------------------------------------
+  // UPDATE / CANCEL
+  // -------------------------------------------------------------------------
+
+  async update(
+    id: string,
+    dto: UpdateWorkshopNeedDto,
+    actorEmployeeId?: string | null,
+  ): Promise<WorkshopNeedDto> {
+    const existing = await this.prisma.workshopNeed.findUnique({
+      where: { id },
+    });
+    if (!existing) throw new WorkshopNeedNotFoundException();
+
+    const data: Prisma.WorkshopNeedUpdateInput = {};
+    const changedFields: string[] = [];
+
+    function trackOptional<K extends keyof UpdateWorkshopNeedDto>(
+      key: K,
+      transform?: (v: NonNullable<UpdateWorkshopNeedDto[K]>) => unknown,
+    ): { changed: boolean; value: unknown } {
+      const raw = dto[key];
+      if (raw === undefined) return { changed: false, value: undefined };
+      const value = raw === null ? null : transform ? transform(raw as NonNullable<UpdateWorkshopNeedDto[K]>) : raw;
+      return { changed: true, value };
+    }
+
+    const purchaseQty = trackOptional('purchaseQty', (v) =>
+      v === null ? null : new Prisma.Decimal(v as string),
+    );
+    if (purchaseQty.changed) {
+      data.purchaseQty = purchaseQty.value as Prisma.Decimal | null;
+      changedFields.push('purchaseQty');
+    }
+
+    if (dto.status !== undefined) {
+      data.status = dto.status;
+      changedFields.push('status');
+    }
+    if (dto.supplierNameText !== undefined) {
+      data.supplierNameText = dto.supplierNameText;
+      changedFields.push('supplierNameText');
+    }
+    if (dto.purchaseItemNameText !== undefined) {
+      data.purchaseItemNameText = dto.purchaseItemNameText;
+      changedFields.push('purchaseItemNameText');
+    }
+    if (dto.quotedPrice !== undefined) {
+      data.quotedPrice =
+        dto.quotedPrice === null ? null : new Prisma.Decimal(dto.quotedPrice);
+      changedFields.push('quotedPrice');
+    }
+    if (dto.quotedCurrency !== undefined) {
+      data.quotedCurrency = dto.quotedCurrency;
+      changedFields.push('quotedCurrency');
+    }
+    if (dto.expectedDeliveryDate !== undefined) {
+      data.expectedDeliveryDate =
+        dto.expectedDeliveryDate === null
+          ? null
+          : new Date(dto.expectedDeliveryDate);
+      changedFields.push('expectedDeliveryDate');
+    }
+    if (dto.comment !== undefined) {
+      data.comment = dto.comment;
+      changedFields.push('comment');
+    }
+
+    // -----------------------------------------------------------------------
+    // Этап 5 «Поставщики»: разрешаем связь Supplier ↔ SupplierCatalogItem.
+    //
+    // Правила (см. ТЗ §6):
+    //   - selectedSupplierId = null   → очистить supplier И catalog item;
+    //   - selectedSupplierId = string → проверить exists + ACTIVE;
+    //   - selectedSupplierCatalogItemId = null   → очистить только catalog item;
+    //   - selectedSupplierCatalogItemId = string → проверить exists + ACTIVE,
+    //       supplier должен совпадать (если указан); если supplier не
+    //       указан — auto-set из catalog item.
+    //   - текстовые supplierNameText / purchaseItemNameText НЕ
+    //     перезаписываем (см. ТЗ §6 «Текстовые поля»).
+    // -----------------------------------------------------------------------
+    const supplierResolution = await this.resolveSupplierFields(
+      existing,
+      dto.selectedSupplierId,
+      dto.selectedSupplierCatalogItemId,
+    );
+    if (supplierResolution.supplierTouched) {
+      data.selectedSupplier =
+        supplierResolution.supplierId == null
+          ? { disconnect: true }
+          : { connect: { id: supplierResolution.supplierId } };
+      changedFields.push('selectedSupplierId');
+    }
+    if (supplierResolution.catalogItemTouched) {
+      data.selectedSupplierCatalogItem =
+        supplierResolution.catalogItemId == null
+          ? { disconnect: true }
+          : { connect: { id: supplierResolution.catalogItemId } };
+      changedFields.push('selectedSupplierCatalogItemId');
+    }
+
+    if (Object.keys(data).length === 0) {
+      // Zod refine уже отбивает «нечего обновлять», но на всякий случай.
+      return this.getOne(id);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.workshopNeed.update({ where: { id }, data });
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEED_UPDATED',
+          entityType: 'WORKSHOP_NEED',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId: existing.orderId,
+            changedFields,
+            // Запрос как пришёл (после Zod-нормализации). Decimal-поля
+            // сериализуем строкой, как и в DTO — чтобы payload был
+            // самодостаточен и не требовал отдельного типа.
+            after: {
+              purchaseQty:
+                dto.purchaseQty === undefined
+                  ? undefined
+                  : (dto.purchaseQty as string | null),
+              status: dto.status,
+              supplierNameText: dto.supplierNameText,
+              purchaseItemNameText: dto.purchaseItemNameText,
+              quotedPrice:
+                dto.quotedPrice === undefined
+                  ? undefined
+                  : (dto.quotedPrice as string | null),
+              quotedCurrency: dto.quotedCurrency,
+              expectedDeliveryDate: dto.expectedDeliveryDate,
+              comment: dto.comment,
+              selectedSupplierId: supplierResolution.supplierTouched
+                ? supplierResolution.supplierId
+                : undefined,
+              selectedSupplierCatalogItemId:
+                supplierResolution.catalogItemTouched
+                  ? supplierResolution.catalogItemId
+                  : undefined,
+            },
+          },
+        },
+        tx,
+      );
+    });
+
+    this.logger.log(
+      `event=workshop_need.update id=${id} fields=${changedFields.join(',')}`,
+    );
+    return this.getOne(id);
+  }
+
+  async cancel(
+    id: string,
+    actorEmployeeId?: string | null,
+  ): Promise<WorkshopNeedDto> {
+    const existing = await this.prisma.workshopNeed.findUnique({
+      where: { id },
+    });
+    if (!existing) throw new WorkshopNeedNotFoundException();
+
+    if (existing.status === 'CANCELLED') {
+      // Идемпотентность: повторная отмена не считается ошибкой.
+      return this.getOne(id);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.workshopNeed.update({
+        where: { id },
+        data: { status: 'CANCELLED' },
+      });
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEED_CANCELLED',
+          entityType: 'WORKSHOP_NEED',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId: existing.orderId,
+            previousStatus: existing.status,
+          },
+        },
+        tx,
+      );
+    });
+    return this.getOne(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // CALCULATE
+  // -------------------------------------------------------------------------
+
+  async calculateForOrder(
+    orderId: string,
+    dto: CalculateWorkshopNeedsDto,
+    actorEmployeeId?: string | null,
+  ): Promise<CalculateWorkshopNeedsResultDto> {
+    const force = dto.force ?? false;
+
+    // 1. Грузим заказ + размерную матрицу + лекало с площадями + техкарту
+    //    + заказные нанесения (`OrderApplication`).
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      include: {
+        items: { include: { size: true } },
+        materialRequirements: { orderBy: { sortOrder: 'asc' } },
+        techCard: {
+          include: {
+            materialLines: { orderBy: { sortOrder: 'asc' } },
+          },
+        },
+        patternItem: {
+          include: {
+            materialAreas: true,
+            // Этап «Фурнитура и нормы»: каждая норма
+            // (`PatternItemParameterNorm`) раскрывается в отдельную
+            // строку `WorkshopNeed` с `sourceType = PATTERN_PARAMETER_NORM`.
+            // На MVP считаются только нормы с
+            // `inputTypeSnapshot = QTY_PER_ITEM` (на текущей версии
+            // только этот тип создаёт строки потребности).
+            parameterNorms: true,
+            // Этап «Погонные метры по размерам»: значения
+            // `PatternItemSizeParameterValue` группируются по
+            // `categoryParameterId`; каждый параметр даёт ОДНУ
+            // строку `WorkshopNeed` с
+            // `sourceType = PATTERN_SIZE_PARAMETER_VALUE`,
+            // `calculatedQty = Σ(value × OrderItem.qtyPlan)` по
+            // совпадающим размерам. Для одного параметра несколько
+            // значений (по разным размерам) объединяются в одну
+            // строку — UI показывает «1 параметр = 1 строка».
+            sizeParameterValues: true,
+          },
+        },
+        // Этап «Нанесение на заказе покупателя» (см.
+        // `apps/api/src/modules/order-applications/*`,
+        // `prisma/schema.prisma::OrderApplication`). На MVP
+        // нанесение — отдельный «новый источник» для
+        // APPLICATION-потребностей: для каждого активного
+        // (не CANCELLED) `OrderApplication` сервис создаёт одну
+        // строку `WorkshopNeed` с `sourceType = ORDER_APPLICATION`
+        // и `materialRole = APPLICATION`. Старые
+        // `TechCardOutsourceLine` остаются как legacy fallback —
+        // backend на этом этапе их в потребности не превращает,
+        // но и не удаляет (см. ТЗ §«Не удалять old TechCardOutsourceLine»).
+        applications: { orderBy: { createdAt: 'asc' } },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+
+    // 2. Базовые проверки.
+    const totalOrderQty = order.items.reduce((s, it) => s + it.qtyPlan, 0);
+    if (order.items.length === 0 || totalOrderQty <= 0) {
+      throw new WorkshopNeedOrderItemsRequiredException();
+    }
+
+    // Источник материалов:
+    //   - есть snapshot → ORDER_MATERIAL_REQUIREMENT (запущенный заказ
+    //     или DRAFT с уже зафиксированным snapshot — соблюдаем
+    //     инвариант «snapshot живёт независимо от шаблона»);
+    //   - иначе live техкарта.
+    const hasSnapshot = order.materialRequirements.length > 0;
+    const useSnapshot = hasSnapshot;
+
+    const sourceLines: SourceLine[] = useSnapshot
+      ? order.materialRequirements.map((r) => ({
+          source: 'ORDER_MATERIAL_REQUIREMENT',
+          id: r.id,
+          name: r.name,
+          unit: r.unit,
+          qtyPerUnit: r.qtyPerUnit,
+          totalQty: r.totalQty,
+          materialRole: r.materialRole,
+          fabricType: r.fabricType,
+          densityGsm: r.densityGsm,
+          plannedWidthCm: r.plannedWidthCm,
+          colorRule: r.colorRule,
+          fixedColorText: r.fixedColorText,
+          resolvedColorText: r.resolvedColorText,
+          // Этап «Исправить формирование Потребности цеха» (см. ТЗ §5):
+          // snapshot хранит дополнительные поля для фурнитуры /
+          // изображения / выбора цвета — переносим их в SourceLine,
+          // чтобы `computeParameterNorm` / `computeMaterialAreaByRole`
+          // могли обогатить description строки потребности.
+          hardwareSizeText: r.hardwareSizeText,
+          hardwareMaterialText: r.hardwareMaterialText,
+          materialImageUrl: r.materialImageUrl,
+          selectedColorText: r.selectedColorText,
+          requiresColorSelection: r.requiresColorSelection,
+        }))
+      : (order.techCard?.materialLines ?? []).map((l) => ({
+          source: 'TECH_CARD_MATERIAL_LINE',
+          id: l.id,
+          name: l.name,
+          unit: l.unit,
+          qtyPerUnit: l.qtyPerUnit,
+          totalQty: null,
+          materialRole: l.materialRole,
+          fabricType: l.fabricType,
+          densityGsm: l.densityGsm,
+          plannedWidthCm: l.plannedWidthCm,
+          colorRule: l.colorRule,
+          fixedColorText: l.fixedColorText,
+          resolvedColorText: null,
+          hardwareSizeText: l.hardwareSizeText,
+          hardwareMaterialText: l.hardwareMaterialText,
+          materialImageUrl: l.materialImageUrl,
+          // Live-техкарта не хранит per-order selectedColorText —
+          // менеджер заполняет его уже на snapshot заказа после
+          // `startCalculation` (см. `OrdersService.updateMaterialRequirementColor`).
+          // Для DRAFT-заказа без snapshot значение null + флаг
+          // выводим из `colorRule = ORDER_SELECTED_COLOR`.
+          selectedColorText: null,
+          requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
+        }));
+
+    // -----------------------------------------------------------------------
+    // Этап «Исправить формирование Потребности цеха» (см. ТЗ §2 и §3):
+    // category-driven заказ — это заказ, у которого `PatternItem` имеет
+    // `categoryId` И в карточке номенклатуры реально заполнены параметры
+    // (нормы фурнитуры / погонные метры / площади м²). Для таких заказов
+    // источник КОЛИЧЕСТВА — это параметры номенклатуры, а строки техкарты
+    // используются ТОЛЬКО для обогащения описания (фабрик-тип, ширина,
+    // плотность, размер фурнитуры, материал, цвет, картинка).
+    //
+    // Для legacy-заказов (без категории либо с категорией, но без
+    // заполненных параметров) сохраняется старый расчёт «по техкарте».
+    // Это нужно, чтобы исторические заказы и старые номенклатуры без
+    // категорий продолжали считаться, как раньше.
+    // -----------------------------------------------------------------------
+    const isCategoryDriven = Boolean(
+      order.patternItem?.categoryId &&
+        ((order.patternItem?.parameterNorms?.length ?? 0) > 0 ||
+          (order.patternItem?.sizeParameterValues?.length ?? 0) > 0 ||
+          (order.patternItem?.materialAreas?.length ?? 0) > 0),
+    );
+
+    if (sourceLines.length === 0 && !isCategoryDriven) {
+      // Без техкарты и без snapshot заказа считать нечего. Однако
+      // лекало без техкарты — совсем редкий кейс; технически можно
+      // было бы посчитать «голый AREA_DENSITY» по лекалу без densityGsm,
+      // но без densityGsm вес не посчитать → теряет смысл. Поэтому
+      // считаем это явной ошибкой расчёта, а не warning-ом.
+      //
+      // Исключение: для category-driven заказа техкарта может вообще
+      // отсутствовать (вся потребность считается из параметров
+      // номенклатуры). Тогда отсутствие sourceLines — норма.
+      throw new WorkshopNeedCalculationSourceException();
+    }
+
+    // 3. Идемпотентность.
+    const existing = await this.prisma.workshopNeed.findMany({
+      where: { orderId },
+      select: { id: true, status: true },
+    });
+    const hasNonCalculated = existing.some((e) => e.status !== 'CALCULATED');
+    if (hasNonCalculated && !force) {
+      throw new WorkshopNeedsAlreadyReviewedException();
+    }
+
+    // 4. Считаем строки в памяти.
+    const warnings: string[] = [];
+    const computed: ComputedNeed[] = [];
+    let methodAreaDensity = 0;
+    let methodQtyPerUnit = 0;
+
+    if (!order.patternItemId) {
+      warnings.push(
+        'У заказа не выбрано лекало — расчёт по площади и плотности невозможен, использован fallback по норме техкарты.',
+      );
+    }
+
+    // -----------------------------------------------------------------------
+    // Этап «Исправить формирование Потребности цеха» (см. ТЗ §3):
+    // для category-driven заказа техкартовые строки НЕ создают
+    // самостоятельные `WorkshopNeed`. Они используются только в
+    // helper-ах enrichment (computeMaterialAreaByRole / computeParameterNorm
+    // / computeLinearBySizeParameter), чтобы подтянуть плотность,
+    // ширину, размер фурнитуры, материал, картинку и цвет.
+    //
+    // Для legacy-заказа (без категории либо с категорией без
+    // заполненных параметров) сохраняется старое поведение:
+    // каждая строка техкарты / snapshot заказа становится отдельной
+    // `WorkshopNeed`. Это позволяет историческим номенклатурам
+    // продолжать считаться, как раньше.
+    // -----------------------------------------------------------------------
+    if (!isCategoryDriven) {
+      for (const line of sourceLines) {
+        const computedLine = this.computeLine({
+          line,
+          order: {
+            color: order.color,
+            patternItemId: order.patternItemId,
+          },
+          items: order.items,
+          materialAreas: order.patternItem?.materialAreas ?? [],
+          totalOrderQty,
+          warnings,
+        });
+        if (computedLine.calculationMethod === 'AREA_DENSITY')
+          methodAreaDensity++;
+        else methodQtyPerUnit++;
+        computed.push(computedLine);
+      }
+    }
+
+    // Этап «Нанесение на заказе покупателя»: для каждого активного
+    // `OrderApplication` создаём одну строку `WorkshopNeed` с
+    // `sourceType = ORDER_APPLICATION`, `materialRole = APPLICATION`.
+    // `calculatedQty` берём из `quantity` нанесения, fallback на
+    // `Σ qtyPlan` (всё изделие = одно нанесение). Описание собираем
+    // в человекочитаемой форме: «<Тип>, <stage label>, <место>,
+    // <WxH>, <цвет/описание>».
+    for (const app of order.applications ?? []) {
+      if (app.status === 'CANCELLED') continue;
+      const computedApp = this.computeApplication(app, totalOrderQty);
+      methodQtyPerUnit++;
+      computed.push(computedApp);
+    }
+
+    // Этап «Исправить формирование Потребности цеха» (см. ТЗ §3):
+    // для category-driven заказа AREA_M2_BY_SIZE-параметры превращаются
+    // в строки потребности напрямую из `PatternMaterialArea`
+    // (по одной строке на materialRole). Это убирает «лишние ткани
+    // из техкарты под которые нет площади в лекале» — например,
+    // Спанбонд / Синтепон, которые в техкарте есть, но в номенклатуре
+    // площадь по ним не заполнена.
+    //
+    // Для legacy-заказа PATTERN_MATERIAL_AREA НЕ генерится:
+    // вся ответственность за AREA_DENSITY остаётся на
+    // `computeLine` (который AREA-data берёт ровно из той же
+    // таблицы, но через техкартовую строку как точку входа).
+    let methodMaterialArea = 0;
+    if (isCategoryDriven) {
+      const areasByRole = new Map<
+        string,
+        { sizeId: string; areaM2: Prisma.Decimal }[]
+      >();
+      for (const a of order.patternItem?.materialAreas ?? []) {
+        const arr = areasByRole.get(a.materialRole) ?? [];
+        arr.push({ sizeId: a.sizeId, areaM2: a.areaM2 });
+        areasByRole.set(a.materialRole, arr);
+      }
+      for (const [role, areas] of areasByRole) {
+        const matchedLine = this.findEnrichmentLine({
+          roleKey: role,
+          labelSnapshot: null,
+          sourceLines,
+        });
+        const computedArea = this.computeMaterialAreaByRole({
+          role,
+          areas,
+          items: order.items,
+          matchedLine,
+          orderColor: order.color,
+          warnings,
+        });
+        if (computedArea) {
+          if (computedArea.calculationMethod === 'AREA_DENSITY')
+            methodAreaDensity++;
+          else methodQtyPerUnit++;
+          methodMaterialArea++;
+          computed.push(computedArea);
+        }
+      }
+    }
+
+    // Этап «Фурнитура и нормы»: для каждой `PatternItemParameterNorm`
+    // (где `qtyPerItem > 0` — пустые нормы вообще не создаются на
+    // стороне `PatternsService.replaceParameterNorms`) создаём
+    // отдельную строку `WorkshopNeed` с
+    // `sourceType = PATTERN_PARAMETER_NORM`, `sourceId = norm.id`.
+    //
+    // Несколько норм с одинаковым `roleKey = PACKAGING` НЕ
+    // объединяются в одну строку — Люверсы / Шнур / Наконечники
+    // должны стать отдельными `WorkshopNeed` (см. ТЗ §8 «WorkshopNeed
+    // calculation»). Группировка идёт по `sourceId = norm.id`.
+    //
+    // Этап «Исправить формирование Потребности цеха» (см. ТЗ §5):
+    // для каждой нормы ищем подходящую строку техкарты по правилам
+    // `findEnrichmentLine` (`materialRole + label` → fallback
+    // single-role-match). Найденная строка обогащает description
+    // данными «<labelSnapshot>, <hardwareSizeText>, <hardwareMaterialText>,
+    // <цвет>», даёт colorRule / fixedColorText / selectedColorText,
+    // плюс прокидывает картинку через `materialImageUrl` (она
+    // потом попадёт в DTO через `toDto`).
+    for (const norm of order.patternItem?.parameterNorms ?? []) {
+      if (norm.inputTypeSnapshot !== 'QTY_PER_ITEM') continue;
+      const matchedLine = this.findEnrichmentLine({
+        roleKey: norm.roleKey,
+        labelSnapshot: norm.labelSnapshot,
+        sourceLines,
+      });
+      const computedNorm = this.computeParameterNorm(
+        norm,
+        totalOrderQty,
+        matchedLine,
+        order.color,
+      );
+      methodQtyPerUnit++;
+      computed.push(computedNorm);
+    }
+
+    // Этап «Погонные метры по размерам»: для каждого параметра
+    // категории с `inputTypeSnapshot = LINEAR_M_BY_SIZE` (см.
+    // `PatternItemSizeParameterValue`) создаём ОДНУ строку
+    // `WorkshopNeed`. Значения группируются по
+    // `categoryParameterId` — для одного параметра несколько
+    // значений по разным размерам объединяются в одну строку
+    // (это и есть «погонные метры по размерам = одна позиция
+    // материала, считается по размерной матрице»).
+    //
+    // Формула: `calculatedQty = Σ(value × OrderItem.qtyPlan)` по
+    // тем размерам, которые есть И в значениях, И в размерной
+    // матрице заказа. Размеры, для которых значение не задано,
+    // дают warning в `calculationNote`.
+    const linearByParam = new Map<
+      string,
+      Array<{
+        sizeId: string;
+        value: Prisma.Decimal;
+        roleKey: string;
+        labelSnapshot: string;
+        unit: string;
+      }>
+    >();
+    for (const v of order.patternItem?.sizeParameterValues ?? []) {
+      if (v.inputTypeSnapshot !== 'LINEAR_M_BY_SIZE') continue;
+      const list = linearByParam.get(v.categoryParameterId) ?? [];
+      list.push({
+        sizeId: v.sizeId,
+        value: v.value,
+        roleKey: v.roleKey,
+        labelSnapshot: v.labelSnapshot,
+        unit: v.unit,
+      });
+      linearByParam.set(v.categoryParameterId, list);
+    }
+    let methodLinearBySize = 0;
+    for (const [categoryParameterId, values] of linearByParam) {
+      const computedLinear = this.computeLinearBySizeParameter({
+        categoryParameterId,
+        values,
+        items: order.items,
+        sourceLines,
+        orderColor: order.color,
+        warnings,
+      });
+      if (computedLinear) {
+        methodLinearBySize++;
+        computed.push(computedLinear);
+      }
+    }
+
+    // 5. Транзакция: удаляем нужные строки и пишем новые.
+    const created = await this.prisma.$transaction(async (tx) => {
+      if (force) {
+        await tx.workshopNeed.deleteMany({ where: { orderId } });
+      } else {
+        // Только CALCULATED — REVIEWED/PURCHASE_PLANNED/CANCELLED не
+        // трогаем (см. ADR/ТЗ Этапа 4А).
+        await tx.workshopNeed.deleteMany({
+          where: { orderId, status: 'CALCULATED' },
+        });
+      }
+
+      const createdRows: WorkshopNeed[] = [];
+      for (const c of computed) {
+        const row = await tx.workshopNeed.create({
+          data: {
+            orderId,
+            sourceType: c.sourceType,
+            sourceId: c.sourceId,
+            materialRole: c.materialRole,
+            sourceName: c.sourceName,
+            description: c.description,
+            fabricType: c.fabricType,
+            densityGsm: c.densityGsm,
+            plannedWidthCm: c.plannedWidthCm,
+            colorRule: c.colorRule,
+            fixedColorText: c.fixedColorText,
+            resolvedColorText: c.resolvedColorText,
+            totalAreaM2: c.totalAreaM2,
+            calculatedQty: c.calculatedQty,
+            unit: c.unit,
+            calculationMethod: c.calculationMethod,
+            calculationNote: c.calculationNote,
+            // status, purchaseQty и т.п. идут по дефолту: status =
+            // CALCULATED, purchaseQty = null. Это и есть инвариант
+            // «закупщик заполняет руками».
+          },
+        });
+        createdRows.push(row);
+      }
+
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEEDS_CALCULATED',
+          entityType: 'WORKSHOP_NEED',
+          entityId: orderId,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId,
+            count: createdRows.length,
+            force,
+            useSnapshot,
+            // Этап «Исправить формирование Потребности цеха» (см.
+            // ТЗ §1 source-recon): пишем в payload, был ли заказ
+            // category-driven и сколько строк создано из каждого
+            // источника. Это закрывает требование «понять, какие
+            // строки создаются из каких источников» через журнал.
+            isCategoryDriven,
+            methods: {
+              AREA_DENSITY: methodAreaDensity,
+              QTY_PER_UNIT: methodQtyPerUnit,
+              LINEAR_M_BY_SIZE: methodLinearBySize,
+              PATTERN_MATERIAL_AREA: methodMaterialArea,
+            },
+            warningsCount: warnings.length,
+          },
+        },
+        tx,
+      );
+
+      return createdRows;
+    });
+
+    this.logger.log(
+      `event=workshop_needs.calculate orderId=${orderId} count=${created.length} ` +
+        `force=${force} categoryDriven=${isCategoryDriven} ` +
+        `methods=AREA_DENSITY:${methodAreaDensity},QTY_PER_UNIT:${methodQtyPerUnit},LINEAR_M_BY_SIZE:${methodLinearBySize},PATTERN_MATERIAL_AREA:${methodMaterialArea} ` +
+        `warnings=${warnings.length}`,
+    );
+
+    // Перечитываем для DTO — нужен include на order.
+    const needs = await this.list({ orderId });
+    return {
+      orderId,
+      needs,
+      count: created.length,
+      force,
+      methods: {
+        AREA_DENSITY: methodAreaDensity,
+        QTY_PER_UNIT: methodQtyPerUnit,
+      },
+      warnings,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // INTERNAL: per-line computation
+  // -------------------------------------------------------------------------
+
+  private computeLine(input: {
+    line: SourceLine;
+    order: { color: string | null; patternItemId: string | null };
+    items: { sizeId: string; qtyPlan: number; size: { id: string; code: string; sortOrder: number } }[];
+    materialAreas: {
+      id: string;
+      sizeId: string;
+      materialRole: string;
+      areaM2: Prisma.Decimal;
+    }[];
+    totalOrderQty: number;
+    warnings: string[];
+  }): ComputedNeed {
+    const { line, order, items, materialAreas, totalOrderQty, warnings } = input;
+
+    const resolvedColorText = this.resolveColor(line, order.color);
+
+    // Попытка AREA_DENSITY: нужны materialRole + densityGsm + лекало +
+    // хотя бы одна совпавшая площадь.
+    const canTryArea =
+      Boolean(order.patternItemId) &&
+      line.materialRole != null &&
+      line.densityGsm != null &&
+      line.densityGsm > 0;
+
+    if (canTryArea) {
+      const role = line.materialRole as string;
+      const density = line.densityGsm as number;
+      const matchedAreasBySize = new Map<string, Prisma.Decimal>();
+      for (const a of materialAreas) {
+        if (a.materialRole === role) {
+          matchedAreasBySize.set(a.sizeId, a.areaM2);
+        }
+      }
+      let totalAreaM2 = new Prisma.Decimal(0);
+      const missingSizes: string[] = [];
+      let coveredAtLeastOne = false;
+      for (const item of items) {
+        const area = matchedAreasBySize.get(item.sizeId);
+        if (!area) {
+          if (item.qtyPlan > 0) missingSizes.push(item.size.code);
+          continue;
+        }
+        if (item.qtyPlan <= 0) continue;
+        coveredAtLeastOne = true;
+        totalAreaM2 = totalAreaM2.add(area.mul(item.qtyPlan));
+      }
+
+      if (coveredAtLeastOne) {
+        // calculatedQty = totalAreaM2 × densityGsm / 1000
+        const calculatedQty = totalAreaM2
+          .mul(density)
+          .div(1000)
+          // Округляем к 4 знакам — поле Decimal(14, 4).
+          .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+
+        const note =
+          missingSizes.length > 0
+            ? `Нет площади для размеров: ${missingSizes.join(', ')} по роли ${role}. Считается только по тем размерам, где площадь задана.`
+            : null;
+        if (note) warnings.push(note);
+
+        return {
+          sourceType: line.source,
+          sourceId: line.id,
+          materialRole: line.materialRole,
+          sourceName: line.name,
+          description: this.buildDescription({
+            method: 'AREA_DENSITY',
+            line,
+            resolvedColorText,
+          }),
+          fabricType: line.fabricType,
+          densityGsm: line.densityGsm,
+          plannedWidthCm: line.plannedWidthCm,
+          colorRule: line.colorRule,
+          fixedColorText: line.fixedColorText,
+          resolvedColorText,
+          totalAreaM2: totalAreaM2.toDecimalPlaces(
+            4,
+            Prisma.Decimal.ROUND_HALF_UP,
+          ),
+          calculatedQty,
+          unit: 'кг',
+          calculationMethod: 'AREA_DENSITY',
+          calculationNote: note,
+        };
+      }
+      // Площадей вообще нет → fallback на QTY_PER_UNIT с нотой.
+      warnings.push(
+        `Для строки «${line.name}» (роль ${role}) нет ни одной площади в лекале — расчёт по норме техкарты.`,
+      );
+    }
+
+    // Fallback QTY_PER_UNIT.
+    let calculatedQty: Prisma.Decimal;
+    let unit = line.unit;
+    if (line.source === 'ORDER_MATERIAL_REQUIREMENT') {
+      // У snapshot уже посчитан totalQty в момент start().
+      calculatedQty = (line.totalQty ?? new Prisma.Decimal(0))
+        .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+    } else {
+      // Live техкарта: qtyPerUnit × Σ qtyPlan.
+      calculatedQty = line.qtyPerUnit
+        .mul(totalOrderQty)
+        .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+    }
+
+    return {
+      sourceType: line.source,
+      sourceId: line.id,
+      materialRole: line.materialRole,
+      sourceName: line.name,
+      description: this.buildDescription({
+        method: 'QTY_PER_UNIT',
+        line,
+        resolvedColorText,
+      }),
+      fabricType: line.fabricType,
+      densityGsm: line.densityGsm,
+      plannedWidthCm: line.plannedWidthCm,
+      colorRule: line.colorRule,
+      fixedColorText: line.fixedColorText,
+      resolvedColorText,
+      totalAreaM2: null,
+      calculatedQty,
+      unit,
+      calculationMethod: 'QTY_PER_UNIT',
+      calculationNote: null,
+    };
+  }
+
+  /**
+   * Этап «Нанесение на заказе покупателя»: per-application расчёт.
+   *
+   * Семантика:
+   *   - `sourceType = ORDER_APPLICATION`, `sourceId = application.id`
+   *     (без FK — это снимок, как и для других sourceType-ов).
+   *   - `materialRole = APPLICATION` — те же роли, что использует
+   *     техкартовая строка с `materialRole = APPLICATION` (из
+   *     `MATERIAL_ROLES` в `@sewing/shared/material-roles`). На UI
+   *     `WorkshopNeedsCard` уже умеет показывать APPLICATION как
+   *     некритичную роль.
+   *   - `calculatedQty = application.quantity` (если задано),
+   *     иначе fallback `Σ qtyPlan` (всё изделие = одно нанесение).
+   *   - `description` — человекочитаемая строка
+   *     «<Тип>, <stage label>, <место>, <WxH мм>, <цвет>».
+   *
+   * `calculationMethod = QTY_PER_UNIT` — нанесение всегда считается
+   * «по количеству», без AREA_DENSITY. Это сознательная простота
+   * MVP — для нанесения площадь полотна не имеет смысла.
+   */
+  private computeApplication(
+    app: {
+      id: string;
+      type: string;
+      stage: string;
+      placement: string | null;
+      widthMm: number | null;
+      heightMm: number | null;
+      colorText: string | null;
+      description: string | null;
+      quantity: Prisma.Decimal | null;
+      unit: string;
+    },
+    totalOrderQty: number,
+  ): ComputedNeed {
+    const type = app.type as OrderApplicationType;
+    const stage = app.stage as OrderApplicationStage;
+    const typeLabel =
+      type in ORDER_APPLICATION_TYPE_LABELS
+        ? ORDER_APPLICATION_TYPE_LABELS[type]
+        : app.type;
+    const stageLabel =
+      stage in ORDER_APPLICATION_STAGE_LABELS
+        ? ORDER_APPLICATION_STAGE_LABELS[stage]
+        : app.stage;
+
+    const parts: string[] = [typeLabel, stageLabel];
+    if (app.placement) parts.push(app.placement);
+    if (app.widthMm != null && app.heightMm != null) {
+      parts.push(`${app.widthMm}×${app.heightMm} мм`);
+    }
+    if (app.colorText) parts.push(app.colorText);
+    if (app.description) parts.push(app.description);
+    const description = parts.join(', ');
+
+    const calculatedQty = app.quantity
+      ? new Prisma.Decimal(app.quantity).toDecimalPlaces(
+          4,
+          Prisma.Decimal.ROUND_HALF_UP,
+        )
+      : new Prisma.Decimal(totalOrderQty);
+
+    return {
+      sourceType: 'ORDER_APPLICATION',
+      sourceId: app.id,
+      materialRole: 'APPLICATION',
+      sourceName: typeLabel,
+      description,
+      fabricType: null,
+      densityGsm: null,
+      plannedWidthCm: null,
+      colorRule: null,
+      fixedColorText: null,
+      resolvedColorText: app.colorText ?? null,
+      totalAreaM2: null,
+      calculatedQty,
+      unit: app.unit ?? 'шт',
+      calculationMethod: 'QTY_PER_UNIT',
+      calculationNote: null,
+    };
+  }
+
+  /**
+   * Этап «Фурнитура и нормы»: per-norm расчёт.
+   *
+   * Семантика:
+   *   - `sourceType = PATTERN_PARAMETER_NORM`, `sourceId = norm.id`
+   *     — каждая норма даёт отдельную строку, даже если несколько
+   *     норм имеют один и тот же `roleKey` (`PACKAGING` для
+   *     Люверсов / Шнура / Наконечников). См. ТЗ §8 «не группировать
+   *     все PACKAGING в одну строку».
+   *   - `materialRole = norm.roleKey` (snapshot — обычно `PACKAGING`,
+   *     но может быть и другая роль из категорийных параметров).
+   *   - `calculatedQty = qtyPerItem × totalOrderQty`,
+   *     `calculationMethod = QTY_PER_UNIT`, единица — `norm.unit`.
+   *   - `description` / `sourceName` — `norm.labelSnapshot` плюс
+   *     обогащение из техкарты (см. ТЗ §5).
+   *
+   * Этап «Исправить формирование Потребности цеха» (см. ТЗ §5
+   * «Enrichment для фурнитуры»): если для нормы найдена строка
+   * техкарты с тем же `materialRole`, в description добавляются
+   * `hardwareSizeText`, `hardwareMaterialText` и резолвленный цвет
+   * (по правилу `colorRule`), а в snapshot-поля строки потребности
+   * (fabricType / densityGsm / plannedWidthCm / colorRule /
+   * fixedColorText / resolvedColorText) ложатся значения из
+   * найденной строки. Если норма требует выбора цвета в заказе
+   * (`colorRule = ORDER_SELECTED_COLOR`) и цвет ещё не указан —
+   * пишем warning «Цвет нужно указать в заказе» в `calculationNote`.
+   *
+   * Если строки техкарты не нашли — description = labelSnapshot,
+   * остальные поля null. Это значит, фурнитура нуждается в
+   * закупочных деталях вручную (норма не отменяется — закупщик
+   * увидит хотя бы количество и название позиции).
+   */
+  private computeParameterNorm(
+    norm: {
+      id: string;
+      roleKey: string;
+      labelSnapshot: string;
+      unit: string;
+      qtyPerItem: Prisma.Decimal;
+      comment: string | null;
+    },
+    totalOrderQty: number,
+    matchedLine: SourceLine | null,
+    orderColor: string | null,
+  ): ComputedNeed {
+    const calculatedQty = norm.qtyPerItem
+      .mul(totalOrderQty)
+      .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+
+    const resolvedColor = matchedLine
+      ? this.resolveColor(matchedLine, orderColor)
+      : null;
+
+    // Description: «<labelSnapshot>, <size>, <material>, цвет <color>».
+    // Каждая часть опциональна — пишем только то, что заполнено.
+    const parts: string[] = [norm.labelSnapshot];
+    if (matchedLine?.hardwareSizeText) {
+      parts.push(matchedLine.hardwareSizeText);
+    }
+    if (matchedLine?.hardwareMaterialText) {
+      parts.push(matchedLine.hardwareMaterialText);
+    }
+    if (resolvedColor) {
+      parts.push(`цвет ${resolvedColor}`);
+    }
+    const description =
+      parts.length === 1 ? parts[0] : `${parts[0]}, ${parts.slice(1).join(', ')}`;
+
+    // Warning «Цвет нужно указать в заказе» — для строк фурнитуры с
+    // правилом цвета `ORDER_SELECTED_COLOR`, у которых в snapshot
+    // заказа не зафиксирован selectedColorText. UI показывает его
+    // под description как secondary-warning.
+    const colorMissing =
+      matchedLine?.colorRule === 'ORDER_SELECTED_COLOR' && !resolvedColor;
+    const calculationNote = colorMissing
+      ? 'Цвет нужно указать в заказе'
+      : null;
+
+    return {
+      sourceType: 'PATTERN_PARAMETER_NORM',
+      sourceId: norm.id,
+      materialRole: norm.roleKey,
+      sourceName: norm.labelSnapshot,
+      description,
+      fabricType: matchedLine?.fabricType ?? null,
+      densityGsm: matchedLine?.densityGsm ?? null,
+      plannedWidthCm: matchedLine?.plannedWidthCm ?? null,
+      colorRule: matchedLine?.colorRule ?? null,
+      fixedColorText: matchedLine?.fixedColorText ?? null,
+      resolvedColorText: resolvedColor,
+      totalAreaM2: null,
+      calculatedQty,
+      unit: norm.unit,
+      calculationMethod: 'QTY_PER_UNIT',
+      calculationNote,
+    };
+  }
+
+  /**
+   * Этап «Исправить формирование Потребности цеха» (см. ТЗ §3 и §6):
+   * per-role расчёт AREA_M2_BY_SIZE для category-driven заказа.
+   *
+   * Семантика:
+   *   - `sourceType = PATTERN_MATERIAL_AREA`, `sourceId = role`
+   *     (одна строка потребности на одну materialRole).
+   *   - `materialRole = role`, `sourceName = matchedLine.name ?? role`.
+   *   - `description` обогащается из найденной строки техкарты
+   *     (fabricType, density, цвет, ширина), как у legacy
+   *     AREA_DENSITY-строки.
+   *   - Если в техкарте есть строка с тем же materialRole
+   *     и `densityGsm > 0` — потребность считается в кг по той же
+   *     формуле, что и legacy AREA_DENSITY:
+   *       calculatedQty = totalAreaM2 × densityGsm / 1000;
+   *   - Если плотность не задана — потребность отдаётся в м² с
+   *     warning, чтобы менеджер видел причину явно (а не получал
+   *     ноль или ошибку).
+   */
+  private computeMaterialAreaByRole(input: {
+    role: string;
+    areas: { sizeId: string; areaM2: Prisma.Decimal }[];
+    items: {
+      sizeId: string;
+      qtyPlan: number;
+      size: { code: string };
+    }[];
+    matchedLine: SourceLine | null;
+    orderColor: string | null;
+    warnings: string[];
+  }): ComputedNeed | null {
+    const { role, areas, items, matchedLine, orderColor, warnings } = input;
+    const areasBySize = new Map<string, Prisma.Decimal>();
+    for (const a of areas) areasBySize.set(a.sizeId, a.areaM2);
+
+    let totalAreaM2 = new Prisma.Decimal(0);
+    let coveredAtLeastOne = false;
+    const missingSizes: string[] = [];
+    for (const it of items) {
+      const a = areasBySize.get(it.sizeId);
+      if (!a) {
+        if (it.qtyPlan > 0) missingSizes.push(it.size.code);
+        continue;
+      }
+      if (it.qtyPlan <= 0) continue;
+      coveredAtLeastOne = true;
+      totalAreaM2 = totalAreaM2.add(a.mul(it.qtyPlan));
+    }
+    if (!coveredAtLeastOne) {
+      warnings.push(
+        `Для роли «${role}» нет ни одной площади на размерах заказа.`,
+      );
+      return null;
+    }
+
+    const noteParts: string[] = [];
+    if (missingSizes.length > 0) {
+      const m = `Нет площади для размеров: ${missingSizes.join(', ')} по роли ${role}. Считается только по тем размерам, где площадь задана.`;
+      noteParts.push(m);
+      warnings.push(m);
+    }
+
+    const density = matchedLine?.densityGsm ?? null;
+    const width = matchedLine?.plannedWidthCm ?? null;
+    const fabricType = matchedLine?.fabricType ?? null;
+    const colorRule = matchedLine?.colorRule ?? null;
+    const fixedColorText = matchedLine?.fixedColorText ?? null;
+    const resolvedColorText = matchedLine
+      ? this.resolveColor(matchedLine, orderColor)
+      : null;
+
+    let calculatedQty: Prisma.Decimal;
+    let unit: string;
+    let calculationMethod: 'AREA_DENSITY' | 'QTY_PER_UNIT';
+    if (density != null && density > 0) {
+      calculatedQty = totalAreaM2
+        .mul(density)
+        .div(1000)
+        .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+      unit = 'кг';
+      calculationMethod = 'AREA_DENSITY';
+    } else {
+      // Без плотности — отдаём площадь в м². Это управленческое
+      // решение: лучше показать площадь и warning, чем ноль или
+      // ошибку. Закупщик увидит причину и сможет дополнить
+      // плотность в техкарте либо ввести закупку вручную.
+      calculatedQty = totalAreaM2.toDecimalPlaces(
+        4,
+        Prisma.Decimal.ROUND_HALF_UP,
+      );
+      unit = 'м²';
+      calculationMethod = 'QTY_PER_UNIT';
+      const w = `Не указана плотность материала по роли «${role}» — потребность сохранена в м² вместо кг. Заполните плотность в техкарте.`;
+      noteParts.push(w);
+      warnings.push(w);
+    }
+
+    // Description: «<fabricType|name> <density> г/м², <color>, ширина <w> см».
+    const head = (matchedLine?.fabricType ?? matchedLine?.name ?? role).trim();
+    const parts: string[] = [head];
+    if (density != null) parts.push(`${density} г/м²`);
+    if (resolvedColorText) parts.push(resolvedColorText);
+    if (width != null) parts.push(`ширина ${width} см`);
+    const description =
+      parts.length === 1 ? parts[0] : `${parts[0]} ${parts.slice(1).join(', ')}`;
+
+    if (matchedLine == null) {
+      const w = `Не найдена строка техкарты для роли «${role}». Описание потребности минимальное.`;
+      noteParts.push(w);
+      warnings.push(w);
+    }
+
+    return {
+      sourceType: 'PATTERN_MATERIAL_AREA',
+      sourceId: role,
+      materialRole: role,
+      sourceName: matchedLine?.name ?? role,
+      description,
+      fabricType,
+      densityGsm: density,
+      plannedWidthCm: width,
+      colorRule,
+      fixedColorText,
+      resolvedColorText,
+      totalAreaM2: totalAreaM2.toDecimalPlaces(
+        4,
+        Prisma.Decimal.ROUND_HALF_UP,
+      ),
+      calculatedQty,
+      unit,
+      calculationMethod,
+      calculationNote: noteParts.length > 0 ? noteParts.join(' ') : null,
+    };
+  }
+
+  /**
+   * Этап «Исправить формирование Потребности цеха» (см. ТЗ §4):
+   * helper «найти строку техкарты для параметра номенклатуры».
+   *
+   * Алгоритм:
+   *   1. exact: совпадает `materialRole = roleKey` И normalized
+   *      `fabricType` или `name` техкарты совпадает с
+   *      normalized(labelSnapshot);
+   *   2. fallback: если в техкарте ровно одна строка с
+   *      `materialRole = roleKey` — берём её;
+   *   3. иначе — null (UI отрисует labelSnapshot и оставит
+   *      enrichment пустым).
+   *
+   * `labelSnapshot` опционален: для PATTERN_MATERIAL_AREA по роли
+   * мы не знаем точное имя параметра номенклатуры, и сразу падаем
+   * в single-role match. Если нужно — передаём имя из категории
+   * параметра (для PARAMETER_NORM это `norm.labelSnapshot`).
+   *
+   * normalized: trim → lowercase → collapse-spaces → ё→е. Этого
+   * хватает для русского нейминга ткани / фурнитуры (Молния = молния
+   * = МОЛНИЯ; Дюспа = дюспа; Тёплый = теплый).
+   */
+  private findEnrichmentLine(input: {
+    roleKey: string | null;
+    labelSnapshot: string | null;
+    sourceLines: SourceLine[];
+  }): SourceLine | null {
+    const { roleKey, labelSnapshot, sourceLines } = input;
+    if (!roleKey) return null;
+    const candidates = sourceLines.filter((l) => l.materialRole === roleKey);
+    if (candidates.length === 0) return null;
+    if (candidates.length === 1) return candidates[0]!;
+
+    const normalized = (s: string | null | undefined): string =>
+      (s ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/ё/g, 'е');
+
+    if (labelSnapshot) {
+      const target = normalized(labelSnapshot);
+      if (target.length > 0) {
+        for (const c of candidates) {
+          if (
+            normalized(c.fabricType) === target ||
+            normalized(c.name) === target
+          ) {
+            return c;
+          }
+        }
+      }
+    }
+    // Несколько строк под одну роль и нет точного совпадения —
+    // не угадываем (см. ТЗ §4 «иначе не матчить, fallback на
+    // labelSnapshot»).
+    return null;
+  }
+
+  /**
+   * Этап «Погонные метры по размерам» + ТЗ «Единица потребности
+   * для LINEAR_M_BY_SIZE»: per-parameter расчёт.
+   *
+   * На вход приходит список значений по размерам для одного
+   * `categoryParameterId` (`inputTypeSnapshot = LINEAR_M_BY_SIZE`).
+   * Все значения относятся к одному параметру категории, поэтому
+   * `roleKey/labelSnapshot/unit` берём из любой строки (snapshot
+   * одинаков по построению).
+   *
+   * Семантика двух единиц (см. ТЗ «Исправить смысл и расчёт
+   * параметров категории номенклатуры»):
+   *   - В ячейках `PatternItemSizeParameterValue.value` пользователь
+   *     ВСЕГДА вводит «погонные метры на изделие» (м пог.) — это
+   *     semantics типа `LINEAR_M_BY_SIZE`. Поле `value.unit`
+   *     (snapshot из `parameter.unit` на момент сохранения) — это
+   *     «единица потребности», а НЕ единица ввода.
+   *   - На основе rawLinearM = Σ(value × qtyPlan) бэкенд считает
+   *     `calculatedQty` в outputUnit = `parameter.unit`:
+   *       - 'м пог.' → calculatedQty = rawLinearM;
+   *       - 'м²'    → calculatedQty = rawLinearM × widthCm / 100;
+   *       - 'кг'    → calculatedQty = rawLinearM × widthCm / 100
+   *                                   × densityGsm / 1000;
+   *       - другое  → calculatedQty = rawLinearM, unit = «м пог.»,
+   *                   warning «единица потребности не поддерживает
+   *                   пересчёт».
+   *   - widthCm / densityGsm берутся из строки техкарты заказа
+   *     (`SourceLine.materialRole === parameter.roleKey`). Если
+   *     строки нет — fallback на rawLinearM (м пог.) для безопасной
+   *     unit «м пог.»; для outputUnit ∈ {кг, м²} строка создаётся
+   *     с calculatedQty = 0 и warning, чтобы менеджер увидел
+   *     проблему явно (а не получил ложное число).
+   *
+   * Семантика:
+   *   - `sourceType = PATTERN_SIZE_PARAMETER_VALUE`,
+   *     `sourceId = categoryParameterId` — один параметр = одна строка
+   *     `WorkshopNeed`.
+   *   - `calculationNote` собирает rawLinearM, info про конверсию
+   *     и все warnings; warnings параллельно агрегируются в
+   *     `result.warnings`.
+   *   - `description` берётся из соответствующей строки техкарты
+   *     (если есть — собираем «Кулирка 180 г/м², чёрный, ширина
+   *     180 см»), иначе — `labelSnapshot`.
+   */
+  private computeLinearBySizeParameter(input: {
+    categoryParameterId: string;
+    values: Array<{
+      sizeId: string;
+      value: Prisma.Decimal;
+      roleKey: string;
+      labelSnapshot: string;
+      unit: string;
+    }>;
+    items: { sizeId: string; qtyPlan: number; size: { code: string } }[];
+    sourceLines: SourceLine[];
+    orderColor: string | null;
+    warnings: string[];
+  }): ComputedNeed | null {
+    const {
+      categoryParameterId,
+      values,
+      items,
+      sourceLines,
+      orderColor,
+      warnings,
+    } = input;
+    if (values.length === 0) return null;
+    // snapshot одинаков по построению (один categoryParameterId)
+    const head = values[0]!;
+
+    const valuesBySize = new Map<string, Prisma.Decimal>();
+    for (const v of values) valuesBySize.set(v.sizeId, v.value);
+
+    let rawLinearM = new Prisma.Decimal(0);
+    let coveredAtLeastOne = false;
+    const missingSizes: string[] = [];
+    for (const item of items) {
+      const v = valuesBySize.get(item.sizeId);
+      if (!v) {
+        if (item.qtyPlan > 0) missingSizes.push(item.size.code);
+        continue;
+      }
+      if (item.qtyPlan <= 0) continue;
+      coveredAtLeastOne = true;
+      rawLinearM = rawLinearM.add(v.mul(item.qtyPlan));
+    }
+
+    if (!coveredAtLeastOne) {
+      // Ни один размер заказа не покрыт значениями — строку не
+      // создаём, но даём управленческий warning.
+      warnings.push(
+        `Для параметра «${head.labelSnapshot}» (погонные метры) не задано ни одного значения по размерам заказа.`,
+      );
+      return null;
+    }
+
+    // Найдём строку техкарты / snapshot заказа по той же
+    // `materialRole = roleKey` параметра. Это даёт нам ширину
+    // рулона, плотность и резолвенный цвет для description.
+    //
+    // Этап «Исправить формирование Потребности цеха» (см. ТЗ §6
+    // «Enrichment для тканей»): используем общий helper, чтобы
+    // несколько техкарточных строк с одной ролью разруливались
+    // консистентно с computeParameterNorm / computeMaterialAreaByRole
+    // (single-role match по умолчанию, exact-match по labelSnapshot).
+    const matchedLine = this.findEnrichmentLine({
+      roleKey: head.roleKey,
+      labelSnapshot: head.labelSnapshot,
+      sourceLines,
+    });
+    const widthCm = matchedLine?.plannedWidthCm ?? null;
+    const densityGsm = matchedLine?.densityGsm ?? null;
+    // Резолвим цвет здесь, а не берём `matchedLine.resolvedColorText`
+    // напрямую: для live-техкарты (DRAFT-заказ без snapshot)
+    // resolvedColorText ВСЕГДА null, и без этого вызова MAIN_FABRIC
+    // никогда не получал бы цвет в description до старта заказа.
+    const resolvedColorText = matchedLine
+      ? this.resolveColor(matchedLine, orderColor)
+      : null;
+
+    // Целевая единица — `parameter.unit` (snapshot в `value.unit`,
+    // одинаковый по построению для всех значений одного параметра).
+    const outputUnitRaw = (head.unit ?? '').trim();
+    const outputUnit = outputUnitRaw === '' ? 'м пог.' : outputUnitRaw;
+
+    const noteParts: string[] = [];
+    noteParts.push(
+      `Σ погонных метров: ${rawLinearM
+        .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP)
+        .toString()} м пог.`,
+    );
+    if (missingSizes.length > 0) {
+      const m = `Не заполнены погонные метры для размеров: ${missingSizes.join(', ')}. Считается только по тем размерам, где значение задано.`;
+      noteParts.push(m);
+      warnings.push(`«${head.labelSnapshot}»: ${m}`);
+    }
+
+    let calculatedQty: Prisma.Decimal;
+    let unit: string;
+    let totalAreaM2: Prisma.Decimal | null = null;
+
+    if (outputUnit === 'м пог.') {
+      calculatedQty = rawLinearM.toDecimalPlaces(
+        4,
+        Prisma.Decimal.ROUND_HALF_UP,
+      );
+      unit = 'м пог.';
+    } else if (outputUnit === 'м²') {
+      if (widthCm == null || widthCm <= 0) {
+        const w = `Не указана ширина материала для пересчёта погонных метров в м². Заполните ширину в техкарте по строке с ролью «${head.roleKey}».`;
+        noteParts.push(w);
+        warnings.push(`«${head.labelSnapshot}»: ${w}`);
+        // Безопасно: создаём строку с calculatedQty = 0 в outputUnit,
+        // чтобы менеджер видел явную проблему, а не ложное число.
+        calculatedQty = new Prisma.Decimal(0);
+        unit = 'м²';
+      } else {
+        const areaM2 = rawLinearM.mul(widthCm).div(100);
+        totalAreaM2 = areaM2.toDecimalPlaces(
+          4,
+          Prisma.Decimal.ROUND_HALF_UP,
+        );
+        calculatedQty = areaM2.toDecimalPlaces(
+          4,
+          Prisma.Decimal.ROUND_HALF_UP,
+        );
+        unit = 'м²';
+        noteParts.push(
+          `Пересчёт: ${rawLinearM.toString()} м пог. × ${widthCm} см / 100 = ${calculatedQty.toString()} м².`,
+        );
+      }
+    } else if (outputUnit === 'кг') {
+      const widthMissing = widthCm == null || widthCm <= 0;
+      const densityMissing = densityGsm == null || densityGsm <= 0;
+      if (widthMissing || densityMissing) {
+        if (widthMissing) {
+          const w = `Не указана ширина материала для пересчёта погонных метров в кг. Заполните ширину в техкарте по строке с ролью «${head.roleKey}».`;
+          noteParts.push(w);
+          warnings.push(`«${head.labelSnapshot}»: ${w}`);
+        }
+        if (densityMissing) {
+          const d = `Не указана плотность материала для пересчёта погонных метров в кг. Заполните плотность (г/м²) в техкарте по строке с ролью «${head.roleKey}».`;
+          noteParts.push(d);
+          warnings.push(`«${head.labelSnapshot}»: ${d}`);
+        }
+        calculatedQty = new Prisma.Decimal(0);
+        unit = 'кг';
+      } else {
+        const areaM2 = rawLinearM.mul(widthCm as number).div(100);
+        totalAreaM2 = areaM2.toDecimalPlaces(
+          4,
+          Prisma.Decimal.ROUND_HALF_UP,
+        );
+        const kg = areaM2.mul(densityGsm as number).div(1000);
+        calculatedQty = kg.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+        unit = 'кг';
+        noteParts.push(
+          `Пересчёт: ${rawLinearM.toString()} м пог. × ${widthCm} см / 100 × ${densityGsm} г/м² / 1000 = ${calculatedQty.toString()} кг.`,
+        );
+      }
+    } else {
+      // Неизвестная единица потребности (не из {м пог., м², кг}).
+      // Безопасно: пишем rawLinearM в м пог. и сообщаем, что
+      // пересчёт невозможен. Это лучше, чем выдать ноль или
+      // неправильное число в неизвестной единице.
+      const u = `Единица потребности «${outputUnit}» не поддерживает пересчёт из погонных метров. Сохранено как м пог.`;
+      noteParts.push(u);
+      warnings.push(`«${head.labelSnapshot}»: ${u}`);
+      calculatedQty = rawLinearM.toDecimalPlaces(
+        4,
+        Prisma.Decimal.ROUND_HALF_UP,
+      );
+      unit = 'м пог.';
+    }
+
+    // Описание: по возможности — материал из техкарты («Кулирка
+    // 180 г/м², ширина 180 см»), иначе fallback на labelSnapshot.
+    const description =
+      matchedLine != null
+        ? this.buildDescription({
+            method: 'AREA_DENSITY',
+            line: matchedLine,
+            resolvedColorText,
+          })
+        : head.labelSnapshot;
+
+    return {
+      sourceType: 'PATTERN_SIZE_PARAMETER_VALUE',
+      sourceId: categoryParameterId,
+      materialRole: head.roleKey,
+      sourceName: head.labelSnapshot,
+      description,
+      fabricType: matchedLine?.fabricType ?? null,
+      densityGsm: matchedLine?.densityGsm ?? null,
+      plannedWidthCm: matchedLine?.plannedWidthCm ?? null,
+      colorRule: matchedLine?.colorRule ?? null,
+      fixedColorText: matchedLine?.fixedColorText ?? null,
+      resolvedColorText,
+      totalAreaM2,
+      calculatedQty,
+      unit,
+      calculationMethod: 'LINEAR_M_BY_SIZE',
+      calculationNote: noteParts.join(' '),
+    };
+  }
+
+  /**
+   * Для snapshot строк уже есть `resolvedColorText` (его посчитал
+   * `OrdersService.start()` по `colorRule`/`Order.color`). Если он
+   * пуст, мы всё равно делаем fallback по правилу — это бесплатная
+   * страховка от старых snapshot-ов с null-ом.
+   */
+  private resolveColor(
+    line: SourceLine,
+    orderColor: string | null,
+  ): string | null {
+    if (
+      line.source === 'ORDER_MATERIAL_REQUIREMENT' &&
+      line.resolvedColorText &&
+      line.resolvedColorText.trim() !== ''
+    ) {
+      return line.resolvedColorText;
+    }
+    const rule = line.colorRule;
+    if (rule === 'ORDER_COLOR') return orderColor ?? null;
+    if (rule === 'FIXED_COLOR') {
+      const t = (line.fixedColorText ?? '').trim();
+      return t === '' ? null : t;
+    }
+    // NO_COLOR / null / unknown → null.
+    return null;
+  }
+
+  /**
+   * Человекочитаемое описание потребности.
+   *
+   * AREA_DENSITY:  «<fabricType|name> <density> г/м², <color>, ширина <w> см»
+   * QTY_PER_UNIT:  «<name> [<color>] [<density> г/м²] [ширина <w> см]»
+   */
+  private buildDescription(input: {
+    method: 'AREA_DENSITY' | 'QTY_PER_UNIT';
+    line: SourceLine;
+    resolvedColorText: string | null;
+  }): string {
+    const { line, resolvedColorText } = input;
+    const head = (line.fabricType ?? line.name ?? 'Материал').trim();
+    const parts: string[] = [head];
+    if (line.densityGsm != null) parts.push(`${line.densityGsm} г/м²`);
+    if (resolvedColorText) parts.push(resolvedColorText);
+    if (line.plannedWidthCm != null) {
+      parts.push(`ширина ${line.plannedWidthCm} см`);
+    }
+    // Pretty-join: первая часть — «название» / «характеристика», дальше
+    // через запятую. Получается «Кулирка 180 г/м², чёрный, ширина 180 см».
+    if (parts.length === 1) return parts[0];
+    return `${parts[0]} ${parts.slice(1).join(', ')}`;
+  }
+
+  // -------------------------------------------------------------------------
+  // INTERNAL: supplier resolution (Этап 5)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Применяет правила Этапа 5 к паре `selectedSupplierId` /
+   * `selectedSupplierCatalogItemId` из DTO. Возвращает «итоговое»
+   * состояние пары и флаги «надо ли вообще трогать колонку».
+   *
+   * Контракт (см. ТЗ §6):
+   *   - selectedSupplierId === undefined && selectedSupplierCatalogItemId
+   *     === undefined → ничего не трогаем;
+   *   - selectedSupplierId === null → очищаем supplier И catalog item
+   *     (catalog item без supplier бессмыслен);
+   *   - selectedSupplierId === string → проверяем exists + ACTIVE;
+   *     если catalog item уже выбран и принадлежит другому поставщику,
+   *     отбиваем mismatch-ом;
+   *   - selectedSupplierCatalogItemId === null → очищаем только catalog
+   *     item, supplier остаётся как есть;
+   *   - selectedSupplierCatalogItemId === string → проверяем exists +
+   *     ACTIVE; если supplier не указан — auto-set из item.supplierId;
+   *     если указан — должен совпадать (mismatch ⇒ 400).
+   */
+  private async resolveSupplierFields(
+    existing: WorkshopNeed,
+    dtoSupplierId: string | null | undefined,
+    dtoCatalogItemId: string | null | undefined,
+  ): Promise<{
+    supplierTouched: boolean;
+    catalogItemTouched: boolean;
+    supplierId: string | null;
+    catalogItemId: string | null;
+  }> {
+    if (dtoSupplierId === undefined && dtoCatalogItemId === undefined) {
+      return {
+        supplierTouched: false,
+        catalogItemTouched: false,
+        supplierId: existing.selectedSupplierId,
+        catalogItemId: existing.selectedSupplierCatalogItemId,
+      };
+    }
+
+    // Стартовое состояние — текущие значения в БД, дальше накатываем DTO.
+    let supplierId: string | null = existing.selectedSupplierId;
+    let catalogItemId: string | null = existing.selectedSupplierCatalogItemId;
+    let supplierTouched = false;
+    let catalogItemTouched = false;
+
+    // Шаг 1. Очистка по supplierId = null — каскадно очищает catalog item.
+    if (dtoSupplierId === null) {
+      supplierId = null;
+      catalogItemId = null;
+      supplierTouched = true;
+      catalogItemTouched = true;
+    } else if (typeof dtoSupplierId === 'string') {
+      const supplier = await this.prisma.supplier.findUnique({
+        where: { id: dtoSupplierId },
+        select: { id: true, status: true },
+      });
+      if (!supplier) throw new SupplierNotFoundException();
+      if (supplier.status !== 'ACTIVE') throw new SupplierInactiveException();
+      if (supplierId !== supplier.id) {
+        // При смене поставщика старый catalog item больше не валиден —
+        // если DTO явно его не задаёт, очищаем.
+        if (dtoCatalogItemId === undefined && catalogItemId != null) {
+          catalogItemId = null;
+          catalogItemTouched = true;
+        }
+      }
+      supplierId = supplier.id;
+      supplierTouched = true;
+    }
+
+    // Шаг 2. Catalog item.
+    if (dtoCatalogItemId === null) {
+      if (catalogItemId !== null) {
+        catalogItemId = null;
+        catalogItemTouched = true;
+      } else if (!catalogItemTouched && dtoCatalogItemId === null) {
+        // Если уже было null — всё равно отметим, что DTO явно сбрасывает,
+        // чтобы аудит видел действие.
+        catalogItemTouched = true;
+      }
+    } else if (typeof dtoCatalogItemId === 'string') {
+      const item = await this.prisma.supplierCatalogItem.findUnique({
+        where: { id: dtoCatalogItemId },
+        select: { id: true, status: true, supplierId: true },
+      });
+      if (!item) throw new SupplierCatalogItemNotFoundException();
+      if (item.status !== 'ACTIVE') {
+        throw new SupplierCatalogItemInactiveException();
+      }
+      if (supplierId == null) {
+        // Auto-set supplier из catalog item, если supplier не задан.
+        // Параллельно валидируем, что сам поставщик ACTIVE.
+        const supplier = await this.prisma.supplier.findUnique({
+          where: { id: item.supplierId },
+          select: { id: true, status: true },
+        });
+        if (!supplier) throw new SupplierNotFoundException();
+        if (supplier.status !== 'ACTIVE') {
+          throw new SupplierInactiveException();
+        }
+        supplierId = supplier.id;
+        supplierTouched = true;
+      } else if (supplierId !== item.supplierId) {
+        throw new SupplierCatalogItemSupplierMismatchException();
+      }
+      catalogItemId = item.id;
+      catalogItemTouched = true;
+    }
+
+    return { supplierTouched, catalogItemTouched, supplierId, catalogItemId };
+  }
+
+  // -------------------------------------------------------------------------
+  // MAPPER
+  // -------------------------------------------------------------------------
+
+  private toDto(row: WorkshopNeedRowWithRelations): WorkshopNeedDto {
+    const supplier = row.selectedSupplier ?? null;
+    const item = row.selectedSupplierCatalogItem ?? null;
+    const order = row.order ?? null;
+
+    // -----------------------------------------------------------------------
+    // Polish-итерация `/admin/workshop-needs` — `client` / `pattern` /
+    // legacy `productName` resolver. Логика идентична
+    // `apps/web/lib/order-nomenclature.ts::resolveOrderNomenclature` —
+    // одно правило выбора во всём приложении.
+    //
+    // Важно: для `IN_PRODUCTION` / `CALCULATION` snapshot уже зафиксирован
+    // в `OrdersService.start()` (либо в момент перевода в `CALCULATION`),
+    // и UI обязан показывать именно snapshot, даже если карточку лекала
+    // потом изменили. Resolver сам выбирает snapshot первым.
+    // -----------------------------------------------------------------------
+    const snapshotName = order?.patternNameSnapshot ?? null;
+    const liveName = order?.patternItem?.name ?? null;
+    const legacyProductName = order?.items?.[0]?.product?.name ?? null;
+
+    let nomenclatureName: string | null;
+    let nomenclatureArticle: string | null;
+    let nomenclaturePreviewImageUrl: string | null;
+    let nomenclatureSource: WorkshopNeedDto['nomenclatureSource'];
+    if (snapshotName) {
+      nomenclatureSource = 'snapshot';
+      nomenclatureName = snapshotName;
+      nomenclatureArticle =
+        order?.patternArticleSnapshot ??
+        order?.patternItem?.article ??
+        null;
+      nomenclaturePreviewImageUrl =
+        order?.patternPreviewSnapshotUrl ??
+        order?.patternItem?.previewImageUrl ??
+        null;
+    } else if (liveName) {
+      nomenclatureSource = 'pattern';
+      nomenclatureName = liveName;
+      nomenclatureArticle = order?.patternItem?.article ?? null;
+      nomenclaturePreviewImageUrl =
+        order?.patternItem?.previewImageUrl ?? null;
+    } else if (legacyProductName) {
+      nomenclatureSource = 'legacyProduct';
+      nomenclatureName = legacyProductName;
+      nomenclatureArticle = null;
+      nomenclaturePreviewImageUrl = null;
+    } else {
+      nomenclatureSource = 'none';
+      nomenclatureName = null;
+      nomenclatureArticle = null;
+      nomenclaturePreviewImageUrl = null;
+    }
+
+    const clientId = order?.clientId ?? null;
+    const clientName =
+      order?.client?.name ?? order?.customer ?? null;
+
+    const enrichment = resolveWorkshopNeedEnrichment(row);
+
+    return {
+      id: row.id,
+      orderId: row.orderId,
+      orderNumber: order?.number ?? null,
+      orderStatus: order?.status ?? null,
+      orderDueDate: order?.dueDate ? order.dueDate.toISOString() : null,
+      orderColor: order?.color ?? null,
+      clientId,
+      clientName,
+      nomenclatureName,
+      nomenclatureArticle,
+      nomenclaturePreviewImageUrl,
+      nomenclatureSource,
+      sourceType: row.sourceType,
+      sourceId: row.sourceId,
+      materialRole: row.materialRole,
+      sourceName: row.sourceName,
+      description: row.description,
+      fabricType: row.fabricType,
+      densityGsm: row.densityGsm,
+      plannedWidthCm: row.plannedWidthCm,
+      colorRule: row.colorRule,
+      fixedColorText: row.fixedColorText,
+      resolvedColorText: row.resolvedColorText,
+      totalAreaM2: row.totalAreaM2 ? row.totalAreaM2.toString() : null,
+      calculatedQty: row.calculatedQty.toString(),
+      purchaseQty: row.purchaseQty ? row.purchaseQty.toString() : null,
+      unit: row.unit,
+      calculationMethod: row.calculationMethod,
+      status: row.status,
+      supplierNameText: row.supplierNameText,
+      purchaseItemNameText: row.purchaseItemNameText,
+      quotedPrice: row.quotedPrice ? row.quotedPrice.toString() : null,
+      quotedCurrency: row.quotedCurrency,
+      expectedDeliveryDate: row.expectedDeliveryDate
+        ? row.expectedDeliveryDate.toISOString()
+        : null,
+      selectedSupplierId: row.selectedSupplierId,
+      selectedSupplierCatalogItemId: row.selectedSupplierCatalogItemId,
+      selectedSupplierName: supplier?.name ?? null,
+      selectedSupplierCatalogItemName: item?.name ?? null,
+      selectedSupplierCatalogItemArticle: item?.supplierArticle ?? null,
+      selectedSupplierCatalogItemUnit: item?.unit ?? null,
+      selectedSupplierCatalogItemLastPrice: item?.lastPrice
+        ? item.lastPrice.toString()
+        : null,
+      comment: row.comment,
+      calculationNote: row.calculationNote,
+      // Этап «Исправить формирование Потребности цеха» (см. ТЗ §5–6):
+      // обогащение из связанной snapshot-строки / live-техкарты.
+      // Если строки не нашлось — значения null/false (UI отрисует
+      // голый description без secondary-блока).
+      hardwareSizeText: enrichment.hardwareSizeText,
+      hardwareMaterialText: enrichment.hardwareMaterialText,
+      materialImageUrl: enrichment.materialImageUrl,
+      selectedColorText: enrichment.selectedColorText,
+      requiresColorSelection: enrichment.requiresColorSelection,
+      calculatedAt: row.calculatedAt.toISOString(),
+      createdAt: row.createdAt.toISOString(),
+      updatedAt: row.updatedAt.toISOString(),
+    };
+  }
+}
+
+/**
+ * Единый include для чтения `WorkshopNeed` из БД. Использован и в
+ * `list`, и в `getOne` — чтобы DTO всегда содержал одно и то же
+ * (ошибки «у одного эндпоинта есть selectedSupplierName, у другого —
+ * нет» исключаются на уровне типа).
+ */
+const WORKSHOP_NEED_INCLUDE = {
+  // Polish-итерация `/admin/workshop-needs`: подтягиваем все «лёгкие»
+  // поля заказа, нужные UI таблицы и группировки по заказу. Это
+  // одна-таблица-через-FK select без N+1 — Prisma делает один JOIN.
+  //
+  // `patternItem` нужен только как fallback для DRAFT-заказов
+  // (snapshot ещё не зафиксирован). Для уже запущенных заказов
+  // resolver всегда выберет snapshot из самого `Order`.
+  //
+  // `client` — карточка из справочника `Client`; если её нет, UI
+  // показывает свободный `customer` как fallback (см. resolver
+  // в `toDto`).
+  order: {
+    select: {
+      id: true,
+      number: true,
+      status: true,
+      dueDate: true,
+      color: true,
+      customer: true,
+      clientId: true,
+      patternNameSnapshot: true,
+      patternArticleSnapshot: true,
+      patternPreviewSnapshotUrl: true,
+      client: { select: { id: true, name: true } },
+      patternItem: {
+        select: { id: true, name: true, article: true, previewImageUrl: true },
+      },
+      // Legacy `productName` fallback: ни snapshot, ни live `PatternItem`
+      // не задан → берём `Product.name` из первой строки `OrderItem`
+      // (исторические заказы без лекала). См. ту же стратегию в
+      // `OrdersService.list` (`firstItem?.product.name`). На пилоте
+      // сюда попадают только исторические заказы — для новых
+      // `OrderItem.productId` указывает на «технический» Product,
+      // созданный `ensureLegacyProductForPattern`, имя которого равно
+      // имени `PatternItem`. То есть в нормальном flow resolver всегда
+      // победит на `pattern` и сюда не дойдёт.
+      items: {
+        select: { product: { select: { name: true } } },
+        take: 1,
+      },
+      // Этап «Исправить формирование Потребности цеха» (см. ТЗ §5–6,
+      // §8): подтягиваем snapshot строк материала + live техкарту,
+      // чтобы `toDto` мог обогатить строку потребности недостающими
+      // полями (hardwareSizeText / hardwareMaterialText / materialImageUrl
+      // / selectedColorText / requiresColorSelection). База WorkshopNeed
+      // эти поля не хранит (см. ТЗ «Не менять Prisma»), мы их выводим
+      // на чтении.
+      materialRequirements: {
+        select: {
+          id: true,
+          materialRole: true,
+          name: true,
+          fabricType: true,
+          colorRule: true,
+          hardwareSizeText: true,
+          hardwareMaterialText: true,
+          materialImageUrl: true,
+          requiresColorSelection: true,
+          selectedColorText: true,
+        },
+      },
+      techCard: {
+        select: {
+          materialLines: {
+            select: {
+              id: true,
+              materialRole: true,
+              name: true,
+              fabricType: true,
+              colorRule: true,
+              hardwareSizeText: true,
+              hardwareMaterialText: true,
+              materialImageUrl: true,
+            },
+          },
+        },
+      },
+    },
+  },
+  selectedSupplier: { select: { id: true, name: true, status: true } },
+  selectedSupplierCatalogItem: {
+    select: {
+      id: true,
+      name: true,
+      supplierArticle: true,
+      unit: true,
+      lastPrice: true,
+      status: true,
+      supplierId: true,
+    },
+  },
+} as const satisfies Prisma.WorkshopNeedInclude;
+
+type WorkshopNeedRowWithRelations = WorkshopNeed & {
+  order?: {
+    id: string;
+    number: string;
+    status: string;
+    dueDate: Date | null;
+    color: string | null;
+    customer: string | null;
+    clientId: string | null;
+    patternNameSnapshot: string | null;
+    patternArticleSnapshot: string | null;
+    patternPreviewSnapshotUrl: string | null;
+    client: { id: string; name: string } | null;
+    patternItem: {
+      id: string;
+      name: string;
+      article: string;
+      previewImageUrl: string | null;
+    } | null;
+    items: { product: { name: string } | null }[];
+    /**
+     * Этап «Исправить формирование Потребности цеха»: обогащение
+     * фурнитуры / тканей данными из snapshot заказа (см. include).
+     */
+    materialRequirements: EnrichmentRequirementRow[];
+    techCard: { materialLines: EnrichmentTechCardLineRow[] } | null;
+  } | null;
+  selectedSupplier?: {
+    id: string;
+    name: string;
+    status: string;
+  } | null;
+  selectedSupplierCatalogItem?: {
+    id: string;
+    name: string;
+    supplierArticle: string | null;
+    unit: string;
+    lastPrice: Prisma.Decimal | null;
+    status: string;
+    supplierId: string;
+  } | null;
+};
+
+interface EnrichmentRequirementRow {
+  id: string;
+  materialRole: string | null;
+  name: string;
+  fabricType: string | null;
+  colorRule: string | null;
+  hardwareSizeText: string | null;
+  hardwareMaterialText: string | null;
+  materialImageUrl: string | null;
+  requiresColorSelection: boolean;
+  selectedColorText: string | null;
+}
+
+interface EnrichmentTechCardLineRow {
+  id: string;
+  materialRole: string | null;
+  name: string;
+  fabricType: string | null;
+  colorRule: string | null;
+  hardwareSizeText: string | null;
+  hardwareMaterialText: string | null;
+  materialImageUrl: string | null;
+}
+
+interface ResolvedEnrichment {
+  hardwareSizeText: string | null;
+  hardwareMaterialText: string | null;
+  materialImageUrl: string | null;
+  selectedColorText: string | null;
+  requiresColorSelection: boolean;
+}
+
+const EMPTY_ENRICHMENT: ResolvedEnrichment = {
+  hardwareSizeText: null,
+  hardwareMaterialText: null,
+  materialImageUrl: null,
+  selectedColorText: null,
+  requiresColorSelection: false,
+};
+
+/**
+ * Этап «Исправить формирование Потребности цеха» (см. ТЗ §4):
+ * нормализация строк для нечувствительного к регистру / ё→е /
+ * лишним пробелам сравнения. Используется и в `findEnrichmentLine`
+ * на стороне расчёта, и здесь, в `resolveWorkshopNeedEnrichment`,
+ * на стороне чтения DTO. Маленькая утилита, чтобы оба места ходили
+ * по одному правилу.
+ */
+function normalizeMatchKey(s: string | null | undefined): string {
+  return (s ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .replace(/ё/g, 'е');
+}
+
+/**
+ * Этап «Исправить формирование Потребности цеха» (см. ТЗ §5–6):
+ * на чтении DTO достраиваем поля, которые `WorkshopNeed` в БД
+ * не хранит (поля фурнитуры / картинка / выбранный цвет / флаг
+ * требования цвета). Берём их из связанной снапшот-строки
+ * `OrderMaterialRequirement` или, если snapshot ещё нет — из
+ * live-строки `TechCardMaterialLine`.
+ *
+ * Алгоритм поиска (точно так же, как `findEnrichmentLine` в сервисе):
+ *   1. Точное совпадение `sourceId` со строкой того же типа источника
+ *      (`ORDER_MATERIAL_REQUIREMENT` → snapshot row;
+ *      `TECH_CARD_MATERIAL_LINE` → live row).
+ *   2. Иначе ищем по `materialRole` + normalized name/fabricType
+ *      = normalized(sourceName).
+ *   3. Иначе single-role match (если по роли ровно одна строка).
+ *   4. Иначе пустое обогащение (UI покажет голый description).
+ *
+ * Snapshot заказа всегда предпочтительнее live-техкарты — он зафиксирован
+ * в момент `OrdersService.start()` и не «уплывёт» при правке шаблона
+ * после того, как заказ ушёл в производство.
+ */
+function resolveWorkshopNeedEnrichment(
+  row: WorkshopNeedRowWithRelations,
+): ResolvedEnrichment {
+  const requirements = row.order?.materialRequirements ?? [];
+  const techLines = row.order?.techCard?.materialLines ?? [];
+
+  // 1. Прямое совпадение sourceId.
+  if (row.sourceType === 'ORDER_MATERIAL_REQUIREMENT' && row.sourceId) {
+    const r = requirements.find((x) => x.id === row.sourceId);
+    if (r) return enrichmentFromRequirement(r);
+  }
+  if (row.sourceType === 'TECH_CARD_MATERIAL_LINE' && row.sourceId) {
+    const l = techLines.find((x) => x.id === row.sourceId);
+    if (l) return enrichmentFromTechCardLine(l);
+  }
+
+  // 2./3. Совпадение по материал-роли (для PATTERN_PARAMETER_NORM /
+  // PATTERN_SIZE_PARAMETER_VALUE / PATTERN_MATERIAL_AREA — там
+  // `sourceId` — это внутренний id параметра / роль, а не строка
+  // техкарты).
+  const role = row.materialRole;
+  if (typeof role === 'string' && role.length > 0) {
+    const target = normalizeMatchKey(row.sourceName);
+
+    const reqMatches = requirements.filter((r) => r.materialRole === role);
+    const reqExact = reqMatches.find(
+      (r) =>
+        target.length > 0 &&
+        (normalizeMatchKey(r.name) === target ||
+          normalizeMatchKey(r.fabricType) === target),
+    );
+    if (reqExact) return enrichmentFromRequirement(reqExact);
+    if (reqMatches.length === 1) {
+      return enrichmentFromRequirement(reqMatches[0]!);
+    }
+
+    const tlMatches = techLines.filter((l) => l.materialRole === role);
+    const tlExact = tlMatches.find(
+      (l) =>
+        target.length > 0 &&
+        (normalizeMatchKey(l.name) === target ||
+          normalizeMatchKey(l.fabricType) === target),
+    );
+    if (tlExact) return enrichmentFromTechCardLine(tlExact);
+    if (tlMatches.length === 1) {
+      return enrichmentFromTechCardLine(tlMatches[0]!);
+    }
+  }
+
+  return EMPTY_ENRICHMENT;
+}
+
+function enrichmentFromRequirement(
+  r: EnrichmentRequirementRow,
+): ResolvedEnrichment {
+  return {
+    hardwareSizeText: r.hardwareSizeText,
+    hardwareMaterialText: r.hardwareMaterialText,
+    materialImageUrl: r.materialImageUrl,
+    selectedColorText: r.selectedColorText,
+    requiresColorSelection: Boolean(r.requiresColorSelection),
+  };
+}
+
+function enrichmentFromTechCardLine(
+  l: EnrichmentTechCardLineRow,
+): ResolvedEnrichment {
+  return {
+    hardwareSizeText: l.hardwareSizeText,
+    hardwareMaterialText: l.hardwareMaterialText,
+    materialImageUrl: l.materialImageUrl,
+    selectedColorText: null,
+    // На live-техкарте нет per-order selectedColorText, но если
+    // правило цвета ORDER_SELECTED_COLOR — UI должен показать warning,
+    // что цвет нужно указать в заказе.
+    requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
+  };
+}
+
+/**
+ * Аккуратно объединяет существующий `where.order` с дополнительным
+ * условием, не теряя того, что уже было задано. На сегодня
+ * `WorkshopNeedsService.list` других `where.order`-условий не задаёт,
+ * но защитный helper нужен на случай, если в будущем кто-то добавит
+ * (поиск по `order.client.id`, фильтр по `dueDate` и т. п.).
+ */
+function mergeOrderWhere(
+  current: Prisma.WorkshopNeedWhereInput['order'],
+  extra: Prisma.OrderWhereInput,
+): Prisma.WorkshopNeedWhereInput['order'] {
+  if (!current) return extra;
+  if (typeof current !== 'object') return extra;
+  return { ...current, ...extra } as Prisma.WorkshopNeedWhereInput['order'];
+}
+
+// ---------------------------------------------------------------------------
+// Internal types
+// ---------------------------------------------------------------------------
+
+/**
+ * Унифицированный «источник материала» для расчёта. Закрывает оба
+ * варианта (live техкарта / snapshot заказа) одной структурой, чтобы
+ * `computeLine` не разветвлял логику по источнику.
+ *
+ * Для live техкарты `totalQty = null` (считаем сами); для snapshot —
+ * `totalQty` уже посчитан `OrdersService.start()`.
+ */
+interface SourceLine {
+  source: 'TECH_CARD_MATERIAL_LINE' | 'ORDER_MATERIAL_REQUIREMENT';
+  id: string;
+  name: string;
+  unit: string;
+  qtyPerUnit: Prisma.Decimal;
+  totalQty: Prisma.Decimal | null;
+  materialRole: string | null;
+  fabricType: string | null;
+  densityGsm: number | null;
+  plannedWidthCm: number | null;
+  colorRule: string | null;
+  fixedColorText: string | null;
+  /** Для snapshot — заранее посчитанный resolvedColorText. */
+  resolvedColorText: string | null;
+  /**
+   * Этап «Исправить формирование Потребности цеха» (см. ТЗ §3, §5):
+   * snapshot-копии полей строки техкарты, нужные для обогащения
+   * описания фурнитуры / тканей и UI-превью изображения. На live-
+   * техкарте `selectedColorText = null` и `requiresColorSelection`
+   * выводится из `colorRule = ORDER_SELECTED_COLOR`. На snapshot-е
+   * заказа поля приходят как есть.
+   */
+  hardwareSizeText: string | null;
+  hardwareMaterialText: string | null;
+  materialImageUrl: string | null;
+  selectedColorText: string | null;
+  requiresColorSelection: boolean;
+}
+
+/**
+ * Готовая потребность, которую сейчас положим в БД.
+ *
+ * `sourceType` шире, чем `SourceLine['source']`: добавляем
+ * `ORDER_APPLICATION` для строк, рассчитанных по `OrderApplication`
+ * (этап «Нанесение на заказе покупателя»),
+ * `PATTERN_PARAMETER_NORM` для строк по нормам фурнитуры из
+ * карточки лекала (этап «Фурнитура и нормы»), и
+ * `PATTERN_SIZE_PARAMETER_VALUE` для строк по погонным метрам
+ * (этап «Погонные метры по размерам»).
+ */
+interface ComputedNeed {
+  sourceType:
+    | 'TECH_CARD_MATERIAL_LINE'
+    | 'ORDER_MATERIAL_REQUIREMENT'
+    | 'ORDER_APPLICATION'
+    | 'PATTERN_PARAMETER_NORM'
+    | 'PATTERN_SIZE_PARAMETER_VALUE'
+    /**
+     * Этап «Исправить формирование Потребности цеха» (см. ТЗ §3 и §6):
+     * для category-driven заказа AREA_M2_BY_SIZE рассчитывается
+     * напрямую из `PatternMaterialArea` (а не из строки техкарты,
+     * как раньше). Это убирает «спанбонд из техкарты, под который
+     * нет заполненной площади в номенклатуре» из потребности.
+     */
+    | 'PATTERN_MATERIAL_AREA';
+  sourceId: string;
+  materialRole: string | null;
+  sourceName: string | null;
+  description: string;
+  fabricType: string | null;
+  densityGsm: number | null;
+  plannedWidthCm: number | null;
+  colorRule: string | null;
+  fixedColorText: string | null;
+  resolvedColorText: string | null;
+  totalAreaM2: Prisma.Decimal | null;
+  calculatedQty: Prisma.Decimal;
+  unit: string;
+  calculationMethod: 'AREA_DENSITY' | 'QTY_PER_UNIT' | 'LINEAR_M_BY_SIZE';
+  calculationNote: string | null;
+}

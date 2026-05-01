@@ -52,7 +52,6 @@ describeWithDb('integration — equipment <-> operations (ADR-0017)', () => {
         login: 'rbac-admin',
         fullName: 'RBAC Admin',
         role: 'ADMIN',
-        paymentType: 'SALARY',
         active: true,
         pinHash: adminPin,
       },

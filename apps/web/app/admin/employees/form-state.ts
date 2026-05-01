@@ -19,3 +19,20 @@ export interface UpdateEmployeeState {
 }
 
 export const initialUpdateEmployeeState: UpdateEmployeeState = {};
+
+/**
+ * Состояние формы создания сотрудника на `/admin/employees/new`.
+ *
+ * При успехе action редиректит на карточку нового сотрудника
+ * (`/admin/employees/[id]`), поэтому `successMessage` тут можно не
+ * показывать — но поле оставлено симметрично `UpdateEmployeeState`,
+ * чтобы UI-структура форм была одинаковой.
+ */
+export interface CreateEmployeeState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialCreateEmployeeState: CreateEmployeeState = {};

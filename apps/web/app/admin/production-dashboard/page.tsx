@@ -1,4 +1,23 @@
 import Link from 'next/link';
+import {
+  Activity,
+  AlertCircle,
+  AlertTriangle,
+  ArrowRight,
+  BarChart3,
+  CheckCircle2,
+  Clock,
+  Coins,
+  Factory,
+  Info,
+  LayoutDashboard,
+  PauseCircle,
+  Scissors,
+  Sparkles,
+  Users,
+  Warehouse,
+  type LucideIcon,
+} from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getProductionDashboard } from '@/lib/dashboard-api';
 import {
@@ -9,7 +28,12 @@ import {
   type ProductionDashboardDto,
   type ProductionDashboardPeriod,
 } from '@sewing/shared/dashboard';
-import { Icon, type IconName } from '@/components/icon';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminSectionHeader,
+} from '@/components/admin';
 import { ProductionDashboardTrendChart } from './trend-chart';
 
 export const dynamic = 'force-dynamic';
@@ -21,20 +45,10 @@ interface SearchParams {
 /**
  * «Дашборд начальника производства» (`docs/screens.md §18`).
  *
- * Единый управленческий экран. RBAC закрывает `app/admin/layout.tsx`
- * (`canSeeAdmin`); backend (`/api/dashboard/production`) дополнительно
- * защищён `@Roles('SHOP_MANAGER', 'ADMIN')`.
- *
- * Содержимое (порядок фиксирован):
- *   1. KPI-карточки сверху (выпуск/WIP/себестоимость/простой/загрузка).
- *   2. Pipeline — где сейчас изделия (CUT … FINISHED) + bottleneck.
- *   3. Динамика выпуска / себестоимости / простоя — компактный SVG-чарт.
- *   4. Загрузка по ролям (ОТК / ВТО / Упаковка) за день.
- *   5. Алерты «Требует внимания».
- *   6. Quick links — переходы в другие управленческие разделы.
- *
- * Источник истины — backend; страница ничего не пересчитывает руками
- * (см. `apps/api/src/modules/dashboard`).
+ * Источник истины — backend (`/api/dashboard/production`). Эта
+ * страница только рендерит DTO; вычисления и API не меняем. UI
+ * приведён к Admin UI 2.6: AdminPageShell + AdminCard + lucide-react,
+ * никаких dark backgrounds и старых строковых иконок.
  */
 export default async function ProductionDashboardPage({
   searchParams,
@@ -55,19 +69,17 @@ export default async function ProductionDashboardPage({
 
   if (!dto) {
     return (
-      <div className="page-shell">
-        <div>
-          <div className="page-eyebrow">
-            <Icon name="dashboard" />
-            Управление производством
+      <AdminPageShell
+        icon={<LayoutDashboard size={22} strokeWidth={1.6} aria-hidden />}
+        title="Дашборд производства"
+        subtitle="Управленческий обзор"
+      >
+        {error && (
+          <div className="error-box" role="alert">
+            {error}
           </div>
-          <h1 className="page-title">
-            <Icon name="dashboard" />
-            Дашборд начальника производства
-          </h1>
-        </div>
-        {error && <div className="error-box">{error}</div>}
-      </div>
+        )}
+      </AdminPageShell>
     );
   }
 
@@ -75,63 +87,38 @@ export default async function ProductionDashboardPage({
   const generatedAtLabel = new Date(dto.generatedAt).toLocaleString('ru-RU');
 
   return (
-    <div className="prod-dashboard page-shell">
-      <div
-        style={{
-          display: 'flex',
-          justifyContent: 'space-between',
-          alignItems: 'flex-start',
-          gap: '1rem',
-          flexWrap: 'wrap',
-        }}
-      >
-        <div>
-          <div className="page-eyebrow">
-            <Icon name="dashboard" />
-            Управление производством
-          </div>
-          <h1 className="page-title">
-            <Icon name="dashboard" />
-            Дашборд начальника производства
-          </h1>
-          <p className="page-subtitle">
-            Единый управленческий экран. KPI «сегодня» считаются по UTC-сегодня;
-            график и сводки за период — за {dto.periodDays} дней
-            ({formatDate(dto.dateFrom)} — {formatDate(dto.dateTo)}).
-          </p>
-          <div className="meta-line" style={{ marginTop: '0.4rem' }}>
-            <Icon name="refresh" size={13} /> Обновлено: {generatedAtLabel}
-          </div>
-        </div>
-        <PeriodSwitcher current={dto.periodDays} />
-      </div>
-
+    <AdminPageShell
+      icon={<LayoutDashboard size={22} strokeWidth={1.6} aria-hidden />}
+      title="Дашборд производства"
+      subtitle={`${dto.periodDays} дней · ${formatDate(dto.dateFrom)} — ${formatDate(dto.dateTo)} · обновлено ${generatedAtLabel}`}
+      actions={<PeriodSwitcher current={dto.periodDays} />}
+    >
       {/* 1. KPI cards ----------------------------------------------------- */}
       <section aria-label="Ключевые показатели">
         <div className="kpi-grid">
           <KpiCard
-            icon="output"
+            Icon={CheckCircle2}
             tone="ok"
             label="Выпущено сегодня"
             value={`${formatInt(kpi.producedToday)} шт`}
             sub={`${formatInt(kpi.producedPeriod)} шт за период`}
           />
           <KpiCard
-            icon="pulse"
+            Icon={Activity}
             tone="accent"
             label="В работе сейчас"
             value={`${formatInt(kpi.wipUnits)} шт`}
             sub={`${formatInt(kpi.wipPassports)} паспортов`}
           />
           <KpiCard
-            icon="orders"
+            Icon={BarChart3}
             label="Заказы в производстве"
             value={`${formatInt(kpi.ordersInProduction)} шт`}
           />
           <KpiCard
-            icon="price"
+            Icon={Coins}
             tone="accent"
-            label="Себестоимость / шт сегодня"
+            label="Себестоимость / шт"
             value={
               kpi.avgCostPerUnitToday > 0
                 ? `${formatMoney(kpi.avgCostPerUnitToday)} ₽`
@@ -144,14 +131,14 @@ export default async function ProductionDashboardPage({
             }
           />
           <KpiCard
-            icon="idle"
+            Icon={PauseCircle}
             tone={kpi.idleCostToday > 0 ? 'danger' : undefined}
             label="Простой сегодня"
             value={`${formatMoney(kpi.idleCostToday)} ₽`}
             sub={`${formatMoney(kpi.idleCostPeriod)} ₽ за период`}
           />
           <KpiCard
-            icon="dashboard"
+            Icon={LayoutDashboard}
             tone={
               kpi.utilizationToday >= 60
                 ? 'ok'
@@ -167,16 +154,17 @@ export default async function ProductionDashboardPage({
       </section>
 
       {/* 2. Pipeline ----------------------------------------------------- */}
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="shopfloor" />
-            Где сейчас изделия
-          </h2>
-          <Link href="/shopfloor" className="meta-line">
-            Открыть «Цех» →
-          </Link>
-        </div>
+      <AdminCard>
+        <AdminSectionHeader
+          icon={<Factory size={16} strokeWidth={1.6} aria-hidden />}
+          title="Где сейчас изделия"
+          actions={
+            <Link href="/shopfloor" className="admin-table__action-link">
+              Открыть «Цех»
+              <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+            </Link>
+          }
+        />
         <div className="stage-grid">
           {pipeline.stages.map((s) => {
             const isBottleneck =
@@ -187,7 +175,9 @@ export default async function ProductionDashboardPage({
                 className={`stage-card${isBottleneck ? ' stage-card--bottleneck' : ''}`}
               >
                 <div className="stage-card__head">
-                  {isBottleneck && <Icon name="bottleneck" />}
+                  {isBottleneck && (
+                    <AlertTriangle size={14} strokeWidth={1.6} aria-hidden />
+                  )}
                   {PRODUCTION_DASHBOARD_STAGE_LABELS[s.stage]}
                 </div>
                 <div className="stage-card__value">
@@ -200,13 +190,14 @@ export default async function ProductionDashboardPage({
           })}
           <div className="stage-card stage-card--ghost">
             <div className="stage-card__head">
-              <Icon name="error" />
+              <AlertCircle size={14} strokeWidth={1.6} aria-hidden />
               Брак (всего)
             </div>
             <div
               className="stage-card__value"
               style={{
-                color: pipeline.defectQty > 0 ? 'var(--color-danger-fg)' : undefined,
+                color:
+                  pipeline.defectQty > 0 ? 'var(--color-danger-fg)' : undefined,
               }}
             >
               {formatInt(pipeline.defectQty)}
@@ -215,109 +206,111 @@ export default async function ProductionDashboardPage({
           </div>
         </div>
         {pipeline.bottleneckStage && pipeline.bottleneckQty > 0 && (
-          <div className="meta-line" style={{ marginTop: '0.6rem' }}>
-            <Icon name="bottleneck" size={13} /> Узкое место:{' '}
-            {PRODUCTION_DASHBOARD_STAGE_LABELS[pipeline.bottleneckStage]}
+          <p className="admin-muted" style={{ margin: '0.5rem 0 0' }}>
+            <AlertTriangle size={13} strokeWidth={1.6} aria-hidden /> Узкое
+            место: {PRODUCTION_DASHBOARD_STAGE_LABELS[pipeline.bottleneckStage]}
             {' — '}
             {formatInt(pipeline.bottleneckQty)} шт.
-          </div>
+          </p>
         )}
-      </section>
+      </AdminCard>
 
       {/* 3. Trend chart -------------------------------------------------- */}
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="pulse" />
-            Динамика по дням
-          </h2>
-          <span className="section-header__hint">
-            Выпуск, себестоимость, простой
-          </span>
-        </div>
+      <AdminCard>
+        <AdminSectionHeader
+          icon={<Activity size={16} strokeWidth={1.6} aria-hidden />}
+          title="Динамика по дням"
+          hint="Выпуск, себестоимость, простой"
+        />
         <ProductionDashboardTrendChart days={trend} />
-      </section>
+      </AdminCard>
 
       {/* 4. Role load ---------------------------------------------------- */}
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="employees" />
-            Загрузка по ролям ({formatDate(dto.dateTo)})
-          </h2>
-          <Link href="/production-cost" className="meta-line">
-            Подробнее в «Себестоимости» →
-          </Link>
-        </div>
+      <AdminCard>
+        <AdminSectionHeader
+          icon={<Users size={16} strokeWidth={1.6} aria-hidden />}
+          title={`Загрузка по ролям (${formatDate(dto.dateTo)})`}
+          actions={
+            <Link
+              href="/production-cost"
+              className="admin-table__action-link"
+            >
+              Подробнее в «Себестоимости»
+              <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+            </Link>
+          }
+        />
         {roleLoad.every((r) => r.employees === 0 && r.trackedMinutes === 0) ? (
-          <div className="empty-state">
-            <span className="empty-state__icon">
-              <Icon name="info" />
-            </span>
-            <span className="empty-state__title">Нет данных за день</span>
-            <span className="empty-state__hint">
-              За {formatDate(dto.dateTo)} нет ни смен окладных сотрудников, ни
-              учтённых минут.
-            </span>
-          </div>
+          <AdminEmptyState
+            icon={<Info size={26} strokeWidth={1.6} aria-hidden />}
+            title="Нет данных за день"
+            hint={`За ${formatDate(dto.dateTo)} нет ни смен, ни учтённых минут.`}
+          />
         ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Роль</th>
-                <th style={{ textAlign: 'right' }}>Окладников</th>
-                <th style={{ textAlign: 'right' }}>Оплачено, мин</th>
-                <th style={{ textAlign: 'right' }}>Учтено, мин</th>
-                <th style={{ textAlign: 'right' }}>Простой, мин</th>
-                <th style={{ textAlign: 'right' }}>Простой, ₽</th>
-                <th style={{ textAlign: 'right' }}>Загрузка</th>
-              </tr>
-            </thead>
-            <tbody>
-              {roleLoad.map((r) => (
-                <tr key={r.role}>
-                  <td>{PRODUCTION_DASHBOARD_ROLE_LABELS[r.role]}</td>
-                  <td style={{ textAlign: 'right' }}>{r.employees}</td>
-                  <td style={{ textAlign: 'right' }}>{formatInt(r.paidMinutes)}</td>
-                  <td style={{ textAlign: 'right' }}>{formatInt(r.trackedMinutes)}</td>
-                  <td style={{ textAlign: 'right' }}>{formatInt(r.idleMinutes)}</td>
-                  <td
-                    style={{
-                      textAlign: 'right',
-                      color: r.idleCost > 0 ? 'var(--color-danger-fg)' : undefined,
-                    }}
-                  >
-                    {formatMoney(r.idleCost)}
-                  </td>
-                  <td style={{ textAlign: 'right' }}>{r.utilization}%</td>
+          <div className="admin-table-wrap">
+            <table className="admin-table">
+              <thead>
+                <tr>
+                  <th>Роль</th>
+                  <th style={{ textAlign: 'right' }}>Окладников</th>
+                  <th style={{ textAlign: 'right' }}>Оплачено, мин</th>
+                  <th style={{ textAlign: 'right' }}>Учтено, мин</th>
+                  <th style={{ textAlign: 'right' }}>Простой, мин</th>
+                  <th style={{ textAlign: 'right' }}>Простой, ₽</th>
+                  <th style={{ textAlign: 'right' }}>Загрузка</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
+              </thead>
+              <tbody>
+                {roleLoad.map((r) => (
+                  <tr key={r.role}>
+                    <td>{PRODUCTION_DASHBOARD_ROLE_LABELS[r.role]}</td>
+                    <td style={{ textAlign: 'right' }}>{r.employees}</td>
+                    <td style={{ textAlign: 'right' }}>
+                      {formatInt(r.paidMinutes)}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {formatInt(r.trackedMinutes)}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>
+                      {formatInt(r.idleMinutes)}
+                    </td>
+                    <td
+                      style={{
+                        textAlign: 'right',
+                        color:
+                          r.idleCost > 0
+                            ? 'var(--color-danger-fg)'
+                            : undefined,
+                      }}
+                    >
+                      {formatMoney(r.idleCost)}
+                    </td>
+                    <td style={{ textAlign: 'right' }}>{r.utilization}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         )}
-      </section>
+      </AdminCard>
 
       {/* 5. Alerts ------------------------------------------------------- */}
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="warning" />
-            Требует внимания
-          </h2>
-          {alerts.length > 0 && (
-            <span className="section-header__hint">
-              {alerts.length} {alerts.length === 1 ? 'алерт' : 'алертов'}
-            </span>
-          )}
-        </div>
+      <AdminCard>
+        <AdminSectionHeader
+          icon={<AlertTriangle size={16} strokeWidth={1.6} aria-hidden />}
+          title="Требует внимания"
+          hint={
+            alerts.length > 0
+              ? `${alerts.length} ${alerts.length === 1 ? 'алерт' : 'алертов'}`
+              : undefined
+          }
+        />
         {alerts.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-state__icon" style={{ background: 'var(--color-ok-soft)', color: 'var(--color-ok-fg)' }}>
-              <Icon name="success" />
-            </span>
-            <span className="empty-state__title">Сегодня всё спокойно</span>
-            <span className="empty-state__hint">Алертов нет.</span>
-          </div>
+          <AdminEmptyState
+            icon={<Sparkles size={26} strokeWidth={1.6} aria-hidden />}
+            title="Сегодня всё спокойно"
+            hint="Алертов нет."
+          />
         ) : (
           <div className="alert-stack">
             {alerts.map((a, i) => (
@@ -325,28 +318,50 @@ export default async function ProductionDashboardPage({
             ))}
           </div>
         )}
-      </section>
+      </AdminCard>
 
       {/* 6. Quick actions ------------------------------------------------ */}
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="arrow-right" />
-            Быстрые переходы
-          </h2>
-        </div>
+      <AdminCard>
+        <AdminSectionHeader
+          icon={<ArrowRight size={16} strokeWidth={1.6} aria-hidden />}
+          title="Быстрые переходы"
+        />
         <div className="quick-grid">
-          <QuickLink href="/shopfloor" icon="shopfloor" label="Цех" />
-          <QuickLink href="/production-cost" icon="production-cost" label="Себестоимость выпуска" />
-          <QuickLink href="/earnings" icon="earnings" label="Зарплата" />
-          <QuickLink href="/admin/employees" icon="employees" label="Сотрудники" />
-          <QuickLink href="/admin/operations" icon="operations" label="Операции" />
-          <QuickLink href="/admin/warehouses" icon="warehouses" label="Склад" />
-          <QuickLink href="/orders" icon="orders" label="Заказы" />
-          <QuickLink href="/admin/overview" icon="overview" label="Операционный обзор" />
+          <QuickLink href="/shopfloor" Icon={Factory} label="Цех" />
+          <QuickLink
+            href="/production-cost"
+            Icon={Coins}
+            label="Себестоимость"
+          />
+          <QuickLink href="/earnings" Icon={Coins} label="Зарплата" />
+          <QuickLink
+            href="/admin/employees"
+            Icon={Users}
+            label="Сотрудники"
+          />
+          <QuickLink
+            href="/admin/operations"
+            Icon={Scissors}
+            label="Операции"
+          />
+          <QuickLink
+            href="/admin/warehouses"
+            Icon={Warehouse}
+            label="Склад"
+          />
+          <QuickLink
+            href="/orders"
+            Icon={BarChart3}
+            label="Заказы"
+          />
+          <QuickLink
+            href="/admin/overview"
+            Icon={LayoutDashboard}
+            label="Операционный обзор"
+          />
         </div>
-      </section>
-    </div>
+      </AdminCard>
+    </AdminPageShell>
   );
 }
 
@@ -376,7 +391,7 @@ function PeriodSwitcher({ current }: { current: ProductionDashboardPeriod }) {
           className={`toggle-group__item${p === current ? ' is-active' : ''}`}
           aria-current={p === current ? 'page' : undefined}
         >
-          <Icon name="period" size={14} />
+          <Clock size={14} strokeWidth={1.6} aria-hidden />
           {p} дней
         </Link>
       ))}
@@ -386,13 +401,13 @@ function PeriodSwitcher({ current }: { current: ProductionDashboardPeriod }) {
 
 type KpiTone = 'ok' | 'warn' | 'danger' | 'accent';
 function KpiCard({
-  icon,
+  Icon,
   label,
   value,
   sub,
   tone,
 }: {
-  icon: IconName;
+  Icon: LucideIcon;
   label: string;
   value: string;
   sub?: string;
@@ -403,7 +418,7 @@ function KpiCard({
     <div className={cls}>
       <div className="kpi-card__head">
         <span className="kpi-card__icon">
-          <Icon name={icon} />
+          <Icon size={16} strokeWidth={1.6} aria-hidden />
         </span>
         {label}
       </div>
@@ -412,6 +427,12 @@ function KpiCard({
     </div>
   );
 }
+
+const SEVERITY_ICON: Record<ProductionDashboardAlertSeverity, LucideIcon> = {
+  INFO: Info,
+  WARN: AlertTriangle,
+  CRIT: AlertCircle,
+};
 
 function AlertRow({
   severity,
@@ -431,11 +452,7 @@ function AlertRow({
     WARN: 'warn',
     CRIT: 'crit',
   };
-  const severityToIcon: Record<ProductionDashboardAlertSeverity, IconName> = {
-    INFO: 'info',
-    WARN: 'warning',
-    CRIT: 'error',
-  };
+  const Icon = SEVERITY_ICON[severity];
   const valueLabel =
     value === undefined
       ? null
@@ -444,7 +461,7 @@ function AlertRow({
   const inner = (
     <>
       <span className="alert-row__icon" aria-hidden>
-        <Icon name={severityToIcon[severity]} />
+        <Icon size={14} strokeWidth={1.6} />
       </span>
       <span className="alert-row__msg">{message}</span>
       {valueLabel && <span className="alert-row__value">{valueLabel}</span>}
@@ -462,20 +479,20 @@ function AlertRow({
 function QuickLink({
   href,
   label,
-  icon,
+  Icon,
 }: {
   href: string;
   label: string;
-  icon: IconName;
+  Icon: LucideIcon;
 }) {
   return (
     <Link className="quick-link" href={href}>
       <span className="quick-link__icon">
-        <Icon name={icon} />
+        <Icon size={16} strokeWidth={1.6} aria-hidden />
       </span>
       <span className="quick-link__label">{label}</span>
       <span className="quick-link__chev" aria-hidden>
-        <Icon name="arrow-right" size={16} />
+        <ArrowRight size={16} strokeWidth={1.6} />
       </span>
     </Link>
   );

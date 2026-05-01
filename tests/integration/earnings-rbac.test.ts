@@ -57,7 +57,6 @@ describeWithDb('integration — earnings RBAC visibility', () => {
         login: 'rbac-admin',
         fullName: 'RBAC Admin',
         role: 'ADMIN',
-        paymentType: 'SALARY',
         active: true,
         pinHash: adminPin,
       },

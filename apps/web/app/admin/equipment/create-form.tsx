@@ -2,8 +2,18 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { useState } from 'react';
+import {
+  Activity,
+  CheckCircle2,
+  Flame,
+  Package,
+  Plus,
+  Scissors,
+  XCircle,
+  type LucideIcon,
+} from 'lucide-react';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
-import { Icon } from '@/components/icon';
+import { GroupedOperationSelect } from '@/components/admin';
 import { createEquipmentAction } from './actions';
 import {
   initialCreateEquipmentState,
@@ -14,148 +24,167 @@ interface Props {
   operations: readonly OperationLiteDto[];
 }
 
+const CATEGORY_ICON: Record<string, LucideIcon> = {
+  CUTTING: Scissors,
+  SEWING: Activity,
+  QC: CheckCircle2,
+  IRONING: Flame,
+  PACKING: Package,
+};
+
+function categoryIcon(category: string): LucideIcon {
+  return CATEGORY_ICON[category.toUpperCase()] ?? Activity;
+}
+
 function SubmitButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name="plus" size={16} />
-      {pending ? 'Создаём…' : 'Создать оборудование'}
+    <button
+      type="submit"
+      className="admin-btn admin-btn--primary"
+      disabled={pending}
+    >
+      <Plus size={16} strokeWidth={1.6} aria-hidden />
+      {pending ? 'Создаём…' : 'Создать'}
     </button>
   );
 }
 
 /**
- * Форма создания оборудования на `/admin/equipment/new` (см. ADR-0017,
- * `docs/screens.md §10a`).
+ * Форма создания оборудования (Admin UI 2.6).
  *
- * Поля:
- *   - **Название оборудования** — обязательное.
- *   - **Номер оборудования** — опциональный ручной `displayNumber`
- *     (см. `docs/domain.md §5c`); пустая строка = `null` на backend.
- *   - **Код** — опциональный технический slug. Оставляем для тех,
- *     кто хочет управлять им сам (печать стикеров и т. п.); если
- *     пусто — backend сгенерирует код из имени.
- *   - **Операции** — чек-лист, тот же стиль, что и на detail-странице
- *     (`option-list`). Порядок выбора задаёт `sortOrder` для /work.
- *
- * После успешного создания action редиректит на карточку нового
- * оборудования (`/admin/equipment/[id]`), чтобы можно было сразу
- * напечатать QR-этикетку и/или подправить операции. Тот же паттерн
- * — у `CreateWarehouseForm`.
+ * Backend / DTO не меняем. Поля:
+ *   - Название — обязательное;
+ *   - Номер — опциональный ручной `displayNumber`;
+ *   - Операции — компактный chip-список (тот же UX, что и на
+ *     карточке оборудования). Без code, без длинных описаний.
  */
 export function CreateEquipmentForm({ operations }: Props) {
   const [state, formAction] = useFormState<CreateEquipmentState, FormData>(
     createEquipmentAction,
     initialCreateEquipmentState,
   );
-  const [checked, setChecked] = useState<Record<string, boolean>>({});
 
   const sortedOperations = [...operations].sort(
     (a, b) => a.sortOrder - b.sortOrder,
   );
-  const checkedCount = sortedOperations.filter((op) => checked[op.id]).length;
+
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [pendingId, setPendingId] = useState<string>('');
+
+  const opsById = new Map(sortedOperations.map((op) => [op.id, op]));
+  const availableOptions = sortedOperations.filter(
+    (op) => !selectedIds.includes(op.id),
+  );
+
+  function addOperation() {
+    if (!pendingId || selectedIds.includes(pendingId)) return;
+    setSelectedIds((prev) => [...prev, pendingId]);
+    setPendingId('');
+  }
+
+  function removeOperation(id: string) {
+    setSelectedIds((prev) => prev.filter((x) => x !== id));
+  }
 
   return (
-    <form action={formAction} className="admin-equipment-form">
-      <div className="admin-equipment-form__meta" style={{ flexWrap: 'wrap' }}>
-        <label htmlFor="eq-name" className="meta-line">
-          Название оборудования
-        </label>
-        <input
-          id="eq-name"
-          name="name"
-          type="text"
-          maxLength={120}
-          placeholder="например, Оверлок 03"
-          required
-          autoComplete="off"
-          style={{ padding: '6px 10px', minWidth: 240 }}
-        />
-        <label htmlFor="eq-display-number" className="meta-line">
-          Номер оборудования
-        </label>
-        <input
-          id="eq-display-number"
-          name="displayNumber"
-          type="text"
-          maxLength={16}
-          placeholder="опционально, напр. 3"
-          autoComplete="off"
-          style={{ padding: '6px 10px', width: 140, fontWeight: 600 }}
-        />
-        <label htmlFor="eq-code" className="meta-line">
-          Код
-        </label>
-        <input
-          id="eq-code"
-          name="code"
-          type="text"
-          maxLength={64}
-          placeholder="опционально, напр. overlock-03"
-          autoComplete="off"
-          pattern="[a-z0-9][a-z0-9-]*"
-          title="Латинские строчные буквы, цифры и дефис"
-          style={{ padding: '6px 10px', width: 220 }}
-        />
+    <form action={formAction} className="admin-form">
+      <div className="admin-form-grid">
+        <div className="admin-field">
+          <label htmlFor="eq-name">Название</label>
+          <input
+            id="eq-name"
+            name="name"
+            type="text"
+            maxLength={120}
+            placeholder="например, Оверлок 03"
+            required
+            autoComplete="off"
+          />
+        </div>
+        <div className="admin-field">
+          <label htmlFor="eq-display-number">Номер</label>
+          <input
+            id="eq-display-number"
+            name="displayNumber"
+            type="text"
+            maxLength={16}
+            placeholder="опционально"
+            autoComplete="off"
+          />
+        </div>
       </div>
 
-      <div>
-        <div
-          className="meta-line"
-          style={{ marginBottom: 8, display: 'flex', gap: '0.75rem' }}
-        >
-          <span>
-            <strong>Операции</strong> — отметьте, какие будут доступны швее
-            на этом станке. Можно оставить пустым и настроить позже.
-          </span>
-          <span>
-            Выбрано: <strong>{checkedCount}</strong> из{' '}
-            {sortedOperations.length}
-          </span>
-        </div>
-        <ul className="option-list">
-          {sortedOperations.map((op) => {
-            const isChecked = !!checked[op.id];
+      <div className="admin-field">
+        <label>Разрешённые операции</label>
+        <ul className="admin-chip-list">
+          {selectedIds.length === 0 && (
+            <li className="admin-muted" style={{ fontSize: '0.88rem' }}>
+              Пока ничего не выбрано.
+            </li>
+          )}
+          {selectedIds.map((id) => {
+            const op = opsById.get(id);
+            if (!op) return null;
+            const Icon = categoryIcon(op.category);
             return (
-              <li
-                key={op.id}
-                className={`option-list__row ${isChecked ? 'is-active' : ''}`}
-              >
-                <label>
-                  <input
-                    type="checkbox"
-                    name="operationIds"
-                    value={op.id}
-                    checked={isChecked}
-                    onChange={(e) =>
-                      setChecked((prev) => ({
-                        ...prev,
-                        [op.id]: e.target.checked,
-                      }))
-                    }
-                  />
-                  <span className="option-list__row-name">{op.name}</span>
-                  <span className="option-list__row-meta">
-                    <code>{op.code}</code> · {op.category.toLowerCase()}
-                  </span>
-                </label>
+              <li key={id} className="admin-chip">
+                <span className="admin-chip__icon" aria-hidden>
+                  <Icon size={13} strokeWidth={1.7} />
+                </span>
+                <span>{op.name}</span>
+                <button
+                  type="button"
+                  className="admin-chip__remove"
+                  onClick={() => removeOperation(id)}
+                  aria-label={`Убрать ${op.name}`}
+                >
+                  ×
+                </button>
+                <input type="hidden" name="operationIds" value={id} />
               </li>
             );
           })}
         </ul>
+        <div
+          className="admin-actions-row"
+          style={{ justifyContent: 'flex-start' }}
+        >
+          <GroupedOperationSelect
+            operations={availableOptions}
+            name="pendingOperationId"
+            value={pendingId}
+            onChange={setPendingId}
+            placeholder="— выбрать операцию —"
+            ariaLabel="Добавить операцию"
+            className="admin-chip-add__select"
+          />
+          <button
+            type="button"
+            className="admin-btn"
+            onClick={addOperation}
+            disabled={!pendingId}
+          >
+            <Plus size={14} strokeWidth={1.6} aria-hidden />
+            Добавить
+          </button>
+        </div>
       </div>
 
-      <div className="detail-form__actions">
+      <div className="admin-actions-row">
         <SubmitButton />
       </div>
 
       {state.error && (
-        <div className="error-box" role="alert">
-          <div className="error-box__msg">{state.error}</div>
+        <div
+          role="alert"
+          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
+        >
+          <XCircle size={14} strokeWidth={1.6} aria-hidden /> {state.error}
           {state.errorRequestId && (
-            <div className="error-box__rid">
+            <span className="admin-muted" style={{ marginLeft: 6 }}>
               req: <code>{state.errorRequestId}</code>
-            </div>
+            </span>
           )}
         </div>
       )}

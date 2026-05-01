@@ -62,7 +62,6 @@ describeWithDb('integration — CUTTER_ASSISTANT shift on equipment', () => {
         login: 'cas-shift',
         fullName: 'Cutter Assistant Shift',
         role: 'CUTTER_ASSISTANT',
-        paymentType: 'SALARY',
         active: true,
         pinHash: assistantPin,
       },

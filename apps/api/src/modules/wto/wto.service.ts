@@ -10,6 +10,7 @@ import {
 } from '@prisma/client';
 import type { WtoPassportDetailDto } from '@sewing/shared/wto';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
 import {
   EmployeeInactiveException,
   EmployeeNotFoundException,
@@ -41,7 +42,10 @@ import {
 export class WtoService {
   private readonly logger = new Logger(WtoService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // -------------------------------------------------------------------------
   // GET DETAIL
@@ -100,14 +104,34 @@ export class WtoService {
     if (!actor) throw new EmployeeNotFoundException();
     if (!actor.active) throw new EmployeeInactiveException();
 
-    await this.prisma.passportEvent.create({
-      data: {
-        passportId,
-        type: PassportEventType.WTO_PASSED,
-        employeeId: actorEmployeeId,
-        operationId: passport.currentOperationId,
-        qty: passport.qtyGood,
-      },
+    // Аналогично `QcService.completeQc`: оборачиваем в `$transaction`,
+    // чтобы запись `WTO_PASSED` и строка `AuditLog` создавались
+    // атомарно. Бизнес-логика не меняется — это всё ещё ровно один
+    // INSERT в `PassportEvent` (см. `docs/domain.md §«Audit log»`).
+    await this.prisma.$transaction(async (tx) => {
+      await tx.passportEvent.create({
+        data: {
+          passportId,
+          type: PassportEventType.WTO_PASSED,
+          employeeId: actorEmployeeId,
+          operationId: passport.currentOperationId,
+          qty: passport.qtyGood,
+        },
+      });
+      await this.audit.log(
+        {
+          event: 'WTO_COMPLETED',
+          entityType: 'WTO',
+          entityId: passportId,
+          employeeId: actorEmployeeId,
+          payload: {
+            passportId,
+            operationId: passport.currentOperationId,
+            qty: passport.qtyGood,
+          },
+        },
+        tx,
+      );
     });
     this.logger.log(
       `event=wto.complete passportId=${passportId} actorId=${actorEmployeeId}`,

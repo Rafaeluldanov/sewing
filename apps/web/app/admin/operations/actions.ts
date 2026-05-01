@@ -11,10 +11,13 @@ import { createOperation, updateOperation } from '@/lib/operations-api';
 import {
   OPERATION_CATEGORIES,
   PRICING_MODES,
+  TIME_NORM_MODES,
   type OperationCategory,
   type PricingMode,
+  type TimeNormMode,
   type UpdateOperationDto,
 } from '@sewing/shared/operations';
+import { toSeconds } from '@/lib/operations-time-norm';
 import type {
   CreateOperationState,
   UpdateOperationState,
@@ -42,6 +45,151 @@ function isPricingMode(v: string): v is PricingMode {
 
 function isCategory(v: string): v is OperationCategory {
   return (OPERATION_CATEGORIES as readonly string[]).includes(v);
+}
+
+function isTimeNormMode(v: string): v is TimeNormMode {
+  return (TIME_NORM_MODES as readonly string[]).includes(v);
+}
+
+/**
+ * Парсит блок «Норма времени» из FormData. Поля формы:
+ *   - `timeNormMode` — `FIXED` / `BY_SIZE`;
+ *   - для FIXED: `timeNormMin` + `timeNormSecPart`;
+ *   - для BY_SIZE: пары `timeNormMin-<sizeId>` + `timeNormSec-<sizeId>`.
+ *
+ * Возвращает `{ timeNormMode, timeNormSec, timeNormsBySize }` или
+ * `{ error }` при невалидных значениях.
+ */
+function parseTimeNormFromForm(form: FormData):
+  | {
+      timeNormMode: TimeNormMode;
+      timeNormSec: number | null;
+      timeNormsBySize: Array<{ sizeId: string; seconds: number }> | undefined;
+    }
+  | { error: string } {
+  const modeRaw = String(form.get('timeNormMode') ?? '').trim();
+  const timeNormMode: TimeNormMode = isTimeNormMode(modeRaw) ? modeRaw : 'FIXED';
+
+  if (timeNormMode === 'FIXED') {
+    const min = String(form.get('timeNormMin') ?? '').trim();
+    const sec = String(form.get('timeNormSecPart') ?? '').trim();
+    if (sec.length > 0) {
+      const secNum = Number(sec.replace(',', '.'));
+      if (!Number.isFinite(secNum) || secNum < 0 || secNum > 59) {
+        return { error: 'Секунды нормы времени — от 0 до 59' };
+      }
+    }
+    if (min.length > 0) {
+      const minNum = Number(min.replace(',', '.'));
+      if (!Number.isFinite(minNum) || minNum < 0) {
+        return { error: 'Минуты нормы времени не могут быть отрицательными' };
+      }
+    }
+    const total = toSeconds(min, sec);
+    return {
+      timeNormMode,
+      timeNormSec: total,
+      timeNormsBySize: undefined,
+    };
+  }
+
+  // BY_SIZE: собираем пары по sizeId.
+  const minBySize = new Map<string, string>();
+  const secBySize = new Map<string, string>();
+  for (const [key, raw] of form.entries()) {
+    const valStr = String(raw ?? '').trim();
+    if (key.startsWith('timeNormMin-')) {
+      const sizeId = key.slice('timeNormMin-'.length);
+      if (sizeId) minBySize.set(sizeId, valStr);
+    } else if (key.startsWith('timeNormSec-')) {
+      const sizeId = key.slice('timeNormSec-'.length);
+      if (sizeId) secBySize.set(sizeId, valStr);
+    }
+  }
+  const sizeIds = new Set<string>([...minBySize.keys(), ...secBySize.keys()]);
+  const timeNormsBySize: Array<{ sizeId: string; seconds: number }> = [];
+  for (const sizeId of sizeIds) {
+    const min = minBySize.get(sizeId) ?? '';
+    const sec = secBySize.get(sizeId) ?? '';
+    if (sec.length > 0) {
+      const secNum = Number(sec.replace(',', '.'));
+      if (!Number.isFinite(secNum) || secNum < 0 || secNum > 59) {
+        return { error: `Секунды нормы для ${sizeId} — от 0 до 59` };
+      }
+    }
+    if (min.length > 0) {
+      const minNum = Number(min.replace(',', '.'));
+      if (!Number.isFinite(minNum) || minNum < 0) {
+        return { error: `Минуты нормы для ${sizeId} не могут быть отрицательными` };
+      }
+    }
+    const total = toSeconds(min, sec);
+    if (total !== null && total > 0) {
+      timeNormsBySize.push({ sizeId, seconds: total });
+    }
+    // Пустые строки — пропускаем (норма не задана для этого размера).
+  }
+
+  return { timeNormMode, timeNormSec: null, timeNormsBySize };
+}
+
+/**
+ * Парсит блок «Плановая окладная стоимость» из FormData. Поля формы:
+ *   - `salaryPlanRubPerShift` — стоимость одной смены, ₽
+ *     (`> 0`, иначе трактуется как «не задано»);
+ *   - `salaryPlanShiftHours` — длительность смены, часы
+ *     (`> 0`, default 8 часов).
+ *
+ * Возвращает `{ salaryPlanRubPerShift, salaryPlanShiftSeconds }` или
+ * `{ error }` при невалидных значениях.
+ *
+ * Контракты:
+ *   - оба поля пусты ⇒ оба `null` (UI показывает «ставка не задана»);
+ *   - указана только ставка ⇒ длительность по умолчанию = 8 часов
+ *     (28800 секунд);
+ *   - указана только длительность без ставки ⇒ ставка `null`
+ *     (длительность сама по себе бессмысленна, но мы отдадим её
+ *     бэкенду — он сам решит).
+ */
+function parseSalaryPlanFromForm(form: FormData):
+  | {
+      salaryPlanRubPerShift: number | null;
+      salaryPlanShiftSeconds: number | null;
+    }
+  | { error: string } {
+  const rateRaw = String(form.get('salaryPlanRubPerShift') ?? '').trim();
+  const hoursRaw = String(form.get('salaryPlanShiftHours') ?? '').trim();
+
+  let salaryPlanRubPerShift: number | null = null;
+  if (rateRaw.length > 0) {
+    const num = Number(rateRaw.replace(',', '.'));
+    if (!Number.isFinite(num) || num <= 0) {
+      return {
+        error:
+          'Плановая стоимость смены должна быть положительным числом',
+      };
+    }
+    salaryPlanRubPerShift = num;
+  }
+
+  let salaryPlanShiftSeconds: number | null = null;
+  if (hoursRaw.length > 0) {
+    const hours = Number(hoursRaw.replace(',', '.'));
+    if (!Number.isFinite(hours) || hours <= 0) {
+      return {
+        error: 'Длительность смены (часы) должна быть положительным числом',
+      };
+    }
+    if (hours > 48) {
+      return { error: 'Длительность смены не может быть больше 48 часов' };
+    }
+    salaryPlanShiftSeconds = Math.floor(hours * 3600);
+  } else if (salaryPlanRubPerShift !== null) {
+    // Ставку задали без длительности — подставляем 8 часов по умолчанию.
+    salaryPlanShiftSeconds = 28800;
+  }
+
+  return { salaryPlanRubPerShift, salaryPlanShiftSeconds };
 }
 
 export async function createOperationAction(
@@ -83,6 +231,19 @@ export async function createOperationAction(
     fixedRate = num;
   }
 
+  // Норма времени: на форме создания — только режим FIXED + единая
+  // норма (опц.). Поразмерная матрица заполняется на карточке после
+  // создания (по тому же паттерну, что и BY_SIZE-ставки).
+  const timeNorm = parseTimeNormFromForm(form);
+  if ('error' in timeNorm) return { error: timeNorm.error };
+
+  // Плановая окладная ставка — отдельная ось от тарифа и от нормы.
+  // Особенно полезна для `pricingMode = SALARY_ONLY` (без неё план
+  // окладных операций считается = 0). См. ТЗ «Плановая стоимость
+  // окладных операций».
+  const salaryPlan = parseSalaryPlanFromForm(form);
+  if ('error' in salaryPlan) return { error: salaryPlan.error };
+
   let createdId: string | null = null;
   try {
     const created = await createOperation({
@@ -91,6 +252,20 @@ export async function createOperationAction(
       category: categoryRaw,
       pricingMode: pricingModeRaw,
       ...(fixedRate !== undefined ? { fixedRate } : {}),
+      timeNormMode: timeNorm.timeNormMode,
+      ...(timeNorm.timeNormMode === 'FIXED' && timeNorm.timeNormSec !== null
+        ? { timeNormSec: timeNorm.timeNormSec }
+        : {}),
+      ...(timeNorm.timeNormMode === 'BY_SIZE' &&
+      timeNorm.timeNormsBySize !== undefined
+        ? { timeNormsBySize: timeNorm.timeNormsBySize }
+        : {}),
+      ...(salaryPlan.salaryPlanRubPerShift !== null
+        ? { salaryPlanRubPerShift: salaryPlan.salaryPlanRubPerShift }
+        : {}),
+      ...(salaryPlan.salaryPlanShiftSeconds !== null
+        ? { salaryPlanShiftSeconds: salaryPlan.salaryPlanShiftSeconds }
+        : {}),
     });
     createdId = created.id;
     revalidatePath('/admin/operations');
@@ -238,6 +413,31 @@ export async function updateOperationAction(
     // FIXED / SALARY_ONLY → не передаём ratesBySize, backend и так
     // удалит все строки в одной транзакции (см. OperationsService.update).
   }
+
+  // Норма времени — отдельная ось от тарифа. Её обновляем независимо
+  // от pricingMode: операция с SALARY_ONLY всё равно может иметь
+  // плановую норму (см. recon §10).
+  const timeNorm = parseTimeNormFromForm(form);
+  if ('error' in timeNorm) return { error: timeNorm.error };
+  dto.timeNormMode = timeNorm.timeNormMode;
+  if (timeNorm.timeNormMode === 'FIXED') {
+    dto.timeNormSec = timeNorm.timeNormSec;
+  } else {
+    dto.timeNormSec = null;
+    if (timeNorm.timeNormsBySize !== undefined) {
+      dto.timeNormsBySize = timeNorm.timeNormsBySize;
+    }
+  }
+
+  // Плановая окладная ставка — также отдельная ось. Бэкенд:
+  //   - `null` → обнулить ставку;
+  //   - `number` → проставить;
+  //   - не передавать → не трогать (но мы здесь всегда передаём,
+  //     потому что форма отдала бы как минимум пустые строки).
+  const salaryPlan = parseSalaryPlanFromForm(form);
+  if ('error' in salaryPlan) return { error: salaryPlan.error };
+  dto.salaryPlanRubPerShift = salaryPlan.salaryPlanRubPerShift;
+  dto.salaryPlanShiftSeconds = salaryPlan.salaryPlanShiftSeconds;
 
   try {
     await updateOperation(operationId, dto);

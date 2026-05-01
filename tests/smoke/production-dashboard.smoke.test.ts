@@ -67,9 +67,15 @@ describe('Production Dashboard — backend wiring', () => {
     expect(src).toMatch(/from '\.\/modules\/dashboard\/dashboard\.module/);
   });
 
-  test('DashboardController защищён @Roles SHOP_MANAGER + ADMIN и валидирует Query', () => {
+  test('DashboardController защищён @Roles SHOP_MANAGER + ADMIN (+ DISPLAY) и валидирует Query', () => {
     const src = readSrc('apps/api/src/modules/dashboard/dashboard.controller.ts');
-    expect(src).toMatch(/@Roles\(\s*'SHOP_MANAGER',\s*'ADMIN'\s*\)/);
+    // Базовые роли — менеджер и админ. DISPLAY-учётка тоже допустима
+    // (большой монитор начальника), её добавили после §11a (см.
+    // `docs/screens.md`), и тест должен это допускать. Остальные роли
+    // (SEAMSTRESS / QC / IRONING / PACKING) проверяются интеграционно
+    // в `production-dashboard.test.ts` и обязаны получать 403.
+    expect(src).toMatch(/@Roles\([^)]*'SHOP_MANAGER'[^)]*\)/);
+    expect(src).toMatch(/@Roles\([^)]*'ADMIN'[^)]*\)/);
     expect(src).toMatch(/@Get\('production'\)/);
     expect(src).toMatch(/ZodValidationPipe\(ProductionDashboardQuerySchema\)/);
   });

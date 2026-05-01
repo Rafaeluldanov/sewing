@@ -23,6 +23,7 @@ import request from 'supertest';
 import { Prisma } from '@prisma/client';
 import {
   loginAs,
+  refreshAdminCookie,
   startTestApp,
   stopTestApp,
   type TestApp,
@@ -44,6 +45,9 @@ describeWithDb('integration — production cost (Себестоимость вы
   beforeEach(async () => {
     await resetDatabase(t.prisma);
     seed = await seedMinimal(t.prisma);
+    // Без `refreshAdminCookie` системный admin был бы стёрт TRUNCATE'ом,
+    // и `t.adminCookie` ушёл бы в 401.
+    await refreshAdminCookie(t);
     cookies = {
       manager: loginAs(t, seed.employees['shop-chief']),
       seamstress: loginAs(t, seed.employees['seamstress']),

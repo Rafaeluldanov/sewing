@@ -7,6 +7,7 @@
  * путём `/api/...`, чтобы не тащить сюда node-only код (см. `Board`).
  */
 
+import type { OrderDivision } from '@sewing/shared/orders';
 import type {
   ShopfloorDisplayDto,
   ShopfloorEquipmentStatusDto,
@@ -49,8 +50,13 @@ export function listShopfloorEquipmentStatus(): Promise<
  * для initial render и тем же URL'ом — клиентским polling'ом в
  * `display-board.tsx`. Подробнее — `docs/api.md §11`.
  */
-export function getShopfloorDisplaySummary(): Promise<ShopfloorDisplayDto> {
+export function getShopfloorDisplaySummary(
+  division?: OrderDivision,
+): Promise<ShopfloorDisplayDto> {
   return apiFetch<ShopfloorDisplayDto>('/shopfloor/display', {
     cache: 'no-store',
+    // Опциональный фильтр по подразделению. Если не передан — backend
+    // отдаёт прежний агрегат по всем активным заказам.
+    searchParams: division ? { division } : undefined,
   });
 }

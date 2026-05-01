@@ -1,0 +1,22 @@
+# CODEOWNERS for SEWING
+#
+# Used together with branch protection rule
+# "Require review from Code Owners" on `main` (и опционально `dev`).
+# См. docs/index.md → "Hard enforcement / Branch protection".
+#
+# TODO: replace @OWNER with GitHub username/team before enabling code-owner review
+# Пока @OWNER — это плейсхолдер. GitHub проигнорирует код-овнера, которого
+# не существует, поэтому до подстановки реального хендла этот файл работает
+# как документация ответственности, а не как живой gate.
+
+# Docs consistency ownership
+/docs/                                @OWNER
+/README.md                            @OWNER
+/.github/workflows/docs-check.yml     @OWNER
+/.github/pull_request_template.md     @OWNER
+/scripts/docs/                        @OWNER
+
+# API / DB source of truth
+/apps/api/                            @OWNER
+/prisma/                              @OWNER
+/packages/shared/                     @OWNER

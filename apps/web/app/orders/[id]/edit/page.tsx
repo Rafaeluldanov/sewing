@@ -4,7 +4,11 @@ import { ApiRequestError } from '@/lib/api';
 import { getOrder, listProducts, listSizes } from '@/lib/orders-api';
 import { listRouteTemplates } from '@/lib/routes-api';
 import { listTechCards, getTechCard } from '@/lib/tech-cards-api';
+import { listClients, getClient } from '@/lib/clients-api';
+import { getPattern, listPatterns } from '@/lib/patterns-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import type { ClientDto } from '@sewing/shared/clients';
+import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { EditOrderForm } from './edit-order-form';
@@ -63,6 +67,29 @@ export default async function EditOrderPage({
   // как опцию с пометкой «неактивна», чтобы submit не сбросил
   // привязку без явного действия. Тот же паттерн используется для
   // routeTemplate (через order.routeTemplateName в EditOrderForm).
+  // Клиенты — best-effort. Если модуль недоступен/упал, форма
+  // покажет «Клиент не указан» без селекта (вместо 500 на странице).
+  let clients: ClientDto[] = [];
+  try {
+    clients = await listClients({ includeInactive: false });
+  } catch {
+    clients = [];
+  }
+  // Если у заказа уже привязан архивный клиент (его нет в активном
+  // списке), подгружаем его карточку отдельно. Иначе при сабмите без
+  // явного действия пользователя привязка слетит. Тот же паттерн, что
+  // ниже для деактивированных tech-card / route template.
+  if (
+    order.client &&
+    !clients.some((c) => c.id === order.client?.id)
+  ) {
+    try {
+      const detail = await getClient(order.client.id);
+      clients = [...clients, detail];
+    } catch {
+      // graceful — форма всё равно покажет фолбэк-опцию
+    }
+  }
   if (
     order.techCardId &&
     !techCards.some((t) => t.id === order.techCardId)
@@ -87,6 +114,49 @@ export default async function EditOrderPage({
     }
   }
 
+  // Soft-pattern MVP (этап 2 «Лекала»): аналогично tech-card / route /
+  // client. Загружаем список активных + тёплый fallback по уже
+  // привязанному (возможно архивному) лекалу.
+  let patterns: PatternListItemDto[] = [];
+  try {
+    patterns = await listPatterns({ status: 'ACTIVE' });
+  } catch {
+    patterns = [];
+  }
+  if (
+    order.patternItemId &&
+    !patterns.some((p) => p.id === order.patternItemId)
+  ) {
+    try {
+      const detail = await getPattern(order.patternItemId);
+      patterns = [
+        ...patterns,
+        {
+          id: detail.id,
+          name: detail.name,
+          article: detail.article,
+          categoryCode: detail.categoryCode,
+          categoryId: detail.categoryId,
+          categoryName: detail.category?.name ?? null,
+          categorySlug: detail.category?.slug ?? null,
+          categoryIconKey: detail.category?.iconKey ?? null,
+          categoryIconImageUrl: detail.category?.iconImageUrl ?? null,
+          categoryStatus: detail.category?.status ?? null,
+          previewImageUrl: detail.previewImageUrl,
+          status: detail.status,
+          description: detail.description,
+          createdAt: detail.createdAt,
+          updatedAt: detail.updatedAt,
+          sizeFilesCount: detail.sizeFiles.length,
+          materialAreasCount: detail.materialAreas.length,
+          sizes: [],
+        },
+      ];
+    } catch {
+      // graceful — форма всё равно покажет фолбэк-опцию
+    }
+  }
+
   return (
     <div>
       <div className="page-header">
@@ -98,6 +168,8 @@ export default async function EditOrderPage({
         products={products}
         routeTemplates={routeTemplates}
         techCards={techCards}
+        clients={clients}
+        patterns={patterns}
       />
     </div>
   );

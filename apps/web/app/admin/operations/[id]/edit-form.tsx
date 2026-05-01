@@ -4,24 +4,21 @@ import { useMemo, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import {
   OPERATION_CATEGORIES,
+  OPERATION_CATEGORY_LABELS,
   PRICING_MODES,
+  TIME_NORM_MODES,
+  TIME_NORM_MODE_LABELS,
   type OperationDetailDto,
   type PricingMode,
+  type TimeNormMode,
 } from '@sewing/shared/operations';
-import { Icon } from '@/components/icon';
+import { CheckCircle2, Plus, Save, XCircle } from 'lucide-react';
+import { splitSeconds } from '@/lib/operations-time-norm';
 import { updateOperationAction } from '../actions';
 import {
   initialUpdateOperationState,
   type UpdateOperationState,
 } from '../form-state';
-
-const CATEGORY_LABEL: Record<string, string> = {
-  CUTTING: 'Раскрой',
-  SEWING: 'Пошив',
-  QC: 'ОТК',
-  IRONING: 'ВТО',
-  PACKING: 'Упаковка',
-};
 
 const PRICING_LABEL: Record<PricingMode, string> = {
   FIXED: 'Фиксированная ставка',
@@ -32,8 +29,8 @@ const PRICING_LABEL: Record<PricingMode, string> = {
 function SaveButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name="save" size={16} />
+    <button type="submit" className="admin-btn admin-btn--primary" disabled={pending}>
+      <Save size={16} strokeWidth={1.6} aria-hidden />
       {pending ? 'Сохраняем…' : 'Сохранить'}
     </button>
   );
@@ -77,6 +74,61 @@ export function OperationEditForm({ operation }: Props) {
     return initial;
   });
 
+  // --- Норма времени (отдельная ось, см. recon §10) ---
+  const [timeNormMode, setTimeNormMode] = useState<TimeNormMode>(
+    operation.timeNormMode,
+  );
+  const fixedSplit = useMemo(
+    () => splitSeconds(operation.timeNormSec),
+    [operation.timeNormSec],
+  );
+  const [fixedMin, setFixedMin] = useState<string>(
+    operation.timeNormSec !== null && operation.timeNormSec > 0
+      ? String(fixedSplit.minutes)
+      : '',
+  );
+  const [fixedSec, setFixedSec] = useState<string>(
+    operation.timeNormSec !== null && operation.timeNormSec > 0
+      ? String(fixedSplit.seconds)
+      : '',
+  );
+  const [bulkTimeMin, setBulkTimeMin] = useState<string>('');
+  const [bulkTimeSec, setBulkTimeSec] = useState<string>('');
+  const [timeMinInputs, setTimeMinInputs] = useState<Record<string, string>>(
+    () => {
+      const initial: Record<string, string> = {};
+      for (const r of operation.timeNormsBySize) {
+        const sp = splitSeconds(r.seconds);
+        initial[r.sizeId] = String(sp.minutes);
+      }
+      return initial;
+    },
+  );
+  const [timeSecInputs, setTimeSecInputs] = useState<Record<string, string>>(
+    () => {
+      const initial: Record<string, string> = {};
+      for (const r of operation.timeNormsBySize) {
+        const sp = splitSeconds(r.seconds);
+        initial[r.sizeId] = String(sp.seconds);
+      }
+      return initial;
+    },
+  );
+
+  // --- Плановая окладная стоимость (см. ТЗ «Плановая стоимость
+  // окладных операций»). Отдельная ось — поле полезно для
+  // pricingMode = SALARY_ONLY, но допустимо и для других. ---
+  const initialSalaryRub =
+    operation.salaryPlanRubPerShift !== null
+      ? Number(operation.salaryPlanRubPerShift).toFixed(2)
+      : '';
+  const initialSalaryHours = (() => {
+    const secs = operation.salaryPlanShiftSeconds;
+    if (secs == null || !Number.isFinite(secs) || secs <= 0) return '8';
+    const hours = secs / 3600;
+    return Number.isInteger(hours) ? String(hours) : hours.toFixed(2);
+  })();
+
   const update = updateOperationAction.bind(null, operation.id);
   const [state, formAction] = useFormState<UpdateOperationState, FormData>(
     update,
@@ -98,25 +150,24 @@ export function OperationEditForm({ operation }: Props) {
     setRateInputs(next);
   }
 
-  return (
-    <form action={formAction} className="detail-form">
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
-          <span className="detail-form__label">Код (read-only)</span>
-          <code
-            style={{
-              padding: '0.55rem 0.85rem',
-              background: 'var(--color-bg-muted)',
-              borderRadius: 'var(--radius-md)',
-              fontSize: '0.95rem',
-              alignSelf: 'flex-start',
-            }}
-          >
-            {operation.code}
-          </code>
-        </div>
+  function applyTimeBulkAll() {
+    const min = bulkTimeMin.trim();
+    const sec = bulkTimeSec.trim();
+    if (min.length === 0 && sec.length === 0) return;
+    const nextMin: Record<string, string> = {};
+    const nextSec: Record<string, string> = {};
+    for (const s of operation.sizes) {
+      nextMin[s.id] = min;
+      nextSec[s.id] = sec;
+    }
+    setTimeMinInputs(nextMin);
+    setTimeSecInputs(nextSec);
+  }
 
-        <div className="detail-form__field">
+  return (
+    <form action={formAction} className="admin-form">
+      <div className="admin-form-grid">
+        <div className="admin-field">
           <label htmlFor="op-name">Название</label>
           <input
             id="op-name"
@@ -129,7 +180,7 @@ export function OperationEditForm({ operation }: Props) {
           />
         </div>
 
-        <div className="detail-form__field">
+        <div className="admin-field">
           <label htmlFor="op-category">Категория</label>
           <select
             id="op-category"
@@ -138,13 +189,13 @@ export function OperationEditForm({ operation }: Props) {
           >
             {OPERATION_CATEGORIES.map((c) => (
               <option key={c} value={c}>
-                {CATEGORY_LABEL[c] ?? c}
+                {OPERATION_CATEGORY_LABELS[c]}
               </option>
             ))}
           </select>
         </div>
 
-        <div className="detail-form__field detail-form__field--inline">
+        <div className="admin-field admin-field--inline">
           <input
             id="op-is-active"
             type="checkbox"
@@ -155,8 +206,8 @@ export function OperationEditForm({ operation }: Props) {
         </div>
       </div>
 
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
+      <div className="admin-form-grid">
+        <div className="admin-field">
           <label htmlFor="op-pricing-mode">Тип тарифа</label>
           <select
             id="op-pricing-mode"
@@ -173,7 +224,7 @@ export function OperationEditForm({ operation }: Props) {
         </div>
 
         {pricingMode === 'FIXED' && (
-          <div className="detail-form__field">
+          <div className="admin-field">
             <label htmlFor="op-fixed-rate">Ставка за единицу, ₽</label>
             <input
               id="op-fixed-rate"
@@ -196,24 +247,25 @@ export function OperationEditForm({ operation }: Props) {
       {pricingMode === 'BY_SIZE' && (
         <div
           className="section-card"
-          style={{ background: 'var(--color-bg-soft)' }}
+          style={{
+            background: 'var(--admin-primary-soft)',
+            padding: 'var(--admin-space-md)',
+            borderRadius: '10px',
+          }}
         >
           <div className="section-header" style={{ marginBottom: '0.5rem' }}>
-            <h2>
-              <Icon name="operations" />
+            <h2 className="admin-section-title" style={{ margin: 0 }}>
               Ставки по размерам
             </h2>
-            <span className="section-header__hint">
-              Сейчас в БД: {operation.ratesBySize.length} из {sizesById.size}.
+            <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
+              {operation.ratesBySize.length} / {sizesById.size}
             </span>
           </div>
-          <p className="detail-form__hint" style={{ marginTop: 0 }}>
-            Заполните ставку для каждого размера. Пустые поля сохраняются как
-            «нет ставки» — backend удалит соответствующую строку. На старте
-            удобно использовать «Заполнить всем».
+          <p className="admin-muted" style={{ marginTop: 0, fontSize: '0.88rem' }}>
+            Пустые поля = «нет ставки», строка будет удалена.
           </p>
 
-          <div className="detail-form__row" style={{ marginBottom: '0.75rem' }}>
+          <div className="admin-actions-row" style={{ marginBottom: '0.75rem', justifyContent: 'flex-start' }}>
             <input
               type="text"
               inputMode="decimal"
@@ -224,26 +276,18 @@ export function OperationEditForm({ operation }: Props) {
             />
             <button
               type="button"
-              className="btn"
+              className="admin-btn"
               onClick={setBulkAll}
               disabled={bulkValue.trim().length === 0}
-              title="Подставить эту ставку во все строки таблицы (можно править вручную дальше)"
             >
-              <Icon name="plus" size={14} />
-              Заполнить всем одну ставку
+              <Plus size={14} strokeWidth={1.6} aria-hidden />
+              Заполнить всем
             </button>
           </div>
 
           {operation.sizes.length === 0 ? (
-            <div className="empty-state">
-              <span className="empty-state__icon">
-                <Icon name="operations" />
-              </span>
-              <span className="empty-state__title">Нет размеров</span>
-              <span className="empty-state__hint">
-                В справочнике размеров нет строк — добавьте их, чтобы задать
-                ставки.
-              </span>
+            <div className="admin-muted" style={{ fontSize: '0.88rem' }}>
+              В справочнике размеров нет строк — добавьте их, чтобы задать ставки.
             </div>
           ) : (
             <div className="rate-table-grid">
@@ -271,40 +315,285 @@ export function OperationEditForm({ operation }: Props) {
         </div>
       )}
 
-      {pricingMode === 'SALARY_ONLY' && (
-        <div
-          className="alert-row alert-row--info"
-          style={{ marginTop: 0 }}
-          role="status"
-        >
-          <span className="alert-row__icon">
-            <Icon name="info" />
-          </span>
-          <span className="alert-row__msg">
-            Окладная операция: сдельная ставка не используется. Начисление по
-            сделке создаваться не будет — оплата идёт через `salaryBase`
-            сотрудника.
-          </span>
+      {/*
+        Норма времени — отдельная ось от тарифа: операция может быть
+        SALARY_ONLY (без сдельной ставки), но с плановой нормой времени
+        (см. `docs/operation-time-norms-recon.md §10`).
+        Хранится в БД в секундах; в UI вводим «минуты + секунды».
+      */}
+      <div
+        className="section-card"
+        style={{
+          background: 'var(--admin-bg-soft, #f6f7f9)',
+          padding: 'var(--admin-space-md)',
+          borderRadius: '10px',
+        }}
+      >
+        <div className="section-header" style={{ marginBottom: '0.5rem' }}>
+          <h2 className="admin-section-title" style={{ margin: 0 }}>
+            Норма времени
+          </h2>
         </div>
-      )}
 
-      <div className="detail-form__actions">
+        <div className="admin-form-grid">
+          <div className="admin-field">
+            <label htmlFor="op-time-norm-mode">Режим</label>
+            <select
+              id="op-time-norm-mode"
+              name="timeNormMode"
+              value={timeNormMode}
+              onChange={(e) =>
+                setTimeNormMode(e.target.value as TimeNormMode)
+              }
+            >
+              {TIME_NORM_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {TIME_NORM_MODE_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </div>
+
+          {timeNormMode === 'FIXED' && (
+            <>
+              <div className="admin-field">
+                <label htmlFor="op-time-norm-min">Минуты</label>
+                <input
+                  id="op-time-norm-min"
+                  name="timeNormMin"
+                  type="number"
+                  min={0}
+                  step={1}
+                  inputMode="numeric"
+                  value={fixedMin}
+                  onChange={(e) => setFixedMin(e.target.value)}
+                  placeholder="0"
+                  autoComplete="off"
+                />
+              </div>
+              <div className="admin-field">
+                <label htmlFor="op-time-norm-sec">Секунды</label>
+                <input
+                  id="op-time-norm-sec"
+                  name="timeNormSecPart"
+                  type="number"
+                  min={0}
+                  max={59}
+                  step={1}
+                  inputMode="numeric"
+                  value={fixedSec}
+                  onChange={(e) => setFixedSec(e.target.value)}
+                  placeholder="0"
+                  autoComplete="off"
+                />
+              </div>
+            </>
+          )}
+        </div>
+
+        {timeNormMode === 'BY_SIZE' && (
+          <div style={{ marginTop: '0.5rem' }}>
+            <p
+              className="admin-muted"
+              style={{ marginTop: 0, fontSize: '0.88rem' }}
+            >
+              Пустые поля = «норма не задана для этого размера».
+            </p>
+
+            <div className="operation-time-bulk-row">
+              <input
+                type="number"
+                min={0}
+                step={1}
+                inputMode="numeric"
+                placeholder="мин"
+                value={bulkTimeMin}
+                onChange={(e) => setBulkTimeMin(e.target.value)}
+                style={{ width: 90 }}
+                aria-label="Минуты для bulk-fill"
+              />
+              <input
+                type="number"
+                min={0}
+                max={59}
+                step={1}
+                inputMode="numeric"
+                placeholder="сек"
+                value={bulkTimeSec}
+                onChange={(e) => setBulkTimeSec(e.target.value)}
+                style={{ width: 90 }}
+                aria-label="Секунды для bulk-fill"
+              />
+              <button
+                type="button"
+                className="admin-btn"
+                onClick={applyTimeBulkAll}
+                disabled={
+                  bulkTimeMin.trim().length === 0 &&
+                  bulkTimeSec.trim().length === 0
+                }
+              >
+                <Plus size={14} strokeWidth={1.6} aria-hidden />
+                Заполнить всем размерам
+              </button>
+            </div>
+
+            {operation.sizes.length === 0 ? (
+              <div className="admin-muted" style={{ fontSize: '0.88rem' }}>
+                В справочнике размеров нет строк — добавьте их, чтобы
+                задать нормы времени.
+              </div>
+            ) : (
+              <div className="operation-time-size-grid">
+                {operation.sizes.map((s) => (
+                  <div key={s.id} className="operation-time-size-card">
+                    <span className="operation-time-size-card__size">
+                      {s.code}
+                    </span>
+                    <div className="operation-time-size-card__inputs">
+                      <input
+                        name={`timeNormMin-${s.id}`}
+                        type="number"
+                        min={0}
+                        step={1}
+                        inputMode="numeric"
+                        value={timeMinInputs[s.id] ?? ''}
+                        onChange={(e) =>
+                          setTimeMinInputs((prev) => ({
+                            ...prev,
+                            [s.id]: e.target.value,
+                          }))
+                        }
+                        placeholder="мин"
+                        aria-label={`Минуты, размер ${s.code}`}
+                      />
+                      <input
+                        name={`timeNormSec-${s.id}`}
+                        type="number"
+                        min={0}
+                        max={59}
+                        step={1}
+                        inputMode="numeric"
+                        value={timeSecInputs[s.id] ?? ''}
+                        onChange={(e) =>
+                          setTimeSecInputs((prev) => ({
+                            ...prev,
+                            [s.id]: e.target.value,
+                          }))
+                        }
+                        placeholder="сек"
+                        aria-label={`Секунды, размер ${s.code}`}
+                      />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/*
+        Плановая окладная стоимость — отдельная ось от тарифа и
+        нормы времени. Используется только для расчёта **плановой**
+        себестоимости окладных операций (pricingMode = SALARY_ONLY)
+        в `OrderOperationPlanService`. На фактическую зарплату
+        сотрудников (`Employee.salaryPerShift`, `SalaryEntry`,
+        `OperationEntry`) поле не влияет.
+      */}
+      <div
+        className="section-card"
+        style={{
+          background: 'var(--admin-bg-soft, #f6f7f9)',
+          padding: 'var(--admin-space-md)',
+          borderRadius: '10px',
+        }}
+      >
+        <div className="section-header" style={{ marginBottom: '0.5rem' }}>
+          <h2 className="admin-section-title" style={{ margin: 0 }}>
+            Плановая окладная стоимость
+          </h2>
+        </div>
+        <p
+          className="admin-muted"
+          style={{ marginTop: 0, fontSize: '0.85rem' }}
+        >
+          Используется только для плановой себестоимости окладных
+          операций. Фактическая зарплата сотрудников не меняется.
+          {pricingMode !== 'SALARY_ONLY' && (
+            <> Актуально для окладных операций (SALARY_ONLY).</>
+          )}
+        </p>
+
+        <div className="admin-form-grid">
+          <div className="admin-field">
+            <label htmlFor="op-salary-plan-rub">Стоимость смены, ₽</label>
+            <input
+              id="op-salary-plan-rub"
+              name="salaryPlanRubPerShift"
+              type="text"
+              inputMode="decimal"
+              defaultValue={initialSalaryRub}
+              placeholder="напр. 3200"
+              autoComplete="off"
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="op-salary-plan-hours">
+              Длительность смены, ч
+            </label>
+            <input
+              id="op-salary-plan-hours"
+              name="salaryPlanShiftHours"
+              type="number"
+              min={0.25}
+              step={0.25}
+              max={48}
+              inputMode="decimal"
+              defaultValue={initialSalaryHours}
+              placeholder="8"
+              autoComplete="off"
+            />
+          </div>
+        </div>
+      </div>
+
+      <div className="admin-actions-row">
         <SaveButton />
       </div>
 
       {state.successMessage && (
-        <div className="detail-form__success" role="status">
-          <Icon name="success" size={16} />
+        <div
+          role="status"
+          className="admin-muted"
+          style={{
+            display: 'inline-flex',
+            gap: 8,
+            alignItems: 'center',
+            color: 'var(--admin-success, #166534)',
+            fontSize: '0.9rem',
+          }}
+        >
+          <CheckCircle2 size={16} strokeWidth={1.6} aria-hidden />
           <span>{state.successMessage}</span>
         </div>
       )}
       {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
+        <div
+          role="alert"
+          style={{
+            display: 'inline-flex',
+            gap: 8,
+            alignItems: 'center',
+            color: 'var(--admin-danger, #b91c1c)',
+            fontSize: '0.9rem',
+          }}
+        >
+          <XCircle size={16} strokeWidth={1.6} aria-hidden />
           <span>
             {state.error}
             {state.errorRequestId && (
-              <span className="detail-form__error-rid">
+              <span className="admin-muted" style={{ marginLeft: 8 }}>
                 req: <code>{state.errorRequestId}</code>
               </span>
             )}

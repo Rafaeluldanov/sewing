@@ -7,6 +7,7 @@
  */
 
 import type {
+  CreateEmployeeDto,
   EmployeeDetailDto,
   EmployeeListItemDto,
   ListEmployeesQuery,
@@ -51,6 +52,20 @@ export function updateEmployee(
 ): Promise<EmployeeDetailDto> {
   return apiFetch<EmployeeDetailDto>(`/employees/${encodeURIComponent(id)}`, {
     method: 'PATCH',
+    body,
+  });
+}
+
+/**
+ * Создание новой карточки сотрудника (роли `ADMIN`/`SHOP_MANAGER`,
+ * см. `docs/api.md §3b`). Используется со страницы
+ * `/admin/employees/new` через server action `createEmployeeAction`.
+ */
+export function createEmployee(
+  body: CreateEmployeeDto,
+): Promise<EmployeeDetailDto> {
+  return apiFetch<EmployeeDetailDto>('/employees', {
+    method: 'POST',
     body,
   });
 }

@@ -1,10 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import {
-  CompensationType,
-  EntryStatus,
-  PassportEventType,
-  Prisma,
-} from '@prisma/client';
+import { EntryStatus, PassportEventType, Prisma } from '@prisma/client';
 import {
   SHIFT_MINUTES,
   type ProductionCostDayDto,
@@ -13,6 +8,7 @@ import {
   type ProductionCostSummaryDto,
 } from '@sewing/shared/costs';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { isSalaryEligible } from '../employees/compensation.js';
 import { PassportDurationsService } from './passport-durations.service.js';
 
 /**
@@ -83,11 +79,7 @@ export class CostsService {
     const employeeRate = new Map<string, number>();
     for (const e of employees) {
       const minute = computeMinuteRate(e.salaryPerShift);
-      if (
-        minute > 0 &&
-        (e.compensationType === CompensationType.SALARY ||
-          e.compensationType === CompensationType.MIXED)
-      ) {
+      if (minute > 0 && isSalaryEligible(e.compensationType)) {
         employeeRate.set(e.id, minute);
       } else {
         // PIECEWORK или нет ставки — ноль (для расчёта простоя оклад

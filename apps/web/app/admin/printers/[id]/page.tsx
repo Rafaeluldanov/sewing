@@ -1,5 +1,10 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import {
+  ArrowLeft,
+  Printer as PrinterIcon,
+  Send,
+} from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listEquipment } from '@/lib/equipment-api';
 import {
@@ -7,7 +12,16 @@ import {
   getPrinter,
   listPrintJobsForPrinter,
 } from '@/lib/printers-api';
-import { Icon } from '@/components/icon';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminPageShell,
+  AdminSectionHeader,
+  AdminStatusBadge,
+  AdminTable,
+  AdminTechInfo,
+  type AdminTableColumn,
+} from '@/components/admin';
 import { EditPrinterForm } from './edit-form';
 import { PairingPanel } from './pairing-panel';
 import { TestPrintForm } from './test-print-form';
@@ -20,13 +34,30 @@ interface PageProps {
   params: { id: string };
 }
 
+interface JobRow {
+  id: string;
+  createdAt: string;
+  sourceType: string;
+  sourceId: string | null;
+  status: string;
+  completedAt: string | null;
+  errorMessage: string | null;
+}
+
+const PRINTER_TYPE_LABEL: Record<string, string> = {
+  DEFAULT: 'По умолчанию',
+  WINDOWS: 'Windows',
+  ZEBRA: 'Zebra',
+};
+
 /**
- * Карточка принтера (см. `docs/screens.md §18`).
+ * Карточка принтера (Admin UI 2.6).
  *
- * Объединяет три use-case-а менеджера:
- *   1. редактировать имя/тип/привязку к рабочему месту;
- *   2. сгенерировать pairingCode и скачать агент (подключение);
- *   3. отправить тестовое задание, чтобы убедиться, что агент жив.
+ * Backend / DTO не меняем. Структура — компактные карточки без
+ * длинных описаний:
+ *   - левая колонка: «Основное», «Подключение» (Windows + pairing),
+ *     «Тест печати», «Опасная зона»;
+ *   - правая колонка: «Очередь» с последними заданиями и AdminTechInfo.
  */
 export default async function PrinterDetailPage({ params }: PageProps) {
   const id = params.id;
@@ -46,169 +77,142 @@ export default async function PrinterDetailPage({ params }: PageProps) {
 
   const agentUrl = buildAgentDownloadUrl();
 
+  const jobColumns: AdminTableColumn<JobRow>[] = [
+    {
+      key: 'createdAt',
+      header: 'Создан',
+      render: (j) => (
+        <span style={{ fontSize: '0.85rem' }}>
+          {new Date(j.createdAt).toLocaleString('ru-RU')}
+        </span>
+      ),
+    },
+    {
+      key: 'source',
+      header: 'Источник',
+      render: (j) => <span style={{ fontSize: '0.85rem' }}>{j.sourceType}</span>,
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      render: (j) => (
+        <AdminStatusBadge
+          tone={
+            j.status === 'PRINTED'
+              ? 'success'
+              : j.status === 'FAILED'
+                ? 'danger'
+                : 'muted'
+          }
+        >
+          {j.status}
+        </AdminStatusBadge>
+      ),
+    },
+    {
+      key: 'completed',
+      header: 'Завершён',
+      render: (j) =>
+        j.completedAt
+          ? new Date(j.completedAt).toLocaleString('ru-RU')
+          : '—',
+    },
+  ];
+
   return (
-    <div className="page-shell">
-      <header className="admin-overview__header">
-        <div>
-          <div className="page-eyebrow">
-            <Link href="/admin/printers">← Принтеры</Link>
-          </div>
-          <h1 className="page-title">
-            <Icon name="equipment" />
-            {printer.name}
-          </h1>
-          <p className="page-subtitle">
-            <span
-              className={`pill ${
-                printer.isOnline ? 'pill--ok' : 'pill--ghost'
-              }`}
-            >
-              <Icon
-                name={printer.isOnline ? 'success' : 'idle'}
-                size={14}
+    <AdminPageShell
+      icon={<PrinterIcon size={22} strokeWidth={1.6} aria-hidden />}
+      title={printer.name}
+      subtitle={PRINTER_TYPE_LABEL[printer.type] ?? printer.type}
+      actions={
+        <>
+          <Link href="/admin/printers" className="admin-btn admin-btn--ghost">
+            <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
+            К списку
+          </Link>
+          <AdminStatusBadge tone={printer.isOnline ? 'success' : 'muted'}>
+            {printer.isOnline ? 'онлайн' : 'офлайн'}
+          </AdminStatusBadge>
+          {!printer.isActive && (
+            <AdminStatusBadge tone="warning">деактивирован</AdminStatusBadge>
+          )}
+        </>
+      }
+    >
+      <div className="admin-grid-2">
+        <div className="admin-stack">
+          <AdminCard>
+            <AdminSectionHeader title="Основное" />
+            <EditPrinterForm printer={printer} equipment={equipment} />
+          </AdminCard>
+
+          <AdminCard>
+            <AdminSectionHeader title="Подключение" />
+            <WindowsPrinterForm printer={printer} />
+            <PairingPanel printer={printer} agentDownloadUrl={agentUrl} />
+          </AdminCard>
+
+          <AdminCard>
+            <AdminSectionHeader title="Тест печати" />
+            <TestPrintForm printerId={printer.id} />
+          </AdminCard>
+
+          <AdminCard>
+            <AdminSectionHeader title="Опасная зона" />
+            <DeletePrinterForm printerId={printer.id} />
+          </AdminCard>
+        </div>
+
+        <div className="admin-stack">
+          <AdminCard>
+            <AdminSectionHeader
+              title="Очередь"
+              hint={jobs.length > 0 ? `${jobs.length}` : undefined}
+            />
+            {jobs.length === 0 ? (
+              <AdminEmptyState
+                icon={<Send size={26} strokeWidth={1.6} aria-hidden />}
+                title="Заданий нет"
               />
-              {printer.isOnline ? 'онлайн' : 'офлайн'}
-            </span>
-            {printer.lastSeenAt && (
-              <>
-                {' · последний контакт '}
-                <time dateTime={printer.lastSeenAt}>
-                  {new Date(printer.lastSeenAt).toLocaleString('ru-RU')}
-                </time>
-              </>
+            ) : (
+              <AdminTable
+                rows={jobs as JobRow[]}
+                columns={jobColumns}
+                rowKey={(j) => j.id}
+              />
             )}
-            {!printer.isActive && ' · деактивирован'}
-          </p>
-        </div>
-      </header>
+          </AdminCard>
 
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="edit" />
-            Параметры
-          </h2>
+          <AdminTechInfo
+            items={[
+              { label: 'ID', value: <code>{printer.id}</code> },
+              { label: 'Тип', value: <code>{printer.type}</code> },
+              {
+                label: 'Equipment',
+                value: printer.equipmentId ? (
+                  <code>{printer.equipmentId}</code>
+                ) : (
+                  '—'
+                ),
+              },
+              {
+                label: 'Создан',
+                value: new Date(printer.createdAt).toLocaleString('ru-RU'),
+              },
+              {
+                label: 'Hostname агента',
+                value: printer.agentHostName ?? '—',
+              },
+              {
+                label: 'Последний контакт',
+                value: printer.lastSeenAt
+                  ? new Date(printer.lastSeenAt).toLocaleString('ru-RU')
+                  : '—',
+              },
+            ]}
+          />
         </div>
-        <EditPrinterForm printer={printer} equipment={equipment} />
-      </section>
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="login" />
-            Подключение агента
-          </h2>
-        </div>
-        <PairingPanel printer={printer} agentDownloadUrl={agentUrl} />
-      </section>
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="equipment" />
-            Физический принтер Windows
-          </h2>
-        </div>
-        <p className="detail-form__hint">
-          Логический принтер выше — это просто карточка в системе.
-          Реально печатает агент на одном из системных Windows-принтеров,
-          установленных на компьютере. Выберите, на какой именно.
-        </p>
-        <WindowsPrinterForm printer={printer} />
-      </section>
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="orders" />
-            Тестовая печать
-          </h2>
-        </div>
-        <p className="detail-form__hint">
-          Создаст задание-заглушку. Если агент работает — напечатает
-          короткий тестовый payload и отметит «PRINTED».
-        </p>
-        <TestPrintForm printerId={printer.id} />
-      </section>
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="orders" />
-            Последние задания
-          </h2>
-          <span className="section-header__hint">{jobs.length}</span>
-        </div>
-        {jobs.length === 0 ? (
-          <div className="empty-state">
-            <span className="empty-state__title">Заданий пока нет</span>
-          </div>
-        ) : (
-          <table className="data-table">
-            <thead>
-              <tr>
-                <th>Создан</th>
-                <th>Источник</th>
-                <th>Статус</th>
-                <th>Завершён</th>
-                <th>Ошибка</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((j) => (
-                <tr key={j.id}>
-                  <td>{new Date(j.createdAt).toLocaleString('ru-RU')}</td>
-                  <td>
-                    {j.sourceType}
-                    {j.sourceId && (
-                      <span className="meta-line"> · {j.sourceId}</span>
-                    )}
-                  </td>
-                  <td>
-                    <span
-                      className={`pill ${
-                        j.status === 'PRINTED'
-                          ? 'pill--ok'
-                          : j.status === 'FAILED'
-                            ? 'pill--error'
-                            : 'pill--ghost'
-                      }`}
-                    >
-                      {j.status}
-                    </span>
-                  </td>
-                  <td>
-                    {j.completedAt
-                      ? new Date(j.completedAt).toLocaleString('ru-RU')
-                      : '—'}
-                  </td>
-                  <td>
-                    {j.errorMessage ? (
-                      <span className="meta-line">{j.errorMessage}</span>
-                    ) : (
-                      '—'
-                    )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
-      </section>
-
-      <section className="card">
-        <div className="section-header">
-          <h2>
-            <Icon name="reset" />
-            Опасная зона
-          </h2>
-        </div>
-        <p className="detail-form__hint">
-          Удаление принтера также удаляет историю заданий печати (cascade).
-          Для временного отключения снимите галочку «Активен» в параметрах.
-        </p>
-        <DeletePrinterForm printerId={printer.id} />
-      </section>
-    </div>
+      </div>
+    </AdminPageShell>
   );
 }

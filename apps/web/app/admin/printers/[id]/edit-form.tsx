@@ -1,12 +1,12 @@
 'use client';
 
 import { useFormState, useFormStatus } from 'react-dom';
+import { Save, XCircle } from 'lucide-react';
 import type { EquipmentSummaryDto } from '@sewing/shared/equipment';
 import {
   PRINTER_TYPES,
   type PrinterDetailDto,
 } from '@sewing/shared/printers';
-import { Icon } from '@/components/icon';
 import { updatePrinterAction } from '../actions';
 import {
   initialUpdatePrinterState,
@@ -18,11 +18,21 @@ interface Props {
   equipment: readonly EquipmentSummaryDto[];
 }
 
+const PRINTER_TYPE_LABEL: Record<string, string> = {
+  DEFAULT: 'По умолчанию',
+  WINDOWS: 'Windows',
+  ZEBRA: 'Zebra',
+};
+
 function SaveButton() {
   const { pending } = useFormStatus();
   return (
-    <button type="submit" className="btn btn-primary" disabled={pending}>
-      <Icon name="save" size={16} />
+    <button
+      type="submit"
+      className="admin-btn admin-btn--primary"
+      disabled={pending}
+    >
+      <Save size={16} strokeWidth={1.6} aria-hidden />
       {pending ? 'Сохраняем…' : 'Сохранить'}
     </button>
   );
@@ -36,12 +46,12 @@ export function EditPrinterForm({ printer, equipment }: Props) {
   );
 
   return (
-    <form action={formAction} className="detail-form">
-      <div className="detail-form__grid">
-        <div className="detail-form__field">
-          <label htmlFor="name">Имя</label>
+    <form action={formAction} className="admin-form">
+      <div className="admin-form-grid">
+        <div className="admin-field">
+          <label htmlFor="printer-name">Название</label>
           <input
-            id="name"
+            id="printer-name"
             name="name"
             type="text"
             required
@@ -50,68 +60,66 @@ export function EditPrinterForm({ printer, equipment }: Props) {
             autoComplete="off"
           />
         </div>
-        <div className="detail-form__field">
-          <label htmlFor="type">Тип</label>
-          <select id="type" name="type" defaultValue={printer.type}>
+        <div className="admin-field">
+          <label htmlFor="printer-type">Тип</label>
+          <select
+            id="printer-type"
+            name="type"
+            defaultValue={printer.type}
+          >
             {PRINTER_TYPES.map((t) => (
               <option key={t} value={t}>
-                {t}
+                {PRINTER_TYPE_LABEL[t] ?? t}
               </option>
             ))}
           </select>
         </div>
-        <div className="detail-form__field">
-          <label htmlFor="equipmentId">Рабочее место</label>
+        <div className="admin-field">
+          <label htmlFor="printer-equipment">Рабочее место</label>
           <select
-            id="equipmentId"
+            id="printer-equipment"
             name="equipmentId"
             defaultValue={printer.equipmentId ?? ''}
           >
             <option value="">— без привязки —</option>
             {equipment.map((eq) => (
               <option key={eq.id} value={eq.id}>
-                {eq.name} ({eq.code})
+                {eq.name}
               </option>
             ))}
           </select>
         </div>
-        <div className="detail-form__field">
-          <label>
-            <input
-              type="checkbox"
-              name="isActive"
-              defaultChecked={printer.isActive}
-            />
-            Активен
-          </label>
-          <span className="detail-form__hint">
-            Если выключено — кнопка «Печать» в системе не будет выбирать
-            этот принтер. История заданий сохраняется.
-          </span>
+        <div className="admin-field admin-field--inline">
+          <input
+            id="printer-active"
+            type="checkbox"
+            name="isActive"
+            defaultChecked={printer.isActive}
+          />
+          <label htmlFor="printer-active">Активен</label>
         </div>
       </div>
 
       {state.error && (
-        <div className="detail-form__error" role="alert">
-          <Icon name="error" size={16} />
-          <span>
-            {state.error}
-            {state.errorRequestId && (
-              <span className="detail-form__error-rid">
-                req: <code>{state.errorRequestId}</code>
-              </span>
-            )}
-          </span>
+        <div
+          role="alert"
+          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
+        >
+          <XCircle size={14} strokeWidth={1.6} aria-hidden /> {state.error}
+          {state.errorRequestId && (
+            <span className="admin-muted" style={{ marginLeft: 6 }}>
+              req: <code>{state.errorRequestId}</code>
+            </span>
+          )}
         </div>
       )}
       {state.ok && (
-        <div className="detail-form__success" role="status">
-          <Icon name="success" size={16} />
-          <span>Сохранено.</span>
+        <div role="status" className="admin-muted" style={{ fontSize: '0.88rem' }}>
+          Сохранено.
         </div>
       )}
 
-      <div className="detail-form__actions">
+      <div className="admin-actions-row">
         <SaveButton />
       </div>
     </form>

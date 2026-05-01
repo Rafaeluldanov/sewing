@@ -35,8 +35,10 @@ function passport(overrides: Partial<ProjectionPassport>): ProjectionPassport {
     qtyDefect: 0,
     status: PassportStatus.IN_PROGRESS,
     currentOperationCategory: OperationCategory.QC,
+    currentEmployeeId: null,
     hasOpenBox: false,
     hasFreshQcPassed: false,
+    hasFreshWtoPassed: false,
     ...overrides,
   };
 }

@@ -3,8 +3,12 @@
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
+import { PrintButton } from '@/components/print-button';
+import { buildPassportPrintPath } from '@/lib/browser-api-paths';
+import { AdminDateField } from '@/components/admin/admin-date-field';
 import {
   createPassportAction,
+  type CreatePassportMode,
   type PassportFormState,
 } from '../actions';
 
@@ -37,6 +41,19 @@ interface Props {
    * чтобы не доверять role-флагу на клиенте.
    */
   canRequestCuttingClosure: boolean;
+  /**
+   * Включает упрощённый «mobile clean» post-create UX для помощника
+   * раскройщика на `/work` (см. `docs/screens.md §7.5`): после
+   * успешного выпуска не делаем redirect на `/passports/[id]`, а
+   * показываем компактный блок с кнопками «Распечатать паспорт» /
+   * «Выпустить следующий». Все остальные роли (SHOP_MANAGER /
+   * CUTTER / ADMIN) получают прежний redirect в большую карточку.
+   *
+   * Источник истины — роль текущего пользователя на сервере
+   * (`page.tsx`); полю на клиенте мы не доверяем, поэтому `mode`
+   * всё равно дополнительно фиксируется на сервере через `bind()`.
+   */
+  isCutterAssistant: boolean;
 }
 
 const initialState: PassportFormState = {};
@@ -54,7 +71,32 @@ function SubmitButton({ disabled }: { disabled: boolean }) {
   );
 }
 
-export function NewPassportForm({
+/**
+ * Внешняя обёртка над формой выпуска паспорта.
+ *
+ * Существует только ради одной вещи: когда помощник раскройщика на
+ * /work жмёт «Выпустить следующий» в компактном пост-релизном блоке
+ * (см. `CutterAssistantSuccessCard` ниже), нам нужно сбросить
+ * `useFormState` обратно в `initialState`, чтобы снова показалась
+ * пустая форма. `useFormState` сам по себе reset-метода не имеет —
+ * самый дешёвый способ его «погасить» — перемонтировать компонент,
+ * у которого он живёт. Делаем это через `key`-bump.
+ *
+ * Для всех остальных ролей `iteration` навсегда остаётся `0`, и
+ * никаких лишних перерендеров не добавляется.
+ */
+export function NewPassportForm(props: Props) {
+  const [iteration, setIteration] = useState(0);
+  return (
+    <NewPassportFormInner
+      key={iteration}
+      {...props}
+      onIssueAnother={() => setIteration((i) => i + 1)}
+    />
+  );
+}
+
+function NewPassportFormInner({
   orderId,
   orderNumber,
   productId,
@@ -64,8 +106,15 @@ export function NewPassportForm({
   today,
   disabled,
   canRequestCuttingClosure,
-}: Props) {
-  const action = createPassportAction.bind(null, orderId, productId);
+  isCutterAssistant,
+  onIssueAnother,
+}: Props & { onIssueAnother: () => void }) {
+  // Помощник раскройщика на /work получает inline-режим: server action
+  // не редиректит, а возвращает `success` для компактного post-create
+  // блока. Менеджер на той же странице получает прежний redirect-режим
+  // в большую карточку паспорта.
+  const mode: CreatePassportMode = isCutterAssistant ? 'inline' : 'redirect';
+  const action = createPassportAction.bind(null, orderId, productId, mode);
   const [state, formAction] = useFormState(action, initialState);
   const sortedSizes = useMemo(
     () => [...sizes].sort((a, b) => a.sizeSortOrder - b.sizeSortOrder),
@@ -83,10 +132,19 @@ export function NewPassportForm({
 
   const selected = sortedSizes.find((s) => s.sizeId === sizeId);
 
-  // Mixed-result / success после combined submit (closure-чекбокс был
-  // включён). При выключенном чекбоксе server action делает redirect и
-  // сюда мы не попадём.
+  // Success-state. Помощнику раскройщика отдаём компактный
+  // post-create блок (печать + «Выпустить следующий»), всем
+  // остальным — старый CombinedResult со ссылкой «Открыть паспорт».
   if (state.success) {
+    if (isCutterAssistant) {
+      return (
+        <CutterAssistantSuccessCard
+          orderNumber={orderNumber}
+          success={state.success}
+          onIssueAnother={onIssueAnother}
+        />
+      );
+    }
     return (
       <CombinedResult
         orderId={orderId}
@@ -175,10 +233,9 @@ export function NewPassportForm({
       <div className="form-row">
         <label htmlFor="cutDate">Дата кроя</label>
         <div>
-          <input
+          <AdminDateField
             id="cutDate"
             name="cutDate"
-            type="date"
             required
             defaultValue={today}
           />
@@ -297,6 +354,124 @@ function ClosureOptIn({
   );
 }
 
+/**
+ * Компактный пост-релизный блок для помощника раскройщика на /work.
+ *
+ * Цель — серийный оперативный выпуск паспортов: после создания
+ * паспорта НЕ открываем большую карточку `/passports/[id]`, а
+ * остаёмся в рабочем поле и даём два действия одного уровня:
+ *   - «Распечатать паспорт» — переиспользуем общий `<PrintButton>`
+ *     (источник истины — `POST /api/print-jobs`, тот же путь, что и
+ *     на `/passports/[id]`); fallback на печатную HTML-форму через
+ *     `buildPassportPrintPath` сохранён.
+ *   - «Выпустить следующий» — сбрасывает success-state (ремонт через
+ *     key-bump в `NewPassportForm`) и возвращает пустую форму. Заказ
+ *     остаётся тем же — помощник продолжает выпуск по тому же заказу,
+ *     не уходя на /work/cut-orders. Размер не пытаемся «угадать» —
+ *     `useState` инициализатор сам выберет первый размер с остатком.
+ *
+ * Если в этом же сабмите помощник попросил подать заявку на закрытие
+ * раскроя (`closure.kind === 'created' | 'failed'`), показываем итог
+ * заявки тут же небольшой плашкой — но не запихиваем сюда длинный
+ * mixed-result UX, как в `CombinedResult` (он остаётся на пути
+ * менеджера). На практике помощнику этого достаточно: дальнейшие
+ * операции с заявкой видны мастеру.
+ */
+function CutterAssistantSuccessCard({
+  orderNumber,
+  success,
+  onIssueAnother,
+}: {
+  orderNumber: string;
+  success: NonNullable<PassportFormState['success']>;
+  onIssueAnother: () => void;
+}) {
+  const { passport, closure } = success;
+  const printHref = buildPassportPrintPath(passport.id);
+  return (
+    <div className="card">
+      <div className="success-box">
+        <strong>Паспорт {passport.number} выпущен.</strong>
+        <div
+          className="meta-line"
+          style={{
+            marginTop: '0.35rem',
+            display: 'flex',
+            flexWrap: 'wrap',
+            gap: '0.6rem',
+          }}
+        >
+          <span>
+            Количество: <strong>{passport.qtyCut}</strong> шт
+          </span>
+          <span>
+            Рулон: <strong>{passport.rollNumber}</strong>
+          </span>
+        </div>
+      </div>
+
+      {closure.kind === 'created' && (
+        <div className="meta-line" style={{ marginTop: '0.6rem' }}>
+          Заявка на закрытие раскроя отправлена мастеру цеха.
+        </div>
+      )}
+      {closure.kind === 'failed' && (
+        <div className="error-box" style={{ marginTop: '0.6rem' }}>
+          <div className="error-box__msg">
+            Заявку на закрытие раскроя отправить не удалось.
+          </div>
+          <div style={{ marginTop: '0.3rem', fontSize: '0.9rem' }}>
+            {closure.error}
+          </div>
+          <div className="meta-line" style={{ marginTop: '0.4rem' }}>
+            Подайте заявку вручную из карточки паспорта.
+          </div>
+        </div>
+      )}
+
+      <div className="actions-row">
+        <PrintButton
+          sourceType="PASSPORT_PRINT"
+          sourceId={passport.id}
+          fallbackHref={printHref}
+          label="Распечатать паспорт"
+        />
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={onIssueAnother}
+        >
+          Выпустить следующий
+        </button>
+        <Link className="btn btn-ghost" href="/work">
+          ← На рабочее место
+        </Link>
+      </div>
+
+      {/*
+       * Прямая ссылка «Открыть паспорт» сознательно скрыта в
+       * developer-friendly hint, а не в primary-row: задача рабочего
+       * места — серийный выпуск, большая карточка существует, но
+       * пользователь не должен в неё уходить случайно.
+       */}
+      <div className="hint" style={{ marginTop: '0.6rem' }}>
+        Заказ: <strong>{orderNumber}</strong>. Большая карточка паспорта
+        доступна по прямой ссылке{' '}
+        <Link href={`/passports/${passport.id}`}>
+          /passports/{passport.id}
+        </Link>
+        , если потребуется детальный просмотр или ОТК. Для следующего
+        выпуска по этому же заказу нажмите «Выпустить следующий» —
+        заказ останется выбранным.
+      </div>
+      <div className="hint" style={{ marginTop: '0.3rem' }}>
+        Чтобы выпустить паспорт по другому заказу, перейдите{' '}
+        <Link href="/work/cut-orders">к выбору заказа</Link>.
+      </div>
+    </div>
+  );
+}
+
 function CombinedResult({
   orderId,
   orderNumber,
@@ -308,6 +483,27 @@ function CombinedResult({
 }) {
   const { passport, closure } = success;
   const passportHref = `/passports/${passport.id}`;
+  if (closure.kind === 'skipped') {
+    // Технически недостижимо в `redirect`-режиме (без чекбокса action
+    // делает redirect, а не вернёт `'skipped'`). Но TypeScript-у нужен
+    // exhaustive switch, и на случай будущих рефакторингов отдадим
+    // безопасный fallback вместо `throw`.
+    return (
+      <div className="card">
+        <div className="success-box">
+          <strong>Паспорт {passport.number} создан.</strong>
+        </div>
+        <div className="actions-row">
+          <Link className="btn btn-primary" href={passportHref}>
+            Открыть паспорт →
+          </Link>
+          <Link className="btn" href={`/orders/${orderId}`}>
+            ← К заказу {orderNumber}
+          </Link>
+        </div>
+      </div>
+    );
+  }
   if (closure.kind === 'created') {
     return (
       <div className="card">

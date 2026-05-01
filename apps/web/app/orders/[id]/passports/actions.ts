@@ -23,10 +23,12 @@ import { createCuttingClosureRequest } from '@/lib/cutting-closure-api';
  * раскройщика может в той же форме отметить чекбокс «подать заявку
  * на закрытие». Тогда сразу после успешного создания паспорта
  * server action пытается создать `CuttingClosureRequest`. Возможны
- * три исхода (см. `docs/flows.md §F2 / §F13`):
+ * исходы (см. `docs/flows.md §F2 / §F13`):
  *
- *  1. Чекбокс выключен → классический happy path: redirect на
- *     `/passports/[id]`. `success` не возвращается.
+ *  1. `mode = 'redirect'` (старый сценарий менеджера на
+ *     `/orders/:id/passports/new`), чекбокс выключен → классический
+ *     happy path: redirect на `/passports/[id]`. `success` не
+ *     возвращается.
  *  2. Чекбокс включён, обе операции прошли → `success.passport` +
  *     `success.closure.kind = 'created'`. UI показывает success-блок
  *     со ссылкой на паспорт.
@@ -35,6 +37,12 @@ import { createCuttingClosureRequest } from '@/lib/cutting-closure-api';
  *     `success.closure.error`. UI показывает mixed-result: «паспорт
  *     создан, но заявку отправить не удалось», ссылку на паспорт и
  *     подсказку «подать заявку вручную».
+ *  4. `mode = 'inline'` (упрощённый flow помощника раскройщика на
+ *     `/work`, см. `docs/screens.md §7.5`), чекбокс выключен →
+ *     `success.passport` + `success.closure.kind = 'skipped'`. UI
+ *     показывает компактный пост-релизный блок с кнопками
+ *     «Распечатать паспорт» / «Выпустить следующий», большая
+ *     карточка `/passports/:id` НЕ открывается автоматически.
  *
  * Если паспорт не создан, ничего из `success` не возвращаем — обычная
  * `error`/`fieldErrors`-семантика как раньше.
@@ -46,11 +54,34 @@ export interface PassportFormState {
 }
 
 export interface PassportFormSuccess {
-  passport: { id: string; number: string };
+  passport: {
+    id: string;
+    number: string;
+    /** Нужен компактному success-блоку помощника раскройщика. */
+    qtyCut: number;
+    /** Нужен компактному success-блоку помощника раскройщика. */
+    rollNumber: string;
+  };
   closure:
     | { kind: 'created' }
-    | { kind: 'failed'; error: string };
+    | { kind: 'failed'; error: string }
+    | { kind: 'skipped' };
 }
+
+/**
+ * Какое поведение должен принять `createPassportAction` после
+ * успешного создания паспорта без чекбокса «закрытие раскроя».
+ *
+ *  - `'redirect'` — классический менеджерский UX: redirect на
+ *    `/passports/[id]`. Это поведение по умолчанию, его получают
+ *    все, кто бьёт форму без явного `mode` (обратная совместимость).
+ *  - `'inline'` — упрощённый UX помощника раскройщика на `/work`:
+ *    форма не редиректит, а возвращает `success` с компактным
+ *    набором полей паспорта. Большая карточка `/passports/:id` не
+ *    открывается автоматически — печать и «Выпустить следующий»
+ *    доступны прямо в рабочем поле (см. `docs/screens.md §7.5`).
+ */
+export type CreatePassportMode = 'redirect' | 'inline';
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
@@ -75,18 +106,27 @@ function isNextRedirect(e: unknown): boolean {
  *  1. Парсим тело паспорта Zod-схемой.
  *  2. Создаём паспорт через `POST /api/passports`. Если упало — обычная
  *     ошибка, заявку даже не пытаемся подать.
- *  3. Если `requestCuttingClosure` выключен — `redirect` на карточку
- *     паспорта, как раньше (UX не меняется для всех кроме помощника).
- *  4. Если включён — пытаемся создать заявку. Паспорт уже существует
- *     и НЕ откатывается ни при каких ошибках заявки (см. ТЗ): UI
- *     честно покажет mixed-result со ссылкой «открыть паспорт».
+ *  3. Если `requestCuttingClosure` выключен И `mode = 'redirect'` —
+ *     `redirect` на карточку паспорта, как раньше (UX менеджера не
+ *     меняется). Если `mode = 'inline'` — возвращаем `success` с
+ *     `closure.kind = 'skipped'`, чтобы /work помощника раскройщика
+ *     показал компактный пост-релизный блок без перехода на
+ *     `/passports/:id` (см. `docs/screens.md §7.5`).
+ *  4. Если чекбокс включён — пытаемся создать заявку. Паспорт уже
+ *     существует и НЕ откатывается ни при каких ошибках заявки
+ *     (см. ТЗ): UI честно покажет mixed-result со ссылкой «открыть
+ *     паспорт».
  *
  *  `productId` пробрасывается через `bind` со страницы — берём его из
  *  заказа на сервере, не доверяя hidden-input в клиентской форме.
+ *  `mode` тоже передаётся через `bind` — нельзя принимать его из
+ *  клиентского `FormData`, иначе любой пользователь смог бы вынудить
+ *  inline-режим на роли, у которой его не должно быть.
  */
 export async function createPassportAction(
   orderId: string,
   productId: string | null,
+  mode: CreatePassportMode,
   _prev: PassportFormState,
   form: FormData,
 ): Promise<PassportFormState> {
@@ -123,7 +163,29 @@ export async function createPassportAction(
   revalidatePath(`/orders/${orderId}`);
   revalidatePath('/orders');
 
+  // Снимок «что показать в success-блоке». Берём с фактически
+  // созданного DTO, а не с body формы, — это и безопаснее (источник
+  // истины — backend), и заодно даёт `number`, который генерится на
+  // сервере.
+  const passportSnapshot = {
+    id: created.id,
+    number: created.number,
+    qtyCut: created.qtyCut,
+    rollNumber: created.rollNumber,
+  };
+
   if (!wantsClosure) {
+    if (mode === 'inline') {
+      // Упрощённый flow помощника раскройщика на /work: не открываем
+      // большую карточку паспорта, отдаём компактный пост-релизный
+      // блок (печать + «Выпустить следующий»).
+      return {
+        success: {
+          passport: passportSnapshot,
+          closure: { kind: 'skipped' },
+        },
+      };
+    }
     redirect(`/passports/${created.id}`);
   }
 
@@ -132,7 +194,7 @@ export async function createPassportAction(
   if (!productId) {
     return {
       success: {
-        passport: { id: created.id, number: created.number },
+        passport: passportSnapshot,
         closure: {
           kind: 'failed',
           error:
@@ -153,7 +215,7 @@ export async function createPassportAction(
   if (!closureParsed.success) {
     return {
       success: {
-        passport: { id: created.id, number: created.number },
+        passport: passportSnapshot,
         closure: {
           kind: 'failed',
           error:
@@ -170,7 +232,7 @@ export async function createPassportAction(
     if (isNextRedirect(e)) throw e;
     return {
       success: {
-        passport: { id: created.id, number: created.number },
+        passport: passportSnapshot,
         closure: { kind: 'failed', error: explainApiError(e) },
       },
     };
@@ -179,7 +241,7 @@ export async function createPassportAction(
   revalidatePath(`/orders/${orderId}`);
   return {
     success: {
-      passport: { id: created.id, number: created.number },
+      passport: passportSnapshot,
       closure: { kind: 'created' },
     },
   };

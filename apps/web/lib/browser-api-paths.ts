@@ -34,3 +34,18 @@ export function buildEquipmentPrintPath(id: string): string {
 export function buildEquipmentQrPath(id: string): string {
   return `/api/equipment/${encodeURIComponent(id)}/qr`;
 }
+
+/**
+ * QR сотрудника (PNG) и печатная этикетка с QR. Используются на
+ * админской карточке сотрудника `/admin/employees/:id` (предпросмотр
+ * и кнопка «Печать QR»). QR-payload — `EMPLOYEE:<id>`, см.
+ * `EMPLOYEE_QR_PREFIX` в `@sewing/shared/master-calls` и
+ * `apps/api/src/modules/employees/employees.controller.ts`.
+ */
+export function buildEmployeeQrPath(id: string): string {
+  return `/api/employees/${encodeURIComponent(id)}/qr`;
+}
+
+export function buildEmployeePrintPath(id: string): string {
+  return `/api/employees/${encodeURIComponent(id)}/print`;
+}

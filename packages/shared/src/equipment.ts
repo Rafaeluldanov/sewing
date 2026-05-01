@@ -60,6 +60,20 @@ export interface EquipmentSummaryDto {
   active: boolean;
   /** Сколько активных операций сейчас разрешено для этого оборудования. */
   allowedOperationsCount: number;
+  /**
+   * Уникальные категории связанных операций в каноническом порядке
+   * (`OPERATION_CATEGORY_ORDER`). Нужны UI для группировки списка
+   * `/admin/equipment` по primary-категории и отрисовки category
+   * chips (см. ТЗ «Единая группировка», §6).
+   *
+   * Поле сознательно «лёгкое» (массив строк, не массив операций):
+   * полный список разрешённых операций живёт в `EquipmentDetailDto`,
+   * на списочной странице нам достаточно категорий.
+   *
+   * Бекенд читает только из существующих `Operation.category` —
+   * Prisma не меняется.
+   */
+  operationCategories: string[];
 }
 
 /**

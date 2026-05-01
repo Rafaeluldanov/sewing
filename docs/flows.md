@@ -1,5 +1,55 @@
 # Бизнес-потоки
 
+> ⚠️ **Статус документа: OUTDATED (PHASE 1, 2026-Q2)** ⚠️
+>
+> PHASE 2 (2026-Q2) **завершён**: runtime-потоки заказа,
+> паспорта и большого монитора вынесены в три новых документа.
+> Этот файл оставлен как исторический контекст; ссылки
+> `§F0..§F13` остаются валидными внутри ADR и комментариев в
+> коде, но **не являются source of truth** — при расхождении
+> верим коду и новым документам.
+>
+> Источники истины (PHASE 2):
+>
+> - **Заказ** ([`docs/order-flow.md`](./order-flow.md)) —
+>   `OrderStatus`, `startCalculation` / `completeCalculation` /
+>   `reopenCalculation` / `start` / `complete` / `cancel`,
+>   `syncOrderRouteStepsSnapshot()`,
+>   `rebuildMaterialRequirementsSnapshot()`, план операций,
+>   `OrderCostEstimate`, `WorkshopNeed`, production balance,
+>   cut-readiness, material-arrival overrides, cut-release
+>   policy, outsource statuses (`MANUAL` / `CUT_READY`).
+> - **Паспорт** ([`docs/production-flow.md`](./production-flow.md))
+>   — `PassportStatus`, `PassportEvent` / `PassportEventType`,
+>   `OPERATION_SCAN`, `QC_PASSED`, `WTO_PASSED`,
+>   `Box` / `BoxItem` / `PACKED`, `OperationEntry` (моменты
+>   pending / APPROVED — финальный апрув на `Box.close()`),
+>   `SalaryEntry`, master actions / master calls, связь с
+>   shopfloor buckets.
+> - **Большой монитор**
+>   ([`docs/display-board.md`](./display-board.md)) —
+>   `/shopfloor/display`, `GET /api/shopfloor/display`,
+>   `DisplayScreenConfig`, DISPLAY-учётка, polling /
+>   degraded / timeout / visibility recovery, bucket mapping,
+>   `sewingColumns` / `sewingRoute (▶/✔)`, layout-цепочка
+>   `min-height: 0`, breakpoint `max-width: 1199px`,
+>   aggregation risks.
+>
+> Дополнительные источники: контроллеры
+> (`apps/api/src/modules/**/*.controller.ts`) и Prisma-схема
+> (`prisma/schema.prisma`). Краткая карта routes — `docs/api.md`,
+> карта моделей — `docs/erd.md`.
+>
+> Содержимое ниже **не переписано и не удалено** в PHASE 2 (по
+> правилу «`flows.md` остаётся как индекс-ссылка на новые
+> документы, без переписывания старого тела»). Оно сохраняется
+> как исторический контекст. Часть потоков (раскрой,
+> производственная цепочка, экран цеха, расчёт-себестоимость,
+> закупки, потребности цеха) уже разъехалась с реальной
+> реализацией в `apps/api/src/modules/**` — для этих зон
+> опирайтесь на новые документы PHASE 2 / на код, а не на
+> §F2..§F13 ниже.
+
 > Все потоки оперируют QR-кодами. Предварительные условия — активная
 > `ShiftSession` (кроме SHOP_MANAGER/ADMIN).
 > Предусловие на любой поток (MVP 1.1) — валидная session-cookie
@@ -61,6 +111,17 @@
 
 **Важно:** после `IN_PRODUCTION` `OrderItem.qtyPlan` **не меняется**.
 
+**Подразделение заказа (`Order.division`).** На форме создания
+(`/orders/new`) и в форме правки `DRAFT`-заказа (`/orders/[id]/edit`)
+есть select «Подразделение» (`MARKETPLACE` / `OTHER`, значения
+из `ORDER_DIVISIONS`). Дефолт — `OTHER`. После `start()` поле
+блокируется тем же `ORDER_LOCKED` guard'ом, что и остальные поля
+шапки, отдельной проверки нет. `division` потом используется
+только как фильтр большого экрана `/shopfloor/display?division=…`
+(см. F-flow «Большой монитор» в `screens.md §9a` и
+`docs/domain.md §9.6.2`). Пер-passport / per-route / payroll он
+сознательно не задействует.
+
 ---
 
 ## F2. Раскрой и создание паспорта
@@ -93,13 +154,42 @@
    - автогенерирует `number = P-YYYYMMDD-NNNN`;
    - пишет `PassportEvent(CREATED, qty=qtyCut, employeeId=creatorId)`;
    - проставляет `qrCode = passport:{id}` (ADR-0008).
-4. Помощник открывает `/passports/[id]`, нажимает «Печать» —
-   `GET /api/passports/:id/print` отдаёт HTML-страницу формата A6 со
-   встроенным data-URL QR (см. ADR-0010). Реальный print-job через
-   агента (`POST /api/print-jobs`) выбирает принтер по `equipmentId`
-   активной смены помощника, поэтому работает только когда смена
-   открыта и к раскройному столу привязан принтер
-   (`PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT` иначе).
+4. Сразу после успешного создания паспорта помощник видит
+   **компактный post-create блок** прямо на той же странице
+   `/orders/:id/passports/new`, без перехода в большую карточку
+   `/passports/:id`. Server action `createPassportAction` для роли
+   `CUTTER_ASSISTANT` стартует в режиме `mode = 'inline'`
+   (передаётся через `bind()` со страницы — источник истины роль
+   на сервере, не клиентское поле формы) и вместо `redirect`
+   возвращает `success` со снимком паспорта. UI рендерит
+   `CutterAssistantSuccessCard` с двумя действиями одного уровня:
+   - **«Распечатать паспорт»** — переиспользует общий
+     `<PrintButton sourceType="PASSPORT_PRINT" sourceId={passport.id}
+     fallbackHref={buildPassportPrintPath(passport.id)} />`. Тот же
+     путь, что и в hero-блоке `/passports/:id`: сначала
+     `POST /api/print-jobs` (принтер выбирается по `equipmentId`
+     активной смены), при `SHIFT_SESSION_REQUIRED` /
+     `PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT` — открываем печатную
+     HTML-форму `GET /api/passports/:id/print` в новом табе. Никакого
+     отдельного print subsystem для /work не вводим.
+   - **«Выпустить следующий»** — сбрасывает `useFormState` через
+     перемонтирование внутреннего компонента (key-bump в обёртке
+     `NewPassportForm`) и возвращает пустую форму на той же
+     странице. Заказ остаётся выбранным (помощник продолжает
+     серийный выпуск по тому же заказу), `qtyCut` и `rollNumber`
+     сбрасываются, размер выбирается заново как «первый с
+     остатком > 0». Если нужно перейти к другому заказу — есть
+     ссылка на `/work/cut-orders` в hint-блоке внизу.
+
+   Прямая ссылка на `/passports/:id` в этом блоке скрыта в
+   мелком hint — большая карточка остаётся доступной для ОТК и
+   детального просмотра, но рабочее место помощника туда
+   автоматически не уходит.
+
+   Менеджеры (`SHOP_MANAGER` / `ADMIN` / `CUTTER`) на той же
+   странице получают прежний UX: `mode = 'redirect'` → переход
+   на `/passports/:id`. Нажатие «Печать» там работает так же
+   (`POST /api/print-jobs` + fallback на печатную HTML-форму).
 
 **Зарплата раскройщика (Шаг 9 — реализовано).** По
 [ADR-0005](./adr/0005-salary-timing.md) начисление возникает в момент
@@ -137,7 +227,7 @@ ADR-0005). Идемпотентность гарантирует
 
 > MVP-ограничение: один паспорт = одна текущая ячейка. Перемещение между
 > ячейками, частичное размещение и split/merge паспортов — за рамками
-> Шага 5 (см. [ADR-0004](./adr/0004-cells-simplified.md) +
+> Шага 5 (см. [ADR-0004](./adr/0004-simplified-cells.md) +
 > [ADR-0010](./adr/0010-passport-print-and-placement.md)).
 
 ---
@@ -227,16 +317,72 @@ auth (Шаг 7) UI хранит выбранного демо-сотрудник
    `PASSPORT_ALREADY_PACKED` / `PASSPORT_CANCELLED` при терминальных
    статусах.
 2. Проверяем активную смену сотрудника (`SHIFT_SESSION_REQUIRED`).
-3. Если паспорт уже выдан (`currentEmployeeId IS NOT NULL AND
-   currentCellId IS NULL`) → `PASSPORT_ALREADY_ISSUED`.
-4. Если паспорт ещё не в ячейке (`currentCellId IS NULL`) →
-   `PASSPORT_NOT_IN_CELL`.
-5. `CellContent(cellId, sizeId).quantity = max(0, quantity − qtyCut)`.
-6. `Passport.currentCellId = NULL`, `currentEmployeeId = :employeeId`,
-   `status = IN_PROGRESS`. `currentOperationId` **не меняем** — это
-   сделает первый `OPERATION_SCAN` у швеи на её операции.
-7. `PassportEvent(ISSUED_TO_EMPLOYEE, operationId=session.operationId,
-   employeeId, cellId=previousCellId, qty=qtyCut)`.
+3. Дальше — две ветки в зависимости от того, лежит ли паспорт в
+   ячейке (`currentCellId IS NOT NULL`):
+
+   **A) Legacy / буферная ветка (`currentCellId IS NOT NULL`).** То же
+   поведение, что и раньше. Применяется к заказам без маршрута и к
+   маршрутным паспортам, которые после CUT_DIVISION/между шагами
+   положили в ячейку как буфер:
+   - `CellContent(cellId, sizeId).quantity = max(0, quantity − qtyCut)`;
+   - `Passport.currentCellId = NULL`, `currentEmployeeId = :employeeId`,
+     `status = IN_PROGRESS`;
+   - `PassportEvent(ISSUED_TO_EMPLOYEE, operationId=session.operationId,
+     employeeId, cellId=previousCellId, qty=qtyCut)`.
+
+   **B) Route-WIP без ячейки (`currentCellId IS NULL`,
+   `currentRouteStepIndex IS NOT NULL`).** Soft-route MVP, см.
+   `docs/domain.md §18`: у заказа есть snapshot `OrderRouteStep[]`,
+   значит паспорт уже в маршрутном потоке (индекс ставится при
+   `Passport.create()`). Размещение на складе между маршрутными
+   шагами **не обязательно**, поэтому:
+   - `PASSPORT_NOT_IN_CELL` не кидаем;
+   - `PASSPORT_ALREADY_ISSUED` кидаем только при реальном конфликте —
+     `status = IN_PROGRESS` И `currentEmployeeId ≠ :employeeId`;
+   - «висящий» creator (status=CREATED, паспорт только что выпущен
+     помощником раскройщика после CUT_DIVISION) и пустой
+     `currentEmployeeId` после `complete-operation` не блокируют
+     приём — это и есть штатный route-flow перехват;
+   - идемпотентно: тот же сотрудник на IN_PROGRESS → no-op (как у scan,
+     ADR-0003 §6);
+   - `Passport.currentEmployeeId = :employeeId`, `status = IN_PROGRESS`.
+     `currentCellId` остаётся `NULL`. `currentOperationId` **не
+     трогаем** — его обновит первый `scan` (см. F4).
+   - `PassportEvent(ISSUED_TO_EMPLOYEE, operationId=session.operationId,
+     employeeId, cellId=NULL, qty=qtyCut)`.
+
+   **C) Без ячейки и без маршрута (`currentCellId IS NULL`,
+   `currentRouteStepIndex IS NULL`).** Старое поведение полностью
+   сохранено: либо `PASSPORT_ALREADY_ISSUED` (если есть
+   `currentEmployeeId`), либо `PASSPORT_NOT_IN_CELL`.
+
+**UI /work симметричен бэкенду.** UX «приёма кроя» подстроен под то
+же правило route-WIP (`currentRouteStepIndex !== null`):
+
+- В `PassportConfirmModal` при route-WIP появляется inline-бейдж
+  «Из маршрута» рядом с номером паспорта. Если `currentCell = null`
+  (типичный случай между маршрутными шагами) — вместо складской
+  тревоги «ячейка не указана» рисуем спокойный subtext «Паспорт
+  идёт по маршрутному потоку — ячейка не требуется» (`role="status"`,
+  без alert). Кнопка «Принять» disabled только по `pending`.
+- В блоке «Сейчас в работе» (`current-work-card.tsx`) для активных
+  паспортов с `currentRouteStepIndex !== null` показывается тот же
+  бейдж «Из маршрута».
+- Подсказки «Получить крой» в обеих панелях (`SeamstressActivePanel`
+  и дефолтной `ActiveShiftPanel` для CUTTER/админа) больше не
+  утверждают, что ячейка обязательна. Backend сам выбирает ветку
+  A/B/C.
+- Для **заказов без маршрута** (ветка C) UI ничего не меняет:
+  бейдж не рендерится, ячейка остаётся обязательной, а
+  `ShelfPlacementPanel` для CUTTER_ASSISTANT по-прежнему доступен
+  как обязательный шаг no-route-flow и опциональный буфер маршрутного
+  flow. См. `docs/screens.md` подраздел «Route-WIP UX в /work».
+
+UI-критерий совпадает с серверным: `Passport.currentRouteStepIndex
+!== null`. Поля прокидываются через server action
+`apps/web/app/work/actions.ts:lookupPassportAction` →
+`PassportLookupResult.passport.currentRouteStepIndex` /
+`currentCellCode` (см. `apps/web/app/work/state.ts`).
 
 **ADR:** [ADR-0003](./adr/0003-event-sourcing-lite.md),
 [ADR-0004](./adr/0004-simplified-cells.md),
@@ -267,14 +413,17 @@ auth (Шаг 7) UI хранит выбранного демо-сотрудник
 `PassportsService.scanOnOperation` после `PassportEvent(OPERATION_SCAN)`
 вызывается `EarningsService.createPendingForPreviousOperation(
 passportId, previousOperationId, previousEmployeeId, sourceEventId=event.id)`.
-Если предыдущая операция входит в piecework-набор пошива
-(`SEW_OVERLOCK_1` / `SEW_BINDING` / `SEW_OVERLOCK_2` / `SEW_COVERSTITCH`)
-и предыдущий исполнитель — сдельщик (`Employee.paymentType = PIECEWORK`),
+Если предыдущая операция оплатная (`Operation.pricingMode ≠ SALARY_ONLY`,
+см. ADR-0020) и предыдущий исполнитель — сдельщик (доменная функция
+`isPieceworkEligible(employee.compensationType)` — `true` для
+`PIECEWORK`/`MIXED`, см. `apps/api/src/modules/employees/compensation.ts`
++ ADR-0021),
 создаётся `OperationEntry { qty=passport.qtyCut, ratePerUnit,
 amount, status=PENDING_RELEASE, approvalMode=AFTER_RELEASE,
 sourceEventType=OPERATION_TRANSITION }`. Раскрой исключён — он уже
-получил immediate-начисление в F2. Окладные роли (ОТК, ВТО, упаковка)
-в piecework вообще не попадают (см. `EarningsService.PIECEWORK_OPERATION_CODES`).
+получил immediate-начисление в F2. Окладные роли (ОТК, ВТО, упаковка,
+помощник раскройщика) в piecework вообще не попадают: `isPieceworkEligible`
+возвращает `false` для `compensationType = SALARY` (silent skip).
 Подтверждение — в F7 при **закрытии коробки** (ADR-0005).
 
 Идемпотентность скан-сценария гарантируется на двух уровнях: повторный
@@ -320,9 +469,24 @@ Frontend — scan-driven role-terminal `/qc` (см. `docs/screens.md §5`,
 
 **Сценарий (роль QC):**
 
-1. Сотрудник ОТК открывает `/qc` — видит большую кнопку «Сканировать
-   паспорт» и `RoleHeaderCard` со своим именем. Никаких списков —
-   терминал ждёт скан.
+1. Сотрудник ОТК открывает `/qc`. Страница SSR-подтягивает
+   `getShiftMeta()` + `getCurrentShift()` (как `/packing`, см. F7) и
+   решает, что показать:
+   - **смены нет** → reuse-форма `SeamstressShiftStart`: большая
+     primary-кнопка «Начать смену», скан QR рабочего места ОТК
+     (например, `qc-station-01` из seed), затем выбор разрешённой
+     операции из allow-листа `EquipmentOperation` (ADR-0017) — для
+     qc-станции это одна операция `QC` — и `POST /shifts/start`
+     (см. F2). Без этого шага все QC-action'ы упирались бы в
+     `SHIFT_SESSION_REQUIRED`, потому что у роли QC нет другой
+     страницы, где можно стартовать смену (`/work` редиректит в
+     `/qc`, см. `getPrimaryWorkspace`);
+   - **смена активна, но категория операции ≠ `QC`** (ОТК случайно
+     открыл смену не на том станке) → банер «Смена не на ОТК» с
+     подсказкой завершить смену через меню в правом верхнем углу.
+     Скан-флоу намеренно не показываем — иначе scan подсадит паспорт
+     в чужой `currentOperationId` и поломает shopfloor-проекцию;
+   - **смена активна, категория `QC`** → штатный scan-flow ниже.
 2. Сканирует QR паспорта (`passport:{id}` или просто номер
    `P-…`). Server-action `lookupQcPassportAction` сначала бьёт
    обычный `POST /api/passports/:id/scan` (вход на операцию
@@ -330,10 +494,11 @@ Frontend — scan-driven role-terminal `/qc` (см. `docs/screens.md §5`,
    двигает паспорт в bucket `QC` на shopfloor-проекции, см. F11),
    а потом `GET /api/qc/passports/:id` и сразу раскрывает карточку
    паспорта под кнопкой. Полный аналог `acceptOnWtoAction` из F6:
-   если у сотрудника ОТК нет активной смены на станке категории
-   `QC` — backend вернёт `SHIFT_SESSION_REQUIRED`, и карточка не
-   откроется. Идемпотентность скана гарантирует backend (повторный
-   скан того же паспорта на той же операции — no-op).
+   shift-gate теперь enforced на UI, но backend остаётся источником
+   истины — если сессии нет (например, истекла между SSR и POST),
+   карточка не откроется и UI покажет `SHIFT_SESSION_REQUIRED` как
+   обычный error-box. Идемпотентность скана гарантирует backend
+   (повторный скан того же паспорта на той же операции — no-op).
 3. В карточке видит meta, цифры **Раскроено / Брак / Годных**, бейдж
    «Проверка выполнена · ⟨дата⟩» (если уже подтверждал паспорт
    раньше), форму «Зафиксировать брак» и кнопку
@@ -458,12 +623,32 @@ gate через прямой `POST /api/passports/:id/scan` нельзя (UI л�
 
 **Сценарий (роль IRONING):**
 
-1. Сотрудник ВТО открывает `/wto` — видит большую кнопку «Сканировать
-   паспорт» и `RoleHeaderCard` со своим именем.
+1. Сотрудник ВТО открывает `/wto`. Страница SSR-подтягивает
+   `getShiftMeta()` + `getCurrentShift()` (как `/qc`, см. F5, и
+   `/packing`, см. F7) и решает, что показать:
+   - **смены нет** → reuse-форма `SeamstressShiftStart`: большая
+     primary-кнопка «Начать смену», скан QR рабочего места ВТО
+     (например, `wto-station-01` из seed), затем выбор разрешённой
+     операции из allow-листа `EquipmentOperation` (ADR-0017) — для
+     wto-станции это одна операция `WTO` — и `POST /shifts/start`
+     (см. F2). Без этого шага все WTO-action'ы упирались бы в
+     `SHIFT_SESSION_REQUIRED`, потому что у роли IRONING нет другой
+     страницы, где можно стартовать смену (`/work` редиректит в
+     `/wto`, см. `getPrimaryWorkspace`);
+   - **смена активна, но категория операции ≠ `IRONING`** (ВТО
+     случайно открыл смену не на том станке) → банер «Смена не на ВТО»
+     с подсказкой завершить смену через меню в правом верхнем углу.
+     Скан-флоу намеренно не показываем — иначе scan подсадит паспорт
+     в чужой `currentOperationId` и поломает shopfloor-проекцию;
+   - **смена активна, категория `IRONING`** → штатный scan-flow ниже.
 2. Сканирует QR паспорта (`passport:{id}` или просто номер `P-…`).
    Server-action `acceptOnWtoAction` сначала бьёт обычный
    `POST /api/passports/:id/scan` (вход на операцию категории
    `IRONING`), а потом `GET /api/wto/passports/:id` для карточки.
+   Frontend-gate выше отрезает `SHIFT_SESSION_REQUIRED` до клика, но
+   backend остаётся источником истины: если сессия истекла между SSR
+   и POST, scan вернёт 409 `SHIFT_SESSION_REQUIRED` и фронт покажет
+   обычный error-box.
    Если у паспорта нет `QC_PASSED` — backend возвращает 409
    `PASSPORT_NOT_QC_PASSED`, фронт показывает error-box с
    подсказкой «Паспорт ещё не прошёл ОТК — принимать на ВТО нельзя».
@@ -664,11 +849,12 @@ unique-index появится, если потребуется).
 
 **Side-effect: окладная синхронизация (post-Шаг 18, ADR-0021).**
 В транзакции `start` и `stop` `ShiftsService` дополнительно дёргает
-`SalaryService.syncDailySalary(employeeId, date)`. Для сотрудников с
-`compensationType ∈ { SALARY, MIXED }` это создаёт/обновляет одну
-`SalaryEntry` за день (см. F9a). Вызов фейл-софт: ошибка sync-а
-**не** ронит сам `start/stop` — бизнес-приоритет «сотрудник
-работает», синхронизация догонит на следующем событии.
+`SalaryService.syncDailySalary(employeeId, date)`. Для сотрудников, у
+которых `isSalaryEligible(compensationType) = true` (т.е. `SALARY` и
+`MIXED`, см. `apps/api/src/modules/employees/compensation.ts`),
+это создаёт/обновляет одну `SalaryEntry` за день (см. F9a). Вызов
+фейл-софт: ошибка sync-а **не** ронит сам `start/stop` — бизнес-приоритет
+«сотрудник работает», синхронизация догонит на следующем событии.
 
 ---
 
@@ -738,8 +924,8 @@ salary_fixed, piecework_approved, piecework_pending, total }`;
 1. Сотрудник нажимает «Начать смену» → `POST /api/shifts/start`.
 2. В транзакции `ShiftsService.start` после создания `ShiftSession`
    дёргается `SalaryService.syncDailySalary(employeeId, today)`.
-3. Если `compensationType ∈ { SALARY, MIXED }` и в этот день есть
-   хотя бы одна `ShiftSession` — `upsert` по
+3. Если `isSalaryEligible(compensationType) = true` (т.е. `SALARY`/`MIXED`)
+   и в этот день есть хотя бы одна `ShiftSession` — `upsert` по
    `(employeeId, date, source = SHIFT_DAY)`:
    - запись существует с `editedManually = true` → `amount` не
      трогаем (менеджер сказал «1500», автоматика не перезаписывает);
@@ -1000,3 +1186,201 @@ pack after defect).
 иммутабелен, [ADR-0006](./adr/0006-plan-is-immutable.md)), не
 переводит сам `Order` в `DONE`, не возвращает уже выпущенные
 паспорта. Это «стоп на новый выпуск», а не правка факта.
+
+## F-Master. Вызов мастера цеха (MVP)
+
+Мобильный «эскалационный» flow без смены владельца паспортов и без
+блокировок выдачи кроя — соответствует §10a `domain.md`
+(`MasterCall`), `screens.md §«/master»` и API-модулю
+`apps/api/src/modules/master-calls/*`.
+
+Назначение: рабочий нажимает одну заметную кнопку «Мастер» на своём
+терминале → мастер цеха видит карточку в очереди на `/master` и
+подсветку плитки на `/shopfloor/display` → подходит к сотруднику →
+сканирует QR его бейджа → вызов закрыт.
+
+### Шаги
+
+1. **Рабочий нажимает «Мастер».**
+   Кнопка `<CallMasterButton>` живёт в layouts `/work`, `/qc`,
+   `/wto`, `/packing` и доступна `SEAMSTRESS`, `CUTTER`,
+   `CUTTER_ASSISTANT`, `QC`, `IRONING`, `PACKING`. Server action
+   `callMasterAction` вызывает `POST /api/master-calls`.
+
+2. **API создаёт OPEN или возвращает существующий.**
+   `MasterCallsService.create` идемпотентно ищет `OPEN` вызов по
+   `(employeeId, status=OPEN)`. Если есть — возвращает его без
+   `INSERT` и без повторного `MASTER_CALLED` audit-события.
+   Если нет — создаёт, снимая снэпшот `equipmentId` / `operationId`
+   из активной `ShiftSession` и пишет `MASTER_CALLED`.
+
+3. **`/shopfloor/display` мигает.**
+   `ShopfloorService.getDisplaySummary` подгружает `OPEN` вызовы
+   тем же запросом, что и оборудование, и:
+   - выставляет `ShopfloorEquipmentStatusDto.hasOpenMasterCall = true`
+     для плиток, у которых есть `OPEN MasterCall` с `equipmentId`;
+   - кладёт остальные (без `equipmentId` или с уже закрытой сменой)
+     в `ShopfloorDisplayDto.orphanMasterCalls`.
+
+   Frontend (`display-board.tsx`) добавляет на плитку класс
+   `display-equipment-tile--master-call` (мягкий violet/blue pulse,
+   отдельно от bottleneck coral pulse) и рендерит блок «Вызовы
+   мастера» с orphan-вызовами.
+
+4. **Мастер открывает `/master`.**
+   `GET /api/master-calls` отдаёт список `OPEN` вызовов с
+   сотрудником, операцией, оборудованием, временем ожидания и
+   текущими паспортами активной смены сотрудника. `MasterPageClient`
+   обновляет очередь polling'ом раз в 5 секунд и тикает «ожидает N
+   мин» раз в секунду на клиенте.
+
+5. **Мастер сканирует QR сотрудника.**
+   QR-этикетка печатается через `GET /api/employees/:id/print`,
+   payload — `EMPLOYEE:<employeeId>`. На `/master` карточка
+   открывает общий `<QrScannerModal>`; результат скана уходит в
+   `resolveMasterCallByEmployeeQrAction` → `POST /api/master-calls/resolve-by-employee-qr`.
+
+6. **API закрывает вызов.**
+   `MasterCallsService.resolveByEmployeeQr` парсит payload через
+   `parseEmployeeQr`, ищет последний `OPEN` вызов сотрудника и
+   переводит его в `RESOLVED` (`resolvedAt = now()`,
+   `resolvedById = текущий user`). Эмитит `MASTER_CALL_RESOLVED`.
+   Если открытого вызова нет — возвращает `404 NOT_FOUND` с
+   человекочитаемым сообщением, UI показывает inline-ошибку и не
+   падает.
+
+7. **UI показывает «Вызов закрыт».**
+   `MasterPageClient` оптимистично убирает карточку из списка и
+   показывает короткий success-toast «Вызов закрыт» (3 сек), затем
+   принудительно дёргает `refreshOpenMasterCallsAction`, чтобы
+   синхронизироваться с БД. На `/shopfloor/display` плитка
+   перестаёт пульсировать на следующем тике (`POLL_INTERVAL_MS`).
+
+### Edge-cases
+
+- **Кнопка «Мастер» нажата до старта смены.** Создаём вызов без
+  `equipmentId` / `operationId`. На `/shopfloor/display` он
+  отрисуется в `orphanMasterCalls`, на `/master` — в карточке без
+  оборудования (метка «Без активной смены»).
+- **Спам кнопки «Мастер».** Идемпотентный `create` гарантирует один
+  `OPEN` на сотрудника; UI показывает persistent статус «Мастер
+  вызван» до закрытия. Audit пишется один раз.
+- **Скан чужого QR (не EMPLOYEE).** `parseEmployeeQr` возвращает
+  `null`, server action отказывает с `VALIDATION_ERROR`. Карточки
+  в очереди не меняются.
+- **Скан QR сотрудника без `OPEN` вызова.** API возвращает
+  `404 NOT_FOUND` (`MASTER_CALL_NOT_FOUND`). UI показывает inline-
+  сообщение, очередь не дёргается.
+- **Ошибка backend'а при `POST /api/master-calls`.** Server action
+  возвращает `{ ok: false, error }`, кнопка показывает «Ошибка»
+  inline и **не блокирует** работу — рабочий может продолжать
+  основной flow (`/work` сканы, ОТК и т.д.).
+
+### Что сознательно не делается (MVP)
+
+- Не открываем «issue override» — выдача кроя остаётся как было
+  (см. §F-issue). Передача / возврат / переназначение — отдельные
+  ручные действия мастера, см. §F-Master actions ниже.
+- Нет alerts/sounds на `/shopfloor/display`: только мягкий pulse.
+- Нет авторазрешения вызова по таймеру: только ручной resolve через
+  скан QR.
+
+---
+
+## F-Master actions. Действия мастера над паспортами (Stage 2)
+
+Stage 2 «Мастер цеха» добавляет в карточку вызова на `/master` блок
+«Действия с кроем». Источник истины — `apps/api/src/modules/master-actions/*`,
+`docs/domain.md §10b`, `docs/screens.md §«/master mobile actions UI»`.
+
+### Общий порядок
+
+1. Мастер открывает карточку вызова на `/master`. В блоке «Действия с
+   кроем» он видит список паспортов сотрудника (`MasterCallPassportDto`):
+   номер, заказ, размер, цвет, `qtyCut`, текущая операция, статус,
+   текущая ячейка, snapshot маршрута заказа.
+2. Тапает «Действия» на нужном паспорте — открывается mobile bottom-sheet
+   (`PassportActionsSheet`).
+3. Выбирает одно из четырёх действий, заполняет специфичные поля
+   (QR/выбор), затем — **обязательно** причину из enum
+   `MASTER_ACTION_REASONS` и опциональный комментарий.
+4. Нажимает «Подтвердить». UI вызывает соответствующий server action
+   (`master-actions-actions.ts`) → `POST /api/master-actions/passports/:id/...`.
+5. Сервис выполняет всё в `prisma.$transaction`: проверки, мутацию
+   `Passport`/`CellContent` и запись в `AuditLog` (`MASTER_PASSPORT_*`).
+6. UI получает `MasterActionResultDto` (`{ passport, before }`),
+   показывает toast «Действие выполнено», обновляет карточку вызова
+   и **не закрывает** `MasterCall` — закрытие отдельной кнопкой
+   «Сканировать QR сотрудника» (см. §F-Master).
+
+### Сценарий 1 — «Снять с сотрудника» (`unassign`)
+
+- API: `POST /api/master-actions/passports/:id/unassign`
+  body `{ reason, comment? }`.
+- Эффект: `currentEmployeeId = null`. `currentOperationId` /
+  `currentRouteStepIndex` сохраняются. Статус не меняется.
+- Audit: `MASTER_PASSPORT_UNASSIGNED` с before/after.
+- Когда применимо: паспорт ошибочно «висит» на сотруднике
+  (`reason = WRONG_SCAN` / `EMPLOYEE_MISTAKE`).
+
+### Сценарий 2 — «Передать сотруднику» (`transferToEmployee`)
+
+- API: `POST /api/master-actions/passports/:id/transfer-to-employee`
+  body `{ employeeQr | employeeId, reason, comment? }`.
+- Сервис проверяет: target существует и `active = true`. Иначе
+  `TARGET_EMPLOYEE_NOT_FOUND` / `TARGET_EMPLOYEE_INACTIVE`.
+- Если у target открыта `ShiftSession` с операцией, входящей в
+  snapshot маршрута заказа — двигаем `currentOperationId` /
+  `currentRouteStepIndex` (route-WIP логика). Если нет — операцию не
+  трогаем, только владельца.
+- Эффект: `currentEmployeeId = target.id`, `currentCellId = null`,
+  `status = IN_PROGRESS`.
+- Audit: `MASTER_PASSPORT_TRANSFERRED` с `targetEmployeeId`.
+- Когда применимо: пересменка (`SHIFT_HANDOVER`), решение менеджера
+  (`MANAGER_DECISION`).
+
+### Сценарий 3 — «Вернуть в ячейку» (`returnToCell`)
+
+- API: `POST /api/master-actions/passports/:id/return-to-cell`
+  body `{ cellQr | cellId, reason, comment? }`.
+- Сервис проверяет: ячейка существует и активна (`CELL_NOT_FOUND` /
+  `CELL_INACTIVE`).
+- Эффект: `currentCellId = cell.id`, `currentEmployeeId = null`,
+  `CellContent[size] += qtyCut`. Статус сохраняется (см. §10b
+  «Safety-инварианты»).
+- Идемпотентность: если паспорт уже в этой ячейке — пишем audit с
+  `noop = true`, `qtyReturned = 0`, `CellContent` не двоится.
+- Audit: `MASTER_PASSPORT_RETURNED_TO_CELL` с `cellId` / `cellCode` /
+  `qtyReturned` / `noop?`.
+- Когда применимо: паспорт ошибочно выдан, нужно вернуть на склад
+  (`WRONG_SCAN` / `CELL_CORRECTION`).
+
+### Сценарий 4 — «Назначить операцию» (`setRouteStep`)
+
+- API: `POST /api/master-actions/passports/:id/set-route-step`
+  body `{ routeStepIndex | operationId, reason, comment? }`.
+- Сервис грузит snapshot маршрута заказа (`OrderRouteStep`). Если
+  snapshot пуст — `ORDER_HAS_NO_ROUTE_SNAPSHOT`. Если индекс /
+  operation не из snapshot — `ROUTE_STEP_NOT_IN_SNAPSHOT`.
+- Эффект: `currentOperationId = op.id`,
+  `currentRouteStepIndex = idx`, `currentEmployeeId = null`,
+  `currentCellId = null`, `status = IN_PROGRESS`.
+- Audit: `MASTER_PASSPORT_ROUTE_STEP_SET` с `operationId` /
+  `routeStepIndex`.
+- Когда применимо: ручная коррекция маршрута (`ROUTE_CORRECTION`).
+
+### Edge-cases / отказ
+
+- **Паспорт `PACKED` / `CANCELLED`.** Любое из четырёх действий
+  отказывает с `409 PASSPORT_TERMINAL`. UI показывает inline-ошибку
+  и не закрывает sheet, чтобы мастер видел причину.
+- **Без `reason`.** Zod возвращает `400 VALIDATION_ERROR` ещё до
+  сервиса. Кнопка «Подтвердить» остаётся `disabled`, пока select
+  пустой.
+- **Скан чужого QR в `transferToEmployee`.** `parseEmployeeQr`
+  возвращает `null` → `400 INVALID_EMPLOYEE_QR`. UI показывает
+  «QR не распознан как сотрудник».
+- **Двойной тап «Подтвердить».** Кнопка переходит в
+  `disabled + busy`, повторного запроса не происходит. Бэкенд
+  идемпотентен только для `returnToCell` (см. выше) — в остальных
+  случаях защищает UI.

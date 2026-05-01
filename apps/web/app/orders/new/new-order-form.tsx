@@ -2,7 +2,12 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
-import type { ProductDto, SizeDto } from '@sewing/shared/orders';
+import {
+  ORDER_DIVISIONS,
+  ORDER_DIVISION_LABELS,
+  type ProductDto,
+  type SizeDto,
+} from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { createOrderAction, type FormActionState } from '../actions';
@@ -90,6 +95,23 @@ export function NewOrderForm({
               </option>
             ))}
           </select>
+        </div>
+      </div>
+
+      <div className="form-row">
+        <label htmlFor="division">Подразделение</label>
+        <div>
+          <select id="division" name="division" defaultValue="OTHER" required>
+            {ORDER_DIVISIONS.map((d) => (
+              <option key={d} value={d}>
+                {ORDER_DIVISION_LABELS[d]}
+              </option>
+            ))}
+          </select>
+          <div className="hint">
+            Определяет, на каком экране /shopfloor/display будет видно
+            заказ. По умолчанию — «Другое».
+          </div>
         </div>
       </div>
 
