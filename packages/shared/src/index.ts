@@ -18,6 +18,7 @@ export * from './packing';
 export * from './earnings';
 export * from './payroll';
 export * from './payroll-payouts';
+export * from './payroll-accrual-documents';
 export * from './shopfloor';
 export * from './admin';
 export * from './diagnostics';

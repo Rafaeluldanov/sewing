@@ -377,6 +377,15 @@ enum PayrollPayoutLineKind {
   SALARY
 }
 
+/// Жизненный цикл документа начисления зарплаты (`PayrollAccrualDocument`,
+/// PHASE 3 STEP 6). Менеджер формирует DRAFT, затем проводит → PAID
+/// (если сформированы индивидуальные выплаты) или отменяет → CANCELLED.
+enum PayrollAccrualDocumentStatus {
+  DRAFT
+  PAID
+  CANCELLED
+}
+
 // =========================
 // DICTIONARIES
 // =========================
@@ -739,6 +748,13 @@ model Employee {
   issuedPayrollPayouts          PayrollPayout[] @relation("PayrollPayoutIssuedBy")
   acknowledgedPayrollPayouts    PayrollPayout[] @relation("PayrollPayoutAcknowledgedBy")
   cancelledPayrollPayouts       PayrollPayout[] @relation("PayrollPayoutCancelledBy")
+
+  /// PHASE 3 STEP 6 «PayrollAccrualDocument» — обратные связи для
+  /// каждой управленческой роли в документе начисления зарплаты.
+  payrollAccrualDocumentsCreated   PayrollAccrualDocument[] @relation("PayrollAccrualDocumentCreatedBy")
+  payrollAccrualDocumentsPaid      PayrollAccrualDocument[] @relation("PayrollAccrualDocumentPaidBy")
+  payrollAccrualDocumentsCancelled PayrollAccrualDocument[] @relation("PayrollAccrualDocumentCancelledBy")
+  payrollAccrualDocumentLines      PayrollAccrualDocumentLine[]
 
   @@index([role])
   @@index([compensationType])
@@ -1476,6 +1492,9 @@ model PayrollPayout {
   acknowledgedBy Employee? @relation("PayrollPayoutAcknowledgedBy", fields: [acknowledgedByEmployeeId], references: [id])
   cancelledBy    Employee? @relation("PayrollPayoutCancelledBy", fields: [cancelledById], references: [id])
   lines          PayrollPayoutLine[]
+  /// PHASE 3 STEP 6: строки документа начисления, из которых
+  /// была сформирована эта выплата (`PayrollAccrualDocumentLine.payoutId`).
+  accrualDocumentLines PayrollAccrualDocumentLine[]
 
   @@index([employeeId, status])
   @@index([periodFrom, periodTo])
@@ -1519,6 +1538,99 @@ model PayrollPayoutLine {
   @@index([operationEntryId])
   @@index([salaryEntryId])
   @@index([kind, occurredOn])
+}
+
+/// Документ начисления зарплаты (PHASE 3 STEP 6).
+///
+/// Менеджер нажимает «Начислить зарплату», указывает `accrualDate`
+/// (дату расчёта включительно). Система формирует DRAFT-документ
+/// со списком сотрудников и суммами к выплате на эту дату:
+/// учитываются только операции и смены до `accrualDate` включительно.
+/// Строки документа — `PayrollAccrualDocumentLine`. После проведения
+/// (status → PAID) для каждой строки может быть создан
+/// индивидуальный `PayrollPayout`.
+///
+/// Жизненный цикл: `DRAFT → PAID | CANCELLED`.
+model PayrollAccrualDocument {
+  id String @id @default(cuid())
+
+  /// Дата расчёта включительно. Учитываются только `OperationEntry`
+  /// и `SalaryEntry` с датой ≤ `accrualDate`.
+  accrualDate DateTime @db.Date
+  status      PayrollAccrualDocumentStatus @default(DRAFT)
+
+  /// Snapshot-итоги по документу. Заполняются при формировании и
+  /// пересчёте строк. После PAID не пересчитываются автоматически.
+  totalPieceworkRub Decimal @default(0) @db.Decimal(12, 2)
+  totalSalaryRub    Decimal @default(0) @db.Decimal(12, 2)
+  totalAdjustRub    Decimal @default(0) @db.Decimal(12, 2)
+  totalToPayRub     Decimal @default(0) @db.Decimal(12, 2)
+
+  managerComment String? @db.Text
+
+  createdById   String
+  paidById      String?
+  cancelledById String?
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  paidAt      DateTime?
+  cancelledAt DateTime?
+  cancelReason String?  @db.Text
+
+  createdBy   Employee  @relation("PayrollAccrualDocumentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  paidBy      Employee? @relation("PayrollAccrualDocumentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
+  cancelledBy Employee? @relation("PayrollAccrualDocumentCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+
+  lines PayrollAccrualDocumentLine[]
+
+  @@index([status, accrualDate])
+  @@index([createdById])
+  @@index([paidById])
+  @@index([cancelledById])
+  @@index([createdAt])
+}
+
+/// Строка документа начисления зарплаты `PayrollAccrualDocument`.
+/// По одной строке на сотрудника в документе (`@@unique([documentId, employeeId])`).
+///
+/// `snapshot` хранит свёрнутый JSON-вид начислений на момент формирования
+/// строки — список `OperationEntry`/`SalaryEntry` с суммами, чтобы
+/// после правки исходных начислений / справочников документ сохранял
+/// «как было посчитано».
+///
+/// `payoutId` — связь с созданным `PayrollPayout` после перевода
+/// документа в PAID. Изначально `null`.
+model PayrollAccrualDocumentLine {
+  id String @id @default(cuid())
+
+  documentId String
+  employeeId String
+
+  amountPieceworkRub Decimal @default(0) @db.Decimal(12, 2)
+  amountSalaryRub    Decimal @default(0) @db.Decimal(12, 2)
+  manualAdjustRub    Decimal @default(0) @db.Decimal(12, 2)
+  manualComment      String? @db.Text
+  amountToPayRub     Decimal @default(0) @db.Decimal(12, 2)
+
+  /// Ссылка на индивидуальную выплату, созданную из этой строки
+  /// после перевода документа в PAID. `null` до создания выплаты.
+  payoutId String?
+
+  /// Snapshot начислений на момент формирования строки.
+  snapshot Json
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  document PayrollAccrualDocument @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  employee Employee               @relation(fields: [employeeId], references: [id], onDelete: Restrict)
+  payout   PayrollPayout?         @relation(fields: [payoutId], references: [id], onDelete: SetNull)
+
+  @@unique([documentId, employeeId])
+  @@index([employeeId])
+  @@index([payoutId])
+  @@index([documentId])
 }
 
 // =========================
