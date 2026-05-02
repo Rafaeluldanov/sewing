@@ -238,8 +238,9 @@ export class PassportsService {
       });
       // Шаг 9 (ADR-0005): immediate-начисление раскройщику. Делается в
       // той же транзакции, чтобы паспорт и зарплата жили атомарно. При
-      // отсутствии действующей `PieceRate` сервис кидает 422
-      // `PIECE_RATE_NOT_FOUND` — это сознательный выбор: silent skip
+      // отсутствии ставки в `OperationRateBySize` для пары
+      // `(operationId, sizeId)` сервис кидает 422
+      // `OPERATION_RATE_MISSING` — это сознательный выбор: silent skip
       // тут разрушит доверие к зарплате (см. `docs/flows.md §F2`).
       await this.earnings.createImmediateForCutter(tx, {
         passportId: created.id,

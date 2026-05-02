@@ -67,7 +67,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
  *   - не пишет в БД (computed endpoint, без снапшотов);
  *   - не назначает конкретных сотрудников по именам, только
  *     количество людей на операцию/категорию;
- *   - не трогает payroll (`OperationEntry`/`SalaryEntry`/`PieceRate`),
+ *   - не трогает payroll (`OperationEntry`/`SalaryEntry`),
  *     Passport, OrderCostEstimate, WorkshopNeed,
  *     PurchaseOrder/PurchaseReceipt;
  *   - НЕ добавляет LABOR-строку в себестоимость (это плановая

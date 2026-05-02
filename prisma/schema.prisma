@@ -353,7 +353,6 @@ model Size {
   passports                Passport[]
   orderItems               OrderItem[]
   cellContents             CellContent[]
-  pieceRates               PieceRate[]
   operationRatesBySize     OperationRateBySize[]
   closureRequests          CuttingClosureRequest[]
   patternSizeFiles         PatternSizeFile[]
@@ -388,7 +387,6 @@ model Product {
 
   passports       Passport[]
   orderItems      OrderItem[]
-  pieceRates      PieceRate[]
   closureRequests CuttingClosureRequest[]
   /// Этап «Номенклатура = Лекала» (см. `docs/recon-soft-integration.md
   /// §«Номенклатура = Лекала»»). Back-relation для авто-создаваемого
@@ -397,8 +395,8 @@ model Product {
   /// `PatternItem`. Связь 1:0..1 (см. `PatternItem.legacyProductId
   /// @unique`). На MVP здесь обычно ровно одна строка на Product —
   /// при удалении лекала связь обнуляется (`onDelete: SetNull` на
-  /// стороне `PatternItem`), сам Product остаётся в БД (паспорта /
-  /// PieceRate всё ещё на него ссылаются).
+  /// стороне `PatternItem`), сам Product остаётся в БД (паспорта
+  /// и `OrderItem` всё ещё на него ссылаются).
   patternItems    PatternItem[] @relation("PatternLegacyProduct")
 }
 
@@ -419,8 +417,10 @@ model Operation {
   /// Тарифный режим операции (см. `PricingMode`). Дефолт
   /// `SALARY_ONLY` — самый безопасный режим: операция участвует в
   /// pipeline, но сдельная ставка не применяется. Все существующие
-  /// операции получают корректное значение в миграции на основе
-  /// текущих `PieceRate` (см. `prisma/migrations/.../migration.sql`).
+  /// операции получили корректное значение через миграцию Шага 18
+  /// (`20260420100000_operation_pricing_model`), которая бэкфилила
+  /// данные из исторической таблицы `PieceRate`. Сама `PieceRate`
+  /// удалена в PHASE 2 STEP 1 (см. ADR-0020 §«PHASE 2 — drop legacy»).
   pricingMode  PricingMode       @default(SALARY_ONLY)
   /// Фиксированная ставка для `pricingMode = FIXED`. Для `BY_SIZE` и
   /// `SALARY_ONLY` хранится `null` (валидируется в `OperationsService`).
@@ -472,7 +472,6 @@ model Operation {
   events              PassportEvent[]           @relation("EventOperation")
   movedFromEvents     PassportEvent[]           @relation("EventFromOperation")
   entries             OperationEntry[]
-  pieceRates          PieceRate[]
   ratesBySize         OperationRateBySize[]
   /// Поразмерная матрица плановых норм времени для `timeNormMode =
   /// "BY_SIZE"` (см. `OperationTimeNormBySize`). Только для плана —
@@ -514,7 +513,7 @@ model OperationRateBySize {
   operationId String
   sizeId      String
   /// Сдельная ставка за единицу для пары (operation, size). Те же
-  /// `Decimal(12,2)`, что и в `OperationEntry.ratePerUnit`/`PieceRate`.
+  /// `Decimal(12,2)`, что и в `OperationEntry.ratePerUnit`.
   rate        Decimal  @db.Decimal(12, 2)
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
@@ -572,10 +571,6 @@ model Employee {
   login            String           @unique
   pinHash          String
   role             Role
-  /// Историческое поле «месячный оклад». На MVP не используется
-  /// payroll-движком, оставлено как справочное (см. ADR-0021).
-  /// Источник истины для оплаты за смену — `salaryPerShift` ниже.
-  salaryBase       Decimal?         @db.Decimal(12, 2)
   /// Единственная ось «как платим» (см. `CompensationType`,
   /// `docs/domain.md §9a`, ADR-0021). Гейтит и сдельный
   /// (`EarningsService`), и окладной (`SalaryService`) контуры:
@@ -1351,22 +1346,6 @@ model SalaryEntry {
   @@unique([employeeId, date, source], name: "SalaryEntry_employee_date_source_uniq")
   @@index([employeeId, date])
   @@index([date])
-}
-
-model PieceRate {
-  id          String    @id @default(cuid())
-  operationId String
-  productId   String?
-  sizeId      String?
-  ratePerUnit Decimal   @db.Decimal(12, 2)
-  validFrom   DateTime
-  validTo     DateTime?
-
-  operation Operation @relation(fields: [operationId], references: [id])
-  product   Product?  @relation(fields: [productId], references: [id])
-  size      Size?     @relation(fields: [sizeId], references: [id])
-
-  @@index([operationId, productId, sizeId, validFrom])
 }
 
 // =========================

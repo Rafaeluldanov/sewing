@@ -498,10 +498,9 @@ tx?)`. Это **единственный** источник истины для 
 только `OrderOperationPlanService` для snapshot-плана заказа
 (`docs/erd.md §3.6`).
 
-`PieceRate` (legacy) — старая модель ставок остаётся в БД для
-аудита/rollback, но runtime больше не читает её
-(`docs/erd.md §2.3`). Источник истины миграции —
-`20260420100000_operation_pricing_model`.
+Историческая таблица `PieceRate` удалена в PHASE 2 STEP 1
+(миграция `20260532100000_drop_legacy_salary_base_and_piece_rate`).
+Источник истины бэкфилла — `20260420100000_operation_pricing_model`.
 
 ### 2.3 `RouteTemplate` / `RouteTemplateStep`
 
@@ -1533,8 +1532,8 @@ Pure-функции в `apps/api/src/modules/employees/compensation.ts` —
 `Employee.salaryPerShift Decimal(12,2)?` — обязателен для
 `SALARY`/`MIXED` (инвариант
 `requiresSalaryRate ⇒ salaryPerShift > 0`).
-`Employee.salaryBase` — legacy, runtime payroll не читает
-(`docs/erd.md §2.1`).
+Историческое поле `Employee.salaryBase` («месячный оклад») удалено в
+PHASE 2 STEP 1 — payroll-движок его никогда не использовал.
 
 `Employee.cutterB2bSewingPercent: Decimal(5,2)?` — B2B-процент для
 раскройщика (см. §10.2).
@@ -1834,10 +1833,10 @@ total         = totalApproved + totalPending
   `SalaryEntry`;
 - не пишет `AuditLog` — read-only журналировать нечего
   (см. `docs/events.md`);
-- не подменяет `Employee.salaryBase` / `PieceRate` —
-  legacy-таблицы остаются на своих местах;
 - не вводит «manual entry» / «reverse» / «lock period» — это
-  скоуп будущей PHASE 2.
+  скоуп PHASE 3 PayrollPayout. PHASE 2 STEP 1 удалила legacy-поля
+  `Employee.salaryBase` и таблицу `PieceRate`, чтобы реальная модель
+  payroll стала прозрачной.
 
 UI поверх этих ручек живёт в `/admin/payroll`,
 `/admin/payroll/daily`, `/admin/payroll/employees/[id]` и

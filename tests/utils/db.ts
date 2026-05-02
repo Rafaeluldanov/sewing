@@ -114,7 +114,6 @@ export async function resetDatabase(prisma: {
     'PrintJob',
     'Printer',
     'ShiftSession',
-    'PieceRate',
     'OperationRateBySize',
     // Этап 1 «Нормы времени операции» (recon §10): отдельная таблица
     // для плановых норм времени по размеру. Подчинена `Operation`

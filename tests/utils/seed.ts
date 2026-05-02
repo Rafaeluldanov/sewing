@@ -42,8 +42,10 @@ const SIZE_CODES: Array<{ code: string; sortOrder: number }> = [
  *   - остальные → SALARY_ONLY (CUT_DIVISION, ОТК, ВТО, PACKING).
  *
  * `fixedRate` для CUT_CUT берём = 10 — совпадает с тем, что раньше
- * было в `pieceRate` с `ratePerUnit = 10`. Так старые тесты, считающие
- * `qty * 10`, сохраняют ожидаемые суммы.
+ * было в исторической таблице `PieceRate` с `ratePerUnit = 10`
+ * (таблица удалена в PHASE 2 STEP 1, см. ADR-0020 §«PHASE 2 — drop
+ * legacy»). Так старые тесты, считающие `qty * 10`, сохраняют
+ * ожидаемые суммы.
  */
 const OP_CODES: Array<{
   code: string;

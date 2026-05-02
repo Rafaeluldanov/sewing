@@ -14,7 +14,9 @@
  *
  * Что НЕ проверяем здесь:
  *   - формы UI (smoke `operation-salary-plan.smoke.test.ts`);
- *   - payroll/Passport/PieceRate (этот этап их не трогает);
+ *   - payroll/Passport (этот этап их не трогает; историческая
+ *     таблица PieceRate удалена в PHASE 2 STEP 1, ставки живут
+ *     в Operation.fixedRate / OperationRateBySize);
  *   - completeCalculation / LABOR (это отдельный этап, см.
  *     `order-cost-estimates.test.ts`).
  */

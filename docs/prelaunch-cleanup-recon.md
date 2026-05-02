@@ -228,7 +228,7 @@
 | «productId» / «productName» | Только в коде / комментариях / smoke. Не видно пользователю. | **Не трогать.** |
 | «старого учёта» | Не встречается в текущем коде. | — |
 | «legacy» | Только в комментариях кода (≈25 совпадений в `apps/web/app`). | **Не трогать.** Комментарии важны как маркер «это технический мост, не бизнес-фича». |
-| «salaryBase (legacy)» | `apps/web/app/admin/employees/[id]/page.tsx:177` — техническая подпись поля в `AdminTechInfo`. | **Safe to relabel** или скрыть. Видно только при открытии «Технической информации» сотрудника; не критично. |
+| ~~«salaryBase (legacy)»~~ | Закрыто в PHASE 2 STEP 1 — поле `Employee.salaryBase` удалено из схемы, DTO, AdminTechInfo и UI (см. ADR-0020 §«PHASE 2 — drop legacy»). |
 | «Лекало (снимок)» / «снимок» / «актуальное» (badges на `PatternPreviewCard`) | `apps/web/components/orders/pattern-preview-card.tsx:108-117`. | Активный, оставить. |
 
 ---

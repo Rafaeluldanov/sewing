@@ -13,10 +13,11 @@
  *   - источник истины смены — `ShiftSession`
  *     (`apps/api/src/modules/shifts/*`).
  *
- * PHASE 1 запрещает менять модель начислений, lifecycle статусов,
- * `Employee.salaryBase`, `PieceRate`, `PackingService.close` и
- * `EarningsService` / `SalaryService` ядро. Сюда попадает только
- * новый read-only сервис, который **не пишет в БД** — только агрегирует.
+ * PHASE 1 запретила менять модель начислений, lifecycle статусов,
+ * `PackingService.close` и `EarningsService` / `SalaryService` ядро.
+ * Сюда попадает только новый read-only сервис, который **не пишет в
+ * БД** — только агрегирует. Legacy-поля `Employee.salaryBase` и
+ * таблица `PieceRate` удалены в PHASE 2 STEP 1.
  *
  * Менеджер видит:
  *

@@ -152,10 +152,11 @@ Seed живёт в [`prisma/seed.ts`](./prisma/seed.ts) и подключён ч
   (`OperationRateBySize` по размерам, детские дешевле, 2XL+ чуть
   дороже взрослых базовых); все остальные операции = `SALARY_ONLY`.
   Управление — `/admin/operations` (роли `ADMIN`, `SHOP_MANAGER`).
-  Старая таблица `PieceRate` физически остаётся для аудита/rollback,
-  но runtime больше не читает её — миграция Шага 18 бэкфилит
-  `pricingMode`/`fixedRate`/`OperationRateBySize` из существующих
-  ставок.
+  Историческая таблица `PieceRate` удалена в PHASE 2 STEP 1
+  (миграция `20260532100000_drop_legacy_salary_base_and_piece_rate`,
+  см. ADR-0020 §«PHASE 2 — drop legacy»). Все ставки живут в
+  `Operation.fixedRate` / `OperationRateBySize`; миграция Шага 18
+  заранее бэкфилила их из `PieceRate` ещё до удаления таблицы.
 - **Виды брака** (`DefectType`, Шаг 7) — `STAIN`, `HOLE`, `CROOKED_SEAM`,
   `SKEW`, `INCOMPLETE`, `OTHER`. Идемпотентно по `code`.
 
@@ -593,8 +594,10 @@ UI `apps/web/app/wto`.
   `OperationEntry { qty=qtyCut, ratePerUnit, amount, status=APPROVED,
   approvalMode=IMMEDIATE, sourceEventType=PASSPORT_CREATED,
   approvedAt=now() }`. Если для пары `(CUT_CUT, sizeId)` нет
-  действующей `PieceRate` — транзакция падает с 422
-  `PIECE_RATE_NOT_FOUND` (silent-skip отключён сознательно).
+  ставки в `OperationRateBySize` (или `Operation(CUT_CUT).fixedRate`
+  пуст для `pricingMode=FIXED`) — транзакция падает с 422
+  `OPERATION_RATE_MISSING` (silent-skip отключён сознательно;
+  ADR-0005, ADR-0020).
 - **Пошив (after release).** В транзакции
   `PassportsService.scanOnOperation` после
   `PassportEvent(OPERATION_SCAN)` создаётся
@@ -1321,8 +1324,10 @@ NULL` сохранит ячейки, см. ADR-0019). Сам QR-payload ячей
   ставкой получают `FIXED`+`fixedRate`, операции с разными
   ставками по размерам — `BY_SIZE`+ заполненный
   `OperationRateBySize`, остальные остаются `SALARY_ONLY`. Сама
-  `PieceRate` таблица сохранена для аудита/rollback, но runtime
-  больше её не читает.
+  `PieceRate` таблица была сохранена для аудита/rollback, но
+  runtime её не читал; в PHASE 2 STEP 1 таблица физически удалена
+  миграцией `20260532100000_drop_legacy_salary_base_and_piece_rate`
+  (см. ADR-0020 §«PHASE 2 — drop legacy»).
 - **Backend API.** Новый модуль
   `apps/api/src/modules/operations`:
   - `GET /api/operations` — список с `pricingMode`, `fixedRate`,
@@ -1346,10 +1351,11 @@ NULL` сохранит ячейки, см. ADR-0019). Сам QR-payload ячей
 - **`EarningsService` использует `resolveRate`.** Раскрой
   (`createImmediateForCutter`, `PASSPORT_CREATED`) и пошив
   (`createPendingForPreviousOperation`, `OPERATION_TRANSITION`)
-  оба зовут именно его. Старая `findRate` поверх `PieceRate` и
-  константа `PIECEWORK_OPERATION_CODES` /
+  оба зовут именно его. Старая `findRate` поверх таблицы
+  `PieceRate` и константа `PIECEWORK_OPERATION_CODES` /
   `isPieceworkOperationCode` удалены из runtime — «оплатная ли
   операция» теперь = `op.pricingMode ≠ SALARY_ONLY` (см. ADR-0020 §4).
+  Сама таблица `PieceRate` снесена в PHASE 2 STEP 1.
 - **Shared DTOs.** Контракты в `packages/shared/src/operations.ts`:
   `PRICING_MODES`, `OPERATION_CATEGORIES`, `CreateOperationSchema`,
   `UpdateOperationSchema`, `OperationDetailDto`,
@@ -1382,9 +1388,10 @@ NULL` сохранит ячейки, см. ADR-0019). Сам QR-payload ячей
     «Операции» только для `ADMIN`/`SHOP_MANAGER`.
 - **Seed.** `prisma/seed.ts` обновлён: `OPERATIONS[]` несёт
   `pricingMode`/`fixedRate`, старый `seedPieceRates()` заменён на
-  `seedOperationRatesBySize()` для `BY_SIZE`-операций. `PieceRate`
-  больше не сидится. `tests/utils/seed.ts` синхронизован
-  (`CUT_CUT = FIXED`/`fixedRate=10`, `SEW_OVERLOCK_*` = `BY_SIZE`).
+  `seedOperationRatesBySize()` для `BY_SIZE`-операций. Таблицы
+  `PieceRate` больше не существует (PHASE 2 STEP 1).
+  `tests/utils/seed.ts` синхронизован (`CUT_CUT = FIXED`/
+  `fixedRate=10`, `SEW_OVERLOCK_*` = `BY_SIZE`).
 - **Tests.** `tests/integration/operations.test.ts` — 20 сценариев:
   CRUD под все три `pricingMode`, валидации
   (`FIXED` без `fixedRate`, `SALARY_ONLY` с `fixedRate` — оба `400

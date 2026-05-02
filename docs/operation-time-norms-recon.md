@@ -71,7 +71,7 @@
 
 | Model | Что есть сейчас | Как используется | Риск при изменении |
 |-------|-----------------|------------------|---------------------|
-| `Operation` | `id`, `code @unique`, `name`, `category` (`OperationCategory`), `sortOrder`, `active`, `createdAt`, `updatedAt`, **`pricingMode PricingMode @default(SALARY_ONLY)`**, **`fixedRate Decimal?`**. Связи: `events`, `entries`, `pieceRates`, `ratesBySize`, `currentPassports`, `shiftSessions`, `equipmentOperations`, `routeTemplateSteps`, `orderRouteSteps`, `masterCalls`. | Источник тарифа для сдельных начислений (`OperationsService.resolveRate`). Появляется в маршруте, в snapshot заказа, в скане паспорта, в `MasterCall`. | Любое obligatory-поле = миграция backfill. Добавлять поля времени — **только nullable + default**. Колонка `pricingMode` НЕ должна получать новую семантику; для времени отдельный режим. |
+| `Operation` | `id`, `code @unique`, `name`, `category` (`OperationCategory`), `sortOrder`, `active`, `createdAt`, `updatedAt`, **`pricingMode PricingMode @default(SALARY_ONLY)`**, **`fixedRate Decimal?`**. Связи: `events`, `entries`, `ratesBySize`, `currentPassports`, `shiftSessions`, `equipmentOperations`, `routeTemplateSteps`, `orderRouteSteps`, `masterCalls`. *(До PHASE 2 STEP 1 в этот список входил и `pieceRates`; таблица удалена, см. ADR-0020 §«PHASE 2 — drop legacy».)* | Источник тарифа для сдельных начислений (`OperationsService.resolveRate`). Появляется в маршруте, в snapshot заказа, в скане паспорта, в `MasterCall`. | Любое obligatory-поле = миграция backfill. Добавлять поля времени — **только nullable + default**. Колонка `pricingMode` НЕ должна получать новую семантику; для времени отдельный режим. |
 | `OperationRateBySize` | `id`, `operationId`, `sizeId`, **`rate Decimal(12,2)`**, `createdAt`, `updatedAt`, `@@unique([operationId, sizeId])`. | Поразмерная сдельная ставка. Читается `resolveRate(...)` в той же транзакции, что создание `OperationEntry`. **Используется payroll-ом**. | Подмешивать `timeNormSec` в эту таблицу опасно: payroll-ставка и норма времени имеют разный жизненный цикл (см. §10 Вариант C — отвергнут). |
 | `RouteTemplate` | `id`, `code @unique`, `name`, `isActive`, `createdAt`, `updatedAt`. | Менеджерский справочник маршрутов в `/admin/routes`. | Безопасно для расширения нормирования — времени тут нет, мы добавим его на стороне `Operation`. |
 | `RouteTemplateStep` | `id`, `templateId`, `index`, `operationId`, `isOptional`, `@@unique([templateId, index])`, `@@unique([templateId, operationId])`. | Шаги маршрута. `RoutesService.replaceSteps` нормализует `index` по позиции в массиве. | Менять не нужно. Поле «учитывать в плане» = `!isOptional` подходит как фильтр. |
@@ -82,7 +82,7 @@
 | `Passport` | `id`, `number`, `qrCode`, `orderId`, `productId`, `sizeId`, `color`, `rollNumber`, `cutDate`, `qtyPlan`, `qtyCut`, `qtyDefect`, `qtyGood`, `status` (`PassportStatus`), `currentOperationId`, `currentEmployeeId`, `currentCellId`, `currentRouteStepIndex`, `cutterId`, `creatorId`, `pdfUrl`. | Агрегат партии. На паспорте «живут» события и сдельные начисления. | Ничего не трогаем. План времени — на заказе, не на паспорте. |
 | `OperationEntry` | `id`, `passportId`, `operationId`, `employeeId`, `qty`, `ratePerUnit`, `amount`, `status` (`EntryStatus`), `approvalMode` (`ApprovalMode`), `sourceEventType` (`EarningSource`), `sourceEventId`, `createdAt`, `approvedAt`, `@@unique([passportId, operationId, employeeId, sourceEventType])`. | **Фактические сдельные начисления**. Создаются `EarningsService.createImmediateForCutter` и `EarningsService.createPendingForPreviousOperation`. | **Не трогать**. План — отдельная сущность, не подмешивается сюда. |
 | `SalaryEntry` | `id`, `employeeId`, `date`, `amount`, `source` (`SalaryEntrySource`), `editedManually`, `managerComment`, `editedByEmployeeId`, `@@unique([employeeId, date, source])`. | Фактический оклад «один день — одна запись». Управляется `SalaryService`. | **Не трогать**. План времени операций ≠ оклад. |
-| `PieceRate` | `id`, `operationId`, `productId?`, `sizeId?`, `ratePerUnit`, `validFrom`, `validTo?`. | Историческая таблица. **Для новых начислений не используется** — `EarningsService` ходит через `OperationsService.resolveRate(...)` (см. ADR-0005, `EarningsModule`-комментарий). Сохраняется только для совместимости/аудита. | Игнорируем. Не подмешиваем сюда нормы времени. |
+| ~~`PieceRate`~~ | Удалена в PHASE 2 STEP 1 (миграция `20260532100000_drop_legacy_salary_base_and_piece_rate`). Раньше: `id`, `operationId`, `productId?`, `sizeId?`, `ratePerUnit`, `validFrom`, `validTo?`. | Для новых начислений не использовалась ещё с ADR-0020; runtime ходит через `OperationsService.resolveRate(...)` (`Operation.fixedRate` / `OperationRateBySize.rate`). | Не возвращаем. Нормы времени — отдельная сущность. |
 | `OrderCostEstimate` | `id`, `orderId`, `version`, `status` (string `COMPLETED|REVOKED`), `totalCostRub Decimal(14,2)`, `usdRateRub Decimal?`, `completedAt`, `completedById`, `revokedAt`, `revokedById`, `comment`, `@@unique([orderId, version])`. | Документ «Себестоимость заказа», создаётся в `OrderCostEstimatesService.completeCalculation` (status `CALCULATION → CALCULATION_DONE`). Пишется snapshot-ами в `Order.costEstimateTotalRub/CompletedAt/Version`. | Безопасно: добавить строку kind = `LABOR` через **новый sourceType `ORDER_OPERATION_PLAN`** — поле `sourceType` уже хранится строкой и расширяется без миграции. |
 | `OrderCostEstimateLine` | `id`, `estimateId`, `workshopNeedId?`, `sourceType?`, `sourceId?`, `kind`, `description`, `unit`, `calculatedQty?`, `purchaseQty Decimal(14,4)`, `quotedPrice Decimal(14,2)`, `quotedCurrency`, `usdRateRub?`, `lineTotalOriginal Decimal`, `lineTotalRub Decimal`, `supplierNameSnapshot?`, `purchaseItemNameSnapshot?`. | Строки расчёта, маппятся 1:1 на активные `WorkshopNeed`. | `kind`/`sourceType` хранятся как строка → можно безопасно завести `LABOR`/`ORDER_OPERATION_PLAN` без миграции схемы (только расширить enum в `@sewing/shared/order-cost-estimates` и `getWorkshopNeedKind`-логику). |
 
@@ -377,9 +377,10 @@ Package exports (`packages/shared/package.json`): уже есть
   `WorkshopNeed`-цикл (CALCULATION → CALCULATION_DONE) и на
   курс USD; план операций живёт раньше и не зависит от валют.
 - **Как не сломать фактические начисления?** — Не трогать
-  `OperationEntry`, `SalaryEntry`, `PieceRate`,
-  `EarningsService`, `SalaryService`. Все новые поля —
-  **dedicated** для плана.
+  `OperationEntry`, `SalaryEntry`, `EarningsService`,
+  `SalaryService`. Все новые поля — **dedicated** для плана.
+  *(Историческая таблица `PieceRate` удалена в PHASE 2 STEP 1, см.
+  ADR-0020 §«PHASE 2 — drop legacy».)*
 
 ## 7. Как операции связаны с маршрутом и заказом
 
@@ -417,7 +418,7 @@ Operation (справочник, OperationsService)
 | `Operation.fixedRate` | `Decimal(12,2)` | Прямо попадает в `OperationEntry.ratePerUnit` для FIXED. |
 | `OperationRateBySize.rate` | `Decimal(12,2)` | Прямо попадает в `OperationEntry.ratePerUnit` для BY_SIZE. |
 | `OperationEntry.@@unique` | `(passportId, operationId, employeeId, sourceEventType)` | Идемпотентный ключ — повторный скан не плодит начисления. |
-| `PieceRate` | legacy | Для новых начислений **не используется**. Но строки в БД остались. |
+| ~~`PieceRate`~~ | удалена в PHASE 2 STEP 1 | До удаления — historical-таблица, новыми начислениями не использовалась. См. ADR-0020 §«PHASE 2 — drop legacy». |
 
 Что значит «нельзя смешивать с плановой нормой времени»:
 
@@ -937,7 +938,8 @@ function recalculateOperationPlan(orderId, tx):
 - **Что НЕ трогать**: `EarningsService`, `SalaryService`,
   `CostsService`, `OrdersService`, `OrderCostEstimatesService`,
   `OrderCostEstimate*`, `Passport*`, `OperationEntry`,
-  `SalaryEntry`, `PieceRate`.
+  `SalaryEntry` *(историческая `PieceRate` уже удалена в PHASE 2
+  STEP 1, ничего возвращать не нужно)*.
 
 ### Этап 2: «Расчёт плана на заказе»
 

@@ -203,9 +203,12 @@ route он сознательно не задействует.
 `OperationEntry { passportId, employeeId=cutterId, operationId=CUT_CUT,
 qty=qtyCut, ratePerUnit, amount, status=APPROVED, approvalMode=IMMEDIATE,
 sourceEventType=PASSPORT_CREATED, approvedAt=now() }`. Если для пары
-`(CUT_CUT, sizeId)` нет действующей `PieceRate` — транзакция откатывается
-с 422 `PIECE_RATE_NOT_FOUND` (silent-skip отключён сознательно — см.
-ADR-0005). Идемпотентность гарантирует
+`(CUT_CUT, sizeId)` нет ставки в `OperationRateBySize` (либо
+`Operation(CUT_CUT).fixedRate` пуст для `pricingMode=FIXED`) —
+транзакция откатывается с 422 `OPERATION_RATE_MISSING` (silent-skip
+отключён сознательно — см. ADR-0005). Историческая таблица
+`PieceRate` удалена в PHASE 2 STEP 1 (см. ADR-0020 §«PHASE 2 — drop
+legacy»). Идемпотентность гарантирует
 `@@unique(passportId, operationId, employeeId, sourceEventType)`
 (ADR-0012).
 

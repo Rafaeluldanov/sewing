@@ -58,14 +58,33 @@ UPDATE OperationEntry
 `BoxClosedException` не даёт повторно вызвать close ещё раз.
 
 **Что не меняется.** Источник истины и формулы расчёта
-(`OperationEntry`, `PieceRate`, `EarningsService.PIECEWORK_OPERATION_CODES`)
-остаются прежними. Ставка по-прежнему берётся как описано ниже.
+(`OperationEntry`, `EarningsService`) остаются прежними. Ставка
+по-прежнему берётся как описано ниже.
+
+> **Update 2026-04 (ADR-0020):** runtime-источник ставки —
+> `OperationsService.resolveRate(operationId, sizeId)`
+> поверх `Operation.fixedRate` / `OperationRateBySize.rate`.
+> Константа `PIECEWORK_OPERATION_CODES` снята из runtime
+> (заменено на `op.pricingMode ≠ SALARY_ONLY`).
+>
+> **Update 2026-05 (PHASE 2 STEP 1):** историческая таблица
+> `PieceRate` физически удалена (см. ADR-0020 §«PHASE 2 — drop
+> legacy»). На контракт §«Ставка» это не влияет — ставку даёт
+> `resolveRate` поверх новой модели.
 
 ### Ставка
 
-Берётся из `PieceRate` — ищется запись с максимально специфичным
-совпадением (operation+product+size → operation+product → operation),
-действующая на `createdAt` паспорта/перехода.
+Возвращает `OperationsService.resolveRate(operationId, sizeId)`:
+
+- `pricingMode = FIXED` → `Operation.fixedRate`;
+- `pricingMode = BY_SIZE` → `OperationRateBySize.rate` для
+  данного размера (отсутствие — 422 `OPERATION_RATE_MISSING`);
+- `pricingMode = SALARY_ONLY` → `null`, `EarningsService`
+  тихо пропускает операцию и не создаёт `OperationEntry`.
+
+Поиск «по специфичности» (operation+product+size → operation+product
+→ operation) был у legacy-таблицы `PieceRate`; новая модель не
+смешивает `productId` (см. ADR-0020 §5 — future work).
 
 ## Последствия
 

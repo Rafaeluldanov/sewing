@@ -116,8 +116,11 @@
   `TechCardMaterialLine`, `TechCardOutsourceLine`,
   `OrderMaterialRequirement`, `OrderOutsourceRequirement`),
   passport core (`Passport`, `PassportEvent`, `PassportDefect`,
-  `DefectType`), payroll (`OperationEntry`, `SalaryEntry`,
-  `PieceRate`), WMS-light (`Warehouse`, `WarehouseLine`, `Cell`,
+  `DefectType`), payroll (`OperationEntry`, `SalaryEntry`;
+  историческая таблица `PieceRate` удалена в PHASE 2 STEP 1, ставки
+  теперь живут в `Operation.fixedRate` / `OperationRateBySize`,
+  см. ADR-0020 §«PHASE 2 — drop legacy»), WMS-light
+  (`Warehouse`, `WarehouseLine`, `Cell`,
   `CellContent`), packing (`Box`, `BoxItem`), printing (`Printer`,
   `PrintJob`), policy (`CuttingClosureRequest`,
   `CutReleasePolicy`), audit (`AuditLog`, `MasterCall`,
@@ -856,9 +859,11 @@ weightKg = 1.05 × 180 × 100 / 1000 = 18.9 кг
    сводится к смене middleware. Сделать через feature flag
    `PATTERNS_STORAGE_DRIVER=local|s3`.
 2. **Переименование/«облагораживание» `Product`.** Не делать.
-   `Product.id` дёргается из `Passport`, `OrderItem`, `PieceRate`,
+   `Product.id` дёргается из `Passport`, `OrderItem`,
    `CuttingClosureRequest` — переименование = большая миграция и
    риск потерять историю. Вводить `PatternItem` отдельно.
+   *(До PHASE 2 STEP 1 в этот список входил и `PieceRate` —
+   таблица удалена, см. ADR-0020 §«PHASE 2 — drop legacy».)*
 3. **Связь `Order ↔ PatternItem`.** Менять только в `DRAFT`
    (общий ORDER_LOCKED guard). Иначе можно «отвязать лекало» от
    уже идущего заказа — это может разойтись с уже посчитанной
@@ -1449,14 +1454,17 @@ model MaterialStock {
 - Стало — менеджер выбирает только `PatternItem`; цвет указывается
   отдельно; технический `Product` создаётся/находится автоматически
   и остаётся живым только для legacy-связей (паспорта, payroll,
-  PieceRate, маршруты, техкарты).
+  маршруты, техкарты; историческую таблицу `PieceRate` снесли в
+  PHASE 2 STEP 1, см. ADR-0020 §«PHASE 2 — drop legacy»).
 
 ### Что НЕ меняем
 
 - `Product` как таблица остаётся (паспорта и payroll по нему живут).
 - `OrderItem.productId` остаётся обязательным.
 - `Passport.productId` не трогаем.
-- payroll / PieceRate / маршруты / техкарты / крой не меняем.
+- payroll / маршруты / техкарты / крой не меняем (историческая
+  таблица `PieceRate` удалена в PHASE 2 STEP 1, ставки живут
+  в `Operation.fixedRate` / `OperationRateBySize`).
 - Легаси-страницы `/orders/new` и `/orders/[id]/edit` оставляем как
   есть — на них полагается `CUTTER_ASSISTANT`-flow и прямые
   POST-интеграции, которые ходят с `productId` без `patternItemId`.

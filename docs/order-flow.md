@@ -752,8 +752,8 @@ Lifecycle:
 
 - Не пишет в БД (computed endpoint, без снапшотов).
 - Не назначает конкретных сотрудников по именам.
-- Не трогает payroll (`OperationEntry` / `SalaryEntry` /
-  `PieceRate`), `Passport`, `OrderCostEstimate`, `WorkshopNeed`,
+- Не трогает payroll (`OperationEntry` / `SalaryEntry`),
+  `Passport`, `OrderCostEstimate`, `WorkshopNeed`,
   `PurchaseOrder` / `PurchaseReceipt`.
 - НЕ добавляет LABOR-строку в себестоимость.
 - Не использует `Employee.salaryPerShift`.

@@ -197,14 +197,6 @@ export default async function AdminEmployeeDetailPage({
                 label: 'Создан',
                 value: new Date(employee.createdAt).toLocaleString('ru-RU'),
               },
-              ...(employee.salaryBase !== null
-                ? [
-                    {
-                      label: 'salaryBase (legacy)',
-                      value: `${employee.salaryBase} ₽/мес`,
-                    },
-                  ]
-                : []),
             ]}
           />
         </div>

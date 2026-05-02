@@ -237,7 +237,6 @@ function toListDto(e: EmployeeRow): EmployeeListItemDto {
 function toDetailDto(e: EmployeeRow): EmployeeDetailDto {
   return {
     ...toListDto(e),
-    salaryBase: e.salaryBase === null ? null : Number(e.salaryBase),
     cutterB2bSewingPercent:
       e.cutterB2bSewingPercent === null
         ? null

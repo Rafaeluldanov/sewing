@@ -96,8 +96,7 @@
 ### 2.1 Users / auth / employees
 
 - **`Employee`** — `id` (cuid), `fullName`, `login` (uniq), `pinHash`,
-  `role: Role`, `salaryBase: Decimal?` (legacy, не используется
-  payroll), `compensationType: CompensationType @default(PIECEWORK)`,
+  `role: Role`, `compensationType: CompensationType @default(PIECEWORK)`,
   `salaryPerShift: Decimal?` (для `SALARY`/`MIXED`),
   `cutterB2bSewingPercent: Decimal(5,2)?` (B2B-процент закройщика),
   `active: Boolean @default(true)`. Индексы: `role`, `compensationType`.
@@ -177,10 +176,6 @@
   используется — `seconds: Int`. `(operationId, sizeId)` uniq,
   cascade от `Operation` и от `Size`. См. §3.6 ниже и
   `docs/operation-time-norms-recon.md`.
-- **`PieceRate`** *(legacy)* — старая модель ставок (operation × product
-  × size + `validFrom/validTo`). Live runtime больше **не использует**
-  её для расчёта (`EarningsService` ходит через `OperationsService.resolveRate`),
-  но таблица оставлена для аудита/rollback (см. ADR-0020).
 - **`RouteTemplate`** — шаблон маршрута. `code` (uniq), `name`, `isActive`.
 - **`RouteTemplateStep`** — шаг шаблона: `(templateId, index)` uniq,
   `(templateId, operationId)` uniq, cascade от `RouteTemplate`.

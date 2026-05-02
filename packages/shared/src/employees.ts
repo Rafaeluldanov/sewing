@@ -246,10 +246,8 @@ const PinField = z
  *     `UpdateEmployeeSchema`: для `SALARY`/`MIXED` обязательна
  *     положительная ставка за смену.
  *
- * `salaryBase` (legacy-«месячный оклад») сюда не выведен сознательно —
- * payroll-движок MVP его не использует, и плодить лишнее поле в форме
- * создания нет смысла. При необходимости проставить его можно прямо
- * через Prisma/seed.
+ * Историческое поле `Employee.salaryBase` («месячный оклад») удалено
+ * в PHASE 2 STEP 1 — payroll-движок его никогда не использовал.
  */
 export const CreateEmployeeSchema = z
   .object({
@@ -303,11 +301,6 @@ export interface EmployeeListItemDto {
 }
 
 export interface EmployeeDetailDto extends EmployeeListItemDto {
-  /**
-   * Историческое поле «месячный оклад». На MVP не используется
-   * payroll-движком; оставлено для информации (см. ADR-0021).
-   */
-  salaryBase: number | null;
   /**
    * Процент B2B-начисления закройщика (`Employee.cutterB2bSewingPercent`,
    * Decimal(5, 2)). См. `docs/payroll-cutter-compensation-recon.md`.

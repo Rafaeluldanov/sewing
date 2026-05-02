@@ -193,10 +193,12 @@ validFrom, validTo?)` — общий «универсальный» справо
      Под `BY_SIZE` миграция дополнительно очищает строки
      `OperationRateBySize` для операций, чей итоговый режим всё-таки
      оказался `FIXED` (защита от ложных дублей).
-   3. **`PieceRate` сознательно НЕ удаляем**: это исторические
+   3. **`PieceRate` сознательно НЕ удаляем сразу**: это исторические
       данные, миграция не сносит их (rollback и аудит). На уровне
       runtime таблица больше не читается — `EarningsService` живёт
-      целиком на новой модели.
+      целиком на новой модели. *(Обновление PHASE 2 STEP 1 — см.
+      §«PHASE 2 — drop legacy» ниже: после полугода эксплуатации
+      на новой модели таблица всё-таки удалена.)*
 
 9. **Seed.** `prisma/seed.ts` обновлён под новую модель:
 
@@ -315,3 +317,52 @@ validFrom, validTo?)` — общий «универсальный» справо
   если когда-нибудь понадобится физически удалять — `OperationRateBySize`
   уже под `ON DELETE CASCADE`, `OperationEntry` остаётся как исторический
   факт.
+
+## 6. PHASE 2 — drop legacy (2026-05)
+
+Контекст: PHASE 2 (`docs/index.md §«PHASE 2 — нормализация
+сотрудников»`) готовит payroll core к PHASE 3 PayrollPayout.
+По ходу ревизии модели зарплаты обнаружены два legacy-объекта,
+которые с момента ADR-0020 уже не читаются runtime, но продолжают
+сбивать с толку при чтении схемы и при онбординге:
+
+- таблица `PieceRate` (была сохранена «для отката» по §2.8.3 выше);
+- поле `Employee.salaryBase` (исторический «оклад»; реальный
+  payroll-движок никогда его не использовал — он считает оклад
+  через `compensationType` + `salaryPerShift`, см. ADR-0021).
+
+Решение PHASE 2 STEP 1:
+
+- Миграция
+  `prisma/migrations/20260532100000_drop_legacy_salary_base_and_piece_rate/migration.sql`
+  делает `DROP TABLE IF EXISTS "PieceRate"` (вместе с FK-ограничениями
+  на `Operation`/`Product`/`Size`) и `ALTER TABLE "Employee" DROP
+  COLUMN "salaryBase"`.
+- В `prisma/schema.prisma` модель `PieceRate` и связи
+  `Operation.pieceRates`/`Product.pieceRates`/`Size.pieceRates` сняты,
+  поле `Employee.salaryBase` удалено.
+- Бизнес-исключение `PieceRateNotFoundException` снято из
+  `apps/api/src/common/errors.ts` — единственный источник «нет
+  ставки» теперь `OPERATION_RATE_MISSING` из `OperationsService.resolveRate`.
+- `prisma/seed.ts` и `tests/utils/seed.ts` больше не записывают
+  `salaryBase`; никаких вспомогательных `seedPieceRates` не остаётся.
+- DTO/UI (`packages/shared/src/employees.ts`, страницы
+  `/admin/employees/*`, AdminTechInfo) не содержат `salaryBase`.
+
+Откат: миграция down не пишется (см. общий стиль миграций в репо).
+Если потребуется восстановить таблицу — это делается через копию
+БД, где `PieceRate` ещё жив; runtime восстановления не требуется,
+потому что `EarningsService` уже несколько релизов читает только
+`Operation.fixedRate` / `OperationRateBySize.rate`.
+
+Что это меняет в текущем ADR-0020:
+
+- §2.8.3 «`PieceRate` сознательно НЕ удаляем» закрыто как
+  выполненное переходное состояние — оно отработало роль защиты на
+  пилоте.
+- §«Альтернативы → Удалить `PieceRate` сразу той же миграцией»
+  больше не релевантна: к моменту drop'а runtime-зависимости уже
+  нет, и safety-окно §2.8.3 истекло.
+- Контракт §1–§5 не меняется: тарифы по-прежнему живут в
+  `Operation.fixedRate` / `OperationRateBySize`, payroll-pipeline
+  не трогается.

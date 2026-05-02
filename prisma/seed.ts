@@ -5,8 +5,8 @@
  * оборудованием и ячейками, базовые сдельные тарифы.
  *
  * Идемпотентен: повторный запуск не плодит дубликаты — используется `upsert`
- * по уникальным полям (`code`, `login`, `(operationId, productId, sizeId,
- * validFrom)` для PieceRate и т. п.).
+ * по уникальным полям (`code`, `login`,
+ * `(operationId, sizeId)` для `OperationRateBySize` и т. п.).
  *
  * Запуск:
  *   npm run db:seed
@@ -213,13 +213,6 @@ type EmployeeSeed = {
   fullName: string;
   role: Role;
   /**
-   * Историческая месячная ставка `Employee.salaryBase`. На MVP runtime
-   * её не читает — оставлена в схеме для будущего месячного payroll
-   * (см. `docs/domain.md §9.1`). Здесь сохраняем на demo-аккаунтах,
-   * чтобы карточка `/admin/employees/[id]` показывала привычные цифры.
-   */
-  salaryBase?: number;
-  /**
    * Управленческий тип компенсации (ADR-0021) — единая ось «как
    * платим». Если не задан — берём безопасный дефолт `PIECEWORK`:
    * автогенерация окладных записей не запустится, пока менеджер сам
@@ -239,27 +232,27 @@ type EmployeeSeed = {
  * перестройки: `login` уже стабильный ключ.
  */
 const EMPLOYEES: readonly EmployeeSeed[] = [
-  { login: 'admin',         fullName: 'Демо Админ',              role: 'ADMIN',             salaryBase: 0 },
-  { login: 'shop-chief',    fullName: 'Демо Начальник цеха',     role: 'SHOP_MANAGER',      salaryBase: 120_000 },
+  { login: 'admin',         fullName: 'Демо Админ',              role: 'ADMIN' },
+  { login: 'shop-chief',    fullName: 'Демо Начальник цеха',     role: 'SHOP_MANAGER' },
   { login: 'cutter',        fullName: 'Демо Раскройщик',         role: 'CUTTER',            compensationType: 'PIECEWORK' },
-  { login: 'cutter-helper', fullName: 'Демо Помощник раскройщика', role: 'CUTTER_ASSISTANT', salaryBase: 70_000, compensationType: 'SALARY', salaryPerShift: 3_500 },
+  { login: 'cutter-helper', fullName: 'Демо Помощник раскройщика', role: 'CUTTER_ASSISTANT', compensationType: 'SALARY', salaryPerShift: 3_500 },
   { login: 'seamstress',    fullName: 'Демо Швея',               role: 'SEAMSTRESS',        compensationType: 'PIECEWORK' },
   // Вторая демо-швея для отладки сценариев с несколькими швеями на
   // смене (передача паспорта между операциями, очередь /work). Та же
   // роль / тип компенсации, что и `seamstress` — отличается только
   // login и fullName. Пароль — общий `DEMO_PASSWORD` (см. ниже).
   { login: 'seamstress2',   fullName: 'Демо Швея 2',             role: 'SEAMSTRESS',        compensationType: 'PIECEWORK' },
-  { login: 'qc',            fullName: 'Демо ОТК',                role: 'QC',                salaryBase: 75_000, compensationType: 'SALARY', salaryPerShift: 3_750 },
-  { login: 'wto',           fullName: 'Демо ВТО',                role: 'IRONING',           salaryBase: 70_000, compensationType: 'SALARY', salaryPerShift: 3_500 },
-  { login: 'packer',        fullName: 'Демо Упаковщик',          role: 'PACKING',           salaryBase: 65_000, compensationType: 'SALARY', salaryPerShift: 3_250 },
+  { login: 'qc',            fullName: 'Демо ОТК',                role: 'QC',                compensationType: 'SALARY', salaryPerShift: 3_750 },
+  { login: 'wto',           fullName: 'Демо ВТО',                role: 'IRONING',           compensationType: 'SALARY', salaryPerShift: 3_500 },
+  { login: 'packer',        fullName: 'Демо Упаковщик',          role: 'PACKING',           compensationType: 'SALARY', salaryPerShift: 3_250 },
   // Мастер цеха (MVP «Мастер цеха», см. `docs/domain.md §10a`).
   // Окладная роль: ставка за смену, без сдельных начислений. Логин
   // короткий, чтобы быстро вводить на телефоне.
-  { login: 'master',        fullName: 'Демо Мастер цеха',        role: 'SHOPFLOOR_MASTER',  salaryBase: 80_000, compensationType: 'SALARY', salaryPerShift: 4_000 },
+  { login: 'master',        fullName: 'Демо Мастер цеха',        role: 'SHOPFLOOR_MASTER',  compensationType: 'SALARY', salaryPerShift: 4_000 },
   // Аккаунт под большой экран цеха (shopfloor display). Роль read-only:
   // не считается ни в зарплате, ни в окладах — `compensationType: PIECEWORK`
-  // (без авто-окладов), `salaryBase: 0`.
-  { login: 'display',       fullName: 'Экран цеха',              role: 'DISPLAY',           salaryBase: 0 },
+  // (без авто-окладов).
+  { login: 'display',       fullName: 'Экран цеха',              role: 'DISPLAY' },
 ];
 
 async function seedUsersEmployees() {
@@ -272,8 +265,6 @@ async function seedUsersEmployees() {
     const data = {
       fullName: e.fullName,
       role: e.role,
-      salaryBase:
-        e.salaryBase !== undefined ? new Prisma.Decimal(e.salaryBase) : null,
       compensationType: e.compensationType ?? 'PIECEWORK',
       salaryPerShift:
         e.salaryPerShift !== undefined
@@ -478,9 +469,9 @@ async function seedCells() {
 
 /**
  * Демо-цифры для BY_SIZE-операций (см. ADR-0017, `docs/domain.md §16a`).
- * Источник истины сдельных ставок — `OperationRateBySize`. Старая
- * таблица `PieceRate` оставлена в схеме как legacy-наблюдение, но новые
- * начисления (`EarningsService.resolveRate`) её не читают.
+ * Источник истины сдельных ставок — `OperationRateBySize`. Историческая
+ * таблица `PieceRate` удалена в PHASE 2 STEP 1 (см. ADR-0020 §«PHASE 2 —
+ * drop legacy»).
  *
  * Ставки в рублях за единицу (`Decimal(12,2)`). Тиры:
  *   - kids: 104..164 — детские размеры;

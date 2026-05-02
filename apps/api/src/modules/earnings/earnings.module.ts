@@ -14,8 +14,8 @@ import { OperationsModule } from '../operations/operations.module.js';
  *
  * Зависит от `OperationsModule`, потому что источник истины ставок —
  * `OperationsService.resolveRate(...)` (см. `docs/domain.md §16a`,
- * `docs/api.md §15a`). Историческая таблица `PieceRate` для подсчёта
- * новых начислений больше не используется.
+ * `docs/api.md §15a`). Историческая таблица `PieceRate` удалена в
+ * PHASE 2 STEP 1 (см. ADR-0020).
  */
 @Module({
   imports: [OperationsModule],

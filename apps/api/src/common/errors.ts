@@ -534,9 +534,10 @@ export class OperationRateDuplicateSizeException extends BusinessException {
  * Для `pricingMode = BY_SIZE` для конкретного размера не задана ставка.
  * Бросается `OperationsService.resolveRate` и/или `EarningsService`,
  * когда сдельную ставку нужно посчитать, но управление операцией
- * её не содержит. Сообщение совместимо по смыслу с
- * `PIECE_RATE_NOT_FOUND` (старый код), но кодом ошибки отличается —
- * чтобы было видно, что источник истины уже новый.
+ * её не содержит. На MVP это явная бизнес-ошибка, а не silent skip —
+ * иначе доверие к зарплатной логике сломается при первой же забытой
+ * ставке. Заменил исторический `PIECE_RATE_NOT_FOUND` (удалён в
+ * PHASE 2 STEP 1 вместе с таблицей `PieceRate`).
  */
 export class OperationRateMissingException extends BusinessException {
   constructor(operationCode: string, sizeCode: string) {
@@ -831,23 +832,6 @@ export class PackingShiftRequiredException extends BusinessException {
 // ---------------------------------------------------------------------------
 // Earnings / payroll (Шаг 9)
 // ---------------------------------------------------------------------------
-
-/**
- * Не нашли действующей `PieceRate` для пары `(operationId, sizeId)`
- * (с учётом `productId = null` — общая ставка). На MVP это явная
- * бизнес-ошибка, а не silent skip — иначе доверие к зарплатной логике
- * сломается при первой же забытой расценке. См. ADR-0005 §«Ставка»
- * и `docs/api.md §10`.
- */
-export class PieceRateNotFoundException extends BusinessException {
-  constructor(operationCode: string, sizeCode: string) {
-    super(
-      'PIECE_RATE_NOT_FOUND',
-      `Нет действующей расценки для операции ${operationCode} и размера ${sizeCode}. Заполните PieceRate.`,
-      HttpStatus.UNPROCESSABLE_ENTITY,
-    );
-  }
-}
 
 /** На MVP не выбрасывается из API, но зарезервирован под детальный lookup. */
 export class EarningNotFoundException extends BusinessException {

@@ -416,8 +416,8 @@ export class OrdersService {
    * Этап «Номенклатура = Лекала» (см. `docs/recon-soft-integration.md
    * §«Номенклатура = Лекала»`): для выбранного `PatternItem`
    * возвращает id «технического» legacy Product, который пойдёт в
-   * `OrderItem.productId` (а через него — в Passport / PieceRate /
-   * прочий старый учёт).
+   * `OrderItem.productId` (а через него — в Passport / прочий
+   * старый учёт).
    *
    * Инварианты:
    *   - один лекало = один Product (`PatternItem.legacyProductId @unique`),
@@ -1320,7 +1320,7 @@ export class OrdersService {
       // Этап «Номенклатура = Лекала»: если в DRAFT-заказе менеджер
       // меняет лекало на новое (не на null), пересчитываем legacy
       // `OrderItem.productId` по новому лекалу — иначе паспорта /
-      // PieceRate / старый учёт продолжали бы ссылаться на старый
+      // старый учёт продолжали бы ссылаться на старый
       // Product, не связанный с актуальным лекалом. Если меняется
       // на null (сброс лекала) — `OrderItem.productId` не трогаем,
       // оставляем последнюю legacy-привязку. Если параллельно

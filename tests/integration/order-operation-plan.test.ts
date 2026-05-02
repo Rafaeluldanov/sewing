@@ -24,7 +24,9 @@
  *   - UI (smoke `order-operation-plan.smoke.test.ts`);
  *   - сам расчёт WorkshopNeed / OrderCostEstimate
  *     (это `workshop-needs.test.ts` / `order-cost-estimates.test.ts`);
- *   - payroll/Passport/PieceRate (этап 2 их не трогает).
+ *   - payroll/Passport (этап 2 их не трогает; историческая
+ *     таблица PieceRate удалена в PHASE 2 STEP 1, ставки живут
+ *     в Operation.fixedRate / OperationRateBySize).
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import { Prisma } from '@prisma/client';
