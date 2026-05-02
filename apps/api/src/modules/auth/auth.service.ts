@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcryptjs';
 import type { Employee, Role } from '@prisma/client';
@@ -24,8 +24,8 @@ export class AuthService {
   private readonly appUrl: string | null;
 
   constructor(
-    private readonly prisma: PrismaService,
-    config: ConfigService,
+    @Inject(PrismaService) private readonly prisma: PrismaService,
+    @Inject(ConfigService) config: ConfigService,
   ) {
     const secret = config.get<string>('JWT_SECRET') ?? '';
     if (!secret || secret === 'change-me-in-prod') {

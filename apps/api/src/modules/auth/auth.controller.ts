@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, Post, Req, Res } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, Req, Res } from '@nestjs/common';
 import type { Response } from 'express';
 import {
   LoginRequestSchema,
@@ -28,7 +28,11 @@ import {
  */
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly auth: AuthService) {}
+  // `@Inject(AuthService)` задан явно, потому что dev-раннер (`tsx watch`
+  // через esbuild) не эмитит `design:paramtypes` — без явного декоратора
+  // Nest DI не подставит AuthService, и `this.auth` окажется `undefined`
+  // уже на `/api/auth/login`.
+  constructor(@Inject(AuthService) private readonly auth: AuthService) {}
 
   @Public()
   @Post('login')

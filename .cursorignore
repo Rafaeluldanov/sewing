@@ -1,0 +1,15 @@
+node_modules
+.next
+dist
+coverage
+.cache
+.turbo
+.git
+prisma/migrations
+docs/archive
+docs/pilot
+docs/recon-*.md
+docs/*-recon.md
+README.md
+*.log
+package-lock.json
