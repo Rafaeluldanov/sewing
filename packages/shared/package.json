@@ -17,6 +17,7 @@
     "./packing": "./src/packing.ts",
     "./earnings": "./src/earnings.ts",
     "./payroll-payouts": "./src/payroll-payouts.ts",
+    "./payroll-accrual-documents": "./src/payroll-accrual-documents.ts",
     "./shopfloor": "./src/shopfloor.ts",
     "./admin": "./src/admin.ts",
     "./diagnostics": "./src/diagnostics.ts",

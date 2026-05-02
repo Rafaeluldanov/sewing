@@ -2432,3 +2432,83 @@ export class PayrollLockedException extends BusinessException {
     super('PAYROLL_LOCKED', message, HttpStatus.CONFLICT);
   }
 }
+
+// ---------------------------------------------------------------------------
+// PayrollAccrualDocument (PHASE 3 STEP 6)
+// ---------------------------------------------------------------------------
+
+/**
+ * Документ начисления зарплаты (`PayrollAccrualDocument`) не найден.
+ * `GET /api/payroll/accrual-documents/:id` при отсутствующем id.
+ */
+export class PayrollAccrualDocumentNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'PAYROLL_ACCRUAL_DOCUMENT_NOT_FOUND',
+      'Документ начисления зарплаты не найден.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Операция недопустима в текущем статусе `PayrollAccrualDocument`.
+ * Например, `recompute`/`pay`/`cancel` на уже `PAID`/`CANCELLED`
+ * документе.
+ */
+export class PayrollAccrualDocumentInvalidStateException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'PAYROLL_ACCRUAL_DOCUMENT_INVALID_STATE',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Строка документа начисления (`PayrollAccrualDocumentLine`) не найдена
+ * в указанном документе.
+ * `PATCH /api/payroll/accrual-documents/:id/lines/:lineId`.
+ */
+export class PayrollAccrualDocumentLineNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND',
+      'Строка документа начисления зарплаты не найдена.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * При проводке документа (`pay`) одна или несколько строк
+ * `OperationEntry`/`SalaryEntry` из snapshot уже входят в активную
+ * выплату (`DRAFT`/`ISSUED`/`ACKNOWLEDGED`).
+ */
+export class PayrollAccrualLineAlreadyPaidException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'PAYROLL_ACCRUAL_LINE_ALREADY_PAID',
+      message,
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * Документ содержит строки с `manualAdjustRub != 0`, но
+ * `PayrollPayoutLineKind` не содержит значения `ADJUSTMENT`.
+ * Проводка заблокирована до расширения enum в STEP 6.3/6.4.
+ */
+export class PayrollAccrualManualAdjustNotSupportedException extends BusinessException {
+  constructor() {
+    super(
+      'PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED',
+      'Ручные корректировки (manualAdjustRub ≠ 0) не могут быть перенесены ' +
+        'в выплату: PayrollPayoutLineKind не содержит ADJUSTMENT. ' +
+        'Обнулите корректировки или дождитесь STEP 6.3/6.4.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}

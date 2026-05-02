@@ -908,6 +908,73 @@ Snapshot строк (см. `PayrollPayoutLine.snapshot`):
 
 ---
 
+<a id="30c-payroll-accrual-documents"></a>
+## 30c. Payroll accrual documents (PHASE 3 STEP 6)
+
+Источник: `payroll-accrual-documents/payroll-accrual-documents.controller.ts` +
+`payroll-accrual-documents/payroll-accrual-documents.service.ts`. DTO/zod —
+`packages/shared/src/payroll-accrual-documents.ts`. Источник истины модели —
+`prisma/schema.prisma::PayrollAccrualDocument` / `PayrollAccrualDocumentLine`
+(см. [docs/erd.md §2.9](./erd.md#29-salary--earnings)).
+
+Менеджер создаёт DRAFT-документ с `accrualDate` (дата начисления включительно):
+система рассчитывает строки по всем сотрудникам из `OperationEntry` (APPROVED,
+`createdAt ≤ accrualDate 23:59:59.999 UTC`) и `SalaryEntry` (`date ≤ accrualDate`).
+Уже попавшие в активные `PayrollPayoutLine` (`DRAFT`/`ISSUED`/`ACKNOWLEDGED`)
+начисления исключаются. При проводке (`pay`) для каждой строки с
+`amountToPayRub > 0` создаётся индивидуальный `PayrollPayout` в статусе `ISSUED`.
+
+Жизненный цикл — `PayrollAccrualDocumentStatus`:
+`DRAFT → PAID` или `DRAFT → CANCELLED`. `PAID` и `CANCELLED` — терминальные.
+
+**Все endpoints доступны только `SHOP_MANAGER` / `ADMIN`.**
+
+| Метод | Путь                                                            | RBAC                | Описание |
+| ----- | --------------------------------------------------------------- | ------------------- | -------- |
+| GET   | `/api/payroll/accrual-documents`                                | SHOP_MANAGER, ADMIN | Query `PayrollAccrualDocumentListQuerySchema` (`{ status?, dateFrom?, dateTo?, page?, pageSize? }`). Фильтрация по статусу и `accrualDate`. Сортировка `createdAt desc`. Возвращает `PayrollAccrualDocumentPageDto` (без `lines`, но с `linesCount`). |
+| POST  | `/api/payroll/accrual-documents`                                | SHOP_MANAGER, ADMIN | Body `CreatePayrollAccrualDocumentDto` (`{ accrualDate, managerComment? }`). Создаёт `DRAFT` и рассчитывает строки по всем сотрудникам: APPROVED `OperationEntry` (`createdAt ≤ accrualDate 23:59:59.999 UTC`, не в активных выплатах) + `SalaryEntry` (`date ≤ accrualDate`, не в активных выплатах). Строка создаётся только при `amountPieceworkRub + amountSalaryRub > 0`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_CREATED`. |
+| GET   | `/api/payroll/accrual-documents/:id`                            | SHOP_MANAGER, ADMIN | Карточка со строками `lines` (полный `PayrollAccrualDocumentDto`). 404 `PAYROLL_ACCRUAL_DOCUMENT_NOT_FOUND` при отсутствии. |
+| POST  | `/api/payroll/accrual-documents/:id/recompute`                  | SHOP_MANAGER, ADMIN | Только DRAFT. Пересчитывает авто-часть строк; `manualAdjustRub` / `manualComment` сохраняются по `employeeId`. Строка без начислений и `manualAdjustRub = 0` удаляется. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_RECOMPUTED`. |
+| PATCH | `/api/payroll/accrual-documents/:id/lines/:lineId`              | SHOP_MANAGER, ADMIN | Только DRAFT. Body `UpdatePayrollAccrualDocumentLineDto` (`{ manualAdjustRub?, manualComment? }`). После изменения пересчитываются `amountToPayRub` и итоги документа. 404 `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_LINE_UPDATED`. |
+| POST  | `/api/payroll/accrual-documents/:id/pay`                        | SHOP_MANAGER, ADMIN | Только DRAFT. Документ переходит в `PAID`. Для каждой строки с `amountToPayRub > 0` создаётся `PayrollPayout` (статус `ISSUED`). Перед созданием повторная проверка активной уникальности → 422 `PAYROLL_ACCRUAL_LINE_ALREADY_PAID`. **STEP 6.2:** если `manualAdjustRub ≠ 0` и `PayrollPayoutLineKind` не содержит `ADJUSTMENT` → 409 `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_PAID`. |
+| POST  | `/api/payroll/accrual-documents/:id/cancel`                     | SHOP_MANAGER, ADMIN | Только DRAFT. `DRAFT → CANCELLED`. Body `CancelPayrollAccrualDocumentDto` (`{ reason? }`). PAID нельзя отменить в MVP. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_CANCELLED`. |
+
+Snapshot строки (`PayrollAccrualDocumentLine.snapshot`):
+```json
+{
+  "accrualDate": "YYYY-MM-DD",
+  "operationEntryIds": ["<id>", ...],
+  "salaryEntryIds": ["<id>", ...],
+  "operationEntries": [{ "id", "operationId", "passportId", "qty", "ratePerUnit", "amount", "sourceEventType", "createdAt", "approvedAt" }],
+  "salaryEntries": [{ "id", "date", "source", "amount", "editedManually", "managerComment" }]
+}
+```
+
+Бизнес-ошибки:
+- `PAYROLL_ACCRUAL_DOCUMENT_NOT_FOUND` (404) — документ не найден;
+- `PAYROLL_ACCRUAL_DOCUMENT_INVALID_STATE` (409) — операция недопустима
+  в текущем статусе (например, `pay`/`recompute`/`cancel` после `PAID`);
+- `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND` (404) — строка не найдена
+  в документе;
+- `PAYROLL_ACCRUAL_LINE_ALREADY_PAID` (422) — начисление из snapshot
+  уже входит в активную выплату на момент проводки;
+- `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED` (409) — строка с
+  `manualAdjustRub ≠ 0`, но `PayrollPayoutLineKind` не содержит
+  `ADJUSTMENT`; требуется STEP 6.3/6.4.
+
+**Примечание `manualAdjustRub`:** в STEP 6.2 `manualAdjustRub` хранится
+в документе и учитывается в `amountToPayRub`, но при проводке (`pay`)
+не может быть перенесён в `PayrollPayoutLine`, если enum
+`PayrollPayoutLineKind` не расширен на `ADJUSTMENT`. Расширение —
+STEP 6.3/6.4.
+
+Связанные документы:
+[docs/erd.md §2.9](./erd.md#29-salary--earnings),
+[docs/events.md §3.4 «PAYROLL_ACCRUAL_DOCUMENT»](./events.md#34-payroll_accrual_document),
+[docs/domain.md §«Документ начисления зарплаты»](./domain.md#документ-начисления-зарплаты).
+
+---
+
 <a id="31-salary"></a>
 ## 31. Salary
 
