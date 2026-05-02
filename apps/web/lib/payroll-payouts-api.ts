@@ -1,5 +1,5 @@
 /**
- * Серверные обёртки над `/api/payroll-payouts/*` (PHASE 3 STEP 4–5).
+ * Серверные обёртки над `/api/payroll/payouts/*` (PHASE 3 STEP 4–5).
  *
  * Функции для менеджеров используются из RSC `/admin/payroll/payouts/*`
  * под ролями `SHOP_MANAGER` / `ADMIN`.
@@ -21,7 +21,7 @@ import { apiFetch } from './api';
 export function listPayrollPayouts(
   query: Partial<PayrollPayoutListQuery> = {},
 ): Promise<PayrollPayoutPageDto> {
-  return apiFetch<PayrollPayoutPageDto>('/payroll-payouts', {
+  return apiFetch<PayrollPayoutPageDto>('/payroll/payouts', {
     searchParams: {
       employeeId: query.employeeId,
       status: query.status,
@@ -35,7 +35,7 @@ export function listPayrollPayouts(
 
 export function getPayrollPayout(id: string): Promise<PayrollPayoutDto> {
   return apiFetch<PayrollPayoutDto>(
-    `/payroll-payouts/${encodeURIComponent(id)}`,
+    `/payroll/payouts/${encodeURIComponent(id)}`,
     { cache: 'no-store' },
   );
 }
@@ -43,7 +43,7 @@ export function getPayrollPayout(id: string): Promise<PayrollPayoutDto> {
 export function createPayrollPayout(
   dto: CreatePayrollPayoutDto,
 ): Promise<PayrollPayoutDto> {
-  return apiFetch<PayrollPayoutDto>('/payroll-payouts', {
+  return apiFetch<PayrollPayoutDto>('/payroll/payouts', {
     method: 'POST',
     body: dto,
   });
@@ -54,14 +54,14 @@ export function recomputePayrollPayout(
   dto: RecomputePayrollPayoutDto = {},
 ): Promise<PayrollPayoutDto> {
   return apiFetch<PayrollPayoutDto>(
-    `/payroll-payouts/${encodeURIComponent(id)}/recompute`,
+    `/payroll/payouts/${encodeURIComponent(id)}/recompute`,
     { method: 'POST', body: dto },
   );
 }
 
 export function issuePayrollPayout(id: string): Promise<PayrollPayoutDto> {
   return apiFetch<PayrollPayoutDto>(
-    `/payroll-payouts/${encodeURIComponent(id)}/issue`,
+    `/payroll/payouts/${encodeURIComponent(id)}/issue`,
     { method: 'POST', body: {} },
   );
 }
@@ -71,7 +71,7 @@ export function cancelPayrollPayout(
   dto: CancelPayrollPayoutDto = {},
 ): Promise<PayrollPayoutDto> {
   return apiFetch<PayrollPayoutDto>(
-    `/payroll-payouts/${encodeURIComponent(id)}/cancel`,
+    `/payroll/payouts/${encodeURIComponent(id)}/cancel`,
     { method: 'POST', body: dto },
   );
 }
