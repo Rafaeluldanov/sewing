@@ -43,6 +43,13 @@ export async function resetDatabase(prisma: {
   // Список таблиц синхронизирован с `prisma/schema.prisma`.
   const tables = [
     'AuditLog',
+    // PHASE 3 «PayrollPayout»: выплаты + строки. Подчинены `Employee`
+    // (несколько relation-ов: employee/createdBy/issuedBy/...). Без
+    // явного truncate `TRUNCATE Employee CASCADE` всё равно бы их
+    // снёс, но явный список читабельнее и страхует от случайной
+    // потери CASCADE-связи в будущем.
+    'PayrollPayoutLine',
+    'PayrollPayout',
     // Этап «Себестоимость заказа»: история расчётов + строки.
     // Подчинены `Order` через `ON DELETE CASCADE`, но truncate явный
     // ради читаемости и стабильности (UNIQUE `(orderId, version)`

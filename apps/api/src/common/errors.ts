@@ -2314,3 +2314,83 @@ export class CompanyDivisionInactiveException extends BusinessException {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Payroll payouts (PHASE 3, см.
+// `apps/api/src/modules/payroll-payouts/*`,
+// `prisma/schema.prisma::PayrollPayout` / `PayrollPayoutLine`,
+// `packages/shared/src/payroll-payouts.ts`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Карточка выплаты `PayrollPayout` не найдена. Бросается из
+ * `PayrollPayoutsService.get/recompute/issue/ack/cancel`. Тот же код
+ * сервис возвращает обычному сотруднику, который пытается прочитать
+ * чужую выплату — UI этой роли «чужой документ не существует»,
+ * 403 нарочно не отдаём, чтобы не утекали id.
+ */
+export class PayrollPayoutNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'PAYROLL_PAYOUT_NOT_FOUND',
+      'Выплата не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Недопустимый переход статуса выплаты. На MVP допустимы:
+ *   DRAFT → ISSUED (recompute + issue),
+ *   DRAFT → CANCELLED,
+ *   ISSUED → ACKNOWLEDGED,
+ *   ISSUED → CANCELLED.
+ * Любой другой переход (например, попытка `recompute` после ISSUED,
+ * `cancel` после ACKNOWLEDGED, повторный `issue` или `ack` от
+ * другого сотрудника) отдаёт эту 409 с конкретным сообщением.
+ */
+export class PayrollPayoutInvalidTransitionException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'PAYROLL_PAYOUT_INVALID_TRANSITION',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Подтверждать получение выплаты (`POST /api/payroll/payouts/:id/ack`)
+ * имеет право только сам сотрудник-получатель. Если запрос пришёл
+ * от любой другой роли (включая `SHOP_MANAGER`/`ADMIN`) и
+ * `viewer.employeeId !== payout.employeeId` — отдаём 403, чтобы
+ * менеджер случайно не «расписался» за работника.
+ */
+export class PayrollPayoutForbiddenAckException extends BusinessException {
+  constructor() {
+    super(
+      'PAYROLL_PAYOUT_FORBIDDEN_ACK',
+      'Подтвердить получение выплаты может только сам сотрудник-получатель.',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * Активный инвариант PHASE 3: одна и та же `OperationEntry` /
+ * `SalaryEntry` не может попасть сразу в две не-`CANCELLED`
+ * выплаты (`DRAFT` / `ISSUED` / `ACKNOWLEDGED`). На уровне БД
+ * `@@unique` на `operationEntryId` / `salaryEntryId` сознательно
+ * НЕ ставится — после `CANCELLED` строка снова доступна. Сервис
+ * `PayrollPayoutsService.collectLines` проверяет конфликт перед
+ * созданием/обновлением `PayrollPayoutLine` и бросает эту 422.
+ */
+export class PayrollPayoutLineAlreadyIncludedException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED',
+      message,
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}

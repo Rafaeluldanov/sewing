@@ -16,6 +16,7 @@
     "./wto": "./src/wto.ts",
     "./packing": "./src/packing.ts",
     "./earnings": "./src/earnings.ts",
+    "./payroll-payouts": "./src/payroll-payouts.ts",
     "./shopfloor": "./src/shopfloor.ts",
     "./admin": "./src/admin.ts",
     "./diagnostics": "./src/diagnostics.ts",

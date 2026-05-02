@@ -242,7 +242,44 @@ export type AuditEntityType =
    * `SalaryEntry` для истории не заводим — это сознательно (см. ТЗ
    * STEP 4 «Не создавать новую таблицу истории»).
    */
-  | 'SALARY_ENTRY';
+  | 'SALARY_ENTRY'
+  /**
+   * Выплаты зарплаты (PHASE 3, см.
+   * `apps/api/src/modules/payroll-payouts/*`,
+   * `prisma/schema.prisma::PayrollPayout` / `PayrollPayoutLine`,
+   * `packages/shared/src/payroll-payouts.ts`,
+   * `docs/erd.md §2.9`). События пишутся в той же транзакции, что и
+   * соответствующая мутация в `PayrollPayoutsService`:
+   *
+   *   - `PAYROLL_PAYOUT_CREATED` — менеджер создал черновик через
+   *     `POST /api/payroll/payouts` (статус `DRAFT`); payload —
+   *     `{ employeeId, periodFrom, periodTo, amountPieceworkRub,
+   *     amountSalaryRub, amountTotalRub, lineCount }`.
+   *   - `PAYROLL_PAYOUT_LINES_RECOMPUTED` — менеджер пересобрал
+   *     строки `DRAFT`-выплаты (`POST /…/recompute`); payload —
+   *     `{ employeeId, periodFrom, periodTo,
+   *     before:{ amountTotalRub, lineCount },
+   *     after:{ amountTotalRub, lineCount } }`.
+   *   - `PAYROLL_PAYOUT_ISSUED` — менеджер выдал выплату
+   *     (`POST /…/issue`, переход `DRAFT → ISSUED`); payload —
+   *     `{ employeeId, periodFrom, periodTo, amountTotalRub,
+   *     issuedById }`.
+   *   - `PAYROLL_PAYOUT_ACKNOWLEDGED` — сотрудник подтвердил
+   *     получение (`POST /…/ack`, переход `ISSUED → ACKNOWLEDGED`);
+   *     payload — `{ employeeId, acknowledgedByEmployeeId,
+   *     amountTotalRub }`.
+   *   - `PAYROLL_PAYOUT_CANCELLED` — менеджер отменил выплату
+   *     (`POST /…/cancel`, переход `DRAFT|ISSUED → CANCELLED`);
+   *     payload — `{ employeeId, fromStatus, cancelledById,
+   *     cancelReason }`.
+   *
+   * `entityId = PayrollPayout.id`. `employeeId` события (см.
+   * `AuditLogInput`) — это `viewer.employeeId`, то есть «кто
+   * нажал кнопку»; `payload.employeeId` — это сотрудник-получатель
+   * выплаты. Это разные люди для CREATE/RECOMPUTE/ISSUE/CANCEL и
+   * один и тот же — для ACKNOWLEDGED.
+   */
+  | 'PAYROLL_PAYOUT';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

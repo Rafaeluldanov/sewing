@@ -351,7 +351,7 @@ ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
-SALARY_ENTRY
+SALARY_ENTRY | PAYROLL_PAYOUT
 ```
 
 <a id="33-salary-entry"></a>
@@ -545,6 +545,57 @@ runtime-коде (не из комментариев/документации). 
     OrderCutIssueRule.id`, payload содержит `passportId` /
     `qty` / `beforeIssued` / `afterIssued` / `sizeCode` /
     `orderId`.
+
+<a id="33b-payroll-payout"></a>
+
+#### Выплаты зарплаты (`entityType = PAYROLL_PAYOUT`)
+
+Источник: `apps/api/src/modules/payroll-payouts/payroll-payouts.service.ts`,
+[`docs/api.md §«Payroll payouts»`](./api.md#30b-payroll-payouts),
+`prisma/schema.prisma::PayrollPayout`. Все события пишутся в той же
+транзакции, что и соответствующая мутация. `entityId =
+PayrollPayout.id`. `employeeId` события (см. `AuditLogInput`) — это
+`viewer.employeeId` (кто нажал кнопку); `payload.employeeId` —
+сотрудник-получатель (для CREATE/RECOMPUTE/ISSUE/CANCEL это разные
+люди, для ACKNOWLEDGED — один и тот же).
+
+- `PAYROLL_PAYOUT_CREATED` — `PayrollPayoutsService.create`.
+  `POST /api/payroll/payouts` создал черновик. Payload —
+  `{ payoutId, employeeId, periodFrom, periodTo,
+  amountPieceworkRub, amountSalaryRub, amountTotalRub, lineCount,
+  createdById }`.
+- `PAYROLL_PAYOUT_LINES_RECOMPUTED` —
+  `PayrollPayoutsService.recompute`. `POST /…/recompute` пересобрал
+  строки `DRAFT`-выплаты. Payload —
+  `{ payoutId, employeeId, periodFrom, periodTo,
+  before:{ amountTotalRub, lineCount },
+  after:{ amountTotalRub, lineCount } }`.
+- `PAYROLL_PAYOUT_ISSUED` — `PayrollPayoutsService.issue`.
+  `POST /…/issue` перевёл `DRAFT → ISSUED` (внутри транзакции
+  выполнен `recompute`). Payload —
+  `{ payoutId, employeeId, periodFrom, periodTo, amountTotalRub,
+  lineCount, issuedById, issuedAt }`.
+- `PAYROLL_PAYOUT_ACKNOWLEDGED` — `PayrollPayoutsService.ack`.
+  `POST /…/ack` перевёл `ISSUED → ACKNOWLEDGED`. Подтверждать имеет
+  право только сам сотрудник-получатель — иначе сервис отдаёт 403
+  `PAYROLL_PAYOUT_FORBIDDEN_ACK` без записи аудита. Повторный `ack`
+  по уже `ACKNOWLEDGED`-выплате тем же владельцем — идемпотентен и
+  тоже **не** пишет аудит. Payload —
+  `{ payoutId, employeeId, acknowledgedByEmployeeId,
+  amountTotalRub }`.
+- `PAYROLL_PAYOUT_CANCELLED` — `PayrollPayoutsService.cancel`.
+  `POST /…/cancel` перевёл `DRAFT|ISSUED → CANCELLED`. `ACKNOWLEDGED`
+  отменить нельзя — сервис отдаст 409 `PAYROLL_PAYOUT_INVALID_TRANSITION`.
+  Payload — `{ payoutId, employeeId, fromStatus, cancelledById,
+  cancelReason }`.
+
+`OperationEntry` / `SalaryEntry` сервис **не** меняет — статус
+выплаты живёт исключительно в `PayrollPayout`. Активная уникальность
+строк (одна `OperationEntry` / `SalaryEntry` — максимум в одной
+не-`CANCELLED` выплате) проверяется в `rebuildLines` и при конфликте
+бросает 422 `PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED` — отдельного
+события для этого нет (бизнес-операция отбивается до записи
+аудита).
 
 <a id="33a-payroll-phase-1-read-only"></a>
 
