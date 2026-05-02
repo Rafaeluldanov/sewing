@@ -58,6 +58,7 @@
 | `OrderStatus` | `DRAFT`, `CALCULATION`, `CALCULATION_DONE`, `IN_PRODUCTION`, `DONE`, `CANCELLED` | `prisma/schema.prisma::enum OrderStatus` |
 | `OutsourceTriggerType` | `MANUAL`, `CUT_READY` | `prisma/schema.prisma::enum OutsourceTriggerType` |
 | `PassportEventType` | `CREATED`, `OPERATION_STARTED`, `OPERATION_FINISHED`, `MOVED`, `DEFECT_RECORDED`, `CELL_PLACED`, `CELL_REMOVED`, `ISSUED_TO_EMPLOYEE`, `OPERATION_SCAN`, `QC_PASSED`, `WTO_PASSED`, `PACKED`, `CANCELLED` | `prisma/schema.prisma::enum PassportEventType` |
+| `PayrollAccrualDocumentStatus` | `DRAFT`, `PAID`, `CANCELLED` | `prisma/schema.prisma::enum PayrollAccrualDocumentStatus` |
 | `PayrollPayoutLineKind` | `PIECEWORK`, `SALARY` | `prisma/schema.prisma::enum PayrollPayoutLineKind` |
 | `PayrollPayoutStatus` | `DRAFT`, `ISSUED`, `ACKNOWLEDGED`, `CANCELLED` | `prisma/schema.prisma::enum PayrollPayoutStatus` |
 | `PassportStatus` | `CREATED`, `IN_PROGRESS`, `PACKED`, `CANCELLED` | `prisma/schema.prisma::enum PassportStatus` |
@@ -337,6 +338,32 @@
   после `CANCELLED` выплаты строка снова доступна для включения в
   новую выплату. Индексы: `payoutId`, `operationEntryId`,
   `salaryEntryId`, `(kind, occurredOn)`.
+
+- **`PayrollAccrualDocument`** *(PHASE 3 STEP 6.1)* — управленческий
+  документ «начисление зарплаты на дату». `accrualDate: Date` —
+  дата расчёта включительно (учитываются только `OperationEntry` /
+  `SalaryEntry` с датой ≤ `accrualDate`), `status: PayrollAccrualDocumentStatus
+  @default(DRAFT)`, snapshot-итоги
+  `totalPieceworkRub` / `totalSalaryRub` / `totalAdjustRub` /
+  `totalToPayRub` (`Decimal(12,2)`, `default 0`), `managerComment?`,
+  `createdById → Employee` (`onDelete: Restrict`) + опциональные роли
+  `paidById?` / `cancelledById? → Employee` (`onDelete: SetNull`).
+  Индексы: `(status, accrualDate)`, `createdById`, `paidById`,
+  `cancelledById`, `createdAt`. Жизненный цикл —
+  `PayrollAccrualDocumentStatus`: `DRAFT → PAID | CANCELLED`.
+- **`PayrollAccrualDocumentLine`** *(PHASE 3 STEP 6.1)* — строка
+  документа начисления. `documentId → PayrollAccrualDocument`
+  (`onDelete: Cascade`), `employeeId → Employee` (`onDelete: Restrict`),
+  `amountPieceworkRub` / `amountSalaryRub` / `manualAdjustRub` /
+  `amountToPayRub` (`Decimal(12,2)`), `manualComment?`,
+  `payoutId? → PayrollPayout` (`onDelete: SetNull`) — заполняется
+  после перевода документа в `PAID`,
+  `snapshot: Json` — свёрнутый JSON-вид начислений на момент
+  формирования строки. `@@unique([documentId, employeeId])`.
+  Индексы: `documentId`, `employeeId`, `payoutId`.
+
+  Граф связей: `PayrollAccrualDocument → PayrollAccrualDocumentLine
+  → PayrollPayout` (через `payoutId` после PAID).
 
 > **Payroll PHASE 1 (read-only).** Управленческий блок «Зарплата»
 > (`/api/payroll/*`, `apps/api/src/modules/payroll/*`,

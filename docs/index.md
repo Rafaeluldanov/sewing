@@ -452,6 +452,22 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   `tests/integration/payroll-employee-detail.test.ts`,
   smoke `tests/smoke/payroll-admin.smoke.test.ts`.
 
+- [ ] **PHASE 3 STEP 6.1 «Payroll accrual document data model».** Добавлена
+  модель данных документа начисления зарплаты. Новый enum
+  `PayrollAccrualDocumentStatus` (`DRAFT` / `PAID` / `CANCELLED`),
+  модели `PayrollAccrualDocument` (документ на дату `accrualDate`,
+  snapshot-итоги `totalPieceworkRub` / `totalSalaryRub` /
+  `totalAdjustRub` / `totalToPayRub`) и `PayrollAccrualDocumentLine`
+  (строка на сотрудника, `@@unique([documentId, employeeId])`,
+  `payoutId? → PayrollPayout`). Обратные связи добавлены в
+  `Employee` (3 роли: создал/провёл/отменил + строки) и
+  `PayrollPayout` (`accrualDocumentLines`). Миграция —
+  `20260603100000_add_payroll_accrual_documents` (аддитивная).
+  Shared-контракты — `packages/shared/src/payroll-accrual-documents.ts`.
+  Сервис/контроллер/UI — не реализованы (STEP 6.2+).
+  Документы: [`docs/erd.md §2.9`](./erd.md#29-salary--earnings).
+  Тесты — `tests/smoke/payroll-accrual-documents-model.smoke.test.ts`.
+
 - [x] **PHASE 2 STEP 5 «Полировка Employee/Payroll UI».** Карточка
   `/admin/employees/[id]` теперь читаемо показывает оси
   компенсации в read-режиме: «Тип оплаты», «Ставка за смену»
