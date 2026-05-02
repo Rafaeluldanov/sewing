@@ -21,6 +21,13 @@ interface SizeOption {
   remaining: number;
 }
 
+/** Активный сотрудник роли `CUTTER` для select-а раскройщика. */
+export interface CutterOption {
+  id: string;
+  fullName: string;
+  login: string;
+}
+
 interface Props {
   orderId: string;
   orderNumber: string;
@@ -54,6 +61,19 @@ interface Props {
    * всё равно дополнительно фиксируется на сервере через `bind()`.
    */
   isCutterAssistant: boolean;
+  /**
+   * PHASE 2 STEP 3 — Cutter attribution.
+   *
+   * Если creator имеет роль `CUTTER` (рабочее место раскройщика),
+   * select раскройщика прячется, и backend подставит самого creator.
+   * Иначе показываем select из `cutterOptions` — backend требует
+   * явный `cutterId`, чтобы immediate-начисление пошло правильному
+   * сотруднику (см. `apps/api/src/modules/passports/passports.service.ts`,
+   * `docs/api.md §13`).
+   */
+  creatorIsCutter: boolean;
+  /** Список активных раскройщиков (`Employee.role = CUTTER && active`). */
+  cutterOptions: CutterOption[];
 }
 
 const initialState: PassportFormState = {};
@@ -107,6 +127,8 @@ function NewPassportFormInner({
   disabled,
   canRequestCuttingClosure,
   isCutterAssistant,
+  creatorIsCutter,
+  cutterOptions,
   onIssueAnother,
 }: Props & { onIssueAnother: () => void }) {
   // Помощник раскройщика на /work получает inline-режим: server action
@@ -131,6 +153,16 @@ function NewPassportFormInner({
   const [requestClosure, setRequestClosure] = useState(false);
 
   const selected = sortedSizes.find((s) => s.sizeId === sizeId);
+
+  // PHASE 2 STEP 3: select раскройщика для не-CUTTER ролей.
+  // По умолчанию — первый активный CUTTER, чтобы менеджер не тыкал
+  // лишний раз (это не сильнее старого «по умолчанию seed `cutter`»
+  // — теперь хотя бы видно, какой раскройщик подставлен).
+  const showCutterSelect = !creatorIsCutter && cutterOptions.length > 0;
+  const noActiveCutters = !creatorIsCutter && cutterOptions.length === 0;
+  const [cutterId, setCutterId] = useState<string>(
+    cutterOptions[0]?.id ?? '',
+  );
 
   // Success-state. Помощнику раскройщика отдаём компактный
   // post-create блок (печать + «Выпустить следующий»), всем
@@ -275,6 +307,42 @@ function NewPassportFormInner({
           />
         </div>
       </div>
+
+      {showCutterSelect && (
+        <div className="form-row">
+          <label htmlFor="cutterId">Раскройщик</label>
+          <div>
+            <select
+              id="cutterId"
+              name="cutterId"
+              required
+              value={cutterId}
+              onChange={(e) => setCutterId(e.target.value)}
+            >
+              {cutterOptions.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.fullName} ({c.login})
+                </option>
+              ))}
+            </select>
+            <div className="hint">
+              Сдельное начисление за раскрой запишется выбранному
+              сотруднику. См.{' '}
+              <code>docs/api.md §24a «Cutter attribution»</code>.
+            </div>
+          </div>
+        </div>
+      )}
+
+      {noActiveCutters && (
+        <div className="error-box">
+          Нет активных сотрудников с ролью раскройщика. Заведите
+          раскройщика в <Link href="/admin/employees">/admin/employees</Link>{' '}
+          или активируйте существующего — без этого backend не сможет
+          записать сдельное начисление за раскрой (
+          <code>CUTTER_REQUIRED</code>).
+        </div>
+      )}
 
       {closureAvailable && (
         <ClosureOptIn

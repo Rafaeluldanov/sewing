@@ -626,7 +626,7 @@ DTO: `packages/shared` (re-export через `@sewing/shared`).
 
 | Метод | Путь                                          | RBAC                                  | Описание |
 | ----- | --------------------------------------------- | ------------------------------------- | -------- |
-| POST  | `/api/passports`                              | CUTTER, CUTTER_ASSISTANT, SHOP_MANAGER (+ ADMIN) | Body `CreatePassportDto`. В одной транзакции: создаёт паспорт, фиксирует `PassportEvent(CREATED)`, генерирует `OperationEntry(IMMEDIATE)` для раскройщика (ADR-0005). 409 `CUTTING_CLOSED` для `APPROVED` заявки на закрытие раскроя. |
+| POST  | `/api/passports`                              | CUTTER, CUTTER_ASSISTANT, SHOP_MANAGER (+ ADMIN) | Body `CreatePassportDto`. В одной транзакции: создаёт паспорт, фиксирует `PassportEvent(CREATED)`, генерирует `OperationEntry(IMMEDIATE)` для раскройщика (ADR-0005). PHASE 2 STEP 3 — требуется явная атрибуция раскройщика: `cutterId` обязателен для не-CUTTER ролей (`CUTTER_REQUIRED`); если creator — CUTTER, `cutterId` опционален и по умолчанию атрибутируется creator-у. См. §«Cutter attribution» ниже. Ошибки: 400 `CUTTER_REQUIRED` / `CUTTER_NOT_FOUND` / `CUTTER_INACTIVE`, 409 `CUTTING_CLOSED` для `APPROVED` заявки на закрытие раскроя. |
 | GET   | `/api/passports/:id`                          | Any auth                              | Карточка паспорта. |
 | POST  | `/api/passports/:id/place`                    | CUTTER, CUTTER_ASSISTANT, SHOP_MANAGER (+ ADMIN) | Body `PlacePassportDto` (`{ cellId }`). Размещает в ячейке (`currentCellId`), пишет `PassportEvent(CELL_PLACED)`. |
 | POST  | `/api/passports/:id/issue`                    | Any auth                              | Body `IssuePassportDto` (бизнес-поля; `employeeId` берётся из сессии). Швея «получает крой»: снимает с ячейки, выставляет `currentEmployeeId = me`, `status = IN_PROGRESS`, `PassportEvent(ISSUED_TO_EMPLOYEE)`. Учитывает `CutReleasePolicy`. |
@@ -639,6 +639,40 @@ DTO: `packages/shared` (re-export через `@sewing/shared`).
 
 DTO: `packages/shared/src/passports.ts`,
 `packages/shared/src/shifts.ts`. ADR: 0005, 0008, 0010, 0012, 0014.
+
+<a id="24a-cutter-attribution"></a>
+### 24a. Cutter attribution (PHASE 2 STEP 3)
+
+`POST /api/passports` теперь требует **явной атрибуции раскройщика** —
+старый fallback по seed-учётке `Employee.login = 'cutter'` удалён
+(он давал ложные начисления при любом несовпадении логина и рушил
+payroll).
+
+`CreatePassportSchema` (см. `packages/shared/src/passports.ts`)
+расширен необязательным полем:
+
+```ts
+cutterId: z.string().min(1, 'cutterId обязателен').optional()
+```
+
+Алгоритм `PassportsService.create`:
+
+1. `dto.cutterId` указан явно → ищем в БД, требуем
+   `role = CUTTER && active = true`. Иначе:
+   - сотрудник не найден / не CUTTER → `400 CUTTER_NOT_FOUND`;
+   - сотрудник CUTTER, но `active = false` → `400 CUTTER_INACTIVE`.
+2. `dto.cutterId` не указан, но `creator.role = CUTTER` → атрибуция
+   creator-у (рабочее место раскройщика, исторический happy-path).
+3. `dto.cutterId` не указан, и creator — НЕ CUTTER (CUTTER_ASSISTANT
+   / SHOP_MANAGER / ADMIN) → `400 CUTTER_REQUIRED`. UI обязан
+   показать select раскройщика для этих ролей (см.
+   `docs/screens.md §«Новый паспорт»`).
+
+Тесты атрибуции — `tests/integration/cutter-attribution.test.ts`
+(все 6 веток выше: happy-path для CUTTER, обязательность для
+не-CUTTER, явный `cutterId` идёт в начисление, ошибки
+`CUTTER_NOT_FOUND` / `CUTTER_INACTIVE`, регрессия на legacy
+`login=cutter` fallback).
 
 ---
 

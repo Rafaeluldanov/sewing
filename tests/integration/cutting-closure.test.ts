@@ -113,7 +113,14 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
     ]);
     await startOrder(t, orderId, cookies.manager);
     // Накроили часть плана — типичный кейс «факт < план».
-    await createPassport(t, cookies.manager, orderId, seed.sizes.M, 7);
+    await createPassport(
+      t,
+      cookies.manager,
+      orderId,
+      seed.sizes.M,
+      7,
+      seed.employees.cutter.id,
+    );
 
     const created = await request(t.app.getHttpServer())
       .post('/api/cutting-close-requests')
@@ -173,7 +180,14 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
       { sizeId: seed.sizes.M, qtyPlan: 10 },
     ]);
     await startOrder(t, orderId, cookies.manager);
-    await createPassport(t, cookies.manager, orderId, seed.sizes.M, 6);
+    await createPassport(
+      t,
+      cookies.manager,
+      orderId,
+      seed.sizes.M,
+      6,
+      seed.employees.cutter.id,
+    );
 
     const created = await postRequest(t, cookies.assistant, orderId, seed.sizes.M);
     const reqId = created.body.id as string;
@@ -197,6 +211,7 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
         rollNumber: 'R-AFTER',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       });
     expect(blocked.status).toBe(409);
     expect(blocked.body.code).toBe('CUTTING_CLOSED');
@@ -227,7 +242,14 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
       { sizeId: seed.sizes.M, qtyPlan: 4 },
     ]);
     await startOrder(t, orderId, cookies.manager);
-    await createPassport(t, cookies.manager, orderId, seed.sizes.M, 2);
+    await createPassport(
+      t,
+      cookies.manager,
+      orderId,
+      seed.sizes.M,
+      2,
+      seed.employees.cutter.id,
+    );
 
     const first = await postRequest(t, cookies.assistant, orderId, seed.sizes.M);
     const rejected = await request(t.app.getHttpServer())
@@ -238,7 +260,14 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
     expect(rejected.body.status).toBe('REJECTED');
 
     // Новый паспорт всё ещё можно выпускать (REJECTED не блокирует).
-    await createPassport(t, cookies.manager, orderId, seed.sizes.M, 1);
+    await createPassport(
+      t,
+      cookies.manager,
+      orderId,
+      seed.sizes.M,
+      1,
+      seed.employees.cutter.id,
+    );
 
     // Помощник может подать заявку повторно.
     const again = await postRequest(t, cookies.assistant, orderId, seed.sizes.M);
@@ -344,6 +373,7 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
       orderId,
       seed.sizes.M,
       5,
+      seed.employees.cutter.id,
     );
     const passportL = await createPassport(
       t,
@@ -351,6 +381,7 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
       orderId,
       seed.sizes.L,
       4,
+      seed.employees.cutter.id,
     );
 
     // По L подаём + reject + повторно reject (через новую заявку),
@@ -437,6 +468,7 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
         rollNumber: 'R-COMBINED-1',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 4,
+        cutterId: seed.employees.cutter.id,
       });
     expect(passportRes.status).toBe(201);
     const passportId = passportRes.body.id as string;
@@ -474,7 +506,14 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
     await startOrder(t, orderId, cookies.manager);
 
     // 1) По строке уже есть APPROVED-заявка от прошлой попытки.
-    await createPassport(t, cookies.manager, orderId, seed.sizes.M, 5);
+    await createPassport(
+      t,
+      cookies.manager,
+      orderId,
+      seed.sizes.M,
+      5,
+      seed.employees.cutter.id,
+    );
     const first = await postRequest(t, cookies.assistant, orderId, seed.sizes.M);
     await request(t.app.getHttpServer())
       .post(`/api/cutting-close-requests/${first.body.id}/approve`)
@@ -495,6 +534,7 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
         rollNumber: 'R-COMBINED-2',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       });
     expect(blocked.status).toBe(409);
     expect(blocked.body.code).toBe('CUTTING_CLOSED');
@@ -517,6 +557,7 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
         rollNumber: 'R-COMBINED-3',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 3,
+        cutterId: seed.employees.cutter.id,
       });
     expect(passportRes.status).toBe(201);
     const goodPassportId = passportRes.body.id as string;
@@ -561,6 +602,7 @@ describeWithDb('integration — cutting closure requests (ADR-0018)', () => {
       orderId,
       seed.sizes.M,
       2,
+      seed.employees.cutter.id,
     );
     const res = await request(t.app.getHttpServer())
       .get(`/api/passports/${passportId}/cutting-closure-request`)
@@ -610,6 +652,7 @@ async function createPassport(
   orderId: string,
   sizeId: string,
   qtyCut: number,
+  cutterId?: string,
 ): Promise<string> {
   const r = await request(t.app.getHttpServer())
     .post('/api/passports')
@@ -620,6 +663,12 @@ async function createPassport(
       rollNumber: `R-${Math.floor(Math.random() * 1e6)}`,
       cutDate: '2026-04-15T00:00:00.000Z',
       qtyCut,
+      // PHASE 2 STEP 3: cutterId обязателен для не-CUTTER ролей
+      // (CUTTER_ASSISTANT / SHOP_MANAGER). Помощник/менеджер выпускает
+      // паспорт за раскройщика — указываем явно, чтобы immediate-
+      // начисление пошло именно ему. Tests, которым плевать на конкретную
+      // атрибуцию, передают `seed.employees.cutter.id`.
+      ...(cutterId ? { cutterId } : {}),
     })
     .expect(201);
   return r.body.id;

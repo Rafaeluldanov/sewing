@@ -30,6 +30,10 @@ import {
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 
+// PHASE 2 STEP 3: id seed-раскройщика для default-атрибуции в helper
+// `createPassport`. См. комментарий в production-flow.test.ts.
+let defaultCutterId: string | undefined;
+
 describeWithDb('integration — pilot flow (Шаг 12)', () => {
   let t: TestApp;
   let seed: SeedResult;
@@ -44,6 +48,7 @@ describeWithDb('integration — pilot flow (Шаг 12)', () => {
   beforeEach(async () => {
     await resetDatabase(t.prisma);
     seed = await seedMinimal(t.prisma);
+    defaultCutterId = seed.employees['cutter'].id;
     cookies = {
       manager: loginAs(t, seed.employees['shop-chief']),
       seamstress: loginAs(t, seed.employees['seamstress']),
@@ -422,6 +427,8 @@ async function createPassport(
       rollNumber: `R-${Math.floor(Math.random() * 1e6)}`,
       cutDate: '2026-04-15T00:00:00.000Z',
       qtyCut,
+      // PHASE 2 STEP 3: cutterId обязателен у не-CUTTER ролей.
+      ...(defaultCutterId ? { cutterId: defaultCutterId } : {}),
     })
     .expect(201);
   return r.body.id;

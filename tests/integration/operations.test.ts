@@ -392,6 +392,7 @@ describeWithDb('integration — operations management (ADR-0020)', () => {
       orderId,
       seed.sizes['S'],
       7,
+      seed.employees.cutter.id,
     );
 
     const earnings = await t.prisma.operationEntry.findMany({
@@ -420,6 +421,7 @@ describeWithDb('integration — operations management (ADR-0020)', () => {
       orderId,
       seed.sizes['S'],
       5,
+      seed.employees.cutter.id,
     );
 
     const earnings = await t.prisma.operationEntry.findMany({
@@ -454,6 +456,7 @@ describeWithDb('integration — operations management (ADR-0020)', () => {
       orderId,
       seed.sizes['M'],
       4,
+      seed.employees.cutter.id,
     );
 
     const earnings = await t.prisma.operationEntry.findMany({
@@ -505,6 +508,7 @@ async function issuePassport(
   orderId: string,
   sizeId: string,
   qtyCut: number,
+  cutterId?: string,
 ): Promise<string> {
   const res = await request(t.app.getHttpServer())
     .post('/api/passports')
@@ -515,6 +519,8 @@ async function issuePassport(
       rollNumber: `R-${Math.floor(Math.random() * 1e6)}`,
       cutDate: '2026-04-15T00:00:00.000Z',
       qtyCut,
+      // PHASE 2 STEP 3: cutterId обязателен у не-CUTTER ролей.
+      ...(cutterId ? { cutterId } : {}),
     })
     .expect(201);
   return res.body.id as string;

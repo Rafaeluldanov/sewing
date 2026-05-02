@@ -96,6 +96,7 @@ describeWithDb('integration — WTO shift-gated scan flow', () => {
         rollNumber: 'R-WTO-01',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passport.body.id;

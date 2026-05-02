@@ -1117,21 +1117,48 @@ shopfloor, pending-начисления, QC-gate.
 В `prisma.$transaction`:
 
 1. `PassportNumberService.nextNumber(tx)`.
-2. `Passport.create({ qrCode = 'passport-pending:<number>', status =
+2. `PassportsService.resolveCutter(dto.cutterId, creator)` (PHASE 2
+   STEP 3, см. ниже): валидирует явный `cutterId`
+   (`role = CUTTER && active = true`) или возвращает creator, если
+   тот сам — CUTTER. Для не-CUTTER creator-а без `cutterId` —
+   `CUTTER_REQUIRED`.
+3. `Passport.create({ qrCode = 'passport-pending:<number>', status =
    CREATED, currentOperationId = CUT_DIVISION.id, currentEmployeeId
-   = creator.id, cutterId = (Employee.login='cutter') ?? creator.id,
+   = creator.id, cutterId = resolveCutter(...).id,
    currentRouteStepIndex = (order.routeSteps.length > 0 ? 0 :
    null) })`.
-3. `Passport.update { qrCode = 'passport:<id>' }`.
-4. `PassportEvent.create({ type: CREATED, operationId =
+4. `Passport.update { qrCode = 'passport:<id>' }`.
+5. `PassportEvent.create({ type: CREATED, operationId =
    CUT_DIVISION.id, employeeId = creator.id, qty = qtyCut, payload =
    { rollNumber, color } })`.
-5. `EarningsService.createImmediateForCutter(tx, ...)` — сдельное
+6. `EarningsService.createImmediateForCutter(tx, ...)` — сдельное
    начисление раскройщику (см. §10.2).
 
-`creatorId` берётся из сессии (ADR-0014). `cutterId` на MVP — из
-seed-учётки `cutter`, fallback к `creator`. UNKNOWN/TODO: «крой
-бригадой» — отдельный шаг в будущем.
+`creatorId` берётся из сессии (ADR-0014).
+
+#### 7.4a Cutter attribution (PHASE 2 STEP 3)
+
+`cutterId` определяется явно — старая привязка к seed-учётке
+`Employee.login = 'cutter'` удалена (она давала ложные начисления
+при любом несовпадении логина и рушила payroll). Алгоритм
+(`PassportsService.resolveCutter`,
+`apps/api/src/modules/passports/passports.service.ts`):
+
+1. Если `dto.cutterId` указан → ищем сотрудника, требуем
+   `role = CUTTER && active = true`. Иначе — `CUTTER_NOT_FOUND`
+   (нет/не-CUTTER) либо `CUTTER_INACTIVE` (CUTTER, но
+   `active = false`).
+2. Если `dto.cutterId` не указан, но `creator.role = CUTTER` →
+   атрибуция creator-у (исторический happy-path рабочего места
+   раскройщика).
+3. Иначе — `CUTTER_REQUIRED` (UI обязан показать select
+   раскройщика для `CUTTER_ASSISTANT` / `SHOP_MANAGER` / `ADMIN`,
+   см. `docs/screens.md §7.5`).
+
+Контракт API и список ошибок — `docs/api.md §24a «Cutter
+attribution»`. Тесты атрибуции — `tests/integration/cutter-attribution.test.ts`
+(6 веток, включая регрессию на удалённый legacy fallback).
+UNKNOWN/TODO: «крой бригадой» — отдельный шаг в будущем.
 
 ### 7.5 Размещение в ячейку и выдача
 

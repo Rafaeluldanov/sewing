@@ -299,6 +299,69 @@ export class CellInactiveException extends BusinessException {
 }
 
 // ---------------------------------------------------------------------------
+// Cutter attribution (PHASE 2 STEP 3, см. `docs/api.md §13`,
+// `docs/domain.md §«Cutter attribution»`).
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /api/passports` пришёл от не-CUTTER (например,
+ * `CUTTER_ASSISTANT` или `SHOP_MANAGER`) без `cutterId`. Раньше
+ * сервис тихо подбирал учётку по `Employee.login = 'cutter'` —
+ * это давало ложные начисления при любом несовпадении логина и
+ * рушило payroll. PHASE 2 STEP 3 убрал fallback: атрибуция
+ * раскройщика обязана быть явной (UI это уже соблюдает).
+ *
+ * Сценарии:
+ *   - creator.role !== CUTTER и `cutterId` не передан → 400
+ *     `CUTTER_REQUIRED`;
+ *   - creator.role === CUTTER без `cutterId` → начисление
+ *     самому creator (без ошибки).
+ */
+export class CutterRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'CUTTER_REQUIRED',
+      'Укажите раскройщика — выберите его из списка перед выпуском паспорта.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Переданный `cutterId` не существует в таблице `Employee` или
+ * принадлежит сотруднику с ролью, отличной от `CUTTER`. Раньше
+ * этот кейс попадал в лог-only «cutterFromSeed not found» — на
+ * пилоте это могло привести к ошибочной атрибуции под seed-
+ * учётку. PHASE 2 STEP 3 делает явный 404.
+ */
+export class CutterNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'CUTTER_NOT_FOUND',
+      'Раскройщик не найден или не имеет роли CUTTER.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Переданный `cutterId` есть в БД и роль `CUTTER`, но карточка
+ * деактивирована (`active = false`). Начислять зарплату такому
+ * сотруднику нельзя — payroll-фильтр `active = true` его всё
+ * равно отфильтрует, и сдельное начисление окажется «ничьим».
+ * Поэтому отбиваем 409 ещё на input-валидации.
+ */
+export class CutterInactiveException extends BusinessException {
+  constructor() {
+    super(
+      'CUTTER_INACTIVE',
+      'Раскройщик деактивирован — выберите активного.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Warehouses (управленческая группировка ячеек)
 // ---------------------------------------------------------------------------
 

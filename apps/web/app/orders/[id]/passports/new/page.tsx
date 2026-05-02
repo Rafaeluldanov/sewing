@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { listEmployees } from '@/lib/employees-api';
 import { getOrder } from '@/lib/orders-api';
 import { listOrderPassports } from '@/lib/passports-api';
 import { NewPassportForm } from './new-passport-form';
@@ -47,8 +48,23 @@ export default async function NewPassportPage({
   // ссылке «← К заказу».
   const me = await getCurrentUserOrNull();
   const isCutterAssistant = me?.user.role === 'CUTTER_ASSISTANT';
+  const isCutter = me?.user.role === 'CUTTER';
   const backHref = isCutterAssistant ? '/work' : `/orders/${order.id}`;
   const backLabel = isCutterAssistant ? '← На рабочее место' : '← К заказу';
+
+  // PHASE 2 STEP 3: select раскройщика для не-CUTTER ролей. Backend
+  // требует явный `cutterId`, чтобы immediate-начисление пошло
+  // правильному сотруднику (см. `PassportsService.create`,
+  // `docs/api.md §24a`). Для creator с role=CUTTER select прячется —
+  // backend подставит самого creator. Загружаем активных CUTTER-ов.
+  const cutterEmployees = isCutter
+    ? []
+    : await listEmployees({ active: true, role: 'CUTTER' });
+  const cutterOptions = cutterEmployees.map((e) => ({
+    id: e.id,
+    fullName: e.fullName,
+    login: e.login,
+  }));
 
   return (
     <div>
@@ -76,6 +92,8 @@ export default async function NewPassportPage({
         disabled={blocked}
         canRequestCuttingClosure={isCutterAssistant}
         isCutterAssistant={isCutterAssistant}
+        creatorIsCutter={isCutter}
+        cutterOptions={cutterOptions}
       />
     </div>
   );

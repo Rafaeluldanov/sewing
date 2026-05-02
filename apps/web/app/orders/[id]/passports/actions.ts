@@ -130,12 +130,19 @@ export async function createPassportAction(
   _prev: PassportFormState,
   form: FormData,
 ): Promise<PassportFormState> {
+  // PHASE 2 STEP 3: cutterId — необязательный для creator-CUTTER (его
+  // подставит backend), и обязательный для всех остальных ролей. На
+  // клиенте select-а просто не будет, если creatorIsCutter, поэтому
+  // пустая строка тут — ожидаемый кейс. Backend всё равно валидирует
+  // через `CUTTER_REQUIRED` / `CUTTER_NOT_FOUND` / `CUTTER_INACTIVE`.
+  const cutterIdRaw = String(form.get('cutterId') ?? '').trim();
   const raw: Partial<CreatePassportDto> = {
     orderId,
     sizeId: String(form.get('sizeId') ?? '').trim(),
     cutDate: String(form.get('cutDate') ?? '').trim(),
     qtyCut: Number(form.get('qtyCut') ?? 0),
     rollNumber: String(form.get('rollNumber') ?? '').trim(),
+    ...(cutterIdRaw ? { cutterId: cutterIdRaw } : {}),
   };
   const parsed = CreatePassportSchema.safeParse(raw);
   if (!parsed.success) {

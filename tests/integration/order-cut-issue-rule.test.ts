@@ -136,6 +136,8 @@ describeWithDb('integration — order cut issue rules', () => {
         rollNumber,
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut,
+        // PHASE 2 STEP 3: cutterId обязателен у не-CUTTER ролей.
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     await request(t.app.getHttpServer())

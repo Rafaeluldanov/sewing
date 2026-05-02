@@ -276,6 +276,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-RT-1',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       });
     expect(passport.status).toBe(201);
     const passportId: string = passport.body.id;
@@ -437,6 +438,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-RT-2',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const created = await t.prisma.passport.findUnique({
@@ -506,6 +508,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-RT-HINT',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     await placePassport(t, cookies.manager, passport.body.id, seed.cells.A1.id);
@@ -592,6 +595,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-NO-ROUTE',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     await request(t.app.getHttpServer())
@@ -636,6 +640,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-RT-WORK',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     await placePassport(t, cookies.manager, passport.body.id, seed.cells.A1.id);
@@ -715,6 +720,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-WIP-G1',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passport.body.id;
@@ -812,6 +818,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-WIP-G2',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passport.body.id;
@@ -931,6 +938,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-WIP-G3',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passport.body.id;
@@ -1004,6 +1012,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-WIP-G4',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passport.body.id;
@@ -1058,6 +1067,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-WIP-G5',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passport.body.id;
@@ -1121,6 +1131,7 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
         rollNumber: 'R-LEGACY-G6',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
 

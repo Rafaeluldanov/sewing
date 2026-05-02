@@ -240,6 +240,7 @@ describeWithDb('integration — admin order edit (PATCH /orders/:id)', () => {
         rollNumber: 'R-EDIT-1',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       });
     expect(passport.status).toBe(201);
 

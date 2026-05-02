@@ -411,6 +411,7 @@ describeWithDb('integration — tech cards (MVP, ADR-0022)', () => {
         rollNumber: 'R-1',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const p2 = await request(t.app.getHttpServer())
@@ -422,6 +423,7 @@ describeWithDb('integration — tech cards (MVP, ADR-0022)', () => {
         rollNumber: 'R-2',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
 

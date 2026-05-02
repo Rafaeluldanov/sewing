@@ -110,6 +110,7 @@ describeWithDb('integration — audit log', () => {
         rollNumber: 'R-AL-1',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passport.body.id;
@@ -287,6 +288,7 @@ describeWithDb('integration — audit log', () => {
         rollNumber: 'R-AL-QC',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passport.body.id;

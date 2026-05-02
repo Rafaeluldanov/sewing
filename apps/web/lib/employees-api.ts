@@ -38,6 +38,9 @@ export function listEmployees(
       role: query.role,
       compensationType: query.compensationType,
       search: query.search,
+      // PHASE 2 STEP 2: filter by company division (для payroll-фильтра
+      // и для select-ов на формах выпуска паспорта/смены).
+      companyDivisionId: query.companyDivisionId,
     },
   });
 }

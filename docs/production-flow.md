@@ -209,31 +209,55 @@ sizeId)` (ADR-0002, ADR-0009). Денормализованные поля со�
   — иначе `BadRequestException(OPERATION_NOT_FOUND, "Запустите
   npm run db:seed")`.
 
-Внутри `$transaction`:
+Внутри `$transaction` (PHASE 2 STEP 3 — атрибуция раскройщика
+через `resolveCutter`, см. ниже):
 
 1. `PassportNumberService.nextNumber(tx)` → новый `number` вида
    `P-…`.
-2. `Passport.create(...)`: `qrCode = 'passport-pending:<number>'`
+2. `PassportsService.resolveCutter(dto.cutterId, creator)` —
+   валидирует явный `cutterId` (`role = CUTTER && active = true`)
+   или возвращает creator-а, если тот сам — CUTTER. Иначе
+   `CUTTER_REQUIRED` / `CUTTER_NOT_FOUND` / `CUTTER_INACTIVE`
+   (см. §«Cutter attribution» ниже).
+3. `Passport.create(...)`: `qrCode = 'passport-pending:<number>'`
    как заглушка; `status = CREATED`; `currentOperationId =
    CUT_DIVISION.id`; `currentEmployeeId = creator.id`; `cutterId
-   = (Employee.login='cutter') ?? creator.id`; `currentRouteStepIndex
+   = resolveCutter(...).id`; `currentRouteStepIndex
    = (order.routeSteps.length > 0) ? 0 : null`.
-3. `Passport.update { qrCode = 'passport:<id>' }` — финальный
+4. `Passport.update { qrCode = 'passport:<id>' }` — финальный
    QR-код после получения id.
-4. `PassportEvent.create({ type: CREATED, operationId:
+5. `PassportEvent.create({ type: CREATED, operationId:
    CUT_DIVISION.id, employeeId: creator.id, qty: qtyCut,
    payload: { rollNumber, color } })`.
-5. `EarningsService.createImmediateForCutter(tx, ...)` — сдельное
+6. `EarningsService.createImmediateForCutter(tx, ...)` — сдельное
    начисление раскройщику в **той же** транзакции
-   (см. §11.1).
+   (см. §11.1). Использует `cutterId`, полученный из
+   `resolveCutter`.
 
 Логирование: `event=passport.create passportId=… orderId=…
 sizeId=… qtyCut=… creatorId=…`.
 
 **`creatorId`** = текущий пользователь сессии (из ADR-0014).
-**`cutterId`** на MVP берётся из seed-учётки `cutter` (если
-есть), иначе fallback к `creator`. Когда появится «крой
-бригадой», эту логику вынесут в отдельный шаг (UNKNOWN/TODO).
+
+#### Cutter attribution (PHASE 2 STEP 3)
+
+`cutterId` определяется явно — старая привязка к seed-учётке
+`Employee.login = 'cutter'` удалена (см. JSDoc
+`PassportsService.create`):
+
+- `dto.cutterId` пришёл → ищем сотрудника, требуем
+  `role = CUTTER && active = true`. Иначе — `CUTTER_NOT_FOUND` /
+  `CUTTER_INACTIVE`.
+- `dto.cutterId` пуст, но `creator.role = CUTTER` → атрибуция
+  creator-у (рабочее место раскройщика).
+- Иначе — `CUTTER_REQUIRED`. UI обязан показать select
+  раскройщика для `CUTTER_ASSISTANT` / `SHOP_MANAGER` / `ADMIN`
+  (см. `docs/screens.md §7.5`).
+
+Контракт API — `docs/api.md §24a «Cutter attribution»`. Тесты —
+`tests/integration/cutter-attribution.test.ts`. Когда появится
+«крой бригадой», эту логику вынесут в отдельный шаг
+(UNKNOWN/TODO).
 
 ---
 

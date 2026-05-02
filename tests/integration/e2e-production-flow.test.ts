@@ -150,6 +150,7 @@ describeWithDb('integration — E2E production golden path', () => {
         rollNumber: 'R-E2E-01',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: QTY,
+        cutterId: seed.employees.cutter.id,
       })
       .expect(201);
     const passportId: string = passportRes.body.id;

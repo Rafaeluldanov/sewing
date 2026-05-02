@@ -24,6 +24,9 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   CellInactiveException,
   CellNotFoundException,
+  CutterInactiveException,
+  CutterNotFoundException,
+  CutterRequiredException,
   PassportAlreadyIssuedException,
   PassportAlreadyPackedException,
   PassportAlreadyPlacedException,
@@ -40,7 +43,7 @@ import {
   PassportSizeNotInOrderException,
   ShiftSessionRequiredException,
 } from '../../common/errors.js';
-import { OperationCategory } from '@prisma/client';
+import { OperationCategory, Role } from '@prisma/client';
 import { PassportNumberService } from './passport-number.service.js';
 import { buildPassportPrintUrl, buildPassportQrPayload } from './qr.js';
 import { EarningsService } from '../earnings/earnings.service.js';
@@ -93,10 +96,25 @@ export class PassportsService {
 
   /**
    * Создание паспорта (выпуск кроя) — `creatorId` приходит из сессии
-   * (ADR-0014). `cutterId` пока берём из seed-учётки `cutter`: на MVP
-   * 1.1 раскройщик вводится в системе только за столом помощника, а
-   * у самого раскройщика отдельной точки сканирования нет. Когда
-   * появится «крой бригадой», эту логику вынесем в отдельный шаг.
+   * (ADR-0014).
+   *
+   * **PHASE 2 STEP 3 — Cutter attribution.** `cutterId` теперь
+   * обязан быть явно определён, а не подобран по seed-учётке
+   * `Employee.login = 'cutter'` (это давало ложные начисления при
+   * любом несовпадении логина и рушило payroll, см.
+   * `docs/domain.md §«Cutter attribution»`).
+   *
+   * Алгоритм:
+   *   1. Если в `dto.cutterId` пришёл явный id — валидируем и
+   *      используем его (сотрудник должен существовать, иметь роль
+   *      `CUTTER` и `active = true`). Иначе — `CUTTER_NOT_FOUND` /
+   *      `CUTTER_INACTIVE`.
+   *   2. Если `dto.cutterId` не пришёл, но `creator.role === CUTTER`
+   *      → атрибуция creator-у самому (исторический happy-path для
+   *      рабочего места раскройщика).
+   *   3. Иначе (creator с ролью CUTTER_ASSISTANT / SHOP_MANAGER /
+   *      ADMIN без `cutterId`) → 400 `CUTTER_REQUIRED`. UI обязан
+   *      показать select раскройщика для этих ролей.
    */
   async create(
     dto: CreatePassportDto,
@@ -161,12 +179,13 @@ export class PassportsService {
     const product = orderItem.product;
     const color = order.color ?? product.color;
 
-    // creator = текущий пользователь сессии (см. ADR-0014). cutter
-    // (раскройщик) — пока seed-учётка `cutter`: у него отдельной точки
-    // сканирования на MVP нет. Если в seed нет «cutter», берём creator.
-    const [creator, cutterFromSeed, divisionOp] = await Promise.all([
+    // creator = текущий пользователь сессии (см. ADR-0014).
+    // cutter (раскройщик) с PHASE 2 STEP 3 определяется явно: либо
+    // переданный `dto.cutterId` (валидируется ниже), либо сам creator,
+    // если у него role = CUTTER. Старая привязка к seed-учётке
+    // `Employee.login = 'cutter'` удалена, см. JSDoc метода.
+    const [creator, divisionOp] = await Promise.all([
       this.prisma.employee.findUnique({ where: { id: creatorEmployeeId } }),
-      this.prisma.employee.findUnique({ where: { login: 'cutter' } }),
       this.prisma.operation.findUnique({ where: { code: 'CUT_DIVISION' } }),
     ]);
     if (!creator) {
@@ -176,7 +195,6 @@ export class PassportsService {
         message: 'Сотрудник-инициатор не найден.',
       });
     }
-    const cutter = cutterFromSeed ?? creator;
     if (!divisionOp) {
       throw new BadRequestException({
         statusCode: 400,
@@ -185,6 +203,7 @@ export class PassportsService {
           'В справочнике операций нет CUT_DIVISION. Запустите `npm run db:seed`.',
       });
     }
+    const cutter = await this.resolveCutter(dto.cutterId, creator);
 
     // Soft-route MVP: если у заказа уже есть snapshot маршрута — у
     // нового паспорта проставляем `currentRouteStepIndex = 0`. Это
@@ -1279,6 +1298,49 @@ export class PassportsService {
       },
       tx,
     );
+  }
+
+  /**
+   * PHASE 2 STEP 3 — Cutter attribution.
+   *
+   * Возвращает сотрудника-раскройщика, на которого PassportsService.create
+   * запишет immediate-начисление (через `EarningsService.createImmediateForCutter`).
+   *
+   * Контракт (см. JSDoc у `create()`):
+   *   - `dto.cutterId` пришёл явно → ищем в БД, требуем role=CUTTER и
+   *     active=true; иначе — `CUTTER_NOT_FOUND` / `CUTTER_INACTIVE`.
+   *   - `dto.cutterId` пуст, но creator.role = CUTTER → возвращаем creator
+   *     (исторический happy-path, где раскройщик сам выпускает паспорт).
+   *   - Иначе → `CUTTER_REQUIRED` (UI должен показать select раскройщика
+   *     для CUTTER_ASSISTANT / SHOP_MANAGER).
+   *
+   * Принимает уже загруженного `creator` — это избавляет от лишнего
+   * round-trip в БД (creator уже подгружен в `create()`).
+   */
+  private async resolveCutter(
+    cutterId: string | undefined,
+    creator: { id: string; role: Role; active: boolean },
+  ): Promise<{ id: string }> {
+    if (cutterId) {
+      const explicit = await this.prisma.employee.findUnique({
+        where: { id: cutterId },
+        select: { id: true, role: true, active: true },
+      });
+      if (!explicit || explicit.role !== Role.CUTTER) {
+        throw new CutterNotFoundException();
+      }
+      if (!explicit.active) {
+        throw new CutterInactiveException();
+      }
+      return { id: explicit.id };
+    }
+    if (creator.role === Role.CUTTER) {
+      // Исторический happy-path: рабочее место раскройщика, паспорт
+      // выпускается «на себя». Активность creator-а уже гарантирована
+      // тем, что он залогинен (auth-flow проверяет `Employee.active`).
+      return { id: creator.id };
+    }
+    throw new CutterRequiredException();
   }
 
   /**

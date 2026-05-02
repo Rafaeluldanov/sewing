@@ -22,6 +22,14 @@ import {
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 
+// PHASE 2 STEP 3: id seed-раскройщика, который helper `createPassport`
+// подставляет по умолчанию в тело `POST /api/passports`. Менеджер
+// (cookies.manager) не имеет роли CUTTER, и без явного `cutterId`
+// backend теперь возвращает CUTTER_REQUIRED (см.
+// `apps/api/src/modules/passports/passports.service.ts`,
+// `docs/api.md §13`).
+let defaultCutterId: string | undefined;
+
 describeWithDb('integration — full production flow (MVP 1.1)', () => {
   let t: TestApp;
   let seed: SeedResult;
@@ -36,6 +44,7 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
   beforeEach(async () => {
     await resetDatabase(t.prisma);
     seed = await seedMinimal(t.prisma);
+    defaultCutterId = seed.employees['cutter'].id;
     // Без `refreshAdminCookie` системный admin был бы стёрт TRUNCATE'ом,
     // и `t.adminCookie` ушёл бы в 401.
     await refreshAdminCookie(t);
@@ -137,6 +146,7 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
         rollNumber: 'R-01',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 5,
+        cutterId: seed.employees['cutter'].id,
       });
     expect(passport.status).toBe(201);
     const passportId: string = passport.body.id;
@@ -152,6 +162,7 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
         rollNumber: 'R-02',
         cutDate: '2026-04-15T00:00:00.000Z',
         qtyCut: 1,
+        cutterId: seed.employees['cutter'].id,
       });
     expect(overflow.status).toBe(422);
     expect(overflow.body.code).toBe('QTY_EXCEEDS_REMAINING_PLAN');
@@ -1221,7 +1232,15 @@ async function createPassport(
   orderId: string,
   sizeId: string,
   qtyCut: number,
+  cutterIdOverride?: string,
 ): Promise<string> {
+  // PHASE 2 STEP 3: backend требует явный cutterId у не-CUTTER
+  // ролей (CUTTER_ASSISTANT / SHOP_MANAGER). Подставляем seed
+  // cutter по умолчанию, чтобы существующие тесты, которые
+  // выпускают паспорт под cookies.manager, не отваливались с
+  // CUTTER_REQUIRED. Тесты, которые проверяют этот контракт
+  // явно, передают cutterIdOverride.
+  const cutterId = cutterIdOverride ?? defaultCutterId;
   const r = await request(t.app.getHttpServer())
     .post('/api/passports')
     .set('Cookie', cookie)
@@ -1231,6 +1250,7 @@ async function createPassport(
       rollNumber: `R-${Math.floor(Math.random() * 1e6)}`,
       cutDate: '2026-04-15T00:00:00.000Z',
       qtyCut,
+      ...(cutterId ? { cutterId } : {}),
     })
     .expect(201);
   return r.body.id;

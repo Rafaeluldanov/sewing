@@ -55,9 +55,16 @@ const DateStringSchema = z
  * - `qtyCut`   — количество физически раскроенных изделий (> 0,
  *                не сверх остатка плана).
  * - `rollNumber` — номер рулона ткани (свободная строка).
+ * - `cutterId` — раскройщик, на которого записываем сдельное
+ *                immediate-начисление (ADR-0005 §«Шаг 9»). PHASE 2
+ *                STEP 3: поле опциональное на схеме, но backend
+ *                требует его явно у не-CUTTER ролей (`CUTTER_ASSISTANT`,
+ *                `SHOP_MANAGER`). Для creator с `role = CUTTER` поле
+ *                можно не передавать — backend запишет паспорт на
+ *                него самого. Старая опасная привязка к seed-учётке
+ *                `login = 'cutter'` удалена.
  *
- * Цвет, изделие и `cutterId` подставляются на сервере из заказа /
- * демо-окружения (на этапе без аутентификации, см. ADR-0010).
+ * Цвет и изделие подставляются на сервере из заказа.
  */
 export const CreatePassportSchema = z.object({
   orderId: z.string().min(1, 'orderId обязателен'),
@@ -72,6 +79,7 @@ export const CreatePassportSchema = z.object({
     .trim()
     .min(1, 'Номер рулона обязателен')
     .max(64, 'Номер рулона слишком длинный'),
+  cutterId: z.string().min(1, 'cutterId обязателен').optional(),
 });
 export type CreatePassportDto = z.infer<typeof CreatePassportSchema>;
 

@@ -1040,6 +1040,20 @@ backend без UI-префикса (см.
 - **Количество** — number, `min=1`, `max = qtyPlan − Σ выпущенного по
   размеру`.
 - **Номер рулона** — text, обязательно.
+- **Раскройщик** (PHASE 2 STEP 3) — select из активных
+  `Employee.role = CUTTER`, обязателен для **не-CUTTER** ролей
+  (`CUTTER_ASSISTANT` / `SHOP_MANAGER` / `ADMIN`). Для creator с
+  ролью `CUTTER` поле скрыто — backend подставит самого creator
+  (`PassportsService.create::resolveCutter`, см. `docs/api.md §24a
+  «Cutter attribution»`). По умолчанию выбран первый активный
+  CUTTER. Если активных раскройщиков нет — показываем красную
+  плашку со ссылкой на `/admin/employees`, без неё backend
+  отвергнет создание паспорта (`CUTTER_REQUIRED`). Возможные
+  бизнес-ошибки backend: `CUTTER_REQUIRED` (поле не заполнено),
+  `CUTTER_NOT_FOUND` (id не существует или не CUTTER),
+  `CUTTER_INACTIVE` (CUTTER c `active = false`). Старого fallback-а
+  по seed-логину `cutter` нет — это сознательный регресс-стоп
+  (см. JSDoc `PassportsService.create`).
 
 Изделие и цвет — readonly из заказа. После успеха redirect на
 `/passports/[id]` + `revalidatePath('/orders/[id]')` — **только
