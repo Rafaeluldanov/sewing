@@ -50,6 +50,12 @@ describe('payroll-payouts-api.ts — acknowledge функция', () => {
     expect(src).toMatch(/\/payroll\/payouts\/.*\/ack/);
   });
 
+  test('все эндпоинты используют base path /payroll/payouts (не /payroll-payouts)', () => {
+    const src = readSrc('apps/web/lib/payroll-payouts-api.ts');
+    expect(src).not.toMatch(/['"`]\/payroll-payouts/);
+    expect(src).toMatch(/['"`]\/payroll\/payouts/);
+  });
+
   test('по-прежнему экспортирует все прежние 6 функций', () => {
     const src = readSrc('apps/web/lib/payroll-payouts-api.ts');
     expect(src).toMatch(/export\s+function\s+listPayrollPayouts\b/);

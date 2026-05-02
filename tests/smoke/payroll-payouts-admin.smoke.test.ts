@@ -70,6 +70,12 @@ describe('payroll-payouts-api.ts — клиент', () => {
     expect(src).toMatch(/\/payroll\/payouts\/.*\/ack/);
   });
 
+  test('все эндпоинты используют base path /payroll/payouts (не /payroll-payouts)', () => {
+    const src = readSrc('apps/web/lib/payroll-payouts-api.ts');
+    expect(src).not.toMatch(/['"`]\/payroll-payouts/);
+    expect(src).toMatch(/['"`]\/payroll\/payouts/);
+  });
+
   test('использует apiFetch из ./api', () => {
     const src = readSrc('apps/web/lib/payroll-payouts-api.ts');
     expect(src).toMatch(/from\s+['"]\.\/api['"]/);
