@@ -309,6 +309,16 @@
   `(employeeId, date, source)` uniq (`SalaryEntry_employee_date_source_uniq`),
   ADR-0021.
 
+> **Payroll PHASE 1 (read-only).** Управленческий блок «Зарплата»
+> (`/api/payroll/*`, `apps/api/src/modules/payroll/*`,
+> [`docs/api.md §10c`](./api.md#30a-payroll),
+> [`docs/domain.md §10.6`](./domain.md#106-payroll-phase-1-read-only))
+> сознательно НЕ заводит новых таблиц / индексов / FK. UI-агрегатор
+> читает существующие `OperationEntry` + `SalaryEntry` +
+> `ShiftSession`, объединяет их через `Employee` и дотягивает
+> «основное подразделение» через `Passport.order.companyDivisionId`.
+> Никаких новых моделей и enum-ов в этой фазе нет.
+
 <a id="210-shopfloor--display"></a>
 ### 2.10 Shopfloor / display
 

@@ -520,6 +520,32 @@ runtime-коде (не из комментариев/документации). 
     `qty` / `beforeIssued` / `afterIssued` / `sizeCode` /
     `orderId`.
 
+<a id="33a-payroll-phase-1-read-only"></a>
+
+### 3.3a. Payroll PHASE 1 — read-only, без AuditLog
+
+Источник: `apps/api/src/modules/payroll/*`,
+[`docs/api.md §10c`](./api.md#30a-payroll),
+[`docs/domain.md §10.6`](./domain.md#106-payroll-phase-1-read-only).
+
+Управленческий блок «Зарплата» в PHASE 1 сознательно read-only:
+сервис `PayrollService` ничего не пишет ни в БД, ни в `AuditLog`.
+Журналировать здесь нечего — это GET-агрегатор поверх уже
+существующих `OperationEntry` / `SalaryEntry` / `ShiftSession`,
+которые сами пишут свой `PassportEvent` / `AuditLog` (см. §2 и
+§3.3 выше).
+
+В частности:
+
+- `GET /api/payroll/period`, `/daily`, `/employees/:id` —
+  никаких записей в `AuditLog`;
+- никаких новых `PassportEventType` / `AuditEntityType`;
+- никаких новых событий «начислено/откачено/закрыт период» —
+  это область PHASE 2.
+
+UI-роуты `/admin/payroll/*` тоже не дёргают мутирующих ручек
+(см. `apps/web/lib/payroll-api.ts`: только три GET-вызова).
+
 ### 3.4. Чем отличается от `PassportEvent`
 
 | Ось                    | `PassportEvent`                                     | `AuditLog`                                              |

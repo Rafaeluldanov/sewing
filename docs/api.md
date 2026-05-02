@@ -88,6 +88,7 @@
 - [28. WTO](#28-wto)
 - [29. Packing](#29-packing)
 - [30. Earnings](#30-earnings)
+- [30a. Payroll (PHASE 1, read-only)](#30a-payroll)
 - [31. Salary](#31-salary)
 - [32. Shopfloor](#32-shopfloor)
 - [33. Display screens](#33-display-screens)
@@ -756,6 +757,46 @@ DTO: `packages/shared/src/packing.ts`. Side-effect: на сервисе
 | GET   | `/api/passports/:id/earnings`     | Any auth  | Список начислений по паспорту. SHOP_MANAGER/ADMIN видят все, остальные — только свои `APPROVED`. |
 
 DTO: `packages/shared/src/earnings.ts`. ADR: 0005, 0012.
+
+---
+
+<a id="30a-payroll"></a>
+<a id="10c"></a>
+## 30a. Payroll (PHASE 1, read-only)
+
+Источник: `payroll/payroll.controller.ts` + `payroll/payroll.service.ts`.
+Класс-уровень `@Roles('SHOP_MANAGER', 'ADMIN')`. Все роли, кроме
+`SHOP_MANAGER` и `ADMIN`, получают `403 FORBIDDEN`. Сервис ничего не
+пишет в БД — только агрегирует уже существующие
+`OperationEntry` / `SalaryEntry` / `ShiftSession` / `Employee` /
+`Order.companyDivision` (см. `docs/domain.md §10.6`,
+`docs/screens.md §12a`, ADR-0005, ADR-0021).
+
+| Метод | Путь                                | RBAC                | Описание |
+| ----- | ----------------------------------- | ------------------- | -------- |
+| GET   | `/api/payroll/period`               | SHOP_MANAGER, ADMIN | Query `PayrollPeriodQuery` (`{ dateFrom, dateTo, employeeId?, role?, divisionCode?, status?, page?, pageSize? }`). Ведомость по сотрудникам за период: суммирует `OperationEntry.amount` (сдельщина, approved + pending) и `SalaryEntry.amount` (оклад) по каждому сотруднику + общий summary (`totalApprovedRub` / `totalPendingRub` / `totalRub` / `pieceworkRub` / `salaryRub` / `salaryEditedRub` / counts). `divisionCode` фильтрует через паспорт → заказ → подразделение. |
+| GET   | `/api/payroll/daily`                | SHOP_MANAGER, ADMIN | Query `PayrollDailyQuery` (`{ date, role?, divisionCode? }`). Снимок «кто работал сегодня»: для каждого сотрудника отдаёт флаг `hadShift`, `MIN(startedAt)` / `MAX(endedAt)` (последнее `null`, если хоть одна смена не закрыта), сдельщину approved/pending за день и `SalaryEntry` за `date`. |
+| GET   | `/api/payroll/employees/:id`        | SHOP_MANAGER, ADMIN | Query `PayrollEmployeeQuery` (`{ dateFrom, dateTo }`). Карточка сотрудника: реквизиты, summary за период, `shifts[]`, `operationEntries[]` (status включает legacy `PENDING` под публичным `PENDING_RELEASE`, как в `EarningsService.toDto`), `salaryEntries[]`. 404 `EMPLOYEE_NOT_FOUND`, если сотрудника нет. |
+
+DTO: `packages/shared/src/payroll.ts`
+(`PayrollPeriodQuerySchema` / `PayrollDailyQuerySchema` /
+`PayrollEmployeeQuerySchema` + соответствующие `*Dto`).
+RBAC-константа — `apps/api/src/modules/payroll/payroll.constants.ts`
+(`PAYROLL_MANAGER_ROLES`).
+
+Что API **сознательно не делает** в PHASE 1:
+
+- не пишет в БД (никаких POST/PATCH ручек, никакой ledger-таблицы);
+- не меняет статусы / суммы / lifecycle `OperationEntry` /
+  `SalaryEntry`;
+- не пишет `AuditLog` — журналировать нечего, см.
+  `docs/events.md §«Payroll PHASE 1»`.
+
+Связанные документы:
+[docs/domain.md §10.6](./domain.md#106-payroll-phase-1-read-only),
+[docs/screens.md §12a](./screens.md#12a-payroll),
+[docs/erd.md](./erd.md),
+[docs/events.md](./events.md).
 
 ---
 

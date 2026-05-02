@@ -1,6 +1,13 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Printer, ScanLine, Users } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  BadgeRussianRuble,
+  Printer,
+  ScanLine,
+  Users,
+} from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getEmployee } from '@/lib/employees-api';
 import {
@@ -120,6 +127,25 @@ export default async function AdminEmployeeDetailPage({
               </dd>
             </dl>
             <EmployeeEditForm employee={employee} />
+          </AdminCard>
+
+          <AdminCard>
+            <AdminSectionHeader title="Зарплата за период" />
+            <p className="admin-muted" style={{ marginTop: 0 }}>
+              Карточка сотрудника в управленческом payroll-отчёте
+              (PHASE 1, read-only). Показывает смены, сдельные и
+              окладные начисления за выбранный период; редактирование
+              окладной части по-прежнему живёт в{' '}
+              <Link href="/earnings">/earnings</Link>.
+            </p>
+            <Link
+              href={`/admin/payroll/employees/${employee.id}`}
+              className="admin-btn admin-btn--primary"
+            >
+              <BadgeRussianRuble size={16} strokeWidth={1.6} aria-hidden />
+              Открыть в «Зарплате»
+              <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+            </Link>
           </AdminCard>
         </div>
 

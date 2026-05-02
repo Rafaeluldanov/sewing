@@ -416,6 +416,41 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   `docs/domain.md §«Подразделения заказа»`,
   `docs/display-board.md`, `docs/erd.md §«CompanyDivision»`.
 
+- [x] **PHASE 1 payroll admin UI (read-only).** Управленческий
+  блок «Зарплата» поверх уже работающих сдельного и окладного
+  контуров. **Никаких новых таблиц / миграций / событий** в этой
+  фазе нет: `OperationEntry` / `SalaryEntry` / `ShiftSession`
+  остаются единственным источником истины, `PackingService.close`,
+  `EarningsService` и `SalaryService` ядро — без изменений.
+  Backend — новый модуль `apps/api/src/modules/payroll/*` под
+  `SHOP_MANAGER` / `ADMIN` (`PAYROLL_MANAGER_ROLES`) с тремя
+  read-only ручками: `GET /api/payroll/period` (ведомость по
+  сотрудникам с разрезом approved / pending / оклад / сдельщина и
+  фильтрами по период / сотруднику / роли / `divisionCode` /
+  `status`), `GET /api/payroll/daily` (снимок «кто работал
+  сегодня»), `GET /api/payroll/employees/:id` (карточка
+  сотрудника с `shifts[]` / `operationEntries[]` /
+  `salaryEntries[]`). UI — `/admin/payroll`,
+  `/admin/payroll/daily`, `/admin/payroll/employees/[id]` и
+  навигационный hub `/admin/payroll/settings` (ссылки на
+  `/admin/operations`, `/admin/employees`,
+  `/admin/company-settings`); пункт «Зарплата» в `AdminSidebar`
+  виден только под `SHOP_MANAGER` / `ADMIN`. Личная страница
+  `/earnings` остаётся как есть, добавлена подсказка-ссылка
+  «Полный payroll-отчёт — в `/admin/payroll`». Контракты —
+  `packages/shared/src/payroll.ts`. Документы:
+  [`docs/api.md §10c`](./api.md#30a-payroll),
+  [`docs/domain.md §10.6`](./domain.md#106-payroll-phase-1-read-only),
+  [`docs/screens.md §12a`](./screens.md#12a-payroll),
+  [`docs/erd.md`](./erd.md#29-salary--earnings) («без новых
+  моделей» note),
+  [`docs/events.md §3.3a`](./events.md#33a-payroll-phase-1-read-only)
+  («не пишет AuditLog»). Тесты —
+  `tests/integration/payroll-period.test.ts`,
+  `tests/integration/payroll-daily.test.ts`,
+  `tests/integration/payroll-employee-detail.test.ts`,
+  smoke `tests/smoke/payroll-admin.smoke.test.ts`.
+
 - [x] **PHASE 2 «Удаление legacy `OrderDivision`».** Удалены
   `enum OrderDivision`, `Order.division`,
   `DisplayScreenConfig.division` и связанные индексы (миграция

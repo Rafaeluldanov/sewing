@@ -1734,6 +1734,116 @@ PATCH **нельзя**.
 - История изменений `SalaryEntry.amount` (только последний
   `editedBy`).
 
+<a id="106-payroll-phase-1-read-only"></a>
+
+### 10.6 Payroll PHASE 1 — read-only управленческая ведомость
+
+Источник: `apps/api/src/modules/payroll/*`,
+`packages/shared/src/payroll.ts`, `docs/api.md §10c`,
+`docs/screens.md §12a`.
+
+Задача — дать `SHOP_MANAGER` и `ADMIN` собранный взгляд на зарплату
+за период / день / по сотруднику, **не меняя ядро начислений**:
+сдельщину пишет `EarningsService`, оклад — `SalaryService`,
+закрытие коробки апрувит pending — `PackingService.close`. Payroll
+ничего из этого не трогает: только агрегирует через `groupBy` и
+`findMany`.
+
+Source of truth остаётся прежним:
+
+- сдельная зарплата → `OperationEntry`
+  (см. §10.2, ADR-0005, ADR-0012);
+- окладная зарплата → `SalaryEntry`
+  (см. §10.3, ADR-0021);
+- факт смены → `ShiftSession`
+  (см. `apps/api/src/modules/shifts/*`).
+
+**Что считаем (`/api/payroll/period`):**
+
+Релевантные сотрудники — те, у кого В ПЕРИОДЕ есть хоть одна
+строка `OperationEntry`, `SalaryEntry` или `ShiftSession`. Дальше
+по каждому считаем:
+
+- `pieceworkApprovedRub` — Σ `OperationEntry.amount`,
+  `status = APPROVED` (по `createdAt`);
+- `pieceworkPendingRub` — Σ `OperationEntry.amount`,
+  `status ∈ {PENDING_RELEASE, PENDING}` (legacy `PENDING`
+  считается тем же ведром, как и в `EarningsService.toDto`);
+- `salaryRub` — Σ `SalaryEntry.amount` по `date`
+  (включая `MANUAL`-источник, если такой появится);
+- `salaryEditedRub` — Σ `SalaryEntry.amount` среди
+  `editedManually = true` (KPI «сколько правки» для аудита);
+- `daysOnShift` — количество **уникальных дат** `startedAt::date`
+  (совпадает с правилом `SalaryService.syncDailySalary`);
+- `entriesCount` — количество строк сдельщины;
+- `companyDivision` — «основное подразделение сотрудника» как
+  подразделение с наибольшим числом сдельных строк за период
+  (`OperationEntry.passport.order.companyDivision`); для окладных
+  ролей и для сотрудников без сдельщины — `null`.
+
+Total на сотрудника:
+
+```
+totalApproved = pieceworkApproved + salaryRub
+totalPending  = pieceworkPending
+total         = totalApproved + totalPending
+```
+
+Эти три значения суммируются в `summary` ответа.
+
+**Фильтры:**
+
+- `dateFrom` / `dateTo` — обязательны (защита от случайного «всё за
+  всё время»);
+- `employeeId` / `role` — фильтр по сотруднику или его роли;
+- `divisionCode` — режет сдельщину через
+  `OperationEntry.passport.order.companyDivision.code`. Окладные
+  начисления подразделению **не принадлежат** (они прибиты к
+  сотруднику), поэтому при выбранном `divisionCode` сотрудник
+  попадает в выдачу, только если у него в этом подразделении
+  была хоть одна сдельная строка; `salaryRub` при этом
+  включается полностью (мы не дробим оклад по подразделениям —
+  это была бы искусственная атрибуция).
+- `status` — `APPROVED` / `PENDING_RELEASE` (legacy `PENDING`
+  входит в `PENDING_RELEASE`); фильтрует только сдельщину.
+
+**Что считаем (`/api/payroll/daily`):** ровно те же поля, но за
+один календарный день. Дополнительно — `hadShift` (была ли
+`ShiftSession` за `date`), `shiftStartedAt = MIN(startedAt)`,
+`shiftStoppedAt = MAX(endedAt)` (последнее `null`, если хоть одна
+смена дня не закрыта).
+
+**Что считаем (`/api/payroll/employees/:id`):** карточка одного
+сотрудника за период — реквизиты + summary + `shifts[]` +
+`operationEntries[]` + `salaryEntries[]`. Pagination сознательно
+нет: на одного сотрудника за разумный период (месяц-два) объём
+небольшой.
+
+**RBAC.** Только `SHOP_MANAGER` и `ADMIN`
+(`PAYROLL_MANAGER_ROLES` в
+`apps/api/src/modules/payroll/payroll.constants.ts`). Все
+остальные роли по-прежнему ходят за личной зарплатой через
+`/api/earnings` и `/api/salary` — там `applyViewerScope` режет
+ответ по своему `employeeId` (см. §10.4). Payroll сознательно
+жёстче: это **управленческая** ведомость, не личный кабинет.
+
+**Чего PHASE 1 НЕ делает:**
+
+- не пишет в БД (нет POST/PATCH ручек, нет ledger-таблицы);
+- не меняет статусы / суммы / lifecycle `OperationEntry` /
+  `SalaryEntry`;
+- не пишет `AuditLog` — read-only журналировать нечего
+  (см. `docs/events.md`);
+- не подменяет `Employee.salaryBase` / `PieceRate` —
+  legacy-таблицы остаются на своих местах;
+- не вводит «manual entry» / «reverse» / «lock period» — это
+  скоуп будущей PHASE 2.
+
+UI поверх этих ручек живёт в `/admin/payroll`,
+`/admin/payroll/daily`, `/admin/payroll/employees/[id]` и
+навигационном hub-е `/admin/payroll/settings`
+(см. `docs/screens.md §12a`).
+
 ---
 
 <a id="11-warehouse"></a>

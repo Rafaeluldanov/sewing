@@ -2881,6 +2881,128 @@ RBAC — `SHOP_MANAGER` / `ADMIN` (на backend), плюс `app/admin/layout.tsx
 
 ---
 
+<a id="12a-payroll"></a>
+
+## 12a. Зарплата admin UI (`/admin/payroll`, PHASE 1, read-only)
+
+Управленческий блок «Зарплата» поверх payroll-агрегатора (см.
+[`docs/api.md §10c`](./api.md#30a-payroll),
+[`docs/domain.md §10.6`](./domain.md#106-payroll-phase-1-read-only)).
+PHASE 1 ничего не пишет: страницы только показывают
+`OperationEntry` / `SalaryEntry` / `ShiftSession` сводно, никаких
+кнопок «начислить вручную» / «закрыть период» / «обнулить» нет —
+это область PHASE 2.
+
+Навигация: пункт «Зарплата» в `AdminSidebar` (`BadgeRussianRuble`
+из `lucide-react`), виден только под `SHOP_MANAGER` / `ADMIN`
+(layout `app/admin/layout.tsx` редиректит остальных). Личная
+страница сотрудника `/earnings` остаётся: рабочие роли по-прежнему
+видят только свои подтверждённые начисления, менеджер на
+`/earnings` видит подсказку-ссылку «Полный payroll-отчёт — в
+`/admin/payroll`».
+
+### 12a.1. `/admin/payroll` — ведомость за период
+
+Файл — `apps/web/app/admin/payroll/page.tsx`.
+
+- **Шапка** `AdminPageShell` с иконкой `BadgeRussianRuble`,
+  subtitle «Период `dateFrom` – `dateTo`», action-кнопки «День»
+  (на `/admin/payroll/daily`) и «Настройки» (на
+  `/admin/payroll/settings`).
+- **KPI** (5 карточек) из `summary`:
+  - «Всего начислено» (`totalRub` + `employeesCount`);
+  - «Утверждено» (`totalApprovedRub`);
+  - «Ожидает упаковки» (`totalPendingRub`);
+  - «Оклад» (`salaryRub` + `salaryEntriesCount` дн., с подсветкой
+    «N с правкой», если `salaryEditedCount > 0`);
+  - «Сдельно» (`pieceworkRub` + `pieceworkEntriesCount` строк).
+- **Фильтры** (GET-форма, `admin-form-grid`):
+  `dateFrom` / `dateTo` (обязательные, по умолчанию — текущий
+  месяц от 1-го числа до сегодня), `employeeId`,
+  `role` (`EMPLOYEE_ROLES`), `divisionCode` (активные
+  `CompanyDivision`), `status` (`APPROVED` / `PENDING_RELEASE`).
+- **Таблица** «По сотрудникам»: ФИО + роль/тип оплаты +
+  подразделение, «Дней», «Оклад» (с детализацией ручных правок
+  под суммой), «Сдельно (утв.)», «Ожидает» (с warning-подсветкой,
+  если > 0), «Итого», ссылка «Открыть» на drill-down карточку.
+  Сортировка по `totalRub DESC`, затем `fullName ASC` (делается
+  на сервере).
+- **Пагинация** `AdminPagination` по сотрудникам (50/100/200,
+  default 50). Все фильтры сохраняются в `preserveParams`.
+
+### 12a.2. `/admin/payroll/daily` — снимок дня
+
+Файл — `apps/web/app/admin/payroll/daily/page.tsx`.
+
+- **Шапка** с иконкой `CalendarDays` и subtitle с человеко-датой
+  (`toLocaleDateString('ru-RU')`).
+- **KPI** (5): «Сотрудники» (employeesCount + shiftsCount),
+  «Оклад», «Сдельно (утв.)», «Сдельно (ожидает)», «Всего за день».
+- **Фильтры**: `date` (обязательный, default — сегодня), `role`,
+  `divisionCode`. Кнопка «Сегодня» сбрасывает фильтр.
+- **Таблица** «Сотрудники за день»: ФИО + роль/тип оплаты,
+  «Смена» (`AdminStatusBadge` Открыта/Закрыта + интервал «с HH:mm»
+  или «HH:mm – HH:mm»), «Оклад», «Сдельно (утв.)», «Ожидает»,
+  «Итого», ссылка «Открыть». Если у сотрудника не было смены —
+  фраза «не было», без бейджа.
+
+### 12a.3. `/admin/payroll/employees/[id]` — карточка сотрудника
+
+Файл — `apps/web/app/admin/payroll/employees/[id]/page.tsx`.
+
+- **Шапка** с ФИО, subtitle «Роль · Тип оплаты», back-link «К
+  ведомости» и быстрая ссылка «Карточка сотрудника» на
+  `/admin/employees/:id` (там же редактируется
+  `compensationType` / `salaryPerShift`).
+- **KPI** (5): «Всего за период», «Утверждено», «Ожидает»,
+  «Оклад», «Сдельно».
+- **Период**: `dateFrom` / `dateTo` (default — текущий месяц).
+  Кнопка «Сбросить» возвращает на default-период.
+- **Таблица «Смены»** из `shifts[]`: дата, открыта/закрыта,
+  оборудование, операция.
+- **Таблица «Сдельные начисления»** из `operationEntries[]`:
+  дата, операция, паспорт (link на `/passports/:id`), заказ
+  (link на `/orders/:id`), кол-во, ставка, сумма, статус —
+  `AdminStatusBadge` (`APPROVED` → success, `PENDING_RELEASE` →
+  warning, `REVERSED` → danger).
+- **Таблица «Окладные начисления»** из `salaryEntries[]`:
+  дата, источник (`SHIFT_DAY` → «Оклад за смену», `MANUAL` →
+  «Ручное»), сумма, флаг правки (с автором), комментарий
+  менеджера.
+
+### 12a.4. `/admin/payroll/settings` — навигационный hub
+
+Файл — `apps/web/app/admin/payroll/settings/page.tsx`.
+
+PHASE 1 сознательно НЕ заводит новых настроек: ставки и тарифы
+живут в существующих разделах. Страница — три ссылки:
+
+- «Ставки операций» → `/admin/operations`
+  (`Operation.fixedRate` / `OperationRateBySize`, ADR-0020);
+- «Ставки сотрудников» → `/admin/employees`
+  (`Employee.salaryPerShift`, `compensationType`, ADR-0021);
+- «Подразделения и реквизиты» → `/admin/company-settings`
+  (`CompanyDivision` для фильтра ведомости).
+
+### 12a.5. Интеграция в карточку сотрудника
+
+В `/admin/employees/[id]` добавлен блок «Зарплата за период» с
+CTA-кнопкой «Открыть в «Зарплате»» (ведёт на
+`/admin/payroll/employees/:id`). Поверх карточки сотрудника
+никаких summary-чисел не подтягиваем — это удержало бы PHASE 1 от
+deep-integration и снимает риск разъезда с payroll-эндпоинтом.
+
+### За рамками PHASE 1 (на UI)
+
+- Кнопки «начислить вручную» / «откатить начисление» / «закрыть
+  период».
+- Ledger / журнал изменений начислений с историей по записям.
+- Удержания за брак / больничные / отпуска / командировки.
+- Экспорт в Excel/PDF и интеграция с 1С/ЗУП.
+- Дашборд «План vs факт» по операциям и ролям.
+
+---
+
 ## 17. Себестоимость выпуска (`/production-cost`)
 
 Управленческая read-only страница. Контракт API — `api.md §17`,

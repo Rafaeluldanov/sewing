@@ -30,6 +30,7 @@ import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import {
   Activity,
+  BadgeRussianRuble,
   Box,
   Building2,
   ClipboardCheck,
@@ -155,6 +156,11 @@ function buildSections(): SidebarItem[] {
       match: ['/admin/display-screens'],
     },
     { href: '/admin/employees', label: 'Сотрудники', Icon: Users },
+    {
+      href: '/admin/payroll',
+      label: 'Зарплата',
+      Icon: BadgeRussianRuble,
+    },
     { href: '/admin/equipment', label: 'Оборудование', Icon: Factory },
     { href: '/admin/operations', label: 'Операции', Icon: Scissors },
     { href: '/admin/routes', label: 'Маршруты', Icon: Activity },
