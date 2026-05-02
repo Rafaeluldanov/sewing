@@ -172,6 +172,32 @@ export interface PayrollPeriodEmployeeRowDto {
   totalRub: number;
   daysOnShift: number;
   entriesCount: number;
+  /**
+   * Gross начислено (approved) за период: `pieceworkApprovedRub + salaryRub`.
+   * Pending сдельщина (`pieceworkPendingRub`) НЕ входит: пока не
+   * утверждена, в выплату не берётся.
+   */
+  grossAccruedRub: number;
+  /**
+   * Σ сумм `PayrollPayoutLine`, привязанных к начислениям этого
+   * сотрудника за выбранный период и относящихся к активным выплатам
+   * (`PayrollPayout.status ∈ {DRAFT, ISSUED, ACKNOWLEDGED}`).
+   * `CANCELLED` не учитывается.
+   */
+  payoutCoveredRub: number;
+  /**
+   * Часть `payoutCoveredRub` от строк `kind = PIECEWORK`.
+   */
+  payoutPieceworkCoveredRub: number;
+  /**
+   * Часть `payoutCoveredRub` от строк `kind = SALARY`.
+   */
+  payoutSalaryCoveredRub: number;
+  /**
+   * Остаток к выплате прямо сейчас:
+   * `max(0, grossAccruedRub − payoutCoveredRub)`.
+   */
+  netToPayRub: number;
 }
 
 export interface PayrollPeriodSummaryDto {
@@ -192,6 +218,10 @@ export interface PayrollPeriodSummaryDto {
   pieceworkPendingCount: number;
   salaryEntriesCount: number;
   salaryEditedCount: number;
+  /** Σ `payoutCoveredRub` — сколько суммарно уже в активных выплатах. */
+  totalPayoutCoveredRub: number;
+  /** Σ `netToPayRub` — суммарный остаток к выплате сейчас. */
+  totalNetToPayRub: number;
 }
 
 export interface PayrollPeriodPageDto {

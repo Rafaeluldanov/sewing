@@ -1931,6 +1931,28 @@ UI поверх этих ручек живёт в `/admin/payroll`,
 навигационном hub-е `/admin/payroll/settings`
 (см. `docs/screens.md §12a`).
 
+**Три понятия: начислено / в выплатах / остаток к выплате**
+
+Чтобы менеджер видел актуальную задолженность по сотрудникам после
+того, как выплаты уже созданы, `/api/payroll/period` возвращает три
+дополнительных поля на строку сотрудника:
+
+| Поле | Описание |
+| ---- | -------- |
+| `grossAccruedRub` | Начислено (approved) за период: `pieceworkApprovedRub + salaryRub`. Pending сдельщина НЕ входит — она ещё не подтверждена и в выплату не берётся. Это поле **никогда не уменьшается** исторически: фиксирует сколько реально заработано. |
+| `payoutCoveredRub` | Уже включено в активные выплаты: Σ `PayrollPayoutLine.amountRub` по строкам, чьи `OperationEntry` / `SalaryEntry` попадают в выбранный период и у которых `PayrollPayout.status ∈ {DRAFT, ISSUED, ACKNOWLEDGED}`. `CANCELLED`-выплаты не учитываются — они «не закрывают» начисления. Разбивается на `payoutPieceworkCoveredRub` и `payoutSalaryCoveredRub`. |
+| `netToPayRub` | Остаток к выплате прямо сейчас: `max(0, grossAccruedRub − payoutCoveredRub)`. Если `netToPayRub = 0` и `grossAccruedRub > 0` — все одобренные начисления периода уже покрыты активными выплатами (UI показывает бейдж «выплачено/закрыто»). |
+
+`pieceworkPendingRub` / `totalPendingRub` — отдельное ведро «ожидает
+упаковки»: сдельщина ещё не утверждена, в `grossAccruedRub` и
+`netToPayRub` не попадает. Это не значит, что деньги потеряны — как
+только паспорт закроется и статус станет `APPROVED`, они войдут в
+`grossAccruedRub` следующего запроса.
+
+Summary ответа (`PayrollPeriodSummaryDto`) дополнен:
+`totalPayoutCoveredRub` и `totalNetToPayRub` — сумма по всем
+сотрудникам периода.
+
 <a id="107-payroll-payout-lock-by-line"></a>
 
 ### 10.7 Payroll payout — lock-by-line (PHASE 3 STEP 3)

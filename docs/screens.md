@@ -2981,10 +2981,14 @@ PHASE 1 ничего не пишет: страницы только показы
   subtitle «Период `dateFrom` – `dateTo`», action-кнопки «День»
   (на `/admin/payroll/daily`) и «Настройки» (на
   `/admin/payroll/settings`).
-- **KPI** (5 карточек) из `summary`:
+- **KPI** (7 карточек) из `summary`:
   - «Всего начислено» (`totalRub` + `employeesCount`);
   - «Утверждено» (`totalApprovedRub`);
   - «Ожидает упаковки» (`totalPendingRub`);
+  - «Выплачено / в выплатах» (`totalPayoutCoveredRub` — сумма активных
+    выплат DRAFT/ISSUED/ACKNOWLEDGED за период);
+  - «К выплате сейчас» (`totalNetToPayRub` = `totalApprovedRub − totalPayoutCoveredRub`,
+    подсвечивается accent, если > 0);
   - «Оклад» (`salaryRub` + `salaryEntriesCount` дн., с подсветкой
     «N с правкой», если `salaryEditedCount > 0`);
   - «Сдельно» (`pieceworkRub` + `pieceworkEntriesCount` строк).
@@ -2996,7 +3000,11 @@ PHASE 1 ничего не пишет: страницы только показы
 - **Таблица** «По сотрудникам»: ФИО + роль/тип оплаты +
   подразделение, «Дней», «Оклад» (с детализацией ручных правок
   под суммой), «Сдельно (утв.)», «Ожидает» (с warning-подсветкой,
-  если > 0), «Итого», ссылка «Открыть» на drill-down карточку.
+  если > 0), «Начислено» (`grossAccruedRub`), «Уже в выплатах»
+  (`payoutCoveredRub`), «К выплате сейчас» (`netToPayRub` — основная
+  сумма в строке; если `netToPayRub = 0` и `grossAccruedRub > 0`,
+  вместо суммы показывается бейдж «выплачено/закрыто»), «Итого»,
+  ссылка «Открыть» на drill-down карточку.
   Сортировка по `totalRub DESC`, затем `fullName ASC` (делается
   на сервере).
 - **Пагинация** `AdminPagination` по сотрудникам (50/100/200,
