@@ -19,6 +19,7 @@ import { WarehousesModule } from './modules/warehouses/warehouses.module.js';
 import { OperationsModule } from './modules/operations/operations.module.js';
 import { SalaryModule } from './modules/salary/salary.module.js';
 import { PayrollModule } from './modules/payroll/payroll.module.js';
+import { PayrollPayoutsModule } from './modules/payroll-payouts/payroll-payouts.module.js';
 import { EmployeesModule } from './modules/employees/employees.module.js';
 import { CostsModule } from './modules/costs/costs.module.js';
 import { DashboardModule } from './modules/dashboard/dashboard.module.js';
@@ -68,6 +69,7 @@ import { SizesModule } from './modules/sizes/sizes.module.js';
     OperationsModule,
     SalaryModule,
     PayrollModule,
+    PayrollPayoutsModule,
     EmployeesModule,
     CostsModule,
     DashboardModule,

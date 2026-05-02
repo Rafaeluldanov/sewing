@@ -834,6 +834,66 @@ RBAC-константа — `apps/api/src/modules/payroll/payroll.constants.ts`
 
 ---
 
+<a id="30b-payroll-payouts"></a>
+## 30b. Payroll payouts (PHASE 3)
+
+Источник: `payroll-payouts/payroll-payouts.controller.ts` +
+`payroll-payouts/payroll-payouts.service.ts`. DTO/zod —
+`packages/shared/src/payroll-payouts.ts`. Источник истины модели —
+`prisma/schema.prisma::PayrollPayout` / `PayrollPayoutLine` (см.
+[docs/erd.md §2.9](./erd.md#29-salary--earnings)).
+
+«Папка выплаты» поверх существующих `OperationEntry` / `SalaryEntry`:
+менеджер собирает черновик за период, выдаёт его сотруднику, сотрудник
+подтверждает получение. Сами таблицы начислений «выплачено» **не**
+помечаются — статус живёт в `PayrollPayout.status`. `EarningsService`
+и `SalaryService` сервис не трогает (см. PHASE 3 STEP 2 ТЗ).
+
+Жизненный цикл — `PayrollPayoutStatus`:
+`DRAFT → ISSUED → ACKNOWLEDGED|CANCELLED` или `DRAFT → CANCELLED`.
+
+| Метод | Путь                                          | RBAC                                | Описание |
+| ----- | --------------------------------------------- | ----------------------------------- | -------- |
+| GET   | `/api/payroll/payouts`                        | Any auth (scope в сервисе)          | Query `PayrollPayoutListQuery` (`{ employeeId?, status?, periodFrom?, periodTo?, page?, pageSize? }`). Менеджер/админ видят всё; обычный сотрудник — только свои строки (`employeeId = viewer.employeeId`, явный `employeeId`-фильтр игнорируется). Период интерпретируется как «выплаты, период которых пересекается с заданным». Возвращает `PayrollPayoutPageDto` (без `lines`). |
+| POST  | `/api/payroll/payouts`                        | SHOP_MANAGER, ADMIN                  | Body `CreatePayrollPayoutDto` (`{ employeeId, periodFrom, periodTo, managerComment? }`). Создаёт `DRAFT` и сразу собирает строки snapshot-ом по APPROVED `OperationEntry` за `periodFrom 00:00:00.000 UTC` — `periodTo 23:59:59.999 UTC` и `SalaryEntry` за `[periodFrom, periodTo]`. Pending сдельщина исключается. `amountPieceworkRub` / `amountSalaryRub` / `amountTotalRub` считаются из строк. Конфликт активной строки → 422 `PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED`. AuditLog: `PAYROLL_PAYOUT_CREATED`. |
+| GET   | `/api/payroll/payouts/:id`                    | Any auth (scope в сервисе)          | Карточка с `lines`. Чужой выплате обычный сотрудник получает 404 `PAYROLL_PAYOUT_NOT_FOUND`, а не 403 — иначе утекают id. |
+| POST  | `/api/payroll/payouts/:id/recompute`          | SHOP_MANAGER, ADMIN                  | Body `RecomputePayrollPayoutDto` (на MVP `{}`). Только из `DRAFT`. Удаляет текущие строки и пересобирает snapshot, пересчитывает суммы. Конфликт активной строки → 422. AuditLog: `PAYROLL_PAYOUT_LINES_RECOMPUTED` (payload `before`/`after` сумм/количества). |
+| POST  | `/api/payroll/payouts/:id/issue`              | SHOP_MANAGER, ADMIN                  | Body `IssuePayrollPayoutDto` (`{}`). Только из `DRAFT`. Внутри транзакции выполняется recompute, затем `status = ISSUED`, фиксируются `issuedAt` / `issuedById`. AuditLog: `PAYROLL_PAYOUT_ISSUED`. |
+| POST  | `/api/payroll/payouts/:id/ack`                | Any auth, **только владелец**       | Body `AckPayrollPayoutDto` (`{}`). Подтверждает только сам сотрудник-получатель: `viewer.employeeId === payout.employeeId`. Менеджер/админ за чужого работника → 403 `PAYROLL_PAYOUT_FORBIDDEN_ACK`. `ISSUED → ACKNOWLEDGED`, фиксируются `acknowledgedAt` / `acknowledgedByEmployeeId`. Повторный `ack` тем же владельцем по `ACKNOWLEDGED` — идемпотентен (возвращает текущий DTO без записи аудита). Прочие статусы → 409 `PAYROLL_PAYOUT_INVALID_TRANSITION`. AuditLog: `PAYROLL_PAYOUT_ACKNOWLEDGED`. |
+| POST  | `/api/payroll/payouts/:id/cancel`             | SHOP_MANAGER, ADMIN                  | Body `CancelPayrollPayoutDto` (`{ reason? }`). `DRAFT → CANCELLED` или `ISSUED → CANCELLED`. `ACKNOWLEDGED` отменить нельзя — 409 `PAYROLL_PAYOUT_INVALID_TRANSITION`. AuditLog: `PAYROLL_PAYOUT_CANCELLED`. |
+
+Бизнес-инвариант (active uniqueness):
+одна и та же `OperationEntry` / `SalaryEntry` не может попасть сразу
+в две **активные** выплаты (`DRAFT` / `ISSUED` / `ACKNOWLEDGED`).
+`CANCELLED`-выплаты строки **не** блокируют — после отмены строка
+снова доступна. На уровне БД `@@unique` на `operationEntryId` /
+`salaryEntryId` сознательно НЕ ставится — иначе re-include после
+`CANCELLED` был бы невозможен. Конфликт проверяется в
+`PayrollPayoutsService` перед `payrollPayoutLine.createMany` и
+отдаётся как 422 `PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED`.
+
+Snapshot строк (см. `PayrollPayoutLine.snapshot`):
+- PIECEWORK — `{ operationId, passportId, qty, ratePerUnit, amount,
+  sourceEventType, createdAt, approvedAt }`;
+- SALARY — `{ date, source, amount, editedManually, managerComment }`.
+
+Бизнес-ошибки:
+- `PAYROLL_PAYOUT_NOT_FOUND` (404) — карточка не найдена / чужая для
+  обычного сотрудника;
+- `PAYROLL_PAYOUT_INVALID_TRANSITION` (409) — недопустимый переход
+  статуса (`recompute` после `ISSUED`, `cancel` после `ACKNOWLEDGED`,
+  `ack` не из `ISSUED`/`ACKNOWLEDGED`, …);
+- `PAYROLL_PAYOUT_FORBIDDEN_ACK` (403) — попытка `ack` за чужого
+  сотрудника;
+- `PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED` (422) — строка начисления
+  уже в активной выплате.
+
+Связанные документы:
+[docs/erd.md §2.9](./erd.md#29-salary--earnings),
+[docs/events.md §3.3 «PAYROLL_PAYOUT»](./events.md#33-salary-entry).
+
+---
+
 <a id="31-salary"></a>
 ## 31. Salary
 
