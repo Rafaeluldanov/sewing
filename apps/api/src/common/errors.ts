@@ -2394,3 +2394,41 @@ export class PayrollPayoutLineAlreadyIncludedException extends BusinessException
     );
   }
 }
+
+/**
+ * PHASE 3 STEP 3 — lock-by-line. Начисление (`SalaryEntry` или
+ * `OperationEntry`) уже включено в `PayrollPayoutLine` выплаты со
+ * статусом `ISSUED` или `ACKNOWLEDGED`. Менять такое начисление
+ * нельзя — изменение «уехавшей» в выплату суммы сломало бы snapshot
+ * `PayrollPayout` и доверие сотрудника к расчётному листу
+ * («сумма после подтверждения вдруг другая»).
+ *
+ * Что блокирует:
+ *   - `PATCH /api/salary/:id` (включая `reset = true`): если
+ *     `SalaryEntry` есть в выплате со статусом `ISSUED`/`ACKNOWLEDGED`.
+ *
+ * Что НЕ блокирует:
+ *   - выплаты в `DRAFT` (черновик): пересборка строк ещё допустима,
+ *     никаких обязательств перед сотрудником ещё не зафиксировано;
+ *   - выплаты в `CANCELLED`: snapshot сознательно снят, строка снова
+ *     свободна (тот же контракт, что и для активной уникальности —
+ *     см. `PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED`);
+ *   - автоматический `SalaryService.syncDailySalary` (`start/stop
+ *     shift`): обнаружив locked-запись, делает silent skip, чтобы не
+ *     ломать сменный flow ради «правильного» оклада за уже выплаченный
+ *     день — менеджер увидит расхождение в audit и решит сам.
+ *
+ * `OperationEntry` на MVP write-once + approve-only: единственный
+ * post-create write в коде — `EarningsService.approvePendingForPassport`
+ * (PENDING_RELEASE → APPROVED при `PackingService.close`), а pending
+ * сдельщина в payout snapshot не входит. Поэтому отдельный guard для
+ * операций пока не нужен; класс зарезервирован и будет использован,
+ * как только появится ручная правка/отмена `OperationEntry`.
+ */
+export class PayrollLockedException extends BusinessException {
+  constructor(
+    message = 'Начисление уже включено в выплату и не может быть изменено.',
+  ) {
+    super('PAYROLL_LOCKED', message, HttpStatus.CONFLICT);
+  }
+}

@@ -1931,6 +1931,59 @@ UI поверх этих ручек живёт в `/admin/payroll`,
 навигационном hub-е `/admin/payroll/settings`
 (см. `docs/screens.md §12a`).
 
+<a id="107-payroll-payout-lock-by-line"></a>
+
+### 10.7 Payroll payout — lock-by-line (PHASE 3 STEP 3)
+
+Источник: `apps/api/src/modules/salary/salary.service.ts`,
+`apps/api/src/modules/payroll-payouts/*`,
+`apps/api/src/common/errors.ts::PayrollLockedException`,
+`docs/api.md §«Payroll payouts»`.
+
+Цель — защитить snapshot уже выпущенной выплаты
+(`PayrollPayout.status ∈ {ISSUED, ACKNOWLEDGED}`) от молчаливого
+пересчёта суммы под уже подтверждённой строкой. Если бы менеджер
+мог поднять `SalaryEntry.amount` после `ISSUED`, `PayrollPayoutLine`
+осталась бы со старым числом, а `/api/salary` показывало новое — и
+доверие к расчётному листу сотрудника сломалось бы.
+
+**Правило.** `SalaryEntry` или `OperationEntry`, у которой есть хотя
+бы одна `PayrollPayoutLine` с родителем в `ISSUED` или `ACKNOWLEDGED`,
+считается «locked-by-payout». Любая ручная мутация такой записи
+отбивается на сервисе как `409 PAYROLL_LOCKED`
+(`code = PAYROLL_LOCKED`, см. `docs/api.md §13`).
+
+**Что блокирует:**
+
+- `PATCH /api/salary/:id` (`SalaryService.updateManually`):
+  - обычный update (`amount` / `managerComment`) — 409 `PAYROLL_LOCKED`;
+  - `reset = true` — тоже 409 `PAYROLL_LOCKED` (вернуть запись «под
+    автоматику» нельзя — `syncDailySalary` тут же поменял бы amount,
+    что и есть запрещённый сценарий).
+
+**Что НЕ блокирует:**
+
+- выплата в `DRAFT`: черновик ещё пересобирается через
+  `recompute`/`issue`, изменение начисления безопасно;
+- выплата в `CANCELLED`: snapshot сознательно снят, строка снова
+  свободна (та же семантика, что и для `PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED` —
+  см. `docs/api.md §«Payroll payouts»`);
+- автоматический `SalaryService.syncDailySalary` (вызывается из
+  `POST /api/shifts/start` / `POST /api/shifts/stop`): на locked
+  записи делает **silent skip** — не падает ошибкой и не переписывает
+  `amount`. Сменный flow важнее «правильной» рутины оклада за
+  уже выплаченный день; расхождение при необходимости разбирается
+  через `AuditLog` (`PAYROLL_PAYOUT_*`).
+
+**OperationEntry — write-once + approve-only.** Единственный
+post-create write на MVP — `EarningsService.approvePendingForPassport`
+(`PENDING_RELEASE → APPROVED` при `PackingService.close`). Pending
+сдельщина в payout snapshot не попадает (см. `PayrollPayoutsService.rebuildLines`,
+фильтр `status = APPROVED`), а APPROVED-строка после approve уже
+не меняется. Отдельный guard для `OperationEntry` поэтому не нужен;
+`PayrollLockedException` зарезервирован и будет подключён, как только
+появится ручная правка/отмена `OperationEntry`.
+
 ---
 
 <a id="11-warehouse"></a>
