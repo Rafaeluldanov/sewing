@@ -17,6 +17,7 @@ export * from './wto';
 export * from './packing';
 export * from './earnings';
 export * from './payroll';
+export * from './payroll-payouts';
 export * from './shopfloor';
 export * from './admin';
 export * from './diagnostics';

@@ -58,6 +58,8 @@
 | `OrderStatus` | `DRAFT`, `CALCULATION`, `CALCULATION_DONE`, `IN_PRODUCTION`, `DONE`, `CANCELLED` | `prisma/schema.prisma::enum OrderStatus` |
 | `OutsourceTriggerType` | `MANUAL`, `CUT_READY` | `prisma/schema.prisma::enum OutsourceTriggerType` |
 | `PassportEventType` | `CREATED`, `OPERATION_STARTED`, `OPERATION_FINISHED`, `MOVED`, `DEFECT_RECORDED`, `CELL_PLACED`, `CELL_REMOVED`, `ISSUED_TO_EMPLOYEE`, `OPERATION_SCAN`, `QC_PASSED`, `WTO_PASSED`, `PACKED`, `CANCELLED` | `prisma/schema.prisma::enum PassportEventType` |
+| `PayrollPayoutLineKind` | `PIECEWORK`, `SALARY` | `prisma/schema.prisma::enum PayrollPayoutLineKind` |
+| `PayrollPayoutStatus` | `DRAFT`, `ISSUED`, `ACKNOWLEDGED`, `CANCELLED` | `prisma/schema.prisma::enum PayrollPayoutStatus` |
 | `PassportStatus` | `CREATED`, `IN_PROGRESS`, `PACKED`, `CANCELLED` | `prisma/schema.prisma::enum PassportStatus` |
 | `PricingMode` | `FIXED`, `BY_SIZE`, `SALARY_ONLY` | `prisma/schema.prisma::enum PricingMode` |
 | `PrintJobSource` | `PASSPORT_QR`, `PASSPORT_PRINT`, `BOX_LABEL`, `CELL_QR`, `CELL_LABEL`, `TEST` | `prisma/schema.prisma::enum PrintJobSource` |
@@ -310,6 +312,31 @@
   `managerComment?`, `editedByEmployeeId? → Employee` (Editor).
   `(employeeId, date, source)` uniq (`SalaryEntry_employee_date_source_uniq`),
   ADR-0021.
+- **`PayrollPayout`** *(PHASE 3 STEP 1)* — управленческий документ
+  «выплата зарплаты сотруднику за период». `employeeId → Employee`,
+  `periodFrom: Date`, `periodTo: Date`, `status: PayrollPayoutStatus
+  @default(DRAFT)`, snapshot-итоги
+  `amountPieceworkRub` / `amountSalaryRub` / `amountTotalRub`
+  (`Decimal(12,2)`, `default 0`), `managerComment?`,
+  `createdById → Employee` + опциональные роли
+  `issuedById?` / `acknowledgedByEmployeeId?` /
+  `cancelledById? → Employee` (`onDelete: SetNull` для опциональных,
+  `Restrict` для `employeeId` / `createdById`). Индексы:
+  `(employeeId, status)`, `(periodFrom, periodTo)`,
+  `(status, createdAt)`. Жизненный цикл — `PayrollPayoutStatus`,
+  активная уникальность строк начислений в выплате проверяется
+  сервисом (см. `PayrollPayoutLine` ниже).
+- **`PayrollPayoutLine`** *(PHASE 3 STEP 1)* — строка выплаты.
+  `payoutId → PayrollPayout` (`onDelete: Cascade`),
+  `kind: PayrollPayoutLineKind`, ровно одна из
+  `operationEntryId? → OperationEntry` /
+  `salaryEntryId? → SalaryEntry` (`onDelete: SetNull`),
+  `amountRub: Decimal(12,2)`, `occurredOn: Date`,
+  `snapshot: Json`. На уровне БД `@@unique` на
+  `operationEntryId` / `salaryEntryId` сознательно НЕ ставится:
+  после `CANCELLED` выплаты строка снова доступна для включения в
+  новую выплату. Индексы: `payoutId`, `operationEntryId`,
+  `salaryEntryId`, `(kind, occurredOn)`.
 
 > **Payroll PHASE 1 (read-only).** Управленческий блок «Зарплата»
 > (`/api/payroll/*`, `apps/api/src/modules/payroll/*`,

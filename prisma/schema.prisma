@@ -340,6 +340,43 @@ enum PrintJobSource {
   TEST
 }
 
+/// Жизненный цикл выплаты зарплаты сотруднику (PHASE 3 «PayrollPayout»,
+/// см. `docs/erd.md §2.9`, `docs/domain.md §10.7`).
+///
+/// Отдельная сущность от `OperationEntry` / `SalaryEntry`: эти таблицы
+/// остаются «начислениями» (исторически сколько заработал), а
+/// `PayrollPayout` фиксирует «факт выплаты» — формирование пакета
+/// строк начислений в выплату конкретному сотруднику за период.
+///
+/// - `DRAFT`        — менеджер собирает выплату, может пересчитывать
+///                    набор строк (`PayrollPayoutLine`). Активная
+///                    блокировка повторного включения строк
+///                    проверяется в сервисе.
+/// - `ISSUED`       — менеджер «выдал» выплату: snapshot сумм и строк
+///                    зафиксирован, сотрудник видит у себя ожидающее
+///                    подтверждение. Из этого состояния доступно
+///                    только `ACKNOWLEDGED` или `CANCELLED`.
+/// - `ACKNOWLEDGED` — сотрудник подтвердил получение. Терминальный
+///                    статус, повторно включать те же строки нельзя.
+/// - `CANCELLED`    — выплата отменена менеджером. Терминальный
+///                    статус; строки `OperationEntry` / `SalaryEntry`
+///                    освобождаются и могут попасть в новую выплату.
+enum PayrollPayoutStatus {
+  DRAFT
+  ISSUED
+  ACKNOWLEDGED
+  CANCELLED
+}
+
+/// Тип строки выплаты `PayrollPayoutLine` — из какой подсистемы
+/// начислений (`OperationEntry` / `SalaryEntry`) пришла строка.
+/// Дублирует выбор «либо `operationEntryId`, либо `salaryEntryId`»
+/// явным enum-ом, чтобы UI и аналитика не лезли в FK.
+enum PayrollPayoutLineKind {
+  PIECEWORK
+  SALARY
+}
+
 // =========================
 // DICTIONARIES
 // =========================
@@ -692,6 +729,16 @@ model Employee {
   /// удаление учётки не сносит исторический override.
   materialArrivalOverridesCreated OrderMaterialArrivalOverride[] @relation("OrderMaterialArrivalOverrideCreatedBy")
   materialArrivalOverridesRevoked OrderMaterialArrivalOverride[] @relation("OrderMaterialArrivalOverrideRevokedBy")
+
+  /// PHASE 3 «PayrollPayout» (см. `model PayrollPayout` ниже,
+  /// `docs/erd.md §2.9`, `docs/domain.md §10.7`). Обратные связи
+  /// для каждой роли в выплате — получатель, автор черновика,
+  /// тот кто выдал, сам сотрудник-подтвердивший и тот кто отменил.
+  payrollPayouts                PayrollPayout[] @relation("PayrollPayoutEmployee")
+  createdPayrollPayouts         PayrollPayout[] @relation("PayrollPayoutCreatedBy")
+  issuedPayrollPayouts          PayrollPayout[] @relation("PayrollPayoutIssuedBy")
+  acknowledgedPayrollPayouts    PayrollPayout[] @relation("PayrollPayoutAcknowledgedBy")
+  cancelledPayrollPayouts       PayrollPayout[] @relation("PayrollPayoutCancelledBy")
 
   @@index([role])
   @@index([compensationType])
@@ -1307,6 +1354,11 @@ model OperationEntry {
   operation Operation @relation(fields: [operationId], references: [id])
   employee  Employee  @relation(fields: [employeeId], references: [id])
 
+  /// PHASE 3 «PayrollPayout»: обратные строки выплат, в которые попало
+  /// это сдельное начисление. Без `@@unique` со стороны строки —
+  /// активная уникальность проверяется в сервисе.
+  payrollPayoutLines PayrollPayoutLine[]
+
   /// Идемпотентность сдельных начислений (Шаг 9, ADR-0012):
   /// один и тот же сотрудник не получает второе начисление за ту же
   /// операцию по тому же паспорту в рамках одного и того же источника.
@@ -1365,9 +1417,108 @@ model SalaryEntry {
   employee Employee  @relation(fields: [employeeId], references: [id])
   editedBy Employee? @relation("SalaryEntryEditor", fields: [editedByEmployeeId], references: [id])
 
+  /// PHASE 3 «PayrollPayout»: обратные строки выплат, в которые попало
+  /// это окладное начисление. Без `@@unique` со стороны строки —
+  /// активная уникальность проверяется в сервисе.
+  payrollPayoutLines PayrollPayoutLine[]
+
   @@unique([employeeId, date, source], name: "SalaryEntry_employee_date_source_uniq")
   @@index([employeeId, date])
   @@index([date])
+}
+
+/// Выплата зарплаты сотруднику за период (PHASE 3, см.
+/// `docs/erd.md §2.9`, `docs/domain.md §10.7`).
+///
+/// Отдельный документ, который менеджер формирует поверх уже
+/// созданных начислений (`OperationEntry` / `SalaryEntry`):
+/// внутри `PayrollPayoutLine` лежит набор строк за период,
+/// snapshot-ом фиксируются денежные итоги (`amountPieceworkRub`,
+/// `amountSalaryRub`, `amountTotalRub`). Сами таблицы начислений
+/// **не помечаются как «выплачено»** — статус выплаты живёт здесь.
+///
+/// Жизненный цикл — `PayrollPayoutStatus`:
+/// `DRAFT → ISSUED → (ACKNOWLEDGED | CANCELLED)` или
+/// `DRAFT → CANCELLED`. Активную уникальность «одна строка
+/// начисления — максимум в одной не-CANCELLED выплате» проверяет
+/// сервис: на уровне БД `@@unique` на `operationEntryId` /
+/// `salaryEntryId` НЕ ставится — это сломало бы пере-включение
+/// строки в новую выплату после `CANCELLED`.
+model PayrollPayout {
+  id                       String              @id @default(cuid())
+  employeeId               String
+  /// Период, за который сформирована выплата. Хранится как
+  /// `DATE` (без времени), сравнивается с `OperationEntry.createdAt`
+  /// (`occurredOn`-снимок строки) и `SalaryEntry.date`.
+  periodFrom               DateTime            @db.Date
+  periodTo                 DateTime            @db.Date
+  status                   PayrollPayoutStatus @default(DRAFT)
+  /// Snapshot-итоги по выплате. Заполняются при `recompute`/`issue`
+  /// и больше не пересчитываются автоматически после `ISSUED`.
+  amountPieceworkRub       Decimal             @db.Decimal(12, 2) @default(0)
+  amountSalaryRub          Decimal             @db.Decimal(12, 2) @default(0)
+  amountTotalRub           Decimal             @db.Decimal(12, 2) @default(0)
+  managerComment           String?             @db.Text
+  createdAt                DateTime            @default(now())
+  createdById              String
+  issuedAt                 DateTime?
+  issuedById               String?
+  acknowledgedAt           DateTime?
+  acknowledgedByEmployeeId String?
+  cancelledAt              DateTime?
+  cancelledById            String?
+  cancelReason             String?             @db.Text
+  updatedAt                DateTime            @updatedAt
+
+  employee       Employee  @relation("PayrollPayoutEmployee", fields: [employeeId], references: [id])
+  createdBy      Employee  @relation("PayrollPayoutCreatedBy", fields: [createdById], references: [id])
+  issuedBy       Employee? @relation("PayrollPayoutIssuedBy", fields: [issuedById], references: [id])
+  acknowledgedBy Employee? @relation("PayrollPayoutAcknowledgedBy", fields: [acknowledgedByEmployeeId], references: [id])
+  cancelledBy    Employee? @relation("PayrollPayoutCancelledBy", fields: [cancelledById], references: [id])
+  lines          PayrollPayoutLine[]
+
+  @@index([employeeId, status])
+  @@index([periodFrom, periodTo])
+  @@index([status, createdAt])
+}
+
+/// Строка выплаты `PayrollPayout`. Ровно одна из
+/// (`operationEntryId`, `salaryEntryId`) обязана быть заполнена;
+/// `kind` дублирует выбор enum-ом для удобства фильтров.
+///
+/// `snapshot` хранит свёрнутый JSON-вид начисления на момент
+/// добавления строки в выплату (паспорт/операция/сотрудник/qty/rate/
+/// amount для PIECEWORK; date/source/amount для SALARY) — чтобы
+/// после правки исходного начисления / справочников выплата всё
+/// ещё показывала «как было выдано».
+///
+/// `@@unique` на `operationEntryId` / `salaryEntryId` сознательно НЕ
+/// ставится: после `CANCELLED` выплаты строки начислений снова
+/// доступны. Активную уникальность («строка в максимум одной
+/// не-CANCELLED выплате») проверяет `PayrollPayoutsService`.
+model PayrollPayoutLine {
+  id                String                @id @default(cuid())
+  payoutId          String
+  kind              PayrollPayoutLineKind
+  operationEntryId  String?
+  salaryEntryId     String?
+  amountRub         Decimal               @db.Decimal(12, 2)
+  /// Дата события начисления — `OperationEntry.createdAt` для
+  /// сдельных и `SalaryEntry.date` для окладных, нормализованные
+  /// до календарной даты. Используется для отчётов и фильтрации
+  /// в UI.
+  occurredOn        DateTime              @db.Date
+  snapshot          Json
+  createdAt         DateTime              @default(now())
+
+  payout         PayrollPayout    @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  operationEntry OperationEntry?  @relation(fields: [operationEntryId], references: [id])
+  salaryEntry    SalaryEntry?     @relation(fields: [salaryEntryId], references: [id])
+
+  @@index([payoutId])
+  @@index([operationEntryId])
+  @@index([salaryEntryId])
+  @@index([kind, occurredOn])
 }
 
 // =========================
