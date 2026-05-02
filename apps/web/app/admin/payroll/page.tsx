@@ -129,6 +129,9 @@ export default async function AdminPayrollPeriodPage({
           <Link href="/admin/payroll/daily" className="admin-btn">
             День
           </Link>
+          <Link href="/admin/payroll/payouts" className="admin-btn">
+            Выплаты
+          </Link>
           <Link href="/admin/payroll/settings" className="admin-btn admin-btn--ghost">
             Настройки
           </Link>

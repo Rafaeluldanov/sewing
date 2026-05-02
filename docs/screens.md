@@ -3075,6 +3075,79 @@ deep-integration и снимает риск разъезда с payroll-эндп
 
 ---
 
+## 12b. Выплаты зарплаты — PHASE 3 STEP 4
+
+Менеджерский интерфейс управления выплатами (`PayrollPayout`).
+Контракт API — `api.md §10d` (`/api/payroll-payouts`).
+Доменная модель — `domain.md §10.8`.
+
+Доступ — `SHOP_MANAGER`, `ADMIN`. RBAC — `app/admin/layout.tsx` +
+backend `@Roles('SHOP_MANAGER', 'ADMIN')`.
+
+### `/admin/payroll/payouts` — список выплат
+
+Файл — `apps/web/app/admin/payroll/payouts/page.tsx`.
+
+- **Шапка** `AdminPageShell` с иконкой `BadgeRussianRuble`,
+  action-кнопка «Создать выплату» → `/admin/payroll/payouts/new`.
+- **Фильтры**: сотрудник (`employeeId`), статус (`status`),
+  период (`periodFrom` / `periodTo`). Сброс → `GET` без параметров.
+- **Таблица** `AdminTable`: сотрудник, период, статус-бейдж,
+  сдельно, оклад, итого, создано, выдано, подтверждено, ссылка
+  «Открыть» → `/admin/payroll/payouts/:id`.
+- **Пагинация** 50/страницу.
+
+Статусы:
+- `DRAFT` — Черновик (muted);
+- `ISSUED` — Выдано (info);
+- `ACKNOWLEDGED` — Получено (success);
+- `CANCELLED` — Отменено (danger).
+
+### `/admin/payroll/payouts/new` — создать выплату
+
+Файл — `apps/web/app/admin/payroll/payouts/new/page.tsx`.
+Клиентская форма — `apps/web/app/admin/payroll/payouts/new/create-form.tsx`.
+
+RSC загружает список активных сотрудников. Клиентский компонент
+`CreatePayrollPayoutForm` использует `useFormState` →
+`createPayrollPayoutAction`.
+
+Поля: сотрудник (select), периодFrom / periodTo (date, по умолчанию
+начало текущего месяца – сегодня), managerComment (textarea,
+необязательно).
+
+После успешного `POST /api/payroll-payouts` — редирект на
+`/admin/payroll/payouts/:id`.
+
+### `/admin/payroll/payouts/[id]` — карточка выплаты
+
+Файл — `apps/web/app/admin/payroll/payouts/[id]/page.tsx`.
+Клиентские действия — `apps/web/app/admin/payroll/payouts/[id]/payout-actions.tsx`.
+
+**Секции:**
+
+1. **Общие сведения** — сотрудник (ссылка на `/admin/employees/:id`),
+   период, статус-бейдж.
+2. **KPI** (3 карточки) — сдельно / оклад / итого.
+3. **Хронология** — createdAt / issuedAt / acknowledgedAt /
+   cancelledAt + managerComment.
+4. **Строки выплаты** — таблица `PayrollPayoutLine`: тип (Сдельно /
+   Оклад), дата, сумма, источник (OperationEntry / SalaryEntry ID),
+   снимок snapshot.
+5. **Действия** (клиентский компонент `PayoutActions`):
+
+   | Статус         | Доступные кнопки                                                |
+   |----------------|-----------------------------------------------------------------|
+   | `DRAFT`        | «Пересчитать», «Передать сотруднику», «Отменить» (+ причина)   |
+   | `ISSUED`       | «Отменить» (+ причина); текст «Ожидает подтверждения»          |
+   | `ACKNOWLEDGED` | read-only: «Сотрудник подтвердил получение»                    |
+   | `CANCELLED`    | read-only: «Выплата отменена»                                  |
+
+**Важно:** кнопка «Подтвердить получение» (ACK) в admin UI
+намеренно **отсутствует** — это действие сотрудника (PHASE 3 STEP 5).
+
+---
+
 ## 17. Себестоимость выпуска (`/production-cost`)
 
 Управленческая read-only страница. Контракт API — `api.md §17`,
