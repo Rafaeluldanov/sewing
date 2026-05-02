@@ -452,6 +452,47 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   `tests/integration/payroll-employee-detail.test.ts`,
   smoke `tests/smoke/payroll-admin.smoke.test.ts`.
 
+- [x] **PHASE 2 STEP 2 «Привязка сотрудника к подразделению».**
+  В `Employee` добавлен опциональный FK
+  `companyDivisionId String?` + relation
+  `companyDivision CompanyDivision? @relation(fields: [companyDivisionId], references: [id], onDelete: SetNull)`
+  и инверсия `employees Employee[]` со стороны `CompanyDivision`
+  (миграция `20260532110000_employee_company_division`).
+  `EmployeesService` валидирует выбранную карточку: 404
+  `COMPANY_DIVISION_NOT_FOUND` для несуществующего id, 409
+  `COMPANY_DIVISION_INACTIVE` для soft-deleted. Карточка
+  `/admin/employees/[id]` показывает «Подразделение» и
+  предоставляет select; в `CreateEmployeeForm` появляется тот же
+  select с опцией «— без привязки —». payroll-фильтр
+  `?divisionCode=` теперь видит и окладную часть: `SalaryEntry`
+  и `ShiftSession` фильтруются через
+  `Employee.companyDivision.code`, а сдельщина — через
+  `Passport.order.companyDivision.code` (без изменений).
+  Контракты — `packages/shared/src/employees.ts`,
+  `packages/shared/src/payroll.ts`. Документы:
+  [`docs/api.md §3`](./api.md#3-employees),
+  [`docs/domain.md §10.1a`](./domain.md#101a-привязка-сотрудника-к-подразделению-phase-2-step-2),
+  [`docs/erd.md §2.1`](./erd.md#21-users--auth--employees).
+  Тесты — `tests/integration/employees-create.test.ts`
+  (companyDivisionId happy-path, error-cases, фильтр списка).
+
+- [x] **PHASE 2 STEP 1 «Удаление legacy
+  `Employee.salaryBase` / `PieceRate`».** Колонка
+  `Employee.salaryBase` и таблица `PieceRate` (вместе со связью
+  `Operation.pieceRates`) удалены из Prisma-схемы и базы
+  (миграция `20260532100000_drop_legacy_salary_base_and_piece_rate`).
+  Они никогда не использовались payroll-движком (`SalaryService`
+  считает оклад через `Employee.salaryPerShift × ShiftSession`,
+  `OperationsService` берёт цену из
+  `OperationRateBySize`/`Operation.fixedRate`). Удалены
+  упоминания из shared-DTO (`Employee.salaryBase`),
+  `AdminTechInfo`, seed, тестов и документов
+  (`docs/erd.md`, `docs/domain.md`, `docs/screens.md`,
+  `docs/index.md`, `docs/api.md`,
+  `docs/adr/0020-operation-pricing-model.md`,
+  `docs/adr/0021-shift-day-salary.md`). Поведение payroll
+  (`OperationEntry` / `SalaryEntry`) не меняется.
+
 - [x] **PHASE 2 «Удаление legacy `OrderDivision`».** Удалены
   `enum OrderDivision`, `Order.division`,
   `DisplayScreenConfig.division` и связанные индексы (миграция

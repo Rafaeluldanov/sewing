@@ -38,8 +38,24 @@ function SaveButton() {
   );
 }
 
+interface DivisionOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
 interface Props {
   employee: EmployeeDetailDto;
+  /**
+   * PHASE 2 STEP 2: список активных подразделений для select-а
+   * «Подразделение». Подгружается на странице карточки. Если
+   * массив пустой (нет активных или backend упал) — поле
+   * прячется. Если у сотрудника установлено soft-deleted
+   * подразделение — оно остаётся в DTO, но в select его не
+   * будет; чтобы не «потерять» текущую привязку, мы добавляем
+   * её к опциям, помеченную меткой `(отключено)`.
+   */
+  divisionOptions?: DivisionOption[];
 }
 
 /**
@@ -50,11 +66,9 @@ interface Props {
  *   - `compensationType` (PIECEWORK | SALARY | MIXED)
  *   - `salaryPerShift`   (обязательна для SALARY/MIXED)
  *   - `active`           (мягкий «архив»)
- *
- * Backend / DTO не меняем — server action `updateEmployeeAction`
- * принимает тот же FormData, что и раньше.
+ *   - `companyDivisionId` (PHASE 2 STEP 2)
  */
-export function EmployeeEditForm({ employee }: Props) {
+export function EmployeeEditForm({ employee, divisionOptions = [] }: Props) {
   const [compensationType, setCompensationType] = useState<CompensationType>(
     employee.compensationType,
   );
@@ -73,7 +87,29 @@ export function EmployeeEditForm({ employee }: Props) {
       ? String(employee.cutterB2bSewingPercent)
       : '',
   );
+  // PHASE 2 STEP 2: подразделение. Дефолт — текущая привязка
+  // карточки (если она есть и не дропнулась).
+  const [companyDivisionId, setCompanyDivisionId] = useState<string>(
+    employee.companyDivisionId ?? '',
+  );
   const isCutter = employee.role === CUTTER_ROLE;
+
+  // Если текущая привязка указывает на soft-deleted подразделение
+  // (его нет в `divisionOptions`), добавим запись «(отключено)»,
+  // чтобы менеджер видел текущее значение и мог его убрать.
+  const currentDivisionInOptions =
+    !employee.companyDivisionId ||
+    divisionOptions.some((d) => d.id === employee.companyDivisionId);
+  const optionsWithCurrent = currentDivisionInOptions
+    ? divisionOptions
+    : [
+        ...divisionOptions,
+        {
+          id: employee.companyDivisionId!,
+          code: employee.companyDivision?.code ?? '???',
+          name: `${employee.companyDivision?.name ?? '???'} (отключено)`,
+        },
+      ];
 
   const update = updateEmployeeAction.bind(null, employee.id);
   const [state, formAction] = useFormState<UpdateEmployeeState, FormData>(
@@ -130,6 +166,42 @@ export function EmployeeEditForm({ employee }: Props) {
           <label htmlFor="emp-active">Активен</label>
         </div>
       </div>
+
+      {/*
+        PHASE 2 STEP 2: подразделение. Если у проекта есть хотя бы
+        одно активное подразделение — рендерим select; иначе поле
+        прячется (форма работает как раньше). Пустое значение в
+        select-е → `null` в DTO → стираем привязку.
+      */}
+      {optionsWithCurrent.length > 0 && (
+        <div className="admin-form-grid">
+          <div className="admin-field">
+            <label htmlFor="emp-company-division">Подразделение</label>
+            <select
+              id="emp-company-division"
+              name="companyDivisionId"
+              value={companyDivisionId}
+              onChange={(e) => setCompanyDivisionId(e.target.value)}
+            >
+              <option value="">— без привязки —</option>
+              {optionsWithCurrent.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.code})
+                </option>
+              ))}
+            </select>
+            <span
+              id="emp-company-division-hint"
+              className="admin-field__hint admin-muted"
+            >
+              Используется payroll-фильтром «Подразделение» для
+              окладной части (смены, дневной оклад). Сдельные
+              начисления автоматически попадают в подразделение
+              заказа независимо от этого выбора.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/*
         Поле «Процент от операций пошива B2B» — только для роли CUTTER.

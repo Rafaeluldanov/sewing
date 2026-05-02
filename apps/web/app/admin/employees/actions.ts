@@ -60,6 +60,13 @@ export async function createEmployeeAction(
   const cutterB2bRaw = String(
     form.get('cutterB2bSewingPercent') ?? '',
   ).trim();
+  // PHASE 2 STEP 2: подразделение сотрудника. Поле может отсутствовать
+  // в FormData (UI не показал select, потому что у проекта нет ни
+  // одного активного подразделения) — тогда DTO не получит ключа,
+  // backend оставит `null`. Пустая строка означает «без привязки».
+  const companyDivisionRaw = form.has('companyDivisionId')
+    ? String(form.get('companyDivisionId') ?? '').trim()
+    : null;
   const active = form.get('active') === 'on';
 
   if (fullName.length === 0) return { error: 'Введите ФИО сотрудника' };
@@ -116,6 +123,15 @@ export async function createEmployeeAction(
     dto.cutterB2bSewingPercent = Math.round(num * 100) / 100;
   }
 
+  // PHASE 2 STEP 2: подразделение. Если ключ был в FormData (UI
+  // показал select), отправляем явное значение — пустая строка =
+  // `null` (без привязки). Если ключа нет — DTO без поля, backend
+  // оставит `null`.
+  if (companyDivisionRaw !== null) {
+    dto.companyDivisionId =
+      companyDivisionRaw === '' ? null : companyDivisionRaw;
+  }
+
   let createdId: string | null = null;
   try {
     const created = await createEmployee(dto);
@@ -155,6 +171,12 @@ export async function updateEmployeeAction(
   const hasCutterB2bKey = form.has('cutterB2bSewingPercent');
   const cutterB2bRaw = hasCutterB2bKey
     ? String(form.get('cutterB2bSewingPercent') ?? '').trim()
+    : null;
+  // PHASE 2 STEP 2: подразделение. Та же семантика
+  // «ключа нет — не трогаем колонку», см. cutterB2bSewingPercent.
+  const hasDivisionKey = form.has('companyDivisionId');
+  const divisionRaw = hasDivisionKey
+    ? String(form.get('companyDivisionId') ?? '').trim()
     : null;
 
   if (!isCompensationType(compensationRaw)) {
@@ -202,6 +224,17 @@ export async function updateEmployeeAction(
       }
       dto.cutterB2bSewingPercent = Math.round(num * 100) / 100;
     }
+  }
+
+  // PHASE 2 STEP 2: подразделение. Семантика:
+  //   - ключа нет в FormData (UI не показал select) → DTO без поля
+  //     (backend колонку не трогает);
+  //   - ключ есть, пустая строка → `null` (стираем привязку);
+  //   - ключ есть, ID → передаём как есть (backend проверит, что
+  //     подразделение существует и активно).
+  if (hasDivisionKey) {
+    dto.companyDivisionId =
+      divisionRaw === '' || divisionRaw === null ? null : divisionRaw;
   }
 
   try {

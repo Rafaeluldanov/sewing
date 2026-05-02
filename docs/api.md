@@ -164,10 +164,10 @@ Side effects: `login` обновляет `Employee.lastSeenAt`-style-поля
 
 | Метод | Путь                       | RBAC               | Описание |
 | ----- | -------------------------- | ------------------ | -------- |
-| GET   | `/api/employees`           | SHOP_MANAGER, ADMIN | List с фильтрами `ListEmployeesQuery` (active/role/comp/search). |
-| POST  | `/api/employees`           | SHOP_MANAGER, ADMIN | Body `CreateEmployeeDto`. Создаёт карточку (с `pinHash` через bcrypt). |
-| GET   | `/api/employees/:id`       | SHOP_MANAGER, ADMIN | Карточка сотрудника. |
-| PATCH | `/api/employees/:id`       | SHOP_MANAGER, ADMIN | Body `UpdateEmployeeDto`. Правит management-поля. |
+| GET   | `/api/employees`           | SHOP_MANAGER, ADMIN | List с фильтрами `ListEmployeesQuery` (active/role/comp/search/companyDivisionId). PHASE 2 STEP 2: каждая запись отдаёт `companyDivisionId` и краткие реквизиты `companyDivision { id, code, name }` (`null` для не привязанных). |
+| POST  | `/api/employees`           | SHOP_MANAGER, ADMIN | Body `CreateEmployeeDto`. Создаёт карточку (с `pinHash` через bcrypt). PHASE 2 STEP 2: тело принимает опциональный `companyDivisionId`; если карточка не найдена — 404 `COMPANY_DIVISION_NOT_FOUND`, если soft-deleted — 409 `COMPANY_DIVISION_INACTIVE`. |
+| GET   | `/api/employees/:id`       | SHOP_MANAGER, ADMIN | Карточка сотрудника. PHASE 2 STEP 2: ответ включает `companyDivisionId` и краткие `companyDivision { id, code, name }` (`null` без привязки). |
+| PATCH | `/api/employees/:id`       | SHOP_MANAGER, ADMIN | Body `UpdateEmployeeDto`. Правит management-поля. PHASE 2 STEP 2: поддерживает `companyDivisionId` (`null` — снять привязку, ID — переставить; те же 404/409, что и POST). |
 | GET   | `/api/employees/:id/print` | Public             | HTML-этикетка с QR `EMPLOYEE:<id>`. Используется на `/master`. |
 | GET   | `/api/employees/:id/qr`    | Public             | PNG QR (`EMPLOYEE:<id>`, см. `EMPLOYEE_QR_PREFIX`). |
 

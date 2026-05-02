@@ -604,6 +604,22 @@ model Employee {
   /// сдельное B2B-начисление закройщика не создаётся (audit/log
   /// warning, workflow не падает).
   cutterB2bSewingPercent Decimal?   @db.Decimal(5, 2)
+  /// PHASE 2 STEP 2: основная привязка сотрудника к подразделению
+  /// компании (`CompanyDivision`, см. ниже и `docs/erd.md §«CompanyDivision»`).
+  ///
+  /// Используется payroll-фильтром `/api/payroll/period?divisionCode=...`
+  /// — для сдельных начислений фильтр идёт через `Passport → Order →
+  /// CompanyDivision`, а окладные/смены прибиты к самому сотруднику
+  /// и берут подразделение из этого поля. Без него управленец не
+  /// мог раньше отделить «своих» окладников MARKETPLACE-цеха от
+  /// общего цеха при выборе фильтра.
+  ///
+  /// `null` — сотрудник пока не привязан ни к одному подразделению
+  /// (legacy-импорт, кадровик ещё не заполнил). В payroll такие
+  /// сотрудники видны только при выборе «все подразделения».
+  /// `onDelete: SetNull` — снос подразделения не сносит сотрудника.
+  companyDivisionId String?
+  companyDivision   CompanyDivision? @relation(fields: [companyDivisionId], references: [id], onDelete: SetNull)
   active           Boolean          @default(true)
   createdAt        DateTime         @default(now())
 
@@ -679,6 +695,12 @@ model Employee {
 
   @@index([role])
   @@index([compensationType])
+  /// PHASE 2 STEP 2: фильтр payroll/period по подразделению пробивается
+  /// через `Employee.companyDivisionId` (для окладной части) и через
+  /// `Order.companyDivisionId` (для сдельной). Индекс ускоряет
+  /// `findMany({ where: { companyDivisionId } })` в сервисе сотрудников
+  /// и payroll-агрегаторе.
+  @@index([companyDivisionId])
 }
 
 model Equipment {
@@ -3966,6 +3988,10 @@ model CompanyDivision {
   /// DisplayScreenConfig — здесь только ради читаемости схемы.
   orders         Order[]
   displayScreens DisplayScreenConfig[]
+  /// PHASE 2 STEP 2: сотрудники этого подразделения. `onDelete: SetNull`
+  /// со стороны `Employee.companyDivisionId` — снос карточки
+  /// подразделения отвязывает сотрудника, а не удаляет его.
+  employees      Employee[]
 
   @@index([isActive])
   @@index([sortOrder])

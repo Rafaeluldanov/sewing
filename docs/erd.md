@@ -99,9 +99,16 @@
   `role: Role`, `compensationType: CompensationType @default(PIECEWORK)`,
   `salaryPerShift: Decimal?` (для `SALARY`/`MIXED`),
   `cutterB2bSewingPercent: Decimal(5,2)?` (B2B-процент закройщика),
-  `active: Boolean @default(true)`. Индексы: `role`, `compensationType`.
+  `companyDivisionId: String? → CompanyDivision` (`onDelete: SetNull`,
+  PHASE 2 STEP 2 — основная привязка сотрудника к подразделению,
+  используется payroll-фильтром «Подразделение» для окладной части),
+  `active: Boolean @default(true)`. Индексы: `role`, `compensationType`,
+  `companyDivisionId`.
   - Сессии: `pinHash` хранит `bcrypt(password)`.
   - Источник истины «как платим» — `compensationType` (см. ADR-0021).
+  - PHASE 2 STEP 1: историческая колонка `salaryBase` удалена (см.
+    ADR-0020 §«PHASE 2 — drop legacy»). Реальная оплата считается
+    через `compensationType` + `salaryPerShift`.
 - **`ShiftSession`** — открытая/закрытая смена сотрудника на
   оборудовании. `employeeId`, `equipmentId`, `operationId`, `startedAt`,
   `endedAt: DateTime?`. Активная смена = `endedAt IS NULL`. Уникальность
@@ -538,9 +545,11 @@
   - `code String @unique`, `name String`, `description String?`,
     `isActive Boolean @default(true)`, `sortOrder Int @default(100)`.
   - индексы: `isActive`, `sortOrder`.
-  - На этот справочник ссылаются `Order.companyDivisionId` и
-    `DisplayScreenConfig.companyDivisionId`. Базовые карточки
-    `MARKETPLACE` / `OTHER` гарантированно созданы миграцией
+  - На этот справочник ссылаются `Order.companyDivisionId`,
+    `DisplayScreenConfig.companyDivisionId` и (PHASE 2 STEP 2)
+    `Employee.companyDivisionId` — основная привязка сотрудника
+    к подразделению, см. §2.1. Базовые карточки `MARKETPLACE` /
+    `OTHER` гарантированно созданы миграцией
     `…_link_company_divisions_to_orders` и `prisma/seed.ts` /
     `tests/utils/seed.ts`. Маппинг `code → cutter compensation
     scheme` живёт в `getCutterCompensationSchemeForDivision`
@@ -548,9 +557,9 @@
     `B2B_SEWING_PERCENT`). См. `docs/domain.md §«Подразделения
     заказа»`.
   - Inverse relations: `orders Order[]`, `displayScreens
-    DisplayScreenConfig[]` — оба `onDelete: SetNull` со стороны
-    привязки, чтобы деактивация/удаление карточки не сносило
-    заказ или экран.
+    DisplayScreenConfig[]`, `employees Employee[]` — все
+    `onDelete: SetNull` со стороны привязки, чтобы деактивация
+    карточки не сносила заказ / экран / сотрудника.
 - Audit под `entityType = COMPANY_SETTINGS` / `COMPANY_DIVISION`
   (см. `docs/events.md §3.2`).
 

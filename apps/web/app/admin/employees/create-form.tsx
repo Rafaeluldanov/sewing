@@ -55,14 +55,29 @@ function SubmitButton() {
 }
 
 /**
+ * PHASE 2 STEP 2: список подразделений для select-а «Подразделение».
+ * Загружается на странице (`/admin/employees/new`) через
+ * `listCompanyDivisions({ includeInactive: false })` и передаётся
+ * сюда — компоненту-форме нужно только id/code/name.
+ */
+interface DivisionOption {
+  id: string;
+  code: string;
+  name: string;
+}
+
+interface Props {
+  divisionOptions?: DivisionOption[];
+}
+
+/**
  * Форма создания сотрудника на `/admin/employees/new`.
  *
- * Поля собраны строго из существующей модели `Employee` — backend не
- * меняем. После успеха action редиректит на карточку нового
- * сотрудника, чтобы менеджер сразу мог проверить и при необходимости
- * подправить окладные поля.
+ * Поля собраны из управленческой модели `Employee`. После успеха
+ * action редиректит на карточку нового сотрудника, чтобы менеджер
+ * сразу мог проверить и при необходимости подправить окладные поля.
  */
-export function CreateEmployeeForm() {
+export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
   const [role, setRole] = useState<EmployeeRole>('SEAMSTRESS');
   const [compensationType, setCompensationType] = useState<CompensationType>(
     'PIECEWORK',
@@ -72,6 +87,9 @@ export function CreateEmployeeForm() {
   // CUTTER (см. `docs/payroll-cutter-compensation-recon.md`); UI
   // прячет его для всех остальных ролей.
   const [cutterB2bPercent, setCutterB2bPercent] = useState<string>('');
+  // PHASE 2 STEP 2: подразделение. По умолчанию — пусто
+  // (`null`), чтобы менеджер сознательно сделал выбор.
+  const [companyDivisionId, setCompanyDivisionId] = useState<string>('');
 
   const [state, formAction] = useFormState<CreateEmployeeState, FormData>(
     createEmployeeAction,
@@ -189,6 +207,42 @@ export function CreateEmployeeForm() {
           <label htmlFor="emp-active">Активен</label>
         </div>
       </div>
+
+      {/*
+        PHASE 2 STEP 2: подразделение сотрудника
+        (`Employee.companyDivisionId`). Источник опций — активные
+        записи `CompanyDivision` (см. `/admin/company-settings`).
+        Если у проекта нет ни одного активного подразделения,
+        select прячется — форма работает как раньше.
+      */}
+      {divisionOptions.length > 0 && (
+        <div className="admin-form-grid">
+          <div className="admin-field">
+            <label htmlFor="emp-company-division">Подразделение</label>
+            <select
+              id="emp-company-division"
+              name="companyDivisionId"
+              value={companyDivisionId}
+              onChange={(e) => setCompanyDivisionId(e.target.value)}
+            >
+              <option value="">— без привязки —</option>
+              {divisionOptions.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.name} ({d.code})
+                </option>
+              ))}
+            </select>
+            <span
+              id="emp-company-division-hint"
+              className="admin-field__hint admin-muted"
+            >
+              Используется payroll-фильтром «Подразделение» для
+              окладной части. Сдельные начисления уходят в
+              подразделение заказа независимо от этой привязки.
+            </span>
+          </div>
+        </div>
+      )}
 
       {/*
         Поле «Процент от операций пошива B2B» — только для роли

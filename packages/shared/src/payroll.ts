@@ -263,6 +263,17 @@ export interface PayrollEmployeeDetailEmployeeDto {
   compensationType: CompensationType;
   salaryPerShift: number | null;
   active: boolean;
+  /**
+   * PHASE 2 STEP 2: подразделение, к которому привязан сотрудник
+   * (`Employee.companyDivisionId`). Используется UI карточки
+   * `/admin/payroll/employees/[id]` для шапки.
+   *
+   * Опционально на уровне типа (`?`) ради backward-compat: старые
+   * потребители без пересборки shared-пакета продолжают
+   * компилироваться. Backend всегда возвращает оба ключа.
+   */
+  companyDivisionId?: string | null;
+  companyDivision?: { id: string; code: string; name: string } | null;
 }
 
 export interface PayrollEmployeeShiftDto {

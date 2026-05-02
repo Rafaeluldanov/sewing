@@ -147,6 +147,14 @@ export const ListEmployeesQuerySchema = z.object({
     .optional(),
   role: z.string().min(1).optional(),
   compensationType: CompensationTypeSchema.optional(),
+  /**
+   * PHASE 2 STEP 2: фильтр по подразделению через
+   * `Employee.companyDivisionId`. Принимаем `id`, не `code`, потому
+   * что у CompanyDivision код — менеджерский слаг и может быть
+   * переименован, а `id` стабилен. Менеджер выбирает в админ-UI
+   * подразделение из dropdown.
+   */
+  companyDivisionId: z.string().min(1).optional(),
   /** Поиск по `fullName` или `login`, нечувствителен к регистру. */
   search: z.string().trim().min(1).max(100).optional(),
 });
@@ -171,6 +179,19 @@ export type ListEmployeesQuery = z.infer<typeof ListEmployeesQuerySchema>;
  * Серверная инвариант-проверка: для `compensationType in (SALARY, MIXED)`
  * после применения patch обязан быть положительный `salaryPerShift`.
  */
+/**
+ * PHASE 2 STEP 2: ID подразделения (CompanyDivision). Опциональное
+ * поле; пустая строка / `null` / `undefined` интерпретируются как
+ * «убрать привязку» либо «не трогать», см. ниже. Backend кладёт
+ * `null` напрямую — поле в схеме nullable.
+ */
+const CompanyDivisionIdField = z
+  .union([z.string().trim().min(1), z.literal(''), z.null()])
+  .transform((v) => {
+    if (v === '' || v === null) return null;
+    return v;
+  });
+
 export const UpdateEmployeeSchema = z
   .object({
     compensationType: CompensationTypeSchema.optional(),
@@ -185,14 +206,23 @@ export const UpdateEmployeeSchema = z
      * пришло (см. `EmployeesService.update`).
      */
     cutterB2bSewingPercent: CutterB2bSewingPercentField.optional(),
+    /**
+     * PHASE 2 STEP 2: подразделение сотрудника (`CompanyDivision.id`).
+     * `undefined` — не трогаем колонку; `null` или пустая строка —
+     * стираем привязку (`Employee.companyDivisionId = NULL`); ID —
+     * привязываем к карточке. Существование/активность подразделения
+     * проверяет backend.
+     */
+    companyDivisionId: CompanyDivisionIdField.optional(),
   })
   .refine(
     (obj) =>
       obj.compensationType !== undefined ||
       obj.salaryPerShift !== undefined ||
       obj.active !== undefined ||
-      obj.cutterB2bSewingPercent !== undefined,
-    'Нечего обновлять: укажите compensationType, salaryPerShift, active или cutterB2bSewingPercent',
+      obj.cutterB2bSewingPercent !== undefined ||
+      obj.companyDivisionId !== undefined,
+    'Нечего обновлять: укажите compensationType, salaryPerShift, active, cutterB2bSewingPercent или companyDivisionId',
   );
 export type UpdateEmployeeDto = z.infer<typeof UpdateEmployeeSchema>;
 
@@ -267,6 +297,13 @@ export const CreateEmployeeSchema = z
      * → B2B_SEWING_PERCENT`).
      */
     cutterB2bSewingPercent: CutterB2bSewingPercentField.optional(),
+    /**
+     * PHASE 2 STEP 2: подразделение сотрудника (`CompanyDivision.id`).
+     * Опционально и nullable: `null` / пустая строка / `undefined` —
+     * сотрудник создаётся без привязки. Менеджер потом проставит
+     * подразделение в `/admin/employees/[id]`.
+     */
+    companyDivisionId: CompanyDivisionIdField.optional(),
   })
   .superRefine((obj, ctx) => {
     if (
@@ -298,6 +335,18 @@ export interface EmployeeListItemDto {
   salaryPerShift: number | null;
   active: boolean;
   createdAt: string;
+  /**
+   * PHASE 2 STEP 2: подразделение сотрудника (`Employee.companyDivisionId`,
+   * `null` если не привязан).
+   *
+   * Поля опциональные на уровне типа (`?`) ради backward-compat —
+   * старые потребители shared-пакета без пересборки продолжают
+   * компилироваться. Backend всегда отдаёт оба ключа: `companyDivision`
+   * — `null` для сотрудников без привязки или с soft-deleted
+   * подразделением.
+   */
+  companyDivisionId?: string | null;
+  companyDivision?: { id: string; code: string; name: string } | null;
 }
 
 export interface EmployeeDetailDto extends EmployeeListItemDto {

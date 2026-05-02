@@ -271,4 +271,153 @@ describeWithDb('integration — employees create (POST /api/employees)', () => {
     expect(res.status).toBe(201);
     expect(res.body.login).toBe('admin-made');
   });
+
+  // ---------------------------------------------------------------------------
+  // 5. PHASE 2 STEP 2 — Employee.companyDivisionId
+  // ---------------------------------------------------------------------------
+
+  test('PHASE 2 STEP 2: создание сотрудника с companyDivisionId привязывает карточку', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/employees')
+      .set('Cookie', cookies.manager)
+      .send({
+        fullName: 'Marketplace Worker',
+        login: 'mp-worker',
+        pin: 'pin-1234',
+        role: 'SEAMSTRESS',
+        compensationType: 'PIECEWORK',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
+    expect(res.body.companyDivision).toMatchObject({
+      id: seed.companyDivisions.MARKETPLACE.id,
+      code: 'MARKETPLACE',
+    });
+
+    const inDb = await t.prisma.employee.findUnique({
+      where: { login: 'mp-worker' },
+    });
+    expect(inDb!.companyDivisionId).toBe(seed.companyDivisions.MARKETPLACE.id);
+  });
+
+  test('PHASE 2 STEP 2: создание без companyDivisionId оставляет null', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/employees')
+      .set('Cookie', cookies.manager)
+      .send({
+        fullName: 'No Division Worker',
+        login: 'nodiv',
+        pin: 'pin-1234',
+        role: 'SEAMSTRESS',
+        compensationType: 'PIECEWORK',
+      });
+    expect(res.status).toBe(201);
+    expect(res.body.companyDivisionId).toBeNull();
+    expect(res.body.companyDivision).toBeNull();
+  });
+
+  test('PHASE 2 STEP 2: PATCH companyDivisionId перепривязывает сотрудника', async () => {
+    const created = await request(t.app.getHttpServer())
+      .post('/api/employees')
+      .set('Cookie', cookies.manager)
+      .send({
+        fullName: 'Mover',
+        login: 'mover',
+        pin: 'pin-1234',
+        role: 'SEAMSTRESS',
+        compensationType: 'PIECEWORK',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+      });
+    expect(created.status).toBe(201);
+
+    const patched = await request(t.app.getHttpServer())
+      .patch(`/api/employees/${created.body.id}`)
+      .set('Cookie', cookies.manager)
+      .send({ companyDivisionId: seed.companyDivisions.OTHER.id });
+    expect(patched.status).toBe(200);
+    expect(patched.body.companyDivisionId).toBe(
+      seed.companyDivisions.OTHER.id,
+    );
+
+    const cleared = await request(t.app.getHttpServer())
+      .patch(`/api/employees/${created.body.id}`)
+      .set('Cookie', cookies.manager)
+      .send({ companyDivisionId: null });
+    expect(cleared.status).toBe(200);
+    expect(cleared.body.companyDivisionId).toBeNull();
+    expect(cleared.body.companyDivision).toBeNull();
+  });
+
+  test('PHASE 2 STEP 2: companyDivisionId с несуществующим id → 404 COMPANY_DIVISION_NOT_FOUND', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/employees')
+      .set('Cookie', cookies.manager)
+      .send({
+        fullName: 'Ghost Division',
+        login: 'ghost-div',
+        pin: 'pin-1234',
+        role: 'SEAMSTRESS',
+        compensationType: 'PIECEWORK',
+        companyDivisionId: 'does-not-exist',
+      });
+    expect(res.status).toBe(404);
+    expect(res.body.code).toBe('COMPANY_DIVISION_NOT_FOUND');
+  });
+
+  test('PHASE 2 STEP 2: companyDivisionId на soft-deleted подразделение → 409 COMPANY_DIVISION_INACTIVE', async () => {
+    await t.prisma.companyDivision.update({
+      where: { id: seed.companyDivisions.OTHER.id },
+      data: { isActive: false },
+    });
+    const res = await request(t.app.getHttpServer())
+      .post('/api/employees')
+      .set('Cookie', cookies.manager)
+      .send({
+        fullName: 'Inactive Division',
+        login: 'inactive-div',
+        pin: 'pin-1234',
+        role: 'SEAMSTRESS',
+        compensationType: 'PIECEWORK',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('COMPANY_DIVISION_INACTIVE');
+  });
+
+  test('PHASE 2 STEP 2: GET /api/employees?companyDivisionId фильтрует список', async () => {
+    await request(t.app.getHttpServer())
+      .post('/api/employees')
+      .set('Cookie', cookies.manager)
+      .send({
+        fullName: 'Marketplace Only',
+        login: 'mp-only',
+        pin: 'pin-1234',
+        role: 'SEAMSTRESS',
+        compensationType: 'PIECEWORK',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+      });
+    await request(t.app.getHttpServer())
+      .post('/api/employees')
+      .set('Cookie', cookies.manager)
+      .send({
+        fullName: 'Other Only',
+        login: 'other-only',
+        pin: 'pin-1234',
+        role: 'SEAMSTRESS',
+        compensationType: 'PIECEWORK',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
+      });
+
+    const list = await request(t.app.getHttpServer())
+      .get('/api/employees')
+      .query({ companyDivisionId: seed.companyDivisions.MARKETPLACE.id })
+      .set('Cookie', cookies.manager);
+    expect(list.status).toBe(200);
+    const logins = (list.body as Array<{ login: string }>).map((e) => e.login);
+    expect(logins).toContain('mp-only');
+    expect(logins).not.toContain('other-only');
+  });
 });

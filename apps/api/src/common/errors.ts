@@ -2234,3 +2234,20 @@ export class CompanyDivisionCodeTakenException extends BusinessException {
     );
   }
 }
+
+/**
+ * Попытка привязать карточку (например, `Employee` в PHASE 2 STEP 2)
+ * к soft-deleted (`isActive = false`) подразделению.
+ *
+ * Менеджер увидит сообщение и сможет либо включить подразделение
+ * обратно через `/admin/company-settings`, либо выбрать активное.
+ */
+export class CompanyDivisionInactiveException extends BusinessException {
+  constructor() {
+    super(
+      'COMPANY_DIVISION_INACTIVE',
+      'Подразделение отключено — выберите активное или включите его обратно',
+      HttpStatus.CONFLICT,
+    );
+  }
+}

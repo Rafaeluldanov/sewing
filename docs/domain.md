@@ -1538,6 +1538,43 @@ PHASE 2 STEP 1 — payroll-движок его никогда не исполь�
 `Employee.cutterB2bSewingPercent: Decimal(5,2)?` — B2B-процент для
 раскройщика (см. §10.2).
 
+### 10.1a Привязка сотрудника к подразделению (PHASE 2 STEP 2)
+
+Источник: `prisma/schema.prisma::Employee.companyDivisionId`,
+`apps/api/src/modules/employees/employees.service.ts`,
+`apps/api/src/modules/payroll/payroll.service.ts`.
+
+`Employee.companyDivisionId String? → CompanyDivision` (`onDelete:
+SetNull`, миграция
+`20260532110000_employee_company_division`) — основная привязка
+сотрудника к подразделению компании. Используется payroll-фильтром
+«Подразделение» (`/api/payroll/period?divisionCode=...`,
+`/api/payroll/daily?divisionCode=...`):
+
+- Сдельная часть фильтра по-прежнему пробивается через
+  `OperationEntry.passport.order.companyDivision.code` — крой и
+  пошив попадают в подразделение **заказа**, а не сотрудника.
+  Это правильно: один и тот же раскройщик может работать как на
+  MARKETPLACE-, так и на B2B-заказы.
+- Окладная часть и список смен теперь фильтруются через
+  `Employee.companyDivision.code` (PHASE 2 STEP 2). Без этого
+  поля менеджер не мог отделить «своих» окладников MARKETPLACE-цеха
+  от общего цеха при `divisionCode`-фильтре.
+- В строке ведомости `companyDivision`: сначала пытается взять
+  «основное подразделение по сдельщине за период», иначе fallback
+  на `Employee.companyDivision`. Это даёт окладникам без
+  сдельщины корректное имя подразделения в колонке.
+
+`null` — сотрудник пока не привязан (legacy-импорт, кадровик ещё
+не заполнил). При `divisionCode`-фильтре такие сотрудники
+включаются в выдачу, только если у них есть сдельщина в выбранном
+подразделении.
+
+`EmployeesService.create` / `update` валидируют, что выбранная
+карточка существует (`COMPANY_DIVISION_NOT_FOUND`) и активна
+(`COMPANY_DIVISION_INACTIVE`). Снять привязку (`null`) можно
+всегда — это не валидируется.
+
 ### 10.2 Сдельные начисления (`OperationEntry`)
 
 Источник: `prisma/schema.prisma::OperationEntry` (~1184),

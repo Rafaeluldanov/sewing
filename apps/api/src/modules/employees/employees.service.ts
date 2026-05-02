@@ -10,6 +10,8 @@ import type {
 } from '@sewing/shared/employees';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  CompanyDivisionInactiveException,
+  CompanyDivisionNotFoundException,
   EmployeeLoginTakenException,
   EmployeeNotFoundException,
   EmployeeSalaryRateRequiredException,
@@ -49,6 +51,9 @@ export class EmployeesService {
     if (query.compensationType) {
       where.compensationType = query.compensationType as CompensationType;
     }
+    if (query.companyDivisionId) {
+      where.companyDivisionId = query.companyDivisionId;
+    }
     if (query.search) {
       where.OR = [
         { fullName: { contains: query.search, mode: 'insensitive' } },
@@ -59,12 +64,16 @@ export class EmployeesService {
     const rows = await this.prisma.employee.findMany({
       where,
       orderBy: [{ active: 'desc' }, { fullName: 'asc' }],
+      include: { companyDivision: true },
     });
     return rows.map(toListDto);
   }
 
   async get(id: string): Promise<EmployeeDetailDto> {
-    const row = await this.prisma.employee.findUnique({ where: { id } });
+    const row = await this.prisma.employee.findUnique({
+      where: { id },
+      include: { companyDivision: true },
+    });
     if (!row) throw new EmployeeNotFoundException();
     return toDetailDto(row);
   }
@@ -101,6 +110,14 @@ export class EmployeesService {
       throw new EmployeeSalaryRateRequiredException();
     }
 
+    // PHASE 2 STEP 2: если менеджер при создании выбрал
+    // подразделение — оно должно существовать и быть активным.
+    // `null` / `undefined` означают «без привязки», менеджер
+    // потом сделает выбор в `/admin/employees/[id]`.
+    if (dto.companyDivisionId) {
+      await this.assertCompanyDivisionUsable(dto.companyDivisionId);
+    }
+
     const pinHash = await bcrypt.hash(dto.pin, PIN_HASH_COST);
 
     let created;
@@ -128,8 +145,10 @@ export class EmployeesService {
             dto.cutterB2bSewingPercent === null
               ? null
               : new Prisma.Decimal(dto.cutterB2bSewingPercent.toFixed(2)),
+          companyDivisionId: dto.companyDivisionId ?? null,
           active: dto.active ?? true,
         },
+        include: { companyDivision: true },
       });
     } catch (e) {
       if (
@@ -146,7 +165,7 @@ export class EmployeesService {
     }
 
     this.logger.log(
-      `event=employee.create id=${created.id} login=${created.login} role=${created.role}`,
+      `event=employee.create id=${created.id} login=${created.login} role=${created.role} companyDivisionId=${created.companyDivisionId ?? 'null'}`,
     );
     return toDetailDto(created);
   }
@@ -184,6 +203,13 @@ export class EmployeesService {
       throw new EmployeeSalaryRateRequiredException();
     }
 
+    // PHASE 2 STEP 2: если менеджер сменил подразделение — должно
+    // существовать и быть активным. `null` (стереть привязку) —
+    // не валидируем; снять привязку всегда можно.
+    if (dto.companyDivisionId !== undefined && dto.companyDivisionId !== null) {
+      await this.assertCompanyDivisionUsable(dto.companyDivisionId);
+    }
+
     const data: Prisma.EmployeeUpdateInput = {};
     if (dto.compensationType !== undefined) {
       data.compensationType = dto.compensationType as CompensationType;
@@ -206,12 +232,43 @@ export class EmployeesService {
           ? null
           : new Prisma.Decimal(dto.cutterB2bSewingPercent.toFixed(2));
     }
+    if (dto.companyDivisionId !== undefined) {
+      // `null` — стереть привязку, иначе — переставить на другую
+      // карточку. Используем nested-write через `connect`/`disconnect`,
+      // чтобы Prisma корректно зачистила FK.
+      data.companyDivision =
+        dto.companyDivisionId === null
+          ? { disconnect: true }
+          : { connect: { id: dto.companyDivisionId } };
+    }
 
     const updated = await this.prisma.employee.update({
       where: { id },
       data,
+      include: { companyDivision: true },
     });
     return toDetailDto(updated);
+  }
+
+  // ===========================================================================
+  // helpers
+  // ===========================================================================
+
+  /**
+   * PHASE 2 STEP 2: гард для `Employee.companyDivisionId` в create/update.
+   *
+   * Карточка должна существовать (`COMPANY_DIVISION_NOT_FOUND`) и быть
+   * активной (`COMPANY_DIVISION_INACTIVE`). Снять привязку (`null`)
+   * можно всегда; этот метод вызывается только когда DTO принёс
+   * непустой `companyDivisionId`.
+   */
+  private async assertCompanyDivisionUsable(divisionId: string): Promise<void> {
+    const div = await this.prisma.companyDivision.findUnique({
+      where: { id: divisionId },
+      select: { id: true, isActive: true },
+    });
+    if (!div) throw new CompanyDivisionNotFoundException();
+    if (!div.isActive) throw new CompanyDivisionInactiveException();
   }
 }
 
@@ -219,7 +276,9 @@ export class EmployeesService {
 // helpers
 // ---------------------------------------------------------------------------
 
-type EmployeeRow = Prisma.EmployeeGetPayload<{}>;
+type EmployeeRow = Prisma.EmployeeGetPayload<{
+  include: { companyDivision: true };
+}>;
 
 function toListDto(e: EmployeeRow): EmployeeListItemDto {
   return {
@@ -231,6 +290,14 @@ function toListDto(e: EmployeeRow): EmployeeListItemDto {
     salaryPerShift: e.salaryPerShift === null ? null : Number(e.salaryPerShift),
     active: e.active,
     createdAt: e.createdAt.toISOString(),
+    companyDivisionId: e.companyDivisionId,
+    companyDivision: e.companyDivision
+      ? {
+          id: e.companyDivision.id,
+          code: e.companyDivision.code,
+          name: e.companyDivision.name,
+        }
+      : null,
   };
 }
 

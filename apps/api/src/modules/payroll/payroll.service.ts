@@ -72,12 +72,19 @@ export class PayrollService {
    *      в БД за «лишними» сотрудниками — на MVP это дёшево, и любой
    *      менеджер с 100 сотрудниками получит ответ за миллисекунды).
    *
-   * `divisionCode` фильтрует через `OperationEntry.passport.order.
-   * companyDivision.code` — если у сотрудника нет ни одного начисления
-   * в выбранном подразделении в периоде, он НЕ появляется в выдаче.
-   * Окладные начисления подразделению не принадлежат, и при выборе
-   * `divisionCode` они НЕ включаются в `salaryRub` (фильтр работает
-   * именно по подразделению заказа).
+   * `divisionCode` фильтрует:
+   *   - сдельную часть — через `OperationEntry.passport.order.
+   *     companyDivision.code` (фактическое подразделение заказа);
+   *   - окладную часть и смены — через `Employee.companyDivision.code`
+   *     (PHASE 2 STEP 2): сотрудник прибит к подразделению, и его
+   *     дневной оклад ходит за ним. Сотрудники без `companyDivisionId`
+   *     не попадают в выдачу при `divisionCode`-фильтре.
+   *
+   * Если у сотрудника есть и сдельщина в заказе MARKETPLACE, и
+   * привязка к OTHER — при выборе MARKETPLACE он будет виден со
+   * сдельщиной, при выборе OTHER — с окладом. Это сознательно: фильтр
+   * показывает «деньги, относящиеся к подразделению», а не «всех
+   * сотрудников подразделения».
    */
   async period(query: PayrollPeriodQuery): Promise<PayrollPeriodPageDto> {
     const { from, to, dayFrom, dayTo } = parsePeriodWindow(
@@ -114,19 +121,25 @@ export class PayrollService {
       shiftWhere.employee = { role };
     }
     if (query.divisionCode) {
-      // Фильтруем сдельщину через паспорт → заказ → подразделение.
-      // `SalaryEntry` подразделению не принадлежит — оно прибито к
-      // сотруднику, а не к заказу; поэтому при `divisionCode` в выдаче
-      // окладные суммы будут 0 для тех сотрудников, у кого в
-      // подразделении были только сдельные начисления.
+      // PHASE 2 STEP 2: фильтр работает на двух осях.
+      //   - Сдельщина прибита к заказу → подразделению через
+      //     паспорт. Используем существующий relation путь.
+      //   - Оклад / смены прибиты к самому сотруднику через
+      //     `Employee.companyDivisionId` (нововведение шага).
+      // Это отражено в `relevantIds` ниже: окладника без сдельщины
+      // мы тоже включаем, если он лично привязан к этому
+      // подразделению.
       earningsWhere.passport = {
         order: { companyDivision: { code: query.divisionCode } },
       };
-      // Для окладной части включаем только сотрудников, у кого В ЭТОМ
-      // ПОДРАЗДЕЛЕНИИ В ПЕРИОДЕ была хотя бы одна сдельная строка
-      // (см. ниже формирование `relevantIds`). Сами `salaryWhere` /
-      // `shiftWhere` без подразделения — это и есть честная картина
-      // «оклад остаётся окладом независимо от заказа».
+      salaryWhere.employee = {
+        ...(salaryWhere.employee as Prisma.EmployeeWhereInput | undefined),
+        companyDivision: { code: query.divisionCode },
+      };
+      shiftWhere.employee = {
+        ...(shiftWhere.employee as Prisma.EmployeeWhereInput | undefined),
+        companyDivision: { code: query.divisionCode },
+      };
     }
     if (query.status) {
       // Только сдельщина имеет статус. Маппим как в EarningsService:
@@ -141,26 +154,23 @@ export class PayrollService {
     }
 
     // 1. Релевантные сотрудники — те, у кого В ПЕРИОДЕ есть хоть что-то.
-    //    `divisionCode` режет SalaryEntry/ShiftSession через сдельщину
-    //    (см. комментарий выше): иначе менеджер при выборе MARKETPLACE
-    //    видел бы окладника, который вообще не работал на marketplace.
+    //    PHASE 2 STEP 2: `divisionCode` фильтрует SalaryEntry/ShiftSession
+    //    через `Employee.companyDivision.code`, а не отбрасывает их
+    //    целиком, как было до шага. Это позволяет окладника без
+    //    сдельщины показать в его «своём» подразделении.
     const [earningsEmps, salaryEmps, shiftEmps] = await Promise.all([
       this.prisma.operationEntry.groupBy({
         by: ['employeeId'],
         where: earningsWhere,
       }),
-      query.divisionCode
-        ? Promise.resolve([])
-        : this.prisma.salaryEntry.groupBy({
-            by: ['employeeId'],
-            where: salaryWhere,
-          }),
-      query.divisionCode
-        ? Promise.resolve([])
-        : this.prisma.shiftSession.groupBy({
-            by: ['employeeId'],
-            where: shiftWhere,
-          }),
+      this.prisma.salaryEntry.groupBy({
+        by: ['employeeId'],
+        where: salaryWhere,
+      }),
+      this.prisma.shiftSession.groupBy({
+        by: ['employeeId'],
+        where: shiftWhere,
+      }),
     ]);
     const relevantIds = new Set<string>();
     for (const r of earningsEmps) relevantIds.add(r.employeeId);
@@ -179,6 +189,10 @@ export class PayrollService {
     }
 
     // 2. Подгружаем карточки сотрудников.
+    //    PHASE 2 STEP 2: тащим `companyDivision` — нужно как fallback
+    //    для строки, у которой за период не было сдельных начислений
+    //    (только оклад/смены), и для строк с `Order.companyDivisionId
+    //    = NULL`.
     const employees = await this.prisma.employee.findMany({
       where: { id: { in: Array.from(relevantIds) } },
       select: {
@@ -188,6 +202,7 @@ export class PayrollService {
         role: true,
         compensationType: true,
         active: true,
+        companyDivision: { select: { id: true, code: true, name: true } },
       },
     });
     const empById = new Map(employees.map((e) => [e.id, e]));
@@ -310,13 +325,20 @@ export class PayrollService {
       const sr = roundMoneyNumber(sal.get(id)?._sum?.amount ?? 0);
       const sre = roundMoneyNumber(salEdited.get(id)?._sum?.amount ?? 0);
       const div = divisionByEmp.get(id) ?? null;
+      // PHASE 2 STEP 2: fallback на `Employee.companyDivision`, если
+      // у сотрудника не было ни одного сдельного начисления
+      // в подразделении (сюда же — если все сдельные строки висели
+      // на заказах с `companyDivisionId = NULL`).
+      const empDiv = emp.companyDivision ?? null;
+      const finalDivId = div?.id ?? empDiv?.id ?? null;
+      const finalDivName = div?.name ?? empDiv?.name ?? null;
       items.push({
         employeeId: emp.id,
         fullName: emp.fullName,
         role: emp.role,
         compensationType: emp.compensationType,
-        companyDivisionId: div?.id ?? null,
-        companyDivision: div?.name ?? null,
+        companyDivisionId: finalDivId,
+        companyDivision: finalDivName,
         pieceworkApprovedRub: pa,
         pieceworkPendingRub: pp,
         salaryRub: sr,
@@ -390,8 +412,17 @@ export class PayrollService {
       shiftWhere.employee = { role };
     }
     if (query.divisionCode) {
+      // PHASE 2 STEP 2: то же двухосевое поведение, что и в `period`.
       earningsWhere.passport = {
         order: { companyDivision: { code: query.divisionCode } },
+      };
+      salaryWhere.employee = {
+        ...(salaryWhere.employee as Prisma.EmployeeWhereInput | undefined),
+        companyDivision: { code: query.divisionCode },
+      };
+      shiftWhere.employee = {
+        ...(shiftWhere.employee as Prisma.EmployeeWhereInput | undefined),
+        companyDivision: { code: query.divisionCode },
       };
     }
 
@@ -400,18 +431,14 @@ export class PayrollService {
         by: ['employeeId'],
         where: earningsWhere,
       }),
-      query.divisionCode
-        ? Promise.resolve([])
-        : this.prisma.salaryEntry.groupBy({
-            by: ['employeeId'],
-            where: salaryWhere,
-          }),
-      query.divisionCode
-        ? Promise.resolve([])
-        : this.prisma.shiftSession.findMany({
-            where: shiftWhere,
-            select: { employeeId: true, startedAt: true, endedAt: true },
-          }),
+      this.prisma.salaryEntry.groupBy({
+        by: ['employeeId'],
+        where: salaryWhere,
+      }),
+      this.prisma.shiftSession.findMany({
+        where: shiftWhere,
+        select: { employeeId: true, startedAt: true, endedAt: true },
+      }),
     ]);
 
     const relevantIds = new Set<string>();
@@ -577,6 +604,7 @@ export class PayrollService {
         compensationType: true,
         salaryPerShift: true,
         active: true,
+        companyDivision: { select: { id: true, code: true, name: true } },
       },
     });
     if (!employee) {
@@ -705,6 +733,8 @@ export class PayrollService {
           ? Number(employee.salaryPerShift)
           : null,
         active: employee.active,
+        companyDivisionId: employee.companyDivision?.id ?? null,
+        companyDivision: employee.companyDivision ?? null,
       },
       dateFrom: query.dateFrom,
       dateTo: query.dateTo,

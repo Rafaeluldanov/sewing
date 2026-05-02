@@ -10,6 +10,7 @@ import {
 } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getEmployee } from '@/lib/employees-api';
+import { listCompanyDivisions } from '@/lib/company-settings-api';
 import {
   AdminCard,
   AdminPageShell,
@@ -68,6 +69,18 @@ export default async function AdminEmployeeDetailPage({
     throw e;
   }
 
+  // PHASE 2 STEP 2: подгружаем активные подразделения для select-а
+  // в форме. Если backend упал — рендерим без selectа (форма
+  // продолжает работать с прежним набором полей).
+  const divisions = await listCompanyDivisions({ includeInactive: false }).catch(
+    () => [],
+  );
+  const divisionOptions = divisions.map((d) => ({
+    id: d.id,
+    code: d.code,
+    name: d.name,
+  }));
+
   const qrUrl = buildEmployeeQrPath(employee.id);
   const printUrl = buildEmployeePrintPath(employee.id);
 
@@ -111,6 +124,19 @@ export default async function AdminEmployeeDetailPage({
               <dd>{formatRole(employee.role)}</dd>
               <dt>Тип оплаты</dt>
               <dd>{formatCompensation(employee.compensationType)}</dd>
+              <dt>Подразделение</dt>
+              <dd>
+                {employee.companyDivision ? (
+                  <>
+                    {employee.companyDivision.name}{' '}
+                    <code style={{ fontSize: '0.85rem' }}>
+                      {employee.companyDivision.code}
+                    </code>
+                  </>
+                ) : (
+                  <span className="admin-muted">— без привязки —</span>
+                )}
+              </dd>
               <dt>В системе с</dt>
               <dd>{formatDateOnly(employee.createdAt)}</dd>
             </dl>
@@ -126,7 +152,10 @@ export default async function AdminEmployeeDetailPage({
                 <code style={{ fontSize: '0.85rem' }}>{employee.login}</code>
               </dd>
             </dl>
-            <EmployeeEditForm employee={employee} />
+            <EmployeeEditForm
+              employee={employee}
+              divisionOptions={divisionOptions}
+            />
           </AdminCard>
 
           <AdminCard>
