@@ -2891,11 +2891,17 @@ RBAC — `SHOP_MANAGER` / `ADMIN` (на backend), плюс `app/admin/layout.tsx
     action дёргает `PATCH /api/salary/:id` с переданными полями;
     `editedManually` поднимается на `true` автоматически. Ошибки
     backend-а (`SALARY_RATE_MISSING`, `VALIDATION_ERROR`) выводятся
-    под формой через `useFormState`.
+    под формой через `useFormState`. PHASE 2 STEP 4 — успешный
+    PATCH пишет `SALARY_ENTRY_UPDATED` в `AuditLog` с
+    `before`/`after`-снимком и `editedByEmployeeId` (см.
+    `docs/events.md §3.3 «SALARY_ENTRY»`); UI это никак не
+    показывает, лог нужен для ретроспективного разбора правок.
   - кнопка **«Вернуть в авто»** видна только для записей с
     `editedManually = true` и сразу шлёт `PATCH /api/salary/:id
     { reset: true }`. После reset запись снова синхронизируется с
-    `Employee.salaryPerShift` на ближайшем `start shift`.
+    `Employee.salaryPerShift` на ближайшем `start shift`. PHASE 2
+    STEP 4 — пишется `SALARY_ENTRY_RESET` (`reset = true` в
+    payload).
 - В личном режиме (не-менеджер) колонок «Сотрудник» и «Действия»
   нет, как и кнопок «Исправить»/«Вернуть в авто» — рабочий
   сотрудник видит только свои окладные суммы и может прочитать

@@ -1774,6 +1774,26 @@ shift).
 = viewer.employeeId`. `employeeId`/`date`/`source` менять через
 PATCH **нельзя**.
 
+##### Audit (PHASE 2 STEP 4)
+
+Каждая успешная ручная правка пишет ровно одно событие в
+`AuditLog` (`entityType = 'SALARY_ENTRY'`, `entityId =
+SalaryEntry.id`):
+
+- `SALARY_ENTRY_UPDATED` — обычный PATCH (`amount` / `managerComment`).
+- `SALARY_ENTRY_RESET` — `reset = true`.
+
+Payload содержит `salaryEntryId`, `employeeId`, `date`,
+`before` / `after`-снимки `{ amount, managerComment, editedManually }`,
+флаг `reset` и `editedByEmployeeId`. Запись `AuditLog` живёт в
+той же `prisma.$transaction`, что и `salaryEntry.update`
+(инвариант «либо и операция, и аудит, либо ничего»). Автоматический
+`syncDailySalary` (срабатывает на `start/stop shift`) аудит
+сознательно НЕ пишет — иначе журнал моментально засыпался бы
+рутиной и потерял ценность для разбора правок. Никаких новых
+таблиц истории не вводим (см. ТЗ STEP 4 «Не создавать новую
+таблицу истории», `docs/events.md §3.3 «SALARY_ENTRY»`).
+
 ### 10.4 RBAC
 
 | Endpoint                                | Роли                                  |
@@ -1794,8 +1814,12 @@ PATCH **нельзя**.
 - Отпуска / больничные / командировки.
 - Удержания за брак для окладных ролей.
 - Интеграция с 1С/ЗУП и экспорт в Excel.
-- История изменений `SalaryEntry.amount` (только последний
-  `editedBy`).
+- История изменений `SalaryEntry.amount` поверх самой модели —
+  никаких новых таблиц/полей не заводим. Однако с PHASE 2 STEP 4
+  каждая ручная правка оставляет запись в общем `AuditLog`
+  (`SALARY_ENTRY_UPDATED` / `SALARY_ENTRY_RESET`), так что
+  ретроспективно «кто и когда менял» восстанавливается через
+  `entityType = 'SALARY_ENTRY'` (см. §10.3 → «Audit»).
 
 <a id="106-payroll-phase-1-read-only"></a>
 

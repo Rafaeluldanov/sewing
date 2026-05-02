@@ -214,7 +214,35 @@ export type AuditEntityType =
    * (включая смену `companyDivisionId`) пишутся под `ORDER`, а
    * `COMPANY_DIVISION` — это события самой карточки справочника.
    */
-  | 'COMPANY_DIVISION';
+  | 'COMPANY_DIVISION'
+  /**
+   * Окладные начисления (PHASE 2 STEP 4 «audit manual salary edits»,
+   * см. `apps/api/src/modules/salary/salary.service.ts::updateManually`,
+   * `prisma/schema.prisma::SalaryEntry`,
+   * `docs/domain.md §«Audit log»`). События только для **ручных**
+   * правок менеджером — автоматический `syncDailySalary` (срабатывает
+   * на `start/stop shift`) аудит не пишет, чтобы не зашумлять журнал.
+   *
+   * События:
+   *   - `SALARY_ENTRY_UPDATED` — менеджер изменил `amount` и/или
+   *     `managerComment` через `PATCH /api/salary/:id` (без флага
+   *     `reset`). Запись приобретает `editedManually = true`,
+   *     `editedByEmployeeId = viewer`. Payload — `{ salaryEntryId,
+   *     employeeId, date, before:{amount,managerComment,editedManually},
+   *     after:{amount,managerComment,editedManually}, reset: false,
+   *     editedByEmployeeId }`.
+   *   - `SALARY_ENTRY_RESET` — менеджер прислал `reset = true`. Запись
+   *     возвращается под автоматический sync: `editedManually = false`,
+   *     `managerComment = null`, `editedByEmployeeId = null`,
+   *     `amount = employee.salaryPerShift`. Payload — тот же набор
+   *     полей, что у `SALARY_ENTRY_UPDATED`, но с `reset: true` и
+   *     `after.editedManually = false` / `after.managerComment = null`.
+   *
+   * `entityId = SalaryEntry.id`. Никаких новых таблиц / полей в
+   * `SalaryEntry` для истории не заводим — это сознательно (см. ТЗ
+   * STEP 4 «Не создавать новую таблицу истории»).
+   */
+  | 'SALARY_ENTRY';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

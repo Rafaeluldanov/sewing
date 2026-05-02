@@ -8,6 +8,11 @@ import { SalaryService } from './salary.service.js';
  * Контракт — `docs/api.md §10a`. Бизнес-правила — `docs/domain.md §9a`.
  * Экспортирует `SalaryService`, чтобы `ShiftsModule` мог дёргать
  * `syncDailySalary` на старте/завершении смены.
+ *
+ * `AuditService` доступен через `@Global` `AuditModule` —
+ * `SalaryService.updateManually` пишет `SALARY_ENTRY_UPDATED` /
+ * `SALARY_ENTRY_RESET` в `AuditLog` (PHASE 2 STEP 4, см. JSDoc
+ * метода, `docs/events.md`).
  */
 @Module({
   controllers: [SalaryController],

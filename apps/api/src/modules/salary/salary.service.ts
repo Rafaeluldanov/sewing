@@ -16,6 +16,7 @@ import {
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { isSalaryEligible } from '../employees/compensation.js';
 import { isSalaryManager } from './salary.constants.js';
+import { AuditService } from '../audit/audit.service.js';
 
 /**
  * Сервис окладных начислений (ADR-0021, post-Шаг 18 / Шаг 19).
@@ -54,7 +55,10 @@ import { isSalaryManager } from './salary.constants.js';
  */
 @Injectable()
 export class SalaryService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // ===========================================================================
   // SYNC
@@ -266,17 +270,37 @@ export class SalaryService {
    *
    * `employeeId`, `date`, `source` мы не трогаем нигде — этих полей
    * нет в `UpdateSalaryEntrySchema`, чтобы запрос не мог их подменить.
+   *
+   * **PHASE 2 STEP 4 — audit trail.** Каждая успешная ручная правка
+   * пишет ровно одно событие в `AuditLog`:
+   *   - `SALARY_ENTRY_UPDATED` для обычного PATCH-а;
+   *   - `SALARY_ENTRY_RESET` для `reset = true`.
+   * Запись `AuditLog` живёт в той же `prisma.$transaction`, что и
+   * `salaryEntry.update` — это инвариант «либо и операция, и аудит,
+   * либо ничего» (см. `docs/domain.md §«Audit log»`,
+   * `apps/api/src/modules/audit/audit.service.ts`).
+   * Автоматический `syncDailySalary` (вызывается из `start/stop shift`)
+   * аудит сознательно НЕ пишет — иначе журнал моментально засыпался
+   * бы рутинной синхронизацией и потерял ценность для разбора правок.
    */
   async updateManually(
     id: string,
     dto: UpdateSalaryEntryDto,
     viewer: AuthPrincipal,
   ): Promise<SalaryEntryDto> {
+    // Берём полный «before»-снимок: сравнить before/after — это и
+    // payload audit-события, и страховка от незапланированных
+    // изменений `employeeId/date/source` (этих полей нет в DTO,
+    // но снимок документирует «что было» на случай реверса).
     const entry = await this.prisma.salaryEntry.findUnique({
       where: { id },
       select: {
         id: true,
         employeeId: true,
+        date: true,
+        amount: true,
+        managerComment: true,
+        editedManually: true,
       },
     });
     if (!entry) throw new SalaryEntryNotFoundException();
@@ -289,15 +313,45 @@ export class SalaryService {
       if (!employee || employee.salaryPerShift === null) {
         throw new SalaryReentryWithoutRateException();
       }
-      const updated = await this.prisma.salaryEntry.update({
-        where: { id },
-        data: {
-          amount: roundMoney(new Prisma.Decimal(employee.salaryPerShift)),
-          editedManually: false,
-          managerComment: null,
-          editedByEmployeeId: null,
-        },
-        include: salaryInclude,
+      const newAmount = roundMoney(new Prisma.Decimal(employee.salaryPerShift));
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.salaryEntry.update({
+          where: { id },
+          data: {
+            amount: newAmount,
+            editedManually: false,
+            managerComment: null,
+            editedByEmployeeId: null,
+          },
+          include: salaryInclude,
+        });
+        await this.audit.log(
+          {
+            event: 'SALARY_ENTRY_RESET',
+            entityType: 'SALARY_ENTRY',
+            entityId: row.id,
+            employeeId: viewer.employeeId,
+            payload: {
+              salaryEntryId: row.id,
+              employeeId: entry.employeeId,
+              date: toDateOnly(entry.date),
+              before: {
+                amount: roundMoneyNumber(entry.amount),
+                managerComment: entry.managerComment,
+                editedManually: entry.editedManually,
+              },
+              after: {
+                amount: roundMoneyNumber(row.amount),
+                managerComment: row.managerComment,
+                editedManually: row.editedManually,
+              },
+              reset: true,
+              editedByEmployeeId: viewer.employeeId,
+            },
+          },
+          tx,
+        );
+        return row;
       });
       return toDto(updated);
     }
@@ -314,10 +368,39 @@ export class SalaryService {
         dto.managerComment === null ? null : dto.managerComment.trim() || null;
     }
 
-    const updated = await this.prisma.salaryEntry.update({
-      where: { id },
-      data,
-      include: salaryInclude,
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.salaryEntry.update({
+        where: { id },
+        data,
+        include: salaryInclude,
+      });
+      await this.audit.log(
+        {
+          event: 'SALARY_ENTRY_UPDATED',
+          entityType: 'SALARY_ENTRY',
+          entityId: row.id,
+          employeeId: viewer.employeeId,
+          payload: {
+            salaryEntryId: row.id,
+            employeeId: entry.employeeId,
+            date: toDateOnly(entry.date),
+            before: {
+              amount: roundMoneyNumber(entry.amount),
+              managerComment: entry.managerComment,
+              editedManually: entry.editedManually,
+            },
+            after: {
+              amount: roundMoneyNumber(row.amount),
+              managerComment: row.managerComment,
+              editedManually: row.editedManually,
+            },
+            reset: false,
+            editedByEmployeeId: viewer.employeeId,
+          },
+        },
+        tx,
+      );
+      return row;
     });
     return toDto(updated);
   }

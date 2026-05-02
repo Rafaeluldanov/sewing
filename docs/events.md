@@ -350,7 +350,8 @@ PURCHASE_ORDER | PURCHASE_RECEIPT |
 ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
 SIZE |
-COMPANY_SETTINGS | COMPANY_DIVISION
+COMPANY_SETTINGS | COMPANY_DIVISION |
+SALARY_ENTRY
 ```
 
 ### 3.3. Что именно логируется (собрано по `rg "event:\\s*'" apps/api/src`)
@@ -499,6 +500,29 @@ runtime-коде (не из комментариев/документации). 
   `entityId = CompanyDivision.id` и `before`/`after`-payload (для
   update). Soft-delete тоже идёт `COMPANY_DIVISION_UPDATED`
   (`isActive: false`), отдельного `*_DELETED` события нет.
+- `SALARY_ENTRY` (PHASE 2 STEP 4) — `SalaryService.updateManually`
+  (`apps/api/src/modules/salary/salary.service.ts`):
+  - `SALARY_ENTRY_UPDATED` — менеджер изменил `amount` /
+    `managerComment` через `PATCH /api/salary/:id`. Запись
+    приобретает `editedManually = true`,
+    `editedByEmployeeId = viewer`. Payload —
+    `{ salaryEntryId, employeeId, date,
+       before: { amount, managerComment, editedManually },
+       after: { amount, managerComment, editedManually },
+       reset: false, editedByEmployeeId }`.
+  - `SALARY_ENTRY_RESET` — менеджер прислал `reset = true`.
+    Запись возвращается под автоматический sync
+    (`editedManually = false`, `managerComment = null`,
+    `editedByEmployeeId = null`,
+    `amount = employee.salaryPerShift`). Payload — тот же набор
+    полей с `reset: true` и сброшенными `after.*`.
+
+  `entityId = SalaryEntry.id`. Автоматический `syncDailySalary`
+  (вызывается на `start/stop shift` из `ShiftsService`) аудит
+  **не** пишет — это сознательно (см. JSDoc
+  `SalaryService.updateManually` и ТЗ STEP 4 «не зашумлять журнал»).
+  Никаких новых таблиц истории не заводим — `SalaryEntry` модель
+  не меняется.
 - `CUT_RELEASE_POLICY_CONSUMED` — пишется в транзакции
   `PassportsService.issueToEmployee` (через
   `consumeCutReleasePolicyInTx`, `passports.service.ts:1223`) при

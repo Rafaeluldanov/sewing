@@ -845,7 +845,7 @@ RBAC-константа — `apps/api/src/modules/payroll/payroll.constants.ts`
 | ----- | -------------------------- | ------------------ | -------- |
 | GET   | `/api/salary`              | Any auth (scope в сервисе) | List `ListSalaryQuery`. SHOP_MANAGER/ADMIN видят всех; остальные — только свои строки. |
 | GET   | `/api/salary/summary`      | Any auth (scope в сервисе) | Агрегат `SalarySummaryQuery`. |
-| PATCH | `/api/salary/:id`          | SHOP_MANAGER, ADMIN | Body `UpdateSalaryEntryDto`. Ручная корректировка суммы / комментария / `reset = true` (вернуть под автоматику). |
+| PATCH | `/api/salary/:id`          | SHOP_MANAGER, ADMIN | Body `UpdateSalaryEntryDto`. Ручная корректировка суммы / комментария / `reset = true` (вернуть под автоматику). PHASE 2 STEP 4 — каждая успешная правка пишет ровно одно событие в `AuditLog`: `SALARY_ENTRY_UPDATED` (обычный PATCH) или `SALARY_ENTRY_RESET` (`reset = true`). Payload содержит `before` / `after`-снимки `amount`/`managerComment`/`editedManually` + `salaryEntryId`/`employeeId`/`date`/`reset`/`editedByEmployeeId`. См. `docs/events.md §3.3 «SALARY_ENTRY»`. Автоматический `syncDailySalary` (на `start/stop shift`) аудит сознательно НЕ пишет. |
 
 DTO: `packages/shared/src/salary.ts`. ADR: 0021.
 

@@ -428,6 +428,111 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
     expect(res.body.editedManually).toBe(false);
     expect(res.body.managerComment).toBeNull();
   });
+
+  // -------------------------------------------------------------------------
+  // 10. AUDIT TRAIL (PHASE 2 STEP 4 «audit manual salary edits»)
+  // -------------------------------------------------------------------------
+
+  test('PATCH /api/salary/:id пишет SALARY_ENTRY_UPDATED с before/after-снимком', async () => {
+    const entry = await t.prisma.salaryEntry.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        date: new Date('2026-04-15'),
+        amount: new Prisma.Decimal(3000),
+        source: 'SHIFT_DAY',
+      },
+    });
+    const res = await request(t.app.getHttpServer())
+      .patch(`/api/salary/${entry.id}`)
+      .set('Cookie', cookies.manager)
+      .send({ amount: 4500, managerComment: 'Переработка' });
+    expect(res.status).toBe(200);
+
+    const auditRows = await t.prisma.auditLog.findMany({
+      where: { entityType: 'SALARY_ENTRY', entityId: entry.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(auditRows).toHaveLength(1);
+    const log = auditRows[0]!;
+    expect(log.event).toBe('SALARY_ENTRY_UPDATED');
+    expect(log.employeeId).toBe(seed.employees['shop-chief'].id);
+    const payload = log.payload as Record<string, unknown>;
+    expect(payload.salaryEntryId).toBe(entry.id);
+    expect(payload.employeeId).toBe(seed.employees.qc.id);
+    expect(payload.date).toBe('2026-04-15');
+    expect(payload.reset).toBe(false);
+    expect(payload.editedByEmployeeId).toBe(seed.employees['shop-chief'].id);
+    const before = payload.before as Record<string, unknown>;
+    const after = payload.after as Record<string, unknown>;
+    expect(before.amount).toBeCloseTo(3000, 2);
+    expect(before.managerComment).toBeNull();
+    expect(before.editedManually).toBe(false);
+    expect(after.amount).toBeCloseTo(4500, 2);
+    expect(after.managerComment).toBe('Переработка');
+    expect(after.editedManually).toBe(true);
+  });
+
+  test('PATCH /api/salary/:id с reset=true пишет SALARY_ENTRY_RESET с reset:true', async () => {
+    const entry = await t.prisma.salaryEntry.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        date: new Date('2026-04-16'),
+        amount: new Prisma.Decimal(7777),
+        source: 'SHIFT_DAY',
+        editedManually: true,
+        managerComment: 'Старая правка',
+        editedByEmployeeId: seed.employees['shop-chief'].id,
+      },
+    });
+    const res = await request(t.app.getHttpServer())
+      .patch(`/api/salary/${entry.id}`)
+      .set('Cookie', cookies.manager)
+      .send({ reset: true });
+    expect(res.status).toBe(200);
+
+    const auditRows = await t.prisma.auditLog.findMany({
+      where: { entityType: 'SALARY_ENTRY', entityId: entry.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(auditRows).toHaveLength(1);
+    const log = auditRows[0]!;
+    expect(log.event).toBe('SALARY_ENTRY_RESET');
+    expect(log.employeeId).toBe(seed.employees['shop-chief'].id);
+    const payload = log.payload as Record<string, unknown>;
+    expect(payload.reset).toBe(true);
+    expect(payload.salaryEntryId).toBe(entry.id);
+    expect(payload.employeeId).toBe(seed.employees.qc.id);
+    expect(payload.date).toBe('2026-04-16');
+    const before = payload.before as Record<string, unknown>;
+    const after = payload.after as Record<string, unknown>;
+    expect(before.amount).toBeCloseTo(7777, 2);
+    expect(before.managerComment).toBe('Старая правка');
+    expect(before.editedManually).toBe(true);
+    expect(after.amount).toBeCloseTo(3000, 2);
+    expect(after.managerComment).toBeNull();
+    expect(after.editedManually).toBe(false);
+  });
+
+  test('автоматический syncDailySalary не пишет SALARY_ENTRY_* в AuditLog', async () => {
+    // Регрессия: только ручной PATCH должен оставлять след в журнале.
+    // Иначе на каждый start/stop shift журнал засыпался бы рутиной и
+    // потерял ценность для разбора правок (см. JSDoc метода).
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.qc)
+      .send({
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+      })
+      .expect((r) => {
+        if (r.status >= 300) throw new Error(JSON.stringify(r.body));
+      });
+
+    const count = await t.prisma.auditLog.count({
+      where: { entityType: 'SALARY_ENTRY' },
+    });
+    expect(count).toBe(0);
+  });
 });
 
 // ---------------------------------------------------------------------------
