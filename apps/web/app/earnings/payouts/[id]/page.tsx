@@ -1,0 +1,291 @@
+import { notFound, redirect } from 'next/navigation';
+import Link from 'next/link';
+import { ArrowLeft, BadgeRussianRuble } from 'lucide-react';
+import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { getPayrollPayout } from '@/lib/payroll-payouts-api';
+import { ApiRequestError } from '@/lib/api';
+import type { PayrollPayoutLineDto, PayrollPayoutDto } from '@sewing/shared/payroll-payouts';
+import { acknowledgePayrollPayoutAction } from '../actions';
+import { AckButton } from './ack-button';
+
+export const dynamic = 'force-dynamic';
+
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(`${iso.slice(0, 10)}T00:00:00.000Z`);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleDateString('ru-RU');
+}
+
+function formatDateTime(iso: string | null | undefined): string {
+  if (!iso) return '—';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return iso;
+  return d.toLocaleString('ru-RU', {
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+function formatRub(value: number): string {
+  return `${value.toLocaleString('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })} ₽`;
+}
+
+function statusLabel(status: PayrollPayoutDto['status']): string {
+  switch (status) {
+    case 'DRAFT':
+      return 'Черновик';
+    case 'ISSUED':
+      return 'Ожидает подтверждения';
+    case 'ACKNOWLEDGED':
+      return 'Получено';
+    case 'CANCELLED':
+      return 'Отменено';
+  }
+}
+
+function statusStyle(
+  status: PayrollPayoutDto['status'],
+): React.CSSProperties {
+  switch (status) {
+    case 'ISSUED':
+      return {
+        background: '#fef9c3',
+        color: '#854d0e',
+        border: '1px solid #fde047',
+      };
+    case 'ACKNOWLEDGED':
+      return {
+        background: '#dcfce7',
+        color: '#166534',
+        border: '1px solid #86efac',
+      };
+    case 'CANCELLED':
+      return {
+        background: '#f3f4f6',
+        color: '#6b7280',
+        border: '1px solid #d1d5db',
+      };
+    default:
+      return {
+        background: '#f3f4f6',
+        color: '#374151',
+        border: '1px solid #d1d5db',
+      };
+  }
+}
+
+function lineKindLabel(kind: PayrollPayoutLineDto['kind']): string {
+  return kind === 'PIECEWORK' ? 'Сдельно' : 'Оклад';
+}
+
+import type React from 'react';
+
+/**
+ * Карточка выплаты для сотрудника (PHASE 3 STEP 5).
+ *
+ * Показывает детали выплаты в read-only режиме.
+ * Кнопка «Деньги получил» доступна только при статусе ISSUED.
+ * Никаких кнопок cancel / recompute / issue нет.
+ */
+export default async function EmployeePayoutDetailPage({
+  params,
+}: {
+  params: { id: string };
+}) {
+  const me = await getCurrentUserOrNull();
+  if (!me) redirect(`/login?next=/earnings/payouts/${params.id}`);
+
+  let payout: PayrollPayoutDto;
+  try {
+    payout = await getPayrollPayout(params.id);
+  } catch (e) {
+    if (e instanceof ApiRequestError && e.statusCode === 404) {
+      notFound();
+    }
+    throw e;
+  }
+
+  const boundAck = acknowledgePayrollPayoutAction.bind(null, payout.id);
+
+  return (
+    <div className="page-shell">
+      {/* Шапка */}
+      <div>
+        <div className="page-eyebrow">
+          <BadgeRussianRuble size={18} strokeWidth={1.6} aria-hidden />
+          Мои выплаты
+        </div>
+        <h1 className="page-title">Выплата зарплаты</h1>
+        <p className="page-subtitle">
+          {formatDate(payout.periodFrom)} — {formatDate(payout.periodTo)}
+        </p>
+      </div>
+
+      {/* Статус */}
+      <div>
+        <span
+          style={{
+            ...statusStyle(payout.status),
+            display: 'inline-block',
+            borderRadius: '9999px',
+            padding: '0.3rem 0.9rem',
+            fontSize: '0.875rem',
+            fontWeight: 600,
+          }}
+        >
+          {statusLabel(payout.status)}
+        </span>
+      </div>
+
+      {/* KPI */}
+      <div className="kpi-grid">
+        <div className="kpi-card">
+          <div className="kpi-card__head">Сдельно</div>
+          <div className="kpi-card__value">
+            {formatRub(payout.amountPieceworkRub)}
+          </div>
+        </div>
+        <div className="kpi-card">
+          <div className="kpi-card__head">Оклад</div>
+          <div className="kpi-card__value">
+            {formatRub(payout.amountSalaryRub)}
+          </div>
+        </div>
+        <div className="kpi-card kpi-card--accent">
+          <div className="kpi-card__head">Итого</div>
+          <div className="kpi-card__value">
+            {formatRub(payout.amountTotalRub)}
+          </div>
+        </div>
+      </div>
+
+      {/* Детали */}
+      <div className="card">
+        <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 600 }}>
+          Детали
+        </h2>
+        <dl
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'auto 1fr',
+            gap: '0.375rem 1rem',
+            margin: 0,
+          }}
+        >
+          <dt style={{ color: '#6b7280', fontWeight: 500 }}>Период</dt>
+          <dd style={{ margin: 0 }}>
+            {formatDate(payout.periodFrom)} — {formatDate(payout.periodTo)}
+          </dd>
+          {payout.issuedAt && (
+            <>
+              <dt style={{ color: '#6b7280', fontWeight: 500 }}>Выдано</dt>
+              <dd style={{ margin: 0 }}>{formatDateTime(payout.issuedAt)}</dd>
+            </>
+          )}
+          {payout.acknowledgedAt && (
+            <>
+              <dt style={{ color: '#6b7280', fontWeight: 500 }}>Подтверждено</dt>
+              <dd style={{ margin: 0 }}>{formatDateTime(payout.acknowledgedAt)}</dd>
+            </>
+          )}
+          {payout.managerComment && (
+            <>
+              <dt style={{ color: '#6b7280', fontWeight: 500 }}>Комментарий</dt>
+              <dd style={{ margin: 0 }}>{payout.managerComment}</dd>
+            </>
+          )}
+        </dl>
+      </div>
+
+      {/* Строки выплаты */}
+      {payout.lines && payout.lines.length > 0 && (
+        <div className="card">
+          <h2
+            style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 600 }}
+          >
+            Строки выплаты
+          </h2>
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Дата</th>
+                <th>Тип</th>
+                <th style={{ textAlign: 'right' }}>Сумма, ₽</th>
+              </tr>
+            </thead>
+            <tbody>
+              {payout.lines.map((line) => (
+                <tr key={line.id}>
+                  <td>{formatDate(line.occurredOn)}</td>
+                  <td>{lineKindLabel(line.kind)}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <strong>{formatRub(line.amountRub)}</strong>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Кнопка подтверждения — только для ISSUED */}
+      {payout.status === 'ISSUED' && (
+        <div className="card">
+          <h2
+            style={{ margin: '0 0 0.5rem', fontSize: '1rem', fontWeight: 600 }}
+          >
+            Подтверждение получения
+          </h2>
+          <p style={{ color: '#6b7280', marginBottom: '1rem', marginTop: 0 }}>
+            Нажмите кнопку ниже, чтобы подтвердить, что вы получили эту
+            выплату.
+          </p>
+          <AckButton ackAction={boundAck} />
+        </div>
+      )}
+
+      {payout.status === 'ACKNOWLEDGED' && (
+        <div
+          style={{
+            background: '#dcfce7',
+            border: '1px solid #86efac',
+            borderRadius: '0.5rem',
+            padding: '0.875rem 1rem',
+            color: '#166534',
+            fontWeight: 500,
+          }}
+        >
+          Вы подтвердили получение этой выплаты. Спасибо!
+        </div>
+      )}
+
+      {payout.status === 'CANCELLED' && (
+        <div
+          style={{
+            background: '#f3f4f6',
+            border: '1px solid #d1d5db',
+            borderRadius: '0.5rem',
+            padding: '0.875rem 1rem',
+            color: '#6b7280',
+          }}
+        >
+          Эта выплата была отменена.
+        </div>
+      )}
+
+      <div>
+        <Link href="/earnings/payouts" className="btn btn-ghost">
+          <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
+          К списку выплат
+        </Link>
+      </div>
+    </div>
+  );
+}
