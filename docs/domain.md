@@ -1984,6 +1984,68 @@ post-create write на MVP — `EarningsService.approvePendingForPassport`
 `PayrollLockedException` зарезервирован и будет подключён, как только
 появится ручная правка/отмена `OperationEntry`.
 
+<a id="документ-начисления-зарплаты"></a>
+
+### 10.9 Документ начисления зарплаты (`PayrollAccrualDocument`)
+
+Источник: `prisma/schema.prisma::PayrollAccrualDocument` /
+`PayrollAccrualDocumentLine`,
+`apps/api/src/modules/payroll-accrual-documents/*`,
+`packages/shared/src/payroll-accrual-documents.ts`,
+`docs/api.md §30c`, `docs/events.md §3.4`.
+
+**Назначение.** Менеджер нажимает «Начислить зарплату» и указывает
+`accrualDate` (дата расчёта **включительно**). Система формирует
+`DRAFT`-документ со списком сотрудников и суммами: учитываются все
+`OperationEntry` (APPROVED, `createdAt ≤ accrualDate 23:59:59.999 UTC`)
+и `SalaryEntry` (`date ≤ accrualDate`), ещё **не** входящие в активные
+`PayrollPayoutLine` (статус `DRAFT`/`ISSUED`/`ACKNOWLEDGED`).
+Группировка — по `employeeId`; строка создаётся только при
+`amountPieceworkRub + amountSalaryRub > 0`.
+
+**Жизненный цикл `PayrollAccrualDocumentStatus`:**
+
+```
+DRAFT ──── pay ────► PAID
+  │
+  └──── cancel ───► CANCELLED
+```
+
+`PAID` и `CANCELLED` — терминальные. `PAID` нельзя отменить в MVP.
+
+**`accrualDate` как cutoff.** Дата включительно:
+- `OperationEntry.createdAt ≤ accrualDate 23:59:59.999 UTC` (endOfDayUtc);
+- `SalaryEntry.date ≤ accrualDate` (сравнение по DB Date).
+Начисления строго **после** `accrualDate` в документ не попадают.
+
+**Исключение уже оплаченных строк.** При расчёте (создание /
+recompute) сначала загружается множество занятых FK из активных
+`PayrollPayoutLine` (`payout.status ∈ DRAFT/ISSUED/ACKNOWLEDGED`).
+Начисления из этого множества исключаются через `id notIn`.
+
+**`manualAdjustRub`.** Менеджер может скорректировать отдельную
+строку через `PATCH /…/:id/lines/:lineId`. Поле сохраняется при
+`recompute`. `amountToPayRub = amountPieceworkRub + amountSalaryRub +
+manualAdjustRub`. Итоговые суммы документа пересчитываются автоматически.
+
+**pay → `PayrollPayout` ISSUED.** При проводке для каждой строки с
+`amountToPayRub > 0`:
+1. Повторная проверка активной уникальности snapshot-строк (guard
+   от race condition → 422 `PAYROLL_ACCRUAL_LINE_ALREADY_PAID`).
+2. Создаётся `PayrollPayout` со статусом `ISSUED`:
+   - `periodFrom` — минимальная дата начисления из snapshot
+     (`salaryEntries[].date` / `operationEntries[].createdAt`);
+   - `periodTo = accrualDate`.
+3. Создаются `PayrollPayoutLine` по snapshot (PIECEWORK/SALARY).
+4. `PayrollAccrualDocumentLine.payoutId` проставляется.
+
+**Ограничение STEP 6.2.** Если хотя бы одна строка документа имеет
+`manualAdjustRub ≠ 0`, а `PayrollPayoutLineKind` не содержит значения
+`ADJUSTMENT`, `pay` блокируется → 409
+`PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`. Для поддержки ручных
+корректировок в payout-строках необходим STEP 6.3/6.4 с расширением
+enum.
+
 ---
 
 <a id="11-warehouse"></a>

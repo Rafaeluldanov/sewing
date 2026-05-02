@@ -279,7 +279,34 @@ export type AuditEntityType =
    * выплаты. Это разные люди для CREATE/RECOMPUTE/ISSUE/CANCEL и
    * один и тот же — для ACKNOWLEDGED.
    */
-  | 'PAYROLL_PAYOUT';
+  | 'PAYROLL_PAYOUT'
+  /**
+   * Документ начисления зарплаты (PHASE 3 STEP 6, см.
+   * `apps/api/src/modules/payroll-accrual-documents/*`,
+   * `prisma/schema.prisma::PayrollAccrualDocument` /
+   * `PayrollAccrualDocumentLine`,
+   * `docs/erd.md §2.9`). Аудит пишется в той же транзакции,
+   * что и соответствующая мутация:
+   *
+   *   - `PAYROLL_ACCRUAL_DOCUMENT_CREATED` — менеджер создал
+   *     DRAFT через `POST /api/payroll/accrual-documents`;
+   *     payload — `{ accrualDate, linesCount, totalToPayRub, createdById }`.
+   *   - `PAYROLL_ACCRUAL_DOCUMENT_RECOMPUTED` — менеджер пересчитал
+   *     строки `POST /…/:id/recompute`;
+   *     payload — `{ accrualDate, before:{linesCount,totalToPayRub}, after:{linesCount,totalToPayRub} }`.
+   *   - `PAYROLL_ACCRUAL_DOCUMENT_LINE_UPDATED` — менеджер
+   *     скорректировал строку `PATCH /…/:id/lines/:lineId`;
+   *     payload — `{ lineId, employeeId, before:{manualAdjustRub,amountToPayRub}, after:{manualAdjustRub,amountToPayRub} }`.
+   *   - `PAYROLL_ACCRUAL_DOCUMENT_PAID` — менеджер провёл документ
+   *     `POST /…/:id/pay`; создаются `PayrollPayout` ISSUED;
+   *     payload — `{ accrualDate, payoutsCreated, totalToPayRub, paidById }`.
+   *   - `PAYROLL_ACCRUAL_DOCUMENT_CANCELLED` — менеджер отменил
+   *     DRAFT `POST /…/:id/cancel`;
+   *     payload — `{ accrualDate, cancelReason, cancelledById }`.
+   *
+   * `entityId = PayrollAccrualDocument.id`.
+   */
+  | 'PAYROLL_ACCRUAL_DOCUMENT';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

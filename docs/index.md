@@ -468,6 +468,29 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   Документы: [`docs/erd.md §2.9`](./erd.md#29-salary--earnings).
   Тесты — `tests/smoke/payroll-accrual-documents-model.smoke.test.ts`.
 
+- [ ] **PHASE 3 STEP 6.2 «Payroll accrual document backend API».** Backend
+  REST API для документа начисления зарплаты. Новый Nest-модуль
+  `PayrollAccrualDocumentsModule` (`payroll-accrual-documents/*`),
+  контроллер `@Controller('payroll/accrual-documents')`, сервис с
+  методами `list` / `get` / `create` / `recompute` / `updateLine` /
+  `pay` / `cancel`. Расчёт строк по дате включительно (`accrualDate`
+  cutoff). При проводке (`pay`) создаётся `PayrollPayout ISSUED` для
+  каждой строки с `amountToPayRub > 0`. `manualAdjustRub` поддерживается
+  в документе; перенос в payout-строки заблокирован (409
+  `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`) до расширения enum
+  `PayrollPayoutLineKind` на `ADJUSTMENT` в STEP 6.3/6.4. Новые коды
+  ошибок: `PAYROLL_ACCRUAL_DOCUMENT_NOT_FOUND` /
+  `PAYROLL_ACCRUAL_DOCUMENT_INVALID_STATE` /
+  `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND` /
+  `PAYROLL_ACCRUAL_LINE_ALREADY_PAID` /
+  `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`. AuditEntityType
+  `PAYROLL_ACCRUAL_DOCUMENT` (5 событий). UI — не реализован (STEP 6.5+).
+  Документы: [`docs/api.md §30c`](./api.md#30c-payroll-accrual-documents),
+  [`docs/events.md §3.4`](./events.md#34-payroll_accrual_document),
+  [`docs/domain.md §10.9`](./domain.md#документ-начисления-зарплаты).
+  Тесты — `tests/integration/payroll-accrual-documents.test.ts`,
+  `tests/smoke/payroll-accrual-documents-api.smoke.test.ts`.
+
 - [x] **PHASE 2 STEP 5 «Полировка Employee/Payroll UI».** Карточка
   `/admin/employees/[id]` теперь читаемо показывает оси
   компенсации в read-режиме: «Тип оплаты», «Ставка за смену»

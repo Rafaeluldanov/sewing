@@ -351,7 +351,8 @@ ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
-SALARY_ENTRY | PAYROLL_PAYOUT
+SALARY_ENTRY | PAYROLL_PAYOUT |
+PAYROLL_ACCRUAL_DOCUMENT
 ```
 
 <a id="33-salary-entry"></a>
@@ -596,6 +597,48 @@ PayrollPayout.id`. `employeeId` события (см. `AuditLogInput`) — эт�
 бросает 422 `PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED` — отдельного
 события для этого нет (бизнес-операция отбивается до записи
 аудита).
+
+<a id="34-payroll_accrual_document"></a>
+
+#### Документ начисления зарплаты (`entityType = PAYROLL_ACCRUAL_DOCUMENT`)
+
+`entityId = PayrollAccrualDocument.id`. Источник —
+`apps/api/src/modules/payroll-accrual-documents/payroll-accrual-documents.service.ts`.
+Все события пишутся в той же транзакции, что и соответствующая мутация
+(передаётся `tx` в `AuditService.log`).
+
+- `PAYROLL_ACCRUAL_DOCUMENT_CREATED` — `PayrollAccrualDocumentsService.create`.
+  Менеджер создал DRAFT через `POST /api/payroll/accrual-documents`.
+  Payload — `{ documentId, accrualDate, linesCount, totalToPayRub, createdById }`.
+
+- `PAYROLL_ACCRUAL_DOCUMENT_RECOMPUTED` — `PayrollAccrualDocumentsService.recompute`.
+  Пересчитаны строки DRAFT (`POST /…/:id/recompute`); `manualAdjustRub` /
+  `manualComment` сохранены.
+  Payload — `{ documentId, accrualDate, before: { linesCount, totalToPayRub },
+  after: { linesCount, totalToPayRub } }`.
+
+- `PAYROLL_ACCRUAL_DOCUMENT_LINE_UPDATED` — `PayrollAccrualDocumentsService.updateLine`.
+  Менеджер скорректировал строку (`PATCH /…/:id/lines/:lineId`).
+  Payload — `{ documentId, lineId, employeeId,
+  before: { manualAdjustRub, amountToPayRub },
+  after: { manualAdjustRub, amountToPayRub } }`.
+
+- `PAYROLL_ACCRUAL_DOCUMENT_PAID` — `PayrollAccrualDocumentsService.pay`.
+  Документ проведён (`POST /…/:id/pay`): `DRAFT → PAID`; созданы
+  `PayrollPayout` ISSUED для каждой строки с `amountToPayRub > 0`.
+  Payload — `{ documentId, accrualDate, payoutsCreated, totalToPayRub,
+  paidById, paidAt }`.
+
+- `PAYROLL_ACCRUAL_DOCUMENT_CANCELLED` — `PayrollAccrualDocumentsService.cancel`.
+  Черновик отменён (`POST /…/:id/cancel`): `DRAFT → CANCELLED`.
+  Payload — `{ documentId, accrualDate, cancelledById, cancelReason,
+  cancelledAt }`.
+
+**Ограничение STEP 6.2 (`manualAdjustRub`).** Если строка документа
+имеет `manualAdjustRub ≠ 0`, а `PayrollPayoutLineKind` не содержит
+`ADJUSTMENT`, проводка блокируется 409
+`PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED` — аудит `PAID` не пишется.
+Расширение enum — STEP 6.3/6.4.
 
 <a id="33a-payroll-phase-1-read-only"></a>
 
