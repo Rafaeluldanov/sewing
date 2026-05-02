@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, SalaryEntrySource } from '@prisma/client';
+import { PayrollPayoutStatus, Prisma, SalaryEntrySource } from '@prisma/client';
 import type {
   ListSalaryQuery,
   SalaryEntryDto,
@@ -10,6 +10,7 @@ import type {
 } from '@sewing/shared/salary';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  PayrollLockedException,
   SalaryEntryNotFoundException,
   SalaryReentryWithoutRateException,
 } from '../../common/errors.js';
@@ -147,6 +148,14 @@ export class SalaryService {
     if (existing) {
       if (existing.editedManually) {
         // Уважаем ручную правку, ничего не трогаем.
+        return toDto(existing);
+      }
+      // PHASE 3 STEP 3: locked payout lines are immutable; auto-sync
+      // must not rewrite paid salary. Если запись уже попала в выплату
+      // со статусом ISSUED/ACKNOWLEDGED — silent skip, не падаем
+      // ошибкой в `start/stop shift` flow. DRAFT не блокирует:
+      // черновик ещё пересобирается.
+      if (await isSalaryEntryLocked(tx, existing.id)) {
         return toDto(existing);
       }
       const updated = await tx.salaryEntry.update({
@@ -304,6 +313,16 @@ export class SalaryService {
       },
     });
     if (!entry) throw new SalaryEntryNotFoundException();
+
+    // PHASE 3 STEP 3 — lock-by-line. Если эта SalaryEntry уже включена
+    // в `PayrollPayoutLine` выплаты со статусом `ISSUED` или
+    // `ACKNOWLEDGED`, ручная правка (включая `reset = true`) должна
+    // отдавать 409 `PAYROLL_LOCKED`. `DRAFT` не блокирует — черновик
+    // ещё пересобирается; `CANCELLED` тоже не блокирует — snapshot
+    // снят, строка свободна. См. JSDoc `PayrollLockedException`.
+    if (await isSalaryEntryLocked(this.prisma, id)) {
+      throw new PayrollLockedException();
+    }
 
     if (dto.reset) {
       const employee = await this.prisma.employee.findUnique({
@@ -473,6 +492,37 @@ function toDto(row: SalaryRow): SalaryEntryDto {
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
+}
+
+/**
+ * PHASE 3 STEP 3 — lock-by-line guard. `true`, если данная
+ * `SalaryEntry` уже привязана к `PayrollPayoutLine`, чьим родителем
+ * является `PayrollPayout` со статусом `ISSUED` или `ACKNOWLEDGED`.
+ *
+ * `DRAFT` сознательно не блокирует: черновик ещё пересобирается
+ * (`PayrollPayoutsService.recompute`), и менять начисление в нём
+ * безопасно. `CANCELLED` тоже не блокирует: snapshot снят, строка
+ * свободна — это та же семантика, что и для активной уникальности
+ * (см. `PAYROLL_PAYOUT_LINE_ALREADY_INCLUDED`).
+ *
+ * Делается одним COUNT-запросом, чтобы guard оставался дешёвым и в
+ * `updateManually`, и в горячем пути `syncDailySalary`.
+ */
+async function isSalaryEntryLocked(
+  tx: Prisma.TransactionClient | PrismaService,
+  salaryEntryId: string,
+): Promise<boolean> {
+  const found = await tx.payrollPayoutLine.count({
+    where: {
+      salaryEntryId,
+      payout: {
+        status: {
+          in: [PayrollPayoutStatus.ISSUED, PayrollPayoutStatus.ACKNOWLEDGED],
+        },
+      },
+    },
+  });
+  return found > 0;
 }
 
 function startOfDay(d: Date): Date {

@@ -862,6 +862,20 @@ RBAC-константа — `apps/api/src/modules/payroll/payroll.constants.ts`
 | POST  | `/api/payroll/payouts/:id/ack`                | Any auth, **только владелец**       | Body `AckPayrollPayoutDto` (`{}`). Подтверждает только сам сотрудник-получатель: `viewer.employeeId === payout.employeeId`. Менеджер/админ за чужого работника → 403 `PAYROLL_PAYOUT_FORBIDDEN_ACK`. `ISSUED → ACKNOWLEDGED`, фиксируются `acknowledgedAt` / `acknowledgedByEmployeeId`. Повторный `ack` тем же владельцем по `ACKNOWLEDGED` — идемпотентен (возвращает текущий DTO без записи аудита). Прочие статусы → 409 `PAYROLL_PAYOUT_INVALID_TRANSITION`. AuditLog: `PAYROLL_PAYOUT_ACKNOWLEDGED`. |
 | POST  | `/api/payroll/payouts/:id/cancel`             | SHOP_MANAGER, ADMIN                  | Body `CancelPayrollPayoutDto` (`{ reason? }`). `DRAFT → CANCELLED` или `ISSUED → CANCELLED`. `ACKNOWLEDGED` отменить нельзя — 409 `PAYROLL_PAYOUT_INVALID_TRANSITION`. AuditLog: `PAYROLL_PAYOUT_CANCELLED`. |
 
+**PHASE 3 STEP 3 — lock-by-line.** Если `SalaryEntry` уже привязана
+к `PayrollPayoutLine`, чьим родителем является выплата со статусом
+`ISSUED` или `ACKNOWLEDGED`, то любая ручная правка (`PATCH /api/salary/:id`,
+включая `reset = true`) возвращает `409 PAYROLL_LOCKED` (см. §10a).
+`DRAFT` сознательно не блокирует — черновик ещё пересобирается;
+`CANCELLED` тоже не блокирует — snapshot снят, строка свободна.
+Автоматический `SalaryService.syncDailySalary` (`POST /api/shifts/start`
+/ `POST /api/shifts/stop`) на locked-записи делает silent skip,
+чтобы сменный flow не падал из-за «правильного» оклада за уже
+выплаченный день. `OperationEntry` на MVP write-once + approve-only
+(единственный post-create write — `EarningsService.approvePendingForPassport`,
+PENDING_RELEASE → APPROVED при упаковке, а pending сдельщина в payout
+snapshot не входит), отдельного guard-а нет.
+
 Бизнес-инвариант (active uniqueness):
 одна и та же `OperationEntry` / `SalaryEntry` не может попасть сразу
 в две **активные** выплаты (`DRAFT` / `ISSUED` / `ACKNOWLEDGED`).
@@ -905,7 +919,7 @@ Snapshot строк (см. `PayrollPayoutLine.snapshot`):
 | ----- | -------------------------- | ------------------ | -------- |
 | GET   | `/api/salary`              | Any auth (scope в сервисе) | List `ListSalaryQuery`. SHOP_MANAGER/ADMIN видят всех; остальные — только свои строки. |
 | GET   | `/api/salary/summary`      | Any auth (scope в сервисе) | Агрегат `SalarySummaryQuery`. |
-| PATCH | `/api/salary/:id`          | SHOP_MANAGER, ADMIN | Body `UpdateSalaryEntryDto`. Ручная корректировка суммы / комментария / `reset = true` (вернуть под автоматику). PHASE 2 STEP 4 — каждая успешная правка пишет ровно одно событие в `AuditLog`: `SALARY_ENTRY_UPDATED` (обычный PATCH) или `SALARY_ENTRY_RESET` (`reset = true`). Payload содержит `before` / `after`-снимки `amount`/`managerComment`/`editedManually` + `salaryEntryId`/`employeeId`/`date`/`reset`/`editedByEmployeeId`. См. `docs/events.md §3.3 «SALARY_ENTRY»`. Автоматический `syncDailySalary` (на `start/stop shift`) аудит сознательно НЕ пишет. |
+| PATCH | `/api/salary/:id`          | SHOP_MANAGER, ADMIN | Body `UpdateSalaryEntryDto`. Ручная корректировка суммы / комментария / `reset = true` (вернуть под автоматику). PHASE 2 STEP 4 — каждая успешная правка пишет ровно одно событие в `AuditLog`: `SALARY_ENTRY_UPDATED` (обычный PATCH) или `SALARY_ENTRY_RESET` (`reset = true`). Payload содержит `before` / `after`-снимки `amount`/`managerComment`/`editedManually` + `salaryEntryId`/`employeeId`/`date`/`reset`/`editedByEmployeeId`. См. `docs/events.md §3.3 «SALARY_ENTRY»`. Автоматический `syncDailySalary` (на `start/stop shift`) аудит сознательно НЕ пишет. **PHASE 3 STEP 3 lock-by-line:** если эта `SalaryEntry` уже включена в `PayrollPayoutLine` выплаты со статусом `ISSUED` или `ACKNOWLEDGED`, любой PATCH (включая `reset = true`) отдаёт `409 PAYROLL_LOCKED`. `DRAFT` и `CANCELLED` не блокируют. См. §«Payroll payouts». |
 
 DTO: `packages/shared/src/salary.ts`. ADR: 0021.
 
