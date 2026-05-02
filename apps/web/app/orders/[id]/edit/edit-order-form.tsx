@@ -3,13 +3,10 @@
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
-import {
-  ORDER_DIVISIONS,
-  ORDER_DIVISION_LABELS,
-  type OrderDetailDto,
-  type OrderDivision,
-  type ProductDto,
-  type SizeDto,
+import type {
+  OrderDetailDto,
+  ProductDto,
+  SizeDto,
 } from '@sewing/shared/orders';
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
@@ -49,10 +46,10 @@ interface Props {
    */
   patterns: PatternListItemDto[];
   /**
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `docs/domain.md §«Подразделения заказа»`): активные карточки
-   * подразделений. Текущая привязка заказа всегда добавляется
-   * отдельной опцией ниже, даже если карточка архивирована.
+   * Активные карточки подразделений (см.
+   * `docs/domain.md §«Подразделения заказа»`). Текущая привязка
+   * заказа всегда добавляется отдельной опцией ниже, даже если
+   * карточка архивирована.
    */
   companyDivisions: CompanyDivisionDto[];
 }
@@ -84,13 +81,6 @@ export function EditOrderForm({
   const [companyDivisionId, setCompanyDivisionId] = useState<string>(
     order.companyDivisionId ?? '',
   );
-  const [division, setDivision] = useState<OrderDivision>(order.division);
-  const handleCompanyDivisionChange = (id: string): void => {
-    setCompanyDivisionId(id);
-    const code = companyDivisions.find((d) => d.id === id)?.code;
-    if (code === 'MARKETPLACE') setDivision('MARKETPLACE');
-    else if (code === 'OTHER') setDivision('OTHER');
-  };
 
   const selectedProduct = useMemo(
     () => products.find((p) => p.id === productId),
@@ -196,22 +186,22 @@ export function EditOrderForm({
         </div>
       </div>
 
-      <div className="form-row">
-        <label htmlFor="companyDivisionId">Подразделение</label>
-        <div>
-          {companyDivisions.length > 0 ? (
+      {(companyDivisions.length > 0 || order.companyDivisionId) && (
+        <div className="form-row">
+          <label htmlFor="companyDivisionId">Подразделение</label>
+          <div>
             <select
               id="companyDivisionId"
               name="companyDivisionId"
               value={companyDivisionId}
-              onChange={(e) => handleCompanyDivisionChange(e.target.value)}
+              onChange={(e) => setCompanyDivisionId(e.target.value)}
             >
               <option value="">— без подразделения —</option>
               {/*
-                PHASE 1: если у заказа уже привязано архивное
-                подразделение (нет в активном списке), показываем
-                его отдельной опцией — иначе FK обнулится при
-                сохранении формы без явного действия пользователя.
+                Если у заказа уже привязано архивное подразделение
+                (нет в активном списке), показываем его отдельной
+                опцией — иначе FK обнулится при сохранении формы без
+                явного действия пользователя.
               */}
               {order.companyDivisionId &&
                 order.companyDivision &&
@@ -229,36 +219,12 @@ export function EditOrderForm({
                 </option>
               ))}
             </select>
-          ) : (
-            <select
-              id="division-legacy"
-              name="division"
-              value={division}
-              onChange={(e) => setDivision(e.target.value as OrderDivision)}
-              required
-            >
-              {ORDER_DIVISIONS.map((d) => (
-                <option key={d} value={d}>
-                  {ORDER_DIVISION_LABELS[d]}
-                </option>
-              ))}
-            </select>
-          )}
-          {/*
-            PHASE 1: hidden legacy `division` enum для backend-
-            fallback. handleCompanyDivisionChange синхронизирует
-            его с выбранной карточкой по `code` (whitelist
-            MARKETPLACE/OTHER). Hidden рендерится только когда
-            активный select — `companyDivisionId`.
-          */}
-          {companyDivisions.length > 0 && (
-            <input type="hidden" name="division" value={division} />
-          )}
-          <div className="hint">
-            Менять можно только пока заказ в DRAFT.
+            <div className="hint">
+              Менять можно только пока заказ в DRAFT.
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="form-row">
         <label htmlFor="color">Цвет</label>

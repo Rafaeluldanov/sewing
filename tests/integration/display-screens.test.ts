@@ -1,7 +1,7 @@
 /**
  * Integration-тесты модуля «Display screens»
  * (`POST /api/display-screens`, `GET /api/display-screens`,
- * + auto-division в `/api/shopfloor/display`).
+ * + auto-resolution в `/api/shopfloor/display`).
  *
  * Источник истины контракта — `docs/api.md §11`,
  * UI-зеркало — `docs/screens.md §10e`,
@@ -9,15 +9,18 @@
  *
  * Сценарии:
  *   1. Happy-path: SHOP_MANAGER создаёт экран → одной транзакцией
- *      появляется `Employee(role=DISPLAY)` + `DisplayScreenConfig` с
- *      нужным division/isActive; под этим логином сразу можно войти.
+ *      появляется `Employee(role=DISPLAY)` + `DisplayScreenConfig`
+ *      с привязанным `companyDivisionId`/`isActive`; под этим
+ *      логином сразу можно войти.
  *   2. Уникальность login → `409 DISPLAY_LOGIN_TAKEN` и НИ ОДНА из
  *      двух сущностей не создаётся (rollback транзакции).
  *   3. RBAC: рабочие роли (SEAMSTRESS / DISPLAY) → 403; админский
  *      листинг им не открывается.
- *   4. Auto-division: DISPLAY-пользователь без `?division=` получает
- *      агрегат своего подразделения, query-param перекрывает его,
- *      `isActive=false` отключает auto-detection.
+ *   4. Auto-resolution: DISPLAY-пользователь без `?divisionCode=`
+ *      получает агрегат своего подразделения, query-param
+ *      перекрывает его, `isActive=false` отключает auto-detection.
+ *   5. Несуществующий `companyDivisionId` → 400
+ *      `COMPANY_DIVISION_NOT_FOUND`.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -61,7 +64,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.manager)
       .send({
         name: 'ТВ маркетплейс у выхода',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         login: 'display-mp',
         pin: 'pin-1234',
         isActive: true,
@@ -69,9 +72,16 @@ describeWithDb('integration — display screens', () => {
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
       name: 'ТВ маркетплейс у выхода',
-      division: 'MARKETPLACE',
       isActive: true,
       employeeLogin: 'display-mp',
+    });
+    expect(res.body.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
+    expect(res.body.companyDivision).toMatchObject({
+      id: seed.companyDivisions.MARKETPLACE.id,
+      code: 'MARKETPLACE',
+      name: 'Маркетплейс',
     });
     expect(typeof res.body.id).toBe('string');
     expect(typeof res.body.employeeId).toBe('string');
@@ -95,7 +105,9 @@ describeWithDb('integration — display screens', () => {
       where: { employeeId: emp!.id },
     });
     expect(config).not.toBeNull();
-    expect(config!.division).toBe('MARKETPLACE');
+    expect(config!.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
     expect(config!.isActive).toBe(true);
     expect(config!.name).toBe('ТВ маркетплейс у выхода');
 
@@ -115,7 +127,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.manager)
       .send({
         name: 'Дисплей у раскройщиков',
-        division: 'OTHER',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
         login: 'display-cut',
         pin: 'pin-2222',
         isActive: true,
@@ -129,11 +141,9 @@ describeWithDb('integration — display screens', () => {
     expect(list.body).toHaveLength(1);
     expect(list.body[0]).toMatchObject({
       name: 'Дисплей у раскройщиков',
-      division: 'OTHER',
       isActive: true,
       employeeLogin: 'display-cut',
     });
-    // PHASE 1: список содержит привязку к карточке `CompanyDivision`.
     expect(list.body[0].companyDivisionId).toBe(
       seed.companyDivisions.OTHER.id,
     );
@@ -144,48 +154,24 @@ describeWithDb('integration — display screens', () => {
     });
   });
 
-  // ---------------------------------------------------------------------------
-  // PHASE 1 «CompanyDivision как master-справочник»
-  // ---------------------------------------------------------------------------
-
-  test('PHASE 1: создание экрана через companyDivisionId синхронизирует legacy division', async () => {
+  test('создание с несуществующим companyDivisionId → 400 COMPANY_DIVISION_NOT_FOUND', async () => {
     const res = await request(t.app.getHttpServer())
       .post('/api/display-screens')
       .set('Cookie', cookies.manager)
       .send({
-        name: 'PHASE1 экран',
-        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
-        login: 'display-phase1',
+        name: 'Экран без подразделения',
+        companyDivisionId: 'no-such-card',
+        login: 'display-bad',
         pin: 'pin-1234',
         isActive: true,
       });
-    expect(res.status).toBe(201);
-    expect(res.body.companyDivisionId).toBe(
-      seed.companyDivisions.MARKETPLACE.id,
-    );
-    expect(res.body.division).toBe('MARKETPLACE');
-    expect(res.body.companyDivision).toMatchObject({
-      code: 'MARKETPLACE',
-      name: 'Маркетплейс',
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('COMPANY_DIVISION_NOT_FOUND');
+    // Ничего не создалось — учётка тоже откатилась.
+    const emp = await t.prisma.employee.findUnique({
+      where: { login: 'display-bad' },
     });
-  });
-
-  test('PHASE 1: legacy `division` без `companyDivisionId` находит карточку по `code`', async () => {
-    const res = await request(t.app.getHttpServer())
-      .post('/api/display-screens')
-      .set('Cookie', cookies.manager)
-      .send({
-        name: 'Legacy экран',
-        division: 'OTHER',
-        login: 'display-legacy',
-        pin: 'pin-1234',
-        isActive: true,
-      });
-    expect(res.status).toBe(201);
-    expect(res.body.division).toBe('OTHER');
-    expect(res.body.companyDivisionId).toBe(
-      seed.companyDivisions.OTHER.id,
-    );
+    expect(emp).toBeNull();
   });
 
   // ---------------------------------------------------------------------------
@@ -198,7 +184,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.manager)
       .send({
         name: 'Первый',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         login: 'display-dup',
         pin: 'pin-1234',
         isActive: true,
@@ -210,7 +196,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.manager)
       .send({
         name: 'Второй',
-        division: 'OTHER',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
         login: 'DISPLAY-DUP',
         pin: 'pin-9999',
         isActive: true,
@@ -237,7 +223,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.manager)
       .send({
         name: 'Конфликтный',
-        division: 'OTHER',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
         login: 'shop-chief',
         pin: 'pin-1234',
         isActive: true,
@@ -266,7 +252,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.seamstress)
       .send({
         name: 'Hack',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         login: 'evil',
         pin: 'pin-1234',
         isActive: true,
@@ -288,7 +274,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.manager)
       .send({
         name: 'Self',
-        division: 'OTHER',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
         login: 'display-self',
         pin: 'pin-1234',
         isActive: true,
@@ -306,7 +292,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', displayCookie)
       .send({
         name: 'Hack',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         login: 'display-evil',
         pin: 'pin-1234',
         isActive: true,
@@ -315,10 +301,10 @@ describeWithDb('integration — display screens', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 4. Auto-division в /api/shopfloor/display
+  // 4. Auto-resolution в /api/shopfloor/display
   // ---------------------------------------------------------------------------
 
-  test('DISPLAY без query.division получает агрегат СВОЕГО подразделения; query.division перекрывает', async () => {
+  test('DISPLAY без query.divisionCode получает агрегат СВОЕГО подразделения; query.divisionCode перекрывает', async () => {
     const today = new Date();
 
     // Создаём по одному заказу/паспорту в каждом подразделении.
@@ -328,7 +314,7 @@ describeWithDb('integration — display screens', () => {
         orderDate: today,
         color: 'Чёрный',
         status: 'IN_PRODUCTION',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         items: {
           create: [
             { productId: seed.product.id, sizeId: seed.sizes.S, qtyPlan: 4 },
@@ -361,7 +347,7 @@ describeWithDb('integration — display screens', () => {
         orderDate: today,
         color: 'Белый',
         status: 'IN_PRODUCTION',
-        division: 'OTHER',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
         items: {
           create: [
             { productId: seed.product.id, sizeId: seed.sizes.M, qtyPlan: 7 },
@@ -394,7 +380,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.manager)
       .send({
         name: 'MP Screen',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         login: 'display-mp-auto',
         pin: 'pin-1234',
         isActive: true,
@@ -417,9 +403,9 @@ describeWithDb('integration — display screens', () => {
     ]);
     expect(auto.body.kpi.waiting).toBe(4);
 
-    // 2) DISPLAY с явным query → query побеждает (старый контракт).
+    // 2) DISPLAY с явным query → query побеждает.
     const overridden = await request(t.app.getHttpServer())
-      .get('/api/shopfloor/display?division=OTHER')
+      .get('/api/shopfloor/display?divisionCode=OTHER')
       .set('Cookie', displayCookie);
     expect(overridden.status).toBe(200);
     expect(
@@ -448,7 +434,7 @@ describeWithDb('integration — display screens', () => {
         orderDate: today,
         color: 'Чёрный',
         status: 'IN_PRODUCTION',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         items: {
           create: [
             { productId: seed.product.id, sizeId: seed.sizes.S, qtyPlan: 3 },
@@ -480,7 +466,7 @@ describeWithDb('integration — display screens', () => {
         orderDate: today,
         color: 'Белый',
         status: 'IN_PRODUCTION',
-        division: 'OTHER',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
         items: {
           create: [
             { productId: seed.product.id, sizeId: seed.sizes.M, qtyPlan: 5 },
@@ -512,7 +498,7 @@ describeWithDb('integration — display screens', () => {
       .set('Cookie', cookies.manager)
       .send({
         name: 'Off Screen',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         login: 'display-off',
         pin: 'pin-1234',
         isActive: false,

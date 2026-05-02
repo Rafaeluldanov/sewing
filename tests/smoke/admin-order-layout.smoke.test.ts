@@ -227,11 +227,8 @@ describe('/admin/orders/new — Admin Order Form (Order workspace v2)', () => {
     expect(formSrc).toMatch(/name="orderDate"/);
     expect(formSrc).toMatch(/name="dueDate"/);
     expect(formSrc).toMatch(/name="clientId"/);
-    // PHASE 1 «CompanyDivision как master-справочник»: новый
-    // приоритетный select. Legacy `name="division"` остался как
-    // hidden-input для backend-fallback.
+    // Подразделение — FK на master-справочник `CompanyDivision`.
     expect(formSrc).toMatch(/name="companyDivisionId"/);
-    expect(formSrc).toMatch(/name="division"/);
     expect(formSrc).toMatch(/name="techCardId"/);
     expect(formSrc).toMatch(/name="routeTemplateId"/);
     // Этап «Номенклатура = Лекала»: единственная видимая

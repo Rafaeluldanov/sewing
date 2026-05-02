@@ -695,7 +695,8 @@ session.operationId` И `currentEmployeeId === me` И
 - Грузит `Operation(code='CUT_CUT')`. Если не найден —
   тихо skip. Если `pricingMode === 'SALARY_ONLY'` — тоже skip
   (раскрой переведён на оклад).
-- Источник истины для выбора схемы — `Order.division` через
+- Источник истины для выбора схемы —
+  `passport.order.companyDivision.code` через
   `getCutterCompensationSchemeForDivision` (см.
   `packages/shared/src/cutter-compensation.ts`):
   - `MARKETPLACE` → `MARKETPLACE_FIXED`:
@@ -703,8 +704,8 @@ session.operationId` И `currentEmployeeId === me` И
     `amount = Operation.fixedRate × qty` через
     `OperationsService.resolveRate` (поддерживает FIXED и
     BY_SIZE).
-  - `OTHER` (legacy B2B + будущий явный `B2B`) →
-    `B2B_SEWING_PERCENT`:
+  - `OTHER` (B2B) и любой произвольный `CompanyDivision.code` /
+    отсутствие привязки → `B2B_SEWING_PERCENT`:
     `createImmediateForCutterB2b` → `base = Σ
     rate(SEWING-операция, размер) × qty`,
     `percent = employee.cutterB2bSewingPercent ?? ENV
@@ -845,8 +846,8 @@ ADR-0021.
 
 | Сценарий | Когда создаётся | `status` | `approvalMode` | `sourceEventType` | Когда становится APPROVED |
 | --- | --- | --- | --- | --- | --- |
-| Раскройщик — Marketplace (`Order.division = MARKETPLACE`) | `PassportsService.create` (в tx). | `APPROVED` сразу | `IMMEDIATE` | `PASSPORT_CREATED` | Уже APPROVED при создании. |
-| Раскройщик — B2B/OTHER (`Order.division = OTHER`) | `PassportsService.create` (в tx). | `APPROVED` сразу | `IMMEDIATE` | `PASSPORT_CREATED` | Уже APPROVED при создании. |
+| Раскройщик — Marketplace (`Order.companyDivision.code = MARKETPLACE`) | `PassportsService.create` (в tx). | `APPROVED` сразу | `IMMEDIATE` | `PASSPORT_CREATED` | Уже APPROVED при создании. |
+| Раскройщик — B2B / любой другой `CompanyDivision.code` / без привязки | `PassportsService.create` (в tx). | `APPROVED` сразу | `IMMEDIATE` | `PASSPORT_CREATED` | Уже APPROVED при создании. |
 | Пошив — любая `pricingMode ∈ {FIXED, BY_SIZE}` операция (не CUT_CUT) | `PassportsService.scanOnOperation` для **предыдущего** исполнителя (в tx). | `PENDING_RELEASE` | `AFTER_RELEASE` | `OPERATION_TRANSITION` | `PackingService.close(boxId)` → `EarningsService.approvePendingForPassport(tx, passportId)` для каждого `BoxItem.passportId` (бывшее поведение «на add-passport» переехало на close, см. ADR-0005 §«Подтверждение»). |
 | Пошив — `pricingMode === SALARY_ONLY` | Не создаётся. | — | — | — | — |
 | Окладные сотрудники (PIECEWORK-условие не выполнено) | Не создаётся `OperationEntry`; вместо этого `SalaryService.syncDailySalary` ведёт `SalaryEntry` (см. §12). | — | — | — | — |

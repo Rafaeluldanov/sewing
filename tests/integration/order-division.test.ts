@@ -1,18 +1,29 @@
 /**
- * Integration-тесты подразделения заказа (`OrderDivision`) и связанного
- * фильтра большого экрана `/api/shopfloor/display?division=…`.
+ * Integration-тесты подразделения заказа (`Order.companyDivisionId`)
+ * и связанного фильтра большого экрана
+ * `/api/shopfloor/display?divisionCode=…`.
  *
- * Покрытие соответствует п. 9 ТЗ «MVP MARKETPLACE display screen»:
- *   1. Создание заказа с `division=MARKETPLACE` сохраняет значение.
- *   2. Редактирование DRAFT-заказа меняет division.
- *   3. `/api/shopfloor/display?division=MARKETPLACE` отдаёт только
- *      паспорта marketplace-заказов; OTHER-заказы при этом отрезаются.
- *   4. `/api/shopfloor/display?division=OTHER` зеркально не возвращает
- *      marketplace-партии.
- *   5. Без параметра `division` поведение прежнее: видим оба заказа
- *      (backward-compatibility со существующими экранами).
+ * Покрытие:
+ *   1. Создание заказа с `companyDivisionId` сохраняет привязку и
+ *      отдаёт краткие реквизиты `companyDivision` в DTO.
+ *   2. Создание заказа без `companyDivisionId` оставляет привязку
+ *      пустой (`null`) — earnings-helper для отсутствующего кода
+ *      даёт безопасный B2B-default.
+ *   3. PATCH /api/orders/:id меняет `companyDivisionId` пока заказ
+ *      DRAFT.
+ *   4. POST /api/orders с несуществующим `companyDivisionId` →
+ *      400 `COMPANY_DIVISION_NOT_FOUND`.
+ *   5. `/api/shopfloor/display?divisionCode=MARKETPLACE` отдаёт
+ *      только паспорта marketplace-заказов; OTHER-заказы при этом
+ *      отрезаются.
+ *   6. `/api/shopfloor/display?divisionCode=OTHER` зеркально не
+ *      возвращает marketplace-партии.
+ *   7. Без параметра `divisionCode` поведение прежнее: видим оба
+ *      заказа.
+ *   8. Audit `ORDER_CREATED` содержит `companyDivisionId` /
+ *      `companyDivisionCode`.
  *
- * Контракт описан в `docs/api.md §11`, доменная роль поля — в
+ * Контракт описан в `docs/api.md §13`, доменная роль поля — в
  * `docs/domain.md §«Подразделения заказа»`.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
@@ -46,79 +57,17 @@ describeWithDb('integration — order division & shopfloor display filter', () =
   // ORDERS API: создание / редактирование с подразделением
   // ---------------------------------------------------------------------------
 
-  test('POST /api/orders сохраняет division=MARKETPLACE', async () => {
-    const res = await request(t.app.getHttpServer())
-      .post('/api/orders')
-      .set("Cookie", cookie)
-      .send({
-        orderDate: new Date().toISOString(),
-        productId: seed.product.id,
-        division: 'MARKETPLACE',
-        items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
-      });
-    expect(res.status).toBe(201);
-    expect(res.body.division).toBe('MARKETPLACE');
-
-    // Сразу проверяем, что list/getOne возвращают то же значение —
-    // чтобы регрессия в маппере не пропустила division мимо UI.
-    const detail = await request(t.app.getHttpServer())
-      .get(`/api/orders/${res.body.id}`)
-      .set("Cookie", cookie);
-    expect(detail.status).toBe(200);
-    expect(detail.body.division).toBe('MARKETPLACE');
-  });
-
-  test('POST /api/orders без division → дефолт OTHER (backward-compatible)', async () => {
-    const res = await request(t.app.getHttpServer())
-      .post('/api/orders')
-      .set("Cookie", cookie)
-      .send({
-        orderDate: new Date().toISOString(),
-        productId: seed.product.id,
-        items: [{ sizeId: seed.sizes.S, qtyPlan: 1 }],
-      });
-    expect(res.status).toBe(201);
-    expect(res.body.division).toBe('OTHER');
-  });
-
-  test('PATCH /api/orders/:id меняет division пока заказ DRAFT', async () => {
-    const created = await request(t.app.getHttpServer())
-      .post('/api/orders')
-      .set("Cookie", cookie)
-      .send({
-        orderDate: new Date().toISOString(),
-        productId: seed.product.id,
-        division: 'OTHER',
-        items: [{ sizeId: seed.sizes.M, qtyPlan: 2 }],
-      });
-    expect(created.status).toBe(201);
-
-    const updated = await request(t.app.getHttpServer())
-      .patch(`/api/orders/${created.body.id}`)
-      .set("Cookie", cookie)
-      .send({ division: 'MARKETPLACE' });
-    expect(updated.status).toBe(200);
-    expect(updated.body.division).toBe('MARKETPLACE');
-  });
-
-  // ---------------------------------------------------------------------------
-  // PHASE 1 «CompanyDivision как master-справочник»
-  // (см. `docs/domain.md §«Подразделения заказа»`)
-  // ---------------------------------------------------------------------------
-
-  test('POST /api/orders с legacy division=MARKETPLACE заполняет companyDivisionId по соответствию code', async () => {
+  test('POST /api/orders сохраняет companyDivisionId=MARKETPLACE', async () => {
     const res = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', cookie)
       .send({
         orderDate: new Date().toISOString(),
         productId: seed.product.id,
-        division: 'MARKETPLACE',
-        items: [{ sizeId: seed.sizes.M, qtyPlan: 3 }],
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
       });
     expect(res.status).toBe(201);
-    expect(res.body.division).toBe('MARKETPLACE');
-    // PHASE 1: backend синхронно подкладывает FK по `code`.
     expect(res.body.companyDivisionId).toBe(
       seed.companyDivisions.MARKETPLACE.id,
     );
@@ -127,33 +76,38 @@ describeWithDb('integration — order division & shopfloor display filter', () =
       code: 'MARKETPLACE',
       name: 'Маркетплейс',
     });
+
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/orders/${res.body.id}`)
+      .set('Cookie', cookie);
+    expect(detail.status).toBe(200);
+    expect(detail.body.companyDivisionId).toBe(
+      seed.companyDivisions.MARKETPLACE.id,
+    );
   });
 
-  test('POST /api/orders с companyDivisionId синхронизирует legacy division по code', async () => {
+  test('POST /api/orders без companyDivisionId → companyDivisionId=null', async () => {
     const res = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', cookie)
       .send({
         orderDate: new Date().toISOString(),
         productId: seed.product.id,
-        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
-        items: [{ sizeId: seed.sizes.M, qtyPlan: 4 }],
+        items: [{ sizeId: seed.sizes.S, qtyPlan: 1 }],
       });
     expect(res.status).toBe(201);
-    expect(res.body.division).toBe('MARKETPLACE');
-    expect(res.body.companyDivisionId).toBe(
-      seed.companyDivisions.MARKETPLACE.id,
-    );
+    expect(res.body.companyDivisionId).toBeNull();
+    expect(res.body.companyDivision).toBeNull();
   });
 
-  test('PATCH /api/orders/:id меняет companyDivisionId и синхронизирует legacy division', async () => {
+  test('PATCH /api/orders/:id меняет companyDivisionId пока заказ DRAFT', async () => {
     const created = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', cookie)
       .send({
         orderDate: new Date().toISOString(),
         productId: seed.product.id,
-        division: 'OTHER',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 2 }],
       });
     expect(created.status).toBe(201);
@@ -169,58 +123,20 @@ describeWithDb('integration — order division & shopfloor display filter', () =
     expect(updated.body.companyDivisionId).toBe(
       seed.companyDivisions.MARKETPLACE.id,
     );
-    // PHASE 1: legacy enum синхронизируется по `code`.
-    expect(updated.body.division).toBe('MARKETPLACE');
   });
 
-  test('GET /api/shopfloor/display?divisionCode=MARKETPLACE фильтрует так же, как legacy ?division=', async () => {
-    const today = new Date();
-    const orderMp = await t.prisma.order.create({
-      data: {
-        number: 'O-DIV-CD-MP',
-        orderDate: today,
-        color: 'Чёрный',
-        status: 'IN_PRODUCTION',
-        division: 'MARKETPLACE',
-        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
-        items: {
-          create: [
-            { productId: seed.product.id, sizeId: seed.sizes.S, qtyPlan: 5 },
-          ],
-        },
-      },
-    });
-    await t.prisma.passport.create({
-      data: {
-        number: 'P-DIV-CD-MP-S',
-        qrCode: 'passport:div-cd-mp-s',
-        orderId: orderMp.id,
+  test('POST /api/orders с несуществующим companyDivisionId → 400 COMPANY_DIVISION_NOT_FOUND', async () => {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', cookie)
+      .send({
+        orderDate: new Date().toISOString(),
         productId: seed.product.id,
-        sizeId: seed.sizes.S,
-        color: 'Чёрный',
-        rollNumber: 'R-CD-MP',
-        cutDate: today,
-        qtyPlan: 5,
-        qtyCut: 5,
-        qtyGood: 5,
-        cutterId: seed.employees.cutter.id,
-        creatorId: seed.employees.cutter.id,
-        status: 'CREATED',
-      },
-    });
-
-    const byCode = await request(t.app.getHttpServer())
-      .get('/api/shopfloor/display?divisionCode=MARKETPLACE')
-      .set('Cookie', cookie);
-    expect(byCode.status).toBe(200);
-    expect(byCode.body.kpi.waiting).toBe(5);
-
-    // Legacy URL продолжает работать как раньше.
-    const byLegacy = await request(t.app.getHttpServer())
-      .get('/api/shopfloor/display?division=MARKETPLACE')
-      .set('Cookie', cookie);
-    expect(byLegacy.status).toBe(200);
-    expect(byLegacy.body.kpi.waiting).toBe(5);
+        companyDivisionId: 'no-such-division-id',
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 1 }],
+      });
+    expect(res.status).toBe(400);
+    expect(res.body.code).toBe('COMPANY_DIVISION_NOT_FOUND');
   });
 
   test('audit ORDER_CREATED содержит companyDivisionId и companyDivisionCode', async () => {
@@ -244,7 +160,6 @@ describeWithDb('integration — order division & shopfloor display filter', () =
     });
     expect(audit).not.toBeNull();
     const payload = audit!.payload as Record<string, unknown>;
-    expect(payload.division).toBe('MARKETPLACE');
     expect(payload.companyDivisionId).toBe(
       seed.companyDivisions.MARKETPLACE.id,
     );
@@ -252,10 +167,10 @@ describeWithDb('integration — order division & shopfloor display filter', () =
   });
 
   // ---------------------------------------------------------------------------
-  // SHOPFLOOR DISPLAY: фильтр по division
+  // SHOPFLOOR DISPLAY: фильтр по divisionCode
   // ---------------------------------------------------------------------------
 
-  test('GET /api/shopfloor/display?division=… фильтрует по подразделению заказа', async () => {
+  test('GET /api/shopfloor/display?divisionCode=… фильтрует по подразделению заказа', async () => {
     const today = new Date();
 
     const orderMp = await t.prisma.order.create({
@@ -264,7 +179,7 @@ describeWithDb('integration — order division & shopfloor display filter', () =
         orderDate: today,
         color: 'Чёрный',
         status: 'IN_PRODUCTION',
-        division: 'MARKETPLACE',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
         items: {
           create: [
             { productId: seed.product.id, sizeId: seed.sizes.S, qtyPlan: 4 },
@@ -297,7 +212,7 @@ describeWithDb('integration — order division & shopfloor display filter', () =
         orderDate: today,
         color: 'Белый',
         status: 'IN_PRODUCTION',
-        division: 'OTHER',
+        companyDivisionId: seed.companyDivisions.OTHER.id,
         items: {
           create: [
             { productId: seed.product.id, sizeId: seed.sizes.M, qtyPlan: 7 },
@@ -326,8 +241,8 @@ describeWithDb('integration — order division & shopfloor display filter', () =
 
     // 1) С фильтром MARKETPLACE — только чёрный (4 шт), белого нет.
     const mp = await request(t.app.getHttpServer())
-      .get('/api/shopfloor/display?division=MARKETPLACE')
-      .set("Cookie", cookie);
+      .get('/api/shopfloor/display?divisionCode=MARKETPLACE')
+      .set('Cookie', cookie);
     expect(mp.status).toBe(200);
     expect(mp.body.colors.map((c: { colorKey: string }) => c.colorKey)).toEqual([
       'black',
@@ -337,8 +252,8 @@ describeWithDb('integration — order division & shopfloor display filter', () =
 
     // 2) С фильтром OTHER — только белый (7 шт), чёрного нет.
     const other = await request(t.app.getHttpServer())
-      .get('/api/shopfloor/display?division=OTHER')
-      .set("Cookie", cookie);
+      .get('/api/shopfloor/display?divisionCode=OTHER')
+      .set('Cookie', cookie);
     expect(other.status).toBe(200);
     expect(other.body.colors.map((c: { colorKey: string }) => c.colorKey)).toEqual([
       'white',
@@ -349,7 +264,7 @@ describeWithDb('integration — order division & shopfloor display filter', () =
     // 3) Без параметра — оба, как раньше (backward-compat).
     const all = await request(t.app.getHttpServer())
       .get('/api/shopfloor/display')
-      .set("Cookie", cookie);
+      .set('Cookie', cookie);
     expect(all.status).toBe(200);
     expect(
       all.body.colors
@@ -358,12 +273,5 @@ describeWithDb('integration — order division & shopfloor display filter', () =
     ).toEqual(['black', 'white']);
     expect(all.body.kpi.waiting).toBe(11);
     expect(all.body.totals.qtyCut).toBe(11);
-  });
-
-  test('невалидный division → 400 (Zod validation)', async () => {
-    const res = await request(t.app.getHttpServer())
-      .get('/api/shopfloor/display?division=NOT_A_VALUE')
-      .set("Cookie", cookie);
-    expect(res.status).toBe(400);
   });
 });

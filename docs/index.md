@@ -409,15 +409,23 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   inverse-связи на `CompanyDivision`. Базовые карточки
   `MARKETPLACE` / `OTHER` гарантированно созданы миграцией
   `…_link_company_divisions_to_orders` и каждым re-seed.
-  Backend (`OrdersService` / `DisplayScreensService`) синхронно
-  пишет пару `(companyDivisionId, legacy division)` по `code`;
-  earnings (`getCutterCompensationSchemeForDivision`) и
-  shopfloor-фильтр (`?divisionCode=…` приоритетнее `?division=…`)
-  работают через `CompanyDivision.code` с fallback на legacy
-  enum. Legacy `enum OrderDivision`, `Order.division` и
-  `DisplayScreenConfig.division` сохранены до PHASE 2 ради
-  backward-compat. См. `docs/domain.md §«Подразделения заказа»`,
+  Backend (`OrdersService` / `DisplayScreensService`) пишет пару
+  `(companyDivisionId, legacy division)` по `code`; earnings
+  (`getCutterCompensationSchemeForDivision`) и shopfloor-фильтр
+  (`?divisionCode=…`) работают через `CompanyDivision.code`. См.
+  `docs/domain.md §«Подразделения заказа»`,
   `docs/display-board.md`, `docs/erd.md §«CompanyDivision»`.
+
+- [x] **PHASE 2 «Удаление legacy `OrderDivision`».** Удалены
+  `enum OrderDivision`, `Order.division`,
+  `DisplayScreenConfig.division` и связанные индексы (миграция
+  `20260530100000_drop_legacy_order_division`). `OrdersService` /
+  `DisplayScreensService` пишут только FK `companyDivisionId`,
+  `EarningsService` читает только `companyDivision.code`,
+  `ShopfloorService` принимает только `?divisionCode=…` (web-
+  уровень `/shopfloor/display` сохраняет deprecated alias на
+  `?division=…` для старых TV-закладок). UI заказа и display-
+  экранов работают через `CompanyDivisionDto`-селект.
 
 ---
 

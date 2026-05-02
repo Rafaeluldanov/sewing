@@ -187,9 +187,9 @@ export type AuditEntityType =
    *   - `COMPANY_DIVISION_UPDATED` — правка карточки (включая мягкое
    *     отключение через `isActive = false`), `entityId = CompanyDivision.id`.
    *
-   * **Не путать** с `entityType = ORDER` для оси `OrderDivision`
-   * (фильтр shopfloor-display): это разные сущности, см. JSDoc на
-   * модели в `prisma/schema.prisma`.
+   * **Не путать** с `entityType = ORDER`: события на самом заказе
+   * (включая смену `companyDivisionId`) пишутся под `ORDER`, а
+   * `COMPANY_DIVISION` — это события самой карточки справочника.
    */
   | 'COMPANY_DIVISION';
 

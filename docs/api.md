@@ -381,10 +381,10 @@ DTO: `packages/shared/src/suppliers.ts`. Audit: `SUPPLIER_*`.
 
 | Метод | Путь                                                                       | RBAC                                | Описание |
 | ----- | -------------------------------------------------------------------------- | ----------------------------------- | -------- |
-| POST  | `/api/orders`                                                              | SHOP_MANAGER (+ ADMIN)              | `CreateOrderDto`. Создаёт заказ в `DRAFT`. PHASE 1: тело принимает `companyDivisionId` (новый источник истины подразделения, см. `docs/domain.md §«Подразделения заказа»`). Если задан — backend синхронно подкладывает legacy `division` enum по `code` (whitelist `MARKETPLACE`/`OTHER`); если задан только legacy `division`, backend ищет/upsert-ит карточку `CompanyDivision` по `code`. Side effects: при наличии `routeTemplateId` сразу синхронизирует `OrderRouteStep[]`; при наличии `techCardId` — `OrderMaterialRequirement[]`/`OrderOutsourceRequirement[]`; пересчитывает плановый snapshot операций. |
+| POST  | `/api/orders`                                                              | SHOP_MANAGER (+ ADMIN)              | `CreateOrderDto`. Создаёт заказ в `DRAFT`. Тело принимает `companyDivisionId` — FK на master-справочник `CompanyDivision` (см. `docs/domain.md §«Подразделения заказа»`). Поле опциональное и nullable: если не задано, заказ создаётся без подразделения. Если карточка не найдена — 400 `COMPANY_DIVISION_NOT_FOUND`. Side effects: при наличии `routeTemplateId` сразу синхронизирует `OrderRouteStep[]`; при наличии `techCardId` — `OrderMaterialRequirement[]`/`OrderOutsourceRequirement[]`; пересчитывает плановый snapshot операций. |
 | GET   | `/api/orders`                                                              | SHOP_MANAGER, CUTTER_ASSISTANT (+ ADMIN) | List `ListOrdersQuery`. PHASE 1: каждая запись отдаёт `companyDivisionId` и краткие реквизиты `companyDivision { id, code, name }` (`null` для исторических заказов). |
 | GET   | `/api/orders/:id`                                                          | SHOP_MANAGER, CUTTER_ASSISTANT (+ ADMIN) | `OrderDetailDto`. Derived: `isCutReadyForOrder`, `isReadyToOrder` для outsource-строк, композитный `displayStatus`. PHASE 1: добавляет `companyDivisionId` и краткие `companyDivision { id, code, name }`. |
-| PATCH | `/api/orders/:id`                                                          | SHOP_MANAGER (+ ADMIN)              | `UpdateOrderDto`. Разрешён только в `DRAFT` / `CALCULATION` (см. `ORDER_LOCKED`). PHASE 1: смена `companyDivisionId` обрабатывается так же, как legacy `division` (с теми же ORDER_LOCKED-инвариантами); backend синхронизирует пару `(companyDivisionId, division)` по `code`. При смене `routeTemplateId` / `items` / `patternItemId` пересинхронизирует snapshot маршрута и план операций (см. ADR-0022). |
+| PATCH | `/api/orders/:id`                                                          | SHOP_MANAGER (+ ADMIN)              | `UpdateOrderDto`. Разрешён только в `DRAFT` / `CALCULATION` (см. `ORDER_LOCKED`). Смена `companyDivisionId` — «опасное» поле под тот же ORDER_LOCKED-guard; backend проверяет существование карточки (400 `COMPANY_DIVISION_NOT_FOUND`). При смене `routeTemplateId` / `items` / `patternItemId` пересинхронизирует snapshot маршрута и план операций (см. ADR-0022). |
 | POST  | `/api/orders/:id/start`                                                    | SHOP_MANAGER (+ ADMIN)              | Перевод `DRAFT`/`CALCULATION`/`CALCULATION_DONE` → `IN_PRODUCTION`. Defensive fallback на snapshot для legacy-заказов. |
 | POST  | `/api/orders/:id/start-calculation`                                        | SHOP_MANAGER (+ ADMIN)              | `DRAFT → CALCULATION`. Side effects: вызывает `WorkshopNeedsService.calculateForOrder` (создаёт `WorkshopNeed[]`), фиксирует план операций. Ошибки: `ORDER_PATTERN_REQUIRED` (400), `ORDER_TECH_CARD_REQUIRED` (400), `ORDER_ITEMS_REQUIRED` (400), `ORDER_INVALID_STATUS_TRANSITION` (409). |
 | POST  | `/api/orders/:id/complete-calculation`                                     | SHOP_MANAGER (+ ADMIN)              | `CALCULATION → CALCULATION_DONE`. Body `CompleteOrderCalculationDto` (`{ usdRateRub?, comment? }`). Создаёт `OrderCostEstimate(status=COMPLETED)`, выставляет `Order.costEstimate*Snapshot`-поля. |
@@ -756,7 +756,7 @@ DTO: `packages/shared/src/salary.ts`. ADR: 0021.
 | GET   | `/api/shopfloor/state`        | Any auth                    | Query `ShopfloorStateQuery`. Менеджерская проекция «размер × этап → qty» поверх `Order`/`Passport`/`PassportEvent`/`BoxItem`. ADR-0013. |
 | GET   | `/api/shopfloor/orders`       | Any auth                    | Список активных заказов для выпадашки. |
 | GET   | `/api/shopfloor/equipment`    | Any auth                    | Статусы оборудования (онлайн/предупреждение/оффлайн) по открытым сменам. **Сознательно вне `EquipmentController`** — `DISPLAY` должен видеть статус без admin-доступа. |
-| GET   | `/api/shopfloor/display`      | Any auth                    | Query `ShopfloorDisplayQuery` (`{ division?, divisionCode? }`). Единый агрегат под `/shopfloor/display`. PHASE 1: новый `divisionCode` принимает любой `CompanyDivision.code`; legacy `division` (`MARKETPLACE`/`OTHER`) сохраняется как backward-compat для старых URL-закладок. Если оба пусты и роль `DISPLAY` — фильтр авто-резолвится из `DisplayScreenConfig.companyDivision.code` (fallback на legacy `division`). См. `docs/display-board.md` и `docs/domain.md §«Подразделения заказа»`. |
+| GET   | `/api/shopfloor/display`      | Any auth                    | Query `ShopfloorDisplayQuery` (`{ divisionCode? }`). Единый агрегат под `/shopfloor/display`. `divisionCode` принимает любой `CompanyDivision.code`. Если параметр пуст и роль `DISPLAY` — фильтр авто-резолвится из `DisplayScreenConfig.companyDivision.code`. См. `docs/display-board.md` и `docs/domain.md §«Подразделения заказа»`. |
 
 DTO: `packages/shared/src/shopfloor.ts`. ADR: 0007, 0013.
 
@@ -771,8 +771,8 @@ DTO: `packages/shared/src/shopfloor.ts`. ADR: 0007, 0013.
 
 | Метод | Путь                              | RBAC               | Описание |
 | ----- | --------------------------------- | ------------------ | -------- |
-| GET   | `/api/display-screens`            | SHOP_MANAGER, ADMIN | Список конфигов. PHASE 1: каждая запись отдаёт `companyDivisionId` и краткие реквизиты `companyDivision { id, code, name }` (`null` для исторических конфигов до миграции — UI fallback-ит на legacy `division` через `ORDER_DIVISION_LABELS`). |
-| POST  | `/api/display-screens`            | SHOP_MANAGER, ADMIN | Body `CreateDisplayScreenDto`. В одной транзакции создаёт `Employee(role=DISPLAY)` + `DisplayScreenConfig` (1:1 по `employeeId`). PHASE 1: тело принимает либо `companyDivisionId`, либо legacy `division`, либо оба — backend синхронизирует пару `(companyDivisionId, division)` по `code` (см. `docs/domain.md §«Подразделения заказа»`). 400 `COMPANY_DIVISION_REQUIRED` если ни одно поле не задано. |
+| GET   | `/api/display-screens`            | SHOP_MANAGER, ADMIN | Список конфигов. Каждая запись отдаёт `companyDivisionId` и краткие реквизиты `companyDivision { id, code, name }` (`null` — для конфигов без привязки к карточке). |
+| POST  | `/api/display-screens`            | SHOP_MANAGER, ADMIN | Body `CreateDisplayScreenDto`. В одной транзакции создаёт `Employee(role=DISPLAY)` + `DisplayScreenConfig` (1:1 по `employeeId`). Тело обязательно содержит `companyDivisionId` (FK на `CompanyDivision`); если карточка не найдена — 400 `COMPANY_DIVISION_NOT_FOUND`. |
 
 DTO: `packages/shared/src/display-screens.ts`.
 
@@ -938,10 +938,13 @@ DTO: `packages/shared/src/company-divisions.ts`. Audit:
 `COMPANY_DIVISION_CREATED` / `COMPANY_DIVISION_UPDATED`
 (`entityType = COMPANY_DIVISION`).
 
-> **Не путать с `enum OrderDivision`** (`MARKETPLACE` / `OTHER`).
-> `CompanyDivision` — это структурное подразделение компании (цех,
-> склад, бухгалтерия), отдельная ось от фильтра shopfloor-display.
-> На MVP справочник стоит сам по себе и не привязан к заказам.
+> **Не путать с компанией / `CompanySettings`** — это master-справочник
+> подразделений, см. `docs/domain.md §«Подразделения заказа»`.
+> `CompanyDivision` — структурное подразделение компании (цех,
+> склад, бухгалтерия). Карточки `MARKETPLACE` / `OTHER` создаются
+> миграцией / seed-ом и используются `EarningsService` для выбора
+> схемы начисления закройщика; менеджер может расширять справочник
+> через UI без миграции.
 
 ---
 

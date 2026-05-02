@@ -203,7 +203,8 @@
 - `color: String?`,
 - `comment: String?`,
 - `status: OrderStatus` (`DRAFT | IN_PRODUCTION | DONE | CANCELLED`),
-- `division: OrderDivision` (`MARKETPLACE | OTHER`),
+- `companyDivisionId?` → `CompanyDivision` (master-справочник
+  подразделений; см. `docs/domain.md §«Подразделения заказа»`),
 - `routeTemplateId?` → `RouteTemplate`,
 - `techCardId?` → `TechCardTemplate`.
 

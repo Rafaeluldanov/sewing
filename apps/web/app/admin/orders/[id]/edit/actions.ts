@@ -18,7 +18,8 @@
  *   - `clientId`         (string, optional, пусто = снять)
  *   - `patternItemId`    (string, optional, пусто = снять — главная
  *                         номенклатура; этап «Номенклатура = Лекала»)
- *   - `division`         (`MARKETPLACE | OTHER`, required)
+ *   - `companyDivisionId` (string, optional, пусто = снять — FK на
+ *                         `CompanyDivision`)
  *   - `color`            (string, optional)
  *   - `comment`          (string, optional)
  *   - `routeTemplateId`  (string, optional, пусто = снять)
@@ -41,7 +42,7 @@
  *
  * Бэкенд сам решает безопасность изменений (см. `OrdersService.update`):
  *   - «опасные» поля (items / productId / routeTemplateId / techCardId /
- *     division) допустимы только в DRAFT — иначе 409 ORDER_LOCKED;
+ *     companyDivisionId) допустимы только в DRAFT — иначе 409 ORDER_LOCKED;
  *   - смена `status` делегируется в `start/complete/cancel` через те же
  *     инварианты, что и существующие endpoints; недопустимый переход
  *     возвращает 409 ORDER_INVALID_TRANSITION.
@@ -50,10 +51,8 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
-  ORDER_DIVISIONS,
   ORDER_STATUSES,
   UpdateOrderSchema,
-  type OrderDivision,
   type OrderStatus,
   type UpdateOrderDto,
 } from '@sewing/shared/orders';
@@ -78,14 +77,6 @@ function extractItems(form: FormData): { sizeId: string; qtyPlan: number }[] {
     items.push({ sizeId, qtyPlan: Math.trunc(n) });
   }
   return items;
-}
-
-function parseDivision(form: FormData): OrderDivision | undefined {
-  const raw = String(form.get('division') ?? '').trim();
-  if (raw === '') return undefined;
-  return (ORDER_DIVISIONS as readonly string[]).includes(raw)
-    ? (raw as OrderDivision)
-    : undefined;
 }
 
 function parseStatus(form: FormData): OrderStatus | undefined {
@@ -159,12 +150,9 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     patternItemId: optionalNullableString(form.get('patternItemId')),
     clientId: optionalNullableString(form.get('clientId')),
     dueDate: optionalNullableString(form.get('dueDate')),
-    division: parseDivision(form),
-    // PHASE 1 «CompanyDivision как master-справочник» (см.
-    // `docs/domain.md §«Подразделения заказа»`,
-    // `OrdersService.resolveCompanyDivisionForOrder`): UI новой
-    // edit-формы шлёт `companyDivisionId` (FK на справочник).
-    // Семантика та же, что у `routeTemplateId` / `techCardId`.
+    // Подразделение заказа — FK на `CompanyDivision` (см.
+    // `docs/domain.md §«Подразделения заказа»`). Семантика та же,
+    // что у `routeTemplateId` / `techCardId`.
     companyDivisionId: optionalNullableString(form.get('companyDivisionId')),
     status: parseStatus(form),
     customerUnitPrice,

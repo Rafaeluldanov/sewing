@@ -9,7 +9,6 @@ import {
   useState,
 } from 'react';
 import { Package, Scissors, Search, type LucideIcon } from 'lucide-react';
-import type { OrderDivision } from '@sewing/shared/orders';
 import {
   SHOPFLOOR_DISPLAY_MATRIX_STAGES,
   SHOPFLOOR_STAGE_LABELS,
@@ -30,18 +29,13 @@ interface Props {
   initialSummary: ShopfloorDisplayDto | null;
   initialError: string | null;
   /**
-   * Опциональный фильтр по подразделению заказа (см. `OrderDivision`).
-   * `null` — фильтра нет, экран показывает все активные заказы (старое
-   * поведение). Если задан, передаётся в `/api/shopfloor/display?
-   * division=…` на каждом polling-tick'е, чтобы выборка считалась
-   * на backend, а не на клиенте.
+   * Опциональный фильтр по подразделению заказа
+   * (`CompanyDivision.code`). `null` — фильтра нет, экран показывает
+   * все активные заказы. Если задан, передаётся в
+   * `/api/shopfloor/display?divisionCode=…` на каждом polling-tick'е,
+   * чтобы выборка считалась на backend, а не на клиенте.
    */
-  division?: OrderDivision | null;
-  /**
-   * Готовая человекочитаемая подпись для шапки (например, «Маркетплейс»).
-   * `null` — подпись не показываем (TV-layout остаётся прежним).
-   */
-  divisionLabel?: string | null;
+  divisionCode?: string | null;
 }
 
 /**
@@ -290,8 +284,7 @@ async function fetchJson<T>(url: string, signal: AbortSignal): Promise<T> {
 export function ShopfloorDisplayBoard({
   initialSummary,
   initialError,
-  division = null,
-  divisionLabel = null,
+  divisionCode = null,
 }: Props) {
   // ВАЖНО: `lastSuccessAt` намеренно инициализируется нулём, даже если
   // `initialSummary` уже есть. Если бы мы поставили сюда `Date.now()`,
@@ -359,10 +352,11 @@ export function ShopfloorDisplayBoard({
     // или, чего доброго, чужой prod-домен.
     // Фильтр по подразделению, если задан в URL страницы. Backend
     // валидирует значение через Zod-схему и возвращает только заказы
-    // выбранного division'а; без параметра — поведение прежнее.
+    // выбранного `CompanyDivision.code`; без параметра — поведение
+    // прежнее (показываем все активные заказы).
     const requestUrl = buildRequestUrl(
-      division
-        ? `/shopfloor/display?division=${encodeURIComponent(division)}`
+      divisionCode
+        ? `/shopfloor/display?divisionCode=${encodeURIComponent(divisionCode)}`
         : '/shopfloor/display',
     );
     try {
@@ -483,7 +477,7 @@ export function ShopfloorDisplayBoard({
         inFlightCtrlRef.current = null;
       }
     }
-  }, [division]);
+  }, [divisionCode]);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -662,12 +656,12 @@ export function ShopfloorDisplayBoard({
             ●
           </span>
           ЦЕХ · LIVE
-          {divisionLabel ? (
+          {divisionCode ? (
             <span
               className="display-screen__brand-sub"
               data-testid="display-division-label"
             >
-              · {divisionLabel}
+              · {divisionCode}
             </span>
           ) : null}
         </div>

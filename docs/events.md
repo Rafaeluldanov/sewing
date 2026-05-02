@@ -441,16 +441,14 @@ runtime-коде (не из комментариев/документации). 
 #### Заказы покупателя (`entityType = ORDER` / `ORDER_COST_ESTIMATE`)
 
 - `ORDER_CREATED` — `OrdersService.create`
-  (`orders.service.ts:358`). PHASE 1: payload расширен полями
-  `companyDivisionId` и `companyDivisionCode` (наряду с legacy
-  `division`). По журналу видно, попал ли заказ на новый FK на
-  `CompanyDivision` или только в legacy enum (см.
-  `docs/domain.md §«Подразделения заказа»`).
+  (`orders.service.ts`). Payload содержит `companyDivisionId` и
+  `companyDivisionCode` (FK на master-справочник
+  `CompanyDivision`). По журналу видно, к какому подразделению
+  привязан заказ (см. `docs/domain.md §«Подразделения заказа»`).
 - `ORDER_UPDATED` — `OrdersService.update`
-  (`orders.service.ts:1327`). PHASE 1: смена `companyDivisionId`
-  попадает в `changedFields` отдельным полем (наряду с legacy
-  `division`), так что историю смены подразделения можно
-  фильтровать по новому источнику истины.
+  (`orders.service.ts`). Смена `companyDivisionId` попадает в
+  `changedFields` — историю смены подразделения можно
+  фильтровать по этому полю.
 - `ORDER_PATTERN_CHANGED` — `OrdersService.update` при смене лекала
   (`orders.service.ts:1353`).
 - `ORDER_OPERATION_PLAN_RECALCULATED` —

@@ -25,7 +25,7 @@
  *
  * Контракт FormData (источник правды — `createOrderAction`):
  * `patternItemId`, `dueDate`, `orderDate`, `color`, `comment`,
- * `clientId`, `division`, `techCardId`, `routeTemplateId`,
+ * `clientId`, `companyDivisionId`, `techCardId`, `routeTemplateId`,
  * `qty[<sizeId>]`. Поле `productId` форма больше НЕ шлёт — backend
  * через `OrdersService.ensureLegacyProductForPattern()` подставит
  * технический legacy Product сам. Подробные смоки на сетку
@@ -107,11 +107,8 @@ describe('admin/orders/new — Admin Order Form 2.0 страница созда�
     // UI удалён, в FormData больше не уходит.
     expect(src).toMatch(/name="patternItemId"/);
     expect(src).not.toMatch(/name="productId"/);
-    // PHASE 1 «CompanyDivision как master-справочник»: новый
-    // приоритетный select. Legacy `name="division"` остался как
-    // hidden-input для backend-fallback (см. JSDoc в форме).
+    // Подразделение — FK на master-справочник `CompanyDivision`.
     expect(src).toMatch(/name="companyDivisionId"/);
-    expect(src).toMatch(/name="division"/);
     expect(src).toMatch(/name="color"/);
     expect(src).toMatch(/name="comment"/);
     expect(src).toMatch(/name="techCardId"/);

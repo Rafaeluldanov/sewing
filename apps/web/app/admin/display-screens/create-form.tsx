@@ -3,10 +3,6 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { AlertCircle, Plus } from 'lucide-react';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
-import {
-  ORDER_DIVISIONS,
-  ORDER_DIVISION_LABELS,
-} from '@sewing/shared/orders';
 import { createDisplayScreenAction } from './actions';
 import {
   initialCreateDisplayScreenState,
@@ -15,10 +11,10 @@ import {
 
 interface Props {
   /**
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `docs/domain.md §«Подразделения заказа»»): активные карточки
-   * подразделений. Если пусто — UI fallback-ит на legacy enum-select
-   * (`ORDER_DIVISIONS`).
+   * Активные карточки `CompanyDivision` (см.
+   * `docs/domain.md §«Подразделения заказа»`). Если список пуст,
+   * select показывает «нет подразделений» — менеджер должен сначала
+   * завести карточку через `/admin/company-settings`.
    */
   companyDivisions: CompanyDivisionDto[];
 }
@@ -40,13 +36,9 @@ function SubmitButton() {
 /**
  * Форма создания display-экрана (Admin UI 2.6, ADR-0022 §display).
  *
- * PHASE 1 «CompanyDivision как master-справочник» (см.
- * `docs/domain.md §«Подразделения заказа»`): подразделение
- * выбирается из активных карточек `CompanyDivision` (новый источник
- * истины). Backend синхронизирует пару `(companyDivisionId, division)`
- * по `code` для known whitelist `MARKETPLACE`/`OTHER`. Если список
- * подразделений пуст (новая инсталляция без миграции/seed), форма
- * fallback-ит на legacy enum-select.
+ * Подразделение выбирается из активных карточек `CompanyDivision`
+ * (master-справочник, см. `docs/domain.md §«Подразделения заказа»`).
+ * Backend пишет FK `DisplayScreenConfig.companyDivisionId` напрямую.
  */
 export function CreateDisplayScreenForm({ companyDivisions }: Props) {
   const [state, formAction] = useFormState<CreateDisplayScreenState, FormData>(
@@ -73,34 +65,24 @@ export function CreateDisplayScreenForm({ companyDivisions }: Props) {
 
         <div className="admin-field">
           <label htmlFor="ds-companyDivisionId">Подразделение</label>
-          {companyDivisions.length > 0 ? (
-            <select
-              id="ds-companyDivisionId"
-              name="companyDivisionId"
-              required
-              defaultValue=""
-            >
-              <option value="" disabled>
-                Выберите подразделение
+          <select
+            id="ds-companyDivisionId"
+            name="companyDivisionId"
+            required
+            defaultValue=""
+            disabled={companyDivisions.length === 0}
+          >
+            <option value="" disabled>
+              {companyDivisions.length === 0
+                ? '— нет подразделений —'
+                : 'Выберите подразделение'}
+            </option>
+            {companyDivisions.map((d) => (
+              <option key={d.id} value={d.id}>
+                {d.name}
               </option>
-              {companyDivisions.map((d) => (
-                <option key={d.id} value={d.id}>
-                  {d.name}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <select id="ds-division" name="division" required defaultValue="">
-              <option value="" disabled>
-                Выберите подразделение
-              </option>
-              {ORDER_DIVISIONS.map((d) => (
-                <option key={d} value={d}>
-                  {ORDER_DIVISION_LABELS[d]}
-                </option>
-              ))}
-            </select>
-          )}
+            ))}
+          </select>
         </div>
       </div>
 

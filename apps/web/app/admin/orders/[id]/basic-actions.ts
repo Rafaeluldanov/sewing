@@ -20,7 +20,7 @@
  * basics-поля разрешены на любом статусе.
  *
  * Контракт FormData (см. UI hero-формы в `order-hero-card.tsx`):
- *   - `division`           — `MARKETPLACE | OTHER`;
+ *   - `companyDivisionId`  — id карточки `CompanyDivision` либо пусто (= без подразделения);
  *   - `dueDate`            — ISO `YYYY-MM-DD` или пусто (= снять);
  *   - `clientId`           — `ulid` либо пусто (= без клиента);
  *   - `customer`           — free-text заказчик (для совместимости со
@@ -42,9 +42,7 @@
 
 import { revalidatePath } from 'next/cache';
 import {
-  ORDER_DIVISIONS,
   UpdateOrderSchema,
-  type OrderDivision,
   type UpdateOrderDto,
 } from '@sewing/shared/orders';
 import { ApiRequestError } from '@/lib/api';
@@ -55,14 +53,6 @@ export interface UpdateOrderBasicsActionState {
   successMessage?: string;
   error?: string;
   fieldErrors?: Record<string, string>;
-}
-
-function parseDivision(form: FormData): OrderDivision | undefined {
-  const raw = String(form.get('division') ?? '').trim();
-  if (raw === '') return undefined;
-  return (ORDER_DIVISIONS as readonly string[]).includes(raw)
-    ? (raw as OrderDivision)
-    : undefined;
 }
 
 function parseNullableString(
@@ -104,11 +94,8 @@ function parseCustomerPrice(form: FormData): {
 function buildBasicsDto(form: FormData): UpdateOrderDto {
   const { customerUnitPrice, customerCurrency } = parseCustomerPrice(form);
   return {
-    division: parseDivision(form),
-    // PHASE 1 «CompanyDivision как master-справочник» (см.
-    // `docs/domain.md §«Подразделения заказа»`): UI новой hero-формы
-    // отдаёт `companyDivisionId` через `<select>`. Backend
-    // синхронизирует пару `(companyDivisionId, division)`.
+    // Подразделение заказа — FK на `CompanyDivision` (см.
+    // `docs/domain.md §«Подразделения заказа»`).
     companyDivisionId: parseNullableString(form, 'companyDivisionId'),
     dueDate: parseNullableString(form, 'dueDate'),
     clientId: parseNullableString(form, 'clientId'),

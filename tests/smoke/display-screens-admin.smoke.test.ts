@@ -8,7 +8,8 @@
  * подключена, что server-action существует, что backend-роут добавлен.
  * Этого достаточно, чтобы поймать регресс «удалили кнопку создания»
  * или «убрали POST из контроллера дисплеев», и чтобы случайным
- * рефакторингом не сломать auto-division-логику в shopfloor.
+ * рефакторингом не сломать auto-resolve-логику подразделения для
+ * DISPLAY-роли в shopfloor.
  *
  * Парные примеры — `tests/smoke/employees-admin.smoke.test.ts`,
  * `tests/smoke/equipment-admin.smoke.test.ts`.
@@ -59,12 +60,8 @@ describe('admin/display-screens/new — отдельная страница со
     // Поля собраны строго по DTO POST /api/display-screens
     // (см. `packages/shared/src/display-screens.ts`).
     expect(src).toMatch(/name="name"/);
-    // PHASE 1 «CompanyDivision как master-справочник»: новый
-    // приоритетный select. Legacy `name="division"` остаётся как
-    // fallback (рендерится, если в инсталляции нет
-    // `companyDivisions`).
+    // Подразделение — FK на master-справочник `CompanyDivision`.
     expect(src).toMatch(/name="companyDivisionId"/);
-    expect(src).toMatch(/name="division"/);
     expect(src).toMatch(/name="login"/);
     expect(src).toMatch(/name="pin"/);
     expect(src).toMatch(/name="isActive"/);
@@ -96,11 +93,11 @@ describe('backend display-screens контракт', () => {
     expect(src).toMatch(/@Get\(\)/);
   });
 
-  test('CreateDisplayScreenSchema — name/division/login/pin/isActive (без выбора существующего DISPLAY)', () => {
+  test('CreateDisplayScreenSchema — name/companyDivisionId/login/pin/isActive (без выбора существующего DISPLAY)', () => {
     const src = readSrc('packages/shared/src/display-screens.ts');
     expect(src).toMatch(/CreateDisplayScreenSchema/);
     expect(src).toMatch(/name:/);
-    expect(src).toMatch(/division:/);
+    expect(src).toMatch(/companyDivisionId:/);
     expect(src).toMatch(/login:/);
     expect(src).toMatch(/pin:/);
     expect(src).toMatch(/isActive:/);
@@ -234,7 +231,7 @@ describe('shopfloor/display — изоляция от admin компоненто
   });
 });
 
-describe('shopfloor — auto-division для DISPLAY-роли (контракт жив)', () => {
+describe('shopfloor — auto-resolve подразделения для DISPLAY-роли (контракт жив)', () => {
   test('контроллер /api/shopfloor/display прокидывает CurrentUser в сервис', () => {
     const src = readSrc(
       'apps/api/src/modules/shopfloor/shopfloor.controller.ts',
@@ -243,16 +240,14 @@ describe('shopfloor — auto-division для DISPLAY-роли (контракт 
     expect(src).toMatch(/getDisplaySummary\(query, user\)/);
   });
 
-  test('shopfloor.service.ts резолвит division по DisplayScreenConfig для роли DISPLAY', () => {
+  test('shopfloor.service.ts резолвит подразделение по DisplayScreenConfig для роли DISPLAY', () => {
     const src = readSrc('apps/api/src/modules/shopfloor/shopfloor.service.ts');
-    // PHASE 1 «CompanyDivision как master-справочник»: helper
-    // переименован в `resolveDisplayDivisionCode` и читает
-    // `companyDivision.code` с fallback на legacy `division`.
     expect(src).toMatch(/resolveDisplayDivisionCode/);
     expect(src).toMatch(/displayScreenConfig\.findUnique/);
     expect(src).toMatch(/Role\.DISPLAY/);
-    // PHASE 1: оба query-параметра приоритетнее автодетектора.
+    // Источник истины — `companyDivision.code` через FK.
+    expect(src).toMatch(/companyDivision: \{ select: \{ code: true \} \}/);
+    // Query-параметр приоритетнее автодетектора.
     expect(src).toMatch(/if \(query\.divisionCode\)/);
-    expect(src).toMatch(/if \(query\.division\)/);
   });
 });

@@ -1,8 +1,3 @@
-import {
-  ORDER_DIVISIONS,
-  ORDER_DIVISION_LABELS,
-  type OrderDivision,
-} from '@sewing/shared/orders';
 import { ApiRequestError } from '@/lib/api';
 import { getShopfloorDisplaySummary } from '@/lib/shopfloor-api';
 import { ShopfloorDisplayBoard } from './display-board';
@@ -10,22 +5,28 @@ import { ShopfloorDisplayBoard } from './display-board';
 export const dynamic = 'force-dynamic';
 
 interface ShopfloorDisplayPageProps {
-  searchParams?: { division?: string | string[] };
+  searchParams?: {
+    /** Новый параметр: `CompanyDivision.code` (см. `docs/display-board.md`). */
+    divisionCode?: string | string[];
+    /**
+     * Deprecated alias на `divisionCode` для старых TV-закладок. Только
+     * web-уровень: на API `?division=…` больше не принимается; здесь
+     * мы тихо пробрасываем значение в `divisionCode`. Параметр будет
+     * убран после переезда всех закладок.
+     *
+     * @deprecated Используйте `?divisionCode=<CompanyDivision.code>`.
+     */
+    division?: string | string[];
+  };
 }
 
-/**
- * Парсит query-параметр `division` в `OrderDivision | null`. Невалидное
- * значение тихо игнорируется — на TV-экране нет UI, чтобы показать
- * ошибку, и логично продолжить работать как «без фильтра».
- */
-function parseDivision(
+function pickQueryString(
   raw: string | string[] | undefined,
-): OrderDivision | null {
+): string | null {
   const value = Array.isArray(raw) ? raw[0] : raw;
   if (!value) return null;
-  return (ORDER_DIVISIONS as readonly string[]).includes(value)
-    ? (value as OrderDivision)
-    : null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : null;
 }
 
 /**
@@ -44,20 +45,25 @@ function parseDivision(
  * спиннера. Дальше клиент-компонент (`ShopfloorDisplayBoard`) поллит
  * каждые 7 секунд — это укладывается в требование «авто-обновление
  * каждые 5–10 секунд» и не выжигает CPU/сеть на круглосуточном экране.
+ *
+ * Опциональный фильтр по подразделению — `?divisionCode=<code>` (см.
+ * `docs/display-board.md`). Web-уровень также принимает старый
+ * `?division=…` как deprecated alias и тихо мапит его на
+ * `divisionCode`, чтобы старые TV-закладки не упали в 404.
  */
 export default async function ShopfloorDisplayPage({
   searchParams,
 }: ShopfloorDisplayPageProps) {
-  // Опциональный фильтр по подразделению: `?division=MARKETPLACE`.
-  // Используется для отдельных display-экранов (см. `docs/screens.md
-  // §9a`). Без параметра поведение прежнее — показываем всё.
-  const division = parseDivision(searchParams?.division);
-  const divisionLabel = division ? ORDER_DIVISION_LABELS[division] : null;
+  const divisionCode =
+    pickQueryString(searchParams?.divisionCode) ??
+    pickQueryString(searchParams?.division);
 
   let initialSummary = null;
   let initialError: string | null = null;
   try {
-    initialSummary = await getShopfloorDisplaySummary(division ?? undefined);
+    initialSummary = await getShopfloorDisplaySummary(
+      divisionCode ?? undefined,
+    );
   } catch (e) {
     initialError =
       e instanceof ApiRequestError
@@ -69,8 +75,7 @@ export default async function ShopfloorDisplayPage({
     <ShopfloorDisplayBoard
       initialSummary={initialSummary}
       initialError={initialError}
-      division={division}
-      divisionLabel={divisionLabel}
+      divisionCode={divisionCode}
     />
   );
 }

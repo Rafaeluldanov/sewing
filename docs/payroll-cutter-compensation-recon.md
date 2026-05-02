@@ -1,5 +1,20 @@
 # Cutter compensation recon
 
+> **ARCHIVED / HISTORICAL.** Этот документ написан до введения
+> master-справочника `CompanyDivision` и удаления legacy
+> `enum OrderDivision` (PHASE 2). Источник истины подразделения
+> заказа теперь — `Order.companyDivisionId → CompanyDivision`,
+> `EarningsService` ветвится по `passport.order.companyDivision.code`
+> (см. `docs/domain.md §«Подразделения заказа»`). Helper
+> `getCutterCompensationSchemeForDivision` сохранён с тем же
+> контрактом и теперь принимает строку-`code`. Сами схемы
+> (`MARKETPLACE_FIXED` / `B2B_SEWING_PERCENT`) и формулы расчёта
+> не изменились.
+>
+> Документ оставлен для исторического контекста — упоминания
+> `Order.division` / `enum OrderDivision` ниже в коде уже не
+> существуют.
+>
 > Технический recon перед добавлением второй (B2B) схемы начисления
 > закройщика. Код, Prisma, миграции, backend, frontend, DTO и тесты в
 > этом recon **не меняются**. Документ описывает, где сейчас живёт

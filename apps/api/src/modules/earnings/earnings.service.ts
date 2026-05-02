@@ -93,15 +93,16 @@ export class EarningsService {
    *
    * Со схемы `B2B cutter compensation` (см.
    * `docs/payroll-cutter-compensation-recon.md`) метод выбирает одну
-   * из двух схем по `Order.division`:
+   * из двух схем по `Order.companyDivision.code`:
    *
-   *   - `MARKETPLACE_FIXED` (default для `division = MARKETPLACE`):
-   *     старая схема `amount = Operation(CUT_CUT).fixedRate ×
-   *     passport.qtyCut`. Marketplace-flow не меняется ни по
-   *     `operationId`, ни по `sourceEventType`, ни по
-   *     `approvalMode`/`status` — только продолжаем эту ветку 1-в-1.
+   *   - `MARKETPLACE_FIXED` (для `code = MARKETPLACE`): старая схема
+   *     `amount = Operation(CUT_CUT).fixedRate × passport.qtyCut`.
+   *     Marketplace-flow не меняется ни по `operationId`, ни по
+   *     `sourceEventType`, ни по `approvalMode`/`status` — только
+   *     продолжаем эту ветку 1-в-1.
    *
-   *   - `B2B_SEWING_PERCENT` (для `division = OTHER`/`B2B`):
+   *   - `B2B_SEWING_PERCENT` (для `code = OTHER` и для любого
+   *     произвольного `CompanyDivision.code`):
    *     `amount = base × percent / 100`, где
    *     `base = Σ rate(SEWING-операция, размер) × qtyForCompensation`,
    *     `percent = employee.cutterB2bSewingPercent ?? ENV
@@ -149,33 +150,26 @@ export class EarningsService {
     // Если раскрой переведён на оклад — никаких сдельных начислений.
     if (op.pricingMode === 'SALARY_ONLY') return;
 
-    // PHASE 1 «CompanyDivision как master-справочник» (см.
-    // `docs/payroll-cutter-compensation-recon.md §4`,
-    // `docs/domain.md §«Подразделения заказа»»).
-    //
-    // Source of truth для выбора схемы — теперь
-    // `passport.order.companyDivision.code`. Fallback на legacy
-    // `Order.division` оставляем до PHASE 2: он покрывает
-    // исторические заказы, у которых FK не проставлен (миграция
-    // backfill-ит только совпадения с known legacy code, но
-    // отдельные заказы могли попасть с `companyDivision = null`).
-    // Marketplace продолжает старый путь 1-в-1; всё остальное идёт
-    // через процент от пошива.
+    // Source of truth для выбора схемы — `passport.order.companyDivision.code`
+    // (см. `docs/payroll-cutter-compensation-recon.md §4`,
+    // `docs/domain.md §«Подразделения заказа»»). Marketplace
+    // (`code = MARKETPLACE`) идёт по фиксированной схеме, всё
+    // остальное — через процент от пошива
+    // (`B2B_SEWING_PERCENT`-default). Если у заказа `companyDivision`
+    // не привязан, helper тоже даёт безопасный B2B-default.
     const passport = await tx.passport.findUnique({
       where: { id: args.passportId },
       select: {
         orderId: true,
         order: {
           select: {
-            division: true,
             companyDivision: { select: { code: true } },
           },
         },
       },
     });
     if (!passport) return;
-    const divisionCode =
-      passport.order.companyDivision?.code ?? passport.order.division;
+    const divisionCode = passport.order.companyDivision?.code ?? null;
     const scheme = getCutterCompensationSchemeForDivision(divisionCode);
 
     if (scheme === 'MARKETPLACE_FIXED') {
@@ -566,10 +560,6 @@ export class EarningsService {
         order: {
           select: {
             id: true,
-            // PHASE 1: legacy `division` оставлен для журнала /
-            // диагностики, фактическая схема выбирается через
-            // `companyDivision.code` в `createImmediateForCutter`.
-            division: true,
             companyDivision: { select: { code: true } },
             routeSteps: {
               select: {

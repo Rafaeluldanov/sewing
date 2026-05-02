@@ -1490,26 +1490,31 @@ client `display-board.tsx`). Стили локализованы в
   оборудование одним «снимком». Вся группировка по цветам считается
   на backend (см. `ShopfloorService.getDisplaySummary`,
   `projectShopfloorDisplay`).
-- **Фильтр по подразделению.** Страница читает `searchParams.division`
-  (валидируется по `OrderDivisionSchema`, невалидное игнорируется,
-  как будто его не было) и пробрасывает в `getShopfloorDisplaySummary`,
-  а та — в `?division=…` бэкенда. Тот же `division` передаётся в
-  client `ShopfloorDisplayBoard` и попадает в каждый последующий polling-
-  запрос — `MARKETPLACE`-экран остаётся `MARKETPLACE`-экраном между
-  тиками. Без параметра — поведение прежнее (общий экран по всем
-  активным заказам).
-- В шапке экрана при наличии `division` дорисовывается маленький
-  саб-лейбл подразделения (`ORDER_DIVISION_LABELS[division]`) рядом
-  с «ЦЕХ · LIVE». На остальной layout/сетку TV-режима это не влияет.
-- URL-конвенция MVP — query-param: `/shopfloor/display?division=MARKETPLACE`.
-  Query-param по-прежнему работает (для отладки и старых закладок), но
-  с появлением админки display-экранов появилась альтернатива: создать
-  отдельную DISPLAY-учётку через `/admin/display-screens/new`,
-  привязать к ней `OrderDivision` — и логиниться сразу под этим
-  логином. `/api/shopfloor/display` сам подставит нужный `division` по
-  `DisplayScreenConfig`, без `?division=` в URL. См. §10g и
-  `api.md §11a`. Slug-роуты (`/shopfloor/display/marketplace`)
-  по-прежнему отложены — см. `domain.md §9.6.2` и ADR-0007.
+- **Фильтр по подразделению.** Страница читает
+  `searchParams.divisionCode` (любой `CompanyDivision.code`) и
+  пробрасывает в `getShopfloorDisplaySummary`, а та — в
+  `?divisionCode=…` бэкенда. Тот же код передаётся в
+  client `ShopfloorDisplayBoard` и попадает в каждый последующий
+  polling-запрос — `MARKETPLACE`-экран остаётся `MARKETPLACE`-
+  экраном между тиками. Без параметра — поведение прежнее (общий
+  экран по всем активным заказам). Web-уровень также принимает
+  старый `?division=<code>` как deprecated alias и тихо мапит его
+  в `divisionCode`, чтобы старые TV-закладки не падали в 404 —
+  алиас будет убран после переезда всех закладок.
+- В шапке экрана при наличии `divisionCode` дорисовывается
+  маленький саб-лейбл с самим кодом рядом с «ЦЕХ · LIVE». На
+  остальной layout/сетку TV-режима это не влияет.
+- URL-конвенция MVP — query-param: `/shopfloor/display?divisionCode=MARKETPLACE`.
+  Query-param по-прежнему работает (для отладки и закладок), но
+  с появлением админки display-экранов появилась альтернатива:
+  создать отдельную DISPLAY-учётку через
+  `/admin/display-screens/new`, привязать к ней
+  `companyDivisionId` — и логиниться сразу под этим логином.
+  `/api/shopfloor/display` сам подставит нужный `divisionCode` из
+  `DisplayScreenConfig.companyDivision.code`, без query в URL.
+  См. §10g и `api.md §11a`. Slug-роуты
+  (`/shopfloor/display/marketplace`) по-прежнему отложены — см.
+  `domain.md §9.6.2` и ADR-0007.
 - Дальше клиент-компонент `ShopfloorDisplayBoard` поллит тот же
   endpoint по recursive `setTimeout`-планировщику с двумя cadence'ами
   (окно 5–10 c, см. ADR-0007):
@@ -2620,7 +2625,7 @@ DisplayScreenConfig`. Доступ — `SHOP_MANAGER` и `ADMIN` (для
 
 - **Шапка** — заголовок «Display-экраны», подзаголовок поясняет
   модель «1 экран = 1 DISPLAY-учётка + 1 подразделение» и упоминает,
-  что без `?division=` в URL `/shopfloor/display` теперь сам
+  что без `?divisionCode=` в URL `/shopfloor/display` теперь сам
   фильтруется по конфигу.
 - **Action-кнопка** в правой части шапки: «Создать экран» — ссылка
   на `/admin/display-screens/new` (тот же UX, что у
@@ -2631,9 +2636,9 @@ DisplayScreenConfig`. Доступ — `SHOP_MANAGER` и `ADMIN` (для
   с `opacity: 0.7`.
 - **Empty-state** — «Пусто». Никаких заглушек или fake-данных.
 - **Карточки экрана нет.** На MVP редактировать конфиг нельзя (это
-  мини-фича: имя/division/PIN правится через «удалить и создать
-  заново»; тумблер `isActive` через UI пока тоже не выведен —
-  меняется при необходимости через Prisma напрямую). Это
+  мини-фича: имя/подразделение/PIN правится через «удалить и
+  создать заново»; тумблер `isActive` через UI пока тоже не
+  выведен — меняется при необходимости через Prisma напрямую). Это
   сознательное упрощение по модели «универсальный экран-конфиг,
   простой create-flow».
 
@@ -2643,8 +2648,9 @@ DisplayScreenConfig`. Доступ — `SHOP_MANAGER` и `ADMIN` (для
   display-экран», back-link «← К списку дисплеев».
 - **Поля формы** (`apps/web/app/admin/display-screens/create-form.tsx`):
   - **Название экрана** (`name`, 2–120 символов) — для админ-листинга;
-  - **Подразделение** (`division`, `OrderDivision` enum) — определяет
-    `division`-фильтр для `/shopfloor/display` под этой DISPLAY-учёткой;
+  - **Подразделение** (`companyDivisionId`, FK на `CompanyDivision`) —
+    определяет `divisionCode`-фильтр для `/shopfloor/display` под
+    этой DISPLAY-учёткой;
   - **Логин дисплея** (`login`, 2–64) — нормализуется в lower-case;
   - **PIN** (`pin`, 4–100) — храним только bcrypt-hash;
   - **Активен** (`isActive`, default `true`) — мягкий выключатель.
@@ -2674,10 +2680,10 @@ DisplayScreenConfig`. Доступ — `SHOP_MANAGER` и `ADMIN` (для
    `apps/web/middleware.ts` сразу уводит DISPLAY-роль на
    `/shopfloor/display` и не пускает её ни на одну другую страницу.
 4. Страница `/shopfloor/display` шлёт `GET /api/shopfloor/display`
-   (без `?division=`). Backend по cookie видит `role = DISPLAY`,
+   (без `?divisionCode=`). Backend по cookie видит `role = DISPLAY`,
    находит `DisplayScreenConfig` по `employeeId` и сужает выборку
-   до `division = MARKETPLACE`. Никаких URL-настроек на TV-панели
-   менять не нужно.
+   до `companyDivision.code = MARKETPLACE`. Никаких URL-настроек на
+   TV-панели менять не нужно.
 
 ### 10h. Настройки компании (`/admin/company-settings`)
 
@@ -2722,15 +2728,16 @@ RBAC — `SHOP_MANAGER` / `ADMIN` (на backend), плюс `app/admin/layout.tsx
 Доменные правила — `docs/domain.md §16`, контракт API —
 `docs/api.md §42`, ER — `docs/erd.md §2.15`.
 
-> **PHASE 1 «CompanyDivision как master-справочник»**. Подразделения,
-> заведённые здесь, теперь являются источником истины для поля
-> «Подразделение» в карточках заказа (`Order.companyDivisionId`)
+> **CompanyDivision = master-справочник подразделений.**
+> Подразделения, заведённые здесь, являются источником истины для
+> поля «Подразделение» в карточках заказа (`Order.companyDivisionId`)
 > и в конфиге display-экранов (`DisplayScreenConfig.companyDivisionId`).
-> Базовые карточки `MARKETPLACE` / `OTHER` (`code` совпадает с
-> legacy enum `OrderDivision`) гарантированно созданы миграцией и
-> seed-ом — менеджер их видит и может переименовать, но `code`
-> менять нельзя пока legacy enum жив (PHASE 2 уберёт эту
-> жёсткость). См. `docs/domain.md §«Подразделения заказа»` и
+> Базовые карточки `MARKETPLACE` / `OTHER` гарантированно созданы
+> миграцией и seed-ом — менеджер их видит, может переименовать.
+> `EarningsService` использует `code` для выбора схемы начисления
+> закройщика (см. `getCutterCompensationSchemeForDivision`), поэтому
+> переименование `code` карточек `MARKETPLACE` / `OTHER` сломает
+> marketplace-flow. См. `docs/domain.md §«Подразделения заказа»` и
 > `docs/erd.md §«CompanyDivision»`.
 
 ---

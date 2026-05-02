@@ -12,10 +12,8 @@ import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
   CreateOrderSchema,
-  ORDER_DIVISIONS,
   UpdateOrderSchema,
   type CreateOrderDto,
-  type OrderDivision,
   type UpdateOrderDto,
 } from '@sewing/shared/orders';
 import {
@@ -57,24 +55,13 @@ function extractItems(form: FormData): { sizeId: string; qtyPlan: number }[] {
   return items;
 }
 
-function parseDivision(form: FormData): OrderDivision | undefined {
-  const raw = String(form.get('division') ?? '').trim();
-  if (raw === '') return undefined;
-  return (ORDER_DIVISIONS as readonly string[]).includes(raw)
-    ? (raw as OrderDivision)
-    : undefined;
-}
-
 /**
- * PHASE 1 «CompanyDivision как master-справочник» (см.
- * `docs/domain.md §«Подразделения заказа»`,
- * `OrdersService.resolveCompanyDivisionForOrder`): UI новой формы
- * шлёт `companyDivisionId` (FK на справочник). Старые формы
- * продолжают слать legacy `division` enum — backend их синхронизирует.
+ * Подразделение заказа — FK на master-справочник `CompanyDivision`
+ * (см. `docs/domain.md §«Подразделения заказа»`).
  *
  * Семантика парсинга:
  *   - поля нет в FormData → `undefined` → backend не трогает колонку
- *     (актуально для legacy `/orders/new` без селекта подразделения);
+ *     (актуально для форм без селекта подразделения);
  *   - есть и пустое → `null` → backend снимает привязку (только в
  *     update-flow, на create эквивалентно «не задан»);
  *   - есть и непустое → строка с id.
@@ -238,11 +225,7 @@ function buildCreateDto(form: FormData): CreateOrderDto {
     patternItemId,
     clientId,
     dueDate,
-    division: parseDivision(form),
-    // PHASE 1: на create достаточно проставить `companyDivisionId`
-    // если он пришёл — backend подкладывает legacy `division` по
-    // `code`. `null` на create равносилен «не задан» (создание не
-    // знает «снять»).
+    // На create `null` равносилен «не задан» (создание не знает «снять»).
     companyDivisionId:
       parseCompanyDivisionId(form) === null
         ? undefined
@@ -327,10 +310,9 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     patternItemId,
     clientId,
     dueDate,
-    division: parseDivision(form),
-    // PHASE 1: новый источник истины подразделения. Семантика та же,
-    // что у `routeTemplateId` / `techCardId`: поля нет = не трогать,
-    // пустая строка = снять, иначе = переустановить.
+    // Подразделение заказа. Семантика та же, что у `routeTemplateId`
+    // / `techCardId`: поля нет = не трогать, пустая строка = снять,
+    // иначе = переустановить.
     companyDivisionId: parseCompanyDivisionId(form),
     customerUnitPrice,
     customerCurrency,

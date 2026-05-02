@@ -196,8 +196,8 @@ Product, который автоматически создаётся под л�
 - `number` (uniq, формат `O-YYYYMMDD-NNNN`),
 - `clientId? → Client`, `customer` (legacy свободный текст),
 - `orderDate`, `dueDate?`, `color?`, `comment?`,
-- `division: OrderDivision @default(OTHER)` —
-  `MARKETPLACE | OTHER` (см. §12);
+- `companyDivisionId? → CompanyDivision` (master-справочник
+  подразделений заказа, см. §12.3);
 - `status: OrderStatus @default(DRAFT)` (см. §1.2);
 - `routeTemplateId? → RouteTemplate` (опционально, см. §2);
 - `techCardId? → TechCardTemplate` (опционально, см. §3);
@@ -212,7 +212,8 @@ Product, который автоматически создаётся под л�
 - цена продажи: `customerUnitPrice?`, `customerCurrency?`
   (управленческое поле, не входит в расчёт себестоимости);
 - индексы: `status`, `orderDate`, `createdAt`, `routeTemplateId`,
-  `techCardId`, `patternItemId`, `division`, `clientId`, `dueDate`.
+  `techCardId`, `patternItemId`, `companyDivisionId`, `clientId`,
+  `dueDate`.
 
 `OrderItem` — строка по размеру:
 `(orderId, productId, sizeId)` UNIQUE, `qtyPlan: Int` (план в
@@ -245,11 +246,11 @@ Postgres-enum расширяется только через `ALTER TYPE … ADD
 
 `PATCH /api/orders/:id` валидирует «опасные» поля
 (`items`, `productId`, `routeTemplateId`, `techCardId`,
-`patternItemId`, `division`) и допускает их к изменению **только в
-`DRAFT`**. На любом другом статусе — `OrderLockedException` (409
-`ORDER_LOCKED`). Если в DTO передан `status`, сервис делегирует
-переход в соответствующий метод (`startCalculation` / `start` /
-`complete` / `cancel`).
+`patternItemId`, `companyDivisionId`) и допускает их к изменению
+**только в `DRAFT`**. На любом другом статусе —
+`OrderLockedException` (409 `ORDER_LOCKED`). Если в DTO передан
+`status`, сервис делегирует переход в соответствующий метод
+(`startCalculation` / `start` / `complete` / `cancel`).
 
 ### 1.3 Snapshot-механика заказа
 
@@ -1523,13 +1524,14 @@ trigger → `P2002` тихо проглатывается в `safeCreate`
   isPieceworkEligible(compensationType)`;
 - `Operation(code='CUT_CUT')`; если `pricingMode = SALARY_ONLY`
   — silent skip (раскрой переведён на оклад);
-- источник истины для схемы — `Order.division` через
-  `getCutterCompensationSchemeForDivision`
+- источник истины для схемы — `passport.order.companyDivision.code`
+  через `getCutterCompensationSchemeForDivision`
   (`packages/shared/src/cutter-compensation.ts`):
   - `MARKETPLACE` → `MARKETPLACE_FIXED`:
     `amount = Operation.fixedRate × qty` через
     `OperationsService.resolveRate` (FIXED / BY_SIZE);
-  - `OTHER` → `B2B_SEWING_PERCENT`:
+  - `OTHER` (а также любой произвольный `CompanyDivision.code` или
+    отсутствие привязки) → `B2B_SEWING_PERCENT`:
     `base = Σ rate(SEWING-операция, размер) × qty`,
     `percent = employee.cutterB2bSewingPercent ?? ENV
     CUTTER_B2B_SEWING_PERCENT`,
@@ -1773,44 +1775,37 @@ ADR-0013, `docs/production-flow.md §15`, `docs/api.md §32`.
 ∈ {QC, IRONING}`), и сравнивает `max(createdAt)` с
 `max(OPERATION_SCAN.createdAt)`.
 
-### 12.3 `Order.division` и `Order.companyDivisionId`
+### 12.3 `Order.companyDivisionId` (CompanyDivision = master)
 
-Источник: `prisma/schema.prisma::enum OrderDivision`
-(`MARKETPLACE | OTHER`, default `OTHER`),
-`prisma/schema.prisma::Order.companyDivisionId` (PHASE 1),
+Источник: `prisma/schema.prisma::Order.companyDivisionId`,
 `docs/order-flow.md §1`, `docs/api.md §13`.
 
-**PHASE 1 «CompanyDivision как master-справочник»** (см.
-`docs/erd.md §«CompanyDivision»`): `CompanyDivision` теперь
-является master-справочником подразделений заказа и display
-screens. У `Order` появился FK `companyDivisionId →
-CompanyDivision`. Базовые карточки `MARKETPLACE` / `OTHER` (`code`
-совпадает с legacy enum) гарантированно созданы миграцией
+`CompanyDivision` — единственный источник истины подразделений
+заказа и display screens (см. `docs/erd.md §«CompanyDivision»`).
+У `Order` есть FK `companyDivisionId → CompanyDivision`
+(`onDelete: SetNull`). Базовые карточки `MARKETPLACE` / `OTHER`
+(B2B) гарантированно созданы миграцией
 `…_link_company_divisions_to_orders` и `prisma/seed.ts` /
 `tests/utils/seed.ts`.
 
-`OrdersService.create` / `update` синхронизируют пару
-`(companyDivisionId, division)` по `code`:
+`OrdersService.create` / `update` пишут `companyDivisionId`
+напрямую:
 
-- если фронт передал `companyDivisionId` — backend подкладывает
-  legacy `division` по `code` (whitelist `MARKETPLACE`/`OTHER`);
-- если передал только legacy `division` — backend ищет/upsert-ит
-  карточку `CompanyDivision` по `code`;
-- оба пусты → `companyDivisionId = null`, `division = OTHER`.
-
-Legacy `division` enum остаётся как backward-compat fallback для
-earnings (`getCutterCompensationSchemeForDivision`) и для
-shopfloor-фильтра. **PHASE 2 удалит и колонку, и enum.**
+- если фронт передал id, backend проверяет существование карточки
+  (400 `COMPANY_DIVISION_NOT_FOUND` иначе);
+- если фронт передал `null` — привязка снимается;
+- если поле не пришло (на create) или `undefined` (на update) —
+  заказ остаётся без подразделения / Prisma не трогает колонку.
 
 Меняется только в `DRAFT`, после `IN_PRODUCTION` блокируется общим
-guard `ORDER_LOCKED`. Индексы: `division`, `companyDivisionId`.
+guard `ORDER_LOCKED`. Индекс — `companyDivisionId`.
 
-Влияет на сдельную схему раскройщика (см. §10.2). Backend
-предпочитает `passport.order.companyDivision?.code`, fallback на
-legacy `Order.division`:
+Влияет на сдельную схему раскройщика (см. §10.2):
+`EarningsService` читает `passport.order.companyDivision?.code` и
+выбирает схему через `getCutterCompensationSchemeForDivision`:
 
 - `MARKETPLACE` → `MARKETPLACE_FIXED`;
-- `OTHER` / любой произвольный `CompanyDivision.code` →
+- `OTHER` / любой произвольный `CompanyDivision.code` / `null` →
   `B2B_SEWING_PERCENT` (безопасный default).
 
 ### 12.4 `DisplayScreenConfig` и DISPLAY-учётка
@@ -1822,14 +1817,17 @@ legacy `Order.division`:
 Управленческая запись «один большой монитор цеха». 1:1 связана с
 `Employee(role = DISPLAY)` через `employeeId @unique`.
 
-Поля: `name`, `division: OrderDivision` (legacy),
-`companyDivisionId? → CompanyDivision` (PHASE 1, master-связка),
+Поля: `name`,
+`companyDivisionId? → CompanyDivision` (master-связка с
+справочником подразделений, `onDelete: SetNull`),
 `employeeId String UNIQUE → Employee` (`onDelete: Cascade`),
-`isActive`. Индексы: `division`, `isActive`, `companyDivisionId`.
+`isActive`. Индексы: `isActive`, `companyDivisionId`.
 
-PHASE 1: `DisplayScreensService.create` синхронно пишет пару
-`(companyDivisionId, division)` по `code` (правила те же, что в
-§12.3 для `Order`). PHASE 2 удалит legacy enum.
+`DisplayScreensService.create` пишет FK `companyDivisionId`
+напрямую. Если карточка не найдена — 400
+`COMPANY_DIVISION_NOT_FOUND` (Zod дополнительно требует
+непустую строку id, чтобы UI получал адресные ошибки без
+round-trip).
 
 Жёсткие правила:
 
@@ -1845,14 +1843,13 @@ PHASE 1: `DisplayScreensService.create` синхронно пишет пару
   `/shopfloor/display`; backend `@Roles` режет её во всех
   управленческих endpoint-ах.
 
-**Auto-division в `/api/shopfloor/display`.** Без `?division=`
-и `?divisionCode=` `ShopfloorService.resolveDisplayDivisionCode`
+**Auto-resolve подразделения в `/api/shopfloor/display`.** Без
+`?divisionCode=` `ShopfloorService.resolveDisplayDivisionCode`
 смотрит на роль вызывающего: если `DISPLAY` и есть активный
-`DisplayScreenConfig` — фильтр берётся из
-`config.companyDivision?.code` (приоритет) с fallback на legacy
-`config.division`. `?divisionCode=<code>` (новый параметр) и
-`?division=<MARKETPLACE|OTHER>` (legacy URL-закладки) работают
-как раньше.
+`DisplayScreenConfig` с привязанным `companyDivisionId` — фильтр
+берётся из `config.companyDivision.code`. Конфиг с
+`isActive = false` сознательно игнорируется (мягкий выключатель
+экрана). `?divisionCode=<code>` всегда перекрывает auto-resolve.
 
 ### 12.5 Дашборд начальника производства
 
@@ -2381,32 +2378,24 @@ RBAC — `SHOP_MANAGER` / `ADMIN`.
   сортирует `[isActive desc, sortOrder asc, name asc]` — активные
   всегда сверху, отключённые тонут вниз.
 
-### 16.4 `CompanyDivision` как master-справочник (PHASE 1)
+### 16.4 `CompanyDivision` = подразделение заказа
 
-**PHASE 1 «CompanyDivision как master-справочник»**:
-`CompanyDivision` теперь является источником истины
-«к какому подразделению относится заказ / экран цеха». На него
-ссылаются `Order.companyDivisionId` и
-`DisplayScreenConfig.companyDivisionId` (см. §12.3, §12.4).
-Базовые карточки `MARKETPLACE` / `OTHER` (`code` совпадает с
-legacy `enum OrderDivision`) гарантированно созданы миграцией
+`CompanyDivision` — единственный источник истины «к какому
+подразделению относится заказ / экран цеха». На него ссылаются
+`Order.companyDivisionId` и `DisplayScreenConfig.companyDivisionId`
+(см. §12.3, §12.4). Базовые карточки `MARKETPLACE` / `OTHER`
+гарантированно созданы миграцией
 `…_link_company_divisions_to_orders` и каждым re-seed
 (`prisma/seed.ts`, `tests/utils/seed.ts`).
 
-Backward-compat до PHASE 2:
-
-| Ось                | Источник истины                                | Где используется                                 |
-| ------------------ | ---------------------------------------------- | ------------------------------------------------ |
-| `CompanyDivision` (master) | `prisma/schema.prisma::CompanyDivision` | Источник истины подразделения для `Order` и `DisplayScreenConfig`. Расширяется через UI без миграции. |
-| `enum OrderDivision` (legacy) | `prisma/schema.prisma::OrderDivision` | Backward-compat для `getCutterCompensationSchemeForDivision` и URL `?division=…` на `/shopfloor/display`. Backend синхронизирует пару `(companyDivisionId, division)` по `code`. Удалится в PHASE 2. |
-
-Менеджер может расширить справочник через UI и привязать новые
-подразделения к заказам / display screens. На MVP earnings-схема
-закройщика для подразделений с произвольным `code` использует
-безопасный default `B2B_SEWING_PERCENT` (см. §10.2). Карточки
-`MARKETPLACE` / `OTHER` нельзя hard-delete'ить (FK + soft-delete),
-менять `code` у них тоже не нужно — на них завязана legacy
-синхронизация.
+Менеджер может расширить справочник через UI (`/admin/company-settings`)
+и привязать новые подразделения к заказам / display screens. На MVP
+earnings-схема закройщика для подразделений с произвольным `code`
+использует безопасный default `B2B_SEWING_PERCENT` (см. §10.2):
+marketplace остаётся единственным whitelist'ом под фиксированную
+схему. Карточки `MARKETPLACE` / `OTHER` нельзя hard-delete'ить
+(FK + soft-delete) — `getCutterCompensationSchemeForDivision`
+ожидает их `code` для marketplace-flow.
 
 ### 16.5 Audit
 

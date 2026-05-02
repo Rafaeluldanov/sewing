@@ -64,10 +64,7 @@
  */
 import { notFound } from 'next/navigation';
 import { Package } from 'lucide-react';
-import {
-  ORDER_DIVISION_LABELS,
-  type OrderDetailDto,
-} from '@sewing/shared/orders';
+import type { OrderDetailDto } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 import { ApiRequestError } from '@/lib/api';
 import { getOrder } from '@/lib/orders-api';
@@ -133,13 +130,10 @@ export default async function AdminOrderDetailPage({
 
   const clientName = order.client?.name ?? order.customer ?? null;
   const canIssuePassport = order.status === 'IN_PRODUCTION';
-  // PHASE 1 «CompanyDivision как master-справочник» (см.
-  // `docs/domain.md §«Подразделения заказа»`): UI предпочитает live-
-  // имя `companyDivision.name`, fallback на legacy
-  // `ORDER_DIVISION_LABELS[order.division]` оставляем для исторических
-  // заказов до миграции (PHASE 2 уберёт fallback).
-  const divisionLabel =
-    order.companyDivision?.name ?? ORDER_DIVISION_LABELS[order.division];
+  // Подразделение заказа — FK на `CompanyDivision` (см.
+  // `docs/domain.md §«Подразделения заказа»`). Для заказов без
+  // привязки показываем «Не указано» в подзаголовке.
+  const divisionLabel = order.companyDivision?.name ?? 'Не указано';
 
   return (
     <AdminPageShell

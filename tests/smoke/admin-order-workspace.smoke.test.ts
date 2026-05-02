@@ -174,14 +174,11 @@ describe('/admin/orders/new — использует OrderWorkspaceLayout mode="
     );
   });
 
-  test('hero «Основное» содержит все управленческие поля (division/dueDate/clientId/price/currency/comment)', () => {
+  test('hero «Основное» содержит все управленческие поля (companyDivisionId/dueDate/clientId/price/currency/comment)', () => {
     expect(formSrc).toMatch(/<OrderHeroCard\s*[\s\S]*?mode="create"/);
     // Поля «Основное» переехали в hero. Имена FormData-ключей сохранены.
-    // PHASE 1 «CompanyDivision как master-справочник»: новый
-    // приоритетный select. Legacy `name="division"` остался как
-    // hidden-input для backend-fallback.
+    // Подразделение — FK на master-справочник `CompanyDivision`.
     expect(formSrc).toMatch(/name="companyDivisionId"/);
-    expect(formSrc).toMatch(/name="division"/);
     expect(formSrc).toMatch(/name="dueDate"/);
     expect(formSrc).toMatch(/name="clientId"/);
     expect(formSrc).toMatch(/name="customerUnitPrice"/);
@@ -218,10 +215,8 @@ describe('/admin/orders/new — использует OrderWorkspaceLayout mode="
     expect(formSrc).toMatch(/name="orderDate"/);
     expect(formSrc).toMatch(/name="dueDate"/);
     expect(formSrc).toMatch(/name="clientId"/);
-    // PHASE 1: контракт расширен новым обязательным ключом
-    // `companyDivisionId` (legacy `division` ушёл в hidden-input).
+    // Подразделение — FK на master-справочник `CompanyDivision`.
     expect(formSrc).toMatch(/name="companyDivisionId"/);
-    expect(formSrc).toMatch(/name="division"/);
     expect(formSrc).toMatch(/name="patternItemId"/);
     expect(formSrc).toMatch(/name="techCardId"/);
     expect(formSrc).toMatch(/name="routeTemplateId"/);
@@ -481,10 +476,8 @@ describe('/admin/orders/[id]/edit — использует OrderWorkspaceLayout 
     expect(formSrc).toMatch(/name="dueDate"/);
     expect(formSrc).toMatch(/name="clientId"/);
     expect(formSrc).toMatch(/name="patternItemId"/);
-    // PHASE 1: контракт расширен новым ключом `companyDivisionId`,
-    // legacy `division` остался как hidden-input для fallback.
+    // Подразделение — FK на master-справочник `CompanyDivision`.
     expect(formSrc).toMatch(/name="companyDivisionId"/);
-    expect(formSrc).toMatch(/name="division"/);
     expect(formSrc).toMatch(/name="color"/);
     expect(formSrc).toMatch(/name="comment"/);
     expect(formSrc).toMatch(/name="techCardId"/);
@@ -631,7 +624,7 @@ describe('order-workspace unification — UI-only refactor', () => {
     // Не делает redirect — остаёмся на той же странице.
     expect(src).not.toMatch(/redirect\(/);
     // Парсит все ожидаемые поля «Основное».
-    expect(src).toMatch(/division/);
+    expect(src).toMatch(/companyDivisionId/);
     expect(src).toMatch(/dueDate/);
     expect(src).toMatch(/clientId/);
     expect(src).toMatch(/customer/);
@@ -649,11 +642,8 @@ describe('OrderBasicsForm — inline-форма «Сохранить основ�
   const src = read('apps/web/components/orders/order-basics-form.tsx');
 
   test('форма содержит все управленческие поля', () => {
-    // PHASE 1 «CompanyDivision как master-справочник»: новый
-    // приоритетный select. Legacy `name="division"` остался как
-    // hidden-input для backend-fallback.
+    // Подразделение — FK на master-справочник `CompanyDivision`.
     expect(src).toMatch(/name="companyDivisionId"/);
-    expect(src).toMatch(/name="division"/);
     expect(src).toMatch(/name="dueDate"/);
     expect(src).toMatch(/name="clientId"/);
     expect(src).toMatch(/name="customerUnitPrice"/);

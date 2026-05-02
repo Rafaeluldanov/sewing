@@ -25,10 +25,11 @@
  * Backend / DTO / Prisma не трогаем: форма продолжает сабмитить
  * `createOrderAction` (`apps/web/app/orders/actions.ts`),
  * FormData-ключи остаются прежними:
- *   - `orderDate`, `dueDate`, `clientId`, `division`, `color`,
- *     `comment`, `routeTemplateId`, `techCardId`, `patternItemId`,
- *     `qty[<sizeId>]`, `applicationsJson`, `customerUnitPrice`,
- *     `customerCurrency`, hidden `redirectTo="admin"`.
+ *   - `orderDate`, `dueDate`, `clientId`, `companyDivisionId`,
+ *     `color`, `comment`, `routeTemplateId`, `techCardId`,
+ *     `patternItemId`, `qty[<sizeId>]`, `applicationsJson`,
+ *     `customerUnitPrice`, `customerCurrency`, hidden
+ *     `redirectTo="admin"`.
  *
  * Никаких autosave / drafts на load — заказ создаётся **только**
  * по нажатию submit. Hero и Product tab лежат внутри ОДНОГО
@@ -49,12 +50,7 @@ import {
 } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
-import {
-  ORDER_DIVISIONS,
-  ORDER_DIVISION_LABELS,
-  type OrderDivision,
-  type SizeDto,
-} from '@sewing/shared/orders';
+import type { SizeDto } from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
   MONEY_CURRENCY_LABELS,
@@ -109,10 +105,10 @@ interface Props {
   clients: ClientDto[];
   patterns: PatternListItemDto[];
   /**
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `docs/domain.md §«Подразделения заказа»`): активные карточки
-   * подразделений для select-а. Backend шлёт только активных, чтобы
-   * менеджер не выбирал «зомби»-карточки.
+   * Активные карточки `CompanyDivision` (см.
+   * `docs/domain.md §«Подразделения заказа»`) для select-а.
+   * Backend шлёт только активных, чтобы менеджер не выбирал
+   * «зомби»-карточки.
    */
   companyDivisions: CompanyDivisionDto[];
   today: string;
@@ -175,9 +171,10 @@ export function AdminCreateOrderForm({
   // том же `<form>` (см. JSX), а в state хранятся для KPI и
   // productSummary в hero (без round-trip-а).
   const [clientId, setClientId] = useState<string>('');
-  // PHASE 1: новый источник истины подразделения. Дефолт — карточка
-  // с `code = OTHER` (B2B), которую гарантированно создаёт миграция/
-  // seed. Если её каким-то образом нет в списке — пустая строка.
+  // Подразделение заказа — FK на `CompanyDivision`. Дефолт —
+  // карточка с `code = OTHER` (B2B), которую гарантированно создаёт
+  // миграция/seed. Если её каким-то образом нет в списке — пустая
+  // строка.
   const defaultCompanyDivisionId =
     companyDivisions.find((d) => d.code === 'OTHER')?.id ??
     companyDivisions[0]?.id ??
@@ -185,7 +182,6 @@ export function AdminCreateOrderForm({
   const [companyDivisionId, setCompanyDivisionId] = useState<string>(
     defaultCompanyDivisionId,
   );
-  const [division, setDivision] = useState<OrderDivision>('OTHER');
   const [dueDate, setDueDate] = useState<string>('');
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>('');
   const [customerCurrency, setCustomerCurrency] =
@@ -351,8 +347,6 @@ export function AdminCreateOrderForm({
                 companyDivisionId={companyDivisionId}
                 onCompanyDivisionIdChange={setCompanyDivisionId}
                 companyDivisions={companyDivisions}
-                division={division}
-                onDivisionChange={setDivision}
                 dueDate={dueDate}
                 onDueDateChange={setDueDate}
                 today={today}
@@ -448,8 +442,6 @@ function BasicsCreateFields({
   companyDivisionId,
   onCompanyDivisionIdChange,
   companyDivisions,
-  division,
-  onDivisionChange,
   dueDate,
   onDueDateChange,
   today,
@@ -464,21 +456,10 @@ function BasicsCreateFields({
   clientId: string;
   onClientIdChange: (v: string) => void;
   clients: ClientDto[];
-  /**
-   * PHASE 1 «CompanyDivision как master-справочник»: новый выбор
-   * подразделения через FK на справочник.
-   */
+  /** Выбор подразделения через FK на `CompanyDivision`. */
   companyDivisionId: string;
   onCompanyDivisionIdChange: (v: string) => void;
   companyDivisions: CompanyDivisionDto[];
-  /**
-   * Legacy `OrderDivision` — синхронизируется backend-ом по
-   * `CompanyDivision.code`, hidden-input ниже передаёт его как
-   * fallback (на случай, если карточки `MARKETPLACE`/`OTHER` нет
-   * и backend не сможет подкласть legacy `division` сам).
-   */
-  division: OrderDivision;
-  onDivisionChange: (v: OrderDivision) => void;
   dueDate: string;
   onDueDateChange: (v: string) => void;
   today: string;
@@ -490,19 +471,9 @@ function BasicsCreateFields({
   onCommentChange: (v: string) => void;
   fieldError: (key: string) => string | undefined;
 }) {
-  // PHASE 1: legacy `division` синхронизируем с выбранной карточкой
-  // справочника по `code` (`MARKETPLACE`/`OTHER`). Для произвольных
-  // подразделений оставляем `OTHER` — backend всё равно подкладывает
-  // legacy enum по `companyDivision.code`, если код in whitelist.
   const selectedDivisionCard = companyDivisions.find(
     (d) => d.id === companyDivisionId,
   );
-  const handleCompanyDivisionChange = (id: string): void => {
-    onCompanyDivisionIdChange(id);
-    const code = companyDivisions.find((d) => d.id === id)?.code;
-    if (code === 'MARKETPLACE') onDivisionChange('MARKETPLACE');
-    else if (code === 'OTHER') onDivisionChange('OTHER');
-  };
   return (
     <div className="order-hero-card__basic-grid">
       <div className="order-hero-card__field">
@@ -511,7 +482,7 @@ function BasicsCreateFields({
           id="companyDivisionId"
           name="companyDivisionId"
           value={companyDivisionId}
-          onChange={(e) => handleCompanyDivisionChange(e.target.value)}
+          onChange={(e) => onCompanyDivisionIdChange(e.target.value)}
           required
         >
           {companyDivisions.length === 0 && (
@@ -523,13 +494,6 @@ function BasicsCreateFields({
             </option>
           ))}
         </select>
-        {/*
-          PHASE 1: legacy `division` enum как hidden — backend читает
-          его как fallback. Для known codes (MARKETPLACE/OTHER)
-          синхронизируется с выбранной карточкой; для произвольных
-          подразделений отдаём `OTHER` (см. ORDER_DIVISIONS).
-        */}
-        <input type="hidden" name="division" value={division} />
         {selectedDivisionCard?.code &&
           selectedDivisionCard.code !== 'MARKETPLACE' &&
           selectedDivisionCard.code !== 'OTHER' && (

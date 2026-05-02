@@ -111,16 +111,20 @@
 
 **Важно:** после `IN_PRODUCTION` `OrderItem.qtyPlan` **не меняется**.
 
-**Подразделение заказа (`Order.division`).** На форме создания
-(`/orders/new`) и в форме правки `DRAFT`-заказа (`/orders/[id]/edit`)
-есть select «Подразделение» (`MARKETPLACE` / `OTHER`, значения
-из `ORDER_DIVISIONS`). Дефолт — `OTHER`. После `start()` поле
-блокируется тем же `ORDER_LOCKED` guard'ом, что и остальные поля
-шапки, отдельной проверки нет. `division` потом используется
-только как фильтр большого экрана `/shopfloor/display?division=…`
-(см. F-flow «Большой монитор» в `screens.md §9a` и
-`docs/domain.md §9.6.2`). Пер-passport / per-route / payroll он
-сознательно не задействует.
+**Подразделение заказа (`Order.companyDivisionId`).** На форме
+создания (`/orders/new`) и в форме правки `DRAFT`-заказа
+(`/orders/[id]/edit`) есть select «Подразделение» — выбор из
+активных карточек master-справочника `CompanyDivision`. Поле
+опциональное и nullable: при отсутствии привязки UI показывает
+«Не указано». После `start()` поле блокируется тем же
+`ORDER_LOCKED` guard'ом, что и остальные поля шапки, отдельной
+проверки нет. `companyDivisionId` потом используется как фильтр
+большого экрана `/shopfloor/display?divisionCode=<code>` (см.
+F-flow «Большой монитор» в `screens.md §9a` и
+`docs/display-board.md`) и как источник для
+`EarningsService.createImmediateForCutter` через
+`getCutterCompensationSchemeForDivision`. Пер-passport / per-
+route он сознательно не задействует.
 
 ---
 

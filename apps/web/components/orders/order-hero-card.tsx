@@ -106,8 +106,8 @@ interface Props {
   /**
    * Слот формы «Основное» — управленческие поля заказа.
    * В create-mode — встроенный фрагмент общей create-формы
-   * (поля `division` / `dueDate` / `clientId` / `customer` /
-   * `customerUnitPrice` / `customerCurrency` / `comment`).
+   * (поля `companyDivisionId` / `dueDate` / `clientId` / `customer`
+   * / `customerUnitPrice` / `customerCurrency` / `comment`).
    * В view-mode — inline-форма с `updateOrderBasicsAction`.
    * В edit-mode — те же поля, но в `<form>` единой edit-формы.
    */

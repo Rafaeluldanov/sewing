@@ -33,9 +33,9 @@
 >   `SHOPFLOOR_STAGES`, `SHOPFLOOR_DISPLAY_MATRIX_STAGES`,
 >   `SHOPFLOOR_DISPLAY_KNOWN_COLORS`,
 >   `SHOPFLOOR_DISPLAY_SEWING_PENDING_KEY`).
-> - `prisma/schema.prisma::model DisplayScreenConfig`
->   (~2058–2085), `model Employee` (роль `DISPLAY` через
->   `enum Role`), `enum OrderDivision` (`MARKETPLACE | OTHER`).
+> - `prisma/schema.prisma::model DisplayScreenConfig`,
+>   `model Employee` (роль `DISPLAY` через `enum Role`),
+>   `model CompanyDivision` (master-справочник подразделений).
 > - `docs/api.md` — карта routes (`§32 Shopfloor`,
 >   `§33 Display screens`).
 > - `docs/erd.md` — карта моделей и enum-ов.
@@ -98,28 +98,28 @@
 Источник: `apps/web/app/shopfloor/display/page.tsx`.
 
 ```text
-GET /shopfloor/display?division=<MARKETPLACE|OTHER>
 GET /shopfloor/display?divisionCode=<CompanyDivision.code>
+GET /shopfloor/display                    # без фильтра / DISPLAY-auto
 ```
 
 - `dynamic = 'force-dynamic'` — RSC всегда дёргается заново.
-- Парсит `?division` (legacy, см. `OrderDivisionSchema` в shared);
-  невалидное значение тихо игнорируется и считается «фильтра
-  нет».
-- PHASE 1 «CompanyDivision как master-справочник»: backend
-  `/api/shopfloor/display` принимает новый `?divisionCode=`
-  параметр (любой `CompanyDivision.code`). `?division=…` URL
-  продолжает работать как раньше — это backward-compat для
-  существующих TV-закладок. См. также
-  `docs/domain.md §«Подразделения заказа»`.
+- Парсит `?divisionCode` — основной query-параметр, любая строка
+  `CompanyDivision.code` (см. `docs/domain.md §«Подразделения
+  заказа»`). Параметр опциональный; пустое значение / отсутствие
+  считается «фильтра нет».
+- **Deprecated alias** на web-уровне: `?division=<value>` тихо
+  мапится в `divisionCode`, чтобы старые TV-закладки не падали
+  в 404. На API-уровне (`ShopfloorDisplayQuerySchema`) этот
+  параметр уже не принимается; алиас будет убран после
+  переезда всех закладок.
 - RSC делает initial fetch
-  (`getShopfloorDisplaySummary(division ?? undefined)`),
+  (`getShopfloorDisplaySummary(divisionCode ?? undefined)`),
   чтобы первый кадр показал данные без спиннера. Если запрос
   падает — `initialError` пробрасывается в client-компонент,
   но snapshot не блокирует рендер.
 - Передаёт в `<ShopfloorDisplayBoard>` `initialSummary`,
-  `initialError`, `division`, `divisionLabel` (готовая
-  человекочитаемая подпись для шапки).
+  `initialError`, `divisionCode`. Шапка экрана рисует код
+  подразделения как саб-лейбл (или ничего, если фильтра нет).
 
 Layout-обёртка:
 `apps/web/app/shopfloor/display/layout.tsx`. Делает
@@ -181,7 +181,6 @@ Backend контроллер `ShopfloorController.display`
 model DisplayScreenConfig {
   id                String         @id @default(cuid())
   name              String
-  division          OrderDivision
   companyDivisionId String?
   companyDivision   CompanyDivision? @relation(fields: [companyDivisionId], references: [id], onDelete: SetNull)
   employeeId        String         @unique
@@ -191,7 +190,6 @@ model DisplayScreenConfig {
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
-  @@index([division])
   @@index([isActive])
   @@index([companyDivisionId])
 }
@@ -202,30 +200,27 @@ model DisplayScreenConfig {
 - `name` — человекочитаемое имя экрана («ТВ маркетплейс на
   стене у выхода»). Используется только в админ-листинге
   `/admin/display-screens`; фронту дисплея не отдаётся.
-- `division: OrderDivision` (`MARKETPLACE | OTHER`) — legacy
-  enum, оставлен для backward-compat URL `?division=…` и
-  старых конфигов до PHASE 1 миграции. **PHASE 2 удалит.**
-- `companyDivisionId? → CompanyDivision` (PHASE 1, master-связка):
-  ссылка на карточку справочника подразделений. Backend
-  (`DisplayScreensService.create`) синхронно пишет пару
-  `(companyDivisionId, division)` по `code` (правила те же,
-  что у заказа, см. `docs/domain.md §«Подразделения заказа»»).
+- `companyDivisionId? → CompanyDivision` — FK на карточку
+  master-справочника подразделений (см. `docs/domain.md
+  §«Подразделения заказа»`). Backend
+  (`DisplayScreensService.create`) валидирует существование
+  карточки (400 `COMPANY_DIVISION_NOT_FOUND` иначе).
   `onDelete: SetNull` — удаление карточки не сносит экран.
 - `employeeId String UNIQUE` — FK на `Employee.id` под этой
   DISPLAY-учёткой. Один экран = ровно одна учётка. На delete
   сотрудника `onDelete: Cascade` удаляет и конфиг.
 - `isActive` — мягкий выключатель экрана. Если `false` —
   `ShopfloorService.resolveDisplayDivisionCode` игнорирует
-  конфиг при автоопределении division для DISPLAY-пользователя
-  и возвращает «общий» агрегат, как раньше. Сама учётка
+  конфиг при автоопределении подразделения для DISPLAY-
+  пользователя и возвращает «общий» агрегат. Сама учётка
   продолжает работать.
 
 Эндпоинты `/api/display-screens`
 (RBAC `SHOP_MANAGER` / `ADMIN`):
 
 - `GET /api/display-screens` — `DisplayScreensService.list()`
-  (full-list, sort by `createdAt desc`). PHASE 1: каждая
-  запись отдаёт `companyDivisionId` и краткие реквизиты
+  (full-list, sort by `createdAt desc`). Каждая запись отдаёт
+  `companyDivisionId` и краткие реквизиты
   `companyDivision { id, code, name }`.
 - `POST /api/display-screens` —
   `DisplayScreensService.create(dto)`. В одной `$transaction`:
@@ -235,11 +230,9 @@ model DisplayScreenConfig {
     active: true })`. `compensationType = SALARY` без
     `salaryPerShift` сознательно даёт ноль в `SalaryService`
     и не плодит сдельных начислений.
-  - `DisplayScreenConfig.create({ name, division,
-    companyDivisionId, employeeId: employee.id, isActive })`.
-    PHASE 1: тело принимает `companyDivisionId` (новый
-    приоритетный путь) либо legacy `division`. Backend
-    подкладывает второе поле по `code`.
+  - `DisplayScreenConfig.create({ name, companyDivisionId,
+    employeeId: employee.id, isActive })`. Тело DTO требует
+    `companyDivisionId`; backend пишет FK напрямую.
 - `P2002` на `Employee.login` транслируется в стабильный
   `DISPLAY_LOGIN_TAKEN` (409, см. `docs/api.md §33`).
 
@@ -257,60 +250,41 @@ model DisplayScreenConfig {
 
 ```ts
 ShopfloorDisplayQuerySchema = z.object({
-  division: OrderDivisionSchema.optional(),
   divisionCode: z.string().trim().min(1).optional(),
 });
 ```
 
-PHASE 1 «CompanyDivision как master-справочник»: backend
-принимает два опциональных параметра, оба означают
-`CompanyDivision.code`:
-
-- `?divisionCode=<code>` — новый параметр, любая строка `code`
-  карточки `CompanyDivision`. Это рекомендуемый путь для новых
-  интеграций.
-- `?division=<MARKETPLACE|OTHER>` — legacy enum, оставлен как
-  backward-compat для существующих TV-закладок. Семантически
-  эквивалентен `divisionCode` с тем же значением.
-
-Если переданы оба — `divisionCode` приоритетнее. Если ни один не
-передан, фильтра нет (выборка по всем активным заказам), либо
-(для роли DISPLAY) фильтр берётся из `DisplayScreenConfig`
-(см. §5.2).
+`divisionCode` — единственный поддерживаемый параметр API,
+любая строка `CompanyDivision.code`. Если параметр не передан,
+фильтра нет (выборка по всем активным заказам), либо (для роли
+DISPLAY) фильтр берётся из `DisplayScreenConfig` (см. §5.2).
 
 ### 5.2 Резолв `divisionCode` (приоритеты)
 
 `ShopfloorService.resolveDisplayDivisionCode(query, user)`:
 
-1. `query.divisionCode` — новый параметр (PHASE 1) **побеждает
-   всё**.
-2. `query.division` — legacy URL-закладка. Кладём напрямую как
-   `divisionCode`, потому что у legacy enum значения и `code`
-   карточек намеренно совпадают.
-3. `user.role === 'DISPLAY'` → ищем `DisplayScreenConfig` по
+1. `query.divisionCode` — побеждает всё.
+2. `user.role === 'DISPLAY'` → ищем `DisplayScreenConfig` по
    `employeeId`. Применяем подразделение оттуда **только** если
-   `isActive = true`. Приоритет — `companyDivision.code`,
-   fallback на legacy `config.division` (для исторических
-   конфигов до миграции).
-4. Иначе → `null` (фильтра нет, выборка по всем активным
+   `isActive = true` и привязан `companyDivisionId`; берём
+   `config.companyDivision.code`.
+3. Иначе → `null` (фильтра нет, выборка по всем активным
    заказам).
 
 Запрос в БД (`displayScreenConfig.findUnique`) делается только
-в случае (3): для не-`DISPLAY`-ролей и для запросов с явным
+в случае (2): для не-`DISPLAY`-ролей и для запросов с явным
 фильтром лишний round-trip не нужен.
 
-### 5.3 Что фильтруется по division
+### 5.3 Что фильтруется по подразделению
 
 - Активные заказы: `Order.status NOT IN {DONE, CANCELLED}`
-  плюс `OR: [{ companyDivision: { code: divisionCode } },
-  { division: divisionCode as OrderDivision }]` (PHASE 1
-  backward-compat: покрывает и FK, и legacy enum для known
-  `MARKETPLACE`/`OTHER`).
+  плюс `companyDivision: { code: divisionCode }` (см.
+  `buildOrderDivisionFilter`).
 - Паспорта (`passports`-выборка) и snapshot маршрутов
   (`activeOrdersPromise / routeSteps`) — оба фильтруются по
   тому же условию.
 
-Что **не** фильтруется по division:
+Что **не** фильтруется по подразделению:
 
 - `equipment` (`listEquipmentStatus`) — оборудование не
   принадлежит подразделению, и одни и те же станки могут шить
@@ -829,12 +803,12 @@ ADR-0007: на MVP сознательно polling, не WS/SSE. Trade-off:
 - Полные правила построения `sewingByOp` для pending (когда
   `currentOperation = null` или `category = CUTTING`) —
   смотри `projectShopfloorDisplay` целиком.
-- Поведение фильтра `?division` для пользователя
+- Поведение фильтра `?divisionCode` для пользователя
   `DISPLAY` с `DisplayScreenConfig.isActive = false`:
   фактически возвращает «общий» агрегат — мягкий выключатель
   экрана. Если в будущем потребуется явно блокировать такой
   экран, нужно либо вернуть отдельную ошибку, либо схлопнуть
-  до `division: ?` query (UNKNOWN/TODO).
+  до пустого query (UNKNOWN/TODO).
 - Сводный список flash-классов матрицы (`shopfloor-flash-up`
   / `shopfloor-flash-down`) и алгоритм `computeChangedCellKeys`
   — реализованы в `display-board.tsx`. PHASE 2 не дублирует.

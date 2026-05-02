@@ -2,10 +2,6 @@ import Link from 'next/link';
 import { MonitorSmartphone, Plus } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listDisplayScreens } from '@/lib/display-screens-api';
-import {
-  ORDER_DIVISION_LABELS,
-  type OrderDivision,
-} from '@sewing/shared/orders';
 import type { DisplayScreenListItemDto } from '@sewing/shared/display-screens';
 import {
   AdminCard,
@@ -91,16 +87,9 @@ function DisplayScreensTable({
       render: (s) => <span className="admin-table__primary">{s.name}</span>,
     },
     {
-      key: 'division',
+      key: 'companyDivision',
       header: 'Подразделение',
-      // PHASE 1 «CompanyDivision как master-справочник» (см.
-      // `docs/domain.md §«Подразделения заказа»»): UI предпочитает
-      // live-имя `companyDivision.name`, fallback на legacy
-      // `ORDER_DIVISION_LABELS[s.division]` оставляем для исторических
-      // конфигов до миграции (PHASE 2 уберёт fallback).
-      render: (s) =>
-        s.companyDivision?.name ??
-        ORDER_DIVISION_LABELS[s.division as OrderDivision],
+      render: (s) => s.companyDivision?.name ?? '— не указано —',
     },
     {
       key: 'login',

@@ -2,13 +2,13 @@
  * Контракты модуля «Display screens» — большие мониторы цеха
  * (`/shopfloor/display`).
  *
- * Контекст: раньше дисплей фильтровался по подразделению вручную через
- * `?division=MARKETPLACE` в URL. Теперь у каждого экрана есть отдельная
- * запись `DisplayScreenConfig` с привязанной DISPLAY-учёткой
- * (`Employee` с `role = DISPLAY`), и `division` определяется
- * автоматически по логину. Query-параметр продолжает работать и
- * перекрывает конфиг — это backward-compatibility со старыми
- * закладками.
+ * Контекст: у каждого экрана есть отдельная запись
+ * `DisplayScreenConfig` с привязанной DISPLAY-учёткой (`Employee` с
+ * `role = DISPLAY`) и FK на `CompanyDivision`. Подразделение
+ * определяется автоматически по логину DISPLAY-пользователя.
+ * Query-параметр `?divisionCode=<CompanyDivision.code>` продолжает
+ * работать и перекрывает конфиг — это удобно для отладки и для
+ * экранов без отдельной DISPLAY-учётки.
  *
  * Источники истины:
  *   - доменная модель: `prisma/schema.prisma → DisplayScreenConfig`,
@@ -18,8 +18,6 @@
  */
 
 import { z } from 'zod';
-
-import { OrderDivisionSchema, type OrderDivision } from './orders';
 
 // ---------------------------------------------------------------------------
 // Helpers (зеркало правил `Employee.login` / `Employee.pinHash`)
@@ -70,53 +68,27 @@ const DisplayPinField = z
  *
  * Один запрос → одна транзакция → две сущности:
  *   1) `Employee` (role = DISPLAY, login/pin из этого DTO);
- *   2) `DisplayScreenConfig` (name + division + isActive,
+ *   2) `DisplayScreenConfig` (name + companyDivisionId + isActive,
  *      employeeId — id только что созданного сотрудника).
  *
  * Если падает любой шаг — оба rollback'аются. Поэтому DTO обязан
  * содержать сразу обе порции данных: «о ком учётка» (login/pin) и
- * «что показывает экран» (name/division/isActive).
+ * «что показывает экран» (name/companyDivisionId/isActive).
  *
- * PHASE 1 «CompanyDivision как master-справочник» (см.
- * `prisma/schema.prisma::DisplayScreenConfig`,
- * `DisplayScreensService.create`): UI выбирает подразделение из
- * `CompanyDivision` и шлёт `companyDivisionId`. Backend
- * синхронизирует legacy `division` enum по `CompanyDivision.code`,
- * если код — `MARKETPLACE`/`OTHER`. Если фронт прислал только
- * legacy `division` (старые интеграции / smoke-тесты), backend
- * найдёт/upsert-ит карточку `CompanyDivision` по `code`.
+ * `companyDivisionId` обязателен: UI выбирает подразделение из
+ * `CompanyDivision`-селекта, backend пишет FK напрямую в
+ * `DisplayScreenConfig.companyDivisionId`. На несуществующую
+ * карточку backend отвечает 400 `COMPANY_DIVISION_NOT_FOUND`.
  */
 export const CreateDisplayScreenSchema = z.object({
   name: ScreenNameField,
-  /**
-   * Legacy enum-подразделение (`MARKETPLACE`/`OTHER`). На PHASE 1
-   * опционально — если задан только `companyDivisionId`, backend
-   * сам подкладывает enum по `code`. Старые формы продолжают
-   * передавать это поле и работают как раньше.
-   */
-  division: OrderDivisionSchema.optional(),
-  /**
-   * PHASE 1: новый источник истины подразделения экрана. Если
-   * задан — backend пишет `DisplayScreenConfig.companyDivisionId`
-   * и подкладывает legacy `division` по `code`.
-   *
-   * Либо `companyDivisionId`, либо `division` обязан быть задан —
-   * `superRefine` ниже это проверит, чтобы UI получил адресную
-   * ошибку «выберите подразделение», а не FK-сбой на backend.
-   */
-  companyDivisionId: z.string().min(1).optional(),
+  companyDivisionId: z
+    .string()
+    .min(1, 'Выберите подразделение'),
   login: DisplayLoginField,
   pin: DisplayPinField,
   /** Дефолт `true` — обычно создают сразу включённый экран. */
   isActive: z.boolean().optional().default(true),
-}).superRefine((dto, ctx) => {
-  if (!dto.companyDivisionId && !dto.division) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['companyDivisionId'],
-      message: 'Выберите подразделение',
-    });
-  }
 });
 export type CreateDisplayScreenDto = z.infer<typeof CreateDisplayScreenSchema>;
 
@@ -136,27 +108,15 @@ export interface DisplayScreenListItemDto {
   id: string;
   name: string;
   /**
-   * PHASE 1: legacy enum-подразделение, оставлено как
-   * backward-compat. UI должен предпочитать `companyDivision?.name`,
-   * а fallback на `division` использовать только если
-   * `companyDivision = null`. PHASE 2 уберёт это поле из DTO.
+   * FK на `CompanyDivision`. `null` — подразделение не указано
+   * (экран показывает «общий» агрегат до привязки в админке).
    */
-  division: OrderDivision;
+  companyDivisionId: string | null;
   /**
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `DisplayScreensService.list`): id привязанной карточки
-   * подразделения. `null` для исторических конфигов до миграции —
-   * UI fallback-ит на `division` с `ORDER_DIVISION_LABELS`.
-   *
-   * Поле опционально (`?`) — старые потребители без пересборки
-   * shared-пакета продолжают компилироваться.
-   */
-  companyDivisionId?: string | null;
-  /**
-   * PHASE 1: краткие реквизиты привязанной карточки `CompanyDivision`,
+   * Краткие реквизиты привязанной карточки `CompanyDivision`,
    * чтобы админ-таблица показывала имя без отдельного запроса.
    */
-  companyDivision?: { id: string; code: string; name: string } | null;
+  companyDivision: { id: string; code: string; name: string } | null;
   isActive: boolean;
   /** Логин привязанной DISPLAY-учётки. */
   employeeLogin: string;

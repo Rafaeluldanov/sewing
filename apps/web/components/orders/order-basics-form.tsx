@@ -5,7 +5,7 @@
  * карточки заказа `/admin/orders/[id]`.
  *
  * Содержит редактируемые управленческие поля заказа:
- *   - подразделение (`division`);
+ *   - подразделение (`companyDivisionId` → `CompanyDivision`);
  *   - срок сдачи (`dueDate`);
  *   - клиент (`clientId`);
  *   - заказчик free-text (`customer`) — для совместимости со старым flow;
@@ -36,12 +36,7 @@ import { useEffect, useState } from 'react';
 import { Save } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
-import {
-  ORDER_DIVISIONS,
-  ORDER_DIVISION_LABELS,
-  type OrderDivision,
-  type OrderStatus,
-} from '@sewing/shared/orders';
+import type { OrderStatus } from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
   MONEY_CURRENCY_LABELS,
@@ -56,10 +51,9 @@ interface Props {
   orderId: string;
   status: OrderStatus;
   initial: {
-    division: OrderDivision;
     /**
-     * PHASE 1 «CompanyDivision как master-справочник»: текущая
-     * привязка заказа. `null` — историческая запись без FK.
+     * Текущая привязка заказа к `CompanyDivision`. `null` — заказ
+     * без подразделения.
      */
     companyDivisionId: string | null;
     /**
@@ -76,9 +70,9 @@ interface Props {
   };
   clients: ClientDto[];
   /**
-   * PHASE 1: активные карточки `CompanyDivision` для select-а. Если
-   * у заказа уже привязана архивная карточка (нет в активном списке),
-   * UI добавит её отдельной опцией ниже — иначе при сохранении
+   * Активные карточки `CompanyDivision` для select-а. Если у заказа
+   * уже привязана архивная карточка (нет в активном списке), UI
+   * добавит её отдельной опцией ниже — иначе при сохранении
    * привязка пропала бы без явного действия пользователя.
    */
   companyDivisions: CompanyDivisionDto[];
@@ -113,7 +107,6 @@ export function OrderBasicsForm({
   const isTerminal = status === 'DONE' || status === 'CANCELLED';
 
   const dueDateInitial = initial.dueDate ? initial.dueDate.slice(0, 10) : '';
-  const [division, setDivision] = useState<OrderDivision>(initial.division);
   const [companyDivisionId, setCompanyDivisionId] = useState<string>(
     initial.companyDivisionId ?? '',
   );
@@ -145,17 +138,6 @@ export function OrderBasicsForm({
     initial.companyDivisionId &&
     !companyDivisions.some((d) => d.id === initial.companyDivisionId);
 
-  // PHASE 1: при смене подразделения через select подкладываем
-  // legacy `division` enum по `code`, чтобы hidden-input ниже
-  // оставался согласован с FK даже если backend не сможет
-  // восстановить пару (карточка с произвольным `code`).
-  const handleCompanyDivisionChange = (id: string): void => {
-    setCompanyDivisionId(id);
-    const code = companyDivisions.find((d) => d.id === id)?.code;
-    if (code === 'MARKETPLACE') setDivision('MARKETPLACE');
-    else if (code === 'OTHER') setDivision('OTHER');
-  };
-
   const fieldError = (key: string): string | undefined =>
     state.fieldErrors?.[key];
 
@@ -178,13 +160,12 @@ export function OrderBasicsForm({
             id="basics-companyDivisionId"
             name="companyDivisionId"
             value={companyDivisionId}
-            onChange={(e) => handleCompanyDivisionChange(e.target.value)}
+            onChange={(e) => setCompanyDivisionId(e.target.value)}
             disabled={isTerminal}
           >
             <option value="">— без подразделения —</option>
             {/*
-              PHASE 1 «CompanyDivision как master-справочник»: если
-              у заказа уже привязана архивная (или не входящая в
+              Если у заказа уже привязана архивная (или не входящая в
               активный список) карточка — показываем её отдельной
               опцией, иначе при сохранении формы FK обнулится без
               явного действия пользователя.
@@ -202,13 +183,6 @@ export function OrderBasicsForm({
               </option>
             ))}
           </select>
-          {/*
-            PHASE 1: legacy `division` enum в hidden-input — backend
-            читает его как fallback на случай отсутствия карточки с
-            таким `code`. handleCompanyDivisionChange синхронизирует
-            это значение, если код карточки распознан.
-          */}
-          <input type="hidden" name="division" value={division} />
         </div>
 
         <div className="order-hero-card__field">

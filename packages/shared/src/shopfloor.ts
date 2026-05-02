@@ -53,8 +53,6 @@
 
 import { z } from 'zod';
 
-import { OrderDivisionSchema } from './orders';
-
 // ---------------------------------------------------------------------------
 // Query
 // ---------------------------------------------------------------------------
@@ -66,30 +64,17 @@ export const ShopfloorStateQuerySchema = z.object({
 export type ShopfloorStateQuery = z.infer<typeof ShopfloorStateQuerySchema>;
 
 /**
- * Query для `GET /api/shopfloor/display`. На MVP единственный фильтр —
- * подразделение заказа.
+ * Query для `GET /api/shopfloor/display`. Единственный фильтр —
+ * подразделение заказа через `divisionCode = CompanyDivision.code`
+ * (см. `docs/display-board.md`, `docs/api.md §11`).
  *
- * PHASE 1 «CompanyDivision как master-справочник» (см.
- * `docs/display-board.md`, `docs/api.md §11`): доступны два
- * параметра, оба означают `CompanyDivision.code` и оба опциональны:
- *
- *   - `divisionCode` — новый, любой `CompanyDivision.code`;
- *   - `division` — legacy `OrderDivision` enum (`MARKETPLACE` /
- *     `OTHER`). Совпадает по семантике с `divisionCode`, оставлен,
- *     чтобы старые URL вида `/shopfloor/display?division=MARKETPLACE`
- *     продолжили работать без изменений.
- *
- * Если переданы оба — `divisionCode` приоритетнее. Если ни один не
- * передан, поведение как раньше: показываем все активные заказы.
+ * `divisionCode` принимает любую непустую строку — валидация
+ * существования карточки на стороне backend, чтобы не плодить
+ * жёсткий enum в shared. Если параметр не передан, показываем все
+ * активные заказы (либо для роли `DISPLAY` подставляем
+ * `DisplayScreenConfig.companyDivision.code`).
  */
 export const ShopfloorDisplayQuerySchema = z.object({
-  division: OrderDivisionSchema.optional(),
-  /**
-   * PHASE 1: новый параметр на стороне `CompanyDivision.code`. На
-   * вход допускается любая непустая строка (валидация
-   * существования карточки — на стороне backend, чтобы не плодить
-   * жёсткий enum в shared).
-   */
   divisionCode: z.string().trim().min(1).optional(),
 });
 export type ShopfloorDisplayQuery = z.infer<typeof ShopfloorDisplayQuerySchema>;

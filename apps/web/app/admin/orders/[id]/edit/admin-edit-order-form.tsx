@@ -6,9 +6,9 @@
  * `OrderWorkspaceLayout` mode=`'edit'`:
  *
  *   - hero «Основное» (`OrderHeroCard`): содержит редактируемые
- *     управленческие поля (`division` / `dueDate` / `clientId` /
- *     `customerUnitPrice` + `customerCurrency` / `comment`) и
- *     поле `status` (с разрешёнными переходами для текущего статуса);
+ *     управленческие поля (`companyDivisionId` / `dueDate` /
+ *     `clientId` / `customerUnitPrice` + `customerCurrency` /
+ *     `comment`) и поле `status` (с разрешёнными переходами);
  *   - tab «Продукция» — editable: лекало, цвет, техкарта, маршрут,
  *     размерная матрица. Прочие вкладки в edit-mode рендерятся
  *     как ссылки на view-режим карточки через `productEditHref`.
@@ -19,7 +19,7 @@
  *   - `dueDate`          (date, optional);
  *   - `clientId`         (string, optional);
  *   - `customer`         (hidden, для совместимости);
- *   - `division`         (`MARKETPLACE | OTHER`, required);
+ *   - `companyDivisionId` (select, FK на `CompanyDivision`);
  *   - `comment`          (textarea);
  *   - `customerUnitPrice` / `customerCurrency`;
  *   - `status`           (`DRAFT | CALCULATION | IN_PRODUCTION | DONE | CANCELLED`);
@@ -32,9 +32,9 @@
  * Backend / DTO / Prisma не трогаем — `updateAdminOrderAction`
  * по-прежнему делегирует в `updateOrder` через
  * `OrdersService.update`. «Опасные» поля (items / route /
- * techCard / pattern / division) backend разрешает только в DRAFT —
- * UI помечает их `disabled` для не-DRAFT, чтобы не вводить
- * менеджера в заблуждение.
+ * techCard / pattern / companyDivisionId) backend разрешает только
+ * в DRAFT — UI помечает их `disabled` для не-DRAFT, чтобы не
+ * вводить менеджера в заблуждение.
  */
 
 import Link from 'next/link';
@@ -50,13 +50,10 @@ import {
 } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
-import {
-  ORDER_DIVISIONS,
-  ORDER_DIVISION_LABELS,
-  type OrderDetailDto,
-  type OrderDivision,
-  type OrderStatus,
-  type SizeDto,
+import type {
+  OrderDetailDto,
+  OrderStatus,
+  SizeDto,
 } from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
@@ -100,10 +97,10 @@ interface Props {
   clients: ClientDto[];
   patterns: PatternListItemDto[];
   /**
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `docs/domain.md §«Подразделения заказа»`): активные карточки
-   * подразделений. Текущая привязка заказа всегда добавляется
-   * отдельной опцией ниже, даже если карточка архивирована.
+   * Активные карточки `CompanyDivision` (см.
+   * `docs/domain.md §«Подразделения заказа»`). Текущая привязка
+   * заказа всегда добавляется отдельной опцией ниже, даже если
+   * карточка архивирована.
    */
   companyDivisions: CompanyDivisionDto[];
   today: string;
@@ -206,18 +203,9 @@ export function AdminEditOrderForm({
   const currentClient = order.client;
 
   const [clientId, setClientId] = useState<string>(currentClient?.id ?? '');
-  const [division, setDivision] = useState<OrderDivision>(order.division);
-  // PHASE 1 «CompanyDivision как master-справочник»: новый источник
-  // истины подразделения через FK на справочник.
   const [companyDivisionId, setCompanyDivisionId] = useState<string>(
     order.companyDivisionId ?? '',
   );
-  const handleCompanyDivisionChange = (id: string): void => {
-    setCompanyDivisionId(id);
-    const code = companyDivisions.find((d) => d.id === id)?.code;
-    if (code === 'MARKETPLACE') setDivision('MARKETPLACE');
-    else if (code === 'OTHER') setDivision('OTHER');
-  };
   const showCurrentDivisionArchivedOption = Boolean(
     order.companyDivisionId &&
       !companyDivisions.some((d) => d.id === order.companyDivisionId),
@@ -337,16 +325,14 @@ export function AdminEditOrderForm({
                     id="companyDivisionId"
                     name="companyDivisionId"
                     value={companyDivisionId}
-                    onChange={(e) =>
-                      handleCompanyDivisionChange(e.target.value)
-                    }
+                    onChange={(e) => setCompanyDivisionId(e.target.value)}
                     disabled={!isDraft}
                   >
                     <option value="">— без подразделения —</option>
                     {/*
-                      PHASE 1: архивная карточка отображается, чтобы
-                      сохранение формы не обнулило FK без явного
-                      действия пользователя.
+                      Архивная карточка отображается, чтобы сохранение
+                      формы не обнулило FK без явного действия
+                      пользователя.
                     */}
                     {showCurrentDivisionArchivedOption &&
                       order.companyDivision && (
@@ -361,13 +347,6 @@ export function AdminEditOrderForm({
                       </option>
                     ))}
                   </select>
-                  {/*
-                    PHASE 1: hidden legacy `division` — backend читает
-                    его как fallback на случай, если у выбранного
-                    подразделения произвольный `code`. handleChange
-                    синхронизирует enum для known codes.
-                  */}
-                  <input type="hidden" name="division" value={division} />
                   {!isDraft && (
                     <span className="order-hero-card__field-hint">
                       Менять подразделение можно только в DRAFT.

@@ -3,11 +3,11 @@
  * (см. `docs/payroll-cutter-compensation-recon.md`).
  *
  * Покрытие:
- *   1. Marketplace (`Order.division = MARKETPLACE`) — старая
+ *   1. Marketplace (`CompanyDivision.code = MARKETPLACE`) — старая
  *      фиксированная схема `amount = Operation(CUT_CUT).fixedRate ×
  *      passport.qtyCut` сохранена 1-в-1.
- *   2. B2B (`Order.division = OTHER`) + два FIXED-оверлока — формула
- *      `amount = (50 + 40) × 20 × 5 / 100 = 90`.
+ *   2. B2B (`CompanyDivision.code = OTHER`) + два FIXED-оверлока —
+ *      формула `amount = (50 + 40) × 20 × 5 / 100 = 90`.
  *   3. B2B + BY_SIZE-оверлок — берёт ставку из
  *      `OperationRateBySize` для размера паспорта.
  *   4. B2B + SALARY_ONLY-операция в маршруте — не попадает в base.
@@ -65,7 +65,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
    * чтобы тесты могли сразу дёрнуть `createImmediateForCutter`.
    */
   async function setupOrderWithPassport(args: {
-    division: 'MARKETPLACE' | 'OTHER';
+    divisionCode: 'MARKETPLACE' | 'OTHER';
     sizeKey: keyof SeedResult['sizes'];
     qtyPlan: number;
     qtyCut: number;
@@ -82,7 +82,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
         orderDate: new Date(),
         color: seed.product.color,
         status: 'IN_PRODUCTION',
-        division: args.division,
+        companyDivisionId: seed.companyDivisions[args.divisionCode].id,
         items: {
           create: { productId: seed.product.id, sizeId, qtyPlan: args.qtyPlan },
         },
@@ -220,7 +220,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
     // CUT_CUT в seed: FIXED 10₽; меняем не нужно. Маршрут не важен —
     // marketplace схема его не читает.
     const setup = await setupOrderWithPassport({
-      division: 'MARKETPLACE',
+      divisionCode: 'MARKETPLACE',
       sizeKey: 'M',
       qtyPlan: 20,
       qtyCut: 20,
@@ -264,7 +264,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
     await setFixedRate('SEW_OVERLOCK_2', 40);
 
     const setup = await setupOrderWithPassport({
-      division: 'OTHER',
+      divisionCode: 'OTHER',
       sizeKey: 'M',
       qtyPlan: 20,
       qtyCut: 20,
@@ -319,7 +319,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
     });
 
     const setup = await setupOrderWithPassport({
-      division: 'OTHER',
+      divisionCode: 'OTHER',
       sizeKey: 'M',
       qtyPlan: 10,
       qtyCut: 10,
@@ -355,7 +355,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
     await setCategory('SEW_OVERLOCK_2', 'SEWING', 'SALARY_ONLY');
 
     const setup = await setupOrderWithPassport({
-      division: 'OTHER',
+      divisionCode: 'OTHER',
       sizeKey: 'M',
       qtyPlan: 10,
       qtyCut: 10,
@@ -405,7 +405,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
     await setFixedRate('SEW_OVERLOCK_2', 100);
 
     const setup = await setupOrderWithPassport({
-      division: 'OTHER',
+      divisionCode: 'OTHER',
       sizeKey: 'M',
       qtyPlan: 10,
       qtyCut: 10,
@@ -453,7 +453,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
   test('B2B без процента (ни в Employee, ни в ENV) → начисление не создаётся, audit warning', async () => {
     await setFixedRate('SEW_OVERLOCK_1', 50);
     const setup = await setupOrderWithPassport({
-      division: 'OTHER',
+      divisionCode: 'OTHER',
       sizeKey: 'M',
       qtyPlan: 10,
       qtyCut: 10,
@@ -484,7 +484,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
     process.env.CUTTER_B2B_SEWING_PERCENT = '5';
 
     const setup = await setupOrderWithPassport({
-      division: 'OTHER',
+      divisionCode: 'OTHER',
       sizeKey: 'M',
       qtyPlan: 10,
       qtyCut: 10,
@@ -513,7 +513,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
   test('Повторный trigger для одного паспорта не создаёт второе начисление (B2B)', async () => {
     await setFixedRate('SEW_OVERLOCK_1', 50);
     const setup = await setupOrderWithPassport({
-      division: 'OTHER',
+      divisionCode: 'OTHER',
       sizeKey: 'M',
       qtyPlan: 10,
       qtyCut: 10,
@@ -542,7 +542,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
 
   test('Повторный trigger для одного паспорта не создаёт второе начисление (Marketplace)', async () => {
     const setup = await setupOrderWithPassport({
-      division: 'MARKETPLACE',
+      divisionCode: 'MARKETPLACE',
       sizeKey: 'M',
       qtyPlan: 5,
       qtyCut: 5,
@@ -572,7 +572,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
     // конкретный сценарий).
     await setFixedRate('SEW_OVERLOCK_1', 30);
     const setup = await setupOrderWithPassport({
-      division: 'OTHER',
+      divisionCode: 'OTHER',
       sizeKey: 'M',
       qtyPlan: 4,
       qtyCut: 4,

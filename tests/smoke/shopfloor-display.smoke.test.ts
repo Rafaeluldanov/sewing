@@ -1664,7 +1664,7 @@ describe('Backend: /api/shopfloor/display + equipment kind', () => {
     );
     expect(ctrl).toMatch(/@Get\('display'\)/);
     // Сервис вызывается из контроллера; сигнатура расширилась
-    // опциональным `query` (см. division-фильтр), поэтому матчим
+    // опциональным `query` (см. divisionCode-фильтр), поэтому матчим
     // `getDisplaySummary(...)`, а не пустые скобки.
     expect(ctrl).toMatch(/getDisplaySummary\(/);
 
@@ -1677,18 +1677,14 @@ describe('Backend: /api/shopfloor/display + equipment kind', () => {
   });
 
   // ---------------------------------------------------------------------
-  // Фильтр по подразделению (`OrderDivision`) — MVP MARKETPLACE display
+  // Фильтр по подразделению (CompanyDivision.code)
   // ---------------------------------------------------------------------
-  test('Контракт `?division=…` валидируется Zod и тянется до Prisma `where`', () => {
-    const shared = readSrc('packages/shared/src/orders.ts');
-    expect(shared).toMatch(/ORDER_DIVISIONS\s*=\s*\[/);
-    expect(shared).toMatch(/MARKETPLACE/);
-    expect(shared).toMatch(/OTHER/);
-    expect(shared).toMatch(/OrderDivisionSchema\s*=\s*z\.enum/);
-
+  test('Контракт `?divisionCode=…` валидируется Zod и тянется до Prisma `where`', () => {
     const sharedShop = readSrc('packages/shared/src/shopfloor.ts');
     expect(sharedShop).toMatch(/ShopfloorDisplayQuerySchema/);
-    expect(sharedShop).toMatch(/division:\s*OrderDivisionSchema\.optional\(\)/);
+    expect(sharedShop).toMatch(
+      /divisionCode:\s*z\.string\(\)\.trim\(\)\.min\(1\)\.optional\(\)/,
+    );
 
     const ctrl = readSrc(
       'apps/api/src/modules/shopfloor/shopfloor.controller.ts',
@@ -1699,54 +1695,46 @@ describe('Backend: /api/shopfloor/display + equipment kind', () => {
 
     const svc = readSrc('apps/api/src/modules/shopfloor/shopfloor.service.ts');
     // Backend filter — никакой постфактум-фильтрации в проекции /
-    // на клиенте быть не должно.
-    //
-    // PHASE 1 «CompanyDivision как master-справочник»: helper
-    // переименован в `resolveDisplayDivisionCode` и кладёт строку
-    // в `divisionCode`, фильтр Prisma собирается через
-    // `buildOrderDivisionFilter` (`OR: [companyDivision.code,
-    // legacy division]`). `query.divisionCode` побеждает,
-    // legacy `query.division` остаётся для backward-compat.
+    // на клиенте быть не должно. Фильтр Prisma собирается через
+    // `buildOrderDivisionFilter` по `companyDivision.code`.
     expect(svc).toMatch(/query\.divisionCode/);
-    expect(svc).toMatch(/query\.division/);
     expect(svc).toMatch(/resolveDisplayDivisionCode/);
     expect(svc).toMatch(/buildOrderDivisionFilter/);
+    expect(svc).toMatch(/companyDivision: \{ code: divisionCode \}/);
   });
 
-  test('Web shopfloor-api пробрасывает division в запрос', () => {
+  test('Web shopfloor-api пробрасывает divisionCode в запрос', () => {
     const api = readSrc('apps/web/lib/shopfloor-api.ts');
-    expect(api).toMatch(/division\?:\s*OrderDivision/);
+    expect(api).toMatch(/divisionCode\?:\s*string/);
     // Должен явно класть параметр в searchParams, а не дописывать вручную URL.
-    expect(api).toMatch(/division/);
-    expect(api).toMatch(/searchParams/);
+    expect(api).toMatch(/searchParams: divisionCode \? \{ divisionCode \}/);
   });
 
-  test('RSC `page.tsx` читает searchParams.division и пробрасывает в API', () => {
+  test('RSC `page.tsx` читает searchParams.divisionCode и пробрасывает в API', () => {
     const page = readSrc('apps/web/app/shopfloor/display/page.tsx');
-    expect(page).toMatch(/searchParams/);
-    expect(page).toMatch(/division/);
-    // Валидация: в page принимается только enum-значение (всё остальное
-    // эффективно null/undefined и эквивалентно «без фильтра»).
-    expect(page).toMatch(/ORDER_DIVISIONS/);
+    expect(page).toMatch(/searchParams\?\.divisionCode/);
+    // Web-уровень принимает legacy `?division=…` как deprecated alias
+    // и тихо мапит его на `divisionCode`.
+    expect(page).toMatch(/searchParams\?\.division/);
+    expect(page).toMatch(/getShopfloorDisplaySummary/);
   });
 
-  test('Order forms (create/edit) содержат select подразделения', () => {
+  test('Order forms (create/edit) содержат select подразделения через CompanyDivisionDto', () => {
     const newForm = readSrc('apps/web/app/orders/new/new-order-form.tsx');
-    expect(newForm).toMatch(/ORDER_DIVISIONS/);
-    expect(newForm).toMatch(/ORDER_DIVISION_LABELS/);
-    expect(newForm).toMatch(/name="division"/);
+    expect(newForm).toMatch(/CompanyDivisionDto/);
+    expect(newForm).toMatch(/name="companyDivisionId"/);
 
     const editForm = readSrc(
       'apps/web/app/orders/[id]/edit/edit-order-form.tsx',
     );
-    expect(editForm).toMatch(/ORDER_DIVISIONS/);
-    expect(editForm).toMatch(/name="division"/);
+    expect(editForm).toMatch(/CompanyDivisionDto/);
+    expect(editForm).toMatch(/name="companyDivisionId"/);
 
     const actions = readSrc('apps/web/app/orders/actions.ts');
-    // buildCreateDto / buildUpdateDto оба должны прокидывать division
-    // через общий parser, иначе бэкенд не получит поле.
-    expect(actions).toMatch(/parseDivision/);
-    expect(actions).toMatch(/division/);
+    // buildCreateDto / buildUpdateDto оба должны прокидывать
+    // companyDivisionId через общий parser, иначе бэкенд не получит поле.
+    expect(actions).toMatch(/parseCompanyDivisionId/);
+    expect(actions).toMatch(/companyDivisionId/);
   });
 
   test('getDisplaySummary гоняет независимые запросы параллельно', () => {

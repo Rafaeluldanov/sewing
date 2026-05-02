@@ -370,40 +370,6 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   CANCELLED: 'Отменён',
 };
 
-/**
- * Подразделение заказа (см. Prisma enum `OrderDivision`,
- * `docs/domain.md §«Подразделения заказа»`). Используется как фильтр
- * большого экрана `/shopfloor/display?division=…`. Минимальный MVP:
- *
- * - `MARKETPLACE` — заказы маркетплейс-направления, под которые
- *   выделяется отдельный экран `?division=MARKETPLACE`;
- * - `OTHER`       — backward-compatible бакет «всё остальное», в
- *   который попадают все исторические заказы (default в БД).
- *
- * Расширение: добавить значение в этот массив + лейбл в
- * `ORDER_DIVISION_LABELS` + соответствующий вариант в Prisma enum.
- */
-export const ORDER_DIVISIONS = ['MARKETPLACE', 'OTHER'] as const;
-export const OrderDivisionSchema = z.enum(ORDER_DIVISIONS);
-export type OrderDivision = z.infer<typeof OrderDivisionSchema>;
-
-/**
- * Человекочитаемые лейблы подразделений для UI (формы заказа,
- * заголовок display-экрана при необходимости).
- *
- * `OTHER` — legacy technical value для B2B-заказов: Prisma enum мы
- * сознательно НЕ переименовываем destructive-миграцией (см.
- * `docs/payroll-cutter-compensation-recon.md §4`). Backend
- * (`EarningsService`) и shared-helper
- * `getCutterCompensationSchemeForDivision` уже трактуют `OTHER` как
- * B2B; в UI лейбл показываем как «B2B», чтобы у менеджера не было
- * двух названий одного и того же бакета.
- */
-export const ORDER_DIVISION_LABELS: Record<OrderDivision, string> = {
-  MARKETPLACE: 'Маркетплейс',
-  OTHER: 'B2B',
-};
-
 // ---------------------------------------------------------------------------
 // Request DTO
 // ---------------------------------------------------------------------------
@@ -554,43 +520,16 @@ export const CreateOrderSchema = z.object({
    */
   patternItemId: z.string().min(1).nullable().optional(),
   /**
-   * Подразделение заказа (см. `OrderDivisionSchema`). Опционально на
-   * уровне DTO: если фронт/интеграция не передал — backend подставит
-   * `OTHER` (Prisma default). Веб-форма всегда подставляет явное
-   * значение из select-а.
+   * Подразделение заказа — FK на master-справочник `CompanyDivision`
+   * (см. `prisma/schema.prisma::Order.companyDivisionId`,
+   * `docs/domain.md §«Подразделения заказа»`,
+   * `OrdersService.create`).
    *
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `docs/domain.md §«Подразделения заказа»`): legacy enum-поле
-   * остаётся как backward-compat fallback. Если фронт прислал и
-   * `companyDivisionId`, и `division` — backend синхронизирует их
-   * по `CompanyDivision.code`. PHASE 2 уберёт это поле из DTO.
-   */
-  division: OrderDivisionSchema.optional(),
-  /**
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `prisma/schema.prisma::Order.companyDivisionId`,
-   * `OrdersService.create`/`update`).
-   *
-   * Идентификатор карточки `CompanyDivision`, к которой привязан
-   * заказ. На MVP UI отдаёт его из селекта подразделений, а
-   * backend синхронно пишет в `Order.companyDivisionId` и
-   * подкладывает legacy `Order.division` по соответствию
-   * `CompanyDivision.code` (для backward-compat shopfloor-фильтра /
-   * earnings до PHASE 2).
-   *
-   * Поведение полей:
-   *   - `companyDivisionId` задан, `division` нет → backend
-   *     использует id и подкладывает legacy `division` по `code`,
-   *     если `code` распознан как `MARKETPLACE`/`OTHER`;
-   *   - `companyDivisionId` не задан, `division` задан → backend
-   *     находит/upsert-ит карточку `CompanyDivision` по
-   *     `code = division` и проставляет id;
-   *   - оба пусты → backend оставляет `companyDivisionId = null` и
-   *     legacy `division = OTHER` (Prisma default).
-   *
-   * `null` явно разрешён, потому что в карточке заказа менеджер
-   * может «снять» подразделение (PHASE 2 запретит это, но на
-   * PHASE 1 поле nullable в БД).
+   * Опционально и nullable: если фронт/интеграция не передал
+   * значение, заказ создаётся без привязки к подразделению — UI
+   * показывает «Не указано», earnings-helper
+   * `getCutterCompensationSchemeForDivision` для отсутствующего
+   * кода даёт безопасный default `B2B_SEWING_PERCENT`.
    */
   companyDivisionId: z.string().min(1).nullable().optional(),
   /**
@@ -676,8 +615,8 @@ export type CreateOrderItemDto = z.infer<typeof CreateOrderItemSchema>;
  *     `customer`, `color`, `status`) — менеджер может править на
  *     любом статусе, в том числе после запуска заказа;
  *   - «потенциально опасные» (`items`, `productId`, `routeTemplateId`,
- *     `techCardId`, `division`) — допустимы только пока заказ в
- *     `DRAFT`; на не-DRAFT заказе backend отвечает 409 `ORDER_LOCKED`.
+ *     `techCardId`, `companyDivisionId`) — допустимы только пока заказ
+ *     в `DRAFT`; на не-DRAFT заказе backend отвечает 409 `ORDER_LOCKED`.
  *
  * Дополнительные инварианты остаются:
  *   - смена `routeTemplateId` блокируется, если уже зафиксирован
@@ -737,21 +676,9 @@ export const UpdateOrderSchema = z.object({
    */
   patternItemId: z.string().min(1).nullable().optional(),
   /**
-   * Подразделение заказа. Меняется только пока заказ в `DRAFT`
-   * (общий ORDER_LOCKED guard `OrdersService.update`). `null` сюда
-   * передавать не нужно — поле в БД NOT NULL; чтобы «сбросить»,
-   * передаётся явное значение `OTHER`.
-   *
-   * PHASE 1: оставлено как backward-compat fallback. См.
-   * `companyDivisionId` ниже — это новый источник истины.
-   */
-  division: OrderDivisionSchema.optional(),
-  /**
-   * PHASE 1: смена подразделения заказа через FK на
-   * `CompanyDivision`. Семантика идентична `CreateOrderSchema`:
-   * если задан — backend подкладывает legacy `division` по `code`;
-   * `null` обнуляет привязку. Меняется только пока заказ в `DRAFT`
-   * (общий ORDER_LOCKED guard).
+   * Смена подразделения заказа через FK на `CompanyDivision`.
+   * Меняется только пока заказ в `DRAFT` (общий ORDER_LOCKED guard).
+   * `null` обнуляет привязку — UI карточки показывает «Не указано».
    */
   companyDivisionId: z.string().min(1).nullable().optional(),
   /**
@@ -939,41 +866,21 @@ export interface OrderListItemDto {
    */
   deadline?: OrderDeadlineDto;
   /**
-   * Подразделение заказа (см. `OrderDivision`). По нему фильтруется
-   * большой экран `/shopfloor/display?division=…`.
-   *
-   * PHASE 1: оставлено как backward-compat. Источник истины теперь
-   * `companyDivisionId` / `companyDivision` ниже; UI должен
-   * предпочитать `companyDivision?.name`, а на legacy `division`
-   * fallback-ить только если `companyDivision = null` (исторические
-   * заказы до миграции). PHASE 2 уберёт это поле из DTO.
-   */
-  division: OrderDivision;
-  /**
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `prisma/schema.prisma::Order.companyDivisionId`,
+   * Подразделение заказа — FK на master-справочник `CompanyDivision`
+   * (см. `prisma/schema.prisma::Order.companyDivisionId`,
    * `OrdersService.toListItemDto`).
    *
-   * Идентификатор привязанной карточки `CompanyDivision`. `null` —
-   * исторический заказ без привязки (миграция backfill-ит только
-   * заказы с распознанным `division::text → code`; для остальных
-   * остаётся `null`).
+   * `companyDivisionId === null` означает «подразделение не указано»
+   * — UI карточки показывает «Не указано», earnings-helper
+   * `getCutterCompensationSchemeForDivision` для отсутствующего
+   * кода даёт безопасный default `B2B_SEWING_PERCENT`.
    *
-   * Поле опционально (`?`) — старые потребители без пересборки
-   * shared-пакета продолжают компилироваться.
-   */
-  companyDivisionId?: string | null;
-  /**
-   * PHASE 1: краткая ссылка на карточку подразделения для UI —
+   * `companyDivision` — краткая ссылка на карточку подразделения,
    * чтобы списки/карточки заказа могли отрисовать имя без
    * дополнительного запроса в `/api/company-divisions`.
-   *
-   * `code` приходит наравне с `id`, чтобы клиенты, которые ещё
-   * читают legacy `division` (например, helper
-   * `getCutterCompensationSchemeForDivision`), могли мигрировать
-   * на новое поле без потери семантики.
    */
-  companyDivision?: { id: string; code: string; name: string } | null;
+  companyDivisionId: string | null;
+  companyDivision: { id: string; code: string; name: string } | null;
   /**
    * Soft-route MVP: привязанный шаблон маршрута (или `null`, если заказ
    * запускается без маршрута). Хранится id + краткие поля для UI, чтобы

@@ -300,10 +300,11 @@ export async function seedMinimal(prisma: PrismaClient): Promise<SeedResult> {
     update: { name: 'Пятно', sortOrder: 10, isActive: true },
   });
 
-  // PHASE 1 «CompanyDivision как master-справочник»: базовые карточки
-  // подразделений заказа / display screens — те же `code`, что
-  // legacy enum `OrderDivision`. Сидим идемпотентно по `code`, имена
-  // выровнены с `ORDER_DIVISION_LABELS` (`Маркетплейс` / `B2B`).
+  // CompanyDivision — master-справочник подразделений заказа /
+  // display screens. Сидим идемпотентно по `code`. Карточки
+  // `MARKETPLACE` / `OTHER` — обязательный whitelist для
+  // `getCutterCompensationSchemeForDivision` (см.
+  // `docs/payroll-cutter-compensation-recon.md`).
   const marketplaceDivision = await prisma.companyDivision.upsert({
     where: { code: 'MARKETPLACE' },
     create: {

@@ -65,20 +65,19 @@ export class ShopfloorController {
    * роли (включая DISPLAY). Никаких мутаций ни здесь, ни в
    * `getDisplaySummary` — только проекция живых данных.
    *
-   * Опциональный query `division` (см. `OrderDivisionSchema`) сужает
+   * Опциональный query `divisionCode` (`CompanyDivision.code`) сужает
    * выборку до заказов одного подразделения и используется для
    * отдельных display-экранов (например, маркетплейса). Если параметр
    * не передан — поведение определяется ролью пользователя:
    *
-   *   - роль `DISPLAY` → берём division из привязанного
-   *     `DisplayScreenConfig` (один экран = один Employee = одно
-   *     подразделение, см. `docs/screens.md §10e`);
+   *   - роль `DISPLAY` → берём подразделение из привязанного
+   *     `DisplayScreenConfig.companyDivision.code` (один экран = один
+   *     Employee = одно подразделение, см. `docs/screens.md §10e`);
    *   - любая другая роль → отдаём прежний агрегат по всем активным
-   *     заказам (backward-compatibility со старыми экранами без
-   *     query-параметра).
+   *     заказам.
    *
-   * `query.division` всегда перекрывает auto-detection — это удобно
-   * для отладки и для прежних URL-закладок менеджеров.
+   * `query.divisionCode` всегда перекрывает auto-detection — это
+   * удобно для отладки и для URL-закладок менеджеров.
    */
   @Get('display')
   display(

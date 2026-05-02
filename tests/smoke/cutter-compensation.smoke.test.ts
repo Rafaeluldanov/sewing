@@ -7,14 +7,12 @@
  * pure-функции из shared:
  *
  *   - shared `cutter-compensation` — schemes, labels, helper;
- *   - shared `orders` — лейбл `OTHER` теперь «B2B»;
  *   - shared `employees` — DTO содержит `cutterB2bSewingPercent`;
  *   - Prisma schema — `Employee.cutterB2bSewingPercent Decimal(5, 2)`;
  *   - миграция additive (только `ADD COLUMN`, без `DROP`/`ALTER TYPE`);
- *   - backend `EarningsService` — flow по `Order.division`,
+ *   - backend `EarningsService` — flow по `CompanyDivision.code`,
  *     fallback ENV `CUTTER_B2B_SEWING_PERCENT`, marketplace 1-в-1;
- *   - frontend — поле в форме сотрудника-закройщика, label `B2B` в
- *     форме заказа.
+ *   - frontend — поле в форме сотрудника-закройщика.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -24,7 +22,6 @@ import {
   CUTTER_COMPENSATION_SCHEME_LABELS,
   getCutterCompensationSchemeForDivision,
 } from '@sewing/shared/cutter-compensation';
-import { ORDER_DIVISION_LABELS } from '@sewing/shared/orders';
 
 const repoRoot = path.resolve(__dirname, '..', '..');
 
@@ -80,17 +77,6 @@ describe('shared/cutter-compensation', () => {
   });
 });
 
-describe('shared/orders — лейбл подразделения OTHER теперь B2B', () => {
-  test('ORDER_DIVISION_LABELS.MARKETPLACE = "Маркетплейс"', () => {
-    expect(ORDER_DIVISION_LABELS.MARKETPLACE).toBe('Маркетплейс');
-  });
-
-  test('ORDER_DIVISION_LABELS.OTHER = "B2B"', () => {
-    // Не переименовываем enum, label-only. См. recon §4.
-    expect(ORDER_DIVISION_LABELS.OTHER).toBe('B2B');
-  });
-});
-
 describe('shared/employees — DTO содержит cutterB2bSewingPercent', () => {
   test('CreateEmployeeSchema принимает cutterB2bSewingPercent', () => {
     const src = readSrc('packages/shared/src/employees.ts');
@@ -138,7 +124,7 @@ describe('Prisma — Employee.cutterB2bSewingPercent Decimal(5, 2)', () => {
   });
 });
 
-describe('backend EarningsService — две схемы по Order.division', () => {
+describe('backend EarningsService — две схемы по CompanyDivision.code', () => {
   const earningsSrc = readSrc(
     'apps/api/src/modules/earnings/earnings.service.ts',
   );
@@ -248,17 +234,18 @@ describe('frontend — поле «Процент от операций поши�
   });
 });
 
-describe('frontend — admin-форма заказа использует обновлённые ORDER_DIVISION_LABELS', () => {
-  test('admin/orders/new и admin/orders/[id]/edit подключают ORDER_DIVISION_LABELS из shared', () => {
+describe('frontend — admin-форма заказа использует CompanyDivision-селект', () => {
+  test('admin/orders/new и admin/orders/[id]/edit рендерят select companyDivisionId', () => {
     const create = readSrc(
       'apps/web/app/admin/orders/new/admin-create-order-form.tsx',
     );
-    expect(create).toMatch(/ORDER_DIVISION_LABELS/);
-    expect(create).toMatch(/from '@sewing\/shared\/orders'/);
+    expect(create).toMatch(/name="companyDivisionId"/);
+    expect(create).toMatch(/CompanyDivisionDto/);
 
     const edit = readSrc(
       'apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx',
     );
-    expect(edit).toMatch(/ORDER_DIVISION_LABELS/);
+    expect(edit).toMatch(/name="companyDivisionId"/);
+    expect(edit).toMatch(/CompanyDivisionDto/);
   });
 });

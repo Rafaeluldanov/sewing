@@ -485,8 +485,9 @@ async function createInProductionOrder(
       // (fixedRate × qty / BY_SIZE-ставка). После внедрения второй
       // схемы (B2B по проценту от пошива, см.
       // `docs/payroll-cutter-compensation-recon.md`) необходимо явно
-      // сказать «это marketplace», иначе backend выберет B2B-flow.
-      division: 'MARKETPLACE',
+      // привязать заказ к подразделению `MARKETPLACE`, иначе
+      // backend выберет B2B-flow по default-у helper-а.
+      companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
       items,
     })
     .expect(201);

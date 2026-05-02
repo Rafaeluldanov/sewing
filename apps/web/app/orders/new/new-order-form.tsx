@@ -3,13 +3,7 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
-import {
-  ORDER_DIVISIONS,
-  ORDER_DIVISION_LABELS,
-  type OrderDivision,
-  type ProductDto,
-  type SizeDto,
-} from '@sewing/shared/orders';
+import type { ProductDto, SizeDto } from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import { createOrderAction, type FormActionState } from '../actions';
@@ -31,10 +25,11 @@ interface Props {
    */
   techCards: TechCardTemplateSummaryDto[];
   /**
-   * PHASE 1 «CompanyDivision как master-справочник» (см.
-   * `docs/domain.md §«Подразделения заказа»`): активные карточки
-   * подразделений для select-а. Если список пуст (новая инсталляция
-   * без миграции/seed) — UI fallback-ит на legacy enum-select.
+   * Активные карточки подразделений (см.
+   * `docs/domain.md §«Подразделения заказа»`) для select-а
+   * `companyDivisionId`. Если список пуст (новая инсталляция без
+   * seed-а) — поле «Подразделение» скрывается, заказ создаётся
+   * без привязки.
    */
   companyDivisions: CompanyDivisionDto[];
   today: string;
@@ -61,7 +56,7 @@ export function NewOrderForm({
 }: Props) {
   const [state, formAction] = useFormState(createOrderAction, initialState);
   const [productId, setProductId] = useState(products[0]?.id ?? '');
-  // PHASE 1: дефолт — карточка с `code = OTHER` (B2B).
+  // Дефолт — карточка с `code = OTHER` (B2B).
   const defaultCompanyDivisionId =
     companyDivisions.find((d) => d.code === 'OTHER')?.id ??
     companyDivisions[0]?.id ??
@@ -69,14 +64,6 @@ export function NewOrderForm({
   const [companyDivisionId, setCompanyDivisionId] = useState<string>(
     defaultCompanyDivisionId,
   );
-  const [division, setDivision] = useState<OrderDivision>('OTHER');
-
-  const handleCompanyDivisionChange = (id: string): void => {
-    setCompanyDivisionId(id);
-    const code = companyDivisions.find((d) => d.id === id)?.code;
-    if (code === 'MARKETPLACE') setDivision('MARKETPLACE');
-    else if (code === 'OTHER') setDivision('OTHER');
-  };
 
   const selectedProduct = useMemo(
     () => products.find((p) => p.id === productId),
@@ -124,15 +111,15 @@ export function NewOrderForm({
         </div>
       </div>
 
-      <div className="form-row">
-        <label htmlFor="companyDivisionId">Подразделение</label>
-        <div>
-          {companyDivisions.length > 0 ? (
+      {companyDivisions.length > 0 && (
+        <div className="form-row">
+          <label htmlFor="companyDivisionId">Подразделение</label>
+          <div>
             <select
               id="companyDivisionId"
               name="companyDivisionId"
               value={companyDivisionId}
-              onChange={(e) => handleCompanyDivisionChange(e.target.value)}
+              onChange={(e) => setCompanyDivisionId(e.target.value)}
               required
             >
               {companyDivisions.map((d) => (
@@ -141,38 +128,13 @@ export function NewOrderForm({
                 </option>
               ))}
             </select>
-          ) : (
-            <select
-              id="division-legacy"
-              name="division"
-              value={division}
-              onChange={(e) => setDivision(e.target.value as OrderDivision)}
-              required
-            >
-              {ORDER_DIVISIONS.map((d) => (
-                <option key={d} value={d}>
-                  {ORDER_DIVISION_LABELS[d]}
-                </option>
-              ))}
-            </select>
-          )}
-          {/*
-            PHASE 1: hidden legacy `division` enum — backend читает
-            его как fallback, если карточка с произвольным `code`
-            (`MAIN_SHOP`, …) не входит в whitelist `MARKETPLACE`/
-            `OTHER`. Когда нет companyDivisions, мы выводим legacy
-            select явно (см. выше) — этот input в таком случае не
-            нужен.
-          */}
-          {companyDivisions.length > 0 && (
-            <input type="hidden" name="division" value={division} />
-          )}
-          <div className="hint">
-            Определяет, на каком экране /shopfloor/display будет видно
-            заказ. По умолчанию — «B2B».
+            <div className="hint">
+              Определяет, на каком экране /shopfloor/display будет
+              видно заказ. По умолчанию — «B2B».
+            </div>
           </div>
         </div>
-      </div>
+      )}
 
       <div className="form-row">
         <label htmlFor="color">Цвет</label>

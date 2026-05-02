@@ -12,7 +12,7 @@
 >   `OrderOutsourceRequirement`, `OrderApplication`,
 >   `OrderCostEstimate`, `OrderCostEstimateLine`,
 >   `OrderMaterialArrivalOverride`, `WorkshopNeed`,
->   `CutReleasePolicy`; enum-ы `OrderStatus`, `OrderDivision`,
+>   `CutReleasePolicy`; enum `OrderStatus`,
 >   `OrderOutsourceExecutionStatus`, `OutsourceTriggerType`,
 >   `CuttingClosureRequestStatus`.
 > - `apps/api/src/modules/orders/**`
@@ -111,22 +111,20 @@
   единицу (управленческое поле, на расчёт себестоимости не
   влияет).
 
-`Order.companyDivisionId? → CompanyDivision` (PHASE 1, см.
-`docs/domain.md §«Подразделения заказа»») — master-связка с
-управленческим справочником подразделений. UI-форма заказа
-выбирает подразделение из активных карточек `CompanyDivision`.
-`OrdersService.create`/`update` синхронизируют пару
-`(companyDivisionId, legacy Order.division)` по `code`:
-если фронт передал `companyDivisionId` — backend подкладывает
-legacy enum по `CompanyDivision.code` (whitelist
-`MARKETPLACE`/`OTHER`). Меняется только в `DRAFT`, после
-`IN_PRODUCTION` блокируется общим guard-ом `ORDER_LOCKED`.
+`Order.companyDivisionId? → CompanyDivision` (см.
+`docs/domain.md §«Подразделения заказа»`) — FK на master-справочник
+подразделений. UI-форма заказа выбирает подразделение из активных
+карточек `CompanyDivision`. `OrdersService.create`/`update`
+пишут FK напрямую: backend проверяет существование карточки (400
+`COMPANY_DIVISION_NOT_FOUND` иначе), `null` снимает привязку.
+Меняется только в `DRAFT`, после `IN_PRODUCTION` блокируется
+общим guard-ом `ORDER_LOCKED`.
 
-`Order.division` (`OrderDivision = MARKETPLACE | OTHER`,
-default `OTHER`) — legacy enum, оставлен как backward-compat
-для earnings (`getCutterCompensationSchemeForDivision`) и для
-URL `/api/shopfloor/display?division=…` (см. `display-board.md`).
-Удалится в PHASE 2.
+`EarningsService` для выбора схемы начисления закройщика читает
+`passport.order.companyDivision?.code` (см.
+`getCutterCompensationSchemeForDivision`); shopfloor-фильтр
+большого монитора — `?divisionCode=<CompanyDivision.code>` (см.
+`display-board.md`).
 
 ---
 
@@ -382,8 +380,8 @@ MVP-ограничение: reopen из `IN_PRODUCTION` сознательно �
 
 `OrdersService.update` валидирует «опасные» поля
 (`items`, `productId`, `routeTemplateId`, `techCardId`,
-`patternItemId`, `division`) и допускает их к изменению **только
-в `DRAFT`**. На любом другом статусе бросается
+`patternItemId`, `companyDivisionId`) и допускает их к изменению
+**только в `DRAFT`**. На любом другом статусе бросается
 `OrderLockedException` (409 `ORDER_LOCKED`).
 
 Если в DTO передан `status`, и он отличается от текущего,
