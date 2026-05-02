@@ -69,6 +69,7 @@ import type { PassportListItemDto } from '@sewing/shared/passports';
 import { ApiRequestError } from '@/lib/api';
 import { getOrder } from '@/lib/orders-api';
 import { listOrderPassports } from '@/lib/passports-api';
+import { getOrderCutIssueRules } from '@/lib/order-cut-issue-rules-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { AdminPageShell } from '@/components/admin';
 import {
@@ -127,6 +128,11 @@ export default async function AdminOrderDetailPage({
   // outsource-блоке (mark ordered / received).
   const role = me?.user.role;
   const isManager = role === 'ADMIN' || role === 'SHOP_MANAGER';
+  // «Очередь выдачи кроя по размерам» — отдельная карточка во вкладке
+  // «План» (см. `OrderCutIssueRulesCard` /
+  // `apps/api/src/modules/order-cut-issue-rules/*`). Тянем сводку
+  // тут, чтобы tab-компонент остался синхронным.
+  const cutIssueRulesSummary = await getOrderCutIssueRules(order.id);
 
   const clientName = order.client?.name ?? order.customer ?? null;
   const canIssuePassport = order.status === 'IN_PRODUCTION';
@@ -170,7 +176,11 @@ export default async function AdminOrderDetailPage({
 
         {activeTab === 'plan' && (
           <div className="order-tab-panel">
-            <OrderPlanTab order={order} />
+            <OrderPlanTab
+              order={order}
+              cutIssueRulesSummary={cutIssueRulesSummary}
+              canManageCutIssueRules={isManager}
+            />
           </div>
         )}
 

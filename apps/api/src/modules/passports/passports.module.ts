@@ -8,6 +8,7 @@ import { EarningsModule } from '../earnings/earnings.module.js';
 import { CuttingClosureModule } from '../cutting-closure/cutting-closure.module.js';
 import { WarehousesModule } from '../warehouses/warehouses.module.js';
 import { CutReleasePolicyModule } from '../cut-release-policy/cut-release-policy.module.js';
+import { OrderCutIssueRulesModule } from '../order-cut-issue-rules/order-cut-issue-rules.module.js';
 
 /**
  * Импортируем `EarningsModule`, чтобы `PassportsService` мог в одной
@@ -24,6 +25,7 @@ import { CutReleasePolicyModule } from '../cut-release-policy/cut-release-policy
     CuttingClosureModule,
     WarehousesModule,
     CutReleasePolicyModule,
+    OrderCutIssueRulesModule,
   ],
   controllers: [PassportsController, OrderPassportsController, CellsController],
   providers: [PassportsService, PassportNumberService],

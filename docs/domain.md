@@ -147,6 +147,7 @@
 | `Printer` / `PrintJob`  | Логический принтер / задание печати    | `prisma/schema.prisma::Printer`/`PrintJob` |
 | `AuditLog`              | Универсальный журнал управленческих действий | `prisma/schema.prisma::AuditLog` |
 | `CutReleasePolicy`      | Политика выдачи кроя                   | `prisma/schema.prisma::CutReleasePolicy` |
+| `OrderCutIssueRule`     | Очередь выдачи кроя по размерам        | `prisma/schema.prisma::OrderCutIssueRule` |
 | `CuttingClosureRequest` | Заявка на закрытие раскроя по размеру  | `prisma/schema.prisma::CuttingClosureRequest` |
 
 Полный список enum-ов и их значений — `docs/erd.md §1`.
@@ -369,6 +370,54 @@ Lifecycle:
 Audit-events: `CUT_RELEASE_POLICY_CREATED` / `_UPDATED` / `_DISABLED`,
 а также `CUT_RELEASE_POLICY_CONSUMED` в транзакции
 `issueToEmployee` (`docs/events.md §3.3`).
+
+### 1.7a `OrderCutIssueRule` — очередь выдачи кроя по размерам
+
+Источник: `prisma/schema.prisma::OrderCutIssueRule`,
+`apps/api/src/modules/order-cut-issue-rules/*`,
+`docs/erd.md §3.8`, `docs/order-flow.md §«Очередь выдачи кроя»`,
+`docs/production-flow.md §«Issue: очередь выдачи кроя»`.
+
+Менеджер заказа задаёт «первую очередь выдачи кроя по размерам»:
+например `S — 70 шт`, `M — 50 шт`, `4XL — 100 шт`. Пока хотя бы одна
+активная строка очереди не выполнена (`issuedQty < requiredQty`),
+`PassportsService.issueToEmployee` режет паспорта «не очередных»
+размеров адресной 409 `ORDER_CUT_ISSUE_RULE_VIOLATION` с
+человекочитаемым сообщением «Сначала нужно выдать: S — осталось 20
+шт, M — осталось 10 шт, 4XL — осталось 50 шт» (текст собирается
+`formatOrderCutIssueRuleViolationMessage` из `@sewing/shared`).
+Когда все активные строки выполнены, выдача остальных размеров
+становится свободной — никаких ручных «снять очередь» не требуется,
+правило гасит само себя по `issuedQty`.
+
+Отличие от `CutReleasePolicy` (§1.7):
+- `CutReleasePolicy` — глобальная политика, единовременно активна
+  максимум одна, режет по `(color, sizeId, limitQty)`;
+- `OrderCutIssueRule` — поразмерная очередь конкретного заказа,
+  одна строка на размер (`@@unique [orderId, sizeId]`), может быть
+  N активных одновременно.
+
+`issuedQty` — materialized counter (как `CutReleasePolicy.consumedQty`).
+Инкрементится в той же транзакции, что и
+`passport.update + passportEvent.create + audit.log`, через conditional
+`updateMany` (`updateMany where issuedQty <= requiredQty - qty`).
+Если строку успели погасить (`isActive = false`) или другая выдача
+«съела остаток» между pre-check и transaction'ом — `updateMany`
+возвращает `count = 0`, мы перечитываем актуальное состояние и
+бросаем VIOLATION (без записи issue).
+
+Применяется ТОЛЬКО на ПЕРВОЙ операции маршрута
+(`Passport.currentRouteStepIndex === 0`) или операциях категории
+`CUTTING` — точно так же, как `CutReleasePolicy`. Порядок проверок
+внутри `issueToEmployee`: `OrderCutIssueRule → CutReleasePolicy`. На
+дальнейших шагах маршрута (scan / complete-operation /
+master-actions) очередь не применяется.
+
+Audit-events: `ORDER_CUT_ISSUE_RULE_UPSERT` (bulk-сохранение формы),
+`ORDER_CUT_ISSUE_RULE_DISABLED` («Отключить очередь»),
+`ORDER_CUT_ISSUE_RULE_CONSUMED` (атомарный инкремент `issuedQty` в
+транзакции `issueToEmployee`); `entityType = ORDER_CUT_ISSUE_RULE`
+(`docs/events.md §3.2`).
 
 ### 1.8 `CuttingClosureRequest` — закрытие раскроя по размеру
 
@@ -1128,6 +1177,24 @@ CREATED }`, `PassportEvent(CELL_PLACED)`, audit
 - При успехе `consumeCutReleasePolicyInTx` атомарно инкрементит
   `CutReleasePolicy.consumedQty` через conditional `updateMany`
   (защита от race) + audit `CUT_RELEASE_POLICY_CONSUMED`.
+
+**Order cut issue rule** проверяется ДО `CutReleasePolicy`, на тех
+же условиях (первая операция маршрута / операции категории
+`CUTTING`). Если у заказа есть активные строки очереди
+(`OrderCutIssueRule.isActive = true && issuedQty < requiredQty`):
+
+- `Passport.sizeId` не среди незавершённых строк →
+  `OrderCutIssueRuleViolationException` с сообщением «Сначала нужно
+  выдать: …» (см. `formatOrderCutIssueRuleViolationMessage` в
+  `@sewing/shared`).
+- `Passport.qtyCut > requiredQty - issuedQty` для соответствующей
+  строки → та же ошибка с тем же текстом.
+- При успехе `OrderCutIssueRulesService.consumeInTx` атомарно
+  инкрементит `OrderCutIssueRule.issuedQty` через conditional
+  `updateMany` (защита от race) + audit
+  `ORDER_CUT_ISSUE_RULE_CONSUMED`. Если 0 строк затронуто (race с
+  `disable-all` или другой выдачей) — VIOLATION с актуальным
+  сообщением (без записи issue).
 
 ### 7.6 Скан и завершение операции
 

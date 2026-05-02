@@ -502,6 +502,17 @@
   `createdAt / updatedAt`. На MVP единовременно максимум одна
   активная (enforcement в сервисе). Используется
   `PassportsService.issueToEmployee`.
+- **`OrderCutIssueRule`** *(новый контур)* — «очередь выдачи кроя по
+  размерам внутри заказа». `orderId → Order` (`onDelete: Cascade`),
+  `sizeId → Size` (`onDelete: Restrict`), `requiredQty: Int`,
+  `issuedQty: Int @default(0)` (materialized counter, инкрементится в
+  той же транзакции, что и `PassportsService.issueToEmployee`),
+  `sortOrder: Int @default(0)`, `isActive: Boolean @default(true)`,
+  `createdById: String?` (без FK), `createdAt / updatedAt`. Уникальность
+  `(orderId, sizeId)` + индексы `(orderId, isActive)` и `(sizeId)`.
+  Применяется ДО `CutReleasePolicy` и только на ПЕРВОЙ операции
+  маршрута / категории `CUTTING` (см. `docs/domain.md §«Очередь
+  выдачи кроя»`).
 
 <a id="215-company-settings"></a>
 ### 2.15 Company settings
@@ -660,7 +671,37 @@
   паспортов и инкрементит `consumedQty` для прошедших.
 - На MVP единовременно максимум одна активная политика.
 
-### 3.8 OrderMaterialArrivalOverride
+### 3.8 OrderCutIssueRule
+
+Источник: `prisma/schema.prisma::OrderCutIssueRule`,
+`apps/api/src/modules/order-cut-issue-rules/*`,
+`docs/domain.md §«Очередь выдачи кроя»`.
+
+- «Очередь выдачи кроя по размерам внутри заказа» — менеджер задаёт
+  набор строк `(размер, requiredQty)`, и пока хотя бы одна активная
+  строка не выполнена, `PassportsService.issueToEmployee` блокирует
+  паспорта «не очередных» размеров адресной 409
+  `ORDER_CUT_ISSUE_RULE_VIOLATION` (текст собирается
+  `formatOrderCutIssueRuleViolationMessage` из `@sewing/shared`).
+- Materialized counter `issuedQty` инкрементится в той же транзакции,
+  что и `passport.update + passportEvent.create + audit.log` (через
+  conditional `updateMany`, как у `CutReleasePolicy.consumedQty`).
+  Превышение лимита и race с `disable-all` ловятся пересчётом 0
+  затронутых строк.
+- Применяется ТОЛЬКО на ПЕРВОЙ операции маршрута
+  (`Passport.currentRouteStepIndex === 0`) или операциях категории
+  `CUTTING` — точно так же, как `CutReleasePolicy`. Порядок проверок
+  внутри `issueToEmployee`: `OrderCutIssueRule → CutReleasePolicy`.
+- bulk-upsert (`POST /api/orders/:id/cut-issue-rules`) — source of
+  truth формы карточки заказа: строки, не пришедшие в payload,
+  переводятся в `isActive = false`. Полное отключение — отдельный
+  endpoint `/cut-issue-rules/disable-all`. `requiredQty` нельзя
+  опустить ниже `issuedQty` (422
+  `ORDER_CUT_ISSUE_RULE_REQUIRED_BELOW_ISSUED`) и поднять выше
+  плана по размеру (422
+  `ORDER_CUT_ISSUE_RULE_REQUIRED_ABOVE_PLAN`).
+
+### 3.9 OrderMaterialArrivalOverride
 
 Источник: `prisma/schema.prisma::OrderMaterialArrivalOverride`,
 `apps/api/src/modules/order-material-arrivals/*`,

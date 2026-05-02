@@ -19,6 +19,7 @@ import {
   resolveOrderNomenclature,
 } from '@/lib/order-nomenclature';
 import { getOrder } from '@/lib/orders-api';
+import { getOrderCutIssueRules } from '@/lib/order-cut-issue-rules-api';
 import {
   PASSPORT_STATUS_LABELS,
   listOrderPassports,
@@ -30,6 +31,7 @@ import { PatternPreviewCard } from '@/components/orders/pattern-preview-card';
 import { MaterialColorForm } from './material-color-form';
 import { OrderActions } from './order-actions';
 import { OutsourceStatusActions } from './outsource-status-actions';
+import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
 
 export const dynamic = 'force-dynamic';
 
@@ -84,6 +86,14 @@ export default async function OrderDetailPage({
   const me = await getCurrentUserOrNull();
   const role = me?.user.role;
   const isManager = role === 'ADMIN' || role === 'SHOP_MANAGER';
+  // «Очередь выдачи кроя по размерам» — отдельная карточка ниже
+  // (см. `OrderCutIssueRulesCard`). Право на редактирование совпадает
+  // с RBAC backend-эндпоинтов: `SHOP_MANAGER` / `SHOPFLOOR_MASTER` /
+  // `ADMIN`. Остальные роли видят блок read-only — нужно для
+  // диагностики «почему не выдаётся крой» прямо в карточке заказа.
+  const canManageCutIssueRules =
+    role === 'SHOP_MANAGER' || role === 'SHOPFLOOR_MASTER' || role === 'ADMIN';
+  const cutIssueRulesSummary = await getOrderCutIssueRules(params.id);
   // ADR-0018: список заявок на закрытие раскроя по этому заказу
   // менеджер видит прямо в карточке. Помощник раскройщика и admin —
   // тоже (бэкенд их пускает). Прочие роли сюда не доходят (RBAC).
@@ -198,6 +208,13 @@ export default async function OrderDetailPage({
         orderId={order.id}
         items={order.outsourceRequirements}
         canManage={isManager}
+      />
+
+      <OrderCutIssueRulesCard
+        orderId={order.id}
+        orderItems={order.items}
+        initialSummary={cutIssueRulesSummary}
+        canManage={canManageCutIssueRules}
       />
 
       {isManager && <OrderActions id={order.id} status={order.status} />}

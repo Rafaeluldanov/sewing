@@ -32,6 +32,29 @@ export type AuditEntityType =
    */
   | 'CUT_RELEASE_POLICY'
   /**
+   * Очередь выдачи кроя по размерам (см.
+   * `apps/api/src/modules/order-cut-issue-rules/*`,
+   * `prisma/schema.prisma::OrderCutIssueRule`,
+   * `docs/domain.md §«Очередь выдачи кроя»`). События:
+   *   - `ORDER_CUT_ISSUE_RULE_UPSERT` — менеджер сохранил bulk-форму
+   *     очереди (заведено/обновлено/деактивировано N строк),
+   *     `entityId = orderId`;
+   *   - `ORDER_CUT_ISSUE_RULE_DISABLED` — менеджер отключил всю
+   *     очередь по заказу (`isActive = false` для всех строк),
+   *     `entityId = orderId`;
+   *   - `ORDER_CUT_ISSUE_RULE_CONSUMED` — атомарный инкремент
+   *     `issuedQty` в той же транзакции, что и
+   *     `PassportsService.issueToEmployee`. `entityId = OrderCutIssueRule.id`,
+   *     payload содержит `passportId` / `qty` / `beforeIssued` /
+   *     `afterIssued`;
+   *   - `ORDER_CUT_ISSUE_RULE_VIOLATION_BLOCKED` — необязательное
+   *     событие (логируется при отказе issue из-за нарушения
+   *     очереди), `entityId = orderId`. На MVP пишется через
+   *     fail-soft (без `tx`) — даже если запись упадёт, бизнес-операция
+   *     не пострадает.
+   */
+  | 'ORDER_CUT_ISSUE_RULE'
+  /**
    * Карточки клиентов (управленческий справочник, см.
    * `apps/api/src/modules/clients/*`, `prisma/schema.prisma::Client`).
    * События — `CLIENT_CREATED`, `CLIENT_UPDATED`. `entityId` —

@@ -343,6 +343,7 @@ model AuditLog {
 ```
 PASSPORT | ORDER | QC | WTO | PACKING |
 MASTER_CALL | CUT_RELEASE_POLICY |
+ORDER_CUT_ISSUE_RULE |
 CLIENT | PATTERN | PATTERN_CATEGORY |
 WORKSHOP_NEED | SUPPLIER |
 PURCHASE_ORDER | PURCHASE_RECEIPT |
@@ -502,6 +503,22 @@ runtime-коде (не из комментариев/документации). 
   `PassportsService.issueToEmployee` (через
   `consumeCutReleasePolicyInTx`, `passports.service.ts:1223`) при
   активной политике выдачи кроя.
+- `ORDER_CUT_ISSUE_RULE_*` — «очередь выдачи кроя по размерам внутри
+  заказа» (`apps/api/src/modules/order-cut-issue-rules/*`,
+  `prisma/schema.prisma::OrderCutIssueRule`):
+  - `ORDER_CUT_ISSUE_RULE_UPSERT` — менеджер сохранил bulk-форму
+    карточки заказа (заведено/обновлено/деактивировано N строк),
+    `entityId = orderId`, payload содержит `rowsCount`,
+    `deactivatedCount`, список после сохранения.
+  - `ORDER_CUT_ISSUE_RULE_DISABLED` — менеджер нажал «Отключить
+    очередь» (`isActive = false` для всех строк заказа). Если
+    активных не было — событие не пишется (идемпотентность).
+  - `ORDER_CUT_ISSUE_RULE_CONSUMED` — атомарный инкремент
+    `issuedQty` в той же транзакции, что и
+    `PassportsService.issueToEmployee`. `entityId =
+    OrderCutIssueRule.id`, payload содержит `passportId` /
+    `qty` / `beforeIssued` / `afterIssued` / `sizeCode` /
+    `orderId`.
 
 ### 3.4. Чем отличается от `PassportEvent`
 
@@ -775,7 +792,8 @@ Enum-ы:
 Всё остальное. Признаки по коду:
 - свободная строка `event` — новые коды добавляются без миграции БД;
 - `entityType` — любой агрегат, включая не-паспортные (`ORDER`,
-  `PURCHASE_ORDER`, `MASTER_CALL`, `CUT_RELEASE_POLICY`, `PATTERN`,
+  `PURCHASE_ORDER`, `MASTER_CALL`, `CUT_RELEASE_POLICY`,
+  `ORDER_CUT_ISSUE_RULE`, `PATTERN`,
   `CLIENT`, …);
 - `payload` — произвольный JSON-срез, часто с
   `before`/`after`/`changedFields`;

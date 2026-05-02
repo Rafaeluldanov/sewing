@@ -10,6 +10,7 @@
 > - `prisma/schema.prisma` — модели `Passport`, `PassportEvent`,
 >   `PassportDefect`, `Box`, `BoxItem`, `OperationEntry`,
 >   `SalaryEntry`, `MasterCall`, `CutReleasePolicy`,
+>   `OrderCutIssueRule`,
 >   `CellContent`, `Cell`; enum-ы `PassportStatus`,
 >   `PassportEventType`, `EntryStatus`, `ApprovalMode`,
 >   `EarningSource`, `OperationCategory`, `PricingMode`,
@@ -301,7 +302,9 @@ null`):
   employeeId = me, qty: qtyCut })`.
 - `audit.log({ event: 'PASSPORT_ISSUED', payload: { mode:
   'FROM_CELL', fromCellId, operationId, qty } })`.
-- `consumeCutReleasePolicyInTx(...)` (см. §6.2).
+- `OrderCutIssueRulesService.consumeInTx(...)` (см. §6.2a) — ДО
+  `consumeCutReleasePolicyInTx`.
+- `consumeCutReleasePolicyInTx(...)` (см. §6.3).
 
 ### 6.2 «Route-WIP без ячейки» (`currentCellId === null`)
 
@@ -317,7 +320,9 @@ null`):
   ISSUED_TO_EMPLOYEE, cellId: null, operationId =
   session.operationId, employeeId, qty: qtyCut })` +
   `audit.log({ event: 'PASSPORT_ISSUED', payload: { mode:
-  'ROUTE_WIP', operationId, qty } })`.
+  'ROUTE_WIP', operationId, qty } })` +
+  `OrderCutIssueRulesService.consumeInTx(...)` (см. §6.2a) +
+  `consumeCutReleasePolicyInTx(...)` (см. §6.3).
 
 Если у заказа маршрута нет (`currentRouteStepIndex === null`)
 И `currentCellId === null`:
@@ -325,6 +330,50 @@ null`):
 - Если `currentEmployeeId !== null` → `PassportAlreadyIssuedException`.
 - Иначе → `PassportNotInCellException` (старое поведение
   «нужно сначала разместить в ячейке»).
+
+<a id="order-cut-issue-rules"></a>
+### 6.2a Очередь выдачи кроя (применение)
+
+Источник: `OrderCutIssueRulesService.evaluateForIssue` /
+`consumeInTx` (`apps/api/src/modules/order-cut-issue-rules/order-cut-issue-rules.service.ts`).
+См. также `docs/domain.md §1.7a`, `docs/order-flow.md §10.1a`.
+
+«Получить крой» дополнительно проверяется поразмерной очередью
+заказа (`OrderCutIssueRule`, `@@unique [orderId, sizeId]`).
+Применяется на тех же условиях, что и `CutReleasePolicy`:
+ПЕРВАЯ операция маршрута (`currentRouteStepIndex === 0`) или
+операция категории `CUTTING`. Порядок проверок внутри
+`issueToEmployee`: **`OrderCutIssueRule → CutReleasePolicy`** —
+если очередь блокирует, до глобальной политики проверка не
+доходит.
+
+- Если у заказа нет ни одной активной строки очереди
+  (`isActive = true`) — выдача проходит как обычно.
+- Если все активные строки уже выполнены
+  (`issuedQty >= requiredQty` для каждой) — выдача проходит как
+  обычно. Очередь «гаснет сама», ручного отключения не нужно.
+- Если есть незавершённые активные строки и `Passport.sizeId` не
+  среди них → `OrderCutIssueRuleViolationException` (409
+  `ORDER_CUT_ISSUE_RULE_VIOLATION`) с сообщением «Сначала нужно
+  выдать: S — осталось 20 шт, M — осталось 10 шт, …» (см.
+  `formatOrderCutIssueRuleViolationMessage` в `@sewing/shared`).
+- Если размер совпал, но `qtyCut > requiredQty - issuedQty` для
+  его строки — та же ошибка с тем же текстом.
+- При успешной выдаче `OrderCutIssueRulesService.consumeInTx`
+  атомарно инкрементит `OrderCutIssueRule.issuedQty` через
+  conditional `updateMany({ where: { id, isActive: true,
+  issuedQty: { lte: requiredQty − qtyCut } } })` — это снимает
+  race с другой одновременной выдачей и с
+  `disable-all`. Если 0 строк затронуто — VIOLATION с актуальным
+  сообщением (без записи issue).
+- Audit `ORDER_CUT_ISSUE_RULE_CONSUMED` (`entityId =
+  OrderCutIssueRule.id`, payload `{ orderId, passportId, sizeCode,
+  qty, beforeIssued, afterIssued }`) пишется в той же транзакции.
+
+Само движение паспорта по маршруту (`scan` /
+`complete-operation`), `MasterActionsService` и
+`PassportsService.create` очередью НЕ проверяются — ограничение
+действует только на «получить крой».
 
 <a id="cut-release-policy"></a>
 ### 6.3 Cut release policy (применение)

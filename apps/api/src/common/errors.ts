@@ -1478,6 +1478,106 @@ export class CutReleasePolicyViolationException extends BusinessException {
 }
 
 // ---------------------------------------------------------------------------
+// Order cut issue rules (Очередь выдачи кроя по размерам, см.
+// `apps/api/src/modules/order-cut-issue-rules/*`,
+// `apps/api/src/modules/passports/passports.service.ts`,
+// `prisma/schema.prisma::OrderCutIssueRule`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Активная очередь выдачи кроя (`OrderCutIssueRule`) по заказу не
+ * разрешает выдать паспорт этого размера сейчас. Срабатывает в
+ * `PassportsService.issueToEmployee` ТОЛЬКО для первой операции
+ * маршрута (`currentRouteStepIndex === 0`) или операций категории
+ * `CUTTING` — точно так же, как `CutReleasePolicy`. Дальнейшее
+ * движение паспорта по маршруту (`scan` / `complete-operation`) НЕ
+ * блокируется.
+ *
+ * Сообщение формируется сервисом динамически из активных
+ * незавершённых строк очереди (см.
+ * `formatOrderCutIssueRuleViolationMessage`) — UI показывает его
+ * «как есть», без префикса `[CODE] ` (см.
+ * `apps/web/app/work/actions.ts::RAW_API_ERROR_CODES`).
+ */
+export class OrderCutIssueRuleViolationException extends BusinessException {
+  constructor(message: string) {
+    super('ORDER_CUT_ISSUE_RULE_VIOLATION', message, HttpStatus.CONFLICT);
+  }
+}
+
+/**
+ * Запрошенная строка очереди выдачи кроя не существует (или была
+ * удалена параллельным процессом). Используется одиночными PATCH/
+ * DELETE-эндпоинтами по конкретному `ruleId` — на MVP их пока нет,
+ * но класс готов: bulk-upsert и disable-all без отдельного 404 не
+ * обходятся.
+ */
+export class OrderCutIssueRuleNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_CUT_ISSUE_RULE_NOT_FOUND',
+      'Строка очереди выдачи кроя не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * В bulk-upsert менеджер указал `sizeId`, которого нет в строках
+ * `OrderItem` этого заказа. Пускать такой ввод нельзя: правило
+ * было бы заведомо «бесполезным» (паспортов этого размера в заказе
+ * не появится), а UI этим прикрылся бы.
+ */
+export class OrderCutIssueRuleSizeNotInOrderException extends BusinessException {
+  constructor(sizeCode?: string) {
+    super(
+      'ORDER_CUT_ISSUE_RULE_SIZE_NOT_IN_ORDER',
+      sizeCode
+        ? `Размер ${sizeCode} не входит в данный заказ — добавить его в очередь нельзя.`
+        : 'Указанный размер не входит в данный заказ — добавить его в очередь нельзя.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * В bulk-upsert менеджер пытается уменьшить `requiredQty` ниже
+ * уже накопленного `issuedQty`. Это сломало бы инвариант
+ * `issuedQty <= requiredQty`, который держит и UI-прогресс, и
+ * атомарный consume в `consumeInTx`. Вместо тихого «обрежем до
+ * `issuedQty`» бросаем 422 — пусть менеджер сознательно решит,
+ * деактивировать ли строку или поднять `requiredQty`.
+ */
+export class OrderCutIssueRuleRequiredBelowIssuedException extends BusinessException {
+  constructor(sizeCode?: string) {
+    super(
+      'ORDER_CUT_ISSUE_RULE_REQUIRED_BELOW_ISSUED',
+      sizeCode
+        ? `Нельзя уменьшить «нужно» ниже уже выданного количества по размеру ${sizeCode}.`
+        : 'Нельзя уменьшить «нужно» ниже уже выданного количества по этой строке.',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * `requiredQty` строки превышает плановое количество (`OrderItem.qtyPlan`)
+ * по этому размеру. Пускать такой ввод нельзя: очередь блокирует
+ * выдачу до выполнения, а выполнить «больше плана» физически
+ * невозможно (паспортов столько просто не выпустят), и заказ
+ * застрянет.
+ */
+export class OrderCutIssueRuleRequiredAbovePlanException extends BusinessException {
+  constructor(sizeCode: string, qtyPlan: number) {
+    super(
+      'ORDER_CUT_ISSUE_RULE_REQUIRED_ABOVE_PLAN',
+      `Нельзя поставить в очередь больше, чем план по размеру ${sizeCode} (план ${qtyPlan} шт).`,
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Patterns (Лекала, MVP-1, см. `apps/api/src/modules/patterns/*`,
 // `prisma/schema.prisma::PatternItem`).
 // ---------------------------------------------------------------------------

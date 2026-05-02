@@ -369,6 +369,14 @@ model Size {
   /// rates / OperationEntry) этой связи не использует — это отдельный
   /// плановый контур (см. `docs/operation-time-norms-recon.md §10`).
   operationTimeNormsBySize OperationTimeNormBySize[]
+  /// Этап «Очередь выдачи кроя по размерам» (см.
+  /// `prisma/schema.prisma::OrderCutIssueRule`,
+  /// `docs/domain.md §«Очередь выдачи кроя»`). Обратная связь от строк
+  /// очереди — менеджер ссылается на конкретный размер из справочника.
+  /// `onDelete: Restrict` со стороны `OrderCutIssueRule.size` защищает
+  /// от случайного удаления размера, на который завязана активная
+  /// очередь.
+  cutIssueRules OrderCutIssueRule[]
 }
 
 model Product {
@@ -1013,6 +1021,26 @@ model Order {
   ///     не требует миграции схемы.
   operationPlanWarnings     Json?
 
+  /// Этап «Очередь выдачи кроя по размерам» (см.
+  /// `apps/api/src/modules/order-cut-issue-rules/*`,
+  /// `prisma/schema.prisma::OrderCutIssueRule`,
+  /// `docs/domain.md §«Очередь выдачи кроя»`).
+  ///
+  /// Менеджер заказа может задать «первую очередь выдачи кроя по
+  /// размерам» (`S — 70 шт`, `M — 50 шт`, `4XL — 100 шт`). Пока хотя
+  /// бы одна строка очереди не выполнена (`issuedQty < requiredQty`),
+  /// `PassportsService.issueToEmployee` пускает только паспорта тех
+  /// размеров, по которым ещё есть «недовыданный» остаток. Остальные
+  /// размеры блокируются `OrderCutIssueRuleViolationException` (409
+  /// `ORDER_CUT_ISSUE_RULE_VIOLATION`). После того как все строки
+  /// выполнены, проверка отключается, выдача снова свободная.
+  ///
+  /// Контур независим от `CutReleasePolicy` (см. ниже): порядок
+  /// проверок в `issueToEmployee` — `OrderCutIssueRule` →
+  /// `CutReleasePolicy`. Cascade удаление от заказа — без заказа
+  /// очередь смысла не имеет.
+  cutIssueRules OrderCutIssueRule[]
+
   @@index([status])
   @@index([orderDate])
   @@index([createdAt])
@@ -1060,6 +1088,86 @@ model OrderItem {
 
   @@unique([orderId, productId, sizeId])
   @@index([productId, sizeId])
+}
+
+/// Этап «Очередь выдачи кроя по размерам» (см.
+/// `apps/api/src/modules/order-cut-issue-rules/*`,
+/// `docs/domain.md §«Очередь выдачи кроя»`,
+/// `docs/order-flow.md §«Очередь выдачи кроя»`).
+///
+/// Менеджер заказа задаёт «первую очередь выдачи кроя по размерам» —
+/// сколько штук какого размера должно быть выдано в первую очередь
+/// (`requiredQty`). Бэкенд materializes счётчик `issuedQty` (атомарный
+/// инкремент в той же транзакции, что и `PassportsService.issueToEmployee`),
+/// и пока хотя бы одна активная строка очереди не выполнена
+/// (`issuedQty < requiredQty`), выдача паспортов «не очередных»
+/// размеров блокируется адресной 409-кой
+/// `ORDER_CUT_ISSUE_RULE_VIOLATION`.
+///
+/// Дизайн (см. ТЗ «Очередь выдачи кроя»):
+///   - правило применяется ТОЛЬКО на первой операции маршрута
+///     (`Passport.currentRouteStepIndex === 0`) или операциях
+///     категории `CUTTING` — точно так же, как `CutReleasePolicy`;
+///   - порядок проверок в `issueToEmployee`:
+///     `OrderCutIssueRule` → `CutReleasePolicy`. Если очередь
+///     блокирует выдачу, до политики проверка не доходит;
+///   - `isActive = false` означает «правило выключено»: счётчики
+///     остаются для аудита, но никаких проверок выдачи не
+///     происходит. Деактивация не сбрасывает `issuedQty` (см. ТЗ
+///     §«Ограничения / не делать reset counters в MVP»);
+///   - bulk save = source of truth формы: строки, не пришедшие в
+///     bulk-payload, переводятся в `isActive = false`. Полное
+///     отключение очереди — `POST /api/orders/:id/cut-issue-rules/disable-all`
+///     (атомарно `isActive = false` для всех строк заказа).
+///   - НЕ дублируем `CutReleasePolicy`: тот контур — глобальный
+///     управленческий стоп, а это — порядок выдачи внутри одного
+///     заказа.
+///
+/// Уникальность `(orderId, sizeId)` гарантирована БД: на одну пару
+/// «заказ × размер» не может быть две конкурирующих строки. Это
+/// упрощает атомарный consume через conditional `updateMany`
+/// (`OrderCutIssueRulesService.consumeInTx`).
+model OrderCutIssueRule {
+  id          String   @id @default(cuid())
+  orderId     String
+  sizeId      String
+  /// Сколько штук этого размера должно быть выдано в первую очередь.
+  /// Валидация на сервисе: `requiredQty > 0`, `requiredQty <= qtyPlan`
+  /// (по соответствующей строке `OrderItem`), `requiredQty >= issuedQty`
+  /// при апдейте уже существующей строки (нельзя «откусить» уже
+  /// выданный объём).
+  requiredQty Int
+  /// Materialized счётчик «уже выдано в рамках этой строки».
+  /// Инкрементится атомарно в `OrderCutIssueRulesService.consumeInTx`
+  /// через conditional `updateMany` (защита от race): инкремент
+  /// срабатывает только если `isActive = true` и
+  /// `issuedQty + qty <= requiredQty`. Не сбрасывается при
+  /// деактивации (см. ТЗ §«не делать reset counters в MVP»).
+  issuedQty   Int      @default(0)
+  /// Управляемый менеджером порядок строк в UI и сообщении
+  /// блокировки. Бэкенд сортирует строки по
+  /// `(sortOrder ASC, Size.sortOrder ASC, Size.code ASC)` — последние
+  /// два уровня обеспечивают стабильный порядок при равных
+  /// `sortOrder` (или при дефолтных нулях).
+  sortOrder   Int      @default(0)
+  /// Активность строки. `false` = «правило выключено» (см. описание
+  /// модели). Подсчёт `unfinished rows` в сервисе игнорирует
+  /// неактивные строки.
+  isActive    Boolean  @default(true)
+  /// Кто завёл/обновил строку (менеджер / мастер цеха / админ). Без
+  /// FK по тем же причинам, что и `CutReleasePolicy.createdById` —
+  /// учётка может быть деактивирована, а строка очереди должна жить
+  /// дальше для аудита.
+  createdById String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  size  Size  @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+
+  @@unique([orderId, sizeId])
+  @@index([orderId, isActive])
+  @@index([sizeId])
 }
 
 // =========================

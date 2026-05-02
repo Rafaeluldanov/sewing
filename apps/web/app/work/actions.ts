@@ -26,8 +26,17 @@ import type { PassportLookupResponse, WorkFormState } from './state';
  * лимит 100 шт.», которую ТЗ требует показать рабочему ровно как
  * inline-message — без code-префикса, без «обратитесь к мастеру»,
  * без alert-обёрток (см. также `seamstress-active-panel.tsx`).
+ *
+ * «Очередь выдачи кроя» (`ORDER_CUT_ISSUE_RULE_VIOLATION`):
+ * backend формирует строку вида «Сначала нужно выдать: S — осталось
+ * 20 шт, M — осталось 10 шт, 4XL — осталось 50 шт». UI показывает
+ * её inline-сообщением — без code-префикса (см. помощник
+ * `formatOrderCutIssueRuleViolationMessage` в `@sewing/shared`).
  */
-const RAW_API_ERROR_CODES = new Set(['CUT_RELEASE_POLICY_VIOLATION']);
+const RAW_API_ERROR_CODES = new Set([
+  'CUT_RELEASE_POLICY_VIOLATION',
+  'ORDER_CUT_ISSUE_RULE_VIOLATION',
+]);
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {

@@ -78,6 +78,7 @@
 - [19. Purchase orders](#19-purchase-orders)
 - [20. Purchase receipts](#20-purchase-receipts)
 - [21. Cut release policy](#21-cut-release-policy)
+- [21a. Order cut issue rules](#21a-order-cut-issue-rules)
 - [22. Master calls](#22-master-calls)
 - [23. Master actions](#23-master-actions)
 - [24. Passports](#24-passports)
@@ -547,6 +548,36 @@ DTO: `packages/shared/src/purchase-receipts.ts`.
 
 DTO: `@sewing/shared` (`CreateCutReleasePolicySchema`,
 `UpdateCutReleasePolicySchema`, `CutReleasePolicyDto`).
+
+---
+
+<a id="21a-order-cut-issue-rules"></a>
+## 21a. Order cut issue rules
+
+Источник:
+`order-cut-issue-rules/order-cut-issue-rules.controller.ts`. На уровне
+класса `@Roles` намеренно не задан: GET доступен любой авторизованной
+роли (нужно швеям/закройщикам для диагностики «почему не выдаётся
+крой»), а write-эндпоинты закрыты явным `@Roles` на методе.
+
+| Метод | Путь                                                 | RBAC                                  | Описание |
+| ----- | ---------------------------------------------------- | ------------------------------------- | -------- |
+| GET   | `/api/orders/:id/cut-issue-rules`                    | Any auth                              | `OrderCutIssueRulesSummaryDto` — `status` (`OFF` / `IN_PROGRESS` / `DONE`) + список строк (см. `@sewing/shared/order-cut-issue-rules`). 404 `ORDER_NOT_FOUND`, если заказ не существует. |
+| POST  | `/api/orders/:id/cut-issue-rules`                    | SHOP_MANAGER, SHOPFLOOR_MASTER (+ ADMIN) | Body `BulkUpsertOrderCutIssueRulesDto` (`{ rows: [{ sizeId, requiredQty, sortOrder? }] }`). Bulk = source of truth формы карточки заказа: строки, не пришедшие в payload, переводятся в `isActive = false`. 400 `ORDER_CUT_ISSUE_RULE_SIZE_NOT_IN_ORDER`, 422 `ORDER_CUT_ISSUE_RULE_REQUIRED_BELOW_ISSUED`, 422 `ORDER_CUT_ISSUE_RULE_REQUIRED_ABOVE_PLAN`. Audit `ORDER_CUT_ISSUE_RULE_UPSERT`. |
+| POST  | `/api/orders/:id/cut-issue-rules/disable-all`        | SHOP_MANAGER, SHOPFLOOR_MASTER (+ ADMIN) | Полностью отключить очередь по заказу (`isActive = false` для всех строк). Идемпотентно: если активных не было, audit-событие не пишется. Audit `ORDER_CUT_ISSUE_RULE_DISABLED`. |
+
+Связанная ошибка `PassportsService.issueToEmployee`: 409
+`ORDER_CUT_ISSUE_RULE_VIOLATION` (текст собирается
+`formatOrderCutIssueRuleViolationMessage` из `@sewing/shared`,
+показывается швее inline без префикса `[CODE] ` —
+см. `apps/web/app/work/actions.ts::RAW_API_ERROR_CODES`). Проверка
+применяется только на ПЕРВОЙ операции маршрута / категории `CUTTING`,
+ДО `CutReleasePolicy`.
+
+DTO: `@sewing/shared` (`BulkUpsertOrderCutIssueRulesSchema`,
+`DisableOrderCutIssueRulesSchema`, `OrderCutIssueRuleDto`,
+`OrderCutIssueRulesSummaryDto`,
+`formatOrderCutIssueRuleViolationMessage`).
 
 ---
 

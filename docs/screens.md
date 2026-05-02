@@ -1005,6 +1005,29 @@ select, никаких inline-edit полей, никакого vendor-edit):
 Решает мастер на карточке паспорта (см. §7.6). Баннер на `/orders/:id`
 нужен, чтобы менеджер не искал заявки вручную.
 
+**Блок «Очередь выдачи кроя» (`OrderCutIssueRule`).** Карточка живёт
+прямо в `/orders/:id` (legacy) и во вкладке `?tab=plan` admin-карточки
+`/admin/orders/:id`. Источник — `OrderCutIssueRulesCard`
+(`apps/web/components/orders/order-cut-issue-rules-card.tsx`),
+данные — `GET /api/orders/:id/cut-issue-rules`. Сверху —
+status-badge (`Выключена` / `Активна` / `Выполнена`) и пояснение
+«Пока очередь активна, швея может получить только паспорта размеров
+из списка». Дальше — таблица строк
+`Размер | Нужно | Выдано | Осталось | Прогресс | Активна` (с
+inline progress-bar по `progressPct`).
+
+Менеджерская тройка (`SHOP_MANAGER` / `SHOPFLOOR_MASTER` /
+`ADMIN`) видит редактируемую форму ниже: select «добавить размер»
+(только из `OrderItem.size` заказа), inline `requiredQty` с
+валидациями «не больше плана» / «не ниже уже выданного», кнопки
+«Сохранить очередь» и «Отключить очередь». Остальные авторизованные
+роли видят блок read-only — нужно цеху для диагностики «почему
+сейчас не выдаётся крой». Сообщение для швеи на `/work` приходит из
+backend без UI-префикса (см.
+`apps/web/app/work/actions.ts::RAW_API_ERROR_CODES`,
+`ORDER_CUT_ISSUE_RULE_VIOLATION`): «Сначала нужно выдать: S —
+осталось 20 шт, M — осталось 10 шт, 4XL — осталось 50 шт».
+
 ### 7.5. `/orders/:id/passports/new` — выпуск паспорта (Шаг 5)
 
 Доступна, если `order.status = IN_PRODUCTION` (иначе показываем баннер

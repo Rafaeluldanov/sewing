@@ -37,6 +37,7 @@ export * from './display-screens';
 export * from './master-calls';
 export * from './master-actions';
 export * from './cut-release-policy';
+export * from './order-cut-issue-rules';
 export * from './order-deadlines';
 export * from './material-roles';
 export * from './patterns';

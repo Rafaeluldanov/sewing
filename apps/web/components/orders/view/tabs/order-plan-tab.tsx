@@ -38,6 +38,7 @@ import type {
   OrderMaterialRequirementDto,
   OrderRouteStepDto,
 } from '@sewing/shared/orders';
+import type { OrderCutIssueRulesSummaryDto } from '@sewing/shared';
 import {
   TECH_CARD_MATERIAL_COLOR_RULE_LABELS,
   getTechCardMaterialRoleLabel,
@@ -59,6 +60,7 @@ import {
   AdminStatusBadge,
 } from '@/components/admin';
 import { MaterialColorForm } from '@/components/orders/materials/material-color-form';
+import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
 import { formatDateRu } from '@/lib/date-format';
 import {
   ORDER_NOMENCLATURE_SOURCE_BADGE,
@@ -68,9 +70,30 @@ import { PatternPreviewCard } from '@/components/orders/pattern-preview-card';
 
 interface Props {
   order: OrderDetailDto;
+  /**
+   * Sводка «Очередь выдачи кроя по размерам» (см.
+   * `apps/web/components/orders/order-cut-issue-rules-card.tsx`,
+   * `apps/api/src/modules/order-cut-issue-rules/*`,
+   * `docs/order-flow.md §«Очередь выдачи кроя»`). Получаем готовой
+   * из admin-page (`/admin/orders/[id]?tab=plan`), чтобы не делать
+   * дополнительный запрос внутри tab-компонента.
+   */
+  cutIssueRulesSummary: OrderCutIssueRulesSummaryDto;
+  /**
+   * `true` для `SHOP_MANAGER` / `SHOPFLOOR_MASTER` / `ADMIN` (см.
+   * RBAC backend-эндпоинтов). На admin-карточке layout уже пускает
+   * только менеджерскую тройку, поэтому фактически всегда `true`,
+   * но проп оставлен явным, чтобы tab-компонент не привязывался к
+   * особенностям layout-а.
+   */
+  canManageCutIssueRules: boolean;
 }
 
-export function OrderPlanTab({ order }: Props) {
+export function OrderPlanTab({
+  order,
+  cutIssueRulesSummary,
+  canManageCutIssueRules,
+}: Props) {
   const nomenclature = resolveOrderNomenclature(order);
   const isStarted =
     order.status === 'IN_PRODUCTION' ||
@@ -225,6 +248,13 @@ export function OrderPlanTab({ order }: Props) {
           </AdminCard>
 
           <OrderMaterialColorsCard order={order} />
+
+          <OrderCutIssueRulesCard
+            orderId={order.id}
+            orderItems={order.items}
+            initialSummary={cutIssueRulesSummary}
+            canManage={canManageCutIssueRules}
+          />
         </div>
 
         <div className="order-plan-tab__col-aside">

@@ -12,7 +12,7 @@
 >   `OrderOutsourceRequirement`, `OrderApplication`,
 >   `OrderCostEstimate`, `OrderCostEstimateLine`,
 >   `OrderMaterialArrivalOverride`, `WorkshopNeed`,
->   `CutReleasePolicy`; enum `OrderStatus`,
+>   `CutReleasePolicy`, `OrderCutIssueRule`; enum `OrderStatus`,
 >   `OrderOutsourceExecutionStatus`, `OutsourceTriggerType`,
 >   `CuttingClosureRequestStatus`.
 > - `apps/api/src/modules/orders/**`
@@ -866,6 +866,48 @@ Audit-events: `CUT_RELEASE_POLICY_CREATED` /
 
 Применение в production-flow — см. `docs/production-flow.md`
 секция «Issue to employee».
+
+### 10.1a Очередь выдачи кроя по размерам (`OrderCutIssueRule`)
+
+Источник: `prisma/schema.prisma::model OrderCutIssueRule`,
+`apps/api/src/modules/order-cut-issue-rules/*`,
+`docs/domain.md §1.7a`, `docs/erd.md §3.8`,
+`docs/production-flow.md §«Issue: очередь выдачи кроя»`.
+
+Менеджерская задача в карточке заказа: «первая очередь выдачи кроя
+по размерам». Например, S — 70 шт, M — 50 шт, 4XL — 100 шт. Пока
+очередь не выполнена, швея может получить только паспорта
+разрешённых размеров (остальные блокируются на
+`POST /api/passports/:id/issue` с 409
+`ORDER_CUT_ISSUE_RULE_VIOLATION` и человекочитаемым сообщением
+«Сначала нужно выдать: …»). После выполнения всех активных строк
+выдача остальных размеров становится свободной автоматически —
+правило гасит само себя по `issuedQty`.
+
+UI-блок «Очередь выдачи кроя» живёт в карточке заказа
+(`apps/web/app/orders/[id]/page.tsx`,
+`apps/web/components/orders/order-cut-issue-rules-card.tsx`) и в
+admin-варианте (`/admin/orders/[id]?tab=plan`). RBAC:
+`SHOP_MANAGER` / `SHOPFLOOR_MASTER` / `ADMIN` — read-write,
+остальным авторизованным ролям — read-only (нужно цеху для
+диагностики).
+
+Эндпоинты:
+
+- `GET  /api/orders/:id/cut-issue-rules` — `OrderCutIssueRulesSummaryDto`
+  (статус `OFF` / `IN_PROGRESS` / `DONE` + список строк). Доступно
+  любой авторизованной роли.
+- `POST /api/orders/:id/cut-issue-rules` — bulk-upsert формы; не
+  пришедшие строки переводятся в `isActive = false`. RBAC
+  `SHOP_MANAGER` / `SHOPFLOOR_MASTER` (+ `ADMIN`). Audit
+  `ORDER_CUT_ISSUE_RULE_UPSERT`.
+- `POST /api/orders/:id/cut-issue-rules/disable-all` — отключить
+  очередь целиком. Идемпотентно. Audit
+  `ORDER_CUT_ISSUE_RULE_DISABLED`.
+
+Применение в production-flow и порядок проверок относительно
+`CutReleasePolicy` — см. `docs/production-flow.md §«Issue: очередь
+выдачи кроя»`.
 
 ### 10.2 Cutting closure requests (ADR-0018)
 

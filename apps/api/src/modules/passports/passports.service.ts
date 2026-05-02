@@ -47,6 +47,7 @@ import { EarningsService } from '../earnings/earnings.service.js';
 import { CuttingClosureService } from '../cutting-closure/cutting-closure.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { CutReleasePolicyService } from '../cut-release-policy/cut-release-policy.service.js';
+import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-issue-rules.service.js';
 
 type PassportRow = Prisma.PassportGetPayload<{
   include: {
@@ -83,6 +84,7 @@ export class PassportsService {
     private readonly closure: CuttingClosureService,
     private readonly audit: AuditService,
     private readonly cutReleasePolicy: CutReleasePolicyService,
+    private readonly orderCutIssueRules: OrderCutIssueRulesService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -486,6 +488,26 @@ export class PassportsService {
     });
     if (!session) throw new ShiftSessionRequiredException();
 
+    // «Очередь выдачи кроя по размерам» — pre-check ДО глобальной
+    // `CutReleasePolicy`. Семантика та же, что у Stage 3: проверка
+    // действует только на ПЕРВОЙ операции маршрута / категории
+    // `CUTTING`. Если правило применимо и паспорт «не очередного»
+    // размера (или штук больше остатка) — здесь же кидаем
+    // `OrderCutIssueRuleViolationException` (HTTP 409), не открывая
+    // транзакцию. См. `OrderCutIssueRulesService.evaluateForIssue`,
+    // `docs/domain.md §«Очередь выдачи кроя»`,
+    // `docs/production-flow.md §«Issue: очередь выдачи кроя»`.
+    const cutIssueRuleEnforcement =
+      await this.orderCutIssueRules.evaluateForIssue(
+        {
+          orderId: passport.orderId,
+          sizeId: passport.sizeId,
+          qtyCut: passport.qtyCut,
+          currentRouteStepIndex: passport.currentRouteStepIndex,
+        },
+        session.operation.category,
+      );
+
     // Stage 3 «Мастер цеха» — политика выдачи кроя. Сравниваем
     // снимок паспорта с активной политикой ДО открытия транзакции,
     // чтобы при reject не плодить пустые audit-записи. Сама конкуренция
@@ -561,6 +583,16 @@ export class PassportsService {
             },
           },
           tx,
+        );
+        await this.orderCutIssueRules.consumeInTx(
+          tx,
+          cutIssueRuleEnforcement,
+          {
+            passportId: passport.id,
+            orderId: passport.orderId,
+            employeeId,
+            qty: passport.qtyCut,
+          },
         );
         await this.consumeCutReleasePolicyInTx(tx, policyEnforcement, {
           passportId: passport.id,
@@ -642,6 +674,16 @@ export class PassportsService {
           },
         },
         tx,
+      );
+      await this.orderCutIssueRules.consumeInTx(
+        tx,
+        cutIssueRuleEnforcement,
+        {
+          passportId: passport.id,
+          orderId: passport.orderId,
+          employeeId,
+          qty: passport.qtyCut,
+        },
       );
       await this.consumeCutReleasePolicyInTx(tx, policyEnforcement, {
         passportId: passport.id,

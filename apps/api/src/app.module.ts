@@ -30,6 +30,7 @@ import { DiagnosticsModule } from './modules/diagnostics/diagnostics.module.js';
 import { MasterCallsModule } from './modules/master-calls/master-calls.module.js';
 import { MasterActionsModule } from './modules/master-actions/master-actions.module.js';
 import { CutReleasePolicyModule } from './modules/cut-release-policy/cut-release-policy.module.js';
+import { OrderCutIssueRulesModule } from './modules/order-cut-issue-rules/order-cut-issue-rules.module.js';
 import { ClientsModule } from './modules/clients/clients.module.js';
 import { CompanySettingsModule } from './modules/company-settings/company-settings.module.js';
 import { PatternsModule } from './modules/patterns/patterns.module.js';
@@ -76,6 +77,7 @@ import { SizesModule } from './modules/sizes/sizes.module.js';
     MasterCallsModule,
     MasterActionsModule,
     CutReleasePolicyModule,
+    OrderCutIssueRulesModule,
     ClientsModule,
     CompanySettingsModule,
     PatternsModule,

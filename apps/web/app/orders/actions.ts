@@ -20,6 +20,11 @@ import {
   OrderApplicationInputSchema,
   type OrderApplicationInput,
 } from '@sewing/shared/order-applications';
+import {
+  BulkUpsertOrderCutIssueRulesSchema,
+  type BulkUpsertOrderCutIssueRulesDto,
+  type OrderCutIssueRulesSummaryDto,
+} from '@sewing/shared';
 import { ApiRequestError } from '@/lib/api';
 import {
   cancelOrder,
@@ -34,6 +39,10 @@ import {
   updateOrderMaterialRequirementColor,
   updateOrderOutsourceRequirementStatus,
 } from '@/lib/orders-api';
+import {
+  disableOrderCutIssueRules,
+  saveOrderCutIssueRules,
+} from '@/lib/order-cut-issue-rules-api';
 
 export interface FormActionState {
   error?: string;
@@ -660,6 +669,89 @@ export async function updateOrderMaterialRequirementColorAction(
   revalidatePath(`/orders/${orderId}`);
   revalidatePath(`/admin/orders/${orderId}`);
   return { ok: true };
+}
+
+// ---------------------------------------------------------------------------
+// «Очередь выдачи кроя по размерам» (см.
+// `apps/api/src/modules/order-cut-issue-rules/*`,
+// `apps/web/components/orders/order-cut-issue-rules-card.tsx`,
+// `docs/order-flow.md §«Очередь выдачи кроя»`).
+// ---------------------------------------------------------------------------
+
+export interface OrderCutIssueRulesActionState extends FormActionState {
+  ok?: boolean;
+  summary?: OrderCutIssueRulesSummaryDto;
+}
+
+/**
+ * Bulk-сохранение формы очереди выдачи кроя из карточки заказа.
+ *
+ * FormData-контракт намеренно компактный (форма «список строк»):
+ *   - `rows` — JSON-массив `{ sizeId, requiredQty, sortOrder? }`.
+ *
+ * Это упрощает client-side: один hidden input + динамический ввод —
+ * проще, чем парсить десятки полей `requiredQty[<sizeId>]`. Парсим в
+ * action, отдельно валидируем `BulkUpsertOrderCutIssueRulesSchema`,
+ * чтобы не доверять JSON из формы. После успеха ревалидируем legacy
+ * `/orders/[id]` и admin `/admin/orders/[id]` — карточка живёт в обоих.
+ */
+export async function saveOrderCutIssueRulesAction(
+  orderId: string,
+  _prev: OrderCutIssueRulesActionState,
+  form: FormData,
+): Promise<OrderCutIssueRulesActionState> {
+  const raw = form.get('rows');
+  if (typeof raw !== 'string' || raw.trim() === '') {
+    return { error: 'Список строк очереди не передан.' };
+  }
+  let parsedJson: unknown;
+  try {
+    parsedJson = JSON.parse(raw);
+  } catch {
+    return { error: 'Не удалось разобрать список строк очереди.' };
+  }
+  const dto: BulkUpsertOrderCutIssueRulesDto = { rows: [] };
+  if (Array.isArray(parsedJson)) {
+    dto.rows = parsedJson as BulkUpsertOrderCutIssueRulesDto['rows'];
+  } else {
+    return { error: 'Список строк должен быть массивом.' };
+  }
+  const parsed = BulkUpsertOrderCutIssueRulesSchema.safeParse(dto);
+  if (!parsed.success) {
+    return {
+      error:
+        parsed.error.issues[0]?.message ?? 'Невалидные данные очереди.',
+    };
+  }
+  let summary: OrderCutIssueRulesSummaryDto;
+  try {
+    summary = await saveOrderCutIssueRules(orderId, parsed.data);
+  } catch (e) {
+    return { error: explainApiError(e) };
+  }
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/admin/orders/${orderId}`);
+  return { ok: true, summary };
+}
+
+/**
+ * Полностью отключить очередь выдачи кроя по заказу
+ * («Снять ограничение по размерам»). Идемпотентно.
+ */
+export async function disableOrderCutIssueRulesAction(
+  orderId: string,
+  _prev: OrderCutIssueRulesActionState,
+  _form: FormData,
+): Promise<OrderCutIssueRulesActionState> {
+  let summary: OrderCutIssueRulesSummaryDto;
+  try {
+    summary = await disableOrderCutIssueRules(orderId);
+  } catch (e) {
+    return { error: explainApiError(e) };
+  }
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/admin/orders/${orderId}`);
+  return { ok: true, summary };
 }
 
 function isNextRedirect(e: unknown): boolean {
