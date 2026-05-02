@@ -78,7 +78,7 @@ export function cancelPayrollPayout(
 
 export function acknowledgePayrollPayout(id: string): Promise<PayrollPayoutDto> {
   return apiFetch<PayrollPayoutDto>(
-    `/payroll-payouts/${encodeURIComponent(id)}/acknowledge`,
+    `/payroll/payouts/${encodeURIComponent(id)}/ack`,
     { method: 'POST', body: {} },
   );
 }

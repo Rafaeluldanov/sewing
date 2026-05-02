@@ -45,9 +45,9 @@ describe('payroll-payouts-api.ts — acknowledge функция', () => {
     expect(src).toMatch(/export\s+function\s+acknowledgePayrollPayout\b/);
   });
 
-  test('acknowledgePayrollPayout вызывает эндпоинт /acknowledge', () => {
+  test('acknowledgePayrollPayout вызывает эндпоинт /payroll/payouts/:id/ack', () => {
     const src = readSrc('apps/web/lib/payroll-payouts-api.ts');
-    expect(src).toMatch(/\/acknowledge/);
+    expect(src).toMatch(/\/payroll\/payouts\/.*\/ack/);
   });
 
   test('по-прежнему экспортирует все прежние 6 функций', () => {

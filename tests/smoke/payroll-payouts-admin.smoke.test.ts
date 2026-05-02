@@ -64,10 +64,10 @@ describe('payroll-payouts-api.ts — клиент', () => {
     expect(src).toMatch(/export\s+function\s+cancelPayrollPayout\b/);
   });
 
-  test('НЕ содержит ack-эндпоинт (это действие сотрудника)', () => {
+  test('ack-эндпоинт присутствует только как acknowledgePayrollPayout (действие сотрудника, STEP 5)', () => {
     const src = readSrc('apps/web/lib/payroll-payouts-api.ts');
-    expect(src).not.toMatch(/ackPayrollPayout/);
-    expect(src).not.toMatch(/\/ack/);
+    expect(src).toMatch(/export\s+function\s+acknowledgePayrollPayout\b/);
+    expect(src).toMatch(/\/payroll\/payouts\/.*\/ack/);
   });
 
   test('использует apiFetch из ./api', () => {
