@@ -2383,9 +2383,17 @@ soft-выключения сотрудников и создания новых 
   служебной `DISPLAY` — её админ заводит напрямую через seed).
 - **Тип компенсации** (`compensationType`, default `PIECEWORK`)
   и **Ставка за смену** (`salaryPerShift`) — единственная ось «как
-  платим» (см. `domain.md §9a`). Тот же UX-инвариант, что и на
-  карточке: для `SALARY`/`MIXED` поле «Ставка за смену»
-  обязательное и `> 0`; для `PIECEWORK` его можно оставить пустым.
+  платим» (см. `domain.md §9a`). PHASE 2 STEP 5: поле «Ставка за
+  смену» рендерится только для `SALARY` / `MIXED` — для
+  `PIECEWORK` его в форме нет (FormData ничего не пишет, backend
+  оставляет `salaryPerShift = null`). При переключении на
+  `SALARY` / `MIXED` поле появляется и обязательное, `> 0`; иначе
+  backend вернёт `EMPLOYEE_SALARY_RATE_REQUIRED` (422).
+- **Процент B2B (раскрой)** (`cutterB2bSewingPercent`) — поле
+  показывается **только** при `role = CUTTER` (PHASE 2 STEP 5). Для
+  остальных ролей ничего не рендерится. Если оставить пустым —
+  backend возьмёт fallback из ENV `CUTTER_B2B_SEWING_PERCENT` (см.
+  `docs/payroll-cutter-compensation-recon.md`).
 - **Активен** (`active`, default `true`) — мягкий флаг.
 - **Подразделение** (`companyDivisionId`, PHASE 2 STEP 2) — select
   с опциями активных карточек `CompanyDivision`. Опционально:
@@ -2403,26 +2411,46 @@ soft-выключения сотрудников и создания новых 
 доуточняет окладную пару (тот же паттерн, что у `createEquipmentAction`,
 `createWarehouseAction`, `createOperationAction`).
 
+<a id="employees-card"></a>
+
 #### Карточка `/admin/employees/[id]`
 
 Три секции, каждая — Server Action:
 
 1. **Реквизиты сотрудника** — read-only поля `fullName` / `login` /
-   `role` + строка «Подразделение» (`Employee.companyDivision`,
-   PHASE 2 STEP 2). Эти поля управляются вне управленческого блока
-   (паспортная карточка приходит из `prisma/seed.ts`/будущей
-   админки PIN-ов). Историческое поле `Employee.salaryBase`
-   («месячный оклад») удалено в PHASE 2 STEP 1 — payroll-движок
-   его никогда не использовал.
+   `role` + явные оси компенсации (PHASE 2 STEP 5):
+   - **Тип оплаты** (`compensationType`).
+   - **Ставка за смену** (`salaryPerShift`) — рендерится только
+     для `SALARY` / `MIXED`; для `PIECEWORK` строка не показывается.
+     Если у `SALARY`/`MIXED` поле пустое — выводим приглушённую
+     подсказку «не задана (требуется для оклада)».
+   - **Процент B2B (раскрой)** (`cutterB2bSewingPercent`) —
+     рендерится только для `role = CUTTER`. Если поле пустое —
+     приглушённая подсказка «не задан, fallback из ENV
+     `CUTTER_B2B_SEWING_PERCENT`».
+   - **Подразделение** (`Employee.companyDivision`, PHASE 2 STEP 2).
+   - **В системе с** (`createdAt`).
+
+   Эти поля управляются вне управленческого блока (паспортная
+   карточка приходит из `prisma/seed.ts`/будущей админки PIN-ов).
+   Историческое поле `Employee.salaryBase` («месячный оклад»)
+   удалено в PHASE 2 STEP 1 — payroll-движок его никогда не
+   использовал.
 2. **Оплата за смену** — точечная форма для `compensationType`,
-   `salaryPerShift`, `active`, `companyDivisionId` (PHASE 2 STEP 2).
-   Источник истины — `PATCH /api/employees/:id`. Поведение:
-   - выбран `PIECEWORK` → поле «Ставка за смену» скрывается
-     (visual hint: «Сдельщик не получает дневной оклад»);
+   `salaryPerShift`, `active`, `companyDivisionId` (PHASE 2 STEP 2),
+   `cutterB2bSewingPercent` (только для CUTTER). Источник истины —
+   `PATCH /api/employees/:id`. Поведение:
+   - выбран `PIECEWORK` → поле «Ставка за смену» **не рендерится**
+     (PHASE 2 STEP 5): сдельщик не получает дневной оклад, поле
+     не нужно. Backend в этой ветке `salaryPerShift` не правит.
    - выбран `SALARY` или `MIXED` → поле «Ставка за смену»
-     обязательное и `> 0`. Если оставить пустым — backend вернёт
-     `EMPLOYEE_SALARY_RATE_REQUIRED` (422), форма покажет ошибку под
-     полем (`useFormState` + bubble error);
+     появляется и обязательное, `> 0`. Если оставить пустым —
+     backend вернёт `EMPLOYEE_SALARY_RATE_REQUIRED` (422), форма
+     покажет ошибку под полем (`useFormState` + bubble error).
+   - роль `CUTTER` → дополнительно показывается поле «Процент от
+     операций пошива B2B, %» (`cutterB2bSewingPercent`). Для
+     остальных ролей поле не рендерится — FormData не пишется,
+     backend колонку не трогает.
    - чекбокс «Активен» — soft-disable. Текущая открытая смена не
      закрывается (см. `api.md §3b`), но новые `SalaryEntry` уже
      не создаются.
@@ -2435,11 +2463,14 @@ soft-выключения сотрудников и создания новых 
      подразделения, select прячется. Backend: 404
      `COMPANY_DIVISION_NOT_FOUND` для несуществующего id, 409
      `COMPANY_DIVISION_INACTIVE` для soft-deleted.
-3. **Последние окладные начисления** — таблица из
-   `GET /api/salary?employeeId=...&pageSize=10`: *дата* · *сумма* ·
-   *исправлено вручную?* · *комментарий менеджера*. Менеджеру удобно
-   сразу проверить, что ставка приехала туда, куда нужно. Если
-   записей нет — пустой стейт «Окладных начислений пока нет».
+3. **Зарплата за период (CTA)** — карточка с описанием и primary
+   CTA «Открыть в “Зарплате” →» на
+   `/admin/payroll/employees/[id]`. Это единая точка входа в
+   управленческий payroll-отчёт по этому сотруднику (смены /
+   сдельщина / оклад за период). Редактирование окладной части
+   живёт в `/earnings` (`SalaryEntryEditor`, см. §12.3) — там
+   же пишется audit (`SALARY_ENTRY_UPDATED` /
+   `SALARY_ENTRY_RESET`, PHASE 2 STEP 4).
 
 #### UX-поведение при смене `compensationType`
 

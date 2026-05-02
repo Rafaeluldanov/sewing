@@ -124,6 +124,67 @@ export default async function AdminEmployeeDetailPage({
               <dd>{formatRole(employee.role)}</dd>
               <dt>Тип оплаты</dt>
               <dd>{formatCompensation(employee.compensationType)}</dd>
+              {/*
+               * PHASE 2 STEP 5 — explicit «оси компенсации» в карточке.
+               * Раньше эти поля были видны только в форме редактирования
+               * (`EmployeeEditForm`), и менеджеру/админу приходилось
+               * открывать форму, чтобы понять «есть ли у сотрудника
+               * ставка за смену» или «какой у CUTTER B2B-процент». Теперь
+               * — всегда в read-режиме, по описанному правилу: ставка
+               * показывается только для SALARY/MIXED, B2B-процент —
+               * только для CUTTER. Для остальных комбинаций строка не
+               * рендерится, чтобы не плодить пустые «—» для read-only
+               * пользователей (см. `docs/screens.md §«/admin/employees/[id]»`).
+               */}
+              {(employee.compensationType === 'SALARY' ||
+                employee.compensationType === 'MIXED') && (
+                <>
+                  <dt>Ставка за смену</dt>
+                  <dd>
+                    {employee.salaryPerShift !== null ? (
+                      <>
+                        {employee.salaryPerShift.toLocaleString('ru-RU', {
+                          minimumFractionDigits: 2,
+                          maximumFractionDigits: 2,
+                        })}{' '}
+                        ₽
+                      </>
+                    ) : (
+                      <span className="admin-muted">
+                        — не задана (требуется для оклада) —
+                      </span>
+                    )}
+                  </dd>
+                </>
+              )}
+              {employee.role === 'CUTTER' && (
+                <>
+                  <dt>Процент B2B (раскрой)</dt>
+                  <dd>
+                    {employee.cutterB2bSewingPercent !== null &&
+                    employee.cutterB2bSewingPercent !== undefined ? (
+                      <>
+                        {employee.cutterB2bSewingPercent.toLocaleString(
+                          'ru-RU',
+                          {
+                            minimumFractionDigits: 2,
+                            maximumFractionDigits: 2,
+                          },
+                        )}{' '}
+                        %
+                      </>
+                    ) : (
+                      <span className="admin-muted">
+                        — не задан, fallback из ENV
+                        <code style={{ marginLeft: 4 }}>
+                          CUTTER_B2B_SEWING_PERCENT
+                        </code>{' '}
+                        —
+                      </span>
+                    )}
+                  </dd>
+                </>
+              )}
               <dt>Подразделение</dt>
               <dd>
                 {employee.companyDivision ? (

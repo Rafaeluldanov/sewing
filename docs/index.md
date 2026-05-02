@@ -452,6 +452,60 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   `tests/integration/payroll-employee-detail.test.ts`,
   smoke `tests/smoke/payroll-admin.smoke.test.ts`.
 
+- [x] **PHASE 2 STEP 5 «Полировка Employee/Payroll UI».** Карточка
+  `/admin/employees/[id]` теперь читаемо показывает оси
+  компенсации в read-режиме: «Тип оплаты», «Ставка за смену»
+  (только для `SALARY` / `MIXED`), «Процент B2B (раскрой)»
+  (только для `CUTTER`), «Подразделение». В формах создания и
+  редактирования сотрудника поле «Ставка за смену» рендерится
+  только для `SALARY` / `MIXED` — для `PIECEWORK` его в форме
+  нет (FormData чистая, backend оставляет `salaryPerShift = null`).
+  Поле «Процент B2B» по-прежнему рендерится только для роли
+  `CUTTER`. Карточка добавила CTA «Открыть в “Зарплате” →» на
+  `/admin/payroll/employees/[id]`. Payroll UI (`/admin/payroll`,
+  `/admin/payroll/daily`, `/admin/payroll/employees/[id]`)
+  изменений не потребовал — фильтр «Подразделение», KPI
+  approved/pending и разрезы salary vs piecework уже на месте
+  с PHASE 1. Документы: [`docs/screens.md` — карточка сотрудника](./screens.md#employees-card).
+
+- [x] **PHASE 2 STEP 4 «Audit ручных правок зарплаты».**
+  `SalaryService.updateManually` теперь пишет в `AuditLog` ровно
+  одно событие на каждый успешный `PATCH /api/salary/:id`:
+  `SALARY_ENTRY_UPDATED` (обычный PATCH amount/managerComment) или
+  `SALARY_ENTRY_RESET` (`reset = true`). Запись `AuditLog` живёт
+  в той же транзакции, что и `salaryEntry.update`. Payload —
+  `{ salaryEntryId, employeeId, date, before, after, reset,
+  editedByEmployeeId }`. Никаких новых таблиц истории не введено
+  (`SalaryEntry` модель не меняется). Автоматический
+  `syncDailySalary` (на `start/stop shift`) аудит сознательно НЕ
+  пишет — иначе журнал засыпался бы рутиной. `AuditEntityType`
+  расширен значением `SALARY_ENTRY` (TS-union, не Prisma enum —
+  миграция не требуется). Документы:
+  [`docs/events.md §3.3 «SALARY_ENTRY»`](./events.md#33-salary-entry),
+  [`docs/api.md §31 PATCH /api/salary/:id`](./api.md#31-salary),
+  `docs/domain.md §10.3 → «Audit (PHASE 2 STEP 4)»`. Тесты —
+  `tests/integration/salary.test.ts` (3 новых теста: UPDATED,
+  RESET, регрессия что sync аудит не пишет).
+
+- [x] **PHASE 2 STEP 3 «Cutter attribution».** Удалён опасный
+  fallback `Employee.findUnique({ login: 'cutter' })` в
+  `PassportsService.create` — он молча привязывал immediate-
+  начисление к seed-учётке при любом несовпадении логина.
+  `CreatePassportSchema` расширена опциональным полем
+  `cutterId`. Новый helper `resolveCutter(cutterId, creator)`
+  валидирует явный id (`role = CUTTER && active = true`) или
+  возвращает creator-а, если тот сам — CUTTER. Иначе backend
+  кидает `CUTTER_REQUIRED` / `CUTTER_NOT_FOUND` /
+  `CUTTER_INACTIVE`. UI `/orders/[id]/passports/new` показывает
+  select раскройщика для не-CUTTER ролей (с первым активным
+  CUTTER по умолчанию); если активных нет — красная плашка со
+  ссылкой на `/admin/employees`. Документы:
+  [`docs/api.md §24a «Cutter attribution»`](./api.md#24a-cutter-attribution-phase-2-step-3),
+  `docs/domain.md §7.4a`, `docs/production-flow.md §4 «Cutter
+  attribution»`, `docs/screens.md §7.5`. Тесты — новый
+  `tests/integration/cutter-attribution.test.ts` (6 веток,
+  включая регрессию на legacy fallback).
+
 - [x] **PHASE 2 STEP 2 «Привязка сотрудника к подразделению».**
   В `Employee` добавлен опциональный FK
   `companyDivisionId String?` + relation

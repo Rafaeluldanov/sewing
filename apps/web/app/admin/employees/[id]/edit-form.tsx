@@ -141,20 +141,32 @@ export function EmployeeEditForm({ employee, divisionOptions = [] }: Props) {
           </select>
         </div>
 
-        <div className="admin-field">
-          <label htmlFor="emp-salary-per-shift">Ставка за смену, ₽</label>
-          <input
-            id="emp-salary-per-shift"
-            name="salaryPerShift"
-            type="text"
-            inputMode="decimal"
-            value={salaryPerShift}
-            onChange={(e) => setSalaryPerShift(e.target.value)}
-            placeholder={requiresRate ? 'обязательно' : '—'}
-            required={requiresRate}
-            autoComplete="off"
-          />
-        </div>
+        {/*
+          PHASE 2 STEP 5: «ставка за смену» имеет смысл только для
+          SALARY/MIXED — для PIECEWORK поле прятали и раньше через
+          UI-подсказку, теперь скрываем по-настоящему. Для PIECEWORK
+          FormData ничего не отправит и backend (`UpdateEmployeeSchema`)
+          оставит `salaryPerShift = null` без правки. Если менеджер
+          переключится на SALARY/MIXED, поле появится; обязательность
+          гарантирует backend — без ставки PATCH вернёт
+          `EMPLOYEE_SALARY_RATE_REQUIRED`.
+        */}
+        {requiresRate && (
+          <div className="admin-field">
+            <label htmlFor="emp-salary-per-shift">Ставка за смену, ₽</label>
+            <input
+              id="emp-salary-per-shift"
+              name="salaryPerShift"
+              type="text"
+              inputMode="decimal"
+              value={salaryPerShift}
+              onChange={(e) => setSalaryPerShift(e.target.value)}
+              placeholder="обязательно"
+              required
+              autoComplete="off"
+            />
+          </div>
+        )}
 
         <div className="admin-field admin-field--inline">
           <input

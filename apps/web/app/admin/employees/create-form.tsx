@@ -182,20 +182,27 @@ export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
           </select>
         </div>
 
-        <div className="admin-field">
-          <label htmlFor="emp-salary-per-shift">Ставка за смену, ₽</label>
-          <input
-            id="emp-salary-per-shift"
-            name="salaryPerShift"
-            type="text"
-            inputMode="decimal"
-            value={salaryPerShift}
-            onChange={(e) => setSalaryPerShift(e.target.value)}
-            placeholder={requiresRate ? 'обязательно' : '—'}
-            required={requiresRate}
-            autoComplete="off"
-          />
-        </div>
+        {/*
+          PHASE 2 STEP 5: «ставка за смену» только для SALARY/MIXED.
+          Для PIECEWORK поле не рендерится — FormData чистая, backend
+          получит `salaryPerShift = null` и сохранит без ставки.
+        */}
+        {requiresRate && (
+          <div className="admin-field">
+            <label htmlFor="emp-salary-per-shift">Ставка за смену, ₽</label>
+            <input
+              id="emp-salary-per-shift"
+              name="salaryPerShift"
+              type="text"
+              inputMode="decimal"
+              value={salaryPerShift}
+              onChange={(e) => setSalaryPerShift(e.target.value)}
+              placeholder="обязательно"
+              required
+              autoComplete="off"
+            />
+          </div>
+        )}
 
         <div className="admin-field admin-field--inline">
           <input

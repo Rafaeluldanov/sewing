@@ -354,6 +354,8 @@ COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY
 ```
 
+<a id="33-salary-entry"></a>
+
 ### 3.3. Что именно логируется (собрано по `rg "event:\\s*'" apps/api/src`)
 
 Полный список кодов событий, которые **реально пишутся** в
