@@ -13,6 +13,7 @@ import {
 import { getSalarySummary, listSalary } from '@/lib/salary-api';
 import { getShiftMeta } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { listPayrollPayouts } from '@/lib/payroll-payouts-api';
 import { Icon, type IconName } from '@/components/icon';
 import { SalaryEntryEditor } from './salary-entry-editor';
 
@@ -85,35 +86,52 @@ export default async function EarningsListPage({
   // сдельными. fail-soft, чтобы старые БД без миграции `SalaryEntry` не
   // ломали экран — но в обычном пайплайне ошибки тут означают баг и
   // должны быть видны разработчику в логах SSR.
-  const [meta, list, summary, salaryList, salarySummary] = await Promise.all([
-    isManager ? getShiftMeta() : Promise.resolve(null),
-    listEarnings({
-      employeeId,
-      status,
-      dateFrom,
-      dateTo,
-      page,
-      pageSize,
-    }),
-    getEarningsSummary({
-      employeeId,
-      dateFrom,
-      dateTo,
-    }),
-    listSalary({
-      employeeId,
-      dateFrom,
-      dateTo,
-      page: 1,
-      pageSize: 100,
-    }).catch(() => ({ items: [] as SalaryEntryDto[], total: 0, page: 1, pageSize: 100 })),
-    getSalarySummary({ employeeId, dateFrom, dateTo }).catch(() => ({
-      total: 0,
-      totalEditedManually: 0,
-      count: 0,
-      countEditedManually: 0,
-    })),
-  ]);
+  const [meta, list, summary, salaryList, salarySummary, payoutsResponse] =
+    await Promise.all([
+      isManager ? getShiftMeta() : Promise.resolve(null),
+      listEarnings({
+        employeeId,
+        status,
+        dateFrom,
+        dateTo,
+        page,
+        pageSize,
+      }),
+      getEarningsSummary({
+        employeeId,
+        dateFrom,
+        dateTo,
+      }),
+      listSalary({
+        employeeId,
+        dateFrom,
+        dateTo,
+        page: 1,
+        pageSize: 100,
+      }).catch(() => ({
+        items: [] as SalaryEntryDto[],
+        total: 0,
+        page: 1,
+        pageSize: 100,
+      })),
+      getSalarySummary({ employeeId, dateFrom, dateTo }).catch(() => ({
+        total: 0,
+        totalEditedManually: 0,
+        count: 0,
+        countEditedManually: 0,
+      })),
+      // Для не-менеджеров загружаем выплаты, чтобы показать баннер
+      // «Есть неподтверждённые выплаты». fail-soft: баннер просто
+      // не появится, если запрос упадёт.
+      isManager
+        ? Promise.resolve(null)
+        : listPayrollPayouts({ pageSize: 10 }).catch(() => null),
+    ]);
+
+  const hasUnacknowledgedPayouts =
+    !isManager &&
+    payoutsResponse !== null &&
+    payoutsResponse.items.some((p) => p.status === 'ISSUED');
 
   const total = summary.totalApproved + summary.totalPending + salarySummary.total;
   const hasFilters = isManager
@@ -145,6 +163,43 @@ export default async function EarningsListPage({
           </p>
         )}
       </div>
+
+      {hasUnacknowledgedPayouts && (
+        <div
+          role="alert"
+          style={{
+            background: '#fef9c3',
+            border: '1px solid #fde047',
+            borderRadius: '0.5rem',
+            padding: '0.875rem 1rem',
+            color: '#854d0e',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            gap: '1rem',
+            flexWrap: 'wrap',
+          }}
+        >
+          <span style={{ fontWeight: 500 }}>
+            У вас есть неподтверждённые выплаты
+          </span>
+          <Link
+            href="/earnings/payouts"
+            style={{
+              background: '#854d0e',
+              color: '#fff',
+              borderRadius: '0.375rem',
+              padding: '0.375rem 0.875rem',
+              textDecoration: 'none',
+              fontSize: '0.875rem',
+              fontWeight: 600,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            Перейти к выплатам →
+          </Link>
+        </div>
+      )}
 
       <div className="kpi-grid">
         <SummaryKpi

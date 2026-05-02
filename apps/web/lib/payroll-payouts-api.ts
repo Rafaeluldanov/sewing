@@ -1,12 +1,12 @@
 /**
- * Серверные обёртки над `/api/payroll-payouts/*` (PHASE 3 STEP 4).
+ * Серверные обёртки над `/api/payroll-payouts/*` (PHASE 3 STEP 4–5).
  *
- * Используются только из RSC `/admin/payroll/payouts/*` под ролями
- * `SHOP_MANAGER` / `ADMIN`. Backend защищает эндпоинты через
- * `@Roles('SHOP_MANAGER', 'ADMIN')`.
+ * Функции для менеджеров используются из RSC `/admin/payroll/payouts/*`
+ * под ролями `SHOP_MANAGER` / `ADMIN`.
  *
- * ACK (подтверждение получения) намеренно не включён — это действие
- * сотрудника (PHASE 3 STEP 5, `/earnings/payouts`).
+ * `acknowledgePayrollPayout` — действие сотрудника (PHASE 3 STEP 5,
+ * `/earnings/payouts`). Backend защищает эндпоинт по сессии: только
+ * сам сотрудник-получатель может подтвердить выплату.
  */
 import type {
   CancelPayrollPayoutDto,
@@ -73,5 +73,12 @@ export function cancelPayrollPayout(
   return apiFetch<PayrollPayoutDto>(
     `/payroll-payouts/${encodeURIComponent(id)}/cancel`,
     { method: 'POST', body: dto },
+  );
+}
+
+export function acknowledgePayrollPayout(id: string): Promise<PayrollPayoutDto> {
+  return apiFetch<PayrollPayoutDto>(
+    `/payroll-payouts/${encodeURIComponent(id)}/acknowledge`,
+    { method: 'POST', body: {} },
   );
 }
