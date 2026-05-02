@@ -219,6 +219,7 @@ export class PayrollService {
       salaryEditedAgg,
       shiftRows,
       pieceworkDivisionRows,
+      payoutCoverageRows,
     ] = await Promise.all([
       this.prisma.operationEntry.groupBy({
         by: ['employeeId'],
@@ -286,6 +287,41 @@ export class PayrollService {
            AND oe."employeeId" IN (${Prisma.join(Array.from(relevantIds))})
          GROUP BY oe."employeeId", cd."id", cd."code", cd."name"
       `,
+      // Покрытие выплатами: PayrollPayoutLine → OperationEntry / SalaryEntry
+      // за этот же период, только активные выплаты (DRAFT/ISSUED/ACKNOWLEDGED).
+      this.prisma.$queryRaw<
+        Array<{
+          employeeId: string;
+          kind: string;
+          coveredRub: string;
+        }>
+      >`
+        SELECT
+          COALESCE(oe."employeeId", se."employeeId") AS "employeeId",
+          ppl."kind"                                  AS "kind",
+          SUM(ppl."amountRub")::text                  AS "coveredRub"
+        FROM "PayrollPayoutLine" ppl
+        JOIN "PayrollPayout" pp ON pp."id" = ppl."payoutId"
+        LEFT JOIN "OperationEntry" oe ON oe."id" = ppl."operationEntryId"
+        LEFT JOIN "SalaryEntry"    se ON se."id" = ppl."salaryEntryId"
+        WHERE pp."status" IN ('DRAFT', 'ISSUED', 'ACKNOWLEDGED')
+          AND (
+            (
+              ppl."operationEntryId" IS NOT NULL
+              AND oe."createdAt" >= ${from}
+              AND oe."createdAt" <= ${to}
+              AND oe."employeeId" IN (${Prisma.join(Array.from(relevantIds))})
+            )
+            OR
+            (
+              ppl."salaryEntryId" IS NOT NULL
+              AND se."date" >= ${dayFrom}
+              AND se."date" <= ${dayTo}
+              AND se."employeeId" IN (${Prisma.join(Array.from(relevantIds))})
+            )
+          )
+        GROUP BY COALESCE(oe."employeeId", se."employeeId"), ppl."kind"
+      `,
     ]);
 
     const piApproved = byId(pieceworkApprovedAgg);
@@ -294,6 +330,24 @@ export class PayrollService {
     const sal = byId(salaryAgg);
     const salEdited = byId(salaryEditedAgg);
     const daysByEmp = countUniqueDates(shiftRows);
+
+    // Сводим покрытие выплатами по сотруднику + виду (PIECEWORK / SALARY).
+    const payoutPieceworkCovered = new Map<string, number>();
+    const payoutSalaryCovered = new Map<string, number>();
+    for (const r of payoutCoverageRows) {
+      const amount = round2(Number(r.coveredRub));
+      if (r.kind === 'PIECEWORK') {
+        payoutPieceworkCovered.set(
+          r.employeeId,
+          (payoutPieceworkCovered.get(r.employeeId) ?? 0) + amount,
+        );
+      } else {
+        payoutSalaryCovered.set(
+          r.employeeId,
+          (payoutSalaryCovered.get(r.employeeId) ?? 0) + amount,
+        );
+      }
+    }
 
     const divisionByEmp = new Map<
       string,
@@ -332,6 +386,13 @@ export class PayrollService {
       const empDiv = emp.companyDivision ?? null;
       const finalDivId = div?.id ?? empDiv?.id ?? null;
       const finalDivName = div?.name ?? empDiv?.name ?? null;
+
+      const grossAccruedRub = round2(pa + sr);
+      const payoutPiecework = round2(payoutPieceworkCovered.get(id) ?? 0);
+      const payoutSalary = round2(payoutSalaryCovered.get(id) ?? 0);
+      const payoutCoveredRub = round2(payoutPiecework + payoutSalary);
+      const netToPayRub = round2(Math.max(0, grossAccruedRub - payoutCoveredRub));
+
       items.push({
         employeeId: emp.id,
         fullName: emp.fullName,
@@ -348,6 +409,11 @@ export class PayrollService {
         totalRub: round2(pa + sr + pp),
         daysOnShift: daysByEmp.get(id) ?? 0,
         entriesCount: ec,
+        grossAccruedRub,
+        payoutCoveredRub,
+        payoutPieceworkCoveredRub: payoutPiecework,
+        payoutSalaryCoveredRub: payoutSalary,
+        netToPayRub,
       });
     }
     items.sort((a, b) => {
@@ -840,6 +906,8 @@ function emptyPeriodSummary(): PayrollPeriodSummaryDto {
     pieceworkPendingCount: 0,
     salaryEntriesCount: 0,
     salaryEditedCount: 0,
+    totalPayoutCoveredRub: 0,
+    totalNetToPayRub: 0,
   };
 }
 
@@ -858,6 +926,8 @@ function computePeriodSummary(
   let salary = 0;
   let salaryEdited = 0;
   let entries = 0;
+  let payoutCovered = 0;
+  let netToPay = 0;
   for (const r of rows) {
     approved += r.totalApprovedRub;
     pending += r.totalPendingRub;
@@ -866,6 +936,8 @@ function computePeriodSummary(
     salary += r.salaryRub;
     salaryEdited += r.salaryEditedRub;
     entries += r.entriesCount;
+    payoutCovered += r.payoutCoveredRub;
+    netToPay += r.netToPayRub;
   }
   return {
     totalApprovedRub: round2(approved),
@@ -879,6 +951,8 @@ function computePeriodSummary(
     pieceworkPendingCount: counts.pieceworkPendingCount,
     salaryEntriesCount: counts.salaryCount,
     salaryEditedCount: counts.salaryEditedCount,
+    totalPayoutCoveredRub: round2(payoutCovered),
+    totalNetToPayRub: round2(netToPay),
   };
 }
 

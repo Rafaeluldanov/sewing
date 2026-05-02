@@ -286,6 +286,17 @@ function PayrollKpiGrid({
         tone="warn"
       />
       <Kpi
+        label="Выплачено / в выплатах"
+        value={formatRub(summary?.totalPayoutCoveredRub ?? 0)}
+        sub="DRAFT · ISSUED · ACKNOWLEDGED"
+      />
+      <Kpi
+        label="К выплате сейчас"
+        value={formatRub(summary?.totalNetToPayRub ?? 0)}
+        sub={`${summary?.employeesCount ?? 0} сотр.`}
+        tone={(summary?.totalNetToPayRub ?? 0) > 0 ? 'accent' : undefined}
+      />
+      <Kpi
         label="Оклад"
         value={formatRub(summary?.salaryRub ?? 0)}
         sub={
@@ -365,6 +376,55 @@ function PayrollPeriodTable({ rows }: { rows: PayrollPeriodEmployeeRowDto[] }) {
         ) : (
           <span className="admin-muted">—</span>
         ),
+    },
+    {
+      key: 'accrued',
+      header: 'Начислено, ₽',
+      align: 'right',
+      render: (r) => formatRub(r.grossAccruedRub),
+    },
+    {
+      key: 'inPayouts',
+      header: 'Уже в выплатах, ₽',
+      align: 'right',
+      render: (r) =>
+        r.payoutCoveredRub > 0 ? (
+          <span style={{ color: 'var(--admin-muted-fg, #6b7280)' }}>
+            {formatRub(r.payoutCoveredRub)}
+          </span>
+        ) : (
+          <span className="admin-muted">—</span>
+        ),
+    },
+    {
+      key: 'netToPay',
+      header: 'К выплате сейчас, ₽',
+      align: 'right',
+      render: (r) => {
+        if (r.netToPayRub === 0 && r.grossAccruedRub > 0) {
+          return (
+            <span
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '0.35rem',
+                color: 'var(--admin-ok, #16a34a)',
+                fontSize: '0.78rem',
+                fontWeight: 600,
+              }}
+            >
+              выплачено/закрыто
+            </span>
+          );
+        }
+        return r.netToPayRub > 0 ? (
+          <strong style={{ color: 'var(--admin-accent, #1d4ed8)' }}>
+            {formatRub(r.netToPayRub)}
+          </strong>
+        ) : (
+          <span className="admin-muted">—</span>
+        );
+      },
     },
     {
       key: 'total',
