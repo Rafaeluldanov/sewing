@@ -603,11 +603,28 @@
   `direction: String` (`IN` / `OUT`),
   `warehouseId?`, `cellId?`, `qty`, `unit`, `unitCost`, `totalCost`,
   `balanceBeforeQty?`, `balanceAfterQty?`, `sourceType?`, `sourceId?`,
-  опциональные FK: `purchaseReceiptId?`, `purchaseReceiptLineId?`,
-  `materialIssueId?`, `materialIssueLineId?` (все `SetNull` на
-  стороне движения), `comment?`, `createdById?`, `createdAt`.
-  Индексы по ключам ссылок и `createdAt`. **Foundation:** приёмка и
-  расход по-прежнему **не** создают движения автоматически.
+  `sourceKey: String? @unique` — внутренний идемпотентный ключ
+  движения, формат `<PREFIX>:<entityId>`:
+    - `PURCHASE_RECEIPT_LINE:<purchaseReceiptLineId>` — приход по
+      строке `PurchaseReceiptLine` (POSTED-приёмка);
+    - `PURCHASE_RECEIPT_LINE_CANCEL:<purchaseReceiptLineId>` —
+      сторнирующее движение при отмене этой же строки.
+  `UNIQUE` гарантирует, что повторная обработка приёмки или её
+  отмена при retry не создадут дубль `StockMovement` и не удвоят
+  `StockBalance.qty`.
+  Дальше — опциональные FK: `purchaseReceiptId?`,
+  `purchaseReceiptLineId?`, `materialIssueId?`,
+  `materialIssueLineId?` (все `SetNull` на стороне движения),
+  `comment?`, `createdById?`, `createdAt`. Индексы по ключам ссылок
+  и `createdAt`.
+  **Подключения** (см. § 3.4 ниже):
+    - `PurchaseReceiptsService.createFromPurchaseOrder` пишет `IN`
+      (`type = PURCHASE_RECEIPT`), `cancel` пишет `REVERSAL` `OUT`
+      только при наличии исходного `IN`. Старые приёмки до
+      этой итерации не реверсятся.
+    - `MaterialIssue` (включая `AUTO_CUT_ISSUE`) и `PassportsService`
+      на этой итерации движения **не пишут** — следующая итерация
+      подключит расход.
 
 <a id="213-printers--print-jobs"></a>
 ### 2.13 Printers / print jobs
@@ -782,9 +799,26 @@
   `POST /api/purchase-receipts/from-purchase-order`. Линии PR
   фиксируют размещение в ячейке (`Cell.cellId`) **без** записи в
   `CellContent` — это сознательная граница MVP.
-- Cancel-flow возвращает связанные `WorkshopNeed.status` обратно
-  (см. сервис; список валидных переходов — в shared-listе
-  `WORKSHOP_NEED_STATUSES`).
+- **Складские движения**: создание `POSTED` приёмки в той же
+  транзакции пишет входящий `StockMovement` (`IN`,
+  `type = PURCHASE_RECEIPT`,
+  `sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`) для каждой строки с
+  `workshopNeedId`, `unit` и `receivedQty > 0`. `warehouseId`
+  движения берётся через `Cell.warehouseId` (если `cellId` пустой —
+  `null`). `unitCost` = `priceSnapshot` для `RUB`/null-валюты, `0`
+  для других валют и для отсутствующего/отрицательного
+  `priceSnapshot` (конвертация валют не делается). `applyMovementInTx`
+  параллельно увеличивает `StockBalance.qty` по `balanceKey =
+  WN/WH/Cell` и пересчитывает среднюю себестоимость.
+- **Cancel-flow**: помимо отката статусов `WorkshopNeed`/PO/PO-line
+  пишет `REVERSAL` `OUT` (`sourceKey =
+  PURCHASE_RECEIPT_LINE_CANCEL:<lineId>`) в той же транзакции.
+  Сторнирование делается **только** при наличии исходного
+  `IN`-движения по тому же `sourceKey =
+  PURCHASE_RECEIPT_LINE:<lineId>` — старые приёмки до подключения
+  склада не реверсятся (защита от дубля для исторических данных).
+  Идемпотентность гарантируется UNIQUE-индексом
+  `StockMovement.sourceKey`.
 
 ### 3.5 OrderCostEstimate
 

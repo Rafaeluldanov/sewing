@@ -525,12 +525,34 @@ DTO: `packages/shared/src/purchase-orders.ts`.
 | ----- | ----------------------------------------------------- | ------------------ | -------- |
 | GET   | `/api/purchase-receipts`                              | ADMIN, SHOP_MANAGER | List `ListPurchaseReceiptsQuery`. |
 | GET   | `/api/purchase-receipts/:id`                          | ADMIN, SHOP_MANAGER | Карточка. |
-| POST  | `/api/purchase-receipts/from-purchase-order`          | ADMIN, SHOP_MANAGER | 201 Created. Body `CreatePurchaseReceiptFromPurchaseOrderDto`. Side effects: пересчёт статусов связанных `PurchaseOrderLine` и `WorkshopNeed`. |
-| POST  | `/api/purchase-receipts/:id/cancel`                   | ADMIN, SHOP_MANAGER | Body `CancelPurchaseReceiptDto`. `POSTED → CANCELLED`. Side effects: пересчёт статусов PO/PO-line/WorkshopNeed обратно. |
+| POST  | `/api/purchase-receipts/from-purchase-order`          | ADMIN, SHOP_MANAGER | 201 Created. Body `CreatePurchaseReceiptFromPurchaseOrderDto`. Side effects: пересчёт статусов связанных `PurchaseOrderLine` и `WorkshopNeed`; для каждой строки с `workshopNeedId`/`unit`/`receivedQty > 0` в той же транзакции пишется входящий `StockMovement` (`IN`, `type = PURCHASE_RECEIPT`, `sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`) и обновляется `StockBalance.qty`/средняя себестоимость (`apps/api/src/modules/stock/stock.service.ts`). |
+| POST  | `/api/purchase-receipts/:id/cancel`                   | ADMIN, SHOP_MANAGER | Body `CancelPurchaseReceiptDto`. `POSTED → CANCELLED`. Side effects: пересчёт статусов PO/PO-line/WorkshopNeed обратно; для каждой строки, у которой существует исходный `IN`-`StockMovement` (`sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`), пишется сторнирующий `StockMovement` (`OUT`, `type = REVERSAL`, `sourceKey = PURCHASE_RECEIPT_LINE_CANCEL:<lineId>`) и `StockBalance.qty` уменьшается. |
 | GET   | `/api/purchase-orders/:id/receipts`                   | ADMIN, SHOP_MANAGER | Список PR по конкретному PO. |
 | GET   | `/api/orders/:id/purchase-receipts`                   | ADMIN, SHOP_MANAGER | Список PR по заказу покупателя. |
 
 DTO: `packages/shared/src/purchase-receipts.ts`.
+
+Сознательные границы MVP (см. также `docs/erd.md §«2.12b»` и
+`§«3.4»`):
+
+- НЕТ FIFO/LIFO и `MaterialStockLot` — себестоимость на остатке
+  считается средневзвешенной (см. `StockService.applyMovementInTx`),
+  отрицательный остаток не блокируется.
+- `unitCost` входящего движения = `priceSnapshot` строки приёмки при
+  `currencySnapshot` в `RUB`/`null`; для других валют и для
+  отсутствующего/отрицательного `priceSnapshot` — `0`. Конвертация
+  валют не делается.
+- `warehouseId` входящего движения берётся через `Cell.warehouseId`
+  (если `cellId` пустой — `warehouseId = null`).
+- Старые приёмки (созданные до подключения склада) не реверсятся
+  при cancel: cancel пишет `REVERSAL` только при наличии исходного
+  `IN`. Идемпотентность гарантирует UNIQUE
+  `StockMovement.sourceKey`.
+- `MaterialIssue` (включая `AUTO_CUT_ISSUE` при включённом
+  `CompanySettings.autoIssueMaterialsOnCutRelease`) **не** уменьшает
+  `StockBalance` — расход подключим следующей итерацией.
+- Публичных REST-роутов под складские остатки в этой итерации нет
+  (`StockBalance`/`StockMovement` — внутренние таблицы).
 
 ---
 

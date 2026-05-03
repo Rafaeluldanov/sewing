@@ -31,7 +31,7 @@ test('PassportsService не содержит StockService', () => {
   expect(src).not.toMatch(/\bStockService\b/);
 });
 
-test('PurchaseReceiptsService не вызывает StockService', () => {
+test('PurchaseReceiptsService подключён к StockService (приём + cancel пишут StockMovement)', () => {
   const src = readFileSync(
     join(
       repoRoot,
@@ -39,7 +39,22 @@ test('PurchaseReceiptsService не вызывает StockService', () => {
     ),
     'utf8',
   );
-  expect(src).not.toMatch(/\bStockService\b/);
+  // foundation подключён: приёмка пишет IN, cancel — REVERSAL OUT
+  // (см. `apps/api/src/modules/stock/stock.service.ts`).
+  expect(src).toMatch(/\bStockService\b/);
+  expect(src).toMatch(/recordPurchaseReceiptInTx/);
+  expect(src).toMatch(/reversePurchaseReceiptInTx/);
+});
+
+test('PurchaseReceiptsModule импортирует StockModule', () => {
+  const src = readFileSync(
+    join(
+      repoRoot,
+      'apps/api/src/modules/purchase-receipts/purchase-receipts.module.ts',
+    ),
+    'utf8',
+  );
+  expect(src).toMatch(/StockModule/);
 });
 
 test('MaterialIssuesService не импортирует StockService', () => {

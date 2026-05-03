@@ -234,21 +234,64 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     (`${workshopNeedId}:NO_WAREHOUSE|<id>:NO_CELL|<id>`), чтобы не
     плодить дубли при `NULL` в `warehouseId` / `cellId`;
   - **`StockService`**: `getOrCreateBalanceInTx`, `applyMovementInTx`,
-    `listBalances`, `listMovements`; отрицательный физический остаток
+    `listBalances`, `listMovements`,
+    `recordPurchaseReceiptInTx` / `reversePurchaseReceiptInTx` (см.
+    подключение приёмки ниже); отрицательный физический остаток
     на foundation **не блокируется**; стоимость на остатке —
     средневзвешенная на `IN` и пропорционально текущей средней на
-    `OUT` (без FIFO/LIFO);
-  - **бизнес-потоки не подключены**: `PurchaseReceipt` / приёмка **не**
-    увеличивают `StockBalance`, `MaterialIssue` (включая POST и авто
-    при выдаче кроя) **не** уменьшают остаток, `PassportsService` /
-    `CostsService` **не** читают склад; публичных REST-роутов под остатки
-    нет.
+    `OUT` (без FIFO/LIFO).
+
+  Backend-итерация «Подключение приёмки к складу»
+  (`apps/api/src/modules/purchase-receipts/purchase-receipts.service.ts`,
+  `prisma/schema.prisma::StockMovement.sourceKey`):
+  - при создании `POSTED PurchaseReceipt` (через
+    `POST /api/purchase-receipts/from-purchase-order`) в той же
+    транзакции для каждой строки с `workshopNeedId`, `unit` и
+    `receivedQty > 0` пишется входящий `StockMovement`
+    (`direction = IN`, `type = PURCHASE_RECEIPT`,
+    `sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`), и
+    `StockBalance.qty` увеличивается; средняя себестоимость
+    пересчитывается по обычной формуле `applyMovementInTx`;
+  - `warehouseId` входящего движения берётся через
+    `Cell.warehouseId` (если `cellId` у строки пустой —
+    `warehouseId = null`); описание для свежесозданного
+    `StockBalance` берётся из `WorkshopNeed.description` →
+    `sourceName` → `PurchaseReceiptLine.itemNameSnapshot`;
+  - `unitCost` = `priceSnapshot` для `RUB`/null-валюты; `0` для
+    других валют и для отсутствующего/отрицательного
+    `priceSnapshot` (конвертация валют не делается);
+  - при отмене приёмки (`POST /api/purchase-receipts/:id/cancel`) в
+    той же транзакции для каждой строки, у которой существует
+    исходный `IN` (`sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`),
+    пишется сторнирующий `StockMovement` (`direction = OUT`,
+    `type = REVERSAL`,
+    `sourceKey = PURCHASE_RECEIPT_LINE_CANCEL:<lineId>`,
+    `comment = "Отмена приёмки"`), и `StockBalance.qty` уменьшается;
+  - **старые приёмки** (созданные до этой итерации) **не
+    реверсятся**: cancel пропускает строки без исходного `IN` и не
+    падает (защита от двойного движения для исторических данных);
+  - идемпотентность приёмки и cancel гарантируется UNIQUE-индексом
+    `StockMovement.sourceKey` — повторный вызов / retry не создаёт
+    дубль и не двигает `StockBalance.qty` повторно; soft-skip строк
+    без `workshopNeedId` / без `unit` / с `receivedQty <= 0` пишет
+    structured-лог `event=stock.purchase_receipt.skip reason=...`;
+  - публичных REST-роутов под `StockBalance` / `StockMovement`
+    по-прежнему нет — это внутренние таблицы для следующих
+    итераций.
+
+  Подключение **расхода** (`MaterialIssue.post`, авто-документ
+  `AUTO_CUT_ISSUE`) и проверка остатков на этой итерации сознательно
+  **не** реализованы. `MaterialIssue` (включая POST и автосписание
+  при выдаче кроя) **не уменьшает** `StockBalance`, `PassportsService`
+  склад **не читает**, и крой по-прежнему не блокируется недостатком
+  материала.
 
   По-прежнему **не реализованы**: `MaterialStockLot`, FIFO/LIFO,
   master-модель `Material`, роли `WAREHOUSE_MANAGER` / `PURCHASER` /
   `ACCOUNTANT`, обновление `ProductionCostV2Service` под склад,
   любые другие финансовые сводки (`OrderPlannedCostSummaryCard`) под
-  эту ось — вынесены в следующие итерации.
+  эту ось, и UI для просмотра остатков — вынесены в следующие
+  итерации.
 
 ---
 

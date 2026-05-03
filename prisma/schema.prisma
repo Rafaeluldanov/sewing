@@ -4587,6 +4587,16 @@ model StockMovement {
 
   sourceType String?
   sourceId   String?
+  /// Идемпотентный технический ключ движения (см.
+  /// `apps/api/src/modules/stock/stock.service.ts`):
+  ///   - `PURCHASE_RECEIPT_LINE:<purchaseReceiptLineId>` — приход
+  ///     по строке `PurchaseReceiptLine`;
+  ///   - `PURCHASE_RECEIPT_LINE_CANCEL:<purchaseReceiptLineId>` —
+  ///     обратное движение при отмене этой же строки.
+  /// `UNIQUE` гарантирует, что повторная обработка приёмки / её
+  /// отмена при retry не создаст дубль `StockMovement` и не
+  /// удвоит изменение `StockBalance.qty`.
+  sourceKey  String? @unique
 
   purchaseReceiptId     String?
   purchaseReceiptLineId String?

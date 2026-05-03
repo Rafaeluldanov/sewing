@@ -27,6 +27,7 @@ import {
   PurchaseReceiptNotFoundException,
   PurchaseReceiptQtyRequiredException,
 } from '../../common/errors.js';
+import { StockService } from '../stock/stock.service.js';
 import { PurchaseReceiptNumberService } from './purchase-receipt-number.service.js';
 
 /**
@@ -48,9 +49,17 @@ import { PurchaseReceiptNumberService } from './purchase-receipt-number.service.
  *     заголовка `PurchaseOrder` и связанных `WorkshopNeed`.
  *
  * Сознательная граница MVP:
- *   - НЕТ полноценного складского остатка (`MaterialStock` /
- *     `FabricRoll` / `CellContent` не создаются);
- *   - НЕТ перемещений между ячейками, НЕТ списания в крой;
+ *   - складские остатки ведутся только по `WorkshopNeed` через
+ *     foundation `StockBalance` / `StockMovement` (см.
+ *     `apps/api/src/modules/stock/stock.service.ts`); создание
+ *     POSTED-приёмки пишет входящий `StockMovement` (`IN`,
+ *     `type = PURCHASE_RECEIPT`), отмена — сторнирующий
+ *     `REVERSAL` (`OUT`), но только если исходный IN существует;
+ *   - НЕТ master-таблицы `MaterialStockLot` / FIFO/LIFO /
+ *     отдельного `MaterialStock` / `FabricRoll` / `CellContent`
+ *     (всё это вынесено в следующие итерации);
+ *   - НЕТ перемещений между ячейками, НЕТ списания в крой со
+ *     склада (`MaterialIssue` пока не уменьшает `StockBalance`);
  *   - НЕТ оплаты поставщику;
  *   - НЕТ новых ролей.
  */
@@ -62,6 +71,7 @@ export class PurchaseReceiptsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly numberService: PurchaseReceiptNumberService,
+    private readonly stock: StockService,
   ) {}
 
   // ===========================================================================
@@ -278,6 +288,17 @@ export class PurchaseReceiptsService {
         affectedNeedIds,
       );
 
+      // Foundation складского учёта: входящие движения по строкам
+      // приёмки. Идём в той же транзакции, чтобы либо «приёмка +
+      // остатки», либо «ничего». Метод сам soft-skip-ает строки без
+      // `workshopNeedId` / `unit` / `receivedQty <= 0` и идемпотентен
+      // по `StockMovement.sourceKey`.
+      const stockMovements = await this.stock.recordPurchaseReceiptInTx(
+        tx,
+        receipt.id,
+        actorEmployeeId ?? null,
+      );
+
       await this.audit.log(
         {
           event: 'PURCHASE_RECEIPT_CREATED',
@@ -295,6 +316,7 @@ export class PurchaseReceiptsService {
             cellIds,
             affectedPoLineIds,
             affectedWorkshopNeedIds: affectedNeedIds,
+            stockMovementsCount: stockMovements.length,
           },
         },
         tx,
@@ -384,6 +406,17 @@ export class PurchaseReceiptsService {
         affectedNeedIds,
       );
 
+      // Foundation складского учёта: сторнирующие OUT-движения по
+      // строкам приёмки. Метод сам пропускает строки, у которых не
+      // было исходного IN (старые приёмки до подключения склада), и
+      // идемпотентен по `sourceKey =
+      // PURCHASE_RECEIPT_LINE_CANCEL:<lineId>`.
+      const reversalMovements = await this.stock.reversePurchaseReceiptInTx(
+        tx,
+        id,
+        actorEmployeeId ?? null,
+      );
+
       await this.audit.log(
         {
           event: 'PURCHASE_RECEIPT_CANCELLED',
@@ -399,6 +432,7 @@ export class PurchaseReceiptsService {
             purchaseOrderId: current.purchaseOrderId,
             affectedPoLineIds,
             affectedWorkshopNeedIds: affectedNeedIds,
+            stockReversalsCount: reversalMovements.length,
           },
         },
         tx,
