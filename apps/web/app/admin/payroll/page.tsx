@@ -126,6 +126,18 @@ export default async function AdminPayrollPeriodPage({
       subtitle={`Период ${formatDate(dateFrom)} – ${formatDate(dateTo)}`}
       actions={
         <>
+          <Link
+            href="/admin/payroll/accrual-documents/new"
+            className="admin-btn admin-btn--primary"
+          >
+            Начислить зарплату
+          </Link>
+          <Link
+            href="/admin/payroll/accrual-documents"
+            className="admin-btn"
+          >
+            Документы начисления
+          </Link>
           <Link href="/admin/payroll/daily" className="admin-btn">
             День
           </Link>

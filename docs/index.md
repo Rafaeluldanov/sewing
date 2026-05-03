@@ -491,6 +491,24 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   Тесты — `tests/integration/payroll-accrual-documents.test.ts`,
   `tests/smoke/payroll-accrual-documents-api.smoke.test.ts`.
 
+- [x] **PHASE 3 STEP 6.3 «Payroll accrual document admin UI».** Admin UI
+  для управления документами начисления зарплаты. Новые страницы:
+  `/admin/payroll/accrual-documents` (список с фильтрами),
+  `/admin/payroll/accrual-documents/new` (форма создания документа),
+  `/admin/payroll/accrual-documents/[id]` (карточка: KPI, таблица строк
+  с inline-редактированием `manualAdjustRub`/`manualComment` для DRAFT,
+  кнопки «Пересчитать» / «Выплатить» / «Отменить»).
+  Кнопка «Начислить зарплату» добавлена в `/admin/payroll` (хаб).
+  При выплате (DRAFT→PAID) backend создаёт `PayrollPayout ISSUED` для
+  каждой строки; UI показывает ссылки на выплаты в таблице строк.
+  `manualAdjustRub ≠ 0` — UI показывает warning и блокирует «Выплатить»
+  до STEP 6.3/6.4 (ограничение `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`).
+  Новые файлы: `apps/web/lib/payroll-accrual-documents-api.ts`,
+  `apps/web/app/admin/payroll/accrual-documents/actions.ts`,
+  `apps/web/app/admin/payroll/accrual-documents/accrual-document-ui.ts`,
+  страницы и клиентские компоненты (см. `docs/screens.md §12c`).
+  Тесты — `tests/smoke/payroll-accrual-documents-ui.smoke.test.ts`.
+
 - [x] **PHASE 2 STEP 5 «Полировка Employee/Payroll UI».** Карточка
   `/admin/employees/[id]` теперь читаемо показывает оси
   компенсации в read-режиме: «Тип оплаты», «Ставка за смену»
