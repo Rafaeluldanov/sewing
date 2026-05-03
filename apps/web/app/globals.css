@@ -11899,13 +11899,16 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .order-materials-table {
   /* AdminTable монтирует <div class="admin-table-wrap"><table class="admin-table"/>.
      Здесь мы скоупим стили под наш режим: компактный padding, font 13px,
-     горизонтальный скролл на узких экранах. */
-  min-width: 1180px;
+     горизонтальный скролл на узких экранах. После добавления колонок
+     «План / факт» и «Стоимость план / факт» (frontend-итерация
+     «план/факт» поверх MaterialIssue) min-width немного выросло —
+     иначе ячейки сжимаются и плохо читаются. */
+  min-width: 1380px;
   font-size: 0.81rem;
 }
 
 .order-materials-table-wrap .admin-table {
-  min-width: 1180px;
+  min-width: 1380px;
 }
 
 .order-materials-table-wrap .admin-table th,
@@ -11987,6 +11990,57 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 0.7rem;
   color: var(--admin-muted);
   font-weight: 400;
+}
+
+/* Frontend-итерация «план/факт» поверх MaterialIssue:
+   компактный блок «План / Факт / Δ» внутри одной ячейки.
+   Каждая строка — `label` (узкий) + `value` (число + unit). */
+.order-materials-table__planfact {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.order-materials-table__planfact-row {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.4rem;
+  align-items: baseline;
+}
+
+.order-materials-table__planfact-label {
+  font-size: 0.68rem;
+  color: var(--admin-muted);
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+}
+
+.order-materials-table__planfact-value {
+  font-weight: 500;
+}
+
+.order-materials-table__planfact-delta {
+  border-top: 1px dashed var(--admin-border, #e5e7eb);
+  padding-top: 0.15rem;
+  margin-top: 0.1rem;
+  font-weight: 600;
+}
+
+.order-materials-table__planfact-delta--over .order-materials-table__planfact-value {
+  color: var(--admin-danger-fg, #b91c1c);
+}
+
+.order-materials-table__planfact-delta--under .order-materials-table__planfact-value {
+  color: var(--admin-success-fg, #047857);
+}
+
+.order-materials-table__planfact-delta--equal .order-materials-table__planfact-value {
+  color: var(--admin-muted);
 }
 
 .order-materials-table__money {

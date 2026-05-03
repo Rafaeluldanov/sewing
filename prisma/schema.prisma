@@ -404,13 +404,13 @@ model Size {
   sortOrder Int
   createdAt DateTime @default(now())
 
-  passports                Passport[]
-  orderItems               OrderItem[]
-  cellContents             CellContent[]
-  operationRatesBySize     OperationRateBySize[]
-  closureRequests          CuttingClosureRequest[]
-  patternSizeFiles         PatternSizeFile[]
-  patternMaterialAreas     PatternMaterialArea[]
+  passports                      Passport[]
+  orderItems                     OrderItem[]
+  cellContents                   CellContent[]
+  operationRatesBySize           OperationRateBySize[]
+  closureRequests                CuttingClosureRequest[]
+  patternSizeFiles               PatternSizeFile[]
+  patternMaterialAreas           PatternMaterialArea[]
   /// Этап «Погонные метры по размерам»: обратная связь от значений
   /// `PatternItemSizeParameterValue`, привязанных к этому размеру.
   /// `onDelete: Cascade` — удаление размера каскадно сносит значения.
@@ -421,7 +421,7 @@ model Size {
   /// `OperationsService.resolveTimeNormSec(...)`. Payroll (Operation
   /// rates / OperationEntry) этой связи не использует — это отдельный
   /// плановый контур (см. `docs/operation-time-norms-recon.md §10`).
-  operationTimeNormsBySize OperationTimeNormBySize[]
+  operationTimeNormsBySize       OperationTimeNormBySize[]
   /// Этап «Очередь выдачи кроя по размерам» (см.
   /// `prisma/schema.prisma::OrderCutIssueRule`,
   /// `docs/domain.md §«Очередь выдачи кроя»`). Обратная связь от строк
@@ -429,7 +429,7 @@ model Size {
   /// `onDelete: Restrict` со стороны `OrderCutIssueRule.size` защищает
   /// от случайного удаления размера, на который завязана активная
   /// очередь.
-  cutIssueRules OrderCutIssueRule[]
+  cutIssueRules                  OrderCutIssueRule[]
 }
 
 model Product {
@@ -451,23 +451,23 @@ model Product {
   /// при удалении лекала связь обнуляется (`onDelete: SetNull` на
   /// стороне `PatternItem`), сам Product остаётся в БД (паспорта
   /// и `OrderItem` всё ещё на него ссылаются).
-  patternItems    PatternItem[] @relation("PatternLegacyProduct")
+  patternItems    PatternItem[]           @relation("PatternLegacyProduct")
 }
 
 model Operation {
-  id          String            @id @default(cuid())
-  code        String            @unique
-  name        String
-  category    OperationCategory
-  sortOrder   Int
-  active      Boolean           @default(true)
-  createdAt   DateTime          @default(now())
+  id                     String            @id @default(cuid())
+  code                   String            @unique
+  name                   String
+  category               OperationCategory
+  sortOrder              Int
+  active                 Boolean           @default(true)
+  createdAt              DateTime          @default(now())
   /// Дата последнего управленческого изменения (тариф, переименование,
   /// смена `pricingMode`). Поставлен `@updatedAt`, чтобы UI
   /// `/admin/operations` мог показывать «когда настраивалось последний
   /// раз». Существующие операции, созданные до миграции, получают
   /// `updatedAt = createdAt` через бэкфилл.
-  updatedAt   DateTime          @updatedAt
+  updatedAt              DateTime          @updatedAt
   /// Тарифный режим операции (см. `PricingMode`). Дефолт
   /// `SALARY_ONLY` — самый безопасный режим: операция участвует в
   /// pipeline, но сдельная ставка не применяется. Все существующие
@@ -475,10 +475,10 @@ model Operation {
   /// (`20260420100000_operation_pricing_model`), которая бэкфилила
   /// данные из исторической таблицы `PieceRate`. Сама `PieceRate`
   /// удалена в PHASE 2 STEP 1 (см. ADR-0020 §«PHASE 2 — drop legacy»).
-  pricingMode  PricingMode       @default(SALARY_ONLY)
+  pricingMode            PricingMode       @default(SALARY_ONLY)
   /// Фиксированная ставка для `pricingMode = FIXED`. Для `BY_SIZE` и
   /// `SALARY_ONLY` хранится `null` (валидируется в `OperationsService`).
-  fixedRate    Decimal?          @db.Decimal(12, 2)
+  fixedRate              Decimal?          @db.Decimal(12, 2)
   /// Режим нормы времени (см. `docs/operation-time-norms-recon.md §10`):
   ///   - `"FIXED"`   — одна норма на операцию (`timeNormSec`);
   ///   - `"BY_SIZE"` — поразмерная матрица (`OperationTimeNormBySize`).
@@ -490,13 +490,13 @@ model Operation {
   /// ставки), но иметь плановую норму времени. Payroll
   /// (`OperationsService.resolveRate`, `EarningsService`) этой колонки
   /// НЕ читает — это плановый, не фактический контур.
-  timeNormMode String            @default("FIXED")
+  timeNormMode           String            @default("FIXED")
   /// Фиксированная норма времени в секундах для `timeNormMode = "FIXED"`.
   /// `null` — норма не задана (UI рисует «—»). Для `timeNormMode =
   /// "BY_SIZE"` всегда `null`; норма берётся из `OperationTimeNormBySize`.
   /// Хранится `Int` — точность одной секунды достаточна (ввод в UI —
   /// «мин:сек»).
-  timeNormSec  Int?
+  timeNormSec            Int?
   /// Плановая стоимость одной смены для расчёта плановой себестоимости
   /// окладных операций (`pricingMode = SALARY_ONLY`). Используется
   /// **только** в `OrderOperationPlanService` для оценки себестоимости
@@ -515,13 +515,13 @@ model Operation {
   ///
   /// Для `pricingMode = FIXED` / `BY_SIZE` поле тоже допустимо, но
   /// игнорируется — там цена считается по сдельной ставке.
-  salaryPlanRubPerShift   Decimal? @db.Decimal(14, 2)
+  salaryPlanRubPerShift  Decimal?          @db.Decimal(14, 2)
   /// Длительность смены (в секундах), используемая для расчёта
   /// `costPerSecond = salaryPlanRubPerShift / salaryPlanShiftSeconds`.
   /// Default `28800` = 8 часов; менеджер может задать иную
   /// «расчётную смену» (например, 7-часовую), не трогая фактический
   /// payroll. Только positive int; валидируется в `OperationsService`.
-  salaryPlanShiftSeconds  Int?     @default(28800)
+  salaryPlanShiftSeconds Int?              @default(28800)
 
   events              PassportEvent[]           @relation("EventOperation")
   movedFromEvents     PassportEvent[]           @relation("EventFromOperation")
@@ -620,11 +620,11 @@ model OperationTimeNormBySize {
 // =========================
 
 model Employee {
-  id               String           @id @default(cuid())
-  fullName         String
-  login            String           @unique
-  pinHash          String
-  role             Role
+  id                     String           @id @default(cuid())
+  fullName               String
+  login                  String           @unique
+  pinHash                String
+  role                   Role
   /// Единственная ось «как платим» (см. `CompensationType`,
   /// `docs/domain.md §9a`, ADR-0021). Гейтит и сдельный
   /// (`EarningsService`), и окладной (`SalaryService`) контуры:
@@ -634,12 +634,12 @@ model Employee {
   /// безопасный: ни одной автоматической окладной записи не
   /// создаётся, пока менеджер не переключит сотрудника в `SALARY`
   /// или `MIXED` через `/admin/employees`.
-  compensationType CompensationType @default(PIECEWORK)
+  compensationType       CompensationType @default(PIECEWORK)
   /// Ставка за один отработанный день/смену. Читается модулем
   /// `salary` для `compensationType ∈ { SALARY, MIXED }`. Для
   /// `PIECEWORK` хранится `null` и игнорируется. Валидируется в
   /// `EmployeesService.update` (см. `apps/api/src/modules/employees`).
-  salaryPerShift   Decimal?         @db.Decimal(12, 2)
+  salaryPerShift         Decimal?         @db.Decimal(12, 2)
   /// Процент начисления закройщика для B2B-заказов (см.
   /// `docs/payroll-cutter-compensation-recon.md §«Настраиваемый
   /// процент»`, `packages/shared/src/cutter-compensation.ts`).
@@ -657,7 +657,7 @@ model Employee {
   /// fallback из ENV `CUTTER_B2B_SEWING_PERCENT`. Если и его нет —
   /// сдельное B2B-начисление закройщика не создаётся (audit/log
   /// warning, workflow не падает).
-  cutterB2bSewingPercent Decimal?   @db.Decimal(5, 2)
+  cutterB2bSewingPercent Decimal?         @db.Decimal(5, 2)
   /// PHASE 2 STEP 2: основная привязка сотрудника к подразделению
   /// компании (`CompanyDivision`, см. ниже и `docs/erd.md §«CompanyDivision»`).
   ///
@@ -672,10 +672,10 @@ model Employee {
   /// (legacy-импорт, кадровик ещё не заполнил). В payroll такие
   /// сотрудники видны только при выборе «все подразделения».
   /// `onDelete: SetNull` — снос подразделения не сносит сотрудника.
-  companyDivisionId String?
-  companyDivision   CompanyDivision? @relation(fields: [companyDivisionId], references: [id], onDelete: SetNull)
-  active           Boolean          @default(true)
-  createdAt        DateTime         @default(now())
+  companyDivisionId      String?
+  companyDivision        CompanyDivision? @relation(fields: [companyDivisionId], references: [id], onDelete: SetNull)
+  active                 Boolean          @default(true)
+  createdAt              DateTime         @default(now())
 
   shiftSessions    ShiftSession[]
   eventsAsActor    PassportEvent[]  @relation("EventEmployee")
@@ -751,17 +751,17 @@ model Employee {
   /// `docs/erd.md §2.9`, `docs/domain.md §10.7`). Обратные связи
   /// для каждой роли в выплате — получатель, автор черновика,
   /// тот кто выдал, сам сотрудник-подтвердивший и тот кто отменил.
-  payrollPayouts                PayrollPayout[] @relation("PayrollPayoutEmployee")
-  createdPayrollPayouts         PayrollPayout[] @relation("PayrollPayoutCreatedBy")
-  issuedPayrollPayouts          PayrollPayout[] @relation("PayrollPayoutIssuedBy")
-  acknowledgedPayrollPayouts    PayrollPayout[] @relation("PayrollPayoutAcknowledgedBy")
-  cancelledPayrollPayouts       PayrollPayout[] @relation("PayrollPayoutCancelledBy")
+  payrollPayouts             PayrollPayout[] @relation("PayrollPayoutEmployee")
+  createdPayrollPayouts      PayrollPayout[] @relation("PayrollPayoutCreatedBy")
+  issuedPayrollPayouts       PayrollPayout[] @relation("PayrollPayoutIssuedBy")
+  acknowledgedPayrollPayouts PayrollPayout[] @relation("PayrollPayoutAcknowledgedBy")
+  cancelledPayrollPayouts    PayrollPayout[] @relation("PayrollPayoutCancelledBy")
 
   /// PHASE 3 STEP 6 «PayrollAccrualDocument» — обратные связи для
   /// каждой управленческой роли в документе начисления зарплаты.
-  payrollAccrualDocumentsCreated   PayrollAccrualDocument[] @relation("PayrollAccrualDocumentCreatedBy")
-  payrollAccrualDocumentsPaid      PayrollAccrualDocument[] @relation("PayrollAccrualDocumentPaidBy")
-  payrollAccrualDocumentsCancelled PayrollAccrualDocument[] @relation("PayrollAccrualDocumentCancelledBy")
+  payrollAccrualDocumentsCreated   PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentCreatedBy")
+  payrollAccrualDocumentsPaid      PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentPaidBy")
+  payrollAccrualDocumentsCancelled PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentCancelledBy")
   payrollAccrualDocumentLines      PayrollAccrualDocumentLine[]
 
   @@index([role])
@@ -1129,6 +1129,17 @@ model Order {
   /// очередь смысла не имеет.
   cutIssueRules OrderCutIssueRule[]
 
+  /// Этап «Фактический расход материалов по заказу» (см.
+  /// `model MaterialIssue` ниже,
+  /// `apps/api/src/modules/material-issues/*`,
+  /// `docs/api.md §«Material issues»`).
+  ///
+  /// Документы фактического списания материалов в производство.
+  /// MVP-итерация — ручная фиксация расхода без проверки складских
+  /// остатков, без FIFO/LIFO и без автосписания при выдаче кроя.
+  /// Cascade — без заказа документ расхода смысла не имеет.
+  materialIssues MaterialIssue[]
+
   @@index([status])
   @@index([orderDate])
   @@index([createdAt])
@@ -1313,6 +1324,15 @@ model Passport {
   boxItems BoxItem[]
   defects  PassportDefect[]
 
+  /// Этап «Фактический расход материалов по заказу» (см.
+  /// `model MaterialIssue` ниже). Документы расхода, опционально
+  /// привязанные к конкретному паспорту (production batch). На MVP
+  /// поле noop с точки зрения авто-списания — оставлено для
+  /// аналитики и возможного расширения в следующих итерациях.
+  /// `onDelete: SetNull` со стороны `MaterialIssue.passportId` —
+  /// снос паспорта не сносит документ расхода.
+  materialIssues MaterialIssue[]
+
   @@index([status, currentOperationId])
   @@index([orderId])
   @@index([sizeId, status])
@@ -1479,9 +1499,9 @@ model PayrollPayout {
   status                   PayrollPayoutStatus @default(DRAFT)
   /// Snapshot-итоги по выплате. Заполняются при `recompute`/`issue`
   /// и больше не пересчитываются автоматически после `ISSUED`.
-  amountPieceworkRub       Decimal             @db.Decimal(12, 2) @default(0)
-  amountSalaryRub          Decimal             @db.Decimal(12, 2) @default(0)
-  amountTotalRub           Decimal             @db.Decimal(12, 2) @default(0)
+  amountPieceworkRub       Decimal             @default(0) @db.Decimal(12, 2)
+  amountSalaryRub          Decimal             @default(0) @db.Decimal(12, 2)
+  amountTotalRub           Decimal             @default(0) @db.Decimal(12, 2)
   managerComment           String?             @db.Text
   createdAt                DateTime            @default(now())
   createdById              String
@@ -1494,12 +1514,12 @@ model PayrollPayout {
   cancelReason             String?             @db.Text
   updatedAt                DateTime            @updatedAt
 
-  employee       Employee  @relation("PayrollPayoutEmployee", fields: [employeeId], references: [id])
-  createdBy      Employee  @relation("PayrollPayoutCreatedBy", fields: [createdById], references: [id])
-  issuedBy       Employee? @relation("PayrollPayoutIssuedBy", fields: [issuedById], references: [id])
-  acknowledgedBy Employee? @relation("PayrollPayoutAcknowledgedBy", fields: [acknowledgedByEmployeeId], references: [id])
-  cancelledBy    Employee? @relation("PayrollPayoutCancelledBy", fields: [cancelledById], references: [id])
-  lines          PayrollPayoutLine[]
+  employee             Employee                     @relation("PayrollPayoutEmployee", fields: [employeeId], references: [id])
+  createdBy            Employee                     @relation("PayrollPayoutCreatedBy", fields: [createdById], references: [id])
+  issuedBy             Employee?                    @relation("PayrollPayoutIssuedBy", fields: [issuedById], references: [id])
+  acknowledgedBy       Employee?                    @relation("PayrollPayoutAcknowledgedBy", fields: [acknowledgedByEmployeeId], references: [id])
+  cancelledBy          Employee?                    @relation("PayrollPayoutCancelledBy", fields: [cancelledById], references: [id])
+  lines                PayrollPayoutLine[]
   /// PHASE 3 STEP 6: строки документа начисления, из которых
   /// была сформирована эта выплата (`PayrollAccrualDocumentLine.payoutId`).
   accrualDocumentLines PayrollAccrualDocumentLine[]
@@ -1524,23 +1544,23 @@ model PayrollPayout {
 /// доступны. Активную уникальность («строка в максимум одной
 /// не-CANCELLED выплате») проверяет `PayrollPayoutsService`.
 model PayrollPayoutLine {
-  id                String                @id @default(cuid())
-  payoutId          String
-  kind              PayrollPayoutLineKind
-  operationEntryId  String?
-  salaryEntryId     String?
-  amountRub         Decimal               @db.Decimal(12, 2)
+  id               String                @id @default(cuid())
+  payoutId         String
+  kind             PayrollPayoutLineKind
+  operationEntryId String?
+  salaryEntryId    String?
+  amountRub        Decimal               @db.Decimal(12, 2)
   /// Дата события начисления — `OperationEntry.createdAt` для
   /// сдельных и `SalaryEntry.date` для окладных, нормализованные
   /// до календарной даты. Используется для отчётов и фильтрации
   /// в UI.
-  occurredOn        DateTime              @db.Date
-  snapshot          Json
-  createdAt         DateTime              @default(now())
+  occurredOn       DateTime              @db.Date
+  snapshot         Json
+  createdAt        DateTime              @default(now())
 
-  payout         PayrollPayout    @relation(fields: [payoutId], references: [id], onDelete: Cascade)
-  operationEntry OperationEntry?  @relation(fields: [operationEntryId], references: [id])
-  salaryEntry    SalaryEntry?     @relation(fields: [salaryEntryId], references: [id])
+  payout         PayrollPayout   @relation(fields: [payoutId], references: [id], onDelete: Cascade)
+  operationEntry OperationEntry? @relation(fields: [operationEntryId], references: [id])
+  salaryEntry    SalaryEntry?    @relation(fields: [salaryEntryId], references: [id])
 
   @@index([payoutId])
   @@index([operationEntryId])
@@ -1564,7 +1584,7 @@ model PayrollAccrualDocument {
 
   /// Дата расчёта включительно. Учитываются только `OperationEntry`
   /// и `SalaryEntry` с датой ≤ `accrualDate`.
-  accrualDate DateTime @db.Date
+  accrualDate DateTime                     @db.Date
   status      PayrollAccrualDocumentStatus @default(DRAFT)
 
   /// Snapshot-итоги по документу. Заполняются при формировании и
@@ -1580,11 +1600,11 @@ model PayrollAccrualDocument {
   paidById      String?
   cancelledById String?
 
-  createdAt   DateTime  @default(now())
-  updatedAt   DateTime  @updatedAt
-  paidAt      DateTime?
-  cancelledAt DateTime?
-  cancelReason String?  @db.Text
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  paidAt       DateTime?
+  cancelledAt  DateTime?
+  cancelReason String?   @db.Text
 
   createdBy   Employee  @relation("PayrollAccrualDocumentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   paidBy      Employee? @relation("PayrollAccrualDocumentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
@@ -1736,6 +1756,13 @@ model Cell {
   /// стороны `PurchaseReceiptLine.cellId`: удаление ячейки
   /// (на MVP не делается) не сносит документ приёмки.
   purchaseReceiptLines PurchaseReceiptLine[]
+  /// Этап «Фактический расход материалов по заказу» (см.
+  /// `model MaterialIssueLine` ниже). Опционально на строке
+  /// расхода фиксируется ячейка, откуда материал выдан в крой —
+  /// это аналитический срез (НЕ движение остатков). `onDelete:
+  /// SetNull` со стороны `MaterialIssueLine.cellId` — удаление
+  /// ячейки не сносит исторический документ расхода.
+  materialIssueLines   MaterialIssueLine[]
 
   @@unique([lineId, lineIndex], name: "Cell_line_index_uniq")
   @@index([warehouseId])
@@ -2117,55 +2144,55 @@ model TechCardTemplate {
 /// Все поля сознательно nullable + backward-compatible: старые
 /// техкарты остаются валидными, заказы по ним стартуют как раньше.
 model TechCardMaterialLine {
-  id             String   @id @default(cuid())
-  techCardId     String
+  id                            String   @id @default(cuid())
+  techCardId                    String
   /// Порядок отображения. Backend нормализует как `(i + 1) * 10` при
   /// записи (см. `TechCardsService.replaceMaterialLines`).
-  sortOrder      Int
+  sortOrder                     Int
   /// Свободное человекочитаемое имя материала (на MVP без справочника).
-  name           String
+  name                          String
   /// Единица измерения (м, шт, г, и т.п.). Свободная строка.
-  unit           String
+  unit                          String
   /// Норма расхода на одну единицу изделия. Положительное число,
   /// валидируется в DTO/сервисе (без БД-check).
-  qtyPerUnit     Decimal  @db.Decimal(12, 4)
-  note           String?
+  qtyPerUnit                    Decimal  @db.Decimal(12, 4)
+  note                          String?
   /// Этап 3: роль материала из общего списка `MATERIAL_ROLES` (см.
   /// `@sewing/shared/material-roles`). Связывается с
   /// `PatternMaterialArea.materialRole` для будущей «Потребности цеха».
-  materialRole   String?
+  materialRole                  String?
   /// Этап 3: характеристика полотна (кулирка, двунитка, …). Свободная
   /// строка на MVP, без справочника.
-  fabricType     String?
+  fabricType                    String?
   /// Этап 3: плотность материала, г/м². Заполняется для тканей; для
   /// пакетов / ниток / фурнитуры остаётся null.
-  densityGsm     Int?
+  densityGsm                    Int?
   /// Этап 3: плановая ширина рулона, см. Заполняется для тканей; для
   /// пакетов / ниток / фурнитуры остаётся null.
-  plannedWidthCm Int?
+  plannedWidthCm                Int?
   /// Этап 3: правило выбора цвета — `ORDER_COLOR` / `FIXED_COLOR` /
   /// `NO_COLOR`. Хранится строкой; список расширяется без миграции.
-  colorRule      String?
+  colorRule                     String?
   /// Этап 3: фиксированный цвет — заполняется только при
   /// `colorRule = FIXED_COLOR`. Сервис нормализует null/empty в null
   /// и зачищает поле для других значений `colorRule`.
-  fixedColorText String?
+  fixedColorText                String?
   /// Этап «Фурнитура в техкарте» (см. ТЗ §3): дополнительные
   /// характеристики строки фурнитуры. Имеют смысл только для
   /// `materialRole = PACKAGING` (UI скрывает поля для других ролей,
   /// сервис зачищает их в null при сохранении). Названы явно через
   /// префикс `hardware*`, чтобы не перепутать с `Size`/общим `unit`
   /// и не конфликтовать с другими полями.
-  hardwareSizeText     String?
-  hardwareMaterialText String?
+  hardwareSizeText              String?
+  hardwareMaterialText          String?
   /// Этап «Изображение материала» (см. ТЗ §5): URL/относительный путь
   /// картинки строки материала и опционально оригинальное имя файла.
   /// Хранение URL на MVP — upload сделан отдельной задачей. Поля
   /// nullable + backward-compatible.
   materialImageUrl              String?
   materialImageOriginalFileName String?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt                     DateTime @default(now())
+  updatedAt                     DateTime @updatedAt
 
   techCard          TechCardTemplate           @relation(fields: [techCardId], references: [id], onDelete: Cascade)
   orderRequirements OrderMaterialRequirement[]
@@ -2217,32 +2244,32 @@ model TechCardOutsourceLine {
 /// `sourceTechCardLineId` имеет `onDelete: SetNull`, поэтому snapshot
 /// никогда не удаляется вместе с источником.
 model OrderMaterialRequirement {
-  id                   String   @id @default(cuid())
-  orderId              String
+  id                            String   @id @default(cuid())
+  orderId                       String
   /// Ссылка на исходную строку шаблона (для аудита). Nullable: если
   /// строку шаблона потом удалили, snapshot заказа продолжает жить с
   /// `null`-ом тут (см. ADR-0022 §«snapshot independence»).
-  sourceTechCardLineId String?
-  sortOrder            Int
-  name                 String
-  unit                 String
+  sourceTechCardLineId          String?
+  sortOrder                     Int
+  name                          String
+  unit                          String
   /// Норма на единицу изделия — копия `TechCardMaterialLine.qtyPerUnit`
   /// в момент snapshot-а.
-  qtyPerUnit           Decimal  @db.Decimal(12, 4)
+  qtyPerUnit                    Decimal  @db.Decimal(12, 4)
   /// Полная потребность по заказу: `qtyPerUnit * Σ OrderItem.qtyPlan`.
-  totalQty             Decimal  @db.Decimal(12, 4)
-  note                 String?
+  totalQty                      Decimal  @db.Decimal(12, 4)
+  note                          String?
   /// Этап 3 «Потребности цеха»: snapshot-копии новых полей
   /// `TechCardMaterialLine` в момент `OrdersService.start()`. Все
   /// nullable + backward-compatible — старые snapshot-строки остаются
   /// валидными, новые получают значения, только если они заданы в
   /// техкарте. См. `docs/recon-soft-integration.md §«Этап 3»`.
-  materialRole         String?
-  fabricType           String?
-  densityGsm           Int?
-  plannedWidthCm       Int?
-  colorRule            String?
-  fixedColorText       String?
+  materialRole                  String?
+  fabricType                    String?
+  densityGsm                    Int?
+  plannedWidthCm                Int?
+  colorRule                     String?
+  fixedColorText                String?
   /// Этап 3: итоговый цвет для конкретного заказа, вычисленный в
   /// `OrdersService.start()` по `colorRule`:
   ///   - `ORDER_COLOR`          → `Order.color` (или null, если у заказа нет цвета);
@@ -2253,7 +2280,7 @@ model OrderMaterialRequirement {
   ///   - null/empty             → null.
   /// Хранится как snapshot — поздние правки заказа/техкарты не меняют
   /// это значение (та же семантика, что у остальных snapshot-полей).
-  resolvedColorText    String?
+  resolvedColorText             String?
   /// Этап «Указать в заказе» (см. ТЗ §4): для строк техкарты с
   /// `colorRule = ORDER_SELECTED_COLOR` фиксируется true в момент
   /// `OrdersService.start()`. UI карточки заказа по этому флагу
@@ -2261,14 +2288,14 @@ model OrderMaterialRequirement {
   /// и action «Сохранить цвет». Дефолт `false` обеспечивает
   /// backward-compat: старые snapshot-строки приходят как
   /// `requiresColorSelection = false`.
-  requiresColorSelection Boolean @default(false)
+  requiresColorSelection        Boolean  @default(false)
   /// Этап «Указать в заказе»: значение, которое менеджер ввёл для
   /// конкретной строки заказа. Меняется через
   /// `PATCH /api/orders/:id/material-requirements/:requirementId/color`
   /// и одновременно перезаписывается в `resolvedColorText` (см.
   /// `OrdersService.updateMaterialRequirementColor`). Не считается
   /// автоматически: для других `colorRule` остаётся null.
-  selectedColorText    String?
+  selectedColorText             String?
   /// Этап «Фурнитура / изображение» (см. ТЗ §3, §5): snapshot-копии
   /// новых полей строки техкарты. Заполняются в `OrdersService.start()`
   /// из шаблона. Все nullable + backward-compatible.
@@ -2276,7 +2303,7 @@ model OrderMaterialRequirement {
   hardwareMaterialText          String?
   materialImageUrl              String?
   materialImageOriginalFileName String?
-  createdAt            DateTime @default(now())
+  createdAt                     DateTime @default(now())
 
   order              Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
   sourceTechCardLine TechCardMaterialLine? @relation(fields: [sourceTechCardLineId], references: [id], onDelete: SetNull)
@@ -2411,11 +2438,11 @@ model AuditLog {
 }
 
 model DisplayScreenConfig {
-  id         String        @id @default(cuid())
+  id                String           @id @default(cuid())
   /// Человекочитаемое имя экрана: «ТВ маркетплейс на стене у выхода»,
   /// «Дисплей у раскройщиков». Используется только в админ-листинге
   /// (`/admin/display-screens`); фронту дисплея не отдаётся.
-  name       String
+  name              String
   /// Подразделение, которое экран показывает без `?divisionCode=` в
   /// URL — FK на master-справочник `CompanyDivision`. Источник
   /// истины подразделения экрана (см. `docs/display-board.md`,
@@ -2431,15 +2458,15 @@ model DisplayScreenConfig {
   /// экран = ровно одна учётка. На delete сотрудника каскадно
   /// удаляется и конфиг (учётку DISPLAY мы заводим строго под этот
   /// экран и не используем где-то ещё).
-  employeeId String        @unique
+  employeeId        String           @unique
   /// Мягкий выключатель экрана. Если `false` — `ShopfloorService`
   /// игнорирует конфиг при автоопределении подразделения для
   /// DISPLAY-пользователя и возвращает «общий» агрегат, как раньше.
   /// Сама учётка может всё равно жить, поэтому отключить экран
   /// временно можно без удаления.
-  isActive   Boolean       @default(true)
-  createdAt  DateTime      @default(now())
-  updatedAt  DateTime      @updatedAt
+  isActive          Boolean          @default(true)
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
 
@@ -2605,8 +2632,8 @@ model PatternItem {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  sizeFiles     PatternSizeFile[]
-  materialAreas PatternMaterialArea[]
+  sizeFiles           PatternSizeFile[]
+  materialAreas       PatternMaterialArea[]
   /// Этап «Фурнитура и нормы» (см. `model PatternItemParameterNorm`
   /// ниже). Для параметров категории с `inputType = QTY_PER_ITEM`
   /// карточка лекала хранит «норму на изделие» (Люверсы = 2 шт,
@@ -2615,7 +2642,7 @@ model PatternItem {
   /// потребности цеха `WorkshopNeedsService.calculateForOrder`
   /// раскрывает каждую норму в отдельную строку `WorkshopNeed`
   /// (`sourceType = PATTERN_PARAMETER_NORM`, `sourceId = norm.id`).
-  parameterNorms PatternItemParameterNorm[]
+  parameterNorms      PatternItemParameterNorm[]
   /// Этап «Погонные метры по размерам» (см.
   /// `model PatternItemSizeParameterValue` ниже). Для параметров
   /// категории с `inputType = LINEAR_M_BY_SIZE` карточка лекала
@@ -2631,13 +2658,13 @@ model PatternItem {
   /// (заказ читает лекало через `Order.patternItem`); связь нужна,
   /// чтобы Prisma знала о relation-поле и могла поддерживать
   /// `onDelete: SetNull` на стороне `Order.patternItemId`.
-  orders        Order[]
+  orders              Order[]
   /// Этап «Номенклатура = Лекала»: связь с авто-создаваемым
   /// «техническим» Product (см. `legacyProductId` выше).
-  legacyProduct Product? @relation("PatternLegacyProduct", fields: [legacyProductId], references: [id], onDelete: SetNull, onUpdate: Cascade)
+  legacyProduct       Product?                        @relation("PatternLegacyProduct", fields: [legacyProductId], references: [id], onDelete: SetNull, onUpdate: Cascade)
   /// Этап «Категории номенклатуры»: типизированный справочник
   /// категорий с параметрами площадей. См. `model PatternCategory`.
-  category      PatternCategory? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  category            PatternCategory?                @relation(fields: [categoryId], references: [id], onDelete: SetNull)
 
   @@index([status])
   @@index([categoryId])
@@ -2663,19 +2690,19 @@ model PatternItem {
 /// `PATTERN_CATEGORY_ICON_KEYS` (`@sewing/shared/pattern-categories`),
 /// UI рисует иконку lucide по ключу — никаких файлов-иконок.
 model PatternCategory {
-  id          String   @id @default(cuid())
+  id                   String   @id @default(cuid())
   /// Человекочитаемое название категории (видим в UI первично).
-  name        String
+  name                 String
   /// URL-friendly идентификатор категории, уникальный. На MVP сервис
   /// генерирует slug из `name`, если не передан.
-  slug        String   @unique
+  slug                 String   @unique
   /// Legacy: ключ lucide-иконки (whitelist в `PATTERN_CATEGORY_ICON_KEYS`).
   /// Хранится строкой — расширение whitelist не требует миграции.
   /// На MVP «Загружаемая JPEG-иконка категории» поле сохранено как
   /// fallback для старых записей: если `iconImageUrl` пуст, UI рисует
   /// lucide по этому ключу (см. `apps/web/lib/pattern-category-icon.tsx`,
   /// `apps/web/app/admin/patterns/page.tsx::CategoryFilterChip`).
-  iconKey     String
+  iconKey              String
   /// Публичный URL загруженной JPEG-иконки категории
   /// (`/uploads/pattern-categories/<id>/icon/<safe-name>.jpg`). Основной
   /// источник иконки в новых UI: фильтр категорий, чипсы, формы создания
@@ -2691,17 +2718,17 @@ model PatternCategory {
   /// Управленческий порядок сортировки в фильтре каталога. Меньше —
   /// выше в списке. Default 100, чтобы новые категории не «прыгали»
   /// в начало.
-  sortOrder   Int      @default(100)
+  sortOrder            Int      @default(100)
   /// `ACTIVE` / `ARCHIVED`. Свободная строка ради расширяемости
   /// (см. `PATTERN_CATEGORY_STATUSES`). Архивные не отдаются в
   /// дефолтном `GET /api/pattern-categories?status=ACTIVE`.
-  status      String   @default("ACTIVE")
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  status               String   @default("ACTIVE")
+  description          String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
 
-  patterns    PatternItem[]
-  parameters  PatternCategoryParameter[]
+  patterns   PatternItem[]
+  parameters PatternCategoryParameter[]
 
   @@index([status])
   @@index([sortOrder])
@@ -2735,10 +2762,10 @@ model PatternCategory {
 /// и сервисе `PatternCategoriesService`. См. миграцию
 /// `20260518100000_allow_multiple_category_hardware_parameters`.
 model PatternCategoryParameter {
-  id          String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  categoryId  String
-  category    PatternCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  categoryId String
+  category   PatternCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   /// Ключ роли материала (uppercase letters/digits/underscore). Должен
   /// маппиться 1:1 на строку, которую хранит
@@ -2756,27 +2783,27 @@ model PatternCategoryParameter {
   /// На этом этапе в таблицу «Площади материалов» попадают только
   /// `AREA_M2_BY_SIZE`. Остальные сохраняются и зарезервированы под
   /// будущий UI.
-  inputType   String   @default("AREA_M2_BY_SIZE")
+  inputType   String  @default("AREA_M2_BY_SIZE")
   /// Единица измерения (для AREA_M2_BY_SIZE = «м²» по умолчанию,
   /// для QTY_PER_ITEM = «шт», для TEXT_ONLY может быть пустой).
   /// На MVP UI берёт строку как есть — никакой нормализации.
-  unit        String   @default("м²")
+  unit        String  @default("м²")
   /// Признак «параметр обязателен» — frontend рисует подсказку, но
   /// на MVP не блокирует сохранение площадей с пустыми ячейками.
-  isRequired  Boolean  @default(false)
+  isRequired  Boolean @default(false)
   /// Управленческий порядок параметров в карточке категории и в
   /// шапке таблицы «Площади материалов».
-  sortOrder   Int      @default(100)
+  sortOrder   Int     @default(100)
   /// `ACTIVE` / `ARCHIVED` (см. `PATTERN_CATEGORY_PARAMETER_STATUSES`).
   /// Архивный параметр не показывается в новых карточках
   /// номенклатуры, но если в `PatternMaterialArea` уже есть строка с
   /// таким `roleKey`, она остаётся валидной (backend не подчищает
   /// исторические данные).
-  status      String   @default("ACTIVE")
+  status      String  @default("ACTIVE")
   description String?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   /// Этап «Фурнитура и нормы»: обратная связь от карточек лекал,
   /// которые сохранили норму «количество на изделие» по этому
@@ -2786,7 +2813,7 @@ model PatternCategoryParameter {
   /// архивирует параметры категории через `status = ARCHIVED` —
   /// архивные параметры не показываются в форме «Фурнитура и нормы»,
   /// но норма остаётся в БД до явной замены.
-  patternItemNorms PatternItemParameterNorm[]
+  patternItemNorms      PatternItemParameterNorm[]
   /// Этап «Погонные метры по размерам»: обратная связь от карточек
   /// лекал, которые сохранили численные значения по размерам по
   /// этому параметру (см. `model PatternItemSizeParameterValue`).
@@ -2899,43 +2926,43 @@ model PatternMaterialArea {
 /// Если norm отсутствует для required параметра, на MVP не блокируем
 /// — `WorkshopNeed` просто не создаётся (см. ТЗ §«Cut readiness»).
 model PatternItemParameterNorm {
-  id                   String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  patternItemId        String
-  patternItem          PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+  patternItemId String
+  patternItem   PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
 
-  categoryParameterId  String
-  categoryParameter    PatternCategoryParameter @relation(fields: [categoryParameterId], references: [id], onDelete: Cascade)
+  categoryParameterId String
+  categoryParameter   PatternCategoryParameter @relation(fields: [categoryParameterId], references: [id], onDelete: Cascade)
 
   /// Snapshot `roleKey` параметра категории на момент сохранения нормы.
   /// Используется `WorkshopNeedsService` для записи `WorkshopNeed.materialRole`.
   /// Для группы фурнитуры это обычно `PACKAGING`, но в одной категории
   /// несколько норм могут иметь одинаковый `roleKey` — различаются
   /// они по `categoryParameterId` (Люверсы / Шнур / Наконечники).
-  roleKey              String
+  roleKey           String
   /// Snapshot `label` параметра — отображается в `WorkshopNeed.description`
   /// и `sourceName`. Сохраняется в момент сохранения нормы, чтобы
   /// переименование параметра категории позже не повлияло на
   /// исторические `WorkshopNeed`-строки.
-  labelSnapshot        String
+  labelSnapshot     String
   /// Snapshot `inputType` параметра — на MVP всегда `QTY_PER_ITEM`,
   /// но поле зарезервировано на случай расширения списка
   /// `PATTERN_CATEGORY_PARAMETER_INPUT_TYPES`.
-  inputTypeSnapshot    String
+  inputTypeSnapshot String
   /// Единица измерения, скопированная из параметра категории
   /// (`PatternCategoryParameter.unit`). Для QTY_PER_ITEM по умолчанию
   /// «шт». Используется как `WorkshopNeed.unit`.
-  unit                 String
+  unit              String
 
   /// Норма на изделие. Decimal(14, 4), > 0. Backend валидирует через
   /// `ReplacePatternItemParameterNormsSchema` (см. `@sewing/shared`).
-  qtyPerItem           Decimal  @db.Decimal(14, 4)
+  qtyPerItem Decimal @db.Decimal(14, 4)
   /// Опциональный комментарий менеджера (например, «китайские
   /// люверсы 11 мм»). Хранится строкой как есть.
-  comment              String?
+  comment    String?
 
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([patternItemId, categoryParameterId])
   @@index([patternItemId])
@@ -2976,43 +3003,43 @@ model PatternItemParameterNorm {
 /// Если для required параметра нет значений, на MVP не блокируем
 /// — `WorkshopNeed` просто не создаётся (с warning в `calculationNote`).
 model PatternItemSizeParameterValue {
-  id                   String   @id @default(cuid())
+  id String @id @default(cuid())
 
-  patternItemId        String
-  patternItem          PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+  patternItemId String
+  patternItem   PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
 
-  categoryParameterId  String
-  categoryParameter    PatternCategoryParameter @relation(fields: [categoryParameterId], references: [id], onDelete: Cascade)
+  categoryParameterId String
+  categoryParameter   PatternCategoryParameter @relation(fields: [categoryParameterId], references: [id], onDelete: Cascade)
 
-  sizeId               String
-  size                 Size @relation(fields: [sizeId], references: [id], onDelete: Cascade)
+  sizeId String
+  size   Size   @relation(fields: [sizeId], references: [id], onDelete: Cascade)
 
   /// Snapshot `PatternCategoryParameter.roleKey` на момент сохранения.
   /// Используется `WorkshopNeedsService` для записи `WorkshopNeed.materialRole`.
-  roleKey              String
+  roleKey           String
   /// Snapshot `PatternCategoryParameter.label` — отображается в
   /// `WorkshopNeed.description` и `sourceName`. Сохраняется в момент
   /// сохранения, чтобы переименование параметра не повлияло на
   /// исторические `WorkshopNeed`-строки.
-  labelSnapshot        String
+  labelSnapshot     String
   /// Snapshot `PatternCategoryParameter.inputType` — на MVP всегда
   /// `LINEAR_M_BY_SIZE`, но поле зарезервировано на случай расширения
   /// списка `PATTERN_CATEGORY_PARAMETER_INPUT_TYPES`.
-  inputTypeSnapshot    String
+  inputTypeSnapshot String
   /// Единица измерения, скопированная из параметра категории
   /// (`PatternCategoryParameter.unit`). Для LINEAR_M_BY_SIZE по
   /// умолчанию «м пог.». Используется как `WorkshopNeed.unit`.
-  unit                 String
+  unit              String
 
   /// Численное значение по этому размеру. Decimal(14, 4), > 0.
   /// Backend валидирует через `ReplacePatternItemSizeParameterValuesSchema`
   /// (см. `@sewing/shared`).
-  value                Decimal @db.Decimal(14, 4)
+  value   Decimal @db.Decimal(14, 4)
   /// Опциональный комментарий менеджера. Хранится строкой как есть.
-  comment              String?
+  comment String?
 
-  createdAt            DateTime @default(now())
-  updatedAt            DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@unique([patternItemId, categoryParameterId, sizeId], name: "PatternItemSizeParameterValue_pattern_param_size_uniq")
   @@index([patternItemId])
@@ -3249,6 +3276,15 @@ model WorkshopNeed {
   /// `onDelete: SetNull` со стороны `OrderMaterialArrivalOverride.workshopNeedId`:
   /// удаление потребности (через cascade от заказа) не сносит override.
   materialArrivalOverrides OrderMaterialArrivalOverride[]
+
+  /// Этап «Фактический расход материалов по заказу» (см.
+  /// `model MaterialIssueLine` ниже). Строки расхода, в которых
+  /// эта потребность указана как источник (description / unit /
+  /// materialRole переносятся из `WorkshopNeed`). `onDelete: SetNull`
+  /// со стороны `MaterialIssueLine.workshopNeedId`: удаление
+  /// потребности (через cascade от заказа) не сносит уже выпущенный
+  /// документ расхода — он остаётся как исторический срез.
+  materialIssueLines MaterialIssueLine[]
 
   @@index([orderId])
   @@index([status])
@@ -3845,7 +3881,7 @@ model OrderApplication {
 
   /// Место нанесения (например, «грудь», «спина», «рукав»).
   /// Свободная строка.
-  placement String?
+  placement   String?
   /// Ширина / высота макета в мм. Для проверки готовности к крою
   /// и описания потребности цеха.
   widthMm     Int?
@@ -4114,9 +4150,9 @@ model OrderMaterialArrivalOverride {
   createdBy   Employee? @relation("OrderMaterialArrivalOverrideCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
 
   /// Когда отменён (если отменён). `null` для активных override-ов.
-  revokedAt   DateTime?
-  revokedById String?
-  revokedBy   Employee? @relation("OrderMaterialArrivalOverrideRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+  revokedAt    DateTime?
+  revokedById  String?
+  revokedBy    Employee? @relation("OrderMaterialArrivalOverrideRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
   /// Обязательная причина отмены — приходит из тела revoke-эндпоинта.
   revokeReason String?
 
@@ -4167,19 +4203,19 @@ model CompanySettings {
   shortName String?
 
   /// ИНН: 10 или 12 цифр (Zod проверяет формат).
-  inn      String?
+  inn  String?
   /// КПП: 9 цифр.
-  kpp      String?
+  kpp  String?
   /// ОГРН: 13 или 15 цифр.
-  ogrn     String?
+  ogrn String?
 
   legalAddress  String?
   actualAddress String?
 
-  phone           String?
-  email           String?
-  directorName    String?
-  accountantName  String?
+  phone          String?
+  email          String?
+  directorName   String?
+  accountantName String?
 
   /// Банковские реквизиты. Все поля свободные — формат проверяет Zod.
   bankName             String?
@@ -4266,4 +4302,174 @@ model CompanyDivision {
 
   @@index([isActive])
   @@index([sortOrder])
+}
+
+// =========================
+// MATERIAL ISSUES (фактический расход материалов по заказу)
+// =========================
+
+/// Документ фактического расхода материалов по заказу
+/// (см. `apps/api/src/modules/material-issues/*`,
+/// `docs/api.md §«Material issues»`,
+/// `docs/erd.md §«MaterialIssue / MaterialIssueLine»`).
+///
+/// Назначение MVP-итерации:
+///   - дать менеджеру цеха ручную фиксацию того, сколько материала
+///     реально было выдано в крой по заказу (с количеством, ценой,
+///     ячейкой и комментарием);
+///   - получить аналитический slice «фактический расход × заказ» для
+///     отчёта о себестоимости — независимо от плановых строк
+///     `WorkshopNeed`;
+///   - оставить место для будущей интеграции со складскими остатками
+///     (`MaterialStockLot` / `StockMovement` / FIFO/LIFO) — этого в
+///     MVP сознательно нет.
+///
+/// Сознательная граница MVP:
+///   - НЕТ складских остатков (`StockBalance` / `MaterialStockLot`
+///     не создаются);
+///   - НЕТ движений (`StockMovement` не пишется);
+///   - НЕТ FIFO/LIFO;
+///   - НЕТ автосписания при выдаче кроя
+///     (`PassportsService.issueToEmployee` не дёргает этот сервис);
+///   - НЕТ master-модели `Material` — описание/единица берутся из
+///     `WorkshopNeed` или вводятся текстом;
+///   - POSTED-документ в MVP нельзя отменить (см. сервис).
+///
+/// Жизненный цикл (статусы хранятся как `String`, как и в соседних
+/// модулях `WorkshopNeed` / `OrderMaterialArrivalOverride`):
+///   - `DRAFT`     — черновик, можно «провести» (POST `/post`) или
+///                   отменить (POST `/cancel`).
+///   - `POSTED`    — проведён. Менять/отменить нельзя в MVP.
+///   - `CANCELLED` — отменён в DRAFT. На статус `POSTED` cancel
+///                   не действует.
+///
+/// Аудит — события `MATERIAL_ISSUE_CREATED` / `MATERIAL_ISSUE_POSTED`
+/// / `MATERIAL_ISSUE_CANCELLED` под `entityType = 'MATERIAL_ISSUE'`.
+model MaterialIssue {
+  id         String  @id @default(cuid())
+  orderId    String
+  /// Опциональная привязка к производственной партии (паспорту).
+  /// На MVP — справочный slice, никаких side-effects на `Passport`
+  /// этот модуль не производит.
+  passportId String?
+  /// `DRAFT` | `POSTED` | `CANCELLED`. Хранится `String` — список
+  /// валидируется на API через Zod (`MaterialIssueStatusSchema`),
+  /// расширение не требует миграции.
+  status     String  @default("DRAFT")
+  /// Σ totalCost строк документа — пересчитывается на сервере при
+  /// `create` и `post`. Клиент не может задавать значение напрямую
+  /// (см. `CreateMaterialIssueDto`).
+  totalCost  Decimal @default(0) @db.Decimal(14, 2)
+
+  /// Источник возникновения документа:
+  ///   - `MANUAL`         — менеджер создал вручную через
+  ///                        `POST /api/material-issues`;
+  ///   - `AUTO_CUT_ISSUE` — документ создан автоматически в той же
+  ///                        транзакции, что и `PassportsService.issueToEmployee`
+  ///                        (автосписание материалов при выдаче кроя
+  ///                        сотруднику; см.
+  ///                        `apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
+  ///                        `docs/current-state.md §«Auto cut issue»`).
+  ///
+  /// Хранится `String`, чтобы расширять список источников (будущие
+  /// корректировочные/сторнирующие автодокументы) без Prisma-
+  /// миграции. Из frontend DTO не принимается — источник решает
+  /// сервис.
+  source    String  @default("MANUAL")
+  /// Технический ключ идемпотентности для автоматических документов.
+  ///   - `null` для `source = MANUAL`;
+  ///   - `AUTO_CUT_ISSUE:<passportId>` для `source = AUTO_CUT_ISSUE`.
+  ///
+  /// UNIQUE-индекс гарантирует, что повторный `issueToEmployee` по
+  /// тому же паспорту не создаст второй авто-документ (идемпотентность
+  /// при retry). В UI не отображается — это внутренний ключ.
+  sourceKey String? @unique
+
+  createdAt   DateTime  @default(now())
+  postedAt    DateTime?
+  cancelledAt DateTime?
+
+  /// Кто создал/провёл/отменил документ. Без FK на `Employee` —
+  /// учётка может быть деактивирована, документ должен уцелеть в
+  /// журнале (тот же подход, что у `OrderCutIssueRule.createdById`,
+  /// `OrderMaterialArrivalOverride.createdById`).
+  createdById   String?
+  postedById    String?
+  cancelledById String?
+  cancelReason  String?
+
+  order    Order               @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  passport Passport?           @relation(fields: [passportId], references: [id], onDelete: SetNull)
+  lines    MaterialIssueLine[]
+
+  @@index([orderId])
+  @@index([passportId])
+  @@index([status])
+  @@index([source])
+  @@index([createdAt])
+}
+
+/// Строка документа фактического расхода материалов
+/// (см. `model MaterialIssue` выше).
+///
+/// Один документ = много строк. Каждая строка фиксирует:
+///   - что списано (`description`, опциональный `materialRole`,
+///     опциональная привязка к плановой `WorkshopNeed`);
+///   - сколько (`issuedQty` × `unit`);
+///   - по какой цене (`unitCost` × `totalCost`, считается на сервере);
+///   - откуда (`cellId`, опционально — справочный slice, не
+///     движение остатков);
+///   - произвольный текст (`comment`).
+///
+/// `description` обязателен:
+///   - если `workshopNeedId` передан, сервис подставляет
+///     `description` из `WorkshopNeed.description` /
+///     `WorkshopNeed.sourceName` (или fallback по ролу);
+///   - если `workshopNeedId` не передан, `description` обязан
+///     прийти от клиента (вместе с `unit`).
+model MaterialIssueLine {
+  id              String  @id @default(cuid())
+  materialIssueId String
+  /// Опциональная ссылка на плановую строку `WorkshopNeed`. Если
+  /// заполнена — `description` / `unit` / `materialRole` могут быть
+  /// унаследованы из неё в момент создания строки.
+  /// `onDelete: SetNull` со стороны связи: удаление `WorkshopNeed`
+  /// (через cascade от `Order`) не сносит исторический документ.
+  workshopNeedId  String?
+
+  /// Готовое человекочитаемое описание материала на момент списания.
+  /// Хранится TEXT — это снимок «как было названо в крой», не FK.
+  description  String
+  /// Опциональная роль материала (`MAIN_FABRIC`, `RIB`, `LINING`, …).
+  /// Свободная строка по тем же соображениям, что
+  /// `WorkshopNeed.materialRole`.
+  materialRole String?
+  /// Единица измерения (`кг`, `м`, `шт`, …). Хранится TEXT.
+  unit         String
+  /// Сколько фактически списано. Точность 4 знака после запятой —
+  /// согласована с `WorkshopNeed.calculatedQty` / `purchaseQty` /
+  /// `PurchaseReceiptLine.receivedQty`.
+  issuedQty    Decimal @db.Decimal(14, 4)
+  /// Цена за единицу. Точность 2 знака — согласована с
+  /// `WorkshopNeed.quotedPrice` / `OrderCostEstimateLine.unitPriceRub`.
+  /// Валюта на MVP не хранится (расход считаем в рублях по аналогии
+  /// с `OrderCostEstimate`).
+  unitCost     Decimal @db.Decimal(14, 2)
+  /// Производное `issuedQty × unitCost`. Считается на сервере при
+  /// `create` и `post` — клиент не может задать значение напрямую.
+  totalCost    Decimal @db.Decimal(14, 2)
+
+  /// Опциональная ячейка, откуда выдан материал. Аналитический
+  /// slice — НЕ движение остатков. Сохраняется как FK с
+  /// `onDelete: SetNull`, чтобы удаление ячейки не сносило документ.
+  cellId  String?
+  comment String?
+
+  materialIssue MaterialIssue @relation(fields: [materialIssueId], references: [id], onDelete: Cascade)
+  workshopNeed  WorkshopNeed? @relation(fields: [workshopNeedId], references: [id], onDelete: SetNull)
+  cell          Cell?         @relation(fields: [cellId], references: [id], onDelete: SetNull)
+
+  @@index([materialIssueId])
+  @@index([workshopNeedId])
+  @@index([cellId])
 }

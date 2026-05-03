@@ -46,6 +46,7 @@ import { OrderApplicationsModule } from './modules/order-applications/order-appl
 import { OrderMaterialArrivalsModule } from './modules/order-material-arrivals/order-material-arrivals.module.js';
 import { SizesModule } from './modules/sizes/sizes.module.js';
 import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documents/payroll-accrual-documents.module.js';
+import { MaterialIssuesModule } from './modules/material-issues/material-issues.module.js';
 
 @Module({
   imports: [
@@ -96,6 +97,7 @@ import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documen
     OrderMaterialArrivalsModule,
     SizesModule,
     PayrollAccrualDocumentsModule,
+    MaterialIssuesModule,
   ],
 })
 export class AppModule {}

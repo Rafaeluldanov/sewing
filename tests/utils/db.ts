@@ -93,6 +93,14 @@ export async function resetDatabase(prisma: {
     // override готовности к крою, подчинён `Order` через
     // `ON DELETE CASCADE`. Truncate явный ради читаемости.
     'OrderMaterialArrivalOverride',
+    // Этап «Фактический расход материалов по заказу» (см.
+    // `apps/api/src/modules/material-issues/*`,
+    // `prisma/schema.prisma::MaterialIssue` / `MaterialIssueLine`):
+    // строки сначала (cascade от MaterialIssue), потом заголовки.
+    // Заголовки подчинены `Order` через `ON DELETE CASCADE`, но
+    // truncate явный — для читаемости.
+    'MaterialIssueLine',
+    'MaterialIssue',
     // Этап 4А «Потребность цеха»: одна строка на материал заказа,
     // подчинена `Order` через `ON DELETE CASCADE`. Truncate явный
     // ради читаемости, хотя CASCADE на `"Order"` ниже сделал бы то же.

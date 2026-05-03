@@ -306,7 +306,36 @@ export type AuditEntityType =
    *
    * `entityId = PayrollAccrualDocument.id`.
    */
-  | 'PAYROLL_ACCRUAL_DOCUMENT';
+  | 'PAYROLL_ACCRUAL_DOCUMENT'
+  /**
+   * Документы фактического расхода материалов по заказу (см.
+   * `apps/api/src/modules/material-issues/*`,
+   * `prisma/schema.prisma::MaterialIssue` / `MaterialIssueLine`,
+   * `docs/api.md §«Material issues»`). MVP-итерация: ручная
+   * фиксация расхода, БЕЗ `StockBalance` / `StockMovement` /
+   * FIFO/LIFO / автосписания при выдаче кроя.
+   *
+   * События пишутся в той же транзакции, что и соответствующая
+   * мутация в `MaterialIssuesService`. `entityId = MaterialIssue.id`,
+   * `payload.lines` — snapshot строк документа.
+   *
+   *   - `MATERIAL_ISSUE_CREATED` — менеджер создал документ через
+   *     `POST /api/material-issues` (статус сразу `DRAFT`); payload —
+   *     `{ materialIssueId, orderId, passportId, status: 'DRAFT',
+   *     totalCost, lines, employeeId, timestamp }`.
+   *   - `MATERIAL_ISSUE_POSTED` — менеджер провёл документ
+   *     (`POST /:id/post`, переход `DRAFT → POSTED`); payload — тот
+   *     же набор полей плюс `previousStatus: 'DRAFT'`.
+   *   - `MATERIAL_ISSUE_CANCELLED` — менеджер отменил документ в
+   *     `DRAFT` (`POST /:id/cancel`, переход `DRAFT → CANCELLED`);
+   *     payload включает `cancelReason` (если передан).
+   *
+   * Cancel для `POSTED` в MVP запрещён (см.
+   * `MaterialIssuePostedCannotCancelException`), отдельного аудит-
+   * события «отказали в отмене» нет — проверка возвращает 409 без
+   * записи в `AuditLog`.
+   */
+  | 'MATERIAL_ISSUE';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

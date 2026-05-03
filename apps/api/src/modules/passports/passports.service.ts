@@ -51,6 +51,7 @@ import { CuttingClosureService } from '../cutting-closure/cutting-closure.servic
 import { AuditService } from '../audit/audit.service.js';
 import { CutReleasePolicyService } from '../cut-release-policy/cut-release-policy.service.js';
 import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-issue-rules.service.js';
+import { MaterialIssuesService } from '../material-issues/material-issues.service.js';
 
 type PassportRow = Prisma.PassportGetPayload<{
   include: {
@@ -88,6 +89,7 @@ export class PassportsService {
     private readonly audit: AuditService,
     private readonly cutReleasePolicy: CutReleasePolicyService,
     private readonly orderCutIssueRules: OrderCutIssueRulesService,
+    private readonly materialIssues: MaterialIssuesService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -620,6 +622,24 @@ export class PassportsService {
           qty: passport.qtyCut,
           mode: 'FROM_CELL',
         });
+        // Автосписание материалов при выдаче кроя (см.
+        // `apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
+        // `docs/current-state.md §«Auto cut issue»`).
+        //
+        // Идёт В ТОЙ ЖЕ транзакции: если создание документа
+        // упадёт (constraint / relation), выдача кроя откатится
+        // целиком — инвариант «либо и выдача, и расход, либо
+        // ничего». Идемпотентность обеспечивается UNIQUE
+        // `MaterialIssue.sourceKey` — retry того же passport-а
+        // не создаёт дубля. Мягкие отсутствия (нет WorkshopNeed,
+        // totalOrderQty <= 0, unit-price отсутствует — см.
+        // `AutoCutIssueSkipReason`) НЕ блокируют issueToEmployee:
+        // сервис вернёт `{ skipped: true }`, и мы продолжим.
+        await this.materialIssues.createAutoCutIssueForPassport(
+          tx,
+          passport.id,
+          employeeId,
+        );
       });
 
       this.logger.log(
@@ -711,6 +731,14 @@ export class PassportsService {
         qty: passport.qtyCut,
         mode: 'ROUTE_WIP',
       });
+      // Автосписание материалов — тот же контракт, что в
+      // FROM_CELL ветке. Пишется в той же транзакции; retry
+      // идемпотентен по UNIQUE `MaterialIssue.sourceKey`.
+      await this.materialIssues.createAutoCutIssueForPassport(
+        tx,
+        passport.id,
+        employeeId,
+      );
     });
 
     this.logger.log(

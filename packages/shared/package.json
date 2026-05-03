@@ -49,6 +49,7 @@
     "./cut-readiness": "./src/cut-readiness.ts",
     "./order-applications": "./src/order-applications.ts",
     "./order-material-arrivals": "./src/order-material-arrivals.ts",
+    "./material-issues": "./src/material-issues.ts",
     "./order-production-balance": "./src/order-production-balance.ts",
     "./production-cost": "./src/production-cost.ts",
     "./sizes": "./src/sizes.ts",

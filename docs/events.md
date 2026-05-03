@@ -349,6 +349,7 @@ WORKSHOP_NEED | SUPPLIER |
 PURCHASE_ORDER | PURCHASE_RECEIPT |
 ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
+MATERIAL_ISSUE |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY | PAYROLL_PAYOUT |
@@ -442,6 +443,50 @@ runtime-коде (не из комментариев/документации). 
   (`purchase-receipts.service.ts:281`).
 - `PURCHASE_RECEIPT_CANCELLED` — `PurchaseReceiptsService.cancel`
   (`purchase-receipts.service.ts:387`).
+
+#### Material issues (`entityType = MATERIAL_ISSUE`, `entityId = MaterialIssue.id`)
+
+Источник: `apps/api/src/modules/material-issues/material-issues.service.ts`,
+`prisma/schema.prisma::MaterialIssue` / `MaterialIssueLine`,
+`docs/api.md §«Material issues»`.
+
+- `MATERIAL_ISSUE_CREATED` — пишется в двух сценариях:
+  - `MaterialIssuesService.create` (ручной `POST /api/material-issues`)
+    сразу после `materialIssue.create` в той же транзакции —
+    `status: 'DRAFT'`, `source: 'MANUAL'`, `sourceKey: null`;
+  - `MaterialIssuesService.createAutoCutIssueForPassport`
+    (автосписание при `PassportsService.issueToEmployee`) —
+    `status: 'POSTED'`, `source: 'AUTO_CUT_ISSUE'`,
+    `sourceKey: 'AUTO_CUT_ISSUE:<passportId>'`. Payload дополнительно
+    содержит `calculation = { totalOrderQty, passportQtyCut,
+    formula: 'WorkshopNeed.calculatedQty * Passport.qtyCut / totalOrderQty' }`.
+  Базовый payload (общий для обоих сценариев):
+  `materialIssueId`, `orderId`, `passportId`, `status`, `source`,
+  `sourceKey`, `totalCost`, `lines` (snapshot строк документа),
+  `employeeId`, `timestamp`.
+- `MATERIAL_ISSUE_POSTED` — пишется в двух сценариях:
+  - `MaterialIssuesService.post` (`DRAFT → POSTED`) — `source:
+    'MANUAL'`;
+  - `MaterialIssuesService.createAutoCutIssueForPassport`
+    (сразу после `MATERIAL_ISSUE_CREATED` — авто-документ
+    проводится в той же транзакции) — `source: 'AUTO_CUT_ISSUE'`.
+  Payload — те же поля, что у `MATERIAL_ISSUE_CREATED`, плюс
+  `previousStatus: 'DRAFT'`.
+- `MATERIAL_ISSUE_CANCELLED` — `MaterialIssuesService.cancel`
+  (`DRAFT → CANCELLED`, только `source: 'MANUAL'`). Payload —
+  те же поля + `previousStatus` и `cancelReason` (если передан).
+
+Cancel для `POSTED`-документа в MVP запрещён
+(`MaterialIssuePostedCannotCancelException`, 409). Запрос
+возвращает ошибку без записи в `AuditLog` — это та же стратегия,
+что и у `WorkshopNeedsService.update` для locked-строк.
+
+Если автосписание skip-ается (повторный retry по `sourceKey`, уже
+есть неотменённый документ по `passportId`, нет подходящей
+`WorkshopNeed`, `totalOrderQty <= 0`) — audit-события **не
+пишутся** (skip — это успешное отсутствие действия), только
+structured-лог `event=material_issue.auto.skip reason=...` в
+stdout сервиса.
 
 #### Заказы покупателя (`entityType = ORDER` / `ORDER_COST_ESTIMATE`)
 

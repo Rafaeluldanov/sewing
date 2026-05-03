@@ -28,6 +28,10 @@ import {
   type CutReadinessDto,
 } from '@sewing/shared/cut-readiness';
 import {
+  type MaterialIssueDetailDto,
+  type MaterialIssueLineDto,
+} from '@sewing/shared/material-issues';
+import {
   type PurchaseOrderListItemDto,
 } from '@sewing/shared/purchase-orders';
 import {
@@ -125,6 +129,58 @@ export interface OrderMaterialTableRow {
    */
   commentText: string | null;
   warnings: string[];
+
+  // ----- Колонки 13–14: план / факт расхода материалов -------------------
+  /**
+   * Плановое количество расхода материала в производство.
+   * `WorkshopNeed.calculatedQty` — производственная потребность
+   * (а не закупочная `purchaseQty`, см. ТЗ §4 frontend-итерации
+   * «план/факт»). Decimal-as-string.
+   */
+  plannedQty: string;
+  /**
+   * Плановая стоимость расхода = `calculatedQty * quotedPrice`,
+   * только для RUB-цены. `null`, если цена не указана либо в USD.
+   * Сознательно не дублируем USD-сумму: `lineTotalUsd` уже
+   * показывается отдельно колонкой «Сумма».
+   */
+  plannedCost: string | null;
+  /**
+   * Σ `MaterialIssueLine.issuedQty` по POSTED-документам с
+   * `workshopNeedId === row.id`. Учитываем только строки с тем же
+   * `unit`, что у потребности — конвертация единиц в MVP не
+   * делается. `'0'`, если факта нет.
+   */
+  issuedQtyFact: string;
+  /**
+   * Σ `MaterialIssueLine.totalCost` по POSTED-документам с
+   * `workshopNeedId === row.id`. Считаем независимо от unit,
+   * потому что `totalCost` — это уже деньги. `'0'`, если факта
+   * нет.
+   */
+  actualCost: string;
+  /**
+   * `issuedQtyFact - plannedQty` (Decimal-as-string). Может быть
+   * отрицательной — это «факт меньше плана», UI отдельно
+   * подкрашивает экономию vs перерасход.
+   */
+  deltaQty: string;
+  /**
+   * `actualCost - plannedCost` (Decimal-as-string). `null`, если
+   * `plannedCost` отсутствует (USD без курса / нет цены) — иначе
+   * был бы фейковый «перерасход» на всю фактическую сумму.
+   */
+  deltaCost: string | null;
+  /**
+   * `true`, если есть POSTED `MaterialIssueLine` с этим
+   * `workshopNeedId`, у которой `unit !== WorkshopNeed.unit`. UI
+   * показывает короткое предупреждение и НЕ суммирует разные
+   * единицы — конвертация в MVP не делается (см. ТЗ §3 «фактический
+   * расход / unit mismatch»).
+   */
+  unitMismatch: boolean;
+  /** Кол-во POSTED-строк с `workshopNeedId === row.id` (для UI/debug). */
+  postedIssueLineCount: number;
 
   /** Ссылка на исходный DTO — на случай inline-edit / debug. */
   originalNeed: WorkshopNeedListItemDto;
@@ -256,6 +312,108 @@ interface BuildRowsInput {
    * деградирует на ожидаемую (`expectedDeliveryDate` потребности).
    */
   purchaseReceiptDetails: Map<string, PurchaseReceiptDetailDto>;
+  /**
+   * Документы фактического расхода материалов по заказу
+   * (`MaterialIssue` + `MaterialIssueLine`). Для агрегации
+   * план/факт нам нужны именно `Detail`-варианты — у `ListItemDto`
+   * нет `lines`. Frontend-итерация: данные грузит
+   * `OrderNeedsTab` один раз и пробрасывает и сюда, и в
+   * `MaterialIssuesSection` (без повторного fetch).
+   *
+   * Мы фильтруем POSTED внутри агрегатора, а не на входе, чтобы
+   * UI мог при желании показывать DRAFT/CANCELLED-сумму отдельно
+   * без второго fetch (текущая итерация этого не делает).
+   *
+   * Если `undefined` или пусто — таблица работает как раньше:
+   * `issuedQtyFact = 0`, `actualCost = 0`, `unitMismatch = false`.
+   */
+  materialIssues?: MaterialIssueDetailDto[];
+}
+
+interface MaterialIssueAggregateForNeed {
+  issuedQtyFact: string;
+  actualCost: string;
+  unitMismatch: boolean;
+  postedLineCount: number;
+}
+
+/**
+ * Агрегат факта расхода для одной `WorkshopNeed.id` по всем
+ * POSTED `MaterialIssueLine` с этим `workshopNeedId`.
+ *
+ * Правила (см. ТЗ §3 frontend-итерации «план/факт»):
+ *   - учитываем только `issue.status === 'POSTED'`;
+ *   - DRAFT и CANCELLED игнорируем;
+ *   - строки с `workshopNeedId === null` сюда не попадают
+ *     (caller их фильтрует);
+ *   - `issuedQty` суммируем только если `line.unit === need.unit`
+ *     (конвертация единиц в MVP не делается). При несовпадении
+ *     поднимаем `unitMismatch = true` и **не** добавляем число;
+ *   - `totalCost` суммируем независимо от unit — это уже деньги.
+ *
+ * Decimal-аккумуляторы — `number`. Это допустимо для UI-агрегата
+ * (мы не закрываем себестоимость), и совпадает со стилем
+ * `summariseOrderMaterialRows`.
+ */
+function buildIssueAggregatesByNeed(
+  materialIssues: readonly MaterialIssueDetailDto[],
+  workshopNeedById: ReadonlyMap<string, WorkshopNeedListItemDto>,
+): Map<string, MaterialIssueAggregateForNeed> {
+  const acc = new Map<
+    string,
+    {
+      issuedQty: number;
+      actualCost: number;
+      unitMismatch: boolean;
+      postedLineCount: number;
+    }
+  >();
+
+  for (const issue of materialIssues) {
+    if (issue.status !== 'POSTED') continue;
+    for (const line of issue.lines as readonly MaterialIssueLineDto[]) {
+      const needId = line.workshopNeedId;
+      if (!needId) continue;
+      // Если `workshopNeedId` указывает на удалённую/неизвестную
+      // потребность — не агрегируем (см. ТЗ §7 «Состояние данных»),
+      // иначе строки таблицы «привесят» лишний факт ни к чему.
+      const need = workshopNeedById.get(needId);
+      if (!need) continue;
+
+      const bucket = acc.get(needId) ?? {
+        issuedQty: 0,
+        actualCost: 0,
+        unitMismatch: false,
+        postedLineCount: 0,
+      };
+
+      const lineUnit = String(line.unit ?? '').trim();
+      const needUnit = String(need.unit ?? '').trim();
+      if (lineUnit && needUnit && lineUnit !== needUnit) {
+        bucket.unitMismatch = true;
+      } else {
+        const qty = toFiniteNumber(line.issuedQty);
+        if (qty != null) bucket.issuedQty += qty;
+      }
+
+      const cost = toFiniteNumber(line.totalCost);
+      if (cost != null) bucket.actualCost += cost;
+      bucket.postedLineCount += 1;
+
+      acc.set(needId, bucket);
+    }
+  }
+
+  const out = new Map<string, MaterialIssueAggregateForNeed>();
+  for (const [needId, bucket] of acc) {
+    out.set(needId, {
+      issuedQtyFact: String(bucket.issuedQty),
+      actualCost: String(bucket.actualCost),
+      unitMismatch: bucket.unitMismatch,
+      postedLineCount: bucket.postedLineCount,
+    });
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -436,6 +594,7 @@ export function buildOrderMaterialRows(
     purchaseOrders,
     purchaseReceipts,
     purchaseReceiptDetails,
+    materialIssues,
   } = input;
 
   // Активный (не CANCELLED) PO для всего заказа — на MVP мы
@@ -445,6 +604,16 @@ export function buildOrderMaterialRows(
   const activePoForOrder = pickActivePurchaseOrderForNeed(
     '*',
     purchaseOrders,
+  );
+
+  // Агрегат факта расхода по `WorkshopNeed.id`. Если документов
+  // нет (`materialIssues` пуст / undefined), вернём пустую мапу —
+  // строки просто отрисуются с `issuedQtyFact = 0`.
+  const workshopNeedById = new Map<string, WorkshopNeedListItemDto>();
+  for (const need of workshopNeeds) workshopNeedById.set(need.id, need);
+  const issueAggregates = buildIssueAggregatesByNeed(
+    materialIssues ?? [],
+    workshopNeedById,
   );
 
   const rows: OrderMaterialTableRow[] = [];
@@ -554,6 +723,49 @@ export function buildOrderMaterialRows(
         .filter((v): v is string => typeof v === 'string' && v.length > 0)
         .join(' · ') || null;
 
+    // План / факт по фактическому расходу материалов
+    // (frontend-итерация «план/факт» поверх MaterialIssue).
+    //
+    // Плановое количество — производственная потребность
+    // (`calculatedQty`), а не закупочная (`purchaseQty`): см. ТЗ §4.
+    // Плановая стоимость — `calculatedQty * quotedPrice`, только
+    // для RUB-цены; для USD цены и для пустой цены — `null`.
+    const plannedCalcQtyNum = toFiniteNumber(need.calculatedQty);
+    let plannedCost: string | null = null;
+    if (
+      priceNum != null &&
+      priceNum >= 0 &&
+      plannedCalcQtyNum != null &&
+      !isUsd
+    ) {
+      plannedCost = String(priceNum * plannedCalcQtyNum);
+    }
+
+    const aggregate = issueAggregates.get(need.id);
+    const issuedQtyFact = aggregate?.issuedQtyFact ?? '0';
+    const actualCost = aggregate?.actualCost ?? '0';
+    const unitMismatch = aggregate?.unitMismatch ?? false;
+    const postedIssueLineCount = aggregate?.postedLineCount ?? 0;
+
+    // `deltaQty = issuedQtyFact - plannedQty`. При unitMismatch
+    // мы намеренно не суммировали разные единицы (см. агрегатор),
+    // поэтому дельта в этом случае — это «факт совпадающих
+    // единиц минус план», UI показывает warning отдельно.
+    const issuedQtyNum = toFiniteNumber(issuedQtyFact) ?? 0;
+    const plannedQtyNum = plannedCalcQtyNum ?? 0;
+    const deltaQty = String(issuedQtyNum - plannedQtyNum);
+
+    // `deltaCost = actualCost - plannedCost`. Если плановой
+    // стоимости нет (USD без курса / нет цены) — `null`, иначе
+    // дельта была бы фейковым «перерасходом» на всю фактическую
+    // сумму.
+    let deltaCost: string | null = null;
+    if (plannedCost != null) {
+      const actualCostNum = toFiniteNumber(actualCost) ?? 0;
+      const plannedCostNum = toFiniteNumber(plannedCost) ?? 0;
+      deltaCost = String(actualCostNum - plannedCostNum);
+    }
+
     rows.push({
       id: need.id,
       roleLabel: getOrderMaterialRoleLabel(
@@ -584,6 +796,14 @@ export function buildOrderMaterialRows(
       supplierItemText,
       commentText,
       warnings: status.warnings,
+      plannedQty: calculatedQty,
+      plannedCost,
+      issuedQtyFact,
+      actualCost,
+      deltaQty,
+      deltaCost,
+      unitMismatch,
+      postedIssueLineCount,
       originalNeed: need,
     });
   }

@@ -52,6 +52,7 @@ export * from './purchase-receipts';
 export * from './cut-readiness';
 export * from './order-applications';
 export * from './order-material-arrivals';
+export * from './material-issues';
 export * from './money';
 export * from './order-cost-estimates';
 export * from './order-production-balance';
