@@ -553,10 +553,23 @@ DTO: `packages/shared/src/purchase-receipts.ts`.
   (`sourceKey = MATERIAL_ISSUE_LINE:<lineId>`,
   `type = MATERIAL_ISSUE`) через
   `StockService.recordMaterialIssueInTx`, `StockBalance.qty`
-  уменьшается. Недостаток остатка не блокирует проведение —
-  допускается отрицательный `StockBalance.qty`. Reversal/сторно для
-  `MaterialIssue` на этой итерации **не реализован** (POSTED
-  отменить нельзя).
+  уменьшается. Поведение при нехватке остатка управляется
+  hardening-флагом `CompanySettings.allowNegativeMaterialStock`
+  (Boolean, default `true`, см.
+  `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`):
+  при `true` (default) минусовой `StockBalance.qty` допустим
+  (включая создание no-location negative balance, если
+  положительного остатка нет); при `false` `MaterialIssue.post`
+  возвращает 409 `MATERIAL_STOCK_INSUFFICIENT`, транзакция
+  целиком откатывается (`MaterialIssue` остаётся `DRAFT`, OUT не
+  пишется, `StockBalance` не меняется). Флаг применяется ТОЛЬКО к
+  OUT-движениям `MaterialIssue` (`MANUAL post` и `AUTO_CUT_ISSUE`):
+  `PurchaseReceipt` cancel / REVERSAL OUT остаётся permissive —
+  отмена приёмки выходит за рамки этой итерации. Публичный DTO/PATCH
+  `/api/company-settings` это поле **не принимает** на этой
+  итерации (UI ещё не утверждён) — backend читает значение через
+  приватный getter. Reversal/сторно для `MaterialIssue` на этой
+  итерации также **не реализован** (POSTED отменить нельзя).
 - Публичных REST-роутов под складские остатки в этой итерации нет
   (`StockBalance`/`StockMovement` — внутренние таблицы).
 
@@ -585,7 +598,7 @@ DTO: `packages/shared/src/purchase-receipts.ts`.
 | GET   | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | List `ListMaterialIssuesQuery` (фильтры `orderId`/`passportId`/`status`). Сортировка `createdAt desc`. |
 | GET   | `/api/material-issues/:id`                        | ADMIN, SHOP_MANAGER | Карточка документа (с `lines`, `order`, `passport`, `workshopNeed` и `cell` по строкам). |
 | POST  | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | 201 Created. Body `CreateMaterialIssueDto`. Создаёт документ со `status = DRAFT`. `totalCost` считается на сервере = Σ `issuedQty × unitCost`. Если `workshopNeedId` указан, `description`/`unit`/`materialRole` берутся из `WorkshopNeed`. НЕ создаёт `StockMovement` — склад пишется только при проведении (`/post`). |
-| POST  | `/api/material-issues/:id/post`                   | ADMIN, SHOP_MANAGER | `DRAFT → POSTED`. Пересчитывает `totalCost` по строкам. Side effects: для каждой `MaterialIssueLine` с `workshopNeedId`, `unit` и `issuedQty > 0` в той же транзакции пишется исходящий `StockMovement` (`OUT`, `type = MATERIAL_ISSUE`, `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`) через `StockService.recordMaterialIssueInTx` и `StockBalance.qty` уменьшается. Недостаток остатка **не блокирует** проведение — допускается минус (см. MVP-границы ниже). `MaterialIssue.totalCost` НЕ пересчитывается по складской стоимости. |
+| POST  | `/api/material-issues/:id/post`                   | ADMIN, SHOP_MANAGER | `DRAFT → POSTED`. Пересчитывает `totalCost` по строкам. Side effects: для каждой `MaterialIssueLine` с `workshopNeedId`, `unit` и `issuedQty > 0` в той же транзакции пишется исходящий `StockMovement` (`OUT`, `type = MATERIAL_ISSUE`, `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`) через `StockService.recordMaterialIssueInTx` и `StockBalance.qty` уменьшается. Реакция на нехватку остатка управляется флагом `CompanySettings.allowNegativeMaterialStock` (default `true` — минус допустим; `false` — 409 `MATERIAL_STOCK_INSUFFICIENT` с `details = { workshopNeedId, warehouseId, cellId, requestedQty, availableQty, unit, description }`, транзакция целиком откатывается, документ остаётся `DRAFT`, OUT не пишется, `StockBalance` не меняется). `MaterialIssue.totalCost` НЕ пересчитывается по складской стоимости. |
 | POST  | `/api/material-issues/:id/cancel`                 | ADMIN, SHOP_MANAGER | Body `CancelMaterialIssueDto` (`{ reason? }`). `DRAFT → CANCELLED`. POSTED отменить нельзя — 409 `MATERIAL_ISSUE_POSTED_CANNOT_CANCEL`. Cancel DRAFT не пишет `StockMovement`. Reversal POSTED-расхода в этой итерации не реализован. |
 | GET   | `/api/orders/:orderId/material-issues`            | ADMIN, SHOP_MANAGER | Список документов расхода по заказу покупателя (с `lines`). |
 
@@ -618,8 +631,19 @@ DTO: `apps/api/src/modules/material-issues/dto/*.ts`. Audit-события
   `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`,
   `comment = "Автоматическое списание при выдаче кроя"`) и
   `StockBalance.qty` уменьшается. `PassportsService` склад напрямую
-  не трогает; выдача кроя не блокируется недостатком остатка
-  (допустим минусовой `StockBalance.qty`).
+  не трогает. Блокировка выдачи кроя при нехватке материала
+  управляется hardening-флагом
+  `CompanySettings.allowNegativeMaterialStock`: при default
+  `true` минусовой `StockBalance.qty` допустим, `issueToEmployee`
+  проходит; при `false` `StockService` бросает 409
+  `MATERIAL_STOCK_INSUFFICIENT` и **вся транзакция выдачи кроя
+  откатывается** — `Passport` не переходит в IN_PROGRESS,
+  `PassportEvent ISSUED_TO_EMPLOYEE` и `AUTO_CUT_ISSUE`
+  `MaterialIssue` не создаются, `StockMovement` не пишется,
+  `StockBalance` не меняется. Если автосписание выключено
+  (`autoIssueMaterialsOnCutRelease = false`), `allowNegativeMaterialStock`
+  на `issueToEmployee` не влияет — авто-документ просто не
+  создаётся.
 
 Сознательная граница MVP:
 
@@ -628,7 +652,18 @@ DTO: `apps/api/src/modules/material-issues/dto/*.ts`. Audit-события
   живут независимо. `MaterialIssue.totalCost` не пересчитывается
   по складу.
 - НЕТ FIFO/LIFO и `MaterialStockLot`;
-- НЕТ проверки достаточности остатков (POSTED проходит при минусе);
+- проверка достаточности остатков опциональна и управляется
+  `CompanySettings.allowNegativeMaterialStock` (default `true` —
+  POSTED проходит при минусе; `false` — 409
+  `MATERIAL_STOCK_INSUFFICIENT` с rollback). Strict-режим `false`
+  применяется только к `MaterialIssue` OUT (ручному `post` и
+  `AUTO_CUT_ISSUE`); `PurchaseReceipt` cancel / REVERSAL OUT
+  остаётся permissive — отмена приёмки выходит за рамки этой
+  итерации;
+- UI/публичного API для управления флагом
+  `allowNegativeMaterialStock` пока нет — `CompanySettings`-DTO
+  не включает это поле, переключение делается прямой записью в БД
+  владельцем проекта;
 - POSTED-документ нельзя отменить в MVP (reversal/сторно склада
   для `MaterialIssue` — отдельная будущая итерация);
 - НЕТ master-модели `Material` — описание/единица берутся из
@@ -1277,6 +1312,21 @@ DTO: `packages/shared/src/printers.ts`.
 DTO: `packages/shared/src/company-settings.ts`. Audit:
 `COMPANY_SETTINGS_UPDATED` (`entityType = COMPANY_SETTINGS`,
 `entityId = "default"`).
+
+Hardening-флаги, которые **не** входят в публичный
+`UpdateCompanySettingsDto` / response DTO на этой итерации
+(переключение делается прямой записью в БД владельцем проекта,
+backend читает их через приватные геттеры
+`CompanySettingsService`):
+
+- `autoIssueMaterialsOnCutRelease Boolean @default(false)` — авто-
+  списание материалов при выдаче кроя (см. §20a «Material issues»);
+- `allowNegativeMaterialStock Boolean @default(true)` — гейт
+  отрицательных остатков для `MaterialIssue` OUT (`MANUAL post`
+  и `AUTO_CUT_ISSUE`); подробности и контракт ошибки 409
+  `MATERIAL_STOCK_INSUFFICIENT` — в §20a «Material issues» и
+  `docs/current-state.md §«Подключение расхода материалов к
+  складу»`. UI для управления флагом ещё не утверждён.
 
 ### 42.2 Подразделения компании
 

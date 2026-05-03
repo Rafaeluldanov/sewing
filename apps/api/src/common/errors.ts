@@ -2691,3 +2691,57 @@ export class MaterialIssuePostedCannotCancelException extends BusinessException 
     );
   }
 }
+
+/**
+ * Hardening-итерация «Запрет отрицательных остатков материалов»:
+ * `MaterialIssue.post` / `AUTO_CUT_ISSUE` пытается списать больше,
+ * чем лежит на выбранном `StockBalance`, при включённой настройке
+ * `CompanySettings.allowNegativeMaterialStock = false`
+ * (см. `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
+ * `apps/api/src/modules/stock/stock.service.ts::applyMovementInTx`,
+ * `apps/api/src/modules/material-issues/material-issues.service.ts`,
+ * `docs/current-state.md §«Material issue → StockMovement OUT»`).
+ *
+ * Контракт ответа:
+ *   - 409 Conflict;
+ *   - `code = MATERIAL_STOCK_INSUFFICIENT`;
+ *   - `details` содержит контекст для UI / клиента: `workshopNeedId`,
+ *     `warehouseId`, `cellId`, `requestedQty`, `availableQty`, `unit`,
+ *     `description`. Все числовые величины — строки (Decimal),
+ *     чтобы не терять точность при JSON-сериализации.
+ *
+ * Сообщение формируется сервисом, потому что зависит от описания
+ * материала и единицы измерения. Класс наследует `BusinessException`,
+ * чтобы попасть в общий exception-фильтр API и держать тот же
+ * формат ответа `{ statusCode, message, code, details? }`, что и
+ * остальные доменные ошибки модуля (см. `MaterialIssue*Exception`
+ * выше).
+ *
+ * Бросается ТОЛЬКО при `allowNegativeMaterialStock = false`. Если
+ * флаг `true`, сервис не падает — балансы могут уйти в минус, как и
+ * до hardening-итерации.
+ */
+export class MaterialStockInsufficientException extends HttpException {
+  constructor(
+    message: string,
+    public readonly details: {
+      workshopNeedId: string;
+      warehouseId: string | null;
+      cellId: string | null;
+      requestedQty: string;
+      availableQty: string;
+      unit: string;
+      description: string;
+    },
+  ) {
+    super(
+      {
+        statusCode: HttpStatus.CONFLICT,
+        message,
+        code: 'MATERIAL_STOCK_INSUFFICIENT',
+        details,
+      },
+      HttpStatus.CONFLICT,
+    );
+  }
+}

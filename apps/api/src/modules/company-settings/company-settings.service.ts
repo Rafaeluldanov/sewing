@@ -85,6 +85,48 @@ export class CompanySettingsService {
     return row?.autoIssueMaterialsOnCutRelease ?? false;
   }
 
+  /**
+   * Hardening-флаг: разрешать ли отрицательный `StockBalance.qty`
+   * при списании материалов в `MaterialIssue.post` /
+   * `AUTO_CUT_ISSUE`
+   * (см. `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
+   * `apps/api/src/modules/stock/stock.service.ts::applyMovementInTx`,
+   * `apps/api/src/modules/material-issues/material-issues.service.ts`,
+   * `docs/current-state.md §«Material issue → StockMovement OUT»`).
+   *
+   * Контракт:
+   *   - `true`  (default) → текущее MVP-поведение: OUT может увести
+   *     `StockBalance.qty` в минус; при отсутствии положительного
+   *     баланса создаётся no-location negative balance.
+   *   - `false` → `StockService` проверяет достаточность остатка
+   *     ДО записи OUT: при нехватке бросает `MATERIAL_STOCK_INSUFFICIENT`
+   *     (409), транзакция откатывается, ни OUT, ни апдейта баланса
+   *     нет; `MaterialIssue` остаётся `DRAFT`.
+   *   - Если строки `CompanySettings` ещё нет (свежая БД, до первого
+   *     обращения к UI настроек) — возвращаем `true` и НЕ создаём
+   *     singleton-row. Это безопасный default, совпадающий с
+   *     SQL-default колонки и со старым поведением — переключение
+   *     на жёсткую блокировку остаётся явным действием владельца
+   *     проекта (после того, как UI-настройка будет утверждена).
+   *
+   * Сознательная граница итерации: метод НЕ ходит через
+   * `getOrCreate()` и НЕ пишет audit. Публичный DTO/PATCH
+   * `/api/company-settings` это поле НЕ принимает (UI ещё не
+   * утверждён, см. `docs/current-state.md`).
+   *
+   * Флаг применяется ТОЛЬКО к OUT-движениям `MaterialIssue` (ручному
+   * `post` и `AUTO_CUT_ISSUE`). `PurchaseReceipt` cancel / REVERSAL
+   * OUT остаётся permissive (см.
+   * `StockService.reversePurchaseReceiptInTx`).
+   */
+  async getAllowNegativeMaterialStock(): Promise<boolean> {
+    const row = await this.prisma.companySettings.findUnique({
+      where: { id: COMPANY_SETTINGS_SINGLETON_ID },
+      select: { allowNegativeMaterialStock: true },
+    });
+    return row?.allowNegativeMaterialStock ?? true;
+  }
+
   // ===========================================================================
   // UPDATE
   // ===========================================================================

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 
+import { CompanySettingsModule } from '../company-settings/company-settings.module.js';
 import { StockModule } from '../stock/stock.module.js';
 import { MaterialIssuesController } from './material-issues.controller.js';
 import { MaterialIssuesOrderController } from './material-issues.order-controller.js';
@@ -18,12 +19,22 @@ import { MaterialIssuesService } from './material-issues.service.js';
  * при выдаче кроя. Обратного импорта (Stock → MaterialIssues) нет —
  * `StockModule` изолирован.
  *
+ * Также импортирует `CompanySettingsModule` ради
+ * `CompanySettingsService.getAllowNegativeMaterialStock()`:
+ * `MaterialIssuesService` читает hardening-флаг ПЕРЕД
+ * `recordMaterialIssueInTx` и пробрасывает его в `StockService`,
+ * чтобы при `false` 409 `MATERIAL_STOCK_INSUFFICIENT` откатывал и
+ * сам `MaterialIssue` (см.
+ * `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
+ * `docs/current-state.md §«Material issue → StockMovement OUT»`).
+ *
  * Сознательная граница MVP (см. `docs/current-state.md §«Material
  * issue → StockMovement OUT»`):
  *   - НЕТ FIFO/LIFO;
  *   - НЕТ `MaterialStockLot`;
- *   - НЕТ проверок достаточности остатков (post не блокируется
- *     минусом);
+ *   - проверка достаточности остатков опциональна и управляется
+ *     `CompanySettings.allowNegativeMaterialStock` (по умолчанию
+ *     `true` — минус допустим, MVP-поведение сохраняется);
  *   - POSTED-документ нельзя отменить (сторнирующий reversal для
  *     `MaterialIssue` — отдельная будущая итерация).
  *
@@ -39,7 +50,7 @@ import { MaterialIssuesService } from './material-issues.service.js';
  * дополнительного `imports` не требуется.
  */
 @Module({
-  imports: [StockModule],
+  imports: [StockModule, CompanySettingsModule],
   controllers: [MaterialIssuesController, MaterialIssuesOrderController],
   providers: [MaterialIssuesService],
   exports: [MaterialIssuesService],

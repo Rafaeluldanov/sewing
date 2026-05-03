@@ -309,10 +309,40 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     `cellId = null`), создавая его при необходимости. Одна
     `MaterialIssueLine` → один OUT-`StockMovement` (без
     дробления между остатками);
-  - **отрицательный остаток не блокируется**: `MaterialIssue.post`
-    и `issueToEmployee` не падают при нехватке материала —
-    `StockBalance.qty` просто уходит в минус;
-  - **проверка достаточности остатков не реализована**;
+  - **проверка достаточности остатков** управляется hardening-флагом
+    `CompanySettings.allowNegativeMaterialStock` (Boolean, default
+    `true`, см. `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`,
+    `apps/api/src/modules/stock/stock.service.ts::applyMovementInTx`).
+    Если флаг **`true`** (default), `MaterialIssue.post` и
+    `AUTO_CUT_ISSUE` продолжают писать OUT даже при нехватке
+    материала: `StockBalance.qty` уходит в минус; если положительного
+    баланса нет — создаётся no-location negative balance
+    (`warehouseId = null`, `cellId = null`). Если флаг **`false`**,
+    `StockService.recordMaterialIssueInTx` проверяет достаточность
+    остатка ДО записи OUT. Аллокация в strict-режиме:
+    (а) если `line.cellId` задан — проверяется именно этот баланс
+    (`qty < issuedQty` ⇒ ошибка, другой баланс не используется);
+    (б) если `line.cellId` не задан — ищется самый большой
+    положительный `StockBalance` по `(workshopNeedId, unit)` и при
+    `qty < issuedQty` или отсутствии положительного баланса
+    бросается 409 `MATERIAL_STOCK_INSUFFICIENT`. **No-location
+    negative balance в strict-режиме НЕ создаётся.** В обоих режимах
+    одна `MaterialIssueLine` → один OUT-`StockMovement` (без
+    дробления / FIFO). При нехватке вся транзакция откатывается:
+    `MaterialIssue` остаётся `DRAFT`, OUT не пишется, `StockBalance`
+    не меняется; для авто-выдачи кроя (`AUTO_CUT_ISSUE` через
+    `PassportsService.issueToEmployee`) откатывается и сама выдача —
+    `Passport` не переходит в IN_PROGRESS, `PassportEvent`
+    `ISSUED_TO_EMPLOYEE` не пишется. Если строки `CompanySettings`
+    ещё нет (свежая БД), backend трактует значение как `true` и не
+    создаёт singleton-row. **Флаг применяется ТОЛЬКО к OUT-движениям
+    `MaterialIssue`** (ручной `post` и `AUTO_CUT_ISSUE`):
+    `PurchaseReceipt` cancel / REVERSAL OUT остаётся permissive —
+    блокировка отмены приёмки выходит за рамки этой итерации. UI для
+    управления флагом на этой итерации **не реализован** —
+    публичный DTO/PATCH `/api/company-settings` это поле не
+    принимает; backend читает его через приватный getter
+    `CompanySettingsService.getAllowNegativeMaterialStock()`;
   - **FIFO/LIFO не реализованы** — `applyMovementInTx` на OUT
     использует текущий `StockBalance.unitCost`, не партии;
   - идемпотентность — UNIQUE `StockMovement.sourceKey`:
@@ -330,15 +360,19 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     итерацию (появится вместе с возвратом в ячейку).
   - `PassportsService` по-прежнему склад **не читает и не пишет**
     напрямую — всё идёт через `MaterialIssuesService` auto-helper;
-    крой не блокируется недостатком материала.
+    крой блокируется недостатком материала **только** если включены
+    оба флага `autoIssueMaterialsOnCutRelease = true` **и**
+    `allowNegativeMaterialStock = false` (см. выше); если автосписание
+    выключено, флаг отрицательных остатков на `issueToEmployee` не
+    влияет.
 
   По-прежнему **не реализованы**: `MaterialStockLot`, FIFO/LIFO,
-  проверка достаточности остатков, master-модель `Material`, роли
-  `WAREHOUSE_MANAGER` / `PURCHASER` / `ACCOUNTANT`, обновление
-  `ProductionCostV2Service` под склад, reversal/возврат
-  `MaterialIssue`, любые другие финансовые сводки
-  (`OrderPlannedCostSummaryCard`) под эту ось, и UI для просмотра
-  остатков — вынесены в следующие итерации.
+  master-модель `Material`, роли `WAREHOUSE_MANAGER` / `PURCHASER` /
+  `ACCOUNTANT`, обновление `ProductionCostV2Service` под склад,
+  reversal/возврат `MaterialIssue`, любые другие финансовые сводки
+  (`OrderPlannedCostSummaryCard`) под эту ось, UI для просмотра
+  остатков и UI для управления флагом
+  `allowNegativeMaterialStock` — вынесены в следующие итерации.
 
 ---
 

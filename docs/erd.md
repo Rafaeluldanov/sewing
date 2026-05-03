@@ -716,6 +716,28 @@
     публичный DTO/PATCH `/api/company-settings` это поле НЕ
     принимает (UI ещё не утверждён); backend читает значение
     через `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`.
+  - `allowNegativeMaterialStock Boolean @default(true)` —
+    hardening-флаг отрицательных остатков материалов при OUT
+    (см. `apps/api/src/modules/stock/stock.service.ts::applyMovementInTx`,
+    `apps/api/src/modules/material-issues/material-issues.service.ts`,
+    `docs/current-state.md §«Material issue → StockMovement OUT»`).
+    `true` (default) — текущее MVP-поведение: `MaterialIssue.post`
+    и `AUTO_CUT_ISSUE` могут увести `StockBalance.qty` в минус
+    (foundation создаёт no-location negative balance, если
+    положительного остатка нет). `false` — `StockService` проверяет
+    достаточность остатка ДО записи OUT-движения и при нехватке
+    бросает 409 `MATERIAL_STOCK_INSUFFICIENT`; транзакция
+    откатывается, `MaterialIssue` остаётся `DRAFT`, OUT не
+    пишется, `StockBalance` не меняется (для авто-выдачи кроя
+    `issueToEmployee` тоже откатывается). Если строки настроек
+    нет (свежая БД) — backend трактует значение как `true` и
+    singleton-row не создаёт. Флаг применяется ТОЛЬКО к OUT-движениям
+    `MaterialIssue` (ручной `post` и `AUTO_CUT_ISSUE`); `PurchaseReceipt`
+    cancel / REVERSAL OUT остаётся permissive — отмена приёмки
+    отдельный бизнес-сценарий следующей итерации. На этой итерации
+    публичный DTO/PATCH `/api/company-settings` это поле НЕ
+    принимает (UI ещё не утверждён); backend читает значение через
+    `CompanySettingsService.getAllowNegativeMaterialStock()`.
   - сервис `CompanySettingsService.getOrCreate()` идемпотентно создаёт
     запись с дефолтами при первом обращении.
 - **`CompanyDivision`** *(master-справочник)* — soft-delete справочник

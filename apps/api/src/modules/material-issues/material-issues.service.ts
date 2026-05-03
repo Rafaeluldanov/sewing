@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { CompanySettingsService } from '../company-settings/company-settings.service.js';
 import { StockService } from '../stock/stock.service.js';
 import {
   MaterialIssueLineDescriptionRequiredException,
@@ -80,11 +81,20 @@ export function buildAutoCutIssueSourceKey(passportId: string): string {
  *   - получить аналитический slice «фактический расход × заказ»;
  *   - провести / отменить документ в DRAFT.
  *
- * Сознательная граница MVP (см. ТЗ):
+ * Сознательная граница MVP (см. ТЗ,
+ * `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`):
  *   - проведение документа пишет OUT-движение в foundation-склад
- *     (`StockService.recordMaterialIssueInTx`), но БЕЗ FIFO/LIFO,
- *     БЕЗ `MaterialStockLot` и БЕЗ проверки достаточности остатка —
- *     минус на `StockBalance.qty` допустим;
+ *     (`StockService.recordMaterialIssueInTx`), БЕЗ FIFO/LIFO и
+ *     БЕЗ `MaterialStockLot`;
+ *   - проверка достаточности остатка управляется hardening-флагом
+ *     `CompanySettings.allowNegativeMaterialStock` (default `true`).
+ *     `true` — минус на `StockBalance.qty` допустим (foundation,
+ *     текущее MVP-поведение). `false` — `post` и `AUTO_CUT_ISSUE`
+ *     падают 409 `MATERIAL_STOCK_INSUFFICIENT` при нехватке остатка,
+ *     транзакция целиком откатывается: `MaterialIssue` остаётся
+ *     `DRAFT`, OUT-движение не пишется, `StockBalance` не меняется
+ *     (для авто-выдачи кроя — `PassportsService.issueToEmployee`
+ *     тоже откатывается);
  *   - `MaterialIssue.totalCost` (финансовая оценка) и
  *     `StockMovement.totalCost` (складская оценка) живут
  *     независимо: OUT-движение использует текущий
@@ -107,6 +117,7 @@ export class MaterialIssuesService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly stock: StockService,
+    private readonly companySettings: CompanySettingsService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -338,6 +349,19 @@ export class MaterialIssuesService {
       new Prisma.Decimal(0),
     );
 
+    // Hardening-флаг (см.
+    // `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
+    // `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`,
+    // `docs/current-state.md §«Material issue → StockMovement OUT»`).
+    // Читаем ДО открытия транзакции — `getAllowNegativeMaterialStock`
+    // не идёт в singleton-getOrCreate и не пишет audit, это
+    // безопасный SELECT. При `false` `StockService.recordMaterialIssueInTx`
+    // бросит `MATERIAL_STOCK_INSUFFICIENT` (409) при нехватке остатка,
+    // и транзакция откатится целиком: `MaterialIssue` останется
+    // `DRAFT`, OUT-движение не создастся, `StockBalance` не изменится.
+    const allowNegativeStock =
+      await this.companySettings.getAllowNegativeMaterialStock();
+
     const updated = await this.prisma.$transaction(async (tx) => {
       const next = await tx.materialIssue.update({
         where: { id },
@@ -354,9 +378,15 @@ export class MaterialIssuesService {
       // расхода. Идём в той же транзакции, чтобы либо «проведение
       // документа + OUT-движения», либо «ничего». Метод сам soft-
       // skip-ает строки без `workshopNeedId` / `unit` / `issuedQty <= 0`
-      // и идемпотентен по `StockMovement.sourceKey`. Недостаток
-      // остатка не блокируется — минус допустим (см. MVP-границы).
-      await this.stock.recordMaterialIssueInTx(tx, next.id, employeeId ?? null);
+      // и идемпотентен по `StockMovement.sourceKey`. При
+      // `allowNegativeStock = false` бросает 409 `MATERIAL_STOCK_INSUFFICIENT`,
+      // и весь `$transaction` откатывается (см. `StockService.recordMaterialIssueInTx`).
+      await this.stock.recordMaterialIssueInTx(
+        tx,
+        next.id,
+        employeeId ?? null,
+        { allowNegativeStock },
+      );
 
       await this.audit.log(
         {
@@ -866,13 +896,21 @@ export class MaterialIssuesService {
     // Foundation складского учёта: исходящие движения по строкам
     // авто-документа. В той же транзакции, что и `issueToEmployee` —
     // либо «выдача кроя + авто-документ + OUT-движения», либо
-    // «ничего». Авто-строки обычно без `cellId` (см. preparedLines
-    // выше), поэтому `StockService` сам выбирает balance: самый
-    // большой положительный по `(workshopNeedId, unit)` или
-    // no-location, если положительного нет (см.
-    // `StockService.recordMaterialIssueInTx`). Недостаток остатка не
-    // блокирует `issueToEmployee` — минус допустим.
-    await this.stock.recordMaterialIssueInTx(tx, issue.id, employeeId);
+    // «ничего». Авто-строки без `cellId` (см. preparedLines выше);
+    // при `allowNegativeStock = true` `StockService` выбирает самый
+    // большой положительный balance по `(workshopNeedId, unit)` или
+    // no-location balance, если положительного нет; при
+    // `allowNegativeStock = false` — самый большой положительный с
+    // `qty >= issuedQty` или 409 `MATERIAL_STOCK_INSUFFICIENT`
+    // (`issueToEmployee` тоже откатывается, потому что владелец явно
+    // запретил минус, см.
+    // `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
+    // `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`).
+    const allowNegativeStock =
+      await this.companySettings.getAllowNegativeMaterialStock();
+    await this.stock.recordMaterialIssueInTx(tx, issue.id, employeeId, {
+      allowNegativeStock,
+    });
 
     this.logger.log(
       `event=material_issue.auto.created materialIssueId=${issue.id} passportId=${passport.id} orderId=${passport.orderId} ` +

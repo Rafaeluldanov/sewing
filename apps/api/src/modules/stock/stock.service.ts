@@ -1,7 +1,10 @@
 import { HttpStatus, Injectable, Logger } from '@nestjs/common';
 import { Prisma, type StockBalance, type StockMovement } from '@prisma/client';
 
-import { BusinessException } from '../../common/errors.js';
+import {
+  BusinessException,
+  MaterialStockInsufficientException,
+} from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { ListStockBalancesQuery } from './dto/list-stock-balances.dto.js';
 import type { ListStockMovementsQuery } from './dto/list-stock-movements.dto.js';
@@ -56,6 +59,24 @@ export type ApplyMovementInTxParams = {
   materialIssueLineId?: string | null;
   comment?: string | null;
   createdById?: string | null;
+  /**
+   * Hardening-флаг: разрешать ли OUT-движение, которое уведёт
+   * `StockBalance.qty` в минус
+   * (см. `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
+   * `apps/api/src/modules/material-issues/material-issues.service.ts`).
+   *
+   * - `true` (default) или не передан: текущее MVP-поведение —
+   *   OUT пишется даже при недостатке остатка, `StockBalance.qty`
+   *   может уйти в минус (foundation).
+   * - `false`: перед записью OUT сервис проверяет, что
+   *   `balanceAfterQty >= 0`; иначе бросает
+   *   {@link MaterialStockInsufficientException} (409), не пишет
+   *   `StockMovement` и не апдейтит `StockBalance`.
+   *
+   * IN-движение от значения флага НЕ зависит — `IN` всегда
+   * увеличивает остаток.
+   */
+  allowNegativeStock?: boolean;
 };
 
 /**
@@ -251,6 +272,34 @@ export class StockService {
       balanceAfterQty = balanceBeforeQty.add(params.qty);
     } else {
       balanceAfterQty = balanceBeforeQty.sub(params.qty);
+    }
+
+    // Hardening-гейт: OUT-движение, уводящее остаток в минус,
+    // блокируется, если вызывающий явно передал
+    // `allowNegativeStock = false`. По умолчанию (`undefined` /
+    // `true`) поведение остаётся permissive — старые сценарии
+    // (PurchaseReceipt reversal, foundation-тесты) работают как
+    // раньше. См.
+    // `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
+    // `apps/api/src/modules/material-issues/material-issues.service.ts`.
+    if (
+      !isIn &&
+      params.allowNegativeStock === false &&
+      balanceAfterQty.lt(0)
+    ) {
+      const description = balance.description ?? params.description;
+      throw new MaterialStockInsufficientException(
+        `Недостаточно остатка материала «${description}» (${params.unit}): запрошено ${params.qty.toString()}, доступно ${balanceBeforeQty.toString()}.`,
+        {
+          workshopNeedId: params.workshopNeedId,
+          warehouseId: balance.warehouseId ?? null,
+          cellId: balance.cellId ?? null,
+          requestedQty: params.qty.toString(),
+          availableQty: balanceBeforeQty.toString(),
+          unit: params.unit,
+          description,
+        },
+      );
     }
 
     let newUnitCost: Prisma.Decimal;
@@ -639,7 +688,9 @@ export class StockService {
    *   - `issuedQty <= 0`;
    *   - пустой `unit`.
    *
-   * Выбор `warehouseId` / `cellId` OUT-движения (MVP-аллокация — ТЗ §6):
+   * Выбор `warehouseId` / `cellId` OUT-движения (MVP-аллокация — ТЗ §6).
+   *
+   * При `allowNegativeStock = true` (или не передан — default):
    *   1. Если `line.cellId` задан — списываем из этой ячейки
    *      (`warehouseId` берём через `Cell.warehouseId`).
    *   2. Иначе ищем существующий `StockBalance` по
@@ -648,11 +699,25 @@ export class StockService {
    *   3. Если положительного баланса нет — пишем OUT в
    *      no-location balance (`warehouseId = null`, `cellId = null`),
    *      создавая его при необходимости. Отрицательный физический
-   *      остаток на foundation **не блокируется** (см. JSDoc класса).
+   *      остаток на foundation **не блокируется**.
    *
-   * Проверка достаточности остатка в этой итерации сознательно НЕ
-   * реализована: `MaterialIssue.post` не падает при нехватке
-   * материала, склад просто уходит в минус.
+   * При `allowNegativeStock = false` (hardening-гейт по
+   * `CompanySettings.allowNegativeMaterialStock`):
+   *   1. Если `line.cellId` задан — проверяем именно этот баланс.
+   *      Если `qty < issuedQty` — бросаем
+   *      {@link MaterialStockInsufficientException} (409). Другой
+   *      баланс не используется (одна строка списывается из одной
+   *      ячейки — без дробления / FIFO).
+   *   2. Если `line.cellId` НЕ задан — ищем самый большой
+   *      положительный `StockBalance` по `(workshopNeedId, unit)`.
+   *      Если нашли и `qty >= issuedQty` — списываем с него. Если
+   *      нашли, но `qty < issuedQty`, или положительного баланса
+   *      нет вообще — бросаем `MaterialStockInsufficientException`.
+   *      `no-location negative balance` НЕ создаётся.
+   *
+   * В обоих режимах одна `MaterialIssueLine` → один OUT-`StockMovement`
+   * (без дробления одной строки между несколькими остатками; FIFO/LIFO
+   * не реализованы).
    *
    * Стоимость (см. `applyMovementInTx`): OUT использует текущий
    * `balance.unitCost`, **не** `MaterialIssueLine.unitCost` — эти две
@@ -670,6 +735,16 @@ export class StockService {
     tx: Prisma.TransactionClient,
     materialIssueId: string,
     employeeId?: string | null,
+    options?: {
+      /**
+       * Hardening-флаг: разрешать ли OUT-движение, которое уведёт
+       * `StockBalance.qty` в минус. По умолчанию — `true` (текущее
+       * MVP-поведение). Передаётся вызывающим сервисом
+       * (`MaterialIssuesService`) после чтения
+       * `CompanySettings.allowNegativeMaterialStock`.
+       */
+      allowNegativeStock?: boolean;
+    },
   ): Promise<StockMovement[]> {
     const issue = await tx.materialIssue.findUnique({
       where: { id: materialIssueId },
@@ -694,6 +769,7 @@ export class StockService {
     if (issue.status !== 'POSTED') return [];
 
     const comment = buildMaterialIssueStockComment(issue.source);
+    const allowNegativeStock = options?.allowNegativeStock ?? true;
 
     const movements: StockMovement[] = [];
     for (const line of issue.lines) {
@@ -703,6 +779,7 @@ export class StockService {
         line,
         comment,
         employeeId ?? null,
+        allowNegativeStock,
       );
       if (movement) movements.push(movement);
     }
@@ -728,6 +805,7 @@ export class StockService {
     }>,
     comment: string,
     employeeId: string | null,
+    allowNegativeStock: boolean,
   ): Promise<StockMovement | null> {
     if (!line.workshopNeedId) {
       this.logger.log(
@@ -766,15 +844,72 @@ export class StockService {
       line.materialRole ?? line.workshopNeed?.materialRole ?? null;
     const unit = line.unit;
 
-    // MVP-аллокация OUT: explicit cell → самый большой положительный
-    // баланс по (workshopNeedId, unit) → no-location negative balance.
-    // Без FIFO/LIFO, без дробления одной строки между остатками (см.
-    // ТЗ §6).
+    // Аллокация OUT (см. JSDoc `recordMaterialIssueInTx`).
+    //
+    // Permissive (`allowNegativeStock = true`):
+    //   1. explicit `line.cellId` → списываем оттуда;
+    //   2. иначе самый большой положительный балас по
+    //      `(workshopNeedId, unit)`;
+    //   3. иначе no-location negative balance (`applyMovementInTx`
+    //      сам создаст его и уведёт в минус).
+    //
+    // Strict (`allowNegativeStock = false`, hardening-гейт по
+    // `CompanySettings.allowNegativeMaterialStock`):
+    //   1. explicit `line.cellId` → проверяем именно этот баланс,
+    //      `qty < issuedQty` ⇒ ошибка;
+    //   2. иначе самый большой положительный, `qty < issuedQty` ⇒
+    //      ошибка; нет положительного → ошибка. No-location negative
+    //      balance НЕ создаётся.
     let warehouseId: string | null = null;
     let cellId: string | null = null;
     if (line.cellId && line.cell) {
       cellId = line.cellId;
       warehouseId = line.cell.warehouseId ?? null;
+      if (!allowNegativeStock) {
+        await this.assertCellBalanceSufficientInTx(tx, {
+          workshopNeedId: line.workshopNeedId,
+          warehouseId,
+          cellId,
+          requestedQty: qty,
+          unit,
+          description,
+        });
+      }
+    } else if (!allowNegativeStock) {
+      const candidate = await tx.stockBalance.findFirst({
+        where: {
+          workshopNeedId: line.workshopNeedId,
+          unit,
+          qty: { gte: qty },
+        },
+        orderBy: [{ qty: 'desc' }, { updatedAt: 'asc' }],
+        select: { id: true, warehouseId: true, cellId: true },
+      });
+      if (!candidate) {
+        // Либо положительного баланса нет вообще, либо самый большой
+        // меньше требуемого. В обоих случаях бросаем insufficient —
+        // без дробления и без no-location negative balance.
+        const best = await tx.stockBalance.findFirst({
+          where: { workshopNeedId: line.workshopNeedId, unit },
+          orderBy: [{ qty: 'desc' }, { updatedAt: 'asc' }],
+          select: { qty: true, warehouseId: true, cellId: true },
+        });
+        const availableQty = best?.qty ?? new Prisma.Decimal(0);
+        throw new MaterialStockInsufficientException(
+          `Недостаточно остатка материала «${description}» (${unit}): запрошено ${qty.toString()}, доступно ${availableQty.toString()}.`,
+          {
+            workshopNeedId: line.workshopNeedId,
+            warehouseId: best?.warehouseId ?? null,
+            cellId: best?.cellId ?? null,
+            requestedQty: qty.toString(),
+            availableQty: availableQty.toString(),
+            unit,
+            description,
+          },
+        );
+      }
+      warehouseId = candidate.warehouseId ?? null;
+      cellId = candidate.cellId ?? null;
     } else {
       const candidate = await tx.stockBalance.findFirst({
         where: {
@@ -812,8 +947,57 @@ export class StockService {
       materialIssueLineId: line.id,
       comment,
       createdById: employeeId,
+      allowNegativeStock,
     });
     return movement;
+  }
+
+  /**
+   * Strict-режим: проверка `StockBalance.qty >= requestedQty` для
+   * заранее выбранной ячейки. Используется
+   * `applyMaterialIssueLineInTx` при `allowNegativeStock = false` и
+   * `line.cellId` задан — мы НЕ ищем другой баланс при нехватке,
+   * сразу бросаем insufficient.
+   *
+   * Если `StockBalance` для пары `(workshopNeed, cell)` ещё не
+   * существует — трактуем это как `availableQty = 0` (никаких приёмок
+   * в эту ячейку не было), и бросаем `MaterialStockInsufficientException`
+   * с тем же контрактом, что `applyMovementInTx`.
+   */
+  private async assertCellBalanceSufficientInTx(
+    tx: Prisma.TransactionClient,
+    params: {
+      workshopNeedId: string;
+      warehouseId: string | null;
+      cellId: string;
+      requestedQty: Prisma.Decimal;
+      unit: string;
+      description: string;
+    },
+  ): Promise<void> {
+    const balanceKey = buildStockBalanceKey(
+      params.workshopNeedId,
+      params.warehouseId,
+      params.cellId,
+    );
+    const existing = await tx.stockBalance.findUnique({
+      where: { balanceKey },
+      select: { qty: true, warehouseId: true, cellId: true, unit: true },
+    });
+    const availableQty = existing?.qty ?? new Prisma.Decimal(0);
+    if (availableQty.gte(params.requestedQty)) return;
+    throw new MaterialStockInsufficientException(
+      `Недостаточно остатка материала «${params.description}» (${params.unit}) в выбранной ячейке: запрошено ${params.requestedQty.toString()}, доступно ${availableQty.toString()}.`,
+      {
+        workshopNeedId: params.workshopNeedId,
+        warehouseId: existing?.warehouseId ?? params.warehouseId,
+        cellId: params.cellId,
+        requestedQty: params.requestedQty.toString(),
+        availableQty: availableQty.toString(),
+        unit: params.unit,
+        description: params.description,
+      },
+    );
   }
 }
 
