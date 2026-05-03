@@ -47,14 +47,23 @@ test('StockService экспортирует buildMaterialIssueLineStockSourceKey
 
 test('StockService содержит recordMaterialIssueInTx (только внутри tx, idempotent по sourceKey)', () => {
   const src = read(STOCK_SERVICE);
-  expect(src).toMatch(/recordMaterialIssueInTx/);
+  // Сам метод существует — ищем именно объявление, а не первое
+  // упоминание в JSDoc-комментарии (иначе ленивый regex захватит
+  // соседние методы вроде listBalances и поймает их `$transaction`).
+  expect(src).toMatch(/async\s+recordMaterialIssueInTx\s*\(/);
   // Идём по sourceKey для идемпотентности.
   expect(src).toMatch(/buildMaterialIssueLineStockSourceKey/);
-  // Используем applyMovementInTx (а не прямой stockMovement.create).
+  // Тело метода: от объявления до закрывающей `}` метода (двух
+  // пробелов отступа). Используем applyMovementInTx, а не прямой
+  // stockMovement.create.
   const methodMatch = src.match(
-    /recordMaterialIssueInTx[\s\S]*?\n  \}\n/,
+    /async\s+recordMaterialIssueInTx[\s\S]*?\n  \}\n/,
   )?.[0];
   expect(methodMatch).toBeTruthy();
+  // Метод должен сам использовать sourceKey-флоу (через приватный
+  // applyMaterialIssueLineInTx, который дергает
+  // buildMaterialIssueLineStockSourceKey).
+  expect(methodMatch!).toMatch(/applyMaterialIssueLineInTx|sourceKey/);
   // Защита от reversal-итерации: в этой задаче OUT пишется через
   // существующий applyMovementInTx — не надо открывать новые tx.
   expect(methodMatch!).not.toMatch(/\$transaction/);

@@ -1,10 +1,5 @@
 import { z } from 'zod';
 
-import {
-  STOCK_MOVEMENT_DIRECTIONS,
-  STOCK_MOVEMENT_TYPES,
-} from '../stock.constants.js';
-
 /**
  * Query DTO для `GET /api/stock/movements` (read-only API).
  *
@@ -21,7 +16,21 @@ import {
  * Pagination:
  *   - `limit` default 50, max 200, > 0;
  *   - `offset` default 0, >= 0.
+ *
+ * Локальные readonly-tuples для `z.enum` (а не `Object.values(...)`
+ * из `stock.constants.ts`, который типизируется как `string[]`).
+ * Значения должны соответствовать `STOCK_MOVEMENT_TYPE` и
+ * `STOCK_MOVEMENT_DIRECTION` в `../stock.constants.ts`.
  */
+const STOCK_MOVEMENT_TYPES = [
+  'PURCHASE_RECEIPT',
+  'MATERIAL_ISSUE',
+  'ADJUSTMENT',
+  'REVERSAL',
+] as const;
+
+const STOCK_MOVEMENT_DIRECTIONS = ['IN', 'OUT'] as const;
+
 export const ListStockMovementsQuerySchema = z
   .object({
     workshopNeedId: z.string().trim().min(1).max(64).optional(),
@@ -29,12 +38,8 @@ export const ListStockMovementsQuerySchema = z
     stockBalanceId: z.string().trim().min(1).max(64).optional(),
     warehouseId: z.string().trim().min(1).max(64).optional(),
     cellId: z.string().trim().min(1).max(64).optional(),
-    type: z
-      .enum(STOCK_MOVEMENT_TYPES as readonly [string, ...string[]])
-      .optional(),
-    direction: z
-      .enum(STOCK_MOVEMENT_DIRECTIONS as readonly [string, ...string[]])
-      .optional(),
+    type: z.enum(STOCK_MOVEMENT_TYPES).optional(),
+    direction: z.enum(STOCK_MOVEMENT_DIRECTIONS).optional(),
     sourceType: z.string().trim().min(1).max(64).optional(),
     sourceId: z.string().trim().min(1).max(64).optional(),
     purchaseReceiptId: z.string().trim().min(1).max(64).optional(),

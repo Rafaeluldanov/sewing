@@ -28,11 +28,11 @@ import { StockService } from './stock.service.js';
  * `MaterialIssuesService` (приёмка / отмена приёмки / `MaterialIssue`
  * post / `AUTO_CUT_ISSUE`).
  *
- * RBAC: `@Roles('ADMIN', 'SHOP_MANAGER')`. Новые роли (`WAREHOUSE_MANAGER`,
- * `PURCHASER`, `ACCOUNTANT`) сознательно не вводятся в MVP — уровень
- * доступа совпадает с `MaterialIssuesController` /
- * `PurchaseReceiptsController`. `ADMIN` глобально проходит через
- * `AuthGuard` (см. `apps/api/src/modules/auth/auth.guard.ts`).
+ * RBAC: `@Roles('ADMIN', 'SHOP_MANAGER')`. Новые складские/закупочные/
+ * бухгалтерские роли на этой итерации не вводятся — уровень доступа
+ * совпадает с `MaterialIssuesController` / `PurchaseReceiptsController`.
+ * `ADMIN` глобально проходит через `AuthGuard`
+ * (см. `apps/api/src/modules/auth/auth.guard.ts`).
  *
  * Сознательная граница MVP:
  *   - `sourceKey` (внутренний идемпотентный ключ) в response **не
