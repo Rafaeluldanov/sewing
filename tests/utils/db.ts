@@ -101,6 +101,10 @@ export async function resetDatabase(prisma: {
     // truncate явный — для читаемости.
     'MaterialIssueLine',
     'MaterialIssue',
+    // Foundation склад: движения и остатки по `WorkshopNeed` — до
+    // `WorkshopNeed`, т.к. FK на потребность.
+    'StockMovement',
+    'StockBalance',
     // Этап 4А «Потребность цеха»: одна строка на материал заказа,
     // подчинена `Order` через `ON DELETE CASCADE`. Truncate явный
     // ради читаемости, хотя CASCADE на `"Order"` ниже сделал бы то же.

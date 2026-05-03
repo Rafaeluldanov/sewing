@@ -643,8 +643,6 @@ describe('Backend / shared НЕ менялись (frontend-only итерация
     const schema = read('prisma/schema.prisma');
     expect(schema).not.toMatch(/model\s+Material\s*\{/);
     expect(schema).not.toMatch(/WAREHOUSE_MANAGER/);
-    expect(schema).not.toMatch(/model\s+StockBalance\b/);
-    expect(schema).not.toMatch(/model\s+StockMovement\b/);
     expect(schema).not.toMatch(/model\s+MaterialStockLot\b/);
   });
 });

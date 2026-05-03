@@ -1693,6 +1693,11 @@ model Warehouse {
   cells Cell[]
   lines WarehouseLine[]
 
+  /// Foundation: остатки материала по `WorkshopNeed` (см. `StockBalance`).
+  stockBalances StockBalance[]
+  /// Foundation: журнал складских движений (см. `StockMovement`).
+  stockMovements StockMovement[]
+
   @@index([isActive])
 }
 
@@ -1763,6 +1768,10 @@ model Cell {
   /// SetNull` со стороны `MaterialIssueLine.cellId` — удаление
   /// ячейки не сносит исторический документ расхода.
   materialIssueLines   MaterialIssueLine[]
+
+  /// Foundation: остатки по ячейке (MVP — привязка к `WorkshopNeed`).
+  stockBalances StockBalance[]
+  stockMovements StockMovement[]
 
   @@unique([lineId, lineIndex], name: "Cell_line_index_uniq")
   @@index([warehouseId])
@@ -3286,6 +3295,11 @@ model WorkshopNeed {
   /// документ расхода — он остаётся как исторический срез.
   materialIssueLines MaterialIssueLine[]
 
+  /// Foundation складского учёта: текущий остаток по потребности заказа.
+  stockBalances StockBalance[]
+  /// Foundation: журнал движений (ещё не вызывается из приёмки/расхода).
+  stockMovements StockMovement[]
+
   @@index([orderId])
   @@index([status])
   @@index([materialRole])
@@ -3732,6 +3746,9 @@ model PurchaseReceipt {
 
   lines PurchaseReceiptLine[]
 
+  /// Foundation: движения с привязкой к приёмке (FK опционален, бизнес-flow пока не пишет).
+  stockMovements StockMovement[]
+
   @@index([purchaseOrderId])
   @@index([supplierId])
   @@index([customerOrderId])
@@ -3819,6 +3836,8 @@ model PurchaseReceiptLine {
   comment   String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  stockMovements StockMovement[]
 
   @@index([purchaseReceiptId])
   @@index([purchaseOrderLineId])
@@ -4427,6 +4446,8 @@ model MaterialIssue {
   passport Passport?           @relation(fields: [passportId], references: [id], onDelete: SetNull)
   lines    MaterialIssueLine[]
 
+  stockMovements StockMovement[]
+
   @@index([orderId])
   @@index([passportId])
   @@index([status])
@@ -4494,7 +4515,106 @@ model MaterialIssueLine {
   workshopNeed  WorkshopNeed? @relation(fields: [workshopNeedId], references: [id], onDelete: SetNull)
   cell          Cell?         @relation(fields: [cellId], references: [id], onDelete: SetNull)
 
+  stockMovements StockMovement[]
+
   @@index([materialIssueId])
   @@index([workshopNeedId])
   @@index([cellId])
+}
+
+// ---------------------------------------------------------------------------
+// Stock foundation (MVP material identity = WorkshopNeed)
+//
+// Текущий остаток и журнал движений для будущего складского учёта.
+// На foundation-итерации бизнес-потоки приёмки / MaterialIssue /
+// auto-cut НЕ вызывают эти таблицы. Нет master `Material`, нет партий
+// FIFO/LIFO. `balanceKey` устраняет дубли строк при NULL в
+// warehouseId/cellId (см. `StockService`, `docs/current-state.md`).
+// ---------------------------------------------------------------------------
+
+model StockBalance {
+  id         String @id @default(cuid())
+  /// Детерминированный ключ `${workshopNeedId}:NO_WAREHOUSE|id:NO_CELL|id`.
+  balanceKey String @unique
+
+  workshopNeedId String
+  warehouseId    String?
+  cellId         String?
+
+  description  String
+  materialRole String?
+  unit         String
+
+  qty       Decimal @default(0) @db.Decimal(14, 4)
+  unitCost  Decimal @default(0) @db.Decimal(14, 2)
+  totalCost Decimal @default(0) @db.Decimal(14, 2)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastMovementAt DateTime?
+
+  workshopNeed WorkshopNeed @relation(fields: [workshopNeedId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse?   @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  cell         Cell?        @relation(fields: [cellId], references: [id], onDelete: SetNull)
+
+  movements StockMovement[]
+
+  @@index([workshopNeedId])
+  @@index([warehouseId])
+  @@index([cellId])
+  @@index([updatedAt])
+}
+
+model StockMovement {
+  id String @id @default(cuid())
+
+  stockBalanceId String?
+  workshopNeedId String
+
+  type      String
+  direction String
+
+  warehouseId String?
+  cellId      String?
+
+  qty       Decimal @db.Decimal(14, 4)
+  unit      String
+  unitCost  Decimal @default(0) @db.Decimal(14, 2)
+  totalCost Decimal @default(0) @db.Decimal(14, 2)
+
+  balanceBeforeQty Decimal? @db.Decimal(14, 4)
+  balanceAfterQty  Decimal? @db.Decimal(14, 4)
+
+  sourceType String?
+  sourceId   String?
+
+  purchaseReceiptId     String?
+  purchaseReceiptLineId String?
+  materialIssueId       String?
+  materialIssueLineId   String?
+
+  comment     String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  stockBalance StockBalance? @relation(fields: [stockBalanceId], references: [id], onDelete: SetNull)
+  workshopNeed WorkshopNeed  @relation(fields: [workshopNeedId], references: [id], onDelete: Cascade)
+  warehouse    Warehouse?    @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  cell         Cell?         @relation(fields: [cellId], references: [id], onDelete: SetNull)
+
+  purchaseReceipt     PurchaseReceipt?     @relation(fields: [purchaseReceiptId], references: [id], onDelete: SetNull)
+  purchaseReceiptLine PurchaseReceiptLine? @relation(fields: [purchaseReceiptLineId], references: [id], onDelete: SetNull)
+  materialIssue       MaterialIssue?       @relation(fields: [materialIssueId], references: [id], onDelete: SetNull)
+  materialIssueLine   MaterialIssueLine?   @relation(fields: [materialIssueLineId], references: [id], onDelete: SetNull)
+
+  @@index([stockBalanceId])
+  @@index([workshopNeedId])
+  @@index([type])
+  @@index([direction])
+  @@index([sourceType, sourceId])
+  @@index([purchaseReceiptId])
+  @@index([purchaseReceiptLineId])
+  @@index([materialIssueId])
+  @@index([materialIssueLineId])
+  @@index([createdAt])
 }

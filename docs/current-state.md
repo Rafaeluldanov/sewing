@@ -213,26 +213,42 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     уже агрегирует POSTED `MaterialIssueLine` с `workshopNeedId` —
     авто-строки видны рядом с планом без доработок.
 
-  Сознательные границы MVP (не менялись и на этой итерации):
-  `StockBalance` / `StockMovement` / `MaterialStockLot` /
-  FIFO/LIFO / проверка складских остатков / master-модель
-  `Material` / новые роли / новые страницы и пункты меню / ручной
-  UI-блок для авто-документа / POSTED → CANCELLED отмена / UI
-  для управления флагом `autoIssueMaterialsOnCutRelease` —
-  **не реализованы**. Цена берётся из `WorkshopNeed.quotedPrice`
+  Сознательные границы MVP (не менялись на итерации авто-списания):
+  `MaterialStockLot` / FIFO/LIFO / проверка складских остатков /
+  master-модель `Material` / новые роли / новые страницы и пункты
+  меню / ручной UI-блок для авто-документа / POSTED → CANCELLED
+  отмена / UI для управления флагом `autoIssueMaterialsOnCutRelease`
+  — **не реализованы**. Цена берётся из `WorkshopNeed.quotedPrice`
   (fallback `0`); `ProductionCostV2Service` / frontend UI
   (`OrderViewTabs` / `MaterialIssuesSection` /
   `OrderMaterialsUnifiedTable` / `OrderSummaryUnifiedTable`) —
   **не менялись**.
 
-  Складские остатки материалов (`StockBalance` /
-  `StockMovement` / `MaterialStockLot` / FIFO/LIFO),
-  master-модель `Material`, роли `WAREHOUSE_MANAGER` /
-  `PURCHASER` / `ACCOUNTANT`, обновление
-  `ProductionCostV2Service` под `MaterialIssue`, любые другие
-  финансовые сводки (`OrderPlannedCostSummaryCard`) на этой
-  итерации **не реализованы и не менялись** — они сознательно
-  вынесены в следующие итерации.
+  **Foundation складского учёта материалов** (отдельная итерация,
+  `apps/api/src/modules/stock/*`, `prisma/schema.prisma::StockBalance` /
+  `StockMovement`):
+  - добавлены таблицы текущего остатка и журнала движений; материал
+    в MVP идентифицируется через **`WorkshopNeed`** (общего master
+    `Material` нет);
+  - уникальность строки остатка обеспечивает поле **`balanceKey`**
+    (`${workshopNeedId}:NO_WAREHOUSE|<id>:NO_CELL|<id>`), чтобы не
+    плодить дубли при `NULL` в `warehouseId` / `cellId`;
+  - **`StockService`**: `getOrCreateBalanceInTx`, `applyMovementInTx`,
+    `listBalances`, `listMovements`; отрицательный физический остаток
+    на foundation **не блокируется**; стоимость на остатке —
+    средневзвешенная на `IN` и пропорционально текущей средней на
+    `OUT` (без FIFO/LIFO);
+  - **бизнес-потоки не подключены**: `PurchaseReceipt` / приёмка **не**
+    увеличивают `StockBalance`, `MaterialIssue` (включая POST и авто
+    при выдаче кроя) **не** уменьшают остаток, `PassportsService` /
+    `CostsService` **не** читают склад; публичных REST-роутов под остатки
+    нет.
+
+  По-прежнему **не реализованы**: `MaterialStockLot`, FIFO/LIFO,
+  master-модель `Material`, роли `WAREHOUSE_MANAGER` / `PURCHASER` /
+  `ACCOUNTANT`, обновление `ProductionCostV2Service` под склад,
+  любые другие финансовые сводки (`OrderPlannedCostSummaryCard`) под
+  эту ось — вынесены в следующие итерации.
 
 ---
 

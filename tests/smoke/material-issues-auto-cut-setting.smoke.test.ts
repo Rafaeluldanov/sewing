@@ -28,9 +28,9 @@
  *      принимает на этой итерации (UI ещё не утверждён) — поле
  *      `autoIssueMaterialsOnCutRelease` отсутствует в
  *      `UpdateCompanySettingsSchema` и в `CompanySettingsDto`.
- *   7. Сознательные границы MVP сохранены: нет StockBalance /
- *      StockMovement / MaterialStockLot / master-модели Material /
- *      новых страниц/вкладок UI.
+ *   7. Сознательные границы MVP: foundation `StockBalance` /
+ *      `StockMovement` допустимы, но auto issue их не трогает; нет
+ *      `MaterialStockLot` / master-модели `Material` / новых страниц UI.
  */
 import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -207,10 +207,10 @@ describe('material-issues auto cut gate — shared DTO boundary', () => {
 // ---------------------------------------------------------------------------
 
 describe('material-issues auto cut gate — MVP boundaries', () => {
-  test('по-прежнему нет StockBalance / StockMovement / MaterialStockLot', () => {
+  test('есть StockBalance / StockMovement; нет MaterialStockLot', () => {
     const schema = read(SCHEMA_PATH);
-    expect(schema).not.toMatch(/^model\s+StockBalance\b/m);
-    expect(schema).not.toMatch(/^model\s+StockMovement\b/m);
+    expect(schema).toMatch(/^model\s+StockBalance\b/m);
+    expect(schema).toMatch(/^model\s+StockMovement\b/m);
     expect(schema).not.toMatch(/^model\s+MaterialStockLot\b/m);
   });
 

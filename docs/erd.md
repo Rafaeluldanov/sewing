@@ -252,7 +252,8 @@
 ### 2.6 Warehouse / cells
 
 - **`Warehouse`** — склад. `name` (uniq), `code: String? @unique`,
-  `isActive`, `labelTemplate?`. Связи: `Cell[]`, `WarehouseLine[]`.
+  `isActive`, `labelTemplate?`. Связи: `Cell[]`, `WarehouseLine[]`,
+  foundation: `StockBalance[]`, `StockMovement[]` (см. § 2.12b).
   Индекс: `isActive`.
 - **`WarehouseLine`** — линия склада (полка/ряд). `code` уникален
   **глобально**, `warehouseId → Warehouse` (cascade).
@@ -261,7 +262,8 @@
   политики, дефолт), `lineId? → WarehouseLine` (`SetNull`),
   `lineIndex: Int?`. Уникальность `(lineId, lineIndex)`. Связи:
   `CellContent[]`, `PassportEvent[]`, паспорта (`PassportCurrentCell`),
-  `PurchaseReceiptLine[]`. Индексы: `warehouseId`, `lineId`.
+  `PurchaseReceiptLine[]`, foundation: `StockBalance[]`,
+  `StockMovement[]` (§ 2.12b). Индексы: `warehouseId`, `lineId`.
 - **`CellContent`** — содержимое ячейки `(cellId, sizeId, quantity)`,
   uniq `(cellId, sizeId)`. Это лёгкий счётчик; для размещения паспорта
   истина — `Passport.currentCellId`.
@@ -460,7 +462,8 @@
   `selectedSupplierCatalogItemId? → SupplierCatalogItem` (`SetNull`),
   `comment?`, `calculationNote?`. Индексы: `orderId`, `status`,
   `materialRole`, `calculationMethod`, `selectedSupplierId`,
-  `selectedSupplierCatalogItemId`.
+  `selectedSupplierCatalogItemId`. Связи foundation-склада:
+  `stockBalances[]`, `stockMovements[]` (см. § 2.12b).
 - **`Supplier`** *(новый контур)* — поставщик. `name` (не uniq),
   `phone? / website? / address? / comment?`,
   `status: String @default("ACTIVE")`. Индексы: `status`, `name`.
@@ -561,7 +564,8 @@
   Автосписание при выдаче кроя создаёт документ сразу в статусе
   `POSTED` (см. `MaterialIssuesService.createAutoCutIssueForPassport`
   и `docs/current-state.md §«Auto cut issue»`). Сознательная
-  граница MVP: НЕ ведёт `StockBalance`, НЕ создаёт `StockMovement`,
+  граница MVP: документ **не вызывает** `StockService` и не пишет
+  `StockMovement` (foundation-таблицы есть, см. § 2.12b ниже);
   НЕТ FIFO/LIFO, НЕТ проверок складских остатков, НЕТ master-модели
   `Material`; POSTED-документ нельзя отменить.
 - **`MaterialIssueLine`** — строка документа расхода. Cascade от
@@ -573,6 +577,37 @@
   сервере), `cellId? → Cell` (`SetNull` — аналитический slice, НЕ
   движение остатков), `comment?`. Индексы: `materialIssueId`,
   `workshopNeedId`, `cellId`. См. § 3.10 ниже.
+
+<a id="212b-stock-foundation"></a>
+### 2.12b Stock foundation (MVP по WorkshopNeed)
+
+- **`StockBalance`** — текущий остаток материала **в разрезе**
+  `workshopNeedId` (+ опционально `warehouseId?`, `cellId?`).
+  `balanceKey: String @unique` — детерминированный ключ
+  `${workshopNeedId}:NO_WAREHOUSE|<id>:NO_CELL|<id>` (защита от
+  дублей при `NULL` в паре склад/ячейка). `description`,
+  `materialRole?`, `unit`, `qty: Decimal(14,4) @default(0)`,
+  `unitCost: Decimal(14,2) @default(0)`,
+  `totalCost: Decimal(14,2) @default(0)`,
+  `createdAt`, `updatedAt`, `lastMovementAt?`.
+  `workshopNeedId → WorkshopNeed` (cascade),
+  `warehouseId? → Warehouse` (`SetNull`),
+  `cellId? → Cell` (`SetNull`).
+  `movements[] → StockMovement`. Индексы: `workshopNeedId`,
+  `warehouseId`, `cellId`, `updatedAt`. Сервис:
+  `apps/api/src/modules/stock/stock.service.ts`.
+- **`StockMovement`** — журнал движения. `stockBalanceId? →
+  StockBalance` (`SetNull`), `workshopNeedId → WorkshopNeed`
+  (cascade), `type: String` (`PURCHASE_RECEIPT` / `MATERIAL_ISSUE` /
+  `ADJUSTMENT` / `REVERSAL` — константы в коде),
+  `direction: String` (`IN` / `OUT`),
+  `warehouseId?`, `cellId?`, `qty`, `unit`, `unitCost`, `totalCost`,
+  `balanceBeforeQty?`, `balanceAfterQty?`, `sourceType?`, `sourceId?`,
+  опциональные FK: `purchaseReceiptId?`, `purchaseReceiptLineId?`,
+  `materialIssueId?`, `materialIssueLineId?` (все `SetNull` на
+  стороне движения), `comment?`, `createdById?`, `createdAt`.
+  Индексы по ключам ссылок и `createdAt`. **Foundation:** приёмка и
+  расход по-прежнему **не** создают движения автоматически.
 
 <a id="213-printers--print-jobs"></a>
 ### 2.13 Printers / print jobs

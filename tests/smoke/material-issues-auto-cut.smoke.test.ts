@@ -17,7 +17,8 @@
  *   - `PassportsService.issueToEmployee` вызывает auto-helper в ОБЕИХ
  *     ветках (FROM_CELL и ROUTE_WIP);
  *   - `PassportsModule` импортирует `MaterialIssuesModule`;
- *   - Не создан StockBalance / StockMovement / MaterialStockLot;
+ *   - Есть foundation `StockBalance` / `StockMovement`, но auto issue
+ *     их не вызывает; нет `MaterialStockLot`;
  *   - Не создана новая master-модель `Material`;
  *   - Не изменён frontend UI (MaterialIssuesSection /
  *     OrderMaterialsUnifiedTable / OrderViewTabs / OrderNeedsTab);
@@ -243,10 +244,10 @@ describe('material-issues auto cut — shared DTO', () => {
 // ---------------------------------------------------------------------------
 
 describe('material-issues auto cut — MVP boundaries', () => {
-  test('нет модели StockBalance / StockMovement / MaterialStockLot в Prisma', () => {
+  test('есть foundation StockBalance / StockMovement; нет MaterialStockLot', () => {
     const schema = read(SCHEMA_PATH);
-    expect(schema).not.toMatch(/^model\s+StockBalance\b/m);
-    expect(schema).not.toMatch(/^model\s+StockMovement\b/m);
+    expect(schema).toMatch(/^model\s+StockBalance\b/m);
+    expect(schema).toMatch(/^model\s+StockMovement\b/m);
     expect(schema).not.toMatch(/^model\s+MaterialStockLot\b/m);
   });
 
