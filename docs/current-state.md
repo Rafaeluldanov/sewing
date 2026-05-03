@@ -17,6 +17,40 @@ display board и payroll-админка.
 Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
 Подробности окружений — `docs/index.md` § «Домены и URL-ы».
 
+Backend-итерация «Фактическая стоимость материалов в production cost
+по периоду» (`apps/api/src/modules/costs/costs.service.ts`,
+`GET /api/costs/production`, контракт `packages/shared/src/costs.ts`):
+`CostsService.getProductionCost` теперь добавляет к каждому дню и к
+итогу периода отдельную сумму `materialCost` и включает её в
+`totalCost = pieceworkCost + salaryCost + materialCost`.
+
+- `materialCost[day]` = Σ `MaterialIssue.totalCost` по
+  `POSTED`-документам, у которых `passportId` входит в множество
+  паспортов, упакованных в этот день (`PACKED`-event внутри окна
+  периода);
+- `DRAFT` и `CANCELLED` документы **не учитываются**;
+- `MaterialIssue` без `passportId` (order-level) сознательно
+  **не включаются** в production cost по периоду — без привязки к
+  паспорту нельзя корректно разнести расход по дню выпуска. Они
+  по-прежнему видны в order-level финансовой сводке заказа;
+- сервис использует `MaterialIssue.totalCost` (server-side агрегат,
+  пересчитываемый при `POST /api/material-issues/:id/post`) — строки
+  `MaterialIssueLine` без `workshopNeedId` не мешают, потому что
+  сервис их и не читает;
+- frontend-страница `/production-cost` пока **не показывает**
+  отдельную колонку «Материалы»: новое поле появилось в response
+  аддитивно, UI рендерит существующие колонки без изменений.
+
+`ProductionCostV2Service` на этой итерации **не менялся** —
+управленческий P&L по-прежнему берёт материалы из расчётной основы
+(`OrderCostEstimate` / `WorkshopNeed`), а не из `MaterialIssue`.
+
+Складские остатки (`StockBalance` / `StockMovement` /
+`MaterialStockLot` / FIFO/LIFO), автосписание при выдаче кроя,
+master-модель `Material`, роли `WAREHOUSE_MANAGER` / `PURCHASER` /
+`ACCOUNTANT` на этой итерации **не реализованы и не менялись** —
+они вынесены в следующие итерации.
+
 ---
 
 ## 2. Стек

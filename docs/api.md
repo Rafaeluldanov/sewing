@@ -1049,8 +1049,8 @@ DTO: `packages/shared/src/dashboard.ts`.
 
 | Метод | Путь                                       | RBAC               | Описание |
 | ----- | ------------------------------------------ | ------------------ | -------- |
-| GET   | `/api/costs/production`                    | SHOP_MANAGER, ADMIN | Query `ProductionCostQuery` (`{ dateFrom, dateTo }`). Старый отчёт «Себестоимость выпуска» по дням. |
-| GET   | `/api/admin/production-cost/v2`            | SHOP_MANAGER, ADMIN | Query `ProductionCostV2Query`. Управленческий P&L по лекалам / заказам / операциям / сотрудникам / размерам (см. `docs/production-cost-v2-recon.md`). |
+| GET   | `/api/costs/production`                    | SHOP_MANAGER, ADMIN | Query `ProductionCostQuery` (`{ dateFrom, dateTo }`). Старый отчёт «Себестоимость выпуска» по дням. Response — `ProductionCostResponseDto` (см. `packages/shared/src/costs.ts`): `days[]` + `summary`. Каждый день и summary содержат `pieceworkCost`, `salaryCost`, **`materialCost`** и `totalCost = pieceworkCost + salaryCost + materialCost`. `materialCost` = Σ `MaterialIssue.totalCost` по `POSTED`-документам, у которых `passportId` входит в множество паспортов, упакованных в этот день (`PACKED`-event внутри окна). DRAFT / CANCELLED и order-level (`passportId IS NULL`) документы фактического расхода в production cost по периоду **не включаются** — без привязки к паспорту нельзя корректно разнести расход по дню выпуска. На MVP нет ни `StockBalance`, ни автосписания при выдаче кроя, ни FIFO/LIFO. |
+| GET   | `/api/admin/production-cost/v2`            | SHOP_MANAGER, ADMIN | Query `ProductionCostV2Query`. Управленческий P&L по лекалам / заказам / операциям / сотрудникам / размерам (см. `docs/production-cost-v2-recon.md`). На текущей итерации **не меняется** и материалы здесь по-прежнему берутся из `OrderCostEstimate` / `WorkshopNeed` (расчётная основа), а не из `MaterialIssue`. |
 
 DTO: `packages/shared/src/costs.ts`,
 `packages/shared/src/production-cost.ts`.

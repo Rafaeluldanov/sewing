@@ -17,6 +17,15 @@
  *   4. RBAC: SHOP_MANAGER/ADMIN — 200; остальные — 403; без сессии — 401.
  *   5. Период: dateFrom/dateTo фильтруют выборку, ответ всегда содержит
  *      все дни диапазона (даже пустые), чтобы график не рвался.
+ *   6. Несколько паспортов в один день агрегируются.
+ *   7. Фактическая стоимость материалов (`MaterialIssue.totalCost`)
+ *      входит в `materialCost` и `totalCost` периода, если документ
+ *      `POSTED` и `passportId` есть в множестве упакованных паспортов
+ *      периода. DRAFT, CANCELLED, order-level (без `passportId`) и
+ *      POSTED-документы по паспортам вне периода — НЕ попадают.
+ *      Несколько POSTED-документов по одному паспорту суммируются;
+ *      `materialCost` относится к тому же дню, что и PACKED-event
+ *      этого паспорта.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -304,6 +313,525 @@ describeWithDb('integration — production cost (Себестоимость вы
     const d = res.body.days[0];
     expect(d.producedUnits).toBe(5);
     expect(d.pieceworkCost).toBeCloseTo(50, 2);
+  });
+
+  // -------------------------------------------------------------------------
+  // 7. Фактическая стоимость материалов в production cost
+  // -------------------------------------------------------------------------
+  //
+  // Контракт MVP-итерации:
+  //   - `materialCost` = Σ `MaterialIssue.totalCost` (POSTED) по
+  //     `passportId`, упакованным в этот день;
+  //   - DRAFT и CANCELLED не учитываются;
+  //   - order-level документы (без `passportId`) сознательно
+  //     НЕ включаются в production cost по периоду — без привязки
+  //     к паспорту нельзя корректно разнести расход по дню выпуска.
+  //   - `materialCost` входит в `totalCost` (наряду с piecework и
+  //     salary).
+
+  test('7a. POSTED MaterialIssue с passportId входит в materialCost и totalCost', async () => {
+    const day = utcDay('2026-04-14');
+    const passport = await createPlacedPassport(t, seed, 2, day);
+
+    // Сдельщина 20 ₽, чтобы видеть отдельные слагаемые в totalCost.
+    await t.prisma.operationEntry.create({
+      data: {
+        passportId: passport.id,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
+        qty: 2,
+        ratePerUnit: new Prisma.Decimal(10),
+        amount: new Prisma.Decimal(20),
+        status: 'APPROVED',
+        approvalMode: 'IMMEDIATE',
+        sourceEventType: 'PASSPORT_CREATED',
+        approvedAt: day,
+      },
+    });
+    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 2);
+
+    // POSTED MaterialIssue на этот паспорт — totalCost = 1 234.56 ₽.
+    const order = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passport.id },
+      select: { orderId: true },
+    });
+    const issue = await t.prisma.materialIssue.create({
+      data: {
+        orderId: order.orderId,
+        passportId: passport.id,
+        status: 'POSTED',
+        postedAt: at(day, 12, 0),
+        totalCost: new Prisma.Decimal('1234.56'),
+        lines: {
+          create: [
+            {
+              description: 'Кулирка чёрная',
+              unit: 'кг',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('1234.56'),
+              totalCost: new Prisma.Decimal('1234.56'),
+            },
+          ],
+        },
+      },
+    });
+    expect(issue.id).toBeTruthy();
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-14', dateTo: '2026-04-14' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const d = res.body.days[0];
+    expect(d.materialCost).toBeCloseTo(1234.56, 2);
+    expect(d.pieceworkCost).toBeCloseTo(20, 2);
+    // totalCost = piecework + salary + material; salary = 0 (нет stage'ов).
+    expect(d.totalCost).toBeCloseTo(20 + 1234.56, 2);
+    expect(res.body.summary.materialCost).toBeCloseTo(1234.56, 2);
+    expect(res.body.summary.totalCost).toBeCloseTo(20 + 1234.56, 2);
+  });
+
+  test('7b. DRAFT MaterialIssue с passportId не включается в materialCost', async () => {
+    const day = utcDay('2026-04-15');
+    const passport = await createPlacedPassport(t, seed, 1, day);
+    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+
+    const order = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passport.id },
+      select: { orderId: true },
+    });
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: order.orderId,
+        passportId: passport.id,
+        status: 'DRAFT',
+        totalCost: new Prisma.Decimal('500.00'),
+        lines: {
+          create: [
+            {
+              description: 'Этикетка',
+              unit: 'шт',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('500.00'),
+              totalCost: new Prisma.Decimal('500.00'),
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-15', dateTo: '2026-04-15' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const d = res.body.days[0];
+    expect(d.materialCost).toBe(0);
+    expect(d.totalCost).toBeCloseTo(0, 2);
+  });
+
+  test('7c. CANCELLED MaterialIssue с passportId не включается в materialCost', async () => {
+    const day = utcDay('2026-04-16');
+    const passport = await createPlacedPassport(t, seed, 1, day);
+    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+
+    const order = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passport.id },
+      select: { orderId: true },
+    });
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: order.orderId,
+        passportId: passport.id,
+        status: 'CANCELLED',
+        cancelledAt: at(day, 12, 0),
+        totalCost: new Prisma.Decimal('700.00'),
+        lines: {
+          create: [
+            {
+              description: 'Молния',
+              unit: 'шт',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('700.00'),
+              totalCost: new Prisma.Decimal('700.00'),
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-16', dateTo: '2026-04-16' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const d = res.body.days[0];
+    expect(d.materialCost).toBe(0);
+    expect(d.totalCost).toBeCloseTo(0, 2);
+  });
+
+  test('7d. POSTED MaterialIssue без passportId (order-level) не включается в materialCost', async () => {
+    const day = utcDay('2026-04-17');
+    const passport = await createPlacedPassport(t, seed, 1, day);
+    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+
+    const order = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passport.id },
+      select: { orderId: true },
+    });
+    // Order-level POSTED (passportId = null). Сознательно out-of-scope
+    // production cost по периоду — без passportId дату упаковки
+    // нельзя сопоставить.
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: order.orderId,
+        passportId: null,
+        status: 'POSTED',
+        postedAt: at(day, 12, 0),
+        totalCost: new Prisma.Decimal('999.00'),
+        lines: {
+          create: [
+            {
+              description: 'Бирка',
+              unit: 'шт',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('999.00'),
+              totalCost: new Prisma.Decimal('999.00'),
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-17', dateTo: '2026-04-17' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const d = res.body.days[0];
+    expect(d.materialCost).toBe(0);
+    expect(d.totalCost).toBeCloseTo(0, 2);
+  });
+
+  test('7e. POSTED MaterialIssue с passportId вне периода не включается', async () => {
+    const inPeriodDay = utcDay('2026-04-18');
+    const outsideDay = utcDay('2026-04-25');
+
+    // Паспорт упакован В ПЕРИОДЕ.
+    const inPassport = await createPlacedPassport(t, seed, 1, inPeriodDay);
+    await writePacked(
+      t,
+      inPassport.id,
+      seed.employees.packer.id,
+      at(inPeriodDay, 11, 0),
+      1,
+    );
+    const inOrder = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: inPassport.id },
+      select: { orderId: true },
+    });
+
+    // Паспорт упакован ВНЕ периода (после `to`).
+    const outPassport = await createPlacedPassport(t, seed, 1, outsideDay);
+    await writePacked(
+      t,
+      outPassport.id,
+      seed.employees.packer.id,
+      at(outsideDay, 11, 0),
+      1,
+    );
+    const outOrder = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: outPassport.id },
+      select: { orderId: true },
+    });
+    // POSTED документ привязан к паспорту ВНЕ периода.
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: outOrder.orderId,
+        passportId: outPassport.id,
+        status: 'POSTED',
+        postedAt: at(outsideDay, 12, 0),
+        totalCost: new Prisma.Decimal('888.00'),
+        lines: {
+          create: [
+            {
+              description: 'Кулирка',
+              unit: 'кг',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('888.00'),
+              totalCost: new Prisma.Decimal('888.00'),
+            },
+          ],
+        },
+      },
+    });
+    // Контрольный POSTED для in-period паспорта.
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: inOrder.orderId,
+        passportId: inPassport.id,
+        status: 'POSTED',
+        postedAt: at(inPeriodDay, 12, 0),
+        totalCost: new Prisma.Decimal('100.00'),
+        lines: {
+          create: [
+            {
+              description: 'Этикетка',
+              unit: 'шт',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('100.00'),
+              totalCost: new Prisma.Decimal('100.00'),
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-18', dateTo: '2026-04-18' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const d = res.body.days[0];
+    // Только 100 ₽ — документ outsideDay не попадает в окно.
+    expect(d.materialCost).toBeCloseTo(100, 2);
+    expect(res.body.summary.materialCost).toBeCloseTo(100, 2);
+  });
+
+  test('7f. Несколько POSTED MaterialIssue по одному паспорту суммируются и попадают в день PACKED', async () => {
+    const day = utcDay('2026-04-19');
+    const passport = await createPlacedPassport(t, seed, 1, day);
+    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+
+    const order = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passport.id },
+      select: { orderId: true },
+    });
+    // Два POSTED-документа на один паспорт. `MaterialIssueLine` без
+    // `workshopNeedId` — это допустимо для production cost: сервис
+    // использует `MaterialIssue.totalCost`, а не суммирует строки.
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: order.orderId,
+        passportId: passport.id,
+        status: 'POSTED',
+        postedAt: at(day, 12, 0),
+        totalCost: new Prisma.Decimal('300.00'),
+        lines: {
+          create: [
+            {
+              description: 'Этикетка',
+              unit: 'шт',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('300.00'),
+              totalCost: new Prisma.Decimal('300.00'),
+              workshopNeedId: null,
+            },
+          ],
+        },
+      },
+    });
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: order.orderId,
+        passportId: passport.id,
+        status: 'POSTED',
+        postedAt: at(day, 13, 0),
+        totalCost: new Prisma.Decimal('200.50'),
+        lines: {
+          create: [
+            {
+              description: 'Бирка',
+              unit: 'шт',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('200.50'),
+              totalCost: new Prisma.Decimal('200.50'),
+              workshopNeedId: null,
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-19', dateTo: '2026-04-19' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    expect(res.body.days).toHaveLength(1);
+    const d = res.body.days[0];
+    expect(d.date).toBe('2026-04-19');
+    // 300 + 200.50 = 500.50.
+    expect(d.materialCost).toBeCloseTo(500.5, 2);
+    expect(d.totalCost).toBeCloseTo(500.5, 2);
+    expect(res.body.summary.materialCost).toBeCloseTo(500.5, 2);
+  });
+
+  test('7g. piecework и salary существующая логика не меняется', async () => {
+    // Полный сценарий из теста 1, но БЕЗ MaterialIssue —
+    // `materialCost` должен быть 0, остальные суммы — те же.
+    const day = utcDay('2026-04-20');
+    const passport = await createPlacedPassport(t, seed, 5, day);
+
+    await t.prisma.operationEntry.create({
+      data: {
+        passportId: passport.id,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
+        qty: 5,
+        ratePerUnit: new Prisma.Decimal(10),
+        amount: new Prisma.Decimal(50),
+        status: 'APPROVED',
+        approvalMode: 'IMMEDIATE',
+        sourceEventType: 'PASSPORT_CREATED',
+        approvedAt: day,
+      },
+    });
+
+    const qcAccept = at(day, 9, 0);
+    const qcDone = at(day, 9, 5);
+    await writeScan(t, passport.id, seed.operations.QC.id, seed.employees.qc.id, qcAccept);
+    await writeStageDone(t, passport.id, 'QC_PASSED', seed.employees.qc.id, qcDone);
+
+    const wtoAccept = at(day, 10, 0);
+    const wtoDone = at(day, 10, 3);
+    await writeScan(t, passport.id, seed.operations.IRONING.id, seed.employees.ironing.id, wtoAccept);
+    await writeStageDone(t, passport.id, 'WTO_PASSED', seed.employees.ironing.id, wtoDone);
+
+    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 5);
+    await createSalary(t, seed.employees.qc.id, day, 480);
+    await createSalary(t, seed.employees.ironing.id, day, 480);
+    await createSalary(t, seed.employees.packer.id, day, 480);
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-20', dateTo: '2026-04-20' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const d = res.body.days[0];
+    expect(d.pieceworkCost).toBeCloseTo(50, 2);
+    expect(d.salaryCost).toBeCloseTo(9, 2);
+    expect(d.materialCost).toBe(0);
+    expect(d.totalCost).toBeCloseTo(59, 2);
+    expect(d.idleCost).toBeCloseTo(1431, 2);
+  });
+
+  test('7h. MaterialIssueLine без workshopNeedId не мешает: сервис использует issue.totalCost', async () => {
+    const day = utcDay('2026-04-21');
+    const passport = await createPlacedPassport(t, seed, 1, day);
+    await writePacked(t, passport.id, seed.employees.packer.id, at(day, 11, 0), 1);
+
+    const order = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passport.id },
+      select: { orderId: true },
+    });
+    // Документ с тремя строками БЕЗ `workshopNeedId`. Сервис
+    // `CostsService` берёт `MaterialIssue.totalCost`, а не сумму
+    // `MaterialIssueLine.totalCost`, и `workshopNeedId` ему не нужен.
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: order.orderId,
+        passportId: passport.id,
+        status: 'POSTED',
+        postedAt: at(day, 12, 0),
+        totalCost: new Prisma.Decimal('123.45'),
+        lines: {
+          create: [
+            {
+              description: 'Подкладка',
+              unit: 'м',
+              issuedQty: new Prisma.Decimal('1.5'),
+              unitCost: new Prisma.Decimal('40'),
+              totalCost: new Prisma.Decimal('60'),
+              workshopNeedId: null,
+            },
+            {
+              description: 'Этикетка',
+              unit: 'шт',
+              issuedQty: new Prisma.Decimal('5'),
+              unitCost: new Prisma.Decimal('5'),
+              totalCost: new Prisma.Decimal('25'),
+              workshopNeedId: null,
+            },
+            {
+              description: 'Нитки',
+              unit: 'кат',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('38.45'),
+              totalCost: new Prisma.Decimal('38.45'),
+              workshopNeedId: null,
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-21', dateTo: '2026-04-21' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const d = res.body.days[0];
+    // `materialCost` = `MaterialIssue.totalCost` (123.45), а не Σ строк.
+    expect(d.materialCost).toBeCloseTo(123.45, 2);
+  });
+
+  test('7i. Daily aggregation: materialCost попадает в день PACKED-event этого паспорта', async () => {
+    // Паспорт упакован 22-го, но MaterialIssue.postedAt — 21-го
+    // (менеджер мог провести «впрок»). Сервис должен относить
+    // расход к дню PACKED, а не к postedAt — это и есть «день
+    // выпуска».
+    const dayPacked = utcDay('2026-04-22');
+    const dayBefore = utcDay('2026-04-21');
+    const passport = await createPlacedPassport(t, seed, 1, dayPacked);
+    await writePacked(
+      t,
+      passport.id,
+      seed.employees.packer.id,
+      at(dayPacked, 11, 0),
+      1,
+    );
+
+    const order = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passport.id },
+      select: { orderId: true },
+    });
+    await t.prisma.materialIssue.create({
+      data: {
+        orderId: order.orderId,
+        passportId: passport.id,
+        status: 'POSTED',
+        postedAt: at(dayBefore, 12, 0),
+        totalCost: new Prisma.Decimal('250.00'),
+        lines: {
+          create: [
+            {
+              description: 'Бирка',
+              unit: 'шт',
+              issuedQty: new Prisma.Decimal('1'),
+              unitCost: new Prisma.Decimal('250.00'),
+              totalCost: new Prisma.Decimal('250.00'),
+            },
+          ],
+        },
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/costs/production')
+      .query({ dateFrom: '2026-04-21', dateTo: '2026-04-22' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    expect(res.body.days).toHaveLength(2);
+    const day21 = res.body.days.find(
+      (d: { date: string }) => d.date === '2026-04-21',
+    );
+    const day22 = res.body.days.find(
+      (d: { date: string }) => d.date === '2026-04-22',
+    );
+    expect(day21.materialCost).toBe(0);
+    expect(day22.materialCost).toBeCloseTo(250, 2);
+    expect(res.body.summary.materialCost).toBeCloseTo(250, 2);
   });
 });
 
