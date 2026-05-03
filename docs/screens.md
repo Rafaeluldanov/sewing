@@ -3083,6 +3083,97 @@ deep-integration и снимает риск разъезда с payroll-эндп
 
 ---
 
+## 12c. Документы начисления зарплаты — PHASE 3 STEP 6.3
+
+<a id="12c-accrual-documents"></a>
+
+Менеджерский интерфейс управления документами начисления зарплаты
+(`PayrollAccrualDocument`).
+Контракт API — `api.md §30c` (`/api/payroll/accrual-documents`).
+Доменная модель — `domain.md §10.9`.
+
+Доступ — `SHOP_MANAGER`, `ADMIN`. RBAC — `app/admin/layout.tsx` +
+backend `@Roles('SHOP_MANAGER', 'ADMIN')`.
+
+### `/admin/payroll/accrual-documents` — список документов
+
+Файл — `apps/web/app/admin/payroll/accrual-documents/page.tsx`.
+
+- **Шапка** `AdminPageShell` с иконкой `BadgeRussianRuble`,
+  action-кнопка «Начислить зарплату» → `/admin/payroll/accrual-documents/new`.
+- **Фильтры**: статус (`status`), дата с/по (`dateFrom` / `dateTo`).
+- **Таблица** с колонками: дата начисления, статус, сотрудников (linesCount),
+  сдельно, оклад, корректировки, итого к выплате, создано, выплачено,
+  кнопка «Открыть» → `/admin/payroll/accrual-documents/:id`.
+- **Пустое состояние**: «Документов начисления пока нет».
+
+API client — `listPayrollAccrualDocuments` в
+`apps/web/lib/payroll-accrual-documents-api.ts`.
+
+### `/admin/payroll/accrual-documents/new` — создать документ
+
+Файл — `apps/web/app/admin/payroll/accrual-documents/new/page.tsx`.
+Клиентская форма — `apps/web/app/admin/payroll/accrual-documents/new/create-form.tsx`.
+
+Форма содержит:
+- `accrualDate` (дата расчёта включительно, по умолчанию — сегодня);
+- `managerComment` (необязательно).
+
+Пояснение: «Документ включит только неоплаченные утверждённые начисления
+и окладные дни до выбранной даты включительно.»
+
+После успешного `POST /api/payroll/accrual-documents` — редирект на
+`/admin/payroll/accrual-documents/:id`.
+
+Server action — `createPayrollAccrualDocumentAction` в
+`apps/web/app/admin/payroll/accrual-documents/actions.ts`.
+
+### `/admin/payroll/accrual-documents/[id]` — карточка документа
+
+Файл — `apps/web/app/admin/payroll/accrual-documents/[id]/page.tsx`.
+Клиентские компоненты — `[id]/document-actions.tsx`, `[id]/line-adjustment-form.tsx`.
+
+Показывает:
+
+- **Общие сведения**: статус, дата начисления, комментарий менеджера.
+- **KPI-карточки**: сдельно / оклад / корректировки / итого к выплате /
+  сотрудников.
+- **Хронология**: createdAt, paidAt (если выплачено), cancelledAt +
+  cancelReason (если отменено).
+- **Таблица строк**: сотрудник, сдельно, оклад, корректировка, комментарий,
+  итого к выплате, выплата (ссылка на `/admin/payroll/payouts/:payoutId`).
+
+**DRAFT** — редактируемый режим:
+
+- Ячейка «Корректировка» каждой строки содержит форму `LineAdjustmentForm`
+  с полями `manualAdjustRub` и `manualComment`. Кнопка «Сохранить» вызывает
+  `PATCH /api/payroll/accrual-documents/:id/lines/:lineId`.
+- Блок «Действия» содержит кнопки:
+  - «Пересчитать» — `POST .../recompute`;
+  - «Выплатить» — `POST .../pay` (переводит в `PAID`,
+    создаёт `PayrollPayout ISSUED` для каждой строки);
+  - «Отменить» — `POST .../cancel`.
+
+**Ограничение `manualAdjustRub` (STEP 6.2).** Если в документе есть
+корректировки (`totalAdjustRub ≠ 0`), кнопка «Выплатить» отображает
+предупреждение:
+«В документе есть корректировки. Выплата с корректировками будет доступна
+после расширения строк выплат. Сейчас уберите корректировки или дождитесь
+следующего шага.»
+
+Если backend вернул `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`, UI
+отображает: «Документ содержит корректировки. Сейчас выплата с
+корректировками ещё не поддержана. Уберите корректировки или выполните
+следующий шаг расширения payout lines.»
+
+**PAID** — read-only; строки показывают ссылки на выплаты.
+**CANCELLED** — read-only.
+
+Server actions — `apps/web/app/admin/payroll/accrual-documents/actions.ts`.
+API client — `apps/web/lib/payroll-accrual-documents-api.ts`.
+
+---
+
 ## 12b. Выплаты зарплаты — PHASE 3 STEP 4
 
 Менеджерский интерфейс управления выплатами (`PayrollPayout`).
