@@ -150,37 +150,82 @@ export class StockService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  async listBalances(query: ListStockBalancesQuery) {
-    const take = query.take ?? 50;
-    const skip = query.skip ?? 0;
-    const where: Prisma.StockBalanceWhereInput = {
-      ...(query.workshopNeedId ? { workshopNeedId: query.workshopNeedId } : {}),
-      ...(query.warehouseId ? { warehouseId: query.warehouseId } : {}),
-      ...(query.cellId ? { cellId: query.cellId } : {}),
+  /**
+   * Read-only list `StockBalance` для `GET /api/stock/balances`.
+   *
+   * Сортировка: `updatedAt desc`, затем `description asc` (стабильный
+   * порядок при одновременных движениях).
+   *
+   * `Decimal` в response отдаём строкой через `.toString()` — так же,
+   * как делают остальные read-only сериализаторы складских / закупочных
+   * модулей (см. `MaterialIssuesService.toListItem`,
+   * `PurchaseReceiptsService`). Это держит точность при JSON-
+   * сериализации и не зависит от настройки Prisma Decimal.
+   */
+  async listBalances(query: ListStockBalancesQuery): Promise<{
+    items: StockBalanceListItem[];
+    total: number;
+    limit: number;
+    offset: number;
+  }> {
+    const limit = query.limit ?? DEFAULT_LIST_LIMIT;
+    const offset = query.offset ?? 0;
+    const where = buildStockBalanceWhere(query);
+
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.stockBalance.findMany({
+        where,
+        orderBy: [{ updatedAt: 'desc' }, { description: 'asc' }],
+        take: limit,
+        skip: offset,
+        include: STOCK_BALANCE_LIST_INCLUDE,
+      }),
+      this.prisma.stockBalance.count({ where }),
+    ]);
+    return {
+      items: rows.map(toStockBalanceListItem),
+      total,
+      limit,
+      offset,
     };
-    return this.prisma.stockBalance.findMany({
-      where,
-      orderBy: { updatedAt: 'desc' },
-      take,
-      skip,
-    });
   }
 
-  async listMovements(query: ListStockMovementsQuery) {
-    const take = query.take ?? 50;
-    const skip = query.skip ?? 0;
-    const where: Prisma.StockMovementWhereInput = {
-      ...(query.workshopNeedId ? { workshopNeedId: query.workshopNeedId } : {}),
-      ...(query.stockBalanceId ? { stockBalanceId: query.stockBalanceId } : {}),
-      ...(query.type ? { type: query.type } : {}),
-      ...(query.direction ? { direction: query.direction } : {}),
+  /**
+   * Read-only list `StockMovement` для `GET /api/stock/movements`.
+   *
+   * Сортировка: `createdAt desc` — это журнал движений, важен порядок
+   * фиксации. `Decimal` сериализуются как строки (см. `listBalances`).
+   *
+   * `sourceKey` НЕ отдаётся — это внутренний идемпотентный ключ
+   * (`PURCHASE_RECEIPT_LINE:<id>` и т.п.). Sorting по нему тоже не
+   * нужен.
+   */
+  async listMovements(query: ListStockMovementsQuery): Promise<{
+    items: StockMovementListItem[];
+    total: number;
+    limit: number;
+    offset: number;
+  }> {
+    const limit = query.limit ?? DEFAULT_LIST_LIMIT;
+    const offset = query.offset ?? 0;
+    const where = buildStockMovementWhere(query);
+
+    const [rows, total] = await this.prisma.$transaction([
+      this.prisma.stockMovement.findMany({
+        where,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: limit,
+        skip: offset,
+        include: STOCK_MOVEMENT_LIST_INCLUDE,
+      }),
+      this.prisma.stockMovement.count({ where }),
+    ]);
+    return {
+      items: rows.map(toStockMovementListItem),
+      total,
+      limit,
+      offset,
     };
-    return this.prisma.stockMovement.findMany({
-      where,
-      orderBy: { createdAt: 'desc' },
-      take,
-      skip,
-    });
   }
 
   async getOrCreateBalanceInTx(
@@ -1048,4 +1093,291 @@ function resolvePurchaseReceiptLineUnitCost(line: {
   const currency = (line.currencySnapshot ?? '').trim().toUpperCase();
   if (currency.length > 0 && currency !== 'RUB') return ZERO;
   return price;
+}
+
+// ---------------------------------------------------------------------------
+// Read-only list shapes for `GET /api/stock/balances|movements`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Дефолт для пагинации read-only API. Совпадает с DTO-схемой
+ * (`limit max 200`); вынесен в константу, чтобы DTO и сервис не
+ * разъезжались.
+ */
+const DEFAULT_LIST_LIMIT = 50;
+
+/**
+ * Тонкий include для list `StockBalance`. Только поля, которые
+ * попадают в response — без heavy relation-объектов (особенно
+ * `workshopNeed.order` обрезан до `{ id, number }`).
+ */
+const STOCK_BALANCE_LIST_INCLUDE = {
+  workshopNeed: {
+    select: {
+      id: true,
+      orderId: true,
+      description: true,
+      sourceName: true,
+      materialRole: true,
+      order: { select: { id: true, number: true } },
+    },
+  },
+  warehouse: { select: { id: true, name: true, code: true } },
+  cell: { select: { id: true, code: true, qrCode: true } },
+} as const satisfies Prisma.StockBalanceInclude;
+
+const STOCK_MOVEMENT_LIST_INCLUDE = {
+  workshopNeed: {
+    select: {
+      id: true,
+      orderId: true,
+      description: true,
+      sourceName: true,
+      materialRole: true,
+      order: { select: { id: true, number: true } },
+    },
+  },
+  warehouse: { select: { id: true, name: true, code: true } },
+  cell: { select: { id: true, code: true, qrCode: true } },
+} as const satisfies Prisma.StockMovementInclude;
+
+export interface StockBalanceListItem {
+  id: string;
+  balanceKey: string;
+  workshopNeedId: string;
+  orderId: string | null;
+  orderNumber: string | null;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  cellId: string | null;
+  cellCode: string | null;
+  description: string;
+  materialRole: string | null;
+  unit: string;
+  qty: string;
+  unitCost: string;
+  totalCost: string;
+  lastMovementAt: string | null;
+  updatedAt: string;
+}
+
+export interface StockMovementListItem {
+  id: string;
+  stockBalanceId: string | null;
+  workshopNeedId: string;
+  orderId: string | null;
+  orderNumber: string | null;
+  type: string;
+  direction: string;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  cellId: string | null;
+  cellCode: string | null;
+  qty: string;
+  unit: string;
+  unitCost: string;
+  totalCost: string;
+  balanceBeforeQty: string | null;
+  balanceAfterQty: string | null;
+  sourceType: string | null;
+  sourceId: string | null;
+  purchaseReceiptId: string | null;
+  purchaseReceiptLineId: string | null;
+  materialIssueId: string | null;
+  materialIssueLineId: string | null;
+  comment: string | null;
+  createdById: string | null;
+  createdAt: string;
+}
+
+type StockBalanceWithRels = Prisma.StockBalanceGetPayload<{
+  include: typeof STOCK_BALANCE_LIST_INCLUDE;
+}>;
+
+type StockMovementWithRels = Prisma.StockMovementGetPayload<{
+  include: typeof STOCK_MOVEMENT_LIST_INCLUDE;
+}>;
+
+function buildStockBalanceWhere(
+  query: ListStockBalancesQuery,
+): Prisma.StockBalanceWhereInput {
+  const conditions: Prisma.StockBalanceWhereInput[] = [];
+
+  if (query.workshopNeedId) {
+    conditions.push({ workshopNeedId: query.workshopNeedId });
+  }
+  if (query.warehouseId) {
+    conditions.push({ warehouseId: query.warehouseId });
+  }
+  if (query.cellId) {
+    conditions.push({ cellId: query.cellId });
+  }
+  if (query.materialRole) {
+    conditions.push({ materialRole: query.materialRole });
+  }
+  if (query.unit) {
+    conditions.push({ unit: query.unit });
+  }
+  if (query.orderId) {
+    // Через relation `workshopNeed.orderId`. Безопасно: workshopNeed —
+    // обязательная связь у `StockBalance`.
+    conditions.push({ workshopNeed: { orderId: query.orderId } });
+  }
+  if (query.q) {
+    const q = query.q;
+    conditions.push({
+      OR: [
+        { description: { contains: q, mode: 'insensitive' } },
+        {
+          workshopNeed: {
+            description: { contains: q, mode: 'insensitive' },
+          },
+        },
+        {
+          workshopNeed: {
+            sourceName: { contains: q, mode: 'insensitive' },
+          },
+        },
+      ],
+    });
+  }
+  // Mutually exclusive: схема Zod гарантирует, что максимум один из
+  // флагов `true`, поэтому проверяем без приоритета.
+  if (query.positiveOnly) {
+    conditions.push({ qty: { gt: 0 } });
+  }
+  if (query.negativeOnly) {
+    conditions.push({ qty: { lt: 0 } });
+  }
+  if (query.zeroOnly) {
+    conditions.push({ qty: 0 });
+  }
+
+  return conditions.length === 0 ? {} : { AND: conditions };
+}
+
+function buildStockMovementWhere(
+  query: ListStockMovementsQuery,
+): Prisma.StockMovementWhereInput {
+  const conditions: Prisma.StockMovementWhereInput[] = [];
+
+  if (query.workshopNeedId) {
+    conditions.push({ workshopNeedId: query.workshopNeedId });
+  }
+  if (query.stockBalanceId) {
+    conditions.push({ stockBalanceId: query.stockBalanceId });
+  }
+  if (query.warehouseId) {
+    conditions.push({ warehouseId: query.warehouseId });
+  }
+  if (query.cellId) {
+    conditions.push({ cellId: query.cellId });
+  }
+  if (query.type) {
+    conditions.push({ type: query.type });
+  }
+  if (query.direction) {
+    conditions.push({ direction: query.direction });
+  }
+  if (query.sourceType) {
+    conditions.push({ sourceType: query.sourceType });
+  }
+  if (query.sourceId) {
+    conditions.push({ sourceId: query.sourceId });
+  }
+  if (query.purchaseReceiptId) {
+    conditions.push({ purchaseReceiptId: query.purchaseReceiptId });
+  }
+  if (query.purchaseReceiptLineId) {
+    conditions.push({ purchaseReceiptLineId: query.purchaseReceiptLineId });
+  }
+  if (query.materialIssueId) {
+    conditions.push({ materialIssueId: query.materialIssueId });
+  }
+  if (query.materialIssueLineId) {
+    conditions.push({ materialIssueLineId: query.materialIssueLineId });
+  }
+  if (query.orderId) {
+    conditions.push({ workshopNeed: { orderId: query.orderId } });
+  }
+  if (query.from || query.to) {
+    const range: Prisma.DateTimeFilter = {};
+    if (query.from) range.gte = new Date(query.from);
+    if (query.to) range.lte = new Date(query.to);
+    conditions.push({ createdAt: range });
+  }
+  if (query.q) {
+    conditions.push({
+      comment: { contains: query.q, mode: 'insensitive' },
+    });
+  }
+
+  return conditions.length === 0 ? {} : { AND: conditions };
+}
+
+function toStockBalanceListItem(
+  row: StockBalanceWithRels,
+): StockBalanceListItem {
+  return {
+    id: row.id,
+    balanceKey: row.balanceKey,
+    workshopNeedId: row.workshopNeedId,
+    orderId: row.workshopNeed?.orderId ?? null,
+    orderNumber: row.workshopNeed?.order?.number ?? null,
+    warehouseId: row.warehouseId,
+    warehouseName: row.warehouse?.name ?? null,
+    cellId: row.cellId,
+    cellCode: row.cell?.code ?? null,
+    description: row.description,
+    materialRole: row.materialRole,
+    unit: row.unit,
+    qty: row.qty.toString(),
+    unitCost: row.unitCost.toString(),
+    totalCost: row.totalCost.toString(),
+    lastMovementAt: row.lastMovementAt
+      ? row.lastMovementAt.toISOString()
+      : null,
+    updatedAt: row.updatedAt.toISOString(),
+  };
+}
+
+function toStockMovementListItem(
+  row: StockMovementWithRels,
+): StockMovementListItem {
+  return {
+    id: row.id,
+    stockBalanceId: row.stockBalanceId,
+    workshopNeedId: row.workshopNeedId,
+    orderId: row.workshopNeed?.orderId ?? null,
+    orderNumber: row.workshopNeed?.order?.number ?? null,
+    type: row.type,
+    direction: row.direction,
+    warehouseId: row.warehouseId,
+    warehouseName: row.warehouse?.name ?? null,
+    cellId: row.cellId,
+    cellCode: row.cell?.code ?? null,
+    qty: row.qty.toString(),
+    unit: row.unit,
+    unitCost: row.unitCost.toString(),
+    totalCost: row.totalCost.toString(),
+    balanceBeforeQty: row.balanceBeforeQty
+      ? row.balanceBeforeQty.toString()
+      : null,
+    balanceAfterQty: row.balanceAfterQty
+      ? row.balanceAfterQty.toString()
+      : null,
+    sourceType: row.sourceType,
+    sourceId: row.sourceId,
+    purchaseReceiptId: row.purchaseReceiptId,
+    purchaseReceiptLineId: row.purchaseReceiptLineId,
+    materialIssueId: row.materialIssueId,
+    materialIssueLineId: row.materialIssueLineId,
+    comment: row.comment,
+    createdById: row.createdById,
+    createdAt: row.createdAt.toISOString(),
+    // Сознательно НЕ отдаём `sourceKey` — это внутренний идемпотентный
+    // технический ключ (`PURCHASE_RECEIPT_LINE:<id>`,
+    // `MATERIAL_ISSUE_LINE:<id>` и т.п.), не предназначенный для
+    // публичного API.
+  };
 }

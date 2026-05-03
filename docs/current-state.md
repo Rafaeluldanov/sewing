@@ -374,6 +374,50 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
   остатков и UI для управления флагом
   `allowNegativeMaterialStock` — вынесены в следующие итерации.
 
+  Backend-итерация «Read-only API склада»
+  (`apps/api/src/modules/stock/stock.controller.ts`,
+  `apps/api/src/modules/stock/stock.service.ts::listBalances` /
+  `listMovements`,
+  `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`,
+  `apps/api/src/modules/stock/dto/list-stock-movements.dto.ts`,
+  `docs/api.md §«26a. Stock (read-only)»`):
+  - появился публичный read-only API для просмотра остатков и
+    журнала движений foundation-склада: `GET /api/stock/balances`
+    и `GET /api/stock/movements`. Контроллер
+    `StockController` зарегистрирован в `StockModule`,
+    класс-уровень `@Roles('ADMIN', 'SHOP_MANAGER')`. `ADMIN`
+    глобально проходит через `AuthGuard`. Бизнес-flow на этой
+    итерации **не менялся** — записи в `StockBalance` /
+    `StockMovement` по-прежнему делает `StockService.applyMovementInTx`
+    из `PurchaseReceiptsService` и `MaterialIssuesService`;
+  - balances: фильтры `workshopNeedId` / `orderId` (через
+    relation `workshopNeed.orderId`) / `warehouseId` / `cellId` /
+    `materialRole` / `unit` / `q` (case-insensitive substring по
+    `description` остатка и `WorkshopNeed.description` /
+    `sourceName`) / `positiveOnly` / `negativeOnly` / `zeroOnly`
+    (взаимоисключающие — больше одного флага = 400
+    `VALIDATION_ERROR`); сортировка `updatedAt desc, description asc`;
+  - movements: фильтры `workshopNeedId` / `orderId` /
+    `stockBalanceId` / `warehouseId` / `cellId` / `type` (`IN |
+    OUT | ADJUSTMENT | REVERSAL`) / `direction` (`IN | OUT`) /
+    `sourceType` / `sourceId` / `purchaseReceiptId` /
+    `purchaseReceiptLineId` / `materialIssueId` /
+    `materialIssueLineId` / `from` / `to` (ISO datetime) / `q`
+    (case-insensitive substring по `comment`); сортировка
+    `createdAt desc`;
+  - pagination — `limit` default `50`, max `200` (> 0); `offset`
+    default `0` (≥ 0); response shape — `{ items, total, limit,
+    offset }`;
+  - `Decimal` сериализуется строкой через `.toString()`,
+    `Date` — ISO-строкой; UI остатков **не реализован** —
+    доступ только через API. **`StockMovement.sourceKey`** —
+    внутренний идемпотентный ключ — сознательно **не отдаётся**
+    в публичном response (см. JSDoc `toStockMovementListItem`);
+  - read-only: никаких adjustment / transfer / corrections; FIFO/LIFO
+    по-прежнему нет; `MaterialStockLot` нет; master-модели
+    `Material` нет; новые роли (`WAREHOUSE_MANAGER` / `PURCHASER` /
+    `ACCOUNTANT`) **не введены**.
+
 ---
 
 ## 2. Стек

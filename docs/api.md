@@ -85,6 +85,7 @@
 - [24. Passports](#24-passports)
 - [25. Cells](#25-cells)
 - [26. Warehouses](#26-warehouses)
+- [26a. Stock (read-only)](#26a-stock)
 - [27. QC](#27-qc)
 - [28. WTO](#28-wto)
 - [29. Packing](#29-packing)
@@ -850,6 +851,165 @@ DTO: `packages/shared/src/warehouses.ts` (`UpdateCellSchema`).
 | POST  | `/api/warehouses/:id/print-cells`     | SHOP_MANAGER, ADMIN | Body `PrintWarehouseCellsDto` (`{ printerId, copies?, labelSize }`). Создаёт `cellsCount × copies` PENDING-job-ов с `sourceType=CELL_LABEL`. Ошибки: 404 `WAREHOUSE_NOT_FOUND` / `PRINTER_NOT_FOUND`, 409 `PRINTER_INACTIVE` / `WAREHOUSE_NO_CELLS_TO_PRINT`. |
 
 DTO: `packages/shared/src/warehouses.ts`. ADR: 0019.
+
+---
+
+<a id="26a-stock"></a>
+## 26a. Stock (read-only)
+
+Источник: `stock/stock.controller.ts`. Класс-уровень
+`@Roles('ADMIN', 'SHOP_MANAGER')`.
+
+Read-only API для просмотра остатков и журнала движений foundation
+складского учёта (см. `apps/api/src/modules/stock/stock.service.ts`,
+`prisma/schema.prisma::StockBalance` / `StockMovement`,
+`docs/current-state.md §«Foundation складского учёта материалов»`).
+На этой итерации **только GET-эндпоинты** — никаких корректировок,
+adjustment-документов, переноса остатков. Запись остатков по-прежнему
+идёт неявно, в той же транзакции, что и бизнес-документ:
+`PurchaseReceipt` (POSTED → IN, cancel → REVERSAL OUT) и
+`MaterialIssue` (POSTED → OUT, в т.ч. `AUTO_CUT_ISSUE`).
+
+| Метод | Путь                       | RBAC               | Описание |
+| ----- | -------------------------- | ------------------ | -------- |
+| GET   | `/api/stock/balances`      | ADMIN, SHOP_MANAGER | Список текущих остатков `StockBalance`. Сортировка `updatedAt desc, description asc`. |
+| GET   | `/api/stock/movements`     | ADMIN, SHOP_MANAGER | Журнал движений `StockMovement`. Сортировка `createdAt desc`. |
+
+DTO query: `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`,
+`apps/api/src/modules/stock/dto/list-stock-movements.dto.ts`.
+Ответ обоих эндпоинтов:
+
+```ts
+{ items: T[]; total: number; limit: number; offset: number }
+```
+
+Pagination — общий контракт: `limit` default `50`, max `200`, > 0;
+`offset` default `0`, ≥ 0. Все `Decimal`-поля сериализуются строкой
+(`qty`, `unitCost`, `totalCost`, `balanceBeforeQty`, `balanceAfterQty`),
+`Date` — ISO-строкой (`createdAt`, `updatedAt`, `lastMovementAt`).
+
+### 26a.1 `GET /api/stock/balances`
+
+Query (все опциональны, склеиваются по AND):
+
+| Параметр         | Тип      | Описание |
+| ---------------- | -------- | -------- |
+| `workshopNeedId` | string   | Точечный фильтр по идентичности материала. |
+| `orderId`        | string   | Через relation `workshopNeed.orderId`. |
+| `warehouseId`    | string   | Точечный фильтр. |
+| `cellId`         | string   | Точечный фильтр. |
+| `materialRole`   | string   | Например `MAIN_FABRIC` / `LINING`. |
+| `unit`           | string   | Точное совпадение единицы измерения. |
+| `q`              | string   | Case-insensitive substring по `description` остатка и `WorkshopNeed.description` / `sourceName`. |
+| `positiveOnly`   | boolean  | `qty > 0`. |
+| `negativeOnly`   | boolean  | `qty < 0`. |
+| `zeroOnly`       | boolean  | `qty = 0`. |
+| `limit`          | number   | 1..200, default 50. |
+| `offset`         | number   | ≥ 0, default 0. |
+
+`positiveOnly` / `negativeOnly` / `zeroOnly` — взаимоисключающие.
+Передача больше одного флага одновременно отдаёт 400 `VALIDATION_ERROR`
+(сообщение «Фильтры positiveOnly / negativeOnly / zeroOnly
+взаимоисключающие — выберите один»).
+
+Каждый item:
+
+```ts
+{
+  id: string;
+  balanceKey: string;
+  workshopNeedId: string;
+  orderId: string | null;
+  orderNumber: string | null;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  cellId: string | null;
+  cellCode: string | null;
+  description: string;
+  materialRole: string | null;
+  unit: string;
+  qty: string;          // Decimal
+  unitCost: string;     // Decimal
+  totalCost: string;    // Decimal
+  lastMovementAt: string | null; // ISO
+  updatedAt: string;             // ISO
+}
+```
+
+### 26a.2 `GET /api/stock/movements`
+
+Query (все опциональны, склеиваются по AND):
+
+| Параметр                | Тип      | Описание |
+| ----------------------- | -------- | -------- |
+| `workshopNeedId`        | string   | |
+| `orderId`               | string   | Через relation `workshopNeed.orderId`. |
+| `stockBalanceId`        | string   | |
+| `warehouseId`           | string   | |
+| `cellId`                | string   | |
+| `type`                  | string   | `PURCHASE_RECEIPT \| MATERIAL_ISSUE \| ADJUSTMENT \| REVERSAL`. |
+| `direction`             | string   | `IN \| OUT`. |
+| `sourceType`            | string   | Внешний классификатор источника (например, `PURCHASE_RECEIPT_LINE`). |
+| `sourceId`              | string   | id строки источника. |
+| `purchaseReceiptId`     | string   | |
+| `purchaseReceiptLineId` | string   | |
+| `materialIssueId`       | string   | |
+| `materialIssueLineId`   | string   | |
+| `from`                  | ISO date | `createdAt >= from`. |
+| `to`                    | ISO date | `createdAt <= to`. |
+| `q`                     | string   | Case-insensitive substring по `comment`. |
+| `limit`                 | number   | 1..200, default 50. |
+| `offset`                | number   | ≥ 0, default 0. |
+
+Каждый item:
+
+```ts
+{
+  id: string;
+  stockBalanceId: string | null;
+  workshopNeedId: string;
+  orderId: string | null;
+  orderNumber: string | null;
+  type: string;
+  direction: string;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  cellId: string | null;
+  cellCode: string | null;
+  qty: string;            // Decimal
+  unit: string;
+  unitCost: string;       // Decimal
+  totalCost: string;      // Decimal
+  balanceBeforeQty: string | null; // Decimal
+  balanceAfterQty: string | null;  // Decimal
+  sourceType: string | null;
+  sourceId: string | null;
+  purchaseReceiptId: string | null;
+  purchaseReceiptLineId: string | null;
+  materialIssueId: string | null;
+  materialIssueLineId: string | null;
+  comment: string | null;
+  createdById: string | null;
+  createdAt: string;       // ISO
+}
+```
+
+`StockMovement.sourceKey` (внутренний идемпотентный ключ
+`PURCHASE_RECEIPT_LINE:<id>` / `PURCHASE_RECEIPT_LINE_CANCEL:<id>` /
+`MATERIAL_ISSUE_LINE:<id>`) сознательно **не отдаётся** в публичном
+API.
+
+### Сознательные границы MVP
+
+- API **read-only**: никаких adjustment / transfer / corrections;
+- остатки считаются по `WorkshopNeed` (нет master-модели `Material`);
+- **FIFO/LIFO нет**, `MaterialStockLot` нет — `applyMovementInTx` на
+  OUT использует текущий `StockBalance.unitCost`;
+- новые роли (`WAREHOUSE_MANAGER`, `PURCHASER`, `ACCOUNTANT`) **не
+  введены**;
+- frontend UI остатков на этой итерации **не реализован** —
+  доступ только через API (будет добавлен в следующей итерации
+  владельцем проекта).
 
 ---
 
