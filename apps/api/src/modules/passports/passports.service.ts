@@ -52,6 +52,7 @@ import { AuditService } from '../audit/audit.service.js';
 import { CutReleasePolicyService } from '../cut-release-policy/cut-release-policy.service.js';
 import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-issue-rules.service.js';
 import { MaterialIssuesService } from '../material-issues/material-issues.service.js';
+import { CompanySettingsService } from '../company-settings/company-settings.service.js';
 
 type PassportRow = Prisma.PassportGetPayload<{
   include: {
@@ -90,6 +91,7 @@ export class PassportsService {
     private readonly cutReleasePolicy: CutReleasePolicyService,
     private readonly orderCutIssueRules: OrderCutIssueRulesService,
     private readonly materialIssues: MaterialIssuesService,
+    private readonly companySettings: CompanySettingsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -541,6 +543,25 @@ export class PassportsService {
       session.operation.category,
     );
 
+    // Hardening-флаг автосписания (см.
+    // `prisma/schema.prisma::CompanySettings.autoIssueMaterialsOnCutRelease`,
+    // `docs/current-state.md §«Auto cut issue»`).
+    //
+    // Читаем ДО открытия транзакции:
+    //   - чтобы не плодить лишний `SELECT` внутри транзакции
+    //     при `false` (самый частый сценарий после миграции);
+    //   - чтобы значение не зависело от транзакционной видимости
+    //     (`SELECT` идёт через основной prisma-клиент и видит
+    //     последнюю commit-ed версию).
+    //
+    // Если строки `CompanySettings` ещё нет (свежая БД, до первого
+    // обращения к UI настроек) — `getAutoIssueMaterialsOnCutRelease`
+    // возвращает `false` и НЕ создаёт singleton-строку. Это
+    // сознательно: настройка читается из live-flow и не должна
+    // открывать сторонний write по пути выдачи кроя.
+    const autoIssueEnabled =
+      await this.companySettings.getAutoIssueMaterialsOnCutRelease();
+
     // Soft-route MVP: «паспорт в маршрутном потоке» = у заказа есть
     // snapshot `OrderRouteStep[]` (а значит и `currentRouteStepIndex`
     // был проставлен при `Passport.create()`). Это самый дешёвый и
@@ -626,24 +647,35 @@ export class PassportsService {
         // `apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
         // `docs/current-state.md §«Auto cut issue»`).
         //
-        // Идёт В ТОЙ ЖЕ транзакции: если создание документа
-        // упадёт (constraint / relation), выдача кроя откатится
-        // целиком — инвариант «либо и выдача, и расход, либо
-        // ничего». Идемпотентность обеспечивается UNIQUE
-        // `MaterialIssue.sourceKey` — retry того же passport-а
-        // не создаёт дубля. Мягкие отсутствия (нет WorkshopNeed,
-        // totalOrderQty <= 0, unit-price отсутствует — см.
-        // `AutoCutIssueSkipReason`) НЕ блокируют issueToEmployee:
-        // сервис вернёт `{ skipped: true }`, и мы продолжим.
-        await this.materialIssues.createAutoCutIssueForPassport(
-          tx,
-          passport.id,
-          employeeId,
-        );
+        // Включается hardening-флагом
+        // `CompanySettings.autoIssueMaterialsOnCutRelease`
+        // (default `false` — после миграции автосписание не
+        // включается само). Если флаг выключен, helper НЕ
+        // вызывается — выдача кроя продолжает работать штатно
+        // (события, статус, currentEmployee, политика лимитов
+        // сохраняются как раньше).
+        //
+        // Если флаг включен — идёт В ТОЙ ЖЕ транзакции: если
+        // создание документа упадёт (constraint / relation),
+        // выдача кроя откатится целиком — инвариант «либо и
+        // выдача, и расход, либо ничего». Идемпотентность
+        // обеспечивается UNIQUE `MaterialIssue.sourceKey` —
+        // retry того же passport-а не создаёт дубля. Мягкие
+        // отсутствия (нет WorkshopNeed, totalOrderQty <= 0,
+        // unit-price отсутствует — см. `AutoCutIssueSkipReason`)
+        // НЕ блокируют issueToEmployee: сервис вернёт
+        // `{ skipped: true }`, и мы продолжим.
+        if (autoIssueEnabled) {
+          await this.materialIssues.createAutoCutIssueForPassport(
+            tx,
+            passport.id,
+            employeeId,
+          );
+        }
       });
 
       this.logger.log(
-        `event=passport.issue passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId}`,
+        `event=passport.issue passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId} autoIssue=${autoIssueEnabled}`,
       );
       return this.getOne(passportId);
     }
@@ -732,17 +764,23 @@ export class PassportsService {
         mode: 'ROUTE_WIP',
       });
       // Автосписание материалов — тот же контракт, что в
-      // FROM_CELL ветке. Пишется в той же транзакции; retry
-      // идемпотентен по UNIQUE `MaterialIssue.sourceKey`.
-      await this.materialIssues.createAutoCutIssueForPassport(
-        tx,
-        passport.id,
-        employeeId,
-      );
+      // FROM_CELL ветке. Включается hardening-флагом
+      // `CompanySettings.autoIssueMaterialsOnCutRelease`
+      // (default `false`). Если выключен — helper не зовём,
+      // route-WIP issue продолжает работать штатно. Если
+      // включен — пишется в той же транзакции; retry идемпотентен
+      // по UNIQUE `MaterialIssue.sourceKey`.
+      if (autoIssueEnabled) {
+        await this.materialIssues.createAutoCutIssueForPassport(
+          tx,
+          passport.id,
+          employeeId,
+        );
+      }
     });
 
     this.logger.log(
-      `event=passport.issue.routed passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId}`,
+      `event=passport.issue.routed passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId} autoIssue=${autoIssueEnabled}`,
     );
     return this.getOne(passportId);
   }

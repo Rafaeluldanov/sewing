@@ -4226,6 +4226,31 @@ model CompanySettings {
   /// Расчётный счёт: 20 цифр.
   settlementAccount    String?
 
+  /// Hardening-флаг: автосписание материалов при выдаче кроя
+  /// (`PassportsService.issueToEmployee` →
+  /// `MaterialIssuesService.createAutoCutIssueForPassport`).
+  ///
+  /// Семантика:
+  ///   - `false` (default) — выдача кроя сотруднику НЕ создаёт
+  ///     `MaterialIssue`. Прочая транзакционная логика
+  ///     `issueToEmployee` (события паспорта, статус, currentEmployee,
+  ///     `CutReleasePolicy` / `OrderCutIssueRule`-учёт) работает
+  ///     штатно.
+  ///   - `true`  — `issueToEmployee` дополнительно вызывает
+  ///     `createAutoCutIssueForPassport(tx, passportId, employeeId)`
+  ///     в той же транзакции (создаётся POSTED `MaterialIssue` с
+  ///     `source = AUTO_CUT_ISSUE`, см. JSDoc метода).
+  ///
+  /// Default `false` сознательно: после миграции production
+  /// поведение НЕ меняется самостоятельно — переключение на
+  /// автосписание остаётся явным действием владельца проекта
+  /// (см. `docs/current-state.md §«Auto cut issue»`,
+  /// `docs/erd.md §2.15`). Публичный DTO/PATCH
+  /// `/api/company-settings` это поле НЕ принимает на этой итерации
+  /// — UI-настройка ещё не утверждена; чтение делает
+  /// `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`.
+  autoIssueMaterialsOnCutRelease Boolean @default(false)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

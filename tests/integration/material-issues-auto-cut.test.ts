@@ -68,6 +68,24 @@ describeWithDb('integration — material issues (auto cut issue on issueToEmploy
       manager: loginAs(t, seed.employees['shop-chief']),
       seamstress: loginAs(t, seed.employees['seamstress']),
     };
+    // Hardening-флаг автосписания (см.
+    // `prisma/schema.prisma::CompanySettings.autoIssueMaterialsOnCutRelease`,
+    // `apps/api/src/modules/company-settings/company-settings.service.ts::getAutoIssueMaterialsOnCutRelease`).
+    // Default `false` сознательно — после миграции production
+    // автосписание не включается само. Все тесты этого файла
+    // проверяют поведение «автосписание ВКЛ», поэтому singleton
+    // настроек создаём явно с `true`. Гейт «автосписание ВЫКЛ»
+    // покрывается отдельным файлом
+    // `tests/integration/material-issues-auto-cut-setting.test.ts`.
+    await t.prisma.companySettings.upsert({
+      where: { id: 'default' },
+      create: {
+        id: 'default',
+        singleton: true,
+        autoIssueMaterialsOnCutRelease: true,
+      },
+      update: { autoIssueMaterialsOnCutRelease: true },
+    });
   });
 
   // ---------------------------------------------------------------------------

@@ -47,6 +47,45 @@ export class CompanySettingsService {
   }
 
   // ===========================================================================
+  // FEATURE FLAGS (backend-only, ещё не выставлены в публичный DTO)
+  // ===========================================================================
+
+  /**
+   * Hardening-флаг автосписания материалов при выдаче кроя
+   * (см. `prisma/schema.prisma::CompanySettings.autoIssueMaterialsOnCutRelease`,
+   * `apps/api/src/modules/passports/passports.service.ts::issueToEmployee`,
+   * `apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
+   * `docs/current-state.md §«Auto cut issue»`).
+   *
+   * Контракт:
+   *   - `false` (default) → `PassportsService.issueToEmployee` НЕ
+   *     вызывает `createAutoCutIssueForPassport`; остальная
+   *     транзакционная логика выдачи (события паспорта, статус,
+   *     currentEmployee, `CutReleasePolicy` / `OrderCutIssueRule`-учёт)
+   *     работает штатно.
+   *   - `true`  → `issueToEmployee` вызывает auto-helper в той же
+   *     транзакции.
+   *   - Если singleton-строки `CompanySettings` ещё нет (свежая БД,
+   *     первый вызов) — считаем `false` и НЕ создаём строку
+   *     "по дороге": настройка читается из live-flow и не должна
+   *     открывать сторонний write. Это безопаснее «idempotent
+   *     getOrCreate», который можно встроить как только настройка
+   *     получит UI.
+   *
+   * Сознательная граница итерации: метод НЕ ходит через
+   * `getOrCreate()` и НЕ пишет audit. Публичный DTO/PATCH
+   * `/api/company-settings` это поле НЕ принимает (UI ещё не
+   * утверждён, см. `docs/current-state.md`).
+   */
+  async getAutoIssueMaterialsOnCutRelease(): Promise<boolean> {
+    const row = await this.prisma.companySettings.findUnique({
+      where: { id: COMPANY_SETTINGS_SINGLETON_ID },
+      select: { autoIssueMaterialsOnCutRelease: true },
+    });
+    return row?.autoIssueMaterialsOnCutRelease ?? false;
+  }
+
+  // ===========================================================================
   // UPDATE
   // ===========================================================================
 
