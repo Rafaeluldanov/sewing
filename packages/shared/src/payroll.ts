@@ -356,6 +356,112 @@ export interface PayrollEmployeeSalaryEntryDto {
   updatedAt: string;
 }
 
+// ---------------------------------------------------------------------------
+// Debts query / DTO (PHASE 3 STEP 7)
+// ---------------------------------------------------------------------------
+
+/**
+ * Query `GET /api/payroll/debts`.
+ *
+ * `asOfDate` — включительная дата среза. Если не передана — используется
+ * сегодняшний день. Формат `YYYY-MM-DD`.
+ *
+ * Остальные фильтры совпадают по семантике с `PayrollPeriodQuerySchema`:
+ * `employeeId`, `role`, `divisionCode` — опциональные уточнители.
+ */
+export const PayrollDebtsQuerySchema = z.object({
+  asOfDate: DateOnlySchema.optional(),
+  employeeId: z.string().min(1).optional(),
+  role: z.string().min(1).max(64).optional(),
+  divisionCode: z.string().min(1).max(64).optional(),
+  page: z.coerce.number().int().positive().default(1),
+  pageSize: z.coerce.number().int().positive().max(200).default(50),
+});
+export type PayrollDebtsQuery = z.infer<typeof PayrollDebtsQuerySchema>;
+
+/**
+ * Одна строка управленческого отчёта задолженности — один сотрудник.
+ *
+ * Формулы (asOfDate inclusive):
+ *   - `accruedGrossRub`       = `accruedPieceworkRub + accruedSalaryRub`
+ *   - `payoutCoveredRub`      = Σ PIECEWORK/SALARY PayrollPayoutLine,
+ *                               ссылающихся на начисления до asOfDate,
+ *                               по активным выплатам (DRAFT/ISSUED/ACKNOWLEDGED)
+ *   - `payoutAdjustRub`       = Σ BONUS/DEDUCTION/ADVANCE/ADJUSTMENT lines
+ *                               по активным выплатам, payout.periodTo <= asOfDate
+ *   - `paidTotalRub`          = `payoutCoveredRub + payoutAdjustRub`
+ *   - `debtRub`               = `max(0, accruedGrossRub − payoutCoveredRub)`
+ *   - `cashBalanceRub`        = `accruedGrossRub − paidTotalRub`
+ *   - `pendingPieceworkRub`   = Σ OperationEntry(PENDING_RELEASE|PENDING) до asOfDate;
+ *                               НЕ входит в debtRub
+ *
+ * Важно: `debtRub` отражает именно «долг по базовым начислениям» — без
+ * корректировок. `cashBalanceRub` учитывает корректировки. Оба поля нужны:
+ *   - `debtRub`         — «сколько ещё не закрыто PIECEWORK/SALARY»;
+ *   - `cashBalanceRub`  — «сколько денег реально на руках у сотрудника
+ *                          с учётом бонусов/удержаний».
+ */
+export interface PayrollDebtEmployeeRowDto {
+  employeeId: string;
+  fullName: string;
+  role: string;
+  companyDivisionId: string | null;
+  companyDivisionName: string | null;
+
+  /** Σ approved OperationEntry.amount до asOfDate. */
+  accruedPieceworkRub: number;
+  /** Σ SalaryEntry.amount до asOfDate. */
+  accruedSalaryRub: number;
+  /** `accruedPieceworkRub + accruedSalaryRub`. */
+  accruedGrossRub: number;
+
+  /** Σ PIECEWORK PayrollPayoutLine по активным выплатам (до asOfDate). */
+  payoutCoveredPieceworkRub: number;
+  /** Σ SALARY PayrollPayoutLine по активным выплатам (до asOfDate). */
+  payoutCoveredSalaryRub: number;
+  /** `payoutCoveredPieceworkRub + payoutCoveredSalaryRub`. */
+  payoutCoveredRub: number;
+
+  /** Σ BONUS/DEDUCTION/ADVANCE/ADJUSTMENT lines по активным выплатам (до asOfDate). */
+  payoutAdjustRub: number;
+
+  /** `payoutCoveredRub + payoutAdjustRub`. */
+  paidTotalRub: number;
+  /** `max(0, accruedGrossRub − payoutCoveredRub)`. Базовый долг без корректировок. */
+  debtRub: number;
+  /** `accruedGrossRub − paidTotalRub`. Остаток с учётом корректировок. */
+  cashBalanceRub: number;
+
+  /** Σ pending OperationEntry.amount до asOfDate. Не входит в debtRub. */
+  pendingPieceworkRub: number;
+  /** Дата последней активной выплаты (issuedAt или createdAt). */
+  lastPayoutAt: string | null;
+  /** Дата последнего ACK сотрудника по активным выплатам. */
+  lastAcknowledgedAt: string | null;
+}
+
+export interface PayrollDebtsSummaryDto {
+  totalAccruedGrossRub: number;
+  totalPayoutCoveredRub: number;
+  totalPayoutAdjustRub: number;
+  totalPaidRub: number;
+  totalDebtRub: number;
+  totalCashBalanceRub: number;
+  totalPendingPieceworkRub: number;
+  /** Количество сотрудников с `debtRub > 0`. */
+  employeesWithDebt: number;
+}
+
+export interface PayrollDebtsPageDto {
+  items: PayrollDebtEmployeeRowDto[];
+  summary: PayrollDebtsSummaryDto;
+  /** Дата среза (YYYY-MM-DD). */
+  asOfDate: string;
+  total: number;
+  page: number;
+  pageSize: number;
+}
+
 export interface PayrollEmployeeDetailDto {
   employee: PayrollEmployeeDetailEmployeeDto;
   /** Эхо-период. */

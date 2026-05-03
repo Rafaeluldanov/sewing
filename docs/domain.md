@@ -2076,6 +2076,62 @@ manualAdjustRub`. Итоговые суммы документа пересчи�
 
 ---
 
+<a id="1010-payroll-debts"></a>
+
+### 10.10 Задолженность по сотруднику (PHASE 3 STEP 7)
+
+Источник: `apps/api/src/modules/payroll/payroll.service.ts::debts`,
+`packages/shared/src/payroll.ts::PayrollDebtsQuerySchema`,
+`docs/api.md §30a` (`GET /api/payroll/debts`),
+`docs/screens.md §12d`.
+
+**Назначение.** Управленческий read-only отчёт: кому сколько должны
+на текущую дату или на произвольную выбранную дату. В отличие от
+ведомости периода (`/api/payroll/period`), смотрит **накопительно** —
+не за отрезок, а «всё до asOfDate включительно».
+
+**Ключевые понятия и формулы:**
+
+| Поле | Формула | Семантика |
+| ---- | ------- | --------- |
+| `accruedPieceworkRub` | Σ `OperationEntry.amount` (APPROVED, `createdAt ≤ asOfDate 23:59:59.999 UTC`) | Approved сдельщина до даты среза |
+| `accruedSalaryRub` | Σ `SalaryEntry.amount` (`date ≤ asOfDate`) | Оклад до даты среза |
+| `accruedGrossRub` | `accruedPieceworkRub + accruedSalaryRub` | Gross начислено |
+| `payoutCoveredRub` | Σ PIECEWORK/SALARY `PayrollPayoutLine`, чьи начисления до asOfDate, по активным выплатам (`DRAFT`/`ISSUED`/`ACKNOWLEDGED`) | Сколько базовых начислений уже закрыто выплатами |
+| `payoutAdjustRub` | Σ BONUS/DEDUCTION/ADVANCE/ADJUSTMENT lines без FK по активным выплатам, `payout.periodTo ≤ asOfDate` | Ручные корректировки в выплатах |
+| `paidTotalRub` | `payoutCoveredRub + payoutAdjustRub` | Всего ушло денег сотруднику |
+| `debtRub` | `max(0, accruedGrossRub − payoutCoveredRub)` | Базовый долг по начислениям (без корректировок) |
+| `cashBalanceRub` | `accruedGrossRub − paidTotalRub` | Остаток с учётом всех корректировок |
+| `pendingPieceworkRub` | Σ `OperationEntry.amount` (PENDING_RELEASE / PENDING, `createdAt ≤ asOfDate`) | Ожидает упаковки; **не входит** в `debtRub` |
+
+**Почему два поля для «остатка» (`debtRub` и `cashBalanceRub`):**
+
+- `debtRub` — «сколько базовых начислений ещё не закрыто выплатами».
+  Это строгий долг по утверждённым `OperationEntry` / `SalaryEntry`.
+  ADJUSTMENT не закрывает базовые начисления и не уменьшает `debtRub`.
+- `cashBalanceRub` — «сколько денег реально ещё не получил сотрудник
+  с учётом всех бонусов, удержаний, авансов и корректировок».
+
+Оба поля нужны для полной картины: `debtRub = 0` означает, что все
+approved начисления уже в выплатах; `cashBalanceRub < 0` означает,
+что удержания превысили начисления.
+
+**CANCELLED выплаты.** `PayrollPayout.status = CANCELLED` полностью
+игнорируется: ни покрытие начислений, ни корректировки из отменённых
+выплат не учитываются.
+
+**Pending.** `OperationEntry` со статусами `PENDING_RELEASE` / `PENDING`
+попадают только в `pendingPieceworkRub`. Они ещё не утверждены и не
+берутся в базовый долг. Как только паспорт закроется и начисление
+получит `APPROVED`, оно войдёт в `accruedGrossRub` следующего запроса.
+
+**Сортировка.** Строки сортируются по убыванию `debtRub`, затем по имени.
+Сотрудники без базовых начислений (только pending/salary) также показываются.
+
+**RBAC.** `SHOP_MANAGER`, `ADMIN`.
+
+---
+
 <a id="11-warehouse"></a>
 
 ## 11. Склад / ячейки

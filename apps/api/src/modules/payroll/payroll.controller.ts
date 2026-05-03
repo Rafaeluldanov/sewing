@@ -7,9 +7,11 @@ import {
 } from '@nestjs/common';
 import {
   PayrollDailyQuerySchema,
+  PayrollDebtsQuerySchema,
   PayrollEmployeeQuerySchema,
   PayrollPeriodQuerySchema,
   type PayrollDailyQuery,
+  type PayrollDebtsQuery,
   type PayrollEmployeeQuery,
   type PayrollPeriodQuery,
 } from '@sewing/shared/payroll';
@@ -62,6 +64,23 @@ export class PayrollController {
   ) {
     if (!user) throw new UnauthorizedException();
     return this.payroll.daily(query);
+  }
+
+  /**
+   * Управленческий отчёт задолженности по сотрудникам (PHASE 3 STEP 7).
+   *
+   * Показывает кому сколько должны на выбранную дату (по умолчанию — сегодня).
+   * `CANCELLED` выплаты не учитываются.
+   * `debtRub = max(0, accruedGrossRub − payoutCoveredRub)` — базовый долг.
+   */
+  @Get('debts')
+  debts(
+    @Query(new ZodValidationPipe(PayrollDebtsQuerySchema))
+    query: PayrollDebtsQuery,
+    @CurrentUser() user: AuthPrincipal | undefined,
+  ) {
+    if (!user) throw new UnauthorizedException();
+    return this.payroll.debts(query);
   }
 
   @Get('employees/:id')

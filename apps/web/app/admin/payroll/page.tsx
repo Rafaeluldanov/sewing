@@ -138,6 +138,9 @@ export default async function AdminPayrollPeriodPage({
           >
             Документы начисления
           </Link>
+          <Link href="/admin/payroll/debts" className="admin-btn">
+            Задолженность
+          </Link>
           <Link href="/admin/payroll/daily" className="admin-btn">
             День
           </Link>

@@ -5,6 +5,10 @@ import type {
   PayrollDailyPageDto,
   PayrollDailyQuery,
   PayrollDailySummaryDto,
+  PayrollDebtEmployeeRowDto,
+  PayrollDebtsPageDto,
+  PayrollDebtsQuery,
+  PayrollDebtsSummaryDto,
   PayrollEmployeeDetailDto,
   PayrollEmployeeOperationEntryDto,
   PayrollEmployeeQuery,
@@ -850,6 +854,355 @@ export class PayrollService {
       salaryEntries: salDto,
     };
   }
+
+  // ===========================================================================
+  // READ: debts report (PHASE 3 STEP 7)
+  // ===========================================================================
+
+  /**
+   * Управленческий отчёт задолженности по сотрудникам (`/api/payroll/debts`).
+   *
+   * Показывает: кому сколько должны на выбранную дату (по умолчанию — сегодня).
+   *
+   * Алгоритм:
+   *   1. Находим сотрудников с `OperationEntry(APPROVED).createdAt <= asOfDate`
+   *      или `SalaryEntry.date <= asOfDate` (с учётом фильтров).
+   *   2. Для каждого агрегируем начисления и покрытие выплатами.
+   *   3. `debtRub = max(0, accruedGrossRub − payoutCoveredRub)` — базовый долг.
+   *   4. `cashBalanceRub = accruedGrossRub − paidTotalRub` — с корректировками.
+   *   5. Pending entries попадают только в `pendingPieceworkRub` (не в debtRub).
+   *   6. `CANCELLED` выплаты не учитываются.
+   */
+  async debts(query: PayrollDebtsQuery): Promise<PayrollDebtsPageDto> {
+    const today = new Date();
+    const asOfDateStr =
+      query.asOfDate ?? toDateOnly(today);
+    const asOf = new Date(`${asOfDateStr}T23:59:59.999Z`);
+    const asOfDay = new Date(`${asOfDateStr}T00:00:00.000Z`);
+
+    // Base where clauses (scoped later with employeeId filter)
+    const earningsApprovedWhere: Prisma.OperationEntryWhereInput = {
+      status: EntryStatus.APPROVED,
+      createdAt: { lte: asOf },
+    };
+    const salaryWhere: Prisma.SalaryEntryWhereInput = {
+      date: { lte: asOfDay },
+    };
+    const pendingWhere: Prisma.OperationEntryWhereInput = {
+      status: { in: [EntryStatus.PENDING_RELEASE, EntryStatus.PENDING] },
+      createdAt: { lte: asOf },
+    };
+
+    if (query.employeeId) {
+      earningsApprovedWhere.employeeId = query.employeeId;
+      salaryWhere.employeeId = query.employeeId;
+      pendingWhere.employeeId = query.employeeId;
+    }
+    if (query.role) {
+      const role = query.role as Role;
+      earningsApprovedWhere.employee = { role };
+      salaryWhere.employee = { role };
+      pendingWhere.employee = { role };
+    }
+    if (query.divisionCode) {
+      earningsApprovedWhere.passport = {
+        order: { companyDivision: { code: query.divisionCode } },
+      };
+      pendingWhere.passport = {
+        order: { companyDivision: { code: query.divisionCode } },
+      };
+      salaryWhere.employee = {
+        ...(salaryWhere.employee as Prisma.EmployeeWhereInput | undefined),
+        companyDivision: { code: query.divisionCode },
+      };
+    }
+
+    // 1. Relevant employee IDs.
+    const [approvedEmps, salaryEmps] = await Promise.all([
+      this.prisma.operationEntry.groupBy({
+        by: ['employeeId'],
+        where: earningsApprovedWhere,
+      }),
+      this.prisma.salaryEntry.groupBy({
+        by: ['employeeId'],
+        where: salaryWhere,
+      }),
+    ]);
+
+    const relevantIds = new Set<string>();
+    for (const r of approvedEmps) relevantIds.add(r.employeeId);
+    for (const r of salaryEmps) relevantIds.add(r.employeeId);
+
+    if (relevantIds.size === 0) {
+      return {
+        items: [],
+        summary: emptyDebtsSummary(),
+        asOfDate: asOfDateStr,
+        total: 0,
+        page: query.page,
+        pageSize: query.pageSize,
+      };
+    }
+
+    const ids = Array.from(relevantIds);
+
+    // 2. Employee profiles.
+    const employees = await this.prisma.employee.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        fullName: true,
+        role: true,
+        companyDivision: { select: { id: true, code: true, name: true } },
+      },
+    });
+    const empById = new Map(employees.map((e) => [e.id, e]));
+
+    // 3. Parallel aggregates.
+    const [
+      pieceworkApproved,
+      pieceworkPending,
+      salaryAgg,
+      payoutCoverageRows,
+      payoutAdjustRows,
+      lastPayoutRows,
+      divisionRows,
+    ] = await Promise.all([
+      this.prisma.operationEntry.groupBy({
+        by: ['employeeId'],
+        where: { ...earningsApprovedWhere, employeeId: { in: ids } },
+        _sum: { amount: true },
+      }),
+      this.prisma.operationEntry.groupBy({
+        by: ['employeeId'],
+        where: { ...pendingWhere, employeeId: { in: ids } },
+        _sum: { amount: true },
+      }),
+      this.prisma.salaryEntry.groupBy({
+        by: ['employeeId'],
+        where: { ...salaryWhere, employeeId: { in: ids } },
+        _sum: { amount: true },
+      }),
+      // Покрытие выплатами: PIECEWORK/SALARY lines, ссылающихся на начисления
+      // до asOfDate по активным выплатам (DRAFT/ISSUED/ACKNOWLEDGED).
+      this.prisma.$queryRaw<
+        Array<{ employeeId: string; kind: string; coveredRub: string }>
+      >`
+        SELECT
+          COALESCE(oe."employeeId", se."employeeId") AS "employeeId",
+          ppl."kind"                                  AS "kind",
+          SUM(ppl."amountRub")::text                  AS "coveredRub"
+        FROM "PayrollPayoutLine" ppl
+        JOIN "PayrollPayout" pp ON pp."id" = ppl."payoutId"
+        LEFT JOIN "OperationEntry" oe ON oe."id" = ppl."operationEntryId"
+        LEFT JOIN "SalaryEntry"    se ON se."id" = ppl."salaryEntryId"
+        WHERE pp."status" IN ('DRAFT', 'ISSUED', 'ACKNOWLEDGED')
+          AND ppl."kind" IN ('PIECEWORK', 'SALARY')
+          AND (
+            (
+              ppl."operationEntryId" IS NOT NULL
+              AND oe."createdAt" <= ${asOf}
+              AND oe."employeeId" IN (${Prisma.join(ids)})
+            )
+            OR
+            (
+              ppl."salaryEntryId" IS NOT NULL
+              AND se."date" <= ${asOfDay}
+              AND se."employeeId" IN (${Prisma.join(ids)})
+            )
+          )
+        GROUP BY COALESCE(oe."employeeId", se."employeeId"), ppl."kind"
+      `,
+      // Manual-kind корректировки (BONUS/DEDUCTION/ADVANCE/ADJUSTMENT) без FK.
+      // Дата: payout.periodTo <= asOfDate.
+      this.prisma.$queryRaw<
+        Array<{ employeeId: string; adjustRub: string }>
+      >`
+        SELECT
+          pp."employeeId"            AS "employeeId",
+          SUM(ppl."amountRub")::text AS "adjustRub"
+        FROM "PayrollPayoutLine" ppl
+        JOIN "PayrollPayout" pp ON pp."id" = ppl."payoutId"
+        WHERE pp."status" IN ('DRAFT', 'ISSUED', 'ACKNOWLEDGED')
+          AND ppl."kind" IN ('ADJUSTMENT', 'BONUS', 'DEDUCTION', 'ADVANCE')
+          AND ppl."operationEntryId" IS NULL
+          AND ppl."salaryEntryId"    IS NULL
+          AND pp."periodTo" <= ${asOfDay}
+          AND pp."employeeId" IN (${Prisma.join(ids)})
+        GROUP BY pp."employeeId"
+      `,
+      // Даты последних выплат per employee (для колонок "последняя выплата").
+      this.prisma.$queryRaw<
+        Array<{
+          employeeId: string;
+          lastPayoutAt: Date | null;
+          lastAcknowledgedAt: Date | null;
+        }>
+      >`
+        SELECT
+          pp."employeeId"          AS "employeeId",
+          MAX(pp."issuedAt")       AS "lastPayoutAt",
+          MAX(pp."acknowledgedAt") AS "lastAcknowledgedAt"
+        FROM "PayrollPayout" pp
+        WHERE pp."status" IN ('DRAFT', 'ISSUED', 'ACKNOWLEDGED')
+          AND pp."employeeId" IN (${Prisma.join(ids)})
+        GROUP BY pp."employeeId"
+      `,
+      // Подразделение по большинству строк сдельщины (для отображения).
+      this.prisma.$queryRaw<
+        Array<{
+          employeeId: string;
+          companyDivisionId: string | null;
+          companyDivisionName: string | null;
+          rows: bigint;
+        }>
+      >`
+        SELECT oe."employeeId"    AS "employeeId",
+               cd."id"           AS "companyDivisionId",
+               cd."name"         AS "companyDivisionName",
+               COUNT(*)::bigint  AS "rows"
+          FROM "OperationEntry" oe
+          JOIN "Passport" p ON p."id" = oe."passportId"
+          JOIN "Order"    o ON o."id" = p."orderId"
+          LEFT JOIN "CompanyDivision" cd ON cd."id" = o."companyDivisionId"
+         WHERE oe."createdAt" <= ${asOf}
+           AND oe."status" = 'APPROVED'
+           AND oe."employeeId" IN (${Prisma.join(ids)})
+         GROUP BY oe."employeeId", cd."id", cd."name"
+      `,
+    ]);
+
+    // 4. Build lookup maps.
+    const piApproved = byId(pieceworkApproved);
+    const piPending = byId(pieceworkPending);
+    const sal = byId(salaryAgg);
+
+    const payoutPieceworkCovered = new Map<string, number>();
+    const payoutSalaryCovered = new Map<string, number>();
+    for (const r of payoutCoverageRows) {
+      const amount = round2(Number(r.coveredRub));
+      if (r.kind === 'PIECEWORK') {
+        payoutPieceworkCovered.set(
+          r.employeeId,
+          (payoutPieceworkCovered.get(r.employeeId) ?? 0) + amount,
+        );
+      } else {
+        payoutSalaryCovered.set(
+          r.employeeId,
+          (payoutSalaryCovered.get(r.employeeId) ?? 0) + amount,
+        );
+      }
+    }
+
+    const payoutAdjustMap = new Map<string, number>();
+    for (const r of payoutAdjustRows) {
+      payoutAdjustMap.set(r.employeeId, round2(Number(r.adjustRub)));
+    }
+
+    const lastPayoutMap = new Map<
+      string,
+      { lastPayoutAt: Date | null; lastAcknowledgedAt: Date | null }
+    >();
+    for (const r of lastPayoutRows) {
+      lastPayoutMap.set(r.employeeId, {
+        lastPayoutAt: r.lastPayoutAt,
+        lastAcknowledgedAt: r.lastAcknowledgedAt,
+      });
+    }
+
+    const divisionByEmp = new Map<
+      string,
+      { id: string | null; name: string | null }
+    >();
+    for (const r of divisionRows) {
+      const prev = divisionByEmp.get(r.employeeId);
+      const rows = Number(r.rows);
+      if (!prev || rows > (prev as { _rows?: number })._rows!) {
+        divisionByEmp.set(r.employeeId, {
+          id: r.companyDivisionId,
+          name: r.companyDivisionName,
+          // @ts-expect-error — служебное поле, наружу не уезжает
+          _rows: rows,
+        });
+      }
+    }
+
+    // 5. Assemble rows.
+    const items: PayrollDebtEmployeeRowDto[] = [];
+    for (const id of relevantIds) {
+      const emp = empById.get(id);
+      if (!emp) continue;
+
+      const accruedPieceworkRub = roundMoneyNumber(
+        piApproved.get(id)?._sum?.amount ?? 0,
+      );
+      const accruedSalaryRub = roundMoneyNumber(sal.get(id)?._sum?.amount ?? 0);
+      const accruedGrossRub = round2(accruedPieceworkRub + accruedSalaryRub);
+      const pendingPieceworkRub = roundMoneyNumber(
+        piPending.get(id)?._sum?.amount ?? 0,
+      );
+
+      const payoutCoveredPiecework = round2(
+        payoutPieceworkCovered.get(id) ?? 0,
+      );
+      const payoutCoveredSalary = round2(payoutSalaryCovered.get(id) ?? 0);
+      const payoutCoveredRub = round2(
+        payoutCoveredPiecework + payoutCoveredSalary,
+      );
+      const payoutAdjustRub = round2(payoutAdjustMap.get(id) ?? 0);
+      const paidTotalRub = round2(payoutCoveredRub + payoutAdjustRub);
+      const debtRub = round2(Math.max(0, accruedGrossRub - payoutCoveredRub));
+      const cashBalanceRub = round2(accruedGrossRub - paidTotalRub);
+
+      const lastPayout = lastPayoutMap.get(id);
+      const div = divisionByEmp.get(id);
+      const empDiv = emp.companyDivision ?? null;
+      const divId = div?.id ?? empDiv?.id ?? null;
+      const divName = div?.name ?? empDiv?.name ?? null;
+
+      items.push({
+        employeeId: emp.id,
+        fullName: emp.fullName,
+        role: emp.role,
+        companyDivisionId: divId,
+        companyDivisionName: divName,
+        accruedPieceworkRub,
+        accruedSalaryRub,
+        accruedGrossRub,
+        payoutCoveredPieceworkRub: payoutCoveredPiecework,
+        payoutCoveredSalaryRub: payoutCoveredSalary,
+        payoutCoveredRub,
+        payoutAdjustRub,
+        paidTotalRub,
+        debtRub,
+        cashBalanceRub,
+        pendingPieceworkRub,
+        lastPayoutAt: lastPayout?.lastPayoutAt?.toISOString() ?? null,
+        lastAcknowledgedAt:
+          lastPayout?.lastAcknowledgedAt?.toISOString() ?? null,
+      });
+    }
+
+    // Sort: сначала с долгом, по убыванию долга, потом по имени.
+    items.sort((a, b) => {
+      if (b.debtRub !== a.debtRub) return b.debtRub - a.debtRub;
+      return a.fullName.localeCompare(b.fullName, 'ru');
+    });
+
+    const summary = computeDebtsSummary(items);
+    const total = items.length;
+    const offset = Math.max(0, (query.page - 1) * query.pageSize);
+    const paged = items.slice(offset, offset + query.pageSize);
+
+    return {
+      items: paged,
+      summary,
+      asOfDate: asOfDateStr,
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1000,4 +1353,50 @@ function roundMoneyNumber(
 
 function toDateOnly(d: Date): string {
   return d.toISOString().slice(0, 10);
+}
+
+function emptyDebtsSummary(): PayrollDebtsSummaryDto {
+  return {
+    totalAccruedGrossRub: 0,
+    totalPayoutCoveredRub: 0,
+    totalPayoutAdjustRub: 0,
+    totalPaidRub: 0,
+    totalDebtRub: 0,
+    totalCashBalanceRub: 0,
+    totalPendingPieceworkRub: 0,
+    employeesWithDebt: 0,
+  };
+}
+
+function computeDebtsSummary(
+  rows: PayrollDebtEmployeeRowDto[],
+): PayrollDebtsSummaryDto {
+  let accrued = 0;
+  let covered = 0;
+  let adjust = 0;
+  let paid = 0;
+  let debt = 0;
+  let cash = 0;
+  let pending = 0;
+  let withDebt = 0;
+  for (const r of rows) {
+    accrued += r.accruedGrossRub;
+    covered += r.payoutCoveredRub;
+    adjust += r.payoutAdjustRub;
+    paid += r.paidTotalRub;
+    debt += r.debtRub;
+    cash += r.cashBalanceRub;
+    pending += r.pendingPieceworkRub;
+    if (r.debtRub > 0) withDebt++;
+  }
+  return {
+    totalAccruedGrossRub: round2(accrued),
+    totalPayoutCoveredRub: round2(covered),
+    totalPayoutAdjustRub: round2(adjust),
+    totalPaidRub: round2(paid),
+    totalDebtRub: round2(debt),
+    totalCashBalanceRub: round2(cash),
+    totalPendingPieceworkRub: round2(pending),
+    employeesWithDebt: withDebt,
+  };
 }
