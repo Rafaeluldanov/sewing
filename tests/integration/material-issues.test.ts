@@ -24,8 +24,11 @@
  *  16. audit MATERIAL_ISSUE_CANCELLED is written.
  *
  * Сознательная граница MVP (фиксируется тестами):
- *   - НЕТ `StockBalance` / `MaterialStockLot` / `StockMovement`;
- *   - НЕТ автосписания при выдаче кроя;
+ *   - `StockBalance` / `StockMovement` — foundation-таблицы есть, но
+ *     этот модуль их **не** пишет (см. `tests/integration/stock.service.test.ts`);
+ *   - НЕТ `MaterialStockLot`;
+ *   - автосписание при выдаче кроя (при включённом флаге компании)
+ *     создаёт `MaterialIssue`, а не движения `StockMovement`;
  *   - POSTED отменить нельзя.
  */
 import { Prisma } from '@prisma/client';
