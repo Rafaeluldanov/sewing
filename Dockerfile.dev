@@ -1,0 +1,20 @@
+FROM node:18-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+COPY apps/api/package*.json ./apps/api/
+COPY packages ./packages
+COPY prisma ./prisma
+COPY apps/api ./apps/api
+COPY tsconfig.json ./tsconfig.json
+
+RUN npm ci
+
+WORKDIR /app
+
+RUN npm run build --workspace=@sewing/api
+
+EXPOSE 3001
+
+CMD ["node", "apps/api/dist/main.js"]

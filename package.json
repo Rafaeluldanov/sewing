@@ -24,7 +24,8 @@
     "docs:check": "node scripts/docs/check-docs.mjs",
     "deploy:stage": "bash scripts/deploy-stage.sh",
     "backup:db": "bash scripts/backup-db.sh",
-    "cleanup:legacy": "bash scripts/cleanup-legacy-processes.sh"
+    "cleanup:legacy": "bash scripts/cleanup-legacy-processes.sh",
+    "start:web": "npm run start --workspace=apps/web"
   },
   "prisma": {
     "schema": "prisma/schema.prisma",

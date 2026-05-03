@@ -1,0 +1,30 @@
+FROM node:18-bookworm-slim AS builder
+WORKDIR /app
+
+RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY package*.json ./
+COPY apps/api/package*.json ./apps/api/
+COPY packages ./packages
+COPY prisma ./prisma
+COPY apps/api ./apps/api
+COPY tsconfig.json ./tsconfig.json
+
+RUN npm ci
+RUN npm run build --workspace=@sewing/api
+RUN npx prisma generate --schema=prisma/schema.prisma
+
+FROM node:18-bookworm-slim
+WORKDIR /app
+
+RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+
+COPY --from=builder /app/node_modules ./node_modules
+COPY --from=builder /app/apps/api ./apps/api
+COPY --from=builder /app/packages ./packages
+COPY --from=builder /app/prisma ./prisma
+COPY package*.json ./
+
+EXPOSE 3001
+
+CMD ["node", "apps/api/dist/main.js"]
