@@ -136,11 +136,24 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
   Backend-итерация «Автосписание материалов при выдаче кроя»
   (см. `apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
   `apps/api/src/modules/passports/passports.service.ts::issueToEmployee`,
-  `prisma/schema.prisma::MaterialIssue.source / sourceKey`): при
-  успешной выдаче паспорта сотруднику (`POST /api/passports/:id/issue`)
-  в той же транзакции создаётся автоматический **POSTED**
-  `MaterialIssue` с `source = AUTO_CUT_ISSUE` и `sourceKey =
-  AUTO_CUT_ISSUE:<passportId>`. Документ содержит по одной строке
+  `prisma/schema.prisma::MaterialIssue.source / sourceKey`):
+  автосписание управляется hardening-флагом
+  `CompanySettings.autoIssueMaterialsOnCutRelease` (Boolean,
+  default `false`). Если флаг **выключен**, выдача кроя
+  (`POST /api/passports/:id/issue`) НЕ создаёт `MaterialIssue` —
+  работают только события паспорта, статус, `currentEmployee` и
+  учёт `CutReleasePolicy` / `OrderCutIssueRule`. Если флаг
+  **включен**, при успешной выдаче в той же транзакции создаётся
+  автоматический **POSTED** `MaterialIssue` с `source = AUTO_CUT_ISSUE`
+  и `sourceKey = AUTO_CUT_ISSUE:<passportId>`. Если строки
+  `CompanySettings` ещё нет (свежая БД), сервис трактует это как
+  `false` и не создаёт singleton-строку — настройка остаётся
+  явным действием владельца проекта. Default `false` сознательно:
+  после миграции production поведение не меняется само. UI для
+  управления флагом на этой итерации **не реализован** —
+  публичный DTO/PATCH `/api/company-settings` это поле не
+  принимает; backend читает значение через приватный getter
+  `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`. Документ содержит по одной строке
   `MaterialIssueLine` на каждую **материальную** строку
   `WorkshopNeed` заказа (исключаются `status = CANCELLED` и
   `sourceType = ORDER_APPLICATION` — нанесения это не материал для
@@ -204,7 +217,8 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
   `StockBalance` / `StockMovement` / `MaterialStockLot` /
   FIFO/LIFO / проверка складских остатков / master-модель
   `Material` / новые роли / новые страницы и пункты меню / ручной
-  UI-блок для авто-документа / POSTED → CANCELLED отмена —
+  UI-блок для авто-документа / POSTED → CANCELLED отмена / UI
+  для управления флагом `autoIssueMaterialsOnCutRelease` —
   **не реализованы**. Цена берётся из `WorkshopNeed.quotedPrice`
   (fallback `0`); `ProductionCostV2Service` / frontend UI
   (`OrderViewTabs` / `MaterialIssuesSection` /

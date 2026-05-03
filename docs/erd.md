@@ -630,6 +630,18 @@
     (10/12 цифр для ИНН, 9 — БИК/КПП, 13/15 — ОГРН, 20 —
     settlement/correspondent) валидируется Zod-ом в
     `@sewing/shared/company-settings`, а не БД.
+  - `autoIssueMaterialsOnCutRelease Boolean @default(false)` —
+    hardening-флаг автосписания материалов при выдаче кроя
+    (см. `apps/api/src/modules/passports/passports.service.ts::issueToEmployee`,
+    `apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
+    `docs/current-state.md §«Auto cut issue»`). `false` ⇒
+    `issueToEmployee` НЕ создаёт MaterialIssue; `true` ⇒
+    создаётся POSTED `AUTO_CUT_ISSUE` MaterialIssue в той же
+    транзакции. Default `false` сознательно — после миграции
+    production поведение не меняется само. На этой итерации
+    публичный DTO/PATCH `/api/company-settings` это поле НЕ
+    принимает (UI ещё не утверждён); backend читает значение
+    через `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`.
   - сервис `CompanySettingsService.getOrCreate()` идемпотентно создаёт
     запись с дефолтами при первом обращении.
 - **`CompanyDivision`** *(master-справочник)* — soft-delete справочник

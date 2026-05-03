@@ -10,6 +10,7 @@ import { WarehousesModule } from '../warehouses/warehouses.module.js';
 import { CutReleasePolicyModule } from '../cut-release-policy/cut-release-policy.module.js';
 import { OrderCutIssueRulesModule } from '../order-cut-issue-rules/order-cut-issue-rules.module.js';
 import { MaterialIssuesModule } from '../material-issues/material-issues.module.js';
+import { CompanySettingsModule } from '../company-settings/company-settings.module.js';
 
 /**
  * Импортируем `EarningsModule`, чтобы `PassportsService` мог в одной
@@ -25,6 +26,12 @@ import { MaterialIssuesModule } from '../material-issues/material-issues.module.
  * (автосписание материалов при выдаче кроя; см.
  * `apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
  * `docs/current-state.md §«Auto cut issue»`).
+ *
+ * Импортируем `CompanySettingsModule`, чтобы `PassportsService.issueToEmployee`
+ * мог проверять hardening-флаг
+ * `CompanySettings.autoIssueMaterialsOnCutRelease` перед вызовом
+ * auto-helper (см. `CompanySettingsService.getAutoIssueMaterialsOnCutRelease`,
+ * `docs/current-state.md §«Auto cut issue»`).
  */
 @Module({
   imports: [
@@ -34,6 +41,7 @@ import { MaterialIssuesModule } from '../material-issues/material-issues.module.
     CutReleasePolicyModule,
     OrderCutIssueRulesModule,
     MaterialIssuesModule,
+    CompanySettingsModule,
   ],
   controllers: [PassportsController, OrderPassportsController, CellsController],
   providers: [PassportsService, PassportNumberService],
