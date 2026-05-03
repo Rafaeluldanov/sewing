@@ -509,6 +509,21 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   страницы и клиентские компоненты (см. `docs/screens.md §12c`).
   Тесты — `tests/smoke/payroll-accrual-documents-ui.smoke.test.ts`.
 
+- [x] **PHASE 3 STEP 7 «Payroll employee debts report».** Управленческий
+  экран «Кому сколько должны на текущую дату». Добавлен endpoint
+  `GET /api/payroll/debts` (query `PayrollDebtsQuerySchema`: `asOfDate?`,
+  `employeeId?`, `role?`, `divisionCode?`, pagination). Response
+  `PayrollDebtsPageDto` включает `debtRub = max(0, accruedGrossRub −
+  payoutCoveredRub)` — базовый долг; `cashBalanceRub = accruedGrossRub −
+  paidTotalRub` — с корректировками; `pendingPieceworkRub` не входит
+  в debtRub. CANCELLED выплаты игнорируются. Frontend: страница
+  `/admin/payroll/debts` (`apps/web/app/admin/payroll/debts/page.tsx`)
+  с KPI-карточками и таблицей задолженности. Ссылка «Задолженность»
+  добавлена в `/admin/payroll/page.tsx`. Доменная модель —
+  `docs/domain.md §10.10`. Экран — `docs/screens.md §12d`.
+  Тесты — `tests/integration/payroll-debts.test.ts`,
+  `tests/smoke/payroll-debts.smoke.test.ts`.
+
 - [x] **PHASE 3 STEP 6.4 «Payroll accrual adjustments in payouts».** Enum
   `PayrollPayoutLineKind` расширен на `BONUS`, `DEDUCTION`, `ADVANCE`,
   `ADJUSTMENT`. При `pay` документа начисления строки с `manualAdjustRub ≠ 0`

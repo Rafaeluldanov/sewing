@@ -16,6 +16,8 @@
 import type {
   PayrollDailyPageDto,
   PayrollDailyQuery,
+  PayrollDebtsPageDto,
+  PayrollDebtsQuery,
   PayrollEmployeeDetailDto,
   PayrollEmployeeQuery,
   PayrollPeriodPageDto,
@@ -48,6 +50,21 @@ export function getPayrollDaily(
       date: query.date,
       role: query.role,
       divisionCode: query.divisionCode,
+    },
+  });
+}
+
+export function getPayrollDebts(
+  query: Partial<PayrollDebtsQuery>,
+): Promise<PayrollDebtsPageDto> {
+  return apiFetch<PayrollDebtsPageDto>('/payroll/debts', {
+    searchParams: {
+      asOfDate: query.asOfDate,
+      employeeId: query.employeeId,
+      role: query.role,
+      divisionCode: query.divisionCode,
+      page: query.page,
+      pageSize: query.pageSize,
     },
   });
 }

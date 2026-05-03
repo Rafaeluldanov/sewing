@@ -3083,6 +3083,66 @@ deep-integration и снимает риск разъезда с payroll-эндп
 
 ---
 
+## 12d. Задолженность по сотрудникам — PHASE 3 STEP 7
+
+<a id="12d-payroll-debts"></a>
+
+Управленческий экран «Кому сколько должны на текущую дату / на выбранную дату».
+Контракт API — `api.md §30a` (`GET /api/payroll/debts`).
+Доменная модель — `domain.md §10.10`.
+
+Доступ — `SHOP_MANAGER`, `ADMIN`. RBAC — `app/admin/layout.tsx` +
+backend `@Roles('SHOP_MANAGER', 'ADMIN')`.
+
+### `/admin/payroll/debts` — отчёт задолженности
+
+Файл — `apps/web/app/admin/payroll/debts/page.tsx`.
+
+**Описание:** «Показывает актуальный остаток по утверждённым начислениям
+до выбранной даты. Выплаты CANCELLED не учитываются.»
+
+Ссылка из `/admin/payroll/page.tsx` — кнопка «Задолженность» в actions-блоке
+`AdminPageShell`.
+
+**Фильтры:**
+- `asOfDate` — дата среза (по умолчанию — сегодня);
+- `employeeId` — конкретный сотрудник;
+- `role` — роль;
+- `divisionCode` — подразделение.
+
+**KPI-карточки (`kpi-grid`):**
+
+| Карточка | Значение |
+| -------- | -------- |
+| Всего начислено | `summary.totalAccruedGrossRub` |
+| Закрыто выплатами | `summary.totalPayoutCoveredRub` |
+| Корректировки выплат | `summary.totalPayoutAdjustRub` |
+| Выплачено всего | `summary.totalPaidRub` |
+| Остаток по начислениям | `summary.totalDebtRub` (tone=warn при > 0) |
+| Ожидает упаковки | `summary.totalPendingPieceworkRub` |
+| Сотрудников с долгом | `summary.employeesWithDebt` (tone=warn при > 0) |
+
+**Таблица** (`AdminTable`):
+
+| Колонка | Поле | Примечание |
+| ------- | ---- | ---------- |
+| Сотрудник | `fullName`, `role`, `companyDivisionName` | |
+| Сдельно начислено, ₽ | `accruedPieceworkRub` | |
+| Оклад начислен, ₽ | `accruedSalaryRub` | |
+| Начислено всего, ₽ | `accruedGrossRub` | |
+| Закрыто выплатами, ₽ | `payoutCoveredRub` | |
+| Корректировки, ₽ | `payoutAdjustRub` | |
+| Выплачено всего, ₽ | `paidTotalRub` | |
+| Остаток, ₽ | `debtRub` | Если 0 и `accruedGrossRub > 0` — бейдж «закрыто» (`AdminStatusBadge`); если > 0 — выделен жирным |
+| Pending, ₽ | `pendingPieceworkRub` | Не входит в debtRub |
+| Последняя выплата | `lastPayoutAt` | |
+
+**Действия** (per row):
+- «Зарплата» → `/admin/payroll/employees/:employeeId`;
+- «Начислить» → `/admin/payroll/accrual-documents/new?asOfDate=YYYY-MM-DD`.
+
+---
+
 ## 12c. Документы начисления зарплаты — PHASE 3 STEP 6.3
 
 <a id="12c-accrual-documents"></a>
