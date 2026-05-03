@@ -418,6 +418,62 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     `Material` нет; новые роли (`WAREHOUSE_MANAGER` / `PURCHASER` /
     `ACCOUNTANT`) **не введены**.
 
+  Frontend-итерация «UI остатков и движений склада»
+  (`apps/web/app/admin/warehouses/page.tsx`,
+  `apps/web/components/warehouses/stock/*`,
+  `apps/web/lib/stock-api.ts`):
+  - в существующем разделе `/admin/warehouses` появились
+    read-only вкладки «Остатки» и «Движения». Переключение —
+    через query-параметр `?tab=balances|movements`; дефолтный
+    вид (`tab` отсутствует или `tab=list`) — это прежняя
+    таблица складов, она не сломалась. Вкладки рендерятся в
+    `actions`-слоте `AdminPageShell` рядом с кнопкой «Добавить»
+    (кнопка осталась и ведёт на `/admin/warehouses/new`);
+  - вкладка **«Остатки»** ходит в `GET /api/stock/balances` через
+    `lib/stock-api.ts::listStockBalances`. Колонки таблицы:
+    Материал (`description` + `materialRole`) / Заказ
+    (`orderNumber` или `orderId`) / Склад / Ячейка / Кол-во /
+    Ед. изм. / Цена / Сумма / Последнее движение / Обновлено.
+    Отрицательный `qty` подсвечивается `<AdminStatusBadge
+    tone="danger">` (используем существующий цветовой словарь —
+    новой системы не вводим). Empty-state «Остатки материалов
+    пока не сформированы»;
+  - вкладка **«Движения»** ходит в `GET /api/stock/movements`
+    через `listStockMovements`. Колонки: Дата / Тип /
+    Направление / Материал (`workshopNeedId` или `sourceId`,
+    т.к. `description` backend в movement-response не отдаёт) /
+    Заказ / Склад / Ячейка / Кол-во + ед. / Цена / Сумма /
+    Остаток до / Остаток после / Источник (`sourceType` ·
+    `sourceId`) / Комментарий. `direction` рендерится как
+    `«Приход»` (info) / `«Расход»` (danger), `type` — как
+    `«Приёмка»` / `«Расход материалов»` / `«Сторно»` /
+    `«Корректировка»`. Empty-state «Движения материалов пока
+    не зафиксированы»;
+  - **`sourceKey`** на UI не отображается — backend его в
+    публичном response не возвращает, frontend-types в
+    `lib/stock-api.ts` его тоже не объявляют;
+  - pagination в read-only API склада — `limit` / `offset`,
+    поэтому таблицы используют отдельный `<StockPagination>`
+    (Назад / Вперёд + диапазон «Показано N–M из total»). Default
+    `limit = 50`, max `200`, как у backend DTO. Общий
+    `<AdminPagination>` остаётся в дефолтной вкладке «Склады»
+    (там `page` / `pageSize`);
+  - **отдельная страница `/admin/stock` не создавалась**, новый
+    sidebar-пункт **не добавлялся** (sidebar `/admin/warehouses`
+    остался единственной точкой входа);
+  - **`OrderViewTabs`** / RBAC / backend-сервисы (`StockService`,
+    `MaterialIssuesService`, `PurchaseReceiptsService`,
+    `PassportsService`) и `prisma/schema.prisma` на этой итерации
+    **не правились**;
+  - сознательно **не реализованы** на этой UI-итерации:
+    multi-warehouse фильтр / группировки по складу / отдельная
+    сводка по складам, ручные корректировки остатков, кнопки
+    «Корректировка» / «Списать» / «Переместить», stock mutations,
+    UI для перемещения между ячейками, FIFO / LIFO / партии,
+    master-модель `Material`, новые роли `WAREHOUSE_MANAGER` /
+    `PURCHASER` / `ACCOUNTANT` — границы итерации зафиксированы
+    в smoke-тесте `tests/smoke/warehouses-stock-tabs.smoke.test.ts`.
+
 ---
 
 ## 2. Стек
