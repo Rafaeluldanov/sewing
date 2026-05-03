@@ -220,6 +220,7 @@ export class PayrollService {
       shiftRows,
       pieceworkDivisionRows,
       payoutCoverageRows,
+      payoutAdjustRows,
     ] = await Promise.all([
       this.prisma.operationEntry.groupBy({
         by: ['employeeId'],
@@ -322,6 +323,25 @@ export class PayrollService {
           )
         GROUP BY COALESCE(oe."employeeId", se."employeeId"), ppl."kind"
       `,
+      // Корректировки (ADJUSTMENT/BONUS/DEDUCTION/ADVANCE) — manual lines без FK.
+      // Связываем через PayrollPayout.employeeId, период — через payout.periodFrom/periodTo.
+      this.prisma.$queryRaw<
+        Array<{ employeeId: string; adjustRub: string }>
+      >`
+        SELECT
+          pp."employeeId"            AS "employeeId",
+          SUM(ppl."amountRub")::text AS "adjustRub"
+        FROM "PayrollPayoutLine" ppl
+        JOIN "PayrollPayout" pp ON pp."id" = ppl."payoutId"
+        WHERE pp."status" IN ('DRAFT', 'ISSUED', 'ACKNOWLEDGED')
+          AND ppl."kind" IN ('ADJUSTMENT', 'BONUS', 'DEDUCTION', 'ADVANCE')
+          AND ppl."operationEntryId" IS NULL
+          AND ppl."salaryEntryId"    IS NULL
+          AND pp."periodFrom" <= ${dayTo}
+          AND pp."periodTo"   >= ${dayFrom}
+          AND pp."employeeId" IN (${Prisma.join(Array.from(relevantIds))})
+        GROUP BY pp."employeeId"
+      `,
     ]);
 
     const piApproved = byId(pieceworkApprovedAgg);
@@ -347,6 +367,12 @@ export class PayrollService {
           (payoutSalaryCovered.get(r.employeeId) ?? 0) + amount,
         );
       }
+    }
+
+    // Суммы manual kind lines (ADJUSTMENT / BONUS / DEDUCTION / ADVANCE) по сотруднику.
+    const payoutAdjustMap = new Map<string, number>();
+    for (const r of payoutAdjustRows) {
+      payoutAdjustMap.set(r.employeeId, round2(Number(r.adjustRub)));
     }
 
     const divisionByEmp = new Map<
@@ -392,6 +418,7 @@ export class PayrollService {
       const payoutSalary = round2(payoutSalaryCovered.get(id) ?? 0);
       const payoutCoveredRub = round2(payoutPiecework + payoutSalary);
       const netToPayRub = round2(Math.max(0, grossAccruedRub - payoutCoveredRub));
+      const payoutAdjustRub = round2(payoutAdjustMap.get(id) ?? 0);
 
       items.push({
         employeeId: emp.id,
@@ -414,6 +441,7 @@ export class PayrollService {
         payoutPieceworkCoveredRub: payoutPiecework,
         payoutSalaryCoveredRub: payoutSalary,
         netToPayRub,
+        payoutAdjustRub,
       });
     }
     items.sort((a, b) => {

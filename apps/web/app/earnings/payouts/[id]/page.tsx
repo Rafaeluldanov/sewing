@@ -82,7 +82,31 @@ function statusStyle(
 }
 
 function lineKindLabel(kind: PayrollPayoutLineDto['kind']): string {
-  return kind === 'PIECEWORK' ? 'Сдельно' : 'Оклад';
+  switch (kind) {
+    case 'PIECEWORK':
+      return 'Сдельно';
+    case 'SALARY':
+      return 'Оклад';
+    case 'BONUS':
+      return 'Бонус';
+    case 'DEDUCTION':
+      return 'Удержание';
+    case 'ADVANCE':
+      return 'Аванс';
+    case 'ADJUSTMENT':
+      return 'Корректировка';
+    default:
+      return kind;
+  }
+}
+
+function formatSignedRub(value: number): string {
+  if (value === 0) return '0 ₽';
+  const prefix = value > 0 ? '+' : '';
+  return `${prefix}${value.toLocaleString('ru-RU', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
+  })} ₽`;
 }
 
 import type React from 'react';
@@ -224,9 +248,30 @@ export default async function EmployeePayoutDetailPage({
               {payout.lines.map((line) => (
                 <tr key={line.id}>
                   <td>{formatDate(line.occurredOn)}</td>
-                  <td>{lineKindLabel(line.kind)}</td>
+                  <td>
+                    {lineKindLabel(line.kind)}
+                    {line.kind === 'ADJUSTMENT' &&
+                      line.snapshot &&
+                      typeof line.snapshot === 'object' &&
+                      typeof (line.snapshot as Record<string, unknown>).manualComment === 'string' && (
+                        <span
+                          style={{
+                            display: 'block',
+                            fontSize: '0.8rem',
+                            color: '#6b7280',
+                            marginTop: '0.15rem',
+                          }}
+                        >
+                          {String((line.snapshot as Record<string, unknown>).manualComment)}
+                        </span>
+                      )}
+                  </td>
                   <td style={{ textAlign: 'right' }}>
-                    <strong>{formatRub(line.amountRub)}</strong>
+                    <strong>
+                      {line.kind === 'ADJUSTMENT'
+                        ? formatSignedRub(line.amountRub)
+                        : formatRub(line.amountRub)}
+                    </strong>
                   </td>
                 </tr>
               ))}

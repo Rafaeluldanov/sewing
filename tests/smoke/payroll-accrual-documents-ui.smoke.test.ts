@@ -151,21 +151,33 @@ describe('/admin/payroll/accrual-documents/[id] page', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 6. DocumentActions содержит warning для manualAdjustRub
+// 6. DocumentActions содержит informational note для manualAdjustRub (STEP 6.4)
 // ---------------------------------------------------------------------------
 
-describe('document-actions.tsx', () => {
+describe('document-actions.tsx (STEP 6.4)', () => {
   const src = readSrc(
     'apps/web/app/admin/payroll/accrual-documents/[id]/document-actions.tsx',
   );
 
-  test('обрабатывает PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED', () => {
-    expect(src).toMatch(/PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED/);
+  test('содержит информационную заметку о корректировках', () => {
+    expect(src).toMatch(/Корректировки будут перенесены в выплату/);
   });
 
-  test('показывает понятный текст об ограничении корректировок', () => {
-    expect(src).toMatch(/корректировки/);
-    expect(src).toMatch(/payout lines/i);
+  test('кнопка «Выплатить» не блокируется из-за корректировок (нет блокировки payBlockedReason через adjustments)', () => {
+    // getPayBlockedReason всегда возвращает null в STEP 6.4
+    const uiSrc = readSrc(
+      'apps/web/app/admin/payroll/accrual-documents/accrual-document-ui.ts',
+    );
+    expect(uiSrc).toMatch(/return null/);
+    expect(uiSrc).not.toMatch(/hasManualAdjustments\(doc\)/);
+  });
+
+  test('enum PAYROLL_PAYOUT_LINE_KINDS содержит ADJUSTMENT', () => {
+    const sharedSrc = readSrc('packages/shared/src/payroll-payouts.ts');
+    expect(sharedSrc).toMatch(/ADJUSTMENT/);
+    expect(sharedSrc).toMatch(/BONUS/);
+    expect(sharedSrc).toMatch(/DEDUCTION/);
+    expect(sharedSrc).toMatch(/ADVANCE/);
   });
 });
 
@@ -192,7 +204,7 @@ describe('docs/screens.md', () => {
     expect(src).toMatch(/accrualDate/);
   });
 
-  test('упоминает ограничение manualAdjustRub', () => {
+  test('упоминает корректировки документа начисления', () => {
     expect(src).toMatch(/manualAdjustRub/);
   });
 });

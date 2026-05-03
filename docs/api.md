@@ -936,7 +936,7 @@ Snapshot строк (см. `PayrollPayoutLine.snapshot`):
 | GET   | `/api/payroll/accrual-documents/:id`                            | SHOP_MANAGER, ADMIN | Карточка со строками `lines` (полный `PayrollAccrualDocumentDto`). 404 `PAYROLL_ACCRUAL_DOCUMENT_NOT_FOUND` при отсутствии. |
 | POST  | `/api/payroll/accrual-documents/:id/recompute`                  | SHOP_MANAGER, ADMIN | Только DRAFT. Пересчитывает авто-часть строк; `manualAdjustRub` / `manualComment` сохраняются по `employeeId`. Строка без начислений и `manualAdjustRub = 0` удаляется. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_RECOMPUTED`. |
 | PATCH | `/api/payroll/accrual-documents/:id/lines/:lineId`              | SHOP_MANAGER, ADMIN | Только DRAFT. Body `UpdatePayrollAccrualDocumentLineDto` (`{ manualAdjustRub?, manualComment? }`). После изменения пересчитываются `amountToPayRub` и итоги документа. 404 `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_LINE_UPDATED`. |
-| POST  | `/api/payroll/accrual-documents/:id/pay`                        | SHOP_MANAGER, ADMIN | Только DRAFT. Документ переходит в `PAID`. Для каждой строки с `amountToPayRub > 0` создаётся `PayrollPayout` (статус `ISSUED`). Перед созданием повторная проверка активной уникальности → 422 `PAYROLL_ACCRUAL_LINE_ALREADY_PAID`. **STEP 6.2:** если `manualAdjustRub ≠ 0` и `PayrollPayoutLineKind` не содержит `ADJUSTMENT` → 409 `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_PAID`. |
+| POST  | `/api/payroll/accrual-documents/:id/pay`                        | SHOP_MANAGER, ADMIN | Только DRAFT. Документ переходит в `PAID`. Для каждой строки с `amountToPayRub > 0` создаётся `PayrollPayout` (статус `ISSUED`). Перед созданием повторная проверка активной уникальности → 422 `PAYROLL_ACCRUAL_LINE_ALREADY_PAID`. **STEP 6.4:** если `manualAdjustRub ≠ 0`, создаётся дополнительная `PayrollPayoutLine` с `kind = ADJUSTMENT`, `operationEntryId = null`, `salaryEntryId = null`. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_PAID` (payload содержит `adjustmentsCount` / `totalAdjustRub`). |
 | POST  | `/api/payroll/accrual-documents/:id/cancel`                     | SHOP_MANAGER, ADMIN | Только DRAFT. `DRAFT → CANCELLED`. Body `CancelPayrollAccrualDocumentDto` (`{ reason? }`). PAID нельзя отменить в MVP. AuditLog: `PAYROLL_ACCRUAL_DOCUMENT_CANCELLED`. |
 
 Snapshot строки (`PayrollAccrualDocumentLine.snapshot`):
@@ -957,16 +957,16 @@ Snapshot строки (`PayrollAccrualDocumentLine.snapshot`):
 - `PAYROLL_ACCRUAL_DOCUMENT_LINE_NOT_FOUND` (404) — строка не найдена
   в документе;
 - `PAYROLL_ACCRUAL_LINE_ALREADY_PAID` (422) — начисление из snapshot
-  уже входит в активную выплату на момент проводки;
-- `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED` (409) — строка с
-  `manualAdjustRub ≠ 0`, но `PayrollPayoutLineKind` не содержит
-  `ADJUSTMENT`; требуется STEP 6.3/6.4.
+  уже входит в активную выплату на момент проводки.
 
-**Примечание `manualAdjustRub`:** в STEP 6.2 `manualAdjustRub` хранится
-в документе и учитывается в `amountToPayRub`, но при проводке (`pay`)
-не может быть перенесён в `PayrollPayoutLine`, если enum
-`PayrollPayoutLineKind` не расширен на `ADJUSTMENT`. Расширение —
-STEP 6.3/6.4.
+**`manualAdjustRub` и ADJUSTMENT (STEP 6.4):** при `pay` документа каждая строка с
+`manualAdjustRub ≠ 0` создаёт дополнительную `PayrollPayoutLine`:
+`kind = ADJUSTMENT`, `operationEntryId = null`, `salaryEntryId = null`,
+`amountRub = manualAdjustRub`. Snapshot содержит `{ manual, source, documentId,
+documentLineId, employeeId, manualAdjustRub, manualComment, accrualDate, createdById }`.
+ADJUSTMENT-строки не закрывают `OperationEntry` / `SalaryEntry` и не уменьшают
+`grossAccruedRub`/`netToPayRub` в ведомости периода — они учитываются отдельно
+в `payoutAdjustRub`.
 
 Связанные документы:
 [docs/erd.md §2.9](./erd.md#29-salary--earnings),

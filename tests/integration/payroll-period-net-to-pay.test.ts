@@ -323,4 +323,66 @@ describeWithDb('integration — payroll period net-to-pay (PHASE 3)', () => {
     expect(data.summary.totalPayoutCoveredRub).toBeCloseTo(300, 2);
     expect(data.summary.totalNetToPayRub).toBeCloseTo(200, 2);
   });
+
+  // -------------------------------------------------------------------------
+  // 7. STEP 6.4: ADJUSTMENT line не уменьшает netToPayRub
+  // -------------------------------------------------------------------------
+
+  test('7. STEP 6.4: ADJUSTMENT PayrollPayoutLine не уменьшает netToPayRub / grossAccruedRub', async () => {
+    // Cutter: 200 gross approved, + ADJUSTMENT 50 в выплате.
+    const oe = await createOperationEntry(seed.employees.cutter.id, 200);
+
+    // Создать PayrollPayout с PIECEWORK и ADJUSTMENT строками.
+    const payout = await t.prisma.payrollPayout.create({
+      data: {
+        employeeId: seed.employees.cutter.id,
+        periodFrom: IN_PERIOD_DAY,
+        periodTo: IN_PERIOD_DAY,
+        status: 'ISSUED',
+        amountPieceworkRub: new Prisma.Decimal(200),
+        amountSalaryRub: new Prisma.Decimal(0),
+        amountTotalRub: new Prisma.Decimal(250),
+        createdById: seed.employees['shop-chief'].id,
+        issuedAt: IN_PERIOD,
+        issuedById: seed.employees['shop-chief'].id,
+      },
+    });
+    // PIECEWORK line закрывает oe.
+    await t.prisma.payrollPayoutLine.create({
+      data: {
+        payoutId: payout.id,
+        kind: PayrollPayoutLineKind.PIECEWORK,
+        operationEntryId: oe.id,
+        salaryEntryId: null,
+        amountRub: new Prisma.Decimal(200),
+        occurredOn: IN_PERIOD_DAY,
+        snapshot: {},
+      },
+    });
+    // ADJUSTMENT line — manual, без FK.
+    await t.prisma.payrollPayoutLine.create({
+      data: {
+        payoutId: payout.id,
+        kind: 'ADJUSTMENT' as PayrollPayoutLineKind,
+        operationEntryId: null,
+        salaryEntryId: null,
+        amountRub: new Prisma.Decimal(50),
+        occurredOn: IN_PERIOD_DAY,
+        snapshot: { manual: true, source: 'PAYROLL_ACCRUAL_DOCUMENT' },
+      },
+    });
+
+    const data = await getPeriod();
+    const row = data.items.find((r) => r.employeeId === seed.employees.cutter.id);
+    expect(row).toBeDefined();
+
+    // grossAccruedRub = 200 (только approved piecework).
+    expect(row!.grossAccruedRub).toBeCloseTo(200, 2);
+    // payoutCoveredRub = 200 (только PIECEWORK закрывает базовые начисления).
+    expect(row!.payoutCoveredRub).toBeCloseTo(200, 2);
+    // netToPayRub = 0 (base полностью покрыт).
+    expect(row!.netToPayRub).toBeCloseTo(0, 2);
+    // payoutAdjustRub = 50 (ADJUSTMENT учитывается отдельно).
+    expect(row!.payoutAdjustRub).toBeCloseTo(50, 2);
+  });
 });

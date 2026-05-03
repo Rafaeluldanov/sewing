@@ -245,4 +245,16 @@ describe('payout-ui.ts — форматтеры', () => {
     expect(src).toMatch(/Получено/);
     expect(src).toMatch(/Отменено/);
   });
+
+  test('getLineKindLabel покрывает все шесть видов строк включая ADJUSTMENT (STEP 6.4)', () => {
+    const src = readSrc(
+      'apps/web/app/admin/payroll/payouts/payout-ui.ts',
+    );
+    expect(src).toMatch(/Сдельно/);
+    expect(src).toMatch(/Оклад/);
+    expect(src).toMatch(/Бонус/);
+    expect(src).toMatch(/Удержание/);
+    expect(src).toMatch(/Аванс/);
+    expect(src).toMatch(/Корректировка/);
+  });
 });

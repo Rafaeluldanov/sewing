@@ -409,19 +409,85 @@ describeWithDb('integration — payroll accrual documents (PHASE 3 STEP 6.2)', (
   });
 
   // -------------------------------------------------------------------------
-  // 8. pay блокируется, если manualAdjustRub != 0 и ADJUSTMENT не поддерживается
+  // 8. STEP 6.4: pay с manualAdjustRub > 0 создаёт ADJUSTMENT PayrollPayoutLine
   // -------------------------------------------------------------------------
 
-  test('pay блокируется 409 PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED, если manualAdjustRub != 0', async () => {
-    const { PayrollPayoutLineKind } = await import('@prisma/client');
-    const kindValues = Object.values(PayrollPayoutLineKind) as string[];
-    const hasAdjustment = kindValues.includes('ADJUSTMENT');
+  test('STEP 6.4: pay с manualAdjustRub > 0 создаёт PayrollPayoutLine kind=ADJUSTMENT', async () => {
+    const passport = await createPassport(t, seed);
+    const entry = await t.prisma.operationEntry.create({
+      data: {
+        passportId: passport.id,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
+        qty: 10,
+        ratePerUnit: new Prisma.Decimal(10),
+        amount: new Prisma.Decimal(100),
+        status: 'APPROVED',
+        approvalMode: 'IMMEDIATE',
+        sourceEventType: 'PASSPORT_CREATED',
+        approvedAt: IN_RANGE,
+      },
+    });
+    await t.prisma.operationEntry.update({
+      where: { id: entry.id },
+      data: { createdAt: IN_RANGE },
+    });
 
-    if (hasAdjustment) {
-      // Если enum расширен, тест неприменим — пропускаем.
-      return;
-    }
+    const created = await request(t.app.getHttpServer())
+      .post('/api/payroll/accrual-documents')
+      .set('Cookie', cookies.manager)
+      .send({ accrualDate: ACCRUAL_DATE });
+    expect(created.status).toBeLessThan(300);
+    const docId = created.body.id as string;
+    const lineId = created.body.lines[0].id as string;
 
+    // Добавить корректировку.
+    const patched = await request(t.app.getHttpServer())
+      .patch(`/api/payroll/accrual-documents/${docId}/lines/${lineId}`)
+      .set('Cookie', cookies.manager)
+      .send({ manualAdjustRub: 50, manualComment: 'Бонус за качество' });
+    expect(patched.status).toBe(200);
+
+    // pay должен пройти (не 409).
+    const paid = await request(t.app.getHttpServer())
+      .post(`/api/payroll/accrual-documents/${docId}/pay`)
+      .set('Cookie', cookies.manager)
+      .send({});
+    expect(paid.status).toBe(200);
+    expect(paid.body.status).toBe('PAID');
+
+    // Найти выплату сотрудника.
+    const payout = await t.prisma.payrollPayout.findFirst({
+      where: { employeeId: seed.employees.seamstress.id, status: 'ISSUED' },
+    });
+    expect(payout).not.toBeNull();
+
+    // amountTotalRub должен быть 150 (100 piecework + 50 adjustment).
+    expect(Number(payout!.amountTotalRub)).toBeCloseTo(150, 2);
+
+    // Строки выплаты.
+    const lines = await t.prisma.payrollPayoutLine.findMany({
+      where: { payoutId: payout!.id },
+    });
+    expect(lines.length).toBeGreaterThanOrEqual(2);
+
+    const adjLine = lines.find((l) => l.kind === 'ADJUSTMENT');
+    expect(adjLine).toBeDefined();
+    expect(Number(adjLine!.amountRub)).toBeCloseTo(50, 2);
+    expect(adjLine!.operationEntryId).toBeNull();
+    expect(adjLine!.salaryEntryId).toBeNull();
+
+    // Проверить snapshot ADJUSTMENT.
+    const snap = adjLine!.snapshot as Record<string, unknown>;
+    expect(snap.manual).toBe(true);
+    expect(snap.source).toBe('PAYROLL_ACCRUAL_DOCUMENT');
+    expect(snap.documentId).toBe(docId);
+    expect(snap.documentLineId).toBe(lineId);
+    expect(snap.manualAdjustRub).toBeCloseTo(50, 2);
+    expect(snap.manualComment).toBe('Бонус за качество');
+  });
+
+  test('STEP 6.4: отрицательный manualAdjustRub создаёт ADJUSTMENT с отрицательной суммой', async () => {
     const passport = await createPassport(t, seed);
     const entry = await t.prisma.operationEntry.create({
       data: {
@@ -449,19 +515,28 @@ describeWithDb('integration — payroll accrual documents (PHASE 3 STEP 6.2)', (
     const docId = created.body.id as string;
     const lineId = created.body.lines[0].id as string;
 
-    // Добавить корректировку.
     await request(t.app.getHttpServer())
       .patch(`/api/payroll/accrual-documents/${docId}/lines/${lineId}`)
       .set('Cookie', cookies.manager)
-      .send({ manualAdjustRub: 50 });
+      .send({ manualAdjustRub: -20, manualComment: 'Удержание за брак' });
 
     const paid = await request(t.app.getHttpServer())
       .post(`/api/payroll/accrual-documents/${docId}/pay`)
       .set('Cookie', cookies.manager)
       .send({});
+    expect(paid.status).toBe(200);
 
-    expect(paid.status).toBe(409);
-    expect(paid.body.code).toBe('PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED');
+    const payout = await t.prisma.payrollPayout.findFirst({
+      where: { employeeId: seed.employees.seamstress.id, status: 'ISSUED' },
+    });
+    expect(Number(payout!.amountTotalRub)).toBeCloseTo(80, 2);
+
+    const lines = await t.prisma.payrollPayoutLine.findMany({
+      where: { payoutId: payout!.id },
+    });
+    const adjLine = lines.find((l) => l.kind === 'ADJUSTMENT');
+    expect(adjLine).toBeDefined();
+    expect(Number(adjLine!.amountRub)).toBeCloseTo(-20, 2);
   });
 
   // -------------------------------------------------------------------------

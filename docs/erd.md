@@ -59,7 +59,7 @@
 | `OutsourceTriggerType` | `MANUAL`, `CUT_READY` | `prisma/schema.prisma::enum OutsourceTriggerType` |
 | `PassportEventType` | `CREATED`, `OPERATION_STARTED`, `OPERATION_FINISHED`, `MOVED`, `DEFECT_RECORDED`, `CELL_PLACED`, `CELL_REMOVED`, `ISSUED_TO_EMPLOYEE`, `OPERATION_SCAN`, `QC_PASSED`, `WTO_PASSED`, `PACKED`, `CANCELLED` | `prisma/schema.prisma::enum PassportEventType` |
 | `PayrollAccrualDocumentStatus` | `DRAFT`, `PAID`, `CANCELLED` | `prisma/schema.prisma::enum PayrollAccrualDocumentStatus` |
-| `PayrollPayoutLineKind` | `PIECEWORK`, `SALARY` | `prisma/schema.prisma::enum PayrollPayoutLineKind` |
+| `PayrollPayoutLineKind` | `PIECEWORK`, `SALARY`, `BONUS`, `DEDUCTION`, `ADVANCE`, `ADJUSTMENT` | `prisma/schema.prisma::enum PayrollPayoutLineKind` |
 | `PayrollPayoutStatus` | `DRAFT`, `ISSUED`, `ACKNOWLEDGED`, `CANCELLED` | `prisma/schema.prisma::enum PayrollPayoutStatus` |
 | `PassportStatus` | `CREATED`, `IN_PROGRESS`, `PACKED`, `CANCELLED` | `prisma/schema.prisma::enum PassportStatus` |
 | `PricingMode` | `FIXED`, `BY_SIZE`, `SALARY_ONLY` | `prisma/schema.prisma::enum PricingMode` |

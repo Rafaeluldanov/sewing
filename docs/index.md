@@ -501,13 +501,28 @@ ADR-0022 / `flows.md` / `README.md`. PHASE 2 разнёс runtime-flow по
   Кнопка «Начислить зарплату» добавлена в `/admin/payroll` (хаб).
   При выплате (DRAFT→PAID) backend создаёт `PayrollPayout ISSUED` для
   каждой строки; UI показывает ссылки на выплаты в таблице строк.
-  `manualAdjustRub ≠ 0` — UI показывает warning и блокирует «Выплатить»
-  до STEP 6.3/6.4 (ограничение `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`).
+  `manualAdjustRub ≠ 0` — UI показывает информационную заметку
+  «Корректировки будут перенесены в выплату отдельной строкой».
   Новые файлы: `apps/web/lib/payroll-accrual-documents-api.ts`,
   `apps/web/app/admin/payroll/accrual-documents/actions.ts`,
   `apps/web/app/admin/payroll/accrual-documents/accrual-document-ui.ts`,
   страницы и клиентские компоненты (см. `docs/screens.md §12c`).
   Тесты — `tests/smoke/payroll-accrual-documents-ui.smoke.test.ts`.
+
+- [x] **PHASE 3 STEP 6.4 «Payroll accrual adjustments in payouts».** Enum
+  `PayrollPayoutLineKind` расширен на `BONUS`, `DEDUCTION`, `ADVANCE`,
+  `ADJUSTMENT`. При `pay` документа начисления строки с `manualAdjustRub ≠ 0`
+  создают дополнительный `PayrollPayoutLine` с `kind = ADJUSTMENT`,
+  `operationEntryId = null`, `salaryEntryId = null`. Блокировка
+  `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED` убрана. `netToPayRub` на
+  странице `/admin/payroll` не изменяется: ADJUSTMENT-строки не закрывают
+  `OperationEntry` / `SalaryEntry`, а учитываются отдельно в `payoutAdjustRub`.
+  Сотрудник видит строку «Корректировка» с комментарием.
+  Миграция — `20260604110000_extend_payroll_payout_line_kind`.
+  Тесты — `tests/integration/payroll-accrual-documents.test.ts`,
+  `tests/integration/payroll-payouts.test.ts`,
+  `tests/integration/payroll-period-net-to-pay.test.ts`,
+  `tests/smoke/payroll-accrual-documents-ui.smoke.test.ts`.
 
 - [x] **PHASE 2 STEP 5 «Полировка Employee/Payroll UI».** Карточка
   `/admin/employees/[id]` теперь читаемо показывает оси

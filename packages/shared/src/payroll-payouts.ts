@@ -49,10 +49,22 @@ export type PayrollPayoutStatus = z.infer<typeof PayrollPayoutStatusSchema>;
 /**
  * Тип строки выплаты — из какой подсистемы начислений она пришла.
  *
- * - `PIECEWORK` — `OperationEntry` (сдельщина);
- * - `SALARY`    — `SalaryEntry` (оклад).
+ * - `PIECEWORK`  — `OperationEntry` (сдельщина);
+ * - `SALARY`     — `SalaryEntry` (оклад);
+ * - `BONUS`      — бонус (резерв для будущих ручных строк);
+ * - `DEDUCTION`  — удержание (резерв для будущих ручных строк);
+ * - `ADVANCE`    — аванс (резерв для будущих ручных строк);
+ * - `ADJUSTMENT` — ручная корректировка из `PayrollAccrualDocumentLine.manualAdjustRub`
+ *                  (PHASE 3 STEP 6.4). `operationEntryId` и `salaryEntryId` = null.
  */
-export const PAYROLL_PAYOUT_LINE_KINDS = ['PIECEWORK', 'SALARY'] as const;
+export const PAYROLL_PAYOUT_LINE_KINDS = [
+  'PIECEWORK',
+  'SALARY',
+  'BONUS',
+  'DEDUCTION',
+  'ADVANCE',
+  'ADJUSTMENT',
+] as const;
 export const PayrollPayoutLineKindSchema = z.enum(PAYROLL_PAYOUT_LINE_KINDS);
 export type PayrollPayoutLineKind = z.infer<typeof PayrollPayoutLineKindSchema>;
 

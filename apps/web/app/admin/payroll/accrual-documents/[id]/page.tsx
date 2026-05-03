@@ -270,6 +270,7 @@ export default async function AdminAccrualDocumentDetailPage({
         <DocumentActions
           status={doc.status}
           payBlockedReason={payBlockedReason}
+          hasAdjustments={doc.totalAdjustRub !== 0}
           recomputeAction={boundRecompute}
           payAction={boundPay}
           cancelAction={boundCancel}

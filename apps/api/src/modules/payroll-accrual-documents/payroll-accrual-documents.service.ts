@@ -21,13 +21,12 @@ import {
   PayrollAccrualDocumentLineNotFoundException,
   PayrollAccrualDocumentNotFoundException,
   PayrollAccrualLineAlreadyPaidException,
-  PayrollAccrualManualAdjustNotSupportedException,
 } from '../../common/errors.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { AuditService } from '../audit/audit.service.js';
 
 /**
- * Сервис «Документ начисления зарплаты» (PHASE 3 STEP 6.2).
+ * Сервис «Документ начисления зарплаты» (PHASE 3 STEP 6.2–6.4).
  *
  * Основной поток:
  *   1. `create` — DRAFT + рассчитать строки по `OperationEntry` /
@@ -38,13 +37,9 @@ import { AuditService } from '../audit/audit.service.js';
  *      `manualComment` у строки (только DRAFT).
  *   4. `pay` — провести документ: DRAFT → PAID, создать
  *      `PayrollPayout` ISSUED для каждой строки с `amountToPayRub > 0`.
+ *      Если у строки `manualAdjustRub != 0`, создаётся дополнительная
+ *      `PayrollPayoutLine` с `kind = ADJUSTMENT` (STEP 6.4).
  *   5. `cancel` — отменить черновик: DRAFT → CANCELLED.
- *
- * Ограничение STEP 6.2:
- *   `PayrollPayoutLineKind` содержит только `PIECEWORK` / `SALARY`.
- *   Если хотя бы одна строка документа имеет `manualAdjustRub != 0`,
- *   `pay` блокируется кодом `PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`.
- *   Расширение enum — STEP 6.3/6.4.
  *
  * Контракт — `docs/api.md §«Payroll accrual documents»`.
  * Аудит — `docs/events.md §«PAYROLL_ACCRUAL_DOCUMENT»`.
@@ -385,13 +380,8 @@ export class PayrollAccrualDocumentsService {
         );
       }
 
-      // Проверка: enum не расширен на ADJUSTMENT → блокируем, если есть ненулевые корректировки.
-      const hasAdj = doc.lines.some((l) => !l.manualAdjustRub.equals(0));
-      const kindValues = Object.values(PayrollPayoutLineKind) as string[];
-      const hasAdjustmentKind = kindValues.includes('ADJUSTMENT');
-      if (hasAdj && !hasAdjustmentKind) {
-        throw new PayrollAccrualManualAdjustNotSupportedException();
-      }
+      // STEP 6.4: ADJUSTMENT lines supported — no longer blocking pay.
+      // (PayrollPayoutLineKind now includes 'ADJUSTMENT'.)
 
       const now = new Date();
       const accrualDate = doc.accrualDate;
@@ -518,8 +508,8 @@ export class PayrollAccrualDocumentsService {
           });
         }
 
-        // Если enum расширен на ADJUSTMENT и корректировка не ноль — создать строку.
-        if (hasAdjustmentKind && !line.manualAdjustRub.equals(0)) {
+        // STEP 6.4: корректировка != 0 → создать ADJUSTMENT PayrollPayoutLine.
+        if (!line.manualAdjustRub.equals(0)) {
           payoutLines.push({
             payoutId: payout.id,
             kind: 'ADJUSTMENT' as PayrollPayoutLineKind,
@@ -528,8 +518,15 @@ export class PayrollAccrualDocumentsService {
             amountRub: roundMoney(line.manualAdjustRub),
             occurredOn: accrualDate,
             snapshot: {
+              manual: true,
+              source: 'PAYROLL_ACCRUAL_DOCUMENT',
+              documentId: id,
+              documentLineId: line.id,
+              employeeId: line.employeeId,
               manualAdjustRub: roundMoneyNumber(line.manualAdjustRub),
               manualComment: line.manualComment ?? null,
+              accrualDate: toDateOnly(accrualDate),
+              createdById: viewer.employeeId,
             } satisfies Prisma.InputJsonValue,
           });
         }
@@ -575,6 +572,8 @@ export class PayrollAccrualDocumentsService {
             accrualDate: toDateOnly(doc.accrualDate),
             payoutsCreated,
             totalToPayRub: roundMoneyNumber(doc.totalToPayRub),
+            adjustmentsCount: doc.lines.filter((l) => !l.manualAdjustRub.equals(0)).length,
+            totalAdjustRub: roundMoneyNumber(doc.totalAdjustRub),
             paidById: viewer.employeeId,
             paidAt: paidAt.toISOString(),
           },

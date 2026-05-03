@@ -220,3 +220,23 @@ describe('docs/screens.md — STEP 5 задокументирован', () => {
     expect(src).toMatch(/Деньги получил/);
   });
 });
+
+// ---------------------------------------------------------------------------
+// 9. STEP 6.4 — employee payout page отображает ADJUSTMENT строку
+// ---------------------------------------------------------------------------
+
+describe('/earnings/payouts/[id] — STEP 6.4 ADJUSTMENT (PHASE 3)', () => {
+  const src = readSrc('apps/web/app/earnings/payouts/[id]/page.tsx');
+
+  test('lineKindLabel покрывает ADJUSTMENT → «Корректировка»', () => {
+    expect(src).toMatch(/Корректировка/);
+  });
+
+  test('ADJUSTMENT строка показывает signed amount (formatSignedRub)', () => {
+    expect(src).toMatch(/formatSignedRub/);
+  });
+
+  test('ADJUSTMENT строка показывает manualComment из snapshot', () => {
+    expect(src).toMatch(/manualComment/);
+  });
+});
