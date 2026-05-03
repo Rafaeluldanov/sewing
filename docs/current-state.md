@@ -279,19 +279,66 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     по-прежнему нет — это внутренние таблицы для следующих
     итераций.
 
-  Подключение **расхода** (`MaterialIssue.post`, авто-документ
-  `AUTO_CUT_ISSUE`) и проверка остатков на этой итерации сознательно
-  **не** реализованы. `MaterialIssue` (включая POST и автосписание
-  при выдаче кроя) **не уменьшает** `StockBalance`, `PassportsService`
-  склад **не читает**, и крой по-прежнему не блокируется недостатком
-  материала.
+  Backend-итерация «Подключение расхода материалов к складу»
+  (`apps/api/src/modules/material-issues/material-issues.service.ts`,
+  `apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueInTx`,
+  `prisma/schema.prisma::StockMovement.sourceKey`):
+  - `MaterialIssue.post` (ручной `DRAFT → POSTED` через
+    `POST /api/material-issues/:id/post`) и `createAutoCutIssueForPassport`
+    (авто-документ `AUTO_CUT_ISSUE` при выдаче кроя) в той же
+    транзакции вызывают `StockService.recordMaterialIssueInTx`. Для
+    каждой `MaterialIssueLine` с `workshopNeedId`, `unit` и
+    `issuedQty > 0` пишется исходящий `StockMovement`
+    (`direction = OUT`, `type = MATERIAL_ISSUE`,
+    `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`), и `StockBalance.qty`
+    уменьшается. Комментарий движения зависит от `MaterialIssue.source`:
+    `"Автоматическое списание при выдаче кроя"` для
+    `AUTO_CUT_ISSUE` и `"Списание по документу расхода материалов"`
+    для `MANUAL`;
+  - soft-skip строк без `workshopNeedId` / без `unit` / с
+    `issuedQty <= 0` пишет structured-лог
+    `event=stock.material_issue.skip reason=...`; `MaterialIssue.post`
+    продолжает успешно завершаться;
+  - если `line.cellId` задан — OUT-движение идёт из этой ячейки
+    (`warehouseId` берётся через `Cell.warehouseId`);
+  - если `line.cellId` не задан, сервис применяет простую
+    MVP-аллокацию: ищет существующий `StockBalance` по
+    `(workshopNeedId, unit)` с `qty > 0` и выбирает один с
+    максимальным `qty`; если положительных балансов нет — пишет
+    OUT в no-location balance (`warehouseId = null`,
+    `cellId = null`), создавая его при необходимости. Одна
+    `MaterialIssueLine` → один OUT-`StockMovement` (без
+    дробления между остатками);
+  - **отрицательный остаток не блокируется**: `MaterialIssue.post`
+    и `issueToEmployee` не падают при нехватке материала —
+    `StockBalance.qty` просто уходит в минус;
+  - **проверка достаточности остатков не реализована**;
+  - **FIFO/LIFO не реализованы** — `applyMovementInTx` на OUT
+    использует текущий `StockBalance.unitCost`, не партии;
+  - идемпотентность — UNIQUE `StockMovement.sourceKey`:
+    `MATERIAL_ISSUE_LINE:<lineId>` на строку. Retry
+    `MaterialIssue.post` / повторный `issueToEmployee` не уменьшают
+    остаток повторно;
+  - **`MaterialIssue.totalCost` не пересчитывается** по складской
+    стоимости: документный `totalCost` остаётся Σ
+    `MaterialIssueLine.issuedQty × unitCost` (финансовый snapshot для
+    `OrderSummaryUnifiedTable` / `CostsService` /
+    `ProductionCostV2Service`). `StockMovement.totalCost` —
+    независимая складская оценка через `StockBalance.unitCost`.
+  - **cancel DRAFT не пишет движение**; POSTED отменить нельзя —
+    reversal/сторно `MaterialIssue` вынесен в отдельную будущую
+    итерацию (появится вместе с возвратом в ячейку).
+  - `PassportsService` по-прежнему склад **не читает и не пишет**
+    напрямую — всё идёт через `MaterialIssuesService` auto-helper;
+    крой не блокируется недостатком материала.
 
   По-прежнему **не реализованы**: `MaterialStockLot`, FIFO/LIFO,
-  master-модель `Material`, роли `WAREHOUSE_MANAGER` / `PURCHASER` /
-  `ACCOUNTANT`, обновление `ProductionCostV2Service` под склад,
-  любые другие финансовые сводки (`OrderPlannedCostSummaryCard`) под
-  эту ось, и UI для просмотра остатков — вынесены в следующие
-  итерации.
+  проверка достаточности остатков, master-модель `Material`, роли
+  `WAREHOUSE_MANAGER` / `PURCHASER` / `ACCOUNTANT`, обновление
+  `ProductionCostV2Service` под склад, reversal/возврат
+  `MaterialIssue`, любые другие финансовые сводки
+  (`OrderPlannedCostSummaryCard`) под эту ось, и UI для просмотра
+  остатков — вынесены в следующие итерации.
 
 ---
 

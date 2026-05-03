@@ -17,8 +17,10 @@
  *   - `PassportsService.issueToEmployee` вызывает auto-helper в ОБЕИХ
  *     ветках (FROM_CELL и ROUTE_WIP);
  *   - `PassportsModule` импортирует `MaterialIssuesModule`;
- *   - Есть foundation `StockBalance` / `StockMovement`, но auto issue
- *     их не вызывает; нет `MaterialStockLot`;
+ *   - Есть foundation `StockBalance` / `StockMovement`, auto issue
+ *     пишет OUT через `MaterialIssuesService` (см.
+ *     `tests/smoke/material-issues-stock.smoke.test.ts`); нет
+ *     `MaterialStockLot`;
  *   - Не создана новая master-модель `Material`;
  *   - Не изменён frontend UI (MaterialIssuesSection /
  *     OrderMaterialsUnifiedTable / OrderViewTabs / OrderNeedsTab);
@@ -155,15 +157,13 @@ describe('material-issues auto cut — MaterialIssuesService', () => {
     );
   });
 
-  test('auto issue НЕ трогает StockBalance / StockMovement / MaterialStockLot (Prisma-клиенты)', () => {
-    // Не вызывает соответствующих моделей Prisma. Комментарии
-    // «НЕТ StockBalance / StockMovement» в шапке сервиса —
-    // часть документации MVP-границ и сюда не попадают (мы
-    // ищем именно `tx.stockBalance.` / `prisma.stockBalance.` и
-    // т.п. patterns).
+  test('auto issue пишет OUT через StockService (без FIFO/LIFO и без MaterialStockLot)', () => {
+    // Прямых Prisma-вызовов к складским таблицам в сервисе нет —
+    // всё идёт через `StockService.recordMaterialIssueInTx`.
     expect(svc).not.toMatch(/\b(tx|prisma|this\.prisma)\.stockBalance\./);
     expect(svc).not.toMatch(/\b(tx|prisma|this\.prisma)\.stockMovement\./);
     expect(svc).not.toMatch(/\b(tx|prisma|this\.prisma)\.materialStockLot\./);
+    expect(svc).toMatch(/this\.stock\.recordMaterialIssueInTx/);
   });
 
   test('auto issue исключает ORDER_APPLICATION (нанесения — не материал)', () => {

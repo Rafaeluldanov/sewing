@@ -548,9 +548,15 @@ DTO: `packages/shared/src/purchase-receipts.ts`.
   при cancel: cancel пишет `REVERSAL` только при наличии исходного
   `IN`. Идемпотентность гарантирует UNIQUE
   `StockMovement.sourceKey`.
-- `MaterialIssue` (включая `AUTO_CUT_ISSUE` при включённом
-  `CompanySettings.autoIssueMaterialsOnCutRelease`) **не** уменьшает
-  `StockBalance` — расход подключим следующей итерацией.
+- `MaterialIssue.post` и `AUTO_CUT_ISSUE` **симметричны** приёмке: в
+  той же транзакции пишется OUT-`StockMovement`
+  (`sourceKey = MATERIAL_ISSUE_LINE:<lineId>`,
+  `type = MATERIAL_ISSUE`) через
+  `StockService.recordMaterialIssueInTx`, `StockBalance.qty`
+  уменьшается. Недостаток остатка не блокирует проведение —
+  допускается отрицательный `StockBalance.qty`. Reversal/сторно для
+  `MaterialIssue` на этой итерации **не реализован** (POSTED
+  отменить нельзя).
 - Публичных REST-роутов под складские остатки в этой итерации нет
   (`StockBalance`/`StockMovement` — внутренние таблицы).
 
@@ -578,9 +584,9 @@ DTO: `packages/shared/src/purchase-receipts.ts`.
 | ----- | ------------------------------------------------- | ------------------ | -------- |
 | GET   | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | List `ListMaterialIssuesQuery` (фильтры `orderId`/`passportId`/`status`). Сортировка `createdAt desc`. |
 | GET   | `/api/material-issues/:id`                        | ADMIN, SHOP_MANAGER | Карточка документа (с `lines`, `order`, `passport`, `workshopNeed` и `cell` по строкам). |
-| POST  | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | 201 Created. Body `CreateMaterialIssueDto`. Создаёт документ со `status = DRAFT`. `totalCost` считается на сервере = Σ `issuedQty × unitCost`. Если `workshopNeedId` указан, `description`/`unit`/`materialRole` берутся из `WorkshopNeed`. |
-| POST  | `/api/material-issues/:id/post`                   | ADMIN, SHOP_MANAGER | `DRAFT → POSTED`. Пересчитывает `totalCost` по строкам. НЕ создаёт `StockMovement`, НЕ трогает остатки. |
-| POST  | `/api/material-issues/:id/cancel`                 | ADMIN, SHOP_MANAGER | Body `CancelMaterialIssueDto` (`{ reason? }`). `DRAFT → CANCELLED`. POSTED отменить нельзя — 409 `MATERIAL_ISSUE_POSTED_CANNOT_CANCEL`. |
+| POST  | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | 201 Created. Body `CreateMaterialIssueDto`. Создаёт документ со `status = DRAFT`. `totalCost` считается на сервере = Σ `issuedQty × unitCost`. Если `workshopNeedId` указан, `description`/`unit`/`materialRole` берутся из `WorkshopNeed`. НЕ создаёт `StockMovement` — склад пишется только при проведении (`/post`). |
+| POST  | `/api/material-issues/:id/post`                   | ADMIN, SHOP_MANAGER | `DRAFT → POSTED`. Пересчитывает `totalCost` по строкам. Side effects: для каждой `MaterialIssueLine` с `workshopNeedId`, `unit` и `issuedQty > 0` в той же транзакции пишется исходящий `StockMovement` (`OUT`, `type = MATERIAL_ISSUE`, `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`) через `StockService.recordMaterialIssueInTx` и `StockBalance.qty` уменьшается. Недостаток остатка **не блокирует** проведение — допускается минус (см. MVP-границы ниже). `MaterialIssue.totalCost` НЕ пересчитывается по складской стоимости. |
+| POST  | `/api/material-issues/:id/cancel`                 | ADMIN, SHOP_MANAGER | Body `CancelMaterialIssueDto` (`{ reason? }`). `DRAFT → CANCELLED`. POSTED отменить нельзя — 409 `MATERIAL_ISSUE_POSTED_CANNOT_CANCEL`. Cancel DRAFT не пишет `StockMovement`. Reversal POSTED-расхода в этой итерации не реализован. |
 | GET   | `/api/orders/:orderId/material-issues`            | ADMIN, SHOP_MANAGER | Список документов расхода по заказу покупателя (с `lines`). |
 
 DTO: `apps/api/src/modules/material-issues/dto/*.ts`. Audit-события
@@ -604,18 +610,31 @@ DTO: `apps/api/src/modules/material-issues/dto/*.ts`. Audit-события
   для USD и для отсутствующей цены;
 - пустые наборы / `totalOrderQty <= 0` / уже существующий
   неотменённый `MaterialIssue` по `passportId` → skip без ошибки
-  (выдача кроя продолжается).
+  (выдача кроя продолжается);
+- **side effect на склад**: сразу после создания авто-документа
+  `MaterialIssuesService` вызывает
+  `StockService.recordMaterialIssueInTx` в той же транзакции — для
+  каждой строки пишется OUT-`StockMovement` (`type = MATERIAL_ISSUE`,
+  `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`,
+  `comment = "Автоматическое списание при выдаче кроя"`) и
+  `StockBalance.qty` уменьшается. `PassportsService` склад напрямую
+  не трогает; выдача кроя не блокируется недостатком остатка
+  (допустим минусовой `StockBalance.qty`).
 
 Сознательная граница MVP:
 
-- НЕ ведёт `StockBalance` / `MaterialStockLot` / `StockMovement`;
-- НЕ проверяет складские остатки;
-- НЕ делает FIFO/LIFO;
-- POSTED-документ нельзя отменить в MVP (нет сторнирующего движения);
-- НЕ создаёт master-модель `Material` — описание/единица берутся
-  из `WorkshopNeed` или вводятся текстом;
-- автосписание не конвертирует валюты — USD/без курса списывается с
-  `unitCost = 0`.
+- OUT-движение использует текущий `StockBalance.unitCost`, а не
+  `MaterialIssueLine.unitCost` — документная и складская стоимость
+  живут независимо. `MaterialIssue.totalCost` не пересчитывается
+  по складу.
+- НЕТ FIFO/LIFO и `MaterialStockLot`;
+- НЕТ проверки достаточности остатков (POSTED проходит при минусе);
+- POSTED-документ нельзя отменить в MVP (reversal/сторно склада
+  для `MaterialIssue` — отдельная будущая итерация);
+- НЕТ master-модели `Material` — описание/единица берутся из
+  `WorkshopNeed` или вводятся текстом;
+- конвертации валют нет — USD/без курса у документа списывается с
+  `MaterialIssueLine.unitCost = 0`.
 
 ---
 

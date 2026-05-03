@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { StockService } from '../stock/stock.service.js';
 import {
   MaterialIssueLineDescriptionRequiredException,
   MaterialIssueLineUnitRequiredException,
@@ -80,11 +81,18 @@ export function buildAutoCutIssueSourceKey(passportId: string): string {
  *   - провести / отменить документ в DRAFT.
  *
  * Сознательная граница MVP (см. ТЗ):
- *   - НЕТ `StockBalance` / `MaterialStockLot` / `StockMovement`;
- *   - НЕТ FIFO/LIFO;
- *   - НЕТ автосписания при `PassportsService.issueToEmployee`;
+ *   - проведение документа пишет OUT-движение в foundation-склад
+ *     (`StockService.recordMaterialIssueInTx`), но БЕЗ FIFO/LIFO,
+ *     БЕЗ `MaterialStockLot` и БЕЗ проверки достаточности остатка —
+ *     минус на `StockBalance.qty` допустим;
+ *   - `MaterialIssue.totalCost` (финансовая оценка) и
+ *     `StockMovement.totalCost` (складская оценка) живут
+ *     независимо: OUT-движение использует текущий
+ *     `StockBalance.unitCost`, документ остаётся считаться по
+ *     `MaterialIssueLine.unitCost` (не пересчитывается после stock OUT);
  *   - НЕТ master-модели `Material`;
- *   - POSTED-документ нельзя отменить.
+ *   - POSTED-документ нельзя отменить (сторнирующий reversal для
+ *     MaterialIssue — отдельная будущая итерация).
  *
  * Аудит — три события под `entityType = MATERIAL_ISSUE`:
  *   `MATERIAL_ISSUE_CREATED` / `MATERIAL_ISSUE_POSTED` /
@@ -98,6 +106,7 @@ export class MaterialIssuesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly stock: StockService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -340,6 +349,14 @@ export class MaterialIssuesService {
         },
         include: MATERIAL_ISSUE_DETAIL_INCLUDE,
       });
+
+      // Foundation складского учёта: исходящие движения по строкам
+      // расхода. Идём в той же транзакции, чтобы либо «проведение
+      // документа + OUT-движения», либо «ничего». Метод сам soft-
+      // skip-ает строки без `workshopNeedId` / `unit` / `issuedQty <= 0`
+      // и идемпотентен по `StockMovement.sourceKey`. Недостаток
+      // остатка не блокируется — минус допустим (см. MVP-границы).
+      await this.stock.recordMaterialIssueInTx(tx, next.id, employeeId ?? null);
 
       await this.audit.log(
         {
@@ -845,6 +862,17 @@ export class MaterialIssuesService {
       },
       tx,
     );
+
+    // Foundation складского учёта: исходящие движения по строкам
+    // авто-документа. В той же транзакции, что и `issueToEmployee` —
+    // либо «выдача кроя + авто-документ + OUT-движения», либо
+    // «ничего». Авто-строки обычно без `cellId` (см. preparedLines
+    // выше), поэтому `StockService` сам выбирает balance: самый
+    // большой положительный по `(workshopNeedId, unit)` или
+    // no-location, если положительного нет (см.
+    // `StockService.recordMaterialIssueInTx`). Недостаток остатка не
+    // блокирует `issueToEmployee` — минус допустим.
+    await this.stock.recordMaterialIssueInTx(tx, issue.id, employeeId);
 
     this.logger.log(
       `event=material_issue.auto.created materialIssueId=${issue.id} passportId=${passport.id} orderId=${passport.orderId} ` +

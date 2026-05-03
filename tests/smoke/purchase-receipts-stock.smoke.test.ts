@@ -72,7 +72,7 @@ test('PurchaseReceiptsModule импортирует StockModule', () => {
   expect(src).toMatch(/StockModule/);
 });
 
-test('MaterialIssuesService НЕ импортирует StockService на этой итерации', () => {
+test('MaterialIssuesService подключён к StockService следующей итерацией (MaterialIssue → StockMovement OUT)', () => {
   const src = readFileSync(
     join(
       repoRoot,
@@ -80,7 +80,12 @@ test('MaterialIssuesService НЕ импортирует StockService на это
     ),
     'utf8',
   );
-  expect(src).not.toMatch(/\bStockService\b/);
+  // Эта итерация (подключение расхода к складу) должна сохранить
+  // приёмочный IN/REVERSAL — здесь проверяем лишь, что сервис
+  // ссылается на `StockService`, а не выпилился случайно. Полные
+  // сценарии OUT — `tests/smoke/material-issues-stock.smoke.test.ts`.
+  expect(src).toMatch(/\bStockService\b/);
+  expect(src).toMatch(/recordMaterialIssueInTx/);
 });
 
 test('PassportsService НЕ создаёт StockMovement напрямую', () => {

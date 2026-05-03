@@ -26,9 +26,11 @@
  *  12. Повторный cancel / retry не создаёт дубль REVERSAL.
  *  13. Cancel старой PurchaseReceipt без исходного IN не создаёт
  *      reversal и не падает.
- *  14. MaterialIssuesService.post не вызывает StockService на этой
- *      итерации (StockBalance.qty не уменьшается).
- *  15. AUTO_CUT_ISSUE не создаёт StockMovement на этой итерации.
+ *  14. MaterialIssuesService.post подключён к StockService и
+ *      уменьшает StockBalance.qty на issuedQty (проверка симметрии
+ *      IN/OUT — прямые сценарии расхода покрываются
+ *      `tests/integration/material-issues-stock.test.ts`).
+ *  15. AUTO_CUT_ISSUE подключён к StockService (симметрия IN/OUT).
  *
  * Тесты используют `TEST_DATABASE_URL` — без неё `describeWithDb`
  * превращается в `describe.skip`.
@@ -568,11 +570,12 @@ describeWithDb('integration — purchase receipt → stock movements', () => {
   });
 
   // ===========================================================================
-  // 14. MaterialIssuesService.post не вызывает StockService на этой
-  //     итерации.
+  // 14. MaterialIssuesService.post симметрично уменьшает StockBalance.qty
+  //     (подключение MaterialIssue → StockMovement OUT). Полный набор
+  //     сценариев расхода живёт в `material-issues-stock.test.ts`.
   // ===========================================================================
 
-  test('MaterialIssue.POST не уменьшает StockBalance.qty (не подключён в этой итерации)', async () => {
+  test('MaterialIssue.post уменьшает StockBalance.qty на issuedQty (IN/OUT симметрия)', async () => {
     const fx = await prepareConfirmedPo();
     const { receiptId } = await createPostedReceipt({
       purchaseOrderId: fx.purchaseOrderId,
@@ -584,8 +587,6 @@ describeWithDb('integration — purchase receipt → stock movements', () => {
     });
     expect(new Prisma.Decimal(balanceAfterReceipt.qty).toString()).toBe('10');
 
-    // Создаём ручной DRAFT и проводим — StockBalance не должен
-    // уменьшиться.
     const created = await request(t.app.getHttpServer())
       .post('/api/material-issues')
       .set('Cookie', cookies.manager)
@@ -608,27 +609,25 @@ describeWithDb('integration — purchase receipt → stock movements', () => {
     const balanceAfterPost = await t.prisma.stockBalance.findFirstOrThrow({
       where: { workshopNeedId: fx.workshopNeedId },
     });
-    expect(new Prisma.Decimal(balanceAfterPost.qty).toString()).toBe('10');
-    // Также убеждаемся, что MATERIAL_ISSUE-движение не записалось.
+    expect(new Prisma.Decimal(balanceAfterPost.qty).toString()).toBe('6');
     const issueMovements = await t.prisma.stockMovement.count({
       where: {
         workshopNeedId: fx.workshopNeedId,
         type: 'MATERIAL_ISSUE',
+        direction: 'OUT',
       },
     });
-    expect(issueMovements).toBe(0);
-    // Reference ни одного receiptId touch — оставляем чтобы сослаться
-    // на receipt и подавить unused warning.
+    expect(issueMovements).toBe(1);
     expect(receiptId.length).toBeGreaterThan(0);
   });
 
   // ===========================================================================
-  // 15. AUTO_CUT_ISSUE не создаёт StockMovement на этой итерации.
-  //     Включаем флаг автосписания и проверяем, что после issueToEmployee
-  //     движений типа MATERIAL_ISSUE нет.
+  // 15. AUTO_CUT_ISSUE симметрично уменьшает StockBalance.qty через
+  //     MaterialIssuesService. Полный набор сценариев авто-списания
+  //     живёт в `material-issues-stock.test.ts`.
   // ===========================================================================
 
-  test('AUTO_CUT_ISSUE не создаёт StockMovement на этой итерации', async () => {
+  test('AUTO_CUT_ISSUE создаёт StockMovement OUT через MaterialIssuesService', async () => {
     const fx = await prepareConfirmedPo();
     await createPostedReceipt({
       purchaseOrderId: fx.purchaseOrderId,
@@ -636,7 +635,6 @@ describeWithDb('integration — purchase receipt → stock movements', () => {
       receivedQty: '25',
     });
 
-    // Включаем флаг автосписания.
     await t.prisma.companySettings.upsert({
       where: { id: 'default' },
       create: {
@@ -686,20 +684,31 @@ describeWithDb('integration — purchase receipt → stock movements', () => {
       .send({})
       .expect(201);
 
-    // AUTO_CUT_ISSUE документ создан…
     const auto = await t.prisma.materialIssue.findFirstOrThrow({
       where: { passportId: passport.body.id, source: 'AUTO_CUT_ISSUE' },
+      include: { lines: true },
     });
     expect(auto.status).toBe('POSTED');
+    expect(auto.lines.length).toBeGreaterThan(0);
+    const issuedTotal = auto.lines.reduce(
+      (acc, l) => acc.add(new Prisma.Decimal(l.issuedQty)),
+      new Prisma.Decimal(0),
+    );
 
-    // …но StockBalance.qty не изменился, и MATERIAL_ISSUE-движений нет.
     const balance = await t.prisma.stockBalance.findFirstOrThrow({
       where: { workshopNeedId: fx.workshopNeedId },
     });
-    expect(new Prisma.Decimal(balance.qty).toString()).toBe('25');
-    const issueMovements = await t.prisma.stockMovement.count({
+    expect(new Prisma.Decimal(balance.qty).toString()).toBe(
+      new Prisma.Decimal(25).sub(issuedTotal).toString(),
+    );
+    const issueMovements = await t.prisma.stockMovement.findMany({
       where: { workshopNeedId: fx.workshopNeedId, type: 'MATERIAL_ISSUE' },
     });
-    expect(issueMovements).toBe(0);
+    expect(issueMovements.length).toBe(auto.lines.length);
+    for (const m of issueMovements) {
+      expect(m.direction).toBe('OUT');
+      expect(m.materialIssueId).toBe(auto.id);
+      expect(m.comment).toBe('Автоматическое списание при выдаче кроя');
+    }
   });
 });

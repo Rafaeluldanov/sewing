@@ -57,7 +57,7 @@ test('PurchaseReceiptsModule импортирует StockModule', () => {
   expect(src).toMatch(/StockModule/);
 });
 
-test('MaterialIssuesService не импортирует StockService', () => {
+test('MaterialIssuesService подключён к StockService (расход пишет StockMovement OUT)', () => {
   const src = readFileSync(
     join(
       repoRoot,
@@ -65,7 +65,11 @@ test('MaterialIssuesService не импортирует StockService', () => {
     ),
     'utf8',
   );
-  expect(src).not.toMatch(/\bStockService\b/);
+  // foundation подключён: MaterialIssue.post и AUTO_CUT_ISSUE пишут
+  // исходящее движение (см.
+  // `apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueInTx`).
+  expect(src).toMatch(/\bStockService\b/);
+  expect(src).toMatch(/recordMaterialIssueInTx/);
 });
 
 test('Нет новых web-роутов / страниц stock (foundation без UI)', () => {

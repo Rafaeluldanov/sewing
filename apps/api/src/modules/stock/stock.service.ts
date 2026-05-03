@@ -45,7 +45,9 @@ export type ApplyMovementInTxParams = {
    * Формат — строковые префиксы (см. helpers ниже):
    *   - `PURCHASE_RECEIPT_LINE:<purchaseReceiptLineId>` — приход;
    *   - `PURCHASE_RECEIPT_LINE_CANCEL:<purchaseReceiptLineId>` —
-   *     обратное движение при отмене приёмки.
+   *     обратное движение при отмене приёмки;
+   *   - `MATERIAL_ISSUE_LINE:<materialIssueLineId>` — расход при
+   *     проведении `MaterialIssue` (в т.ч. `AUTO_CUT_ISSUE`).
    */
   sourceKey?: string | null;
   purchaseReceiptId?: string | null;
@@ -76,6 +78,7 @@ export function buildStockBalanceKey(
 export const STOCK_MOVEMENT_SOURCE_KEY_PREFIX = {
   PURCHASE_RECEIPT_LINE: 'PURCHASE_RECEIPT_LINE',
   PURCHASE_RECEIPT_LINE_CANCEL: 'PURCHASE_RECEIPT_LINE_CANCEL',
+  MATERIAL_ISSUE_LINE: 'MATERIAL_ISSUE_LINE',
 } as const;
 
 /**
@@ -96,6 +99,18 @@ export function buildPurchaseReceiptLineCancelStockSourceKey(
   purchaseReceiptLineId: string,
 ): string {
   return `${STOCK_MOVEMENT_SOURCE_KEY_PREFIX.PURCHASE_RECEIPT_LINE_CANCEL}:${purchaseReceiptLineId}`;
+}
+
+/**
+ * Ключ OUT-движения по расходу: один `MaterialIssueLine` → одно
+ * движение. Реверсы / возвраты у `MaterialIssue` в MVP не
+ * реализованы, поэтому для них отдельного `_CANCEL`-префикса нет
+ * (см. `StockService.recordMaterialIssueInTx`).
+ */
+export function buildMaterialIssueLineStockSourceKey(
+  materialIssueLineId: string,
+): string {
+  return `${STOCK_MOVEMENT_SOURCE_KEY_PREFIX.MATERIAL_ISSUE_LINE}:${materialIssueLineId}`;
 }
 
 /**
@@ -593,6 +608,213 @@ export class StockService {
     });
     return movement;
   }
+
+  // ===========================================================================
+  // MATERIAL ISSUE → OUT movements
+  // ===========================================================================
+
+  /**
+   * Записывает исходящие движения по `POSTED MaterialIssue`.
+   *
+   * Контракт (см. ТЗ «MaterialIssue → StockMovement OUT»):
+   *   - работает строго внутри переданного `tx`, новую транзакцию не
+   *     открывает;
+   *   - срабатывает только если `MaterialIssue.status === POSTED`
+   *     (для `DRAFT` / `CANCELLED` — no-op);
+   *   - для каждой подходящей `MaterialIssueLine` создаёт
+   *     `StockMovement` с `direction = OUT`, `type = MATERIAL_ISSUE`
+   *     и `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`;
+   *   - `applyMovementInTx` параллельно уменьшает `StockBalance.qty`
+   *     и пересчитывает `totalCost` по текущему среднему
+   *     `balance.unitCost` (MVP без FIFO/LIFO);
+   *   - идемпотентен: если движение по `sourceKey` уже существует,
+   *     строка пропускается без побочных эффектов. Защита от гонки —
+   *     UNIQUE на `StockMovement.sourceKey`.
+   *
+   * Soft-skip строки (без бросания ошибки, чтобы проведение документа
+   * не падало):
+   *   - нет `workshopNeedId` (foundation использует `WorkshopNeed`
+   *     как material identity — без неё склад не знает, что
+   *     списывать);
+   *   - `issuedQty <= 0`;
+   *   - пустой `unit`.
+   *
+   * Выбор `warehouseId` / `cellId` OUT-движения (MVP-аллокация — ТЗ §6):
+   *   1. Если `line.cellId` задан — списываем из этой ячейки
+   *      (`warehouseId` берём через `Cell.warehouseId`).
+   *   2. Иначе ищем существующий `StockBalance` по
+   *      `(workshopNeedId, unit)` с `qty > 0` и выбираем один с
+   *      максимальным `qty` — списываем оттуда.
+   *   3. Если положительного баланса нет — пишем OUT в
+   *      no-location balance (`warehouseId = null`, `cellId = null`),
+   *      создавая его при необходимости. Отрицательный физический
+   *      остаток на foundation **не блокируется** (см. JSDoc класса).
+   *
+   * Проверка достаточности остатка в этой итерации сознательно НЕ
+   * реализована: `MaterialIssue.post` не падает при нехватке
+   * материала, склад просто уходит в минус.
+   *
+   * Стоимость (см. `applyMovementInTx`): OUT использует текущий
+   * `balance.unitCost`, **не** `MaterialIssueLine.unitCost` — эти две
+   * стоимости живут независимо (`MaterialIssue.totalCost` — финансовый
+   * snapshot, `StockMovement.totalCost` — складская оценка).
+   *
+   * `comment` движения зависит от `MaterialIssue.source`:
+   *   - `AUTO_CUT_ISSUE` → `'Автоматическое списание при выдаче кроя'`;
+   *   - иначе (`MANUAL`, …) → `'Списание по документу расхода материалов'`.
+   *
+   * Возвращает массив созданных/найденных движений (чисто
+   * информативно — основной side effect лежит в БД).
+   */
+  async recordMaterialIssueInTx(
+    tx: Prisma.TransactionClient,
+    materialIssueId: string,
+    employeeId?: string | null,
+  ): Promise<StockMovement[]> {
+    const issue = await tx.materialIssue.findUnique({
+      where: { id: materialIssueId },
+      include: {
+        lines: {
+          include: {
+            workshopNeed: {
+              select: {
+                id: true,
+                description: true,
+                sourceName: true,
+                materialRole: true,
+                unit: true,
+              },
+            },
+            cell: { select: { id: true, warehouseId: true } },
+          },
+        },
+      },
+    });
+    if (!issue) return [];
+    if (issue.status !== 'POSTED') return [];
+
+    const comment = buildMaterialIssueStockComment(issue.source);
+
+    const movements: StockMovement[] = [];
+    for (const line of issue.lines) {
+      const movement = await this.applyMaterialIssueLineInTx(
+        tx,
+        issue.id,
+        line,
+        comment,
+        employeeId ?? null,
+      );
+      if (movement) movements.push(movement);
+    }
+    return movements;
+  }
+
+  private async applyMaterialIssueLineInTx(
+    tx: Prisma.TransactionClient,
+    materialIssueId: string,
+    line: Prisma.MaterialIssueLineGetPayload<{
+      include: {
+        workshopNeed: {
+          select: {
+            id: true;
+            description: true;
+            sourceName: true;
+            materialRole: true;
+            unit: true;
+          };
+        };
+        cell: { select: { id: true; warehouseId: true } };
+      };
+    }>,
+    comment: string,
+    employeeId: string | null,
+  ): Promise<StockMovement | null> {
+    if (!line.workshopNeedId) {
+      this.logger.log(
+        `event=stock.material_issue.skip reason=no_workshop_need ` +
+          `materialIssueId=${materialIssueId} materialIssueLineId=${line.id}`,
+      );
+      return null;
+    }
+    if (!line.unit || line.unit.length === 0) {
+      this.logger.log(
+        `event=stock.material_issue.skip reason=no_unit ` +
+          `materialIssueId=${materialIssueId} materialIssueLineId=${line.id}`,
+      );
+      return null;
+    }
+    const qty = line.issuedQty;
+    if (!qty || qty.lessThanOrEqualTo(0)) {
+      this.logger.log(
+        `event=stock.material_issue.skip reason=non_positive_qty ` +
+          `materialIssueId=${materialIssueId} materialIssueLineId=${line.id}`,
+      );
+      return null;
+    }
+
+    const sourceKey = buildMaterialIssueLineStockSourceKey(line.id);
+    const existing = await this.findMovementBySourceKeyInTx(tx, sourceKey);
+    if (existing) return existing;
+
+    const description =
+      pickFirstNonEmpty([
+        line.workshopNeed?.description,
+        line.workshopNeed?.sourceName,
+        line.description,
+      ]) ?? 'Материал';
+    const materialRole =
+      line.materialRole ?? line.workshopNeed?.materialRole ?? null;
+    const unit = line.unit;
+
+    // MVP-аллокация OUT: explicit cell → самый большой положительный
+    // баланс по (workshopNeedId, unit) → no-location negative balance.
+    // Без FIFO/LIFO, без дробления одной строки между остатками (см.
+    // ТЗ §6).
+    let warehouseId: string | null = null;
+    let cellId: string | null = null;
+    if (line.cellId && line.cell) {
+      cellId = line.cellId;
+      warehouseId = line.cell.warehouseId ?? null;
+    } else {
+      const candidate = await tx.stockBalance.findFirst({
+        where: {
+          workshopNeedId: line.workshopNeedId,
+          unit,
+          qty: { gt: 0 },
+        },
+        orderBy: [{ qty: 'desc' }, { updatedAt: 'asc' }],
+        select: { id: true, warehouseId: true, cellId: true },
+      });
+      if (candidate) {
+        warehouseId = candidate.warehouseId ?? null;
+        cellId = candidate.cellId ?? null;
+      }
+    }
+
+    const { movement } = await this.applyMovementInTx(tx, {
+      workshopNeedId: line.workshopNeedId,
+      warehouseId,
+      cellId,
+      description,
+      materialRole,
+      type: STOCK_MOVEMENT_TYPE.MATERIAL_ISSUE,
+      direction: STOCK_MOVEMENT_DIRECTION.OUT,
+      qty,
+      unit,
+      // unitCost для OUT не используется в проводке (берётся текущий
+      // средний `balance.unitCost`), но `ApplyMovementInTxParams`
+      // требует поле — передаём 0.
+      unitCost: new Prisma.Decimal(0),
+      sourceType: STOCK_MOVEMENT_SOURCE_KEY_PREFIX.MATERIAL_ISSUE_LINE,
+      sourceId: line.id,
+      sourceKey,
+      materialIssueId,
+      materialIssueLineId: line.id,
+      comment,
+      createdById: employeeId,
+    });
+    return movement;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -619,6 +841,18 @@ function pickFirstNonEmpty(
  *   - другая валюта (`USD`, `EUR`, ...) → `0` (конвертацию не делаем);
  *   - `priceSnapshot` отсутствует или отрицателен → `0`.
  */
+/**
+ * `StockMovement.comment` для OUT-движения по `MaterialIssue`.
+ * Текст — человекочитаемый, попадает в журнал движений и бизнес-отчёты
+ * (см. `docs/api.md §«Material issues»`).
+ */
+function buildMaterialIssueStockComment(source: string): string {
+  if (source === 'AUTO_CUT_ISSUE') {
+    return 'Автоматическое списание при выдаче кроя';
+  }
+  return 'Списание по документу расхода материалов';
+}
+
 function resolvePurchaseReceiptLineUnitCost(line: {
   priceSnapshot: Prisma.Decimal | null;
   currencySnapshot: string | null;
