@@ -23,6 +23,11 @@ services:
       DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/myapp
       APP_URL: http://localhost
       CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
+      # Авто-синхронизация схемы Prisma при старте контейнера.
+      # Чтобы выключить — поставьте PRISMA_AUTO_SYNC=0 в .env.prod.
+      PRISMA_AUTO_SYNC: ${PRISMA_AUTO_SYNC:-1}
+      PRISMA_AUTO_SYNC_RETRIES: ${PRISMA_AUTO_SYNC_RETRIES:-15}
+      PRISMA_AUTO_SYNC_ACCEPT_DATA_LOSS: ${PRISMA_AUTO_SYNC_ACCEPT_DATA_LOSS:-0}
     depends_on:
       - db
     restart: always

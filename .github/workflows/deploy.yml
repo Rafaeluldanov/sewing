@@ -1,0 +1,150 @@
+# -----------------------------------------------------------------------------
+# Deploy pipeline: develop → dev, main → prod.
+#
+# Архитектура: CI на runner-е валидирует, что код собирается (build api + web).
+# Только после этого SSH-job заходит на сервер и зовёт ОДИН из двух
+# заранее существующих скриптов:
+#
+#   ветка develop  → /root/sewing/scripts/deploy-dev.sh
+#   ветка main     → /root/sewing/scripts/deploy-prod.sh
+#
+# Реальный деплой (git pull, docker compose build/up, prisma migrate,
+# healthcheck) живёт в этих скриптах — workflow не дублирует их логику.
+#
+# Секреты (Settings → Secrets and variables → Actions):
+#   SERVER_HOST     — IP/DNS сервера деплоя (один на dev и prod, т.к. оба
+#                     стека крутятся на одной машине).
+#   SERVER_USER     — пользователь для SSH (например, deploy / root).
+#   SERVER_SSH_KEY  — приватный SSH-ключ (PEM/OpenSSH), без passphrase.
+#
+# Никаких реальных IP, токенов или паролей в этом файле нет.
+# -----------------------------------------------------------------------------
+
+name: Deploy
+
+on:
+  push:
+    branches:
+      - develop
+      - main
+  workflow_dispatch:
+    inputs:
+      target:
+        description: 'Куда деплоить (auto = по текущей ветке)'
+        required: false
+        default: auto
+        type: choice
+        options:
+          - auto
+          - dev
+          - prod
+
+# Не пускаем два параллельных деплоя одной и той же ветки.
+# `cancel-in-progress: false` — хвостовой push НЕ отменяет уже идущий
+# деплой. Это безопаснее для prod: лучше отдеплоить старее, чем оборвать
+# миграцию посередине.
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # CI — проверка, что код собирается. Без CI до сервера не идём.
+  # ---------------------------------------------------------------------------
+  ci:
+    name: CI checks
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies (npm ci)
+        # `@prisma/client` postinstall сам зовёт `prisma generate`, поэтому
+        # отдельный шаг prisma:generate не обязателен. Если вдруг
+        # postinstall выключат — раскомментируйте шаг ниже.
+        run: npm ci
+
+      # - name: Prisma generate
+      #   run: npm run prisma:generate
+
+      - name: Build API (@sewing/api)
+        run: npm run build --workspace=@sewing/api
+
+      - name: Build Web (@sewing/web)
+        # NEXT_PUBLIC_* инлайнится в client bundle во время `next build`.
+        # На CI runner мы только проверяем сборку — реальное значение
+        # NEXT_PUBLIC_API_URL подставляется в `docker build` на сервере
+        # из .env.dev / .env.prod.
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:3001/api
+        run: npm run build --workspace=@sewing/web
+
+  # ---------------------------------------------------------------------------
+  # Deploy DEV — после merge в `develop`.
+  # Сервер сам пулит ветку и поднимает dev-стек (см. scripts/deploy-dev.sh).
+  # ---------------------------------------------------------------------------
+  deploy-dev:
+    name: Deploy to DEV (develop)
+    needs: ci
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/develop') ||
+      (github.event_name == 'workflow_dispatch' &&
+        (inputs.target == 'dev' ||
+         (inputs.target == 'auto' && github.ref == 'refs/heads/develop')))
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - name: SSH → run deploy-dev.sh
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          # SSH порт можно переопределить через SERVER_SSH_PORT (опционально).
+          port: ${{ secrets.SERVER_SSH_PORT || 22 }}
+          # `command_timeout` подобран с запасом на docker build, миграции
+          # и healthcheck-ретраи (~30s × 2s = 60s) внутри скрипта.
+          command_timeout: 30m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /root/sewing
+            bash scripts/deploy-dev.sh
+
+  # ---------------------------------------------------------------------------
+  # Deploy PROD — после merge в `main`.
+  # `environment: production` включает GitHub Environments: можно настроить
+  # required reviewers / wait timer / branch protection. Если environment
+  # ещё не создан в Settings → Environments — workflow пройдёт без блока,
+  # но и approval gating работать не будет.
+  # ---------------------------------------------------------------------------
+  deploy-prod:
+    name: Deploy to PROD (main)
+    needs: ci
+    if: |
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_dispatch' &&
+        (inputs.target == 'prod' ||
+         (inputs.target == 'auto' && github.ref == 'refs/heads/main')))
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: SSH → run deploy-prod.sh
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.SERVER_HOST }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SERVER_SSH_KEY }}
+          port: ${{ secrets.SERVER_SSH_PORT || 22 }}
+          command_timeout: 30m
+          script_stop: true
+          script: |
+            set -euo pipefail
+            cd /root/sewing
+            bash scripts/deploy-prod.sh

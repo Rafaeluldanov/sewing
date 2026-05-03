@@ -27,4 +27,5 @@ COPY package*.json ./
 
 EXPOSE 3001
 
+ENTRYPOINT ["sh", "/app/apps/api/scripts/docker-entrypoint.sh"]
 CMD ["node", "apps/api/dist/main.js"]
