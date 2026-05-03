@@ -421,8 +421,14 @@ describe('globals.css — стили для unified materials table', () => {
   });
 
   test('таблица имеет min-width для горизонтального скролла', () => {
+    // После добавления колонок «План / факт» и «Стоимость план /
+    // факт» (frontend-итерация «план/факт» поверх MaterialIssue)
+    // min-width выросло — иначе ячейки сжимаются и плохо
+    // читаются. Конкретное значение менять допустимо без backend
+    // изменений, но min-width должен оставаться выше 1180px,
+    // чтобы 14+ колонок укладывались.
     expect(css).toMatch(
-      /\.order-materials-table\s*\{[\s\S]*?min-width:\s*1180px/,
+      /\.order-materials-table\s*\{[\s\S]*?min-width:\s*1380px/,
     );
   });
 

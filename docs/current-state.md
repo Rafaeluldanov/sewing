@@ -17,39 +17,208 @@ display board и payroll-админка.
 Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
 Подробности окружений — `docs/index.md` § «Домены и URL-ы».
 
-Backend-итерация «Фактическая стоимость материалов в production cost
-по периоду» (`apps/api/src/modules/costs/costs.service.ts`,
-`GET /api/costs/production`, контракт `packages/shared/src/costs.ts`):
-`CostsService.getProductionCost` теперь добавляет к каждому дню и к
-итогу периода отдельную сумму `materialCost` и включает её в
-`totalCost = pieceworkCost + salaryCost + materialCost`.
+Модули с фронтовым UI в MVP-итерации «Фактический расход»:
 
-- `materialCost[day]` = Σ `MaterialIssue.totalCost` по
-  `POSTED`-документам, у которых `passportId` входит в множество
-  паспортов, упакованных в этот день (`PACKED`-event внутри окна
-  периода);
-- `DRAFT` и `CANCELLED` документы **не учитываются**;
-- `MaterialIssue` без `passportId` (order-level) сознательно
-  **не включаются** в production cost по периоду — без привязки к
-  паспорту нельзя корректно разнести расход по дню выпуска. Они
-  по-прежнему видны в order-level финансовой сводке заказа;
-- сервис использует `MaterialIssue.totalCost` (server-side агрегат,
-  пересчитываемый при `POST /api/material-issues/:id/post`) — строки
-  `MaterialIssueLine` без `workshopNeedId` не мешают, потому что
-  сервис их и не читает;
-- frontend-страница `/production-cost` пока **не показывает**
-  отдельную колонку «Материалы»: новое поле появилось в response
-  аддитивно, UI рендерит существующие колонки без изменений.
+- **Фактический расход материалов по заказу**
+  (`apps/api/src/modules/material-issues/*`,
+  `prisma/schema.prisma::MaterialIssue` / `MaterialIssueLine`,
+  `docs/api.md §20a «Material issues»`). Менеджер фиксирует,
+  сколько материала фактически выдано в крой по заказу — ручной
+  документ с заголовком и строками, без автосписания и без
+  складских остатков.
+  В UI реализован frontend-блок «Фактический расход материалов» в
+  карточке заказа (`/admin/orders/[id]?tab=needs`, компонент
+  `apps/web/components/orders/material-issues/material-issues-section.tsx`).
+  Блок размещён во вкладке «Потребности» ПОСЛЕ
+  `OrderMaterialsUnifiedTable`; показывает список документов,
+  сводку (`всего / DRAFT / POSTED / CANCELLED / Σ POSTED`), preview
+  строк и действия `Создать расход` / `Провести` / `Отменить`
+  (RBAC — только ADMIN / SHOP_MANAGER).
+  **Отдельная страница `/admin/material-issues` сознательно НЕ
+  реализована** (UI-решение владельца): нового пункта меню, новой
+  вкладки и роута не добавляется.
 
-`ProductionCostV2Service` на этой итерации **не менялся** —
-управленческий P&L по-прежнему берёт материалы из расчётной основы
-(`OrderCostEstimate` / `WorkshopNeed`), а не из `MaterialIssue`.
+  Frontend-итерация «План / факт по фактическому расходу
+  материалов» (поверх существующих эндпоинтов): в
+  `OrderMaterialsUnifiedTable` (вкладка «Потребности») добавлены
+  две компактные колонки — «План / факт» (количество) и
+  «Стоимость план / факт». В каждой строке `WorkshopNeed` рядом с
+  планом показываем факт по POSTED `MaterialIssueLine` с тем же
+  `workshopNeedId` и дельту между ними:
+  - `plannedQty` = `WorkshopNeed.calculatedQty` (производственная
+    потребность, не закупочная `purchaseQty`);
+  - `plannedCost` = `calculatedQty * quotedPrice` (только для
+    RUB-цены; для USD без курса и для пустой цены — `null`);
+  - `issuedQtyFact` = Σ `MaterialIssueLine.issuedQty` по POSTED
+    с `workshopNeedId === need.id` **только если** `line.unit`
+    совпадает с `need.unit` — конвертация единиц в MVP не
+    делается, при mismatch UI показывает короткое предупреждение
+    «Ед. изм. отличаются»;
+  - `actualCost` = Σ `MaterialIssueLine.totalCost` по POSTED-строкам
+    с тем же `workshopNeedId` (стоимость суммируется независимо
+    от unit, потому что это уже деньги);
+  - DRAFT и CANCELLED документы в факт **не попадают**;
+  - строки `MaterialIssueLine` без `workshopNeedId` сопоставить
+    нельзя — в план/факт-таблицу они не включаются (но видны в
+    блоке «Фактический расход материалов» и в финансовых
+    итогах документа).
 
-Складские остатки (`StockBalance` / `StockMovement` /
-`MaterialStockLot` / FIFO/LIFO), автосписание при выдаче кроя,
-master-модель `Material`, роли `WAREHOUSE_MANAGER` / `PURCHASER` /
-`ACCOUNTANT` на этой итерации **не реализованы и не менялись** —
-они вынесены в следующие итерации.
+  Чтобы избежать второго fetch, `OrderNeedsTab` грузит
+  `MaterialIssue` (list + per-issue details) **один раз** и
+  пробрасывает массив сразу в обе цели:
+  `OrderMaterialsUnifiedTable` (для агрегата плана/факта) и
+  `MaterialIssuesSection` (для таблицы документов и preview
+  строк).
+
+  Frontend-итерация «Фактическая стоимость материалов в финансовой
+  сводке заказа» (поверх существующих эндпоинтов): в существующей
+  вкладке «Сводно по заказу» (`/admin/orders/[id]?tab=costSummary`,
+  `OrderSummaryUnifiedTable` → `TotalsBlock`) рядом с уже
+  существующей строкой «Материалы за тираж» (план) показываются
+  две новые строки — «Материалы за тираж · факт» и «Материалы за
+  тираж · Δ (факт − план)». Для order-level financial summary:
+  - `actualMaterialCost` = Σ `MaterialIssue.totalCost` по всем
+    POSTED-документам этого заказа (источник истины —
+    `MaterialIssue.totalCost`, а не пересчёт строк на frontend);
+  - DRAFT и CANCELLED документы **не учитываются**;
+  - в сводку входят POSTED-документы **без `passportId`** и
+    POSTED-строки **без `workshopNeedId`** — на финансовом уровне
+    важен именно факт денег, выданных в производство по заказу;
+  - `plannedMaterialCost` берётся из существующего расчёта
+    (Σ материалов в RUB по `OrderCostEstimate`-snapshot или
+    fallback по `WorkshopNeed`, как и до этой итерации);
+  - `deltaMaterialCost = actualMaterialCost − plannedMaterialCost`,
+    `null` если плана нет (тогда UI показывает «—»). Тон строки Δ:
+    перерасход — danger, экономия — success, ровно по плану —
+    neutral.
+
+  Загрузка `MaterialIssue` для финансовой сводки идёт через
+  существующий `GET /api/orders/:orderId/material-issues` в
+  server-loader самого `OrderSummaryUnifiedTable` — без нового
+  backend-эндпоинта и без fetch внутри глубоко вложенного
+  client-компонента.
+
+  Backend-итерация «Фактическая стоимость материалов в
+  production cost по периоду» (`apps/api/src/modules/costs/costs.service.ts`,
+  `GET /api/costs/production`, контракт
+  `packages/shared/src/costs.ts`): `CostsService.getProductionCost`
+  теперь добавляет к каждому дню и к итогу отдельную сумму
+  `materialCost` и включает её в `totalCost = pieceworkCost +
+  salaryCost + materialCost`.
+  - `materialCost[day]` = Σ `MaterialIssue.totalCost` по
+    `POSTED`-документам, у которых `passportId` входит в
+    множество паспортов, упакованных в этот день
+    (`PACKED`-event внутри окна периода);
+  - `DRAFT` / `CANCELLED` документы **не учитываются**;
+  - `MaterialIssue` без `passportId` (order-level) сознательно
+    **не включаются** в production cost по периоду — без
+    привязки к паспорту нельзя корректно разнести расход по
+    дню выпуска. Они по-прежнему видны в order-level финансовой
+    сводке заказа (предыдущая итерация);
+  - сервис использует `MaterialIssue.totalCost` (server-side
+    агрегат, пересчитываемый при `POST /:id/post`) — строки
+    `MaterialIssueLine` без `workshopNeedId` не мешают, потому
+    что сервис их и не читает;
+  - frontend-страница `/production-cost` пока **не показывает**
+    отдельную колонку «Материалы»: новое поле появилось в
+    response аддитивно и UI рендерит существующие колонки без
+    изменений (см. `apps/web/app/production-cost/page.tsx`).
+  `ProductionCostV2Service` на этой итерации **не менялся** —
+  управленческий P&L по-прежнему берёт материалы из расчётной
+  основы (`OrderCostEstimate` / `WorkshopNeed`), а не из
+  `MaterialIssue`.
+
+  Эта итерация **не меняет** `OrderViewTabs` /
+  `OrderMaterialsUnifiedTable` / `OrderSummaryUnifiedTable` /
+  `MaterialIssuesSection` и не добавляет новых страниц,
+  вкладок, секций или пунктов меню.
+
+  Backend-итерация «Автосписание материалов при выдаче кроя»
+  (см. `apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
+  `apps/api/src/modules/passports/passports.service.ts::issueToEmployee`,
+  `prisma/schema.prisma::MaterialIssue.source / sourceKey`): при
+  успешной выдаче паспорта сотруднику (`POST /api/passports/:id/issue`)
+  в той же транзакции создаётся автоматический **POSTED**
+  `MaterialIssue` с `source = AUTO_CUT_ISSUE` и `sourceKey =
+  AUTO_CUT_ISSUE:<passportId>`. Документ содержит по одной строке
+  `MaterialIssueLine` на каждую **материальную** строку
+  `WorkshopNeed` заказа (исключаются `status = CANCELLED` и
+  `sourceType = ORDER_APPLICATION` — нанесения это не материал для
+  кроя). Для каждой строки:
+  - `issuedQty = WorkshopNeed.calculatedQty * Passport.qtyCut / totalOrderQty`
+    (Decimal(14,4)), где `totalOrderQty = Σ OrderItem.qtyPlan` —
+    расход распределяется пропорционально доле паспорта в общем
+    количестве изделий заказа, а не списывается целиком на первый
+    паспорт;
+  - `unitCost = WorkshopNeed.quotedPrice` при валюте `RUB`/`null`;
+    для `USD` и отсутствующей цены — `unitCost = 0` (конвертация
+    валют на этой итерации не делается);
+  - `totalCost = issuedQty * unitCost` (Decimal(14,2));
+  - `workshopNeedId` проставлен, `cellId = null`, `comment =
+    «Автоматически при выдаче кроя»`;
+  - `createdById = postedById = employeeId` (сотрудник, получивший крой).
+
+  Идемпотентность (повторный `issueToEmployee` / retry не создаёт
+  дубля):
+  - UNIQUE-индекс `MaterialIssue.sourceKey` ловит дубль на уровне БД;
+  - перед вставкой сервис дополнительно проверяет, нет ли уже
+    неотменённого (`DRAFT`/`POSTED`) `MaterialIssue` по этому
+    `passportId` — если менеджер успел создать ручной документ, авто-
+    списание skip-ается (чтобы не было двойного расхода);
+  - при `CANCELLED` авто-документе повторный авто skip-ается по
+    sourceKey (сознательное ограничение MVP: сторнирование /
+    возвраты в этой итерации не делаем).
+
+  Устойчивость (ТЗ §9 «Ошибки и устойчивость»):
+  - если у заказа нет материальных `WorkshopNeed`, все
+    `calculatedQty` пропорционально дают `0`, `totalOrderQty <= 0`
+    или паспорт уже получил неотменённый `MaterialIssue` —
+    `issueToEmployee` проходит успешно и авто-документ **не
+    создаётся**. В логах пишется `event=material_issue.auto.skip
+    reason=...`;
+  - блокируем `issueToEmployee` только при технических ошибках
+    (Prisma constraint / целостность). Отсутствие цены / отсутствие
+    подходящей WorkshopNeed — это мягкий кейс, не блокирует выдачу
+    кроя.
+
+  Audit: в той же транзакции пишутся `MATERIAL_ISSUE_CREATED` и
+  `MATERIAL_ISSUE_POSTED` с `entityType = MATERIAL_ISSUE`,
+  `entityId = MaterialIssue.id`, payload содержит `source`,
+  `sourceKey`, `status = POSTED`, `totalCost`, snapshot `lines`,
+  `employeeId`, `calculation = { totalOrderQty, passportQtyCut,
+  formula }`.
+
+  Downstream-эффекты через уже существующую логику (никакой
+  повторной работы в этой итерации):
+  - `CostsService` подхватывает авто-документы как POSTED
+    `MaterialIssue` с `passportId` и включает их в production cost
+    по периоду (см. предыдущую итерацию);
+  - order-level financial summary (`OrderSummaryUnifiedTable`)
+    уже суммирует `MaterialIssue.totalCost` по всем POSTED-документам
+    заказа — авто-документы попадают туда автоматически;
+  - `OrderMaterialsUnifiedTable` (план/факт по `WorkshopNeed`)
+    уже агрегирует POSTED `MaterialIssueLine` с `workshopNeedId` —
+    авто-строки видны рядом с планом без доработок.
+
+  Сознательные границы MVP (не менялись и на этой итерации):
+  `StockBalance` / `StockMovement` / `MaterialStockLot` /
+  FIFO/LIFO / проверка складских остатков / master-модель
+  `Material` / новые роли / новые страницы и пункты меню / ручной
+  UI-блок для авто-документа / POSTED → CANCELLED отмена —
+  **не реализованы**. Цена берётся из `WorkshopNeed.quotedPrice`
+  (fallback `0`); `ProductionCostV2Service` / frontend UI
+  (`OrderViewTabs` / `MaterialIssuesSection` /
+  `OrderMaterialsUnifiedTable` / `OrderSummaryUnifiedTable`) —
+  **не менялись**.
+
+  Складские остатки материалов (`StockBalance` /
+  `StockMovement` / `MaterialStockLot` / FIFO/LIFO),
+  master-модель `Material`, роли `WAREHOUSE_MANAGER` /
+  `PURCHASER` / `ACCOUNTANT`, обновление
+  `ProductionCostV2Service` под `MaterialIssue`, любые другие
+  финансовые сводки (`OrderPlannedCostSummaryCard`) на этой
+  итерации **не реализованы и не менялись** — они сознательно
+  вынесены в следующие итерации.
 
 ---
 

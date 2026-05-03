@@ -2512,3 +2512,182 @@ export class PayrollAccrualManualAdjustNotSupportedException extends BusinessExc
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Material issues (Этап «Фактический расход материалов по заказу», см.
+// `apps/api/src/modules/material-issues/*`,
+// `prisma/schema.prisma::MaterialIssue` / `MaterialIssueLine`).
+//
+// MVP-итерация ограничена ручной фиксацией: НЕТ складских остатков,
+// НЕТ движений (`StockMovement`), НЕТ FIFO/LIFO, НЕТ автосписания при
+// выдаче кроя. POSTED-документ отменить нельзя.
+// ---------------------------------------------------------------------------
+
+/**
+ * Документ фактического расхода (`MaterialIssue`) не найден.
+ * Бросается из `MaterialIssuesService.getById/post/cancel`.
+ */
+export class MaterialIssueNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_NOT_FOUND',
+      'Документ расхода материалов не найден',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * `passportId`, переданный в `CreateMaterialIssueDto`, существует, но
+ * принадлежит другому заказу. На MVP мы запрещаем такие документы —
+ * иначе аналитический slice «расход × заказ» становится бессмысленным
+ * (паспорт уже привязан к своему заказу).
+ */
+export class MaterialIssuePassportNotInOrderException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_PASSPORT_NOT_IN_ORDER',
+      'Паспорт не относится к этому заказу',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Строка содержит `workshopNeedId`, но эта потребность принадлежит
+ * другому заказу. По тем же соображениям, что
+ * `MaterialIssuePassportNotInOrderException`.
+ */
+export class MaterialIssueWorkshopNeedNotInOrderException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_WORKSHOP_NEED_NOT_IN_ORDER',
+      'Потребность не относится к этому заказу',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * `POST /api/material-issues` пришёл без строк (или с пустым массивом).
+ * Создавать пустой документ нельзя — `totalCost` всегда суммируется
+ * по строкам, а `lines` со стороны клиента — единственный источник
+ * расхода.
+ *
+ * Zod-схема (`CreateMaterialIssueSchema`) ловит это первым на уровне
+ * `min(1)`, но отдельный код полезен для server-to-server вызовов и
+ * для адресного UI-сообщения.
+ */
+export class MaterialIssueLinesRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_LINES_REQUIRED',
+      'Нужна хотя бы одна строка расхода',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * `issuedQty` строки <= 0. Zod-схема валидирует это первым, но
+ * отдельный класс остаётся как server-side guard и для понятного
+ * сообщения в UI.
+ */
+export class MaterialIssueQtyRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_QTY_REQUIRED',
+      'Количество расхода должно быть больше нуля',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * `unitCost` строки < 0. На MVP цена может быть нулевой (передача
+ * списанной партии), но не отрицательной.
+ */
+export class MaterialIssueUnitCostInvalidException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_UNIT_COST_INVALID',
+      'Цена за единицу не может быть отрицательной',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * Строка не содержит `workshopNeedId` и не передаёт `description`
+ * явно. Без описания строка теряет смысл — что списывали?
+ */
+export class MaterialIssueLineDescriptionRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_LINE_DESCRIPTION_REQUIRED',
+      'Укажите описание материала или выберите потребность из заказа',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * Строка не содержит `workshopNeedId` и не передаёт `unit` явно.
+ * Без единицы измерения количество расхода неинтерпретируемо.
+ */
+export class MaterialIssueLineUnitRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_LINE_UNIT_REQUIRED',
+      'Укажите единицу измерения или выберите потребность из заказа',
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * Попытка `POST /:id/post` для документа не в `DRAFT`. Повторное
+ * проведение проведённого, отменённого или уже-проведённого
+ * документа бессмысленно.
+ */
+export class MaterialIssueNotDraftForPostException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_NOT_DRAFT_FOR_POST',
+      'Провести можно только документ в статусе «Черновик»',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Попытка `POST /:id/cancel` для документа в `CANCELLED`. Повторная
+ * отмена бессмысленна. Для `POSTED` отдельная семантика —
+ * `MaterialIssuePostedCannotCancelException` (см. ниже).
+ */
+export class MaterialIssueNotDraftForCancelException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_NOT_DRAFT_FOR_CANCEL',
+      'Отменить можно только документ в статусе «Черновик»',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Попытка `POST /:id/cancel` для документа в `POSTED`. На MVP
+ * проведённый документ нельзя отменить — это сознательное
+ * ограничение (no `StockMovement` для отката). Если действительно
+ * нужно «откатить» расход, в следующей итерации появится сторнирующий
+ * документ.
+ */
+export class MaterialIssuePostedCannotCancelException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_POSTED_CANNOT_CANCEL',
+      'Проведённый документ расхода нельзя отменить в MVP',
+      HttpStatus.CONFLICT,
+    );
+  }
+}

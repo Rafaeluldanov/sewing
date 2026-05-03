@@ -42,6 +42,7 @@ import {
   Palette,
 } from 'lucide-react';
 import type { CutReadinessDto } from '@sewing/shared/cut-readiness';
+import type { MaterialIssueDetailDto } from '@sewing/shared/material-issues';
 import type {
   PurchaseReceiptDetailDto,
   PurchaseReceiptListItemDto,
@@ -73,6 +74,19 @@ import {
 
 interface Props {
   orderId: string;
+  /**
+   * Документы фактического расхода материалов по заказу
+   * (`MaterialIssue` + `MaterialIssueLine`). Опционально:
+   * `OrderNeedsTab` пробрасывает преподгруженный массив, тот же,
+   * что и в `MaterialIssuesSection` — без второго fetch (см.
+   * frontend-итерация «план/факт»).
+   *
+   * Из них в строки таблицы ложится только агрегат POSTED по
+   * `workshopNeedId`. DRAFT и CANCELLED игнорируются. Если
+   * `undefined` или пусто — таблица показывает план/факт-колонки
+   * с «нет проведённых расходов».
+   */
+  materialIssues?: MaterialIssueDetailDto[];
 }
 
 const RUB_FORMATTER = new Intl.NumberFormat('ru-RU', {
@@ -332,6 +346,163 @@ function SupplierCell({ row }: { row: OrderMaterialTableRow }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// План / факт по фактическому расходу материалов
+// (frontend-итерация «план/факт» поверх MaterialIssue)
+// ---------------------------------------------------------------------------
+
+function formatQty(value: string | number | null | undefined): string {
+  if (value == null || value === '') return '—';
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return '—';
+  // Decimal-as-string: убираем хвостовые нули, локаль `ru-RU`.
+  return n.toLocaleString('ru-RU', {
+    maximumFractionDigits: 4,
+    minimumFractionDigits: 0,
+  });
+}
+
+function formatSignedQty(value: string | number | null | undefined): string {
+  if (value == null || value === '') return '—';
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return '—';
+  if (n === 0) return '0';
+  const formatted = formatQty(Math.abs(n));
+  return n > 0 ? `+${formatted}` : `−${formatted}`;
+}
+
+function formatSignedRub(value: string | number | null | undefined): string {
+  if (value == null || value === '') return '—';
+  const n = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(n)) return '—';
+  if (n === 0) return formatRub(0);
+  const formatted = formatRub(Math.abs(n));
+  return n > 0 ? `+${formatted}` : `−${formatted}`;
+}
+
+function deltaQtyTone(
+  delta: number,
+): 'over' | 'under' | 'equal' {
+  if (delta > 0) return 'over';
+  if (delta < 0) return 'under';
+  return 'equal';
+}
+
+function PlanFactQtyCell({ row }: { row: OrderMaterialTableRow }) {
+  const issuedNum = Number(row.issuedQtyFact);
+  const hasFact = row.postedIssueLineCount > 0;
+  const deltaNum = Number(row.deltaQty);
+  const tone = Number.isFinite(deltaNum) ? deltaQtyTone(deltaNum) : 'equal';
+  return (
+    <div
+      className="order-materials-table__planfact"
+      data-testid="order-materials-planfact-qty"
+    >
+      <div className="order-materials-table__planfact-row">
+        <span className="order-materials-table__planfact-label">План</span>
+        <span className="order-materials-table__planfact-value">
+          {formatQty(row.plannedQty)}
+          {row.unit ? ` ${row.unit}` : ''}
+        </span>
+      </div>
+      <div className="order-materials-table__planfact-row">
+        <span className="order-materials-table__planfact-label">Факт</span>
+        <span className="order-materials-table__planfact-value">
+          {row.unitMismatch ? (
+            // Разные единицы измерения — не суммируем количество
+            // (см. ТЗ §3 «фактический расход / unit mismatch»).
+            <span
+              className="order-materials-table__warning"
+              title="POSTED строки с этой потребностью используют другую единицу измерения. Конвертация в MVP не делается — стоимость суммируется, количество — нет."
+              data-testid="order-materials-planfact-unit-mismatch"
+            >
+              <AlertTriangle size={11} strokeWidth={1.7} aria-hidden />
+              Ед. изм. отличаются
+            </span>
+          ) : !hasFact ? (
+            <span className="order-materials-table__qty--placeholder">
+              0{row.unit ? ` ${row.unit}` : ''}
+              <span className="order-materials-table__qty-hint">
+                нет проведённых расходов
+              </span>
+            </span>
+          ) : (
+            <>
+              {formatQty(issuedNum)}
+              {row.unit ? ` ${row.unit}` : ''}
+            </>
+          )}
+        </span>
+      </div>
+      {hasFact && !row.unitMismatch && (
+        <div
+          className={`order-materials-table__planfact-row order-materials-table__planfact-delta order-materials-table__planfact-delta--${tone}`}
+        >
+          <span className="order-materials-table__planfact-label">Δ</span>
+          <span className="order-materials-table__planfact-value">
+            {formatSignedQty(deltaNum)}
+            {row.unit ? ` ${row.unit}` : ''}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlanFactCostCell({ row }: { row: OrderMaterialTableRow }) {
+  const hasFact = row.postedIssueLineCount > 0;
+  const actualNum = Number(row.actualCost);
+  const deltaNum = row.deltaCost == null ? null : Number(row.deltaCost);
+  const tone =
+    deltaNum != null && Number.isFinite(deltaNum)
+      ? deltaQtyTone(deltaNum)
+      : 'equal';
+  return (
+    <div
+      className="order-materials-table__planfact"
+      data-testid="order-materials-planfact-cost"
+    >
+      <div className="order-materials-table__planfact-row">
+        <span className="order-materials-table__planfact-label">План</span>
+        <span className="order-materials-table__planfact-value">
+          {row.plannedCost == null ? (
+            // Нет цены или USD без курса — `null` плановой стоимости
+            // (см. build-order-material-rows.ts).
+            <span className="order-materials-table__money--empty">—</span>
+          ) : (
+            formatRub(row.plannedCost)
+          )}
+        </span>
+      </div>
+      <div className="order-materials-table__planfact-row">
+        <span className="order-materials-table__planfact-label">Факт</span>
+        <span className="order-materials-table__planfact-value">
+          {!hasFact ? (
+            <span className="order-materials-table__money--empty">
+              {formatRub(0)}
+              <span className="order-materials-table__qty-hint">
+                нет проведённых расходов
+              </span>
+            </span>
+          ) : (
+            formatRub(actualNum)
+          )}
+        </span>
+      </div>
+      {hasFact && deltaNum != null && Number.isFinite(deltaNum) && (
+        <div
+          className={`order-materials-table__planfact-row order-materials-table__planfact-delta order-materials-table__planfact-delta--${tone}`}
+        >
+          <span className="order-materials-table__planfact-label">Δ</span>
+          <span className="order-materials-table__planfact-value">
+            {formatSignedRub(deltaNum)}
+          </span>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function DateCell({ row }: { row: OrderMaterialTableRow }) {
   if (!row.expectedOrReceivedDate) {
     return <span className="admin-muted">—</span>;
@@ -432,7 +603,10 @@ async function loadData(orderId: string): Promise<LoadedData> {
 // Component
 // ---------------------------------------------------------------------------
 
-export async function OrderMaterialsUnifiedTable({ orderId }: Props) {
+export async function OrderMaterialsUnifiedTable({
+  orderId,
+  materialIssues,
+}: Props) {
   const data = await loadData(orderId);
   const rows = buildOrderMaterialRows({
     workshopNeeds: data.workshopNeeds,
@@ -440,6 +614,7 @@ export async function OrderMaterialsUnifiedTable({ orderId }: Props) {
     purchaseOrders: data.purchaseOrders,
     purchaseReceipts: data.purchaseReceipts,
     purchaseReceiptDetails: data.purchaseReceiptDetails,
+    materialIssues,
   });
   const summary = summariseOrderMaterialRows(rows);
 
@@ -489,6 +664,25 @@ export async function OrderMaterialsUnifiedTable({ orderId }: Props) {
       header: 'Сумма',
       align: 'right',
       render: (row) => <TotalCell row={row} />,
+    },
+    {
+      // План / факт по фактическому расходу материалов
+      // (frontend-итерация «план/факт» поверх MaterialIssue).
+      // Компактный блок «План / Факт / Δ» по количеству — сидит
+      // рядом с «К закупке», чтобы менеджер сразу видел разницу
+      // между производственной потребностью и фактически выданным
+      // в крой количеством. Отдельная вкладка / страница НЕ
+      // создаётся — это решение владельца UI-итерации.
+      key: 'planFactQty',
+      header: 'План / факт',
+      align: 'right',
+      render: (row) => <PlanFactQtyCell row={row} />,
+    },
+    {
+      key: 'planFactCost',
+      header: 'Стоимость план / факт',
+      align: 'right',
+      render: (row) => <PlanFactCostCell row={row} />,
     },
     {
       key: 'received',

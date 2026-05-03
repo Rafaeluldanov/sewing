@@ -33,6 +33,7 @@
   - [2.10 Shopfloor / display](#210-shopfloor--display)
   - [2.11 Patterns](#211-patterns)
   - [2.12 Workshop needs / procurement](#212-workshop-needs--procurement)
+  - [2.12a Material issues](#212a-material-issues)
   - [2.13 Printers / print jobs](#213-printers--print-jobs)
   - [2.14 Audit](#214-audit)
   - [2.15 Company settings](#215-company-settings)
@@ -151,6 +152,7 @@
     `WorkshopNeed[]` (cascade), `PurchaseOrder[]` (`SetNull` со стороны
     PO), `PurchaseReceipt[]` (`SetNull`), `OrderApplication[]` (cascade),
     `OrderCostEstimate[]`, `OrderMaterialArrivalOverride[]` (cascade),
+    `MaterialIssue[]` (cascade — см. §2.12a),
     `CuttingClosureRequest[]`, `companyDivision? → CompanyDivision`.
   - Индексы: `status`, `orderDate`, `createdAt`, `routeTemplateId`,
     `techCardId`, `patternItemId`, `clientId`, `dueDate`,
@@ -536,6 +538,42 @@
   `materialRole`. См. `CutReadinessService` — override прибавляется к
   `placedQty`.
 
+<a id="212a-material-issues"></a>
+### 2.12a Material issues
+
+- **`MaterialIssue`** *(новый контур)* — документ фиксации
+  фактического расхода материалов по заказу
+  (`apps/api/src/modules/material-issues/*`). `orderId → Order`
+  (cascade), `passportId? → Passport` (`SetNull`),
+  `status @default("DRAFT")` (`DRAFT` / `POSTED` / `CANCELLED`),
+  `totalCost: Decimal(14,2) @default(0)` (Σ строк, считается на сервере),
+  `source: String @default("MANUAL")` (`MANUAL` / `AUTO_CUT_ISSUE` —
+  кто создал документ: пользователь вручную или автоматика при
+  выдаче кроя),
+  `sourceKey: String? @unique` (технический ключ идемпотентности
+  для авто-документов; для `AUTO_CUT_ISSUE` — `AUTO_CUT_ISSUE:<passportId>`,
+  для `MANUAL` — `null`; UNIQUE защищает от двойного автосписания
+  при retry `PassportsService.issueToEmployee`),
+  `createdAt`, `postedAt?`, `cancelledAt?`, `createdById?`,
+  `postedById?`, `cancelledById?` (без FK на `Employee` — учётка
+  может быть деактивирована, журнал должен уцелеть), `cancelReason?`.
+  Индексы: `orderId`, `passportId`, `status`, `source`, `createdAt`.
+  Автосписание при выдаче кроя создаёт документ сразу в статусе
+  `POSTED` (см. `MaterialIssuesService.createAutoCutIssueForPassport`
+  и `docs/current-state.md §«Auto cut issue»`). Сознательная
+  граница MVP: НЕ ведёт `StockBalance`, НЕ создаёт `StockMovement`,
+  НЕТ FIFO/LIFO, НЕТ проверок складских остатков, НЕТ master-модели
+  `Material`; POSTED-документ нельзя отменить.
+- **`MaterialIssueLine`** — строка документа расхода. Cascade от
+  `MaterialIssue`. `workshopNeedId? → WorkshopNeed` (`SetNull` —
+  снос потребности через cascade от заказа не сносит исторический
+  документ). `description: String`, `materialRole?`, `unit: String`,
+  `issuedQty: Decimal(14,4)`, `unitCost: Decimal(14,2)`,
+  `totalCost: Decimal(14,2)` (= `issuedQty × unitCost`, считается на
+  сервере), `cellId? → Cell` (`SetNull` — аналитический slice, НЕ
+  движение остатков), `comment?`. Индексы: `materialIssueId`,
+  `workshopNeedId`, `cellId`. См. § 3.10 ниже.
+
 <a id="213-printers--print-jobs"></a>
 ### 2.13 Printers / print jobs
 
@@ -781,6 +819,59 @@
   `CutReadinessService`: `ACTIVE`-override-ы прибавляются к
   `placedQty` и могут разблокировать крой даже при
   `WorkshopNeed.status != RECEIVED`.
+
+### 3.10 MaterialIssue / MaterialIssueLine
+
+Источник: `prisma/schema.prisma::MaterialIssue` /
+`MaterialIssueLine`, `apps/api/src/modules/material-issues/*`,
+`docs/api.md §«Material issues»`.
+
+- Документ фиксации фактического расхода материалов по заказу —
+  ручной (пользовательский `POST /api/material-issues`) или
+  автоматический (при выдаче кроя сотруднику).
+- Жизненный цикл: `DRAFT → POSTED` (провести) или
+  `DRAFT → CANCELLED` (отменить). POSTED-документ нельзя отменить
+  в MVP (нет сторнирующего движения). Автоматические документы
+  создаются сразу в `POSTED`, минуя `DRAFT`.
+- `MaterialIssue` хранит шапку (`orderId`, `passportId?`, `status`,
+  `source`, `sourceKey?`, `totalCost`, актор-поля),
+  `MaterialIssueLine` — строки
+  (`description`, `materialRole?`, `unit`, `issuedQty`, `unitCost`,
+  `totalCost`, `cellId?`, `comment?`). `totalCost` всегда
+  считается на сервере.
+- `source`/`sourceKey` (см. § 2.12a):
+  - `source = MANUAL` — ручной документ, `sourceKey = null`;
+  - `source = AUTO_CUT_ISSUE` — авто-документ при
+    `PassportsService.issueToEmployee`,
+    `sourceKey = AUTO_CUT_ISSUE:<passportId>` (UNIQUE —
+    идемпотентность retry);
+  - frontend DTO (`CreateMaterialIssueSchema`) эти поля НЕ
+    принимает — источник проставляет сервис.
+- Автосписание при выдаче кроя
+  (`MaterialIssuesService.createAutoCutIssueForPassport`):
+  - формула строки `issuedQty = WorkshopNeed.calculatedQty *
+    Passport.qtyCut / totalOrderQty`,
+    `totalOrderQty = Σ OrderItem.qtyPlan`;
+  - исключаются `WorkshopNeed.status = CANCELLED` и
+    `sourceType = ORDER_APPLICATION` (нанесение — не материал);
+  - `unitCost = WorkshopNeed.quotedPrice` при RUB/null-валюте,
+    `0` при USD и при отсутствующей цене;
+  - пустой набор строк / `totalOrderQty <= 0` / уже существующий
+    неотменённый `MaterialIssue` по `passportId` → skip (без
+    ошибки, выдача кроя продолжается).
+- Сознательная граница MVP:
+  - НЕТ `StockBalance` / `MaterialStockLot` / `StockMovement`;
+  - НЕТ FIFO/LIFO;
+  - НЕТ проверок складских остатков;
+  - НЕТ master-модели `Material` (`description` / `unit` берутся
+    из `WorkshopNeed`-snapshot или вводятся текстом);
+  - конвертации валют нет — USD-цены списываются с `unitCost = 0`.
+- Audit-события — `MATERIAL_ISSUE_CREATED` / `MATERIAL_ISSUE_POSTED`
+  / `MATERIAL_ISSUE_CANCELLED` под
+  `entityType = 'MATERIAL_ISSUE'`, `entityId = MaterialIssue.id`.
+  Для авто-документа payload `CREATED`/`POSTED` содержит
+  `source = AUTO_CUT_ISSUE`, `sourceKey`, `calculation =
+  { totalOrderQty, passportQtyCut, formula }`.
 
 ---
 

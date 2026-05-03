@@ -77,6 +77,7 @@
 - [18. Workshop needs](#18-workshop-needs)
 - [19. Purchase orders](#19-purchase-orders)
 - [20. Purchase receipts](#20-purchase-receipts)
+- [20a. Material issues](#20a-material-issues)
 - [21. Cut release policy](#21-cut-release-policy)
 - [21a. Order cut issue rules](#21a-order-cut-issue-rules)
 - [22. Master calls](#22-master-calls)
@@ -530,6 +531,69 @@ DTO: `packages/shared/src/purchase-orders.ts`.
 | GET   | `/api/orders/:id/purchase-receipts`                   | ADMIN, SHOP_MANAGER | Список PR по заказу покупателя. |
 
 DTO: `packages/shared/src/purchase-receipts.ts`.
+
+---
+
+<a id="20a-material-issues"></a>
+## 20a. Material issues
+
+Источник: `material-issues/material-issues.controller.ts` +
+`material-issues/material-issues.order-controller.ts`. Класс-уровень
+`@Roles('ADMIN', 'SHOP_MANAGER')`.
+
+Документ фактического расхода материалов по заказу. Жизненный цикл
+документа: `DRAFT → POSTED` или `DRAFT → CANCELLED` (ручная
+фиксация). Автосписание материалов при выдаче кроя создаёт документ
+сразу в `POSTED`, минуя `DRAFT` (см. ниже «Автосписание при выдаче
+кроя»).
+
+Ответ содержит `source` (`MANUAL` | `AUTO_CUT_ISSUE`) — для
+клиентов, которым важно отличать ручные документы от автоматических.
+Технический ключ идемпотентности `sourceKey` в публичном API **не
+отдаётся** (внутреннее поле, см. `prisma/schema.prisma::MaterialIssue.sourceKey`).
+
+| Метод | Путь                                              | RBAC               | Описание |
+| ----- | ------------------------------------------------- | ------------------ | -------- |
+| GET   | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | List `ListMaterialIssuesQuery` (фильтры `orderId`/`passportId`/`status`). Сортировка `createdAt desc`. |
+| GET   | `/api/material-issues/:id`                        | ADMIN, SHOP_MANAGER | Карточка документа (с `lines`, `order`, `passport`, `workshopNeed` и `cell` по строкам). |
+| POST  | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | 201 Created. Body `CreateMaterialIssueDto`. Создаёт документ со `status = DRAFT`. `totalCost` считается на сервере = Σ `issuedQty × unitCost`. Если `workshopNeedId` указан, `description`/`unit`/`materialRole` берутся из `WorkshopNeed`. |
+| POST  | `/api/material-issues/:id/post`                   | ADMIN, SHOP_MANAGER | `DRAFT → POSTED`. Пересчитывает `totalCost` по строкам. НЕ создаёт `StockMovement`, НЕ трогает остатки. |
+| POST  | `/api/material-issues/:id/cancel`                 | ADMIN, SHOP_MANAGER | Body `CancelMaterialIssueDto` (`{ reason? }`). `DRAFT → CANCELLED`. POSTED отменить нельзя — 409 `MATERIAL_ISSUE_POSTED_CANNOT_CANCEL`. |
+| GET   | `/api/orders/:orderId/material-issues`            | ADMIN, SHOP_MANAGER | Список документов расхода по заказу покупателя (с `lines`). |
+
+DTO: `apps/api/src/modules/material-issues/dto/*.ts`. Audit-события
+(`MATERIAL_ISSUE_CREATED` / `MATERIAL_ISSUE_POSTED` /
+`MATERIAL_ISSUE_CANCELLED`) — см. `docs/events.md §«Material issues»`.
+
+Автосписание при выдаче кроя
+(`apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
+вызывается из `PassportsService.issueToEmployee` в той же
+транзакции; публичного API для ручного вызова **нет** — это
+внутренний hook выдачи кроя):
+
+- создаётся POSTED-документ с `source = AUTO_CUT_ISSUE`,
+  `sourceKey = AUTO_CUT_ISSUE:<passportId>` (UNIQUE → идемпотентность
+  retry);
+- строки — по одной на каждую материальную `WorkshopNeed` заказа
+  (исключаются `status = CANCELLED` и `sourceType = ORDER_APPLICATION`);
+- `issuedQty = WorkshopNeed.calculatedQty * Passport.qtyCut /
+  totalOrderQty`, где `totalOrderQty = Σ OrderItem.qtyPlan`;
+- `unitCost = WorkshopNeed.quotedPrice` (RUB / null-валюта); `0`
+  для USD и для отсутствующей цены;
+- пустые наборы / `totalOrderQty <= 0` / уже существующий
+  неотменённый `MaterialIssue` по `passportId` → skip без ошибки
+  (выдача кроя продолжается).
+
+Сознательная граница MVP:
+
+- НЕ ведёт `StockBalance` / `MaterialStockLot` / `StockMovement`;
+- НЕ проверяет складские остатки;
+- НЕ делает FIFO/LIFO;
+- POSTED-документ нельзя отменить в MVP (нет сторнирующего движения);
+- НЕ создаёт master-модель `Material` — описание/единица берутся
+  из `WorkshopNeed` или вводятся текстом;
+- автосписание не конвертирует валюты — USD/без курса списывается с
+  `unitCost = 0`.
 
 ---
 
