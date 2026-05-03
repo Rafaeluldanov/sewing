@@ -12,6 +12,21 @@ import { isSalaryEligible } from '../employees/compensation.js';
 import { PassportDurationsService } from './passport-durations.service.js';
 
 /**
+ * `MaterialIssue.status` для проведённого документа фактического
+ * расхода материалов. Сознательно не импортируем из
+ * `modules/material-issues/material-issues.service.ts`, чтобы не
+ * затаскивать в costs-модуль зависимость от соседнего модуля и
+ * не создавать риск циклического импорта (`MaterialIssuesModule`
+ * сам уже зависит от `AuditModule`).
+ *
+ * Список валидируется shared-Zod (`MATERIAL_ISSUE_STATUSES`), а в
+ * БД статус хранится строкой — расширение списка не требует
+ * миграции (см. `prisma/schema.prisma::MaterialIssue.status`,
+ * `packages/shared/src/material-issues.ts`).
+ */
+const MATERIAL_ISSUE_STATUS_POSTED = 'POSTED';
+
+/**
  * Сервис «Себестоимость выпуска» (см. `docs/domain.md §17`).
  *
  * Алгоритм:
@@ -24,10 +39,24 @@ import { PassportDurationsService } from './passport-durations.service.js';
  *        piecework = Σ `OperationEntry.amount` (status=APPROVED) по
  *                    этому паспорту;
  *        salary    = Σ по стадиям QC/WTO/PACKING:
- *                       durationMinutes × employee.minuteRate.
+ *                       durationMinutes × employee.minuteRate;
+ *        material  = Σ `MaterialIssue.totalCost` по POSTED-документам
+ *                    с `passportId === passport.id` (фактический
+ *                    расход материалов, см.
+ *                    `apps/api/src/modules/material-issues/*`,
+ *                    `docs/api.md §«Material issues»`). DRAFT /
+ *                    CANCELLED не учитываем; order-level документы
+ *                    без `passportId` сознательно НЕ включаем — без
+ *                    привязки к паспорту нельзя корректно разнести
+ *                    расход по дню выпуска (см. ТЗ итерации). На MVP
+ *                    нет ни `StockBalance`, ни автосписания при
+ *                    выдаче кроя — `MaterialIssue` остаётся ручным
+ *                    документом.
  *      Cap длительности — в `PassportDurationsService`.
  *
- *   3. День агрегата = дата `PACKED` event паспорта (UTC).
+ *   3. День агрегата = дата `PACKED` event паспорта (UTC). И
+ *      piecework, и salary, и material попадают в один и тот же
+ *      день (день упаковки этого паспорта).
  *
  *   4. Простой считаем отдельно: для каждого окладного сотрудника с
  *      открытой/закрытой сменой в этот день
@@ -137,6 +166,33 @@ export class CostsService {
       stagesByPassport.set(s.passportId, arr);
     }
 
+    // 5a) Фактический расход материалов по паспортам периода.
+    //     Берём только POSTED-документы с `passportId` из выборки —
+    //     DRAFT / CANCELLED и order-level документы (без `passportId`)
+    //     в production cost по периоду НЕ попадают (см. шапку файла
+    //     и ТЗ итерации). `totalCost` берём с backend (`MaterialIssue.
+    //     totalCost`), не пересчитываем из `MaterialIssueLine` —
+    //     это и так server-side агрегат, который пересчитывается
+    //     при `POST /:id/post`.
+    const materialCostByPassport = new Map<string, number>();
+    if (passportIds.length > 0) {
+      const issues = await this.prisma.materialIssue.findMany({
+        where: {
+          status: MATERIAL_ISSUE_STATUS_POSTED,
+          passportId: { in: passportIds },
+        },
+        select: { passportId: true, totalCost: true },
+      });
+      for (const issue of issues) {
+        if (!issue.passportId) continue;
+        const prev = materialCostByPassport.get(issue.passportId) ?? 0;
+        materialCostByPassport.set(
+          issue.passportId,
+          prev + decimalToNumber(issue.totalCost),
+        );
+      }
+    }
+
     // 6) Группируем по дню упаковки.
     const dayMap = new Map<string, MutableDay>();
     for (const ev of packedEvents) {
@@ -153,6 +209,7 @@ export class CostsService {
         salaryShare += rate * st.durationMinutes;
       }
       day.salaryCost += salaryShare;
+      day.materialCost += materialCostByPassport.get(ev.passportId) ?? 0;
     }
 
     // 7) Учтённые минуты (по дню окончания стадии).
@@ -220,6 +277,11 @@ interface MutableDay {
   producedUnits: number;
   pieceworkCost: number;
   salaryCost: number;
+  /**
+   * Σ `MaterialIssue.totalCost` (POSTED) по паспортам, упакованным
+   * в этот день. См. шапку `CostsService` и шаг 5a.
+   */
+  materialCost: number;
   trackedMinutes: number;
   idleMinutes: number;
   idleCost: number;
@@ -237,6 +299,7 @@ function ensureDay(map: Map<string, MutableDay>, key: string): MutableDay {
       producedUnits: 0,
       pieceworkCost: 0,
       salaryCost: 0,
+      materialCost: 0,
       trackedMinutes: 0,
       idleMinutes: 0,
       idleCost: 0,
@@ -251,12 +314,14 @@ function ensureDay(map: Map<string, MutableDay>, key: string): MutableDay {
 function toDayDto(d: MutableDay): ProductionCostDayDto {
   const piece = round2(d.pieceworkCost);
   const sal = round2(d.salaryCost);
+  const mat = round2(d.materialCost);
   return {
     date: d.date,
     producedUnits: d.producedUnits,
     pieceworkCost: piece,
     salaryCost: sal,
-    totalCost: round2(piece + sal),
+    materialCost: mat,
+    totalCost: round2(piece + sal + mat),
     trackedMinutes: d.trackedMinutes,
     idleMinutes: d.idleMinutes,
     idleCost: round2(d.idleCost),
@@ -269,6 +334,7 @@ function computeSummary(
   let producedUnits = 0;
   let pieceworkCost = 0;
   let salaryCost = 0;
+  let materialCost = 0;
   let idleCost = 0;
   let trackedMinutes = 0;
   let idleMinutes = 0;
@@ -276,17 +342,19 @@ function computeSummary(
     producedUnits += d.producedUnits;
     pieceworkCost += d.pieceworkCost;
     salaryCost += d.salaryCost;
+    materialCost += d.materialCost;
     idleCost += d.idleCost;
     trackedMinutes += d.trackedMinutes;
     idleMinutes += d.idleMinutes;
   }
-  const totalCost = round2(pieceworkCost + salaryCost);
+  const totalCost = round2(pieceworkCost + salaryCost + materialCost);
   const avgCostPerUnit =
     producedUnits > 0 ? round2(totalCost / producedUnits) : 0;
   return {
     producedUnits,
     pieceworkCost: round2(pieceworkCost),
     salaryCost: round2(salaryCost),
+    materialCost: round2(materialCost),
     idleCost: round2(idleCost),
     trackedMinutes,
     idleMinutes,

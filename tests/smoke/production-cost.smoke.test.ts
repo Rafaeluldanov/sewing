@@ -84,6 +84,29 @@ describe('Production Cost — backend wiring', () => {
     expect(src).toMatch(/idleCost/);
   });
 
+  test('CostsService включает фактический расход материалов (POSTED MaterialIssue) в materialCost', () => {
+    const src = readSrc('apps/api/src/modules/costs/costs.service.ts');
+    // Сервис явно загружает MaterialIssue со статусом POSTED.
+    expect(src).toMatch(/this\.prisma\.materialIssue\.findMany/);
+    expect(src).toMatch(/MATERIAL_ISSUE_STATUS_POSTED/);
+    // Фильтр по passportId — это и есть привязка к паспортам периода.
+    expect(src).toMatch(/passportId:\s*\{\s*in:\s*passportIds\s*\}/);
+    // Аккумулятор по паспорту присутствует и попадает в день упаковки.
+    expect(src).toMatch(/materialCostByPassport/);
+    expect(src).toMatch(/day\.materialCost\s*\+=/);
+    // totalCost включает materialCost (см. toDayDto / computeSummary).
+    expect(src).toMatch(/piece\s*\+\s*sal\s*\+\s*mat/);
+    expect(src).toMatch(/pieceworkCost\s*\+\s*salaryCost\s*\+\s*materialCost/);
+  });
+
+  test('shared DTO `ProductionCostDayDto` / `ProductionCostSummaryDto` объявляют `materialCost`', () => {
+    const src = readSrc('packages/shared/src/costs.ts');
+    // Поле должно быть в обоих DTO; формулировка `materialCost: number` —
+    // ровно так же, как для других сумм в этом контракте.
+    expect(src).toMatch(/interface ProductionCostDayDto[\s\S]*?materialCost: number/);
+    expect(src).toMatch(/interface ProductionCostSummaryDto[\s\S]*?materialCost: number/);
+  });
+
   test('PassportDurationsService cap-ает длительности и обрабатывает PACKING fallback', () => {
     const src = readSrc('apps/api/src/modules/costs/passport-durations.service.ts');
     expect(src).toMatch(/MAX_STAGE_MINUTES_PER_PASSPORT/);

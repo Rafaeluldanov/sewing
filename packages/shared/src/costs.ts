@@ -78,12 +78,20 @@ export interface ProductionCostDayDto {
   date: string;
   /** Сумма `qtyGood` по паспортам, упакованным в этот день. */
   producedUnits: number;
-  /** `pieceworkCost + salaryCost` (только распределённая на изделия часть). */
+  /** `pieceworkCost + salaryCost + materialCost` (только распределённая на изделия часть). */
   totalCost: number;
   /** Σ сдельных начислений (`OperationEntry.amount`, статус APPROVED). */
   pieceworkCost: number;
   /** Σ окладной доли, распределённой по упакованным паспортам. */
   salaryCost: number;
+  /**
+   * Σ `MaterialIssue.totalCost` по POSTED-документам, у которых
+   * `passportId` входит в множество паспортов, упакованных в этот день
+   * (см. `docs/domain.md §17`, `docs/api.md §35`). DRAFT / CANCELLED
+   * и order-level документы (без `passportId`) сюда не попадают —
+   * без `passportId` нельзя разнести расход по дню выпуска.
+   */
+  materialCost: number;
   /** Σ учтённых минут (`QC + WTO + PACKING`, с cap). */
   trackedMinutes: number;
   /** Σ неучтённых минут окладных сотрудников за день. */
@@ -95,12 +103,14 @@ export interface ProductionCostDayDto {
 export interface ProductionCostSummaryDto {
   /** Σ `producedUnits` по всему периоду. */
   producedUnits: number;
-  /** Σ `totalCost`. */
+  /** Σ `totalCost` (`pieceworkCost + salaryCost + materialCost`). */
   totalCost: number;
   /** Σ `pieceworkCost`. */
   pieceworkCost: number;
   /** Σ `salaryCost`. */
   salaryCost: number;
+  /** Σ `materialCost` по периоду (см. `ProductionCostDayDto.materialCost`). */
+  materialCost: number;
   /** Σ `idleCost`. */
   idleCost: number;
   /** Σ `trackedMinutes`. */
