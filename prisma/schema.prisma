@@ -375,6 +375,14 @@ enum PayrollPayoutStatus {
 enum PayrollPayoutLineKind {
   PIECEWORK
   SALARY
+  /// Бонус (подготовка для будущих ручных строк выплат; UI в STEP 6.4 не делается).
+  BONUS
+  /// Удержание (подготовка для будущих ручных строк выплат; UI в STEP 6.4 не делается).
+  DEDUCTION
+  /// Аванс (подготовка для будущих ручных строк выплат; UI в STEP 6.4 не делается).
+  ADVANCE
+  /// Корректировка из PayrollAccrualDocumentLine.manualAdjustRub (STEP 6.4).
+  ADJUSTMENT
 }
 
 /// Жизненный цикл документа начисления зарплаты (`PayrollAccrualDocument`,

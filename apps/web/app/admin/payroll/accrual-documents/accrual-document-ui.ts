@@ -82,25 +82,18 @@ export function hasManualAdjustments(
 
 /**
  * Может ли менеджер нажать «Выплатить» прямо сейчас.
- * В STEP 6.2 backend блокирует pay если есть manualAdjustRub != 0.
+ * STEP 6.4: корректировки поддержаны — кнопка больше не блокируется из-за manualAdjustRub.
  */
 export function canPayDocument(doc: PayrollAccrualDocumentDto): boolean {
-  return doc.status === 'DRAFT' && !hasManualAdjustments(doc);
+  return doc.status === 'DRAFT';
 }
 
 /**
  * Причина блокировки кнопки «Выплатить». `null` если кнопка разблокирована.
+ * STEP 6.4: корректировки поддержаны — нет блокировки по manualAdjustRub.
  */
 export function getPayBlockedReason(
-  doc: PayrollAccrualDocumentDto,
+  _doc: PayrollAccrualDocumentDto,
 ): string | null {
-  if (doc.status !== 'DRAFT') return null;
-  if (hasManualAdjustments(doc)) {
-    return (
-      'В документе есть корректировки. Выплата с корректировками будет доступна ' +
-      'после расширения строк выплат. Сейчас уберите корректировки или дождитесь ' +
-      'следующего шага.'
-    );
-  }
   return null;
 }

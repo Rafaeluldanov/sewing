@@ -1,13 +1,14 @@
 'use client';
 
 /**
- * Клиентский компонент действий над документом начисления (PHASE 3 STEP 6.3).
+ * Клиентский компонент действий над документом начисления (PHASE 3 STEP 6.3–6.4).
  *
  * Принимает связанные (`bound`) server actions от родительского RSC.
  * Кнопки: «Пересчитать», «Выплатить», «Отменить».
  *
- * Если backend вернул PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED,
- * показывает понятную ошибку с объяснением ограничения.
+ * STEP 6.4: корректировки поддержаны — кнопка «Выплатить» не блокируется
+ * из-за manualAdjustRub, а при выплате корректировки попадают
+ * в PayrollPayoutLine отдельной строкой kind=ADJUSTMENT.
  */
 
 import { useFormState, useFormStatus } from 'react-dom';
@@ -22,28 +23,22 @@ type BoundAction = (
 
 const initial: AccrualDocumentActionState = {};
 
-const MANUAL_ADJUST_NOT_SUPPORTED_CODE = 'PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED';
-
 function formatError(state: AccrualDocumentActionState): string | null {
   if (!state.error) return null;
-  if (state.error.includes(MANUAL_ADJUST_NOT_SUPPORTED_CODE)) {
-    return (
-      'Документ содержит корректировки. Сейчас выплата с корректировками ещё не поддержана. ' +
-      'Уберите корректировки или выполните следующий шаг расширения payout lines.'
-    );
-  }
   return state.error;
 }
 
 export function DocumentActions({
   status,
   payBlockedReason,
+  hasAdjustments,
   recomputeAction,
   payAction,
   cancelAction,
 }: {
   status: PayrollAccrualDocumentStatus;
   payBlockedReason: string | null;
+  hasAdjustments?: boolean;
   recomputeAction: BoundAction;
   payAction: BoundAction;
   cancelAction: BoundAction;
@@ -100,6 +95,16 @@ export function DocumentActions({
         </div>
       )}
 
+      {hasAdjustments && !payBlockedReason && (
+        <div
+          className="admin-info-box"
+          role="note"
+          style={{ marginBottom: '0.75rem' }}
+        >
+          ℹ️ Корректировки будут перенесены в выплату отдельной строкой.
+        </div>
+      )}
+
       <div style={{ display: 'flex', gap: '0.75rem', flexWrap: 'wrap' }}>
         <form action={recomputeFormAction}>
           <RecomputeButton />
@@ -131,7 +136,6 @@ function PayButton({ disabled }: { disabled: boolean }) {
       type="submit"
       className="admin-btn admin-btn--primary"
       disabled={pending || disabled}
-      title={disabled ? 'Выплата заблокирована — есть корректировки' : undefined}
     >
       {pending ? 'Выплата...' : 'Выплатить'}
     </button>

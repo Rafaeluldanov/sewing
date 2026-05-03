@@ -198,6 +198,12 @@ export interface PayrollPeriodEmployeeRowDto {
    * `max(0, grossAccruedRub − payoutCoveredRub)`.
    */
   netToPayRub: number;
+  /**
+   * Σ сумм `PayrollPayoutLine` с `kind ∈ {ADJUSTMENT, BONUS, DEDUCTION, ADVANCE}`
+   * по активным выплатам сотрудника за период (STEP 6.4).
+   * Не входит в `payoutCoveredRub` и не влияет на `netToPayRub`.
+   */
+  payoutAdjustRub: number;
 }
 
 export interface PayrollPeriodSummaryDto {

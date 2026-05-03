@@ -68,14 +68,28 @@ export function getPayoutStatusTone(
 }
 
 export function getLineKindLabel(kind: PayrollPayoutLineKind): string {
-  return kind === 'PIECEWORK' ? 'Сдельно' : 'Оклад';
+  switch (kind) {
+    case 'PIECEWORK':
+      return 'Сдельно';
+    case 'SALARY':
+      return 'Оклад';
+    case 'BONUS':
+      return 'Бонус';
+    case 'DEDUCTION':
+      return 'Удержание';
+    case 'ADVANCE':
+      return 'Аванс';
+    case 'ADJUSTMENT':
+      return 'Корректировка';
+  }
 }
 
 /**
  * Краткое текстовое описание снимка строки для колонки таблицы.
  *
- * PIECEWORK — qty · ratePerUnit · operationId / passportId.
- * SALARY    — source · editedManually · managerComment.
+ * PIECEWORK  — qty · ratePerUnit · operationId / passportId.
+ * SALARY     — source · editedManually · managerComment.
+ * ADJUSTMENT — manualComment из snapshot (STEP 6.4).
  */
 export function summarizePayoutLineSnapshot(
   line: PayrollPayoutLineDto,
@@ -89,6 +103,8 @@ export function summarizePayoutLineSnapshot(
       parts.push(`ставка: ${snap.ratePerUnit} ₽`);
     if (snap.operationId) parts.push(`опер: ${String(snap.operationId).slice(0, 8)}`);
     if (snap.passportId) parts.push(`паспорт: ${String(snap.passportId).slice(0, 8)}`);
+  } else if (line.kind === 'ADJUSTMENT') {
+    if (snap.manualComment) parts.push(String(snap.manualComment));
   } else {
     if (snap.source) parts.push(`источник: ${snap.source}`);
     if (snap.editedManually) parts.push('ручная правка');

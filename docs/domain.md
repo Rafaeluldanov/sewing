@@ -2058,15 +2058,21 @@ manualAdjustRub`. Итоговые суммы документа пересчи�
    - `periodFrom` — минимальная дата начисления из snapshot
      (`salaryEntries[].date` / `operationEntries[].createdAt`);
    - `periodTo = accrualDate`.
-3. Создаются `PayrollPayoutLine` по snapshot (PIECEWORK/SALARY).
-4. `PayrollAccrualDocumentLine.payoutId` проставляется.
+3. Создаются `PayrollPayoutLine` по snapshot (`kind = PIECEWORK` / `SALARY`).
+4. **STEP 6.4:** если `manualAdjustRub ≠ 0`, создаётся дополнительная
+   `PayrollPayoutLine` с `kind = ADJUSTMENT`, `operationEntryId = null`,
+   `salaryEntryId = null`, `amountRub = manualAdjustRub`.
+   - ADJUSTMENT-строка **не закрывает** `OperationEntry` / `SalaryEntry`.
+   - ADJUSTMENT-строка **не уменьшает** `grossAccruedRub` / `netToPayRub` в
+     ведомости периода (учитывается отдельно в `payoutAdjustRub`).
+   - Сотрудник видит строку «Корректировка» с суммой (со знаком) и
+     комментарием.
+5. `PayrollAccrualDocumentLine.payoutId` проставляется.
 
-**Ограничение STEP 6.2.** Если хотя бы одна строка документа имеет
-`manualAdjustRub ≠ 0`, а `PayrollPayoutLineKind` не содержит значения
-`ADJUSTMENT`, `pay` блокируется → 409
-`PAYROLL_ACCRUAL_MANUAL_ADJUST_NOT_SUPPORTED`. Для поддержки ручных
-корректировок в payout-строках необходим STEP 6.3/6.4 с расширением
-enum.
+**`PayrollPayoutLineKind` (STEP 6.4):** enum расширен:
+`PIECEWORK` / `SALARY` — базовые начисления;
+`ADJUSTMENT` — ручная корректировка из документа начисления;
+`BONUS` / `DEDUCTION` / `ADVANCE` — резерв для будущих ручных строк выплат.
 
 ---
 
