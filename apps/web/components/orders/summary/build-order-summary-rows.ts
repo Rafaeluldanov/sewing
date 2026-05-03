@@ -42,6 +42,10 @@ import {
   getWorkshopNeedKind,
   type WorkshopNeedKind,
 } from '@sewing/shared/workshop-needs';
+import type {
+  MaterialIssueListItemDto,
+  MaterialIssueStatus,
+} from '@sewing/shared/material-issues';
 import type { OrderCostEstimateDto } from '@sewing/shared/order-cost-estimates';
 import type { OrderMaterialTableRow } from '@/components/orders/materials/build-order-material-rows';
 import type { OrderOperationTableRow } from '@/components/orders/operations/build-order-operation-rows';
@@ -475,6 +479,35 @@ export interface OrderSummaryTotals {
   /** `costTotalRub / qtyTotal` или `null`. */
   costPerUnitRub: number | null;
 
+  /**
+   * Фактическая стоимость материалов по заказу — Σ
+   * `MaterialIssue.totalCost` по всем POSTED-документам этого
+   * заказа. Источник истины — `MaterialIssue.totalCost` (а не
+   * пересчёт строк на frontend), как требует MVP-итерация
+   * «Фактический расход». DRAFT и CANCELLED документы не
+   * учитываются.
+   *
+   * Источник `MaterialIssue` для финансовой сводки сознательно
+   * НЕ требует `workshopNeedId` у строк и НЕ требует `passportId`
+   * у документа: order-level financial summary показывает «всё, что
+   * фактически выдано в производство по этому заказу», даже если
+   * строка не сопоставлена с конкретной потребностью цеха.
+   *
+   * `null`, только если `materialIssues` не передан — в этом
+   * случае мы не можем отличить «нет факта» от «факт не
+   * загружен». При переданном пустом массиве — `0`.
+   */
+  materialActualCostRub: number | null;
+  /**
+   * Отклонение факта от плана по материалам:
+   * `materialActualCostRub - byKind.material`.
+   *
+   * `null`, если плана по материалам нет (`byKind.material === null`)
+   * либо если факт не передавался (`materialActualCostRub === null`).
+   * Положительное значение — перерасход, отрицательное — экономия.
+   */
+  materialDeltaCostRub: number | null;
+
   /** Цена продажи за единицу (как пришла из заказа). */
   customerUnitPrice: number | null;
   customerCurrency: 'RUB' | 'USD' | null;
@@ -507,6 +540,19 @@ interface ComputeTotalsInput {
   operationPlanIsStale?: boolean | null;
   /** Опциональный «есть незавершённый расчёт себестоимости» — для warning. */
   hasCompletedEstimate?: boolean;
+  /**
+   * Список документов «Фактический расход материалов» по заказу
+   * (`GET /api/orders/:orderId/material-issues`). Используется для
+   * подсчёта `materialActualCostRub` / `materialDeltaCostRub` —
+   * order-level финансового факта. На уровне сводки берём ТОЛЬКО
+   * POSTED-документы; DRAFT и CANCELLED игнорируются.
+   *
+   * Если `undefined` — `materialActualCostRub` останется `null` и
+   * сводка покажет «—» для факта. Это отличается от `[]` (явный
+   * пустой массив) — `[]` означает «факта по заказу нет», и тогда
+   * сводка показывает `0 ₽`.
+   */
+  materialIssues?: MaterialIssueListItemDto[];
 }
 
 export function computeOrderSummaryTotals(
@@ -519,6 +565,7 @@ export function computeOrderSummaryTotals(
     customerCurrency,
     operationPlanIsStale,
     hasCompletedEstimate,
+    materialIssues,
   } = input;
 
   const byKind: OrderSummaryTotals['byKind'] = {
@@ -574,6 +621,29 @@ export function computeOrderSummaryTotals(
   const costPerUnitRub =
     costTotalRub != null && qtyTotal > 0
       ? costTotalRub / qtyTotal
+      : null;
+
+  // Фактическая стоимость материалов: Σ MaterialIssue.totalCost по
+  // POSTED-документам. Источник истины — `MaterialIssue.totalCost`,
+  // не пересчёт строк (см. ТЗ: `passportId` / `workshopNeedId` тут
+  // не требуются). DRAFT / CANCELLED игнорируем.
+  let materialActualCostRub: number | null = null;
+  if (materialIssues !== undefined) {
+    let actualSum = 0;
+    for (const issue of materialIssues) {
+      if ((issue.status as MaterialIssueStatus) !== 'POSTED') continue;
+      const n = Number(issue.totalCost);
+      if (Number.isFinite(n)) actualSum += n;
+    }
+    materialActualCostRub = actualSum;
+  }
+  // Δ = факт - план. Если план неизвестен (нет ни одной MATERIAL
+  // строки в RUB) — отклонение тоже неизвестно, иначе UI показал
+  // бы фейковый «перерасход» на всю фактическую сумму.
+  const plannedMaterialCostRub = byKind.material;
+  const materialDeltaCostRub =
+    materialActualCostRub != null && plannedMaterialCostRub != null
+      ? materialActualCostRub - plannedMaterialCostRub
       : null;
 
   // Цена продажи и выручка.
@@ -650,6 +720,8 @@ export function computeOrderSummaryTotals(
     byKind,
     costTotalRub,
     costPerUnitRub,
+    materialActualCostRub,
+    materialDeltaCostRub,
     customerUnitPrice: customerUnitPriceNum,
     customerCurrency: customerCurrencyResolved,
     revenueTotalRub,

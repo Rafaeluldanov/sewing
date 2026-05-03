@@ -75,6 +75,7 @@
  */
 import { AlertTriangle } from 'lucide-react';
 import type { CutReadinessDto } from '@sewing/shared/cut-readiness';
+import type { MaterialIssueListItemDto } from '@sewing/shared/material-issues';
 import type { OperationDetailDto } from '@sewing/shared/operations';
 import type { OrderDetailDto } from '@sewing/shared/orders';
 import type { OrderProductionBalanceDto } from '@sewing/shared/order-production-balance';
@@ -92,6 +93,7 @@ import {
 } from '@/components/admin';
 import { ApiRequestError } from '@/lib/api';
 import { getOrderCutReadiness } from '@/lib/cut-readiness-api';
+import { listOrderMaterialIssues } from '@/lib/material-issues-api';
 import { getOperation } from '@/lib/operations-api';
 import { getOrderProductionBalance } from '@/lib/order-production-balance-api';
 import { getOrderPurchaseOrders } from '@/lib/purchase-orders-api';
@@ -157,6 +159,17 @@ interface LoadedData {
   purchaseReceiptDetails: Map<string, PurchaseReceiptDetailDto>;
   operationsById: Map<string, OperationDetailDto>;
   productionBalance: OrderProductionBalanceDto | null;
+  /**
+   * Список документов «Фактический расход материалов» по заказу
+   * (`GET /api/orders/:orderId/material-issues`). Используется
+   * только для подсчёта order-level фактической стоимости
+   * материалов (`materialActualCostRub`) — DRAFT / CANCELLED здесь
+   * не отфильтровываются, фильтрацию делает `computeOrderSummaryTotals`.
+   *
+   * `null`, если запрос упал — в этом случае сводка покажет «—»
+   * для факта (не путаем «нет данных» с «факта = 0»).
+   */
+  materialIssues: MaterialIssueListItemDto[] | null;
   loadErrors: string[];
 }
 
@@ -185,6 +198,7 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
     cutReadiness,
     purchaseOrders,
     purchaseReceipts,
+    materialIssues,
   ] = await Promise.all([
     safe(() => getOrderWorkshopNeeds(order.id), [], 'Потребность цеха'),
     safe<CutReadinessDto | null>(
@@ -194,6 +208,16 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
     ),
     safe(() => getOrderPurchaseOrders(order.id), [], 'Заказы поставщикам'),
     safe(() => getOrderPurchaseReceipts(order.id), [], 'Поступления'),
+    // Order-level фактическая стоимость материалов: список
+    // документов `MaterialIssue` для текущего заказа. POSTED/DRAFT/
+    // CANCELLED фильтрация — на стороне `computeOrderSummaryTotals`.
+    // При ошибке fallback — `null`, чтобы UI отличал «факт = 0»
+    // от «факт не загружен».
+    safe<MaterialIssueListItemDto[] | null>(
+      () => listOrderMaterialIssues(order.id),
+      null,
+      'Фактический расход материалов',
+    ),
   ]);
 
   const purchaseReceiptDetails = new Map<string, PurchaseReceiptDetailDto>();
@@ -252,6 +276,7 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
     purchaseReceiptDetails,
     operationsById,
     productionBalance,
+    materialIssues,
     loadErrors,
   };
 }
@@ -504,17 +529,50 @@ function KpiBar({ totals }: { totals: OrderSummaryTotals }) {
 // ---------------------------------------------------------------------------
 
 function TotalsBlock({ totals }: { totals: OrderSummaryTotals }) {
+  // Тон Δ материалов: перерасход (factual > planned) — danger,
+  // экономия — success, ровно по плану — neutral. Если delta
+  // неизвестна (нет плана / нет факта) — без тона.
+  const materialDeltaTone: 'positive' | 'negative' | 'neutral' | null = (() => {
+    if (totals.materialDeltaCostRub == null) return null;
+    if (totals.materialDeltaCostRub > 0) return 'negative';
+    if (totals.materialDeltaCostRub < 0) return 'positive';
+    return 'neutral';
+  })();
+
   const rows: Array<{
     id: string;
     label: string;
     value: string;
     isTotal?: boolean;
     testId?: string;
+    /** Inline-тон строки (только для Δ материалов на этой итерации). */
+    tone?: 'positive' | 'negative' | 'neutral' | null;
   }> = [
     {
       id: 'material',
       label: 'Материалы за тираж',
       value: fmtRub(totals.byKind.material),
+      testId: 'order-summary-totals-material-planned',
+    },
+    // Фактическая стоимость материалов: Σ MaterialIssue.totalCost
+    // по POSTED-документам этого заказа (см.
+    // `computeOrderSummaryTotals` / ТЗ §«Order summary actual material
+    // cost»). Источник истины — `MaterialIssue.totalCost`, не
+    // пересчёт строк на frontend. DRAFT и CANCELLED не учитываются.
+    // Документы без `passportId` и строки без `workshopNeedId`
+    // тоже учитываются — для order-level summary этого достаточно.
+    {
+      id: 'material-actual',
+      label: 'Материалы за тираж · факт',
+      value: fmtRub(totals.materialActualCostRub),
+      testId: 'order-summary-totals-material-actual',
+    },
+    {
+      id: 'material-delta',
+      label: 'Материалы за тираж · Δ (факт − план)',
+      value: fmtRub(totals.materialDeltaCostRub),
+      testId: 'order-summary-totals-material-delta',
+      tone: materialDeltaTone,
     },
     {
       id: 'hardware',
@@ -617,6 +675,12 @@ function TotalsBlock({ totals }: { totals: OrderSummaryTotals }) {
               className={[
                 'order-summary-totals__row',
                 r.isTotal ? 'order-summary-totals__row--total' : '',
+                r.tone === 'positive'
+                  ? 'order-summary-margin order-summary-margin--positive'
+                  : '',
+                r.tone === 'negative'
+                  ? 'order-summary-margin order-summary-margin--negative'
+                  : '',
               ]
                 .filter(Boolean)
                 .join(' ')}
@@ -767,6 +831,11 @@ export async function OrderSummaryUnifiedTable({
     customerCurrency: order.customerCurrency ?? null,
     operationPlanIsStale: order.operationPlanIsStale === true,
     hasCompletedEstimate: order.currentCostEstimate != null,
+    // `null` (запрос упал) пробрасываем как `undefined`, чтобы
+    // `computeOrderSummaryTotals` оставил `materialActualCostRub =
+    // null` и UI показал «—» вместо `0 ₽`. Пустой массив — это
+    // явный сигнал «факта по заказу нет», тогда показываем `0 ₽`.
+    materialIssues: data.materialIssues ?? undefined,
   });
 
   // Колонки: Раздел / Статья / Кол-во / Ед. / Цена / Сумма за тираж /
