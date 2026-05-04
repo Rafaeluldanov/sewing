@@ -1,4 +1,13 @@
-FROM node:18-alpine AS deps
+# Node 20 обязателен:
+#   - корневой package.json уже объявляет `"engines": { "node": ">=20" }`;
+#   - server actions Next.js 14 в роутах /admin/patterns и /admin/tech-cards
+#     используют глобальный `File` (см. `instanceof File` в `actions.ts`),
+#     а в Node 18 он НЕ глобальный (доступен только через `node:buffer`,
+#     при этом помечен experimental). На Node 18 любая загрузка файла
+#     падала с `ReferenceError: File is not defined` (digest 624324718 в
+#     UI, 500 в access.log). Подробнее — комментарий к
+#     `apps/web/app/admin/patterns/actions.ts`.
+FROM node:20-alpine AS deps
 WORKDIR /app
 
 COPY package*.json ./
@@ -6,7 +15,7 @@ COPY apps/web/package*.json ./apps/web/
 COPY packages ./packages
 RUN npm ci
 
-FROM node:18-alpine AS builder
+FROM node:20-alpine AS builder
 WORKDIR /app
 
 # NEXT_PUBLIC_* подставляется в client-bundle во время `next build`,
@@ -22,7 +31,7 @@ COPY apps/web ./apps/web
 WORKDIR /app/apps/web
 RUN npx next build
 
-FROM node:18-alpine AS runner
+FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
