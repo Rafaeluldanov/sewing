@@ -1425,6 +1425,16 @@ Source of truth: `apps/web/app/master/passport-actions-sheet.tsx`,
   и «Печать QR» (HTML), плюс preview QR в карточке. Существующие QR
   оборудования и ячеек не трогаем.
 
+> **Frontend QR render централизован.** Любой клиентский рендер QR
+> на frontend идёт через единый компонент
+> [`QrCodeView`](../apps/web/components/qr/qr-code-view.tsx) — он
+> единственный импортирует `qrcode.react` (named export `QRCodeSVG`),
+> у него встроен fallback «QR-код недоступен» для пустого/`null`-payload'а
+> и регрессионный smoke
+> [`tests/smoke/qr-rendering-regression.smoke.test.ts`](../tests/smoke/qr-rendering-regression.smoke.test.ts).
+> Бэкендовые `<img src="/api/.../qr">` (печатные этикетки/admin-preview)
+> остаются как есть — это другой контур (см. `docs/qr-regression-recon.md`).
+
 ---
 
 ## 9. Экран «Цех» (`/shopfloor`) — Шаг 10 MVP

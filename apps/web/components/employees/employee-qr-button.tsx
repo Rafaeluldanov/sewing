@@ -24,9 +24,15 @@
  */
 
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
+<<<<<<< HEAD
 import { QRCodeCanvas } from 'qrcode.react';
 import type { EmployeeQrResponseDto } from '@sewing/shared/employee-qr';
 import { getMyEmployeeQrAction } from '@/app/employee-qr/actions';
+=======
+import type { EmployeeQrResponseDto } from '@sewing/shared/employee-qr';
+import { getMyEmployeeQrAction } from '@/app/employee-qr/actions';
+import { QrCodeView } from '@/components/qr';
+>>>>>>> 88554a2aa2955493b346a1883607fb420def843e
 
 export interface EmployeeQrButtonProps {
   /**
@@ -171,6 +177,7 @@ export function EmployeeQrButton({
               </div>
             ) : data ? (
               <div className="employee-qr-modal__body">
+<<<<<<< HEAD
                 <div
                   className="employee-qr-modal__canvas"
                   data-testid="employee-qr-canvas"
@@ -183,6 +190,15 @@ export function EmployeeQrButton({
                     aria-label="QR-код сотрудника"
                   />
                 </div>
+=======
+                <QrCodeView
+                  value={data.qrPayload}
+                  size={240}
+                  title="QR-код сотрудника"
+                  className="employee-qr-modal__canvas"
+                />
+
+>>>>>>> 88554a2aa2955493b346a1883607fb420def843e
                 <div className="employee-qr-modal__meta">
                   <p className="employee-qr-modal__name">
                     {data.employee.name}

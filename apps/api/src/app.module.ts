@@ -45,9 +45,12 @@ import { CutReadinessModule } from './modules/cut-readiness/cut-readiness.module
 import { OrderApplicationsModule } from './modules/order-applications/order-applications.module.js';
 import { OrderMaterialArrivalsModule } from './modules/order-material-arrivals/order-material-arrivals.module.js';
 import { SizesModule } from './modules/sizes/sizes.module.js';
+<<<<<<< HEAD
 import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documents/payroll-accrual-documents.module.js';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module.js';
 import { StockModule } from './modules/stock/stock.module.js';
+=======
+>>>>>>> 88554a2aa2955493b346a1883607fb420def843e
 import { MeModule } from './modules/me/me.module.js';
 
 @Module({
@@ -98,9 +101,12 @@ import { MeModule } from './modules/me/me.module.js';
     OrderApplicationsModule,
     OrderMaterialArrivalsModule,
     SizesModule,
+<<<<<<< HEAD
     PayrollAccrualDocumentsModule,
     MaterialIssuesModule,
     StockModule,
+=======
+>>>>>>> 88554a2aa2955493b346a1883607fb420def843e
     MeModule,
   ],
 })

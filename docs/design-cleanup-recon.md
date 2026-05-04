@@ -6,10 +6,13 @@
 > [`docs/screens.md`](./screens.md) (карта экранов) и
 > [`docs/ui-mobile.md`](./ui-mobile.md) (Шаг 13 / mobile clean redesign +
 > visual layer v2).
+<<<<<<< HEAD
 >
 > **Связано:** auth-зона (login + первый экран после login) переехала
 > на новый дизайн отдельной задачей — см.
 > [`docs/auth-design-cleanup-recon.md`](./auth-design-cleanup-recon.md).
+=======
+>>>>>>> 88554a2aa2955493b346a1883607fb420def843e
 
 ---
 
