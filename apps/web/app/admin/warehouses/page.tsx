@@ -26,6 +26,7 @@ import {
 import { formatStatus, statusTone } from '@/lib/admin-labels';
 import {
   parseWarehouseStockTab,
+  StockAdjustmentButton,
   StockBalancesTable,
   StockMovementsTable,
   StockPagination,
@@ -286,6 +287,26 @@ async function BalancesTabPage({
       )}
 
       <AdminCard>
+        {/*
+         * Кнопка ручной корректировки остатка (см.
+         * `apps/web/components/warehouses/stock/stock-adjustment-button.tsx`,
+         * `POST /api/stock/adjustments`,
+         * `docs/current-state.md §«UI остатков и движений склада»`).
+         * Размещаем над таблицей внутри той же `AdminCard` — UI-решение
+         * владельца проекта: не плодить отдельную страницу/пункт меню,
+         * корректировка живёт прямо во вкладке «Остатки».
+         */}
+        {items.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'flex-end',
+              padding: '0 0 8px 0',
+            }}
+          >
+            <StockAdjustmentButton balances={items} />
+          </div>
+        )}
         <StockBalancesTable items={items} />
         <StockPagination
           basePath="/admin/warehouses"

@@ -167,3 +167,40 @@ export function listStockMovements(
     },
   });
 }
+
+/**
+ * Body для `POST /api/stock/adjustments` — ручная корректировка
+ * остатка из UI `/admin/warehouses?tab=balances` (см.
+ * `apps/api/src/modules/stock/dto/create-stock-adjustment.dto.ts`).
+ *
+ * `unitCost` имеет смысл только для `IN`. Для `OUT` поле может быть
+ * передано (UI может прислать сохранённое значение), но backend его
+ * игнорирует — складская оценка OUT всегда берётся из текущего
+ * `StockBalance.unitCost`. `clientRequestId` опционален; если передан,
+ * становится частью идемпотентного `sourceKey` в `StockMovement`
+ * (один `clientRequestId` → одно движение).
+ */
+export interface CreateStockAdjustmentDto {
+  stockBalanceId: string;
+  direction: StockMovementDirection;
+  qty: string | number;
+  unitCost?: string | number;
+  comment: string;
+  clientRequestId?: string;
+}
+
+/**
+ * `POST /api/stock/adjustments` — единственная mutation в API склада
+ * на этой итерации. Возвращает созданное (или ранее существовавшее
+ * при идемпотентном повторе) `StockMovement` в shape
+ * `StockMovementListItem`. `sourceKey` сознательно НЕ возвращается
+ * (см. `StockService.toStockMovementListItem`).
+ */
+export function createStockAdjustment(
+  body: CreateStockAdjustmentDto,
+): Promise<StockMovementListItem> {
+  return apiFetch<StockMovementListItem>('/stock/adjustments', {
+    method: 'POST',
+    body,
+  });
+}

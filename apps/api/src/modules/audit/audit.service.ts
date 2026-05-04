@@ -335,7 +335,30 @@ export type AuditEntityType =
    * события «отказали в отмене» нет — проверка возвращает 409 без
    * записи в `AuditLog`.
    */
-  | 'MATERIAL_ISSUE';
+  | 'MATERIAL_ISSUE'
+  /**
+   * Движения склада (см. `apps/api/src/modules/stock/*`,
+   * `prisma/schema.prisma::StockMovement`,
+   * `docs/api.md §«26a. Stock»`,
+   * `docs/events.md §«StockMovement»`). На MVP-итерации единственное
+   * аудит-событие — ручная корректировка остатка через
+   * `POST /api/stock/adjustments`:
+   *
+   *   - `STOCK_ADJUSTMENT_CREATED` — менеджер сохранил корректировку
+   *     через UI `/admin/warehouses?tab=balances`. Пишется в той же
+   *     транзакции, что и сама запись `StockMovement` ADJUSTMENT и
+   *     апдейт `StockBalance`. Payload — `{ stockMovementId,
+   *     stockBalanceId, workshopNeedId, warehouseId, cellId, direction,
+   *     qty, unit, unitCost, totalCost, balanceBeforeQty,
+   *     balanceAfterQty, comment, employeeId, sourceKey, timestamp }`.
+   *     `entityId = StockMovement.id`.
+   *
+   * Автоматические движения (`PURCHASE_RECEIPT` / `MATERIAL_ISSUE` /
+   * `REVERSAL`) собственного аудит-события под этим `entityType` не
+   * пишут — они уже атрибутированы под `PURCHASE_RECEIPT` /
+   * `MATERIAL_ISSUE` соответственно.
+   */
+  | 'STOCK_MOVEMENT';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

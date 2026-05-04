@@ -1,11 +1,15 @@
-import { HttpStatus, Injectable, Logger } from '@nestjs/common';
+import { HttpStatus, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma, type StockBalance, type StockMovement } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 
 import {
   BusinessException,
   MaterialStockInsufficientException,
 } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { CompanySettingsService } from '../company-settings/company-settings.service.js';
+import type { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto.js';
 import type { ListStockBalancesQuery } from './dto/list-stock-balances.dto.js';
 import type { ListStockMovementsQuery } from './dto/list-stock-movements.dto.js';
 import {
@@ -100,6 +104,14 @@ export const STOCK_MOVEMENT_SOURCE_KEY_PREFIX = {
   PURCHASE_RECEIPT_LINE: 'PURCHASE_RECEIPT_LINE',
   PURCHASE_RECEIPT_LINE_CANCEL: 'PURCHASE_RECEIPT_LINE_CANCEL',
   MATERIAL_ISSUE_LINE: 'MATERIAL_ISSUE_LINE',
+  /**
+   * Префикс ключа ручной корректировки остатка (см.
+   * `StockService.createAdjustment`,
+   * `apps/api/src/modules/stock/dto/create-stock-adjustment.dto.ts`,
+   * UI — `/admin/warehouses?tab=balances`). Один `clientRequestId`
+   * формы → одно `StockMovement` (защита от двойного submit).
+   */
+  STOCK_ADJUSTMENT: 'STOCK_ADJUSTMENT',
 } as const;
 
 /**
@@ -135,6 +147,15 @@ export function buildMaterialIssueLineStockSourceKey(
 }
 
 /**
+ * Ключ движения ручной корректировки: один `clientRequestId` формы
+ * (или сгенерированный сервером uuid) → одно `StockMovement`. Защита
+ * от двойного submit формы «Корректировка» в `/admin/warehouses?tab=balances`.
+ */
+export function buildStockAdjustmentSourceKey(clientRequestId: string): string {
+  return `${STOCK_MOVEMENT_SOURCE_KEY_PREFIX.STOCK_ADJUSTMENT}:${clientRequestId}`;
+}
+
+/**
  * Сервис foundation складского учёта по `WorkshopNeed`.
  *
  * **Стоимость на остатке (без FIFO):**
@@ -148,7 +169,11 @@ export function buildMaterialIssueLineStockSourceKey(
 export class StockService {
   private readonly logger = new Logger(StockService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly companySettings: CompanySettingsService,
+  ) {}
 
   /**
    * Read-only list `StockBalance` для `GET /api/stock/balances`.
@@ -1044,11 +1069,207 @@ export class StockService {
       },
     );
   }
+
+  // ===========================================================================
+  // STOCK ADJUSTMENT (manual) → ADJUSTMENT IN/OUT movements
+  // ===========================================================================
+
+  /**
+   * Ручная корректировка остатка материала
+   * (`POST /api/stock/adjustments`, см.
+   * `apps/api/src/modules/stock/stock.controller.ts`,
+   * `apps/api/src/modules/stock/dto/create-stock-adjustment.dto.ts`,
+   * UI — `/admin/warehouses?tab=balances`,
+   * `docs/api.md §«26a.3 POST /api/stock/adjustments»`).
+   *
+   * Контракт:
+   *   - открывает свою `prisma.$transaction(...)`;
+   *   - корректирует существующий `StockBalance` по `stockBalanceId`
+   *     (для MVP корректировка только существующего остатка — см. DTO);
+   *   - пишет одно `StockMovement` с `type = ADJUSTMENT`,
+   *     `direction = dto.direction`, идемпотентным
+   *     `sourceKey = STOCK_ADJUSTMENT:<clientRequestId>`. Повторный
+   *     submit с тем же `clientRequestId` возвращает существующее
+   *     движение и не апдейтит `StockBalance` второй раз;
+   *   - для `IN` использует `unitCost` из dto (или текущий
+   *     `balance.unitCost`, или `0`); для `OUT` `unitCost` из dto
+   *     игнорируется — `applyMovementInTx` берёт текущий
+   *     `balance.unitCost` (`MaterialIssue.totalCost` при этом не
+   *     меняется — корректировка живёт только в плоскости склада);
+   *   - для `OUT` при `CompanySettings.allowNegativeMaterialStock = false`
+   *     бросает 409 `MATERIAL_STOCK_INSUFFICIENT`, если остатка
+   *     недостаточно. `IN` от флага не зависит. `PurchaseReceipt`
+   *     reversal остаётся permissive — мы его не трогаем;
+   *   - пишет audit `STOCK_ADJUSTMENT_CREATED` под
+   *     `entityType = STOCK_MOVEMENT` в той же транзакции.
+   */
+  async createAdjustment(
+    dto: CreateStockAdjustmentDto,
+    employeeId: string | null | undefined,
+  ): Promise<StockMovementListItem> {
+    const qty = parseAdjustmentDecimal(dto.qty, 'qty');
+    if (qty.lte(0)) {
+      throw new BusinessException(
+        'STOCK_MOVEMENT_QTY_INVALID',
+        'Количество корректировки должно быть больше нуля.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (
+      dto.direction !== STOCK_MOVEMENT_DIRECTION.IN &&
+      dto.direction !== STOCK_MOVEMENT_DIRECTION.OUT
+    ) {
+      throw new BusinessException(
+        'STOCK_MOVEMENT_DIRECTION_INVALID',
+        'Недопустимое направление корректировки (ожидается IN или OUT).',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const dtoUnitCost =
+      dto.unitCost !== undefined && dto.unitCost !== null
+        ? parseAdjustmentDecimal(dto.unitCost, 'unitCost')
+        : null;
+    if (dtoUnitCost && dtoUnitCost.lt(0)) {
+      throw new BusinessException(
+        'STOCK_MOVEMENT_UNIT_COST_INVALID',
+        'Цена корректировки не может быть отрицательной.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    // Hardening-флаг читаем ДО $transaction — это безопасный SELECT
+    // (см. `MaterialIssuesService.post`).
+    const allowNegativeStock =
+      await this.companySettings.getAllowNegativeMaterialStock();
+
+    const isIn = dto.direction === STOCK_MOVEMENT_DIRECTION.IN;
+    const clientRequestId = dto.clientRequestId ?? randomUUID();
+    const sourceKey = buildStockAdjustmentSourceKey(clientRequestId);
+
+    const movement = await this.prisma.$transaction(async (tx) => {
+      const existing = await this.findMovementBySourceKeyInTx(tx, sourceKey);
+      if (existing) {
+        // Идемпотентность: один `clientRequestId` → одно движение.
+        // Не пишем audit повторно, не апдейтим `StockBalance`.
+        return existing;
+      }
+
+      const balance = await tx.stockBalance.findUnique({
+        where: { id: dto.stockBalanceId },
+      });
+      if (!balance) {
+        throw new BusinessException(
+          'STOCK_BALANCE_NOT_FOUND',
+          'Остаток не найден.',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      const movementUnitCost = isIn
+        ? (dtoUnitCost ?? balance.unitCost ?? new Prisma.Decimal(0))
+        : new Prisma.Decimal(0);
+
+      const { movement: created, balance: updated } =
+        await this.applyMovementInTx(tx, {
+          workshopNeedId: balance.workshopNeedId,
+          warehouseId: balance.warehouseId,
+          cellId: balance.cellId,
+          description: balance.description,
+          materialRole: balance.materialRole,
+          type: STOCK_MOVEMENT_TYPE.ADJUSTMENT,
+          direction: dto.direction as StockMovementDirection,
+          qty,
+          unit: balance.unit,
+          unitCost: movementUnitCost,
+          sourceType: STOCK_MOVEMENT_SOURCE_KEY_PREFIX.STOCK_ADJUSTMENT,
+          sourceId: clientRequestId,
+          sourceKey,
+          comment: dto.comment,
+          createdById: employeeId ?? null,
+          // IN не зависит от флага; OUT уважает hardening-гейт
+          // `CompanySettings.allowNegativeMaterialStock`. Если `false`
+          // и нехватка — applyMovementInTx бросит 409, транзакция
+          // откатится (audit и StockMovement не запишутся).
+          allowNegativeStock: isIn ? true : allowNegativeStock,
+        });
+
+      await this.audit.log(
+        {
+          event: 'STOCK_ADJUSTMENT_CREATED',
+          entityType: 'STOCK_MOVEMENT',
+          entityId: created.id,
+          employeeId: employeeId ?? null,
+          payload: {
+            stockMovementId: created.id,
+            stockBalanceId: updated.id,
+            workshopNeedId: created.workshopNeedId,
+            warehouseId: created.warehouseId,
+            cellId: created.cellId,
+            direction: created.direction,
+            qty: created.qty.toString(),
+            unit: created.unit,
+            unitCost: created.unitCost.toString(),
+            totalCost: created.totalCost.toString(),
+            balanceBeforeQty: created.balanceBeforeQty?.toString() ?? null,
+            balanceAfterQty: created.balanceAfterQty?.toString() ?? null,
+            comment: created.comment,
+            employeeId: employeeId ?? null,
+            sourceKey,
+            timestamp: created.createdAt.toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+        tx,
+      );
+
+      return created;
+    });
+
+    this.logger.log(
+      `event=stock.adjustment.create id=${movement.id} ` +
+        `direction=${movement.direction} qty=${movement.qty.toString()} ` +
+        `stockBalanceId=${dto.stockBalanceId} sourceKey=${sourceKey}`,
+    );
+
+    // Возвращаем item в shape `StockMovementListItem` — тот же, что
+    // отдаёт `GET /api/stock/movements` (см. `toStockMovementListItem`).
+    // `sourceKey` сознательно НЕ отдаём наружу.
+    const detail = await this.prisma.stockMovement.findUniqueOrThrow({
+      where: { id: movement.id },
+      include: STOCK_MOVEMENT_LIST_INCLUDE,
+    });
+    return toStockMovementListItem(detail);
+  }
 }
 
 // ---------------------------------------------------------------------------
 // helpers (file-private)
 // ---------------------------------------------------------------------------
+
+/**
+ * Парсер `qty` / `unitCost` из тела `POST /api/stock/adjustments`.
+ * DTO принимает строку или число, превращаем в `Prisma.Decimal` с
+ * понятной 400-ошибкой при мусоре. Сами числовые ограничения
+ * (положительность, неотрицательность цены) валидируются вызывающим.
+ */
+function parseAdjustmentDecimal(
+  raw: string | number,
+  field: 'qty' | 'unitCost',
+): Prisma.Decimal {
+  try {
+    const value = typeof raw === 'number' ? raw : raw.trim();
+    if (value === '' || (typeof value === 'number' && !Number.isFinite(value))) {
+      throw new Error('empty');
+    }
+    return new Prisma.Decimal(value);
+  } catch {
+    throw new BusinessException(
+      'STOCK_MOVEMENT_VALUE_INVALID',
+      `Поле «${field}» имеет некорректное числовое значение.`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
 
 /**
  * Возвращает первое непустое строковое значение или `null`.

@@ -276,14 +276,16 @@ describe('UI остатков — границы итерации', () => {
     }
   });
 
-  test('backend stock-сервис / контроллер не правились в этой итерации', () => {
-    // Самые тонкие проверки: основные публичные методы остаются на
-    // месте и ни новых mutation-роутов, ни adjustment не появилось.
+  test('backend stock-сервис / контроллер сохраняют read-only GET-эндпоинты', () => {
+    // Read-only эндпоинты остаются на месте; mutation-добавления
+    // (manual stock adjustment) проверяются в отдельном smoke
+    // `tests/smoke/stock-adjustments.smoke.test.ts`.
     const controller = readSrc(
       'apps/api/src/modules/stock/stock.controller.ts',
     );
     expect(controller).toMatch(/@Get\('balances'\)/);
     expect(controller).toMatch(/@Get\('movements'\)/);
-    expect(controller).not.toMatch(/@Post|@Patch|@Delete|@Put/);
+    // Никаких PATCH / DELETE / PUT в этой итерации.
+    expect(controller).not.toMatch(/@Patch|@Delete|@Put/);
   });
 });

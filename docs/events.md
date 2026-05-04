@@ -350,6 +350,7 @@ PURCHASE_ORDER | PURCHASE_RECEIPT |
 ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
 MATERIAL_ISSUE |
+STOCK_MOVEMENT |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY | PAYROLL_PAYOUT |
@@ -487,6 +488,30 @@ Cancel для `POSTED`-документа в MVP запрещён
 пишутся** (skip — это успешное отсутствие действия), только
 structured-лог `event=material_issue.auto.skip reason=...` в
 stdout сервиса.
+
+#### Stock movements (`entityType = STOCK_MOVEMENT`, `entityId = StockMovement.id`)
+
+Источник: `apps/api/src/modules/stock/stock.service.ts::createAdjustment`,
+`prisma/schema.prisma::StockMovement`,
+`docs/api.md §«26a.3 POST /api/stock/adjustments»`.
+
+- `STOCK_ADJUSTMENT_CREATED` — менеджер сохранил ручную корректировку
+  остатка через `POST /api/stock/adjustments` (UI кнопка
+  «Корректировка» в `/admin/warehouses?tab=balances`). Пишется в той
+  же транзакции, что и сама запись `StockMovement` `type=ADJUSTMENT`
+  и апдейт `StockBalance`. При идемпотентном повторе с тем же
+  `clientRequestId` событие **не дублируется** — сервис возвращает
+  существующее движение и audit не пишет повторно. Payload —
+  `{ stockMovementId, stockBalanceId, workshopNeedId, warehouseId,
+  cellId, direction, qty, unit, unitCost, totalCost, balanceBeforeQty,
+  balanceAfterQty, comment, employeeId, sourceKey, timestamp }`.
+  `sourceKey` имеет формат `STOCK_ADJUSTMENT:<clientRequestId>` и
+  отдаётся **только в payload audit** — публичный API его не возвращает.
+
+Автоматические движения (`PURCHASE_RECEIPT` / `MATERIAL_ISSUE` /
+`REVERSAL`) собственного аудит-события под `entityType = STOCK_MOVEMENT`
+не пишут — они уже атрибутированы под `PURCHASE_RECEIPT` /
+`MATERIAL_ISSUE` соответственно.
 
 #### Заказы покупателя (`entityType = ORDER` / `ORDER_COST_ESTIMATE`)
 

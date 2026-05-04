@@ -857,25 +857,27 @@ DTO: `packages/shared/src/warehouses.ts`. ADR: 0019.
 ---
 
 <a id="26a-stock"></a>
-## 26a. Stock (read-only)
+## 26a. Stock
 
 Источник: `stock/stock.controller.ts`. Класс-уровень
 `@Roles('ADMIN', 'SHOP_MANAGER')`.
 
-Read-only API для просмотра остатков и журнала движений foundation
-складского учёта (см. `apps/api/src/modules/stock/stock.service.ts`,
+API для просмотра остатков, журнала движений и ручной корректировки
+foundation складского учёта (см.
+`apps/api/src/modules/stock/stock.service.ts`,
 `prisma/schema.prisma::StockBalance` / `StockMovement`,
 `docs/current-state.md §«Foundation складского учёта материалов»`).
-На этой итерации **только GET-эндпоинты** — никаких корректировок,
-adjustment-документов, переноса остатков. Запись остатков по-прежнему
-идёт неявно, в той же транзакции, что и бизнес-документ:
-`PurchaseReceipt` (POSTED → IN, cancel → REVERSAL OUT) и
-`MaterialIssue` (POSTED → OUT, в т.ч. `AUTO_CUT_ISSUE`).
+GET-эндпоинты остаются read-only. Единственная mutation — ручная
+корректировка остатка (`POST /api/stock/adjustments`); остальные
+движения по-прежнему пишутся неявно, в той же транзакции, что и
+бизнес-документ: `PurchaseReceipt` (POSTED → IN, cancel → REVERSAL
+OUT) и `MaterialIssue` (POSTED → OUT, в т.ч. `AUTO_CUT_ISSUE`).
 
 | Метод | Путь                       | RBAC               | Описание |
 | ----- | -------------------------- | ------------------ | -------- |
 | GET   | `/api/stock/balances`      | ADMIN, SHOP_MANAGER | Список текущих остатков `StockBalance`. Сортировка `updatedAt desc, description asc`. |
 | GET   | `/api/stock/movements`     | ADMIN, SHOP_MANAGER | Журнал движений `StockMovement`. Сортировка `createdAt desc`. |
+| POST  | `/api/stock/adjustments`   | ADMIN, SHOP_MANAGER | Ручная корректировка остатка — создаёт `StockMovement` `type = ADJUSTMENT`. |
 
 DTO query: `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`,
 `apps/api/src/modules/stock/dto/list-stock-movements.dto.ts`.
@@ -998,20 +1000,74 @@ Query (все опциональны, склеиваются по AND):
 
 `StockMovement.sourceKey` (внутренний идемпотентный ключ
 `PURCHASE_RECEIPT_LINE:<id>` / `PURCHASE_RECEIPT_LINE_CANCEL:<id>` /
-`MATERIAL_ISSUE_LINE:<id>`) сознательно **не отдаётся** в публичном
-API.
+`MATERIAL_ISSUE_LINE:<id>` / `STOCK_ADJUSTMENT:<id>`) сознательно
+**не отдаётся** в публичном API.
+
+### 26a.3 `POST /api/stock/adjustments`
+
+Ручная корректировка остатка материала. Создаёт `StockMovement` с
+`type = ADJUSTMENT`, `direction = IN | OUT`, апдейтит `StockBalance` и
+пишет audit `STOCK_ADJUSTMENT_CREATED` (под `entityType = STOCK_MOVEMENT`,
+`entityId = StockMovement.id`) в одной транзакции.
+
+UI — `/admin/warehouses?tab=balances`, кнопка «Корректировка»
+(см. `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,
+`apps/web/lib/stock-api.ts::createStockAdjustment`). Отдельной
+страницы / пункта меню под корректировки сознательно не вводим.
+
+Body:
+
+| Поле              | Тип                | Обязательно | Описание |
+| ----------------- | ------------------ | ----------- | -------- |
+| `stockBalanceId`  | string             | да          | Корректируем существующий `StockBalance` (для MVP — только его). |
+| `direction`       | `'IN' \| 'OUT'`    | да          | `IN` увеличивает остаток, `OUT` уменьшает. |
+| `qty`             | string \| number   | да          | > 0; Decimal. |
+| `unitCost`        | string \| number   | нет         | Используется только для `IN`. Для `OUT` — игнорируется (складская оценка OUT берётся из текущего `StockBalance.unitCost`). Если `IN` без `unitCost` — берётся текущий `balance.unitCost` или `0`. |
+| `comment`         | string             | да          | 2..500 символов; причина корректировки. |
+| `clientRequestId` | string             | нет         | Если передан — используется в `sourceKey` (`STOCK_ADJUSTMENT:<clientRequestId>`). Защита от двойного submit формы: один `clientRequestId` → одно `StockMovement`. Если не передан, сервер сгенерирует свой. |
+
+Сервис **сознательно не принимает** `sourceKey`, `totalCost`,
+`balanceBeforeQty`, `balanceAfterQty`, `createdById` — это служебные
+поля, которые рассчитывает / выставляет сам.
+
+Ответ — созданное (или ранее существовавшее при идемпотентном повторе)
+`StockMovement` в shape `26a.2 StockMovement`. `sourceKey` не
+возвращается.
+
+Правила:
+
+- `StockMovement.type` всегда `ADJUSTMENT`;
+- `IN` увеличивает `StockBalance.qty`, `OUT` уменьшает;
+- `OUT` уважает `CompanySettings.allowNegativeMaterialStock`:
+  - `true` — OUT может увести `StockBalance.qty` в минус (текущее
+    MVP-поведение);
+  - `false` — нехватка остатка → 409 `MATERIAL_STOCK_INSUFFICIENT`;
+- `IN` от флага не зависит — всегда добавляет qty;
+- `PurchaseReceipt` cancel остаётся permissive (REVERSAL может уйти в
+  минус), поведение `MaterialIssue.totalCost` корректировка **не
+  меняет** — adjustment живёт только в плоскости склада;
+- `StockAdjustment` модель **не создаётся** — корректировка
+  представлена строкой `StockMovement type=ADJUSTMENT`.
+
+Ошибки:
+
+- 400 `VALIDATION_ERROR` — невалидный body (qty/comment/direction).
+- 400 `STOCK_MOVEMENT_QTY_INVALID` — `qty <= 0`.
+- 400 `STOCK_MOVEMENT_VALUE_INVALID` — некорректный числовой формат `qty` / `unitCost`.
+- 400 `STOCK_MOVEMENT_UNIT_COST_INVALID` — `unitCost < 0` для `IN`.
+- 404 `STOCK_BALANCE_NOT_FOUND` — `stockBalanceId` не существует.
+- 409 `MATERIAL_STOCK_INSUFFICIENT` — `OUT` при `allowNegativeMaterialStock = false`.
 
 ### Сознательные границы MVP
 
-- API **read-only**: никаких adjustment / transfer / corrections;
-- остатки считаются по `WorkshopNeed` (нет master-модели `Material`);
-- **FIFO/LIFO нет**, `MaterialStockLot` нет — `applyMovementInTx` на
-  OUT использует текущий `StockBalance.unitCost`;
+- mutation на этой итерации ровно одна (`POST /adjustments`); никаких
+  transfer / FIFO/LIFO / `MaterialStockLot` / master-`Material`;
+- остатки считаются по `WorkshopNeed`;
+- delete / cancel adjustment в этой итерации не реализованы;
 - новые роли (`WAREHOUSE_MANAGER`, `PURCHASER`, `ACCOUNTANT`) **не
   введены**;
-- frontend UI остатков на этой итерации **не реализован** —
-  доступ только через API (будет добавлен в следующей итерации
-  владельцем проекта).
+- UI корректировки живёт прямо во вкладке «Остатки» раздела «Склады»;
+  отдельной страницы / пункта sidebar нет.
 
 ---
 

@@ -13,3 +13,5 @@ export { StockMovementsTable } from './stock-movements-table';
 export { StockPagination } from './stock-pagination';
 export { StockDirectionBadge } from './stock-direction-badge';
 export { StockMovementTypeBadge } from './stock-movement-type-badge';
+export { StockAdjustmentButton } from './stock-adjustment-button';
+export { StockAdjustmentDialog } from './stock-adjustment-dialog';

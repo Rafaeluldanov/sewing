@@ -186,14 +186,21 @@ test('StockService использует $transaction для пары findMany + 
 });
 
 // ---------------------------------------------------------------------------
-// MVP-границы: read-only, никаких UI
+// MVP-границы: единственная mutation — `POST /adjustments`
 // ---------------------------------------------------------------------------
 
-test('Никаких mutations в StockController (read-only)', () => {
+test('StockController имеет только одну mutation — POST /adjustments', () => {
   const src = read(STOCK_CONTROLLER);
-  for (const verb of ['@Post(', '@Patch(', '@Put(', '@Delete(']) {
+  // Единственный разрешённый verb — `@Post('adjustments')`
+  // (см. `apps/api/src/modules/stock/stock.controller.ts`).
+  expect(src).toMatch(/@Post\('adjustments'\)/);
+  // Запрещённых mutation-эндпоинтов больше нет.
+  for (const verb of ['@Patch(', '@Put(', '@Delete(']) {
     expect(src).not.toContain(verb);
   }
+  // И никаких других POST, кроме `adjustments`.
+  const otherPosts = src.match(/@Post\('(?!adjustments')[^']+'\)/g);
+  expect(otherPosts).toBeNull();
 });
 
 test('Нет публичных stock-страниц / роутов в web (foundation без UI)', () => {

@@ -1,7 +1,20 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Post,
+  Query,
+} from '@nestjs/common';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import {
+  CreateStockAdjustmentSchema,
+  type CreateStockAdjustmentDto,
+} from './dto/create-stock-adjustment.dto.js';
 import {
   ListStockBalancesQuerySchema,
   type ListStockBalancesQuery,
@@ -13,20 +26,24 @@ import {
 import { StockService } from './stock.service.js';
 
 /**
- * `/api/stock/*` — read-only API складского foundation
+ * `/api/stock/*` — API складского foundation
  * (см. `apps/api/src/modules/stock/stock.service.ts`,
  * `prisma/schema.prisma::StockBalance` / `StockMovement`,
  * `docs/api.md §«Stock»`).
  *
- *   GET /api/stock/balances   — текущие остатки по `WorkshopNeed`;
- *   GET /api/stock/movements  — журнал движений (IN / OUT / REVERSAL).
+ *   GET  /api/stock/balances     — текущие остатки по `WorkshopNeed`;
+ *   GET  /api/stock/movements    — журнал движений (IN / OUT / REVERSAL / ADJUSTMENT);
+ *   POST /api/stock/adjustments  — ручная корректировка остатка
+ *                                  (`StockMovement` `type = ADJUSTMENT`).
  *
- * Контроллер сознательно read-only: на этой итерации никаких mutations,
- * adjustment-эндпоинтов и flow-изменений (см. ТЗ «Backend-only stock
- * read API»). Запись остатков по-прежнему идёт через
- * `StockService.applyMovementInTx` из `PurchaseReceiptsService` и
- * `MaterialIssuesService` (приёмка / отмена приёмки / `MaterialIssue`
- * post / `AUTO_CUT_ISSUE`).
+ * На этой итерации добавлен ровно один mutation-эндпоинт —
+ * `POST /api/stock/adjustments`. Запись остатков по `PurchaseReceipt`
+ * (POSTED → IN, cancel → REVERSAL OUT) и `MaterialIssue` (POSTED → OUT,
+ * включая `AUTO_CUT_ISSUE`) по-прежнему идёт неявно, в той же
+ * транзакции, что и бизнес-документ — `StockService.applyMovementInTx`
+ * из `PurchaseReceiptsService` / `MaterialIssuesService`. Никаких
+ * transfer / FIFO/LIFO / `MaterialStockLot` / master-`Material` не
+ * вводим (см. ТЗ).
  *
  * RBAC: `@Roles('ADMIN', 'SHOP_MANAGER')`. Новые складские/закупочные/
  * бухгалтерские роли на этой итерации не вводятся — уровень доступа
@@ -39,7 +56,7 @@ import { StockService } from './stock.service.js';
  *     возвращается**;
  *   - FIFO/LIFO нет; `MaterialStockLot` нет; master-модели `Material`
  *     нет — материал идентифицируется через `WorkshopNeed`;
- *   - публичных PATCH/POST для управления остатками нет.
+ *   - `delete` / `cancel` adjustment в этой итерации **не реализованы**.
  */
 @Controller('stock')
 @Roles('ADMIN', 'SHOP_MANAGER')
@@ -60,5 +77,26 @@ export class StockController {
     query: ListStockMovementsQuery,
   ) {
     return this.stock.listMovements(query);
+  }
+
+  /**
+   * Ручная корректировка остатка материала. Создаёт `StockMovement`
+   * с `type = ADJUSTMENT` и `direction = IN | OUT`, апдейтит
+   * `StockBalance` и пишет audit `STOCK_ADJUSTMENT_CREATED` в одной
+   * транзакции (см. `StockService.createAdjustment`).
+   *
+   * Идемпотентность: один `clientRequestId` формы → одно
+   * `StockMovement` (`sourceKey = STOCK_ADJUSTMENT:<clientRequestId>`).
+   * Если `clientRequestId` не передан — сервер генерирует свой,
+   * чтобы `sourceKey` всегда оставался уникальным.
+   */
+  @Post('adjustments')
+  @HttpCode(HttpStatus.CREATED)
+  createAdjustment(
+    @Body(new ZodValidationPipe(CreateStockAdjustmentSchema))
+    body: CreateStockAdjustmentDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.stock.createAdjustment(body, user.employeeId);
   }
 }

@@ -475,12 +475,60 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     **не правились**;
   - сознательно **не реализованы** на этой UI-итерации:
     multi-warehouse фильтр / группировки по складу / отдельная
-    сводка по складам, ручные корректировки остатков, кнопки
-    «Корректировка» / «Списать» / «Переместить», stock mutations,
-    UI для перемещения между ячейками, FIFO / LIFO / партии,
+    сводка по складам, кнопки «Списать» / «Переместить», UI для
+    перемещения между ячейками, FIFO / LIFO / партии,
     master-модель `Material`, новые роли `WAREHOUSE_MANAGER` /
     `PURCHASER` / `ACCOUNTANT` — границы итерации зафиксированы
     в smoke-тесте `tests/smoke/warehouses-stock-tabs.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Ручная корректировка остатка»
+  (`apps/api/src/modules/stock/stock.controller.ts::createAdjustment`,
+  `apps/api/src/modules/stock/stock.service.ts::createAdjustment`,
+  `apps/api/src/modules/stock/dto/create-stock-adjustment.dto.ts`,
+  `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,
+  `apps/web/components/warehouses/stock/stock-adjustment-button.tsx`,
+  `apps/web/lib/stock-api.ts::createStockAdjustment`,
+  `docs/api.md §«26a.3 POST /api/stock/adjustments»`):
+  - в разделе «Склады» во вкладке «Остатки»
+    (`/admin/warehouses?tab=balances`) появилась кнопка
+    «Корректировка». Открывает inline-форму прямо над таблицей —
+    отдельной страницы / пункта меню / sidebar-item не вводим.
+  - Backend mutation: `POST /api/stock/adjustments`
+    (`@Roles('ADMIN', 'SHOP_MANAGER')`). Body — `stockBalanceId`,
+    `direction` (`IN | OUT`), `qty`, `unitCost?`, `comment`,
+    `clientRequestId?`. Создаёт `StockMovement` `type = ADJUSTMENT`,
+    апдейтит `StockBalance` и пишет audit `STOCK_ADJUSTMENT_CREATED`
+    (под `entityType = STOCK_MOVEMENT`) — всё в одной транзакции.
+  - **IN** увеличивает `StockBalance.qty`. `unitCost` из тела
+    используется при пересчёте средневзвешенной цены остатка
+    (`applyMovementInTx`-логика без изменений). Если `unitCost`
+    не передан — берётся текущий `balance.unitCost` или `0`.
+  - **OUT** уменьшает `StockBalance.qty`. `unitCost` из тела
+    игнорируется — складская оценка OUT берётся из текущего
+    `balance.unitCost`, как у `MaterialIssue.post` / REVERSAL.
+    `MaterialIssue.totalCost` корректировка **не меняет** —
+    adjustment живёт только в плоскости склада.
+  - **`CompanySettings.allowNegativeMaterialStock`** действует на
+    `OUT`-корректировку: при `false` нехватка остатка → 409
+    `MATERIAL_STOCK_INSUFFICIENT`. `IN` от флага не зависит.
+    `PurchaseReceipt` cancel остаётся permissive (REVERSAL не
+    блокируется) — поведение из предыдущей hardening-итерации не
+    трогаем.
+  - **Идемпотентность**: один `clientRequestId` формы → один
+    `StockMovement` (UNIQUE по `sourceKey`,
+    `STOCK_ADJUSTMENT:<clientRequestId>`). Повторный submit
+    возвращает существующее движение и не апдейтит `StockBalance`
+    повторно. Если `clientRequestId` не передан, сервис генерирует
+    свой UUID. `sourceKey` в response **не отдаётся**.
+  - В UI `StockMovementsTable` тип `ADJUSTMENT` уже отрисовывается
+    как «Корректировка» (`StockMovementTypeBadge`); после успешной
+    корректировки движение появится во вкладке «Движения».
+  - Сознательно **не реализованы** на этой итерации: transfer
+    между складами/ячейками, FIFO / LIFO / `MaterialStockLot`,
+    `StockAdjustment` master-модель, master-`Material`,
+    delete / cancel adjustment, новые роли `WAREHOUSE_MANAGER` /
+    `PURCHASER` / `ACCOUNTANT`. Запреты зафиксированы в smoke-
+    тесте `tests/smoke/stock-adjustments.smoke.test.ts`.
 
   Frontend-итерация «Настройки компании → Материалы и склад»
   (`apps/web/app/admin/company-settings/settings-form.tsx`,

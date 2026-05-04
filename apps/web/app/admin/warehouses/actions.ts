@@ -8,6 +8,10 @@ import type {
 } from '@sewing/shared/warehouses';
 import { ApiRequestError } from '@/lib/api';
 import {
+  createStockAdjustment,
+  type CreateStockAdjustmentDto,
+} from '@/lib/stock-api';
+import {
   createWarehouse,
   createWarehouseLine,
   printWarehouseCells,
@@ -18,6 +22,7 @@ import type {
   AssignCellState,
   CreateLineState,
   CreateWarehouseState,
+  StockAdjustmentState,
   UpdateWarehouseState,
 } from './form-state';
 
@@ -242,5 +247,46 @@ export async function printWarehouseCellsAction(
       };
     }
     return { ok: false, error: 'Не удалось поставить задания на печать' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stock adjustment (manual): `POST /api/stock/adjustments`
+// (см. `apps/api/src/modules/stock/stock.controller.ts`,
+//  `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,
+//  `docs/api.md §«26a.3 POST /api/stock/adjustments»`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action ручной корректировки остатка. Принимает уже
+ * нормализованный body и просто делегирует в `createStockAdjustment`.
+ * Идемпотентность реализована backend-ом по `clientRequestId` —
+ * клиент в диалоге сам генерирует uuid и присылает один и тот же
+ * при повторных submit.
+ *
+ * После успеха ревалидируем `/admin/warehouses` (вкладки `balances`
+ * и `movements` живут на одной странице с разным `?tab=`), чтобы
+ * корректировка появилась и в остатках, и в журнале движений.
+ *
+ * `MATERIAL_STOCK_INSUFFICIENT` (409) возвращается с `code` —
+ * клиентский диалог отрисовывает понятный текст backend без raw JSON.
+ */
+export async function createStockAdjustmentAction(
+  body: CreateStockAdjustmentDto,
+): Promise<StockAdjustmentState> {
+  try {
+    const movement = await createStockAdjustment(body);
+    revalidatePath('/admin/warehouses');
+    return { ok: true, createdId: movement.id };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        code: e.code,
+        error: e.message,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { ok: false, error: 'Не удалось сохранить корректировку остатка.' };
   }
 }

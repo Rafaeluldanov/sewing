@@ -255,6 +255,34 @@ backend-ом в горячем flow через приватные геттеры
 6. На `/admin/warehouses?tab=balances` убедиться, что
    `StockBalance.qty` **не изменился**.
 
+### 4.5 Проверка корректировки остатка
+
+1. На `/admin/warehouses?tab=balances` нажать кнопку «Корректировка».
+2. **IN-сценарий**: выбрать остаток, выбрать «Приход (увеличить)»,
+   ввести `qty > 0`, при необходимости указать цену, заполнить
+   комментарий, сохранить. Убедиться:
+   - вкладка «Остатки» обновилась — `StockBalance.qty` увеличился;
+   - вкладка «Движения» содержит новую запись типа «Корректировка»,
+     направление «Приход», `Кол-во` равно введённому, `Комментарий` —
+     введённой причине;
+   - повторный submit с тем же `clientRequestId` (защита от двойного
+     клика) НЕ создаёт второй `StockMovement`.
+3. **OUT-сценарий**: выбрать остаток с положительным `qty`, выбрать
+   «Расход (уменьшить)», ввести `qty > 0` (поле «Цена» становится
+   неактивным с подсказкой «Для расходной корректировки используется
+   текущая складская цена остатка»), сохранить. Убедиться:
+   - `StockBalance.qty` уменьшился;
+   - в журнале движений запись типа «Корректировка», направление
+     «Расход», `Цена` совпадает с текущей `StockBalance.unitCost`
+     до корректировки.
+4. **Запрет минуса**: при `allowNegativeMaterialStock = false`
+   попытаться сделать OUT-корректировку, превышающую остаток —
+   ожидать понятный текст ошибки `MATERIAL_STOCK_INSUFFICIENT`,
+   `StockBalance.qty` НЕ изменился, нового движения в журнале нет.
+5. Убедиться, что отдельной страницы `/admin/stock` /
+   `/admin/stock-adjustments` нет, в sidebar новых пунктов не
+   появилось.
+
 ---
 
 ## 5. API для проверки
@@ -266,6 +294,7 @@ backend-ом в горячем flow через приватные геттеры
 | --- | --- | --- |
 | GET | `/api/stock/balances` | Список текущих остатков (фильтры: `workshopNeedId`, `orderId`, `warehouseId`, `cellId`, `materialRole`, `unit`, `q`, `positiveOnly` / `negativeOnly` / `zeroOnly`) |
 | GET | `/api/stock/movements` | Журнал движений (фильтры: `workshopNeedId`, `orderId`, `stockBalanceId`, `warehouseId`, `cellId`, `type`, `direction`, `sourceType`, `sourceId`, `purchaseReceiptId`, `purchaseReceiptLineId`, `materialIssueId`, `materialIssueLineId`, `from`, `to`, `q`) |
+| POST | `/api/stock/adjustments` | Ручная корректировка остатка (создаёт `StockMovement` `type=ADJUSTMENT`, см. `docs/api.md §«26a.3»`) |
 | GET | `/api/orders/:orderId/material-issues` | Список `MaterialIssue` по заказу |
 | GET | `/api/material-issues/:id` | Детали одного документа со строками |
 | GET | `/api/company-settings` | Текущие настройки, включая оба флага |
@@ -274,10 +303,11 @@ backend-ом в горячем flow через приватные геттеры
 Особенности:
 
 - **API требует авторизацию** — без сессии 401.
-- **Stock API read-only** — никаких adjustment / transfer / corrections
-  через REST не предусмотрено. Записи делает только бизнес-flow
-  (`PurchaseReceiptsService`, `MaterialIssuesService`) через
-  `StockService.applyMovementInTx`.
+- **Единственная stock mutation** — `POST /api/stock/adjustments`
+  (ручная корректировка). Никаких transfer / cancel adjustment / FIFO
+  / партий через REST не предусмотрено. Автоматические IN/OUT/REVERSAL
+  по-прежнему пишет бизнес-flow (`PurchaseReceiptsService`,
+  `MaterialIssuesService`) через `StockService.applyMovementInTx`.
 - **`sourceKey` не отдаётся наружу** — внутренний идемпотентный ключ
   `StockMovement.sourceKey` сознательно вырезан из публичного
   response (`toStockMovementListItem`) и не объявлен в frontend
@@ -297,8 +327,6 @@ backend-ом в горячем flow через приватные геттеры
   `StockBalance.unitCost` (средневзвешенная);
 - нет сложной multi-warehouse фильтрации / группировок по складу /
   отдельной сводки по складам в UI;
-- нет ручных корректировок остатков (`ADJUSTMENT IN` /
-  `ADJUSTMENT OUT`);
 - нет transfer между складами / ячейками;
 - нет возврата / сторно POSTED `MaterialIssue` (POSTED отменить
   нельзя — DRAFT cancel не пишет движение);
@@ -343,9 +371,13 @@ backend-ом в горячем flow через приватные геттеры
 Backlog по оси «материалы / склад» (порядок ориентировочный — реальная
 приоритизация определяется владельцем проекта):
 
-1. **Ручная корректировка остатков:**
-   - `ADJUSTMENT IN`;
-   - `ADJUSTMENT OUT`.
+1. **Ручная корректировка остатков** — реализована в текущей итерации
+   как `StockMovement` `type=ADJUSTMENT` через `POST /api/stock/adjustments`
+   и UI кнопку «Корректировка» во вкладке `/admin/warehouses?tab=balances`
+   (см. `docs/api.md §«26a.3»`, `docs/current-state.md §«Ручная
+   корректировка остатка»`). `IN` увеличивает остаток, `OUT` уменьшает;
+   `OUT` уважает `allowNegativeMaterialStock`. Delete / cancel
+   adjustment в этой итерации не реализованы.
 2. **Возврат / сторно POSTED `MaterialIssue`** (вместе с возвратом
    материала в ячейку).
 3. **Фильтры склада** — расширение UI и/или API:
