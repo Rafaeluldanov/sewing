@@ -19,14 +19,23 @@ services:
     build:
       context: .
       dockerfile: apps/api/Dockerfile.prod
-    ports:
-      - "8081:3001"
+    # Host-порт 8081 убран: после ввода reverse proxy api ходит ТОЛЬКО через
+    # nginx на /api/ и /uploads/ (см. nginx/conf.d/10-prod-teeon-ru.conf).
+    # Если на время отладки нужно достучаться напрямую — добавьте обратно
+    # `ports: - "127.0.0.1:8081:3001"` (только loopback).
+    expose:
+      - "3001"
     environment:
       NODE_ENV: production
       API_PORT: 3001
       DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/myapp
-      APP_URL: http://localhost
-      CORS_ALLOWED_ORIGINS: http://localhost,http://127.0.0.1
+      # Публичные URL — используются для CORS-whitelist, формирования
+      # абсолютных ссылок и Domain в session-cookie. Дефолты прибиты к
+      # prod.teeon.ru, поэтому даже без .env.prod конфиг будет валидный.
+      APP_URL: ${APP_URL:-https://prod.teeon.ru}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://prod.teeon.ru}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-https://prod.teeon.ru/api}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://prod.teeon.ru}
       # Авто-синхронизация схемы Prisma при старте контейнера.
       # Чтобы выключить — поставьте PRISMA_AUTO_SYNC=0 в .env.prod.
       PRISMA_AUTO_SYNC: ${PRISMA_AUTO_SYNC:-1}
@@ -43,12 +52,23 @@ services:
       context: .
       dockerfile: apps/web/Dockerfile.prod
       args:
-        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8081/api}
-    ports:
-      - "80:3000"
+        # ВАЖНО: NEXT_PUBLIC_API_URL вшивается в client-bundle во время билда
+        # и попадает в браузер as-is. На prod это публичный URL за nginx.
+        # Если переопределяете в .env.prod — указывайте ТОЛЬКО https://prod.teeon.ru/api
+        # (либо `/api` для same-origin), иначе client уйдёт мимо nginx.
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://prod.teeon.ru/api}
+    # Прямой проброс host:80 убран: порт 80 теперь занят nginx-сервисом
+    # (TLS-терминатор для https://prod.teeon.ru, ACME-challenge для
+    # Let's Encrypt). web доступен только в docker-сети по имени `web:3000`.
+    expose:
+      - "3000"
     environment:
       NODE_ENV: production
-      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8081/api}
+      # Тот же URL пробрасываем в runtime — нужен для server-side fetch
+      # внутри RSC, если кто-то вместо INTERNAL_API_URL прочитает этот.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://prod.teeon.ru/api}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://prod.teeon.ru}
+      APP_URL: ${APP_URL:-https://prod.teeon.ru}
       INTERNAL_API_URL: http://api:3001/api
       API_URL: http://api:3001/api
     depends_on:
@@ -56,6 +76,41 @@ services:
     restart: always
     networks:
       - prod-network
+
+  nginx:
+    # Reverse-proxy / TLS-терминатор для prod.teeon.ru.
+    # Стабильный alpine-образ, ничего не собираем — только конфиги.
+    image: nginx:1.27-alpine
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      # Главный конфиг и vhost-ы — read-only, чтобы случайно не затёрли изнутри.
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      # Сертификаты Let's Encrypt — read-only. /etc/letsencrypt содержит
+      # symlink-и в /etc/letsencrypt/archive — монтируем корень целиком,
+      # иначе ssl_certificate увидит «битую» цепочку.
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Webroot для ACME http-01 challenge. Сюда certbot --webroot пишет
+      # токены, отсюда же 00-shared.conf их раздаёт.
+      - /var/www/certbot:/var/www/certbot:ro
+      # Логи наружу — удобно tail-ить с хоста и логротейтить системным
+      # logrotate (см. /etc/logrotate.d/sewing-letsencrypt и при желании
+      # отдельный конфиг для nginx).
+      - /var/log/nginx-sewing:/var/log/nginx
+    depends_on:
+      - web
+      - api
+    networks:
+      - prod-network
+    healthcheck:
+      # Лёгкий self-check — конфиг валиден.
+      test: ["CMD", "nginx", "-t", "-q"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
 
 volumes:
   # Том prod-БД. external=true → Compose не создаёт и не удаляет его сам
