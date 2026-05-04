@@ -545,22 +545,24 @@ export class PassportsService {
 
     // Hardening-флаг автосписания (см.
     // `prisma/schema.prisma::CompanySettings.autoIssueMaterialsOnCutRelease`,
-    // `docs/current-state.md §«Auto cut issue»`).
+    // `prisma/schema.prisma::CompanyDivision.autoIssueMaterialsOnCutReleaseOverride`,
+    // `apps/api/src/modules/company-settings/company-settings.service.ts::getEffectiveMaterialStockSettingsForOrder`,
+    // `docs/current-state.md §«Материалы и склад — division overrides»`).
     //
-    // Читаем ДО открытия транзакции:
-    //   - чтобы не плодить лишний `SELECT` внутри транзакции
-    //     при `false` (самый частый сценарий после миграции);
-    //   - чтобы значение не зависело от транзакционной видимости
-    //     (`SELECT` идёт через основной prisma-клиент и видит
-    //     последнюю commit-ed версию).
-    //
-    // Если строки `CompanySettings` ещё нет (свежая БД, до первого
-    // обращения к UI настроек) — `getAutoIssueMaterialsOnCutRelease`
-    // возвращает `false` и НЕ создаёт singleton-строку. Это
-    // сознательно: настройка читается из live-flow и не должна
-    // открывать сторонний write по пути выдачи кроя.
-    const autoIssueEnabled =
-      await this.companySettings.getAutoIssueMaterialsOnCutRelease();
+    // Effective policy читается ДО открытия транзакции — resolver
+    // делает только SELECT-ы (`Order`, `CompanySettings`,
+    // `CompanyDivision`) и не пишет singleton-row. Порядок:
+    //   division.autoIssueMaterialsOnCutReleaseOverride
+    //     ?? companySettings.autoIssueMaterialsOnCutRelease
+    //     ?? false
+    // Таким образом подразделение B2B может включить автосписание,
+    // даже если глобальный флаг выключен, и наоборот — в «OTHER»
+    // выключить при глобально включённом.
+    const effectivePolicy =
+      await this.companySettings.getEffectiveMaterialStockSettingsForOrder(
+        passport.orderId,
+      );
+    const autoIssueEnabled = effectivePolicy.autoIssueMaterialsOnCutRelease;
 
     // Soft-route MVP: «паспорт в маршрутном потоке» = у заказа есть
     // snapshot `OrderRouteStep[]` (а значит и `currentRouteStepIndex`

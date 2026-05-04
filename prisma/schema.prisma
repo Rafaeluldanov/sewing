@@ -4368,6 +4368,29 @@ model CompanyDivision {
   /// порядок старых.
   sortOrder   Int     @default(100)
 
+  /// Per-division override флагов блока «Материалы и склад» из
+  /// `CompanySettings` (см. `model CompanySettings` выше,
+  /// `apps/api/src/modules/company-settings/company-settings.service.ts::getEffectiveMaterialStockSettingsForOrderInTx`,
+  /// `docs/current-state.md §«Материалы и склад — division overrides»`).
+  ///
+  /// Семантика nullable (сознательно без `@default`):
+  ///   - `null`  → наследовать глобальный `CompanySettings.<флаг>`;
+  ///   - `true`  → принудительно включить для подразделения;
+  ///   - `false` → принудительно выключить для подразделения.
+  ///
+  /// Применяются к: `PassportsService.issueToEmployee`,
+  /// `MaterialIssuesService.post` / `createAutoCutIssueForPassport`,
+  /// `StockService.createAdjustment` (OUT). `PurchaseReceipt` cancel /
+  /// REVERSAL OUT сознательно остаётся permissive и от division
+  /// overrides не зависит. Effective policy считается сервисом
+  /// `CompanySettingsService.getEffectiveMaterialStockSettingsForOrder`,
+  /// который идёт через `Order.companyDivisionId`. Если у заказа нет
+  /// division (старые заказы до `link_company_divisions_to_orders` —
+  /// FK `onDelete: SetNull`), используется глобальный
+  /// `CompanySettings.<флаг>`.
+  autoIssueMaterialsOnCutReleaseOverride Boolean?
+  allowNegativeMaterialStockOverride     Boolean?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

@@ -140,10 +140,17 @@ describe('material-issues auto cut gate — PassportsService', () => {
     );
   });
 
-  test('issueToEmployee читает флаг через companySettings.getAutoIssueMaterialsOnCutRelease()', () => {
+  test('issueToEmployee читает effective autoIssue через effective resolver', () => {
+    // После итерации «Division overrides» hardening-флаг берётся
+    // через `CompanySettingsService.getEffectiveMaterialStockSettingsForOrder`
+    // — resolver учитывает per-division override и fallback на
+    // глобальный `CompanySettings.autoIssueMaterialsOnCutRelease`
+    // (см. `docs/current-state.md §«Материалы и склад — division overrides»`).
     const block =
       svc.match(/async issueToEmployee\([\s\S]*?\n  \}\n/)?.[0] ?? '';
-    expect(block).toContain(
+    expect(block).toMatch(/getEffectiveMaterialStockSettingsForOrder\(/);
+    // Прямой getter больше не дёргаем.
+    expect(block).not.toContain(
       'this.companySettings.getAutoIssueMaterialsOnCutRelease()',
     );
     // Имя локальной переменной фиксируем, чтобы next-step

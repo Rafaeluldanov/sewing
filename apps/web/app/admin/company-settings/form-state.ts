@@ -32,3 +32,19 @@ export interface UpdateCompanyDivisionState {
 }
 
 export const initialUpdateCompanyDivisionState: UpdateCompanyDivisionState = {};
+
+/**
+ * State inline-формы «Настройки материалов и склада по подразделениям»
+ * (см. `material-stock-division-overrides-section.tsx`). Отдельный
+ * тип, чтобы успех/ошибка одной строки не перезаписывали общий
+ * feedback правки реквизитов.
+ */
+export interface UpdateCompanyDivisionOverridesState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialUpdateCompanyDivisionOverridesState: UpdateCompanyDivisionOverridesState =
+  {};

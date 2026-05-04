@@ -29,6 +29,7 @@ import {
 } from '@/lib/company-settings-api';
 import type {
   CreateCompanyDivisionState,
+  UpdateCompanyDivisionOverridesState,
   UpdateCompanyDivisionState,
   UpdateCompanySettingsState,
 } from './form-state';
@@ -198,6 +199,69 @@ export async function updateCompanyDivisionAction(
       error: parsed.error.issues[0]?.message ?? 'Невалидные данные',
     };
   }
+  try {
+    await updateCompanyDivision(divisionId, parsed.data);
+    revalidatePath(ADMIN_PATH);
+    return { ok: true, successMessage: 'Сохранено.' };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
+}
+
+/**
+ * Server action секции «Настройки по подразделениям» блока
+ * «Материалы и склад»
+ * (см. `material-stock-division-overrides-section.tsx`,
+ * `apps/api/src/modules/company-settings/company-settings.service.ts::getEffectiveMaterialStockSettingsForOrder`,
+ * `docs/current-state.md §«Материалы и склад — division overrides»`).
+ *
+ * Принимает одну строку-форму с двумя select-ами и сохраняет их
+ * override-значения через существующий `PATCH /api/company-divisions/:id`.
+ * Новый backend endpoint не создаём — используем тот же контракт,
+ * что и обычное редактирование подразделения.
+ *
+ * Values select-а (см. `DIVISION_OVERRIDE_*_VALUE`):
+ *   - `'inherit'` → `null`  (наследовать глобальную `CompanySettings`);
+ *   - `'true'`    → `true`  (принудительно включить override);
+ *   - `'false'`   → `false` (принудительно выключить override);
+ *   - отсутствие поля в форме (`null`) трактуем как `undefined` и не
+ *     трогаем значение в БД (безопасный дефолт; в нашем UI select
+ *     всегда присутствует, но страхуемся).
+ */
+function parseDivisionOverrideFieldValue(
+  raw: FormDataEntryValue | null,
+): boolean | null | undefined {
+  if (raw === null) return undefined;
+  const v = String(raw);
+  if (v === 'inherit') return null;
+  if (v === 'true') return true;
+  if (v === 'false') return false;
+  return undefined;
+}
+
+export async function updateCompanyDivisionOverridesAction(
+  divisionId: string,
+  _prev: UpdateCompanyDivisionOverridesState,
+  form: FormData,
+): Promise<UpdateCompanyDivisionOverridesState> {
+  const body: UpdateCompanyDivisionDto = {};
+  const auto = parseDivisionOverrideFieldValue(
+    form.get('autoIssueMaterialsOnCutReleaseOverride'),
+  );
+  if (auto !== undefined) body.autoIssueMaterialsOnCutReleaseOverride = auto;
+  const neg = parseDivisionOverrideFieldValue(
+    form.get('allowNegativeMaterialStockOverride'),
+  );
+  if (neg !== undefined) body.allowNegativeMaterialStockOverride = neg;
+
+  const parsed = UpdateCompanyDivisionSchema.safeParse(body);
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные',
+    };
+  }
+
   try {
     await updateCompanyDivision(divisionId, parsed.data);
     revalidatePath(ADMIN_PATH);

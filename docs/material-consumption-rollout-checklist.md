@@ -141,11 +141,59 @@ POST /api/purchase-receipts/:id/cancel
 
 ## 3. Флаги CompanySettings
 
-Оба флага живут в `CompanySettings` (singleton-row), читаются
-backend-ом в горячем flow через приватные геттеры
-`CompanySettingsService.getAutoIssueMaterialsOnCutRelease()` /
-`.getAllowNegativeMaterialStock()`. Управляются через
-`/admin/company-settings`, блок «Материалы и склад».
+Оба флага живут в `CompanySettings` (singleton-row). Это
+**глобальные значения по умолчанию** для компании. Начиная с
+итерации «division overrides» горячий бизнес-flow
+(`PassportsService.issueToEmployee`, `MaterialIssuesService.post` /
+`createAutoCutIssueForPassport`, `StockService.createAdjustment`
+для `OUT`) читает не эти флаги напрямую, а **эффективную политику
+по заказу** через
+`CompanySettingsService.getEffectiveMaterialStockSettingsForOrder(orderId)`
+(или `-InTx`). Резолвер идёт по цепочке
+`Order → Order.companyDivisionId → CompanyDivision.<override>`
+и применяет приоритет:
+
+```
+division.<override> ?? companySettings.<флаг> ?? hard-coded default
+```
+
+То есть:
+
+- `null` у `CompanyDivision.<override>` (default у всех подразделений
+  после миграции, в т.ч. базовых `MARKETPLACE` / `OTHER`) → работает
+  глобальный `CompanySettings.<флаг>`;
+- `true` / `false` у override → перебивают глобальный флаг только
+  для заказов этого подразделения;
+- если у заказа нет `companyDivisionId` (старые заказы до
+  `link_company_divisions_to_orders`, FK `onDelete: SetNull`) —
+  используется глобальный `CompanySettings.<флаг>` без override.
+
+Глобальные два переключателя по-прежнему живут в
+`/admin/company-settings` → блок «Материалы и склад». Override-ы
+редактируются на том же экране в подразделе «Настройки по
+подразделениям» — отдельной страницы, нового route-а и пункта
+sidebar сознательно **нет** (см. §8 границ MVP и
+`docs/current-state.md §«Материалы и склад — division overrides»`).
+
+> **Пример B2B-подразделения.** На `/admin/company-settings`:
+> - глобальный блок «Материалы и склад» можно оставить в любом
+>   состоянии (например, автосписание `false`, минус `true`);
+> - в «Настройки по подразделениям» для B2B (условно
+>   `CompanyDivision(code='OTHER')`) выставить:
+>   - «Автосписание при выдаче кроя» → «Включено»
+>     (`autoIssueMaterialsOnCutReleaseOverride = true`);
+>   - «Отрицательные остатки» → «Запрещены»
+>     (`allowNegativeMaterialStockOverride = false`).
+>
+> Тогда заказы B2B-подразделения автоматически списывают крой и
+> блокируются при недостатке материала, а заказы всех остальных
+> подразделений продолжают работать по глобальным настройкам
+> компании.
+
+`PurchaseReceipt` / `PurchaseReceipt cancel` (REVERSAL OUT)
+сознательно **остаются permissive** и от division-override-ов не
+зависят — это закрывает сценарий «задним числом оформить приход,
+который уже был расходован».
 
 ### `autoIssueMaterialsOnCutRelease`
 

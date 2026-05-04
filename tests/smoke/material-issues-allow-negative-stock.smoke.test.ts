@@ -270,19 +270,22 @@ describe('hardening «allowNegativeMaterialStock» — MaterialIssuesService', (
     expect(svc).toMatch(/private\s+readonly\s+companySettings:\s*CompanySettingsService/);
   });
 
-  test('post() читает getAllowNegativeMaterialStock и пробрасывает в recordMaterialIssueInTx', () => {
+  test('post() резолвит effective allowNegative по orderId и пробрасывает в recordMaterialIssueInTx', () => {
+    // После итерации «Division overrides» hardening-флаг берётся
+    // через `CompanySettingsService.getEffectiveMaterialStockSettingsForOrder`
+    // (см. `docs/current-state.md §«Материалы и склад — division overrides»`).
     const post = svc.match(/\n  async post\([\s\S]*?\n  \}\n/)?.[0];
     expect(post).toBeTruthy();
-    expect(post!).toMatch(/this\.companySettings\.getAllowNegativeMaterialStock\(/);
+    expect(post!).toMatch(/getEffectiveMaterialStockSettingsForOrder\(/);
     expect(post!).toMatch(/recordMaterialIssueInTx[\s\S]*?allowNegativeStock/);
   });
 
-  test('createAutoCutIssueForPassport читает флаг и пробрасывает в recordMaterialIssueInTx', () => {
+  test('createAutoCutIssueForPassport резолвит effective через tx и пробрасывает в recordMaterialIssueInTx', () => {
     const auto = svc.match(
       /async createAutoCutIssueForPassport[\s\S]*?\n  \}\n/,
     )?.[0];
     expect(auto).toBeTruthy();
-    expect(auto!).toMatch(/this\.companySettings\.getAllowNegativeMaterialStock\(/);
+    expect(auto!).toMatch(/getEffectiveMaterialStockSettingsForOrderInTx\(/);
     expect(auto!).toMatch(/recordMaterialIssueInTx[\s\S]*?allowNegativeStock/);
   });
 

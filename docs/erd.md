@@ -744,6 +744,20 @@
   подразделений заказа и display screens.
   - `code String @unique`, `name String`, `description String?`,
     `isActive Boolean @default(true)`, `sortOrder Int @default(100)`.
+  - `autoIssueMaterialsOnCutReleaseOverride Boolean?`,
+    `allowNegativeMaterialStockOverride Boolean?` — per-division
+    override глобальных флагов блока «Материалы и склад» из
+    `CompanySettings` (`null` → наследовать, `true`/`false` →
+    принудительно; `@default` нет — `null` как раз и есть семантика
+    «наследовать»). Effective policy считает
+    `CompanySettingsService.getEffectiveMaterialStockSettingsForOrder{InTx}`
+    (см. §2.15 выше, `docs/current-state.md §«Материалы и склад —
+    division overrides»`). Применяется к
+    `PassportsService.issueToEmployee`,
+    `MaterialIssuesService.post` / `createAutoCutIssueForPassport`,
+    `StockService.createAdjustment` (OUT). `PurchaseReceipt` cancel /
+    REVERSAL OUT сознательно остаётся permissive и от override не
+    зависит.
   - индексы: `isActive`, `sortOrder`.
   - На этот справочник ссылаются `Order.companyDivisionId`,
     `DisplayScreenConfig.companyDivisionId` и (PHASE 2 STEP 2)

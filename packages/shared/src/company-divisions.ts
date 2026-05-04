@@ -120,6 +120,26 @@ const SortOrderField = z
   .min(0, 'Порядок не может быть отрицательным')
   .max(100000, 'Слишком большой порядок');
 
+/**
+ * Per-division override флагов блока «Материалы и склад» из
+ * `CompanySettings` (см.
+ * `prisma/schema.prisma::CompanyDivision.{autoIssueMaterialsOnCutReleaseOverride, allowNegativeMaterialStockOverride}`,
+ * `apps/api/src/modules/company-settings/company-settings.service.ts::getEffectiveMaterialStockSettingsForOrder`,
+ * `docs/current-state.md §«Материалы и склад — division overrides»`).
+ *
+ * Семантика:
+ *   - `null`       → наследовать глобальный `CompanySettings.<флаг>`;
+ *   - `true`       → принудительно включить для подразделения;
+ *   - `false`      → принудительно выключить для подразделения;
+ *   - `undefined`  → backend поле не трогает (стандартный PATCH-
+ *     контракт: поле не передано — текущее значение сохраняется).
+ *
+ * Nullable обязателен: он нужен, чтобы UI умел СБРОСИТЬ override в
+ * «наследовать» без удаления карточки. `@default` в схеме нет —
+ * `null` это «не задано», не «наследовать глобальный false».
+ */
+const OverrideBooleanField = z.boolean().nullable().optional();
+
 // ---------------------------------------------------------------------------
 // Request DTO
 // ---------------------------------------------------------------------------
@@ -130,6 +150,18 @@ export const CreateCompanyDivisionSchema = z.object({
   description: DescriptionField,
   isActive: z.boolean().optional(),
   sortOrder: SortOrderField.optional(),
+  /**
+   * Override `CompanySettings.autoIssueMaterialsOnCutRelease` для
+   * подразделения. На создании можно сразу задать конкретную
+   * политику или оставить `null` / `undefined` для наследования.
+   */
+  autoIssueMaterialsOnCutReleaseOverride: OverrideBooleanField,
+  /**
+   * Override `CompanySettings.allowNegativeMaterialStock` для
+   * подразделения. Semantics — как у
+   * `autoIssueMaterialsOnCutReleaseOverride`.
+   */
+  allowNegativeMaterialStockOverride: OverrideBooleanField,
 });
 export type CreateCompanyDivisionDto = z.infer<
   typeof CreateCompanyDivisionSchema
@@ -142,6 +174,17 @@ export const UpdateCompanyDivisionSchema = z
     description: DescriptionField,
     isActive: z.boolean().optional(),
     sortOrder: SortOrderField.optional(),
+    /**
+     * Override для `CompanySettings.autoIssueMaterialsOnCutRelease`.
+     * PATCH принимает `boolean` (переопределить), `null` (сбросить в
+     * «наследовать») или `undefined` (не трогать).
+     */
+    autoIssueMaterialsOnCutReleaseOverride: OverrideBooleanField,
+    /**
+     * Override для `CompanySettings.allowNegativeMaterialStock`.
+     * Семантика — как у `autoIssueMaterialsOnCutReleaseOverride`.
+     */
+    allowNegativeMaterialStockOverride: OverrideBooleanField,
   })
   .refine(
     (obj) =>
@@ -149,7 +192,9 @@ export const UpdateCompanyDivisionSchema = z
       obj.name !== undefined ||
       obj.description !== undefined ||
       obj.isActive !== undefined ||
-      obj.sortOrder !== undefined,
+      obj.sortOrder !== undefined ||
+      obj.autoIssueMaterialsOnCutReleaseOverride !== undefined ||
+      obj.allowNegativeMaterialStockOverride !== undefined,
     'Нечего обновлять: укажите хотя бы одно поле',
   );
 export type UpdateCompanyDivisionDto = z.infer<
@@ -190,6 +235,18 @@ export interface CompanyDivisionDto {
   description: string | null;
   isActive: boolean;
   sortOrder: number;
+  /**
+   * Override `CompanySettings.autoIssueMaterialsOnCutRelease` для
+   * подразделения. `null` означает «наследовать глобальную
+   * настройку компании» (см.
+   * `apps/api/src/modules/company-settings/company-settings.service.ts::getEffectiveMaterialStockSettingsForOrder`).
+   */
+  autoIssueMaterialsOnCutReleaseOverride: boolean | null;
+  /**
+   * Override `CompanySettings.allowNegativeMaterialStock`. Семантика —
+   * как у `autoIssueMaterialsOnCutReleaseOverride`.
+   */
+  allowNegativeMaterialStockOverride: boolean | null;
   createdAt: string; // ISO
   updatedAt: string; // ISO
 }

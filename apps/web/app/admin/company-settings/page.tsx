@@ -9,6 +9,7 @@ import {
 import { AdminPageShell } from '@/components/admin';
 import { CompanySettingsForm } from './settings-form';
 import { DivisionsSection } from './divisions-section';
+import { MaterialStockDivisionOverridesSection } from './material-stock-division-overrides-section';
 
 export const dynamic = 'force-dynamic';
 
@@ -62,6 +63,12 @@ export default async function AdminCompanySettingsPage() {
       )}
 
       {settings && <CompanySettingsForm settings={settings} />}
+      {settings && (
+        <MaterialStockDivisionOverridesSection
+          divisions={divisions}
+          settings={settings}
+        />
+      )}
       {settings && <DivisionsSection divisions={divisions} />}
     </AdminPageShell>
   );

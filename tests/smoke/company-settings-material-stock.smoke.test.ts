@@ -305,16 +305,31 @@ describe('company-settings material/stock UI — backend flow не перепи�
     expect(src).toMatch(/MaterialStockInsufficientException/);
   });
 
-  test('MaterialIssuesService всё так же читает getAllowNegativeMaterialStock', () => {
+  test('MaterialIssuesService читает effective material stock settings resolver', () => {
+    // После division-overrides итерации hardening-флаг берётся через
+    // `getEffectiveMaterialStockSettingsForOrder{InTx}` (см.
+    // `apps/api/src/modules/company-settings/company-settings.service.ts`,
+    // `docs/current-state.md §«Материалы и склад — division overrides»`).
+    // Прямой getter `getAllowNegativeMaterialStock` сервис больше
+    // не дёргает — effective resolver сам учитывает division override
+    // и fallback на глобальный `CompanySettings.allowNegativeMaterialStock`.
     const src = read(MATERIAL_ISSUES_SERVICE_PATH);
     expect(src).toMatch(
+      /getEffectiveMaterialStockSettingsForOrder(?:InTx)?\(/,
+    );
+    expect(src).not.toMatch(
       /this\.companySettings\.getAllowNegativeMaterialStock\(/,
     );
   });
 
-  test('PassportsService всё так же читает getAutoIssueMaterialsOnCutRelease', () => {
+  test('PassportsService читает effective auto-issue через resolver', () => {
+    // Аналогично: `issueToEmployee` учитывает division override
+    // `CompanyDivision.autoIssueMaterialsOnCutReleaseOverride`.
     const src = read(PASSPORTS_SERVICE_PATH);
     expect(src).toMatch(
+      /getEffectiveMaterialStockSettingsForOrder(?:InTx)?\(/,
+    );
+    expect(src).not.toMatch(
       /this\.companySettings\.getAutoIssueMaterialsOnCutRelease\(/,
     );
   });

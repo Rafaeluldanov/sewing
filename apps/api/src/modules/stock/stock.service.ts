@@ -1103,6 +1103,42 @@ export class StockService {
    *   - пишет audit `STOCK_ADJUSTMENT_CREATED` под
    *     `entityType = STOCK_MOVEMENT` в той же транзакции.
    */
+  /**
+   * Resolve эффективного `allowNegativeMaterialStock` для OUT-
+   * корректировки `StockBalance`.
+   *
+   * Порядок разрешения (см.
+   * `CompanySettingsService.getEffectiveMaterialStockSettingsForOrder`,
+   * `docs/current-state.md §«Материалы и склад — division overrides»`):
+   *   1. `StockBalance → WorkshopNeed.orderId`;
+   *   2. если у заказа есть `companyDivisionId` и у division стоит
+   *      override `allowNegativeMaterialStockOverride` — берём его;
+   *   3. иначе — глобальный `CompanySettings.allowNegativeMaterialStock`
+   *      (default `true`).
+   *
+   * Если `stockBalanceId` не найден / `WorkshopNeed` без заказа
+   * (теоретически невозможно на production, но страхуемся) —
+   * возвращаем глобальный флаг через
+   * `CompanySettingsService.getAllowNegativeMaterialStock()`.
+   */
+  private async resolveAdjustmentAllowNegative(
+    stockBalanceId: string,
+  ): Promise<boolean> {
+    const balance = await this.prisma.stockBalance.findUnique({
+      where: { id: stockBalanceId },
+      select: { workshopNeed: { select: { orderId: true } } },
+    });
+    const orderId = balance?.workshopNeed?.orderId ?? null;
+    if (!orderId) {
+      return this.companySettings.getAllowNegativeMaterialStock();
+    }
+    const effective =
+      await this.companySettings.getEffectiveMaterialStockSettingsForOrder(
+        orderId,
+      );
+    return effective.allowNegativeMaterialStock;
+  }
+
   async createAdjustment(
     dto: CreateStockAdjustmentDto,
     employeeId: string | null | undefined,
@@ -1139,9 +1175,21 @@ export class StockService {
     }
 
     // Hardening-флаг читаем ДО $transaction — это безопасный SELECT
-    // (см. `MaterialIssuesService.post`).
-    const allowNegativeStock =
-      await this.companySettings.getAllowNegativeMaterialStock();
+    // (см. `MaterialIssuesService.post`). Для OUT эффективный флаг
+    // учитывает per-division override
+    // `CompanyDivision.allowNegativeMaterialStockOverride`, если у
+    // остатка есть связанный заказ (`StockBalance.workshopNeed.orderId`).
+    // При отсутствии заказа (старые foundation-балансы) / отсутствии
+    // у заказа `companyDivisionId` — fallback на глобальный
+    // `CompanySettings.allowNegativeMaterialStock`. IN-корректировки
+    // от флага не зависят — ниже мы всё равно передаём `true` для IN.
+    //
+    // `PurchaseReceipt` cancel / REVERSAL OUT сознательно остаётся
+    // permissive (см. `reversePurchaseReceiptInTx`) — корректировка
+    // приёмки другой бизнес-сценарий.
+    const allowNegativeStock = await this.resolveAdjustmentAllowNegative(
+      dto.stockBalanceId,
+    );
 
     const isIn = dto.direction === STOCK_MOVEMENT_DIRECTION.IN;
     const clientRequestId = dto.clientRequestId ?? randomUUID();
