@@ -9,6 +9,7 @@ import { randomBytes } from 'node:crypto';
 import { Prisma } from '@prisma/client';
 import type {
   AgentPairResultDto,
+  AgentSelectWindowsPrinterResultDto,
   AgentWindowsPrintersDto,
   AgentWindowsPrintersResultDto,
   CreatePrinterDto,
@@ -282,6 +283,53 @@ export class PrintersService {
       selectedWindowsPrinter: updated.selectedWindowsPrinter,
       availableWindowsPrinters: updated.availableWindowsPrinters,
       agentHostName: updated.agentHostName,
+    };
+  }
+
+  /**
+   * Агент сам выставляет физический Windows-принтер (см.
+   * `POST /api/printers/agent/select-windows-printer`,
+   * `apps/agent/src/wizard.mjs`). Защищён `AgentAuthGuard`-ом, так
+   * что менять можно только «свой» принтер: `printerId` приходит из
+   * `X-Printer-Agent-Token`, а не из тела.
+   *
+   * Имя обязательно должно лежать в `availableWindowsPrinters` (его
+   * только что прислал тот же агент через
+   * `updateWindowsPrinters`). Если нет — 422
+   * `WINDOWS_PRINTER_NOT_FOUND_FOR_AGENT`, та же ошибка, что и для
+   * UI-PATCH — обработка единая.
+   *
+   * `name=null` снимает выбор (симметрично PATCH-у в UI).
+   */
+  async selectWindowsPrinterByAgent(
+    printerId: string,
+    name: string | null,
+  ): Promise<AgentSelectWindowsPrinterResultDto> {
+    const existing = await this.prisma.printer.findUnique({
+      where: { id: printerId },
+      select: { id: true, availableWindowsPrinters: true },
+    });
+    if (!existing) throw new PrinterNotFoundException();
+
+    if (name !== null) {
+      const allowed = existing.availableWindowsPrinters ?? [];
+      if (!allowed.includes(name)) {
+        throw new WindowsPrinterNotFoundForAgentException(name);
+      }
+    }
+
+    const updated = await this.prisma.printer.update({
+      where: { id: printerId },
+      data: {
+        selectedWindowsPrinter: name,
+        isOnline: true,
+        lastSeenAt: new Date(),
+      },
+      select: { id: true, selectedWindowsPrinter: true },
+    });
+    return {
+      printerId: updated.id,
+      selectedWindowsPrinter: updated.selectedWindowsPrinter,
     };
   }
 

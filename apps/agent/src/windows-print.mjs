@@ -41,7 +41,7 @@
 
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { basename, dirname, extname, isAbsolute, join, resolve } from 'node:path';
 import { log } from './logger.mjs';
@@ -229,6 +229,14 @@ export async function printHtmlWithBrowser(filePath, printerName, options = {}) 
   let userDataDir = null;
   try {
     userDataDir = await mkdtemp(join(tmpdir(), 'sewing-chrome-'));
+    // Без подложенных preferences chromium при kiosk-printing берёт
+    // дефолтные «sticky settings» (header/footer ON, fitToPage ON,
+    // margins=default) и печатает в шапке URL вида
+    // file:///C:/Users/.../job-…autoprint.html, а в футере — дату.
+    // Менеджеры жалуются, что у них на этикетке поверх данных
+    // печатается путь к файлу. Подкладываем свой профиль с
+    // выключенным header/footer и нулевыми полями.
+    await seedPrintPreferences(userDataDir);
     const args = [
       '--kiosk-printing',
       '--no-first-run',
@@ -352,6 +360,99 @@ async function writeAutoPrintWrapper(htmlPath) {
   return {
     path: wrapperPath,
   };
+}
+
+/**
+ * Записать в свежий chromium-профиль `Default/Preferences` так, чтобы
+ * `--kiosk-printing` НЕ печатал заголовок (URL/имя файла) и подвал
+ * (дата/нумерация) поверх содержимого.
+ *
+ * Chromium хранит настройки диалога печати в виде JSON-СТРОКИ внутри
+ * Preferences по ключу
+ * `printing.print_preview_sticky_settings.appState`. С версии M61+
+ * это единственный способ выключить header/footer без UI-диалога:
+ * ни CLI-флага, ни ENV-переменной нет (см.
+ * https://crbug.com/753092 и https://issues.chromium.org/issues/41258586).
+ *
+ * Поля `appState`, которые нам важны:
+ *   - `version: 2`                 — обязательное у chromium;
+ *   - `isHeaderFooterEnabled: false` — собственно убирает шапку/подвал;
+ *   - `marginsType: 2`             — «printable area»: Chrome
+ *                                    уважает hardware-margins
+ *                                    принтера. У термопринтеров
+ *                                    (TSC TE200 и т.п.) термоголовка
+ *                                    не дотягивается до самого края
+ *                                    этикетки — если попросить
+ *                                    `1` (no margins), драйвер
+ *                                    срезает левую/верхнюю кромку
+ *                                    примерно на 2 cm, и контент
+ *                                    обрезается. `2` решает это
+ *                                    автоматически на всех принтерах;
+ *   - `isCssBackgroundEnabled: true` — иначе на термоэтикетке
+ *                                    пропадают чёрные блоки/заливка.
+ *
+ * userDataDir обязательно создан до этого вызова (`mkdtemp`).
+ * Если запись не удалась — мы НЕ роняем job: печать без preferences
+ * по-прежнему пройдёт, просто с шапкой/подвалом, как было раньше.
+ * Это лучше «failed-job из-за нашей косметики».
+ */
+async function seedPrintPreferences(userDataDir) {
+  try {
+    const defaultDir = join(userDataDir, 'Default');
+    await mkdir(defaultDir, { recursive: true });
+    const appState = JSON.stringify({
+      version: 2,
+      recentDestinations: [],
+      isHeaderFooterEnabled: false,
+      isCssBackgroundEnabled: true,
+      // 0=DEFAULT_MARGINS, 1=NO_MARGINS (срезает край термопринтера),
+      // 2=PRINTABLE_AREA_MARGINS (driver hardware-margins),
+      // 3=CUSTOM_MARGINS. На MVP берём `2` — самый безопасный выбор:
+      // печатаем всю печатаемую драйвером область, без зазора от
+      // CSS @page и без среза по краям.
+      marginsType: 2,
+      // `mediaSize` намеренно НЕ задаём: размер бумаги/этикетки
+      // должен прийти из настроек принтера в Windows. Если задать
+      // CUSTOM здесь, Chrome игнорирует @page CSS из payload-а
+      // (тестовая страница, паспорт, этикетка склада — у каждого
+      // своя геометрия).
+      //
+      // scalingType:
+      //   0 = DEFAULT (как настроено в драйвере)
+      //   1 = FIT_TO_PAGE (вписать в этикетку — нужно нам)
+      //   2 = FIT_TO_PAPER
+      //   3 = CUSTOM (использовать `scaling`)
+      //   4 = NO_SCALING (1:1, контент вылезает за границы маленькой
+      //       этикетки и обрезается)
+      // Берём `1` — на термопринтере с этикеткой 38×25 / 58×40 / 100×150
+      // содержимое автоматически уменьшается, чтобы целиком влезть
+      // в печатаемую область. На офисном A4 это безвредно: и так
+      // страница поместится с запасом. `scalingTypePdf` симметрично
+      // для PDF-payload-ов (паспорт через `printFileOnWindows` это
+      // не трогает — там handler сам решает, но если когда-то
+      // будем печатать PDF через Chrome, поведение будет таким же).
+      scalingType: 1,
+      scalingTypePdf: 1,
+    });
+    const preferences = {
+      printing: {
+        print_preview_sticky_settings: { appState },
+      },
+    };
+    await writeFile(
+      join(defaultDir, 'Preferences'),
+      JSON.stringify(preferences),
+      'utf8',
+    );
+    log.info(
+      `Seeded chromium print preferences (header/footer off): ${defaultDir}`,
+    );
+  } catch (err) {
+    log.warn(
+      `Failed to seed print preferences (печать пройдёт с дефолтным ` +
+        `header/footer): ${err instanceof Error ? err.message : String(err)}`,
+    );
+  }
 }
 
 /**

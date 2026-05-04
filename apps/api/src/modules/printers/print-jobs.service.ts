@@ -42,16 +42,19 @@ export class PrintJobsService {
   ): Promise<PrintJobDto> {
     const printer = await this.resolvePrinter(employeeId, dto.printerId);
     if (!printer.isActive) throw new PrinterInactiveException();
-    const payloadUrl = buildPayloadUrl(
-      apiBaseUrl,
-      dto.sourceType,
-      dto.sourceId,
-    );
+    // Для TEST используем сам принтер как sourceId — payloadUrl
+    // станет `/api/printers/<printerId>/test-page` (HTML, который
+    // агент умеет печатать через Chrome/Edge). Раньше TEST мапился
+    // на `/api/health` (JSON), и job всегда падал с
+    // «Unsupported print file type: .json».
+    const sourceId =
+      dto.sourceType === 'TEST' ? dto.sourceId ?? printer.id : dto.sourceId;
+    const payloadUrl = buildPayloadUrl(apiBaseUrl, dto.sourceType, sourceId);
     const created = await this.prisma.printJob.create({
       data: {
         printerId: printer.id,
         sourceType: dto.sourceType,
-        sourceId: dto.sourceId ?? null,
+        sourceId: sourceId ?? null,
         payloadUrl,
         status: 'PENDING',
       },
@@ -300,7 +303,14 @@ export class PrinterNotConfiguredException extends ConflictException {
  *   BOX_LABEL      → /api/packing/boxes/:id/label (HTML)
  *   CELL_QR        → /api/cells/:id/qr         (PNG, голый QR)
  *   CELL_LABEL     → /api/cells/:id/print      (HTML, готовая 38×58 этикетка)
- *   TEST           → /api/health               (заглушка для «Тестовая печать»)
+ *   TEST           → /api/printers/:id/test-page (HTML, тестовая
+ *                    страница «связь до принтера работает», см.
+ *                    `PrintersController.getTestPage`). На MVP
+ *                    `sourceId` для TEST = printerId (подставляется
+ *                    автоматически в `createForUser`).
+ *                    Старый маппинг `/api/health` (JSON) ушёл, потому
+ *                    что агент не умел такое печатать и job уходил
+ *                    в FAILED со «Unsupported print file type: .json».
  */
 export function buildPayloadUrl(
   apiBaseUrl: string,
@@ -325,7 +335,12 @@ export function buildPayloadUrl(
       assertSourceId(sourceType, sourceId);
       return `${base}/cells/${encodeURIComponent(sourceId!)}/print`;
     case 'TEST':
-      return `${base}/health`;
+      // `createForUser` подставит printerId как sourceId, если его
+      // не было в DTO — ручной POST без sourceId в теории даст 409
+      // PRINT_JOB_SOURCE_ID_REQUIRED, но в продовом UI кнопка
+      // «Тестовая печать» всегда идёт через `createForUser`.
+      assertSourceId(sourceType, sourceId);
+      return `${base}/printers/${encodeURIComponent(sourceId!)}/test-page`;
     default: {
       const _exhaustive: never = sourceType;
       throw new Error(`Unknown sourceType: ${String(_exhaustive)}`);

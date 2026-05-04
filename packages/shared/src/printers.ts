@@ -260,6 +260,38 @@ export type AgentWindowsPrintersDto = z.infer<
 >;
 
 /**
+ * Тело `POST /api/printers/agent/select-windows-printer` — агент сам
+ * выставляет физический Windows-принтер, выбранный оператором в его
+ * локальном wizard-е (см. `apps/agent/src/wizard.mjs`). Раньше это
+ * мог сделать только менеджер через UI `/admin/printers/:id`; теперь
+ * оператор может всё настроить с своей машины при первом запуске.
+ *
+ * Защищено `AgentAuthGuard` (`X-Printer-Agent-Token`), так что нельзя
+ * выставить чужой принтер. Имя обязательно должно быть в
+ * `availableWindowsPrinters`, иначе сервер вернёт
+ * `WINDOWS_PRINTER_NOT_FOUND_FOR_AGENT` (422). `name=null` снимает
+ * выбор — оставлено для симметрии с UI, агент сейчас этим не
+ * пользуется.
+ */
+export const AgentSelectWindowsPrinterSchema = z.object({
+  name: z.string().trim().min(1).max(255).nullable(),
+});
+export type AgentSelectWindowsPrinterDto = z.infer<
+  typeof AgentSelectWindowsPrinterSchema
+>;
+
+/**
+ * Ответ `POST /api/printers/agent/select-windows-printer`. Возвращаем
+ * подтверждённый `selectedWindowsPrinter` (то, что реально лежит в
+ * БД после апдейта) — агент сразу пишет это в свой лог и больше не
+ * ходит на сервер за подтверждением.
+ */
+export interface AgentSelectWindowsPrinterResultDto {
+  printerId: string;
+  selectedWindowsPrinter: string | null;
+}
+
+/**
  * Тело `POST /api/print-jobs` — создание задания на печать сотрудником
  * системы. `printerId` опционален: если не передан, backend сам ищет
  * активный принтер по `equipmentId` текущей смены.
