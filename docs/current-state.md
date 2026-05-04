@@ -596,6 +596,7 @@ deploy/           — конфиги развёртывания
 | `docs/adr/*.md` | принятые архитектурные решения |
 | `docs/pilot/*` | rollout / UAT (не нужно для разработки) |
 | `docs/*-recon.md` | рабочие планы внедрения подсистем (читать только по теме) |
+| [`docs/material-consumption-rollout-checklist.md`](./material-consumption-rollout-checklist.md) | rollout / приёмочный checklist по фактическому расходу материалов и foundation складского учёта |
 
 Архивные / устаревшие документы помечены `OUTDATED` / `ARCHIVED` в
 `docs/index.md`. В спорных местах **верим коду**, а не документу.
