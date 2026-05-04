@@ -577,35 +577,12 @@ describe('Packing earnings approval timing (ADR-0005)', () => {
   });
 });
 
-describe('homepage tile visibility', () => {
-  test('app/page.tsx использует canSeeOrdersMenu для тайла «Заказы» (CUTTER_ASSISTANT исключён)', () => {
-    const src = readSrc('apps/web/app/page.tsx');
-    // Тайл «Заказы» на главной должен использовать ту же матрицу
-    // видимости, что header / mobile-nav, иначе у CUTTER_ASSISTANT
-    // снова появится entry point в admin-раздел.
-    expect(src).toMatch(/canSeeOrdersMenu/);
-    expect(src).not.toMatch(/canSeeOrders\(/);
-    // Тайл по-прежнему виден ADMIN/SHOP_MANAGER через showOrders.
-    expect(src).toMatch(/showOrders && \(/);
-    expect(src).toMatch(/title="Заказы"/);
-  });
-
-  test('app/page.tsx прячет терминальные тайлы у SHOP_MANAGER через *Menu-хелперы', () => {
-    const src = readSrc('apps/web/app/page.tsx');
-    // Те же *Menu-хелперы, что в header/mobile-nav: тайлы
-    // «Рабочее место» / «ОТК» / «ВТО» / «Упаковка» у начальника
-    // цеха в навигации не показываем (см. `canSeeQcMenu` и т.д.).
-    expect(src).toMatch(/canSeeQcMenu/);
-    expect(src).toMatch(/canSeeWtoMenu/);
-    expect(src).toMatch(/canSeePackingMenu/);
-    expect(src).toMatch(/canSeeWorkTab/);
-    // Тайл «Рабочее место» теперь под флагом `showWork`, а не
-    // безусловный — иначе SHOP_MANAGER снова увидит точку входа в
-    // терминал швеи на главной.
-    expect(src).toMatch(/showWork && \(/);
-    expect(src).toMatch(/title="Рабочее место"/);
-  });
-});
+// Старый блок `homepage tile visibility` удалён вместе с tile-сеткой
+// на `/`. После auth-design-cleanup-а корневая страница — pure
+// redirect (см. `apps/web/app/page.tsx` и
+// `docs/auth-design-cleanup-recon.md §3, §7`); ассерты на тайлы и
+// `*Menu`-хелперы внутри `/page.tsx` потеряли смысл. Поведение
+// корня закрепляется в `tests/smoke/auth-design-cleanup.smoke.test.ts`.
 
 describe('frontend nav-visibility helpers fed into layout / mobile-nav', () => {
   test('apps/web/app/layout.tsx прокидывает show-флаги в MobileNav', () => {
@@ -735,28 +712,39 @@ describe('primary workspace per role (one terminal per role)', () => {
   });
 });
 
-describe('login redirect uses primary workspace', () => {
-  test('apps/web/app/login/actions.ts по умолчанию ведёт в getPrimaryWorkspace роли', () => {
+describe('login redirect uses safeReturnTo + getDefaultRouteForRole', () => {
+  test('apps/web/app/login/actions.ts использует safeReturnTo (не getPrimaryWorkspace напрямую)', () => {
     const src = readSrc('apps/web/app/login/actions.ts');
-    expect(src).toMatch(/getPrimaryWorkspace/);
-    // Если `next` пуст или просто `/` — летим в primary workspace роли,
-    // а не в `/`.
-    expect(src).toMatch(/next === '\/'/);
-    expect(src).toMatch(/getPrimaryWorkspace\(role\)/);
-    // Старый «hard-coded» fallback на `/` ушёл.
+    // После auth-design-cleanup-а login action делегирует роутинг
+    // единому `safeReturnTo` (см. `apps/web/lib/safe-return-to.ts`),
+    // который сам зовёт `getDefaultRouteForRole`. Старый ручной
+    // `next === '/'` + `getPrimaryWorkspace(role)` больше не нужен.
+    expect(src).toMatch(/safeReturnTo/);
+    expect(src).not.toMatch(/getPrimaryWorkspace/);
+    // Старого «hard-coded» fallback на `/` тоже не должно остаться.
     expect(src).not.toMatch(/redirect\(next\.startsWith/);
   });
 
-  test('apps/web/app/login/page.tsx редиректит уже залогиненного в primary workspace', () => {
+  test('apps/web/app/login/page.tsx редиректит уже залогиненного через safeReturnTo', () => {
     const src = readSrc('apps/web/app/login/page.tsx');
-    expect(src).toMatch(/getPrimaryWorkspace\(me\.user\.role\)/);
+    expect(src).toMatch(/safeReturnTo/);
+    expect(src).not.toMatch(/getPrimaryWorkspace/);
   });
 });
 
-describe('root / redirects working roles into their workspace', () => {
-  test('apps/web/app/page.tsx делает SSR-редирект для рабочих ролей', () => {
+describe('root / pure redirect (no legacy intermediate dashboard)', () => {
+  test('apps/web/app/page.tsx — pure redirect через getDefaultRouteForRole', () => {
     const src = readSrc('apps/web/app/page.tsx');
-    expect(src).toMatch(/isWorkingRole/);
-    expect(src).toMatch(/redirect\(getPrimaryWorkspace\(role\)\)/);
+    // Для anon — `/login`, для залогиненного — role-based redirect
+    // через единый helper. Никаких tile-grid/MobileActionCard и
+    // никаких ветвлений по working-role внутри страницы.
+    expect(src).toMatch(/redirect\('\/login'\)/);
+    expect(src).toMatch(/getDefaultRouteForRole/);
+    expect(src).not.toMatch(/MobileActionCard/);
+    expect(src).not.toMatch(/isWorkingRole/);
+    // Helper-возврат `/` запрещён (см. `lib/role-redirect.ts`), но
+    // дополнительная страховка — никаких inline `redirect('/')` в
+    // самой странице.
+    expect(src).not.toMatch(/redirect\('\/'\)/);
   });
 });

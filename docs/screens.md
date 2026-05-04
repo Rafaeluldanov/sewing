@@ -70,34 +70,52 @@
 Для производственных ролей UI работает как терминал: после
 авторизации пользователь сразу попадает в **primary workspace**
 своей роли, а отдельной «Главной» страницы у них нет (`/`
-редиректит туда же на сервере). Менеджеры и админ продолжают
-видеть многосекционный интерфейс с тайлами на `/`.
+редиректит туда же на сервере). Менеджеры и админ после
+auth-cleanup-а (см. `docs/auth-design-cleanup-recon.md`) тоже
+не видят tile-сетку на `/` — они отправляются на `/admin`,
+который и есть канонический admin landing.
 
-Источник истины — `apps/web/lib/rbac.ts`:
+Источник истины — `apps/web/lib/rbac.ts` (primary workspace) и
+`apps/web/lib/role-redirect.ts` (post-login destination):
 
-| Роль               | Primary workspace |
-| ------------------ | ----------------- |
-| SEAMSTRESS         | `/work` |
-| CUTTER_ASSISTANT   | `/work` |
-| CUTTER             | `/work` |
-| IRONING            | `/wto`  |
-| QC                 | `/qc`   |
-| PACKING            | `/packing` |
-| SHOPFLOOR_MASTER   | `/master` |
-| SHOP_MANAGER       | `/`     |
-| ADMIN              | `/`     |
+| Роль               | Primary workspace | Post-login destination |
+| ------------------ | ----------------- | ---------------------- |
+| SEAMSTRESS         | `/work`           | `/work` |
+| CUTTER_ASSISTANT   | `/work`           | `/work` |
+| CUTTER             | `/work`           | `/work` |
+| IRONING            | `/wto`            | `/wto`  |
+| QC                 | `/qc`             | `/qc`   |
+| PACKING            | `/packing`        | `/packing` |
+| SHOPFLOOR_MASTER   | `/master`         | `/master` |
+| DISPLAY            | `/shopfloor/display` | `/shopfloor/display` |
+| SHOP_MANAGER       | `/`               | `/admin` |
+| ADMIN              | `/`               | `/admin` |
+
+Колонки расходятся только для ADMIN/SHOP_MANAGER: исторически их
+primary workspace = `/` (так помечено в `getPrimaryWorkspace`,
+на это опираются `/work/page.tsx` и shop-floor flows). После
+auth-cleanup-а `/` сам по себе не имеет UI — это redirect-страница
+через `getDefaultRouteForRole`. Поэтому фактическая точка входа
+для менеджера — `/admin`.
 
 Где это применяется:
 
 - **Login redirect** (`apps/web/app/login/actions.ts`,
-  `app/login/page.tsx`). После успешного логина или возврата
-  залогиненного пользователя на `/login`: если в `?next=` нет явного
-  валидного пути (или он равен `/`), редиректим в
-  `getPrimaryWorkspace(role)`. Явный `?next=/orders` от
-  middleware-редиректа уважаем.
-- **Корневой `/`** (`apps/web/app/page.tsx`). Для рабочих ролей
-  (`isWorkingRole`) делаем server-side redirect в primary workspace.
-  Для менеджеров/админа рендерим прежнюю плитку action-карточек.
+  `app/login/page.tsx`). После успешного логина (или возврата
+  залогиненного пользователя на `/login`) роутинг полностью
+  делегирован `safeReturnTo(returnTo, role)`
+  (`apps/web/lib/safe-return-to.ts`):
+  - если в `?next=` есть валидный относительный путь, не указывающий
+    обратно на `/login`, — уважаем его (например, middleware-редирект
+    с `?next=/orders/abc`);
+  - иначе — `getDefaultRouteForRole(role)`. Open-redirect через
+    абсолютные / protocol-relative URL и циклы через `?next=/login`
+    закрыты в этом же helper-е (см.
+    `docs/auth-design-cleanup-recon.md §6`).
+- **Корневой `/`** (`apps/web/app/page.tsx`). Pure redirect: для
+  анонима — `redirect('/login')`, для залогиненного —
+  `redirect(getDefaultRouteForRole(role))`. Никакого UI, никаких
+  tile-сеток.
 - **`/work` для ролей с собственным терминалом** (`apps/web/app/work/page.tsx`).
   QC, IRONING и PACKING на `/work` оказаться не должны: их primary
   workspace — это `/qc`, `/wto`, `/packing` соответственно. Если такая
@@ -124,15 +142,20 @@
 
 ## 2. Общие экраны
 
-### 2.1. `/login` (MVP 1.1, Шаг 13 redesign)
-- Полностраничный светлый фон + центрированная карточка `auth-card`
-  с brand-mark `S`, заголовком, короткой подсказкой и primary-кнопкой
-  во всю ширину (`apps/web/app/login/`).
-- Поля `login` и `password` (для seed-учёток это `Demo12345!`).
-- Server action вызывает `POST /api/auth/login`. На успех — редирект
-  на `?next=...` (или `/`), сессия живёт через cookie `sewing_session`.
-- На ошибку показываем нормализованный код (`INVALID_CREDENTIALS`,
-  `EMPLOYEE_INACTIVE`) в мягкой красной плашке прямо под полями.
+### 2.1. `/login` (Auth Design Cleanup)
+- Полностраничный светлый фон + центрированная карточка
+  `AuthShell` → `AuthCard` (`apps/web/components/auth/`):
+  - brand-mark `S`,
+  - заголовок «Вход в SEWING»,
+  - подзаголовок «Система управления швейным производством»,
+  - primary-кнопка «Войти» во всю ширину (loading-текст «Входим…»).
+- Поля `login` и `password` (см. `apps/web/components/auth/login-form.tsx`).
+- Server action `loginAction` вызывает `POST /api/auth/login`. На успех —
+  редирект через `safeReturnTo` (см. §1.1); сессия живёт через cookie
+  `sewing_session`.
+- На ошибку показываем `AuthErrorState`: серверный текст (например,
+  `INVALID_CREDENTIALS`, `EMPLOYEE_INACTIVE`) либо fallback-текст из
+  ТЗ — «Не удалось войти. Проверьте данные и попробуйте ещё раз.»
 - Маршрут публичный. Все остальные экраны защищены `middleware.ts`:
   без cookie — редирект на `/login?next=<url>`.
 - В шапке после логина: ФИО + роль + кнопка «Выйти» (`POST /api/auth/logout`).

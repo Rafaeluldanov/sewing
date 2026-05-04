@@ -3,7 +3,7 @@
 import { redirect } from 'next/navigation';
 import { LoginRequestSchema } from '@sewing/shared/auth';
 import { loginAndPersistSession } from '@/lib/auth-api';
-import { getPrimaryWorkspace } from '@/lib/rbac';
+import { safeReturnTo } from '@/lib/safe-return-to';
 
 export interface LoginFormState {
   error?: string;
@@ -11,27 +11,19 @@ export interface LoginFormState {
 }
 
 /**
- * Default-редирект после успешного входа.
+ * Server action логина. Сетевая часть и cookie-handling не меняются —
+ * см. `loginAndPersistSession`. После успеха роутинг полностью
+ * делегирован `safeReturnTo`:
+ *   - если в FormData есть валидный относительный `next` (и он не
+ *     ведёт обратно на /login) — уважаем его;
+ *   - иначе — `getDefaultRouteForRole(role)` (см.
+ *     `apps/web/lib/role-redirect.ts`).
  *
- * Если `next` не задан или указывает на корневой `/` (типичная
- * ситуация: пользователь зашёл на `/login` без явного редиректа),
- * отправляем сразу в primary workspace роли — швея и помощник
- * раскройщика попадают в `/work`, ОТК — в `/qc`, упаковка — в
- * `/packing`. Это ключевая часть модели «одно рабочее окно на
- * роль» (см. `apps/web/lib/rbac.ts`, `docs/screens.md §1`).
- *
- * Если `next` — валидный относительный путь, отличный от `/` (как
- * при middleware-редиректе с `?next=/orders`), уважаем его.
+ * Это закрывает open-redirect surface (см.
+ * `docs/auth-design-cleanup-recon.md §6`) и убирает старый
+ * intermediate-экран на `/`: для ADMIN/SHOP_MANAGER `safeReturnTo`
+ * вернёт `/admin`, минуя legacy dashboard.
  */
-function resolveLoginRedirect(rawNext: string, role: string): string {
-  const next = rawNext.trim();
-  const isRelative = next.startsWith('/') && !next.startsWith('//');
-  if (!isRelative || next === '/') {
-    return getPrimaryWorkspace(role);
-  }
-  return next;
-}
-
 export async function loginAction(
   _prev: LoginFormState,
   form: FormData,
@@ -48,5 +40,5 @@ export async function loginAction(
     return { error: result.message, code: result.code };
   }
   const next = String(form.get('next') ?? '');
-  redirect(resolveLoginRedirect(next, result.user.role));
+  redirect(safeReturnTo(next, result.user.role));
 }

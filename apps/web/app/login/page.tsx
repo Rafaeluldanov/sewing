@@ -1,8 +1,9 @@
 import { redirect } from 'next/navigation';
-import Link from 'next/link';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { getPrimaryWorkspace } from '@/lib/rbac';
-import { LoginForm } from './login-form';
+import { safeReturnTo } from '@/lib/safe-return-to';
+import { AuthShell } from '@/components/auth/auth-shell';
+import { AuthCard } from '@/components/auth/auth-card';
+import { LoginForm } from '@/components/auth/login-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,55 +12,46 @@ interface LoginPageProps {
 }
 
 /**
- * Страница входа (MVP 1.1, mobile clean redesign).
+ * Страница входа (`/login`).
  *
- * Если пользователь уже залогинен — сразу редиректим на `next` (если
- * он есть и валиден) либо в primary workspace его роли. Это убирает
- * «мерцание» формы при возврате по back-кнопке и поддерживает
- * модель «одно рабочее окно на роль» (см. `apps/web/lib/rbac.ts`).
+ * Если пользователь уже залогинен — сразу редиректим в нужный экран по
+ * роли, опираясь на единый `safeReturnTo` (см.
+ * `apps/web/lib/safe-return-to.ts` и `docs/auth-design-cleanup-recon.md
+ * §7`). Это убирает мерцание формы при back-кнопке и полностью
+ * закрывает open-redirect через `?next=…`.
  */
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const me = await getCurrentUserOrNull();
   if (me) {
-    const explicit = safeNext(searchParams.next);
-    redirect(explicit ?? getPrimaryWorkspace(me.user.role));
+    redirect(safeReturnTo(searchParams.next, me.user.role));
   }
+  // Для анонима `safeReturnTo` без роли вернул бы `/login` (fallback),
+  // что нам не подходит — здесь нам нужен «честный» relative-путь либо
+  // пустая строка, чтобы login action после успеха пошёл по
+  // role-default. Делаем эту валидацию inline и узко.
+  const nextForForm = sanitizeNextForAnon(searchParams.next);
   return (
-    <div className="auth-page">
-      <div className="auth-card">
-        <div className="auth-card__brand">
-          <span className="auth-card__brand-mark" aria-hidden>
-            S
-          </span>
-          Sewing
-        </div>
-        <h1 className="auth-card__title">Вход в систему</h1>
-        <p className="auth-card__hint">
-          Введите ваш логин и пароль из справочника сотрудников.
-          {' '}
-          Demo-аккаунты после <code>npm run db:seed</code> используют
-          {' '}
-          пароль <code>Demo12345!</code>.
-        </p>
-        <LoginForm next={safeNext(searchParams.next) ?? ''} />
-        <div className="auth-card__footer">
-          <Link href="/">← На главную</Link>
-        </div>
-      </div>
-    </div>
+    <AuthShell>
+      <AuthCard>
+        <LoginForm next={nextForForm} />
+      </AuthCard>
+    </AuthShell>
   );
 }
 
-/**
- * Защита от open-redirect: разрешаем только явные относительные
- * пути, отличные от `/`. Корневой `/` трактуется как «нет явного
- * next» — дальше за выбор отвечает `getPrimaryWorkspace` (см.
- * `apps/web/app/login/actions.ts`).
- */
-function safeNext(value: string | undefined): string | null {
-  if (!value || !value.startsWith('/') || value.startsWith('//')) {
-    return null;
+function sanitizeNextForAnon(value: string | undefined): string {
+  if (typeof value !== 'string') return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (!trimmed.startsWith('/') || trimmed.startsWith('//')) return '';
+  if (trimmed.includes('://')) return '';
+  if (trimmed === '/') return '';
+  if (
+    trimmed === '/login' ||
+    trimmed.startsWith('/login/') ||
+    trimmed.startsWith('/login?')
+  ) {
+    return '';
   }
-  if (value === '/') return null;
-  return value;
+  return trimmed;
 }

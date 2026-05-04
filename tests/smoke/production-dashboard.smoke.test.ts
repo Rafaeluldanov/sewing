@@ -155,9 +155,16 @@ describe('Production Dashboard — frontend', () => {
     expect(src).toMatch(/Дашборд/);
   });
 
-  test('Главная содержит тайл «Дашборд начальника» для менеджеров', () => {
-    const src = readSrc('apps/web/app/page.tsx');
-    expect(src).toMatch(/href="\/admin\/production-dashboard"/);
-    expect(src).toMatch(/Дашборд начальника/);
+  test('Production-dashboard остаётся доступен ADMIN/SHOP_MANAGER из шапки', () => {
+    // После auth-design-cleanup-а корневая `/` стала pure redirect
+    // (см. `docs/auth-design-cleanup-recon.md §3, §7`) — старый
+    // tile-grid с «Дашборд начальника» уехал из root, а сам
+    // `/admin/production-dashboard` менеджер открывает либо из шапки
+    // (Header-тест выше), либо по прямой ссылке. Здесь дублируем
+    // проверку link-а в `layout.tsx`, чтобы регрессия не пропала
+    // вместе с изменённой главной.
+    const layout = readSrc('apps/web/app/layout.tsx');
+    expect(layout).toMatch(/href="\/admin\/production-dashboard"/);
+    expect(layout).toMatch(/Дашборд/);
   });
 });

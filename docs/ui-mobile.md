@@ -110,11 +110,18 @@
 
 ### 4.1. `/login`
 
-- Полностраничный светлый фон, центрированная карточка `.auth-card`
-  (max 420 px).
-- Brand-mark (квадратик с буквой S), компактный заголовок,
-  короткая подсказка, два input'а, primary-кнопка во всю ширину.
-- Ошибка — мягкая красная плашка прямо под полями.
+- Полностраничный светлый фон, центрированная карточка на компонентах
+  `AuthShell` → `AuthCard` (`apps/web/components/auth/`,
+  max 440 px) — clean redesign из
+  [`docs/auth-design-cleanup-recon.md`](./auth-design-cleanup-recon.md).
+- Brand-mark (квадратик с буквой S), заголовок «Вход в SEWING»,
+  подзаголовок «Система управления швейным производством», два input'а,
+  primary-кнопка «Войти» во всю ширину (loading-текст «Входим…»).
+- Ошибка — `AuthErrorState`: либо серверный текст (`INVALID_CREDENTIALS`,
+  `EMPLOYEE_INACTIVE`), либо fallback из ТЗ
+  («Не удалось войти. Проверьте данные и попробуйте ещё раз.»).
+- Старая секция CSS-классов `.auth-page` / `.auth-card*` / `.auth-form*`
+  удалена; новый scope — `.auth-screen*` в `apps/web/app/globals.css`.
 
 ### 4.2. `/work` — главный мобильный кабинет
 

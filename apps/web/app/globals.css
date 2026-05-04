@@ -808,107 +808,113 @@ table.data-table th.num { text-align: right; }
 .admin-equipment-form__op-meta { color: var(--color-fg-muted); font-size: 0.85rem; }
 
 /* =============================================================
-   /login — вход (mobile clean)
+   /login — Auth screen (clean redesign)
+   -------------------------------------------------------------
+   Заменяет старую секцию login (auth-page / auth-card / auth-form):
+   соответствующих правил здесь больше нет (см.
+   `apps/web/components/auth/` и `docs/auth-design-cleanup-recon.md`).
+   Все правила опираются только на existing UI-токены: палитра,
+   радиусы и тени общие со всем приложением.
    ============================================================= */
-.auth-page {
-  min-height: calc(100vh - 56px);
+.auth-screen {
+  min-height: 100dvh;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 1.5rem 1rem 2rem;
+  padding: 1.5rem 1rem 2.25rem;
   background: var(--color-bg-soft);
 }
-.auth-card {
+.auth-screen__card {
   width: 100%;
-  max-width: 420px;
-  background: #fff;
+  max-width: 440px;
+  background: var(--color-bg-card);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-xl);
-  padding: 1.75rem;
+  padding: 2rem 1.75rem 1.85rem;
   box-shadow: var(--shadow-md);
 }
-.auth-card__brand {
+.auth-screen__header {
   display: flex;
-  align-items: center;
+  flex-direction: column;
+  align-items: flex-start;
   gap: 0.6rem;
-  font-weight: 700;
-  font-size: 1rem;
-  color: var(--color-fg-muted);
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  margin-bottom: 0.85rem;
+  margin-bottom: 1.5rem;
 }
-.auth-card__brand-mark {
-  width: 28px;
-  height: 28px;
-  border-radius: 8px;
+.auth-screen__brand-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: var(--radius-md);
   background: linear-gradient(135deg, var(--color-accent), #60a5fa);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   color: #fff;
-  font-size: 0.85rem;
   font-weight: 700;
+  font-size: 1.1rem;
+  letter-spacing: 0.04em;
 }
-.auth-card__title {
-  margin: 0 0 0.35rem;
-  font-size: 1.45rem;
+.auth-screen__title {
+  margin: 0;
+  font-size: 1.55rem;
   letter-spacing: -0.01em;
   color: var(--color-fg-strong);
 }
-.auth-card__hint {
-  margin: 0 0 1.25rem;
+.auth-screen__subtitle {
+  margin: 0;
   color: var(--color-fg-muted);
-  font-size: 0.92rem;
+  font-size: 0.95rem;
   line-height: 1.5;
 }
-.auth-card__hint code {
-  background: var(--color-bg-muted);
-  padding: 0 0.3rem;
-  border-radius: 4px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  font-size: 0.85rem;
-  color: var(--color-fg);
-}
-.auth-card__footer {
-  margin-top: 1.25rem;
-  text-align: center;
-  font-size: 0.9rem;
-  color: var(--color-fg-muted);
-}
-
-.auth-form {
+.auth-screen__body {
   display: flex;
   flex-direction: column;
-  gap: 0.85rem;
+  gap: 1rem;
 }
-.auth-form__field {
+.auth-screen__form {
   display: flex;
   flex-direction: column;
-  gap: 0.35rem;
+  gap: 0.95rem;
 }
-.auth-form__field span {
+.auth-screen__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+.auth-screen__label {
   font-size: 0.82rem;
   font-weight: 600;
   color: var(--color-fg-muted);
   letter-spacing: 0.01em;
 }
-.auth-form__field input {
-  padding: 0.85rem 0.95rem;
+.auth-screen__input {
+  width: 100%;
+  padding: 0.9rem 1rem;
+  font: inherit;
   font-size: 1.05rem;
+  color: var(--color-fg);
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-md);
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
-.auth-form__error {
+.auth-screen__input::placeholder { color: var(--color-fg-subtle); }
+.auth-screen__input:focus {
+  outline: none;
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 4px var(--color-accent-soft);
+}
+.auth-screen__error {
   background: var(--color-danger-soft);
   color: var(--color-danger-fg);
   border: 1px solid #fecaca;
   border-radius: var(--radius-md);
-  padding: 0.65rem 0.85rem;
-  font-size: 0.92rem;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.95rem;
 }
-.auth-form__submit {
+.auth-screen__submit {
   margin-top: 0.35rem;
   width: 100%;
-  min-height: 52px;
+  min-height: var(--tap-min);
   border: none;
   border-radius: var(--radius-md);
   background: var(--color-accent);
@@ -919,12 +925,30 @@ table.data-table th.num { text-align: right; }
   box-shadow: 0 6px 18px -8px rgba(37, 99, 235, 0.6);
   transition: background 0.15s, transform 0.05s;
 }
-.auth-form__submit:hover { background: var(--color-accent-hover); }
-.auth-form__submit:active { transform: translateY(1px); }
-.auth-form__submit:disabled {
+.auth-screen__submit:hover { background: var(--color-accent-hover); }
+.auth-screen__submit:active { transform: translateY(1px); }
+.auth-screen__submit:disabled {
   opacity: 0.6;
   cursor: not-allowed;
   box-shadow: none;
+}
+.auth-screen__status {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.55rem;
+  color: var(--color-fg-muted);
+  font-size: 0.95rem;
+}
+.auth-screen__spinner {
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-pill);
+  border: 2px solid var(--color-border-strong);
+  border-top-color: var(--color-accent);
+  animation: auth-screen-spin 0.7s linear infinite;
+}
+@keyframes auth-screen-spin {
+  to { transform: rotate(360deg); }
 }
 
 /* =============================================================
