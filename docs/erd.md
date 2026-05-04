@@ -563,11 +563,19 @@
   Индексы: `orderId`, `passportId`, `status`, `source`, `createdAt`.
   Автосписание при выдаче кроя создаёт документ сразу в статусе
   `POSTED` (см. `MaterialIssuesService.createAutoCutIssueForPassport`
-  и `docs/current-state.md §«Auto cut issue»`). Сознательная
-  граница MVP: документ **не вызывает** `StockService` и не пишет
-  `StockMovement` (foundation-таблицы есть, см. § 2.12b ниже);
-  НЕТ FIFO/LIFO, НЕТ проверок складских остатков, НЕТ master-модели
-  `Material`; POSTED-документ нельзя отменить.
+  и `docs/current-state.md §«Auto cut issue»`). **Подключение к
+  складу**: проведение документа (`DRAFT → POSTED` ручного или
+  создание `POSTED AUTO_CUT_ISSUE`) в той же транзакции вызывает
+  `StockService.recordMaterialIssueInTx`, который пишет исходящий
+  `StockMovement` по каждой строке с `workshopNeedId`, `unit` и
+  `issuedQty > 0` (`sourceKey = MATERIAL_ISSUE_LINE:<lineId>`) и
+  уменьшает `StockBalance.qty` (см. § 2.12b и § 3.10). Сознательная
+  граница MVP: НЕТ FIFO/LIFO и `MaterialStockLot`, НЕТ проверок
+  достаточности остатков (отрицательный `StockBalance.qty`
+  допускается), НЕТ master-модели `Material`, POSTED-документ
+  нельзя отменить (reversal появится отдельной итерацией).
+  `MaterialIssue.totalCost` — финансовый snapshot, НЕ пересчитывается
+  по складской стоимости.
 - **`MaterialIssueLine`** — строка документа расхода. Cascade от
   `MaterialIssue`. `workshopNeedId? → WorkshopNeed` (`SetNull` —
   снос потребности через cascade от заказа не сносит исторический
@@ -603,11 +611,42 @@
   `direction: String` (`IN` / `OUT`),
   `warehouseId?`, `cellId?`, `qty`, `unit`, `unitCost`, `totalCost`,
   `balanceBeforeQty?`, `balanceAfterQty?`, `sourceType?`, `sourceId?`,
-  опциональные FK: `purchaseReceiptId?`, `purchaseReceiptLineId?`,
-  `materialIssueId?`, `materialIssueLineId?` (все `SetNull` на
-  стороне движения), `comment?`, `createdById?`, `createdAt`.
-  Индексы по ключам ссылок и `createdAt`. **Foundation:** приёмка и
-  расход по-прежнему **не** создают движения автоматически.
+  `sourceKey: String? @unique` — внутренний идемпотентный ключ
+  движения, формат `<PREFIX>:<entityId>`:
+    - `PURCHASE_RECEIPT_LINE:<purchaseReceiptLineId>` — приход по
+      строке `PurchaseReceiptLine` (POSTED-приёмка);
+    - `PURCHASE_RECEIPT_LINE_CANCEL:<purchaseReceiptLineId>` —
+      сторнирующее движение при отмене этой же строки;
+    - `MATERIAL_ISSUE_LINE:<materialIssueLineId>` — расход по строке
+      `MaterialIssueLine` при `POSTED MaterialIssue` (ручной
+      `MaterialIssue.post` или авто-документ `AUTO_CUT_ISSUE`).
+  `UNIQUE` гарантирует, что повторная обработка приёмки/расхода или
+  их отмена при retry не создадут дубль `StockMovement` и не удвоят
+  `StockBalance.qty`. В этой итерации нет `MATERIAL_ISSUE_LINE_CANCEL`:
+  сторнирующего движения для `MaterialIssue` сейчас нет (POSTED
+  отменить нельзя — reversal появится отдельной итерацией вместе с
+  возвратом в ячейку).
+  Дальше — опциональные FK: `purchaseReceiptId?`,
+  `purchaseReceiptLineId?`, `materialIssueId?`,
+  `materialIssueLineId?` (все `SetNull` на стороне движения),
+  `comment?`, `createdById?`, `createdAt`. Индексы по ключам ссылок
+  и `createdAt`. `StockMovement` для `MATERIAL_ISSUE` ссылается
+  одновременно на `materialIssueId` (шапка документа) и
+  `materialIssueLineId` (конкретная строка).
+  **Подключения** (см. § 3.4 и § 3.10 ниже):
+    - `PurchaseReceiptsService.createFromPurchaseOrder` пишет `IN`
+      (`type = PURCHASE_RECEIPT`), `cancel` пишет `REVERSAL` `OUT`
+      только при наличии исходного `IN`. Старые приёмки до
+      подключения склада не реверсятся.
+    - `MaterialIssuesService.post` и
+      `MaterialIssuesService.createAutoCutIssueForPassport` пишут
+      `OUT` (`type = MATERIAL_ISSUE`) через
+      `StockService.recordMaterialIssueInTx` в той же транзакции, что
+      и сам переход документа в `POSTED`. `PassportsService` склад
+      **не читает и не пишет** напрямую — только дергает
+      `createAutoCutIssueForPassport`. Крой не блокируется
+      недостатком остатка, `StockBalance.qty` может уйти в минус
+      (см. § 3.10).
 
 <a id="213-printers--print-jobs"></a>
 ### 2.13 Printers / print jobs
@@ -677,6 +716,28 @@
     публичный DTO/PATCH `/api/company-settings` это поле НЕ
     принимает (UI ещё не утверждён); backend читает значение
     через `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`.
+  - `allowNegativeMaterialStock Boolean @default(true)` —
+    hardening-флаг отрицательных остатков материалов при OUT
+    (см. `apps/api/src/modules/stock/stock.service.ts::applyMovementInTx`,
+    `apps/api/src/modules/material-issues/material-issues.service.ts`,
+    `docs/current-state.md §«Material issue → StockMovement OUT»`).
+    `true` (default) — текущее MVP-поведение: `MaterialIssue.post`
+    и `AUTO_CUT_ISSUE` могут увести `StockBalance.qty` в минус
+    (foundation создаёт no-location negative balance, если
+    положительного остатка нет). `false` — `StockService` проверяет
+    достаточность остатка ДО записи OUT-движения и при нехватке
+    бросает 409 `MATERIAL_STOCK_INSUFFICIENT`; транзакция
+    откатывается, `MaterialIssue` остаётся `DRAFT`, OUT не
+    пишется, `StockBalance` не меняется (для авто-выдачи кроя
+    `issueToEmployee` тоже откатывается). Если строки настроек
+    нет (свежая БД) — backend трактует значение как `true` и
+    singleton-row не создаёт. Флаг применяется ТОЛЬКО к OUT-движениям
+    `MaterialIssue` (ручной `post` и `AUTO_CUT_ISSUE`); `PurchaseReceipt`
+    cancel / REVERSAL OUT остаётся permissive — отмена приёмки
+    отдельный бизнес-сценарий следующей итерации. На этой итерации
+    публичный DTO/PATCH `/api/company-settings` это поле НЕ
+    принимает (UI ещё не утверждён); backend читает значение через
+    `CompanySettingsService.getAllowNegativeMaterialStock()`.
   - сервис `CompanySettingsService.getOrCreate()` идемпотентно создаёт
     запись с дефолтами при первом обращении.
 - **`CompanyDivision`** *(master-справочник)* — soft-delete справочник
@@ -782,9 +843,26 @@
   `POST /api/purchase-receipts/from-purchase-order`. Линии PR
   фиксируют размещение в ячейке (`Cell.cellId`) **без** записи в
   `CellContent` — это сознательная граница MVP.
-- Cancel-flow возвращает связанные `WorkshopNeed.status` обратно
-  (см. сервис; список валидных переходов — в shared-listе
-  `WORKSHOP_NEED_STATUSES`).
+- **Складские движения**: создание `POSTED` приёмки в той же
+  транзакции пишет входящий `StockMovement` (`IN`,
+  `type = PURCHASE_RECEIPT`,
+  `sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`) для каждой строки с
+  `workshopNeedId`, `unit` и `receivedQty > 0`. `warehouseId`
+  движения берётся через `Cell.warehouseId` (если `cellId` пустой —
+  `null`). `unitCost` = `priceSnapshot` для `RUB`/null-валюты, `0`
+  для других валют и для отсутствующего/отрицательного
+  `priceSnapshot` (конвертация валют не делается). `applyMovementInTx`
+  параллельно увеличивает `StockBalance.qty` по `balanceKey =
+  WN/WH/Cell` и пересчитывает среднюю себестоимость.
+- **Cancel-flow**: помимо отката статусов `WorkshopNeed`/PO/PO-line
+  пишет `REVERSAL` `OUT` (`sourceKey =
+  PURCHASE_RECEIPT_LINE_CANCEL:<lineId>`) в той же транзакции.
+  Сторнирование делается **только** при наличии исходного
+  `IN`-движения по тому же `sourceKey =
+  PURCHASE_RECEIPT_LINE:<lineId>` — старые приёмки до подключения
+  склада не реверсятся (защита от дубля для исторических данных).
+  Идемпотентность гарантируется UNIQUE-индексом
+  `StockMovement.sourceKey`.
 
 ### 3.5 OrderCostEstimate
 
@@ -906,13 +984,42 @@
   - пустой набор строк / `totalOrderQty <= 0` / уже существующий
     неотменённый `MaterialIssue` по `passportId` → skip (без
     ошибки, выдача кроя продолжается).
+- **Подключение к складскому foundation** (см. § 2.12b,
+  `apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueInTx`):
+  проведение документа (`DRAFT → POSTED` ручного или создание
+  `POSTED AUTO_CUT_ISSUE`) в той же транзакции пишет исходящий
+  `StockMovement` (`direction = OUT`, `type = MATERIAL_ISSUE`,
+  `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`) для каждой
+  `MaterialIssueLine` с `workshopNeedId`, `unit` и
+  `issuedQty > 0`. `StockBalance.qty` уменьшается. Выбор ячейки —
+  простая MVP-аллокация: explicit `line.cellId` → самый большой
+  положительный `StockBalance` по `(workshopNeedId, unit)` →
+  no-location balance (`warehouseId = null, cellId = null`), если
+  положительного нет. Одна строка не дробится между остатками.
+  Отрицательный `StockBalance.qty` не блокируется —
+  `MaterialIssue.post` / `issueToEmployee` не падают при нехватке
+  материала (см. ТЗ §6, §7). Идемпотентность — UNIQUE
+  `StockMovement.sourceKey` на строку.
+- **Две независимые стоимости**:
+  `MaterialIssue.totalCost` / `MaterialIssueLine.totalCost`
+  остаются финансовым snapshot-ом (`issuedQty × unitCost` документа,
+  пересчитывается сервисом при `create` / `post`) и НЕ переписываются
+  складским OUT. `StockMovement.totalCost` считается через текущий
+  `StockBalance.unitCost` (средневзвешенная), а не
+  `MaterialIssueLine.unitCost`. `OrderSummaryUnifiedTable` /
+  `CostsService` / `ProductionCostV2Service` по-прежнему читают
+  `MaterialIssue.totalCost`.
 - Сознательная граница MVP:
-  - НЕТ `StockBalance` / `MaterialStockLot` / `StockMovement`;
-  - НЕТ FIFO/LIFO;
-  - НЕТ проверок складских остатков;
+  - НЕТ FIFO/LIFO и `MaterialStockLot`;
+  - НЕТ проверок достаточности остатков (пост не блокируется
+    минусом);
+  - НЕТ reversal/сторно `MaterialIssue` — POSTED нельзя отменить,
+    cancel DRAFT не пишет движение;
   - НЕТ master-модели `Material` (`description` / `unit` берутся
     из `WorkshopNeed`-snapshot или вводятся текстом);
-  - конвертации валют нет — USD-цены списываются с `unitCost = 0`.
+  - конвертации валют нет — USD-цены документа списываются с
+    `MaterialIssueLine.unitCost = 0`; складская оценка OUT при этом
+    всё равно берёт текущий `StockBalance.unitCost`.
 - Audit-события — `MATERIAL_ISSUE_CREATED` / `MATERIAL_ISSUE_POSTED`
   / `MATERIAL_ISSUE_CANCELLED` под
   `entityType = 'MATERIAL_ISSUE'`, `entityId = MaterialIssue.id`.

@@ -191,6 +191,64 @@ export function CompanySettingsForm({
       </AdminCard>
 
       <AdminCard>
+        <AdminSectionHeader title="Материалы и склад" />
+        {/*
+          Hidden-marker-ы, чтобы server action мог отличить «чекбокс
+          выключен» (`name` не приходит в `FormData`) от «блок не
+          рендерился». См. `actions.ts::SETTINGS_BOOLEAN_FIELDS`.
+        */}
+        <input
+          type="hidden"
+          name="autoIssueMaterialsOnCutRelease__present"
+          value="1"
+        />
+        <input
+          type="hidden"
+          name="allowNegativeMaterialStock__present"
+          value="1"
+        />
+        <div className="admin-field">
+          <label className="admin-field--inline" htmlFor="company-autoIssueMaterialsOnCutRelease">
+            <input
+              id="company-autoIssueMaterialsOnCutRelease"
+              type="checkbox"
+              name="autoIssueMaterialsOnCutRelease"
+              defaultChecked={settings.autoIssueMaterialsOnCutRelease}
+            />
+            <span>Автосписание материалов при выдаче кроя</span>
+          </label>
+          <span className="admin-field__hint">
+            Если включено, при выдаче кроя сотруднику система автоматически
+            создаёт проведённый расход материалов по паспорту.
+          </span>
+          <span className="admin-field__hint">
+            Использует плановую потребность заказа и распределяет расход
+            пропорционально количеству паспорта.
+          </span>
+        </div>
+        <div className="admin-field">
+          <label className="admin-field--inline" htmlFor="company-allowNegativeMaterialStock">
+            <input
+              id="company-allowNegativeMaterialStock"
+              type="checkbox"
+              name="allowNegativeMaterialStock"
+              defaultChecked={settings.allowNegativeMaterialStock}
+            />
+            <span>Разрешить отрицательные остатки материалов</span>
+          </label>
+          <span className="admin-field__hint">
+            Если включено, расход материалов может увести складской остаток
+            в минус.
+          </span>
+          <span className="admin-field__hint">
+            Если выключить, проведение расхода материалов будет заблокировано
+            при недостатке остатка. При включённом автосписании выдача кроя
+            тоже может быть заблокирована.
+          </span>
+        </div>
+      </AdminCard>
+
+      <AdminCard>
         <AdminSectionHeader title="Банковские реквизиты" />
         <div className="admin-form-grid">
           <div className="admin-field">

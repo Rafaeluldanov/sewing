@@ -85,6 +85,7 @@
 - [24. Passports](#24-passports)
 - [25. Cells](#25-cells)
 - [26. Warehouses](#26-warehouses)
+- [26a. Stock (read-only)](#26a-stock)
 - [27. QC](#27-qc)
 - [28. WTO](#28-wto)
 - [29. Packing](#29-packing)
@@ -525,12 +526,55 @@ DTO: `packages/shared/src/purchase-orders.ts`.
 | ----- | ----------------------------------------------------- | ------------------ | -------- |
 | GET   | `/api/purchase-receipts`                              | ADMIN, SHOP_MANAGER | List `ListPurchaseReceiptsQuery`. |
 | GET   | `/api/purchase-receipts/:id`                          | ADMIN, SHOP_MANAGER | Карточка. |
-| POST  | `/api/purchase-receipts/from-purchase-order`          | ADMIN, SHOP_MANAGER | 201 Created. Body `CreatePurchaseReceiptFromPurchaseOrderDto`. Side effects: пересчёт статусов связанных `PurchaseOrderLine` и `WorkshopNeed`. |
-| POST  | `/api/purchase-receipts/:id/cancel`                   | ADMIN, SHOP_MANAGER | Body `CancelPurchaseReceiptDto`. `POSTED → CANCELLED`. Side effects: пересчёт статусов PO/PO-line/WorkshopNeed обратно. |
+| POST  | `/api/purchase-receipts/from-purchase-order`          | ADMIN, SHOP_MANAGER | 201 Created. Body `CreatePurchaseReceiptFromPurchaseOrderDto`. Side effects: пересчёт статусов связанных `PurchaseOrderLine` и `WorkshopNeed`; для каждой строки с `workshopNeedId`/`unit`/`receivedQty > 0` в той же транзакции пишется входящий `StockMovement` (`IN`, `type = PURCHASE_RECEIPT`, `sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`) и обновляется `StockBalance.qty`/средняя себестоимость (`apps/api/src/modules/stock/stock.service.ts`). |
+| POST  | `/api/purchase-receipts/:id/cancel`                   | ADMIN, SHOP_MANAGER | Body `CancelPurchaseReceiptDto`. `POSTED → CANCELLED`. Side effects: пересчёт статусов PO/PO-line/WorkshopNeed обратно; для каждой строки, у которой существует исходный `IN`-`StockMovement` (`sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`), пишется сторнирующий `StockMovement` (`OUT`, `type = REVERSAL`, `sourceKey = PURCHASE_RECEIPT_LINE_CANCEL:<lineId>`) и `StockBalance.qty` уменьшается. |
 | GET   | `/api/purchase-orders/:id/receipts`                   | ADMIN, SHOP_MANAGER | Список PR по конкретному PO. |
 | GET   | `/api/orders/:id/purchase-receipts`                   | ADMIN, SHOP_MANAGER | Список PR по заказу покупателя. |
 
 DTO: `packages/shared/src/purchase-receipts.ts`.
+
+Сознательные границы MVP (см. также `docs/erd.md §«2.12b»` и
+`§«3.4»`):
+
+- НЕТ FIFO/LIFO и `MaterialStockLot` — себестоимость на остатке
+  считается средневзвешенной (см. `StockService.applyMovementInTx`),
+  отрицательный остаток не блокируется.
+- `unitCost` входящего движения = `priceSnapshot` строки приёмки при
+  `currencySnapshot` в `RUB`/`null`; для других валют и для
+  отсутствующего/отрицательного `priceSnapshot` — `0`. Конвертация
+  валют не делается.
+- `warehouseId` входящего движения берётся через `Cell.warehouseId`
+  (если `cellId` пустой — `warehouseId = null`).
+- Старые приёмки (созданные до подключения склада) не реверсятся
+  при cancel: cancel пишет `REVERSAL` только при наличии исходного
+  `IN`. Идемпотентность гарантирует UNIQUE
+  `StockMovement.sourceKey`.
+- `MaterialIssue.post` и `AUTO_CUT_ISSUE` **симметричны** приёмке: в
+  той же транзакции пишется OUT-`StockMovement`
+  (`sourceKey = MATERIAL_ISSUE_LINE:<lineId>`,
+  `type = MATERIAL_ISSUE`) через
+  `StockService.recordMaterialIssueInTx`, `StockBalance.qty`
+  уменьшается. Поведение при нехватке остатка управляется
+  hardening-флагом `CompanySettings.allowNegativeMaterialStock`
+  (Boolean, default `true`, см.
+  `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`):
+  при `true` (default) минусовой `StockBalance.qty` допустим
+  (включая создание no-location negative balance, если
+  положительного остатка нет); при `false` `MaterialIssue.post`
+  возвращает 409 `MATERIAL_STOCK_INSUFFICIENT`, транзакция
+  целиком откатывается (`MaterialIssue` остаётся `DRAFT`, OUT не
+  пишется, `StockBalance` не меняется). Флаг применяется ТОЛЬКО к
+  OUT-движениям `MaterialIssue` (`MANUAL post` и `AUTO_CUT_ISSUE`):
+  `PurchaseReceipt` cancel / REVERSAL OUT остаётся permissive —
+  отмена приёмки выходит за рамки этой итерации. Публичный DTO/PATCH
+  `/api/company-settings` **принимает** это поле (блок «Материалы и
+  склад» в `/admin/company-settings`, см. §42 ниже); в горячем flow
+  backend читает значение через приватный getter
+  `CompanySettingsService.getAllowNegativeMaterialStock()`.
+  Reversal/сторно для `MaterialIssue` на этой итерации также **не
+  реализован** (POSTED отменить нельзя).
+- Публичных REST-роутов под складские остатки в этой итерации нет
+  (`StockBalance`/`StockMovement` — внутренние таблицы).
 
 ---
 
@@ -556,9 +600,9 @@ DTO: `packages/shared/src/purchase-receipts.ts`.
 | ----- | ------------------------------------------------- | ------------------ | -------- |
 | GET   | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | List `ListMaterialIssuesQuery` (фильтры `orderId`/`passportId`/`status`). Сортировка `createdAt desc`. |
 | GET   | `/api/material-issues/:id`                        | ADMIN, SHOP_MANAGER | Карточка документа (с `lines`, `order`, `passport`, `workshopNeed` и `cell` по строкам). |
-| POST  | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | 201 Created. Body `CreateMaterialIssueDto`. Создаёт документ со `status = DRAFT`. `totalCost` считается на сервере = Σ `issuedQty × unitCost`. Если `workshopNeedId` указан, `description`/`unit`/`materialRole` берутся из `WorkshopNeed`. |
-| POST  | `/api/material-issues/:id/post`                   | ADMIN, SHOP_MANAGER | `DRAFT → POSTED`. Пересчитывает `totalCost` по строкам. НЕ создаёт `StockMovement`, НЕ трогает остатки. |
-| POST  | `/api/material-issues/:id/cancel`                 | ADMIN, SHOP_MANAGER | Body `CancelMaterialIssueDto` (`{ reason? }`). `DRAFT → CANCELLED`. POSTED отменить нельзя — 409 `MATERIAL_ISSUE_POSTED_CANNOT_CANCEL`. |
+| POST  | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | 201 Created. Body `CreateMaterialIssueDto`. Создаёт документ со `status = DRAFT`. `totalCost` считается на сервере = Σ `issuedQty × unitCost`. Если `workshopNeedId` указан, `description`/`unit`/`materialRole` берутся из `WorkshopNeed`. НЕ создаёт `StockMovement` — склад пишется только при проведении (`/post`). |
+| POST  | `/api/material-issues/:id/post`                   | ADMIN, SHOP_MANAGER | `DRAFT → POSTED`. Пересчитывает `totalCost` по строкам. Side effects: для каждой `MaterialIssueLine` с `workshopNeedId`, `unit` и `issuedQty > 0` в той же транзакции пишется исходящий `StockMovement` (`OUT`, `type = MATERIAL_ISSUE`, `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`) через `StockService.recordMaterialIssueInTx` и `StockBalance.qty` уменьшается. Реакция на нехватку остатка управляется флагом `CompanySettings.allowNegativeMaterialStock` (default `true` — минус допустим; `false` — 409 `MATERIAL_STOCK_INSUFFICIENT` с `details = { workshopNeedId, warehouseId, cellId, requestedQty, availableQty, unit, description }`, транзакция целиком откатывается, документ остаётся `DRAFT`, OUT не пишется, `StockBalance` не меняется). `MaterialIssue.totalCost` НЕ пересчитывается по складской стоимости. |
+| POST  | `/api/material-issues/:id/cancel`                 | ADMIN, SHOP_MANAGER | Body `CancelMaterialIssueDto` (`{ reason? }`). `DRAFT → CANCELLED`. POSTED отменить нельзя — 409 `MATERIAL_ISSUE_POSTED_CANNOT_CANCEL`. Cancel DRAFT не пишет `StockMovement`. Reversal POSTED-расхода в этой итерации не реализован. |
 | GET   | `/api/orders/:orderId/material-issues`            | ADMIN, SHOP_MANAGER | Список документов расхода по заказу покупателя (с `lines`). |
 
 DTO: `apps/api/src/modules/material-issues/dto/*.ts`. Audit-события
@@ -582,18 +626,53 @@ DTO: `apps/api/src/modules/material-issues/dto/*.ts`. Audit-события
   для USD и для отсутствующей цены;
 - пустые наборы / `totalOrderQty <= 0` / уже существующий
   неотменённый `MaterialIssue` по `passportId` → skip без ошибки
-  (выдача кроя продолжается).
+  (выдача кроя продолжается);
+- **side effect на склад**: сразу после создания авто-документа
+  `MaterialIssuesService` вызывает
+  `StockService.recordMaterialIssueInTx` в той же транзакции — для
+  каждой строки пишется OUT-`StockMovement` (`type = MATERIAL_ISSUE`,
+  `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`,
+  `comment = "Автоматическое списание при выдаче кроя"`) и
+  `StockBalance.qty` уменьшается. `PassportsService` склад напрямую
+  не трогает. Блокировка выдачи кроя при нехватке материала
+  управляется hardening-флагом
+  `CompanySettings.allowNegativeMaterialStock`: при default
+  `true` минусовой `StockBalance.qty` допустим, `issueToEmployee`
+  проходит; при `false` `StockService` бросает 409
+  `MATERIAL_STOCK_INSUFFICIENT` и **вся транзакция выдачи кроя
+  откатывается** — `Passport` не переходит в IN_PROGRESS,
+  `PassportEvent ISSUED_TO_EMPLOYEE` и `AUTO_CUT_ISSUE`
+  `MaterialIssue` не создаются, `StockMovement` не пишется,
+  `StockBalance` не меняется. Если автосписание выключено
+  (`autoIssueMaterialsOnCutRelease = false`), `allowNegativeMaterialStock`
+  на `issueToEmployee` не влияет — авто-документ просто не
+  создаётся.
 
 Сознательная граница MVP:
 
-- НЕ ведёт `StockBalance` / `MaterialStockLot` / `StockMovement`;
-- НЕ проверяет складские остатки;
-- НЕ делает FIFO/LIFO;
-- POSTED-документ нельзя отменить в MVP (нет сторнирующего движения);
-- НЕ создаёт master-модель `Material` — описание/единица берутся
-  из `WorkshopNeed` или вводятся текстом;
-- автосписание не конвертирует валюты — USD/без курса списывается с
-  `unitCost = 0`.
+- OUT-движение использует текущий `StockBalance.unitCost`, а не
+  `MaterialIssueLine.unitCost` — документная и складская стоимость
+  живут независимо. `MaterialIssue.totalCost` не пересчитывается
+  по складу.
+- НЕТ FIFO/LIFO и `MaterialStockLot`;
+- проверка достаточности остатков опциональна и управляется
+  `CompanySettings.allowNegativeMaterialStock` (default `true` —
+  POSTED проходит при минусе; `false` — 409
+  `MATERIAL_STOCK_INSUFFICIENT` с rollback). Strict-режим `false`
+  применяется только к `MaterialIssue` OUT (ручному `post` и
+  `AUTO_CUT_ISSUE`); `PurchaseReceipt` cancel / REVERSAL OUT
+  остаётся permissive — отмена приёмки выходит за рамки этой
+  итерации;
+- UI/публичного API для управления флагом
+  `allowNegativeMaterialStock` пока нет — `CompanySettings`-DTO
+  не включает это поле, переключение делается прямой записью в БД
+  владельцем проекта;
+- POSTED-документ нельзя отменить в MVP (reversal/сторно склада
+  для `MaterialIssue` — отдельная будущая итерация);
+- НЕТ master-модели `Material` — описание/единица берутся из
+  `WorkshopNeed` или вводятся текстом;
+- конвертации валют нет — USD/без курса у документа списывается с
+  `MaterialIssueLine.unitCost = 0`.
 
 ---
 
@@ -774,6 +853,221 @@ DTO: `packages/shared/src/warehouses.ts` (`UpdateCellSchema`).
 | POST  | `/api/warehouses/:id/print-cells`     | SHOP_MANAGER, ADMIN | Body `PrintWarehouseCellsDto` (`{ printerId, copies?, labelSize }`). Создаёт `cellsCount × copies` PENDING-job-ов с `sourceType=CELL_LABEL`. Ошибки: 404 `WAREHOUSE_NOT_FOUND` / `PRINTER_NOT_FOUND`, 409 `PRINTER_INACTIVE` / `WAREHOUSE_NO_CELLS_TO_PRINT`. |
 
 DTO: `packages/shared/src/warehouses.ts`. ADR: 0019.
+
+---
+
+<a id="26a-stock"></a>
+## 26a. Stock
+
+Источник: `stock/stock.controller.ts`. Класс-уровень
+`@Roles('ADMIN', 'SHOP_MANAGER')`.
+
+API для просмотра остатков, журнала движений и ручной корректировки
+foundation складского учёта (см.
+`apps/api/src/modules/stock/stock.service.ts`,
+`prisma/schema.prisma::StockBalance` / `StockMovement`,
+`docs/current-state.md §«Foundation складского учёта материалов»`).
+GET-эндпоинты остаются read-only. Единственная mutation — ручная
+корректировка остатка (`POST /api/stock/adjustments`); остальные
+движения по-прежнему пишутся неявно, в той же транзакции, что и
+бизнес-документ: `PurchaseReceipt` (POSTED → IN, cancel → REVERSAL
+OUT) и `MaterialIssue` (POSTED → OUT, в т.ч. `AUTO_CUT_ISSUE`).
+
+| Метод | Путь                       | RBAC               | Описание |
+| ----- | -------------------------- | ------------------ | -------- |
+| GET   | `/api/stock/balances`      | ADMIN, SHOP_MANAGER | Список текущих остатков `StockBalance`. Сортировка `updatedAt desc, description asc`. |
+| GET   | `/api/stock/movements`     | ADMIN, SHOP_MANAGER | Журнал движений `StockMovement`. Сортировка `createdAt desc`. |
+| POST  | `/api/stock/adjustments`   | ADMIN, SHOP_MANAGER | Ручная корректировка остатка — создаёт `StockMovement` `type = ADJUSTMENT`. |
+
+DTO query: `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`,
+`apps/api/src/modules/stock/dto/list-stock-movements.dto.ts`.
+Ответ обоих эндпоинтов:
+
+```ts
+{ items: T[]; total: number; limit: number; offset: number }
+```
+
+Pagination — общий контракт: `limit` default `50`, max `200`, > 0;
+`offset` default `0`, ≥ 0. Все `Decimal`-поля сериализуются строкой
+(`qty`, `unitCost`, `totalCost`, `balanceBeforeQty`, `balanceAfterQty`),
+`Date` — ISO-строкой (`createdAt`, `updatedAt`, `lastMovementAt`).
+
+### 26a.1 `GET /api/stock/balances`
+
+Query (все опциональны, склеиваются по AND):
+
+| Параметр         | Тип      | Описание |
+| ---------------- | -------- | -------- |
+| `workshopNeedId` | string   | Точечный фильтр по идентичности материала. |
+| `orderId`        | string   | Через relation `workshopNeed.orderId`. |
+| `warehouseId`    | string   | Точечный фильтр. |
+| `cellId`         | string   | Точечный фильтр. |
+| `materialRole`   | string   | Например `MAIN_FABRIC` / `LINING`. |
+| `unit`           | string   | Точное совпадение единицы измерения. |
+| `q`              | string   | Case-insensitive substring по `description` остатка и `WorkshopNeed.description` / `sourceName`. |
+| `positiveOnly`   | boolean  | `qty > 0`. |
+| `negativeOnly`   | boolean  | `qty < 0`. |
+| `zeroOnly`       | boolean  | `qty = 0`. |
+| `limit`          | number   | 1..200, default 50. |
+| `offset`         | number   | ≥ 0, default 0. |
+
+`positiveOnly` / `negativeOnly` / `zeroOnly` — взаимоисключающие.
+Передача больше одного флага одновременно отдаёт 400 `VALIDATION_ERROR`
+(сообщение «Фильтры positiveOnly / negativeOnly / zeroOnly
+взаимоисключающие — выберите один»).
+
+Каждый item:
+
+```ts
+{
+  id: string;
+  balanceKey: string;
+  workshopNeedId: string;
+  orderId: string | null;
+  orderNumber: string | null;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  cellId: string | null;
+  cellCode: string | null;
+  description: string;
+  materialRole: string | null;
+  unit: string;
+  qty: string;          // Decimal
+  unitCost: string;     // Decimal
+  totalCost: string;    // Decimal
+  lastMovementAt: string | null; // ISO
+  updatedAt: string;             // ISO
+}
+```
+
+### 26a.2 `GET /api/stock/movements`
+
+Query (все опциональны, склеиваются по AND):
+
+| Параметр                | Тип      | Описание |
+| ----------------------- | -------- | -------- |
+| `workshopNeedId`        | string   | |
+| `orderId`               | string   | Через relation `workshopNeed.orderId`. |
+| `stockBalanceId`        | string   | |
+| `warehouseId`           | string   | |
+| `cellId`                | string   | |
+| `type`                  | string   | `PURCHASE_RECEIPT \| MATERIAL_ISSUE \| ADJUSTMENT \| REVERSAL`. |
+| `direction`             | string   | `IN \| OUT`. |
+| `sourceType`            | string   | Внешний классификатор источника (например, `PURCHASE_RECEIPT_LINE`). |
+| `sourceId`              | string   | id строки источника. |
+| `purchaseReceiptId`     | string   | |
+| `purchaseReceiptLineId` | string   | |
+| `materialIssueId`       | string   | |
+| `materialIssueLineId`   | string   | |
+| `from`                  | ISO date | `createdAt >= from`. |
+| `to`                    | ISO date | `createdAt <= to`. |
+| `q`                     | string   | Case-insensitive substring по `comment`. |
+| `limit`                 | number   | 1..200, default 50. |
+| `offset`                | number   | ≥ 0, default 0. |
+
+Каждый item:
+
+```ts
+{
+  id: string;
+  stockBalanceId: string | null;
+  workshopNeedId: string;
+  orderId: string | null;
+  orderNumber: string | null;
+  type: string;
+  direction: string;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  cellId: string | null;
+  cellCode: string | null;
+  qty: string;            // Decimal
+  unit: string;
+  unitCost: string;       // Decimal
+  totalCost: string;      // Decimal
+  balanceBeforeQty: string | null; // Decimal
+  balanceAfterQty: string | null;  // Decimal
+  sourceType: string | null;
+  sourceId: string | null;
+  purchaseReceiptId: string | null;
+  purchaseReceiptLineId: string | null;
+  materialIssueId: string | null;
+  materialIssueLineId: string | null;
+  comment: string | null;
+  createdById: string | null;
+  createdAt: string;       // ISO
+}
+```
+
+`StockMovement.sourceKey` (внутренний идемпотентный ключ
+`PURCHASE_RECEIPT_LINE:<id>` / `PURCHASE_RECEIPT_LINE_CANCEL:<id>` /
+`MATERIAL_ISSUE_LINE:<id>` / `STOCK_ADJUSTMENT:<id>`) сознательно
+**не отдаётся** в публичном API.
+
+### 26a.3 `POST /api/stock/adjustments`
+
+Ручная корректировка остатка материала. Создаёт `StockMovement` с
+`type = ADJUSTMENT`, `direction = IN | OUT`, апдейтит `StockBalance` и
+пишет audit `STOCK_ADJUSTMENT_CREATED` (под `entityType = STOCK_MOVEMENT`,
+`entityId = StockMovement.id`) в одной транзакции.
+
+UI — `/admin/warehouses?tab=balances`, кнопка «Корректировка»
+(см. `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,
+`apps/web/lib/stock-api.ts::createStockAdjustment`). Отдельной
+страницы / пункта меню под корректировки сознательно не вводим.
+
+Body:
+
+| Поле              | Тип                | Обязательно | Описание |
+| ----------------- | ------------------ | ----------- | -------- |
+| `stockBalanceId`  | string             | да          | Корректируем существующий `StockBalance` (для MVP — только его). |
+| `direction`       | `'IN' \| 'OUT'`    | да          | `IN` увеличивает остаток, `OUT` уменьшает. |
+| `qty`             | string \| number   | да          | > 0; Decimal. |
+| `unitCost`        | string \| number   | нет         | Используется только для `IN`. Для `OUT` — игнорируется (складская оценка OUT берётся из текущего `StockBalance.unitCost`). Если `IN` без `unitCost` — берётся текущий `balance.unitCost` или `0`. |
+| `comment`         | string             | да          | 2..500 символов; причина корректировки. |
+| `clientRequestId` | string             | нет         | Если передан — используется в `sourceKey` (`STOCK_ADJUSTMENT:<clientRequestId>`). Защита от двойного submit формы: один `clientRequestId` → одно `StockMovement`. Если не передан, сервер сгенерирует свой. |
+
+Сервис **сознательно не принимает** `sourceKey`, `totalCost`,
+`balanceBeforeQty`, `balanceAfterQty`, `createdById` — это служебные
+поля, которые рассчитывает / выставляет сам.
+
+Ответ — созданное (или ранее существовавшее при идемпотентном повторе)
+`StockMovement` в shape `26a.2 StockMovement`. `sourceKey` не
+возвращается.
+
+Правила:
+
+- `StockMovement.type` всегда `ADJUSTMENT`;
+- `IN` увеличивает `StockBalance.qty`, `OUT` уменьшает;
+- `OUT` уважает `CompanySettings.allowNegativeMaterialStock`:
+  - `true` — OUT может увести `StockBalance.qty` в минус (текущее
+    MVP-поведение);
+  - `false` — нехватка остатка → 409 `MATERIAL_STOCK_INSUFFICIENT`;
+- `IN` от флага не зависит — всегда добавляет qty;
+- `PurchaseReceipt` cancel остаётся permissive (REVERSAL может уйти в
+  минус), поведение `MaterialIssue.totalCost` корректировка **не
+  меняет** — adjustment живёт только в плоскости склада;
+- `StockAdjustment` модель **не создаётся** — корректировка
+  представлена строкой `StockMovement type=ADJUSTMENT`.
+
+Ошибки:
+
+- 400 `VALIDATION_ERROR` — невалидный body (qty/comment/direction).
+- 400 `STOCK_MOVEMENT_QTY_INVALID` — `qty <= 0`.
+- 400 `STOCK_MOVEMENT_VALUE_INVALID` — некорректный числовой формат `qty` / `unitCost`.
+- 400 `STOCK_MOVEMENT_UNIT_COST_INVALID` — `unitCost < 0` для `IN`.
+- 404 `STOCK_BALANCE_NOT_FOUND` — `stockBalanceId` не существует.
+- 409 `MATERIAL_STOCK_INSUFFICIENT` — `OUT` при `allowNegativeMaterialStock = false`.
+
+### Сознательные границы MVP
+
+- mutation на этой итерации ровно одна (`POST /adjustments`); никаких
+  transfer / FIFO/LIFO / `MaterialStockLot` / master-`Material`;
+- остатки считаются по `WorkshopNeed`;
+- delete / cancel adjustment в этой итерации не реализованы;
+- новые роли (`WAREHOUSE_MANAGER`, `PURCHASER`, `ACCOUNTANT`) **не
+  введены**;
+- UI корректировки живёт прямо во вкладке «Остатки» раздела «Склады»;
+  отдельной страницы / пункта sidebar нет.
 
 ---
 
@@ -1230,12 +1524,32 @@ DTO: `packages/shared/src/printers.ts`.
 
 | Метод | Путь                       | RBAC                | Описание |
 | ----- | -------------------------- | ------------------- | -------- |
-| GET   | `/api/company-settings`    | SHOP_MANAGER, ADMIN | Текущие реквизиты. Backend идемпотентно создаёт singleton-строку, если её ещё нет (`CompanySettingsService.getOrCreate`). |
-| PATCH | `/api/company-settings`    | SHOP_MANAGER, ADMIN | `UpdateCompanySettingsDto` (любое подмножество полей: legalName/shortName/INN/КПП/ОГРН/адреса/телефон/email/руководители/банк/БИК/р/с/к/с). Audit `COMPANY_SETTINGS_UPDATED`. |
+| GET   | `/api/company-settings`    | SHOP_MANAGER, ADMIN | Текущие реквизиты + флаги блока «Материалы и склад» (`autoIssueMaterialsOnCutRelease`, `allowNegativeMaterialStock`). Backend идемпотентно создаёт singleton-строку, если её ещё нет (`CompanySettingsService.getOrCreate`) — в этом случае флаги отдаются со значениями Prisma-default (`false` / `true`). |
+| PATCH | `/api/company-settings`    | SHOP_MANAGER, ADMIN | `UpdateCompanySettingsDto` (любое подмножество полей: legalName/shortName/INN/КПП/ОГРН/адреса/телефон/email/руководители/банк/БИК/р/с/к/с + `autoIssueMaterialsOnCutRelease?`, `allowNegativeMaterialStock?`). Audit `COMPANY_SETTINGS_UPDATED`. |
 
 DTO: `packages/shared/src/company-settings.ts`. Audit:
 `COMPANY_SETTINGS_UPDATED` (`entityType = COMPANY_SETTINGS`,
 `entityId = "default"`).
+
+Флаги блока «Материалы и склад» (рендерятся в UI
+`/admin/company-settings` переключателями, см.
+`apps/web/app/admin/company-settings/settings-form.tsx`):
+
+- `autoIssueMaterialsOnCutRelease Boolean @default(false)` —
+  автосписание материалов при выдаче кроя (см. §20a «Material
+  issues»). GET отдаёт текущее значение; PATCH принимает `true` /
+  `false` (поле опциональное — `undefined` ⇒ backend не трогает).
+  Бизнес-flow читает флаг через
+  `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`
+  (cheap SELECT, без `getOrCreate`).
+- `allowNegativeMaterialStock Boolean @default(true)` — гейт
+  отрицательных остатков для `MaterialIssue` OUT (`MANUAL post`
+  и `AUTO_CUT_ISSUE`); подробности и контракт ошибки 409
+  `MATERIAL_STOCK_INSUFFICIENT` — в §20a «Material issues» и
+  `docs/current-state.md §«Подключение расхода материалов к
+  складу»`. GET отдаёт текущее значение; PATCH принимает `true` /
+  `false`; бизнес-flow читает флаг через
+  `CompanySettingsService.getAllowNegativeMaterialStock()`.
 
 ### 42.2 Подразделения компании
 

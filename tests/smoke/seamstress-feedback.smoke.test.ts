@@ -78,25 +78,23 @@ describe('seamstress feedback wiring (/work)', () => {
 
   test('feedback.ts: triggerScanHaptic — fail-soft без navigator.vibrate', async () => {
     vi.resetModules();
-    // jsdom-окружения нет, navigator есть только если объявлен
-    // глобально; гарантируем чистое состояние.
-    const originalNavigator = (globalThis as { navigator?: unknown }).navigator;
-    (globalThis as { navigator?: unknown }).navigator = {};
+    // jsdom-окружения нет; в новых Node/Vitest у globalThis.navigator
+    // только getter, поэтому безопасно подменяем через vi.stubGlobal.
+    vi.stubGlobal('navigator', {});
     try {
       const mod = await import(
         path.join(repoRoot, 'apps/web/app/work/feedback.ts')
       );
       expect(() => mod.triggerScanHaptic()).not.toThrow();
     } finally {
-      (globalThis as { navigator?: unknown }).navigator = originalNavigator;
+      vi.unstubAllGlobals();
     }
   });
 
   test('feedback.ts: triggerScanHaptic зовёт navigator.vibrate ровно один раз', async () => {
     vi.resetModules();
     const vibrate = vi.fn();
-    const originalNavigator = (globalThis as { navigator?: unknown }).navigator;
-    (globalThis as { navigator?: unknown }).navigator = { vibrate } as unknown;
+    vi.stubGlobal('navigator', { vibrate });
     try {
       const mod = await import(
         path.join(repoRoot, 'apps/web/app/work/feedback.ts')
@@ -110,7 +108,7 @@ describe('seamstress feedback wiring (/work)', () => {
       expect(ms).toBeGreaterThan(0);
       expect(ms).toBeLessThanOrEqual(100);
     } finally {
-      (globalThis as { navigator?: unknown }).navigator = originalNavigator;
+      vi.unstubAllGlobals();
     }
   });
 
@@ -183,4 +181,5 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });

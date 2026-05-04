@@ -31,8 +31,9 @@
  *      source = MANUAL, sourceKey = null.
  *  12. Audit MATERIAL_ISSUE_CREATED и MATERIAL_ISSUE_POSTED
  *      записываются для auto issue.
- *  13. MaterialIssueLine не создаёт строк StockBalance/StockMovement
- *      (таблиц нет в этой MVP-итерации).
+ *  13. AUTO_CUT_ISSUE подключён к складу: создаётся StockMovement OUT
+ *      через MaterialIssuesService (MaterialStockLot по-прежнему нет —
+ *      эта сущность вне MVP).
  *
  * Тесты используют `TEST_DATABASE_URL` — без неё `describeWithDb`
  * превращается в `describe.skip`.
@@ -573,18 +574,16 @@ describeWithDb('integration — material issues (auto cut issue on issueToEmploy
   });
 
   // ---------------------------------------------------------------------------
-  // 13. Auto issue НЕ создаёт записей StockBalance / StockMovement
-  //     (эти модели в MVP отсутствуют вообще) — проверяем косвенно,
-  //     что в БД нет соответствующих таблиц.
+  // 13. Auto issue подключён к складу: есть таблицы StockBalance /
+  //     StockMovement (foundation) и AUTO_CUT_ISSUE пишет OUT-движения
+  //     через `MaterialIssuesService`. `MaterialStockLot` по-прежнему
+  //     вне MVP — проверяем, что клиент не содержит такой модели.
   // ---------------------------------------------------------------------------
 
-  test('backend-итерация не создаёт таблиц StockBalance / StockMovement / MaterialStockLot', async () => {
-    // На Prisma-клиенте этих моделей не должно быть в сгенерированном
-    // типе. Проверка — через runtime `Object.prototype.hasOwnProperty`
-    // по `t.prisma` (обычный клиент).
+  test('foundation StockBalance / StockMovement присутствуют, MaterialStockLot — нет', async () => {
     const prismaAny = t.prisma as unknown as Record<string, unknown>;
-    expect(prismaAny.stockBalance).toBeUndefined();
-    expect(prismaAny.stockMovement).toBeUndefined();
+    expect(prismaAny.stockBalance).toBeDefined();
+    expect(prismaAny.stockMovement).toBeDefined();
     expect(prismaAny.materialStockLot).toBeUndefined();
   });
 

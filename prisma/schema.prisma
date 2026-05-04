@@ -4270,6 +4270,43 @@ model CompanySettings {
   /// `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`.
   autoIssueMaterialsOnCutRelease Boolean @default(false)
 
+  /// Hardening-флаг: разрешать ли отрицательный `StockBalance.qty`
+  /// при списании материалов в `MaterialIssue.post` /
+  /// `AUTO_CUT_ISSUE`
+  /// (см. `apps/api/src/modules/stock/stock.service.ts::applyMovementInTx`,
+  /// `apps/api/src/modules/material-issues/material-issues.service.ts`,
+  /// `docs/current-state.md §«Material issue → StockMovement OUT»`).
+  ///
+  /// Семантика:
+  ///   - `true`  (default) — текущее MVP-поведение: `MaterialIssue.post`
+  ///     и `AUTO_CUT_ISSUE` могут увести `StockBalance.qty` в минус.
+  ///     `applyMovementInTx` пишет OUT-движение и no-location negative
+  ///     balance, если положительного остатка нет.
+  ///   - `false` — сервис проверяет достаточность остатка ДО записи
+  ///     движения. При нехватке OUT не создаётся, `StockBalance` не
+  ///     меняется, бросается доменная ошибка `MATERIAL_STOCK_INSUFFICIENT`
+  ///     (409). Транзакция откатывается, `MaterialIssue` остаётся
+  ///     `DRAFT` (для авто-выдачи кроя — `issueToEmployee` тоже падает,
+  ///     потому что владелец явно запретил минус).
+  ///
+  /// Default `true` сознательно: после миграции production-flow НЕ
+  /// меняется самостоятельно — переключение на жёсткую блокировку
+  /// остаётся явным действием владельца проекта. Если строки
+  /// `CompanySettings` ещё нет (свежая БД), backend трактует значение
+  /// как `true` и не создаёт singleton-row по пути production-flow
+  /// (см. `CompanySettingsService.getAllowNegativeMaterialStock()`).
+  ///
+  /// Флаг применяется ТОЛЬКО к OUT-движениям `MaterialIssue` (ручному
+  /// `post` и `AUTO_CUT_ISSUE`). `PurchaseReceipt` cancel / REVERSAL
+  /// OUT остаётся permissive — отмена приёмки бизнес-сценарий
+  /// отдельной итерации.
+  ///
+  /// Публичный DTO/PATCH `/api/company-settings` это поле НЕ
+  /// принимает на этой итерации (UI-настройка ещё не утверждена);
+  /// чтение делает
+  /// `CompanySettingsService.getAllowNegativeMaterialStock()`.
+  allowNegativeMaterialStock Boolean @default(true)
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
@@ -4587,6 +4624,16 @@ model StockMovement {
 
   sourceType String?
   sourceId   String?
+  /// Идемпотентный технический ключ движения (см.
+  /// `apps/api/src/modules/stock/stock.service.ts`):
+  ///   - `PURCHASE_RECEIPT_LINE:<purchaseReceiptLineId>` — приход
+  ///     по строке `PurchaseReceiptLine`;
+  ///   - `PURCHASE_RECEIPT_LINE_CANCEL:<purchaseReceiptLineId>` —
+  ///     обратное движение при отмене этой же строки.
+  /// `UNIQUE` гарантирует, что повторная обработка приёмки / её
+  /// отмена при retry не создаст дубль `StockMovement` и не
+  /// удвоит изменение `StockBalance.qty`.
+  sourceKey  String? @unique
 
   purchaseReceiptId     String?
   purchaseReceiptLineId String?

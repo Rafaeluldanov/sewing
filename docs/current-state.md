@@ -150,9 +150,11 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
   `false` и не создаёт singleton-строку — настройка остаётся
   явным действием владельца проекта. Default `false` сознательно:
   после миграции production поведение не меняется само. UI для
-  управления флагом на этой итерации **не реализован** —
-  публичный DTO/PATCH `/api/company-settings` это поле не
-  принимает; backend читает значение через приватный getter
+  управления флагом живёт в блоке «Материалы и склад» на
+  `/admin/company-settings` (переключатель «Автосписание материалов
+  при выдаче кроя»); публичный `GET`/`PATCH` `/api/company-settings`
+  отдают и принимают это поле (см. `docs/api.md §42`). В горячем
+  flow backend читает его через приватный getter
   `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`. Документ содержит по одной строке
   `MaterialIssueLine` на каждую **материальную** строку
   `WorkshopNeed` заказа (исключаются `status = CANCELLED` и
@@ -234,21 +236,344 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     (`${workshopNeedId}:NO_WAREHOUSE|<id>:NO_CELL|<id>`), чтобы не
     плодить дубли при `NULL` в `warehouseId` / `cellId`;
   - **`StockService`**: `getOrCreateBalanceInTx`, `applyMovementInTx`,
-    `listBalances`, `listMovements`; отрицательный физический остаток
+    `listBalances`, `listMovements`,
+    `recordPurchaseReceiptInTx` / `reversePurchaseReceiptInTx` (см.
+    подключение приёмки ниже); отрицательный физический остаток
     на foundation **не блокируется**; стоимость на остатке —
     средневзвешенная на `IN` и пропорционально текущей средней на
-    `OUT` (без FIFO/LIFO);
-  - **бизнес-потоки не подключены**: `PurchaseReceipt` / приёмка **не**
-    увеличивают `StockBalance`, `MaterialIssue` (включая POST и авто
-    при выдаче кроя) **не** уменьшают остаток, `PassportsService` /
-    `CostsService` **не** читают склад; публичных REST-роутов под остатки
-    нет.
+    `OUT` (без FIFO/LIFO).
+
+  Backend-итерация «Подключение приёмки к складу»
+  (`apps/api/src/modules/purchase-receipts/purchase-receipts.service.ts`,
+  `prisma/schema.prisma::StockMovement.sourceKey`):
+  - при создании `POSTED PurchaseReceipt` (через
+    `POST /api/purchase-receipts/from-purchase-order`) в той же
+    транзакции для каждой строки с `workshopNeedId`, `unit` и
+    `receivedQty > 0` пишется входящий `StockMovement`
+    (`direction = IN`, `type = PURCHASE_RECEIPT`,
+    `sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`), и
+    `StockBalance.qty` увеличивается; средняя себестоимость
+    пересчитывается по обычной формуле `applyMovementInTx`;
+  - `warehouseId` входящего движения берётся через
+    `Cell.warehouseId` (если `cellId` у строки пустой —
+    `warehouseId = null`); описание для свежесозданного
+    `StockBalance` берётся из `WorkshopNeed.description` →
+    `sourceName` → `PurchaseReceiptLine.itemNameSnapshot`;
+  - `unitCost` = `priceSnapshot` для `RUB`/null-валюты; `0` для
+    других валют и для отсутствующего/отрицательного
+    `priceSnapshot` (конвертация валют не делается);
+  - при отмене приёмки (`POST /api/purchase-receipts/:id/cancel`) в
+    той же транзакции для каждой строки, у которой существует
+    исходный `IN` (`sourceKey = PURCHASE_RECEIPT_LINE:<lineId>`),
+    пишется сторнирующий `StockMovement` (`direction = OUT`,
+    `type = REVERSAL`,
+    `sourceKey = PURCHASE_RECEIPT_LINE_CANCEL:<lineId>`,
+    `comment = "Отмена приёмки"`), и `StockBalance.qty` уменьшается;
+  - **старые приёмки** (созданные до этой итерации) **не
+    реверсятся**: cancel пропускает строки без исходного `IN` и не
+    падает (защита от двойного движения для исторических данных);
+  - идемпотентность приёмки и cancel гарантируется UNIQUE-индексом
+    `StockMovement.sourceKey` — повторный вызов / retry не создаёт
+    дубль и не двигает `StockBalance.qty` повторно; soft-skip строк
+    без `workshopNeedId` / без `unit` / с `receivedQty <= 0` пишет
+    structured-лог `event=stock.purchase_receipt.skip reason=...`;
+  - публичных REST-роутов под `StockBalance` / `StockMovement`
+    по-прежнему нет — это внутренние таблицы для следующих
+    итераций.
+
+  Backend-итерация «Подключение расхода материалов к складу»
+  (`apps/api/src/modules/material-issues/material-issues.service.ts`,
+  `apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueInTx`,
+  `prisma/schema.prisma::StockMovement.sourceKey`):
+  - `MaterialIssue.post` (ручной `DRAFT → POSTED` через
+    `POST /api/material-issues/:id/post`) и `createAutoCutIssueForPassport`
+    (авто-документ `AUTO_CUT_ISSUE` при выдаче кроя) в той же
+    транзакции вызывают `StockService.recordMaterialIssueInTx`. Для
+    каждой `MaterialIssueLine` с `workshopNeedId`, `unit` и
+    `issuedQty > 0` пишется исходящий `StockMovement`
+    (`direction = OUT`, `type = MATERIAL_ISSUE`,
+    `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`), и `StockBalance.qty`
+    уменьшается. Комментарий движения зависит от `MaterialIssue.source`:
+    `"Автоматическое списание при выдаче кроя"` для
+    `AUTO_CUT_ISSUE` и `"Списание по документу расхода материалов"`
+    для `MANUAL`;
+  - soft-skip строк без `workshopNeedId` / без `unit` / с
+    `issuedQty <= 0` пишет structured-лог
+    `event=stock.material_issue.skip reason=...`; `MaterialIssue.post`
+    продолжает успешно завершаться;
+  - если `line.cellId` задан — OUT-движение идёт из этой ячейки
+    (`warehouseId` берётся через `Cell.warehouseId`);
+  - если `line.cellId` не задан, сервис применяет простую
+    MVP-аллокацию: ищет существующий `StockBalance` по
+    `(workshopNeedId, unit)` с `qty > 0` и выбирает один с
+    максимальным `qty`; если положительных балансов нет — пишет
+    OUT в no-location balance (`warehouseId = null`,
+    `cellId = null`), создавая его при необходимости. Одна
+    `MaterialIssueLine` → один OUT-`StockMovement` (без
+    дробления между остатками);
+  - **проверка достаточности остатков** управляется hardening-флагом
+    `CompanySettings.allowNegativeMaterialStock` (Boolean, default
+    `true`, см. `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`,
+    `apps/api/src/modules/stock/stock.service.ts::applyMovementInTx`).
+    Если флаг **`true`** (default), `MaterialIssue.post` и
+    `AUTO_CUT_ISSUE` продолжают писать OUT даже при нехватке
+    материала: `StockBalance.qty` уходит в минус; если положительного
+    баланса нет — создаётся no-location negative balance
+    (`warehouseId = null`, `cellId = null`). Если флаг **`false`**,
+    `StockService.recordMaterialIssueInTx` проверяет достаточность
+    остатка ДО записи OUT. Аллокация в strict-режиме:
+    (а) если `line.cellId` задан — проверяется именно этот баланс
+    (`qty < issuedQty` ⇒ ошибка, другой баланс не используется);
+    (б) если `line.cellId` не задан — ищется самый большой
+    положительный `StockBalance` по `(workshopNeedId, unit)` и при
+    `qty < issuedQty` или отсутствии положительного баланса
+    бросается 409 `MATERIAL_STOCK_INSUFFICIENT`. **No-location
+    negative balance в strict-режиме НЕ создаётся.** В обоих режимах
+    одна `MaterialIssueLine` → один OUT-`StockMovement` (без
+    дробления / FIFO). При нехватке вся транзакция откатывается:
+    `MaterialIssue` остаётся `DRAFT`, OUT не пишется, `StockBalance`
+    не меняется; для авто-выдачи кроя (`AUTO_CUT_ISSUE` через
+    `PassportsService.issueToEmployee`) откатывается и сама выдача —
+    `Passport` не переходит в IN_PROGRESS, `PassportEvent`
+    `ISSUED_TO_EMPLOYEE` не пишется. Если строки `CompanySettings`
+    ещё нет (свежая БД), backend трактует значение как `true` и не
+    создаёт singleton-row. **Флаг применяется ТОЛЬКО к OUT-движениям
+    `MaterialIssue`** (ручной `post` и `AUTO_CUT_ISSUE`):
+    `PurchaseReceipt` cancel / REVERSAL OUT остаётся permissive —
+    блокировка отмены приёмки выходит за рамки этой итерации. UI для
+    управления флагом живёт в блоке «Материалы и склад» на
+    `/admin/company-settings` (переключатель «Разрешить отрицательные
+    остатки материалов»); публичный `GET`/`PATCH`
+    `/api/company-settings` отдают и принимают это поле (см.
+    `docs/api.md §42`). В горячем flow backend читает его через
+    приватный getter
+    `CompanySettingsService.getAllowNegativeMaterialStock()`;
+  - **FIFO/LIFO не реализованы** — `applyMovementInTx` на OUT
+    использует текущий `StockBalance.unitCost`, не партии;
+  - идемпотентность — UNIQUE `StockMovement.sourceKey`:
+    `MATERIAL_ISSUE_LINE:<lineId>` на строку. Retry
+    `MaterialIssue.post` / повторный `issueToEmployee` не уменьшают
+    остаток повторно;
+  - **`MaterialIssue.totalCost` не пересчитывается** по складской
+    стоимости: документный `totalCost` остаётся Σ
+    `MaterialIssueLine.issuedQty × unitCost` (финансовый snapshot для
+    `OrderSummaryUnifiedTable` / `CostsService` /
+    `ProductionCostV2Service`). `StockMovement.totalCost` —
+    независимая складская оценка через `StockBalance.unitCost`.
+  - **cancel DRAFT не пишет движение**; POSTED отменить нельзя —
+    reversal/сторно `MaterialIssue` вынесен в отдельную будущую
+    итерацию (появится вместе с возвратом в ячейку).
+  - `PassportsService` по-прежнему склад **не читает и не пишет**
+    напрямую — всё идёт через `MaterialIssuesService` auto-helper;
+    крой блокируется недостатком материала **только** если включены
+    оба флага `autoIssueMaterialsOnCutRelease = true` **и**
+    `allowNegativeMaterialStock = false` (см. выше); если автосписание
+    выключено, флаг отрицательных остатков на `issueToEmployee` не
+    влияет.
 
   По-прежнему **не реализованы**: `MaterialStockLot`, FIFO/LIFO,
   master-модель `Material`, роли `WAREHOUSE_MANAGER` / `PURCHASER` /
   `ACCOUNTANT`, обновление `ProductionCostV2Service` под склад,
-  любые другие финансовые сводки (`OrderPlannedCostSummaryCard`) под
-  эту ось — вынесены в следующие итерации.
+  reversal/возврат `MaterialIssue`, любые другие финансовые сводки
+  (`OrderPlannedCostSummaryCard`) под эту ось, UI для просмотра
+  остатков — вынесены в следующие итерации. UI управления флагами
+  `autoIssueMaterialsOnCutRelease` / `allowNegativeMaterialStock`
+  реализован в блоке «Материалы и склад» на
+  `/admin/company-settings` (см. ниже «Frontend-итерация “Настройки
+  компании → Материалы и склад”»).
+
+  Backend-итерация «Read-only API склада»
+  (`apps/api/src/modules/stock/stock.controller.ts`,
+  `apps/api/src/modules/stock/stock.service.ts::listBalances` /
+  `listMovements`,
+  `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`,
+  `apps/api/src/modules/stock/dto/list-stock-movements.dto.ts`,
+  `docs/api.md §«26a. Stock (read-only)»`):
+  - появился публичный read-only API для просмотра остатков и
+    журнала движений foundation-склада: `GET /api/stock/balances`
+    и `GET /api/stock/movements`. Контроллер
+    `StockController` зарегистрирован в `StockModule`,
+    класс-уровень `@Roles('ADMIN', 'SHOP_MANAGER')`. `ADMIN`
+    глобально проходит через `AuthGuard`. Бизнес-flow на этой
+    итерации **не менялся** — записи в `StockBalance` /
+    `StockMovement` по-прежнему делает `StockService.applyMovementInTx`
+    из `PurchaseReceiptsService` и `MaterialIssuesService`;
+  - balances: фильтры `workshopNeedId` / `orderId` (через
+    relation `workshopNeed.orderId`) / `warehouseId` / `cellId` /
+    `materialRole` / `unit` / `q` (case-insensitive substring по
+    `description` остатка и `WorkshopNeed.description` /
+    `sourceName`) / `positiveOnly` / `negativeOnly` / `zeroOnly`
+    (взаимоисключающие — больше одного флага = 400
+    `VALIDATION_ERROR`); сортировка `updatedAt desc, description asc`;
+  - movements: фильтры `workshopNeedId` / `orderId` /
+    `stockBalanceId` / `warehouseId` / `cellId` / `type` (`IN |
+    OUT | ADJUSTMENT | REVERSAL`) / `direction` (`IN | OUT`) /
+    `sourceType` / `sourceId` / `purchaseReceiptId` /
+    `purchaseReceiptLineId` / `materialIssueId` /
+    `materialIssueLineId` / `from` / `to` (ISO datetime) / `q`
+    (case-insensitive substring по `comment`); сортировка
+    `createdAt desc`;
+  - pagination — `limit` default `50`, max `200` (> 0); `offset`
+    default `0` (≥ 0); response shape — `{ items, total, limit,
+    offset }`;
+  - `Decimal` сериализуется строкой через `.toString()`,
+    `Date` — ISO-строкой; UI остатков **не реализован** —
+    доступ только через API. **`StockMovement.sourceKey`** —
+    внутренний идемпотентный ключ — сознательно **не отдаётся**
+    в публичном response (см. JSDoc `toStockMovementListItem`);
+  - read-only: никаких adjustment / transfer / corrections; FIFO/LIFO
+    по-прежнему нет; `MaterialStockLot` нет; master-модели
+    `Material` нет; новые роли (`WAREHOUSE_MANAGER` / `PURCHASER` /
+    `ACCOUNTANT`) **не введены**.
+
+  Frontend-итерация «UI остатков и движений склада»
+  (`apps/web/app/admin/warehouses/page.tsx`,
+  `apps/web/components/warehouses/stock/*`,
+  `apps/web/lib/stock-api.ts`):
+  - в существующем разделе `/admin/warehouses` появились
+    read-only вкладки «Остатки» и «Движения». Переключение —
+    через query-параметр `?tab=balances|movements`; дефолтный
+    вид (`tab` отсутствует или `tab=list`) — это прежняя
+    таблица складов, она не сломалась. Вкладки рендерятся в
+    `actions`-слоте `AdminPageShell` рядом с кнопкой «Добавить»
+    (кнопка осталась и ведёт на `/admin/warehouses/new`);
+  - вкладка **«Остатки»** ходит в `GET /api/stock/balances` через
+    `lib/stock-api.ts::listStockBalances`. Колонки таблицы:
+    Материал (`description` + `materialRole`) / Заказ
+    (`orderNumber` или `orderId`) / Склад / Ячейка / Кол-во /
+    Ед. изм. / Цена / Сумма / Последнее движение / Обновлено.
+    Отрицательный `qty` подсвечивается `<AdminStatusBadge
+    tone="danger">` (используем существующий цветовой словарь —
+    новой системы не вводим). Empty-state «Остатки материалов
+    пока не сформированы»;
+  - вкладка **«Движения»** ходит в `GET /api/stock/movements`
+    через `listStockMovements`. Колонки: Дата / Тип /
+    Направление / Материал (`workshopNeedId` или `sourceId`,
+    т.к. `description` backend в movement-response не отдаёт) /
+    Заказ / Склад / Ячейка / Кол-во + ед. / Цена / Сумма /
+    Остаток до / Остаток после / Источник (`sourceType` ·
+    `sourceId`) / Комментарий. `direction` рендерится как
+    `«Приход»` (info) / `«Расход»` (danger), `type` — как
+    `«Приёмка»` / `«Расход материалов»` / `«Сторно»` /
+    `«Корректировка»`. Empty-state «Движения материалов пока
+    не зафиксированы»;
+  - **`sourceKey`** на UI не отображается — backend его в
+    публичном response не возвращает, frontend-types в
+    `lib/stock-api.ts` его тоже не объявляют;
+  - pagination в read-only API склада — `limit` / `offset`,
+    поэтому таблицы используют отдельный `<StockPagination>`
+    (Назад / Вперёд + диапазон «Показано N–M из total»). Default
+    `limit = 50`, max `200`, как у backend DTO. Общий
+    `<AdminPagination>` остаётся в дефолтной вкладке «Склады»
+    (там `page` / `pageSize`);
+  - **отдельная страница `/admin/stock` не создавалась**, новый
+    sidebar-пункт **не добавлялся** (sidebar `/admin/warehouses`
+    остался единственной точкой входа);
+  - **`OrderViewTabs`** / RBAC / backend-сервисы (`StockService`,
+    `MaterialIssuesService`, `PurchaseReceiptsService`,
+    `PassportsService`) и `prisma/schema.prisma` на этой итерации
+    **не правились**;
+  - сознательно **не реализованы** на этой UI-итерации:
+    multi-warehouse фильтр / группировки по складу / отдельная
+    сводка по складам, кнопки «Списать» / «Переместить», UI для
+    перемещения между ячейками, FIFO / LIFO / партии,
+    master-модель `Material`, новые роли `WAREHOUSE_MANAGER` /
+    `PURCHASER` / `ACCOUNTANT` — границы итерации зафиксированы
+    в smoke-тесте `tests/smoke/warehouses-stock-tabs.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Ручная корректировка остатка»
+  (`apps/api/src/modules/stock/stock.controller.ts::createAdjustment`,
+  `apps/api/src/modules/stock/stock.service.ts::createAdjustment`,
+  `apps/api/src/modules/stock/dto/create-stock-adjustment.dto.ts`,
+  `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,
+  `apps/web/components/warehouses/stock/stock-adjustment-button.tsx`,
+  `apps/web/lib/stock-api.ts::createStockAdjustment`,
+  `docs/api.md §«26a.3 POST /api/stock/adjustments»`):
+  - в разделе «Склады» во вкладке «Остатки»
+    (`/admin/warehouses?tab=balances`) появилась кнопка
+    «Корректировка». Открывает inline-форму прямо над таблицей —
+    отдельной страницы / пункта меню / sidebar-item не вводим.
+  - Backend mutation: `POST /api/stock/adjustments`
+    (`@Roles('ADMIN', 'SHOP_MANAGER')`). Body — `stockBalanceId`,
+    `direction` (`IN | OUT`), `qty`, `unitCost?`, `comment`,
+    `clientRequestId?`. Создаёт `StockMovement` `type = ADJUSTMENT`,
+    апдейтит `StockBalance` и пишет audit `STOCK_ADJUSTMENT_CREATED`
+    (под `entityType = STOCK_MOVEMENT`) — всё в одной транзакции.
+  - **IN** увеличивает `StockBalance.qty`. `unitCost` из тела
+    используется при пересчёте средневзвешенной цены остатка
+    (`applyMovementInTx`-логика без изменений). Если `unitCost`
+    не передан — берётся текущий `balance.unitCost` или `0`.
+  - **OUT** уменьшает `StockBalance.qty`. `unitCost` из тела
+    игнорируется — складская оценка OUT берётся из текущего
+    `balance.unitCost`, как у `MaterialIssue.post` / REVERSAL.
+    `MaterialIssue.totalCost` корректировка **не меняет** —
+    adjustment живёт только в плоскости склада.
+  - **`CompanySettings.allowNegativeMaterialStock`** действует на
+    `OUT`-корректировку: при `false` нехватка остатка → 409
+    `MATERIAL_STOCK_INSUFFICIENT`. `IN` от флага не зависит.
+    `PurchaseReceipt` cancel остаётся permissive (REVERSAL не
+    блокируется) — поведение из предыдущей hardening-итерации не
+    трогаем.
+  - **Идемпотентность**: один `clientRequestId` формы → один
+    `StockMovement` (UNIQUE по `sourceKey`,
+    `STOCK_ADJUSTMENT:<clientRequestId>`). Повторный submit
+    возвращает существующее движение и не апдейтит `StockBalance`
+    повторно. Если `clientRequestId` не передан, сервис генерирует
+    свой UUID. `sourceKey` в response **не отдаётся**.
+  - В UI `StockMovementsTable` тип `ADJUSTMENT` уже отрисовывается
+    как «Корректировка» (`StockMovementTypeBadge`); после успешной
+    корректировки движение появится во вкладке «Движения».
+  - Сознательно **не реализованы** на этой итерации: transfer
+    между складами/ячейками, FIFO / LIFO / `MaterialStockLot`,
+    `StockAdjustment` master-модель, master-`Material`,
+    delete / cancel adjustment, новые роли `WAREHOUSE_MANAGER` /
+    `PURCHASER` / `ACCOUNTANT`. Запреты зафиксированы в smoke-
+    тесте `tests/smoke/stock-adjustments.smoke.test.ts`.
+
+  Frontend-итерация «Настройки компании → Материалы и склад»
+  (`apps/web/app/admin/company-settings/settings-form.tsx`,
+  `apps/web/app/admin/company-settings/actions.ts`,
+  `packages/shared/src/company-settings.ts`,
+  `apps/api/src/modules/company-settings/company-settings.service.ts`,
+  `docs/api.md §42`):
+  - в существующем экране `/admin/company-settings` появился блок
+    «Материалы и склад» с двумя переключателями:
+    - «Автосписание материалов при выдаче кроя» → поле
+      `autoIssueMaterialsOnCutRelease` (Boolean, default `false`);
+    - «Разрешить отрицательные остатки материалов» → поле
+      `allowNegativeMaterialStock` (Boolean, default `true`);
+  - первый флаг включает/выключает автосписание при выдаче кроя
+    (`PassportsService.issueToEmployee` → `createAutoCutIssueForPassport`);
+  - второй флаг разрешает/запрещает отрицательные остатки
+    материалов при `MaterialIssue.post` и `AUTO_CUT_ISSUE`. Если
+    `allowNegativeMaterialStock = false`, `MaterialIssue.post` может
+    вернуть 409 `MATERIAL_STOCK_INSUFFICIENT`; если при этом
+    `autoIssueMaterialsOnCutRelease = true`, `issueToEmployee` тоже
+    может быть заблокирован недостатком остатка (см. выше);
+  - поля добавлены в публичный `CompanySettingsDto` и
+    `UpdateCompanySettingsSchema` (`@sewing/shared/company-settings`).
+    `GET /api/company-settings` отдаёт текущие значения (fallback —
+    Prisma-default, т.к. `get()` идёт через `getOrCreate()`). `PATCH`
+    принимает любое подмножество полей, `undefined` ⇒ backend поле
+    не трогает; audit пишется одним `COMPANY_SETTINGS_UPDATED` как
+    и раньше;
+  - форма одна — Submit сохраняет разом и реквизиты, и флаги
+    (`updateCompanySettingsAction`). Чекбоксы защищены
+    hidden-маркерами `${name}__present`, чтобы server action отличал
+    «выключен» от «блок не рендерился»;
+  - приватные геттеры `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()` /
+    `.getAllowNegativeMaterialStock()` не менялись — бизнес-сервисы
+    (`PassportsService`, `MaterialIssuesService`, `StockService`)
+    читают флаги в горячем flow как раньше, без дополнительного
+    write;
+  - **не менялись** на этой итерации: `Prisma schema`, миграции,
+    `StockService` / `MaterialIssuesService` / `PassportsService` /
+    `PurchaseReceiptsService` / `CostsService` /
+    `ProductionCostV2Service`, sidebar, `OrderViewTabs`, RBAC (те
+    же `SHOP_MANAGER` / `ADMIN` на контроллере). Новая страница /
+    отдельный route `/admin/stock-settings` **не создавались**,
+    настройки в `/admin/warehouses` не переезжают. Границы
+    зафиксированы в `tests/smoke/company-settings-material-stock.smoke.test.ts`.
 
 ---
 
@@ -319,6 +644,7 @@ deploy/           — конфиги развёртывания
 | `docs/adr/*.md` | принятые архитектурные решения |
 | `docs/pilot/*` | rollout / UAT (не нужно для разработки) |
 | `docs/*-recon.md` | рабочие планы внедрения подсистем (читать только по теме) |
+| [`docs/material-consumption-rollout-checklist.md`](./material-consumption-rollout-checklist.md) | rollout / приёмочный checklist по фактическому расходу материалов и foundation складского учёта |
 
 Архивные / устаревшие документы помечены `OUTDATED` / `ARCHIVED` в
 `docs/index.md`. В спорных местах **верим коду**, а не документу.

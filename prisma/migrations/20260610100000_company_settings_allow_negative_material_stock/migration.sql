@@ -1,0 +1,35 @@
+-- Hardening-итерация «Запрет отрицательных остатков материалов при
+-- списании» (см. `prisma/schema.prisma::CompanySettings`,
+-- `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`,
+-- `apps/api/src/modules/stock/stock.service.ts::applyMovementInTx`,
+-- `apps/api/src/modules/material-issues/material-issues.service.ts`,
+-- `docs/current-state.md §«Material issue → StockMovement OUT»`).
+--
+-- Цель: добавить boolean-настройку, которая разрешает или запрещает
+-- уход `StockBalance.qty` в минус при списании материалов
+-- (`MaterialIssue.post` и `AUTO_CUT_ISSUE`). Default `true`
+-- сознательно — после миграции production-flow НЕ меняется
+-- самостоятельно, переключение на жёсткую блокировку остаётся явным
+-- действием владельца проекта.
+--
+-- Контракт:
+--   * `true`  → текущее MVP-поведение: OUT-движение пишется даже
+--     если на балансе не хватает; при отсутствии положительного
+--     `StockBalance` создаётся no-location negative balance.
+--   * `false` → перед записью OUT-движения сервис проверяет
+--     достаточность остатка. Если не хватает — бросается
+--     доменная ошибка `MATERIAL_STOCK_INSUFFICIENT` (409),
+--     транзакция откатывается, ни OUT, ни апдейта баланса нет,
+--     `MaterialIssue` остаётся в `DRAFT`.
+--
+-- Флаг применяется только к OUT-движениям `MaterialIssue` (ручному
+-- `post` и `AUTO_CUT_ISSUE`); `PurchaseReceipt` cancel / REVERSAL OUT
+-- остаётся permissive (см. `StockService.reversePurchaseReceiptInTx`).
+--
+-- Публичный API настройки на этой итерации НЕ добавляется —
+-- DTO `/api/company-settings` поле не принимает (UI ещё не
+-- утверждён). Backend читает значение через
+-- `CompanySettingsService.getAllowNegativeMaterialStock()`.
+
+ALTER TABLE "CompanySettings"
+  ADD COLUMN "allowNegativeMaterialStock" BOOLEAN NOT NULL DEFAULT true;

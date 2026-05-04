@@ -356,17 +356,24 @@ describeWithDb('integration — StockService (foundation)', () => {
     expect(n).toBe(1);
   });
 
-  test('MaterialIssuesService / PurchaseReceiptsService не импортируют StockService', () => {
+  test('MaterialIssuesService подключён к StockService (recordMaterialIssueInTx)', () => {
     const root = join(__dirname, '../../apps/api/src/modules');
     const mi = readFileSync(
       join(root, 'material-issues/material-issues.service.ts'),
       'utf8',
     );
+    expect(mi).toMatch(/\bStockService\b/);
+    expect(mi).toMatch(/recordMaterialIssueInTx/);
+  });
+
+  test('PurchaseReceiptsService подключён к StockService (recordPurchaseReceiptInTx + reversePurchaseReceiptInTx)', () => {
+    const root = join(__dirname, '../../apps/api/src/modules');
     const pr = readFileSync(
       join(root, 'purchase-receipts/purchase-receipts.service.ts'),
       'utf8',
     );
-    expect(mi).not.toMatch(/\bStockService\b/);
-    expect(pr).not.toMatch(/\bStockService\b/);
+    expect(pr).toMatch(/\bStockService\b/);
+    expect(pr).toMatch(/recordPurchaseReceiptInTx/);
+    expect(pr).toMatch(/reversePurchaseReceiptInTx/);
   });
 });
