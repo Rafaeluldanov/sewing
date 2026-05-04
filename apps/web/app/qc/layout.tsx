@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { canSeeQc } from '@/lib/rbac';
+import { canSeeEmployeeQrButton, canSeeQc } from '@/lib/rbac';
 import { CallMasterButton } from '@/components/call-master-button';
+import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 
 /**
  * Route-level guard для всего раздела `/qc/*`.
@@ -27,9 +28,11 @@ export default async function QcSectionLayout({
   // экранов им не нужно (см. `docs/flows.md §«Вызов мастера»`,
   // backend `@Roles(...)` всё равно отрежет лишних).
   const showMasterCall = me.user.role === 'QC';
+  const showEmployeeQr = canSeeEmployeeQrButton(me.user.role);
   return (
     <>
       {children}
+      {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
       {showMasterCall ? <CallMasterButton /> : null}
     </>
   );

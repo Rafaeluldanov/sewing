@@ -58,6 +58,7 @@
 
 - [0. Health / Readiness / Diagnostics](#0-health-ready-diagnostics)
 - [1. Auth](#1-auth)
+- [1a. Me (личный кабинет)](#1a-me)
 - [2. Catalog (sizes / products / sizes-CRUD)](#2-catalog)
 - [3. Employees](#3-employees)
 - [4. Equipment](#4-equipment)
@@ -134,6 +135,25 @@ Response DTO: `HealthResponseDto`, `ReadyResponseDto`
 
 Side effects: `login` обновляет `Employee.lastSeenAt`-style-поля
 не пишет (на MVP отдельной таблицы сессий нет, см. ADR-0014).
+
+---
+
+<a id="1a-me"></a>
+## 1a. Me (личный кабинет)
+
+Источник: `me/me.controller.ts`. Класс-уровень `@Controller('me')`,
+доступ — любой авторизованный пользователь (в т.ч. `DISPLAY` проходит,
+но UI-кнопки для этой роли скрыты, см. `apps/web/lib/rbac.ts`
+`canSeeEmployeeQrButton`). Контракты — `packages/shared/src/employee-qr.ts`.
+
+| Метод | Путь                  | RBAC     | Описание |
+| ----- | --------------------- | -------- | -------- |
+| GET   | `/api/me/employee-qr` | Any auth | Возвращает `EmployeeQrResponseDto` — подписанный QR-код текущего сотрудника для показа мастеру / сканирования на рабочем терминале. Payload: `{ employee: { id, name, role }, qrPayload: "SEWING_EMPLOYEE:<signedToken>", expiresAt }`. Токен HMAC-SHA256 (тот же `JWT_SECRET`, что у session-cookie), TTL = 12 часов, `type = "EMPLOYEE_QR"`, не содержит `pinHash` / `login` / `phone` / паспортных / salary-данных. 401 `UNAUTHENTICATED` без сессии; 404 `EMPLOYEE_PROFILE_NOT_FOUND`, если у авторизованного пользователя нет карточки сотрудника; 403 `EMPLOYEE_INACTIVE`, если карточка `active=false`. |
+
+UI-потребители: `apps/web/components/employees/employee-qr-button.tsx`
+(клиентская кнопка + модалка с `qrcode.react`), server-обёртка
+`apps/web/lib/employee-qr-api.ts`, action
+`apps/web/app/employee-qr/actions.ts`.
 
 ---
 

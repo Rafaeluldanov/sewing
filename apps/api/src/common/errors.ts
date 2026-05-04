@@ -1364,6 +1364,54 @@ export class ForbiddenRoleException extends BusinessException {
 }
 
 // ---------------------------------------------------------------------------
+// Employee self-service (GET /api/me/employee-qr, см.
+// `apps/api/src/modules/me/*`, `packages/shared/src/employee-qr.ts`).
+// ---------------------------------------------------------------------------
+
+/**
+ * `GET /api/me/employee-qr`: у текущего пользователя не нашлась
+ * карточка `Employee` (теоретически возможно, если сотрудника
+ * удалили между выдачей сессии и вызовом). В SEWING `Employee`
+ * совпадает с auth-principal'ом, поэтому для практики это «не
+ * должно случиться», но endpoint всё равно обязан иметь явный
+ * код — иначе UI будет ловить generic 500.
+ */
+export class EmployeeProfileNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'EMPLOYEE_PROFILE_NOT_FOUND',
+      'К учётной записи не привязана карточка сотрудника.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * `GET /api/me/employee-qr`: карточка найдена, но `active = false`.
+ *
+ * В обычном flow `AuthGuard` уже режет неактивных сотрудников в
+ * `resolvePrincipal` (вернёт `null` → 401). Этот класс нужен как
+ * defence-in-depth: если в будущем появится способ «ADMIN смотрит
+ * чужой QR» или session-логика релаксирует проверку `active`, мы
+ * всё равно обязаны отдавать 403 `EMPLOYEE_INACTIVE` без утечки
+ * токена.
+ *
+ * Статус сознательно 403 (а не 409, как у исторического
+ * `EmployeeInactiveException`): задача явно требует
+ * «`403 EMPLOYEE_INACTIVE`». Код сообщения совпадает с существующим
+ * классом — UI уже умеет показывать «Сотрудник деактивирован».
+ */
+export class EmployeeInactiveForbiddenException extends BusinessException {
+  constructor() {
+    super(
+      'EMPLOYEE_INACTIVE',
+      'Сотрудник деактивирован.',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Cutting closure requests (ADR-0018)
 // ---------------------------------------------------------------------------
 

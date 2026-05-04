@@ -98,7 +98,12 @@ function ResultCard({ state, mode }: { state: WorkFormState; mode: Mode }) {
       </div>
       <div className="result-card__row">
         <span>Количество</span>
-        <strong>{p.qtyCut} шт <span style={{ color: 'var(--color-fg-muted)', fontWeight: 500 }}>· годных {p.qtyGood}</span></strong>
+        <strong>
+          {p.qtyCut} шт{' '}
+          <span className="result-card__row-meta">
+            · годных {p.qtyGood}
+          </span>
+        </strong>
       </div>
     </div>
   );
@@ -287,7 +292,7 @@ function DefaultActivePanel({ shift }: { shift: ShiftSessionDto }) {
   const [mode, setMode] = useState<Mode>('issue');
 
   return (
-    <div className="work-active" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+    <div className="work-active">
       <div className="work-tabs" role="tablist" aria-label="Режим работы">
         <button
           type="button"
@@ -332,7 +337,7 @@ function DefaultActivePanel({ shift }: { shift: ShiftSessionDto }) {
 
       <form
         action={stopAction}
-        style={{ display: 'flex', justifyContent: 'flex-end' }}
+        className="work-active__shift-end"
         aria-label="Завершить смену"
       >
         <StopButton />

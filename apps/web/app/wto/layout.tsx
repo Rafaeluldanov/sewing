@@ -1,7 +1,8 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { canSeeWto } from '@/lib/rbac';
+import { canSeeEmployeeQrButton, canSeeWto } from '@/lib/rbac';
 import { CallMasterButton } from '@/components/call-master-button';
+import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 
 /**
  * Route-level guard для всего раздела `/wto/*`.
@@ -23,9 +24,11 @@ export default async function WtoSectionLayout({
   if (!me) redirect('/login?next=/wto');
   if (!canSeeWto(me.user.role)) redirect('/');
   const showMasterCall = me.user.role === 'IRONING';
+  const showEmployeeQr = canSeeEmployeeQrButton(me.user.role);
   return (
     <>
       {children}
+      {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
       {showMasterCall ? <CallMasterButton /> : null}
     </>
   );
