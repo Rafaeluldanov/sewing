@@ -119,6 +119,15 @@ services:
       - api
     networks:
       - prod-network
+      # Подключаемся также к сети dev-стека (`docker-compose.dev.yml`,
+      # project=sewing → имя сети `sewing_app-network`). Это позволяет
+      # одному nginx-у обслуживать оба домена: prod.teeon.ru → prod-стек,
+      # dev.teeon.ru → dev-стек. external=true означает «не создаём сеть,
+      # подключаемся к уже существующей»; nginx стартует только если
+      # dev-стек хотя бы раз поднимался и сеть была создана. Если dev
+      # никогда не запускался — сначала `docker compose --env-file .env.dev
+      # -f docker-compose.dev.yml up -d` (создаст сеть), потом prod-стек.
+      - dev-network
     healthcheck:
       # Лёгкий self-check — конфиг валиден.
       test: ["CMD", "nginx", "-t", "-q"]
@@ -144,3 +153,11 @@ volumes:
 networks:
   prod-network:
     driver: bridge
+  # Сеть dev-стека (`docker-compose.dev.yml`, project=sewing). external=true
+  # → не создаём её здесь, только подключаем nginx к уже существующей.
+  # Если поднимаете prod на новом сервере БЕЗ dev — закомментируйте обе
+  # строки `- dev-network` (в nginx.networks и здесь), иначе compose
+  # упадёт с «network sewing_app-network not found».
+  dev-network:
+    external: true
+    name: sewing_app-network

@@ -18,12 +18,25 @@ services:
     volumes:
       - .:/app
       - /app/node_modules
+      # Persistent uploads-том. Имя зашито (sewing_uploads), external=true
+      # — Compose не создаёт и не удаляет volume сам. Перед первым
+      # подъёмом dev-стека на новом сервере выполнить:
+      #   docker volume create sewing_uploads
+      - dev_uploads:/var/lib/sewing/uploads
     environment:
       NODE_ENV: development
       API_PORT: 3001
       DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/myapp
-      APP_URL: http://localhost:3000
-      CORS_ALLOWED_ORIGINS: http://localhost:3000,http://127.0.0.1:3000
+      # Публичные URL dev-окружения. По умолчанию — https://dev.teeon.ru
+      # (за nginx-сервисом prod-инсталляции). Локально без nginx переопределите
+      # в .env.dev на http://localhost:3000.
+      APP_URL: ${APP_URL:-https://dev.teeon.ru}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://dev.teeon.ru}
+      PUBLIC_API_URL: ${PUBLIC_API_URL:-https://dev.teeon.ru/api}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://dev.teeon.ru,http://localhost:3000,http://127.0.0.1:3000}
+      # Корень файлового хранилища. Соответствует mount выше; в БД-URL-ах
+      # лежит /uploads/..., которое Express и nginx раздают одинаково.
+      PATTERNS_UPLOADS_DIR: /var/lib/sewing/uploads
       # В dev по умолчанию выключено: схему обычно катают вручную через
       # `prisma migrate dev` / `db push`. Чтобы включить точечно, поставьте
       # PRISMA_AUTO_SYNC=1 в .env.dev.
@@ -46,10 +59,23 @@ services:
       - /app/node_modules
     environment:
       NODE_ENV: development
-      NEXT_PUBLIC_API_URL: http://localhost:3001/api
+      # NEXT_PUBLIC_* читается на client-side из window.__NEXT_DATA__,
+      # на dev-сервере подхватывается без пересборки. Дефолт ставит
+      # https://dev.teeon.ru/api — для работы через nginx; локально без
+      # nginx достаточно переопределить в .env.dev.
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://dev.teeon.ru/api}
+      NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://dev.teeon.ru}
+      APP_URL: ${APP_URL:-https://dev.teeon.ru}
       INTERNAL_API_URL: http://api:3001/api
       API_URL: http://api:3001/api
     depends_on:
       - api
     networks:
       - app-network
+
+volumes:
+  # См. комментарий у db_data: external + ручное создание тома.
+  #   docker volume create sewing_uploads
+  dev_uploads:
+    external: true
+    name: sewing_uploads
