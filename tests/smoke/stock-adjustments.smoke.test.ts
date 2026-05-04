@@ -92,8 +92,10 @@ test('StockService.createAdjustment пишет StockMovement type=ADJUSTMENT', (
   const block = src.match(/async createAdjustment\([\s\S]*?\n  \}\n/)?.[0];
   expect(block).toBeTruthy();
   expect(block!).toMatch(/STOCK_MOVEMENT_TYPE\.ADJUSTMENT/);
-  // Прокидывает allowNegativeStock из CompanySettings (только для OUT).
-  expect(block!).toMatch(/getAllowNegativeMaterialStock/);
+  // Прокидывает allowNegativeStock через effective-resolver
+  // (`resolveAdjustmentAllowNegative` учитывает per-division override,
+  // см. `docs/current-state.md §«Материалы и склад — division overrides»`).
+  expect(block!).toMatch(/resolveAdjustmentAllowNegative/);
   // Идемпотентность по sourceKey.
   expect(block!).toMatch(/findMovementBySourceKeyInTx/);
   // Audit event.

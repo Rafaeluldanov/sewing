@@ -135,6 +135,133 @@ export class CompanySettingsService {
   }
 
   // ===========================================================================
+  // EFFECTIVE MATERIAL STOCK POLICY (division overrides → company defaults)
+  // ===========================================================================
+
+  /**
+   * Effective политика блока «Материалы и склад» для заказа:
+   * считает `autoIssueMaterialsOnCutRelease` / `allowNegativeMaterialStock`
+   * с учётом per-division override
+   * (см. `prisma/schema.prisma::CompanyDivision.{autoIssueMaterialsOnCutReleaseOverride, allowNegativeMaterialStockOverride}`,
+   * `docs/current-state.md §«Материалы и склад — division overrides»`).
+   *
+   * Алгоритм:
+   *   1. Читаем у заказа `companyDivisionId` (может быть `null` —
+   *      старые заказы, либо карточку division снесли:
+   *      `onDelete: SetNull`).
+   *   2. Читаем глобальные `CompanySettings` (без `getOrCreate` —
+   *      read-only горячий flow). Если строки ещё нет, используем
+   *      дефолты: `autoIssueMaterialsOnCutRelease = false`,
+   *      `allowNegativeMaterialStock = true` (совпадают с SQL-default
+   *      и с legacy-поведением приватных getter-ов).
+   *   3. Если у заказа есть `companyDivisionId` — читаем division-
+   *      overrides; `null` ⇒ наследовать глобальное значение,
+   *      `true`/`false` ⇒ принудительно переопределить.
+   *
+   * Возвращаем эффективные `boolean` плюс `source`, чтобы вызывающий
+   * flow (логи / audit) мог указать, откуда пришло решение —
+   * `DIVISION` или `COMPANY_DEFAULT`.
+   *
+   * Контракт:
+   *   - READ-ONLY: сервис не пишет ни `CompanySettings`, ни
+   *     `CompanyDivision`, чтобы горячий flow `issueToEmployee` /
+   *     `MaterialIssue.post` не открывал побочных write-transactions;
+   *   - метод ходит через основной prisma-клиент (не через tx), чтобы
+   *     его можно было звать ДО открытия бизнес-транзакции
+   *     (см. `MaterialIssuesService.post` — читаем флаг ДО
+   *     `$transaction`);
+   *   - transaction-aware sibling — {@link getEffectiveMaterialStockSettingsForOrderInTx}.
+   *
+   * Если заказа `orderId` не существует — возвращаем глобальные
+   * дефолты с `source = COMPANY_DEFAULT`; вызывающий сам решает,
+   * бросать ли `ORDER_NOT_FOUND` (мы не хотим дублировать
+   * валидацию заказа в этом сервисе).
+   */
+  async getEffectiveMaterialStockSettingsForOrder(
+    orderId: string,
+  ): Promise<EffectiveMaterialStockSettings> {
+    return this.computeEffectiveMaterialStockSettingsForOrder(
+      this.prisma,
+      orderId,
+    );
+  }
+
+  /**
+   * Transaction-aware версия {@link getEffectiveMaterialStockSettingsForOrder}:
+   * использует тот же `Prisma.TransactionClient`, что и вызывающий
+   * бизнес-flow (например, `PassportsService.issueToEmployee`). Это
+   * важно, когда поведение флага должно учитывать изменения той же
+   * транзакции (редкий кейс, но контракт симметричный).
+   *
+   * Как и не-tx sibling, метод НЕ пишет ни `CompanySettings`, ни
+   * `CompanyDivision` — это read-only resolver. Возвращает тот же
+   * shape.
+   */
+  async getEffectiveMaterialStockSettingsForOrderInTx(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+  ): Promise<EffectiveMaterialStockSettings> {
+    return this.computeEffectiveMaterialStockSettingsForOrder(tx, orderId);
+  }
+
+  private async computeEffectiveMaterialStockSettingsForOrder(
+    client: Prisma.TransactionClient | PrismaService,
+    orderId: string,
+  ): Promise<EffectiveMaterialStockSettings> {
+    const order = await client.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, companyDivisionId: true },
+    });
+
+    const settings = await client.companySettings.findUnique({
+      where: { id: COMPANY_SETTINGS_SINGLETON_ID },
+      select: {
+        autoIssueMaterialsOnCutRelease: true,
+        allowNegativeMaterialStock: true,
+      },
+    });
+    const companyAutoIssue = settings?.autoIssueMaterialsOnCutRelease ?? false;
+    const companyAllowNegative = settings?.allowNegativeMaterialStock ?? true;
+
+    const companyDivisionId = order?.companyDivisionId ?? null;
+    if (!companyDivisionId) {
+      return {
+        autoIssueMaterialsOnCutRelease: companyAutoIssue,
+        allowNegativeMaterialStock: companyAllowNegative,
+        source: {
+          companyDivisionId: null,
+          autoIssueMaterialsOnCutRelease: 'COMPANY_DEFAULT',
+          allowNegativeMaterialStock: 'COMPANY_DEFAULT',
+        },
+      };
+    }
+
+    const division = await client.companyDivision.findUnique({
+      where: { id: companyDivisionId },
+      select: {
+        autoIssueMaterialsOnCutReleaseOverride: true,
+        allowNegativeMaterialStockOverride: true,
+      },
+    });
+    const autoIssueOverride =
+      division?.autoIssueMaterialsOnCutReleaseOverride ?? null;
+    const allowNegativeOverride =
+      division?.allowNegativeMaterialStockOverride ?? null;
+
+    return {
+      autoIssueMaterialsOnCutRelease: autoIssueOverride ?? companyAutoIssue,
+      allowNegativeMaterialStock: allowNegativeOverride ?? companyAllowNegative,
+      source: {
+        companyDivisionId,
+        autoIssueMaterialsOnCutRelease:
+          autoIssueOverride === null ? 'COMPANY_DEFAULT' : 'DIVISION',
+        allowNegativeMaterialStock:
+          allowNegativeOverride === null ? 'COMPANY_DEFAULT' : 'DIVISION',
+      },
+    };
+  }
+
+  // ===========================================================================
   // UPDATE
   // ===========================================================================
 
@@ -225,6 +352,23 @@ export class CompanySettingsService {
       throw e;
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Effective material stock policy (см.
+// `CompanySettingsService.getEffectiveMaterialStockSettingsForOrder{InTx}`).
+// ---------------------------------------------------------------------------
+
+export type EffectiveMaterialStockSettingSource = 'DIVISION' | 'COMPANY_DEFAULT';
+
+export interface EffectiveMaterialStockSettings {
+  autoIssueMaterialsOnCutRelease: boolean;
+  allowNegativeMaterialStock: boolean;
+  source: {
+    companyDivisionId: string | null;
+    autoIssueMaterialsOnCutRelease: EffectiveMaterialStockSettingSource;
+    allowNegativeMaterialStock: EffectiveMaterialStockSettingSource;
+  };
 }
 
 // ---------------------------------------------------------------------------

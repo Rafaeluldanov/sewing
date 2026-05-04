@@ -4,7 +4,8 @@ import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listOpenMasterCalls } from '@/lib/master-calls-api';
 import { getActiveCutReleasePolicy } from '@/lib/cut-release-policy-api';
 import { listSizes } from '@/lib/orders-api';
-import { canSeeMasterPage } from '@/lib/rbac';
+import { canSeeEmployeeQrButton, canSeeMasterPage } from '@/lib/rbac';
+import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { MasterPageClient } from './master-page-client';
 
 export const dynamic = 'force-dynamic';
@@ -57,11 +58,16 @@ export default async function MasterPage() {
   }
 
   return (
-    <MasterPageClient
-      initialItems={initialItems ?? []}
-      initialError={initialError}
-      initialPolicy={initialPolicy}
-      sizes={initialSizes}
-    />
+    <>
+      <MasterPageClient
+        initialItems={initialItems ?? []}
+        initialError={initialError}
+        initialPolicy={initialPolicy}
+        sizes={initialSizes}
+      />
+      {canSeeEmployeeQrButton(me.user.role) ? (
+        <EmployeeQrButton variant="floating" />
+      ) : null}
+    </>
   );
 }

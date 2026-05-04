@@ -1211,6 +1211,21 @@ table.data-table th.num { text-align: right; }
   box-shadow: var(--shadow-xs);
 }
 
+/* Контейнер «активной смены» (CUTTER + manager fallback на /work). */
+/* `DefaultActivePanel` оборачивает табы и форму завершения смены      */
+/* в `.work-active`, чтобы убрать inline `style={{ display: flex,      */
+/* flexDirection: column, gap: 1rem }}`. См.                            */
+/* `docs/design-cleanup-recon.md §7 Этап 3`.                             */
+.work-active {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.work-active__shift-end {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* Result cards (success/scan/error) ---------------------------- */
 .result-card {
   border-radius: var(--radius-lg);
@@ -1246,6 +1261,12 @@ table.data-table th.num { text-align: right; }
   font-size: 0.85rem;
 }
 .result-card__row strong { font-weight: 700; }
+/* Приглушённый «годных N» в строке «Количество» — заменяет inline */
+/* style={{ color: var(--color-fg-muted), fontWeight: 500 }}.       */
+.result-card__row-meta {
+  color: var(--color-fg-muted);
+  font-weight: 500;
+}
 
 /* Совместимость со старыми классами .work-* (на случай, если где-то ещё используются) */
 .work-employee__label,
@@ -4746,6 +4767,138 @@ table.data-table td code {
     right: 0.75rem;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
   }
+}
+
+/* -----------------------------------------------------------------------
+ * Кнопка «Мой QR-код» + модалка
+ * (см. `apps/web/components/employees/employee-qr-button.tsx`,
+ * `docs/screens.md §«Мой QR-код»`).
+ *
+ * Визуально — родственник `.call-master-btn`, но с нейтральной
+ * тёмно-синей палитрой: мастер — оранжевый/фиолетовый акцент,
+ * «Мой QR» — спокойная «ссылка на себя», чтобы две кнопки на одном
+ * экране не конкурировали за внимание.
+ * ----------------------------------------------------------------------- */
+.employee-qr-btn {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.6rem 1rem;
+  border: 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.14);
+  color: #ffffff;
+  font-size: 0.95rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  transition: background 0.15s ease, transform 0.1s ease;
+}
+.employee-qr-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.22);
+}
+.employee-qr-btn:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.employee-qr-btn__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.22);
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+.employee-qr-btn__label { white-space: nowrap; }
+
+/* Inline-вариант на «светлых» карточках (например, `/master`). */
+.employee-qr-btn--inline.employee-qr-btn {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+.employee-qr-btn--inline.employee-qr-btn:hover:not(:disabled) {
+  background: #c7d2fe;
+}
+.employee-qr-btn--inline.employee-qr-btn .employee-qr-btn__icon {
+  background: #ffffff;
+  color: #3730a3;
+}
+
+/* Внутри role-header (синяя шапка) оставляем белый полупрозрачный фон. */
+.role-header .employee-qr-btn--inline.employee-qr-btn {
+  background: rgba(255, 255, 255, 0.16);
+  color: #ffffff;
+}
+.role-header .employee-qr-btn--inline.employee-qr-btn:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.24);
+}
+.role-header .employee-qr-btn--inline.employee-qr-btn .employee-qr-btn__icon {
+  background: rgba(255, 255, 255, 0.24);
+  color: #ffffff;
+}
+
+/* Floating-вариант — уровнем выше «Мастера», но левее, чтобы не
+   перекрывал. Используется, когда кнопку надо видеть всегда. */
+.employee-qr-btn--fab {
+  position: fixed;
+  left: 1rem;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 1rem);
+  z-index: 90;
+  min-height: 48px;
+  background: #1e293b;
+  color: #ffffff;
+  box-shadow: 0 6px 14px rgba(15, 23, 42, 0.35);
+}
+.employee-qr-btn--fab:hover:not(:disabled) { background: #0f172a; }
+@media (max-width: 480px) {
+  .employee-qr-btn--fab {
+    left: 0.75rem;
+    bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
+  }
+}
+
+/* Карточка модалки «Мой QR» — вариант общего .qr-modal__card. */
+.employee-qr-modal__card {
+  max-width: 360px;
+  gap: 0.9rem;
+}
+.employee-qr-modal__body {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.9rem;
+}
+.employee-qr-modal__canvas {
+  padding: 1rem;
+  background: #ffffff;
+  border-radius: 12px;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+  line-height: 0;
+}
+.employee-qr-modal__meta {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.employee-qr-modal__name {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--color-fg, #0f172a);
+}
+.employee-qr-modal__role {
+  margin: 0;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--color-fg-muted, #64748b);
+}
+.employee-qr-modal__retry {
+  margin-top: 0.6rem;
 }
 
 /* -----------------------------------------------------------------------

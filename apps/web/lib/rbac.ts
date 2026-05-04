@@ -397,6 +397,49 @@ export function canSeeDisplayPage(role: string | undefined | null): boolean {
 }
 
 /**
+ * Видимость кнопки «Мой QR-код» (см. компонент
+ * `apps/web/components/employees/employee-qr-button.tsx` и endpoint
+ * `GET /api/me/employee-qr`).
+ *
+ * Кого включаем:
+ *   - Все производственные/терминальные роли
+ *     (`CUTTER`, `CUTTER_ASSISTANT`, `SEAMSTRESS`, `QC`, `IRONING`,
+ *     `PACKING`) — им QR нужен, чтобы мастер/терминал быстро
+ *     идентифицировал сотрудника вместо ручного ввода логина.
+ *   - `SHOPFLOOR_MASTER` — по обратной логике: мастер тоже может
+ *     оказаться «сканируемым» (например, на чужом терминале), а UI
+ *     в `/master` проще держит единый паттерн «у каждого рабочего
+ *     экрана есть эта кнопка».
+ *   - `ADMIN`, `SHOP_MANAGER` — для тестирования сканера и
+ *     диагностики на пилоте: админу должно быть видно всё.
+ *
+ * Кого исключаем:
+ *   - `DISPLAY` — это учётка под большой монитор без сотрудника;
+ *     показывать на ней «мой QR» бессмысленно (сотрудника нет) и
+ *     опасно (публичный экран).
+ */
+export const EMPLOYEE_QR_BUTTON_ALLOWED_ROLES: readonly Role[] = [
+  'CUTTER',
+  'CUTTER_ASSISTANT',
+  'SEAMSTRESS',
+  'QC',
+  'IRONING',
+  'PACKING',
+  'SHOPFLOOR_MASTER',
+  'ADMIN',
+  'SHOP_MANAGER',
+];
+
+export function canSeeEmployeeQrButton(
+  role: string | undefined | null,
+): boolean {
+  return (
+    !!role &&
+    (EMPLOYEE_QR_BUTTON_ALLOWED_ROLES as readonly string[]).includes(role)
+  );
+}
+
+/**
  * Видимость пункта/тайла «Главная» в навигации.
  *
  * Для производственных ролей `/` либо редиректит на их primary

@@ -97,6 +97,16 @@ export class CompanyDivisionsService {
           description: dto.description ?? null,
           isActive: dto.isActive ?? true,
           sortOrder: dto.sortOrder ?? 100,
+          // Override-поля (см.
+          // `prisma/schema.prisma::CompanyDivision.{autoIssueMaterialsOnCutReleaseOverride, allowNegativeMaterialStockOverride}`,
+          // `packages/shared/src/company-divisions.ts`).
+          // `undefined` ⇒ Prisma оставит `null` (дефолт колонки —
+          // «наследовать глобальные настройки»); `null`/`boolean`
+          // ⇒ сохраняется как есть.
+          autoIssueMaterialsOnCutReleaseOverride:
+            dto.autoIssueMaterialsOnCutReleaseOverride ?? null,
+          allowNegativeMaterialStockOverride:
+            dto.allowNegativeMaterialStockOverride ?? null,
         },
       });
       this.logger.log(
@@ -112,6 +122,10 @@ export class CompanyDivisionsService {
           description: created.description,
           isActive: created.isActive,
           sortOrder: created.sortOrder,
+          autoIssueMaterialsOnCutReleaseOverride:
+            created.autoIssueMaterialsOnCutReleaseOverride,
+          allowNegativeMaterialStockOverride:
+            created.allowNegativeMaterialStockOverride,
         },
         employeeId: actorEmployeeId ?? null,
       });
@@ -141,6 +155,19 @@ export class CompanyDivisionsService {
     if (dto.description !== undefined) data.description = dto.description;
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
     if (dto.sortOrder !== undefined) data.sortOrder = dto.sortOrder;
+    // Override-поля. `undefined` ⇒ не трогаем (старое значение в БД
+    // сохраняется). `null` ⇒ сбрасываем в «наследовать глобальные
+    // настройки компании». `true` / `false` ⇒ принудительный override
+    // (см. `packages/shared/src/company-divisions.ts`,
+    // `apps/api/src/modules/company-settings/company-settings.service.ts::getEffectiveMaterialStockSettingsForOrder`).
+    if (dto.autoIssueMaterialsOnCutReleaseOverride !== undefined) {
+      data.autoIssueMaterialsOnCutReleaseOverride =
+        dto.autoIssueMaterialsOnCutReleaseOverride;
+    }
+    if (dto.allowNegativeMaterialStockOverride !== undefined) {
+      data.allowNegativeMaterialStockOverride =
+        dto.allowNegativeMaterialStockOverride;
+    }
 
     try {
       const updated = await this.prisma.companyDivision.update({
@@ -161,6 +188,10 @@ export class CompanyDivisionsService {
             description: current.description,
             isActive: current.isActive,
             sortOrder: current.sortOrder,
+            autoIssueMaterialsOnCutReleaseOverride:
+              current.autoIssueMaterialsOnCutReleaseOverride,
+            allowNegativeMaterialStockOverride:
+              current.allowNegativeMaterialStockOverride,
           },
           after: {
             code: updated.code,
@@ -168,6 +199,10 @@ export class CompanyDivisionsService {
             description: updated.description,
             isActive: updated.isActive,
             sortOrder: updated.sortOrder,
+            autoIssueMaterialsOnCutReleaseOverride:
+              updated.autoIssueMaterialsOnCutReleaseOverride,
+            allowNegativeMaterialStockOverride:
+              updated.allowNegativeMaterialStockOverride,
           },
         },
         employeeId: actorEmployeeId ?? null,
@@ -211,6 +246,9 @@ function toDto(c: CompanyDivisionRow): CompanyDivisionDto {
     description: c.description,
     isActive: c.isActive,
     sortOrder: c.sortOrder,
+    autoIssueMaterialsOnCutReleaseOverride:
+      c.autoIssueMaterialsOnCutReleaseOverride,
+    allowNegativeMaterialStockOverride: c.allowNegativeMaterialStockOverride,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };

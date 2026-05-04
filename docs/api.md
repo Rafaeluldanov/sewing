@@ -58,6 +58,7 @@
 
 - [0. Health / Readiness / Diagnostics](#0-health-ready-diagnostics)
 - [1. Auth](#1-auth)
+- [1a. Me (личный кабинет)](#1a-me)
 - [2. Catalog (sizes / products / sizes-CRUD)](#2-catalog)
 - [3. Employees](#3-employees)
 - [4. Equipment](#4-equipment)
@@ -134,6 +135,25 @@ Response DTO: `HealthResponseDto`, `ReadyResponseDto`
 
 Side effects: `login` обновляет `Employee.lastSeenAt`-style-поля
 не пишет (на MVP отдельной таблицы сессий нет, см. ADR-0014).
+
+---
+
+<a id="1a-me"></a>
+## 1a. Me (личный кабинет)
+
+Источник: `me/me.controller.ts`. Класс-уровень `@Controller('me')`,
+доступ — любой авторизованный пользователь (в т.ч. `DISPLAY` проходит,
+но UI-кнопки для этой роли скрыты, см. `apps/web/lib/rbac.ts`
+`canSeeEmployeeQrButton`). Контракты — `packages/shared/src/employee-qr.ts`.
+
+| Метод | Путь                  | RBAC     | Описание |
+| ----- | --------------------- | -------- | -------- |
+| GET   | `/api/me/employee-qr` | Any auth | Возвращает `EmployeeQrResponseDto` — подписанный QR-код текущего сотрудника для показа мастеру / сканирования на рабочем терминале. Payload: `{ employee: { id, name, role }, qrPayload: "SEWING_EMPLOYEE:<signedToken>", expiresAt }`. Токен HMAC-SHA256 (тот же `JWT_SECRET`, что у session-cookie), TTL = 12 часов, `type = "EMPLOYEE_QR"`, не содержит `pinHash` / `login` / `phone` / паспортных / salary-данных. 401 `UNAUTHENTICATED` без сессии; 404 `EMPLOYEE_PROFILE_NOT_FOUND`, если у авторизованного пользователя нет карточки сотрудника; 403 `EMPLOYEE_INACTIVE`, если карточка `active=false`. |
+
+UI-потребители: `apps/web/components/employees/employee-qr-button.tsx`
+(клиентская кнопка + модалка с `qrcode.react`), server-обёртка
+`apps/web/lib/employee-qr-api.ts`, action
+`apps/web/app/employee-qr/actions.ts`.
 
 ---
 
@@ -1533,36 +1553,90 @@ DTO: `packages/shared/src/company-settings.ts`. Audit:
 
 Флаги блока «Материалы и склад» (рендерятся в UI
 `/admin/company-settings` переключателями, см.
-`apps/web/app/admin/company-settings/settings-form.tsx`):
+`apps/web/app/admin/company-settings/settings-form.tsx`). Это
+**глобальные default-значения**: каждая карточка `CompanyDivision`
+может их переопределить через `*Override`-поля (`null` ⇒
+наследовать, см. §42.2 ниже и `docs/current-state.md §«Материалы
+и склад — division overrides»`). Effective policy для конкретного
+заказа считает
+`CompanySettingsService.getEffectiveMaterialStockSettingsForOrder(orderId)`
+(`InTx`-sibling — для горячего flow внутри транзакции).
 
 - `autoIssueMaterialsOnCutRelease Boolean @default(false)` —
-  автосписание материалов при выдаче кроя (см. §20a «Material
-  issues»). GET отдаёт текущее значение; PATCH принимает `true` /
-  `false` (поле опциональное — `undefined` ⇒ backend не трогает).
-  Бизнес-flow читает флаг через
-  `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`
-  (cheap SELECT, без `getOrCreate`).
-- `allowNegativeMaterialStock Boolean @default(true)` — гейт
-  отрицательных остатков для `MaterialIssue` OUT (`MANUAL post`
-  и `AUTO_CUT_ISSUE`); подробности и контракт ошибки 409
+  глобальный default автосписания материалов при выдаче кроя
+  (см. §20a «Material issues»). GET отдаёт текущее значение;
+  PATCH принимает `true` / `false` (поле опциональное — `undefined`
+  ⇒ backend не трогает).
+- `allowNegativeMaterialStock Boolean @default(true)` — глобальный
+  default гейта отрицательных остатков для `MaterialIssue` OUT
+  (`MANUAL post` и `AUTO_CUT_ISSUE`) и OUT-корректировки
+  `POST /api/stock/adjustments`; подробности и контракт ошибки 409
   `MATERIAL_STOCK_INSUFFICIENT` — в §20a «Material issues» и
   `docs/current-state.md §«Подключение расхода материалов к
   складу»`. GET отдаёт текущее значение; PATCH принимает `true` /
-  `false`; бизнес-flow читает флаг через
-  `CompanySettingsService.getAllowNegativeMaterialStock()`.
+  `false`.
+
+Effective policy (вместо прямого getter-а) применяется в:
+
+- `PassportsService.issueToEmployee` — гейт автосписания по
+  `passport.orderId`;
+- `MaterialIssuesService.post` и `createAutoCutIssueForPassport`
+  — гейт отрицательных остатков `MaterialIssue` OUT;
+- `StockService.createAdjustment` OUT — гейт отрицательных
+  остатков ручной корректировки (по `StockBalance → WorkshopNeed.orderId`).
+
+`PurchaseReceipt` cancel / REVERSAL OUT сознательно остаётся
+permissive и от division overrides НЕ зависит (см. §28.3).
 
 ### 42.2 Подразделения компании
 
 | Метод | Путь                                | RBAC                | Описание |
 | ----- | ----------------------------------- | ------------------- | -------- |
 | GET   | `/api/company-divisions`            | SHOP_MANAGER, ADMIN | List `ListCompanyDivisionsQuery` (по умолчанию `isActive = true`, `search` по `name`/`code`). |
-| POST  | `/api/company-divisions`            | SHOP_MANAGER, ADMIN | `CreateCompanyDivisionDto`. 409 `COMPANY_DIVISION_CODE_TAKEN` при дубликате `code`. |
+| POST  | `/api/company-divisions`            | SHOP_MANAGER, ADMIN | `CreateCompanyDivisionDto` (включая `*Override`-поля). 409 `COMPANY_DIVISION_CODE_TAKEN` при дубликате `code`. |
 | GET   | `/api/company-divisions/:id`        | SHOP_MANAGER, ADMIN | Карточка. 404 `COMPANY_DIVISION_NOT_FOUND`. |
-| PATCH | `/api/company-divisions/:id`        | SHOP_MANAGER, ADMIN | `UpdateCompanyDivisionDto` (включая `isActive` для мягкой деактивации). Hard-delete нет. |
+| PATCH | `/api/company-divisions/:id`        | SHOP_MANAGER, ADMIN | `UpdateCompanyDivisionDto` (включая `isActive` для мягкой деактивации и `*Override`-поля блока «Материалы и склад»). Hard-delete нет. |
 
 DTO: `packages/shared/src/company-divisions.ts`. Audit:
 `COMPANY_DIVISION_CREATED` / `COMPANY_DIVISION_UPDATED`
 (`entityType = COMPANY_DIVISION`).
+
+Per-division override блока «Материалы и склад» (см.
+`docs/current-state.md §«Материалы и склад — division overrides»`,
+`prisma/schema.prisma::CompanyDivision.{autoIssueMaterialsOnCutReleaseOverride, allowNegativeMaterialStockOverride}`):
+
+- `autoIssueMaterialsOnCutReleaseOverride: boolean | null` — override
+  глобальной `CompanySettings.autoIssueMaterialsOnCutRelease`
+  для этого подразделения;
+- `allowNegativeMaterialStockOverride: boolean | null` — override
+  `CompanySettings.allowNegativeMaterialStock` для этого
+  подразделения.
+
+Семантика `null/true/false`:
+
+- `null`      — **наследовать** глобальную `CompanySettings.<флаг>`
+  (default после миграции у всех карточек, в т.ч. базовых
+  `MARKETPLACE` / `OTHER`);
+- `true`      — принудительно включить для подразделения;
+- `false`     — принудительно выключить для подразделения;
+- `undefined` — PATCH поле не трогает (стандартный контракт).
+
+PATCH умеет и поставить конкретный `true`/`false`, и сбросить
+override в `null` (вернуть «наследовать»). Для override-only PATCH
+(`{ autoIssueMaterialsOnCutReleaseOverride: null }`) refine-гвард
+«Нечего обновлять» НЕ срабатывает. Effective policy для
+конкретного заказа считает
+`CompanySettingsService.getEffectiveMaterialStockSettingsForOrder(orderId)`
+(см. §42.1). UI этих override-ов живёт в карточке «Настройки по
+подразделениям» на `/admin/company-settings`
+(`material-stock-division-overrides-section.tsx`) — отдельная
+страница / новый route / пункт sidebar **не создавались**.
+
+> Пример B2B: `CompanyDivision(code='OTHER')` с
+> `autoIssueMaterialsOnCutReleaseOverride = true`,
+> `allowNegativeMaterialStockOverride = false` — в заказах этого
+> подразделения крой автосписывается, минус на остатках запрещён,
+> независимо от глобальных настроек.
 
 > **Не путать с компанией / `CompanySettings`** — это master-справочник
 > подразделений, см. `docs/domain.md §«Подразделения заказа»`.

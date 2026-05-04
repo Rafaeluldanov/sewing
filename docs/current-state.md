@@ -575,6 +575,110 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     настройки в `/admin/warehouses` не переезжают. Границы
     зафиксированы в `tests/smoke/company-settings-material-stock.smoke.test.ts`.
 
+  Backend/Frontend-итерация «Материалы и склад — division overrides»
+  (`prisma/schema.prisma::CompanyDivision.{autoIssueMaterialsOnCutReleaseOverride, allowNegativeMaterialStockOverride}`,
+  `packages/shared/src/company-divisions.ts`,
+  `apps/api/src/modules/company-settings/company-settings.service.ts::getEffectiveMaterialStockSettingsForOrder{InTx}`,
+  `apps/api/src/modules/company-settings/company-divisions.service.ts`,
+  `apps/api/src/modules/material-issues/material-issues.service.ts`,
+  `apps/api/src/modules/passports/passports.service.ts::issueToEmployee`,
+  `apps/api/src/modules/stock/stock.service.ts::createAdjustment`,
+  `apps/web/app/admin/company-settings/material-stock-division-overrides-section.tsx`,
+  `docs/api.md §42`, `docs/erd.md §«CompanyDivision»`):
+  - **Бизнес-требование**: разные подразделения могут работать по
+    разным правилам двух флагов блока «Материалы и склад». Пример —
+    B2B (код `OTHER`) с автосписанием и запретом минуса, маркетплейс
+    (`MARKETPLACE`) с обратной политикой. Глобальные
+    `CompanySettings.autoIssueMaterialsOnCutRelease` /
+    `.allowNegativeMaterialStock` остаются «настройками по
+    умолчанию».
+  - Модель `CompanyDivision` расширена двумя **nullable**
+    override-полями (`@default` сознательно нет):
+    - `autoIssueMaterialsOnCutReleaseOverride Boolean?`;
+    - `allowNegativeMaterialStockOverride     Boolean?`;
+    семантика `null ⇒ наследовать`, `true/false ⇒ принудительно`.
+    Миграция `20260611100000_company_division_material_stock_overrides`
+    добавляет обе колонки без `NOT NULL` и без `DEFAULT`, поэтому
+    базовые карточки `MARKETPLACE` / `OTHER` после миграции
+    наследуют глобальные настройки (production поведение не меняется
+    само).
+  - Новый централизованный resolver
+    `CompanySettingsService.getEffectiveMaterialStockSettingsForOrder(orderId)`
+    и его `InTx`-sibling. Алгоритм:
+    1. читаем `Order.companyDivisionId` (может быть `null`);
+    2. читаем глобальные `CompanySettings` (без `getOrCreate` —
+       read-only горячий flow). При отсутствии singleton-row —
+       дефолты `autoIssueMaterialsOnCutRelease = false`,
+       `allowNegativeMaterialStock = true`;
+    3. если `companyDivisionId` задан — читаем override-поля; `null`
+       ⇒ наследовать, `true/false` ⇒ принудительно.
+    Возвращает `{ autoIssueMaterialsOnCutRelease,
+    allowNegativeMaterialStock, source: { companyDivisionId,
+    autoIssueMaterialsOnCutRelease: 'DIVISION'|'COMPANY_DEFAULT',
+    allowNegativeMaterialStock: 'DIVISION'|'COMPANY_DEFAULT' } }`.
+    Resolver **не пишет** ни `CompanySettings`, ни `CompanyDivision`.
+  - Бизнес-точки, переведённые на effective policy:
+    - `MaterialIssuesService.post()` использует
+      `getEffectiveMaterialStockSettingsForOrder(issue.orderId)` ДО
+      открытия $transaction и передаёт
+      `effective.allowNegativeMaterialStock` в
+      `StockService.recordMaterialIssueInTx`;
+    - `MaterialIssuesService.createAutoCutIssueForPassport()`
+      использует `getEffectiveMaterialStockSettingsForOrderInTx(tx,
+      passport.orderId)` (`InTx`, потому что вызывается внутри
+      `issueToEmployee` транзакции);
+    - `PassportsService.issueToEmployee` использует
+      `getEffectiveMaterialStockSettingsForOrder(passport.orderId)`
+      ДО открытия транзакции и гейт `if (autoIssueEnabled)` теперь
+      смотрит на `effective.autoIssueMaterialsOnCutRelease`, а не
+      на глобальный флаг;
+    - `StockService.createAdjustment` для OUT-корректировки резолвит
+      `allowNegativeStock` через helper
+      `resolveAdjustmentAllowNegative(stockBalanceId)` — он идёт
+      `StockBalance → WorkshopNeed.orderId` и возвращает
+      `effective.allowNegativeMaterialStock`. Если у остатка нет
+      `orderId` (теоретически невозможно, foundation-баланс всегда
+      связан с `WorkshopNeed`), fallback на глобальный
+      `getAllowNegativeMaterialStock()`. IN-корректировка от флага
+      не зависит (`allowNegativeStock: isIn ? true : …`).
+    `PurchaseReceipt` cancel / REVERSAL OUT сознательно остаётся
+    permissive — `StockService.reversePurchaseReceiptInTx` не
+    передаёт `allowNegativeStock: false` и не читает
+    `CompanySettings`/`CompanyDivision`. Это **не** меняется на этой
+    итерации: division override тоже не влияет.
+  - Публичный `CompanyDivisionDto` расширен двумя `boolean | null`
+    override-полями; `UpdateCompanyDivisionSchema` и
+    `CreateCompanyDivisionSchema` принимают `boolean | null |
+    undefined` (nullable optional). `refine()` в update-схеме
+    пропускает override-only PATCH (иначе «Нечего обновлять»).
+    `PATCH /api/company-divisions/:id` умеет и ставить конкретный
+    `true`/`false`, и сбрасывать override в `null` (наследовать).
+    Новый backend endpoint сознательно НЕ создаём — используем
+    существующий.
+  - UI `/admin/company-settings` получил карточку «Настройки по
+    подразделениям» прямо под блоком «Материалы и склад». Каждая
+    активная карточка `CompanyDivision` показана строкой с двумя
+    `<select>` (три значения): «Наследовать настройку компании» /
+    «Включено»·«Разрешены» / «Выключено»·«Запрещены». Switch / checkbox
+    сознательно не используем — нужно третье состояние «наследовать».
+    Effective hint («Сейчас: включено/выключено/разрешены/запрещены»)
+    считается в UI из текущего global + выбранного override, и сразу
+    отражает, что именно сохранится. Каждая строка — отдельная
+    `<form>` с server action `updateCompanyDivisionOverridesAction`;
+    под капотом — тот же `PATCH /api/company-divisions/:id`. Если
+    активных подразделений нет, рендерится подсказка «Подразделения
+    ещё не созданы. Используются настройки компании.».
+  - **не менялись** на этой итерации: `MaterialIssue` / `StockMovement`
+    / `StockBalance` модели, `OrderViewTabs`, UI раздела «Склады»,
+    поведение `PurchaseReceipt.cancel`, sidebar, RBAC (те же
+    `SHOP_MANAGER` / `ADMIN`). Новые роли `WAREHOUSE_MANAGER` /
+    `PURCHASER` / `ACCOUNTANT` **не добавлены**. FIFO/LIFO и
+    master-модель `Material` остаются out-of-scope. Границы
+    зафиксированы в
+    `tests/smoke/company-divisions-material-stock-overrides.smoke.test.ts`
+    и integration-тесте
+    `tests/integration/company-divisions-material-stock-overrides.test.ts`.
+
 ---
 
 ## 2. Стек

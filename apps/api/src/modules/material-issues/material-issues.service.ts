@@ -351,16 +351,24 @@ export class MaterialIssuesService {
 
     // Hardening-флаг (см.
     // `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
-    // `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`,
-    // `docs/current-state.md §«Material issue → StockMovement OUT»`).
-    // Читаем ДО открытия транзакции — `getAllowNegativeMaterialStock`
-    // не идёт в singleton-getOrCreate и не пишет audit, это
-    // безопасный SELECT. При `false` `StockService.recordMaterialIssueInTx`
-    // бросит `MATERIAL_STOCK_INSUFFICIENT` (409) при нехватке остатка,
-    // и транзакция откатится целиком: `MaterialIssue` останется
-    // `DRAFT`, OUT-движение не создастся, `StockBalance` не изменится.
-    const allowNegativeStock =
-      await this.companySettings.getAllowNegativeMaterialStock();
+    // `prisma/schema.prisma::CompanyDivision.allowNegativeMaterialStockOverride`,
+    // `apps/api/src/modules/company-settings/company-settings.service.ts::getEffectiveMaterialStockSettingsForOrder`,
+    // `docs/current-state.md §«Материалы и склад — division overrides»`).
+    // Читаем ДО открытия транзакции: effective-resolver делает только
+    // SELECT-ы и не пишет ни `CompanySettings`, ни `CompanyDivision`.
+    // Порядок разрешения:
+    //   division.allowNegativeMaterialStockOverride
+    //     ?? companySettings.allowNegativeMaterialStock
+    //     ?? true
+    // При `false` `StockService.recordMaterialIssueInTx` бросит
+    // `MATERIAL_STOCK_INSUFFICIENT` (409) при нехватке остатка, и
+    // транзакция откатится целиком: `MaterialIssue` останется `DRAFT`,
+    // OUT-движение не создастся, `StockBalance` не изменится.
+    const effective =
+      await this.companySettings.getEffectiveMaterialStockSettingsForOrder(
+        current.orderId,
+      );
+    const allowNegativeStock = effective.allowNegativeMaterialStock;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const next = await tx.materialIssue.update({
@@ -903,13 +911,20 @@ export class MaterialIssuesService {
     // `allowNegativeStock = false` — самый большой положительный с
     // `qty >= issuedQty` или 409 `MATERIAL_STOCK_INSUFFICIENT`
     // (`issueToEmployee` тоже откатывается, потому что владелец явно
-    // запретил минус, см.
-    // `prisma/schema.prisma::CompanySettings.allowNegativeMaterialStock`,
-    // `apps/api/src/modules/company-settings/company-settings.service.ts::getAllowNegativeMaterialStock`).
-    const allowNegativeStock =
-      await this.companySettings.getAllowNegativeMaterialStock();
+    // запретил минус).
+    //
+    // Флаг читается effective-resolver-ом `CompanySettingsService`
+    // — учитывается per-division override `CompanyDivision.allowNegativeMaterialStockOverride`
+    // (см. `docs/current-state.md §«Материалы и склад — division overrides»`).
+    // Ходим по `tx`, чтобы остаться в той же транзакции
+    // `issueToEmployee` и не открывать повторный коннект.
+    const effective =
+      await this.companySettings.getEffectiveMaterialStockSettingsForOrderInTx(
+        tx,
+        passport.orderId,
+      );
     await this.stock.recordMaterialIssueInTx(tx, issue.id, employeeId, {
-      allowNegativeStock,
+      allowNegativeStock: effective.allowNegativeMaterialStock,
     });
 
     this.logger.log(

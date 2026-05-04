@@ -16,6 +16,8 @@ import {
 import { LogoutButton } from '@/components/logout-button';
 import { MobileNav } from '@/components/mobile-nav';
 import { AppHeader } from '@/components/app-header';
+import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
+import { canSeeEmployeeQrButton } from '@/lib/rbac';
 import { ChunkErrorGuard } from '@/components/chunk-error-guard';
 import { Icon } from '@/components/icon';
 
@@ -118,6 +120,9 @@ export default async function RootLayout({
                   {me.user.fullName}
                 </span>
                 <span className="app-header__user-role">{me.user.role}</span>
+                {canSeeEmployeeQrButton(me.user.role) ? (
+                  <EmployeeQrButton variant="inline" />
+                ) : null}
                 <LogoutButton />
               </>
             ) : (
