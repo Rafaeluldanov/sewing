@@ -11,6 +11,10 @@ import {
   updatePrinter,
 } from '@/lib/printers-api';
 import {
+  EMPLOYEE_ROLES,
+  type EmployeeRole,
+} from '@sewing/shared/employees';
+import {
   PRINTER_TYPES,
   type PrinterType,
 } from '@sewing/shared/printers';
@@ -30,20 +34,32 @@ function asPrinterType(form: FormData, key: string): PrinterType {
   return (PRINTER_TYPES as readonly string[]).includes(v) ? v : 'DEFAULT';
 }
 
+/**
+ * Прочитать роль из формы. Пустая строка / любое значение вне
+ * `EMPLOYEE_ROLES` → `null` (без привязки). Это защищает от опечаток
+ * в name-атрибутах и от старых браузерных автозаполнений.
+ */
+function asRoleOrNull(form: FormData, key: string): EmployeeRole | null {
+  const v = asString(form, key);
+  if (!v) return null;
+  return (EMPLOYEE_ROLES as readonly string[]).includes(v)
+    ? (v as EmployeeRole)
+    : null;
+}
+
 export async function createPrinterAction(
   _prev: CreatePrinterState,
   form: FormData,
 ): Promise<CreatePrinterState> {
   const name = asString(form, 'name');
   const type = asPrinterType(form, 'type');
-  const equipmentIdRaw = asString(form, 'equipmentId');
-  const equipmentId = equipmentIdRaw.length > 0 ? equipmentIdRaw : null;
+  const role = asRoleOrNull(form, 'role');
 
   if (!name) return { error: 'Имя принтера обязательно' };
 
   let createdId: string | null = null;
   try {
-    const created = await createPrinter({ name, type, equipmentId });
+    const created = await createPrinter({ name, type, role });
     createdId = created.id;
   } catch (e) {
     if (e instanceof ApiRequestError) {
@@ -66,15 +82,14 @@ export async function updatePrinterAction(
 ): Promise<UpdatePrinterState> {
   const name = asString(form, 'name');
   const type = asPrinterType(form, 'type');
-  const equipmentIdRaw = asString(form, 'equipmentId');
-  const equipmentId = equipmentIdRaw.length > 0 ? equipmentIdRaw : null;
+  const role = asRoleOrNull(form, 'role');
   const isActive = form.get('isActive') === 'on';
 
   try {
     await updatePrinter(printerId, {
       name: name || undefined,
       type,
-      equipmentId,
+      role,
       isActive,
     });
     revalidatePath('/admin/printers');

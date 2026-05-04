@@ -59,6 +59,7 @@ export class PrintersService {
       isActive: p.isActive,
       isOnline: this.isOnline(p.isOnline, p.lastSeenAt, now),
       lastSeenAt: p.lastSeenAt ? p.lastSeenAt.toISOString() : null,
+      role: (p.role ?? null) as PrinterSummaryDto['role'],
       equipmentId: p.equipmentId,
       equipmentName: p.equipment?.name ?? null,
       equipmentCode: p.equipment?.code ?? null,
@@ -80,6 +81,7 @@ export class PrintersService {
       isActive: row.isActive,
       isOnline: this.isOnline(row.isOnline, row.lastSeenAt, Date.now()),
       lastSeenAt: row.lastSeenAt ? row.lastSeenAt.toISOString() : null,
+      role: (row.role ?? null) as PrinterDetailDto['role'],
       equipmentId: row.equipmentId,
       equipmentName: row.equipment?.name ?? null,
       equipmentCode: row.equipment?.code ?? null,
@@ -104,6 +106,10 @@ export class PrintersService {
       data: {
         name: dto.name,
         type: dto.type ?? 'DEFAULT',
+        // Новая привязка по роли (см. `Printer.role` в schema.prisma).
+        // Старая `equipmentId` остаётся для обратной совместимости —
+        // backend принимает оба поля независимо.
+        role: dto.role ?? null,
         equipmentId: dto.equipmentId ?? null,
         isActive: dto.isActive ?? true,
       },
@@ -132,6 +138,13 @@ export class PrintersService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.type !== undefined) data.type = dto.type;
     if (dto.isActive !== undefined) data.isActive = dto.isActive;
+    if (dto.role !== undefined) {
+      // Прямое присвоение enum-поля: `null` снимает привязку, иначе —
+      // конкретная роль. Валидация значения уже сделана Zod-схемой
+      // (UpdatePrinterSchema.role), здесь дополнительной проверки
+      // не нужно.
+      data.role = dto.role;
+    }
     if (dto.equipmentId !== undefined) {
       data.equipment = dto.equipmentId
         ? { connect: { id: dto.equipmentId } }

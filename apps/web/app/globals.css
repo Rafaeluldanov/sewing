@@ -6680,6 +6680,30 @@ body:has(.admin-layout) .app-header { display: none !important; }
   gap: var(--admin-space-md);
 }
 
+/* -----------------------------------------------------------------------------
+   Сетка формы принтера (`/admin/printers/new`, `/admin/printers/[id]`).
+   Три поля «Название | Тип | Роль» должны стоять в одну линию на широких
+   экранах (так короче и читабельнее), но на планшете/мобильном — переходить
+   в столбец, иначе селекты сжимаются до неюзабельных 90–110px.
+
+   Градации:
+     • >= 720px  →  2fr 1fr 2fr   (Название шире, Тип компактный, Роль шире)
+     • < 720px   →  1fr           (одна колонка, поля одно под другим)
+
+   `minmax(0, …)` нужен, чтобы длинные опции <option> не растягивали
+   колонку и не «прыгал» layout при выборе значения.
+   ============================================================================= */
+.admin-form-grid--printer-row {
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 2fr);
+  align-items: start;
+}
+
+@media (max-width: 720px) {
+  .admin-form-grid--printer-row {
+    grid-template-columns: 1fr;
+  }
+}
+
 .admin-field {
   display: grid;
   gap: var(--admin-space-xs);

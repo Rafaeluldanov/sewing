@@ -20,6 +20,7 @@
  */
 
 import { z } from 'zod';
+import { EmployeeRoleSchema, type EmployeeRole } from './employees';
 
 // ---------------------------------------------------------------------------
 // ENUMS — дублируем как литералы, чтобы shared не зависел от @prisma/client
@@ -60,8 +61,20 @@ export interface PrinterSummaryDto {
   isActive: boolean;
   isOnline: boolean;
   lastSeenAt: string | null;
+  /**
+   * Привязка принтера к роли сотрудника. На MVP именно по этой роли
+   * `PrintJobsService` выбирает принтер для печати: при `POST
+   * /api/print-jobs` без явного `printerId` backend ищет активный
+   * принтер с такой же `role`, как у текущего сотрудника. NULL =
+   * принтер не используется в автоматическом матчинге (только тестовая
+   * печать / массовые батчи по явному `printerId`).
+   */
+  role: EmployeeRole | null;
+  /** @deprecated Старое поле; в новых UI больше не показывается. */
   equipmentId: string | null;
+  /** @deprecated Старое поле; в новых UI больше не показывается. */
   equipmentName: string | null;
+  /** @deprecated Старое поле; в новых UI больше не показывается. */
   equipmentCode: string | null;
   /** Есть ли pairingCode прямо сейчас (само значение в списке не отдаём). */
   hasPairingCode: boolean;
@@ -77,8 +90,13 @@ export interface PrinterDetailDto {
   isActive: boolean;
   isOnline: boolean;
   lastSeenAt: string | null;
+  /** См. одноимённое поле в `PrinterSummaryDto`. */
+  role: EmployeeRole | null;
+  /** @deprecated Старое поле; в новых UI больше не показывается. */
   equipmentId: string | null;
+  /** @deprecated Старое поле; в новых UI больше не показывается. */
   equipmentName: string | null;
+  /** @deprecated Старое поле; в новых UI больше не показывается. */
   equipmentCode: string | null;
   /**
    * Текущий pairingCode (если есть). Виден только админам/менеджерам
@@ -166,7 +184,13 @@ const NonEmptyString = (max = 200) => z.string().trim().min(1).max(max);
 export const CreatePrinterSchema = z.object({
   name: NonEmptyString(120),
   type: z.enum(PRINTER_TYPES).default('DEFAULT'),
-  /** Привязка к рабочему месту. На MVP можно создать без привязки и доцепить позже. */
+  /**
+   * Привязка к роли сотрудника. На MVP можно создать без привязки и
+   * доцепить позже — но без `role` принтер не будет матчиться в
+   * автоматической печати по смене.
+   */
+  role: EmployeeRoleSchema.nullable().optional(),
+  /** @deprecated Старое поле; backend принимает, новые UI не передают. */
   equipmentId: z.string().min(1).nullable().optional(),
   isActive: z.boolean().optional(),
 });
@@ -176,6 +200,8 @@ export const UpdatePrinterSchema = z
   .object({
     name: NonEmptyString(120).optional(),
     type: z.enum(PRINTER_TYPES).optional(),
+    role: EmployeeRoleSchema.nullable().optional(),
+    /** @deprecated Старое поле; backend принимает, новые UI не передают. */
     equipmentId: z.string().min(1).nullable().optional(),
     isActive: z.boolean().optional(),
     /**

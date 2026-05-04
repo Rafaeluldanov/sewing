@@ -178,13 +178,20 @@ export class PrintJobsService {
 
   /**
    * Найти принтер для печати:
-   *   - если `printerId` передан явно (тестовая печать менеджером) —
-   *     берём его;
-   *   - иначе — берём активную смену сотрудника, оттуда
-   *     `equipmentId`, и ищем активный принтер с такой привязкой.
+   *   1. если `printerId` передан явно (тестовая печать менеджером) —
+   *      берём его;
+   *   2. иначе — ищем активный принтер по РОЛИ сотрудника (новая
+   *      привязка `Printer.role`, см. `docs/domain.md §17`);
+   *   3. если по роли ничего нет — fallback на старую привязку:
+   *      берём активную смену сотрудника и ищем принтер по
+   *      `Printer.equipmentId === ShiftSession.equipmentId`. Это
+   *      сохраняет работоспособность для инсталляций, которые ещё
+   *      не переехали на роль-привязку. Удалить fallback можно
+   *      одновременно с полем `Printer.equipmentId`.
    *
-   * Если нет смены — `SHIFT_SESSION_REQUIRED`. Если нет привязанного
-   * принтера — `PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT`.
+   * Если ни роль-привязка, ни смена не дают принтера —
+   * `PRINTER_NOT_CONFIGURED_FOR_EMPLOYEE`. Если в fallback-ветке
+   * нет смены — `SHIFT_SESSION_REQUIRED` (как раньше).
    */
   private async resolvePrinter(employeeId: string, printerId?: string) {
     if (printerId) {
@@ -195,6 +202,23 @@ export class PrintJobsService {
       return explicit;
     }
 
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: employeeId },
+      select: { role: true },
+    });
+    if (employee) {
+      const byRole = await this.prisma.printer.findFirst({
+        where: { role: employee.role, isActive: true },
+        orderBy: { createdAt: 'asc' },
+      });
+      if (byRole) return byRole;
+    }
+
+    // Fallback: старая привязка по equipment активной смены.
+    // Контракт ошибок намеренно НЕ изменён, чтобы не сломать
+    // существующих клиентов и интеграционные тесты:
+    // нет смены → SHIFT_SESSION_REQUIRED, нет принтера →
+    // PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT.
     const shift = await this.prisma.shiftSession.findFirst({
       where: { employeeId, endedAt: null },
       select: { equipmentId: true },
