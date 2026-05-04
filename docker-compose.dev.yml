@@ -68,6 +68,8 @@ services:
       APP_URL: ${APP_URL:-https://dev.teeon.ru}
       INTERNAL_API_URL: http://api:3001/api
       API_URL: http://api:3001/api
+      # Стабильный ключ для Next.js Server Actions (см. .env.dev / .env.prod).
+      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}
     depends_on:
       - api
     networks:
