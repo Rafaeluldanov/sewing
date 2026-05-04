@@ -13,11 +13,17 @@ COPY tsconfig.json ./tsconfig.json
 
 RUN npm ci
 
-WORKDIR /app
-RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
-RUN npm run build --workspace=@sewing/api
+# Generate Prisma Client заранее — start:dev не вызывает build,
+# а без сгенерированного клиента nest упадёт.
+RUN npx prisma generate --schema=prisma/schema.prisma
 
 EXPOSE 3001
 
+# Раньше dev-стек запускал готовый `dist/main.js`. Bind-mount `.:/app`
+# подкладывал хостовый `dist`, который мог быть от старого билда — и
+# api тихо работал со старым кодом, игнорируя любые правки в src/.
+# Теперь стартуем через swc-node watch (`npm run start:dev` →
+# `node --watch ... src/main.ts`): любой `Ctrl+S` в `apps/api/src/**`
+# или `packages/shared/**` подхватывается без `docker compose build`.
 ENTRYPOINT ["sh", "/app/apps/api/scripts/docker-entrypoint.sh"]
-CMD ["node", "apps/api/dist/main.js"]
+CMD ["sh", "-lc", "cd apps/api && npm run start:dev"]

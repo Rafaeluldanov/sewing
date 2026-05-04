@@ -85,6 +85,12 @@ services:
       APP_URL: ${APP_URL:-https://prod.teeon.ru}
       INTERNAL_API_URL: http://api:3001/api
       API_URL: http://api:3001/api
+      # Стабильный ключ шифрования для Next.js Server Actions: без него
+      # ключ генерируется при каждом старте контейнера, и сабмиты форм
+      # с уже открытых клиентских страниц молча отбрасываются после
+      # рестарта web (Next 14+ рефлексирует action ID и бракует «чужие»).
+      # Подробности и генерация ключа — см. .env.prod.
+      NEXT_SERVER_ACTIONS_ENCRYPTION_KEY: ${NEXT_SERVER_ACTIONS_ENCRYPTION_KEY}
     depends_on:
       - api
     restart: always
