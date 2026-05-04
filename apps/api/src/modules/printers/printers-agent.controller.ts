@@ -1,9 +1,12 @@
 import { Body, Controller, Post, UseGuards } from '@nestjs/common';
 import {
   AgentPairSchema,
+  AgentSelectWindowsPrinterSchema,
   AgentWindowsPrintersSchema,
   type AgentPairDto,
   type AgentPairResultDto,
+  type AgentSelectWindowsPrinterDto,
+  type AgentSelectWindowsPrinterResultDto,
   type AgentWindowsPrintersDto,
   type AgentWindowsPrintersResultDto,
 } from '@sewing/shared/printers';
@@ -66,5 +69,27 @@ export class PrintersAgentController {
     @CurrentPrinter() printer: { id: string },
   ): Promise<AgentWindowsPrintersResultDto> {
     return this.printers.updateWindowsPrinters(printer.id, dto);
+  }
+
+  /**
+   * `POST /api/printers/agent/select-windows-printer` — оператор сам
+   * выбирает физический Windows-принтер прямо из агентского wizard-а
+   * при первом запуске exe (см. `apps/agent/src/wizard.mjs`). До
+   * этого выбор делал только менеджер в UI `/admin/printers/:id`.
+   *
+   * Защищено `AgentAuthGuard`-ом — менять можно только «свой» принтер
+   * (`printerId` берётся из `X-Printer-Agent-Token`, тело лишь
+   * передаёт имя). Имя должно лежать в `availableWindowsPrinters`,
+   * иначе 422 `WINDOWS_PRINTER_NOT_FOUND_FOR_AGENT`.
+   */
+  @Public()
+  @UseGuards(AgentAuthGuard)
+  @Post('select-windows-printer')
+  selectWindowsPrinter(
+    @Body(new ZodValidationPipe(AgentSelectWindowsPrinterSchema))
+    dto: AgentSelectWindowsPrinterDto,
+    @CurrentPrinter() printer: { id: string },
+  ): Promise<AgentSelectWindowsPrinterResultDto> {
+    return this.printers.selectWindowsPrinterByAgent(printer.id, dto.name);
   }
 }

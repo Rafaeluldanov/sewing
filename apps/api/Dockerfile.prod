@@ -9,14 +9,30 @@ RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /v
 
 COPY package*.json ./
 COPY apps/api/package*.json ./apps/api/
+# Копируем `apps/agent` целиком — нужно для сборки exe-агента
+# (`npm run build:win --workspace=@sewing/agent`). Без него
+# `PrintersController` отдаёт 404 AGENT_BUNDLE_NOT_FOUND, а кнопка
+# «Скачать агент» в карточке принтера не работает.
+COPY apps/agent/package*.json ./apps/agent/
 COPY packages ./packages
 COPY prisma ./prisma
 COPY apps/api ./apps/api
+COPY apps/agent ./apps/agent
 COPY tsconfig.json ./tsconfig.json
 
 RUN npm ci
 RUN npm run build --workspace=@sewing/api
 RUN npx prisma generate --schema=prisma/schema.prisma
+
+# Сборка Windows-бинарника агента. esbuild сначала собирает self-contained
+# CJS-бандл (см. apps/agent/package.json scripts.bundle), затем
+# @yao-pkg/pkg запекает его вместе с node20-win-x64 рантаймом в
+# `apps/agent/dist/sewing-print-agent.exe`. Этот exe потом отдаёт
+# `PrintersController.downloadAgent` (см. resolveAgentBundlePath).
+# Сборка занимает ~30s и тянет ~100 MB win-binary при первом запуске —
+# это окупается тем, что менеджер скачивает агент кликом без отдельных
+# скриптов сборки на хосте.
+RUN npm run build:win --workspace=@sewing/agent
 
 FROM node:20-bookworm-slim
 WORKDIR /app
@@ -27,6 +43,11 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api ./apps/api
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/prisma ./prisma
+# Только готовый exe из builder — без node_modules агента, без src.
+# Путь должен совпадать с одним из кандидатов в
+# `PrintersController.resolveAgentBundlePath()`.
+COPY --from=builder /app/apps/agent/dist/sewing-print-agent.exe \
+     /app/apps/agent/dist/sewing-print-agent.exe
 COPY package*.json ./
 
 EXPOSE 3001

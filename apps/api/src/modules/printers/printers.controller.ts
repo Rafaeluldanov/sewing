@@ -45,6 +45,31 @@ export class PrintersController {
     return this.printers.list();
   }
 
+  /**
+   * Тестовая страница для агента. Возвращает простой A6-HTML с именем
+   * принтера и текущим временем — это payload для job-ов с
+   * `sourceType=TEST`. Public, потому что агент скачивает её без
+   * куки/JWT (как и `/passports/:id/print`, `/cells/:id/print`).
+   *
+   * Раньше TEST мапился на `/api/health` (JSON), и агент честно
+   * фейлил такие job-ы со «Unsupported print file type: .json». Это
+   * запутывало менеджера: он жмёт «Тестовая печать», а ничего не
+   * печатается. Сейчас отдаём настоящий HTML — Chrome/Edge печатают
+   * его в обычном режиме `printHtmlWithBrowser`.
+   *
+   * ВАЖНО: route стоит ВЫШЕ `@Get(':id')`, иначе nest заматчит
+   * `:id = 'test-page'` или наоборот — порядок объявления маршрутов
+   * в Nest имеет значение для статики vs параметров.
+   */
+  @Public()
+  @Get(':id/test-page')
+  @Header('content-type', 'text/html; charset=utf-8')
+  @Header('cache-control', 'no-store')
+  async getTestPage(@Param('id') id: string): Promise<string> {
+    const printer = await this.printers.getOne(id);
+    return renderTestPageHtml(printer);
+  }
+
   @Get(':id')
   getOne(@Param('id') id: string): Promise<PrinterDetailDto> {
     return this.printers.getOne(id);
@@ -166,4 +191,74 @@ export class PrintersController {
     );
     return null;
   }
+}
+
+/**
+ * Тестовая страница печати — намеренно плотный, безопасный к
+ * парсингу chromium HTML, размер 80x80 mm (вписывается и в
+ * термоэтикетку 58 mm, и в обычный A4). Включает имя принтера,
+ * физический Windows-принтер (если уже выбран) и временной штамп —
+ * по нему видно, что именно эта печать сработала.
+ *
+ * Никаких inline-скриптов: их потом всё равно подменит
+ * `writeAutoPrintWrapper` в агенте (вставит свой `window.print()`).
+ */
+function renderTestPageHtml(printer: PrinterDetailDto): string {
+  const escape = (s: string | null | undefined) =>
+    String(s ?? '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#39;');
+  const ts = new Date().toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow',
+  });
+  // Намеренно НЕ задаём `@page { size: ... }` и не фиксируем ширину
+  // в mm: размер бумаги/этикетки берётся из настроек физического
+  // принтера в Windows (например TSC TE200 — заданный размер
+  // термоэтикетки). Если задать здесь 80×80mm — на этикетке 100×150mm
+  // содержимое поедет в угол, на A4 — будет крошечным куском в
+  // верху листа. Так шаблон одинаково работает и на термопринтере,
+  // и на офисном лазернике.
+  //
+  // Содержимое сделано максимально компактным (мелкий шрифт, узкие
+  // отступы, минимум строк), чтобы влезло даже на самые мелкие
+  // термоэтикетки 38×25 / 40×30 mm. Реальное масштабирование под
+  // этикетку делает Chrome через `scalingType: 1` (FIT_TO_PAGE),
+  // см. `apps/agent/src/windows-print.mjs`.
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Test print</title>
+  <style>
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+      color: #000;
+      padding: 1mm 2mm;
+      box-sizing: border-box;
+      line-height: 1.15;
+    }
+    h1 { margin: 0 0 1mm 0; font-size: 9pt; }
+    table { border-collapse: collapse; font-size: 7pt; }
+    td { padding: 0 2mm 0 0; vertical-align: top; }
+    .k { color: #555; }
+    .v { font-weight: 600; word-break: break-word; }
+    .muted { color: #555; font-size: 6pt; margin-top: 1mm; }
+  </style>
+</head>
+<body>
+  <h1>Тест печати</h1>
+  <table>
+    <tr><td class="k">Принтер</td><td class="v">${escape(printer.name)}</td></tr>
+    <tr><td class="k">Windows</td><td class="v">${escape(printer.selectedWindowsPrinter ?? '(не выбран)')}</td></tr>
+    <tr><td class="k">Хост</td><td class="v">${escape(printer.agentHostName ?? '(нет данных)')}</td></tr>
+    <tr><td class="k">Время</td><td class="v">${escape(ts)}</td></tr>
+  </table>
+  <div class="muted">Связь Windows → принтер работает.</div>
+</body>
+</html>
+`;
 }

@@ -103,6 +103,30 @@ export async function uploadWindowsPrinters(apiUrl, token, hostName, printers) {
   return res.json();
 }
 
+/**
+ * Выставить физический Windows-принтер прямо из агента (см.
+ * `POST /api/printers/agent/select-windows-printer`). Используется
+ * первичным wizard-ом: оператор скачал exe, ввёл код, выбрал
+ * принтер из своего списка — этот вызов прокидывает выбор на сервер
+ * без участия менеджера. `name=null` снимает выбор. Сервер вернёт
+ * 422 `WINDOWS_PRINTER_NOT_FOUND_FOR_AGENT`, если имени нет в
+ * `availableWindowsPrinters` (то есть выбранного принтера агент
+ * сервером не показывал).
+ */
+export async function selectWindowsPrinter(apiUrl, token, name) {
+  const res = await fetch(`${apiUrl}/printers/agent/select-windows-printer`, {
+    method: 'POST',
+    headers: { ...authHeaders(token), 'content-type': 'application/json' },
+    body: JSON.stringify({ name }),
+  });
+  if (!res.ok) {
+    throw new Error(
+      `Select windows printer failed: HTTP ${res.status} ${await safeText(res)}`,
+    );
+  }
+  return res.json();
+}
+
 export async function pollJobs(apiUrl, token) {
   const res = await fetch(`${apiUrl}/print-jobs/agent`, {
     method: 'GET',
