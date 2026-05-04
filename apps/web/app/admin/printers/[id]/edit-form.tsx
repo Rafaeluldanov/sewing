@@ -2,11 +2,12 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { Save, XCircle } from 'lucide-react';
-import type { EquipmentSummaryDto } from '@sewing/shared/equipment';
+import { EMPLOYEE_ROLES } from '@sewing/shared/employees';
 import {
   PRINTER_TYPES,
   type PrinterDetailDto,
 } from '@sewing/shared/printers';
+import { formatRole } from '@/lib/admin-labels';
 import { updatePrinterAction } from '../actions';
 import {
   initialUpdatePrinterState,
@@ -15,7 +16,6 @@ import {
 
 interface Props {
   printer: PrinterDetailDto;
-  equipment: readonly EquipmentSummaryDto[];
 }
 
 const PRINTER_TYPE_LABEL: Record<string, string> = {
@@ -38,7 +38,14 @@ function SaveButton() {
   );
 }
 
-export function EditPrinterForm({ printer, equipment }: Props) {
+/**
+ * Форма карточки принтера. Привязка теперь по РОЛИ сотрудника
+ * (`Printer.role`). См. комментарий к `CreatePrinterForm` и
+ * `PrintJobsService.resolvePrinter`. Старая привязка к Equipment
+ * из админки убрана; в БД поле `equipmentId` остаётся, но из этой
+ * формы оно больше не редактируется.
+ */
+export function EditPrinterForm({ printer }: Props) {
   const action = updatePrinterAction.bind(null, printer.id);
   const [state, formAction] = useFormState<UpdatePrinterState, FormData>(
     action,
@@ -47,7 +54,9 @@ export function EditPrinterForm({ printer, equipment }: Props) {
 
   return (
     <form action={formAction} className="admin-form">
-      <div className="admin-form-grid">
+      {/* Три поля в одну линию (адаптив — см. .admin-form-grid--printer-row
+          в globals.css: на узких экранах разворачиваются в столбец). */}
+      <div className="admin-form-grid admin-form-grid--printer-row">
         <div className="admin-field">
           <label htmlFor="printer-name">Название</label>
           <input
@@ -75,29 +84,35 @@ export function EditPrinterForm({ printer, equipment }: Props) {
           </select>
         </div>
         <div className="admin-field">
-          <label htmlFor="printer-equipment">Рабочее место</label>
+          <label htmlFor="printer-role">Роль сотрудника</label>
           <select
-            id="printer-equipment"
-            name="equipmentId"
-            defaultValue={printer.equipmentId ?? ''}
+            id="printer-role"
+            name="role"
+            defaultValue={printer.role ?? ''}
           >
             <option value="">— без привязки —</option>
-            {equipment.map((eq) => (
-              <option key={eq.id} value={eq.id}>
-                {eq.name}
+            {EMPLOYEE_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {formatRole(r)}
               </option>
             ))}
           </select>
         </div>
-        <div className="admin-field admin-field--inline">
-          <input
-            id="printer-active"
-            type="checkbox"
-            name="isActive"
-            defaultChecked={printer.isActive}
-          />
-          <label htmlFor="printer-active">Активен</label>
-        </div>
+      </div>
+
+      <div className="admin-muted" style={{ fontSize: '0.8rem' }}>
+        Сотрудник этой роли получит сюда задания на печать. Без привязки
+        принтер останется только под тестовую/массовую печать.
+      </div>
+
+      <div className="admin-field admin-field--inline">
+        <input
+          id="printer-active"
+          type="checkbox"
+          name="isActive"
+          defaultChecked={printer.isActive}
+        />
+        <label htmlFor="printer-active">Активен</label>
       </div>
 
       {state.error && (

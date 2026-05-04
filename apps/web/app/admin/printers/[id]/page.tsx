@@ -6,12 +6,12 @@ import {
   Send,
 } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
-import { listEquipment } from '@/lib/equipment-api';
 import {
   buildAgentDownloadUrl,
   getPrinter,
   listPrintJobsForPrinter,
 } from '@/lib/printers-api';
+import { formatRole } from '@/lib/admin-labels';
 import {
   AdminCard,
   AdminEmptyState,
@@ -70,10 +70,7 @@ export default async function PrinterDetailPage({ params }: PageProps) {
     throw e;
   }
 
-  const [equipment, jobs] = await Promise.all([
-    listEquipment(),
-    listPrintJobsForPrinter(id, 20).catch(() => []),
-  ]);
+  const jobs = await listPrintJobsForPrinter(id, 20).catch(() => []);
 
   const agentUrl = buildAgentDownloadUrl();
 
@@ -143,7 +140,7 @@ export default async function PrinterDetailPage({ params }: PageProps) {
         <div className="admin-stack">
           <AdminCard>
             <AdminSectionHeader title="Основное" />
-            <EditPrinterForm printer={printer} equipment={equipment} />
+            <EditPrinterForm printer={printer} />
           </AdminCard>
 
           <AdminCard>
@@ -188,12 +185,8 @@ export default async function PrinterDetailPage({ params }: PageProps) {
               { label: 'ID', value: <code>{printer.id}</code> },
               { label: 'Тип', value: <code>{printer.type}</code> },
               {
-                label: 'Equipment',
-                value: printer.equipmentId ? (
-                  <code>{printer.equipmentId}</code>
-                ) : (
-                  '—'
-                ),
+                label: 'Роль',
+                value: printer.role ? formatRole(printer.role) : '—',
               },
               {
                 label: 'Создан',

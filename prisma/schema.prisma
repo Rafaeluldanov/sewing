@@ -1940,6 +1940,20 @@ model Printer {
   id                       String      @id @default(cuid())
   name                     String
   type                     PrinterType @default(DEFAULT)
+  /// Привязка принтера к роли сотрудника (см. enum `Role`). Один
+  /// принтер обслуживает одну роль; одна роль может иметь несколько
+  /// принтеров (несколько столов QC и т.п.). NULL = без привязки —
+  /// печать через смену не сработает (`PRINTER_NOT_CONFIGURED_FOR_ROLE`),
+  /// но принтер можно использовать для тестовой/массовой печати по
+  /// явному `printerId`. Эта привязка пришла на замену `equipmentId`
+  /// (см. ниже): см. `docs/domain.md §17`, миграция 2026-05-04.
+  role                     Role?
+  /// DEPRECATED: историческая привязка к рабочему месту (Equipment).
+  /// Сохранена ради обратной совместимости с агентом и старыми
+  /// инсталляциями: новые UI на этом поле не пишут, но
+  /// `PrintJobsService.resolvePrinter` использует его как fallback,
+  /// если у сотрудника нет принтера по роли. Можно удалить вместе с
+  /// fallback-веткой в следующем major-релизе.
   equipmentId              String?
   isActive                 Boolean     @default(true)
   /// Короткий одноразовый код подключения (UI кнопка «Сгенерировать
@@ -1982,6 +1996,7 @@ model Printer {
   jobs      PrintJob[]
 
   @@index([equipmentId, isActive])
+  @@index([role, isActive])
   @@index([isOnline])
   @@index([pairingCode])
   @@index([agentToken])

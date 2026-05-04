@@ -3,6 +3,7 @@ import { ArrowRight, Plus, Printer } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listPrinters } from '@/lib/printers-api';
 import type { PrinterSummaryDto } from '@sewing/shared/printers';
+import { formatRole } from '@/lib/admin-labels';
 import {
   AdminCard,
   AdminEmptyState,
@@ -87,17 +88,11 @@ export default async function AdminPrintersPage({
       render: (p) => formatPrinterType(p.type),
     },
     {
-      key: 'equipment',
-      header: 'Рабочее место',
+      key: 'role',
+      header: 'Роль',
       render: (p) =>
-        p.equipmentId ? (
-          <Link
-            href={`/admin/equipment/${p.equipmentId}`}
-            className="admin-table__action-link"
-            style={{ color: 'var(--admin-text)', textDecoration: 'none' }}
-          >
-            {p.equipmentName ?? '—'}
-          </Link>
+        p.role ? (
+          <span>{formatRole(p.role)}</span>
         ) : (
           <span className="admin-muted">Не привязан</span>
         ),

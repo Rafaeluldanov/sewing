@@ -2,8 +2,9 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { Save, XCircle } from 'lucide-react';
-import type { EquipmentSummaryDto } from '@sewing/shared/equipment';
+import { EMPLOYEE_ROLES } from '@sewing/shared/employees';
 import { PRINTER_TYPES } from '@sewing/shared/printers';
+import { formatRole } from '@/lib/admin-labels';
 import { createPrinterAction } from './actions';
 import {
   initialCreatePrinterState,
@@ -30,11 +31,15 @@ function SubmitButton() {
   );
 }
 
-export function CreatePrinterForm({
-  equipment,
-}: {
-  equipment: readonly EquipmentSummaryDto[];
-}) {
+/**
+ * Форма создания принтера. Привязка идёт по РОЛИ сотрудника
+ * (`Printer.role`, см. `packages/shared/src/printers.ts`): когда
+ * сотрудник на терминале жмёт «Печать» без явного `printerId`,
+ * backend ищет активный принтер с такой же `role` (см.
+ * `PrintJobsService.resolvePrinter`). Старая привязка к Equipment
+ * из UI убрана и больше не передаётся в API.
+ */
+export function CreatePrinterForm() {
   const [state, formAction] = useFormState<CreatePrinterState, FormData>(
     createPrinterAction,
     initialCreatePrinterState,
@@ -42,7 +47,9 @@ export function CreatePrinterForm({
 
   return (
     <form action={formAction} className="admin-form">
-      <div className="admin-form-grid">
+      {/* Три поля в одну линию (адаптив — см. .admin-form-grid--printer-row
+          в globals.css: на узких экранах разворачиваются в столбец). */}
+      <div className="admin-form-grid admin-form-grid--printer-row">
         <div className="admin-field">
           <label htmlFor="printer-name">Название</label>
           <input
@@ -66,16 +73,22 @@ export function CreatePrinterForm({
           </select>
         </div>
         <div className="admin-field">
-          <label htmlFor="printer-equipment">Рабочее место</label>
-          <select id="printer-equipment" name="equipmentId" defaultValue="">
+          <label htmlFor="printer-role">Роль сотрудника</label>
+          <select id="printer-role" name="role" defaultValue="">
             <option value="">— без привязки —</option>
-            {equipment.map((eq) => (
-              <option key={eq.id} value={eq.id}>
-                {eq.name}
+            {EMPLOYEE_ROLES.map((r) => (
+              <option key={r} value={r}>
+                {formatRole(r)}
               </option>
             ))}
           </select>
         </div>
+      </div>
+
+      <div className="admin-muted" style={{ fontSize: '0.8rem' }}>
+        Когда сотрудник выбранной роли нажмёт «Печать», задание уйдёт на
+        этот принтер. Без привязки принтер можно использовать только для
+        тестовой и массовой печати.
       </div>
 
       {state.error && (
