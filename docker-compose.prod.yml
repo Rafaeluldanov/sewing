@@ -36,11 +36,25 @@ services:
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://prod.teeon.ru}
       PUBLIC_API_URL: ${PUBLIC_API_URL:-https://prod.teeon.ru/api}
       CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-https://prod.teeon.ru}
+      # Корень дискового хранилища для модулей «Лекала» и «Категории
+      # номенклатуры» (см. apps/api/src/main.ts → useStaticAssets и
+      # apps/api/src/modules/patterns/patterns-storage.service.ts).
+      # Указываем абсолютный путь, который монтируется из named volume
+      # ниже — иначе fallback пишет внутрь /app/apps/api/uploads и всё
+      # пропадает при пересборке api-образа.
+      PATTERNS_UPLOADS_DIR: /var/lib/sewing/uploads
       # Авто-синхронизация схемы Prisma при старте контейнера.
       # Чтобы выключить — поставьте PRISMA_AUTO_SYNC=0 в .env.prod.
       PRISMA_AUTO_SYNC: ${PRISMA_AUTO_SYNC:-1}
       PRISMA_AUTO_SYNC_RETRIES: ${PRISMA_AUTO_SYNC_RETRIES:-15}
       PRISMA_AUTO_SYNC_ACCEPT_DATA_LOSS: ${PRISMA_AUTO_SYNC_ACCEPT_DATA_LOSS:-0}
+    volumes:
+      # Загруженные пользователем файлы (превью лекал, DXF по размерам,
+      # иконки категорий). Persistent named volume — переживает любые
+      # `docker compose up -d --build api` и `docker compose down`.
+      # Тот же путь раздаёт nginx через прокси /uploads/ (см.
+      # nginx/conf.d/10-prod-teeon-ru.conf и Express-mount в main.ts).
+      - prod_uploads:/var/lib/sewing/uploads
     depends_on:
       - db
     restart: always
@@ -119,6 +133,13 @@ volumes:
   prod_db_data:
     external: true
     name: sewing-prod_prod_db_data
+  # Том prod-uploads (превью лекал, DXF, иконки категорий). external=true
+  # по тем же причинам, что и prod_db_data — `down -v` не должен сносить
+  # пользовательский контент. На новом сервере выполнить заранее:
+  #   docker volume create sewing-prod_uploads
+  prod_uploads:
+    external: true
+    name: sewing-prod_uploads
 
 networks:
   prod-network:

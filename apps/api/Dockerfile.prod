@@ -1,4 +1,8 @@
-FROM node:18-bookworm-slim AS builder
+# Node 20+ соответствует `engines.node` в корневом package.json.
+# В web-образе (Dockerfile.prod) это критично из-за глобального `File`;
+# здесь — для единообразия и совместимости со свежими версиями
+# Prisma/Nest, которые рекомендуют Node 20.
+FROM node:20-bookworm-slim AS builder
 WORKDIR /app
 
 RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
@@ -14,7 +18,7 @@ RUN npm ci
 RUN npm run build --workspace=@sewing/api
 RUN npx prisma generate --schema=prisma/schema.prisma
 
-FROM node:18-bookworm-slim
+FROM node:20-bookworm-slim
 WORKDIR /app
 
 RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
