@@ -72,10 +72,11 @@ export class CompanySettingsService {
    *     getOrCreate», который можно встроить как только настройка
    *     получит UI.
    *
-   * Сознательная граница итерации: метод НЕ ходит через
-   * `getOrCreate()` и НЕ пишет audit. Публичный DTO/PATCH
-   * `/api/company-settings` это поле НЕ принимает (UI ещё не
-   * утверждён, см. `docs/current-state.md`).
+   * Сознательная граница метода: НЕ ходит через `getOrCreate()` и
+   * НЕ пишет audit — это быстрый read из горячего flow. Публичный
+   * `GET /api/company-settings` отдаёт то же значение через
+   * `get() → toDto()` (с тем же fallback), а `PATCH` принимает его
+   * в `UpdateCompanySettingsDto` и пишет audit через общий update().
    */
   async getAutoIssueMaterialsOnCutRelease(): Promise<boolean> {
     const row = await this.prisma.companySettings.findUnique({
@@ -118,6 +119,12 @@ export class CompanySettingsService {
    * `post` и `AUTO_CUT_ISSUE`). `PurchaseReceipt` cancel / REVERSAL
    * OUT остаётся permissive (см.
    * `StockService.reversePurchaseReceiptInTx`).
+   *
+   * Сознательная граница метода: НЕ ходит через `getOrCreate()` и
+   * НЕ пишет audit — это быстрый read из горячего flow. Публичный
+   * `GET /api/company-settings` отдаёт то же значение через
+   * `get() → toDto()` (с тем же fallback), а `PATCH` принимает его
+   * в `UpdateCompanySettingsDto` и пишет audit через общий update().
    */
   async getAllowNegativeMaterialStock(): Promise<boolean> {
     const row = await this.prisma.companySettings.findUnique({
@@ -138,14 +145,26 @@ export class CompanySettingsService {
     const current = await this.getOrCreate();
 
     const data: Prisma.CompanySettingsUpdateInput = {};
-    const changed: Record<string, { before: string | null; after: string | null }> = {};
-    for (const key of UPDATABLE_FIELDS) {
+    const changed: Record<
+      string,
+      { before: string | boolean | null; after: string | boolean | null }
+    > = {};
+    for (const key of UPDATABLE_STRING_FIELDS) {
       const value = dto[key];
       if (value === undefined) continue;
       const before = current[key] ?? null;
       const after = value ?? null;
       if (before === after) continue;
       (data as Record<string, string | null>)[key] = after;
+      changed[key] = { before, after };
+    }
+    for (const key of UPDATABLE_BOOLEAN_FIELDS) {
+      const value = dto[key];
+      if (value === undefined) continue;
+      const before = current[key];
+      const after = value;
+      if (before === after) continue;
+      (data as Record<string, boolean>)[key] = after;
       changed[key] = { before, after };
     }
 
@@ -212,7 +231,7 @@ export class CompanySettingsService {
 // Field list & DTO mapper
 // ---------------------------------------------------------------------------
 
-const UPDATABLE_FIELDS = [
+const UPDATABLE_STRING_FIELDS = [
   'legalName',
   'shortName',
   'inn',
@@ -228,6 +247,16 @@ const UPDATABLE_FIELDS = [
   'bik',
   'correspondentAccount',
   'settlementAccount',
+] as const satisfies ReadonlyArray<keyof UpdateCompanySettingsDto>;
+
+/**
+ * Boolean-флаги блока «Материалы и склад». Держим в отдельном списке,
+ * чтобы в `update()` сравнивать их как boolean (а не как string|null)
+ * и не писать NULL в NOT NULL-колонку.
+ */
+const UPDATABLE_BOOLEAN_FIELDS = [
+  'autoIssueMaterialsOnCutRelease',
+  'allowNegativeMaterialStock',
 ] as const satisfies ReadonlyArray<keyof UpdateCompanySettingsDto>;
 
 type CompanySettingsRow = Prisma.CompanySettingsGetPayload<{}>;
@@ -250,6 +279,8 @@ function toDto(c: CompanySettingsRow): CompanySettingsDto {
     bik: c.bik,
     correspondentAccount: c.correspondentAccount,
     settlementAccount: c.settlementAccount,
+    autoIssueMaterialsOnCutRelease: c.autoIssueMaterialsOnCutRelease,
+    allowNegativeMaterialStock: c.allowNegativeMaterialStock,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };

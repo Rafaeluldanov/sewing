@@ -181,24 +181,24 @@ describe('material-issues auto cut gate — PassportsService', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 5. Public DTO НЕ принимает поле (UI ещё не утверждён)
+// 5. Public DTO отдаёт и принимает поле (UI в /admin/company-settings)
 // ---------------------------------------------------------------------------
 
 describe('material-issues auto cut gate — shared DTO boundary', () => {
   const shared = read(SHARED_COMPANY_SETTINGS_PATH);
 
-  test('UpdateCompanySettingsSchema не содержит autoIssueMaterialsOnCutRelease', () => {
+  test('UpdateCompanySettingsSchema принимает autoIssueMaterialsOnCutRelease', () => {
     const updateSchema =
       shared.match(
         /export const UpdateCompanySettingsSchema[\s\S]*?export type UpdateCompanySettingsDto/,
       )?.[0] ?? '';
-    expect(updateSchema).not.toContain('autoIssueMaterialsOnCutRelease');
+    expect(updateSchema).toContain('autoIssueMaterialsOnCutRelease');
   });
 
-  test('CompanySettingsDto не содержит autoIssueMaterialsOnCutRelease', () => {
+  test('CompanySettingsDto содержит autoIssueMaterialsOnCutRelease: boolean', () => {
     const dto =
       shared.match(/export interface CompanySettingsDto[\s\S]*?\n\}/)?.[0] ?? '';
-    expect(dto).not.toContain('autoIssueMaterialsOnCutRelease');
+    expect(dto).toMatch(/autoIssueMaterialsOnCutRelease\s*:\s*boolean/);
   });
 });
 

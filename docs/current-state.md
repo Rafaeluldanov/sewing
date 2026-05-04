@@ -150,9 +150,11 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
   `false` и не создаёт singleton-строку — настройка остаётся
   явным действием владельца проекта. Default `false` сознательно:
   после миграции production поведение не меняется само. UI для
-  управления флагом на этой итерации **не реализован** —
-  публичный DTO/PATCH `/api/company-settings` это поле не
-  принимает; backend читает значение через приватный getter
+  управления флагом живёт в блоке «Материалы и склад» на
+  `/admin/company-settings` (переключатель «Автосписание материалов
+  при выдаче кроя»); публичный `GET`/`PATCH` `/api/company-settings`
+  отдают и принимают это поле (см. `docs/api.md §42`). В горячем
+  flow backend читает его через приватный getter
   `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`. Документ содержит по одной строке
   `MaterialIssueLine` на каждую **материальную** строку
   `WorkshopNeed` заказа (исключаются `status = CANCELLED` и
@@ -339,9 +341,12 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     `MaterialIssue`** (ручной `post` и `AUTO_CUT_ISSUE`):
     `PurchaseReceipt` cancel / REVERSAL OUT остаётся permissive —
     блокировка отмены приёмки выходит за рамки этой итерации. UI для
-    управления флагом на этой итерации **не реализован** —
-    публичный DTO/PATCH `/api/company-settings` это поле не
-    принимает; backend читает его через приватный getter
+    управления флагом живёт в блоке «Материалы и склад» на
+    `/admin/company-settings` (переключатель «Разрешить отрицательные
+    остатки материалов»); публичный `GET`/`PATCH`
+    `/api/company-settings` отдают и принимают это поле (см.
+    `docs/api.md §42`). В горячем flow backend читает его через
+    приватный getter
     `CompanySettingsService.getAllowNegativeMaterialStock()`;
   - **FIFO/LIFO не реализованы** — `applyMovementInTx` на OUT
     использует текущий `StockBalance.unitCost`, не партии;
@@ -371,8 +376,11 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
   `ACCOUNTANT`, обновление `ProductionCostV2Service` под склад,
   reversal/возврат `MaterialIssue`, любые другие финансовые сводки
   (`OrderPlannedCostSummaryCard`) под эту ось, UI для просмотра
-  остатков и UI для управления флагом
-  `allowNegativeMaterialStock` — вынесены в следующие итерации.
+  остатков — вынесены в следующие итерации. UI управления флагами
+  `autoIssueMaterialsOnCutRelease` / `allowNegativeMaterialStock`
+  реализован в блоке «Материалы и склад» на
+  `/admin/company-settings` (см. ниже «Frontend-итерация “Настройки
+  компании → Материалы и склад”»).
 
   Backend-итерация «Read-only API склада»
   (`apps/api/src/modules/stock/stock.controller.ts`,
@@ -473,6 +481,51 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     master-модель `Material`, новые роли `WAREHOUSE_MANAGER` /
     `PURCHASER` / `ACCOUNTANT` — границы итерации зафиксированы
     в smoke-тесте `tests/smoke/warehouses-stock-tabs.smoke.test.ts`.
+
+  Frontend-итерация «Настройки компании → Материалы и склад»
+  (`apps/web/app/admin/company-settings/settings-form.tsx`,
+  `apps/web/app/admin/company-settings/actions.ts`,
+  `packages/shared/src/company-settings.ts`,
+  `apps/api/src/modules/company-settings/company-settings.service.ts`,
+  `docs/api.md §42`):
+  - в существующем экране `/admin/company-settings` появился блок
+    «Материалы и склад» с двумя переключателями:
+    - «Автосписание материалов при выдаче кроя» → поле
+      `autoIssueMaterialsOnCutRelease` (Boolean, default `false`);
+    - «Разрешить отрицательные остатки материалов» → поле
+      `allowNegativeMaterialStock` (Boolean, default `true`);
+  - первый флаг включает/выключает автосписание при выдаче кроя
+    (`PassportsService.issueToEmployee` → `createAutoCutIssueForPassport`);
+  - второй флаг разрешает/запрещает отрицательные остатки
+    материалов при `MaterialIssue.post` и `AUTO_CUT_ISSUE`. Если
+    `allowNegativeMaterialStock = false`, `MaterialIssue.post` может
+    вернуть 409 `MATERIAL_STOCK_INSUFFICIENT`; если при этом
+    `autoIssueMaterialsOnCutRelease = true`, `issueToEmployee` тоже
+    может быть заблокирован недостатком остатка (см. выше);
+  - поля добавлены в публичный `CompanySettingsDto` и
+    `UpdateCompanySettingsSchema` (`@sewing/shared/company-settings`).
+    `GET /api/company-settings` отдаёт текущие значения (fallback —
+    Prisma-default, т.к. `get()` идёт через `getOrCreate()`). `PATCH`
+    принимает любое подмножество полей, `undefined` ⇒ backend поле
+    не трогает; audit пишется одним `COMPANY_SETTINGS_UPDATED` как
+    и раньше;
+  - форма одна — Submit сохраняет разом и реквизиты, и флаги
+    (`updateCompanySettingsAction`). Чекбоксы защищены
+    hidden-маркерами `${name}__present`, чтобы server action отличал
+    «выключен» от «блок не рендерился»;
+  - приватные геттеры `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()` /
+    `.getAllowNegativeMaterialStock()` не менялись — бизнес-сервисы
+    (`PassportsService`, `MaterialIssuesService`, `StockService`)
+    читают флаги в горячем flow как раньше, без дополнительного
+    write;
+  - **не менялись** на этой итерации: `Prisma schema`, миграции,
+    `StockService` / `MaterialIssuesService` / `PassportsService` /
+    `PurchaseReceiptsService` / `CostsService` /
+    `ProductionCostV2Service`, sidebar, `OrderViewTabs`, RBAC (те
+    же `SHOP_MANAGER` / `ADMIN` на контроллере). Новая страница /
+    отдельный route `/admin/stock-settings` **не создавались**,
+    настройки в `/admin/warehouses` не переезжают. Границы
+    зафиксированы в `tests/smoke/company-settings-material-stock.smoke.test.ts`.
 
 ---
 

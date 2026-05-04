@@ -567,10 +567,12 @@ DTO: `packages/shared/src/purchase-receipts.ts`.
   OUT-движениям `MaterialIssue` (`MANUAL post` и `AUTO_CUT_ISSUE`):
   `PurchaseReceipt` cancel / REVERSAL OUT остаётся permissive —
   отмена приёмки выходит за рамки этой итерации. Публичный DTO/PATCH
-  `/api/company-settings` это поле **не принимает** на этой
-  итерации (UI ещё не утверждён) — backend читает значение через
-  приватный getter. Reversal/сторно для `MaterialIssue` на этой
-  итерации также **не реализован** (POSTED отменить нельзя).
+  `/api/company-settings` **принимает** это поле (блок «Материалы и
+  склад» в `/admin/company-settings`, см. §42 ниже); в горячем flow
+  backend читает значение через приватный getter
+  `CompanySettingsService.getAllowNegativeMaterialStock()`.
+  Reversal/сторно для `MaterialIssue` на этой итерации также **не
+  реализован** (POSTED отменить нельзя).
 - Публичных REST-роутов под складские остатки в этой итерации нет
   (`StockBalance`/`StockMovement` — внутренние таблицы).
 
@@ -1466,27 +1468,32 @@ DTO: `packages/shared/src/printers.ts`.
 
 | Метод | Путь                       | RBAC                | Описание |
 | ----- | -------------------------- | ------------------- | -------- |
-| GET   | `/api/company-settings`    | SHOP_MANAGER, ADMIN | Текущие реквизиты. Backend идемпотентно создаёт singleton-строку, если её ещё нет (`CompanySettingsService.getOrCreate`). |
-| PATCH | `/api/company-settings`    | SHOP_MANAGER, ADMIN | `UpdateCompanySettingsDto` (любое подмножество полей: legalName/shortName/INN/КПП/ОГРН/адреса/телефон/email/руководители/банк/БИК/р/с/к/с). Audit `COMPANY_SETTINGS_UPDATED`. |
+| GET   | `/api/company-settings`    | SHOP_MANAGER, ADMIN | Текущие реквизиты + флаги блока «Материалы и склад» (`autoIssueMaterialsOnCutRelease`, `allowNegativeMaterialStock`). Backend идемпотентно создаёт singleton-строку, если её ещё нет (`CompanySettingsService.getOrCreate`) — в этом случае флаги отдаются со значениями Prisma-default (`false` / `true`). |
+| PATCH | `/api/company-settings`    | SHOP_MANAGER, ADMIN | `UpdateCompanySettingsDto` (любое подмножество полей: legalName/shortName/INN/КПП/ОГРН/адреса/телефон/email/руководители/банк/БИК/р/с/к/с + `autoIssueMaterialsOnCutRelease?`, `allowNegativeMaterialStock?`). Audit `COMPANY_SETTINGS_UPDATED`. |
 
 DTO: `packages/shared/src/company-settings.ts`. Audit:
 `COMPANY_SETTINGS_UPDATED` (`entityType = COMPANY_SETTINGS`,
 `entityId = "default"`).
 
-Hardening-флаги, которые **не** входят в публичный
-`UpdateCompanySettingsDto` / response DTO на этой итерации
-(переключение делается прямой записью в БД владельцем проекта,
-backend читает их через приватные геттеры
-`CompanySettingsService`):
+Флаги блока «Материалы и склад» (рендерятся в UI
+`/admin/company-settings` переключателями, см.
+`apps/web/app/admin/company-settings/settings-form.tsx`):
 
-- `autoIssueMaterialsOnCutRelease Boolean @default(false)` — авто-
-  списание материалов при выдаче кроя (см. §20a «Material issues»);
+- `autoIssueMaterialsOnCutRelease Boolean @default(false)` —
+  автосписание материалов при выдаче кроя (см. §20a «Material
+  issues»). GET отдаёт текущее значение; PATCH принимает `true` /
+  `false` (поле опциональное — `undefined` ⇒ backend не трогает).
+  Бизнес-flow читает флаг через
+  `CompanySettingsService.getAutoIssueMaterialsOnCutRelease()`
+  (cheap SELECT, без `getOrCreate`).
 - `allowNegativeMaterialStock Boolean @default(true)` — гейт
   отрицательных остатков для `MaterialIssue` OUT (`MANUAL post`
   и `AUTO_CUT_ISSUE`); подробности и контракт ошибки 409
   `MATERIAL_STOCK_INSUFFICIENT` — в §20a «Material issues» и
   `docs/current-state.md §«Подключение расхода материалов к
-  складу»`. UI для управления флагом ещё не утверждён.
+  складу»`. GET отдаёт текущее значение; PATCH принимает `true` /
+  `false`; бизнес-flow читает флаг через
+  `CompanySettingsService.getAllowNegativeMaterialStock()`.
 
 ### 42.2 Подразделения компании
 

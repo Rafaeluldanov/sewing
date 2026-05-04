@@ -182,6 +182,18 @@ const CorrespondentAccountField = optionalDigitsField({
   label: 'Корреспондентский счёт',
 });
 
+/**
+ * Boolean-флаги блока «Материалы и склад». На уровне Zod — просто
+ * `z.boolean().optional()`: `undefined` ⇒ backend поле не трогает,
+ * `true/false` ⇒ применяет значение. Дефолты лежат в Prisma
+ * (`autoIssueMaterialsOnCutRelease @default(false)`,
+ * `allowNegativeMaterialStock @default(true)`) и читаются backend-ом
+ * через приватные геттеры при отсутствии singleton-строки — здесь их
+ * не дублируем, чтобы не было двух источников истины.
+ */
+const AutoIssueMaterialsOnCutReleaseField = z.boolean().optional();
+const AllowNegativeMaterialStockField = z.boolean().optional();
+
 // ---------------------------------------------------------------------------
 // Update DTO
 // ---------------------------------------------------------------------------
@@ -203,6 +215,8 @@ export const UpdateCompanySettingsSchema = z
     bik: BikField,
     correspondentAccount: CorrespondentAccountField,
     settlementAccount: SettlementAccountField,
+    autoIssueMaterialsOnCutRelease: AutoIssueMaterialsOnCutReleaseField,
+    allowNegativeMaterialStock: AllowNegativeMaterialStockField,
   })
   .refine(
     (obj) => Object.values(obj).some((v) => v !== undefined),
@@ -234,6 +248,15 @@ export interface CompanySettingsDto {
   bik: string | null;
   correspondentAccount: string | null;
   settlementAccount: string | null;
+  /**
+   * Блок «Материалы и склад» / UI `/admin/company-settings`.
+   * Если singleton-строки ещё нет, backend отдаёт дефолт
+   * (см. `CompanySettingsService.get` fallback):
+   *   - `autoIssueMaterialsOnCutRelease = false`
+   *   - `allowNegativeMaterialStock    = true`.
+   */
+  autoIssueMaterialsOnCutRelease: boolean;
+  allowNegativeMaterialStock: boolean;
   createdAt: string; // ISO
   updatedAt: string; // ISO
 }

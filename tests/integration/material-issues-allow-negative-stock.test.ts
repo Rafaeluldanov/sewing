@@ -84,8 +84,11 @@ describeWithDb(
 
     /**
      * Включить / отключить флаги hardening через прямую запись в БД.
-     * Сознательно не идём через PATCH `/api/company-settings` —
-     * публичный DTO эти поля не принимает (см. ТЗ §7 / docs/api.md §42).
+     * PATCH `/api/company-settings` теперь принимает эти поля (см.
+     * `docs/api.md §42` и блок «Материалы и склад» в
+     * `/admin/company-settings`), но писать напрямую проще: тест
+     * проверяет поведение `MaterialIssuesService` / `StockService`
+     * и не должен зависеть от HTTP-слоя настроек.
      */
     async function setSettings(values: {
       allowNegativeMaterialStock?: boolean;

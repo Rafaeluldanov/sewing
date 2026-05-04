@@ -133,20 +133,29 @@ describe('hardening «allowNegativeMaterialStock» — CompanySettingsService', 
 });
 
 // ---------------------------------------------------------------------------
-// 4. Public DTO `CompanySettings` НЕ принимает / НЕ отдаёт флаг
+// 4. Public DTO `CompanySettings` отдаёт и принимает флаг
 // ---------------------------------------------------------------------------
 
-describe('hardening «allowNegativeMaterialStock» — public DTO не утёк', () => {
-  test('shared CompanySettings DTO не содержит allowNegativeMaterialStock', () => {
+describe('hardening «allowNegativeMaterialStock» — public DTO', () => {
+  test('shared CompanySettings DTO содержит allowNegativeMaterialStock: boolean', () => {
     if (!exists(COMPANY_SETTINGS_DTO_PATH)) {
-      // Если файл переименован — fail с явным указанием путей,
-      // которые нужно поправить вручную.
       throw new Error(
         `Не найден ${COMPANY_SETTINGS_DTO_PATH} — обнови smoke-тест и docs/api.md §42`,
       );
     }
     const src = read(COMPANY_SETTINGS_DTO_PATH);
-    expect(src).not.toMatch(/allowNegativeMaterialStock/);
+    const dto =
+      src.match(/export interface CompanySettingsDto[\s\S]*?\n\}/)?.[0] ?? '';
+    expect(dto).toMatch(/allowNegativeMaterialStock\s*:\s*boolean/);
+  });
+
+  test('UpdateCompanySettingsSchema принимает allowNegativeMaterialStock', () => {
+    const src = read(COMPANY_SETTINGS_DTO_PATH);
+    const schemaBlock =
+      src.match(
+        /export const UpdateCompanySettingsSchema[\s\S]*?export type UpdateCompanySettingsDto/,
+      )?.[0] ?? '';
+    expect(schemaBlock).toContain('allowNegativeMaterialStock');
   });
 });
 

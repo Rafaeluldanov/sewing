@@ -67,16 +67,35 @@ const SETTINGS_FIELDS = [
   'settlementAccount',
 ] as const;
 
+/**
+ * Boolean-флаги блока «Материалы и склад». В отличие от строковых
+ * реквизитов, браузер не посылает unchecked-checkbox в `FormData`
+ * (stale `null`), поэтому явно различаем их через hidden-маркер
+ * `${name}__present`, который рендерит форма (см. settings-form.tsx).
+ */
+const SETTINGS_BOOLEAN_FIELDS = [
+  'autoIssueMaterialsOnCutRelease',
+  'allowNegativeMaterialStock',
+] as const;
+
 function buildSettingsDto(form: FormData): UpdateCompanySettingsDto {
   // Семантика — как в `clients/actions.ts::buildUpdateDto`: поле есть в
   // форме (`!== null`) → передаём как строку (включая пустую, которая
   // через preprocess превратится в `null`), иначе оставляем
   // `undefined` — backend такие не трогает.
-  const dto: Record<string, string | undefined> = {};
+  const dto: Record<string, string | boolean | undefined> = {};
   for (const key of SETTINGS_FIELDS) {
     const v = form.get(key);
     if (v === null) continue;
     dto[key] = String(v);
+  }
+  for (const key of SETTINGS_BOOLEAN_FIELDS) {
+    // hidden-marker `${key}__present` ставится формой всегда;
+    // `${key}` приходит только если чекбокс включён → браузер шлёт
+    // `on` (`checked`-default). Отсутствие marker-а означает, что
+    // блок не рендерился вовсе — поле не трогаем.
+    if (form.get(`${key}__present`) === null) continue;
+    dto[key] = form.get(key) !== null;
   }
   return dto as UpdateCompanySettingsDto;
 }
