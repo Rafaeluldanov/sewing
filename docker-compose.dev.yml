@@ -1,4 +1,10 @@
-version: '3.8'
+# Имя проекта Compose жёстко зафиксировано, чтобы запуск без `-p` не путал
+# dev и prod-стек (они должны использовать РАЗНЫЕ контейнеры и volume-ы).
+# До этой фиксации запуск `docker compose -f base.yml -f prod.yml` без `-p`
+# из этого каталога перецеплял `sewing-db-1` на чужой volume и данные
+# «терялись» — см. историю инцидента в чате.
+name: sewing
+
 include:
   - docker-compose.base.yml
 

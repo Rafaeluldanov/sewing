@@ -1,3 +1,7 @@
+# Имя проекта Compose жёстко зафиксировано, чтобы запуск без `-p` не путал
+# prod и dev-стек. См. комментарий в docker-compose.dev.yml.
+name: sewing-prod
+
 services:
   db:
     image: postgres:15
@@ -54,7 +58,12 @@ services:
       - prod-network
 
 volumes:
+  # Том prod-БД. external=true → Compose не создаёт и не удаляет его сам
+  # (защита от случайного `down -v`). Для нового сервера выполнить заранее:
+  #   docker volume create sewing-prod_prod_db_data
   prod_db_data:
+    external: true
+    name: sewing-prod_prod_db_data
 
 networks:
   prod-network:

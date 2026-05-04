@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   db:
     image: postgres:15
@@ -13,7 +12,13 @@ services:
       - app-network
 
 volumes:
+  # Том с данными Postgres. external=true → Compose НЕ создаёт и НЕ удаляет
+  # его сам: даже `docker compose down -v` не снесёт БД. Если разворачиваете
+  # окружение с нуля — заранее создайте том вручную:
+  #   docker volume create sewing_db_data        # для dev (project=sewing)
   db_data:
+    external: true
+    name: sewing_db_data
 
 networks:
   app-network:
