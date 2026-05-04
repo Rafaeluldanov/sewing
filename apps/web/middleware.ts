@@ -53,6 +53,15 @@ export function middleware(req: NextRequest): NextResponse {
   ) {
     return NextResponse.next();
   }
+  // Все `/api/*` отдаём как есть: на prod их раньше перехватывал nginx и
+  // в middleware они не доходили вовсе; теперь через Next.js (rewrites)
+  // они тоже идут НАПРЯМУЮ в NestJS, у которого свой AuthGuard. Без
+  // этого middleware редиректил бы даже `/api/auth/login` на `/login`
+  // и логин был бы невозможен — ровно та поломка, что и без `isApiPath`
+  // в проверке `SHOPFLOOR_MASTER` ниже.
+  if (isApiPath(pathname)) {
+    return NextResponse.next();
+  }
   const cookie = req.cookies.get(SESSION_COOKIE_NAME);
   if (!cookie) {
     const url = req.nextUrl.clone();
