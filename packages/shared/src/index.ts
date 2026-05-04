@@ -38,6 +38,7 @@ export * from './tech-cards';
 export * from './display-screens';
 export * from './master-calls';
 export * from './master-actions';
+export * from './employee-qr';
 export * from './cut-release-policy';
 export * from './order-cut-issue-rules';
 export * from './order-deadlines';

@@ -82,6 +82,29 @@
 Не плодите новые компоненты ради новых компонентов: для одноразовых
 секций достаточно `<AppSectionCard>` или `.card`.
 
+### 3.1. Unified shopfloor namespace
+
+`apps/web/components/shopfloor/index.ts` — единая точка входа для
+рабочих мест сотрудников. Это **не новая дизайн-система**: namespace
+ре-экспортит существующие канонические компоненты под единым префиксом
+`@/components/shopfloor` и добавляет несколько тонких функциональных
+обёрток над уже существующими CSS-классами `globals.css`.
+
+| Имя из namespace | Что это | Под капотом |
+|------------------|---------|-------------|
+| `ShopfloorShell` | Контейнер рабочего места | `<div className="seamstress-work">` (без новых стилей) |
+| `ScanPanel` | Скан-блок с заголовком и хинтом | `.scan-card.scan-card--simple` |
+| `ProductionEmptyState` | Пустое состояние | `.card.empty` |
+| `ProductionErrorState` | Ошибка с requestId/hint | `.error-box` |
+| `ProductionLoadingState` | Inline-loader | `<p>Загрузка…</p>` |
+| `RoleHeaderCard` / `WorkerStatusCard` / `ShopfloorPageTitle` | Шапка-профиль | алиасы того же `RoleHeaderCard` |
+| `StatusBadge` / `ProductionStatusBadge` | Pill-бейдж | алиасы `StatusBadge` |
+| `MobileActionCard`, `AppSectionCard`, `Icon`, `EmployeeQrButton` | Канонические компоненты | re-export из `apps/web/components/*` |
+| `QrCodeView` | Единый рендер QR на frontend (`qrcode.react` SVG) | `apps/web/components/qr/qr-code-view.tsx` — см. [`docs/qr-regression-recon.md`](./qr-regression-recon.md) |
+
+Подробности и решение «не плодить дубли»  — см.
+[`docs/design-cleanup-recon.md`](./design-cleanup-recon.md).
+
 ---
 
 ## 4. Главные экраны

@@ -44,6 +44,7 @@ import { CutReadinessModule } from './modules/cut-readiness/cut-readiness.module
 import { OrderApplicationsModule } from './modules/order-applications/order-applications.module.js';
 import { OrderMaterialArrivalsModule } from './modules/order-material-arrivals/order-material-arrivals.module.js';
 import { SizesModule } from './modules/sizes/sizes.module.js';
+import { MeModule } from './modules/me/me.module.js';
 
 @Module({
   imports: [
@@ -92,6 +93,7 @@ import { SizesModule } from './modules/sizes/sizes.module.js';
     OrderApplicationsModule,
     OrderMaterialArrivalsModule,
     SizesModule,
+    MeModule,
   ],
 })
 export class AppModule {}

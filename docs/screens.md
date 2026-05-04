@@ -22,6 +22,21 @@
 > сохранили scan-flow и крупные тач-цели — обновились только
 > заголовки и иконки primary-кнопок. Backend, API, server actions и
 > redirect-таблица не менялись.
+>
+> **Design cleanup (employee workplaces).** Все рабочие места
+> сотрудников (`/work`, `/qc`, `/wto`, `/packing`, `/master`,
+> `/shopfloor/display`) переведены на новый дизайн ещё в Шаге 13 +
+> visual layer v2. Чтобы новые экраны имели один очевидный entry-point
+> и не дублировали уже существующие компоненты, заведён unified
+> namespace `apps/web/components/shopfloor/` — re-export канонических
+> блоков (`RoleHeaderCard`, `StatusBadge`, `MobileActionCard`,
+> `AppSectionCard`, `EmployeeQrButton`) под алиасами из ТЗ
+> (`WorkerStatusCard`, `ProductionStatusBadge`, …) + три тонких
+> функциональных wrapper'а (`ShopfloorShell`, `ScanPanel`,
+> `Production{Empty,Error,Loading}State`) над существующими CSS-классами
+> без новых стилей. Подробности и план — см.
+> [`docs/design-cleanup-recon.md`](./design-cleanup-recon.md) и
+> [`docs/ui-mobile.md`](./ui-mobile.md).
 
 ---
 
@@ -1386,6 +1401,16 @@ Source of truth: `apps/web/app/master/passport-actions-sheet.tsx`,
 - На `/admin/employees/:id` добавлены кнопки «QR сотрудника» (PNG)
   и «Печать QR» (HTML), плюс preview QR в карточке. Существующие QR
   оборудования и ячеек не трогаем.
+
+> **Frontend QR render централизован.** Любой клиентский рендер QR
+> на frontend идёт через единый компонент
+> [`QrCodeView`](../apps/web/components/qr/qr-code-view.tsx) — он
+> единственный импортирует `qrcode.react` (named export `QRCodeSVG`),
+> у него встроен fallback «QR-код недоступен» для пустого/`null`-payload'а
+> и регрессионный smoke
+> [`tests/smoke/qr-rendering-regression.smoke.test.ts`](../tests/smoke/qr-rendering-regression.smoke.test.ts).
+> Бэкендовые `<img src="/api/.../qr">` (печатные этикетки/admin-preview)
+> остаются как есть — это другой контур (см. `docs/qr-regression-recon.md`).
 
 ---
 

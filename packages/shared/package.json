@@ -35,6 +35,7 @@
     "./display-screens": "./src/display-screens.ts",
     "./master-calls": "./src/master-calls.ts",
     "./master-actions": "./src/master-actions.ts",
+    "./employee-qr": "./src/employee-qr.ts",
     "./cut-release-policy": "./src/cut-release-policy.ts",
     "./order-deadlines": "./src/order-deadlines.ts",
     "./material-roles": "./src/material-roles.ts",
