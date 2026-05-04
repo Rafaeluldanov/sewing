@@ -94,13 +94,6 @@ describe('canSeeEmployeeQrButton', () => {
 describe('EmployeeQrButton component', () => {
   const SRC = 'apps/web/components/employees/employee-qr-button.tsx';
 
-<<<<<<< HEAD
-  test('client component, использует qrcode.react для рендера QR', () => {
-    const src = readSrc(SRC);
-    expect(src).toMatch(/^'use client'/);
-    expect(src).toMatch(/from 'qrcode\.react'/);
-    expect(src).toMatch(/<QRCodeCanvas\b/);
-=======
   test('client component, рендерит QR через единый QrCodeView', () => {
     const src = readSrc(SRC);
     expect(src).toMatch(/^'use client'/);
@@ -112,7 +105,6 @@ describe('EmployeeQrButton component', () => {
     expect(src).toMatch(/from '@\/components\/qr'/);
     expect(src).toMatch(/<QrCodeView\b/);
     expect(src).not.toMatch(/from 'qrcode\.react'/);
->>>>>>> 88554a2aa2955493b346a1883607fb420def843e
   });
 
   test('загружает QR через server action getMyEmployeeQrAction', () => {
@@ -144,10 +136,6 @@ describe('EmployeeQrButton component', () => {
     // data-testid-ы пригодятся для будущего e2e.
     expect(src).toContain('data-testid="employee-qr-open"');
     expect(src).toContain('data-testid="employee-qr-modal"');
-<<<<<<< HEAD
-    expect(src).toContain('data-testid="employee-qr-canvas"');
-=======
->>>>>>> 88554a2aa2955493b346a1883607fb420def843e
   });
 });
 

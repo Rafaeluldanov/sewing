@@ -100,10 +100,7 @@
 | `RoleHeaderCard` / `WorkerStatusCard` / `ShopfloorPageTitle` | Шапка-профиль | алиасы того же `RoleHeaderCard` |
 | `StatusBadge` / `ProductionStatusBadge` | Pill-бейдж | алиасы `StatusBadge` |
 | `MobileActionCard`, `AppSectionCard`, `Icon`, `EmployeeQrButton` | Канонические компоненты | re-export из `apps/web/components/*` |
-<<<<<<< HEAD
-=======
 | `QrCodeView` | Единый рендер QR на frontend (`qrcode.react` SVG) | `apps/web/components/qr/qr-code-view.tsx` — см. [`docs/qr-regression-recon.md`](./qr-regression-recon.md) |
->>>>>>> 88554a2aa2955493b346a1883607fb420def843e
 
 Подробности и решение «не плодить дубли»  — см.
 [`docs/design-cleanup-recon.md`](./design-cleanup-recon.md).
