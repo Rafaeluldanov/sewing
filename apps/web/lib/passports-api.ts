@@ -9,10 +9,12 @@
 import type {
   CellDetailDto,
   CreatePassportDto,
+  MyPassportListItem,
   PassportDetailDto,
   PassportListItemDto,
   PassportPlacementResultDto,
   PlacePassportDto,
+  UpdatePassportDto,
 } from '@sewing/shared/passports';
 import { apiFetch } from './api';
 
@@ -27,6 +29,35 @@ export function createPassport(
 
 export function getPassport(id: string): Promise<PassportDetailDto> {
   return apiFetch<PassportDetailDto>(`/passports/${encodeURIComponent(id)}`);
+}
+
+/**
+ * `PATCH /api/passports/:id` — обновление полей паспорта силами
+ * автора (CUTTER_ASSISTANT/CUTTER) или менеджера. Backend разрешает
+ * только пока паспорт ещё в статусе CREATED, без ячейки и без
+ * событий кроме CREATED. См. `PassportsService.update`.
+ */
+export function updatePassport(
+  id: string,
+  body: UpdatePassportDto,
+): Promise<PassportDetailDto> {
+  return apiFetch<PassportDetailDto>(`/passports/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    body,
+  });
+}
+
+/**
+ * `GET /api/passports/my-recent` — последние паспорта, выпущенные
+ * самим actor-ом. Используется страницей `/work/passports`. Backend
+ * сужает RBAC до `CUTTER_ASSISTANT` / `CUTTER` / `SHOP_MANAGER` /
+ * `ADMIN`; для всех «нерабочих» ролей вызов вернёт 403, что мы здесь
+ * не глотаем — пусть страница сама решит, как себя вести.
+ */
+export function listMyRecentPassports(): Promise<MyPassportListItem[]> {
+  return apiFetch<MyPassportListItem[]>('/passports/my-recent', {
+    cache: 'no-store',
+  });
 }
 
 export function listOrderPassports(

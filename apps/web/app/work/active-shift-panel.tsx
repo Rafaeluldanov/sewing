@@ -262,6 +262,23 @@ export function CutterAssistantWorkPanel() {
         >
           Выпустить паспорт
         </Link>
+        {/*
+         * Вторая action-кнопка того же блока — «Выпущенные паспорта».
+         * Открывает список последних выпусков самого помощника
+         * (`/work/passports`, источник истины — `GET /api/passports/my-recent`),
+         * где можно отредактировать или удалить только что созданный
+         * паспорт, пока он ещё не уехал в производство (status=CREATED,
+         * без ячейки и без событий кроме CREATED). Ниже primary-CTA
+         * сознательно: серийный happy-path — «выпустить → следующий
+         * заказ», правка — корректирующее действие.
+         */}
+        <Link
+          className="btn btn-block scan-card__secondary-action"
+          href="/work/passports"
+          prefetch={false}
+        >
+          Выпущенные паспорта
+        </Link>
       </div>
 
       <div className="scan-card scan-card--simple">

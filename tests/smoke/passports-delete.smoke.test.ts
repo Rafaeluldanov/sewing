@@ -20,32 +20,48 @@ function readSrc(relativePath: string): string {
   return readFileSync(path.join(repoRoot, relativePath), 'utf8');
 }
 
-describe('PassportsController — DELETE /:id под SHOP_MANAGER/ADMIN', () => {
-  test('контроллер выставляет @Delete(":id") с RBAC SHOP_MANAGER+ADMIN и 204', () => {
+describe('PassportsController — DELETE /:id (manager + self-cancel cutter)', () => {
+  test('контроллер выставляет @Delete(":id") с расширенным RBAC и 204', () => {
     const src = readSrc('apps/api/src/modules/passports/passports.controller.ts');
     expect(src).toMatch(/@Delete\(['"]:id['"]\)/);
-    expect(src).toMatch(/@Roles\(['"]SHOP_MANAGER['"],\s*['"]ADMIN['"]\)/);
+    // RBAC расширен: помощник раскройщика и раскройщик удаляют свои
+    // только что выпущенные паспорта (`creatorId === me`, status=CREATED,
+    // без ячейки/событий) — backend разделяет ветки по `actorRole`.
+    expect(src).toMatch(
+      /@Roles\(['"]CUTTER['"],\s*['"]CUTTER_ASSISTANT['"],\s*['"]SHOP_MANAGER['"],\s*['"]ADMIN['"]\)/,
+    );
     expect(src).toMatch(/@HttpCode\(204\)/);
-    expect(src).toMatch(/this\.passports\.delete\(id,\s*user\.employeeId\)/);
+    // Третий аргумент — actor.role, чтобы сервис знал, какую ветку
+    // блокеров применить (manager strict vs self-cancel relaxed).
+    expect(src).toMatch(
+      /this\.passports\.delete\(\s*id,\s*user\.employeeId,\s*user\.role\s*\)/,
+    );
   });
 
-  test('PassportsService.delete блокирует BoxItem / APPROVED earnings / POSTED MaterialIssue', () => {
+  test('PassportsService.delete блокирует BoxItem / POSTED MaterialIssue для всех + APPROVED earnings только для менеджеров', () => {
     const src = readSrc('apps/api/src/modules/passports/passports.service.ts');
-    expect(src).toMatch(/async delete\(id:\s*string,\s*deleterEmployeeId:\s*string\)/);
-    // Импорт всех трёх блокер-классов
+    expect(src).toMatch(
+      /async delete\(\s*id:\s*string,\s*deleterEmployeeId:\s*string,\s*actorRole\?:\s*Role,?\s*\)/,
+    );
+    // Импорт всех блокер-классов + новых для self-cancel ветки
     expect(src).toMatch(/PassportPackedDeleteException/);
     expect(src).toMatch(/PassportHasApprovedEarningsException/);
     expect(src).toMatch(/PassportHasPostedMaterialIssueException/);
+    expect(src).toMatch(/PassportNotEditableException/);
+    expect(src).toMatch(/PassportNotYoursToEditException/);
     // Использование каждого — в `throw new …` внутри метода
     expect(src).toMatch(/throw new PassportPackedDeleteException/);
     expect(src).toMatch(/throw new PassportHasApprovedEarningsException/);
     expect(src).toMatch(/throw new PassportHasPostedMaterialIssueException/);
+    expect(src).toMatch(/throw new PassportNotEditableException/);
+    expect(src).toMatch(/throw new PassportNotYoursToEditException/);
     // Каскад в транзакции
     expect(src).toMatch(/passportEvent\.deleteMany/);
     expect(src).toMatch(/operationEntry\.deleteMany/);
     expect(src).toMatch(/passportDefect\.deleteMany/);
-    // AuditLog с правильным event-неймом
+    // AuditLog с правильным event-неймом и ролью actor-а в payload
     expect(src).toMatch(/event:\s*['"]PASSPORT_DELETED['"]/);
+    expect(src).toMatch(/actorRole:\s*actorRole\s*\?\?\s*null/);
   });
 
   test('коды ошибок объявлены в common/errors.ts с CONFLICT-статусом', () => {

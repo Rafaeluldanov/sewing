@@ -84,6 +84,50 @@ export const CreatePassportSchema = z.object({
 export type CreatePassportDto = z.infer<typeof CreatePassportSchema>;
 
 /**
+ * Тело `PATCH /api/passports/:id` — редактирование полей паспорта,
+ * пока он в статусе `CREATED` и ещё не «уехал» в производство.
+ *
+ * Зачем: помощник раскройщика на /work/passports может ошибиться при
+ * выпуске (не тот размер / рулон / qty / раскройщик / дата кроя) и
+ * хочет поправить, не пересоздавая паспорт. Backend разрешает edit
+ * только если паспорт ещё «нетронут» — нет ячейки, нет упаковки, нет
+ * `PassportEvent` кроме `CREATED`. Иначе теряются инварианты payroll
+ * и cell-content. См. `PassportsService.update`,
+ * `docs/domain.md §7.8a «Редактирование паспорта»`.
+ *
+ * Все поля опциональны: backend меняет только переданные и оставляет
+ * остальные. Хотя бы одно поле должно быть передано — иначе нет
+ * смысла дёргать PATCH (нет операции).
+ */
+export const UpdatePassportSchema = z
+  .object({
+    sizeId: z.string().min(1, 'sizeId обязателен').optional(),
+    cutDate: DateStringSchema.optional(),
+    qtyCut: z
+      .number({ invalid_type_error: 'qtyCut должен быть числом' })
+      .int('qtyCut должен быть целым')
+      .positive('qtyCut должен быть > 0')
+      .optional(),
+    rollNumber: z
+      .string()
+      .trim()
+      .min(1, 'Номер рулона обязателен')
+      .max(64, 'Номер рулона слишком длинный')
+      .optional(),
+    cutterId: z.string().min(1, 'cutterId обязателен').optional(),
+  })
+  .refine(
+    (v) =>
+      v.sizeId !== undefined ||
+      v.cutDate !== undefined ||
+      v.qtyCut !== undefined ||
+      v.rollNumber !== undefined ||
+      v.cutterId !== undefined,
+    { message: 'Передайте хотя бы одно поле для изменения' },
+  );
+export type UpdatePassportDto = z.infer<typeof UpdatePassportSchema>;
+
+/**
  * Тело `POST /api/passports/:id/place`.
  *
  * Поддерживаем два варианта идентификации ячейки: по `cellId` (из
@@ -246,4 +290,48 @@ export interface PassportDetailDto extends PassportListItemDto {
 export interface PassportPlacementResultDto {
   passport: PassportDetailDto;
   cell: CellDetailDto;
+}
+
+/**
+ * Причина, по которой паспорт нельзя править/удалять помощником
+ * раскройщика на /work/passports. Используется как машинный код,
+ * чтобы UI мог показать локализованную подсказку и не повторял текст
+ * backend-исключения (`PASSPORT_NOT_EDITABLE`).
+ */
+export type PassportEditableBlock =
+  | 'STATUS_NOT_CREATED'
+  | 'PLACED_IN_CELL'
+  | 'HAS_EVENTS_BEYOND_CREATED';
+
+/**
+ * Строка для страницы «Выпущенные паспорта» помощника раскройщика.
+ * Возвращается `GET /api/passports/my-recent`.
+ *
+ * Минимально достаточный срез для серийной правки/удаления: номер,
+ * заказ, размер, qty, дата кроя — и `editable`-флаг, чтобы UI
+ * знал, на каких строках можно показывать кнопки.
+ */
+export interface MyPassportListItem {
+  id: string;
+  number: string;
+  status: PassportStatus;
+  cutDate: string;
+  createdAt: string;
+  qtyCut: number;
+  qtyPlan: number;
+  rollNumber: string;
+  sizeId: string;
+  sizeCode: string;
+  sizeSortOrder: number;
+  orderId: string;
+  orderNumber: string;
+  productName: string | null;
+  currentCell: CellLiteDto | null;
+  /**
+   * Можно ли отредактировать или удалить паспорт силами автора.
+   * `true` ↔ `editableBlockReason === null`.
+   */
+  editable: boolean;
+  /** Причина блокировки редактирования (machine-readable код). */
+  editableBlockReason: PassportEditableBlock | null;
 }
