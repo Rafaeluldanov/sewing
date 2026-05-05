@@ -339,5 +339,13 @@ export async function deletePassportFromDetailAction(
   revalidatePath(`/orders/${orderId}`);
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath(`/passports/${passportId}`);
-  redirect(`/orders/${orderId}`);
+  // Возвращаем менеджера на admin-карточку заказа, вкладка
+  // «Паспорта» (см. `OrderPassportsTab`,
+  // `apps/web/app/admin/orders/[id]/page.tsx`). Управленческое
+  // удаление паспорта живёт под admin-RBAC, поэтому именно admin-
+  // карточка — правильный «куда вернуться»: пользователь сразу
+  // видит обновлённый список без удалённой строки. Раньше уходило
+  // в legacy `/orders/<id>` — там SSR подтягивал кэш до revalidate
+  // и на пару секунд показывал «битый» паспорт.
+  redirect(`/admin/orders/${orderId}?tab=passports`);
 }

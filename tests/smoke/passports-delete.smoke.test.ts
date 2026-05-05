@@ -73,7 +73,7 @@ describe('Frontend — server action и кнопки удаления', () => {
     expect(src).toMatch(/\/passports\/\$\{encodeURIComponent\(id\)\}/);
   });
 
-  test('actions.ts: deletePassportAction (без редиректа) и deletePassportFromDetailAction (с редиректом)', () => {
+  test('actions.ts: deletePassportAction (без редиректа) и deletePassportFromDetailAction (с редиректом на admin-таб «Паспорта»)', () => {
     const src = readSrc('apps/web/app/orders/[id]/passports/actions.ts');
     expect(src).toMatch(
       /export async function deletePassportAction\(\s*passportId:\s*string,\s*orderId:\s*string,?\s*\)/,
@@ -81,10 +81,19 @@ describe('Frontend — server action и кнопки удаления', () => {
     expect(src).toMatch(
       /export async function deletePassportFromDetailAction\(/,
     );
-    // Оба ревалидируют список паспортов в карточке заказа
+    // Оба ревалидируют список паспортов в карточке заказа (admin
+    // и legacy), чтобы и admin-tab, и legacy-таблица обновились.
     expect(src).toMatch(/revalidatePath\(`\/orders\/\$\{orderId\}`\)/);
-    // И ровно detail-вариант редиректит обратно в заказ
-    expect(src).toMatch(/redirect\(`\/orders\/\$\{orderId\}`\)/);
+    expect(src).toMatch(/revalidatePath\(`\/admin\/orders\/\$\{orderId\}`\)/);
+    // Detail-вариант редиректит на admin-карточку, вкладка
+    // «Паспорта» — это и есть «предыдущая страница со списком
+    // паспортов» из ТЗ. Legacy `/orders/<id>` после удаления
+    // показывал кэш с уже удалённой строкой — отказались.
+    expect(src).toMatch(
+      /redirect\(`\/admin\/orders\/\$\{orderId\}\?tab=passports`\)/,
+    );
+    // Защита от регресса: больше НЕ редиректим в legacy-карточку.
+    expect(src).not.toMatch(/redirect\(`\/orders\/\$\{orderId\}`\)/);
   });
 
   test('таблица паспортов на /orders/[id] получает canDelete и рендерит DeletePassportButton', () => {
@@ -127,5 +136,31 @@ describe('Frontend — server action и кнопки удаления', () => {
     const src = readSrc('apps/web/components/icon.tsx');
     expect(src).toMatch(/\|\s*['"]trash['"]/);
     expect(src).toMatch(/trash:\s*\{/);
+  });
+});
+
+describe('Admin /admin/orders/[id]?tab=passports — корзинка в OrderPassportsTab', () => {
+  test('OrderPassportsTab принимает canDelete и рендерит DeletePassportButton после колонки «Крой»', () => {
+    const src = readSrc(
+      'apps/web/components/orders/view/tabs/order-passports-tab.tsx',
+    );
+    expect(src).toMatch(/import\s*\{\s*DeletePassportButton\s*\}/);
+    expect(src).toMatch(/canDelete:\s*boolean/);
+    expect(src).toMatch(/<DeletePassportButton\b/);
+    expect(src).toMatch(/variant=['"]icon-only['"]/);
+    // Колонка с корзинкой стоит ПОСЛЕ колонки `cutDate` (Крой) —
+    // именно так из ТЗ: «в конце каждого паспорта после столбца
+    // крой». Проверяем порядок текстуально (cutDate-блок раньше
+    // delete-блока).
+    const cutDateIdx = src.indexOf("key: 'cutDate'");
+    const deleteIdx = src.indexOf("key: 'delete'");
+    expect(cutDateIdx).toBeGreaterThan(0);
+    expect(deleteIdx).toBeGreaterThan(0);
+    expect(cutDateIdx).toBeLessThan(deleteIdx);
+  });
+
+  test('Серверная страница /admin/orders/[id] прокидывает canDelete={isManager}', () => {
+    const src = readSrc('apps/web/app/admin/orders/[id]/page.tsx');
+    expect(src).toMatch(/<OrderPassportsTab\b[^>]*canDelete=\{isManager\}/s);
   });
 });

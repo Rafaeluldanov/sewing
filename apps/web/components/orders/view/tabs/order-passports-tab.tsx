@@ -45,6 +45,7 @@ import {
 } from '@/components/admin';
 import { PASSPORT_STATUS_LABELS } from '@/lib/passport-status-labels';
 import { statusTone } from '@/lib/admin-labels';
+import { DeletePassportButton } from '@/app/orders/[id]/passports/delete-passport-button';
 
 interface Props {
   orderId: string;
@@ -52,6 +53,14 @@ interface Props {
   routeSteps: OrderRouteStepDto[];
   /** `true`, если у заказа можно выпустить паспорт (status = IN_PRODUCTION). */
   canIssuePassport: boolean;
+  /**
+   * `true`, если у пользователя есть право удалять паспорта (см.
+   * `PassportsService.delete` — `SHOP_MANAGER` / `ADMIN`). Когда
+   * `true`, в таблице после колонки «Крой» появляется столбец с
+   * корзинкой; backend в любом случае закрыт `@Roles`, флаг здесь —
+   * чтобы не рисовать кнопку остальным.
+   */
+  canDelete: boolean;
 }
 
 interface SizeOption {
@@ -79,6 +88,7 @@ export function OrderPassportsTab({
   passports,
   routeSteps,
   canIssuePassport,
+  canDelete,
 }: Props) {
   const [statusFilter, setStatusFilter] = useState<PassportStatus | ''>('');
   const [sizeFilter, setSizeFilter] = useState<string>('');
@@ -190,6 +200,28 @@ export function OrderPassportsTab({
       header: 'Крой',
       render: (p) => formatDate(p.cutDate),
     },
+    // Управленческое удаление паспорта (см.
+    // `PassportsService.delete`, `docs/domain.md §7.8`). Колонка
+    // добавляется только для менеджерских ролей, чтобы остальным
+    // пользователям не маячила корзинка, на которую backend всё
+    // равно вернёт 403.
+    ...(canDelete
+      ? [
+          {
+            key: 'delete' as const,
+            header: '',
+            align: 'right' as const,
+            render: (p: PassportListItemDto) => (
+              <DeletePassportButton
+                passportId={p.id}
+                orderId={orderId}
+                passportNumber={p.number}
+                variant="icon-only"
+              />
+            ),
+          },
+        ]
+      : []),
   ];
 
   return (
