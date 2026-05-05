@@ -13,12 +13,15 @@ import {
 import {
   type CellDetailDto,
   type CreatePassportDto,
+  type MyPassportListItem,
   type PassportDetailDto,
+  type PassportEditableBlock,
   type PassportListItemDto,
   type PassportPlacementResultDto,
   type PassportRouteHintDto,
   type PassportRouteStepLiteDto,
   type PlacePassportDto,
+  type UpdatePassportDto,
 } from '@sewing/shared/passports';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
@@ -35,11 +38,13 @@ import {
   PassportCuttingClosedException,
   PassportHasApprovedEarningsException,
   PassportHasPostedMaterialIssueException,
+  PassportNotEditableException,
   PassportNotInCellException,
   PassportNotInProgressException,
   PassportNotPlaceableException,
   PassportNotQcPassedException,
   PassportNotYoursException,
+  PassportNotYoursToEditException,
   PassportOrderNotInProductionException,
   PassportPackedDeleteException,
   PassportQtyExceedsRemainingException,
@@ -321,6 +326,330 @@ export class PassportsService {
   }
 
   // -------------------------------------------------------------------------
+  // LIST MINE (страница «Выпущенные паспорта» помощника раскройщика,
+  // см. `app/work/passports/page.tsx`).
+  //
+  // Контракт: возвращает свежие паспорта, которые выпустил сам actor
+  // (`creatorId === employeeId`). Без пагинации (на /work показываем
+  // последние 100 — этого достаточно для серийного выпуска MVP), с
+  // полями `editable` / `editableBlockReason`, чтобы UI рисовал кнопки
+  // «Редактировать»/«Удалить» как enabled только для пригодных
+  // паспортов и не падал в backend-ошибку при попытке отредактировать
+  // уже размещённый паспорт.
+  // -------------------------------------------------------------------------
+
+  /**
+   * Список последних паспортов, выпущенных самим actor-ом.
+   *
+   * Используется страницей `/work/passports` для роли
+   * `CUTTER_ASSISTANT` / `CUTTER`. Менеджеры/админ всё равно видят
+   * чужие паспорта на admin-карточке заказа — отдельной страницы
+   * списка для них нет.
+   *
+   * Поле `editable` отражает текущее состояние backend-инвариантов
+   * (status = CREATED, currentCellId = null, нет PassportEvent кроме
+   * CREATED). UI этим полем гасит кнопки на строках, которые
+   * «двинулись», и показывает причину пользователю, а не глухую
+   * 409-ку из PATCH/DELETE.
+   */
+  async listMineRecent(employeeId: string): Promise<MyPassportListItem[]> {
+    const rows = await this.prisma.passport.findMany({
+      where: { creatorId: employeeId },
+      include: {
+        size: true,
+        product: { select: { id: true, name: true } },
+        order: {
+          select: { id: true, number: true },
+        },
+        currentCell: { select: { id: true, code: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
+    if (rows.length === 0) return [];
+
+    // Один общий select по PassportEvent, чтобы понять для каждого
+    // паспорта, есть ли события кроме CREATED. На MVP это самый
+    // дешёвый способ — последовательные findFirst-ы давали бы N+1.
+    const eventCounts = await this.prisma.passportEvent.groupBy({
+      by: ['passportId'],
+      where: {
+        passportId: { in: rows.map((r) => r.id) },
+        type: { not: PassportEventType.CREATED },
+      },
+      _count: { _all: true },
+    });
+    const hasOtherEvents = new Map(
+      eventCounts.map((g) => [g.passportId, g._count._all > 0]),
+    );
+
+    return rows.map((r) => {
+      const blocked = this.editableBlockReason(
+        {
+          status: r.status,
+          currentCellId: r.currentCellId,
+        },
+        hasOtherEvents.get(r.id) ?? false,
+      );
+      return {
+        id: r.id,
+        number: r.number,
+        status: r.status,
+        cutDate: r.cutDate.toISOString(),
+        createdAt: r.createdAt.toISOString(),
+        qtyCut: r.qtyCut,
+        qtyPlan: r.qtyPlan,
+        rollNumber: r.rollNumber,
+        sizeId: r.sizeId,
+        sizeCode: r.size.code,
+        sizeSortOrder: r.size.sortOrder,
+        orderId: r.order.id,
+        orderNumber: r.order.number,
+        productName: r.product?.name ?? null,
+        currentCell: r.currentCell
+          ? { id: r.currentCell.id, code: r.currentCell.code }
+          : null,
+        editable: blocked === null,
+        editableBlockReason: blocked,
+      };
+    });
+  }
+
+  // -------------------------------------------------------------------------
+  // UPDATE (редактирование полей паспорта помощником/раскройщиком/менеджером,
+  // см. `docs/domain.md §7.8a «Редактирование паспорта»`).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Редактирование полей паспорта, пока он ещё не «уехал» в
+   * производство.
+   *
+   * RBAC enforce-ит контроллер; здесь дополнительно проверяем
+   * «свой/не-свой» для не-менеджерских ролей и инварианты
+   * редактируемости (status, ячейка, события).
+   *
+   * Что меняем (опционально, любая комбинация):
+   *   - `sizeId` — должен быть в строках заказа; пересчитываем
+   *     immediate-начисление раскройщика (новый sizeId → новая
+   *     ставка по `OperationRateBySize`);
+   *   - `cutDate`, `rollNumber` — простые update-ы, не трогают
+   *     payroll;
+   *   - `qtyCut` — должно влезать в остаток плана размера (с учётом
+   *     уже выпущенных паспортов, исключая редактируемый); параллельно
+   *     пересчитываем `qtyPlan` / `qtyGood` (на момент CREATED они
+   *     равны `qtyCut`, см. `create()`) и immediate-начисление;
+   *   - `cutterId` — новый раскройщик (active, role=CUTTER); сносим
+   *     старое immediate-начисление и создаём новое уже на нового.
+   *
+   * Транзакция:
+   *   1. Удаляем все `OperationEntry` этого паспорта с
+   *      `sourceEventType = PASSPORT_CREATED` (immediate-cutter).
+   *      Других `APPROVED` начислений на статусе CREATED не бывает —
+   *      см. JSDoc у `delete()` и проверку `editable*` выше.
+   *   2. Обновляем `Passport`.
+   *   3. Обновляем CREATED `PassportEvent` (qty + payload) — это даёт
+   *      честный аудит «помощник поправил qtyCut/rollNumber» без
+   *      нового events-таймлайна.
+   *   4. Перезапускаем `EarningsService.createImmediateForCutter` с
+   *      новыми параметрами (qty/sizeId/cutterId).
+   *   5. Audit log `PASSPORT_UPDATED` с before/after-снэпшотом.
+   */
+  async update(
+    id: string,
+    dto: UpdatePassportDto,
+    actor: { employeeId: string; role: Role },
+  ): Promise<PassportDetailDto> {
+    const passport = await this.prisma.passport.findUnique({
+      where: { id },
+      include: {
+        order: {
+          include: { items: true },
+        },
+      },
+    });
+    if (!passport) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PASSPORT_NOT_FOUND',
+        message: 'Паспорт не найден',
+      });
+    }
+
+    const isManager = actor.role === Role.SHOP_MANAGER || actor.role === Role.ADMIN;
+    if (!isManager && passport.creatorId !== actor.employeeId) {
+      throw new PassportNotYoursToEditException();
+    }
+
+    const otherEvent = await this.prisma.passportEvent.findFirst({
+      where: { passportId: id, type: { not: PassportEventType.CREATED } },
+      select: { id: true },
+    });
+    const blocked = this.editableBlockReason(
+      { status: passport.status, currentCellId: passport.currentCellId },
+      Boolean(otherEvent),
+    );
+    if (blocked !== null) {
+      throw new PassportNotEditableException();
+    }
+
+    if (
+      passport.order.status === OrderStatus.DONE ||
+      passport.order.status === OrderStatus.CANCELLED ||
+      passport.order.status !== OrderStatus.IN_PRODUCTION
+    ) {
+      throw new PassportOrderNotInProductionException();
+    }
+
+    const nextSizeId = dto.sizeId ?? passport.sizeId;
+    const orderItem = passport.order.items.find((it) => it.sizeId === nextSizeId);
+    if (!orderItem) {
+      throw new PassportSizeNotInOrderException();
+    }
+
+    if (dto.sizeId && dto.sizeId !== passport.sizeId) {
+      // Меняем размер — нужно проверить, что в новой строке нет
+      // подтверждённой заявки на закрытие раскроя.
+      const closed = await this.closure.hasApprovedClosure(
+        passport.orderId,
+        orderItem.productId,
+        nextSizeId,
+      );
+      if (closed) throw new PassportCuttingClosedException();
+    }
+
+    const nextQty = dto.qtyCut ?? passport.qtyCut;
+    if (nextQty !== passport.qtyCut || nextSizeId !== passport.sizeId) {
+      // Проверяем remaining по размеру, исключая сам редактируемый
+      // паспорт. На статусе CREATED CANCELLED-братьев у него нет, но
+      // для корректности считаем как в create().
+      const others = await this.prisma.passport.findMany({
+        where: {
+          orderId: passport.orderId,
+          sizeId: nextSizeId,
+          status: { not: PassportStatus.CANCELLED },
+          NOT: { id: passport.id },
+        },
+        select: { qtyCut: true },
+      });
+      const cutByThisSize = others.reduce((s, p) => s + p.qtyCut, 0);
+      const remaining = orderItem.qtyPlan - cutByThisSize;
+      if (nextQty > remaining) {
+        throw new PassportQtyExceedsRemainingException(Math.max(remaining, 0));
+      }
+    }
+
+    // Резолвим раскройщика (active, role=CUTTER). Если поле не
+    // прислали — оставляем прежнего. Прислали тот же id — тоже
+    // дополнительно валидируем, чтобы UI не давал сохранять
+    // деактивированную учётку.
+    const nextCutterId = dto.cutterId ?? passport.cutterId;
+    const nextCutter = await this.prisma.employee.findUnique({
+      where: { id: nextCutterId },
+      select: { id: true, role: true, active: true },
+    });
+    if (!nextCutter || nextCutter.role !== Role.CUTTER) {
+      throw new CutterNotFoundException();
+    }
+    if (!nextCutter.active) {
+      throw new CutterInactiveException();
+    }
+
+    const before = {
+      sizeId: passport.sizeId,
+      cutDate: passport.cutDate.toISOString(),
+      qtyCut: passport.qtyCut,
+      rollNumber: passport.rollNumber,
+      cutterId: passport.cutterId,
+    };
+    const after = {
+      sizeId: nextSizeId,
+      cutDate: dto.cutDate ?? passport.cutDate.toISOString(),
+      qtyCut: nextQty,
+      rollNumber: dto.rollNumber ?? passport.rollNumber,
+      cutterId: nextCutter.id,
+    };
+
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Снимаем immediate-начисления раскройщика (если были).
+      //    На статусе CREATED других APPROVED-entries не бывает.
+      await tx.operationEntry.deleteMany({
+        where: { passportId: id, sourceEventType: 'PASSPORT_CREATED' },
+      });
+
+      // 2. Обновляем сам паспорт. На CREATED qtyPlan и qtyGood равны
+      //    qtyCut (см. create()), поэтому при изменении qtyCut они
+      //    тоже меняются — иначе ОТК-формула qtyGood = qtyCut - qtyDefect
+      //    для нового количества развалилась бы.
+      await tx.passport.update({
+        where: { id },
+        data: {
+          sizeId: after.sizeId,
+          cutDate: new Date(after.cutDate),
+          qtyCut: after.qtyCut,
+          qtyPlan: after.qtyCut,
+          qtyGood: after.qtyCut,
+          rollNumber: after.rollNumber,
+          cutterId: after.cutterId,
+          // Если меняется размер — нормализуем `color` под изделие
+          // строки (в create() именно так и делается, см. снимок).
+          // На MVP `Order.color` не зависит от размера, поэтому
+          // фактически это no-op; оставлено для симметрии с create().
+        },
+      });
+
+      // 3. Обновляем CREATED PassportEvent — историю не множим, но
+      //    и снэпшот «что было выпущено» не сохраняем устаревшим.
+      await tx.passportEvent.updateMany({
+        where: { passportId: id, type: PassportEventType.CREATED },
+        data: {
+          qty: after.qtyCut,
+          employeeId: passport.creatorId,
+          payload: {
+            rollNumber: after.rollNumber,
+            color: passport.color,
+            updatedByEmployeeId: actor.employeeId,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      });
+
+      // 4. Пересоздаём immediate-начисление раскройщика. Контракт
+      //    тот же, что в create() — тот же service, та же транзакция.
+      await this.earnings.createImmediateForCutter(tx, {
+        passportId: id,
+        cutterId: after.cutterId,
+        sizeId: after.sizeId,
+        productId: orderItem.productId,
+        qty: after.qtyCut,
+      });
+
+      // 5. Audit. Минимальный полезный набор — before/after по
+      //    редактируемым полям + actor.
+      await this.audit.log(
+        {
+          event: 'PASSPORT_UPDATED',
+          entityType: 'PASSPORT',
+          entityId: id,
+          employeeId: actor.employeeId,
+          payload: {
+            number: passport.number,
+            orderId: passport.orderId,
+            before,
+            after,
+          },
+        },
+        tx,
+      );
+    });
+
+    this.logger.log(
+      `event=passport.update passportId=${id} actorId=${actor.employeeId} ` +
+        `qtyCut=${after.qtyCut} sizeId=${after.sizeId} cutterId=${after.cutterId}`,
+    );
+    return this.getOne(id);
+  }
+
+  // -------------------------------------------------------------------------
   // DELETE (управленческое удаление паспорта, см. `docs/domain.md §7.8`)
   // -------------------------------------------------------------------------
 
@@ -357,7 +686,11 @@ export class PassportsService {
    * необходимым для разбора инцидента (`number` / `orderId` /
    * `sizeId` / `qtyCut` / актор), и кидаем в обычный логгер сервиса.
    */
-  async delete(id: string, deleterEmployeeId: string): Promise<void> {
+  async delete(
+    id: string,
+    deleterEmployeeId: string,
+    actorRole?: Role,
+  ): Promise<void> {
     const passport = await this.prisma.passport.findUnique({
       where: { id },
       select: {
@@ -366,6 +699,9 @@ export class PassportsService {
         orderId: true,
         sizeId: true,
         qtyCut: true,
+        status: true,
+        currentCellId: true,
+        creatorId: true,
         boxItems: { select: { box: { select: { number: true } } }, take: 1 },
       },
     });
@@ -376,17 +712,52 @@ export class PassportsService {
         message: 'Паспорт не найден',
       });
     }
+
+    // Self-cancel ветка для не-менеджерских ролей: помощник раскройщика
+    // / раскройщик может удалить ТОЛЬКО свой только что выпущенный
+    // паспорт, и только пока паспорт ещё нетронут (status=CREATED, без
+    // ячейки, без событий кроме CREATED). См. JSDoc у класса.
+    const isManager =
+      actorRole === Role.SHOP_MANAGER || actorRole === Role.ADMIN;
+    if (!isManager && actorRole) {
+      if (passport.creatorId !== deleterEmployeeId) {
+        throw new PassportNotYoursToEditException();
+      }
+      const otherEvent = await this.prisma.passportEvent.findFirst({
+        where: { passportId: id, type: { not: PassportEventType.CREATED } },
+        select: { id: true },
+      });
+      const blocked = this.editableBlockReason(
+        { status: passport.status, currentCellId: passport.currentCellId },
+        Boolean(otherEvent),
+      );
+      if (blocked !== null) {
+        throw new PassportNotEditableException();
+      }
+    }
+
     const packedInto = passport.boxItems[0]?.box?.number;
     if (packedInto) {
       throw new PassportPackedDeleteException(packedInto);
     }
-    const approvedEntry = await this.prisma.operationEntry.findFirst({
-      where: { passportId: id, status: 'APPROVED' },
-      select: { id: true },
-    });
-    if (approvedEntry) {
-      throw new PassportHasApprovedEarningsException();
+
+    // Для self-cancel APPROVED-блокер не нужен: на статусе CREATED +
+    // нет cell + нет других событий APPROVED-entries бывают только
+    // immediate-cutter (`sourceEventType = PASSPORT_CREATED`), и их
+    // мы каскадно сносим — это корректно: «работы по выпуску не
+    // случилось», начислять не за что. Для менеджерского delete
+    // оставляем строгий блокер: paint-by-numbers с уже подтверждённой
+    // зарплатой швеи стирать нельзя.
+    if (isManager) {
+      const approvedEntry = await this.prisma.operationEntry.findFirst({
+        where: { passportId: id, status: 'APPROVED' },
+        select: { id: true },
+      });
+      if (approvedEntry) {
+        throw new PassportHasApprovedEarningsException();
+      }
     }
+
     const postedIssue = await this.prisma.materialIssue.findFirst({
       where: { passportId: id, status: 'POSTED' },
       select: { id: true },
@@ -411,13 +782,14 @@ export class PassportsService {
             orderId: passport.orderId,
             sizeId: passport.sizeId,
             qtyCut: passport.qtyCut,
+            actorRole: actorRole ?? null,
           },
         },
         tx,
       );
     });
     this.logger.log(
-      `event=passport.delete passportId=${id} number=${passport.number} orderId=${passport.orderId} qtyCut=${passport.qtyCut} deleterId=${deleterEmployeeId}`,
+      `event=passport.delete passportId=${id} number=${passport.number} orderId=${passport.orderId} qtyCut=${passport.qtyCut} deleterId=${deleterEmployeeId} actorRole=${actorRole ?? '-'}`,
     );
   }
 
@@ -1519,6 +1891,29 @@ export class PassportsService {
       return { id: creator.id };
     }
     throw new CutterRequiredException();
+  }
+
+  /**
+   * Возвращает причину, по которой паспорт нельзя редактировать или
+   * удалять силами автора (CUTTER_ASSISTANT/CUTTER на /work/passports).
+   *
+   * Используется и в `update()` / `delete()` (для блокировки backend-
+   * операций), и в `listMineRecent()` (чтобы UI рисовал disabled-кнопки
+   * на «двинувшихся» паспортах). Возвращает `null`, если паспорт ещё
+   * полностью «свежий» — `CREATED`, без ячейки, без событий кроме
+   * `CREATED`.
+   *
+   * Менеджеры/админ этими ограничениями не связаны: для них правка
+   * чужих паспортов идёт через master-actions, а не PATCH.
+   */
+  private editableBlockReason(
+    passport: { status: PassportStatus; currentCellId: string | null },
+    hasOtherEvents: boolean,
+  ): PassportEditableBlock | null {
+    if (passport.status !== PassportStatus.CREATED) return 'STATUS_NOT_CREATED';
+    if (passport.currentCellId) return 'PLACED_IN_CELL';
+    if (hasOtherEvents) return 'HAS_EVENTS_BEYOND_CREATED';
+    return null;
   }
 
   /**

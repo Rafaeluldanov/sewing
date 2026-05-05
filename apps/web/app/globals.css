@@ -2774,6 +2774,85 @@ table.data-table td code {
   letter-spacing: 0.005em;
   font-weight: 600;
 }
+/* Вторичная action-кнопка под «Выпустить паспорт» помощника
+   раскройщика (CutterAssistantWorkPanel). По форме совпадает с
+   primary той же scan-card, но без акцентной заливки — открывает
+   корректирующий flow «Выпущенные паспорта» (правка/удаление
+   только что выпущенного паспорта). */
+.scan-card__secondary-action {
+  min-height: 56px;
+  font-size: 1.05rem;
+  font-weight: 600;
+  letter-spacing: 0.005em;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+/* Список «Выпущенные паспорта» (`/work/passports`). Стиль mobile-
+   first под /work — тёмная карточка на каждой строке, primary —
+   крупный кликабельный номер паспорта, secondary-meta мелким
+   текстом, кнопки справа. Заблокированные строки слегка приглушены,
+   чтобы пользователь сразу видел: «здесь править нельзя». */
+.my-passports-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.65rem;
+}
+.my-passports-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0.85rem 1rem;
+  background: var(--surface-2, #1f2330);
+  border: 1px solid var(--border-1, #2a2f3d);
+  border-radius: 14px;
+}
+.my-passports-row.is-blocked {
+  opacity: 0.7;
+}
+.my-passports-row__main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  min-width: 0;
+  flex: 1 1 240px;
+}
+.my-passports-row__number {
+  font-size: 1.15rem;
+  font-weight: 700;
+  color: var(--text-1, #f1f3f7);
+  text-decoration: underline;
+  word-break: break-all;
+}
+.my-passports-row.is-blocked .my-passports-row__number {
+  text-decoration: none;
+}
+.my-passports-row__meta {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  font-size: 0.95rem;
+  color: var(--text-2, #c9ccd6);
+}
+.my-passports-row__sub {
+  font-size: 0.8rem;
+  color: var(--text-3, #8a90a2);
+}
+.my-passports-row__blocked-hint {
+  font-size: 0.78rem;
+  color: var(--color-warning-fg, #d6a300);
+}
+.my-passports-row__actions {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+}
 .scan-card__manual-toggle {
   appearance: none;
   background: transparent;

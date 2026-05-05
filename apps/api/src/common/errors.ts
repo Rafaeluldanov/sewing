@@ -1560,6 +1560,45 @@ export class PassportHasApprovedEarningsException extends BusinessException {
   }
 }
 
+/**
+ * Помощник раскройщика / раскройщик пытается отредактировать или
+ * удалить чужой паспорт со страницы «Выпущенные паспорта»
+ * (`/work/passports`). Бросается из `PassportsService.update` /
+ * `delete`, когда `actorRole` нечуток к менеджерскому RBAC и
+ * `passport.creatorId !== actorEmployeeId`. Менеджеры/админ ошибки
+ * не получают — они и так могут править/удалять чужие паспорта.
+ */
+export class PassportNotYoursToEditException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_NOT_YOURS_TO_EDIT',
+      'Этот паспорт выпустил другой сотрудник — изменять его нельзя.',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * Паспорт уже «уехал» в производство — редактировать или удалять
+ * силами помощника/раскройщика нельзя:
+ *   - status != CREATED,
+ *   - currentCellId != null (паспорт лежит в ячейке),
+ *   - есть `PassportEvent`, отличный от `CREATED` (issue/scan/qc/place).
+ *
+ * Менеджер на admin-карточке тоже ловит этот код для PATCH (с теми же
+ * инвариантами): после первого скана/размещения паспорт правится
+ * только через master-actions и операционные сервисы.
+ */
+export class PassportNotEditableException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_NOT_EDITABLE',
+      'Паспорт уже двинулся: размещён в ячейке, попал в работу или упакован — править его нельзя. Создайте новый паспорт.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class PassportHasPostedMaterialIssueException extends BusinessException {
   constructor() {
     super(

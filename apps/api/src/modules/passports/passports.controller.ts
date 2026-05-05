@@ -6,6 +6,7 @@ import {
   Header,
   HttpCode,
   Param,
+  Patch,
   Post,
   Res,
 } from '@nestjs/common';
@@ -13,8 +14,11 @@ import type { Response } from 'express';
 import {
   CreatePassportSchema,
   PlacePassportSchema,
+  UpdatePassportSchema,
   type CreatePassportDto,
+  type MyPassportListItem,
   type PlacePassportDto,
+  type UpdatePassportDto,
 } from '@sewing/shared/passports';
 import { z } from 'zod';
 import {
@@ -50,25 +54,70 @@ export class PassportsController {
     return this.passports.create(dto, user.employeeId);
   }
 
+  /**
+   * `GET /api/passports/my-recent` — последние паспорта, выпущенные
+   * самим actor-ом. Используется страницей `/work/passports` помощника
+   * раскройщика / раскройщика. RBAC сужен до тех ролей, у кого есть
+   * рабочее место выпуска паспорта; менеджеры/админ всё равно видят
+   * чужие паспорта в admin-карточке заказа, отдельной страницы списка
+   * для них нет, но мы оставляем им endpoint доступным — это удобно
+   * для отладки/QA.
+   *
+   * Маршрут объявлен ДО `@Get(':id')`, чтобы NestJS-роутер не
+   * разрешал его как `id = "my-recent"` и не отдавал `404
+   * PASSPORT_NOT_FOUND` вместо списка.
+   */
+  @Get('my-recent')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  async listMineRecent(
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<MyPassportListItem[]> {
+    return this.passports.listMineRecent(user.employeeId);
+  }
+
   @Get(':id')
   getOne(@Param('id') id: string) {
     return this.passports.getOne(id);
   }
 
   /**
-   * Удалить паспорт целиком (управленческая корректировка ошибки
-   * выпуска). RBAC: `SHOP_MANAGER` / `ADMIN`. Семантика и блокеры —
-   * см. `PassportsService.delete` и `docs/domain.md §7.8 «Удаление
-   * паспорта»`.
+   * `PATCH /api/passports/:id` — редактирование полей паспорта, пока
+   * он ещё не двинулся в производство. Источник истины и инварианты —
+   * `PassportsService.update` (status=CREATED, без ячейки, без событий
+   * кроме CREATED). Для не-менеджерских ролей дополнительно
+   * проверяется `creatorId === me`.
+   */
+  @Patch(':id')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  update(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdatePassportSchema)) dto: UpdatePassportDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.passports.update(id, dto, {
+      employeeId: user.employeeId,
+      role: user.role,
+    });
+  }
+
+  /**
+   * Удалить паспорт целиком. RBAC расширен: помощник раскройщика и
+   * раскройщик могут удалить СВОЙ только что выпущенный паспорт
+   * (status=CREATED, без ячейки, без событий кроме CREATED) — это
+   * штатная серийная коррекция мисс-выпуска на /work/passports.
+   * Менеджер/админ удаляют любой паспорт по строгим инвариантам
+   * (boxItems / APPROVED earnings / POSTED material issue).
+   * Подробнее — `PassportsService.delete` и `docs/domain.md §7.8
+   * «Удаление паспорта»`.
    */
   @Delete(':id')
-  @Roles('SHOP_MANAGER', 'ADMIN')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
   @HttpCode(204)
   async delete(
     @Param('id') id: string,
     @CurrentUser() user: AuthPrincipal,
   ): Promise<void> {
-    await this.passports.delete(id, user.employeeId);
+    await this.passports.delete(id, user.employeeId, user.role);
   }
 
   @Post(':id/place')
