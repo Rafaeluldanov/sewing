@@ -61,15 +61,22 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
    * Подготовить «живой» паспорт в `IN_PROGRESS` так же, как это
    * делает `production-flow.test.ts §D2` — через начатую смену
    * швеи + `issue`. Возвращаем passportId.
+   *
+   * Опциональный `qtyCut` нужен для расширенных тестов
+   * `recordDefect`: дефолт 1 сохраняет существующие сценарии без
+   * изменений, новые тесты могут попросить большую партию.
    */
-  async function prepareInProgressPassport(): Promise<string> {
+  async function prepareInProgressPassport(
+    opts: { qtyCut?: number } = {},
+  ): Promise<string> {
+    const qtyCut = opts.qtyCut ?? 1;
     const order = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', cookies.manager)
       .send({
         orderDate: '2026-04-15T00:00:00.000Z',
         productId: seed.product.id,
-        items: [{ sizeId: seed.sizes.M, qtyPlan: 1 }],
+        items: [{ sizeId: seed.sizes.M, qtyPlan: qtyCut }],
       })
       .expect(201);
     const orderId: string = order.body.id;
@@ -86,7 +93,7 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
         sizeId: seed.sizes.M,
         rollNumber: 'R-QC-01',
         cutDate: '2026-04-15T00:00:00.000Z',
-        qtyCut: 1,
+        qtyCut,
         cutterId: seed.employees.cutter.id,
       })
       .expect(201);
@@ -107,6 +114,28 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
     await request(t.app.getHttpServer())
       .post(`/api/passports/${passportId}/issue`)
       .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+    return passportId;
+  }
+
+  /**
+   * Открыть QC-смену и провести scan-in паспорта на QC. Возвращает
+   * passportId, готовый к `recordDefect` / `completeQc`.
+   */
+  async function prepareQcReady(opts: { qtyCut?: number } = {}): Promise<string> {
+    const passportId = await prepareInProgressPassport(opts);
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.qc)
+      .send({
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+      })
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.qc)
       .send({})
       .expect(201);
     return passportId;
@@ -198,4 +227,160 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
     expect(qcStation!.active).toBe(true);
     expect(qcStation!.allowedOperationIds).toContain(seed.operations.QC.id);
   });
+
+  // ---------------------------------------------------------------------------
+  // P0-5: дополнительные QC-инварианты (см. docs/test-gap-plan.md §P0-5).
+  // ---------------------------------------------------------------------------
+
+  /**
+   * **FINDING:** recon §6 invariant 6 ожидает «`QC_PASSED` создаётся
+   * ровно один раз». Однако `QcService.completeQc` (см. JSDoc на
+   * `apps/api/src/modules/qc/qc.service.ts:195-198`) сознательно пишет
+   * новое событие на каждый клик: «Каждое нажатие создаёт новое
+   * событие — это полезно, если ОТК после фиксации брака подтверждает
+   * повторно. Аудит видит всю историю, `qcCompletedAt` в карточке
+   * всегда соответствует последнему событию». Этот тест **пинит
+   * текущий контракт** (count = 2 после × 2), а расхождение зафиксировано
+   * в `docs/operations-test-findings.md`.
+   */
+  test('FINDING: completeQc × 2 пишет два QC_PASSED и два QC_COMPLETED audit (текущее поведение)', async () => {
+    const passportId = await prepareQcReady();
+
+    const first = await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/complete`)
+      .set('Cookie', cookies.qc)
+      .send({});
+    expect(first.status).toBe(201);
+    const firstQcAt = first.body.qcCompletedAt as string;
+    expect(typeof firstQcAt).toBe('string');
+
+    // Небольшая пауза — иначе timestamp может совпасть и assert
+    // на «обновился» проходит вырожденно.
+    await new Promise((r) => setTimeout(r, 5));
+
+    const second = await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/complete`)
+      .set('Cookie', cookies.qc)
+      .send({});
+    expect(second.status).toBe(201);
+    const secondQcAt = second.body.qcCompletedAt as string;
+    expect(typeof secondQcAt).toBe('string');
+    expect(new Date(secondQcAt).getTime()).toBeGreaterThanOrEqual(
+      new Date(firstQcAt).getTime(),
+    );
+
+    // Текущий контракт: каждое нажатие → новое QC_PASSED + новый
+    // QC_COMPLETED audit. Recon §6 ожидал count=1 — см. findings.
+    const passportEvents = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'QC_PASSED' },
+    });
+    expect(passportEvents).toBe(2);
+    const auditCount = await t.prisma.auditLog.count({
+      where: { event: 'QC_COMPLETED', entityType: 'QC', entityId: passportId },
+    });
+    expect(auditCount).toBe(2);
+
+    // Status паспорта остаётся IN_PROGRESS — completeQc сознательно
+    // не двигает pipeline (см. service.ts:185-187).
+    const passport = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: { status: true },
+    });
+    expect(passport.status).toBe('IN_PROGRESS');
+  });
+
+  test('recordDefect happy path: qtyGood=8, qtyDefect=2, sum ≤ qtyCut', async () => {
+    const passportId = await prepareQcReady({ qtyCut: 10 });
+    const before = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: { qtyCut: true, qtyGood: true, qtyDefect: true },
+    });
+    expect(before).toMatchObject({ qtyCut: 10, qtyGood: 10, qtyDefect: 0 });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/defects`)
+      .set('Cookie', cookies.qc)
+      .send({ defectTypeId: seed.defectType.id, qty: 2 });
+    expect(res.status).toBe(201);
+
+    const after = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: { qtyCut: true, qtyGood: true, qtyDefect: true },
+    });
+    expect(after).toMatchObject({ qtyCut: 10, qtyGood: 8, qtyDefect: 2 });
+    expect(after.qtyGood + after.qtyDefect).toBeLessThanOrEqual(after.qtyCut);
+
+    const defects = await t.prisma.passportDefect.findMany({
+      where: { passportId },
+    });
+    expect(defects).toHaveLength(1);
+    expect(defects[0]!.qty).toBe(2);
+
+    const events = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'DEFECT_RECORDED' },
+    });
+    expect(events).toBe(1);
+  });
+
+  test('recordDefect overflow → 422 DEFECT_EXCEEDS_REMAINING, без сайд-эффектов', async () => {
+    // Готовим состояние qtyCut=10, qtyDefect=9, qtyGood=1 через нормальный
+    // flow, без прямого изменения БД.
+    const passportId = await prepareQcReady({ qtyCut: 10 });
+    await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/defects`)
+      .set('Cookie', cookies.qc)
+      .send({ defectTypeId: seed.defectType.id, qty: 9 })
+      .expect(201);
+
+    const before = await snapshotForDefectAttempt(passportId);
+    expect(before.qtyGood).toBe(1);
+    expect(before.qtyDefect).toBe(9);
+    expect(before.defectsCount).toBe(1);
+    expect(before.defectEventsCount).toBe(1);
+
+    // qty=2 > remaining (qtyCut - qtyDefect = 1) → 422.
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/defects`)
+      .set('Cookie', cookies.qc)
+      .send({ defectTypeId: seed.defectType.id, qty: 2 });
+    expect(res.status).toBe(422);
+    expect(res.body.code).toBe('DEFECT_EXCEEDS_REMAINING');
+
+    // Снимок не изменился: counts и qty стабильны.
+    const after = await snapshotForDefectAttempt(passportId);
+    expect(after).toEqual(before);
+    expect(after.qtyGood + after.qtyDefect).toBeLessThanOrEqual(after.qtyCut);
+  });
+
+  /**
+   * Снимок именно того, что обязан сохраниться при отказе recordDefect:
+   * счётчики паспорта, count `PassportDefect`, count `PassportEvent
+   * DEFECT_RECORDED` и count `AuditLog` по дефектам.
+   */
+  async function snapshotForDefectAttempt(passportId: string) {
+    const [p, defects, events, audit] = await Promise.all([
+      t.prisma.passport.findUniqueOrThrow({
+        where: { id: passportId },
+        select: { qtyCut: true, qtyGood: true, qtyDefect: true },
+      }),
+      t.prisma.passportDefect.count({ where: { passportId } }),
+      t.prisma.passportEvent.count({
+        where: { passportId, type: 'DEFECT_RECORDED' },
+      }),
+      // Audit-канал по дефектам в текущем коде QC-сервис явно НЕ
+      // пишет (см. recordDefect — нет audit.log). Считаем для полноты
+      // картины — должен оставаться 0.
+      t.prisma.auditLog.count({
+        where: { entityType: 'QC', entityId: passportId, event: 'DEFECT_RECORDED' },
+      }),
+    ]);
+    return {
+      qtyCut: p.qtyCut,
+      qtyGood: p.qtyGood,
+      qtyDefect: p.qtyDefect,
+      defectsCount: defects,
+      defectEventsCount: events,
+      defectAuditCount: audit,
+    };
+  }
 });
