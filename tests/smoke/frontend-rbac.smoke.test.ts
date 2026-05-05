@@ -326,6 +326,26 @@ describe('legacy /work disabled for QC / IRONING / PACKING', () => {
     expect(labelsBlock).not.toMatch(/\bPACKING:/);
   });
 
+  test('ROLE_LABELS в work/page.tsx показывает CUTTER_ASSISTANT как «Помощник раскройщика» (канон admin-labels)', () => {
+    // Регресс-щит для опечатки «Помощник закройщика» (см.
+    // `docs/cutter-assistant-passport-release-recon.md §8`):
+    // канонический лейбл живёт в `apps/web/lib/admin-labels.ts`.
+    // Любая обратная замена ловится в CI.
+    const src = readSrc('apps/web/app/work/page.tsx');
+    const labelsStart = src.indexOf('const ROLE_LABELS');
+    const labelsEnd = src.indexOf('};', labelsStart);
+    expect(labelsStart).toBeGreaterThan(0);
+    expect(labelsEnd).toBeGreaterThan(labelsStart);
+    const labelsBlock = src.slice(labelsStart, labelsEnd);
+    expect(labelsBlock).toMatch(
+      /CUTTER_ASSISTANT:\s*'Помощник раскройщика'/,
+    );
+    expect(labelsBlock).not.toMatch(/закройщик/);
+    // Канонический словарь должен совпадать по этой роли.
+    const canon = readSrc('apps/web/lib/admin-labels.ts');
+    expect(canon).toMatch(/CUTTER_ASSISTANT:\s*'Помощник раскройщика'/);
+  });
+
   test('ActiveShiftPanel.Props больше не принимает role (legacy QC-ветка удалена)', () => {
     const src = readSrc('apps/web/app/work/active-shift-panel.tsx');
     const propsStart = src.indexOf('interface Props');

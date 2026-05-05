@@ -2,6 +2,7 @@ import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import bcrypt from 'bcryptjs';
 import { CompensationType, Prisma, Role } from '@prisma/client';
 import type {
+  ActiveCutterListItemDto,
   CreateEmployeeDto,
   EmployeeDetailDto,
   EmployeeListItemDto,
@@ -76,6 +77,32 @@ export class EmployeesService {
     });
     if (!row) throw new EmployeeNotFoundException();
     return toDetailDto(row);
+  }
+
+  /**
+   * Узкий read-only справочник активных раскройщиков для select-а
+   * на форме выпуска паспорта (`apps/web/app/orders/[id]/passports/new`).
+   *
+   * Контракт фиксирован на уровне сервиса:
+   *   - `where`: hard-coded `role = CUTTER` AND `active = true`
+   *     (фильтр не приходит из query — endpoint узкий по дизайну);
+   *   - `select`: только `id, fullName, login` — никаких payroll-полей
+   *     (`salaryPerShift`, `compensationType`, `companyDivision`).
+   *     Метод **не должен** делегироваться в `list()` или
+   *     `toListDto()`: они расширяемы, и любой будущий field в
+   *     `EmployeeListItemDto` автоматически утечёт через широкий DTO.
+   *   - `orderBy`: `fullName ASC` для предсказуемого порядка в UI.
+   *
+   * RBAC контролируется на контроллере (`EmployeesController.listActiveCutters`,
+   * `@Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')`). Подробнее —
+   * `docs/cutter-assistant-passport-release-recon.md §5`.
+   */
+  async listActiveCutters(): Promise<ActiveCutterListItemDto[]> {
+    return this.prisma.employee.findMany({
+      where: { role: Role.CUTTER, active: true },
+      orderBy: { fullName: 'asc' },
+      select: { id: true, fullName: true, login: true },
+    });
   }
 
   // ===========================================================================

@@ -133,3 +133,97 @@ describe('backend employees контракт', () => {
     expect(src).toMatch(/EmployeeSalaryRateRequiredException/);
   });
 });
+
+describe('GET /api/employees/cutters — узкий справочник раскройщиков для CUTTER_ASSISTANT', () => {
+  // Регресс-щит для бага «помощник раскройщика не может выпустить
+  // паспорт» (`docs/cutter-assistant-passport-release-recon.md`).
+  // Фиксируем все четыре звена одновременно: контроллер, сервис,
+  // shared DTO, frontend-страница и helper. Если хотя бы одно
+  // звено сломается — баг вернётся.
+
+  test('контроллер выставляет GET /employees/cutters c CUTTER_ASSISTANT в @Roles и ДО @Get(\':id\')', () => {
+    const src = readSrc('apps/api/src/modules/employees/employees.controller.ts');
+    // Узкий маршрут с собственным method-уровневым @Roles. Ищем
+    // именно декоратор в начале строки (ровно два пробела отступа),
+    // чтобы не ловить упоминания внутри JSDoc-комментариев.
+    const cuttersMatch = src.match(/^ {2}@Get\('cutters'\)/m);
+    const idMatch = src.match(/^ {2}@Get\(':id'\)/m);
+    expect(cuttersMatch).not.toBeNull();
+    expect(idMatch).not.toBeNull();
+    const cuttersIdx = cuttersMatch!.index!;
+    const idIdx = idMatch!.index!;
+    // Иначе Nest распарсит литерал `cutters` как параметр `:id` и
+    // улетит в `get('cutters')` → 404 EMPLOYEE_NOT_FOUND.
+    expect(cuttersIdx).toBeLessThan(idIdx);
+    // Method-уровневый @Roles переопределяет класс-уровневый
+    // ('SHOP_MANAGER', 'ADMIN') и расширяет его на CUTTER_ASSISTANT.
+    // Окно специально широкое — над @Get('cutters') живёт JSDoc-блок,
+    // а сам @Roles(...) идёт прямо перед декоратором маршрута.
+    const block = src.slice(
+      Math.max(0, cuttersIdx - 1500),
+      cuttersIdx,
+    );
+    expect(block).toMatch(
+      /@Roles\(\s*'CUTTER_ASSISTANT',\s*'SHOP_MANAGER',\s*'ADMIN'\s*\)\s*$/,
+    );
+    // Класс по-прежнему admin-only — широкий /employees не открыт.
+    expect(src).toMatch(/^@Roles\('SHOP_MANAGER',\s*'ADMIN'\)/m);
+  });
+
+  test('EmployeesService.listActiveCutters использует Prisma `select` (а не `include`/`toListDto`)', () => {
+    const src = readSrc('apps/api/src/modules/employees/employees.service.ts');
+    expect(src).toMatch(/async listActiveCutters\(/);
+    const start = src.indexOf('async listActiveCutters(');
+    expect(start).toBeGreaterThan(0);
+    // Метод короткий — отсекаем по следующей закрывающей `}` блока.
+    const block = src.slice(start, start + 800);
+    // Hard-coded фильтр: только активные раскройщики.
+    expect(block).toMatch(/role:\s*Role\.CUTTER/);
+    expect(block).toMatch(/active:\s*true/);
+    // Прямая проекция, никакого toListDto/include.
+    expect(block).toMatch(
+      /select:\s*\{\s*id:\s*true,\s*fullName:\s*true,\s*login:\s*true\s*\}/,
+    );
+    expect(block).not.toMatch(/toListDto/);
+    expect(block).not.toMatch(/include:/);
+    // ORDER BY fullName ASC — для предсказуемого UI-дропдауна.
+    expect(block).toMatch(/orderBy:\s*\{\s*fullName:\s*'asc'\s*\}/);
+  });
+
+  test('shared DTO ActiveCutterListItemDto содержит ровно { id, fullName, login } и НЕ наследует EmployeeListItemDto', () => {
+    const src = readSrc('packages/shared/src/employees.ts');
+    expect(src).toMatch(/export interface ActiveCutterListItemDto/);
+    const start = src.indexOf('export interface ActiveCutterListItemDto');
+    const end = src.indexOf('}', start);
+    expect(start).toBeGreaterThan(0);
+    expect(end).toBeGreaterThan(start);
+    const block = src.slice(start, end);
+    // Никакого `extends EmployeeListItemDto` — иначе любое будущее
+    // поле широкого DTO утечёт через узкий endpoint.
+    expect(block).not.toMatch(/extends/);
+    // Поля жёстко зафиксированы.
+    expect(block).toMatch(/id:\s*string/);
+    expect(block).toMatch(/fullName:\s*string/);
+    expect(block).toMatch(/login:\s*string/);
+    // Никаких payroll-полей.
+    expect(block).not.toMatch(/salaryPerShift/);
+    expect(block).not.toMatch(/compensationType/);
+    expect(block).not.toMatch(/companyDivision/);
+  });
+
+  test('apps/web/lib/employees-api.ts экспортирует listActiveCutters → /employees/cutters', () => {
+    const src = readSrc('apps/web/lib/employees-api.ts');
+    expect(src).toMatch(/export function listActiveCutters\(/);
+    expect(src).toMatch(/apiFetch<ActiveCutterListItemDto\[\]>\('\/employees\/cutters'\)/);
+  });
+
+  test('страница /orders/[id]/passports/new использует listActiveCutters, а не listEmployees', () => {
+    const src = readSrc('apps/web/app/orders/[id]/passports/new/page.tsx');
+    // Импорт переключён.
+    expect(src).toMatch(/import \{ listActiveCutters \} from '@\/lib\/employees-api'/);
+    // Старый широкий helper больше не вызывается на этой странице.
+    expect(src).not.toMatch(/listEmployees\(/);
+    // Новая ветка вызова.
+    expect(src).toMatch(/await listActiveCutters\(\)/);
+  });
+});

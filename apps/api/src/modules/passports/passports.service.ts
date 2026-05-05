@@ -33,12 +33,15 @@ import {
   PassportCancelledException,
   PassportCompleteBackwardException,
   PassportCuttingClosedException,
+  PassportHasApprovedEarningsException,
+  PassportHasPostedMaterialIssueException,
   PassportNotInCellException,
   PassportNotInProgressException,
   PassportNotPlaceableException,
   PassportNotQcPassedException,
   PassportNotYoursException,
   PassportOrderNotInProductionException,
+  PassportPackedDeleteException,
   PassportQtyExceedsRemainingException,
   PassportSizeNotInOrderException,
   ShiftSessionRequiredException,
@@ -200,11 +203,17 @@ export class PassportsService {
       });
     }
     if (!divisionOp) {
+      // На корректно поднятом инстансе этой ветки быть не должно:
+      // `ReferenceDataBootstrapService.onApplicationBootstrap`
+      // (`apps/api/src/modules/bootstrap/reference-data.service.ts`)
+      // создаёт `CUT_DIVISION` при старте Nest. Если строка
+      // действительно отсутствует — менеджер случайно удалил её через
+      // `/admin/operations`; перезапуск контейнера её восстановит.
       throw new BadRequestException({
         statusCode: 400,
         code: 'OPERATION_NOT_FOUND',
         message:
-          'В справочнике операций нет CUT_DIVISION. Запустите `npm run db:seed`.',
+          'В справочнике нет операции CUT_DIVISION. Восстановите её в /admin/operations или перезапустите API — bootstrap создаёт её автоматически.',
       });
     }
     const cutter = await this.resolveCutter(dto.cutterId, creator);
@@ -309,6 +318,107 @@ export class PassportsService {
     }
     const routeHint = await this.buildRouteHint(row, options);
     return this.toDetailDto(row, routeHint);
+  }
+
+  // -------------------------------------------------------------------------
+  // DELETE (управленческое удаление паспорта, см. `docs/domain.md §7.8`)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Удалить паспорт целиком — нужно, когда менеджер хочет откатить
+   * ошибочный выпуск (неверный размер, рулон, кол-во). Операция
+   * безопасна по построению: блокируется, как только данные паспорта
+   * уже «уехали» в учёт:
+   *
+   *   - паспорт упакован в коробку (`BoxItem` есть) →
+   *     `PASSPORT_HAS_BOX`. Сначала менеджер должен снять паспорт с
+   *     коробки на упаковке;
+   *   - есть подтверждённые сдельные начисления (`OperationEntry.status
+   *     = APPROVED`) → `PASSPORT_HAS_APPROVED_EARNINGS`. Стирать уже
+   *     начисленную сотрудникам зарплату нельзя;
+   *   - привязан проведённый документ расхода материалов
+   *     (`MaterialIssue.status = POSTED`) →
+   *     `PASSPORT_HAS_POSTED_MATERIAL_ISSUE`. Удаление паспорта
+   *     оставило бы документ-расход с ссылкой `passportId=null`, но
+   *     стирать историю расхода материалов мы тоже не имеем права —
+   *     лучше отказать явно.
+   *
+   * Если ни одного блокера нет, чистим всё, что висит на паспорте, в
+   * одной транзакции:
+   *   - `PassportEvent` (история событий, без `onDelete` каскада в схеме);
+   *   - `OperationEntry` (только `PENDING_RELEASE` — `APPROVED` уже
+   *     заблокирован выше);
+   *   - `PassportDefect` (записи брака ОТК).
+   *
+   * `MaterialIssue.passportId` Prisma-схема обнуляет автоматически
+   * (`onDelete: SetNull`), отдельной чистки не нужно.
+   *
+   * После успеха пишем `AuditLog` с минимальным набором полей,
+   * необходимым для разбора инцидента (`number` / `orderId` /
+   * `sizeId` / `qtyCut` / актор), и кидаем в обычный логгер сервиса.
+   */
+  async delete(id: string, deleterEmployeeId: string): Promise<void> {
+    const passport = await this.prisma.passport.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        number: true,
+        orderId: true,
+        sizeId: true,
+        qtyCut: true,
+        boxItems: { select: { box: { select: { number: true } } }, take: 1 },
+      },
+    });
+    if (!passport) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PASSPORT_NOT_FOUND',
+        message: 'Паспорт не найден',
+      });
+    }
+    const packedInto = passport.boxItems[0]?.box?.number;
+    if (packedInto) {
+      throw new PassportPackedDeleteException(packedInto);
+    }
+    const approvedEntry = await this.prisma.operationEntry.findFirst({
+      where: { passportId: id, status: 'APPROVED' },
+      select: { id: true },
+    });
+    if (approvedEntry) {
+      throw new PassportHasApprovedEarningsException();
+    }
+    const postedIssue = await this.prisma.materialIssue.findFirst({
+      where: { passportId: id, status: 'POSTED' },
+      select: { id: true },
+    });
+    if (postedIssue) {
+      throw new PassportHasPostedMaterialIssueException();
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.passportDefect.deleteMany({ where: { passportId: id } });
+      await tx.operationEntry.deleteMany({ where: { passportId: id } });
+      await tx.passportEvent.deleteMany({ where: { passportId: id } });
+      await tx.passport.delete({ where: { id } });
+      await this.audit.log(
+        {
+          event: 'PASSPORT_DELETED',
+          entityType: 'PASSPORT',
+          entityId: id,
+          employeeId: deleterEmployeeId,
+          payload: {
+            number: passport.number,
+            orderId: passport.orderId,
+            sizeId: passport.sizeId,
+            qtyCut: passport.qtyCut,
+          },
+        },
+        tx,
+      );
+    });
+    this.logger.log(
+      `event=passport.delete passportId=${id} number=${passport.number} orderId=${passport.orderId} qtyCut=${passport.qtyCut} deleterId=${deleterEmployeeId}`,
+    );
   }
 
   // -------------------------------------------------------------------------

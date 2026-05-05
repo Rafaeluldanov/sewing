@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
+  HttpCode,
   Param,
   Post,
   Res,
@@ -51,6 +53,22 @@ export class PassportsController {
   @Get(':id')
   getOne(@Param('id') id: string) {
     return this.passports.getOne(id);
+  }
+
+  /**
+   * Удалить паспорт целиком (управленческая корректировка ошибки
+   * выпуска). RBAC: `SHOP_MANAGER` / `ADMIN`. Семантика и блокеры —
+   * см. `PassportsService.delete` и `docs/domain.md §7.8 «Удаление
+   * паспорта»`.
+   */
+  @Delete(':id')
+  @Roles('SHOP_MANAGER', 'ADMIN')
+  @HttpCode(204)
+  async delete(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<void> {
+    await this.passports.delete(id, user.employeeId);
   }
 
   @Post(':id/place')

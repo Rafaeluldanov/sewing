@@ -1514,6 +1514,47 @@ export class PassportCuttingClosedException extends BusinessException {
 }
 
 // ---------------------------------------------------------------------------
+// Passport delete blockers (см. `PassportsService.delete`,
+// `docs/domain.md §7.8 «Удаление паспорта»`).
+//
+// Удаление паспорта — операционная корректировка ошибки выпуска. Поэтому
+// мы блокируем удаление, как только данные паспорта уже «уехали в
+// бухгалтерию» (подтверждённые сдельные начисления / проведённый
+// документ расхода материалов) или физически легли в коробку (упаковка
+// уже считает паспорт выпущенным изделием).
+// ---------------------------------------------------------------------------
+
+export class PassportPackedDeleteException extends BusinessException {
+  constructor(boxNumber: string) {
+    super(
+      'PASSPORT_HAS_BOX',
+      `Паспорт упакован в коробку ${boxNumber}. Удалите паспорт из коробки на упаковке, тогда его можно будет удалить.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class PassportHasApprovedEarningsException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_HAS_APPROVED_EARNINGS',
+      'По паспорту есть подтверждённые сдельные начисления. Удалить паспорт нельзя — это сотрёт начисленную сотрудникам зарплату.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class PassportHasPostedMaterialIssueException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_HAS_POSTED_MATERIAL_ISSUE',
+      'По паспорту проведён документ расхода материалов. Удалить паспорт нельзя — это сломает учёт расхода.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Clients (управленческий справочник, см.
 // `apps/api/src/modules/clients/*`, `prisma/schema.prisma model Client`).
 // ---------------------------------------------------------------------------

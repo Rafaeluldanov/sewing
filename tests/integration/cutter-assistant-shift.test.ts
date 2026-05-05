@@ -187,6 +187,37 @@ describeWithDb('integration — CUTTER_ASSISTANT shift on equipment', () => {
     });
   });
 
+  test('Принтер привязан к role=CUTTER (без equipment), CUTTER_ASSISTANT печатает на нём через role-fallback', async () => {
+    // Реальный прод-кейс: менеджер завёл один принтер на раскройный
+    // стол и привязал его к role=CUTTER. Помощник раскройщика
+    // (CUTTER_ASSISTANT) физически работает за тем же столом, и
+    // должен использовать тот же принтер.
+    //
+    // До фикса (см. `printer-role-resolution.ts`): resolvePrinter
+    // искал ровно `role=CUTTER_ASSISTANT`, не находил, шёл в
+    // equipment-fallback. Без активной смены — SHIFT_SESSION_REQUIRED.
+    // PrintButton трактовал ошибку как «нет принтера» и открывал
+    // печатную форму в новой вкладке.
+    //
+    // После фикса: PRINTER_ROLE_FALLBACKS говорит, что
+    // CUTTER_ASSISTANT делит принтер с CUTTER, и job создаётся даже
+    // без активной смены — сама роль сотрудника достаточна.
+    const printer = await t.prisma.printer.create({
+      data: { name: 'Cutting table printer', role: 'CUTTER' },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post('/api/print-jobs')
+      .set('Cookie', cookies.assistant)
+      .send({ sourceType: 'TEST' });
+    expect(res.status).toBe(201);
+    expect(res.body).toMatchObject({
+      printerId: printer.id,
+      sourceType: 'TEST',
+      status: 'PENDING',
+    });
+  });
+
   // -------------------------------------------------------------------------
   // 3. Завершение смены
   // -------------------------------------------------------------------------

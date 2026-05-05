@@ -61,6 +61,28 @@ export class EmployeesController {
     return this.employees.create(body);
   }
 
+  /**
+   * Узкий справочник активных раскройщиков для select-а на форме
+   * выпуска паспорта (`apps/web/app/orders/[id]/passports/new`).
+   *
+   * Метод-уровневый `@Roles(...)` переопределяет класс-уровневый
+   * `@Roles('SHOP_MANAGER', 'ADMIN')` и расширяет доступ на
+   * `CUTTER_ASSISTANT` — единственная роль, которой эта форма нужна
+   * по UX (см. `docs/cutter-assistant-passport-release-recon.md §5`).
+   *
+   * Маршрут объявлен **до** `@Get(':id')` намеренно: иначе Nest
+   * парсит литерал `cutters` как `id` и улетает в `get(id='cutters')`
+   * → 404 `EMPLOYEE_NOT_FOUND` вместо успеха.
+   *
+   * Никаких payroll-полей не отдаём — проекция фиксируется в
+   * `EmployeesService.listActiveCutters()` через Prisma `select`.
+   */
+  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @Get('cutters')
+  listActiveCutters() {
+    return this.employees.listActiveCutters();
+  }
+
   @Get(':id')
   get(@Param('id') id: string) {
     return this.employees.get(id);

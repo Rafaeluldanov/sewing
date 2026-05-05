@@ -62,6 +62,7 @@ export type IconName =
   | 'period'
   | 'arrow-right'
   | 'plus'
+  | 'trash'
   | 'logout'
   | 'refresh'
   | 'search'
@@ -220,6 +221,11 @@ const ICON_PATHS: Record<IconName, PathSpec> = {
   },
   plus: {
     d: 'M12 5v14M5 12h14',
+  },
+  trash: {
+    d: 'M4 7h16',
+    extra:
+      '<path d="M9 7V5a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /><path d="M6 7l1 13a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1l1-13" /><path d="M10 11v6M14 11v6" />',
   },
   logout: {
     d: 'M9 4H5a1 1 0 0 0-1 1v14a1 1 0 0 0 1 1h4',

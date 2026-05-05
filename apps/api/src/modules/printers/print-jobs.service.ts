@@ -13,6 +13,7 @@ import {
   PrinterNotFoundException,
   PrintersService,
 } from './printers.service.js';
+import { resolveCandidateRoles } from './printer-role-resolution.js';
 
 /**
  * Сервис заданий на печать (`PrintJob`). Содержит:
@@ -184,12 +185,17 @@ export class PrintJobsService {
    *   1. если `printerId` передан явно (тестовая печать менеджером) —
    *      берём его;
    *   2. иначе — ищем активный принтер по РОЛИ сотрудника (новая
-   *      привязка `Printer.role`, см. `docs/domain.md §17`);
-   *   3. если по роли ничего нет — fallback на старую привязку:
-   *      берём активную смену сотрудника и ищем принтер по
-   *      `Printer.equipmentId === ShiftSession.equipmentId`. Это
-   *      сохраняет работоспособность для инсталляций, которые ещё
-   *      не переехали на роль-привязку. Удалить fallback можно
+   *      привязка `Printer.role`, см. `docs/domain.md §17`).
+   *      Если для роли сотрудника нет принтера, перебираем
+   *      «помощниковские» fallback-роли из
+   *      `PRINTER_ROLE_FALLBACKS` (например, `CUTTER_ASSISTANT`
+   *      физически работает за тем же столом, что и `CUTTER`, и
+   *      печатает на тот же принтер);
+   *   3. если ни сама роль, ни fallback-роли не дают принтера —
+   *      пробуем старую привязку: берём активную смену сотрудника и
+   *      ищем принтер по `Printer.equipmentId === ShiftSession.equipmentId`.
+   *      Это сохраняет работоспособность для инсталляций, которые
+   *      ещё не переехали на роль-привязку. Удалить fallback можно
    *      одновременно с полем `Printer.equipmentId`.
    *
    * Если ни роль-привязка, ни смена не дают принтера —
@@ -210,11 +216,14 @@ export class PrintJobsService {
       select: { role: true },
     });
     if (employee) {
-      const byRole = await this.prisma.printer.findFirst({
-        where: { role: employee.role, isActive: true },
-        orderBy: { createdAt: 'asc' },
-      });
-      if (byRole) return byRole;
+      const candidateRoles = resolveCandidateRoles(employee.role);
+      for (const role of candidateRoles) {
+        const byRole = await this.prisma.printer.findFirst({
+          where: { role, isActive: true },
+          orderBy: { createdAt: 'asc' },
+        });
+        if (byRole) return byRole;
+      }
     }
 
     // Fallback: старая привязка по equipment активной смены.
