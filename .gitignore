@@ -23,3 +23,6 @@ apps/api/uploads/
 # editor
 .idea/
 .vscode/
+
+# TypeScript build info
+*.tsbuildinfo
