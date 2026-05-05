@@ -125,7 +125,7 @@ export function OrderPassportsTab({
       header: 'Номер',
       render: (p) => (
         <Link
-          href={`/passports/${p.id}`}
+          href={`/admin/passports/${p.id}`}
           className="admin-table__action-link"
           prefetch={false}
         >

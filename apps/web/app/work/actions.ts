@@ -111,7 +111,9 @@ async function runWithPassport(
     >;
     revalidatePath('/work');
     revalidatePath(`/passports/${passport.id}`);
+    revalidatePath(`/admin/passports/${passport.id}`);
     revalidatePath(`/orders/${passport.orderId}`);
+    revalidatePath(`/admin/orders/${passport.orderId}`);
     return {
       info: successMessage,
       passport: {

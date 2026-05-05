@@ -13503,3 +13503,127 @@ body:has(.admin-layout) .app-header { display: none !important; }
   background: rgba(15, 23, 42, 0.02);
   border: 1px solid var(--admin-border);
 }
+
+/* =====================================================================
+   Admin UI 2.6 — карточка паспорта `/admin/passports/[id]`.
+
+   Стили только для новой admin-страницы паспорта (см.
+   `apps/web/app/admin/passports/[id]/page.tsx`). На legacy
+   `/passports/[id]` ничего не задеваем — там по-прежнему живут
+   `passport-hero`, `passport-fields` и `qc-summary` из старой
+   эпохи.
+   ===================================================================== */
+
+.admin-link {
+  color: var(--admin-primary, #1d4ed8);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.admin-link:hover {
+  color: var(--admin-primary-strong, #1e40af);
+}
+
+.admin-passport-fields {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 0;
+}
+
+.admin-passport-field {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.55rem 0;
+  border-bottom: 1px solid var(--admin-border, #e5e7eb);
+}
+.admin-passport-field:last-child {
+  border-bottom: 0;
+}
+.admin-passport-field__label {
+  color: var(--admin-muted, #64748b);
+  font-size: 0.88rem;
+  flex: 0 0 auto;
+}
+.admin-passport-field__value {
+  text-align: right;
+  font-size: 0.95rem;
+}
+
+.admin-passport-qr {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.65rem;
+}
+.admin-passport-qr img {
+  width: 180px;
+  height: 180px;
+  border-radius: 12px;
+  border: 1px solid var(--admin-border, #e5e7eb);
+  background: #fff;
+  padding: 8px;
+}
+.admin-passport-qr__code {
+  font-size: 0.78rem;
+  color: var(--admin-muted, #64748b);
+  letter-spacing: 0.08em;
+}
+
+.admin-passport-qc {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+}
+.admin-passport-qc__cell {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  padding: 0.6rem 0.7rem;
+  border-radius: 10px;
+  background: rgba(15, 23, 42, 0.03);
+  border: 1px solid var(--admin-border, #e5e7eb);
+}
+.admin-passport-qc__cell strong {
+  font-size: 1.15rem;
+}
+.admin-passport-qc__cell--bad {
+  background: rgba(220, 38, 38, 0.06);
+  border-color: rgba(220, 38, 38, 0.2);
+}
+.admin-passport-qc__cell--bad strong {
+  color: #b91c1c;
+}
+.admin-passport-qc__cell--good {
+  background: rgba(22, 163, 74, 0.06);
+  border-color: rgba(22, 163, 74, 0.2);
+}
+.admin-passport-qc__cell--good strong {
+  color: #15803d;
+}
+
+.admin-passport-earnings {
+  overflow-x: auto;
+}
+.admin-passport-earnings table {
+  width: 100%;
+  border-collapse: collapse;
+}
+.admin-passport-earnings th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.82rem;
+  color: var(--admin-muted, #64748b);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid var(--admin-border, #e5e7eb);
+}
+.admin-passport-earnings td {
+  padding: 0.55rem 0.5rem;
+  border-bottom: 1px solid var(--admin-border, #e5e7eb);
+  font-size: 0.92rem;
+}
+.admin-passport-earnings tbody tr:last-child td {
+  border-bottom: 0;
+}

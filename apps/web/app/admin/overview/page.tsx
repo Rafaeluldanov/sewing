@@ -192,7 +192,7 @@ export default async function AdminOverviewPage() {
               {overview.passports.map((p) => (
                 <tr key={p.passportId}>
                   <td>
-                    <Link href={`/passports/${p.passportId}`}>{p.number}</Link>{' '}
+                    <Link href={`/admin/passports/${p.passportId}`}>{p.number}</Link>{' '}
                     <AdminStatusBadge
                       tone={p.status === 'IN_PROGRESS' ? 'info' : 'muted'}
                     >

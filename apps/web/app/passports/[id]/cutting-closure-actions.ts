@@ -59,7 +59,9 @@ export async function requestCuttingClosureAction(
     return { error: explainApiError(e) };
   }
   revalidatePath(`/passports/${passportId}`);
+  revalidatePath(`/admin/passports/${passportId}`);
   revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/admin/orders/${orderId}`);
   return { ok: true };
 }
 
@@ -82,7 +84,9 @@ export async function approveCuttingClosureAction(
     return { error: explainApiError(e) };
   }
   revalidatePath(`/passports/${passportId}`);
+  revalidatePath(`/admin/passports/${passportId}`);
   revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/admin/orders/${orderId}`);
   return { ok: true };
 }
 
@@ -105,6 +109,8 @@ export async function rejectCuttingClosureAction(
     return { error: explainApiError(e) };
   }
   revalidatePath(`/passports/${passportId}`);
+  revalidatePath(`/admin/passports/${passportId}`);
   revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/admin/orders/${orderId}`);
   return { ok: true };
 }

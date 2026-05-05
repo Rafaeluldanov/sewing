@@ -21,7 +21,9 @@ function errorRequestId(e: unknown): string | undefined {
 function revalidateForPassport(detail: WtoPassportDetailDto): void {
   revalidatePath('/wto');
   revalidatePath(`/passports/${detail.passportId}`);
+  revalidatePath(`/admin/passports/${detail.passportId}`);
   revalidatePath(`/orders/${detail.orderId}`);
+  revalidatePath(`/admin/orders/${detail.orderId}`);
   revalidateTag('cells');
 }
 

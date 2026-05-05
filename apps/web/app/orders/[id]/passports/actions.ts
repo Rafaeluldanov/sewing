@@ -249,7 +249,9 @@ export async function createPassportAction(
     };
   }
   revalidatePath(`/passports/${created.id}`);
+  revalidatePath(`/admin/passports/${created.id}`);
   revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/admin/orders/${orderId}`);
   return {
     success: {
       passport: passportSnapshot,
@@ -277,7 +279,11 @@ export async function placePassportAction(
   try {
     await placePassport(passportId, parsed.data);
     revalidatePath(`/passports/${passportId}`);
-    if (orderId) revalidatePath(`/orders/${orderId}`);
+    revalidatePath(`/admin/passports/${passportId}`);
+    if (orderId) {
+      revalidatePath(`/orders/${orderId}`);
+      revalidatePath(`/admin/orders/${orderId}`);
+    }
   } catch (e) {
     if (isNextRedirect(e)) throw e;
     return { error: explainApiError(e) };
@@ -324,6 +330,7 @@ export async function deletePassportAction(
   revalidatePath(`/orders/${orderId}`);
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath(`/passports/${passportId}`);
+  revalidatePath(`/admin/passports/${passportId}`);
   return { ok: true };
 }
 
@@ -339,6 +346,7 @@ export async function deletePassportFromDetailAction(
   revalidatePath(`/orders/${orderId}`);
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath(`/passports/${passportId}`);
+  revalidatePath(`/admin/passports/${passportId}`);
   // Возвращаем менеджера на admin-карточку заказа, вкладка
   // «Паспорта» (см. `OrderPassportsTab`,
   // `apps/web/app/admin/orders/[id]/page.tsx`). Управленческое

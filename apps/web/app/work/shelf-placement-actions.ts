@@ -163,7 +163,9 @@ export async function placePassportToCellAction(
     const passport = await findPassportByCode(trimmed);
     const result = await placePassport(passport.id, { cellId });
     revalidatePath(`/passports/${passport.id}`);
+    revalidatePath(`/admin/passports/${passport.id}`);
     revalidatePath(`/orders/${passport.orderId}`);
+    revalidatePath(`/admin/orders/${passport.orderId}`);
     revalidateTag('cells');
     const updated = result.passport;
     return {

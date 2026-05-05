@@ -301,13 +301,15 @@ function OperationEntriesTable({
       key: 'passport',
       header: 'Паспорт',
       render: (e) => (
-        <Link href={`/passports/${e.passportId}`}>{e.passportNumber}</Link>
+        <Link href={`/admin/passports/${e.passportId}`}>{e.passportNumber}</Link>
       ),
     },
     {
       key: 'order',
       header: 'Заказ',
-      render: (e) => <Link href={`/orders/${e.orderId}`}>{e.orderNumber}</Link>,
+      render: (e) => (
+        <Link href={`/admin/orders/${e.orderId}`}>{e.orderNumber}</Link>
+      ),
     },
     {
       key: 'qty',
