@@ -70,9 +70,13 @@ export class WtoService {
    *     дублируется на всякий случай: входной скан уже это проверил,
    *     но WTO_PASSED без QC_PASSED — невозможное состояние).
    *
-   * Идемпотентность: повторное «Завершить ВТО» допустимо. Каждое
-   * нажатие создаёт новое событие (как у QC). Аудит хранит всю историю,
-   * `wtoCompletedAt` — это всегда самое свежее `WTO_PASSED`.
+   * Идемпотентность (row-level): повторное «Завершить ВТО» допустимо,
+   * но второй вызов НЕ пишет ни новый `PassportEvent(WTO_PASSED)`,
+   * ни новую запись `AuditLog(WTO_COMPLETED)`. Возвращаем текущее
+   * состояние карточки. `wtoCompletedAt` указывает на единственный
+   * `WTO_PASSED`-event и не «прыгает» между нажатиями. Симметрично
+   * `QcService.completeQc` и закрывает соответствующий finding из
+   * `docs/operations-test-findings.md`.
    */
   async completeWto(
     passportId: string,
@@ -106,9 +110,19 @@ export class WtoService {
 
     // Аналогично `QcService.completeQc`: оборачиваем в `$transaction`,
     // чтобы запись `WTO_PASSED` и строка `AuditLog` создавались
-    // атомарно. Бизнес-логика не меняется — это всё ещё ровно один
-    // INSERT в `PassportEvent` (см. `docs/domain.md §«Audit log»`).
+    // атомарно (см. `docs/domain.md §«Audit log»`).
+    //
+    // Row-level idempotency: внутри транзакции проверяем наличие
+    // существующего `WTO_PASSED`-event; если есть — выходим без
+    // вставки event/audit. См. подробный комментарий в
+    // `QcService.completeQc` — здесь применяется тот же подход
+    // «check-then-insert» под одной транзакцией.
     await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.passportEvent.findFirst({
+        where: { passportId, type: PassportEventType.WTO_PASSED },
+        select: { id: true },
+      });
+      if (existing) return;
       await tx.passportEvent.create({
         data: {
           passportId,

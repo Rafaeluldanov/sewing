@@ -267,14 +267,12 @@ describeWithDb('integration — WTO shift-gated scan flow', () => {
   });
 
   /**
-   * **FINDING:** recon §6 invariant 6 ожидает «`WTO_PASSED` создаётся
-   * ровно один раз». `WtoService.completeWto` (см. JSDoc на
-   * `apps/api/src/modules/wto/wto.service.ts:73-76`) сознательно пишет
-   * новое событие на каждый клик, по аналогии с QC. Этот тест
-   * **пинит текущий контракт** (count = 2 после × 2); расхождение в
-   * `docs/operations-test-findings.md`.
+   * Row-level идемпотентность `completeWto` (симметрично QC, fixed в
+   * `WtoService.completeWto`): второй клик возвращает успешный detail,
+   * но НЕ пишет ни второй `PassportEvent(WTO_PASSED)`, ни вторую
+   * запись `AuditLog(WTO_COMPLETED)`, ни не сдвигает `wtoCompletedAt`.
    */
-  test('FINDING: completeWto × 2 пишет два WTO_PASSED и два WTO_COMPLETED audit (текущее поведение)', async () => {
+  test('completeWto × 2 идемпотентен: один WTO_PASSED, один WTO_COMPLETED, wtoCompletedAt стабилен', async () => {
     const passportId = await prepareInProgressPassport(true);
 
     await request(t.app.getHttpServer())
@@ -299,6 +297,8 @@ describeWithDb('integration — WTO shift-gated scan flow', () => {
     const firstWtoAt = first.body.wtoCompletedAt as string;
     expect(typeof firstWtoAt).toBe('string');
 
+    // Если бы сервис писал второй event, его timestamp был бы заметно
+    // позже. Идемпотентность означает «тот же первый event».
     await new Promise((r) => setTimeout(r, 5));
 
     const second = await request(t.app.getHttpServer())
@@ -307,17 +307,15 @@ describeWithDb('integration — WTO shift-gated scan flow', () => {
       .send({});
     expect(second.status).toBe(201);
     const secondWtoAt = second.body.wtoCompletedAt as string;
-    expect(new Date(secondWtoAt).getTime()).toBeGreaterThanOrEqual(
-      new Date(firstWtoAt).getTime(),
-    );
+    expect(secondWtoAt).toBe(firstWtoAt);
 
     const events = await t.prisma.passportEvent.count({
       where: { passportId, type: 'WTO_PASSED' },
     });
-    expect(events).toBe(2);
+    expect(events).toBe(1);
     const audit = await t.prisma.auditLog.count({
       where: { event: 'WTO_COMPLETED', entityType: 'WTO', entityId: passportId },
     });
-    expect(audit).toBe(2);
+    expect(audit).toBe(1);
   });
 });

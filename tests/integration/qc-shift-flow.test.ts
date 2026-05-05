@@ -233,17 +233,13 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
   // ---------------------------------------------------------------------------
 
   /**
-   * **FINDING:** recon §6 invariant 6 ожидает «`QC_PASSED` создаётся
-   * ровно один раз». Однако `QcService.completeQc` (см. JSDoc на
-   * `apps/api/src/modules/qc/qc.service.ts:195-198`) сознательно пишет
-   * новое событие на каждый клик: «Каждое нажатие создаёт новое
-   * событие — это полезно, если ОТК после фиксации брака подтверждает
-   * повторно. Аудит видит всю историю, `qcCompletedAt` в карточке
-   * всегда соответствует последнему событию». Этот тест **пинит
-   * текущий контракт** (count = 2 после × 2), а расхождение зафиксировано
-   * в `docs/operations-test-findings.md`.
+   * Row-level идемпотентность `completeQc` (см. recon §6 invariant 6,
+   * fixed в `QcService.completeQc`): второй клик возвращает успешный
+   * detail, но НЕ пишет ни второй `PassportEvent(QC_PASSED)`, ни
+   * вторую запись `AuditLog(QC_COMPLETED)`, ни не сдвигает
+   * `qcCompletedAt`.
    */
-  test('FINDING: completeQc × 2 пишет два QC_PASSED и два QC_COMPLETED audit (текущее поведение)', async () => {
+  test('completeQc × 2 идемпотентен: один QC_PASSED, один QC_COMPLETED, qcCompletedAt стабилен', async () => {
     const passportId = await prepareQcReady();
 
     const first = await request(t.app.getHttpServer())
@@ -254,8 +250,8 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
     const firstQcAt = first.body.qcCompletedAt as string;
     expect(typeof firstQcAt).toBe('string');
 
-    // Небольшая пауза — иначе timestamp может совпасть и assert
-    // на «обновился» проходит вырожденно.
+    // Небольшая пауза — если бы сервис писал второй event, у него
+    // был бы наблюдаемо более поздний timestamp.
     await new Promise((r) => setTimeout(r, 5));
 
     const second = await request(t.app.getHttpServer())
@@ -264,24 +260,21 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
       .send({});
     expect(second.status).toBe(201);
     const secondQcAt = second.body.qcCompletedAt as string;
-    expect(typeof secondQcAt).toBe('string');
-    expect(new Date(secondQcAt).getTime()).toBeGreaterThanOrEqual(
-      new Date(firstQcAt).getTime(),
-    );
+    // qcCompletedAt не сдвигается — это тот же первый event.
+    expect(secondQcAt).toBe(firstQcAt);
 
-    // Текущий контракт: каждое нажатие → новое QC_PASSED + новый
-    // QC_COMPLETED audit. Recon §6 ожидал count=1 — см. findings.
+    // Row-level контракт: ровно одно событие и одна запись в AuditLog.
     const passportEvents = await t.prisma.passportEvent.count({
       where: { passportId, type: 'QC_PASSED' },
     });
-    expect(passportEvents).toBe(2);
+    expect(passportEvents).toBe(1);
     const auditCount = await t.prisma.auditLog.count({
       where: { event: 'QC_COMPLETED', entityType: 'QC', entityId: passportId },
     });
-    expect(auditCount).toBe(2);
+    expect(auditCount).toBe(1);
 
     // Status паспорта остаётся IN_PROGRESS — completeQc сознательно
-    // не двигает pipeline (см. service.ts:185-187).
+    // не двигает pipeline (см. service.ts JSDoc).
     const passport = await t.prisma.passport.findUniqueOrThrow({
       where: { id: passportId },
       select: { status: true },
