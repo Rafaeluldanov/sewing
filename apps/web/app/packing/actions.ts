@@ -33,7 +33,9 @@ function revalidateBox(box: BoxDetailDto): void {
   revalidatePath(`/packing/boxes/${box.id}`);
   for (const it of box.items) {
     revalidatePath(`/orders/${it.orderId}`);
+    revalidatePath(`/admin/orders/${it.orderId}`);
     revalidatePath(`/passports/${it.passportId}`);
+    revalidatePath(`/admin/passports/${it.passportId}`);
   }
   // Закрытие коробки апрувит начисления — `/earnings` тоже стоит освежить.
   revalidatePath('/earnings');

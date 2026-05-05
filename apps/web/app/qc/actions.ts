@@ -30,7 +30,9 @@ function revalidateForPassport(detail: QcPassportDetailDto): void {
   revalidatePath('/qc');
   revalidatePath(`/qc/passports/${detail.passportId}`);
   revalidatePath(`/passports/${detail.passportId}`);
+  revalidatePath(`/admin/passports/${detail.passportId}`);
   revalidatePath(`/orders/${detail.orderId}`);
+  revalidatePath(`/admin/orders/${detail.orderId}`);
   revalidateTag('cells');
 }
 

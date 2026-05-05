@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import {
   PASSPORT_STATUS_LABELS,
@@ -74,6 +74,18 @@ export default async function PassportDetailPage({
 }: {
   params: { id: string };
 }) {
+  // Менеджеру / админу карточка живёт под admin-chrome (sidebar +
+  // AdminPageShell) на `/admin/passports/[id]`. Старая страница без
+  // sidebar — это legacy-вид для производственных ролей (швея,
+  // помощник раскройщика, ОТК), у которых admin-layout всё равно
+  // редиректит на «/». Перенаправляем менеджеров до запросов
+  // данных, чтобы не делать бессмысленных round-trip-ов: всё
+  // равно отрисуем админскую страницу. Сравни с подобным редиректом
+  // на legacy `/orders/[id]` → `/admin/orders/[id]`.
+  const me = await getCurrentUserOrNull();
+  if (me?.user.role === 'ADMIN' || me?.user.role === 'SHOP_MANAGER') {
+    redirect(`/admin/passports/${params.id}`);
+  }
   let passport;
   try {
     passport = await getPassport(params.id);
@@ -83,7 +95,6 @@ export default async function PassportDetailPage({
   }
   const cells = await listCells();
   const defects = await listPassportDefects(passport.id);
-  const me = await getCurrentUserOrNull();
   const isManager = isEarningsManager(me?.user.role);
   const earnings = await listPassportEarnings(passport.id);
   // ADR-0018: «закрытие раскроя по размеру через заявку». Подтягиваем
