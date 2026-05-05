@@ -170,6 +170,7 @@ export default async function AdminOrderDetailPage({
               passports={passports}
               routeSteps={order.routeSteps}
               canIssuePassport={canIssuePassport}
+              canDelete={isManager}
             />
           </div>
         )}
