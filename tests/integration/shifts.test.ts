@@ -195,17 +195,20 @@ describeWithDb('integration — ShiftsService dedicated coverage', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 4. FINDING-test: equipment-operation binding не enforce-ится на старте
-  //    смены. См. docs/operations-test-findings.md (severity: medium).
+  // 4. Allow-list EquipmentOperation enforcement на старте смены
+  //    (был finding, fixed в ShiftsService.start; см.
+  //    docs/operations-test-findings.md §Resolved).
   // ---------------------------------------------------------------------------
 
-  test('FINDING: start не проверяет Equipment.allowedOperations — пинит текущее поведение', async () => {
+  test('start с operationId вне Equipment.allowedOperations → 409 SHIFT_OPERATION_NOT_ALLOWED_FOR_EQUIPMENT, ShiftSession не создаётся', async () => {
     // qc-station-01 разрешает только QC, не CUT_DIVISION (см. seedMinimal).
-    // /shifts/meta (источник истины для UI) этот mismatch отрежет —
-    // но сам POST /shifts/start пропускает.
+    // /shifts/meta уже отрезает этот mismatch для UI; теперь и backend
+    // на POST /shifts/start блокирует обходной запрос.
     const eq = seed.equipment['qc-station-01'];
     const op = seed.operations.CUT_DIVISION;
 
+    // Источник правды — тот же, что у /shifts/meta: проверяем, что
+    // mismatch действительно есть в allow-list карте.
     const meta = await request(t.app.getHttpServer())
       .get('/api/shifts/meta')
       .set('Cookie', cookies.seamstress)
@@ -217,17 +220,37 @@ describeWithDb('integration — ShiftsService dedicated coverage', () => {
     expect(qcStation, 'qc-station-01 must be present in meta').toBeDefined();
     expect(qcStation!.allowedOperationIds).not.toContain(op.id);
 
-    // Текущее поведение: backend разрешает старт, потому что в
-    // ShiftsService.start нет проверки `EquipmentOperation`.
-    // Ожидаемое поведение (см. RECON §6 invariant 9): 4xx
-    // OPERATION_NOT_ALLOWED_BY_EQUIPMENT.
     const res = await request(t.app.getHttpServer())
       .post('/api/shifts/start')
       .set('Cookie', cookies.seamstress)
       .send({ equipmentId: eq.id, operationId: op.id });
-    // Pin current behavior, без падения CI. Точно НЕ 500.
-    expect(res.status).not.toBe(500);
-    expect([201, 400, 409]).toContain(res.status);
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SHIFT_OPERATION_NOT_ALLOWED_FOR_EQUIPMENT');
+
+    const created = await t.prisma.shiftSession.findFirst({
+      where: { employeeId: seed.employees.seamstress.id },
+    });
+    expect(created).toBeNull();
+  });
+
+  test('start с EquipmentOperation isActive=false → 409 SHIFT_OPERATION_NOT_ALLOWED_FOR_EQUIPMENT (soft-delete биндинга)', async () => {
+    // overlock-01 ↔ SEW_OVERLOCK_1 — нормально разрешённая пара. Если
+    // менеджер «выключил» связь через `isActive=false` (см. ADR-0017),
+    // start не должен проходить — даже если операция и оборудование
+    // оба `active=true`.
+    const eq = seed.equipment['overlock-01'];
+    const op = seed.operations.SEW_OVERLOCK_1;
+    await t.prisma.equipmentOperation.updateMany({
+      where: { equipmentId: eq.id, operationId: op.id },
+      data: { isActive: false },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.seamstress)
+      .send({ equipmentId: eq.id, operationId: op.id });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('SHIFT_OPERATION_NOT_ALLOWED_FOR_EQUIPMENT');
   });
 
   // ---------------------------------------------------------------------------

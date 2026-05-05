@@ -647,6 +647,22 @@ export class ShiftSessionRequiredException extends BusinessException {
   }
 }
 
+/**
+ * Сотрудник пытается стартовать смену на оборудовании, для которого
+ * выбранная операция не входит в allow-list `EquipmentOperation`
+ * (см. ADR-0017). Источник истины — та же выборка, что у
+ * `/api/shifts/meta`: связь должна существовать и быть `isActive=true`.
+ */
+export class ShiftOperationNotAllowedForEquipmentException extends BusinessException {
+  constructor() {
+    super(
+      'SHIFT_OPERATION_NOT_ALLOWED_FOR_EQUIPMENT',
+      'Операция недоступна для выбранного оборудования.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class PassportNotInCellException extends BusinessException {
   constructor() {
     super(
