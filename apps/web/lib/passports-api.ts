@@ -47,6 +47,19 @@ export function placePassport(
   );
 }
 
+/**
+ * Управленческое удаление паспорта (см.
+ * `PassportsService.delete`, `docs/api.md §«DELETE /api/passports/:id»`).
+ * RBAC: `SHOP_MANAGER` / `ADMIN`. Backend отвечает `204 No Content`,
+ * `apiFetch` для пустого тела возвращает `null`-friendly значение —
+ * мы намеренно ничего не используем, важен сам факт `2xx`.
+ */
+export async function deletePassport(id: string): Promise<void> {
+  await apiFetch<unknown>(`/passports/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
 export function listCells(): Promise<CellDetailDto[]> {
   return apiFetch<CellDetailDto[]>('/cells', {
     next: { revalidate: 60, tags: ['cells'] },

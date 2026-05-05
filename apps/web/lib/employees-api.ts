@@ -7,6 +7,7 @@
  */
 
 import type {
+  ActiveCutterListItemDto,
   CreateEmployeeDto,
   EmployeeDetailDto,
   EmployeeListItemDto,
@@ -43,6 +44,21 @@ export function listEmployees(
       companyDivisionId: query.companyDivisionId,
     },
   });
+}
+
+/**
+ * Узкий справочник активных раскройщиков для select-а на форме
+ * выпуска паспорта (`apps/web/app/orders/[id]/passports/new`).
+ *
+ * В отличие от `listEmployees(...)` этот endpoint:
+ *   - доступен `CUTTER_ASSISTANT` (а не только `SHOP_MANAGER, ADMIN`);
+ *   - возвращает только `{ id, fullName, login }` — никаких
+ *     payroll-полей.
+ *
+ * См. `docs/cutter-assistant-passport-release-recon.md §5`.
+ */
+export function listActiveCutters(): Promise<ActiveCutterListItemDto[]> {
+  return apiFetch<ActiveCutterListItemDto[]>('/employees/cutters');
 }
 
 export function getEmployee(id: string): Promise<EmployeeDetailDto> {

@@ -13,7 +13,11 @@ import {
   type CreateCuttingClosureRequestDto,
 } from '@sewing/shared/cutting-closure';
 import { ApiRequestError } from '@/lib/api';
-import { createPassport, placePassport } from '@/lib/passports-api';
+import {
+  createPassport,
+  deletePassport,
+  placePassport,
+} from '@/lib/passports-api';
 import { createCuttingClosureRequest } from '@/lib/cutting-closure-api';
 
 /**
@@ -279,4 +283,61 @@ export async function placePassportAction(
     return { error: explainApiError(e) };
   }
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// DELETE — управленческое удаление паспорта (см.
+// `PassportsService.delete`, `docs/domain.md §7.8 «Удаление паспорта»`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Тонкая обёртка `DELETE /api/passports/:id`. RBAC enforce-ит backend
+ * (`@Roles('SHOP_MANAGER', 'ADMIN')`); серверная страница, которая
+ * рендерит кнопку, отвечает за то, чтобы для остальных ролей кнопка
+ * вообще не приходила в HTML.
+ *
+ * Контракт:
+ *   - `{ ok: true }` — паспорт удалён, страница ревалидирована;
+ *     UI сам решает, перерисоваться или редиректнуть;
+ *   - `{ error: '…' }` — backend отказал (нет прав, паспорт упакован,
+ *     есть подтверждённые начисления и т.п.). Текст уже подготовлен
+ *     к показу, client-component кладёт его в свой error-box.
+ *
+ * Отдельный wrapper `deletePassportFromDetailAction` дополнительно
+ * редиректит на карточку заказа после успешного удаления — со
+ * страницы паспорта возвращаться больше некуда.
+ */
+export interface DeletePassportActionResult {
+  ok?: true;
+  error?: string;
+}
+
+export async function deletePassportAction(
+  passportId: string,
+  orderId: string,
+): Promise<DeletePassportActionResult> {
+  try {
+    await deletePassport(passportId);
+  } catch (e) {
+    return { error: explainApiError(e) };
+  }
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/admin/orders/${orderId}`);
+  revalidatePath(`/passports/${passportId}`);
+  return { ok: true };
+}
+
+export async function deletePassportFromDetailAction(
+  passportId: string,
+  orderId: string,
+): Promise<DeletePassportActionResult> {
+  try {
+    await deletePassport(passportId);
+  } catch (e) {
+    return { error: explainApiError(e) };
+  }
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath(`/admin/orders/${orderId}`);
+  revalidatePath(`/passports/${passportId}`);
+  redirect(`/orders/${orderId}`);
 }

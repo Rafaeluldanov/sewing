@@ -49,6 +49,7 @@ import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documen
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module.js';
 import { StockModule } from './modules/stock/stock.module.js';
 import { MeModule } from './modules/me/me.module.js';
+import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
 
 @Module({
   imports: [
@@ -102,6 +103,7 @@ import { MeModule } from './modules/me/me.module.js';
     MaterialIssuesModule,
     StockModule,
     MeModule,
+    BootstrapModule,
   ],
 })
 export class AppModule {}

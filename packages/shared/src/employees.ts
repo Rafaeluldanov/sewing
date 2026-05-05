@@ -349,6 +349,25 @@ export interface EmployeeListItemDto {
   companyDivision?: { id: string; code: string; name: string } | null;
 }
 
+/**
+ * Узкий справочник активных раскройщиков для select-а на форме
+ * выпуска паспорта (`apps/web/app/orders/[id]/passports/new`).
+ *
+ * НЕ наследует `EmployeeListItemDto` сознательно — этот DTO живёт
+ * на узком read-only endpoint `GET /api/employees/cutters`, к
+ * которому помимо `SHOP_MANAGER`/`ADMIN` имеет доступ ещё и
+ * `CUTTER_ASSISTANT`. Любые payroll-поля (`salaryPerShift`,
+ * `compensationType`, `companyDivision`) сюда не попадают:
+ * проекция фиксируется на уровне Prisma `select` в
+ * `EmployeesService.listActiveCutters`. Подробнее — RECON
+ * `docs/cutter-assistant-passport-release-recon.md §5`.
+ */
+export interface ActiveCutterListItemDto {
+  id: string;
+  fullName: string;
+  login: string;
+}
+
 export interface EmployeeDetailDto extends EmployeeListItemDto {
   /**
    * Процент B2B-начисления закройщика (`Employee.cutterB2bSewingPercent`,

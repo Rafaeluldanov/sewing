@@ -33,7 +33,7 @@ const ROLE_LABELS: Record<string, string> = {
   ADMIN: 'Администратор',
   SHOP_MANAGER: 'Начальник цеха',
   CUTTER: 'Раскройщик',
-  CUTTER_ASSISTANT: 'Помощник закройщика',
+  CUTTER_ASSISTANT: 'Помощник раскройщика',
   SEAMSTRESS: 'Швея',
 };
 

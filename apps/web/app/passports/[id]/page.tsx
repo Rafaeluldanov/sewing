@@ -22,6 +22,7 @@ import { getPassportCuttingClosureRequest } from '@/lib/cutting-closure-api';
 import { PrintButton } from '@/components/print-button';
 import { PlaceForm } from './place-form';
 import { CuttingClosureSection } from './cutting-closure-section';
+import { DeleteFromDetailButton } from './delete-from-detail-button';
 
 /**
  * Роли с полной видимостью начислений (см. backend
@@ -93,6 +94,12 @@ export default async function PassportDetailPage({
   const canRequestClosure = role === 'CUTTER_ASSISTANT';
   const canReviewClosure = role === 'SHOP_MANAGER' || role === 'ADMIN';
   const showClosureSection = canRequestClosure || canReviewClosure;
+  // Управленческое удаление паспорта (см.
+  // `apps/web/app/orders/[id]/passports/actions.ts`,
+  // `docs/domain.md §7.8 «Удаление паспорта»`). RBAC enforce-ит backend
+  // (`@Roles('SHOP_MANAGER', 'ADMIN')`), но рендерить кнопку
+  // не-менеджеру смысла нет — после клика всё равно прилетит 403.
+  const canDeletePassport = role === 'SHOP_MANAGER' || role === 'ADMIN';
   const closureRequest = showClosureSection
     ? await getPassportCuttingClosureRequest(passport.id)
     : null;
@@ -175,6 +182,13 @@ export default async function PassportDetailPage({
             <Link className="btn" href={`/orders/${passport.orderId}`}>
               <Icon name="orders" size={16} />К заказу
             </Link>
+            {canDeletePassport && (
+              <DeleteFromDetailButton
+                passportId={passport.id}
+                orderId={passport.orderId}
+                passportNumber={passport.number}
+              />
+            )}
           </div>
         </div>
       </div>

@@ -32,6 +32,7 @@ import { MaterialColorForm } from './material-color-form';
 import { OrderActions } from './order-actions';
 import { OutsourceStatusActions } from './outsource-status-actions';
 import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
+import { DeletePassportButton } from './passports/delete-passport-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -294,7 +295,11 @@ export default async function OrderDetailPage({
       {passports.length === 0 ? (
         <div className="card empty">По заказу пока нет выпущенных паспортов.</div>
       ) : (
-        <PassportsTable rows={passports} />
+        <PassportsTable
+          rows={passports}
+          orderId={order.id}
+          canDelete={isManager}
+        />
       )}
     </div>
   );
@@ -697,7 +702,15 @@ function RouteSnapshotCard({ steps }: { steps: OrderRouteStepDto[] }) {
   );
 }
 
-function PassportsTable({ rows }: { rows: PassportListItemDto[] }) {
+function PassportsTable({
+  rows,
+  orderId,
+  canDelete,
+}: {
+  rows: PassportListItemDto[];
+  orderId: string;
+  canDelete: boolean;
+}) {
   return (
     <table className="data-table">
       <thead>
@@ -710,6 +723,14 @@ function PassportsTable({ rows }: { rows: PassportListItemDto[] }) {
           <th>Статус</th>
           <th>Ячейка</th>
           <th>Создан</th>
+          {/*
+            Управленческое удаление паспорта (см.
+            `apps/web/app/orders/[id]/passports/delete-passport-button.tsx`,
+            `docs/domain.md §7.8 «Удаление паспорта»`). Колонка
+            рендерится только для менеджерских ролей; backend в любом
+            случае закрыт `@Roles('SHOP_MANAGER', 'ADMIN')`.
+          */}
+          {canDelete && <th aria-label="Действия" />}
         </tr>
       </thead>
       <tbody>
@@ -733,6 +754,16 @@ function PassportsTable({ rows }: { rows: PassportListItemDto[] }) {
             </td>
             <td>{p.currentCell ? p.currentCell.code : '—'}</td>
             <td>{new Date(p.createdAt).toLocaleDateString('ru-RU')}</td>
+            {canDelete && (
+              <td style={{ textAlign: 'right' }}>
+                <DeletePassportButton
+                  passportId={p.id}
+                  orderId={orderId}
+                  passportNumber={p.number}
+                  variant="icon-only"
+                />
+              </td>
+            )}
           </tr>
         ))}
       </tbody>

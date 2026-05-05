@@ -14,13 +14,13 @@
  *   npx prisma db seed
  */
 
-import {
-  OperationCategory,
-  Prisma,
-  PrismaClient,
-  Role,
-} from '@prisma/client';
+import { Prisma, PrismaClient, Role } from '@prisma/client';
 import bcrypt from 'bcryptjs';
+import {
+  REFERENCE_OPERATIONS,
+  REFERENCE_SIZES,
+  type ReferenceOperationSeed,
+} from '../apps/api/src/modules/bootstrap/reference-data.js';
 
 const prisma = new PrismaClient();
 
@@ -34,29 +34,14 @@ const DEMO_PASSWORD = 'Demo12345!';
 // SIZES
 // ---------------------------------------------------------------------------
 
-const SIZES: readonly string[] = [
-  '104',
-  '110',
-  '116',
-  '122',
-  '128',
-  '134',
-  '140',
-  '146',
-  '152',
-  '158',
-  '164',
-  'XS',
-  'S',
-  'M',
-  'L',
-  'XL',
-  '2XL',
-  '3XL',
-  '4XL',
-  '5XL',
-  '6XL',
-];
+/**
+ * Канонический список размеров — единственный источник истины
+ * (`apps/api/src/modules/bootstrap/reference-data.ts`). Тот же массив
+ * читает `ReferenceDataBootstrapService` на старте API; здесь —
+ * стандартный re-seed с обновлением `sortOrder` (на dev/CI мы хотим
+ * воспроизводимость).
+ */
+const SIZES: readonly string[] = REFERENCE_SIZES;
 
 async function seedSizes() {
   let created = 0;
@@ -117,47 +102,19 @@ async function seedProducts() {
 // OPERATIONS
 // ---------------------------------------------------------------------------
 
-type PricingModeSeed = 'FIXED' | 'BY_SIZE' | 'SALARY_ONLY';
-
-type OperationSeed = {
-  code: string;
-  name: string;
-  category: OperationCategory;
-  sortOrder: number;
-  pricingMode: PricingModeSeed;
-  /** Только для FIXED. Игнорируется иначе. */
-  fixedRate?: number;
-};
-
 /**
- * Базовая бизнес-семантика (см. `docs/domain.md §16a`):
- *   - оверлок отличается по размеру → `BY_SIZE`;
- *   - остальные piecework (раскрой, киперка, распошив) — фиксированная
- *     ставка → `FIXED`;
- *   - подсобные/окладные операции (печать лекал, настил, ОТК, ВТО,
- *     упаковка и т.п.) — `SALARY_ONLY`, начисление не создаётся.
+ * Канонический список операций — единственный источник истины
+ * (`apps/api/src/modules/bootstrap/reference-data.ts`). Тот же массив
+ * читает `ReferenceDataBootstrapService` на старте API; здесь —
+ * полный re-seed с обновлением полей (на dev/CI мы хотим
+ * воспроизводимость).
  *
- * Конкретные ставки специально консервативные демо-цифры: лежат в
- * допустимом диапазоне `Decimal(12,2)` и совпадают с adult-tier из
- * исторического `RATES_BY_OP`. Менеджер дальше правит их в
- * `/admin/operations`.
+ * `OperationCategory` (Prisma-enum) совместим со строковыми
+ * литералами в `REFERENCE_OPERATIONS` (см. enum `OperationCategory`
+ * в `prisma/schema.prisma`).
  */
-const OPERATIONS: readonly OperationSeed[] = [
-  { code: 'CUT_PATTERN_PRINT', name: 'Печать лекал',      category: 'CUTTING', sortOrder: 10,  pricingMode: 'SALARY_ONLY' },
-  { code: 'CUT_SPREADING',     name: 'Настил',            category: 'CUTTING', sortOrder: 20,  pricingMode: 'SALARY_ONLY' },
-  { code: 'CUT_CUT',           name: 'Раскрой',           category: 'CUTTING', sortOrder: 30,  pricingMode: 'FIXED',    fixedRate: 12.0 },
-  { code: 'CUT_DIVISION',      name: 'Деление кроя',      category: 'CUTTING', sortOrder: 40,  pricingMode: 'SALARY_ONLY' },
-  { code: 'CUT_BASE_PREP',     name: 'Подготовка основы', category: 'CUTTING', sortOrder: 50,  pricingMode: 'SALARY_ONLY' },
-  { code: 'CUT_RIBANA_PREP',   name: 'Подготовка рибаны', category: 'CUTTING', sortOrder: 60,  pricingMode: 'SALARY_ONLY' },
-  { code: 'CUT_ISSUE',         name: 'Выдача кроя',       category: 'SEWING',  sortOrder: 70,  pricingMode: 'SALARY_ONLY' },
-  { code: 'SEW_OVERLOCK_1',    name: 'Оверлок 1',         category: 'SEWING',  sortOrder: 80,  pricingMode: 'BY_SIZE' },
-  { code: 'SEW_BINDING',       name: 'Киперка',           category: 'SEWING',  sortOrder: 90,  pricingMode: 'FIXED',    fixedRate: 9.0 },
-  { code: 'SEW_OVERLOCK_2',    name: 'Оверлок 2',         category: 'SEWING',  sortOrder: 100, pricingMode: 'BY_SIZE' },
-  { code: 'SEW_COVERSTITCH',   name: 'Распошив',          category: 'SEWING',  sortOrder: 110, pricingMode: 'FIXED',    fixedRate: 13.5 },
-  { code: 'QC',                name: 'ОТК',               category: 'QC',      sortOrder: 120, pricingMode: 'SALARY_ONLY' },
-  { code: 'WTO',               name: 'ВТО',               category: 'IRONING', sortOrder: 130, pricingMode: 'SALARY_ONLY' },
-  { code: 'PACKING',           name: 'Упаковка',          category: 'PACKING', sortOrder: 140, pricingMode: 'SALARY_ONLY' },
-];
+type OperationSeed = ReferenceOperationSeed;
+const OPERATIONS: readonly OperationSeed[] = REFERENCE_OPERATIONS;
 
 /**
  * `Operation` upsert-ит и `pricingMode`/`fixedRate`.

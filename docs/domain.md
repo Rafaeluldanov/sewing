@@ -1283,6 +1283,73 @@ completedOperationId, currentRouteStepIndex }`,
 номера `P-…` или голого id без побочных эффектов. Используется
 `/work` перед `issue` / `scan`.
 
+### 7.8 Удаление паспорта
+
+Источник: `apps/api/src/modules/passports/passports.service.ts::delete`,
+`apps/api/src/modules/passports/passports.controller.ts::delete`,
+`apps/api/src/common/errors.ts` (классы `PassportPackedDeleteException`,
+`PassportHasApprovedEarningsException`,
+`PassportHasPostedMaterialIssueException`), UI: trash-кнопка в
+таблице паспортов на `/orders/[id]` и кнопка «Удалить паспорт»
+рядом с «К заказу» в карточке `/passports/[id]`.
+
+`DELETE /api/passports/:id` — управленческая корректировка ошибки
+выпуска (неверный размер / рулон / количество). RBAC:
+`SHOP_MANAGER` / `ADMIN`. Ответ — `204 No Content`.
+
+**Блокеры (409 без удаления, состояние БД не меняется):**
+
+- `PASSPORT_HAS_BOX` — паспорт упакован в коробку (`BoxItem`
+  существует). Сначала менеджер должен снять паспорт с коробки на
+  упаковке, иначе удаление сломало бы итог упаковки коробки.
+- `PASSPORT_HAS_APPROVED_EARNINGS` — есть `OperationEntry.status =
+  APPROVED`. Стирать уже начисленную сотрудникам зарплату
+  нельзя — для исправления используется отдельный flow реверса
+  начислений.
+- `PASSPORT_HAS_POSTED_MATERIAL_ISSUE` — привязан проведённый
+  документ расхода материалов (`MaterialIssue.status = POSTED`).
+  Удаление паспорта оставило бы документ-расход с обнулённой
+  ссылкой `passportId`, но стирать историю расхода материалов мы
+  тоже не имеем права — поэтому отказ явный.
+
+**Что чистится в одной транзакции** (если ни один блокер не
+сработал):
+
+1. `PassportEvent` (`deleteMany` по `passportId`) — история
+   событий, без `onDelete`-каскада в схеме.
+2. `OperationEntry` (`deleteMany` по `passportId`) — на этом
+   этапе там остались только `PENDING_RELEASE` (APPROVED уже
+   заблокирован выше).
+3. `PassportDefect` (`deleteMany` по `passportId`) — записи
+   брака ОТК.
+4. `Passport` (сам корень).
+5. `AuditLog(event: 'PASSPORT_DELETED')` с
+   `entityType='PASSPORT'`, `employeeId` = актор, `payload =
+   { number, orderId, sizeId, qtyCut }` — минимальный срез,
+   достаточный для разбора инцидента.
+
+`MaterialIssue.passportId` обнуляется БД автоматически
+(`onDelete: SetNull` в `prisma/schema.prisma`), отдельной чистки
+в коде нет — это сознательно: документ расхода живёт дольше, чем
+конкретный паспорт.
+
+**Эффект на сводку заказа.** `Order.summary.qtyCutFactTotal` и
+строки `sizeBreakdown.qtyCutFact` пересчитываются на лету из
+живых паспортов в `order-aggregator.ts` (см. §1) — после удаления
+паспорта цифры автоматически уменьшаются на `passport.qtyCut`. То
+же касается `qtyDefect` / `qtyGood`. Никаких snapshot-витрин
+обновлять не нужно.
+
+**UI.** Trash-кнопка ставится в столбце «Действия» таблицы
+паспортов на `/orders/[id]` только для менеджерских ролей
+(`SHOP_MANAGER` / `ADMIN`). На карточке `/passports/[id]` кнопка
+«Удалить паспорт» лежит на одном ряду с «К заказу». Подтверждение
+через `window.confirm` — операция редкая (исправляет ошибку), без
+своего модального окна. После успеха table-кнопка ревалидирует
+страницу заказа, detail-кнопка дополнительно редиректит на
+`/orders/<orderId>`, потому что страница только что удалённого
+паспорта больше не существует.
+
 ---
 
 <a id="8-qc-wto"></a>
@@ -2538,11 +2605,22 @@ Lifecycle (`docs/events.md §7.2`):
 При `POST /api/print-jobs` без явного `printerId`
 (`apps/api/src/modules/printers/print-jobs.service.ts:resolvePrinter`):
 
-1. Берём активную смену сотрудника (`ShiftSession.endedAt = null`).
-2. Если смены нет — `409 SHIFT_SESSION_REQUIRED`.
-3. Берём `equipmentId` смены; ищем `Printer { equipmentId,
-   isActive: true }`. Если несколько — первый по `createdAt`.
-4. Если принтера нет — `409 PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT`.
+1. Берём роль сотрудника. Перебираем кандидатов из
+   `resolveCandidateRoles(role)` (см.
+   `apps/api/src/modules/printers/printer-role-resolution.ts`):
+   первой идёт сама роль, дальше — fallback'и из
+   `PRINTER_ROLE_FALLBACKS`. На MVP единственный fallback —
+   `CUTTER_ASSISTANT → CUTTER`: помощник раскройщика физически
+   работает за тем же раскройным столом, что и сам раскройщик, и
+   печатает на тот же принтер. Для каждой роли ищем
+   `Printer { role, isActive: true }`, берём первый по `createdAt`.
+2. Если ни сама роль, ни fallback'и не дают принтера — пробуем
+   старую привязку по `equipmentId` активной смены:
+   * берём активную смену сотрудника (`ShiftSession.endedAt = null`);
+   * если смены нет — `409 SHIFT_SESSION_REQUIRED`;
+   * берём `equipmentId` смены; ищем `Printer { equipmentId,
+     isActive: true }`. Если несколько — первый по `createdAt`;
+   * если принтера нет — `409 PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT`.
 
 `PrintButton` (`apps/web/`) при коде
 `PRINTER_NOT_CONFIGURED_FOR_EQUIPMENT` или
