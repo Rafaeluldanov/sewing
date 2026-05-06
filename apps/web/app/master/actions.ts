@@ -27,6 +27,8 @@ import { ApiRequestError } from '@/lib/api';
 import {
   createMasterCall,
   listOpenMasterCalls,
+  listRecentlyResolvedMasterCalls,
+  resolveMasterCallById,
   resolveMasterCallByEmployeeQr,
 } from '@/lib/master-calls-api';
 
@@ -105,6 +107,43 @@ export async function resolveMasterCallByEmployeeQrAction(
     const call = await resolveMasterCallByEmployeeQr(parsed.data);
     revalidatePath('/master');
     return { ok: true, call };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/**
+ * Ручное закрытие вызова мастером по кнопке «Проблема решена» в
+ * карточке (без QR). Возвращает обновлённый DTO, чтобы клиент мог
+ * сразу переложить карточку в архив без повторного listing'а.
+ */
+export async function resolveMasterCallByIdAction(
+  id: string,
+): Promise<ResolveMasterCallResult> {
+  if (!id || typeof id !== 'string') {
+    return { ok: false, error: 'Некорректный идентификатор вызова' };
+  }
+  try {
+    const call = await resolveMasterCallById(id);
+    revalidatePath('/master');
+    return { ok: true, call };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+export async function refreshRecentlyResolvedMasterCallsAction(): Promise<MasterCallsListResult> {
+  try {
+    const items = await listRecentlyResolvedMasterCalls();
+    return { ok: true, items };
   } catch (e) {
     return {
       ok: false,

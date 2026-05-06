@@ -5574,6 +5574,11 @@ body:has(.master-page) .app-main {
   cursor: default;
 }
 
+.master-call-card__actions {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
 .master-call-card__resolve {
   display: inline-flex;
   align-items: center;
@@ -5596,6 +5601,110 @@ body:has(.master-page) .app-main {
 .master-call-card__resolve:disabled {
   opacity: 0.7;
   cursor: default;
+}
+.master-call-card__resolve-manual {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 48px;
+  padding: 0.7rem 1rem;
+  border: 1px solid #6ee7b7;
+  border-radius: 0.6rem;
+  background: #ecfdf5;
+  color: #065f46;
+  font-size: 0.95rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+.master-call-card__resolve-manual:hover {
+  background: #d1fae5;
+  border-color: #34d399;
+}
+.master-call-card__resolve-manual:active {
+  transform: scale(0.99);
+}
+.master-call-card__resolve-manual:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* -----------------------------------------------------------------------
+ * Архив закрытых вызовов на /master.
+ * Сворачиваемая секция под активной очередью; визуально приглушённая,
+ * чтобы не отвлекать от основного потока «открытых вызовов».
+ * --------------------------------------------------------------------- */
+.master-archive {
+  margin-top: 1rem;
+  border: 1px solid #e5e7eb;
+  border-radius: 0.6rem;
+  background: #f9fafb;
+  overflow: hidden;
+}
+.master-archive__toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  padding: 0.75rem 1rem;
+  background: transparent;
+  border: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  color: #374151;
+  cursor: pointer;
+}
+.master-archive__chevron {
+  font-size: 0.9rem;
+  color: #6b7280;
+}
+.master-archive__empty {
+  padding: 0.8rem 1rem;
+  color: #6b7280;
+  font-size: 0.9rem;
+  border-top: 1px solid #e5e7eb;
+}
+.master-archive__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-top: 1px solid #e5e7eb;
+}
+.master-archive__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid #f1f5f9;
+}
+.master-archive__item:last-child {
+  border-bottom: 0;
+}
+.master-archive__item-main {
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.master-archive__item-main strong {
+  color: #111827;
+  font-size: 0.95rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.master-archive__item-meta {
+  color: #6b7280;
+  font-size: 0.8rem;
+}
+.master-archive__item-time {
+  color: #4b5563;
+  font-size: 0.8rem;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* -----------------------------------------------------------------------

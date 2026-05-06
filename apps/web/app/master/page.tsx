@@ -1,7 +1,10 @@
 import { redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { listOpenMasterCalls } from '@/lib/master-calls-api';
+import {
+  listOpenMasterCalls,
+  listRecentlyResolvedMasterCalls,
+} from '@/lib/master-calls-api';
 import { getActiveCutReleasePolicy } from '@/lib/cut-release-policy-api';
 import { listSizes } from '@/lib/orders-api';
 import { canSeeEmployeeQrButton, canSeeMasterPage } from '@/lib/rbac';
@@ -39,6 +42,15 @@ export default async function MasterPage() {
     initialError = e.message;
   }
 
+  // Архив (последние закрытые вызовы) — soft-fail: пустой массив, если
+  // API недоступен. Активные вызовы — приоритет, архив справочный.
+  let initialResolved: Awaited<ReturnType<typeof listRecentlyResolvedMasterCalls>> = [];
+  try {
+    initialResolved = await listRecentlyResolvedMasterCalls();
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) throw e;
+  }
+
   // Stage 3 «Мастер цеха»: подтягиваем активную политику выдачи кроя
   // и справочник размеров для формы. Любая ошибка тут — soft-fail:
   // экран мастера и без блока ограничений должен открываться (вызовы
@@ -62,6 +74,7 @@ export default async function MasterPage() {
       <MasterPageClient
         initialItems={initialItems ?? []}
         initialError={initialError}
+        initialResolved={initialResolved}
         initialPolicy={initialPolicy}
         sizes={initialSizes}
       />

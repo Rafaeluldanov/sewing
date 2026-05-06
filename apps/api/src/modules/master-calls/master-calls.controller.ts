@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post } from '@nestjs/common';
 import {
   CreateMasterCallSchema,
   ResolveMasterCallByQrSchema,
@@ -93,5 +93,30 @@ export class MasterCallsController {
     dto: ResolveMasterCallByQrDto,
   ): Promise<MasterCallDto> {
     return this.service.resolveByEmployeeQr(user, dto);
+  }
+
+  /**
+   * `GET /api/master-calls/recently-resolved` — последние закрытые
+   * вызовы для блока «Архив» на `/master`. Тот же RBAC, что у
+   * листинга открытых.
+   */
+  @Get('recently-resolved')
+  @Roles('SHOPFLOOR_MASTER', 'SHOP_MANAGER')
+  listRecentResolved(): Promise<MasterCallDto[]> {
+    return this.service.listRecentResolved();
+  }
+
+  /**
+   * `POST /api/master-calls/:id/resolve` — мастер нажал «Проблема
+   * решена» в карточке (ручное закрытие, без QR). RBAC тот же, что у
+   * resolve-by-qr.
+   */
+  @Post(':id/resolve')
+  @Roles('SHOPFLOOR_MASTER', 'SHOP_MANAGER')
+  resolveById(
+    @CurrentUser() user: AuthPrincipal,
+    @Param('id') id: string,
+  ): Promise<MasterCallDto> {
+    return this.service.resolveById(user, id);
   }
 }

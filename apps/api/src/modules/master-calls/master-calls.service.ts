@@ -164,6 +164,91 @@ export class MasterCallsService {
   // -------------------------------------------------------------------------
 
   /**
+   * Закрыть конкретный вызов вручную (без QR).
+   *
+   * UX-сценарий: мастер на `/master` нажал «Проблема решена» в карточке —
+   * вопрос разобран на месте, сканировать QR сотрудника не нужно. RBAC и
+   * запись в audit те же, что у `resolveByEmployeeQr`; в payload audit
+   * добавляем `via: 'manual'`, чтобы потом можно было различать каналы
+   * закрытия в отчётах.
+   *
+   * Идемпотентно по статусу: если вызов уже не `OPEN`, возвращаем 404
+   * `MASTER_CALL_NOT_FOUND` (закрывать нечего) — UI уберёт карточку из
+   * активных при ближайшем polling'е и так.
+   */
+  async resolveById(
+    actor: AuthPrincipal,
+    masterCallId: string,
+  ): Promise<MasterCallDto> {
+    const open = await this.prisma.masterCall.findFirst({
+      where: { id: masterCallId, status: MasterCallStatus.OPEN },
+      select: { id: true, employeeId: true },
+    });
+    if (!open) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'MASTER_CALL_NOT_FOUND',
+        message: 'Открытый вызов не найден (возможно, уже закрыт).',
+      });
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.masterCall.update({
+        where: { id: open.id },
+        data: {
+          status: MasterCallStatus.RESOLVED,
+          resolvedAt: new Date(),
+          resolvedById: actor.employeeId,
+        },
+        include: masterCallInclude,
+      });
+      await this.audit.log(
+        {
+          event: 'MASTER_CALL_RESOLVED',
+          entityType: 'MASTER_CALL',
+          entityId: row.id,
+          employeeId: actor.employeeId,
+          payload: {
+            masterCallId: row.id,
+            employeeId: open.employeeId,
+            equipmentId: row.equipmentId,
+            operationId: row.operationId,
+            resolvedById: actor.employeeId,
+            via: 'manual',
+          },
+        },
+        tx,
+      );
+      return row;
+    });
+
+    this.logger.log(
+      `event=master_call.resolve_manual id=${updated.id} employeeId=${open.employeeId} resolvedById=${actor.employeeId}`,
+    );
+    const passports = await this.loadCurrentPassports(open.employeeId);
+    return toMasterCallDto(updated, passports);
+  }
+
+  /**
+   * Список недавно закрытых вызовов — «архив» на `/master`.
+   *
+   * Сортировка по `resolvedAt desc` (самые свежие сверху). Лимит
+   * 50 — практический баланс «достаточно, чтобы мастер увидел свою
+   * сегодняшнюю работу» и «не утяжелять mobile-запрос». `currentPassports`
+   * для архива не нужны (вызов закрыт, паспорта на сотруднике уже
+   * могли поменяться) — отдаём пустой массив.
+   */
+  async listRecentResolved(): Promise<MasterCallDto[]> {
+    const calls = await this.prisma.masterCall.findMany({
+      where: { status: MasterCallStatus.RESOLVED },
+      orderBy: { resolvedAt: 'desc' },
+      take: 50,
+      include: masterCallInclude,
+    });
+    return calls.map((c) => toMasterCallDto(c, []));
+  }
+
+  /**
    * Закрыть вызов сотрудника по сканированному QR.
    *
    * Алгоритм:

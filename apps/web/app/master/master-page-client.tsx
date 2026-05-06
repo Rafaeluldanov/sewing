@@ -32,7 +32,9 @@ import { QrScannerModal } from '@/app/work/qr-scanner-modal';
 import { logoutAction } from '@/app/(auth)/logout-action';
 import {
   refreshOpenMasterCallsAction,
+  refreshRecentlyResolvedMasterCallsAction,
   resolveMasterCallByEmployeeQrAction,
+  resolveMasterCallByIdAction,
 } from './actions';
 import { PassportActionsSheet } from './passport-actions-sheet';
 import { CutReleasePolicyCard } from './cut-release-policy-card';
@@ -43,6 +45,7 @@ const POLL_INTERVAL_MS = 5000;
 interface Props {
   initialItems: MasterCallDto[];
   initialError: string | null;
+  initialResolved: MasterCallDto[];
   initialPolicy: CutReleasePolicyDto | null;
   sizes: SizeDto[];
 }
@@ -50,10 +53,13 @@ interface Props {
 export function MasterPageClient({
   initialItems,
   initialError,
+  initialResolved,
   initialPolicy,
   sizes,
 }: Props) {
   const [items, setItems] = useState<MasterCallDto[]>(initialItems);
+  const [resolved, setResolved] =
+    useState<MasterCallDto[]>(initialResolved);
   const [error, setError] = useState<string | null>(initialError);
   const [policy, setPolicy] = useState<CutReleasePolicyDto | null>(
     initialPolicy,
@@ -61,6 +67,10 @@ export function MasterPageClient({
   const [scannerOpen, setScannerOpen] = useState(false);
   const [activeCallId, setActiveCallId] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
+  const [resolvingManualId, setResolvingManualId] = useState<string | null>(
+    null,
+  );
+  const [archiveOpen, setArchiveOpen] = useState(false);
   const [toast, setToast] = useState<string | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
   // Stage 2 «Действия мастера»: открытый bottom-sheet ручных действий
@@ -83,6 +93,13 @@ export function MasterPageClient({
       setError(null);
     } else {
       setError(res.error);
+    }
+    // Архив (последние закрытые вызовы) обновляем тем же polling'ом —
+    // другой мастер мог закрыть вызов с другого устройства. Soft-fail:
+    // ошибки не показываем, чтобы не перекрывать экран активных вызовов.
+    const arcRes = await refreshRecentlyResolvedMasterCallsAction();
+    if (arcRes.ok) {
+      setResolved(arcRes.items);
     }
     // Stage 3 «Мастер цеха»: политика выдачи кроя обновляется тем
     // же polling'ом, чтобы карточка показывала актуальный
@@ -138,6 +155,30 @@ export function MasterPageClient({
     setScannerOpen(false);
     setActiveCallId(null);
   }, []);
+
+  const onResolveManual = useCallback(
+    async (callId: string) => {
+      if (resolvingManualId) return;
+      setResolvingManualId(callId);
+      setError(null);
+      try {
+        const res = await resolveMasterCallByIdAction(callId);
+        if (res.ok) {
+          // Оптимистично переносим карточку в архив, чтобы UX был
+          // мгновенным — polling следом синхронизирует серверное состояние.
+          setItems((prev) => prev.filter((c) => c.id !== callId));
+          setResolved((prev) => [res.call, ...prev].slice(0, 50));
+          showToast('Вызов закрыт');
+        } else {
+          setError(res.error);
+        }
+      } finally {
+        setResolvingManualId(null);
+        void refresh();
+      }
+    },
+    [refresh, resolvingManualId, showToast],
+  );
 
   const onScan = useCallback(
     async (decodedText: string) => {
@@ -239,10 +280,37 @@ export function MasterPageClient({
             onOpenActions={(p) =>
               setActionsFor({ passport: p, ownerName: call.employee.fullName })
             }
+            onResolveManual={onResolveManual}
             busy={resolving && activeCallId === call.id}
+            resolvingManual={resolvingManualId === call.id}
           />
         ))
       )}
+
+      <section className="master-archive" aria-label="Архив закрытых вызовов">
+        <button
+          type="button"
+          className="master-archive__toggle"
+          onClick={() => setArchiveOpen((v) => !v)}
+          aria-expanded={archiveOpen}
+        >
+          <span>Архив ({resolved.length})</span>
+          <span className="master-archive__chevron" aria-hidden>
+            {archiveOpen ? '▾' : '▸'}
+          </span>
+        </button>
+        {archiveOpen && (
+          resolved.length === 0 ? (
+            <div className="master-archive__empty">Закрытых вызовов пока нет</div>
+          ) : (
+            <ul className="master-archive__list">
+              {resolved.map((call) => (
+                <ArchivedCallRow key={call.id} call={call} />
+              ))}
+            </ul>
+          )
+        )}
+      </section>
 
       {scannerOpen && (
         <QrScannerModal onScan={onScan} onClose={onCloseScanner} />
@@ -270,7 +338,9 @@ interface CardProps {
   now: number;
   onOpenScanner: (callId: string) => void;
   onOpenActions: (passport: MasterCallPassportDto) => void;
+  onResolveManual: (callId: string) => void;
   busy: boolean;
+  resolvingManual: boolean;
 }
 
 function MasterCallCard({
@@ -278,7 +348,9 @@ function MasterCallCard({
   now,
   onOpenScanner,
   onOpenActions,
+  onResolveManual,
   busy,
+  resolvingManual,
 }: CardProps) {
   const waited = formatWaited(now - new Date(call.createdAt).getTime());
   const equipmentLabel = call.equipment
@@ -354,16 +426,53 @@ function MasterCallCard({
         </section>
       )}
 
-      <button
-        type="button"
-        className="master-call-card__resolve"
-        onClick={() => onOpenScanner(call.id)}
-        disabled={busy}
-      >
-        <Icon name="scan" size={18} />
-        {busy ? 'Закрываем…' : 'Сканировать QR сотрудника'}
-      </button>
+      <div className="master-call-card__actions">
+        <button
+          type="button"
+          className="master-call-card__resolve"
+          onClick={() => onOpenScanner(call.id)}
+          disabled={busy || resolvingManual}
+        >
+          <Icon name="scan" size={18} />
+          {busy ? 'Закрываем…' : 'Сканировать QR сотрудника'}
+        </button>
+        <button
+          type="button"
+          className="master-call-card__resolve-manual"
+          onClick={() => onResolveManual(call.id)}
+          disabled={busy || resolvingManual}
+          aria-label="Закрыть вызов: проблема решена"
+        >
+          <Icon name="success" size={18} />
+          {resolvingManual ? 'Закрываем…' : 'Проблема решена'}
+        </button>
+      </div>
     </article>
+  );
+}
+
+function ArchivedCallRow({ call }: { call: MasterCallDto }) {
+  const equipmentLabel = call.equipment
+    ? `${call.equipment.displayNumber ? `№${call.equipment.displayNumber} ` : ''}${call.equipment.name}`
+    : '—';
+  const resolvedAt = call.resolvedAt
+    ? new Date(call.resolvedAt).toLocaleString('ru-RU', {
+        day: '2-digit',
+        month: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+      })
+    : '—';
+  return (
+    <li className="master-archive__item">
+      <div className="master-archive__item-main">
+        <strong>{call.employee.fullName}</strong>
+        <span className="master-archive__item-meta">{equipmentLabel}</span>
+      </div>
+      <span className="master-archive__item-time" title="Закрыт">
+        {resolvedAt}
+      </span>
+    </li>
   );
 }
 

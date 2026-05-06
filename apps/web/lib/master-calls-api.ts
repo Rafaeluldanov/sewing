@@ -35,3 +35,16 @@ export function resolveMasterCallByEmployeeQr(
     body,
   });
 }
+
+export function resolveMasterCallById(id: string): Promise<MasterCallDto> {
+  return apiFetch<MasterCallDto>(
+    `/master-calls/${encodeURIComponent(id)}/resolve`,
+    { method: 'POST' },
+  );
+}
+
+export function listRecentlyResolvedMasterCalls(): Promise<MasterCallDto[]> {
+  return apiFetch<MasterCallDto[]>('/master-calls/recently-resolved', {
+    cache: 'no-store',
+  });
+}
