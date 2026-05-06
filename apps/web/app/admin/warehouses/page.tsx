@@ -473,6 +473,7 @@ async function MovementsTabPage({
             // поэтому в этот контур поиск не уходит.
             type:
               type === 'PRODUCTION_RECEIPT' ||
+              type === 'SHIPMENT' ||
               type === 'REVERSAL' ||
               type === 'ADJUSTMENT' ||
               type === 'TRANSFER'

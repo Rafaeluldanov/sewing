@@ -152,8 +152,11 @@ describe('Movements: type PRODUCTION_RECEIPT', () => {
     const src = readSrc(MOVEMENTS_FILTERS);
     expect(src).toMatch(/value:\s*'PRODUCTION_RECEIPT'/);
     expect(src).toMatch(/label:\s*'Выпуск'/);
-    // SHIPMENT не в фильтре — отгрузка ещё не реализована.
-    expect(src).not.toMatch(/value:\s*'SHIPMENT'/);
+    // Итерация «Отгрузка готовой продукции» добавила SHIPMENT →
+    // «Отгрузка» в фильтр (см.
+    // `apps/web/components/warehouses/stock/stock-movements-filters.tsx`).
+    expect(src).toMatch(/value:\s*'SHIPMENT'/);
+    expect(src).toMatch(/label:\s*'Отгрузка'/);
   });
 });
 

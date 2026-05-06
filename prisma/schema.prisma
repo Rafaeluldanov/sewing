@@ -437,6 +437,11 @@ model Size {
   /// удалить без сноса самих балансов.
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
+
+  /// Back-relation на строки отгрузки готовой продукции (см.
+  /// `model FinishedGoodsShipmentLine`). Restrict — размер, по
+  /// которому уже была отгрузка, нельзя удалять.
+  finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
 }
 
 model Product {
@@ -467,6 +472,12 @@ model Product {
   /// справочник, удаление out-of-scope.
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
+
+  /// Back-relation на строки отгрузки готовой продукции (см.
+  /// `model FinishedGoodsShipmentLine`). Restrict — продукт, по
+  /// которому уже была отгрузка, нельзя удалить без сноса
+  /// самой отгрузки.
+  finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
 }
 
 model Operation {
@@ -1222,6 +1233,13 @@ model Order {
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
 
+  /// Документы и строки отгрузки готовой продукции по заказу (см.
+  /// `model FinishedGoodsShipment` / `FinishedGoodsShipmentLine`,
+  /// `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`).
+  /// Cascade — отгрузка живёт только в рамках заказа.
+  finishedGoodsShipments     FinishedGoodsShipment[]
+  finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
+
   /// Упрощённая политика учёта материалов и фурнитуры в себестоимости
   /// заказа (см. `docs/current-state.md §«Давальческое сырьё клиента»`,
   /// `apps/api/src/modules/orders/orders.service.ts::create / update`,
@@ -1849,6 +1867,12 @@ model Warehouse {
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
 
+  /// Back-relation на строки отгрузки готовой продукции (см.
+  /// `model FinishedGoodsShipmentLine`). `onDelete: SetNull` со
+  /// стороны строки — историческая отгрузка переживает деактивацию
+  /// карточки склада с warehouseId = null.
+  finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
+
   @@index([isActive])
 }
 
@@ -1936,6 +1960,11 @@ model Cell {
   /// `onDelete: SetNull` — снос ячейки не валит исторический выпуск.
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
+
+  /// Back-relation на строки отгрузки готовой продукции (см.
+  /// `model FinishedGoodsShipmentLine`). `onDelete: SetNull` со
+  /// стороны строки — снос ячейки не валит историческую отгрузку.
+  finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
 
   @@unique([lineId, lineIndex], name: "Cell_line_index_uniq")
   @@index([warehouseId])
@@ -5115,6 +5144,13 @@ model FinishedGoodsBalance {
 
   movements FinishedGoodsMovement[]
 
+  /// Back-relation на строки отгрузки готовой продукции (см.
+  /// `model FinishedGoodsShipmentLine`). `onDelete: SetNull` со
+  /// стороны строки — если баланс удалили (теоретически только при
+  /// удалении заказа cascade-ом), строка отгрузки сохраняет snapshot
+  /// product / size / color / warehouse / cell.
+  shipmentLines FinishedGoodsShipmentLine[]
+
   @@index([orderId])
   @@index([productId])
   @@index([sizeId])
@@ -5193,4 +5229,108 @@ model FinishedGoodsMovement {
   @@index([boxId])
   @@index([sourceType, sourceId])
   @@index([createdAt])
+}
+
+/// Документ отгрузки готовой продукции (см.
+/// `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+/// `docs/current-state.md §«Отгрузка готовой продукции»`,
+/// `docs/api.md §«Finished goods shipments»`).
+///
+/// Отгрузка — менеджерская акция на карточке заказа: уменьшает
+/// `FinishedGoodsBalance.qty` и создаёт `FinishedGoodsMovement`
+/// `type = SHIPMENT`, `direction = OUT` по каждой строке (sourceKey
+/// `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`). Поддерживает частичную
+/// отгрузку: можно отгрузить часть остатка по любому сочетанию
+/// product / size / color / warehouse / cell.
+///
+/// **Отдельный контур от материалов** — `StockBalance` /
+/// `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+/// `StockAdjustment` / `StockTransfer` / `CostsService` /
+/// `ProductionCostV2Service` НЕ затрагиваются. Order.status
+/// автоматически НЕ меняется.
+///
+/// Идемпотентность — `sourceKey @unique`
+/// (`FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`):
+/// повторный submit формы (двойной клик / network retry) с тем же
+/// `clientRequestId` возвращает существующий документ и НЕ создаёт
+/// дублирующих движений / списаний.
+///
+/// На MVP `status` всегда `POSTED` — DRAFT-флоу и cancel/reversal
+/// (включая отмену shipment) сознательно не реализованы.
+model FinishedGoodsShipment {
+  id String @id @default(cuid())
+
+  /// Человеко-читаемый номер документа `S-YYYYMMDD-NNNN` (суточный
+  /// счётчик, аналогично `Order.number` / `Box.number`).
+  number String @unique
+
+  orderId String
+  /// На MVP всегда `POSTED`. Зарезервировано строкой, чтобы не
+  /// плодить миграции при появлении DRAFT / CANCELLED.
+  status String @default("POSTED")
+
+  shippedAt DateTime @default(now())
+  comment   String?
+
+  /// Идемпотентный технический ключ документа.
+  /// `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`. UNIQUE +
+  /// nullable: если `clientRequestId` не передан, можно создавать без
+  /// ключа (но UI-слой всегда генерирует UUID).
+  sourceKey String? @unique
+
+  createdAt   DateTime @default(now())
+  createdById String?
+
+  order Order                       @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  lines FinishedGoodsShipmentLine[]
+
+  @@index([orderId])
+  @@index([status])
+  @@index([shippedAt])
+  @@index([createdAt])
+}
+
+/// Строка документа отгрузки готовой продукции (см.
+/// `model FinishedGoodsShipment` выше).
+///
+/// Каждая строка ссылается на конкретный `FinishedGoodsBalance` (или
+/// `null`, если баланс впоследствии удалён — `onDelete: SetNull`),
+/// фиксирует `productId` / `sizeId` / `color` / `warehouseId` /
+/// `cellId` snapshot-ом (на момент отгрузки) и `qty` штук. По каждой
+/// строке создаётся ровно один `FinishedGoodsMovement` `type =
+/// SHIPMENT`, `direction = OUT` (sourceKey
+/// `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`).
+model FinishedGoodsShipmentLine {
+  id String @id @default(cuid())
+
+  finishedGoodsShipmentId String
+  finishedGoodsBalanceId  String?
+
+  orderId   String
+  productId String
+  sizeId    String
+  color     String
+
+  warehouseId String?
+  cellId      String?
+
+  qty Int
+
+  comment String?
+
+  shipment             FinishedGoodsShipment @relation(fields: [finishedGoodsShipmentId], references: [id], onDelete: Cascade)
+  finishedGoodsBalance FinishedGoodsBalance? @relation(fields: [finishedGoodsBalanceId], references: [id], onDelete: SetNull)
+  order                Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product              Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  size                 Size                  @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+  warehouse            Warehouse?            @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  cell                 Cell?                 @relation(fields: [cellId], references: [id], onDelete: SetNull)
+
+  @@index([finishedGoodsShipmentId])
+  @@index([finishedGoodsBalanceId])
+  @@index([orderId])
+  @@index([productId])
+  @@index([sizeId])
+  @@index([warehouseId])
+  @@index([cellId])
 }

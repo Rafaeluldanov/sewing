@@ -159,7 +159,10 @@ test('FinishedGoodsModule зарегистрирован в AppModule', () => {
 test('FinishedGoodsModule экспортирует FinishedGoodsService', () => {
   const src = read(FG_MODULE);
   expect(src).toMatch(/exports:\s*\[\s*FinishedGoodsService\s*\]/);
-  expect(src).toMatch(/controllers:\s*\[\s*FinishedGoodsController\s*\]/);
+  // controllers: [FinishedGoodsController, FinishedGoodsOrderShipmentsController]
+  // — отгрузка из карточки заказа добавила второй контроллер.
+  expect(src).toMatch(/FinishedGoodsController/);
+  expect(src).toMatch(/FinishedGoodsOrderShipmentsController/);
 });
 
 // ---------------------------------------------------------------------------
@@ -291,19 +294,22 @@ test('MaterialIssuesService не изменён под готовую проду
 });
 
 // ---------------------------------------------------------------------------
-// 7. Не реализованы отгрузка / transfer / новый UI-раздел
+// 7. Не реализованы transfer / adjustment / новый UI-раздел
 // ---------------------------------------------------------------------------
 
-test('Не реализована отгрузка готовой продукции (нет SHIPMENT writer-а)', () => {
+test('Отгрузка готовой продукции — реализована из карточки заказа (см. createShipmentForOrder)', () => {
+  // Итерация «Отгрузка готовой продукции» добавила POST
+  // /api/orders/:orderId/finished-goods-shipments. Проверка-гарантия:
+  // SHIPMENT writer существует (через `applyMovementInTx`), но это
+  // единственная допустимая мутация SHIPMENT (cancel/reversal не
+  // реализованы — см. отдельный smoke
+  // tests/smoke/finished-goods-shipments.smoke.test.ts).
   const src = read(FG_SERVICE);
-  // PRODUCTION_RECEIPT — единственный реальный writer (SHIPMENT
-  // упоминается только в типах / комментариях, реальной записи нет).
-  // Проверка-гарантия: applyMovementInTx сам не делает SHIPMENT,
-  // нет dedicated «recordShipment*» / «createShipment» / SHIPMENT
-  // assignment в payload.
-  expect(src).not.toMatch(/recordShipment/);
-  expect(src).not.toMatch(/createShipment/);
-  expect(src).not.toMatch(/type:\s*FINISHED_GOODS_MOVEMENT_TYPE\.SHIPMENT/);
+  expect(src).toMatch(/createShipmentForOrder/);
+  expect(src).toMatch(/FINISHED_GOODS_MOVEMENT_TYPE\.SHIPMENT/);
+  // Cancel / reversal shipment по-прежнему не реализованы.
+  expect(src).not.toMatch(/cancelShipment/);
+  expect(src).not.toMatch(/reverseShipment/);
 });
 
 test('Не реализован transfer готовой продукции', () => {

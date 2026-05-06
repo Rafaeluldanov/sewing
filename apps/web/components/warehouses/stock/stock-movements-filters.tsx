@@ -36,14 +36,20 @@ import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import type { StockMovementDirection } from '@/lib/stock-api';
 
 /**
- * Объединённый union типов движений для UI. На MVP-итерации
- * unified-вкладка не показывает `SHIPMENT` (отгрузка готовой
- * продукции ещё не реализована).
+ * Объединённый union типов движений для UI.
+ *
+ * `SHIPMENT` — отгрузка готовой продукции из карточки заказа (см.
+ * `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+ * `docs/current-state.md §«Отгрузка готовой продукции»`). Документ
+ * shipment живёт ТОЛЬКО на странице заказа, но движения уходят в
+ * общий журнал `/admin/warehouses?tab=movements` — отсюда и фильтр
+ * по типу.
  */
 export type UnifiedMovementType =
   | 'PURCHASE_RECEIPT'
   | 'MATERIAL_ISSUE'
   | 'PRODUCTION_RECEIPT'
+  | 'SHIPMENT'
   | 'REVERSAL'
   | 'ADJUSTMENT'
   | 'TRANSFER';
@@ -73,6 +79,7 @@ export const UNIFIED_MOVEMENT_TYPE_OPTIONS: ReadonlyArray<{
     scope: 'material-only',
   },
   { value: 'PRODUCTION_RECEIPT', label: 'Выпуск', scope: 'finished-goods-only' },
+  { value: 'SHIPMENT', label: 'Отгрузка', scope: 'finished-goods-only' },
   { value: 'REVERSAL', label: 'Сторно', scope: 'shared' },
   { value: 'ADJUSTMENT', label: 'Корректировка', scope: 'shared' },
   { value: 'TRANSFER', label: 'Перемещение', scope: 'shared' },

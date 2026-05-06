@@ -206,3 +206,89 @@ export function listFinishedGoodsMovements(
     },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Shipments — отгрузка готовой продукции из карточки заказа.
+// ---------------------------------------------------------------------------
+
+/**
+ * Строка документа отгрузки готовой продукции (см.
+ * `apps/api/src/modules/finished-goods/finished-goods.service.ts::FinishedGoodsShipmentLineDto`).
+ * Snapshot product / size / color / warehouse / cell на момент
+ * создания документа.
+ */
+export interface FinishedGoodsShipmentLineDto {
+  id: string;
+  finishedGoodsBalanceId: string | null;
+  productId: string;
+  productName: string | null;
+  sizeId: string;
+  sizeCode: string | null;
+  color: string;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  cellId: string | null;
+  cellCode: string | null;
+  qty: number;
+  comment: string | null;
+}
+
+export interface FinishedGoodsShipmentDetailDto {
+  id: string;
+  number: string;
+  orderId: string;
+  status: string;
+  shippedAt: string;
+  comment: string | null;
+  createdAt: string;
+  createdById: string | null;
+  lines: FinishedGoodsShipmentLineDto[];
+  // sourceKey намеренно не объявлен — backend его не отдаёт.
+}
+
+/**
+ * Body для `POST /api/orders/:orderId/finished-goods-shipments`. UI
+ * собирает строки по доступным `FinishedGoodsBalance` и присылает
+ * `clientRequestId` (UUID) для идемпотентности повторного submit.
+ */
+export interface CreateFinishedGoodsShipmentDto {
+  shippedAt?: string;
+  comment?: string;
+  clientRequestId?: string;
+  lines: Array<{
+    finishedGoodsBalanceId: string;
+    qty: number;
+    comment?: string;
+  }>;
+}
+
+export function listOrderFinishedGoodsShipments(
+  orderId: string,
+): Promise<FinishedGoodsShipmentDetailDto[]> {
+  return apiFetch<FinishedGoodsShipmentDetailDto[]>(
+    `/orders/${encodeURIComponent(orderId)}/finished-goods-shipments`,
+    { cache: 'no-store' },
+  );
+}
+
+export function createOrderFinishedGoodsShipment(
+  orderId: string,
+  body: CreateFinishedGoodsShipmentDto,
+): Promise<FinishedGoodsShipmentDetailDto> {
+  return apiFetch<FinishedGoodsShipmentDetailDto>(
+    `/orders/${encodeURIComponent(orderId)}/finished-goods-shipments`,
+    {
+      method: 'POST',
+      body,
+    },
+  );
+}
+
+export function getFinishedGoodsShipment(
+  id: string,
+): Promise<FinishedGoodsShipmentDetailDto> {
+  return apiFetch<FinishedGoodsShipmentDetailDto>(
+    `/finished-goods/shipments/${encodeURIComponent(id)}`,
+    { cache: 'no-store' },
+  );
+}

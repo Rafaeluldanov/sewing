@@ -330,8 +330,9 @@
 - **`FinishedGoodsMovement`** — журнал движений. `type: String`,
   `direction: String`, `qty: Int`, `balanceBeforeQty?`,
   `balanceAfterQty?`, `sourceType?`, `sourceId?`,
-  `sourceKey String? @unique` (на MVP формат —
-  `PACKED_PASSPORT:<passportId>`, идемпотентность). Связи:
+  `sourceKey String? @unique` (форматы: `PACKED_PASSPORT:<passportId>`
+  для PRODUCTION_RECEIPT IN; `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`
+  для SHIPMENT OUT). Связи:
   `finishedGoodsBalance? → FinishedGoodsBalance` (SetNull),
   `order → Order` (Cascade), `product → Product` (Restrict),
   `size → Size` (Restrict), `warehouse? → Warehouse` (SetNull),
@@ -340,6 +341,29 @@
   `orderId`, `productId`, `sizeId`, `type`, `direction`,
   `warehouseId`, `cellId`, `passportId`, `boxId`,
   `(sourceType, sourceId)`, `createdAt`.
+- **`FinishedGoodsShipment`** — документ отгрузки готовой продукции
+  из карточки заказа (см. `docs/current-state.md §«Отгрузка готовой
+  продукции»`). `id`, `number String @unique` (`S-YYYYMMDD-NNNN`),
+  `orderId`, `status: String @default("POSTED")` (на MVP всегда
+  POSTED), `shippedAt`, `comment?`, `sourceKey String? @unique`
+  (`FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`,
+  идемпотентность повторного submit), `createdAt`, `createdById?`.
+  Связи: `order → Order` (Cascade), `lines: FinishedGoodsShipmentLine[]`.
+  Индексы: `orderId`, `status`, `shippedAt`, `createdAt`.
+- **`FinishedGoodsShipmentLine`** — строка документа отгрузки.
+  `id`, `finishedGoodsShipmentId`, `finishedGoodsBalanceId?` (snapshot
+  к балансу — `SetNull` при удалении баланса), `orderId`, `productId`,
+  `sizeId`, `color`, `warehouseId?`, `cellId?` (snapshot на момент
+  создания), `qty: Int`, `comment?`. Связи:
+  `shipment → FinishedGoodsShipment` (Cascade),
+  `finishedGoodsBalance? → FinishedGoodsBalance` (SetNull),
+  `order → Order` (Cascade), `product → Product` (Restrict),
+  `size → Size` (Restrict), `warehouse? → Warehouse` (SetNull),
+  `cell? → Cell` (SetNull). Индексы: `finishedGoodsShipmentId`,
+  `finishedGoodsBalanceId`, `orderId`, `productId`, `sizeId`,
+  `warehouseId`, `cellId`. По каждой строке создаётся ровно один
+  `FinishedGoodsMovement` SHIPMENT OUT (sourceKey
+  `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`).
 - **Бизнес-момент выпуска**: `PackingService.addPassport` →
   `FinishedGoodsService.recordPackedPassportInTx` в той же
   транзакции, что и `Passport.status → PACKED`. `qty =
@@ -351,6 +375,15 @@
 - **Read-only API**: `GET /api/finished-goods/balances`,
   `GET /api/finished-goods/movements` (см. `docs/api.md §29a`).
   `sourceKey` сознательно НЕ отдаётся.
+- **Shipment API** (`docs/api.md §29a «Finished goods shipments»`):
+  `POST /api/orders/:orderId/finished-goods-shipments` — частичная
+  отгрузка готовой продукции из заказа (создаёт
+  `FinishedGoodsShipment` + N `FinishedGoodsShipmentLine` + N
+  `FinishedGoodsMovement` SHIPMENT OUT в одной транзакции,
+  атомарно уменьшает балансы). `GET /api/orders/:orderId/finished-goods-shipments`
+  и `GET /api/finished-goods/shipments/:id` — read-only detail.
+  Audit `FINISHED_GOODS_SHIPMENT_CREATED`. `Order.status` НЕ меняется
+  автоматически.
 
 <a id="28-qc--wto--defects"></a>
 ### 2.8 QC / WTO / defects

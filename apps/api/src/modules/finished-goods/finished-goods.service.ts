@@ -5,17 +5,22 @@ import {
   type FinishedGoodsBalance,
   type FinishedGoodsMovement,
 } from '@prisma/client';
+import { randomUUID } from 'node:crypto';
 
 import { BusinessException } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import type { CreateFinishedGoodsShipmentDto } from './dto/create-finished-goods-shipment.dto.js';
 import type { ListFinishedGoodsBalancesQuery } from './dto/list-finished-goods-balances.dto.js';
 import type { ListFinishedGoodsMovementsQuery } from './dto/list-finished-goods-movements.dto.js';
+import { FinishedGoodsShipmentNumberService } from './finished-goods-shipment-number.service.js';
 import {
   FINISHED_GOODS_MOVEMENT_DIRECTION,
   FINISHED_GOODS_MOVEMENT_TYPE,
   FINISHED_GOODS_SOURCE_TYPE,
   buildFinishedGoodsBalanceKey,
+  buildFinishedGoodsShipmentLineSourceKey,
+  buildFinishedGoodsShipmentSourceKey,
   buildPassportFinishedGoodsOutputSourceKey,
   type FinishedGoodsMovementDirection,
   type FinishedGoodsMovementType,
@@ -81,6 +86,7 @@ export class FinishedGoodsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly shipmentNumber: FinishedGoodsShipmentNumberService,
   ) {}
 
   // ===========================================================================
@@ -271,6 +277,17 @@ export class FinishedGoodsService {
     const balanceAfterQty = isIn
       ? balanceBeforeQty + params.qty
       : balanceBeforeQty - params.qty;
+
+    // Готовая продукция в MVP не уходит в минус — отгрузка не может
+    // увести остаток ниже нуля. `allowNegativeMaterialStock` к этому
+    // контуру неприменим (это флаг для StockBalance материалов).
+    if (!isIn && balanceAfterQty < 0) {
+      throw new BusinessException(
+        'FINISHED_GOODS_INSUFFICIENT_BALANCE',
+        `Недостаточно остатка готовой продукции: доступно ${balanceBeforeQty}, требуется ${params.qty}.`,
+        HttpStatus.CONFLICT,
+      );
+    }
 
     const movement = await tx.finishedGoodsMovement.create({
       data: {
@@ -498,6 +515,272 @@ export class FinishedGoodsService {
       trigger: 'PACKED_PASSPORT',
     });
   }
+
+  // ===========================================================================
+  // SHIPMENT — отгрузка готовой продукции из карточки заказа
+  // ===========================================================================
+
+  /**
+   * Список документов отгрузки готовой продукции по заказу.
+   *
+   * Read-only, отдаёт detail-shape (заголовок + строки + lookups).
+   * Сортировка `shippedAt desc, createdAt desc, id desc`. RBAC и
+   * проверка существования заказа выполняется на уровне контроллера
+   * (`ADMIN` / `SHOP_MANAGER`).
+   */
+  async listShipmentsByOrder(
+    orderId: string,
+  ): Promise<FinishedGoodsShipmentDetailDto[]> {
+    const rows = await this.prisma.finishedGoodsShipment.findMany({
+      where: { orderId },
+      orderBy: [{ shippedAt: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      include: SHIPMENT_DETAIL_INCLUDE,
+    });
+    return rows.map(toShipmentDetailDto);
+  }
+
+  async getShipmentDetail(
+    id: string,
+  ): Promise<FinishedGoodsShipmentDetailDto> {
+    const row = await this.prisma.finishedGoodsShipment.findUnique({
+      where: { id },
+      include: SHIPMENT_DETAIL_INCLUDE,
+    });
+    if (!row) {
+      throw new BusinessException(
+        'FINISHED_GOODS_SHIPMENT_NOT_FOUND',
+        'Документ отгрузки готовой продукции не найден.',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+    return toShipmentDetailDto(row);
+  }
+
+  /**
+   * Создать документ отгрузки готовой продукции по заказу.
+   *
+   * Контракт (см. `docs/api.md §«Finished goods shipments»`):
+   *   - открывает `prisma.$transaction`, внутри:
+   *     1. валидирует, что заказ существует;
+   *     2. отбрасывает `qty <= 0` строки и проверяет, что все
+   *        `finishedGoodsBalanceId` уникальны — duplicate в request
+   *        отклоняется (`FINISHED_GOODS_SHIPMENT_DUPLICATE_BALANCE`);
+   *     3. строит `sourceKey` по `clientRequestId` (если не передан —
+   *        генерирует UUID server-side; повторный submit под новым
+   *        ключом не идемпотентен);
+   *     4. если документ с этим `sourceKey` уже существует — отдаёт
+   *        существующий detail (никаких новых движений / списаний);
+   *     5. для каждой строки находит `FinishedGoodsBalance`,
+   *        проверяет принадлежность заказу (`balance.orderId === orderId`)
+   *        и достаточность остатка (`balance.qty >= qty`);
+   *     6. создаёт `FinishedGoodsShipment` `status = POSTED` +
+   *        `FinishedGoodsShipmentLine` snapshot;
+   *     7. для каждой строки создаёт `FinishedGoodsMovement`
+   *        `type = SHIPMENT, direction = OUT` через
+   *        `applyMovementInTx` — c sourceKey
+   *        `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`. Балансы
+   *        атомарно уменьшаются;
+   *     8. пишет audit `FINISHED_GOODS_SHIPMENT_CREATED`
+   *        (`entityType = FINISHED_GOODS_SHIPMENT`).
+   *
+   * **Не меняет** `Order.status` автоматически — это сознательное
+   * решение, см. ТЗ. Не затрагивает материалы (`StockBalance` /
+   * `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+   * `StockAdjustment` / `StockTransfer` / `CostsService` /
+   * `ProductionCostV2Service`).
+   */
+  async createShipmentForOrder(
+    orderId: string,
+    dto: CreateFinishedGoodsShipmentDto,
+    employeeId?: string | null,
+  ): Promise<FinishedGoodsShipmentDetailDto> {
+    // Базовая нормализация и проверки заказа выполняются вне
+    // транзакции — это не меняет состояние.
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true },
+    });
+    if (!order) {
+      throw new BusinessException(
+        'ORDER_NOT_FOUND',
+        `Заказ ${orderId} не найден.`,
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    // Duplicate finishedGoodsBalanceId в request — запрещаем (одна
+    // строка на баланс). Это безопаснее агрегации: менеджер видит
+    // ровно те строки, которые он ввёл.
+    const seenBalances = new Set<string>();
+    for (const line of dto.lines) {
+      if (seenBalances.has(line.finishedGoodsBalanceId)) {
+        throw new BusinessException(
+          'FINISHED_GOODS_SHIPMENT_DUPLICATE_BALANCE',
+          'В заявке на отгрузку строки по одному остатку готовой продукции дублируются.',
+          HttpStatus.BAD_REQUEST,
+        );
+      }
+      seenBalances.add(line.finishedGoodsBalanceId);
+    }
+
+    const clientRequestId = dto.clientRequestId ?? randomUUID();
+    const sourceKey = buildFinishedGoodsShipmentSourceKey(
+      orderId,
+      clientRequestId,
+    );
+
+    // Idempotency: если shipment с таким sourceKey уже создан —
+    // возвращаем existing detail без апдейта балансов.
+    const existing = await this.prisma.finishedGoodsShipment.findUnique({
+      where: { sourceKey },
+      include: SHIPMENT_DETAIL_INCLUDE,
+    });
+    if (existing) {
+      return toShipmentDetailDto(existing);
+    }
+
+    const shippedAt = dto.shippedAt ? new Date(dto.shippedAt) : new Date();
+
+    const detail = await this.prisma.$transaction(async (tx) => {
+      // Подгружаем все балансы одним запросом и валидируем.
+      const balances = await tx.finishedGoodsBalance.findMany({
+        where: { id: { in: dto.lines.map((l) => l.finishedGoodsBalanceId) } },
+      });
+      const balancesById = new Map(balances.map((b) => [b.id, b]));
+      for (const line of dto.lines) {
+        const balance = balancesById.get(line.finishedGoodsBalanceId);
+        if (!balance) {
+          throw new BusinessException(
+            'FINISHED_GOODS_BALANCE_NOT_FOUND',
+            `Остаток готовой продукции ${line.finishedGoodsBalanceId} не найден.`,
+            HttpStatus.NOT_FOUND,
+          );
+        }
+        if (balance.orderId !== orderId) {
+          throw new BusinessException(
+            'FINISHED_GOODS_SHIPMENT_BALANCE_ORDER_MISMATCH',
+            'Остаток готовой продукции принадлежит другому заказу.',
+            HttpStatus.BAD_REQUEST,
+          );
+        }
+        if (balance.qty < line.qty) {
+          throw new BusinessException(
+            'FINISHED_GOODS_SHIPMENT_QTY_EXCEEDS_AVAILABLE',
+            `Нельзя отгрузить ${line.qty} шт.: на остатке доступно ${balance.qty}.`,
+            HttpStatus.CONFLICT,
+          );
+        }
+      }
+
+      const number = await this.shipmentNumber.nextNumber(tx, shippedAt);
+
+      const shipment = await tx.finishedGoodsShipment.create({
+        data: {
+          number,
+          orderId,
+          status: 'POSTED',
+          shippedAt,
+          comment: dto.comment ?? null,
+          sourceKey,
+          createdById: employeeId ?? null,
+        },
+      });
+
+      // Создаём строки и attached SHIPMENT OUT движения. Каждое
+      // movement идёт через `applyMovementInTx` — баланс уменьшается
+      // атомарно, и при `balance.qty < qty` после конкурентной
+      // отгрузки бросится `FINISHED_GOODS_INSUFFICIENT_BALANCE` (409),
+      // которое откатит всю транзакцию.
+      const movements: FinishedGoodsMovement[] = [];
+      const lineIds: string[] = [];
+      for (const line of dto.lines) {
+        const balance = balancesById.get(line.finishedGoodsBalanceId)!;
+        const shipmentLine = await tx.finishedGoodsShipmentLine.create({
+          data: {
+            finishedGoodsShipmentId: shipment.id,
+            finishedGoodsBalanceId: balance.id,
+            orderId,
+            productId: balance.productId,
+            sizeId: balance.sizeId,
+            color: balance.color,
+            warehouseId: balance.warehouseId,
+            cellId: balance.cellId,
+            qty: line.qty,
+            comment: line.comment ?? null,
+          },
+        });
+        lineIds.push(shipmentLine.id);
+
+        const { movement } = await this.applyMovementInTx(tx, {
+          orderId,
+          productId: balance.productId,
+          sizeId: balance.sizeId,
+          color: balance.color,
+          warehouseId: balance.warehouseId,
+          cellId: balance.cellId,
+          type: FINISHED_GOODS_MOVEMENT_TYPE.SHIPMENT,
+          direction: FINISHED_GOODS_MOVEMENT_DIRECTION.OUT,
+          qty: line.qty,
+          sourceType: FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_SHIPMENT_LINE,
+          sourceId: shipmentLine.id,
+          sourceKey: buildFinishedGoodsShipmentLineSourceKey(shipmentLine.id),
+          comment: dto.comment ?? 'Отгрузка готовой продукции',
+          createdById: employeeId ?? null,
+        });
+        movements.push(movement);
+      }
+
+      // Audit пишется в той же транзакции — либо документ + движения +
+      // запись в журнале атомарно, либо ничего.
+      await this.audit.log(
+        {
+          event: 'FINISHED_GOODS_SHIPMENT_CREATED',
+          entityType: 'FINISHED_GOODS_SHIPMENT',
+          entityId: shipment.id,
+          employeeId: employeeId ?? null,
+          payload: {
+            finishedGoodsShipmentId: shipment.id,
+            number: shipment.number,
+            orderId,
+            shippedAt: shipment.shippedAt.toISOString(),
+            comment: shipment.comment,
+            lines: dto.lines.map((line, idx) => ({
+              finishedGoodsShipmentLineId: lineIds[idx],
+              finishedGoodsBalanceId: line.finishedGoodsBalanceId,
+              productId: balancesById.get(line.finishedGoodsBalanceId)!
+                .productId,
+              sizeId: balancesById.get(line.finishedGoodsBalanceId)!.sizeId,
+              color: balancesById.get(line.finishedGoodsBalanceId)!.color,
+              warehouseId: balancesById.get(line.finishedGoodsBalanceId)!
+                .warehouseId,
+              cellId: balancesById.get(line.finishedGoodsBalanceId)!.cellId,
+              qty: line.qty,
+            })),
+            employeeId: employeeId ?? null,
+            timestamp: new Date().toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+        tx,
+      );
+
+      this.logger.log(
+        `event=finished_goods.shipment.create shipmentId=${shipment.id} ` +
+          `number=${shipment.number} orderId=${orderId} ` +
+          `lines=${dto.lines.length} totalQty=${dto.lines.reduce(
+            (acc, l) => acc + l.qty,
+            0,
+          )}`,
+      );
+
+      const reloaded = await tx.finishedGoodsShipment.findUniqueOrThrow({
+        where: { id: shipment.id },
+        include: SHIPMENT_DETAIL_INCLUDE,
+      });
+      return reloaded;
+    });
+
+    return toShipmentDetailDto(detail);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,5 +985,85 @@ function toMovementListItem(
     comment: row.comment,
     createdById: row.createdById,
     createdAt: row.createdAt.toISOString(),
+  };
+}
+
+// ---------------------------------------------------------------------------
+// Shipment detail DTO + include
+// ---------------------------------------------------------------------------
+
+const SHIPMENT_DETAIL_INCLUDE = {
+  lines: {
+    orderBy: [{ id: 'asc' }],
+    include: {
+      product: { select: { id: true, name: true } },
+      size: { select: { id: true, code: true } },
+      warehouse: { select: { id: true, name: true, code: true } },
+      cell: { select: { id: true, code: true } },
+    },
+  },
+} as const satisfies Prisma.FinishedGoodsShipmentInclude;
+
+type ShipmentWithRels = Prisma.FinishedGoodsShipmentGetPayload<{
+  include: typeof SHIPMENT_DETAIL_INCLUDE;
+}>;
+
+export interface FinishedGoodsShipmentLineDto {
+  id: string;
+  finishedGoodsBalanceId: string | null;
+  productId: string;
+  productName: string | null;
+  sizeId: string;
+  sizeCode: string | null;
+  color: string;
+  warehouseId: string | null;
+  warehouseName: string | null;
+  cellId: string | null;
+  cellCode: string | null;
+  qty: number;
+  comment: string | null;
+}
+
+export interface FinishedGoodsShipmentDetailDto {
+  id: string;
+  number: string;
+  orderId: string;
+  status: string;
+  shippedAt: string;
+  comment: string | null;
+  createdAt: string;
+  createdById: string | null;
+  lines: FinishedGoodsShipmentLineDto[];
+  // sourceKey намеренно не возвращается — внутренний идемпотентный ключ
+  // (FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>).
+}
+
+function toShipmentDetailDto(
+  row: ShipmentWithRels,
+): FinishedGoodsShipmentDetailDto {
+  return {
+    id: row.id,
+    number: row.number,
+    orderId: row.orderId,
+    status: row.status,
+    shippedAt: row.shippedAt.toISOString(),
+    comment: row.comment,
+    createdAt: row.createdAt.toISOString(),
+    createdById: row.createdById,
+    lines: row.lines.map((line) => ({
+      id: line.id,
+      finishedGoodsBalanceId: line.finishedGoodsBalanceId,
+      productId: line.productId,
+      productName: line.product?.name ?? null,
+      sizeId: line.sizeId,
+      sizeCode: line.size?.code ?? null,
+      color: line.color,
+      warehouseId: line.warehouseId,
+      warehouseName: line.warehouse?.name ?? null,
+      cellId: line.cellId,
+      cellCode: line.cell?.code ?? null,
+      qty: line.qty,
+      comment: line.comment,
+    })),
   };
 }

@@ -1301,35 +1301,102 @@ DTO: `packages/shared/src/packing.ts`. Side-effect: на сервисе
 `StockBalance` / `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
 `StockAdjustment` / `StockTransfer` / `CostsService` /
 `ProductionCostV2Service` НЕ затрагиваются. На MVP-итерации
-реализован только тип `PRODUCTION_RECEIPT` (`direction = IN`),
-автоматический приход в момент `Passport.status = PACKED`.
+реализованы:
+- автоматический приход `PRODUCTION_RECEIPT` (`direction = IN`) в
+  момент упаковки паспорта / прохождения операции с
+  `Operation.producesFinishedGoods = true`;
+- ручная отгрузка готовой продукции из карточки заказа —
+  `SHIPMENT` (`direction = OUT`), см. блок «Finished goods shipments»
+  ниже.
 
-Запись движений идёт неявно из `PackingService.addPassport` →
-`FinishedGoodsService.recordPackedPassportInTx` (idempotent по
-`sourceKey = PACKED_PASSPORT:<passportId>`). Публичных мутаций на
-этой итерации **нет**: отгрузка (`SHIPMENT`), transfer (`TRANSFER`),
-ручная корректировка (`ADJUSTMENT`), сторно (`REVERSAL`) — следующие
-итерации.
+Запись `PRODUCTION_RECEIPT` идёт неявно из `PackingService.addPassport`
+/ `PassportsService.scanOnOperation` →
+`FinishedGoodsService.recordPassportOutputInTx` (idempotent по
+`sourceKey = PACKED_PASSPORT:<passportId>`).
 
 | Метод | Путь                              | RBAC                | Описание |
 | ----- | --------------------------------- | ------------------- | -------- |
 | GET   | `/api/finished-goods/balances`    | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsBalancesQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `q` (substring по `color`), `positiveOnly` / `negativeOnly` / `zeroOnly` (взаимоисключающие), `limit` (default 50, max 200), `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `balanceKey`, `orderId`, `orderNumber`, `clientId`, `clientName` (через `Order.client → Client`), `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `lastMovementAt`, `updatedAt`. |
 | GET   | `/api/finished-goods/movements`   | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsMovementsQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `type` ∈ `PRODUCTION_RECEIPT \| REVERSAL \| ADJUSTMENT \| SHIPMENT \| TRANSFER`, `direction` ∈ `IN \| OUT`, `passportId`, `boxId`, `from` / `to` (ISO-8601), `limit`, `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `finishedGoodsBalanceId`, `type`, `direction`, `orderId`, `orderNumber`, `clientId`, `clientName` (через `Order.client → Client`), `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `sourceType`, `sourceId`, `passportId`, `boxId`, `comment`, `createdById`, `createdAt`. |
+| GET   | `/api/finished-goods/shipments/:id` | ADMIN, SHOP_MANAGER | Detail документа отгрузки. Response — `FinishedGoodsShipmentDetailDto`: `id`, `number`, `orderId`, `status` (на MVP всегда `POSTED`), `shippedAt`, `comment`, `createdAt`, `createdById`, `lines: [{ id, finishedGoodsBalanceId, productId, productName, sizeId, sizeCode, color, warehouseId, warehouseName, cellId, cellCode, qty, comment }]`. |
 
-`sourceKey` сознательно **не возвращается** — это внутренний
-идемпотентный технический ключ (`PACKED_PASSPORT:<passportId>`).
+`sourceKey` сознательно **не возвращается** ни для движений, ни для
+shipment-документа — это внутренний идемпотентный технический ключ.
 
 Поведение при отсутствии склада: если у заказа
 `Order.finishedGoodsWarehouseId = null`, баланс ведётся как
 «no-warehouse» (`warehouseId = null`); упаковка НЕ блокируется.
 
-Audit: `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` с
-`entityType = FINISHED_GOODS_MOVEMENT`,
-`entityId = FinishedGoodsMovement.id`. Payload содержит
-`finishedGoodsMovementId`, `finishedGoodsBalanceId`, `orderId`,
-`passportId`, `boxId`, `productId`, `sizeId`, `color`, `warehouseId`,
-`cellId`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `employeeId`,
-`timestamp`.
+Audit:
+- `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` с
+  `entityType = FINISHED_GOODS_MOVEMENT`,
+  `entityId = FinishedGoodsMovement.id`. Payload содержит
+  `finishedGoodsMovementId`, `finishedGoodsBalanceId`, `orderId`,
+  `passportId`, `boxId`, `productId`, `sizeId`, `color`, `warehouseId`,
+  `cellId`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `employeeId`,
+  `timestamp`;
+- `FINISHED_GOODS_SHIPMENT_CREATED` — см. блок «Finished goods
+  shipments» ниже.
+
+### Finished goods shipments
+
+Источник: `apps/api/src/modules/finished-goods/finished-goods-order-shipments.controller.ts`,
+`apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+`prisma/schema.prisma::FinishedGoodsShipment` /
+`FinishedGoodsShipmentLine`,
+`docs/current-state.md §«Отгрузка готовой продукции»`.
+
+Менеджерская акция «Отгрузка готовой продукции» из карточки заказа
+(вкладка «Производство»). Поддерживается частичная отгрузка: можно
+отгрузить часть остатка по любому сочетанию `product / size / color
+/ warehouse / cell`. Каждая строка shipment-документа создаёт ровно
+один `FinishedGoodsMovement type=SHIPMENT direction=OUT` (sourceKey
+`FINISHED_GOODS_SHIPMENT_LINE:<lineId>`); `FinishedGoodsBalance.qty`
+атомарно уменьшается. **Order.status автоматически НЕ меняется.**
+
+| Метод | Путь                                             | RBAC                | Описание |
+| ----- | ------------------------------------------------ | ------------------- | -------- |
+| GET   | `/api/orders/:orderId/finished-goods-shipments`  | ADMIN, SHOP_MANAGER | Список документов отгрузки по заказу (`FinishedGoodsShipmentDetailDto[]`), сортировка `shippedAt desc, createdAt desc, id desc`. |
+| POST  | `/api/orders/:orderId/finished-goods-shipments`  | ADMIN, SHOP_MANAGER | Body — `CreateFinishedGoodsShipmentDto`: `{ shippedAt? (ISO datetime), comment? (max 500), clientRequestId? (max 128), lines: [{ finishedGoodsBalanceId, qty (int > 0), comment? (max 500) }] }`. Минимум одна строка. `orderId` берётся из URL. Response — созданный (или existing для повторного `clientRequestId`) `FinishedGoodsShipmentDetailDto`. |
+
+Идемпотентность POST — `FinishedGoodsShipment.sourceKey @unique`
+(`FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`). Повторный
+submit формы (двойной клик / network retry) с тем же
+`clientRequestId` возвращает существующий документ и НЕ создаёт
+дублирующих движений / списаний. Если `clientRequestId` не передан,
+сервис генерирует UUID server-side, но идемпотентность тогда
+отсутствует — UI всегда обязан генерировать UUID.
+
+Ошибки:
+- `FINISHED_GOODS_SHIPMENT_DUPLICATE_BALANCE` (400) — duplicate
+  `finishedGoodsBalanceId` в request;
+- `FINISHED_GOODS_BALANCE_NOT_FOUND` (404) — `finishedGoodsBalanceId`
+  не существует;
+- `FINISHED_GOODS_SHIPMENT_BALANCE_ORDER_MISMATCH` (400) — баланс
+  принадлежит другому заказу;
+- `FINISHED_GOODS_SHIPMENT_QTY_EXCEEDS_AVAILABLE` (409) — `qty >
+  balance.qty`;
+- `FINISHED_GOODS_INSUFFICIENT_BALANCE` (409) — конкурентная
+  отгрузка успела увести остаток ниже нуля (защита внутри
+  `applyMovementInTx`); транзакция полностью откатывается;
+- `ORDER_NOT_FOUND` (404) — заказа нет.
+
+Audit `FINISHED_GOODS_SHIPMENT_CREATED` (entityType
+`FINISHED_GOODS_SHIPMENT`, entityId — `FinishedGoodsShipment.id`)
+пишется в той же транзакции, что и сам документ + N
+`FinishedGoodsMovement` SHIPMENT OUT. Payload —
+`{ finishedGoodsShipmentId, number, orderId, shippedAt, comment,
+lines: [{ finishedGoodsShipmentLineId, finishedGoodsBalanceId,
+productId, sizeId, color, warehouseId, cellId, qty }], employeeId,
+timestamp }`.
+
+Сознательно **не реализованы** на этой итерации (см.
+`docs/current-state.md §«Отгрузка готовой продукции»`):
+- отмена / сторно shipment (`cancel` / `reversal`);
+- DRAFT-flow shipment;
+- transfer / adjustment готовой продукции;
+- автоматическая смена `Order.status` при полной отгрузке;
+- материальный stock не затрагивается.
 
 ---
 

@@ -39,11 +39,16 @@ export const FINISHED_GOODS_MOVEMENT_DIRECTIONS = Object.values(
 );
 
 /**
- * Источник `FinishedGoodsMovement`. На MVP единственный реальный
- * источник — упаковка паспорта (`Passport.status = PACKED`).
+ * Источник `FinishedGoodsMovement`. На MVP реализовано два источника:
+ *   - `PACKED_PASSPORT` — упаковка паспорта (`Passport.status = PACKED`)
+ *     или прохождение операции с `Operation.producesFinishedGoods = true`;
+ *   - `FINISHED_GOODS_SHIPMENT_LINE` — отгрузка готовой продукции
+ *     из карточки заказа (`type = SHIPMENT`, `direction = OUT`,
+ *     см. `FinishedGoodsService.createShipmentForOrder`).
  */
 export const FINISHED_GOODS_SOURCE_TYPE = {
   PACKED_PASSPORT: 'PACKED_PASSPORT',
+  FINISHED_GOODS_SHIPMENT_LINE: 'FINISHED_GOODS_SHIPMENT_LINE',
 } as const;
 export type FinishedGoodsSourceType =
   (typeof FINISHED_GOODS_SOURCE_TYPE)[keyof typeof FINISHED_GOODS_SOURCE_TYPE];
@@ -89,6 +94,42 @@ export function buildPassportFinishedGoodsOutputSourceKey(
  * в SQL UNIQUE — Postgres трактует `NULL != NULL` и без явного ключа
  * UNIQUE-индекс по optional FK не сработает.
  */
+/**
+ * `sourceKey` для движения отгрузки готовой продукции по конкретной
+ * строке shipment (см.
+ * `FinishedGoodsService.createShipmentForOrder`,
+ * `prisma/schema.prisma::FinishedGoodsShipmentLine`).
+ *
+ * Один shipment-line → одно движение `SHIPMENT OUT`. UNIQUE на
+ * `FinishedGoodsMovement.sourceKey` гарантирует, что повторная
+ * обработка строки (retry, replay) не создаст дублирующее списание.
+ */
+export function buildFinishedGoodsShipmentLineSourceKey(
+  shipmentLineId: string,
+): string {
+  return `${FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_SHIPMENT_LINE}:${shipmentLineId}`;
+}
+
+/**
+ * `sourceKey` для самого документа отгрузки. Формат
+ * `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>` гарантирует
+ * идемпотентность: повторный submit формы (двойной клик / network
+ * retry) с тем же `clientRequestId` возвращает существующий документ
+ * и НЕ создаёт дублирующих движений / списаний.
+ *
+ * UI-слой обязан генерировать `clientRequestId` (UUID) и передавать
+ * его в DTO; backend подстрахуется server-side cuid-ом, если поле
+ * не пришло, но тогда повторный submit идёт под новым ключом и
+ * идемпотентность отсутствует — это сознательный fallback на случай
+ * нестандартных клиентов.
+ */
+export function buildFinishedGoodsShipmentSourceKey(
+  orderId: string,
+  clientRequestId: string,
+): string {
+  return `FINISHED_GOODS_SHIPMENT:${orderId}:${clientRequestId}`;
+}
+
 export function buildFinishedGoodsBalanceKey(params: {
   orderId: string;
   productId: string;

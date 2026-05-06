@@ -838,9 +838,91 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     `FinishedGoodsMovement` для готовой продукции). `StockService`,
     `FinishedGoodsService`, `MaterialIssue`, packing flow, operation
     flow, `prisma/schema.prisma` на этой итерации **не правились**.
-  - Сознательно **не реализованы**: отгрузка готовой продукции (UI и
-    backend), transfer / adjustment готовой продукции, отдельный
-    UI-раздел / sidebar item / роль для готовой продукции.
+  - Сознательно **не реализованы**: transfer / adjustment готовой
+    продукции, отдельный UI-раздел / sidebar item / роль для готовой
+    продукции. Отгрузка готовой продукции реализована отдельной
+    итерацией «Отгрузка готовой продукции» (см. ниже).
+
+  Backend + Frontend-итерация «Отгрузка готовой продукции»
+  (`prisma/schema.prisma::FinishedGoodsShipment` /
+  `FinishedGoodsShipmentLine`,
+  `prisma/migrations/20260617100000_add_finished_goods_shipments`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+  `apps/api/src/modules/finished-goods/finished-goods-order-shipments.controller.ts`,
+  `apps/api/src/modules/finished-goods/dto/create-finished-goods-shipment.dto.ts`,
+  `apps/web/components/orders/finished-goods/*`,
+  `apps/web/app/admin/orders/[id]/finished-goods-shipments-actions.ts`,
+  `tests/smoke/finished-goods-shipments.smoke.test.ts`,
+  `docs/api.md §«Finished goods shipments»`):
+  - в заказ покупателя добавлена возможность **частичной отгрузки**
+    готовой продукции из карточки заказа (вкладка «Производство»,
+    блок «Отгрузка готовой продукции»). Отдельная страница
+    `/admin/finished-goods` / `/admin/shipments` / sidebar-пункт /
+    новая вкладка `OrderViewTabs` **не создавались**.
+  - Документ — `FinishedGoodsShipment` (`status` всегда `POSTED` на
+    MVP, номер `S-YYYYMMDD-NNNN` через
+    `FinishedGoodsShipmentNumberService`); строка —
+    `FinishedGoodsShipmentLine` со snapshot-ом `productId` /
+    `sizeId` / `color` / `warehouseId` / `cellId` от
+    `FinishedGoodsBalance` на момент создания.
+  - По каждой строке shipment создаётся ровно одно
+    `FinishedGoodsMovement` `type = SHIPMENT, direction = OUT` через
+    `applyMovementInTx` — sourceKey
+    `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`. Балансы атомарно
+    уменьшаются (`balance.qty -= line.qty`); guard на отрицательный
+    остаток в MVP **запрещает** уход в минус
+    (`FINISHED_GOODS_INSUFFICIENT_BALANCE`, 409 — откатывает всю
+    транзакцию). `allowNegativeMaterialStock` к этому контуру
+    **не применим** (это флаг для StockBalance материалов).
+  - **Идемпотентность.** `FinishedGoodsShipment.sourceKey @unique` =
+    `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`. UI
+    генерирует `clientRequestId` (`crypto.randomUUID()`) один раз на
+    жизненный цикл формы — повторный submit (двойной клик / network
+    retry) возвращает существующий документ и НЕ создаёт
+    дублирующих движений. Если backend получает request без
+    `clientRequestId`, генерит UUID server-side, но повторный submit
+    тогда не идемпотентен (sound fallback).
+  - **Order.status автоматически НЕ меняется.** Полная отгрузка не
+    переводит заказ в `DONE` — это сознательное решение (см.
+    ТЗ итерации). Управление статусами заказа — отдельная ручка
+    менеджера (`POST /api/orders/:id/complete`).
+  - **Отдельный контур от материалов.** `StockBalance` /
+    `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+    `StockAdjustment` / `StockTransfer` / `CostsService` /
+    `ProductionCostV2Service` НЕ затрагиваются и НЕ меняются.
+  - **Public API:** `POST /api/orders/:orderId/finished-goods-shipments`,
+    `GET /api/orders/:orderId/finished-goods-shipments`,
+    `GET /api/finished-goods/shipments/:id` (RBAC `ADMIN` /
+    `SHOP_MANAGER`). DTO body — `{ shippedAt?, comment?,
+    clientRequestId?, lines: [{ finishedGoodsBalanceId, qty,
+    comment? }] }`. `orderId` берётся из URL, snapshot-поля
+    (productId / sizeId / color / warehouse / cell) не принимаются.
+  - **Audit** `FINISHED_GOODS_SHIPMENT_CREATED`
+    (`entityType = FINISHED_GOODS_SHIPMENT`,
+    `entityId = FinishedGoodsShipment.id`) пишется в той же
+    транзакции, что и сам документ + N движений SHIPMENT OUT.
+    Payload — `{ finishedGoodsShipmentId, number, orderId, shippedAt,
+    comment, lines: [{ finishedGoodsShipmentLineId,
+    finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
+    cellId, qty }], employeeId, timestamp }`.
+  - **UI.** Блок `OrderFinishedGoodsShipmentSection` показывает три
+    части: «Доступная готовая продукция» (по `positiveOnly = true`),
+    «История отгрузок» (table с раскрытием строк), inline-форма
+    `CreateFinishedGoodsShipmentDialog` (qty input на каждый
+    `FinishedGoodsBalance`, validation `qty <= available`,
+    `clientRequestId`, server action
+    `createFinishedGoodsShipmentAction`). После submit —
+    `revalidatePath('/admin/orders/[id]')`.
+  - В `/admin/warehouses?tab=movements` строки отгрузки
+    отображаются с типом «Отгрузка» (`StockMovementTypeBadge` →
+    `SHIPMENT`); в фильтре «Тип движения» появилась опция
+    `SHIPMENT → «Отгрузка»` (scope `finished-goods-only`).
+  - Сознательно **не реализованы** на этой итерации:
+    отмена / сторно shipment (`cancel` / `reversal`), DRAFT-flow,
+    transfer / adjustment готовой продукции, автоматическая смена
+    `Order.status` при полной отгрузке, отдельный UI-раздел /
+    sidebar / новая роль. Запреты зафиксированы в
+    `tests/smoke/finished-goods-shipments.smoke.test.ts`.
 
   Backend + Frontend-итерация «Давальческое сырьё клиента»
   (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,

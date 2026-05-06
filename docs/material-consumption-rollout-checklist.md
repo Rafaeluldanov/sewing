@@ -713,14 +713,77 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
   `trigger: 'OPERATION_OUTPUT' | 'PACKED_PASSPORT'` и
   `triggerOperationId` для operation-driven выпуска.
 
+Что добавлено итерацией «Отгрузка готовой продукции»:
+- модели `FinishedGoodsShipment` (`status` всегда `POSTED` на MVP,
+  номер `S-YYYYMMDD-NNNN`) и `FinishedGoodsShipmentLine` (snapshot
+  product / size / color / warehouse / cell от `FinishedGoodsBalance`
+  на момент создания);
+- API: `POST /api/orders/:orderId/finished-goods-shipments`,
+  `GET /api/orders/:orderId/finished-goods-shipments`,
+  `GET /api/finished-goods/shipments/:id` (RBAC ADMIN / SHOP_MANAGER);
+- по каждой строке shipment создаётся ровно один
+  `FinishedGoodsMovement` `type = SHIPMENT, direction = OUT` (sourceKey
+  `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`); `FinishedGoodsBalance.qty`
+  уменьшается атомарно; `FINISHED_GOODS_INSUFFICIENT_BALANCE` (409)
+  при попытке отгрузить больше доступного;
+- идемпотентность повторного submit формы — `FinishedGoodsShipment.sourceKey
+  @unique` = `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`;
+- UI блок «Отгрузка готовой продукции» во вкладке «Производство»
+  карточки заказа (
+  `apps/web/components/orders/finished-goods/*`); отдельная страница
+  `/admin/finished-goods` / sidebar-пункт / новая вкладка
+  `OrderViewTabs` НЕ создавались;
+- audit `FINISHED_GOODS_SHIPMENT_CREATED` (`entityType =
+  FINISHED_GOODS_SHIPMENT`).
+
 Чего нет на этой итерации (отдельный backlog по готовой продукции):
-- отгрузка готовой продукции (`SHIPMENT`);
+- отмена / сторно shipment (`cancel` / `reversal`) — нет в
+  `FinishedGoodsService` и нет публичного эндпоинта;
+- DRAFT-flow shipment (на MVP всегда POSTED);
+- автоматическая смена `Order.status` при полной отгрузке —
+  сознательное решение, статус заказа меняется только через
+  `POST /api/orders/:id/complete`;
 - transfer готовой продукции между складами / ячейками
   (`TRANSFER`);
-- ручная корректировка (`ADJUSTMENT`) и сторно (`REVERSAL`);
-- размещение готовой продукции по ячейкам (`cellId` всегда `null`);
-- UI-раздел `/admin/finished-goods` / sidebar item / отчёт.
+- ручная корректировка (`ADJUSTMENT`) и сторно (`REVERSAL`)
+  движений;
+- размещение готовой продукции по ячейкам (`cellId` всегда `null`
+  для `PRODUCTION_RECEIPT`; для `SHIPMENT` snapshot-ом берётся
+  существующий `cellId` баланса);
+- UI-раздел `/admin/finished-goods` / sidebar item / отчёт;
 - новые роли (RBAC ограничен `ADMIN` / `SHOP_MANAGER`).
+
+### Как проверить «Отгрузку готовой продукции из заказа»
+
+1. Выпустить готовую продукцию (через `producesFinishedGoods`-операцию
+   или упаковку паспорта). В `/admin/warehouses?tab=balances`
+   появится строка готовой продукции с `qty > 0`.
+2. Открыть карточку заказа `/admin/orders/[id]?tab=production`.
+   В блоке «Отгрузка готовой продукции» должны быть видны доступные
+   остатки. Нажать «Создать отгрузку».
+3. В форме указать `qty` по одной или нескольким строкам (частичная
+   отгрузка). Submit.
+4. Проверить:
+   - `FinishedGoodsShipment` с `status = POSTED`,
+     `number = S-YYYYMMDD-NNNN` (см. detail
+     `GET /api/finished-goods/shipments/:id`);
+   - `FinishedGoodsShipmentLine` по каждой отправленной строке;
+   - `FinishedGoodsBalance.qty` уменьшился на сумму отгруженных
+     `qty`;
+   - в `/admin/warehouses?tab=movements` появилась строка с типом
+     «Отгрузка», направлением «Расход», правильной номенклатурой и
+     заказчиком; источник `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`.
+5. Попробовать отгрузить больше доступного в форме — backend
+   возвращает 409 `FINISHED_GOODS_SHIPMENT_QTY_EXCEEDS_AVAILABLE`,
+   UI показывает осмысленное сообщение.
+6. Повторить submit формы с тем же `clientRequestId` (например,
+   двойной клик / network retry) — backend возвращает существующий
+   документ; новые движения / списания НЕ создаются (идемпотентность
+   по `FinishedGoodsShipment.sourceKey @unique`).
+7. Проверить, что `Order.status` после полной отгрузки **остался
+   прежним** — переход в `DONE` сознательно НЕ автоматизирован.
+8. Проверить, что material `StockBalance` / `StockMovement` не
+   изменились (отдельный контур).
 
 ### Как проверить «Выпуск по операции»
 

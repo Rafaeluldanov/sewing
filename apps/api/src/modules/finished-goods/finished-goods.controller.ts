@@ -1,4 +1,4 @@
-import { Controller, Get, Query } from '@nestjs/common';
+import { Controller, Get, Param, Query } from '@nestjs/common';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { Roles } from '../auth/auth.decorators.js';
@@ -53,5 +53,20 @@ export class FinishedGoodsController {
     query: ListFinishedGoodsMovementsQuery,
   ) {
     return this.finishedGoods.listMovements(query);
+  }
+
+  /**
+   * Detail документа отгрузки готовой продукции (см.
+   * `FinishedGoodsService.createShipmentForOrder`,
+   * `apps/api/src/modules/finished-goods/finished-goods-order-shipments.controller.ts`).
+   *
+   * Создание / список по заказу живут на
+   * `/api/orders/:orderId/finished-goods-shipments` в
+   * `FinishedGoodsOrderShipmentsController`. Detail полезен для
+   * перехода с любого UI (movement journal, audit log) и для тестов.
+   */
+  @Get('shipments/:id')
+  getShipment(@Param('id') id: string) {
+    return this.finishedGoods.getShipmentDetail(id);
   }
 }

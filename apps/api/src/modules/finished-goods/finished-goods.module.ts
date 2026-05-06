@@ -1,6 +1,8 @@
 import { Module } from '@nestjs/common';
 
 import { FinishedGoodsController } from './finished-goods.controller.js';
+import { FinishedGoodsOrderShipmentsController } from './finished-goods-order-shipments.controller.js';
+import { FinishedGoodsShipmentNumberService } from './finished-goods-shipment-number.service.js';
 import { FinishedGoodsService } from './finished-goods.service.js';
 
 /**
@@ -21,8 +23,8 @@ import { FinishedGoodsService } from './finished-goods.service.js';
  * import не нужен.
  */
 @Module({
-  controllers: [FinishedGoodsController],
-  providers: [FinishedGoodsService],
+  controllers: [FinishedGoodsController, FinishedGoodsOrderShipmentsController],
+  providers: [FinishedGoodsService, FinishedGoodsShipmentNumberService],
   exports: [FinishedGoodsService],
 })
 export class FinishedGoodsModule {}

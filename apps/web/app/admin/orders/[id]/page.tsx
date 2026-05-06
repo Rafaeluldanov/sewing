@@ -159,7 +159,7 @@ export default async function AdminOrderDetailPage({
       >
         {activeTab === 'production' && (
           <div className="order-tab-panel">
-            <OrderProductionTab order={order} />
+            <OrderProductionTab order={order} canManage={isManager} />
           </div>
         )}
 

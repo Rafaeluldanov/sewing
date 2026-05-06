@@ -411,7 +411,37 @@ export type AuditEntityType =
    * `FinishedGoodsMovement.sourceKey @unique` =
    * `PACKED_PASSPORT:<passportId>`).
    */
-  | 'FINISHED_GOODS_MOVEMENT';
+  | 'FINISHED_GOODS_MOVEMENT'
+  /**
+   * Документ отгрузки готовой продукции из карточки заказа (см.
+   * `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+   * `prisma/schema.prisma::FinishedGoodsShipment` /
+   * `FinishedGoodsShipmentLine`,
+   * `docs/events.md §«Finished goods»`,
+   * `docs/current-state.md §«Отгрузка готовой продукции»`).
+   *
+   * **Отдельный контур от материалов.** Не путать с `STOCK_MOVEMENT`
+   * и `FINISHED_GOODS_MOVEMENT`: один shipment-документ создаёт N
+   * `FinishedGoodsMovement` `type = SHIPMENT, direction = OUT`, но в
+   * `AuditLog` пишется ровно одна строка верхнеуровневого события.
+   *
+   * События:
+   *   - `FINISHED_GOODS_SHIPMENT_CREATED` — менеджер создал документ
+   *     отгрузки (`POST /api/orders/:orderId/finished-goods-shipments`).
+   *     `entityId = FinishedGoodsShipment.id`. Payload —
+   *     `{ finishedGoodsShipmentId, number, orderId, shippedAt,
+   *     comment, lines: [{ finishedGoodsShipmentLineId,
+   *     finishedGoodsBalanceId, productId, sizeId, color,
+   *     warehouseId, cellId, qty }], employeeId, timestamp }`.
+   *     Пишется в той же транзакции, что и сам документ + N
+   *     `FinishedGoodsMovement` SHIPMENT OUT.
+   *
+   * Идемпотентно: повторный submit с тем же `clientRequestId`
+   * возвращает существующий документ и audit заново НЕ пишет
+   * (защита по `FinishedGoodsShipment.sourceKey @unique` =
+   * `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`).
+   */
+  | 'FINISHED_GOODS_SHIPMENT';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

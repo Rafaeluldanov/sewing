@@ -352,6 +352,7 @@ ORDER_MATERIAL_ARRIVAL_OVERRIDE |
 MATERIAL_ISSUE | MATERIAL_ISSUE_RETURN |
 STOCK_MOVEMENT |
 FINISHED_GOODS_MOVEMENT |
+FINISHED_GOODS_SHIPMENT |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY | PAYROLL_PAYOUT |
@@ -425,9 +426,41 @@ runtime-коде (не из комментариев/документации). 
   employeeId, timestamp }`.
 
   События `FINISHED_GOODS_REVERSAL_*`, `FINISHED_GOODS_ADJUSTMENT_*`,
-  `FINISHED_GOODS_SHIPMENT_*`, `FINISHED_GOODS_TRANSFER_*` на этой
-  итерации **не реализованы** — соответствующие движения зарезервированы
-  в `FINISHED_GOODS_MOVEMENT_TYPE`, но writer-ов нет.
+  `FINISHED_GOODS_TRANSFER_*` на этой итерации **не реализованы** —
+  соответствующие движения зарезервированы в
+  `FINISHED_GOODS_MOVEMENT_TYPE`, но writer-ов нет.
+
+#### Отгрузка готовой продукции (`entityType = FINISHED_GOODS_SHIPMENT`, `entityId = FinishedGoodsShipment.id`)
+
+См. `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+`prisma/schema.prisma::FinishedGoodsShipment` /
+`FinishedGoodsShipmentLine`,
+`docs/api.md §29a «Finished goods shipments»`,
+`docs/current-state.md §«Отгрузка готовой продукции»`.
+
+**Отдельный контур от материалов** — не пересекается с
+`STOCK_MOVEMENT` / `MATERIAL_ISSUE`. Одно audit-событие на
+shipment-документ верхнего уровня, независимо от количества
+строк / movements внутри.
+
+- `FINISHED_GOODS_SHIPMENT_CREATED` — менеджер создал документ
+  отгрузки готовой продукции из карточки заказа (`POST
+  /api/orders/:orderId/finished-goods-shipments`). Пишется в той же
+  транзакции, что и сам `FinishedGoodsShipment` + N
+  `FinishedGoodsShipmentLine` + N `FinishedGoodsMovement` `type =
+  SHIPMENT, direction = OUT`. Идемпотентно по
+  `FinishedGoodsShipment.sourceKey =
+  FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`: повторный
+  submit формы возвращает существующий документ и event заново НЕ
+  пишет. Payload — `{ finishedGoodsShipmentId, number, orderId,
+  shippedAt, comment, lines: [{ finishedGoodsShipmentLineId,
+  finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
+  cellId, qty }], employeeId, timestamp }`.
+
+  События `FINISHED_GOODS_SHIPMENT_CANCELLED` /
+  `FINISHED_GOODS_SHIPMENT_REVERSED` на этой итерации **не
+  реализованы** (см. ТЗ — cancel / reversal shipment отдельная
+  будущая итерация).
 
 #### ОТК (`entityType = QC`, `entityId = passportId`)
 
