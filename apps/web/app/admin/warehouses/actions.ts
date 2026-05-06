@@ -7,6 +7,7 @@ import type {
   PrintWarehouseCellsResultDto,
 } from '@sewing/shared/warehouses';
 import { ApiRequestError } from '@/lib/api';
+import { listCells } from '@/lib/passports-api';
 import {
   createStockAdjustment,
   createStockTransfer,
@@ -394,5 +395,67 @@ export async function createStockTransferAction(
       };
     }
     return { ok: false, error: 'Не удалось сохранить перемещение остатка.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cells lookup (for transfer destination cell selector)
+// ---------------------------------------------------------------------------
+
+/**
+ * Минимальная карточка ячейки для select-а в `StockTransferDialog`
+ * (см. `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`).
+ * Берём только то, что показывает selectbox — `id` + `code` (опционально
+ * `qrCode` оставляем, чтобы не плодить отдельных DTO). `warehouse`
+ * уже отфильтрован на backend через `?warehouseId=…`.
+ */
+export interface TransferDestinationCellOption {
+  id: string;
+  code: string;
+}
+
+export interface LoadTransferDestinationCellsResult {
+  ok: boolean;
+  cells?: TransferDestinationCellOption[];
+  error?: string;
+  code?: string;
+}
+
+/**
+ * Server action для динамической подгрузки ячеек выбранного склада
+ * назначения в форме «Переместить».
+ *
+ * Контракт:
+ *   - `warehouseId` пустой / не задан → возвращаем пустой массив без
+ *     запроса в backend (UI знает «склад ещё не выбран»);
+ *   - иначе зовём `GET /api/cells?warehouseId=<id>` и нормализуем
+ *     ответ до минимального shape `{ id, code }`. Только активные
+ *     ячейки этого склада (фильтрация — на backend).
+ *   - сетевые / API-ошибки оборачиваем в `{ ok: false, error, code }`,
+ *     чтобы клиентский диалог отрисовал понятный fallback вместо
+ *     raw-JSON.
+ *
+ * Не используется кэширование — список ячеек меняется редко, но
+ * пользователь после привязки/отвязки ячейки на `/admin/warehouses/[id]`
+ * должен сразу увидеть актуальное содержимое selectbox-а.
+ */
+export async function loadTransferDestinationCellsAction(
+  warehouseId: string,
+): Promise<LoadTransferDestinationCellsResult> {
+  const wid = warehouseId.trim();
+  if (wid.length === 0) {
+    return { ok: true, cells: [] };
+  }
+  try {
+    const cells = await listCells({ warehouseId: wid });
+    return {
+      ok: true,
+      cells: cells.map((c) => ({ id: c.id, code: c.code })),
+    };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, code: e.code, error: e.message };
+    }
+    return { ok: false, error: 'Не удалось загрузить список ячеек.' };
   }
 }

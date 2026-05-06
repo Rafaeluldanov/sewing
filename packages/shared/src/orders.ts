@@ -568,6 +568,23 @@ export const CreateOrderSchema = z.object({
    */
   customerUnitPrice: CustomerUnitPriceField,
   customerCurrency: CustomerCurrencyField,
+  /**
+   * Этап «Склад выпуска готовой продукции» (см.
+   * `prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
+   * `OrdersService.create` / `update`,
+   * `docs/current-state.md §«Склад выпуска готовой продукции»`).
+   *
+   * Управленческое поле: id `Warehouse`, на который менеджер
+   * планирует выпустить готовую продукцию (B2B / Marketplace /
+   * Образцы / …). Это НЕ склад материалов — backend никак не
+   * затрагивает `StockBalance` / `StockMovement` / `MaterialIssue` /
+   * `PurchaseReceipt` / `WorkshopNeed`.
+   *
+   * Поле опциональное и nullable: на create `null` / `undefined` →
+   * заказ создаётся без выбранного склада. Если передан непустой
+   * id — backend проверяет existence и `isActive = true`.
+   */
+  finishedGoodsWarehouseId: z.string().min(1).nullable().optional(),
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -689,6 +706,16 @@ export const UpdateOrderSchema = z.object({
    */
   customerUnitPrice: CustomerUnitPriceField,
   customerCurrency: CustomerCurrencyField,
+  /**
+   * Этап «Склад выпуска готовой продукции»: смена / сброс выбранного
+   * склада выпуска. Это управленческое поле — менеджер может править
+   * на любом статусе заказа (без `ORDER_LOCKED` guard), потому что
+   * оно не затрагивает snapshot маршрута / техкарты / план операций.
+   * `undefined` — поле не пришло, не трогать; `null` — сбросить;
+   * непустая строка — переустановить (backend валидирует existence
+   * и `isActive`).
+   */
+  finishedGoodsWarehouseId: z.string().min(1).nullable().optional(),
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -928,6 +955,28 @@ export interface OrderListItemDto {
    */
   customerUnitPrice?: string | number | null;
   customerCurrency?: MoneyCurrency | null;
+
+  /**
+   * Этап «Склад выпуска готовой продукции» (см.
+   * `prisma/schema.prisma::Order.finishedGoodsWarehouseId`).
+   *
+   * Управленческая ссылка на склад, на который менеджер планирует
+   * выпустить готовую продукцию по заказу. Краткий объект
+   * `{ id, name, code }` — для UI списков и карточек, чтобы не
+   * делать дополнительный запрос за именем. `null` означает «не
+   * выбран» (исторические заказы / новый создаваемый заказ без
+   * указания склада).
+   *
+   * Поле сознательно опционально (`?`) — старые потребители без
+   * пересборки shared-пакета продолжают компилироваться. Новые
+   * клиенты получают `null` или объект.
+   */
+  finishedGoodsWarehouseId?: string | null;
+  finishedGoodsWarehouse?: {
+    id: string;
+    name: string;
+    code: string | null;
+  } | null;
 
   /**
    * Этап 2 «План операций на заказе» (см.

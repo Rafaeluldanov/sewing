@@ -221,6 +221,27 @@ export function OrderManagementHeader({ order, passports }: Props) {
           )}
         </HeaderField>
 
+        {/*
+          Этап «Склад выпуска готовой продукции» (см.
+          `prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
+          `docs/current-state.md §«Склад выпуска готовой продукции»`).
+          Управленческое поле — НЕ влияет на StockBalance / StockMovement
+          материалов. Если не выбран — показываем «Не выбран», без
+          предупреждений: новые заказы создавать без склада допустимо.
+        */}
+        <HeaderField label="Склад готовой продукции">
+          {order.finishedGoodsWarehouse ? (
+            <strong>
+              {order.finishedGoodsWarehouse.name}
+              {order.finishedGoodsWarehouse.code
+                ? ` (${order.finishedGoodsWarehouse.code})`
+                : ''}
+            </strong>
+          ) : (
+            <span className="admin-muted">не выбран</span>
+          )}
+        </HeaderField>
+
         <HeaderField label="Общий план">
           <strong>{totalPlan.toLocaleString('ru-RU')}</strong>
           <span className="order-mgmt-header__unit"> шт</span>

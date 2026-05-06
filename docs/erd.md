@@ -147,16 +147,24 @@
     `operationCostPlanRub?`, `operationTimePlanSec?`,
     `operationPlanCalculatedAt?`, `operationPlanWarnings: Json?`.
   - **Цена продажи**: `customerUnitPrice?`, `customerCurrency?`.
+  - **Склад выпуска готовой продукции**:
+    `finishedGoodsWarehouseId? → Warehouse` (named relation
+    `OrderFinishedGoodsWarehouse`, `onDelete: SetNull`). Управленческое
+    поле — НЕ влияет на `StockBalance` / `StockMovement` материалов;
+    готовая продукция как stock-сущность на этой итерации не
+    моделируется. Backend (`OrdersService`) валидирует existence +
+    `isActive` (400 `WAREHOUSE_NOT_FOUND`, 409 `WAREHOUSE_INACTIVE`).
   - Связи: `OrderItem[]`, `Passport[]`, `OrderRouteStep[]`,
     `OrderMaterialRequirement[]`, `OrderOutsourceRequirement[]`,
     `WorkshopNeed[]` (cascade), `PurchaseOrder[]` (`SetNull` со стороны
     PO), `PurchaseReceipt[]` (`SetNull`), `OrderApplication[]` (cascade),
     `OrderCostEstimate[]`, `OrderMaterialArrivalOverride[]` (cascade),
     `MaterialIssue[]` (cascade — см. §2.12a),
-    `CuttingClosureRequest[]`, `companyDivision? → CompanyDivision`.
+    `CuttingClosureRequest[]`, `companyDivision? → CompanyDivision`,
+    `finishedGoodsWarehouse? → Warehouse` (`SetNull`).
   - Индексы: `status`, `orderDate`, `createdAt`, `routeTemplateId`,
     `techCardId`, `patternItemId`, `clientId`, `dueDate`,
-    `companyDivisionId`.
+    `companyDivisionId`, `finishedGoodsWarehouseId`.
   - **`CompanyDivision` как master-справочник подразделений** (см.
     `docs/domain.md §«Подразделения заказа»`): backend
     `OrdersService.create`/`update` пишет FK

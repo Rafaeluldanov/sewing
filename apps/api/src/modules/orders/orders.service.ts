@@ -85,6 +85,15 @@ type OrderWithItems = Prisma.OrderGetPayload<{
      * реквизиты карточки подразделения для DTO-ответа.
      */
     companyDivision: true;
+    /**
+     * Этап «Склад выпуска готовой продукции» (см.
+     * `prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
+     * `OrdersService.toDetailDto`): подгружаем минимальные
+     * реквизиты склада-получателя готовой продукции, чтобы UI
+     * карточки и списка отрисовали имя/код без дополнительного
+     * запроса в `/api/warehouses/:id`.
+     */
+    finishedGoodsWarehouse: true;
   };
 }>;
 
@@ -220,6 +229,15 @@ export class OrdersService {
       const companyDivisionIdForCreate =
         await this.resolveCompanyDivisionIdForOrder(tx, dto.companyDivisionId);
 
+      // Этап «Склад выпуска готовой продукции»: на create принимаем
+      // `null` / непустую строку / `undefined`. Резолвер кидает
+      // адресную 400 / 409, если warehouse не найден / неактивен.
+      const finishedGoodsWarehouseIdForCreate =
+        await this.resolveFinishedGoodsWarehouseIdForOrder(
+          tx,
+          dto.finishedGoodsWarehouseId,
+        );
+
       // Цвет заказа: предпочитаем явный input.color. Если его нет —
       // в legacy product-only flow подставляем `Product.color` (как
       // раньше, см. `docs/domain.md §5a`); в pattern-flow цвета по
@@ -267,6 +285,12 @@ export class OrdersService {
                 ? null
                 : new Prisma.Decimal(customerUnitPrice),
           customerCurrency: customerCurrency ?? null,
+          // Этап «Склад выпуска готовой продукции»:
+          // resolver вернул либо `null` (не задан / `undefined`-входе),
+          // либо валидный warehouse.id. На create `undefined`-режим
+          // эквивалентен «не задан» — пишем `null`.
+          finishedGoodsWarehouseId:
+            finishedGoodsWarehouseIdForCreate ?? null,
           items: {
             create: dto.items.map((i) => ({
               productId: productIdForItems,
@@ -325,6 +349,10 @@ export class OrdersService {
           // PHASE 1: подгружаем краткие реквизиты `CompanyDivision`
           // для того же DTO-контракта, что и `getOne`.
           companyDivision: true,
+          // Этап «Склад выпуска готовой продукции»: краткие реквизиты
+          // выбранного склада-получателя, чтобы UI отрисовал имя/код
+          // без отдельного запроса.
+          finishedGoodsWarehouse: true,
         },
       });
       // Этап 2 «План операций на заказе» (см.
@@ -556,6 +584,13 @@ export class OrdersService {
         companyDivision: {
           select: { id: true, code: true, name: true },
         },
+        // Этап «Склад выпуска готовой продукции»: тонкий select для
+        // `OrderListItemDto.finishedGoodsWarehouse`. Это
+        // **управленческое** поле — `StockBalance` / `StockMovement`
+        // не затрагивается.
+        finishedGoodsWarehouse: {
+          select: { id: true, name: true, code: true },
+        },
         // Тонкий select по паспортам: только то, что нужно для
         // qtyFinishedTotal. Полный include паспортов сюда не нужен.
         passports: { select: { qtyGood: true, status: true } },
@@ -628,6 +663,17 @@ export class OrdersService {
     patternPreviewSnapshotUrl: string | null;
     customerUnitPrice: Prisma.Decimal | null;
     customerCurrency: string | null;
+    /**
+     * Этап «Склад выпуска готовой продукции» (см.
+     * `prisma/schema.prisma::Order.finishedGoodsWarehouseId`).
+     * Управленческое поле — не влияет на StockBalance / StockMovement.
+     */
+    finishedGoodsWarehouseId: string | null;
+    finishedGoodsWarehouse: {
+      id: string;
+      name: string;
+      code: string | null;
+    } | null;
     operationCostPlanRub: Prisma.Decimal | null;
     operationTimePlanSec: number | null;
     operationPlanCalculatedAt: Date | null;
@@ -701,6 +747,18 @@ export class OrdersService {
         : null,
       customerCurrency:
         (o.customerCurrency as 'RUB' | 'USD' | null) ?? null,
+      // Этап «Склад выпуска готовой продукции»: краткие реквизиты
+      // выбранного склада-получателя (id + name + code) либо `null`,
+      // если склад не выбран. Это управленческое поле, в плоскости
+      // склада материалов оно ничего не меняет.
+      finishedGoodsWarehouseId: o.finishedGoodsWarehouseId,
+      finishedGoodsWarehouse: o.finishedGoodsWarehouse
+        ? {
+            id: o.finishedGoodsWarehouse.id,
+            name: o.finishedGoodsWarehouse.name,
+            code: o.finishedGoodsWarehouse.code,
+          }
+        : null,
       // Этап 2 «План операций на заказе»: snapshot полей в API.
       // Decimal сериализуется строкой (`toString`), warnings —
       // нормализуются через helper, который не падает на не-массивах
@@ -749,6 +807,9 @@ export class OrdersService {
         // PHASE 1: краткие реквизиты карточки подразделения для
         // `OrderDetailDto.companyDivision`. См. `toDetailDto`.
         companyDivision: true,
+        // Этап «Склад выпуска готовой продукции»: краткие реквизиты
+        // выбранного склада-получателя для `OrderDetailDto`.
+        finishedGoodsWarehouse: true,
       },
     });
     if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Заказ не найден' });
@@ -1204,6 +1265,13 @@ export class OrdersService {
       current.companyDivisionId,
       dto.companyDivisionId,
     );
+    trackScalar(
+      'finishedGoodsWarehouseId',
+      current.finishedGoodsWarehouseId ?? null,
+      dto.finishedGoodsWarehouseId === undefined
+        ? undefined
+        : dto.finishedGoodsWarehouseId ?? null,
+    );
     trackScalar('productId', currentProductId ?? null, dto.productId);
     trackScalar('routeTemplateId', current.routeTemplateId, dto.routeTemplateId);
     trackScalar('techCardId', current.techCardId, dto.techCardId);
@@ -1264,7 +1332,8 @@ export class OrdersService {
         dto.clientId !== undefined ||
         dto.companyDivisionId !== undefined ||
         dto.customerUnitPrice !== undefined ||
-        dto.customerCurrency !== undefined;
+        dto.customerCurrency !== undefined ||
+        dto.finishedGoodsWarehouseId !== undefined;
 
       // Резолвим `companyDivisionId` только если он реально пришёл в
       // PATCH. `undefined` — Prisma колонку не трогает; явный `null`
@@ -1277,6 +1346,17 @@ export class OrdersService {
               tx,
               dto.companyDivisionId,
             );
+
+      // Этап «Склад выпуска готовой продукции»: семантика та же —
+      // `undefined` не трогает колонку, `null` сбрасывает,
+      // непустая строка валидируется через resolver. Это
+      // **управленческое** поле — меняется на любом статусе заказа,
+      // никаких ORDER_LOCKED-ограничений.
+      const finishedGoodsWarehouseIdForPrisma =
+        await this.resolveFinishedGoodsWarehouseIdForOrder(
+          tx,
+          dto.finishedGoodsWarehouseId,
+        );
 
       if (hasOrderUpdates) {
         await tx.order.update({
@@ -1313,6 +1393,7 @@ export class OrdersService {
             companyDivisionId: companyDivisionIdForPrisma,
             customerUnitPrice: customerPriceForPrisma,
             customerCurrency: customerCurrencyForPrisma,
+            finishedGoodsWarehouseId: finishedGoodsWarehouseIdForPrisma,
           },
         });
       }
@@ -2199,6 +2280,18 @@ export class OrdersService {
         : null,
       customerCurrency:
         (order.customerCurrency as 'RUB' | 'USD' | null) ?? null,
+      // Этап «Склад выпуска готовой продукции»: краткие реквизиты
+      // выбранного склада-получателя. Поля управленческие — их
+      // присутствие в DTO **не** означает наличие движений готовой
+      // продукции в `StockMovement`.
+      finishedGoodsWarehouseId: order.finishedGoodsWarehouseId,
+      finishedGoodsWarehouse: order.finishedGoodsWarehouse
+        ? {
+            id: order.finishedGoodsWarehouse.id,
+            name: order.finishedGoodsWarehouse.name,
+            code: order.finishedGoodsWarehouse.code,
+          }
+        : null,
       // Этап 2 «План операций на заказе»: те же snapshot-поля, что
       // в `toListItemDto`. Здесь они нужны, чтобы карточка заказа
       // (`/admin/orders/[id]`) отрисовала блок «План операций» —
@@ -2536,6 +2629,52 @@ export class OrdersService {
       });
     }
     return card.id;
+  }
+
+  /**
+   * Резолвит `finishedGoodsWarehouseId` для записи в
+   * `Order.finishedGoodsWarehouseId` (см.
+   * `prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
+   * `docs/current-state.md §«Склад выпуска готовой продукции»`).
+   *
+   * Контракт:
+   *   - `undefined` → не трогаем колонку (актуально для PATCH без
+   *     поля). На create — заказ создаётся без выбранного склада;
+   *   - `null` → явно снимаем привязку (`Order.finishedGoodsWarehouseId
+   *     = null`);
+   *   - непустая строка → проверяем existence + `isActive = true`.
+   *     На несуществующий — 400 `WAREHOUSE_NOT_FOUND`. На неактивный —
+   *     409 `WAREHOUSE_INACTIVE`. UI покажет адресную ошибку и не даст
+   *     сохранить заказ с «зомби»-складом.
+   *
+   * Это **не** склад материалов: `StockBalance` / `StockMovement`
+   * никак не затрагиваются. Поле живёт ровно на уровне `Order`.
+   */
+  private async resolveFinishedGoodsWarehouseIdForOrder(
+    tx: Prisma.TransactionClient,
+    warehouseId: string | null | undefined,
+  ): Promise<string | null | undefined> {
+    if (warehouseId === undefined) return undefined;
+    if (warehouseId === null) return null;
+    const wh = await tx.warehouse.findUnique({
+      where: { id: warehouseId },
+      select: { id: true, isActive: true },
+    });
+    if (!wh) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'WAREHOUSE_NOT_FOUND',
+        message: 'Склад выпуска готовой продукции не найден',
+      });
+    }
+    if (!wh.isActive) {
+      throw new BadRequestException({
+        statusCode: 409,
+        code: 'WAREHOUSE_INACTIVE',
+        message: 'Склад выпуска готовой продукции неактивен',
+      });
+    }
+    return wh.id;
   }
 
   /**

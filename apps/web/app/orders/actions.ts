@@ -239,10 +239,32 @@ function buildCreateDto(form: FormData): CreateOrderDto {
       parseCompanyDivisionId(form) === null
         ? undefined
         : parseCompanyDivisionId(form),
+    // Этап «Склад выпуска готовой продукции»: на create
+    // `null`/`undefined` означают «не выбран» — попадает в БД как
+    // `null`. Семантика идентична `companyDivisionId`.
+    finishedGoodsWarehouseId: parseFinishedGoodsWarehouseId(form),
     applications,
     customerUnitPrice,
     customerCurrency,
   };
+}
+
+/**
+ * Этап «Склад выпуска готовой продукции» (см.
+ * `prisma/schema.prisma::Order.finishedGoodsWarehouseId`).
+ *
+ * Семантика парсинга совпадает с `parseCompanyDivisionId`:
+ *   - поля нет в FormData → `undefined` (backend не трогает колонку);
+ *   - есть и пустое → `null` (снять привязку);
+ *   - есть и непустое → строка с `Warehouse.id`.
+ */
+function parseFinishedGoodsWarehouseId(
+  form: FormData,
+): string | null | undefined {
+  const raw = form.get('finishedGoodsWarehouseId');
+  if (raw === null) return undefined;
+  const v = String(raw).trim();
+  return v === '' ? null : v;
 }
 
 function buildUpdateDto(form: FormData): UpdateOrderDto {
@@ -323,6 +345,10 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     // / `techCardId`: поля нет = не трогать, пустая строка = снять,
     // иначе = переустановить.
     companyDivisionId: parseCompanyDivisionId(form),
+    // Этап «Склад выпуска готовой продукции»: семантика та же —
+    // поля нет = не трогать, пустая строка = снять, иначе =
+    // переустановить (backend валидирует existence + isActive).
+    finishedGoodsWarehouseId: parseFinishedGoodsWarehouseId(form),
     customerUnitPrice,
     customerCurrency,
   };

@@ -50,6 +50,7 @@ import {
 } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
+import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import type {
   OrderDetailDto,
   OrderStatus,
@@ -103,6 +104,14 @@ interface Props {
    * карточка архивирована.
    */
   companyDivisions: CompanyDivisionDto[];
+  /**
+   * Список складов для select-а «Склад выпуска готовой продукции»
+   * (см. `prisma/schema.prisma::Order.finishedGoodsWarehouseId`).
+   * Поле управленческое — не влияет на StockBalance / StockMovement.
+   * Если у заказа уже привязан архивный склад — его опцию форма
+   * добавит сама, чтобы submit без явного действия не сбросил FK.
+   */
+  warehouses: WarehouseSummaryDto[];
   today: string;
 }
 
@@ -148,6 +157,7 @@ export function AdminEditOrderForm({
   clients,
   patterns,
   companyDivisions,
+  warehouses,
   today,
 }: Props) {
   const action = updateAdminOrderAction.bind(null, order.id);
@@ -209,6 +219,21 @@ export function AdminEditOrderForm({
   const showCurrentDivisionArchivedOption = Boolean(
     order.companyDivisionId &&
       !companyDivisions.some((d) => d.id === order.companyDivisionId),
+  );
+
+  // Этап «Склад выпуска готовой продукции»: state + fallback-опция
+  // на случай, если выбранный ранее склад больше не активен
+  // (`isActive = false`) или удалён из live-списка. Sample-list
+  // (`warehouses`) на странице фильтрации не делает — мы дополнительно
+  // отрисовываем «архивную» опцию, чтобы submit без явного действия
+  // не обнулил FK.
+  const [
+    finishedGoodsWarehouseId,
+    setFinishedGoodsWarehouseId,
+  ] = useState<string>(order.finishedGoodsWarehouseId ?? '');
+  const showCurrentFinishedGoodsArchivedOption = Boolean(
+    order.finishedGoodsWarehouseId &&
+      !warehouses.some((w) => w.id === order.finishedGoodsWarehouseId),
   );
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>(
     order.customerUnitPrice == null ? '' : String(order.customerUnitPrice),
@@ -352,6 +377,40 @@ export function AdminEditOrderForm({
                       Менять подразделение можно только в DRAFT.
                     </span>
                   )}
+                </div>
+
+                <div className="order-hero-card__field">
+                  <label htmlFor="finishedGoodsWarehouseId">
+                    Склад выпуска готовой продукции
+                  </label>
+                  <select
+                    id="finishedGoodsWarehouseId"
+                    name="finishedGoodsWarehouseId"
+                    value={finishedGoodsWarehouseId}
+                    onChange={(e) =>
+                      setFinishedGoodsWarehouseId(e.target.value)
+                    }
+                  >
+                    <option value="">— не выбран —</option>
+                    {showCurrentFinishedGoodsArchivedOption &&
+                      order.finishedGoodsWarehouse && (
+                        <option value={order.finishedGoodsWarehouse.id}>
+                          {order.finishedGoodsWarehouse.name} — архив
+                        </option>
+                      )}
+                    {warehouses.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                        {w.code ? ` (${w.code})` : ''}
+                        {w.isActive ? '' : ' — архив'}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="order-hero-card__field-hint">
+                    Склад, на который должна поступить готовая продукция
+                    после производства / упаковки. Это не склад
+                    материалов.
+                  </span>
                 </div>
 
                 <div className="order-hero-card__field">

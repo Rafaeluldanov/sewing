@@ -31,6 +31,7 @@ import type {
   RouteTemplateSummaryDto,
 } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
+import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listClients } from '@/lib/clients-api';
@@ -39,6 +40,7 @@ import { listSizes } from '@/lib/orders-api';
 import { listPatterns } from '@/lib/patterns-api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { listTechCards } from '@/lib/tech-cards-api';
+import { listWarehouses } from '@/lib/warehouses-api';
 import { AdminCard, AdminPageShell } from '@/components/admin';
 import {
   AdminCreateOrderForm,
@@ -58,12 +60,13 @@ export default async function AdminOrderNewPage() {
   let clients: ClientDto[] = [];
   let patterns: PatternListItemDto[] = [];
   let companyDivisions: CompanyDivisionDto[] = [];
+  let warehouses: WarehouseSummaryDto[] = [];
   let error: string | null = null;
   try {
     // Этап «Номенклатура = Лекала»: больше не грузим список Product —
     // в форме его нет, backend сам подставит legacy Product через
     // `OrdersService.ensureLegacyProductForPattern()`.
-    const [sz, rt, tc, cl, pt, cd] = await Promise.allSettled([
+    const [sz, rt, tc, cl, pt, cd, wh] = await Promise.allSettled([
       listSizes(),
       listRouteTemplates({ isActive: true }),
       listTechCards({ isActive: true }),
@@ -76,6 +79,12 @@ export default async function AdminOrderNewPage() {
       // `docs/domain.md §«Подразделения заказа»`): подгружаем
       // только активные карточки подразделений для select-а.
       listCompanyDivisions(),
+      // Этап «Склад выпуска готовой продукции» (см.
+      // `prisma/schema.prisma::Order.finishedGoodsWarehouseId`):
+      // список складов нужен для select-а «Склад выпуска готовой
+      // продукции». Это **управленческое** поле — никак не
+      // затрагивает плоскость склада материалов.
+      listWarehouses(),
     ]);
     if (sz.status === 'fulfilled') sizes = sz.value;
     else throw sz.reason;
@@ -84,6 +93,7 @@ export default async function AdminOrderNewPage() {
     clients = cl.status === 'fulfilled' ? cl.value : [];
     patterns = pt.status === 'fulfilled' ? pt.value : [];
     companyDivisions = cd.status === 'fulfilled' ? cd.value : [];
+    warehouses = wh.status === 'fulfilled' ? wh.value : [];
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -141,6 +151,7 @@ export default async function AdminOrderNewPage() {
         clients={clients}
         patterns={patterns}
         companyDivisions={companyDivisions}
+        warehouses={warehouses}
         today={today}
       />
     </AdminPageShell>

@@ -579,12 +579,76 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     «Перемещение» (`StockMovementTypeBadge`); после успешного
     перемещения во вкладке «Движения» видны две строки —
     «Перемещение» / «Расход» и «Перемещение» / «Приход».
+  - **Cell selector назначения** реализован в форме «Переместить»
+    (`apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`).
+    Backend `GET /api/cells` принимает additive query-фильтр
+    `?warehouseId=<id>` (см.
+    `apps/api/src/modules/passports/cells.controller.ts`,
+    `apps/api/src/modules/passports/passports.service.ts::listCells`).
+    Frontend client `listCells({ warehouseId })` и server action
+    `loadTransferDestinationCellsAction(warehouseId)` подгружают
+    список ячеек выбранного склада на лету. Первая опция — «Без
+    ячейки» (отправляет `toCellId = null` / поле опускается).
+    Если склад не выбран — selectbox задисейблен с подсказкой
+    «Сначала выберите склад»; если в складе нет ячеек — «Нет ячеек
+    на этом складе»; если ранее выбранная ячейка не относится к
+    новому складу — `toCellId` сбрасывается. Preview-блок «Куда:
+    Склад / Ячейка» под формой даёт оператору контроль перед
+    submit. Backend transfer-flow / business rules / DTO
+    `create-stock-transfer.dto.ts` не менялись — `toCellId` уже
+    принимался с предыдущей итерации.
   - Сознательно **не реализованы** на этой итерации: отдельная
     модель `StockTransfer`, FIFO / LIFO / `MaterialStockLot`,
-    dropdown ячейки назначения (cell selector в форме перемещения
-    скрыт — destination `cellId = null`, ждём API списка ячеек по
-    складу), delete / cancel transfer. Запреты зафиксированы в
-    smoke-тесте `tests/smoke/stock-transfers.smoke.test.ts`.
+    delete / cancel transfer. Запреты зафиксированы в smoke-
+    тестах `tests/smoke/stock-transfers.smoke.test.ts` и
+    `tests/smoke/stock-transfer-cell-selector.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Склад выпуска готовой продукции»
+  (`prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
+  `prisma/migrations/20260613100000_add_order_finished_goods_warehouse`,
+  `apps/api/src/modules/orders/orders.service.ts`,
+  `packages/shared/src/orders.ts`,
+  `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+  `apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx`,
+  `apps/web/components/orders/view/order-management-header.tsx`):
+  - в заказ покупателя добавлено управленческое поле
+    `Order.finishedGoodsWarehouseId` — на какой склад менеджер
+    планирует выпустить готовую продукцию (B2B / Marketplace /
+    Образцы / …). Поле опционально, nullable, FK на `Warehouse` с
+    `onDelete: SetNull` (деактивация / удаление склада обнуляет
+    привязку, заказ не сносится).
+  - Это **НЕ склад материалов**: поле НЕ создаёт ни
+    `StockBalance`, ни `StockMovement` — готовая продукция как
+    stock-сущность на этой итерации сознательно не отслеживается.
+    `StockService`, `MaterialIssue`-flow, `PurchaseReceipt`-flow,
+    `MaterialIssueReturn`-flow, `StockAdjustment`-flow, transfer-
+    flow, `CostsService`, `ProductionCostV2Service`,
+    `WorkshopNeedsService` НЕ затрагиваются.
+  - Backend: `CreateOrderSchema` / `UpdateOrderSchema` принимают
+    `finishedGoodsWarehouseId?: string | null`. `OrdersService`
+    через `resolveFinishedGoodsWarehouseIdForOrder` валидирует
+    existence + `isActive = true` (адресные ошибки 400
+    `WAREHOUSE_NOT_FOUND` и 409 `WAREHOUSE_INACTIVE`). На любом
+    статусе заказа (без `ORDER_LOCKED`-guard), потому что это
+    управленческое поле. `null` снимает привязку. `OrderListItemDto`
+    / `OrderDetailDto` отдают `finishedGoodsWarehouseId` +
+    краткий `finishedGoodsWarehouse: { id, name, code }`. Audit:
+    смена поля попадает в `ORDER_UPDATED.changedFields`.
+  - Frontend: select «Склад выпуска готовой продукции» в форме
+    создания (`/admin/orders/new`) и редактирования
+    (`/admin/orders/[id]/edit`), help-text «Склад, на который
+    должна поступить готовая продукция после производства /
+    упаковки. Это не склад материалов.» В detail-карточке
+    (`OrderManagementHeader`) — поле «Склад готовой продукции»
+    рядом с «Цвет»; для заказа без выбранного склада показываем
+    «не выбран». В edit-форме архивный склад остаётся в опциях
+    отдельной пометкой «архив», чтобы submit без явного действия
+    не обнулил FK.
+  - Сознательно **не реализованы**: отдельный контур
+    `FinishedGoodsBalance` / `FinishedGoodsMovement`, отгрузка
+    готовой продукции, packing UI с подсказкой по складу, новый
+    раздел / sidebar item, новые роли. Запреты зафиксированы в
+    smoke-тесте `tests/smoke/order-finished-goods-warehouse.smoke.test.ts`.
 
   Frontend-итерация «Фильтры склада»
   (`apps/web/app/admin/warehouses/page.tsx`,

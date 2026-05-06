@@ -1144,6 +1144,35 @@ model Order {
   /// без заказа возврат теряет смысл.
   materialIssueReturns MaterialIssueReturn[]
 
+  /// Этап «Склад выпуска готовой продукции» (см.
+  /// `apps/api/src/modules/orders/orders.service.ts::create`/`update`,
+  /// UI — `/admin/orders/new`, `/admin/orders/[id]/edit`,
+  /// `docs/current-state.md §«Склад выпуска готовой продукции»`).
+  ///
+  /// Управленческое поле: на какой склад менеджер планирует
+  /// выпустить готовую продукцию по этому заказу (например,
+  /// «Склад готовой продукции B2B», «Склад маркетплейсов»,
+  /// «Склад образцов»). Это **НЕ склад материалов** — изменение
+  /// поля никак не затрагивает `StockBalance` / `StockMovement`,
+  /// `MaterialIssue`, `PurchaseReceipt`, `WorkshopNeed`,
+  /// `ProductionCostV2Service`.
+  ///
+  /// Дизайн поля:
+  ///   - nullable + `onDelete: SetNull` — деактивация / удаление
+  ///     карточки склада не сносит заказ, live-связь обнуляется,
+  ///     UI показывает «Не выбран»;
+  ///   - привязка валидируется на backend: при `null` сбрасывается,
+  ///     при непустом id проверяется existence и `isActive = true`,
+  ///     иначе 400 `WAREHOUSE_NOT_FOUND` / 409
+  ///     `WAREHOUSE_INACTIVE`. Это управленческое поле, поэтому
+  ///     меняется на любом статусе заказа (без `ORDER_LOCKED`-guard);
+  ///   - именованная relation `OrderFinishedGoodsWarehouse` —
+  ///     обязательна, чтобы Prisma могла отличить эту связь от
+  ///     `Cell.warehouse` / `StockBalance.warehouse` /
+  ///     `StockMovement.warehouse` на той же стороне `Warehouse`.
+  finishedGoodsWarehouseId String?
+  finishedGoodsWarehouse   Warehouse? @relation("OrderFinishedGoodsWarehouse", fields: [finishedGoodsWarehouseId], references: [id], onDelete: SetNull)
+
   @@index([status])
   @@index([orderDate])
   @@index([createdAt])
@@ -1153,6 +1182,7 @@ model Order {
   @@index([clientId])
   @@index([dueDate])
   @@index([companyDivisionId])
+  @@index([finishedGoodsWarehouseId])
 }
 
 /// Карточка клиента (управленческий справочник, см. `docs/domain.md
@@ -1706,6 +1736,21 @@ model Warehouse {
   stockBalances  StockBalance[]
   /// Foundation: журнал складских движений (см. `StockMovement`).
   stockMovements StockMovement[]
+
+  /// Заказы покупателя, у которых этот склад выбран как «склад выпуска
+  /// готовой продукции» (см. `Order.finishedGoodsWarehouseId`). Это
+  /// **management-only** связь: она НЕ создаёт ни `StockBalance`, ни
+  /// `StockMovement` — готовая продукция в плоскости склада на этой
+  /// итерации не отслеживается. Поле живёт ровно на уровне заказа,
+  /// чтобы менеджер мог зафиксировать «куда поедет тираж после
+  /// упаковки».
+  ///
+  /// Именованная relation — обязательна, потому что при удалении
+  /// карточки склада мы хотим `SetNull` именно по этой связи, а у
+  /// `Cell.warehouse`/`StockBalance.warehouse`/`StockMovement.warehouse`
+  /// своё поведение (Restrict/SetNull) и Prisma требует разделять
+  /// несколько relation-ов на ту же модель явными именами.
+  finishedGoodsOrders Order[] @relation("OrderFinishedGoodsWarehouse")
 
   @@index([isActive])
 }

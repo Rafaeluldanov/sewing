@@ -154,6 +154,13 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     // `docs/domain.md §«Подразделения заказа»`). Семантика та же,
     // что у `routeTemplateId` / `techCardId`.
     companyDivisionId: optionalNullableString(form.get('companyDivisionId')),
+    // Этап «Склад выпуска готовой продукции» (см.
+    // `prisma/schema.prisma::Order.finishedGoodsWarehouseId`).
+    // Семантика та же — поля нет = не трогать, пустая строка = снять,
+    // иначе = переустановить.
+    finishedGoodsWarehouseId: optionalNullableString(
+      form.get('finishedGoodsWarehouseId'),
+    ),
     status: parseStatus(form),
     customerUnitPrice,
     customerCurrency,

@@ -1629,9 +1629,31 @@ export class PassportsService {
   // CELLS (минимальный контракт под форму размещения)
   // -------------------------------------------------------------------------
 
-  async listCells(): Promise<CellDetailDto[]> {
+  /**
+   * List активных ячеек для UI размещения паспорта и формы
+   * «Переместить» в `/admin/warehouses?tab=balances`.
+   *
+   * `warehouseId` — additive query-фильтр (см.
+   * `apps/api/src/modules/passports/cells.controller.ts::list`,
+   * `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`):
+   *   - `undefined` / not passed → все активные ячейки (исторический
+   *     контракт `GET /api/cells`, сохраняем как есть);
+   *   - непустая строка → ячейки, привязанные именно к этому складу
+   *     (`Cell.warehouseId = warehouseId`).
+   *
+   * Список ячеек «без склада» (`Cell.warehouseId IS NULL`) сознательно
+   * не отдаём, когда клиент явно фильтрует по складу — это бы ввело
+   * пользователя в заблуждение.
+   */
+  async listCells(filter: {
+    warehouseId?: string;
+  } = {}): Promise<CellDetailDto[]> {
+    const where: Prisma.CellWhereInput = { active: true };
+    if (filter.warehouseId) {
+      where.warehouseId = filter.warehouseId;
+    }
     const cells = await this.prisma.cell.findMany({
-      where: { active: true },
+      where,
       include: {
         contents: { include: { size: true } },
         warehouse: true,
