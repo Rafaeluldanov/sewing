@@ -644,11 +644,78 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     «не выбран». В edit-форме архивный склад остаётся в опциях
     отдельной пометкой «архив», чтобы submit без явного действия
     не обнулил FK.
-  - Сознательно **не реализованы**: отдельный контур
-    `FinishedGoodsBalance` / `FinishedGoodsMovement`, отгрузка
-    готовой продукции, packing UI с подсказкой по складу, новый
-    раздел / sidebar item, новые роли. Запреты зафиксированы в
-    smoke-тесте `tests/smoke/order-finished-goods-warehouse.smoke.test.ts`.
+  - Сознательно **не реализованы** на этой итерации (см. ниже —
+    отдельная итерация «Foundation готовой продукции» уже добавила
+    `FinishedGoodsBalance` / `FinishedGoodsMovement` в момент
+    `Passport.status = PACKED`, но без отгрузки / transfer / UI):
+    отгрузка готовой продукции, transfer готовой продукции, packing
+    UI с подсказкой по складу, новый раздел / sidebar item, новые
+    роли. Запреты зафиксированы в smoke-тесте
+    `tests/smoke/order-finished-goods-warehouse.smoke.test.ts`.
+
+  Backend-итерация «Foundation готовой продукции»
+  (`prisma/schema.prisma::FinishedGoodsBalance` /
+  `FinishedGoodsMovement`,
+  `prisma/migrations/20260615100000_add_finished_goods_foundation`,
+  `apps/api/src/modules/finished-goods/*`,
+  `apps/api/src/modules/packing/packing.service.ts`,
+  `tests/smoke/finished-goods-foundation.smoke.test.ts`,
+  `tests/integration/finished-goods-foundation.test.ts`):
+  - добавлены отдельные модели `FinishedGoodsBalance` и
+    `FinishedGoodsMovement` для учёта готовой продукции. Это
+    **отдельный контур** от материалов: `StockBalance` /
+    `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+    `StockAdjustment` / `StockTransfer` / `CostsService` /
+    `ProductionCostV2Service` НЕ затрагиваются.
+  - Идентичность остатка — `(orderId, productId, sizeId, color,
+    warehouseId?, cellId?)`. `balanceKey` детерминирован:
+    `${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`
+    (UNIQUE). `qty` — `Int` (готовые изделия штучные).
+  - Бизнес-момент выпуска: при первом `Passport.status = PACKED`
+    (`PackingService.addPassport`) в той же транзакции создаётся
+    одна запись `FinishedGoodsMovement` `type = PRODUCTION_RECEIPT`,
+    `direction = IN`, `qty = passport.qtyGood`,
+    `passportId = passport.id`, `boxId = box.id`,
+    `warehouseId = order.finishedGoodsWarehouseId ?? null`,
+    `cellId = null`, `comment = "Выпуск готовой продукции после
+    упаковки"`, и обновляется баланс
+    (`balanceAfterQty = balanceBeforeQty + qty`).
+  - Идемпотентность — `FinishedGoodsMovement.sourceKey @unique` =
+    `PACKED_PASSPORT:<passportId>`. Повторная обработка `PACKED`
+    (retry, дубль handler) не задвоит движение и не удвоит баланс.
+  - Если `Order.finishedGoodsWarehouseId` не выбран — ведём
+    «no-warehouse» баланс (`warehouseId = null`); упаковка НЕ
+    блокируется, никаких ошибок.
+  - Read-only API:
+    `GET /api/finished-goods/balances` (с фильтрами `orderId` /
+    `productId` / `sizeId` / `warehouseId` / `cellId` / `q` /
+    `positiveOnly` / `negativeOnly` / `zeroOnly` / `limit` /
+    `offset`); `GET /api/finished-goods/movements` (с фильтрами
+    `orderId` / `productId` / `sizeId` / `warehouseId` / `cellId` /
+    `type` / `direction` / `passportId` / `boxId` / `from` / `to` /
+    `limit` / `offset`). RBAC: `@Roles('ADMIN', 'SHOP_MANAGER')`.
+    `sourceKey` сознательно НЕ возвращается (внутренний
+    идемпотентный технический ключ).
+  - Audit: `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED`,
+    `entityType = FINISHED_GOODS_MOVEMENT`,
+    `entityId = FinishedGoodsMovement.id`. Payload содержит
+    `finishedGoodsMovementId`, `finishedGoodsBalanceId`, `orderId`,
+    `passportId`, `boxId`, `productId`, `sizeId`, `color`,
+    `warehouseId`, `cellId`, `qty`, `balanceBeforeQty`,
+    `balanceAfterQty`, `employeeId`, `timestamp`. Пишется в той же
+    транзакции, что и `PRODUCTION_RECEIPT`.
+  - Сознательно **не реализованы** на этой итерации:
+    отгрузка готовой продукции (`SHIPMENT`), transfer готовой
+    продукции (`TRANSFER`), ручная корректировка (`ADJUSTMENT`),
+    сторно (`REVERSAL`), UI-раздел `/admin/finished-goods`,
+    sidebar item, отдельная страница / отчёт, новые роли. Эти типы
+    зарезервированы как строковые литералы в
+    `FINISHED_GOODS_MOVEMENT_TYPE` для следующих итераций. На MVP
+    UI не делаем — добавление нового раздела требует подтверждения
+    владельца проекта. Существующие модули материалов
+    (`StockService`, `MaterialIssue`, `PurchaseReceipt`,
+    `StockAdjustment`, `StockTransfer`, `CostsService`,
+    `ProductionCostV2Service`) не меняются.
 
   Backend + Frontend-итерация «Давальческое сырьё клиента»
   (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,

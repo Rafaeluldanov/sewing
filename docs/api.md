@@ -90,6 +90,7 @@
 - [27. QC](#27-qc)
 - [28. WTO](#28-wto)
 - [29. Packing](#29-packing)
+- [29a. Finished goods (read-only)](#29a-finished-goods)
 - [30. Earnings](#30-earnings)
 - [30a. Payroll (PHASE 1, read-only)](#30a-payroll)
 - [31. Salary](#31-salary)
@@ -1274,13 +1275,57 @@ DTO: см. shared (`WtoPassportDetailDto`). UNKNOWN/TODO для DTO —
 | POST  | `/api/packing/boxes`                              | PACKING, SHOP_MANAGER (+ ADMIN)   | Body `CreateBoxDto`. |
 | GET   | `/api/packing/boxes`                              | PACKING, SHOP_MANAGER (+ ADMIN)   | List `ListBoxesQuery`. |
 | GET   | `/api/packing/boxes/:id`                          | PACKING, SHOP_MANAGER (+ ADMIN)   | Карточка. |
-| POST  | `/api/packing/boxes/:id/add-passport`             | PACKING, SHOP_MANAGER (+ ADMIN)   | Body `AddPassportToBoxDto`. Side effects: `BoxItem(boxId, passportId UNIQUE, qty = passport.qtyGood)`, `Box.totalQty += qtyGood`, `Passport.status = PACKED` (+ обнуление `currentEmployeeId` / `currentCellId`), `PassportEvent(PACKED)`, `AuditLog(PASSPORT_PACKED)`. Финальный апрув `OperationEntry(PENDING_RELEASE → APPROVED)` здесь **не** делается — он перенесён на `close()` (см. ADR-0005 §«Подтверждение», ADR-0011 §5, `docs/production-flow.md §10.4`). |
+| POST  | `/api/packing/boxes/:id/add-passport`             | PACKING, SHOP_MANAGER (+ ADMIN)   | Body `AddPassportToBoxDto`. Side effects: `BoxItem(boxId, passportId UNIQUE, qty = passport.qtyGood)`, `Box.totalQty += qtyGood`, `Passport.status = PACKED` (+ обнуление `currentEmployeeId` / `currentCellId`), `PassportEvent(PACKED)`, `AuditLog(PASSPORT_PACKED)`, **`FinishedGoodsMovement` `type = PRODUCTION_RECEIPT` `direction = IN`** + апдейт `FinishedGoodsBalance.qty` + `AuditLog(FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED)` в той же транзакции (см. §29a, идемпотент по `sourceKey = PACKED_PASSPORT:<passportId>`). Финальный апрув `OperationEntry(PENDING_RELEASE → APPROVED)` здесь **не** делается — он перенесён на `close()` (см. ADR-0005 §«Подтверждение», ADR-0011 §5, `docs/production-flow.md §10.4`). |
 | POST  | `/api/packing/boxes/:id/close`                    | PACKING, SHOP_MANAGER (+ ADMIN)   | Body `CloseBoxDto` (пустое). Side effects: `Box.closedAt = now`, для каждого `BoxItem.passportId` — `EarningsService.approvePendingForPassport(tx, passportId)` (`OperationEntry(PENDING_RELEASE → APPROVED)`, `AuditLog(BOX_CLOSED)`). Идемпотентно: повторный close ловится `BoxClosedException` до апрува, а сама `approvePendingForPassport` фильтрует только `PENDING_RELEASE`/legacy `PENDING` (см. ADR-0005, ADR-0011 §5, `docs/production-flow.md §10.4`/§11.3). |
 | GET   | `/api/packing/boxes/:id/qr`                       | Public                            | PNG QR `box:{id}` (ADR-0008). |
 | GET   | `/api/packing/boxes/:id/label`                    | Public                            | HTML этикетка коробки (ADR-0010, A6 80×120 мм). |
 
 DTO: `packages/shared/src/packing.ts`. Side-effect: на сервисе
 требуется активная смена с операцией `OperationCategory.PACKING`.
+
+---
+
+<a id="29a-finished-goods"></a>
+## 29a. Finished goods (read-only)
+
+Источник: `apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+`apps/api/src/modules/finished-goods/finished-goods.service.ts`,
+`prisma/schema.prisma::FinishedGoodsBalance` / `FinishedGoodsMovement`,
+`docs/current-state.md §«Foundation готовой продукции»`.
+
+**Отдельный контур от материалов** — не путать с §26a Stock.
+`StockBalance` / `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+`StockAdjustment` / `StockTransfer` / `CostsService` /
+`ProductionCostV2Service` НЕ затрагиваются. На MVP-итерации
+реализован только тип `PRODUCTION_RECEIPT` (`direction = IN`),
+автоматический приход в момент `Passport.status = PACKED`.
+
+Запись движений идёт неявно из `PackingService.addPassport` →
+`FinishedGoodsService.recordPackedPassportInTx` (idempotent по
+`sourceKey = PACKED_PASSPORT:<passportId>`). Публичных мутаций на
+этой итерации **нет**: отгрузка (`SHIPMENT`), transfer (`TRANSFER`),
+ручная корректировка (`ADJUSTMENT`), сторно (`REVERSAL`) — следующие
+итерации.
+
+| Метод | Путь                              | RBAC                | Описание |
+| ----- | --------------------------------- | ------------------- | -------- |
+| GET   | `/api/finished-goods/balances`    | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsBalancesQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `q` (substring по `color`), `positiveOnly` / `negativeOnly` / `zeroOnly` (взаимоисключающие), `limit` (default 50, max 200), `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `balanceKey`, `orderId`, `orderNumber`, `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `lastMovementAt`, `updatedAt`. |
+| GET   | `/api/finished-goods/movements`   | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsMovementsQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `type` ∈ `PRODUCTION_RECEIPT \| REVERSAL \| ADJUSTMENT \| SHIPMENT \| TRANSFER`, `direction` ∈ `IN \| OUT`, `passportId`, `boxId`, `from` / `to` (ISO-8601), `limit`, `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `finishedGoodsBalanceId`, `type`, `direction`, `orderId`, `orderNumber`, `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `sourceType`, `sourceId`, `passportId`, `boxId`, `comment`, `createdById`, `createdAt`. |
+
+`sourceKey` сознательно **не возвращается** — это внутренний
+идемпотентный технический ключ (`PACKED_PASSPORT:<passportId>`).
+
+Поведение при отсутствии склада: если у заказа
+`Order.finishedGoodsWarehouseId = null`, баланс ведётся как
+«no-warehouse» (`warehouseId = null`); упаковка НЕ блокируется.
+
+Audit: `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` с
+`entityType = FINISHED_GOODS_MOVEMENT`,
+`entityId = FinishedGoodsMovement.id`. Payload содержит
+`finishedGoodsMovementId`, `finishedGoodsBalanceId`, `orderId`,
+`passportId`, `boxId`, `productId`, `sizeId`, `color`, `warehouseId`,
+`cellId`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `employeeId`,
+`timestamp`.
 
 ---
 

@@ -195,11 +195,15 @@ test('MaterialIssuesService не получил поле finishedGoodsWarehouseI
   expect(src).not.toMatch(/finishedGoodsWarehouseId/);
 });
 
-test('Не создан FinishedGoodsBalance / FinishedGoodsMovement', () => {
+test('FinishedGoodsBalance / FinishedGoodsMovement — отдельный контур, не материалы', () => {
   const schema = read(SCHEMA);
-  expect(schema).not.toMatch(/^model\s+FinishedGoodsBalance\s*\{/m);
-  expect(schema).not.toMatch(/^model\s+FinishedGoodsMovement\s*\{/m);
-  // Также не должно быть отдельной модели «Material» / MaterialStockLot.
+  // Foundation готовой продукции добавлен (этап «Готовая продукция»,
+  // см. `apps/api/src/modules/finished-goods/*`,
+  // `docs/current-state.md §«Готовая продукция»`).
+  expect(schema).toMatch(/^model\s+FinishedGoodsBalance\s*\{/m);
+  expect(schema).toMatch(/^model\s+FinishedGoodsMovement\s*\{/m);
+  // Это **отдельный контур** от материалов — не должны появиться
+  // master-модель `Material` / `MaterialStockLot`.
   expect(schema).not.toMatch(/^model\s+MaterialStockLot\s*\{/m);
   expect(schema).not.toMatch(/^model\s+Material\s*\{/m);
 });

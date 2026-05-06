@@ -3,6 +3,7 @@ import { PackingService } from './packing.service.js';
 import { PackingController } from './packing.controller.js';
 import { BoxNumberService } from './box-number.service.js';
 import { EarningsModule } from '../earnings/earnings.module.js';
+import { FinishedGoodsModule } from '../finished-goods/finished-goods.module.js';
 
 /**
  * Модуль упаковки и выпуска изделия (Шаг 8 MVP).
@@ -11,9 +12,17 @@ import { EarningsModule } from '../earnings/earnings.module.js';
  * Импортирует `EarningsModule`, чтобы в той же транзакции, что и
  * `Passport.status → PACKED`, переводить все pending-начисления по
  * паспорту в `APPROVED` (Шаг 9, ADR-0005).
+ *
+ * Импортирует `FinishedGoodsModule`, чтобы в той же транзакции, что
+ * и `Passport.status → PACKED`, фиксировать выпуск готовой продукции
+ * (`FinishedGoodsMovement` `type = PRODUCTION_RECEIPT`,
+ * `direction = IN`, idempotent по
+ * `sourceKey = PACKED_PASSPORT:<passportId>`). См.
+ * `apps/api/src/modules/finished-goods/finished-goods.service.ts`,
+ * `docs/current-state.md §«Готовая продукция»`.
  */
 @Module({
-  imports: [EarningsModule],
+  imports: [EarningsModule, FinishedGoodsModule],
   controllers: [PackingController],
   providers: [PackingService, BoxNumberService],
   exports: [PackingService],

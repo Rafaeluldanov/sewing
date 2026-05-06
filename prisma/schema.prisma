@@ -430,6 +430,13 @@ model Size {
   /// от случайного удаления размера, на который завязана активная
   /// очередь.
   cutIssueRules                  OrderCutIssueRule[]
+
+  /// Foundation готовой продукции (см. `model FinishedGoodsBalance` /
+  /// `model FinishedGoodsMovement` ниже). Restrict со стороны баланса/
+  /// движения — размер, по которому есть выпущенные изделия, нельзя
+  /// удалить без сноса самих балансов.
+  finishedGoodsBalances  FinishedGoodsBalance[]
+  finishedGoodsMovements FinishedGoodsMovement[]
 }
 
 model Product {
@@ -452,6 +459,14 @@ model Product {
   /// стороне `PatternItem`), сам Product остаётся в БД (паспорта
   /// и `OrderItem` всё ещё на него ссылаются).
   patternItems    PatternItem[]           @relation("PatternLegacyProduct")
+
+  /// Foundation готовой продукции (см. `model FinishedGoodsBalance` /
+  /// `model FinishedGoodsMovement` ниже). Restrict со стороны баланса/
+  /// движения: продукт, по которому есть выпущенные изделия, нельзя
+  /// удалить без сноса самих балансов. На MVP это управленческий
+  /// справочник, удаление out-of-scope.
+  finishedGoodsBalances  FinishedGoodsBalance[]
+  finishedGoodsMovements FinishedGoodsMovement[]
 }
 
 model Operation {
@@ -1173,6 +1188,19 @@ model Order {
   finishedGoodsWarehouseId String?
   finishedGoodsWarehouse   Warehouse? @relation("OrderFinishedGoodsWarehouse", fields: [finishedGoodsWarehouseId], references: [id], onDelete: SetNull)
 
+  /// Этап «Foundation готовой продукции» (см. `model FinishedGoodsBalance` /
+  /// `model FinishedGoodsMovement` ниже,
+  /// `apps/api/src/modules/finished-goods/*`,
+  /// `docs/current-state.md §«Готовая продукция»`).
+  ///
+  /// Это **отдельный контур** от материалов: `StockBalance` /
+  /// `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+  /// `StockAdjustment` / `StockTransfer` в этом flow не участвуют.
+  /// Cascade — без заказа остаток/движение готовой продукции смысла
+  /// не имеют.
+  finishedGoodsBalances  FinishedGoodsBalance[]
+  finishedGoodsMovements FinishedGoodsMovement[]
+
   /// Упрощённая политика учёта материалов и фурнитуры в себестоимости
   /// заказа (см. `docs/current-state.md §«Давальческое сырьё клиента»`,
   /// `apps/api/src/modules/orders/orders.service.ts::create / update`,
@@ -1401,6 +1429,13 @@ model Passport {
   /// ниже). `onDelete: SetNull` — удаление паспорта не сносит
   /// исторический документ возврата.
   materialIssueReturns MaterialIssueReturn[]
+
+  /// Foundation готовой продукции (см. `model FinishedGoodsMovement`
+  /// ниже). Один паспорт → одно `PRODUCTION_RECEIPT` движение в
+  /// момент `PassportStatus = PACKED` (idempotent через
+  /// `sourceKey = PACKED_PASSPORT:<passportId>`). `onDelete: SetNull`
+  /// — снос паспорта не сносит исторический выпуск.
+  finishedGoodsMovements FinishedGoodsMovement[]
 
   @@index([status, currentOperationId])
   @@index([orderId])
@@ -1782,6 +1817,17 @@ model Warehouse {
   /// несколько relation-ов на ту же модель явными именами.
   finishedGoodsOrders Order[] @relation("OrderFinishedGoodsWarehouse")
 
+  /// Foundation готовой продукции (см. `model FinishedGoodsBalance` /
+  /// `model FinishedGoodsMovement` ниже,
+  /// `apps/api/src/modules/finished-goods/*`). Этот склад — назначение
+  /// выпуска готовых изделий по заказу (берётся из
+  /// `Order.finishedGoodsWarehouseId` в момент упаковки). На стороне
+  /// баланса/движения — `onDelete: SetNull`: деактивация / удаление
+  /// карточки склада не сносит исторический выпуск, balance/movement
+  /// остаются с `warehouseId = null`.
+  finishedGoodsBalances  FinishedGoodsBalance[]
+  finishedGoodsMovements FinishedGoodsMovement[]
+
   @@index([isActive])
 }
 
@@ -1862,6 +1908,14 @@ model Cell {
   stockBalances  StockBalance[]
   stockMovements StockMovement[]
 
+  /// Foundation готовой продукции (см. `model FinishedGoodsBalance` /
+  /// `model FinishedGoodsMovement` ниже). На текущей итерации
+  /// `cellId` готовой продукции всегда `null`, связи держим ради
+  /// будущей итерации «размещение готовой продукции по ячейкам».
+  /// `onDelete: SetNull` — снос ячейки не валит исторический выпуск.
+  finishedGoodsBalances  FinishedGoodsBalance[]
+  finishedGoodsMovements FinishedGoodsMovement[]
+
   @@unique([lineId, lineIndex], name: "Cell_line_index_uniq")
   @@index([warehouseId])
   @@index([lineId])
@@ -1896,6 +1950,13 @@ model Box {
   createdBy Employee        @relation("BoxCreator", fields: [createdById], references: [id])
   items     BoxItem[]
   events    PassportEvent[]
+
+  /// Foundation готовой продукции (см. `model FinishedGoodsMovement`
+  /// ниже). Опциональная back-ссылка от движения выпуска к коробке,
+  /// в которую упакован паспорт (если коробка известна на момент
+  /// фиксации `PACKED`). `onDelete: SetNull` — снос коробки не валит
+  /// исторический выпуск.
+  finishedGoodsMovements FinishedGoodsMovement[]
 
   @@index([closedAt])
 }
@@ -4976,5 +5037,139 @@ model StockMovement {
   @@index([purchaseReceiptLineId])
   @@index([materialIssueId])
   @@index([materialIssueLineId])
+  @@index([createdAt])
+}
+
+// =========================
+// FINISHED GOODS (foundation)
+// =========================
+
+/// Foundation остатка готовой продукции (см.
+/// `apps/api/src/modules/finished-goods/*`,
+/// `docs/current-state.md §«Готовая продукция»`).
+///
+/// **Отдельный контур от материалов.** `StockBalance` / `StockMovement`
+/// под готовую продукцию НЕ используются — материалы и готовые изделия
+/// живут в разных таблицах, и выпуск не задевает `MaterialIssue` /
+/// `PurchaseReceipt` / `StockAdjustment` / `StockTransfer` /
+/// `CostsService` / `ProductionCostV2Service`.
+///
+/// Идентичность остатка — `(orderId, productId, sizeId, color,
+/// warehouseId?, cellId?)`. На MVP `cellId` всегда `null`, склад
+/// берётся из `Order.finishedGoodsWarehouseId`. Если склад не выбран,
+/// ведём «no-warehouse» баланс (`warehouseId = null`) — упаковку это
+/// не блокирует.
+///
+/// `qty` — целое (штуки): готовые изделия штучные. На MVP единственное
+/// движение — `FinishedGoodsMovement` `type = PRODUCTION_RECEIPT`,
+/// `direction = IN`, создаётся при первом `Passport.status = PACKED`
+/// (idempotent через `sourceKey = PACKED_PASSPORT:<passportId>`).
+model FinishedGoodsBalance {
+  id String @id @default(cuid())
+
+  /// Детерминированный ключ
+  /// `${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`.
+  /// Гарантирует, что у каждой комбинации остаток ровно один.
+  balanceKey String @unique
+
+  orderId   String
+  productId String
+  sizeId    String
+  color     String
+
+  warehouseId String?
+  cellId      String?
+
+  qty Int @default(0)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastMovementAt DateTime?
+
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  size      Size       @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+  warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  cell      Cell?      @relation(fields: [cellId], references: [id], onDelete: SetNull)
+
+  movements FinishedGoodsMovement[]
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([sizeId])
+  @@index([warehouseId])
+  @@index([cellId])
+  @@index([updatedAt])
+}
+
+/// Foundation журнала движений готовой продукции (см.
+/// `apps/api/src/modules/finished-goods/*`).
+///
+/// На MVP-итерации единственный реализованный type — `PRODUCTION_RECEIPT`
+/// (`direction = IN`), создаётся `FinishedGoodsService.recordPackedPassportInTx`
+/// в той же транзакции, что и `PassportStatus → PACKED`. Остальные
+/// типы (`REVERSAL`, `ADJUSTMENT`, `SHIPMENT`, `TRANSFER`)
+/// зарезервированы и появятся в следующих итерациях.
+///
+/// Идемпотентность — `sourceKey @unique`:
+///   - `PACKED_PASSPORT:<passportId>` — выпуск по упаковке паспорта.
+/// `sourceKey` сознательно НЕ отдаём в read-only API (внутренний
+/// технический ключ).
+model FinishedGoodsMovement {
+  id String @id @default(cuid())
+
+  finishedGoodsBalanceId String?
+
+  type      String
+  direction String
+
+  orderId   String
+  productId String
+  sizeId    String
+  color     String
+
+  warehouseId String?
+  cellId      String?
+
+  qty Int
+
+  balanceBeforeQty Int?
+  balanceAfterQty  Int?
+
+  sourceType String?
+  sourceId   String?
+  /// Идемпотентный технический ключ движения. На MVP единственный
+  /// формат — `PACKED_PASSPORT:<passportId>`. UNIQUE гарантирует, что
+  /// повторная обработка `PACKED` (retry, дубль box-close) не задвоит
+  /// движение и не удвоит изменение `FinishedGoodsBalance.qty`.
+  sourceKey  String? @unique
+
+  passportId String?
+  boxId      String?
+
+  comment     String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  finishedGoodsBalance FinishedGoodsBalance? @relation(fields: [finishedGoodsBalanceId], references: [id], onDelete: SetNull)
+  order                Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product              Product               @relation(fields: [productId], references: [id], onDelete: Restrict)
+  size                 Size                  @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+  warehouse            Warehouse?            @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  cell                 Cell?                 @relation(fields: [cellId], references: [id], onDelete: SetNull)
+  passport             Passport?             @relation(fields: [passportId], references: [id], onDelete: SetNull)
+  box                  Box?                  @relation(fields: [boxId], references: [id], onDelete: SetNull)
+
+  @@index([finishedGoodsBalanceId])
+  @@index([orderId])
+  @@index([productId])
+  @@index([sizeId])
+  @@index([type])
+  @@index([direction])
+  @@index([warehouseId])
+  @@index([cellId])
+  @@index([passportId])
+  @@index([boxId])
+  @@index([sourceType, sourceId])
   @@index([createdAt])
 }

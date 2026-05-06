@@ -663,6 +663,46 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
 
 ---
 
+## 5a. Готовая продукция
+
+Готовая продукция — **отдельный контур** от материалов
+(`apps/api/src/modules/finished-goods/*`,
+`prisma/schema.prisma::FinishedGoodsBalance` / `FinishedGoodsMovement`,
+`docs/current-state.md §«Foundation готовой продукции»`,
+`docs/api.md §29a`).
+
+`StockBalance` / `StockMovement` / `MaterialIssue` /
+`MaterialIssueReturn` / `PurchaseReceipt` / `StockAdjustment` /
+`StockTransfer` / `CostsService` / `ProductionCostV2Service` —
+**этим контуром не затрагиваются и не меняются**.
+
+Что уже реализовано на этой итерации:
+- модели `FinishedGoodsBalance` / `FinishedGoodsMovement` (миграция
+  `20260615100000_add_finished_goods_foundation`);
+- автоматический приход `PRODUCTION_RECEIPT IN` в момент
+  `Passport.status = PACKED` (через `PackingService.addPassport` →
+  `FinishedGoodsService.recordPackedPassportInTx`), idempotent по
+  `sourceKey = PACKED_PASSPORT:<passportId>`;
+- read-only API: `GET /api/finished-goods/balances` и
+  `GET /api/finished-goods/movements`;
+- audit `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` (под
+  `entityType = FINISHED_GOODS_MOVEMENT`).
+
+Чего нет на этой итерации (отдельный backlog по готовой продукции):
+- отгрузка готовой продукции (`SHIPMENT`);
+- transfer готовой продукции между складами / ячейками
+  (`TRANSFER`);
+- ручная корректировка (`ADJUSTMENT`) и сторно (`REVERSAL`);
+- размещение готовой продукции по ячейкам (`cellId` всегда `null`);
+- UI-раздел `/admin/finished-goods` / sidebar item / отчёт.
+- новые роли (RBAC ограничен `ADMIN` / `SHOP_MANAGER`).
+
+Эти типы зарезервированы строковыми литералами в
+`FINISHED_GOODS_MOVEMENT_TYPE`, но writer-ов / API нет. Добавление
+UI-раздела требует подтверждения владельца проекта.
+
+---
+
 ## 6. Что НЕ реализовано
 
 Зафиксированные ограничения MVP — задачи, которые **сознательно не

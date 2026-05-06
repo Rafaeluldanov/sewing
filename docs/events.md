@@ -351,6 +351,7 @@ ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
 MATERIAL_ISSUE | MATERIAL_ISSUE_RETURN |
 STOCK_MOVEMENT |
+FINISHED_GOODS_MOVEMENT |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY | PAYROLL_PAYOUT |
@@ -402,6 +403,31 @@ runtime-коде (не из комментариев/документации). 
   Собственно парного `PassportEvent` нет — закрытие коробки это
   box-level действие; в payload летит список `passportIds` упакованных
   паспортов.
+
+#### Готовая продукция (`entityType = FINISHED_GOODS_MOVEMENT`, `entityId = FinishedGoodsMovement.id`)
+
+**Отдельный контур от материалов** — не путать с
+`STOCK_MOVEMENT` (см. ниже). На MVP-итерации одно событие.
+
+- `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` —
+  `FinishedGoodsService.recordPackedPassportInTx` зафиксировал
+  выпуск готовой продукции в момент `Passport.status = PACKED`
+  (см. `apps/api/src/modules/finished-goods/finished-goods.service.ts`,
+  `prisma/schema.prisma::FinishedGoodsMovement`,
+  `docs/api.md §29a`). Пишется в той же транзакции, что и сам
+  перевод паспорта в `PACKED` (через `PackingService.addPassport`).
+  Идемпотентно по
+  `FinishedGoodsMovement.sourceKey = PACKED_PASSPORT:<passportId>`:
+  повторный вызов для уже обработанного паспорта event не пишет.
+  Payload — `{ finishedGoodsMovementId, finishedGoodsBalanceId,
+  orderId, passportId, boxId, productId, sizeId, color,
+  warehouseId, cellId, qty, balanceBeforeQty, balanceAfterQty,
+  employeeId, timestamp }`.
+
+  События `FINISHED_GOODS_REVERSAL_*`, `FINISHED_GOODS_ADJUSTMENT_*`,
+  `FINISHED_GOODS_SHIPMENT_*`, `FINISHED_GOODS_TRANSFER_*` на этой
+  итерации **не реализованы** — соответствующие движения зарезервированы
+  в `FINISHED_GOODS_MOVEMENT_TYPE`, но writer-ов нет.
 
 #### ОТК (`entityType = QC`, `entityId = passportId`)
 

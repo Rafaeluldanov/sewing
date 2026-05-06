@@ -383,7 +383,35 @@ export type AuditEntityType =
    * пишут — они уже атрибутированы под `PURCHASE_RECEIPT` /
    * `MATERIAL_ISSUE` соответственно.
    */
-  | 'STOCK_MOVEMENT';
+  | 'STOCK_MOVEMENT'
+  /**
+   * Движения готовой продукции (см.
+   * `apps/api/src/modules/finished-goods/*`,
+   * `prisma/schema.prisma::FinishedGoodsMovement`,
+   * `docs/events.md §«Finished goods»`,
+   * `docs/current-state.md §«Готовая продукция»`).
+   *
+   * **Отдельный контур от материалов** — не путать с `STOCK_MOVEMENT`,
+   * который покрывает движения материалов (`StockBalance` /
+   * `StockMovement`).
+   *
+   * На MVP-итерации одно автоматическое событие:
+   *   - `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` —
+   *     `FinishedGoodsService.recordPackedPassportInTx` зафиксировал
+   *     выпуск готовой продукции в момент `Passport.status = PACKED`.
+   *     Пишется в той же транзакции, что и сам перевод паспорта в
+   *     `PACKED` (см. `PackingService.addPassport`). Payload —
+   *     `{ finishedGoodsMovementId, finishedGoodsBalanceId, orderId,
+   *     passportId, boxId, productId, sizeId, color, warehouseId,
+   *     cellId, qty, balanceBeforeQty, balanceAfterQty, employeeId,
+   *     timestamp }`. `entityId = FinishedGoodsMovement.id`.
+   *
+   * Идемпотентно: повторный вызов `recordPackedPassportInTx` для уже
+   * обработанного паспорта не пишет ни движение, ни audit (защита по
+   * `FinishedGoodsMovement.sourceKey @unique` =
+   * `PACKED_PASSPORT:<passportId>`).
+   */
+  | 'FINISHED_GOODS_MOVEMENT';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

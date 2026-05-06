@@ -28,6 +28,7 @@
   - [2.5 Passports / production](#25-passports--production)
   - [2.6 Warehouse / cells](#26-warehouse--cells)
   - [2.7 Packing](#27-packing)
+  - [2.7a Finished goods (foundation)](#27a-finished-goods)
   - [2.8 QC / WTO / defects](#28-qc--wto--defects)
   - [2.9 Salary / earnings](#29-salary--earnings)
   - [2.10 Shopfloor / display](#210-shopfloor--display)
@@ -292,11 +293,57 @@
 
 - **`Box`** — коробка. `number` (uniq), `qrCode` (uniq),
   `totalQty @default(0)`, `maxQty @default(100)`, `closedAt?`,
-  `createdById → Employee` (BoxCreator). Индекс: `closedAt`.
+  `createdById → Employee` (BoxCreator). Индекс: `closedAt`. Связи:
+  `BoxItem[]`, `PassportEvent[]`, `FinishedGoodsMovement[]`
+  (см. § 2.7a).
 - **`BoxItem`** — связь паспорт↔коробка. `passportId String @unique`
   (глобально, ADR-0015), `(boxId, passportId)` uniq, `qty: Int`.
 - **`Packed`-флаг** хранится в `Passport.status = PACKED` и в
   `PassportEvent(type = PACKED)`.
+
+<a id="27a-finished-goods"></a>
+### 2.7a Finished goods (foundation)
+
+**Отдельный контур от материалов** (`StockBalance` / `StockMovement`
+НЕ используются). На MVP-итерации — автоматический приход
+готовой продукции в момент `Passport.status = PACKED`. Реализован
+только тип `PRODUCTION_RECEIPT` (`direction = IN`); `REVERSAL` /
+`ADJUSTMENT` / `SHIPMENT` / `TRANSFER` зарезервированы.
+
+- **`FinishedGoodsBalance`** — остаток готовой продукции по
+  `(orderId, productId, sizeId, color, warehouseId?, cellId?)`.
+  `balanceKey` детерминирован
+  (`${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`,
+  `@unique`). `qty: Int @default(0)` (готовые изделия штучные),
+  `lastMovementAt?`. Связи: `order → Order` (Cascade),
+  `product → Product` (Restrict), `size → Size` (Restrict),
+  `warehouse? → Warehouse` (SetNull), `cell? → Cell` (SetNull),
+  `movements: FinishedGoodsMovement[]`. Индексы: `orderId`,
+  `productId`, `sizeId`, `warehouseId`, `cellId`, `updatedAt`.
+- **`FinishedGoodsMovement`** — журнал движений. `type: String`,
+  `direction: String`, `qty: Int`, `balanceBeforeQty?`,
+  `balanceAfterQty?`, `sourceType?`, `sourceId?`,
+  `sourceKey String? @unique` (на MVP формат —
+  `PACKED_PASSPORT:<passportId>`, идемпотентность). Связи:
+  `finishedGoodsBalance? → FinishedGoodsBalance` (SetNull),
+  `order → Order` (Cascade), `product → Product` (Restrict),
+  `size → Size` (Restrict), `warehouse? → Warehouse` (SetNull),
+  `cell? → Cell` (SetNull), `passport? → Passport` (SetNull),
+  `box? → Box` (SetNull). Индексы: `finishedGoodsBalanceId`,
+  `orderId`, `productId`, `sizeId`, `type`, `direction`,
+  `warehouseId`, `cellId`, `passportId`, `boxId`,
+  `(sourceType, sourceId)`, `createdAt`.
+- **Бизнес-момент выпуска**: `PackingService.addPassport` →
+  `FinishedGoodsService.recordPackedPassportInTx` в той же
+  транзакции, что и `Passport.status → PACKED`. `qty =
+  passport.qtyGood`, `warehouseId = order.finishedGoodsWarehouseId
+  ?? null` (no-warehouse balance, упаковку не блокирует),
+  `cellId = null`. Audit:
+  `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` под
+  `entityType = FINISHED_GOODS_MOVEMENT`.
+- **Read-only API**: `GET /api/finished-goods/balances`,
+  `GET /api/finished-goods/movements` (см. `docs/api.md §29a`).
+  `sourceKey` сознательно НЕ отдаётся.
 
 <a id="28-qc--wto--defects"></a>
 ### 2.8 QC / WTO / defects
