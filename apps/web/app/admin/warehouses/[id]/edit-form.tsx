@@ -1,14 +1,22 @@
 'use client';
 
-import { useTransition } from 'react';
+import { useState, useTransition } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
-import { AlertCircle, Check, Save, Unlink, Warehouse } from 'lucide-react';
+import {
+  AlertCircle,
+  Check,
+  Save,
+  Trash2,
+  Unlink,
+  Warehouse,
+} from 'lucide-react';
 import type { CellDetailDto } from '@sewing/shared/passports';
 import type { WarehouseDetailDto } from '@sewing/shared/warehouses';
 import { AdminEmptyState } from '@/components/admin';
 import {
   assignCellToWarehouseAction,
   createWarehouseLineAction,
+  deleteWarehouseLineAction,
   detachCellFromWarehouseAction,
   updateWarehouseAction,
 } from '../actions';
@@ -292,5 +300,68 @@ export function CreateLineForm({
         <SuccessBox message={state.successMessage} />
       )}
     </form>
+  );
+}
+
+/**
+ * Кнопка-«корзина» в строке таблицы линий. Удаляет линию и её ячейки —
+ * backend заблокирует операцию (`WAREHOUSE_LINE_HAS_CONTENT`), если в
+ * ячейках есть содержимое/паспорта/события/остатки. Перед запросом
+ * показываем нативный `confirm` с кодом линии и количеством ячеек.
+ *
+ * Ошибка отображается мини-боксом под кнопкой (inline в строке таблицы,
+ * чтобы менеджер видел, какие именно коды «заняты»).
+ */
+export function DeleteLineButton({
+  warehouseId,
+  lineId,
+  lineCode,
+  cellsCount,
+}: {
+  warehouseId: string;
+  lineId: string;
+  lineCode: string;
+  cellsCount: number;
+}) {
+  const [pending, startTransition] = useTransition();
+  const [error, setError] = useState<string | null>(null);
+
+  function handleClick() {
+    const ok = window.confirm(
+      `Удалить линию «${lineCode}» и все ${cellsCount} ячеек?\n\n` +
+        'Удаление возможно только если в ячейках нет содержимого, ' +
+        'паспортов и остатков.',
+    );
+    if (!ok) return;
+    setError(null);
+    startTransition(async () => {
+      const res = await deleteWarehouseLineAction(warehouseId, lineId);
+      if (!res.ok && res.error) {
+        setError(res.error);
+      }
+    });
+  }
+
+  return (
+    <span style={{ display: 'inline-flex', flexDirection: 'column', gap: 4 }}>
+      <button
+        type="button"
+        className="admin-btn admin-btn--ghost"
+        disabled={pending}
+        onClick={handleClick}
+        title={`Удалить линию «${lineCode}»`}
+      >
+        <Trash2 size={14} strokeWidth={1.6} aria-hidden />
+        {pending ? 'Удаляем…' : 'Удалить'}
+      </button>
+      {error && (
+        <span
+          role="alert"
+          style={{ color: 'var(--admin-danger, #c0392b)', fontSize: '0.78rem' }}
+        >
+          {error}
+        </span>
+      )}
+    </span>
   );
 }

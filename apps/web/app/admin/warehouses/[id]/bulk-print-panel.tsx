@@ -14,6 +14,7 @@ import {
 import { buildCellQrImageUrl } from '@/lib/warehouses-urls';
 import {
   printWarehouseCellsAction,
+  printWarehouseLineCellsAction,
   type PrintWarehouseCellsActionResult,
 } from '../actions';
 
@@ -65,9 +66,72 @@ export function WarehouseBulkPrintPanel({ warehouse, printers }: Props) {
       </button>
       {open && (
         <BulkPrintModal
-          warehouse={warehouse}
+          title={`Печать ячеек: ${warehouse.name}`}
           printers={printers}
           printableCells={printableCells}
+          onSubmit={(body) => printWarehouseCellsAction(warehouse.id, body)}
+          onClose={() => setOpen(false)}
+        />
+      )}
+    </>
+  );
+}
+
+interface LinePrintButtonProps {
+  warehouseId: string;
+  warehouseName: string;
+  lineId: string;
+  lineCode: string;
+  /** Активные ячейки именно этой линии (склад уже отфильтровал по `lineId`). */
+  cells: WarehouseCellDto[];
+  printers: PrinterSummaryDto[];
+}
+
+/**
+ * Кнопка «Печать линии» в строке таблицы линий. Открывает ту же
+ * модалку, что и общая массовая печать, но action бьёт в per-line
+ * endpoint. Список ячеек для preview уже отфильтрован по `lineId`
+ * на странице.
+ */
+export function LinePrintButton({
+  warehouseId,
+  warehouseName,
+  lineId,
+  lineCode,
+  cells,
+  printers,
+}: LinePrintButtonProps) {
+  const [open, setOpen] = useState(false);
+  const printableCells = useMemo(
+    () => cells.filter((c) => c.active),
+    [cells],
+  );
+  const hasCells = printableCells.length > 0;
+
+  return (
+    <>
+      <button
+        type="button"
+        className="admin-btn"
+        onClick={() => setOpen(true)}
+        disabled={!hasCells}
+        title={
+          hasCells
+            ? `Печать всех штрихкодов линии «${lineCode}»`
+            : 'В линии нет активных ячеек для печати'
+        }
+      >
+        <Printer size={14} strokeWidth={1.6} aria-hidden />
+        Печать
+      </button>
+      {open && (
+        <BulkPrintModal
+          title={`Печать линии «${lineCode}» — ${warehouseName}`}
+          printers={printers}
+          printableCells={printableCells}
+          onSubmit={(body) =>
+            printWarehouseLineCellsAction(warehouseId, lineId, body)
+          }
           onClose={() => setOpen(false)}
         />
       )}
@@ -76,16 +140,20 @@ export function WarehouseBulkPrintPanel({ warehouse, printers }: Props) {
 }
 
 interface ModalProps {
-  warehouse: Pick<WarehouseDetailDto, 'id' | 'name'>;
+  title: string;
   printers: PrinterSummaryDto[];
   printableCells: WarehouseCellDto[];
+  onSubmit: (
+    body: PrintWarehouseCellsDto,
+  ) => Promise<PrintWarehouseCellsActionResult>;
   onClose: () => void;
 }
 
 function BulkPrintModal({
-  warehouse,
+  title,
   printers,
   printableCells,
+  onSubmit,
   onClose,
 }: ModalProps) {
   const titleId = useId();
@@ -152,7 +220,7 @@ function BulkPrintModal({
       labelSize,
     };
     startTransition(async () => {
-      const res = await printWarehouseCellsAction(warehouse.id, body);
+      const res = await onSubmit(body);
       setFeedback(res);
       setPhase(res.ok ? 'success' : 'error');
     });
@@ -172,7 +240,7 @@ function BulkPrintModal({
         <div className="qr-modal__header">
           <h2 className="qr-modal__title" id={titleId}>
             <Printer size={18} strokeWidth={1.6} aria-hidden />
-            Печать ячеек: {warehouse.name}
+            {title}
           </h2>
           <button
             type="button"

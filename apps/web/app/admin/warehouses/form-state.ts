@@ -40,6 +40,21 @@ export interface CreateLineState {
 export const initialCreateLineState: CreateLineState = {};
 
 /**
+ * Состояние «удаление линии». UI показывает сообщение при
+ * `WAREHOUSE_LINE_HAS_CONTENT` — backend уже формирует
+ * человекочитаемый текст с кодами «занятых» ячеек.
+ */
+export interface DeleteLineState {
+  ok?: boolean;
+  /** Машинный код ошибки backend — UI ветвит отображение. */
+  code?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialDeleteLineState: DeleteLineState = {};
+
+/**
  * Состояние формы «Корректировка остатка»
  * (`/admin/warehouses?tab=balances` → кнопка «Корректировка», см.
  * `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,

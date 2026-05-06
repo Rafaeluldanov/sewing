@@ -440,6 +440,56 @@ export class WarehouseNoCellsToPrintException extends BusinessException {
   }
 }
 
+/**
+ * `:lineId` не существует или принадлежит другому складу. Срабатывает
+ * на per-line ручках (`DELETE /api/warehouses/:id/lines/:lineId`,
+ * `POST /api/warehouses/:id/lines/:lineId/print-cells`).
+ */
+export class WarehouseLineNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'WAREHOUSE_LINE_NOT_FOUND',
+      'Линия склада не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * `DELETE /api/warehouses/:id/lines/:lineId`: в одной из ячеек линии
+ * есть содержимое (`CellContent`), активные паспорта (`Passport.currentCellId`),
+ * исторические события (`PassportEvent.cellId`) или ненулевой остаток
+ * (`StockBalance.qty > 0`). Удаление заблокировано — менеджер должен
+ * сначала освободить ячейки.
+ */
+export class WarehouseLineHasContentException extends BusinessException {
+  constructor(busyCodes: string[]) {
+    const sample = busyCodes.slice(0, 5).join(', ');
+    super(
+      'WAREHOUSE_LINE_HAS_CONTENT',
+      `Нельзя удалить линию: в ячейках ${sample}${
+        busyCodes.length > 5 ? '…' : ''
+      } есть содержимое, паспорта или остатки. Сначала освободите ячейки.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * `POST /api/warehouses/:id/lines/:lineId/print-cells`: в линии нет ни
+ * одной активной ячейки. UI отдельно отрисует empty-state, но
+ * валидируем и на backend, чтобы не положить 0 заданий в очередь принтера.
+ */
+export class WarehouseLineNoCellsToPrintException extends BusinessException {
+  constructor() {
+    super(
+      'WAREHOUSE_LINE_NO_CELLS_TO_PRINT',
+      'В линии нет активных ячеек для печати',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Shifts / work (Шаг 6)
 // ---------------------------------------------------------------------------

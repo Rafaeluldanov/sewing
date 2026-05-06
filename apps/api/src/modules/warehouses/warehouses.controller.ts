@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -118,5 +120,42 @@ export class WarehousesController {
   ): Promise<PrintWarehouseCellsResultDto> {
     const apiBaseUrl = resolvePublicApiBaseUrl(req);
     return this.warehouses.printAllCells(id, dto, apiBaseUrl);
+  }
+
+  /**
+   * Удаление линии склада (вариант с защитой). Удаляются и сама
+   * линия, и все её ячейки — но ТОЛЬКО если ни в одной ячейке нет
+   * содержимого, паспортов, событий или ненулевого остатка. Иначе —
+   * 409 `WAREHOUSE_LINE_HAS_CONTENT` со списком «занятых» кодов.
+   *
+   * Ошибки:
+   *   - 404 `WAREHOUSE_NOT_FOUND`
+   *   - 404 `WAREHOUSE_LINE_NOT_FOUND` (линия не найдена или у другого склада)
+   *   - 409 `WAREHOUSE_LINE_HAS_CONTENT`
+   */
+  @Delete(':id/lines/:lineId')
+  @HttpCode(204)
+  async deleteLine(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+  ): Promise<void> {
+    await this.warehouses.deleteLine(id, lineId);
+  }
+
+  /**
+   * Печать всех активных ячеек одной линии — per-line вариант
+   * `printAllCells`. Те же поля (`printerId`/`copies`/`labelSize`),
+   * та же сводка в ответе.
+   */
+  @Post(':id/lines/:lineId/print-cells')
+  printLineCells(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body(new ZodValidationPipe(PrintWarehouseCellsSchema))
+    dto: PrintWarehouseCellsDto,
+    @Req() req: Request,
+  ): Promise<PrintWarehouseCellsResultDto> {
+    const apiBaseUrl = resolvePublicApiBaseUrl(req);
+    return this.warehouses.printLineCells(id, lineId, dto, apiBaseUrl);
   }
 }
