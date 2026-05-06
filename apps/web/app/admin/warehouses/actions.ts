@@ -9,7 +9,9 @@ import type {
 import { ApiRequestError } from '@/lib/api';
 import {
   createStockAdjustment,
+  createStockTransfer,
   type CreateStockAdjustmentDto,
+  type CreateStockTransferDto,
 } from '@/lib/stock-api';
 import {
   createWarehouse,
@@ -26,6 +28,7 @@ import type {
   CreateWarehouseState,
   DeleteLineState,
   StockAdjustmentState,
+  StockTransferState,
   UpdateWarehouseState,
 } from './form-state';
 
@@ -349,5 +352,47 @@ export async function createStockAdjustmentAction(
       };
     }
     return { ok: false, error: 'Не удалось сохранить корректировку остатка.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stock transfer (manual): `POST /api/stock/transfers`
+// (см. `apps/api/src/modules/stock/stock.controller.ts`,
+//  `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+//  `docs/api.md §«26a.4 POST /api/stock/transfers»`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action перемещения остатка между складами / ячейками.
+ * Принимает уже нормализованный body (qty / comment / clientRequestId)
+ * и делегирует в `createStockTransfer`. Идемпотентность реализована
+ * backend-ом по `clientRequestId` — UI-диалог сам генерирует uuid и
+ * присылает один и тот же при повторных submit.
+ *
+ * После успеха ревалидируем `/admin/warehouses` (вкладки `balances` и
+ * `movements` живут на одной странице с разным `?tab=`), чтобы оба
+ * движения появились в журнале и обновились остатки.
+ *
+ * `MATERIAL_STOCK_INSUFFICIENT` / `STOCK_TRANSFER_SAME_LOCATION` /
+ * `STOCK_BALANCE_NOT_FOUND` приходят с `code` — клиентский диалог
+ * отрисовывает понятный текст backend без raw JSON.
+ */
+export async function createStockTransferAction(
+  body: CreateStockTransferDto,
+): Promise<StockTransferState> {
+  try {
+    const result = await createStockTransfer(body);
+    revalidatePath('/admin/warehouses');
+    return { ok: true, transferId: result.transferId };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        code: e.code,
+        error: e.message,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { ok: false, error: 'Не удалось сохранить перемещение остатка.' };
   }
 }

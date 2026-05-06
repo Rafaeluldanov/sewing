@@ -15,3 +15,5 @@ export { StockDirectionBadge } from './stock-direction-badge';
 export { StockMovementTypeBadge } from './stock-movement-type-badge';
 export { StockAdjustmentButton } from './stock-adjustment-button';
 export { StockAdjustmentDialog } from './stock-adjustment-dialog';
+export { StockTransferButton } from './stock-transfer-button';
+export { StockTransferDialog } from './stock-transfer-dialog';

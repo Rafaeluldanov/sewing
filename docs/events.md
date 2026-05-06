@@ -531,6 +531,20 @@ audit-событий не существует.
   balanceAfterQty, comment, employeeId, sourceKey, timestamp }`.
   `sourceKey` имеет формат `STOCK_ADJUSTMENT:<clientRequestId>` и
   отдаётся **только в payload audit** — публичный API его не возвращает.
+- `STOCK_TRANSFER_CREATED` — менеджер сохранил перемещение остатка
+  между складами / ячейками через `POST /api/stock/transfers` (UI
+  кнопка «Переместить» в `/admin/warehouses?tab=balances`). Пишется
+  в той же транзакции, что и пара `StockMovement` `type=TRANSFER`
+  (`OUT` + `IN`) и апдейт обоих `StockBalance`. Один аудит-event на
+  один transfer (entityId = `outMovement.id`). При идемпотентном
+  повторе с тем же `clientRequestId` событие **не дублируется** —
+  сервис возвращает существующую пару движений и audit не пишет
+  повторно. Payload — `{ sourceType: "STOCK_TRANSFER", transferId,
+  fromStockBalanceId, toStockBalanceId, outMovementId, inMovementId,
+  workshopNeedId, qty, unit, from: { warehouseId, cellId }, to: {
+  warehouseId, cellId }, comment, employeeId, timestamp }`. Сами
+  `sourceKey` (`STOCK_TRANSFER:<id>:OUT|IN`) в payload audit не
+  попадают — публичный API их тоже не возвращает.
 
 Автоматические движения (`PURCHASE_RECEIPT` / `MATERIAL_ISSUE` /
 `REVERSAL`) собственного аудит-события под `entityType = STOCK_MOVEMENT`

@@ -358,9 +358,8 @@ export type AuditEntityType =
    * Движения склада (см. `apps/api/src/modules/stock/*`,
    * `prisma/schema.prisma::StockMovement`,
    * `docs/api.md §«26a. Stock»`,
-   * `docs/events.md §«StockMovement»`). На MVP-итерации единственное
-   * аудит-событие — ручная корректировка остатка через
-   * `POST /api/stock/adjustments`:
+   * `docs/events.md §«StockMovement»`). На MVP-итерации два
+   * аудит-события под `entityType = STOCK_MOVEMENT`:
    *
    *   - `STOCK_ADJUSTMENT_CREATED` — менеджер сохранил корректировку
    *     через UI `/admin/warehouses?tab=balances`. Пишется в той же
@@ -370,6 +369,14 @@ export type AuditEntityType =
    *     qty, unit, unitCost, totalCost, balanceBeforeQty,
    *     balanceAfterQty, comment, employeeId, sourceKey, timestamp }`.
    *     `entityId = StockMovement.id`.
+   *   - `STOCK_TRANSFER_CREATED` — менеджер сохранил перемещение
+   *     остатка через UI `/admin/warehouses?tab=balances`, кнопка
+   *     «Переместить». Пишется в той же транзакции, что и пара
+   *     `StockMovement` TRANSFER (`OUT` + `IN`). Один event на один
+   *     transfer (`entityId = outMovement.id`). Payload —
+   *     `{ sourceType, transferId, fromStockBalanceId, toStockBalanceId,
+   *     outMovementId, inMovementId, workshopNeedId, qty, unit, from,
+   *     to, comment, employeeId, timestamp }`.
    *
    * Автоматические движения (`PURCHASE_RECEIPT` / `MATERIAL_ISSUE` /
    * `REVERSAL`) собственного аудит-события под этим `entityType` не

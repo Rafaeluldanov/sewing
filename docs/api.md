@@ -86,7 +86,7 @@
 - [24. Passports](#24-passports)
 - [25. Cells](#25-cells)
 - [26. Warehouses](#26-warehouses)
-- [26a. Stock (read-only)](#26a-stock)
+- [26a. Stock](#26a-stock)
 - [27. QC](#27-qc)
 - [28. WTO](#28-wto)
 - [29. Packing](#29-packing)
@@ -921,22 +921,24 @@ DTO: `packages/shared/src/warehouses.ts`. ADR: 0019.
 Источник: `stock/stock.controller.ts`. Класс-уровень
 `@Roles('ADMIN', 'SHOP_MANAGER')`.
 
-API для просмотра остатков, журнала движений и ручной корректировки
-foundation складского учёта (см.
+API для просмотра остатков, журнала движений, ручной корректировки и
+перемещения остатка foundation складского учёта (см.
 `apps/api/src/modules/stock/stock.service.ts`,
 `prisma/schema.prisma::StockBalance` / `StockMovement`,
 `docs/current-state.md §«Foundation складского учёта материалов»`).
-GET-эндпоинты остаются read-only. Единственная mutation — ручная
-корректировка остатка (`POST /api/stock/adjustments`); остальные
-движения по-прежнему пишутся неявно, в той же транзакции, что и
-бизнес-документ: `PurchaseReceipt` (POSTED → IN, cancel → REVERSAL
-OUT) и `MaterialIssue` (POSTED → OUT, в т.ч. `AUTO_CUT_ISSUE`).
+GET-эндпоинты остаются read-only. Mutation-эндпоинтов два: ручная
+корректировка (`POST /api/stock/adjustments`) и перемещение
+(`POST /api/stock/transfers`). Остальные движения по-прежнему
+пишутся неявно, в той же транзакции, что и бизнес-документ:
+`PurchaseReceipt` (POSTED → IN, cancel → REVERSAL OUT) и
+`MaterialIssue` (POSTED → OUT, в т.ч. `AUTO_CUT_ISSUE`).
 
 | Метод | Путь                       | RBAC               | Описание |
 | ----- | -------------------------- | ------------------ | -------- |
 | GET   | `/api/stock/balances`      | ADMIN, SHOP_MANAGER | Список текущих остатков `StockBalance`. Сортировка `updatedAt desc, description asc`. |
 | GET   | `/api/stock/movements`     | ADMIN, SHOP_MANAGER | Журнал движений `StockMovement`. Сортировка `createdAt desc`. |
 | POST  | `/api/stock/adjustments`   | ADMIN, SHOP_MANAGER | Ручная корректировка остатка — создаёт `StockMovement` `type = ADJUSTMENT`. |
+| POST  | `/api/stock/transfers`     | ADMIN, SHOP_MANAGER | Перемещение остатка между складами / ячейками — создаёт пару `StockMovement` `type = TRANSFER` (`OUT` + `IN`). |
 
 DTO query: `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`,
 `apps/api/src/modules/stock/dto/list-stock-movements.dto.ts`.
@@ -1010,7 +1012,7 @@ Query (все опциональны, склеиваются по AND):
 | `stockBalanceId`        | string   | |
 | `warehouseId`           | string   | |
 | `cellId`                | string   | |
-| `type`                  | string   | `PURCHASE_RECEIPT \| MATERIAL_ISSUE \| ADJUSTMENT \| REVERSAL`. |
+| `type`                  | string   | `PURCHASE_RECEIPT \| MATERIAL_ISSUE \| ADJUSTMENT \| REVERSAL \| TRANSFER`. |
 | `direction`             | string   | `IN \| OUT`. |
 | `sourceType`            | string   | Внешний классификатор источника (например, `PURCHASE_RECEIPT_LINE`). |
 | `sourceId`              | string   | id строки источника. |
@@ -1059,8 +1061,9 @@ Query (все опциональны, склеиваются по AND):
 
 `StockMovement.sourceKey` (внутренний идемпотентный ключ
 `PURCHASE_RECEIPT_LINE:<id>` / `PURCHASE_RECEIPT_LINE_CANCEL:<id>` /
-`MATERIAL_ISSUE_LINE:<id>` / `STOCK_ADJUSTMENT:<id>`) сознательно
-**не отдаётся** в публичном API.
+`MATERIAL_ISSUE_LINE:<id>` / `STOCK_ADJUSTMENT:<id>` /
+`STOCK_TRANSFER:<id>:OUT|IN`) сознательно **не отдаётся** в
+публичном API.
 
 ### 26a.3 `POST /api/stock/adjustments`
 
@@ -1117,16 +1120,92 @@ Body:
 - 404 `STOCK_BALANCE_NOT_FOUND` — `stockBalanceId` не существует.
 - 409 `MATERIAL_STOCK_INSUFFICIENT` — `OUT` при `allowNegativeMaterialStock = false`.
 
+### 26a.4 `POST /api/stock/transfers`
+
+Перемещение остатка `StockBalance` между складами / ячейками. Создаёт
+**пару** `StockMovement` `type = TRANSFER` (`direction = OUT` из
+источника + `direction = IN` в назначение), апдейтит исходный
+`StockBalance` и создаёт / увеличивает целевой `StockBalance`, и
+пишет audit `STOCK_TRANSFER_CREATED` (под `entityType =
+STOCK_MOVEMENT`, `entityId = OUT.id`) в одной транзакции.
+
+UI — `/admin/warehouses?tab=balances`, кнопка «Переместить»
+(см. `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+`apps/web/lib/stock-api.ts::createStockTransfer`). Отдельной страницы /
+пункта меню под перемещения сознательно не вводим.
+
+Body:
+
+| Поле                 | Тип                | Обязательно | Описание |
+| -------------------- | ------------------ | ----------- | -------- |
+| `fromStockBalanceId` | string             | да          | Источник перемещения. `workshopNeedId`, `unit`, `description`, `materialRole`, `unitCost` сервис достаёт из исходного `StockBalance`. |
+| `toWarehouseId`      | string \| null     | нет         | Склад назначения. Если передан `toCellId`, destination warehouse берётся из `Cell.warehouseId` (с fallback на `toWarehouseId`). |
+| `toCellId`           | string \| null     | нет         | Ячейка назначения. Если передана — destination warehouse берётся из `Cell.warehouseId`. |
+| `qty`                | string \| number   | да          | > 0; Decimal. |
+| `comment`            | string             | да          | 2..500 символов; причина перемещения, попадает в `comment` обоих движений. |
+| `clientRequestId`    | string             | нет         | Если передан — становится частью пары идемпотентных ключей `STOCK_TRANSFER:<clientRequestId>:OUT` и `STOCK_TRANSFER:<clientRequestId>:IN`. Защита от двойного submit формы. Если не передан, сервер сгенерирует свой uuid. |
+
+Сервис **сознательно не принимает** `sourceKey`, `totalCost`,
+`unitCost`, `balanceBeforeQty`, `balanceAfterQty`, `createdById`,
+`workshopNeedId`, `unit` — это служебные / выводимые из источника поля.
+
+Ответ:
+
+```ts
+{
+  transferId: string;
+  outMovement: StockMovement; // shape `26a.2 StockMovement`
+  inMovement: StockMovement;  // shape `26a.2 StockMovement`
+}
+```
+
+`sourceKey` ни для одного из движений в response **не возвращается**
+(`STOCK_TRANSFER:<id>:OUT|IN` живёт только в БД и audit).
+
+Правила:
+
+- `StockMovement.type` всегда `TRANSFER` для обоих движений;
+- `OUT` уменьшает источник, `IN` создаёт / увеличивает назначение;
+- transfer всегда **strict**: при `source.qty < qty` отдаём 409
+  `MATERIAL_STOCK_INSUFFICIENT`, баланс не меняется, ни одно
+  движение не пишется. `CompanySettings.allowNegativeMaterialStock`
+  на transfer **не влияет** — отрицательный остаток источника
+  через transfer запрещён независимо от глобальных настроек;
+- IN использует `source.unitCost` — destination через
+  `applyMovementInTx` пересчитывает свою средневзвешенную цену;
+- transfer **не** меняет `MaterialIssue.totalCost`, `OrderSummary` /
+  плановую/фактическую себестоимость заказа и production cost —
+  движение живёт строго в плоскости склада;
+- отдельная модель `StockTransfer` **не создаётся** — пара движений
+  сама себе документ (общий `sourceId` / парные `sourceKey` ключи);
+- `delete` / `cancel` transfer в этой итерации **не реализованы**.
+
+Ошибки:
+
+- 400 `VALIDATION_ERROR` — невалидный body (qty/comment).
+- 400 `STOCK_MOVEMENT_QTY_INVALID` — `qty <= 0`.
+- 400 `STOCK_MOVEMENT_VALUE_INVALID` — некорректный числовой формат `qty`.
+- 404 `STOCK_BALANCE_NOT_FOUND` — `fromStockBalanceId` не существует.
+- 404 `STOCK_TRANSFER_CELL_NOT_FOUND` — `toCellId` не существует.
+- 409 `MATERIAL_STOCK_INSUFFICIENT` — `qty > source.qty`.
+- 409 `STOCK_TRANSFER_SAME_LOCATION` — destination совпадает с source
+  (`warehouseId` + `cellId`).
+- 409 `STOCK_TRANSFER_INCONSISTENT_STATE` — структурная аномалия:
+  есть только один из двух `sourceKey` пары; обычно не возникает.
+
 ### Сознательные границы MVP
 
-- mutation на этой итерации ровно одна (`POST /adjustments`); никаких
-  transfer / FIFO/LIFO / `MaterialStockLot` / master-`Material`;
+- mutation на этой итерации две: `POST /adjustments` (ручная
+  корректировка) и `POST /transfers` (перемещение). FIFO/LIFO /
+  `MaterialStockLot` / master-`Material` / отдельная модель
+  `StockTransfer` НЕ вводятся;
 - остатки считаются по `WorkshopNeed`;
-- delete / cancel adjustment в этой итерации не реализованы;
+- delete / cancel adjustment / cancel transfer в этой итерации не
+  реализованы;
 - новые роли (`WAREHOUSE_MANAGER`, `PURCHASER`, `ACCOUNTANT`) **не
   введены**;
-- UI корректировки живёт прямо во вкладке «Остатки» раздела «Склады»;
-  отдельной страницы / пункта sidebar нет.
+- UI корректировки и перемещения живут прямо во вкладке «Остатки»
+  раздела «Склады»; отдельной страницы / пункта sidebar нет.
 
 ---
 

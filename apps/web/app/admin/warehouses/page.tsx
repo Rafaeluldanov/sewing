@@ -30,6 +30,7 @@ import {
   StockBalancesTable,
   StockMovementsTable,
   StockPagination,
+  StockTransferButton,
   WarehouseStockTabs,
   type WarehouseStockTab,
 } from '@/components/warehouses/stock';
@@ -254,15 +255,21 @@ async function BalancesTabPage({
 
   let response: StockBalanceListResponse | null = null;
   let error: string | null = null;
+  let warehouses: WarehouseSummaryDto[] = [];
   try {
-    response = await listStockBalances({
-      q,
-      positiveOnly,
-      negativeOnly,
-      zeroOnly,
-      limit,
-      offset,
-    });
+    // Параллельно: остатки + список складов для select-а назначения
+    // в форме «Переместить» (см. `StockTransferDialog`).
+    [response, warehouses] = await Promise.all([
+      listStockBalances({
+        q,
+        positiveOnly,
+        negativeOnly,
+        zeroOnly,
+        limit,
+        offset,
+      }),
+      listWarehouses(),
+    ]);
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -300,10 +307,12 @@ async function BalancesTabPage({
           <div
             style={{
               display: 'flex',
+              gap: 8,
               justifyContent: 'flex-end',
               padding: '0 0 8px 0',
             }}
           >
+            <StockTransferButton balances={items} warehouses={warehouses} />
             <StockAdjustmentButton balances={items} />
           </div>
         )}
@@ -431,6 +440,7 @@ const MOVEMENT_TYPES: ReadonlySet<StockMovementType> = new Set<StockMovementType
   'MATERIAL_ISSUE',
   'ADJUSTMENT',
   'REVERSAL',
+  'TRANSFER',
 ]);
 
 function parseMovementType(raw: string | undefined): StockMovementType | undefined {

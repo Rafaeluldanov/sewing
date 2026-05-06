@@ -10,6 +10,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { CompanySettingsService } from '../company-settings/company-settings.service.js';
 import type { CreateStockAdjustmentDto } from './dto/create-stock-adjustment.dto.js';
+import type { CreateStockTransferDto } from './dto/create-stock-transfer.dto.js';
 import type { ListStockBalancesQuery } from './dto/list-stock-balances.dto.js';
 import type { ListStockMovementsQuery } from './dto/list-stock-movements.dto.js';
 import {
@@ -121,6 +122,18 @@ export const STOCK_MOVEMENT_SOURCE_KEY_PREFIX = {
    * формы → одно `StockMovement` (защита от двойного submit).
    */
   STOCK_ADJUSTMENT: 'STOCK_ADJUSTMENT',
+  /**
+   * Префикс ключей пары движений склад-в-склад / ячейка-в-ячейка
+   * (см. `StockService.createTransfer`,
+   * `apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`,
+   * UI — `/admin/warehouses?tab=balances`, кнопка «Переместить»).
+   * Один transfer пишется как пара `StockMovement`:
+   *   - `STOCK_TRANSFER:<clientRequestId>:OUT` — списание с источника;
+   *   - `STOCK_TRANSFER:<clientRequestId>:IN` — зачисление в назначение.
+   * `UNIQUE` на `StockMovement.sourceKey` гарантирует, что повторный
+   * submit с тем же `clientRequestId` не задвоит ни OUT, ни IN.
+   */
+  STOCK_TRANSFER: 'STOCK_TRANSFER',
 } as const;
 
 /**
@@ -180,6 +193,26 @@ export function buildMaterialIssueReturnLineStockSourceKey(
  */
 export function buildStockAdjustmentSourceKey(clientRequestId: string): string {
   return `${STOCK_MOVEMENT_SOURCE_KEY_PREFIX.STOCK_ADJUSTMENT}:${clientRequestId}`;
+}
+
+/**
+ * Ключ OUT-движения склад-в-склад: списание с исходного `StockBalance`.
+ * Один `clientRequestId` → одно OUT-движение.
+ */
+export function buildStockTransferOutSourceKey(
+  clientRequestId: string,
+): string {
+  return `${STOCK_MOVEMENT_SOURCE_KEY_PREFIX.STOCK_TRANSFER}:${clientRequestId}:OUT`;
+}
+
+/**
+ * Ключ IN-движения склад-в-склад: зачисление в целевой `StockBalance`.
+ * Один `clientRequestId` → одно IN-движение.
+ */
+export function buildStockTransferInSourceKey(
+  clientRequestId: string,
+): string {
+  return `${STOCK_MOVEMENT_SOURCE_KEY_PREFIX.STOCK_TRANSFER}:${clientRequestId}:IN`;
 }
 
 /**
@@ -1549,6 +1582,268 @@ export class StockService {
       include: STOCK_MOVEMENT_LIST_INCLUDE,
     });
     return toStockMovementListItem(detail);
+  }
+
+  // ===========================================================================
+  // STOCK TRANSFER (склад-в-склад / ячейка-в-ячейка)
+  // ===========================================================================
+
+  /**
+   * Перемещение остатка `StockBalance` между складами / ячейками
+   * (`POST /api/stock/transfers`, см.
+   * `apps/api/src/modules/stock/stock.controller.ts`,
+   * `apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`,
+   * UI — `/admin/warehouses?tab=balances`, кнопка «Переместить»,
+   * `docs/api.md §«26a.4 POST /api/stock/transfers»`).
+   *
+   * Контракт:
+   *   - открывает свою `prisma.$transaction(...)`;
+   *   - находит исходный `StockBalance` по `fromStockBalanceId` и
+   *     достаёт `workshopNeedId`, `description`, `materialRole`, `unit`,
+   *     `unitCost` — клиент эти поля не присылает;
+   *   - проверяет, что `qty > 0` и `source.qty >= qty` (transfer всегда
+   *     strict, `allowNegativeMaterialStock` НЕ используется);
+   *   - при `toCellId` — `Cell.warehouseId` (с fallback на
+   *     `toWarehouseId`) определяет destination warehouse, иначе
+   *     `cellId = null`;
+   *   - запрещает same-location transfer (404 / 409
+   *     `STOCK_TRANSFER_SAME_LOCATION`);
+   *   - пишет пару `StockMovement` `type = TRANSFER`:
+   *     `direction = OUT` (sourceKey `STOCK_TRANSFER:<id>:OUT`) уменьшает
+   *     исходный остаток, `direction = IN` (sourceKey
+   *     `STOCK_TRANSFER:<id>:IN`) создаёт / увеличивает целевой
+   *     `StockBalance`. IN использует `unitCost` исходного баланса —
+   *     `applyMovementInTx` пересчитывает средневзвешенную цену
+   *     назначения;
+   *   - идемпотентен по `clientRequestId`: если оба ключа уже
+   *     существуют, возвращает существующую пару и не апдейтит баланс
+   *     повторно. Если найден только один — поднимает 409
+   *     `STOCK_TRANSFER_INCONSISTENT_STATE` (структурная аномалия);
+   *   - пишет audit `STOCK_TRANSFER_CREATED` под
+   *     `entityType = STOCK_MOVEMENT` (`entityId = OUT.id`) в той же
+   *     транзакции.
+   *
+   * Сознательная граница MVP: НЕ создаём отдельную модель `StockTransfer`,
+   * НЕ дробим transfer (один OUT + один IN), НЕ влияет на
+   * `MaterialIssue.totalCost` / `OrderSummary` / production cost —
+   * transfer живёт строго в плоскости склада.
+   */
+  async createTransfer(
+    dto: CreateStockTransferDto,
+    employeeId: string | null | undefined,
+  ): Promise<{
+    transferId: string;
+    outMovement: StockMovementListItem;
+    inMovement: StockMovementListItem;
+  }> {
+    const qty = parseAdjustmentDecimal(dto.qty, 'qty');
+    if (qty.lte(0)) {
+      throw new BusinessException(
+        'STOCK_MOVEMENT_QTY_INVALID',
+        'Количество перемещения должно быть больше нуля.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const clientRequestId = dto.clientRequestId ?? randomUUID();
+    const transferId = clientRequestId;
+    const outSourceKey = buildStockTransferOutSourceKey(clientRequestId);
+    const inSourceKey = buildStockTransferInSourceKey(clientRequestId);
+
+    const { outMovementId, inMovementId } = await this.prisma.$transaction(
+      async (tx) => {
+        // ---- idempotency: оба ключа уже есть -------------------------------
+        const existingOut = await this.findMovementBySourceKeyInTx(
+          tx,
+          outSourceKey,
+        );
+        const existingIn = await this.findMovementBySourceKeyInTx(
+          tx,
+          inSourceKey,
+        );
+        if (existingOut && existingIn) {
+          return {
+            outMovementId: existingOut.id,
+            inMovementId: existingIn.id,
+          };
+        }
+        if (existingOut || existingIn) {
+          throw new BusinessException(
+            'STOCK_TRANSFER_INCONSISTENT_STATE',
+            'Перемещение находится в несогласованном состоянии (есть только OUT или только IN).',
+            HttpStatus.CONFLICT,
+          );
+        }
+
+        // ---- source ----------------------------------------------------------
+        const source = await tx.stockBalance.findUnique({
+          where: { id: dto.fromStockBalanceId },
+        });
+        if (!source) {
+          throw new BusinessException(
+            'STOCK_BALANCE_NOT_FOUND',
+            'Исходный остаток не найден.',
+            HttpStatus.NOT_FOUND,
+          );
+        }
+        if (source.qty.lt(qty)) {
+          throw new MaterialStockInsufficientException(
+            `Недостаточно остатка материала «${source.description}» (${source.unit}): запрошено ${qty.toString()}, доступно ${source.qty.toString()}.`,
+            {
+              workshopNeedId: source.workshopNeedId,
+              warehouseId: source.warehouseId ?? null,
+              cellId: source.cellId ?? null,
+              requestedQty: qty.toString(),
+              availableQty: source.qty.toString(),
+              unit: source.unit,
+              description: source.description,
+            },
+          );
+        }
+
+        // ---- destination -----------------------------------------------------
+        let destWarehouseId: string | null;
+        let destCellId: string | null;
+        if (dto.toCellId) {
+          const cell = await tx.cell.findUnique({
+            where: { id: dto.toCellId },
+            select: { id: true, warehouseId: true },
+          });
+          if (!cell) {
+            throw new BusinessException(
+              'STOCK_TRANSFER_CELL_NOT_FOUND',
+              'Целевая ячейка не найдена.',
+              HttpStatus.NOT_FOUND,
+            );
+          }
+          destCellId = cell.id;
+          destWarehouseId = cell.warehouseId ?? dto.toWarehouseId ?? null;
+        } else {
+          destCellId = null;
+          destWarehouseId = dto.toWarehouseId ?? null;
+        }
+
+        // ---- same-location гейт ---------------------------------------------
+        if (
+          (source.warehouseId ?? null) === destWarehouseId &&
+          (source.cellId ?? null) === destCellId
+        ) {
+          throw new BusinessException(
+            'STOCK_TRANSFER_SAME_LOCATION',
+            'Источник и назначение перемещения совпадают.',
+            HttpStatus.CONFLICT,
+          );
+        }
+
+        // ---- OUT (списание из source) ---------------------------------------
+        const sourceUnitCost = source.unitCost;
+        const { movement: outMovement } = await this.applyMovementInTx(tx, {
+          workshopNeedId: source.workshopNeedId,
+          warehouseId: source.warehouseId,
+          cellId: source.cellId,
+          description: source.description,
+          materialRole: source.materialRole,
+          type: STOCK_MOVEMENT_TYPE.TRANSFER,
+          direction: STOCK_MOVEMENT_DIRECTION.OUT,
+          qty,
+          unit: source.unit,
+          unitCost: sourceUnitCost,
+          sourceType: STOCK_MOVEMENT_SOURCE_KEY_PREFIX.STOCK_TRANSFER,
+          sourceId: transferId,
+          sourceKey: outSourceKey,
+          comment: dto.comment,
+          createdById: employeeId ?? null,
+          // Transfer всегда strict — отрицательный остаток источника
+          // запрещён независимо от `allowNegativeMaterialStock`.
+          allowNegativeStock: false,
+        });
+
+        // ---- IN (зачисление в destination) ----------------------------------
+        const { movement: inMovement } = await this.applyMovementInTx(tx, {
+          workshopNeedId: source.workshopNeedId,
+          warehouseId: destWarehouseId,
+          cellId: destCellId,
+          description: source.description,
+          materialRole: source.materialRole,
+          type: STOCK_MOVEMENT_TYPE.TRANSFER,
+          direction: STOCK_MOVEMENT_DIRECTION.IN,
+          qty,
+          unit: source.unit,
+          // IN использует `unitCost` исходного баланса —
+          // применяется средневзвешенная по назначению.
+          unitCost: sourceUnitCost,
+          sourceType: STOCK_MOVEMENT_SOURCE_KEY_PREFIX.STOCK_TRANSFER,
+          sourceId: transferId,
+          sourceKey: inSourceKey,
+          comment: dto.comment,
+          createdById: employeeId ?? null,
+        });
+
+        // ---- audit ----------------------------------------------------------
+        await this.audit.log(
+          {
+            event: 'STOCK_TRANSFER_CREATED',
+            entityType: 'STOCK_MOVEMENT',
+            entityId: outMovement.id,
+            employeeId: employeeId ?? null,
+            payload: {
+              sourceType: STOCK_MOVEMENT_SOURCE_KEY_PREFIX.STOCK_TRANSFER,
+              transferId,
+              fromStockBalanceId: source.id,
+              toStockBalanceId: inMovement.stockBalanceId,
+              outMovementId: outMovement.id,
+              inMovementId: inMovement.id,
+              workshopNeedId: source.workshopNeedId,
+              qty: qty.toString(),
+              unit: source.unit,
+              from: {
+                warehouseId: source.warehouseId ?? null,
+                cellId: source.cellId ?? null,
+              },
+              to: {
+                warehouseId: destWarehouseId,
+                cellId: destCellId,
+              },
+              comment: dto.comment,
+              employeeId: employeeId ?? null,
+              timestamp: outMovement.createdAt.toISOString(),
+            } as Prisma.InputJsonValue,
+          },
+          tx,
+        );
+
+        return {
+          outMovementId: outMovement.id,
+          inMovementId: inMovement.id,
+        };
+      },
+    );
+
+    this.logger.log(
+      `event=stock.transfer.create transferId=${transferId} ` +
+        `out=${outMovementId} in=${inMovementId} qty=${qty.toString()} ` +
+        `fromStockBalanceId=${dto.fromStockBalanceId}`,
+    );
+
+    // Возвращаем пару движений в shape `StockMovementListItem` — тот же,
+    // что отдаёт `GET /api/stock/movements`. `sourceKey` сознательно
+    // не пробрасываем (`toStockMovementListItem` его вырезает).
+    const [outDetail, inDetail] = await Promise.all([
+      this.prisma.stockMovement.findUniqueOrThrow({
+        where: { id: outMovementId },
+        include: STOCK_MOVEMENT_LIST_INCLUDE,
+      }),
+      this.prisma.stockMovement.findUniqueOrThrow({
+        where: { id: inMovementId },
+        include: STOCK_MOVEMENT_LIST_INCLUDE,
+      }),
+    ]);
+
+    return {
+      transferId,
+      outMovement: toStockMovementListItem(outDetail),
+      inMovement: toStockMovementListItem(inDetail),
+    };
   }
 }
 

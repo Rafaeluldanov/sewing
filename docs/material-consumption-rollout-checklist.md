@@ -331,6 +331,41 @@ sidebar сознательно **нет** (см. §8 границ MVP и
    `/admin/stock-adjustments` нет, в sidebar новых пунктов не
    появилось.
 
+### 4.5b Проверка перемещения остатка между складами
+
+1. На `/admin/warehouses?tab=balances` нажать кнопку «Переместить».
+2. Выбрать исходный остаток с положительным `qty`, выбрать склад
+   назначения (отличный от source), ввести `qty > 0` (не больше
+   текущего остатка), заполнить комментарий, сохранить.
+3. Убедиться:
+   - вкладка «Остатки» обновилась — у источника `qty` уменьшился
+     ровно на `qty` перемещения; у назначения появился (или
+     увеличился) `StockBalance` с тем же `workshopNeedId`,
+     `description`, `materialRole`, `unit` и `unitCost` =
+     `source.unitCost`;
+   - вкладка «Движения» содержит **две** новые записи типа
+     «Перемещение» (`type = TRANSFER`):
+     - «Расход» (`direction = OUT`) на исходной локации;
+     - «Приход» (`direction = IN`) на целевой локации;
+   - повторный submit с тем же `clientRequestId` (защита от
+     двойного клика) НЕ создаёт новую пару — backend возвращает
+     существующую.
+4. **Strict-режим**: попробовать переместить количество, превышающее
+   `source.qty`, — ожидать понятный текст ошибки
+   `MATERIAL_STOCK_INSUFFICIENT`, балансы НЕ изменились, новых
+   движений в журнале нет, **независимо** от
+   `CompanySettings.allowNegativeMaterialStock` (transfer всегда
+   strict).
+5. **Same-location гейт**: попробовать переместить в ту же
+   локацию (тот же `warehouseId` + `cellId`) — ожидать ошибку
+   `STOCK_TRANSFER_SAME_LOCATION`.
+6. Убедиться:
+   - `MaterialIssue.totalCost` / order summary / план-факт /
+     production cost по заказу источника **не изменились** —
+     transfer живёт строго в плоскости склада;
+   - отдельной страницы `/admin/stock-transfer[s]` нет, в sidebar
+     новых пунктов не появилось.
+
 ### 4.6 Проверка сторно `MaterialIssue`
 
 1. Подготовить POSTED-документ расхода — например, через сценарий
@@ -449,6 +484,7 @@ sidebar сознательно **нет** (см. §8 границ MVP и
 | GET | `/api/stock/balances` | Список текущих остатков (фильтры: `workshopNeedId`, `orderId`, `warehouseId`, `cellId`, `materialRole`, `unit`, `q`, `positiveOnly` / `negativeOnly` / `zeroOnly`) |
 | GET | `/api/stock/movements` | Журнал движений (фильтры: `workshopNeedId`, `orderId`, `stockBalanceId`, `warehouseId`, `cellId`, `type`, `direction`, `sourceType`, `sourceId`, `purchaseReceiptId`, `purchaseReceiptLineId`, `materialIssueId`, `materialIssueLineId`, `from`, `to`, `q`) |
 | POST | `/api/stock/adjustments` | Ручная корректировка остатка (создаёт `StockMovement` `type=ADJUSTMENT`, см. `docs/api.md §«26a.3»`) |
+| POST | `/api/stock/transfers` | Перемещение остатка между складами / ячейками (создаёт пару `StockMovement` `type=TRANSFER` `OUT`+`IN`, см. `docs/api.md §«26a.4»`) |
 | GET | `/api/orders/:orderId/material-issues` | Список `MaterialIssue` по заказу |
 | GET | `/api/material-issues/:id` | Детали одного документа со строками |
 | GET | `/api/company-settings` | Текущие настройки, включая оба флага |
@@ -457,11 +493,13 @@ sidebar сознательно **нет** (см. §8 границ MVP и
 Особенности:
 
 - **API требует авторизацию** — без сессии 401.
-- **Единственная stock mutation** — `POST /api/stock/adjustments`
-  (ручная корректировка). Никаких transfer / cancel adjustment / FIFO
-  / партий через REST не предусмотрено. Автоматические IN/OUT/REVERSAL
-  по-прежнему пишет бизнес-flow (`PurchaseReceiptsService`,
-  `MaterialIssuesService`) через `StockService.applyMovementInTx`.
+- **Stock mutations**: ручная корректировка
+  (`POST /api/stock/adjustments`) и перемещение между складами /
+  ячейками (`POST /api/stock/transfers`). Никаких cancel adjustment /
+  cancel transfer / FIFO / партий через REST не предусмотрено.
+  Автоматические IN/OUT/REVERSAL по-прежнему пишет бизнес-flow
+  (`PurchaseReceiptsService`, `MaterialIssuesService`) через
+  `StockService.applyMovementInTx`.
 - **`sourceKey` не отдаётся наружу** — внутренний идемпотентный ключ
   `StockMovement.sourceKey` сознательно вырезан из публичного
   response (`toStockMovementListItem`) и не объявлен в frontend
@@ -481,7 +519,12 @@ sidebar сознательно **нет** (см. §8 границ MVP и
   `StockBalance.unitCost` (средневзвешенная);
 - нет сложной multi-warehouse фильтрации / группировок по складу /
   отдельной сводки по складам в UI;
-- нет transfer между складами / ячейками;
+- transfer между складами / ячейками реализован как пара
+  `StockMovement` `type=TRANSFER` (`OUT`+`IN`) через
+  `POST /api/stock/transfers`; UI — кнопка «Переместить» во вкладке
+  `/admin/warehouses?tab=balances`. Остаются нерешёнными: cell
+  selector в форме перемещения (ждём API списка ячеек по складу) и
+  отмена / удаление transfer;
 - нет возврата / сторно POSTED `MaterialIssue` (POSTED отменить
   нельзя — DRAFT cancel не пишет движение);
 - нет новых ролей `WAREHOUSE_MANAGER` / `PURCHASER` / `ACCOUNTANT`
@@ -553,7 +596,14 @@ Backlog по оси «материалы / склад» (порядок орие
    - `cellId`;
    - `orderId`;
    - `negativeOnly`.
-4. **Transfer между складами / ячейками.**
+4. **Transfer между складами / ячейками** — реализовано как пара
+   `StockMovement` `type=TRANSFER` (`OUT`+`IN`) через
+   `POST /api/stock/transfers`. UI — кнопка «Переместить» во
+   вкладке `/admin/warehouses?tab=balances`. Идемпотентность по
+   `clientRequestId` (UNIQUE на парных
+   `STOCK_TRANSFER:<id>:OUT|IN`-ключах). Backlog: cell selector в
+   форме перемещения (нужен API списка ячеек по складу) и
+   отмена / удаление transfer.
 5. **Master-модель `Material`** (отдельная сущность вместо
    идентификации через `WorkshopNeed`).
 6. **`MaterialStockLot` / партии.**

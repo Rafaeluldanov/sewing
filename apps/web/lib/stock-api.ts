@@ -58,7 +58,8 @@ export type StockMovementType =
   | 'PURCHASE_RECEIPT'
   | 'MATERIAL_ISSUE'
   | 'ADJUSTMENT'
-  | 'REVERSAL';
+  | 'REVERSAL'
+  | 'TRANSFER';
 
 export interface StockBalanceListItem {
   id: string;
@@ -190,16 +191,66 @@ export interface CreateStockAdjustmentDto {
 }
 
 /**
- * `POST /api/stock/adjustments` — единственная mutation в API склада
- * на этой итерации. Возвращает созданное (или ранее существовавшее
- * при идемпотентном повторе) `StockMovement` в shape
- * `StockMovementListItem`. `sourceKey` сознательно НЕ возвращается
- * (см. `StockService.toStockMovementListItem`).
+ * `POST /api/stock/adjustments` — ручная корректировка остатка.
+ * Возвращает созданное (или ранее существовавшее при идемпотентном
+ * повторе) `StockMovement` в shape `StockMovementListItem`. `sourceKey`
+ * сознательно НЕ возвращается (см. `StockService.toStockMovementListItem`).
  */
 export function createStockAdjustment(
   body: CreateStockAdjustmentDto,
 ): Promise<StockMovementListItem> {
   return apiFetch<StockMovementListItem>('/stock/adjustments', {
+    method: 'POST',
+    body,
+  });
+}
+
+/**
+ * Body для `POST /api/stock/transfers` — перемещение остатка между
+ * складами / ячейками из UI `/admin/warehouses?tab=balances`,
+ * кнопка «Переместить» (см.
+ * `apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`).
+ *
+ * `workshopNeedId`, `unit`, `unitCost`, `description` сервис берёт из
+ * исходного `StockBalance` — клиент их не присылает.
+ *
+ * `clientRequestId` опционален; если передан — становится частью
+ * пары идемпотентных `sourceKey`-ключей в `StockMovement`
+ * (`STOCK_TRANSFER:<id>:OUT` / `STOCK_TRANSFER:<id>:IN`). UI всё равно
+ * присылает `clientRequestId`, чтобы повторный submit при двойном
+ * клике / network retry не задвоил движения.
+ */
+export interface CreateStockTransferDto {
+  fromStockBalanceId: string;
+  toWarehouseId?: string | null;
+  toCellId?: string | null;
+  qty: string | number;
+  comment: string;
+  clientRequestId?: string;
+}
+
+/**
+ * Ответ `POST /api/stock/transfers` — пара движений `type = TRANSFER`
+ * + сам `transferId` (идентификатор пары, совпадает с
+ * `clientRequestId`). `sourceKey` сознательно НЕ возвращается.
+ */
+export interface CreateStockTransferResponse {
+  transferId: string;
+  outMovement: StockMovementListItem;
+  inMovement: StockMovementListItem;
+}
+
+/**
+ * `POST /api/stock/transfers` — перемещение остатка склад-в-склад /
+ * ячейка-в-ячейка. Создаёт пару `StockMovement` `type = TRANSFER`
+ * (`OUT` из источника + `IN` в назначение) в одной транзакции;
+ * `sourceKey` для обоих движений строится по `clientRequestId`,
+ * поэтому повторный submit идемпотентен.
+ */
+export function createStockTransfer(
+  body: CreateStockTransferDto,
+): Promise<CreateStockTransferResponse> {
+  return apiFetch<CreateStockTransferResponse>('/stock/transfers', {
     method: 'POST',
     body,
   });

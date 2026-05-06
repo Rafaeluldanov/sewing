@@ -523,12 +523,69 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
   - В UI `StockMovementsTable` тип `ADJUSTMENT` уже отрисовывается
     как «Корректировка» (`StockMovementTypeBadge`); после успешной
     корректировки движение появится во вкладке «Движения».
-  - Сознательно **не реализованы** на этой итерации: transfer
-    между складами/ячейками, FIFO / LIFO / `MaterialStockLot`,
-    `StockAdjustment` master-модель, master-`Material`,
-    delete / cancel adjustment, новые роли `WAREHOUSE_MANAGER` /
-    `PURCHASER` / `ACCOUNTANT`. Запреты зафиксированы в smoke-
-    тесте `tests/smoke/stock-adjustments.smoke.test.ts`.
+  - Сознательно **не реализованы** на этой итерации: FIFO / LIFO /
+    `MaterialStockLot`, `StockAdjustment` master-модель,
+    master-`Material`, delete / cancel adjustment, новые роли
+    `WAREHOUSE_MANAGER` / `PURCHASER` / `ACCOUNTANT`. Запреты
+    зафиксированы в smoke-тесте `tests/smoke/stock-adjustments.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Перемещение остатка между складами»
+  (`apps/api/src/modules/stock/stock.controller.ts::createTransfer`,
+  `apps/api/src/modules/stock/stock.service.ts::createTransfer`,
+  `apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`,
+  `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+  `apps/web/components/warehouses/stock/stock-transfer-button.tsx`,
+  `apps/web/lib/stock-api.ts::createStockTransfer`,
+  `docs/api.md §«26a.4 POST /api/stock/transfers»`):
+  - в разделе «Склады» во вкладке «Остатки»
+    (`/admin/warehouses?tab=balances`) появилась кнопка
+    «Переместить» рядом с кнопкой «Корректировка». Открывает
+    inline-форму прямо над таблицей — отдельной страницы / пункта
+    меню / sidebar-item не вводим.
+  - Backend mutation: `POST /api/stock/transfers`
+    (`@Roles('ADMIN', 'SHOP_MANAGER')`). Body — `fromStockBalanceId`,
+    `toWarehouseId?`, `toCellId?`, `qty`, `comment`,
+    `clientRequestId?`. Создаёт **пару** `StockMovement`
+    `type = TRANSFER`: `OUT` уменьшает источник,
+    `IN` создаёт / увеличивает назначение; пишет audit
+    `STOCK_TRANSFER_CREATED` (под `entityType = STOCK_MOVEMENT`,
+    `entityId = outMovement.id`) — всё в одной транзакции.
+  - Destination resolve: если передан `toCellId` —
+    destination warehouse берётся из `Cell.warehouseId` (с fallback
+    на `toWarehouseId`); если `toCellId` не передан —
+    destination `cellId = null`.
+  - **Strict-режим**: при `source.qty < qty` отдаём 409
+    `MATERIAL_STOCK_INSUFFICIENT`, баланс не меняется, ни одно
+    движение не пишется. `CompanySettings.allowNegativeMaterialStock`
+    на transfer **не влияет** — отрицательный остаток источника
+    через transfer запрещён независимо от глобальных настроек.
+  - Same-location гейт: если destination
+    (`warehouseId` + `cellId`) совпадает с source — 409
+    `STOCK_TRANSFER_SAME_LOCATION`.
+  - **Идемпотентность**: один `clientRequestId` → пара движений
+    по UNIQUE-ключам `STOCK_TRANSFER:<clientRequestId>:OUT` и
+    `STOCK_TRANSFER:<clientRequestId>:IN`. Повторный submit
+    возвращает существующую пару и не апдейтит балансы повторно.
+    Если найден только один из ключей (структурная аномалия) —
+    409 `STOCK_TRANSFER_INCONSISTENT_STATE`. Если `clientRequestId`
+    не передан — сервер генерирует свой UUID. `sourceKey` ни одного
+    из двух движений в response **не отдаётся**.
+  - **IN использует `source.unitCost`** — destination через
+    `applyMovementInTx` пересчитывает свою средневзвешенную цену.
+    Transfer **не** меняет `MaterialIssue.totalCost`,
+    `OrderSummary` / плановую/фактическую себестоимость заказа и
+    production cost — движение живёт строго в плоскости склада.
+  - В UI `StockMovementsTable` тип `TRANSFER` отрисовывается как
+    «Перемещение» (`StockMovementTypeBadge`); после успешного
+    перемещения во вкладке «Движения» видны две строки —
+    «Перемещение» / «Расход» и «Перемещение» / «Приход».
+  - Сознательно **не реализованы** на этой итерации: отдельная
+    модель `StockTransfer`, FIFO / LIFO / `MaterialStockLot`,
+    multi-warehouse фильтр на UI, dropdown ячейки назначения
+    (cell selector в форме перемещения скрыт — destination
+    `cellId = null`, ждём API списка ячеек по складу),
+    delete / cancel transfer. Запреты зафиксированы в smoke-
+    тесте `tests/smoke/stock-transfers.smoke.test.ts`.
 
   Frontend-итерация «Настройки компании → Материалы и склад»
   (`apps/web/app/admin/company-settings/settings-form.tsx`,

@@ -7,12 +7,7 @@
  *   MATERIAL_ISSUE   → «Расход материалов» (warning — это всегда OUT)
  *   REVERSAL         → «Сторно»      (muted — служебная коррекция)
  *   ADJUSTMENT       → «Корректировка» (warning — ручная правка)
- *
- * Никаких mutation-кнопок (например, «Сторно» / «Корректировка»)
- * рядом с бейджем не рисуем — UI на этой итерации read-only.
- * Backend ADJUSTMENT-тип формально присутствует в enum, но на MVP
- * никем не записывается; держим лейбл, чтобы при появлении
- * adjustment-документа в будущем UI не падал на «unknown type».
+ *   TRANSFER         → «Перемещение»  (info — пара OUT + IN)
  */
 import { AdminStatusBadge } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
@@ -26,6 +21,7 @@ const TYPE_LABELS: Record<string, { label: string; tone: AdminStatusTone }> = {
   MATERIAL_ISSUE: { label: 'Расход материалов', tone: 'warning' },
   REVERSAL: { label: 'Сторно', tone: 'muted' },
   ADJUSTMENT: { label: 'Корректировка', tone: 'warning' },
+  TRANSFER: { label: 'Перемещение', tone: 'info' },
 };
 
 export function StockMovementTypeBadge({ type }: Props) {
