@@ -29,12 +29,22 @@ export const dynamic = 'force-dynamic';
  * `AppHeader` именно по префиксу `/work` (и по точному пути выпуска
  * паспорта).
  */
-export default async function WorkCutOrdersPage() {
+export default async function WorkCutOrdersPage({
+  searchParams,
+}: {
+  searchParams?: { mode?: string };
+}) {
   // Middleware уже редиректит анонимов, но дополнительно сверяемся:
   // если cookie неактуальна, пусть лучше будет явный редирект, а не
   // пустой UI с непонятной ошибкой 401 в консоли.
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/work/cut-orders');
+
+  // Демо-режим серийного выпуска паспортов отличается только конечной
+  // страницей: вместо `/passports/new` ведём на `/passports/new-demo`.
+  // Логика выбора заказа (один/много/ни одного) не меняется.
+  const isDemo = searchParams?.mode === 'demo';
+  const newPassportPath = isDemo ? 'new-demo' : 'new';
 
   let items: OrderListItemDto[] = [];
   let error: string | null = null;
@@ -51,7 +61,7 @@ export default async function WorkCutOrdersPage() {
 
   // Авто-выбор: один заказ → сразу выпуск паспорта.
   if (!error && items.length === 1) {
-    redirect(`/orders/${items[0].id}/passports/new`);
+    redirect(`/orders/${items[0].id}/passports/${newPassportPath}`);
   }
 
   return (
@@ -60,7 +70,9 @@ export default async function WorkCutOrdersPage() {
         <Link href="/work" className="cut-orders__back" aria-label="Назад">
           ←
         </Link>
-        <h1 className="cut-orders__title">Выберите заказ</h1>
+        <h1 className="cut-orders__title">
+          {isDemo ? 'Выберите заказ (демо)' : 'Выберите заказ'}
+        </h1>
       </header>
 
       {error && (
@@ -87,7 +99,7 @@ export default async function WorkCutOrdersPage() {
             <li key={o.id}>
               <Link
                 className="cut-orders__card"
-                href={`/orders/${o.id}/passports/new`}
+                href={`/orders/${o.id}/passports/${newPassportPath}`}
                 prefetch={false}
               >
                 <span className="cut-orders__card-title">
