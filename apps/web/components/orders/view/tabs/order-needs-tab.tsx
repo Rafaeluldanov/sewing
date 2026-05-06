@@ -157,6 +157,9 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
           <OrderMaterialsUnifiedTable
             orderId={order.id}
             materialIssues={materialIssues}
+            materialsAndHardwareCostPolicy={
+              order.materialsAndHardwareCostPolicy ?? 'INCLUDE'
+            }
           />
           <ManualMaterialArrivalActions
             orderId={order.id}

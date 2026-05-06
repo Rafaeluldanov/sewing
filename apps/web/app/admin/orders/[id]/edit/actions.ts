@@ -135,6 +135,21 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     else customerCurrency = null;
   }
 
+  // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+  // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+  // `packages/shared/src/orders.ts::OrderMaterialsAndHardwareCostPolicy`).
+  // Семантика парсинга: поля нет = не трогать (`undefined`), есть и
+  // пустое = `INCLUDE` (default), `'EXCLUDE'` = давальческое сырьё /
+  // фурнитура клиента, всё остальное = `INCLUDE` (защитный fallback).
+  const policyRaw = form.get('materialsAndHardwareCostPolicy');
+  let materialsAndHardwareCostPolicy: 'INCLUDE' | 'EXCLUDE' | undefined;
+  if (policyRaw === null) {
+    materialsAndHardwareCostPolicy = undefined;
+  } else {
+    const v = String(policyRaw).trim().toUpperCase();
+    materialsAndHardwareCostPolicy = v === 'EXCLUDE' ? 'EXCLUDE' : 'INCLUDE';
+  }
+
   const dto: UpdateOrderDto = {
     orderDate: optionalString(form.get('orderDate')),
     color: optionalNullableString(form.get('color')),
@@ -161,6 +176,7 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     finishedGoodsWarehouseId: optionalNullableString(
       form.get('finishedGoodsWarehouseId'),
     ),
+    materialsAndHardwareCostPolicy,
     status: parseStatus(form),
     customerUnitPrice,
     customerCurrency,

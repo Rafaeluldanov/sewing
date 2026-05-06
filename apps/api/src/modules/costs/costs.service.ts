@@ -190,6 +190,29 @@ export class CostsService {
     //     соответствующие исходные расходы. `totalCost` берём с
     //     backend (`MaterialIssueReturn.totalCost`) — server-side
     //     агрегат, пересчитывать не нужно.
+    //
+    // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+    // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+    // `docs/current-state.md §«Давальческое сырьё клиента»`).
+    // Если у заказа паспорта политика `EXCLUDE`, materialCost этого
+    // паспорта = 0. piecework / salary остаются как раньше — это
+    // компания заплатила своим людям. MaterialIssue / MaterialIssueReturn
+    // в БД при этом не меняются — это исключительно cost-aggregation.
+    const excludedPassportIds = new Set<string>();
+    if (passportIds.length > 0) {
+      const passportsWithPolicy = await this.prisma.passport.findMany({
+        where: { id: { in: passportIds } },
+        select: {
+          id: true,
+          order: { select: { materialsAndHardwareCostPolicy: true } },
+        },
+      });
+      for (const p of passportsWithPolicy) {
+        if (p.order?.materialsAndHardwareCostPolicy === 'EXCLUDE') {
+          excludedPassportIds.add(p.id);
+        }
+      }
+    }
     const materialCostByPassport = new Map<string, number>();
     if (passportIds.length > 0) {
       const [issues, returns] = await Promise.all([
@@ -210,6 +233,7 @@ export class CostsService {
       ]);
       for (const issue of issues) {
         if (!issue.passportId) continue;
+        if (excludedPassportIds.has(issue.passportId)) continue;
         const prev = materialCostByPassport.get(issue.passportId) ?? 0;
         materialCostByPassport.set(
           issue.passportId,
@@ -218,6 +242,7 @@ export class CostsService {
       }
       for (const ret of returns) {
         if (!ret.passportId) continue;
+        if (excludedPassportIds.has(ret.passportId)) continue;
         const prev = materialCostByPassport.get(ret.passportId) ?? 0;
         materialCostByPassport.set(
           ret.passportId,

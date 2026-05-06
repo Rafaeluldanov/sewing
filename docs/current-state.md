@@ -650,6 +650,70 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     раздел / sidebar item, новые роли. Запреты зафиксированы в
     smoke-тесте `tests/smoke/order-finished-goods-warehouse.smoke.test.ts`.
 
+  Backend + Frontend-итерация «Давальческое сырьё клиента»
+  (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+  `prisma/migrations/20260614100000_add_order_materials_and_hardware_cost_policy`,
+  `apps/api/src/modules/orders/orders.service.ts`,
+  `apps/api/src/modules/costs/costs.service.ts`,
+  `apps/api/src/modules/orders/order-cost-estimates.service.ts`,
+  `packages/shared/src/orders.ts`,
+  `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+  `apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx`,
+  `apps/web/components/orders/view/order-management-header.tsx`,
+  `apps/web/components/orders/summary/build-order-summary-rows.ts`,
+  `apps/web/components/orders/materials/order-materials-unified-table.tsx`):
+  - в заказ покупателя добавлена управленческая политика учёта
+    материалов и фурнитуры в себестоимости —
+    `Order.materialsAndHardwareCostPolicy: String @default("INCLUDE")`.
+    Значения: `INCLUDE` — материалы и фурнитура учитываются в
+    себестоимости заказа и в production cost (default); `EXCLUDE` —
+    давальческое сырьё / фурнитура клиента: финансовое включение
+    MATERIAL / HARDWARE отключается.
+  - **Что продолжает работать при `EXCLUDE`** (упрощённый MVP):
+    `WorkshopNeedsService.calculateForOrder` — расчёт потребности
+    материалов и фурнитуры; `OrderMaterialRequirement` snapshot;
+    `MaterialIssue` / `MaterialIssueReturn` — складское списание и
+    возврат; `StockBalance`, `StockMovement`, `StockAdjustment`,
+    `StockTransfer` — остатки и движения; `PurchaseReceipt` — приёмка.
+    План/факт по количеству материалов и фурнитуры остаётся —
+    клиенту всё ещё можно сообщить, сколько ткани и комплектующих
+    нужно для его заказа.
+  - **Что меняется при `EXCLUDE`** (только финансовое включение в
+    себестоимость): `OrderCostEstimatesService.completeCalculation`
+    исключает строки `MATERIAL` / `HARDWARE` из `totalCostRub`
+    (`APPLICATION` остаётся — это услуги/нанесения компании);
+    `CostsService.getProductionCost` обнуляет `materialCost` для
+    паспортов заказов с `EXCLUDE` (piecework / salary не трогаем);
+    UI summary `OrderSummaryUnifiedTable` показывает «Материалы и
+    фурнитура не учитываются в себестоимости», в строках MATERIAL /
+    HARDWARE сумма за тираж = «не учитывается»; UI таблица
+    `OrderMaterialsUnifiedTable` рисует «не учитывается» в колонках
+    «Сумма» и «Стоимость план / факт» по таким строкам.
+  - Backend: `CreateOrderSchema` / `UpdateOrderSchema` принимают
+    `materialsAndHardwareCostPolicy?: 'INCLUDE' | 'EXCLUDE'`.
+    `null` / пустая строка / `undefined` на create трактуется как
+    `INCLUDE` (default), на update `undefined` — Prisma не трогает
+    колонку. `OrderListItemDto` / `OrderDetailDto` отдают
+    `materialsAndHardwareCostPolicy`. Audit: смена поля попадает
+    в `ORDER_UPDATED.changedFields`.
+  - Frontend: select «Учет материалов и фурнитуры в себестоимости»
+    в формах создания (`/admin/orders/new`) и редактирования
+    (`/admin/orders/[id]/edit`), help-text «Если материалы или
+    фурнитуру предоставляет клиент, выберите ‘Не учитывать’.
+    Потребность по количеству всё равно будет рассчитана и
+    показана, но стоимость материалов и фурнитуры не войдёт в
+    себестоимость заказа.» В detail-карточке
+    (`OrderManagementHeader`) — поле «Материалы и фурнитура в
+    себестоимости» с бейджем «Давальческое сырьё / фурнитура
+    клиента» при `EXCLUDE`.
+  - Сознательно **не реализованы** (упрощённый MVP): отдельный
+    ownership-контур, `CustomerMaterialReceipt`, разделение
+    `StockBalance` по владельцу материала, `ownerClientId`,
+    master `Material`, `MaterialStockLot`, FIFO / LIFO, отдельная
+    страница / sidebar item, новые роли. Запреты зафиксированы в
+    smoke-тесте
+    `tests/smoke/order-materials-and-hardware-cost-policy.smoke.test.ts`.
+
   Frontend-итерация «Фильтры склада»
   (`apps/web/app/admin/warehouses/page.tsx`,
   `apps/web/components/warehouses/stock/stock-balances-filters.tsx`,

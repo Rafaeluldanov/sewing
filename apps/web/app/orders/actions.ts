@@ -243,6 +243,11 @@ function buildCreateDto(form: FormData): CreateOrderDto {
     // `null`/`undefined` означают «не выбран» — попадает в БД как
     // `null`. Семантика идентична `companyDivisionId`.
     finishedGoodsWarehouseId: parseFinishedGoodsWarehouseId(form),
+    // Упрощённый MVP давальческого сырья / фурнитуры клиента: на
+    // create поле опционально; backend подставит `INCLUDE`, если
+    // FormData ничего не прислала.
+    materialsAndHardwareCostPolicy:
+      parseMaterialsAndHardwareCostPolicy(form),
     applications,
     customerUnitPrice,
     customerCurrency,
@@ -265,6 +270,28 @@ function parseFinishedGoodsWarehouseId(
   if (raw === null) return undefined;
   const v = String(raw).trim();
   return v === '' ? null : v;
+}
+
+/**
+ * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+ * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+ * `packages/shared/src/orders.ts::OrderMaterialsAndHardwareCostPolicy`).
+ *
+ *   - поля нет в FormData → `undefined` (backend не трогает / на create
+ *     подставит default `INCLUDE`);
+ *   - есть и пустое → `INCLUDE` (default);
+ *   - есть `'EXCLUDE'` → не учитывать материалы и фурнитуру в
+ *     себестоимости (давальческое сырьё клиента);
+ *   - всё остальное → `INCLUDE` (защитный fallback).
+ */
+function parseMaterialsAndHardwareCostPolicy(
+  form: FormData,
+): 'INCLUDE' | 'EXCLUDE' | undefined {
+  const raw = form.get('materialsAndHardwareCostPolicy');
+  if (raw === null) return undefined;
+  const v = String(raw).trim().toUpperCase();
+  if (v === 'EXCLUDE') return 'EXCLUDE';
+  return 'INCLUDE';
 }
 
 function buildUpdateDto(form: FormData): UpdateOrderDto {
@@ -349,6 +376,10 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     // поля нет = не трогать, пустая строка = снять, иначе =
     // переустановить (backend валидирует existence + isActive).
     finishedGoodsWarehouseId: parseFinishedGoodsWarehouseId(form),
+    // Упрощённый MVP давальческого сырья: при PATCH поля нет →
+    // backend не трогает колонку, иначе пишем `INCLUDE` / `EXCLUDE`.
+    materialsAndHardwareCostPolicy:
+      parseMaterialsAndHardwareCostPolicy(form),
     customerUnitPrice,
     customerCurrency,
   };

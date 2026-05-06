@@ -53,8 +53,13 @@ import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import type {
   OrderDetailDto,
+  OrderMaterialsAndHardwareCostPolicy,
   OrderStatus,
   SizeDto,
+} from '@sewing/shared/orders';
+import {
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS,
 } from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
@@ -241,6 +246,17 @@ export function AdminEditOrderForm({
   const [customerCurrency, setCustomerCurrency] = useState<MoneyCurrency | ''>(
     order.customerCurrency ?? '',
   );
+  // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+  // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+  // Default — `INCLUDE` (старая семантика «учитывается в себестоимости»).
+  // Управленческое поле — меняется на любом статусе заказа, без
+  // ORDER_LOCKED-ограничений.
+  const [
+    materialsAndHardwareCostPolicy,
+    setMaterialsAndHardwareCostPolicy,
+  ] = useState<OrderMaterialsAndHardwareCostPolicy>(
+    order.materialsAndHardwareCostPolicy ?? 'INCLUDE',
+  );
   const [comment, setComment] = useState<string>(order.comment ?? '');
 
   const fieldError = (key: string): string | undefined =>
@@ -410,6 +426,37 @@ export function AdminEditOrderForm({
                     Склад, на который должна поступить готовая продукция
                     после производства / упаковки. Это не склад
                     материалов.
+                  </span>
+                </div>
+
+                <div className="order-hero-card__field">
+                  <label htmlFor="materialsAndHardwareCostPolicy">
+                    Учет материалов и фурнитуры в себестоимости
+                  </label>
+                  <select
+                    id="materialsAndHardwareCostPolicy"
+                    name="materialsAndHardwareCostPolicy"
+                    value={materialsAndHardwareCostPolicy}
+                    onChange={(e) =>
+                      setMaterialsAndHardwareCostPolicy(
+                        e.target.value as OrderMaterialsAndHardwareCostPolicy,
+                      )
+                    }
+                  >
+                    {ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES.map((p) => (
+                      <option key={p} value={p}>
+                        {p === 'EXCLUDE'
+                          ? 'Не учитывать — давальческое сырьё / фурнитура клиента'
+                          : ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS[p]}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="order-hero-card__field-hint">
+                    Если материалы или фурнитуру предоставляет клиент,
+                    выберите «Не учитывать». Потребность по количеству
+                    всё равно будет рассчитана и показана, но стоимость
+                    материалов и фурнитуры не войдёт в себестоимость
+                    заказа.
                   </span>
                 </div>
 

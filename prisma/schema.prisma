@@ -1173,6 +1173,35 @@ model Order {
   finishedGoodsWarehouseId String?
   finishedGoodsWarehouse   Warehouse? @relation("OrderFinishedGoodsWarehouse", fields: [finishedGoodsWarehouseId], references: [id], onDelete: SetNull)
 
+  /// Упрощённая политика учёта материалов и фурнитуры в себестоимости
+  /// заказа (см. `docs/current-state.md §«Давальческое сырьё клиента»`,
+  /// `apps/api/src/modules/orders/orders.service.ts::create / update`,
+  /// `apps/api/src/modules/costs/costs.service.ts`,
+  /// `apps/web/components/orders/summary/build-order-summary-rows.ts`).
+  ///
+  /// Значения:
+  ///   - `INCLUDE` — материалы и фурнитура учитываются в себестоимости
+  ///     заказа и в production cost. Это default для всех новых и
+  ///     исторических заказов (backward-compat).
+  ///   - `EXCLUDE` — давальческое сырьё / фурнитура клиента: расчёт
+  ///     потребности материалов и фурнитуры всё равно выполняется,
+  ///     складские движения работают как раньше, но финансовое
+  ///     включение MATERIAL / HARDWARE в себестоимость отключается
+  ///     (план = `null` / `0`, факт = `0`, дельта = `null`).
+  ///
+  /// Поле сознательно `String` (а не Prisma enum): в проекте многие
+  /// статусы/режимы хранятся строкой (`MaterialIssue.status`,
+  /// `Order.customerCurrency`), и расширение списка значений в
+  /// будущем не потребует миграции схемы.
+  ///
+  /// Это **только** про себестоимость. `WorkshopNeed`,
+  /// `OrderMaterialRequirement`, `MaterialIssue`, `MaterialIssueReturn`,
+  /// `StockBalance`, `StockMovement`, `StockAdjustment`, `StockTransfer`
+  /// в этом контуре не меняются — складская и логистическая часть
+  /// продолжает работать как раньше, чтобы клиенту можно было
+  /// сообщить количество материалов и фурнитуры по его заказу.
+  materialsAndHardwareCostPolicy String @default("INCLUDE")
+
   @@index([status])
   @@index([orderDate])
   @@index([createdAt])
@@ -1183,6 +1212,7 @@ model Order {
   @@index([dueDate])
   @@index([companyDivisionId])
   @@index([finishedGoodsWarehouseId])
+  @@index([materialsAndHardwareCostPolicy])
 }
 
 /// Карточка клиента (управленческий справочник, см. `docs/domain.md

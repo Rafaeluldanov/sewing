@@ -51,7 +51,14 @@ import {
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
-import type { SizeDto } from '@sewing/shared/orders';
+import type {
+  OrderMaterialsAndHardwareCostPolicy,
+  SizeDto,
+} from '@sewing/shared/orders';
+import {
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS,
+} from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
   MONEY_CURRENCY_LABELS,
@@ -199,6 +206,11 @@ export function AdminCreateOrderForm({
   );
   const [finishedGoodsWarehouseId, setFinishedGoodsWarehouseId] =
     useState<string>('');
+  // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+  // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+  // Default — `INCLUDE` (учитывать в себестоимости как раньше).
+  const [materialsAndHardwareCostPolicy, setMaterialsAndHardwareCostPolicy] =
+    useState<OrderMaterialsAndHardwareCostPolicy>('INCLUDE');
   const [dueDate, setDueDate] = useState<string>('');
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>('');
   const [customerCurrency, setCustomerCurrency] =
@@ -369,6 +381,12 @@ export function AdminCreateOrderForm({
                   setFinishedGoodsWarehouseId
                 }
                 warehouses={activeWarehouses}
+                materialsAndHardwareCostPolicy={
+                  materialsAndHardwareCostPolicy
+                }
+                onMaterialsAndHardwareCostPolicyChange={
+                  setMaterialsAndHardwareCostPolicy
+                }
                 dueDate={dueDate}
                 onDueDateChange={setDueDate}
                 today={today}
@@ -467,6 +485,8 @@ function BasicsCreateFields({
   finishedGoodsWarehouseId,
   onFinishedGoodsWarehouseIdChange,
   warehouses,
+  materialsAndHardwareCostPolicy,
+  onMaterialsAndHardwareCostPolicyChange,
   dueDate,
   onDueDateChange,
   today,
@@ -489,6 +509,11 @@ function BasicsCreateFields({
   finishedGoodsWarehouseId: string;
   onFinishedGoodsWarehouseIdChange: (v: string) => void;
   warehouses: WarehouseSummaryDto[];
+  /** Упрощённый MVP давальческого сырья / фурнитуры клиента. */
+  materialsAndHardwareCostPolicy: OrderMaterialsAndHardwareCostPolicy;
+  onMaterialsAndHardwareCostPolicyChange: (
+    v: OrderMaterialsAndHardwareCostPolicy,
+  ) => void;
   dueDate: string;
   onDueDateChange: (v: string) => void;
   today: string;
@@ -559,6 +584,36 @@ function BasicsCreateFields({
         <span className="order-hero-card__field-hint">
           Склад, на который должна поступить готовая продукция после
           производства / упаковки. Это не склад материалов.
+        </span>
+      </div>
+
+      <div className="order-hero-card__field">
+        <label htmlFor="materialsAndHardwareCostPolicy">
+          Учет материалов и фурнитуры в себестоимости
+        </label>
+        <select
+          id="materialsAndHardwareCostPolicy"
+          name="materialsAndHardwareCostPolicy"
+          value={materialsAndHardwareCostPolicy}
+          onChange={(e) =>
+            onMaterialsAndHardwareCostPolicyChange(
+              e.target.value as OrderMaterialsAndHardwareCostPolicy,
+            )
+          }
+        >
+          {ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES.map((p) => (
+            <option key={p} value={p}>
+              {p === 'EXCLUDE'
+                ? 'Не учитывать — давальческое сырьё / фурнитура клиента'
+                : ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS[p]}
+            </option>
+          ))}
+        </select>
+        <span className="order-hero-card__field-hint">
+          Если материалы или фурнитуру предоставляет клиент, выберите
+          «Не учитывать». Потребность по количеству всё равно будет
+          рассчитана и показана, но стоимость материалов и фурнитуры
+          не войдёт в себестоимость заказа.
         </span>
       </div>
 

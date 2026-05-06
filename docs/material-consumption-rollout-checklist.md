@@ -460,6 +460,68 @@ UI-фильтры живут в существующем разделе `/admin/
 > `FinishedGoodsMovement`) на этой итерации сознательно не
 > реализована.
 
+### 4.5e Проверка «Давальческое сырьё / фурнитура клиента» (упрощённый MVP)
+
+Упрощённый MVP: на заказе появилась политика
+`Order.materialsAndHardwareCostPolicy = INCLUDE | EXCLUDE` (см.
+`prisma/schema.prisma`, `docs/current-state.md §«Давальческое сырьё
+клиента»`). Отдельный ownership-контур, `CustomerMaterialReceipt`,
+ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
+**не реализуются** в этой итерации.
+
+1. Открыть `/admin/orders/new`. В блоке «Основное» рядом со «Склад
+   выпуска готовой продукции» появилось поле «Учет материалов и
+   фурнитуры в себестоимости» с двумя вариантами:
+   - **«Учитывать материалы и фурнитуру»** (default);
+   - **«Не учитывать — давальческое сырьё / фурнитура клиента»**.
+2. Создать заказ с **«Не учитывать»**. Прогнать flow:
+   1) расчёт потребности (`POST /api/orders/:id/start-calculation`);
+   2) проверить, что `WorkshopNeed[]` собран — потребность по
+      количеству материалов и фурнитуры есть, snapshot
+      `OrderMaterialRequirement[]` фиксируется как раньше;
+   3) создать и провести `MaterialIssue` (`POST /api/material-issues`
+      → `/post`) с `workshopNeedId` и `unit`;
+   4) проверить, что `StockBalance.qty` уменьшился, `StockMovement`
+      OUT появился, документ `POSTED` — складские движения работают
+      без изменений;
+   5) в карточке заказа во вкладке «Потребности»
+      (`OrderMaterialsUnifiedTable`) колонки «Сумма» и «Стоимость
+      план / факт» по строкам MATERIAL / HARDWARE показывают
+      «не учитывается»; план/факт по количеству и Δ остаются;
+   6) во вкладке «Сводно по заказу» в order-level warnings есть
+      «Материалы и фурнитура не учитываются в себестоимости»;
+      `materialActualCostRub` = 0, `byKind.material` = 0/null,
+      строки MATERIAL / HARDWARE в таблице с totalDisplay
+      «не учитывается»;
+   7) `OrderCostEstimatesService.completeCalculation` — `totalCostRub`
+      собирается без MATERIAL / HARDWARE строк (APPLICATION
+      сохраняется);
+   8) `GET /api/costs/production-cost` за период с упакованными
+      паспортами этого заказа — `materialCost` для этих паспортов
+      = 0, `pieceworkCost` / `salaryCost` остаются как раньше.
+3. Создать заказ с **«Учитывать»** (default). Тот же flow — старая
+   логика без изменений: материалы и фурнитура входят в
+   `OrderCostEstimate.totalCostRub` и в production cost.
+4. PATCH `materialsAndHardwareCostPolicy` на любом статусе заказа
+   разрешён (управленческое поле, без `ORDER_LOCKED`-guard).
+   Невалидное значение → 400
+   `ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_INVALID`. `null` /
+   пустая строка трактуется как `INCLUDE`.
+5. Убедиться, что **не появилось**: отдельной страницы под
+   давальческое сырьё (`/admin/given-materials`,
+   `/admin/customer-materials`), новых пунктов в sidebar, новых
+   ролей, отдельных моделей `CustomerMaterialReceipt`,
+   `MaterialStockLot`, master `Material`, ownership-полей
+   (`ownerClientId`).
+
+> **Контуры**: «складское списание / расход» (`MaterialIssue` +
+> `StockMovement` + `StockBalance`) и «учёт в себестоимости»
+> (`OrderCostEstimate.totalCostRub`,
+> `CostsService.materialCost`) — два разных контура. Поле
+> `materialsAndHardwareCostPolicy` управляет **только финансовым**
+> контуром: складские движения и расчёт потребности продолжают
+> работать.
+
 ### 4.6 Проверка сторно `MaterialIssue`
 
 1. Подготовить POSTED-документ расхода — например, через сценарий

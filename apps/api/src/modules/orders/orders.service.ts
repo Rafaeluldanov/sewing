@@ -15,10 +15,12 @@ import type {
   OrderDeadlineDto,
   OrderDetailDto,
   OrderListItemDto,
+  OrderMaterialsAndHardwareCostPolicy,
   OrderOutsourceDisplayStatus,
   Paginated,
   UpdateOrderDto,
 } from '@sewing/shared/orders';
+import { ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES } from '@sewing/shared/orders';
 import {
   evaluateOrderDeadline,
   type EvaluateOrderDeadlineInput,
@@ -291,6 +293,16 @@ export class OrdersService {
           // эквивалентен «не задан» — пишем `null`.
           finishedGoodsWarehouseId:
             finishedGoodsWarehouseIdForCreate ?? null,
+          // Упрощённый MVP давальческого сырья / фурнитуры клиента:
+          // на create обязательно фиксируем политику. Если поле не
+          // пришло / пустое / null → default `INCLUDE` (старая
+          // семантика — материалы и фурнитура учитываются в
+          // себестоимости).
+          materialsAndHardwareCostPolicy:
+            resolveMaterialsAndHardwareCostPolicy(
+              dto.materialsAndHardwareCostPolicy,
+              'create',
+            ) ?? 'INCLUDE',
           items: {
             create: dto.items.map((i) => ({
               productId: productIdForItems,
@@ -674,6 +686,13 @@ export class OrdersService {
       name: string;
       code: string | null;
     } | null;
+    /**
+     * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+     * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+     * В БД хранится строкой; маппер ниже сужает к
+     * `OrderMaterialsAndHardwareCostPolicy`.
+     */
+    materialsAndHardwareCostPolicy: string;
     operationCostPlanRub: Prisma.Decimal | null;
     operationTimePlanSec: number | null;
     operationPlanCalculatedAt: Date | null;
@@ -759,6 +778,14 @@ export class OrdersService {
             code: o.finishedGoodsWarehouse.code,
           }
         : null,
+      // Упрощённый MVP давальческого сырья / фурнитуры клиента:
+      // нормализованная политика учёта (`INCLUDE` / `EXCLUDE`).
+      // Backend кладёт всегда — default `INCLUDE` для исторических
+      // заказов после миграции.
+      materialsAndHardwareCostPolicy:
+        normalizeMaterialsAndHardwareCostPolicy(
+          o.materialsAndHardwareCostPolicy,
+        ),
       // Этап 2 «План операций на заказе»: snapshot полей в API.
       // Decimal сериализуется строкой (`toString`), warnings —
       // нормализуются через helper, который не падает на не-массивах
@@ -1272,6 +1299,18 @@ export class OrdersService {
         ? undefined
         : dto.finishedGoodsWarehouseId ?? null,
     );
+    // Упрощённый MVP давальческого сырья: трек-аудит политики учёта
+    // материалов и фурнитуры. Резолвим в `update`-режиме —
+    // `undefined`-passthrough означает «поле не пришло, не трогать».
+    const policyForUpdate = resolveMaterialsAndHardwareCostPolicy(
+      dto.materialsAndHardwareCostPolicy,
+      'update',
+    );
+    trackScalar(
+      'materialsAndHardwareCostPolicy',
+      (current.materialsAndHardwareCostPolicy as string) ?? 'INCLUDE',
+      policyForUpdate ?? undefined,
+    );
     trackScalar('productId', currentProductId ?? null, dto.productId);
     trackScalar('routeTemplateId', current.routeTemplateId, dto.routeTemplateId);
     trackScalar('techCardId', current.techCardId, dto.techCardId);
@@ -1333,7 +1372,8 @@ export class OrdersService {
         dto.companyDivisionId !== undefined ||
         dto.customerUnitPrice !== undefined ||
         dto.customerCurrency !== undefined ||
-        dto.finishedGoodsWarehouseId !== undefined;
+        dto.finishedGoodsWarehouseId !== undefined ||
+        dto.materialsAndHardwareCostPolicy !== undefined;
 
       // Резолвим `companyDivisionId` только если он реально пришёл в
       // PATCH. `undefined` — Prisma колонку не трогает; явный `null`
@@ -1394,6 +1434,12 @@ export class OrdersService {
             customerUnitPrice: customerPriceForPrisma,
             customerCurrency: customerCurrencyForPrisma,
             finishedGoodsWarehouseId: finishedGoodsWarehouseIdForPrisma,
+            // Упрощённый MVP давальческого сырья: `undefined` — поле
+            // не пришло, Prisma колонку не трогает; иначе пишем
+            // нормализованное `INCLUDE` / `EXCLUDE`. Это
+            // управленческая политика — меняется на любом статусе
+            // заказа, никаких ORDER_LOCKED-ограничений.
+            materialsAndHardwareCostPolicy: policyForUpdate,
           },
         });
       }
@@ -2292,6 +2338,16 @@ export class OrdersService {
             code: order.finishedGoodsWarehouse.code,
           }
         : null,
+      // Упрощённый MVP давальческого сырья / фурнитуры клиента:
+      // та же нормализация политики, что в `toListItemDto`. UI
+      // карточки заказа (`/admin/orders/[id]`) показывает бейдж
+      // «Не учитываются», когда `EXCLUDE`; backend по этой же
+      // политике решает, включать ли MATERIAL/HARDWARE в
+      // себестоимость.
+      materialsAndHardwareCostPolicy:
+        normalizeMaterialsAndHardwareCostPolicy(
+          order.materialsAndHardwareCostPolicy,
+        ),
       // Этап 2 «План операций на заказе»: те же snapshot-поля, что
       // в `toListItemDto`. Здесь они нужны, чтобы карточка заказа
       // (`/admin/orders/[id]`) отрисовала блок «План операций» —
@@ -2954,6 +3010,68 @@ function resolveCustomerPriceAndCurrency(
     customerUnitPrice: rawPrice,
     customerCurrency: currency ?? null,
   };
+}
+
+/**
+ * Упрощённый MVP давальческого сырья / фурнитуры клиента: маппер
+ * raw-значения колонки в нормализованную shared-политику.
+ *
+ * В БД (`Order.materialsAndHardwareCostPolicy`) хранится строкой,
+ * default = `INCLUDE` (см. миграцию). Любое неожиданное значение
+ * (исторические данные / ручная правка) трактуем как `INCLUDE` —
+ * это безопасный default «материалы и фурнитура учитываются как
+ * раньше».
+ */
+function normalizeMaterialsAndHardwareCostPolicy(
+  raw: string | null | undefined,
+): OrderMaterialsAndHardwareCostPolicy {
+  if (typeof raw !== 'string') return 'INCLUDE';
+  const normalized = raw.trim().toUpperCase();
+  return ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES.includes(
+    normalized as OrderMaterialsAndHardwareCostPolicy,
+  )
+    ? (normalized as OrderMaterialsAndHardwareCostPolicy)
+    : 'INCLUDE';
+}
+
+/**
+ * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+ * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+ * `packages/shared/src/orders.ts::OrderMaterialsAndHardwareCostPolicy`).
+ *
+ * Нормализует вход из DTO (Zod-схема уже привела к `INCLUDE` /
+ * `EXCLUDE` / `undefined`):
+ *   - `undefined` на create → `INCLUDE` (default);
+ *   - `undefined` на update → `undefined` (Prisma не трогает колонку);
+ *   - валидное значение → как есть;
+ *   - всё остальное → reject через 400 (защитный fallback —
+ *     Zod-схема такого не пропустит).
+ *
+ * Функция используется и в `create` (`mode: 'create'` → null-safe
+ * default), и в `update` (`mode: 'update'` → undefined-passthrough).
+ */
+function resolveMaterialsAndHardwareCostPolicy(
+  raw: OrderMaterialsAndHardwareCostPolicy | string | null | undefined,
+  mode: 'create' | 'update',
+): OrderMaterialsAndHardwareCostPolicy | undefined {
+  if (raw === undefined || raw === null || raw === '') {
+    return mode === 'create' ? 'INCLUDE' : undefined;
+  }
+  const normalized =
+    typeof raw === 'string' ? raw.trim().toUpperCase() : raw;
+  if (
+    !ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES.includes(
+      normalized as OrderMaterialsAndHardwareCostPolicy,
+    )
+  ) {
+    throw new BadRequestException({
+      statusCode: 400,
+      code: 'ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_INVALID',
+      message:
+        'Недопустимое значение «учёт материалов и фурнитуры в себестоимости»',
+    });
+  }
+  return normalized as OrderMaterialsAndHardwareCostPolicy;
 }
 
 /**

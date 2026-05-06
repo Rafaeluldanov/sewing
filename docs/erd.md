@@ -154,6 +154,16 @@
     готовая продукция как stock-сущность на этой итерации не
     моделируется. Backend (`OrdersService`) валидирует existence +
     `isActive` (400 `WAREHOUSE_NOT_FOUND`, 409 `WAREHOUSE_INACTIVE`).
+  - **Учёт материалов и фурнитуры в себестоимости**:
+    `materialsAndHardwareCostPolicy: String @default("INCLUDE")`,
+    значения `INCLUDE` / `EXCLUDE` (см. `docs/current-state.md
+    §«Давальческое сырьё клиента»`). При `EXCLUDE` MATERIAL /
+    HARDWARE строки не входят в `OrderCostEstimate.totalCostRub` и
+    в production cost (`CostsService.getProductionCost.materialCost`
+    для паспортов заказа = 0). Расчёт потребности (`WorkshopNeed`),
+    `MaterialIssue` / `MaterialIssueReturn`, `StockBalance` и
+    `StockMovement` НЕ затрагиваются — это исключительно
+    финансовая политика. Индекс — `materialsAndHardwareCostPolicy`.
   - Связи: `OrderItem[]`, `Passport[]`, `OrderRouteStep[]`,
     `OrderMaterialRequirement[]`, `OrderOutsourceRequirement[]`,
     `WorkshopNeed[]` (cascade), `PurchaseOrder[]` (`SetNull` со стороны
@@ -164,7 +174,8 @@
     `finishedGoodsWarehouse? → Warehouse` (`SetNull`).
   - Индексы: `status`, `orderDate`, `createdAt`, `routeTemplateId`,
     `techCardId`, `patternItemId`, `clientId`, `dueDate`,
-    `companyDivisionId`, `finishedGoodsWarehouseId`.
+    `companyDivisionId`, `finishedGoodsWarehouseId`,
+    `materialsAndHardwareCostPolicy`.
   - **`CompanyDivision` как master-справочник подразделений** (см.
     `docs/domain.md §«Подразделения заказа»`): backend
     `OrdersService.create`/`update` пишет FK
