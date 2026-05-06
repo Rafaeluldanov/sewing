@@ -132,9 +132,9 @@ describe('NewPassportDemoForm — UX размер/рулоны/сетка', () =
       /Нельзя создавать сетку без указания количества рулонов/,
     );
     // handleCreateGrid снапшотит rollsCount → gridSize и инициализирует
-    // массив количеств нулями.
+    // массив количеств пустыми строками (поля стартуют пустыми, не «0»).
     expect(src).toMatch(/setGridSize\(/);
-    expect(src).toMatch(/setQuantities\(new Array\(\s*n\s*\)\.fill\(0\)\)/);
+    expect(src).toMatch(/setQuantities\(new Array\(\s*n\s*\)\.fill\(''\)\)/);
   });
 
   test('сетка пересоздаётся автоматически при смене размера', () => {
@@ -161,12 +161,24 @@ describe('NewPassportDemoForm — UX размер/рулоны/сетка', () =
     expect(src).toMatch(/JSON\.stringify\(quantities\)/);
   });
 
-  test('кнопка submit подписана «Выпустить паспорта» и блокируется без сетки/итога', () => {
+  test('кнопка submit подписана «Выпустить паспорта» и блокируется без сетки/незаполненных рулонов', () => {
     const src = readSrc(formPath);
     expect(src).toMatch(/Выпустить паспорта/);
     // Disable: либо страница заблокирована, либо сетка ещё не создана,
-    // либо итого = 0.
-    expect(src).toMatch(/disabled=\{disabled \|\| gridSize === 0 \|\| total <= 0\}/);
+    // либо не все рулоны заполнены положительным числом.
+    expect(src).toMatch(
+      /disabled=\{disabled \|\| gridSize === 0 \|\| !allRollsFilled\}/,
+    );
+    expect(src).toMatch(/allRollsFilled/);
+  });
+
+  test('поля «Рулон N» пустые по умолчанию и помечены required + min=1', () => {
+    const src = readSrc(formPath);
+    // Фабрика стартового стейта — массив пустых строк, не нулей.
+    expect(src).toMatch(/setQuantities\(new Array\(\s*\w+\s*\)\.fill\(''\)\)/);
+    // Сам input — required и не позволяет 0.
+    expect(src).toMatch(/required/);
+    expect(src).toMatch(/min=\{1\}/);
   });
 });
 
