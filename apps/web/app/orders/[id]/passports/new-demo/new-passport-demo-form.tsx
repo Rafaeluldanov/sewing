@@ -91,7 +91,10 @@ export function NewPassportDemoForm({
   );
 
   const [sizeId, setSizeId] = useState<string>(() => pickDefaultSize(sizes));
-  const [rollsCount, setRollsCount] = useState<number>(0);
+  // rollsCount держим строкой, чтобы поле могло быть пустым (без «0»
+  // по умолчанию) и пользователь мог стереть все цифры. Парсим в число
+  // только в `handleCreateGrid`.
+  const [rollsCount, setRollsCount] = useState<string>('');
   // gridSize = снапшот количества рулонов на момент последнего нажатия
   // «Создать сетку». Именно он определяет, существует ли сетка и какой
   // у неё размер. Это позволяет автоматически пересоздать сетку при
@@ -117,14 +120,15 @@ export function NewPassportDemoForm({
   }, [sizeId]);
 
   const handleCreateGrid = () => {
-    if (!Number.isFinite(rollsCount) || rollsCount <= 0) {
+    const parsed = Number(rollsCount);
+    if (!rollsCount.trim() || !Number.isFinite(parsed) || parsed <= 0) {
       setGridError(
         'Нельзя создавать сетку без указания количества рулонов',
       );
       return;
     }
     setGridError(null);
-    const n = Math.floor(rollsCount);
+    const n = Math.floor(parsed);
     setGridSize(n);
     setQuantities(new Array(n).fill(0));
   };
@@ -234,12 +238,16 @@ export function NewPassportDemoForm({
             min={0}
             step={1}
             inputMode="numeric"
+            // Контролируемая строка: пустое значение по умолчанию + любое
+            // количество удалений, пока пользователь подбирает число.
+            // Парсинг → `handleCreateGrid`.
             value={rollsCount}
-            onChange={(e) => setRollsCount(Number(e.target.value))}
+            onChange={(e) => setRollsCount(e.target.value)}
+            placeholder="Например, 3"
           />
           <button
             type="button"
-            className="btn"
+            className="btn btn-primary"
             style={{ marginLeft: '0.5rem' }}
             onClick={handleCreateGrid}
           >
