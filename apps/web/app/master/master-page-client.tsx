@@ -29,6 +29,7 @@ import {
 import type { CutReleasePolicyDto, SizeDto } from '@sewing/shared';
 import { Icon } from '@/components/icon';
 import { QrScannerModal } from '@/app/work/qr-scanner-modal';
+import { logoutAction } from '@/app/(auth)/logout-action';
 import {
   refreshOpenMasterCallsAction,
   resolveMasterCallByEmployeeQrAction,
@@ -178,13 +179,25 @@ export function MasterPageClient({
             сотрудника.
           </p>
         </div>
-        <span
-          className="master-page__count"
-          title="Открытых вызовов сейчас"
-          aria-label="Открытых вызовов"
-        >
-          {items.length}
-        </span>
+        <div className="master-page__header-actions">
+          <span
+            className="master-page__count"
+            title="Открытых вызовов сейчас"
+            aria-label="Открытых вызовов"
+          >
+            {items.length}
+          </span>
+          <form action={logoutAction}>
+            <button
+              type="submit"
+              className="master-page__logout"
+              aria-label="Выйти из аккаунта"
+            >
+              <Icon name="logout" size={16} />
+              <span>Выйти</span>
+            </button>
+          </form>
+        </div>
       </header>
 
       {error && (

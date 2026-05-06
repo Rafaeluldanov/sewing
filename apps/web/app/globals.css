@@ -5085,6 +5085,33 @@ body:has(.master-page) .app-main {
   justify-content: space-between;
   gap: 0.5rem;
 }
+.master-page__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  flex-shrink: 0;
+}
+.master-page__logout {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.45rem 0.8rem;
+  border-radius: 999px;
+  border: 1px solid #c7d2fe;
+  background: #fff;
+  color: #4338ca;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.master-page__logout:hover {
+  background: #eef2ff;
+  border-color: #a5b4fc;
+}
+.master-page__logout:active {
+  transform: scale(0.98);
+}
 .master-page__title {
   margin: 0;
   font-size: 1.4rem;
