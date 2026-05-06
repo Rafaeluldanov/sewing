@@ -281,6 +281,28 @@ export function CutterAssistantWorkPanel() {
         </Link>
       </div>
 
+      {/*
+       * Демо-вариант серийного выпуска паспортов: размер + сетка рулонов
+       * + одна кнопка «Выпустить паспорта». Лежит рядом с обычной
+       * кнопкой, ведёт на тот же выбор заказа, но с `mode=demo` —
+       * `/work/cut-orders` отрешает на `/orders/:id/passports/new-demo`.
+       */}
+      <div className="scan-card scan-card--simple">
+        <div>
+          <h2 className="scan-card__title">Выпустить паспорт (демо)</h2>
+          <p className="scan-card__hint">
+            Серийный выпуск: выбор размера, сетка по рулонам, одна кнопка.
+          </p>
+        </div>
+        <Link
+          className="btn btn-primary btn-lg btn-block"
+          href="/work/cut-orders?mode=demo"
+          prefetch={false}
+        >
+          Выпустить паспорт
+        </Link>
+      </div>
+
       <div className="scan-card scan-card--simple">
         <div>
           <h2 className="scan-card__title">Разместить крой на стеллаж</h2>
