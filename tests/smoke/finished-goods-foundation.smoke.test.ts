@@ -127,7 +127,14 @@ test('FinishedGoodsService записывает audit FINISHED_GOODS_PRODUCTION_
 
 test('FinishedGoodsService использует sourceKey PACKED_PASSPORT:<passportId>', () => {
   const src = read(FG_SERVICE);
-  expect(src).toMatch(/buildPackedPassportSourceKey/);
+  // Сервис использует `buildPassportFinishedGoodsOutputSourceKey`,
+  // которая возвращает тот же идемпотентный ключ
+  // `PACKED_PASSPORT:<passportId>` (см. constants).
+  expect(src).toMatch(/buildPassportFinishedGoodsOutputSourceKey/);
+  const constantsSrc = read(FG_CONSTANTS);
+  expect(constantsSrc).toMatch(
+    /buildPassportFinishedGoodsOutputSourceKey[\s\S]*buildPackedPassportSourceKey/,
+  );
 });
 
 test('finished-goods.constants.ts содержит ключевые константы', () => {

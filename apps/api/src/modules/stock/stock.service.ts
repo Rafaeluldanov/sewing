@@ -1960,7 +1960,17 @@ const STOCK_MOVEMENT_LIST_INCLUDE = {
       description: true,
       sourceName: true,
       materialRole: true,
-      order: { select: { id: true, number: true } },
+      order: {
+        select: {
+          id: true,
+          number: true,
+          // Client management chain (см. `prisma/schema.prisma::Order.clientId`,
+          // `model Client`). Read-only — журнал движений материалов
+          // показывает заказчика в `/admin/warehouses?tab=movements`
+          // (колонка «Заказчик»).
+          client: { select: { id: true, name: true } },
+        },
+      },
     },
   },
   warehouse: { select: { id: true, name: true, code: true } },
@@ -1993,6 +2003,10 @@ export interface StockMovementListItem {
   workshopNeedId: string;
   orderId: string | null;
   orderNumber: string | null;
+  /** `Order.clientId` — управленческая привязка к карточке клиента. */
+  clientId: string | null;
+  /** `Client.name` — отображается в UI журнала движений склада. */
+  clientName: string | null;
   type: string;
   direction: string;
   warehouseId: string | null;
@@ -2176,6 +2190,8 @@ function toStockMovementListItem(
     workshopNeedId: row.workshopNeedId,
     orderId: row.workshopNeed?.orderId ?? null,
     orderNumber: row.workshopNeed?.order?.number ?? null,
+    clientId: row.workshopNeed?.order?.client?.id ?? null,
+    clientName: row.workshopNeed?.order?.client?.name ?? null,
     type: row.type,
     direction: row.direction,
     warehouseId: row.warehouseId,

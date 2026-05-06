@@ -558,6 +558,48 @@ export function OperationEditForm({ operation }: Props) {
         </div>
       </div>
 
+      {/*
+        Признак «операция выпускает готовую продукцию» (см.
+        `prisma/schema.prisma::Operation.producesFinishedGoods`,
+        `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`).
+        При включении прохождение этой операции по паспорту создаёт
+        `FinishedGoodsMovement PRODUCTION_RECEIPT IN` на склад
+        `Order.finishedGoodsWarehouseId`. Идемпотентно по
+        `sourceKey = PACKED_PASSPORT:<passportId>` — последующая упаковка
+        дубль не создаст. Не путать с категорией `PACKING` —
+        категория про UI/группировку, признак про выпуск.
+      */}
+      <div
+        className="admin-form-section"
+        style={{
+          marginTop: '1rem',
+          padding: '0.75rem 1rem',
+          border: '1px solid var(--admin-border)',
+          borderRadius: 'var(--admin-radius)',
+          background: 'var(--admin-surface-alt)',
+        }}
+      >
+        <div className="admin-field admin-field--inline">
+          <input
+            id="op-produces-finished-goods"
+            type="checkbox"
+            name="producesFinishedGoods"
+            defaultChecked={operation.producesFinishedGoods}
+          />
+          <label
+            htmlFor="op-produces-finished-goods"
+            style={{ display: 'grid', gap: '0.18rem' }}
+          >
+            <strong>Выпускает готовую продукцию</strong>
+            <span className="admin-muted" style={{ fontSize: '0.82rem' }}>
+              Если включено, при успешном прохождении этой операции по
+              паспорту будет создан приход готовой продукции на склад
+              выпуска заказа.
+            </span>
+          </label>
+        </div>
+      </div>
+
       <div className="admin-actions-row">
         <SaveButton />
       </div>

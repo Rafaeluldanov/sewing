@@ -252,9 +252,9 @@ DTO: `packages/shared/src/shifts.ts`.
 | Метод | Путь                  | RBAC               | Описание |
 | ----- | --------------------- | ------------------ | -------- |
 | GET   | `/api/operations`     | SHOP_MANAGER, ADMIN | `OperationSummaryDto[]`. |
-| POST  | `/api/operations`     | SHOP_MANAGER, ADMIN | `CreateOperationDto`. Поддерживает `pricingMode` (`FIXED` / `BY_SIZE` / `SALARY_ONLY`), `timeNormMode` (`FIXED`/`BY_SIZE`), плановые `salaryPlanRubPerShift` / `salaryPlanShiftSeconds`. |
-| GET   | `/api/operations/:id` | SHOP_MANAGER, ADMIN | `OperationDetailDto`. |
-| PATCH | `/api/operations/:id` | SHOP_MANAGER, ADMIN | `UpdateOperationDto`. Полный full-replace по `OperationRateBySize` / `OperationTimeNormBySize` для соответствующих режимов. |
+| POST  | `/api/operations`     | SHOP_MANAGER, ADMIN | `CreateOperationDto`. Поддерживает `pricingMode` (`FIXED` / `BY_SIZE` / `SALARY_ONLY`), `timeNormMode` (`FIXED`/`BY_SIZE`), плановые `salaryPlanRubPerShift` / `salaryPlanShiftSeconds`, `producesFinishedGoods: boolean` (default `false`). |
+| GET   | `/api/operations/:id` | SHOP_MANAGER, ADMIN | `OperationDetailDto`. Включает `producesFinishedGoods: boolean`. |
+| PATCH | `/api/operations/:id` | SHOP_MANAGER, ADMIN | `UpdateOperationDto`. Полный full-replace по `OperationRateBySize` / `OperationTimeNormBySize` для соответствующих режимов. Поле `producesFinishedGoods` опционально — если передано, обновляется; иначе значение в БД не трогается. При включении флага последующие прохождения операции по паспорту начинают создавать `FinishedGoodsMovement PRODUCTION_RECEIPT IN` (`sourceKey = PACKED_PASSPORT:<passportId>`); уже выпущенные паспорты не пересоздаются. |
 
 > Read-only `GET /api/sizes` уже отдаёт справочник для редактирования
 > ставок/норм; отдельных endpoints для `OperationRateBySize` /
@@ -1047,6 +1047,10 @@ Query (все опциональны, склеиваются по AND):
   workshopNeedId: string;
   orderId: string | null;
   orderNumber: string | null;
+  // Управленческая привязка к карточке клиента (Order.client → Client).
+  // Read-only — UI журнала движений отображает в колонке «Заказчик».
+  clientId: string | null;
+  clientName: string | null;
   type: string;
   direction: string;
   warehouseId: string | null;
@@ -1309,8 +1313,8 @@ DTO: `packages/shared/src/packing.ts`. Side-effect: на сервисе
 
 | Метод | Путь                              | RBAC                | Описание |
 | ----- | --------------------------------- | ------------------- | -------- |
-| GET   | `/api/finished-goods/balances`    | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsBalancesQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `q` (substring по `color`), `positiveOnly` / `negativeOnly` / `zeroOnly` (взаимоисключающие), `limit` (default 50, max 200), `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `balanceKey`, `orderId`, `orderNumber`, `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `lastMovementAt`, `updatedAt`. |
-| GET   | `/api/finished-goods/movements`   | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsMovementsQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `type` ∈ `PRODUCTION_RECEIPT \| REVERSAL \| ADJUSTMENT \| SHIPMENT \| TRANSFER`, `direction` ∈ `IN \| OUT`, `passportId`, `boxId`, `from` / `to` (ISO-8601), `limit`, `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `finishedGoodsBalanceId`, `type`, `direction`, `orderId`, `orderNumber`, `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `sourceType`, `sourceId`, `passportId`, `boxId`, `comment`, `createdById`, `createdAt`. |
+| GET   | `/api/finished-goods/balances`    | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsBalancesQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `q` (substring по `color`), `positiveOnly` / `negativeOnly` / `zeroOnly` (взаимоисключающие), `limit` (default 50, max 200), `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `balanceKey`, `orderId`, `orderNumber`, `clientId`, `clientName` (через `Order.client → Client`), `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `lastMovementAt`, `updatedAt`. |
+| GET   | `/api/finished-goods/movements`   | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsMovementsQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `type` ∈ `PRODUCTION_RECEIPT \| REVERSAL \| ADJUSTMENT \| SHIPMENT \| TRANSFER`, `direction` ∈ `IN \| OUT`, `passportId`, `boxId`, `from` / `to` (ISO-8601), `limit`, `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `finishedGoodsBalanceId`, `type`, `direction`, `orderId`, `orderNumber`, `clientId`, `clientName` (через `Order.client → Client`), `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `sourceType`, `sourceId`, `passportId`, `boxId`, `comment`, `createdById`, `createdAt`. |
 
 `sourceKey` сознательно **не возвращается** — это внутренний
 идемпотентный технический ключ (`PACKED_PASSPORT:<passportId>`).

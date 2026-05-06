@@ -199,7 +199,14 @@
   `timeNormMode: String @default("FIXED")` (`FIXED` / `BY_SIZE`),
   `timeNormSec: Int?`,
   `salaryPlanRubPerShift: Decimal(14,2)?`,
-  `salaryPlanShiftSeconds: Int? @default(28800)`. См. ADR-0020.
+  `salaryPlanShiftSeconds: Int? @default(28800)`,
+  `producesFinishedGoods: Boolean @default(false)` — признак
+  «операция выпускает готовую продукцию»; если `true`, прохождение
+  паспортом этой операции (`scanOnOperation` /
+  `completeOperationByEmployee`) создаёт
+  `FinishedGoodsMovement PRODUCTION_RECEIPT IN` идемпотентно по
+  `sourceKey = PACKED_PASSPORT:<passportId>` (см.
+  `docs/current-state.md §«Готовая продукция»`). См. ADR-0020.
 - **`OperationRateBySize`** — сдельные ставки по размерам
   (`pricingMode = BY_SIZE`). `(operationId, sizeId)` uniq,
   `onDelete: Cascade` от `Operation`.

@@ -110,6 +110,21 @@ export function StockMovementsTable({ items }: Props) {
           <span className="admin-muted">—</span>
         ),
     },
+    // Колонка «Заказчик» — `Client.name` через `Order.client` (см.
+    // `apps/api/src/modules/stock/stock.service.ts::toStockMovementListItem`,
+    // `apps/api/src/modules/finished-goods/finished-goods.service.ts::toMovementListItem`).
+    // Идёт сразу за «Заказ», чтобы менеджер видел и номер, и
+    // юр. лицо в журнале движений склада.
+    {
+      key: 'client',
+      header: 'Заказчик',
+      render: (m) =>
+        m.clientName ? (
+          <span>{m.clientName}</span>
+        ) : (
+          <span className="admin-muted">—</span>
+        ),
+    },
     {
       key: 'warehouse',
       header: 'Склад',

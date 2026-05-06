@@ -226,6 +226,22 @@ export default async function AdminOperationsListPage() {
                       >
                         <td data-label="Название">
                           <span className="admin-table__primary">{op.name}</span>
+                          {op.producesFinishedGoods && (
+                            <>
+                              {' '}
+                              {/*
+                                Признак «операция выпускает готовую продукцию»
+                                (см.
+                                `prisma/schema.prisma::Operation.producesFinishedGoods`,
+                                `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`).
+                                Маленький badge даёт менеджеру быструю
+                                ориентацию, какая операция фиксирует выпуск.
+                              */}
+                              <AdminStatusBadge tone="info">
+                                Выпуск ГП
+                              </AdminStatusBadge>
+                            </>
+                          )}
                         </td>
                         <td data-label="Тариф">{formatPricingMode(op.pricingMode)}</td>
                         <td data-label="Ставка">{formatRate(op)}</td>

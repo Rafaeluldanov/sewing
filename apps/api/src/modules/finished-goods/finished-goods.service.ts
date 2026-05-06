@@ -16,7 +16,7 @@ import {
   FINISHED_GOODS_MOVEMENT_TYPE,
   FINISHED_GOODS_SOURCE_TYPE,
   buildFinishedGoodsBalanceKey,
-  buildPackedPassportSourceKey,
+  buildPassportFinishedGoodsOutputSourceKey,
   type FinishedGoodsMovementDirection,
   type FinishedGoodsMovementType,
 } from './finished-goods.constants.js';
@@ -308,37 +308,60 @@ export class FinishedGoodsService {
   }
 
   // ===========================================================================
-  // PACKED PASSPORT → PRODUCTION_RECEIPT IN
+  // PASSPORT OUTPUT → PRODUCTION_RECEIPT IN
   // ===========================================================================
 
   /**
-   * Зафиксировать выпуск готовой продукции в момент `Passport.status = PACKED`.
+   * Зафиксировать выпуск готовой продукции по паспорту.
+   *
+   * Единая точка записи `FinishedGoodsMovement PRODUCTION_RECEIPT IN`
+   * для двух триггеров (см. `docs/current-state.md §«Готовая
+   * продукция»`):
+   *   1. Прохождение операции с `Operation.producesFinishedGoods = true`
+   *      — вызывается из `PassportsService.scanOnOperation` /
+   *      `PassportsService.completeOperationByEmployee` в той же
+   *      транзакции, что и обновление паспорта;
+   *   2. `Passport.status = PACKED` — вызывается из
+   *      `PackingService.addPassport` (через
+   *      `recordPackedPassportInTx`-обёртку, оставленную для обратной
+   *      совместимости).
    *
    * Контракт:
-   *   - вызывается из `PackingService.addPassport` строго **внутри**
-   *     той же `$transaction(...)`, что и сам перевод паспорта в
-   *     `PACKED`;
-   *   - идемпотентен по `sourceKey = PACKED_PASSPORT:<passportId>`:
-   *     повторный вызов (retry, дубль box-close handler) не задвоит
-   *     движение и не удвоит баланс;
-   *   - `qty = passport.qtyGood` (количество годных в этом паспорте);
-   *     если `qty <= 0`, soft-skip без ошибки и без записи;
+   *   - идемпотентен по `sourceKey = PACKED_PASSPORT:<passportId>`
+   *     (см. `buildPassportFinishedGoodsOutputSourceKey` —
+   *     сознательно совпадает с `buildPackedPassportSourceKey`):
+   *     повторный complete/scan и последующая упаковка не задвоят
+   *     движение и не удвоят `FinishedGoodsBalance.qty`;
+   *   - `qty = passport.qtyGood`; если `qty <= 0` — soft-skip;
    *   - `warehouseId = order.finishedGoodsWarehouseId` (может быть
-   *     `null` — тогда ведём «no-warehouse» баланс, упаковку это не
-   *     блокирует);
+   *     `null` — ведём «no-warehouse» баланс, поток не блокируем);
    *   - `cellId = null` на этой итерации;
    *   - audit `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` пишется в
-   *     той же транзакции (см. `AuditEntityType = FINISHED_GOODS_MOVEMENT`).
+   *     той же транзакции (только при первом, не идемпотентном вызове).
    *
    * Возвращает созданное (или ранее существовавшее) движение, либо
-   * `null`, если движение не понадобилось (qty <= 0 или паспорт не
-   * найден / не в PACKED).
+   * `null`, если движение не понадобилось (паспорт отменён, qty <= 0).
+   *
+   * Не путать с материалами (`StockMovement` / `MaterialIssue` /
+   * `PurchaseReceipt` / `StockAdjustment` / `StockTransfer`) и
+   * с `CostsService` / `ProductionCostV2Service` — это отдельный
+   * контур (см. JSDoc сервиса).
    */
-  async recordPackedPassportInTx(
+  async recordPassportOutputInTx(
     tx: Prisma.TransactionClient,
     passportId: string,
     employeeId?: string | null,
-    boxIdHint?: string | null,
+    options?: {
+      boxIdHint?: string | null;
+      /**
+       * Метаданные для лога/audit о причине вызова. Не влияет на
+       * сам факт выпуска — выпуск всегда один на паспорт благодаря
+       * `sourceKey`-идемпотентности.
+       */
+      trigger?: 'OPERATION_OUTPUT' | 'PACKED_PASSPORT';
+      triggerOperationId?: string | null;
+      comment?: string | null;
+    },
   ): Promise<FinishedGoodsMovement | null> {
     const passport = await tx.passport.findUnique({
       where: { id: passportId },
@@ -360,15 +383,17 @@ export class FinishedGoodsService {
     });
 
     if (!passport) return null;
-    if (passport.status !== PassportStatus.PACKED) return null;
+    if (passport.status === PassportStatus.CANCELLED) return null;
     if (passport.qtyGood <= 0) return null;
 
-    const sourceKey = buildPackedPassportSourceKey(passport.id);
+    const sourceKey = buildPassportFinishedGoodsOutputSourceKey(passport.id);
     const warehouseId = passport.order.finishedGoodsWarehouseId ?? null;
+    const trigger = options?.trigger ?? 'PACKED_PASSPORT';
 
     // Если boxIdHint не передан, попробуем найти box через BoxItem
-    // (внутри той же транзакции).
-    let boxId = boxIdHint ?? null;
+    // (внутри той же транзакции). Для operation-driven выпуска коробки
+    // ещё может не быть — это нормально, оставим `null`.
+    let boxId = options?.boxIdHint ?? null;
     if (!boxId) {
       const boxItem = await tx.boxItem.findUnique({
         where: { passportId: passport.id },
@@ -376,6 +401,12 @@ export class FinishedGoodsService {
       });
       boxId = boxItem?.boxId ?? null;
     }
+
+    const comment =
+      options?.comment ??
+      (trigger === 'OPERATION_OUTPUT'
+        ? 'Выпуск готовой продукции по операции'
+        : 'Выпуск готовой продукции после упаковки');
 
     const { movement, balance, idempotent } = await this.applyMovementInTx(tx, {
       orderId: passport.orderId,
@@ -392,7 +423,7 @@ export class FinishedGoodsService {
       sourceKey,
       passportId: passport.id,
       boxId,
-      comment: 'Выпуск готовой продукции после упаковки',
+      comment,
       createdById: employeeId ?? null,
     });
 
@@ -419,6 +450,8 @@ export class FinishedGoodsService {
           balanceBeforeQty: movement.balanceBeforeQty,
           balanceAfterQty: movement.balanceAfterQty,
           employeeId: employeeId ?? null,
+          trigger,
+          triggerOperationId: options?.triggerOperationId ?? null,
           timestamp: movement.createdAt.toISOString(),
         } as Prisma.InputJsonValue,
       },
@@ -428,10 +461,42 @@ export class FinishedGoodsService {
     this.logger.log(
       `event=finished_goods.production_receipt.create movementId=${movement.id} ` +
         `passportId=${passport.id} orderId=${passport.orderId} qty=${movement.qty} ` +
-        `warehouseId=${warehouseId ?? 'NO_WAREHOUSE'}`,
+        `warehouseId=${warehouseId ?? 'NO_WAREHOUSE'} trigger=${trigger}` +
+        (options?.triggerOperationId
+          ? ` operationId=${options.triggerOperationId}`
+          : ''),
     );
 
     return movement;
+  }
+
+  /**
+   * Wrapper над `recordPassportOutputInTx` для исторического
+   * packing-flow (`PackingService.addPassport`), сохранённый для
+   * обратной совместимости и явной читаемости вызова. Дополнительно
+   * требует `Passport.status = PACKED` — иначе soft-skip.
+   *
+   * Идемпотентен по `sourceKey = PACKED_PASSPORT:<passportId>`,
+   * совпадает с operation-driven выпуском — двойной триггер
+   * (operation flag + последующий PACKED) выпуск не задваивает.
+   */
+  async recordPackedPassportInTx(
+    tx: Prisma.TransactionClient,
+    passportId: string,
+    employeeId?: string | null,
+    boxIdHint?: string | null,
+  ): Promise<FinishedGoodsMovement | null> {
+    const passport = await tx.passport.findUnique({
+      where: { id: passportId },
+      select: { id: true, status: true },
+    });
+    if (!passport) return null;
+    if (passport.status !== PassportStatus.PACKED) return null;
+
+    return this.recordPassportOutputInTx(tx, passportId, employeeId, {
+      boxIdHint: boxIdHint ?? null,
+      trigger: 'PACKED_PASSPORT',
+    });
   }
 }
 
@@ -442,7 +507,13 @@ export class FinishedGoodsService {
 const DEFAULT_LIST_LIMIT = 50;
 
 const BALANCE_LIST_INCLUDE = {
-  order: { select: { id: true, number: true } },
+  order: {
+    select: {
+      id: true,
+      number: true,
+      client: { select: { id: true, name: true } },
+    },
+  },
   product: { select: { id: true, name: true } },
   size: { select: { id: true, code: true } },
   warehouse: { select: { id: true, name: true, code: true } },
@@ -450,7 +521,16 @@ const BALANCE_LIST_INCLUDE = {
 } as const satisfies Prisma.FinishedGoodsBalanceInclude;
 
 const MOVEMENT_LIST_INCLUDE = {
-  order: { select: { id: true, number: true } },
+  order: {
+    select: {
+      id: true,
+      number: true,
+      // Client management chain (см. `prisma/schema.prisma::Order.clientId`,
+      // `model Client`). Read-only — журнал движений показывает заказчика
+      // в `/admin/warehouses?tab=movements` (колонка «Заказчик»).
+      client: { select: { id: true, name: true } },
+    },
+  },
   product: { select: { id: true, name: true } },
   size: { select: { id: true, code: true } },
   warehouse: { select: { id: true, name: true, code: true } },
@@ -470,6 +550,10 @@ export interface FinishedGoodsBalanceListItem {
   balanceKey: string;
   orderId: string;
   orderNumber: string | null;
+  /** `Order.clientId` — управленческая привязка к карточке клиента. */
+  clientId: string | null;
+  /** `Client.name` — отображается в UI («Заказчик»). */
+  clientName: string | null;
   productId: string;
   productName: string | null;
   sizeId: string;
@@ -491,6 +575,10 @@ export interface FinishedGoodsMovementListItem {
   direction: string;
   orderId: string;
   orderNumber: string | null;
+  /** `Order.clientId` — управленческая привязка к карточке клиента. */
+  clientId: string | null;
+  /** `Client.name` — отображается в UI журнала движений склада. */
+  clientName: string | null;
   productId: string;
   productName: string | null;
   sizeId: string;
@@ -564,6 +652,8 @@ function toBalanceListItem(row: BalanceWithRels): FinishedGoodsBalanceListItem {
     balanceKey: row.balanceKey,
     orderId: row.orderId,
     orderNumber: row.order?.number ?? null,
+    clientId: row.order?.client?.id ?? null,
+    clientName: row.order?.client?.name ?? null,
     productId: row.productId,
     productName: row.product?.name ?? null,
     sizeId: row.sizeId,
@@ -591,6 +681,8 @@ function toMovementListItem(
     direction: row.direction,
     orderId: row.orderId,
     orderNumber: row.order?.number ?? null,
+    clientId: row.order?.client?.id ?? null,
+    clientName: row.order?.client?.name ?? null,
     productId: row.productId,
     productName: row.product?.name ?? null,
     sizeId: row.sizeId,

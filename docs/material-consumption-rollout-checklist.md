@@ -683,10 +683,27 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
   `Passport.status = PACKED` (через `PackingService.addPassport` →
   `FinishedGoodsService.recordPackedPassportInTx`), idempotent по
   `sourceKey = PACKED_PASSPORT:<passportId>`;
+- **Operation flag `producesFinishedGoods`** (миграция
+  `20260616100000_add_operation_produces_finished_goods`):
+  если на операции стоит `producesFinishedGoods = true`, выпуск
+  фиксируется уже при прохождении этой операции
+  (`PassportsService.scanOnOperation` для предыдущей операции +
+  `PassportsService.completeOperationByEmployee` для завершаемой).
+  Идемпотентный `sourceKey` совпадает с packed-flow, поэтому
+  последующая упаковка дубль не создаёт;
 - read-only API: `GET /api/finished-goods/balances` и
-  `GET /api/finished-goods/movements`;
+  `GET /api/finished-goods/movements` отдают `clientId` /
+  `clientName` (через `Order.client → Client`); те же поля
+  добавлены в `GET /api/stock/movements`;
+- UI колонка «Заказчик» в `/admin/warehouses?tab=movements`;
+- UI чекбокс «Выпускает готовую продукцию» в формах создания и
+  редактирования операции (`/admin/operations/new` и
+  `/admin/operations/[id]`); badge «Выпуск ГП» в таблице списка
+  операций;
 - audit `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` (под
-  `entityType = FINISHED_GOODS_MOVEMENT`).
+  `entityType = FINISHED_GOODS_MOVEMENT`) с расширенным payload
+  `trigger: 'OPERATION_OUTPUT' | 'PACKED_PASSPORT'` и
+  `triggerOperationId` для operation-driven выпуска.
 
 Чего нет на этой итерации (отдельный backlog по готовой продукции):
 - отгрузка готовой продукции (`SHIPMENT`);
@@ -696,6 +713,31 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
 - размещение готовой продукции по ячейкам (`cellId` всегда `null`);
 - UI-раздел `/admin/finished-goods` / sidebar item / отчёт.
 - новые роли (RBAC ограничен `ADMIN` / `SHOP_MANAGER`).
+
+### Как проверить «Выпуск по операции»
+
+1. Открыть `/admin/operations/[id]` (например, операцию «Упаковка»
+   или «ОТК финальный») и включить чекбокс «Выпускает готовую
+   продукцию», сохранить.
+2. Создать паспорт по заказу с заданным
+   `Order.finishedGoodsWarehouseId` (или без — для проверки
+   «no-warehouse»-ветки).
+3. Провести паспорт по маршруту до операции с признаком —
+   завершить её (`completeOperationByEmployee`) или сканировать
+   на следующей операции (`scanOnOperation`). В `GET
+   /api/finished-goods/movements?passportId=…` должен появиться
+   ровно один `PRODUCTION_RECEIPT IN` с
+   `qty = passport.qtyGood` и
+   `warehouseId = finishedGoodsWarehouseId`.
+4. Повторно провести паспорт через ту же операцию (или сканировать
+   ещё раз, или дополнительно упаковать через `PackingService`):
+   количество движений по этому passportId не должно вырасти —
+   `sourceKey = PACKED_PASSPORT:<passportId>` UNIQUE удерживает
+   идемпотентность.
+5. Открыть `/admin/warehouses?tab=movements` — в журнале
+   движений материалов колонка «Заказчик» должна показывать
+   `Client.name` для строк, привязанных к заказу с клиентом, и
+   «—» для остальных.
 
 Эти типы зарезервированы строковыми литералами в
 `FINISHED_GOODS_MOVEMENT_TYPE`, но writer-ов / API нет. Добавление

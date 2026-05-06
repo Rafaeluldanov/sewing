@@ -61,6 +61,25 @@ export function buildPackedPassportSourceKey(passportId: string): string {
 }
 
 /**
+ * `sourceKey` для движения выпуска готовой продукции при
+ * прохождении паспортом операции с
+ * `Operation.producesFinishedGoods = true` (см.
+ * `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`).
+ *
+ * Сознательно совпадает с `buildPackedPassportSourceKey` — один
+ * паспорт = один выпуск, независимо от того, чем он был
+ * инициирован (operation flag → scan/complete или последующая
+ * `Passport.status = PACKED` через `PackingService`). UNIQUE
+ * `FinishedGoodsMovement.sourceKey` сам гарантирует идемпотентность
+ * при любом из путей.
+ */
+export function buildPassportFinishedGoodsOutputSourceKey(
+  passportId: string,
+): string {
+  return buildPackedPassportSourceKey(passportId);
+}
+
+/**
  * Детерминированный ключ остатка готовой продукции:
  *
  *   `${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`

@@ -717,6 +717,73 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     `StockAdjustment`, `StockTransfer`, `CostsService`,
     `ProductionCostV2Service`) не меняются.
 
+  Backend + Frontend-итерация «Выпуск готовой продукции по операции»
+  (`prisma/schema.prisma::Operation.producesFinishedGoods`,
+  `prisma/migrations/20260616100000_add_operation_produces_finished_goods`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`,
+  `apps/api/src/modules/passports/passports.service.ts::scanOnOperation` /
+  `completeOperationByEmployee`,
+  `packages/shared/src/operations.ts::OperationSummaryDto.producesFinishedGoods`,
+  `apps/web/app/admin/operations/*` (форма create/edit, badge в списке),
+  `tests/smoke/finished-goods-operation-output.smoke.test.ts`):
+  - выпуск готовой продукции теперь определяется не только
+    `Passport.status = PACKED`, а **признаком на операции**:
+    `Operation.producesFinishedGoods Boolean @default(false)`. Если
+    флаг включён, успешное прохождение операции по паспорту
+    (`OPERATION_SCAN` с предыдущей операцией под флагом или
+    `OPERATION_FINISHED` через `completeOperationByEmployee`)
+    создаёт `FinishedGoodsMovement PRODUCTION_RECEIPT IN` —
+    `qty = passport.qtyGood`,
+    `warehouseId = order.finishedGoodsWarehouseId ?? null`,
+    `cellId = null`. Канонический сценарий — пометить операцию
+    «Упаковка» признаком; отдельную операцию «Выпуск» сознательно
+    не заводим.
+  - **Идемпотентность.** `sourceKey = PACKED_PASSPORT:<passportId>`
+    (см. `buildPassportFinishedGoodsOutputSourceKey` —
+    сознательно совпадает с `buildPackedPassportSourceKey`): один
+    паспорт = одно движение, независимо от триггера. Повторный
+    complete/scan и последующая упаковка через
+    `PackingService.addPassport → recordPackedPassportInTx` не
+    задвоят движение. Старый формат ключа сохранён, чтобы не
+    инвалидировать уже выпущенные паспорты.
+  - **Точка записи.** Единая — `FinishedGoodsService.recordPassportOutputInTx`,
+    которую `PassportsService` вызывает в той же транзакции, что и
+    `OPERATION_SCAN` / `OPERATION_FINISHED`. Wrapper
+    `recordPackedPassportInTx` (для `PackingService`) делегирует в
+    тот же метод. Это исключает «два кода на одно событие».
+  - **Packing-flow остаётся.** Текущая упаковка реализована не как
+    `Operation`-flow, а как отдельный `PackingService.addPassport`,
+    который пишет `Passport.status = PACKED` и BoxItem. Поэтому
+    `recordPackedPassportInTx` остаётся в packing-сервисе как
+    отдельный путь записи выпуска для случаев, когда `Operation`-flow
+    не задействован (например, `producesFinishedGoods` не выставлен
+    ни на одной операции маршрута). Идемпотентный `sourceKey` =
+    общий, дубля нет.
+  - **Movements API.** `GET /api/finished-goods/movements` и
+    `GET /api/stock/movements` теперь отдают `clientId` и
+    `clientName` (через `Order.client → Client.id/name`).
+    `FinishedGoodsBalanceListItem` тоже получил эти поля —
+    управление с балансом ведёт менеджер, и заказчика удобно видеть
+    сразу.
+  - **UI колонка «Заказчик»** добавлена в `/admin/warehouses?tab=movements`
+    (`apps/web/components/warehouses/stock/stock-movements-table.tsx`)
+    рядом с колонкой «Заказ». Никаких новых страниц / sidebar /
+    отдельных UI под готовую продукцию не создаём (см. ТЗ).
+  - **UI операций.** Чекбокс «Выпускает готовую продукцию» с
+    подсказкой добавлен в форму создания
+    (`apps/web/app/admin/operations/create-form.tsx`) и в форму
+    редактирования (`apps/web/app/admin/operations/[id]/edit-form.tsx`).
+    В таблице списка операций рядом с названием рисуется маленький
+    badge «Выпуск ГП» для операций с флагом, чтобы менеджеру было
+    видно «какая операция фиксирует выпуск» с одного взгляда.
+  - Сознательно **не реализованы / не меняются**: отдельная операция
+    «Выпуск», отгрузка / transfer готовой продукции, новый
+    UI-раздел / sidebar item, изменения в `MaterialIssue` /
+    `PurchaseReceipt` / `StockAdjustment` / `StockTransfer` /
+    `CostsService` / `ProductionCostV2Service`. Запреты
+    зафиксированы в smoke-тесте
+    `tests/smoke/finished-goods-operation-output.smoke.test.ts`.
+
   Backend + Frontend-итерация «Давальческое сырьё клиента»
   (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
   `prisma/migrations/20260614100000_add_order_materials_and_hardware_cost_policy`,

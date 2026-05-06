@@ -537,6 +537,27 @@ model Operation {
   /// «расчётную смену» (например, 7-часовую), не трогая фактический
   /// payroll. Только positive int; валидируется в `OperationsService`.
   salaryPlanShiftSeconds Int?              @default(28800)
+  /// Признак «операция выпускает готовую продукцию» (см.
+  /// `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`,
+  /// `docs/current-state.md §«Готовая продукция»`).
+  ///
+  /// Если `true`, при успешном прохождении этой операции по паспорту
+  /// (см. `PassportsService.scanOnOperation` /
+  /// `PassportsService.completeOperationByEmployee`) создаётся
+  /// `FinishedGoodsMovement` `type = PRODUCTION_RECEIPT` `direction = IN`
+  /// на склад `Order.finishedGoodsWarehouseId` (или «no-warehouse»,
+  /// если не задан). Идемпотентно по
+  /// `sourceKey = PACKED_PASSPORT:<passportId>` — повторное прохождение
+  /// той же операции, повторный complete и последующая упаковка не
+  /// задвоят движение.
+  ///
+  /// Не путать с категорией `PACKING`: категория управляет UI/группировкой,
+  /// а признак выпуска — реальной финансово-учётной точкой. Канонический
+  /// сценарий — операция «Упаковка» с `producesFinishedGoods = true`
+  /// (либо «ОТК финальный» / любая другая последняя операция цеха).
+  /// Отдельную операцию «Выпуск» сознательно НЕ заводим — это
+  /// признак на уже существующей операции.
+  producesFinishedGoods  Boolean           @default(false)
 
   events              PassportEvent[]           @relation("EventOperation")
   movedFromEvents     PassportEvent[]           @relation("EventFromOperation")

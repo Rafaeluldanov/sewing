@@ -61,6 +61,7 @@ import { CutReleasePolicyService } from '../cut-release-policy/cut-release-polic
 import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-issue-rules.service.js';
 import { MaterialIssuesService } from '../material-issues/material-issues.service.js';
 import { CompanySettingsService } from '../company-settings/company-settings.service.js';
+import { FinishedGoodsService } from '../finished-goods/finished-goods.service.js';
 
 type PassportRow = Prisma.PassportGetPayload<{
   include: {
@@ -100,6 +101,7 @@ export class PassportsService {
     private readonly orderCutIssueRules: OrderCutIssueRulesService,
     private readonly materialIssues: MaterialIssuesService,
     private readonly companySettings: CompanySettingsService,
+    private readonly finishedGoods: FinishedGoodsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -1339,6 +1341,24 @@ export class PassportsService {
     const previousOperationId = passport.currentOperationId;
     const previousEmployeeId = passport.currentEmployeeId;
 
+    // Признак выпуска готовой продукции на завершённой операции (см.
+    // `prisma/schema.prisma::Operation.producesFinishedGoods`,
+    // `FinishedGoodsService.recordPassportOutputInTx`). Прохождение
+    // операции с `producesFinishedGoods = true` фиксирует
+    // `FinishedGoodsMovement PRODUCTION_RECEIPT IN`. Идемпотентно по
+    // `sourceKey = PACKED_PASSPORT:<passportId>` — последующая упаковка
+    // через `PackingService` не задвоит движение.
+    const previousOperationProducesFinishedGoods = previousOperationId
+      ? Boolean(
+          (
+            await this.prisma.operation.findUnique({
+              where: { id: previousOperationId },
+              select: { producesFinishedGoods: true },
+            })
+          )?.producesFinishedGoods,
+        )
+      : false;
+
     // Soft-route MVP: если у заказа есть snapshot маршрута и
     // отсканированная операция в нём встречается — двигаем
     // `currentRouteStepIndex`. Если операция не из маршрута, оставляем
@@ -1405,6 +1425,23 @@ export class PassportsService {
         },
         tx,
       );
+      // Выпуск готовой продукции при прохождении операции с
+      // `producesFinishedGoods = true` (см. ТЗ «выпуск управляется
+      // признаком на операции», `prisma/schema.prisma::Operation`,
+      // `docs/current-state.md §«Готовая продукция»`). Идемпотентно
+      // по `sourceKey = PACKED_PASSPORT:<passportId>`: повторный
+      // scan/complete и последующая упаковка не задвоят движение.
+      if (previousOperationProducesFinishedGoods) {
+        await this.finishedGoods.recordPassportOutputInTx(
+          tx,
+          passport.id,
+          employeeId,
+          {
+            trigger: 'OPERATION_OUTPUT',
+            triggerOperationId: previousOperationId,
+          },
+        );
+      }
     });
 
     this.logger.log(
@@ -1538,6 +1575,21 @@ export class PassportsService {
       currentCellId: null,
     };
 
+    // Признак выпуска готовой продукции на завершаемой операции (см.
+    // `prisma/schema.prisma::Operation.producesFinishedGoods`,
+    // `FinishedGoodsService.recordPassportOutputInTx`). Прохождение
+    // операции с `producesFinishedGoods = true` создаёт
+    // `FinishedGoodsMovement PRODUCTION_RECEIPT IN`. Идемпотентно
+    // по `sourceKey = PACKED_PASSPORT:<passportId>`.
+    const completedOperationProducesFinishedGoods = Boolean(
+      (
+        await this.prisma.operation.findUnique({
+          where: { id: completedOperationId },
+          select: { producesFinishedGoods: true },
+        })
+      )?.producesFinishedGoods,
+    );
+
     await this.prisma.$transaction(async (tx) => {
       await tx.passport.update({
         where: { id: passport.id },
@@ -1577,6 +1629,24 @@ export class PassportsService {
         },
         tx,
       );
+      // Выпуск готовой продукции при завершении операции с
+      // `producesFinishedGoods = true` (см. ТЗ «выпуск управляется
+      // признаком на операции», `prisma/schema.prisma::Operation`,
+      // `docs/current-state.md §«Готовая продукция»`). Идемпотентно
+      // по `sourceKey = PACKED_PASSPORT:<passportId>` — повторный
+      // complete, последующий scan на следующей операции и упаковка
+      // не задвоят движение.
+      if (completedOperationProducesFinishedGoods) {
+        await this.finishedGoods.recordPassportOutputInTx(
+          tx,
+          passport.id,
+          employeeId,
+          {
+            trigger: 'OPERATION_OUTPUT',
+            triggerOperationId: completedOperationId,
+          },
+        );
+      }
     });
 
     this.logger.log(

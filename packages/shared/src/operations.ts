@@ -554,6 +554,19 @@ export const CreateOperationSchema = z
     salaryPlanShiftSeconds: z
       .union([SalaryPlanShiftSecondsField, z.null()])
       .optional(),
+    /**
+     * Признак «операция выпускает готовую продукцию» (см.
+     * `prisma/schema.prisma::Operation.producesFinishedGoods`,
+     * `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`).
+     *
+     * Если `true`, при успешном прохождении этой операции по паспорту
+     * создаётся `FinishedGoodsMovement` `type = PRODUCTION_RECEIPT IN`
+     * (склад `Order.finishedGoodsWarehouseId`, идемпотентно по
+     * `sourceKey = PACKED_PASSPORT:<passportId>` — последующая упаковка
+     * не задвоит движение). Опционально на старых клиентах — backend
+     * проставит default `false`.
+     */
+    producesFinishedGoods: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     if (data.pricingMode === 'FIXED') {
@@ -732,6 +745,15 @@ export const UpdateOperationSchema = z
     salaryPlanShiftSeconds: z
       .union([SalaryPlanShiftSecondsField, z.null()])
       .optional(),
+    /**
+     * Признак «операция выпускает готовую продукцию» (см. в
+     * `CreateOperationSchema`). При смене на `true` будущие
+     * прохождения этой операции по паспорту начнут создавать
+     * `FinishedGoodsMovement PRODUCTION_RECEIPT IN`. Уже выпущенные
+     * паспорты не пересоздаются — идемпотентность по
+     * `sourceKey = PACKED_PASSPORT:<passportId>`.
+     */
+    producesFinishedGoods: z.boolean().optional(),
   })
   .superRefine((data, ctx) => {
     // Если режим явно указан — валидируем согласованность; иначе
@@ -792,7 +814,8 @@ export const UpdateOperationSchema = z
       obj.timeNormSec !== undefined ||
       obj.timeNormsBySize !== undefined ||
       obj.salaryPlanRubPerShift !== undefined ||
-      obj.salaryPlanShiftSeconds !== undefined,
+      obj.salaryPlanShiftSeconds !== undefined ||
+      obj.producesFinishedGoods !== undefined,
     'Нечего обновлять: укажите хотя бы одно поле',
   );
 export type UpdateOperationDto = z.infer<typeof UpdateOperationSchema>;
@@ -867,6 +890,16 @@ export interface OperationSummaryDto {
    * первого сохранения.
    */
   salaryPlanShiftSeconds: number | null;
+  /**
+   * Признак «операция выпускает готовую продукцию» (см.
+   * `prisma/schema.prisma::Operation.producesFinishedGoods`).
+   *
+   * При успешном прохождении такой операции по паспорту backend
+   * создаёт `FinishedGoodsMovement PRODUCTION_RECEIPT IN` на склад
+   * `Order.finishedGoodsWarehouseId`. Default `false` — операция
+   * не считается выпускной, пока менеджер явно не включит признак.
+   */
+  producesFinishedGoods: boolean;
 }
 
 /** Карточка операции `GET /api/operations/:id`. */

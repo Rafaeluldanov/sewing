@@ -116,6 +116,10 @@ export interface StockMovementListItem {
   workshopNeedId: string;
   orderId?: string | null;
   orderNumber?: string | null;
+  /** `Order.clientId` — управленческая привязка к карточке клиента. */
+  clientId?: string | null;
+  /** `Client.name` — отображается в UI колонкой «Заказчик». */
+  clientName?: string | null;
   type: string;
   direction: StockMovementDirection;
   warehouseId?: string | null;
