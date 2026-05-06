@@ -100,7 +100,10 @@ export function NewPassportDemoForm({
   // у неё размер. Это позволяет автоматически пересоздать сетку при
   // смене размера, не трогая ввод rollsCount.
   const [gridSize, setGridSize] = useState<number>(0);
-  const [quantities, setQuantities] = useState<number[]>([]);
+  // По рулону держим строку, чтобы поле было пустым по умолчанию (без
+  // «0») и пользователь мог стирать символы. Парсим в число при подсчёте
+  // итога и в server action.
+  const [quantities, setQuantities] = useState<string[]>([]);
   const [gridError, setGridError] = useState<string | null>(null);
 
   const [cutterId, setCutterId] = useState<string>(cutterOptions[0]?.id ?? '');
@@ -114,7 +117,7 @@ export function NewPassportDemoForm({
   // рулонов». Используем gridSize как «количество рулонов в сетке».
   useEffect(() => {
     if (gridSize > 0) {
-      setQuantities(new Array(gridSize).fill(0));
+      setQuantities(new Array(gridSize).fill(''));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sizeId]);
@@ -130,13 +133,22 @@ export function NewPassportDemoForm({
     setGridError(null);
     const n = Math.floor(parsed);
     setGridSize(n);
-    setQuantities(new Array(n).fill(0));
+    setQuantities(new Array(n).fill(''));
   };
 
-  const total = quantities.reduce(
-    (acc, n) => acc + (Number.isFinite(n) && n > 0 ? n : 0),
-    0,
-  );
+  const total = quantities.reduce((acc, raw) => {
+    const n = Number(raw);
+    return acc + (raw.trim() && Number.isFinite(n) && n > 0 ? n : 0);
+  }, 0);
+  // Все поля сетки должны быть заполнены положительным числом — иначе
+  // submit заблокирован. Это и есть «требовали заполнения».
+  const allRollsFilled =
+    gridSize > 0 &&
+    quantities.length === gridSize &&
+    quantities.every((raw) => {
+      const n = Number(raw);
+      return raw.trim() !== '' && Number.isFinite(n) && n > 0;
+    });
   const selected = sortedSizes.find((s) => s.sizeId === sizeId);
   const showCutterSelect = !creatorIsCutter && cutterOptions.length > 0;
   const noActiveCutters = !creatorIsCutter && cutterOptions.length === 0;
@@ -279,16 +291,17 @@ export function NewPassportDemoForm({
                     <td>
                       <input
                         type="number"
-                        min={0}
+                        min={1}
                         step={1}
                         inputMode="numeric"
+                        required
+                        placeholder="—"
                         value={q}
                         onChange={(e) => {
-                          const v = Number(e.target.value);
+                          const raw = e.target.value;
                           setQuantities((prev) => {
                             const copy = [...prev];
-                            copy[idx] =
-                              Number.isFinite(v) && v >= 0 ? v : 0;
+                            copy[idx] = raw;
                             return copy;
                           });
                         }}
@@ -348,7 +361,7 @@ export function NewPassportDemoForm({
 
       <div className="actions-row">
         <SubmitButton
-          disabled={disabled || gridSize === 0 || total <= 0}
+          disabled={disabled || gridSize === 0 || !allRollsFilled}
         />
         <Link href="/work" className="btn btn-ghost">
           Отмена
