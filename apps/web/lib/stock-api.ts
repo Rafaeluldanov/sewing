@@ -18,13 +18,22 @@ import { apiFetch } from './api';
  * Запрос к `GET /api/stock/balances` (см. `ListStockBalancesQuerySchema`
  * в `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`).
  *
- * На этой UI-итерации фильтр держим минимальным: `q` + три
- * взаимоисключающих флага + pagination. `warehouseId` / `cellId` /
- * `materialRole` / `unit` сознательно не прокидываем, чтобы не
- * усложнять MVP UI «Складов» multi-warehouse-логикой.
+ * Фильтр UI-итерации «Фильтры склада» (см.
+ * `apps/web/components/warehouses/stock/stock-balances-filters.tsx`,
+ * `apps/web/app/admin/warehouses/page.tsx`):
+ *   - `q` — поиск (description / WorkshopNeed.description / sourceName);
+ *   - `warehouseId` — точечный фильтр по складу;
+ *   - три взаимоисключающих флага состояния остатка
+ *     (`positiveOnly` / `negativeOnly` / `zeroOnly`) — UI выбирает
+ *     ровно один через единый `stockState` selectbox;
+ *   - `limit` / `offset` — pagination.
+ *
+ * `cellId` / `materialRole` / `unit` сознательно не прокидываем —
+ * UI этой итерации работает на уровне склада.
  */
 export interface ListStockBalancesQuery {
   q?: string;
+  warehouseId?: string;
   positiveOnly?: boolean;
   negativeOnly?: boolean;
   zeroOnly?: boolean;
@@ -34,14 +43,27 @@ export interface ListStockBalancesQuery {
 
 /**
  * Запрос к `GET /api/stock/movements` (см. `ListStockMovementsQuerySchema`).
- * `direction` / `type` оставлены как минимально полезные фильтры
- * для журнала движений; `warehouseId` / `cellId` / `from` / `to`
- * не прокидываем.
+ *
+ * Фильтр UI-итерации «Фильтры склада» (см.
+ * `apps/web/components/warehouses/stock/stock-movements-filters.tsx`):
+ *   - `q` — substring по `comment` движения;
+ *   - `warehouseId` — точечный фильтр по складу;
+ *   - `type` — `PURCHASE_RECEIPT | MATERIAL_ISSUE | ADJUSTMENT |
+ *     REVERSAL | TRANSFER`;
+ *   - `direction` — `IN | OUT`;
+ *   - `from` / `to` — диапазон по `createdAt` (ISO-строка / `YYYY-MM-DD`).
+ *
+ * `cellId` / `sourceType` / `sourceId` / `purchaseReceiptId` / прочие
+ * id-фильтры backend-DTO сознательно не прокидываем — UI этой
+ * итерации работает на уровне склада, не на уровне источника.
  */
 export interface ListStockMovementsQuery {
   q?: string;
+  warehouseId?: string;
   type?: StockMovementType;
   direction?: StockMovementDirection;
+  from?: string;
+  to?: string;
   limit?: number;
   offset?: number;
 }
@@ -142,6 +164,7 @@ export function listStockBalances(
     cache: 'no-store',
     searchParams: {
       q: query.q,
+      warehouseId: query.warehouseId,
       // Backend ZodValidationPipe принимает 'true' | 'false' | '1' | '0';
       // отправляем строку только когда флаг явно true — так UI не
       // конфликтует с superRefine «mutually exclusive».
@@ -161,8 +184,11 @@ export function listStockMovements(
     cache: 'no-store',
     searchParams: {
       q: query.q,
+      warehouseId: query.warehouseId,
       type: query.type,
       direction: query.direction,
+      from: query.from,
+      to: query.to,
       limit: query.limit,
       offset: query.offset,
     },

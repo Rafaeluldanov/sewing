@@ -25,13 +25,18 @@ import {
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
 import {
+  parseStockBalanceState,
   parseWarehouseStockTab,
   StockAdjustmentButton,
+  StockBalancesFilters,
   StockBalancesTable,
+  StockMovementsFilters,
   StockMovementsTable,
   StockPagination,
   StockTransferButton,
+  stockStateToApiFlags,
   WarehouseStockTabs,
+  type StockBalanceState,
   type WarehouseStockTab,
 } from '@/components/warehouses/stock';
 
@@ -48,10 +53,26 @@ interface SearchParams {
   offset?: string;
   /** Лёгкий поиск; backend применяет `q` и в balances, и в movements. */
   q?: string;
+  /** Точечный фильтр по складу (для обеих вкладок). */
+  warehouseId?: string;
+  /**
+   * Единый UI-параметр над тремя backend-флагами
+   * `positiveOnly` / `negativeOnly` / `zeroOnly` для вкладки
+   * `balances` (см. `StockBalancesFilters`). Принимает
+   * `'all' | 'positive' | 'zero' | 'negative'`. Любое незнакомое
+   * значение → `'all'`.
+   */
+  stockState?: string;
   /** Только для вкладки `movements`. */
   type?: string;
   direction?: string;
-  /** Взаимоисключающие флаги для вкладки `balances`. */
+  from?: string;
+  to?: string;
+  /**
+   * Legacy: backend-флаги напрямую — оставляем поддержку для обратной
+   * совместимости URL-ов до введения единого `stockState`-селекта.
+   * Из формы фильтра больше не отправляются.
+   */
   positiveOnly?: string;
   negativeOnly?: string;
   zeroOnly?: string;
@@ -249,22 +270,36 @@ async function BalancesTabPage({
   const limit = parseLimit(searchParams.limit);
   const offset = parseOffset(searchParams.offset);
   const q = sanitizeString(searchParams.q);
-  const positiveOnly = parseBoolean(searchParams.positiveOnly);
-  const negativeOnly = parseBoolean(searchParams.negativeOnly);
-  const zeroOnly = parseBoolean(searchParams.zeroOnly);
+  const warehouseId = sanitizeString(searchParams.warehouseId);
+  // Новый единый UI-параметр «Остаток» — `'all' | 'positive' | 'zero'
+  // | 'negative'` (см. `StockBalancesFilters`). Маппится в три
+  // backend-флага через `stockStateToApiFlags`.
+  const stockState: StockBalanceState = parseStockBalanceState(
+    searchParams.stockState,
+  );
+  // Legacy: если URL пришёл со старыми флагами (`positiveOnly=true`
+  // и т.п.) — продолжаем их уважать, но новый UI больше не отдаёт.
+  const stateFromFlags = parseLegacyStockState({
+    positiveOnly: searchParams.positiveOnly,
+    negativeOnly: searchParams.negativeOnly,
+    zeroOnly: searchParams.zeroOnly,
+  });
+  const effectiveStockState: StockBalanceState =
+    stockState === 'all' && stateFromFlags ? stateFromFlags : stockState;
+  const apiFlags = stockStateToApiFlags(effectiveStockState);
 
   let response: StockBalanceListResponse | null = null;
   let error: string | null = null;
   let warehouses: WarehouseSummaryDto[] = [];
   try {
-    // Параллельно: остатки + список складов для select-а назначения
-    // в форме «Переместить» (см. `StockTransferDialog`).
+    // Параллельно: остатки + список складов (нужен и для select-а
+    // назначения в `StockTransferDialog`, и для select-а склада в
+    // `StockBalancesFilters`).
     [response, warehouses] = await Promise.all([
       listStockBalances({
         q,
-        positiveOnly,
-        negativeOnly,
-        zeroOnly,
+        warehouseId,
+        ...apiFlags,
         limit,
         offset,
       }),
@@ -280,6 +315,16 @@ async function BalancesTabPage({
   const total = response?.total ?? 0;
   const items = response?.items ?? [];
 
+  // Параметры, которые нужно сохранять при переходе по pagination и
+  // переключении страниц pagination — submit формы фильтров их
+  // регенерирует, но pagination сама про них ничего не знает.
+  const balancesPreserve: Record<string, string | undefined> = {
+    tab: 'balances',
+    q,
+    warehouseId,
+    stockState: effectiveStockState !== 'all' ? effectiveStockState : undefined,
+  };
+
   return (
     <AdminPageShell
       icon={<Warehouse size={22} strokeWidth={1.6} aria-hidden />}
@@ -293,16 +338,24 @@ async function BalancesTabPage({
         </div>
       )}
 
+      {/*
+       * Фильтры остатков (см.
+       * `apps/web/components/warehouses/stock/stock-balances-filters.tsx`).
+       * Отдельная `AdminCard` над таблицей — submit формы перерисует
+       * страницу со свежими `searchParams`. Кнопки «Корректировка» /
+       * «Переместить» остаются над таблицей внутри основной карточки.
+       */}
       <AdminCard>
-        {/*
-         * Кнопка ручной корректировки остатка (см.
-         * `apps/web/components/warehouses/stock/stock-adjustment-button.tsx`,
-         * `POST /api/stock/adjustments`,
-         * `docs/current-state.md §«UI остатков и движений склада»`).
-         * Размещаем над таблицей внутри той же `AdminCard` — UI-решение
-         * владельца проекта: не плодить отдельную страницу/пункт меню,
-         * корректировка живёт прямо во вкладке «Остатки».
-         */}
+        <StockBalancesFilters
+          q={q}
+          warehouseId={warehouseId}
+          stockState={effectiveStockState}
+          limit={limit}
+          warehouses={warehouses}
+        />
+      </AdminCard>
+
+      <AdminCard>
         {items.length > 0 && (
           <div
             style={{
@@ -322,13 +375,7 @@ async function BalancesTabPage({
           total={total}
           limit={response?.limit ?? limit}
           offset={response?.offset ?? offset}
-          preserveParams={{
-            tab: 'balances',
-            q,
-            positiveOnly: positiveOnly ? 'true' : undefined,
-            negativeOnly: negativeOnly ? 'true' : undefined,
-            zeroOnly: zeroOnly ? 'true' : undefined,
-          }}
+          preserveParams={balancesPreserve}
           label="остатков"
         />
       </AdminCard>
@@ -350,19 +397,29 @@ async function MovementsTabPage({
   const limit = parseLimit(searchParams.limit);
   const offset = parseOffset(searchParams.offset);
   const q = sanitizeString(searchParams.q);
+  const warehouseId = sanitizeString(searchParams.warehouseId);
   const type = parseMovementType(searchParams.type);
   const direction = parseMovementDirection(searchParams.direction);
+  const from = sanitizeDate(searchParams.from);
+  const to = sanitizeDate(searchParams.to);
 
   let response: StockMovementListResponse | null = null;
   let error: string | null = null;
+  let warehouses: WarehouseSummaryDto[] = [];
   try {
-    response = await listStockMovements({
-      q,
-      type,
-      direction,
-      limit,
-      offset,
-    });
+    [response, warehouses] = await Promise.all([
+      listStockMovements({
+        q,
+        warehouseId,
+        type,
+        direction,
+        from,
+        to,
+        limit,
+        offset,
+      }),
+      listWarehouses(),
+    ]);
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -372,6 +429,16 @@ async function MovementsTabPage({
 
   const total = response?.total ?? 0;
   const items = response?.items ?? [];
+
+  const movementsPreserve: Record<string, string | undefined> = {
+    tab: 'movements',
+    q,
+    warehouseId,
+    type,
+    direction,
+    from,
+    to,
+  };
 
   return (
     <AdminPageShell
@@ -386,6 +453,23 @@ async function MovementsTabPage({
         </div>
       )}
 
+      {/*
+       * Фильтры журнала движений (см.
+       * `apps/web/components/warehouses/stock/stock-movements-filters.tsx`).
+       */}
+      <AdminCard>
+        <StockMovementsFilters
+          q={q}
+          warehouseId={warehouseId}
+          type={type}
+          direction={direction}
+          from={from}
+          to={to}
+          limit={limit}
+          warehouses={warehouses}
+        />
+      </AdminCard>
+
       <AdminCard>
         <StockMovementsTable items={items} />
         <StockPagination
@@ -393,12 +477,7 @@ async function MovementsTabPage({
           total={total}
           limit={response?.limit ?? limit}
           offset={response?.offset ?? offset}
-          preserveParams={{
-            tab: 'movements',
-            q,
-            type,
-            direction,
-          }}
+          preserveParams={movementsPreserve}
           label="движений"
         />
       </AdminCard>
@@ -423,16 +502,39 @@ function parseOffset(raw: string | undefined): number {
   return n;
 }
 
-function parseBoolean(raw: string | undefined): boolean | undefined {
-  if (raw === 'true' || raw === '1') return true;
-  return undefined;
-}
-
 function sanitizeString(raw: string | undefined): string | undefined {
   if (raw == null) return undefined;
   const trimmed = raw.trim();
   if (trimmed.length === 0) return undefined;
   return trimmed;
+}
+
+/**
+ * `<input type="date">` отдаёт `YYYY-MM-DD` или пустую строку.
+ * Прокидываем backend-у как есть — `Zod.datetime()` на DTO принимает
+ * ISO-формат, а сам сервис строит `Date` из строки. Пустая строка /
+ * undefined → не отправляем фильтр.
+ */
+function sanitizeDate(raw: string | undefined): string | undefined {
+  return sanitizeString(raw);
+}
+
+/**
+ * Legacy-парсер старых backend-флагов в URL (`positiveOnly=true` и
+ * т.п.). Новый UI отдаёт единый `stockState`, но если кто-то открыл
+ * старую ссылку — продолжаем уважать её. Возвращает соответствующий
+ * `StockBalanceState` или `null`, если ни один флаг не установлен.
+ */
+function parseLegacyStockState(raw: {
+  positiveOnly?: string;
+  negativeOnly?: string;
+  zeroOnly?: string;
+}): StockBalanceState | null {
+  const isTrue = (v: string | undefined) => v === 'true' || v === '1';
+  if (isTrue(raw.positiveOnly)) return 'positive';
+  if (isTrue(raw.negativeOnly)) return 'negative';
+  if (isTrue(raw.zeroOnly)) return 'zero';
+  return null;
 }
 
 const MOVEMENT_TYPES: ReadonlySet<StockMovementType> = new Set<StockMovementType>([

@@ -581,11 +581,63 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     «Перемещение» / «Расход» и «Перемещение» / «Приход».
   - Сознательно **не реализованы** на этой итерации: отдельная
     модель `StockTransfer`, FIFO / LIFO / `MaterialStockLot`,
-    multi-warehouse фильтр на UI, dropdown ячейки назначения
-    (cell selector в форме перемещения скрыт — destination
-    `cellId = null`, ждём API списка ячеек по складу),
-    delete / cancel transfer. Запреты зафиксированы в smoke-
-    тесте `tests/smoke/stock-transfers.smoke.test.ts`.
+    dropdown ячейки назначения (cell selector в форме перемещения
+    скрыт — destination `cellId = null`, ждём API списка ячеек по
+    складу), delete / cancel transfer. Запреты зафиксированы в
+    smoke-тесте `tests/smoke/stock-transfers.smoke.test.ts`.
+
+  Frontend-итерация «Фильтры склада»
+  (`apps/web/app/admin/warehouses/page.tsx`,
+  `apps/web/components/warehouses/stock/stock-balances-filters.tsx`,
+  `apps/web/components/warehouses/stock/stock-movements-filters.tsx`,
+  `apps/web/lib/stock-api.ts`):
+  - в существующем разделе `/admin/warehouses` над таблицами
+    «Остатки» и «Движения» появились GET-формы фильтров. Backend
+    `StockController` / `StockService` / Prisma schema на этой
+    итерации **не менялись** — UI пользуется тем, что DTO уже
+    поддерживали (`q`, `warehouseId`, `positiveOnly` /
+    `negativeOnly` / `zeroOnly`, `type`, `direction`, `from` /
+    `to`).
+  - Вкладка **«Остатки»** — `StockBalancesFilters`:
+    - **Поиск** (`q`) — substring по `description` остатка и
+      `WorkshopNeed.description` / `sourceName`;
+    - **Склад** (`warehouseId`) — select из `listWarehouses()`,
+      «Все склады» / `<option value="">`;
+    - **Остаток** (`stockState`) — единый UI-параметр над тремя
+      backend-флагами: `'all' | 'positive' | 'zero' | 'negative'`.
+      UI не позволяет выбрать несколько mutually-exclusive флагов
+      одновременно. Маппинг делает `stockStateToApiFlags`
+      (`positive → positiveOnly=true`, `negative →
+      negativeOnly=true`, `zero → zeroOnly=true`, `all → ничего`).
+      Если URL пришёл со старыми флагами `positiveOnly=true` и
+      т.п. — page их парсит через legacy-helper и применяет.
+  - Вкладка **«Движения»** — `StockMovementsFilters`:
+    - **Поиск** (`q`) — substring по `comment` движения;
+    - **Склад** (`warehouseId`);
+    - **Тип движения** — `PURCHASE_RECEIPT | MATERIAL_ISSUE |
+      REVERSAL | ADJUSTMENT | TRANSFER` с человекочитаемыми
+      лейблами;
+    - **Направление** — `IN | OUT`;
+    - **Период с / по** — `<input type="date">` (`YYYY-MM-DD`),
+      backend парсит через `Zod.datetime()`-валидацию.
+  - **URL state**: фильтры живут в `searchParams`. При submit
+    формы браузер отправляет GET с собранными значениями, RSC
+    перерисовывает страницу. `tab` и `limit` сохраняются через
+    `<input type="hidden">`, `offset` сознательно НЕ переносится
+    — применение фильтра должно сбрасывать pagination на первую
+    страницу. Pagination (`StockPagination`) сохраняет все
+    активные фильтры через `preserveParams` — кнопки «Назад» /
+    «Вперёд» меняют только `offset`. Кнопка «Сбросить» — обычная
+    ссылка на `/admin/warehouses?tab=balances|movements`.
+  - Кнопки «Корректировка» и «Переместить» на вкладке «Остатки»
+    остались на месте, кнопка «Добавить» в header тоже — фильтры
+    добавлены отдельной `AdminCard` над таблицей.
+  - Сознательно **не реализованы** на этой итерации: cell
+    selector назначения для transfer (ждёт API списка ячеек по
+    складу), chips / advanced filter summary в UI, фильтр
+    `materialRole` / `unit`, валидация `from > to` на frontend
+    (backend сам обработает). Запреты зафиксированы в smoke-
+    тесте `tests/smoke/warehouses-stock-filters.smoke.test.ts`.
 
   Frontend-итерация «Настройки компании → Материалы и склад»
   (`apps/web/app/admin/company-settings/settings-form.tsx`,
