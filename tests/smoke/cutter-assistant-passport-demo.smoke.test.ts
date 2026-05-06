@@ -81,8 +81,11 @@ describe('/orders/[id]/passports/new-demo/page.tsx — серверная стр
     expect(src).toMatch(/from '@\/lib\/employees-api'/);
     expect(src).toMatch(/getOrder\(/);
     expect(src).toMatch(/listOrderPassports\(/);
-    // Активные CUTTER-ы как в обычной форме.
-    expect(src).toMatch(/listEmployees\(\s*\{\s*active:\s*true,\s*role:\s*'CUTTER'\s*\}/);
+    // Узкий `/api/employees/cutters` (RBAC: CUTTER_ASSISTANT, SHOP_MANAGER,
+    // ADMIN). Широкий `listEmployees` для CUTTER_ASSISTANT даёт 403 —
+    // именно так и сделана обычная форма выпуска паспорта.
+    expect(src).toMatch(/listActiveCutters\(/);
+    expect(src).not.toMatch(/listEmployees\(/);
   });
 
   test('передаёт today/disabled/sizes в клиентскую форму', () => {
