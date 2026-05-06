@@ -203,6 +203,19 @@ describe('actions.ts — batch создание паспортов через с
     expect(src).toMatch(/CreatePassportSchema\.safeParse/);
   });
 
+  test('после успешного создания каждый паспорт уходит в печать', () => {
+    const src = readSrc(actionsPath);
+    // Печать через тот же `POST /api/print-jobs`, что использует
+    // общий <PrintButton> после обычного выпуска паспорта.
+    expect(src).toMatch(/from '@\/lib\/printers-api'/);
+    expect(src).toMatch(/await createPrintJob\(\s*\{/);
+    expect(src).toMatch(/sourceType:\s*'PASSPORT_PRINT'/);
+    expect(src).toMatch(/sourceId:\s*createdPassport\.id/);
+    // Ошибка печати не должна откатывать паспорт — отдельные счётчики.
+    expect(src).toMatch(/printed\+\+/);
+    expect(src).toMatch(/printFailed\+\+/);
+  });
+
   test('пропускает рулоны с qty <= 0 и собирает счётчики created/failed', () => {
     const src = readSrc(actionsPath);
     expect(src).toMatch(/if \(!Number\.isFinite\(qty\) \|\| qty <= 0\) continue;/);

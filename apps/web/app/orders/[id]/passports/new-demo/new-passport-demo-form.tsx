@@ -154,11 +154,27 @@ export function NewPassportDemoForm({
   const noActiveCutters = !creatorIsCutter && cutterOptions.length === 0;
 
   if (state.success) {
-    const { created, failed, firstError } = state.success;
+    const {
+      created,
+      failed,
+      printed,
+      printFailed,
+      firstError,
+      firstPrintError,
+    } = state.success;
     return (
       <div className="card">
         <div className="success-box">
           <strong>Выпущено паспортов: {created}</strong>
+          <div style={{ marginTop: '0.4rem' }}>
+            Отправлено в печать: <strong>{printed}</strong>
+            {printFailed > 0 && (
+              <>
+                {' '}· не ушло в печать: <strong>{printFailed}</strong>
+                {firstPrintError ? <> ({firstPrintError})</> : null}
+              </>
+            )}
+          </div>
           {failed > 0 && (
             <div style={{ marginTop: '0.4rem' }}>
               Не удалось выпустить: <strong>{failed}</strong>
@@ -257,20 +273,27 @@ export function NewPassportDemoForm({
             onChange={(e) => setRollsCount(e.target.value)}
             placeholder="Например, 3"
           />
-          <button
-            type="button"
-            className="btn btn-primary"
-            style={{ marginLeft: '0.5rem' }}
-            onClick={handleCreateGrid}
-          >
-            Создать сетку
-          </button>
           {gridError && (
             <div className="error-box" style={{ marginTop: '0.4rem' }}>
               {gridError}
             </div>
           )}
         </div>
+      </div>
+
+      {/*
+       * Кнопка «Создать сетку» сидит в собственном `actions-row` — том
+       * же контейнере, что финальный submit «Выпустить паспорта», —
+       * поэтому отступ и выравнивание у них совпадают.
+       */}
+      <div className="actions-row">
+        <button
+          type="button"
+          className="btn btn-primary"
+          onClick={handleCreateGrid}
+        >
+          Создать сетку
+        </button>
       </div>
 
       {gridSize > 0 && (

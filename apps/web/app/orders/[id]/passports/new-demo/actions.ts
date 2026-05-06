@@ -4,14 +4,21 @@ import { revalidatePath } from 'next/cache';
 import { CreatePassportSchema } from '@sewing/shared/passports';
 import { ApiRequestError } from '@/lib/api';
 import { createPassport } from '@/lib/passports-api';
+import { createPrintJob } from '@/lib/printers-api';
 
 export interface PassportDemoFormState {
   error?: string;
   success?: {
     created: number;
     failed: number;
-    /** Первое сообщение об ошибке для частичного успеха (created > 0). */
+    /** Сколько паспортов успешно отправлено в печать. */
+    printed: number;
+    /** Сколько паспортов создано, но печать не ушла (нет смены/принтера/etc). */
+    printFailed: number;
+    /** Первое сообщение об ошибке создания (для частичного успеха). */
     firstError?: string;
+    /** Первое сообщение об ошибке печати — отдельно, оно не критичное. */
+    firstPrintError?: string;
   };
 }
 
@@ -78,7 +85,10 @@ export async function createPassportDemoBatchAction(
 
   let created = 0;
   let failed = 0;
+  let printed = 0;
+  let printFailed = 0;
   let firstError: string | undefined;
+  let firstPrintError: string | undefined;
 
   for (let i = 0; i < quantities.length; i++) {
     const qty = Math.floor(quantities[i] ?? 0);
@@ -99,12 +109,31 @@ export async function createPassportDemoBatchAction(
       continue;
     }
 
+    let createdPassport;
     try {
-      await createPassport(parsed.data);
+      createdPassport = await createPassport(parsed.data);
       created++;
     } catch (e) {
       failed++;
       if (!firstError) firstError = explainApiError(e);
+      continue;
+    }
+
+    // Автопечать: тот же `POST /api/print-jobs`, что использует общий
+    // `<PrintButton>` после обычного выпуска. Принтер резолвится по
+    // equipmentId активной смены помощника раскройщика
+    // (см. `print-jobs.service.ts::resolvePrinter`). Если печать
+    // не ушла (нет принтера / нет агента), паспорт всё равно создан —
+    // считаем только в `printFailed`, а не в `failed`.
+    try {
+      await createPrintJob({
+        sourceType: 'PASSPORT_PRINT',
+        sourceId: createdPassport.id,
+      });
+      printed++;
+    } catch (e) {
+      printFailed++;
+      if (!firstPrintError) firstPrintError = explainApiError(e);
     }
   }
 
@@ -115,6 +144,13 @@ export async function createPassportDemoBatchAction(
     return { error: firstError ?? 'Не удалось создать ни одного паспорта' };
   }
   return {
-    success: { created, failed, firstError },
+    success: {
+      created,
+      failed,
+      printed,
+      printFailed,
+      firstError,
+      firstPrintError,
+    },
   };
 }
