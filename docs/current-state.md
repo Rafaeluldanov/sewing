@@ -784,6 +784,64 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     зафиксированы в smoke-тесте
     `tests/smoke/finished-goods-operation-output.smoke.test.ts`.
 
+  Frontend-итерация «Готовая продукция в существующих вкладках склада»
+  (`apps/web/app/admin/warehouses/page.tsx`,
+  `apps/web/components/warehouses/stock/unified-rows.ts`,
+  `apps/web/components/warehouses/stock/stock-balances-table.tsx`,
+  `apps/web/components/warehouses/stock/stock-movements-table.tsx`,
+  `apps/web/components/warehouses/stock/stock-movements-filters.tsx`,
+  `apps/web/lib/finished-goods-api.ts`,
+  `tests/smoke/warehouses-unified-stock-finished-goods.smoke.test.ts`):
+  - в существующих вкладках `/admin/warehouses?tab=balances` и
+    `?tab=movements` теперь отображаются и материалы, и готовая
+    продукция в одной таблице. Отдельная вкладка / страница /
+    sidebar-пункт под готовую продукцию **не создавались**;
+    `OrderViewTabs` не менялся.
+  - Готовая продукция различима по названию строки —
+    `${productName} / ${color} / ${sizeCode}` (например, «Худи модель
+    001 / чёрный / L»). Колонка «Материал» переименована в
+    «Номенклатура»; отдельной колонки «Тип» нет (см. UI-решение
+    владельца проекта). Цена и сумма для готовой продукции —
+    прочерк (`«—»`), потому что это не material cost.
+  - Frontend-wrapper `apps/web/lib/finished-goods-api.ts` обёртывает
+    `GET /api/finished-goods/balances` и `GET /api/finished-goods/movements`
+    (read-only, RBAC backend `ADMIN` / `SHOP_MANAGER`). `sourceKey`
+    в client-types сознательно не объявлен — backend его не отдаёт.
+  - Объединение делается на уровне RSC (`unified-rows.ts`):
+    `materialBalanceToUnified` / `finishedGoodsBalanceToUnified` /
+    `materialMovementToUnified` / `finishedGoodsMovementToUnified` →
+    общий массив `UnifiedWarehouseBalanceRow` /
+    `UnifiedWarehouseMovementRow`, сортировка по `updatedAt desc` /
+    `createdAt desc`, UI-pagination через `applyUnifiedPagination`.
+    Для остатков `total = material.total + finishedGoods.total`.
+  - Type routing в журнале движений: `PURCHASE_RECEIPT` /
+    `MATERIAL_ISSUE` уходят только в material API,
+    `PRODUCTION_RECEIPT` — только в finished goods API,
+    `REVERSAL` / `ADJUSTMENT` / `TRANSFER` — в оба. Если type не
+    выбран — оба API запрашиваются параллельно. `SHIPMENT` пока в
+    UI-фильтре не показывается, потому что отгрузка не реализована.
+  - В фильтре «Поиск» (`q`) backend материалов принимает
+    case-insensitive substring по `description`/`comment`; finished
+    goods backend `q` не принимает (DTO `.strict()`), поэтому в этот
+    контур поиск не уходит.
+  - Колонка «Заказчик» (`Client.name` через `Order.client`) есть и
+    для материалов, и для готовой продукции — backend на предыдущей
+    итерации добавил `clientId` / `clientName` в оба movement-API.
+  - Это **временный unified UI layer** до появления master-сущности
+    номенклатуры и backend unified warehouse endpoint. Ограничения
+    MVP: сейчас оба API запрашиваются с потолком `limit=200`, общий
+    массив сортируется на UI и slice-ится по `offset/limit`. Для
+    больших объёмов лучше сделать backend unified warehouse endpoint
+    с серверным total / pagination / sorting (TODO в коде).
+  - Backend модели остаются раздельными (`StockBalance` /
+    `StockMovement` для материалов, `FinishedGoodsBalance` /
+    `FinishedGoodsMovement` для готовой продукции). `StockService`,
+    `FinishedGoodsService`, `MaterialIssue`, packing flow, operation
+    flow, `prisma/schema.prisma` на этой итерации **не правились**.
+  - Сознательно **не реализованы**: отгрузка готовой продукции (UI и
+    backend), transfer / adjustment готовой продукции, отдельный
+    UI-раздел / sidebar item / роль для готовой продукции.
+
   Backend + Frontend-итерация «Давальческое сырьё клиента»
   (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
   `prisma/migrations/20260614100000_add_order_materials_and_hardware_cost_policy`,

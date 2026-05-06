@@ -1,24 +1,24 @@
 /**
- * `StockMovementsTable` — read-only журнал движений
- * `StockMovement` для вкладки `?tab=movements` раздела «Склады».
+ * `StockMovementsTable` — read-only журнал движений для вкладки
+ * `?tab=movements` раздела «Склады» (см.
+ * `apps/web/app/admin/warehouses/page.tsx`).
  *
- * Server-component: получает уже загруженный массив items и
- * рендерит `<AdminTable>`. `description` в response движений
- * нет (backend на этой итерации не отдаёт — `sourceKey`
- * сознательно скрыт), поэтому колонка «Материал» собирается
- * из `workshopNeedId` или `sourceId` (см. ТЗ §7).
+ * Server-component: получает уже загруженный массив unified-строк
+ * (`UnifiedWarehouseMovementRow`). Сам ничего не fetch-ит — страница
+ * объединяет ответы `listStockMovements` (материалы) и
+ * `listFinishedGoodsMovements` (готовая продукция) через mappers
+ * (`unified-rows.ts`).
  *
- * Никаких mutation-кнопок — журнал read-only. `sourceKey`
- * (внутренний идемпотентный ключ `PURCHASE_RECEIPT_LINE:<id>`,
- * `MATERIAL_ISSUE_LINE:<id>`) сознательно не показываем — backend
- * его в публичном response не возвращает (см. JSDoc сервиса).
+ * `sourceKey` (внутренний идемпотентный ключ) сознательно не
+ * показываем — backend его в публичном response не возвращает. Для
+ * движений готовой продукции «Источник» собирается из `passportId` /
+ * `boxId`; для материалов — из `sourceType` · `sourceId`.
  */
 import {
   AdminEmptyState,
   AdminTable,
   type AdminTableColumn,
 } from '@/components/admin';
-import type { StockMovementListItem } from '@/lib/stock-api';
 import { Activity } from 'lucide-react';
 import {
   formatStockDateTime,
@@ -27,39 +27,30 @@ import {
 } from './format';
 import { StockDirectionBadge } from './stock-direction-badge';
 import { StockMovementTypeBadge } from './stock-movement-type-badge';
+import type { UnifiedWarehouseMovementRow } from './unified-rows';
 
 interface Props {
-  items: StockMovementListItem[];
+  items: UnifiedWarehouseMovementRow[];
 }
 
 /**
- * Источник движения для колонки «Источник» — компактная
- * подпись `<sourceType> <sourceId>` или fallback на пустую
- * прочерк-ячейку. `sourceType` это внешний классификатор
- * (например, `PURCHASE_RECEIPT_LINE`); `sourceId` — id строки
- * исходного документа. Полные id не обрезаем — UI ширина
- * горизонтального скролла это допускает.
+ * Подпись «Источник» в зависимости от типа строки. Для материалов
+ * это `sourceType · sourceId` (ровно как в предыдущем UI). Для
+ * готовой продукции — `passportId` и/или `boxId`, потому что
+ * движение с `type = PRODUCTION_RECEIPT` всегда привязано к
+ * паспорту (см. `FinishedGoodsService.recordPassportOutputInTx`).
  */
-function formatSource(item: StockMovementListItem): string {
+function formatUnifiedSource(item: UnifiedWarehouseMovementRow): string {
   const parts: string[] = [];
-  if (item.sourceType) parts.push(item.sourceType);
-  if (item.sourceId) parts.push(item.sourceId);
+  if (item.kind === 'FINISHED_GOOD') {
+    if (item.passportId) parts.push(`паспорт ${item.passportId}`);
+    if (item.boxId) parts.push(`коробка ${item.boxId}`);
+  } else {
+    if (item.sourceType) parts.push(item.sourceType);
+    if (item.sourceId) parts.push(item.sourceId);
+  }
   if (parts.length === 0) return '—';
   return parts.join(' · ');
-}
-
-/**
- * Подпись материала для колонки «Материал». Backend не отдаёт
- * `description` в movement-response (есть только в balance), поэтому
- * fallback-цепочка: `workshopNeedId` → `sourceId` → `«—»`. Эта
- * подпись управленческая: «по чему движение», без дублирования
- * полной справочной информации (она доступна на вкладке «Остатки»
- * по тому же `workshopNeedId`).
- */
-function formatMaterial(item: StockMovementListItem): string {
-  if (item.workshopNeedId) return item.workshopNeedId;
-  if (item.sourceId) return item.sourceId;
-  return '—';
 }
 
 export function StockMovementsTable({ items }: Props) {
@@ -67,13 +58,13 @@ export function StockMovementsTable({ items }: Props) {
     return (
       <AdminEmptyState
         icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}
-        title="Движения материалов пока не зафиксированы."
-        hint="Они появятся после первой приёмки или расхода материалов."
+        title="Движения пока не зафиксированы."
+        hint="Они появятся после первой приёмки / расхода материалов или выпуска готовой продукции."
       />
     );
   }
 
-  const columns: AdminTableColumn<StockMovementListItem>[] = [
+  const columns: AdminTableColumn<UnifiedWarehouseMovementRow>[] = [
     {
       key: 'createdAt',
       header: 'Дата',
@@ -90,11 +81,11 @@ export function StockMovementsTable({ items }: Props) {
       render: (m) => <StockDirectionBadge direction={m.direction} />,
     },
     {
-      key: 'material',
-      header: 'Материал',
+      key: 'name',
+      header: 'Номенклатура',
       render: (m) => (
-        <span className="admin-muted admin-stock-cell__hint">
-          {formatMaterial(m)}
+        <span data-row-kind={m.kind}>
+          {m.name || <span className="admin-muted">—</span>}
         </span>
       ),
     },
@@ -113,8 +104,6 @@ export function StockMovementsTable({ items }: Props) {
     // Колонка «Заказчик» — `Client.name` через `Order.client` (см.
     // `apps/api/src/modules/stock/stock.service.ts::toStockMovementListItem`,
     // `apps/api/src/modules/finished-goods/finished-goods.service.ts::toMovementListItem`).
-    // Идёт сразу за «Заказ», чтобы менеджер видел и номер, и
-    // юр. лицо в журнале движений склада.
     {
       key: 'client',
       header: 'Заказчик',
@@ -185,7 +174,7 @@ export function StockMovementsTable({ items }: Props) {
       header: 'Источник',
       render: (m) => (
         <span className="admin-muted admin-stock-cell__hint">
-          {formatSource(m)}
+          {formatUnifiedSource(m)}
         </span>
       ),
     },
@@ -193,7 +182,11 @@ export function StockMovementsTable({ items }: Props) {
       key: 'comment',
       header: 'Комментарий',
       render: (m) =>
-        m.comment ? <span>{m.comment}</span> : <span className="admin-muted">—</span>,
+        m.comment ? (
+          <span>{m.comment}</span>
+        ) : (
+          <span className="admin-muted">—</span>
+        ),
     },
   ];
 

@@ -159,9 +159,12 @@ describe('StockBalancesTable — read-only состав колонок', () => {
     expect(page).toMatch(/listStockBalances\(/);
   });
 
-  test('содержит колонки Материал/Заказ/Склад/Ячейка/Кол-во/Цена/Сумма', () => {
+  test('содержит колонки Номенклатура/Заказ/Склад/Ячейка/Кол-во/Цена/Сумма', () => {
     const src = readSrc(BALANCES_TABLE);
-    expect(src).toMatch(/header:\s*'Материал'/);
+    // Заголовок переименован в «Номенклатура» — таблица показывает
+    // и материалы, и готовую продукцию (см. итерация «show finished
+    // goods in stock views»).
+    expect(src).toMatch(/header:\s*'Номенклатура'/);
     expect(src).toMatch(/header:\s*'Заказ'/);
     expect(src).toMatch(/header:\s*'Склад'/);
     expect(src).toMatch(/header:\s*'Ячейка'/);
@@ -173,9 +176,9 @@ describe('StockBalancesTable — read-only состав колонок', () => {
     expect(src).toMatch(/Обновлено/);
   });
 
-  test('пустое состояние подсказывает «Остатки материалов пока не сформированы»', () => {
+  test('пустое состояние общее: «Остатки пока не сформированы»', () => {
     const src = readSrc(BALANCES_TABLE);
-    expect(src).toMatch(/Остатки материалов пока не сформированы/);
+    expect(src).toMatch(/Остатки пока не сформированы/);
   });
 
   test('никаких mutation-кнопок на остатках', () => {
@@ -198,12 +201,14 @@ describe('StockMovementsTable — read-only состав колонок', () => 
     expect(page).toMatch(/listStockMovements\(/);
   });
 
-  test('содержит колонки Дата/Тип/Направление/Материал/Кол-во/Остаток до/после', () => {
+  test('содержит колонки Дата/Тип/Направление/Номенклатура/Кол-во/Остаток до/после', () => {
     const src = readSrc(MOVEMENTS_TABLE);
     expect(src).toMatch(/header:\s*'Дата'/);
     expect(src).toMatch(/header:\s*'Тип'/);
     expect(src).toMatch(/header:\s*'Направление'/);
-    expect(src).toMatch(/header:\s*'Материал'/);
+    // Заголовок переименован в «Номенклатура» — журнал показывает
+    // движения и материалов, и готовой продукции.
+    expect(src).toMatch(/header:\s*'Номенклатура'/);
     expect(src).toMatch(/header:\s*'Кол-во'/);
     expect(src).toMatch(/header:\s*'Остаток до'/);
     expect(src).toMatch(/header:\s*'Остаток после'/);
@@ -212,9 +217,9 @@ describe('StockMovementsTable — read-only состав колонок', () => 
     expect(src).toMatch(/Комментарий/);
   });
 
-  test('пустое состояние подсказывает «Движения материалов пока не зафиксированы»', () => {
+  test('пустое состояние общее: «Движения пока не зафиксированы»', () => {
     const src = readSrc(MOVEMENTS_TABLE);
-    expect(src).toMatch(/Движения материалов пока не зафиксированы/);
+    expect(src).toMatch(/Движения пока не зафиксированы/);
   });
 
   test('sourceKey в журнале не отображается (нет колонки и нет m.sourceKey)', () => {

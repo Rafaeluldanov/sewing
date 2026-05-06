@@ -10,8 +10,13 @@ import {
   type StockBalanceListResponse,
   type StockMovementListResponse,
   type StockMovementDirection,
-  type StockMovementType,
 } from '@/lib/stock-api';
+import {
+  listFinishedGoodsBalances,
+  listFinishedGoodsMovements,
+  type FinishedGoodsBalanceListResponse,
+  type FinishedGoodsMovementListResponse,
+} from '@/lib/finished-goods-api';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import {
   AdminCard,
@@ -25,8 +30,17 @@ import {
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
 import {
+  applyUnifiedPagination,
+  finishedGoodsBalanceToUnified,
+  finishedGoodsMovementToUnified,
+  materialBalanceToUnified,
+  materialMovementToUnified,
   parseStockBalanceState,
+  parseUnifiedMovementType,
   parseWarehouseStockTab,
+  routeMovementTypeToScope,
+  sortUnifiedBalances,
+  sortUnifiedMovements,
   StockAdjustmentButton,
   StockBalancesFilters,
   StockBalancesTable,
@@ -35,8 +49,11 @@ import {
   StockPagination,
   StockTransferButton,
   stockStateToApiFlags,
+  WAREHOUSES_UNIFIED_FETCH_LIMIT,
   WarehouseStockTabs,
   type StockBalanceState,
+  type UnifiedWarehouseBalanceRow,
+  type UnifiedWarehouseMovementRow,
   type WarehouseStockTab,
 } from '@/components/warehouses/stock';
 
@@ -51,16 +68,15 @@ interface SearchParams {
   /** Pagination для read-only API склада (`limit/offset`). */
   limit?: string;
   offset?: string;
-  /** Лёгкий поиск; backend применяет `q` и в balances, и в movements. */
+  /** Лёгкий поиск; для остатков прокидывается в оба API, для движений
+   * только в material API (finished goods backend `q` не принимает). */
   q?: string;
   /** Точечный фильтр по складу (для обеих вкладок). */
   warehouseId?: string;
   /**
    * Единый UI-параметр над тремя backend-флагами
    * `positiveOnly` / `negativeOnly` / `zeroOnly` для вкладки
-   * `balances` (см. `StockBalancesFilters`). Принимает
-   * `'all' | 'positive' | 'zero' | 'negative'`. Любое незнакомое
-   * значение → `'all'`.
+   * `balances`. Принимает `'all' | 'positive' | 'zero' | 'negative'`.
    */
   stockState?: string;
   /** Только для вкладки `movements`. */
@@ -71,7 +87,6 @@ interface SearchParams {
   /**
    * Legacy: backend-флаги напрямую — оставляем поддержку для обратной
    * совместимости URL-ов до введения единого `stockState`-селекта.
-   * Из формы фильтра больше не отправляются.
    */
   positiveOnly?: string;
   negativeOnly?: string;
@@ -81,22 +96,25 @@ interface SearchParams {
 /**
  * `/admin/warehouses` — раздел «Склады».
  *
- * UI-решение владельца проекта (см. ТЗ «show stock balances and
- * movements tabs»): вместо отдельной страницы `/admin/stock` или
- * нового пункта sidebar — три вкладки прямо здесь:
+ * UI-решение владельца проекта: вместо отдельной страницы
+ * `/admin/finished-goods` или нового пункта sidebar — три вкладки
+ * прямо здесь:
  *   - `list` (default) — текущая таблица складов;
- *   - `balances` — `GET /api/stock/balances`, read-only;
- *   - `movements` — `GET /api/stock/movements`, read-only.
+ *   - `balances` — объединённые остатки материалов
+ *     (`GET /api/stock/balances`) и готовой продукции
+ *     (`GET /api/finished-goods/balances`), read-only;
+ *   - `movements` — объединённый журнал движений
+ *     (`GET /api/stock/movements` + `GET /api/finished-goods/movements`),
+ *     read-only.
  *
- * Никаких mutation-actions в UI на этой итерации (см.
- * `apps/api/src/modules/stock/stock.controller.ts` — backend тоже
- * read-only). Multi-warehouse фильтр / сводки по складам / FIFO/LIFO /
- * корректировки остатков **не реализованы** — это сознательная
- * граница итерации (см. `docs/current-state.md`).
+ * Никаких mutation-actions для готовой продукции в UI на этой
+ * итерации — только чтение в существующих вкладках. Backend остаётся
+ * раздельным; merge делается в RSC через mappers
+ * (`unified-rows.ts`).
  *
- * Backend / DTO не меняем — frontend ходит через
- * `apps/web/lib/stock-api.ts` (`apiFetch`-обёртка с cookie-форвардом
- * из `next/headers`, ровно как остальные admin pages).
+ * **TODO (backend unified endpoint).** На больших объёмах двойной
+ * fetch + UI-merge не масштабируется. Лучшее решение — серверный
+ * unified warehouse endpoint с общим total / pagination / sorting.
  */
 export default async function AdminWarehousesListPage({
   searchParams,
@@ -257,7 +275,7 @@ async function WarehousesListTabPage({
 }
 
 // ---------------------------------------------------------------------------
-// Tab: «Остатки» — `GET /api/stock/balances`.
+// Tab: «Остатки» — материалы + готовая продукция в одной таблице.
 // ---------------------------------------------------------------------------
 
 async function BalancesTabPage({
@@ -271,14 +289,9 @@ async function BalancesTabPage({
   const offset = parseOffset(searchParams.offset);
   const q = sanitizeString(searchParams.q);
   const warehouseId = sanitizeString(searchParams.warehouseId);
-  // Новый единый UI-параметр «Остаток» — `'all' | 'positive' | 'zero'
-  // | 'negative'` (см. `StockBalancesFilters`). Маппится в три
-  // backend-флага через `stockStateToApiFlags`.
   const stockState: StockBalanceState = parseStockBalanceState(
     searchParams.stockState,
   );
-  // Legacy: если URL пришёл со старыми флагами (`positiveOnly=true`
-  // и т.п.) — продолжаем их уважать, но новый UI больше не отдаёт.
   const stateFromFlags = parseLegacyStockState({
     positiveOnly: searchParams.positiveOnly,
     negativeOnly: searchParams.negativeOnly,
@@ -288,20 +301,31 @@ async function BalancesTabPage({
     stockState === 'all' && stateFromFlags ? stateFromFlags : stockState;
   const apiFlags = stockStateToApiFlags(effectiveStockState);
 
-  let response: StockBalanceListResponse | null = null;
+  // На MVP объединяем два независимых backend-API на UI-уровне.
+  // Запрашиваем оба с потолком `WAREHOUSES_UNIFIED_FETCH_LIMIT`,
+  // объединяем, сортируем и применяем UI-pagination над общим
+  // массивом. `total` — сумма backend-total-ов.
+  // TODO: Для больших объёмов лучше сделать backend unified
+  // warehouse endpoint с серверным total / pagination / sorting.
+  let materialResp: StockBalanceListResponse | null = null;
+  let finishedResp: FinishedGoodsBalanceListResponse | null = null;
   let error: string | null = null;
   let warehouses: WarehouseSummaryDto[] = [];
   try {
-    // Параллельно: остатки + список складов (нужен и для select-а
-    // назначения в `StockTransferDialog`, и для select-а склада в
-    // `StockBalancesFilters`).
-    [response, warehouses] = await Promise.all([
+    [materialResp, finishedResp, warehouses] = await Promise.all([
       listStockBalances({
         q,
         warehouseId,
         ...apiFlags,
-        limit,
-        offset,
+        limit: WAREHOUSES_UNIFIED_FETCH_LIMIT,
+        offset: 0,
+      }),
+      listFinishedGoodsBalances({
+        q,
+        warehouseId,
+        ...apiFlags,
+        limit: WAREHOUSES_UNIFIED_FETCH_LIMIT,
+        offset: 0,
       }),
       listWarehouses(),
     ]);
@@ -312,12 +336,16 @@ async function BalancesTabPage({
         : 'Не удалось загрузить остатки склада';
   }
 
-  const total = response?.total ?? 0;
-  const items = response?.items ?? [];
+  const materialItems = materialResp?.items ?? [];
+  const finishedItems = finishedResp?.items ?? [];
+  const total = (materialResp?.total ?? 0) + (finishedResp?.total ?? 0);
 
-  // Параметры, которые нужно сохранять при переходе по pagination и
-  // переключении страниц pagination — submit формы фильтров их
-  // регенерирует, но pagination сама про них ничего не знает.
+  const unified: UnifiedWarehouseBalanceRow[] = sortUnifiedBalances([
+    ...materialItems.map(materialBalanceToUnified),
+    ...finishedItems.map(finishedGoodsBalanceToUnified),
+  ]);
+  const pageRows = applyUnifiedPagination(unified, offset, limit);
+
   const balancesPreserve: Record<string, string | undefined> = {
     tab: 'balances',
     q,
@@ -338,13 +366,6 @@ async function BalancesTabPage({
         </div>
       )}
 
-      {/*
-       * Фильтры остатков (см.
-       * `apps/web/components/warehouses/stock/stock-balances-filters.tsx`).
-       * Отдельная `AdminCard` над таблицей — submit формы перерисует
-       * страницу со свежими `searchParams`. Кнопки «Корректировка» /
-       * «Переместить» остаются над таблицей внутри основной карточки.
-       */}
       <AdminCard>
         <StockBalancesFilters
           q={q}
@@ -356,7 +377,10 @@ async function BalancesTabPage({
       </AdminCard>
 
       <AdminCard>
-        {items.length > 0 && (
+        {/* Mutation-кнопки работают только с материалами — у готовой
+         * продукции своя транзакционная модель (через PackingService /
+         * Operation flag), отдельных adjustment / transfer не ввели. */}
+        {materialItems.length > 0 && (
           <div
             style={{
               display: 'flex',
@@ -365,16 +389,19 @@ async function BalancesTabPage({
               padding: '0 0 8px 0',
             }}
           >
-            <StockTransferButton balances={items} warehouses={warehouses} />
-            <StockAdjustmentButton balances={items} />
+            <StockTransferButton
+              balances={materialItems}
+              warehouses={warehouses}
+            />
+            <StockAdjustmentButton balances={materialItems} />
           </div>
         )}
-        <StockBalancesTable items={items} />
+        <StockBalancesTable items={pageRows} />
         <StockPagination
           basePath="/admin/warehouses"
           total={total}
-          limit={response?.limit ?? limit}
-          offset={response?.offset ?? offset}
+          limit={limit}
+          offset={offset}
           preserveParams={balancesPreserve}
           label="остатков"
         />
@@ -384,7 +411,7 @@ async function BalancesTabPage({
 }
 
 // ---------------------------------------------------------------------------
-// Tab: «Движения» — `GET /api/stock/movements`.
+// Tab: «Движения» — материалы + готовая продукция в одном журнале.
 // ---------------------------------------------------------------------------
 
 async function MovementsTabPage({
@@ -398,26 +425,66 @@ async function MovementsTabPage({
   const offset = parseOffset(searchParams.offset);
   const q = sanitizeString(searchParams.q);
   const warehouseId = sanitizeString(searchParams.warehouseId);
-  const type = parseMovementType(searchParams.type);
+  const type = parseUnifiedMovementType(sanitizeString(searchParams.type));
   const direction = parseMovementDirection(searchParams.direction);
   const from = sanitizeDate(searchParams.from);
   const to = sanitizeDate(searchParams.to);
+  const scope = routeMovementTypeToScope(type);
 
-  let response: StockMovementListResponse | null = null;
+  // Type routing — пропускаем лишний fetch, если тип специфичен для
+  // одного контура. `material-only` (PURCHASE_RECEIPT / MATERIAL_ISSUE)
+  // не идёт в finished goods API; `finished-goods-only`
+  // (PRODUCTION_RECEIPT) не идёт в material API. `shared`
+  // (REVERSAL / ADJUSTMENT / TRANSFER) и `all` — оба API.
+  const wantsMaterial = scope === 'all' || scope === 'shared' || scope === 'material-only';
+  const wantsFinished =
+    scope === 'all' || scope === 'shared' || scope === 'finished-goods-only';
+
+  let materialResp: StockMovementListResponse | null = null;
+  let finishedResp: FinishedGoodsMovementListResponse | null = null;
   let error: string | null = null;
   let warehouses: WarehouseSummaryDto[] = [];
   try {
-    [response, warehouses] = await Promise.all([
-      listStockMovements({
-        q,
-        warehouseId,
-        type,
-        direction,
-        from,
-        to,
-        limit,
-        offset,
-      }),
+    [materialResp, finishedResp, warehouses] = await Promise.all([
+      wantsMaterial
+        ? listStockMovements({
+            q,
+            warehouseId,
+            // Передаём type только если он валиден для материального API.
+            type:
+              type === 'PURCHASE_RECEIPT' ||
+              type === 'MATERIAL_ISSUE' ||
+              type === 'REVERSAL' ||
+              type === 'ADJUSTMENT' ||
+              type === 'TRANSFER'
+                ? type
+                : undefined,
+            direction,
+            from,
+            to,
+            limit: WAREHOUSES_UNIFIED_FETCH_LIMIT,
+            offset: 0,
+          })
+        : Promise.resolve(null),
+      wantsFinished
+        ? listFinishedGoodsMovements({
+            warehouseId,
+            // Finished goods API не принимает `q` (DTO `.strict()`),
+            // поэтому в этот контур поиск не уходит.
+            type:
+              type === 'PRODUCTION_RECEIPT' ||
+              type === 'REVERSAL' ||
+              type === 'ADJUSTMENT' ||
+              type === 'TRANSFER'
+                ? type
+                : undefined,
+            direction,
+            from,
+            to,
+            limit: WAREHOUSES_UNIFIED_FETCH_LIMIT,
+            offset: 0,
+          })
+        : Promise.resolve(null),
       listWarehouses(),
     ]);
   } catch (e) {
@@ -427,8 +494,17 @@ async function MovementsTabPage({
         : 'Не удалось загрузить журнал движений склада';
   }
 
-  const total = response?.total ?? 0;
-  const items = response?.items ?? [];
+  const materialItems = materialResp?.items ?? [];
+  const finishedItems = finishedResp?.items ?? [];
+  const total = (materialResp?.total ?? 0) + (finishedResp?.total ?? 0);
+
+  // TODO: Для больших объёмов лучше сделать backend unified
+  // warehouse endpoint с серверным total / pagination / sorting.
+  const unified: UnifiedWarehouseMovementRow[] = sortUnifiedMovements([
+    ...materialItems.map(materialMovementToUnified),
+    ...finishedItems.map(finishedGoodsMovementToUnified),
+  ]);
+  const pageRows = applyUnifiedPagination(unified, offset, limit);
 
   const movementsPreserve: Record<string, string | undefined> = {
     tab: 'movements',
@@ -453,10 +529,6 @@ async function MovementsTabPage({
         </div>
       )}
 
-      {/*
-       * Фильтры журнала движений (см.
-       * `apps/web/components/warehouses/stock/stock-movements-filters.tsx`).
-       */}
       <AdminCard>
         <StockMovementsFilters
           q={q}
@@ -471,12 +543,12 @@ async function MovementsTabPage({
       </AdminCard>
 
       <AdminCard>
-        <StockMovementsTable items={items} />
+        <StockMovementsTable items={pageRows} />
         <StockPagination
           basePath="/admin/warehouses"
           total={total}
-          limit={response?.limit ?? limit}
-          offset={response?.offset ?? offset}
+          limit={limit}
+          offset={offset}
           preserveParams={movementsPreserve}
           label="движений"
         />
@@ -509,22 +581,10 @@ function sanitizeString(raw: string | undefined): string | undefined {
   return trimmed;
 }
 
-/**
- * `<input type="date">` отдаёт `YYYY-MM-DD` или пустую строку.
- * Прокидываем backend-у как есть — `Zod.datetime()` на DTO принимает
- * ISO-формат, а сам сервис строит `Date` из строки. Пустая строка /
- * undefined → не отправляем фильтр.
- */
 function sanitizeDate(raw: string | undefined): string | undefined {
   return sanitizeString(raw);
 }
 
-/**
- * Legacy-парсер старых backend-флагов в URL (`positiveOnly=true` и
- * т.п.). Новый UI отдаёт единый `stockState`, но если кто-то открыл
- * старую ссылку — продолжаем уважать её. Возвращает соответствующий
- * `StockBalanceState` или `null`, если ни один флаг не установлен.
- */
 function parseLegacyStockState(raw: {
   positiveOnly?: string;
   negativeOnly?: string;
@@ -535,21 +595,6 @@ function parseLegacyStockState(raw: {
   if (isTrue(raw.negativeOnly)) return 'negative';
   if (isTrue(raw.zeroOnly)) return 'zero';
   return null;
-}
-
-const MOVEMENT_TYPES: ReadonlySet<StockMovementType> = new Set<StockMovementType>([
-  'PURCHASE_RECEIPT',
-  'MATERIAL_ISSUE',
-  'ADJUSTMENT',
-  'REVERSAL',
-  'TRANSFER',
-]);
-
-function parseMovementType(raw: string | undefined): StockMovementType | undefined {
-  if (raw == null) return undefined;
-  return MOVEMENT_TYPES.has(raw as StockMovementType)
-    ? (raw as StockMovementType)
-    : undefined;
 }
 
 function parseMovementDirection(

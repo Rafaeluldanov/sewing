@@ -700,6 +700,14 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
   редактирования операции (`/admin/operations/new` и
   `/admin/operations/[id]`); badge «Выпуск ГП» в таблице списка
   операций;
+- **готовая продукция отображается в существующих вкладках
+  `/admin/warehouses?tab=balances` и `?tab=movements`** вместе с
+  материалами (см. итерация «Готовая продукция в существующих
+  вкладках склада» в `docs/current-state.md`). Отдельная вкладка /
+  страница / sidebar-пункт под готовую продукцию не создавалась.
+  Имя строки готовой продукции — `productName / color / sizeCode`,
+  цена и сумма — `«—»` (это не material cost). Тип
+  `PRODUCTION_RECEIPT` отображается как «Выпуск»;
 - audit `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` (под
   `entityType = FINISHED_GOODS_MOVEMENT`) с расширенным payload
   `trigger: 'OPERATION_OUTPUT' | 'PACKED_PASSPORT'` и
@@ -734,10 +742,18 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
    количество движений по этому passportId не должно вырасти —
    `sourceKey = PACKED_PASSPORT:<passportId>` UNIQUE удерживает
    идемпотентность.
-5. Открыть `/admin/warehouses?tab=movements` — в журнале
-   движений материалов колонка «Заказчик» должна показывать
-   `Client.name` для строк, привязанных к заказу с клиентом, и
-   «—» для остальных.
+5. Открыть `/admin/warehouses?tab=movements` — в общем журнале
+   движений (материалы + готовая продукция) колонка «Заказчик»
+   должна показывать `Client.name` для строк, привязанных к заказу
+   с клиентом, и «—» для остальных. Строка выпуска готовой
+   продукции должна иметь тип «Выпуск», название
+   `productName / color / sizeCode` и прочерк в колонках «Цена» /
+   «Сумма».
+6. Открыть `/admin/warehouses?tab=balances` — текущий остаток по
+   паспорту/партии должен появиться в той же таблице, что и
+   материалы; имя строки — `productName / color / sizeCode`.
+   Цена / сумма — прочерк. Готовая продукция различима по имени —
+   отдельной колонки «Тип» нет.
 
 Эти типы зарезервированы строковыми литералами в
 `FINISHED_GOODS_MOVEMENT_TYPE`, но writer-ов / API нет. Добавление
