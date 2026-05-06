@@ -94,3 +94,37 @@ export function printWarehouseCells(
     { method: 'POST', body },
   );
 }
+
+/**
+ * Печать всех ячеек одной линии. Использует
+ * `POST /api/warehouses/:id/lines/:lineId/print-cells`.
+ */
+export function printWarehouseLineCells(
+  warehouseId: string,
+  lineId: string,
+  body: PrintWarehouseCellsDto,
+): Promise<PrintWarehouseCellsResultDto> {
+  return apiFetch<PrintWarehouseCellsResultDto>(
+    `/warehouses/${encodeURIComponent(warehouseId)}/lines/${encodeURIComponent(
+      lineId,
+    )}/print-cells`,
+    { method: 'POST', body },
+  );
+}
+
+/**
+ * Удаление линии склада с защитой по «занятости» ячеек. Использует
+ * `DELETE /api/warehouses/:id/lines/:lineId`. 204 — успех; 409
+ * `WAREHOUSE_LINE_HAS_CONTENT` — есть ячейки с содержимым.
+ */
+export function deleteWarehouseLine(
+  warehouseId: string,
+  lineId: string,
+): Promise<unknown> {
+  return apiFetch<unknown>(
+    `/warehouses/${encodeURIComponent(warehouseId)}/lines/${encodeURIComponent(
+      lineId,
+    )}`,
+    { method: 'DELETE' },
+  );
+}

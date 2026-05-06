@@ -186,6 +186,12 @@ export interface WarehouseCellDto {
   active: boolean;
   /** Готовый абсолютный URL печати QR ячейки (см. `/api/cells/:id/print`). */
   printUrl: string;
+  /**
+   * Линия, к которой принадлежит ячейка (если создана через массовый
+   * инструмент линий). `null` для исторических/одиночных ячеек.
+   * Нужен UI: per-line печать фильтрует ячейки по `lineId`.
+   */
+  lineId: string | null;
 }
 
 /** Сжатая запись о линии склада. */

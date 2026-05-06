@@ -14,7 +14,9 @@ import {
 import {
   createWarehouse,
   createWarehouseLine,
+  deleteWarehouseLine,
   printWarehouseCells,
+  printWarehouseLineCells,
   updateCellWarehouse,
   updateWarehouse,
 } from '@/lib/warehouses-api';
@@ -22,6 +24,7 @@ import type {
   AssignCellState,
   CreateLineState,
   CreateWarehouseState,
+  DeleteLineState,
   StockAdjustmentState,
   UpdateWarehouseState,
 } from './form-state';
@@ -247,6 +250,64 @@ export async function printWarehouseCellsAction(
       };
     }
     return { ok: false, error: 'Не удалось поставить задания на печать' };
+  }
+}
+
+/**
+ * Server action поверх `POST /api/warehouses/:id/lines/:lineId/print-cells` —
+ * печать всех активных ячеек ОДНОЙ линии. Возвращаемая форма
+ * совпадает с `printWarehouseCellsAction`, чтобы UI-модалка могла
+ * быть универсальной.
+ */
+export async function printWarehouseLineCellsAction(
+  warehouseId: string,
+  lineId: string,
+  input: PrintWarehouseCellsDto,
+): Promise<PrintWarehouseCellsActionResult> {
+  try {
+    const result = await printWarehouseLineCells(warehouseId, lineId, input);
+    return { ok: true, result };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        code: e.code,
+        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { ok: false, error: 'Не удалось поставить задания на печать' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Delete warehouse line (вариант с защитой по «занятости» ячеек)
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action поверх `DELETE /api/warehouses/:id/lines/:lineId`.
+ * Возвращает `code` отдельно, чтобы UI отличил `WAREHOUSE_LINE_HAS_CONTENT`
+ * (заняты ячейки) от прочих 4xx/5xx. После успеха ревалидируем
+ * страницу склада — таблицы линий и ячеек обновятся.
+ */
+export async function deleteWarehouseLineAction(
+  warehouseId: string,
+  lineId: string,
+): Promise<DeleteLineState> {
+  try {
+    await deleteWarehouseLine(warehouseId, lineId);
+    revalidatePath('/admin/warehouses');
+    revalidatePath(`/admin/warehouses/${warehouseId}`);
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        code: e.code,
+        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { error: 'Не удалось удалить линию' };
   }
 }
 

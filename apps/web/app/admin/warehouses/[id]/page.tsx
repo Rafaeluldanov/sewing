@@ -23,13 +23,15 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
-import { WarehouseBulkPrintPanel } from './bulk-print-panel';
+import { LinePrintButton, WarehouseBulkPrintPanel } from './bulk-print-panel';
 import {
   AssignCellForm,
   CreateLineForm,
+  DeleteLineButton,
   DetachCellButton,
   WarehouseEditForm,
 } from './edit-form';
+import type { WarehouseCellDto } from '@sewing/shared/warehouses';
 
 export const dynamic = 'force-dynamic';
 
@@ -83,6 +85,17 @@ export default async function AdminWarehouseDetailPage({ params }: Params) {
     printers = [];
   }
 
+  // Группировка ячеек по линии нужна `LinePrintButton`-у для preview
+  // (модалка показывает превью этикеток ИМЕННО этой линии). Делаем
+  // мапу один раз — `find` по cellId внутри render-а не масштабируется.
+  const cellsByLine = new Map<string, WarehouseCellDto[]>();
+  for (const cell of warehouse.cells) {
+    if (!cell.lineId) continue;
+    const list = cellsByLine.get(cell.lineId) ?? [];
+    list.push(cell);
+    cellsByLine.set(cell.lineId, list);
+  }
+
   const lineColumns: AdminTableColumn<{
     id: string;
     code: string;
@@ -107,6 +120,29 @@ export default async function AdminWarehouseDetailPage({ params }: Params) {
         <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
           {new Date(l.createdAt).toLocaleString('ru-RU')}
         </span>
+      ),
+    },
+    {
+      key: 'actions',
+      header: '',
+      isAction: true,
+      render: (l) => (
+        <div style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}>
+          <LinePrintButton
+            warehouseId={warehouse.id}
+            warehouseName={warehouse.name}
+            lineId={l.id}
+            lineCode={l.code}
+            cells={cellsByLine.get(l.id) ?? []}
+            printers={printers}
+          />
+          <DeleteLineButton
+            warehouseId={warehouse.id}
+            lineId={l.id}
+            lineCode={l.code}
+            cellsCount={l.cellsCount}
+          />
+        </div>
       ),
     },
   ];

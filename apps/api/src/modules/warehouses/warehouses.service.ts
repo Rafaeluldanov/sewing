@@ -16,6 +16,9 @@ import {
   WarehouseCodeTakenException,
   WarehouseLineCellCodeTakenException,
   WarehouseLineCodeTakenException,
+  WarehouseLineHasContentException,
+  WarehouseLineNoCellsToPrintException,
+  WarehouseLineNotFoundException,
   WarehouseNameTakenException,
   WarehouseNoCellsToPrintException,
   WarehouseNotFoundException,
@@ -106,6 +109,7 @@ export class WarehousesService {
         qrCode: c.qrCode,
         active: c.active,
         printUrl: buildCellPrintUrl(c.id),
+        lineId: c.lineId,
       })),
       lines: row.lines.map((l) => ({
         id: l.id,
@@ -326,8 +330,98 @@ export class WarehousesService {
         qrCode: c.qrCode,
         active: c.active,
         printUrl: buildCellPrintUrl(c.id),
+        lineId: c.lineId,
       })),
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // DELETE LINE (с защитой: каскадно удаляем только пустые ячейки)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Удаление линии склада вместе с её ячейками.
+   *
+   * Защита: удаляем только если ВСЕ ячейки линии «пустые» — иначе
+   * `WAREHOUSE_LINE_HAS_CONTENT` (409) с перечнем «занятых» кодов.
+   * «Занятой» считаем ячейку, у которой есть:
+   *   - `CellContent` (текущее содержимое);
+   *   - `Passport.currentCellId` (паспорт сейчас лежит здесь);
+   *   - `PassportEvent` (исторические события — иначе FK-констрейнт
+   *     просто упадёт с непонятным P2003);
+   *   - `StockBalance` с `qty > 0` (ненулевой остаток).
+   *
+   * Исторические `StockMovement`, `PurchaseReceiptLine`, `MaterialIssueLine`,
+   * `StockBalance` с `qty == 0` — все имеют `onDelete: SetNull` и
+   * безопасны: cellId/lineId обнулятся, документы останутся.
+   *
+   * Удаление выполняется в одной транзакции: сначала ячейки линии
+   * (по одной — `deleteMany` не понадобится, ячеек ≤ 200), затем сама
+   * линия. `lineId` у ячеек обнулять не нужно — мы их удаляем целиком.
+   *
+   * Ошибки:
+   *   - 404 `WAREHOUSE_NOT_FOUND`        — склада нет;
+   *   - 404 `WAREHOUSE_LINE_NOT_FOUND`   — линии нет или она у другого склада;
+   *   - 409 `WAREHOUSE_LINE_HAS_CONTENT` — есть «занятые» ячейки.
+   */
+  async deleteLine(warehouseId: string, lineId: string): Promise<void> {
+    const wh = await this.prisma.warehouse.findUnique({
+      where: { id: warehouseId },
+      select: { id: true },
+    });
+    if (!wh) throw new WarehouseNotFoundException();
+
+    const line = await this.prisma.warehouseLine.findUnique({
+      where: { id: lineId },
+      select: { id: true, code: true, warehouseId: true },
+    });
+    if (!line || line.warehouseId !== warehouseId) {
+      throw new WarehouseLineNotFoundException();
+    }
+
+    // Берём ячейки линии вместе с признаками занятости. `_count`
+    // покрывает CellContent / currentPassports / events; для
+    // StockBalance с `qty > 0` нужен явный where, поэтому
+    // подгружаем балансы и фильтруем в JS.
+    const cells = await this.prisma.cell.findMany({
+      where: { lineId },
+      select: {
+        id: true,
+        code: true,
+        _count: {
+          select: {
+            contents: true,
+            currentPassports: true,
+            events: true,
+          },
+        },
+        stockBalances: { select: { qty: true } },
+      },
+    });
+
+    const busyCodes: string[] = [];
+    for (const c of cells) {
+      const hasContent = c._count.contents > 0;
+      const hasPassport = c._count.currentPassports > 0;
+      const hasEvents = c._count.events > 0;
+      const hasStock = c.stockBalances.some((b) => Number(b.qty) > 0);
+      if (hasContent || hasPassport || hasEvents || hasStock) {
+        busyCodes.push(c.code);
+      }
+    }
+    if (busyCodes.length > 0) {
+      throw new WarehouseLineHasContentException(busyCodes);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.cell.deleteMany({ where: { lineId } });
+      await tx.warehouseLine.delete({ where: { id: lineId } });
+    });
+
+    this.logger.log(
+      `event=warehouse.line.delete warehouseId=${warehouseId} ` +
+        `lineId=${lineId} code=${line.code} cellsDeleted=${cells.length}`,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -421,6 +515,76 @@ export class WarehousesService {
         `printerId=${dto.printerId} cells=${cells.length} ` +
         `copies=${dto.copies} jobsCreated=${result.jobsCreated} ` +
         `labelSize=${dto.labelSize}`,
+    );
+
+    return {
+      warehouseId,
+      printerId: dto.printerId,
+      cellsCount: cells.length,
+      copies: dto.copies,
+      jobsCreated: result.jobsCreated,
+      labelSize: dto.labelSize,
+    };
+  }
+
+  /**
+   * Печать всех активных ячеек одной линии (per-line вариант
+   * `printAllCells`). Принтер/копии/размер — те же поля, что и в
+   * массовой печати склада.
+   *
+   * Ошибки:
+   *   - 404 `WAREHOUSE_NOT_FOUND`              — склада нет;
+   *   - 404 `WAREHOUSE_LINE_NOT_FOUND`         — линия не принадлежит складу;
+   *   - 404 `PRINTER_NOT_FOUND` / 409 `PRINTER_INACTIVE` — из `PrintJobsService`;
+   *   - 409 `WAREHOUSE_LINE_NO_CELLS_TO_PRINT` — в линии нет активных ячеек.
+   */
+  async printLineCells(
+    warehouseId: string,
+    lineId: string,
+    dto: PrintWarehouseCellsDto,
+    apiBaseUrl: string,
+  ): Promise<PrintWarehouseCellsResultDto> {
+    const wh = await this.prisma.warehouse.findUnique({
+      where: { id: warehouseId },
+      select: { id: true },
+    });
+    if (!wh) throw new WarehouseNotFoundException();
+
+    const line = await this.prisma.warehouseLine.findUnique({
+      where: { id: lineId },
+      select: { id: true, warehouseId: true, code: true },
+    });
+    if (!line || line.warehouseId !== warehouseId) {
+      throw new WarehouseLineNotFoundException();
+    }
+
+    const cells = await this.prisma.cell.findMany({
+      where: { warehouseId, lineId, active: true },
+      orderBy: [{ lineIndex: 'asc' }, { code: 'asc' }],
+      select: { id: true, code: true },
+    });
+    if (cells.length === 0) {
+      throw new WarehouseLineNoCellsToPrintException();
+    }
+
+    const items: Array<{ sourceType: 'CELL_LABEL'; sourceId: string }> = [];
+    for (const cell of cells) {
+      for (let copy = 0; copy < dto.copies; copy += 1) {
+        items.push({ sourceType: 'CELL_LABEL', sourceId: cell.id });
+      }
+    }
+
+    const result = await this.printJobs.createBatch(
+      dto.printerId,
+      items,
+      apiBaseUrl,
+    );
+
+    this.logger.log(
+      `event=warehouse.line.print-cells warehouseId=${warehouseId} ` +
+        `lineId=${lineId} lineCode=${line.code} printerId=${dto.printerId} ` +
+        `cells=${cells.length} copies=${dto.copies} ` +
+        `jobsCreated=${result.jobsCreated} labelSize=${dto.labelSize}`,
     );
 
     return {
