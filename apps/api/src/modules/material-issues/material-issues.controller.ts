@@ -24,6 +24,10 @@ import {
   ListMaterialIssuesQuerySchema,
   type ListMaterialIssuesQuery,
 } from './dto/list-material-issues.dto.js';
+import {
+  ReturnMaterialIssueSchema,
+  type ReturnMaterialIssueDto,
+} from './dto/return-material-issue.dto.js';
 import { MaterialIssuesService } from './material-issues.service.js';
 
 /**
@@ -91,5 +95,32 @@ export class MaterialIssuesController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.materialIssues.cancel(id, user.employeeId, body.reason ?? null);
+  }
+
+  /**
+   * `POST /api/material-issues/:id/return` — полное сторно
+   * проведённого расхода (см.
+   * `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+   * `prisma/schema.prisma::MaterialIssueReturn`,
+   * `docs/api.md §«Material issues»`).
+   *
+   * Body — `ReturnMaterialIssueDto`:
+   *   - `reason` (required, 2..500) — причина возврата;
+   *   - `clientRequestId` (optional, 1..128) — UUID формы для
+   *     идемпотентности повторного submit. UI передаёт всегда; для
+   *     server-to-server можно опустить — sourceKey будет
+   *     `MATERIAL_ISSUE_RETURN_FULL:<id>`.
+   *
+   * Возвращает `MaterialIssueReturnDetail` (без `sourceKey`).
+   */
+  @Post(':id/return')
+  @HttpCode(HttpStatus.OK)
+  return_(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(ReturnMaterialIssueSchema))
+    body: ReturnMaterialIssueDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.materialIssues.returnPostedIssue(id, body, user.employeeId);
   }
 }

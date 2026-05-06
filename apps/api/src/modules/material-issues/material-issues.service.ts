@@ -6,6 +6,7 @@ import { AuditService } from '../audit/audit.service.js';
 import { CompanySettingsService } from '../company-settings/company-settings.service.js';
 import { StockService } from '../stock/stock.service.js';
 import {
+  MaterialIssueAlreadyReturnedException,
   MaterialIssueLineDescriptionRequiredException,
   MaterialIssueLineUnitRequiredException,
   MaterialIssueLinesRequiredException,
@@ -15,6 +16,7 @@ import {
   MaterialIssuePassportNotInOrderException,
   MaterialIssuePostedCannotCancelException,
   MaterialIssueQtyRequiredException,
+  MaterialIssueReturnOnlyPostedException,
   MaterialIssueUnitCostInvalidException,
   MaterialIssueWorkshopNeedNotInOrderException,
   WorkshopNeedNotFoundException,
@@ -24,6 +26,7 @@ import type {
   CreateMaterialIssueLineDto,
 } from './dto/create-material-issue.dto.js';
 import type { ListMaterialIssuesQuery } from './dto/list-material-issues.dto.js';
+import type { ReturnMaterialIssueDto } from './dto/return-material-issue.dto.js';
 
 /**
  * Жизненный цикл документа `MaterialIssue` (статусы хранятся как
@@ -70,6 +73,41 @@ export type MaterialIssueSource =
  */
 export function buildAutoCutIssueSourceKey(passportId: string): string {
   return `${MATERIAL_ISSUE_SOURCE.AUTO_CUT_ISSUE}:${passportId}`;
+}
+
+/**
+ * Префиксы `MaterialIssueReturn.sourceKey` (UNIQUE, см.
+ * `prisma/schema.prisma::MaterialIssueReturn.sourceKey`).
+ *
+ *   - `MATERIAL_ISSUE_RETURN_FULL:<materialIssueId>` — для полного
+ *     сторно без `clientRequestId`. Защищает от двойного полного
+ *     возврата (повторный запрос вернёт уже созданный документ);
+ *   - `MATERIAL_ISSUE_RETURN:<materialIssueId>:<clientRequestId>` —
+ *     если UI передал свой `clientRequestId` (рекомендуется: один
+ *     UUID на одну форму, см. UI).
+ */
+export const MATERIAL_ISSUE_RETURN_SOURCE_KEY_PREFIX = {
+  FULL: 'MATERIAL_ISSUE_RETURN_FULL',
+  WITH_REQUEST: 'MATERIAL_ISSUE_RETURN',
+} as const;
+
+/**
+ * Сгенерировать `MaterialIssueReturn.sourceKey` для идемпотентного
+ * `POST /api/material-issues/:id/return`. Если клиент передал
+ * `clientRequestId` — используем форму с ним (форма UI генерит UUID
+ * на каждое открытие); иначе — «полное сторно по этому документу»,
+ * UNIQUE-индекс защитит от случайного двойного полного возврата.
+ */
+export function buildMaterialIssueReturnSourceKey(
+  materialIssueId: string,
+  clientRequestId?: string | null,
+): string {
+  const trimmed =
+    typeof clientRequestId === 'string' ? clientRequestId.trim() : '';
+  if (trimmed.length > 0) {
+    return `${MATERIAL_ISSUE_RETURN_SOURCE_KEY_PREFIX.WITH_REQUEST}:${materialIssueId}:${trimmed}`;
+  }
+  return `${MATERIAL_ISSUE_RETURN_SOURCE_KEY_PREFIX.FULL}:${materialIssueId}`;
 }
 
 /**
@@ -588,6 +626,235 @@ export class MaterialIssuesService {
   }
 
   // ---------------------------------------------------------------------------
+  // RETURN (полное сторно проведённого расхода)
+  //
+  // См. ТЗ «Возврат / сторно проведённого списания материалов»,
+  // `prisma/schema.prisma::MaterialIssueReturn` /
+  // `MaterialIssueReturnLine`,
+  // `apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueReturnInTx`,
+  // `docs/current-state.md §«Material issue return»`.
+  //
+  // MVP-итерация:
+  //   - UI отдаёт только полное сторно (return_full): сервис сам
+  //     считает «остаток к возврату» по каждой строке как
+  //     `MaterialIssueLine.issuedQty − Σ ранее возвращённое`;
+  //   - частичный возврат с произвольным qty НЕ реализован — DTO
+  //     не принимает строки, и `prepareReturnLines` всегда отдаёт
+  //     полный остаток;
+  //   - удаление / отмена возврата НЕ реализованы;
+  //   - идемпотентность по `MaterialIssueReturn.sourceKey` (см.
+  //     `buildMaterialIssueReturnSourceKey`) — повторный submit с
+  //     тем же `clientRequestId` (или просто полное сторно без
+  //     id-а) возвращает уже созданный документ.
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Полное сторно проведённого `MaterialIssue` — создаёт отдельный
+   * документ `MaterialIssueReturn` + строки + IN-движения склада в
+   * одной транзакции. Исходный `MaterialIssue` не удаляется и не
+   * меняет статус.
+   */
+  async returnPostedIssue(
+    id: string,
+    dto: ReturnMaterialIssueDto,
+    employeeId: string | null | undefined,
+  ): Promise<MaterialIssueReturnDetail> {
+    const sourceKey = buildMaterialIssueReturnSourceKey(id, dto.clientRequestId);
+
+    // 1) Идемпотентность ДО открытия транзакции — это просто SELECT,
+    //    cheap-path для retry/двойного submit формы. Если существующий
+    //    документ найден — просто возвращаем его detail (без повторных
+    //    IN-движений и без второго audit).
+    const existing = await this.prisma.materialIssueReturn.findUnique({
+      where: { sourceKey },
+      include: MATERIAL_ISSUE_RETURN_DETAIL_INCLUDE,
+    });
+    if (existing) {
+      this.logger.log(
+        `event=material_issue.return.idempotent_hit materialIssueId=${id} returnId=${existing.id} sourceKey=${sourceKey}`,
+      );
+      return toReturnDetail(existing);
+    }
+
+    // 2) Загружаем исходный `MaterialIssue` со строками и текущими
+    //    возвратами, чтобы посчитать остаток к возврату.
+    const issue = await this.prisma.materialIssue.findUnique({
+      where: { id },
+      include: {
+        lines: true,
+        returns: {
+          where: { status: 'POSTED' },
+          select: {
+            id: true,
+            lines: { select: { materialIssueLineId: true, returnedQty: true } },
+          },
+        },
+      },
+    });
+    if (!issue) throw new MaterialIssueNotFoundException();
+    if (issue.status !== MATERIAL_ISSUE_STATUS.POSTED) {
+      throw new MaterialIssueReturnOnlyPostedException();
+    }
+
+    // 3) Считаем «уже возвращено» по каждой строке (POSTED-возвраты).
+    const alreadyReturnedByLine = aggregateReturnsByLine(issue.returns);
+
+    // 4) Готовим строки возврата = полный остаток по каждой строке.
+    interface PreparedReturnLine {
+      materialIssueLineId: string;
+      workshopNeedId: string | null;
+      description: string;
+      materialRole: string | null;
+      unit: string;
+      returnedQty: Prisma.Decimal;
+      unitCost: Prisma.Decimal;
+      totalCost: Prisma.Decimal;
+      cellId: string | null;
+    }
+    const prepared: PreparedReturnLine[] = [];
+    for (const line of issue.lines) {
+      const already =
+        alreadyReturnedByLine.get(line.id)?.returnedQty ??
+        new Prisma.Decimal(0);
+      const remaining = line.issuedQty.sub(already);
+      if (remaining.lessThanOrEqualTo(0)) continue;
+      const totalCost = remaining
+        .mul(line.unitCost)
+        .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+      prepared.push({
+        materialIssueLineId: line.id,
+        workshopNeedId: line.workshopNeedId,
+        description: line.description,
+        materialRole: line.materialRole,
+        unit: line.unit,
+        returnedQty: remaining,
+        unitCost: line.unitCost,
+        totalCost,
+        cellId: null,
+      });
+    }
+    if (prepared.length === 0) {
+      throw new MaterialIssueAlreadyReturnedException();
+    }
+
+    const totalCost = prepared.reduce(
+      (acc, l) => acc.add(l.totalCost),
+      new Prisma.Decimal(0),
+    );
+    const reason = dto.reason.trim();
+
+    // 5) В одной транзакции:
+    //    - create MaterialIssueReturn + lines;
+    //    - StockService.recordMaterialIssueReturnInTx → IN-движения;
+    //    - audit `MATERIAL_ISSUE_RETURNED`.
+    //    Если на создании случился P2002 (другая параллельная попытка
+    //    создала документ с тем же sourceKey раньше) — отдаём ей
+    //    приоритет: возвращаем уже созданный return.
+    const created = await this.prisma
+      .$transaction(async (tx) => {
+        const ret = await tx.materialIssueReturn.create({
+          data: {
+            materialIssueId: issue.id,
+            orderId: issue.orderId,
+            passportId: issue.passportId,
+            status: 'POSTED',
+            sourceKey,
+            reason,
+            totalCost,
+            createdById: employeeId ?? null,
+            lines: {
+              create: prepared.map((l) => ({
+                materialIssueLineId: l.materialIssueLineId,
+                workshopNeedId: l.workshopNeedId,
+                description: l.description,
+                materialRole: l.materialRole,
+                unit: l.unit,
+                returnedQty: l.returnedQty,
+                unitCost: l.unitCost,
+                totalCost: l.totalCost,
+                cellId: l.cellId,
+              })),
+            },
+          },
+          include: MATERIAL_ISSUE_RETURN_DETAIL_INCLUDE,
+        });
+
+        await this.stock.recordMaterialIssueReturnInTx(
+          tx,
+          ret.id,
+          employeeId ?? null,
+        );
+
+        await this.audit.log(
+          {
+            event: 'MATERIAL_ISSUE_RETURNED',
+            entityType: 'MATERIAL_ISSUE_RETURN',
+            entityId: ret.id,
+            employeeId: employeeId ?? null,
+            payload: this.buildReturnAuditPayload(
+              issue.id,
+              ret,
+              employeeId ?? null,
+            ) as Prisma.InputJsonValue,
+          },
+          tx,
+        );
+
+        return ret;
+      })
+      .catch(async (err) => {
+        // Идемпотентность под конкурентным submit-ом: одна
+        // транзакция выиграла гонку, другая словила P2002 на
+        // UNIQUE `sourceKey`. Отдаём успешный result.
+        if (
+          err instanceof Prisma.PrismaClientKnownRequestError &&
+          err.code === 'P2002'
+        ) {
+          const winner = await this.prisma.materialIssueReturn.findUnique({
+            where: { sourceKey },
+            include: MATERIAL_ISSUE_RETURN_DETAIL_INCLUDE,
+          });
+          if (winner) return winner;
+        }
+        throw err;
+      });
+
+    this.logger.log(
+      `event=material_issue.return.created materialIssueId=${issue.id} returnId=${created.id} ` +
+        `lines=${created.lines.length} totalCost=${created.totalCost.toString()}`,
+    );
+
+    return toReturnDetail(created);
+  }
+
+  private buildReturnAuditPayload(
+    materialIssueId: string,
+    ret: Prisma.MaterialIssueReturnGetPayload<{
+      include: typeof MATERIAL_ISSUE_RETURN_DETAIL_INCLUDE;
+    }>,
+    employeeId: string | null,
+  ): Record<string, unknown> {
+    return {
+      materialIssueId,
+      materialIssueReturnId: ret.id,
+      orderId: ret.orderId,
+      passportId: ret.passportId,
+      reason: ret.reason,
+      totalCost: ret.totalCost.toString(),
+      lines: ret.lines.map((l) => ({
+        materialIssueLineId: l.materialIssueLineId,
+        workshopNeedId: l.workshopNeedId,
+        returnedQty: l.returnedQty.toString(),
+        unit: l.unit,
+        unitCost: l.unitCost.toString(),
+        totalCost: l.totalCost.toString(),
+      })),
+      employeeId,
+      timestamp: new Date().toISOString(),
+    };
+  }
+
+  // ---------------------------------------------------------------------------
   // AUTO CUT ISSUE (автосписание материалов при выдаче кроя)
   //
   // См. ТЗ «Автосписание материалов при выдаче кроя» и
@@ -982,19 +1249,48 @@ export type AutoCutIssueSkipReason =
 // includes / DTOs (источник истины для list / get)
 // ---------------------------------------------------------------------------
 
+/**
+ * Минимально полный include для one-row сериализации
+ * `MaterialIssueReturn` (используется и в detail-DTO основного
+ * расхода, и в standalone-detail возврата).
+ *
+ * `orderBy` намеренно мутируемый (без `as const`) — Prisma 5.x
+ * `MaterialIssueReturn$linesArgs.orderBy` принимает только обычные
+ * массивы, не readonly tuple.
+ */
+const MATERIAL_ISSUE_RETURN_DETAIL_INCLUDE = {
+  lines: {
+    orderBy: [{ id: 'asc' as const }],
+    include: {
+      cell: { select: { id: true, code: true } },
+    },
+  },
+} satisfies Prisma.MaterialIssueReturnInclude;
+
 const MATERIAL_ISSUE_LIST_INCLUDE = {
   order: { select: { id: true, number: true, status: true } },
   passport: { select: { id: true, number: true } },
   lines: {
-    orderBy: [{ id: 'asc' }] as const,
+    orderBy: [{ id: 'asc' as const }],
   },
-} as const satisfies Prisma.MaterialIssueInclude;
+  returns: {
+    where: { status: 'POSTED' },
+    orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }],
+    select: {
+      id: true,
+      totalCost: true,
+      lines: {
+        select: { materialIssueLineId: true, returnedQty: true },
+      },
+    },
+  },
+} satisfies Prisma.MaterialIssueInclude;
 
 const MATERIAL_ISSUE_DETAIL_INCLUDE = {
   order: { select: { id: true, number: true, status: true } },
   passport: { select: { id: true, number: true } },
   lines: {
-    orderBy: [{ id: 'asc' }] as const,
+    orderBy: [{ id: 'asc' as const }],
     include: {
       workshopNeed: {
         select: {
@@ -1009,7 +1305,12 @@ const MATERIAL_ISSUE_DETAIL_INCLUDE = {
       },
     },
   },
-} as const satisfies Prisma.MaterialIssueInclude;
+  returns: {
+    where: { status: 'POSTED' },
+    orderBy: [{ createdAt: 'asc' as const }, { id: 'asc' as const }],
+    include: MATERIAL_ISSUE_RETURN_DETAIL_INCLUDE,
+  },
+} satisfies Prisma.MaterialIssueInclude;
 
 export interface MaterialIssueLineDetail {
   id: string;
@@ -1029,6 +1330,44 @@ export interface MaterialIssueLineDetail {
   cellId: string | null;
   cellCode: string | null;
   comment: string | null;
+  /** Σ возвращённого qty по этой строке (POSTED-возвраты). */
+  returnedQty: string;
+  /** Σ totalCost возвращённого. */
+  returnedTotalCost: string;
+  /** `issuedQty - returnedQty`. */
+  netIssuedQty: string;
+  /** `totalCost - returnedTotalCost`. */
+  netTotalCost: string;
+}
+
+export type MaterialIssueAggregateReturnStatus = 'NONE' | 'PARTIAL' | 'FULL';
+
+export interface MaterialIssueReturnLineDetail {
+  id: string;
+  materialIssueLineId: string;
+  workshopNeedId: string | null;
+  description: string;
+  materialRole: string | null;
+  unit: string;
+  returnedQty: string;
+  unitCost: string;
+  totalCost: string;
+  cellId: string | null;
+  cellCode: string | null;
+  comment: string | null;
+}
+
+export interface MaterialIssueReturnDetail {
+  id: string;
+  materialIssueId: string;
+  orderId: string;
+  passportId: string | null;
+  status: string;
+  reason: string;
+  totalCost: string;
+  createdAt: string;
+  createdById: string | null;
+  lines: MaterialIssueReturnLineDetail[];
 }
 
 export interface MaterialIssueDetail {
@@ -1054,6 +1393,10 @@ export interface MaterialIssueDetail {
   cancelledById: string | null;
   cancelReason: string | null;
   lines: MaterialIssueLineDetail[];
+  returns: MaterialIssueReturnDetail[];
+  returnedTotalCost: string;
+  netTotalCost: string;
+  returnStatus: MaterialIssueAggregateReturnStatus;
 }
 
 export interface MaterialIssueListItem {
@@ -1069,6 +1412,78 @@ export interface MaterialIssueListItem {
   postedAt: string | null;
   cancelledAt: string | null;
   linesCount: number;
+  returnedTotalCost: string;
+  netTotalCost: string;
+  returnsCount: number;
+  returnStatus: MaterialIssueAggregateReturnStatus;
+}
+
+/**
+ * Считает per-line `returnedQty` / `returnedTotalCost` по массиву
+ * POSTED `MaterialIssueReturn`-ов (с include-ом строк). Возвращает
+ * map `materialIssueLineId → { returnedQty, returnedTotalCost }` в
+ * виде Decimal.
+ *
+ * `returnedTotalCost` суммируем как `returnedQty × MaterialIssueLine.unitCost`,
+ * взяв `unitCost` из самой `MaterialIssueReturnLine.unitCost` —
+ * snapshot, который сервис фиксирует в момент создания возврата
+ * (см. `MaterialIssuesService.returnPostedIssue`).
+ */
+function aggregateReturnsByLine(
+  returns: ReadonlyArray<{
+    lines: ReadonlyArray<{
+      materialIssueLineId: string;
+      returnedQty: Prisma.Decimal;
+      totalCost?: Prisma.Decimal;
+    }>;
+  }>,
+): Map<
+  string,
+  { returnedQty: Prisma.Decimal; returnedTotalCost: Prisma.Decimal }
+> {
+  const acc = new Map<
+    string,
+    { returnedQty: Prisma.Decimal; returnedTotalCost: Prisma.Decimal }
+  >();
+  for (const r of returns) {
+    for (const rl of r.lines) {
+      const prev = acc.get(rl.materialIssueLineId) ?? {
+        returnedQty: new Prisma.Decimal(0),
+        returnedTotalCost: new Prisma.Decimal(0),
+      };
+      const next = {
+        returnedQty: prev.returnedQty.add(rl.returnedQty),
+        returnedTotalCost: prev.returnedTotalCost.add(
+          rl.totalCost ?? new Prisma.Decimal(0),
+        ),
+      };
+      acc.set(rl.materialIssueLineId, next);
+    }
+  }
+  return acc;
+}
+
+/**
+ * Совокупный return-status: `NONE` если нет ни одного возврата,
+ * `FULL` если все строки `issuedQty <= returnedQty`, иначе `PARTIAL`.
+ */
+function computeReturnStatus(
+  lines: ReadonlyArray<{ id: string; issuedQty: Prisma.Decimal }>,
+  perLine: Map<string, { returnedQty: Prisma.Decimal }>,
+): MaterialIssueAggregateReturnStatus {
+  if (perLine.size === 0) return 'NONE';
+  let totalIssued = new Prisma.Decimal(0);
+  let totalReturned = new Prisma.Decimal(0);
+  let allFull = true;
+  for (const l of lines) {
+    totalIssued = totalIssued.add(l.issuedQty);
+    const r = perLine.get(l.id)?.returnedQty ?? new Prisma.Decimal(0);
+    totalReturned = totalReturned.add(r);
+    if (r.lt(l.issuedQty)) allFull = false;
+  }
+  if (totalReturned.lte(0)) return 'NONE';
+  if (allFull && totalReturned.gte(totalIssued)) return 'FULL';
+  return 'PARTIAL';
 }
 
 function toListItem(
@@ -1076,6 +1491,13 @@ function toListItem(
     include: typeof MATERIAL_ISSUE_LIST_INCLUDE;
   }>,
 ): MaterialIssueListItem {
+  const perLine = aggregateReturnsByLine(row.returns);
+  const returnedTotalCost = row.returns.reduce(
+    (acc, r) => acc.add(r.totalCost),
+    new Prisma.Decimal(0),
+  );
+  const netTotalCost = row.totalCost.sub(returnedTotalCost);
+  const returnStatus = computeReturnStatus(row.lines, perLine);
   return {
     id: row.id,
     orderId: row.orderId,
@@ -1089,6 +1511,44 @@ function toListItem(
     postedAt: row.postedAt ? row.postedAt.toISOString() : null,
     cancelledAt: row.cancelledAt ? row.cancelledAt.toISOString() : null,
     linesCount: row.lines.length,
+    returnedTotalCost: returnedTotalCost.toString(),
+    netTotalCost: netTotalCost.toString(),
+    returnsCount: row.returns.length,
+    returnStatus,
+  };
+}
+
+function toReturnDetail(
+  row: Prisma.MaterialIssueReturnGetPayload<{
+    include: typeof MATERIAL_ISSUE_RETURN_DETAIL_INCLUDE;
+  }>,
+): MaterialIssueReturnDetail {
+  return {
+    id: row.id,
+    materialIssueId: row.materialIssueId,
+    orderId: row.orderId,
+    passportId: row.passportId,
+    status: row.status,
+    reason: row.reason,
+    totalCost: row.totalCost.toString(),
+    createdAt: row.createdAt.toISOString(),
+    createdById: row.createdById,
+    lines: row.lines.map(
+      (l): MaterialIssueReturnLineDetail => ({
+        id: l.id,
+        materialIssueLineId: l.materialIssueLineId,
+        workshopNeedId: l.workshopNeedId,
+        description: l.description,
+        materialRole: l.materialRole,
+        unit: l.unit,
+        returnedQty: l.returnedQty.toString(),
+        unitCost: l.unitCost.toString(),
+        totalCost: l.totalCost.toString(),
+        cellId: l.cellId,
+        cellCode: l.cell?.code ?? null,
+        comment: l.comment,
+      }),
+    ),
   };
 }
 
@@ -1097,6 +1557,13 @@ function toDetail(
     include: typeof MATERIAL_ISSUE_DETAIL_INCLUDE;
   }>,
 ): MaterialIssueDetail {
+  const perLine = aggregateReturnsByLine(row.returns);
+  const returnedTotalCost = row.returns.reduce(
+    (acc, r) => acc.add(r.totalCost),
+    new Prisma.Decimal(0),
+  );
+  const netTotalCost = row.totalCost.sub(returnedTotalCost);
+  const returnStatus = computeReturnStatus(row.lines, perLine);
   return {
     id: row.id,
     orderId: row.orderId,
@@ -1114,8 +1581,14 @@ function toDetail(
     postedById: row.postedById,
     cancelledById: row.cancelledById,
     cancelReason: row.cancelReason,
-    lines: row.lines.map(
-      (l): MaterialIssueLineDetail => ({
+    lines: row.lines.map((l): MaterialIssueLineDetail => {
+      const agg = perLine.get(l.id);
+      const returnedQty = agg?.returnedQty ?? new Prisma.Decimal(0);
+      const returnedLineTotalCost =
+        agg?.returnedTotalCost ?? new Prisma.Decimal(0);
+      const netIssuedQty = l.issuedQty.sub(returnedQty);
+      const netLineTotalCost = l.totalCost.sub(returnedLineTotalCost);
+      return {
         id: l.id,
         workshopNeedId: l.workshopNeedId,
         workshopNeed: l.workshopNeed
@@ -1135,7 +1608,15 @@ function toDetail(
         cellId: l.cellId,
         cellCode: l.cell?.code ?? null,
         comment: l.comment,
-      }),
-    ),
+        returnedQty: returnedQty.toString(),
+        returnedTotalCost: returnedLineTotalCost.toString(),
+        netIssuedQty: netIssuedQty.toString(),
+        netTotalCost: netLineTotalCost.toString(),
+      };
+    }),
+    returns: row.returns.map(toReturnDetail),
+    returnedTotalCost: returnedTotalCost.toString(),
+    netTotalCost: netTotalCost.toString(),
+    returnStatus,
   };
 }

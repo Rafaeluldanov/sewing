@@ -585,6 +585,46 @@
   сервере), `cellId? → Cell` (`SetNull` — аналитический slice, НЕ
   движение остатков), `comment?`. Индексы: `materialIssueId`,
   `workshopNeedId`, `cellId`. См. § 3.10 ниже.
+- **`MaterialIssueReturn`** *(новый контур)* — документ возврата /
+  сторно проведённого `MaterialIssue`
+  (`apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+  `prisma/schema.prisma::MaterialIssueReturn`). `materialIssueId →
+  MaterialIssue` (cascade), `orderId → Order` (cascade — дублируем
+  для удобных фильтров без JOIN), `passportId? → Passport`
+  (`SetNull`, snapshot `MaterialIssue.passportId`),
+  `status @default("POSTED")` (на MVP всегда `POSTED`),
+  `sourceKey: String? @unique` (UNIQUE — идемпотентность; формат
+  `MATERIAL_ISSUE_RETURN_FULL:<materialIssueId>` или
+  `MATERIAL_ISSUE_RETURN:<materialIssueId>:<clientRequestId>`),
+  `reason: String` (обязательная причина возврата, 2..500),
+  `totalCost: Decimal(14,2) @default(0)` (Σ строк, считается на
+  сервере), `createdAt`, `createdById?` (без FK на `Employee`).
+  Индексы: `materialIssueId`, `orderId`, `passportId`, `status`,
+  `createdAt`. Связь со складом: создание возврата в той же
+  транзакции вызывает `StockService.recordMaterialIssueReturnInTx`
+  → IN-движения `type = REVERSAL`, `sourceKey =
+  MATERIAL_ISSUE_RETURN_LINE:<id>`. Сознательная граница MVP: на
+  UI отдаётся только полное сторно (частичный возврат с произвольным
+  qty не реализован), удаление и отмена возврата не реализованы,
+  возврат **не удаляет** и **не переводит в DRAFT** исходный
+  `MaterialIssue` — это отдельный документ. Финансовая стоимость
+  возврата = snapshot `MaterialIssueLine.unitCost` × `returnedQty`
+  (для нетто-расчёта в order summary, plan/fact и production cost),
+  складская стоимость IN-движения берётся из исходного
+  `MaterialIssueLine` OUT-движения (если оно было).
+- **`MaterialIssueReturnLine`** — строка возврата. Cascade от
+  `MaterialIssueReturn` и от `MaterialIssueLine` (через
+  `materialIssueLineId`). `workshopNeedId? → WorkshopNeed`
+  (`SetNull`, snapshot потребности исходной строки),
+  `description: String` / `materialRole?` / `unit: String`
+  (snapshots исходной строки), `returnedQty: Decimal(14,4)`,
+  `unitCost: Decimal(14,2)` (snapshot
+  `MaterialIssueLine.unitCost`), `totalCost: Decimal(14,2)` (=
+  `returnedQty × unitCost`), `cellId? → Cell` (`SetNull` —
+  опциональная ячейка зачисления, на MVP сервис её не выставляет —
+  IN-движение использует `cellId` исходного OUT), `comment?`.
+  Индексы: `materialIssueReturnId`, `materialIssueLineId`,
+  `workshopNeedId`, `cellId`.
 
 <a id="212b-stock-foundation"></a>
 ### 2.12b Stock foundation (MVP по WorkshopNeed)

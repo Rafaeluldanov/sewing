@@ -1138,7 +1138,11 @@ model Order {
   /// MVP-итерация — ручная фиксация расхода без проверки складских
   /// остатков, без FIFO/LIFO и без автосписания при выдаче кроя.
   /// Cascade — без заказа документ расхода смысла не имеет.
-  materialIssues MaterialIssue[]
+  materialIssues       MaterialIssue[]
+  /// Документы возврата / сторно по проведённым `MaterialIssue`
+  /// этого заказа (см. `model MaterialIssueReturn` ниже). Cascade —
+  /// без заказа возврат теряет смысл.
+  materialIssueReturns MaterialIssueReturn[]
 
   @@index([status])
   @@index([orderDate])
@@ -1331,7 +1335,12 @@ model Passport {
   /// аналитики и возможного расширения в следующих итерациях.
   /// `onDelete: SetNull` со стороны `MaterialIssue.passportId` —
   /// снос паспорта не сносит документ расхода.
-  materialIssues MaterialIssue[]
+  materialIssues       MaterialIssue[]
+  /// Документы возврата / сторно `MaterialIssueReturn`, опционально
+  /// привязанные к этому паспорту (см. `model MaterialIssueReturn`
+  /// ниже). `onDelete: SetNull` — удаление паспорта не сносит
+  /// исторический документ возврата.
+  materialIssueReturns MaterialIssueReturn[]
 
   @@index([status, currentOperationId])
   @@index([orderId])
@@ -1694,7 +1703,7 @@ model Warehouse {
   lines WarehouseLine[]
 
   /// Foundation: остатки материала по `WorkshopNeed` (см. `StockBalance`).
-  stockBalances StockBalance[]
+  stockBalances  StockBalance[]
   /// Foundation: журнал складских движений (см. `StockMovement`).
   stockMovements StockMovement[]
 
@@ -1746,11 +1755,11 @@ model Cell {
   lineIndex   Int?
   createdAt   DateTime @default(now())
 
-  warehouse            Warehouse?            @relation(fields: [warehouseId], references: [id])
-  line                 WarehouseLine?        @relation(fields: [lineId], references: [id], onDelete: SetNull)
-  contents             CellContent[]
-  events               PassportEvent[]
-  currentPassports     Passport[]            @relation("PassportCurrentCell")
+  warehouse                Warehouse?                @relation(fields: [warehouseId], references: [id])
+  line                     WarehouseLine?            @relation(fields: [lineId], references: [id], onDelete: SetNull)
+  contents                 CellContent[]
+  events                   PassportEvent[]
+  currentPassports         Passport[]                @relation("PassportCurrentCell")
   /// Этап 7А «Приёмка поставок» (см. `model PurchaseReceiptLine`
   /// ниже, `apps/api/src/modules/purchase-receipts/*`).
   /// Размещение принятой партии материала: одна строка приёмки —
@@ -1760,17 +1769,22 @@ model Cell {
   /// продолжает работать как раньше. `onDelete: SetNull` со
   /// стороны `PurchaseReceiptLine.cellId`: удаление ячейки
   /// (на MVP не делается) не сносит документ приёмки.
-  purchaseReceiptLines PurchaseReceiptLine[]
+  purchaseReceiptLines     PurchaseReceiptLine[]
   /// Этап «Фактический расход материалов по заказу» (см.
   /// `model MaterialIssueLine` ниже). Опционально на строке
   /// расхода фиксируется ячейка, откуда материал выдан в крой —
   /// это аналитический срез (НЕ движение остатков). `onDelete:
   /// SetNull` со стороны `MaterialIssueLine.cellId` — удаление
   /// ячейки не сносит исторический документ расхода.
-  materialIssueLines   MaterialIssueLine[]
+  materialIssueLines       MaterialIssueLine[]
+  /// Строки документов возврата `MaterialIssueReturnLine`,
+  /// опционально привязанные к ячейке (см. `model
+  /// MaterialIssueReturnLine` ниже). `onDelete: SetNull` —
+  /// удаление ячейки не сносит исторический возврат.
+  materialIssueReturnLines MaterialIssueReturnLine[]
 
   /// Foundation: остатки по ячейке (MVP — привязка к `WorkshopNeed`).
-  stockBalances StockBalance[]
+  stockBalances  StockBalance[]
   stockMovements StockMovement[]
 
   @@unique([lineId, lineIndex], name: "Cell_line_index_uniq")
@@ -3308,10 +3322,16 @@ model WorkshopNeed {
   /// со стороны `MaterialIssueLine.workshopNeedId`: удаление
   /// потребности (через cascade от заказа) не сносит уже выпущенный
   /// документ расхода — он остаётся как исторический срез.
-  materialIssueLines MaterialIssueLine[]
+  materialIssueLines       MaterialIssueLine[]
+  /// Строки документов возврата `MaterialIssueReturnLine`,
+  /// опционально привязанные к этой потребности (см. `model
+  /// MaterialIssueReturnLine` ниже). `onDelete: SetNull` —
+  /// удаление потребности (через cascade от заказа) не сносит
+  /// уже созданный документ возврата.
+  materialIssueReturnLines MaterialIssueReturnLine[]
 
   /// Foundation складского учёта: текущий остаток по потребности заказа.
-  stockBalances StockBalance[]
+  stockBalances  StockBalance[]
   /// Foundation: журнал движений (ещё не вызывается из приёмки/расхода).
   stockMovements StockMovement[]
 
@@ -4522,6 +4542,13 @@ model MaterialIssue {
   lines    MaterialIssueLine[]
 
   stockMovements StockMovement[]
+  /// Документы возврата / сторно по этому проведённому
+  /// `MaterialIssue` (см. `model MaterialIssueReturn` ниже).
+  /// Один проведённый расход может иметь несколько возвратов
+  /// (на MVP-итерации — только полное сторно остатка, частичные
+  /// возвраты подготовлены архитектурно). Cascade — без исходного
+  /// расхода возврат теряет смысл.
+  returns        MaterialIssueReturn[]
 
   @@index([orderId])
   @@index([passportId])
@@ -4591,8 +4618,181 @@ model MaterialIssueLine {
   cell          Cell?         @relation(fields: [cellId], references: [id], onDelete: SetNull)
 
   stockMovements StockMovement[]
+  /// Строки возвратов, ссылающиеся на эту `MaterialIssueLine`
+  /// (см. `model MaterialIssueReturnLine` ниже). Cascade — если
+  /// исходная строка удаляется (через cascade от `MaterialIssue`),
+  /// её возвраты тоже теряют смысл.
+  returnLines    MaterialIssueReturnLine[]
 
   @@index([materialIssueId])
+  @@index([workshopNeedId])
+  @@index([cellId])
+}
+
+/// Документ возврата / сторно проведённого `MaterialIssue`
+/// (см. `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+/// `docs/api.md §«Material issues»`, `docs/current-state.md
+/// §«Material issue return»`).
+///
+/// Назначение MVP-итерации:
+///   - менеджер цеха возвращает оставшееся количество материала по
+///     уже проведённому документу расхода;
+///   - исходный `MaterialIssue` НЕ удаляется и НЕ переводится обратно
+///     в `DRAFT`. Возврат живёт как отдельный документ, чтобы
+///     исторический расход остался в журнале;
+///   - на UI MVP — только полное сторно (одна кнопка «Сторнировать»
+///     возвращает всё, что ещё не было возвращено). Частичный
+///     возврат подготовлен архитектурно: `MaterialIssueReturnLine`
+///     умеет хранить произвольный `returnedQty`, но клиентский DTO
+///     этого не даёт ввести (одна итерация — одна точка ввода).
+///
+/// Сознательные границы:
+///   - `status = POSTED` всегда (поле оставлено на будущие
+///     `DRAFT`/`CANCELLED` итерации и для симметрии с `MaterialIssue`);
+///   - удаление возврата не реализовано (`MaterialIssueReturn` без
+///     soft/hard delete);
+///   - отмена возврата не реализована;
+///   - `MaterialStockLot` / FIFO / master `Material` остаются вне
+///     scope (как и в исходном `MaterialIssue`);
+///   - складское движение — `StockMovement` направления `IN` с
+///     `type = REVERSAL` (см. `StockService.recordMaterialIssueReturnInTx`);
+///   - финансовая сводка заказа учитывает возвраты как «нетто»:
+///     `MaterialIssue.totalCost − Σ MaterialIssueReturn.totalCost`
+///     (см. `apps/web/components/orders/summary/build-order-summary-rows.ts`).
+model MaterialIssueReturn {
+  id String @id @default(cuid())
+
+  /// Исходный проведённый документ расхода. Cascade — без расхода
+  /// возврат теряет смысл (если кто-то форсированно удалит
+  /// `MaterialIssue`, возвраты тоже сносятся вместе с ним).
+  materialIssueId String
+  /// Дублируем `orderId` исходного `MaterialIssue` для удобных
+  /// фильтров `WHERE orderId = ?` без `JOIN`. Заполняется сервисом
+  /// одновременно с `materialIssueId` (`MaterialIssuesService.returnPostedIssue`).
+  orderId         String
+  /// Дублируем `passportId` исходного `MaterialIssue` (`null`, если
+  /// расход order-level). Используется в production-cost agregации
+  /// `CostsService` — позволяет вычесть возврат из периода без
+  /// JOIN-а на исходный `MaterialIssue`.
+  passportId      String?
+
+  /// Жизненный цикл документа возврата. На MVP всегда `POSTED`
+  /// (создаётся сразу проведённым). Поле зарезервировано на
+  /// будущее: `DRAFT` (черновик возврата с предварительным
+  /// расчётом) / `CANCELLED` (откат возврата). Хранится `String`
+  /// — расширение списка не требует миграции.
+  status    String  @default("POSTED")
+  /// Идемпотентный ключ возврата. Защищает от двойного submit
+  /// и retry клиентом:
+  ///   - `MATERIAL_ISSUE_RETURN_FULL:<materialIssueId>` — для полного
+  ///     сторно без `clientRequestId` (одна попытка полного возврата
+  ///     на один проведённый расход);
+  ///   - `MATERIAL_ISSUE_RETURN:<materialIssueId>:<clientRequestId>` —
+  ///     если клиент передал `clientRequestId` в теле запроса
+  ///     (рекомендуется для UI-формы — повторный submit формы с тем
+  ///     же id вернёт уже созданный возврат вместо дубля).
+  ///
+  /// `null` — теоретически возможен (для будущих server-to-server
+  /// сценариев), но на MVP сервис всегда выставляет ключ. UNIQUE-
+  /// индекс — единственная точка защиты от гонок.
+  sourceKey String? @unique
+
+  /// Причина возврата. Обязательное поле — UI требует комментарий
+  /// (`min 2`, `max 500`), чтобы возвраты в журнале можно было
+  /// отличать от автоматических корректировок.
+  reason    String
+  /// Σ `totalCost` строк возврата. Считается на сервере при создании
+  /// (`MaterialIssueReturnLine.returnedQty × MaterialIssueLine.unitCost`).
+  /// Финансовый smartcast: `MaterialIssue.totalCost − Σ
+  /// MaterialIssueReturn.totalCost` = «нетто факт» по документу
+  /// (используется в order summary, plan/fact, production-cost).
+  totalCost Decimal @default(0) @db.Decimal(14, 2)
+
+  createdAt   DateTime @default(now())
+  /// Кто инициировал возврат. Без FK на `Employee` (тот же подход,
+  /// что у `MaterialIssue.createdById` — учётка может быть
+  /// деактивирована, документ уцелеет).
+  createdById String?
+
+  materialIssue MaterialIssue             @relation(fields: [materialIssueId], references: [id], onDelete: Cascade)
+  order         Order                     @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  passport      Passport?                 @relation(fields: [passportId], references: [id], onDelete: SetNull)
+  lines         MaterialIssueReturnLine[]
+
+  @@index([materialIssueId])
+  @@index([orderId])
+  @@index([passportId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+/// Строка документа возврата `MaterialIssueReturn`. Отражает,
+/// какое количество какой исходной `MaterialIssueLine` возвращено,
+/// по какой документной цене и опционально на какую ячейку склада
+/// должен быть зачислен возврат.
+///
+/// На MVP-итерации полного сторно `returnedQty` всегда равен
+/// `MaterialIssueLine.issuedQty − Σ ранее возвращённое` (т.е.
+/// «остаток»), но поле допускает произвольный положительный
+/// Decimal — фундамент под будущий частичный возврат.
+///
+/// Финансовая стоимость возврата (`unitCost × returnedQty =
+/// totalCost`) сознательно использует `MaterialIssueLine.unitCost`,
+/// а НЕ текущий складской `StockBalance.unitCost`. Возврат отдаёт
+/// в деньги ровно столько, сколько списали по документу — иначе
+/// «фактический расход материалов» по заказу будет дрейфовать.
+/// Складская стоимость IN-движения берётся отдельно из исходного
+/// `StockMovement` OUT (`recordMaterialIssueReturnInTx`).
+model MaterialIssueReturnLine {
+  id String @id @default(cuid())
+
+  materialIssueReturnId String
+  /// Какую исходную строку расхода возвращаем. Cascade — снос
+  /// исходной строки (только при cascade от `MaterialIssue`)
+  /// сносит её строки возврата вместе.
+  materialIssueLineId   String
+  /// Snapshot `workshopNeedId` исходной строки (может быть `null`,
+  /// если в исходном расходе её не было, например ручной order-level
+  /// расход без потребности). `onDelete: SetNull` — удаление
+  /// потребности (через cascade от заказа) не сносит документ возврата.
+  workshopNeedId        String?
+
+  /// Снапшоты исходной строки на момент возврата. Дублируем, чтобы
+  /// возврат мог печататься/отображаться независимо от того, изменили
+  /// ли исходную строку расхода (description / unit), и чтобы UI не
+  /// делал лишний JOIN. Аналогично `MaterialIssueLine` хранит
+  /// snapshot `description` от `WorkshopNeed`.
+  description  String
+  materialRole String?
+  unit         String
+
+  /// Сколько возвращено в этой строке. Точность 4 знака — согласовано
+  /// с `MaterialIssueLine.issuedQty`.
+  returnedQty Decimal @db.Decimal(14, 4)
+  /// Цена единицы возврата = `MaterialIssueLine.unitCost` (snapshot
+  /// финансовой оценки исходной строки). Не пересчитывается из
+  /// складской цены.
+  unitCost    Decimal @db.Decimal(14, 2)
+  /// Производное `returnedQty × unitCost`. Считается на сервере при
+  /// создании возврата.
+  totalCost   Decimal @db.Decimal(14, 2)
+
+  /// Опциональная ячейка зачисления возврата на склад. На MVP сервис
+  /// её НЕ заполняет (использует ячейку исходного OUT-движения через
+  /// `StockMovement.cellId`), но поле зарезервировано на случай
+  /// «возврат на склад в другую ячейку».
+  cellId  String?
+  /// Опциональный комментарий по строке (на MVP не используется UI —
+  /// общий `reason` живёт на уровне документа).
+  comment String?
+
+  materialIssueReturn MaterialIssueReturn @relation(fields: [materialIssueReturnId], references: [id], onDelete: Cascade)
+  materialIssueLine   MaterialIssueLine   @relation(fields: [materialIssueLineId], references: [id], onDelete: Cascade)
+  workshopNeed        WorkshopNeed?       @relation(fields: [workshopNeedId], references: [id], onDelete: SetNull)
+  cell                Cell?               @relation(fields: [cellId], references: [id], onDelete: SetNull)
+
+  @@index([materialIssueReturnId])
+  @@index([materialIssueLineId])
   @@index([workshopNeedId])
   @@index([cellId])
 }

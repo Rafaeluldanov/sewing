@@ -105,6 +105,15 @@ export const STOCK_MOVEMENT_SOURCE_KEY_PREFIX = {
   PURCHASE_RECEIPT_LINE_CANCEL: 'PURCHASE_RECEIPT_LINE_CANCEL',
   MATERIAL_ISSUE_LINE: 'MATERIAL_ISSUE_LINE',
   /**
+   * Префикс ключа IN-движения возврата проведённого `MaterialIssue`.
+   * Один `MaterialIssueReturnLine` → одно зачисляющее движение
+   * `direction = IN`, `type = REVERSAL`. См.
+   * `StockService.recordMaterialIssueReturnInTx`,
+   * `prisma/schema.prisma::MaterialIssueReturnLine`,
+   * `docs/current-state.md §«Material issue return»`.
+   */
+  MATERIAL_ISSUE_RETURN_LINE: 'MATERIAL_ISSUE_RETURN_LINE',
+  /**
    * Префикс ключа ручной корректировки остатка (см.
    * `StockService.createAdjustment`,
    * `apps/api/src/modules/stock/dto/create-stock-adjustment.dto.ts`,
@@ -136,14 +145,32 @@ export function buildPurchaseReceiptLineCancelStockSourceKey(
 
 /**
  * Ключ OUT-движения по расходу: один `MaterialIssueLine` → одно
- * движение. Реверсы / возвраты у `MaterialIssue` в MVP не
- * реализованы, поэтому для них отдельного `_CANCEL`-префикса нет
- * (см. `StockService.recordMaterialIssueInTx`).
+ * движение. См. `StockService.recordMaterialIssueInTx`. IN-движение
+ * по возврату проведённого расхода имеет отдельный префикс
+ * (`buildMaterialIssueReturnLineStockSourceKey`) — это разные
+ * сущности и оба ключа должны существовать одновременно.
  */
 export function buildMaterialIssueLineStockSourceKey(
   materialIssueLineId: string,
 ): string {
   return `${STOCK_MOVEMENT_SOURCE_KEY_PREFIX.MATERIAL_ISSUE_LINE}:${materialIssueLineId}`;
+}
+
+/**
+ * Ключ IN-движения возврата проведённого `MaterialIssue`: один
+ * `MaterialIssueReturnLine` → одно зачисляющее движение
+ * (`type = REVERSAL`, `direction = IN`). UNIQUE-индекс на
+ * `StockMovement.sourceKey` гарантирует, что повторный вызов
+ * `recordMaterialIssueReturnInTx` в той же или новой транзакции
+ * не создаст дубль. См.
+ * `StockService.recordMaterialIssueReturnInTx`,
+ * `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+ * `prisma/schema.prisma::MaterialIssueReturnLine`.
+ */
+export function buildMaterialIssueReturnLineStockSourceKey(
+  materialIssueReturnLineId: string,
+): string {
+  return `${STOCK_MOVEMENT_SOURCE_KEY_PREFIX.MATERIAL_ISSUE_RETURN_LINE}:${materialIssueReturnLineId}`;
 }
 
 /**
@@ -1068,6 +1095,241 @@ export class StockService {
         description: params.description,
       },
     );
+  }
+
+  // ===========================================================================
+  // MATERIAL ISSUE RETURN → REVERSAL IN movements
+  // ===========================================================================
+
+  /**
+   * Записывает зачисляющие движения по `MaterialIssueReturn` (возврат
+   * проведённого расхода `MaterialIssue`). См.
+   * `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+   * `prisma/schema.prisma::MaterialIssueReturn` /
+   * `MaterialIssueReturnLine`,
+   * `docs/current-state.md §«Material issue return»`.
+   *
+   * Контракт:
+   *   - работает строго внутри переданного `tx`, новую транзакцию не
+   *     открывает (вызывается из `MaterialIssuesService.returnPostedIssue`);
+   *   - срабатывает только если `MaterialIssueReturn.status === POSTED`;
+   *   - для каждой `MaterialIssueReturnLine` с `returnedQty > 0` и
+   *     `workshopNeedId` создаёт `StockMovement` с `direction = IN`,
+   *     `type = REVERSAL`, `sourceKey = MATERIAL_ISSUE_RETURN_LINE:<id>`.
+   *     `applyMovementInTx` параллельно увеличивает `StockBalance.qty`
+   *     и пересчитывает среднюю себестоимость.
+   *   - идемпотентен: если движение по `sourceKey` уже существует,
+   *     строка пропускается без побочных эффектов;
+   *   - soft-skip строки без `workshopNeedId` / `unit` / `returnedQty <= 0`
+   *     (защита от мусорных данных — без бросания ошибки, чтобы
+   *     отдельная плохая строка не валила весь возврат).
+   *
+   * **Куда вернуть:** для каждой строки сначала ищем исходное OUT-
+   * движение `MaterialIssueLine` (`sourceKey = MATERIAL_ISSUE_LINE:<id>`).
+   * Если нашли — берём его `warehouseId` / `cellId` (чтобы возврат
+   * лёг в ту же ячейку, откуда списывали) и его `unitCost` для
+   * IN-движения (складская стоимость партии). Если оригинал не
+   * найден (расход проводился до подключения склада или
+   * без `workshopNeedId`):
+   *   - если у строки возврата задан `cellId` — используем его
+   *     (`warehouseId` подтянем через `Cell.warehouseId`);
+   *   - иначе — `warehouseId = null`, `cellId = null` (no-location
+   *     balance).
+   *
+   * Финансовая стоимость документа возврата (`MaterialIssueReturn.totalCost`)
+   * живёт независимо от складской стоимости движения. Для UI / order
+   * summary берётся `MaterialIssueReturn.totalCost` (snapshot
+   * `MaterialIssueLine.unitCost`), а движение использует складскую
+   * среднюю — те же два слоя, что и у `MaterialIssue` OUT.
+   *
+   * `IN`-движение никогда не блокируется флагом
+   * `CompanySettings.allowNegativeMaterialStock` (этот hardening-гейт
+   * относится только к OUT-движениям). Возврат разрешён всегда —
+   * остаток только увеличивается.
+   */
+  async recordMaterialIssueReturnInTx(
+    tx: Prisma.TransactionClient,
+    materialIssueReturnId: string,
+    employeeId?: string | null,
+  ): Promise<StockMovement[]> {
+    const ret = await tx.materialIssueReturn.findUnique({
+      where: { id: materialIssueReturnId },
+      include: {
+        lines: {
+          include: {
+            materialIssueLine: {
+              select: {
+                id: true,
+                workshopNeedId: true,
+                description: true,
+                materialRole: true,
+                unit: true,
+                cellId: true,
+              },
+            },
+            workshopNeed: {
+              select: {
+                id: true,
+                description: true,
+                sourceName: true,
+                materialRole: true,
+                unit: true,
+              },
+            },
+            cell: { select: { id: true, warehouseId: true } },
+          },
+        },
+      },
+    });
+    if (!ret) return [];
+    if (ret.status !== 'POSTED') return [];
+
+    const reasonComment = (ret.reason ?? '').trim();
+    const fallbackComment = 'Возврат по списанию материалов';
+    const movements: StockMovement[] = [];
+    for (const line of ret.lines) {
+      const movement = await this.applyMaterialIssueReturnLineInTx(
+        tx,
+        ret.materialIssueId,
+        line,
+        reasonComment.length > 0 ? reasonComment : fallbackComment,
+        employeeId ?? null,
+      );
+      if (movement) movements.push(movement);
+    }
+    return movements;
+  }
+
+  private async applyMaterialIssueReturnLineInTx(
+    tx: Prisma.TransactionClient,
+    materialIssueId: string,
+    line: Prisma.MaterialIssueReturnLineGetPayload<{
+      include: {
+        materialIssueLine: {
+          select: {
+            id: true;
+            workshopNeedId: true;
+            description: true;
+            materialRole: true;
+            unit: true;
+            cellId: true;
+          };
+        };
+        workshopNeed: {
+          select: {
+            id: true;
+            description: true;
+            sourceName: true;
+            materialRole: true;
+            unit: true;
+          };
+        };
+        cell: { select: { id: true; warehouseId: true } };
+      };
+    }>,
+    comment: string,
+    employeeId: string | null,
+  ): Promise<StockMovement | null> {
+    const sourceLine = line.materialIssueLine;
+    const workshopNeedId = sourceLine?.workshopNeedId ?? line.workshopNeedId;
+    if (!workshopNeedId) {
+      this.logger.log(
+        `event=stock.material_issue_return.skip reason=no_workshop_need ` +
+          `materialIssueId=${materialIssueId} returnLineId=${line.id}`,
+      );
+      return null;
+    }
+    if (!line.unit || line.unit.length === 0) {
+      this.logger.log(
+        `event=stock.material_issue_return.skip reason=no_unit ` +
+          `materialIssueId=${materialIssueId} returnLineId=${line.id}`,
+      );
+      return null;
+    }
+    const qty = line.returnedQty;
+    if (!qty || qty.lessThanOrEqualTo(0)) {
+      this.logger.log(
+        `event=stock.material_issue_return.skip reason=non_positive_qty ` +
+          `materialIssueId=${materialIssueId} returnLineId=${line.id}`,
+      );
+      return null;
+    }
+
+    const sourceKey = buildMaterialIssueReturnLineStockSourceKey(line.id);
+    const existing = await this.findMovementBySourceKeyInTx(tx, sourceKey);
+    if (existing) return existing;
+
+    // Ищем исходное OUT-движение по `MaterialIssueLine`, чтобы
+    // вернуть остаток в ту же ячейку и по той же складской цене,
+    // которой он был списан. Если OUT не было (старый расход до
+    // подключения склада / расход без workshopNeedId) — fallback на
+    // `returnLine.cellId` или no-location balance.
+    let warehouseId: string | null = null;
+    let cellId: string | null = null;
+    let stockUnitCost: Prisma.Decimal = line.unitCost;
+    if (sourceLine) {
+      const originalOutKey = buildMaterialIssueLineStockSourceKey(sourceLine.id);
+      const originalOut = await this.findMovementBySourceKeyInTx(
+        tx,
+        originalOutKey,
+      );
+      if (originalOut) {
+        warehouseId = originalOut.warehouseId ?? null;
+        cellId = originalOut.cellId ?? null;
+        stockUnitCost = originalOut.unitCost;
+      } else if (line.cellId && line.cell) {
+        cellId = line.cellId;
+        warehouseId = line.cell.warehouseId ?? null;
+      }
+    } else if (line.cellId && line.cell) {
+      cellId = line.cellId;
+      warehouseId = line.cell.warehouseId ?? null;
+    }
+
+    const description =
+      pickFirstNonEmpty([
+        line.workshopNeed?.description,
+        line.workshopNeed?.sourceName,
+        line.description,
+        sourceLine?.description,
+      ]) ?? 'Материал';
+    const materialRole =
+      line.materialRole ??
+      sourceLine?.materialRole ??
+      line.workshopNeed?.materialRole ??
+      null;
+
+    const { movement } = await this.applyMovementInTx(tx, {
+      workshopNeedId,
+      warehouseId,
+      cellId,
+      description,
+      materialRole,
+      type: STOCK_MOVEMENT_TYPE.REVERSAL,
+      direction: STOCK_MOVEMENT_DIRECTION.IN,
+      qty,
+      unit: line.unit,
+      // Складская цена IN-движения: цена из исходного OUT, если он
+      // был; иначе — документная цена из MaterialIssueReturnLine
+      // (snapshot MaterialIssueLine.unitCost). Не клампим — `IN`
+      // через `applyMovementInTx` пересчитывает среднюю и пишет
+      // именно эту цену в `StockMovement.unitCost`.
+      unitCost: stockUnitCost,
+      sourceType: STOCK_MOVEMENT_SOURCE_KEY_PREFIX.MATERIAL_ISSUE_RETURN_LINE,
+      sourceId: line.id,
+      sourceKey,
+      // Бизнес-привязку оставляем на исходный `MaterialIssue` /
+      // `MaterialIssueLine`, чтобы фильтры журнала по
+      // `materialIssueId` / `materialIssueLineId` показывали и
+      // OUT, и REVERSAL IN рядом. ID самого `MaterialIssueReturn`
+      // фигурирует только в `sourceId` / `sourceKey` (специальный
+      // префикс выше).
+      materialIssueId,
+      materialIssueLineId: sourceLine?.id ?? null,
+      comment,
+      createdById: employeeId,
+    });
+    return movement;
   }
 
   // ===========================================================================

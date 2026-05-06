@@ -349,7 +349,7 @@ WORKSHOP_NEED | SUPPLIER |
 PURCHASE_ORDER | PURCHASE_RECEIPT |
 ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
-MATERIAL_ISSUE |
+MATERIAL_ISSUE | MATERIAL_ISSUE_RETURN |
 STOCK_MOVEMENT |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
@@ -479,8 +479,8 @@ runtime-коде (не из комментариев/документации). 
 
 Cancel для `POSTED`-документа в MVP запрещён
 (`MaterialIssuePostedCannotCancelException`, 409). Запрос
-возвращает ошибку без записи в `AuditLog` — это та же стратегия,
-что и у `WorkshopNeedsService.update` для locked-строк.
+возвращает ошибку без записи в `AuditLog`. Для отката проведённого
+расхода — отдельный документ `MaterialIssueReturn` (см. ниже).
 
 Если автосписание skip-ается (повторный retry по `sourceKey`, уже
 есть неотменённый документ по `passportId`, нет подходящей
@@ -488,6 +488,30 @@ Cancel для `POSTED`-документа в MVP запрещён
 пишутся** (skip — это успешное отсутствие действия), только
 structured-лог `event=material_issue.auto.skip reason=...` в
 stdout сервиса.
+
+#### Material issue returns (`entityType = MATERIAL_ISSUE_RETURN`, `entityId = MaterialIssueReturn.id`)
+
+Источник: `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+`apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueReturnInTx`,
+`prisma/schema.prisma::MaterialIssueReturn` /
+`MaterialIssueReturnLine`,
+`docs/api.md §«Material issues»`.
+
+- `MATERIAL_ISSUE_RETURNED` — менеджер сторнировал проведённый
+  документ расхода через `POST /api/material-issues/:id/return`.
+  Пишется в той же транзакции, что и `MaterialIssueReturn` +
+  `MaterialIssueReturnLine[]` + IN-движения (`type = REVERSAL`,
+  `direction = IN`, `sourceKey = MATERIAL_ISSUE_RETURN_LINE:<id>`).
+  Payload — `{ materialIssueId, materialIssueReturnId, orderId,
+  passportId, reason, totalCost, lines: [{ materialIssueLineId,
+  workshopNeedId, returnedQty, unit, unitCost, totalCost }],
+  employeeId, timestamp }`. При идемпотентном повторе с тем же
+  `clientRequestId` (UNIQUE `MaterialIssueReturn.sourceKey`)
+  событие **не дублируется** — сервис возвращает существующий
+  возврат и audit не пишет повторно.
+
+Удаление / отмена возврата на MVP не реализованы — соответствующих
+audit-событий не существует.
 
 #### Stock movements (`entityType = STOCK_MOVEMENT`, `entityId = StockMovement.id`)
 

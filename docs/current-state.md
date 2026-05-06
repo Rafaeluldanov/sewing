@@ -679,6 +679,53 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     и integration-тесте
     `tests/integration/company-divisions-material-stock-overrides.test.ts`.
 
+  Backend + UI итерация «Возврат / сторно проведённого
+  `MaterialIssue`» (см. ТЗ «Material issue return»,
+  `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+  `apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueReturnInTx`,
+  `prisma/schema.prisma::MaterialIssueReturn` /
+  `MaterialIssueReturnLine`):
+  - проведённый `MaterialIssue` теперь можно сторнировать через
+    `POST /api/material-issues/:id/return`. Запрос требует `reason`
+    и опциональный `clientRequestId`;
+  - сторно создаёт отдельный документ `MaterialIssueReturn` (status
+    `POSTED`) и строки `MaterialIssueReturnLine[]` — исходный
+    `MaterialIssue` **не удаляется** и **не переводится** обратно
+    в `DRAFT`;
+  - в той же транзакции пишется `StockMovement` (`direction = IN`,
+    `type = REVERSAL`, `sourceKey = MATERIAL_ISSUE_RETURN_LINE:<id>`);
+    для каждой строки сервис ищет исходный OUT-движение
+    `MaterialIssueLine` и возвращает в ту же ячейку склада с той
+    же складской ценой партии;
+  - идемпотентность — `MaterialIssueReturn.sourceKey` UNIQUE
+    (`MATERIAL_ISSUE_RETURN_FULL:<materialIssueId>` или
+    `MATERIAL_ISSUE_RETURN:<materialIssueId>:<clientRequestId>`).
+    Повторный submit с тем же `clientRequestId` возвращает уже
+    созданный документ;
+  - audit `MATERIAL_ISSUE_RETURNED` под `entityType =
+    MATERIAL_ISSUE_RETURN`;
+  - `MaterialIssueListItemDto` / `MaterialIssueDetailDto`
+    отдают `returnedTotalCost`, `netTotalCost`, `returnsCount`,
+    `returnStatus` (`NONE` / `PARTIAL` / `FULL`); строки —
+    `returnedQty`, `returnedTotalCost`, `netIssuedQty`,
+    `netTotalCost`. Технический `sourceKey` в публичном API не
+    отдаётся;
+  - order summary `materialActualCostRub` и
+    `OrderMaterialsUnifiedTable` план/факт считают **нетто**
+    (`Σ MaterialIssue.totalCost − Σ MaterialIssueReturn.totalCost`,
+    `issuedQty − Σ returnedQty`); `CostsService` production cost
+    тоже вычитает возвраты по passportId исходного расхода;
+  - UI-кнопка «Сторнировать» / «Сторнировать остаток» добавлена в
+    карточке заказа → вкладка «Потребности» → блок «Фактический
+    расход материалов» (`MaterialIssuesTable`). Для `returnStatus =
+    FULL` кнопки нет — показывается «Сторнирован». Отдельная
+    страница / роут / пункт меню НЕ создаются;
+  - частичный возврат с произвольным qty UI пока не реализован
+    (одна кнопка = полное сторно остатка); удаление и отмена
+    возврата НЕ реализованы; FIFO/LIFO/`MaterialStockLot` /
+    master `Material` остаются вне scope; новых ролей не
+    появилось.
+
 ---
 
 ## 2. Стек

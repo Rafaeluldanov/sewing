@@ -82,6 +82,20 @@ export const MATERIAL_ISSUE_LINE_UNIT_MAX_LENGTH = 32;
 export const MATERIAL_ISSUE_LINE_COMMENT_MAX_LENGTH = 2000;
 export const MATERIAL_ISSUE_CANCEL_REASON_MAX_LENGTH = 2000;
 
+/**
+ * Ограничения reason для возврата (`POST /api/material-issues/:id/return`).
+ * `min(2)` — иначе UI получит «бесполезные» возвраты с пустыми
+ * комментариями, и журнал теряет смысл; `max(500)` — просто чтобы
+ * не дать клиенту положить слишком длинный текст в `reason`.
+ */
+export const MATERIAL_ISSUE_RETURN_REASON_MIN_LENGTH = 2;
+export const MATERIAL_ISSUE_RETURN_REASON_MAX_LENGTH = 500;
+/**
+ * Длина опционального `clientRequestId` (UI-форма генерит UUID,
+ * максимум — обычно 36, но допускаем чуть больше).
+ */
+export const MATERIAL_ISSUE_RETURN_CLIENT_REQUEST_ID_MAX_LENGTH = 128;
+
 // ---------------------------------------------------------------------------
 // Reusable Zod helpers
 // ---------------------------------------------------------------------------
@@ -175,6 +189,38 @@ export const CancelMaterialIssueSchema = z
 export type CancelMaterialIssueDto = z.infer<typeof CancelMaterialIssueSchema>;
 
 // ---------------------------------------------------------------------------
+// Return DTO (полное сторно проведённого расхода)
+// ---------------------------------------------------------------------------
+
+/**
+ * Body для `POST /api/material-issues/:id/return` (см.
+ * `apps/api/src/modules/material-issues/dto/return-material-issue.dto.ts`,
+ * `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`).
+ *
+ * MVP-итерация — UI отдаёт только полное сторно: список строк
+ * сервер собирает сам по `MaterialIssueLine.issuedQty − Σ уже
+ * возвращённое`. Поэтому body содержит только `reason` и
+ * опциональный `clientRequestId` для идемпотентности повторного
+ * submit (`UNIQUE` `MaterialIssueReturn.sourceKey`).
+ */
+export const ReturnMaterialIssueSchema = z
+  .object({
+    reason: z
+      .string()
+      .trim()
+      .min(MATERIAL_ISSUE_RETURN_REASON_MIN_LENGTH)
+      .max(MATERIAL_ISSUE_RETURN_REASON_MAX_LENGTH),
+    clientRequestId: z
+      .string()
+      .trim()
+      .min(1)
+      .max(MATERIAL_ISSUE_RETURN_CLIENT_REQUEST_ID_MAX_LENGTH)
+      .optional(),
+  })
+  .strict();
+export type ReturnMaterialIssueDto = z.infer<typeof ReturnMaterialIssueSchema>;
+
+// ---------------------------------------------------------------------------
 // List query DTO
 // ---------------------------------------------------------------------------
 
@@ -220,6 +266,85 @@ export interface MaterialIssueLineDto {
   cellId: string | null;
   cellCode: string | null;
   comment: string | null;
+  /**
+   * Σ `MaterialIssueReturnLine.returnedQty` по `POSTED`
+   * `MaterialIssueReturn`-ам, ссылающимся на эту строку расхода.
+   * Decimal-as-string. `'0'`, если возвратов нет (см.
+   * `apps/api/src/modules/material-issues/material-issues.service.ts::computeLineNetAggregates`).
+   */
+  returnedQty: string;
+  /**
+   * Σ `MaterialIssueReturnLine.totalCost` (документная стоимость
+   * возврата) по `POSTED` возвратам этой строки. `'0'`, если
+   * возвратов нет.
+   */
+  returnedTotalCost: string;
+  /**
+   * `issuedQty − returnedQty`. Может быть `'0'` (полностью
+   * возвращено), но не отрицательным — backend гарантирует, что
+   * сумма возвратов не превышает выданное.
+   */
+  netIssuedQty: string;
+  /** `totalCost − returnedTotalCost`. */
+  netTotalCost: string;
+}
+
+/**
+ * Жизненный цикл возврата `MaterialIssueReturn`. На MVP всегда
+ * `POSTED`, но клиент должен принимать любую строку (расширение
+ * списка не требует миграции — `prisma/schema.prisma::MaterialIssueReturn.status`
+ * хранится как `String`).
+ */
+export const MATERIAL_ISSUE_RETURN_STATUSES = ['POSTED'] as const;
+export type MaterialIssueReturnStatus =
+  (typeof MATERIAL_ISSUE_RETURN_STATUSES)[number];
+
+/**
+ * Совокупный статус возвратов по проведённому `MaterialIssue`,
+ * который видит UI на блоке «Фактический расход материалов»:
+ *
+ *   - `NONE`    — возвратов ещё нет;
+ *   - `PARTIAL` — какие-то строки возвращены частично или
+ *                 полностью, но остаток ещё не нулевой;
+ *   - `FULL`    — все строки полностью возвращены, остатка нет —
+ *                 кнопка «Сторнировать» уже не показывается.
+ */
+export const MATERIAL_ISSUE_RETURN_STATUSES_AGG = [
+  'NONE',
+  'PARTIAL',
+  'FULL',
+] as const;
+export type MaterialIssueAggregateReturnStatus =
+  (typeof MATERIAL_ISSUE_RETURN_STATUSES_AGG)[number];
+
+export interface MaterialIssueReturnLineDto {
+  id: string;
+  materialIssueLineId: string;
+  workshopNeedId: string | null;
+  description: string;
+  materialRole: string | null;
+  unit: string;
+  /** Decimal-as-string. */
+  returnedQty: string;
+  unitCost: string;
+  totalCost: string;
+  cellId: string | null;
+  cellCode: string | null;
+  comment: string | null;
+}
+
+export interface MaterialIssueReturnDto {
+  id: string;
+  materialIssueId: string;
+  orderId: string;
+  passportId: string | null;
+  status: MaterialIssueReturnStatus | string;
+  reason: string;
+  /** Σ `MaterialIssueReturnLine.totalCost` (Decimal-as-string). */
+  totalCost: string;
+  createdAt: string;
+  createdById: string | null;
+  lines: MaterialIssueReturnLineDto[];
 }
 
 export interface MaterialIssueDetailDto {
@@ -246,6 +371,19 @@ export interface MaterialIssueDetailDto {
   cancelledById: string | null;
   cancelReason: string | null;
   lines: MaterialIssueLineDto[];
+  /**
+   * Документы возврата по этому проведённому `MaterialIssue`
+   * (только `POSTED`). Пустой массив, если возвратов нет. Detail-
+   * уровень — UI рендерит «Сторнирован» / «Частичный возврат» по
+   * `returnStatus` без дополнительного fetch.
+   */
+  returns: MaterialIssueReturnDto[];
+  /** Σ `MaterialIssueReturn.totalCost` (POSTED). Decimal-as-string. */
+  returnedTotalCost: string;
+  /** `totalCost − returnedTotalCost`. Decimal-as-string. */
+  netTotalCost: string;
+  /** Совокупный статус возвратов: `NONE` | `PARTIAL` | `FULL`. */
+  returnStatus: MaterialIssueAggregateReturnStatus;
 }
 
 /**
@@ -272,4 +410,17 @@ export interface MaterialIssueListItemDto {
   postedAt: string | null;
   cancelledAt: string | null;
   linesCount: number;
+  /**
+   * Σ `MaterialIssueReturn.totalCost` (POSTED) по этому документу.
+   * Decimal-as-string. `'0'`, если возвратов нет — UI не делает
+   * различий «нет возвратов» / «явный 0», но строка всё равно
+   * приходит, чтобы сводка по списку считалась без второго fetch.
+   */
+  returnedTotalCost: string;
+  /** `totalCost − returnedTotalCost`. Decimal-as-string. */
+  netTotalCost: string;
+  /** Сколько возвратов прошло (POSTED `MaterialIssueReturn` count). */
+  returnsCount: number;
+  /** Совокупный статус: `NONE` | `PARTIAL` | `FULL`. */
+  returnStatus: MaterialIssueAggregateReturnStatus;
 }

@@ -2887,6 +2887,43 @@ export class MaterialIssuePostedCannotCancelException extends BusinessException 
 }
 
 /**
+ * Попытка `POST /api/material-issues/:id/return` для документа,
+ * не находящегося в `POSTED` (DRAFT / CANCELLED). Возврат имеет
+ * смысл только для уже проведённого расхода — `DRAFT` отменяется
+ * штатным `cancel`-ом, `CANCELLED` уже не повлиял на склад.
+ *
+ * Бросается `MaterialIssuesService.returnPostedIssue` (см.
+ * `apps/api/src/modules/material-issues/material-issues.service.ts`).
+ */
+export class MaterialIssueReturnOnlyPostedException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_RETURN_ONLY_POSTED',
+      'Сторнировать можно только проведённый документ расхода',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Попытка возврата проведённого документа, у которого все строки уже
+ * полностью возвращены предыдущими `MaterialIssueReturn`. На MVP
+ * полное сторно идемпотентно по `sourceKey`, но если клиент попробует
+ * вызвать `POST /:id/return` с НОВЫМ `clientRequestId` после того, как
+ * предыдущий полный возврат уже прошёл — мы возвращаем 409 с этим
+ * кодом, а не пишем «пустой» документ возврата.
+ */
+export class MaterialIssueAlreadyReturnedException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_ALREADY_RETURNED',
+      'Документ расхода уже полностью сторнирован',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Hardening-итерация «Запрет отрицательных остатков материалов»:
  * `MaterialIssue.post` / `AUTO_CUT_ISSUE` пытается списать больше,
  * чем лежит на выбранном `StockBalance`, при включённой настройке

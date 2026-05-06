@@ -40,18 +40,21 @@ const MATERIAL_ISSUE_STATUS_POSTED = 'POSTED';
  *                    этому паспорту;
  *        salary    = Σ по стадиям QC/WTO/PACKING:
  *                       durationMinutes × employee.minuteRate;
- *        material  = Σ `MaterialIssue.totalCost` по POSTED-документам
+ *        material  = Σ `MaterialIssue.totalCost` − Σ
+ *                    `MaterialIssueReturn.totalCost` по POSTED-документам
  *                    с `passportId === passport.id` (фактический
- *                    расход материалов, см.
+ *                    расход материалов нетто, см.
  *                    `apps/api/src/modules/material-issues/*`,
- *                    `docs/api.md §«Material issues»`). DRAFT /
- *                    CANCELLED не учитываем; order-level документы
- *                    без `passportId` сознательно НЕ включаем — без
- *                    привязки к паспорту нельзя корректно разнести
- *                    расход по дню выпуска (см. ТЗ итерации). На MVP
- *                    нет ни `StockBalance`, ни автосписания при
- *                    выдаче кроя — `MaterialIssue` остаётся ручным
- *                    документом.
+ *                    `docs/api.md §«Material issues»`,
+ *                    `prisma/schema.prisma::MaterialIssueReturn`).
+ *                    DRAFT / CANCELLED не учитываем; order-level
+ *                    документы без `passportId` сознательно НЕ
+ *                    включаем — без привязки к паспорту нельзя
+ *                    корректно разнести расход по дню выпуска
+ *                    (см. ТЗ итерации). Возвраты `MaterialIssueReturn`
+ *                    (POSTED) вычитаются: вернувшийся на склад
+ *                    материал не должен оставаться в себестоимости
+ *                    дня упаковки.
  *      Cap длительности — в `PassportDurationsService`.
  *
  *   3. День агрегата = дата `PACKED` event паспорта (UTC). И
@@ -166,29 +169,59 @@ export class CostsService {
       stagesByPassport.set(s.passportId, arr);
     }
 
-    // 5a) Фактический расход материалов по паспортам периода.
+    // 5a) Фактический расход материалов по паспортам периода (нетто).
     //     Берём только POSTED-документы с `passportId` из выборки —
     //     DRAFT / CANCELLED и order-level документы (без `passportId`)
     //     в production cost по периоду НЕ попадают (см. шапку файла
-    //     и ТЗ итерации). `totalCost` берём с backend (`MaterialIssue.
-    //     totalCost`), не пересчитываем из `MaterialIssueLine` —
-    //     это и так server-side агрегат, который пересчитывается
-    //     при `POST /:id/post`.
+    //     и ТЗ итерации).
+    //
+    //     Нетто-расход = `Σ MaterialIssue.totalCost − Σ MaterialIssueReturn.totalCost`
+    //     для тех же `passportId`. Возвраты (`MaterialIssueReturn`,
+    //     status `POSTED`, см.
+    //     `prisma/schema.prisma::MaterialIssueReturn`,
+    //     `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`)
+    //     уменьшают material cost дня упаковки паспорта — иначе
+    //     возврат материала остался бы виден в себестоимости.
+    //
+    //     Возврат гарантированно несёт `passportId` исходного
+    //     `MaterialIssue` (сервис копирует поле при создании
+    //     `MaterialIssueReturn`), поэтому фильтр по `passportId in
+    //     passportIds` отбирает ровно те же возвраты, что и
+    //     соответствующие исходные расходы. `totalCost` берём с
+    //     backend (`MaterialIssueReturn.totalCost`) — server-side
+    //     агрегат, пересчитывать не нужно.
     const materialCostByPassport = new Map<string, number>();
     if (passportIds.length > 0) {
-      const issues = await this.prisma.materialIssue.findMany({
-        where: {
-          status: MATERIAL_ISSUE_STATUS_POSTED,
-          passportId: { in: passportIds },
-        },
-        select: { passportId: true, totalCost: true },
-      });
+      const [issues, returns] = await Promise.all([
+        this.prisma.materialIssue.findMany({
+          where: {
+            status: MATERIAL_ISSUE_STATUS_POSTED,
+            passportId: { in: passportIds },
+          },
+          select: { passportId: true, totalCost: true },
+        }),
+        this.prisma.materialIssueReturn.findMany({
+          where: {
+            status: MATERIAL_ISSUE_STATUS_POSTED,
+            passportId: { in: passportIds },
+          },
+          select: { passportId: true, totalCost: true },
+        }),
+      ]);
       for (const issue of issues) {
         if (!issue.passportId) continue;
         const prev = materialCostByPassport.get(issue.passportId) ?? 0;
         materialCostByPassport.set(
           issue.passportId,
           prev + decimalToNumber(issue.totalCost),
+        );
+      }
+      for (const ret of returns) {
+        if (!ret.passportId) continue;
+        const prev = materialCostByPassport.get(ret.passportId) ?? 0;
+        materialCostByPassport.set(
+          ret.passportId,
+          prev - decimalToNumber(ret.totalCost),
         );
       }
     }

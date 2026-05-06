@@ -389,14 +389,31 @@ function buildIssueAggregatesByNeed(
 
       const lineUnit = String(line.unit ?? '').trim();
       const needUnit = String(need.unit ?? '').trim();
+      // Нетто-метрики (issued - returned) приходят с backend в
+      // `MaterialIssueLineDto.netIssuedQty` / `netTotalCost`. Если
+      // их нет (старый бэкенд / тестовый стенд) — fallback на
+      // gross-значения, чтобы фронт не падал и поведение
+      // совпадало с до-возвратной итерацией. Возвраты вычитаем —
+      // вернувшийся материал не считается выданным в производство.
+      const netQtyRaw = (line as { netIssuedQty?: string | null }).netIssuedQty;
+      const issuedQtyForFact =
+        netQtyRaw !== undefined && netQtyRaw !== null
+          ? netQtyRaw
+          : line.issuedQty;
+      const netCostRaw = (line as { netTotalCost?: string | null }).netTotalCost;
+      const totalCostForFact =
+        netCostRaw !== undefined && netCostRaw !== null
+          ? netCostRaw
+          : line.totalCost;
+
       if (lineUnit && needUnit && lineUnit !== needUnit) {
         bucket.unitMismatch = true;
       } else {
-        const qty = toFiniteNumber(line.issuedQty);
+        const qty = toFiniteNumber(issuedQtyForFact);
         if (qty != null) bucket.issuedQty += qty;
       }
 
-      const cost = toFiniteNumber(line.totalCost);
+      const cost = toFiniteNumber(totalCostForFact);
       if (cost != null) bucket.actualCost += cost;
       bucket.postedLineCount += 1;
 

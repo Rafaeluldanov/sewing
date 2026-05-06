@@ -331,6 +331,51 @@ sidebar сознательно **нет** (см. §8 границ MVP и
    `/admin/stock-adjustments` нет, в sidebar новых пунктов не
    появилось.
 
+### 4.6 Проверка сторно `MaterialIssue`
+
+1. Подготовить POSTED-документ расхода — например, через сценарий
+   §4.1 (создать `DRAFT`, потом провести). Запомнить `MaterialIssue.id`,
+   `totalCost`, `cellId` строк. Убедиться, что `StockBalance.qty`
+   уменьшился ровно на сумму `Σ issuedQty`.
+2. Открыть карточку заказа (`/admin/orders/[id]?tab=needs`) → блок
+   «Фактический расход материалов» → строка проведённого
+   документа. Должна появиться кнопка «Сторнировать»; для
+   `returnStatus = NONE` — обычный лейбл, для `PARTIAL` —
+   «Сторнировать остаток».
+3. Нажать «Сторнировать». В открывшейся форме:
+   - проверить warning «Будет возвращено всё оставшееся
+     количество по документу»;
+   - убедиться, что preview-таблица показывает `description`,
+     `issuedQty`, `returnedQty`, `remainingQty (netIssuedQty)` и
+     `unit` для каждой строки с `netIssuedQty > 0`;
+   - ввести причину возврата (`reason`, ≥ 2 символов), сабмит.
+4. Убедиться:
+   - блок «Фактический расход материалов» обновился; у документа
+     `returnStatus = FULL`, кнопка «Сторнировать» исчезла,
+     показывается «Сторнирован»;
+   - на вкладке «Склады» → «Движения» появилась запись типа
+     «Сторно» (`type = REVERSAL`, `direction = IN`),
+     `cellId`/`warehouseId` совпадают с исходным OUT;
+   - на вкладке «Склады» → «Остатки» `StockBalance.qty`
+     увеличился ровно на возвращённое количество;
+   - финансовая сводка заказа (вкладка «Себестоимость») показывает
+     `materialActualCost = totalCost − returnedTotalCost` (нетто);
+   - план/факт в `OrderMaterialsUnifiedTable` тоже использует
+     нетто-`issuedQty` (план не изменился, факт уменьшился до 0
+     для полностью возвращённой строки);
+   - для production cost (`/api/costs/production`) день упаковки
+     паспорта вычитает возврат из `materialCost`.
+5. Повторный submit с тем же `clientRequestId` (двойной клик /
+   refresh формы): UI получит `200 OK` с тем же `MaterialIssueReturn.id`
+   — нового движения и нового audit-события нет
+   (`MaterialIssueReturn.sourceKey` UNIQUE).
+6. Попытка сторнировать DRAFT-документ — ожидать `409
+   MATERIAL_ISSUE_RETURN_ONLY_POSTED`. Попытка сторнировать
+   уже полностью возвращённый POSTED с НОВЫМ `clientRequestId` —
+   `409 MATERIAL_ISSUE_ALREADY_RETURNED`.
+7. Убедиться, что отдельной страницы `/admin/material-issue-returns`
+   нет, нового пункта меню не появилось.
+
 ---
 
 ## 5. API для проверки
@@ -426,8 +471,18 @@ Backlog по оси «материалы / склад» (порядок орие
    корректировка остатка»`). `IN` увеличивает остаток, `OUT` уменьшает;
    `OUT` уважает `allowNegativeMaterialStock`. Delete / cancel
    adjustment в этой итерации не реализованы.
-2. **Возврат / сторно POSTED `MaterialIssue`** (вместе с возвратом
-   материала в ячейку).
+2. **Возврат / сторно POSTED `MaterialIssue`** — реализовано в
+   текущей итерации (полное сторно остатка): `POST
+   /api/material-issues/:id/return` создаёт документ
+   `MaterialIssueReturn` + `StockMovement` `type=REVERSAL`
+   `direction=IN` в той же транзакции. UI — кнопка «Сторнировать»
+   в карточке заказа → вкладка «Потребности» → блок «Фактический
+   расход материалов». Идемпотентность по
+   `MaterialIssueReturn.sourceKey`. Order summary, plan/fact и
+   production cost считают **нетто** (`Σ MaterialIssue.totalCost
+   − Σ MaterialIssueReturn.totalCost`). Будущий этап —
+   **частичный возврат** (произвольное qty по строкам), удаление
+   и отмена возврата.
 3. **Фильтры склада** — расширение UI и/или API:
    - `warehouseId`;
    - `cellId`;

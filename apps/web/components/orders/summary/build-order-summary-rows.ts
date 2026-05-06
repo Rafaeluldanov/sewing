@@ -623,17 +623,26 @@ export function computeOrderSummaryTotals(
       ? costTotalRub / qtyTotal
       : null;
 
-  // Фактическая стоимость материалов: Σ MaterialIssue.totalCost по
-  // POSTED-документам. Источник истины — `MaterialIssue.totalCost`,
-  // не пересчёт строк (см. ТЗ: `passportId` / `workshopNeedId` тут
-  // не требуются). DRAFT / CANCELLED игнорируем.
+  // Фактическая стоимость материалов: Σ MaterialIssue.netTotalCost по
+  // POSTED-документам — то есть `totalCost − returnedTotalCost`. Это
+  // нетто-факт по заказу: возвраты `MaterialIssueReturn` (POSTED)
+  // вычитают свою часть из исходного `MaterialIssue.totalCost`,
+  // потому что физически материал вернулся на склад. Источник
+  // истины — `MaterialIssueListItemDto.netTotalCost` (backend уже
+  // считает его в `MaterialIssuesService.toListItem`); fallback на
+  // `totalCost` для совместимости со старыми клиентами/тестами,
+  // которые ещё не отдают `netTotalCost`. DRAFT / CANCELLED
+  // игнорируем (как и раньше).
   let materialActualCostRub: number | null = null;
   if (materialIssues !== undefined) {
     let actualSum = 0;
     for (const issue of materialIssues) {
       if ((issue.status as MaterialIssueStatus) !== 'POSTED') continue;
-      const n = Number(issue.totalCost);
-      if (Number.isFinite(n)) actualSum += n;
+      const netRaw = (issue as { netTotalCost?: string | null }).netTotalCost;
+      const candidate = netRaw !== undefined && netRaw !== null
+        ? Number(netRaw)
+        : Number(issue.totalCost);
+      if (Number.isFinite(candidate)) actualSum += candidate;
     }
     materialActualCostRub = actualSum;
   }

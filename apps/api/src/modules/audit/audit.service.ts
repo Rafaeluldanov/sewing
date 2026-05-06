@@ -337,6 +337,24 @@ export type AuditEntityType =
    */
   | 'MATERIAL_ISSUE'
   /**
+   * Документы возврата / сторно проведённого `MaterialIssue` (см.
+   * `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+   * `prisma/schema.prisma::MaterialIssueReturn`,
+   * `docs/events.md §«Material issues»`).
+   *
+   *   - `MATERIAL_ISSUE_RETURNED` — менеджер сторнировал
+   *     проведённый документ через
+   *     `POST /api/material-issues/:id/return`. Пишется в той же
+   *     транзакции, что и сам `MaterialIssueReturn` + строки + IN-
+   *     движения склада. Payload — `{ materialIssueId,
+   *     materialIssueReturnId, orderId, passportId, reason,
+   *     totalCost, lines[], employeeId, timestamp }`. `entityId =
+   *     MaterialIssueReturn.id`.
+   *
+   * Удаление / отмена возврата на MVP не реализованы.
+   */
+  | 'MATERIAL_ISSUE_RETURN'
+  /**
    * Движения склада (см. `apps/api/src/modules/stock/*`,
    * `prisma/schema.prisma::StockMovement`,
    * `docs/api.md §«26a. Stock»`,

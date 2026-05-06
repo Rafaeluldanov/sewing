@@ -623,12 +623,41 @@ DTO: `packages/shared/src/purchase-receipts.ts`.
 | GET   | `/api/material-issues/:id`                        | ADMIN, SHOP_MANAGER | Карточка документа (с `lines`, `order`, `passport`, `workshopNeed` и `cell` по строкам). |
 | POST  | `/api/material-issues`                            | ADMIN, SHOP_MANAGER | 201 Created. Body `CreateMaterialIssueDto`. Создаёт документ со `status = DRAFT`. `totalCost` считается на сервере = Σ `issuedQty × unitCost`. Если `workshopNeedId` указан, `description`/`unit`/`materialRole` берутся из `WorkshopNeed`. НЕ создаёт `StockMovement` — склад пишется только при проведении (`/post`). |
 | POST  | `/api/material-issues/:id/post`                   | ADMIN, SHOP_MANAGER | `DRAFT → POSTED`. Пересчитывает `totalCost` по строкам. Side effects: для каждой `MaterialIssueLine` с `workshopNeedId`, `unit` и `issuedQty > 0` в той же транзакции пишется исходящий `StockMovement` (`OUT`, `type = MATERIAL_ISSUE`, `sourceKey = MATERIAL_ISSUE_LINE:<lineId>`) через `StockService.recordMaterialIssueInTx` и `StockBalance.qty` уменьшается. Реакция на нехватку остатка управляется флагом `CompanySettings.allowNegativeMaterialStock` (default `true` — минус допустим; `false` — 409 `MATERIAL_STOCK_INSUFFICIENT` с `details = { workshopNeedId, warehouseId, cellId, requestedQty, availableQty, unit, description }`, транзакция целиком откатывается, документ остаётся `DRAFT`, OUT не пишется, `StockBalance` не меняется). `MaterialIssue.totalCost` НЕ пересчитывается по складской стоимости. |
-| POST  | `/api/material-issues/:id/cancel`                 | ADMIN, SHOP_MANAGER | Body `CancelMaterialIssueDto` (`{ reason? }`). `DRAFT → CANCELLED`. POSTED отменить нельзя — 409 `MATERIAL_ISSUE_POSTED_CANNOT_CANCEL`. Cancel DRAFT не пишет `StockMovement`. Reversal POSTED-расхода в этой итерации не реализован. |
-| GET   | `/api/orders/:orderId/material-issues`            | ADMIN, SHOP_MANAGER | Список документов расхода по заказу покупателя (с `lines`). |
+| POST  | `/api/material-issues/:id/cancel`                 | ADMIN, SHOP_MANAGER | Body `CancelMaterialIssueDto` (`{ reason? }`). `DRAFT → CANCELLED`. POSTED отменить нельзя — 409 `MATERIAL_ISSUE_POSTED_CANNOT_CANCEL`. Cancel DRAFT не пишет `StockMovement`. Для отката POSTED — отдельный эндпоинт `/return` (см. ниже). |
+| POST  | `/api/material-issues/:id/return`                 | ADMIN, SHOP_MANAGER | Body `ReturnMaterialIssueDto` (`{ reason, clientRequestId? }`). Полное сторно проведённого расхода. Создаёт отдельный документ `MaterialIssueReturn` (status `POSTED`) + строки + `StockMovement` (`IN`, `type = REVERSAL`, `sourceKey = MATERIAL_ISSUE_RETURN_LINE:<id>`) на исходный `warehouseId/cellId` OUT-движения. Исходный `MaterialIssue` НЕ удаляется и НЕ меняет статус. Идемпотентность: `MaterialIssueReturn.sourceKey = MATERIAL_ISSUE_RETURN[_FULL]:<materialIssueId>[:<clientRequestId>]` (UNIQUE) — повторный submit с тем же `clientRequestId` возвращает существующий return. Ошибки: 409 `MATERIAL_ISSUE_RETURN_ONLY_POSTED` для не-POSTED; 409 `MATERIAL_ISSUE_ALREADY_RETURNED`, если все строки уже возвращены. Финансовая стоимость возврата (`unitCost × returnedQty`) уменьшает `netTotalCost` исходного `MaterialIssue` в list/detail-DTO и в order summary. Возврат фигурирует в `GET /api/stock/movements` как `type = REVERSAL` (`direction = IN`). `clientRequestId` ≤ 128 символов, `reason` 2..500. |
+| GET   | `/api/orders/:orderId/material-issues`            | ADMIN, SHOP_MANAGER | Список документов расхода по заказу покупателя (с `lines`). Каждый элемент содержит `returnedTotalCost`, `netTotalCost`, `returnsCount`, `returnStatus` (`NONE` | `PARTIAL` | `FULL`). |
 
 DTO: `apps/api/src/modules/material-issues/dto/*.ts`. Audit-события
 (`MATERIAL_ISSUE_CREATED` / `MATERIAL_ISSUE_POSTED` /
-`MATERIAL_ISSUE_CANCELLED`) — см. `docs/events.md §«Material issues»`.
+`MATERIAL_ISSUE_CANCELLED` / `MATERIAL_ISSUE_RETURNED`) — см.
+`docs/events.md §«Material issues»`.
+
+Возвраты (`MaterialIssueReturn`) — отдельная сущность, не отменяющая
+исходный расход:
+
+- `MaterialIssue` НЕ удаляется и НЕ переводится обратно в `DRAFT`;
+- `MaterialIssueReturn` всегда `status = POSTED` на MVP-итерации
+  (`DRAFT`-возврата нет);
+- удаление / отмена возврата не реализованы;
+- частичный возврат с произвольным qty не реализован — UI отдаёт
+  только полное сторно остатка (сервер сам считает остаток к возврату
+  по каждой строке как `MaterialIssueLine.issuedQty − Σ ранее
+  возвращённое`);
+- `sourceKey` возврата в публичном API **не отдаётся** (внутреннее
+  поле для идемпотентности, см.
+  `prisma/schema.prisma::MaterialIssueReturn.sourceKey`);
+- складское IN-движение возврата типа `REVERSAL` от настройки
+  `CompanySettings.allowNegativeMaterialStock` НЕ зависит — IN всегда
+  разрешено (остаток только увеличивается);
+- финансовая стоимость возврата = snapshot `MaterialIssueLine.unitCost`
+  × `returnedQty`. Складская стоимость IN-движения берётся из
+  исходного OUT-движения `MaterialIssueLine` (`StockMovement.unitCost`),
+  если оно есть, иначе — снапшот из строки возврата;
+- order-level фактическая стоимость материалов считается как
+  `Σ MaterialIssue.totalCost − Σ MaterialIssueReturn.totalCost`
+  (см. `apps/web/components/orders/summary/build-order-summary-rows.ts`);
+- production cost (`/api/costs/production`, `CostsService`) использует
+  ту же нетто-формулу для дня упаковки паспорта.
 
 Автосписание при выдаче кроя
 (`apps/api/src/modules/material-issues/material-issues.service.ts::createAutoCutIssueForPassport`,
