@@ -226,9 +226,12 @@ describe('actions.ts — batch создание паспортов через с
     expect(src).toMatch(/if \(created === 0\)/);
   });
 
-  test('rollNumber генерится автоматически как «Демо-Р{n}-…»', () => {
+  test('rollNumber — простой порядковый номер рулона (1, 2, …)', () => {
     const src = readSrc(actionsPath);
-    expect(src).toMatch(/rollNumber:\s*`Демо-Р\$\{i \+ 1\}-\$\{ts\}`/);
+    // Печатается ровно цифра: «Рулон 1» → rollNumber = "1".
+    expect(src).toMatch(/rollNumber:\s*String\(i \+ 1\)/);
+    // Старого префикса «Демо-Р…» больше быть не должно.
+    expect(src).not.toMatch(/Демо-Р/);
   });
 
   test('revalidatePath пересчитывает страницы заказа и списка', () => {
