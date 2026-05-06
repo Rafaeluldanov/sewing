@@ -78,11 +78,6 @@ export async function createPassportDemoBatchAction(
     return { error: 'Укажите количество хотя бы для одного рулона' };
   }
 
-  // Маркер серии — чтобы rollNumber-ы оставались различимыми между
-  // последовательными демо-сабмитами (схема просто требует 1–64 chars,
-  // уникальности нет, но визуально удобнее).
-  const ts = Date.now().toString(36).slice(-6);
-
   let created = 0;
   let failed = 0;
   let printed = 0;
@@ -99,7 +94,11 @@ export async function createPassportDemoBatchAction(
       sizeId,
       cutDate,
       qtyCut: qty,
-      rollNumber: `Демо-Р${i + 1}-${ts}`,
+      // По требованию — печатаем простой порядковый номер рулона: «1»,
+      // «2», … (рулон 1 → rollNumber = "1"). Уникальности по rollNumber
+      // схема и БД не требуют, поэтому пересечения между сабмитами не
+      // ломают создание.
+      rollNumber: String(i + 1),
       ...(cutterIdRaw ? { cutterId: cutterIdRaw } : {}),
     };
     const parsed = CreatePassportSchema.safeParse(body);
