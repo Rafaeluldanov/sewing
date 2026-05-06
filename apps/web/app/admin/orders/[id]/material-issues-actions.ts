@@ -244,8 +244,31 @@ export async function cancelMaterialIssueAction(
 }
 
 // ---------------------------------------------------------------------------
-// RETURN (полное сторно проведённого расхода)
+// RETURN (полное сторно или частичный возврат проведённого расхода)
 // ---------------------------------------------------------------------------
+
+/**
+ * Парсит hidden-поле `linesPayload` (JSON-сериализованный массив
+ * `[{ materialIssueLineId, returnedQty }]`) из `<form>`-сабмита.
+ * Возвращает unknown → дальше валидируем через `ReturnMaterialIssueSchema`.
+ *
+ * Если `linesPayload` отсутствует или пустой → `undefined` (legacy-
+ * полное сторно, backend сам посчитает остаток).
+ */
+function parseReturnLinesPayload(form: FormData): unknown {
+  const raw = form.get('linesPayload');
+  if (raw === null) return undefined;
+  const text = String(raw).trim();
+  if (text === '' || text === '[]') return undefined;
+  try {
+    return JSON.parse(text);
+  } catch {
+    // Невалидный JSON — пробросим через Zod с осмысленной ошибкой
+    // (`lines` ожидает массив, передадим строку — Zod вернёт
+    // type-mismatch).
+    return text;
+  }
+}
 
 /**
  * Сигнатура совместима с `useFormState` + `bind(null, orderId, id)`:
@@ -254,8 +277,17 @@ export async function cancelMaterialIssueAction(
  * FormData:
  *   - `reason` (required, 2..500) — причина возврата;
  *   - `clientRequestId` (optional, 1..128) — UUID формы для
- *     идемпотентности повторного submit. UI сам генерит его в
- *     момент открытия диалога; сервер всё равно повторно валидирует.
+ *     идемпотентности повторного submit;
+ *   - `linesPayload` (optional) — JSON-сериализованный массив
+ *     `[{ materialIssueLineId: string, returnedQty: string }]`.
+ *     Если отсутствует / пустой массив — backend выполняет полное
+ *     сторно (legacy-режим, backward-compat). Если присутствует —
+ *     частичный возврат только по указанным строкам.
+ *
+ * UI всегда отправляет `linesPayload`, кнопка «Заполнить всё
+ * доступное» проставляет максимумы — это даёт «полное сторно»
+ * через тот же механизм. Legacy-режим без `linesPayload` оставлен
+ * для server-to-server клиентов и совместимости старых тестов.
  */
 export async function returnMaterialIssueAction(
   orderId: string,
@@ -270,10 +302,37 @@ export async function returnMaterialIssueAction(
     typeof clientRequestIdRaw === 'string' && clientRequestIdRaw.trim() !== ''
       ? clientRequestIdRaw.trim()
       : undefined;
+  const linesPayload = parseReturnLinesPayload(form);
+
+  // Дополнительный фильтр на уровне server action: если клиент
+  // прислал нулевые / пустые строки в JSON (теоретически возможно
+  // для нестандартного клиента), убираем их ДО валидации, чтобы
+  // Zod не поднимал шум на и так невалидных строках. Для UI это
+  // безвредно — наш собственный диалог уже фильтрует zero qty.
+  let normalizedLines: Array<unknown> | undefined;
+  if (Array.isArray(linesPayload)) {
+    normalizedLines = linesPayload.filter((entry) => {
+      if (!entry || typeof entry !== 'object') return false;
+      const candidate = entry as { returnedQty?: unknown };
+      const qty = candidate.returnedQty;
+      if (qty === undefined || qty === null) return false;
+      const n = typeof qty === 'number' ? qty : Number(String(qty).trim());
+      return Number.isFinite(n) && n > 0;
+    });
+    if (normalizedLines.length === 0) {
+      // Все строки нулевые — нечего возвращать.
+      return {
+        ok: false,
+        error:
+          'Укажите количество к возврату хотя бы по одной строке.',
+      };
+    }
+  }
 
   const parsed = ReturnMaterialIssueSchema.safeParse({
     reason,
     ...(clientRequestId === undefined ? {} : { clientRequestId }),
+    ...(normalizedLines === undefined ? {} : { lines: normalizedLines }),
   });
   if (!parsed.success) {
     const fieldErrors: Record<string, string> = {};

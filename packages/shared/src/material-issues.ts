@@ -193,15 +193,45 @@ export type CancelMaterialIssueDto = z.infer<typeof CancelMaterialIssueSchema>;
 // ---------------------------------------------------------------------------
 
 /**
+ * Одна строка частичного возврата в теле
+ * `POST /api/material-issues/:id/return` (см.
+ * `apps/api/src/modules/material-issues/dto/return-material-issue.dto.ts`,
+ * `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`).
+ *
+ * `materialIssueLineId` ОБЯЗАТЕЛЬНО принадлежит исходному документу
+ * (валидируется на сервере 409). `returnedQty > 0` — строки с `0`
+ * UI обязан фильтровать ДО submit, иначе Zod вернёт 400.
+ */
+export const ReturnMaterialIssueLineSchema = z
+  .object({
+    materialIssueLineId: trimmedString(64),
+    returnedQty: positiveDecimal,
+  })
+  .strict();
+export type ReturnMaterialIssueLineDto = z.infer<
+  typeof ReturnMaterialIssueLineSchema
+>;
+
+/**
  * Body для `POST /api/material-issues/:id/return` (см.
  * `apps/api/src/modules/material-issues/dto/return-material-issue.dto.ts`,
  * `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`).
  *
- * MVP-итерация — UI отдаёт только полное сторно: список строк
- * сервер собирает сам по `MaterialIssueLine.issuedQty − Σ уже
- * возвращённое`. Поэтому body содержит только `reason` и
- * опциональный `clientRequestId` для идемпотентности повторного
- * submit (`UNIQUE` `MaterialIssueReturn.sourceKey`).
+ * Два режима:
+ *   - **Полное сторно** — `lines` не передан (или undefined). Сервис
+ *     возвращает весь оставшийся остаток (`MaterialIssueLine.issuedQty −
+ *     Σ ранее возвращённое`) по каждой строке. Это исходное MVP-
+ *     поведение, оставлено ради обратной совместимости.
+ *   - **Частичный возврат** — `lines` передан (≥ 1 элемент). Сервис
+ *     возвращает только указанные `materialIssueLineId × returnedQty`,
+ *     каждый `returnedQty` ≤ `availableToReturn` (исходное
+ *     `issuedQty` − уже возвращённое); duplicate `materialIssueLineId`
+ *     запрещены (409). Строка с `returnedQty = 0` НЕ принимается DTO
+ *     (`positiveDecimal`), UI обязан фильтровать нулевые строки.
+ *
+ * `clientRequestId` (UUID v4 от UI) — UNIQUE-ключ идемпотентности,
+ * защита от двойного submit формы (см.
+ * `MaterialIssueReturn.sourceKey`).
  */
 export const ReturnMaterialIssueSchema = z
   .object({
@@ -215,6 +245,10 @@ export const ReturnMaterialIssueSchema = z
       .trim()
       .min(1)
       .max(MATERIAL_ISSUE_RETURN_CLIENT_REQUEST_ID_MAX_LENGTH)
+      .optional(),
+    lines: z
+      .array(ReturnMaterialIssueLineSchema)
+      .min(1, 'Нужна хотя бы одна строка возврата')
       .optional(),
   })
   .strict();

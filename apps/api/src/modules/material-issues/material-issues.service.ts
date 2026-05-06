@@ -13,10 +13,14 @@ import {
   MaterialIssueNotDraftForCancelException,
   MaterialIssueNotDraftForPostException,
   MaterialIssueNotFoundException,
+  MaterialIssueNothingToReturnException,
   MaterialIssuePassportNotInOrderException,
   MaterialIssuePostedCannotCancelException,
   MaterialIssueQtyRequiredException,
+  MaterialIssueReturnDuplicateLineException,
+  MaterialIssueReturnLineNotFoundException,
   MaterialIssueReturnOnlyPostedException,
+  MaterialIssueReturnQtyExceedsAvailableException,
   MaterialIssueUnitCostInvalidException,
   MaterialIssueWorkshopNeedNotInOrderException,
   WorkshopNeedNotFoundException,
@@ -626,33 +630,44 @@ export class MaterialIssuesService {
   }
 
   // ---------------------------------------------------------------------------
-  // RETURN (полное сторно проведённого расхода)
+  // RETURN (полное сторно или частичный возврат проведённого расхода)
   //
-  // См. ТЗ «Возврат / сторно проведённого списания материалов»,
+  // См. ТЗ «Возврат / сторно проведённого списания материалов»
+  // и «Частичный возврат проведённого MaterialIssue»,
   // `prisma/schema.prisma::MaterialIssueReturn` /
   // `MaterialIssueReturnLine`,
   // `apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueReturnInTx`,
   // `docs/current-state.md §«Material issue return»`.
   //
-  // MVP-итерация:
-  //   - UI отдаёт только полное сторно (return_full): сервис сам
-  //     считает «остаток к возврату» по каждой строке как
-  //     `MaterialIssueLine.issuedQty − Σ ранее возвращённое`;
-  //   - частичный возврат с произвольным qty НЕ реализован — DTO
-  //     не принимает строки, и `prepareReturnLines` всегда отдаёт
-  //     полный остаток;
+  // Два режима эндпоинта `POST /api/material-issues/:id/return`:
+  //   1. **Полное сторно** (`dto.lines === undefined`) — сервис сам
+  //      считает «остаток к возврату» по каждой строке как
+  //      `MaterialIssueLine.issuedQty − Σ ранее возвращённое` и
+  //      возвращает весь остаток. Исходное MVP-поведение, оставлено
+  //      ради обратной совместимости со старыми клиентами и тестами.
+  //   2. **Частичный возврат** (`dto.lines !== undefined`) —
+  //      возвращаем только указанные `materialIssueLineId × returnedQty`,
+  //      каждый ≤ `availableToReturn`. Дубликаты, чужие строки и
+  //      превышение — 409. UI всегда отправляет `lines[]`, кнопка
+  //      «Заполнить всё доступное» сама проставляет полные остатки.
+  //
+  // Сознательные границы:
   //   - удаление / отмена возврата НЕ реализованы;
   //   - идемпотентность по `MaterialIssueReturn.sourceKey` (см.
   //     `buildMaterialIssueReturnSourceKey`) — повторный submit с
-  //     тем же `clientRequestId` (или просто полное сторно без
-  //     id-а) возвращает уже созданный документ.
+  //     тем же `clientRequestId` возвращает уже созданный документ;
+  //   - исходный `MaterialIssue` НЕ удаляется и НЕ меняет статус;
+  //   - `MaterialIssue.totalCost` НЕ пересчитывается — net-агрегаты
+  //     считаются на read через DTO (`returnedTotalCost`,
+  //     `netTotalCost`, `returnStatus`).
   // ---------------------------------------------------------------------------
 
   /**
-   * Полное сторно проведённого `MaterialIssue` — создаёт отдельный
-   * документ `MaterialIssueReturn` + строки + IN-движения склада в
-   * одной транзакции. Исходный `MaterialIssue` не удаляется и не
-   * меняет статус.
+   * Создать `MaterialIssueReturn` (полное сторно или частичный
+   * возврат) по проведённому `MaterialIssue`. `dto.lines === undefined`
+   * → полный возврат всего остатка; `dto.lines !== undefined` →
+   * только указанные строки с заданным `returnedQty`. Документ
+   * возврата + строки + IN-движения склада живут в одной транзакции.
    */
   async returnPostedIssue(
     id: string,
@@ -699,7 +714,12 @@ export class MaterialIssuesService {
     // 3) Считаем «уже возвращено» по каждой строке (POSTED-возвраты).
     const alreadyReturnedByLine = aggregateReturnsByLine(issue.returns);
 
-    // 4) Готовим строки возврата = полный остаток по каждой строке.
+    // 4) Готовим строки возврата.
+    //    - dto.lines не передан → полное сторно (исходное MVP-поведение):
+    //      возвращаем весь оставшийся `remaining` по каждой строке.
+    //    - dto.lines передан → частичный возврат: возвращаем только
+    //      указанные `materialIssueLineId × returnedQty`. Дубликаты,
+    //      несуществующие строки, превышение остатка → 409.
     interface PreparedReturnLine {
       materialIssueLineId: string;
       workshopNeedId: string | null;
@@ -711,29 +731,111 @@ export class MaterialIssuesService {
       totalCost: Prisma.Decimal;
       cellId: string | null;
     }
-    const prepared: PreparedReturnLine[] = [];
+
+    const linesById = new Map(issue.lines.map((l) => [l.id, l]));
+    const remainingByLineId = new Map<string, Prisma.Decimal>();
     for (const line of issue.lines) {
       const already =
         alreadyReturnedByLine.get(line.id)?.returnedQty ??
         new Prisma.Decimal(0);
-      const remaining = line.issuedQty.sub(already);
-      if (remaining.lessThanOrEqualTo(0)) continue;
-      const totalCost = remaining
-        .mul(line.unitCost)
-        .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
-      prepared.push({
-        materialIssueLineId: line.id,
-        workshopNeedId: line.workshopNeedId,
-        description: line.description,
-        materialRole: line.materialRole,
-        unit: line.unit,
-        returnedQty: remaining,
-        unitCost: line.unitCost,
-        totalCost,
-        cellId: null,
-      });
+      remainingByLineId.set(line.id, line.issuedQty.sub(already));
+    }
+
+    const prepared: PreparedReturnLine[] = [];
+
+    if (dto.lines && dto.lines.length > 0) {
+      // Частичный возврат — обрабатываем строго переданные строки.
+      const seen = new Set<string>();
+      for (const requested of dto.lines) {
+        // 4a) Дубликаты материальных строк в одном запросе. На MVP
+        //     не суммируем за клиента — попросим переотправить.
+        if (seen.has(requested.materialIssueLineId)) {
+          throw new MaterialIssueReturnDuplicateLineException(
+            requested.materialIssueLineId,
+          );
+        }
+        seen.add(requested.materialIssueLineId);
+
+        // 4b) Принадлежность строки этому MaterialIssue. Если нет —
+        //     это другая строка / опечатка / параллельный refresh
+        //     после удаления (MaterialIssueLine cascade-сносится
+        //     только вместе с самим MaterialIssue, который выше уже
+        //     найден; на практике это «строка из другого документа»).
+        const sourceLine = linesById.get(requested.materialIssueLineId);
+        if (!sourceLine) {
+          throw new MaterialIssueReturnLineNotFoundException(
+            requested.materialIssueLineId,
+          );
+        }
+
+        // 4c) returnedQty > 0 уже валидирован Zod-ом (positiveDecimal),
+        //     но повторно проверяем как server-side guard — DTO не
+        //     обязан совпадать у всех клиентов.
+        const requestedQty = new Prisma.Decimal(requested.returnedQty);
+        if (requestedQty.lessThanOrEqualTo(0)) {
+          throw new MaterialIssueQtyRequiredException();
+        }
+
+        // 4d) Не превышаем доступное.
+        const remaining =
+          remainingByLineId.get(sourceLine.id) ?? new Prisma.Decimal(0);
+        if (requestedQty.greaterThan(remaining)) {
+          throw new MaterialIssueReturnQtyExceedsAvailableException({
+            materialIssueLineId: sourceLine.id,
+            requestedQty: requestedQty.toString(),
+            availableQty: remaining.toString(),
+          });
+        }
+
+        const totalCost = requestedQty
+          .mul(sourceLine.unitCost)
+          .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+        prepared.push({
+          materialIssueLineId: sourceLine.id,
+          workshopNeedId: sourceLine.workshopNeedId,
+          description: sourceLine.description,
+          materialRole: sourceLine.materialRole,
+          unit: sourceLine.unit,
+          returnedQty: requestedQty,
+          unitCost: sourceLine.unitCost,
+          totalCost,
+          cellId: null,
+        });
+      }
+    } else {
+      // Полное сторно — возвращаем весь оставшийся остаток по всем
+      // строкам (legacy-поведение MVP-1, оставлено для backward-compat
+      // со старыми клиентами и тестами).
+      for (const line of issue.lines) {
+        const remaining =
+          remainingByLineId.get(line.id) ?? new Prisma.Decimal(0);
+        if (remaining.lessThanOrEqualTo(0)) continue;
+        const totalCost = remaining
+          .mul(line.unitCost)
+          .toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+        prepared.push({
+          materialIssueLineId: line.id,
+          workshopNeedId: line.workshopNeedId,
+          description: line.description,
+          materialRole: line.materialRole,
+          unit: line.unit,
+          returnedQty: remaining,
+          unitCost: line.unitCost,
+          totalCost,
+          cellId: null,
+        });
+      }
     }
     if (prepared.length === 0) {
+      // Полное сторно по уже-полностью-возвращённому документу —
+      // привычный для UI код `MATERIAL_ISSUE_ALREADY_RETURNED`.
+      // Частичный с пустым результатом сюда попасть не может (Zod
+      // требует `lines.min(1)` и `returnedQty > 0`), но если когда-
+      // нибудь попадёт (server-to-server мутация DTO) — отдаём
+      // `nothing_to_return`.
+      if (dto.lines && dto.lines.length > 0) {
+        throw new MaterialIssueNothingToReturnException();
+      }
       throw new MaterialIssueAlreadyReturnedException();
     }
 

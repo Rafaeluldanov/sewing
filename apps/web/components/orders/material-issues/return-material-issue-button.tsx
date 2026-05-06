@@ -4,29 +4,30 @@
  * `ReturnMaterialIssueButton` — inline-действие «Сторнировать» для
  * строки POSTED-документа расхода в таблице `MaterialIssuesTable`.
  *
- * MVP-итерация (см. ТЗ «Возврат / сторно проведённого списания
- * материалов»): UI отдаёт ТОЛЬКО полное сторно остатка. Никаких
- * inputs по qty — сервер сам считает остаток к возврату по каждой
- * строке (`MaterialIssueLine.issuedQty − Σ ранее возвращённое`).
+ * Итерация «Частичный возврат» (см. ТЗ): UI отдаёт массив строк
+ * `lines[] = [{ materialIssueLineId, returnedQty }]`, каждая
+ * `returnedQty ≥ 0` и не больше `availableToReturn`
+ * (`MaterialIssueLineDto.netIssuedQty`). Кнопка «Заполнить всё
+ * доступное» проставляет максимум по всем строкам сразу — это
+ * заменяет старое полное сторно (исходный backend-режим без
+ * `lines` остаётся как fallback для server-to-server клиентов).
  *
  * Поведение:
  *   - свёрнутое состояние — маленькая danger-кнопка «Сторнировать»
- *     (если у документа `returnStatus === 'PARTIAL'` — текст
- *     «Сторнировать остаток», смысл тот же);
+ *     (для `PARTIAL` — лейбл «Сторнировать остаток»);
  *   - развёрнутое — inline-форма с обязательной причиной (`reason`,
- *     2..500), warning-блоком «Будет возвращено всё оставшееся
- *     количество» и preview-таблицей строк (`issuedQty`,
- *     `returnedQty`, `remainingQty = netIssuedQty`, `unit`,
- *     `description`);
- *   - сабмит идёт через `returnMaterialIssueAction`, форма генерит
+ *     2..500), warning-блоком, кнопкой «Заполнить всё доступное» и
+ *     таблицей строк с input-ом `Вернуть` по каждой;
+ *   - submit фильтрует строки с `returnedQty <= 0`;
+ *   - минимум одна строка должна иметь `returnedQty > 0` — иначе
+ *     UI показывает inline-валидацию и не сабмитит;
+ *   - submit идёт через `returnMaterialIssueAction`, форма генерит
  *     `clientRequestId` (UUID v4) при первом рендере — повторный
  *     submit с тем же id идемпотентен на уровне backend
  *     (`UNIQUE MaterialIssueReturn.sourceKey`);
  *   - после успеха `revalidatePath` обновляет блок «Фактический
- *     расход материалов»: `returnStatus` уходит в `FULL` (или
- *     остаётся `PARTIAL`, если когда-нибудь появится частичный
- *     возврат с произвольным qty), кнопка «Сторнировать» исчезает
- *     либо превращается в «Сторнировать остаток».
+ *     расход материалов»: `returnStatus` уходит в `FULL` (если
+ *     возвращено всё) или `PARTIAL` (если только часть).
  */
 import { useFormState, useFormStatus } from 'react-dom';
 import { RotateCcw, XCircle } from 'lucide-react';
@@ -51,20 +52,22 @@ interface Props {
    */
   returnStatus: MaterialIssueAggregateReturnStatus;
   /**
-   * Строки исходного документа — нужны для preview-таблицы.
-   * Передаются из `MaterialIssuesTable`, который уже подгружает
-   * `MaterialIssueDetailDto`.
+   * Строки исходного документа — нужны и для preview, и для qty-
+   * input-ов. Передаются из `MaterialIssuesTable`, который
+   * подгружает `MaterialIssueDetailDto`. Если детали ещё не
+   * подгрузились — родитель передаст `[]`, форма откажется
+   * сабмитить (ниже).
    */
   lines: readonly MaterialIssueLineDto[];
 }
 
-function SubmitButton() {
+function SubmitButton({ disabled }: { disabled?: boolean }) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
       className="admin-btn admin-btn--danger"
-      disabled={pending}
+      disabled={pending || disabled}
       style={{ fontSize: '0.78rem', padding: '4px 8px' }}
       data-testid="material-issue-return-submit"
     >
@@ -89,6 +92,58 @@ function generateClientRequestId(): string {
   return `mi-return-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+interface PreparedLine {
+  /** id `MaterialIssueLine`. */
+  id: string;
+  description: string;
+  unit: string;
+  /** `issuedQty` исходной строки (display). */
+  issuedQty: string;
+  /** `returnedQty` суммарно по уже-проведённым возвратам (display). */
+  returnedQty: string;
+  /**
+   * Сколько ещё можно вернуть — `MaterialIssueLineDto.netIssuedQty`
+   * (с fallback на `issuedQty` для старых клиентов / тестов).
+   */
+  availableToReturn: number;
+  /**
+   * Текстовый display `availableToReturn` — берём raw-строку
+   * `netIssuedQty` (или `issuedQty`), чтобы не терять precision при
+   * `Number.toFixed`. Используется как `defaultValue` input-а.
+   */
+  availableDisplay: string;
+}
+
+function prepareLines(lines: readonly MaterialIssueLineDto[]): PreparedLine[] {
+  return lines
+    .map((line) => {
+      const availableRaw = line.netIssuedQty ?? line.issuedQty;
+      const availableToReturn = Number(availableRaw);
+      return {
+        id: line.id,
+        description: line.description,
+        unit: line.unit,
+        issuedQty: line.issuedQty,
+        returnedQty: line.returnedQty ?? '0',
+        availableToReturn: Number.isFinite(availableToReturn)
+          ? availableToReturn
+          : 0,
+        availableDisplay: String(availableRaw ?? line.issuedQty ?? '0'),
+      } satisfies PreparedLine;
+    })
+    .filter((p) => p.availableToReturn > 0);
+}
+
+/**
+ * Парсит локализованный ввод (`,` / `.`) в число.
+ * Возвращает `NaN`, если строка пустая или не парсится.
+ */
+function parseQty(value: string): number {
+  const normalized = value.replace(',', '.').trim();
+  if (normalized === '') return Number.NaN;
+  return Number(normalized);
+}
+
 export function ReturnMaterialIssueButton({
   orderId,
   id,
@@ -104,6 +159,13 @@ export function ReturnMaterialIssueButton({
   // рендер — иначе после неуспешного submit retry получит другой
   // ключ и идемпотентность сломается.
   const clientRequestId = useMemo(() => generateClientRequestId(), []);
+
+  const preparedLines = useMemo(() => prepareLines(lines), [lines]);
+
+  // Контролируемые input-ы по строкам. По умолчанию — пусто
+  // (пользователь сам решит, сколько возвращать). Кнопка «Заполнить
+  // всё доступное» проставляет максимумы. Ключ — `MaterialIssueLine.id`.
+  const [qtyByLine, setQtyByLine] = useState<Record<string, string>>({});
 
   if (returnStatus === 'FULL') {
     // Защитный no-op на случай, если родитель забыл скрыть кнопку.
@@ -125,16 +187,77 @@ export function ReturnMaterialIssueButton({
     );
   }
 
-  // Считаем «строки к возврату»: только те, у которых `netIssuedQty > 0`.
-  // Если `netIssuedQty` не пришёл с backend (старый клиент / тестовая
-  // фикстура), fallback — `issuedQty`.
-  const linesToReturn = lines
-    .map((line) => {
-      const netRaw = line.netIssuedQty ?? line.issuedQty;
-      const remaining = Number(netRaw);
-      return { line, remaining: Number.isFinite(remaining) ? remaining : 0 };
+  // Если детали ещё не подгрузились (parent передал []), нечего
+  // возвращать — отрисуем минимальный stub с подсказкой и без
+  // submit-кнопки.
+  if (preparedLines.length === 0) {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 6,
+          minWidth: 320,
+        }}
+        data-testid="material-issue-return-form"
+      >
+        <div className="admin-muted" style={{ fontSize: '0.78rem' }}>
+          Нет строк, доступных к возврату.
+        </div>
+        <button
+          type="button"
+          className="admin-btn admin-btn--ghost"
+          onClick={() => setOpen(false)}
+          style={{ fontSize: '0.78rem', padding: '4px 8px' }}
+        >
+          Закрыть
+        </button>
+      </div>
+    );
+  }
+
+  // Валидация по input-ам: для каждой строки парсим введённое qty,
+  // сверяем с `availableToReturn`, считаем общую сумму > 0.
+  let hasInvalidQty = false;
+  let totalRequested = 0;
+  for (const p of preparedLines) {
+    const raw = qtyByLine[p.id] ?? '';
+    if (raw === '') continue; // пустое поле — строка просто не идёт в запрос
+    const n = parseQty(raw);
+    if (!Number.isFinite(n) || n < 0 || n > p.availableToReturn) {
+      hasInvalidQty = true;
+      continue;
+    }
+    if (n > 0) totalRequested += n;
+  }
+  const hasNonZeroLine = totalRequested > 0;
+  const submitDisabled = !hasNonZeroLine || hasInvalidQty;
+
+  // FormData собирается через скрытое поле `linesPayload` — это
+  // проще, чем конструировать `name="lines[0][materialIssueLineId]"`
+  // и парсить на сервере. Server action знает обе формы.
+  const submittedLines = preparedLines
+    .map((p) => {
+      const raw = qtyByLine[p.id] ?? '';
+      if (raw === '') return null;
+      const n = parseQty(raw);
+      if (!Number.isFinite(n) || n <= 0) return null;
+      return {
+        materialIssueLineId: p.id,
+        // Передаём строку (не number) — Decimal-as-string совпадает с
+        // backend Zod (`positiveDecimal`), без потерь точности.
+        returnedQty: raw.replace(',', '.').trim(),
+      };
     })
-    .filter(({ remaining }) => remaining > 0);
+    .filter((x): x is NonNullable<typeof x> => x !== null);
+
+  const fillAllAvailable = () => {
+    const next: Record<string, string> = {};
+    for (const p of preparedLines) {
+      next[p.id] = p.availableDisplay;
+    }
+    setQtyByLine(next);
+  };
 
   return (
     <form
@@ -143,11 +266,16 @@ export function ReturnMaterialIssueButton({
         display: 'flex',
         flexDirection: 'column',
         gap: 6,
-        minWidth: 320,
+        minWidth: 360,
       }}
       data-testid="material-issue-return-form"
     >
       <input type="hidden" name="clientRequestId" value={clientRequestId} />
+      <input
+        type="hidden"
+        name="linesPayload"
+        value={JSON.stringify(submittedLines)}
+      />
 
       <div
         style={{
@@ -159,51 +287,114 @@ export function ReturnMaterialIssueButton({
           borderRadius: 4,
         }}
       >
-        Будет возвращено всё оставшееся количество по документу.
+        Будет создан документ возврата. Исходный расход останется
+        проведённым, а факт материалов будет уменьшен на возвращённое
+        количество.
       </div>
 
-      {linesToReturn.length > 0 && (
-        <table
-          style={{
-            fontSize: '0.75rem',
-            borderCollapse: 'collapse',
-            width: '100%',
-          }}
-          data-testid="material-issue-return-preview"
+      <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <button
+          type="button"
+          className="admin-btn admin-btn--ghost"
+          onClick={fillAllAvailable}
+          style={{ fontSize: '0.72rem', padding: '2px 6px' }}
+          data-testid="material-issue-return-fill-all"
         >
-          <thead>
-            <tr style={{ textAlign: 'left' }}>
-              <th style={{ padding: '2px 4px' }}>Материал</th>
-              <th style={{ padding: '2px 4px', textAlign: 'right' }}>
-                Списано
-              </th>
-              <th style={{ padding: '2px 4px', textAlign: 'right' }}>
-                Возвращено
-              </th>
-              <th style={{ padding: '2px 4px', textAlign: 'right' }}>
-                К возврату
-              </th>
-              <th style={{ padding: '2px 4px' }}>Ед.</th>
-            </tr>
-          </thead>
-          <tbody>
-            {linesToReturn.map(({ line }) => (
-              <tr key={line.id}>
-                <td style={{ padding: '2px 4px' }}>{line.description}</td>
+          Заполнить всё доступное
+        </button>
+      </div>
+
+      <table
+        style={{
+          fontSize: '0.75rem',
+          borderCollapse: 'collapse',
+          width: '100%',
+        }}
+        data-testid="material-issue-return-preview"
+      >
+        <thead>
+          <tr style={{ textAlign: 'left' }}>
+            <th style={{ padding: '2px 4px' }}>Материал</th>
+            <th style={{ padding: '2px 4px', textAlign: 'right' }}>Списано</th>
+            <th style={{ padding: '2px 4px', textAlign: 'right' }}>
+              Возвращено
+            </th>
+            <th style={{ padding: '2px 4px', textAlign: 'right' }}>
+              Доступно
+            </th>
+            <th style={{ padding: '2px 4px', textAlign: 'right' }}>Вернуть</th>
+            <th style={{ padding: '2px 4px' }}>Ед.</th>
+          </tr>
+        </thead>
+        <tbody>
+          {preparedLines.map((p) => {
+            const raw = qtyByLine[p.id] ?? '';
+            const parsed = raw === '' ? Number.NaN : parseQty(raw);
+            const overLimit =
+              Number.isFinite(parsed) && parsed > p.availableToReturn;
+            const negative = Number.isFinite(parsed) && parsed < 0;
+            const invalid =
+              raw !== '' && (!Number.isFinite(parsed) || negative || overLimit);
+            return (
+              <tr key={p.id} data-testid="material-issue-return-row">
+                <td style={{ padding: '2px 4px' }}>{p.description}</td>
                 <td style={{ padding: '2px 4px', textAlign: 'right' }}>
-                  {line.issuedQty}
+                  {p.issuedQty}
                 </td>
                 <td style={{ padding: '2px 4px', textAlign: 'right' }}>
-                  {line.returnedQty ?? '0'}
+                  {p.returnedQty}
                 </td>
                 <td style={{ padding: '2px 4px', textAlign: 'right' }}>
-                  {line.netIssuedQty ?? line.issuedQty}
+                  {p.availableDisplay}
                 </td>
-                <td style={{ padding: '2px 4px' }}>{line.unit}</td>
+                <td style={{ padding: '2px 4px', textAlign: 'right' }}>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={raw}
+                    onChange={(e) =>
+                      setQtyByLine((prev) => ({
+                        ...prev,
+                        [p.id]: e.target.value,
+                      }))
+                    }
+                    placeholder="0"
+                    aria-invalid={invalid || undefined}
+                    aria-label={`Вернуть по строке ${p.description}`}
+                    data-testid="material-issue-return-qty-input"
+                    style={{
+                      width: 80,
+                      fontSize: '0.78rem',
+                      padding: '2px 4px',
+                      textAlign: 'right',
+                      border: `1px solid ${
+                        invalid ? '#dc2626' : 'var(--admin-border, #d4d4d8)'
+                      }`,
+                      borderRadius: 3,
+                    }}
+                  />
+                  {overLimit && (
+                    <div style={{ fontSize: '0.7rem', color: '#dc2626' }}>
+                      Не больше {p.availableDisplay}
+                    </div>
+                  )}
+                </td>
+                <td style={{ padding: '2px 4px' }}>{p.unit}</td>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            );
+          })}
+        </tbody>
+      </table>
+
+      {!hasNonZeroLine && !hasInvalidQty && (
+        <div
+          className="admin-muted"
+          style={{ fontSize: '0.72rem' }}
+          data-testid="material-issue-return-no-qty-hint"
+        >
+          Укажите количество к возврату хотя бы по одной строке (или
+          нажмите «Заполнить всё доступное»).
+        </div>
       )}
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
@@ -233,7 +424,7 @@ export function ReturnMaterialIssueButton({
       </label>
 
       <div style={{ display: 'flex', gap: 4 }}>
-        <SubmitButton />
+        <SubmitButton disabled={submitDisabled} />
         <button
           type="button"
           className="admin-btn admin-btn--ghost"

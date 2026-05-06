@@ -720,11 +720,26 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     расход материалов» (`MaterialIssuesTable`). Для `returnStatus =
     FULL` кнопки нет — показывается «Сторнирован». Отдельная
     страница / роут / пункт меню НЕ создаются;
-  - частичный возврат с произвольным qty UI пока не реализован
-    (одна кнопка = полное сторно остатка); удаление и отмена
-    возврата НЕ реализованы; FIFO/LIFO/`MaterialStockLot` /
-    master `Material` остаются вне scope; новых ролей не
-    появилось.
+  - **частичный возврат с произвольным qty по строкам реализован**:
+    UI рендерит per-line input «Вернуть» по каждой строке расхода
+    (`MaterialIssueLineDto.netIssuedQty`), кнопка «Заполнить всё
+    доступное» проставляет максимумы. Submit фильтрует строки с
+    `returnedQty <= 0` и блокирует, пока ни одной строки не введено.
+    Backend `ReturnMaterialIssueSchema` принимает `lines = [{
+    materialIssueLineId, returnedQty }]` (≥ 1), бросает
+    409 `MATERIAL_ISSUE_RETURN_QTY_EXCEEDS_AVAILABLE` /
+    `MATERIAL_ISSUE_RETURN_LINE_NOT_FOUND` /
+    `MATERIAL_ISSUE_RETURN_DUPLICATE_LINE` /
+    `MATERIAL_ISSUE_NOTHING_TO_RETURN` для соответствующих
+    нарушений. Несколько частичных возвратов на один `MaterialIssue`
+    допускаются — `availableToReturn = issuedQty − Σ ранее
+    возвращённое`, каждый следующий submit уменьшает остаток.
+    `returnStatus` пересчитывается: `NONE → PARTIAL → FULL`;
+  - вызов без `lines` остаётся как backward-compat режим полного
+    сторно (server-to-server клиенты);
+  - удаление и отмена возврата НЕ реализованы;
+    FIFO/LIFO/`MaterialStockLot` / master `Material` остаются вне
+    scope; новых ролей не появилось.
 
 ---
 
