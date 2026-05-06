@@ -5610,18 +5610,18 @@ body:has(.master-page) .app-main {
   width: 100%;
   min-height: 48px;
   padding: 0.7rem 1rem;
-  border: 1px solid #6ee7b7;
+  border: 1px solid #93c5fd;
   border-radius: 0.6rem;
-  background: #ecfdf5;
-  color: #065f46;
+  background: #eff6ff;
+  color: #1e3a8a;
   font-size: 0.95rem;
   font-weight: 700;
   cursor: pointer;
   transition: background 0.15s, border-color 0.15s;
 }
 .master-call-card__resolve-manual:hover {
-  background: #d1fae5;
-  border-color: #34d399;
+  background: #dbeafe;
+  border-color: #60a5fa;
 }
 .master-call-card__resolve-manual:active {
   transform: scale(0.99);
@@ -5629,6 +5629,20 @@ body:has(.master-page) .app-main {
 .master-call-card__resolve-manual:disabled {
   opacity: 0.6;
   cursor: default;
+}
+.master-archive__resolved-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid #6ee7b7;
+  border-radius: 0.5rem;
+  background: #ecfdf5;
+  color: #065f46;
+  font-size: 0.8rem;
+  font-weight: 700;
+  white-space: nowrap;
+  flex-shrink: 0;
 }
 
 /* -----------------------------------------------------------------------

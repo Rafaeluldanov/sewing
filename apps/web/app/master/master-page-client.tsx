@@ -469,6 +469,10 @@ function ArchivedCallRow({ call }: { call: MasterCallDto }) {
         <strong>{call.employee.fullName}</strong>
         <span className="master-archive__item-meta">{equipmentLabel}</span>
       </div>
+      <span className="master-archive__resolved-badge" aria-label="Проблема решена">
+        <Icon name="success" size={14} />
+        Проблема решена
+      </span>
       <span className="master-archive__item-time" title="Закрыт">
         {resolvedAt}
       </span>
