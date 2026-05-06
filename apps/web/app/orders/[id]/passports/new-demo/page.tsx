@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { listEmployees } from '@/lib/employees-api';
+import { listActiveCutters } from '@/lib/employees-api';
 import { getOrder } from '@/lib/orders-api';
 import { listOrderPassports } from '@/lib/passports-api';
 import { NewPassportDemoForm } from './new-passport-demo-form';
@@ -56,15 +56,11 @@ export default async function NewPassportDemoPage({
 
   // Раскройщик подставляется так же, как в обычной форме: для creator
   // с ролью CUTTER select прячется (backend подставит самого creator),
-  // иначе берём первого активного CUTTER. См. `docs/api.md §24a`.
-  const cutterEmployees = isCutter
-    ? []
-    : await listEmployees({ active: true, role: 'CUTTER' });
-  const cutterOptions = cutterEmployees.map((e) => ({
-    id: e.id,
-    fullName: e.fullName,
-    login: e.login,
-  }));
+  // иначе берём первого активного CUTTER через узкий read-only endpoint
+  // `/api/employees/cutters` — широкий `/api/employees` под
+  // `SHOP_MANAGER, ADMIN`, и помощник раскройщика там получает 403
+  // FORBIDDEN_ROLE. См. `docs/cutter-assistant-passport-release-recon.md §5`.
+  const cutterOptions = isCutter ? [] : await listActiveCutters();
 
   const backHref = isCutterAssistant ? '/work' : `/orders/${order.id}`;
   const backLabel = isCutterAssistant ? '← На рабочее место' : '← К заказу';
