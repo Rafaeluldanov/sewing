@@ -870,4 +870,74 @@ describeWithDb('integration — order cut issue rules', () => {
     expect(card.queueIndex).toBe(1);
     expect(card.requiredQty).toBe(3);
   });
+
+  // T19. Per-queue disable: гасит активные строки только указанной
+  // очереди, остальные не трогает; issuedQty сохраняется.
+  test('T19. POST /queues/:queueIndex/disable отключает только указанную очередь', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 100 },
+    ]);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 3 }],
+      cookies.manager,
+      1,
+    ).expect(201);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 10 }],
+      cookies.manager,
+      2,
+    ).expect(201);
+
+    // Выдадим 2 шт в queue 1 — issuedQty=2.
+    const passportS = await createAndPlace(orderId, sizeIdByKey.S!, 2);
+    await startSeamstressShift();
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportS}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    // Отключаем только queue 1.
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/cut-issue-rules/queues/1/disable`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+
+    // queue 1 → status OFF, queue 2 → IN_PROGRESS.
+    const q1 = res.body.queues.find((q: { queueIndex: number }) => q.queueIndex === 1);
+    const q2 = res.body.queues.find((q: { queueIndex: number }) => q.queueIndex === 2);
+    expect(q1.status).toBe('OFF');
+    expect(q2.status).toBe('IN_PROGRESS');
+
+    // issuedQty в queue 1 сохранён.
+    const q1Rule = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, queueIndex: 1, sizeId: sizeIdByKey.S! },
+    });
+    expect(q1Rule.isActive).toBe(false);
+    expect(q1Rule.issuedQty).toBe(2);
+
+    // queue 2 нетронута и активна.
+    const q2Rule = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, queueIndex: 2, sizeId: sizeIdByKey.S! },
+    });
+    expect(q2Rule.isActive).toBe(true);
+
+    // Audit написан с queueIndex.
+    const audits = await t.prisma.auditLog.findMany({
+      where: {
+        entityType: 'ORDER_CUT_ISSUE_RULE',
+        entityId: orderId,
+        event: 'ORDER_CUT_ISSUE_RULE_DISABLED',
+      },
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.payload).toMatchObject({
+      orderId,
+      queueIndex: 1,
+      deactivatedCount: 1,
+    });
+  });
 });

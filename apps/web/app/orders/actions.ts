@@ -40,7 +40,7 @@ import {
   updateOrderOutsourceRequirementStatus,
 } from '@/lib/orders-api';
 import {
-  deleteOrderCutIssueQueue,
+  disableOrderCutIssueQueue,
   disableOrderCutIssueRules,
   saveOrderCutIssueRules,
 } from '@/lib/order-cut-issue-rules-api';
@@ -741,11 +741,12 @@ export async function saveOrderCutIssueRulesAction(
 }
 
 /**
- * Удалить пустую последнюю очередь выдачи кроя. FormData-контракт:
- *   - `queueIndex` — индекс удаляемой очереди.
- * Бэкенд защищает удаление (последняя + `Σ issuedQty = 0`).
+ * Отключить одну конкретную очередь выдачи кроя. FormData-контракт:
+ *   - `queueIndex` — индекс отключаемой очереди.
+ * `isActive = false` для всех её активных строк, `issuedQty`
+ * сохраняется (нужен для аудита). Идемпотентно.
  */
-export async function deleteOrderCutIssueQueueAction(
+export async function disableOrderCutIssueQueueAction(
   orderId: string,
   _prev: OrderCutIssueRulesActionState,
   form: FormData,
@@ -757,7 +758,7 @@ export async function deleteOrderCutIssueQueueAction(
   }
   let summary: OrderCutIssueRulesSummaryDto;
   try {
-    summary = await deleteOrderCutIssueQueue(orderId, queueIndex);
+    summary = await disableOrderCutIssueQueue(orderId, queueIndex);
   } catch (e) {
     return { error: explainApiError(e) };
   }

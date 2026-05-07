@@ -42,8 +42,7 @@ import type {
 } from '@sewing/shared';
 import {
   type OrderCutIssueRulesActionState,
-  deleteOrderCutIssueQueueAction,
-  disableOrderCutIssueRulesAction,
+  disableOrderCutIssueQueueAction,
   saveOrderCutIssueRulesAction,
 } from '@/app/orders/actions';
 
@@ -147,14 +146,9 @@ export function OrderCutIssueRulesCard({
 
   const saveAction = saveOrderCutIssueRulesAction.bind(null, orderId);
   const [saveState, saveFormAction] = useFormState(saveAction, initialState);
-  const disableAction = disableOrderCutIssueRulesAction.bind(null, orderId);
-  const [disableState, disableFormAction] = useFormState(
-    disableAction,
-    initialState,
-  );
-  const deleteAction = deleteOrderCutIssueQueueAction.bind(null, orderId);
-  const [deleteState, deleteFormAction] = useFormState(
-    deleteAction,
+  const disableQueueAction = disableOrderCutIssueQueueAction.bind(null, orderId);
+  const [disableState, disableQueueFormAction] = useFormState(
+    disableQueueAction,
     initialState,
   );
 
@@ -172,12 +166,6 @@ export function OrderCutIssueRulesCard({
       setEditing(null);
     }
   }, [disableState]);
-  useEffect(() => {
-    if (deleteState.ok && deleteState.summary) {
-      setSummary(deleteState.summary);
-      setEditing(null);
-    }
-  }, [deleteState]);
 
   /**
    * Σ requiredQty по активным строкам очередей с индексом меньше `queueIndex`.
@@ -316,7 +304,7 @@ export function OrderCutIssueRulesCard({
     });
   }
 
-  const formError = saveState.error ?? disableState.error ?? deleteState.error;
+  const formError = saveState.error ?? disableState.error;
   const status = summary.status;
 
   const hasAnyQueue = summary.queues.length > 0;
@@ -371,12 +359,7 @@ export function OrderCutIssueRulesCard({
           editing !== null &&
           !editing.isNew &&
           editing.queueIndex === queue.queueIndex;
-        const totalIssuedInQueue = queue.rules.reduce(
-          (s, r) => s + r.issuedQty,
-          0,
-        );
-        const canDeleteQueue =
-          canManage && isLast && totalIssuedInQueue === 0;
+        const hasActiveRows = queue.rules.some((r) => r.isActive);
         return (
           <div
             key={queue.queueIndex}
@@ -418,9 +401,9 @@ export function OrderCutIssueRulesCard({
                     Добавить очередь
                   </button>
                 )}
-                {canDeleteQueue && (
-                  <DeleteQueueButton
-                    formAction={deleteFormAction}
+                {hasActiveRows && (
+                  <DisableQueueButton
+                    formAction={disableQueueFormAction}
                     queueIndex={queue.queueIndex}
                     disabled={editing !== null}
                   />
@@ -479,23 +462,6 @@ export function OrderCutIssueRulesCard({
             formAction={saveFormAction}
           />
         </div>
-      )}
-
-      {canManage && hasAnyQueue && summary.queues.some((q) =>
-        q.rules.some((r) => r.isActive),
-      ) && (
-        <form action={disableFormAction} style={{ marginTop: '0.75rem' }}>
-          <DisableButton />
-          {disableState.ok && (
-            <span
-              className="meta-line"
-              role="status"
-              style={{ marginLeft: 8, color: '#1f7a1f' }}
-            >
-              Очередь отключена.
-            </span>
-          )}
-        </form>
       )}
 
       {formError && (
@@ -811,16 +777,7 @@ function SaveButton({ hasRows }: { hasRows: boolean }) {
   );
 }
 
-function DisableButton() {
-  const { pending } = useFormStatus();
-  return (
-    <button type="submit" className="btn btn-danger" disabled={pending}>
-      {pending ? 'Отключаем…' : 'Отключить очередь'}
-    </button>
-  );
-}
-
-function DeleteQueueButton({
+function DisableQueueButton({
   formAction,
   queueIndex,
   disabled,
@@ -832,21 +789,27 @@ function DeleteQueueButton({
   return (
     <form action={formAction} style={{ display: 'inline' }}>
       <input type="hidden" name="queueIndex" value={queueIndex} />
-      <DeleteQueueSubmit disabled={disabled} />
+      <DisableQueueSubmit disabled={disabled} queueIndex={queueIndex} />
     </form>
   );
 }
 
-function DeleteQueueSubmit({ disabled }: { disabled: boolean }) {
+function DisableQueueSubmit({
+  disabled,
+  queueIndex,
+}: {
+  disabled: boolean;
+  queueIndex: number;
+}) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
-      className="btn"
+      className="btn btn-danger"
       disabled={pending || disabled}
-      data-testid="btn-delete-queue"
+      data-testid={`btn-disable-queue-${queueIndex}`}
     >
-      {pending ? 'Удаляем…' : 'Удалить очередь'}
+      {pending ? 'Отключаем…' : 'Отключить очередь'}
     </button>
   );
 }
