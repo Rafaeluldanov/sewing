@@ -25,6 +25,7 @@
  * кнопки — отдельные client-компоненты.
  */
 import type {
+  MaterialIssueAggregateReturnStatus,
   MaterialIssueDetailDto,
   MaterialIssueListItemDto,
 } from '@sewing/shared/material-issues';
@@ -37,6 +38,7 @@ import { CancelMaterialIssueButton } from './cancel-material-issue-button';
 import { MaterialIssueLinesPreview } from './material-issue-lines-preview';
 import { MaterialIssueStatusBadge } from './material-issue-status-badge';
 import { PostMaterialIssueButton } from './post-material-issue-button';
+import { ReturnMaterialIssueButton } from './return-material-issue-button';
 
 interface Props {
   orderId: string;
@@ -125,6 +127,58 @@ export function MaterialIssuesTable({
             >
               <PostMaterialIssueButton orderId={orderId} id={row.id} />
               <CancelMaterialIssueButton orderId={orderId} id={row.id} />
+            </div>
+          );
+        }
+        if (row.status === 'POSTED') {
+          // returnStatus поднимается из backend (см.
+          // `MaterialIssuesService.toListItem`). Если бэкенд старый
+          // и поля нет — fallback на `NONE`, чтобы кнопка
+          // отрендерилась (но без preview-таблицы строк это будет
+          // gross qty fallback в `ReturnMaterialIssueButton`).
+          const returnStatus: MaterialIssueAggregateReturnStatus =
+            (row.returnStatus as MaterialIssueAggregateReturnStatus | undefined) ??
+            'NONE';
+          if (returnStatus === 'FULL') {
+            return (
+              <span
+                className="admin-muted"
+                data-testid="material-issue-return-full"
+                style={{ fontSize: '0.78rem' }}
+              >
+                Сторнирован
+              </span>
+            );
+          }
+          const detail = issueDetails?.[row.id];
+          const lines = detail?.lines ?? [];
+          return (
+            <div
+              style={{
+                display: 'flex',
+                gap: 6,
+                flexWrap: 'wrap',
+                justifyContent: 'flex-end',
+              }}
+            >
+              {returnStatus === 'PARTIAL' && (
+                <span
+                  className="admin-muted"
+                  data-testid="material-issue-return-partial"
+                  style={{
+                    fontSize: '0.72rem',
+                    alignSelf: 'center',
+                  }}
+                >
+                  Частичный возврат
+                </span>
+              )}
+              <ReturnMaterialIssueButton
+                orderId={orderId}
+                id={row.id}
+                returnStatus={returnStatus}
+                lines={lines}
+              />
             </div>
           );
         }

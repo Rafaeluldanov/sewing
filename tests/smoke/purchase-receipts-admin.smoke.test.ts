@@ -162,7 +162,10 @@ describe('Purchase receipts (Этап 7А) — smoke', () => {
     expect(src).toMatch(/purchaseReceipts\s+PurchaseReceipt\[\]/);
     expect(src).toMatch(/receiptLines\s+PurchaseReceiptLine\[\]/);
     expect(src).toMatch(/receivedPurchaseReceipts PurchaseReceipt\[\]/);
-    expect(src).toMatch(/purchaseReceiptLines PurchaseReceiptLine\[\]/);
+    // `\s+` (а не одинарный пробел) — `prisma format` выравнивает
+    // колонки по самому длинному имени связи в блоке Cell, и
+    // добавление новых back-relations может расширить отступ.
+    expect(src).toMatch(/purchaseReceiptLines\s+PurchaseReceiptLine\[\]/);
   });
 
   test('Migration создаёт таблицы PurchaseReceipt + PurchaseReceiptLine с FK', () => {

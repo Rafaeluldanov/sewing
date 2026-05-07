@@ -85,8 +85,9 @@ export default async function AdminWarehouseDetailPage({ params }: Params) {
     printers = [];
   }
 
-  // Группировка ячеек по линии нужна `LinePrintButton`-у для preview.
-  // Делаем мапу один раз — `find` по cellId внутри render-а не масштабируется.
+  // Группировка ячеек по линии нужна `LinePrintButton`-у для preview
+  // (модалка показывает превью этикеток ИМЕННО этой линии). Делаем
+  // мапу один раз — `find` по cellId внутри render-а не масштабируется.
   const cellsByLine = new Map<string, WarehouseCellDto[]>();
   for (const cell of warehouse.cells) {
     if (!cell.lineId) continue;

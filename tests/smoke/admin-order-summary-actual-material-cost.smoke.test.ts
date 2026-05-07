@@ -84,12 +84,19 @@ function makeIssue(
     passportId: null,
     passportNumber: null,
     status,
+    source: 'MANUAL',
     totalCost,
     createdAt: new Date('2026-01-01').toISOString(),
     postedAt: status === 'POSTED' ? new Date('2026-01-02').toISOString() : null,
     cancelledAt:
       status === 'CANCELLED' ? new Date('2026-01-03').toISOString() : null,
     linesCount: 1,
+    // Поля итерации возврата (`MaterialIssueReturn`). Тесты этой
+    // финансовой сводки не моделируют возвраты — net == gross.
+    returnedTotalCost: '0',
+    netTotalCost: totalCost,
+    returnsCount: 0,
+    returnStatus: 'NONE',
     ...overrides,
   };
 }

@@ -91,7 +91,7 @@ interface LinePrintButtonProps {
  * Кнопка «Печать линии» в строке таблицы линий. Открывает ту же
  * модалку, что и общая массовая печать, но action бьёт в per-line
  * endpoint. Список ячеек для preview уже отфильтрован по `lineId`
- * на странице.
+ * на странице — здесь компонент только переливает props в модалку.
  */
 export function LinePrintButton({
   warehouseId,

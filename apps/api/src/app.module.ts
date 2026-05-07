@@ -48,6 +48,7 @@ import { SizesModule } from './modules/sizes/sizes.module.js';
 import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documents/payroll-accrual-documents.module.js';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module.js';
 import { StockModule } from './modules/stock/stock.module.js';
+import { FinishedGoodsModule } from './modules/finished-goods/finished-goods.module.js';
 import { MeModule } from './modules/me/me.module.js';
 import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
 
@@ -102,6 +103,7 @@ import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
     PayrollAccrualDocumentsModule,
     MaterialIssuesModule,
     StockModule,
+    FinishedGoodsModule,
     MeModule,
     BootstrapModule,
   ],

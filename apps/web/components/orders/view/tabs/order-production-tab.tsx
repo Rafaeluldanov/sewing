@@ -2,21 +2,28 @@
  * `OrderProductionTab` — вкладка «Производство» управленческой
  * карточки `/admin/orders/[id]?tab=production`.
  *
- * Показывает только производственный срез заказа (см. ТЗ
+ * Показывает производственный срез заказа (см. ТЗ
  * «Вкладка Производство»):
  *   - KPI «План / Раскроено / В пошиве / ОТК / ВТО / Упаковано /
  *     Выпущено / Брак / Δ» из `OrderSummary`;
  *   - таблица «по размерам» из `OrderSizeBreakdownRow[]`;
- *   - текущие stage-buckets по заказу — отдельный блок «Цех сейчас»,
+ *   - текущие stage-buckets по заказу — блок «Цех сейчас»,
  *     данные из `GET /api/shopfloor/state?orderId=…`. Backend не
- *     меняли — это уже существующая read-only проекция.
+ *     меняли — это уже существующая read-only проекция;
+ *   - блок «Отгрузка готовой продукции»
+ *     (`OrderFinishedGoodsShipmentSection`) — частичная отгрузка
+ *     остатков `FinishedGoodsBalance` с созданием
+ *     `FinishedGoodsMovement type=SHIPMENT direction=OUT` (см.
+ *     `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+ *     `docs/current-state.md §«Отгрузка готовой продукции»`).
  *
  * Что СОЗНАТЕЛЬНО НЕ показываем:
  *   - список паспортов (он во вкладке «Паспорта»);
  *   - материалы / outsource / cost (вкладка «Потребности»);
  *   - метрики hero (тираж, выручка, маржа) — это в шапке.
  *
- * Backend / DTO / Prisma не задействованы — это presentation-слой.
+ * Backend / DTO / Prisma не задействованы здесь — это presentation-
+ * слой. Shipment-секция фетчит данные сама и инкапсулирует свой UI.
  */
 import type {
   OrderDetailDto,
@@ -38,9 +45,17 @@ import {
 import { ApiRequestError } from '@/lib/api';
 import { getShopfloorState } from '@/lib/shopfloor-api';
 import { Activity, BarChart3, Package } from 'lucide-react';
+import { OrderFinishedGoodsShipmentSection } from '@/components/orders/finished-goods/order-finished-goods-shipment-section';
 
 interface Props {
   order: OrderDetailDto;
+  /**
+   * ADMIN / SHOP_MANAGER — определяет видимость кнопки «Создать
+   * отгрузку» в блоке готовой продукции. Layout `/admin/*` уже
+   * пускает только этих ролей, флаг нужен для симметрии с
+   * остальными action-блоками карточки заказа.
+   */
+  canManage: boolean;
 }
 
 interface KpiCardProps {
@@ -97,7 +112,7 @@ function buildKpis(summary: OrderSummary): KpiCardProps[] {
   ];
 }
 
-export async function OrderProductionTab({ order }: Props) {
+export async function OrderProductionTab({ order, canManage }: Props) {
   // Stage buckets имеют смысл только когда заказ реально едет в
   // производстве: до запуска (DRAFT/CALCULATION/CALCULATION_DONE)
   // паспортов нет, проекция пуста, а endpoint `/api/shopfloor/state`
@@ -195,6 +210,18 @@ export async function OrderProductionTab({ order }: Props) {
           />
         )}
       </AdminCard>
+
+      {/*
+       * Блок «Отгрузка готовой продукции» — частичная отгрузка по
+       * заказу. Это единственное UI-место, где живёт shipment-flow
+       * (см. `docs/current-state.md §«Отгрузка готовой продукции»`):
+       * отдельной страницы /admin/finished-goods нет, sidebar
+       * не меняется, OrderViewTabs не получил новой вкладки.
+       */}
+      <OrderFinishedGoodsShipmentSection
+        orderId={order.id}
+        canManage={canManage}
+      />
     </div>
   );
 }

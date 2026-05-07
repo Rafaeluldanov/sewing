@@ -37,6 +37,7 @@ import { BoxNumberService } from './box-number.service.js';
 import { getApiUrl } from '../passports/qr.js';
 import { EarningsService } from '../earnings/earnings.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { FinishedGoodsService } from '../finished-goods/finished-goods.service.js';
 
 type BoxRow = Prisma.BoxGetPayload<{
   include: {
@@ -89,6 +90,7 @@ export class PackingService {
     private readonly numbers: BoxNumberService,
     private readonly earnings: EarningsService,
     private readonly audit: AuditService,
+    private readonly finishedGoods: FinishedGoodsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -344,6 +346,26 @@ export class PackingService {
           },
         },
         tx,
+      );
+      // Foundation готовой продукции (см.
+      // `apps/api/src/modules/finished-goods/finished-goods.service.ts`,
+      // `prisma/schema.prisma::FinishedGoodsBalance` /
+      // `FinishedGoodsMovement`,
+      // `docs/current-state.md §«Готовая продукция»`).
+      //
+      // В этой же транзакции, что и `Passport.status → PACKED`,
+      // фиксируем выпуск готовой продукции (`PRODUCTION_RECEIPT IN`,
+      // qty = passport.qtyGood, склад = Order.finishedGoodsWarehouseId
+      // или null). Идемпотентно по
+      // `sourceKey = PACKED_PASSPORT:<passportId>` — повторная
+      // обработка PACKED не задвоит движение и не удвоит баланс.
+      // Это **отдельный контур** от материалов: ни StockBalance, ни
+      // StockMovement, ни MaterialIssue не затрагиваются.
+      await this.finishedGoods.recordPackedPassportInTx(
+        tx,
+        fresh.id,
+        actorEmployeeId,
+        box.id,
       );
       // Финальный апрув начислений всем участникам цепочки по этому
       // паспорту перенесён на закрытие коробки (см. `close()` ниже и

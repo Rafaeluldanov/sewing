@@ -697,6 +697,22 @@ export class ShiftSessionRequiredException extends BusinessException {
   }
 }
 
+/**
+ * Сотрудник пытается стартовать смену на оборудовании, для которого
+ * выбранная операция не входит в allow-list `EquipmentOperation`
+ * (см. ADR-0017). Источник истины — та же выборка, что у
+ * `/api/shifts/meta`: связь должна существовать и быть `isActive=true`.
+ */
+export class ShiftOperationNotAllowedForEquipmentException extends BusinessException {
+  constructor() {
+    super(
+      'SHIFT_OPERATION_NOT_ALLOWED_FOR_EQUIPMENT',
+      'Операция недоступна для выбранного оборудования.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class PassportNotInCellException extends BusinessException {
   constructor() {
     super(
@@ -2898,6 +2914,131 @@ export class MaterialIssuePostedCannotCancelException extends BusinessException 
     super(
       'MATERIAL_ISSUE_POSTED_CANNOT_CANCEL',
       'Проведённый документ расхода нельзя отменить в MVP',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Попытка `POST /api/material-issues/:id/return` для документа,
+ * не находящегося в `POSTED` (DRAFT / CANCELLED). Возврат имеет
+ * смысл только для уже проведённого расхода — `DRAFT` отменяется
+ * штатным `cancel`-ом, `CANCELLED` уже не повлиял на склад.
+ *
+ * Бросается `MaterialIssuesService.returnPostedIssue` (см.
+ * `apps/api/src/modules/material-issues/material-issues.service.ts`).
+ */
+export class MaterialIssueReturnOnlyPostedException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_RETURN_ONLY_POSTED',
+      'Сторнировать можно только проведённый документ расхода',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Попытка возврата проведённого документа, у которого все строки уже
+ * полностью возвращены предыдущими `MaterialIssueReturn`. На MVP
+ * полное сторно идемпотентно по `sourceKey`, но если клиент попробует
+ * вызвать `POST /:id/return` с НОВЫМ `clientRequestId` после того, как
+ * предыдущий полный возврат уже прошёл — мы возвращаем 409 с этим
+ * кодом, а не пишем «пустой» документ возврата.
+ */
+export class MaterialIssueAlreadyReturnedException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_ALREADY_RETURNED',
+      'Документ расхода уже полностью сторнирован',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Запрос частичного возврата с `materialIssueLineId`, который не
+ * принадлежит указанному `MaterialIssue` (другая строка / опечатка
+ * клиента / параллельный refresh после удаления). 409, чтобы UI
+ * мог перезагрузить форму.
+ *
+ * Используется `MaterialIssuesService.returnPostedIssue` при
+ * non-empty `dto.lines` (см. также DTO
+ * `apps/api/src/modules/material-issues/dto/return-material-issue.dto.ts`).
+ */
+export class MaterialIssueReturnLineNotFoundException extends BusinessException {
+  constructor(materialIssueLineId: string) {
+    super(
+      'MATERIAL_ISSUE_RETURN_LINE_NOT_FOUND',
+      `Строка расхода ${materialIssueLineId} не принадлежит этому документу`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Запрос частичного возврата с `returnedQty`, превышающим остаток к
+ * возврату (`issuedQty − Σ ранее возвращённое`). 409 с контекстом в
+ * `details`, чтобы UI мог показать актуальный `availableQty`
+ * пользователю и попросить уменьшить значение.
+ *
+ * Тот же паттерн с `details`, что у
+ * `MaterialStockInsufficientException` ниже — наследуется от
+ * `HttpException` напрямую, чтобы прокинуть произвольный объект в
+ * exception-фильтр API.
+ */
+export class MaterialIssueReturnQtyExceedsAvailableException extends HttpException {
+  constructor(
+    public readonly details: {
+      materialIssueLineId: string;
+      requestedQty: string;
+      availableQty: string;
+    },
+  ) {
+    super(
+      {
+        statusCode: HttpStatus.CONFLICT,
+        message: `Запрошенное количество к возврату по строке ${details.materialIssueLineId} (${details.requestedQty}) превышает доступное (${details.availableQty})`,
+        code: 'MATERIAL_ISSUE_RETURN_QTY_EXCEEDS_AVAILABLE',
+        details,
+      },
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Запрос частичного возврата с одним и тем же `materialIssueLineId`,
+ * упомянутым более одного раза. 409 — мы не суммируем `returnedQty`
+ * за клиента, чтобы случайные повторения формы не создавали
+ * скрытое удвоение.
+ */
+export class MaterialIssueReturnDuplicateLineException extends BusinessException {
+  constructor(materialIssueLineId: string) {
+    super(
+      'MATERIAL_ISSUE_RETURN_DUPLICATE_LINE',
+      `Строка расхода ${materialIssueLineId} указана в запросе несколько раз`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * После фильтрации (`returnedQty > 0`, остаток > 0) к возврату не
+ * осталось ни одной строки. На практике покрывает два сценария:
+ *   - частичный возврат: все переданные `returnedQty` обнулились
+ *     (UI уже должен был отфильтровать, но защищаемся);
+ *   - полное сторно по уже-полностью-возвращённому документу с
+ *     НОВЫМ `clientRequestId` (старый код кидал
+ *     `MATERIAL_ISSUE_ALREADY_RETURNED`; на этой итерации оба кейса
+ *     обслуживает один эндпоинт, и для `lines`-режима имя
+ *     `nothing_to_return` точнее).
+ */
+export class MaterialIssueNothingToReturnException extends BusinessException {
+  constructor() {
+    super(
+      'MATERIAL_ISSUE_NOTHING_TO_RETURN',
+      'По указанным строкам нечего возвращать',
       HttpStatus.CONFLICT,
     );
   }

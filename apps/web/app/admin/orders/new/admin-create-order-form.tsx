@@ -50,7 +50,15 @@ import {
 } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
-import type { SizeDto } from '@sewing/shared/orders';
+import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
+import type {
+  OrderMaterialsAndHardwareCostPolicy,
+  SizeDto,
+} from '@sewing/shared/orders';
+import {
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS,
+} from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
   MONEY_CURRENCY_LABELS,
@@ -111,6 +119,13 @@ interface Props {
    * «зомби»-карточки.
    */
   companyDivisions: CompanyDivisionDto[];
+  /**
+   * Список складов для select-а «Склад выпуска готовой продукции»
+   * (см. `prisma/schema.prisma::Order.finishedGoodsWarehouseId`).
+   * Это **управленческое** поле — выбранный склад не влияет на
+   * `StockBalance` / `StockMovement` материалов.
+   */
+  warehouses: WarehouseSummaryDto[];
   today: string;
 }
 
@@ -142,6 +157,7 @@ export function AdminCreateOrderForm({
   clients,
   patterns,
   companyDivisions,
+  warehouses,
   today,
 }: Props) {
   const [state, formAction] = useFormState(createOrderAction, initialState);
@@ -182,6 +198,19 @@ export function AdminCreateOrderForm({
   const [companyDivisionId, setCompanyDivisionId] = useState<string>(
     defaultCompanyDivisionId,
   );
+  // Этап «Склад выпуска готовой продукции»: на create поле опционально,
+  // дефолт — пустая строка («Не выбран»). Список ограничен активными.
+  const activeWarehouses = useMemo(
+    () => warehouses.filter((w) => w.isActive),
+    [warehouses],
+  );
+  const [finishedGoodsWarehouseId, setFinishedGoodsWarehouseId] =
+    useState<string>('');
+  // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+  // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+  // Default — `INCLUDE` (учитывать в себестоимости как раньше).
+  const [materialsAndHardwareCostPolicy, setMaterialsAndHardwareCostPolicy] =
+    useState<OrderMaterialsAndHardwareCostPolicy>('INCLUDE');
   const [dueDate, setDueDate] = useState<string>('');
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>('');
   const [customerCurrency, setCustomerCurrency] =
@@ -347,6 +376,17 @@ export function AdminCreateOrderForm({
                 companyDivisionId={companyDivisionId}
                 onCompanyDivisionIdChange={setCompanyDivisionId}
                 companyDivisions={companyDivisions}
+                finishedGoodsWarehouseId={finishedGoodsWarehouseId}
+                onFinishedGoodsWarehouseIdChange={
+                  setFinishedGoodsWarehouseId
+                }
+                warehouses={activeWarehouses}
+                materialsAndHardwareCostPolicy={
+                  materialsAndHardwareCostPolicy
+                }
+                onMaterialsAndHardwareCostPolicyChange={
+                  setMaterialsAndHardwareCostPolicy
+                }
                 dueDate={dueDate}
                 onDueDateChange={setDueDate}
                 today={today}
@@ -442,6 +482,11 @@ function BasicsCreateFields({
   companyDivisionId,
   onCompanyDivisionIdChange,
   companyDivisions,
+  finishedGoodsWarehouseId,
+  onFinishedGoodsWarehouseIdChange,
+  warehouses,
+  materialsAndHardwareCostPolicy,
+  onMaterialsAndHardwareCostPolicyChange,
   dueDate,
   onDueDateChange,
   today,
@@ -460,6 +505,15 @@ function BasicsCreateFields({
   companyDivisionId: string;
   onCompanyDivisionIdChange: (v: string) => void;
   companyDivisions: CompanyDivisionDto[];
+  /** Выбор склада выпуска готовой продукции (управленческое поле). */
+  finishedGoodsWarehouseId: string;
+  onFinishedGoodsWarehouseIdChange: (v: string) => void;
+  warehouses: WarehouseSummaryDto[];
+  /** Упрощённый MVP давальческого сырья / фурнитуры клиента. */
+  materialsAndHardwareCostPolicy: OrderMaterialsAndHardwareCostPolicy;
+  onMaterialsAndHardwareCostPolicyChange: (
+    v: OrderMaterialsAndHardwareCostPolicy,
+  ) => void;
   dueDate: string;
   onDueDateChange: (v: string) => void;
   today: string;
@@ -505,6 +559,62 @@ function BasicsCreateFields({
               работает по той же логике, что B2B.
             </span>
           )}
+      </div>
+
+      <div className="order-hero-card__field">
+        <label htmlFor="finishedGoodsWarehouseId">
+          Склад выпуска готовой продукции
+        </label>
+        <select
+          id="finishedGoodsWarehouseId"
+          name="finishedGoodsWarehouseId"
+          value={finishedGoodsWarehouseId}
+          onChange={(e) =>
+            onFinishedGoodsWarehouseIdChange(e.target.value)
+          }
+        >
+          <option value="">— не выбран —</option>
+          {warehouses.map((w) => (
+            <option key={w.id} value={w.id}>
+              {w.name}
+              {w.code ? ` (${w.code})` : ''}
+            </option>
+          ))}
+        </select>
+        <span className="order-hero-card__field-hint">
+          Склад, на который должна поступить готовая продукция после
+          производства / упаковки. Это не склад материалов.
+        </span>
+      </div>
+
+      <div className="order-hero-card__field">
+        <label htmlFor="materialsAndHardwareCostPolicy">
+          Учет материалов и фурнитуры в себестоимости
+        </label>
+        <select
+          id="materialsAndHardwareCostPolicy"
+          name="materialsAndHardwareCostPolicy"
+          value={materialsAndHardwareCostPolicy}
+          onChange={(e) =>
+            onMaterialsAndHardwareCostPolicyChange(
+              e.target.value as OrderMaterialsAndHardwareCostPolicy,
+            )
+          }
+        >
+          {ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES.map((p) => (
+            <option key={p} value={p}>
+              {p === 'EXCLUDE'
+                ? 'Не учитывать — давальческое сырьё / фурнитура клиента'
+                : ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS[p]}
+            </option>
+          ))}
+        </select>
+        <span className="order-hero-card__field-hint">
+          Если материалы или фурнитуру предоставляет клиент, выберите
+          «Не учитывать». Потребность по количеству всё равно будет
+          рассчитана и показана, но стоимость материалов и фурнитуры
+          не войдёт в себестоимость заказа.
+        </span>
       </div>
 
       <div className="order-hero-card__field">

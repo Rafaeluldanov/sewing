@@ -7,10 +7,19 @@ import type {
   PrintWarehouseCellsResultDto,
 } from '@sewing/shared/warehouses';
 import { ApiRequestError } from '@/lib/api';
+import { listCells } from '@/lib/passports-api';
 import {
   createStockAdjustment,
+  createStockTransfer,
   type CreateStockAdjustmentDto,
+  type CreateStockTransferDto,
 } from '@/lib/stock-api';
+import {
+  createFinishedGoodsAdjustment,
+  createFinishedGoodsTransfer,
+  type CreateFinishedGoodsAdjustmentDto,
+  type CreateFinishedGoodsTransferDto,
+} from '@/lib/finished-goods-api';
 import {
   createWarehouse,
   createWarehouseLine,
@@ -26,6 +35,7 @@ import type {
   CreateWarehouseState,
   DeleteLineState,
   StockAdjustmentState,
+  StockTransferState,
   UpdateWarehouseState,
 } from './form-state';
 
@@ -287,8 +297,8 @@ export async function printWarehouseLineCellsAction(
 /**
  * Server action поверх `DELETE /api/warehouses/:id/lines/:lineId`.
  * Возвращает `code` отдельно, чтобы UI отличил `WAREHOUSE_LINE_HAS_CONTENT`
- * от прочих 4xx/5xx. После успеха ревалидируем страницу склада —
- * таблицы линий и ячеек обновятся.
+ * (заняты ячейки) от прочих 4xx/5xx. После успеха ревалидируем
+ * страницу склада — таблицы линий и ячеек обновятся.
  */
 export async function deleteWarehouseLineAction(
   warehouseId: string,
@@ -349,5 +359,223 @@ export async function createStockAdjustmentAction(
       };
     }
     return { ok: false, error: 'Не удалось сохранить корректировку остатка.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Stock transfer (manual): `POST /api/stock/transfers`
+// (см. `apps/api/src/modules/stock/stock.controller.ts`,
+//  `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+//  `docs/api.md §«26a.4 POST /api/stock/transfers»`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action перемещения остатка между складами / ячейками.
+ * Принимает уже нормализованный body (qty / comment / clientRequestId)
+ * и делегирует в `createStockTransfer`. Идемпотентность реализована
+ * backend-ом по `clientRequestId` — UI-диалог сам генерирует uuid и
+ * присылает один и тот же при повторных submit.
+ *
+ * После успеха ревалидируем `/admin/warehouses` (вкладки `balances` и
+ * `movements` живут на одной странице с разным `?tab=`), чтобы оба
+ * движения появились в журнале и обновились остатки.
+ *
+ * `MATERIAL_STOCK_INSUFFICIENT` / `STOCK_TRANSFER_SAME_LOCATION` /
+ * `STOCK_BALANCE_NOT_FOUND` приходят с `code` — клиентский диалог
+ * отрисовывает понятный текст backend без raw JSON.
+ */
+export async function createStockTransferAction(
+  body: CreateStockTransferDto,
+): Promise<StockTransferState> {
+  try {
+    const result = await createStockTransfer(body);
+    revalidatePath('/admin/warehouses');
+    return { ok: true, transferId: result.transferId };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        code: e.code,
+        error: e.message,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { ok: false, error: 'Не удалось сохранить перемещение остатка.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Finished goods transfer (manual): `POST /api/finished-goods/transfers`
+// (см. `apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+//  `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+//  `docs/api.md §«Finished goods transfers»`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action перемещения готовой продукции между складами / ячейками.
+ *
+ * Принимает уже нормализованный body (qty integer / comment /
+ * clientRequestId) и делегирует в `createFinishedGoodsTransfer`.
+ * Идемпотентность реализована backend-ом по `clientRequestId` —
+ * UI-диалог сам генерирует uuid и присылает один и тот же при
+ * повторных submit.
+ *
+ * После успеха ревалидируем `/admin/warehouses` (вкладки `balances` и
+ * `movements` живут на одной странице с разным `?tab=`), чтобы оба
+ * движения появились в журнале и обновились остатки готовой продукции.
+ *
+ * `FINISHED_GOODS_INSUFFICIENT_BALANCE` /
+ * `FINISHED_GOODS_TRANSFER_SAME_LOCATION` /
+ * `FINISHED_GOODS_BALANCE_NOT_FOUND` приходят с `code` — клиентский
+ * диалог отрисовывает понятный текст backend без raw JSON.
+ */
+export async function createFinishedGoodsTransferAction(
+  body: CreateFinishedGoodsTransferDto,
+): Promise<StockTransferState> {
+  if (!Number.isInteger(body.qty) || body.qty <= 0) {
+    return {
+      ok: false,
+      error: 'Для готовой продукции количество должно быть целым числом.',
+    };
+  }
+  try {
+    const result = await createFinishedGoodsTransfer(body);
+    revalidatePath('/admin/warehouses');
+    return { ok: true, transferId: result.transferId };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        code: e.code,
+        error: e.message,
+        errorRequestId: e.requestId,
+      };
+    }
+    return {
+      ok: false,
+      error: 'Не удалось сохранить перемещение готовой продукции.',
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Finished goods adjustment (manual): `POST /api/finished-goods/adjustments`
+// (см. `apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+//  `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,
+//  `docs/api.md §«Finished goods adjustments»`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action ручной корректировки остатка готовой продукции.
+ *
+ * Принимает уже нормализованный body (qty integer / direction /
+ * comment / clientRequestId) и делегирует в
+ * `createFinishedGoodsAdjustment`. Идемпотентность реализована
+ * backend-ом по `clientRequestId` — UI-диалог сам генерирует uuid и
+ * присылает один и тот же при повторных submit.
+ *
+ * Перед отправкой подстраховываемся на server-action-уровне: `qty`
+ * должен быть целым положительным; нецелое число → понятная
+ * валидационная ошибка без обращения в backend.
+ *
+ * После успеха ревалидируем `/admin/warehouses` (вкладки `balances`
+ * и `movements` живут на одной странице с разным `?tab=`), чтобы
+ * движение появилось в журнале и обновился остаток готовой
+ * продукции.
+ *
+ * `FINISHED_GOODS_INSUFFICIENT_BALANCE` /
+ * `FINISHED_GOODS_BALANCE_NOT_FOUND` /
+ * `FINISHED_GOODS_ADJUSTMENT_QTY_INVALID` приходят с `code` —
+ * клиентский диалог отрисовывает понятный текст backend без raw
+ * JSON.
+ */
+export async function createFinishedGoodsAdjustmentAction(
+  body: CreateFinishedGoodsAdjustmentDto,
+): Promise<StockAdjustmentState> {
+  if (!Number.isInteger(body.qty) || body.qty <= 0) {
+    return {
+      ok: false,
+      error: 'Для готовой продукции количество должно быть целым числом.',
+    };
+  }
+  try {
+    const movement = await createFinishedGoodsAdjustment(body);
+    revalidatePath('/admin/warehouses');
+    return { ok: true, createdId: movement.id };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        code: e.code,
+        error: e.message,
+        errorRequestId: e.requestId,
+      };
+    }
+    return {
+      ok: false,
+      error: 'Не удалось сохранить корректировку готовой продукции.',
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Cells lookup (for transfer destination cell selector)
+// ---------------------------------------------------------------------------
+
+/**
+ * Минимальная карточка ячейки для select-а в `StockTransferDialog`
+ * (см. `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`).
+ * Берём только то, что показывает selectbox — `id` + `code` (опционально
+ * `qrCode` оставляем, чтобы не плодить отдельных DTO). `warehouse`
+ * уже отфильтрован на backend через `?warehouseId=…`.
+ */
+export interface TransferDestinationCellOption {
+  id: string;
+  code: string;
+}
+
+export interface LoadTransferDestinationCellsResult {
+  ok: boolean;
+  cells?: TransferDestinationCellOption[];
+  error?: string;
+  code?: string;
+}
+
+/**
+ * Server action для динамической подгрузки ячеек выбранного склада
+ * назначения в форме «Переместить».
+ *
+ * Контракт:
+ *   - `warehouseId` пустой / не задан → возвращаем пустой массив без
+ *     запроса в backend (UI знает «склад ещё не выбран»);
+ *   - иначе зовём `GET /api/cells?warehouseId=<id>` и нормализуем
+ *     ответ до минимального shape `{ id, code }`. Только активные
+ *     ячейки этого склада (фильтрация — на backend).
+ *   - сетевые / API-ошибки оборачиваем в `{ ok: false, error, code }`,
+ *     чтобы клиентский диалог отрисовал понятный fallback вместо
+ *     raw-JSON.
+ *
+ * Не используется кэширование — список ячеек меняется редко, но
+ * пользователь после привязки/отвязки ячейки на `/admin/warehouses/[id]`
+ * должен сразу увидеть актуальное содержимое selectbox-а.
+ */
+export async function loadTransferDestinationCellsAction(
+  warehouseId: string,
+): Promise<LoadTransferDestinationCellsResult> {
+  const wid = warehouseId.trim();
+  if (wid.length === 0) {
+    return { ok: true, cells: [] };
+  }
+  try {
+    const cells = await listCells({ warehouseId: wid });
+    return {
+      ok: true,
+      cells: cells.map((c) => ({ id: c.id, code: c.code })),
+    };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, code: e.code, error: e.message };
+    }
+    return { ok: false, error: 'Не удалось загрузить список ячеек.' };
   }
 }

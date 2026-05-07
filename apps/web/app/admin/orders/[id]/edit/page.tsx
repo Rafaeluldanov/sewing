@@ -30,6 +30,7 @@ import type {
   RouteTemplateSummaryDto,
 } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
+import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getClient, listClients } from '@/lib/clients-api';
@@ -41,6 +42,7 @@ import { getOrder, listSizes } from '@/lib/orders-api';
 import { getPattern, listPatterns } from '@/lib/patterns-api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { getTechCard, listTechCards } from '@/lib/tech-cards-api';
+import { listWarehouses } from '@/lib/warehouses-api';
 import { AdminCard, AdminPageShell } from '@/components/admin';
 import {
   AdminEditOrderForm,
@@ -74,6 +76,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
   let clients: ClientDto[] = [];
   let patterns: PatternListItemDto[] = [];
   let companyDivisions: CompanyDivisionDto[] = [];
+  let warehouses: WarehouseSummaryDto[] = [];
   let error: string | null = null;
   try {
     // Этап «Номенклатура = Лекала»: список Product больше не нужен —
@@ -82,13 +85,17 @@ export default async function AdminOrderEditPage({ params }: Params) {
     // PHASE 1 «CompanyDivision как master-справочник»: подгружаем
     // активные карточки подразделений вместе с остальными
     // справочниками.
-    const [sz, rt, tc, cl, pt, cd] = await Promise.allSettled([
+    const [sz, rt, tc, cl, pt, cd, wh] = await Promise.allSettled([
       listSizes(),
       listRouteTemplates({ isActive: true }),
       listTechCards({ isActive: true }),
       listClients(),
       listPatterns({ status: 'ACTIVE' }),
       listCompanyDivisions(),
+      // Этап «Склад выпуска готовой продукции»: список складов для
+      // select-а «Склад выпуска готовой продукции» в форме
+      // редактирования. Не путать со складом материалов.
+      listWarehouses(),
     ]);
     if (sz.status === 'fulfilled') sizes = sz.value;
     else throw sz.reason;
@@ -97,6 +104,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
     clients = cl.status === 'fulfilled' ? cl.value : [];
     patterns = pt.status === 'fulfilled' ? pt.value : [];
     companyDivisions = cd.status === 'fulfilled' ? cd.value : [];
+    warehouses = wh.status === 'fulfilled' ? wh.value : [];
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -269,6 +277,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
         clients={clients}
         patterns={patterns}
         companyDivisions={companyDivisions}
+        warehouses={warehouses}
         today={today}
       />
     </AdminPageShell>

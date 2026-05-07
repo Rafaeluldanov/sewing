@@ -50,10 +50,16 @@ import {
 } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
+import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import type {
   OrderDetailDto,
+  OrderMaterialsAndHardwareCostPolicy,
   OrderStatus,
   SizeDto,
+} from '@sewing/shared/orders';
+import {
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS,
 } from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
@@ -103,6 +109,14 @@ interface Props {
    * карточка архивирована.
    */
   companyDivisions: CompanyDivisionDto[];
+  /**
+   * Список складов для select-а «Склад выпуска готовой продукции»
+   * (см. `prisma/schema.prisma::Order.finishedGoodsWarehouseId`).
+   * Поле управленческое — не влияет на StockBalance / StockMovement.
+   * Если у заказа уже привязан архивный склад — его опцию форма
+   * добавит сама, чтобы submit без явного действия не сбросил FK.
+   */
+  warehouses: WarehouseSummaryDto[];
   today: string;
 }
 
@@ -148,6 +162,7 @@ export function AdminEditOrderForm({
   clients,
   patterns,
   companyDivisions,
+  warehouses,
   today,
 }: Props) {
   const action = updateAdminOrderAction.bind(null, order.id);
@@ -210,11 +225,37 @@ export function AdminEditOrderForm({
     order.companyDivisionId &&
       !companyDivisions.some((d) => d.id === order.companyDivisionId),
   );
+
+  // Этап «Склад выпуска готовой продукции»: state + fallback-опция
+  // на случай, если выбранный ранее склад больше не активен
+  // (`isActive = false`) или удалён из live-списка. Sample-list
+  // (`warehouses`) на странице фильтрации не делает — мы дополнительно
+  // отрисовываем «архивную» опцию, чтобы submit без явного действия
+  // не обнулил FK.
+  const [
+    finishedGoodsWarehouseId,
+    setFinishedGoodsWarehouseId,
+  ] = useState<string>(order.finishedGoodsWarehouseId ?? '');
+  const showCurrentFinishedGoodsArchivedOption = Boolean(
+    order.finishedGoodsWarehouseId &&
+      !warehouses.some((w) => w.id === order.finishedGoodsWarehouseId),
+  );
   const [customerUnitPrice, setCustomerUnitPrice] = useState<string>(
     order.customerUnitPrice == null ? '' : String(order.customerUnitPrice),
   );
   const [customerCurrency, setCustomerCurrency] = useState<MoneyCurrency | ''>(
     order.customerCurrency ?? '',
+  );
+  // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+  // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+  // Default — `INCLUDE` (старая семантика «учитывается в себестоимости»).
+  // Управленческое поле — меняется на любом статусе заказа, без
+  // ORDER_LOCKED-ограничений.
+  const [
+    materialsAndHardwareCostPolicy,
+    setMaterialsAndHardwareCostPolicy,
+  ] = useState<OrderMaterialsAndHardwareCostPolicy>(
+    order.materialsAndHardwareCostPolicy ?? 'INCLUDE',
   );
   const [comment, setComment] = useState<string>(order.comment ?? '');
 
@@ -352,6 +393,71 @@ export function AdminEditOrderForm({
                       Менять подразделение можно только в DRAFT.
                     </span>
                   )}
+                </div>
+
+                <div className="order-hero-card__field">
+                  <label htmlFor="finishedGoodsWarehouseId">
+                    Склад выпуска готовой продукции
+                  </label>
+                  <select
+                    id="finishedGoodsWarehouseId"
+                    name="finishedGoodsWarehouseId"
+                    value={finishedGoodsWarehouseId}
+                    onChange={(e) =>
+                      setFinishedGoodsWarehouseId(e.target.value)
+                    }
+                  >
+                    <option value="">— не выбран —</option>
+                    {showCurrentFinishedGoodsArchivedOption &&
+                      order.finishedGoodsWarehouse && (
+                        <option value={order.finishedGoodsWarehouse.id}>
+                          {order.finishedGoodsWarehouse.name} — архив
+                        </option>
+                      )}
+                    {warehouses.map((w) => (
+                      <option key={w.id} value={w.id}>
+                        {w.name}
+                        {w.code ? ` (${w.code})` : ''}
+                        {w.isActive ? '' : ' — архив'}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="order-hero-card__field-hint">
+                    Склад, на который должна поступить готовая продукция
+                    после производства / упаковки. Это не склад
+                    материалов.
+                  </span>
+                </div>
+
+                <div className="order-hero-card__field">
+                  <label htmlFor="materialsAndHardwareCostPolicy">
+                    Учет материалов и фурнитуры в себестоимости
+                  </label>
+                  <select
+                    id="materialsAndHardwareCostPolicy"
+                    name="materialsAndHardwareCostPolicy"
+                    value={materialsAndHardwareCostPolicy}
+                    onChange={(e) =>
+                      setMaterialsAndHardwareCostPolicy(
+                        e.target.value as OrderMaterialsAndHardwareCostPolicy,
+                      )
+                    }
+                  >
+                    {ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES.map((p) => (
+                      <option key={p} value={p}>
+                        {p === 'EXCLUDE'
+                          ? 'Не учитывать — давальческое сырьё / фурнитура клиента'
+                          : ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS[p]}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="order-hero-card__field-hint">
+                    Если материалы или фурнитуру предоставляет клиент,
+                    выберите «Не учитывать». Потребность по количеству
+                    всё равно будет рассчитана и показана, но стоимость
+                    материалов и фурнитуры не войдёт в себестоимость
+                    заказа.
+                  </span>
                 </div>
 
                 <div className="order-hero-card__field">

@@ -1,33 +1,24 @@
 /**
- * `StockBalancesTable` — read-only таблица текущих остатков
- * `StockBalance` для вкладки `?tab=balances` раздела «Склады».
+ * `StockBalancesTable` — read-only таблица текущих остатков для
+ * вкладки `?tab=balances` раздела «Склады» (см.
+ * `apps/web/app/admin/warehouses/page.tsx`).
  *
- * Server-component: получает уже загруженный массив items и
- * рендерит `<AdminTable>`. Сам ничего не fetch-ит — это делает
- * страница `/admin/warehouses/page.tsx` через
- * `listStockBalances(...)`. Никаких mutation-кнопок (списание /
- * корректировка / перемещение между ячейками) — UI полностью
- * read-only (см. ТЗ §11).
+ * Server-component: получает уже загруженный массив unified-строк
+ * (`UnifiedWarehouseBalanceRow`) и рендерит `<AdminTable>`. Сам ничего
+ * не fetch-ит — это делает страница, которая объединяет ответы
+ * `listStockBalances` (материалы) и `listFinishedGoodsBalances`
+ * (готовая продукция) через mappers (`unified-rows.ts`).
  *
- * Колонки совпадают с `StockBalanceListItem` из
- * `apps/web/lib/stock-api.ts` (тот же shape, что отдаёт
- * `StockService::toStockBalanceListItem`):
- *   - Материал / описание (`description` + lookups);
- *   - Заказ (`orderNumber` или короткий `orderId`);
- *   - Склад / Ячейка (если данных нет — `«—»`);
- *   - Кол-во + ед. изм. (`qty`, `unit`);
- *   - Цена / Сумма (`unitCost`, `totalCost`);
- *   - Последнее движение (`lastMovementAt`);
- *   - Обновлено (`updatedAt`).
+ * UI-решение владельца проекта: материалы и готовая продукция
+ * показываются в одной таблице. Готовая продукция различается по
+ * шаблону имени `productName / color / sizeCode` — отдельной колонки
+ * «Тип» не вводим. Цена / сумма для готовой продукции — `«—»`,
+ * потому что это не material cost.
  *
- * Подсветка отрицательного остатка: при `qty < 0` строка
- * получает класс `admin-table__row--danger`. CSS-новый не
- * вводим — используем существующее `data-state="danger"`-стиль
- * через inline-style (чтобы не зависеть от CSS-классов, которых
- * может не быть). При `qty < 0` колонка «Кол-во» дополнительно
- * получает `<AdminStatusBadge tone="danger">` с числом — так
- * красная подсветка считывается даже без таблично-уровневых
- * стилей.
+ * Никаких mutation-кнопок (списание / корректировка / перемещение
+ * между ячейками) внутри таблицы — UI полностью read-only. Кнопки
+ * `StockTransferButton` / `StockAdjustmentButton` на странице
+ * работают только с материалами и фильтруют список отдельно.
  */
 import {
   AdminEmptyState,
@@ -35,7 +26,6 @@ import {
   AdminTable,
   type AdminTableColumn,
 } from '@/components/admin';
-import type { StockBalanceListItem } from '@/lib/stock-api';
 import { Warehouse } from 'lucide-react';
 import {
   formatStockDateTime,
@@ -43,9 +33,10 @@ import {
   formatStockQty,
   toStockNumber,
 } from './format';
+import type { UnifiedWarehouseBalanceRow } from './unified-rows';
 
 interface Props {
-  items: StockBalanceListItem[];
+  items: UnifiedWarehouseBalanceRow[];
 }
 
 export function StockBalancesTable({ items }: Props) {
@@ -53,23 +44,21 @@ export function StockBalancesTable({ items }: Props) {
     return (
       <AdminEmptyState
         icon={<Warehouse size={26} strokeWidth={1.6} aria-hidden />}
-        title="Остатки материалов пока не сформированы."
-        hint="Они появятся, когда будет проведена приёмка или расход материалов."
+        title="Остатки пока не сформированы."
+        hint="Они появятся, когда будет проведена приёмка / расход материалов или выпуск готовой продукции."
       />
     );
   }
 
-  const columns: AdminTableColumn<StockBalanceListItem>[] = [
+  const columns: AdminTableColumn<UnifiedWarehouseBalanceRow>[] = [
     {
-      key: 'description',
-      header: 'Материал',
+      key: 'name',
+      header: 'Номенклатура',
       render: (b) => (
-        <div className="admin-stock-cell">
-          <span className="admin-table__primary">{b.description}</span>
-          {b.materialRole && (
-            <span className="admin-muted admin-stock-cell__hint">
-              {b.materialRole}
-            </span>
+        <div className="admin-stock-cell" data-row-kind={b.kind}>
+          <span className="admin-table__primary">{b.name}</span>
+          {b.hint && (
+            <span className="admin-muted admin-stock-cell__hint">{b.hint}</span>
           )}
         </div>
       ),

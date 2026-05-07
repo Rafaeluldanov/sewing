@@ -160,7 +160,24 @@ function makeIssue(
       cellId: null,
       cellCode: null,
       comment: null,
+      // План/факт-тесты не моделируют возвраты — net == issued.
+      // Поля добавлены в `MaterialIssueLineDto` итерацией возврата
+      // (см. `packages/shared/src/material-issues.ts`).
+      returnedQty: '0',
+      returnedTotalCost: '0',
+      netIssuedQty: l.issuedQty,
+      netTotalCost: l.totalCost,
     })),
+    // Новые поля у `MaterialIssueDetailDto` (итерация возврата).
+    // Тесты этой итерации считают «расход без возвратов», поэтому
+    // net == gross, returns пустой, returnStatus = NONE.
+    returns: [],
+    returnedTotalCost: '0',
+    netTotalCost: lines
+      .reduce((s, l) => s + Number(l.totalCost), 0)
+      .toString(),
+    returnStatus: 'NONE',
+    source: 'MANUAL',
   };
 }
 

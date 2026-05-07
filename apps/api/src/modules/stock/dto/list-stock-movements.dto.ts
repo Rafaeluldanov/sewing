@@ -7,7 +7,7 @@ import { z } from 'zod';
  *   - `orderId` — через relation `workshopNeed.orderId`;
  *   - `direction` ∈ `IN | OUT`;
  *   - `type` ∈ `PURCHASE_RECEIPT | MATERIAL_ISSUE | ADJUSTMENT |
- *     REVERSAL` (см. `stock.constants.ts`);
+ *     REVERSAL | TRANSFER` (см. `stock.constants.ts`);
  *   - `from` / `to` — ISO-строки даты/времени; парсятся `Zod.datetime()`
  *     для UTC; внутри сервиса конвертируются в `Date`;
  *   - `q` — case-insensitive substring по `comment` движения
@@ -27,6 +27,7 @@ const STOCK_MOVEMENT_TYPES = [
   'MATERIAL_ISSUE',
   'ADJUSTMENT',
   'REVERSAL',
+  'TRANSFER',
 ] as const;
 
 const STOCK_MOVEMENT_DIRECTIONS = ['IN', 'OUT'] as const;

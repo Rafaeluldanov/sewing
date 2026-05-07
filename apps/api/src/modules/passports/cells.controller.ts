@@ -6,6 +6,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
@@ -21,6 +22,21 @@ import { WarehousesService } from '../warehouses/warehouses.service.js';
 import { PassportsService } from './passports.service.js';
 import { renderCellPrintHtml } from './cell-print.js';
 import { buildCellQrPayload } from './qr.js';
+
+/**
+ * Query DTO `GET /api/cells`. Single optional поле `warehouseId` —
+ * additive фильтр, чтобы UI формы «Переместить» получал только ячейки
+ * выбранного склада (см.
+ * `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`).
+ * Историческое поведение (без query → все активные ячейки) не
+ * меняется.
+ */
+const ListCellsQuerySchema = z
+  .object({
+    warehouseId: z.string().trim().min(1).max(64).optional(),
+  })
+  .strict();
+type ListCellsQuery = z.infer<typeof ListCellsQuerySchema>;
 
 /**
  * Резолв ячейки по произвольному коду (QR `cell:{id}`, человекочитаемый
@@ -50,8 +66,10 @@ export class CellsController {
   ) {}
 
   @Get()
-  list() {
-    return this.passports.listCells();
+  list(
+    @Query(new ZodValidationPipe(ListCellsQuerySchema)) query: ListCellsQuery,
+  ) {
+    return this.passports.listCells({ warehouseId: query.warehouseId });
   }
 
   @Get(':id')

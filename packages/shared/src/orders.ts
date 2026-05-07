@@ -371,6 +371,73 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
 };
 
 // ---------------------------------------------------------------------------
+// Materials & hardware cost policy (упрощённый MVP давальческого сырья)
+// ---------------------------------------------------------------------------
+
+/**
+ * Политика учёта материалов и фурнитуры в себестоимости заказа (см.
+ * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+ * `apps/api/src/modules/orders/orders.service.ts`,
+ * `apps/api/src/modules/costs/costs.service.ts`,
+ * `docs/current-state.md §«Давальческое сырьё клиента»`).
+ *
+ *   - `INCLUDE` — материалы и фурнитура учитываются в себестоимости
+ *     заказа и в production cost (default);
+ *   - `EXCLUDE` — давальческое сырьё / фурнитура клиента: расчёт
+ *     потребности и складские движения продолжают работать, но
+ *     MATERIAL / HARDWARE не включаются в себестоимость заказа и
+ *     production cost.
+ */
+export const ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES = [
+  'INCLUDE',
+  'EXCLUDE',
+] as const;
+export const OrderMaterialsAndHardwareCostPolicySchema = z.enum(
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
+);
+export type OrderMaterialsAndHardwareCostPolicy = z.infer<
+  typeof OrderMaterialsAndHardwareCostPolicySchema
+>;
+
+/**
+ * Человекочитаемые лейблы политики. Источник истины для UI форм
+ * (`/admin/orders/new`, `/admin/orders/[id]/edit`) и карточки заказа.
+ */
+export const ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS: Record<
+  OrderMaterialsAndHardwareCostPolicy,
+  string
+> = {
+  INCLUDE: 'Учитывать материалы и фурнитуру',
+  EXCLUDE: 'Не учитывать материалы и фурнитуру',
+};
+
+/**
+ * Backend-приём политики из тела запроса:
+ *   - `'INCLUDE'` / `'EXCLUDE'` — валидные значения;
+ *   - `null` / `undefined` / пустая строка — `INCLUDE` (default).
+ *
+ * Используется в `CreateOrderSchema` / `UpdateOrderSchema`. Семантика
+ * `null → INCLUDE` (а не «не трогать колонку») сознательная — это
+ * upper-level политика заказа, не nullable-поле.
+ */
+const OrderMaterialsAndHardwareCostPolicyField: z.ZodType<
+  OrderMaterialsAndHardwareCostPolicy | undefined
+> = z
+  .preprocess(
+    (v) => {
+      if (v === undefined) return undefined;
+      if (v === null) return 'INCLUDE';
+      if (typeof v === 'string') {
+        const trimmed = v.trim();
+        if (trimmed === '') return 'INCLUDE';
+        return trimmed.toUpperCase();
+      }
+      return v;
+    },
+    OrderMaterialsAndHardwareCostPolicySchema.optional(),
+  ) as unknown as z.ZodType<OrderMaterialsAndHardwareCostPolicy | undefined>;
+
+// ---------------------------------------------------------------------------
 // Request DTO
 // ---------------------------------------------------------------------------
 
@@ -568,6 +635,38 @@ export const CreateOrderSchema = z.object({
    */
   customerUnitPrice: CustomerUnitPriceField,
   customerCurrency: CustomerCurrencyField,
+  /**
+   * Этап «Склад выпуска готовой продукции» (см.
+   * `prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
+   * `OrdersService.create` / `update`,
+   * `docs/current-state.md §«Склад выпуска готовой продукции»`).
+   *
+   * Управленческое поле: id `Warehouse`, на который менеджер
+   * планирует выпустить готовую продукцию (B2B / Marketplace /
+   * Образцы / …). Это НЕ склад материалов — backend никак не
+   * затрагивает `StockBalance` / `StockMovement` / `MaterialIssue` /
+   * `PurchaseReceipt` / `WorkshopNeed`.
+   *
+   * Поле опциональное и nullable: на create `null` / `undefined` →
+   * заказ создаётся без выбранного склада. Если передан непустой
+   * id — backend проверяет existence и `isActive = true`.
+   */
+  finishedGoodsWarehouseId: z.string().min(1).nullable().optional(),
+  /**
+   * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+   * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+   * `OrderMaterialsAndHardwareCostPolicy` выше).
+   *
+   *   - `INCLUDE` — материалы и фурнитура учитываются в себестоимости
+   *     заказа (default);
+   *   - `EXCLUDE` — давальческое сырьё / фурнитура клиента: расчёт
+   *     потребности и складские движения продолжают работать, но
+   *     MATERIAL / HARDWARE не включаются в себестоимость и
+   *     production cost.
+   *
+   * `undefined` / `null` / пустая строка трактуется как `INCLUDE`.
+   */
+  materialsAndHardwareCostPolicy: OrderMaterialsAndHardwareCostPolicyField,
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -689,6 +788,24 @@ export const UpdateOrderSchema = z.object({
    */
   customerUnitPrice: CustomerUnitPriceField,
   customerCurrency: CustomerCurrencyField,
+  /**
+   * Этап «Склад выпуска готовой продукции»: смена / сброс выбранного
+   * склада выпуска. Это управленческое поле — менеджер может править
+   * на любом статусе заказа (без `ORDER_LOCKED` guard), потому что
+   * оно не затрагивает snapshot маршрута / техкарты / план операций.
+   * `undefined` — поле не пришло, не трогать; `null` — сбросить;
+   * непустая строка — переустановить (backend валидирует existence
+   * и `isActive`).
+   */
+  finishedGoodsWarehouseId: z.string().min(1).nullable().optional(),
+  /**
+   * Упрощённый MVP давальческого сырья / фурнитуры клиента — то же
+   * поле, что в `CreateOrderSchema`. Меняется на любом статусе заказа
+   * (это управленческая политика учёта в себестоимости, а не
+   * «опасное» поле). `undefined` — не трогать, `null` / пустая
+   * строка — `INCLUDE`.
+   */
+  materialsAndHardwareCostPolicy: OrderMaterialsAndHardwareCostPolicyField,
   items: z
     .array(CreateOrderItemSchema)
     .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
@@ -928,6 +1045,49 @@ export interface OrderListItemDto {
    */
   customerUnitPrice?: string | number | null;
   customerCurrency?: MoneyCurrency | null;
+
+  /**
+   * Этап «Склад выпуска готовой продукции» (см.
+   * `prisma/schema.prisma::Order.finishedGoodsWarehouseId`).
+   *
+   * Управленческая ссылка на склад, на который менеджер планирует
+   * выпустить готовую продукцию по заказу. Краткий объект
+   * `{ id, name, code }` — для UI списков и карточек, чтобы не
+   * делать дополнительный запрос за именем. `null` означает «не
+   * выбран» (исторические заказы / новый создаваемый заказ без
+   * указания склада).
+   *
+   * Поле сознательно опционально (`?`) — старые потребители без
+   * пересборки shared-пакета продолжают компилироваться. Новые
+   * клиенты получают `null` или объект.
+   */
+  finishedGoodsWarehouseId?: string | null;
+  finishedGoodsWarehouse?: {
+    id: string;
+    name: string;
+    code: string | null;
+  } | null;
+
+  /**
+   * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+   * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+   * `apps/api/src/modules/orders/orders.service.ts`,
+   * `apps/api/src/modules/costs/costs.service.ts`,
+   * `docs/current-state.md §«Давальческое сырьё клиента»`).
+   *
+   *   - `INCLUDE` — материалы и фурнитура учитываются в себестоимости
+   *     заказа и в production cost (default);
+   *   - `EXCLUDE` — давальческое сырьё / фурнитура клиента: расчёт
+   *     потребности и складские движения продолжают работать, но
+   *     MATERIAL / HARDWARE не включаются в себестоимость заказа и
+   *     production cost.
+   *
+   * Поле сознательно опционально (`?`) — старые потребители без
+   * пересборки shared-пакета продолжают компилироваться. Backend
+   * всегда отдаёт значение (default `INCLUDE` для исторических
+   * заказов после миграции).
+   */
+  materialsAndHardwareCostPolicy?: OrderMaterialsAndHardwareCostPolicy;
 
   /**
    * Этап 2 «План операций на заказе» (см.

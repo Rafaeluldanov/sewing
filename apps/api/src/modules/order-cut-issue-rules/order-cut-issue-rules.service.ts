@@ -505,10 +505,25 @@ export class OrderCutIssueRulesService {
     issuedQtyBefore: number;
     sizeCode: string;
   } | null> {
-    const isFirstRouteStep = passport.currentRouteStepIndex === 0;
     const isCuttingOperation = operationCategory === OperationCategory.CUTTING;
-    if (!isFirstRouteStep && !isCuttingOperation) {
-      return null;
+    if (!isCuttingOperation) {
+      // Не-CUTTING операция: правило применяется если паспорт сейчас на
+      // ПЕРВОМ не-CUTTING шаге маршрута заказа (handoff из раскройного
+      // цеха в швейный поток — например, ОВР/ФУЛ). На полностью
+      // CUTTING-маршрутах сюда не попадаем (isCutting=true выше).
+      // На «sewing-only» маршрутах первый не-CUTTING шаг = index 0.
+      if (passport.currentRouteStepIndex === null) return null;
+      const firstNonCutting = await this.prisma.orderRouteStep.findFirst({
+        where: {
+          orderId: passport.orderId,
+          operation: { category: { not: OperationCategory.CUTTING } },
+        },
+        select: { index: true },
+        orderBy: { index: 'asc' },
+      });
+      if (firstNonCutting?.index !== passport.currentRouteStepIndex) {
+        return null;
+      }
     }
 
     const activeRows = await this.prisma.orderCutIssueRule.findMany({
@@ -859,15 +874,31 @@ export class OrderCutIssueRulesService {
     if (isCutting) {
       allowedOrderIds = new Set(byOrder.keys());
     } else {
-      const firstSteps = await this.prisma.orderRouteStep.findMany({
-        where: {
-          orderId: { in: [...byOrder.keys()] },
-          index: 0,
-          operationId,
+      // Для не-CUTTING операции баннер показываем, если эта операция —
+      // первый не-CUTTING шаг маршрута заказа (handoff из раскройного
+      // цеха в швейный поток). Симметрично `evaluateForIssue`. Покрывает
+      // и «sewing-only» маршруты (первый шаг — наш SEWING), и связки
+      // CUT → CUT_DIVISION → SEWING.
+      const orderIds = [...byOrder.keys()];
+      const steps = await this.prisma.orderRouteStep.findMany({
+        where: { orderId: { in: orderIds } },
+        select: {
+          orderId: true,
+          operationId: true,
+          operation: { select: { category: true } },
         },
-        select: { orderId: true },
+        orderBy: [{ orderId: 'asc' }, { index: 'asc' }],
       });
-      allowedOrderIds = new Set(firstSteps.map((s) => s.orderId));
+      const firstNonCuttingOpByOrder = new Map<string, string>();
+      for (const s of steps) {
+        if (s.operation.category === OperationCategory.CUTTING) continue;
+        if (firstNonCuttingOpByOrder.has(s.orderId)) continue;
+        firstNonCuttingOpByOrder.set(s.orderId, s.operationId);
+      }
+      allowedOrderIds = new Set();
+      for (const [oid, opId] of firstNonCuttingOpByOrder) {
+        if (opId === operationId) allowedOrderIds.add(oid);
+      }
     }
     if (allowedOrderIds.size === 0) {
       return { applicable: false, orders: [] };
