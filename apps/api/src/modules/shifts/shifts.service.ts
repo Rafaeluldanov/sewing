@@ -15,6 +15,7 @@ import {
   OperationNotFoundException,
   ShiftAlreadyActiveException,
   ShiftNotActiveException,
+  ShiftOperationNotAllowedForEquipmentException,
 } from '../../common/errors.js';
 import { SalaryService } from '../salary/salary.service.js';
 
@@ -51,6 +52,24 @@ export class ShiftsService {
     if (!equipment.active) throw new EquipmentInactiveException();
     if (!operation) throw new OperationNotFoundException();
     if (!operation.active) throw new OperationInactiveException();
+
+    // Allow-list `EquipmentOperation` (ADR-0017). Источник правды
+    // тот же, что у `getMeta`: связь должна существовать и быть
+    // `isActive=true`. Без этой проверки backend пропускал любую
+    // активную операцию на любом активном оборудовании, в обход
+    // UI-фильтра /shifts/meta. Закрывает finding из
+    // `docs/operations-test-findings.md` (`ShiftsService.start`).
+    const allowed = await this.prisma.equipmentOperation.findFirst({
+      where: {
+        equipmentId: dto.equipmentId,
+        operationId: dto.operationId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+    if (!allowed) {
+      throw new ShiftOperationNotAllowedForEquipmentException();
+    }
 
     const current = await this.findActiveByEmployee(dto.employeeId);
     if (current) throw new ShiftAlreadyActiveException();

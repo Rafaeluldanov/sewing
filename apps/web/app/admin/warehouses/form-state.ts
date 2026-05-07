@@ -41,8 +41,8 @@ export const initialCreateLineState: CreateLineState = {};
 
 /**
  * Состояние «удаление линии». UI показывает сообщение при
- * `WAREHOUSE_LINE_HAS_CONTENT` — backend уже формирует
- * человекочитаемый текст с кодами «занятых» ячеек.
+ * `WAREHOUSE_LINE_HAS_CONTENT` (есть «занятые» ячейки) — backend
+ * уже формирует человекочитаемый текст с кодами.
  */
 export interface DeleteLineState {
   ok?: boolean;
@@ -75,3 +75,25 @@ export interface StockAdjustmentState {
 }
 
 export const initialStockAdjustmentState: StockAdjustmentState = {};
+
+/**
+ * Состояние формы «Переместить» (`/admin/warehouses?tab=balances` →
+ * кнопка «Переместить», см.
+ * `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+ * `createStockTransferAction` в `./actions.ts`).
+ *
+ * `code` нужен, чтобы UI отдельно отрисовывал нехватку остатка
+ * (`MATERIAL_STOCK_INSUFFICIENT`) и `STOCK_TRANSFER_SAME_LOCATION`
+ * от прочих 4xx/5xx — текст уже формируется backend-ом.
+ */
+export interface StockTransferState {
+  ok?: boolean;
+  error?: string;
+  /** Машинный код ошибки backend — UI может ветвить отображение. */
+  code?: string;
+  errorRequestId?: string;
+  /** Id transfer-а (=clientRequestId) — полезно для тестов / автоматики. */
+  transferId?: string;
+}
+
+export const initialStockTransferState: StockTransferState = {};

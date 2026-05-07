@@ -47,8 +47,40 @@ import type {
   MaterialIssueStatus,
 } from '@sewing/shared/material-issues';
 import type { OrderCostEstimateDto } from '@sewing/shared/order-cost-estimates';
+import type { OrderMaterialsAndHardwareCostPolicy } from '@sewing/shared/orders';
 import type { OrderMaterialTableRow } from '@/components/orders/materials/build-order-material-rows';
 import type { OrderOperationTableRow } from '@/components/orders/operations/build-order-operation-rows';
+
+/**
+ * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+ * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+ * `docs/current-state.md §«Давальческое сырьё клиента»`).
+ *
+ * Если у заказа `materialsAndHardwareCostPolicy = 'EXCLUDE'`, секции
+ * MATERIAL и HARDWARE не должны попадать в финансовую сводку: план,
+ * факт, дельта по этим секциям становятся `0` / `null`, в UI колонке
+ * «Сумма за тираж» показываем «не учитывается». APPLICATION (нанесение)
+ * и OTHER не затрагиваются — это услуги/нанесения компании, они
+ * остаются в себестоимости как раньше.
+ */
+const EXCLUDED_SECTIONS_FOR_GIVEN_MATERIAL: ReadonlySet<OrderSummarySection> =
+  new Set(['MATERIAL', 'HARDWARE']);
+
+/** Помощник: эта строка должна игнорироваться в финансовой сводке? */
+function isFinanciallyExcludedRow(
+  row: { section: OrderSummarySection; sourceKind: 'material' | 'operation' },
+  policy: OrderMaterialsAndHardwareCostPolicy,
+): boolean {
+  return (
+    policy === 'EXCLUDE' &&
+    row.sourceKind === 'material' &&
+    EXCLUDED_SECTIONS_FOR_GIVEN_MATERIAL.has(row.section)
+  );
+}
+
+/** Лейбл, который мы показываем в колонке «Сумма за тираж» / комментарии,
+ *  когда строка финансово исключена политикой EXCLUDE. */
+export const ORDER_MATERIALS_AND_HARDWARE_EXCLUDED_LABEL = 'не учитывается';
 
 /** UI-секции единой таблицы «Сводно по заказу». */
 export type OrderSummarySection =
@@ -382,6 +414,18 @@ interface BuildOrderSummaryRowsInput {
   currentCostEstimate?: OrderCostEstimateDto | null;
   /** Тираж заказа — для расчёта `unitCostRub` каждой строки. */
   qtyTotal: number;
+  /**
+   * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+   * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+   * `OrderDetailDto.materialsAndHardwareCostPolicy`).
+   *
+   * `EXCLUDE` обнуляет финансовый вклад строк MATERIAL / HARDWARE
+   * (план/факт/дельта = 0/null, в UI «не учитывается»). Количество
+   * план/факт остаётся — клиенту всё ещё нужно сообщить, сколько
+   * материалов и фурнитуры требуется. Default `INCLUDE` — старая
+   * семантика, материалы и фурнитура учитываются как раньше.
+   */
+  materialsAndHardwareCostPolicy?: OrderMaterialsAndHardwareCostPolicy;
 }
 
 /**
@@ -404,6 +448,7 @@ export function buildOrderSummaryRows(
     operationRows,
     currentCostEstimate = null,
     qtyTotal,
+    materialsAndHardwareCostPolicy = 'INCLUDE',
   } = input;
 
   const materialRowsActive = materialRows.filter(
@@ -422,6 +467,23 @@ export function buildOrderSummaryRows(
     const summaryRow = buildMaterialRow(r, {
       estimate: currentCostEstimate,
     });
+    // Упрощённый MVP давальческого сырья: если политика заказа
+    // `EXCLUDE`, и строка относится к MATERIAL / HARDWARE — финансовый
+    // вклад обнуляем (план = `null`, RUB = `null`, display = «не
+    // учитывается»). Количество и единица измерения сохраняются —
+    // менеджер всё равно видит, сколько надо.
+    if (
+      isFinanciallyExcludedRow(summaryRow, materialsAndHardwareCostPolicy)
+    ) {
+      summaryRow.totalRub = null;
+      summaryRow.totalDisplay = ORDER_MATERIALS_AND_HARDWARE_EXCLUDED_LABEL;
+      summaryRow.unitCostRub = null;
+      const note =
+        'Не учитывается в себестоимости — давальческое сырьё / фурнитура клиента';
+      if (!summaryRow.warnings.includes(note)) {
+        summaryRow.warnings = [...summaryRow.warnings, note];
+      }
+    }
     buckets[summaryRow.section].push(summaryRow);
   }
   for (const r of operationRows) {
@@ -443,6 +505,8 @@ export function buildOrderSummaryRows(
   }
 
   // unitCostRub считаем после сборки — нужен `qtyTotal` заказа.
+  // EXCLUDE-строки уже имеют `totalRub === null`, поэтому условие
+  // ниже их пропустит автоматически — `unitCostRub` останется null.
   if (qtyTotal > 0) {
     for (const r of rows) {
       if (r.totalRub != null) {
@@ -553,6 +617,19 @@ interface ComputeTotalsInput {
    * сводка показывает `0 ₽`.
    */
   materialIssues?: MaterialIssueListItemDto[];
+  /**
+   * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+   * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+   * `OrderDetailDto.materialsAndHardwareCostPolicy`).
+   *
+   * `EXCLUDE` обнуляет финансовый план и факт по материалам и
+   * фурнитуре: `byKind.material` / `byKind.hardware` =
+   * `0`/`null`-aware ноль, `materialActualCostRub = 0`,
+   * `materialDeltaCostRub = null`. В warnings добавляется
+   * «Материалы и фурнитура не учитываются в себестоимости».
+   * Default `INCLUDE` — старая логика без изменений.
+   */
+  materialsAndHardwareCostPolicy?: OrderMaterialsAndHardwareCostPolicy;
 }
 
 export function computeOrderSummaryTotals(
@@ -566,7 +643,10 @@ export function computeOrderSummaryTotals(
     operationPlanIsStale,
     hasCompletedEstimate,
     materialIssues,
+    materialsAndHardwareCostPolicy = 'INCLUDE',
   } = input;
+  const isMaterialsAndHardwareExcluded =
+    materialsAndHardwareCostPolicy === 'EXCLUDE';
 
   const byKind: OrderSummaryTotals['byKind'] = {
     material: null,
@@ -623,26 +703,47 @@ export function computeOrderSummaryTotals(
       ? costTotalRub / qtyTotal
       : null;
 
-  // Фактическая стоимость материалов: Σ MaterialIssue.totalCost по
-  // POSTED-документам. Источник истины — `MaterialIssue.totalCost`,
-  // не пересчёт строк (см. ТЗ: `passportId` / `workshopNeedId` тут
-  // не требуются). DRAFT / CANCELLED игнорируем.
+  // Фактическая стоимость материалов: Σ MaterialIssue.netTotalCost по
+  // POSTED-документам — то есть `totalCost − returnedTotalCost`. Это
+  // нетто-факт по заказу: возвраты `MaterialIssueReturn` (POSTED)
+  // вычитают свою часть из исходного `MaterialIssue.totalCost`,
+  // потому что физически материал вернулся на склад. Источник
+  // истины — `MaterialIssueListItemDto.netTotalCost` (backend уже
+  // считает его в `MaterialIssuesService.toListItem`); fallback на
+  // `totalCost` для совместимости со старыми клиентами/тестами,
+  // которые ещё не отдают `netTotalCost`. DRAFT / CANCELLED
+  // игнорируем (как и раньше).
   let materialActualCostRub: number | null = null;
   if (materialIssues !== undefined) {
     let actualSum = 0;
     for (const issue of materialIssues) {
       if ((issue.status as MaterialIssueStatus) !== 'POSTED') continue;
-      const n = Number(issue.totalCost);
-      if (Number.isFinite(n)) actualSum += n;
+      const netRaw = (issue as { netTotalCost?: string | null }).netTotalCost;
+      const candidate = netRaw !== undefined && netRaw !== null
+        ? Number(netRaw)
+        : Number(issue.totalCost);
+      if (Number.isFinite(candidate)) actualSum += candidate;
     }
     materialActualCostRub = actualSum;
+  }
+  // Упрощённый MVP давальческого сырья / фурнитуры клиента: при
+  // `EXCLUDE` финансовая сводка по материалам обнуляется. План
+  // (`byKind.material` / `byKind.hardware`) уже занулён выше, потому
+  // что строки вошли с `totalRub === null`. Факт `materialActualCostRub`
+  // и дельту здесь принудительно сводим к 0 / null:
+  //   - факт = `0` (документы расхода в БД не меняются — это только
+  //     UI-агрегация);
+  //   - дельта = `null` (план неизвестен → разница не имеет смысла).
+  if (isMaterialsAndHardwareExcluded) {
+    materialActualCostRub = 0;
   }
   // Δ = факт - план. Если план неизвестен (нет ни одной MATERIAL
   // строки в RUB) — отклонение тоже неизвестно, иначе UI показал
   // бы фейковый «перерасход» на всю фактическую сумму.
   const plannedMaterialCostRub = byKind.material;
-  const materialDeltaCostRub =
-    materialActualCostRub != null && plannedMaterialCostRub != null
+  const materialDeltaCostRub = isMaterialsAndHardwareExcluded
+    ? null
+    : materialActualCostRub != null && plannedMaterialCostRub != null
       ? materialActualCostRub - plannedMaterialCostRub
       : null;
 
@@ -686,13 +787,19 @@ export function computeOrderSummaryTotals(
 
   // Order-level warnings.
   const warnings: string[] = [];
+  // Упрощённый MVP давальческого сырья / фурнитуры клиента: бейдж в
+  // самом верху списка, чтобы менеджер сразу видел, почему план/факт
+  // по материалам и фурнитуре в финансовой сводке = 0/—.
+  if (isMaterialsAndHardwareExcluded) {
+    warnings.push('Материалы и фурнитура не учитываются в себестоимости');
+  }
   if (qtyTotal <= 0) {
     warnings.push('Не заполнен тираж');
   }
-  if (hasUsdMissingRate) {
+  if (hasUsdMissingRate && !isMaterialsAndHardwareExcluded) {
     warnings.push('Есть строки в USD без курса — сумма в рублях не считается');
   }
-  if (hasMissingPrice) {
+  if (hasMissingPrice && !isMaterialsAndHardwareExcluded) {
     warnings.push('Есть материалы без цены');
   }
   if (hasOperationFallback) {
@@ -708,8 +815,12 @@ export function computeOrderSummaryTotals(
   } else if (customerCurrencyResolved === 'USD') {
     warnings.push('Маржа не рассчитана: цена продажи в USD без курса');
   }
+  // Если материалы и фурнитура исключены политикой — статус «расчёт
+  // себестоимости не завершён» теряет смысл (в неё материалов и так
+  // не должно быть).
   if (
     !hasCompletedEstimate &&
+    !isMaterialsAndHardwareExcluded &&
     rows.some((r) => r.sourceKind === 'material')
   ) {
     warnings.push('Расчёт себестоимости не завершён');

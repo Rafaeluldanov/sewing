@@ -91,9 +91,23 @@ export async function deletePassport(id: string): Promise<void> {
   });
 }
 
-export function listCells(): Promise<CellDetailDto[]> {
+/**
+ * `GET /api/cells` — read-only список активных ячеек.
+ *
+ * Опциональный `warehouseId`-фильтр (см.
+ * `apps/api/src/modules/passports/cells.controller.ts`,
+ * `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`):
+ *   - не передан → все активные ячейки (исторический контракт);
+ *   - передан → только ячейки этого склада.
+ */
+export function listCells(query: {
+  warehouseId?: string;
+} = {}): Promise<CellDetailDto[]> {
   return apiFetch<CellDetailDto[]>('/cells', {
     next: { revalidate: 60, tags: ['cells'] },
+    searchParams: {
+      warehouseId: query.warehouseId,
+    },
   });
 }
 

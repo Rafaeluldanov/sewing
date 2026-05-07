@@ -16,6 +16,10 @@ import {
   type CreateStockAdjustmentDto,
 } from './dto/create-stock-adjustment.dto.js';
 import {
+  CreateStockTransferSchema,
+  type CreateStockTransferDto,
+} from './dto/create-stock-transfer.dto.js';
+import {
   ListStockBalancesQuerySchema,
   type ListStockBalancesQuery,
 } from './dto/list-stock-balances.dto.js';
@@ -32,18 +36,20 @@ import { StockService } from './stock.service.js';
  * `docs/api.md §«Stock»`).
  *
  *   GET  /api/stock/balances     — текущие остатки по `WorkshopNeed`;
- *   GET  /api/stock/movements    — журнал движений (IN / OUT / REVERSAL / ADJUSTMENT);
+ *   GET  /api/stock/movements    — журнал движений (IN / OUT / REVERSAL / ADJUSTMENT / TRANSFER);
  *   POST /api/stock/adjustments  — ручная корректировка остатка
- *                                  (`StockMovement` `type = ADJUSTMENT`).
+ *                                  (`StockMovement` `type = ADJUSTMENT`);
+ *   POST /api/stock/transfers    — перемещение остатка между складами /
+ *                                  ячейками (пара `StockMovement`
+ *                                  `type = TRANSFER` `OUT` + `IN`).
  *
- * На этой итерации добавлен ровно один mutation-эндпоинт —
- * `POST /api/stock/adjustments`. Запись остатков по `PurchaseReceipt`
- * (POSTED → IN, cancel → REVERSAL OUT) и `MaterialIssue` (POSTED → OUT,
- * включая `AUTO_CUT_ISSUE`) по-прежнему идёт неявно, в той же
- * транзакции, что и бизнес-документ — `StockService.applyMovementInTx`
- * из `PurchaseReceiptsService` / `MaterialIssuesService`. Никаких
- * transfer / FIFO/LIFO / `MaterialStockLot` / master-`Material` не
- * вводим (см. ТЗ).
+ * Запись остатков по `PurchaseReceipt` (POSTED → IN, cancel → REVERSAL
+ * OUT) и `MaterialIssue` (POSTED → OUT, включая `AUTO_CUT_ISSUE`)
+ * по-прежнему идёт неявно, в той же транзакции, что и бизнес-документ
+ * — `StockService.applyMovementInTx` из `PurchaseReceiptsService` /
+ * `MaterialIssuesService`. FIFO/LIFO / `MaterialStockLot` /
+ * master-`Material` / отдельной модели `StockTransfer` сознательно
+ * НЕ вводим (см. ТЗ).
  *
  * RBAC: `@Roles('ADMIN', 'SHOP_MANAGER')`. Новые складские/закупочные/
  * бухгалтерские роли на этой итерации не вводятся — уровень доступа
@@ -98,5 +104,37 @@ export class StockController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.stock.createAdjustment(body, user.employeeId);
+  }
+
+  /**
+   * Перемещение остатка между складами / ячейками. Пишет пару
+   * `StockMovement` `type = TRANSFER` (`OUT` из источника + `IN` в
+   * назначение) и audit `STOCK_TRANSFER_CREATED` в одной транзакции
+   * (см. `StockService.createTransfer`,
+   * `apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`,
+   * UI — `/admin/warehouses?tab=balances`, кнопка «Переместить»).
+   *
+   * Контракт MVP-итерации:
+   *   - transfer всегда strict — недостаток источника отдаёт 409
+   *     `MATERIAL_STOCK_INSUFFICIENT`. `allowNegativeMaterialStock`
+   *     НЕ используется;
+   *   - same source/destination → 409 `STOCK_TRANSFER_SAME_LOCATION`;
+   *   - идемпотентность по `clientRequestId`: повторный submit с тем
+   *     же `clientRequestId` возвращает существующую пару движений и
+   *     не апдейтит балансы повторно;
+   *   - response — `{ transferId, outMovement, inMovement }` в shape
+   *     `StockMovementListItem`. `sourceKey` сознательно НЕ отдаём
+   *     (см. `StockService.toStockMovementListItem`);
+   *   - НЕ создаём отдельную модель `StockTransfer`; transfer
+   *     представлен парой `StockMovement` `type = TRANSFER`.
+   */
+  @Post('transfers')
+  @HttpCode(HttpStatus.CREATED)
+  createTransfer(
+    @Body(new ZodValidationPipe(CreateStockTransferSchema))
+    body: CreateStockTransferDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.stock.createTransfer(body, user.employeeId);
   }
 }

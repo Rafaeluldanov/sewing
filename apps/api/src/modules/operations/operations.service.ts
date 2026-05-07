@@ -158,6 +158,7 @@ export class OperationsService {
             timeNormSec,
             salaryPlanRubPerShift,
             salaryPlanShiftSeconds,
+            producesFinishedGoods: dto.producesFinishedGoods ?? false,
           },
         });
         if (dto.pricingMode === 'BY_SIZE' && dto.ratesBySize?.length) {
@@ -307,6 +308,18 @@ export class OperationsService {
           // была проставлена — подставляем default, чтобы расчёт
           // плана сразу заработал.
           data.salaryPlanShiftSeconds = 28800;
+        }
+
+        // Признак «операция выпускает готовую продукцию» (см.
+        // `prisma/schema.prisma::Operation.producesFinishedGoods`,
+        // `FinishedGoodsService.recordPassportOutputInTx`). Принимает
+        // `true` / `false`; не пришло — поле не трогаем. Уже выпущенные
+        // паспорты не пересоздаются: идемпотентность по
+        // `sourceKey = PACKED_PASSPORT:<passportId>` гарантирует
+        // ровно одно `FinishedGoodsMovement PRODUCTION_RECEIPT IN`
+        // на паспорт.
+        if (dto.producesFinishedGoods !== undefined) {
+          data.producesFinishedGoods = dto.producesFinishedGoods;
         }
 
         await tx.operation.update({ where: { id }, data });
@@ -554,6 +567,7 @@ export class OperationsService {
       timeNormSec: number | null;
       salaryPlanRubPerShift: Prisma.Decimal | null;
       salaryPlanShiftSeconds: number | null;
+      producesFinishedGoods: boolean;
     },
     ratesBySizeCount: number,
     timeNormsBySizeCount: number,
@@ -577,6 +591,7 @@ export class OperationsService {
         ? Number(row.salaryPlanRubPerShift.toFixed(2))
         : null,
       salaryPlanShiftSeconds: row.salaryPlanShiftSeconds ?? null,
+      producesFinishedGoods: row.producesFinishedGoods,
     };
   }
 

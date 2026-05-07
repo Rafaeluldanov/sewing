@@ -355,6 +355,10 @@ export class WarehousesService {
    * `StockBalance` с `qty == 0` — все имеют `onDelete: SetNull` и
    * безопасны: cellId/lineId обнулятся, документы останутся.
    *
+   * Удаление выполняется в одной транзакции: сначала ячейки линии
+   * (по одной — `deleteMany` не понадобится, ячеек ≤ 200), затем сама
+   * линия. `lineId` у ячеек обнулять не нужно — мы их удаляем целиком.
+   *
    * Ошибки:
    *   - 404 `WAREHOUSE_NOT_FOUND`        — склада нет;
    *   - 404 `WAREHOUSE_LINE_NOT_FOUND`   — линии нет или она у другого склада;
@@ -375,6 +379,10 @@ export class WarehousesService {
       throw new WarehouseLineNotFoundException();
     }
 
+    // Берём ячейки линии вместе с признаками занятости. `_count`
+    // покрывает CellContent / currentPassports / events; для
+    // StockBalance с `qty > 0` нужен явный where, поэтому
+    // подгружаем балансы и фильтруем в JS.
     const cells = await this.prisma.cell.findMany({
       where: { lineId },
       select: {
@@ -396,9 +404,7 @@ export class WarehousesService {
       const hasContent = c._count.contents > 0;
       const hasPassport = c._count.currentPassports > 0;
       const hasEvents = c._count.events > 0;
-      const hasStock = c.stockBalances.some(
-        (b: { qty: Prisma.Decimal | number | string }) => Number(b.qty) > 0,
-      );
+      const hasStock = c.stockBalances.some((b) => Number(b.qty) > 0);
       if (hasContent || hasPassport || hasEvents || hasStock) {
         busyCodes.push(c.code);
       }
@@ -523,7 +529,8 @@ export class WarehousesService {
 
   /**
    * Печать всех активных ячеек одной линии (per-line вариант
-   * `printAllCells`). Принтер/копии/размер — те же поля.
+   * `printAllCells`). Принтер/копии/размер — те же поля, что и в
+   * массовой печати склада.
    *
    * Ошибки:
    *   - 404 `WAREHOUSE_NOT_FOUND`              — склада нет;

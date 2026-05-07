@@ -198,10 +198,26 @@ export class OrderCostEstimatesService {
       };
     });
 
-    const totalCostRub = computed.reduce(
-      (acc, c) => acc.add(c.lineTotalRub),
-      new Prisma.Decimal(0),
-    );
+    // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+    // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+    // `docs/current-state.md §«Давальческое сырьё клиента»`).
+    // Если у заказа политика `EXCLUDE`, строки MATERIAL и HARDWARE
+    // не участвуют в totalCostRub. APPLICATION (нанесение) и OTHER
+    // продолжают учитываться — это услуги/нанесения компании.
+    // Сами строки сохраняются как есть (со своим `lineTotalRub`),
+    // чтобы план/факт по количеству и snapshot для аудита остались
+    // полные. Меняется только финансовый итог заказа.
+    const isMaterialsAndHardwareExcluded =
+      (order.materialsAndHardwareCostPolicy ?? 'INCLUDE') === 'EXCLUDE';
+    const totalCostRub = computed.reduce((acc, c) => {
+      if (
+        isMaterialsAndHardwareExcluded &&
+        (c.kind === 'MATERIAL' || c.kind === 'HARDWARE')
+      ) {
+        return acc;
+      }
+      return acc.add(c.lineTotalRub);
+    }, new Prisma.Decimal(0));
 
     // Транзакция: создаём estimate + lines, обновляем snapshot-поля
     // заказа и переводим статус. Аудит — двумя строками

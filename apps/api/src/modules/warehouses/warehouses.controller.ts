@@ -146,6 +146,11 @@ export class WarehousesController {
    * Печать всех активных ячеек одной линии — per-line вариант
    * `printAllCells`. Те же поля (`printerId`/`copies`/`labelSize`),
    * та же сводка в ответе.
+   *
+   * Ошибки:
+   *   - 404 `WAREHOUSE_NOT_FOUND` / `WAREHOUSE_LINE_NOT_FOUND`
+   *   - 409 `PRINTER_INACTIVE` / `WAREHOUSE_LINE_NO_CELLS_TO_PRINT`
+   *   - 404 `PRINTER_NOT_FOUND`
    */
   @Post(':id/lines/:lineId/print-cells')
   printLineCells(

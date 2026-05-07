@@ -18,13 +18,22 @@ import { apiFetch } from './api';
  * Запрос к `GET /api/stock/balances` (см. `ListStockBalancesQuerySchema`
  * в `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`).
  *
- * На этой UI-итерации фильтр держим минимальным: `q` + три
- * взаимоисключающих флага + pagination. `warehouseId` / `cellId` /
- * `materialRole` / `unit` сознательно не прокидываем, чтобы не
- * усложнять MVP UI «Складов» multi-warehouse-логикой.
+ * Фильтр UI-итерации «Фильтры склада» (см.
+ * `apps/web/components/warehouses/stock/stock-balances-filters.tsx`,
+ * `apps/web/app/admin/warehouses/page.tsx`):
+ *   - `q` — поиск (description / WorkshopNeed.description / sourceName);
+ *   - `warehouseId` — точечный фильтр по складу;
+ *   - три взаимоисключающих флага состояния остатка
+ *     (`positiveOnly` / `negativeOnly` / `zeroOnly`) — UI выбирает
+ *     ровно один через единый `stockState` selectbox;
+ *   - `limit` / `offset` — pagination.
+ *
+ * `cellId` / `materialRole` / `unit` сознательно не прокидываем —
+ * UI этой итерации работает на уровне склада.
  */
 export interface ListStockBalancesQuery {
   q?: string;
+  warehouseId?: string;
   positiveOnly?: boolean;
   negativeOnly?: boolean;
   zeroOnly?: boolean;
@@ -34,14 +43,27 @@ export interface ListStockBalancesQuery {
 
 /**
  * Запрос к `GET /api/stock/movements` (см. `ListStockMovementsQuerySchema`).
- * `direction` / `type` оставлены как минимально полезные фильтры
- * для журнала движений; `warehouseId` / `cellId` / `from` / `to`
- * не прокидываем.
+ *
+ * Фильтр UI-итерации «Фильтры склада» (см.
+ * `apps/web/components/warehouses/stock/stock-movements-filters.tsx`):
+ *   - `q` — substring по `comment` движения;
+ *   - `warehouseId` — точечный фильтр по складу;
+ *   - `type` — `PURCHASE_RECEIPT | MATERIAL_ISSUE | ADJUSTMENT |
+ *     REVERSAL | TRANSFER`;
+ *   - `direction` — `IN | OUT`;
+ *   - `from` / `to` — диапазон по `createdAt` (ISO-строка / `YYYY-MM-DD`).
+ *
+ * `cellId` / `sourceType` / `sourceId` / `purchaseReceiptId` / прочие
+ * id-фильтры backend-DTO сознательно не прокидываем — UI этой
+ * итерации работает на уровне склада, не на уровне источника.
  */
 export interface ListStockMovementsQuery {
   q?: string;
+  warehouseId?: string;
   type?: StockMovementType;
   direction?: StockMovementDirection;
+  from?: string;
+  to?: string;
   limit?: number;
   offset?: number;
 }
@@ -58,7 +80,8 @@ export type StockMovementType =
   | 'PURCHASE_RECEIPT'
   | 'MATERIAL_ISSUE'
   | 'ADJUSTMENT'
-  | 'REVERSAL';
+  | 'REVERSAL'
+  | 'TRANSFER';
 
 export interface StockBalanceListItem {
   id: string;
@@ -93,6 +116,10 @@ export interface StockMovementListItem {
   workshopNeedId: string;
   orderId?: string | null;
   orderNumber?: string | null;
+  /** `Order.clientId` — управленческая привязка к карточке клиента. */
+  clientId?: string | null;
+  /** `Client.name` — отображается в UI колонкой «Заказчик». */
+  clientName?: string | null;
   type: string;
   direction: StockMovementDirection;
   warehouseId?: string | null;
@@ -141,6 +168,7 @@ export function listStockBalances(
     cache: 'no-store',
     searchParams: {
       q: query.q,
+      warehouseId: query.warehouseId,
       // Backend ZodValidationPipe принимает 'true' | 'false' | '1' | '0';
       // отправляем строку только когда флаг явно true — так UI не
       // конфликтует с superRefine «mutually exclusive».
@@ -160,8 +188,11 @@ export function listStockMovements(
     cache: 'no-store',
     searchParams: {
       q: query.q,
+      warehouseId: query.warehouseId,
       type: query.type,
       direction: query.direction,
+      from: query.from,
+      to: query.to,
       limit: query.limit,
       offset: query.offset,
     },
@@ -190,16 +221,66 @@ export interface CreateStockAdjustmentDto {
 }
 
 /**
- * `POST /api/stock/adjustments` — единственная mutation в API склада
- * на этой итерации. Возвращает созданное (или ранее существовавшее
- * при идемпотентном повторе) `StockMovement` в shape
- * `StockMovementListItem`. `sourceKey` сознательно НЕ возвращается
- * (см. `StockService.toStockMovementListItem`).
+ * `POST /api/stock/adjustments` — ручная корректировка остатка.
+ * Возвращает созданное (или ранее существовавшее при идемпотентном
+ * повторе) `StockMovement` в shape `StockMovementListItem`. `sourceKey`
+ * сознательно НЕ возвращается (см. `StockService.toStockMovementListItem`).
  */
 export function createStockAdjustment(
   body: CreateStockAdjustmentDto,
 ): Promise<StockMovementListItem> {
   return apiFetch<StockMovementListItem>('/stock/adjustments', {
+    method: 'POST',
+    body,
+  });
+}
+
+/**
+ * Body для `POST /api/stock/transfers` — перемещение остатка между
+ * складами / ячейками из UI `/admin/warehouses?tab=balances`,
+ * кнопка «Переместить» (см.
+ * `apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`).
+ *
+ * `workshopNeedId`, `unit`, `unitCost`, `description` сервис берёт из
+ * исходного `StockBalance` — клиент их не присылает.
+ *
+ * `clientRequestId` опционален; если передан — становится частью
+ * пары идемпотентных `sourceKey`-ключей в `StockMovement`
+ * (`STOCK_TRANSFER:<id>:OUT` / `STOCK_TRANSFER:<id>:IN`). UI всё равно
+ * присылает `clientRequestId`, чтобы повторный submit при двойном
+ * клике / network retry не задвоил движения.
+ */
+export interface CreateStockTransferDto {
+  fromStockBalanceId: string;
+  toWarehouseId?: string | null;
+  toCellId?: string | null;
+  qty: string | number;
+  comment: string;
+  clientRequestId?: string;
+}
+
+/**
+ * Ответ `POST /api/stock/transfers` — пара движений `type = TRANSFER`
+ * + сам `transferId` (идентификатор пары, совпадает с
+ * `clientRequestId`). `sourceKey` сознательно НЕ возвращается.
+ */
+export interface CreateStockTransferResponse {
+  transferId: string;
+  outMovement: StockMovementListItem;
+  inMovement: StockMovementListItem;
+}
+
+/**
+ * `POST /api/stock/transfers` — перемещение остатка склад-в-склад /
+ * ячейка-в-ячейка. Создаёт пару `StockMovement` `type = TRANSFER`
+ * (`OUT` из источника + `IN` в назначение) в одной транзакции;
+ * `sourceKey` для обоих движений строится по `clientRequestId`,
+ * поэтому повторный submit идемпотентен.
+ */
+export function createStockTransfer(
+  body: CreateStockTransferDto,
+): Promise<CreateStockTransferResponse> {
+  return apiFetch<CreateStockTransferResponse>('/stock/transfers', {
     method: 'POST',
     body,
   });

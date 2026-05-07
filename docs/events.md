@@ -349,8 +349,10 @@ WORKSHOP_NEED | SUPPLIER |
 PURCHASE_ORDER | PURCHASE_RECEIPT |
 ORDER_APPLICATION | ORDER_COST_ESTIMATE |
 ORDER_MATERIAL_ARRIVAL_OVERRIDE |
-MATERIAL_ISSUE |
+MATERIAL_ISSUE | MATERIAL_ISSUE_RETURN |
 STOCK_MOVEMENT |
+FINISHED_GOODS_MOVEMENT |
+FINISHED_GOODS_SHIPMENT |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY | PAYROLL_PAYOUT |
@@ -402,6 +404,116 @@ runtime-коде (не из комментариев/документации). 
   Собственно парного `PassportEvent` нет — закрытие коробки это
   box-level действие; в payload летит список `passportIds` упакованных
   паспортов.
+
+#### Готовая продукция (`entityType = FINISHED_GOODS_MOVEMENT`, `entityId = FinishedGoodsMovement.id`)
+
+**Отдельный контур от материалов** — не путать с
+`STOCK_MOVEMENT` (см. ниже). На MVP-итерации одно событие.
+
+- `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` —
+  `FinishedGoodsService.recordPackedPassportInTx` зафиксировал
+  выпуск готовой продукции в момент `Passport.status = PACKED`
+  (см. `apps/api/src/modules/finished-goods/finished-goods.service.ts`,
+  `prisma/schema.prisma::FinishedGoodsMovement`,
+  `docs/api.md §29a`). Пишется в той же транзакции, что и сам
+  перевод паспорта в `PACKED` (через `PackingService.addPassport`).
+  Идемпотентно по
+  `FinishedGoodsMovement.sourceKey = PACKED_PASSPORT:<passportId>`:
+  повторный вызов для уже обработанного паспорта event не пишет.
+  Payload — `{ finishedGoodsMovementId, finishedGoodsBalanceId,
+  orderId, passportId, boxId, productId, sizeId, color,
+  warehouseId, cellId, qty, balanceBeforeQty, balanceAfterQty,
+  employeeId, timestamp }`.
+
+  События `FINISHED_GOODS_REVERSAL_*`, `FINISHED_GOODS_ADJUSTMENT_*`,
+  `FINISHED_GOODS_TRANSFER_*` на этой итерации **не реализованы** —
+  соответствующие движения зарезервированы в
+  `FINISHED_GOODS_MOVEMENT_TYPE`, но writer-ов нет.
+
+#### Отгрузка готовой продукции (`entityType = FINISHED_GOODS_SHIPMENT`, `entityId = FinishedGoodsShipment.id`)
+
+См. `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+`prisma/schema.prisma::FinishedGoodsShipment` /
+`FinishedGoodsShipmentLine`,
+`docs/api.md §29a «Finished goods shipments»`,
+`docs/current-state.md §«Отгрузка готовой продукции»`.
+
+**Отдельный контур от материалов** — не пересекается с
+`STOCK_MOVEMENT` / `MATERIAL_ISSUE`. Одно audit-событие на
+shipment-документ верхнего уровня, независимо от количества
+строк / movements внутри.
+
+- `FINISHED_GOODS_SHIPMENT_CREATED` — менеджер создал документ
+  отгрузки готовой продукции из карточки заказа (`POST
+  /api/orders/:orderId/finished-goods-shipments`). Пишется в той же
+  транзакции, что и сам `FinishedGoodsShipment` + N
+  `FinishedGoodsShipmentLine` + N `FinishedGoodsMovement` `type =
+  SHIPMENT, direction = OUT`. Идемпотентно по
+  `FinishedGoodsShipment.sourceKey =
+  FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`: повторный
+  submit формы возвращает существующий документ и event заново НЕ
+  пишет. Payload — `{ finishedGoodsShipmentId, number, orderId,
+  shippedAt, comment, lines: [{ finishedGoodsShipmentLineId,
+  finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
+  cellId, qty }], employeeId, timestamp }`.
+
+- `FINISHED_GOODS_SHIPMENT_CANCELLED` — менеджер отменил ранее
+  проведённый shipment (`POST /api/finished-goods/shipments/:id/cancel`).
+  Документ получает `status = CANCELLED` + `cancelledAt` /
+  `cancelledById` / `cancelReason`; по каждой строке создаётся
+  `FinishedGoodsMovement` `type = REVERSAL, direction = IN`
+  (sourceKey `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`).
+  Пишется в той же транзакции, что и сами обновления документа +
+  REVERSAL IN. Идемпотентно: повторный cancel-вызов на уже
+  отменённом документе возвращает existing detail и event заново
+  НЕ пишет. Payload — `{ finishedGoodsShipmentId, number, orderId,
+  cancelledAt, cancelReason, lines: [{
+  finishedGoodsShipmentLineId, finishedGoodsBalanceId, productId,
+  sizeId, color, warehouseId, cellId, qty }], employeeId,
+  timestamp }`.
+
+  События `FINISHED_GOODS_SHIPMENT_REVERSED` (отдельный документ
+  возврата), `FINISHED_GOODS_SHIPMENT_PARTIAL_CANCELLED`
+  (частичная отмена) на этой итерации **не реализованы** —
+  отдельных моделей `FinishedGoodsShipmentReturn` /
+  `FinishedGoodsShipmentCancel` нет, частичная отмена не
+  поддерживается (см. ТЗ).
+
+- `FINISHED_GOODS_TRANSFER_CREATED` — менеджер сохранил перемещение
+  готовой продукции (`POST /api/finished-goods/transfers`). Пишется
+  в той же транзакции, что и пара `FinishedGoodsMovement`
+  `type = TRANSFER`: `direction = OUT` (sourceKey
+  `FINISHED_GOODS_TRANSFER:<id>:OUT`) + `direction = IN` (sourceKey
+  `FINISHED_GOODS_TRANSFER:<id>:IN`). `entityType =
+  FINISHED_GOODS_MOVEMENT`, `entityId = OUT-movement.id`.
+  Идемпотентно по `clientRequestId`: повторный submit с тем же
+  ключом возвращает существующую пару движений и event заново НЕ
+  пишет. Payload — `{ sourceType: 'FINISHED_GOODS_TRANSFER',
+  transferId, fromFinishedGoodsBalanceId, toFinishedGoodsBalanceId,
+  outMovementId, inMovementId, orderId, productId, sizeId, color,
+  qty, from: { warehouseId, cellId }, to: { warehouseId, cellId },
+  comment, employeeId, timestamp }`. Отдельной модели
+  `FinishedGoodsTransfer` сознательно нет — transfer полностью
+  представлен парой `FinishedGoodsMovement` (см. ТЗ).
+
+- `FINISHED_GOODS_ADJUSTMENT_CREATED` — менеджер сохранил ручную
+  корректировку остатка готовой продукции
+  (`POST /api/finished-goods/adjustments`). Пишется в той же
+  транзакции, что и одно `FinishedGoodsMovement` `type = ADJUSTMENT`
+  (`direction = IN | OUT`, sourceKey
+  `FINISHED_GOODS_ADJUSTMENT:<clientRequestId>`); `entityType =
+  FINISHED_GOODS_MOVEMENT`, `entityId = FinishedGoodsMovement.id`.
+  Идемпотентно по `clientRequestId`: повторный submit с тем же
+  ключом возвращает существующее движение и event заново НЕ пишет.
+  Payload — `{ sourceType: 'FINISHED_GOODS_ADJUSTMENT',
+  adjustmentId, finishedGoodsBalanceId, movementId, orderId,
+  productId, sizeId, color, warehouseId, cellId, direction, qty,
+  balanceBeforeQty, balanceAfterQty, comment, employeeId,
+  timestamp }`. Отдельной модели `FinishedGoodsAdjustment`
+  сознательно нет — корректировка представлена одним
+  `FinishedGoodsMovement` (см. ТЗ). `OUT` всегда strict — готовая
+  продукция не уходит в минус, аналога
+  `allowNegativeMaterialStock` для finished goods нет.
 
 #### ОТК (`entityType = QC`, `entityId = passportId`)
 
@@ -479,8 +591,8 @@ runtime-коде (не из комментариев/документации). 
 
 Cancel для `POSTED`-документа в MVP запрещён
 (`MaterialIssuePostedCannotCancelException`, 409). Запрос
-возвращает ошибку без записи в `AuditLog` — это та же стратегия,
-что и у `WorkshopNeedsService.update` для locked-строк.
+возвращает ошибку без записи в `AuditLog`. Для отката проведённого
+расхода — отдельный документ `MaterialIssueReturn` (см. ниже).
 
 Если автосписание skip-ается (повторный retry по `sourceKey`, уже
 есть неотменённый документ по `passportId`, нет подходящей
@@ -488,6 +600,30 @@ Cancel для `POSTED`-документа в MVP запрещён
 пишутся** (skip — это успешное отсутствие действия), только
 structured-лог `event=material_issue.auto.skip reason=...` в
 stdout сервиса.
+
+#### Material issue returns (`entityType = MATERIAL_ISSUE_RETURN`, `entityId = MaterialIssueReturn.id`)
+
+Источник: `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+`apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueReturnInTx`,
+`prisma/schema.prisma::MaterialIssueReturn` /
+`MaterialIssueReturnLine`,
+`docs/api.md §«Material issues»`.
+
+- `MATERIAL_ISSUE_RETURNED` — менеджер сторнировал проведённый
+  документ расхода через `POST /api/material-issues/:id/return`.
+  Пишется в той же транзакции, что и `MaterialIssueReturn` +
+  `MaterialIssueReturnLine[]` + IN-движения (`type = REVERSAL`,
+  `direction = IN`, `sourceKey = MATERIAL_ISSUE_RETURN_LINE:<id>`).
+  Payload — `{ materialIssueId, materialIssueReturnId, orderId,
+  passportId, reason, totalCost, lines: [{ materialIssueLineId,
+  workshopNeedId, returnedQty, unit, unitCost, totalCost }],
+  employeeId, timestamp }`. При идемпотентном повторе с тем же
+  `clientRequestId` (UNIQUE `MaterialIssueReturn.sourceKey`)
+  событие **не дублируется** — сервис возвращает существующий
+  возврат и audit не пишет повторно.
+
+Удаление / отмена возврата на MVP не реализованы — соответствующих
+audit-событий не существует.
 
 #### Stock movements (`entityType = STOCK_MOVEMENT`, `entityId = StockMovement.id`)
 
@@ -507,6 +643,20 @@ stdout сервиса.
   balanceAfterQty, comment, employeeId, sourceKey, timestamp }`.
   `sourceKey` имеет формат `STOCK_ADJUSTMENT:<clientRequestId>` и
   отдаётся **только в payload audit** — публичный API его не возвращает.
+- `STOCK_TRANSFER_CREATED` — менеджер сохранил перемещение остатка
+  между складами / ячейками через `POST /api/stock/transfers` (UI
+  кнопка «Переместить» в `/admin/warehouses?tab=balances`). Пишется
+  в той же транзакции, что и пара `StockMovement` `type=TRANSFER`
+  (`OUT` + `IN`) и апдейт обоих `StockBalance`. Один аудит-event на
+  один transfer (entityId = `outMovement.id`). При идемпотентном
+  повторе с тем же `clientRequestId` событие **не дублируется** —
+  сервис возвращает существующую пару движений и audit не пишет
+  повторно. Payload — `{ sourceType: "STOCK_TRANSFER", transferId,
+  fromStockBalanceId, toStockBalanceId, outMovementId, inMovementId,
+  workshopNeedId, qty, unit, from: { warehouseId, cellId }, to: {
+  warehouseId, cellId }, comment, employeeId, timestamp }`. Сами
+  `sourceKey` (`STOCK_TRANSFER:<id>:OUT|IN`) в payload audit не
+  попадают — публичный API их тоже не возвращает.
 
 Автоматические движения (`PURCHASE_RECEIPT` / `MATERIAL_ISSUE` /
 `REVERSAL`) собственного аудит-события под `entityType = STOCK_MOVEMENT`

@@ -244,6 +244,13 @@ export async function createOperationAction(
   const salaryPlan = parseSalaryPlanFromForm(form);
   if ('error' in salaryPlan) return { error: salaryPlan.error };
 
+  // Признак выпуска готовой продукции (см.
+  // `prisma/schema.prisma::Operation.producesFinishedGoods`,
+  // `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`).
+  // Чекбокс включён → прохождение этой операции по паспорту
+  // создаёт `FinishedGoodsMovement PRODUCTION_RECEIPT IN`.
+  const producesFinishedGoods = form.get('producesFinishedGoods') === 'on';
+
   let createdId: string | null = null;
   try {
     const created = await createOperation({
@@ -266,6 +273,7 @@ export async function createOperationAction(
       ...(salaryPlan.salaryPlanShiftSeconds !== null
         ? { salaryPlanShiftSeconds: salaryPlan.salaryPlanShiftSeconds }
         : {}),
+      producesFinishedGoods,
     });
     createdId = created.id;
     revalidatePath('/admin/operations');
@@ -438,6 +446,13 @@ export async function updateOperationAction(
   if ('error' in salaryPlan) return { error: salaryPlan.error };
   dto.salaryPlanRubPerShift = salaryPlan.salaryPlanRubPerShift;
   dto.salaryPlanShiftSeconds = salaryPlan.salaryPlanShiftSeconds;
+
+  // Признак выпуска готовой продукции (см.
+  // `prisma/schema.prisma::Operation.producesFinishedGoods`,
+  // `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`).
+  // Forms send `'on'` для checked checkbox; иначе ключа в FormData нет
+  // — отправляем `false` явно, чтобы менеджер мог его выключить.
+  dto.producesFinishedGoods = form.get('producesFinishedGoods') === 'on';
 
   try {
     await updateOperation(operationId, dto);

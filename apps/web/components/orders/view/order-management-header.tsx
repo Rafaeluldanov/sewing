@@ -221,6 +221,52 @@ export function OrderManagementHeader({ order, passports }: Props) {
           )}
         </HeaderField>
 
+        {/*
+          Этап «Склад выпуска готовой продукции» (см.
+          `prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
+          `docs/current-state.md §«Склад выпуска готовой продукции»`).
+          Управленческое поле — НЕ влияет на StockBalance / StockMovement
+          материалов. Если не выбран — показываем «Не выбран», без
+          предупреждений: новые заказы создавать без склада допустимо.
+        */}
+        <HeaderField label="Склад готовой продукции">
+          {order.finishedGoodsWarehouse ? (
+            <strong>
+              {order.finishedGoodsWarehouse.name}
+              {order.finishedGoodsWarehouse.code
+                ? ` (${order.finishedGoodsWarehouse.code})`
+                : ''}
+            </strong>
+          ) : (
+            <span className="admin-muted">не выбран</span>
+          )}
+        </HeaderField>
+
+        {/*
+          Упрощённый MVP давальческого сырья / фурнитуры клиента
+          (см. `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+          `docs/current-state.md §«Давальческое сырьё клиента»`).
+          Это управленческая политика учёта в себестоимости — НЕ влияет
+          на расчёт потребности материалов / фурнитуры, на
+          MaterialIssue, StockBalance, StockMovement.
+        */}
+        <HeaderField label="Материалы и фурнитура в себестоимости">
+          {(order.materialsAndHardwareCostPolicy ?? 'INCLUDE') === 'EXCLUDE' ? (
+            <span>
+              <strong>Не учитываются</strong>
+              <span
+                className="admin-order-item-card__source-badge"
+                title="Давальческое сырьё / фурнитура клиента — расчёт потребности и складские движения работают как раньше, в себестоимость заказа не включаются"
+                style={{ marginLeft: 6 }}
+              >
+                Давальческое сырьё / фурнитура клиента
+              </span>
+            </span>
+          ) : (
+            <strong>Учитываются</strong>
+          )}
+        </HeaderField>
+
         <HeaderField label="Общий план">
           <strong>{totalPlan.toLocaleString('ru-RU')}</strong>
           <span className="order-mgmt-header__unit"> шт</span>

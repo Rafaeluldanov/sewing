@@ -189,17 +189,21 @@ test('StockService использует $transaction для пары findMany + 
 // MVP-границы: единственная mutation — `POST /adjustments`
 // ---------------------------------------------------------------------------
 
-test('StockController имеет только одну mutation — POST /adjustments', () => {
+test('StockController имеет только разрешённый whitelist mutation: POST /adjustments и /transfers', () => {
   const src = read(STOCK_CONTROLLER);
-  // Единственный разрешённый verb — `@Post('adjustments')`
-  // (см. `apps/api/src/modules/stock/stock.controller.ts`).
+  // Разрешённые POST-ы — `adjustments` (ручная корректировка) и
+  // `transfers` (перемещение между складами / ячейками, см.
+  // `apps/api/src/modules/stock/stock.controller.ts`).
   expect(src).toMatch(/@Post\('adjustments'\)/);
-  // Запрещённых mutation-эндпоинтов больше нет.
+  expect(src).toMatch(/@Post\('transfers'\)/);
+  // Запрещённых mutation-эндпоинтов нет.
   for (const verb of ['@Patch(', '@Put(', '@Delete(']) {
     expect(src).not.toContain(verb);
   }
-  // И никаких других POST, кроме `adjustments`.
-  const otherPosts = src.match(/@Post\('(?!adjustments')[^']+'\)/g);
+  // И никаких других POST, кроме adjustments / transfers.
+  const otherPosts = src.match(
+    /@Post\('(?!adjustments'|transfers')[^']+'\)/g,
+  );
   expect(otherPosts).toBeNull();
 });
 

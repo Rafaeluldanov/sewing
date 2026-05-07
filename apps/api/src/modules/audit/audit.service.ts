@@ -337,12 +337,29 @@ export type AuditEntityType =
    */
   | 'MATERIAL_ISSUE'
   /**
+   * Документы возврата / сторно проведённого `MaterialIssue` (см.
+   * `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+   * `prisma/schema.prisma::MaterialIssueReturn`,
+   * `docs/events.md §«Material issues»`).
+   *
+   *   - `MATERIAL_ISSUE_RETURNED` — менеджер сторнировал
+   *     проведённый документ через
+   *     `POST /api/material-issues/:id/return`. Пишется в той же
+   *     транзакции, что и сам `MaterialIssueReturn` + строки + IN-
+   *     движения склада. Payload — `{ materialIssueId,
+   *     materialIssueReturnId, orderId, passportId, reason,
+   *     totalCost, lines[], employeeId, timestamp }`. `entityId =
+   *     MaterialIssueReturn.id`.
+   *
+   * Удаление / отмена возврата на MVP не реализованы.
+   */
+  | 'MATERIAL_ISSUE_RETURN'
+  /**
    * Движения склада (см. `apps/api/src/modules/stock/*`,
    * `prisma/schema.prisma::StockMovement`,
    * `docs/api.md §«26a. Stock»`,
-   * `docs/events.md §«StockMovement»`). На MVP-итерации единственное
-   * аудит-событие — ручная корректировка остатка через
-   * `POST /api/stock/adjustments`:
+   * `docs/events.md §«StockMovement»`). На MVP-итерации два
+   * аудит-события под `entityType = STOCK_MOVEMENT`:
    *
    *   - `STOCK_ADJUSTMENT_CREATED` — менеджер сохранил корректировку
    *     через UI `/admin/warehouses?tab=balances`. Пишется в той же
@@ -352,13 +369,90 @@ export type AuditEntityType =
    *     qty, unit, unitCost, totalCost, balanceBeforeQty,
    *     balanceAfterQty, comment, employeeId, sourceKey, timestamp }`.
    *     `entityId = StockMovement.id`.
+   *   - `STOCK_TRANSFER_CREATED` — менеджер сохранил перемещение
+   *     остатка через UI `/admin/warehouses?tab=balances`, кнопка
+   *     «Переместить». Пишется в той же транзакции, что и пара
+   *     `StockMovement` TRANSFER (`OUT` + `IN`). Один event на один
+   *     transfer (`entityId = outMovement.id`). Payload —
+   *     `{ sourceType, transferId, fromStockBalanceId, toStockBalanceId,
+   *     outMovementId, inMovementId, workshopNeedId, qty, unit, from,
+   *     to, comment, employeeId, timestamp }`.
    *
    * Автоматические движения (`PURCHASE_RECEIPT` / `MATERIAL_ISSUE` /
    * `REVERSAL`) собственного аудит-события под этим `entityType` не
    * пишут — они уже атрибутированы под `PURCHASE_RECEIPT` /
    * `MATERIAL_ISSUE` соответственно.
    */
-  | 'STOCK_MOVEMENT';
+  | 'STOCK_MOVEMENT'
+  /**
+   * Движения готовой продукции (см.
+   * `apps/api/src/modules/finished-goods/*`,
+   * `prisma/schema.prisma::FinishedGoodsMovement`,
+   * `docs/events.md §«Finished goods»`,
+   * `docs/current-state.md §«Готовая продукция»`).
+   *
+   * **Отдельный контур от материалов** — не путать с `STOCK_MOVEMENT`,
+   * который покрывает движения материалов (`StockBalance` /
+   * `StockMovement`).
+   *
+   * На MVP-итерации одно автоматическое событие:
+   *   - `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` —
+   *     `FinishedGoodsService.recordPackedPassportInTx` зафиксировал
+   *     выпуск готовой продукции в момент `Passport.status = PACKED`.
+   *     Пишется в той же транзакции, что и сам перевод паспорта в
+   *     `PACKED` (см. `PackingService.addPassport`). Payload —
+   *     `{ finishedGoodsMovementId, finishedGoodsBalanceId, orderId,
+   *     passportId, boxId, productId, sizeId, color, warehouseId,
+   *     cellId, qty, balanceBeforeQty, balanceAfterQty, employeeId,
+   *     timestamp }`. `entityId = FinishedGoodsMovement.id`.
+   *
+   * Идемпотентно: повторный вызов `recordPackedPassportInTx` для уже
+   * обработанного паспорта не пишет ни движение, ни audit (защита по
+   * `FinishedGoodsMovement.sourceKey @unique` =
+   * `PACKED_PASSPORT:<passportId>`).
+   */
+  | 'FINISHED_GOODS_MOVEMENT'
+  /**
+   * Документ отгрузки готовой продукции из карточки заказа (см.
+   * `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+   * `prisma/schema.prisma::FinishedGoodsShipment` /
+   * `FinishedGoodsShipmentLine`,
+   * `docs/events.md §«Finished goods»`,
+   * `docs/current-state.md §«Отгрузка готовой продукции»`).
+   *
+   * **Отдельный контур от материалов.** Не путать с `STOCK_MOVEMENT`
+   * и `FINISHED_GOODS_MOVEMENT`: один shipment-документ создаёт N
+   * `FinishedGoodsMovement` `type = SHIPMENT, direction = OUT`, но в
+   * `AuditLog` пишется ровно одна строка верхнеуровневого события.
+   *
+   * События:
+   *   - `FINISHED_GOODS_SHIPMENT_CREATED` — менеджер создал документ
+   *     отгрузки (`POST /api/orders/:orderId/finished-goods-shipments`).
+   *     `entityId = FinishedGoodsShipment.id`. Payload —
+   *     `{ finishedGoodsShipmentId, number, orderId, shippedAt,
+   *     comment, lines: [{ finishedGoodsShipmentLineId,
+   *     finishedGoodsBalanceId, productId, sizeId, color,
+   *     warehouseId, cellId, qty }], employeeId, timestamp }`.
+   *     Пишется в той же транзакции, что и сам документ + N
+   *     `FinishedGoodsMovement` SHIPMENT OUT;
+   *   - `FINISHED_GOODS_SHIPMENT_CANCELLED` — менеджер отменил ранее
+   *     проведённый документ (`POST /api/finished-goods/shipments/:id/cancel`).
+   *     `entityId = FinishedGoodsShipment.id`. Payload —
+   *     `{ finishedGoodsShipmentId, number, orderId, cancelledAt,
+   *     cancelReason, lines: [{ finishedGoodsShipmentLineId,
+   *     finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
+   *     cellId, qty }], employeeId, timestamp }`. Пишется в той же
+   *     транзакции, что и `status → CANCELLED` + N
+   *     `FinishedGoodsMovement` REVERSAL IN.
+   *
+   * Идемпотентно: повторный submit с тем же `clientRequestId`
+   * возвращает существующий документ и audit заново НЕ пишет
+   * (защита по `FinishedGoodsShipment.sourceKey @unique` =
+   * `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`). Повторный
+   * cancel-вызов на уже отменённом документе тоже идемпотентен —
+   * сервис возвращает existing detail и event заново НЕ пишет.
+   */
+  | 'FINISHED_GOODS_SHIPMENT';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

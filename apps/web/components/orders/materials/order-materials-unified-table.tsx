@@ -71,6 +71,29 @@ import {
   type OrderMaterialStatusTone,
   type OrderMaterialTableRow,
 } from './build-order-material-rows';
+import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
+
+/**
+ * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+ * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+ *
+ * Строка финансово исключена, если политика заказа `EXCLUDE` и
+ * `getWorkshopNeedKind` относит её к MATERIAL или HARDWARE.
+ * APPLICATION (нанесение) и OTHER не затрагиваются — это
+ * услуги/нанесения компании, они остаются в себестоимости.
+ */
+function isCostExcludedRow(
+  row: OrderMaterialTableRow,
+  policy: 'INCLUDE' | 'EXCLUDE',
+): boolean {
+  if (policy !== 'EXCLUDE') return false;
+  const kind = getWorkshopNeedKind({
+    sourceType: row.originalNeed.sourceType,
+    calculationMethod: row.originalNeed.calculationMethod,
+    materialRole: row.originalNeed.materialRole ?? undefined,
+  });
+  return kind === 'MATERIAL' || kind === 'HARDWARE';
+}
 
 interface Props {
   orderId: string;
@@ -87,6 +110,17 @@ interface Props {
    * с «нет проведённых расходов».
    */
   materialIssues?: MaterialIssueDetailDto[];
+  /**
+   * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+   * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+   *
+   * При `EXCLUDE` колонки «Стоимость план / факт» и «Сумма» по
+   * материалам и фурнитуре показывают «не учитывается». Количество
+   * план/факт остаётся как раньше — клиенту всё ещё нужно сообщить,
+   * сколько материалов и фурнитуры требуется. Default — `INCLUDE`
+   * (старая логика без изменений).
+   */
+  materialsAndHardwareCostPolicy?: 'INCLUDE' | 'EXCLUDE';
 }
 
 const RUB_FORMATTER = new Intl.NumberFormat('ru-RU', {
@@ -147,6 +181,18 @@ function PriceCell({ row }: { row: OrderMaterialTableRow }) {
     <span className="order-materials-table__money">
       {formatted}
       {row.unit ? ` / ${row.unit}` : ''}
+    </span>
+  );
+}
+
+function ExcludedCostCell() {
+  return (
+    <span
+      className="order-materials-table__money order-materials-table__money--empty"
+      title="Не учитывается в себестоимости — давальческое сырьё / фурнитура клиента"
+      data-testid="order-materials-cost-excluded"
+    >
+      не учитывается
     </span>
   );
 }
@@ -606,6 +652,7 @@ async function loadData(orderId: string): Promise<LoadedData> {
 export async function OrderMaterialsUnifiedTable({
   orderId,
   materialIssues,
+  materialsAndHardwareCostPolicy = 'INCLUDE',
 }: Props) {
   const data = await loadData(orderId);
   const rows = buildOrderMaterialRows({
@@ -663,7 +710,12 @@ export async function OrderMaterialsUnifiedTable({
       key: 'total',
       header: 'Сумма',
       align: 'right',
-      render: (row) => <TotalCell row={row} />,
+      render: (row) =>
+        isCostExcludedRow(row, materialsAndHardwareCostPolicy) ? (
+          <ExcludedCostCell />
+        ) : (
+          <TotalCell row={row} />
+        ),
     },
     {
       // План / факт по фактическому расходу материалов
@@ -682,7 +734,12 @@ export async function OrderMaterialsUnifiedTable({
       key: 'planFactCost',
       header: 'Стоимость план / факт',
       align: 'right',
-      render: (row) => <PlanFactCostCell row={row} />,
+      render: (row) =>
+        isCostExcludedRow(row, materialsAndHardwareCostPolicy) ? (
+          <ExcludedCostCell />
+        ) : (
+          <PlanFactCostCell row={row} />
+        ),
     },
     {
       key: 'received',

@@ -523,12 +523,773 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
   - В UI `StockMovementsTable` тип `ADJUSTMENT` уже отрисовывается
     как «Корректировка» (`StockMovementTypeBadge`); после успешной
     корректировки движение появится во вкладке «Движения».
-  - Сознательно **не реализованы** на этой итерации: transfer
-    между складами/ячейками, FIFO / LIFO / `MaterialStockLot`,
-    `StockAdjustment` master-модель, master-`Material`,
-    delete / cancel adjustment, новые роли `WAREHOUSE_MANAGER` /
-    `PURCHASER` / `ACCOUNTANT`. Запреты зафиксированы в smoke-
-    тесте `tests/smoke/stock-adjustments.smoke.test.ts`.
+  - Сознательно **не реализованы** на этой итерации: FIFO / LIFO /
+    `MaterialStockLot`, `StockAdjustment` master-модель,
+    master-`Material`, delete / cancel adjustment, новые роли
+    `WAREHOUSE_MANAGER` / `PURCHASER` / `ACCOUNTANT`. Запреты
+    зафиксированы в smoke-тесте `tests/smoke/stock-adjustments.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Перемещение остатка между складами»
+  (`apps/api/src/modules/stock/stock.controller.ts::createTransfer`,
+  `apps/api/src/modules/stock/stock.service.ts::createTransfer`,
+  `apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`,
+  `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+  `apps/web/components/warehouses/stock/stock-transfer-button.tsx`,
+  `apps/web/lib/stock-api.ts::createStockTransfer`,
+  `docs/api.md §«26a.4 POST /api/stock/transfers»`):
+  - в разделе «Склады» во вкладке «Остатки»
+    (`/admin/warehouses?tab=balances`) появилась кнопка
+    «Переместить» рядом с кнопкой «Корректировка». Открывает
+    inline-форму прямо над таблицей — отдельной страницы / пункта
+    меню / sidebar-item не вводим.
+  - Backend mutation: `POST /api/stock/transfers`
+    (`@Roles('ADMIN', 'SHOP_MANAGER')`). Body — `fromStockBalanceId`,
+    `toWarehouseId?`, `toCellId?`, `qty`, `comment`,
+    `clientRequestId?`. Создаёт **пару** `StockMovement`
+    `type = TRANSFER`: `OUT` уменьшает источник,
+    `IN` создаёт / увеличивает назначение; пишет audit
+    `STOCK_TRANSFER_CREATED` (под `entityType = STOCK_MOVEMENT`,
+    `entityId = outMovement.id`) — всё в одной транзакции.
+  - Destination resolve: если передан `toCellId` —
+    destination warehouse берётся из `Cell.warehouseId` (с fallback
+    на `toWarehouseId`); если `toCellId` не передан —
+    destination `cellId = null`.
+  - **Strict-режим**: при `source.qty < qty` отдаём 409
+    `MATERIAL_STOCK_INSUFFICIENT`, баланс не меняется, ни одно
+    движение не пишется. `CompanySettings.allowNegativeMaterialStock`
+    на transfer **не влияет** — отрицательный остаток источника
+    через transfer запрещён независимо от глобальных настроек.
+  - Same-location гейт: если destination
+    (`warehouseId` + `cellId`) совпадает с source — 409
+    `STOCK_TRANSFER_SAME_LOCATION`.
+  - **Идемпотентность**: один `clientRequestId` → пара движений
+    по UNIQUE-ключам `STOCK_TRANSFER:<clientRequestId>:OUT` и
+    `STOCK_TRANSFER:<clientRequestId>:IN`. Повторный submit
+    возвращает существующую пару и не апдейтит балансы повторно.
+    Если найден только один из ключей (структурная аномалия) —
+    409 `STOCK_TRANSFER_INCONSISTENT_STATE`. Если `clientRequestId`
+    не передан — сервер генерирует свой UUID. `sourceKey` ни одного
+    из двух движений в response **не отдаётся**.
+  - **IN использует `source.unitCost`** — destination через
+    `applyMovementInTx` пересчитывает свою средневзвешенную цену.
+    Transfer **не** меняет `MaterialIssue.totalCost`,
+    `OrderSummary` / плановую/фактическую себестоимость заказа и
+    production cost — движение живёт строго в плоскости склада.
+  - В UI `StockMovementsTable` тип `TRANSFER` отрисовывается как
+    «Перемещение» (`StockMovementTypeBadge`); после успешного
+    перемещения во вкладке «Движения» видны две строки —
+    «Перемещение» / «Расход» и «Перемещение» / «Приход».
+  - **Cell selector назначения** реализован в форме «Переместить»
+    (`apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`).
+    Backend `GET /api/cells` принимает additive query-фильтр
+    `?warehouseId=<id>` (см.
+    `apps/api/src/modules/passports/cells.controller.ts`,
+    `apps/api/src/modules/passports/passports.service.ts::listCells`).
+    Frontend client `listCells({ warehouseId })` и server action
+    `loadTransferDestinationCellsAction(warehouseId)` подгружают
+    список ячеек выбранного склада на лету. Первая опция — «Без
+    ячейки» (отправляет `toCellId = null` / поле опускается).
+    Если склад не выбран — selectbox задисейблен с подсказкой
+    «Сначала выберите склад»; если в складе нет ячеек — «Нет ячеек
+    на этом складе»; если ранее выбранная ячейка не относится к
+    новому складу — `toCellId` сбрасывается. Preview-блок «Куда:
+    Склад / Ячейка» под формой даёт оператору контроль перед
+    submit. Backend transfer-flow / business rules / DTO
+    `create-stock-transfer.dto.ts` не менялись — `toCellId` уже
+    принимался с предыдущей итерации.
+  - Сознательно **не реализованы** на этой итерации: отдельная
+    модель `StockTransfer`, FIFO / LIFO / `MaterialStockLot`,
+    delete / cancel transfer. Запреты зафиксированы в smoke-
+    тестах `tests/smoke/stock-transfers.smoke.test.ts` и
+    `tests/smoke/stock-transfer-cell-selector.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Склад выпуска готовой продукции»
+  (`prisma/schema.prisma::Order.finishedGoodsWarehouseId`,
+  `prisma/migrations/20260613100000_add_order_finished_goods_warehouse`,
+  `apps/api/src/modules/orders/orders.service.ts`,
+  `packages/shared/src/orders.ts`,
+  `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+  `apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx`,
+  `apps/web/components/orders/view/order-management-header.tsx`):
+  - в заказ покупателя добавлено управленческое поле
+    `Order.finishedGoodsWarehouseId` — на какой склад менеджер
+    планирует выпустить готовую продукцию (B2B / Marketplace /
+    Образцы / …). Поле опционально, nullable, FK на `Warehouse` с
+    `onDelete: SetNull` (деактивация / удаление склада обнуляет
+    привязку, заказ не сносится).
+  - Это **НЕ склад материалов**: поле НЕ создаёт ни
+    `StockBalance`, ни `StockMovement` — готовая продукция как
+    stock-сущность на этой итерации сознательно не отслеживается.
+    `StockService`, `MaterialIssue`-flow, `PurchaseReceipt`-flow,
+    `MaterialIssueReturn`-flow, `StockAdjustment`-flow, transfer-
+    flow, `CostsService`, `ProductionCostV2Service`,
+    `WorkshopNeedsService` НЕ затрагиваются.
+  - Backend: `CreateOrderSchema` / `UpdateOrderSchema` принимают
+    `finishedGoodsWarehouseId?: string | null`. `OrdersService`
+    через `resolveFinishedGoodsWarehouseIdForOrder` валидирует
+    existence + `isActive = true` (адресные ошибки 400
+    `WAREHOUSE_NOT_FOUND` и 409 `WAREHOUSE_INACTIVE`). На любом
+    статусе заказа (без `ORDER_LOCKED`-guard), потому что это
+    управленческое поле. `null` снимает привязку. `OrderListItemDto`
+    / `OrderDetailDto` отдают `finishedGoodsWarehouseId` +
+    краткий `finishedGoodsWarehouse: { id, name, code }`. Audit:
+    смена поля попадает в `ORDER_UPDATED.changedFields`.
+  - Frontend: select «Склад выпуска готовой продукции» в форме
+    создания (`/admin/orders/new`) и редактирования
+    (`/admin/orders/[id]/edit`), help-text «Склад, на который
+    должна поступить готовая продукция после производства /
+    упаковки. Это не склад материалов.» В detail-карточке
+    (`OrderManagementHeader`) — поле «Склад готовой продукции»
+    рядом с «Цвет»; для заказа без выбранного склада показываем
+    «не выбран». В edit-форме архивный склад остаётся в опциях
+    отдельной пометкой «архив», чтобы submit без явного действия
+    не обнулил FK.
+  - Сознательно **не реализованы** на этой итерации (см. ниже —
+    отдельная итерация «Foundation готовой продукции» уже добавила
+    `FinishedGoodsBalance` / `FinishedGoodsMovement` в момент
+    `Passport.status = PACKED`, но без отгрузки / transfer / UI):
+    отгрузка готовой продукции, transfer готовой продукции, packing
+    UI с подсказкой по складу, новый раздел / sidebar item, новые
+    роли. Запреты зафиксированы в smoke-тесте
+    `tests/smoke/order-finished-goods-warehouse.smoke.test.ts`.
+
+  Backend-итерация «Foundation готовой продукции»
+  (`prisma/schema.prisma::FinishedGoodsBalance` /
+  `FinishedGoodsMovement`,
+  `prisma/migrations/20260615100000_add_finished_goods_foundation`,
+  `apps/api/src/modules/finished-goods/*`,
+  `apps/api/src/modules/packing/packing.service.ts`,
+  `tests/smoke/finished-goods-foundation.smoke.test.ts`,
+  `tests/integration/finished-goods-foundation.test.ts`):
+  - добавлены отдельные модели `FinishedGoodsBalance` и
+    `FinishedGoodsMovement` для учёта готовой продукции. Это
+    **отдельный контур** от материалов: `StockBalance` /
+    `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+    `StockAdjustment` / `StockTransfer` / `CostsService` /
+    `ProductionCostV2Service` НЕ затрагиваются.
+  - Идентичность остатка — `(orderId, productId, sizeId, color,
+    warehouseId?, cellId?)`. `balanceKey` детерминирован:
+    `${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`
+    (UNIQUE). `qty` — `Int` (готовые изделия штучные).
+  - Бизнес-момент выпуска: при первом `Passport.status = PACKED`
+    (`PackingService.addPassport`) в той же транзакции создаётся
+    одна запись `FinishedGoodsMovement` `type = PRODUCTION_RECEIPT`,
+    `direction = IN`, `qty = passport.qtyGood`,
+    `passportId = passport.id`, `boxId = box.id`,
+    `warehouseId = order.finishedGoodsWarehouseId ?? null`,
+    `cellId = null`, `comment = "Выпуск готовой продукции после
+    упаковки"`, и обновляется баланс
+    (`balanceAfterQty = balanceBeforeQty + qty`).
+  - Идемпотентность — `FinishedGoodsMovement.sourceKey @unique` =
+    `PACKED_PASSPORT:<passportId>`. Повторная обработка `PACKED`
+    (retry, дубль handler) не задвоит движение и не удвоит баланс.
+  - Если `Order.finishedGoodsWarehouseId` не выбран — ведём
+    «no-warehouse» баланс (`warehouseId = null`); упаковка НЕ
+    блокируется, никаких ошибок.
+  - Read-only API:
+    `GET /api/finished-goods/balances` (с фильтрами `orderId` /
+    `productId` / `sizeId` / `warehouseId` / `cellId` / `q` /
+    `positiveOnly` / `negativeOnly` / `zeroOnly` / `limit` /
+    `offset`); `GET /api/finished-goods/movements` (с фильтрами
+    `orderId` / `productId` / `sizeId` / `warehouseId` / `cellId` /
+    `type` / `direction` / `passportId` / `boxId` / `from` / `to` /
+    `limit` / `offset`). RBAC: `@Roles('ADMIN', 'SHOP_MANAGER')`.
+    `sourceKey` сознательно НЕ возвращается (внутренний
+    идемпотентный технический ключ).
+  - Audit: `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED`,
+    `entityType = FINISHED_GOODS_MOVEMENT`,
+    `entityId = FinishedGoodsMovement.id`. Payload содержит
+    `finishedGoodsMovementId`, `finishedGoodsBalanceId`, `orderId`,
+    `passportId`, `boxId`, `productId`, `sizeId`, `color`,
+    `warehouseId`, `cellId`, `qty`, `balanceBeforeQty`,
+    `balanceAfterQty`, `employeeId`, `timestamp`. Пишется в той же
+    транзакции, что и `PRODUCTION_RECEIPT`.
+  - Сознательно **не реализованы** на этой итерации:
+    отгрузка готовой продукции (`SHIPMENT`), transfer готовой
+    продукции (`TRANSFER`), ручная корректировка (`ADJUSTMENT`),
+    сторно (`REVERSAL`), UI-раздел `/admin/finished-goods`,
+    sidebar item, отдельная страница / отчёт, новые роли. Эти типы
+    зарезервированы как строковые литералы в
+    `FINISHED_GOODS_MOVEMENT_TYPE` для следующих итераций. На MVP
+    UI не делаем — добавление нового раздела требует подтверждения
+    владельца проекта. Существующие модули материалов
+    (`StockService`, `MaterialIssue`, `PurchaseReceipt`,
+    `StockAdjustment`, `StockTransfer`, `CostsService`,
+    `ProductionCostV2Service`) не меняются.
+
+  Backend + Frontend-итерация «Выпуск готовой продукции по операции»
+  (`prisma/schema.prisma::Operation.producesFinishedGoods`,
+  `prisma/migrations/20260616100000_add_operation_produces_finished_goods`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::recordPassportOutputInTx`,
+  `apps/api/src/modules/passports/passports.service.ts::scanOnOperation` /
+  `completeOperationByEmployee`,
+  `packages/shared/src/operations.ts::OperationSummaryDto.producesFinishedGoods`,
+  `apps/web/app/admin/operations/*` (форма create/edit, badge в списке),
+  `tests/smoke/finished-goods-operation-output.smoke.test.ts`):
+  - выпуск готовой продукции теперь определяется не только
+    `Passport.status = PACKED`, а **признаком на операции**:
+    `Operation.producesFinishedGoods Boolean @default(false)`. Если
+    флаг включён, успешное прохождение операции по паспорту
+    (`OPERATION_SCAN` с предыдущей операцией под флагом или
+    `OPERATION_FINISHED` через `completeOperationByEmployee`)
+    создаёт `FinishedGoodsMovement PRODUCTION_RECEIPT IN` —
+    `qty = passport.qtyGood`,
+    `warehouseId = order.finishedGoodsWarehouseId ?? null`,
+    `cellId = null`. Канонический сценарий — пометить операцию
+    «Упаковка» признаком; отдельную операцию «Выпуск» сознательно
+    не заводим.
+  - **Идемпотентность.** `sourceKey = PACKED_PASSPORT:<passportId>`
+    (см. `buildPassportFinishedGoodsOutputSourceKey` —
+    сознательно совпадает с `buildPackedPassportSourceKey`): один
+    паспорт = одно движение, независимо от триггера. Повторный
+    complete/scan и последующая упаковка через
+    `PackingService.addPassport → recordPackedPassportInTx` не
+    задвоят движение. Старый формат ключа сохранён, чтобы не
+    инвалидировать уже выпущенные паспорты.
+  - **Точка записи.** Единая — `FinishedGoodsService.recordPassportOutputInTx`,
+    которую `PassportsService` вызывает в той же транзакции, что и
+    `OPERATION_SCAN` / `OPERATION_FINISHED`. Wrapper
+    `recordPackedPassportInTx` (для `PackingService`) делегирует в
+    тот же метод. Это исключает «два кода на одно событие».
+  - **Packing-flow остаётся.** Текущая упаковка реализована не как
+    `Operation`-flow, а как отдельный `PackingService.addPassport`,
+    который пишет `Passport.status = PACKED` и BoxItem. Поэтому
+    `recordPackedPassportInTx` остаётся в packing-сервисе как
+    отдельный путь записи выпуска для случаев, когда `Operation`-flow
+    не задействован (например, `producesFinishedGoods` не выставлен
+    ни на одной операции маршрута). Идемпотентный `sourceKey` =
+    общий, дубля нет.
+  - **Movements API.** `GET /api/finished-goods/movements` и
+    `GET /api/stock/movements` теперь отдают `clientId` и
+    `clientName` (через `Order.client → Client.id/name`).
+    `FinishedGoodsBalanceListItem` тоже получил эти поля —
+    управление с балансом ведёт менеджер, и заказчика удобно видеть
+    сразу.
+  - **UI колонка «Заказчик»** добавлена в `/admin/warehouses?tab=movements`
+    (`apps/web/components/warehouses/stock/stock-movements-table.tsx`)
+    рядом с колонкой «Заказ». Никаких новых страниц / sidebar /
+    отдельных UI под готовую продукцию не создаём (см. ТЗ).
+  - **UI операций.** Чекбокс «Выпускает готовую продукцию» с
+    подсказкой добавлен в форму создания
+    (`apps/web/app/admin/operations/create-form.tsx`) и в форму
+    редактирования (`apps/web/app/admin/operations/[id]/edit-form.tsx`).
+    В таблице списка операций рядом с названием рисуется маленький
+    badge «Выпуск ГП» для операций с флагом, чтобы менеджеру было
+    видно «какая операция фиксирует выпуск» с одного взгляда.
+  - Сознательно **не реализованы / не меняются**: отдельная операция
+    «Выпуск», отгрузка / transfer готовой продукции, новый
+    UI-раздел / sidebar item, изменения в `MaterialIssue` /
+    `PurchaseReceipt` / `StockAdjustment` / `StockTransfer` /
+    `CostsService` / `ProductionCostV2Service`. Запреты
+    зафиксированы в smoke-тесте
+    `tests/smoke/finished-goods-operation-output.smoke.test.ts`.
+
+  Frontend-итерация «Готовая продукция в существующих вкладках склада»
+  (`apps/web/app/admin/warehouses/page.tsx`,
+  `apps/web/components/warehouses/stock/unified-rows.ts`,
+  `apps/web/components/warehouses/stock/stock-balances-table.tsx`,
+  `apps/web/components/warehouses/stock/stock-movements-table.tsx`,
+  `apps/web/components/warehouses/stock/stock-movements-filters.tsx`,
+  `apps/web/lib/finished-goods-api.ts`,
+  `tests/smoke/warehouses-unified-stock-finished-goods.smoke.test.ts`):
+  - в существующих вкладках `/admin/warehouses?tab=balances` и
+    `?tab=movements` теперь отображаются и материалы, и готовая
+    продукция в одной таблице. Отдельная вкладка / страница /
+    sidebar-пункт под готовую продукцию **не создавались**;
+    `OrderViewTabs` не менялся.
+  - Готовая продукция различима по названию строки —
+    `${productName} / ${color} / ${sizeCode}` (например, «Худи модель
+    001 / чёрный / L»). Колонка «Материал» переименована в
+    «Номенклатура»; отдельной колонки «Тип» нет (см. UI-решение
+    владельца проекта). Цена и сумма для готовой продукции —
+    прочерк (`«—»`), потому что это не material cost.
+  - Frontend-wrapper `apps/web/lib/finished-goods-api.ts` обёртывает
+    `GET /api/finished-goods/balances` и `GET /api/finished-goods/movements`
+    (read-only, RBAC backend `ADMIN` / `SHOP_MANAGER`). `sourceKey`
+    в client-types сознательно не объявлен — backend его не отдаёт.
+  - Объединение делается на уровне RSC (`unified-rows.ts`):
+    `materialBalanceToUnified` / `finishedGoodsBalanceToUnified` /
+    `materialMovementToUnified` / `finishedGoodsMovementToUnified` →
+    общий массив `UnifiedWarehouseBalanceRow` /
+    `UnifiedWarehouseMovementRow`, сортировка по `updatedAt desc` /
+    `createdAt desc`, UI-pagination через `applyUnifiedPagination`.
+    Для остатков `total = material.total + finishedGoods.total`.
+  - Type routing в журнале движений: `PURCHASE_RECEIPT` /
+    `MATERIAL_ISSUE` уходят только в material API,
+    `PRODUCTION_RECEIPT` — только в finished goods API,
+    `REVERSAL` / `ADJUSTMENT` / `TRANSFER` — в оба. Если type не
+    выбран — оба API запрашиваются параллельно. `SHIPMENT` пока в
+    UI-фильтре не показывается, потому что отгрузка не реализована.
+  - В фильтре «Поиск» (`q`) backend материалов принимает
+    case-insensitive substring по `description`/`comment`; finished
+    goods backend `q` не принимает (DTO `.strict()`), поэтому в этот
+    контур поиск не уходит.
+  - Колонка «Заказчик» (`Client.name` через `Order.client`) есть и
+    для материалов, и для готовой продукции — backend на предыдущей
+    итерации добавил `clientId` / `clientName` в оба movement-API.
+  - Это **временный unified UI layer** до появления master-сущности
+    номенклатуры и backend unified warehouse endpoint. Ограничения
+    MVP: сейчас оба API запрашиваются с потолком `limit=200`, общий
+    массив сортируется на UI и slice-ится по `offset/limit`. Для
+    больших объёмов лучше сделать backend unified warehouse endpoint
+    с серверным total / pagination / sorting (TODO в коде).
+  - Backend модели остаются раздельными (`StockBalance` /
+    `StockMovement` для материалов, `FinishedGoodsBalance` /
+    `FinishedGoodsMovement` для готовой продукции). `StockService`,
+    `FinishedGoodsService`, `MaterialIssue`, packing flow, operation
+    flow, `prisma/schema.prisma` на этой итерации **не правились**.
+  - Сознательно **не реализованы**: transfer / adjustment готовой
+    продукции, отдельный UI-раздел / sidebar item / роль для готовой
+    продукции. Отгрузка готовой продукции реализована отдельной
+    итерацией «Отгрузка готовой продукции» (см. ниже).
+
+  Backend + Frontend-итерация «Отгрузка готовой продукции»
+  (`prisma/schema.prisma::FinishedGoodsShipment` /
+  `FinishedGoodsShipmentLine`,
+  `prisma/migrations/20260617100000_add_finished_goods_shipments`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
+  `apps/api/src/modules/finished-goods/finished-goods-order-shipments.controller.ts`,
+  `apps/api/src/modules/finished-goods/dto/create-finished-goods-shipment.dto.ts`,
+  `apps/web/components/orders/finished-goods/*`,
+  `apps/web/app/admin/orders/[id]/finished-goods-shipments-actions.ts`,
+  `tests/smoke/finished-goods-shipments.smoke.test.ts`,
+  `docs/api.md §«Finished goods shipments»`):
+  - в заказ покупателя добавлена возможность **частичной отгрузки**
+    готовой продукции из карточки заказа (вкладка «Производство»,
+    блок «Отгрузка готовой продукции»). Отдельная страница
+    `/admin/finished-goods` / `/admin/shipments` / sidebar-пункт /
+    новая вкладка `OrderViewTabs` **не создавались**.
+  - Документ — `FinishedGoodsShipment` (`status` всегда `POSTED` на
+    MVP, номер `S-YYYYMMDD-NNNN` через
+    `FinishedGoodsShipmentNumberService`); строка —
+    `FinishedGoodsShipmentLine` со snapshot-ом `productId` /
+    `sizeId` / `color` / `warehouseId` / `cellId` от
+    `FinishedGoodsBalance` на момент создания.
+  - По каждой строке shipment создаётся ровно одно
+    `FinishedGoodsMovement` `type = SHIPMENT, direction = OUT` через
+    `applyMovementInTx` — sourceKey
+    `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`. Балансы атомарно
+    уменьшаются (`balance.qty -= line.qty`); guard на отрицательный
+    остаток в MVP **запрещает** уход в минус
+    (`FINISHED_GOODS_INSUFFICIENT_BALANCE`, 409 — откатывает всю
+    транзакцию). `allowNegativeMaterialStock` к этому контуру
+    **не применим** (это флаг для StockBalance материалов).
+  - **Идемпотентность.** `FinishedGoodsShipment.sourceKey @unique` =
+    `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`. UI
+    генерирует `clientRequestId` (`crypto.randomUUID()`) один раз на
+    жизненный цикл формы — повторный submit (двойной клик / network
+    retry) возвращает существующий документ и НЕ создаёт
+    дублирующих движений. Если backend получает request без
+    `clientRequestId`, генерит UUID server-side, но повторный submit
+    тогда не идемпотентен (sound fallback).
+  - **Order.status автоматически НЕ меняется.** Полная отгрузка не
+    переводит заказ в `DONE` — это сознательное решение (см.
+    ТЗ итерации). Управление статусами заказа — отдельная ручка
+    менеджера (`POST /api/orders/:id/complete`).
+  - **Отдельный контур от материалов.** `StockBalance` /
+    `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+    `StockAdjustment` / `StockTransfer` / `CostsService` /
+    `ProductionCostV2Service` НЕ затрагиваются и НЕ меняются.
+  - **Public API:** `POST /api/orders/:orderId/finished-goods-shipments`,
+    `GET /api/orders/:orderId/finished-goods-shipments`,
+    `GET /api/finished-goods/shipments/:id` (RBAC `ADMIN` /
+    `SHOP_MANAGER`). DTO body — `{ shippedAt?, comment?,
+    clientRequestId?, lines: [{ finishedGoodsBalanceId, qty,
+    comment? }] }`. `orderId` берётся из URL, snapshot-поля
+    (productId / sizeId / color / warehouse / cell) не принимаются.
+  - **Audit** `FINISHED_GOODS_SHIPMENT_CREATED`
+    (`entityType = FINISHED_GOODS_SHIPMENT`,
+    `entityId = FinishedGoodsShipment.id`) пишется в той же
+    транзакции, что и сам документ + N движений SHIPMENT OUT.
+    Payload — `{ finishedGoodsShipmentId, number, orderId, shippedAt,
+    comment, lines: [{ finishedGoodsShipmentLineId,
+    finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
+    cellId, qty }], employeeId, timestamp }`.
+  - **UI.** Блок `OrderFinishedGoodsShipmentSection` показывает три
+    части: «Доступная готовая продукция» (по `positiveOnly = true`),
+    «История отгрузок» (table с раскрытием строк), inline-форма
+    `CreateFinishedGoodsShipmentDialog` (qty input на каждый
+    `FinishedGoodsBalance`, validation `qty <= available`,
+    `clientRequestId`, server action
+    `createFinishedGoodsShipmentAction`). После submit —
+    `revalidatePath('/admin/orders/[id]')`.
+  - В `/admin/warehouses?tab=movements` строки отгрузки
+    отображаются с типом «Отгрузка» (`StockMovementTypeBadge` →
+    `SHIPMENT`); в фильтре «Тип движения» появилась опция
+    `SHIPMENT → «Отгрузка»` (scope `finished-goods-only`).
+  - Сознательно **не реализованы** на этой итерации:
+    DRAFT-flow shipment, transfer / adjustment готовой продукции,
+    автоматическая смена `Order.status` при полной отгрузке,
+    отдельный UI-раздел / sidebar / новая роль. Запреты
+    зафиксированы в `tests/smoke/finished-goods-shipments.smoke.test.ts`.
+    Отмена shipment реализована отдельной итерацией (см. ниже).
+
+  Backend + Frontend-итерация «Отмена / сторно отгрузки готовой
+  продукции»
+  (`prisma/schema.prisma::FinishedGoodsShipment`,
+  `prisma/migrations/20260618100000_finished_goods_shipment_cancel`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::cancelShipment`,
+  `apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+  `apps/api/src/modules/finished-goods/dto/cancel-finished-goods-shipment.dto.ts`,
+  `apps/web/components/orders/finished-goods/cancel-finished-goods-shipment-button.tsx`,
+  `apps/web/components/orders/finished-goods/finished-goods-shipments-table.tsx`,
+  `apps/web/app/admin/orders/[id]/finished-goods-shipments-actions.ts::cancelFinishedGoodsShipmentAction`,
+  `tests/smoke/finished-goods-shipment-cancel.smoke.test.ts`,
+  `docs/api.md §«Finished goods shipments»`):
+  - решение владельца проекта — **НЕ создавать** отдельную модель
+    `FinishedGoodsShipmentReturn` / `FinishedGoodsShipmentCancel`.
+    Существующий `FinishedGoodsShipment` получает
+    `status = CANCELLED` + новые поля `cancelledAt` / `cancelledById`
+    / `cancelReason`. По каждой `FinishedGoodsShipmentLine`
+    создаётся обратное `FinishedGoodsMovement` `type = REVERSAL,
+    direction = IN` (sourceKey
+    `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`);
+    `FinishedGoodsBalance.qty` атомарно увеличивается обратно через
+    `applyMovementInTx`.
+  - **Частичная отмена сознательно не поддерживается.** Если нужно
+    отгрузить меньше — пользователь отменяет ошибочную отгрузку
+    целиком и создаёт новую корректную частичную отгрузку.
+  - **Идемпотентность повторного cancel-вызова.** Сервис проверяет
+    `shipment.status === 'CANCELLED'` до старта транзакции и
+    возвращает existing detail без новых движений / audit-записи.
+    На уровень movement `FinishedGoodsMovement.sourceKey @unique`
+    подстрахует от race-condition: даже если две одновременные
+    cancel-операции дойдут до создания, вторая получит уникальную
+    ошибку и откатит транзакцию.
+  - **Public API:**
+    `POST /api/finished-goods/shipments/:id/cancel` (RBAC `ADMIN` /
+    `SHOP_MANAGER`). DTO body — `{ reason (2..500) }`. Никаких
+    `lines` / `qty` / `clientRequestId` — частичная отмена и
+    клиентский ключ идемпотентности на этой итерации не нужны.
+    Response — обновлённый `FinishedGoodsShipmentDetailDto` с
+    `status = CANCELLED` и заполненными полями отмены.
+  - **Detail / list response расширен** полями `cancelledAt` /
+    `cancelledById` / `cancelReason` (`null` для POSTED-документов).
+    `sourceKey` по-прежнему сознательно не отдаётся.
+  - **Audit** `FINISHED_GOODS_SHIPMENT_CANCELLED`
+    (`entityType = FINISHED_GOODS_SHIPMENT`,
+    `entityId = FinishedGoodsShipment.id`) пишется в той же
+    транзакции, что и `status → CANCELLED` + N движений REVERSAL IN.
+    Payload — `{ finishedGoodsShipmentId, number, orderId,
+    cancelledAt, cancelReason, lines: [{
+    finishedGoodsShipmentLineId, finishedGoodsBalanceId, productId,
+    sizeId, color, warehouseId, cellId, qty }], employeeId,
+    timestamp }`.
+  - **UI.** В существующем блоке «Отгрузка готовой продукции» во
+    вкладке «Производство» карточки заказа: для `POSTED`-shipment
+    рядом со строкой появилась inline-кнопка «Отменить» →
+    раскрывает форму с textarea «Причина отмены» (2..500) и
+    предупреждение «Отмена вернёт всю отгруженную готовую продукцию
+    на склад. Исходная отгрузка останется в истории со статусом
+    „Отменена“». Submit идёт через server action
+    `cancelFinishedGoodsShipmentAction`. Для `CANCELLED`-shipment
+    кнопка скрыта; в таблице рендерится badge «Отменена» (tone
+    `danger`) + дата отмены + причина. Cancelled-строки **не
+    скрываются** — остаются в истории.
+  - **Order.status автоматически НЕ меняется.** Material
+    `StockBalance` / `StockMovement` / `MaterialIssue` /
+    `PurchaseReceipt` / `StockAdjustment` / `StockTransfer` /
+    `CostsService` / `ProductionCostV2Service` **не затрагиваются**.
+    REVERSAL-движения в `/admin/warehouses?tab=movements`
+    отображаются с типом «Сторно» (`StockMovementTypeBadge` →
+    `REVERSAL`).
+  - Сознательно **не реализованы** на этой итерации:
+    частичная отмена, DRAFT-shipment, отдельный документ возврата,
+    автоматическая смена `Order.status`, новые роли. Запреты
+    зафиксированы в
+    `tests/smoke/finished-goods-shipment-cancel.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Перемещение готовой продукции»
+  (`apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::createTransfer`,
+  `apps/api/src/modules/finished-goods/dto/create-finished-goods-transfer.dto.ts`,
+  `apps/api/src/modules/finished-goods/finished-goods.constants.ts`,
+  `apps/web/lib/finished-goods-api.ts::createFinishedGoodsTransfer`,
+  `apps/web/app/admin/warehouses/actions.ts::createFinishedGoodsTransferAction`,
+  `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+  `apps/web/components/warehouses/stock/stock-transfer-button.tsx`,
+  `tests/smoke/finished-goods-transfers.smoke.test.ts`,
+  `tests/integration/finished-goods-transfers.test.ts`,
+  `docs/api.md §«Finished goods transfers»`):
+  - решение владельца проекта — «Переместить» это **одна общая
+    складская операция** в UI. Вкладка «Остатки» в
+    `/admin/warehouses?tab=balances` оставляет одну кнопку
+    «Переместить»; диалог сам решает, в какой backend endpoint идти,
+    по `kind` выбранного остатка:
+    - `MATERIAL` → `POST /api/stock/transfers`;
+    - `FINISHED_GOOD` → `POST /api/finished-goods/transfers`.
+    Отдельная кнопка / страница / sidebar item / новая вкладка
+    `OrderViewTabs` **не создавались**.
+  - Backend mutation: `POST /api/finished-goods/transfers` (RBAC
+    `ADMIN` / `SHOP_MANAGER`). DTO body —
+    `CreateFinishedGoodsTransferDto`: `{ fromFinishedGoodsBalanceId,
+    toWarehouseId? | null, toCellId? | null, qty (int > 0), comment
+    (2..500), clientRequestId? }`. `orderId`, `productId`, `sizeId`,
+    `color`, `warehouseId`, `cellId` сервис достаёт из исходного
+    `FinishedGoodsBalance` — клиент их не присылает. `qty` всегда
+    целое (готовая продукция штучная).
+  - Transfer фиксируется парой `FinishedGoodsMovement`
+    `type = TRANSFER` через `applyMovementInTx`:
+    - `direction = OUT` (sourceKey
+      `FINISHED_GOODS_TRANSFER:<id>:OUT`) уменьшает исходный
+      `FinishedGoodsBalance.qty`;
+    - `direction = IN` (sourceKey
+      `FINISHED_GOODS_TRANSFER:<id>:IN`) создаёт / увеличивает
+      целевой `FinishedGoodsBalance` той же номенклатуры.
+    Если IN падает, OUT откатывается (одна транзакция). Отдельной
+    модели `FinishedGoodsTransfer` сознательно нет.
+  - Transfer всегда **strict** — нельзя переместить больше, чем есть
+    на исходном балансе (`source.qty >= qty`). Готовая продукция не
+    уходит в минус. `allowNegativeMaterialStock` к этому контуру
+    **не применим** (это флаг для StockBalance материалов).
+  - **Same-location guard.** Если source `(warehouseId, cellId)`
+    совпадает с destination — 409
+    `FINISHED_GOODS_TRANSFER_SAME_LOCATION`.
+  - **Идемпотентность по `clientRequestId`.** Повторный submit с тем
+    же ключом возвращает существующую пару движений и НЕ апдейтит
+    балансы повторно. UNIQUE на `FinishedGoodsMovement.sourceKey`
+    подстрахует от race-condition. Если найден только один из двух
+    ключей — 409 `FINISHED_GOODS_TRANSFER_INCONSISTENT_STATE`.
+  - **Public API:** `POST /api/finished-goods/transfers`. Response —
+    `{ transferId, outMovement, inMovement }` в shape
+    `FinishedGoodsMovementListItem`. `sourceKey` сознательно НЕ
+    отдаём (внутренний идемпотентный технический ключ).
+  - **Audit** `FINISHED_GOODS_TRANSFER_CREATED`
+    (`entityType = FINISHED_GOODS_MOVEMENT`,
+    `entityId = OUT-movement.id`) пишется в той же транзакции, что
+    и пара движений. Payload — `{ sourceType:
+    'FINISHED_GOODS_TRANSFER', transferId,
+    fromFinishedGoodsBalanceId, toFinishedGoodsBalanceId,
+    outMovementId, inMovementId, orderId, productId, sizeId, color,
+    qty, from: { warehouseId, cellId }, to: { warehouseId, cellId },
+    comment, employeeId, timestamp }`.
+  - **UI.** Существующий `StockTransferDialog` расширен на оба
+    контура: source select собран как `<optgroup>`-список из
+    материалов + готовой продукции; на каждой опции лежит
+    `data-kind="MATERIAL" | "FINISHED_GOOD"`. Для FINISHED_GOOD
+    рендерится подсказка «Готовая продукция перемещается в штуках»,
+    `inputMode="numeric"`, и frontend-валидация `Number.isInteger` —
+    нецелое qty не уходит в backend. После успешного submit диалог
+    закрывается и `revalidatePath('/admin/warehouses')` обновляет
+    обе вкладки.
+  - **Отдельный контур от материалов.** `StockBalance` /
+    `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+    `StockAdjustment` / `StockTransfer` / `CostsService` /
+    `ProductionCostV2Service` **не затрагиваются** и **не менялись**.
+    Backend модели готовой продукции — отдельные
+    (`FinishedGoodsBalance` / `FinishedGoodsMovement`); никакого
+    общего master `Material` / `MaterialStockLot` / FIFO/LIFO нет.
+  - В `/admin/warehouses?tab=movements` строки перемещения готовой
+    продукции отображаются как «Перемещение»
+    (`StockMovementTypeBadge` → `TRANSFER`); направление — «Расход»
+    (OUT) и «Приход» (IN). Колонка «Заказчик» (`Client.name` через
+    `Order.client`) уже доступна.
+  - Сознательно **не реализованы** на этой итерации:
+    cancel transfer, partial / batch transfer, transfer history
+    endpoint, отдельный документ `FinishedGoodsTransfer`, FIFO/LIFO,
+    адjustment готовой продукции. Ошибочный transfer оператор
+    компенсирует обратным transfer-ом. Запреты зафиксированы в
+    `tests/smoke/finished-goods-transfers.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Корректировка готовой продукции»
+  (`apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::createAdjustment`,
+  `apps/api/src/modules/finished-goods/dto/create-finished-goods-adjustment.dto.ts`,
+  `apps/api/src/modules/finished-goods/finished-goods.constants.ts`,
+  `apps/web/lib/finished-goods-api.ts::createFinishedGoodsAdjustment`,
+  `apps/web/app/admin/warehouses/actions.ts::createFinishedGoodsAdjustmentAction`,
+  `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,
+  `apps/web/components/warehouses/stock/stock-adjustment-button.tsx`,
+  `tests/smoke/finished-goods-adjustments.smoke.test.ts`,
+  `tests/integration/finished-goods-adjustments.test.ts`,
+  `docs/api.md §«Finished goods adjustments»`):
+  - решение владельца проекта — «Корректировка» это **одна общая
+    складская операция** в UI. Вкладка «Остатки» в
+    `/admin/warehouses?tab=balances` оставляет одну кнопку
+    «Корректировка»; диалог сам решает, в какой backend endpoint
+    идти, по `kind` выбранного остатка:
+    - `MATERIAL` → `POST /api/stock/adjustments`;
+    - `FINISHED_GOOD` → `POST /api/finished-goods/adjustments`.
+    Отдельная кнопка / страница / sidebar item / новая вкладка
+    `OrderViewTabs` **не создавались**.
+  - Backend mutation: `POST /api/finished-goods/adjustments` (RBAC
+    `ADMIN` / `SHOP_MANAGER`). DTO body —
+    `CreateFinishedGoodsAdjustmentDto`: `{ finishedGoodsBalanceId,
+    direction ('IN' | 'OUT'), qty (int > 0), comment (2..500),
+    clientRequestId? }`. `orderId`, `productId`, `sizeId`, `color`,
+    `warehouseId`, `cellId`, `unit` сервис достаёт из исходного
+    `FinishedGoodsBalance` — клиент их не присылает. `qty` всегда
+    целое.
+  - Adjustment фиксируется одним `FinishedGoodsMovement`
+    `type = ADJUSTMENT` через `applyMovementInTx`:
+    - `direction = IN` увеличивает `FinishedGoodsBalance.qty` на
+      `qty`;
+    - `direction = OUT` уменьшает на `qty`. **Strict** —
+      `applyMovementInTx` не пускает баланс ниже нуля; backend
+      отдаёт 409 `FINISHED_GOODS_INSUFFICIENT_BALANCE`. Готовая
+      продукция не уходит в минус, аналога
+      `allowNegativeMaterialStock` для finished goods на этой
+      итерации нет.
+  - **Идемпотентность по `clientRequestId`.** SourceKey =
+    `FINISHED_GOODS_ADJUSTMENT:<clientRequestId>`. Повторный submit
+    с тем же ключом возвращает существующее движение и НЕ изменяет
+    баланс повторно. UNIQUE на `FinishedGoodsMovement.sourceKey`
+    подстрахует от race-condition.
+  - **Public API:** `POST /api/finished-goods/adjustments`. Response
+    — `FinishedGoodsMovementListItem`. `sourceKey` сознательно НЕ
+    отдаём (внутренний идемпотентный технический ключ).
+  - **Audit** `FINISHED_GOODS_ADJUSTMENT_CREATED`
+    (`entityType = FINISHED_GOODS_MOVEMENT`,
+    `entityId = FinishedGoodsMovement.id`) пишется в той же
+    транзакции, что и движение. Payload — `{ sourceType:
+    'FINISHED_GOODS_ADJUSTMENT', adjustmentId,
+    finishedGoodsBalanceId, movementId, orderId, productId, sizeId,
+    color, warehouseId, cellId, direction, qty, balanceBeforeQty,
+    balanceAfterQty, comment, employeeId, timestamp }`.
+  - **UI.** Существующий `StockAdjustmentDialog` расширен на оба
+    контура: source select собран как `<optgroup>`-список из
+    материалов + готовой продукции; на каждой опции лежит
+    `data-kind="MATERIAL" | "FINISHED_GOOD"`. Для `FINISHED_GOOD`:
+    рендерится подсказка «Готовая продукция корректируется в
+    штуках»; `inputMode="numeric"`; frontend-валидация
+    `Number.isInteger`; поле «Цена за единицу» **disabled** с
+    подсказкой «Стоимость для готовой продукции в этой
+    корректировке не указывается». После успеха диалог закрывается
+    и `revalidatePath('/admin/warehouses')` обновляет обе вкладки.
+  - **Отдельный контур от материалов.** `StockBalance` /
+    `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+    `StockAdjustment` / `StockTransfer` / `FinishedGoodsShipment` /
+    `FinishedGoodsTransfer` / `Packing` / `Operation` /
+    `CostsService` / `ProductionCostV2Service` **не затрагиваются**
+    и **не менялись**.
+  - В `/admin/warehouses?tab=movements` строки корректировки
+    готовой продукции отображаются как «Корректировка»
+    (`StockMovementTypeBadge` → `ADJUSTMENT`); направление —
+    «Расход» (OUT) и «Приход» (IN).
+  - Сознательно **не реализованы** на этой итерации:
+    cancel adjustment, partial cancel, adjustment history endpoint,
+    отдельный документ `FinishedGoodsAdjustment`, FIFO/LIFO,
+    `unitCost` для готовой продукции, флаг разрешения отрицательного
+    остатка готовой продукции. Ошибочную корректировку оператор
+    компенсирует обратной (IN ↔ OUT). Запреты зафиксированы в
+    `tests/smoke/finished-goods-adjustments.smoke.test.ts`.
+
+  Backend + Frontend-итерация «Давальческое сырьё клиента»
+  (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
+  `prisma/migrations/20260614100000_add_order_materials_and_hardware_cost_policy`,
+  `apps/api/src/modules/orders/orders.service.ts`,
+  `apps/api/src/modules/costs/costs.service.ts`,
+  `apps/api/src/modules/orders/order-cost-estimates.service.ts`,
+  `packages/shared/src/orders.ts`,
+  `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+  `apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx`,
+  `apps/web/components/orders/view/order-management-header.tsx`,
+  `apps/web/components/orders/summary/build-order-summary-rows.ts`,
+  `apps/web/components/orders/materials/order-materials-unified-table.tsx`):
+  - в заказ покупателя добавлена управленческая политика учёта
+    материалов и фурнитуры в себестоимости —
+    `Order.materialsAndHardwareCostPolicy: String @default("INCLUDE")`.
+    Значения: `INCLUDE` — материалы и фурнитура учитываются в
+    себестоимости заказа и в production cost (default); `EXCLUDE` —
+    давальческое сырьё / фурнитура клиента: финансовое включение
+    MATERIAL / HARDWARE отключается.
+  - **Что продолжает работать при `EXCLUDE`** (упрощённый MVP):
+    `WorkshopNeedsService.calculateForOrder` — расчёт потребности
+    материалов и фурнитуры; `OrderMaterialRequirement` snapshot;
+    `MaterialIssue` / `MaterialIssueReturn` — складское списание и
+    возврат; `StockBalance`, `StockMovement`, `StockAdjustment`,
+    `StockTransfer` — остатки и движения; `PurchaseReceipt` — приёмка.
+    План/факт по количеству материалов и фурнитуры остаётся —
+    клиенту всё ещё можно сообщить, сколько ткани и комплектующих
+    нужно для его заказа.
+  - **Что меняется при `EXCLUDE`** (только финансовое включение в
+    себестоимость): `OrderCostEstimatesService.completeCalculation`
+    исключает строки `MATERIAL` / `HARDWARE` из `totalCostRub`
+    (`APPLICATION` остаётся — это услуги/нанесения компании);
+    `CostsService.getProductionCost` обнуляет `materialCost` для
+    паспортов заказов с `EXCLUDE` (piecework / salary не трогаем);
+    UI summary `OrderSummaryUnifiedTable` показывает «Материалы и
+    фурнитура не учитываются в себестоимости», в строках MATERIAL /
+    HARDWARE сумма за тираж = «не учитывается»; UI таблица
+    `OrderMaterialsUnifiedTable` рисует «не учитывается» в колонках
+    «Сумма» и «Стоимость план / факт» по таким строкам.
+  - Backend: `CreateOrderSchema` / `UpdateOrderSchema` принимают
+    `materialsAndHardwareCostPolicy?: 'INCLUDE' | 'EXCLUDE'`.
+    `null` / пустая строка / `undefined` на create трактуется как
+    `INCLUDE` (default), на update `undefined` — Prisma не трогает
+    колонку. `OrderListItemDto` / `OrderDetailDto` отдают
+    `materialsAndHardwareCostPolicy`. Audit: смена поля попадает
+    в `ORDER_UPDATED.changedFields`.
+  - Frontend: select «Учет материалов и фурнитуры в себестоимости»
+    в формах создания (`/admin/orders/new`) и редактирования
+    (`/admin/orders/[id]/edit`), help-text «Если материалы или
+    фурнитуру предоставляет клиент, выберите ‘Не учитывать’.
+    Потребность по количеству всё равно будет рассчитана и
+    показана, но стоимость материалов и фурнитуры не войдёт в
+    себестоимость заказа.» В detail-карточке
+    (`OrderManagementHeader`) — поле «Материалы и фурнитура в
+    себестоимости» с бейджем «Давальческое сырьё / фурнитура
+    клиента» при `EXCLUDE`.
+  - Сознательно **не реализованы** (упрощённый MVP): отдельный
+    ownership-контур, `CustomerMaterialReceipt`, разделение
+    `StockBalance` по владельцу материала, `ownerClientId`,
+    master `Material`, `MaterialStockLot`, FIFO / LIFO, отдельная
+    страница / sidebar item, новые роли. Запреты зафиксированы в
+    smoke-тесте
+    `tests/smoke/order-materials-and-hardware-cost-policy.smoke.test.ts`.
+
+  Frontend-итерация «Фильтры склада»
+  (`apps/web/app/admin/warehouses/page.tsx`,
+  `apps/web/components/warehouses/stock/stock-balances-filters.tsx`,
+  `apps/web/components/warehouses/stock/stock-movements-filters.tsx`,
+  `apps/web/lib/stock-api.ts`):
+  - в существующем разделе `/admin/warehouses` над таблицами
+    «Остатки» и «Движения» появились GET-формы фильтров. Backend
+    `StockController` / `StockService` / Prisma schema на этой
+    итерации **не менялись** — UI пользуется тем, что DTO уже
+    поддерживали (`q`, `warehouseId`, `positiveOnly` /
+    `negativeOnly` / `zeroOnly`, `type`, `direction`, `from` /
+    `to`).
+  - Вкладка **«Остатки»** — `StockBalancesFilters`:
+    - **Поиск** (`q`) — substring по `description` остатка и
+      `WorkshopNeed.description` / `sourceName`;
+    - **Склад** (`warehouseId`) — select из `listWarehouses()`,
+      «Все склады» / `<option value="">`;
+    - **Остаток** (`stockState`) — единый UI-параметр над тремя
+      backend-флагами: `'all' | 'positive' | 'zero' | 'negative'`.
+      UI не позволяет выбрать несколько mutually-exclusive флагов
+      одновременно. Маппинг делает `stockStateToApiFlags`
+      (`positive → positiveOnly=true`, `negative →
+      negativeOnly=true`, `zero → zeroOnly=true`, `all → ничего`).
+      Если URL пришёл со старыми флагами `positiveOnly=true` и
+      т.п. — page их парсит через legacy-helper и применяет.
+  - Вкладка **«Движения»** — `StockMovementsFilters`:
+    - **Поиск** (`q`) — substring по `comment` движения;
+    - **Склад** (`warehouseId`);
+    - **Тип движения** — `PURCHASE_RECEIPT | MATERIAL_ISSUE |
+      REVERSAL | ADJUSTMENT | TRANSFER` с человекочитаемыми
+      лейблами;
+    - **Направление** — `IN | OUT`;
+    - **Период с / по** — `<input type="date">` (`YYYY-MM-DD`),
+      backend парсит через `Zod.datetime()`-валидацию.
+  - **URL state**: фильтры живут в `searchParams`. При submit
+    формы браузер отправляет GET с собранными значениями, RSC
+    перерисовывает страницу. `tab` и `limit` сохраняются через
+    `<input type="hidden">`, `offset` сознательно НЕ переносится
+    — применение фильтра должно сбрасывать pagination на первую
+    страницу. Pagination (`StockPagination`) сохраняет все
+    активные фильтры через `preserveParams` — кнопки «Назад» /
+    «Вперёд» меняют только `offset`. Кнопка «Сбросить» — обычная
+    ссылка на `/admin/warehouses?tab=balances|movements`.
+  - Кнопки «Корректировка» и «Переместить» на вкладке «Остатки»
+    остались на месте, кнопка «Добавить» в header тоже — фильтры
+    добавлены отдельной `AdminCard` над таблицей.
+  - Сознательно **не реализованы** на этой итерации: cell
+    selector назначения для transfer (ждёт API списка ячеек по
+    складу), chips / advanced filter summary в UI, фильтр
+    `materialRole` / `unit`, валидация `from > to` на frontend
+    (backend сам обработает). Запреты зафиксированы в smoke-
+    тесте `tests/smoke/warehouses-stock-filters.smoke.test.ts`.
 
   Frontend-итерация «Настройки компании → Материалы и склад»
   (`apps/web/app/admin/company-settings/settings-form.tsx`,
@@ -678,6 +1439,68 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     `tests/smoke/company-divisions-material-stock-overrides.smoke.test.ts`
     и integration-тесте
     `tests/integration/company-divisions-material-stock-overrides.test.ts`.
+
+  Backend + UI итерация «Возврат / сторно проведённого
+  `MaterialIssue`» (см. ТЗ «Material issue return»,
+  `apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+  `apps/api/src/modules/stock/stock.service.ts::recordMaterialIssueReturnInTx`,
+  `prisma/schema.prisma::MaterialIssueReturn` /
+  `MaterialIssueReturnLine`):
+  - проведённый `MaterialIssue` теперь можно сторнировать через
+    `POST /api/material-issues/:id/return`. Запрос требует `reason`
+    и опциональный `clientRequestId`;
+  - сторно создаёт отдельный документ `MaterialIssueReturn` (status
+    `POSTED`) и строки `MaterialIssueReturnLine[]` — исходный
+    `MaterialIssue` **не удаляется** и **не переводится** обратно
+    в `DRAFT`;
+  - в той же транзакции пишется `StockMovement` (`direction = IN`,
+    `type = REVERSAL`, `sourceKey = MATERIAL_ISSUE_RETURN_LINE:<id>`);
+    для каждой строки сервис ищет исходный OUT-движение
+    `MaterialIssueLine` и возвращает в ту же ячейку склада с той
+    же складской ценой партии;
+  - идемпотентность — `MaterialIssueReturn.sourceKey` UNIQUE
+    (`MATERIAL_ISSUE_RETURN_FULL:<materialIssueId>` или
+    `MATERIAL_ISSUE_RETURN:<materialIssueId>:<clientRequestId>`).
+    Повторный submit с тем же `clientRequestId` возвращает уже
+    созданный документ;
+  - audit `MATERIAL_ISSUE_RETURNED` под `entityType =
+    MATERIAL_ISSUE_RETURN`;
+  - `MaterialIssueListItemDto` / `MaterialIssueDetailDto`
+    отдают `returnedTotalCost`, `netTotalCost`, `returnsCount`,
+    `returnStatus` (`NONE` / `PARTIAL` / `FULL`); строки —
+    `returnedQty`, `returnedTotalCost`, `netIssuedQty`,
+    `netTotalCost`. Технический `sourceKey` в публичном API не
+    отдаётся;
+  - order summary `materialActualCostRub` и
+    `OrderMaterialsUnifiedTable` план/факт считают **нетто**
+    (`Σ MaterialIssue.totalCost − Σ MaterialIssueReturn.totalCost`,
+    `issuedQty − Σ returnedQty`); `CostsService` production cost
+    тоже вычитает возвраты по passportId исходного расхода;
+  - UI-кнопка «Сторнировать» / «Сторнировать остаток» добавлена в
+    карточке заказа → вкладка «Потребности» → блок «Фактический
+    расход материалов» (`MaterialIssuesTable`). Для `returnStatus =
+    FULL` кнопки нет — показывается «Сторнирован». Отдельная
+    страница / роут / пункт меню НЕ создаются;
+  - **частичный возврат с произвольным qty по строкам реализован**:
+    UI рендерит per-line input «Вернуть» по каждой строке расхода
+    (`MaterialIssueLineDto.netIssuedQty`), кнопка «Заполнить всё
+    доступное» проставляет максимумы. Submit фильтрует строки с
+    `returnedQty <= 0` и блокирует, пока ни одной строки не введено.
+    Backend `ReturnMaterialIssueSchema` принимает `lines = [{
+    materialIssueLineId, returnedQty }]` (≥ 1), бросает
+    409 `MATERIAL_ISSUE_RETURN_QTY_EXCEEDS_AVAILABLE` /
+    `MATERIAL_ISSUE_RETURN_LINE_NOT_FOUND` /
+    `MATERIAL_ISSUE_RETURN_DUPLICATE_LINE` /
+    `MATERIAL_ISSUE_NOTHING_TO_RETURN` для соответствующих
+    нарушений. Несколько частичных возвратов на один `MaterialIssue`
+    допускаются — `availableToReturn = issuedQty − Σ ранее
+    возвращённое`, каждый следующий submit уменьшает остаток.
+    `returnStatus` пересчитывается: `NONE → PARTIAL → FULL`;
+  - вызов без `lines` остаётся как backward-compat режим полного
+    сторно (server-to-server клиенты);
+  - удаление и отмена возврата НЕ реализованы;
+    FIFO/LIFO/`MaterialStockLot` / master `Material` остаются вне
+    scope; новых ролей не появилось.
 
 ---
 

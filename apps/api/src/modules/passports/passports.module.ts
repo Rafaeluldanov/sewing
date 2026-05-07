@@ -11,6 +11,7 @@ import { CutReleasePolicyModule } from '../cut-release-policy/cut-release-policy
 import { OrderCutIssueRulesModule } from '../order-cut-issue-rules/order-cut-issue-rules.module.js';
 import { MaterialIssuesModule } from '../material-issues/material-issues.module.js';
 import { CompanySettingsModule } from '../company-settings/company-settings.module.js';
+import { FinishedGoodsModule } from '../finished-goods/finished-goods.module.js';
 
 /**
  * Импортируем `EarningsModule`, чтобы `PassportsService` мог в одной
@@ -42,6 +43,15 @@ import { CompanySettingsModule } from '../company-settings/company-settings.modu
     OrderCutIssueRulesModule,
     MaterialIssuesModule,
     CompanySettingsModule,
+    // Foundation готовой продукции (см.
+    // `apps/api/src/modules/finished-goods/finished-goods.service.ts`,
+    // `prisma/schema.prisma::Operation.producesFinishedGoods`).
+    // PassportsService при `scanOnOperation` /
+    // `completeOperationByEmployee` фиксирует выпуск готовой продукции
+    // (`PRODUCTION_RECEIPT IN`), если у пройденной операции стоит
+    // `producesFinishedGoods = true`. Идемпотентно по
+    // `sourceKey = PACKED_PASSPORT:<passportId>`.
+    FinishedGoodsModule,
   ],
   controllers: [PassportsController, OrderPassportsController, CellsController],
   providers: [PassportsService, PassportNumberService],

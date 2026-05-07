@@ -192,10 +192,13 @@ export class QcService {
    *   - проверяем актора (есть, активен);
    *   - пишем `PassportEvent(QC_PASSED, qty=qtyGood, employeeId=actor)`.
    *
-   * Идемпотентность: повторное «Проверка выполнена» допустимо. Каждое
-   * нажатие создаёт новое событие — это полезно, если ОТК после
-   * фиксации брака подтверждает повторно. Аудит видит всю историю,
-   * `qcCompletedAt` в карточке всегда соответствует последнему событию.
+   * Идемпотентность (row-level): повторный «Проверка выполнена»
+   * допустим, но второй вызов НЕ пишет ни новый `PassportEvent
+   * (QC_PASSED)`, ни новую запись `AuditLog(QC_COMPLETED)`. Возвращаем
+   * текущее состояние карточки. `qcCompletedAt` указывает на
+   * единственный `QC_PASSED`-event и не «прыгает» между нажатиями.
+   * Это закрывает finding из `docs/operations-test-findings.md` и
+   * соответствует recon §6 invariant 6.
    */
   async completeQc(
     passportId: string,
@@ -223,11 +226,23 @@ export class QcService {
 
     // Сам event и аудит — в одной транзакции, чтобы инвариант
     // «либо и QC_PASSED, и AuditLog, либо ничего» соблюдался даже
-    // на уровне БД (см. `docs/domain.md §«Audit log»`). Раньше event
-    // писался одиночным `prisma.passportEvent.create`; обёртка в
-    // `$transaction` бизнес-логику не меняет — это всё ещё ровно один
-    // INSERT в `PassportEvent`.
+    // на уровне БД (см. `docs/domain.md §«Audit log»`).
+    //
+    // Row-level idempotency: внутри транзакции проверяем наличие
+    // уже существующего `QC_PASSED`-event; если есть — выходим без
+    // вставки event/audit. Без unique-индекса на `(passportId, type)`
+    // обходимся «check-then-insert» под одной транзакцией, в которой
+    // повторный insert от параллельного запроса в худшем случае
+    // создаст вторую строку — но в нашем продовом сценарии «двойной
+    // клик» это происходит последовательно, так что обычного `findFirst`
+    // достаточно. Полный конкурент-safe-вариант потребовал бы partial
+    // unique индекс — это уже миграция и выходит за рамки задачи.
     await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.passportEvent.findFirst({
+        where: { passportId, type: PassportEventType.QC_PASSED },
+        select: { id: true },
+      });
+      if (existing) return;
       await tx.passportEvent.create({
         data: {
           passportId,

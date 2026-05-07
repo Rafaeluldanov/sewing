@@ -17,6 +17,8 @@ import type {
   ListMaterialIssuesQuery,
   MaterialIssueDetailDto,
   MaterialIssueListItemDto,
+  MaterialIssueReturnDto,
+  ReturnMaterialIssueDto,
 } from '@sewing/shared/material-issues';
 import { apiFetch } from './api';
 
@@ -81,6 +83,26 @@ export function cancelMaterialIssue(
 ): Promise<MaterialIssueDetailDto> {
   return apiFetch<MaterialIssueDetailDto>(
     `/material-issues/${encodeURIComponent(id)}/cancel`,
+    {
+      method: 'POST',
+      body,
+    },
+  );
+}
+
+/**
+ * `POST /api/material-issues/:id/return` — полное сторно
+ * проведённого расхода (см. `apps/api/src/modules/material-issues/material-issues.controller.ts`,
+ * `docs/api.md §«Material issues»`). Возвращает detail созданного
+ * (или ранее созданного — идемпотентно по `clientRequestId`)
+ * `MaterialIssueReturn`.
+ */
+export function returnMaterialIssue(
+  id: string,
+  body: ReturnMaterialIssueDto,
+): Promise<MaterialIssueReturnDto> {
+  return apiFetch<MaterialIssueReturnDto>(
+    `/material-issues/${encodeURIComponent(id)}/return`,
     {
       method: 'POST',
       body,

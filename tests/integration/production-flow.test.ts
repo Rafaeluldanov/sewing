@@ -351,8 +351,11 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
     expect(typeof done.body.qcCompletedAt).toBe('string');
     // Сатус не трогаем — ОТК это аудит-маркер, не движение по pipeline.
     expect(done.body.status).toBe('IN_PROGRESS');
-    // Повторно завершить — допустимо (например, после фиксации
-    // дополнительного брака): backend должен отдать новый timestamp.
+    // Повторное завершение допустимо (двойной клик, повторное
+    // подтверждение после фиксации брака), но идемпотентно: второй
+    // вызов НЕ пишет ни новый QC_PASSED, ни новый QC_COMPLETED audit;
+    // qcCompletedAt не сдвигается. См. `qc-shift-flow.test.ts §5`
+    // и `docs/operations-test-findings.md §Resolved`.
     const firstAt = done.body.qcCompletedAt as string;
     await new Promise((r) => setTimeout(r, 5));
     const again = await request(t.app.getHttpServer())
@@ -360,16 +363,14 @@ describeWithDb('integration — full production flow (MVP 1.1)', () => {
       .set('Cookie', cookies.qc)
       .send({})
       .expect(201);
-    expect(again.body.qcCompletedAt).not.toBeNull();
-    expect(
-      new Date(again.body.qcCompletedAt as string).getTime(),
-    ).toBeGreaterThanOrEqual(new Date(firstAt).getTime());
+    expect(again.body.qcCompletedAt).toBe(firstAt);
 
-    // 3) В аудите обязательно появляется PassportEvent(QC_PASSED).
+    // 3) В аудите ровно один PassportEvent(QC_PASSED) — row-level
+    // idempotency, см. QcService.completeQc.
     const events = await t.prisma.passportEvent.findMany({
       where: { passportId, type: 'QC_PASSED' },
     });
-    expect(events.length).toBeGreaterThanOrEqual(2);
+    expect(events).toHaveLength(1);
     expect(events[0]?.employeeId).toBe(seed.employees.qc.id);
   });
 

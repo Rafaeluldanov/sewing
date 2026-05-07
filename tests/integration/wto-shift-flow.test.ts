@@ -217,4 +217,105 @@ describeWithDb('integration — WTO shift-gated scan flow', () => {
       seed.operations.IRONING.id,
     );
   });
+
+  // ---------------------------------------------------------------------------
+  // P0-6: дополнительные WTO-инварианты (см. docs/test-gap-plan.md §P0-6).
+  // ---------------------------------------------------------------------------
+
+  /**
+   * `WtoService.completeWto` сначала проверяет статус+категорию, и
+   * только потом `assertQcPassed`. Чтобы добраться до проверки QC и
+   * получить именно `PASSPORT_NOT_QC_PASSED`, нужен паспорт уже на
+   * операции категории `IRONING`. Через scan такое состояние недостижимо
+   * (входной QC-gate в `PassportsService.scanOnOperation:826-840` тоже
+   * блокирует), поэтому artificially выставляем `currentOperationId`
+   * напрямую через Prisma — это test-only short-circuit, никакого
+   * изменения production-кода.
+   */
+  test('completeWto без QC_PASSED → 409 PASSPORT_NOT_QC_PASSED, без WTO-сайд-эффектов', async () => {
+    const passportId = await prepareInProgressPassport(false);
+    // Принудительно ставим passport на IRONING без QC_PASSED события.
+    await t.prisma.passport.update({
+      where: { id: passportId },
+      data: { currentOperationId: seed.operations.IRONING.id },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PASSPORT_NOT_QC_PASSED');
+
+    // WTO-сайд-эффекты не созданы.
+    const wtoEvents = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'WTO_PASSED' },
+    });
+    expect(wtoEvents).toBe(0);
+    const wtoAudit = await t.prisma.auditLog.count({
+      where: { event: 'WTO_COMPLETED', entityType: 'WTO', entityId: passportId },
+    });
+    expect(wtoAudit).toBe(0);
+
+    // Контрольно: passport не сдвинулся в терминальный статус.
+    const after = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: { status: true, currentOperationId: true },
+    });
+    expect(after.status).toBe('IN_PROGRESS');
+    expect(after.currentOperationId).toBe(seed.operations.IRONING.id);
+  });
+
+  /**
+   * Row-level идемпотентность `completeWto` (симметрично QC, fixed в
+   * `WtoService.completeWto`): второй клик возвращает успешный detail,
+   * но НЕ пишет ни второй `PassportEvent(WTO_PASSED)`, ни вторую
+   * запись `AuditLog(WTO_COMPLETED)`, ни не сдвигает `wtoCompletedAt`.
+   */
+  test('completeWto × 2 идемпотентен: один WTO_PASSED, один WTO_COMPLETED, wtoCompletedAt стабилен', async () => {
+    const passportId = await prepareInProgressPassport(true);
+
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', cookies.ironing)
+      .send({
+        equipmentId: seed.equipment['ironing-station-01'].id,
+        operationId: seed.operations.IRONING.id,
+      })
+      .expect(201);
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.ironing)
+      .send({})
+      .expect(201);
+
+    const first = await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({});
+    expect(first.status).toBe(201);
+    const firstWtoAt = first.body.wtoCompletedAt as string;
+    expect(typeof firstWtoAt).toBe('string');
+
+    // Если бы сервис писал второй event, его timestamp был бы заметно
+    // позже. Идемпотентность означает «тот же первый event».
+    await new Promise((r) => setTimeout(r, 5));
+
+    const second = await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({});
+    expect(second.status).toBe(201);
+    const secondWtoAt = second.body.wtoCompletedAt as string;
+    expect(secondWtoAt).toBe(firstWtoAt);
+
+    const events = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'WTO_PASSED' },
+    });
+    expect(events).toBe(1);
+    const audit = await t.prisma.auditLog.count({
+      where: { event: 'WTO_COMPLETED', entityType: 'WTO', entityId: passportId },
+    });
+    expect(audit).toBe(1);
+  });
 });

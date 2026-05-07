@@ -28,6 +28,7 @@
   - [2.5 Passports / production](#25-passports--production)
   - [2.6 Warehouse / cells](#26-warehouse--cells)
   - [2.7 Packing](#27-packing)
+  - [2.7a Finished goods (foundation)](#27a-finished-goods)
   - [2.8 QC / WTO / defects](#28-qc--wto--defects)
   - [2.9 Salary / earnings](#29-salary--earnings)
   - [2.10 Shopfloor / display](#210-shopfloor--display)
@@ -147,16 +148,35 @@
     `operationCostPlanRub?`, `operationTimePlanSec?`,
     `operationPlanCalculatedAt?`, `operationPlanWarnings: Json?`.
   - **Цена продажи**: `customerUnitPrice?`, `customerCurrency?`.
+  - **Склад выпуска готовой продукции**:
+    `finishedGoodsWarehouseId? → Warehouse` (named relation
+    `OrderFinishedGoodsWarehouse`, `onDelete: SetNull`). Управленческое
+    поле — НЕ влияет на `StockBalance` / `StockMovement` материалов;
+    готовая продукция как stock-сущность на этой итерации не
+    моделируется. Backend (`OrdersService`) валидирует existence +
+    `isActive` (400 `WAREHOUSE_NOT_FOUND`, 409 `WAREHOUSE_INACTIVE`).
+  - **Учёт материалов и фурнитуры в себестоимости**:
+    `materialsAndHardwareCostPolicy: String @default("INCLUDE")`,
+    значения `INCLUDE` / `EXCLUDE` (см. `docs/current-state.md
+    §«Давальческое сырьё клиента»`). При `EXCLUDE` MATERIAL /
+    HARDWARE строки не входят в `OrderCostEstimate.totalCostRub` и
+    в production cost (`CostsService.getProductionCost.materialCost`
+    для паспортов заказа = 0). Расчёт потребности (`WorkshopNeed`),
+    `MaterialIssue` / `MaterialIssueReturn`, `StockBalance` и
+    `StockMovement` НЕ затрагиваются — это исключительно
+    финансовая политика. Индекс — `materialsAndHardwareCostPolicy`.
   - Связи: `OrderItem[]`, `Passport[]`, `OrderRouteStep[]`,
     `OrderMaterialRequirement[]`, `OrderOutsourceRequirement[]`,
     `WorkshopNeed[]` (cascade), `PurchaseOrder[]` (`SetNull` со стороны
     PO), `PurchaseReceipt[]` (`SetNull`), `OrderApplication[]` (cascade),
     `OrderCostEstimate[]`, `OrderMaterialArrivalOverride[]` (cascade),
     `MaterialIssue[]` (cascade — см. §2.12a),
-    `CuttingClosureRequest[]`, `companyDivision? → CompanyDivision`.
+    `CuttingClosureRequest[]`, `companyDivision? → CompanyDivision`,
+    `finishedGoodsWarehouse? → Warehouse` (`SetNull`).
   - Индексы: `status`, `orderDate`, `createdAt`, `routeTemplateId`,
     `techCardId`, `patternItemId`, `clientId`, `dueDate`,
-    `companyDivisionId`.
+    `companyDivisionId`, `finishedGoodsWarehouseId`,
+    `materialsAndHardwareCostPolicy`.
   - **`CompanyDivision` как master-справочник подразделений** (см.
     `docs/domain.md §«Подразделения заказа»`): backend
     `OrdersService.create`/`update` пишет FK
@@ -179,7 +199,14 @@
   `timeNormMode: String @default("FIXED")` (`FIXED` / `BY_SIZE`),
   `timeNormSec: Int?`,
   `salaryPlanRubPerShift: Decimal(14,2)?`,
-  `salaryPlanShiftSeconds: Int? @default(28800)`. См. ADR-0020.
+  `salaryPlanShiftSeconds: Int? @default(28800)`,
+  `producesFinishedGoods: Boolean @default(false)` — признак
+  «операция выпускает готовую продукцию»; если `true`, прохождение
+  паспортом этой операции (`scanOnOperation` /
+  `completeOperationByEmployee`) создаёт
+  `FinishedGoodsMovement PRODUCTION_RECEIPT IN` идемпотентно по
+  `sourceKey = PACKED_PASSPORT:<passportId>` (см.
+  `docs/current-state.md §«Готовая продукция»`). См. ADR-0020.
 - **`OperationRateBySize`** — сдельные ставки по размерам
   (`pricingMode = BY_SIZE`). `(operationId, sizeId)` uniq,
   `onDelete: Cascade` от `Operation`.
@@ -273,11 +300,100 @@
 
 - **`Box`** — коробка. `number` (uniq), `qrCode` (uniq),
   `totalQty @default(0)`, `maxQty @default(100)`, `closedAt?`,
-  `createdById → Employee` (BoxCreator). Индекс: `closedAt`.
+  `createdById → Employee` (BoxCreator). Индекс: `closedAt`. Связи:
+  `BoxItem[]`, `PassportEvent[]`, `FinishedGoodsMovement[]`
+  (см. § 2.7a).
 - **`BoxItem`** — связь паспорт↔коробка. `passportId String @unique`
   (глобально, ADR-0015), `(boxId, passportId)` uniq, `qty: Int`.
 - **`Packed`-флаг** хранится в `Passport.status = PACKED` и в
   `PassportEvent(type = PACKED)`.
+
+<a id="27a-finished-goods"></a>
+### 2.7a Finished goods (foundation)
+
+**Отдельный контур от материалов** (`StockBalance` / `StockMovement`
+НЕ используются). На MVP-итерации — автоматический приход
+готовой продукции в момент `Passport.status = PACKED`. Реализован
+только тип `PRODUCTION_RECEIPT` (`direction = IN`); `REVERSAL` /
+`ADJUSTMENT` / `SHIPMENT` / `TRANSFER` зарезервированы.
+
+- **`FinishedGoodsBalance`** — остаток готовой продукции по
+  `(orderId, productId, sizeId, color, warehouseId?, cellId?)`.
+  `balanceKey` детерминирован
+  (`${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`,
+  `@unique`). `qty: Int @default(0)` (готовые изделия штучные),
+  `lastMovementAt?`. Связи: `order → Order` (Cascade),
+  `product → Product` (Restrict), `size → Size` (Restrict),
+  `warehouse? → Warehouse` (SetNull), `cell? → Cell` (SetNull),
+  `movements: FinishedGoodsMovement[]`. Индексы: `orderId`,
+  `productId`, `sizeId`, `warehouseId`, `cellId`, `updatedAt`.
+- **`FinishedGoodsMovement`** — журнал движений. `type: String`,
+  `direction: String`, `qty: Int`, `balanceBeforeQty?`,
+  `balanceAfterQty?`, `sourceType?`, `sourceId?`,
+  `sourceKey String? @unique` (форматы: `PACKED_PASSPORT:<passportId>`
+  для PRODUCTION_RECEIPT IN; `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`
+  для SHIPMENT OUT). Связи:
+  `finishedGoodsBalance? → FinishedGoodsBalance` (SetNull),
+  `order → Order` (Cascade), `product → Product` (Restrict),
+  `size → Size` (Restrict), `warehouse? → Warehouse` (SetNull),
+  `cell? → Cell` (SetNull), `passport? → Passport` (SetNull),
+  `box? → Box` (SetNull). Индексы: `finishedGoodsBalanceId`,
+  `orderId`, `productId`, `sizeId`, `type`, `direction`,
+  `warehouseId`, `cellId`, `passportId`, `boxId`,
+  `(sourceType, sourceId)`, `createdAt`.
+- **`FinishedGoodsShipment`** — документ отгрузки готовой продукции
+  из карточки заказа (см. `docs/current-state.md §«Отгрузка готовой
+  продукции»`). `id`, `number String @unique` (`S-YYYYMMDD-NNNN`),
+  `orderId`, `status: String @default("POSTED")` (`POSTED` /
+  `CANCELLED`), `shippedAt`, `comment?`, `cancelledAt?`,
+  `cancelledById?`, `cancelReason?` (заполняются при
+  `status = CANCELLED`), `sourceKey String? @unique`
+  (`FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`,
+  идемпотентность повторного submit), `createdAt`, `createdById?`.
+  Связи: `order → Order` (Cascade), `lines: FinishedGoodsShipmentLine[]`.
+  Индексы: `orderId`, `status`, `shippedAt`, `createdAt`,
+  `cancelledAt`.
+- **`FinishedGoodsShipmentLine`** — строка документа отгрузки.
+  `id`, `finishedGoodsShipmentId`, `finishedGoodsBalanceId?` (snapshot
+  к балансу — `SetNull` при удалении баланса), `orderId`, `productId`,
+  `sizeId`, `color`, `warehouseId?`, `cellId?` (snapshot на момент
+  создания), `qty: Int`, `comment?`. Связи:
+  `shipment → FinishedGoodsShipment` (Cascade),
+  `finishedGoodsBalance? → FinishedGoodsBalance` (SetNull),
+  `order → Order` (Cascade), `product → Product` (Restrict),
+  `size → Size` (Restrict), `warehouse? → Warehouse` (SetNull),
+  `cell? → Cell` (SetNull). Индексы: `finishedGoodsShipmentId`,
+  `finishedGoodsBalanceId`, `orderId`, `productId`, `sizeId`,
+  `warehouseId`, `cellId`. По каждой строке создаётся ровно один
+  `FinishedGoodsMovement` SHIPMENT OUT (sourceKey
+  `FINISHED_GOODS_SHIPMENT_LINE:<lineId>`).
+- **Бизнес-момент выпуска**: `PackingService.addPassport` →
+  `FinishedGoodsService.recordPackedPassportInTx` в той же
+  транзакции, что и `Passport.status → PACKED`. `qty =
+  passport.qtyGood`, `warehouseId = order.finishedGoodsWarehouseId
+  ?? null` (no-warehouse balance, упаковку не блокирует),
+  `cellId = null`. Audit:
+  `FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED` под
+  `entityType = FINISHED_GOODS_MOVEMENT`.
+- **Read-only API**: `GET /api/finished-goods/balances`,
+  `GET /api/finished-goods/movements` (см. `docs/api.md §29a`).
+  `sourceKey` сознательно НЕ отдаётся.
+- **Shipment API** (`docs/api.md §29a «Finished goods shipments»`):
+  `POST /api/orders/:orderId/finished-goods-shipments` — частичная
+  отгрузка готовой продукции из заказа (создаёт
+  `FinishedGoodsShipment` + N `FinishedGoodsShipmentLine` + N
+  `FinishedGoodsMovement` SHIPMENT OUT в одной транзакции,
+  атомарно уменьшает балансы). `GET /api/orders/:orderId/finished-goods-shipments`
+  и `GET /api/finished-goods/shipments/:id` — read-only detail.
+  `POST /api/finished-goods/shipments/:id/cancel` — отмена
+  документа целиком: `status → CANCELLED` +
+  `cancelledAt` / `cancelledById` / `cancelReason` + N обратных
+  `FinishedGoodsMovement` REVERSAL IN (sourceKey
+  `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`); балансы атомарно
+  возвращаются. Идемпотентно по `status === CANCELLED`. Audit
+  `FINISHED_GOODS_SHIPMENT_CREATED` / `FINISHED_GOODS_SHIPMENT_CANCELLED`.
+  `Order.status` НЕ меняется автоматически. Частичная отмена не
+  поддерживается; отдельные модели возврата / сторно НЕ создавались.
 
 <a id="28-qc--wto--defects"></a>
 ### 2.8 QC / WTO / defects
@@ -585,6 +701,46 @@
   сервере), `cellId? → Cell` (`SetNull` — аналитический slice, НЕ
   движение остатков), `comment?`. Индексы: `materialIssueId`,
   `workshopNeedId`, `cellId`. См. § 3.10 ниже.
+- **`MaterialIssueReturn`** *(новый контур)* — документ возврата /
+  сторно проведённого `MaterialIssue`
+  (`apps/api/src/modules/material-issues/material-issues.service.ts::returnPostedIssue`,
+  `prisma/schema.prisma::MaterialIssueReturn`). `materialIssueId →
+  MaterialIssue` (cascade), `orderId → Order` (cascade — дублируем
+  для удобных фильтров без JOIN), `passportId? → Passport`
+  (`SetNull`, snapshot `MaterialIssue.passportId`),
+  `status @default("POSTED")` (на MVP всегда `POSTED`),
+  `sourceKey: String? @unique` (UNIQUE — идемпотентность; формат
+  `MATERIAL_ISSUE_RETURN_FULL:<materialIssueId>` или
+  `MATERIAL_ISSUE_RETURN:<materialIssueId>:<clientRequestId>`),
+  `reason: String` (обязательная причина возврата, 2..500),
+  `totalCost: Decimal(14,2) @default(0)` (Σ строк, считается на
+  сервере), `createdAt`, `createdById?` (без FK на `Employee`).
+  Индексы: `materialIssueId`, `orderId`, `passportId`, `status`,
+  `createdAt`. Связь со складом: создание возврата в той же
+  транзакции вызывает `StockService.recordMaterialIssueReturnInTx`
+  → IN-движения `type = REVERSAL`, `sourceKey =
+  MATERIAL_ISSUE_RETURN_LINE:<id>`. Сознательная граница MVP: на
+  UI отдаётся только полное сторно (частичный возврат с произвольным
+  qty не реализован), удаление и отмена возврата не реализованы,
+  возврат **не удаляет** и **не переводит в DRAFT** исходный
+  `MaterialIssue` — это отдельный документ. Финансовая стоимость
+  возврата = snapshot `MaterialIssueLine.unitCost` × `returnedQty`
+  (для нетто-расчёта в order summary, plan/fact и production cost),
+  складская стоимость IN-движения берётся из исходного
+  `MaterialIssueLine` OUT-движения (если оно было).
+- **`MaterialIssueReturnLine`** — строка возврата. Cascade от
+  `MaterialIssueReturn` и от `MaterialIssueLine` (через
+  `materialIssueLineId`). `workshopNeedId? → WorkshopNeed`
+  (`SetNull`, snapshot потребности исходной строки),
+  `description: String` / `materialRole?` / `unit: String`
+  (snapshots исходной строки), `returnedQty: Decimal(14,4)`,
+  `unitCost: Decimal(14,2)` (snapshot
+  `MaterialIssueLine.unitCost`), `totalCost: Decimal(14,2)` (=
+  `returnedQty × unitCost`), `cellId? → Cell` (`SetNull` —
+  опциональная ячейка зачисления, на MVP сервис её не выставляет —
+  IN-движение использует `cellId` исходного OUT), `comment?`.
+  Индексы: `materialIssueReturnId`, `materialIssueLineId`,
+  `workshopNeedId`, `cellId`.
 
 <a id="212b-stock-foundation"></a>
 ### 2.12b Stock foundation (MVP по WorkshopNeed)

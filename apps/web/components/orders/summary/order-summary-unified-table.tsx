@@ -822,6 +822,10 @@ export async function OrderSummaryUnifiedTable({
     operationRows,
     currentCostEstimate: order.currentCostEstimate ?? null,
     qtyTotal: order.qtyPlanTotal,
+    // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+    // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+    materialsAndHardwareCostPolicy:
+      order.materialsAndHardwareCostPolicy ?? 'INCLUDE',
   });
 
   const totals = computeOrderSummaryTotals({
@@ -836,6 +840,8 @@ export async function OrderSummaryUnifiedTable({
     // null` и UI показал «—» вместо `0 ₽`. Пустой массив — это
     // явный сигнал «факта по заказу нет», тогда показываем `0 ₽`.
     materialIssues: data.materialIssues ?? undefined,
+    materialsAndHardwareCostPolicy:
+      order.materialsAndHardwareCostPolicy ?? 'INCLUDE',
   });
 
   // Колонки: Раздел / Статья / Кол-во / Ед. / Цена / Сумма за тираж /

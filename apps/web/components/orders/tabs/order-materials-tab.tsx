@@ -22,19 +22,35 @@
  *
  * Backend / Prisma не менялись.
  */
-import type { OrderStatus } from '@sewing/shared/orders';
+import type {
+  OrderMaterialsAndHardwareCostPolicy,
+  OrderStatus,
+} from '@sewing/shared/orders';
 import { ManualMaterialArrivalActions } from '@/components/orders/materials/manual-material-arrival-actions';
 import { OrderMaterialsUnifiedTable } from '@/components/orders/materials/order-materials-unified-table';
 
 interface Props {
   orderId: string;
   orderStatus?: OrderStatus;
+  /**
+   * Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
+   * `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`).
+   * Default — `INCLUDE` (старая логика).
+   */
+  materialsAndHardwareCostPolicy?: OrderMaterialsAndHardwareCostPolicy;
 }
 
-export function OrderMaterialsTab({ orderId, orderStatus }: Props) {
+export function OrderMaterialsTab({
+  orderId,
+  orderStatus,
+  materialsAndHardwareCostPolicy,
+}: Props) {
   return (
     <>
-      <OrderMaterialsUnifiedTable orderId={orderId} />
+      <OrderMaterialsUnifiedTable
+        orderId={orderId}
+        materialsAndHardwareCostPolicy={materialsAndHardwareCostPolicy}
+      />
       <ManualMaterialArrivalActions
         orderId={orderId}
         orderStatus={orderStatus}
