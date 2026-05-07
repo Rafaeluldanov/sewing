@@ -19,6 +19,7 @@ import {
 } from '@sewing/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-issue-rules.service.js';
 import {
   CellInactiveException,
   CellNotFoundException,
@@ -61,6 +62,7 @@ export class MasterActionsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly orderCutIssueRules: OrderCutIssueRulesService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -285,6 +287,16 @@ export class MasterActionsService {
           // — тоже сохраняем, см. doc-comment выше.
         },
         include: passportInclude,
+      });
+      // Откат счётчика очереди выдачи кроя: возврат в ячейку
+      // эквивалентен «un-issue» — `OrderCutIssueRule.issuedQty`
+      // декрементится на ту же величину, на которую был
+      // инкрементирован при выдаче. Идемпотентно (см. releaseInTx).
+      await this.orderCutIssueRules.releaseInTx(tx, {
+        passportId: passport.id,
+        orderId: passport.orderId,
+        sizeId: passport.sizeId,
+        employeeId: actor.employeeId,
       });
       await this.audit.log(
         {

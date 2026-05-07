@@ -951,4 +951,77 @@ describeWithDb('integration — order cut issue rules', () => {
       deactivatedCount: 1,
     });
   });
+
+  // ---------------------------------------------------------------------------
+  // T20. master returnToCell декрементит issuedQty правила очереди
+  // ---------------------------------------------------------------------------
+
+  test('T20. master returnToCell откатывает issuedQty в той же строке, что была инкрементирована', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 20 },
+    ]);
+    await bulkUpsertRules(orderId, [
+      { sizeId: sizeIdByKey.S!, requiredQty: 5 },
+    ]).expect(201);
+
+    const passportId = await createAndPlace(
+      orderId,
+      sizeIdByKey.S!,
+      3,
+      'R-T20',
+    );
+    await startSeamstressShift();
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const ruleAfterIssue = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+    });
+    expect(ruleAfterIssue.issuedQty).toBe(3);
+
+    // Мастер возвращает паспорт в ту же ячейку.
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/return-to-cell`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'WRONG_SCAN', cellId: seed.cells.A1.id })
+      .expect(201);
+
+    const ruleAfterReturn = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+    });
+    expect(ruleAfterReturn.issuedQty).toBe(0);
+
+    // Идемпотентность: повторный returnToCell не уводит issuedQty в минус
+    // (CONSUMED уже сбалансирован RELEASED-ом).
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/return-to-cell`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'WRONG_SCAN', cellId: seed.cells.A1.id })
+      .expect(201);
+
+    const ruleAfterDouble = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+    });
+    expect(ruleAfterDouble.issuedQty).toBe(0);
+
+    // Audit-паре CONSUMED ↔ RELEASED.
+    const consumed = await t.prisma.auditLog.findMany({
+      where: { event: 'ORDER_CUT_ISSUE_RULE_CONSUMED' },
+    });
+    const released = await t.prisma.auditLog.findMany({
+      where: { event: 'ORDER_CUT_ISSUE_RULE_RELEASED' },
+    });
+    expect(consumed).toHaveLength(1);
+    expect(released).toHaveLength(1);
+    expect(released[0]!.payload).toMatchObject({
+      orderId,
+      passportId,
+      qty: 3,
+      queueIndex: 1,
+    });
+  });
 });

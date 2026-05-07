@@ -667,6 +667,90 @@ export class OrderCutIssueRulesService {
     );
   }
 
+  /**
+   * Откатить последнюю CONSUMED-выдачу паспорта: декрементить
+   * `issuedQty` той строки правила, которая была инкрементирована
+   * на issue, и записать `ORDER_CUT_ISSUE_RULE_RELEASED` в audit.
+   * Идемпотентно: если CONSUMED уже был сбалансирован RELEASED-ом,
+   * ничего не делаем.
+   *
+   * Используется из мастер-действия `returnToCell` — паспорт
+   * физически возвращается на склад, и счётчик правила должен
+   * откатиться до состояния «как до выдачи». Так баннер на /work
+   * и таблица очереди заказа сразу видят актуальный остаток.
+   *
+   * Идентификацию строки правила берём из audit-payload последнего
+   * `ORDER_CUT_ISSUE_RULE_CONSUMED` для этого `passportId`. Это
+   * учитывает кейс, когда правило успело перейти в следующую
+   * очередь после issue (мы откатываем именно ту строку, которую
+   * инкрементили, а не «последнюю активную по размеру»).
+   */
+  async releaseInTx(
+    tx: Prisma.TransactionClient,
+    op: {
+      passportId: string;
+      orderId: string;
+      sizeId: string;
+      employeeId: string;
+    },
+  ): Promise<void> {
+    const consumedCount = await tx.auditLog.count({
+      where: {
+        event: 'ORDER_CUT_ISSUE_RULE_CONSUMED',
+        payload: { path: ['passportId'], equals: op.passportId },
+      },
+    });
+    if (consumedCount === 0) return;
+    const releasedCount = await tx.auditLog.count({
+      where: {
+        event: 'ORDER_CUT_ISSUE_RULE_RELEASED',
+        payload: { path: ['passportId'], equals: op.passportId },
+      },
+    });
+    if (releasedCount >= consumedCount) return;
+
+    const lastConsumed = await tx.auditLog.findFirst({
+      where: {
+        event: 'ORDER_CUT_ISSUE_RULE_CONSUMED',
+        payload: { path: ['passportId'], equals: op.passportId },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { entityId: true, payload: true },
+    });
+    if (!lastConsumed) return;
+
+    const payload = lastConsumed.payload as {
+      qty: number;
+      queueIndex: number;
+      sizeCode: string;
+    };
+    const ruleId = lastConsumed.entityId;
+    const qty = payload.qty;
+
+    await tx.orderCutIssueRule.update({
+      where: { id: ruleId },
+      data: { issuedQty: { decrement: qty } },
+    });
+
+    await this.audit.log(
+      {
+        event: 'ORDER_CUT_ISSUE_RULE_RELEASED',
+        entityType: 'ORDER_CUT_ISSUE_RULE',
+        entityId: ruleId,
+        employeeId: op.employeeId,
+        payload: {
+          orderId: op.orderId,
+          passportId: op.passportId,
+          sizeId: op.sizeId,
+          queueIndex: payload.queueIndex,
+          sizeCode: payload.sizeCode,
+          qty,
+        },
+      },
+      tx,
+    );
+  }
+
   // -------------------------------------------------------------------------
   // mapping & helpers
   // -------------------------------------------------------------------------
