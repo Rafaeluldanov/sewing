@@ -69,6 +69,22 @@ export class OrderCutIssueRulesController {
   }
 
   /**
+   * Отключить одну конкретную очередь заказа (`isActive = false`
+   * для всех её активных строк). Идемпотентно. См.
+   * `OrderCutIssueRulesService.disableQueue`.
+   */
+  @Post('queues/:queueIndex/disable')
+  @Roles('SHOP_MANAGER', 'SHOPFLOOR_MASTER')
+  disableQueue(
+    @Param('id') orderId: string,
+    @Param('queueIndex') queueIndexParam: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderCutIssueRulesSummaryDto> {
+    const queueIndex = parseQueueIndex(queueIndexParam);
+    return this.service.disableQueue(user, orderId, queueIndex);
+  }
+
+  /**
    * Удалить целиком одну очередь заказа. Разрешено только если
    * это последняя очередь и в ней `Σ issuedQty = 0` (см.
    * `OrderCutIssueRulesService.deleteQueue`). Без body.
@@ -80,14 +96,19 @@ export class OrderCutIssueRulesController {
     @Param('queueIndex') queueIndexParam: string,
     @CurrentUser() user: AuthPrincipal,
   ): Promise<OrderCutIssueRulesSummaryDto> {
-    const queueIndex = Number(queueIndexParam);
-    if (!Number.isInteger(queueIndex) || queueIndex < 1) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'INVALID_QUEUE_INDEX',
-        message: 'Некорректный индекс очереди',
-      });
-    }
+    const queueIndex = parseQueueIndex(queueIndexParam);
     return this.service.deleteQueue(user, orderId, queueIndex);
   }
+}
+
+function parseQueueIndex(raw: string): number {
+  const queueIndex = Number(raw);
+  if (!Number.isInteger(queueIndex) || queueIndex < 1) {
+    throw new BadRequestException({
+      statusCode: 400,
+      code: 'INVALID_QUEUE_INDEX',
+      message: 'Некорректный индекс очереди',
+    });
+  }
+  return queueIndex;
 }

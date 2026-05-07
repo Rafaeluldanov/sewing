@@ -331,6 +331,63 @@ export class OrderCutIssueRulesService {
   }
 
   // -------------------------------------------------------------------------
+  // DISABLE QUEUE (per queueIndex)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Отключить одну конкретную очередь — `isActive = false` для всех
+   * её активных строк. В отличие от `deleteQueue`, не требует, чтобы
+   * `Σ issuedQty = 0` и не требует, чтобы очередь была последней:
+   * счётчики `issuedQty` сохраняются (нужны для аудита и для случая,
+   * если менеджер захочет «вернуть» очередь редактированием формы),
+   * а порядок очередей не меняется. Идемпотентно: если в очереди
+   * уже нет активных строк — без записи в audit.
+   */
+  async disableQueue(
+    actor: AuthPrincipal,
+    orderId: string,
+    queueIndex: number,
+  ): Promise<OrderCutIssueRulesSummaryDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    await this.prisma.$transaction(async (tx) => {
+      const result = await tx.orderCutIssueRule.updateMany({
+        where: { orderId, queueIndex, isActive: true },
+        data: { isActive: false },
+      });
+      if (result.count > 0) {
+        await this.audit.log(
+          {
+            event: 'ORDER_CUT_ISSUE_RULE_DISABLED',
+            entityType: 'ORDER_CUT_ISSUE_RULE',
+            entityId: orderId,
+            employeeId: actor.employeeId,
+            payload: {
+              orderId,
+              queueIndex,
+              deactivatedCount: result.count,
+            },
+          },
+          tx,
+        );
+      }
+    });
+    this.logger.log(
+      `event=orderCutIssueRule.disableQueue orderId=${orderId} queueIndex=${queueIndex} actor=${actor.employeeId}`,
+    );
+    return this.listForOrder(orderId);
+  }
+
+  // -------------------------------------------------------------------------
   // DELETE QUEUE (last empty)
   // -------------------------------------------------------------------------
 
