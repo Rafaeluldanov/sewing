@@ -507,22 +507,27 @@ export class OrderCutIssueRulesService {
   } | null> {
     const isCuttingOperation = operationCategory === OperationCategory.CUTTING;
     if (!isCuttingOperation) {
-      // Не-CUTTING операция: правило применяется если паспорт сейчас на
-      // ПЕРВОМ не-CUTTING шаге маршрута заказа (handoff из раскройного
-      // цеха в швейный поток — например, ОВР/ФУЛ). На полностью
-      // CUTTING-маршрутах сюда не попадаем (isCutting=true выше).
-      // На «sewing-only» маршрутах первый не-CUTTING шаг = index 0.
+      // Не-CUTTING операция: правило применяется если паспорт на
+      // (а) index 0 — legacy «первая выдача»; покрывает sewing-only
+      //     маршруты И сценарий, когда CUTTING-шаги в маршруте есть,
+      //     но раскройщики не делают `complete-operation` (паспорт
+      //     остаётся на step 0 до handoff в швейный поток);
+      // (б) ПЕРВОМ не-CUTTING шаге маршрута заказа (handoff после
+      //     `complete-operation` на CUTTING-шагах — например, ОВР/ФУЛ
+      //     при последовательно завершаемых КРОЙ → Деление кроя).
       if (passport.currentRouteStepIndex === null) return null;
-      const firstNonCutting = await this.prisma.orderRouteStep.findFirst({
-        where: {
-          orderId: passport.orderId,
-          operation: { category: { not: OperationCategory.CUTTING } },
-        },
-        select: { index: true },
-        orderBy: { index: 'asc' },
-      });
-      if (firstNonCutting?.index !== passport.currentRouteStepIndex) {
-        return null;
+      if (passport.currentRouteStepIndex !== 0) {
+        const firstNonCutting = await this.prisma.orderRouteStep.findFirst({
+          where: {
+            orderId: passport.orderId,
+            operation: { category: { not: OperationCategory.CUTTING } },
+          },
+          select: { index: true },
+          orderBy: { index: 'asc' },
+        });
+        if (firstNonCutting?.index !== passport.currentRouteStepIndex) {
+          return null;
+        }
       }
     }
 
