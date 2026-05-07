@@ -1787,17 +1787,50 @@ export class OrderCutIssueRuleRequiredBelowIssuedException extends BusinessExcep
 
 /**
  * `requiredQty` строки превышает плановое количество (`OrderItem.qtyPlan`)
- * по этому размеру. Пускать такой ввод нельзя: очередь блокирует
- * выдачу до выполнения, а выполнить «больше плана» физически
- * невозможно (паспортов столько просто не выпустят), и заказ
- * застрянет.
+ * по этому размеру. С учётом множественных очередей проверяется
+ * суммарно по всем очередям заказа (Σ requiredQty по размеру не
+ * должна превышать план). Пускать такой ввод нельзя: очередь
+ * блокирует выдачу до выполнения, а выполнить «больше плана»
+ * физически невозможно.
  */
 export class OrderCutIssueRuleRequiredAbovePlanException extends BusinessException {
-  constructor(sizeCode: string, qtyPlan: number) {
+  constructor(sizeCode: string, qtyPlan: number, remainder?: number) {
     super(
       'ORDER_CUT_ISSUE_RULE_REQUIRED_ABOVE_PLAN',
-      `Нельзя поставить в очередь больше, чем план по размеру ${sizeCode} (план ${qtyPlan} шт).`,
+      remainder !== undefined
+        ? `Нельзя поставить в очередь больше, чем остаток плана по размеру ${sizeCode} (доступно ${remainder} из ${qtyPlan} шт).`
+        : `Нельзя поставить в очередь больше, чем план по размеру ${sizeCode} (план ${qtyPlan} шт).`,
       HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * Удалить очередь нельзя: либо она не последняя (нельзя удалять
+ * «дырку» в середине), либо в ней уже что-то выдано
+ * (`Σ issuedQty > 0`). Бросается из `DELETE /api/orders/:id/cut-issue-rules/queues/:queueIndex`.
+ */
+export class OrderCutIssueQueueDeleteNotAllowedException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'ORDER_CUT_ISSUE_QUEUE_DELETE_NOT_ALLOWED',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Очередь с указанным `queueIndex` для заказа не существует.
+ * Бросается из bulk-upsert / delete по `queueIndex`, на который нет
+ * ни одной строки.
+ */
+export class OrderCutIssueQueueNotFoundException extends BusinessException {
+  constructor(queueIndex: number) {
+    super(
+      'ORDER_CUT_ISSUE_QUEUE_NOT_FOUND',
+      `Очередь №${queueIndex} не найдена для этого заказа.`,
+      HttpStatus.NOT_FOUND,
     );
   }
 }

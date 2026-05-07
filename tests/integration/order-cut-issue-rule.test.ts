@@ -163,11 +163,12 @@ describeWithDb('integration — order cut issue rules', () => {
     orderId: string,
     rows: Array<{ sizeId: string; requiredQty: number; sortOrder?: number }>,
     cookie: string = cookies.manager,
+    queueIndex = 1,
   ): request.Test {
     return request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/cut-issue-rules`)
       .set('Cookie', cookie)
-      .send({ rows });
+      .send({ queueIndex, rows });
   }
 
   // ---------------------------------------------------------------------------
@@ -597,5 +598,276 @@ describeWithDb('integration — order cut issue rules', () => {
     const source = await fs.readFile(filePath, 'utf-8');
     expect(source).toMatch(/ORDER_CUT_ISSUE_RULE_VIOLATION/);
     expect(source).toMatch(/RAW_API_ERROR_CODES/);
+  });
+
+  // ---------------------------------------------------------------------------
+  // Multi-queue tests
+  // ---------------------------------------------------------------------------
+
+  // T12. Две очереди создаются и видны в summary.queues, queue 1 — current.
+  test('T12. две очереди: summary.queues отдан в правильном порядке, isCurrent у первой', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 100 },
+    ]);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 30 }],
+      cookies.manager,
+      1,
+    ).expect(201);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 50 }],
+      cookies.manager,
+      2,
+    ).expect(201);
+
+    const summary = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/cut-issue-rules`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    expect(summary.body.queues).toHaveLength(2);
+    expect(summary.body.queues[0].queueIndex).toBe(1);
+    expect(summary.body.queues[0].isCurrent).toBe(true);
+    expect(summary.body.queues[1].queueIndex).toBe(2);
+    expect(summary.body.queues[1].isCurrent).toBe(false);
+  });
+
+  // T13. Σ requiredQty по размеру через все очереди не должна превышать план.
+  test('T13. сумма requiredQty по очередям не превышает план — иначе 422 ABOVE_PLAN', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 100 },
+    ]);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 60 }],
+      cookies.manager,
+      1,
+    ).expect(201);
+    // Во 2-й очереди остаток 40; пробуем 50 — 422.
+    const res = await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 50 }],
+      cookies.manager,
+      2,
+    ).expect(422);
+    expect(res.body?.code).toBe('ORDER_CUT_ISSUE_RULE_REQUIRED_ABOVE_PLAN');
+    // 40 — пройдёт.
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 40 }],
+      cookies.manager,
+      2,
+    ).expect(201);
+  });
+
+  // T14. Блокировка по текущей очереди: пока queue 1 не закрыта по
+  // одному размеру, выдача другого размера заблокирована, даже если
+  // он есть в queue 2.
+  test('T14. queue 1 блокирует размеры, отсутствующие в её незавершённых строках', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 50 },
+      { sizeKey: 'M', qtyPlan: 50 },
+    ]);
+    // Очередь №1 — только S; Очередь №2 — M.
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 5 }],
+      cookies.manager,
+      1,
+    ).expect(201);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.M!, requiredQty: 5 }],
+      cookies.manager,
+      2,
+    ).expect(201);
+
+    const passportM = await createAndPlace(orderId, sizeIdByKey.M!, 3);
+    await startSeamstressShift();
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportM}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(409);
+    expect(res.body?.code).toBe('ORDER_CUT_ISSUE_RULE_VIOLATION');
+    // Сообщение упоминает только S (текущая очередь №1), но не M.
+    expect(res.body?.message).toMatch(/S/);
+    expect(res.body?.message).not.toMatch(/M/);
+  });
+
+  // T15. После закрытия queue 1 по размеру — выдача того же размера
+  // во 2-й очереди списывается в строку 2-й очереди.
+  test('T15. после закрытия queue 1 по S, дальнейшая выдача S списывается в queue 2', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 100 },
+    ]);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 5 }],
+      cookies.manager,
+      1,
+    ).expect(201);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 10 }],
+      cookies.manager,
+      2,
+    ).expect(201);
+
+    const pA = await createAndPlace(orderId, sizeIdByKey.S!, 5, 'R-T15-A');
+    const pB = await createAndPlace(orderId, sizeIdByKey.S!, 4, 'R-T15-B');
+    await startSeamstressShift();
+
+    // 1-й issue закрывает queue 1 (5/5).
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${pA}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const rulesAfterFirst = await t.prisma.orderCutIssueRule.findMany({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+      orderBy: { queueIndex: 'asc' },
+    });
+    expect(rulesAfterFirst).toHaveLength(2);
+    expect(rulesAfterFirst[0]!.queueIndex).toBe(1);
+    expect(rulesAfterFirst[0]!.issuedQty).toBe(5);
+    expect(rulesAfterFirst[1]!.queueIndex).toBe(2);
+    expect(rulesAfterFirst[1]!.issuedQty).toBe(0);
+
+    // 2-й issue списывается в queue 2 (4 шт).
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${pB}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const rulesAfterSecond = await t.prisma.orderCutIssueRule.findMany({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+      orderBy: { queueIndex: 'asc' },
+    });
+    expect(rulesAfterSecond[0]!.issuedQty).toBe(5);
+    expect(rulesAfterSecond[1]!.issuedQty).toBe(4);
+  });
+
+  // T16. Удаление пустой последней очереди — ОК.
+  test('T16. удаление пустой последней очереди', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 100 },
+    ]);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 30 }],
+      cookies.manager,
+      1,
+    ).expect(201);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 20 }],
+      cookies.manager,
+      2,
+    ).expect(201);
+
+    const del = await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/cut-issue-rules/queues/2`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+    expect(del.body.queues).toHaveLength(1);
+    expect(del.body.queues[0].queueIndex).toBe(1);
+
+    const audit = await t.prisma.auditLog.findMany({
+      where: {
+        entityType: 'ORDER_CUT_ISSUE_RULE',
+        entityId: orderId,
+        event: 'ORDER_CUT_ISSUE_QUEUE_DELETED',
+      },
+    });
+    expect(audit).toHaveLength(1);
+  });
+
+  // T17. Удаление непоследней очереди / очереди с выдачей — 409.
+  test('T17. нельзя удалить непоследнюю очередь или очередь с выдачей', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 100 },
+    ]);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 5 }],
+      cookies.manager,
+      1,
+    ).expect(201);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 10 }],
+      cookies.manager,
+      2,
+    ).expect(201);
+
+    // Непоследнюю — нельзя.
+    const r1 = await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/cut-issue-rules/queues/1`)
+      .set('Cookie', cookies.manager)
+      .expect(409);
+    expect(r1.body?.code).toBe('ORDER_CUT_ISSUE_QUEUE_DELETE_NOT_ALLOWED');
+
+    // Сначала закроем queue 1 выдачей.
+    const passportS = await createAndPlace(orderId, sizeIdByKey.S!, 5);
+    await startSeamstressShift();
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportS}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    // Теперь queue 1 — последняя по issuedQty (5/5), но queue 2 всё
+    // ещё существует. Попытка удалить queue 2 ОК (она ещё пустая).
+    await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/cut-issue-rules/queues/2`)
+      .set('Cookie', cookies.manager)
+      .expect(200);
+
+    // Удалить queue 1 теперь нельзя — в ней issuedQty=5.
+    const r2 = await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/cut-issue-rules/queues/1`)
+      .set('Cookie', cookies.manager)
+      .expect(409);
+    expect(r2.body?.code).toBe('ORDER_CUT_ISSUE_QUEUE_DELETE_NOT_ALLOWED');
+  });
+
+  // T18. Banner показывает текущую очередь по orderId.
+  test('T18. banner возвращает queueIndex текущей очереди', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 100 },
+    ]);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 3 }],
+      cookies.manager,
+      1,
+    ).expect(201);
+    await bulkUpsertRules(
+      orderId,
+      [{ sizeId: sizeIdByKey.S!, requiredQty: 10 }],
+      cookies.manager,
+      2,
+    ).expect(201);
+
+    await createAndPlace(orderId, sizeIdByKey.S!, 1);
+    await startSeamstressShift();
+
+    const banner = await request(t.app.getHttpServer())
+      .get(
+        `/api/cut-issue-banner?operationId=${seed.operations.SEW_OVERLOCK_1.id}`,
+      )
+      .set('Cookie', cookies.seamstress)
+      .expect(200);
+    expect(banner.body.applicable).toBe(true);
+    const card = banner.body.orders.find(
+      (o: { orderId: string }) => o.orderId === orderId,
+    );
+    expect(card.queueIndex).toBe(1);
+    expect(card.requiredQty).toBe(3);
   });
 });

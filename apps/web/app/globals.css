@@ -2658,6 +2658,157 @@ table.data-table td code {
   flex-direction: column;
   gap: 1.1rem;
 }
+/* Постоянный баннер «Очередь выдачи кроя» на /work для швеи
+   (см. `cut-issue-rule-banner.tsx`). Mobile-first карточка с
+   крупным размером и списком ячеек — UI должен быть читаем
+   через всю мастерскую без приближения. */
+.cut-issue-banner {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.cut-issue-banner__card {
+  background: var(--color-bg);
+  border: 2px solid var(--color-accent);
+  border-radius: var(--radius-xl);
+  padding: 0.9rem 1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+}
+.cut-issue-banner__head {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.8rem;
+  align-items: baseline;
+  border-bottom: 1px solid var(--color-border, rgba(15, 23, 42, 0.1));
+  padding-bottom: 0.35rem;
+}
+.cut-issue-banner__order {
+  font-weight: 700;
+  font-size: 0.95rem;
+}
+.cut-issue-banner__product {
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+}
+.cut-issue-banner__row {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.6rem;
+}
+.cut-issue-banner__row--cells {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0.25rem;
+}
+.cut-issue-banner__label {
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.cut-issue-banner__size {
+  font-size: 1.6rem;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+}
+.cut-issue-banner__remaining {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.cut-issue-banner__cells {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+}
+.cut-issue-banner__cell {
+  background: var(--color-bg-muted, rgba(15, 23, 42, 0.05));
+  border-radius: var(--radius-md, 8px);
+  padding: 0.25rem 0.6rem;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.4rem;
+}
+.cut-issue-banner__cell-code {
+  font-weight: 700;
+}
+.cut-issue-banner__cell-qty {
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+  font-variant-numeric: tabular-nums;
+}
+.cut-issue-banner__cells-empty {
+  color: var(--color-fg-muted);
+  font-style: italic;
+  font-size: 0.9rem;
+}
+/* Модалка «не тот размер» (см. `seamstress-active-panel.tsx ::
+   WrongSizeModal`). Поднимается до PassportConfirmModal, поэтому
+   z-index должен быть >= 100, как у `.qr-modal`. */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  background: rgba(15, 23, 42, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1rem;
+}
+.modal {
+  background: #fff;
+  width: 100%;
+  max-width: 480px;
+  border-radius: var(--radius-xl);
+  padding: 1.1rem 1.2rem 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  box-shadow: 0 20px 50px -10px rgba(15, 23, 42, 0.35);
+}
+.modal__title {
+  margin: 0 0 0.2rem;
+  font-size: 1.2rem;
+  font-weight: 800;
+}
+.modal__text {
+  margin: 0;
+  font-size: 1rem;
+  line-height: 1.4;
+}
+.modal__text--muted {
+  color: var(--color-fg-muted);
+}
+.modal__cells {
+  background: var(--color-bg-muted, rgba(15, 23, 42, 0.05));
+  border-radius: var(--radius-md, 8px);
+  padding: 0.5rem 0.75rem;
+}
+.modal__cells-label {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  margin-bottom: 0.25rem;
+}
+.modal__cells-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+}
+.modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 0.5rem;
+}
 /* Cutter-assistant /work теперь имеет два action-card одного уровня
    (см. `active-shift-panel.tsx` → `CutterAssistantWorkPanel`). На
    мобильном они идут вертикальной колонкой как и у швеи; gap 1rem

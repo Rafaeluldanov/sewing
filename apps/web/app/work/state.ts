@@ -38,6 +38,17 @@ export interface PassportLookupResult {
   passport: {
     id: string;
     number: string;
+    /**
+     * ID и id размера паспорта — нужны UI-проверке очереди выдачи
+     * кроя на /work: сравниваем `orderId`/`sizeCode` с активным
+     * баннером и, если паспорт «не очередного» размера, поднимаем
+     * модалку «не тот размер» вместо `PassportConfirmModal`.
+     * Реальная защита остаётся на бэке (`evaluateForIssue` бросит
+     * 409, даже если фронт проворонит); это UX-оптимизация, чтобы
+     * швея не тратила шаг на визуальную сверку зря.
+     */
+    orderId: string;
+    sizeId: string;
     sizeCode: string;
     qtyCut: number;
     qtyGood: number;

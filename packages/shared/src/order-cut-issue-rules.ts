@@ -7,13 +7,15 @@
  * `docs/domain.md §«Очередь выдачи кроя»`).
  *
  * Назначение: позволить менеджеру заказа (`SHOP_MANAGER` /
- * `SHOPFLOOR_MASTER` / `ADMIN`) задать «первую очередь выдачи кроя
- * по размерам». Пока хотя бы одна активная строка очереди не
- * выполнена, бэкенд режет `PassportsService.issueToEmployee` для
- * паспортов «не очередных» размеров адресной 409
- * `ORDER_CUT_ISSUE_RULE_VIOLATION`. После выполнения всех строк
- * выдача снова свободная (никаких ручных «снять очередь» не
- * требуется — правило гасит само себя по `issuedQty`).
+ * `SHOPFLOOR_MASTER` / `ADMIN`) задать последовательность очередей
+ * выдачи кроя по размерам. В каждой очереди — свой набор размеров и
+ * количеств. Пока в «текущей» очереди (минимальный `queueIndex` с
+ * незавершёнными строками) есть незакрытые размеры — бэкенд режет
+ * `PassportsService.issueToEmployee` для паспортов «не очередных»
+ * размеров адресной 409 `ORDER_CUT_ISSUE_RULE_VIOLATION`. После
+ * полного закрытия текущей очереди следующая (с большим
+ * `queueIndex`) автоматически становится «текущей»; если очередей
+ * больше нет — выдача снова свободная.
  *
  * Дизайн ТЗ:
  *   - применяется только на ПЕРВОЙ операции маршрута
@@ -22,9 +24,11 @@
  *   - порядок проверок в `issueToEmployee`:
  *     `OrderCutIssueRule` → `CutReleasePolicy`. Если очередь
  *     блокирует, до политики проверка не доходит;
- *   - bulk save = source of truth формы: строки, не пришедшие в
- *     bulk-payload, переводятся в `isActive = false`. Полное
- *     отключение очереди — `POST /api/orders/:id/cut-issue-rules/disable-all`.
+ *   - bulk save применяется в рамках КОНКРЕТНОЙ очереди (`queueIndex`):
+ *     строки той же очереди, не пришедшие в bulk-payload, переводятся
+ *     в `isActive = false`. Другие очереди bulk не трогает. Полное
+ *     отключение очереди заказа целиком —
+ *     `POST /api/orders/:id/cut-issue-rules/disable-all`.
  */
 
 import { z } from 'zod';
@@ -38,6 +42,12 @@ const CUID_LIKE = z
   .trim()
   .min(1, 'Не указан размер')
   .max(64, 'Некорректный sizeId');
+
+const QueueIndexSchema = z
+  .number()
+  .int('Индекс очереди — целое число')
+  .min(1, 'Индекс очереди не может быть меньше 1')
+  .max(64, 'Слишком большой индекс очереди');
 
 /**
  * Одна строка очереди (используется в bulk-upsert и в одиночных
@@ -68,18 +78,6 @@ const RuleRowFields = {
     .optional(),
 } as const;
 
-/**
- * `POST /api/orders/:id/cut-issue-rules` — bulk upsert одной формы
- * (источник истины формы карточки заказа). Передаётся весь набор
- * активных строк; всё, чего нет в `rows`, бэкенд переводит в
- * `isActive = false`.
- *
- * Уникальность по `sizeId` валидируется на уровне Zod-схемы
- * (`refine` ниже): UI и API защищены от дублей размеров в одной
- * форме. Это упрощает atomic upsert на сервисе — мы можем зайти
- * в одну транзакцию и быть уверены, что одной строкой не «затрём»
- * другую с тем же размером в той же форме.
- */
 export const CreateOrderCutIssueRuleSchema = z.object({
   ...RuleRowFields,
 });
@@ -104,8 +102,22 @@ export type UpdateOrderCutIssueRuleDto = z.infer<
   typeof UpdateOrderCutIssueRuleSchema
 >;
 
+/**
+ * `POST /api/orders/:id/cut-issue-rules` — bulk upsert одной формы
+ * (источник истины формы карточки заказа в рамках одной очереди).
+ * Передаётся весь набор активных строк очереди + её `queueIndex`;
+ * всё, чего нет в `rows`, бэкенд переводит в `isActive = false` —
+ * но только в рамках указанной очереди. Другие очереди этого заказа
+ * не трогаются.
+ *
+ * Уникальность по `sizeId` валидируется на уровне Zod-схемы
+ * (`refine` ниже): UI и API защищены от дублей размеров в одной
+ * форме одной очереди. Между разными очередями один и тот же
+ * размер допустим (в этом и смысл многоочередной выдачи).
+ */
 export const BulkUpsertOrderCutIssueRulesSchema = z
   .object({
+    queueIndex: QueueIndexSchema,
     rows: z
       .array(
         z.object({
@@ -143,6 +155,17 @@ export type DisableOrderCutIssueRulesDto = z.infer<
   typeof DisableOrderCutIssueRulesSchema
 >;
 
+/**
+ * `DELETE /api/orders/:id/cut-issue-rules/queues/:queueIndex` —
+ * удаление пустой очереди (только последней, и только если в ней
+ * `Σ issuedQty = 0`). Body не нужен; параметр пути приходит как
+ * route-param и валидируется на сервисе.
+ */
+export const DeleteOrderCutIssueQueueSchema = z.object({}).strict();
+export type DeleteOrderCutIssueQueueDto = z.infer<
+  typeof DeleteOrderCutIssueQueueSchema
+>;
+
 // ---------------------------------------------------------------------------
 // Response DTO
 // ---------------------------------------------------------------------------
@@ -163,6 +186,7 @@ export type DisableOrderCutIssueRulesDto = z.infer<
 export interface OrderCutIssueRuleDto {
   id: string;
   orderId: string;
+  queueIndex: number;
   sizeId: string;
   sizeCode: string;
   sizeLabel: string;
@@ -183,26 +207,90 @@ export interface OrderCutIssueRuleDto {
 }
 
 /**
- * Сводка очереди по заказу: статус + строки. Хорошая точка для
- * UI, где сразу нужны и заголовок («Очередь выполнена»), и
- * таблица. Поле `status` рассчитывается так же, как сообщение
- * блокировки (см. `formatOrderCutIssueRuleViolationMessage`):
- *
+ * Статус строки/очереди:
  *   - `OFF` — нет ни одной активной строки;
  *   - `IN_PROGRESS` — есть активные строки, и хотя бы у одной
  *     `issuedQty < requiredQty`;
  *   - `DONE` — есть активные строки, и у всех `issuedQty >= requiredQty`.
- *
- * В состоянии `DONE` правило бэкенд тоже считает «не блокирующим»
- * (см. `OrderCutIssueRulesService.evaluateForIssue`): выдача
- * остальных размеров становится свободной.
  */
 export type OrderCutIssueRuleStatus = 'OFF' | 'IN_PROGRESS' | 'DONE';
 
+/**
+ * Снимок одной очереди (одной «партии» выдачи) для UI карточки
+ * заказа. `isCurrent = true` у той единственной очереди, которая
+ * сейчас «активная» (минимальный `queueIndex`, у которого есть
+ * незакрытые строки) — на UI её можно подсветить, и именно её
+ * смотрит `evaluateForIssue` при выдаче кроя.
+ */
+export interface OrderCutIssueQueueDto {
+  queueIndex: number;
+  status: OrderCutIssueRuleStatus;
+  isCurrent: boolean;
+  rules: OrderCutIssueRuleDto[];
+}
+
+/**
+ * Сводка очереди выдачи кроя по заказу: статус заказа в целом +
+ * список всех очередей.
+ *
+ *   - `status = 'OFF'` — нет активных строк ни в одной очереди;
+ *   - `status = 'IN_PROGRESS'` — есть хоть одна активная незакрытая
+ *     строка в любой очереди;
+ *   - `status = 'DONE'` — есть активные строки, и все они закрыты.
+ *
+ * `queues` отсортированы по возрастанию `queueIndex`. Поле `rules`
+ * (плоский список без группировки) сохранено как deprecated для
+ * обратной совместимости со старыми клиентами; на новых UI
+ * используем `queues`.
+ */
 export interface OrderCutIssueRulesSummaryDto {
   orderId: string;
   status: OrderCutIssueRuleStatus;
+  queues: OrderCutIssueQueueDto[];
+  /**
+   * @deprecated Используйте `queues` — плоский список оставлен для
+   * обратной совместимости и упрощения миграции UI.
+   */
   rules: OrderCutIssueRuleDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Active banner (для /work «Сейчас сканируйте: размер X, ячейки Y»)
+// ---------------------------------------------------------------------------
+
+export interface OrderCutIssueRuleBannerCellDto {
+  cellId: string;
+  cellCode: string;
+  /** Сколько паспортов нужного размера в этой ячейке. */
+  passportsCount: number;
+}
+
+/**
+ * Карточка одного заказа в баннере «Очередь выдачи кроя» на /work.
+ * Показывает первый незакрытый размер в ТЕКУЩЕЙ очереди заказа
+ * (минимальный `queueIndex` с незакрытыми строками).
+ */
+export interface OrderCutIssueRuleBannerOrderDto {
+  orderId: string;
+  orderNumber: string;
+  /** Краткое название изделия для шапки карточки баннера (опционально). */
+  productLabel: string | null;
+  /** Индекс текущей очереди заказа (1-based). */
+  queueIndex: number;
+  /** ID и код текущего (незакрытого) размера очереди. */
+  currentSizeId: string;
+  currentSizeCode: string;
+  /** Сколько ещё нужно выдать по этому размеру (`required - issued`). */
+  remainingQty: number;
+  requiredQty: number;
+  issuedQty: number;
+  /** Список ячеек с паспортами текущего размера (может быть пустым). */
+  cells: OrderCutIssueRuleBannerCellDto[];
+}
+
+export interface OrderCutIssueRuleBannerDto {
+  applicable: boolean;
+  orders: OrderCutIssueRuleBannerOrderDto[];
 }
 
 // ---------------------------------------------------------------------------
@@ -234,9 +322,6 @@ export function formatOrderCutIssueRuleViolationMessage(
   rows: ReadonlyArray<OrderCutIssueRuleViolationRow>,
 ): string {
   if (rows.length === 0) {
-    // Сюда мы вообще не должны попадать (если строк нет, очередь
-    // не блокирует), но защищаемся от пустого массива явно — иначе
-    // получим текст «Сначала нужно выдать: » с висящим двоеточием.
     return 'Сначала нужно выдать паспорта по очереди заказа.';
   }
   const parts = rows.map((r) => `${r.sizeCode} — осталось ${r.remainingQty} шт`);

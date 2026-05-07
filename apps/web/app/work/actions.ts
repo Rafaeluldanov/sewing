@@ -153,6 +153,8 @@ export async function lookupPassportAction(
       passport: {
         id: p.id,
         number: p.number,
+        orderId: p.orderId,
+        sizeId: p.sizeId,
         sizeCode: p.sizeCode,
         qtyCut: p.qtyCut,
         qtyGood: p.qtyGood,

@@ -3,6 +3,7 @@ import { ApiRequestError } from '@/lib/api';
 import {
   getCurrentShift,
   getCurrentWork,
+  getCutIssueBanner,
   getShiftMeta,
 } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
@@ -57,6 +58,22 @@ async function loadCurrentWorkSafely() {
   } catch (e) {
     if (!(e instanceof ApiRequestError)) throw e;
     return [];
+  }
+}
+
+/**
+ * Безопасно подгружает подсказку «Очередь выдачи кроя» для
+ * seamstress-баннера. Если backend недоступен или вернул бизнес-
+ * ошибку — отдаём `applicable = false`, баннер не рендерится, а
+ * основной flow «Взять крой» остаётся работоспособным (реальная
+ * защита очереди всё равно сработает на бэке при `acceptForIssue`).
+ */
+async function loadCutIssueBannerSafely(operationId: string) {
+  try {
+    return await getCutIssueBanner(operationId);
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) throw e;
+    return { applicable: false, orders: [] };
   }
 }
 
@@ -180,10 +197,19 @@ export default async function WorkPage() {
         // одна primary-кнопка «Взять (следующий) крой» с модалкой
         // проверки паспорта (см. ТЗ §1–§6, ADR-0014).
         isActive ? (
-          <SeamstressActivePanel
-            shift={currentShift!}
-            currentWork={await loadCurrentWorkSafely()}
-          />
+          await (async () => {
+            const [currentWork, cutIssueBanner] = await Promise.all([
+              loadCurrentWorkSafely(),
+              loadCutIssueBannerSafely(currentShift!.operationId),
+            ]);
+            return (
+              <SeamstressActivePanel
+                shift={currentShift!}
+                currentWork={currentWork}
+                cutIssueBanner={cutIssueBanner}
+              />
+            );
+          })()
         ) : (
           <SeamstressShiftStart meta={meta} employee={employee} />
         )

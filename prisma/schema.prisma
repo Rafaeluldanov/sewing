@@ -1222,19 +1222,32 @@ model OrderItem {
 ///     управленческий стоп, а это — порядок выдачи внутри одного
 ///     заказа.
 ///
-/// Уникальность `(orderId, sizeId)` гарантирована БД: на одну пару
-/// «заказ × размер» не может быть две конкурирующих строки. Это
-/// упрощает атомарный consume через conditional `updateMany`
-/// (`OrderCutIssueRulesService.consumeInTx`).
+/// Уникальность `(orderId, queueIndex, sizeId)` гарантирована БД: в
+/// рамках одной «очереди» (партии выдачи) на один размер может
+/// быть только одна строка. Между очередями один и тот же размер
+/// может встречаться много раз (например, план 1000: очередь №1 —
+/// 150, очередь №2 — 850). Это упрощает атомарный consume через
+/// conditional `updateMany` (`OrderCutIssueRulesService.consumeInTx`).
+///
+/// «Текущая очередь» = минимальный `queueIndex`, у которого есть
+/// хоть одна активная строка с `issuedQty < requiredQty`. Блокировка
+/// и инкремент выдачи всегда работают в её рамках; после закрытия
+/// «текущей» автоматически становится следующая.
 model OrderCutIssueRule {
   id          String   @id @default(cuid())
   orderId     String
+  /// Индекс очереди (1-based). Менеджер может последовательно
+  /// добавлять очереди; в каждой задаётся свой набор размеров.
+  /// `queueIndex >= 1`. Строки с одним и тем же `(orderId, sizeId)`
+  /// могут существовать в разных очередях — суммарно они
+  /// ограничены планом размера в заказе.
+  queueIndex  Int      @default(1)
   sizeId      String
-  /// Сколько штук этого размера должно быть выдано в первую очередь.
-  /// Валидация на сервисе: `requiredQty > 0`, `requiredQty <= qtyPlan`
-  /// (по соответствующей строке `OrderItem`), `requiredQty >= issuedQty`
-  /// при апдейте уже существующей строки (нельзя «откусить» уже
-  /// выданный объём).
+  /// Сколько штук этого размера должно быть выдано в этой очереди.
+  /// Валидация на сервисе: `requiredQty > 0`,
+  /// `Σ requiredQty по всем очередям этого размера <= qtyPlan`
+  /// (по `OrderItem`), `requiredQty >= issuedQty` при апдейте уже
+  /// существующей строки (нельзя «откусить» уже выданный объём).
   requiredQty Int
   /// Materialized счётчик «уже выдано в рамках этой строки».
   /// Инкрементится атомарно в `OrderCutIssueRulesService.consumeInTx`
@@ -1264,7 +1277,8 @@ model OrderCutIssueRule {
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
   size  Size  @relation(fields: [sizeId], references: [id], onDelete: Restrict)
 
-  @@unique([orderId, sizeId])
+  @@unique([orderId, queueIndex, sizeId])
+  @@index([orderId, queueIndex, isActive])
   @@index([orderId, isActive])
   @@index([sizeId])
 }

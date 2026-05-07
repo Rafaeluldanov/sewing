@@ -42,3 +42,19 @@ export function disableOrderCutIssueRules(
     { method: 'POST', body },
   );
 }
+
+/**
+ * Удалить пустую последнюю очередь выдачи кроя
+ * (`DELETE /api/orders/:id/cut-issue-rules/queues/:queueIndex`).
+ * Бэкенд защищает: удалить можно только последнюю очередь и только
+ * если в ней `Σ issuedQty = 0`.
+ */
+export function deleteOrderCutIssueQueue(
+  orderId: string,
+  queueIndex: number,
+): Promise<OrderCutIssueRulesSummaryDto> {
+  return apiFetch<OrderCutIssueRulesSummaryDto>(
+    `/orders/${encodeURIComponent(orderId)}/cut-issue-rules/queues/${queueIndex}`,
+    { method: 'DELETE' },
+  );
+}

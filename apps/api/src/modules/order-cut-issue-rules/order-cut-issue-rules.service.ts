@@ -4,6 +4,9 @@ import { OperationCategory } from '@prisma/client';
 import {
   formatOrderCutIssueRuleViolationMessage,
   type BulkUpsertOrderCutIssueRulesDto,
+  type OrderCutIssueQueueDto,
+  type OrderCutIssueRuleBannerDto,
+  type OrderCutIssueRuleBannerOrderDto,
   type OrderCutIssueRuleDto,
   type OrderCutIssueRuleStatus,
   type OrderCutIssueRulesSummaryDto,
@@ -11,6 +14,8 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
+  OrderCutIssueQueueDeleteNotAllowedException,
+  OrderCutIssueQueueNotFoundException,
   OrderCutIssueRuleRequiredAbovePlanException,
   OrderCutIssueRuleRequiredBelowIssuedException,
   OrderCutIssueRuleSizeNotInOrderException,
@@ -21,37 +26,35 @@ import type { AuthPrincipal } from '../auth/auth.types.js';
 /**
  * Сервис «Очередь выдачи кроя по размерам» (см.
  * `prisma/schema.prisma::OrderCutIssueRule`,
- * `docs/domain.md §«Очередь выдачи кроя»`,
- * `docs/order-flow.md §«Очередь выдачи кроя»`,
- * `docs/production-flow.md §«Issue: очередь выдачи кроя»`).
+ * `docs/domain.md §«Очередь выдачи кроя»`).
+ *
+ * Поддерживает множественные очереди (каждая — отдельная «партия»
+ * выдачи внутри заказа, идентифицируется `queueIndex`). «Текущая»
+ * очередь — минимальный `queueIndex`, у которого есть незакрытые
+ * строки. Блокировка выдачи и инкремент `issuedQty` всегда работают
+ * в рамках текущей очереди; после её закрытия следующая
+ * автоматически становится текущей.
  *
  * Контракт:
- *   - `listForOrder(orderId)` — отдать список строк очереди заказа +
- *     derived-сводку для UI карточки заказа;
- *   - `bulkUpsert(actor, orderId, dto)` — сохранить форму карточки:
- *     upsert по `(orderId, sizeId)`, остальные активные строки
- *     заказа гасит `isActive = false` (bulk = source of truth формы);
- *   - `disableAll(actor, orderId)` — атомарно `isActive = false`
- *     для всех строк заказа;
+ *   - `listForOrder(orderId)` — отдать сводку: статус заказа +
+ *     список всех очередей с их строками, сортировкой и derived-полями;
+ *   - `bulkUpsert(actor, orderId, dto)` — сохранить форму одной
+ *     очереди (`dto.queueIndex`): upsert строк этой очереди; строки
+ *     этой же очереди, не пришедшие в `dto.rows`, гасятся
+ *     `isActive = false`. Другие очереди заказа не трогаются;
+ *   - `disableAll(actor, orderId)` — атомарно `isActive = false` для
+ *     всех строк во всех очередях заказа;
+ *   - `deleteQueue(actor, orderId, queueIndex)` — удалить очередь
+ *     целиком; разрешено только если это последняя очередь и в ней
+ *     `Σ issuedQty = 0`;
  *   - `evaluateForIssue(passport, operationCategory)` — pre-check для
  *     `PassportsService.issueToEmployee`: возвращает evaluation с
- *     id строки + `requiredQty / issuedQty`, либо `null`, если
- *     правило не применимо (нет активных, все выполнены, не первая
- *     операция / не CUTTING);
+ *     id строки ТЕКУЩЕЙ очереди + `requiredQty / issuedQty`, либо
+ *     `null`, если правило не применимо;
  *   - `consumeInTx(tx, evaluation, ...)` — атомарный инкремент
  *     `issuedQty` через conditional `updateMany`. Если 0 строк
- *     обновлено (race с другой выдачей или с deactivate) —
- *     перечитываем актуальное состояние и кидаем VIOLATION с
- *     актуальным сообщением.
- *
- * Что сервис НЕ делает:
- *   - не пишет `PassportEvent` (модель события не имеет смысла —
- *     consumed-инкремент уже фиксируется в audit-логе и в самой
- *     строке очереди);
- *   - не сбрасывает `issuedQty` при `disableAll` или при апдейте
- *     строки (см. ТЗ §«Ограничения» — reset counters out of scope);
- *   - не делает advisory locks (атомарность гарантирует conditional
- *     `updateMany`, как у `CutReleasePolicy`).
+ *     обновлено (race) — перечитываем актуальное состояние и кидаем
+ *     VIOLATION с актуальным сообщением.
  */
 @Injectable()
 export class OrderCutIssueRulesService {
@@ -82,49 +85,29 @@ export class OrderCutIssueRulesService {
       where: { orderId },
       include: { size: true },
     });
-    // Стабильная сортировка: пользовательский `sortOrder`, затем
-    // справочный `Size.sortOrder`, затем `Size.code` для полного
-    // детерминизма (на MVP `sortOrder` обычно нулевой).
-    rows.sort((a, b) => {
-      if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-      if (a.size.sortOrder !== b.size.sortOrder)
-        return a.size.sortOrder - b.size.sortOrder;
-      return a.size.code.localeCompare(b.size.code);
-    });
-    const dtos = rows.map((r) => this.toDto(r));
-    return {
-      orderId,
-      status: this.computeStatus(dtos),
-      rules: dtos,
-    };
+    rows.sort(this.compareRows);
+    return this.buildSummary(orderId, rows.map((r) => this.toDto(r)));
   }
 
   // -------------------------------------------------------------------------
-  // BULK UPSERT
+  // BULK UPSERT (per queue)
   // -------------------------------------------------------------------------
 
   /**
-   * Сохранить bulk-форму очереди (источник истины формы карточки
-   * заказа). Контракт:
-   *
+   * Сохранить bulk-форму одной конкретной очереди (`dto.queueIndex`).
+   * Контракт:
    *   - проверяем, что заказ существует;
    *   - проверяем, что каждый `sizeId` из `rows` встречается в
-   *     `OrderItem` этого заказа (иначе 400
-   *     `ORDER_CUT_ISSUE_RULE_SIZE_NOT_IN_ORDER`);
-   *   - для каждого размера считаем `qtyPlanBySize = Σ qtyPlan по
-   *     OrderItem(orderId, sizeId)` и проверяем, что
-   *     `requiredQty <= qtyPlan` (иначе 422
-   *     `ORDER_CUT_ISSUE_RULE_REQUIRED_ABOVE_PLAN`);
-   *   - для каждой уже существующей строки убеждаемся, что новый
-   *     `requiredQty >= issuedQty` (иначе 422
-   *     `ORDER_CUT_ISSUE_RULE_REQUIRED_BELOW_ISSUED`);
-   *   - в одной транзакции upsert-им строки и переводим в
-   *     `isActive = false` все активные строки заказа, которых нет
-   *     в `rows` (сама форма — source of truth).
-   *
-   * Audit `ORDER_CUT_ISSUE_RULE_UPSERT` пишется одним событием на
-   * заказ, payload содержит сводку: count добавленных / обновлённых
-   * / деактивированных строк + список после сохранения.
+   *     `OrderItem` этого заказа (иначе 400);
+   *   - для каждого размера считаем `qtyPlanBySize` и проверяем,
+   *     что `requiredQty (этой очереди) + Σ requiredQty по этому
+   *     размеру в ДРУГИХ активных очередях <= qtyPlan` — иначе 422
+   *     (сумма по очередям не должна перевышать план);
+   *   - для каждой уже существующей строки этой очереди убеждаемся,
+   *     что новый `requiredQty >= issuedQty`;
+   *   - в одной транзакции upsert-им строки этой очереди и переводим
+   *     в `isActive = false` все активные строки ЭТОЙ ЖЕ очереди,
+   *     которых нет в `rows`.
    */
   async bulkUpsert(
     actor: AuthPrincipal,
@@ -145,9 +128,6 @@ export class OrderCutIssueRulesService {
       });
     }
 
-    // Σ qtyPlan по размеру (на одном size может быть несколько
-    // OrderItem с разными productId; на MVP обычно один — но
-    // сумма всё равно корректна).
     const qtyPlanBySize = new Map<string, number>();
     for (const it of order.items) {
       qtyPlanBySize.set(
@@ -156,17 +136,34 @@ export class OrderCutIssueRulesService {
       );
     }
 
-    // Подтянем существующие строки сразу — это нужно и для
-    // (а) проверки `requiredQty >= issuedQty`, и для (б) дешёвой
-    // диагностики «какие строки деактивируются» в audit-payload.
-    const existingRows = await this.prisma.orderCutIssueRule.findMany({
+    // Все строки заказа во ВСЕХ очередях — нужно для:
+    //  (а) проверки `Σ requiredQty по другим активным очередям <= план`;
+    //  (б) определения существующих строк ИМЕННО этой очереди;
+    //  (в) audit-payload «что деактивируем».
+    const allRows = await this.prisma.orderCutIssueRule.findMany({
       where: { orderId },
       include: { size: { select: { code: true } } },
     });
-    const existingBySizeId = new Map(existingRows.map((r) => [r.sizeId, r]));
+    const existingInThisQueue = allRows.filter(
+      (r) => r.queueIndex === dto.queueIndex,
+    );
+    const existingBySizeIdInThisQueue = new Map(
+      existingInThisQueue.map((r) => [r.sizeId, r]),
+    );
 
-    // Подтянем коды размеров из dto одним запросом — нужно для
-    // понятных сообщений ошибок («Размер 4XL не входит в заказ»).
+    // Σ requiredQty по другим активным очередям, разбитая по sizeId.
+    // Используется как «остаток плана» для валидации новой/обновляемой
+    // строки в текущей очереди.
+    const otherQueuesActiveBySize = new Map<string, number>();
+    for (const r of allRows) {
+      if (!r.isActive) continue;
+      if (r.queueIndex === dto.queueIndex) continue;
+      otherQueuesActiveBySize.set(
+        r.sizeId,
+        (otherQueuesActiveBySize.get(r.sizeId) ?? 0) + r.requiredQty,
+      );
+    }
+
     const dtoSizeIds = dto.rows.map((r) => r.sizeId);
     const sizeRows = dtoSizeIds.length
       ? await this.prisma.size.findMany({
@@ -181,21 +178,20 @@ export class OrderCutIssueRulesService {
     for (const row of dto.rows) {
       const planQty = qtyPlanBySize.get(row.sizeId);
       if (planQty === undefined) {
-        // Размер не входит в заказ. Если это известный размер из
-        // справочника — отдадим его код для понятного сообщения;
-        // если нет — валится без кода (это ещё и страховка от
-        // подмены id).
         throw new OrderCutIssueRuleSizeNotInOrderException(
           sizeCodeById.get(row.sizeId),
         );
       }
-      if (row.requiredQty > planQty) {
+      const claimedInOtherQueues = otherQueuesActiveBySize.get(row.sizeId) ?? 0;
+      const remainder = Math.max(planQty - claimedInOtherQueues, 0);
+      if (row.requiredQty > remainder) {
         throw new OrderCutIssueRuleRequiredAbovePlanException(
           sizeCodeById.get(row.sizeId) ?? row.sizeId,
           planQty,
+          remainder,
         );
       }
-      const existing = existingBySizeId.get(row.sizeId);
+      const existing = existingBySizeIdInThisQueue.get(row.sizeId);
       if (existing && row.requiredQty < existing.issuedQty) {
         throw new OrderCutIssueRuleRequiredBelowIssuedException(
           sizeCodeById.get(row.sizeId) ?? row.sizeId,
@@ -204,25 +200,34 @@ export class OrderCutIssueRulesService {
     }
 
     const dtoSizeIdSet = new Set(dtoSizeIds);
-    const toDeactivate = existingRows.filter(
+    const toDeactivate = existingInThisQueue.filter(
       (r) => r.isActive && !dtoSizeIdSet.has(r.sizeId),
     );
+    // Если в гасящейся строке уже что-то выдано, мы не можем её
+    // деактивировать (это сломает блокирующую логику и счётчик).
+    // Но тот же кейс уже прикрыт чек-ом «requiredQty < issuedQty»
+    // только для строк, которые остаются в форме. Здесь дополнительно
+    // блокируем деактивацию строк с `issuedQty > 0`, чтобы менеджер
+    // увидел понятную ошибку.
+    for (const r of toDeactivate) {
+      if (r.issuedQty > 0) {
+        throw new OrderCutIssueRuleRequiredBelowIssuedException(
+          allRows.find((x) => x.id === r.id)?.size.code,
+        );
+      }
+    }
 
     // -- WRITE --------------------------------------------------------------
 
     await this.prisma.$transaction(async (tx) => {
       for (const row of dto.rows) {
-        const existing = existingBySizeId.get(row.sizeId);
+        const existing = existingBySizeIdInThisQueue.get(row.sizeId);
         if (existing) {
           await tx.orderCutIssueRule.update({
             where: { id: existing.id },
             data: {
               requiredQty: row.requiredQty,
               sortOrder: row.sortOrder ?? existing.sortOrder,
-              // Любое явное сохранение строки в форме — это «активная»
-              // строка. Если менеджер хочет деактивировать строку, он
-              // должен убрать её из формы (или нажать «Отключить
-              // очередь»).
               isActive: true,
             },
           });
@@ -230,6 +235,7 @@ export class OrderCutIssueRulesService {
           await tx.orderCutIssueRule.create({
             data: {
               orderId,
+              queueIndex: dto.queueIndex,
               sizeId: row.sizeId,
               requiredQty: row.requiredQty,
               issuedQty: 0,
@@ -256,6 +262,7 @@ export class OrderCutIssueRulesService {
           employeeId: actor.employeeId,
           payload: {
             orderId,
+            queueIndex: dto.queueIndex,
             rowsCount: dto.rows.length,
             deactivatedCount: toDeactivate.length,
             rows: dto.rows.map((r) => ({
@@ -272,7 +279,7 @@ export class OrderCutIssueRulesService {
     });
 
     this.logger.log(
-      `event=orderCutIssueRule.upsert orderId=${orderId} actor=${actor.employeeId} rows=${dto.rows.length} deactivated=${toDeactivate.length}`,
+      `event=orderCutIssueRule.upsert orderId=${orderId} queueIndex=${dto.queueIndex} actor=${actor.employeeId} rows=${dto.rows.length} deactivated=${toDeactivate.length}`,
     );
     return this.listForOrder(orderId);
   }
@@ -301,7 +308,6 @@ export class OrderCutIssueRulesService {
         where: { orderId, isActive: true },
         data: { isActive: false },
       });
-      // Идемпотентность: если активных не было — не плодим audit-дубль.
       if (result.count > 0) {
         await this.audit.log(
           {
@@ -325,6 +331,89 @@ export class OrderCutIssueRulesService {
   }
 
   // -------------------------------------------------------------------------
+  // DELETE QUEUE (last empty)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Удалить очередь целиком. Разрешено только если:
+   *   - очередь существует (есть хоть одна строка с этим `queueIndex`);
+   *   - очередь является последней (нет очередей с большим
+   *     `queueIndex` у этого заказа);
+   *   - в ней `Σ issuedQty = 0` (ничего ещё не выдано).
+   *
+   * Реальное удаление строк (а не `isActive = false`) — потому что
+   * пустая очередь не несёт ни данных, ни инвариантов: её добавили
+   * по ошибке, удалили обратно. Audit-событие пишется до
+   * `deleteMany`.
+   */
+  async deleteQueue(
+    actor: AuthPrincipal,
+    orderId: string,
+    queueIndex: number,
+  ): Promise<OrderCutIssueRulesSummaryDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+
+    const allRows = await this.prisma.orderCutIssueRule.findMany({
+      where: { orderId },
+      select: { id: true, queueIndex: true, issuedQty: true },
+    });
+    const targetRows = allRows.filter((r) => r.queueIndex === queueIndex);
+    if (targetRows.length === 0) {
+      throw new OrderCutIssueQueueNotFoundException(queueIndex);
+    }
+    const maxQueueIndex = allRows.reduce(
+      (m, r) => (r.queueIndex > m ? r.queueIndex : m),
+      0,
+    );
+    if (queueIndex !== maxQueueIndex) {
+      throw new OrderCutIssueQueueDeleteNotAllowedException(
+        'Удалить можно только последнюю очередь.',
+      );
+    }
+    const totalIssued = targetRows.reduce((s, r) => s + r.issuedQty, 0);
+    if (totalIssued > 0) {
+      throw new OrderCutIssueQueueDeleteNotAllowedException(
+        'Нельзя удалить очередь, по которой уже что-то выдано.',
+      );
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.audit.log(
+        {
+          event: 'ORDER_CUT_ISSUE_QUEUE_DELETED',
+          entityType: 'ORDER_CUT_ISSUE_RULE',
+          entityId: orderId,
+          employeeId: actor.employeeId,
+          payload: {
+            orderId,
+            queueIndex,
+            deletedRowsCount: targetRows.length,
+          },
+        },
+        tx,
+      );
+      await tx.orderCutIssueRule.deleteMany({
+        where: { orderId, queueIndex },
+      });
+    });
+
+    this.logger.log(
+      `event=orderCutIssueRule.deleteQueue orderId=${orderId} queueIndex=${queueIndex} actor=${actor.employeeId}`,
+    );
+    return this.listForOrder(orderId);
+  }
+
+  // -------------------------------------------------------------------------
   // EVALUATE / CONSUME (горячий путь, вызывается из PassportsService)
   // -------------------------------------------------------------------------
 
@@ -333,16 +422,16 @@ export class OrderCutIssueRulesService {
    *
    * Возвращает `null`, если правило не применимо к этому issue:
    *   - нет ни одной активной строки очереди заказа;
-   *   - все активные строки выполнены (`issuedQty >= requiredQty`);
+   *   - все активные строки выполнены во всех очередях;
    *   - операция активной смены НЕ из категории `CUTTING` И у
-   *     паспорта `currentRouteStepIndex !== 0` (Stage 3-семантика
-   *     «только первая операция / CUTTING», см. ТЗ §6).
+   *     паспорта `currentRouteStepIndex !== 0`.
    *
-   * Если есть незавершённые активные строки и паспорт ИХ размера —
-   * возвращаем evaluation с конкретной строкой, которую дальше
-   * консумит `consumeInTx`. Если паспорт «не очередного» размера —
-   * сразу `OrderCutIssueRuleViolationException` с человекочитаемым
-   * сообщением.
+   * Иначе ищет «текущую очередь» (минимальный `queueIndex` с
+   * незакрытыми строками) и работает в её рамках:
+   *   - если паспорт «не очередного» размера в текущей очереди —
+   *     `OrderCutIssueRuleViolationException`;
+   *   - если паспорт ИХ размера — возвращает evaluation, который
+   *     дальше консумит `consumeInTx`.
    */
   async evaluateForIssue(
     passport: {
@@ -354,6 +443,7 @@ export class OrderCutIssueRulesService {
     operationCategory: OperationCategory,
   ): Promise<{
     ruleId: string;
+    queueIndex: number;
     requiredQty: number;
     issuedQtyBefore: number;
     sizeCode: string;
@@ -361,10 +451,6 @@ export class OrderCutIssueRulesService {
     const isFirstRouteStep = passport.currentRouteStepIndex === 0;
     const isCuttingOperation = operationCategory === OperationCategory.CUTTING;
     if (!isFirstRouteStep && !isCuttingOperation) {
-      // Сознательно: ограничение действует только на первую выдачу
-      // кроя. Дальнейшие движения по маршруту (`scan` /
-      // `complete-operation`) очередь не трогает (см. ТЗ §6,
-      // зеркально CutReleasePolicy).
       return null;
     }
 
@@ -374,48 +460,27 @@ export class OrderCutIssueRulesService {
     });
     if (activeRows.length === 0) return null;
 
-    const unfinishedRows = activeRows.filter(
-      (r) => r.issuedQty < r.requiredQty,
-    );
-    if (unfinishedRows.length === 0) {
-      // Все активные строки выполнены — очередь «гаснет сама».
+    const currentQueueIndex = this.computeCurrentQueueIndex(activeRows);
+    if (currentQueueIndex === null) {
+      // Все строки во всех очередях закрыты — очередь «погасла сама».
       return null;
     }
 
-    const matched = unfinishedRows.find((r) => r.sizeId === passport.sizeId);
-    if (!matched) {
-      // Паспорт «не очередного» размера — блокируем с понятным
-      // списком, что осталось выдать. Сортировка та же, что в
-      // `listForOrder` — UI и сообщение должны выглядеть
-      // одинаково.
-      const sortedUnfinished = [...unfinishedRows].sort((a, b) => {
-        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-        if (a.size.sortOrder !== b.size.sortOrder)
-          return a.size.sortOrder - b.size.sortOrder;
-        return a.size.code.localeCompare(b.size.code);
-      });
-      throw new OrderCutIssueRuleViolationException(
-        formatOrderCutIssueRuleViolationMessage(
-          sortedUnfinished.map((r) => ({
-            sizeCode: r.size.code,
-            remainingQty: Math.max(r.requiredQty - r.issuedQty, 0),
-          })),
-        ),
-      );
-    }
+    const currentRows = activeRows.filter(
+      (r) => r.queueIndex === currentQueueIndex,
+    );
+    const unfinishedInCurrent = currentRows.filter(
+      (r) => r.issuedQty < r.requiredQty,
+    );
+    // По определению currentQueueIndex здесь `unfinishedInCurrent.length > 0`,
+    // но проверяем явно ради читаемости (и страховки от рассинхрона).
+    if (unfinishedInCurrent.length === 0) return null;
 
-    const remaining = matched.requiredQty - matched.issuedQty;
-    if (passport.qtyCut > remaining) {
-      // Паспорт того же размера, но «лишние» штуки за пределами
-      // оставшегося лимита очереди — тоже блокируем. Сообщение
-      // показывает остаток именно по этому размеру (плюс другие
-      // незавершённые строки, чтобы менеджер видел весь контекст).
-      const sortedUnfinished = [...unfinishedRows].sort((a, b) => {
-        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-        if (a.size.sortOrder !== b.size.sortOrder)
-          return a.size.sortOrder - b.size.sortOrder;
-        return a.size.code.localeCompare(b.size.code);
-      });
+    const matched = unfinishedInCurrent.find(
+      (r) => r.sizeId === passport.sizeId,
+    );
+    if (!matched) {
+      const sortedUnfinished = [...unfinishedInCurrent].sort(this.compareRows);
       throw new OrderCutIssueRuleViolationException(
         formatOrderCutIssueRuleViolationMessage(
           sortedUnfinished.map((r) => ({
@@ -428,6 +493,7 @@ export class OrderCutIssueRulesService {
 
     return {
       ruleId: matched.id,
+      queueIndex: matched.queueIndex,
       requiredQty: matched.requiredQty,
       issuedQtyBefore: matched.issuedQty,
       sizeCode: matched.size.code,
@@ -439,21 +505,17 @@ export class OrderCutIssueRulesService {
    * `prisma.$transaction` от `PassportsService.issueToEmployee`).
    *
    * Делает conditional `updateMany`: инкремент `issuedQty`
-   * срабатывает только если строка всё ещё активна и лимит не
-   * будет превышен (`issuedQty + qty <= requiredQty`). Если 0
-   * строк обновлено — гонка по `issuedQty` или строку успели
-   * деактивировать; перечитываем актуальное состояние очереди
-   * заказа и бросаем VIOLATION с актуальным сообщением.
-   *
-   * Audit-событие `ORDER_CUT_ISSUE_RULE_CONSUMED` пишется в той же
-   * транзакции — `entityType = ORDER_CUT_ISSUE_RULE`,
-   * `entityId = ruleId`. Payload содержит `passportId` / `qty` /
-   * `beforeIssued` / `afterIssued` / `sizeCode` / `orderId`.
+   * срабатывает только если строка всё ещё активна и размер ещё
+   * не закрыт (`issuedQty < requiredQty`). Лимит сверху не
+   * проверяем — overshoot на «последнем» паспорте разрешён по ТЗ.
+   * Если 0 строк обновлено — гонка/деактивация; перечитываем
+   * актуальное состояние ТЕКУЩЕЙ очереди и бросаем VIOLATION.
    */
   async consumeInTx(
     tx: Prisma.TransactionClient,
     evaluation: {
       ruleId: string;
+      queueIndex: number;
       requiredQty: number;
       issuedQtyBefore: number;
       sizeCode: string;
@@ -470,38 +532,29 @@ export class OrderCutIssueRulesService {
       where: {
         id: evaluation.ruleId,
         isActive: true,
-        issuedQty: { lte: evaluation.requiredQty - op.qty },
+        issuedQty: { lt: evaluation.requiredQty },
       },
       data: { issuedQty: { increment: op.qty } },
     });
     if (incremented.count === 0) {
-      // Между pre-check и transaction'ом строку либо погасили
-      // (`isActive = false`), либо «съел» остаток другой паспорт.
-      // Перечитываем актуальное состояние и бросаем VIOLATION
-      // ровно с тем текстом, который покажем рабочему.
+      // Перечитываем все активные строки заказа и бросаем VIOLATION
+      // с текстом текущей очереди.
       const fresh = await tx.orderCutIssueRule.findMany({
         where: { orderId: op.orderId, isActive: true },
         include: { size: { select: { code: true, sortOrder: true } } },
       });
-      const unfinished = fresh.filter((r) => r.issuedQty < r.requiredQty);
-      if (unfinished.length === 0) {
-        // Очередь «погасла» между pre-check и tx — выдача стала
-        // свободной. Это не ошибка для UX (паспорт прошёл бы и
-        // без правила), но мы УЖЕ начали транзакцию и должны её
-        // откатить, чтобы счётчик не разъехался. Для простоты
-        // отдадим VIOLATION с понятным текстом «правило стало
-        // неактуально, попробуйте ещё раз» — fronted покажет его
-        // как inline, и швея просто сделает второй scan.
+      const currentQueueIndex = this.computeCurrentQueueIndex(fresh);
+      if (currentQueueIndex === null) {
         throw new OrderCutIssueRuleViolationException(
           'Очередь выдачи изменилась — повторите получение кроя.',
         );
       }
-      const sortedUnfinished = [...unfinished].sort((a, b) => {
-        if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
-        if (a.size.sortOrder !== b.size.sortOrder)
-          return a.size.sortOrder - b.size.sortOrder;
-        return a.size.code.localeCompare(b.size.code);
-      });
+      const unfinished = fresh.filter(
+        (r) =>
+          r.queueIndex === currentQueueIndex &&
+          r.issuedQty < r.requiredQty,
+      );
+      const sortedUnfinished = [...unfinished].sort(this.compareRows);
       throw new OrderCutIssueRuleViolationException(
         formatOrderCutIssueRuleViolationMessage(
           sortedUnfinished.map((r) => ({
@@ -520,6 +573,7 @@ export class OrderCutIssueRulesService {
         payload: {
           orderId: op.orderId,
           passportId: op.passportId,
+          queueIndex: evaluation.queueIndex,
           sizeCode: evaluation.sizeCode,
           qty: op.qty,
           beforeIssued: evaluation.issuedQtyBefore,
@@ -531,7 +585,7 @@ export class OrderCutIssueRulesService {
   }
 
   // -------------------------------------------------------------------------
-  // mapping
+  // mapping & helpers
   // -------------------------------------------------------------------------
 
   private toDto(
@@ -547,6 +601,7 @@ export class OrderCutIssueRulesService {
     return {
       id: row.id,
       orderId: row.orderId,
+      queueIndex: row.queueIndex,
       sizeId: row.sizeId,
       sizeCode: row.size.code,
       sizeLabel: row.size.code,
@@ -561,6 +616,67 @@ export class OrderCutIssueRulesService {
     };
   }
 
+  /**
+   * Группируем плоский список строк (уже отсортированный) в
+   * массив очередей. Очередь считается активной (`status !== OFF`),
+   * если в ней есть хоть одна `isActive` строка. `isCurrent = true`
+   * у одной очереди — той, у которой минимальный `queueIndex` среди
+   * очередей с незакрытыми активными строками.
+   */
+  private buildSummary(
+    orderId: string,
+    rules: OrderCutIssueRuleDto[],
+  ): OrderCutIssueRulesSummaryDto {
+    const queueMap = new Map<number, OrderCutIssueRuleDto[]>();
+    for (const r of rules) {
+      const list = queueMap.get(r.queueIndex) ?? [];
+      list.push(r);
+      queueMap.set(r.queueIndex, list);
+    }
+    const queueIndexes = [...queueMap.keys()].sort((a, b) => a - b);
+
+    // Текущая очередь = минимальный queueIndex с незакрытой активной
+    // строкой.
+    let currentQueueIndex: number | null = null;
+    for (const idx of queueIndexes) {
+      const list = queueMap.get(idx) ?? [];
+      const hasUnfinishedActive = list.some(
+        (r) => r.isActive && r.issuedQty < r.requiredQty,
+      );
+      if (hasUnfinishedActive) {
+        currentQueueIndex = idx;
+        break;
+      }
+    }
+
+    const queues: OrderCutIssueQueueDto[] = queueIndexes.map((idx) => {
+      const list = queueMap.get(idx) ?? [];
+      const status = this.computeStatus(list);
+      return {
+        queueIndex: idx,
+        status,
+        isCurrent: idx === currentQueueIndex,
+        rules: list,
+      };
+    });
+
+    const overallStatus: OrderCutIssueRuleStatus = (() => {
+      const anyActive = rules.some((r) => r.isActive);
+      if (!anyActive) return 'OFF';
+      const allDoneAcrossActive = rules
+        .filter((r) => r.isActive)
+        .every((r) => r.issuedQty >= r.requiredQty);
+      return allDoneAcrossActive ? 'DONE' : 'IN_PROGRESS';
+    })();
+
+    return {
+      orderId,
+      status: overallStatus,
+      queues,
+      rules,
+    };
+  }
+
   private computeStatus(
     rules: OrderCutIssueRuleDto[],
   ): OrderCutIssueRuleStatus {
@@ -568,5 +684,183 @@ export class OrderCutIssueRulesService {
     if (active.length === 0) return 'OFF';
     const allDone = active.every((r) => r.issuedQty >= r.requiredQty);
     return allDone ? 'DONE' : 'IN_PROGRESS';
+  }
+
+  /**
+   * Минимальный `queueIndex` среди активных строк с
+   * `issuedQty < requiredQty`. `null`, если незакрытых активных
+   * строк нет (очередь «погасла сама»).
+   */
+  private computeCurrentQueueIndex(
+    rows: ReadonlyArray<{
+      queueIndex: number;
+      isActive: boolean;
+      issuedQty: number;
+      requiredQty: number;
+    }>,
+  ): number | null {
+    let result: number | null = null;
+    for (const r of rows) {
+      if (!r.isActive) continue;
+      if (r.issuedQty >= r.requiredQty) continue;
+      if (result === null || r.queueIndex < result) result = r.queueIndex;
+    }
+    return result;
+  }
+
+  /**
+   * Стабильная сортировка строк очереди для UI и сообщений
+   * блокировки: очередь → пользовательский sortOrder → справочный
+   * Size.sortOrder → Size.code.
+   */
+  private compareRows = (
+    a: {
+      queueIndex: number;
+      sortOrder: number;
+      size: { sortOrder: number; code: string };
+    },
+    b: {
+      queueIndex: number;
+      sortOrder: number;
+      size: { sortOrder: number; code: string };
+    },
+  ): number => {
+    if (a.queueIndex !== b.queueIndex) return a.queueIndex - b.queueIndex;
+    if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
+    if (a.size.sortOrder !== b.size.sortOrder)
+      return a.size.sortOrder - b.size.sortOrder;
+    return a.size.code.localeCompare(b.size.code);
+  };
+
+  // -------------------------------------------------------------------------
+  // ACTIVE BANNER (UI /work — «Сейчас сканируйте: размер X, ячейки Y»)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Подсказка для seamstress UI: какие размеры по каким заказам
+   * сейчас разрешено сканировать. Симметричен `evaluateForIssue` —
+   * правило применимо только для операций категории `CUTTING` или
+   * для первого шага маршрута заказа. С multi-queue: по каждому
+   * заказу берётся ТЕКУЩАЯ очередь и её первый незакрытый размер.
+   */
+  async getActiveBannerForOperation(
+    operationId: string,
+  ): Promise<OrderCutIssueRuleBannerDto> {
+    const operation = await this.prisma.operation.findUnique({
+      where: { id: operationId },
+      select: { id: true, category: true },
+    });
+    if (!operation) return { applicable: false, orders: [] };
+
+    const isCutting = operation.category === OperationCategory.CUTTING;
+
+    const activeRows = await this.prisma.orderCutIssueRule.findMany({
+      where: { isActive: true },
+      include: {
+        size: { select: { id: true, code: true, sortOrder: true } },
+        order: { select: { id: true, number: true, status: true } },
+      },
+    });
+    if (activeRows.length === 0) return { applicable: false, orders: [] };
+
+    const candidateRows = activeRows.filter(
+      (r) =>
+        r.issuedQty < r.requiredQty && r.order.status === 'IN_PRODUCTION',
+    );
+    if (candidateRows.length === 0) return { applicable: false, orders: [] };
+
+    // Группируем по orderId, в каждой группе оставляем только
+    // строки текущей очереди (минимальный queueIndex с незакрытой
+    // активной строкой). Если у заказа в более ранней очереди есть
+    // незакрытые строки — в баннер попадут именно они.
+    const byOrder = new Map<string, typeof activeRows>();
+    for (const row of activeRows) {
+      const list = byOrder.get(row.orderId) ?? [];
+      list.push(row);
+      byOrder.set(row.orderId, list);
+    }
+
+    let allowedOrderIds: Set<string>;
+    if (isCutting) {
+      allowedOrderIds = new Set(byOrder.keys());
+    } else {
+      const firstSteps = await this.prisma.orderRouteStep.findMany({
+        where: {
+          orderId: { in: [...byOrder.keys()] },
+          index: 0,
+          operationId,
+        },
+        select: { orderId: true },
+      });
+      allowedOrderIds = new Set(firstSteps.map((s) => s.orderId));
+    }
+    if (allowedOrderIds.size === 0) {
+      return { applicable: false, orders: [] };
+    }
+
+    const orderCards: OrderCutIssueRuleBannerOrderDto[] = [];
+    for (const [orderId, rows] of byOrder) {
+      if (!allowedOrderIds.has(orderId)) continue;
+      const currentQueueIndex = this.computeCurrentQueueIndex(rows);
+      if (currentQueueIndex === null) continue;
+      const inCurrent = rows.filter(
+        (r) =>
+          r.queueIndex === currentQueueIndex &&
+          r.isActive &&
+          r.issuedQty < r.requiredQty,
+      );
+      if (inCurrent.length === 0) continue;
+      const sorted = [...inCurrent].sort(this.compareRows);
+      const top = sorted[0];
+
+      const cellRows = await this.prisma.passport.groupBy({
+        by: ['currentCellId'],
+        where: {
+          orderId,
+          sizeId: top.sizeId,
+          currentCellId: { not: null },
+          status: { in: ['CREATED', 'IN_PROGRESS'] as const },
+          currentEmployeeId: null,
+        },
+        _count: { _all: true },
+      });
+      const cellIds = cellRows
+        .map((c) => c.currentCellId)
+        .filter((id): id is string => !!id);
+      const cellMeta = cellIds.length
+        ? await this.prisma.cell.findMany({
+            where: { id: { in: cellIds } },
+            select: { id: true, code: true },
+          })
+        : [];
+      const codeById = new Map(cellMeta.map((c) => [c.id, c.code]));
+
+      const cells = cellRows
+        .map((c) => ({
+          cellId: c.currentCellId!,
+          cellCode: codeById.get(c.currentCellId!) ?? c.currentCellId!,
+          passportsCount: c._count._all,
+        }))
+        .sort((a, b) => a.cellCode.localeCompare(b.cellCode));
+
+      orderCards.push({
+        orderId,
+        orderNumber: top.order.number,
+        productLabel: null,
+        queueIndex: top.queueIndex,
+        currentSizeId: top.sizeId,
+        currentSizeCode: top.size.code,
+        remainingQty: Math.max(top.requiredQty - top.issuedQty, 0),
+        requiredQty: top.requiredQty,
+        issuedQty: top.issuedQty,
+        cells,
+      });
+    }
+
+    if (orderCards.length === 0) {
+      return { applicable: false, orders: [] };
+    }
+    orderCards.sort((a, b) => a.orderNumber.localeCompare(b.orderNumber));
+    return { applicable: true, orders: orderCards };
   }
 }

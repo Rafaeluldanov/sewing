@@ -1,4 +1,12 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Post,
+} from '@nestjs/common';
 import {
   BulkUpsertOrderCutIssueRulesSchema,
   DisableOrderCutIssueRulesSchema,
@@ -12,42 +20,32 @@ import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderCutIssueRulesService } from './order-cut-issue-rules.service.js';
 
 /**
- * REST-контракт модуля «Очередь выдачи кроя по размерам» (см.
- * `apps/api/src/modules/order-cut-issue-rules/*`,
- * `docs/api.md §«Очередь выдачи кроя»`,
- * `docs/order-flow.md §«Очередь выдачи кроя»`).
+ * REST-контракт модуля «Очередь выдачи кроя по размерам».
  *
  * Маршруты идут под префиксом `/api/orders/:id/cut-issue-rules` —
- * это семантически принадлежит карточке заказа, и UI карточки
- * (`apps/web/app/orders/[id]/page.tsx`) ходит сюда без отдельного
- * корневого ресурса. На уровне класса `@Roles` не ставим намеренно:
- * GET доступен любой авторизованной роли (нужно швеям/закройщикам
- * для диагностики «почему не выдаётся крой»), а write-эндпоинты
- * закрыты явным `@Roles` на методе (`getAllAndOverride` в
- * `RolesGuard` использует ближайший декоратор). `ADMIN` всегда
- * проходит через `RolesGuard`.
+ * это семантически принадлежит карточке заказа. На уровне класса
+ * `@Roles` не ставим: GET доступен любой авторизованной роли,
+ * write-эндпоинты закрыты явным `@Roles` на методе.
+ *
+ * С multi-queue: bulk-upsert принимает `queueIndex` в payload,
+ * добавление новой очереди = bulk-upsert на свежий
+ * `queueIndex = max + 1`. Отдельный «add empty queue» эндпоинт не
+ * нужен — пустая очередь без строк ничего не блокирует, а UI
+ * заводит первую строку сразу.
+ *
+ * Удаление пустой последней очереди —
+ * `DELETE /api/orders/:id/cut-issue-rules/queues/:queueIndex` (см.
+ * `OrderCutIssueRulesService.deleteQueue`).
  */
 @Controller('orders/:id/cut-issue-rules')
 export class OrderCutIssueRulesController {
   constructor(private readonly service: OrderCutIssueRulesService) {}
 
-  /**
-   * Список строк очереди выдачи кроя для заказа + derived-сводка
-   * (`status` ∈ `OFF` / `IN_PROGRESS` / `DONE`). Доступно любой
-   * авторизованной роли — нужно как менеджеру (UI карточки заказа),
-   * так и работникам цеха (диагностика на пилоте, support).
-   */
   @Get()
   list(@Param('id') orderId: string): Promise<OrderCutIssueRulesSummaryDto> {
     return this.service.listForOrder(orderId);
   }
 
-  /**
-   * Bulk upsert одной формы карточки заказа: пришедшие строки
-   * upsert-ятся (active = true), остальные активные строки заказа
-   * деактивируются (`isActive = false`). См. JSDoc сервиса
-   * (`bulkUpsert`) — там валидации и инварианты.
-   */
   @Post()
   @Roles('SHOP_MANAGER', 'SHOPFLOOR_MASTER')
   bulkUpsert(
@@ -59,12 +57,6 @@ export class OrderCutIssueRulesController {
     return this.service.bulkUpsert(user, orderId, dto);
   }
 
-  /**
-   * Полностью отключить очередь выдачи кроя по заказу
-   * (`isActive = false` для всех строк). Идемпотентно — повторный
-   * вызов на «уже выключенной» очереди вернёт сводку без
-   * дополнительной записи в audit.
-   */
   @Post('disable-all')
   @Roles('SHOP_MANAGER', 'SHOPFLOOR_MASTER')
   disableAll(
@@ -74,5 +66,28 @@ export class OrderCutIssueRulesController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<OrderCutIssueRulesSummaryDto> {
     return this.service.disableAll(user, orderId);
+  }
+
+  /**
+   * Удалить целиком одну очередь заказа. Разрешено только если
+   * это последняя очередь и в ней `Σ issuedQty = 0` (см.
+   * `OrderCutIssueRulesService.deleteQueue`). Без body.
+   */
+  @Delete('queues/:queueIndex')
+  @Roles('SHOP_MANAGER', 'SHOPFLOOR_MASTER')
+  deleteQueue(
+    @Param('id') orderId: string,
+    @Param('queueIndex') queueIndexParam: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderCutIssueRulesSummaryDto> {
+    const queueIndex = Number(queueIndexParam);
+    if (!Number.isInteger(queueIndex) || queueIndex < 1) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'INVALID_QUEUE_INDEX',
+        message: 'Некорректный индекс очереди',
+      });
+    }
+    return this.service.deleteQueue(user, orderId, queueIndex);
   }
 }

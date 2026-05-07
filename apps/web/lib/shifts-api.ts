@@ -14,6 +14,7 @@ import type {
   ShiftSessionDto,
   StartShiftDto,
 } from '@sewing/shared/shifts';
+import type { OrderCutIssueRuleBannerDto } from '@sewing/shared';
 import type { PassportDetailDto } from '@sewing/shared/passports';
 import { apiFetch } from './api';
 
@@ -79,4 +80,20 @@ export function completePassportOperation(id: string): Promise<PassportDetailDto
     `/passports/${encodeURIComponent(id)}/complete-operation`,
     { method: 'POST', body: {} },
   );
+}
+
+/**
+ * Подсказка для seamstress-баннера на /work — какой размер сейчас
+ * разрешён к выдаче по очереди заказа и в каких ячейках лежат
+ * паспорта этого размера. Backend сам решает применимость
+ * (`OrderCutIssueRulesService.getActiveBannerForOperation`):
+ * если operationId не CUTTING и не первый шаг ни одного маршрута
+ * с активной очередью — вернёт `applicable = false`.
+ */
+export function getCutIssueBanner(
+  operationId: string,
+): Promise<OrderCutIssueRuleBannerDto> {
+  return apiFetch<OrderCutIssueRuleBannerDto>('/cut-issue-banner', {
+    searchParams: { operationId },
+  });
 }

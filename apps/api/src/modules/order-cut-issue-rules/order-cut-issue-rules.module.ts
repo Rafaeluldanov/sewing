@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { CutIssueBannerController } from './cut-issue-banner.controller.js';
 import { OrderCutIssueRulesController } from './order-cut-issue-rules.controller.js';
 import { OrderCutIssueRulesService } from './order-cut-issue-rules.service.js';
 
@@ -19,7 +20,7 @@ import { OrderCutIssueRulesService } from './order-cut-issue-rules.service.js';
  * `imports` не требуются.
  */
 @Module({
-  controllers: [OrderCutIssueRulesController],
+  controllers: [OrderCutIssueRulesController, CutIssueBannerController],
   providers: [OrderCutIssueRulesService],
   exports: [OrderCutIssueRulesService],
 })

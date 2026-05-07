@@ -28,6 +28,10 @@ import type {
   CurrentWorkPassportDto,
   ShiftSessionDto,
 } from '@sewing/shared/shifts';
+import type {
+  OrderCutIssueRuleBannerDto,
+  OrderCutIssueRuleBannerOrderDto,
+} from '@sewing/shared';
 import { QrScannerModal } from './qr-scanner-modal';
 import {
   PassportConfirmModal,
@@ -39,6 +43,7 @@ import {
   lookupPassportAction,
 } from './actions';
 import { CurrentWorkCard } from './current-work-card';
+import { CutIssueRuleBanner } from './cut-issue-rule-banner';
 import {
   playCutAcceptedSound,
   playOperationCompletedSound,
@@ -55,6 +60,16 @@ interface Props {
    * (`revalidatePath('/work')` в action инвалидирует RSC-кэш).
    */
   currentWork: CurrentWorkPassportDto[];
+  /**
+   * Подсказка «Очередь выдачи кроя» для текущей операции швеи
+   * (см. `OrderCutIssueRulesService.getActiveBannerForOperation`).
+   * Используется и для постоянного баннера сверху, и для
+   * pre-issue проверки размера в `lookup`-flow: если паспорт
+   * относится к заказу из баннера, но его `sizeCode` не совпадает
+   * с `currentSizeCode` — поднимаем модалку «не тот размер»
+   * вместо `PassportConfirmModal`.
+   */
+  cutIssueBanner: OrderCutIssueRuleBannerDto;
 }
 
 /**
@@ -64,7 +79,11 @@ interface Props {
  */
 type FlowMode = 'issue' | 'complete';
 
-export function SeamstressActivePanel({ shift, currentWork }: Props) {
+export function SeamstressActivePanel({
+  shift,
+  currentWork,
+  cutIssueBanner,
+}: Props) {
   const router = useRouter();
 
   const [scannerOpen, setScannerOpen] = useState<FlowMode | null>(null);
@@ -76,6 +95,20 @@ export function SeamstressActivePanel({ shift, currentWork }: Props) {
   const [errorRequestId, setErrorRequestId] = useState<string | undefined>(
     undefined,
   );
+  /**
+   * Состояние модалки «не тот размер» — поднимается, когда после
+   * успешного `lookupPassportAction` мы локально сравнили
+   * `passport.sizeCode` с `currentSizeCode` соответствующего
+   * заказа из `cutIssueBanner` и обнаружили расхождение. Это
+   * UX-оптимизация поверх жёсткой серверной проверки в
+   * `evaluateForIssue` (она бы всё равно вернула 409 на
+   * `acceptForIssue`, но швея бы успела зря пройти модалку
+   * визуальной сверки).
+   */
+  const [wrongSize, setWrongSize] = useState<{
+    scannedSize: string;
+    expected: OrderCutIssueRuleBannerOrderDto;
+  } | null>(null);
   const [isPending, startTransition] = useTransition();
 
   const lookup = (code: string, mode: FlowMode) => {
@@ -86,12 +119,32 @@ export function SeamstressActivePanel({ shift, currentWork }: Props) {
     }
     setError(null);
     setErrorRequestId(undefined);
+    setWrongSize(null);
     startTransition(async () => {
       const res = await lookupPassportAction(trimmed);
       if (!res.ok) {
         setError(res.error);
         setErrorRequestId(res.errorRequestId);
         return;
+      }
+      // Pre-issue проверка очереди выдачи (вариант 2 ТЗ §4):
+      // если паспорт принадлежит заказу из активного баннера и
+      // его размер не совпадает с currentSizeCode — поднимаем
+      // модалку «не тот размер» ВМЕСТО `PassportConfirmModal`.
+      // Для `complete`-flow эту проверку не делаем: завершение
+      // операции по своему паспорту не регулируется очередью
+      // выдачи (правило применяется только на первой выдаче).
+      if (mode === 'issue' && cutIssueBanner.applicable) {
+        const expected = cutIssueBanner.orders.find(
+          (o) => o.orderId === res.passport.orderId,
+        );
+        if (expected && expected.currentSizeCode !== res.passport.sizeCode) {
+          setWrongSize({
+            scannedSize: res.passport.sizeCode,
+            expected,
+          });
+          return;
+        }
       }
       setConfirmMode(mode);
       setConfirm(res.passport);
@@ -172,6 +225,7 @@ export function SeamstressActivePanel({ shift, currentWork }: Props) {
 
   return (
     <div className="seamstress-work">
+      <CutIssueRuleBanner banner={cutIssueBanner} />
       <CurrentWorkCard
         items={currentWork}
         shiftOperationId={shift.operationId}
@@ -302,6 +356,81 @@ export function SeamstressActivePanel({ shift, currentWork }: Props) {
           pendingLabel="Завершаем…"
         />
       )}
+      {wrongSize && (
+        <WrongSizeModal
+          scannedSize={wrongSize.scannedSize}
+          expected={wrongSize.expected}
+          onClose={() => setWrongSize(null)}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * Модалка «не тот размер» для seamstress flow на /work.
+ *
+ * Поднимается из `lookup`-flow до `PassportConfirmModal`, когда
+ * швея отсканировала паспорт с `sizeCode`, не совпадающим с
+ * текущим разрешённым размером очереди по этому заказу. Это
+ * полностью UI-проверка: реальная защита остаётся на бэке
+ * (`OrderCutIssueRulesService.evaluateForIssue` бросит 409 при
+ * `acceptForIssue`), но модалка экономит швее шаг визуальной
+ * сверки.
+ */
+function WrongSizeModal({
+  scannedSize,
+  expected,
+  onClose,
+}: {
+  scannedSize: string;
+  expected: OrderCutIssueRuleBannerOrderDto;
+  onClose: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="presentation" onClick={onClose}>
+      <div
+        className="modal modal--wrong-size"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="wrong-size-title"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <h2 id="wrong-size-title" className="modal__title">
+          Не тот размер
+        </h2>
+        <p className="modal__text">
+          Этот паспорт размера <b>{scannedSize}</b>, а сейчас по заказу №
+          {expected.orderNumber} разрешён только{' '}
+          <b>{expected.currentSizeCode}</b>.
+        </p>
+        <p className="modal__text">
+          Осталось выдать: {expected.remainingQty} шт ({expected.issuedQty}/
+          {expected.requiredQty}).
+        </p>
+        {expected.cells.length > 0 ? (
+          <div className="modal__cells">
+            <div className="modal__cells-label">Возьмите паспорт из ячейки:</div>
+            <ul className="modal__cells-list">
+              {expected.cells.map((c) => (
+                <li key={c.cellId}>
+                  <b>{c.cellCode}</b> — {c.passportsCount} шт
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <p className="modal__text modal__text--muted">
+            Сейчас нет паспортов размера {expected.currentSizeCode} в ячейках —
+            обратитесь к мастеру.
+          </p>
+        )}
+        <div className="modal__actions">
+          <button type="button" className="btn btn-primary" onClick={onClose}>
+            Понятно
+          </button>
+        </div>
+      </div>
     </div>
   );
 }
