@@ -8,7 +8,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration": "vitest run integration",
-    "test:smoke": "vitest run smoke"
+    "test:smoke": "vitest run smoke",
+    "test:payroll-scenario": "vitest run integration/production-payroll-scenario.integration.test.ts --reporter=verbose"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.4",

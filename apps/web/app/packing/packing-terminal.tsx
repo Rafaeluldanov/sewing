@@ -27,6 +27,7 @@
  * которые возвращают `BoxDetailDto`, а не `redirect`/`revalidate`-only.
  */
 
+import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
 import type { BoxDetailDto } from '@sewing/shared/packing';
 import type {
@@ -139,6 +140,16 @@ interface MainProps {
 
 function PackingMainTerminal({ shift }: MainProps) {
   const [box, setBox] = useState<BoxDetailDto | null>(null);
+  // Id коробки, которую упаковщик «свернул», но **не закрыл**: она
+  // ещё `OPEN` в БД. Нужен, чтобы на пустом stage показать баннер
+  // «Карточка свёрнута» с кнопкой возврата и не дать упаковщику
+  // потерять активную коробку (см. docs/packing-close-ui-recon.md §6).
+  const [collapsedBoxId, setCollapsedBoxId] = useState<string | null>(null);
+  // Подпись свёрнутой коробки для баннера — чтобы не делать ещё один
+  // запрос только ради номера. Заполняется одновременно с `collapsedBoxId`.
+  const [collapsedBoxNumber, setCollapsedBoxNumber] = useState<string | null>(
+    null,
+  );
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
@@ -190,18 +201,25 @@ function PackingMainTerminal({ shift }: MainProps) {
   }, []);
 
   // Сохраняем id активной коробки в localStorage при каждой смене.
+  // «Активной» считается либо открытая коробка в state, либо
+  // свернутая (`collapsedBoxId`) — она ещё `OPEN` в БД, и упаковщик
+  // должен иметь возможность вернуться к ней после перезагрузки.
+  // Закрытая коробка (`status === 'CLOSED'`) активной не считается —
+  // её id из storage чистится.
   useEffect(() => {
     if (typeof window === 'undefined') return;
     try {
-      if (box && box.status === 'OPEN') {
-        window.localStorage.setItem(ACTIVE_BOX_STORAGE_KEY, box.id);
+      const remembered =
+        box && box.status === 'OPEN' ? box.id : collapsedBoxId;
+      if (remembered) {
+        window.localStorage.setItem(ACTIVE_BOX_STORAGE_KEY, remembered);
       } else {
         window.localStorage.removeItem(ACTIVE_BOX_STORAGE_KEY);
       }
     } catch {
       /* fail-soft */
     }
-  }, [box]);
+  }, [box, collapsedBoxId]);
 
   const handleCreateBox = () => {
     const trimmed = maxQtyDraft.trim();
@@ -275,7 +293,7 @@ function PackingMainTerminal({ shift }: MainProps) {
   };
 
   const handleClose = () => {
-    if (!box) return;
+    if (!box || box.status !== 'OPEN') return;
     if (box.totalQty <= 0) {
       setError({ message: 'Нельзя закрыть пустую коробку' });
       return;
@@ -292,12 +310,27 @@ function PackingMainTerminal({ shift }: MainProps) {
       setInfo(
         `Коробка ${res.data.number} закрыта. Начислено всем участникам.`,
       );
-      setBox(null);
+      // Оставляем закрытую коробку в state — рендерим success-карточку
+      // с явным статусом «Закрыта» и ссылкой на детальную страницу.
+      // См. `docs/packing-close-ui-recon.md §7`.
+      setBox(res.data);
+      setCollapsedBoxId(null);
+      setCollapsedBoxNumber(null);
       setLastAddedPassportId(null);
       setManualCode('');
       setManualOpen(false);
       setMaxQtyDraft('');
     });
+  };
+
+  const handleStartNewBox = () => {
+    setBox(null);
+    setLastAddedPassportId(null);
+    setError(null);
+    setInfo(null);
+    setManualCode('');
+    setManualOpen(false);
+    setMaxQtyDraft('');
   };
 
   const handleRefresh = () => {
@@ -311,22 +344,91 @@ function PackingMainTerminal({ shift }: MainProps) {
   };
 
   const handleLeaveBox = () => {
+    if (!box || box.status !== 'OPEN') return;
+    // Коробка ещё `OPEN` в БД — запоминаем её id, чтобы показать
+    // на пустом stage баннер «Карточка свёрнута» с кнопкой возврата.
+    // localStorage сохраняется автоматически (см. effect выше).
+    setCollapsedBoxId(box.id);
+    setCollapsedBoxNumber(box.number);
     setBox(null);
     setLastAddedPassportId(null);
     setError(null);
-    setInfo(null);
+    setInfo(
+      `Карточка коробки ${box.number} свёрнута. Коробка ещё открыта — её можно вернуть кнопкой ниже.`,
+    );
     setManualCode('');
     setManualOpen(false);
     setMaxQtyDraft('');
   };
 
+  const handleRestoreCollapsedBox = () => {
+    if (!collapsedBoxId) return;
+    const id = collapsedBoxId;
+    setError(null);
+    startTransition(async () => {
+      const res = await getActiveBoxAction(id);
+      if (!res.ok) {
+        setError({ message: res.error, requestId: res.errorRequestId });
+        setCollapsedBoxId(null);
+        setCollapsedBoxNumber(null);
+        return;
+      }
+      if (res.data.status === 'CLOSED') {
+        // Кто-то закрыл коробку с другого устройства, пока мы были
+        // на пустом stage. Покажем закрытую карточку — ровно тот же
+        // success state, что после собственного close.
+        setBox(res.data);
+        setCollapsedBoxId(null);
+        setCollapsedBoxNumber(null);
+        setInfo(`Коробка ${res.data.number} уже закрыта.`);
+        return;
+      }
+      setBox(res.data);
+      setCollapsedBoxId(null);
+      setCollapsedBoxNumber(null);
+      setInfo(null);
+    });
+  };
+
   // ----------------------------------------------------------------------
   // Stage 1: нет активной коробки — большая кнопка «Создать коробку».
+  // Дополнительно — баннер «Карточка свёрнута», если у нас в state
+  // запомнен collapsedBoxId: коробка ещё `OPEN` в БД, и упаковщик
+  // должен иметь явный путь к ней (см. docs/packing-close-ui-recon.md §6).
   // ----------------------------------------------------------------------
   if (!box) {
     return (
       <>
         <ShiftStrip startedAt={shift.startedAt} />
+
+        {collapsedBoxId && (
+          <div
+            className="scan-card scan-card--simple"
+            aria-label="Свёрнутая коробка"
+            style={{ marginBottom: '0.75rem' }}
+          >
+            <h2 className="scan-card__title">
+              <Icon name="packing" size={22} />
+              <span style={{ marginLeft: '0.45rem' }}>
+                Коробка{collapsedBoxNumber ? ` ${collapsedBoxNumber}` : ''}{' '}
+                свёрнута
+              </span>
+            </h2>
+            <p className="scan-card__hint">
+              Карточка свёрнута, но сама коробка ещё открыта в системе.
+              Можно вернуться к ней и продолжить упаковку.
+            </p>
+            <button
+              type="button"
+              className="btn btn-primary btn-lg btn-block"
+              onClick={handleRestoreCollapsedBox}
+              disabled={isPending}
+            >
+              {isPending ? 'Загружаем…' : 'Вернуться к коробке'}
+            </button>
+          </div>
+        )}
+
         <div
           className="scan-card scan-card--simple"
           aria-label="Создать коробку"
@@ -410,6 +512,91 @@ function PackingMainTerminal({ shift }: MainProps) {
             </button>
           )}
         </div>
+      </>
+    );
+  }
+
+  // ----------------------------------------------------------------------
+  // Stage 2a: коробка только что закрыта — show success-карточку с
+  // явным статусом «Закрыта», ссылкой на детальную страницу и
+  // primary-кнопкой «Создать новую коробку». См.
+  // `docs/packing-close-ui-recon.md §7`.
+  // ----------------------------------------------------------------------
+  if (box.status === 'CLOSED') {
+    return (
+      <>
+        <ShiftStrip startedAt={shift.startedAt} />
+
+        <section className="qc-card" aria-label="Закрытая коробка">
+          <header className="qc-card__header">
+            <div>
+              <div className="qc-card__label">Коробка</div>
+              <div className="qc-card__number">{box.number}</div>
+            </div>
+            <span className="status-badge done">Закрыта</span>
+          </header>
+
+          <dl className="qc-card__grid">
+            <div>
+              <dt>Изделие</dt>
+              <dd>{box.summary?.productName ?? '—'}</dd>
+            </div>
+            <div>
+              <dt>Цвет</dt>
+              <dd>{box.summary?.color ?? '—'}</dd>
+            </div>
+            <div>
+              <dt>Размер</dt>
+              <dd className="qc-card__size">{box.summary?.sizeCode ?? '—'}</dd>
+            </div>
+            <div>
+              <dt>Упаковано</dt>
+              <dd>
+                <strong>{box.totalQty}</strong> / {box.maxQty}
+              </dd>
+            </div>
+          </dl>
+
+          {info && (
+            <div className="info-box" role="status">
+              {info}
+            </div>
+          )}
+
+          {box.items.length > 0 && (
+            <details className="qc-card__history">
+              <summary>Упаковано: {box.items.length} паспорт(ов)</summary>
+              <ul>
+                {box.items.map((it) => (
+                  <li key={it.id}>
+                    <strong>{it.passportNumber}</strong> · {it.qty} шт.
+                    <span className="qc-card__history-meta">
+                      {' '}
+                      · заказ {it.orderNumber} · {formatTime(it.createdAt)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </details>
+          )}
+
+          <div className="qc-card__actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-block btn-lg"
+              onClick={handleStartNewBox}
+              disabled={isPending}
+            >
+              Создать новую коробку
+            </button>
+            <Link
+              className="btn btn-block"
+              href={`/packing/boxes/${box.id}`}
+            >
+              Открыть карточку коробки
+            </Link>
+          </div>
+        </section>
       </>
     );
   }
