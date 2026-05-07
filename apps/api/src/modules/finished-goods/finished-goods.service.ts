@@ -11,6 +11,7 @@ import { BusinessException } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { CancelFinishedGoodsShipmentDto } from './dto/cancel-finished-goods-shipment.dto.js';
+import type { CreateFinishedGoodsAdjustmentDto } from './dto/create-finished-goods-adjustment.dto.js';
 import type { CreateFinishedGoodsShipmentDto } from './dto/create-finished-goods-shipment.dto.js';
 import type { CreateFinishedGoodsTransferDto } from './dto/create-finished-goods-transfer.dto.js';
 import type { ListFinishedGoodsBalancesQuery } from './dto/list-finished-goods-balances.dto.js';
@@ -20,6 +21,7 @@ import {
   FINISHED_GOODS_MOVEMENT_DIRECTION,
   FINISHED_GOODS_MOVEMENT_TYPE,
   FINISHED_GOODS_SOURCE_TYPE,
+  buildFinishedGoodsAdjustmentSourceKey,
   buildFinishedGoodsBalanceKey,
   buildFinishedGoodsShipmentCancelLineSourceKey,
   buildFinishedGoodsShipmentLineSourceKey,
@@ -1185,6 +1187,168 @@ export class FinishedGoodsService {
       outMovement: toMovementListItem(outDetail),
       inMovement: toMovementListItem(inDetail),
     };
+  }
+
+  // ===========================================================================
+  // ADJUSTMENT — ручная корректировка остатка готовой продукции
+  // ===========================================================================
+
+  /**
+   * Ручная корректировка остатка готовой продукции (см.
+   * `apps/api/src/modules/finished-goods/dto/create-finished-goods-adjustment.dto.ts`,
+   * `docs/api.md §«Finished goods adjustments»`).
+   *
+   * Контракт MVP:
+   *   - открывает свою `prisma.$transaction(...)`;
+   *   - находит `FinishedGoodsBalance` по `finishedGoodsBalanceId`,
+   *     достаёт `orderId`, `productId`, `sizeId`, `color`,
+   *     `warehouseId`, `cellId` — клиент эти поля не присылает;
+   *   - проверяет, что `qty > 0` (целое) и `direction ∈ {IN, OUT}`;
+   *   - для `OUT` — strict: `source.qty >= qty`. Готовая продукция не
+   *     уходит в минус (нет аналога `allowNegativeMaterialStock`,
+   *     `applyMovementInTx` сам отклонит OUT, который уведёт баланс
+   *     ниже нуля);
+   *   - идемпотентен по `clientRequestId`: один `clientRequestId` →
+   *     одно движение `type = ADJUSTMENT`. Повторный submit формы
+   *     возвращает существующее движение и НЕ изменяет баланс
+   *     повторно;
+   *   - пишет audit `FINISHED_GOODS_ADJUSTMENT_CREATED` под
+   *     `entityType = FINISHED_GOODS_MOVEMENT` (`entityId =
+   *     FinishedGoodsMovement.id`) в той же транзакции.
+   *
+   * Сознательная граница MVP: НЕ создаём отдельную модель
+   * `FinishedGoodsAdjustment`, корректировка полностью представлена
+   * одним `FinishedGoodsMovement`. Не затрагивает материалы
+   * (`StockBalance` / `StockMovement` / `MaterialIssue` /
+   * `PurchaseReceipt` / `StockAdjustment` / `StockTransfer` /
+   * `CostsService` / `ProductionCostV2Service`).
+   */
+  async createAdjustment(
+    dto: CreateFinishedGoodsAdjustmentDto,
+    employeeId: string | null | undefined,
+  ): Promise<FinishedGoodsMovementListItem> {
+    if (!Number.isInteger(dto.qty) || dto.qty <= 0) {
+      throw new BusinessException(
+        'FINISHED_GOODS_ADJUSTMENT_QTY_INVALID',
+        'Количество корректировки готовой продукции должно быть целым положительным числом.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+    if (
+      dto.direction !== FINISHED_GOODS_MOVEMENT_DIRECTION.IN &&
+      dto.direction !== FINISHED_GOODS_MOVEMENT_DIRECTION.OUT
+    ) {
+      throw new BusinessException(
+        'FINISHED_GOODS_MOVEMENT_DIRECTION_INVALID',
+        'Недопустимое направление корректировки готовой продукции (ожидается IN или OUT).',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const clientRequestId = dto.clientRequestId ?? randomUUID();
+    const adjustmentId = clientRequestId;
+    const sourceKey = buildFinishedGoodsAdjustmentSourceKey(adjustmentId);
+
+    const movementId = await this.prisma.$transaction(async (tx) => {
+      // Идемпотентность: один `clientRequestId` → одно движение.
+      // Не пишем audit повторно, не апдейтим `FinishedGoodsBalance`.
+      const existing = await tx.finishedGoodsMovement.findUnique({
+        where: { sourceKey },
+      });
+      if (existing) {
+        return existing.id;
+      }
+
+      const balance = await tx.finishedGoodsBalance.findUnique({
+        where: { id: dto.finishedGoodsBalanceId },
+      });
+      if (!balance) {
+        throw new BusinessException(
+          'FINISHED_GOODS_BALANCE_NOT_FOUND',
+          'Остаток готовой продукции не найден.',
+          HttpStatus.NOT_FOUND,
+        );
+      }
+
+      const isOut =
+        dto.direction === FINISHED_GOODS_MOVEMENT_DIRECTION.OUT;
+      // Pre-check для OUT: явный 409 с понятным `code`, чтобы UI отрисовал
+      // backend-message без raw JSON. `applyMovementInTx` всё равно
+      // подстрахует от race-condition тем же кодом.
+      if (isOut && balance.qty < dto.qty) {
+        throw new BusinessException(
+          'FINISHED_GOODS_INSUFFICIENT_BALANCE',
+          `Недостаточно остатка готовой продукции: доступно ${balance.qty}, требуется ${dto.qty}.`,
+          HttpStatus.CONFLICT,
+        );
+      }
+
+      const { movement: created, balance: updated } =
+        await this.applyMovementInTx(tx, {
+          orderId: balance.orderId,
+          productId: balance.productId,
+          sizeId: balance.sizeId,
+          color: balance.color,
+          warehouseId: balance.warehouseId,
+          cellId: balance.cellId,
+          type: FINISHED_GOODS_MOVEMENT_TYPE.ADJUSTMENT,
+          direction: dto.direction,
+          qty: dto.qty,
+          sourceType: FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_ADJUSTMENT,
+          sourceId: adjustmentId,
+          sourceKey,
+          comment: dto.comment,
+          createdById: employeeId ?? null,
+        });
+
+      await this.audit.log(
+        {
+          event: 'FINISHED_GOODS_ADJUSTMENT_CREATED',
+          entityType: 'FINISHED_GOODS_MOVEMENT',
+          entityId: created.id,
+          employeeId: employeeId ?? null,
+          payload: {
+            sourceType: FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_ADJUSTMENT,
+            adjustmentId,
+            finishedGoodsBalanceId: updated.id,
+            movementId: created.id,
+            orderId: created.orderId,
+            productId: created.productId,
+            sizeId: created.sizeId,
+            color: created.color,
+            warehouseId: created.warehouseId,
+            cellId: created.cellId,
+            direction: created.direction,
+            qty: created.qty,
+            balanceBeforeQty: created.balanceBeforeQty,
+            balanceAfterQty: created.balanceAfterQty,
+            comment: created.comment,
+            employeeId: employeeId ?? null,
+            timestamp: created.createdAt.toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+        tx,
+      );
+
+      return created.id;
+    });
+
+    this.logger.log(
+      `event=finished_goods.adjustment.create id=${movementId} ` +
+        `direction=${dto.direction} qty=${dto.qty} ` +
+        `finishedGoodsBalanceId=${dto.finishedGoodsBalanceId} ` +
+        `sourceKey=${sourceKey}`,
+    );
+
+    // Возвращаем item в shape `FinishedGoodsMovementListItem` — тот
+    // же, что отдаёт `GET /api/finished-goods/movements`. `sourceKey`
+    // сознательно НЕ отдаём наружу.
+    const detail =
+      await this.prisma.finishedGoodsMovement.findUniqueOrThrow({
+        where: { id: movementId },
+        include: MOVEMENT_LIST_INCLUDE,
+      });
+    return toMovementListItem(detail);
   }
 }
 

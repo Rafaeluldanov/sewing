@@ -1091,6 +1091,89 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     компенсирует обратным transfer-ом. Запреты зафиксированы в
     `tests/smoke/finished-goods-transfers.smoke.test.ts`.
 
+  Backend + Frontend-итерация «Корректировка готовой продукции»
+  (`apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::createAdjustment`,
+  `apps/api/src/modules/finished-goods/dto/create-finished-goods-adjustment.dto.ts`,
+  `apps/api/src/modules/finished-goods/finished-goods.constants.ts`,
+  `apps/web/lib/finished-goods-api.ts::createFinishedGoodsAdjustment`,
+  `apps/web/app/admin/warehouses/actions.ts::createFinishedGoodsAdjustmentAction`,
+  `apps/web/components/warehouses/stock/stock-adjustment-dialog.tsx`,
+  `apps/web/components/warehouses/stock/stock-adjustment-button.tsx`,
+  `tests/smoke/finished-goods-adjustments.smoke.test.ts`,
+  `tests/integration/finished-goods-adjustments.test.ts`,
+  `docs/api.md §«Finished goods adjustments»`):
+  - решение владельца проекта — «Корректировка» это **одна общая
+    складская операция** в UI. Вкладка «Остатки» в
+    `/admin/warehouses?tab=balances` оставляет одну кнопку
+    «Корректировка»; диалог сам решает, в какой backend endpoint
+    идти, по `kind` выбранного остатка:
+    - `MATERIAL` → `POST /api/stock/adjustments`;
+    - `FINISHED_GOOD` → `POST /api/finished-goods/adjustments`.
+    Отдельная кнопка / страница / sidebar item / новая вкладка
+    `OrderViewTabs` **не создавались**.
+  - Backend mutation: `POST /api/finished-goods/adjustments` (RBAC
+    `ADMIN` / `SHOP_MANAGER`). DTO body —
+    `CreateFinishedGoodsAdjustmentDto`: `{ finishedGoodsBalanceId,
+    direction ('IN' | 'OUT'), qty (int > 0), comment (2..500),
+    clientRequestId? }`. `orderId`, `productId`, `sizeId`, `color`,
+    `warehouseId`, `cellId`, `unit` сервис достаёт из исходного
+    `FinishedGoodsBalance` — клиент их не присылает. `qty` всегда
+    целое.
+  - Adjustment фиксируется одним `FinishedGoodsMovement`
+    `type = ADJUSTMENT` через `applyMovementInTx`:
+    - `direction = IN` увеличивает `FinishedGoodsBalance.qty` на
+      `qty`;
+    - `direction = OUT` уменьшает на `qty`. **Strict** —
+      `applyMovementInTx` не пускает баланс ниже нуля; backend
+      отдаёт 409 `FINISHED_GOODS_INSUFFICIENT_BALANCE`. Готовая
+      продукция не уходит в минус, аналога
+      `allowNegativeMaterialStock` для finished goods на этой
+      итерации нет.
+  - **Идемпотентность по `clientRequestId`.** SourceKey =
+    `FINISHED_GOODS_ADJUSTMENT:<clientRequestId>`. Повторный submit
+    с тем же ключом возвращает существующее движение и НЕ изменяет
+    баланс повторно. UNIQUE на `FinishedGoodsMovement.sourceKey`
+    подстрахует от race-condition.
+  - **Public API:** `POST /api/finished-goods/adjustments`. Response
+    — `FinishedGoodsMovementListItem`. `sourceKey` сознательно НЕ
+    отдаём (внутренний идемпотентный технический ключ).
+  - **Audit** `FINISHED_GOODS_ADJUSTMENT_CREATED`
+    (`entityType = FINISHED_GOODS_MOVEMENT`,
+    `entityId = FinishedGoodsMovement.id`) пишется в той же
+    транзакции, что и движение. Payload — `{ sourceType:
+    'FINISHED_GOODS_ADJUSTMENT', adjustmentId,
+    finishedGoodsBalanceId, movementId, orderId, productId, sizeId,
+    color, warehouseId, cellId, direction, qty, balanceBeforeQty,
+    balanceAfterQty, comment, employeeId, timestamp }`.
+  - **UI.** Существующий `StockAdjustmentDialog` расширен на оба
+    контура: source select собран как `<optgroup>`-список из
+    материалов + готовой продукции; на каждой опции лежит
+    `data-kind="MATERIAL" | "FINISHED_GOOD"`. Для `FINISHED_GOOD`:
+    рендерится подсказка «Готовая продукция корректируется в
+    штуках»; `inputMode="numeric"`; frontend-валидация
+    `Number.isInteger`; поле «Цена за единицу» **disabled** с
+    подсказкой «Стоимость для готовой продукции в этой
+    корректировке не указывается». После успеха диалог закрывается
+    и `revalidatePath('/admin/warehouses')` обновляет обе вкладки.
+  - **Отдельный контур от материалов.** `StockBalance` /
+    `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+    `StockAdjustment` / `StockTransfer` / `FinishedGoodsShipment` /
+    `FinishedGoodsTransfer` / `Packing` / `Operation` /
+    `CostsService` / `ProductionCostV2Service` **не затрагиваются**
+    и **не менялись**.
+  - В `/admin/warehouses?tab=movements` строки корректировки
+    готовой продукции отображаются как «Корректировка»
+    (`StockMovementTypeBadge` → `ADJUSTMENT`); направление —
+    «Расход» (OUT) и «Приход» (IN).
+  - Сознательно **не реализованы** на этой итерации:
+    cancel adjustment, partial cancel, adjustment history endpoint,
+    отдельный документ `FinishedGoodsAdjustment`, FIFO/LIFO,
+    `unitCost` для готовой продукции, флаг разрешения отрицательного
+    остатка готовой продукции. Ошибочную корректировку оператор
+    компенсирует обратной (IN ↔ OUT). Запреты зафиксированы в
+    `tests/smoke/finished-goods-adjustments.smoke.test.ts`.
+
   Backend + Frontend-итерация «Давальческое сырьё клиента»
   (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
   `prisma/migrations/20260614100000_add_order_materials_and_hardware_cost_policy`,

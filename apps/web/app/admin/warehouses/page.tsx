@@ -378,12 +378,12 @@ async function BalancesTabPage({
 
       <AdminCard>
         {/*
-          «Переместить» — единая складская операция и для материалов,
-          и для готовой продукции. Кнопка одна; диалог сам решает, в
-          какой backend endpoint идти, по `kind` выбранного источника
-          (`POST /api/stock/transfers` / `POST /api/finished-goods/transfers`).
-          «Корректировка» по-прежнему только материалы — у готовой
-          продукции корректировок на этой итерации нет.
+          «Переместить» и «Корректировка» — единые складские операции
+          и для материалов, и для готовой продукции. Кнопки по одной;
+          диалоги сами решают, в какой backend endpoint идти, по
+          `kind` выбранного источника:
+            - `POST /api/stock/transfers` / `POST /api/finished-goods/transfers`;
+            - `POST /api/stock/adjustments` / `POST /api/finished-goods/adjustments`.
         */}
         {(materialItems.length > 0 || finishedItems.length > 0) && (
           <div
@@ -399,9 +399,10 @@ async function BalancesTabPage({
               finishedGoodsBalances={finishedItems}
               warehouses={warehouses}
             />
-            {materialItems.length > 0 && (
-              <StockAdjustmentButton balances={materialItems} />
-            )}
+            <StockAdjustmentButton
+              materialBalances={materialItems}
+              finishedGoodsBalances={finishedItems}
+            />
           </div>
         )}
         <StockBalancesTable items={pageRows} />

@@ -69,6 +69,19 @@ export const FINISHED_GOODS_SOURCE_TYPE = {
    * transfer полностью представлен парой `FinishedGoodsMovement`.
    */
   FINISHED_GOODS_TRANSFER: 'FINISHED_GOODS_TRANSFER',
+  /**
+   * Ручная корректировка остатка готовой продукции
+   * (см. `FinishedGoodsService.createAdjustment`). Один adjustment →
+   * одно движение `type = ADJUSTMENT` (`direction = IN` или `OUT`).
+   * SourceKey — `FINISHED_GOODS_ADJUSTMENT:<clientRequestId>`. UNIQUE
+   * на `FinishedGoodsMovement.sourceKey` гарантирует, что повторный
+   * submit формы (двойной клик / network retry) с тем же
+   * `clientRequestId` НЕ задвоит движение и НЕ изменит баланс
+   * повторно. Отдельной модели `FinishedGoodsAdjustment` сознательно
+   * не вводим — корректировка полностью представлена одним
+   * `FinishedGoodsMovement`.
+   */
+  FINISHED_GOODS_ADJUSTMENT: 'FINISHED_GOODS_ADJUSTMENT',
 } as const;
 export type FinishedGoodsSourceType =
   (typeof FINISHED_GOODS_SOURCE_TYPE)[keyof typeof FINISHED_GOODS_SOURCE_TYPE];
@@ -188,6 +201,19 @@ export function buildFinishedGoodsTransferInSourceKey(
   transferId: string,
 ): string {
   return `${FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_TRANSFER}:${transferId}:IN`;
+}
+
+/**
+ * `sourceKey` для движения ручной корректировки остатка готовой
+ * продукции (см. `FinishedGoodsService.createAdjustment`). Один
+ * adjustment → одно движение `type = ADJUSTMENT`. UNIQUE на
+ * `FinishedGoodsMovement.sourceKey` подстрахует от race-condition при
+ * повторном submit формы.
+ */
+export function buildFinishedGoodsAdjustmentSourceKey(
+  adjustmentId: string,
+): string {
+  return `${FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_ADJUSTMENT}:${adjustmentId}`;
 }
 
 export function buildFinishedGoodsBalanceKey(params: {

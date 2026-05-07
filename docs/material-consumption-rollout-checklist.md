@@ -797,15 +797,94 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
   endpoint / отдельная модель `FinishedGoodsTransfer` — transfer
   представлен парой `FinishedGoodsMovement type = TRANSFER`,
   ошибочный transfer оператор компенсирует обратным transfer-ом;
-- ручная корректировка (`ADJUSTMENT`) и сторно (`REVERSAL`)
-  движений готовой продукции (REVERSAL пишется автоматически на
-  cancel shipment);
+- cancel adjustment / partial cancel / adjustment history endpoint
+  / отдельная модель `FinishedGoodsAdjustment` — adjustment
+  представлен одним `FinishedGoodsMovement type = ADJUSTMENT`,
+  ошибочную корректировку оператор компенсирует обратной (IN ↔
+  OUT);
+- сторно (`REVERSAL`) движений готовой продукции вручную
+  (REVERSAL пишется автоматически только на cancel shipment);
+- `unitCost` / `totalCost` для движений готовой продукции (это не
+  material cost);
+- флаг разрешения отрицательного остатка готовой продукции
+  (`OUT` всегда strict);
 - размещение готовой продукции по ячейкам автоматически (`cellId`
   всегда `null` для `PRODUCTION_RECEIPT`; для `SHIPMENT` snapshot-ом
   берётся существующий `cellId` баланса; для `TRANSFER` оператор
   выбирает ячейку назначения сам);
 - UI-раздел `/admin/finished-goods` / sidebar item / отчёт;
 - новые роли (RBAC ограничен `ADMIN` / `SHOP_MANAGER`).
+
+Что добавлено итерацией «Корректировка готовой продукции»:
+- API: `POST /api/finished-goods/adjustments` (RBAC ADMIN /
+  SHOP_MANAGER), body `{ finishedGoodsBalanceId, direction
+  ('IN'|'OUT'), qty (int > 0), comment (2..500), clientRequestId? }`.
+  `orderId` / `productId` / `sizeId` / `color` / `warehouseId` /
+  `cellId` / `unit` сервис достаёт из исходного
+  `FinishedGoodsBalance` — клиент их не присылает;
+- adjustment фиксируется одним `FinishedGoodsMovement`
+  `type = ADJUSTMENT` через `applyMovementInTx`: `direction = IN`
+  увеличивает баланс, `direction = OUT` уменьшает; sourceKey
+  `FINISHED_GOODS_ADJUSTMENT:<clientRequestId>`;
+- `OUT` всегда **strict** — нельзя списать больше, чем есть на
+  балансе (`FINISHED_GOODS_INSUFFICIENT_BALANCE`, 409). Готовая
+  продукция не уходит в минус, аналога
+  `allowNegativeMaterialStock` для finished goods нет;
+- идемпотентность по `clientRequestId`;
+- UI: единая кнопка «Корректировка» во вкладке
+  `/admin/warehouses?tab=balances` (общий диалог
+  `StockAdjustmentDialog`); по `kind` выбранного остатка идёт в
+  `POST /api/stock/adjustments` (материал) или в
+  `POST /api/finished-goods/adjustments` (готовая продукция). Для
+  готовой продукции `qty` валидируется как целое (`Number.isInteger`)
+  на frontend и backend; поле «Цена за единицу» **disabled** для
+  готовой продукции (это не material cost);
+- audit `FINISHED_GOODS_ADJUSTMENT_CREATED` (`entityType =
+  FINISHED_GOODS_MOVEMENT`).
+
+### Как проверить «Корректировку готовой продукции»
+
+1. Подготовить остаток готовой продукции: упаковать паспорт или
+   провести операцию с `Operation.producesFinishedGoods = true`. На
+   вкладке «Остатки» `/admin/warehouses?tab=balances` должна
+   появиться строка готовой продукции (имя `productName / color /
+   sizeCode`, ед. изм. — `шт`).
+2. Нажать кнопку «Корректировка» над таблицей остатков.
+   Открывается inline-диалог «Корректировка остатка».
+3. В select «Остаток» выбрать строку из группы «Готовая
+   продукция». Под select-ом отрисуется подсказка «Готовая
+   продукция корректируется в штуках». Поле «Цена за единицу»
+   станет disabled с подсказкой «Стоимость для готовой продукции в
+   этой корректировке не указывается». В подсказке под полем
+   количества виден текущий остаток в шт.
+4. Сценарий **IN (увеличение)**: выбрать «Приход (увеличить)»,
+   ввести целое число, заполнить причину (2..500), нажать
+   «Сохранить корректировку». Проверить: на вкладке «Остатки»
+   `FinishedGoodsBalance.qty` увеличился на введённую величину;
+   на вкладке `?tab=movements` появилась строка `type = ADJUSTMENT,
+   direction = IN` («Корректировка», «Приход») с тем же
+   количеством и комментарием.
+5. Сценарий **OUT (уменьшение)**: выбрать «Расход (уменьшить)»,
+   ввести количество ≤ доступного, заполнить причину, сохранить.
+   Проверить, что баланс уменьшился, в журнале появилась строка
+   `type = ADJUSTMENT, direction = OUT` («Корректировка»,
+   «Расход»).
+6. Сценарий **OUT > доступного** → 409
+   `FINISHED_GOODS_INSUFFICIENT_BALANCE`, понятный текст backend
+   без raw JSON. Баланс не изменился.
+7. Сценарий **дробное qty** → frontend-валидация «Для готовой
+   продукции количество должно быть целым числом», submit не
+   отправляется. На уровне backend-DTO дробное значение даёт 400
+   через `qty.int()`.
+8. Идемпотентность: повторный submit формы (двойной клик / network
+   retry) с тем же `clientRequestId` НЕ задваивает движение и НЕ
+   меняет баланс повторно.
+9. Roles: попытка вызвать endpoint от роли `SEAMSTRESS` / `MASTER`
+   → 403 `FORBIDDEN_ROLE`. Доступ есть только у `ADMIN` /
+   `SHOP_MANAGER`.
+10. Изоляция: после adjustment-а готовой продукции `StockBalance`
+    / `StockMovement` материалов / `MaterialIssue` / production
+    cost **не изменились**.
 
 ### Как проверить «Перемещение готовой продукции»
 

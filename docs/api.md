@@ -1494,6 +1494,79 @@ Audit:
   / PurchaseReceipt / StockAdjustment / Packing / Operation /
   CostsService / ProductionCostV2Service.
 
+### Finished goods adjustments
+
+Источник: `apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+`apps/api/src/modules/finished-goods/finished-goods.service.ts::createAdjustment`,
+`apps/api/src/modules/finished-goods/dto/create-finished-goods-adjustment.dto.ts`,
+`docs/current-state.md §«Готовая продукция»`.
+
+Ручная корректировка остатка готовой продукции. Для пользователя это
+та же складская операция, что и корректировка материалов: одна кнопка
+«Корректировка» во вкладке `/admin/warehouses?tab=balances`. UI
+смотрит на `kind` выбранного остатка и идёт либо в
+`POST /api/stock/adjustments` (материал), либо в
+`POST /api/finished-goods/adjustments` (готовая продукция). Backend
+держит контуры раздельными — `FinishedGoodsBalance` /
+`FinishedGoodsMovement` не пересекаются с `StockBalance` /
+`StockMovement` материалов.
+
+Adjustment фиксируется одним `FinishedGoodsMovement` `type =
+ADJUSTMENT, direction = IN | OUT` (sourceKey
+`FINISHED_GOODS_ADJUSTMENT:<clientRequestId>`); `FinishedGoodsBalance.qty`
+атомарно меняется в той же транзакции через `applyMovementInTx`.
+Отдельной модели `FinishedGoodsAdjustment` сознательно нет —
+корректировка полностью описывается одним движением.
+
+| Метод | Путь                                  | RBAC                | Описание |
+| ----- | ------------------------------------- | ------------------- | -------- |
+| POST  | `/api/finished-goods/adjustments`     | ADMIN, SHOP_MANAGER | Body — `CreateFinishedGoodsAdjustmentDto`: `{ finishedGoodsBalanceId, direction ('IN'\|'OUT'), qty (int > 0), comment (2..500), clientRequestId? (max 128) }`. `orderId`, `productId`, `sizeId`, `color`, `warehouseId`, `cellId`, `unit` сервис достаёт из исходного `FinishedGoodsBalance` — клиент их не присылает. `qty` всегда целое (готовая продукция штучная); `unitCost` для готовой продукции **не запрашивается** (это не material cost). Response — `FinishedGoodsMovementListItem` БЕЗ `sourceKey`. Создаёт одно движение `type = ADJUSTMENT` и audit `FINISHED_GOODS_ADJUSTMENT_CREATED` в одной транзакции. |
+
+Правила:
+- `IN` увеличивает `FinishedGoodsBalance.qty` на `qty`; `OUT`
+  уменьшает;
+- `OUT` всегда **strict** — нельзя списать больше, чем есть на
+  балансе (`source.qty >= qty`). Готовая продукция не уходит в минус,
+  аналога `allowNegativeMaterialStock` для finished goods на этой
+  итерации нет;
+- идемпотентность по `clientRequestId`: повторный submit с тем же
+  ключом возвращает существующее движение и не апдейтит баланс
+  повторно (UNIQUE на `FinishedGoodsMovement.sourceKey`);
+- `sourceKey` сознательно НЕ возвращается (внутренний идемпотентный
+  технический ключ).
+
+Ошибки:
+- `FINISHED_GOODS_ADJUSTMENT_QTY_INVALID` (400) — `qty` не целое
+  положительное число (zod-pipe ловит большую часть кейсов раньше);
+- `FINISHED_GOODS_MOVEMENT_DIRECTION_INVALID` (400) — direction не
+  `IN` / `OUT`;
+- `FINISHED_GOODS_BALANCE_NOT_FOUND` (404) — баланс не существует;
+- `FINISHED_GOODS_INSUFFICIENT_BALANCE` (409) — `OUT` с `qty >
+  balance.qty`.
+
+Audit:
+- `FINISHED_GOODS_ADJUSTMENT_CREATED` (entityType
+  `FINISHED_GOODS_MOVEMENT`, entityId — `FinishedGoodsMovement.id`).
+  Payload — `{ sourceType: 'FINISHED_GOODS_ADJUSTMENT', adjustmentId,
+  finishedGoodsBalanceId, movementId, orderId, productId, sizeId,
+  color, warehouseId, cellId, direction, qty, balanceBeforeQty,
+  balanceAfterQty, comment, employeeId, timestamp }`.
+
+Сознательная граница MVP:
+- **не создаём** отдельную модель `FinishedGoodsAdjustment`;
+- **не реализуем** cancel adjustment / partial cancel — ошибочную
+  корректировку оператор компенсирует обратной (IN ↔ OUT);
+- **не реализуем** adjustment history endpoint — движения видны
+  через стандартный `GET /api/finished-goods/movements` (фильтр
+  `type=ADJUSTMENT`);
+- **не запрашиваем** `unitCost` для готовой продукции (это не
+  material cost);
+- **не вводим** FIFO/LIFO/MaterialStockLot;
+- **не меняем** material `StockAdjustment` business logic /
+  MaterialIssue / PurchaseReceipt / StockTransfer /
+  FinishedGoodsShipment / FinishedGoodsTransfer / Packing /
+  Operation / CostsService / ProductionCostV2Service.
+
 ---
 
 <a id="30-earnings"></a>

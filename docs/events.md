@@ -496,6 +496,25 @@ shipment-документ верхнего уровня, независимо о
   `FinishedGoodsTransfer` сознательно нет — transfer полностью
   представлен парой `FinishedGoodsMovement` (см. ТЗ).
 
+- `FINISHED_GOODS_ADJUSTMENT_CREATED` — менеджер сохранил ручную
+  корректировку остатка готовой продукции
+  (`POST /api/finished-goods/adjustments`). Пишется в той же
+  транзакции, что и одно `FinishedGoodsMovement` `type = ADJUSTMENT`
+  (`direction = IN | OUT`, sourceKey
+  `FINISHED_GOODS_ADJUSTMENT:<clientRequestId>`); `entityType =
+  FINISHED_GOODS_MOVEMENT`, `entityId = FinishedGoodsMovement.id`.
+  Идемпотентно по `clientRequestId`: повторный submit с тем же
+  ключом возвращает существующее движение и event заново НЕ пишет.
+  Payload — `{ sourceType: 'FINISHED_GOODS_ADJUSTMENT',
+  adjustmentId, finishedGoodsBalanceId, movementId, orderId,
+  productId, sizeId, color, warehouseId, cellId, direction, qty,
+  balanceBeforeQty, balanceAfterQty, comment, employeeId,
+  timestamp }`. Отдельной модели `FinishedGoodsAdjustment`
+  сознательно нет — корректировка представлена одним
+  `FinishedGoodsMovement` (см. ТЗ). `OUT` всегда strict — готовая
+  продукция не уходит в минус, аналога
+  `allowNegativeMaterialStock` для finished goods нет.
+
 #### ОТК (`entityType = QC`, `entityId = passportId`)
 
 - `QC_COMPLETED` — `QcService.completeQc` (`qc.service.ts:240`).

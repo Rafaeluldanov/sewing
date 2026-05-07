@@ -17,6 +17,10 @@ import {
   type CancelFinishedGoodsShipmentDto,
 } from './dto/cancel-finished-goods-shipment.dto.js';
 import {
+  CreateFinishedGoodsAdjustmentSchema,
+  type CreateFinishedGoodsAdjustmentDto,
+} from './dto/create-finished-goods-adjustment.dto.js';
+import {
   CreateFinishedGoodsTransferSchema,
   type CreateFinishedGoodsTransferDto,
 } from './dto/create-finished-goods-transfer.dto.js';
@@ -146,5 +150,42 @@ export class FinishedGoodsController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.finishedGoods.createTransfer(body, user.employeeId);
+  }
+
+  /**
+   * Ручная корректировка остатка готовой продукции. Пишет одно
+   * `FinishedGoodsMovement` `type = ADJUSTMENT` (`direction = IN |
+   * OUT`) и audit `FINISHED_GOODS_ADJUSTMENT_CREATED` в одной
+   * транзакции (см. `FinishedGoodsService.createAdjustment`,
+   * `apps/api/src/modules/finished-goods/dto/create-finished-goods-adjustment.dto.ts`,
+   * UI — `/admin/warehouses?tab=balances`, кнопка «Корректировка»
+   * для выбранного остатка готовой продукции).
+   *
+   * Контракт MVP-итерации:
+   *   - `qty` всегда целое положительное (готовая продукция
+   *     штучная);
+   *   - `OUT` всегда strict — недостаток источника отдаёт 409
+   *     `FINISHED_GOODS_INSUFFICIENT_BALANCE`. Готовая продукция не
+   *     уходит в минус, аналога `allowNegativeMaterialStock` нет;
+   *   - идемпотентность по `clientRequestId`: повторный submit с тем
+   *     же ключом возвращает существующее движение и не апдейтит
+   *     баланс повторно;
+   *   - response — `FinishedGoodsMovementListItem`. `sourceKey`
+   *     сознательно НЕ отдаём (внутренний идемпотентный технический
+   *     ключ);
+   *   - НЕ создаём отдельную модель `FinishedGoodsAdjustment`;
+   *     корректировка представлена одним `FinishedGoodsMovement`.
+   *
+   * RBAC — `ADMIN` / `SHOP_MANAGER` (наследуется от `@Roles` на
+   * классе).
+   */
+  @Post('adjustments')
+  @HttpCode(HttpStatus.CREATED)
+  createAdjustment(
+    @Body(new ZodValidationPipe(CreateFinishedGoodsAdjustmentSchema))
+    body: CreateFinishedGoodsAdjustmentDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.finishedGoods.createAdjustment(body, user.employeeId);
   }
 }

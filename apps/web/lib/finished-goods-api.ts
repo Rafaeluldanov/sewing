@@ -383,3 +383,52 @@ export function createFinishedGoodsTransfer(
     },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Adjustments — ручная корректировка остатка готовой продукции.
+// ---------------------------------------------------------------------------
+
+/**
+ * Body для `POST /api/finished-goods/adjustments` — ручная
+ * корректировка остатка готовой продукции из UI
+ * `/admin/warehouses?tab=balances`, кнопка «Корректировка» (см.
+ * `apps/api/src/modules/finished-goods/dto/create-finished-goods-adjustment.dto.ts`).
+ *
+ * `orderId`, `productId`, `sizeId`, `color`, `warehouseId`, `cellId`,
+ * `unit` сервис берёт из исходного `FinishedGoodsBalance` — клиент их
+ * не присылает. `qty` всегда целое (готовая продукция штучная,
+ * `FinishedGoodsBalance.qty: Int`). `unitCost` для готовой продукции
+ * не запрашивается — это не material cost.
+ *
+ * `clientRequestId` опционален; если передан — становится частью
+ * идемпотентного `sourceKey =
+ * FINISHED_GOODS_ADJUSTMENT:<clientRequestId>`. UI всё равно
+ * присылает `clientRequestId`, чтобы повторный submit при двойном
+ * клике / network retry не задвоил движение.
+ */
+export interface CreateFinishedGoodsAdjustmentDto {
+  finishedGoodsBalanceId: string;
+  direction: FinishedGoodsMovementDirection;
+  qty: number;
+  comment: string;
+  clientRequestId?: string;
+}
+
+/**
+ * `POST /api/finished-goods/adjustments` — ручная корректировка
+ * остатка готовой продукции. Создаёт одно
+ * `FinishedGoodsMovement` `type = ADJUSTMENT` (`direction = IN | OUT`)
+ * и audit `FINISHED_GOODS_ADJUSTMENT_CREATED` в одной транзакции.
+ * `sourceKey` сознательно НЕ возвращается.
+ */
+export function createFinishedGoodsAdjustment(
+  body: CreateFinishedGoodsAdjustmentDto,
+): Promise<FinishedGoodsMovementListItem> {
+  return apiFetch<FinishedGoodsMovementListItem>(
+    '/finished-goods/adjustments',
+    {
+      method: 'POST',
+      body,
+    },
+  );
+}

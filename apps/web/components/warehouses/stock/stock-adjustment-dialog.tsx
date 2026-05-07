@@ -9,43 +9,72 @@
  * Открывается по `StockAdjustmentButton`, рендерится в той же
  * card-обёртке. После успешного submit панель закрывается и
  * `revalidatePath('/admin/warehouses')` перерисовывает balances и
- * movements (см. `createStockAdjustmentAction`).
+ * movements.
  *
- * Контракт формы (см. backend
- * `apps/api/src/modules/stock/dto/create-stock-adjustment.dto.ts`):
- *   - select остатка из текущей страницы balances (MVP: корректируем
- *     только существующий `StockBalance`);
+ * Для пользователя «Корректировка» — одна общая складская операция.
+ * Под капотом разные backend endpoint-ы:
+ *   - MATERIAL → `POST /api/stock/adjustments`
+ *     (`apps/api/src/modules/stock/dto/create-stock-adjustment.dto.ts`,
+ *     `StockService.createAdjustment`);
+ *   - FINISHED_GOOD → `POST /api/finished-goods/adjustments`
+ *     (`apps/api/src/modules/finished-goods/dto/create-finished-goods-adjustment.dto.ts`,
+ *     `FinishedGoodsService.createAdjustment`).
+ * UI различает их по `kind` выбранного остатка и валидирует
+ * количество соответствующим образом (decimal для материалов,
+ * integer для готовой продукции). Для готовой продукции поле «Цена»
+ * отключено — это не material cost.
+ *
+ * Контракт формы:
+ *   - select остатка из объединённого списка материалов и готовой
+ *     продукции (MVP: корректируем только существующий баланс);
  *   - direction `IN` (увеличить) / `OUT` (уменьшить);
- *   - qty > 0 (text input с `inputMode="decimal"`);
- *   - unitCost виден и активен только при IN; для OUT поясняем,
- *     что складская оценка берётся из текущего `StockBalance.unitCost`;
+ *   - qty > 0 (text input). Для FINISHED_GOOD `inputMode="numeric"`
+ *     и frontend validation `Number.isInteger`;
+ *   - unitCost виден только для MATERIAL и активен только при IN;
+ *     для OUT и для FINISHED_GOOD поле задисейблено;
  *   - comment обязателен (placeholder «Причина корректировки»);
  *   - `clientRequestId` — uuid, сгенерированный единожды на mount
  *     (защита от двойного submit; при ретрае с тем же id backend
  *     вернёт уже существующее движение и не задвоит).
- *
- * Сознательная простота:
- *   - inline-панель, без модального оверлея / focus-trap (тот же
- *     паттерн, что у `CreateMaterialIssueDialog`);
- *   - без раздельных field-errors — backend message-а достаточно
- *     для UI MVP. `MATERIAL_STOCK_INSUFFICIENT` (409) показываем как
- *     понятный текст, без raw JSON;
- *   - идемпотентный технический ключ движения пользователю не виден.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle, X } from 'lucide-react';
-import { createStockAdjustmentAction } from '@/app/admin/warehouses/actions';
+import {
+  createFinishedGoodsAdjustmentAction,
+  createStockAdjustmentAction,
+} from '@/app/admin/warehouses/actions';
 import {
   initialStockAdjustmentState,
   type StockAdjustmentState,
 } from '@/app/admin/warehouses/form-state';
 import type { StockBalanceListItem } from '@/lib/stock-api';
+import type { FinishedGoodsBalanceListItem } from '@/lib/finished-goods-api';
+
+/**
+ * Унифицированный source-вариант для select-а исходного остатка. UI
+ * различает два контура только через `kind`; всё остальное (имя,
+ * локация, единица, количество, цена) рассчитывается по
+ * полю-источнику.
+ */
+type AdjustmentSourceOption =
+  | {
+      kind: 'MATERIAL';
+      id: string;
+      balance: StockBalanceListItem;
+    }
+  | {
+      kind: 'FINISHED_GOOD';
+      id: string;
+      balance: FinishedGoodsBalanceListItem;
+    };
 
 interface Props {
-  balances: StockBalanceListItem[];
-  /** Если задан, форма открывается с уже выбранным остатком. */
-  initialStockBalanceId?: string | null;
+  materialBalances: StockBalanceListItem[];
+  finishedGoodsBalances: FinishedGoodsBalanceListItem[];
+  /** Если задан, форма открывается с уже выбранным остатком
+   * (формат: `material:<id>` / `finished-good:<id>`). */
+  initialSourceOptionId?: string | null;
   onClose: () => void;
 }
 
@@ -56,7 +85,7 @@ function makeClientRequestId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function formatBalanceLabel(b: StockBalanceListItem): string {
+function formatMaterialLabel(b: StockBalanceListItem): string {
   const where = [b.warehouseName, b.cellCode]
     .filter((v): v is string => typeof v === 'string' && v.length > 0)
     .join(' / ');
@@ -65,22 +94,61 @@ function formatBalanceLabel(b: StockBalanceListItem): string {
   return `${b.description} — ${qtyText}${tail}`;
 }
 
+function formatFinishedGoodName(b: FinishedGoodsBalanceListItem): string {
+  const product = b.productName ?? b.productId;
+  const size = b.sizeCode ?? b.sizeId;
+  const parts: string[] = [];
+  if (product) parts.push(product);
+  if (b.color) parts.push(b.color);
+  if (size) parts.push(size);
+  return parts.join(' / ');
+}
+
+function formatFinishedGoodLabel(b: FinishedGoodsBalanceListItem): string {
+  const where = [b.warehouseName, b.cellCode]
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .join(' / ');
+  const qtyText = `${b.qty} шт`;
+  const tail = where.length > 0 ? ` · ${where}` : '';
+  return `${formatFinishedGoodName(b)} — ${qtyText}${tail}`;
+}
+
 export function StockAdjustmentDialog({
-  balances,
-  initialStockBalanceId,
+  materialBalances,
+  finishedGoodsBalances,
+  initialSourceOptionId,
   onClose,
 }: Props) {
+  const sourceOptions = useMemo<AdjustmentSourceOption[]>(() => {
+    const opts: AdjustmentSourceOption[] = [];
+    for (const b of materialBalances) {
+      opts.push({
+        kind: 'MATERIAL',
+        id: `material:${b.id}`,
+        balance: b,
+      });
+    }
+    for (const b of finishedGoodsBalances) {
+      opts.push({
+        kind: 'FINISHED_GOOD',
+        id: `finished-good:${b.id}`,
+        balance: b,
+      });
+    }
+    return opts;
+  }, [materialBalances, finishedGoodsBalances]);
+
   const initialId = useMemo(() => {
     if (
-      initialStockBalanceId &&
-      balances.some((b) => b.id === initialStockBalanceId)
+      initialSourceOptionId &&
+      sourceOptions.some((o) => o.id === initialSourceOptionId)
     ) {
-      return initialStockBalanceId;
+      return initialSourceOptionId;
     }
-    return balances[0]?.id ?? '';
-  }, [initialStockBalanceId, balances]);
+    return sourceOptions[0]?.id ?? '';
+  }, [initialSourceOptionId, sourceOptions]);
 
-  const [stockBalanceId, setStockBalanceId] = useState<string>(initialId);
+  const [sourceOptionId, setSourceOptionId] = useState<string>(initialId);
   const [direction, setDirection] = useState<'IN' | 'OUT'>('IN');
   const [qty, setQty] = useState<string>('');
   const [unitCost, setUnitCost] = useState<string>('');
@@ -91,27 +159,45 @@ export function StockAdjustmentDialog({
     initialStockAdjustmentState,
   );
 
-  // Если remote update изменил список balances и текущий id больше
+  // Если remote update изменил список options и текущий id больше
   // не существует — переключаемся на первый доступный.
   useEffect(() => {
-    if (balances.length === 0) return;
-    if (!balances.some((b) => b.id === stockBalanceId)) {
-      setStockBalanceId(balances[0].id);
+    if (sourceOptions.length === 0) return;
+    if (!sourceOptions.some((o) => o.id === sourceOptionId)) {
+      setSourceOptionId(sourceOptions[0].id);
     }
-  }, [balances, stockBalanceId]);
+  }, [sourceOptions, sourceOptionId]);
 
-  const selected = balances.find((b) => b.id === stockBalanceId) ?? null;
+  const selected =
+    sourceOptions.find((o) => o.id === sourceOptionId) ?? null;
+  const selectedKind = selected?.kind ?? null;
+  const selectedUnit: string = selected
+    ? selected.kind === 'FINISHED_GOOD'
+      ? 'шт'
+      : selected.balance.unit
+    : '';
+  const selectedQty: string | number | null = selected
+    ? selected.balance.qty
+    : null;
+
+  const isFinishedGood = selectedKind === 'FINISHED_GOOD';
+  // Цену мы спрашиваем только у материала и только для IN.
+  // Для готовой продукции unitCost не имеет смысла (это не material cost).
+  const unitCostDisabled = isFinishedGood || direction === 'OUT';
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting) return;
-    if (!stockBalanceId) {
+    if (!selected) {
       setState({ ok: false, error: 'Выберите остаток для корректировки.' });
       return;
     }
     const trimmedComment = comment.trim();
     if (trimmedComment.length < 2) {
-      setState({ ok: false, error: 'Укажите причину корректировки (минимум 2 символа).' });
+      setState({
+        ok: false,
+        error: 'Укажите причину корректировки (минимум 2 символа).',
+      });
       return;
     }
     if (qty.trim() === '') {
@@ -122,16 +208,42 @@ export function StockAdjustmentDialog({
     setSubmitting(true);
     setState(initialStockAdjustmentState);
     try {
-      const result = await createStockAdjustmentAction({
-        stockBalanceId,
-        direction,
-        qty: qty.trim().replace(',', '.'),
-        ...(direction === 'IN' && unitCost.trim().length > 0
-          ? { unitCost: unitCost.trim().replace(',', '.') }
-          : {}),
-        comment: trimmedComment,
-        clientRequestId,
-      });
+      let result: StockAdjustmentState;
+      if (selected.kind === 'MATERIAL') {
+        result = await createStockAdjustmentAction({
+          stockBalanceId: selected.balance.id,
+          direction,
+          qty: qty.trim().replace(',', '.'),
+          ...(direction === 'IN' && unitCost.trim().length > 0
+            ? { unitCost: unitCost.trim().replace(',', '.') }
+            : {}),
+          comment: trimmedComment,
+          clientRequestId,
+        });
+      } else {
+        // Для готовой продукции — целое штучное количество.
+        const normalized = qty.trim().replace(',', '.');
+        const qtyNum = Number(normalized);
+        if (
+          !Number.isFinite(qtyNum) ||
+          !Number.isInteger(qtyNum) ||
+          qtyNum <= 0
+        ) {
+          setState({
+            ok: false,
+            error:
+              'Для готовой продукции количество должно быть целым числом.',
+          });
+          return;
+        }
+        result = await createFinishedGoodsAdjustmentAction({
+          finishedGoodsBalanceId: selected.balance.id,
+          direction,
+          qty: qtyNum,
+          comment: trimmedComment,
+          clientRequestId,
+        });
+      }
       setState(result);
       if (result.ok) {
         onClose();
@@ -141,7 +253,7 @@ export function StockAdjustmentDialog({
     }
   }
 
-  if (balances.length === 0) {
+  if (sourceOptions.length === 0) {
     return (
       <div
         className="stock-adjustment-dialog"
@@ -162,11 +274,7 @@ export function StockAdjustmentDialog({
           Нет остатков, доступных для корректировки на этой странице.
         </div>
         <div>
-          <button
-            type="button"
-            className="admin-btn"
-            onClick={onClose}
-          >
+          <button type="button" className="admin-btn" onClick={onClose}>
             Закрыть
           </button>
         </div>
@@ -211,11 +319,11 @@ export function StockAdjustmentDialog({
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>
-          Остаток / материал
+          Остаток
         </span>
         <select
-          value={stockBalanceId}
-          onChange={(e) => setStockBalanceId(e.target.value)}
+          value={sourceOptionId}
+          onChange={(e) => setSourceOptionId(e.target.value)}
           required
           style={{
             fontSize: '0.85rem',
@@ -224,14 +332,41 @@ export function StockAdjustmentDialog({
             borderRadius: 4,
             fontFamily: 'inherit',
           }}
-          name="stockBalanceId"
+          name="sourceOptionId"
+          data-source-kind={selectedKind ?? ''}
         >
-          {balances.map((b) => (
-            <option key={b.id} value={b.id}>
-              {formatBalanceLabel(b)}
-            </option>
-          ))}
+          {materialBalances.length > 0 && (
+            <optgroup label="Материалы">
+              {materialBalances.map((b) => (
+                <option
+                  key={`material:${b.id}`}
+                  value={`material:${b.id}`}
+                  data-kind="MATERIAL"
+                >
+                  {formatMaterialLabel(b)}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {finishedGoodsBalances.length > 0 && (
+            <optgroup label="Готовая продукция">
+              {finishedGoodsBalances.map((b) => (
+                <option
+                  key={`finished-good:${b.id}`}
+                  value={`finished-good:${b.id}`}
+                  data-kind="FINISHED_GOOD"
+                >
+                  {formatFinishedGoodLabel(b)}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
+        {isFinishedGood && (
+          <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
+            Готовая продукция корректируется в штуках.
+          </span>
+        )}
       </label>
 
       <fieldset
@@ -287,11 +422,11 @@ export function StockAdjustmentDialog({
           </span>
           <input
             type="text"
-            inputMode="decimal"
+            inputMode={isFinishedGood ? 'numeric' : 'decimal'}
             value={qty}
             onChange={(e) => setQty(e.target.value)}
             required
-            placeholder="0.00"
+            placeholder={isFinishedGood ? '1' : '0.00'}
             name="qty"
             style={{
               fontSize: '0.85rem',
@@ -302,11 +437,8 @@ export function StockAdjustmentDialog({
             }}
           />
           {selected && (
-            <span
-              className="admin-muted"
-              style={{ fontSize: '0.72rem' }}
-            >
-              Текущий остаток: {String(selected.qty)} {selected.unit}
+            <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
+              Текущий остаток: {String(selectedQty)} {selectedUnit}
             </span>
           )}
         </label>
@@ -318,15 +450,17 @@ export function StockAdjustmentDialog({
           <input
             type="text"
             inputMode="decimal"
-            value={unitCost}
+            value={isFinishedGood ? '' : unitCost}
             onChange={(e) => setUnitCost(e.target.value)}
-            disabled={direction === 'OUT'}
+            disabled={unitCostDisabled}
             placeholder={
-              direction === 'IN'
-                ? selected
-                  ? String(selected.unitCost)
-                  : '0.00'
-                : '—'
+              isFinishedGood
+                ? '—'
+                : direction === 'IN'
+                  ? selected && selected.kind === 'MATERIAL'
+                    ? String(selected.balance.unitCost)
+                    : '0.00'
+                  : '—'
             }
             name="unitCost"
             style={{
@@ -335,25 +469,21 @@ export function StockAdjustmentDialog({
               border: '1px solid var(--admin-border, #d4d4d8)',
               borderRadius: 4,
               fontFamily: 'inherit',
-              background:
-                direction === 'OUT'
-                  ? 'rgba(0,0,0,0.04)'
-                  : undefined,
+              background: unitCostDisabled ? 'rgba(0,0,0,0.04)' : undefined,
             }}
           />
-          {direction === 'OUT' ? (
-            <span
-              className="admin-muted"
-              style={{ fontSize: '0.72rem' }}
-            >
-              Для расходной корректировки используется текущая складская цена
-              остатка.
+          {isFinishedGood ? (
+            <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
+              Стоимость для готовой продукции в этой корректировке не
+              указывается.
+            </span>
+          ) : direction === 'OUT' ? (
+            <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
+              Для расходной корректировки используется текущая складская
+              цена остатка.
             </span>
           ) : (
-            <span
-              className="admin-muted"
-              style={{ fontSize: '0.72rem' }}
-            >
+            <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
               Если не указать, возьмём текущую цену остатка.
             </span>
           )}
