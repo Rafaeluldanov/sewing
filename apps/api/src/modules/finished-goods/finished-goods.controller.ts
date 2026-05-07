@@ -1,4 +1,13 @@
-import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Param,
+  Post,
+  Query,
+} from '@nestjs/common';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
@@ -7,6 +16,10 @@ import {
   CancelFinishedGoodsShipmentSchema,
   type CancelFinishedGoodsShipmentDto,
 } from './dto/cancel-finished-goods-shipment.dto.js';
+import {
+  CreateFinishedGoodsTransferSchema,
+  type CreateFinishedGoodsTransferDto,
+} from './dto/create-finished-goods-transfer.dto.js';
 import {
   ListFinishedGoodsBalancesQuerySchema,
   type ListFinishedGoodsBalancesQuery,
@@ -97,5 +110,41 @@ export class FinishedGoodsController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.finishedGoods.cancelShipment(id, dto, user.employeeId);
+  }
+
+  /**
+   * Перемещение готовой продукции между складами / ячейками. Пишет
+   * пару `FinishedGoodsMovement` `type = TRANSFER` (`OUT` из источника
+   * + `IN` в назначение) и audit `FINISHED_GOODS_TRANSFER_CREATED` в
+   * одной транзакции (см. `FinishedGoodsService.createTransfer`,
+   * `apps/api/src/modules/finished-goods/dto/create-finished-goods-transfer.dto.ts`,
+   * UI — `/admin/warehouses?tab=balances`, кнопка «Переместить» для
+   * выбранного остатка готовой продукции).
+   *
+   * Контракт MVP-итерации:
+   *   - transfer всегда strict — недостаток источника отдаёт 409
+   *     `FINISHED_GOODS_INSUFFICIENT_BALANCE`;
+   *   - same source/destination → 409
+   *     `FINISHED_GOODS_TRANSFER_SAME_LOCATION`;
+   *   - идемпотентность по `clientRequestId`: повторный submit с тем
+   *     же `clientRequestId` возвращает существующую пару движений и
+   *     не апдейтит балансы повторно;
+   *   - response — `{ transferId, outMovement, inMovement }` в shape
+   *     `FinishedGoodsMovementListItem`. `sourceKey` сознательно НЕ
+   *     отдаём (`toMovementListItem` его вырезает);
+   *   - НЕ создаём отдельную модель `FinishedGoodsTransfer`; transfer
+   *     представлен парой `FinishedGoodsMovement` `type = TRANSFER`.
+   *
+   * RBAC — `ADMIN` / `SHOP_MANAGER` (наследуется от `@Roles` на
+   * классе).
+   */
+  @Post('transfers')
+  @HttpCode(HttpStatus.CREATED)
+  createTransfer(
+    @Body(new ZodValidationPipe(CreateFinishedGoodsTransferSchema))
+    body: CreateFinishedGoodsTransferDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.finishedGoods.createTransfer(body, user.employeeId);
   }
 }

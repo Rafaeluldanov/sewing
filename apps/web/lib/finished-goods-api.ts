@@ -320,3 +320,66 @@ export function cancelFinishedGoodsShipment(
     },
   );
 }
+
+// ---------------------------------------------------------------------------
+// Transfers — перемещение готовой продукции между складами / ячейками.
+// ---------------------------------------------------------------------------
+
+/**
+ * Body для `POST /api/finished-goods/transfers` — перемещение готовой
+ * продукции между складами / ячейками из UI
+ * `/admin/warehouses?tab=balances`, кнопка «Переместить» (см.
+ * `apps/api/src/modules/finished-goods/dto/create-finished-goods-transfer.dto.ts`).
+ *
+ * `orderId`, `productId`, `sizeId`, `color`, `unit` сервис берёт из
+ * исходного `FinishedGoodsBalance` — клиент их не присылает.
+ *
+ * `qty` всегда целое (готовая продукция штучная,
+ * `FinishedGoodsBalance.qty: Int`).
+ *
+ * `clientRequestId` опционален; если передан — становится частью пары
+ * идемпотентных `sourceKey`-ключей в `FinishedGoodsMovement`
+ * (`FINISHED_GOODS_TRANSFER:<id>:OUT` /
+ * `FINISHED_GOODS_TRANSFER:<id>:IN`). UI всё равно присылает
+ * `clientRequestId`, чтобы повторный submit при двойном клике /
+ * network retry не задвоил движения.
+ */
+export interface CreateFinishedGoodsTransferDto {
+  fromFinishedGoodsBalanceId: string;
+  toWarehouseId?: string | null;
+  toCellId?: string | null;
+  qty: number;
+  comment: string;
+  clientRequestId?: string;
+}
+
+/**
+ * Ответ `POST /api/finished-goods/transfers` — пара движений
+ * `type = TRANSFER` + сам `transferId` (идентификатор пары, совпадает с
+ * `clientRequestId`). `sourceKey` сознательно НЕ возвращается.
+ */
+export interface CreateFinishedGoodsTransferResponse {
+  transferId: string;
+  outMovement: FinishedGoodsMovementListItem;
+  inMovement: FinishedGoodsMovementListItem;
+}
+
+/**
+ * `POST /api/finished-goods/transfers` — перемещение готовой продукции
+ * склад-в-склад / ячейка-в-ячейка. Создаёт пару
+ * `FinishedGoodsMovement` `type = TRANSFER` (`OUT` из источника +
+ * `IN` в назначение) в одной транзакции; `sourceKey` для обоих
+ * движений строится по `clientRequestId`, поэтому повторный submit
+ * идемпотентен.
+ */
+export function createFinishedGoodsTransfer(
+  body: CreateFinishedGoodsTransferDto,
+): Promise<CreateFinishedGoodsTransferResponse> {
+  return apiFetch<CreateFinishedGoodsTransferResponse>(
+    '/finished-goods/transfers',
+    {
+      method: 'POST',
+      body,
+    },
+  );
+}

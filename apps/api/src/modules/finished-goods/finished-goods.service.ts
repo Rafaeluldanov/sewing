@@ -12,6 +12,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { CancelFinishedGoodsShipmentDto } from './dto/cancel-finished-goods-shipment.dto.js';
 import type { CreateFinishedGoodsShipmentDto } from './dto/create-finished-goods-shipment.dto.js';
+import type { CreateFinishedGoodsTransferDto } from './dto/create-finished-goods-transfer.dto.js';
 import type { ListFinishedGoodsBalancesQuery } from './dto/list-finished-goods-balances.dto.js';
 import type { ListFinishedGoodsMovementsQuery } from './dto/list-finished-goods-movements.dto.js';
 import { FinishedGoodsShipmentNumberService } from './finished-goods-shipment-number.service.js';
@@ -23,6 +24,8 @@ import {
   buildFinishedGoodsShipmentCancelLineSourceKey,
   buildFinishedGoodsShipmentLineSourceKey,
   buildFinishedGoodsShipmentSourceKey,
+  buildFinishedGoodsTransferInSourceKey,
+  buildFinishedGoodsTransferOutSourceKey,
   buildPassportFinishedGoodsOutputSourceKey,
   type FinishedGoodsMovementDirection,
   type FinishedGoodsMovementType,
@@ -936,6 +939,252 @@ export class FinishedGoodsService {
     });
 
     return toShipmentDetailDto(detail);
+  }
+
+  // ===========================================================================
+  // TRANSFER — перемещение готовой продукции между складами / ячейками
+  // ===========================================================================
+
+  /**
+   * Перемещение готовой продукции между складами / ячейками
+   * (см. `apps/api/src/modules/finished-goods/dto/create-finished-goods-transfer.dto.ts`,
+   * `docs/api.md §«Finished goods transfers»`).
+   *
+   * Контракт MVP:
+   *   - открывает свою `prisma.$transaction(...)`;
+   *   - находит исходный `FinishedGoodsBalance` по
+   *     `fromFinishedGoodsBalanceId` и достаёт `orderId`, `productId`,
+   *     `sizeId`, `color`, `warehouseId`, `cellId` — клиент эти поля не
+   *     присылает;
+   *   - проверяет, что `qty > 0` (целое) и `source.qty >= qty`
+   *     (transfer всегда strict; готовая продукция не уходит в минус);
+   *   - при `toCellId` — `Cell.warehouseId` (с fallback на
+   *     `toWarehouseId`) определяет destination warehouse, иначе
+   *     `cellId = null`;
+   *   - запрещает same-location transfer (409
+   *     `FINISHED_GOODS_TRANSFER_SAME_LOCATION`);
+   *   - пишет пару `FinishedGoodsMovement` `type = TRANSFER`:
+   *     `direction = OUT` (sourceKey
+   *     `FINISHED_GOODS_TRANSFER:<id>:OUT`) уменьшает исходный остаток,
+   *     `direction = IN` (sourceKey
+   *     `FINISHED_GOODS_TRANSFER:<id>:IN`) создаёт / увеличивает
+   *     целевой `FinishedGoodsBalance`;
+   *   - идемпотентен по `clientRequestId`: если оба ключа уже
+   *     существуют, возвращает существующую пару и не апдейтит баланс.
+   *     Если найден только один — поднимает 409
+   *     `FINISHED_GOODS_TRANSFER_INCONSISTENT_STATE`;
+   *   - пишет audit `FINISHED_GOODS_TRANSFER_CREATED` под
+   *     `entityType = FINISHED_GOODS_MOVEMENT` (`entityId = OUT.id`) в
+   *     той же транзакции.
+   *
+   * Сознательная граница MVP: НЕ создаём отдельную модель
+   * `FinishedGoodsTransfer`, transfer представлен парой
+   * `FinishedGoodsMovement` `type = TRANSFER`. Не затрагивает
+   * материалы (`StockBalance` / `StockMovement` / `MaterialIssue` /
+   * `PurchaseReceipt` / `StockAdjustment` / `StockTransfer` /
+   * `CostsService` / `ProductionCostV2Service`).
+   */
+  async createTransfer(
+    dto: CreateFinishedGoodsTransferDto,
+    employeeId: string | null | undefined,
+  ): Promise<{
+    transferId: string;
+    outMovement: FinishedGoodsMovementListItem;
+    inMovement: FinishedGoodsMovementListItem;
+  }> {
+    if (!Number.isInteger(dto.qty) || dto.qty <= 0) {
+      throw new BusinessException(
+        'FINISHED_GOODS_TRANSFER_QTY_INVALID',
+        'Количество перемещения готовой продукции должно быть целым положительным числом.',
+        HttpStatus.BAD_REQUEST,
+      );
+    }
+
+    const clientRequestId = dto.clientRequestId ?? randomUUID();
+    const transferId = clientRequestId;
+    const outSourceKey = buildFinishedGoodsTransferOutSourceKey(transferId);
+    const inSourceKey = buildFinishedGoodsTransferInSourceKey(transferId);
+
+    const { outMovementId, inMovementId } = await this.prisma.$transaction(
+      async (tx) => {
+        // ---- idempotency: оба ключа уже есть -------------------------------
+        const existingOut = await tx.finishedGoodsMovement.findUnique({
+          where: { sourceKey: outSourceKey },
+        });
+        const existingIn = await tx.finishedGoodsMovement.findUnique({
+          where: { sourceKey: inSourceKey },
+        });
+        if (existingOut && existingIn) {
+          return {
+            outMovementId: existingOut.id,
+            inMovementId: existingIn.id,
+          };
+        }
+        if (existingOut || existingIn) {
+          throw new BusinessException(
+            'FINISHED_GOODS_TRANSFER_INCONSISTENT_STATE',
+            'Перемещение готовой продукции находится в несогласованном состоянии (есть только OUT или только IN).',
+            HttpStatus.CONFLICT,
+          );
+        }
+
+        // ---- source ----------------------------------------------------------
+        const source = await tx.finishedGoodsBalance.findUnique({
+          where: { id: dto.fromFinishedGoodsBalanceId },
+        });
+        if (!source) {
+          throw new BusinessException(
+            'FINISHED_GOODS_BALANCE_NOT_FOUND',
+            'Исходный остаток готовой продукции не найден.',
+            HttpStatus.NOT_FOUND,
+          );
+        }
+        if (source.qty < dto.qty) {
+          throw new BusinessException(
+            'FINISHED_GOODS_INSUFFICIENT_BALANCE',
+            `Недостаточно остатка готовой продукции: доступно ${source.qty}, требуется ${dto.qty}.`,
+            HttpStatus.CONFLICT,
+          );
+        }
+
+        // ---- destination -----------------------------------------------------
+        let destWarehouseId: string | null;
+        let destCellId: string | null;
+        if (dto.toCellId) {
+          const cell = await tx.cell.findUnique({
+            where: { id: dto.toCellId },
+            select: { id: true, warehouseId: true },
+          });
+          if (!cell) {
+            throw new BusinessException(
+              'FINISHED_GOODS_TRANSFER_CELL_NOT_FOUND',
+              'Целевая ячейка не найдена.',
+              HttpStatus.NOT_FOUND,
+            );
+          }
+          destCellId = cell.id;
+          destWarehouseId = cell.warehouseId ?? dto.toWarehouseId ?? null;
+        } else {
+          destCellId = null;
+          destWarehouseId = dto.toWarehouseId ?? null;
+        }
+
+        // ---- same-location гейт ---------------------------------------------
+        if (
+          (source.warehouseId ?? null) === destWarehouseId &&
+          (source.cellId ?? null) === destCellId
+        ) {
+          throw new BusinessException(
+            'FINISHED_GOODS_TRANSFER_SAME_LOCATION',
+            'Источник и назначение перемещения готовой продукции совпадают.',
+            HttpStatus.CONFLICT,
+          );
+        }
+
+        // ---- OUT (списание из source) ---------------------------------------
+        const { movement: outMovement } = await this.applyMovementInTx(tx, {
+          orderId: source.orderId,
+          productId: source.productId,
+          sizeId: source.sizeId,
+          color: source.color,
+          warehouseId: source.warehouseId,
+          cellId: source.cellId,
+          type: FINISHED_GOODS_MOVEMENT_TYPE.TRANSFER,
+          direction: FINISHED_GOODS_MOVEMENT_DIRECTION.OUT,
+          qty: dto.qty,
+          sourceType: FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_TRANSFER,
+          sourceId: transferId,
+          sourceKey: outSourceKey,
+          comment: dto.comment,
+          createdById: employeeId ?? null,
+        });
+
+        // ---- IN (зачисление в destination) ----------------------------------
+        const { movement: inMovement, balance: destBalance } =
+          await this.applyMovementInTx(tx, {
+            orderId: source.orderId,
+            productId: source.productId,
+            sizeId: source.sizeId,
+            color: source.color,
+            warehouseId: destWarehouseId,
+            cellId: destCellId,
+            type: FINISHED_GOODS_MOVEMENT_TYPE.TRANSFER,
+            direction: FINISHED_GOODS_MOVEMENT_DIRECTION.IN,
+            qty: dto.qty,
+            sourceType: FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_TRANSFER,
+            sourceId: transferId,
+            sourceKey: inSourceKey,
+            comment: dto.comment,
+            createdById: employeeId ?? null,
+          });
+
+        // ---- audit ----------------------------------------------------------
+        await this.audit.log(
+          {
+            event: 'FINISHED_GOODS_TRANSFER_CREATED',
+            entityType: 'FINISHED_GOODS_MOVEMENT',
+            entityId: outMovement.id,
+            employeeId: employeeId ?? null,
+            payload: {
+              sourceType: FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_TRANSFER,
+              transferId,
+              fromFinishedGoodsBalanceId: source.id,
+              toFinishedGoodsBalanceId: destBalance.id,
+              outMovementId: outMovement.id,
+              inMovementId: inMovement.id,
+              orderId: source.orderId,
+              productId: source.productId,
+              sizeId: source.sizeId,
+              color: source.color,
+              qty: dto.qty,
+              from: {
+                warehouseId: source.warehouseId ?? null,
+                cellId: source.cellId ?? null,
+              },
+              to: {
+                warehouseId: destWarehouseId,
+                cellId: destCellId,
+              },
+              comment: dto.comment,
+              employeeId: employeeId ?? null,
+              timestamp: outMovement.createdAt.toISOString(),
+            } as Prisma.InputJsonValue,
+          },
+          tx,
+        );
+
+        return {
+          outMovementId: outMovement.id,
+          inMovementId: inMovement.id,
+        };
+      },
+    );
+
+    this.logger.log(
+      `event=finished_goods.transfer.create transferId=${transferId} ` +
+        `out=${outMovementId} in=${inMovementId} qty=${dto.qty} ` +
+        `fromFinishedGoodsBalanceId=${dto.fromFinishedGoodsBalanceId}`,
+    );
+
+    // Возвращаем пару движений в shape `FinishedGoodsMovementListItem` —
+    // тот же, что отдаёт `GET /api/finished-goods/movements`. `sourceKey`
+    // сознательно не пробрасываем (`toMovementListItem` его вырезает).
+    const [outDetail, inDetail] = await Promise.all([
+      this.prisma.finishedGoodsMovement.findUniqueOrThrow({
+        where: { id: outMovementId },
+        include: MOVEMENT_LIST_INCLUDE,
+      }),
+      this.prisma.finishedGoodsMovement.findUniqueOrThrow({
+        where: { id: inMovementId },
+        include: MOVEMENT_LIST_INCLUDE,
+      }),
+    ]);
+
+    return {
+      transferId,
+      outMovement: toMovementListItem(outDetail),
+      inMovement: toMovementListItem(inDetail),
+    };
   }
 }
 

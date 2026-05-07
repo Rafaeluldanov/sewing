@@ -15,6 +15,10 @@ import {
   type CreateStockTransferDto,
 } from '@/lib/stock-api';
 import {
+  createFinishedGoodsTransfer,
+  type CreateFinishedGoodsTransferDto,
+} from '@/lib/finished-goods-api';
+import {
   createWarehouse,
   createWarehouseLine,
   deleteWarehouseLine,
@@ -395,6 +399,60 @@ export async function createStockTransferAction(
       };
     }
     return { ok: false, error: 'Не удалось сохранить перемещение остатка.' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Finished goods transfer (manual): `POST /api/finished-goods/transfers`
+// (см. `apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+//  `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+//  `docs/api.md §«Finished goods transfers»`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action перемещения готовой продукции между складами / ячейками.
+ *
+ * Принимает уже нормализованный body (qty integer / comment /
+ * clientRequestId) и делегирует в `createFinishedGoodsTransfer`.
+ * Идемпотентность реализована backend-ом по `clientRequestId` —
+ * UI-диалог сам генерирует uuid и присылает один и тот же при
+ * повторных submit.
+ *
+ * После успеха ревалидируем `/admin/warehouses` (вкладки `balances` и
+ * `movements` живут на одной странице с разным `?tab=`), чтобы оба
+ * движения появились в журнале и обновились остатки готовой продукции.
+ *
+ * `FINISHED_GOODS_INSUFFICIENT_BALANCE` /
+ * `FINISHED_GOODS_TRANSFER_SAME_LOCATION` /
+ * `FINISHED_GOODS_BALANCE_NOT_FOUND` приходят с `code` — клиентский
+ * диалог отрисовывает понятный текст backend без raw JSON.
+ */
+export async function createFinishedGoodsTransferAction(
+  body: CreateFinishedGoodsTransferDto,
+): Promise<StockTransferState> {
+  if (!Number.isInteger(body.qty) || body.qty <= 0) {
+    return {
+      ok: false,
+      error: 'Для готовой продукции количество должно быть целым числом.',
+    };
+  }
+  try {
+    const result = await createFinishedGoodsTransfer(body);
+    revalidatePath('/admin/warehouses');
+    return { ok: true, transferId: result.transferId };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        code: e.code,
+        error: e.message,
+        errorRequestId: e.requestId,
+      };
+    }
+    return {
+      ok: false,
+      error: 'Не удалось сохранить перемещение готовой продукции.',
+    };
   }
 }
 

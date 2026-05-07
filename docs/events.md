@@ -479,6 +479,23 @@ shipment-документ верхнего уровня, независимо о
   `FinishedGoodsShipmentCancel` нет, частичная отмена не
   поддерживается (см. ТЗ).
 
+- `FINISHED_GOODS_TRANSFER_CREATED` — менеджер сохранил перемещение
+  готовой продукции (`POST /api/finished-goods/transfers`). Пишется
+  в той же транзакции, что и пара `FinishedGoodsMovement`
+  `type = TRANSFER`: `direction = OUT` (sourceKey
+  `FINISHED_GOODS_TRANSFER:<id>:OUT`) + `direction = IN` (sourceKey
+  `FINISHED_GOODS_TRANSFER:<id>:IN`). `entityType =
+  FINISHED_GOODS_MOVEMENT`, `entityId = OUT-movement.id`.
+  Идемпотентно по `clientRequestId`: повторный submit с тем же
+  ключом возвращает существующую пару движений и event заново НЕ
+  пишет. Payload — `{ sourceType: 'FINISHED_GOODS_TRANSFER',
+  transferId, fromFinishedGoodsBalanceId, toFinishedGoodsBalanceId,
+  outMovementId, inMovementId, orderId, productId, sizeId, color,
+  qty, from: { warehouseId, cellId }, to: { warehouseId, cellId },
+  comment, employeeId, timestamp }`. Отдельной модели
+  `FinishedGoodsTransfer` сознательно нет — transfer полностью
+  представлен парой `FinishedGoodsMovement` (см. ТЗ).
+
 #### ОТК (`entityType = QC`, `entityId = passportId`)
 
 - `QC_COMPLETED` — `QcService.completeQc` (`qc.service.ts:240`).

@@ -377,10 +377,15 @@ async function BalancesTabPage({
       </AdminCard>
 
       <AdminCard>
-        {/* Mutation-кнопки работают только с материалами — у готовой
-         * продукции своя транзакционная модель (через PackingService /
-         * Operation flag), отдельных adjustment / transfer не ввели. */}
-        {materialItems.length > 0 && (
+        {/*
+          «Переместить» — единая складская операция и для материалов,
+          и для готовой продукции. Кнопка одна; диалог сам решает, в
+          какой backend endpoint идти, по `kind` выбранного источника
+          (`POST /api/stock/transfers` / `POST /api/finished-goods/transfers`).
+          «Корректировка» по-прежнему только материалы — у готовой
+          продукции корректировок на этой итерации нет.
+        */}
+        {(materialItems.length > 0 || finishedItems.length > 0) && (
           <div
             style={{
               display: 'flex',
@@ -390,10 +395,13 @@ async function BalancesTabPage({
             }}
           >
             <StockTransferButton
-              balances={materialItems}
+              materialBalances={materialItems}
+              finishedGoodsBalances={finishedItems}
               warehouses={warehouses}
             />
-            <StockAdjustmentButton balances={materialItems} />
+            {materialItems.length > 0 && (
+              <StockAdjustmentButton balances={materialItems} />
+            )}
           </div>
         )}
         <StockBalancesTable items={pageRows} />

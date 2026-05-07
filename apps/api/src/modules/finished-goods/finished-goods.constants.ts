@@ -59,6 +59,16 @@ export const FINISHED_GOODS_SOURCE_TYPE = {
    * `FinishedGoodsService.cancelShipment`).
    */
   FINISHED_GOODS_SHIPMENT_CANCEL_LINE: 'FINISHED_GOODS_SHIPMENT_CANCEL_LINE',
+  /**
+   * Перемещение готовой продукции между складами / ячейками
+   * (см. `FinishedGoodsService.createTransfer`). Transfer фиксируется
+   * парой движений `type = TRANSFER`:
+   *   - `FINISHED_GOODS_TRANSFER:<transferId>:OUT` — списание из источника;
+   *   - `FINISHED_GOODS_TRANSFER:<transferId>:IN` — зачисление в назначение.
+   * Отдельной модели `FinishedGoodsTransfer` сознательно не вводим —
+   * transfer полностью представлен парой `FinishedGoodsMovement`.
+   */
+  FINISHED_GOODS_TRANSFER: 'FINISHED_GOODS_TRANSFER',
 } as const;
 export type FinishedGoodsSourceType =
   (typeof FINISHED_GOODS_SOURCE_TYPE)[keyof typeof FINISHED_GOODS_SOURCE_TYPE];
@@ -153,6 +163,31 @@ export function buildFinishedGoodsShipmentSourceKey(
   clientRequestId: string,
 ): string {
   return `FINISHED_GOODS_SHIPMENT:${orderId}:${clientRequestId}`;
+}
+
+/**
+ * `sourceKey` для OUT-движения перемещения готовой продукции
+ * (см. `FinishedGoodsService.createTransfer`). Один transfer →
+ * ровно одно OUT-движение. UNIQUE на `FinishedGoodsMovement.sourceKey`
+ * гарантирует, что повторный submit с тем же `clientRequestId`
+ * (двойной клик / network retry) не задвоит списание.
+ */
+export function buildFinishedGoodsTransferOutSourceKey(
+  transferId: string,
+): string {
+  return `${FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_TRANSFER}:${transferId}:OUT`;
+}
+
+/**
+ * `sourceKey` для IN-движения перемещения готовой продукции
+ * (см. `FinishedGoodsService.createTransfer`). Один transfer →
+ * ровно одно IN-движение. Парный с
+ * `buildFinishedGoodsTransferOutSourceKey`.
+ */
+export function buildFinishedGoodsTransferInSourceKey(
+  transferId: string,
+): string {
+  return `${FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_TRANSFER}:${transferId}:IN`;
 }
 
 export function buildFinishedGoodsBalanceKey(params: {

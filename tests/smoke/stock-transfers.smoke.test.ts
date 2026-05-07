@@ -161,11 +161,16 @@ test('actions.ts содержит createStockTransferAction', () => {
 test('StockTransferDialog существует и имеет fields source/destination/qty/comment', () => {
   expect(exists(TRANSFER_DIALOG)).toBe(true);
   const src = read(TRANSFER_DIALOG);
-  // Поля формы.
-  expect(src).toMatch(/name="fromStockBalanceId"/);
+  // Унифицированный select исходного остатка (поддерживает MATERIAL и
+  // FINISHED_GOOD) — после введения transfer-а готовой продукции.
+  expect(src).toMatch(/name="sourceOptionId"/);
+  expect(src).toMatch(/data-kind="MATERIAL"/);
   expect(src).toMatch(/name="toWarehouseId"/);
   expect(src).toMatch(/name="qty"/);
   expect(src).toMatch(/name="comment"/);
+  // Существующий material transfer всё ещё вызывает
+  // createStockTransferAction.
+  expect(src).toMatch(/createStockTransferAction\(\{/);
   // Кнопки «Создать перемещение» / «Отмена».
   expect(src).toMatch(/Создать перемещение/);
   expect(src).toMatch(/Отмена/);

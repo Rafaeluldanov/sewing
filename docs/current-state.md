@@ -999,6 +999,98 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     зафиксированы в
     `tests/smoke/finished-goods-shipment-cancel.smoke.test.ts`.
 
+  Backend + Frontend-итерация «Перемещение готовой продукции»
+  (`apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::createTransfer`,
+  `apps/api/src/modules/finished-goods/dto/create-finished-goods-transfer.dto.ts`,
+  `apps/api/src/modules/finished-goods/finished-goods.constants.ts`,
+  `apps/web/lib/finished-goods-api.ts::createFinishedGoodsTransfer`,
+  `apps/web/app/admin/warehouses/actions.ts::createFinishedGoodsTransferAction`,
+  `apps/web/components/warehouses/stock/stock-transfer-dialog.tsx`,
+  `apps/web/components/warehouses/stock/stock-transfer-button.tsx`,
+  `tests/smoke/finished-goods-transfers.smoke.test.ts`,
+  `tests/integration/finished-goods-transfers.test.ts`,
+  `docs/api.md §«Finished goods transfers»`):
+  - решение владельца проекта — «Переместить» это **одна общая
+    складская операция** в UI. Вкладка «Остатки» в
+    `/admin/warehouses?tab=balances` оставляет одну кнопку
+    «Переместить»; диалог сам решает, в какой backend endpoint идти,
+    по `kind` выбранного остатка:
+    - `MATERIAL` → `POST /api/stock/transfers`;
+    - `FINISHED_GOOD` → `POST /api/finished-goods/transfers`.
+    Отдельная кнопка / страница / sidebar item / новая вкладка
+    `OrderViewTabs` **не создавались**.
+  - Backend mutation: `POST /api/finished-goods/transfers` (RBAC
+    `ADMIN` / `SHOP_MANAGER`). DTO body —
+    `CreateFinishedGoodsTransferDto`: `{ fromFinishedGoodsBalanceId,
+    toWarehouseId? | null, toCellId? | null, qty (int > 0), comment
+    (2..500), clientRequestId? }`. `orderId`, `productId`, `sizeId`,
+    `color`, `warehouseId`, `cellId` сервис достаёт из исходного
+    `FinishedGoodsBalance` — клиент их не присылает. `qty` всегда
+    целое (готовая продукция штучная).
+  - Transfer фиксируется парой `FinishedGoodsMovement`
+    `type = TRANSFER` через `applyMovementInTx`:
+    - `direction = OUT` (sourceKey
+      `FINISHED_GOODS_TRANSFER:<id>:OUT`) уменьшает исходный
+      `FinishedGoodsBalance.qty`;
+    - `direction = IN` (sourceKey
+      `FINISHED_GOODS_TRANSFER:<id>:IN`) создаёт / увеличивает
+      целевой `FinishedGoodsBalance` той же номенклатуры.
+    Если IN падает, OUT откатывается (одна транзакция). Отдельной
+    модели `FinishedGoodsTransfer` сознательно нет.
+  - Transfer всегда **strict** — нельзя переместить больше, чем есть
+    на исходном балансе (`source.qty >= qty`). Готовая продукция не
+    уходит в минус. `allowNegativeMaterialStock` к этому контуру
+    **не применим** (это флаг для StockBalance материалов).
+  - **Same-location guard.** Если source `(warehouseId, cellId)`
+    совпадает с destination — 409
+    `FINISHED_GOODS_TRANSFER_SAME_LOCATION`.
+  - **Идемпотентность по `clientRequestId`.** Повторный submit с тем
+    же ключом возвращает существующую пару движений и НЕ апдейтит
+    балансы повторно. UNIQUE на `FinishedGoodsMovement.sourceKey`
+    подстрахует от race-condition. Если найден только один из двух
+    ключей — 409 `FINISHED_GOODS_TRANSFER_INCONSISTENT_STATE`.
+  - **Public API:** `POST /api/finished-goods/transfers`. Response —
+    `{ transferId, outMovement, inMovement }` в shape
+    `FinishedGoodsMovementListItem`. `sourceKey` сознательно НЕ
+    отдаём (внутренний идемпотентный технический ключ).
+  - **Audit** `FINISHED_GOODS_TRANSFER_CREATED`
+    (`entityType = FINISHED_GOODS_MOVEMENT`,
+    `entityId = OUT-movement.id`) пишется в той же транзакции, что
+    и пара движений. Payload — `{ sourceType:
+    'FINISHED_GOODS_TRANSFER', transferId,
+    fromFinishedGoodsBalanceId, toFinishedGoodsBalanceId,
+    outMovementId, inMovementId, orderId, productId, sizeId, color,
+    qty, from: { warehouseId, cellId }, to: { warehouseId, cellId },
+    comment, employeeId, timestamp }`.
+  - **UI.** Существующий `StockTransferDialog` расширен на оба
+    контура: source select собран как `<optgroup>`-список из
+    материалов + готовой продукции; на каждой опции лежит
+    `data-kind="MATERIAL" | "FINISHED_GOOD"`. Для FINISHED_GOOD
+    рендерится подсказка «Готовая продукция перемещается в штуках»,
+    `inputMode="numeric"`, и frontend-валидация `Number.isInteger` —
+    нецелое qty не уходит в backend. После успешного submit диалог
+    закрывается и `revalidatePath('/admin/warehouses')` обновляет
+    обе вкладки.
+  - **Отдельный контур от материалов.** `StockBalance` /
+    `StockMovement` / `MaterialIssue` / `PurchaseReceipt` /
+    `StockAdjustment` / `StockTransfer` / `CostsService` /
+    `ProductionCostV2Service` **не затрагиваются** и **не менялись**.
+    Backend модели готовой продукции — отдельные
+    (`FinishedGoodsBalance` / `FinishedGoodsMovement`); никакого
+    общего master `Material` / `MaterialStockLot` / FIFO/LIFO нет.
+  - В `/admin/warehouses?tab=movements` строки перемещения готовой
+    продукции отображаются как «Перемещение»
+    (`StockMovementTypeBadge` → `TRANSFER`); направление — «Расход»
+    (OUT) и «Приход» (IN). Колонка «Заказчик» (`Client.name` через
+    `Order.client`) уже доступна.
+  - Сознательно **не реализованы** на этой итерации:
+    cancel transfer, partial / batch transfer, transfer history
+    endpoint, отдельный документ `FinishedGoodsTransfer`, FIFO/LIFO,
+    адjustment готовой продукции. Ошибочный transfer оператор
+    компенсирует обратным transfer-ом. Запреты зафиксированы в
+    `tests/smoke/finished-goods-transfers.smoke.test.ts`.
+
   Backend + Frontend-итерация «Давальческое сырьё клиента»
   (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
   `prisma/migrations/20260614100000_add_order_materials_and_hardware_cost_policy`,

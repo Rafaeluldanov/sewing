@@ -753,6 +753,36 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
   «Отменена» + `cancelReason` для `CANCELLED`;
 - audit `FINISHED_GOODS_SHIPMENT_CANCELLED`.
 
+Что добавлено итерацией «Перемещение готовой продукции»:
+- API: `POST /api/finished-goods/transfers` (RBAC ADMIN /
+  SHOP_MANAGER), body `{ fromFinishedGoodsBalanceId, toWarehouseId? |
+  null, toCellId? | null, qty (int > 0), comment (2..500),
+  clientRequestId? }`. `orderId` / `productId` / `sizeId` / `color` /
+  `warehouseId` / `cellId` сервис достаёт из исходного
+  `FinishedGoodsBalance` — клиент их не присылает;
+- transfer фиксируется парой `FinishedGoodsMovement` `type = TRANSFER`
+  через `applyMovementInTx`: `direction = OUT` (sourceKey
+  `FINISHED_GOODS_TRANSFER:<id>:OUT`) уменьшает исходный баланс,
+  `direction = IN` (sourceKey
+  `FINISHED_GOODS_TRANSFER:<id>:IN`) создаёт / увеличивает целевой
+  баланс той же номенклатуры;
+- transfer всегда **strict** — нельзя переместить больше, чем есть
+  на источнике (`FINISHED_GOODS_INSUFFICIENT_BALANCE`, 409);
+- same-location guard
+  (`FINISHED_GOODS_TRANSFER_SAME_LOCATION`, 409);
+- идемпотентность по `clientRequestId`; inconsistent state
+  (`FINISHED_GOODS_TRANSFER_INCONSISTENT_STATE`, 409) при
+  частичном дубле sourceKey;
+- UI: единая кнопка «Переместить» во вкладке
+  `/admin/warehouses?tab=balances` (общий диалог
+  `StockTransferDialog`); по `kind` выбранного остатка идёт в
+  `POST /api/stock/transfers` (материал) или в
+  `POST /api/finished-goods/transfers` (готовая продукция). Для
+  готовой продукции `qty` валидируется как целое (`Number.isInteger`)
+  на frontend и backend;
+- audit `FINISHED_GOODS_TRANSFER_CREATED` (`entityType =
+  FINISHED_GOODS_MOVEMENT`).
+
 Чего нет на этой итерации (отдельный backlog по готовой продукции):
 - частичная отмена shipment — пользователь отменяет ошибочный
   shipment целиком и создаёт новый корректный;
@@ -763,15 +793,66 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
 - автоматическая смена `Order.status` при полной отгрузке —
   сознательное решение, статус заказа меняется только через
   `POST /api/orders/:id/complete`;
-- transfer готовой продукции между складами / ячейками
-  (`TRANSFER`);
+- cancel transfer / partial / batch transfer / transfer history
+  endpoint / отдельная модель `FinishedGoodsTransfer` — transfer
+  представлен парой `FinishedGoodsMovement type = TRANSFER`,
+  ошибочный transfer оператор компенсирует обратным transfer-ом;
 - ручная корректировка (`ADJUSTMENT`) и сторно (`REVERSAL`)
-  движений;
-- размещение готовой продукции по ячейкам (`cellId` всегда `null`
-  для `PRODUCTION_RECEIPT`; для `SHIPMENT` snapshot-ом берётся
-  существующий `cellId` баланса);
+  движений готовой продукции (REVERSAL пишется автоматически на
+  cancel shipment);
+- размещение готовой продукции по ячейкам автоматически (`cellId`
+  всегда `null` для `PRODUCTION_RECEIPT`; для `SHIPMENT` snapshot-ом
+  берётся существующий `cellId` баланса; для `TRANSFER` оператор
+  выбирает ячейку назначения сам);
 - UI-раздел `/admin/finished-goods` / sidebar item / отчёт;
 - новые роли (RBAC ограничен `ADMIN` / `SHOP_MANAGER`).
+
+### Как проверить «Перемещение готовой продукции»
+
+1. Подготовить остаток готовой продукции: упаковать паспорт
+   (см. сценарий ниже про packing) или провести операцию с
+   `Operation.producesFinishedGoods = true`. На вкладке «Остатки»
+   `/admin/warehouses?tab=balances` должна появиться строка готовой
+   продукции (имя `productName / color / sizeCode`, ед. изм. — `шт`).
+2. Нажать кнопку «Переместить» над таблицей остатков. Открывается
+   inline-диалог «Перемещение остатка».
+3. В select «Исходный остаток» выбрать строку из группы «Готовая
+   продукция». Под select-ом отрисуется подсказка «Готовая продукция
+   перемещается в штуках». В сводке «Откуда» виден текущий склад /
+   ячейка / номенклатура остатка.
+4. Выбрать склад и (опционально) ячейку назначения. Если выбрать
+   ту же локацию, что у источника — submit вернёт 409
+   `FINISHED_GOODS_TRANSFER_SAME_LOCATION`.
+5. Указать целое количество ≤ доступного. Дробное число → frontend
+   валидация «Для готовой продукции количество должно быть целым
+   числом», backend `FINISHED_GOODS_TRANSFER_QTY_INVALID` (400).
+   Превышение доступного → 409
+   `FINISHED_GOODS_INSUFFICIENT_BALANCE`.
+6. Указать причину перемещения (комментарий, 2..500 символов) и
+   нажать «Создать перемещение».
+7. После успеха диалог закрывается, страница ревалидируется.
+   Проверить:
+   - на вкладке «Остатки» исходный `FinishedGoodsBalance.qty`
+     уменьшился, в локации назначения появился (или вырос)
+     `FinishedGoodsBalance` той же номенклатуры с
+     перемещённым `qty`;
+   - на вкладке `/admin/warehouses?tab=movements` появились две
+     строки `type = TRANSFER`: одна с направлением «Расход» (OUT) в
+     исходной локации и одна с «Приход» (IN) в локации назначения,
+     обе с одинаковым `qty` и комментарием. Колонка «Заказчик»
+     показывает клиента заказа.
+8. Идемпотентность: повторный submit формы (двойной клик / network
+   retry) с тем же `clientRequestId` НЕ задваивает движения и НЕ
+   меняет балансы повторно. UNIQUE на
+   `FinishedGoodsMovement.sourceKey` (sourceKey
+   `FINISHED_GOODS_TRANSFER:<id>:OUT/IN`) подстрахует от
+   race-condition.
+9. Roles: попытка вызвать endpoint от роли `SEAMSTRESS` / `MASTER` →
+   403 `FORBIDDEN_ROLE`. Доступ есть только у `ADMIN` /
+   `SHOP_MANAGER`.
+10. Изоляция: после transfer-а готовой продукции `StockBalance` /
+    `StockMovement` материалов / `MaterialIssue` / production cost
+    **не изменились**.
 
 ### Как проверить «Отмену отгрузки готовой продукции»
 

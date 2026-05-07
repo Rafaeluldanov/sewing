@@ -11,20 +11,31 @@
  *   - НЕ добавляем пункт в sidebar;
  *   - dialog inline (без модала) — тот же паттерн, что у
  *     `StockAdjustmentDialog`.
+ *
+ * Кнопка ОДНА для пользователя, но под капотом обслуживает оба
+ * контура — материалы (`POST /api/stock/transfers`) и готовую
+ * продукцию (`POST /api/finished-goods/transfers`). Diff делается в
+ * самом диалоге по `kind` выбранного источника.
  */
 
 import { useState } from 'react';
 import { ArrowRightLeft } from 'lucide-react';
 import { StockTransferDialog } from './stock-transfer-dialog';
 import type { StockBalanceListItem } from '@/lib/stock-api';
+import type { FinishedGoodsBalanceListItem } from '@/lib/finished-goods-api';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 
 interface Props {
-  balances: StockBalanceListItem[];
+  materialBalances: StockBalanceListItem[];
+  finishedGoodsBalances: FinishedGoodsBalanceListItem[];
   warehouses: WarehouseSummaryDto[];
 }
 
-export function StockTransferButton({ balances, warehouses }: Props) {
+export function StockTransferButton({
+  materialBalances,
+  finishedGoodsBalances,
+  warehouses,
+}: Props) {
   const [open, setOpen] = useState(false);
   return (
     <>
@@ -42,7 +53,8 @@ export function StockTransferButton({ balances, warehouses }: Props) {
       {open && (
         <div id="stock-transfer-dialog" style={{ marginTop: 12 }}>
           <StockTransferDialog
-            balances={balances}
+            materialBalances={materialBalances}
+            finishedGoodsBalances={finishedGoodsBalances}
             warehouses={warehouses}
             onClose={() => setOpen(false)}
           />

@@ -1411,10 +1411,88 @@ Audit-события (entityType `FINISHED_GOODS_SHIPMENT`, entityId —
   `FinishedGoodsShipmentCancel` — отмена решена через
   `status = CANCELLED` + REVERSAL IN, без нового документа;
 - DRAFT-flow shipment;
-- transfer / adjustment готовой продукции;
+- adjustment готовой продукции;
 - автоматическая смена `Order.status` при полной отгрузке /
   отмене shipment;
 - материальный stock не затрагивается.
+
+### Finished goods transfers
+
+Источник: `apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+`apps/api/src/modules/finished-goods/finished-goods.service.ts::createTransfer`,
+`apps/api/src/modules/finished-goods/dto/create-finished-goods-transfer.dto.ts`,
+`docs/current-state.md §«Готовая продукция»`.
+
+Перемещение готовой продукции между складами / ячейками. Для
+пользователя это та же складская операция, что и перемещение
+материалов: одна кнопка «Переместить» во вкладке
+`/admin/warehouses?tab=balances`. UI смотрит на `kind` выбранного
+остатка и идёт либо в `POST /api/stock/transfers` (материал), либо в
+`POST /api/finished-goods/transfers` (готовая продукция). Backend
+держит контуры раздельными — `FinishedGoodsBalance` /
+`FinishedGoodsMovement` не пересекаются с `StockBalance` /
+`StockMovement` материалов.
+
+Transfer фиксируется парой `FinishedGoodsMovement` `type = TRANSFER`:
+`direction = OUT` (sourceKey `FINISHED_GOODS_TRANSFER:<id>:OUT`)
+уменьшает исходный `FinishedGoodsBalance.qty`, `direction = IN`
+(sourceKey `FINISHED_GOODS_TRANSFER:<id>:IN`) создаёт / увеличивает
+целевой `FinishedGoodsBalance` той же номенклатуры
+(`order × product × size × color × warehouse × cell`). Отдельной модели
+`FinishedGoodsTransfer` сознательно нет — transfer полностью
+описывается парой движений.
+
+| Метод | Путь                                | RBAC                | Описание |
+| ----- | ----------------------------------- | ------------------- | -------- |
+| POST  | `/api/finished-goods/transfers`     | ADMIN, SHOP_MANAGER | Body — `CreateFinishedGoodsTransferDto`: `{ fromFinishedGoodsBalanceId, toWarehouseId? \| null, toCellId? \| null, qty (int > 0), comment (2..500), clientRequestId? (max 128) }`. `orderId`, `productId`, `sizeId`, `color`, `warehouseId`, `cellId` сервис достаёт из исходного `FinishedGoodsBalance` — клиент их не присылает. `qty` всегда целое (готовая продукция штучная). Response — `{ transferId, outMovement, inMovement }`, где movements — `FinishedGoodsMovementListItem` БЕЗ `sourceKey`. Создаёт пару движений `type = TRANSFER` (`OUT` / `IN`) и audit `FINISHED_GOODS_TRANSFER_CREATED` в одной транзакции. |
+
+Правила:
+- transfer всегда **strict** — нельзя переместить больше, чем есть на
+  исходном балансе (`source.qty >= qty`). Готовая продукция не уходит
+  в минус;
+- если `toCellId` передан — destination `warehouseId` берётся из
+  `Cell.warehouseId` (с fallback на `toWarehouseId`); иначе `cellId =
+  null`;
+- если source `(warehouseId, cellId)` совпадает с destination — 409
+  `FINISHED_GOODS_TRANSFER_SAME_LOCATION`;
+- идемпотентность по `clientRequestId`: повторный submit с тем же
+  ключом возвращает существующую пару движений и не апдейтит балансы
+  повторно. Если найден только один из двух ключей — 409
+  `FINISHED_GOODS_TRANSFER_INCONSISTENT_STATE` (структурная аномалия);
+- `sourceKey` сознательно НЕ возвращается (внутренний идемпотентный
+  технический ключ).
+
+Ошибки:
+- `FINISHED_GOODS_TRANSFER_QTY_INVALID` (400) — `qty` не целое
+  положительное число (zod-pipe ловит большую часть кейсов раньше);
+- `FINISHED_GOODS_BALANCE_NOT_FOUND` (404) — исходного баланса нет;
+- `FINISHED_GOODS_INSUFFICIENT_BALANCE` (409) — `qty > source.qty`;
+- `FINISHED_GOODS_TRANSFER_CELL_NOT_FOUND` (404) — целевой ячейки нет;
+- `FINISHED_GOODS_TRANSFER_SAME_LOCATION` (409) — source/destination
+  совпадают;
+- `FINISHED_GOODS_TRANSFER_INCONSISTENT_STATE` (409) — найден только
+  один из пары sourceKey-ключей.
+
+Audit:
+- `FINISHED_GOODS_TRANSFER_CREATED` (entityType
+  `FINISHED_GOODS_MOVEMENT`, entityId — `FinishedGoodsMovement.id`
+  для OUT). Payload — `{ sourceType: 'FINISHED_GOODS_TRANSFER',
+  transferId, fromFinishedGoodsBalanceId, toFinishedGoodsBalanceId,
+  outMovementId, inMovementId, orderId, productId, sizeId, color,
+  qty, from: { warehouseId, cellId }, to: { warehouseId, cellId },
+  comment, employeeId, timestamp }`.
+
+Сознательная граница MVP:
+- **не создаём** отдельную модель `FinishedGoodsTransfer`;
+- **не реализуем** cancel transfer / partial cancel — ошибочный
+  transfer оператор компенсирует обратным transfer-ом;
+- **не реализуем** transfer history endpoint — пара движений видна
+  через стандартный `GET /api/finished-goods/movements` (фильтр
+  `type=TRANSFER`);
+- **не вводим** FIFO/LIFO/MaterialStockLot;
+- **не меняем** material `StockTransfer` business logic / MaterialIssue
+  / PurchaseReceipt / StockAdjustment / Packing / Operation /
+  CostsService / ProductionCostV2Service.
 
 ---
 

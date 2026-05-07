@@ -3,34 +3,42 @@
 /**
  * `StockTransferDialog` — inline-форма перемещения остатка между
  * складами / ячейками для вкладки «Остатки» в
- * `/admin/warehouses?tab=balances` (см. backend
- * `apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`,
- * `StockService.createTransfer`).
+ * `/admin/warehouses?tab=balances`.
  *
  * UI-решение владельца проекта (см. ТЗ): не делать новую страницу /
  * новый пункт меню, а добавить inline-панель прямо над таблицей.
  * Открывается по `StockTransferButton`, рендерится в той же
  * card-обёртке. После успешного submit панель закрывается и
  * `revalidatePath('/admin/warehouses')` перерисовывает balances и
- * movements (см. `createStockTransferAction`).
+ * movements (см. `createStockTransferAction` /
+ * `createFinishedGoodsTransferAction`).
+ *
+ * Для пользователя «Переместить» — одна общая складская операция.
+ * Под капотом разные backend endpoint-ы:
+ *   - MATERIAL → `POST /api/stock/transfers`
+ *     (`apps/api/src/modules/stock/dto/create-stock-transfer.dto.ts`,
+ *     `StockService.createTransfer`);
+ *   - FINISHED_GOOD → `POST /api/finished-goods/transfers`
+ *     (`apps/api/src/modules/finished-goods/dto/create-finished-goods-transfer.dto.ts`,
+ *     `FinishedGoodsService.createTransfer`).
+ * UI различает их по `kind` исходного остатка и валидирует количество
+ * соответствующим образом (decimal для материалов, integer для
+ * готовой продукции).
  *
  * Контракт формы:
- *   - select исходного остатка из текущих balances (MVP: перемещаем
- *     только существующий `StockBalance`);
+ *   - select исходного остатка из объединённого списка
+ *     материалов и готовой продукции (MVP: перемещаем только
+ *     существующий баланс);
  *   - select целевого склада из загруженного на странице списка
  *     `warehouses`. Опция «Без склада» сознательно НЕ предусмотрена —
  *     перемещать «никуда» не имеет смысла; для MVP destination
  *     обязателен;
  *   - select целевой ячейки динамически подгружается через
  *     `loadTransferDestinationCellsAction` при смене склада. Первая
- *     опция — «Без ячейки» (отправляет `toCellId = null`). Если
- *     склад не выбран — selectbox задисейблен с подсказкой «Сначала
- *     выберите склад». Если в складе нет ячеек — selectbox
- *     задисейблен с подсказкой «Нет ячеек на этом складе». Если ранее
- *     выбранная ячейка не относится к новому складу — `toCellId`
- *     сбрасывается на «Без ячейки»;
- *   - qty > 0 (text input с `inputMode="decimal"`), плюс UI-подсказка
- *     «Доступно: X ед.»;
+ *     опция — «Без ячейки» (отправляет `toCellId = null`);
+ *   - qty > 0 (text input с `inputMode="decimal"` для материалов /
+ *     `inputMode="numeric"` для готовой продукции). Для готовой
+ *     продукции количество должно быть целым;
  *   - comment обязателен (placeholder «Причина перемещения»);
  *   - `clientRequestId` — uuid, сгенерированный единожды на mount
  *     (защита от двойного submit; при ретрае с тем же id backend
@@ -45,6 +53,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { CheckCircle, X } from 'lucide-react';
 import {
+  createFinishedGoodsTransferAction,
   createStockTransferAction,
   loadTransferDestinationCellsAction,
   type TransferDestinationCellOption,
@@ -54,13 +63,33 @@ import {
   type StockTransferState,
 } from '@/app/admin/warehouses/form-state';
 import type { StockBalanceListItem } from '@/lib/stock-api';
+import type { FinishedGoodsBalanceListItem } from '@/lib/finished-goods-api';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 
+/**
+ * Унифицированный source-вариант для select-а исходного остатка. UI
+ * различает два контура только через `kind`; всё остальное (имя,
+ * локация, единица, количество) рассчитывается по полю-источнику.
+ */
+type TransferSourceOption =
+  | {
+      kind: 'MATERIAL';
+      id: string;
+      balance: StockBalanceListItem;
+    }
+  | {
+      kind: 'FINISHED_GOOD';
+      id: string;
+      balance: FinishedGoodsBalanceListItem;
+    };
+
 interface Props {
-  balances: StockBalanceListItem[];
+  materialBalances: StockBalanceListItem[];
+  finishedGoodsBalances: FinishedGoodsBalanceListItem[];
   warehouses: WarehouseSummaryDto[];
-  /** Если задан, форма открывается с уже выбранным остатком. */
-  initialStockBalanceId?: string | null;
+  /** Если задан, форма открывается с уже выбранным остатком
+   * (формат: `material:<id>` / `finished-good:<id>`). */
+  initialSourceOptionId?: string | null;
   onClose: () => void;
 }
 
@@ -71,7 +100,14 @@ function makeClientRequestId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
-function formatBalanceLabel(b: StockBalanceListItem): string {
+function buildOptionId(
+  kind: 'MATERIAL' | 'FINISHED_GOOD',
+  id: string,
+): string {
+  return kind === 'MATERIAL' ? `material:${id}` : `finished-good:${id}`;
+}
+
+function formatMaterialLabel(b: StockBalanceListItem): string {
   const where = [b.warehouseName, b.cellCode]
     .filter((v): v is string => typeof v === 'string' && v.length > 0)
     .join(' / ');
@@ -80,24 +116,65 @@ function formatBalanceLabel(b: StockBalanceListItem): string {
   return `${b.description} — ${qtyText}${tail}`;
 }
 
+function formatFinishedGoodName(b: FinishedGoodsBalanceListItem): string {
+  const product = b.productName ?? b.productId;
+  const size = b.sizeCode ?? b.sizeId;
+  const parts: string[] = [];
+  if (product) parts.push(product);
+  if (b.color) parts.push(b.color);
+  if (size) parts.push(size);
+  return parts.join(' / ');
+}
+
+function formatFinishedGoodLabel(b: FinishedGoodsBalanceListItem): string {
+  const where = [b.warehouseName, b.cellCode]
+    .filter((v): v is string => typeof v === 'string' && v.length > 0)
+    .join(' / ');
+  const qtyText = `${b.qty} шт`;
+  const tail = where.length > 0 ? ` · ${where}` : '';
+  return `${formatFinishedGoodName(b)} — ${qtyText}${tail}`;
+}
+
 export function StockTransferDialog({
-  balances,
+  materialBalances,
+  finishedGoodsBalances,
   warehouses,
-  initialStockBalanceId,
+  initialSourceOptionId,
   onClose,
 }: Props) {
+  // Объединённый список вариантов источника — материалы первыми,
+  // готовая продукция дальше. Группировку через `<optgroup>` ставим
+  // ниже на render-уровне, чтобы оператор сразу видел разделение.
+  const sourceOptions = useMemo<TransferSourceOption[]>(() => {
+    const opts: TransferSourceOption[] = [];
+    for (const b of materialBalances) {
+      opts.push({
+        kind: 'MATERIAL',
+        id: buildOptionId('MATERIAL', b.id),
+        balance: b,
+      });
+    }
+    for (const b of finishedGoodsBalances) {
+      opts.push({
+        kind: 'FINISHED_GOOD',
+        id: buildOptionId('FINISHED_GOOD', b.id),
+        balance: b,
+      });
+    }
+    return opts;
+  }, [materialBalances, finishedGoodsBalances]);
+
   const initialId = useMemo(() => {
     if (
-      initialStockBalanceId &&
-      balances.some((b) => b.id === initialStockBalanceId)
+      initialSourceOptionId &&
+      sourceOptions.some((o) => o.id === initialSourceOptionId)
     ) {
-      return initialStockBalanceId;
+      return initialSourceOptionId;
     }
-    return balances[0]?.id ?? '';
-  }, [initialStockBalanceId, balances]);
+    return sourceOptions[0]?.id ?? '';
+  }, [initialSourceOptionId, sourceOptions]);
 
-  const [fromStockBalanceId, setFromStockBalanceId] =
-    useState<string>(initialId);
+  const [sourceOptionId, setSourceOptionId] = useState<string>(initialId);
   const [toWarehouseId, setToWarehouseId] = useState<string>('');
   const [toCellId, setToCellId] = useState<string>('');
   const [destinationCells, setDestinationCells] = useState<
@@ -150,16 +227,35 @@ export function StockTransferDialog({
     };
   }, [toWarehouseId]);
 
-  // Если remote update изменил список balances и текущий id больше
+  // Если remote update изменил список options и текущий id больше
   // не существует — переключаемся на первый доступный.
   useEffect(() => {
-    if (balances.length === 0) return;
-    if (!balances.some((b) => b.id === fromStockBalanceId)) {
-      setFromStockBalanceId(balances[0].id);
+    if (sourceOptions.length === 0) return;
+    if (!sourceOptions.some((o) => o.id === sourceOptionId)) {
+      setSourceOptionId(sourceOptions[0].id);
     }
-  }, [balances, fromStockBalanceId]);
+  }, [sourceOptions, sourceOptionId]);
 
-  const selected = balances.find((b) => b.id === fromStockBalanceId) ?? null;
+  const selected =
+    sourceOptions.find((o) => o.id === sourceOptionId) ?? null;
+
+  const selectedKind = selected?.kind ?? null;
+  const selectedUnit: string = selected
+    ? selected.kind === 'FINISHED_GOOD'
+      ? 'шт'
+      : selected.balance.unit
+    : '';
+  const selectedQty: string | number | null = selected
+    ? selected.balance.qty
+    : null;
+  const selectedName =
+    selected === null
+      ? null
+      : selected.kind === 'MATERIAL'
+        ? selected.balance.description
+        : formatFinishedGoodName(selected.balance);
+  const selectedFromWarehouseName = selected?.balance.warehouseName ?? null;
+  const selectedFromCellCode = selected?.balance.cellCode ?? null;
 
   // Active warehouses — destination не должен совпадать с источником.
   const destinationWarehouses = warehouses.filter((w) => w.isActive);
@@ -167,7 +263,7 @@ export function StockTransferDialog({
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();
     if (submitting) return;
-    if (!fromStockBalanceId) {
+    if (!selected) {
       setState({ ok: false, error: 'Выберите остаток для перемещения.' });
       return;
     }
@@ -191,18 +287,37 @@ export function StockTransferDialog({
     setSubmitting(true);
     setState(initialStockTransferState);
     try {
-      const result = await createStockTransferAction({
-        fromStockBalanceId,
-        toWarehouseId,
-        // «Без ячейки» (`toCellId === ''`) → не отправляем поле,
-        // backend трактует как `cellId = null`. Иначе — реальный
-        // `Cell.id`. Если по какой-то причине ячейка ушла из списка
-        // (race с unbinding), backend отдаст `STOCK_TRANSFER_CELL_NOT_FOUND`.
-        ...(toCellId ? { toCellId } : {}),
-        qty: qty.trim().replace(',', '.'),
-        comment: trimmedComment,
-        clientRequestId,
-      });
+      let result: StockTransferState;
+      if (selected.kind === 'MATERIAL') {
+        result = await createStockTransferAction({
+          fromStockBalanceId: selected.balance.id,
+          toWarehouseId,
+          ...(toCellId ? { toCellId } : {}),
+          qty: qty.trim().replace(',', '.'),
+          comment: trimmedComment,
+          clientRequestId,
+        });
+      } else {
+        // Для готовой продукции — целое штучное количество.
+        const normalized = qty.trim().replace(',', '.');
+        const qtyNum = Number(normalized);
+        if (!Number.isFinite(qtyNum) || !Number.isInteger(qtyNum) || qtyNum <= 0) {
+          setState({
+            ok: false,
+            error:
+              'Для готовой продукции количество должно быть целым числом.',
+          });
+          return;
+        }
+        result = await createFinishedGoodsTransferAction({
+          fromFinishedGoodsBalanceId: selected.balance.id,
+          toWarehouseId,
+          ...(toCellId ? { toCellId } : {}),
+          qty: qtyNum,
+          comment: trimmedComment,
+          clientRequestId,
+        });
+      }
       setState(result);
       if (result.ok) {
         onClose();
@@ -212,7 +327,7 @@ export function StockTransferDialog({
     }
   }
 
-  if (balances.length === 0) {
+  if (sourceOptions.length === 0) {
     return (
       <div
         className="stock-transfer-dialog"
@@ -281,8 +396,8 @@ export function StockTransferDialog({
           Исходный остаток
         </span>
         <select
-          value={fromStockBalanceId}
-          onChange={(e) => setFromStockBalanceId(e.target.value)}
+          value={sourceOptionId}
+          onChange={(e) => setSourceOptionId(e.target.value)}
           required
           style={{
             fontSize: '0.85rem',
@@ -291,15 +406,72 @@ export function StockTransferDialog({
             borderRadius: 4,
             fontFamily: 'inherit',
           }}
-          name="fromStockBalanceId"
+          name="sourceOptionId"
+          data-source-kind={selectedKind ?? ''}
         >
-          {balances.map((b) => (
-            <option key={b.id} value={b.id}>
-              {formatBalanceLabel(b)}
-            </option>
-          ))}
+          {materialBalances.length > 0 && (
+            <optgroup label="Материалы">
+              {materialBalances.map((b) => (
+                <option
+                  key={`material:${b.id}`}
+                  value={`material:${b.id}`}
+                  data-kind="MATERIAL"
+                >
+                  {formatMaterialLabel(b)}
+                </option>
+              ))}
+            </optgroup>
+          )}
+          {finishedGoodsBalances.length > 0 && (
+            <optgroup label="Готовая продукция">
+              {finishedGoodsBalances.map((b) => (
+                <option
+                  key={`finished-good:${b.id}`}
+                  value={`finished-good:${b.id}`}
+                  data-kind="FINISHED_GOOD"
+                >
+                  {formatFinishedGoodLabel(b)}
+                </option>
+              ))}
+            </optgroup>
+          )}
         </select>
+        {selectedKind === 'FINISHED_GOOD' && (
+          <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
+            Готовая продукция перемещается в штуках.
+          </span>
+        )}
       </label>
+
+      {/*
+        Сводка «Откуда» — короткая шапка, чтобы оператор видел текущую
+        локацию выбранного остатка перед заполнением «Куда».
+      */}
+      {selected && (
+        <div
+          style={{
+            fontSize: '0.78rem',
+            padding: '6px 8px',
+            border: '1px dashed var(--admin-border, #d4d4d8)',
+            borderRadius: 4,
+            background: 'rgba(0, 0, 0, 0.015)',
+          }}
+          aria-label="Откуда перемещаем"
+        >
+          <div style={{ fontWeight: 600, marginBottom: 2 }}>Откуда:</div>
+          <div>
+            <span className="admin-muted">Номенклатура:</span> {selectedName}
+          </div>
+          <div>
+            <span className="admin-muted">Склад:</span>{' '}
+            {selectedFromWarehouseName ?? '—'}
+          </div>
+          <div>
+            <span className="admin-muted">Ячейка:</span>{' '}
+            {selectedFromCellCode ?? 'Без ячейки'}
+          </div>
+        </div>
+      )}
 
       <label style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
         <span style={{ fontSize: '0.78rem', fontWeight: 500 }}>
@@ -351,11 +523,6 @@ export function StockTransferDialog({
                 : undefined,
           }}
         >
-          {/*
-            Первая опция — «Без ячейки»: отправляет `toCellId = ''`,
-            handleSubmit вырезает поле из payload, backend трактует как
-            `cellId = null`. Опции конкретных ячеек добавляются ниже.
-          */}
           <option value="">Без ячейки</option>
           {destinationCells.map((c) => (
             <option key={c.id} value={c.id}>
@@ -382,11 +549,11 @@ export function StockTransferDialog({
         </span>
         <input
           type="text"
-          inputMode="decimal"
+          inputMode={selectedKind === 'FINISHED_GOOD' ? 'numeric' : 'decimal'}
           value={qty}
           onChange={(e) => setQty(e.target.value)}
           required
-          placeholder="0.00"
+          placeholder={selectedKind === 'FINISHED_GOOD' ? '1' : '0.00'}
           name="qty"
           style={{
             fontSize: '0.85rem',
@@ -398,7 +565,7 @@ export function StockTransferDialog({
         />
         {selected && (
           <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
-            Доступно: {String(selected.qty)} {selected.unit}
+            Доступно: {String(selectedQty)} {selectedUnit}
           </span>
         )}
       </label>
@@ -429,8 +596,7 @@ export function StockTransferDialog({
 
       {/*
         Preview «Куда» — короткая сводка выбранных склада и ячейки
-        перед submit. Помогает оператору убедиться, что transfer
-        пойдёт в нужную локацию (см. ТЗ §A5).
+        перед submit.
       */}
       {toWarehouseId && (
         <div
