@@ -918,11 +918,86 @@ Stage домены: `stage.teeon.ru` (web) / `stage.teeon.ru/api` (API).
     `SHIPMENT`); в фильтре «Тип движения» появилась опция
     `SHIPMENT → «Отгрузка»` (scope `finished-goods-only`).
   - Сознательно **не реализованы** на этой итерации:
-    отмена / сторно shipment (`cancel` / `reversal`), DRAFT-flow,
-    transfer / adjustment готовой продукции, автоматическая смена
-    `Order.status` при полной отгрузке, отдельный UI-раздел /
-    sidebar / новая роль. Запреты зафиксированы в
-    `tests/smoke/finished-goods-shipments.smoke.test.ts`.
+    DRAFT-flow shipment, transfer / adjustment готовой продукции,
+    автоматическая смена `Order.status` при полной отгрузке,
+    отдельный UI-раздел / sidebar / новая роль. Запреты
+    зафиксированы в `tests/smoke/finished-goods-shipments.smoke.test.ts`.
+    Отмена shipment реализована отдельной итерацией (см. ниже).
+
+  Backend + Frontend-итерация «Отмена / сторно отгрузки готовой
+  продукции»
+  (`prisma/schema.prisma::FinishedGoodsShipment`,
+  `prisma/migrations/20260618100000_finished_goods_shipment_cancel`,
+  `apps/api/src/modules/finished-goods/finished-goods.service.ts::cancelShipment`,
+  `apps/api/src/modules/finished-goods/finished-goods.controller.ts`,
+  `apps/api/src/modules/finished-goods/dto/cancel-finished-goods-shipment.dto.ts`,
+  `apps/web/components/orders/finished-goods/cancel-finished-goods-shipment-button.tsx`,
+  `apps/web/components/orders/finished-goods/finished-goods-shipments-table.tsx`,
+  `apps/web/app/admin/orders/[id]/finished-goods-shipments-actions.ts::cancelFinishedGoodsShipmentAction`,
+  `tests/smoke/finished-goods-shipment-cancel.smoke.test.ts`,
+  `docs/api.md §«Finished goods shipments»`):
+  - решение владельца проекта — **НЕ создавать** отдельную модель
+    `FinishedGoodsShipmentReturn` / `FinishedGoodsShipmentCancel`.
+    Существующий `FinishedGoodsShipment` получает
+    `status = CANCELLED` + новые поля `cancelledAt` / `cancelledById`
+    / `cancelReason`. По каждой `FinishedGoodsShipmentLine`
+    создаётся обратное `FinishedGoodsMovement` `type = REVERSAL,
+    direction = IN` (sourceKey
+    `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`);
+    `FinishedGoodsBalance.qty` атомарно увеличивается обратно через
+    `applyMovementInTx`.
+  - **Частичная отмена сознательно не поддерживается.** Если нужно
+    отгрузить меньше — пользователь отменяет ошибочную отгрузку
+    целиком и создаёт новую корректную частичную отгрузку.
+  - **Идемпотентность повторного cancel-вызова.** Сервис проверяет
+    `shipment.status === 'CANCELLED'` до старта транзакции и
+    возвращает existing detail без новых движений / audit-записи.
+    На уровень movement `FinishedGoodsMovement.sourceKey @unique`
+    подстрахует от race-condition: даже если две одновременные
+    cancel-операции дойдут до создания, вторая получит уникальную
+    ошибку и откатит транзакцию.
+  - **Public API:**
+    `POST /api/finished-goods/shipments/:id/cancel` (RBAC `ADMIN` /
+    `SHOP_MANAGER`). DTO body — `{ reason (2..500) }`. Никаких
+    `lines` / `qty` / `clientRequestId` — частичная отмена и
+    клиентский ключ идемпотентности на этой итерации не нужны.
+    Response — обновлённый `FinishedGoodsShipmentDetailDto` с
+    `status = CANCELLED` и заполненными полями отмены.
+  - **Detail / list response расширен** полями `cancelledAt` /
+    `cancelledById` / `cancelReason` (`null` для POSTED-документов).
+    `sourceKey` по-прежнему сознательно не отдаётся.
+  - **Audit** `FINISHED_GOODS_SHIPMENT_CANCELLED`
+    (`entityType = FINISHED_GOODS_SHIPMENT`,
+    `entityId = FinishedGoodsShipment.id`) пишется в той же
+    транзакции, что и `status → CANCELLED` + N движений REVERSAL IN.
+    Payload — `{ finishedGoodsShipmentId, number, orderId,
+    cancelledAt, cancelReason, lines: [{
+    finishedGoodsShipmentLineId, finishedGoodsBalanceId, productId,
+    sizeId, color, warehouseId, cellId, qty }], employeeId,
+    timestamp }`.
+  - **UI.** В существующем блоке «Отгрузка готовой продукции» во
+    вкладке «Производство» карточки заказа: для `POSTED`-shipment
+    рядом со строкой появилась inline-кнопка «Отменить» →
+    раскрывает форму с textarea «Причина отмены» (2..500) и
+    предупреждение «Отмена вернёт всю отгруженную готовую продукцию
+    на склад. Исходная отгрузка останется в истории со статусом
+    „Отменена“». Submit идёт через server action
+    `cancelFinishedGoodsShipmentAction`. Для `CANCELLED`-shipment
+    кнопка скрыта; в таблице рендерится badge «Отменена» (tone
+    `danger`) + дата отмены + причина. Cancelled-строки **не
+    скрываются** — остаются в истории.
+  - **Order.status автоматически НЕ меняется.** Material
+    `StockBalance` / `StockMovement` / `MaterialIssue` /
+    `PurchaseReceipt` / `StockAdjustment` / `StockTransfer` /
+    `CostsService` / `ProductionCostV2Service` **не затрагиваются**.
+    REVERSAL-движения в `/admin/warehouses?tab=movements`
+    отображаются с типом «Сторно» (`StockMovementTypeBadge` →
+    `REVERSAL`).
+  - Сознательно **не реализованы** на этой итерации:
+    частичная отмена, DRAFT-shipment, отдельный документ возврата,
+    автоматическая смена `Order.status`, новые роли. Запреты
+    зафиксированы в
+    `tests/smoke/finished-goods-shipment-cancel.smoke.test.ts`.
 
   Backend + Frontend-итерация «Давальческое сырьё клиента»
   (`prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,

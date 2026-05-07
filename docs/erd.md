@@ -344,12 +344,15 @@
 - **`FinishedGoodsShipment`** — документ отгрузки готовой продукции
   из карточки заказа (см. `docs/current-state.md §«Отгрузка готовой
   продукции»`). `id`, `number String @unique` (`S-YYYYMMDD-NNNN`),
-  `orderId`, `status: String @default("POSTED")` (на MVP всегда
-  POSTED), `shippedAt`, `comment?`, `sourceKey String? @unique`
+  `orderId`, `status: String @default("POSTED")` (`POSTED` /
+  `CANCELLED`), `shippedAt`, `comment?`, `cancelledAt?`,
+  `cancelledById?`, `cancelReason?` (заполняются при
+  `status = CANCELLED`), `sourceKey String? @unique`
   (`FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`,
   идемпотентность повторного submit), `createdAt`, `createdById?`.
   Связи: `order → Order` (Cascade), `lines: FinishedGoodsShipmentLine[]`.
-  Индексы: `orderId`, `status`, `shippedAt`, `createdAt`.
+  Индексы: `orderId`, `status`, `shippedAt`, `createdAt`,
+  `cancelledAt`.
 - **`FinishedGoodsShipmentLine`** — строка документа отгрузки.
   `id`, `finishedGoodsShipmentId`, `finishedGoodsBalanceId?` (snapshot
   к балансу — `SetNull` при удалении баланса), `orderId`, `productId`,
@@ -382,8 +385,15 @@
   `FinishedGoodsMovement` SHIPMENT OUT в одной транзакции,
   атомарно уменьшает балансы). `GET /api/orders/:orderId/finished-goods-shipments`
   и `GET /api/finished-goods/shipments/:id` — read-only detail.
-  Audit `FINISHED_GOODS_SHIPMENT_CREATED`. `Order.status` НЕ меняется
-  автоматически.
+  `POST /api/finished-goods/shipments/:id/cancel` — отмена
+  документа целиком: `status → CANCELLED` +
+  `cancelledAt` / `cancelledById` / `cancelReason` + N обратных
+  `FinishedGoodsMovement` REVERSAL IN (sourceKey
+  `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`); балансы атомарно
+  возвращаются. Идемпотентно по `status === CANCELLED`. Audit
+  `FINISHED_GOODS_SHIPMENT_CREATED` / `FINISHED_GOODS_SHIPMENT_CANCELLED`.
+  `Order.status` НЕ меняется автоматически. Частичная отмена не
+  поддерживается; отдельные модели возврата / сторно НЕ создавались.
 
 <a id="28-qc--wto--defects"></a>
 ### 2.8 QC / WTO / defects

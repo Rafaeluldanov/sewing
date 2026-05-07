@@ -128,7 +128,11 @@ export async function OrderFinishedGoodsShipmentSection({
         />
       )}
 
-      <FinishedGoodsShipmentsTable items={shipments} />
+      <FinishedGoodsShipmentsTable
+        orderId={orderId}
+        canManage={canManage}
+        items={shipments}
+      />
     </AdminCard>
   );
 }

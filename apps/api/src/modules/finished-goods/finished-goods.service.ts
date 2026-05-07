@@ -10,6 +10,7 @@ import { randomUUID } from 'node:crypto';
 import { BusinessException } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import type { CancelFinishedGoodsShipmentDto } from './dto/cancel-finished-goods-shipment.dto.js';
 import type { CreateFinishedGoodsShipmentDto } from './dto/create-finished-goods-shipment.dto.js';
 import type { ListFinishedGoodsBalancesQuery } from './dto/list-finished-goods-balances.dto.js';
 import type { ListFinishedGoodsMovementsQuery } from './dto/list-finished-goods-movements.dto.js';
@@ -19,6 +20,7 @@ import {
   FINISHED_GOODS_MOVEMENT_TYPE,
   FINISHED_GOODS_SOURCE_TYPE,
   buildFinishedGoodsBalanceKey,
+  buildFinishedGoodsShipmentCancelLineSourceKey,
   buildFinishedGoodsShipmentLineSourceKey,
   buildFinishedGoodsShipmentSourceKey,
   buildPassportFinishedGoodsOutputSourceKey,
@@ -781,6 +783,160 @@ export class FinishedGoodsService {
 
     return toShipmentDetailDto(detail);
   }
+
+  /**
+   * Отмена документа отгрузки целиком (см. `docs/api.md §«Finished
+   * goods shipments»`, ТЗ итерации «Отмена / сторно отгрузки»).
+   *
+   * Решение владельца проекта — НЕ создавать отдельную модель
+   * `FinishedGoodsShipmentReturn` / `FinishedGoodsShipmentCancel`.
+   * Существующий документ `FinishedGoodsShipment` получает
+   * `status = CANCELLED` + `cancelledAt` / `cancelledById` /
+   * `cancelReason`; по каждой строке создаётся обратное
+   * `FinishedGoodsMovement` `type = REVERSAL, direction = IN`
+   * (sourceKey `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`).
+   * Балансы атомарно увеличиваются обратно через `applyMovementInTx`.
+   *
+   * Контракт:
+   *   - `404` если документа нет;
+   *   - **idempotent** при повторном вызове на уже отменённом
+   *     документе: возвращаем existing detail, новые движения НЕ
+   *     создаём (защита и на уровне shipment.status, и через
+   *     `sourceKey @unique` movement-а);
+   *   - `409 FINISHED_GOODS_SHIPMENT_INVALID_STATUS` если статус
+   *     неизвестный (на MVP допустимы только POSTED / CANCELLED, но
+   *     поле `status` свободная строка — защищаемся явно);
+   *   - **частичная отмена не поддерживается** — отменяется весь
+   *     документ. Если нужно отгрузить меньше, пользователь отменяет
+   *     ошибочный shipment целиком и создаёт новый корректный.
+   *
+   * Audit `FINISHED_GOODS_SHIPMENT_CANCELLED` пишется в той же
+   * транзакции, что и сам документ + N REVERSAL IN. **Order.status
+   * автоматически НЕ меняется.** Material `StockBalance` /
+   * `StockMovement` / `MaterialIssue` не затрагиваются.
+   */
+  async cancelShipment(
+    id: string,
+    dto: CancelFinishedGoodsShipmentDto,
+    employeeId?: string | null,
+  ): Promise<FinishedGoodsShipmentDetailDto> {
+    const shipment = await this.prisma.finishedGoodsShipment.findUnique({
+      where: { id },
+      include: SHIPMENT_DETAIL_INCLUDE,
+    });
+    if (!shipment) {
+      throw new BusinessException(
+        'FINISHED_GOODS_SHIPMENT_NOT_FOUND',
+        'Документ отгрузки готовой продукции не найден.',
+        HttpStatus.NOT_FOUND,
+      );
+    }
+
+    // Idempotent re-cancel: возвращаем existing detail, не пишем
+    // новые движения и не повторяем audit. UNIQUE на
+    // `FinishedGoodsMovement.sourceKey` всё равно подстрахует от
+    // дубликатов на race-condition.
+    if (shipment.status === 'CANCELLED') {
+      return toShipmentDetailDto(shipment);
+    }
+    if (shipment.status !== 'POSTED') {
+      throw new BusinessException(
+        'FINISHED_GOODS_SHIPMENT_INVALID_STATUS',
+        `Нельзя отменить документ отгрузки в статусе ${shipment.status}. Ожидался POSTED.`,
+        HttpStatus.CONFLICT,
+      );
+    }
+
+    const cancelledAt = new Date();
+    const reason = dto.reason;
+
+    const detail = await this.prisma.$transaction(async (tx) => {
+      // 1. Помечаем документ как отменённый.
+      await tx.finishedGoodsShipment.update({
+        where: { id: shipment.id },
+        data: {
+          status: 'CANCELLED',
+          cancelledAt,
+          cancelledById: employeeId ?? null,
+          cancelReason: reason,
+        },
+      });
+
+      // 2. Для каждой строки — обратное движение REVERSAL IN.
+      // Идемпотентность по `sourceKey @unique`: повторный вызов
+      // (race / retry внутри транзакции) на ту же строку вернёт
+      // существующее движение и баланс повторно не апдейтит — это
+      // ровно поведение `applyMovementInTx`.
+      for (const line of shipment.lines) {
+        await this.applyMovementInTx(tx, {
+          orderId: line.orderId,
+          productId: line.productId,
+          sizeId: line.sizeId,
+          color: line.color,
+          warehouseId: line.warehouseId,
+          cellId: line.cellId,
+          type: FINISHED_GOODS_MOVEMENT_TYPE.REVERSAL,
+          direction: FINISHED_GOODS_MOVEMENT_DIRECTION.IN,
+          qty: line.qty,
+          sourceType:
+            FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_SHIPMENT_CANCEL_LINE,
+          sourceId: line.id,
+          sourceKey: buildFinishedGoodsShipmentCancelLineSourceKey(line.id),
+          comment: `Отмена отгрузки готовой продукции: ${reason}`,
+          createdById: employeeId ?? null,
+        });
+      }
+
+      // 3. Audit пишется в той же транзакции — либо документ
+      // (status=CANCELLED) + N REVERSAL IN + AuditLog атомарно, либо
+      // ничего.
+      await this.audit.log(
+        {
+          event: 'FINISHED_GOODS_SHIPMENT_CANCELLED',
+          entityType: 'FINISHED_GOODS_SHIPMENT',
+          entityId: shipment.id,
+          employeeId: employeeId ?? null,
+          payload: {
+            finishedGoodsShipmentId: shipment.id,
+            number: shipment.number,
+            orderId: shipment.orderId,
+            cancelledAt: cancelledAt.toISOString(),
+            cancelReason: reason,
+            lines: shipment.lines.map((line) => ({
+              finishedGoodsShipmentLineId: line.id,
+              finishedGoodsBalanceId: line.finishedGoodsBalanceId,
+              productId: line.productId,
+              sizeId: line.sizeId,
+              color: line.color,
+              warehouseId: line.warehouseId,
+              cellId: line.cellId,
+              qty: line.qty,
+            })),
+            employeeId: employeeId ?? null,
+            timestamp: cancelledAt.toISOString(),
+          } as Prisma.InputJsonValue,
+        },
+        tx,
+      );
+
+      this.logger.log(
+        `event=finished_goods.shipment.cancel shipmentId=${shipment.id} ` +
+          `number=${shipment.number} orderId=${shipment.orderId} ` +
+          `lines=${shipment.lines.length} totalQty=${shipment.lines.reduce(
+            (acc, l) => acc + l.qty,
+            0,
+          )}`,
+      );
+
+      const reloaded = await tx.finishedGoodsShipment.findUniqueOrThrow({
+        where: { id: shipment.id },
+        include: SHIPMENT_DETAIL_INCLUDE,
+      });
+      return reloaded;
+    });
+
+    return toShipmentDetailDto(detail);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1033,6 +1189,15 @@ export interface FinishedGoodsShipmentDetailDto {
   comment: string | null;
   createdAt: string;
   createdById: string | null;
+  /**
+   * Поля отмены отгрузки. Если `status === 'CANCELLED'` — все три
+   * заполнены; если `status === 'POSTED'` — все три `null`. См.
+   * `FinishedGoodsService.cancelShipment` и
+   * `prisma/schema.prisma::FinishedGoodsShipment`.
+   */
+  cancelledAt: string | null;
+  cancelledById: string | null;
+  cancelReason: string | null;
   lines: FinishedGoodsShipmentLineDto[];
   // sourceKey намеренно не возвращается — внутренний идемпотентный ключ
   // (FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>).
@@ -1050,6 +1215,9 @@ function toShipmentDetailDto(
     comment: row.comment,
     createdAt: row.createdAt.toISOString(),
     createdById: row.createdById,
+    cancelledAt: row.cancelledAt ? row.cancelledAt.toISOString() : null,
+    cancelledById: row.cancelledById,
+    cancelReason: row.cancelReason,
     lines: row.lines.map((line) => ({
       id: line.id,
       finishedGoodsBalanceId: line.finishedGoodsBalanceId,

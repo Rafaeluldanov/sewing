@@ -1318,7 +1318,7 @@ DTO: `packages/shared/src/packing.ts`. Side-effect: на сервисе
 | ----- | --------------------------------- | ------------------- | -------- |
 | GET   | `/api/finished-goods/balances`    | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsBalancesQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `q` (substring по `color`), `positiveOnly` / `negativeOnly` / `zeroOnly` (взаимоисключающие), `limit` (default 50, max 200), `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `balanceKey`, `orderId`, `orderNumber`, `clientId`, `clientName` (через `Order.client → Client`), `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `lastMovementAt`, `updatedAt`. |
 | GET   | `/api/finished-goods/movements`   | ADMIN, SHOP_MANAGER | List `ListFinishedGoodsMovementsQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`, `type` ∈ `PRODUCTION_RECEIPT \| REVERSAL \| ADJUSTMENT \| SHIPMENT \| TRANSFER`, `direction` ∈ `IN \| OUT`, `passportId`, `boxId`, `from` / `to` (ISO-8601), `limit`, `offset`. Response: `{ items, total, limit, offset }`. Item: `id`, `finishedGoodsBalanceId`, `type`, `direction`, `orderId`, `orderNumber`, `clientId`, `clientName` (через `Order.client → Client`), `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `sourceType`, `sourceId`, `passportId`, `boxId`, `comment`, `createdById`, `createdAt`. |
-| GET   | `/api/finished-goods/shipments/:id` | ADMIN, SHOP_MANAGER | Detail документа отгрузки. Response — `FinishedGoodsShipmentDetailDto`: `id`, `number`, `orderId`, `status` (на MVP всегда `POSTED`), `shippedAt`, `comment`, `createdAt`, `createdById`, `lines: [{ id, finishedGoodsBalanceId, productId, productName, sizeId, sizeCode, color, warehouseId, warehouseName, cellId, cellCode, qty, comment }]`. |
+| GET   | `/api/finished-goods/shipments/:id` | ADMIN, SHOP_MANAGER | Detail документа отгрузки. Response — `FinishedGoodsShipmentDetailDto`: `id`, `number`, `orderId`, `status` (`POSTED` \| `CANCELLED`), `shippedAt`, `comment`, `createdAt`, `createdById`, `cancelledAt`, `cancelledById`, `cancelReason` (заполнены при `status = CANCELLED`, иначе `null`), `lines: [{ id, finishedGoodsBalanceId, productId, productName, sizeId, sizeCode, color, warehouseId, warehouseName, cellId, cellCode, qty, comment }]`. |
 
 `sourceKey` сознательно **не возвращается** ни для движений, ни для
 shipment-документа — это внутренний идемпотентный технический ключ.
@@ -1356,8 +1356,9 @@ Audit:
 
 | Метод | Путь                                             | RBAC                | Описание |
 | ----- | ------------------------------------------------ | ------------------- | -------- |
-| GET   | `/api/orders/:orderId/finished-goods-shipments`  | ADMIN, SHOP_MANAGER | Список документов отгрузки по заказу (`FinishedGoodsShipmentDetailDto[]`), сортировка `shippedAt desc, createdAt desc, id desc`. |
+| GET   | `/api/orders/:orderId/finished-goods-shipments`  | ADMIN, SHOP_MANAGER | Список документов отгрузки по заказу (`FinishedGoodsShipmentDetailDto[]`, включая статус, `cancelledAt`, `cancelReason`), сортировка `shippedAt desc, createdAt desc, id desc`. CANCELLED-документы НЕ скрываются. |
 | POST  | `/api/orders/:orderId/finished-goods-shipments`  | ADMIN, SHOP_MANAGER | Body — `CreateFinishedGoodsShipmentDto`: `{ shippedAt? (ISO datetime), comment? (max 500), clientRequestId? (max 128), lines: [{ finishedGoodsBalanceId, qty (int > 0), comment? (max 500) }] }`. Минимум одна строка. `orderId` берётся из URL. Response — созданный (или existing для повторного `clientRequestId`) `FinishedGoodsShipmentDetailDto`. |
+| POST  | `/api/finished-goods/shipments/:id/cancel`       | ADMIN, SHOP_MANAGER | Отмена ранее проведённого документа целиком. Body — `CancelFinishedGoodsShipmentDto`: `{ reason (2..500) }`. Документ получает `status = CANCELLED` + `cancelledAt` / `cancelledById` / `cancelReason`; по каждой строке создаётся `FinishedGoodsMovement` `type = REVERSAL, direction = IN` (sourceKey `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`); `FinishedGoodsBalance.qty` атомарно увеличивается обратно. Idempotent при повторном вызове на CANCELLED-документе — возвращает existing detail без новых движений. **Частичная отмена не поддерживается.** Order.status / material stock не меняются. Response — обновлённый `FinishedGoodsShipmentDetailDto`. |
 
 Идемпотентность POST — `FinishedGoodsShipment.sourceKey @unique`
 (`FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`). Повторный
@@ -1379,23 +1380,40 @@ submit формы (двойной клик / network retry) с тем же
 - `FINISHED_GOODS_INSUFFICIENT_BALANCE` (409) — конкурентная
   отгрузка успела увести остаток ниже нуля (защита внутри
   `applyMovementInTx`); транзакция полностью откатывается;
+- `FINISHED_GOODS_SHIPMENT_NOT_FOUND` (404) — на cancel: документа
+  с таким `id` нет;
+- `FINISHED_GOODS_SHIPMENT_INVALID_STATUS` (409) — на cancel:
+  документ не в статусе `POSTED` (и не `CANCELLED` — last для
+  идемпотентности возвращает existing detail);
 - `ORDER_NOT_FOUND` (404) — заказа нет.
 
-Audit `FINISHED_GOODS_SHIPMENT_CREATED` (entityType
-`FINISHED_GOODS_SHIPMENT`, entityId — `FinishedGoodsShipment.id`)
-пишется в той же транзакции, что и сам документ + N
-`FinishedGoodsMovement` SHIPMENT OUT. Payload —
-`{ finishedGoodsShipmentId, number, orderId, shippedAt, comment,
-lines: [{ finishedGoodsShipmentLineId, finishedGoodsBalanceId,
-productId, sizeId, color, warehouseId, cellId, qty }], employeeId,
-timestamp }`.
+Audit-события (entityType `FINISHED_GOODS_SHIPMENT`, entityId —
+`FinishedGoodsShipment.id`):
+- `FINISHED_GOODS_SHIPMENT_CREATED` пишется в той же транзакции,
+  что и сам документ + N `FinishedGoodsMovement` SHIPMENT OUT.
+  Payload — `{ finishedGoodsShipmentId, number, orderId, shippedAt,
+  comment, lines: [{ finishedGoodsShipmentLineId,
+  finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
+  cellId, qty }], employeeId, timestamp }`.
+- `FINISHED_GOODS_SHIPMENT_CANCELLED` пишется в той же транзакции,
+  что и `status → CANCELLED` + N `FinishedGoodsMovement` REVERSAL IN.
+  Payload — `{ finishedGoodsShipmentId, number, orderId, cancelledAt,
+  cancelReason, lines: [{ finishedGoodsShipmentLineId,
+  finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
+  cellId, qty }], employeeId, timestamp }`. Идемпотентен — повторный
+  cancel-вызов на уже отменённом документе audit заново не пишет.
 
 Сознательно **не реализованы** на этой итерации (см.
 `docs/current-state.md §«Отгрузка готовой продукции»`):
-- отмена / сторно shipment (`cancel` / `reversal`);
+- частичная отмена shipment — пользователь отменяет ошибочный
+  shipment целиком и создаёт новый корректный;
+- отдельные модели `FinishedGoodsShipmentReturn` /
+  `FinishedGoodsShipmentCancel` — отмена решена через
+  `status = CANCELLED` + REVERSAL IN, без нового документа;
 - DRAFT-flow shipment;
 - transfer / adjustment готовой продукции;
-- автоматическая смена `Order.status` при полной отгрузке;
+- автоматическая смена `Order.status` при полной отгрузке /
+  отмене shipment;
 - материальный stock не затрагивается.
 
 ---

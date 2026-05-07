@@ -26,6 +26,7 @@
 import { revalidatePath } from 'next/cache';
 import { ApiRequestError } from '@/lib/api';
 import {
+  cancelFinishedGoodsShipment,
   createOrderFinishedGoodsShipment,
   type CreateFinishedGoodsShipmentDto,
 } from '@/lib/finished-goods-api';
@@ -164,6 +165,60 @@ export async function createFinishedGoodsShipmentAction(
     return {
       ok: false,
       error: explainApiError(e, 'Не удалось создать отгрузку готовой продукции'),
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// CANCEL — отмена документа отгрузки целиком (см.
+// `apps/api/src/modules/finished-goods/finished-goods.service.ts::cancelShipment`).
+// Документ получает `status = CANCELLED`, по каждой строке создаётся
+// `FinishedGoodsMovement` REVERSAL IN — `FinishedGoodsBalance.qty`
+// атомарно увеличивается обратно. Idempotent при повторном вызове.
+// ---------------------------------------------------------------------------
+
+/**
+ * Сигнатура совместима с `useFormState` + `bind(null, orderId,
+ * shipmentId)`: `(orderId, shipmentId, prev, formData) → next`.
+ *
+ * Поля FormData:
+ *   - `reason` (required, 2..500) — причина отмены, попадает в
+ *     `FinishedGoodsShipment.cancelReason` и в audit-payload.
+ */
+export async function cancelFinishedGoodsShipmentAction(
+  orderId: string,
+  shipmentId: string,
+  _prev: FinishedGoodsShipmentFormState,
+  form: FormData,
+): Promise<FinishedGoodsShipmentFormState> {
+  const reasonRaw = form.get('reason');
+  const reason = typeof reasonRaw === 'string' ? reasonRaw.trim() : '';
+  if (reason.length < 2) {
+    return {
+      ok: false,
+      error: 'Укажите причину отмены отгрузки (минимум 2 символа).',
+    };
+  }
+  if (reason.length > 500) {
+    return {
+      ok: false,
+      error: 'Причина отмены не должна превышать 500 символов.',
+    };
+  }
+
+  try {
+    const cancelled = await cancelFinishedGoodsShipment(shipmentId, { reason });
+    revalidateOrder(orderId);
+    return {
+      ok: true,
+      createdId: cancelled.id,
+      createdNumber: cancelled.number,
+      successMessage: `Документ отгрузки ${cancelled.number} отменён.`,
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e, 'Не удалось отменить отгрузку готовой продукции'),
     };
   }
 }

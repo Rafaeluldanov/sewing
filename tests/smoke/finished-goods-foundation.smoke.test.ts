@@ -297,19 +297,22 @@ test('MaterialIssuesService не изменён под готовую проду
 // 7. Не реализованы transfer / adjustment / новый UI-раздел
 // ---------------------------------------------------------------------------
 
-test('Отгрузка готовой продукции — реализована из карточки заказа (см. createShipmentForOrder)', () => {
+test('Отгрузка готовой продукции и отмена — реализованы из карточки заказа', () => {
   // Итерация «Отгрузка готовой продукции» добавила POST
-  // /api/orders/:orderId/finished-goods-shipments. Проверка-гарантия:
-  // SHIPMENT writer существует (через `applyMovementInTx`), но это
-  // единственная допустимая мутация SHIPMENT (cancel/reversal не
-  // реализованы — см. отдельный smoke
-  // tests/smoke/finished-goods-shipments.smoke.test.ts).
+  // /api/orders/:orderId/finished-goods-shipments; итерация
+  // «Отмена / сторно отгрузки» — POST /api/finished-goods/shipments/:id/cancel.
+  // Cancel реализуется БЕЗ создания нового документа: тот же
+  // FinishedGoodsShipment получает status=CANCELLED + REVERSAL IN
+  // (см. `tests/smoke/finished-goods-shipment-cancel.smoke.test.ts`).
   const src = read(FG_SERVICE);
   expect(src).toMatch(/createShipmentForOrder/);
   expect(src).toMatch(/FINISHED_GOODS_MOVEMENT_TYPE\.SHIPMENT/);
-  // Cancel / reversal shipment по-прежнему не реализованы.
-  expect(src).not.toMatch(/cancelShipment/);
-  expect(src).not.toMatch(/reverseShipment/);
+  expect(src).toMatch(/cancelShipment/);
+  expect(src).toMatch(/FINISHED_GOODS_MOVEMENT_TYPE\.REVERSAL/);
+  // Отдельных моделей-документов отмены НЕ появилось — итерация
+  // решена через status=CANCELLED + REVERSAL IN.
+  expect(src).not.toMatch(/finishedGoodsShipmentReturn/);
+  expect(src).not.toMatch(/finishedGoodsShipmentCancel\b\./);
 });
 
 test('Не реализован transfer готовой продукции', () => {

@@ -8,19 +8,26 @@
  * `apps/web/lib/finished-goods-api.ts::listOrderFinishedGoodsShipments`).
  *
  * Каждая строка раскрывается в список номенклатуры (productName /
- * color / sizeCode + qty + warehouse / cell). Cancel / reversal на
- * этой итерации сознательно не реализованы (см. ТЗ §«Не
- * реализовывать отмену shipment»).
+ * color / sizeCode + qty + warehouse / cell). Для статуса
+ * `POSTED` доступна inline-кнопка «Отменить» (см.
+ * `CancelFinishedGoodsShipmentButton`); для статуса `CANCELLED`
+ * показывается badge «Отменена» + причина отмены и дата. Cancelled
+ * строки сознательно НЕ скрываются — они остаются в истории.
  */
+import { Ban, Truck } from 'lucide-react';
 import {
   AdminEmptyState,
+  AdminStatusBadge,
   AdminTable,
   type AdminTableColumn,
 } from '@/components/admin';
-import { Truck } from 'lucide-react';
 import type { FinishedGoodsShipmentDetailDto } from '@/lib/finished-goods-api';
+import { CancelFinishedGoodsShipmentButton } from './cancel-finished-goods-shipment-button';
 
 interface Props {
+  orderId: string;
+  /** ADMIN / SHOP_MANAGER — определяет видимость кнопки «Отменить». */
+  canManage: boolean;
   items: FinishedGoodsShipmentDetailDto[];
 }
 
@@ -34,7 +41,8 @@ function formatLineName(line: FinishedGoodsShipmentDetailDto['lines'][number]): 
   return parts.join(' / ');
 }
 
-function formatDate(iso: string): string {
+function formatDate(iso: string | null | undefined): string {
+  if (!iso) return '—';
   try {
     const d = new Date(iso);
     if (Number.isNaN(d.getTime())) return '—';
@@ -50,7 +58,11 @@ function formatDate(iso: string): string {
   }
 }
 
-export function FinishedGoodsShipmentsTable({ items }: Props) {
+export function FinishedGoodsShipmentsTable({
+  orderId,
+  canManage,
+  items,
+}: Props) {
   if (items.length === 0) {
     return (
       <AdminEmptyState
@@ -71,6 +83,49 @@ export function FinishedGoodsShipmentsTable({ items }: Props) {
       key: 'number',
       header: 'Номер',
       render: (s) => <span className="admin-table__primary">{s.number}</span>,
+    },
+    {
+      key: 'status',
+      header: 'Статус',
+      render: (s) => {
+        if (s.status === 'CANCELLED') {
+          return (
+            <div data-status="CANCELLED">
+              <AdminStatusBadge tone="danger">
+                <Ban
+                  size={12}
+                  strokeWidth={1.6}
+                  aria-hidden
+                  style={{ marginRight: 4, verticalAlign: 'middle' }}
+                />
+                Отменена
+              </AdminStatusBadge>
+              {s.cancelledAt && (
+                <div
+                  className="admin-muted"
+                  style={{ fontSize: '0.8rem', marginTop: 2 }}
+                >
+                  {formatDate(s.cancelledAt)}
+                </div>
+              )}
+              {s.cancelReason && (
+                <div
+                  className="admin-muted"
+                  style={{ fontSize: '0.8rem', marginTop: 2 }}
+                  title={s.cancelReason}
+                >
+                  Причина: {s.cancelReason}
+                </div>
+              )}
+            </div>
+          );
+        }
+        return (
+          <div data-status="POSTED">
+            <AdminStatusBadge tone="success">Проведена</AdminStatusBadge>
+          </div>
+        );
+      },
     },
     {
       key: 'lines',
@@ -103,6 +158,22 @@ export function FinishedGoodsShipmentsTable({ items }: Props) {
       header: 'Комментарий',
       render: (s) =>
         s.comment ? <span>{s.comment}</span> : <span className="admin-muted">—</span>,
+    },
+    {
+      key: 'actions',
+      header: '',
+      isAction: true,
+      render: (s) => {
+        if (!canManage) return null;
+        if (s.status !== 'POSTED') return null;
+        return (
+          <CancelFinishedGoodsShipmentButton
+            orderId={orderId}
+            shipmentId={s.id}
+            shipmentNumber={s.number}
+          />
+        );
+      },
     },
   ];
 

@@ -736,10 +736,30 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
 - audit `FINISHED_GOODS_SHIPMENT_CREATED` (`entityType =
   FINISHED_GOODS_SHIPMENT`).
 
+Что добавлено итерацией «Отмена / сторно отгрузки готовой продукции»:
+- `FinishedGoodsShipment` расширен полями `cancelledAt` /
+  `cancelledById` / `cancelReason` (миграция
+  `20260618100000_finished_goods_shipment_cancel`);
+- API: `POST /api/finished-goods/shipments/:id/cancel` (RBAC
+  ADMIN / SHOP_MANAGER), body `{ reason }` (2..500);
+- по каждой `FinishedGoodsShipmentLine` создаётся обратное
+  `FinishedGoodsMovement type = REVERSAL, direction = IN` с
+  `sourceKey FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`;
+  `FinishedGoodsBalance.qty` атомарно увеличивается обратно;
+- идемпотентность повторного cancel-вызова — `shipment.status ===
+  CANCELLED` возвращает existing detail без новых движений;
+- UI кнопка «Отменить» в существующем блоке «Отгрузка готовой
+  продукции» карточки заказа (для `POSTED`-документов); badge
+  «Отменена» + `cancelReason` для `CANCELLED`;
+- audit `FINISHED_GOODS_SHIPMENT_CANCELLED`.
+
 Чего нет на этой итерации (отдельный backlog по готовой продукции):
-- отмена / сторно shipment (`cancel` / `reversal`) — нет в
-  `FinishedGoodsService` и нет публичного эндпоинта;
-- DRAFT-flow shipment (на MVP всегда POSTED);
+- частичная отмена shipment — пользователь отменяет ошибочный
+  shipment целиком и создаёт новый корректный;
+- отдельные модели `FinishedGoodsShipmentReturn` /
+  `FinishedGoodsShipmentCancel` — отмена решена через
+  `status = CANCELLED` + REVERSAL IN, без нового документа;
+- DRAFT-flow shipment (на MVP всегда POSTED → CANCELLED);
 - автоматическая смена `Order.status` при полной отгрузке —
   сознательное решение, статус заказа меняется только через
   `POST /api/orders/:id/complete`;
@@ -752,6 +772,41 @@ ownership-поля, `MaterialStockLot`, master `Material` и FIFO / LIFO
   существующий `cellId` баланса);
 - UI-раздел `/admin/finished-goods` / sidebar item / отчёт;
 - новые роли (RBAC ограничен `ADMIN` / `SHOP_MANAGER`).
+
+### Как проверить «Отмену отгрузки готовой продукции»
+
+1. Создать `FinishedGoodsShipment` (см. сценарий «Отгрузка готовой
+   продукции из заказа» ниже). Запомнить `shipment.id`,
+   `shipment.number` и текущие `FinishedGoodsBalance.qty` строк
+   (после отгрузки они уменьшились).
+2. В блоке «История отгрузок» в `/admin/orders/[id]?tab=production`
+   убедиться, что у строки статус «Проведена» и видна кнопка
+   «Отменить». Нажать.
+3. В форме указать причину отмены (минимум 2 символа), нажать
+   «Отменить отгрузку».
+4. Проверить:
+   - `FinishedGoodsShipment.status = CANCELLED`,
+     `cancelledAt` / `cancelledById` / `cancelReason` заполнены
+     (см. detail `GET /api/finished-goods/shipments/:id`);
+   - на каждую строку создалось `FinishedGoodsMovement`
+     `type = REVERSAL, direction = IN` с `sourceType =
+     FINISHED_GOODS_SHIPMENT_CANCEL_LINE`,
+     `sourceId = shipmentLine.id`;
+   - `FinishedGoodsBalance.qty` восстановился до значения **до
+     отгрузки** (исходный SHIPMENT OUT остаётся в журнале — это
+     корректное историческое движение).
+5. В блоке «История отгрузок» строка теперь со статусом
+   «Отменена», виден `cancelReason` и дата отмены. Кнопка
+   «Отменить» больше не показывается.
+6. В `/admin/warehouses?tab=movements` появилась строка REVERSAL
+   IN с типом «Сторно», правильной номенклатурой / заказом /
+   заказчиком. Comment содержит причину отмены.
+7. Повторно дёрнуть `POST /api/finished-goods/shipments/:id/cancel`
+   с любым reason — backend возвращает существующий detail; новых
+   движений / списаний / audit-записей НЕ создаётся (idempotent
+   при `status === CANCELLED`).
+8. Проверить, что `Order.status` после отмены **остался прежним**
+   и что material `StockBalance` / `StockMovement` не изменились.
 
 ### Как проверить «Отгрузку готовой продукции из заказа»
 

@@ -1,7 +1,12 @@
-import { Controller, Get, Param, Query } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import {
+  CancelFinishedGoodsShipmentSchema,
+  type CancelFinishedGoodsShipmentDto,
+} from './dto/cancel-finished-goods-shipment.dto.js';
 import {
   ListFinishedGoodsBalancesQuerySchema,
   type ListFinishedGoodsBalancesQuery,
@@ -68,5 +73,29 @@ export class FinishedGoodsController {
   @Get('shipments/:id')
   getShipment(@Param('id') id: string) {
     return this.finishedGoods.getShipmentDetail(id);
+  }
+
+  /**
+   * Отмена документа отгрузки готовой продукции (см.
+   * `FinishedGoodsService.cancelShipment`,
+   * `docs/api.md §«Finished goods shipments»`).
+   *
+   * Тело — `{ reason }`, body-only DTO. Идемпотентно по
+   * `shipment.status === 'CANCELLED'`. По каждой строке создаётся
+   * `FinishedGoodsMovement` `type = REVERSAL, direction = IN`
+   * (sourceKey `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`),
+   * `FinishedGoodsBalance.qty` атомарно увеличивается обратно.
+   *
+   * RBAC — `ADMIN` / `SHOP_MANAGER` (наследуется от `@Roles` на
+   * классе).
+   */
+  @Post('shipments/:id/cancel')
+  cancelShipment(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(CancelFinishedGoodsShipmentSchema))
+    dto: CancelFinishedGoodsShipmentDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.finishedGoods.cancelShipment(id, dto, user.employeeId);
   }
 }

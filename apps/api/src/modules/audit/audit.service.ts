@@ -434,12 +434,23 @@ export type AuditEntityType =
    *     finishedGoodsBalanceId, productId, sizeId, color,
    *     warehouseId, cellId, qty }], employeeId, timestamp }`.
    *     Пишется в той же транзакции, что и сам документ + N
-   *     `FinishedGoodsMovement` SHIPMENT OUT.
+   *     `FinishedGoodsMovement` SHIPMENT OUT;
+   *   - `FINISHED_GOODS_SHIPMENT_CANCELLED` — менеджер отменил ранее
+   *     проведённый документ (`POST /api/finished-goods/shipments/:id/cancel`).
+   *     `entityId = FinishedGoodsShipment.id`. Payload —
+   *     `{ finishedGoodsShipmentId, number, orderId, cancelledAt,
+   *     cancelReason, lines: [{ finishedGoodsShipmentLineId,
+   *     finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
+   *     cellId, qty }], employeeId, timestamp }`. Пишется в той же
+   *     транзакции, что и `status → CANCELLED` + N
+   *     `FinishedGoodsMovement` REVERSAL IN.
    *
    * Идемпотентно: повторный submit с тем же `clientRequestId`
    * возвращает существующий документ и audit заново НЕ пишет
    * (защита по `FinishedGoodsShipment.sourceKey @unique` =
-   * `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`).
+   * `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`). Повторный
+   * cancel-вызов на уже отменённом документе тоже идемпотентен —
+   * сервис возвращает existing detail и event заново НЕ пишет.
    */
   | 'FINISHED_GOODS_SHIPMENT';
 

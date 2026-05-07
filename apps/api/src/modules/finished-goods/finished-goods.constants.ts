@@ -49,6 +49,16 @@ export const FINISHED_GOODS_MOVEMENT_DIRECTIONS = Object.values(
 export const FINISHED_GOODS_SOURCE_TYPE = {
   PACKED_PASSPORT: 'PACKED_PASSPORT',
   FINISHED_GOODS_SHIPMENT_LINE: 'FINISHED_GOODS_SHIPMENT_LINE',
+  /**
+   * Отмена строки shipment-документа: обратное движение
+   * `type = REVERSAL, direction = IN` по каждой
+   * `FinishedGoodsShipmentLine` отменяемого документа. Возвращает
+   * `FinishedGoodsBalance.qty` к значению до отгрузки. Используется
+   * вместо отдельной модели `FinishedGoodsShipmentReturn` —
+   * сознательное упрощение MVP (см.
+   * `FinishedGoodsService.cancelShipment`).
+   */
+  FINISHED_GOODS_SHIPMENT_CANCEL_LINE: 'FINISHED_GOODS_SHIPMENT_CANCEL_LINE',
 } as const;
 export type FinishedGoodsSourceType =
   (typeof FINISHED_GOODS_SOURCE_TYPE)[keyof typeof FINISHED_GOODS_SOURCE_TYPE];
@@ -108,6 +118,21 @@ export function buildFinishedGoodsShipmentLineSourceKey(
   shipmentLineId: string,
 ): string {
   return `${FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_SHIPMENT_LINE}:${shipmentLineId}`;
+}
+
+/**
+ * `sourceKey` для обратного движения отмены отгрузки
+ * (`type = REVERSAL, direction = IN`). Один shipment-line → одно
+ * cancel-движение. UNIQUE на `FinishedGoodsMovement.sourceKey`
+ * гарантирует, что повторный вызов `cancelShipment` не задвоит
+ * REVERSAL и не удвоит `FinishedGoodsBalance.qty` (idempotency
+ * уровня movement; уровень документа защищён проверкой
+ * `status === CANCELLED`).
+ */
+export function buildFinishedGoodsShipmentCancelLineSourceKey(
+  shipmentLineId: string,
+): string {
+  return `${FINISHED_GOODS_SOURCE_TYPE.FINISHED_GOODS_SHIPMENT_CANCEL_LINE}:${shipmentLineId}`;
 }
 
 /**

@@ -237,11 +237,16 @@ export interface FinishedGoodsShipmentDetailDto {
   id: string;
   number: string;
   orderId: string;
+  /** На MVP допустимы значения `POSTED` и `CANCELLED`. */
   status: string;
   shippedAt: string;
   comment: string | null;
   createdAt: string;
   createdById: string | null;
+  /** Заполняется одновременно при `status = CANCELLED`. */
+  cancelledAt: string | null;
+  cancelledById: string | null;
+  cancelReason: string | null;
   lines: FinishedGoodsShipmentLineDto[];
   // sourceKey намеренно не объявлен — backend его не отдаёт.
 }
@@ -290,5 +295,28 @@ export function getFinishedGoodsShipment(
   return apiFetch<FinishedGoodsShipmentDetailDto>(
     `/finished-goods/shipments/${encodeURIComponent(id)}`,
     { cache: 'no-store' },
+  );
+}
+
+/**
+ * Body для `POST /api/finished-goods/shipments/:id/cancel`. UI
+ * собирает только `reason` (2..500); никаких lines / qty —
+ * частичная отмена не поддерживается на этой итерации (см.
+ * `FinishedGoodsService.cancelShipment`).
+ */
+export interface CancelFinishedGoodsShipmentDto {
+  reason: string;
+}
+
+export function cancelFinishedGoodsShipment(
+  id: string,
+  body: CancelFinishedGoodsShipmentDto,
+): Promise<FinishedGoodsShipmentDetailDto> {
+  return apiFetch<FinishedGoodsShipmentDetailDto>(
+    `/finished-goods/shipments/${encodeURIComponent(id)}/cancel`,
+    {
+      method: 'POST',
+      body,
+    },
   );
 }

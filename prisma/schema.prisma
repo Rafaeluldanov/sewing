@@ -5265,12 +5265,27 @@ model FinishedGoodsShipment {
   number String @unique
 
   orderId String
-  /// На MVP всегда `POSTED`. Зарезервировано строкой, чтобы не
-  /// плодить миграции при появлении DRAFT / CANCELLED.
+  /// На MVP допустимы два значения: `POSTED` (документ создан, движения
+  /// SHIPMENT OUT записаны) и `CANCELLED` (документ отменён целиком,
+  /// по каждой строке есть обратное `FinishedGoodsMovement` REVERSAL IN
+  /// — sourceKey `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`).
+  /// Частичная отмена сознательно не реализована — пользователь
+  /// отменяет ошибочный shipment целиком и создаёт новый корректный
+  /// частичный shipment (см.
+  /// `FinishedGoodsService.cancelShipment`,
+  /// `docs/current-state.md §«Отгрузка готовой продукции»`).
   status String @default("POSTED")
 
   shippedAt DateTime @default(now())
   comment   String?
+
+  /// Поля отмены отгрузки (см. `cancelShipment` сервиса).
+  /// Если `status = CANCELLED`, все три поля заполняются в той же
+  /// транзакции, что и `FinishedGoodsMovement` REVERSAL IN. Для
+  /// `POSTED`-документа все три остаются `null`.
+  cancelledAt   DateTime?
+  cancelledById String?
+  cancelReason  String?
 
   /// Идемпотентный технический ключ документа.
   /// `FINISHED_GOODS_SHIPMENT:<orderId>:<clientRequestId>`. UNIQUE +
@@ -5288,6 +5303,7 @@ model FinishedGoodsShipment {
   @@index([status])
   @@index([shippedAt])
   @@index([createdAt])
+  @@index([cancelledAt])
 }
 
 /// Строка документа отгрузки готовой продукции (см.

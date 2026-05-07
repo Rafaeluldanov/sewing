@@ -457,10 +457,27 @@ shipment-документ верхнего уровня, независимо о
   finishedGoodsBalanceId, productId, sizeId, color, warehouseId,
   cellId, qty }], employeeId, timestamp }`.
 
-  События `FINISHED_GOODS_SHIPMENT_CANCELLED` /
-  `FINISHED_GOODS_SHIPMENT_REVERSED` на этой итерации **не
-  реализованы** (см. ТЗ — cancel / reversal shipment отдельная
-  будущая итерация).
+- `FINISHED_GOODS_SHIPMENT_CANCELLED` — менеджер отменил ранее
+  проведённый shipment (`POST /api/finished-goods/shipments/:id/cancel`).
+  Документ получает `status = CANCELLED` + `cancelledAt` /
+  `cancelledById` / `cancelReason`; по каждой строке создаётся
+  `FinishedGoodsMovement` `type = REVERSAL, direction = IN`
+  (sourceKey `FINISHED_GOODS_SHIPMENT_CANCEL_LINE:<lineId>`).
+  Пишется в той же транзакции, что и сами обновления документа +
+  REVERSAL IN. Идемпотентно: повторный cancel-вызов на уже
+  отменённом документе возвращает existing detail и event заново
+  НЕ пишет. Payload — `{ finishedGoodsShipmentId, number, orderId,
+  cancelledAt, cancelReason, lines: [{
+  finishedGoodsShipmentLineId, finishedGoodsBalanceId, productId,
+  sizeId, color, warehouseId, cellId, qty }], employeeId,
+  timestamp }`.
+
+  События `FINISHED_GOODS_SHIPMENT_REVERSED` (отдельный документ
+  возврата), `FINISHED_GOODS_SHIPMENT_PARTIAL_CANCELLED`
+  (частичная отмена) на этой итерации **не реализованы** —
+  отдельных моделей `FinishedGoodsShipmentReturn` /
+  `FinishedGoodsShipmentCancel` нет, частичная отмена не
+  поддерживается (см. ТЗ).
 
 #### ОТК (`entityType = QC`, `entityId = passportId`)
 
