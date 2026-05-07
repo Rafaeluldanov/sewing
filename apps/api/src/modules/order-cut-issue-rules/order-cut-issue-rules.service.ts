@@ -568,23 +568,6 @@ export class OrderCutIssueRulesService {
       );
     }
 
-    // Паспорт того же размера, но `qtyCut` больше остатка строки —
-    // блокируем единичный overshoot. `consumeInTx` conditional
-    // `updateMany` ловит только гонку (issuedQty<requiredQty до
-    // инкремента) и сам по себе не ограничивает величину инкремента.
-    const remaining = matched.requiredQty - matched.issuedQty;
-    if (passport.qtyCut > remaining) {
-      const sortedUnfinished = [...unfinishedInCurrent].sort(this.compareRows);
-      throw new OrderCutIssueRuleViolationException(
-        formatOrderCutIssueRuleViolationMessage(
-          sortedUnfinished.map((r) => ({
-            sizeCode: r.size.code,
-            remainingQty: Math.max(r.requiredQty - r.issuedQty, 0),
-          })),
-        ),
-      );
-    }
-
     return {
       ruleId: matched.id,
       queueIndex: matched.queueIndex,
@@ -600,11 +583,16 @@ export class OrderCutIssueRulesService {
    *
    * Делает conditional `updateMany`: инкремент `issuedQty`
    * срабатывает только если строка всё ещё активна и размер ещё
-   * не закрыт (`issuedQty < requiredQty`). Это race-guard; верхний
-   * лимит (`qtyCut <= remaining`) проверяет `evaluateForIssue` ДО
-   * открытия транзакции. Если здесь 0 строк обновлено — гонка/
-   * деактивация; перечитываем актуальное состояние ТЕКУЩЕЙ очереди
-   * и бросаем VIOLATION.
+   * не закрыт (`issuedQty < requiredQty`). Лимит сверху не
+   * проверяем — overshoot на «последнем» паспорте разрешён по ТЗ:
+   * сканер берёт целое число штук с паспорта, и если у размера
+   * остался остаток меньше `qtyCut`, паспорт всё равно засчитывается
+   * целиком, а размер закрывается с overshoot. Дальнейшие сканы того
+   * же размера получают `not in unfinishedInCurrent` → VIOLATION с
+   * подсказкой следующего размера.
+   * Если 0 строк обновлено — размер уже был закрыт другим скан-ом
+   * (race) или строку погасили; перечитываем актуальное состояние
+   * ТЕКУЩЕЙ очереди и бросаем VIOLATION.
    */
   async consumeInTx(
     tx: Prisma.TransactionClient,
@@ -627,7 +615,7 @@ export class OrderCutIssueRulesService {
       where: {
         id: evaluation.ruleId,
         isActive: true,
-        issuedQty: { lte: evaluation.requiredQty - op.qty },
+        issuedQty: { lt: evaluation.requiredQty },
       },
       data: { issuedQty: { increment: op.qty } },
     });
