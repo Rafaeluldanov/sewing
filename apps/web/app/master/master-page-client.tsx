@@ -36,6 +36,7 @@ import {
   resolveMasterCallByEmployeeQrAction,
   resolveMasterCallByIdAction,
 } from './actions';
+import { findMasterPassportByCodeAction } from './master-actions-actions';
 import { PassportActionsSheet } from './passport-actions-sheet';
 import { CutReleasePolicyCard } from './cut-release-policy-card';
 import { refreshCutReleasePolicyAction } from './cut-release-policy-actions';
@@ -64,9 +65,16 @@ export function MasterPageClient({
   const [policy, setPolicy] = useState<CutReleasePolicyDto | null>(
     initialPolicy,
   );
-  const [scannerOpen, setScannerOpen] = useState(false);
+  // `scannerMode === 'employee'` — закрытие конкретного вызова QR'ом
+  // сотрудника (исторический сценарий). `'passport'` — новая кнопка
+  // «Сканировать паспорт»: мастер сканирует ЛЮБОЙ паспорт и получает
+  // те же действия, что в карточке вызова. `null` — сканер закрыт.
+  const [scannerMode, setScannerMode] = useState<
+    null | 'employee' | 'passport'
+  >(null);
   const [activeCallId, setActiveCallId] = useState<string | null>(null);
   const [resolving, setResolving] = useState(false);
+  const [findingPassport, setFindingPassport] = useState(false);
   const [resolvingManualId, setResolvingManualId] = useState<string | null>(
     null,
   );
@@ -148,11 +156,16 @@ export function MasterPageClient({
   const onOpenScanner = useCallback((callId: string) => {
     setActiveCallId(callId);
     setError(null);
-    setScannerOpen(true);
+    setScannerMode('employee');
+  }, []);
+
+  const onOpenPassportScanner = useCallback(() => {
+    setError(null);
+    setScannerMode('passport');
   }, []);
 
   const onCloseScanner = useCallback(() => {
-    setScannerOpen(false);
+    setScannerMode(null);
     setActiveCallId(null);
   }, []);
 
@@ -182,16 +195,42 @@ export function MasterPageClient({
 
   const onScan = useCallback(
     async (decodedText: string) => {
+      // Ветка «Сканировать паспорт» — открываем PassportActionsSheet
+      // с найденным паспортом, не трогаем очередь вызовов.
+      if (scannerMode === 'passport') {
+        if (findingPassport) return;
+        setFindingPassport(true);
+        setScannerMode(null);
+        try {
+          const res = await findMasterPassportByCodeAction({
+            code: decodedText,
+          });
+          if (res.ok) {
+            setActionsFor({
+              passport: res.result.passport,
+              ownerName: res.result.ownerFullName ?? 'Не закреплён',
+            });
+            setError(null);
+          } else {
+            setError(res.error);
+          }
+        } finally {
+          setFindingPassport(false);
+        }
+        return;
+      }
+
+      // Историческая ветка — закрытие вызова по QR сотрудника.
       if (resolving) return;
       const parsed = parseEmployeeQr(decodedText);
       if (!parsed) {
-        setScannerOpen(false);
+        setScannerMode(null);
         setActiveCallId(null);
         setError('QR не распознан как сотрудник (ожидается EMPLOYEE:<id>)');
         return;
       }
       setResolving(true);
-      setScannerOpen(false);
+      setScannerMode(null);
       try {
         const res = await resolveMasterCallByEmployeeQrAction(decodedText);
         if (res.ok) {
@@ -207,7 +246,7 @@ export function MasterPageClient({
         void refresh();
       }
     },
-    [refresh, resolving, showToast],
+    [findingPassport, refresh, resolving, scannerMode, showToast],
   );
 
   return (
@@ -252,6 +291,17 @@ export function MasterPageClient({
           {toast}
         </div>
       )}
+
+      <button
+        type="button"
+        className="master-page__scan-passport"
+        onClick={onOpenPassportScanner}
+        disabled={findingPassport}
+        aria-label="Сканировать паспорт изделия для действий мастера"
+      >
+        <Icon name="scan" size={20} />
+        {findingPassport ? 'Ищем паспорт…' : 'Сканировать паспорт'}
+      </button>
 
       <CutReleasePolicyCard
         policy={policy}
@@ -312,7 +362,7 @@ export function MasterPageClient({
         )}
       </section>
 
-      {scannerOpen && (
+      {scannerMode !== null && (
         <QrScannerModal onScan={onScan} onClose={onCloseScanner} />
       )}
 

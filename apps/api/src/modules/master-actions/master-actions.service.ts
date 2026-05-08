@@ -10,8 +10,10 @@ import {
 } from '@prisma/client';
 import {
   parseEmployeeQr,
+  type FindMasterPassportByCodeResultDto,
   type MasterActionPassportSnapshotDto,
   type MasterActionResultDto,
+  type MasterCallPassportDto,
   type ReturnPassportToCellDto,
   type SetRouteStepDto,
   type TransferPassportDto,
@@ -475,6 +477,93 @@ export class MasterActionsService {
     return {
       passport: this.snapshot(updated),
       before: this.beforeSnapshot(before),
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // 5. FIND BY CODE — поиск паспорта для кнопки «Сканировать паспорт»
+  // -------------------------------------------------------------------------
+
+  /**
+   * Найти паспорт по произвольному коду (`passport:<id>`, `P-…`, голый
+   * id) и вернуть его в shape, совместимом с
+   * `PassportActionsSheet` (`MasterCallPassportDto` + `ownerFullName`).
+   *
+   * Read-only — никаких записей в БД, audit не пишем (это просто
+   * lookup перед открытием bottom-sheet'а; сами действия пишут audit
+   * сами). Терминальные паспорта (`PACKED`/`CANCELLED`) тоже отдаём —
+   * пусть UI покажет их статус, а попытка действия отвалится с
+   * понятным `PASSPORT_TERMINAL_FOR_MASTER` уже в action-эндпоинте.
+   */
+  async findPassportByCode(
+    code: string,
+  ): Promise<FindMasterPassportByCodeResultDto> {
+    const trimmed = code.trim();
+    const idFromQr = trimmed.startsWith('passport:')
+      ? trimmed.slice('passport:'.length)
+      : trimmed;
+
+    const row = await this.prisma.passport.findFirst({
+      where: {
+        OR: [{ id: idFromQr }, { qrCode: trimmed }, { number: trimmed }],
+      },
+      select: {
+        id: true,
+        color: true,
+        qtyCut: true,
+        status: true,
+        orderId: true,
+        currentRouteStepIndex: true,
+        size: { select: { code: true } },
+        order: { select: { number: true } },
+        currentEmployee: { select: { fullName: true } },
+        currentOperation: { select: { id: true, name: true } },
+        currentCell: { select: { id: true, code: true } },
+      },
+    });
+    if (!row) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PASSPORT_NOT_FOUND',
+        message: `Паспорт не найден по коду «${trimmed}»`,
+      });
+    }
+
+    const stepRows = await this.prisma.orderRouteStep.findMany({
+      where: { orderId: row.orderId },
+      orderBy: { index: 'asc' },
+      select: {
+        index: true,
+        operation: { select: { id: true, name: true } },
+      },
+    });
+
+    const passport: MasterCallPassportDto = {
+      id: row.id,
+      number: row.order.number,
+      size: row.size.code,
+      color: row.color ?? null,
+      qtyCut: row.qtyCut,
+      status: row.status,
+      orderNumber: row.order.number,
+      currentOperation: row.currentOperation
+        ? { id: row.currentOperation.id, name: row.currentOperation.name }
+        : null,
+      currentCell: row.currentCell
+        ? { id: row.currentCell.id, code: row.currentCell.code }
+        : null,
+      currentRouteStepIndex: row.currentRouteStepIndex,
+      routeSteps: stepRows.map((s) => ({
+        index: s.index,
+        operationId: s.operation.id,
+        operationName: s.operation.name,
+        isCurrent: s.index === row.currentRouteStepIndex,
+      })),
+    };
+
+    return {
+      passport,
+      ownerFullName: row.currentEmployee?.fullName ?? null,
     };
   }
 

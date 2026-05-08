@@ -1,9 +1,12 @@
 import { Body, Controller, Param, Post } from '@nestjs/common';
 import {
+  FindMasterPassportByCodeSchema,
   ReturnPassportToCellSchema,
   SetRouteStepSchema,
   TransferPassportSchema,
   UnassignPassportSchema,
+  type FindMasterPassportByCodeDto,
+  type FindMasterPassportByCodeResultDto,
   type MasterActionResultDto,
   type ReturnPassportToCellDto,
   type SetRouteStepDto,
@@ -95,5 +98,20 @@ export class MasterActionsController {
     dto: SetRouteStepDto,
   ): Promise<MasterActionResultDto> {
     return this.service.setRouteStep(user, id, dto);
+  }
+
+  /**
+   * `POST /api/master-actions/find-passport-by-code` — поиск паспорта
+   * по произвольному коду (QR/номер/id) для кнопки «Сканировать
+   * паспорт» на `/master`. Read-only; используется UI как pre-step
+   * перед открытием `PassportActionsSheet` (см.
+   * `MasterActionsService.findPassportByCode`).
+   */
+  @Post('find-passport-by-code')
+  findByCode(
+    @Body(new ZodValidationPipe(FindMasterPassportByCodeSchema))
+    dto: FindMasterPassportByCodeDto,
+  ): Promise<FindMasterPassportByCodeResultDto> {
+    return this.service.findPassportByCode(dto.code);
   }
 }

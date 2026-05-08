@@ -21,14 +21,17 @@
 
 import { revalidatePath } from 'next/cache';
 import {
+  FindMasterPassportByCodeSchema,
   ReturnPassportToCellSchema,
   SetRouteStepSchema,
   TransferPassportSchema,
   UnassignPassportSchema,
+  type FindMasterPassportByCodeResultDto,
   type MasterActionResultDto,
 } from '@sewing/shared';
 import { ApiRequestError } from '@/lib/api';
 import {
+  findMasterPassportByCode,
   returnMasterPassportToCell,
   setMasterPassportRouteStep,
   transferMasterPassport,
@@ -145,6 +148,39 @@ export async function masterSetRouteStepAction(
   try {
     const result = await setMasterPassportRouteStep(passportId, parsed.data);
     revalidatePath('/master');
+    return { ok: true, result };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/**
+ * Кнопка «Сканировать паспорт» на `/master`. Read-only lookup —
+ * `revalidatePath` не нужен, т.к. ничего в БД не меняется. Возвращаем
+ * результат `MasterCallPassportDto` + `ownerFullName`, чтобы UI
+ * напрямую открыл `PassportActionsSheet`.
+ */
+export type FindMasterPassportResult =
+  | { ok: true; result: FindMasterPassportByCodeResultDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+export async function findMasterPassportByCodeAction(
+  raw: unknown,
+): Promise<FindMasterPassportResult> {
+  const parsed = FindMasterPassportByCodeSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error:
+        parsed.error.issues[0]?.message ?? 'Передайте код паспорта.',
+    };
+  }
+  try {
+    const result = await findMasterPassportByCode(parsed.data.code);
     return { ok: true, result };
   } catch (e) {
     return {
