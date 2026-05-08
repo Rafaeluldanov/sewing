@@ -2,114 +2,104 @@
 # -----------------------------------------------------------------------------
 # backup-db.sh — pre-deploy / периодический backup PostgreSQL для SEWING.
 #
-# Зачем не `pg_dump "$DATABASE_URL"`:
-#   В .env строка вида
-#       DATABASE_URL="postgresql://...:5432/sewing?schema=public"
-#   Параметр `?schema=public` — это Prisma-расширение, libpq его не знает
-#   и падает с "invalid URI query parameter: schema". На stage это уже
-#   ловили. Поэтому DATABASE_URL парсим в Node (URL API) и передаём
-#   pg_dump через стандартные PG* env vars.
+# Делает `pg_dump` ВНУТРИ контейнера postgres через `docker exec`. Это
+# избавляет от необходимости иметь `pg_dump` той же major-версии на
+# хосте (раньше скрипт падал «pg_dump: command not found» в средах,
+# где postgresql-client не установлен) и не зависит от
+# `.env::DATABASE_URL` — креды берём из env-vars самого контейнера
+# (`POSTGRES_USER` / `POSTGRES_DB`), а пароль не нужен, потому что
+# обращение идёт через unix-socket внутри контейнера.
 #
-# Можно явно подсунуть PG* через окружение — тогда .env не читается.
+# Формат: `pg_dump --format=custom --no-owner --no-acl` — компактный
+# binary, восстанавливается через `pg_restore --clean --if-exists`,
+# переносится между БД с разными ролями (важно при restore stage→dev
+# и наоборот).
 #
-# Формат: pg_dump -Fc (custom, бинарный) — компактнее plain SQL и
-# восстанавливается через pg_restore с --clean/--if-exists.
+# Ротация: оставляем `KEEP` последних файлов с тем же `FILE_PREFIX`,
+# всё что старше — удаляем.
 #
-# Ротация: храним 14 последних файлов, всё что старше — удаляем.
+# Параметры (env, можно переопределить из CI):
+#   CONTAINER     — имя контейнера postgres (default: sewing-prod-db-1).
+#                   Для dev: CONTAINER=sewing-db-1
+#   BACKUP_DIR    — каталог для дампов (default: /var/backups/sewing).
+#   KEEP          — сколько последних файлов хранить (default: 14).
+#   FILE_PREFIX   — префикс имени файла (default: sewing). Полезно
+#                   развести prod- и dev-бэкапы в одном каталоге:
+#                   FILE_PREFIX=sewing_prod / FILE_PREFIX=sewing_dev.
+#
+# stdout: путь созданного файла (последняя строка) — чтобы вызывающий
+# скрипт мог захватить его через `BACKUP_FILE=$(scripts/backup-db.sh | tail -1)`.
 #
 # Запуск:
-#   sudo bash /sewing/scripts/backup-db.sh
-# или из deploy-stage.sh.
+#   sudo bash /root/sewing/scripts/backup-db.sh
+#   sudo CONTAINER=sewing-db-1 FILE_PREFIX=sewing_dev \
+#        bash /root/sewing/scripts/backup-db.sh
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
 
-REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-ENV_FILE="${ENV_FILE:-${REPO_ROOT}/.env}"
+CONTAINER="${CONTAINER:-sewing-prod-db-1}"
 BACKUP_DIR="${BACKUP_DIR:-/var/backups/sewing}"
 KEEP="${KEEP:-14}"
+FILE_PREFIX="${FILE_PREFIX:-sewing}"
 
-# 1. Получаем PG* connection params.
-#    Если уже выставлены извне (deploy-stage.sh может это сделать),
-#    парсинг .env пропускаем — это даёт корректную работу из CI / cron,
-#    где .env может не существовать.
-if [[ -z "${PGDATABASE:-}" || -z "${PGUSER:-}" || -z "${PGHOST:-}" ]]; then
-  if [[ ! -f "${ENV_FILE}" ]]; then
-    echo "[backup-db] не найден ${ENV_FILE} и PG* не выставлены" >&2
-    exit 1
-  fi
-
-  # node парсит URL без участия shell — кавычки/спецсимволы безопасны.
-  # readFileSync + regex (а не require('dotenv')), чтобы не зависеть от
-  # node_modules: backup может работать ещё до npm install.
-  eval "$(
-    ENV_FILE="${ENV_FILE}" node --input-type=module -e '
-      import { readFileSync } from "node:fs";
-      const p = process.env.ENV_FILE;
-      const text = readFileSync(p, "utf8");
-      const m = text.match(/^\s*DATABASE_URL\s*=\s*(.+)\s*$/m);
-      if (!m) { console.error("DATABASE_URL не найден в " + p); process.exit(1); }
-      let raw = m[1].trim();
-      if ((raw.startsWith("\"") && raw.endsWith("\"")) ||
-          (raw.startsWith("'\''") && raw.endsWith("'\''"))) {
-        raw = raw.slice(1, -1);
-      }
-      const u = new URL(raw);
-      const out = {
-        PGHOST: u.hostname,
-        PGPORT: u.port || "5432",
-        PGDATABASE: decodeURIComponent(u.pathname.replace(/^\//, "")),
-        PGUSER: decodeURIComponent(u.username),
-        PGPASSWORD: decodeURIComponent(u.password),
-      };
-      // Экранируем как single-quoted POSIX literal.
-      const esc = (v) => "'\''" + String(v).replace(/'\''/g, "'\''\\'\'''\''") + "'\''";
-      for (const [k, v] of Object.entries(out)) {
-        console.log(`export ${k}=${esc(v)}`);
-      }
-    '
-  )"
+# 1. Sanity: контейнер существует и запущен. Без `Running: true`
+#    `docker exec` упадёт с невнятным сообщением — лучше ловим раньше.
+if ! docker inspect "${CONTAINER}" >/dev/null 2>&1; then
+  echo "[backup-db] контейнер ${CONTAINER} не найден" >&2
+  exit 1
+fi
+running="$(docker inspect -f '{{.State.Running}}' "${CONTAINER}" 2>/dev/null || echo false)"
+if [[ "${running}" != "true" ]]; then
+  echo "[backup-db] контейнер ${CONTAINER} не запущен (State.Running=${running})" >&2
+  exit 1
 fi
 
-: "${PGHOST:?PGHOST не определён}"
-: "${PGPORT:?PGPORT не определён}"
-: "${PGDATABASE:?PGDATABASE не определён}"
-: "${PGUSER:?PGUSER не определён}"
-# PGPASSWORD может быть пустым, если используется .pgpass / peer auth.
-export PGHOST PGPORT PGDATABASE PGUSER PGPASSWORD
+# 2. Креды из env-vars контейнера. Postgres-образ официально
+#    выставляет `POSTGRES_USER` / `POSTGRES_DB` — отсюда и берём.
+PGUSER="$(docker exec "${CONTAINER}" sh -c 'printf "%s" "${POSTGRES_USER:-}"')"
+PGDATABASE="$(docker exec "${CONTAINER}" sh -c 'printf "%s" "${POSTGRES_DB:-}"')"
+if [[ -z "${PGUSER}" || -z "${PGDATABASE}" ]]; then
+  echo "[backup-db] POSTGRES_USER/POSTGRES_DB не выставлены в ${CONTAINER}" >&2
+  exit 1
+fi
 
-# 2. Готовим директорию.
+# 3. Готовим директорию (с правильными правами — содержит pg_dump'ы
+#    с PII, оставлять чтение для всех нельзя).
 mkdir -p "${BACKUP_DIR}"
 chmod 700 "${BACKUP_DIR}"
 
 ts="$(date +%Y%m%d_%H%M%S)"
-out="${BACKUP_DIR}/sewing_${ts}.dump"
+out="${BACKUP_DIR}/${FILE_PREFIX}_${ts}.dump"
 tmp="${out}.partial"
 
-# 3. Дамп. -Fc — custom binary; --no-owner/--no-acl делает дамп
-#    переносимым между БД с разными ролями (важно при restore из stage
-#    в локальный dev и наоборот).
-echo "[backup-db] pg_dump ${PGUSER}@${PGHOST}:${PGPORT}/${PGDATABASE} → ${out}"
-pg_dump \
+# 4. Дамп. Внутри контейнера используем -h /var/run/postgresql (unix
+#    socket дефолтного образа postgres:15+); пароль не нужен (peer/trust).
+#    Чтобы скрипт не зависел от расположения сокета у разных образов,
+#    проще явно не указывать `-h` — libpq возьмёт сокет по дефолту.
+echo "[backup-db] pg_dump ${PGUSER}@${CONTAINER}/${PGDATABASE} → ${out}"
+docker exec "${CONTAINER}" pg_dump \
   --format=custom \
   --no-owner \
   --no-acl \
-  --file="${tmp}" \
-  "${PGDATABASE}"
+  -U "${PGUSER}" \
+  -d "${PGDATABASE}" \
+  > "${tmp}"
 
-# atomic rename: не хотим в ротации увидеть полу-записанный .partial.
+# atomic rename — в ротации не должны видеть `.partial`.
 mv "${tmp}" "${out}"
 
 size="$(du -h "${out}" | awk '{print $1}')"
 echo "[backup-db] OK ${out} (${size})"
 
-# 4. Ротация: оставляем KEEP свежих файлов.
-mapfile -t old < <(ls -1t "${BACKUP_DIR}"/sewing_*.dump 2>/dev/null | tail -n +"$((KEEP + 1))")
+# 5. Ротация: оставляем KEEP свежих файлов c тем же FILE_PREFIX.
+#    Чужие префиксы (например, sewing_dev_*.dump при FILE_PREFIX=sewing_prod)
+#    скрипт НЕ трогает.
+mapfile -t old < <(ls -1t "${BACKUP_DIR}/${FILE_PREFIX}_"*.dump 2>/dev/null | tail -n +"$((KEEP + 1))")
 for f in "${old[@]}"; do
   echo "[backup-db] rotate: rm ${f}"
   rm -f -- "${f}"
 done
 
-# stdout: путь созданного файла (последняя строка) — чтобы deploy-stage.sh
-# мог захватить его через `BACKUP_FILE=$(scripts/backup-db.sh | tail -1)`.
+# stdout: путь созданного файла последней строкой.
 echo "${out}"

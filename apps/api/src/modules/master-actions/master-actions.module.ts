@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { OrderCutIssueRulesModule } from '../order-cut-issue-rules/order-cut-issue-rules.module.js';
 import { MasterActionsController } from './master-actions.controller.js';
 import { MasterActionsService } from './master-actions.service.js';
 
@@ -15,6 +16,7 @@ import { MasterActionsService } from './master-actions.service.js';
  * `imports` не требуются.
  */
 @Module({
+  imports: [OrderCutIssueRulesModule],
   controllers: [MasterActionsController],
   providers: [MasterActionsService],
   exports: [MasterActionsService],

@@ -5306,6 +5306,30 @@ body:has(.master-page) .app-main {
 .master-page__primary:active {
   transform: scale(0.99);
 }
+.master-page__scan-passport {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  min-height: 56px;
+  padding: 0.85rem 1rem;
+  border: 0;
+  border-radius: 0.8rem;
+  background: #0f766e;
+  color: #fff;
+  font-size: 1.05rem;
+  font-weight: 700;
+  cursor: pointer;
+  box-shadow: 0 6px 14px rgba(15, 118, 110, 0.3);
+}
+.master-page__scan-passport:active {
+  transform: scale(0.99);
+}
+.master-page__scan-passport:disabled {
+  opacity: 0.7;
+  cursor: default;
+}
 .master-page__empty {
   margin: 2rem auto;
   text-align: center;

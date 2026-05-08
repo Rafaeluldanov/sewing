@@ -8,6 +8,7 @@
  */
 
 import type {
+  FindMasterPassportByCodeResultDto,
   MasterActionResultDto,
   ReturnPassportToCellDto,
   SetRouteStepDto,
@@ -53,5 +54,14 @@ export function setMasterPassportRouteStep(
   return apiFetch<MasterActionResultDto>(
     `/master-actions/passports/${encodeURIComponent(passportId)}/set-route-step`,
     { method: 'POST', body },
+  );
+}
+
+export function findMasterPassportByCode(
+  code: string,
+): Promise<FindMasterPassportByCodeResultDto> {
+  return apiFetch<FindMasterPassportByCodeResultDto>(
+    `/master-actions/find-passport-by-code`,
+    { method: 'POST', body: { code } },
   );
 }

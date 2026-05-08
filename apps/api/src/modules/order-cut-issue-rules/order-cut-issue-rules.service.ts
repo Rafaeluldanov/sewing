@@ -507,22 +507,27 @@ export class OrderCutIssueRulesService {
   } | null> {
     const isCuttingOperation = operationCategory === OperationCategory.CUTTING;
     if (!isCuttingOperation) {
-      // Не-CUTTING операция: правило применяется если паспорт сейчас на
-      // ПЕРВОМ не-CUTTING шаге маршрута заказа (handoff из раскройного
-      // цеха в швейный поток — например, ОВР/ФУЛ). На полностью
-      // CUTTING-маршрутах сюда не попадаем (isCutting=true выше).
-      // На «sewing-only» маршрутах первый не-CUTTING шаг = index 0.
+      // Не-CUTTING операция: правило применяется если паспорт на
+      // (а) index 0 — legacy «первая выдача»; покрывает sewing-only
+      //     маршруты И сценарий, когда CUTTING-шаги в маршруте есть,
+      //     но раскройщики не делают `complete-operation` (паспорт
+      //     остаётся на step 0 до handoff в швейный поток);
+      // (б) ПЕРВОМ не-CUTTING шаге маршрута заказа (handoff после
+      //     `complete-operation` на CUTTING-шагах — например, ОВР/ФУЛ
+      //     при последовательно завершаемых КРОЙ → Деление кроя).
       if (passport.currentRouteStepIndex === null) return null;
-      const firstNonCutting = await this.prisma.orderRouteStep.findFirst({
-        where: {
-          orderId: passport.orderId,
-          operation: { category: { not: OperationCategory.CUTTING } },
-        },
-        select: { index: true },
-        orderBy: { index: 'asc' },
-      });
-      if (firstNonCutting?.index !== passport.currentRouteStepIndex) {
-        return null;
+      if (passport.currentRouteStepIndex !== 0) {
+        const firstNonCutting = await this.prisma.orderRouteStep.findFirst({
+          where: {
+            orderId: passport.orderId,
+            operation: { category: { not: OperationCategory.CUTTING } },
+          },
+          select: { index: true },
+          orderBy: { index: 'asc' },
+        });
+        if (firstNonCutting?.index !== passport.currentRouteStepIndex) {
+          return null;
+        }
       }
     }
 
@@ -563,23 +568,6 @@ export class OrderCutIssueRulesService {
       );
     }
 
-    // Паспорт того же размера, но `qtyCut` больше остатка строки —
-    // блокируем единичный overshoot. `consumeInTx` conditional
-    // `updateMany` ловит только гонку (issuedQty<requiredQty до
-    // инкремента) и сам по себе не ограничивает величину инкремента.
-    const remaining = matched.requiredQty - matched.issuedQty;
-    if (passport.qtyCut > remaining) {
-      const sortedUnfinished = [...unfinishedInCurrent].sort(this.compareRows);
-      throw new OrderCutIssueRuleViolationException(
-        formatOrderCutIssueRuleViolationMessage(
-          sortedUnfinished.map((r) => ({
-            sizeCode: r.size.code,
-            remainingQty: Math.max(r.requiredQty - r.issuedQty, 0),
-          })),
-        ),
-      );
-    }
-
     return {
       ruleId: matched.id,
       queueIndex: matched.queueIndex,
@@ -595,11 +583,16 @@ export class OrderCutIssueRulesService {
    *
    * Делает conditional `updateMany`: инкремент `issuedQty`
    * срабатывает только если строка всё ещё активна и размер ещё
-   * не закрыт (`issuedQty < requiredQty`). Это race-guard; верхний
-   * лимит (`qtyCut <= remaining`) проверяет `evaluateForIssue` ДО
-   * открытия транзакции. Если здесь 0 строк обновлено — гонка/
-   * деактивация; перечитываем актуальное состояние ТЕКУЩЕЙ очереди
-   * и бросаем VIOLATION.
+   * не закрыт (`issuedQty < requiredQty`). Лимит сверху не
+   * проверяем — overshoot на «последнем» паспорте разрешён по ТЗ:
+   * сканер берёт целое число штук с паспорта, и если у размера
+   * остался остаток меньше `qtyCut`, паспорт всё равно засчитывается
+   * целиком, а размер закрывается с overshoot. Дальнейшие сканы того
+   * же размера получают `not in unfinishedInCurrent` → VIOLATION с
+   * подсказкой следующего размера.
+   * Если 0 строк обновлено — размер уже был закрыт другим скан-ом
+   * (race) или строку погасили; перечитываем актуальное состояние
+   * ТЕКУЩЕЙ очереди и бросаем VIOLATION.
    */
   async consumeInTx(
     tx: Prisma.TransactionClient,
@@ -622,7 +615,7 @@ export class OrderCutIssueRulesService {
       where: {
         id: evaluation.ruleId,
         isActive: true,
-        issuedQty: { lte: evaluation.requiredQty - op.qty },
+        issuedQty: { lt: evaluation.requiredQty },
       },
       data: { issuedQty: { increment: op.qty } },
     });
@@ -668,6 +661,90 @@ export class OrderCutIssueRulesService {
           qty: op.qty,
           beforeIssued: evaluation.issuedQtyBefore,
           afterIssued: evaluation.issuedQtyBefore + op.qty,
+        },
+      },
+      tx,
+    );
+  }
+
+  /**
+   * Откатить последнюю CONSUMED-выдачу паспорта: декрементить
+   * `issuedQty` той строки правила, которая была инкрементирована
+   * на issue, и записать `ORDER_CUT_ISSUE_RULE_RELEASED` в audit.
+   * Идемпотентно: если CONSUMED уже был сбалансирован RELEASED-ом,
+   * ничего не делаем.
+   *
+   * Используется из мастер-действия `returnToCell` — паспорт
+   * физически возвращается на склад, и счётчик правила должен
+   * откатиться до состояния «как до выдачи». Так баннер на /work
+   * и таблица очереди заказа сразу видят актуальный остаток.
+   *
+   * Идентификацию строки правила берём из audit-payload последнего
+   * `ORDER_CUT_ISSUE_RULE_CONSUMED` для этого `passportId`. Это
+   * учитывает кейс, когда правило успело перейти в следующую
+   * очередь после issue (мы откатываем именно ту строку, которую
+   * инкрементили, а не «последнюю активную по размеру»).
+   */
+  async releaseInTx(
+    tx: Prisma.TransactionClient,
+    op: {
+      passportId: string;
+      orderId: string;
+      sizeId: string;
+      employeeId: string;
+    },
+  ): Promise<void> {
+    const consumedCount = await tx.auditLog.count({
+      where: {
+        event: 'ORDER_CUT_ISSUE_RULE_CONSUMED',
+        payload: { path: ['passportId'], equals: op.passportId },
+      },
+    });
+    if (consumedCount === 0) return;
+    const releasedCount = await tx.auditLog.count({
+      where: {
+        event: 'ORDER_CUT_ISSUE_RULE_RELEASED',
+        payload: { path: ['passportId'], equals: op.passportId },
+      },
+    });
+    if (releasedCount >= consumedCount) return;
+
+    const lastConsumed = await tx.auditLog.findFirst({
+      where: {
+        event: 'ORDER_CUT_ISSUE_RULE_CONSUMED',
+        payload: { path: ['passportId'], equals: op.passportId },
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { entityId: true, payload: true },
+    });
+    if (!lastConsumed) return;
+
+    const payload = lastConsumed.payload as {
+      qty: number;
+      queueIndex: number;
+      sizeCode: string;
+    };
+    const ruleId = lastConsumed.entityId;
+    const qty = payload.qty;
+
+    await tx.orderCutIssueRule.update({
+      where: { id: ruleId },
+      data: { issuedQty: { decrement: qty } },
+    });
+
+    await this.audit.log(
+      {
+        event: 'ORDER_CUT_ISSUE_RULE_RELEASED',
+        entityType: 'ORDER_CUT_ISSUE_RULE',
+        entityId: ruleId,
+        employeeId: op.employeeId,
+        payload: {
+          orderId: op.orderId,
+          passportId: op.passportId,
+          sizeId: op.sizeId,
+          queueIndex: payload.queueIndex,
+          sizeCode: payload.sizeCode,
+          qty,
         },
       },
       tx,

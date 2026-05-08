@@ -894,7 +894,16 @@ export class PassportsService {
       }
       await tx.passport.update({
         where: { id: passport.id },
-        data: { currentCellId: cell.id },
+        data: {
+          currentCellId: cell.id,
+          // После размещения паспорт «отвязывается» от создателя
+          // (раскройщика): он лежит в ячейке и доступен любому, кто
+          // делает `issue`. Без этого `currentEmployeeId` оставался бы
+          // на cutter-е, и баннер `getActiveBannerForOperation` (фильтр
+          // `currentEmployeeId: null`) не показывал бы ячейки в
+          // подсказке швее.
+          currentEmployeeId: null,
+        },
       });
       await tx.passportEvent.create({
         data: {

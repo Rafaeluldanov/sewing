@@ -234,16 +234,19 @@ describeWithDb('integration — order cut issue rules', () => {
   // T3. размер из очереди можно выдать только до requiredQty
   // ---------------------------------------------------------------------------
 
-  test('T3. лимит по очередному размеру: лишние штуки блокируются', async () => {
+  test('T3. overshoot последним паспортом разрешён, дальнейшие сканы того же размера блокируются', async () => {
     const { orderId, sizeIdByKey } = await setupOrderWithRoute([
       { sizeKey: 'S', qtyPlan: 20 },
+      { sizeKey: 'L', qtyPlan: 20 },
     ]);
     await bulkUpsertRules(orderId, [
       { sizeId: sizeIdByKey.S!, requiredQty: 5 },
+      { sizeId: sizeIdByKey.L!, requiredQty: 5, sortOrder: 1 },
     ]).expect(201);
 
     const passportA = await createAndPlace(orderId, sizeIdByKey.S!, 3, 'R-T3-A');
     const passportB = await createAndPlace(orderId, sizeIdByKey.S!, 4, 'R-T3-B');
+    const passportC = await createAndPlace(orderId, sizeIdByKey.S!, 1, 'R-T3-C');
     await startSeamstressShift();
 
     await request(t.app.getHttpServer())
@@ -252,19 +255,28 @@ describeWithDb('integration — order cut issue rules', () => {
       .send({})
       .expect(201);
 
-    // Уже выдано 3, осталось 2; 4 шт нельзя.
-    const res = await request(t.app.getHttpServer())
+    // Выдано 3, осталось 2. Паспорт на 4 шт — overshoot последним
+    // паспортом разрешён, размер закрывается с issuedQty=7.
+    await request(t.app.getHttpServer())
       .post(`/api/passports/${passportB}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const ruleAfterOvershoot = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+    });
+    expect(ruleAfterOvershoot.issuedQty).toBe(7);
+
+    // S уже закрыт (7 >= 5). Следующий скан S блокируется с
+    // подсказкой следующего незакрытого размера (L).
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportC}/issue`)
       .set('Cookie', cookies.seamstress)
       .send({})
       .expect(409);
     expect(res.body?.code).toBe('ORDER_CUT_ISSUE_RULE_VIOLATION');
-    expect(res.body?.message).toBe('Сначала нужно выдать: S — осталось 2 шт');
-
-    const rule = await t.prisma.orderCutIssueRule.findFirstOrThrow({
-      where: { orderId, sizeId: sizeIdByKey.S! },
-    });
-    expect(rule.issuedQty).toBe(3);
+    expect(res.body?.message).toBe('Сначала нужно выдать: L — осталось 5 шт');
   });
 
   // ---------------------------------------------------------------------------
@@ -318,7 +330,7 @@ describeWithDb('integration — order cut issue rules', () => {
   // T5. параллельные issue не превышают requiredQty
   // ---------------------------------------------------------------------------
 
-  test('T5. параллельные issue не превышают requiredQty', async () => {
+  test('T5. параллельные issue по одному размеру оба проходят (overshoot последним паспортом разрешён)', async () => {
     const { orderId, sizeIdByKey } = await setupOrderWithRoute([
       { sizeKey: 'S', qtyPlan: 20 },
     ]);
@@ -330,7 +342,11 @@ describeWithDb('integration — order cut issue rules', () => {
     const passportB = await createAndPlace(orderId, sizeIdByKey.S!, 3, 'R-T5-B');
     await startSeamstressShift();
 
-    // Параллельный issue: оба запроса уходят одновременно.
+    // Параллельный issue: оба запроса уходят одновременно. Conditional
+    // `updateMany` (`issuedQty < requiredQty`) пропускает оба, потому
+    // что в момент апдейта строка ещё не закрыта (issuedQty<5).
+    // Итог: issuedQty = 6 (overshoot 1 шт). Это by design — overshoot
+    // на «последнем» паспорте принимается.
     const [resA, resB] = await Promise.all([
       request(t.app.getHttpServer())
         .post(`/api/passports/${passportA}/issue`)
@@ -341,17 +357,12 @@ describeWithDb('integration — order cut issue rules', () => {
         .set('Cookie', cookies.seamstress)
         .send({}),
     ]);
-    const statuses = [resA.status, resB.status].sort();
-    expect(statuses).toEqual([201, 409]);
-    const rejected = resA.status === 409 ? resA : resB;
-    expect(rejected.body?.code).toBe('ORDER_CUT_ISSUE_RULE_VIOLATION');
+    expect([resA.status, resB.status]).toEqual([201, 201]);
 
     const rule = await t.prisma.orderCutIssueRule.findFirstOrThrow({
       where: { orderId, sizeId: sizeIdByKey.S! },
     });
-    // Прошедший issue инкрементил counter ровно на 3 (один из двух).
-    expect(rule.issuedQty).toBe(3);
-    expect(rule.issuedQty).toBeLessThanOrEqual(rule.requiredQty);
+    expect(rule.issuedQty).toBe(6);
   });
 
   // ---------------------------------------------------------------------------
@@ -938,6 +949,79 @@ describeWithDb('integration — order cut issue rules', () => {
       orderId,
       queueIndex: 1,
       deactivatedCount: 1,
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // T20. master returnToCell декрементит issuedQty правила очереди
+  // ---------------------------------------------------------------------------
+
+  test('T20. master returnToCell откатывает issuedQty в той же строке, что была инкрементирована', async () => {
+    const { orderId, sizeIdByKey } = await setupOrderWithRoute([
+      { sizeKey: 'S', qtyPlan: 20 },
+    ]);
+    await bulkUpsertRules(orderId, [
+      { sizeId: sizeIdByKey.S!, requiredQty: 5 },
+    ]).expect(201);
+
+    const passportId = await createAndPlace(
+      orderId,
+      sizeIdByKey.S!,
+      3,
+      'R-T20',
+    );
+    await startSeamstressShift();
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const ruleAfterIssue = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+    });
+    expect(ruleAfterIssue.issuedQty).toBe(3);
+
+    // Мастер возвращает паспорт в ту же ячейку.
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/return-to-cell`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'WRONG_SCAN', cellId: seed.cells.A1.id })
+      .expect(201);
+
+    const ruleAfterReturn = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+    });
+    expect(ruleAfterReturn.issuedQty).toBe(0);
+
+    // Идемпотентность: повторный returnToCell не уводит issuedQty в минус
+    // (CONSUMED уже сбалансирован RELEASED-ом).
+    await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/return-to-cell`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'WRONG_SCAN', cellId: seed.cells.A1.id })
+      .expect(201);
+
+    const ruleAfterDouble = await t.prisma.orderCutIssueRule.findFirstOrThrow({
+      where: { orderId, sizeId: sizeIdByKey.S! },
+    });
+    expect(ruleAfterDouble.issuedQty).toBe(0);
+
+    // Audit-паре CONSUMED ↔ RELEASED.
+    const consumed = await t.prisma.auditLog.findMany({
+      where: { event: 'ORDER_CUT_ISSUE_RULE_CONSUMED' },
+    });
+    const released = await t.prisma.auditLog.findMany({
+      where: { event: 'ORDER_CUT_ISSUE_RULE_RELEASED' },
+    });
+    expect(consumed).toHaveLength(1);
+    expect(released).toHaveLength(1);
+    expect(released[0]!.payload).toMatchObject({
+      orderId,
+      passportId,
+      qty: 3,
+      queueIndex: 1,
     });
   });
 });

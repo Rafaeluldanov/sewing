@@ -19,6 +19,7 @@
  */
 
 import { z } from 'zod';
+import type { MasterCallPassportDto } from './master-calls';
 
 // ---------------------------------------------------------------------------
 // Reason
@@ -248,4 +249,45 @@ export interface MasterActionResultDto {
     | 'currentRouteStepIndex'
     | 'status'
   >;
+}
+
+// ---------------------------------------------------------------------------
+// Find passport by code (для кнопки «Сканировать паспорт» на /master)
+// ---------------------------------------------------------------------------
+
+/**
+ * `POST /api/master-actions/find-passport-by-code`.
+ *
+ * Поиск паспорта по произвольному коду — поддерживаются те же форматы,
+ * что и у `POST /api/passports/by-code`:
+ *   - QR `passport:<id>` (см. ADR-0008);
+ *   - человекочитаемый номер `P-YYYYMMDD-NNNN`;
+ *   - голый id (на случай, когда код уже распарсен на клиенте).
+ *
+ * Используется кнопкой «Сканировать паспорт» на `/master`: мастер
+ * сканирует ЛЮБОЙ паспорт (не только тот, что числится за «вызвавшим»
+ * сотрудником) и получает тот же набор действий, что и в карточке
+ * вызова — снять с сотрудника, передать, вернуть в ячейку, назначить
+ * операцию маршрута.
+ */
+export const FindMasterPassportByCodeSchema = z.object({
+  code: z.string().trim().min(1).max(200),
+});
+export type FindMasterPassportByCodeDto = z.infer<
+  typeof FindMasterPassportByCodeSchema
+>;
+
+/**
+ * Ответ `POST /api/master-actions/find-passport-by-code`.
+ *
+ * `passport` — тот же `MasterCallPassportDto`, что отдаётся в
+ * `currentPassports` карточки вызова, чтобы UI мог переиспользовать
+ * `PassportActionsSheet` без преобразований. `ownerFullName` —
+ * подсказка для заголовка sheet'а: ФИО сотрудника, на котором паспорт
+ * сейчас числится; `null`, если паспорт «в воздухе» (нет
+ * `currentEmployeeId`).
+ */
+export interface FindMasterPassportByCodeResultDto {
+  passport: MasterCallPassportDto;
+  ownerFullName: string | null;
 }
