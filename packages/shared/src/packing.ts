@@ -40,16 +40,17 @@ export type BoxStatus = z.infer<typeof BoxStatusSchema>;
 /**
  * Тело `POST /api/packing/boxes`.
  *
- * `maxQty` опционален: если не задан, на сервере используется значение
- * из `Box.maxQty` (default 100, см. `docs/erd.md §2.15`). В рамках MVP
- * позволено только уменьшать стандартную вместимость, не увеличивать.
+ * `maxQty` опционален: если не задан, на сервере используется default
+ * `Box.maxQty = 100` (см. `docs/erd.md §2.15`). 100 — это рекомендация
+ * («сколько обычно влезает в стандартную коробку»), не жёсткий потолок:
+ * упаковщик может задать и больше, если по факту коробка вмещает.
+ * Жёсткое ограничение остаётся только снизу — `> 0`.
  */
 export const CreateBoxSchema = z.object({
   maxQty: z
     .number({ invalid_type_error: 'maxQty должен быть числом' })
     .int('maxQty должен быть целым')
     .positive('maxQty должен быть > 0')
-    .max(100, 'На MVP коробка не может содержать больше 100 шт.')
     .optional(),
 });
 export type CreateBoxDto = z.infer<typeof CreateBoxSchema>;
@@ -76,6 +77,25 @@ export type AddPassportToBoxDto = z.infer<typeof AddPassportToBoxSchema>;
 export const CloseBoxSchema = z.object({}).strict();
 export type CloseBoxDto = z.infer<typeof CloseBoxSchema>;
 
+/**
+ * Тело `POST /api/packing/boxes/:id/place`. Размещает закрытую коробку
+ * в ячейку склада — после этого она исчезает из списка «ждут
+ * размещения» в терминале упаковщика.
+ *
+ * Принимает либо `cellId` (id ячейки), либо `code` (свободный код или
+ * QR-payload `cell:<id>`). Достаточно одного.
+ */
+export const PlaceBoxSchema = z
+  .object({
+    cellId: z.string().min(1).optional(),
+    code: z.string().trim().min(1).max(128).optional(),
+  })
+  .refine((v) => Boolean(v.cellId || v.code), {
+    message: 'Укажите ячейку (cellId или code)',
+    path: ['code'],
+  });
+export type PlaceBoxDto = z.infer<typeof PlaceBoxSchema>;
+
 // ---------------------------------------------------------------------------
 // Query DTO
 // ---------------------------------------------------------------------------
@@ -83,6 +103,17 @@ export type CloseBoxDto = z.infer<typeof CloseBoxSchema>;
 export const ListBoxesQuerySchema = z.object({
   /** `OPEN` — только незакрытые; `CLOSED` — только закрытые; иначе обе. */
   status: BoxStatusSchema.optional(),
+  /**
+   * Фильтр по факту размещения коробки в ячейку склада. `true` —
+   * только размещённые (`placedAt IS NOT NULL`); `false` — только
+   * не размещённые (`placedAt IS NULL`); если не указан — обе.
+   * Используется на Stage 1 терминала упаковщика, чтобы показать
+   * «закрыты, но ещё не размещены».
+   */
+  placed: z
+    .union([z.boolean(), z.enum(['true', 'false'])])
+    .transform((v) => (typeof v === 'boolean' ? v : v === 'true'))
+    .optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(200).default(50),
 });
@@ -132,6 +163,14 @@ export interface BoxListItemDto {
   closedAt: string | null;
   createdById: string;
   createdByName: string;
+  /** ISO момента размещения коробки в ячейку. `null` — ещё не размещена. */
+  placedAt: string | null;
+  /**
+   * Ячейка, в которую размещена коробка. `null`, если ещё не размещена
+   * либо ячейка была удалена (FK `onDelete: SetNull`, см.
+   * `prisma/schema.prisma::Box`).
+   */
+  placedInCell: { id: string; code: string } | null;
 }
 
 /** Карточка коробки (`GET /api/packing/boxes/:id`). */

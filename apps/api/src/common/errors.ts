@@ -958,6 +958,28 @@ export class PackingShiftRequiredException extends BusinessException {
   }
 }
 
+/** Размещение коробки в ячейку до её закрытия запрещено. */
+export class BoxNotClosedForPlacementException extends BusinessException {
+  constructor() {
+    super(
+      'BOX_NOT_CLOSED_FOR_PLACEMENT',
+      'Сначала закройте коробку — размещать в ячейку можно только закрытые.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/** Коробка уже размещена в ячейку. */
+export class BoxAlreadyPlacedException extends BusinessException {
+  constructor() {
+    super(
+      'BOX_ALREADY_PLACED',
+      'Коробка уже размещена в ячейку.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Earnings / payroll (Шаг 9)
 // ---------------------------------------------------------------------------

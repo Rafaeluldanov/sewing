@@ -34,13 +34,13 @@ export function CreateBoxForm({ disabled = false }: { disabled?: boolean }) {
             name="maxQty"
             type="number"
             min={1}
-            max={100}
             step={1}
             placeholder="100"
             disabled={disabled}
           />
           <div className="hint">
-            Можно оставить пустым — будет 100 (стандарт MVP).
+            Рекомендуемая вместимость — 100 шт. Поле пустое — подставится
+            100; можно задать больше или меньше, если коробка нестандартная.
           </div>
         </div>
       </div>

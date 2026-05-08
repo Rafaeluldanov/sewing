@@ -11,6 +11,7 @@ import type {
   BoxesPage,
   CreateBoxDto,
   ListBoxesQuery,
+  PlaceBoxDto,
 } from '@sewing/shared/packing';
 import { apiFetch } from './api';
 
@@ -20,6 +21,15 @@ export function listBoxes(
   return apiFetch<BoxesPage>('/packing/boxes', {
     searchParams: {
       status: query.status,
+      // `placed` мы передаём как строковый флаг — Zod на сервере сам
+      // распарсит в boolean (см. `ListBoxesQuerySchema`). Если поле
+      // не задано — параметр не отправляется.
+      placed:
+        query.placed === undefined
+          ? undefined
+          : query.placed
+            ? 'true'
+            : 'false',
       page: query.page,
       pageSize: query.pageSize,
     },
@@ -51,6 +61,16 @@ export function closeBox(id: string): Promise<BoxDetailDto> {
   return apiFetch<BoxDetailDto>(
     `/packing/boxes/${encodeURIComponent(id)}/close`,
     { method: 'POST', body: {} },
+  );
+}
+
+export function placeBox(
+  id: string,
+  body: PlaceBoxDto,
+): Promise<BoxDetailDto> {
+  return apiFetch<BoxDetailDto>(
+    `/packing/boxes/${encodeURIComponent(id)}/place`,
+    { method: 'POST', body },
   );
 }
 

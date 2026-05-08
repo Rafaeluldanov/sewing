@@ -30,7 +30,13 @@ const nextConfig = {
   // нет (специально), иначе этот rewrite их бы перехватил.
   // -------------------------------------------------------------------------
   async rewrites() {
-    const internal = process.env.INTERNAL_API_URL || 'http://api:3001/api';
+    // Fallback. Docker-compose (docker-compose.dev.yml / .prod.yml)
+    // ВСЕГДА задаёт INTERNAL_API_URL=http://api:3001/api явно, поэтому
+    // на хост `api` (DNS docker network) рассчитывать в fallback нельзя:
+    // при локальном `npm run dev:web` без docker такой fallback падает
+    // с `getaddrinfo ENOTFOUND api`. Дефолт — http://localhost:3001/api,
+    // соответствующий локальному `npm run dev:api` на :3001.
+    const internal = process.env.INTERNAL_API_URL || 'http://localhost:3001/api';
     const apiOrigin = internal.replace(/\/api\/?$/, '');
     return [
       { source: '/api/:path*', destination: `${apiOrigin}/api/:path*` },

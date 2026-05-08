@@ -599,6 +599,608 @@ async function seedCompanyDivisions() {
 }
 
 // ---------------------------------------------------------------------------
+// PATTERN CATEGORIES + PARAMETERS (этап «Категории номенклатуры»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Демо-категории номенклатуры с набором параметров (см. модели
+ * `PatternCategory` / `PatternCategoryParameter` и
+ * `packages/shared/src/pattern-categories.ts`):
+ *   - HOODIE / SHIRT / PANTS — три тип-«раскладки» MVP-каталога;
+ *   - параметры покрывают: основной материал, рибана/подклад (площади м²),
+ *     нитки (текст-описание), фурнитуру (молния/шнур/бирка/пуговицы —
+ *     QTY_PER_ITEM).
+ *
+ * `slug` уникален в БД — используется как ключ идемпотентности при re-seed.
+ */
+type CategoryParamSeed = {
+  paramKey: string; // локальный ключ внутри категории (для линка из лекал)
+  roleKey: string;
+  label: string;
+  inputType: 'AREA_M2_BY_SIZE' | 'LINEAR_M_BY_SIZE' | 'QTY_PER_ITEM' | 'TEXT_ONLY';
+  unit: string;
+  isRequired?: boolean;
+  sortOrder: number;
+};
+
+type CategorySeed = {
+  code: string; // локальный ключ для линка из лекал
+  slug: string;
+  name: string;
+  iconKey: string;
+  sortOrder: number;
+  description?: string;
+  parameters: CategoryParamSeed[];
+};
+
+const PATTERN_CATEGORIES: readonly CategorySeed[] = [
+  {
+    code: 'HOODIE',
+    slug: 'hoodie',
+    name: 'Худи',
+    iconKey: 'HOODIE',
+    sortOrder: 10,
+    description: 'Худи / толстовка с капюшоном',
+    parameters: [
+      { paramKey: 'main', roleKey: 'MAIN_FABRIC', label: 'Основной материал', inputType: 'AREA_M2_BY_SIZE', unit: 'м²', isRequired: true, sortOrder: 10 },
+      { paramKey: 'rib', roleKey: 'RIB', label: 'Кашкорсе', inputType: 'AREA_M2_BY_SIZE', unit: 'м²', sortOrder: 20 },
+      { paramKey: 'thread', roleKey: 'THREAD', label: 'Нитки', inputType: 'TEXT_ONLY', unit: '', sortOrder: 30 },
+      { paramKey: 'zipper', roleKey: 'PACKAGING', label: 'Молния', inputType: 'QTY_PER_ITEM', unit: 'шт', sortOrder: 40 },
+      { paramKey: 'cord', roleKey: 'PACKAGING', label: 'Шнур', inputType: 'QTY_PER_ITEM', unit: 'шт', sortOrder: 50 },
+      { paramKey: 'tips', roleKey: 'PACKAGING', label: 'Наконечники', inputType: 'QTY_PER_ITEM', unit: 'шт', sortOrder: 60 },
+    ],
+  },
+  {
+    code: 'SHIRT',
+    slug: 'tshirt',
+    name: 'Футболка',
+    iconKey: 'SHIRT',
+    sortOrder: 20,
+    description: 'Футболка / лонгслив',
+    parameters: [
+      { paramKey: 'main', roleKey: 'MAIN_FABRIC', label: 'Основной материал', inputType: 'AREA_M2_BY_SIZE', unit: 'м²', isRequired: true, sortOrder: 10 },
+      { paramKey: 'rib', roleKey: 'RIB', label: 'Воротник (рибана)', inputType: 'AREA_M2_BY_SIZE', unit: 'м²', sortOrder: 20 },
+      { paramKey: 'thread', roleKey: 'THREAD', label: 'Нитки', inputType: 'TEXT_ONLY', unit: '', sortOrder: 30 },
+      { paramKey: 'tag', roleKey: 'PACKAGING', label: 'Бирка', inputType: 'QTY_PER_ITEM', unit: 'шт', sortOrder: 40 },
+    ],
+  },
+  {
+    code: 'PANTS',
+    slug: 'pants',
+    name: 'Брюки',
+    iconKey: 'PANTS',
+    sortOrder: 30,
+    description: 'Брюки / штаны спортивные',
+    parameters: [
+      { paramKey: 'main', roleKey: 'MAIN_FABRIC', label: 'Основной материал', inputType: 'AREA_M2_BY_SIZE', unit: 'м²', isRequired: true, sortOrder: 10 },
+      { paramKey: 'lining', roleKey: 'LINING', label: 'Подклад', inputType: 'AREA_M2_BY_SIZE', unit: 'м²', sortOrder: 20 },
+      { paramKey: 'thread', roleKey: 'THREAD', label: 'Нитки', inputType: 'TEXT_ONLY', unit: '', sortOrder: 30 },
+      { paramKey: 'cord', roleKey: 'PACKAGING', label: 'Шнур', inputType: 'QTY_PER_ITEM', unit: 'шт', sortOrder: 40 },
+      { paramKey: 'buttons', roleKey: 'PACKAGING', label: 'Пуговицы', inputType: 'QTY_PER_ITEM', unit: 'шт', sortOrder: 50 },
+    ],
+  },
+];
+
+interface SeededCategory {
+  id: string;
+  paramIdsByKey: Record<string, string>;
+}
+
+async function seedPatternCategories(): Promise<{
+  created: number;
+  updated: number;
+  total: number;
+  paramsCreated: number;
+  paramsUpdated: number;
+  byCode: Record<string, SeededCategory>;
+}> {
+  let created = 0;
+  let updated = 0;
+  let paramsCreated = 0;
+  let paramsUpdated = 0;
+  const byCode: Record<string, SeededCategory> = {};
+
+  for (const cat of PATTERN_CATEGORIES) {
+    const existing = await prisma.patternCategory.findUnique({
+      where: { slug: cat.slug },
+    });
+    const upserted = await prisma.patternCategory.upsert({
+      where: { slug: cat.slug },
+      create: {
+        name: cat.name,
+        slug: cat.slug,
+        iconKey: cat.iconKey,
+        sortOrder: cat.sortOrder,
+        status: 'ACTIVE',
+        description: cat.description ?? null,
+      },
+      update: {
+        name: cat.name,
+        iconKey: cat.iconKey,
+        sortOrder: cat.sortOrder,
+        status: 'ACTIVE',
+        description: cat.description ?? null,
+      },
+    });
+    if (existing) updated += 1;
+    else created += 1;
+
+    const paramIdsByKey: Record<string, string> = {};
+    // Параметры: уникальность `(categoryId, roleKey, label)` не enforce-ится
+    // на уровне БД (см. комментарий у модели). Идемпотентность обеспечиваем
+    // вручную через `findFirst` по тройке.
+    for (const p of cat.parameters) {
+      const existingParam = await prisma.patternCategoryParameter.findFirst({
+        where: {
+          categoryId: upserted.id,
+          roleKey: p.roleKey,
+          label: p.label,
+        },
+      });
+      if (existingParam) {
+        const upd = await prisma.patternCategoryParameter.update({
+          where: { id: existingParam.id },
+          data: {
+            inputType: p.inputType,
+            unit: p.unit,
+            isRequired: p.isRequired ?? false,
+            sortOrder: p.sortOrder,
+            status: 'ACTIVE',
+          },
+        });
+        paramIdsByKey[p.paramKey] = upd.id;
+        paramsUpdated += 1;
+      } else {
+        const ins = await prisma.patternCategoryParameter.create({
+          data: {
+            categoryId: upserted.id,
+            roleKey: p.roleKey,
+            label: p.label,
+            inputType: p.inputType,
+            unit: p.unit,
+            isRequired: p.isRequired ?? false,
+            sortOrder: p.sortOrder,
+            status: 'ACTIVE',
+          },
+        });
+        paramIdsByKey[p.paramKey] = ins.id;
+        paramsCreated += 1;
+      }
+    }
+
+    byCode[cat.code] = { id: upserted.id, paramIdsByKey };
+  }
+
+  return {
+    created,
+    updated,
+    total: PATTERN_CATEGORIES.length,
+    paramsCreated,
+    paramsUpdated,
+    byCode,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// PATTERN ITEMS (Лекала) + площади + фурнитурные нормы
+// ---------------------------------------------------------------------------
+
+/**
+ * Демо-лекала с привязкой к категории. Для удобства проверок UI
+ * добавлены площади основного материала по 4 размерам (XS/S/M/L) и
+ * нормы фурнитуры на изделие — этого достаточно, чтобы экраны
+ * `/admin/patterns/[id]` (площади, нормы) и `WorkshopNeedsService`
+ * видели реальные значения.
+ */
+type PatternItemSeed = {
+  article: string;
+  name: string;
+  categoryCode: string; // ссылка на CategorySeed.code
+  description?: string;
+  /** Площади м² по `(roleKey, sizeCode)`. */
+  materialAreas: Array<{
+    paramKey: string; // должен существовать в paramIdsByKey категории
+    roleKey: string;
+    bySize: Record<string, number>; // sizeCode → м²
+  }>;
+  /** Нормы «количество на изделие» по фурнитуре. */
+  parameterNorms: Array<{ paramKey: string; qtyPerItem: number }>;
+  /** Опциональная привязка к legacy-Product (по slug из PRODUCTS). */
+  legacyProductSlug?: string;
+};
+
+const PATTERN_ITEMS: readonly PatternItemSeed[] = [
+  {
+    article: 'HOODIE-CLASSIC-001',
+    name: 'Худи классический',
+    categoryCode: 'HOODIE',
+    description: 'Демо-лекало: классический худи с капюшоном на молнии.',
+    materialAreas: [
+      {
+        paramKey: 'main',
+        roleKey: 'MAIN_FABRIC',
+        bySize: { XS: 1.85, S: 1.95, M: 2.1, L: 2.25, XL: 2.4 },
+      },
+      {
+        paramKey: 'rib',
+        roleKey: 'RIB',
+        bySize: { XS: 0.18, S: 0.2, M: 0.22, L: 0.24, XL: 0.26 },
+      },
+    ],
+    parameterNorms: [
+      { paramKey: 'zipper', qtyPerItem: 1 },
+      { paramKey: 'cord', qtyPerItem: 1 },
+      { paramKey: 'tips', qtyPerItem: 2 },
+    ],
+  },
+  {
+    article: 'TSHIRT-WHITE-001',
+    name: 'Футболка белая',
+    categoryCode: 'SHIRT',
+    description: 'Демо-лекало: базовая белая футболка.',
+    legacyProductSlug: 'tshirt_white',
+    materialAreas: [
+      {
+        paramKey: 'main',
+        roleKey: 'MAIN_FABRIC',
+        bySize: { XS: 0.95, S: 1.05, M: 1.15, L: 1.25, XL: 1.35 },
+      },
+      {
+        paramKey: 'rib',
+        roleKey: 'RIB',
+        bySize: { XS: 0.05, S: 0.06, M: 0.07, L: 0.08, XL: 0.09 },
+      },
+    ],
+    parameterNorms: [{ paramKey: 'tag', qtyPerItem: 1 }],
+  },
+  {
+    article: 'TSHIRT-BLACK-001',
+    name: 'Футболка черная',
+    categoryCode: 'SHIRT',
+    description: 'Демо-лекало: базовая чёрная футболка.',
+    legacyProductSlug: 'tshirt_black',
+    materialAreas: [
+      {
+        paramKey: 'main',
+        roleKey: 'MAIN_FABRIC',
+        bySize: { XS: 0.95, S: 1.05, M: 1.15, L: 1.25, XL: 1.35 },
+      },
+      {
+        paramKey: 'rib',
+        roleKey: 'RIB',
+        bySize: { XS: 0.05, S: 0.06, M: 0.07, L: 0.08, XL: 0.09 },
+      },
+    ],
+    parameterNorms: [{ paramKey: 'tag', qtyPerItem: 1 }],
+  },
+  {
+    article: 'PANTS-SPORT-001',
+    name: 'Брюки спортивные',
+    categoryCode: 'PANTS',
+    description: 'Демо-лекало: спортивные брюки на резинке.',
+    materialAreas: [
+      {
+        paramKey: 'main',
+        roleKey: 'MAIN_FABRIC',
+        bySize: { XS: 1.6, S: 1.7, M: 1.8, L: 1.9, XL: 2.0 },
+      },
+    ],
+    parameterNorms: [
+      { paramKey: 'cord', qtyPerItem: 1 },
+      { paramKey: 'buttons', qtyPerItem: 0 },
+    ],
+  },
+];
+
+async function seedPatternItems(
+  categories: Record<string, SeededCategory>,
+  productsBySlug: Record<string, string>,
+): Promise<{
+  created: number;
+  updated: number;
+  total: number;
+  areasCreated: number;
+  areasUpdated: number;
+  normsCreated: number;
+  normsUpdated: number;
+}> {
+  // Подгружаем размеры один раз — понадобятся для FK в `PatternMaterialArea`.
+  const sizes = await prisma.size.findMany();
+  const sizeIdByCode: Record<string, string> = Object.fromEntries(
+    sizes.map((s) => [s.code, s.id]),
+  );
+
+  let created = 0;
+  let updated = 0;
+  let areasCreated = 0;
+  let areasUpdated = 0;
+  let normsCreated = 0;
+  let normsUpdated = 0;
+
+  for (const item of PATTERN_ITEMS) {
+    const cat = categories[item.categoryCode];
+    if (!cat) {
+      throw new Error(
+        `Pattern seed: category ${item.categoryCode} for article ${item.article} not found`,
+      );
+    }
+    const legacyProductId = item.legacyProductSlug
+      ? productsBySlug[item.legacyProductSlug] ?? null
+      : null;
+
+    const existing = await prisma.patternItem.findUnique({
+      where: { article: item.article },
+    });
+    const upserted = await prisma.patternItem.upsert({
+      where: { article: item.article },
+      create: {
+        article: item.article,
+        name: item.name,
+        categoryId: cat.id,
+        description: item.description ?? null,
+        status: 'ACTIVE',
+        legacyProductId,
+      },
+      update: {
+        name: item.name,
+        categoryId: cat.id,
+        description: item.description ?? null,
+        status: 'ACTIVE',
+        legacyProductId,
+      },
+    });
+    if (existing) updated += 1;
+    else created += 1;
+
+    // ----- Площади материалов: bulk-replace через upsert по `(pattern, size, role)`.
+    for (const area of item.materialAreas) {
+      for (const [sizeCode, areaM2] of Object.entries(area.bySize)) {
+        const sizeId = sizeIdByCode[sizeCode];
+        if (!sizeId) continue; // размер не сидится в данном dev-окружении
+        const existingArea = await prisma.patternMaterialArea.findUnique({
+          where: {
+            PatternMaterialArea_pattern_size_role_uniq: {
+              patternItemId: upserted.id,
+              sizeId,
+              materialRole: area.roleKey,
+            },
+          },
+        });
+        await prisma.patternMaterialArea.upsert({
+          where: {
+            PatternMaterialArea_pattern_size_role_uniq: {
+              patternItemId: upserted.id,
+              sizeId,
+              materialRole: area.roleKey,
+            },
+          },
+          create: {
+            patternItemId: upserted.id,
+            sizeId,
+            materialRole: area.roleKey,
+            areaM2: new Prisma.Decimal(areaM2),
+          },
+          update: {
+            areaM2: new Prisma.Decimal(areaM2),
+          },
+        });
+        if (existingArea) areasUpdated += 1;
+        else areasCreated += 1;
+      }
+    }
+
+    // ----- Нормы фурнитуры (QTY_PER_ITEM).
+    for (const norm of item.parameterNorms) {
+      const paramId = cat.paramIdsByKey[norm.paramKey];
+      if (!paramId) continue;
+      // Snapshot-поля (`labelSnapshot`/`unit`/`roleKey`) нужно достать
+      // из самого параметра категории — берём из БД для консистентности.
+      const param = await prisma.patternCategoryParameter.findUnique({
+        where: { id: paramId },
+      });
+      if (!param) continue;
+      const existingNorm = await prisma.patternItemParameterNorm.findFirst({
+        where: { patternItemId: upserted.id, categoryParameterId: paramId },
+      });
+      const data = {
+        roleKey: param.roleKey,
+        labelSnapshot: param.label,
+        inputTypeSnapshot: param.inputType,
+        unit: param.unit,
+        qtyPerItem: new Prisma.Decimal(norm.qtyPerItem),
+      };
+      if (existingNorm) {
+        await prisma.patternItemParameterNorm.update({
+          where: { id: existingNorm.id },
+          data,
+        });
+        normsUpdated += 1;
+      } else {
+        await prisma.patternItemParameterNorm.create({
+          data: {
+            patternItemId: upserted.id,
+            categoryParameterId: paramId,
+            ...data,
+          },
+        });
+        normsCreated += 1;
+      }
+    }
+  }
+
+  return {
+    created,
+    updated,
+    total: PATTERN_ITEMS.length,
+    areasCreated,
+    areasUpdated,
+    normsCreated,
+    normsUpdated,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// TECH CARDS (Шаблоны техкарт)
+// ---------------------------------------------------------------------------
+
+type TechCardMaterialSeed = {
+  name: string;
+  unit: string;
+  qtyPerUnit: number;
+  materialRole: string;
+  fabricType?: string;
+  densityGsm?: number;
+  plannedWidthCm?: number;
+  colorRule?: 'ORDER_COLOR' | 'FIXED_COLOR' | 'NO_COLOR';
+  fixedColorText?: string;
+  hardwareSizeText?: string;
+  hardwareMaterialText?: string;
+  note?: string;
+};
+
+type TechCardOutsourceSeed = {
+  name: string;
+  unit?: string;
+  qtyPerUnit?: number;
+  vendorName?: string;
+  note?: string;
+  triggerType?: 'MANUAL' | 'CUT_READY';
+};
+
+type TechCardSeed = {
+  code: string;
+  name: string;
+  materialLines: TechCardMaterialSeed[];
+  outsourceLines: TechCardOutsourceSeed[];
+};
+
+const TECH_CARDS: readonly TechCardSeed[] = [
+  {
+    code: 'HOODIE-MAT',
+    name: 'Худи — материалы и подряд',
+    materialLines: [
+      { name: 'Футер 3-нитка с начёсом', unit: 'м', qtyPerUnit: 1.4, materialRole: 'MAIN_FABRIC', fabricType: 'футер 3-нитка', densityGsm: 320, plannedWidthCm: 180, colorRule: 'ORDER_COLOR' },
+      { name: 'Кашкорсе (манжеты/пояс)', unit: 'м', qtyPerUnit: 0.25, materialRole: 'RIB', fabricType: 'кашкорсе', densityGsm: 280, plannedWidthCm: 100, colorRule: 'ORDER_COLOR' },
+      { name: 'Нитки 50/2', unit: 'кат.', qtyPerUnit: 0.05, materialRole: 'THREAD', colorRule: 'ORDER_COLOR' },
+      { name: 'Молния разъёмная 60 см', unit: 'шт', qtyPerUnit: 1, materialRole: 'PACKAGING', hardwareSizeText: '60 см', hardwareMaterialText: 'металл', colorRule: 'FIXED_COLOR', fixedColorText: 'чёрный' },
+      { name: 'Шнур плоский 8 мм', unit: 'м', qtyPerUnit: 1.4, materialRole: 'PACKAGING', hardwareSizeText: '8 мм', hardwareMaterialText: 'полиэстер', colorRule: 'ORDER_COLOR' },
+      { name: 'Наконечники для шнура', unit: 'шт', qtyPerUnit: 2, materialRole: 'PACKAGING', hardwareMaterialText: 'металл', colorRule: 'FIXED_COLOR', fixedColorText: 'серебро' },
+    ],
+    outsourceLines: [
+      { name: 'Шелкография на спинке', unit: 'шт', qtyPerUnit: 1, vendorName: 'Принт-Студия', triggerType: 'CUT_READY', note: 'Принт A4, 1 цвет' },
+    ],
+  },
+  {
+    code: 'TSHIRT-MAT',
+    name: 'Футболка — материалы',
+    materialLines: [
+      { name: 'Кулирка', unit: 'м', qtyPerUnit: 0.8, materialRole: 'MAIN_FABRIC', fabricType: 'кулирка', densityGsm: 160, plannedWidthCm: 180, colorRule: 'ORDER_COLOR' },
+      { name: 'Воротник рибана', unit: 'м', qtyPerUnit: 0.05, materialRole: 'RIB', fabricType: 'рибана', densityGsm: 200, plannedWidthCm: 60, colorRule: 'ORDER_COLOR' },
+      { name: 'Нитки 50/2', unit: 'кат.', qtyPerUnit: 0.03, materialRole: 'THREAD', colorRule: 'ORDER_COLOR' },
+      { name: 'Бирка размерная', unit: 'шт', qtyPerUnit: 1, materialRole: 'PACKAGING', hardwareMaterialText: 'тканевая', colorRule: 'NO_COLOR' },
+    ],
+    outsourceLines: [],
+  },
+  {
+    code: 'PANTS-MAT',
+    name: 'Брюки спортивные — материалы',
+    materialLines: [
+      { name: 'Футер 2-нитка', unit: 'м', qtyPerUnit: 1.2, materialRole: 'MAIN_FABRIC', fabricType: 'футер 2-нитка', densityGsm: 280, plannedWidthCm: 180, colorRule: 'ORDER_COLOR' },
+      { name: 'Подклад тонкий', unit: 'м', qtyPerUnit: 0.6, materialRole: 'LINING', fabricType: 'подклад', densityGsm: 80, plannedWidthCm: 150, colorRule: 'FIXED_COLOR', fixedColorText: 'серый' },
+      { name: 'Нитки 50/2', unit: 'кат.', qtyPerUnit: 0.04, materialRole: 'THREAD', colorRule: 'ORDER_COLOR' },
+      { name: 'Шнур плоский 8 мм', unit: 'м', qtyPerUnit: 1.0, materialRole: 'PACKAGING', hardwareSizeText: '8 мм', hardwareMaterialText: 'полиэстер', colorRule: 'ORDER_COLOR' },
+      { name: 'Пуговица декоративная', unit: 'шт', qtyPerUnit: 1, materialRole: 'PACKAGING', hardwareSizeText: '15 мм', hardwareMaterialText: 'пластик', colorRule: 'FIXED_COLOR', fixedColorText: 'чёрный' },
+    ],
+    outsourceLines: [
+      { name: 'Вышивка логотипа', unit: 'шт', qtyPerUnit: 1, vendorName: 'Вышивка-Сервис', triggerType: 'MANUAL', note: 'Лого 5x5 см на левом кармане' },
+    ],
+  },
+];
+
+async function seedTechCards(): Promise<{
+  created: number;
+  updated: number;
+  total: number;
+  matLinesCreated: number;
+  outLinesCreated: number;
+}> {
+  let created = 0;
+  let updated = 0;
+  let matLinesCreated = 0;
+  let outLinesCreated = 0;
+
+  for (const tc of TECH_CARDS) {
+    const existing = await prisma.techCardTemplate.findUnique({
+      where: { code: tc.code },
+    });
+    const upserted = await prisma.techCardTemplate.upsert({
+      where: { code: tc.code },
+      create: { code: tc.code, name: tc.name, isActive: true },
+      update: { name: tc.name, isActive: true },
+    });
+    if (existing) updated += 1;
+    else created += 1;
+
+    // Bulk-replace строк (как делает `TechCardsService.replaceMaterialLines`):
+    // на seed мы держим канонический набор, поэтому полностью пересоздаём
+    // строки — иначе при изменении состава остались бы «фантомы».
+    await prisma.techCardMaterialLine.deleteMany({
+      where: { techCardId: upserted.id },
+    });
+    for (let i = 0; i < tc.materialLines.length; i += 1) {
+      const m = tc.materialLines[i];
+      await prisma.techCardMaterialLine.create({
+        data: {
+          techCardId: upserted.id,
+          sortOrder: (i + 1) * 10,
+          name: m.name,
+          unit: m.unit,
+          qtyPerUnit: new Prisma.Decimal(m.qtyPerUnit),
+          materialRole: m.materialRole,
+          fabricType: m.fabricType ?? null,
+          densityGsm: m.densityGsm ?? null,
+          plannedWidthCm: m.plannedWidthCm ?? null,
+          colorRule: m.colorRule ?? null,
+          fixedColorText: m.colorRule === 'FIXED_COLOR' ? m.fixedColorText ?? null : null,
+          hardwareSizeText: m.hardwareSizeText ?? null,
+          hardwareMaterialText: m.hardwareMaterialText ?? null,
+          note: m.note ?? null,
+        },
+      });
+      matLinesCreated += 1;
+    }
+
+    await prisma.techCardOutsourceLine.deleteMany({
+      where: { techCardId: upserted.id },
+    });
+    for (let i = 0; i < tc.outsourceLines.length; i += 1) {
+      const o = tc.outsourceLines[i];
+      await prisma.techCardOutsourceLine.create({
+        data: {
+          techCardId: upserted.id,
+          sortOrder: (i + 1) * 10,
+          name: o.name,
+          unit: o.unit ?? null,
+          qtyPerUnit: o.qtyPerUnit !== undefined ? new Prisma.Decimal(o.qtyPerUnit) : null,
+          vendorName: o.vendorName ?? null,
+          note: o.note ?? null,
+          triggerType: o.triggerType ?? 'MANUAL',
+        },
+      });
+      outLinesCreated += 1;
+    }
+  }
+
+  return {
+    created,
+    updated,
+    total: TECH_CARDS.length,
+    matLinesCreated,
+    outLinesCreated,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // MAIN
 // ---------------------------------------------------------------------------
 
@@ -621,6 +1223,12 @@ async function main() {
   const defects = await seedDefectTypes();
   console.log('→ Seeding company divisions…');
   const divisions = await seedCompanyDivisions();
+  console.log('→ Seeding pattern categories + parameters…');
+  const categories = await seedPatternCategories();
+  console.log('→ Seeding pattern items + areas + norms…');
+  const patterns = await seedPatternItems(categories.byCode, products.byslug);
+  console.log('→ Seeding tech-card templates…');
+  const techCards = await seedTechCards();
 
   console.log('\n================ SEED SUMMARY ================');
   console.log(`Sizes:       total=${sizes.total}      created=${sizes.created}  updated=${sizes.updated}`);
@@ -632,6 +1240,9 @@ async function main() {
   console.log(`OperationRatesBySize: total=${rates.total} created=${rates.created} updated=${rates.updated}`);
   console.log(`DefectTypes: total=${defects.total}    created=${defects.created}  updated=${defects.updated}`);
   console.log(`CompanyDivisions: total=${divisions.total} created=${divisions.created} updated=${divisions.updated}`);
+  console.log(`PatternCategories: total=${categories.total} created=${categories.created} updated=${categories.updated} params+${categories.paramsCreated}/upd${categories.paramsUpdated}`);
+  console.log(`PatternItems: total=${patterns.total} created=${patterns.created} updated=${patterns.updated} areas+${patterns.areasCreated}/upd${patterns.areasUpdated} norms+${patterns.normsCreated}/upd${patterns.normsUpdated}`);
+  console.log(`TechCards:   total=${techCards.total}  created=${techCards.created} updated=${techCards.updated} matLines+${techCards.matLinesCreated} outLines+${techCards.outLinesCreated}`);
   console.log('==============================================\n');
   console.log('Demo password for all demo logins:', DEMO_PASSWORD);
   console.log('Demo logins:', EMPLOYEES.map((e) => e.login).join(', '));

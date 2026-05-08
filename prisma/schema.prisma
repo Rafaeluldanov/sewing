@@ -1980,6 +1980,11 @@ model Cell {
   /// стороны строки — снос ячейки не валит историческую отгрузку.
   finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
 
+  /// Размещённые в ячейку коробки упаковки (см. `model Box.placedInCellId`).
+  /// `onDelete: SetNull` со стороны коробки — снос ячейки не сносит
+  /// историческое размещение.
+  placedBoxes Box[] @relation("BoxPlacement")
+
   @@unique([lineId, lineIndex], name: "Cell_line_index_uniq")
   @@index([warehouseId])
   @@index([lineId])
@@ -2011,9 +2016,19 @@ model Box {
   createdById String
   createdAt   DateTime  @default(now())
 
-  createdBy Employee        @relation("BoxCreator", fields: [createdById], references: [id])
-  items     BoxItem[]
-  events    PassportEvent[]
+  /// Размещение коробки в ячейку склада. После закрытия коробка
+  /// показывается в терминале упаковщика как «ждёт размещения», пока
+  /// `placedAt` не будет проставлено через
+  /// `POST /api/packing/boxes/:id/place` (скан QR ячейки).
+  /// `placedInCellId` обнуляется на удалении ячейки (`onDelete: SetNull`),
+  /// чтобы не сносить историческую коробку.
+  placedAt       DateTime?
+  placedInCellId String?
+
+  createdBy   Employee        @relation("BoxCreator", fields: [createdById], references: [id])
+  items       BoxItem[]
+  events      PassportEvent[]
+  placedInCell Cell?          @relation("BoxPlacement", fields: [placedInCellId], references: [id], onDelete: SetNull)
 
   /// Foundation готовой продукции (см. `model FinishedGoodsMovement`
   /// ниже). Опциональная back-ссылка от движения выпуска к коробке,
@@ -2023,6 +2038,8 @@ model Box {
   finishedGoodsMovements FinishedGoodsMovement[]
 
   @@index([closedAt])
+  @@index([placedAt])
+  @@index([placedInCellId])
 }
 
 model BoxItem {

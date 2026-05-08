@@ -29,7 +29,7 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState, useTransition } from 'react';
-import type { BoxDetailDto } from '@sewing/shared/packing';
+import type { BoxDetailDto, BoxListItemDto } from '@sewing/shared/packing';
 import type {
   EmployeeLiteDto,
   ShiftMetaDto,
@@ -47,6 +47,9 @@ import {
   closeBoxTerminalAction,
   createBoxTerminalAction,
   getActiveBoxAction,
+  listClosedUnplacedBoxesTerminalAction,
+  listOpenBoxesTerminalAction,
+  placeBoxTerminalAction,
   scanPassportToBoxAction,
 } from './actions';
 
@@ -75,6 +78,24 @@ interface Props {
    * на другой операции) — терминал покажет баннер.
    */
   activeOperationCategory: string | null;
+  /**
+   * SSR-снимок незакрытых (`OPEN`) коробок. На Stage 1 терминала
+   * (когда нет активной карточки) выводится списком — упаковщик
+   * может вернуться к любой коробке (своей или коллеги) одним
+   * кликом, не вспоминая id и не теряя коробки между устройствами.
+   * Источник истины — backend (`GET /api/packing/boxes?status=OPEN`);
+   * клиент дополнительно перечитывает этот список после закрытия
+   * коробки и при ручном refresh.
+   */
+  initialOpenBoxes: BoxListItemDto[];
+  /**
+   * SSR-снимок «закрытых, но ещё не размещённых» коробок
+   * (`?status=CLOSED&placed=false`). Упаковщик видит, какие коробки
+   * упакованы и ждут разноса по ячейкам склада. Кнопка «Разместить»
+   * на строке открывает скан QR ячейки → `placeBoxTerminalAction`,
+   * после чего коробка пропадает из списка (`Box.placedAt`).
+   */
+  initialClosedUnplacedBoxes: BoxListItemDto[];
 }
 
 function formatTime(iso: string): string {
@@ -88,6 +109,8 @@ export function PackingTerminal({
   employee,
   initialShift,
   activeOperationCategory,
+  initialOpenBoxes,
+  initialClosedUnplacedBoxes,
 }: Props) {
   const isShiftActive = !!(initialShift && initialShift.active);
   const onPackingShift = isShiftActive && activeOperationCategory === 'PACKING';
@@ -109,7 +132,11 @@ export function PackingTerminal({
           operationName={initialShift!.operationName}
         />
       ) : (
-        <PackingMainTerminal shift={initialShift!} />
+        <PackingMainTerminal
+          shift={initialShift!}
+          initialOpenBoxes={initialOpenBoxes}
+          initialClosedUnplacedBoxes={initialClosedUnplacedBoxes}
+        />
       )}
     </div>
   );
@@ -136,10 +163,36 @@ function WrongOperationCard({ operationName }: { operationName: string }) {
 
 interface MainProps {
   shift: ShiftSessionDto;
+  initialOpenBoxes: BoxListItemDto[];
+  initialClosedUnplacedBoxes: BoxListItemDto[];
 }
 
-function PackingMainTerminal({ shift }: MainProps) {
+function PackingMainTerminal({
+  shift,
+  initialOpenBoxes,
+  initialClosedUnplacedBoxes,
+}: MainProps) {
   const [box, setBox] = useState<BoxDetailDto | null>(null);
+  // Локальный кеш списка `OPEN` коробок: первый рендер берёт SSR-снимок,
+  // дальше обновляется client-action'ом (`refreshOpenBoxes`) после
+  // закрытия коробки и при ручном refresh.
+  const [openBoxes, setOpenBoxes] =
+    useState<BoxListItemDto[]>(initialOpenBoxes);
+  const [openBoxesLoading, setOpenBoxesLoading] = useState(false);
+  // Локальный кеш «закрытых, но ещё не размещённых» коробок. После
+  // успешного `placeBoxTerminalAction` коробка из списка убирается
+  // оптимистично (без ожидания backend round-trip), а параллельно
+  // происходит refresh на случай несинхронных правок коллег.
+  const [closedUnplacedBoxes, setClosedUnplacedBoxes] = useState<
+    BoxListItemDto[]
+  >(initialClosedUnplacedBoxes);
+  const [closedUnplacedLoading, setClosedUnplacedLoading] = useState(false);
+  // id коробки, у которой сейчас открыт сканер ячейки для размещения
+  // (mutually exclusive с обычным сканером паспортов на Stage 2).
+  const [placingBoxId, setPlacingBoxId] = useState<string | null>(null);
+  const [placingBoxNumber, setPlacingBoxNumber] = useState<string | null>(null);
+  const [placeManualOpen, setPlaceManualOpen] = useState(false);
+  const [placeManualCode, setPlaceManualCode] = useState('');
   // Id коробки, которую упаковщик «свернул», но **не закрыл**: она
   // ещё `OPEN` в БД. Нужен, чтобы на пустом stage показать баннер
   // «Карточка свёрнута» с кнопкой возврата и не дать упаковщику
@@ -284,12 +337,23 @@ function PackingMainTerminal({ shift }: MainProps) {
 
   const handleScan = (decoded: string) => {
     setScannerOpen(false);
+    // Если активен flow «разместить коробку в ячейку» — общий
+    // QR-сканер уходит туда, а не в добавление паспорта.
+    if (placingBoxId) {
+      acceptPlacementCode(decoded);
+      return;
+    }
     acceptScan(decoded);
   };
 
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     acceptScan(manualCode);
+  };
+
+  const handlePlacementManualSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    acceptPlacementCode(placeManualCode);
   };
 
   const handleClose = () => {
@@ -320,6 +384,11 @@ function PackingMainTerminal({ shift }: MainProps) {
       setManualCode('');
       setManualOpen(false);
       setMaxQtyDraft('');
+      // После закрытия — список незакрытых коробок устаревает (только
+      // что закрытая должна исчезнуть; коллеги могли открыть/закрыть
+      // свои). Перечитываем backend, чтобы Stage 1 после «Создать
+      // новую коробку» показал актуальный пул.
+      refreshOpenBoxes();
     });
   };
 
@@ -340,6 +409,101 @@ function PackingMainTerminal({ shift }: MainProps) {
       const res = await getActiveBoxAction(id);
       if (!res.ok) return;
       setBox(res.data);
+    });
+  };
+
+  const refreshOpenBoxes = () => {
+    setOpenBoxesLoading(true);
+    startTransition(async () => {
+      const res = await listOpenBoxesTerminalAction();
+      setOpenBoxesLoading(false);
+      if (!res.ok) return;
+      setOpenBoxes(res.data);
+    });
+  };
+
+  const refreshClosedUnplacedBoxes = () => {
+    setClosedUnplacedLoading(true);
+    startTransition(async () => {
+      const res = await listClosedUnplacedBoxesTerminalAction();
+      setClosedUnplacedLoading(false);
+      if (!res.ok) return;
+      setClosedUnplacedBoxes(res.data);
+    });
+  };
+
+  const handleStartPlacement = (id: string, number: string) => {
+    setError(null);
+    setInfo(null);
+    setPlacingBoxId(id);
+    setPlacingBoxNumber(number);
+    setPlaceManualOpen(false);
+    setPlaceManualCode('');
+    // Открываем общий QR-сканер сразу — упаковщик ожидаемо сразу
+    // подносит QR ячейки. Альтернативный «ручной ввод» включается
+    // отдельной кнопкой ниже на той же карточке.
+    setScannerOpen(true);
+  };
+
+  const handleCancelPlacement = () => {
+    setPlacingBoxId(null);
+    setPlacingBoxNumber(null);
+    setPlaceManualOpen(false);
+    setPlaceManualCode('');
+    setScannerOpen(false);
+  };
+
+  const acceptPlacementCode = (code: string) => {
+    if (!placingBoxId) return;
+    const trimmed = code.trim();
+    if (!trimmed) {
+      setError({ message: 'Введите или отсканируйте код ячейки' });
+      return;
+    }
+    const id = placingBoxId;
+    setError(null);
+    startTransition(async () => {
+      const res = await placeBoxTerminalAction(id, trimmed);
+      if (!res.ok) {
+        setError({ message: res.error, requestId: res.errorRequestId });
+        return;
+      }
+      // Оптимистично выкидываем коробку из списка «ждут размещения»;
+      // параллельно делаем refresh — на случай, если коллеги тоже
+      // что-то двигали.
+      setClosedUnplacedBoxes((prev) => prev.filter((b) => b.id !== id));
+      refreshClosedUnplacedBoxes();
+      const cellCode = res.data.placedInCell?.code ?? '—';
+      setInfo(
+        `Коробка ${res.data.number} размещена в ячейку ${cellCode}.`,
+      );
+      setPlacingBoxId(null);
+      setPlacingBoxNumber(null);
+      setPlaceManualOpen(false);
+      setPlaceManualCode('');
+    });
+  };
+
+  const handlePickOpenBox = (id: string) => {
+    setError(null);
+    setInfo(null);
+    setLastAddedPassportId(null);
+    startTransition(async () => {
+      const res = await getActiveBoxAction(id);
+      if (!res.ok) {
+        setError({ message: res.error, requestId: res.errorRequestId });
+        return;
+      }
+      if (res.data.status === 'CLOSED') {
+        // Коллега успел закрыть, пока упаковщик смотрел список —
+        // обновим список и не открываем закрытую как активную.
+        setInfo(`Коробка ${res.data.number} уже закрыта.`);
+        refreshOpenBoxes();
+        return;
+      }
+      setBox(res.data);
+      setCollapsedBoxId(null);
+      setCollapsedBoxNumber(null);
     });
   };
 
@@ -397,6 +561,12 @@ function PackingMainTerminal({ shift }: MainProps) {
   // должен иметь явный путь к ней (см. docs/packing-close-ui-recon.md §6).
   // ----------------------------------------------------------------------
   if (!box) {
+    // Свёрнутая коробка показывается отдельным баннером выше — чтобы
+    // не дублировать её внутри списка «Открытые коробки», убираем по
+    // id. Закрытые в backend-фильтре `?status=OPEN` не приходят.
+    const visibleOpenBoxes = openBoxes.filter(
+      (b) => b.id !== collapsedBoxId,
+    );
     return (
       <>
         <ShiftStrip startedAt={shift.startedAt} />
@@ -429,6 +599,278 @@ function PackingMainTerminal({ shift }: MainProps) {
           </div>
         )}
 
+        {visibleOpenBoxes.length > 0 && (
+          <section
+            className="scan-card scan-card--simple packing-open-boxes"
+            aria-label="Открытые коробки"
+            style={{ marginBottom: '0.75rem' }}
+          >
+            <header
+              className="packing-open-boxes__header"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.5rem',
+              }}
+            >
+              <h2 className="scan-card__title" style={{ margin: 0 }}>
+                <Icon name="packing" size={22} />
+                <span style={{ marginLeft: '0.45rem' }}>
+                  Открытые коробки ({visibleOpenBoxes.length})
+                </span>
+              </h2>
+              <button
+                type="button"
+                className="scan-card__manual-toggle"
+                onClick={refreshOpenBoxes}
+                disabled={openBoxesLoading || isPending}
+              >
+                {openBoxesLoading ? 'Обновляем…' : 'Обновить'}
+              </button>
+            </header>
+            <p className="scan-card__hint">
+              Все незакрытые коробки. Нажмите «Продолжить» — карточка
+              откроется, можно сканировать паспорта или закрыть.
+            </p>
+            <ul
+              className="packing-open-boxes__list"
+              style={{
+                listStyle: 'none',
+                padding: 0,
+                margin: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+              }}
+            >
+              {visibleOpenBoxes.map((b) => (
+                <li
+                  key={b.id}
+                  className="packing-open-boxes__item"
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '0.5rem',
+                    padding: '0.6rem 0.75rem',
+                    border: '1px solid var(--color-border, #e2e8f0)',
+                    borderRadius: '0.5rem',
+                  }}
+                >
+                  <div style={{ minWidth: 0 }}>
+                    <strong>{b.number}</strong>
+                    <div className="meta-line" style={{ margin: 0 }}>
+                      {b.totalQty}/{b.maxQty} шт. · {b.itemsCount} паспорт(ов)
+                      {b.createdByName ? ` · ${b.createdByName}` : ''}
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    className="btn btn-primary"
+                    onClick={() => handlePickOpenBox(b.id)}
+                    disabled={isPending}
+                  >
+                    Продолжить
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </section>
+        )}
+
+        {closedUnplacedBoxes.length > 0 && (
+          <section
+            className="scan-card scan-card--simple packing-unplaced-boxes"
+            aria-label="Упакованы — ждут размещения"
+            style={{ marginBottom: '0.75rem' }}
+          >
+            <header
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: '0.5rem',
+              }}
+            >
+              <h2 className="scan-card__title" style={{ margin: 0 }}>
+                <Icon name="packing" size={22} />
+                <span style={{ marginLeft: '0.45rem' }}>
+                  Ждут размещения ({closedUnplacedBoxes.length})
+                </span>
+              </h2>
+              <button
+                type="button"
+                className="scan-card__manual-toggle"
+                onClick={refreshClosedUnplacedBoxes}
+                disabled={closedUnplacedLoading || isPending}
+              >
+                {closedUnplacedLoading ? 'Обновляем…' : 'Обновить'}
+              </button>
+            </header>
+            <p className="scan-card__hint">
+              Закрытые коробки, которые ещё не размещены в ячейку.
+              Нажмите «Разместить» и отсканируйте QR ячейки склада.
+            </p>
+            <ul
+              style={{
+                listStyle: 'none',
+                padding: 0,
+                margin: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.5rem',
+              }}
+            >
+              {closedUnplacedBoxes.map((b) => {
+                const isPlacingThis = placingBoxId === b.id;
+                return (
+                  <li
+                    key={b.id}
+                    style={{
+                      display: 'flex',
+                      flexDirection: 'column',
+                      gap: '0.5rem',
+                      padding: '0.6rem 0.75rem',
+                      border: '1px solid var(--color-border, #e2e8f0)',
+                      borderRadius: '0.5rem',
+                      background: isPlacingThis
+                        ? 'var(--color-surface-soft, #f8fafc)'
+                        : undefined,
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: '0.5rem',
+                      }}
+                    >
+                      <div style={{ minWidth: 0 }}>
+                        <strong>{b.number}</strong>
+                        <div className="meta-line" style={{ margin: 0 }}>
+                          {b.totalQty} шт. · {b.itemsCount} паспорт(ов)
+                          {b.closedAt
+                            ? ` · закрыта ${formatTime(b.closedAt)}`
+                            : ''}
+                          {b.createdByName ? ` · ${b.createdByName}` : ''}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.4rem' }}>
+                        <a
+                          className="btn"
+                          href={`/api/packing/boxes/${encodeURIComponent(b.id)}/label`}
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          Этикетка
+                        </a>
+                        {!isPlacingThis ? (
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => handleStartPlacement(b.id, b.number)}
+                            disabled={isPending}
+                          >
+                            Разместить
+                          </button>
+                        ) : (
+                          <button
+                            type="button"
+                            className="btn"
+                            onClick={handleCancelPlacement}
+                            disabled={isPending}
+                          >
+                            Отмена
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {isPlacingThis && (
+                      <div
+                        style={{
+                          display: 'flex',
+                          flexDirection: 'column',
+                          gap: '0.5rem',
+                        }}
+                      >
+                        <p className="meta-line" style={{ margin: 0 }}>
+                          Отсканируйте QR ячейки склада, куда вы кладёте
+                          коробку <strong>{placingBoxNumber}</strong>.
+                        </p>
+                        <div style={{ display: 'flex', gap: '0.4rem' }}>
+                          <button
+                            type="button"
+                            className="btn btn-primary"
+                            onClick={() => {
+                              setError(null);
+                              setScannerOpen(true);
+                            }}
+                            disabled={isPending}
+                          >
+                            <Icon name="scan" size={18} />
+                            <span style={{ marginLeft: '0.4rem' }}>
+                              Сканировать ячейку
+                            </span>
+                          </button>
+                          <button
+                            type="button"
+                            className="scan-card__manual-toggle"
+                            onClick={() => setPlaceManualOpen((v) => !v)}
+                          >
+                            {placeManualOpen
+                              ? 'Скрыть ручной ввод'
+                              : 'Ввести код вручную'}
+                          </button>
+                        </div>
+                        {placeManualOpen && (
+                          <form
+                            onSubmit={handlePlacementManualSubmit}
+                            aria-label="Ввести код ячейки вручную"
+                            className="seamstress-start__manual"
+                          >
+                            <label
+                              className="scan-card__input"
+                              htmlFor={`packing-place-cell-${b.id}`}
+                            >
+                              <span className="scan-card__input-label">
+                                Код ячейки
+                              </span>
+                              <input
+                                id={`packing-place-cell-${b.id}`}
+                                type="text"
+                                inputMode="text"
+                                autoComplete="off"
+                                autoCapitalize="off"
+                                autoCorrect="off"
+                                spellCheck={false}
+                                placeholder="cell:… / код ячейки"
+                                value={placeManualCode}
+                                onChange={(e) =>
+                                  setPlaceManualCode(e.target.value)
+                                }
+                                autoFocus
+                              />
+                            </label>
+                            <button
+                              type="submit"
+                              className="btn btn-block"
+                              disabled={isPending}
+                            >
+                              Разместить в ячейку
+                            </button>
+                          </form>
+                        )}
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
+          </section>
+        )}
+
         <div
           className="scan-card scan-card--simple"
           aria-label="Создать коробку"
@@ -440,8 +882,9 @@ function PackingMainTerminal({ shift }: MainProps) {
             </h2>
             <p className="scan-card__hint">
               Откройте коробку — затем сканируйте паспорта. По умолчанию
-              лимит 100 шт.; коробка должна быть однородной (одинаковое
-              изделие, цвет и размер).
+              рекомендуем лимит 100 шт.; можно задать другой, если
+              коробка нестандартная. Содержимое должно быть однородным
+              (одинаковое изделие, цвет и размер).
             </p>
           </div>
 
@@ -476,7 +919,7 @@ function PackingMainTerminal({ shift }: MainProps) {
                 e.preventDefault();
                 handleCreateBox();
               }}
-              aria-label="Уменьшить лимит коробки"
+              aria-label="Изменить лимит коробки"
               className="seamstress-start__manual"
             >
               <label className="scan-card__input" htmlFor="packing-max-qty">
@@ -485,7 +928,6 @@ function PackingMainTerminal({ shift }: MainProps) {
                   id="packing-max-qty"
                   type="number"
                   min={1}
-                  max={100}
                   step={1}
                   inputMode="numeric"
                   placeholder="100"
@@ -581,6 +1023,14 @@ function PackingMainTerminal({ shift }: MainProps) {
           )}
 
           <div className="qc-card__actions">
+            <a
+              className="btn btn-success btn-block btn-lg"
+              href={box.labelUrl}
+              target="_blank"
+              rel="noreferrer"
+            >
+              Печать наклейки
+            </a>
             <button
               type="button"
               className="btn btn-primary btn-block btn-lg"

@@ -5,7 +5,9 @@ import { redirect } from 'next/navigation';
 import {
   AddPassportToBoxSchema,
   CreateBoxSchema,
+  PlaceBoxSchema,
   type BoxDetailDto,
+  type BoxListItemDto,
 } from '@sewing/shared/packing';
 import { ApiRequestError } from '@/lib/api';
 import {
@@ -13,6 +15,8 @@ import {
   closeBox,
   createBox,
   getBox,
+  listBoxes,
+  placeBox,
 } from '@/lib/packing-api';
 import type { PackingFormState } from './form-state';
 
@@ -135,6 +139,92 @@ export async function getActiveBoxAction(
 ): Promise<PackingTerminalResult<BoxDetailDto>> {
   try {
     const box = await getBox(boxId);
+    return { ok: true, data: box };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/**
+ * Список открытых (не закрытых) коробок — для Stage 1 терминала.
+ * Упаковщик видит все коробки со статусом `OPEN` и может вернуться
+ * к любой из них (своей или коллеги) одним кликом, не перетыкая
+ * id вручную и не теряя коробку, оставленную с другого устройства.
+ *
+ * Backend (`PackingController.list`) уже отдаёт этот срез по
+ * `?status=OPEN`; клиенту достаточно лёгкой обёртки, которая
+ * возвращает массив без пагинации (на MVP коробок «в полёте»
+ * меньше, чем pageSize=50).
+ */
+export async function listOpenBoxesTerminalAction(): Promise<
+  PackingTerminalResult<BoxListItemDto[]>
+> {
+  try {
+    const page = await listBoxes({ status: 'OPEN', page: 1, pageSize: 50 });
+    return { ok: true, data: page.items };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/**
+ * Список «закрытых, но ещё не размещённых» коробок — для Stage 1
+ * терминала. Упаковщик видит, какие коробки уже упакованы и ждут,
+ * пока их разнесут по ячейкам склада. После `placeBoxTerminalAction`
+ * коробка из этого списка пропадает.
+ */
+export async function listClosedUnplacedBoxesTerminalAction(): Promise<
+  PackingTerminalResult<BoxListItemDto[]>
+> {
+  try {
+    const page = await listBoxes({
+      status: 'CLOSED',
+      placed: false,
+      page: 1,
+      pageSize: 50,
+    });
+    return { ok: true, data: page.items };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/**
+ * Разместить закрытую коробку в ячейку. Принимает QR-payload `cell:<id>`
+ * либо код ячейки (`Cell.code` / `Cell.qrCode`). Backend
+ * (`PackingService.place`) сам резолвит код через ту же логику, что и
+ * `findCellByCode` в `PassportsService`.
+ */
+export async function placeBoxTerminalAction(
+  boxId: string,
+  code: string,
+): Promise<PackingTerminalResult<BoxDetailDto>> {
+  const trimmed = code.trim();
+  if (!trimmed) {
+    return { ok: false, error: 'Введите или отсканируйте код ячейки' };
+  }
+  const parsed = PlaceBoxSchema.safeParse({ code: trimmed });
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные',
+    };
+  }
+  try {
+    const box = await placeBox(boxId, parsed.data);
+    revalidateBox(box);
     return { ok: true, data: box };
   } catch (e) {
     return {

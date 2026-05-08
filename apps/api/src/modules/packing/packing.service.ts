@@ -18,14 +18,19 @@ import type {
   BoxesPage,
   CreateBoxDto,
   ListBoxesQuery,
+  PlaceBoxDto,
 } from '@sewing/shared/packing';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  BoxAlreadyPlacedException,
   BoxCapacityExceededException,
   BoxClosedException,
   BoxEmptyCloseException,
   BoxHomogeneityViolatedException,
+  BoxNotClosedForPlacementException,
   BoxNotFoundException,
+  CellInactiveException,
+  CellNotFoundException,
   EmployeeInactiveException,
   EmployeeNotFoundException,
   PackingShiftRequiredException,
@@ -42,6 +47,7 @@ import { FinishedGoodsService } from '../finished-goods/finished-goods.service.j
 type BoxRow = Prisma.BoxGetPayload<{
   include: {
     createdBy: { select: { id: true; fullName: true } };
+    placedInCell: { select: { id: true; code: true } };
     items: {
       include: {
         passport: {
@@ -132,6 +138,10 @@ export class PackingService {
     const where: Prisma.BoxWhereInput = {};
     if (query.status === 'OPEN') where.closedAt = null;
     if (query.status === 'CLOSED') where.closedAt = { not: null };
+    // Фильтр размещения: упаковочный терминал на Stage 1 показывает
+    // closed-but-not-placed коробки через `?status=CLOSED&placed=false`.
+    if (query.placed === true) where.placedAt = { not: null };
+    if (query.placed === false) where.placedAt = null;
 
     const [total, rows] = await this.prisma.$transaction([
       this.prisma.box.count({ where }),
@@ -139,6 +149,7 @@ export class PackingService {
         where,
         include: {
           createdBy: { select: { id: true, fullName: true } },
+          placedInCell: { select: { id: true, code: true } },
           items: {
             include: {
               passport: {
@@ -446,6 +457,96 @@ export class PackingService {
   }
 
   // -------------------------------------------------------------------------
+  // PLACE (размещение коробки в ячейку)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Размещение закрытой коробки в ячейку склада. После этой операции
+   * коробка пропадает из списка «ждут размещения» в терминале
+   * упаковщика (`?placed=false&status=CLOSED`).
+   *
+   * Бизнес-инварианты:
+   *   - размещать можно только закрытые коробки (есть `closedAt`),
+   *     иначе `BoxNotClosedForPlacementException`;
+   *   - повторное размещение запрещено — `BoxAlreadyPlacedException`;
+   *   - ячейка должна существовать и быть активной (`CellNotFound` /
+   *     `CellInactive`).
+   *
+   * `dto.code` принимает QR-payload `cell:<id>`, `Cell.code` или
+   * `Cell.qrCode` — flow совпадает с `findCellByCode`.
+   *
+   * Аудит/события: на MVP отдельного `PassportEvent` не пишем —
+   * перемещение «коробка → ячейка» — это управленческая фиксация,
+   * а не движение паспорта (паспорта уже PACKED). Если позже
+   * понадобится — добавим `BOX_PLACED` event без миграции схемы.
+   */
+  async place(
+    boxId: string,
+    dto: PlaceBoxDto,
+    actorEmployeeId: string,
+  ): Promise<BoxDetailDto> {
+    // Резолвим сотрудника отдельно от транзакции — единственная
+    // цель валидации тут «не дать заблокированному пользователю
+    // размещать коробки» (мы доверяем session-cookie, но проверяем
+    // active=true).
+    const actor = await this.prisma.employee.findUnique({
+      where: { id: actorEmployeeId },
+      select: { id: true, active: true },
+    });
+    if (!actor) throw new EmployeeNotFoundException();
+    if (!actor.active) throw new EmployeeInactiveException();
+
+    // Резолвим ячейку. Поддерживаем все три формы — `cellId`,
+    // QR-payload `cell:<id>` или код ячейки.
+    let cellId: string | null = null;
+    if (dto.cellId) cellId = dto.cellId;
+    else if (dto.code) {
+      const trimmed = dto.code.trim();
+      const fromQr = trimmed.startsWith('cell:')
+        ? trimmed.slice('cell:'.length)
+        : trimmed;
+      const cell = await this.prisma.cell.findFirst({
+        where: {
+          OR: [{ id: fromQr }, { qrCode: trimmed }, { code: trimmed }],
+        },
+        select: { id: true, active: true },
+      });
+      if (!cell) throw new CellNotFoundException();
+      if (!cell.active) throw new CellInactiveException();
+      cellId = cell.id;
+    }
+    if (!cellId) throw new CellNotFoundException();
+
+    // Проверяем активность ячейки даже если cellId передан явно —
+    // защита от устаревших ссылок.
+    const cell = await this.prisma.cell.findUnique({
+      where: { id: cellId },
+      select: { id: true, active: true },
+    });
+    if (!cell) throw new CellNotFoundException();
+    if (!cell.active) throw new CellInactiveException();
+
+    await this.prisma.$transaction(async (tx) => {
+      const box = await tx.box.findUnique({
+        where: { id: boxId },
+        select: { id: true, closedAt: true, placedAt: true },
+      });
+      if (!box) throw new BoxNotFoundException();
+      if (!box.closedAt) throw new BoxNotClosedForPlacementException();
+      if (box.placedAt) throw new BoxAlreadyPlacedException();
+      await tx.box.update({
+        where: { id: box.id },
+        data: { placedAt: new Date(), placedInCellId: cellId },
+      });
+    });
+
+    this.logger.log(
+      `event=packing.place boxId=${boxId} cellId=${cellId} actorId=${actorEmployeeId}`,
+    );
+    return this.getOne(boxId);
+  }
+
+  // -------------------------------------------------------------------------
   // INTERNAL
   // -------------------------------------------------------------------------
 
@@ -454,6 +555,7 @@ export class PackingService {
       where: { id },
       include: {
         createdBy: { select: { id: true, fullName: true } },
+        placedInCell: { select: { id: true, code: true } },
         items: {
           include: {
             passport: {
@@ -552,6 +654,10 @@ export class PackingService {
       closedAt: row.closedAt ? row.closedAt.toISOString() : null,
       createdById: row.createdBy.id,
       createdByName: row.createdBy.fullName,
+      placedAt: row.placedAt ? row.placedAt.toISOString() : null,
+      placedInCell: row.placedInCell
+        ? { id: row.placedInCell.id, code: row.placedInCell.code }
+        : null,
     };
   }
 

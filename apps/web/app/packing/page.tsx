@@ -61,6 +61,39 @@ export default async function PackingPage({
       if (!(e instanceof ApiRequestError)) throw e;
     }
 
+    // Список незакрытых коробок — на Stage 1 терминала (когда у
+    // упаковщика нет активной карточки) показываем общий пул `OPEN`
+    // коробок, чтобы можно было вернуться к любой из них одним кликом
+    // и не терять коробки, открытые с другого устройства/коллегой.
+    // fail-soft: если backend временно недоступен, отдаём пустой
+    // список — терминал всё равно умеет создать новую коробку.
+    let initialOpenBoxes: Awaited<ReturnType<typeof listBoxes>>['items'] = [];
+    try {
+      const page = await listBoxes({ status: 'OPEN', page: 1, pageSize: 50 });
+      initialOpenBoxes = page.items;
+    } catch (e) {
+      if (!(e instanceof ApiRequestError)) throw e;
+    }
+
+    // Список «закрытых, но ещё не размещённых» — упаковщик должен
+    // видеть, какие коробки уже упакованы и ждут разноса по ячейкам.
+    // После размещения через `placeBoxTerminalAction` коробка
+    // пропадает из этого списка (см. `Box.placedAt`).
+    let initialClosedUnplacedBoxes: Awaited<
+      ReturnType<typeof listBoxes>
+    >['items'] = [];
+    try {
+      const page = await listBoxes({
+        status: 'CLOSED',
+        placed: false,
+        page: 1,
+        pageSize: 50,
+      });
+      initialClosedUnplacedBoxes = page.items;
+    } catch (e) {
+      if (!(e instanceof ApiRequestError)) throw e;
+    }
+
     const operation = shift
       ? meta.operations.find((o) => o.id === shift.operationId)
       : null;
@@ -99,6 +132,8 @@ export default async function PackingPage({
           employee={employee}
           initialShift={shift}
           activeOperationCategory={activeOperationCategory}
+          initialOpenBoxes={initialOpenBoxes}
+          initialClosedUnplacedBoxes={initialClosedUnplacedBoxes}
         />
       </div>
     );
@@ -172,8 +207,10 @@ export default async function PackingPage({
           Новая коробка
         </h2>
         <p className="meta-line" style={{ margin: '0 0 0.75rem' }}>
-          Лимит на MVP — 100 шт.; коробка должна быть однородной по
-          изделию, цвету и размеру. Можно опционально уменьшить лимит.
+          Рекомендуемая вместимость — 100 шт.; коробка должна быть
+          однородной по изделию, цвету и размеру. Лимит можно задать
+          любым целым {`> 0`} — увеличить или уменьшить в зависимости
+          от того, что физически вмещает коробка.
         </p>
         <CreateBoxForm disabled={!onPackingShift} />
       </div>
