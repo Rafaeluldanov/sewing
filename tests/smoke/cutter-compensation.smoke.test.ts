@@ -183,9 +183,9 @@ describe('backend EarningsService — две схемы по CompanyDivision.cod
     expect(earningsSrc).toMatch(/P2002/);
   });
 
-  test('createPendingForPreviousOperation (швеи) и approvePendingForPassport остались на месте', () => {
+  test('createPendingForCompletedOperation (швеи) и approvePendingForPassport остались на месте', () => {
     // Гарантия, что мы не задели payroll швей / упаковочный апрув.
-    expect(earningsSrc).toMatch(/createPendingForPreviousOperation\(/);
+    expect(earningsSrc).toMatch(/createPendingForCompletedOperation\(/);
     expect(earningsSrc).toMatch(/approvePendingForPassport\(/);
   });
 });

@@ -7,7 +7,7 @@
  *   - Контракт DTO двух источников начислений: `PASSPORT_CREATED` /
  *     IMMEDIATE / APPROVED против `OPERATION_TRANSITION` /
  *     AFTER_RELEASE / PENDING_RELEASE — один паспорт, обе ветки;
- *   - `createPendingForPreviousOperation` при повторном trigger даёт
+ *   - `createPendingForCompletedOperation` при повторном trigger даёт
  *     одну строку (composite-key
  *     `@@unique(passportId, operationId, employeeId, sourceEventType)`,
  *     обработка P2002 в `safeCreate` — см. earnings.service.ts §1068);
@@ -165,10 +165,10 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
   });
 
   // ---------------------------------------------------------------------------
-  // 2. createPendingForPreviousOperation — контракт DTO
+  // 2. createPendingForCompletedOperation — контракт DTO
   // ---------------------------------------------------------------------------
 
-  test('createPendingForPreviousOperation: PENDING_RELEASE + AFTER_RELEASE + OPERATION_TRANSITION + approvedAt=null', async () => {
+  test('createPendingForCompletedOperation: PENDING_RELEASE + AFTER_RELEASE + OPERATION_TRANSITION + approvedAt=null', async () => {
     const setup = await setupOrderWithPassport({
       divisionCode: 'OTHER',
       sizeKey: 'M',
@@ -178,10 +178,10 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
     });
     // Ставка для оверлока seed-минимум = 10₽ (BY_SIZE для M).
     await t.prisma.$transaction(async (tx) => {
-      await earnings.createPendingForPreviousOperation(tx, {
+      await earnings.createPendingForCompletedOperation(tx, {
         passportId: setup.passportId,
-        previousOperationId: seed.operations.SEW_OVERLOCK_1.id,
-        previousEmployeeId: seed.employees.seamstress.id,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
         productId: seed.product.id,
         sizeId: setup.sizeId,
         qty: 4,
@@ -204,11 +204,11 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
   });
 
   // ---------------------------------------------------------------------------
-  // 3. createPendingForPreviousOperation — повторный trigger даёт 1 строку
+  // 3. createPendingForCompletedOperation — повторный trigger даёт 1 строку
   //    (composite-key идемпотентность; safeCreate глотает P2002).
   // ---------------------------------------------------------------------------
 
-  test('createPendingForPreviousOperation повторный trigger → ровно одна OperationEntry', async () => {
+  test('createPendingForCompletedOperation повторный trigger → ровно одна OperationEntry', async () => {
     const setup = await setupOrderWithPassport({
       divisionCode: 'OTHER',
       sizeKey: 'M',
@@ -218,10 +218,10 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
     });
     const trigger = () =>
       t.prisma.$transaction(async (tx) => {
-        await earnings.createPendingForPreviousOperation(tx, {
+        await earnings.createPendingForCompletedOperation(tx, {
           passportId: setup.passportId,
-          previousOperationId: seed.operations.SEW_OVERLOCK_1.id,
-          previousEmployeeId: seed.employees.seamstress.id,
+          operationId: seed.operations.SEW_OVERLOCK_1.id,
+          employeeId: seed.employees.seamstress.id,
           productId: seed.product.id,
           sizeId: setup.sizeId,
           qty: 3,
@@ -237,12 +237,12 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
   });
 
   // ---------------------------------------------------------------------------
-  // 4. RACE — параллельные триггеры createPendingForPreviousOperation
+  // 4. RACE — параллельные триггеры createPendingForCompletedOperation
   //    не плодят дублей и не валят процесс. Composite-key + safeCreate
   //    обеспечивают одну строку в БД.
   // ---------------------------------------------------------------------------
 
-  test('RACE: 5 параллельных createPendingForPreviousOperation → 1 строка, без 500', async () => {
+  test('RACE: 5 параллельных createPendingForCompletedOperation → 1 строка, без 500', async () => {
     const setup = await setupOrderWithPassport({
       divisionCode: 'OTHER',
       sizeKey: 'M',
@@ -252,10 +252,10 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
     });
     const fire = () =>
       t.prisma.$transaction(async (tx) => {
-        await earnings.createPendingForPreviousOperation(tx, {
+        await earnings.createPendingForCompletedOperation(tx, {
           passportId: setup.passportId,
-          previousOperationId: seed.operations.SEW_OVERLOCK_1.id,
-          previousEmployeeId: seed.employees.seamstress.id,
+          operationId: seed.operations.SEW_OVERLOCK_1.id,
+          employeeId: seed.employees.seamstress.id,
           productId: seed.product.id,
           sizeId: setup.sizeId,
           qty: 6,
@@ -490,10 +490,10 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
       });
     });
     await t.prisma.$transaction(async (tx) => {
-      await earnings.createPendingForPreviousOperation(tx, {
+      await earnings.createPendingForCompletedOperation(tx, {
         passportId: setup.passportId,
-        previousOperationId: seed.operations.SEW_OVERLOCK_1.id,
-        previousEmployeeId: seed.employees.seamstress.id,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
         productId: seed.product.id,
         sizeId: setup.sizeId,
         qty: 2,
@@ -550,10 +550,10 @@ describeWithDb('integration — EarningsService and OperationEntry single-write 
           productId: seed.product.id,
           qty: 5,
         });
-        await earnings.createPendingForPreviousOperation(tx, {
+        await earnings.createPendingForCompletedOperation(tx, {
           passportId: setup.passportId,
-          previousOperationId: seed.operations.SEW_OVERLOCK_1.id,
-          previousEmployeeId: seed.employees.seamstress.id,
+          operationId: seed.operations.SEW_OVERLOCK_1.id,
+          employeeId: seed.employees.seamstress.id,
           productId: seed.product.id,
           sizeId: setup.sizeId,
           qty: 5,

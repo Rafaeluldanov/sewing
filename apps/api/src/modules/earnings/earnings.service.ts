@@ -45,8 +45,9 @@ export const CUTTER_B2B_SEWING_PERCENT_ENV = 'CUTTER_B2B_SEWING_PERCENT';
  * 1. Создаёт `OperationEntry` в нужный момент:
  *    - immediate-начисление раскройщику в `PassportsService.create`
  *      (`createImmediateForCutter`);
- *    - deferred-начисление швее за предыдущую операцию в
- *      `PassportsService.scanOnOperation` (`createPendingForPreviousOperation`).
+ *    - deferred-начисление швее за её только что завершённую
+ *      операцию в `PassportsService.completeOperationByEmployee`
+ *      (`createPendingForCompletedOperation`).
  *
  * 2. Подтверждает все pending-начисления паспорта в момент закрытия
  *    коробки (`approvePendingForPassport`, вызывается из
@@ -704,39 +705,41 @@ export class EarningsService {
   // ===========================================================================
 
   /**
-   * Пошив: при переходе паспорта на следующую операцию мы платим
-   * предыдущему исполнителю предыдущей операции. Контракт ADR-0005
+   * Пошив: в момент, когда швея явно завершила свою операцию через
+   * `PassportsService.completeOperationByEmployee`, создаём ей
+   * `PENDING_RELEASE`-начисление за эту операцию. Контракт ADR-0005
    * §«Создание»: `status = PENDING_RELEASE`, `approvedAt = null`,
-   * `qty = passport.qtyCut` на момент перехода.
+   * `qty = passport.qtyCut`. Подтверждение по-прежнему — на закрытии
+   * коробки (`approvePendingForPassport`).
    *
    * Источник истины «есть ли сдельная ставка» — `Operation.pricingMode`
    * (см. `docs/domain.md §16a`, `OperationsService.resolveRate`). Если
-   * предыдущая операция оклад/нет ставки или исполнитель не piecework —
-   * тихо ничего не создаём.
+   * операция оклад/нет ставки или исполнитель не piecework — тихо
+   * ничего не создаём.
    *
-   * Дубли защищены `@@unique`: повторный скан той же сменой/тем же
-   * сотрудником на той же операции не поднимает второе начисление.
+   * Дубли защищены `@@unique`: повторный complete тем же сотрудником
+   * по тому же паспорту/операции не поднимает второе начисление.
    *
-   * Должен вызываться из той же транзакции, что и обновление
-   * `Passport.currentOperationId/currentEmployeeId` и `OPERATION_SCAN`.
+   * Должен вызываться из той же транзакции, что и `OPERATION_FINISHED`
+   * `PassportEvent` и обновление `Passport.currentOperationId`.
    */
-  async createPendingForPreviousOperation(
+  async createPendingForCompletedOperation(
     tx: Prisma.TransactionClient,
     args: {
       passportId: string;
-      previousOperationId: string | null;
-      previousEmployeeId: string | null;
+      operationId: string | null;
+      employeeId: string | null;
       productId: string;
       sizeId: string;
       qty: number;
       sourceEventId?: string | null;
     },
   ): Promise<void> {
-    if (!args.previousOperationId || !args.previousEmployeeId) return;
+    if (!args.operationId || !args.employeeId) return;
     if (args.qty <= 0) return;
 
     const op = await tx.operation.findUnique({
-      where: { id: args.previousOperationId },
+      where: { id: args.operationId },
       select: { id: true, code: true, pricingMode: true },
     });
     if (!op) return;
@@ -750,7 +753,7 @@ export class EarningsService {
     if (op.code === 'CUT_CUT') return;
 
     const employee = await tx.employee.findUnique({
-      where: { id: args.previousEmployeeId },
+      where: { id: args.employeeId },
       select: { id: true, compensationType: true, active: true },
     });
     if (!employee || !employee.active) return;

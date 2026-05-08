@@ -11,7 +11,7 @@
  *   4. RBAC — менеджерские роли видят, рабочие — 403.
  *   5. Earnings integration — earningsService.resolveRate
  *      используется в `createImmediateForCutter` /
- *      `createPendingForPreviousOperation`:
+ *      `createPendingForCompletedOperation`:
  *        - FIXED → используется `Operation.fixedRate`;
  *        - BY_SIZE → используется `OperationRateBySize.rate`;
  *        - SALARY_ONLY → начисление вообще не создаётся.

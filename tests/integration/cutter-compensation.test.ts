@@ -17,7 +17,7 @@
  *      OperationEntry, audit warning.
  *   7. Идемпотентность: повторный trigger не создаёт второе
  *      начисление.
- *   8. Payroll швеи не задет (`createPendingForPreviousOperation`
+ *   8. Payroll швеи не задет (`createPendingForCompletedOperation`
  *      продолжает работать как раньше).
  *
  * Для скорости и стабильности тесты вызывают `EarningsService.
@@ -566,7 +566,7 @@ describeWithDb('integration — cutter B2B compensation', () => {
   // 8. NON-CUTTER PAYROLL UNAFFECTED
   // ---------------------------------------------------------------------------
 
-  test('Швея payroll (createPendingForPreviousOperation) не задет: создаёт PENDING_RELEASE с FIXED-ставкой', async () => {
+  test('Швея payroll (createPendingForCompletedOperation) не задет: создаёт PENDING_RELEASE с FIXED-ставкой', async () => {
     // Перенастраиваем оверлок на FIXED, чтобы было детерминированно
     // (BY_SIZE-ставки seed-а тоже работают, но мы фиксируем
     // конкретный сценарий).
@@ -586,10 +586,10 @@ describeWithDb('integration — cutter B2B compensation', () => {
     // Для MVP проще проверить, что метод вообще создал именно
     // PENDING_RELEASE для seamstress, а не повторил логику cutter.
     await t.prisma.$transaction(async (tx) => {
-      await earnings.createPendingForPreviousOperation(tx, {
+      await earnings.createPendingForCompletedOperation(tx, {
         passportId: setup.passportId,
-        previousOperationId: seed.operations.SEW_OVERLOCK_1.id,
-        previousEmployeeId: seed.employees.seamstress.id,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
         productId: seed.product.id,
         sizeId: setup.sizeId,
         qty: 4,

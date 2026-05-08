@@ -1390,7 +1390,7 @@ export class PassportsService {
           currentRouteStepIndex: nextRouteStepIndex,
         },
       });
-      const event = await tx.passportEvent.create({
+      await tx.passportEvent.create({
         data: {
           passportId: passport.id,
           type: PassportEventType.OPERATION_SCAN,
@@ -1400,20 +1400,9 @@ export class PassportsService {
           qty: passport.qtyGood,
         },
       });
-      // Шаг 9 (ADR-0005): начисление PENDING_RELEASE предыдущему
-      // исполнителю предыдущей операции. Сервис сам решит, выписывать
-      // ли начисление: проверит, что operation — piecework и не CUT_CUT
-      // (он покрыт immediate-веткой), а employee — на сдельной оплате.
-      // Дубли защищены `@@unique` и обработкой P2002 в сервисе.
-      await this.earnings.createPendingForPreviousOperation(tx, {
-        passportId: passport.id,
-        previousOperationId,
-        previousEmployeeId,
-        productId: passport.productId,
-        sizeId: passport.sizeId,
-        qty: passport.qtyCut,
-        sourceEventId: event.id,
-      });
+      // Сдельное начисление швее теперь создаётся в момент явного
+      // завершения операции (`completeOperationByEmployee`), а не на
+      // следующем скане — см. `EarningsService.createPendingForCompletedOperation`.
       // Audit: фиксируем переход на новую операцию — это самое
       // частое движение паспорта и самый ценный срез для разбора
       // («куда и от кого ушла партия»). Соблюдаем минимальный
@@ -1609,7 +1598,7 @@ export class PassportsService {
           currentRouteStepIndex: nextRouteStepIndex,
         },
       });
-      await tx.passportEvent.create({
+      const finishedEvent = await tx.passportEvent.create({
         data: {
           passportId: passport.id,
           type: PassportEventType.OPERATION_FINISHED,
@@ -1618,6 +1607,22 @@ export class PassportsService {
           employeeId,
           qty: passport.qtyGood,
         },
+      });
+      // Шаг 9 (ADR-0005): начисление PENDING_RELEASE самой швее за
+      // только что завершённую операцию. Сервис сам решит, выписывать
+      // ли начисление: проверит, что operation — piecework и не CUT_CUT
+      // (он покрыт immediate-веткой), а employee — на сдельной оплате.
+      // Подтверждение остаётся за упаковщиком в `PackingService.close`
+      // (`approvePendingForPassport`). Дубли защищены `@@unique` и
+      // обработкой P2002 в сервисе.
+      await this.earnings.createPendingForCompletedOperation(tx, {
+        passportId: passport.id,
+        operationId: completedOperationId,
+        employeeId,
+        productId: passport.productId,
+        sizeId: passport.sizeId,
+        qty: passport.qtyCut,
+        sourceEventId: finishedEvent.id,
       });
       // Audit: швея явно завершила свою операцию (см. ТЗ §7.2).
       // Payload расширен before/after-снэпшотами и `completedOperationId`
