@@ -11,6 +11,77 @@ interface Props {
 
 const REGION_ID = 'qr-scanner-region';
 
+type CameraErrorKind =
+  | 'insecure'
+  | 'unsupported'
+  | 'denied'
+  | 'no-device'
+  | 'busy'
+  | 'overconstrained'
+  | 'unknown';
+
+interface CameraError {
+  kind: CameraErrorKind;
+  detail: string;
+}
+
+// Подсказка пользователю по типу отказа. Заголовок «Нет доступа к камере»
+// одинаковый, а вот действие — разное: запретили в настройках браузера vs
+// камера занята vs HTTP вместо HTTPS — лечатся по-разному.
+const HINT: Record<CameraErrorKind, string> = {
+  insecure:
+    'Камера работает только по защищённому соединению (HTTPS). Откройте страницу через https://… вместо http:// или IP-адреса.',
+  unsupported:
+    'Этот браузер не умеет включать камеру. Откройте сайт в Chrome/Safari вместо встроенного браузера приложения (Telegram, ВК и т.п.).',
+  denied:
+    'Доступ к камере запрещён в настройках браузера. Откройте настройки сайта (значок замка слева от адреса), включите камеру и перезагрузите страницу.',
+  'no-device':
+    'Камера не найдена. Проверьте, что у устройства есть камера и она не отключена в настройках системы.',
+  busy: 'Камера занята другой вкладкой или приложением. Закройте их и попробуйте снова.',
+  overconstrained:
+    'Не удалось включить заднюю камеру. Попробуйте ещё раз — возможно, на устройстве доступна только фронтальная.',
+  unknown: 'Не удалось включить камеру. Попробуйте ещё раз.',
+};
+
+function classifyError(e: unknown): CameraError {
+  const detail =
+    e instanceof Error && e.message
+      ? e.message
+      : typeof e === 'string'
+        ? e
+        : 'Неизвестная ошибка камеры';
+  const name = e instanceof Error ? e.name : '';
+  const lower = detail.toLowerCase();
+
+  // html5-qrcode иногда оборачивает оригинальный DOMException в Error —
+  // поэтому смотрим и на name, и на подстроку в сообщении.
+  if (
+    name === 'NotAllowedError' ||
+    name === 'PermissionDeniedError' ||
+    lower.includes('permission denied') ||
+    lower.includes('not allowed')
+  )
+    return { kind: 'denied', detail };
+  if (
+    name === 'NotFoundError' ||
+    name === 'DevicesNotFoundError' ||
+    lower.includes('no camera') ||
+    lower.includes('requested device not found')
+  )
+    return { kind: 'no-device', detail };
+  if (
+    name === 'NotReadableError' ||
+    name === 'TrackStartError' ||
+    lower.includes('in use') ||
+    lower.includes('could not start')
+  )
+    return { kind: 'busy', detail };
+  if (name === 'OverconstrainedError' || name === 'ConstraintNotSatisfiedError')
+    return { kind: 'overconstrained', detail };
+  if (name === 'SecurityError') return { kind: 'insecure', detail };
+  return { kind: 'unknown', detail };
+}
+
 /**
  * Модальное окно со сканером QR через камеру устройства.
  *
@@ -22,54 +93,92 @@ const REGION_ID = 'qr-scanner-region';
 export function QrScannerModal({ onScan, onClose }: Props) {
   const scannerRef = useRef<unknown>(null);
   const handledRef = useRef(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<CameraError | null>(null);
   const [starting, setStarting] = useState(true);
+  // ModalPortal на первом рендере возвращает null (SSR-guard) и монтирует
+  // содержимое только во втором рендере. Если стартовать сканер из обычного
+  // useEffect, html5-qrcode не найдёт #qr-scanner-region в DOM. Поэтому
+  // привязываемся к фактическому появлению элемента через callback-ref.
+  const [region, setRegion] = useState<HTMLDivElement | null>(null);
 
   useEffect(() => {
+    if (!region) return;
     let cancelled = false;
 
     (async () => {
+      // Быстрые pre-flight проверки до загрузки тяжёлой библиотеки —
+      // даём пользователю понятную подсказку, не дожидаясь падения
+      // getUserMedia с непрозрачным сообщением.
+      if (typeof window !== 'undefined' && window.isSecureContext === false) {
+        setError({ kind: 'insecure', detail: 'window.isSecureContext === false' });
+        setStarting(false);
+        return;
+      }
+      if (
+        typeof navigator === 'undefined' ||
+        !navigator.mediaDevices?.getUserMedia
+      ) {
+        setError({
+          kind: 'unsupported',
+          detail: 'navigator.mediaDevices.getUserMedia недоступен',
+        });
+        setStarting(false);
+        return;
+      }
+
       try {
         const mod = await import('html5-qrcode');
         if (cancelled) return;
         const instance = new mod.Html5Qrcode(REGION_ID, /* verbose */ false);
         scannerRef.current = instance;
 
-        await instance.start(
-          { facingMode: 'environment' },
-          {
-            fps: 10,
-            qrbox: { width: 260, height: 260 },
-            aspectRatio: 1.0,
-          },
-          (decodedText: string) => {
-            if (handledRef.current) return;
-            handledRef.current = true;
-            // Тактильный сигнал даём максимально близко к моменту
-            // распознавания (синхронно, ещё до stop/onScan), чтобы
-            // швея чувствовала подтверждение «поймали» сразу.
-            triggerScanHaptic();
-            // Стопаем камеру до того, как закроем окно — иначе на iOS
-            // диод/индикатор может «висеть» до следующего рендера.
-            instance
-              .stop()
-              .catch(() => {})
-              .finally(() => {
-                onScan(decodedText);
-              });
-          },
-          () => {
-            // Кадр без QR — это норма, лог не нужен.
-          },
-        );
+        const onDecoded = (decodedText: string) => {
+          if (handledRef.current) return;
+          handledRef.current = true;
+          // Тактильный сигнал даём максимально близко к моменту
+          // распознавания (синхронно, ещё до stop/onScan), чтобы
+          // швея чувствовала подтверждение «поймали» сразу.
+          triggerScanHaptic();
+          // Стопаем камеру до того, как закроем окно — иначе на iOS
+          // диод/индикатор может «висеть» до следующего рендера.
+          instance
+            .stop()
+            .catch(() => {})
+            .finally(() => {
+              onScan(decodedText);
+            });
+        };
+        const startWith = (config: MediaTrackConstraints | string) =>
+          instance.start(
+            config,
+            { fps: 10, qrbox: { width: 260, height: 260 }, aspectRatio: 1.0 },
+            onDecoded,
+            () => {
+              // Кадр без QR — это норма, лог не нужен.
+            },
+          );
+
+        try {
+          // html5-qrcode валидирует facingMode сам и принимает только
+          // строку или { exact: ... } — `ideal` он отвергнет с ошибкой
+          // ещё до getUserMedia. Строка эквивалентна "ideal" на уровне
+          // браузера, поэтому её и используем.
+          await startWith({ facingMode: 'environment' });
+        } catch (e: unknown) {
+          // Если задней камеры физически нет (десктоп) или constraints
+          // не подходят — фолбэк на первую доступную камеру.
+          // Для denied/insecure фолбэк бессмыслен — пробрасываем дальше.
+          if (cancelled) return;
+          const cls = classifyError(e);
+          if (cls.kind !== 'overconstrained' && cls.kind !== 'no-device') throw e;
+          const cams = await mod.Html5Qrcode.getCameras();
+          if (!cams || cams.length === 0) throw e;
+          await startWith(cams[0].id);
+        }
         if (!cancelled) setStarting(false);
       } catch (e: unknown) {
         if (cancelled) return;
-        const msg =
-          e instanceof Error && e.message
-            ? e.message
-            : 'Не удалось получить доступ к камере';
-        setError(msg);
+        setError(classifyError(e));
         setStarting(false);
       }
     })();
@@ -93,7 +202,7 @@ export function QrScannerModal({ onScan, onClose }: Props) {
         finalize();
       }
     };
-  }, [onScan]);
+  }, [onScan, region]);
 
   return (
     <ModalPortal>
@@ -122,10 +231,8 @@ export function QrScannerModal({ onScan, onClose }: Props) {
         {error ? (
           <div className="qr-modal__error" role="alert">
             <p className="qr-modal__error-title">Нет доступа к камере</p>
-            <p className="qr-modal__hint">
-              Разрешите доступ в настройках браузера и откройте экран по HTTPS.
-            </p>
-            <p className="qr-modal__hint qr-modal__hint--mono">{error}</p>
+            <p className="qr-modal__hint">{HINT[error.kind]}</p>
+            <p className="qr-modal__hint qr-modal__hint--mono">{error.detail}</p>
           </div>
         ) : (
           <p className="qr-modal__hint">
@@ -135,7 +242,7 @@ export function QrScannerModal({ onScan, onClose }: Props) {
           </p>
         )}
 
-        <div id={REGION_ID} className="qr-modal__viewport" />
+        <div id={REGION_ID} ref={setRegion} className="qr-modal__viewport" />
 
         <button
           type="button"
