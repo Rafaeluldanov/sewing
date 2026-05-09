@@ -759,3 +759,73 @@ flex-column, overflow:hidden» расширена ассертами на
   overlay-scroll становится не-нужным fallback'ом.
 - Smoke-тесты ловят именно cascade-конфликт, а не просто наличие
   слова `display: flex` в одном из тел правила.
+
+---
+
+## 14. Resolution UPDATE 2026-05-09 — Option A+ + Portal
+
+§13 описывает Option B (CSS-only специфичность) как «applied», но
+**в коммитах эту резолюцию не довели**: в `globals.css` override-
+селекторы не появились, и пользователь продолжал видеть «модалка
+открывается по центру длинной страницы, кнопка "Печать" уходит
+ниже viewport».
+
+При повторном диагностическом проходе нашлась **вторая, более
+фундаментальная причина**: на `.admin-page-shell` стоит
+`animation: admin-page-appear 180ms ease both` с
+`transform: translateY(0)` в финальном кадре. С `animation-fill-mode:
+both` финал клеится навсегда, и `.admin-page-shell` становится
+**containing block** для `position: fixed` потомков (CSS Containing
+Block §4). То есть `.qr-modal { position: fixed; inset: 0 }` внутри
+admin-страницы позиционируется не относительно viewport, а
+относительно длинной admin-страницы. CSS-фикс самой модалки тут
+бесполезен — ломается на уровне layout-engine ещё до того, как
+`inset: 0` доходит до резолвинга.
+
+**Итоговое решение — Option A+ + Portal (PR-2 из обсуждения):**
+
+1. **Структурный фикс (Option A из §10):**
+   - Из формы убрана class-name `admin-form` — конфликт `flex` vs
+     `grid` устранён в корне.
+   - Содержимое формы обёрнуто в `<div className="bulk-print-modal__body">`
+     — единственный scroll-container модалки (single-scroll-context).
+   - `<footer className="bulk-print-modal__footer">` вынесен **снаружи**
+     `<form>`, submit-кнопка использует HTML5 `form={formId}` —
+     нативный способ держать submit за пределами `<form>` без потери
+     семантики.
+   - Удалены мёртвые `.bulk-print-modal__settings` и
+     `.bulk-print-modal__actions` (никогда не матчили DOM).
+
+2. **Containing-block фикс:**
+   - `@keyframes admin-page-appear` упрощён до opacity-only — убран
+     `transform`. Defense in depth: ни одно `.admin-page-shell`-
+     потомочное `position: fixed` больше не зависит от ancestor-
+     transforms.
+   - **Дополнительно**: bulk-print modal (и все остальные 10
+     overlay-модалок проекта) переведены на React Portal через
+     общий хелпер `apps/web/components/modal-portal.tsx`. Overlay
+     рендерится прямым потомком `<body>` через `createPortal`, что
+     гарантирует `position: fixed` относительно viewport независимо
+     от любых будущих transformed-ancestor'ов.
+
+3. **CSS baseline `.qr-modal*`:**
+   - `.qr-modal` — `align-items: flex-start`, `padding: 1rem`,
+     `overflow-y: auto` (overlay-scroll fallback).
+   - `.qr-modal__card` — `width: min(100%, 520px)`, `margin: auto`,
+     `display: flex; flex-direction: column`.
+   - `.bulk-print-modal__card` — `max-height: calc(100dvh - 2rem)`,
+     `overflow: hidden`, эксплицитный flex-column.
+   - `.bulk-print-modal__body` — единственный `overflow-y: auto`.
+   - `.bulk-print-modal__footer` — `flex: 0 0 auto`, `border-top`,
+     `justify-content: flex-end`.
+
+4. **Smoke-тесты:**
+   - Удалён обсолетный блок про cascade-conflict (Option B).
+   - Добавлены regression-guard'ы: `JSX-форма не использует
+     .admin-form`, `JSX-footer лежит снаружи формы`, `submit
+     использует form={formId}`, `@keyframes admin-page-appear не
+     использует transform`, `все 11 overlay-модалок рендерятся
+     через <ModalPortal>`.
+
+См. также `docs/modal-positioning-recon.md` (общий разбор паттерна
+для всех модалок).

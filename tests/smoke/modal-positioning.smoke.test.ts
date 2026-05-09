@@ -136,32 +136,22 @@ describe('modal positioning — footer/actions остаются доступны
     expect(body).toMatch(/flex:\s*0\s+0\s+auto/);
   });
 
-  test('.bulk-print-modal__form > .admin-actions-row — flex-fixed footer внутри ограниченной карточки', () => {
-    const body = readRuleBody(
-      css,
-      '.bulk-print-modal__form > .admin-actions-row',
-    );
-    // Footer закрепляется не sticky, а bounded-panel layout'ом
-    // (`docs/modal-positioning-recon.md` §6): карточка ограничена
-    // по высоте, preview скроллится внутри, actions — последний
-    // flex-child формы.
-    expect(body).toMatch(/flex:\s*0\s+0\s+auto/);
-  });
-
   test('.bulk-print-modal__card — bounded по dvh, flex-column, overflow:hidden', () => {
     const body = readRuleBody(css, '.bulk-print-modal__card');
     // Главная защита от регресса: карточка не имеет права снова
     // расти выше viewport. Иначе footer уезжает ниже экрана
-    // (`docs/modal-positioning-recon.md` §6, скриншот «Печать линии»).
+    // (`docs/warehouse-bulk-print-modal-runtime-recon.md` §9).
     expect(body).toMatch(/max-height:\s*calc\(100dvh\s*-\s*2rem\)/);
     expect(body).toMatch(/overflow:\s*hidden/);
-    // Карточка должна быть flex-column сама по себе, чтобы header/form/footer
-    // выстраивались колонкой и form могла занять оставшееся место.
+    // Карточка — flex-column контейнер для header / form / footer.
     expect(body).toMatch(/display:\s*flex/);
     expect(body).toMatch(/flex-direction:\s*column/);
   });
 
   test('.bulk-print-modal__form — flex-grow внутри карточки, без overflow за пределы', () => {
+    // Сама форма не скроллится — она просто оборачивает body как
+    // flex-column. Скролл живёт на `.bulk-print-modal__body` (см.
+    // ниже), что даёт UX «один scroll-context на модалку».
     const body = readRuleBody(css, '.bulk-print-modal__form');
     expect(body).toMatch(/display:\s*flex/);
     expect(body).toMatch(/flex-direction:\s*column/);
@@ -170,104 +160,142 @@ describe('modal positioning — footer/actions остаются доступны
     expect(body).toMatch(/overflow:\s*hidden/);
   });
 
-  test('.bulk-print-modal__form > .bulk-print-modal__preview — единственный scrollable child', () => {
-    const body = readRuleBody(
-      css,
-      '.bulk-print-modal__form > .bulk-print-modal__preview',
-    );
-    expect(body).toMatch(/flex:\s*1\s+1\s+0/);
-    expect(body).toMatch(/min-height:\s*0/);
-    expect(body).toMatch(/overflow:\s*hidden/);
-  });
-
-  test('.bulk-print-modal__preview-grid — flex:1, скролл внутри preview, без max-height: 32vh', () => {
-    const body = readRuleBody(css, '.bulk-print-modal__preview-grid');
+  test('.bulk-print-modal__body — единственный scrollable child карточки', () => {
+    // Single-scroll-context: body — единственное место, где живёт
+    // вертикальный скролл. Footer (.bulk-print-modal__footer) лежит
+    // снаружи body и снаружи формы — поэтому всегда виден.
+    const body = readRuleBody(css, '.bulk-print-modal__body');
     expect(body).toMatch(/flex:\s*1\s+1\s+auto/);
     expect(body).toMatch(/min-height:\s*0/);
     expect(body).toMatch(/overflow-y:\s*auto/);
-    // Старый max-height: 32vh + overflow-y: auto не справлялся с
-    // длинными карточками — теперь верхний лимит задаёт
-    // `.bulk-print-modal__card`.
-    expect(body).not.toMatch(/max-height:\s*32vh/);
+    expect(body).toMatch(/display:\s*flex/);
+    expect(body).toMatch(/flex-direction:\s*column/);
+  });
+
+  test('.bulk-print-modal__footer — фикс-высота, прижат к низу карточки, виден без скролла', () => {
+    // Footer лежит **вне формы** (submit-кнопка использует form={id}),
+    // поэтому он гарантированно вне scroll-зоны body — не зависит от
+    // длины preview и доступен сразу после открытия модалки.
+    const body = readRuleBody(css, '.bulk-print-modal__footer');
+    expect(body).toMatch(/flex:\s*0\s+0\s+auto/);
+    expect(body).toMatch(/border-top:/);
+    expect(body).toMatch(/justify-content:\s*flex-end/);
   });
 });
 
 /**
- * Regression guard: `.admin-form` объявлен ниже по globals.css и без
- * cascade-override-а перебивает `display: flex` на `display: grid`,
- * из-за чего footer-кнопка «Печать» уезжает ниже viewport на длинных
- * линиях склада (см. `docs/warehouse-bulk-print-modal-runtime-recon.md`
- * §7.1). Проверяем именно компаунд-селектор
- * `.bulk-print-modal__card .bulk-print-modal__form.admin-form` —
- * простая «есть `display:flex` в теле `.bulk-print-modal__form`»
- * проверка давала false-positive, потому что cascade выигрывал
- * `.admin-form { display: grid }`.
+ * Regression guard: bulk-print modal раньше использовал на форме два
+ * класса (`bulk-print-modal__form admin-form`) с разной layout-моделью
+ * (flex-column ↔ grid). Они конкурировали с равной специфичностью, и
+ * `.admin-form { display: grid }` выигрывал по source-order — это
+ * валило весь footer-anchor layout. Решение (Option A из
+ * `docs/warehouse-bulk-print-modal-runtime-recon.md` §10): убрать
+ * `.admin-form` с формы и вынести actions в `<footer>` СНАРУЖИ формы.
+ * Тесты ниже стерегут от возврата конфликта.
  */
-describe('modal positioning — cascade conflict .admin-form vs .bulk-print-modal__form', () => {
-  const css = readSrc('apps/web/app/globals.css');
-
-  test('JSX рендерит обе class-name (`bulk-print-modal__form admin-form`) — конфликт реальный', () => {
-    // Defensive baseline: если в JSX когда-то уберут `admin-form`, тесты
-    // ниже становятся overhead-ом. Этот тест явно фиксирует, что
-    // конфликт всё ещё актуален.
+describe('modal positioning — bulk-print form layout без класс-конфликтов', () => {
+  test('JSX-форма не использует .admin-form вместе с .bulk-print-modal__form (cascade-trap)', () => {
     const src = readSrc(
       'apps/web/app/admin/warehouses/[id]/bulk-print-panel.tsx',
     );
-    expect(src).toMatch(/className="bulk-print-modal__form admin-form"/);
+    // Если кто-то добавит `admin-form` обратно — снова получим
+    // grid vs flex конфликт. Не пускаем.
+    expect(src).not.toMatch(/className=["']bulk-print-modal__form\s+admin-form/);
+    expect(src).not.toMatch(/className=["']admin-form\s+bulk-print-modal__form/);
   });
 
-  test('.admin-form объявлен в globals.css с display: grid (regression guard, источник конфликта)', () => {
-    // Пока `.admin-form { display: grid }` существует, нам нужен
-    // override с большей специфичностью. Если когда-то `.admin-form`
-    // уберут или поменяют display, можно будет упростить override.
-    // Регэксп с lookbehind на newline-граничный `.admin-form` —
-    // чтобы не зацепить компаунд `.bulk-print-modal__form.admin-form`.
-    expect(css).toMatch(/\n\.admin-form\s*\{[^}]*display:\s*grid/);
-  });
-
-  test('.bulk-print-modal__card .bulk-print-modal__form.admin-form — компаунд-override (specificity 0,3,0) возвращает flex-column', () => {
-    const body = readRuleBody(
-      css,
-      '.bulk-print-modal__card .bulk-print-modal__form.admin-form',
+  test('JSX-footer лежит СНАРУЖИ формы как <footer> с .bulk-print-modal__footer', () => {
+    const src = readSrc(
+      'apps/web/app/admin/warehouses/[id]/bulk-print-panel.tsx',
     );
-    expect(body).toMatch(/display:\s*flex/);
-    expect(body).toMatch(/flex-direction:\s*column/);
-    expect(body).toMatch(/flex:\s*1\s+1\s+auto/);
-    expect(body).toMatch(/min-height:\s*0/);
-    expect(body).toMatch(/overflow:\s*hidden/);
+    // Footer-теги вне <form>: иначе footer попадает в form-grid/flex
+    // и поведение footer-anchor ломается.
+    expect(src).toMatch(/<\/form>\s*\n\s*<footer\s+className=["']bulk-print-modal__footer/);
   });
 
-  test('.bulk-print-modal__card .bulk-print-modal__form.admin-form > .bulk-print-modal__preview — preview занимает свободное место в реальном runtime-каскаде', () => {
-    const body = readRuleBody(
-      css,
-      '.bulk-print-modal__card .bulk-print-modal__form.admin-form > .bulk-print-modal__preview',
+  test('JSX-submit использует form={formId} — кнопка «Печать» вне <form>, но логически принадлежит ей', () => {
+    const src = readSrc(
+      'apps/web/app/admin/warehouses/[id]/bulk-print-panel.tsx',
     );
-    expect(body).toMatch(/flex:\s*1\s+1\s+0/);
-    expect(body).toMatch(/min-height:\s*0/);
-    expect(body).toMatch(/overflow:\s*hidden/);
+    // HTML5: `form={id}` — нативный способ держать submit снаружи
+    // <form> без потери семантики.
+    expect(src).toMatch(/<form\s+id=\{formId\}/);
+    expect(src).toMatch(/type=["']submit["'][\s\S]{0,80}form=\{formId\}/);
   });
 
-  test('.bulk-print-modal__card .bulk-print-modal__form.admin-form > .admin-actions-row — footer прибит к низу формы и виден без скролла', () => {
-    const body = readRuleBody(
-      css,
-      '.bulk-print-modal__card .bulk-print-modal__form.admin-form > .admin-actions-row',
-    );
-    expect(body).toMatch(/flex:\s*0\s+0\s+auto/);
-    expect(body).toMatch(/margin-top:\s*auto/);
-    expect(body).toMatch(/border-top:/);
-    expect(body).toMatch(/background:/);
+  test('CSS не содержит мёртвых правил .bulk-print-modal__settings / .bulk-print-modal__actions', () => {
+    const css = readSrc('apps/web/app/globals.css');
+    // В JSX используются `admin-form-grid` и `bulk-print-modal__footer`.
+    // `.bulk-print-modal__settings` и `.bulk-print-modal__actions`
+    // никогда не матчили DOM — их удалили вместе со структурным фиксом.
+    expect(css).not.toMatch(/\.bulk-print-modal__settings\b/);
+    expect(css).not.toMatch(/\.bulk-print-modal__actions\b/);
   });
 
-  test('override-селектор объявлен ПОСЛЕ `.admin-form` ИЛИ имеет более высокую специфичность', () => {
-    // Гарантируем, что cascade-победитель — наш override, а не
-    // `.admin-form`. Текущий компаунд `.bulk-print-modal__card
-    // .bulk-print-modal__form.admin-form` имеет специфичность
-    // (0,3,0), что выше `.admin-form` (0,1,0) при любом source-order.
-    // Заодно проверяем сам факт присутствия override-а — без него
-    // фикс мёртв.
-    expect(css).toContain(
-      '.bulk-print-modal__card .bulk-print-modal__form.admin-form',
-    );
+  test('@keyframes admin-page-appear не использует transform (containing-block ловушка для position: fixed)', () => {
+    const css = readSrc('apps/web/app/globals.css');
+    // `.admin-page-shell` имеет `animation: admin-page-appear ... both`.
+    // С `animation-fill-mode: both` финальный кадр приклеивается навсегда,
+    // и любой `transform` (даже translateY(0)) делает page-shell
+    // containing block'ом для `position: fixed` потомков. Это ломало
+    // overlay-модалки внутри admin-страниц (см. recon).
+    const idx = css.indexOf('@keyframes admin-page-appear');
+    expect(idx, '@keyframes admin-page-appear должен существовать').toBeGreaterThan(-1);
+    const start = css.indexOf('{', idx);
+    let depth = 0;
+    let end = start;
+    for (let i = start; i < css.length; i++) {
+      if (css[i] === '{') depth++;
+      else if (css[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          end = i;
+          break;
+        }
+      }
+    }
+    const body = css.slice(start + 1, end);
+    expect(body).not.toMatch(/transform:/);
+  });
+
+  test('ModalPortal helper существует и использует createPortal в document.body', () => {
+    const src = readSrc('apps/web/components/modal-portal.tsx');
+    // Единая точка реализации Portal-паттерна. Если кто-то её удалит
+    // или поменяет цель, все consumer-модалки могут начать
+    // позиционироваться неправильно — ловим тестом.
+    expect(src).toMatch(/import\s*\{\s*createPortal\s*\}\s*from\s*['"]react-dom['"]/);
+    expect(src).toMatch(/createPortal\(children,\s*document\.body\)/);
+    expect(src).toMatch(/export\s+function\s+ModalPortal/);
+  });
+
+  test('все overlay-модалки рендерятся через <ModalPortal>', () => {
+    // Контракт: каждая модалка с `position: fixed` overlay'ем
+    // оборачивается в `<ModalPortal>`, чтобы обойти
+    // transformed-ancestor'ов (см. recon про `.admin-page-shell`).
+    const modals = [
+      'apps/web/app/admin/warehouses/[id]/bulk-print-panel.tsx',
+      'apps/web/app/admin/patterns/[id]/add-pattern-size-modal.tsx',
+      'apps/web/app/admin/patterns/[id]/create-size-modal.tsx',
+      'apps/web/app/admin/orders/new/size-plan-selector.tsx',
+      'apps/web/app/master/passport-actions-sheet.tsx',
+      'apps/web/app/master/cut-release-policy-card.tsx',
+      'apps/web/app/work/seamstress-active-panel.tsx',
+      'apps/web/app/work/passport-confirm-modal.tsx',
+      'apps/web/app/work/qr-scanner-modal.tsx',
+      'apps/web/app/work/shelf-placement-panel.tsx',
+      'apps/web/components/employees/employee-qr-button.tsx',
+    ];
+    for (const file of modals) {
+      const src = readSrc(file);
+      expect(
+        src,
+        `${file} должен импортировать ModalPortal`,
+      ).toMatch(/import\s*\{[^}]*ModalPortal[^}]*\}\s*from\s*['"]@\/components\/modal-portal['"]/);
+      expect(
+        src,
+        `${file} должен оборачивать overlay в <ModalPortal>`,
+      ).toMatch(/<ModalPortal>/);
+    }
   });
 });
 
@@ -295,7 +323,7 @@ describe('modal positioning — никакая модалка не исполь�
 });
 
 describe('modal positioning — printer и bulk-print page обвязки', () => {
-  test('bulk-print-panel.tsx использует общий `.qr-modal` и группирует actions внутри form', () => {
+  test('bulk-print-panel.tsx использует общий `.qr-modal` overlay-паттерн', () => {
     const src = readSrc(
       'apps/web/app/admin/warehouses/[id]/bulk-print-panel.tsx',
     );
@@ -303,13 +331,14 @@ describe('modal positioning — printer и bulk-print page обвязки', () =
     expect(src).toMatch(/className="qr-modal"/);
     expect(src).toMatch(/role="dialog"/);
     expect(src).toMatch(/aria-modal="true"/);
-    // Footer-actions лежат внутри `.bulk-print-modal__form`,
-    // что позволяет sticky-правилу из globals.css закрепить их
-    // на дне карточки при overlay-scroll.
-    expect(src).toMatch(/className="bulk-print-modal__form admin-form"/);
-    expect(src).toMatch(/className="admin-actions-row"/);
+    // Card / form / body / footer — структурные секции Option A+
+    // (см. `docs/warehouse-bulk-print-modal-runtime-recon.md` §10):
+    expect(src).toMatch(/className="qr-modal__card bulk-print-modal__card"/);
+    expect(src).toMatch(/className="bulk-print-modal__form"/);
+    expect(src).toMatch(/className="bulk-print-modal__body"/);
+    expect(src).toMatch(/className="bulk-print-modal__footer"/);
     // Кнопка submit называется «Печать» — это именно то, что не
-    // должно уезжать ниже экрана (см. docs/modal-positioning-recon.md).
+    // должно уезжать ниже экрана.
     expect(src).toMatch(/Печать/);
     expect(src).toMatch(/type="submit"/);
   });

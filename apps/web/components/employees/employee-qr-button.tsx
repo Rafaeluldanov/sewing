@@ -26,6 +26,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { EmployeeQrResponseDto } from '@sewing/shared/employee-qr';
 import { getMyEmployeeQrAction } from '@/app/employee-qr/actions';
+import { ModalPortal } from '@/components/modal-portal';
 import { QrCodeView } from '@/components/qr';
 
 export interface EmployeeQrButtonProps {
@@ -122,6 +123,7 @@ export function EmployeeQrButton({
       </button>
 
       {open ? (
+        <ModalPortal>
         <div
           className="qr-modal"
           role="dialog"
@@ -199,6 +201,7 @@ export function EmployeeQrButton({
             </button>
           </div>
         </div>
+        </ModalPortal>
       ) : null}
     </>
   );

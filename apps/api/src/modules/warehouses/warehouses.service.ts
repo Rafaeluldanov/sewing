@@ -345,7 +345,7 @@ export class WarehousesService {
    * Защита: удаляем только если ВСЕ ячейки линии «пустые» — иначе
    * `WAREHOUSE_LINE_HAS_CONTENT` (409) с перечнем «занятых» кодов.
    * «Занятой» считаем ячейку, у которой есть:
-   *   - `CellContent` (текущее содержимое);
+   *   - `WorkInProgressBalance` с `qty > 0` (полуфабрикат в ячейке);
    *   - `Passport.currentCellId` (паспорт сейчас лежит здесь);
    *   - `PassportEvent` (исторические события — иначе FK-констрейнт
    *     просто упадёт с непонятным P2003);
@@ -380,8 +380,8 @@ export class WarehousesService {
     }
 
     // Берём ячейки линии вместе с признаками занятости. `_count`
-    // покрывает CellContent / currentPassports / events; для
-    // StockBalance с `qty > 0` нужен явный where, поэтому
+    // покрывает currentPassports / events; для StockBalance и
+    // WorkInProgressBalance с `qty > 0` нужен явный where, поэтому
     // подгружаем балансы и фильтруем в JS.
     const cells = await this.prisma.cell.findMany({
       where: { lineId },
@@ -390,22 +390,22 @@ export class WarehousesService {
         code: true,
         _count: {
           select: {
-            contents: true,
             currentPassports: true,
             events: true,
           },
         },
         stockBalances: { select: { qty: true } },
+        workInProgressBalances: { select: { qty: true } },
       },
     });
 
     const busyCodes: string[] = [];
     for (const c of cells) {
-      const hasContent = c._count.contents > 0;
       const hasPassport = c._count.currentPassports > 0;
       const hasEvents = c._count.events > 0;
       const hasStock = c.stockBalances.some((b) => Number(b.qty) > 0);
-      if (hasContent || hasPassport || hasEvents || hasStock) {
+      const hasWip = c.workInProgressBalances.some((b) => b.qty > 0);
+      if (hasPassport || hasEvents || hasStock || hasWip) {
         busyCodes.push(c.code);
       }
     }

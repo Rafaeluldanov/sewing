@@ -17,6 +17,12 @@ import {
   type FinishedGoodsBalanceListResponse,
   type FinishedGoodsMovementListResponse,
 } from '@/lib/finished-goods-api';
+import {
+  listWorkInProgressBalances,
+  listWorkInProgressMovements,
+  type WorkInProgressBalanceListResponse,
+  type WorkInProgressMovementListResponse,
+} from '@/lib/work-in-progress-api';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import {
   AdminCard,
@@ -35,6 +41,8 @@ import {
   finishedGoodsMovementToUnified,
   materialBalanceToUnified,
   materialMovementToUnified,
+  workInProgressBalanceToUnified,
+  workInProgressMovementToUnified,
   parseStockBalanceState,
   parseUnifiedMovementType,
   parseWarehouseStockTab,
@@ -309,10 +317,11 @@ async function BalancesTabPage({
   // warehouse endpoint с серверным total / pagination / sorting.
   let materialResp: StockBalanceListResponse | null = null;
   let finishedResp: FinishedGoodsBalanceListResponse | null = null;
+  let wipResp: WorkInProgressBalanceListResponse | null = null;
   let error: string | null = null;
   let warehouses: WarehouseSummaryDto[] = [];
   try {
-    [materialResp, finishedResp, warehouses] = await Promise.all([
+    [materialResp, finishedResp, wipResp, warehouses] = await Promise.all([
       listStockBalances({
         q,
         warehouseId,
@@ -327,6 +336,15 @@ async function BalancesTabPage({
         limit: WAREHOUSES_UNIFIED_FETCH_LIMIT,
         offset: 0,
       }),
+      listWorkInProgressBalances({
+        warehouseId,
+        // `nonZero` под флагом «only positive» из общих apiFlags:
+        // если менеджер выбрал «только положительные», скрываем
+        // нулевые WIP-строки. Иначе отдаём все.
+        nonZero: apiFlags.positiveOnly === true ? true : undefined,
+        take: WAREHOUSES_UNIFIED_FETCH_LIMIT,
+        skip: 0,
+      }),
       listWarehouses(),
     ]);
   } catch (e) {
@@ -338,11 +356,16 @@ async function BalancesTabPage({
 
   const materialItems = materialResp?.items ?? [];
   const finishedItems = finishedResp?.items ?? [];
-  const total = (materialResp?.total ?? 0) + (finishedResp?.total ?? 0);
+  const wipItems = wipResp?.items ?? [];
+  const total =
+    (materialResp?.total ?? 0) +
+    (finishedResp?.total ?? 0) +
+    (wipResp?.total ?? 0);
 
   const unified: UnifiedWarehouseBalanceRow[] = sortUnifiedBalances([
     ...materialItems.map(materialBalanceToUnified),
     ...finishedItems.map(finishedGoodsBalanceToUnified),
+    ...wipItems.map(workInProgressBalanceToUnified),
   ]);
   const pageRows = applyUnifiedPagination(unified, offset, limit);
 
@@ -448,13 +471,19 @@ async function MovementsTabPage({
   const wantsMaterial = scope === 'all' || scope === 'shared' || scope === 'material-only';
   const wantsFinished =
     scope === 'all' || scope === 'shared' || scope === 'finished-goods-only';
+  // Полуфабрикат: типы (PLACE/ISSUE/RETURN/DELETE/PACK_OUT) не
+  // пересекаются с материальными и finished-goods, поэтому WIP
+  // фетчим только когда фильтр по типу не выставлен (`all`) —
+  // иначе результат всегда пустой и фетч лишний.
+  const wantsWip = scope === 'all';
 
   let materialResp: StockMovementListResponse | null = null;
   let finishedResp: FinishedGoodsMovementListResponse | null = null;
+  let wipResp: WorkInProgressMovementListResponse | null = null;
   let error: string | null = null;
   let warehouses: WarehouseSummaryDto[] = [];
   try {
-    [materialResp, finishedResp, warehouses] = await Promise.all([
+    [materialResp, finishedResp, wipResp, warehouses] = await Promise.all([
       wantsMaterial
         ? listStockMovements({
             q,
@@ -495,6 +524,14 @@ async function MovementsTabPage({
             offset: 0,
           })
         : Promise.resolve(null),
+      wantsWip
+        ? listWorkInProgressMovements({
+            warehouseId,
+            direction,
+            take: WAREHOUSES_UNIFIED_FETCH_LIMIT,
+            skip: 0,
+          })
+        : Promise.resolve(null),
       listWarehouses(),
     ]);
   } catch (e) {
@@ -506,13 +543,18 @@ async function MovementsTabPage({
 
   const materialItems = materialResp?.items ?? [];
   const finishedItems = finishedResp?.items ?? [];
-  const total = (materialResp?.total ?? 0) + (finishedResp?.total ?? 0);
+  const wipItems = wipResp?.items ?? [];
+  const total =
+    (materialResp?.total ?? 0) +
+    (finishedResp?.total ?? 0) +
+    (wipResp?.total ?? 0);
 
   // TODO: Для больших объёмов лучше сделать backend unified
   // warehouse endpoint с серверным total / pagination / sorting.
   const unified: UnifiedWarehouseMovementRow[] = sortUnifiedMovements([
     ...materialItems.map(materialMovementToUnified),
     ...finishedItems.map(finishedGoodsMovementToUnified),
+    ...wipItems.map(workInProgressMovementToUnified),
   ]);
   const pageRows = applyUnifiedPagination(unified, offset, limit);
 

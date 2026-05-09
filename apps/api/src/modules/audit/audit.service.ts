@@ -514,7 +514,7 @@ export class AuditService {
   async log(
     input: AuditLogInput,
     tx?: Prisma.TransactionClient,
-  ): Promise<void> {
+  ): Promise<{ id: string } | null> {
     const data: Prisma.AuditLogUncheckedCreateInput = {
       event: input.event,
       entityType: input.entityType,
@@ -528,12 +528,19 @@ export class AuditService {
       // жили атомарно. Если запись в `AuditLog` падает (например, при
       // несовместимой миграции на пилоте) — это структурная проблема,
       // которую лучше увидеть на уровне 500, чем потерять.
-      await tx.auditLog.create({ data });
-      return;
+      const created = await tx.auditLog.create({
+        data,
+        select: { id: true },
+      });
+      return { id: created.id };
     }
 
     try {
-      await this.prisma.auditLog.create({ data });
+      const created = await this.prisma.auditLog.create({
+        data,
+        select: { id: true },
+      });
+      return { id: created.id };
     } catch (err) {
       // Без транзакции: fail-soft. Аудит не должен валить
       // бизнес-операцию, особенно в legacy-сервисах, которые ещё не
@@ -541,6 +548,7 @@ export class AuditService {
       this.logger.warn(
         `audit.log failed event=${input.event} entityType=${input.entityType} entityId=${input.entityId}: ${(err as Error).message}`,
       );
+      return null;
     }
   }
 }

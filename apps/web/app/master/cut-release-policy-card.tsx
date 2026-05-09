@@ -25,6 +25,7 @@
  */
 
 import { useCallback, useState } from 'react';
+import { ModalPortal } from '@/components/modal-portal';
 import type { CutReleasePolicyDto, SizeDto } from '@sewing/shared';
 import {
   disableCutReleasePolicyAction,
@@ -209,6 +210,7 @@ function CutReleasePolicyForm({
   const canSubmit = limitText.trim().length > 0 && !submitting;
 
   return (
+    <ModalPortal>
     <div
       className="master-actions-sheet"
       role="dialog"
@@ -323,5 +325,6 @@ function CutReleasePolicyForm({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }

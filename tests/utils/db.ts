@@ -77,7 +77,13 @@ export async function resetDatabase(prisma: {
     'BoxItem',
     'Box',
     'PassportEvent',
-    'CellContent',
+    // Foundation полуфабриката (см.
+    // `prisma/schema.prisma::WorkInProgressBalance`/
+    // `WorkInProgressMovement`): движения сначала (FK на balance),
+    // потом баланс. Truncate явный — обе таблицы каскадятся от
+    // `Order`, но порядок важен на случай повторных прогонов.
+    'WorkInProgressMovement',
+    'WorkInProgressBalance',
     'Passport',
     'CuttingClosureRequest',
     'OrderRouteStep',

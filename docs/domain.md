@@ -136,7 +136,7 @@
 | `Box` / `BoxItem`       | Коробка / содержимое коробки           | `prisma/schema.prisma::Box`/`BoxItem` |
 | `OperationEntry`        | Сдельное начисление                    | `prisma/schema.prisma::OperationEntry` |
 | `SalaryEntry`           | Окладное начисление за день            | `prisma/schema.prisma::SalaryEntry` |
-| `Cell` / `CellContent`  | Ячейка / содержимое ячейки             | `prisma/schema.prisma::Cell`/`CellContent` |
+| `Cell` / `WorkInProgressBalance` | Ячейка / полуфабрикат в ячейке (см. § 2.7b в `docs/erd.md`) | `prisma/schema.prisma::Cell`/`WorkInProgressBalance` |
 | `Warehouse` / `WarehouseLine` | Склад / линия (полка)            | `prisma/schema.prisma::Warehouse`/`WarehouseLine` |
 | `Equipment`             | Оборудование (станок, стол с QR)       | `prisma/schema.prisma::Equipment` |
 | `EquipmentOperation`    | Разрешённая операция станка (M2M)      | `prisma/schema.prisma::EquipmentOperation` |
@@ -344,7 +344,7 @@ Lifecycle:
 **не** складская операция:
 
 - НЕ создаёт `PurchaseReceipt` / `PurchaseReceiptLine`,
-- НЕ меняет `CellContent` / складские остатки,
+- НЕ меняет `WorkInProgressBalance` / складские остатки,
 - НЕ двигает `WorkshopNeed.status`,
 - НЕ создаёт `Passport` / `OperationEntry` / `SalaryEntry`.
 
@@ -978,9 +978,10 @@ Side-effects:
 - `status: String @default("POSTED")`.
 
 **Граница MVP.** PR фиксирует размещение в ячейке (`Cell.cellId`)
-**без** записи в `CellContent`. Это сознательная граница: складские
-остатки на ячейках по-прежнему ведутся только через
-`PassportsService.place` (см. §11).
+**без** записи в `WorkInProgressBalance`. Это сознательная граница:
+полуфабрикат в ячейках ведётся только через `PassportsService.place`
+(см. §11), материальный складской контур (`StockBalance`) и
+полуфабрикат (`WorkInProgressBalance`) не пересекаются.
 
 Lifecycle:
 
@@ -1167,21 +1168,27 @@ UNKNOWN/TODO: «крой бригадой» — отдельный шаг в б�
 (`apps/api/src/modules/passports/passports.service.ts` ~337–460),
 `docs/production-flow.md §5`.
 
-В транзакции: инкремент `CellContent` по `(cellId, sizeId)` на
-`qtyCut`, `Passport.update { currentCellId, status: остаётся
-CREATED }`, `PassportEvent(CELL_PLACED)`, audit
-`PASSPORT_PLACED` (`employeeId = null` — это управленческое
-действие raw-handler-а).
+В транзакции: `Passport.update { currentCellId, status: остаётся
+CREATED }`, `PassportEvent(CELL_PLACED)`,
+`WorkInProgressService.recordPlaceInTx` создаёт
+`WorkInProgressMovement` `PLACE` IN на `qtyCut` и инкрементит
+`WorkInProgressBalance.qty` по
+`(orderId, productId, sizeId, color, warehouseId?, cellId)` (см.
+`docs/erd.md §2.7b`); audit `PASSPORT_PLACED` (`employeeId = null` —
+это управленческое действие raw-handler-а).
 
 `POST /api/passports/:id/issue` —
 `PassportsService.issueToEmployee`
 (`apps/api/src/modules/passports/passports.service.ts` ~462–658),
 `docs/production-flow.md §6`. Две ветки:
 
-- **«Из ячейки»** (`currentCellId !== null`): декремент
-  `CellContent`, `Passport.update { currentCellId: null,
-  currentEmployeeId = me, status: IN_PROGRESS }`,
-  `PassportEvent(ISSUED_TO_EMPLOYEE)`, audit
+- **«Из ячейки»** (`currentCellId !== null`): `Passport.update {
+  currentCellId: null, currentEmployeeId = me, status:
+  IN_PROGRESS }`, `PassportEvent(ISSUED_TO_EMPLOYEE)`,
+  `WorkInProgressService.recordIssueInTx` создаёт
+  `WorkInProgressMovement` `ISSUE` OUT на `qtyCut` (декрементит
+  баланс), идемпотентно по `WIP_ISSUE:<eventId>`. Защита от ухода
+  ниже нуля — `WIP_INSUFFICIENT_BALANCE` (409). Audit
   `PASSPORT_ISSUED { mode: 'FROM_CELL' }`.
 - **«Route-WIP без ячейки»** (`currentCellId === null` и
   `currentRouteStepIndex !== null`): идемпотентный no-op для того
@@ -2216,34 +2223,53 @@ approved начисления уже в выплатах; `cashBalanceRub < 0` �
 `WarehouseLine` — линия склада (полка/ряд). `code` уникален
 **глобально**. `warehouseId → Warehouse` (Cascade).
 
-### 11.2 `Cell` / `CellContent`
+### 11.2 `Cell` / `WorkInProgressBalance`
 
-Источник: `prisma/schema.prisma::Cell`/`CellContent`,
+Источник: `prisma/schema.prisma::Cell` / `WorkInProgressBalance` /
+`WorkInProgressMovement`,
 `apps/api/src/modules/passports/cells.controller.ts`,
-ADR-0008, `docs/erd.md §2.6`, `docs/api.md §25`.
+`apps/api/src/modules/work-in-progress/*`, ADR-0008, `docs/erd.md
+§2.6`/`§2.7b`, `docs/api.md §25`/`§29b`.
 
 `Cell`: `code` (uniq), `qrCode` (uniq, `cell:{id}` — ADR-0008),
 `active`, `warehouseId? → Warehouse`, `lineId? → WarehouseLine`
 (`SetNull`), `lineIndex: Int?`. `(lineId, lineIndex)` UNIQUE.
 
-`CellContent` — `(cellId, sizeId, quantity)`,
-`@@unique([cellId, sizeId])`. Это **лёгкий счётчик**;
-истинный размещённый паспорт хранится в
-`Passport.currentCellId`.
+**Полуфабрикат в ячейках** (после удаления legacy `CellContent` —
+2026-05-09) ведётся через `WorkInProgressBalance` и
+`WorkInProgressMovement`. Это единственный источник истины.
+
+`WorkInProgressBalance` — `(orderId, productId, sizeId, color,
+warehouseId?, cellId?, qty)` с детерминированным `balanceKey
+@unique`. Содержит больше измерений, чем legacy `CellContent` —
+может быть основой будущей фичи «промежуточный контроль расхода
+материала на выпуске кроя» (привязка `MaterialIssue` к конкретному
+PLACE-движению). См. `docs/erd.md §2.7b`.
+
+`WorkInProgressMovement` — журнал движений (`PLACE` / `ISSUE` /
+`RETURN` / `DELETE` / `PACK_OUT`) с `sourceKey @unique` для
+идемпотентности.
 
 ### 11.3 Операции
 
-- **`POST /api/passports/:id/place`** — инкремент
-  `CellContent[size] += qtyCut`, `Passport.currentCellId = cell.id`,
-  `PassportEvent(CELL_PLACED)`. См. §7.5.
+- **`POST /api/passports/:id/place`** — `Passport.currentCellId =
+  cell.id`, `PassportEvent(CELL_PLACED)`,
+  `WorkInProgressMovement` `PLACE` IN на `qtyCut` →
+  `WorkInProgressBalance.qty += qtyCut`. Идемпотентно по
+  `WIP_PLACE:<eventId>`. См. §7.5.
 - **`POST /api/passports/:id/issue`** (FROM_CELL ветка) —
-  декремент `CellContent[size]` через `max(quantity − qtyCut, 0)`,
-  `Passport.currentCellId = null`. Отдельного `CELL_REMOVED`
-  события на этом шаге **не пишется** (`docs/events.md §2.7`,
-  `§9.1` WARNING).
+  `Passport.currentCellId = null`, `WorkInProgressMovement` `ISSUE`
+  OUT на `qtyCut` → декремент баланса. Защита от ухода ниже нуля —
+  `WIP_INSUFFICIENT_BALANCE` (409). Отдельного `CELL_REMOVED`
+  события не пишется (`docs/events.md §2.7`, `§9.1` WARNING).
 - **`MasterActionsService.returnToCell` / `setRouteStep`
-  (BACKWARD)** — инкремент `CellContent[size]`. Идемпотентно для
-  той же ячейки (`noop = true` в audit).
+  (BACKWARD)** — `WorkInProgressMovement` `RETURN` IN на `qtyCut`.
+  Идемпотентно для той же ячейки (`noop = true` в audit, WIP-движение
+  не создаётся).
+- **`PassportsService.delete`** (если паспорт лежал в ячейке) —
+  `WorkInProgressMovement` `DELETE` OUT, симметрично откатывает
+  PLACE/RETURN. Идемпотентно по `WIP_DELETE:<passportId>` (паспорт
+  удаляется, ключ остаётся уникальным).
 
 ### 11.4 RBAC и UI
 
@@ -2463,8 +2489,8 @@ before })` и пишут в `AuditLog` (`MASTER_PASSPORT_*`,
 | --------------------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- | -------------- |
 | `unassign`            | `MasterActionsService.unassign`     | `currentEmployeeId = null`. `currentOperationId` / `currentRouteStepIndex` сохраняются.                                          | `MASTER_PASSPORT_UNASSIGNED` |
 | `transferToEmployee`  | `MasterActionsService.transferToEmployee` | `currentEmployeeId = target`, `currentCellId = null`, `status = IN_PROGRESS`. Если у target активная смена с операцией из snapshot — двигаем `currentRouteStepIndex` / `currentOperationId`. | `MASTER_PASSPORT_TRANSFERRED` |
-| `returnToCell`        | `MasterActionsService.returnToCell` | `currentCellId = cell.id`, `currentEmployeeId = null`. `CellContent[size] += qtyCut`. Идемпотентно: `noop = true` если уже в этой ячейке. | `MASTER_PASSPORT_RETURNED_TO_CELL` |
-| `setRouteStep`        | `MasterActionsService.setRouteStep` | `currentOperationId = op.id`, `currentRouteStepIndex = idx`, `currentEmployeeId = null`, `status = IN_PROGRESS`. **Forward**: `currentCellId = null`. **Backward**: обязательно требуется placement в ячейку (`MASTER_BACKWARD_ROUTE_REQUIRES_CELL` если нет cellQr/cellId), `currentCellId = cell.id`, `CellContent[size] += qtyCut`. | `MASTER_PASSPORT_ROUTE_STEP_SET` (`payload: { direction: 'FORWARD' | 'BACKWARD', requiredCellPlacement: bool, cellId? }`) |
+| `returnToCell`        | `MasterActionsService.returnToCell` | `currentCellId = cell.id`, `currentEmployeeId = null`. `WorkInProgressMovement` `RETURN` IN + инкремент `WorkInProgressBalance.qty`. Идемпотентно: `noop = true` если уже в этой ячейке (WIP-движение не создаётся). | `MASTER_PASSPORT_RETURNED_TO_CELL` |
+| `setRouteStep`        | `MasterActionsService.setRouteStep` | `currentOperationId = op.id`, `currentRouteStepIndex = idx`, `currentEmployeeId = null`, `status = IN_PROGRESS`. **Forward**: `currentCellId = null`. **Backward**: обязательно требуется placement в ячейку (`MASTER_BACKWARD_ROUTE_REQUIRES_CELL` если нет cellQr/cellId), `currentCellId = cell.id`, `WorkInProgressMovement` `RETURN` IN + инкремент баланса. | `MASTER_PASSPORT_ROUTE_STEP_SET` (`payload: { direction: 'FORWARD' | 'BACKWARD', requiredCellPlacement: bool, cellId? }`) |
 
 Каждое действие требует обязательного `reason` (Zod-enum
 `MASTER_ACTION_REASONS = WRONG_SCAN | SHIFT_HANDOVER |
@@ -2986,8 +3012,9 @@ marketplace остаётся единственным whitelist'ом под фи
 10. `CuttingClosureRequest`: переход `APPROVED → REJECTED`
     (отмена закрытия) — в коде не реализован.
 11. `PurchaseReceiptLine.cellId` фиксирует ячейку приёмки, но
-    `CellContent` при этом **не** обновляется — складские
-    остатки на ячейках на MVP по-прежнему ведутся только через
+    `WorkInProgressBalance` при этом **не** обновляется — контур
+    материалов и контур полуфабриката не пересекаются.
+    Полуфабрикат в ячейках ведётся только через
     `PassportsService.place` (см. §6.3).
 12. Поведение `PassportEvent.employeeId` при удалении сотрудника:
     FK без явной директивы `onDelete` (дефолт Prisma) —

@@ -22,6 +22,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-issue-rules.service.js';
+import { WorkInProgressService } from '../work-in-progress/work-in-progress.service.js';
 import {
   CellInactiveException,
   CellNotFoundException,
@@ -65,6 +66,7 @@ export class MasterActionsService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly orderCutIssueRules: OrderCutIssueRulesService,
+    private readonly workInProgress: WorkInProgressService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -257,28 +259,6 @@ export class MasterActionsService {
     const alreadyInThisCell = passport.currentCellId === cell.id;
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      if (!alreadyInThisCell) {
-        const existing = await tx.cellContent.findUnique({
-          where: {
-            cellId_sizeId: { cellId: cell.id, sizeId: passport.sizeId },
-          },
-        });
-        if (existing) {
-          await tx.cellContent.update({
-            where: { id: existing.id },
-            data: { quantity: existing.quantity + passport.qtyCut },
-          });
-        } else {
-          await tx.cellContent.create({
-            data: {
-              cellId: cell.id,
-              sizeId: passport.sizeId,
-              quantity: passport.qtyCut,
-            },
-          });
-        }
-      }
-
       const next = await tx.passport.update({
         where: { id: passport.id },
         data: {
@@ -300,7 +280,7 @@ export class MasterActionsService {
         sizeId: passport.sizeId,
         employeeId: actor.employeeId,
       });
-      await this.audit.log(
+      const audit = await this.audit.log(
         {
           event: 'MASTER_PASSPORT_RETURNED_TO_CELL',
           entityType: 'PASSPORT',
@@ -319,6 +299,25 @@ export class MasterActionsService {
         },
         tx,
       );
+      // Foundation полуфабриката: RETURN-движение по крою. Только
+      // если это не noop (паспорт реально переехал в новую ячейку).
+      // Идемпотентно по `WIP_RETURN:<auditId>`. См.
+      // `WorkInProgressService.recordReturnInTx`.
+      if (!alreadyInThisCell && audit) {
+        await this.workInProgress.recordReturnInTx(tx, {
+          passport: {
+            id: passport.id,
+            orderId: passport.orderId,
+            productId: passport.productId,
+            sizeId: passport.sizeId,
+            color: passport.color,
+            qtyCut: passport.qtyCut,
+          },
+          cell: { id: cell.id, warehouseId: cell.warehouseId },
+          auditId: audit.id,
+          employeeId: actor.employeeId,
+        });
+      }
       return next;
     });
 
@@ -394,7 +393,12 @@ export class MasterActionsService {
 
     // Backward без placement → 400. Эта проверка идёт до открытия
     // транзакции, чтобы не плодить пустые audit-логи.
-    let cell: { id: string; code: string; active: boolean } | null = null;
+    let cell: {
+      id: string;
+      code: string;
+      active: boolean;
+      warehouseId: string | null;
+    } | null = null;
     if (isBackward) {
       const hasCellHint =
         Boolean(dto.cellId && dto.cellId.length > 0) ||
@@ -411,31 +415,6 @@ export class MasterActionsService {
       cell !== null && passport.currentCellId === cell.id;
 
     const updated = await this.prisma.$transaction(async (tx) => {
-      // Backward + cell → размещаем паспорт в ячейку (см.
-      // `MasterActionsService.returnToCell`, та же логика, только
-      // встроенная в один master-action).
-      if (cell && !alreadyInThisCell) {
-        const existing = await tx.cellContent.findUnique({
-          where: {
-            cellId_sizeId: { cellId: cell.id, sizeId: passport.sizeId },
-          },
-        });
-        if (existing) {
-          await tx.cellContent.update({
-            where: { id: existing.id },
-            data: { quantity: existing.quantity + passport.qtyCut },
-          });
-        } else {
-          await tx.cellContent.create({
-            data: {
-              cellId: cell.id,
-              sizeId: passport.sizeId,
-              quantity: passport.qtyCut,
-            },
-          });
-        }
-      }
-
       const next = await tx.passport.update({
         where: { id: passport.id },
         data: {
@@ -447,7 +426,7 @@ export class MasterActionsService {
         },
         include: passportInclude,
       });
-      await this.audit.log(
+      const audit = await this.audit.log(
         {
           event: 'MASTER_PASSPORT_ROUTE_STEP_SET',
           entityType: 'PASSPORT',
@@ -468,6 +447,24 @@ export class MasterActionsService {
         },
         tx,
       );
+      // Foundation полуфабриката: backward + cell = тот же return-in-cell
+      // паттерн, что и в `returnToCell`. Для forward / backward без
+      // cell-hint'а WIP не трогаем (паспорт уходит без размещения).
+      if (cell && !alreadyInThisCell && audit) {
+        await this.workInProgress.recordReturnInTx(tx, {
+          passport: {
+            id: passport.id,
+            orderId: passport.orderId,
+            productId: passport.productId,
+            sizeId: passport.sizeId,
+            color: passport.color,
+            qtyCut: passport.qtyCut,
+          },
+          cell: { id: cell.id, warehouseId: cell.warehouseId },
+          auditId: audit.id,
+          employeeId: actor.employeeId,
+        });
+      }
       return next;
     });
 
@@ -610,11 +607,16 @@ export class MasterActionsService {
 
   private async resolveCell(
     dto: { cellQr?: string; cellId?: string },
-  ): Promise<{ id: string; code: string; active: boolean }> {
+  ): Promise<{
+    id: string;
+    code: string;
+    active: boolean;
+    warehouseId: string | null;
+  }> {
     if (dto.cellId) {
       const c = await this.prisma.cell.findUnique({
         where: { id: dto.cellId },
-        select: { id: true, code: true, active: true },
+        select: { id: true, code: true, active: true, warehouseId: true },
       });
       if (!c) throw new CellNotFoundException();
       return c;
@@ -624,7 +626,7 @@ export class MasterActionsService {
     const idFromQr = raw.startsWith('cell:') ? raw.slice('cell:'.length) : raw;
     const c = await this.prisma.cell.findFirst({
       where: { OR: [{ id: idFromQr }, { qrCode: raw }, { code: raw }] },
-      select: { id: true, code: true, active: true },
+      select: { id: true, code: true, active: true, warehouseId: true },
     });
     if (!c) throw new CellNotFoundException();
     return c;

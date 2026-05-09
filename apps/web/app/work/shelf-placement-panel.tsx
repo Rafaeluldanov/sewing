@@ -24,6 +24,7 @@
  */
 
 import { useState, useTransition } from 'react';
+import { ModalPortal } from '@/components/modal-portal';
 import { QrScannerModal } from './qr-scanner-modal';
 import {
   lookupCellByCodeAction,
@@ -186,6 +187,7 @@ export function ShelfPlacementPanel({ onClose }: { onClose: () => void }) {
     const { cell } = stage;
     const occupied = cell.contents.filter((c) => c.quantity > 0);
     return (
+      <ModalPortal>
       <div
         className="qr-modal passport-confirm"
         role="dialog"
@@ -251,6 +253,7 @@ export function ShelfPlacementPanel({ onClose }: { onClose: () => void }) {
           </div>
         </div>
       </div>
+      </ModalPortal>
     );
   }
 

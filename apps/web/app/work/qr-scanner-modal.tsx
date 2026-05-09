@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { ModalPortal } from '@/components/modal-portal';
 import { triggerScanHaptic } from './feedback';
 
 interface Props {
@@ -95,6 +96,7 @@ export function QrScannerModal({ onScan, onClose }: Props) {
   }, [onScan]);
 
   return (
+    <ModalPortal>
     <div
       className="qr-modal"
       role="dialog"
@@ -144,5 +146,6 @@ export function QrScannerModal({ onScan, onClose }: Props) {
         </button>
       </div>
     </div>
+    </ModalPortal>
   );
 }

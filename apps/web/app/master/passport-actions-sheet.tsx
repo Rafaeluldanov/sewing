@@ -26,6 +26,7 @@ import {
   type MasterActionReason,
   type MasterCallPassportDto,
 } from '@sewing/shared';
+import { ModalPortal } from '@/components/modal-portal';
 import { QrScannerModal } from '@/app/work/qr-scanner-modal';
 import {
   masterReturnToCellAction,
@@ -74,6 +75,7 @@ export function PassportActionsSheet({
   const [action, setAction] = useState<ActionId | null>(null);
 
   return (
+    <ModalPortal>
     <div
       className="master-actions-sheet"
       role="dialog"
@@ -146,6 +148,7 @@ export function PassportActionsSheet({
         )}
       </div>
     </div>
+    </ModalPortal>
   );
 }
 

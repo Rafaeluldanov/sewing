@@ -9,8 +9,9 @@
 
 - Раскройщик (сдельный) — начисление сразу при создании паспорта, статус
   APPROVED.
-- Пошив (сдельный) — начисление при переходе на следующую операцию,
-  статус PENDING. Становится APPROVED только после упаковки.
+- Пошив (сдельный) — начисление в момент явного завершения операции
+  швеёй (`completeOperationByEmployee`), статус PENDING. Становится
+  APPROVED только после упаковки.
 - Окладные роли (ОТК, помощник раскройщика, упаковка) — никакие
   OperationEntry вообще не создаются.
 
@@ -22,10 +23,24 @@
   `operationId = CUT_CUT` (оплачиваемая операция раскроя),
   `qty = passport.qtyCut`, `status = APPROVED`, `approvedAt = now()`.
 
-- **Пошив**: `OperationEntry` создаётся в транзакции `MovementsService.move`
-  **для предыдущего сотрудника и операции** (если операция принадлежит
-  категории `SEWING` и роль исполнителя — `PIECEWORK`).
-  `status = PENDING`, `approvedAt = null`.
+- **Пошив**: `OperationEntry` создаётся в транзакции
+  `PassportsService.completeOperationByEmployee` **для самой швеи и
+  только что завершённой операции** (если `Operation.pricingMode ≠
+  SALARY_ONLY`, операция не `CUT_CUT` и роль исполнителя —
+  `PIECEWORK`/`MIXED`). Источник — `EarningsService.createPendingForCompletedOperation`,
+  `sourceEventId = OPERATION_FINISHED PassportEvent.id`,
+  `sourceEventType = OPERATION_TRANSITION`. `status = PENDING_RELEASE`,
+  `approvedAt = null`.
+
+  **Важно (изменение 2026-05).** Раньше начисление создавалось в
+  `scanOnOperation` *для предыдущего исполнителя предыдущей операции*
+  при сканировании на следующую. Это создавало ловушку «последняя
+  операция перед упаковкой»: за неё никто не получал, потому что
+  следующего скана уже не было — паспорт уходил в коробку. Перенос
+  записи на `completeOperationByEmployee` устраняет эту ловушку
+  (см. также `docs/flows.md §F4`). `scanOnOperation` остаётся
+  pipeline-движком (обновление `currentOperationId/Employee`), но
+  сдельных строк больше не пишет.
 
 - **Окладные**: ничего не создаём. Зарплата начисляется фиксированным окладом
   (см. `PayrollService.computeSalaryMonth`).

@@ -40,6 +40,7 @@ import {
   type PatternSizeRefDto,
 } from '@sewing/shared/patterns';
 import { uploadPatternSizeFileAction } from '../actions';
+import { ModalPortal } from '@/components/modal-portal';
 import {
   initialUploadPatternFileState,
   type UploadPatternFileState,
@@ -157,6 +158,7 @@ export function AddPatternSizeModal({
   const allAdded = effectiveSizes.length === 0;
 
   return (
+    <ModalPortal>
     <div
       className="admin-size-plan-modal__backdrop"
       onMouseDown={handleBackdropClick}
@@ -276,5 +278,6 @@ export function AddPatternSizeModal({
         </form>
       </div>
     </div>
+    </ModalPortal>
   );
 }

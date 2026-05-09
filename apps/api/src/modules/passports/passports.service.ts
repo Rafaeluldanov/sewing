@@ -62,6 +62,7 @@ import { OrderCutIssueRulesService } from '../order-cut-issue-rules/order-cut-is
 import { MaterialIssuesService } from '../material-issues/material-issues.service.js';
 import { CompanySettingsService } from '../company-settings/company-settings.service.js';
 import { FinishedGoodsService } from '../finished-goods/finished-goods.service.js';
+import { WorkInProgressService } from '../work-in-progress/work-in-progress.service.js';
 
 type PassportRow = Prisma.PassportGetPayload<{
   include: {
@@ -102,6 +103,7 @@ export class PassportsService {
     private readonly materialIssues: MaterialIssuesService,
     private readonly companySettings: CompanySettingsService,
     private readonly finishedGoods: FinishedGoodsService,
+    private readonly workInProgress: WorkInProgressService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -676,6 +678,9 @@ export class PassportsService {
    *
    * Если ни одного блокера нет, чистим всё, что висит на паспорте, в
    * одной транзакции:
+   *   - `CellContent.quantity` декрементим на `passport.qtyCut`, если
+   *     паспорт лежал в ячейке (`currentCellId != null`) — симметрично
+   *     инкременту в `place`, иначе ячейка «помнит» лишний остаток;
    *   - `PassportEvent` (история событий, без `onDelete` каскада в схеме);
    *   - `OperationEntry` (только `PENDING_RELEASE` — `APPROVED` уже
    *     заблокирован выше);
@@ -699,10 +704,13 @@ export class PassportsService {
         id: true,
         number: true,
         orderId: true,
+        productId: true,
         sizeId: true,
+        color: true,
         qtyCut: true,
         status: true,
         currentCellId: true,
+        currentCell: { select: { warehouseId: true } },
         creatorId: true,
         boxItems: { select: { box: { select: { number: true } } }, take: 1 },
       },
@@ -769,6 +777,27 @@ export class PassportsService {
     }
 
     await this.prisma.$transaction(async (tx) => {
+      if (passport.currentCellId) {
+        // Foundation полуфабриката: DELETE-движение по крою откатывает
+        // PLACE/RETURN-движения этого паспорта. Идемпотентно по
+        // `WIP_DELETE:<passportId>` (паспорт удаляется, ключ остаётся
+        // уникальным навсегда). См. `WorkInProgressService.recordDeleteInTx`.
+        await this.workInProgress.recordDeleteInTx(tx, {
+          passport: {
+            id: passport.id,
+            orderId: passport.orderId,
+            productId: passport.productId,
+            sizeId: passport.sizeId,
+            color: passport.color,
+            qtyCut: passport.qtyCut,
+          },
+          fromCell: {
+            id: passport.currentCellId,
+            warehouseId: passport.currentCell?.warehouseId ?? null,
+          },
+          employeeId: deleterEmployeeId,
+        });
+      }
       await tx.passportDefect.deleteMany({ where: { passportId: id } });
       await tx.operationEntry.deleteMany({ where: { passportId: id } });
       await tx.passportEvent.deleteMany({ where: { passportId: id } });
@@ -784,6 +813,7 @@ export class PassportsService {
             orderId: passport.orderId,
             sizeId: passport.sizeId,
             qtyCut: passport.qtyCut,
+            cellId: passport.currentCellId,
             actorRole: actorRole ?? null,
           },
         },
@@ -869,29 +899,6 @@ export class PassportsService {
     const cell = await this.findCellByIdOrCode(dto.cellId, dto.cellCode);
 
     await this.prisma.$transaction(async (tx) => {
-      // Инкрементим срез CellContent (или создаём, если ещё нет).
-      // Используем updateMany→create вместо upsert, т.к. unique по
-      // (cellId, sizeId) у нас составной — это корректно работает с upsert,
-      // но 2-шаговая реализация проще читается.
-      const existing = await tx.cellContent.findUnique({
-        where: {
-          cellId_sizeId: { cellId: cell.id, sizeId: passport.sizeId },
-        },
-      });
-      if (existing) {
-        await tx.cellContent.update({
-          where: { id: existing.id },
-          data: { quantity: existing.quantity + passport.qtyCut },
-        });
-      } else {
-        await tx.cellContent.create({
-          data: {
-            cellId: cell.id,
-            sizeId: passport.sizeId,
-            quantity: passport.qtyCut,
-          },
-        });
-      }
       await tx.passport.update({
         where: { id: passport.id },
         data: {
@@ -905,13 +912,29 @@ export class PassportsService {
           currentEmployeeId: null,
         },
       });
-      await tx.passportEvent.create({
+      const placedEvent = await tx.passportEvent.create({
         data: {
           passportId: passport.id,
           type: PassportEventType.CELL_PLACED,
           cellId: cell.id,
           qty: passport.qtyCut,
         },
+      });
+      // Foundation полуфабриката: PLACE-движение по крою — единственный
+      // источник истины «что лежит в ячейке». Идемпотентно по
+      // `WIP_PLACE:<eventId>`. См. `WorkInProgressService.recordPlaceInTx`.
+      await this.workInProgress.recordPlaceInTx(tx, {
+        passport: {
+          id: passport.id,
+          orderId: passport.orderId,
+          productId: passport.productId,
+          sizeId: passport.sizeId,
+          color: passport.color,
+          qtyCut: passport.qtyCut,
+        },
+        cell: { id: cell.id, warehouseId: cell.warehouseId },
+        eventId: placedEvent.id,
+        employeeId: null,
       });
       // Audit (см. `docs/domain.md §«Audit log»`): фиксируем ровно
       // тот срез, который полезен для разбора инцидента — на какую
@@ -1065,26 +1088,9 @@ export class PassportsService {
     const isRouteWip = passport.currentRouteStepIndex !== null;
 
     if (passport.currentCellId) {
-      // Legacy / буферная ветка: паспорт лежит в ячейке (с маршрутом
-      // или без — неважно). Идём по старой транзакции с декрементом
-      // CellContent — это не должно меняться, чтобы заказы без
-      // маршрута и опциональное буферное хранение работали как раньше.
+      // Буферная ветка: паспорт лежит в ячейке (с маршрутом или без).
+      // Списываем из WIP в одной транзакции с обновлением паспорта.
       await this.prisma.$transaction(async (tx) => {
-        const content = await tx.cellContent.findUnique({
-          where: {
-            cellId_sizeId: {
-              cellId: passport.currentCellId!,
-              sizeId: passport.sizeId,
-            },
-          },
-        });
-        if (content) {
-          const nextQty = Math.max(content.quantity - passport.qtyCut, 0);
-          await tx.cellContent.update({
-            where: { id: content.id },
-            data: { quantity: nextQty },
-          });
-        }
         await tx.passport.update({
           where: { id: passport.id },
           data: {
@@ -1093,7 +1099,7 @@ export class PassportsService {
             status: PassportStatus.IN_PROGRESS,
           },
         });
-        await tx.passportEvent.create({
+        const issuedEvent = await tx.passportEvent.create({
           data: {
             passportId: passport.id,
             type: PassportEventType.ISSUED_TO_EMPLOYEE,
@@ -1102,6 +1108,25 @@ export class PassportsService {
             employeeId,
             qty: passport.qtyCut,
           },
+        });
+        // Foundation полуфабриката: ISSUE-движение по крою —
+        // единственная точка списания остатка из ячейки. Идемпотентно
+        // по `WIP_ISSUE:<eventId>`. См. `WorkInProgressService.recordIssueInTx`.
+        await this.workInProgress.recordIssueInTx(tx, {
+          passport: {
+            id: passport.id,
+            orderId: passport.orderId,
+            productId: passport.productId,
+            sizeId: passport.sizeId,
+            color: passport.color,
+            qtyCut: passport.qtyCut,
+          },
+          fromCell: {
+            id: passport.currentCellId!,
+            warehouseId: passport.currentCell?.warehouseId ?? null,
+          },
+          eventId: issuedEvent.id,
+          employeeId,
         });
         // Audit (см. `docs/domain.md §«Audit log»`): legacy/буферная
         // ветка — фиксируем источник (ячейка) и операцию, на которой
@@ -1738,25 +1763,24 @@ export class PassportsService {
     }
     const cells = await this.prisma.cell.findMany({
       where,
-      include: {
-        contents: { include: { size: true } },
-        warehouse: true,
-      },
+      include: { warehouse: true },
       orderBy: { code: 'asc' },
     });
-    return cells.map((c) => this.toCellDto(c));
+    const cellIds = cells.map((c) => c.id);
+    const contentsByCellId = await this.loadCellContentsFromWip(cellIds);
+    return cells.map((c) =>
+      this.toCellDto(c, contentsByCellId.get(c.id) ?? []),
+    );
   }
 
   async getCell(id: string): Promise<CellDetailDto> {
     const cell = await this.prisma.cell.findUnique({
       where: { id },
-      include: {
-        contents: { include: { size: true } },
-        warehouse: true,
-      },
+      include: { warehouse: true },
     });
     if (!cell) throw new CellNotFoundException();
-    return this.toCellDto(cell);
+    const contentsByCellId = await this.loadCellContentsFromWip([id]);
+    return this.toCellDto(cell, contentsByCellId.get(id) ?? []);
   }
 
   /**
@@ -1780,14 +1804,12 @@ export class PassportsService {
       where: {
         OR: [{ id: idFromQr }, { qrCode: trimmed }, { code: trimmed }],
       },
-      include: {
-        contents: { include: { size: true } },
-        warehouse: true,
-      },
+      include: { warehouse: true },
     });
     if (!cell) throw new CellNotFoundException();
     if (!cell.active) throw new CellInactiveException();
-    return this.toCellDto(cell);
+    const contentsByCellId = await this.loadCellContentsFromWip([cell.id]);
+    return this.toCellDto(cell, contentsByCellId.get(cell.id) ?? []);
   }
 
   // -------------------------------------------------------------------------
@@ -2207,11 +2229,9 @@ export class PassportsService {
 
   private toCellDto(
     cell: Prisma.CellGetPayload<{
-      include: {
-        contents: { include: { size: true } };
-        warehouse: true;
-      };
+      include: { warehouse: true };
     }>,
+    contents: CellDetailDto['contents'],
   ): CellDetailDto {
     return {
       id: cell.id,
@@ -2225,14 +2245,80 @@ export class PassportsService {
             code: cell.warehouse.code,
           }
         : null,
-      contents: cell.contents
-        .map((c) => ({
-          sizeId: c.sizeId,
-          sizeCode: c.size.code,
-          sizeSortOrder: c.size.sortOrder,
-          quantity: c.quantity,
-        }))
-        .sort((a, b) => a.sizeSortOrder - b.sizeSortOrder),
+      contents,
     };
+  }
+
+  /**
+   * Подгружает «содержимое ячеек» (срез по размерам) из
+   * `WorkInProgressBalance` — единственный источник истины для
+   * полуфабриката (см.
+   * `apps/api/src/modules/work-in-progress/work-in-progress.service.ts`,
+   * `prisma/schema.prisma::WorkInProgressBalance`).
+   *
+   * Историческая `CellContent` была удалена в рамках перехода к
+   * единой модели полуфабриката. WIP содержит больше измерений
+   * (`orderId`/`productId`/`color`), поэтому здесь мы их сворачиваем
+   * по `(cellId, sizeId)` суммой qty — для UI «что в ячейке по
+   * размерам» этого достаточно.
+   *
+   * Возвращает Map cellId → отсортированный по `Size.sortOrder` массив
+   * `{ sizeId, sizeCode, sizeSortOrder, quantity }`. Размеры с
+   * нулевой/отсутствующей суммой не включаются.
+   */
+  private async loadCellContentsFromWip(
+    cellIds: string[],
+  ): Promise<Map<string, CellDetailDto['contents']>> {
+    const result = new Map<string, CellDetailDto['contents']>();
+    if (cellIds.length === 0) return result;
+
+    const balances = await this.prisma.workInProgressBalance.findMany({
+      where: {
+        cellId: { in: cellIds },
+        qty: { gt: 0 },
+      },
+      include: {
+        size: { select: { id: true, code: true, sortOrder: true } },
+      },
+    });
+
+    // Свёртка (cellId, sizeId) → суммарный qty. У одной ячейки и
+    // одного размера может быть несколько строк WIP (разные orderId/
+    // productId/color), их складываем — на уровне CellDetailDto
+    // нужна общая цифра «N штук размера M в ячейке».
+    type Bucket = {
+      sizeId: string;
+      sizeCode: string;
+      sizeSortOrder: number;
+      quantity: number;
+    };
+    const aggregated = new Map<string, Map<string, Bucket>>();
+    for (const b of balances) {
+      if (!b.cellId) continue;
+      let bySize = aggregated.get(b.cellId);
+      if (!bySize) {
+        bySize = new Map();
+        aggregated.set(b.cellId, bySize);
+      }
+      const existing = bySize.get(b.sizeId);
+      if (existing) {
+        existing.quantity += b.qty;
+      } else {
+        bySize.set(b.sizeId, {
+          sizeId: b.sizeId,
+          sizeCode: b.size.code,
+          sizeSortOrder: b.size.sortOrder,
+          quantity: b.qty,
+        });
+      }
+    }
+
+    for (const [cellId, bySize] of aggregated.entries()) {
+      const items = Array.from(bySize.values()).sort(
+        (a, b) => a.sizeSortOrder - b.sizeSortOrder,
+      );
+      result.set(cellId, items);
+    }
+    return result;
   }
 }

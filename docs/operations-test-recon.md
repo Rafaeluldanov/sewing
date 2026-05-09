@@ -75,10 +75,10 @@ Source files:
 | `create` | `passports.service.ts` | `CreatePassportDto`, `creatorEmployeeId` | `PassportDetailDto` | `Passport` (status=`CREATED`, `currentOperationId`=CUT_DIVISION, `qrCode`); `PassportEvent` (`CREATED`); `OperationEntry` (immediate cutter earning через `EarningsService`); `AuditLog` | Атрибуция cutter (PHASE 2 STEP 3): creator=CUTTER auto, иначе обязателен `cutterId`. Падение валидации = 400 `CUTTER_REQUIRED`. |
 | `getOne` | `passports.service.ts` | `id`, `options` | `PassportDetailDto` | none | Hint по маршруту строится из активной shift — может расходиться с реальностью при смене смены. |
 | `listByOrder` | `passports.service.ts` | `orderId` | `PassportListItemDto[]` | none | — |
-| `place` | `passports.service.ts` | `id`, `PlacePassportDto` | `PassportPlacementResultDto` | `CellContent` (+= `qtyCut`); `Passport.currentCellId`; `PassportEvent` (`CELL_PLACED`); `AuditLog` (`PASSPORT_PLACED`) | Суммирование по (cellId, sizeId), идемпотентность не гарантирована при двойном клике. |
-| `issueToEmployee` | `passports.service.ts` | `id`, `employeeId` | `PassportDetailDto` | `Passport` (status=`IN_PROGRESS`, `currentEmployeeId`, `currentCellId`=null); `CellContent` (-= `qtyCut`); `PassportEvent` (`ISSUED_TO_EMPLOYEE`); `CutReleasePolicy.consumedQty`; `MaterialIssue` (если auto cut); `AuditLog` (`PASSPORT_ISSUED`) | Скрытое автосписание сырья; пересечение с CutReleasePolicy. Должен срабатывать только в SEWING-ветке маршрута. |
-| `scanOnOperation` | `passports.service.ts` | `id`, `employeeId` | `PassportDetailDto` | `Passport.currentOperationId`/`currentRouteStepIndex`; `PassportEvent` (`OPERATION_SCAN`); `OperationEntry` (pending по предыдущей операции); `AuditLog` | QC-gate для входа в IRONING; есть проверка allowed equipment+operation. |
-| `completeOperationByEmployee` | `passports.service.ts` | `id`, `employeeId` | `PassportDetailDto` | `Passport.currentEmployeeId`=null; `currentRouteStepIndex` сдвигается; `PassportEvent` (`OPERATION_FINISHED`); `AuditLog` (`PASSPORT_OPERATION_COMPLETED`) | Не должен откатывать паспорт назад (тест уже есть). Идемпотентен на той же операции. |
+| `place` | `passports.service.ts` | `id`, `PlacePassportDto` | `PassportPlacementResultDto` | `Passport.currentCellId`; `PassportEvent` (`CELL_PLACED`); `WorkInProgressMovement` `PLACE` IN + `WorkInProgressBalance.qty` += `qtyCut` (см. `docs/erd.md §2.7b`); `AuditLog` (`PASSPORT_PLACED`) | Идемпотентность WIP по `WIP_PLACE:<eventId>`. |
+| `issueToEmployee` | `passports.service.ts` | `id`, `employeeId` | `PassportDetailDto` | `Passport` (status=`IN_PROGRESS`, `currentEmployeeId`, `currentCellId`=null); `PassportEvent` (`ISSUED_TO_EMPLOYEE`); `WorkInProgressMovement` `ISSUE` OUT + декремент баланса; `CutReleasePolicy.consumedQty`; `MaterialIssue` (если auto cut); `AuditLog` (`PASSPORT_ISSUED`) | Скрытое автосписание сырья; пересечение с CutReleasePolicy. Должен срабатывать только в SEWING-ветке маршрута. WIP бросает `WIP_INSUFFICIENT_BALANCE` (409), если списание увело бы баланс ниже нуля. |
+| `scanOnOperation` | `passports.service.ts` | `id`, `employeeId` | `PassportDetailDto` | `Passport.currentOperationId`/`currentRouteStepIndex`; `PassportEvent` (`OPERATION_SCAN`); `AuditLog` | QC-gate для входа в IRONING; есть проверка allowed equipment+operation. **Сдельных начислений больше не пишет** — после изменения 2026-05 они создаются в `completeOperationByEmployee`. |
+| `completeOperationByEmployee` | `passports.service.ts` | `id`, `employeeId` | `PassportDetailDto` | `Passport.currentEmployeeId`=null; `currentRouteStepIndex` сдвигается; `PassportEvent` (`OPERATION_FINISHED`); `OperationEntry` (`PENDING_RELEASE` сдельной швее за только что завершённую операцию через `EarningsService.createPendingForCompletedOperation`); `AuditLog` (`PASSPORT_OPERATION_COMPLETED`) | Не должен откатывать паспорт назад (тест уже есть). Идемпотентен на той же операции. Закрывает ловушку «последняя швейная операция перед упаковкой» (раньше за неё никто не получал). |
 | `findByCode` | `passports.service.ts` | `code` | `PassportDetailDto` | none | Резолвит QR `passport:{id}`, человеческий номер `P-YYYYMMDD-NNNN`, raw id. |
 | `listCells` / `getCell` / `findCellByCode` | `passports.service.ts` | — | `CellDetailDto[] / CellDetailDto` | none | — |
 
@@ -148,7 +148,7 @@ Source files:
 |--------|------|--------------|------|
 | `unassign` | `master-actions.service.ts` | `Passport.currentEmployeeId`=null; `AuditLog` (`MASTER_PASSPORT_UNASSIGNED`) | Reason обязателен. |
 | `transferToEmployee` | `master-actions.service.ts` | `Passport.currentEmployeeId/currentCellId`; `AuditLog` (`MASTER_PASSPORT_TRANSFERRED`) | Может авто-сдвинуть `currentRouteStepIndex` если у целевого сотрудника подходящая смена. |
-| `returnToCell` | `master-actions.service.ts` | `CellContent.quantity` += qtyCut; `Passport.currentCellId`; `AuditLog` (`MASTER_PASSPORT_RETURNED_TO_CELL`) | Идемпотентен в ту же ячейку. |
+| `returnToCell` | `master-actions.service.ts` | `Passport.currentCellId`; `WorkInProgressMovement` `RETURN` IN + инкремент `WorkInProgressBalance.qty` (см. `docs/erd.md §2.7b`); `AuditLog` (`MASTER_PASSPORT_RETURNED_TO_CELL`) | Идемпотентен в ту же ячейку (noop без WIP-движения). |
 | `setRouteStep` | `master-actions.service.ts` | `Passport.currentRouteStepIndex`/`currentOperationId`; `AuditLog` (`MASTER_PASSPORT_ROUTE_STEP_SET`) | Запрет шага «назад». |
 | `MasterCallsService.create` | `master-calls.service.ts` | `MasterCall` (OPEN); `AuditLog` (`MASTER_CALLED`, только при реальной создании) | Идемпотентен — повторный POST вернёт ту же запись, без второй строки в Audit. |
 | `MasterCallsService.listOpen` | `master-calls.service.ts` | none | FIFO. |
@@ -264,7 +264,7 @@ Source files:
 | `tests/integration/production-dashboard.test.ts` | `/api/shopfloor/state` агрегаты. | — |
 | `tests/integration/shopfloor-display.test.ts` | display KPI. | — |
 | `tests/integration/me-employee-qr.test.ts` | `GET /api/me/employee-qr` для самого себя. | — |
-| `tests/integration/db-invariants.test.ts` | partial unique (одна активная смена); `BoxItem` (один паспорт в одном коробе); `CellContent` уникальность пары. | Нет инварианта «один `OperationEntry` на пару (passport, op-completion-event)». |
+| `tests/integration/db-invariants.test.ts` | partial unique (одна активная смена); `BoxItem` (один паспорт в одном коробе); `WorkInProgressBalance.balanceKey` — уникальность пары (orderId/productId/sizeId/color/warehouseId/cellId). | Нет инварианта «один `OperationEntry` на пару (passport, op-completion-event)». |
 | `tests/integration/salary.test.ts` | SalaryEntry idempotent, edited manually, RBAC. | — |
 
 ### 5.2 Smoke (UI)
@@ -350,9 +350,11 @@ Source files:
 12. **Master call idempotency.** Повторный `POST /api/master-calls` от
     одного сотрудника возвращает существующий OPEN-call, не пишет второй
     `MASTER_CALLED` в `AuditLog`.
-13. **Cell content invariant.** При issue/return-to-cell `CellContent`
-    меняется ровно на `qtyCut` паспорта; `quantity` никогда не уходит в
-    минус.
+13. **Work-in-progress invariant.** При place/issue/return/delete/
+    pack-out `WorkInProgressBalance.qty` меняется ровно на `qtyCut`
+    паспорта в одном `WorkInProgressMovement` с уникальным
+    `sourceKey`. `qty` никогда не уходит ниже нуля — backend бросает
+    `WIP_INSUFFICIENT_BALANCE` (409). См. `docs/erd.md §2.7b`.
 14. **AuditLog complete.** Каждое доменное действие пишет ровно одну
     запись `AuditLog` (e.g. `PASSPORT_PLACED`, `PASSPORT_ISSUED`,
     `PASSPORT_OPERATION_COMPLETED`, `QC_COMPLETED`, `WTO_COMPLETED`,
@@ -494,7 +496,9 @@ Source files:
   `MIXED`.
 - `Equipment` + `EquipmentOperation` — allow-list операций для рабочего
   места.
-- `Cell` + `CellContent` — пары (cell, size) с количеством раскроя.
+- `Cell` + `WorkInProgressBalance` / `WorkInProgressMovement` —
+  полуфабрикат в ячейках с полным контекстом (orderId / productId /
+  sizeId / color) и журналом движений.
 - `Box` + `BoxItem` — упаковка; короб закрывается ровно один раз.
 - `SalaryEntry` — суточная зарплата. Enum `SalaryEntrySource`:
   `SHIFT_DAY`, `MANUAL`.

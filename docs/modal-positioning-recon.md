@@ -274,3 +274,88 @@ noop. Footer уезжает ниже viewport.
 
 JSX, backend, DTO, Prisma и печатная бизнес-логика **не
 изменены**.
+
+---
+
+## 7. UPDATE 2026-05-09 — финальный паттерн для всех модалок
+
+§5–§6 описывают CSS-only фикс через специфичность (Option B). На
+практике этого оказалось мало — bulk-print modal продолжал
+открываться «по центру длинной admin-страницы», а не viewport.
+Подробнее — `docs/warehouse-bulk-print-modal-runtime-recon.md §14`.
+
+**Корневая причина (вторая, не описанная ранее):** на
+`.admin-page-shell` стоит `animation: admin-page-appear 180ms ease
+both` с `transform: translateY(0)` в финальном кадре. С
+`animation-fill-mode: both` финал клеится навсегда, и
+`.admin-page-shell` становится **containing block** для `position:
+fixed` потомков (CSS Containing Block §4). То есть `.qr-modal {
+position: fixed; inset: 0 }` внутри admin-страницы позиционируется
+не относительно viewport, а относительно длинной admin-страницы.
+CSS-фикс самой модалки тут бесполезен — ломается на уровне
+layout-engine ещё до того, как `inset: 0` доходит до резолвинга.
+
+**Финальный паттерн, применённый ко всем 11 overlay-модалкам:**
+
+1. **`<ModalPortal>` helper** (новый файл
+   [`apps/web/components/modal-portal.tsx`](../apps/web/components/modal-portal.tsx)):
+   ```tsx
+   export function ModalPortal({ children }: { children: ReactNode }) {
+     const [mounted, setMounted] = useState(false);
+     useEffect(() => setMounted(true), []);
+     if (!mounted) return null;
+     return createPortal(children, document.body);
+   }
+   ```
+   SSR-guard через `mounted`; на сервере ничего не рендерится,
+   на клиенте — overlay уходит прямым потомком `<body>` через
+   `createPortal`. Это гарантирует `position: fixed` относительно
+   viewport независимо от любых ancestor-transforms /
+   filters / will-change / contain.
+
+2. **Все 11 модалок переведены на ModalPortal:**
+   - `qr-modal`-семейство (5 файлов): `bulk-print-panel.tsx`,
+     `qr-scanner-modal.tsx`, `passport-confirm-modal.tsx`,
+     `shelf-placement-panel.tsx`, `employee-qr-button.tsx`
+   - `master-actions-sheet`-семейство (2 файла):
+     `passport-actions-sheet.tsx`, `cut-release-policy-card.tsx`
+   - `admin-size-plan-modal__backdrop`-семейство (3 файла):
+     `add-pattern-size-modal.tsx`, `create-size-modal.tsx`,
+     `size-plan-selector.tsx`
+   - `modal-backdrop`-семейство (1 файл):
+     `seamstress-active-panel.tsx`
+
+3. **CSS baseline унифицирован** для всех overlay-классов
+   (`.qr-modal`, `.modal-backdrop`, `.master-actions-sheet`,
+   `.admin-size-plan-modal__backdrop`):
+   - `position: fixed; inset: 0; overflow-y: auto;
+     overscroll-behavior: contain` — overlay-scroll fallback
+   - `align-items: flex-start; padding: 1rem` — карточка не
+     растягивается, центр через `margin: auto`
+   - card: `width: min(100%, ...)`; `max-height: calc(100dvh - 2rem)`
+     где применимо; `flex 0 0 auto` на footer-actions
+
+4. **`@keyframes admin-page-appear`** упрощён до opacity-only
+   (убран `transform`) — defense in depth, чтобы будущие
+   `position: fixed` потомки `.admin-page-shell` не попадали в ту
+   же ловушку.
+
+5. **bulk-print modal — Option A+** (вместо Option B):
+   - С формы убран `admin-form` (cascade-trap устранён в корне).
+   - Тело формы обёрнуто в `<div className="bulk-print-modal__body">`
+     — единственный scroll-container.
+   - `<footer className="bulk-print-modal__footer">` вынесен **снаружи**
+     `<form>`, submit использует HTML5 `form={formId}`.
+   - Удалены мёртвые `.bulk-print-modal__settings` и
+     `.bulk-print-modal__actions`.
+
+6. **Regression-guard в smoke-тестах**
+   ([`tests/smoke/modal-positioning.smoke.test.ts`](../tests/smoke/modal-positioning.smoke.test.ts)):
+   - JSX-форма bulk-print не использует `admin-form`
+   - JSX-footer лежит снаружи `<form>` с `bulk-print-modal__footer`
+   - submit использует `form={formId}`
+   - `@keyframes admin-page-appear` не содержит `transform`
+   - Все 11 overlay-модалок импортируют `ModalPortal` и
+     оборачивают overlay в `<ModalPortal>`
+   - `ModalPortal` helper существует и использует
+     `createPortal(children, document.body)`

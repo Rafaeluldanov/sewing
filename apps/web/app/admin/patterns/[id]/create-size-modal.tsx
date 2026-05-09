@@ -37,6 +37,7 @@ import { useFormState, useFormStatus } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, CheckCircle, Plus, Ruler, X, XCircle } from 'lucide-react';
 import { createSizeAction } from '../actions';
+import { ModalPortal } from '@/components/modal-portal';
 import {
   initialCreateSizeState,
   type CreateSizeState,
@@ -126,6 +127,7 @@ export function CreateSizeModal({
   );
 
   return (
+    <ModalPortal>
     <div
       className="admin-size-plan-modal__backdrop"
       onMouseDown={handleBackdropClick}
@@ -272,5 +274,6 @@ export function CreateSizeModal({
         </form>
       </div>
     </div>
+    </ModalPortal>
   );
 }

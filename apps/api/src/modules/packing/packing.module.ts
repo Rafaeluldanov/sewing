@@ -4,6 +4,7 @@ import { PackingController } from './packing.controller.js';
 import { BoxNumberService } from './box-number.service.js';
 import { EarningsModule } from '../earnings/earnings.module.js';
 import { FinishedGoodsModule } from '../finished-goods/finished-goods.module.js';
+import { WorkInProgressModule } from '../work-in-progress/work-in-progress.module.js';
 
 /**
  * Модуль упаковки и выпуска изделия (Шаг 8 MVP).
@@ -22,7 +23,7 @@ import { FinishedGoodsModule } from '../finished-goods/finished-goods.module.js'
  * `docs/current-state.md §«Готовая продукция»`.
  */
 @Module({
-  imports: [EarningsModule, FinishedGoodsModule],
+  imports: [EarningsModule, FinishedGoodsModule, WorkInProgressModule],
   controllers: [PackingController],
   providers: [PackingService, BoxNumberService],
   exports: [PackingService],

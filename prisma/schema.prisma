@@ -406,7 +406,6 @@ model Size {
 
   passports                      Passport[]
   orderItems                     OrderItem[]
-  cellContents                   CellContent[]
   operationRatesBySize           OperationRateBySize[]
   closureRequests                CuttingClosureRequest[]
   patternSizeFiles               PatternSizeFile[]
@@ -437,6 +436,11 @@ model Size {
   /// удалить без сноса самих балансов.
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
+
+  /// Foundation полуфабриката (см. `model WorkInProgressBalance` /
+  /// `model WorkInProgressMovement` ниже).
+  workInProgressBalances  WorkInProgressBalance[]
+  workInProgressMovements WorkInProgressMovement[]
 
   /// Back-relation на строки отгрузки готовой продукции (см.
   /// `model FinishedGoodsShipmentLine`). Restrict — размер, по
@@ -472,6 +476,11 @@ model Product {
   /// справочник, удаление out-of-scope.
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
+
+  /// Foundation полуфабриката (см. `model WorkInProgressBalance` /
+  /// `model WorkInProgressMovement` ниже).
+  workInProgressBalances  WorkInProgressBalance[]
+  workInProgressMovements WorkInProgressMovement[]
 
   /// Back-relation на строки отгрузки готовой продукции (см.
   /// `model FinishedGoodsShipmentLine`). Restrict — продукт, по
@@ -1233,6 +1242,12 @@ model Order {
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
 
+  /// Foundation полуфабриката (см. `model WorkInProgressBalance` /
+  /// `model WorkInProgressMovement` ниже). Cascade — снос заказа
+  /// сносит и его крой/движения по крою.
+  workInProgressBalances  WorkInProgressBalance[]
+  workInProgressMovements WorkInProgressMovement[]
+
   /// Документы и строки отгрузки готовой продукции по заказу (см.
   /// `model FinishedGoodsShipment` / `FinishedGoodsShipmentLine`,
   /// `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`).
@@ -1489,6 +1504,11 @@ model Passport {
   /// `sourceKey = PACKED_PASSPORT:<passportId>`). `onDelete: SetNull`
   /// — снос паспорта не сносит исторический выпуск.
   finishedGoodsMovements FinishedGoodsMovement[]
+
+  /// Foundation полуфабриката (см. `model WorkInProgressMovement`).
+  /// `onDelete: SetNull` — снос паспорта оставляет историю движений
+  /// кроя без `passportId` (исторический след для аудита).
+  workInProgressMovements WorkInProgressMovement[]
 
   @@index([status, currentOperationId])
   @@index([orderId])
@@ -1881,6 +1901,12 @@ model Warehouse {
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
 
+  /// Foundation полуфабриката (см. `model WorkInProgressBalance` /
+  /// `model WorkInProgressMovement` ниже). `onDelete: SetNull` — снос
+  /// карточки склада оставляет балансы/движения с `warehouseId = null`.
+  workInProgressBalances  WorkInProgressBalance[]
+  workInProgressMovements WorkInProgressMovement[]
+
   /// Back-relation на строки отгрузки готовой продукции (см.
   /// `model FinishedGoodsShipmentLine`). `onDelete: SetNull` со
   /// стороны строки — историческая отгрузка переживает деактивацию
@@ -1937,7 +1963,6 @@ model Cell {
 
   warehouse                Warehouse?                @relation(fields: [warehouseId], references: [id])
   line                     WarehouseLine?            @relation(fields: [lineId], references: [id], onDelete: SetNull)
-  contents                 CellContent[]
   events                   PassportEvent[]
   currentPassports         Passport[]                @relation("PassportCurrentCell")
   /// Этап 7А «Приёмка поставок» (см. `model PurchaseReceiptLine`
@@ -1975,6 +2000,12 @@ model Cell {
   finishedGoodsBalances  FinishedGoodsBalance[]
   finishedGoodsMovements FinishedGoodsMovement[]
 
+  /// Foundation полуфабриката (см. `model WorkInProgressBalance` /
+  /// `model WorkInProgressMovement` ниже). `onDelete: SetNull` — снос
+  /// ячейки оставляет балансы/движения с `cellId = null`.
+  workInProgressBalances  WorkInProgressBalance[]
+  workInProgressMovements WorkInProgressMovement[]
+
   /// Back-relation на строки отгрузки готовой продукции (см.
   /// `model FinishedGoodsShipmentLine`). `onDelete: SetNull` со
   /// стороны строки — снос ячейки не валит историческую отгрузку.
@@ -1988,18 +2019,6 @@ model Cell {
   @@unique([lineId, lineIndex], name: "Cell_line_index_uniq")
   @@index([warehouseId])
   @@index([lineId])
-}
-
-model CellContent {
-  id       String @id @default(cuid())
-  cellId   String
-  sizeId   String
-  quantity Int    @default(0)
-
-  cell Cell @relation(fields: [cellId], references: [id])
-  size Size @relation(fields: [sizeId], references: [id])
-
-  @@unique([cellId, sizeId])
 }
 
 // =========================
@@ -2025,10 +2044,10 @@ model Box {
   placedAt       DateTime?
   placedInCellId String?
 
-  createdBy   Employee        @relation("BoxCreator", fields: [createdById], references: [id])
-  items       BoxItem[]
-  events      PassportEvent[]
-  placedInCell Cell?          @relation("BoxPlacement", fields: [placedInCellId], references: [id], onDelete: SetNull)
+  createdBy    Employee        @relation("BoxCreator", fields: [createdById], references: [id])
+  items        BoxItem[]
+  events       PassportEvent[]
+  placedInCell Cell?           @relation("BoxPlacement", fields: [placedInCellId], references: [id], onDelete: SetNull)
 
   /// Foundation готовой продукции (см. `model FinishedGoodsMovement`
   /// ниже). Опциональная back-ссылка от движения выпуска к коробке,
@@ -5305,7 +5324,7 @@ model FinishedGoodsShipment {
   /// частичный shipment (см.
   /// `FinishedGoodsService.cancelShipment`,
   /// `docs/current-state.md §«Отгрузка готовой продукции»`).
-  status String @default("POSTED")
+  status  String @default("POSTED")
 
   shippedAt DateTime @default(now())
   comment   String?
@@ -5380,4 +5399,138 @@ model FinishedGoodsShipmentLine {
   @@index([sizeId])
   @@index([warehouseId])
   @@index([cellId])
+}
+
+// =========================
+// WORK IN PROGRESS (полуфабрикат / крой)
+// =========================
+
+/// Foundation учёта полуфабриката — кроя, лежащего в ячейках после
+/// раскроя и до момента выдачи в пошив (и обратных движений: возврат
+/// в ячейку master-action'ом).
+///
+/// **Отдельный контур** от материалов (`StockBalance`) и готовой
+/// продукции (`FinishedGoodsBalance`). Складская проекция «крой как
+/// остаток по ячейке/размеру/заказу/цвету» — для управленческого
+/// представления на странице «Склады → Остатки».
+///
+/// `qty` — целое (штуки): полуфабрикат штучный, единица измерения
+/// = единица паспорта (`Passport.qtyCut` при размещении).
+///
+/// **Единственный источник истины** для «что лежит в ячейках» —
+/// после удаления legacy `CellContent` ровно одна запись на каждую
+/// уникальную комбинацию `(orderId, productId, sizeId, color,
+/// warehouseId, cellId)`. Все consumer'ы (`listCells()` API,
+/// `WarehousesService.deleteLine`, `DiagnosticsService`,
+/// shelf-placement UI) читают отсюда.
+model WorkInProgressBalance {
+  id String @id @default(cuid())
+
+  /// Детерминированный ключ
+  /// `${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`.
+  /// Гарантирует, что у каждой комбинации остаток ровно один.
+  balanceKey String @unique
+
+  orderId   String
+  productId String
+  sizeId    String
+  color     String
+
+  warehouseId String?
+  cellId      String?
+
+  qty Int @default(0)
+
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  lastMovementAt DateTime?
+
+  order     Order      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product   Product    @relation(fields: [productId], references: [id], onDelete: Restrict)
+  size      Size       @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+  warehouse Warehouse? @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  cell      Cell?      @relation(fields: [cellId], references: [id], onDelete: SetNull)
+
+  movements WorkInProgressMovement[]
+
+  @@index([orderId])
+  @@index([productId])
+  @@index([sizeId])
+  @@index([warehouseId])
+  @@index([cellId])
+  @@index([updatedAt])
+}
+
+/// Foundation журнала движений полуфабриката (см.
+/// `apps/api/src/modules/work-in-progress/*`).
+///
+/// Реализованные types:
+///   - `PLACE`            (`IN`)  — `PassportsService.place`
+///   - `ISSUE`            (`OUT`) — `PassportsService.issueToEmployee`
+///   - `RETURN`           (`IN`)  — `MasterActionsService.returnToCell`
+///                                  и `setRouteStep` backward c cell-hint'ом
+///   - `DELETE`           (`OUT`) — `PassportsService.delete` если
+///                                  паспорт был в ячейке
+///   - `PACK_OUT`         (`OUT`) — `PackingService.addPassport` если
+///                                  паспорт ушёл в коробку прямо из
+///                                  ячейки (defensive, edge-case)
+///
+/// `ADJUSTMENT` / `TRANSFER` зарезервированы, появятся при необходимости.
+///
+/// Идемпотентность — `sourceKey @unique`. Формат: `WIP_<TYPE>:<eventId>`,
+/// где `eventId` — `PassportEvent.id` для движений с event-trigger'ом
+/// или `passportId` для DELETE (паспорт удаляется → ключ уникален).
+model WorkInProgressMovement {
+  id String @id @default(cuid())
+
+  workInProgressBalanceId String?
+
+  type      String
+  direction String
+
+  orderId   String
+  productId String
+  sizeId    String
+  color     String
+
+  warehouseId String?
+  cellId      String?
+
+  qty Int
+
+  balanceBeforeQty Int?
+  balanceAfterQty  Int?
+
+  sourceType String?
+  sourceId   String?
+  /// Идемпотентный технический ключ движения. UNIQUE гарантирует, что
+  /// повторная обработка того же события (retry, replay) не задвоит
+  /// движение и не удвоит `WorkInProgressBalance.qty`.
+  sourceKey  String? @unique
+
+  passportId String?
+
+  comment     String?
+  createdById String?
+  createdAt   DateTime @default(now())
+
+  workInProgressBalance WorkInProgressBalance? @relation(fields: [workInProgressBalanceId], references: [id], onDelete: SetNull)
+  order                 Order                  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product               Product                @relation(fields: [productId], references: [id], onDelete: Restrict)
+  size                  Size                   @relation(fields: [sizeId], references: [id], onDelete: Restrict)
+  warehouse             Warehouse?             @relation(fields: [warehouseId], references: [id], onDelete: SetNull)
+  cell                  Cell?                  @relation(fields: [cellId], references: [id], onDelete: SetNull)
+  passport              Passport?              @relation(fields: [passportId], references: [id], onDelete: SetNull)
+
+  @@index([workInProgressBalanceId])
+  @@index([orderId])
+  @@index([productId])
+  @@index([sizeId])
+  @@index([type])
+  @@index([direction])
+  @@index([warehouseId])
+  @@index([cellId])
+  @@index([passportId])
+  @@index([sourceType, sourceId])
+  @@index([createdAt])
 }

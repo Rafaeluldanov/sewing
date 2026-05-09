@@ -227,9 +227,13 @@ legacy»). Идемпотентность гарантирует
    - проверяет, что паспорт в `CREATED` и ещё не размещён
      (`currentCellId IS NULL`);
    - проверяет, что ячейка существует и `active = true`;
-   - upsert `CellContent(cellId, sizeId).quantity += passport.qtyCut`;
    - проставляет `Passport.currentCellId`;
    - пишет `PassportEvent(CELL_PLACED, cellId, qty=passport.qtyCut)`;
+   - вызывает `WorkInProgressService.recordPlaceInTx` —
+     `WorkInProgressMovement` `PLACE` IN на `qtyCut`, и
+     `WorkInProgressBalance(orderId, productId, sizeId, color,
+     warehouseId?, cellId).qty += qtyCut` (см. `docs/erd.md §2.7b`).
+     Идемпотентно по `WIP_PLACE:<eventId>`;
    - **не меняет** `currentOperation` (ячейка — хранение, не этап).
 
 > MVP-ограничение: один паспорт = одна текущая ячейка. Перемещение между
@@ -327,15 +331,18 @@ auth (Шаг 7) UI хранит выбранного демо-сотрудник
 3. Дальше — две ветки в зависимости от того, лежит ли паспорт в
    ячейке (`currentCellId IS NOT NULL`):
 
-   **A) Legacy / буферная ветка (`currentCellId IS NOT NULL`).** То же
-   поведение, что и раньше. Применяется к заказам без маршрута и к
-   маршрутным паспортам, которые после CUT_DIVISION/между шагами
-   положили в ячейку как буфер:
-   - `CellContent(cellId, sizeId).quantity = max(0, quantity − qtyCut)`;
+   **A) Буферная ветка (`currentCellId IS NOT NULL`).** Применяется
+   к заказам без маршрута и к маршрутным паспортам, которые после
+   CUT_DIVISION/между шагами положили в ячейку как буфер:
    - `Passport.currentCellId = NULL`, `currentEmployeeId = :employeeId`,
      `status = IN_PROGRESS`;
    - `PassportEvent(ISSUED_TO_EMPLOYEE, operationId=session.operationId,
-     employeeId, cellId=previousCellId, qty=qtyCut)`.
+     employeeId, cellId=previousCellId, qty=qtyCut)`;
+   - `WorkInProgressService.recordIssueInTx` →
+     `WorkInProgressMovement` `ISSUE` OUT на `qtyCut`, баланс ячейки/
+     размера декрементится. Идемпотентно по `WIP_ISSUE:<eventId>`.
+     Если бы движение увело баланс ниже нуля — backend бросает
+     `WIP_INSUFFICIENT_BALANCE` (409); защита от рассинхронизации.
 
    **B) Route-WIP без ячейки (`currentCellId IS NULL`,
    `currentRouteStepIndex IS NOT NULL`).** Soft-route MVP, см.
@@ -416,27 +423,38 @@ UI-критерий совпадает с серверным: `Passport.currentR
 5. Пишем `PassportEvent(OPERATION_SCAN, operationId=session.operationId,
    fromOperationId=previous, employeeId, qty=qtyGood)`.
 
-**Начисление пошива (Шаг 9 — реализовано).** В той же транзакции
-`PassportsService.scanOnOperation` после `PassportEvent(OPERATION_SCAN)`
-вызывается `EarningsService.createPendingForPreviousOperation(
-passportId, previousOperationId, previousEmployeeId, sourceEventId=event.id)`.
-Если предыдущая операция оплатная (`Operation.pricingMode ≠ SALARY_ONLY`,
-см. ADR-0020) и предыдущий исполнитель — сдельщик (доменная функция
-`isPieceworkEligible(employee.compensationType)` — `true` для
-`PIECEWORK`/`MIXED`, см. `apps/api/src/modules/employees/compensation.ts`
-+ ADR-0021),
-создаётся `OperationEntry { qty=passport.qtyCut, ratePerUnit,
-amount, status=PENDING_RELEASE, approvalMode=AFTER_RELEASE,
-sourceEventType=OPERATION_TRANSITION }`. Раскрой исключён — он уже
-получил immediate-начисление в F2. Окладные роли (ОТК, ВТО, упаковка,
-помощник раскройщика) в piecework вообще не попадают: `isPieceworkEligible`
-возвращает `false` для `compensationType = SALARY` (silent skip).
-Подтверждение — в F7 при **закрытии коробки** (ADR-0005).
+**Начисление пошива (Шаг 9 — реализовано).** Создание сдельной строки
+перенесено с `scanOnOperation` (где платили *предыдущему* исполнителю
+при сканировании на следующую операцию) на
+`PassportsService.completeOperationByEmployee`: швея сама явно
+завершает операцию, и в этот момент создаётся её PENDING-начисление
+за только что завершённую работу. Это устраняет ловушку «последняя
+операция перед упаковкой» — раньше за неё никто не платил, потому
+что после неё не было следующего скана.
 
-Идемпотентность скан-сценария гарантируется на двух уровнях: повторный
-скан той же сменой → no-op (ADR-0003 §6); даже если в обход
-PassportsService возникнет повторная попытка — `OperationEntry_idem`
-вернёт `P2002`, и `EarningsService.safeCreate` молча его проглотит
+В транзакции `completeOperationByEmployee` после
+`PassportEvent(OPERATION_FINISHED)` вызывается
+`EarningsService.createPendingForCompletedOperation(passportId,
+operationId=completedOperationId, employeeId, sourceEventId=event.id)`.
+Если завершённая операция оплатная (`Operation.pricingMode ≠
+SALARY_ONLY`, см. ADR-0020), не `CUT_CUT` (раскрой покрыт immediate-
+веткой в F2) и исполнитель — сдельщик (`isPieceworkEligible` — `true`
+для `PIECEWORK`/`MIXED`, см. ADR-0021), создаётся `OperationEntry {
+qty = passport.qtyCut, ratePerUnit, amount, status = PENDING_RELEASE,
+approvalMode = AFTER_RELEASE, sourceEventType = OPERATION_TRANSITION }`.
+Окладные роли (ОТК, ВТО, упаковка, помощник раскройщика) в piecework
+не попадают: `isPieceworkEligible` возвращает `false` для
+`compensationType = SALARY` (silent skip). Подтверждение — в F7 при
+**закрытии коробки** (ADR-0005, не менялось).
+
+`scanOnOperation` (`POST /api/passports/:id/scan`) больше **не**
+создаёт сдельных начислений — он остаётся только для маршрутных
+переходов (обновление `currentOperationId/Employee` и `OPERATION_SCAN`-
+события).
+
+Идемпотентность гарантируется `OperationEntry_idem` (composite
+`(passportId, operationId, employeeId, sourceEventType)` UNIQUE) +
+`EarningsService.safeCreate`, который молча проглатывает `P2002`
 (см. ADR-0012).
 
 `OPERATION_STARTED` / `OPERATION_FINISHED` / `MOVED` на MVP не пишутся —
@@ -1314,7 +1332,8 @@ Stage 2 «Мастер цеха» добавляет в карточку выз�
 4. Нажимает «Подтвердить». UI вызывает соответствующий server action
    (`master-actions-actions.ts`) → `POST /api/master-actions/passports/:id/...`.
 5. Сервис выполняет всё в `prisma.$transaction`: проверки, мутацию
-   `Passport`/`CellContent` и запись в `AuditLog` (`MASTER_PASSPORT_*`).
+   `Passport` (+ `WorkInProgressMovement`/`Balance` для action'ов,
+   меняющих ячейку) и запись в `AuditLog` (`MASTER_PASSPORT_*`).
 6. UI получает `MasterActionResultDto` (`{ passport, before }`),
    показывает toast «Действие выполнено», обновляет карточку вызова
    и **не закрывает** `MasterCall` — закрытие отдельной кнопкой
@@ -1353,10 +1372,12 @@ Stage 2 «Мастер цеха» добавляет в карточку выз�
 - Сервис проверяет: ячейка существует и активна (`CELL_NOT_FOUND` /
   `CELL_INACTIVE`).
 - Эффект: `currentCellId = cell.id`, `currentEmployeeId = null`,
-  `CellContent[size] += qtyCut`. Статус сохраняется (см. §10b
-  «Safety-инварианты»).
+  `WorkInProgressMovement` `RETURN` IN на `qtyCut` (баланс ячейки/
+  размера/заказа/цвета инкрементится в `WorkInProgressBalance`).
+  Статус сохраняется (см. §10b «Safety-инварианты»).
 - Идемпотентность: если паспорт уже в этой ячейке — пишем audit с
-  `noop = true`, `qtyReturned = 0`, `CellContent` не двоится.
+  `noop = true`, `qtyReturned = 0`, WIP-движение не создаётся,
+  балансы не двоятся.
 - Audit: `MASTER_PASSPORT_RETURNED_TO_CELL` с `cellId` / `cellCode` /
   `qtyReturned` / `noop?`.
 - Когда применимо: паспорт ошибочно выдан, нужно вернуть на склад

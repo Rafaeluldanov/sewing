@@ -288,12 +288,14 @@
   `active`, `warehouseId? → Warehouse` (`onDelete: ?` — без явной
   политики, дефолт), `lineId? → WarehouseLine` (`SetNull`),
   `lineIndex: Int?`. Уникальность `(lineId, lineIndex)`. Связи:
-  `CellContent[]`, `PassportEvent[]`, паспорта (`PassportCurrentCell`),
+  `PassportEvent[]`, паспорта (`PassportCurrentCell`),
   `PurchaseReceiptLine[]`, foundation: `StockBalance[]`,
-  `StockMovement[]` (§ 2.12b). Индексы: `warehouseId`, `lineId`.
-- **`CellContent`** — содержимое ячейки `(cellId, sizeId, quantity)`,
-  uniq `(cellId, sizeId)`. Это лёгкий счётчик; для размещения паспорта
-  истина — `Passport.currentCellId`.
+  `StockMovement[]` (§ 2.12b), `WorkInProgressBalance[]`,
+  `WorkInProgressMovement[]` (§ 2.7b). Индексы: `warehouseId`, `lineId`.
+- ~~**`CellContent`**~~ — **удалена** в рамках перехода к единой
+  сущности полуфабриката (см. § 2.7b). Историческое представление
+  «срез по ячейке/размеру» теперь выводится агрегацией
+  `WorkInProgressBalance` по `(cellId, sizeId)`.
 
 <a id="27-packing"></a>
 ### 2.7 Packing
@@ -394,6 +396,62 @@
   `FINISHED_GOODS_SHIPMENT_CREATED` / `FINISHED_GOODS_SHIPMENT_CANCELLED`.
   `Order.status` НЕ меняется автоматически. Частичная отмена не
   поддерживается; отдельные модели возврата / сторно НЕ создавались.
+
+<a id="27b-work-in-progress"></a>
+### 2.7b Work in progress (полуфабрикат / крой, foundation)
+
+**Отдельный контур** от материалов (`StockBalance`) и готовой
+продукции (`FinishedGoodsBalance`). Учёт паспортов, лежащих в ячейках
+после раскроя и до выдачи в пошив — а также обратных движений (возврат
+master-action'ом, удаление, упаковка прямо из ячейки).
+
+**Единственный источник истины** для «что лежит в ячейках» — после
+удаления legacy `CellContent` ровно одна запись на каждую уникальную
+комбинацию `(orderId, productId, sizeId, color, warehouseId, cellId)`.
+Все consumer'ы (`listCells()` API, `WarehousesService.deleteLine`,
+`DiagnosticsService`, shelf-placement UI) читают отсюда.
+
+- **`WorkInProgressBalance`** — остаток полуфабриката по
+  `(orderId, productId, sizeId, color, warehouseId?, cellId?)`.
+  `balanceKey` детерминирован
+  (`${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`,
+  `@unique`). `qty: Int @default(0)` (полуфабрикат штучный = единица
+  паспорта `Passport.qtyCut`), `lastMovementAt?`. Связи:
+  `order → Order` (Cascade), `product → Product` (Restrict),
+  `size → Size` (Restrict), `warehouse? → Warehouse` (SetNull),
+  `cell? → Cell` (SetNull), `movements: WorkInProgressMovement[]`.
+  Индексы: `orderId`, `productId`, `sizeId`, `warehouseId`, `cellId`,
+  `updatedAt`.
+- **`WorkInProgressMovement`** — журнал движений. `type: String`
+  (`PLACE` / `ISSUE` / `RETURN` / `DELETE` / `PACK_OUT`),
+  `direction: String` (`IN` / `OUT`), `qty: Int`, `balanceBeforeQty?`,
+  `balanceAfterQty?`, `sourceType?` (`PASSPORT_EVENT` /
+  `MASTER_AUDIT` / `PASSPORT_DELETE` / `PASSPORT_PACK`), `sourceId?`,
+  `sourceKey String? @unique` (формат `WIP_<TYPE>:<sourceId>`,
+  идемпотентность retry). Связи:
+  `workInProgressBalance? → WorkInProgressBalance` (SetNull),
+  `order → Order` (Cascade), `product → Product` (Restrict),
+  `size → Size` (Restrict), `warehouse? → Warehouse` (SetNull),
+  `cell? → Cell` (SetNull), `passport? → Passport` (SetNull). Индексы:
+  `workInProgressBalanceId`, `orderId`, `productId`, `sizeId`,
+  `type`, `direction`, `warehouseId`, `cellId`, `passportId`,
+  `(sourceType, sourceId)`, `createdAt`.
+- **Триггеры записи** (все в одной транзакции с обновлением паспорта):
+  - `PassportsService.place` → `PLACE` IN, sourceId = `PassportEvent.id`
+    (`CELL_PLACED`)
+  - `PassportsService.issueToEmployee` → `ISSUE` OUT, sourceId =
+    `PassportEvent.id` (`ISSUED_TO_EMPLOYEE`)
+  - `MasterActionsService.returnToCell` → `RETURN` IN, sourceId =
+    `AuditLog.id` (`MASTER_PASSPORT_RETURNED_TO_CELL`)
+  - `MasterActionsService.setRouteStep` (backward + cell hint) →
+    `RETURN` IN, sourceId = `AuditLog.id` (`MASTER_PASSPORT_ROUTE_STEP_SET`)
+  - `PassportsService.delete` → `DELETE` OUT (если `currentCellId !=
+    null`), sourceId = `passportId`
+  - `PackingService.addPassport` → `PACK_OUT` OUT (defensive, если
+    паспорт упаковывают прямо из ячейки), sourceId = `passportId`
+- **Read-only API**: `GET /api/work-in-progress/balances`,
+  `GET /api/work-in-progress/movements` (см. `docs/api.md §29b`).
+  `sourceKey` сознательно НЕ отдаётся (внутренний идемпотентный ключ).
 
 <a id="28-qc--wto--defects"></a>
 ### 2.8 QC / WTO / defects
@@ -1012,7 +1070,8 @@
 - **PR** создаётся из PO через
   `POST /api/purchase-receipts/from-purchase-order`. Линии PR
   фиксируют размещение в ячейке (`Cell.cellId`) **без** записи в
-  `CellContent` — это сознательная граница MVP.
+  `WorkInProgressBalance` — это сознательная граница MVP (контур
+  материалов и контур полуфабриката не пересекаются).
 - **Складские движения**: создание `POSTED` приёмки в той же
   транзакции пишет входящий `StockMovement` (`IN`,
   `type = PURCHASE_RECEIPT`,
@@ -1109,8 +1168,9 @@
 `apps/api/src/modules/cut-readiness/cut-readiness.service.ts`.
 
 - Ручная override-кнопка «Материал поступил» в карточке заказа.
-  Не складская операция (НЕТ `PurchaseReceipt`, НЕТ `CellContent`,
-  НЕТ изменения `WorkshopNeed.status`). Используется только
+  Не складская операция (НЕТ `PurchaseReceipt`, НЕТ
+  `WorkInProgressBalance`, НЕТ изменения `WorkshopNeed.status`).
+  Используется только
   `CutReadinessService`: `ACTIVE`-override-ы прибавляются к
   `placedQty` и могут разблокировать крой даже при
   `WorkshopNeed.status != RECEIVED`.

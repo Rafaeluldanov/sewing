@@ -2565,15 +2565,15 @@ table.data-table td code {
   z-index: 100;
   background: rgba(15, 23, 42, 0.55);
   display: flex;
-  align-items: stretch;
+  align-items: flex-start;
   justify-content: center;
-  padding: 0;
+  padding: 1rem;
+  overflow-y: auto;
   overscroll-behavior: contain;
 }
 .qr-modal__card {
   background: #fff;
-  width: 100%;
-  max-width: 520px;
+  width: min(100%, 520px);
   margin: auto;
   border-radius: var(--radius-xl);
   padding: 1rem 1rem 1.1rem;
@@ -2581,8 +2581,6 @@ table.data-table td code {
   flex-direction: column;
   gap: 0.75rem;
   box-shadow: 0 20px 50px -10px rgba(15, 23, 42, 0.35);
-  max-height: 100dvh;
-  overflow: auto;
 }
 .qr-modal__header {
   display: flex;
@@ -2649,7 +2647,7 @@ table.data-table td code {
   font-weight: 700;
   color: var(--color-danger, #b91c1c);
 }
-.qr-modal__cancel { min-height: 52px; }
+.qr-modal__cancel { flex: 0 0 auto; min-height: 52px; }
 .scan-card__camera { min-height: 48px; font-weight: 600; }
 
 /* Упрощённый /work для роли SEAMSTRESS ------------------------- */
@@ -2756,14 +2754,16 @@ table.data-table td code {
   z-index: 100;
   background: rgba(15, 23, 42, 0.55);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 .modal {
   background: #fff;
-  width: 100%;
-  max-width: 480px;
+  width: min(100%, 480px);
+  margin: auto;
   border-radius: var(--radius-xl);
   padding: 1.1rem 1.2rem 1.2rem;
   display: flex;
@@ -2805,6 +2805,7 @@ table.data-table td code {
   gap: 0.2rem;
 }
 .modal__actions {
+  flex: 0 0 auto;
   display: flex;
   justify-content: flex-end;
   margin-top: 0.5rem;
@@ -3686,6 +3687,7 @@ table.data-table td code {
   font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
 }
 .passport-confirm__actions {
+  flex: 0 0 auto;
   display: grid;
   grid-template-columns: 1fr 1.4fr;
   gap: 0.5rem;
@@ -3700,7 +3702,6 @@ table.data-table td code {
 
 @media (min-width: 600px) {
   .qr-modal { padding: 1.5rem; }
-  .qr-modal__card { max-height: calc(100dvh - 3rem); }
 }
 
 /* ----------------------------------------------------------------- */
@@ -3927,42 +3928,61 @@ table.data-table td code {
   gap: 0.65rem;
   flex-wrap: wrap;
 }
+/*
+ * Bulk-print карточка: bounded по dvh, без самостоятельного scroll
+ * (он живёт на `__body`). Card сама — flex-column-контейнер для
+ * header / form / footer; padding обнулён, потому что внутренние
+ * секции дают свой horizontal padding (header — от `.qr-modal__card`
+ * 1rem, body/footer — 1.1rem).
+ */
 .bulk-print-modal__card {
-  max-width: 720px;
-  gap: 1rem;
-  padding: 1rem 1.1rem 1.25rem;
+  width: min(100%, 720px);
+  max-width: none;
+  max-height: calc(100dvh - 2rem);
+  padding: 0;
+  gap: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
+/* Header не растёт и не ужимается — фикс-высота под title + close. */
+.bulk-print-modal__card > .qr-modal__header {
+  flex: 0 0 auto;
+  padding: 1rem 1.1rem 0;
+}
+/*
+ * Form — flex-column контейнер для body. Сама форма не скроллится,
+ * скролл внутри `__body`. Это даёт single-scroll-context UX: одна
+ * полоса прокрутки внутри карточки, footer всегда видим.
+ */
 .bulk-print-modal__form {
+  flex: 1 1 auto;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+/* Body — единственный scrollable child карточки. */
+.bulk-print-modal__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  padding: 1rem 1.1rem 0.5rem;
 }
-.bulk-print-modal__settings {
-  display: grid;
-  grid-template-columns: minmax(220px, 1.6fr) minmax(180px, 1.2fr) 110px;
-  gap: 0.85rem;
-}
-.bulk-print-modal__settings .detail-form__field {
+/* Footer — снаружи формы (submit-кнопка через `form={id}`). */
+.bulk-print-modal__footer {
+  flex: 0 0 auto;
   display: flex;
-  flex-direction: column;
-  gap: 0.3rem;
-}
-.bulk-print-modal__settings label {
-  font-size: 0.78rem;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
-  color: var(--color-fg-muted);
-}
-.bulk-print-modal__settings select,
-.bulk-print-modal__settings input {
-  width: 100%;
-  font-size: 0.95rem;
-  padding: 0.5rem 0.65rem;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--admin-space-sm, 0.6rem);
+  flex-wrap: wrap;
+  padding: 0.7rem 1.1rem 1rem;
+  border-top: 1px solid var(--color-border);
   background: #fff;
-  color: var(--color-fg);
 }
 .bulk-print-modal__summary {
   display: grid;
@@ -4060,25 +4080,7 @@ table.data-table td code {
   padding: 0 4px;
   line-height: 1;
 }
-.bulk-print-modal__actions {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 0.6rem;
-  flex-wrap: wrap;
-}
-.bulk-print-modal__actions .btn-ghost {
-  background: transparent;
-  border: 1px solid var(--color-border);
-  color: var(--color-fg);
-}
-.bulk-print-modal__actions .btn-ghost:hover {
-  background: var(--color-bg-muted, #f1f3f7);
-}
 @media (max-width: 640px) {
-  .bulk-print-modal__settings {
-    grid-template-columns: 1fr;
-  }
   .bulk-print-modal__summary {
     grid-template-columns: 1fr;
   }
@@ -5475,9 +5477,8 @@ body:has(.master-page) .app-main {
   z-index: 100;
 }
 .master-actions-sheet__card {
-  width: 100%;
-  max-width: 520px;
-  max-height: 92vh;
+  width: min(100%, 520px);
+  max-height: 92dvh;
   overflow-y: auto;
   background: #fff;
   border-top-left-radius: 1rem;
@@ -7360,9 +7361,20 @@ body:has(.admin-layout) .app-header { display: none !important; }
 
 /* Animations ------------------------------------------------------------ */
 
+/*
+ * Сознательно opacity-only, без `transform`. Любое значение
+ * `transform` (даже translateY(0)) превращает элемент в containing
+ * block для `position: fixed` потомков (см. CSS Containing Block §4),
+ * а `animation: ... both` приклеивает финальный кадр навсегда.
+ * В этом проекте такая ловушка уже один раз ломала overlay-модалки
+ * внутри `.admin-page-shell` (модалка bulk-print «Печать ячеек» уезжала
+ * к центру длинной страницы вместо центра viewport — см.
+ * `docs/warehouse-bulk-print-modal-runtime-recon.md`). Не возвращать
+ * `transform` сюда, иначе ловушка вернётся для будущих fixed-потомков.
+ */
 @keyframes admin-page-appear {
-  from { opacity: 0; transform: translateY(4px); }
-  to { opacity: 1; transform: translateY(0); }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -9240,9 +9252,11 @@ body:has(.admin-layout) .app-header { display: none !important; }
   background: rgba(15, 23, 42, 0.45);
   backdrop-filter: blur(2px);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
   padding: 1rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
   animation: admin-size-plan-fade 140ms ease-out;
 }
 
@@ -9253,7 +9267,8 @@ body:has(.admin-layout) .app-header { display: none !important; }
 
 .admin-size-plan-modal {
   width: min(420px, 100%);
-  max-height: calc(100vh - 2rem);
+  max-height: calc(100dvh - 2rem);
+  margin: auto;
   background: var(--admin-surface);
   border-radius: 18px;
   border: 1px solid var(--admin-border);

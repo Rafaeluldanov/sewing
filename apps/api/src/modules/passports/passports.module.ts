@@ -12,6 +12,7 @@ import { OrderCutIssueRulesModule } from '../order-cut-issue-rules/order-cut-iss
 import { MaterialIssuesModule } from '../material-issues/material-issues.module.js';
 import { CompanySettingsModule } from '../company-settings/company-settings.module.js';
 import { FinishedGoodsModule } from '../finished-goods/finished-goods.module.js';
+import { WorkInProgressModule } from '../work-in-progress/work-in-progress.module.js';
 
 /**
  * Импортируем `EarningsModule`, чтобы `PassportsService` мог в одной
@@ -52,6 +53,14 @@ import { FinishedGoodsModule } from '../finished-goods/finished-goods.module.js'
     // `producesFinishedGoods = true`. Идемпотентно по
     // `sourceKey = PACKED_PASSPORT:<passportId>`.
     FinishedGoodsModule,
+    // Foundation полуфабриката (см.
+    // `apps/api/src/modules/work-in-progress/work-in-progress.service.ts`,
+    // `prisma/schema.prisma::WorkInProgressBalance`/`WorkInProgressMovement`).
+    // PassportsService при `place` / `issueToEmployee` / `delete`
+    // фиксирует движения кроя в той же транзакции, что и обновление
+    // CellContent / Passport.currentCellId. Идемпотентно по
+    // `sourceKey = WIP_<TYPE>:<eventId|passportId>`.
+    WorkInProgressModule,
   ],
   controllers: [PassportsController, OrderPassportsController, CellsController],
   providers: [PassportsService, PassportNumberService],

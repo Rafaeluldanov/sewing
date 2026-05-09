@@ -192,9 +192,11 @@ describeWithDb('integration — order material arrivals (ручная отмет
     expect(receipts).toBe(0);
     const receiptLines = await t.prisma.purchaseReceiptLine.count();
     expect(receiptLines).toBe(0);
-    // CellContent не тронут (никаких записей).
-    const cellContents = await t.prisma.cellContent.count();
-    expect(cellContents).toBe(0);
+    // Полуфабрикат не тронут (никаких WIP-движений / балансов).
+    const wipBalances = await t.prisma.workInProgressBalance.count();
+    expect(wipBalances).toBe(0);
+    const wipMovements = await t.prisma.workInProgressMovement.count();
+    expect(wipMovements).toBe(0);
     // WorkshopNeed.status не сдвинулся.
     const needAfter = await t.prisma.workshopNeed.findUniqueOrThrow({
       where: { id: workshopNeedId },

@@ -173,6 +173,96 @@ describeWithDb('integration — passports.delete (управленческое �
     expect(payload.number).toMatch(/^P-/);
   });
 
+  test('Удаление паспорта в ячейке декрементит WorkInProgressBalance до 0', async () => {
+    const { passportId } = await setupOrderWithPassport();
+    const cell = seed.cells['A1'];
+    expect(cell).toBeDefined();
+
+    // Размещаем паспорт в ячейку — `place` создаёт WIP balance + PLACE.
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/place`)
+      .set('Cookie', cookies.manager)
+      .send({ cellCode: cell!.code })
+      .expect(201);
+
+    const before = await t.prisma.workInProgressBalance.findFirst({
+      where: { cellId: cell!.id, sizeId: seed.sizes.M },
+    });
+    expect(before?.qty).toBe(4);
+
+    await request(t.app.getHttpServer())
+      .delete(`/api/passports/${passportId}`)
+      .set('Cookie', cookies.manager)
+      .expect(204);
+
+    const after = await t.prisma.workInProgressBalance.findFirst({
+      where: { cellId: cell!.id, sizeId: seed.sizes.M },
+    });
+    // Баланс остаётся (строка хранится для истории), но qty = 0.
+    expect(after?.qty ?? 0).toBe(0);
+
+    // Audit-payload содержит cellId — полезный след для разбора.
+    const audit = await t.prisma.auditLog.findFirst({
+      where: { entityType: 'PASSPORT', entityId: passportId, event: 'PASSPORT_DELETED' },
+    });
+    expect((audit!.payload as { cellId: string | null }).cellId).toBe(cell!.id);
+
+    // DELETE-движение по стабильному sourceKey (passportId уходит в
+    // null после delete через `onDelete: SetNull`).
+    const deleteMovement = await t.prisma.workInProgressMovement.findUnique({
+      where: { sourceKey: `WIP_DELETE:${passportId}` },
+    });
+    expect(deleteMovement).not.toBeNull();
+    expect(deleteMovement!.direction).toBe('OUT');
+    expect(deleteMovement!.balanceAfterQty).toBe(0);
+  });
+
+  test('Полный жизненный цикл паспорта в ячейке отражается в WorkInProgressBalance', async () => {
+    const { passportId, orderId } = await setupOrderWithPassport();
+    const cell = seed.cells['A1'];
+    expect(cell).toBeDefined();
+
+    // 1. PLACE — крой попадает в ячейку.
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/place`)
+      .set('Cookie', cookies.manager)
+      .send({ cellCode: cell!.code })
+      .expect(201);
+
+    let wipBalance = await t.prisma.workInProgressBalance.findFirst({
+      where: { orderId, sizeId: seed.sizes.M, cellId: cell!.id },
+    });
+    expect(wipBalance?.qty).toBe(4);
+    expect(wipBalance?.warehouseId).toBeDefined();
+
+    // 2. DELETE — крой списывается. Баланс ушёл в 0, движений 2
+    // (PLACE IN + DELETE OUT), в журнале есть оба.
+    await request(t.app.getHttpServer())
+      .delete(`/api/passports/${passportId}`)
+      .set('Cookie', cookies.manager)
+      .expect(204);
+
+    wipBalance = await t.prisma.workInProgressBalance.findFirst({
+      where: { orderId, sizeId: seed.sizes.M, cellId: cell!.id },
+    });
+    expect(wipBalance?.qty).toBe(0);
+
+    // FK passportId уходит в null после delete (`onDelete: SetNull`),
+    // но движения остаются — историческая лента.
+    const movements = await t.prisma.workInProgressMovement.findMany({
+      where: { orderId, sizeId: seed.sizes.M, cellId: cell!.id },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(movements.map((m) => m.type)).toEqual(['PLACE', 'DELETE']);
+    expect(movements[0]!.balanceBeforeQty).toBe(0);
+    expect(movements[0]!.balanceAfterQty).toBe(4);
+    expect(movements[1]!.balanceBeforeQty).toBe(4);
+    expect(movements[1]!.balanceAfterQty).toBe(0);
+    // SetNull сработал на passportId, sourceKey остался уникальным.
+    expect(movements[1]!.passportId).toBeNull();
+    expect(movements[1]!.sourceKey).toBe(`WIP_DELETE:${passportId}`);
+  });
+
   test('ADMIN тоже может удалять (админ — суперюзер)', async () => {
     const { passportId } = await setupOrderWithPassport();
     await request(t.app.getHttpServer())

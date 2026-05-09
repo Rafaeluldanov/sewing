@@ -2,6 +2,7 @@
 
 import { useEffect, useId, useMemo, useState, useTransition } from 'react';
 import { AlertCircle, Check, Printer, Warehouse, X } from 'lucide-react';
+import { ModalPortal } from '@/components/modal-portal';
 import type { PrinterSummaryDto } from '@sewing/shared/printers';
 import {
   WAREHOUSE_LABEL_SIZES,
@@ -157,6 +158,7 @@ function BulkPrintModal({
   onClose,
 }: ModalProps) {
   const titleId = useId();
+  const formId = useId();
   const printerSelectId = useId();
   const sizeSelectId = useId();
   const copiesInputId = useId();
@@ -227,6 +229,7 @@ function BulkPrintModal({
   }
 
   return (
+    <ModalPortal>
     <div
       className="qr-modal"
       role="dialog"
@@ -252,148 +255,158 @@ function BulkPrintModal({
           </button>
         </div>
 
-        <form className="bulk-print-modal__form admin-form" onSubmit={handleSubmit}>
-          <div className="admin-form-grid">
-            <div className="admin-field">
-              <label htmlFor={printerSelectId}>Принтер</label>
-              <select
-                id={printerSelectId}
-                value={printerId}
-                onChange={(e) => setPrinterId(e.target.value)}
-                disabled={noPrinters}
-                required
-              >
-                {noPrinters && (
-                  <option value="" disabled>
-                    Нет активных принтеров
-                  </option>
-                )}
-                {activePrinters.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                    {p.equipmentName ? ` — ${p.equipmentName}` : ''}
-                    {p.isOnline ? ' • онлайн' : ' • офлайн'}
-                  </option>
-                ))}
-              </select>
+        <form
+          id={formId}
+          className="bulk-print-modal__form"
+          onSubmit={handleSubmit}
+        >
+          <div className="bulk-print-modal__body">
+            <div className="admin-form-grid">
+              <div className="admin-field">
+                <label htmlFor={printerSelectId}>Принтер</label>
+                <select
+                  id={printerSelectId}
+                  value={printerId}
+                  onChange={(e) => setPrinterId(e.target.value)}
+                  disabled={noPrinters}
+                  required
+                >
+                  {noPrinters && (
+                    <option value="" disabled>
+                      Нет активных принтеров
+                    </option>
+                  )}
+                  {activePrinters.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.equipmentName ? ` — ${p.equipmentName}` : ''}
+                      {p.isOnline ? ' • онлайн' : ' • офлайн'}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="admin-field">
+                <label htmlFor={sizeSelectId}>Размер этикетки</label>
+                <select
+                  id={sizeSelectId}
+                  value={labelSize}
+                  onChange={(e) =>
+                    setLabelSize(e.target.value as WarehouseLabelSize)
+                  }
+                >
+                  {WAREHOUSE_LABEL_SIZES.map((size) => (
+                    <option key={size} value={size}>
+                      {LABEL_SIZE_LABELS[size]}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="admin-field">
+                <label htmlFor={copiesInputId}>Копий каждой</label>
+                <input
+                  id={copiesInputId}
+                  type="number"
+                  min={1}
+                  max={WAREHOUSE_PRINT_CELLS_MAX_COPIES}
+                  value={copies}
+                  onChange={(e) => handleCopiesChange(e.target.value)}
+                  inputMode="numeric"
+                />
+              </div>
             </div>
 
-            <div className="admin-field">
-              <label htmlFor={sizeSelectId}>Размер этикетки</label>
-              <select
-                id={sizeSelectId}
-                value={labelSize}
-                onChange={(e) =>
-                  setLabelSize(e.target.value as WarehouseLabelSize)
-                }
-              >
-                {WAREHOUSE_LABEL_SIZES.map((size) => (
-                  <option key={size} value={size}>
-                    {LABEL_SIZE_LABELS[size]}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="admin-field">
-              <label htmlFor={copiesInputId}>Копий каждой</label>
-              <input
-                id={copiesInputId}
-                type="number"
-                min={1}
-                max={WAREHOUSE_PRINT_CELLS_MAX_COPIES}
-                value={copies}
-                onChange={(e) => handleCopiesChange(e.target.value)}
-                inputMode="numeric"
-              />
-            </div>
-          </div>
-
-          <div className="bulk-print-modal__summary">
-            <div>
-              <span className="bulk-print-modal__summary-label">Ячеек</span>
-              <span className="bulk-print-modal__summary-value">
-                {cellsCount}
-              </span>
-            </div>
-            <div>
-              <span className="bulk-print-modal__summary-label">Копий</span>
-              <span className="bulk-print-modal__summary-value">{copies}</span>
-            </div>
-            <div>
-              <span className="bulk-print-modal__summary-label">Заданий</span>
-              <span className="bulk-print-modal__summary-value">
-                {totalJobs}
-              </span>
-            </div>
-          </div>
-
-          <div className="bulk-print-modal__preview">
-            <div className="bulk-print-modal__preview-header">
-              <span>Превью этикеток</span>
-              {hiddenInPreview > 0 && (
-                <span className="admin-muted" style={{ fontSize: '0.82rem' }}>
-                  Показаны первые {previewCells.length}, ещё{' '}
-                  {hiddenInPreview} попадёт в печать.
+            <div className="bulk-print-modal__summary">
+              <div>
+                <span className="bulk-print-modal__summary-label">Ячеек</span>
+                <span className="bulk-print-modal__summary-value">
+                  {cellsCount}
                 </span>
-              )}
-            </div>
-            {cellsCount === 0 ? (
-              <p className="admin-muted" style={{ margin: 0 }}>
-                <Warehouse size={14} strokeWidth={1.6} aria-hidden /> Нет
-                активных ячеек для печати.
-              </p>
-            ) : (
-              <div className="bulk-print-modal__preview-grid">
-                {previewCells.map((cell) => (
-                  <CellLabelPreview key={cell.id} cell={cell} />
-                ))}
               </div>
-            )}
-          </div>
+              <div>
+                <span className="bulk-print-modal__summary-label">Копий</span>
+                <span className="bulk-print-modal__summary-value">
+                  {copies}
+                </span>
+              </div>
+              <div>
+                <span className="bulk-print-modal__summary-label">Заданий</span>
+                <span className="bulk-print-modal__summary-value">
+                  {totalJobs}
+                </span>
+              </div>
+            </div>
 
-          {phase === 'success' && feedback?.result && (
-            <div className="success-box" role="status">
-              <Check size={14} strokeWidth={1.6} aria-hidden />
-              Поставлено {feedback.result.jobsCreated} заданий (
-              {feedback.result.cellsCount} × {feedback.result.copies}).
-            </div>
-          )}
-          {phase === 'error' && feedback && (
-            <div className="error-box" role="alert">
-              <div className="error-box__msg">
-                <AlertCircle size={14} strokeWidth={1.6} aria-hidden />{' '}
-                {feedback.error ?? 'Не удалось поставить задания на печать.'}
+            <div className="bulk-print-modal__preview">
+              <div className="bulk-print-modal__preview-header">
+                <span>Превью этикеток</span>
+                {hiddenInPreview > 0 && (
+                  <span className="admin-muted" style={{ fontSize: '0.82rem' }}>
+                    Показаны первые {previewCells.length}, ещё{' '}
+                    {hiddenInPreview} попадёт в печать.
+                  </span>
+                )}
               </div>
-              {feedback.errorRequestId && (
-                <div className="error-box__rid">
-                  req: <code>{feedback.errorRequestId}</code>
+              {cellsCount === 0 ? (
+                <p className="admin-muted" style={{ margin: 0 }}>
+                  <Warehouse size={14} strokeWidth={1.6} aria-hidden /> Нет
+                  активных ячеек для печати.
+                </p>
+              ) : (
+                <div className="bulk-print-modal__preview-grid">
+                  {previewCells.map((cell) => (
+                    <CellLabelPreview key={cell.id} cell={cell} />
+                  ))}
                 </div>
               )}
             </div>
-          )}
 
-          <div className="admin-actions-row">
-            <button
-              type="button"
-              className="admin-btn admin-btn--ghost"
-              onClick={onClose}
-              disabled={pending}
-            >
-              Отмена
-            </button>
-            <button
-              type="submit"
-              className="admin-btn admin-btn--primary"
-              disabled={submitDisabled}
-            >
-              <Printer size={16} strokeWidth={1.6} aria-hidden />
-              {pending ? 'Отправляем…' : 'Печать'}
-            </button>
+            {phase === 'success' && feedback?.result && (
+              <div className="success-box" role="status">
+                <Check size={14} strokeWidth={1.6} aria-hidden />
+                Поставлено {feedback.result.jobsCreated} заданий (
+                {feedback.result.cellsCount} × {feedback.result.copies}).
+              </div>
+            )}
+            {phase === 'error' && feedback && (
+              <div className="error-box" role="alert">
+                <div className="error-box__msg">
+                  <AlertCircle size={14} strokeWidth={1.6} aria-hidden />{' '}
+                  {feedback.error ?? 'Не удалось поставить задания на печать.'}
+                </div>
+                {feedback.errorRequestId && (
+                  <div className="error-box__rid">
+                    req: <code>{feedback.errorRequestId}</code>
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </form>
+
+        <footer className="bulk-print-modal__footer">
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            onClick={onClose}
+            disabled={pending}
+          >
+            Отмена
+          </button>
+          <button
+            type="submit"
+            form={formId}
+            className="admin-btn admin-btn--primary"
+            disabled={submitDisabled}
+          >
+            <Printer size={16} strokeWidth={1.6} aria-hidden />
+            {pending ? 'Отправляем…' : 'Печать'}
+          </button>
+        </footer>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 

@@ -167,8 +167,9 @@ CANCELLED
   не пишется (endpoint без активной смены, см. комментарий
   `passports.service.ts:397`).
 - **Влияет ли на state:** ДА. В той же транзакции обновляется
-  `Passport.currentCellId`, инкрементится/создаётся
-  `CellContent.quantity`. `Passport.status` остаётся `CREATED`.
+  `Passport.currentCellId`, создаётся `WorkInProgressMovement`
+  `PLACE` IN на `qtyCut` и инкрементится `WorkInProgressBalance.qty`
+  (см. `docs/erd.md §2.7b`). `Passport.status` остаётся `CREATED`.
 
 ### 2.7. `CELL_REMOVED`
 
@@ -176,8 +177,8 @@ CANCELLED
   `apps/api/src` — пусто.
 - **Статус:** значение enum зарезервировано, runtime-кодом не пишется.
   При `ISSUED_TO_EMPLOYEE` паспорт физически «снимается» с ячейки
-  (`CellContent.quantity -= qtyCut`, `currentCellId = null`), но
-  отдельного события `CELL_REMOVED` при этом НЕ пишется
+  (`WorkInProgressMovement` `ISSUE` OUT, `currentCellId = null`),
+  но отдельного события `CELL_REMOVED` при этом НЕ пишется
   (`passports.service.ts:512-545`). UNKNOWN — см. §Конец документа.
 
 ### 2.8. `ISSUED_TO_EMPLOYEE`

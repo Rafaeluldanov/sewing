@@ -268,7 +268,7 @@ describeWithDb('integration — master actions (Stage 2)', () => {
   // 3. RETURN TO CELL
   // -------------------------------------------------------------------------
 
-  test('return-to-cell: ставит ячейку и инкрементит CellContent', async () => {
+  test('return-to-cell: ставит ячейку и инкрементит WorkInProgressBalance', async () => {
     const { passportId } = await setupPassport({ qtyCut: 7 });
     const cell = seed.cells.A1;
 
@@ -287,25 +287,21 @@ describeWithDb('integration — master actions (Stage 2)', () => {
     expect(inDb?.currentCellId).toBe(cell.id);
     expect(inDb?.currentEmployeeId).toBeNull();
 
-    const cellContent = await t.prisma.cellContent.findUnique({
-      where: {
-        cellId_sizeId: { cellId: cell.id, sizeId: seed.sizes.M },
-      },
+    const wipBalance = await t.prisma.workInProgressBalance.findFirst({
+      where: { cellId: cell.id, sizeId: seed.sizes.M },
     });
-    expect(cellContent?.quantity).toBe(7);
+    expect(wipBalance?.qty).toBe(7);
 
-    // Идемпотентность: повторный вызов на ту же ячейку не двоит CellContent.
+    // Идемпотентность: повторный вызов на ту же ячейку — noop, баланс не двоится.
     await request(t.app.getHttpServer())
       .post(`/api/master-actions/passports/${passportId}/return-to-cell`)
       .set('Cookie', cookies.master)
       .send({ reason: 'CELL_CORRECTION', cellId: cell.id })
       .expect(201);
-    const cellContentAfter = await t.prisma.cellContent.findUnique({
-      where: {
-        cellId_sizeId: { cellId: cell.id, sizeId: seed.sizes.M },
-      },
+    const wipAfter = await t.prisma.workInProgressBalance.findFirst({
+      where: { cellId: cell.id, sizeId: seed.sizes.M },
     });
-    expect(cellContentAfter?.quantity).toBe(7);
+    expect(wipAfter?.qty).toBe(7);
 
     const audits = await t.prisma.auditLog.findMany({
       where: { entityType: 'PASSPORT', entityId: passportId },
@@ -457,12 +453,10 @@ describeWithDb('integration — master actions (Stage 2)', () => {
     expect(inDb?.currentCellId).toBe(cell.id);
     expect(inDb?.status).toBe('IN_PROGRESS');
 
-    const cellContent = await t.prisma.cellContent.findUnique({
-      where: {
-        cellId_sizeId: { cellId: cell.id, sizeId: seed.sizes.M },
-      },
+    const wipBalance = await t.prisma.workInProgressBalance.findFirst({
+      where: { cellId: cell.id, sizeId: seed.sizes.M },
     });
-    expect(cellContent?.quantity).toBe(8);
+    expect(wipBalance?.qty).toBe(8);
 
     const audits = await t.prisma.auditLog.findMany({
       where: { entityType: 'PASSPORT', entityId: passportId },

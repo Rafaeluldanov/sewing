@@ -684,13 +684,15 @@ describeWithDb('integration — material issues (фактический расх
   // не меняет WorkshopNeed.status на post.
   // ---------------------------------------------------------------------------
 
-  test('post: НЕ трогает WorkshopNeed.status и не создаёт CellContent', async () => {
+  test('post: НЕ трогает WorkshopNeed.status и не создаёт движений по полуфабрикату', async () => {
     const { orderId, workshopNeedId } = await prepareOrderWithNeed();
 
     const needBefore = await t.prisma.workshopNeed.findUniqueOrThrow({
       where: { id: workshopNeedId },
     });
-    const cellContentsBefore = await t.prisma.cellContent.count();
+    // MaterialIssue — отдельный контур от WIP (полуфабрикат). Расход
+    // материала не должен создавать движений по крою.
+    const wipMovementsBefore = await t.prisma.workInProgressMovement.count();
 
     const created = await request(t.app.getHttpServer())
       .post('/api/material-issues')
@@ -710,7 +712,7 @@ describeWithDb('integration — material issues (фактический расх
       where: { id: workshopNeedId },
     });
     expect(needAfter.status).toBe(needBefore.status);
-    const cellContentsAfter = await t.prisma.cellContent.count();
-    expect(cellContentsAfter).toBe(cellContentsBefore);
+    const wipMovementsAfter = await t.prisma.workInProgressMovement.count();
+    expect(wipMovementsAfter).toBe(wipMovementsBefore);
   });
 });

@@ -1575,3 +1575,26 @@ model MaterialStock {
 stage-/dev-окружении есть «тестовые» заказы, их можно безопасно
 удалить через существующий админ-API/UI до проверки нового flow —
 никаких SQL-скриптов не требуется.
+
+---
+
+## RESOLUTION 2026-05-09: единая сущность полуфабриката
+
+Все упоминания `CellContent` в этом документе теперь **исторические**.
+Модель физически удалена из схемы; на её место пришли
+`WorkInProgressBalance` + `WorkInProgressMovement` (Вариант 3).
+
+Ключевые отличия от старой `CellContent`:
+- больше измерений: `(orderId, productId, sizeId, color,
+  warehouseId?, cellId?)` вместо `(cellId, sizeId)`;
+- журнал движений `WorkInProgressMovement` (PLACE / ISSUE / RETURN /
+  DELETE / PACK_OUT) с `sourceKey @unique` для идемпотентности;
+- единый источник истины — все consumer'ы (`listCells()` API,
+  `WarehousesService.deleteLine`, `DiagnosticsService`,
+  shelf-placement UI) читают отсюда;
+- может быть использована как основа для фичи «промежуточный контроль
+  расхода материала на выпуске кроя» (привязка `MaterialIssue` к
+  конкретному `WorkInProgressMovement.PLACE`).
+
+Подробнее: `docs/erd.md §2.7b`, `docs/api.md §29b`,
+`docs/flows.md §F3`/`§F3b`.

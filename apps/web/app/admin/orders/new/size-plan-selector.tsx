@@ -66,6 +66,7 @@ import {
 } from 'react';
 import { Pencil, Plus, Ruler, X } from 'lucide-react';
 import type { SizeDto } from '@sewing/shared/orders';
+import { ModalPortal } from '@/components/modal-portal';
 
 export interface SizePlanSelectorProps {
   /**
@@ -354,6 +355,7 @@ export function SizePlanSelector({
       </div>
 
       {isOpen && (
+        <ModalPortal>
         <div
           className="admin-size-plan-modal__backdrop"
           onMouseDown={handleBackdropClick}
@@ -479,6 +481,7 @@ export function SizePlanSelector({
             </footer>
           </div>
         </div>
+        </ModalPortal>
       )}
     </div>
   );

@@ -38,6 +38,8 @@ export {
   finishedGoodsMovementToUnified,
   materialBalanceToUnified,
   materialMovementToUnified,
+  workInProgressBalanceToUnified,
+  workInProgressMovementToUnified,
   sortUnifiedBalances,
   sortUnifiedMovements,
   type UnifiedRowKind,

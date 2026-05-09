@@ -9,6 +9,7 @@
  */
 
 import { useEffect } from 'react';
+import { ModalPortal } from '@/components/modal-portal';
 import type { ShiftSessionDto } from '@sewing/shared/shifts';
 import type { PassportRouteHintDto } from '@sewing/shared/passports';
 
@@ -99,6 +100,7 @@ export function PassportConfirmModal({
   const showRouteOnlyHint = isRouteWip && !passport.currentCellCode;
 
   return (
+    <ModalPortal>
     <div
       className="qr-modal passport-confirm"
       role="dialog"
@@ -220,6 +222,7 @@ export function PassportConfirmModal({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }
 

@@ -49,6 +49,7 @@ import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documen
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module.js';
 import { StockModule } from './modules/stock/stock.module.js';
 import { FinishedGoodsModule } from './modules/finished-goods/finished-goods.module.js';
+import { WorkInProgressModule } from './modules/work-in-progress/work-in-progress.module.js';
 import { MeModule } from './modules/me/me.module.js';
 import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
 
@@ -104,6 +105,7 @@ import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
     MaterialIssuesModule,
     StockModule,
     FinishedGoodsModule,
+    WorkInProgressModule,
     MeModule,
     BootstrapModule,
   ],

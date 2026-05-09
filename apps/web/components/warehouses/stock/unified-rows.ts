@@ -29,6 +29,10 @@ import type {
   FinishedGoodsBalanceListItem,
   FinishedGoodsMovementListItem,
 } from '@/lib/finished-goods-api';
+import type {
+  WorkInProgressBalanceListItem,
+  WorkInProgressMovementListItem,
+} from '@/lib/work-in-progress-api';
 
 /**
  * Размер страницы при объединённом fetch-е материалов и готовой
@@ -38,7 +42,7 @@ import type {
  */
 export const WAREHOUSES_UNIFIED_FETCH_LIMIT = 200;
 
-export type UnifiedRowKind = 'MATERIAL' | 'FINISHED_GOOD';
+export type UnifiedRowKind = 'MATERIAL' | 'FINISHED_GOOD' | 'WORK_IN_PROGRESS';
 
 /**
  * Общий формат строки таблицы «Остатки». Для готовой продукции
@@ -160,6 +164,76 @@ export function finishedGoodsBalanceToUnified(
     totalCost: null,
     lastMovementAt: b.lastMovementAt ?? null,
     updatedAt: b.updatedAt,
+  };
+}
+
+/**
+ * Преобразование `WorkInProgressBalanceListItem` → unified row.
+ *
+ * Имя строки — `${productName} / ${color} / ${sizeCode}` (тот же
+ * шаблон, что у готовой продукции). `unit` = «шт» — крой штучный
+ * (`qty: Int`). `unitCost` / `totalCost` — `null`: материальная
+ * себестоимость кроя в этом контуре не считается (она живёт в
+ * `MaterialIssue`). `hint` = «Полуфабрикат» — единственный кейс,
+ * где мы маркируем строку, потому что без подсказки крой и готовая
+ * продукция выглядят одинаково.
+ */
+export function workInProgressBalanceToUnified(
+  b: WorkInProgressBalanceListItem,
+): UnifiedWarehouseBalanceRow {
+  return {
+    kind: 'WORK_IN_PROGRESS',
+    id: `wip:${b.id}`,
+    name: buildFinishedGoodsName(b),
+    hint: 'Полуфабрикат',
+    orderId: b.orderId ?? null,
+    orderNumber: b.orderNumber ?? null,
+    warehouseId: b.warehouseId ?? null,
+    warehouseName: b.warehouseName ?? null,
+    cellId: b.cellId ?? null,
+    cellCode: b.cellCode ?? null,
+    qty: b.qty,
+    unit: 'шт',
+    unitCost: null,
+    totalCost: null,
+    lastMovementAt: b.lastMovementAt ?? null,
+    updatedAt: b.updatedAt,
+  };
+}
+
+/**
+ * Преобразование `WorkInProgressMovementListItem` → unified row.
+ */
+export function workInProgressMovementToUnified(
+  m: WorkInProgressMovementListItem,
+): UnifiedWarehouseMovementRow {
+  const direction: 'IN' | 'OUT' = m.direction === 'OUT' ? 'OUT' : 'IN';
+  return {
+    kind: 'WORK_IN_PROGRESS',
+    id: `wip:${m.id}`,
+    createdAt: m.createdAt,
+    type: m.type,
+    direction,
+    name: buildFinishedGoodsName(m),
+    orderId: m.orderId ?? null,
+    orderNumber: m.orderNumber ?? null,
+    clientId: null,
+    clientName: null,
+    warehouseId: m.warehouseId ?? null,
+    warehouseName: m.warehouseName ?? null,
+    cellId: m.cellId ?? null,
+    cellCode: m.cellCode ?? null,
+    qty: m.qty,
+    unit: 'шт',
+    unitCost: null,
+    totalCost: null,
+    balanceBeforeQty: m.balanceBeforeQty ?? null,
+    balanceAfterQty: m.balanceAfterQty ?? null,
+    sourceType: m.sourceType ?? null,
+    sourceId: null,
+    passportId: m.passportId ?? null,
+    boxId: null,
+    comment: m.comment ?? null,
   };
 }
 

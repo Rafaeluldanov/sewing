@@ -755,30 +755,45 @@ export class DiagnosticsService {
   }
 
   // ---------------------------------------------------------------------------
-  // Cells / Boxes (R, T, U).  S опускаем сознательно — FK у CellContent
-  // на cell/size NOT NULL, обычной mutation эту инвариант сломать
-  // нельзя; для отлова прямой ручной SQL-правки достаточно общего
-  // мониторинга PostgreSQL.
+  // Cells / Boxes (R, T, U). S опускаем сознательно — FK у
+  // WorkInProgressBalance на cell/size NOT NULL/optional корректно
+  // защищены, обычной mutation эти инварианты сломать нельзя; для
+  // отлова прямой ручной SQL-правки достаточно общего мониторинга
+  // PostgreSQL.
   // ---------------------------------------------------------------------------
 
   private async checkStorageIssues(out: DiagnosticIssueDto[]): Promise<void> {
-    // R. CELL_CONTENT_NEGATIVE
-    const negativeContents = await this.prisma.cellContent.findMany({
-      where: { quantity: { lt: 0 } },
-      select: { id: true, cellId: true, sizeId: true, quantity: true },
+    // R. WORK_IN_PROGRESS_NEGATIVE — в ячейке отрицательный остаток
+    // полуфабриката. Не должно происходить при нормальном flow,
+    // потому что `applyMovementInTx` бросает `WIP_INSUFFICIENT_BALANCE`
+    // на любой OUT, который увёл бы баланс ниже нуля.
+    const negativeWip = await this.prisma.workInProgressBalance.findMany({
+      where: { qty: { lt: 0 } },
+      select: {
+        id: true,
+        cellId: true,
+        sizeId: true,
+        orderId: true,
+        productId: true,
+        color: true,
+        qty: true,
+      },
       take: LIMIT_PER_CHECK,
     });
-    for (const c of negativeContents) {
+    for (const b of negativeWip) {
       out.push({
-        code: 'CELL_CONTENT_NEGATIVE',
+        code: 'WORK_IN_PROGRESS_NEGATIVE',
         severity: 'CRITICAL',
-        entityType: 'CELL_CONTENT',
-        entityId: c.id,
-        message: `В ячейке отрицательное количество (${c.quantity}).`,
+        entityType: 'WORK_IN_PROGRESS_BALANCE',
+        entityId: b.id,
+        message: `Отрицательный остаток полуфабриката (${b.qty}).`,
         context: {
-          cellId: c.cellId,
-          sizeId: c.sizeId,
-          quantity: c.quantity,
+          cellId: b.cellId,
+          sizeId: b.sizeId,
+          orderId: b.orderId,
+          productId: b.productId,
+          color: b.color,
+          qty: b.qty,
         },
       });
     }

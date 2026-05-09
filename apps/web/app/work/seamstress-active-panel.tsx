@@ -24,6 +24,7 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import { ModalPortal } from '@/components/modal-portal';
 import type {
   CurrentWorkPassportDto,
   ShiftSessionDto,
@@ -388,6 +389,7 @@ function WrongSizeModal({
   onClose: () => void;
 }) {
   return (
+    <ModalPortal>
     <div className="modal-backdrop" role="presentation" onClick={onClose}>
       <div
         className="modal modal--wrong-size"
@@ -432,5 +434,6 @@ function WrongSizeModal({
         </div>
       </div>
     </div>
+    </ModalPortal>
   );
 }

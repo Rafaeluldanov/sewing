@@ -43,6 +43,7 @@ import { getApiUrl } from '../passports/qr.js';
 import { EarningsService } from '../earnings/earnings.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { FinishedGoodsService } from '../finished-goods/finished-goods.service.js';
+import { WorkInProgressService } from '../work-in-progress/work-in-progress.service.js';
 
 type BoxRow = Prisma.BoxGetPayload<{
   include: {
@@ -97,6 +98,7 @@ export class PackingService {
     private readonly earnings: EarningsService,
     private readonly audit: AuditService,
     private readonly finishedGoods: FinishedGoodsService,
+    private readonly workInProgress: WorkInProgressService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -270,9 +272,13 @@ export class PackingService {
           id: true,
           status: true,
           qtyGood: true,
+          qtyCut: true,
+          orderId: true,
           productId: true,
           sizeId: true,
           color: true,
+          currentCellId: true,
+          currentCell: { select: { warehouseId: true } },
         },
       });
       if (!fresh) throw new PassportNotPackableException();
@@ -318,6 +324,29 @@ export class PackingService {
         where: { id: box.id },
         data: { totalQty: { increment: fresh.qtyGood } },
       });
+      // Defensive WIP PACK_OUT: если паспорт пакуется прямо из ячейки
+      // (master вернул в ячейку IN_PROGRESS-паспорт, и его сразу
+      // упаковали без re-issue), синхронно списываем остаток кроя
+      // ДО того, как `tx.passport.update` обнулит currentCellId.
+      // Идемпотентно по `WIP_PACK_OUT:<passportId>`. Нормальный flow
+      // (issue → ... → pack) сюда не попадает: currentCellId уже null.
+      if (fresh.currentCellId) {
+        await this.workInProgress.recordPackOutInTx(tx, {
+          passport: {
+            id: fresh.id,
+            orderId: fresh.orderId,
+            productId: fresh.productId,
+            sizeId: fresh.sizeId,
+            color: fresh.color,
+            qtyCut: fresh.qtyCut,
+          },
+          fromCell: {
+            id: fresh.currentCellId,
+            warehouseId: fresh.currentCell?.warehouseId ?? null,
+          },
+          employeeId: actorEmployeeId,
+        });
+      }
       await tx.passport.update({
         where: { id: fresh.id },
         data: {

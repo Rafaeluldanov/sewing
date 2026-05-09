@@ -240,22 +240,30 @@ describeWithDb('integration — diagnostic consistency report', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // CELL_CONTENT_NEGATIVE
+  // WORK_IN_PROGRESS_NEGATIVE
   // ---------------------------------------------------------------------------
 
-  test('E. CellContent.quantity < 0 → CRITICAL', async () => {
-    const cellContent = await t.prisma.cellContent.create({
+  test('E. WorkInProgressBalance.qty < 0 → CRITICAL', async () => {
+    // Создаём отрицательный баланс напрямую — нормальный flow его не
+    // допускает (`applyMovementInTx` бросает `WIP_INSUFFICIENT_BALANCE`).
+    // Тест ловит ситуацию ручной правки SQL / повреждённой миграции.
+    const { orderId } = await makePassport(t, seed, {});
+    const balance = await t.prisma.workInProgressBalance.create({
       data: {
-        cellId: seed.cells.A1!.id,
+        balanceKey: `${orderId}:${seed.product.id}:${seed.sizes.M!}:${seed.product.color}:NO_WAREHOUSE:${seed.cells.A1!.id}`,
+        orderId,
+        productId: seed.product.id,
         sizeId: seed.sizes.M!,
-        quantity: -3,
+        color: seed.product.color,
+        cellId: seed.cells.A1!.id,
+        qty: -3,
       },
     });
     const report = await fetchReport(t);
-    const issue = findIssue(report, 'CELL_CONTENT_NEGATIVE', cellContent.id);
+    const issue = findIssue(report, 'WORK_IN_PROGRESS_NEGATIVE', balance.id);
     expect(issue).toBeDefined();
     expect(issue?.severity).toBe('CRITICAL');
-    expect((issue?.context as { quantity: number }).quantity).toBe(-3);
+    expect((issue?.context as { qty: number }).qty).toBe(-3);
   });
 
   // ---------------------------------------------------------------------------

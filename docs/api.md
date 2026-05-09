@@ -1569,6 +1569,48 @@ Audit:
 
 ---
 
+<a id="29b-work-in-progress"></a>
+## 29b. Work in progress (read-only)
+
+Источник: `apps/api/src/modules/work-in-progress/work-in-progress.controller.ts`,
+`apps/api/src/modules/work-in-progress/work-in-progress.service.ts`,
+`prisma/schema.prisma::WorkInProgressBalance` /
+`WorkInProgressMovement`, `docs/erd.md §2.7b`.
+
+**Отдельный контур** от материалов (§26a Stock) и готовой продукции
+(§29a Finished goods). Учёт паспортов, лежащих в ячейках после
+раскроя и до выдачи в пошив, плюс обратные движения (возврат
+master-action'ом, удаление, упаковка из ячейки).
+
+**Единственный источник истины** для «что лежит в ячейках» — после
+удаления legacy `CellContent` все consumer'ы (`/api/cells`,
+`WarehousesService.deleteLine`, `DiagnosticsService`,
+shelf-placement UI) читают из `WorkInProgressBalance`.
+
+Запись движений идёт неявно из `PassportsService.place` /
+`issueToEmployee` / `delete`, `MasterActionsService.returnToCell` /
+`setRouteStep` (backward + cell), `PackingService.addPassport` (defensive)
+через `WorkInProgressService.recordXxxInTx`-обёртки. Идемпотентность —
+`WorkInProgressMovement.sourceKey @unique` (формат
+`WIP_<TYPE>:<sourceId>`, где `sourceId` — `PassportEvent.id` для
+PLACE/ISSUE, `AuditLog.id` для RETURN, `passportId` для DELETE/PACK_OUT).
+
+| Метод | Путь                                | RBAC                | Описание |
+| ----- | ----------------------------------- | ------------------- | -------- |
+| GET   | `/api/work-in-progress/balances`    | ADMIN, SHOP_MANAGER | List `ListWorkInProgressBalancesQuery`. Фильтры: `orderId`, `productId`, `sizeId`, `color`, `warehouseId`, `cellId`, `nonZero` (если `true` — только qty > 0), `take` (default 100, max 500), `skip`. Response: `{ items, total }`. Item: `id`, `orderId`, `orderNumber`, `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `updatedAt`, `lastMovementAt`. |
+| GET   | `/api/work-in-progress/movements`   | ADMIN, SHOP_MANAGER | List `ListWorkInProgressMovementsQuery`. Фильтры: `orderId`, `passportId`, `warehouseId`, `cellId`, `type` ∈ `PLACE \| ISSUE \| RETURN \| DELETE \| PACK_OUT`, `direction` ∈ `IN \| OUT`, `take`, `skip`. Response: `{ items, total }`. Item: `id`, `type`, `direction`, `orderId`, `orderNumber`, `productId`, `productName`, `sizeId`, `sizeCode`, `color`, `warehouseId`, `warehouseName`, `cellId`, `cellCode`, `qty`, `balanceBeforeQty`, `balanceAfterQty`, `passportId`, `passportNumber`, `sourceType`, `comment`, `createdAt`. |
+
+`sourceKey` сознательно **не возвращается** — внутренний
+идемпотентный технический ключ.
+
+Защита от рассинхронизации: `applyMovementInTx` бросает
+`WIP_INSUFFICIENT_BALANCE` (409) на любом OUT, который увёл бы
+`WorkInProgressBalance.qty` ниже нуля. На проде после миграции
+обязателен backfill существующих паспортов в ячейках (см. план
+деплоя).
+
+---
+
 <a id="30-earnings"></a>
 ## 30. Earnings
 

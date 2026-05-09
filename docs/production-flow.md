@@ -11,7 +11,8 @@
 >   `PassportDefect`, `Box`, `BoxItem`, `OperationEntry`,
 >   `SalaryEntry`, `MasterCall`, `CutReleasePolicy`,
 >   `OrderCutIssueRule`,
->   `CellContent`, `Cell`; enum-ы `PassportStatus`,
+>   `WorkInProgressBalance`, `WorkInProgressMovement`, `Cell`;
+>   enum-ы `PassportStatus`,
 >   `PassportEventType`, `EntryStatus`, `ApprovalMode`,
 >   `EarningSource`, `OperationCategory`, `PricingMode`,
 >   `SalaryEntrySource`, `Role`, `MasterCallStatus`.
@@ -286,12 +287,13 @@ Cell резолвится через `findCellByIdOrCode(dto.cellId, dto.cellCod
 
 Внутри `$transaction`:
 
-- Инкремент `CellContent` по `(cellId, sizeId)`: если уже есть
-  — `update { quantity: +qtyCut }`, иначе `create { quantity:
-  qtyCut }`.
 - `Passport.update { currentCellId, status: остаётся CREATED }`.
 - `PassportEvent.create({ type: CELL_PLACED, cellId, qty: qtyCut,
   operationId = currentOperationId })`.
+- `WorkInProgressService.recordPlaceInTx` — `WorkInProgressMovement`
+  `PLACE` IN на `qtyCut` + инкремент `WorkInProgressBalance.qty` по
+  `(orderId, productId, sizeId, color, warehouseId?, cellId)`.
+  Идемпотентно по `WIP_PLACE:<eventId>`. См. `docs/erd.md §2.7b`.
 
 ---
 
@@ -318,12 +320,15 @@ null`):
 
 Внутри `$transaction`:
 
-- Декремент `CellContent.quantity` (`max(quantity − qtyCut, 0)`).
 - `Passport.update { currentCellId: null, currentEmployeeId =
   me, status: IN_PROGRESS }`.
 - `PassportEvent.create({ type: ISSUED_TO_EMPLOYEE, cellId =
   старый currentCellId, operationId = session.operationId,
   employeeId = me, qty: qtyCut })`.
+- `WorkInProgressService.recordIssueInTx` — `WorkInProgressMovement`
+  `ISSUE` OUT на `qtyCut` + декремент `WorkInProgressBalance.qty`.
+  Идемпотентно по `WIP_ISSUE:<eventId>`. Защита от ухода ниже нуля —
+  `WIP_INSUFFICIENT_BALANCE` (409).
 - `audit.log({ event: 'PASSPORT_ISSUED', payload: { mode:
   'FROM_CELL', fromCellId, operationId, qty } })`.
 - `OrderCutIssueRulesService.consumeInTx(...)` (см. §6.2a) — ДО

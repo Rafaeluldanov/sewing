@@ -943,19 +943,14 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
       .expect(201);
     const passportId: string = passport.body.id;
 
-    // Кладём в ячейку как буфер: CellContent.quantity = 1.
+    // Кладём в ячейку как буфер: WIP balance.qty = 1.
     await placePassport(t, cookies.manager, passportId, seed.cells.A1.id);
-    const afterPlace = await t.prisma.cellContent.findUnique({
-      where: {
-        cellId_sizeId: {
-          cellId: seed.cells.A1.id,
-          sizeId: seed.sizes.M,
-        },
-      },
+    const afterPlace = await t.prisma.workInProgressBalance.findFirst({
+      where: { cellId: seed.cells.A1.id, sizeId: seed.sizes.M },
     });
-    expect(afterPlace?.quantity).toBe(1);
+    expect(afterPlace?.qty).toBe(1);
 
-    // Швея забирает из ячейки — legacy-ветка с декрементом CellContent.
+    // Швея забирает из ячейки — WIP списывается ISSUE-движением.
     await request(t.app.getHttpServer())
       .post('/api/shifts/start')
       .set('Cookie', cookies.seamstress)
@@ -970,15 +965,10 @@ describeWithDb('integration — production routes (soft-route MVP)', () => {
       .send({});
     expect(issue.status).toBe(201);
     expect(issue.body.currentCell).toBeNull();
-    const afterIssue = await t.prisma.cellContent.findUnique({
-      where: {
-        cellId_sizeId: {
-          cellId: seed.cells.A1.id,
-          sizeId: seed.sizes.M,
-        },
-      },
+    const afterIssue = await t.prisma.workInProgressBalance.findFirst({
+      where: { cellId: seed.cells.A1.id, sizeId: seed.sizes.M },
     });
-    expect(afterIssue?.quantity).toBe(0);
+    expect(afterIssue?.qty).toBe(0);
     // ISSUED_TO_EMPLOYEE написан с cellId — пришёл из ячейки.
     const issuedEvents = await t.prisma.passportEvent.findMany({
       where: { passportId, type: 'ISSUED_TO_EMPLOYEE' },
