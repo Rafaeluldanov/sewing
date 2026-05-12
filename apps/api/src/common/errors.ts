@@ -783,6 +783,23 @@ export class PassportNotInProgressException extends BusinessException {
   }
 }
 
+/**
+ * По паспорту уже зафиксировано `OPERATION_FINISHED` на той же операции
+ * текущей смены. Повторная выдача (`issueToEmployee`) или повторное
+ * завершение (`completeOperationByEmployee`) той же операции запрещены —
+ * операция считается закрытой безвозвратно для рядового сотрудника.
+ * Откат для переделки возможен только админом через прямую правку БД.
+ */
+export class PassportOperationAlreadyFinishedException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_OPERATION_ALREADY_FINISHED',
+      'Операция по данному паспорту закрыта для вас.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // QC / defects (Шаг 7)
 // ---------------------------------------------------------------------------
@@ -1394,6 +1411,25 @@ export class MasterBackwardRouteRequiresCellException extends BusinessException 
       'MASTER_BACKWARD_ROUTE_REQUIRES_CELL',
       'Откат паспорта назад по маршруту разрешён только с одновременным размещением в ячейку. Укажите cellQr или cellId.',
       HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Мастер пытается назначить паспорту шаг маршрута на операцию, по
+ * которой у этого паспорта уже зафиксировано `OPERATION_FINISHED`.
+ * Возврат на завершённую операцию запрещён — она считается закрытой
+ * безвозвратно. Для исправления (переделка по браку и т.п.) требуется
+ * прямая правка БД админом.
+ *
+ * Бросается из `MasterActionsService.setRouteStep`.
+ */
+export class MasterTargetOperationAlreadyFinishedException extends BusinessException {
+  constructor() {
+    super(
+      'MASTER_TARGET_OPERATION_ALREADY_FINISHED',
+      'Операция по этому паспорту уже завершена; вернуть паспорт на неё нельзя.',
+      HttpStatus.CONFLICT,
     );
   }
 }

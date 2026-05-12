@@ -328,7 +328,17 @@ auth (Шаг 7) UI хранит выбранного демо-сотрудник
    `PASSPORT_ALREADY_PACKED` / `PASSPORT_CANCELLED` при терминальных
    статусах.
 2. Проверяем активную смену сотрудника (`SHIFT_SESSION_REQUIRED`).
-3. Дальше — две ветки в зависимости от того, лежит ли паспорт в
+3. **Запрет повторной выдачи на завершённую операцию.** Если по этому
+   паспорту в `PassportEvent` уже есть запись `OPERATION_FINISHED` с
+   `operationId = session.operationId` — бросаем 409
+   `PASSPORT_OPERATION_ALREADY_FINISHED` («Операция по данному паспорту
+   закрыта для вас.»). Защита введена после инцидента 09.05.2026,
+   когда несколько швей в конце смены массово пересканировали уже
+   завершённые крои на той же операции и система создавала второй
+   `ISSUED_TO_EMPLOYEE` — паспорта «зависали» у швеи без
+   `OPERATION_FINISHED` следом. Откат для переделки (брак и т.п.) —
+   только админом через прямую правку БД.
+4. Дальше — две ветки в зависимости от того, лежит ли паспорт в
    ячейке (`currentCellId IS NOT NULL`):
 
    **A) Буферная ветка (`currentCellId IS NOT NULL`).** Применяется
@@ -1390,6 +1400,15 @@ Stage 2 «Мастер цеха» добавляет в карточку выз�
 - Сервис грузит snapshot маршрута заказа (`OrderRouteStep`). Если
   snapshot пуст — `ORDER_HAS_NO_ROUTE_SNAPSHOT`. Если индекс /
   operation не из snapshot — `ROUTE_STEP_NOT_IN_SNAPSHOT`.
+- **Запрет возврата на завершённую операцию.** Если по паспорту уже
+  есть `PassportEvent.OPERATION_FINISHED` с `operationId =
+  target.operationId` — бросаем 409
+  `MASTER_TARGET_OPERATION_ALREADY_FINISHED` («Операция по этому
+  паспорту уже завершена; вернуть паспорт на неё нельзя.»). Правило
+  работает для backward и same-index сценариев; forward на
+  незавершённую следующую операцию проходит штатно. Для переделки
+  по браку и подобных случаев — отдельный flow (см. бэклог) или
+  прямая правка БД админом.
 - Эффект: `currentOperationId = op.id`,
   `currentRouteStepIndex = idx`, `currentEmployeeId = null`,
   `currentCellId = null`, `status = IN_PROGRESS`.

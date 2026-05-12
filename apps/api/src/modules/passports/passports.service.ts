@@ -41,6 +41,7 @@ import {
   PassportNotEditableException,
   PassportNotInCellException,
   PassportNotInProgressException,
+  PassportOperationAlreadyFinishedException,
   PassportNotPlaceableException,
   PassportNotQcPassedException,
   PassportNotYoursException,
@@ -1028,6 +1029,13 @@ export class PassportsService {
     });
     if (!session) throw new ShiftSessionRequiredException();
 
+    // Если операция текущей смены уже завершалась по этому паспорту —
+    // запрещаем повторную выдачу. Без этого scan на уже закрытой
+    // операции создаёт второй `ISSUED_TO_EMPLOYEE` и паспорт начинает
+    // «висеть» у швеи без OPERATION_FINISHED (см. инцидент 09.05.2026,
+    // 60+ дубль-выдач у трёх швей).
+    await this.assertOperationNotFinished(passport.id, session.operationId);
+
     // «Очередь выдачи кроя по размерам» — pre-check ДО глобальной
     // `CutReleasePolicy`. Семантика та же, что у Stage 3: проверка
     // действует только на ПЕРВОЙ операции маршрута / категории
@@ -1559,6 +1567,14 @@ export class PassportsService {
 
     const completedOperationId = session.operationId;
 
+    // Та же защита, что в `issueToEmployee`: если по этой паре
+    // (passport, operation) уже зафиксировано `OPERATION_FINISHED`,
+    // повторное завершение запрещено. Сценарий «штатно» к этой ветке
+    // приходит после повторного `ISSUED_TO_EMPLOYEE` — поскольку issue
+    // уже заблокирован, до сюда не должно дойти; защита оставлена на
+    // случай race-condition / прямого вызова.
+    await this.assertOperationNotFinished(passport.id, completedOperationId);
+
     // Если у заказа есть snapshot маршрута — ищем шаг, который
     // соответствует завершаемой операции. Это нужно, чтобы корректно
     // обновить `currentRouteStepIndex` (для WIP-buffer ✔) и проверить,
@@ -2055,6 +2071,31 @@ export class PassportsService {
     }
     if (status === PassportStatus.CANCELLED) {
       throw new PassportCancelledException();
+    }
+  }
+
+  /**
+   * Запрещает повторное выполнение завершённой операции по паспорту.
+   * Используется в `issueToEmployee` и `completeOperationByEmployee`:
+   * как только в истории `PassportEvent` появилось `OPERATION_FINISHED`
+   * на (passportId, operationId), для рядового сотрудника операция
+   * считается закрытой безвозвратно. Откат — только админом через
+   * прямую правку БД.
+   */
+  private async assertOperationNotFinished(
+    passportId: string,
+    operationId: string,
+  ): Promise<void> {
+    const finished = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        operationId,
+        type: PassportEventType.OPERATION_FINISHED,
+      },
+      select: { id: true },
+    });
+    if (finished) {
+      throw new PassportOperationAlreadyFinishedException();
     }
   }
 

@@ -5,6 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import {
+  PassportEventType,
   PassportStatus,
   type Prisma,
 } from '@prisma/client';
@@ -31,6 +32,7 @@ import {
   MasterRouteStepNotInSnapshotException,
   MasterTargetEmployeeInactiveException,
   MasterTargetEmployeeNotFoundException,
+  MasterTargetOperationAlreadyFinishedException,
   PassportTerminalForMasterException,
 } from '../../common/errors.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
@@ -384,6 +386,23 @@ export class MasterActionsService {
       target = steps.find((s) => s.operationId === dto.operationId);
     }
     if (!target) throw new MasterRouteStepNotInSnapshotException();
+
+    // По целевой операции уже есть `OPERATION_FINISHED` → запрещаем
+    // вернуть на неё паспорт. По бизнес-инварианту операция считается
+    // закрытой безвозвратно для всех ролей, включая мастера. Для
+    // переделки по браку и аналогичных случаев — отдельный flow или
+    // прямая правка БД админом.
+    const finishedOnTarget = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId: passport.id,
+        operationId: target.operationId,
+        type: PassportEventType.OPERATION_FINISHED,
+      },
+      select: { id: true },
+    });
+    if (finishedOnTarget) {
+      throw new MasterTargetOperationAlreadyFinishedException();
+    }
 
     // Определяем направление движения. Если у паспорта ещё нет
     // currentRouteStepIndex (новый паспорт без скан-истории), считаем
