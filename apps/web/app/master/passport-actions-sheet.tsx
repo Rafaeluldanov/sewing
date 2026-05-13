@@ -35,8 +35,18 @@ import {
   masterUnassignPassportAction,
   type MasterActionResult,
 } from './master-actions-actions';
+import { PassportHistoryView } from './passport-history-view';
 
 type ActionId = 'unassign' | 'transfer' | 'returnToCell' | 'setRouteStep';
+
+/**
+ * `history` — отдельный «псевдо-action» в sheet'е: вместо формы
+ * действия рендерим `PassportHistoryView` с тем же `onBack`-паттерном,
+ * что и обычные действия. Это позволяет переиспользовать существующий
+ * layout (header сверху, scrollable body, кнопка «Назад»), не
+ * раздваивая дерево компонентов.
+ */
+type Mode = ActionId | 'history';
 
 interface Props {
   passport: MasterCallPassportDto;
@@ -72,7 +82,7 @@ export function PassportActionsSheet({
   onSuccess,
   onError,
 }: Props) {
-  const [action, setAction] = useState<ActionId | null>(null);
+  const [mode, setMode] = useState<Mode | null>(null);
 
   return (
     <ModalPortal>
@@ -116,15 +126,31 @@ export function PassportActionsSheet({
           </button>
         </header>
 
-        {action === null ? (
+        {mode === null && (
           <div className="master-actions-sheet__menu">
+            {/* «Посмотреть историю» — read-only обзор PassportEvent;
+                логически идёт ПЕРЕД destructive-действиями, чтобы
+                мастер мог сначала разобраться, потом действовать. */}
+            <button
+              type="button"
+              className="master-actions-sheet__menu-item master-actions-sheet__menu-item--history"
+              onClick={() => setMode('history')}
+            >
+              <span className="master-actions-sheet__menu-label">
+                Посмотреть историю паспорта
+              </span>
+              <span className="master-actions-sheet__menu-hint">
+                Хронология событий: что было сделано по паспорту, кем и
+                когда. Перед действиями стоит сверить состояние.
+              </span>
+            </button>
             {(['unassign', 'transfer', 'returnToCell', 'setRouteStep'] as ActionId[]).map(
               (id) => (
                 <button
                   key={id}
                   type="button"
                   className="master-actions-sheet__menu-item"
-                  onClick={() => setAction(id)}
+                  onClick={() => setMode(id)}
                 >
                   <span className="master-actions-sheet__menu-label">
                     {ACTION_LABELS[id]}
@@ -136,11 +162,21 @@ export function PassportActionsSheet({
               ),
             )}
           </div>
-        ) : (
+        )}
+
+        {mode === 'history' && (
+          <PassportHistoryView
+            passportId={passport.id}
+            passportNumber={passport.number}
+            onBack={() => setMode(null)}
+          />
+        )}
+
+        {mode !== null && mode !== 'history' && (
           <ActionBody
-            action={action}
+            action={mode}
             passport={passport}
-            onBack={() => setAction(null)}
+            onBack={() => setMode(null)}
             onClose={onClose}
             onSuccess={onSuccess}
             onError={onError}

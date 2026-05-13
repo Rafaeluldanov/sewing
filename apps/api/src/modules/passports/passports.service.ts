@@ -11,11 +11,15 @@ import {
   PassportStatus,
 } from '@prisma/client';
 import {
+  PASSPORT_EVENT_LABELS,
   type CellDetailDto,
   type CreatePassportDto,
   type MyPassportListItem,
   type PassportDetailDto,
   type PassportEditableBlock,
+  type PassportHistoryDto,
+  type PassportHistoryEventDto,
+  type PassportHistoryEventType,
   type PassportListItemDto,
   type PassportPlacementResultDto,
   type PassportRouteHintDto,
@@ -418,6 +422,79 @@ export class PassportsService {
         editableBlockReason: blocked,
       };
     });
+  }
+
+  // -------------------------------------------------------------------------
+  // HISTORY (PassportEvent timeline для экрана `/master` — кнопка
+  // «Посмотреть историю паспорта» в `PassportActionsSheet`).
+  // -------------------------------------------------------------------------
+
+  /**
+   * Хронологический список `PassportEvent` одного паспорта с
+   * подтянутыми именами связных сущностей (operation, employee, cell,
+   * fromOperation). Сортировка — `createdAt asc` (старые → новые),
+   * чтобы мастер «прочитал историю сверху вниз». Возвращает пустой
+   * массив, если паспорт не найден, — UI обычно открывает историю по
+   * id из карточки уже найденного паспорта, но defensive-проверка
+   * через `findUnique` ниже выкидывает 404, если id не существует.
+   *
+   * Поле `manual` помечает события с id-префиксом `man_` — мы
+   * используем этот префикс для записей, созданных ручной правкой
+   * админа (см. инциденты 12.05.2026 с догенерацией `OPERATION_FINISHED`
+   * и `OperationEntry`). UI помечает такие строки «(ручная правка)»,
+   * чтобы мастер не путал их с штатным flow.
+   */
+  async getHistory(passportId: string): Promise<PassportHistoryDto> {
+    const passport = await this.prisma.passport.findUnique({
+      where: { id: passportId },
+      select: { id: true },
+    });
+    if (!passport) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PASSPORT_NOT_FOUND',
+        message: 'Паспорт не найден',
+      });
+    }
+    const rows = await this.prisma.passportEvent.findMany({
+      where: { passportId },
+      orderBy: [
+        { createdAt: 'asc' },
+        // Tie-break по id — если несколько событий записаны в одну
+        // миллисекунду (батч-инсёрт), сохраняем стабильный порядок
+        // между запросами.
+        { id: 'asc' },
+      ],
+      include: {
+        operation: { select: { id: true, name: true } },
+        fromOperation: { select: { id: true, name: true } },
+        employee: { select: { id: true, fullName: true } },
+        cell: { select: { id: true, code: true } },
+      },
+    });
+    const events: PassportHistoryEventDto[] = rows.map((r) => {
+      const type = r.type as PassportHistoryEventType;
+      return {
+        id: r.id,
+        type,
+        typeLabel: PASSPORT_EVENT_LABELS[type] ?? type,
+        createdAt: r.createdAt.toISOString(),
+        employee: r.employee
+          ? { id: r.employee.id, fullName: r.employee.fullName }
+          : null,
+        operation: r.operation
+          ? { id: r.operation.id, name: r.operation.name }
+          : null,
+        fromOperation: r.fromOperation
+          ? { id: r.fromOperation.id, name: r.fromOperation.name }
+          : null,
+        cell: r.cell ? { id: r.cell.id, code: r.cell.code } : null,
+        qty: r.qty,
+        defectQty: r.defectQty,
+        manual: r.id.startsWith('man_'),
+      };
+    });
+    return { passportId, events };
   }
 
   // -------------------------------------------------------------------------

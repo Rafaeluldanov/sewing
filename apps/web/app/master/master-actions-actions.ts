@@ -28,8 +28,10 @@ import {
   UnassignPassportSchema,
   type FindMasterPassportByCodeResultDto,
   type MasterActionResultDto,
+  type PassportHistoryDto,
 } from '@sewing/shared';
 import { ApiRequestError } from '@/lib/api';
+import { fetchPassportHistory } from '@/lib/passports-api';
 import {
   findMasterPassportByCode,
   returnMasterPassportToCell,
@@ -148,6 +150,34 @@ export async function masterSetRouteStepAction(
   try {
     const result = await setMasterPassportRouteStep(passportId, parsed.data);
     revalidatePath('/master');
+    return { ok: true, result };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/**
+ * Кнопка «Посмотреть историю паспорта» в `PassportActionsSheet` —
+ * read-only выборка `PassportEvent`. `revalidatePath` не нужен, в БД
+ * ничего не меняется. RBAC enforce-ит backend (SHOPFLOOR_MASTER /
+ * SHOP_MANAGER / ADMIN), здесь его не дублируем.
+ */
+export type PassportHistoryResult =
+  | { ok: true; result: PassportHistoryDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+export async function fetchPassportHistoryAction(
+  passportId: string,
+): Promise<PassportHistoryResult> {
+  if (!passportId) {
+    return { ok: false, error: 'Не передан паспорт.' };
+  }
+  try {
+    const result = await fetchPassportHistory(passportId);
     return { ok: true, result };
   } catch (e) {
     return {

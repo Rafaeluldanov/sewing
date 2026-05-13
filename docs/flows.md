@@ -1393,6 +1393,32 @@ Stage 2 «Мастер цеха» добавляет в карточку выз�
 - Когда применимо: паспорт ошибочно выдан, нужно вернуть на склад
   (`WRONG_SCAN` / `CELL_CORRECTION`).
 
+### Сценарий 0 — «Посмотреть историю паспорта»
+
+- API: `GET /api/passports/:id/history` (RBAC `SHOPFLOOR_MASTER` /
+  `SHOP_MANAGER` / `ADMIN`).
+- Возвращает `PassportHistoryDto` — массив `PassportHistoryEventDto`,
+  отсортированный по `createdAt asc`. Каждое событие несёт:
+  тип (`PassportEventType`) + human-readable `typeLabel`, дату,
+  исполнителя (`employee.fullName` или `null` для системных
+  `CELL_PLACED`/`CELL_REMOVED`), операцию, «откуда» (для `MOVED`),
+  ячейку, кол-во, кол-во брака.
+- Поле `manual = true` помечает события с id-префиксом `man_*` —
+  ручные правки админа (см. инциденты 12.05.2026 с догенерацией
+  `OPERATION_FINISHED` и `OperationEntry` после фикса payroll-логики).
+  UI рисует у таких строк бейдж «(ручная правка)».
+- UI — кнопка **«Посмотреть историю паспорта»** в
+  `PassportActionsSheet` ПЕРЕД списком destructive-действий
+  (`unassign` / `transfer` / `returnToCell` / `setRouteStep`):
+  мастер сначала смотрит, что было, потом действует. Реализация —
+  `apps/web/app/master/passport-history-view.tsx` + псевдо-action
+  `'history'` в локальном state sheet'а. История скроллится внутри
+  `max-height: 60vh`, кнопка «Назад к действиям» возвращает в меню.
+- НЕ показывает `AuditLog` (`PASSPORT_OPERATION_COMPLETED`,
+  master-actions audit и т. п.) — там детальная техническая телеметрия,
+  она нужна админу через `/admin`, мастеру избыточна. В бэклоге
+  оставлен вариант «расширить history `AuditLog`-событиями».
+
 ### Сценарий 4 — «Назначить операцию» (`setRouteStep`)
 
 - API: `POST /api/master-actions/passports/:id/set-route-step`

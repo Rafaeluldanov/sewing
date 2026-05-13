@@ -335,3 +335,108 @@ export interface MyPassportListItem {
   /** Причина блокировки редактирования (machine-readable код). */
   editableBlockReason: PassportEditableBlock | null;
 }
+
+// ---------------------------------------------------------------------------
+// History (PassportEvent timeline) — для `/master`
+// ---------------------------------------------------------------------------
+
+/**
+ * Типы событий из `PassportEventType` (см. `prisma/schema.prisma`).
+ * Здесь дублируем enum как литералы — shared не может зависеть от
+ * `@prisma/client`. При расширении enum в schema нужно синхронно
+ * расширить этот тип (TS подсветит несоответствие в `PASSPORT_EVENT_LABELS`).
+ */
+export type PassportHistoryEventType =
+  | 'CREATED'
+  | 'OPERATION_STARTED'
+  | 'OPERATION_FINISHED'
+  | 'MOVED'
+  | 'DEFECT_RECORDED'
+  | 'CELL_PLACED'
+  | 'CELL_REMOVED'
+  | 'ISSUED_TO_EMPLOYEE'
+  | 'OPERATION_SCAN'
+  | 'QC_PASSED'
+  | 'WTO_PASSED'
+  | 'PACKED'
+  | 'CANCELLED';
+
+/**
+ * Человекочитаемые подписи событий для UI истории паспорта
+ * (страница `/master`, кнопка «Посмотреть историю паспорта»).
+ * Если в `PassportEventType` появится новый литерал — TS подсветит
+ * пропуск в этом mapping'е.
+ */
+export const PASSPORT_EVENT_LABELS: Record<PassportHistoryEventType, string> = {
+  CREATED: 'Паспорт выпущен',
+  OPERATION_STARTED: 'Операция начата',
+  OPERATION_FINISHED: 'Операция завершена',
+  MOVED: 'Перемещение',
+  DEFECT_RECORDED: 'Зафиксирован брак',
+  CELL_PLACED: 'Положен в ячейку',
+  CELL_REMOVED: 'Вынут из ячейки',
+  ISSUED_TO_EMPLOYEE: 'Выдан сотруднику',
+  OPERATION_SCAN: 'Скан на операции',
+  QC_PASSED: 'ОТК пройдено',
+  WTO_PASSED: 'ВТО пройдено',
+  PACKED: 'Упакован',
+  CANCELLED: 'Отменён',
+};
+
+/**
+ * Одна строка истории паспорта. Источник — `PassportEvent` +
+ * подтянутые имена `Operation` / `Employee` / `Cell`.
+ *
+ * Поля типа `*Name` / `*Code` — текущие справочные значения (без
+ * historic-snapshot): паспорт может ссылаться на переименованную
+ * операцию, мы это не воспроизводим, отдаём актуальное имя на момент
+ * запроса.
+ *
+ * `manual = true` для событий, созданных ручной правкой админа (по
+ * convention id с префиксом `man_`). Это позволяет UI пометить такую
+ * строку «(ручная правка)», чтобы мастер понимал, что событие не
+ * пришло из обычного flow.
+ */
+export interface PassportHistoryEventDto {
+  id: string;
+  type: PassportHistoryEventType;
+  /**
+   * Подпись типа события — `PASSPORT_EVENT_LABELS[type]`. Дублируем
+   * на бэке, чтобы UI не зависел от константы — но клиент всё равно
+   * может использовать локальный mapping (например, для i18n).
+   */
+  typeLabel: string;
+  createdAt: string;
+  /**
+   * Кто действовал. `null` для системных событий (`CELL_PLACED`,
+   * `CELL_REMOVED` — пишутся flow без явного исполнителя).
+   */
+  employee: { id: string; fullName: string } | null;
+  /** Операция, к которой привязано событие. `null` для CREATED/CELL_*. */
+  operation: { id: string; name: string } | null;
+  /**
+   * «Откуда» — для `MOVED` (паспорт ушёл с предыдущей операции на
+   * `operation`). Для остальных типов `null`.
+   */
+  fromOperation: { id: string; name: string } | null;
+  /** Ячейка, если событие связано с ячейкой (`CELL_PLACED`, `ISSUED_TO_EMPLOYEE`). */
+  cell: { id: string; code: string } | null;
+  /** Кол-во штук, к которому относится событие. `null`, если не применимо. */
+  qty: number | null;
+  /** Кол-во брака для `DEFECT_RECORDED`. */
+  defectQty: number | null;
+  /**
+   * `true`, если запись создана ручной правкой админа (id с префиксом
+   * `man_`). UI помечает такие строки «(ручная правка)».
+   */
+  manual: boolean;
+}
+
+/**
+ * Ответ `GET /api/passports/:id/history`. Список событий в
+ * хронологическом порядке (старые → новые).
+ */
+export interface PassportHistoryDto {
+  passportId: string;
+  events: PassportHistoryEventDto[];
+}

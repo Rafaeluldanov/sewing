@@ -81,6 +81,23 @@ export class PassportsController {
   }
 
   /**
+   * `GET /api/passports/:id/history` — хронологический список
+   * `PassportEvent` для экрана `/master` (кнопка «Посмотреть историю
+   * паспорта» в `PassportActionsSheet`). См. `docs/flows.md
+   * §F-Master actions`.
+   *
+   * RBAC: основной потребитель — мастер цеха, но история может быть
+   * полезна и менеджеру/админу для разбора инцидентов. Раскройщику
+   * и швее endpoint недоступен (для них есть `/admin/passports/:id`
+   * со своим UI).
+   */
+  @Get(':id/history')
+  @Roles('SHOPFLOOR_MASTER', 'SHOP_MANAGER', 'ADMIN')
+  getHistory(@Param('id') id: string) {
+    return this.passports.getHistory(id);
+  }
+
+  /**
    * `PATCH /api/passports/:id` — редактирование полей паспорта, пока
    * он ещё не двинулся в производство. Источник истины и инварианты —
    * `PassportsService.update` (status=CREATED, без ячейки, без событий

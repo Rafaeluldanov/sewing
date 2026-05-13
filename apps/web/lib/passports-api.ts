@@ -11,6 +11,7 @@ import type {
   CreatePassportDto,
   MyPassportListItem,
   PassportDetailDto,
+  PassportHistoryDto,
   PassportListItemDto,
   PassportPlacementResultDto,
   PlacePassportDto,
@@ -75,6 +76,24 @@ export function placePassport(
   return apiFetch<PassportPlacementResultDto>(
     `/passports/${encodeURIComponent(id)}/place`,
     { method: 'POST', body },
+  );
+}
+
+/**
+ * `GET /api/passports/:id/history` — хронология `PassportEvent` для
+ * экрана `/master` (кнопка «Посмотреть историю паспорта» в
+ * `PassportActionsSheet`). RBAC: `SHOPFLOOR_MASTER` / `SHOP_MANAGER` /
+ * `ADMIN`; раскройщику/швее endpoint вернёт 403. Кэширование
+ * отключаем (`no-store`): после каждой `setRouteStep` / `returnToCell`
+ * / `unassign` история обновляется, и stale-данные на UI мастера —
+ * хуже, чем лишний round-trip.
+ */
+export function fetchPassportHistory(
+  id: string,
+): Promise<PassportHistoryDto> {
+  return apiFetch<PassportHistoryDto>(
+    `/passports/${encodeURIComponent(id)}/history`,
+    { cache: 'no-store' },
   );
 }
 
