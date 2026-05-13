@@ -599,6 +599,150 @@ describeWithDb('integration — /api/shopfloor/display (display dashboard)', () 
     );
   });
 
+  // Регрессия: фикс инцидента «138 чёрного S в строке белого S».
+  // До этого `buildSewingRoute` агрегировал только по (operation, size),
+  // и UI клонировал per-size число во все цветовые строки одного
+  // размера. Теперь агрегация идёт по (operation, size, color), и
+  // строка `sewingRoute[*].rows` несёт `colorKey`/`colorLabel`.
+  test('sewingRoute: разделяет ▶/✔ по цвету — чёрный S не «затекает» в строку белого S', async () => {
+    const today = new Date();
+    const tpl = await t.prisma.routeTemplate.create({
+      data: {
+        code: 'TPL-DSP-COLOR',
+        name: 'Маршрут — цветовое измерение',
+        steps: {
+          create: [
+            { index: 0, operationId: seed.operations.SEW_OVERLOCK_1.id },
+            { index: 1, operationId: seed.operations.QC.id },
+          ],
+        },
+      },
+    });
+    // Два заказа разного цвета и одинаковых размеров (S, M). У чёрного
+    // заказа на Оверлоке 1 «висит» паспорт-буфер (`done` = 21). У
+    // белого заказа на той же операции — ноль работы (CREATED).
+    // До фикса: в строке белого S тоже отображалось бы 21.
+    // После фикса: только в строке чёрного S.
+    const mkOrder = async (
+      num: string,
+      color: 'Чёрный' | 'Белый',
+    ): Promise<string> => {
+      const o = await t.prisma.order.create({
+        data: {
+          number: num,
+          orderDate: today,
+          color,
+          status: 'IN_PRODUCTION',
+          routeTemplateId: tpl.id,
+          items: {
+            create: [
+              { productId: seed.product.id, sizeId: seed.sizes.S, qtyPlan: 21 },
+              { productId: seed.product.id, sizeId: seed.sizes.M, qtyPlan: 21 },
+            ],
+          },
+          routeSteps: {
+            create: [
+              { index: 0, operationId: seed.operations.SEW_OVERLOCK_1.id },
+              { index: 1, operationId: seed.operations.QC.id },
+            ],
+          },
+        },
+      });
+      return o.id;
+    };
+    const orderBlackId = await mkOrder('O-CLR-BLK', 'Чёрный');
+    const orderWhiteId = await mkOrder('O-CLR-WHT', 'Белый');
+
+    // Чёрный S — паспорт-буфер на Оверлоке 1 (idx=0, employee=null,
+    // IN_PROGRESS, qtyCut=21). Это ✔ Оверлока 1.
+    await t.prisma.passport.create({
+      data: {
+        number: 'P-CLR-BLK-S',
+        qrCode: 'passport:clr-blk-s',
+        orderId: orderBlackId,
+        productId: seed.product.id,
+        sizeId: seed.sizes.S,
+        color: 'Чёрный',
+        rollNumber: 'R-CLR-1',
+        cutDate: today,
+        qtyPlan: 21,
+        qtyCut: 21,
+        qtyGood: 21,
+        cutterId: seed.employees.cutter.id,
+        creatorId: seed.employees.cutter.id,
+        status: 'IN_PROGRESS',
+        currentRouteStepIndex: 0,
+        currentEmployeeId: null,
+      },
+    });
+
+    const cookie = loginAs(t, seed.employees['shop-chief']);
+    const res = await request(t.app.getHttpServer())
+      .get('/api/shopfloor/display')
+      .set('Cookie', cookie);
+    expect(res.status).toBe(200);
+
+    const body = res.body as {
+      sewingRoute: Array<{
+        operationName: string;
+        rows: Array<{
+          size: string;
+          colorKey: string;
+          colorLabel: string;
+          inProgress: number;
+          done: number;
+        }>;
+      }>;
+    };
+
+    const op1 = body.sewingRoute.find((b) => b.operationName === 'Оверлок 1');
+    expect(op1).toBeDefined();
+    const op1Rows = op1!.rows;
+
+    // У Оверлока 1 должна быть строка чёрного S с done=21 и строка
+    // белого S с done=0 (или просто отсутствовать, но при наличии
+    // живых паспортов цветовая строка должна быть с нулями).
+    const blackS = op1Rows.find(
+      (r) => r.size === 'S' && r.colorKey === 'black',
+    );
+    expect(blackS).toBeDefined();
+    expect(blackS).toEqual(
+      expect.objectContaining({ colorLabel: 'Чёрный', inProgress: 0, done: 21 }),
+    );
+
+    // Pass 1b всё ещё рисует строки 0/0 для размеров OrderItem заказа
+    // (см. инвариант «операция активного заказа не может исчезнуть»).
+    // Белый заказ существует с S/M в OrderItem, поэтому строки белого
+    // S и белого M на Оверлоке 1 присутствуют — но с нулями, НЕ с 21.
+    const whiteS = op1Rows.find(
+      (r) => r.size === 'S' && r.colorKey === 'white',
+    );
+    expect(whiteS).toBeDefined();
+    expect(whiteS).toEqual(
+      expect.objectContaining({ colorLabel: 'Белый', inProgress: 0, done: 0 }),
+    );
+
+    // Размер M есть в OrderItem обоих заказов — должны быть две
+    // отдельные строки M, обе с нулями (работы по M нет ни у чёрного,
+    // ни у белого).
+    const blackM = op1Rows.find(
+      (r) => r.size === 'M' && r.colorKey === 'black',
+    );
+    const whiteM = op1Rows.find(
+      (r) => r.size === 'M' && r.colorKey === 'white',
+    );
+    expect(blackM).toEqual(
+      expect.objectContaining({ inProgress: 0, done: 0 }),
+    );
+    expect(whiteM).toEqual(
+      expect.objectContaining({ inProgress: 0, done: 0 }),
+    );
+
+    // Suppress unused warning — orderWhiteId создавался для проверки,
+    // что белый заказ действительно попадает в Pass 1b fallback.
+    expect(orderWhiteId).toBeTypeOf('string');
+  });
+
   // Регрессия: до фикса `inProgress`/`done` в `sewingRoute` считали
   // ШТУКИ ПАСПОРТОВ (`+= 1`), а не сумму `qtyCut`. На дисплее это
   // вводило оператора в заблуждение: один паспорт на 21 шт показывался

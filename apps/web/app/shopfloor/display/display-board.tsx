@@ -915,14 +915,20 @@ interface ProcessSplit {
    * разделены `op-divider`'ом).
    */
   isFlowStart: boolean;
-  /** Значение ▶ для одной row матрицы (per-(color, size)). */
-  inProgressForRow: (row: ShopfloorDisplayRow) => number;
-  /** Значение ✔ для одной row матрицы. */
-  doneForRow: (row: ShopfloorDisplayRow) => number;
+  /**
+   * Значение ▶ для одной row матрицы (per-(color, size)). `colorKey`
+   * берётся из родительского `ShopfloorDisplayColorBlock` — без него
+   * sewing-route не различает цвета и одно и то же per-size число
+   * расплывалось бы по всем цветам того же размера (см. инцидент
+   * «138 чёрного S в строке белого S»).
+   */
+  inProgressForRow: (row: ShopfloorDisplayRow, colorKey: string) => number;
+  /** Значение ✔ для одной row матрицы. См. JSDoc у `inProgressForRow`. */
+  doneForRow: (row: ShopfloorDisplayRow, colorKey: string) => number;
   /**
    * Значение ▶ для color totals блока. Sewing считает Σ per-size
-   * через rows блока (backend не разрезает sewingRoute по цвету,
-   * но per-size lookup одинаков для всех цветов одного размера).
+   * через rows блока с учётом `block.colorKey` — sewing-route теперь
+   * содержит цветовое измерение, и итог цвета совпадает с физикой.
    * QC/ВТО берут готовые `block.totals.qtyQc` etc.
    */
   inProgressForBlockTotals: (block: ShopfloorDisplayColorBlock) => number;
@@ -957,16 +963,20 @@ function buildProcessSplits(
       kind: 'sew',
       cellPrefix: `sewroute:${op.operationId}`,
       isFlowStart: false,
-      inProgressForRow: (row) => routeQty(lookup, row.sizeCode, 'in'),
-      doneForRow: (row) => routeQty(lookup, row.sizeCode, 'done'),
+      inProgressForRow: (row, colorKey) => routeQty(lookup, colorKey, row.sizeCode, 'in'),
+      doneForRow: (row, colorKey) => routeQty(lookup, colorKey, row.sizeCode, 'done'),
       inProgressForBlockTotals: (block) => {
         let s = 0;
-        for (const r of block.rows) s += routeQty(lookup, r.sizeCode, 'in');
+        for (const r of block.rows) {
+          s += routeQty(lookup, block.colorKey, r.sizeCode, 'in');
+        }
         return s;
       },
       doneForBlockTotals: (block) => {
         let s = 0;
-        for (const r of block.rows) s += routeQty(lookup, r.sizeCode, 'done');
+        for (const r of block.rows) {
+          s += routeQty(lookup, block.colorKey, r.sizeCode, 'done');
+        }
         return s;
       },
       inProgressForGrand: () => lookup?.totalIn ?? 0,
@@ -1119,10 +1129,22 @@ function SplitHeadIcon({ kind }: { kind: ProcessSplitKind }) {
  */
 type SewingDir = 'in' | 'done';
 
+/**
+ * Ключ `colorKey|sizeCode`. Раньше lookup был только по `sizeCode`,
+ * из-за чего на матрице `(color × size)` одно per-size значение
+ * клонировалось во все цветовые строки одного размера (инцидент
+ * «138 чёрного S отображалось в строке белого S»). Теперь backend
+ * отдаёт строки sewing-route с собственным `colorKey`, и UI ищет
+ * ячейку ровно по паре `(colorKey, size)`.
+ */
+function routeCellKey(colorKey: string, sizeCode: string): string {
+  return `${colorKey}|${sizeCode}`;
+}
+
 interface RouteLookup {
-  /** sizeCode → { inProgress, done } для одной операции. */
-  bySize: ReadonlyMap<string, { inProgress: number; done: number }>;
-  /** Σ по всем размерам — для grand-totals (= честный итог из backend). */
+  /** `colorKey|sizeCode` → { inProgress, done } для одной операции. */
+  byColorSize: ReadonlyMap<string, { inProgress: number; done: number }>;
+  /** Σ по всем строкам — для grand-totals (= честный итог из backend). */
   totalIn: number;
   totalDone: number;
 }
@@ -1132,26 +1154,30 @@ function buildRouteLookup(
 ): Map<string, RouteLookup> {
   const out = new Map<string, RouteLookup>();
   for (const op of route) {
-    const bySize = new Map<string, { inProgress: number; done: number }>();
+    const byColorSize = new Map<string, { inProgress: number; done: number }>();
     let totalIn = 0;
     let totalDone = 0;
     for (const r of op.rows) {
-      bySize.set(r.size, { inProgress: r.inProgress, done: r.done });
+      byColorSize.set(routeCellKey(r.colorKey, r.size), {
+        inProgress: r.inProgress,
+        done: r.done,
+      });
       totalIn += r.inProgress;
       totalDone += r.done;
     }
-    out.set(op.operationId, { bySize, totalIn, totalDone });
+    out.set(op.operationId, { byColorSize, totalIn, totalDone });
   }
   return out;
 }
 
 function routeQty(
   lookup: RouteLookup | undefined,
+  colorKey: string,
   sizeCode: string,
   dir: SewingDir,
 ): number {
   if (!lookup) return 0;
-  const v = lookup.bySize.get(sizeCode);
+  const v = lookup.byColorSize.get(routeCellKey(colorKey, sizeCode));
   if (!v) return 0;
   return dir === 'in' ? v.inProgress : v.done;
 }
@@ -1631,8 +1657,8 @@ function ColorBlockRows({
             );
           })}
           {processSplits.map((sp, idx) => {
-            const inV = sp.inProgressForRow(row);
-            const doneV = sp.doneForRow(row);
+            const inV = sp.inProgressForRow(row, block.colorKey);
+            const doneV = sp.doneForRow(row, block.colorKey);
             const inDivider = splitInDividerClass(sp, idx);
             const bnClass = bottlenecks.has(sp.key)
               ? ' display-matrix__bottleneck-col'
@@ -2377,8 +2403,8 @@ function flattenProcessSplits(
       let inSum = 0;
       let doneSum = 0;
       for (const row of block.rows) {
-        const inV = sp.inProgressForRow(row);
-        const doneV = sp.doneForRow(row);
+        const inV = sp.inProgressForRow(row, block.colorKey);
+        const doneV = sp.doneForRow(row, block.colorKey);
         out.set(
           `${block.colorKey}|${row.sizeId}|${sp.cellPrefix}:in`,
           inV,

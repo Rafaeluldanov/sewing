@@ -370,7 +370,16 @@ export interface DisplayProjectionResult {
 /** Подпись fallback-колонки для passports без явной sewing-операции. */
 const SEWING_PENDING_LABEL = 'Ожидает';
 
-function normalizeColor(raw: string | null | undefined): {
+/**
+ * Нормализует «сырой» цвет (`Passport.color` / `Order.color`) в пару
+ * `{ key, label }`, где `key` — стабильная lower-case строка для
+ * группировок (с дополнительной сводкой синонимов «чёрный/black»),
+ * а `label` — человекочитаемая подпись. Экспортируется для
+ * `buildSewingRoute` (см. `shopfloor.service.ts`) — там она нужна,
+ * чтобы цветовая колонка sewing-route совпадала с колонкой матрицы
+ * по нормализованному ключу.
+ */
+export function normalizeColor(raw: string | null | undefined): {
   key: string;
   label: string;
 } {

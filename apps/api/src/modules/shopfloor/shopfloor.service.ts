@@ -25,6 +25,7 @@ import type {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import {
+  normalizeColor,
   projectShopfloor,
   projectShopfloorDisplay,
   type DisplayProjectionPassport,
@@ -845,6 +846,13 @@ export class ShopfloorService {
       },
       select: {
         id: true,
+        // Цвет заказа (`Order.color`) идёт в `buildSewingRoute` как
+        // fallback для Pass 1b: если у заказа нет ни одного «живого»
+        // паспорта (cold start / все PACKED|CANCELLED), мы всё равно
+        // должны нарисовать 0/0-строки на маршрутных операциях,
+        // привязав их к корректному `colorKey`. Иначе fallback-строки
+        // уезжали бы в «Без цвета» и перепутали бы матрицу.
+        color: true,
         items: { select: { sizeId: true } },
       },
     });
@@ -887,10 +895,17 @@ export class ShopfloorService {
     // самого заказа. См. блок-комментарий у `buildSewingRoute`
     // про size fallback.
     const orderItemSizes = new Map<string, Set<string>>();
+    // Параллельная карта `Map<orderId, color>` нужна для цветового
+    // измерения в `buildSewingRoute`: на cold-start (Pass 1b)
+    // у заказа может не быть ни одного «живого» паспорта, и
+    // нормализованный цвет 0/0-строк берётся из `Order.color`,
+    // чтобы матрица привязала их к правильной цветовой колонке.
+    const orderColors = new Map<string, string | null>();
     for (const o of activeOrders) {
       const set = new Set<string>();
       for (const it of o.items) set.add(it.sizeId);
       orderItemSizes.set(o.id, set);
+      orderColors.set(o.id, o.color ?? null);
     }
     const equipment = equipmentBundle.equipment;
     const orphanMasterCalls = equipmentBundle.orphanMasterCalls;
@@ -1058,6 +1073,11 @@ export class ShopfloorService {
     const sewingRouteInput = passports.map((p) => ({
       orderId: p.orderId,
       sizeId: p.sizeId,
+      // Цвет паспорта (`Passport.color`) — то самое цветовое
+      // измерение, которого раньше не хватало sewing-route: без него
+      // одно per-size число «138 чёрного S» отображалось и в строке
+      // белого S. Теперь агрегация идёт по `(operation, size, color)`.
+      color: p.color,
       status: p.status,
       currentRouteStepIndex: p.currentRouteStepIndex,
       qtyCut: p.qtyCut,
@@ -1073,6 +1093,7 @@ export class ShopfloorService {
       routeSteps,
       sizes,
       orderItemSizes,
+      orderColors,
     );
 
     // `equipment` уже посчитан в общем `Promise.all` выше — никаких
@@ -1324,6 +1345,14 @@ function buildSewingRoute(
   passports: Array<{
     orderId: string;
     sizeId: string;
+    /**
+     * `Passport.color` — нужен для цветового измерения агрегата
+     * (см. `ShopfloorDisplayRouteSizeRowDto.colorKey`). Нормализуется
+     * через `normalizeColor`, который тот же, что использует матрица —
+     * это позволяет UI искать ячейку по паре `(colorKey, size)` без
+     * расхождений между sewing-route и matrix.
+     */
+    color: string | null;
     status: PassportStatus;
     currentRouteStepIndex: number | null;
     /**
@@ -1362,6 +1391,14 @@ function buildSewingRoute(
    * `routeSteps`).
    */
   orderItemSizes: Map<string, Set<string>>,
+  /**
+   * Цвет заказа `Order.color` — нужен в Pass 1b, когда у заказа нет
+   * ни одного живого паспорта. Без него fallback-строки 0/0 уезжали
+   * бы в `__unknown__` («Без цвета»), и матрица их бы не прицепила
+   * к цветовой колонке. Передаётся всегда, может содержать `null`
+   * (тогда `normalizeColor` сама выдаст `__unknown__`).
+   */
+  orderColors: Map<string, string | null>,
 ): ShopfloorDisplayRouteOperationDto[] {
   if (routeSteps.length === 0) return [];
 
@@ -1434,12 +1471,25 @@ function buildSewingRoute(
     operationName: string;
     operationSortOrder: number;
     sizeId: string;
+    colorKey: string;
+    colorLabel: string;
     inProgress: number;
     done: number;
   };
   const cells = new Map<string, Cell>();
-  const cellKey = (operationId: string, sizeId: string): string =>
-    `${operationId}|${sizeId}`;
+  const cellKey = (operationId: string, colorKey: string, sizeId: string): string =>
+    `${operationId}|${colorKey}|${sizeId}`;
+
+  // Цвета заказа, нормализованные один раз. В Pass 1b строки 0/0
+  // привязываются к цвету заказа (заказ в этой доменной модели
+  // одноцветный — см. `Passport.color = order.color ?? product.color`).
+  const normalizedOrderColors = new Map<
+    string,
+    { key: string; label: string }
+  >();
+  for (const [orderId, raw] of orderColors) {
+    normalizedOrderColors.set(orderId, normalizeColor(raw));
+  }
 
   for (const [operationId, meta] of opMeta) {
     for (const orderId of meta.orderIds) {
@@ -1457,14 +1507,17 @@ function buildSewingRoute(
         sizeIds = orderItemSizes.get(orderId);
       }
       if (!sizeIds || sizeIds.size === 0) continue;
+      const color = normalizedOrderColors.get(orderId) ?? normalizeColor(null);
       for (const sizeId of sizeIds) {
-        const key = cellKey(operationId, sizeId);
+        const key = cellKey(operationId, color.key, sizeId);
         if (cells.has(key)) continue;
         cells.set(key, {
           operationId,
           operationName: meta.name,
           operationSortOrder: meta.sortOrder,
           sizeId,
+          colorKey: color.key,
+          colorLabel: color.label,
           inProgress: 0,
           done: 0,
         });
@@ -1489,6 +1542,7 @@ function buildSewingRoute(
     // в Pass 1b.
     if (idx === null && resolved === null) continue;
 
+    const passportColor = normalizeColor(p.color);
     for (const step of steps) {
       let bucket: 'inProgress' | 'done' | null = null;
       if (resolved === step.operation.id) {
@@ -1515,18 +1569,21 @@ function buildSewingRoute(
       } else {
         continue;
       }
-      const key = cellKey(step.operation.id, p.sizeId);
+      const key = cellKey(step.operation.id, passportColor.key, p.sizeId);
       let cell = cells.get(key);
       if (!cell) {
-        // Defensive: размер паспорта не попал в Pass 1b (например,
+        // Defensive: размер/цвет паспорта не попал в Pass 1b (например,
         // CREATED-паспорт без `currentRouteStepIndex` уже учтён в
         // sizesByOrder, но если по какой-то причине нет — добавляем
-        // ячейку прямо здесь, чтобы не потерять ▶/✔).
+        // ячейку прямо здесь, чтобы не потерять ▶/✔). Цвет берём
+        // из самого паспорта — он точнее, чем order-level fallback.
         cell = {
           operationId: step.operation.id,
           operationName: step.operation.name,
           operationSortOrder: step.operation.sortOrder,
           sizeId: p.sizeId,
+          colorKey: passportColor.key,
+          colorLabel: passportColor.label,
           inProgress: 0,
           done: 0,
         };
@@ -1566,19 +1623,27 @@ function buildSewingRoute(
     block.rows.push({
       size: meta?.code ?? '—',
       sizeSortOrder: meta?.sortOrder ?? Number.MAX_SAFE_INTEGER,
+      colorKey: cell.colorKey,
+      colorLabel: cell.colorLabel,
       inProgress: cell.inProgress,
       done: cell.done,
     });
   }
 
+  // Sort: сначала по цвету (стабильно — алфавит colorLabel), потом
+  // по размеру. UI группирует по colorKey, так что порядок внутри
+  // одного цвета — это уже привычная sortOrder размера.
   const result = Array.from(blocks.values())
     .map((b) => ({
       operationId: b.operationId,
       operationName: b.operationName,
       operationSortOrder: b.operationSortOrder,
-      rows: b.rows
-        .slice()
-        .sort((a, b2) => a.sizeSortOrder - b2.sizeSortOrder),
+      rows: b.rows.slice().sort((a, b2) => {
+        if (a.colorLabel !== b2.colorLabel) {
+          return a.colorLabel.localeCompare(b2.colorLabel);
+        }
+        return a.sizeSortOrder - b2.sizeSortOrder;
+      }),
     }))
     .sort((a, b) => a.operationSortOrder - b.operationSortOrder);
 
