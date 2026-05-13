@@ -49,6 +49,8 @@ import {
   PassportNotPlaceableException,
   PassportNotQcPassedException,
   PassportNotYoursException,
+  PassportIssueBackwardException,
+  PassportScanBackwardException,
   PassportNotYoursToEditException,
   PassportOrderNotInProductionException,
   PassportPackedDeleteException,
@@ -1113,6 +1115,27 @@ export class PassportsService {
     // 60+ дубль-выдач у трёх швей).
     await this.assertOperationNotFinished(passport.id, session.operationId);
 
+    // Запрещаем «получить крой» на операции, идущей в маршруте раньше
+    // уже зафиксированного шага паспорта. Симметрично
+    // `PASSPORT_SCAN_BACKWARD` в `scanOnOperation`: без этого
+    // issue-канал становился лазейкой — швея могла «вернуть» паспорт
+    // на прошлый шаг через issue (issue не двигает
+    // `currentRouteStepIndex`), а последующий complete уже падал с
+    // `PASSPORT_COMPLETE_BACKWARD`, и паспорт «висел» у неё в работе
+    // (инцидент 13.05.2026, 5 паспортов на КИПЕРКЕ после РАСПОШИВ).
+    // Откат назад остаётся прерогативой мастера через `set-route-step`.
+    const issueMatchedStep = await this.prisma.orderRouteStep.findFirst({
+      where: { orderId: passport.orderId, operationId: session.operationId },
+      select: { index: true },
+    });
+    if (
+      issueMatchedStep &&
+      passport.currentRouteStepIndex !== null &&
+      issueMatchedStep.index < passport.currentRouteStepIndex
+    ) {
+      throw new PassportIssueBackwardException();
+    }
+
     // «Очередь выдачи кроя по размерам» — pre-check ДО глобальной
     // `CutReleasePolicy`. Семантика та же, что у Stage 3: проверка
     // действует только на ПЕРВОЙ операции маршрута / категории
@@ -1478,15 +1501,30 @@ export class PassportsService {
         )
       : false;
 
-    // Soft-route MVP: если у заказа есть snapshot маршрута и
-    // отсканированная операция в нём встречается — двигаем
-    // `currentRouteStepIndex`. Если операция не из маршрута, оставляем
-    // прежнее значение (НЕ ломаем UI-подсказку, НЕ кидаем 409). См.
-    // `docs/domain.md §«Маршруты производства»`.
+    // Если у заказа есть snapshot маршрута и отсканированная операция
+    // в нём встречается — двигаем `currentRouteStepIndex`. Если операция
+    // не из маршрута, оставляем прежнее значение (НЕ ломаем UI-подсказку,
+    // НЕ кидаем 409). См. `docs/domain.md §«Маршруты производства»`.
     const matchedStep = await this.prisma.orderRouteStep.findFirst({
       where: { orderId: passport.orderId, operationId: session.operationId },
       select: { index: true },
     });
+
+    // Запрещаем «брать» операцию, идущую в маршруте раньше уже
+    // зафиксированного шага паспорта: швея на «прошлой» операции не
+    // должна суметь перехватить паспорт назад. Симметрично
+    // `PASSPORT_COMPLETE_BACKWARD` в `completeOperationByEmployee` —
+    // откат назад остаётся прерогативой мастера через `set-route-step`.
+    // Идемпотентный re-scan той же операции (`sameOp && sameEmployee`)
+    // отрабатывает выше и сюда не доходит.
+    if (
+      matchedStep &&
+      passport.currentRouteStepIndex !== null &&
+      matchedStep.index < passport.currentRouteStepIndex
+    ) {
+      throw new PassportScanBackwardException();
+    }
+
     const nextRouteStepIndex =
       matchedStep !== null ? matchedStep.index : passport.currentRouteStepIndex;
 

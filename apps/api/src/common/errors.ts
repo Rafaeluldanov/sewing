@@ -1453,6 +1453,48 @@ export class PassportCompleteBackwardException extends BusinessException {
   }
 }
 
+/**
+ * Сотрудник пытается «взять» паспорт сканированием на операции, которая
+ * стоит в маршруте РАНЬШЕ уже зафиксированного `currentRouteStepIndex`.
+ * Симметрично `PASSPORT_COMPLETE_BACKWARD`: откат паспорта назад по
+ * маршруту — прерогатива мастера (`MasterActionsService.setRouteStep`).
+ *
+ * Бросается из `PassportsService.scanOnOperation`, когда операция
+ * активной смены найдена в snapshot маршрута заказа с индексом меньше
+ * текущего.
+ */
+export class PassportScanBackwardException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_SCAN_BACKWARD',
+      'Нельзя взять эту операцию: по маршруту она идёт раньше текущего шага паспорта. Откат назад делает мастер.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Сотрудник пытается «получить крой» (issue) на операции, которая стоит
+ * в маршруте РАНЬШЕ уже зафиксированного `currentRouteStepIndex`. Без
+ * этой симметрии с `PASSPORT_SCAN_BACKWARD` issue-канал становился
+ * лазейкой: switch на «прошлый» шаг через issue не двигает
+ * `currentRouteStepIndex`, а последующий complete падает с
+ * `PASSPORT_COMPLETE_BACKWARD` — паспорт «зависает» у швеи.
+ *
+ * Бросается из `PassportsService.issueToEmployee`, когда операция
+ * активной смены найдена в snapshot маршрута заказа с индексом меньше
+ * текущего.
+ */
+export class PassportIssueBackwardException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_ISSUE_BACKWARD',
+      'Нельзя получить крой на этой операции: по маршруту она идёт раньше текущего шага паспорта. Возврат назад делает мастер.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Auth (MVP 1.1, ADR-0014)
 // ---------------------------------------------------------------------------

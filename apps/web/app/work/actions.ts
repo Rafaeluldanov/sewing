@@ -36,6 +36,8 @@ import type { PassportLookupResponse, WorkFormState } from './state';
 const RAW_API_ERROR_CODES = new Set([
   'CUT_RELEASE_POLICY_VIOLATION',
   'ORDER_CUT_ISSUE_RULE_VIOLATION',
+  'PASSPORT_SCAN_BACKWARD',
+  'PASSPORT_ISSUE_BACKWARD',
 ]);
 
 function explainApiError(e: unknown): string {
