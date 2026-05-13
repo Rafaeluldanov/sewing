@@ -18,6 +18,7 @@ import {
   ListPatternCategoriesQuerySchema,
   ReplacePatternCategoryParametersSchema,
   UpdatePatternCategorySchema,
+  type CompatibleTechCardsResponseDto,
   type CreatePatternCategoryDto,
   type ListPatternCategoriesQuery,
   type PatternCategoryDto,
@@ -114,6 +115,22 @@ export class PatternCategoriesController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<PatternCategoryDto> {
     return this.service.uploadIcon(id, file, user.employeeId);
+  }
+
+  /**
+   * Inline-создание изделия из формы заказа (см.
+   * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`).
+   *
+   * Возвращает активные техкарты с компатибилити-оценкой по этой
+   * категории (`FULL` / `PARTIAL` / `NONE`) и списками
+   * `matchedRoleKeys` / `missingRoleKeys`. UI использует ответ для
+   * фильтрации/подсветки селекта «Техкарта».
+   */
+  @Get(':id/compatible-tech-cards')
+  compatibleTechCards(
+    @Param('id') id: string,
+  ): Promise<CompatibleTechCardsResponseDto> {
+    return this.service.compatibleTechCards(id);
   }
 
   @Delete(':id')

@@ -17,6 +17,8 @@ import { isKnownTechCardMaterialRoleKey } from '@sewing/shared/tech-cards';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  PatternCategoryInactiveException,
+  PatternCategoryNotFoundException,
   TechCardCodeTakenException,
   TechCardImageUploadMissingFileException,
   TechCardInactiveException,
@@ -61,6 +63,11 @@ export class TechCardsService {
   async list(query: ListTechCardsQuery): Promise<TechCardTemplateSummaryDto[]> {
     const where: Prisma.TechCardTemplateWhereInput = {};
     if (query.isActive !== undefined) where.isActive = query.isActive;
+    // Этап «Inline-создание изделия из формы заказа»: фильтр по
+    // группе номенклатуры (см. `TechCardTemplate.patternCategoryId`).
+    if (query.patternCategoryId) {
+      where.patternCategoryId = query.patternCategoryId;
+    }
     if (query.search) {
       where.OR = [
         { code: { contains: query.search, mode: 'insensitive' } },
@@ -81,6 +88,7 @@ export class TechCardsService {
       code: row.code,
       name: row.name,
       isActive: row.isActive,
+      patternCategoryId: row.patternCategoryId,
       materialLinesCount: row._count.materialLines,
       outsourceLinesCount: row._count.outsourceLines,
       createdAt: row.createdAt.toISOString(),
@@ -208,11 +216,37 @@ export class TechCardsService {
     if (!tpl.isActive) throw new TechCardInactiveException();
   }
 
+  /**
+   * Этап «Inline-создание изделия из формы заказа»: при привязке
+   * техкарты к группе номенклатуры (`patternCategoryId`) валидируем,
+   * что категория существует и `status = ACTIVE`. Аналог
+   * `OrdersService.assertPatternUsable` — soft-protection против
+   * прямого POST/PATCH со «зомби»-категорией.
+   */
+  private async assertPatternCategoryUsable(
+    patternCategoryId: string,
+  ): Promise<void> {
+    const cat = await this.prisma.patternCategory.findUnique({
+      where: { id: patternCategoryId },
+      select: { id: true, status: true },
+    });
+    if (!cat) throw new PatternCategoryNotFoundException();
+    if (cat.status !== 'ACTIVE') {
+      throw new PatternCategoryInactiveException();
+    }
+  }
+
   // -------------------------------------------------------------------------
   // CREATE
   // -------------------------------------------------------------------------
 
   async create(dto: CreateTechCardDto): Promise<TechCardTemplateDetailDto> {
+    // Этап «Inline-создание изделия из формы заказа»: если передан
+    // patternCategoryId — проверяем existence и активность категории
+    // до открытия транзакции, чтобы UI получил адресную ошибку.
+    if (dto.patternCategoryId) {
+      await this.assertPatternCategoryUsable(dto.patternCategoryId);
+    }
     let createdId: string;
     try {
       createdId = await this.prisma.$transaction(async (tx) => {
@@ -221,6 +255,7 @@ export class TechCardsService {
             code: dto.code,
             name: dto.name,
             isActive: dto.isActive ?? true,
+            patternCategoryId: dto.patternCategoryId ?? null,
           },
         });
         if (dto.materialLines.length > 0) {
@@ -267,12 +302,26 @@ export class TechCardsService {
     });
     if (!existing) throw new TechCardNotFoundException();
 
+    // Этап «Inline-создание изделия из формы заказа»: при смене
+    // привязки на не-null валидируем категорию до открытия транзакции.
+    if (dto.patternCategoryId) {
+      await this.assertPatternCategoryUsable(dto.patternCategoryId);
+    }
+
     try {
       await this.prisma.$transaction(async (tx) => {
         const data: Prisma.TechCardTemplateUpdateInput = {};
         if (dto.code !== undefined) data.code = dto.code;
         if (dto.name !== undefined) data.name = dto.name;
         if (dto.isActive !== undefined) data.isActive = dto.isActive;
+        if (dto.patternCategoryId !== undefined) {
+          // null = снять привязку; string = переустановить.
+          // Используем скалярную колонку (а не relation `connect/
+          // disconnect`), потому что в проекте есть mixed-style
+          // и через скалярный fk проще / типы стабильнее.
+          (data as { patternCategoryId?: string | null }).patternCategoryId =
+            dto.patternCategoryId;
+        }
         if (Object.keys(data).length > 0) {
           await tx.techCardTemplate.update({ where: { id }, data });
         }
@@ -555,6 +604,7 @@ export class TechCardsService {
       code: row.code,
       name: row.name,
       isActive: row.isActive,
+      patternCategoryId: row.patternCategoryId,
       materialLinesCount: materialLines.length,
       outsourceLinesCount: outsourceLines.length,
       createdAt: row.createdAt.toISOString(),

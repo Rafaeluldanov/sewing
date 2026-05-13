@@ -7,6 +7,7 @@
  * Zod-схемы из `@sewing/shared/pattern-categories`.
  */
 import type {
+  CompatibleTechCardsResponseDto,
   CreatePatternCategoryDto,
   ListPatternCategoriesQuery,
   PatternCategoryDto,
@@ -60,6 +61,25 @@ export function replacePatternCategoryParameters(
   return apiFetch<PatternCategoryDto>(
     `/pattern-categories/${encodeURIComponent(id)}/parameters`,
     { method: 'PUT', body },
+  );
+}
+
+/**
+ * Inline-создание изделия из формы заказа (см.
+ * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+ * `apps/api/src/modules/pattern-categories/pattern-categories.controller.ts`).
+ *
+ * Получить активные техкарты с оценкой совместимости по группе
+ * номенклатуры (`FULL` / `PARTIAL` / `NONE` + matched/missing
+ * roleKeys). UI селекта «Техкарта» использует ответ для подсветки
+ * и фильтрации.
+ */
+export function getCompatibleTechCards(
+  categoryId: string,
+): Promise<CompatibleTechCardsResponseDto> {
+  return apiFetch<CompatibleTechCardsResponseDto>(
+    `/pattern-categories/${encodeURIComponent(categoryId)}/compatible-tech-cards`,
+    { cache: 'no-store' },
   );
 }
 

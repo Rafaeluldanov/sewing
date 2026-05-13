@@ -792,6 +792,56 @@ export interface PatternCategoryDto extends PatternCategoryListItemDto {
 }
 
 // ---------------------------------------------------------------------------
+// Compatible tech-cards (этап «Inline-создание изделия из формы заказа»)
+//
+// Источник: `apps/api/src/modules/pattern-categories/pattern-categories.controller.ts`
+// `GET /api/pattern-categories/:id/compatible-tech-cards`.
+// Используется селектом «Техкарта» в модалке «Создать изделие» для
+// фильтрации/предупреждений по совместимости с категорией.
+// ---------------------------------------------------------------------------
+
+export const TECH_CARD_COMPATIBILITY_LEVELS = [
+  'FULL',
+  'PARTIAL',
+  'NONE',
+] as const;
+export type TechCardCompatibilityLevel =
+  (typeof TECH_CARD_COMPATIBILITY_LEVELS)[number];
+
+export interface CompatibleTechCardDto {
+  id: string;
+  code: string;
+  name: string;
+  isActive: boolean;
+  patternCategoryId: string | null;
+  /**
+   * Совместимость техкарты с группой номенклатуры:
+   *   - `FULL`    — все активные `AREA_M2_BY_SIZE` параметры
+   *     категории имеют соответствующую строку техкарты
+   *     с тем же `materialRole`;
+   *   - `PARTIAL` — часть roleKey-ов совпала, часть отсутствует;
+   *   - `NONE`    — ни одной совпавшей пары.
+   *
+   * UI «Создать изделие» по умолчанию показывает все варианты,
+   * сортируя `FULL → PARTIAL → NONE`, и подсвечивает уровни.
+   * Backend `OrdersService.create` дополнительно валидирует строго:
+   * при `CREATE_FOR_CALCULATION` допустимо только `FULL`-совпадение
+   * (иначе 409 `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY`).
+   */
+  compatibility: TechCardCompatibilityLevel;
+  matchedRoleKeys: string[];
+  missingRoleKeys: string[];
+  materialLinesCount: number;
+}
+
+export interface CompatibleTechCardsResponseDto {
+  categoryId: string;
+  /** Активные `AREA_M2_BY_SIZE` параметры категории — что мы матчим. */
+  requiredRoleKeys: string[];
+  techCards: CompatibleTechCardDto[];
+}
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

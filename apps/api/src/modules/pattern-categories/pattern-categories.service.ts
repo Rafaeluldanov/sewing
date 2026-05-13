@@ -3,6 +3,8 @@ import { Prisma } from '@prisma/client';
 import {
   applyParameterDefaults,
   generatePatternCategorySlug,
+  type CompatibleTechCardDto,
+  type CompatibleTechCardsResponseDto,
   type CreatePatternCategoryDto,
   type ListPatternCategoriesQuery,
   type PatternCategoryDto,
@@ -10,6 +12,7 @@ import {
   type PatternCategoryParameterDto,
   type PatternCategoryParameterInputDto,
   type ReplacePatternCategoryParametersDto,
+  type TechCardCompatibilityLevel,
   type UpdatePatternCategoryDto,
 } from '@sewing/shared/pattern-categories';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -110,6 +113,102 @@ export class PatternCategoriesService {
     });
     if (!row) throw new PatternCategoryNotFoundException();
     return toDetailDto(row);
+  }
+
+  /**
+   * Inline-создание изделия из формы заказа (см.
+   * `apps/api/src/modules/pattern-categories/pattern-categories.controller.ts`,
+   * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`).
+   *
+   * Возвращает активные техкарты с оценкой совместимости по этой
+   * группе номенклатуры:
+   *   - `FULL`    — все активные `AREA_M2_BY_SIZE`-параметры категории
+   *     имеют соответствующую `TechCardMaterialLine.materialRole`;
+   *   - `PARTIAL` — часть roleKey-ов совпала, часть отсутствует;
+   *   - `NONE`    — нет ни одного совпавшего roleKey.
+   *
+   * Используется UI модалки «Создать изделие» для подсветки/фильтрации
+   * селекта «Техкарта». Backend `OrdersService.create` дополнительно
+   * валидирует строго при сохранении.
+   */
+  async compatibleTechCards(
+    categoryId: string,
+  ): Promise<CompatibleTechCardsResponseDto> {
+    const category = await this.prisma.patternCategory.findUnique({
+      where: { id: categoryId },
+      include: {
+        parameters: { where: { status: 'ACTIVE' } },
+      },
+    });
+    if (!category) throw new PatternCategoryNotFoundException();
+    const requiredRoleKeys = category.parameters
+      .filter((p) => p.inputType === 'AREA_M2_BY_SIZE')
+      .map((p) => p.roleKey);
+
+    const requiredSet = new Set(requiredRoleKeys);
+    const techCards = await this.prisma.techCardTemplate.findMany({
+      where: { isActive: true },
+      include: {
+        materialLines: { select: { materialRole: true } },
+        _count: { select: { materialLines: true } },
+      },
+      orderBy: [{ code: 'asc' }],
+    });
+
+    const result: CompatibleTechCardDto[] = techCards.map((tc) => {
+      const present = new Set<string>();
+      for (const l of tc.materialLines) {
+        if (l.materialRole) present.add(l.materialRole);
+      }
+      const matched: string[] = [];
+      const missing: string[] = [];
+      for (const role of requiredSet) {
+        if (present.has(role)) matched.push(role);
+        else missing.push(role);
+      }
+      let compatibility: TechCardCompatibilityLevel;
+      if (requiredSet.size === 0) {
+        // У категории нет AREA_M2_BY_SIZE параметров — любая
+        // техкарта считается «полностью совместимой» (нечего
+        // покрывать).
+        compatibility = 'FULL';
+      } else if (missing.length === 0) {
+        compatibility = 'FULL';
+      } else if (matched.length === 0) {
+        compatibility = 'NONE';
+      } else {
+        compatibility = 'PARTIAL';
+      }
+      return {
+        id: tc.id,
+        code: tc.code,
+        name: tc.name,
+        isActive: tc.isActive,
+        patternCategoryId: tc.patternCategoryId,
+        compatibility,
+        matchedRoleKeys: matched,
+        missingRoleKeys: missing,
+        materialLinesCount: tc._count.materialLines,
+      };
+    });
+
+    // Sort FULL → PARTIAL → NONE, затем по code asc.
+    const order: Record<TechCardCompatibilityLevel, number> = {
+      FULL: 0,
+      PARTIAL: 1,
+      NONE: 2,
+    };
+    result.sort((a, b) => {
+      const d = order[a.compatibility] - order[b.compatibility];
+      if (d !== 0) return d;
+      return a.code.localeCompare(b.code);
+    });
+
+    return {
+      categoryId,
+      requiredRoleKeys,
+      techCards: result,
+    };
   }
 
   // ===========================================================================

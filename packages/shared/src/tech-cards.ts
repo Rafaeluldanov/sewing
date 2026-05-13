@@ -662,10 +662,26 @@ const OutsourceLinesField = z
 // Request DTO
 // ---------------------------------------------------------------------------
 
+/**
+ * Soft-привязка техкарты к группе номенклатуры (`PatternCategory`).
+ * Этап «Inline-создание изделия из формы заказа»: окно создания
+ * техкарты внутри модалки «Создать изделие» автоматически передаёт
+ * `patternCategoryId` выбранной категории. На остальных формах
+ * (admin `/admin/tech-cards/new`) поле опционально и nullable.
+ *
+ * `null` — снять привязку; `undefined` — не трогать колонку (на update).
+ */
+const PatternCategoryIdOptionalField = z
+  .string()
+  .min(1)
+  .nullable()
+  .optional();
+
 export const CreateTechCardSchema = z.object({
   code: TechCardCodeField,
   name: TechCardNameField,
   isActive: z.boolean().optional().default(true),
+  patternCategoryId: PatternCategoryIdOptionalField,
   materialLines: MaterialLinesField.default([]),
   outsourceLines: OutsourceLinesField.default([]),
 });
@@ -676,6 +692,7 @@ export const UpdateTechCardSchema = z
     code: TechCardCodeField.optional(),
     name: TechCardNameField.optional(),
     isActive: z.boolean().optional(),
+    patternCategoryId: PatternCategoryIdOptionalField,
     materialLines: MaterialLinesField.optional(),
     outsourceLines: OutsourceLinesField.optional(),
   })
@@ -684,6 +701,7 @@ export const UpdateTechCardSchema = z
       obj.code !== undefined ||
       obj.name !== undefined ||
       obj.isActive !== undefined ||
+      obj.patternCategoryId !== undefined ||
       obj.materialLines !== undefined ||
       obj.outsourceLines !== undefined,
     'Нечего обновлять: укажите хотя бы одно поле',
@@ -708,6 +726,13 @@ export const ListTechCardsQuerySchema = z.object({
       if (typeof v === 'boolean') return v;
       return v === 'true';
     }),
+  /**
+   * Этап «Inline-создание изделия из формы заказа»: фильтр по
+   * группе номенклатуры (`TechCardTemplate.patternCategoryId`).
+   * Используется селектом «Техкарта» в модалке «Создать изделие»,
+   * чтобы показать только техкарты выбранной категории.
+   */
+  patternCategoryId: z.string().min(1).optional(),
   search: z.string().trim().max(100).optional(),
 });
 export type ListTechCardsQuery = z.infer<typeof ListTechCardsQuerySchema>;
@@ -788,6 +813,13 @@ export interface TechCardTemplateSummaryDto {
   code: string;
   name: string;
   isActive: boolean;
+  /**
+   * Soft-привязка техкарты к группе номенклатуры. Поле опционально (`?`)
+   * для backward-compat — старые клиенты shared-пакета продолжают
+   * компилироваться. Backend всегда отдаёт `null | string` после
+   * миграции `20260622100000_add_product_creation_mode_and_dev_cost`.
+   */
+  patternCategoryId?: string | null;
   materialLinesCount: number;
   outsourceLinesCount: number;
   createdAt: string; // ISO

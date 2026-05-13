@@ -524,6 +524,172 @@ export const CreateOrderItemSchema = z.object({
     .positive('qtyPlan должен быть > 0'),
 });
 
+// ---------------------------------------------------------------------------
+// Inline-создание изделия из формы заказа
+// (см. `prisma/schema.prisma::Order.productCreationMode`,
+//   `apps/api/src/modules/orders/orders.service.ts::create`,
+//   `apps/web/app/admin/orders/new/admin-create-order-form.tsx`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Режим заведения «Изделия» по заказу:
+ *   - `EXISTING_PATTERN`         — стандартный путь, выбран уже существующий
+ *     `PatternItem`. Default + backward-compat для всех существующих
+ *     клиентов формы;
+ *   - `CREATE_FOR_CALCULATION`   — новый inline-сценарий «Создать изделие →
+ *     Сделать расчёт». Backend в одной транзакции с создаваемым заказом
+ *     создаёт `PatternItem` + `PatternMaterialArea[]` + technical `Product`,
+ *     проставляет `Order.patternItemId` и `Order.patternDevelopmentCostRub`;
+ *   - `SEND_TO_CONSTRUCTOR`      — зарезервировано под вторую вкладку модалки
+ *     «Отправить изделие конструктору». На MVP в API не обрабатывается —
+ *     UI-заглушка.
+ */
+export const ORDER_PRODUCT_CREATION_MODES = [
+  'EXISTING_PATTERN',
+  'CREATE_FOR_CALCULATION',
+  'SEND_TO_CONSTRUCTOR',
+] as const;
+export const OrderProductCreationModeSchema = z.enum(
+  ORDER_PRODUCT_CREATION_MODES,
+);
+export type OrderProductCreationMode = z.infer<
+  typeof OrderProductCreationModeSchema
+>;
+
+/**
+ * Decimal-строка с не более чем 4 знаками после запятой, > 0.
+ * Используется для `areaM2` в inline-сценарии. Шаблон совпадает с
+ * `PatternMaterialArea.areaM2` (Decimal(10,4)).
+ */
+const AreaM2StringField: z.ZodType<string> = z
+  .union([z.string(), z.number()])
+  .transform((v, ctx) => {
+    const raw =
+      typeof v === 'number' ? String(v) : String(v).trim().replace(',', '.');
+    if (raw === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'areaM2 обязателен',
+      });
+      return z.NEVER;
+    }
+    if (!/^\d+(\.\d{1,4})?$/.test(raw)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'areaM2: число, не более 4 знаков после точки',
+      });
+      return z.NEVER;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'areaM2 должен быть > 0',
+      });
+      return z.NEVER;
+    }
+    return raw;
+  }) as unknown as z.ZodType<string>;
+
+/**
+ * Decimal-строка с не более чем 2 знаками, >= 0. Стиль идентичен
+ * `CustomerUnitPriceField`, но для `patternDevelopmentCostRub` мы
+ * разрешаем `0`/`null` (когда стоимость не указана) и не передаём
+ * `undefined` отдельно — поле опционально на уровне родительской схемы.
+ */
+const PatternDevelopmentCostRubField: z.ZodType<string | null | undefined> = z
+  .union([z.string(), z.number(), z.null()])
+  .optional()
+  .transform((v, ctx) => {
+    if (v === undefined) return undefined;
+    if (v === null) return null;
+    const raw =
+      typeof v === 'number' ? String(v) : v.trim().replace(',', '.');
+    if (raw === '') return null;
+    if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Стоимость разработки лекала: число, не более 2 знаков после точки',
+      });
+      return z.NEVER;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n < 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Стоимость разработки лекала должна быть >= 0',
+      });
+      return z.NEVER;
+    }
+    return raw;
+  }) as unknown as z.ZodType<string | null | undefined>;
+
+/**
+ * Одна строка размерной матрицы для inline-сценария:
+ *   - `qtyPlan` — план тиража по размеру (как в `CreateOrderItemSchema`);
+ *   - `areas[]` — массив `(roleKey, areaM2)`-пар для AREA_M2_BY_SIZE
+ *     параметров выбранной категории. Сервис складывает их в
+ *     `PatternMaterialArea(patternItemId, sizeId, materialRole, areaM2)`.
+ *
+ * `areas[].roleKey` валидируется на сервисе по активным параметрам
+ * категории — здесь только базовая проверка непустоты.
+ */
+export const CreateOrderProductCalculationSizeAreaSchema = z.object({
+  roleKey: z.string().trim().min(1, 'roleKey обязателен').max(64),
+  areaM2: AreaM2StringField,
+});
+export type CreateOrderProductCalculationSizeArea = z.infer<
+  typeof CreateOrderProductCalculationSizeAreaSchema
+>;
+
+export const CreateOrderProductCalculationSizeRowSchema = z.object({
+  sizeId: z.string().min(1, 'sizeId обязателен'),
+  qtyPlan: z
+    .number({ invalid_type_error: 'qtyPlan должен быть числом' })
+    .int('qtyPlan должен быть целым')
+    .positive('qtyPlan должен быть > 0'),
+  areas: z
+    .array(CreateOrderProductCalculationSizeAreaSchema)
+    .min(1, 'Заполните расход хотя бы по одному параметру'),
+});
+export type CreateOrderProductCalculationSizeRow = z.infer<
+  typeof CreateOrderProductCalculationSizeRowSchema
+>;
+
+/**
+ * Полезная нагрузка для `productMode = CREATE_FOR_CALCULATION`. Backend
+ * требует все три «контракта»: категорию, техкарту и непустую размерную
+ * матрицу. Совместимость техкарты с категорией дополнительно проверяет
+ * `OrdersService` и возвращает 409 `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY`.
+ */
+export const CreateOrderNewProductCalculationSchema = z
+  .object({
+    categoryId: z.string().min(1, 'Группа номенклатуры обязательна'),
+    techCardId: z.string().min(1, 'Техкарта обязательна'),
+    patternDevelopmentCostRub: PatternDevelopmentCostRubField,
+    sizes: z
+      .array(CreateOrderProductCalculationSizeRowSchema)
+      .min(1, 'Заполните хотя бы один размер'),
+  })
+  .superRefine((dto, ctx) => {
+    const seen = new Set<string>();
+    for (let i = 0; i < dto.sizes.length; i += 1) {
+      const sid = dto.sizes[i].sizeId;
+      if (seen.has(sid)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['sizes', i, 'sizeId'],
+          message: 'Размер не должен повторяться',
+        });
+      }
+      seen.add(sid);
+    }
+  });
+export type CreateOrderNewProductCalculationDto = z.infer<
+  typeof CreateOrderNewProductCalculationSchema
+>;
+
 export const CreateOrderSchema = z.object({
   orderDate: DateStringSchema,
   /**
@@ -667,9 +833,29 @@ export const CreateOrderSchema = z.object({
    * `undefined` / `null` / пустая строка трактуется как `INCLUDE`.
    */
   materialsAndHardwareCostPolicy: OrderMaterialsAndHardwareCostPolicyField,
+  /**
+   * Inline-создание изделия из формы заказа (см.
+   * `prisma/schema.prisma::Order.productCreationMode`,
+   * `OrderProductCreationModeSchema` выше).
+   *
+   *   - не передано / `EXISTING_PATTERN` — стандартный путь, нужен
+   *     `patternItemId` или legacy `productId`;
+   *   - `CREATE_FOR_CALCULATION` — backend сам заводит `PatternItem` +
+   *     `PatternMaterialArea[]` + technical `Product` по
+   *     `newProductCalculation`. Передавать `patternItemId` нельзя
+   *     (см. `superRefine` ниже);
+   *   - `SEND_TO_CONSTRUCTOR` — зарезервировано, бэк отдаст 400
+   *     (UI-заглушка).
+   */
+  productMode: OrderProductCreationModeSchema.optional(),
+  /**
+   * Полезная нагрузка для `productMode = CREATE_FOR_CALCULATION` (см.
+   * `CreateOrderNewProductCalculationSchema`). Игнорируется для других
+   * режимов.
+   */
+  newProductCalculation: CreateOrderNewProductCalculationSchema.optional(),
   items: z
     .array(CreateOrderItemSchema)
-    .min(1, 'Заказ должен содержать хотя бы одну строку по размеру')
     .superRefine((items, ctx) => {
       const seen = new Set<string>();
       for (let i = 0; i < items.length; i += 1) {
@@ -683,22 +869,77 @@ export const CreateOrderSchema = z.object({
         }
         seen.add(sid);
       }
-    }),
+    })
+    .optional()
+    .default([]),
 }).superRefine((dto, ctx) => {
-  // Этап «Номенклатура = Лекала»: на уровне DTO заказ должен иметь
-  // хотя бы один источник изделия — новый `patternItemId` (главный
-  // путь, admin-форма) либо legacy `productId` (старый flow). Если
-  // нет ни того, ни другого — отдаём адресную ошибку, чтобы UI
-  // подсветил именно поле «Номенклатура / лекало».
+  // Inline-сценарий «Создать изделие → Сделать расчёт»: запрещаем
+  // одновременно передавать `patternItemId` и `newProductCalculation`,
+  // потому что backend сам заведёт PatternItem из payload — иначе
+  // получился бы рассинхрон «выбрано существующее лекало + параллельно
+  // создаём новое».
+  const mode = dto.productMode ?? 'EXISTING_PATTERN';
   const hasPattern =
     typeof dto.patternItemId === 'string' && dto.patternItemId.length > 0;
   const hasProduct =
     typeof dto.productId === 'string' && dto.productId.length > 0;
+  const hasNewCalc =
+    dto.newProductCalculation !== undefined && dto.newProductCalculation !== null;
+
+  if (mode === 'CREATE_FOR_CALCULATION') {
+    if (!hasNewCalc) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['newProductCalculation'],
+        message:
+          'Для режима «Создать изделие» нужны данные нового изделия',
+      });
+    }
+    if (hasPattern) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['patternItemId'],
+        message:
+          'Нельзя одновременно выбрать существующее лекало и создать новое',
+      });
+    }
+    // items[] для этого режима не передаётся (формирует backend из
+    // newProductCalculation.sizes). Если пришли — отбрасываем без ошибки.
+    return;
+  }
+
+  if (mode === 'SEND_TO_CONSTRUCTOR') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['productMode'],
+      message:
+        'Вкладка «Отправить изделие конструктору» пока недоступна',
+    });
+    return;
+  }
+
+  // mode === 'EXISTING_PATTERN' (default): хотя бы один источник
+  // изделия (patternItemId или legacy productId) + непустой items[].
   if (!hasPattern && !hasProduct) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       path: ['patternItemId'],
       message: 'Выберите номенклатуру / лекало',
+    });
+  }
+  if (hasNewCalc) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['newProductCalculation'],
+      message:
+        'newProductCalculation допустим только для режима CREATE_FOR_CALCULATION',
+    });
+  }
+  if (!dto.items || dto.items.length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['items'],
+      message: 'Заказ должен содержать хотя бы одну строку по размеру',
     });
   }
 });
@@ -1116,6 +1357,23 @@ export interface OrderListItemDto {
   operationTimePlanSec?: number | null;
   /** ISO-string `Order.operationPlanCalculatedAt` или `null`. */
   operationPlanCalculatedAt?: string | null;
+
+  /**
+   * Inline-создание изделия из формы заказа (см.
+   * `prisma/schema.prisma::Order.productCreationMode`,
+   * `OrderProductCreationModeSchema` выше). Default `EXISTING_PATTERN`
+   * для всех исторических заказов. Поле опционально (`?`) — старые
+   * потребители без пересборки shared-пакета продолжают компилироваться.
+   */
+  productCreationMode?: OrderProductCreationMode;
+  /**
+   * Стоимость разработки лекала из inline-сценария «Сделать расчёт»
+   * (см. `prisma/schema.prisma::Order.patternDevelopmentCostRub`).
+   * Заполняется только при `productCreationMode = CREATE_FOR_CALCULATION`;
+   * на остальных путях `null`. Decimal сериализуется строкой —
+   * `string | number` для backward-compat.
+   */
+  patternDevelopmentCostRub?: string | number | null;
   /**
    * Список человекочитаемых warnings, нормализованный в `string[]`
    * маппером backend-а (`OrdersService.toListItemDto/toDetailDto`).
