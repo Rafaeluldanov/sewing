@@ -3,6 +3,7 @@ import { ConstructorTasksController } from './constructor-tasks.controller.js';
 import { ConstructorTasksService } from './constructor-tasks.service.js';
 import { ConstructorTasksStorageService } from './constructor-tasks-storage.service.js';
 import { PatternsModule } from '../patterns/patterns.module.js';
+import { OrdersModule } from '../orders/orders.module.js';
 
 /**
  * «Заявка конструктору» (этап «Отправить изделие конструктору»).
@@ -25,7 +26,7 @@ import { PatternsModule } from '../patterns/patterns.module.js';
  * — единый storage, единый формат имён, единый upload-каталог).
  */
 @Module({
-  imports: [PatternsModule],
+  imports: [PatternsModule, OrdersModule],
   controllers: [ConstructorTasksController],
   providers: [ConstructorTasksService, ConstructorTasksStorageService],
   exports: [ConstructorTasksService],

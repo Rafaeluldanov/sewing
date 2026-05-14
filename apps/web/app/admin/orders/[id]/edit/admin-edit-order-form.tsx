@@ -936,17 +936,6 @@ export function AdminEditOrderForm({
                     name="patternItemId"
                     value={patternItemId}
                   />
-                  {/* Карточка «Конструкторское бюро» появляется, если у
-                      заказа есть связанная задача (после refresh, когда
-                      `savedConstructorTask` в state-е уже null). Показываем
-                      её ВЫШЕ остальных вариантов, потому что это самый
-                      важный сигнал — лекало в работе у конструктора и
-                      может ждать действий менеджера. */}
-                  {order.constructorTask && (
-                    <div style={{ marginBottom: '0.75rem' }}>
-                      <OrderConstructorTaskCard task={order.constructorTask} />
-                    </div>
-                  )}
                   {savedInlineProduct ? (
                     <SavedInlineProductCard
                       payload={savedInlineProduct}
@@ -1039,6 +1028,38 @@ export function AdminEditOrderForm({
                 </span>
               )}
             </AdminCard>
+
+            {/* «Заявки в КБ» — отдельная секция-карточка после блока
+                «Изделие». Источник — `order.constructorTask` (живёт в
+                server-data: после refresh показывает текущий статус
+                заявки), либо `savedConstructorTask` из in-session
+                state — карточку видно сразу, не дожидаясь refresh. */}
+            {(order.constructorTask || savedConstructorTask) && (
+              <OrderConstructorTaskCard
+                title="Заявки в КБ"
+                task={
+                  order.constructorTask ??
+                  (savedConstructorTask
+                    ? {
+                        id: savedConstructorTask.taskId,
+                        patternItemId: savedConstructorTask.patternItemId,
+                        patternName: savedConstructorTask.patternName,
+                        patternArticle: savedConstructorTask.patternArticle,
+                        status: 'NEW' as const,
+                        comment: '',
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        submittedAt: new Date().toISOString(),
+                        acceptedAt: null,
+                        createdByName: null,
+                        assignedToName: null,
+                        filesCount: savedConstructorTask.filesCount,
+                        sizeRowsCount: savedConstructorTask.sizeRowsCount,
+                      }
+                    : null)
+                }
+              />
+            )}
 
             <AdminCard className="admin-order-card admin-order-card--production">
               <header className="admin-order-card__header">

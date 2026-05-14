@@ -38,6 +38,7 @@
 
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
+import { useRouter } from 'next/navigation';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
@@ -77,6 +78,7 @@ import {
   type AdminRouteStep,
 } from '@/components/admin';
 import { OrderApplicationsEditor } from '@/components/orders/order-applications-editor';
+import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 import {
   OrderHeroCard,
   type OrderHeroKpi,
@@ -191,6 +193,11 @@ export function AdminCreateOrderForm({
   // `createOrderAction` — если есть `savedInlineProduct`, его JSON
   // лежит в hidden input `newProductCalculationJson` и `actions.ts`
   // разворачивает его в `productMode = CREATE_FOR_CALCULATION`.
+  // `useRouter` нужен для редиректа на `[id]/edit` после успешного
+  // «Отправить конструктору»: backend в той же транзакции создаёт
+  // DRAFT-Order и возвращает orderId — менеджер сразу попадает в
+  // карточку заказа, где доводит остальные поля.
+  const router = useRouter();
   type ProductBlockMode = 'EMPTY' | 'SELECTING' | 'CREATING' | 'CREATED';
   const [productBlockMode, setProductBlockMode] =
     useState<ProductBlockMode>('EMPTY');
@@ -535,6 +542,10 @@ export function AdminCreateOrderForm({
                   sizes={sortedSizes}
                   initialValue={savedInlineProduct}
                   initialTab={inlineInitialTab}
+                  // Просим backend создать DRAFT-Order в той же
+                  // транзакции, чтобы избежать orphan-task без
+                  // привязки к заказу.
+                  createDraftOrderOnConstructor
                   onCancel={() => {
                     // «Отмена» внутри inline-формы возвращает в EMPTY,
                     // если ничего не было сохранено, и в CREATED, если
@@ -549,11 +560,21 @@ export function AdminCreateOrderForm({
                       setSavedConstructorTask(null);
                       setProductBlockMode('CREATED');
                     } else {
-                      // SEND_TO_CONSTRUCTOR: server action уже создал
-                      // DRAFT-PatternItem и ConstructorTask в БД.
-                      // Подставляем patternItemId как «выбранную
-                      // номенклатуру» заказа, чтобы parent submit
-                      // отправил его без дополнительной логики.
+                      // SEND_TO_CONSTRUCTOR: backend в той же транзакции
+                      // создал DRAFT-PatternItem + ConstructorTask + Order
+                      // и вернул `orderId`. Редирект на edit-страницу,
+                      // где менеджер дозаполнит остальные поля заказа
+                      // в контексте уже привязанной заявки КБ.
+                      if (result.result.orderId) {
+                        router.push(
+                          `/admin/orders/${result.result.orderId}/edit`,
+                        );
+                        return;
+                      }
+                      // Fallback на старый flow (orderId не пришёл —
+                      // backend старой версии или флаг не отработал):
+                      // оставляем поведение «привязали pattern,
+                      // отправим заказ при «Создать заказ»».
                       setSavedConstructorTask(result.result);
                       setSavedInlineProduct(null);
                       setPatternItemId(result.result.patternItemId);
@@ -598,6 +619,29 @@ export function AdminCreateOrderForm({
               type="hidden"
               name="patternItemId"
               value={savedConstructorTask.patternItemId}
+            />
+            {/* «Заявки в КБ» — карточка-summary только что созданной заявки.
+                Show-on-success — пока пользователь не покинул страницу
+                создания. После сабмита заказа карточка появится в hero
+                страницы заказа уже из server-data (`order.constructorTask`). */}
+            <OrderConstructorTaskCard
+              title="Заявки в КБ"
+              task={{
+                id: savedConstructorTask.taskId,
+                patternItemId: savedConstructorTask.patternItemId,
+                patternName: savedConstructorTask.patternName,
+                patternArticle: savedConstructorTask.patternArticle,
+                status: 'NEW',
+                comment: '',
+                createdAt: new Date().toISOString(),
+                updatedAt: new Date().toISOString(),
+                submittedAt: new Date().toISOString(),
+                acceptedAt: null,
+                createdByName: null,
+                assignedToName: null,
+                filesCount: savedConstructorTask.filesCount,
+                sizeRowsCount: savedConstructorTask.sizeRowsCount,
+              }}
             />
           </>
         )}
@@ -1002,7 +1046,17 @@ function ProductCreateTab({
           )}
 
           {isSelecting && (
-            <div className="admin-form-grid">
+            <div
+              className="admin-form-grid"
+              style={{
+                // Номенклатура шире (длинный label + длинные option-ы),
+                // Цвет компактнее. `alignItems: start` — чтобы поля
+                // не растягивались по высоте и подсказка под селектом
+                // не сдвигала input «Цвет».
+                gridTemplateColumns: 'minmax(0, 2fr) minmax(0, 1fr)',
+                alignItems: 'start',
+              }}
+            >
               <div className="admin-field">
                 <label htmlFor="patternItemId">Номенклатура / лекало</label>
                 <select
@@ -1019,6 +1073,28 @@ function ProductCreateTab({
                     </option>
                   ))}
                 </select>
+              </div>
+
+              <div className="admin-field">
+                <label htmlFor="color">Цвет</label>
+                <input
+                  id="color"
+                  name="color"
+                  type="text"
+                  value={color}
+                  onChange={(e) => onColorChange(e.target.value)}
+                  placeholder="не задан"
+                  maxLength={64}
+                />
+              </div>
+
+              {/* Подсказки и ошибки выносим под обе колонки, чтобы они
+                  не влияли на выравнивание input-а «Цвет» в верхней
+                  строке (`grid-column: 1 / -1`). */}
+              <div
+                className="admin-field"
+                style={{ gridColumn: '1 / -1', gap: 'var(--admin-space-xs)' }}
+              >
                 <span
                   id="patternItemId-hint"
                   className="admin-field__hint admin-muted"
@@ -1040,19 +1116,6 @@ function ProductCreateTab({
                     {fieldError('patternItemId')}
                   </span>
                 )}
-              </div>
-
-              <div className="admin-field">
-                <label htmlFor="color">Цвет</label>
-                <input
-                  id="color"
-                  name="color"
-                  type="text"
-                  value={color}
-                  onChange={(e) => onColorChange(e.target.value)}
-                  placeholder="не задан"
-                  maxLength={64}
-                />
               </div>
             </div>
           )}

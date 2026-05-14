@@ -77,6 +77,7 @@ export class OrderTechCardRequiredException extends BusinessException {
   }
 }
 
+
 /**
  * У заказа нет ни одной размерной строки с `qtyPlan > 0` — без
  * размерной матрицы расчёт чистой потребности невозможен.

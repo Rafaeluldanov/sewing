@@ -21,8 +21,17 @@ import { AdminCard, AdminStatusBadge } from '@/components/admin';
  */
 export function OrderConstructorTaskCard({
   task,
+  title = 'Конструкторское бюро',
 }: {
   task: ConstructorTaskSummaryDto | null | undefined;
+  /**
+   * Заголовок карточки. На странице заказа (view + edit-форма после
+   * блока «Изделие») передаём «Заявки в КБ» — это узнаваемое имя
+   * вкладки, которая раньше жила в модалке `CreateProductInline`. На
+   * остальных местах (admin-страница задачи и т.д.) используется
+   * default «Конструкторское бюро».
+   */
+  title?: string;
 }) {
   if (!task) return null;
 
@@ -47,7 +56,7 @@ export function OrderConstructorTaskCard({
           }}
         >
           <ClipboardList size={16} strokeWidth={1.6} aria-hidden />
-          Конструкторское бюро
+          {title}
         </h3>
         <AdminStatusBadge tone={CONSTRUCTOR_TASK_STATUS_TONE[task.status]}>
           {CONSTRUCTOR_TASK_STATUS_LABELS[task.status]}

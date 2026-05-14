@@ -51,6 +51,7 @@ export interface SaveConstructorDraftActionResult {
  */
 export async function saveConstructorDraftAction(
   formData: FormData,
+  options?: { createDraftOrder?: boolean },
 ): Promise<SaveConstructorDraftActionResult> {
   const payloadRaw = formData.get('payload');
   if (typeof payloadRaw !== 'string') {
@@ -84,7 +85,9 @@ export async function saveConstructorDraftAction(
         out.append('files', entry, entry.name);
       }
     }
-    const result = await saveConstructorTaskDraft(out);
+    const result = await saveConstructorTaskDraft(out, {
+      createDraftOrder: options?.createDraftOrder,
+    });
     return { ok: true, result };
   } catch (e) {
     if (e instanceof ApiRequestError) {

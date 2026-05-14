@@ -27,11 +27,12 @@ export function getConstructorTask(
 
 export function saveConstructorTaskDraft(
   formData: FormData,
+  options?: { createDraftOrder?: boolean },
 ): Promise<SaveConstructorDraftResultDto> {
-  return apiFetchMultipart<SaveConstructorDraftResultDto>(
-    '/constructor-tasks',
-    formData,
-  );
+  const path = options?.createDraftOrder
+    ? '/constructor-tasks?createDraftOrder=true'
+    : '/constructor-tasks';
+  return apiFetchMultipart<SaveConstructorDraftResultDto>(path, formData);
 }
 
 export function cancelConstructorTask(

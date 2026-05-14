@@ -356,6 +356,7 @@ export class ConstructorTasksController {
     @Body('payload') payloadRaw: string | undefined,
     @UploadedFiles() files: UploadedFileLike[] | undefined,
     @CurrentUser() user: AuthPrincipal,
+    @Query('createDraftOrder') createDraftOrderRaw?: string,
   ): Promise<SaveConstructorDraftResultDto> {
     if (typeof payloadRaw !== 'string' || payloadRaw.trim() === '') {
       throw new ConstructorTaskFileInvalidException(
@@ -379,10 +380,15 @@ export class ConstructorTasksController {
           .join('; ') || 'Невалидный payload.',
       );
     }
+    // Опциональный флаг — UI на `/admin/orders/new` передаёт `true`,
+    // чтобы backend в той же транзакции создал DRAFT-Order и привязал
+    // pattern. Любое другое значение трактуем как `false`.
+    const createDraftOrder = createDraftOrderRaw === 'true';
     return this.tasks.saveDraft(
       parsed.data,
       Array.isArray(files) ? files : [],
       user.employeeId ?? null,
+      createDraftOrder,
     );
   }
 }

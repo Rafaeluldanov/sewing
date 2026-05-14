@@ -95,6 +95,13 @@ export interface SavedConstructorDraftPayload {
   patternArticle: string;
   sizeRowsCount: number;
   filesCount: number;
+  /**
+   * Если backend получил `?createDraftOrder=true` — здесь приходит id
+   * созданного DRAFT-заказа. Parent на `/admin/orders/new` редиректит
+   * на `/admin/orders/[orderId]/edit`. На edit-странице (где заказ
+   * уже существует) поле остаётся `null`.
+   */
+  orderId?: string | null;
 }
 
 /**
@@ -155,6 +162,15 @@ interface Props {
    * (см. `SavedInlineProductCard` в `admin-create-order-form.tsx`).
    */
   initialTab?: TabId;
+  /**
+   * При `true` server action `saveConstructorDraftAction` вызывается
+   * с `?createDraftOrder=true` — backend в той же транзакции создаёт
+   * DRAFT-Order и возвращает `orderId`. Используется на странице
+   * создания заказа `/admin/orders/new`, чтобы заявка КБ всегда была
+   * привязана к заказу. На странице редактирования заказа
+   * `/admin/orders/[id]/edit` оставляем `false` — там заказ уже есть.
+   */
+  createDraftOrderOnConstructor?: boolean;
 }
 
 let __rowSeq = 0;
@@ -188,6 +204,7 @@ export function CreateProductInline({
   initialValue = null,
   initialPatterns = [],
   initialTab = 'calculate',
+  createDraftOrderOnConstructor = false,
 }: Props) {
   const [tab, setTab] = useState<TabId>(initialTab);
 
@@ -245,6 +262,7 @@ export function CreateProductInline({
   const [constructorError, setConstructorError] = useState<string | null>(null);
   const [isDraggingFiles, setIsDraggingFiles] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+
 
   const sortedSizes = useMemo(
     () => [...sizes].sort((a, b) => a.sortOrder - b.sortOrder),
@@ -552,11 +570,16 @@ export function CreateProductInline({
       for (const file of constructorFiles) {
         fd.append('files', file, file.name);
       }
-      const result = await saveConstructorDraftAction(fd);
+      const result = await saveConstructorDraftAction(fd, {
+        createDraftOrder: createDraftOrderOnConstructor,
+      });
       if (!result.ok || !result.result) {
         setConstructorError(result.error ?? 'Не удалось сохранить заявку');
         return;
       }
+      // Закрываем модалку — карточку «Заявки в КБ» рендерит parent-форма
+      // под блоком «Изделие» (`OrderConstructorTaskCard` через
+      // `savedConstructorTask` state).
       onSave({ kind: 'constructor', result: result.result });
     } finally {
       setConstructorSubmitting(false);

@@ -30,6 +30,7 @@ import {
 } from '../../common/errors.js';
 import { ConstructorTasksStorageService } from './constructor-tasks-storage.service.js';
 import { mapConstructorTaskSummary } from './constructor-task-mappers.js';
+import { OrderNumberService } from '../orders/order-number.service.js';
 import {
   PatternsStorageService,
   type UploadedFileLike,
@@ -60,6 +61,7 @@ export class ConstructorTasksService {
     private readonly prisma: PrismaService,
     private readonly storage: ConstructorTasksStorageService,
     private readonly patternsStorage: PatternsStorageService,
+    private readonly orderNumbers: OrderNumberService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -79,6 +81,7 @@ export class ConstructorTasksService {
     dto: SaveConstructorDraftDto,
     files: UploadedFileLike[],
     actorEmployeeId: string | null,
+    createDraftOrder: boolean = false,
   ): Promise<SaveConstructorDraftResultDto> {
     if (files.length > CONSTRUCTOR_TASK_FILE_MAX_COUNT) {
       throw new ConstructorTaskFileInvalidException(
@@ -182,11 +185,74 @@ export class ConstructorTasksService {
         await tx.patternMaterialArea.createMany({ data: areaRows });
       }
 
+      // Опциональный шаг: создать DRAFT-Order и привязать к нему
+      // только что созданный pattern. Используется при «Отправить
+      // конструктору» из формы создания заказа `/admin/orders/new` —
+      // без этого мы получаем orphan-task без связки с заказом.
+      // Заказ создаётся минимально:
+      //   - `number` через `OrderNumberService.nextNumber(tx)`;
+      //   - `orderDate = now`, всё остальное опционально (DRAFT можно
+      //     дозаполнить на edit-странице);
+      //   - `items` строятся из `dto.calcPayload.sizes` — там у каждого
+      //     размера уже есть `qtyPlan`, ровно тот, что менеджер ввёл
+      //     на вкладке «Сделать расчёт» в той же модалке;
+      //   - `productCreationMode = 'SEND_TO_CONSTRUCTOR'` — UI карточки
+      //     заказа знает, что лекало пока в разработке.
+      //
+      // Inline создаём legacy `Product` (`PatternItem.legacyProductId`).
+      // НЕ переиспользуем `OrdersService.ensureLegacyProductForPattern`,
+      // потому что тот валидирует `status === 'ACTIVE'`, а у нас
+      // pattern как раз DRAFT — это сознательное состояние. Логика
+      // создания Product повторяет ensure-helper минимально.
+      let createdOrderId: string | null = null;
+      if (createDraftOrder) {
+        const product = await tx.product.create({
+          data: {
+            name: pattern.name,
+            color: '',
+            active: true,
+          },
+          select: { id: true },
+        });
+        await tx.patternItem.update({
+          where: { id: pattern.id },
+          data: { legacyProductId: product.id },
+        });
+        const number = await this.orderNumbers.nextNumber(tx);
+        const order = await tx.order.create({
+          data: {
+            number,
+            orderDate: new Date(),
+            status: 'DRAFT',
+            patternItemId: pattern.id,
+            // Техкарта из calc-вкладки модалки изделия — менеджер
+            // выбрал её в той же сессии «Сохранить изделие», а потом
+            // «Отправить». Без этого менеджер при «Перевести в расчёт»
+            // получал `ORDER_TECH_CARD_REQUIRED` — потерянная привязка
+            // на старте flow.
+            techCardId: dto.calcPayload.techCardId ?? null,
+            productCreationMode: 'SEND_TO_CONSTRUCTOR',
+            items: {
+              createMany: {
+                data: dto.calcPayload.sizes.map((s) => ({
+                  productId: product.id,
+                  sizeId: s.sizeId,
+                  qtyPlan: s.qtyPlan,
+                })),
+              },
+            },
+          },
+          select: { id: true },
+        });
+        createdOrderId = order.id;
+      }
+
       return {
         taskId: task.id,
         patternItemId: pattern.id,
         patternName: pattern.name,
         patternArticle: pattern.article,
+        orderId: createdOrderId,
       };
     });
 
@@ -227,6 +293,7 @@ export class ConstructorTasksService {
       patternArticle: created.patternArticle,
       sizeRowsCount: dto.sizeRows.length,
       filesCount,
+      orderId: created.orderId,
     };
   }
 

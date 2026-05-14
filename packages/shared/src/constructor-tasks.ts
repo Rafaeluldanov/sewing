@@ -300,6 +300,12 @@ export interface ConstructorTaskDetailDto extends ConstructorTaskSummaryDto {
  * Лёгкий ответ от server action `saveConstructorDraftAction` — то,
  * что нужно родительской форме заказа, чтобы прицепить созданное
  * изделие как `patternItemId` и показать summary.
+ *
+ * `orderId` присутствует, если запрос пришёл с
+ * `?createDraftOrder=true` — backend в той же транзакции создал
+ * DRAFT-заказ с привязкой patternItemId. UI на `/admin/orders/new`
+ * после получения orderId редиректит менеджера на edit-страницу,
+ * чтобы заявка КБ всегда жила в контексте заказа.
  */
 export interface SaveConstructorDraftResultDto {
   taskId: string;
@@ -308,6 +314,7 @@ export interface SaveConstructorDraftResultDto {
   patternArticle: string;
   sizeRowsCount: number;
   filesCount: number;
+  orderId?: string | null;
 }
 
 // ---------------------------------------------------------------------------

@@ -533,10 +533,25 @@ export class OrdersService {
         name: true,
         status: true,
         legacyProductId: true,
+        constructorTask: { select: { status: true } },
       },
     });
     if (!pattern) throw new PatternNotFoundException();
-    if (pattern.status !== 'ACTIVE') throw new PatternInactiveException();
+    // DRAFT-pattern допускается, если рядом висит активная
+    // `ConstructorTask` (NEW/IN_PROGRESS/PENDING_ACCEPT/REWORK) —
+    // менеджер собирает заказ вокруг лекала, которое ещё разрабатывает
+    // конструктор. Запуск в производство (`start`) всё равно требует
+    // ACTIVE — он валидируется отдельно. См. `assertPatternUsable`.
+    const taskStatus = pattern.constructorTask?.status;
+    const taskIsActive =
+      taskStatus === 'NEW' ||
+      taskStatus === 'IN_PROGRESS' ||
+      taskStatus === 'PENDING_ACCEPT' ||
+      taskStatus === 'REWORK';
+    const draftAllowed = pattern.status === 'DRAFT' && taskIsActive;
+    if (pattern.status !== 'ACTIVE' && !draftAllowed) {
+      throw new PatternInactiveException();
+    }
 
     // Уже привязан Product → используем его. Дополнительно проверяем,
     // что он реально существует (на случай ручного DELETE FROM
@@ -2048,6 +2063,24 @@ export class OrdersService {
       });
     }
 
+    // Этап «Конструкторское бюро»: запуск в производство требует
+    // именно `ACTIVE`-pattern. `assertPatternUsable` сейчас разрешает
+    // DRAFT при наличии активной `ConstructorTask` — это нужно для
+    // того, чтобы менеджер мог собирать заказ-черновик вокруг
+    // незавершённой задачи. Но `start()` — гейт качества: лекало
+    // должно быть принято менеджером (через `acceptConstructorTaskAction`),
+    // что переводит pattern в ACTIVE. Если pattern всё ещё DRAFT —
+    // запуск запрещён.
+    if (order.patternItemId) {
+      const p = await this.prisma.patternItem.findUnique({
+        where: { id: order.patternItemId },
+        select: { status: true },
+      });
+      if (p && p.status !== 'ACTIVE') {
+        throw new PatternInactiveException();
+      }
+    }
+
     // Soft-route MVP: snapshot маршрута фиксируется в момент запуска
     // заказа. Если шаблон не выбран — ничего не делаем (полная backward
     // compatibility со старым flow). Если выбран — копируем шаги в
@@ -2376,6 +2409,13 @@ export class OrdersService {
     if (!order.patternItemId) {
       throw new OrderPatternRequiredException();
     }
+    // Сознательно НЕ блокируем переход в расчёт на DRAFT-pattern с
+    // активной ConstructorTask: расчёт — управленческий этап
+    // («посчитать потребности, прикинуть себестоимость»), он не
+    // требует, чтобы лекало было «принято». Гейт качества стоит
+    // позже — в `start()` (запуск в производство), где pattern
+    // ОБЯЗАН быть ACTIVE. Если лекало изменится после accept от
+    // конструктора, менеджер пересчитает расчёт через `recalculate-plan`.
     if (!order.techCardId) {
       throw new OrderTechCardRequiredException();
     }
@@ -3151,14 +3191,36 @@ export class OrdersService {
    * `prisma/schema.prisma`). UI по умолчанию показывает только
    * `ACTIVE`-лекала; backend дополнительно блокирует прямой POST/PATCH
    * с не-`ACTIVE` лекалом отдельной 409 PATTERN_INACTIVE.
+   *
+   * Исключение — DRAFT-pattern, у которого есть привязанная активная
+   * `ConstructorTask` (`NEW` / `IN_PROGRESS` / `PENDING_ACCEPT` /
+   * `REWORK`): такой pattern существует ровно потому, что менеджер
+   * отправил его конструктору и ждёт готового лекала. Заказ в DRAFT
+   * вокруг него — нормальный сценарий, его нужно разрешить менеджеру
+   * сохранять/редактировать. `assertOrderStartable` (в `start()`)
+   * по-прежнему блокирует запуск в производство — там pattern ОБЯЗАН
+   * быть ACTIVE, и accept-flow менеджера это гарантирует.
    */
   private async assertPatternUsable(patternItemId: string): Promise<void> {
     const p = await this.prisma.patternItem.findUnique({
       where: { id: patternItemId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        constructorTask: { select: { status: true } },
+      },
     });
     if (!p) throw new PatternNotFoundException();
-    if (p.status !== 'ACTIVE') throw new PatternInactiveException();
+    if (p.status === 'ACTIVE') return;
+    // DRAFT-pattern допускается, если есть незавершённая ConstructorTask.
+    const taskStatus = p.constructorTask?.status;
+    const taskIsActive =
+      taskStatus === 'NEW' ||
+      taskStatus === 'IN_PROGRESS' ||
+      taskStatus === 'PENDING_ACCEPT' ||
+      taskStatus === 'REWORK';
+    if (p.status === 'DRAFT' && taskIsActive) return;
+    throw new PatternInactiveException();
   }
 
   /**

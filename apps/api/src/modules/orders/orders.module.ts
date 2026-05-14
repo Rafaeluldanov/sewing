@@ -50,6 +50,6 @@ import { WorkshopNeedsModule } from '../workshop-needs/workshop-needs.module.js'
     OrderOperationPlanService,
     OrderProductionBalanceService,
   ],
-  exports: [OrdersService, OrderCostEstimatesService],
+  exports: [OrdersService, OrderCostEstimatesService, OrderNumberService],
 })
 export class OrdersModule {}
