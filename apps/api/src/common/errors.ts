@@ -1175,6 +1175,34 @@ export class TechCardInactiveException extends BusinessException {
 }
 
 /**
+ * Inline-создание изделия из формы заказа (см.
+ * `OrdersService.create::CREATE_FOR_CALCULATION`,
+ * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`).
+ *
+ * Техкарта несовместима с выбранной группой номенклатуры: хотя бы
+ * один активный `PatternCategoryParameter(inputType=AREA_M2_BY_SIZE)`
+ * не имеет соответствующей строки `TechCardMaterialLine.materialRole`.
+ * UI получает `missingRoleKeys` через payload и подсвечивает
+ * недостающие роли.
+ */
+export class TechCardNotCompatibleWithCategoryException extends HttpException {
+  constructor(missingRoleKeys: string[]) {
+    super(
+      {
+        statusCode: HttpStatus.CONFLICT,
+        code: 'TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY',
+        message:
+          missingRoleKeys.length > 0
+            ? `Техкарта не покрывает обязательные материалы группы: ${missingRoleKeys.join(', ')}.`
+            : 'Техкарта не совместима с группой номенклатуры.',
+        missingRoleKeys,
+      },
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Строка материала техкарты (`TechCardMaterialLine`) не найдена.
  * Используется upload-эндпоинтом изображения строки материала
  * (см. `TechCardsService.uploadMaterialImage`, ТЗ §5).

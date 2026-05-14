@@ -54,10 +54,13 @@ import {
   OrderPatternRequiredException,
   OrderTechCardAlreadyStartedException,
   OrderTechCardRequiredException,
+  PatternCategoryInactiveException,
+  PatternCategoryNotFoundException,
   PatternInactiveException,
   PatternNotFoundException,
   RouteTemplateInactiveException,
   RouteTemplateNotFoundException,
+  TechCardNotCompatibleWithCategoryException,
 } from '../../common/errors.js';
 import { aggregateOrder } from './order-aggregator.js';
 import { OrderCostEstimatesService } from './order-cost-estimates.service.js';
@@ -126,6 +129,23 @@ export class OrdersService {
     dto: CreateOrderDto,
     actorEmployeeId?: string | null,
   ): Promise<OrderDetailDto> {
+    // Inline-создание изделия из формы заказа (см.
+    // `prisma/schema.prisma::Order.productCreationMode`). Backend сам
+    // создаёт `PatternItem` + `PatternMaterialArea[]` + technical
+    // `Product` по `newProductCalculation` — см. `createWithInlinePattern`.
+    const productMode = dto.productMode ?? 'EXISTING_PATTERN';
+    if (productMode === 'CREATE_FOR_CALCULATION') {
+      return this.createWithInlinePattern(dto, actorEmployeeId);
+    }
+    if (productMode === 'SEND_TO_CONSTRUCTOR') {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'ORDER_SEND_TO_CONSTRUCTOR_NOT_IMPLEMENTED',
+        message:
+          'Вкладка «Отправить изделие конструктору» пока недоступна',
+      });
+    }
+
     // Этап «Номенклатура = Лекала» (см. `docs/recon-soft-integration.md
     // §«Номенклатура = Лекала»`): новая admin-форма присылает только
     // `patternItemId`. Backend сам обеспечивает legacy `productId`
@@ -531,6 +551,287 @@ export class OrdersService {
   }
 
   // -------------------------------------------------------------------------
+  // CREATE (CREATE_FOR_CALCULATION)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Inline-сценарий «Создать изделие → Сделать расчёт» (см.
+   * `prisma/schema.prisma::Order.productCreationMode`,
+   * `apps/web/app/admin/orders/new/create-product-modal.tsx`).
+   *
+   * Атомарно создаёт `PatternItem` + `PatternMaterialArea[]` +
+   * technical `Product` + `Order` + `OrderItem[]` в одной транзакции.
+   * Делает те же snapshot-вызовы, что и стандартная ветка create —
+   * `startCalculation` после этого проходит без отличий.
+   */
+  private async createWithInlinePattern(
+    dto: CreateOrderDto,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderDetailDto> {
+    const calc = dto.newProductCalculation;
+    if (!calc) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'ORDER_NEW_PRODUCT_CALCULATION_REQUIRED',
+        message:
+          'Для режима «Создать изделие» нужны данные нового изделия',
+      });
+    }
+
+    // Опционально: группа номенклатуры. Если выбрана, валидируем
+    // existence/активность и собираем `AREA_M2_BY_SIZE`-параметры
+    // для проверки совместимости areas[].roleKey. Если не выбрана —
+    // продолжаем без категории (PatternItem.categoryId = null).
+    type PatternCategoryWithParameters = Prisma.PatternCategoryGetPayload<{
+      include: {
+        parameters: { where: { status: 'ACTIVE' }; orderBy: { sortOrder: 'asc' } };
+      };
+    }>;
+    let category: PatternCategoryWithParameters | null = null;
+    let requiredRoleKeys = new Set<string>();
+    if (calc.categoryId) {
+      category = await this.prisma.patternCategory.findUnique({
+        where: { id: calc.categoryId },
+        include: {
+          parameters: {
+            where: { status: 'ACTIVE' },
+            orderBy: { sortOrder: 'asc' },
+          },
+        },
+      });
+      if (!category) throw new PatternCategoryNotFoundException();
+      if (category.status !== 'ACTIVE') {
+        throw new PatternCategoryInactiveException();
+      }
+      requiredRoleKeys = new Set(
+        category.parameters
+          .filter((p) => p.inputType === 'AREA_M2_BY_SIZE')
+          .map((p) => p.roleKey),
+      );
+
+      // areas[].roleKey валидируем только если категория задана —
+      // иначе backend принимает любые строки (фактически их не должно
+      // быть, UI не покажет колонки расхода).
+      for (let i = 0; i < calc.sizes.length; i += 1) {
+        const row = calc.sizes[i];
+        for (let j = 0; j < row.areas.length; j += 1) {
+          const a = row.areas[j];
+          if (!requiredRoleKeys.has(a.roleKey)) {
+            throw new BadRequestException({
+              statusCode: 400,
+              code: 'ORDER_NEW_PRODUCT_AREA_ROLE_INVALID',
+              message: `Параметр «${a.roleKey}» не входит в группу «${category.name}»`,
+              path: ['newProductCalculation', 'sizes', i, 'areas', j, 'roleKey'],
+            });
+          }
+        }
+      }
+    }
+
+    // Размеры — валидируем existence только если хоть один передан.
+    if (calc.sizes.length > 0) {
+      const sizeIds = Array.from(new Set(calc.sizes.map((s) => s.sizeId)));
+      const knownSizes = await this.prisma.size.findMany({
+        where: { id: { in: sizeIds } },
+        select: { id: true },
+      });
+      if (knownSizes.length !== sizeIds.length) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'SIZE_NOT_FOUND',
+          message: 'Один из размеров не найден в справочнике',
+        });
+      }
+    }
+
+    // Опционально: техкарта. Если выбрана — валидируем активность.
+    // Совместимость с категорией проверяем только когда заданы оба.
+    if (calc.techCardId) {
+      await this.techCards.assertTechCardUsable(calc.techCardId);
+      if (category && requiredRoleKeys.size > 0) {
+        await this.assertTechCardCompatibleWithCategory(
+          calc.techCardId,
+          requiredRoleKeys,
+        );
+      }
+    }
+
+    if (dto.routeTemplateId) {
+      await this.assertRouteTemplateUsable(dto.routeTemplateId);
+    }
+    if (dto.clientId) {
+      await this.assertClientUsable(dto.clientId);
+    }
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const number = await this.numbers.nextNumber(tx);
+
+      const newPattern = await tx.patternItem.create({
+        data: {
+          name: category
+            ? `${category.name} / заказ ${number}`
+            : `Новое изделие · заказ ${number}`,
+          article: `CUSTOM-${number}`,
+          categoryId: category?.id ?? null,
+          status: 'ACTIVE',
+        },
+      });
+
+      const materialAreasData: Prisma.PatternMaterialAreaCreateManyInput[] =
+        [];
+      for (const row of calc.sizes) {
+        for (const a of row.areas) {
+          materialAreasData.push({
+            patternItemId: newPattern.id,
+            sizeId: row.sizeId,
+            materialRole: a.roleKey,
+            areaM2: new Prisma.Decimal(a.areaM2),
+          });
+        }
+      }
+      if (materialAreasData.length > 0) {
+        await tx.patternMaterialArea.createMany({
+          data: materialAreasData,
+        });
+      }
+
+      const legacyProductId = await this.ensureLegacyProductForPattern(
+        newPattern.id,
+        tx,
+      );
+
+      const companyDivisionIdForCreate =
+        await this.resolveCompanyDivisionIdForOrder(
+          tx,
+          dto.companyDivisionId,
+        );
+      const finishedGoodsWarehouseIdForCreate =
+        await this.resolveFinishedGoodsWarehouseIdForOrder(
+          tx,
+          dto.finishedGoodsWarehouseId,
+        );
+      const { customerUnitPrice, customerCurrency } =
+        resolveCustomerPriceAndCurrency(
+          dto.customerUnitPrice ?? undefined,
+          dto.customerCurrency ?? undefined,
+        );
+
+      const orderRow = await tx.order.create({
+        data: {
+          number,
+          customer: dto.customer ?? null,
+          orderDate: new Date(dto.orderDate),
+          dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
+          color: dto.color ?? null,
+          comment: dto.comment ?? null,
+          status: OrderStatus.DRAFT,
+          companyDivisionId: companyDivisionIdForCreate,
+          routeTemplateId: dto.routeTemplateId ?? null,
+          techCardId: calc.techCardId ?? null,
+          patternItemId: newPattern.id,
+          clientId: dto.clientId ?? null,
+          customerUnitPrice:
+            customerUnitPrice == null
+              ? null
+              : new Prisma.Decimal(customerUnitPrice),
+          customerCurrency: customerCurrency ?? null,
+          finishedGoodsWarehouseId:
+            finishedGoodsWarehouseIdForCreate ?? null,
+          materialsAndHardwareCostPolicy:
+            resolveMaterialsAndHardwareCostPolicy(
+              dto.materialsAndHardwareCostPolicy,
+              'create',
+            ) ?? 'INCLUDE',
+          productCreationMode: 'CREATE_FOR_CALCULATION',
+          patternDevelopmentCostRub:
+            calc.patternDevelopmentCostRub == null
+              ? null
+              : new Prisma.Decimal(calc.patternDevelopmentCostRub),
+          // items создаются только если размеры переданы. Допустимо
+          // создать заказ-черновик без OrderItem'ов — расчёт потом
+          // потребует их через `startCalculation` (`ORDER_ITEMS_REQUIRED`).
+          ...(calc.sizes.length > 0
+            ? {
+                items: {
+                  create: calc.sizes.map((row) => ({
+                    productId: legacyProductId,
+                    sizeId: row.sizeId,
+                    qtyPlan: row.qtyPlan,
+                  })),
+                },
+              }
+            : {}),
+        },
+      });
+
+      await this.orderOperationPlan.recalculateAndWrite(orderRow.id, tx);
+      await this.syncOrderRouteStepsSnapshot(orderRow.id, tx);
+      await this.rebuildMaterialRequirementsSnapshot(orderRow.id, tx);
+
+      await this.audit.log(
+        {
+          event: 'ORDER_CREATED',
+          entityType: 'ORDER',
+          entityId: orderRow.id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            number: orderRow.number,
+            productId: legacyProductId,
+            companyDivisionId: orderRow.companyDivisionId,
+            qtyPlanTotal: calc.sizes.reduce(
+              (s, i) => s + i.qtyPlan,
+              0,
+            ),
+            sizeIds: calc.sizes.map((s) => s.sizeId),
+            routeTemplateId: orderRow.routeTemplateId,
+            techCardId: orderRow.techCardId,
+            patternItemId: orderRow.patternItemId,
+            clientId: orderRow.clientId,
+            productCreationMode: 'CREATE_FOR_CALCULATION',
+            inlinePatternCategoryId: category?.id ?? null,
+            inlinePatternMaterialAreaCount: materialAreasData.length,
+            patternDevelopmentCostRub:
+              calc.patternDevelopmentCostRub ?? null,
+          },
+        },
+        tx,
+      );
+
+      return orderRow;
+    });
+
+    return this.getOne(created.id);
+  }
+
+  /**
+   * Inline-создание изделия: проверяет, что у выбранной техкарты есть
+   * `TechCardMaterialLine.materialRole` для каждого `AREA_M2_BY_SIZE`-
+   * параметра категории. Иначе кидает 409
+   * `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY` с `missingRoleKeys`.
+   */
+  private async assertTechCardCompatibleWithCategory(
+    techCardId: string,
+    requiredRoleKeys: Set<string>,
+  ): Promise<void> {
+    if (requiredRoleKeys.size === 0) return;
+    const lines = await this.prisma.techCardMaterialLine.findMany({
+      where: { techCardId },
+      select: { materialRole: true },
+    });
+    const present = new Set<string>();
+    for (const l of lines) {
+      if (l.materialRole) present.add(l.materialRole);
+    }
+    const missing: string[] = [];
+    for (const role of requiredRoleKeys) {
+      if (!present.has(role)) missing.push(role);
+    }
+    if (missing.length > 0) {
+      throw new TechCardNotCompatibleWithCategoryException(missing);
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // LIST
   // -------------------------------------------------------------------------
 
@@ -697,6 +998,9 @@ export class OrdersService {
     operationTimePlanSec: number | null;
     operationPlanCalculatedAt: Date | null;
     operationPlanWarnings: Prisma.JsonValue | null;
+    /** Inline-создание изделия из формы заказа. */
+    productCreationMode: string;
+    patternDevelopmentCostRub: Prisma.Decimal | null;
     items: { qtyPlan: number; product: { id: string; name: string; color: string } | null }[];
     passports: { qtyGood: number; status: PassportStatus }[];
   }): OrderListItemDto {
@@ -800,6 +1104,10 @@ export class OrdersService {
       operationPlanWarnings: normalizeOperationPlanWarnings(
         o.operationPlanWarnings,
       ),
+      productCreationMode: normalizeProductCreationMode(o.productCreationMode),
+      patternDevelopmentCostRub: o.patternDevelopmentCostRub
+        ? o.patternDevelopmentCostRub.toString()
+        : null,
     };
   }
 
@@ -2370,6 +2678,15 @@ export class OrdersService {
       operationPlanSourceUpdatedAt: freshness.sourceUpdatedAt
         ? freshness.sourceUpdatedAt.toISOString()
         : null,
+      // Inline-создание изделия из формы заказа: режим + стоимость
+      // разработки лекала. Default `EXISTING_PATTERN` + null для
+      // исторических заказов.
+      productCreationMode: normalizeProductCreationMode(
+        order.productCreationMode,
+      ),
+      patternDevelopmentCostRub: order.patternDevelopmentCostRub
+        ? order.patternDevelopmentCostRub.toString()
+        : null,
       items: order.items.map((it) => {
         const s = sizes.find((x) => x.id === it.sizeId);
         return {
@@ -3032,6 +3349,30 @@ function normalizeMaterialsAndHardwareCostPolicy(
   )
     ? (normalized as OrderMaterialsAndHardwareCostPolicy)
     : 'INCLUDE';
+}
+
+/**
+ * Inline-создание изделия из формы заказа (см.
+ * `prisma/schema.prisma::Order.productCreationMode`). Нормализует
+ * значение из БД (хранится свободной строкой) к whitelist-у; иначе
+ * fallback на `EXISTING_PATTERN` (исторические заказы).
+ */
+const ORDER_PRODUCT_CREATION_MODE_VALUES = [
+  'EXISTING_PATTERN',
+  'CREATE_FOR_CALCULATION',
+  'SEND_TO_CONSTRUCTOR',
+] as const;
+type OrderProductCreationModeValue =
+  (typeof ORDER_PRODUCT_CREATION_MODE_VALUES)[number];
+
+function normalizeProductCreationMode(
+  raw: string | null | undefined,
+): OrderProductCreationModeValue {
+  if (typeof raw !== 'string') return 'EXISTING_PATTERN';
+  const v = raw.trim().toUpperCase() as OrderProductCreationModeValue;
+  return ORDER_PRODUCT_CREATION_MODE_VALUES.includes(v)
+    ? v
+    : 'EXISTING_PATTERN';
 }
 
 /**

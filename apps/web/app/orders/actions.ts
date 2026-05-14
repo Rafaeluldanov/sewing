@@ -224,6 +224,13 @@ function buildCreateDto(form: FormData): CreateOrderDto {
   const applications = parseApplicationsJson(form);
   const { customerUnitPrice, customerCurrency } =
     parseCustomerPriceFromForm(form);
+  // Inline-сценарий «Создать изделие → Сохранить изделие» (см.
+  // `apps/web/app/admin/orders/new/create-product-inline.tsx`).
+  // Hidden input `newProductCalculationJson` несёт JSON со снимком
+  // inline-формы. Если поле есть — переключаем DTO в режим
+  // `CREATE_FOR_CALCULATION` и шлём `newProductCalculation`
+  // (backend сам создаст PatternItem / PatternMaterialArea / Product).
+  const inlineCalc = parseNewProductCalculationJson(form);
   return {
     orderDate,
     productId,
@@ -252,6 +259,93 @@ function buildCreateDto(form: FormData): CreateOrderDto {
     applications,
     customerUnitPrice,
     customerCurrency,
+    ...(inlineCalc
+      ? {
+          productMode: 'CREATE_FOR_CALCULATION' as const,
+          newProductCalculation: inlineCalc,
+        }
+      : {}),
+  };
+}
+
+/**
+ * Inline-сценарий «Создать изделие → Сохранить изделие»: hidden
+ * input `newProductCalculationJson` содержит JSON со снимком inline-
+ * формы (`SavedInlineProductPayload`). Здесь:
+ *   - читаем строку, парсим JSON;
+ *   - выкидываем UI-only поля (`categoryName`, `techCardName`,
+ *     `sizeCode`, `areas[i].label`) — backend их не ждёт;
+ *   - возвращаем DTO, ожидаемый
+ *     `CreateOrderNewProductCalculationSchema` в shared.
+ *
+ * Любой невалидный/пустой JSON → `null` — заказ создаётся как
+ * обычный EXISTING_PATTERN.
+ */
+function parseNewProductCalculationJson(form: FormData): {
+  categoryId?: string | null;
+  techCardId?: string | null;
+  patternDevelopmentCostRub?: string | null;
+  sizes: {
+    sizeId: string;
+    qtyPlan: number;
+    areas: { roleKey: string; areaM2: string }[];
+  }[];
+} | null {
+  const raw = form.get('newProductCalculationJson');
+  if (raw === null) return null;
+  const text = String(raw).trim();
+  if (text === '') return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!parsed || typeof parsed !== 'object') return null;
+  const p = parsed as Record<string, unknown>;
+  const rawSizes = Array.isArray(p.sizes) ? p.sizes : [];
+  const sizes: {
+    sizeId: string;
+    qtyPlan: number;
+    areas: { roleKey: string; areaM2: string }[];
+  }[] = [];
+  for (const s of rawSizes) {
+    if (!s || typeof s !== 'object') continue;
+    const sr = s as Record<string, unknown>;
+    const sizeId = typeof sr.sizeId === 'string' ? sr.sizeId : '';
+    const qty = Number(sr.qtyPlan);
+    if (!sizeId || !Number.isFinite(qty) || qty <= 0) continue;
+    const areasRaw = Array.isArray(sr.areas) ? sr.areas : [];
+    const areas: { roleKey: string; areaM2: string }[] = [];
+    for (const a of areasRaw) {
+      if (!a || typeof a !== 'object') continue;
+      const ar = a as Record<string, unknown>;
+      const roleKey = typeof ar.roleKey === 'string' ? ar.roleKey : '';
+      const areaM2 =
+        typeof ar.areaM2 === 'string'
+          ? ar.areaM2
+          : typeof ar.areaM2 === 'number'
+            ? String(ar.areaM2)
+            : '';
+      if (roleKey && areaM2) areas.push({ roleKey, areaM2 });
+    }
+    sizes.push({ sizeId, qtyPlan: Math.trunc(qty), areas });
+  }
+  return {
+    categoryId:
+      typeof p.categoryId === 'string' && p.categoryId.length > 0
+        ? p.categoryId
+        : null,
+    techCardId:
+      typeof p.techCardId === 'string' && p.techCardId.length > 0
+        ? p.techCardId
+        : null,
+    patternDevelopmentCostRub:
+      typeof p.patternDevelopmentCostRub === 'string' &&
+      p.patternDevelopmentCostRub.length > 0
+        ? p.patternDevelopmentCostRub
+        : null,
+    sizes,
   };
 }
 
@@ -399,6 +493,67 @@ function explainApiError(e: unknown): string {
     return `${prefix}${e.message}`;
   }
   return 'Не удалось выполнить запрос';
+}
+
+/**
+ * Inline-создание изделия из формы заказа (см.
+ * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+ * `apps/api/src/modules/orders/orders.service.ts::createWithInlinePattern`).
+ *
+ * Принимает уже собранный `CreateOrderDto` (с `productMode =
+ * CREATE_FOR_CALCULATION` и непустым `newProductCalculation`),
+ * валидирует через тот же Zod-контракт, что использует обычная
+ * `createOrderAction`, и редиректит на admin-карточку нового заказа.
+ *
+ * Сознательно НЕ через FormData: клиент собирает структурированный
+ * объект (категория, техкарта, размерная матрица, стоимость разработки)
+ * и шлёт его JSON-ом в server action — парсить такое из FormData
+ * было бы громоздко и ненадёжно по точности Decimal.
+ */
+export interface CreateOrderForCalculationResult {
+  ok?: boolean;
+  error?: string;
+  orderId?: string;
+  /** Адресные `missingRoleKeys` для UI техкарты. */
+  missingRoleKeys?: string[];
+}
+
+export async function createOrderForCalculationAction(
+  dtoRaw: unknown,
+): Promise<CreateOrderForCalculationResult> {
+  const parsed = CreateOrderSchema.safeParse(dtoRaw);
+  if (!parsed.success) {
+    return {
+      error:
+        parsed.error.issues[0]?.message ?? 'Невалидные данные заказа',
+    };
+  }
+  try {
+    const created = await createOrder(parsed.data);
+    revalidatePath('/orders');
+    revalidatePath('/admin/orders');
+    revalidatePath(`/admin/orders/${created.id}`);
+    return { ok: true, orderId: created.id };
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    if (e instanceof ApiRequestError) {
+      // Извлекаем `missingRoleKeys`, если backend отдал
+      // `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY`.
+      const payload = (e as { payload?: unknown }).payload as
+        | { missingRoleKeys?: unknown }
+        | undefined;
+      const rawList =
+        payload && Array.isArray(payload.missingRoleKeys)
+          ? payload.missingRoleKeys
+          : undefined;
+      const missing =
+        rawList && rawList.every((x) => typeof x === 'string')
+          ? (rawList as string[])
+          : undefined;
+      return { error: explainApiError(e), missingRoleKeys: missing };
+    }
+    return { error: explainApiError(e) };
+  }
 }
 
 export async function createOrderAction(

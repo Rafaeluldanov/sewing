@@ -25,6 +25,7 @@ import { Package } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { SizeDto } from '@sewing/shared/orders';
+import type { PatternCategoryListItemDto } from '@sewing/shared/pattern-categories';
 import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type {
   RouteTemplateDetailDto,
@@ -37,6 +38,7 @@ import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listClients } from '@/lib/clients-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
 import { listSizes } from '@/lib/orders-api';
+import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { listPatterns } from '@/lib/patterns-api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { listTechCards } from '@/lib/tech-cards-api';
@@ -59,6 +61,7 @@ export default async function AdminOrderNewPage() {
   let techCards: TechCardTemplateSummaryDto[] = [];
   let clients: ClientDto[] = [];
   let patterns: PatternListItemDto[] = [];
+  let patternCategories: PatternCategoryListItemDto[] = [];
   let companyDivisions: CompanyDivisionDto[] = [];
   let warehouses: WarehouseSummaryDto[] = [];
   let error: string | null = null;
@@ -66,7 +69,7 @@ export default async function AdminOrderNewPage() {
     // Этап «Номенклатура = Лекала»: больше не грузим список Product —
     // в форме его нет, backend сам подставит legacy Product через
     // `OrdersService.ensureLegacyProductForPattern()`.
-    const [sz, rt, tc, cl, pt, cd, wh] = await Promise.allSettled([
+    const [sz, rt, tc, cl, pt, pcat, cd, wh] = await Promise.allSettled([
       listSizes(),
       listRouteTemplates({ isActive: true }),
       listTechCards({ isActive: true }),
@@ -75,6 +78,10 @@ export default async function AdminOrderNewPage() {
       // это единственная видимая номенклатура, менеджер не должен
       // видеть архив в селекте.
       listPatterns({ status: 'ACTIVE' }),
+      // Inline-создание изделия из формы заказа: активные группы
+      // номенклатуры для селекта «Группа номенклатуры» в модалке
+      // «Создать изделие».
+      listPatternCategories({ status: 'ACTIVE' }),
       // PHASE 1 «CompanyDivision как master-справочник» (см.
       // `docs/domain.md §«Подразделения заказа»`): подгружаем
       // только активные карточки подразделений для select-а.
@@ -92,6 +99,7 @@ export default async function AdminOrderNewPage() {
     techCards = tc.status === 'fulfilled' ? tc.value : [];
     clients = cl.status === 'fulfilled' ? cl.value : [];
     patterns = pt.status === 'fulfilled' ? pt.value : [];
+    patternCategories = pcat.status === 'fulfilled' ? pcat.value : [];
     companyDivisions = cd.status === 'fulfilled' ? cd.value : [];
     warehouses = wh.status === 'fulfilled' ? wh.value : [];
   } catch (e) {
@@ -150,6 +158,7 @@ export default async function AdminOrderNewPage() {
         techCards={techCards}
         clients={clients}
         patterns={patterns}
+        patternCategories={patternCategories}
         companyDivisions={companyDivisions}
         warehouses={warehouses}
         today={today}

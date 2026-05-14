@@ -1284,6 +1284,23 @@ model Order {
   /// сообщить количество материалов и фурнитуры по его заказу.
   materialsAndHardwareCostPolicy String @default("INCLUDE")
 
+  /// Inline-создание изделия из формы заказа (см.
+  /// `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
+  /// `apps/api/src/modules/orders/orders.service.ts::create`).
+  ///
+  /// Режим заведения «Изделия» по заказу:
+  ///   - `EXISTING_PATTERN`         — стандартный путь, default;
+  ///   - `CREATE_FOR_CALCULATION`   — backend в той же транзакции
+  ///     create-заказа автоматически создаёт `PatternItem` +
+  ///     `PatternMaterialArea[]` + technical Product;
+  ///   - `SEND_TO_CONSTRUCTOR`      — зарезервировано (UI-заглушка).
+  productCreationMode       String   @default("EXISTING_PATTERN")
+  /// Стоимость разработки лекала из inline-сценария «Сделать расчёт»
+  /// (см. `productCreationMode = CREATE_FOR_CALCULATION`).
+  /// Управленческое поле — НЕ участвует в `OrderCostEstimate` /
+  /// `WorkshopNeed` / `OrderOperationPlan` / складских движениях.
+  patternDevelopmentCostRub Decimal? @db.Decimal(12, 2)
+
   @@index([status])
   @@index([orderDate])
   @@index([createdAt])
@@ -1295,6 +1312,7 @@ model Order {
   @@index([companyDivisionId])
   @@index([finishedGoodsWarehouseId])
   @@index([materialsAndHardwareCostPolicy])
+  @@index([productCreationMode])
 }
 
 /// Карточка клиента (управленческий справочник, см. `docs/domain.md
@@ -2381,6 +2399,13 @@ model TechCardTemplate {
   code      String   @unique
   name      String
   isActive  Boolean  @default(true)
+  /// Soft-привязка техкарты к группе номенклатуры (`PatternCategory`).
+  /// Этап «Inline-создание изделия из формы заказа»: модалка «Создать
+  /// изделие» предзаполняет materialLines по AREA_M2_BY_SIZE параметрам
+  /// категории. На остальных формах поле опционально и nullable.
+  /// `onDelete: SetNull` — архивация/удаление категории не сносит техкарту.
+  patternCategoryId String?
+  patternCategory   PatternCategory? @relation(fields: [patternCategoryId], references: [id], onDelete: SetNull)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -2389,6 +2414,7 @@ model TechCardTemplate {
   orders         Order[]
 
   @@index([isActive])
+  @@index([patternCategoryId])
 }
 
 /// Строка материала в шаблоне техкарты. На MVP — простая линейная
@@ -3003,6 +3029,9 @@ model PatternCategory {
 
   patterns   PatternItem[]
   parameters PatternCategoryParameter[]
+  /// Этап «Inline-создание изделия из формы заказа»: техкарты,
+  /// опционально привязанные к этой группе (см. `TechCardTemplate.patternCategoryId`).
+  techCards  TechCardTemplate[]
 
   @@index([status])
   @@index([sortOrder])

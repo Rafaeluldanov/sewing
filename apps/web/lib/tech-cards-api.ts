@@ -23,6 +23,11 @@ export function listTechCards(
   if (query.isActive !== undefined) {
     params.set('isActive', String(query.isActive));
   }
+  // Inline-создание изделия из формы заказа: фильтр по группе
+  // номенклатуры (см. `TechCardTemplate.patternCategoryId`).
+  if (query.patternCategoryId) {
+    params.set('patternCategoryId', query.patternCategoryId);
+  }
   if (query.search) params.set('search', query.search);
   const qs = params.toString();
   const path = qs.length > 0 ? `/tech-cards?${qs}` : '/tech-cards';

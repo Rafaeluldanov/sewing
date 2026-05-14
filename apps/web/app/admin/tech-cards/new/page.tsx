@@ -6,6 +6,7 @@ import {
   AdminSectionHeader,
 } from '@/components/admin';
 import { listPatterns } from '@/lib/patterns-api';
+import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { TechCardForm } from '../tech-card-form';
 
 export const dynamic = 'force-dynamic';
@@ -48,6 +49,21 @@ export default async function AdminTechCardsNewPage() {
   } catch {
     patternItems = [];
   }
+  // Активные группы номенклатур для кнопки «Подтянуть из группы».
+  // Те же гарантии сериализации: только plain `{ id, name }`, без
+  // Date/DTO целиком.
+  let patternCategories: { id: string; name: string }[] = [];
+  try {
+    const list = await listPatternCategories({ status: 'ACTIVE' });
+    if (Array.isArray(list)) {
+      patternCategories = list.map((c) => ({
+        id: String(c?.id ?? ''),
+        name: String(c?.name ?? ''),
+      }));
+    }
+  } catch {
+    patternCategories = [];
+  }
   return (
     <AdminPageShell
       icon={<ClipboardList size={22} strokeWidth={1.6} aria-hidden />}
@@ -62,7 +78,11 @@ export default async function AdminTechCardsNewPage() {
     >
       <AdminCard>
         <AdminSectionHeader title="Параметры" />
-        <TechCardForm mode="create" patternItems={patternItems} />
+        <TechCardForm
+          mode="create"
+          patternItems={patternItems}
+          patternCategories={patternCategories}
+        />
       </AdminCard>
     </AdminPageShell>
   );
