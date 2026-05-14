@@ -1068,18 +1068,25 @@ function ProductCreateTab({
           )}
         </AdminCard>
 
-        {/* Превью видим только когда выбрано существующее лекало. */}
-        {isSelecting && (
-          <AdminCard className="admin-order-card admin-order-card--hero">
-            <header className="admin-order-card__header">
-              <span className="admin-order-card__icon admin-order-card__icon--violet">
-                <ImageIcon size={18} strokeWidth={1.7} aria-hidden />
-              </span>
-              <h2 className="admin-order-card__title">Превью изделия</h2>
-            </header>
-            <PatternHeroPreview pattern={selectedPattern} />
-          </AdminCard>
-        )}
+        {/* Превью видно всегда. В CREATING/CREATED блок «Изделие»
+            берёт всю ширину (`--full-row`); чтобы превью не висело
+            в половинной колонке под широким блоком, тоже растягиваем
+            его на всю строку. В EMPTY/SELECTING остаётся правой
+            колонкой 2-колоночной сетки. */}
+        <AdminCard
+          className={
+            'admin-order-card admin-order-card--hero' +
+            (isCreating || isCreated ? ' admin-order-card--full-row' : '')
+          }
+        >
+          <header className="admin-order-card__header">
+            <span className="admin-order-card__icon admin-order-card__icon--violet">
+              <ImageIcon size={18} strokeWidth={1.7} aria-hidden />
+            </span>
+            <h2 className="admin-order-card__title">Превью изделия</h2>
+          </header>
+          <PatternHeroPreview pattern={selectedPattern} />
+        </AdminCard>
       </div>
 
       {/* Нижние карточки (Производство, Нанесение, План по размерам)
