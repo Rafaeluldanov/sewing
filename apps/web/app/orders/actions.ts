@@ -264,8 +264,28 @@ function buildCreateDto(form: FormData): CreateOrderDto {
           productMode: 'CREATE_FOR_CALCULATION' as const,
           newProductCalculation: inlineCalc,
         }
-      : {}),
+      : parseSendToConstructorMode(form)
+        ? {
+            productMode: 'SEND_TO_CONSTRUCTOR' as const,
+          }
+        : {}),
   };
+}
+
+/**
+ * Этап «Отправить изделие конструктору»: hidden input
+ * `productCreationMode` со значением `SEND_TO_CONSTRUCTOR` сигналит,
+ * что DRAFT-PatternItem был создан отдельным server action-ом
+ * (`saveConstructorDraftAction`) и его id лежит в `patternItemId`.
+ * Backend в этом случае создаёт обычный заказ с привязкой к
+ * pattern-у, но `Order.productCreationMode` пишет как
+ * `SEND_TO_CONSTRUCTOR` — для UI-плашки и блокировки расчёта до
+ * возврата лекала.
+ */
+function parseSendToConstructorMode(form: FormData): boolean {
+  const raw = form.get('productCreationMode');
+  if (typeof raw !== 'string') return false;
+  return raw.trim() === 'SEND_TO_CONSTRUCTOR';
 }
 
 /**

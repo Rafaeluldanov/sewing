@@ -36,6 +36,7 @@ export * from './dashboard';
 export * from './printers';
 export * from './routes';
 export * from './tech-cards';
+export * from './constructor-tasks';
 export * from './display-screens';
 export * from './master-calls';
 export * from './master-actions';

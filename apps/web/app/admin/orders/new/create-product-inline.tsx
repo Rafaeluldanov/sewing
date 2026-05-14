@@ -27,10 +27,12 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
+  type DragEvent,
   type FormEvent,
 } from 'react';
-import { Plus, X } from 'lucide-react';
+import { Paperclip, Plus, Upload, X } from 'lucide-react';
 import type {
   CompatibleTechCardDto,
   CompatibleTechCardsResponseDto,
@@ -42,9 +44,15 @@ import type { SizeDto } from '@sewing/shared/orders';
 import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import {
+  CONSTRUCTOR_TASK_FILE_MAX_COUNT,
+  CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES,
+  type SaveConstructorDraftResultDto,
+} from '@sewing/shared/constructor-tasks';
+import {
   loadCompatibleTechCardsAction,
   loadPatternCategoryDetailAction,
 } from './inline-product-actions';
+import { saveConstructorDraftAction } from './constructor-task-action';
 import { CreateCategoryWindow } from './create-category-window';
 import {
   CreateTechCardWindow,
@@ -72,6 +80,33 @@ export interface SavedInlineProductPayload {
   }>;
 }
 
+/**
+ * Результат сохранения вкладки `constructor` («Отправить изделие
+ * конструктору»). В отличие от `SavedInlineProductPayload`, это уже
+ * запись в БД (`PatternItem (DRAFT)` + `ConstructorTask (NEW)`) —
+ * backend вернул нам id-шники, и родительская форма заказа
+ * подставляет `patternItemId` в hidden input для последующего
+ * создания заказа.
+ */
+export interface SavedConstructorDraftPayload {
+  taskId: string;
+  patternItemId: string;
+  patternName: string;
+  patternArticle: string;
+  sizeRowsCount: number;
+  filesCount: number;
+}
+
+/**
+ * Discriminated union — что именно сохранено в inline-форме изделия.
+ * Родитель (`admin-create-order-form.tsx`) разводит две ветки:
+ *   - `kind: 'calculate'`  → CREATE_FOR_CALCULATION (как раньше);
+ *   - `kind: 'constructor'` → SEND_TO_CONSTRUCTOR (новая ветка).
+ */
+export type InlineProductSaveResult =
+  | { kind: 'calculate'; payload: SavedInlineProductPayload }
+  | { kind: 'constructor'; result: SavedConstructorDraftPayload };
+
 interface SizeRowState {
   key: string;
   sizeId: string;
@@ -94,15 +129,32 @@ interface Props {
    * массив пуст — модалка просто покажет disabled-сообщение.
    */
   initialPatterns?: PatternListItemDto[];
-  /** Колбэк локального сохранения. Родитель кладёт payload в state. */
-  onSave: (payload: SavedInlineProductPayload) => void;
+  /**
+   * Колбэк сохранения. Discriminated union: либо локальный payload
+   * для расчёта (`kind: 'calculate'`), либо результат уже созданной
+   * в БД заявки конструктору (`kind: 'constructor'`).
+   */
+  onSave: (result: InlineProductSaveResult) => void;
   /** Колбэк выхода из inline-режима (например, «Назад»). */
   onCancel: () => void;
   /**
-   * Предзаполнение формы (режим «Редактировать»). Если задано,
-   * inline-форма стартует с этими значениями.
+   * Предзаполнение формы (режим «Редактировать» или сценарий
+   * «Отправить конструктору» из карточки сохранённого изделия).
+   *
+   * - На вкладке `calculate` — повторно заполняет все поля calc-формы.
+   * - На вкладке `constructor` — служит «источником истины»: показывает
+   *   read-only сводку и берёт из неё размеры для таблицы погонных
+   *   метров. БЕЗ `initialValue` constructor-tab блокируется и
+   *   подсказывает менеджеру сначала сохранить изделие в calc.
    */
   initialValue?: SavedInlineProductPayload | null;
+  /**
+   * Какая вкладка открыта при монтировании. Дефолт — `'calculate'`.
+   * Родитель передаёт `'constructor'`, когда пользователь нажал
+   * «Отправить конструктору» в карточке уже сохранённого изделия
+   * (см. `SavedInlineProductCard` в `admin-create-order-form.tsx`).
+   */
+  initialTab?: TabId;
 }
 
 let __rowSeq = 0;
@@ -135,8 +187,9 @@ export function CreateProductInline({
   onCancel,
   initialValue = null,
   initialPatterns = [],
+  initialTab = 'calculate',
 }: Props) {
-  const [tab, setTab] = useState<TabId>('calculate');
+  const [tab, setTab] = useState<TabId>(initialTab);
 
   const [categories, setCategories] =
     useState<PatternCategoryListItemDto[]>(initialCategories);
@@ -165,6 +218,33 @@ export function CreateProductInline({
 
   const [showCategoryWindow, setShowCategoryWindow] = useState(false);
   const [showTechCardWindow, setShowTechCardWindow] = useState(false);
+
+  // ── Вкладка `constructor` («Отправить изделие конструктору») ────────
+  // Локальный state, который при «Сохранить изделие» отправляется на
+  // backend через `saveConstructorDraftAction`. После успешного ответа
+  // родительская форма получает `kind: 'constructor'` payload и
+  // подставляет `patternItemId` в hidden input заказа.
+  const [constructorRows, setConstructorRows] = useState<
+    Array<{
+      key: string;
+      sizeId: string;
+      sizeCode: string;
+      kulirkaMeters: string;
+      kashkorseMeters: string;
+    }>
+  >([]);
+  // Pre-populate constructor rows from order sizes ONE TIME при первом
+  // переключении на вкладку — пользователь сразу видит все размеры
+  // заказа и заполняет только числа. Если переключаться туда-обратно,
+  // правки сохраняются.
+  const [constructorRowsInitialized, setConstructorRowsInitialized] =
+    useState(false);
+  const [constructorComment, setConstructorComment] = useState('');
+  const [constructorFiles, setConstructorFiles] = useState<File[]>([]);
+  const [constructorSubmitting, setConstructorSubmitting] = useState(false);
+  const [constructorError, setConstructorError] = useState<string | null>(null);
+  const [isDraggingFiles, setIsDraggingFiles] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const sortedSizes = useMemo(
     () => [...sizes].sort((a, b) => a.sortOrder - b.sortOrder),
@@ -294,6 +374,187 @@ export function CreateProductInline({
     }));
   }, [areaParameters]);
 
+  // При первом переключении на вкладку конструктора инициализируем
+  // строки погонных метров. Источник — `initialValue.sizes` (то, что
+  // менеджер уже сохранил в calc-вкладке). Если изделие не сохранено
+  // — рендерим заглушку «Сначала сохраните изделие», и эта инициализация
+  // не сработает.
+  useEffect(() => {
+    if (tab !== 'constructor' || constructorRowsInitialized) return;
+    if (!initialValue || initialValue.sizes.length === 0) return;
+    setConstructorRows(
+      initialValue.sizes.map((s, idx) => ({
+        key: `cr_${Date.now().toString(36)}_${idx}`,
+        sizeId: s.sizeId,
+        sizeCode: s.sizeCode,
+        kulirkaMeters: '',
+        kashkorseMeters: '',
+      })),
+    );
+    setConstructorRowsInitialized(true);
+  }, [tab, constructorRowsInitialized, initialValue]);
+
+  // Updater для строки (Кулирка/Кашкорсе). Сам размер read-only —
+  // его задаёт сохранённое изделие, менеджер на этой вкладке его
+  // не меняет (см. ТЗ: «тянет данные из сохранённого изделия»).
+  const updateConstructorRow = useCallback(
+    (
+      key: string,
+      patch: Partial<{ kulirkaMeters: string; kashkorseMeters: string }>,
+    ) => {
+      setConstructorRows((prev) =>
+        prev.map((r) => (r.key === key ? { ...r, ...patch } : r)),
+      );
+    },
+    [],
+  );
+
+  // Принять List<File> от drag-drop ИЛИ от <input type="file">.
+  // Фильтруем по размеру + лимиту количества; ошибки складываем
+  // в `constructorError`, чтобы менеджер сразу видел причину отказа.
+  const acceptDroppedFiles = useCallback(
+    (incoming: FileList | File[]) => {
+      setConstructorError(null);
+      const arr = Array.from(incoming);
+      if (arr.length === 0) return;
+      const next = [...constructorFiles];
+      const errors: string[] = [];
+      for (const f of arr) {
+        if (f.size <= 0) {
+          errors.push(`«${f.name}»: пустой файл`);
+          continue;
+        }
+        if (f.size > CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES) {
+          const mb = Math.round(CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES / 1024 / 1024);
+          errors.push(`«${f.name}»: больше ${mb} МБ`);
+          continue;
+        }
+        if (next.length >= CONSTRUCTOR_TASK_FILE_MAX_COUNT) {
+          errors.push(
+            `Лимит вложений: ${CONSTRUCTOR_TASK_FILE_MAX_COUNT}. Удалите лишнее перед добавлением новых.`,
+          );
+          break;
+        }
+        next.push(f);
+      }
+      setConstructorFiles(next);
+      if (errors.length > 0) setConstructorError(errors.join(' · '));
+    },
+    [constructorFiles],
+  );
+
+  const removeConstructorFile = useCallback((idx: number) => {
+    setConstructorFiles((prev) => prev.filter((_, i) => i !== idx));
+  }, []);
+
+  function onDropFiles(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFiles(false);
+    if (e.dataTransfer?.files) acceptDroppedFiles(e.dataTransfer.files);
+  }
+
+  function onDragOverFiles(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    if (!isDraggingFiles) setIsDraggingFiles(true);
+  }
+
+  function onDragLeaveFiles(e: DragEvent<HTMLDivElement>) {
+    e.preventDefault();
+    e.stopPropagation();
+    setIsDraggingFiles(false);
+  }
+
+  async function onSubmitConstructor(e: FormEvent) {
+    e.preventDefault();
+    setConstructorError(null);
+
+    // Constructor-tab гейтится на сохранённое изделие (см.
+    // рендер ниже — без `initialValue` показываем заглушку и кнопка
+    // submit недоступна), но защитимся ещё раз — иначе мы не знаем,
+    // какой calc-payload отправить backend-у.
+    if (!initialValue) {
+      setConstructorError(
+        'Сначала сохраните изделие на вкладке «Сделать расчёт».',
+      );
+      return;
+    }
+
+    // Валидация перед отправкой — backend всё равно перепроверит,
+    // но менеджер увидит ошибку быстрее.
+    const cleanRows = constructorRows.filter((r) => r.sizeId.trim() !== '');
+    if (cleanRows.length === 0) {
+      setConstructorError('Добавьте хотя бы один размер.');
+      return;
+    }
+    const hasAnyMeters = cleanRows.some(
+      (r) => r.kulirkaMeters.trim() !== '' || r.kashkorseMeters.trim() !== '',
+    );
+    if (!hasAnyMeters) {
+      setConstructorError(
+        'Заполните хотя бы одно значение Кулирки или Кашкорсе — иначе конструктору нечего считать.',
+      );
+      return;
+    }
+    const sizeIdSeen = new Set<string>();
+    for (const r of cleanRows) {
+      if (sizeIdSeen.has(r.sizeId)) {
+        setConstructorError(`Размер «${r.sizeCode || r.sizeId}» добавлен дважды.`);
+        return;
+      }
+      sizeIdSeen.add(r.sizeId);
+    }
+
+    setConstructorSubmitting(true);
+    try {
+      // Собираем calc-payload из уже сохранённого изделия. ВАЖНО:
+      // `patternDevelopmentCostRub` в этот payload НЕ кладём — стоимость
+      // разработки касается только сценария «Сделать расчёт» (мы её
+      // не платим конструктору, а считаем себестоимость собственного
+      // лекала). См. ТЗ: «Отправить тянет все данные кроме стоимости
+      // разработки лекала».
+      const calcPayload = {
+        categoryId: initialValue.categoryId,
+        techCardId: initialValue.techCardId,
+        sizes: initialValue.sizes.map((s) => ({
+          sizeId: s.sizeId,
+          qtyPlan: s.qtyPlan,
+          areas: s.areas.map((a) => ({
+            roleKey: a.roleKey,
+            areaM2: a.areaM2,
+          })),
+        })),
+      };
+      const result = await saveConstructorDraftAction(
+        {
+          calcPayload,
+          comment: constructorComment.trim(),
+          sizeRows: cleanRows.map((r) => ({
+            sizeId: r.sizeId,
+            sizeCodeSnapshot: r.sizeCode,
+            kulirkaMeters:
+              r.kulirkaMeters.trim() === ''
+                ? null
+                : r.kulirkaMeters.trim().replace(',', '.'),
+            kashkorseMeters:
+              r.kashkorseMeters.trim() === ''
+                ? null
+                : r.kashkorseMeters.trim().replace(',', '.'),
+          })),
+        },
+        constructorFiles,
+      );
+      if (!result.ok || !result.result) {
+        setConstructorError(result.error ?? 'Не удалось сохранить заявку');
+        return;
+      }
+      onSave({ kind: 'constructor', result: result.result });
+    } finally {
+      setConstructorSubmitting(false);
+    }
+  }
+
   function onSubmit(e: FormEvent) {
     e.preventDefault();
     setSubmitError(null);
@@ -338,13 +599,16 @@ export function CreateProductInline({
       : null;
 
     onSave({
-      categoryId: categoryId === '' ? null : categoryId,
-      categoryName,
-      techCardId: techCardId === '' ? null : techCardId,
-      techCardName,
-      patternDevelopmentCostRub:
-        devCost.trim() === '' ? null : devCost.trim().replace(',', '.'),
-      sizes: sizesPayload,
+      kind: 'calculate',
+      payload: {
+        categoryId: categoryId === '' ? null : categoryId,
+        categoryName,
+        techCardId: techCardId === '' ? null : techCardId,
+        techCardName,
+        patternDevelopmentCostRub:
+          devCost.trim() === '' ? null : devCost.trim().replace(',', '.'),
+        sizes: sizesPayload,
+      },
     });
   }
 
@@ -638,22 +902,322 @@ export function CreateProductInline({
         </div>
       )}
 
-      {tab === 'constructor' && (
+      {tab === 'constructor' && !initialValue && (
         <div className="cpi-stub">
           <p>
-            Заявка конструктору пока недоступна — модель отправки лекала на
-            разработку появится отдельной задачей.
+            Прежде чем отправить конструктору, заполните и сохраните
+            изделие на вкладке «Сделать расчёт».
           </p>
           <p className="cpi-muted">
-            На MVP используйте вкладку «Сделать расчет».
+            Категория, размеры и расход материалов берутся из сохранённого
+            изделия — здесь вы только добавите документы и комментарий
+            конструктору.
           </p>
           <button
             type="button"
             className="cpi-btn cpi-btn--ghost"
-            onClick={onCancel}
+            onClick={() => setTab('calculate')}
           >
-            Вернуться
+            Перейти к «Сделать расчёт»
           </button>
+        </div>
+      )}
+
+      {tab === 'constructor' && initialValue && (
+        <div className="cpi-form cpi-form--constructor">
+          {/* Read-only сводка по сохранённому изделию — менеджер видит,
+              что именно уйдёт конструктору, и не вводит эти поля повторно
+              (см. ТЗ: «Отправить тянет все данные из сохранённого
+              изделия кроме стоимости разработки лекала»). */}
+          <div
+            style={{
+              border: '1px solid #cbd5e1',
+              borderRadius: 6,
+              padding: '0.75rem',
+              background: '#f8fafc',
+              display: 'grid',
+              gridTemplateColumns: 'auto 1fr',
+              gap: '4px 12px',
+              fontSize: '0.88rem',
+            }}
+          >
+            <strong style={{ gridColumn: '1 / -1' }}>
+              Изделие сохранено
+            </strong>
+            <span style={{ color: '#475569' }}>Группа</span>
+            <span>
+              {initialValue.categoryName ?? (
+                <span className="cpi-muted">не указана</span>
+              )}
+            </span>
+            <span style={{ color: '#475569' }}>Техкарта</span>
+            <span>
+              {initialValue.techCardName ?? (
+                <span className="cpi-muted">не выбрана</span>
+              )}
+            </span>
+            <span style={{ color: '#475569' }}>Размеров / тираж</span>
+            <span>
+              {initialValue.sizes.length === 0 ? (
+                <span className="cpi-muted">не заданы</span>
+              ) : (
+                <>
+                  {initialValue.sizes
+                    .map((s) => `${s.sizeCode}: ${s.qtyPlan}`)
+                    .join(', ')}{' '}
+                  <span style={{ color: '#475569' }}>
+                    (всего{' '}
+                    {initialValue.sizes
+                      .reduce((acc, s) => acc + (s.qtyPlan ?? 0), 0)
+                      .toLocaleString('ru-RU')}{' '}
+                    шт)
+                  </span>
+                </>
+              )}
+            </span>
+          </div>
+
+          {/* Таблица «Размер / Кулирка / Кашкорсе» — погонные метры.
+              Сами размеры взяты из сохранённого изделия (read-only),
+              менеджер только вводит Кулирку и Кашкорсе на одно изделие.
+              Эта таблица потом превратится в `PatternItemSizeParameterValue`
+              номенклатуры (см. форму «Погонные метры» на /admin/patterns/[id]). */}
+          <div className="cpi-field">
+            <label>Погонные метры для конструктора</label>
+            <span className="cpi-muted">
+              Введите расход на одно изделие в погонных метрах (м пог.).
+              Любую ячейку можно оставить пустой — конструктор уточнит её
+              при разработке лекала.
+            </span>
+            <div style={{ overflowX: 'auto', marginTop: '0.5rem' }}>
+              <table className="admin-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: 120 }}>Размер</th>
+                    <th>Кулирка, м пог.</th>
+                    <th>Кашкорсе, м пог.</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {constructorRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={3}>
+                        <span className="cpi-muted">
+                          У сохранённого изделия нет размеров. Вернитесь
+                          на «Сделать расчёт» и добавьте размеры.
+                        </span>
+                      </td>
+                    </tr>
+                  ) : (
+                    constructorRows.map((row) => (
+                      <tr key={row.key}>
+                        <td>
+                          <strong>{row.sizeCode}</strong>
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={row.kulirkaMeters}
+                            onChange={(e) =>
+                              updateConstructorRow(row.key, {
+                                kulirkaMeters: e.target.value,
+                              })
+                            }
+                            placeholder="м пог."
+                            disabled={constructorSubmitting}
+                            style={{ width: 120, textAlign: 'right' }}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            type="text"
+                            inputMode="decimal"
+                            value={row.kashkorseMeters}
+                            onChange={(e) =>
+                              updateConstructorRow(row.key, {
+                                kashkorseMeters: e.target.value,
+                              })
+                            }
+                            placeholder="м пог."
+                            disabled={constructorSubmitting}
+                            style={{ width: 120, textAlign: 'right' }}
+                          />
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+
+          {/* Прикреплённые документы */}
+          <div className="cpi-field">
+            <label>Документы для конструктора</label>
+            <div
+              onDrop={onDropFiles}
+              onDragOver={onDragOverFiles}
+              onDragLeave={onDragLeaveFiles}
+              style={{
+                border: isDraggingFiles
+                  ? '2px dashed var(--admin-primary, #2563eb)'
+                  : '1px dashed var(--admin-border, #cbd5e1)',
+                borderRadius: 6,
+                padding: '0.75rem',
+                textAlign: 'center',
+                background: isDraggingFiles
+                  ? 'rgba(37, 99, 235, 0.05)'
+                  : 'transparent',
+                transition: 'background 120ms ease',
+              }}
+            >
+              <Upload
+                size={20}
+                strokeWidth={1.6}
+                aria-hidden
+                style={{ marginBottom: 6, opacity: 0.7 }}
+              />
+              <p style={{ margin: 0, fontSize: '0.9rem' }}>
+                Перетащите файлы сюда или{' '}
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={constructorSubmitting}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: 'var(--admin-primary, #2563eb)',
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                    padding: 0,
+                    font: 'inherit',
+                  }}
+                >
+                  выберите вручную
+                </button>
+              </p>
+              <p
+                className="cpi-muted"
+                style={{ margin: '4px 0 0 0', fontSize: '0.8rem' }}
+              >
+                Любой формат (PDF, JPG, PNG, DWG, ZIP), до{' '}
+                {Math.round(
+                  CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES / 1024 / 1024,
+                )}{' '}
+                МБ на файл, максимум {CONSTRUCTOR_TASK_FILE_MAX_COUNT}{' '}
+                файлов.
+              </p>
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: 'none' }}
+                onChange={(e) => {
+                  if (e.target.files) acceptDroppedFiles(e.target.files);
+                  // Сбрасываем value, чтобы можно было повторно выбрать
+                  // тот же файл (если пользователь его удалил и снова
+                  // нажал «выберите вручную»).
+                  e.target.value = '';
+                }}
+                disabled={constructorSubmitting}
+              />
+            </div>
+            {constructorFiles.length > 0 && (
+              <ul
+                className="cpi-file-list"
+                style={{
+                  listStyle: 'none',
+                  padding: 0,
+                  margin: '0.5rem 0 0 0',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '0.25rem',
+                }}
+              >
+                {constructorFiles.map((f, idx) => (
+                  <li
+                    key={`${f.name}-${idx}`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: '0.5rem',
+                      padding: '0.25rem 0.5rem',
+                      border: '1px solid var(--admin-border, #e5e7eb)',
+                      borderRadius: 4,
+                      fontSize: '0.85rem',
+                    }}
+                  >
+                    <Paperclip size={14} strokeWidth={1.6} aria-hidden />
+                    <span style={{ flex: 1, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                      {f.name}
+                    </span>
+                    <span className="cpi-muted" style={{ fontSize: '0.8rem' }}>
+                      {(f.size / 1024).toFixed(0)} КБ
+                    </span>
+                    <button
+                      type="button"
+                      className="cpi-btn cpi-btn--ghost"
+                      onClick={() => removeConstructorFile(idx)}
+                      disabled={constructorSubmitting}
+                      aria-label="Удалить файл"
+                    >
+                      <X size={14} strokeWidth={1.6} aria-hidden />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+
+          {/* Комментарий конструктору */}
+          <div className="cpi-field">
+            <label htmlFor="cpi-constructor-comment">
+              Комментарий конструктору
+            </label>
+            <textarea
+              id="cpi-constructor-comment"
+              value={constructorComment}
+              onChange={(e) => setConstructorComment(e.target.value)}
+              rows={4}
+              maxLength={4000}
+              placeholder="Например: материал кулирка плотностью 180 г/м², рисунок А4 в приложении"
+              disabled={constructorSubmitting}
+              style={{ width: '100%', resize: 'vertical' }}
+            />
+            <span className="cpi-muted" style={{ fontSize: '0.8rem' }}>
+              {constructorComment.length} / 4000
+            </span>
+          </div>
+
+          {constructorError && (
+            <div
+              className="error-box"
+              role="alert"
+              style={{ marginTop: '0.5rem' }}
+            >
+              <div className="error-box__msg">{constructorError}</div>
+            </div>
+          )}
+
+          <footer className="cpi-footer">
+            <button
+              type="button"
+              className="cpi-btn cpi-btn--ghost"
+              onClick={onCancel}
+              disabled={constructorSubmitting}
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              className="cpi-btn cpi-btn--primary"
+              onClick={onSubmitConstructor}
+              disabled={constructorSubmitting}
+            >
+              {constructorSubmitting ? 'Отправляем…' : 'Отправить'}
+            </button>
+          </footer>
         </div>
       )}
 

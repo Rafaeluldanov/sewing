@@ -874,12 +874,32 @@ export const CreateOrderSchema = z.object({
   }
 
   if (mode === 'SEND_TO_CONSTRUCTOR') {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      path: ['productMode'],
-      message:
-        'Вкладка «Отправить изделие конструктору» пока недоступна',
-    });
+    // Этап «Отправить изделие конструктору»: на момент parent submit
+    // создания заказа черновое изделие УЖЕ создано отдельным server
+    // action-ом `saveConstructorDraftAction` (внутри модалки, по клику
+    // «Сохранить изделие» на вкладке `constructor`). Действие создаёт
+    // `PatternItem (status='DRAFT')` + `ConstructorTask (status='NEW')`
+    // и возвращает `patternItemId`, который родительская форма
+    // сохраняет в hidden input как обычное `patternItemId`. Поэтому
+    // ровно как `EXISTING_PATTERN` — заказ должен иметь `patternItemId`,
+    // и НЕ должен иметь `newProductCalculation` (та форма заполняется
+    // только во вкладке «Сделать расчёт»).
+    if (!hasPattern) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['patternItemId'],
+        message:
+          'Нажмите «Сохранить изделие» на вкладке «Отправить конструктору» — без этого заказ не создать',
+      });
+    }
+    if (hasNewCalc) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['newProductCalculation'],
+        message:
+          'newProductCalculation допустим только для режима CREATE_FOR_CALCULATION',
+      });
+    }
     return;
   }
 

@@ -410,6 +410,11 @@ model Size {
   closureRequests                CuttingClosureRequest[]
   patternSizeFiles               PatternSizeFile[]
   patternMaterialAreas           PatternMaterialArea[]
+  /// Этап «Отправить изделие конструктору»: обратная связь от строк
+  /// `ConstructorTaskSizeRow`, ссылающихся на размер. `onDelete: SetNull`
+  /// со стороны строки задачи — удаление `Size` не сносит исторические
+  /// строки задач, sizeCode сохраняется в `sizeCodeSnapshot`.
+  constructorTaskSizeRows        ConstructorTaskSizeRow[]
   /// Этап «Погонные метры по размерам»: обратная связь от значений
   /// `PatternItemSizeParameterValue`, привязанных к этому размеру.
   /// `onDelete: Cascade` — удаление размера каскадно сносит значения.
@@ -819,6 +824,15 @@ model Employee {
   payrollAccrualDocumentsPaid      PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentPaidBy")
   payrollAccrualDocumentsCancelled PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentCancelledBy")
   payrollAccrualDocumentLines      PayrollAccrualDocumentLine[]
+
+  /// Этап «Отправить изделие конструктору»: обратные связи на
+  /// `ConstructorTask`. `createdBy` — менеджер, создавший задачу;
+  /// `assignedTo` — конструктор, на кого назначена (Nullable до
+  /// появления роли `CONSTRUCTOR` и кабинета конструктора).
+  /// `onDelete: SetNull` со стороны задачи — удаление учётки не
+  /// сносит исторические задачи.
+  constructorTasksCreated  ConstructorTask[] @relation("ConstructorTaskCreatedBy")
+  constructorTasksAssigned ConstructorTask[] @relation("ConstructorTaskAssignedTo")
 
   @@index([role])
   @@index([compensationType])
@@ -2965,6 +2979,12 @@ model PatternItem {
   /// Этап «Категории номенклатуры»: типизированный справочник
   /// категорий с параметрами площадей. См. `model PatternCategory`.
   category            PatternCategory?                @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  /// Этап «Отправить изделие конструктору» (см. `model ConstructorTask`
+  /// в конце файла): задача конструктору для DRAFT-pattern. 1:1 —
+  /// один черновик = один запрос. Когда `PatternItem.status` переходит
+  /// в `ACTIVE`, задача остаётся как история и должна быть переведена
+  /// в `DONE`.
+  constructorTask     ConstructorTask?
 
   @@index([status])
   @@index([categoryId])
@@ -5562,4 +5582,137 @@ model WorkInProgressMovement {
   @@index([passportId])
   @@index([sourceType, sourceId])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// «Заявка конструктору» (этап «Отправить изделие конструктору»).
+//
+// Контекст: при создании заказа менеджер во вкладке `constructor`
+// модалки «Изделие» (`apps/web/app/admin/orders/new/create-product-inline.tsx`)
+// собирает черновик отправки конструктору: таблицу «Размер / Кулирка
+// / Кашкорсе», вложенные документы, комментарий. Клик «Сохранить
+// изделие» вызывает server action, который атомарно создаёт:
+//   - `PatternItem` со `status='DRAFT'` (автогенерация name/article);
+//   - `PatternMaterialArea[]` (по строкам таблицы — конверсия
+//     `areaM2 = linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`,
+//     роли `MAIN_FABRIC`/`RIB` — см. `@sewing/shared/constructor-tasks`);
+//   - `ConstructorTask` со `status='NEW'`;
+//   - `ConstructorTaskSizeRow[]` (исходные погонные метры — для
+//     конструктора);
+//   - `ConstructorTaskFile[]` (перенесённые из multipart в
+//     `apps/api/uploads/constructor-tasks/<taskId>/...`).
+//
+// Заказ создаётся позже штатным `OrdersService.create` с этим
+// `patternItemId`. Заказ может пойти в расчёт «Потребности цеха»
+// сразу — `PatternMaterialArea[]` уже есть. Когда конструктор
+// завершит работу, лекало уточняется (реальные `PatternSizeFile`,
+// пересчитанные area), `PatternItem.status` переводится в `ACTIVE`,
+// `ConstructorTask.status` — в `DONE`.
+//
+// Связь 1:1 PatternItem ↔ ConstructorTask сознательно: один
+// черновик-pattern = один запрос конструктору. Multi-round правок
+// (две задачи на один pattern) в MVP не поддерживаются — если
+// конструктор вернул «нужны правки», менеджер редактирует
+// существующую задачу (статус → IN_PROGRESS).
+//
+// RBAC контроллера: `ADMIN` / `SHOP_MANAGER` (как у `tech-cards`).
+// Роль `CONSTRUCTOR` в `enum Role` в этом этапе НЕ добавляется —
+// поля `createdById`/`assignedToId` уже nullable, кабинет
+// конструктора будет отдельным PR.
+// ---------------------------------------------------------------------------
+
+model ConstructorTask {
+  id            String      @id @default(cuid())
+  patternItemId String      @unique
+  patternItem   PatternItem @relation(fields: [patternItemId], references: [id], onDelete: Cascade)
+
+  /// Жизненный цикл задачи (свободная строка ради расширяемости —
+  /// см. `@sewing/shared/constructor-tasks::CONSTRUCTOR_TASK_STATUSES`):
+  ///   - `NEW`         — менеджер отправил, конструктор ещё не взял;
+  ///   - `IN_PROGRESS` — конструктор работает (выставит из кабинета);
+  ///   - `DONE`        — конструктор завершил, лекало готово;
+  ///   - `CANCELLED`   — менеджер отменил.
+  /// При создании задачи всегда `NEW` (DRAFT-фазы у задачи нет —
+  /// модалка либо сохраняет, либо ничего; orphan-DRAFT не плодим).
+  status String @default("NEW")
+
+  /// Произвольный комментарий менеджера для конструктора. Дефолт —
+  /// пустая строка (а не null), чтобы UI всегда мог `value={comment}`
+  /// без `?? ''`.
+  comment String @default("")
+
+  /// FK на `Employee.id` — кто создал задачу (менеджер). Nullable,
+  /// чтобы удаление сотрудника не сносило аудиторскую запись задачи.
+  createdById  String?
+  createdBy    Employee? @relation("ConstructorTaskCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  /// FK на `Employee.id` — конструктор, на кого назначена. Nullable
+  /// до появления роли `CONSTRUCTOR` и реальных назначений из кабинета.
+  assignedToId String?
+  assignedTo   Employee? @relation("ConstructorTaskAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+  /// Момент перевода в `NEW` (т.е. когда менеджер нажал «Сохранить
+  /// изделие»). В MVP совпадает с `createdAt` — мы создаём сразу
+  /// как `NEW`. Поле зарезервировано на случай, если будущая фаза
+  /// `DRAFT` понадобится.
+  submittedAt DateTime?
+
+  sizeRows ConstructorTaskSizeRow[]
+  files    ConstructorTaskFile[]
+
+  @@index([status])
+  @@index([assignedToId, status])
+}
+
+/// Одна строка таблицы «Размер / Кулирка / Кашкорсе» в задаче
+/// конструктору. Значения — погонные метры на одно изделие (как в
+/// форме «Погонные метры» на `/admin/patterns/[id]`). На сохранении
+/// задачи backend также создаёт `PatternMaterialArea` для каждой
+/// строки с конверсией
+/// `areaM2 = linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`
+/// (см. `@sewing/shared/constructor-tasks`).
+model ConstructorTaskSizeRow {
+  id     String          @id @default(cuid())
+  taskId String
+  task   ConstructorTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  /// Управленческий порядок отрисовки строк в таблице.
+  sortOrder Int
+
+  /// FK на `Size.id`. Nullable: если размер из `Size` будет удалён,
+  /// строка задачи не теряется; UI fallback-ит на `sizeCodeSnapshot`.
+  sizeId String?
+  size   Size?   @relation(fields: [sizeId], references: [id], onDelete: SetNull)
+
+  /// Снимок `Size.code` в момент создания строки — защита от
+  /// переименования / удаления `Size`. Всегда заполнен.
+  sizeCodeSnapshot String
+
+  /// Расход «Кулирки» (основное полотно) — м пог. на одно изделие.
+  /// Nullable: менеджер может оставить пустым.
+  kulirkaMeters Decimal? @db.Decimal(10, 4)
+  /// Расход «Кашкорсе» (рибана для манжет/пояса/горловины) — м пог.
+  /// на одно изделие. Nullable.
+  kashkorseMeters Decimal? @db.Decimal(10, 4)
+
+  @@unique([taskId, sizeId], name: "ConstructorTaskSizeRow_task_size_uniq")
+  @@index([taskId, sortOrder])
+}
+
+/// Вложенный документ задачи конструктору. URL — публичный путь
+/// файла на диске `apps/api/uploads/constructor-tasks/<taskId>/...`
+/// (см. `ConstructorTasksStorageService`). Формат файла НЕ ограничен
+/// (PDF / JPG / PNG / DWG / ZIP / ...) — валидация только по размеру.
+model ConstructorTaskFile {
+  id               String          @id @default(cuid())
+  taskId           String
+  task             ConstructorTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  fileUrl          String
+  originalFileName String
+  contentType      String
+  sizeBytes        Int
+  createdAt        DateTime        @default(now())
+
+  @@index([taskId])
 }

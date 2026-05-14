@@ -137,14 +137,15 @@ export class OrdersService {
     if (productMode === 'CREATE_FOR_CALCULATION') {
       return this.createWithInlinePattern(dto, actorEmployeeId);
     }
-    if (productMode === 'SEND_TO_CONSTRUCTOR') {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'ORDER_SEND_TO_CONSTRUCTOR_NOT_IMPLEMENTED',
-        message:
-          'Вкладка «Отправить изделие конструктору» пока недоступна',
-      });
-    }
+    // SEND_TO_CONSTRUCTOR ведёт себя как EXISTING_PATTERN на уровне
+    // create: лекало уже создано отдельным server action-ом
+    // `saveConstructorDraftAction` (см. apps/web/app/admin/orders/new/
+    // constructor-task-action.ts), и в форме лежит `patternItemId`
+    // указывающий на DRAFT-pattern. Эта ветка отличается только тем,
+    // что мы записываем `productCreationMode = 'SEND_TO_CONSTRUCTOR'`
+    // в Order — чтобы UI карточки заказа знал, что лекало пока в
+    // разработке у конструктора. Сам путь создания идёт ниже по той
+    // же логике, что и EXISTING_PATTERN.
 
     // Этап «Номенклатура = Лекала» (см. `docs/recon-soft-integration.md
     // §«Номенклатура = Лекала»`): новая admin-форма присылает только
@@ -323,6 +324,17 @@ export class OrdersService {
               dto.materialsAndHardwareCostPolicy,
               'create',
             ) ?? 'INCLUDE',
+          // Этап «Отправить изделие конструктору»: если в DTO режим
+          // SEND_TO_CONSTRUCTOR — фиксируем это на заказе, чтобы UI
+          // мог показать плашку «Лекало в разработке у конструктора»
+          // и заблокировать запуск расчёта до возврата лекала.
+          // Для CREATE_FOR_CALCULATION эта ветка не используется
+          // (отдельный путь `createWithInlinePattern` выставляет
+          // productCreationMode сам, см. ниже).
+          productCreationMode:
+            productMode === 'SEND_TO_CONSTRUCTOR'
+              ? 'SEND_TO_CONSTRUCTOR'
+              : 'EXISTING_PATTERN',
           items: {
             create: dto.items.map((i) => ({
               productId: productIdForItems,

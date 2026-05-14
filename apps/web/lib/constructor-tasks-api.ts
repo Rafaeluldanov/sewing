@@ -1,0 +1,43 @@
+import 'server-only';
+import type {
+  ConstructorTaskDetailDto,
+  ConstructorTaskSummaryDto,
+  SaveConstructorDraftResultDto,
+} from '@sewing/shared/constructor-tasks';
+import { apiFetch, apiFetchMultipart } from './api';
+
+/**
+ * Клиент для `/api/constructor-tasks` (этап «Отправить изделие
+ * конструктору»). Используется:
+ *   - server action-ом `saveConstructorDraftAction` (создание задачи
+ *     при «Сохранить изделие» на вкладке `constructor`);
+ *   - RSC-страницами `/admin/constructor-tasks` (список / деталь).
+ */
+
+export function listConstructorTasks(): Promise<ConstructorTaskSummaryDto[]> {
+  return apiFetch<ConstructorTaskSummaryDto[]>('/constructor-tasks');
+}
+
+export function getConstructorTask(
+  id: string,
+): Promise<ConstructorTaskDetailDto> {
+  return apiFetch<ConstructorTaskDetailDto>(`/constructor-tasks/${id}`);
+}
+
+export function saveConstructorTaskDraft(
+  formData: FormData,
+): Promise<SaveConstructorDraftResultDto> {
+  return apiFetchMultipart<SaveConstructorDraftResultDto>(
+    '/constructor-tasks',
+    formData,
+  );
+}
+
+export function cancelConstructorTask(
+  id: string,
+): Promise<ConstructorTaskDetailDto> {
+  return apiFetch<ConstructorTaskDetailDto>(
+    `/constructor-tasks/${id}/cancel`,
+    { method: 'POST' },
+  );
+}

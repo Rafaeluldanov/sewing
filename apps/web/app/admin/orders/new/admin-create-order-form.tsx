@@ -98,6 +98,7 @@ import {
 import { SizePlanSelector } from './size-plan-selector';
 import {
   CreateProductInline,
+  type SavedConstructorDraftPayload,
   type SavedInlineProductPayload,
 } from './create-product-inline';
 
@@ -195,6 +196,20 @@ export function AdminCreateOrderForm({
     useState<ProductBlockMode>('EMPTY');
   const [savedInlineProduct, setSavedInlineProduct] =
     useState<SavedInlineProductPayload | null>(null);
+  // Этап «Отправить изделие конструктору»: результат уже созданной
+  // задачи (DRAFT PatternItem + ConstructorTask в БД). При сабмите
+  // заказа `patternItemId` пишется в hidden input, чтобы заказ
+  // привязался к DRAFT-pattern; `productCreationMode` отдельным
+  // hidden-ом помечает заказ как `SEND_TO_CONSTRUCTOR`.
+  const [savedConstructorTask, setSavedConstructorTask] =
+    useState<SavedConstructorDraftPayload | null>(null);
+  // На какой вкладке открыть модалку «Изделие» при следующем монтировании.
+  // По умолчанию — `calculate`. Меняется в `'constructor'`, когда
+  // пользователь жмёт «Отправить конструктору» в карточке сохранённого
+  // изделия (см. `SavedInlineProductCard`).
+  const [inlineInitialTab, setInlineInitialTab] = useState<
+    'calculate' | 'constructor'
+  >('calculate');
   const [state, formAction] = useFormState(createOrderAction, initialState);
 
   const [color, setColor] = useState<string>('');
@@ -492,10 +507,24 @@ export function AdminCreateOrderForm({
             onSelectExisting={() => setProductBlockMode('SELECTING')}
             onStartCreating={() => setProductBlockMode('CREATING')}
             savedInlineProduct={savedInlineProduct}
-            onEditSavedProduct={() => setProductBlockMode('CREATING')}
+            savedConstructorTask={savedConstructorTask}
+            onEditSavedProduct={() => {
+              setInlineInitialTab('calculate');
+              setProductBlockMode('CREATING');
+            }}
+            onSendSavedProductToConstructor={() => {
+              setInlineInitialTab('constructor');
+              setProductBlockMode('CREATING');
+            }}
             onDeleteSavedProduct={() => {
               setSavedInlineProduct(null);
+              setSavedConstructorTask(null);
+              // Также сбрасываем patternItemId, который мы выставили
+              // при сохранении задачи конструктору, чтобы submit не
+              // отправил его без CREATED-режима.
+              setPatternItemId('');
               setProductBlockMode('EMPTY');
+              setInlineInitialTab('calculate');
             }}
             inlineRender={
               productBlockMode === 'CREATING' ? (
@@ -505,6 +534,7 @@ export function AdminCreateOrderForm({
                   initialPatterns={patterns}
                   sizes={sortedSizes}
                   initialValue={savedInlineProduct}
+                  initialTab={inlineInitialTab}
                   onCancel={() => {
                     // «Отмена» внутри inline-формы возвращает в EMPTY,
                     // если ничего не было сохранено, и в CREATED, если
@@ -513,9 +543,22 @@ export function AdminCreateOrderForm({
                       savedInlineProduct ? 'CREATED' : 'EMPTY',
                     );
                   }}
-                  onSave={(payload) => {
-                    setSavedInlineProduct(payload);
-                    setProductBlockMode('CREATED');
+                  onSave={(result) => {
+                    if (result.kind === 'calculate') {
+                      setSavedInlineProduct(result.payload);
+                      setSavedConstructorTask(null);
+                      setProductBlockMode('CREATED');
+                    } else {
+                      // SEND_TO_CONSTRUCTOR: server action уже создал
+                      // DRAFT-PatternItem и ConstructorTask в БД.
+                      // Подставляем patternItemId как «выбранную
+                      // номенклатуру» заказа, чтобы parent submit
+                      // отправил его без дополнительной логики.
+                      setSavedConstructorTask(result.result);
+                      setSavedInlineProduct(null);
+                      setPatternItemId(result.result.patternItemId);
+                      setProductBlockMode('CREATED');
+                    }
                   }}
                 />
               ) : null
@@ -533,6 +576,31 @@ export function AdminCreateOrderForm({
             savedInlineProduct ? JSON.stringify(savedInlineProduct) : ''
           }
         />
+
+        {/* Этап «Отправить изделие конструктору»: hidden input
+            `productCreationMode` сигналит backend-у, что заказ нужно
+            создать со `productCreationMode = 'SEND_TO_CONSTRUCTOR'`.
+            patternItemId уже прокинут как поле `name="patternItemId"`
+            внутри `ProductCreateTab` (мы выставили его в state выше
+            при сохранении задачи). */}
+        {savedConstructorTask && (
+          <>
+            <input
+              type="hidden"
+              name="productCreationMode"
+              value="SEND_TO_CONSTRUCTOR"
+            />
+            {/* В CREATED-режиме SELECTING-блок с `<select name="patternItemId">`
+                не рендерится — но action ожидает поле `patternItemId`,
+                чтобы привязать заказ к DRAFT-pattern. Прокидываем
+                hidden-ом из state. */}
+            <input
+              type="hidden"
+              name="patternItemId"
+              value={savedConstructorTask.patternItemId}
+            />
+          </>
+        )}
 
         {/* === Tab placeholders for disabled tabs (smoke-friendly text) ===
             На MVP в create-mode мы рендерим только tab body «Продукция»;
@@ -825,7 +893,9 @@ function ProductCreateTab({
   onSelectExisting,
   onStartCreating,
   savedInlineProduct,
+  savedConstructorTask,
   onEditSavedProduct,
+  onSendSavedProductToConstructor,
   onDeleteSavedProduct,
   inlineRender,
 }: {
@@ -853,7 +923,15 @@ function ProductCreateTab({
   onSelectExisting: () => void;
   onStartCreating: () => void;
   savedInlineProduct: SavedInlineProductPayload | null;
+  /**
+   * Этап «Отправить изделие конструктору»: результат уже созданной
+   * задачи (DRAFT-PatternItem + ConstructorTask). В CREATED-режиме
+   * рендерим отдельную summary-карточку «Заявка конструктору».
+   */
+  savedConstructorTask: SavedConstructorDraftPayload | null;
   onEditSavedProduct: () => void;
+  /** Открыть модалку «Изделие» на вкладке `constructor`. */
+  onSendSavedProductToConstructor: () => void;
   onDeleteSavedProduct: () => void;
   /** Render inline-формы (CREATING-режим). */
   inlineRender: React.ReactNode;
@@ -911,6 +989,14 @@ function ProductCreateTab({
             <SavedInlineProductCard
               payload={savedInlineProduct}
               onEdit={onEditSavedProduct}
+              onSendToConstructor={onSendSavedProductToConstructor}
+              onDelete={onDeleteSavedProduct}
+            />
+          )}
+
+          {isCreated && savedConstructorTask && (
+            <SavedConstructorTaskCard
+              task={savedConstructorTask}
               onDelete={onDeleteSavedProduct}
             />
           )}
@@ -1152,10 +1238,18 @@ function ProductCreateTab({
 function SavedInlineProductCard({
   payload,
   onEdit,
+  onSendToConstructor,
   onDelete,
 }: {
   payload: SavedInlineProductPayload;
   onEdit: () => void;
+  /**
+   * Этап «Отправить изделие конструктору»: открывает модалку
+   * сразу на вкладке `constructor`, передавая текущий `payload`
+   * как `initialValue`. Backend в server action-е использует его
+   * как calc-payload для создания DRAFT-PatternItem.
+   */
+  onSendToConstructor: () => void;
   onDelete: () => void;
 }) {
   const totalQty = payload.sizes.reduce((s, r) => s + (r.qtyPlan ?? 0), 0);
@@ -1188,6 +1282,14 @@ function SavedInlineProductCard({
             onClick={onEdit}
           >
             Редактировать
+          </button>
+          <button
+            type="button"
+            className="admin-btn admin-btn--primary"
+            onClick={onSendToConstructor}
+            title="Открыть форму отправки лекала на разработку конструктору"
+          >
+            Отправить конструктору
           </button>
           <button
             type="button"
@@ -1247,6 +1349,89 @@ function SavedInlineProductCard({
         Изделие сохранено локально. Для создания заказа нажмите
         «Создать заказ» в шапке формы — backend создаст лекало и
         привяжет его к заказу.
+      </p>
+    </div>
+  );
+}
+
+/**
+ * Карточка-резюме «Заявка конструктору» в CREATED-режиме блока
+ * «Изделие». В отличие от {@link SavedInlineProductCard}, она НЕ
+ * предлагает «Редактировать» — DRAFT-PatternItem уже создан в БД,
+ * и редактирование не поддерживается в этой версии (см. ТЗ §«Что
+ * НЕ делаем»). Только кнопка «Удалить» — она снимает hidden
+ * `patternItemId` / `productCreationMode`, чтобы submit заказа
+ * прошёл без привязки к черновому лекалу.
+ *
+ * Сама запись `ConstructorTask` остаётся в БД — менеджер увидит её
+ * в `/admin/constructor-tasks` и может закрыть оттуда.
+ */
+function SavedConstructorTaskCard({
+  task,
+  onDelete,
+}: {
+  task: SavedConstructorDraftPayload;
+  onDelete: () => void;
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid #cbd5e1',
+        borderRadius: 8,
+        padding: '12px 14px',
+        background: '#f8fafc',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+      data-testid="saved-constructor-task-card"
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <strong style={{ fontSize: '0.95rem', color: '#0f172a' }}>
+          Заявка конструктору
+        </strong>
+        <div style={{ display: 'flex', gap: 6 }}>
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            onClick={onDelete}
+            style={{ color: '#b91c1c' }}
+          >
+            Открепить от заказа
+          </button>
+        </div>
+      </div>
+      <dl
+        style={{
+          margin: 0,
+          display: 'grid',
+          gridTemplateColumns: 'auto 1fr',
+          gap: '4px 12px',
+          fontSize: '0.88rem',
+        }}
+      >
+        <dt style={{ color: '#475569' }}>Изделие</dt>
+        <dd style={{ margin: 0 }}>
+          {task.patternName}{' '}
+          <span style={{ color: '#94a3b8' }}>({task.patternArticle})</span>
+        </dd>
+        <dt style={{ color: '#475569' }}>Размеров</dt>
+        <dd style={{ margin: 0 }}>{task.sizeRowsCount}</dd>
+        <dt style={{ color: '#475569' }}>Файлов</dt>
+        <dd style={{ margin: 0 }}>{task.filesCount}</dd>
+        <dt style={{ color: '#475569' }}>Статус</dt>
+        <dd style={{ margin: 0 }}>Новая · ждёт конструктора</dd>
+      </dl>
+      <p className="admin-muted" style={{ margin: 0, fontSize: '0.8rem' }}>
+        Лекало создано как черновик (DRAFT). После клика «Создать заказ» в
+        шапке формы заказ привяжется к этому лекалу и будет ждать
+        конструктора. Управление заявкой — в разделе «Заявки конструктору».
       </p>
     </div>
   );

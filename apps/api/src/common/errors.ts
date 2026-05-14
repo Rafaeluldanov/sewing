@@ -1235,6 +1235,65 @@ export class TechCardImageUploadInvalidException extends BusinessException {
 }
 
 /**
+ * Загруженный файл вложения задачи конструктору не прошёл валидацию
+ * (размер / попытка path-traversal в `originalname`). Расширение файла
+ * НЕ ограничено — конструктору можно слать любые форматы. См.
+ * `ConstructorTasksStorageService.saveTaskFile`.
+ */
+export class ConstructorTaskFileInvalidException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'CONSTRUCTOR_TASK_FILE_INVALID',
+      message,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * `ConstructorTask` не найдена. Используется в админских GET-эндпоинтах
+ * `/api/constructor-tasks/:id`.
+ */
+export class ConstructorTaskNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_NOT_FOUND',
+      'Заявка конструктору не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Payload `saveConstructorDraftAction` ссылается на размер `Size.id`,
+ * которого нет в справочнике. Защита от подделки/несинхронизированной
+ * формы — UI заполняет sizeId из активных размеров заказа.
+ */
+export class ConstructorTaskSizeNotFoundException extends BusinessException {
+  constructor(sizeId: string) {
+    super(
+      'CONSTRUCTOR_TASK_SIZE_NOT_FOUND',
+      `Размер ${sizeId} не найден в справочнике`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Недопустимый переход статуса заявки конструктору (напр. cancel
+ * `DONE`-задачи — лекало уже передано, отменять нечего).
+ */
+export class ConstructorTaskInvalidTransitionException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'CONSTRUCTOR_TASK_INVALID_TRANSITION',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Multipart-запрос upload-а изображения строки материала техкарты
  * пришёл без файла (`file` пустое или отсутствует).
  */
