@@ -526,8 +526,13 @@ export function CreateProductInline({
           })),
         })),
       };
-      const result = await saveConstructorDraftAction(
-        {
+      // Собираем FormData локально, потому что server actions в Next 14
+      // не принимают `File[]` как top-level аргумент. См. doc-комментарий
+      // к `saveConstructorDraftAction` и memory `feedback-server-action-file-array`.
+      const fd = new FormData();
+      fd.append(
+        'payload',
+        JSON.stringify({
           calcPayload,
           comment: constructorComment.trim(),
           sizeRows: cleanRows.map((r) => ({
@@ -542,9 +547,12 @@ export function CreateProductInline({
                 ? null
                 : r.kashkorseMeters.trim().replace(',', '.'),
           })),
-        },
-        constructorFiles,
+        }),
       );
+      for (const file of constructorFiles) {
+        fd.append('files', file, file.name);
+      }
+      const result = await saveConstructorDraftAction(fd);
       if (!result.ok || !result.result) {
         setConstructorError(result.error ?? 'Не удалось сохранить заявку');
         return;

@@ -1,0 +1,13 @@
+-- Добавляем значение `CONSTRUCTOR` в enum `Role` (см.
+-- `prisma/schema.prisma::enum Role` и `apps/web/app/constructor/`).
+--
+-- Кабинет конструктора: single-workspace роль (как `SHOPFLOOR_MASTER`),
+-- видит назначенные себе и общий пул `ConstructorTask.status='NEW'`,
+-- завершает задачу с загрузкой готовых DXF-лекал — backend атомарно
+-- переводит `PatternItem` DRAFT → ACTIVE и `ConstructorTask` IN_PROGRESS
+-- → DONE.
+--
+-- ALTER TYPE ... ADD VALUE безопасен и не требует таблицы-простоя:
+-- PostgreSQL добавляет значение без перезаписи существующих строк
+-- (Role хранится как enum в `Employee.role`).
+ALTER TYPE "Role" ADD VALUE 'CONSTRUCTOR';

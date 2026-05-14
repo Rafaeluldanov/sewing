@@ -1294,6 +1294,55 @@ export class ConstructorTaskInvalidTransitionException extends BusinessException
 }
 
 /**
+ * Конструктор пытается выполнить действие (assignSelf / updateComment /
+ * complete) с задачей, которую уже взял другой конструктор. ADMIN /
+ * SHOP_MANAGER эту проверку обходят (в контроллере мы не передаём
+ * `enforceOwnership = true` для них), поэтому исключение поднимается
+ * только для роли `CONSTRUCTOR`.
+ */
+export class ConstructorTaskAssignedToOtherException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_ASSIGNED_TO_OTHER',
+      'Задача уже назначена другому конструктору',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Попытка завершить задачу (`POST /:id/complete`), которая не находится
+ * в статусе `IN_PROGRESS`. Сценарии: задача ещё `NEW` (не взята в
+ * работу), уже `DONE` (повторное завершение), или `CANCELLED`.
+ */
+export class ConstructorTaskNotInProgressException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_NOT_IN_PROGRESS',
+      'Завершить можно только задачу в статусе «В работе»',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Набор `sizeId` в payload `complete` не совпадает с `task.sizeRows[]`
+ * — есть лишний размер либо нет файла на один из обязательных. UI
+ * рендерит по одному `<input type="file" name="file_<sizeId>">` на
+ * каждую строку task — обычно это значит, что пользователь не выбрал
+ * файл для всех полей.
+ */
+export class ConstructorTaskCompleteFilesMismatchException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'CONSTRUCTOR_TASK_COMPLETE_FILES_MISMATCH',
+      message,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
  * Multipart-запрос upload-а изображения строки материала техкарты
  * пришёл без файла (`file` пустое или отсутствует).
  */

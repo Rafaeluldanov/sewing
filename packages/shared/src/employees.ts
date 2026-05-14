@@ -42,6 +42,10 @@ export const EMPLOYEE_ROLES = [
   // `docs/domain.md §«Мастер цеха»`). Учётка заводится менеджером
   // через тот же `/admin/employees/new`, как и остальные сотрудники.
   'SHOPFLOOR_MASTER',
+  // Конструктор лекал (`Role.CONSTRUCTOR`, кабинет
+  // `apps/web/app/constructor/`). Single-workspace роль: единственная
+  // осмысленная страница — `/constructor`.
+  'CONSTRUCTOR',
 ] as const;
 export const EmployeeRoleSchema = z.enum(EMPLOYEE_ROLES);
 export type EmployeeRole = z.infer<typeof EmployeeRoleSchema>;

@@ -39,6 +39,7 @@ const ROLE_LABELS: Record<AdminVisibleRole, string> = {
   QC: 'ОТК',
   IRONING: 'ВТО',
   PACKING: 'Упаковка',
+  CONSTRUCTOR: 'Конструктор',
 };
 
 /**

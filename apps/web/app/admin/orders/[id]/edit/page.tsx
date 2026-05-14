@@ -30,6 +30,7 @@ import type {
   RouteTemplateSummaryDto,
 } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
+import type { PatternCategoryListItemDto } from '@sewing/shared/pattern-categories';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
@@ -40,6 +41,7 @@ import {
 } from '@/lib/company-settings-api';
 import { getOrder, listSizes } from '@/lib/orders-api';
 import { getPattern, listPatterns } from '@/lib/patterns-api';
+import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { getTechCard, listTechCards } from '@/lib/tech-cards-api';
 import { listWarehouses } from '@/lib/warehouses-api';
@@ -75,6 +77,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
   let techCards: TechCardTemplateSummaryDto[] = [];
   let clients: ClientDto[] = [];
   let patterns: PatternListItemDto[] = [];
+  let patternCategories: PatternCategoryListItemDto[] = [];
   let companyDivisions: CompanyDivisionDto[] = [];
   let warehouses: WarehouseSummaryDto[] = [];
   let error: string | null = null;
@@ -85,7 +88,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
     // PHASE 1 «CompanyDivision как master-справочник»: подгружаем
     // активные карточки подразделений вместе с остальными
     // справочниками.
-    const [sz, rt, tc, cl, pt, cd, wh] = await Promise.allSettled([
+    const [sz, rt, tc, cl, pt, cd, wh, pcat] = await Promise.allSettled([
       listSizes(),
       listRouteTemplates({ isActive: true }),
       listTechCards({ isActive: true }),
@@ -96,6 +99,10 @@ export default async function AdminOrderEditPage({ params }: Params) {
       // select-а «Склад выпуска готовой продукции» в форме
       // редактирования. Не путать со складом материалов.
       listWarehouses(),
+      // Этап «Inline-создание изделия в режиме редактирования»: те же
+      // активные группы номенклатуры, что используются на /admin/orders/new,
+      // нужны модалке «Создать изделие» в блоке «Изделие» edit-формы.
+      listPatternCategories({ status: 'ACTIVE' }),
     ]);
     if (sz.status === 'fulfilled') sizes = sz.value;
     else throw sz.reason;
@@ -105,6 +112,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
     patterns = pt.status === 'fulfilled' ? pt.value : [];
     companyDivisions = cd.status === 'fulfilled' ? cd.value : [];
     warehouses = wh.status === 'fulfilled' ? wh.value : [];
+    patternCategories = pcat.status === 'fulfilled' ? pcat.value : [];
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -276,6 +284,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
         techCards={techCards}
         clients={clients}
         patterns={patterns}
+        patternCategories={patternCategories}
         companyDivisions={companyDivisions}
         warehouses={warehouses}
         today={today}

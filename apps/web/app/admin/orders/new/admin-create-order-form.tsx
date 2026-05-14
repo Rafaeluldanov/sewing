@@ -1235,7 +1235,7 @@ function ProductCreateTab({
  * hidden input `newProductCalculationJson` и оформляются как
  * `productMode = CREATE_FOR_CALCULATION`.
  */
-function SavedInlineProductCard({
+export function SavedInlineProductCard({
   payload,
   onEdit,
   onSendToConstructor,
@@ -1366,7 +1366,7 @@ function SavedInlineProductCard({
  * Сама запись `ConstructorTask` остаётся в БД — менеджер увидит её
  * в `/admin/constructor-tasks` и может закрыть оттуда.
  */
-function SavedConstructorTaskCard({
+export function SavedConstructorTaskCard({
   task,
   onDelete,
 }: {

@@ -44,6 +44,15 @@ const DISPLAY_PATH = '/shopfloor/display';
 const SHOPFLOOR_MASTER_ROLE = 'SHOPFLOOR_MASTER';
 const SHOPFLOOR_MASTER_PATH = '/master';
 
+/**
+ * Учётка конструктора. Кабинет `/constructor` — единственная
+ * осмысленная страница, см. `apps/web/lib/rbac.ts`
+ * (`CONSTRUCTOR_ALLOWED_PATH`). Та же модель, что и у
+ * `SHOPFLOOR_MASTER` / `DISPLAY`.
+ */
+const CONSTRUCTOR_ROLE = 'CONSTRUCTOR';
+const CONSTRUCTOR_PATH = '/constructor';
+
 export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
   if (
@@ -93,6 +102,17 @@ export function middleware(req: NextRequest): NextResponse {
     return NextResponse.redirect(url);
   }
 
+  if (
+    role === CONSTRUCTOR_ROLE &&
+    !isConstructorPath(pathname) &&
+    !isApiPath(pathname)
+  ) {
+    const url = req.nextUrl.clone();
+    url.pathname = CONSTRUCTOR_PATH;
+    url.search = '';
+    return NextResponse.redirect(url);
+  }
+
   return NextResponse.next();
 }
 
@@ -104,6 +124,13 @@ function isShopfloorMasterPath(pathname: string): boolean {
   return (
     pathname === SHOPFLOOR_MASTER_PATH ||
     pathname.startsWith(`${SHOPFLOOR_MASTER_PATH}/`)
+  );
+}
+
+function isConstructorPath(pathname: string): boolean {
+  return (
+    pathname === CONSTRUCTOR_PATH ||
+    pathname.startsWith(`${CONSTRUCTOR_PATH}/`)
   );
 }
 

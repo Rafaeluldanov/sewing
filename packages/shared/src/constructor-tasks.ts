@@ -268,6 +268,98 @@ export interface SaveConstructorDraftResultDto {
 }
 
 // ---------------------------------------------------------------------------
+// Кабинет конструктора (`apps/web/app/constructor/`) — list / actions
+// ---------------------------------------------------------------------------
+
+/**
+ * Фильтр для `GET /api/constructor-tasks/my?scope=...`:
+ *   - `mine` — только назначенные на меня (`assignedToId == me`),
+ *     статусы `NEW` (если успели «забронировать» в UI) + `IN_PROGRESS`;
+ *   - `pool` — общий пул свободных (`assignedToId IS NULL` и
+ *     `status == 'NEW'`);
+ *   - `all`  — мои активные + общий пул (default для главного экрана
+ *     кабинета). DONE и CANCELLED скрыты.
+ *
+ * История завершённых задач конструктора (DONE) появится отдельным
+ * срезом позже — в первой итерации не показываем (комментарий-doc
+ * к `listForConstructor` в сервисе).
+ */
+export const CONSTRUCTOR_TASK_LIST_SCOPES = ['mine', 'pool', 'all'] as const;
+export const ConstructorTaskListScopeSchema = z.enum(
+  CONSTRUCTOR_TASK_LIST_SCOPES,
+);
+export type ConstructorTaskListScope = z.infer<
+  typeof ConstructorTaskListScopeSchema
+>;
+
+/**
+ * Префикс multipart-полей с файлами лекал в `POST /:id/complete`.
+ * Frontend для каждой строки `task.sizeRows` отправляет файл с
+ * `name = ${COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX}${sizeId}`,
+ * backend по этому префиксу матчит файлы с записями в payload-е.
+ */
+export const COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX = 'file_';
+
+/**
+ * Payload `PATCH /api/constructor-tasks/:id/comment`. Перезаписывает
+ * `ConstructorTask.comment` целиком (не diff/append). Ограничение по
+ * длине совпадает с `SaveConstructorDraftSchema.comment`.
+ */
+export const UpdateConstructorTaskCommentSchema = z.object({
+  comment: z
+    .string()
+    .max(4000, 'Комментарий слишком длинный (макс. 4000 символов)')
+    .transform((v) => v.trim())
+    .default(''),
+});
+export type UpdateConstructorTaskCommentDto = z.infer<
+  typeof UpdateConstructorTaskCommentSchema
+>;
+
+/**
+ * Payload `POST /api/constructor-tasks/:id/complete`. Сами файлы лекал
+ * передаются отдельным multipart-полем (см. `COMPLETE_..._FIELD_PREFIX`).
+ * В JSON-payload-е — только маппинг `sizeId -> fileFieldName`, чтобы
+ * backend знал, какой файл к какому размеру относится.
+ *
+ * Один файл на размер. Версия в `PatternSizeFile.version` инкрементится
+ * сервисом (не клиентом).
+ */
+export const CompleteConstructorTaskSchema = z.object({
+  sizeFiles: z
+    .array(
+      z.object({
+        sizeId: z.string().min(1, 'sizeId обязателен'),
+        fileFieldName: z
+          .string()
+          .min(1, 'fileFieldName обязателен')
+          .refine(
+            (v) => v.startsWith(COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX),
+            `fileFieldName должен начинаться с "${COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX}"`,
+          ),
+      }),
+    )
+    .min(1, 'Должен быть хотя бы один файл лекала')
+    .superRefine((rows, ctx) => {
+      const seen = new Set<string>();
+      for (let i = 0; i < rows.length; i += 1) {
+        const sid = rows[i]!.sizeId;
+        if (seen.has(sid)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [i, 'sizeId'],
+            message: 'Размер уже указан — дубликаты не допускаются',
+          });
+        }
+        seen.add(sid);
+      }
+    }),
+});
+export type CompleteConstructorTaskDto = z.infer<
+  typeof CompleteConstructorTaskSchema
+>;
+
+// ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 

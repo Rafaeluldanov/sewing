@@ -2,10 +2,13 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
   CONSTRUCTOR_TASK_FILE_MAX_COUNT,
+  COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX,
   generateDraftPatternArticle,
   generateDraftPatternName,
+  type CompleteConstructorTaskDto,
   type ConstructorTaskDetailDto,
   type ConstructorTaskFileDto,
+  type ConstructorTaskListScope,
   type ConstructorTaskSizeRowDto,
   type ConstructorTaskSummaryDto,
   type SaveConstructorDraftDto,
@@ -14,13 +17,19 @@ import {
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  ConstructorTaskAssignedToOtherException,
+  ConstructorTaskCompleteFilesMismatchException,
   ConstructorTaskFileInvalidException,
   ConstructorTaskInvalidTransitionException,
   ConstructorTaskNotFoundException,
+  ConstructorTaskNotInProgressException,
   ConstructorTaskSizeNotFoundException,
 } from '../../common/errors.js';
 import { ConstructorTasksStorageService } from './constructor-tasks-storage.service.js';
-import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
+import {
+  PatternsStorageService,
+  type UploadedFileLike,
+} from '../patterns/patterns-storage.service.js';
 
 /**
  * Сервис «Заявка конструктору».
@@ -46,6 +55,7 @@ export class ConstructorTasksService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: ConstructorTasksStorageService,
+    private readonly patternsStorage: PatternsStorageService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -303,6 +313,338 @@ export class ConstructorTasksService {
         createdAt: f.createdAt.toISOString(),
       })),
     };
+  }
+
+  // ---------------------------------------------------------------------------
+  // CONSTRUCTOR CABINET (`apps/web/app/constructor/`)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Список задач для кабинета конструктора. См.
+   * `ConstructorTaskListScope`:
+   *   - `mine` — назначенные на текущего конструктора (NEW + IN_PROGRESS);
+   *   - `pool` — общий пул свободных (assignedToId IS NULL и status NEW);
+   *   - `all`  — `mine ∪ pool` (default экрана списка).
+   *
+   * `DONE` и `CANCELLED` сейчас не показываем — для конструктора задача
+   * после завершения «уходит из кабинета», менеджер видит её в
+   * `/admin/constructor-tasks`. История завершённых конструктором задач
+   * — отдельный срез на будущее (см. ТЗ кабинета: scope MVP).
+   */
+  async listForConstructor(
+    employeeId: string,
+    scope: ConstructorTaskListScope,
+  ): Promise<ConstructorTaskSummaryDto[]> {
+    const where: Prisma.ConstructorTaskWhereInput = (() => {
+      if (scope === 'mine') {
+        return {
+          assignedToId: employeeId,
+          status: { in: ['NEW', 'IN_PROGRESS'] },
+        };
+      }
+      if (scope === 'pool') {
+        return { assignedToId: null, status: 'NEW' };
+      }
+      // `all`
+      return {
+        OR: [
+          {
+            assignedToId: employeeId,
+            status: { in: ['NEW', 'IN_PROGRESS'] },
+          },
+          { assignedToId: null, status: 'NEW' },
+        ],
+      };
+    })();
+
+    const tasks = await this.prisma.constructorTask.findMany({
+      where,
+      orderBy: { createdAt: 'desc' },
+      include: {
+        patternItem: { select: { name: true, article: true } },
+        createdBy: { select: { fullName: true } },
+        assignedTo: { select: { fullName: true } },
+        _count: { select: { files: true, sizeRows: true } },
+      },
+    });
+    return tasks.map((t) => this.toSummary(t));
+  }
+
+  /**
+   * «Взять задачу в работу» из кабинета конструктора.
+   *
+   * Идемпотентен:
+   *   - если задача уже принадлежит этому же конструктору и в
+   *     `IN_PROGRESS` — просто возвращаем актуальную карточку;
+   *   - если в `NEW` и не назначена никому — назначаем текущего и
+   *     переводим в `IN_PROGRESS`;
+   *   - если назначена другому — `ConstructorTaskAssignedToOtherException`
+   *     (только когда `enforceOwnership = true`; для ADMIN/SHOP_MANAGER
+   *     ручка работает как «забрать на себя»);
+   *   - если уже `DONE`/`CANCELLED` — `ConstructorTaskInvalidTransitionException`.
+   *
+   * Поле `submittedAt` не меняем: это фиксированный момент
+   * «менеджер нажал Сохранить изделие», конструктор assign-ом его не
+   * переоткрывает.
+   */
+  async assignSelf(
+    taskId: string,
+    employeeId: string,
+    enforceOwnership: boolean,
+  ): Promise<ConstructorTaskDetailDto> {
+    const existing = await this.prisma.constructorTask.findUnique({
+      where: { id: taskId },
+      select: { id: true, status: true, assignedToId: true },
+    });
+    if (!existing) throw new ConstructorTaskNotFoundException();
+
+    if (existing.status === 'DONE' || existing.status === 'CANCELLED') {
+      throw new ConstructorTaskInvalidTransitionException(
+        existing.status === 'DONE'
+          ? 'Задача уже завершена'
+          : 'Задача отменена менеджером',
+      );
+    }
+
+    if (
+      enforceOwnership &&
+      existing.assignedToId &&
+      existing.assignedToId !== employeeId
+    ) {
+      throw new ConstructorTaskAssignedToOtherException();
+    }
+
+    const alreadyMineAndInProgress =
+      existing.assignedToId === employeeId && existing.status === 'IN_PROGRESS';
+    if (!alreadyMineAndInProgress) {
+      await this.prisma.constructorTask.update({
+        where: { id: taskId },
+        data: { assignedToId: employeeId, status: 'IN_PROGRESS' },
+      });
+    }
+    return this.getOne(taskId);
+  }
+
+  /**
+   * Обновить `comment` задачи. На MVP комментарий — единое поле для
+   * менеджера и конструктора (не diff, не append): новое значение
+   * перезаписывает прежнее. Если конструктору важно сохранить
+   * исходный текст менеджера, он копирует его сам. Это сознательно
+   * простая модель — комментарии-история отдельным потоком на будущее.
+   *
+   * `enforceOwnership = true` гарантирует, что обычный CONSTRUCTOR
+   * меняет только то, что назначено лично ему. ADMIN/SHOP_MANAGER
+   * этот guard пропускает.
+   */
+  async updateComment(
+    taskId: string,
+    employeeId: string,
+    comment: string,
+    enforceOwnership: boolean,
+  ): Promise<ConstructorTaskDetailDto> {
+    const existing = await this.prisma.constructorTask.findUnique({
+      where: { id: taskId },
+      select: { id: true, status: true, assignedToId: true },
+    });
+    if (!existing) throw new ConstructorTaskNotFoundException();
+    if (existing.status === 'DONE' || existing.status === 'CANCELLED') {
+      throw new ConstructorTaskInvalidTransitionException(
+        'Нельзя править комментарий завершённой/отменённой задачи',
+      );
+    }
+    if (
+      enforceOwnership &&
+      existing.assignedToId &&
+      existing.assignedToId !== employeeId
+    ) {
+      throw new ConstructorTaskAssignedToOtherException();
+    }
+    await this.prisma.constructorTask.update({
+      where: { id: taskId },
+      data: { comment },
+    });
+    return this.getOne(taskId);
+  }
+
+  /**
+   * Завершить задачу: загрузить готовые DXF-лекала (по одному на каждый
+   * размер из `task.sizeRows`), записать `PatternSizeFile` для каждого,
+   * перевести `PatternItem.status` DRAFT → ACTIVE и
+   * `ConstructorTask.status` IN_PROGRESS → DONE.
+   *
+   * Гарантии:
+   *   - задача обязана быть `IN_PROGRESS` (`assignSelf` сначала);
+   *   - задача обязана принадлежать текущему конструктору, если
+   *     `enforceOwnership = true`;
+   *   - набор `sizeId` в `payload.sizeFiles` обязан совпадать с
+   *     `task.sizeRows[].sizeId` без лишних/недостающих;
+   *   - все `Size` существуют (защита от подделки);
+   *   - все `fileFieldName` присутствуют в multipart `files`.
+   *
+   * Phase 1 (вне транзакции): валидируем, грузим файлы через
+   * `PatternsStorageService.saveSizeFile` (он сам валидирует
+   * расширение DXF и размер). Получаем список
+   * `{ sizeId, publicUrl, originalFileName, contentType, sizeBytes }`.
+   *
+   * Phase 2 (одна транзакция):
+   *   - читаем актуальную `version` для каждого `(patternItemId, sizeId)`
+   *     (`max(version) + 1`, или `1` если записей не было);
+   *   - createMany(PatternSizeFile) с `status='ACTIVE'`,
+   *     `uploadedById = employeeId`;
+   *   - update(PatternItem.status = 'ACTIVE');
+   *   - update(ConstructorTask.status = 'DONE').
+   *
+   * Если Phase 2 падает — файлы остаются orphan-ами на диске
+   * (стандартный паттерн проекта; cleanup-job подберёт). UI повторно
+   * не загрузит — операция считается провалившейся целиком.
+   */
+  async complete(
+    taskId: string,
+    employeeId: string,
+    payload: CompleteConstructorTaskDto,
+    files: UploadedFileLike[],
+    enforceOwnership: boolean,
+  ): Promise<ConstructorTaskDetailDto> {
+    const existing = await this.prisma.constructorTask.findUnique({
+      where: { id: taskId },
+      select: {
+        id: true,
+        status: true,
+        assignedToId: true,
+        patternItemId: true,
+        sizeRows: { select: { sizeId: true, sizeCodeSnapshot: true } },
+      },
+    });
+    if (!existing) throw new ConstructorTaskNotFoundException();
+    if (existing.status !== 'IN_PROGRESS') {
+      throw new ConstructorTaskNotInProgressException();
+    }
+    if (
+      enforceOwnership &&
+      existing.assignedToId &&
+      existing.assignedToId !== employeeId
+    ) {
+      throw new ConstructorTaskAssignedToOtherException();
+    }
+
+    // 1) Сверяем набор sizeId в payload с task.sizeRows.
+    const taskSizeIds = new Set(
+      existing.sizeRows
+        .map((r) => r.sizeId)
+        .filter((id): id is string => id != null),
+    );
+    const payloadSizeIds = new Set(payload.sizeFiles.map((sf) => sf.sizeId));
+
+    const missing = [...taskSizeIds].filter((sid) => !payloadSizeIds.has(sid));
+    const extra = [...payloadSizeIds].filter((sid) => !taskSizeIds.has(sid));
+    if (missing.length > 0 || extra.length > 0) {
+      const parts: string[] = [];
+      if (missing.length > 0) {
+        parts.push(`не загружены файлы для размеров: ${missing.join(', ')}`);
+      }
+      if (extra.length > 0) {
+        parts.push(`лишние размеры в payload: ${extra.join(', ')}`);
+      }
+      throw new ConstructorTaskCompleteFilesMismatchException(parts.join('; '));
+    }
+
+    // 2) Маппим multipart-файлы по fieldname.
+    const filesByFieldName = new Map<string, UploadedFileLike>();
+    for (const file of files) {
+      filesByFieldName.set(file.fieldname, file);
+    }
+    const expectedPrefix = COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX;
+    for (const sf of payload.sizeFiles) {
+      if (!sf.fileFieldName.startsWith(expectedPrefix)) {
+        throw new ConstructorTaskCompleteFilesMismatchException(
+          `Поле ${sf.fileFieldName} не имеет обязательного префикса ${expectedPrefix}`,
+        );
+      }
+      if (!filesByFieldName.has(sf.fileFieldName)) {
+        throw new ConstructorTaskCompleteFilesMismatchException(
+          `В multipart-запросе нет файла с полем ${sf.fileFieldName}`,
+        );
+      }
+    }
+
+    // 3) Доп. проверка: все Size живы. Защита от подделки sizeId.
+    const sizes = await this.prisma.size.findMany({
+      where: { id: { in: [...payloadSizeIds] } },
+      select: { id: true },
+    });
+    const sizeIdsAlive = new Set(sizes.map((s) => s.id));
+    for (const sid of payloadSizeIds) {
+      if (!sizeIdsAlive.has(sid)) {
+        throw new ConstructorTaskSizeNotFoundException(sid);
+      }
+    }
+
+    // 4) Phase 1: грузим файлы на диск через PatternsStorageService.
+    //    Он валидирует расширение/размер; PatternUploadInvalidException
+    //    пробросится наружу.
+    const savedFiles: Array<{
+      sizeId: string;
+      publicUrl: string;
+      originalFileName: string;
+      contentType: string;
+      sizeBytes: number;
+    }> = [];
+    for (const sf of payload.sizeFiles) {
+      const file = filesByFieldName.get(sf.fileFieldName)!;
+      const saved = await this.patternsStorage.saveSizeFile(
+        existing.patternItemId,
+        sf.sizeId,
+        file,
+      );
+      savedFiles.push({
+        sizeId: sf.sizeId,
+        publicUrl: saved.publicUrl,
+        originalFileName: file.originalname,
+        contentType: file.mimetype,
+        sizeBytes: file.size,
+      });
+    }
+
+    // 5) Phase 2: транзакция БД.
+    await this.prisma.$transaction(async (tx) => {
+      // Резервируем версии (max+1) для каждой пары (pattern, size).
+      const existingMaxByPair = await tx.patternSizeFile.groupBy({
+        by: ['sizeId'],
+        where: {
+          patternItemId: existing.patternItemId,
+          sizeId: { in: [...payloadSizeIds] },
+        },
+        _max: { version: true },
+      });
+      const maxBySize = new Map<string, number>();
+      for (const row of existingMaxByPair) {
+        maxBySize.set(row.sizeId, row._max.version ?? 0);
+      }
+
+      await tx.patternSizeFile.createMany({
+        data: savedFiles.map((sf) => ({
+          patternItemId: existing.patternItemId,
+          sizeId: sf.sizeId,
+          fileUrl: sf.publicUrl,
+          originalFileName: sf.originalFileName,
+          version: (maxBySize.get(sf.sizeId) ?? 0) + 1,
+          status: 'ACTIVE',
+          uploadedById: employeeId,
+        })),
+      });
+
+      await tx.patternItem.update({
+        where: { id: existing.patternItemId },
+        data: { status: 'ACTIVE' },
+      });
+
+      await tx.constructorTask.update({
+        where: { id: taskId },
+        data: { status: 'DONE' },
+      });
+    });
+
+    return this.getOne(taskId);
   }
 
   // ---------------------------------------------------------------------------

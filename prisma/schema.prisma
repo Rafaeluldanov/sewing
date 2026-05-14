@@ -34,6 +34,15 @@ enum Role {
   /// ценам, маршрутам, техкартам и пользователям. См.
   /// `docs/domain.md §«Мастер цеха»` и `MasterCall` ниже.
   SHOPFLOOR_MASTER
+  /// Конструктор лекал. Кабинет `/constructor` — single-workspace
+  /// роль (как `SHOPFLOOR_MASTER`): видит назначенные себе задачи и
+  /// общий пул свободных `ConstructorTask.status = 'NEW'`, берёт в
+  /// работу (`assignSelf` → IN_PROGRESS), завершает с загрузкой
+  /// готовых лекал (PatternSizeFile по каждому размеру) — backend
+  /// атомарно переводит `PatternItem.status` DRAFT → ACTIVE и
+  /// `ConstructorTask.status` IN_PROGRESS → DONE. Доступа к
+  /// admin-разделам/заказам/ценам не имеет.
+  CONSTRUCTOR
 }
 
 enum OperationCategory {
@@ -5615,10 +5624,11 @@ model WorkInProgressMovement {
 // конструктор вернул «нужны правки», менеджер редактирует
 // существующую задачу (статус → IN_PROGRESS).
 //
-// RBAC контроллера: `ADMIN` / `SHOP_MANAGER` (как у `tech-cards`).
-// Роль `CONSTRUCTOR` в `enum Role` в этом этапе НЕ добавляется —
-// поля `createdById`/`assignedToId` уже nullable, кабинет
-// конструктора будет отдельным PR.
+// RBAC контроллера: `ADMIN` / `SHOP_MANAGER` (создание/cancel/общий
+// список) + `CONSTRUCTOR` (карточка задачи + действия из своего
+// кабинета: `/my`, `/assign-self`, `/comment`, `/complete`). См.
+// `apps/web/app/constructor/` — single-workspace кабинет конструктора,
+// модель та же, что у `/master` для `SHOPFLOOR_MASTER`.
 // ---------------------------------------------------------------------------
 
 model ConstructorTask {

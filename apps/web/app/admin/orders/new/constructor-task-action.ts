@@ -31,20 +31,41 @@ export interface SaveConstructorDraftActionResult {
 }
 
 /**
- * Принимает структурированный payload и массив `File`-ов из client-
- * component-а (CreateProductInline собирает их в state, не в DOM-
- * input-ах). Action упаковывает всё в FormData и отправляет backend-у.
+ * Принимает уже собранный `FormData` с двумя полями:
+ *   - `payload` — JSON-строка с `calcPayload / sizeRows / comment`;
+ *   - `files`   — повторяющееся поле с прикреплёнными `File`-ами.
  *
- * Перед отправкой payload прогоняется через shared zod-схему. Это
- * убирает UI-only поля (например, `categoryName` / `techCardName`
- * из saved-payload родительской формы) и сразу даёт менеджеру понятную
- * ошибку, если данные в state модалки неполные.
+ * Раньше action принимал два аргумента — объект-payload и `File[]`.
+ * Next.js 14 server actions требует, чтобы все аргументы были
+ * сериализуемыми по «React Server Components serialization rules».
+ * Top-level `File[]` (массив `File`-ов как ОТДЕЛЬНЫЙ аргумент) этим
+ * правилам не соответствует и падает с `Only plain objects, and a
+ * few built-ins, can be passed to Server Actions` (см. инциденте
+ * 14.05.2026, форма «Отправить конструктору» на edit-странице
+ * заказа). `FormData` — один из явно поддерживаемых типов, и файлы
+ * внутри него передаются корректно.
+ *
+ * Парсинг JSON-payload-а и валидация через shared zod-схему остаются
+ * на server-стороне action-а — UI получает понятную ошибку, если
+ * данные в state модалки неполные.
  */
 export async function saveConstructorDraftAction(
-  rawPayload: unknown,
-  files: File[],
+  formData: FormData,
 ): Promise<SaveConstructorDraftActionResult> {
-  const parsed = SaveConstructorDraftSchema.safeParse(rawPayload);
+  const payloadRaw = formData.get('payload');
+  if (typeof payloadRaw !== 'string') {
+    return {
+      ok: false,
+      error: 'Поле payload обязательно — передайте JSON со sizeRows и комментарием.',
+    };
+  }
+  let payloadJson: unknown;
+  try {
+    payloadJson = JSON.parse(payloadRaw);
+  } catch {
+    return { ok: false, error: 'Невалидный JSON в payload.' };
+  }
+  const parsed = SaveConstructorDraftSchema.safeParse(payloadJson);
   if (!parsed.success) {
     return {
       ok: false,
@@ -54,12 +75,16 @@ export async function saveConstructorDraftAction(
     };
   }
   try {
-    const fd = new FormData();
-    fd.append('payload', JSON.stringify(parsed.data));
-    for (const f of files) {
-      fd.append('files', f, f.name);
+    // Пересобираем FormData, чтобы payload был ровно тот, что прошёл
+    // через zod (без UI-only полей вроде `categoryName`).
+    const out = new FormData();
+    out.append('payload', JSON.stringify(parsed.data));
+    for (const entry of formData.getAll('files')) {
+      if (entry instanceof File) {
+        out.append('files', entry, entry.name);
+      }
     }
-    const result = await saveConstructorTaskDraft(fd);
+    const result = await saveConstructorTaskDraft(out);
     return { ok: true, result };
   } catch (e) {
     if (e instanceof ApiRequestError) {

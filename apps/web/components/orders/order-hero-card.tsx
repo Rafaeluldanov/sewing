@@ -311,9 +311,18 @@ export function OrderHeroAction({
 function formatHeroDateTime(iso: string | null | undefined): string {
   if (!iso) return '—';
   try {
+    // Явный `timeZone` — иначе сервер (UTC в dev-docker) и браузер
+    // (локальный TZ пользователя, обычно Europe/Moscow) дают разный
+    // текст, и React падает с hydration-ошибкой
+    // (Server "12:46" vs Client "15:46"). Эта ошибка откатывает рендер
+    // секции и onClick на кнопках в той же ветке (например,
+    // «Отправить» во вкладке «Отправить конструктору») перестают
+    // срабатывать. Production system — российская, бизнес-время
+    // всегда МСК.
     return new Date(iso).toLocaleString('ru-RU', {
       dateStyle: 'medium',
       timeStyle: 'short',
+      timeZone: 'Europe/Moscow',
     });
   } catch {
     return '—';
