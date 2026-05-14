@@ -39,6 +39,7 @@ import type {
   PatternCategoryParameterDto,
 } from '@sewing/shared/pattern-categories';
 import type { SizeDto } from '@sewing/shared/orders';
+import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import {
   loadCompatibleTechCardsAction,
@@ -87,6 +88,12 @@ interface Props {
   initialTechCards: TechCardTemplateSummaryDto[];
   /** Справочник размеров. */
   sizes: SizeDto[];
+  /**
+   * Активные номенклатуры — нужны селектy «Подтянуть номенклатуры»
+   * внутри `CreateTechCardWindow`. Если в проекте нет ни одной,
+   * массив пуст — модалка просто покажет disabled-сообщение.
+   */
+  initialPatterns?: PatternListItemDto[];
   /** Колбэк локального сохранения. Родитель кладёт payload в state. */
   onSave: (payload: SavedInlineProductPayload) => void;
   /** Колбэк выхода из inline-режима (например, «Назад»). */
@@ -127,6 +134,7 @@ export function CreateProductInline({
   onSave,
   onCancel,
   initialValue = null,
+  initialPatterns = [],
 }: Props) {
   const [tab, setTab] = useState<TabId>('calculate');
 
@@ -681,6 +689,15 @@ export function CreateProductInline({
         <CreateTechCardWindow
           patternCategoryId={categoryId || null}
           prefilledMaterialLines={techCardSeedLines}
+          patternItems={initialPatterns.map((p) => ({
+            id: p.id,
+            name: p.name,
+            article: p.article,
+          }))}
+          patternCategories={categories.map((c) => ({
+            id: c.id,
+            name: c.name,
+          }))}
           suggestedCode={
             categoryDetail
               ? `${categoryDetail.slug.toUpperCase()}-${Date.now()

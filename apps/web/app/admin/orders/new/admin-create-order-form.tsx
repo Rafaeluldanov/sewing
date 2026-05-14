@@ -502,6 +502,7 @@ export function AdminCreateOrderForm({
                 <CreateProductInline
                   initialCategories={patternCategories}
                   initialTechCards={techCards}
+                  initialPatterns={patterns}
                   sizes={sortedSizes}
                   initialValue={savedInlineProduct}
                   onCancel={() => {
@@ -863,7 +864,12 @@ function ProductCreateTab({
   return (
     <>
       <div className="admin-order-form__grid admin-order-form__top">
-        <AdminCard className="admin-order-card admin-order-card--product">
+        <AdminCard
+          className={
+            'admin-order-card admin-order-card--product' +
+            (isCreating || isCreated ? ' admin-order-card--full-row' : '')
+          }
+        >
           <header className="admin-order-card__header admin-order-card__header--with-meta">
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               <span className="admin-order-card__icon admin-order-card__icon--pink">

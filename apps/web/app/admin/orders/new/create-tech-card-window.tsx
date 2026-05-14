@@ -27,7 +27,7 @@
  * совместимость техкарты с категорией при использовании на заказе.
  */
 
-import { useCallback, useState, type FormEvent } from 'react';
+import { useCallback, useState, useTransition, type FormEvent } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import {
   TECH_CARD_MATERIAL_COLOR_RULES,
@@ -41,6 +41,10 @@ import {
 } from '@sewing/shared/tech-cards';
 import { DraggableWindow } from './draggable-window';
 import { createTechCardFromOrderModalAction } from './inline-product-actions';
+import {
+  pullMaterialLinesFromCategoryAction,
+  pullMaterialLinesFromPatternAction,
+} from '../../tech-cards/actions';
 
 type MaterialRow = {
   key: string;
@@ -117,6 +121,22 @@ export interface PrefilledMaterialLineSeed {
   qtyPerUnit?: string;
 }
 
+/**
+ * Лёгкое представление номенклатуры для select-а «Подтянуть из
+ * номенклатуры». Зеркалит `PatternItemOption` в `tech-card-form.tsx`.
+ */
+export interface PatternItemOption {
+  id: string;
+  name: string;
+  article: string;
+}
+
+/** Лёгкое представление группы для select-а «Подтянуть из группы». */
+export interface PatternCategoryOption {
+  id: string;
+  name: string;
+}
+
 interface Props {
   onCancel: () => void;
   onCreated: (techCard: TechCardTemplateDetailDto) => void;
@@ -128,6 +148,54 @@ interface Props {
   suggestedCode?: string;
   /** Опционально: предложенное `name`. */
   suggestedName?: string;
+  /**
+   * Активные номенклатуры — источник для кнопки «Подтянуть номенклатуры»
+   * (полная замена `materials` материалами выбранной номенклатуры).
+   */
+  patternItems?: PatternItemOption[];
+  /**
+   * Активные группы номенклатур — источник для кнопки «Подтянуть группу
+   * номенклатур» (полная замена `materials` параметрами группы). НЕ
+   * меняет внутреннюю привязку техкарты к `patternCategoryId` — она
+   * остаётся той, что задал родитель.
+   */
+  patternCategories?: PatternCategoryOption[];
+}
+
+/**
+ * Нормализует `fabricType` к ключу для дедупа внутри одного pull.
+ * Зеркалит логику основной формы техкарт.
+ */
+function normalizeDedupeFabric(value: string | null | undefined): string {
+  if (value == null) return '';
+  return value.trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+function dedupeKey(roleKey: string, fabricType: string | null): string {
+  return `${roleKey}::${normalizeDedupeFabric(fabricType)}`;
+}
+
+/**
+ * Строит `MaterialRow` модалки из шаблонной строки, полученной из
+ * server action-ов `pullMaterialLinesFromPatternAction` /
+ * `pullMaterialLinesFromCategoryAction`. Дефолты совпадают с
+ * `emptyMaterial()` — отличия только в `name/fabricType/unit/colorRule`,
+ * чтобы строки сразу прошли валидацию (`name` обязательное поле модалки).
+ */
+function rowFromPulledLine(line: {
+  roleKey: string;
+  labelSnapshot: string;
+  unit: string;
+}): MaterialRow {
+  const isPackaging = line.roleKey === 'PACKAGING';
+  return emptyMaterial({
+    name: line.labelSnapshot,
+    materialRole: line.roleKey,
+    fabricType: line.labelSnapshot,
+    unit: line.unit && line.unit.length > 0 ? line.unit : 'кг',
+    qtyPerUnit: '1',
+    colorRule: isPackaging ? 'ORDER_SELECTED_COLOR' : 'ORDER_COLOR',
+  });
 }
 
 export function CreateTechCardWindow({
@@ -137,7 +205,19 @@ export function CreateTechCardWindow({
   prefilledMaterialLines = [],
   suggestedCode = '',
   suggestedName = '',
+  patternItems = [],
+  patternCategories = [],
 }: Props) {
+  // Защита от не-массива в проде: если родитель прокинул что-то странное,
+  // не падаем на `.map`/`.length` — рендерим без блока pull.
+  const safePatternItems: PatternItemOption[] = Array.isArray(patternItems)
+    ? patternItems
+    : [];
+  const safePatternCategories: PatternCategoryOption[] = Array.isArray(
+    patternCategories,
+  )
+    ? patternCategories
+    : [];
   const [code, setCode] = useState(suggestedCode);
   const [name, setName] = useState(suggestedName);
   const [isActive, setIsActive] = useState(true);
@@ -157,6 +237,93 @@ export function CreateTechCardWindow({
   const [outsource, setOutsource] = useState<OutsourceRow[]>([]);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // ─── «Подтянуть из номенклатуры / группы» ─────────────────────────────
+  // Два независимых pull-источника. Каждый клик ПОЛНОСТЬЮ заменяет
+  // массив `materials` содержимым выбранного источника — симметрично
+  // с основной формой техкарт (`tech-card-form.tsx`).
+  const [pullPatternId, setPullPatternId] = useState<string>('');
+  const [pullError, setPullError] = useState<string | null>(null);
+  const [pullSummary, setPullSummary] = useState<string | null>(null);
+  const [isPulling, startPullTransition] = useTransition();
+  const [pullCategoryId, setPullCategoryId] = useState<string>('');
+  const [pullCategoryError, setPullCategoryError] = useState<string | null>(
+    null,
+  );
+  const [pullCategorySummary, setPullCategorySummary] = useState<string | null>(
+    null,
+  );
+  const [isPullingCategory, startPullCategoryTransition] = useTransition();
+
+  const handlePullFromNomenclature = () => {
+    setPullError(null);
+    setPullSummary(null);
+    const trimmedId = pullPatternId.trim();
+    if (trimmedId === '') {
+      setPullError('Выберите номенклатуру');
+      return;
+    }
+    startPullTransition(async () => {
+      const result = await pullMaterialLinesFromPatternAction(trimmedId);
+      if (!result.ok) {
+        setPullError(result.error);
+        return;
+      }
+      if (result.lines.length === 0) {
+        setMaterials([]);
+        setPullSummary(
+          'В номенклатуре нет заполненных норм или погонных метров. Нечего подтягивать.',
+        );
+        return;
+      }
+      const seen = new Set<string>();
+      const next: MaterialRow[] = [];
+      for (const line of result.lines) {
+        const k = dedupeKey(line.roleKey, line.labelSnapshot);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        next.push(rowFromPulledLine(line));
+      }
+      setMaterials(next);
+      setPullSummary(`Подтянуто строк: ${next.length}. Список заменён.`);
+    });
+  };
+
+  const handlePullFromCategory = () => {
+    setPullCategoryError(null);
+    setPullCategorySummary(null);
+    const trimmedId = pullCategoryId.trim();
+    if (trimmedId === '') {
+      setPullCategoryError('Выберите группу номенклатур');
+      return;
+    }
+    startPullCategoryTransition(async () => {
+      const result = await pullMaterialLinesFromCategoryAction(trimmedId);
+      if (!result.ok) {
+        setPullCategoryError(result.error);
+        return;
+      }
+      if (result.lines.length === 0) {
+        setMaterials([]);
+        setPullCategorySummary(
+          'В группе нет параметров для подтягивания (фурнитуры на изделие или погонных метров).',
+        );
+        return;
+      }
+      const seen = new Set<string>();
+      const next: MaterialRow[] = [];
+      for (const line of result.lines) {
+        const k = dedupeKey(line.roleKey, line.labelSnapshot);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        next.push(rowFromPulledLine(line));
+      }
+      setMaterials(next);
+      setPullCategorySummary(
+        `Подтянуто строк: ${next.length}. Список заменён.`,
+      );
+    });
+  };
 
   const updateMaterial = useCallback(
     (key: string, patch: Partial<MaterialRow>) => {
@@ -316,6 +483,121 @@ export function CreateTechCardWindow({
                 Техкарта будет привязана к выбранной группе номенклатуры.
               </span>
             )}
+          </div>
+        </section>
+
+        {/*
+          Двухколоночный pull-блок: слева — выбор номенклатуры, справа —
+          выбор группы номенклатур. Обе кнопки ПОЛНОСТЬЮ заменяют список
+          материалов содержимым источника. Зеркалит блок в
+          `apps/web/app/admin/tech-cards/tech-card-form.tsx`.
+        */}
+        <section className="ctw-section">
+          <h3 className="ctw-section__title">Материальные требования</h3>
+          <div className="ctw-pull-grid">
+            <div className="ctw-pull-col">
+              <label htmlFor="ctw-pull-pattern" className="ctw-pull-label">
+                Номенклатура:
+              </label>
+              {safePatternItems.length > 0 ? (
+                <>
+                  <select
+                    id="ctw-pull-pattern"
+                    value={pullPatternId}
+                    onChange={(e) => setPullPatternId(e.target.value)}
+                    disabled={isPulling}
+                  >
+                    <option value="">— выберите номенклатуру —</option>
+                    {safePatternItems.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name} · {p.article}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="ctw-btn ctw-btn--ghost"
+                    onClick={handlePullFromNomenclature}
+                    disabled={isPulling || pullPatternId.trim() === ''}
+                  >
+                    {isPulling
+                      ? 'Подтягиваем…'
+                      : 'Подтянуть номенклатуры'}
+                  </button>
+                  <p className="ctw-muted">
+                    Подтягивает заполненные нормы фурнитуры и параметры
+                    погонных метров. Список материалов будет заменён.
+                  </p>
+                  {pullError && (
+                    <span className="ctw-error" role="alert">
+                      {pullError}
+                    </span>
+                  )}
+                  {pullSummary && (
+                    <span className="ctw-muted" role="status">
+                      {pullSummary}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <p className="ctw-muted">
+                  Активных номенклатур пока нет — подтягивать не из чего.
+                </p>
+              )}
+            </div>
+
+            <div className="ctw-pull-col">
+              <label htmlFor="ctw-pull-category" className="ctw-pull-label">
+                Группа номенклатур:
+              </label>
+              {safePatternCategories.length > 0 ? (
+                <>
+                  <select
+                    id="ctw-pull-category"
+                    value={pullCategoryId}
+                    onChange={(e) => setPullCategoryId(e.target.value)}
+                    disabled={isPullingCategory}
+                  >
+                    <option value="">— выберите группу —</option>
+                    {safePatternCategories.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    className="ctw-btn ctw-btn--ghost"
+                    onClick={handlePullFromCategory}
+                    disabled={
+                      isPullingCategory || pullCategoryId.trim() === ''
+                    }
+                  >
+                    {isPullingCategory
+                      ? 'Подтягиваем…'
+                      : 'Подтянуть группу номенклатур'}
+                  </button>
+                  <p className="ctw-muted">
+                    Подтягивает строки материалов по активным параметрам
+                    группы. Список материалов будет заменён.
+                  </p>
+                  {pullCategoryError && (
+                    <span className="ctw-error" role="alert">
+                      {pullCategoryError}
+                    </span>
+                  )}
+                  {pullCategorySummary && (
+                    <span className="ctw-muted" role="status">
+                      {pullCategorySummary}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <p className="ctw-muted">
+                  Активных групп номенклатур пока нет — подтягивать не из чего.
+                </p>
+              )}
+            </div>
           </div>
         </section>
 
@@ -654,6 +936,23 @@ export function CreateTechCardWindow({
           }
           .ctw-section__title { margin: 0; font-size: 0.95rem; font-weight: 600; color: #0f172a; }
           .ctw-grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+          .ctw-pull-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            gap: 16px;
+          }
+          .ctw-pull-col {
+            display: flex; flex-direction: column; gap: 6px;
+            padding: 10px; border: 1px solid #e2e8f0; border-radius: 6px;
+            background: #f8fafc;
+          }
+          .ctw-pull-label { font-size: 0.85rem; font-weight: 600; color: #1f2937; }
+          .ctw-pull-col select, .ctw-pull-col button {
+            padding: 6px 8px; font-size: 0.88rem;
+          }
+          .ctw-pull-col select {
+            border: 1px solid #cbd5e1; border-radius: 6px; background: #fff;
+          }
           .ctw-field { display: flex; flex-direction: column; gap: 4px; }
           .ctw-field--row { flex-direction: row; align-items: center; gap: 12px; }
           .ctw-field label { font-size: 0.85rem; font-weight: 600; color: #1f2937; }

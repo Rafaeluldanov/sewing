@@ -8735,7 +8735,8 @@ body:has(.admin-layout) .app-header { display: none !important; }
     0 12px 32px rgba(15, 23, 42, 0.06);
 }
 
-.admin-order-card--sizes {
+.admin-order-card--sizes,
+.admin-order-card--full-row {
   grid-column: 1 / -1;
 }
 
