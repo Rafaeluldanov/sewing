@@ -14278,30 +14278,40 @@ body:has(.admin-layout) .app-header { display: none !important; }
   margin-top: 2px;
 }
 
+/* Бейдж статуса в кабинете конструктора. Цвета берутся из тех же
+   `--admin-*-soft / --admin-*-fg` токенов, что и `AdminStatusBadge`,
+   чтобы статус выглядел одинаково и в админке, и в кабинете
+   конструктора (источник истины тонов — `CONSTRUCTOR_TASK_STATUS_TONE`
+   в `@sewing/shared/constructor-tasks`). Геометрия (padding/font/uppercase)
+   подобрана под mobile-first кабинет — крупнее, чем admin-pill. */
 .constructor-status {
   font-size: 0.78rem;
   font-weight: 600;
-  padding: 0.2rem 0.55rem;
-  border-radius: 999px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
+  padding: 0.2rem 0.65rem;
+  border-radius: var(--admin-radius-pill);
+  letter-spacing: 0.02em;
   white-space: nowrap;
 }
-.constructor-status--new {
-  background: #fef3c7;
-  color: #92400e;
+.constructor-status--new,
+.constructor-status--pending_accept {
+  background: var(--admin-warning-soft);
+  color: var(--admin-warning-fg);
 }
 .constructor-status--in_progress {
-  background: #dbeafe;
-  color: #1d4ed8;
+  background: var(--admin-primary-soft);
+  color: var(--admin-primary-fg);
+}
+.constructor-status--rework {
+  background: var(--admin-danger-soft);
+  color: var(--admin-danger-fg);
 }
 .constructor-status--done {
-  background: #dcfce7;
-  color: #166534;
+  background: var(--admin-success-soft);
+  color: var(--admin-success-fg);
 }
 .constructor-status--cancelled {
-  background: #f1f5f9;
-  color: #64748b;
+  background: var(--admin-soft);
+  color: var(--admin-muted);
 }
 
 .constructor-card-block {

@@ -4,14 +4,19 @@ import {
   ArrowLeft,
   ClipboardList,
   ExternalLink,
+  FileDown,
   Paperclip,
 } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getConstructorTask } from '@/lib/constructor-tasks-api';
+import { getPattern } from '@/lib/patterns-api';
 import {
   CONSTRUCTOR_TASK_STATUS_LABELS,
+  CONSTRUCTOR_TASK_STATUS_TONE,
   type ConstructorTaskDetailDto,
+  type ConstructorTaskFileDto,
 } from '@sewing/shared/constructor-tasks';
+import type { PatternDetailDto } from '@sewing/shared/patterns';
 import {
   AdminCard,
   AdminPageShell,
@@ -19,7 +24,9 @@ import {
   AdminTable,
   type AdminTableColumn,
 } from '@/components/admin';
+import { AcceptTaskButton } from './accept-task-button';
 import { CancelTaskButton } from './cancel-task-button';
+import { RequestReworkForm } from './request-rework-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -52,6 +59,23 @@ export default async function AdminConstructorTaskDetailPage({
     }
     throw e;
   }
+
+  // Дополнительно тянем PatternDetailDto, чтобы показать готовые DXF
+  // лекала от конструктора (если уже загружены). Это отдельный запрос
+  // — не критично по перфу, страница admin.
+  let pattern: PatternDetailDto | null = null;
+  try {
+    pattern = await getPattern(task.patternItemId);
+  } catch {
+    // Не критично — секция «Готовые лекала» просто не отрендерится.
+  }
+
+  const activeSizeFiles =
+    pattern?.sizeFiles.filter((sf) => sf.status === 'ACTIVE') ?? [];
+  const initialFiles = task.files.filter(
+    (f) => f.direction !== 'REWORK',
+  );
+  const reworkFiles = task.files.filter((f) => f.direction === 'REWORK');
 
   const sizeColumns: AdminTableColumn<
     ConstructorTaskDetailDto['sizeRows'][number]
@@ -91,13 +115,19 @@ export default async function AdminConstructorTaskDetailPage({
       title={task.patternName}
       subtitle={`Артикул: ${task.patternArticle}`}
       actions={
-        <div style={{ display: 'inline-flex', gap: 8 }}>
+        <div style={{ display: 'inline-flex', gap: 8, flexWrap: 'wrap' }}>
           <Link
             href="/admin/constructor-tasks"
             className="admin-btn admin-btn--ghost"
           >
             <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />К списку
           </Link>
+          {task.status === 'PENDING_ACCEPT' && (
+            <>
+              <AcceptTaskButton taskId={task.id} />
+              <RequestReworkForm taskId={task.id} />
+            </>
+          )}
           <CancelTaskButton taskId={task.id} currentStatus={task.status} />
         </div>
       }
@@ -122,20 +152,20 @@ export default async function AdminConstructorTaskDetailPage({
           >
             <dt style={{ color: '#475569' }}>Статус</dt>
             <dd style={{ margin: 0 }}>
-              <AdminStatusBadge
-                tone={
-                  task.status === 'DONE'
-                    ? 'success'
-                    : task.status === 'CANCELLED'
-                      ? 'muted'
-                      : task.status === 'IN_PROGRESS'
-                        ? 'info'
-                        : 'warning'
-                }
-              >
+              <AdminStatusBadge tone={CONSTRUCTOR_TASK_STATUS_TONE[task.status]}>
                 {CONSTRUCTOR_TASK_STATUS_LABELS[task.status]}
               </AdminStatusBadge>
             </dd>
+            {task.acceptedAt && (
+              <>
+                <dt style={{ color: '#475569' }}>Принято</dt>
+                <dd style={{ margin: 0 }}>
+                  {new Date(task.acceptedAt).toLocaleString('ru-RU', {
+                    timeZone: 'Europe/Moscow',
+                  })}
+                </dd>
+              </>
+            )}
             <dt style={{ color: '#475569' }}>Создана</dt>
             <dd style={{ margin: 0 }}>
               {new Date(task.createdAt).toLocaleString('ru-RU')}
@@ -200,65 +230,153 @@ export default async function AdminConstructorTaskDetailPage({
       <div style={{ marginTop: '1rem' }}>
         <AdminCard>
           <h3 className="admin-card__title">
-            Вложения{' '}
+            Бриф от менеджера{' '}
             <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
-              ({task.files.length})
+              ({initialFiles.length})
             </span>
           </h3>
-        {task.files.length === 0 ? (
-          <p className="admin-muted" style={{ margin: 0 }}>
-            Файлы не прикреплены.
-          </p>
-        ) : (
-          <ul
-            style={{
-              listStyle: 'none',
-              padding: 0,
-              margin: 0,
-              display: 'flex',
-              flexDirection: 'column',
-              gap: '0.25rem',
-            }}
-          >
-            {task.files.map((f) => (
-              <li
-                key={f.id}
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '0.5rem',
-                  padding: '0.25rem 0.5rem',
-                  border: '1px solid var(--admin-border, #e5e7eb)',
-                  borderRadius: 4,
-                  fontSize: '0.9rem',
-                }}
-              >
-                <Paperclip size={14} strokeWidth={1.6} aria-hidden />
-                <a
-                  href={f.fileUrl}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{
-                    flex: 1,
-                    color: 'var(--admin-primary, #2563eb)',
-                    overflow: 'hidden',
-                    textOverflow: 'ellipsis',
-                  }}
-                >
-                  {f.originalFileName}
-                </a>
-                <span className="admin-muted" style={{ fontSize: '0.8rem' }}>
-                  {(f.sizeBytes / 1024).toFixed(0)} КБ
-                </span>
-                <span className="admin-muted" style={{ fontSize: '0.8rem' }}>
-                  {f.contentType || 'unknown'}
-                </span>
-              </li>
-            ))}
-          </ul>
-        )}
+          <FileList files={initialFiles} emptyHint="Бриф не прикреплён." />
         </AdminCard>
       </div>
+
+      {activeSizeFiles.length > 0 && (
+        <div style={{ marginTop: '1rem' }}>
+          <AdminCard>
+            <h3 className="admin-card__title">
+              Готовые лекала от конструктора{' '}
+              <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
+                ({activeSizeFiles.length})
+              </span>
+            </h3>
+            <ul
+              style={{
+                listStyle: 'none',
+                padding: 0,
+                margin: 0,
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '0.25rem',
+              }}
+            >
+              {activeSizeFiles.map((sf) => (
+                <li
+                  key={sf.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '0.5rem',
+                    padding: '0.25rem 0.5rem',
+                    border: '1px solid var(--admin-border, #e5e7eb)',
+                    borderRadius: 4,
+                    fontSize: '0.9rem',
+                  }}
+                >
+                  <FileDown size={14} strokeWidth={1.6} aria-hidden />
+                  <strong style={{ minWidth: 64 }}>{sf.size.code}</strong>
+                  <a
+                    href={sf.fileUrl}
+                    target="_blank"
+                    rel="noreferrer"
+                    style={{
+                      flex: 1,
+                      color: 'var(--admin-primary, #2563eb)',
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                    }}
+                  >
+                    {sf.originalFileName}
+                  </a>
+                  <span
+                    className="admin-muted"
+                    style={{ fontSize: '0.8rem' }}
+                  >
+                    v{sf.version}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </AdminCard>
+        </div>
+      )}
+
+      {reworkFiles.length > 0 && (
+        <div style={{ marginTop: '1rem' }}>
+          <AdminCard>
+            <h3 className="admin-card__title">
+              Замечания на доработку{' '}
+              <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
+                ({reworkFiles.length})
+              </span>
+            </h3>
+            <FileList files={reworkFiles} emptyHint="—" />
+          </AdminCard>
+        </div>
+      )}
     </AdminPageShell>
+  );
+}
+
+/**
+ * Локальный рендерер списка `ConstructorTaskFile`-ов. Использован
+ * дважды (бриф + замечания), отличия только в заголовке секции.
+ */
+function FileList({
+  files,
+  emptyHint,
+}: {
+  files: ConstructorTaskFileDto[];
+  emptyHint: string;
+}) {
+  if (files.length === 0) {
+    return (
+      <p className="admin-muted" style={{ margin: 0 }}>
+        {emptyHint}
+      </p>
+    );
+  }
+  return (
+    <ul
+      style={{
+        listStyle: 'none',
+        padding: 0,
+        margin: 0,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '0.25rem',
+      }}
+    >
+      {files.map((f) => (
+        <li
+          key={f.id}
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.5rem',
+            padding: '0.25rem 0.5rem',
+            border: '1px solid var(--admin-border, #e5e7eb)',
+            borderRadius: 4,
+            fontSize: '0.9rem',
+          }}
+        >
+          <Paperclip size={14} strokeWidth={1.6} aria-hidden />
+          <a
+            href={f.fileUrl}
+            target="_blank"
+            rel="noreferrer"
+            style={{
+              flex: 1,
+              color: 'var(--admin-primary, #2563eb)',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}
+          >
+            {f.originalFileName}
+          </a>
+          <span className="admin-muted" style={{ fontSize: '0.8rem' }}>
+            {(f.sizeBytes / 1024).toFixed(0)} КБ
+          </span>
+        </li>
+      ))}
+    </ul>
   );
 }

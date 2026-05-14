@@ -24,6 +24,7 @@ import type {
   PatternCategoryParameterDto,
 } from '@sewing/shared/pattern-categories';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { mapConstructorTaskSummary } from '../constructor-tasks/constructor-task-mappers.js';
 import {
   PatternArticleTakenException,
   PatternCategoryInactiveException,
@@ -212,6 +213,16 @@ export class PatternsService {
             _count: {
               select: { parameters: true, patterns: true },
             },
+          },
+        },
+        // Этап «Конструкторское бюро»: связанная задача, если pattern
+        // создан через flow «Отправить конструктору». UI на
+        // `/admin/patterns/[id]` показывает карточку «Источник».
+        constructorTask: {
+          include: {
+            createdBy: { select: { fullName: true } },
+            assignedTo: { select: { fullName: true } },
+            _count: { select: { files: true, sizeRows: true } },
           },
         },
       },
@@ -922,6 +933,13 @@ export class PatternsService {
             _count: { select: { parameters: true; patterns: true } };
           };
         };
+        constructorTask: {
+          include: {
+            createdBy: { select: { fullName: true } };
+            assignedTo: { select: { fullName: true } };
+            _count: { select: { files: true; sizeRows: true } };
+          };
+        };
       };
     }>,
   ): PatternDetailDto {
@@ -1051,6 +1069,15 @@ export class PatternsService {
       materialAreas,
       parameterNorms,
       sizeParameterValues,
+      // Этап «Конструкторское бюро»: включаем patternItem-данные
+      // в summary (они нужны UI карточки «Источник» на /admin/patterns/[id]
+      // — название и артикул совпадают с самим лекалом).
+      constructorTask: row.constructorTask
+        ? mapConstructorTaskSummary({
+            ...row.constructorTask,
+            patternItem: { name: row.name, article: row.article },
+          })
+        : null,
     };
   }
 

@@ -83,3 +83,26 @@ export function completeConstructorTask(
     formData,
   );
 }
+
+// ---------------------------------------------------------------------------
+// Приёмка / возврат на доработку (admin)
+// ---------------------------------------------------------------------------
+
+export function acceptConstructorTask(
+  id: string,
+): Promise<ConstructorTaskDetailDto> {
+  return apiFetch<ConstructorTaskDetailDto>(
+    `/constructor-tasks/${id}/accept`,
+    { method: 'POST' },
+  );
+}
+
+export function requestReworkConstructorTask(
+  id: string,
+  formData: FormData,
+): Promise<ConstructorTaskDetailDto> {
+  return apiFetchMultipart<ConstructorTaskDetailDto>(
+    `/constructor-tasks/${id}/rework`,
+    formData,
+  );
+}

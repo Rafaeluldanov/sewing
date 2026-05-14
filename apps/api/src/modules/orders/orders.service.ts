@@ -63,6 +63,7 @@ import {
   TechCardNotCompatibleWithCategoryException,
 } from '../../common/errors.js';
 import { aggregateOrder } from './order-aggregator.js';
+import { mapConstructorTaskSummary } from '../constructor-tasks/constructor-task-mappers.js';
 import { OrderCostEstimatesService } from './order-cost-estimates.service.js';
 import { OrderNumberService } from './order-number.service.js';
 import { OrderOperationPlanService } from './order-operation-plan.service.js';
@@ -81,7 +82,17 @@ type OrderWithItems = Prisma.OrderGetPayload<{
     materialRequirements: true;
     outsourceRequirements: true;
     client: true;
-    patternItem: true;
+    patternItem: {
+      include: {
+        constructorTask: {
+          include: {
+            createdBy: { select: { fullName: true } };
+            assignedTo: { select: { fullName: true } };
+            _count: { select: { files: true; sizeRows: true } };
+          };
+        };
+      };
+    };
     applications: true;
     /**
      * PHASE 1 «CompanyDivision как master-справочник» (см.
@@ -901,6 +912,13 @@ export class OrdersService {
             name: true,
             article: true,
             previewImageUrl: true,
+            // Этап «Конструкторское бюро»: один лёгкий select по
+            // связанной задаче — UI на `/admin/orders` показывает
+            // маленький бейдж рядом со статусом заказа, если задача
+            // в активном состоянии (NEW/IN_PROGRESS/PENDING_ACCEPT/REWORK).
+            constructorTask: {
+              select: { id: true, status: true },
+            },
           },
         },
         // PHASE 1: краткие реквизиты карточки подразделения для
@@ -982,6 +1000,7 @@ export class OrdersService {
       name: string;
       article: string;
       previewImageUrl: string | null;
+      constructorTask: { id: string; status: string } | null;
     } | null;
     patternNameSnapshot: string | null;
     patternArticleSnapshot: string | null;
@@ -1120,6 +1139,12 @@ export class OrdersService {
       patternDevelopmentCostRub: o.patternDevelopmentCostRub
         ? o.patternDevelopmentCostRub.toString()
         : null,
+      // Этап «Конструкторское бюро»: id и статус связанной задачи,
+      // если pattern был создан через flow «Отправить конструктору».
+      // UI на `/admin/orders` показывает маленький бейдж в колонке
+      // «Статус» только для активных статусов (см. шаблон).
+      constructorTaskId: o.patternItem?.constructorTask?.id ?? null,
+      constructorTaskStatus: o.patternItem?.constructorTask?.status ?? null,
     };
   }
 
@@ -1145,7 +1170,20 @@ export class OrdersService {
         // Soft-pattern MVP (этап 2 «Лекала»): полная карточка лекала
         // нужна детали для виджета `PatternPreviewCard` в UI карточки
         // заказа. Snapshot-поля лежат на `Order` напрямую.
-        patternItem: true,
+        // Этап «Конструкторское бюро»: подгружаем связанную задачу с
+        // именами создателя/назначенного — UI карточки заказа рендерит
+        // полную карточку «Конструкторское бюро» с действиями приёмки.
+        patternItem: {
+          include: {
+            constructorTask: {
+              include: {
+                createdBy: { select: { fullName: true } },
+                assignedTo: { select: { fullName: true } },
+                _count: { select: { files: true, sizeRows: true } },
+              },
+            },
+          },
+        },
         // Этап «Нанесение на заказе покупателя»: подгружаем
         // заказные нанесения, чтобы UI карточки (`/admin/orders/[id]`)
         // мог отрендерить блок «Нанесение» без отдельного запроса.
@@ -2774,6 +2812,14 @@ export class OrdersService {
         : null,
       costEstimateVersion: order.costEstimateVersion ?? null,
       currentCostEstimate,
+      // Этап «Конструкторское бюро»: связанная задача `ConstructorTask`,
+      // если pattern был создан через flow «Отправить конструктору».
+      // UI карточки заказа рендерит блок «Конструкторское бюро» с
+      // действиями приёмки/возврата на доработку. `null` — у лекала
+      // нет связанной задачи (стандартный flow создания).
+      constructorTask: order.patternItem?.constructorTask
+        ? mapConstructorTaskSummary(order.patternItem.constructorTask)
+        : null,
       outsourceRequirements: order.outsourceRequirements
         .slice()
         .sort((a, b) => a.sortOrder - b.sortOrder)

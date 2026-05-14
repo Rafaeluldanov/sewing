@@ -3,7 +3,10 @@ import { ArrowRight, ClipboardList } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listConstructorTasks } from '@/lib/constructor-tasks-api';
 import type { ConstructorTaskSummaryDto } from '@sewing/shared/constructor-tasks';
-import { CONSTRUCTOR_TASK_STATUS_LABELS } from '@sewing/shared/constructor-tasks';
+import {
+  CONSTRUCTOR_TASK_STATUS_LABELS,
+  CONSTRUCTOR_TASK_STATUS_TONE,
+} from '@sewing/shared/constructor-tasks';
 import {
   AdminCard,
   AdminEmptyState,
@@ -102,17 +105,7 @@ export default async function AdminConstructorTasksListPage({
       key: 'status',
       header: 'Статус',
       render: (t) => (
-        <AdminStatusBadge
-          tone={
-            t.status === 'DONE'
-              ? 'success'
-              : t.status === 'CANCELLED'
-                ? 'muted'
-                : t.status === 'IN_PROGRESS'
-                  ? 'info'
-                  : 'warning'
-          }
-        >
+        <AdminStatusBadge tone={CONSTRUCTOR_TASK_STATUS_TONE[t.status]}>
           {CONSTRUCTOR_TASK_STATUS_LABELS[t.status]}
         </AdminStatusBadge>
       ),

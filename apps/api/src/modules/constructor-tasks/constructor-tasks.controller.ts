@@ -23,6 +23,8 @@ import {
   CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES,
   CompleteConstructorTaskSchema,
   ConstructorTaskListScopeSchema,
+  REWORK_CONSTRUCTOR_TASK_FILE_FIELD,
+  RequestReworkConstructorTaskSchema,
   SaveConstructorDraftSchema,
   UpdateConstructorTaskCommentSchema,
   type ConstructorTaskDetailDto,
@@ -235,6 +237,93 @@ export class ConstructorTasksController {
       parsed.data,
       Array.isArray(files) ? files : [],
       user.role === 'CONSTRUCTOR',
+    );
+  }
+
+  /**
+   * Менеджер «Принять» — `PENDING_ACCEPT` → `DONE`, `PatternItem`
+   * становится `ACTIVE`. См. `ConstructorTasksService.accept`.
+   *
+   * RBAC: только `ADMIN`/`SHOP_MANAGER`. `CONSTRUCTOR` не может
+   * принимать собственную работу.
+   */
+  @Post(':id/accept')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  acceptTask(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<ConstructorTaskDetailDto> {
+    if (!user.employeeId) {
+      throw new ConstructorTaskFileInvalidException(
+        'У вашей учётки нет привязанного сотрудника — обратитесь к администратору.',
+      );
+    }
+    return this.tasks.accept(id, user.employeeId);
+  }
+
+  /**
+   * Менеджер «Вернуть на доработку» — `PENDING_ACCEPT` → `REWORK`.
+   * Multipart-запрос:
+   *   - `payload` (string JSON) — `{ comment: string }` (обязательно
+   *     заполнен; см. `RequestReworkConstructorTaskSchema`);
+   *   - `rework_files` (file[]) — приложенные файлы замечаний (любой
+   *     формат), сохраняются как `ConstructorTaskFile` с
+   *     `direction='REWORK'`.
+   *
+   * `AnyFilesInterceptor` (а не `FilesInterceptor('rework_files', ...)`) —
+   * чтобы не падать при отсутствии файлового поля совсем (комментарий
+   * без файлов — нормальный кейс). Сами поля фильтруем по имени ниже.
+   */
+  @Post(':id/rework')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  @UseInterceptors(
+    AnyFilesInterceptor({
+      storage: memoryStorage(),
+      limits: {
+        fileSize: CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES,
+        files: CONSTRUCTOR_TASK_FILE_MAX_COUNT,
+      },
+    }),
+  )
+  async requestRework(
+    @Param('id') id: string,
+    @Body('payload') payloadRaw: string | undefined,
+    @UploadedFiles() files: UploadedFileLike[] | undefined,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<ConstructorTaskDetailDto> {
+    if (!user.employeeId) {
+      throw new ConstructorTaskFileInvalidException(
+        'У вашей учётки нет привязанного сотрудника — обратитесь к администратору.',
+      );
+    }
+    if (typeof payloadRaw !== 'string' || payloadRaw.trim() === '') {
+      throw new ConstructorTaskFileInvalidException(
+        'Поле payload обязательно — передайте JSON с комментарием.',
+      );
+    }
+    let payloadJson: unknown;
+    try {
+      payloadJson = JSON.parse(payloadRaw);
+    } catch {
+      throw new ConstructorTaskFileInvalidException(
+        'Поле payload содержит невалидный JSON.',
+      );
+    }
+    const parsed = RequestReworkConstructorTaskSchema.safeParse(payloadJson);
+    if (!parsed.success) {
+      throw new ConstructorTaskFileInvalidException(
+        parsed.error.issues.map((i) => i.message).join('; ') ||
+          'Невалидный payload.',
+      );
+    }
+    const reworkFiles = Array.isArray(files)
+      ? files.filter((f) => f.fieldname === REWORK_CONSTRUCTOR_TASK_FILE_FIELD)
+      : [];
+    return this.tasks.requestRework(
+      id,
+      user.employeeId,
+      parsed.data.comment,
+      reworkFiles,
     );
   }
 

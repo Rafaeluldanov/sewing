@@ -77,6 +77,7 @@ import {
   OrderWorkspaceLayout,
 } from '@/components/orders/order-workspace-layout';
 import { OrderActionCenter } from '@/components/orders/view/order-action-center';
+import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 import { OrderManagementHeader } from '@/components/orders/view/order-management-header';
 import { OrderViewTabs } from '@/components/orders/view/order-view-tabs';
 import {
@@ -153,6 +154,9 @@ export default async function AdminOrderDetailPage({
           <>
             <OrderManagementHeader order={order} passports={passports} />
             <OrderActionCenter order={order} passports={passports} />
+            {order.constructorTask && (
+              <OrderConstructorTaskCard task={order.constructorTask} />
+            )}
           </>
         }
         tabs={<OrderViewTabs orderId={order.id} activeTab={activeTab} />}

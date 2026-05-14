@@ -7,6 +7,7 @@ import {
   generateDraftPatternName,
   type CompleteConstructorTaskDto,
   type ConstructorTaskDetailDto,
+  type ConstructorTaskFileDirection,
   type ConstructorTaskFileDto,
   type ConstructorTaskListScope,
   type ConstructorTaskSizeRowDto,
@@ -17,15 +18,18 @@ import {
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  ConstructorTaskAcceptInvalidException,
   ConstructorTaskAssignedToOtherException,
   ConstructorTaskCompleteFilesMismatchException,
   ConstructorTaskFileInvalidException,
   ConstructorTaskInvalidTransitionException,
   ConstructorTaskNotFoundException,
   ConstructorTaskNotInProgressException,
+  ConstructorTaskReworkInvalidException,
   ConstructorTaskSizeNotFoundException,
 } from '../../common/errors.js';
 import { ConstructorTasksStorageService } from './constructor-tasks-storage.service.js';
+import { mapConstructorTaskSummary } from './constructor-task-mappers.js';
 import {
   PatternsStorageService,
   type UploadedFileLike,
@@ -311,8 +315,21 @@ export class ConstructorTasksService {
         contentType: f.contentType,
         sizeBytes: f.sizeBytes,
         createdAt: f.createdAt.toISOString(),
+        direction: this.normalizeDirection(f.direction),
       })),
     };
+  }
+
+  /**
+   * Старые `ConstructorTaskFile`-записи (до введения поля
+   * `direction`) лежат с `null`. UI трактует их как `INITIAL`
+   * (бриф от менеджера) — это исторически правильно. Здесь нормализуем
+   * unknown-string значения тоже к union-типу.
+   */
+  private normalizeDirection(raw: string | null): ConstructorTaskFileDirection {
+    if (raw === 'REWORK') return 'REWORK';
+    if (raw === 'INITIAL') return 'INITIAL';
+    return null;
   }
 
   // ---------------------------------------------------------------------------
@@ -335,11 +352,16 @@ export class ConstructorTasksService {
     employeeId: string,
     scope: ConstructorTaskListScope,
   ): Promise<ConstructorTaskSummaryDto[]> {
+    // Активные для конструктора статусы — все, кроме DONE/CANCELLED.
+    // REWORK и PENDING_ACCEPT тоже его касаются: REWORK — нужно
+    // продолжать работу; PENDING_ACCEPT — ждёт приёмки, но конструктор
+    // должен видеть «висящие» задачи.
+    const ACTIVE_STATUSES = ['NEW', 'IN_PROGRESS', 'REWORK', 'PENDING_ACCEPT'];
     const where: Prisma.ConstructorTaskWhereInput = (() => {
       if (scope === 'mine') {
         return {
           assignedToId: employeeId,
-          status: { in: ['NEW', 'IN_PROGRESS'] },
+          status: { in: ACTIVE_STATUSES },
         };
       }
       if (scope === 'pool') {
@@ -350,7 +372,7 @@ export class ConstructorTasksService {
         OR: [
           {
             assignedToId: employeeId,
-            status: { in: ['NEW', 'IN_PROGRESS'] },
+            status: { in: ACTIVE_STATUSES },
           },
           { assignedToId: null, status: 'NEW' },
         ],
@@ -405,6 +427,11 @@ export class ConstructorTasksService {
           : 'Задача отменена менеджером',
       );
     }
+    if (existing.status === 'PENDING_ACCEPT') {
+      throw new ConstructorTaskInvalidTransitionException(
+        'Задача уже отправлена на приёмку — дождитесь решения менеджера',
+      );
+    }
 
     if (
       enforceOwnership &&
@@ -414,6 +441,10 @@ export class ConstructorTasksService {
       throw new ConstructorTaskAssignedToOtherException();
     }
 
+    // Допустимые исходные статусы:
+    //   - NEW    — задача из общего пула;
+    //   - REWORK — менеджер вернул на доработку (своя или unassigned).
+    // В обоих случаях приводим к IN_PROGRESS и фиксируем владельца.
     const alreadyMineAndInProgress =
       existing.assignedToId === employeeId && existing.status === 'IN_PROGRESS';
     if (!alreadyMineAndInProgress) {
@@ -469,11 +500,16 @@ export class ConstructorTasksService {
   /**
    * Завершить задачу: загрузить готовые DXF-лекала (по одному на каждый
    * размер из `task.sizeRows`), записать `PatternSizeFile` для каждого,
-   * перевести `PatternItem.status` DRAFT → ACTIVE и
-   * `ConstructorTask.status` IN_PROGRESS → DONE.
+   * перевести `ConstructorTask.status` IN_PROGRESS → **PENDING_ACCEPT**.
+   *
+   * **PatternItem.status НЕ меняется здесь** — лекало активирует
+   * менеджер через `accept()`. Это сознательный гейт качества: до
+   * приёмки заказ не уйдёт в производство (`OrdersService.assertPatternUsable`
+   * требует `status='ACTIVE'`).
    *
    * Гарантии:
-   *   - задача обязана быть `IN_PROGRESS` (`assignSelf` сначала);
+   *   - задача обязана быть `IN_PROGRESS` (`assignSelf` сначала; для
+   *     REWORK конструктор тоже делает `assignSelf` → IN_PROGRESS);
    *   - задача обязана принадлежать текущему конструктору, если
    *     `enforceOwnership = true`;
    *   - набор `sizeId` в `payload.sizeFiles` обязан совпадать с
@@ -483,20 +519,18 @@ export class ConstructorTasksService {
    *
    * Phase 1 (вне транзакции): валидируем, грузим файлы через
    * `PatternsStorageService.saveSizeFile` (он сам валидирует
-   * расширение DXF и размер). Получаем список
-   * `{ sizeId, publicUrl, originalFileName, contentType, sizeBytes }`.
+   * расширение DXF и размер).
    *
    * Phase 2 (одна транзакция):
    *   - читаем актуальную `version` для каждого `(patternItemId, sizeId)`
    *     (`max(version) + 1`, или `1` если записей не было);
    *   - createMany(PatternSizeFile) с `status='ACTIVE'`,
    *     `uploadedById = employeeId`;
-   *   - update(PatternItem.status = 'ACTIVE');
-   *   - update(ConstructorTask.status = 'DONE').
+   *   - update(ConstructorTask.status = 'PENDING_ACCEPT', acceptedAt = null).
    *
    * Если Phase 2 падает — файлы остаются orphan-ами на диске
-   * (стандартный паттерн проекта; cleanup-job подберёт). UI повторно
-   * не загрузит — операция считается провалившейся целиком.
+   * (стандартный паттерн проекта). UI повторно не загрузит — операция
+   * считается провалившейся целиком.
    */
   async complete(
     taskId: string,
@@ -515,8 +549,16 @@ export class ConstructorTasksService {
         sizeRows: { select: { sizeId: true, sizeCodeSnapshot: true } },
       },
     });
+    // (комментарий ниже про допустимые статусы)
     if (!existing) throw new ConstructorTaskNotFoundException();
-    if (existing.status !== 'IN_PROGRESS') {
+    // Допускаем complete для IN_PROGRESS и REWORK: REWORK — это «возврат
+    // в работу», конструктор может сразу приложить новую версию DXF без
+    // отдельного нажатия «Взять в работу». Phase 2 transactionally
+    // зафиксирует владельца, если REWORK был unassigned.
+    if (
+      existing.status !== 'IN_PROGRESS' &&
+      existing.status !== 'REWORK'
+    ) {
       throw new ConstructorTaskNotInProgressException();
     }
     if (
@@ -633,17 +675,132 @@ export class ConstructorTasksService {
         })),
       });
 
+      await tx.constructorTask.update({
+        where: { id: taskId },
+        data: {
+          status: 'PENDING_ACCEPT',
+          acceptedAt: null,
+          // Если задача была REWORK без `assignedToId` (мог сбросить
+          // менеджер) — фиксируем владельца текущим конструктором.
+          // Иначе оставляем существующего.
+          assignedToId: existing.assignedToId ?? employeeId,
+        },
+      });
+    });
+
+    return this.getOne(taskId);
+  }
+
+  /**
+   * Менеджер «Принять»: `PENDING_ACCEPT` → `DONE`, `PatternItem.status`
+   * DRAFT → `ACTIVE`. Обе записи обновляются в одной транзакции —
+   * частичного состояния «task DONE, pattern всё ещё DRAFT» быть не
+   * должно. RBAC выполняется в контроллере (`ADMIN`/`SHOP_MANAGER`).
+   *
+   * Идемпотентен в рамках смысла: повторный accept на DONE-задаче
+   * отдаст `ConstructorTaskAcceptInvalidException` — намеренно, чтобы
+   * UI заметил «уже принято» и обновился.
+   */
+  async accept(
+    taskId: string,
+    employeeId: string,
+  ): Promise<ConstructorTaskDetailDto> {
+    const existing = await this.prisma.constructorTask.findUnique({
+      where: { id: taskId },
+      select: { id: true, status: true, patternItemId: true },
+    });
+    if (!existing) throw new ConstructorTaskNotFoundException();
+    if (existing.status !== 'PENDING_ACCEPT') {
+      throw new ConstructorTaskAcceptInvalidException();
+    }
+
+    await this.prisma.$transaction(async (tx) => {
       await tx.patternItem.update({
         where: { id: existing.patternItemId },
         data: { status: 'ACTIVE' },
       });
-
       await tx.constructorTask.update({
         where: { id: taskId },
-        data: { status: 'DONE' },
+        data: { status: 'DONE', acceptedAt: new Date() },
       });
     });
 
+    this.logger.log(
+      `event=constructor-task.accepted taskId=${taskId} acceptedBy=${employeeId}`,
+    );
+    return this.getOne(taskId);
+  }
+
+  /**
+   * Менеджер «Вернуть на доработку»: `PENDING_ACCEPT` → `REWORK`.
+   * Перезаписывает `comment` новым текстом замечаний и сохраняет
+   * прикреплённые файлы как `ConstructorTaskFile` с `direction='REWORK'`.
+   * `PatternItem` НЕ трогаем (он остаётся DRAFT).
+   *
+   * Phase 1: файлы пишем на диск через `ConstructorTasksStorageService`
+   * (тот же storage, что initial brief). Этот storage не валидирует
+   * расширение — менеджер может прислать любой формат (PDF/JPG/ZIP).
+   *
+   * Phase 2 (транзакция): обновить статус/комментарий, создать
+   * `ConstructorTaskFile`-записи.
+   */
+  async requestRework(
+    taskId: string,
+    employeeId: string,
+    comment: string,
+    files: UploadedFileLike[],
+  ): Promise<ConstructorTaskDetailDto> {
+    const existing = await this.prisma.constructorTask.findUnique({
+      where: { id: taskId },
+      select: { id: true, status: true },
+    });
+    if (!existing) throw new ConstructorTaskNotFoundException();
+    if (existing.status !== 'PENDING_ACCEPT') {
+      throw new ConstructorTaskReworkInvalidException(
+        'Вернуть на доработку можно только задачу в статусе «На приёмке»',
+      );
+    }
+    if (files.length > CONSTRUCTOR_TASK_FILE_MAX_COUNT) {
+      throw new ConstructorTaskFileInvalidException(
+        `Слишком много файлов: лимит ${CONSTRUCTOR_TASK_FILE_MAX_COUNT}.`,
+      );
+    }
+
+    // Phase 1: сохранить файлы на диск.
+    const savedFiles: Array<{
+      publicUrl: string;
+      originalFileName: string;
+      contentType: string;
+      sizeBytes: number;
+    }> = [];
+    for (const file of files) {
+      const saved = await this.storage.saveTaskFile(taskId, file);
+      savedFiles.push(saved);
+    }
+
+    // Phase 2: одна транзакция — статус, комментарий, files.
+    await this.prisma.$transaction(async (tx) => {
+      await tx.constructorTask.update({
+        where: { id: taskId },
+        data: { status: 'REWORK', comment, acceptedAt: null },
+      });
+      if (savedFiles.length > 0) {
+        await tx.constructorTaskFile.createMany({
+          data: savedFiles.map((s) => ({
+            taskId,
+            fileUrl: s.publicUrl,
+            originalFileName: s.originalFileName,
+            contentType: s.contentType,
+            sizeBytes: s.sizeBytes,
+            direction: 'REWORK',
+          })),
+        });
+      }
+    });
+
+    this.logger.log(
+      `event=constructor-task.rework-requested taskId=${taskId} by=${employeeId} files=${savedFiles.length}`,
+    );
     return this.getOne(taskId);
   }
 
@@ -651,33 +808,14 @@ export class ConstructorTasksService {
   // INTERNAL
   // ---------------------------------------------------------------------------
 
-  private toSummary(t: {
-    id: string;
-    patternItemId: string;
-    status: string;
-    comment: string;
-    createdAt: Date;
-    updatedAt: Date;
-    submittedAt: Date | null;
-    patternItem: { name: string; article: string };
-    createdBy: { fullName: string } | null;
-    assignedTo: { fullName: string } | null;
-    _count: { files: number; sizeRows: number };
-  }): ConstructorTaskSummaryDto {
-    return {
-      id: t.id,
-      patternItemId: t.patternItemId,
-      patternName: t.patternItem.name,
-      patternArticle: t.patternItem.article,
-      status: t.status as ConstructorTaskSummaryDto['status'],
-      comment: t.comment,
-      createdAt: t.createdAt.toISOString(),
-      updatedAt: t.updatedAt.toISOString(),
-      submittedAt: t.submittedAt ? t.submittedAt.toISOString() : null,
-      createdByName: t.createdBy?.fullName ?? null,
-      assignedToName: t.assignedTo?.fullName ?? null,
-      filesCount: t._count.files,
-      sizeRowsCount: t._count.sizeRows,
-    };
+  /**
+   * Маппинг делегирован чистой функции `mapConstructorTaskSummary`,
+   * чтобы тот же DTO собирали `OrdersService.toDetailDto` и
+   * `PatternsService.getOne` (через include `constructorTask`).
+   */
+  private toSummary(
+    t: Parameters<typeof mapConstructorTaskSummary>[0],
+  ): ConstructorTaskSummaryDto {
+    return mapConstructorTaskSummary(t);
   }
 }

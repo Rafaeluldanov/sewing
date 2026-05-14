@@ -31,8 +31,24 @@ export default async function ConstructorCabinetPage() {
         : 'Не удалось загрузить список задач';
   }
 
-  const myTasks = tasks.filter((t) => t.assignedToName !== null);
+  // Секции для главного экрана — приоритезируем то, что требует
+  // действий конструктора:
+  //   1. REWORK — самая срочная (менеджер прислал замечания);
+  //   2. IN_PROGRESS / NEW (мои) — текущая работа;
+  //   3. свободные NEW — общий пул;
+  //   4. PENDING_ACCEPT — read-only «висит у менеджера», только инфо.
+  const reworkTasks = tasks.filter(
+    (t) => t.assignedToName !== null && t.status === 'REWORK',
+  );
+  const myActiveTasks = tasks.filter(
+    (t) =>
+      t.assignedToName !== null &&
+      (t.status === 'IN_PROGRESS' || t.status === 'NEW'),
+  );
   const poolTasks = tasks.filter((t) => t.assignedToName === null);
+  const pendingTasks = tasks.filter(
+    (t) => t.assignedToName !== null && t.status === 'PENDING_ACCEPT',
+  );
 
   return (
     <div className="constructor-page">
@@ -44,10 +60,18 @@ export default async function ConstructorCabinetPage() {
         </div>
       )}
 
+      {reworkTasks.length > 0 && (
+        <Section
+          title="Возвращены на доработку"
+          emptyHint=""
+          items={reworkTasks}
+        />
+      )}
+
       <Section
         title="В работе у меня"
         emptyHint="Пока нет задач в работе. Возьмите задачу из списка ниже."
-        items={myTasks}
+        items={myActiveTasks}
       />
 
       <Section
@@ -55,6 +79,14 @@ export default async function ConstructorCabinetPage() {
         emptyHint="Свободных задач сейчас нет. Менеджер создаст новую — она появится здесь."
         items={poolTasks}
       />
+
+      {pendingTasks.length > 0 && (
+        <Section
+          title="Ждут приёмки менеджером"
+          emptyHint=""
+          items={pendingTasks}
+        />
+      )}
     </div>
   );
 }

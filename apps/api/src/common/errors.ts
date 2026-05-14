@@ -1343,6 +1343,36 @@ export class ConstructorTaskCompleteFilesMismatchException extends BusinessExcep
 }
 
 /**
+ * Менеджер пытается принять (`POST /:id/accept`) задачу не в
+ * `PENDING_ACCEPT`. Сценарии: ещё не завершена конструктором (NEW /
+ * IN_PROGRESS / REWORK), уже принята (DONE) или отменена.
+ */
+export class ConstructorTaskAcceptInvalidException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_ACCEPT_INVALID',
+      'Принять можно только задачу в статусе «На приёмке»',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Менеджер пытается вернуть на доработку (`POST /:id/rework`) задачу
+ * не в `PENDING_ACCEPT`, либо payload пришёл невалидный (например,
+ * пустой комментарий).
+ */
+export class ConstructorTaskReworkInvalidException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'CONSTRUCTOR_TASK_REWORK_INVALID',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Multipart-запрос upload-а изображения строки материала техкарты
  * пришёл без файла (`file` пустое или отсутствует).
  */

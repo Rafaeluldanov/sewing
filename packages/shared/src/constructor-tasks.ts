@@ -27,18 +27,32 @@ import { CreateOrderNewProductCalculationSchema } from './orders';
 // ---------------------------------------------------------------------------
 
 /**
- * Жизненный цикл задачи конструктору:
- *   - `NEW`         — менеджер отправил, конструктор ещё не взял;
- *   - `IN_PROGRESS` — конструктор взял в работу (из своего кабинета);
- *   - `DONE`        — конструктор завершил, лекало готово;
- *   - `CANCELLED`   — менеджер отменил заявку.
+ * Жизненный цикл задачи конструктору (расширен 14.05.2026 ради цикла
+ * приёмки и доработки на стороне админа):
  *
- * В БД хранится как `String` (без Prisma enum) — расширение возможно
- * без миграции.
+ *   NEW ──assignSelf──▶ IN_PROGRESS ──complete──▶ PENDING_ACCEPT
+ *                            ▲                          │
+ *                            │                  ┌───────┴───────┐
+ *                            │                  ▼               ▼
+ *                            └─────assignSelf── REWORK         DONE
+ *                                                              + pattern → ACTIVE
+ *
+ * - `NEW`            — менеджер отправил, конструктор ещё не взял.
+ * - `IN_PROGRESS`    — конструктор взял в работу.
+ * - `PENDING_ACCEPT` — конструктор завершил (загрузил DXF), лекало
+ *                      ждёт приёмки менеджером. PatternItem ещё DRAFT.
+ * - `REWORK`         — менеджер вернул на доработку с комментарием и,
+ *                      возможно, файлами замечаний (`direction='REWORK'`).
+ * - `DONE`           — менеджер принял; PatternItem.status='ACTIVE'.
+ * - `CANCELLED`      — менеджер отменил.
+ *
+ * В БД хранится как `String` (без Prisma enum) — расширение без миграции.
  */
 export const CONSTRUCTOR_TASK_STATUSES = [
   'NEW',
   'IN_PROGRESS',
+  'PENDING_ACCEPT',
+  'REWORK',
   'DONE',
   'CANCELLED',
 ] as const;
@@ -52,8 +66,26 @@ export const CONSTRUCTOR_TASK_STATUS_LABELS: Record<
 > = {
   NEW: 'Новая',
   IN_PROGRESS: 'В работе',
-  DONE: 'Готова',
+  PENDING_ACCEPT: 'На приёмке',
+  REWORK: 'Доработка',
+  DONE: 'Принята',
   CANCELLED: 'Отменена',
+};
+
+/**
+ * Тон бейджа статуса (для admin-UI и кабинета конструктора). Совпадает
+ * с тонами `AdminStatusBadge` (success/info/warning/danger/muted).
+ */
+export const CONSTRUCTOR_TASK_STATUS_TONE: Record<
+  ConstructorTaskStatus,
+  'success' | 'info' | 'warning' | 'danger' | 'muted'
+> = {
+  NEW: 'warning',
+  IN_PROGRESS: 'info',
+  PENDING_ACCEPT: 'warning',
+  REWORK: 'danger',
+  DONE: 'success',
+  CANCELLED: 'muted',
 };
 
 // ---------------------------------------------------------------------------
@@ -212,6 +244,14 @@ export type SaveConstructorDraftDto = z.infer<typeof SaveConstructorDraftSchema>
 // Output DTOs
 // ---------------------------------------------------------------------------
 
+/**
+ * Источник вложенного файла:
+ *   - `INITIAL` — бриф от менеджера при создании задачи;
+ *   - `REWORK`  — замечания менеджера при возврате на доработку;
+ *   - `null`    — старая запись до введения поля (трактуем как `INITIAL`).
+ */
+export type ConstructorTaskFileDirection = 'INITIAL' | 'REWORK' | null;
+
 export interface ConstructorTaskFileDto {
   id: string;
   fileUrl: string;
@@ -219,6 +259,7 @@ export interface ConstructorTaskFileDto {
   contentType: string;
   sizeBytes: number;
   createdAt: string;
+  direction: ConstructorTaskFileDirection;
 }
 
 export interface ConstructorTaskSizeRowDto {
@@ -242,6 +283,8 @@ export interface ConstructorTaskSummaryDto {
   createdAt: string;
   updatedAt: string;
   submittedAt: string | null;
+  /** Момент финальной приёмки менеджером (`PENDING_ACCEPT` → `DONE`). */
+  acceptedAt: string | null;
   createdByName: string | null;
   assignedToName: string | null;
   filesCount: number;
@@ -357,6 +400,37 @@ export const CompleteConstructorTaskSchema = z.object({
 });
 export type CompleteConstructorTaskDto = z.infer<
   typeof CompleteConstructorTaskSchema
+>;
+
+// ---------------------------------------------------------------------------
+// Приёмка / возврат на доработку (admin)
+// ---------------------------------------------------------------------------
+
+/**
+ * Multipart-поле для файлов возврата на доработку (`requestRework`).
+ * Менеджер прикладывает любой набор файлов (PDF/JPG/ZIP/...). Поле
+ * именное (повторяющееся), как `files` в `saveDraft` — `AnyFilesInterceptor`
+ * на backend-е принимает их под этим именем.
+ */
+export const REWORK_CONSTRUCTOR_TASK_FILE_FIELD = 'rework_files';
+
+/**
+ * Payload `POST /api/constructor-tasks/:id/rework`. Файлы передаются
+ * отдельно multipart-ом под `REWORK_CONSTRUCTOR_TASK_FILE_FIELD`.
+ *
+ * `comment` обязателен — без явного описания «что не так» возврат
+ * на доработку бессмысленен. Перезаписывает `ConstructorTask.comment`
+ * (как и `updateComment`).
+ */
+export const RequestReworkConstructorTaskSchema = z.object({
+  comment: z
+    .string()
+    .min(1, 'Комментарий обязателен — опишите, что нужно поправить')
+    .max(4000, 'Комментарий слишком длинный (макс. 4000 символов)')
+    .transform((v) => v.trim()),
+});
+export type RequestReworkConstructorTaskDto = z.infer<
+  typeof RequestReworkConstructorTaskSchema
 >;
 
 // ---------------------------------------------------------------------------

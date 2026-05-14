@@ -62,6 +62,12 @@ export default async function ConstructorTaskDetailPage({ params }: PageProps) {
 
   const statusLabel = CONSTRUCTOR_TASK_STATUS_LABELS[task.status];
 
+  // Группируем файлы по направлению, чтобы конструктор отличал бриф
+  // менеджера от замечаний на доработку. Старые записи без `direction`
+  // (до 14.05.2026) трактуем как INITIAL.
+  const initialFiles = task.files.filter((f) => f.direction !== 'REWORK');
+  const reworkFiles = task.files.filter((f) => f.direction === 'REWORK');
+
   return (
     <div className="constructor-detail">
       <Link href="/constructor" className="constructor-back">
@@ -129,6 +135,36 @@ export default async function ConstructorTaskDetailPage({ params }: PageProps) {
         </section>
       ) : null}
 
+      {/* REWORK: задачу вернул менеджер. Если она моя — продолжаю работу
+          (ниже отрендерится та же CompleteTaskForm). Если ничей — могу
+          взять (assignSelf переведёт в IN_PROGRESS). Если у другого
+          конструктора — read-only. */}
+      {task.status === 'REWORK' && isUnassigned ? (
+        <section className="constructor-card-block">
+          <p className="constructor-muted" style={{ marginBottom: '0.5rem' }}>
+            Задача вернулась на доработку. Возьмите её в работу, чтобы
+            прислать новую версию лекала.
+          </p>
+          <AssignSelfButton taskId={task.id} />
+        </section>
+      ) : null}
+      {task.status === 'REWORK' && !isUnassigned && !isMine && !isAdmin ? (
+        <section className="constructor-card-block">
+          <p className="constructor-muted">
+            Доработку ведёт {task.assignedToName ?? 'другой конструктор'}.
+          </p>
+        </section>
+      ) : null}
+
+      {task.status === 'PENDING_ACCEPT' ? (
+        <section className="constructor-card-block">
+          <p className="constructor-muted">
+            Лекало отправлено менеджеру на приёмку. Если будут замечания
+            — задача вернётся к вам со статусом «Доработка».
+          </p>
+        </section>
+      ) : null}
+
       {task.status === 'CANCELLED' ? (
         <section className="constructor-card-block">
           <p className="constructor-muted">
@@ -140,7 +176,7 @@ export default async function ConstructorTaskDetailPage({ params }: PageProps) {
       {task.status === 'DONE' ? (
         <section className="constructor-card-block">
           <p className="constructor-muted">
-            Задача завершена. Лекало переведено в статус ACTIVE.
+            Задача принята менеджером. Лекало переведено в статус ACTIVE.
             {isAdmin ? (
               <>
                 {' '}
@@ -166,7 +202,9 @@ export default async function ConstructorTaskDetailPage({ params }: PageProps) {
         )}
 
         {(isMine || isAdmin) &&
-        (task.status === 'NEW' || task.status === 'IN_PROGRESS') ? (
+        (task.status === 'NEW' ||
+          task.status === 'IN_PROGRESS' ||
+          task.status === 'REWORK') ? (
           <UpdateCommentForm
             taskId={task.id}
             initialComment={task.comment}
@@ -206,14 +244,14 @@ export default async function ConstructorTaskDetailPage({ params }: PageProps) {
 
       <section className="constructor-card-block">
         <h2 className="constructor-card-block__title">
-          Вложения от менеджера{' '}
-          <span className="constructor-muted">({task.files.length})</span>
+          Бриф от менеджера{' '}
+          <span className="constructor-muted">({initialFiles.length})</span>
         </h2>
-        {task.files.length === 0 ? (
+        {initialFiles.length === 0 ? (
           <p className="constructor-muted">Файлы не прикреплены.</p>
         ) : (
           <ul className="constructor-files">
-            {task.files.map((f) => (
+            {initialFiles.map((f) => (
               <li key={f.id}>
                 <a
                   href={f.fileUrl}
@@ -233,9 +271,41 @@ export default async function ConstructorTaskDetailPage({ params }: PageProps) {
         )}
       </section>
 
-      {task.status === 'IN_PROGRESS' && (isMine || isAdmin) ? (
+      {reworkFiles.length > 0 && (
         <section className="constructor-card-block constructor-card-block--complete">
-          <h2 className="constructor-card-block__title">Завершить задачу</h2>
+          <h2 className="constructor-card-block__title">
+            Замечания на доработку{' '}
+            <span className="constructor-muted">({reworkFiles.length})</span>
+          </h2>
+          <ul className="constructor-files">
+            {reworkFiles.map((f) => (
+              <li key={f.id}>
+                <a
+                  href={f.fileUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="constructor-link"
+                >
+                  {f.originalFileName}
+                </a>
+                <span className="constructor-muted">
+                  {' '}
+                  · {(f.sizeBytes / 1024).toFixed(0)} КБ
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {(task.status === 'IN_PROGRESS' || task.status === 'REWORK') &&
+      (isMine || isAdmin) ? (
+        <section className="constructor-card-block constructor-card-block--complete">
+          <h2 className="constructor-card-block__title">
+            {task.status === 'REWORK'
+              ? 'Загрузить исправленную версию'
+              : 'Завершить задачу'}
+          </h2>
           <CompleteTaskForm taskId={task.id} sizeRows={task.sizeRows} />
         </section>
       ) : null}

@@ -5667,6 +5667,11 @@ model ConstructorTask {
   /// как `NEW`. Поле зарезервировано на случай, если будущая фаза
   /// `DRAFT` понадобится.
   submittedAt DateTime?
+  /// Момент финальной приёмки менеджером (`PENDING_ACCEPT` → `DONE`).
+  /// До accept-а остаётся `null`. При rework-е сбрасывается в `null`,
+  /// чтобы следующая приёмка перезаписала актуальной датой. Используется
+  /// только для отображения в карточке задачи и аудита.
+  acceptedAt DateTime?
 
   sizeRows ConstructorTaskSizeRow[]
   files    ConstructorTaskFile[]
@@ -5723,6 +5728,17 @@ model ConstructorTaskFile {
   contentType      String
   sizeBytes        Int
   createdAt        DateTime        @default(now())
+
+  /// Какой стороне принадлежит файл:
+  ///   - `INITIAL` — первичный бриф от менеджера (создаётся при
+  ///     `saveDraft` на вкладке «Отправить конструктору»);
+  ///   - `REWORK`  — файлы возврата на доработку (создаются при
+  ///     `requestRework` менеджером — замечания по DXF, фото,
+  ///     откорректированный ТЗ).
+  ///
+  /// Nullable для обратной совместимости со старыми записями (до
+  /// введения поля). Старые записи UI отображает как `INITIAL`.
+  direction String?
 
   @@index([taskId])
 }

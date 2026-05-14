@@ -22,6 +22,7 @@
  */
 
 import { z } from 'zod';
+import type { ConstructorTaskSummaryDto } from './constructor-tasks';
 
 import {
   MATERIAL_ROLES,
@@ -826,4 +827,15 @@ export interface PatternDetailDto {
    * параметры дают столбцы, а значения — содержимое ячеек по размерам.
    */
   sizeParameterValues: PatternItemSizeParameterValueDto[];
+  /**
+   * Этап «Конструкторское бюро»: связанная задача `ConstructorTask`,
+   * если pattern был создан через flow «Отправить конструктору». UI
+   * на `/admin/patterns/[id]` показывает карточку «Источник» со
+   * ссылкой на `/admin/constructor-tasks/[id]`. `null` для лекал,
+   * созданных вручную.
+   *
+   * Опционально (`?`) — старые потребители без пересборки shared
+   * продолжают компилироваться. Backend всегда отдаёт значение.
+   */
+  constructorTask?: ConstructorTaskSummaryDto | null;
 }

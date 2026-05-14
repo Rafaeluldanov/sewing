@@ -26,6 +26,7 @@ import type {
 } from './tech-cards';
 import type { MaterialRole } from './material-roles';
 import type { OrderApplicationDto } from './order-applications';
+import type { ConstructorTaskSummaryDto } from './constructor-tasks';
 import {
   OrderApplicationInputSchema,
   type OrderApplicationInput,
@@ -1254,6 +1255,22 @@ export interface OrderListItemDto {
   patternPreviewSnapshotUrl: string | null;
 
   /**
+   * Этап «Конструкторское бюро» — статус связанной `ConstructorTask`,
+   * если pattern был создан через flow «Отправить конструктору».
+   *
+   * `null` — заказ создан с уже готовым лекалом (стандартный flow),
+   * либо лекало вообще не привязано. UI на `/admin/orders` показывает
+   * маленький бейдж рядом со статусом заказа только для статусов
+   * NEW/IN_PROGRESS/PENDING_ACCEPT/REWORK (DONE/CANCELLED не
+   * показывает — оператору неинтересно).
+   *
+   * Поле опционально (`?`) — старые потребители без пересборки
+   * shared-пакета продолжают компилироваться.
+   */
+  constructorTaskId?: string | null;
+  constructorTaskStatus?: string | null;
+
+  /**
    * Этап «Цена продажи за единицу» (см.
    * `prisma/schema.prisma::Order.customerUnitPrice`,
    * `apps/api/src/modules/orders/orders.service.ts::create`/`update`).
@@ -1480,6 +1497,18 @@ export interface OrderDetailDto
    * заказов без активного расчёта (DRAFT/CALCULATION/REVOKED-only).
    */
   currentCostEstimate?: OrderCostEstimateDto | null;
+
+  /**
+   * Этап «Конструкторское бюро» — полная карточка связанной задачи
+   * (см. `model ConstructorTask`). Если есть, UI на странице заказа
+   * рендерит блок «Конструкторское бюро» с действиями приёмки/возврата
+   * на доработку. `null` — у заказа нет связанной задачи.
+   *
+   * Опционально (`?`) для backward-compat: старые потребители без
+   * пересборки shared-пакета продолжают компилироваться. Backend
+   * всегда отдаёт значение (`null` или объект).
+   */
+  constructorTask?: ConstructorTaskSummaryDto | null;
 }
 
 export interface Paginated<T> {

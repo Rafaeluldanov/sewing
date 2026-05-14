@@ -99,6 +99,7 @@ import {
 } from '@/components/orders/order-hero-card';
 import { OrderDetailTabs } from '@/components/orders/order-detail-tabs';
 import { OrderWorkspaceLayout } from '@/components/orders/order-workspace-layout';
+import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 import {
   updateAdminOrderAction,
   type FormActionState,
@@ -935,6 +936,17 @@ export function AdminEditOrderForm({
                     name="patternItemId"
                     value={patternItemId}
                   />
+                  {/* Карточка «Конструкторское бюро» появляется, если у
+                      заказа есть связанная задача (после refresh, когда
+                      `savedConstructorTask` в state-е уже null). Показываем
+                      её ВЫШЕ остальных вариантов, потому что это самый
+                      важный сигнал — лекало в работе у конструктора и
+                      может ждать действий менеджера. */}
+                  {order.constructorTask && (
+                    <div style={{ marginBottom: '0.75rem' }}>
+                      <OrderConstructorTaskCard task={order.constructorTask} />
+                    </div>
+                  )}
                   {savedInlineProduct ? (
                     <SavedInlineProductCard
                       payload={savedInlineProduct}
