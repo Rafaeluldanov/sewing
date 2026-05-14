@@ -2321,16 +2321,25 @@ export class WorkshopNeedsAlreadyReviewedException extends BusinessException {
 }
 
 /**
- * Не из чего считать потребность заказа: нет привязки к техкарте и
- * нет snapshot строк `OrderMaterialRequirement`. Без живой техкарты
- * (DRAFT) и без snapshot (запущенный заказ без техкарты в момент
- * `start()`) считать нечего.
+ * Не из чего считать потребность заказа. Универсальный код, конкретику
+ * передаём в message — менеджер сразу видит, что именно поправить:
+ *   - техкарта выбрана, но пустая (нет TechCardMaterialLine-ов);
+ *   - лекало без заполненных параметров (нет PatternMaterialArea-ов,
+ *     PatternItemParameterNorm-ов и PatternItemSizeParameterValue-ов),
+ *     при том что категория тоже не помогает (см. `isCategoryDriven`);
+ *   - вообще ничего не привязано (исторический generic-кейс).
+ *
+ * Конкретный текст конструируется в
+ * `WorkshopNeedsService.calculateForOrder` на месте throw, чтобы
+ * сообщение знало `techCardId`/`patternItemId` контекста.
  */
 export class WorkshopNeedCalculationSourceException extends BusinessException {
-  constructor() {
+  constructor(
+    message: string = 'Для расчёта потребности нужна техкарта или snapshot материалов.',
+  ) {
     super(
       'WORKSHOP_NEED_SOURCE_REQUIRED',
-      'Для расчёта потребности нужна техкарта или snapshot материалов.',
+      message,
       HttpStatus.UNPROCESSABLE_ENTITY,
     );
   }

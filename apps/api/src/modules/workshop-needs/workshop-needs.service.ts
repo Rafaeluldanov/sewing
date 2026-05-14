@@ -487,16 +487,48 @@ export class WorkshopNeedsService {
     );
 
     if (sourceLines.length === 0 && !isCategoryDriven) {
-      // Без техкарты и без snapshot заказа считать нечего. Однако
-      // лекало без техкарты — совсем редкий кейс; технически можно
-      // было бы посчитать «голый AREA_DENSITY» по лекалу без densityGsm,
-      // но без densityGsm вес не посчитать → теряет смысл. Поэтому
-      // считаем это явной ошибкой расчёта, а не warning-ом.
-      //
-      // Исключение: для category-driven заказа техкарта может вообще
-      // отсутствовать (вся потребность считается из параметров
-      // номенклатуры). Тогда отсутствие sourceLines — норма.
-      throw new WorkshopNeedCalculationSourceException();
+      // Конструируем адресное сообщение — менеджер сразу должен
+      // понять, ЧТО именно поправить, без открытия логов. Три типичных
+      // случая:
+      //   1) техкарта выбрана, но пустая (typical: менеджер выбрал
+      //      техкарту, в которой ни одной строки `TechCardMaterialLine`);
+      //   2) лекало есть, у него категория есть, но не заполнены ни
+      //      площади, ни нормы фурнитуры, ни погонные метры
+      //      (typical: в calc-tab оставили все ячейки м² пустыми);
+      //   3) совсем ничего: ни техкарты, ни заполненного лекала.
+      const hasTechCard = Boolean(order.techCardId);
+      const techCardLinesEmpty =
+        hasTechCard && (order.techCard?.materialLines.length ?? 0) === 0;
+      const hasPattern = Boolean(order.patternItem);
+      const patternHasCategory = Boolean(order.patternItem?.categoryId);
+      const patternEmptyParams =
+        hasPattern &&
+        (order.patternItem?.materialAreas?.length ?? 0) === 0 &&
+        (order.patternItem?.parameterNorms?.length ?? 0) === 0 &&
+        (order.patternItem?.sizeParameterValues?.length ?? 0) === 0;
+
+      let message: string;
+      if (techCardLinesEmpty && patternEmptyParams) {
+        message =
+          'Расчёт не запустится: выбранная техкарта пустая (нет ни одной строки материала), и у лекала тоже не заполнены параметры. Откройте техкарту и добавьте материалы, либо откройте карточку лекала и заполните площади/нормы.';
+      } else if (techCardLinesEmpty) {
+        message =
+          'В выбранной техкарте нет строк материалов — нечего считать. Откройте «Техкарты», добавьте в техкарту хотя бы одну строку (название, единица, норма на изделие) и попробуйте ещё раз.';
+      } else if (patternHasCategory && patternEmptyParams) {
+        message =
+          'У лекала указана категория, но не заполнены площади материалов / нормы фурнитуры / погонные метры. Откройте карточку лекала (раздел «Номенклатура») и заполните параметры — либо привяжите к заказу техкарту со строками материалов.';
+      } else if (patternEmptyParams && !patternHasCategory) {
+        message =
+          'У лекала не заполнены параметры (площади / нормы / погонные метры) и не задана категория. Откройте карточку лекала и добавьте параметры — либо привяжите к заказу техкарту со строками материалов.';
+      } else if (!hasTechCard && !hasPattern) {
+        message =
+          'У заказа не привязано ни лекало, ни техкарта. Откройте заказ, выберите лекало и (опционально) техкарту, затем повторите запуск расчёта.';
+      } else {
+        // Fallback на исходный generic, если попали в неучтённую комбинацию.
+        message =
+          'Для расчёта потребности нужна техкарта со строками материалов либо лекало с заполненными параметрами.';
+      }
+      throw new WorkshopNeedCalculationSourceException(message);
     }
 
     // 3. Идемпотентность.
