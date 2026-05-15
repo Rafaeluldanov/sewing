@@ -10,13 +10,13 @@ export const dynamic = 'force-dynamic';
 function formatDate(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleDateString('ru-RU');
+  return d.toLocaleDateString('ru-RU', { timeZone: 'Europe/Moscow' });
 }
 
 function formatDateTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('ru-RU');
+  return d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
 }
 
 export default async function QcPassportDetailPage({

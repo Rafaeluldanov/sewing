@@ -17,7 +17,11 @@ const ROLE_LABELS: Record<string, string> = {
 function formatTime(iso: string): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleTimeString('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 /**
