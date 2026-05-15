@@ -44,6 +44,7 @@ export type OrderViewTabId =
   | 'operations'
   | 'costSummary'
   | 'needs'
+  | 'signalSample'
   | 'history';
 
 export interface OrderViewTabConfig {
@@ -99,6 +100,13 @@ export const ORDER_VIEW_TABS: readonly OrderViewTabConfig[] = [
     emptyStateTitle: 'Потребности',
     emptyStateHint:
       'Материалы, внешние подряды и себестоимость появятся после расчёта заказа.',
+  },
+  {
+    id: 'signalSample',
+    label: 'Сигнальный образец',
+    emptyStateTitle: 'Сигнальный образец',
+    emptyStateHint:
+      'Запустите образец перед тиражом: выберите размер из заказа, количество, режим материалов и решите, входит ли образец в тираж.',
   },
   {
     id: 'history',

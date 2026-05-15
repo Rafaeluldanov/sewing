@@ -84,6 +84,7 @@
 - [22. Master calls](#22-master-calls)
 - [23. Master actions](#23-master-actions)
 - [24. Passports](#24-passports)
+- [24b. Order samples (Сигнальный образец)](#24b-order-samples)
 - [25. Cells](#25-cells)
 - [26. Warehouses](#26-warehouses)
 - [26a. Stock](#26a-stock)
@@ -888,6 +889,32 @@ cutterId: z.string().min(1, 'cutterId обязателен').optional()
 не-CUTTER, явный `cutterId` идёт в начисление, ошибки
 `CUTTER_NOT_FOUND` / `CUTTER_INACTIVE`, регрессия на legacy
 `login=cutter` fallback).
+
+---
+
+<a id="24b-order-samples"></a>
+## 24b. Order samples (Сигнальный образец)
+
+Источник: `order-samples/order-samples.controller.ts`. MVP, см.
+`docs/order-signal-sample-flow.md`,
+`docs/order-signal-sample-recon.md`.
+
+Подресурс заказа: запуск sample, его согласование / отклонение /
+отмена. Sample-passport создаётся стандартным
+`PassportsService.create` (со всеми side-effects), затем `sampleId`
+проставляется в той же `prisma.$transaction`, что и `OrderSample`.
+
+| Метод | Путь | RBAC | Описание |
+| --- | --- | --- | --- |
+| POST | `/api/orders/:orderId/samples/start` | SHOP_MANAGER, CUTTER_ASSISTANT (+ ADMIN) | Body `StartOrderSampleDto`. Создаёт `OrderSample(IN_PROGRESS)` + sample-passport (`Passport.sampleId = OrderSample.id`). Валидация: размер из заказа (400 `ORDER_SAMPLE_SIZE_NOT_IN_ORDER`); если `countsTowardOrderQty = true` и `qty > qtyPlan` (400 `ORDER_SAMPLE_QTY_EXCEEDS_ORDER_SIZE_QTY`); активный sample на пару (productId, sizeId) даёт 409 `ORDER_SAMPLE_ALREADY_ACTIVE`; заказ DONE/CANCELLED → 409 `ORDER_SAMPLE_ORDER_INVALID_STATUS`. Audit `ORDER_SAMPLE_STARTED`. |
+| GET  | `/api/orders/:orderId/samples` | SHOP_MANAGER, CUTTER_ASSISTANT, CUTTER, SHOPFLOOR_MASTER (+ ADMIN) | Список образцов заказа (`OrderSampleListItemDto[]`) + `bulkEffect`. |
+| GET  | `/api/order-samples/:id` | SHOP_MANAGER, CUTTER_ASSISTANT, CUTTER, SHOPFLOOR_MASTER (+ ADMIN) | Карточка `OrderSampleDto`. |
+| POST | `/api/order-samples/:id/approve` | SHOP_MANAGER (+ ADMIN) | Body `ApproveOrderSampleDto` (`{ comment? }`). Только `IN_PROGRESS → APPROVED`, иначе 409 `ORDER_SAMPLE_INVALID_STATUS`. Audit `ORDER_SAMPLE_APPROVED`. Эффект на тираж — derived в DTO (`bulkEffect.remainingQty`); `OrderItem.qtyPlan` не мутируется. |
+| POST | `/api/order-samples/:id/reject` | SHOP_MANAGER (+ ADMIN) | Body `RejectOrderSampleDto` (`{ reason }`). 400 `ORDER_SAMPLE_REJECTION_REASON_REQUIRED` если пусто. Audit `ORDER_SAMPLE_REJECTED`. Sample-passport не удаляется. |
+| POST | `/api/order-samples/:id/cancel` | SHOP_MANAGER (+ ADMIN) | Body `CancelOrderSampleDto` (`{ comment? }`). Audit `ORDER_SAMPLE_CANCELLED`. Sample-passport не удаляется. |
+
+DTO: `packages/shared/src/order-samples.ts`. Доменные коды ошибок —
+`ORDER_SAMPLE_*` (см. `apps/api/src/common/errors.ts`).
 
 ---
 

@@ -357,7 +357,8 @@ FINISHED_GOODS_SHIPMENT |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY | PAYROLL_PAYOUT |
-PAYROLL_ACCRUAL_DOCUMENT
+PAYROLL_ACCRUAL_DOCUMENT |
+ORDER_SAMPLE
 ```
 
 <a id="33-salary-entry"></a>
@@ -897,6 +898,39 @@ UI-роуты `/admin/payroll/*` тоже не дёргают мутирующи
 | FK на актора           | `employeeId` → `Employee` (FK, `onDelete`?)         | `employeeId?` строкой, без FK                           |
 | Индексы                | `(passportId,createdAt)`, `(type,createdAt)`, `(operationId,createdAt)` | `(entityType,entityId)`, `(createdAt)`    |
 | Покрытие кодом         | 9 из 13 значений enum пишутся                       | расширяется без миграции, ~30 event-кодов в коде        |
+
+---
+
+## 3a. Order sample events (Сигнальный образец)
+
+Источник истины — `apps/api/src/modules/order-samples/order-samples.service.ts`
++ `prisma/schema.prisma::OrderSample` / `OrderSampleStatus` /
+`OrderSampleMaterialMode`. См. `docs/order-signal-sample-flow.md`.
+
+`AuditEntityType = 'ORDER_SAMPLE'`. `entityId = OrderSample.id`.
+События:
+
+- **`ORDER_SAMPLE_STARTED`** — `POST /api/orders/:orderId/samples/start`.
+  Пишется в той же `prisma.$transaction`, что и
+  `tx.orderSample.create` + `tx.passport.update({ sampleId })`.
+  Payload: `{ orderId, productId, sizeId, qty, materialMode,
+  countsTowardOrderQty, passportId, passportNumber, timestamp }`.
+- **`ORDER_SAMPLE_APPROVED`** — `POST /api/order-samples/:id/approve`.
+  Только при переходе `IN_PROGRESS → APPROVED` (иначе 409
+  `ORDER_SAMPLE_INVALID_STATUS`). Payload: `{ orderId, sizeId, qty,
+  countsTowardOrderQty, timestamp }`. **Не мутирует**
+  `OrderItem.qtyPlan` (см. RECON §10) — эффект на тираж derived в DTO
+  `OrderSampleBulkEffectDto`.
+- **`ORDER_SAMPLE_REJECTED`** — `POST /api/order-samples/:id/reject`.
+  Body требует `reason`. Payload: `{ orderId, rejectionReason,
+  timestamp }`. Sample-passport не удаляется.
+- **`ORDER_SAMPLE_CANCELLED`** — `POST /api/order-samples/:id/cancel`.
+  Payload: `{ orderId, comment, timestamp }`. Sample-passport не
+  удаляется.
+
+`PassportEvent` для sample-passport пишется стандартным
+`PassportsService.create` (`CREATED`); специфичных «sample»-кодов в
+`PassportEventType` нет.
 
 ---
 

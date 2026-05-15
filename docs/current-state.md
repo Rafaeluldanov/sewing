@@ -1566,6 +1566,8 @@ deploy/           — конфиги развёртывания
 | `docs/events.md` | `PassportEvent` / `AuditLog` |
 | `docs/order-flow.md` | бизнес-цикл заказа (PHASE 2, OK) |
 | `docs/production-flow.md` | бизнес-цикл паспорта (PHASE 2, OK) |
+| `docs/order-signal-sample-flow.md` | сигнальный образец (MVP) |
+| `docs/order-signal-sample-recon.md` | RECON перед MVP сигнального образца |
 | `docs/display-board.md` | большой экран `/shopfloor/display` |
 | `docs/screens.md` | карта экранов PWA (часть OUTDATED — сверять с кодом) |
 | `docs/adr/*.md` | принятые архитектурные решения |

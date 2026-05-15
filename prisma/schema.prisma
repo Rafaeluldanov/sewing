@@ -403,6 +403,48 @@ enum PayrollAccrualDocumentStatus {
   CANCELLED
 }
 
+/// Жизненный цикл сигнального образца (`OrderSample`, MVP). См.
+/// `docs/order-signal-sample-flow.md`, `docs/order-signal-sample-recon.md`,
+/// `apps/api/src/modules/order-samples/*`.
+///
+/// - `IN_PROGRESS`        — образец запущен (создан sample-паспорт),
+///                          ещё не дошёл до согласования.
+/// - `READY_FOR_APPROVAL` — зарезервировано на будущее (UI-маркер
+///                          «sample прошёл маршрут и ждёт менеджера»);
+///                          на MVP code в этот статус не переводит,
+///                          но enum-значение объявлено сразу, чтобы
+///                          будущее расширение не требовало миграции.
+/// - `APPROVED`           — менеджер согласовал образец, тираж может
+///                          быть запущен (см.
+///                          `OrderSample.countsTowardOrderQty`,
+///                          §«Bulk effect»).
+/// - `REJECTED`           — менеджер отклонил, причина в
+///                          `rejectionReason`.
+/// - `CANCELLED`          — менеджер отменил.
+enum OrderSampleStatus {
+  IN_PROGRESS
+  READY_FOR_APPROVAL
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+/// Режим расчёта материалов для сигнального образца (`OrderSample`).
+/// См. `docs/order-signal-sample-flow.md §«Material modes»`.
+///
+/// - `SAMPLE_ONLY` — материалы считаются ТОЛЬКО на sample (preview в
+///                   DTO, в `WorkshopNeed` не пишется). После APPROVED
+///                   менеджер запускает существующий
+///                   `WorkshopNeedsService.calculateForOrder` отдельно
+///                   для тиража.
+/// - `FULL_ORDER`  — материалы считаются на весь заказ через
+///                   существующий пайплайн `WorkshopNeed`. Образец
+///                   проходит как passport-сверху.
+enum OrderSampleMaterialMode {
+  SAMPLE_ONLY
+  FULL_ORDER
+}
+
 // =========================
 // DICTIONARIES
 // =========================
@@ -460,6 +502,11 @@ model Size {
   /// `model FinishedGoodsShipmentLine`). Restrict — размер, по
   /// которому уже была отгрузка, нельзя удалять.
   finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
+
+  /// Сигнальные образцы (см. `model OrderSample`). Без cascade —
+  /// размер из справочника удалять «вживую» нельзя, если на него
+  /// уже завязан образец.
+  orderSamples OrderSample[]
 }
 
 model Product {
@@ -501,6 +548,9 @@ model Product {
   /// которому уже была отгрузка, нельзя удалить без сноса
   /// самой отгрузки.
   finishedGoodsShipmentLines FinishedGoodsShipmentLine[]
+
+  /// Сигнальные образцы (см. `model OrderSample`).
+  orderSamples OrderSample[]
 }
 
 model Operation {
@@ -1213,6 +1263,14 @@ model Order {
   /// `apps/api/src/modules/material-issues/*`,
   /// `docs/api.md §«Material issues»`).
   ///
+  /// Сигнальные образцы заказа (MVP, см. `model OrderSample`,
+  /// `apps/api/src/modules/order-samples/*`,
+  /// `docs/order-signal-sample-flow.md`). Один заказ → много
+  /// образцов (последовательно: при отклонении первый можно
+  /// запустить второй). Cascade — без заказа образец смысла не
+  /// имеет.
+  samples OrderSample[]
+
   /// Документы фактического списания материалов в производство.
   /// MVP-итерация — ручная фиксация расхода без проверки складских
   /// остатков, без FIFO/LIFO и без автосписания при выдаче кроя.
@@ -1556,6 +1614,18 @@ model Passport {
   /// `onDelete: SetNull` — снос паспорта оставляет историю движений
   /// кроя без `passportId` (исторический след для аудита).
   workInProgressMovements WorkInProgressMovement[]
+
+  /// Сигнальный образец (MVP, см. `model OrderSample`,
+  /// `apps/api/src/modules/order-samples/*`,
+  /// `docs/order-signal-sample-flow.md`).
+  ///
+  /// Если паспорт выпущен как образец (sample-passport), здесь стоит
+  /// id `OrderSample`. Уникальность — один паспорт ↔ один образец.
+  /// Тиражные паспорта имеют `sampleId = null`. `onDelete: SetNull`:
+  /// удаление `OrderSample` не сносит паспорт (история сохраняется,
+  /// connection between sample and passport just breaks).
+  sampleId String?      @unique
+  sample   OrderSample? @relation("OrderSamplePassport", fields: [sampleId], references: [id], onDelete: SetNull)
 
   @@index([status, currentOperationId])
   @@index([orderId])
@@ -2362,6 +2432,11 @@ model RouteTemplate {
 
   steps  RouteTemplateStep[]
   orders Order[]
+
+  /// Маршрут, выбранный для запуска сигнального образца
+  /// (`OrderSample.routeTemplateId`). На MVP — метаинформация,
+  /// enforcement в коде нет.
+  orderSamples OrderSample[]
 
   @@index([isActive])
 }
@@ -3466,6 +3541,25 @@ model WorkshopNeed {
   orderId String
   order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
 
+  /// Сигнальный образец (MVP, см. `model OrderSample` ниже,
+  /// `apps/api/src/modules/order-samples/*`,
+  /// `docs/order-signal-sample-flow.md §«Material modes»`).
+  ///
+  /// Если потребность была рассчитана в рамках запуска
+  /// сигнального образца — здесь стоит id `OrderSample`. Для строк
+  /// тиражного расчёта (`WorkshopNeedsService.calculateForOrder`)
+  /// поле остаётся `null`. UI карточки заказа показывает sample-
+  /// потребности отдельной плашкой «Образец», тиражные — обычной
+  /// таблицей.
+  ///
+  /// `onDelete: SetNull` — удаление `OrderSample` (cascade от заказа,
+  /// либо ручное) не сносит исторические строки потребности; связь
+  /// просто обнуляется. Это совместимо с инвариантом «WorkshopNeed
+  /// живёт независимо от исходной строки» (то же поведение, что у
+  /// `sourceId`).
+  orderSampleId String?
+  orderSample   OrderSample? @relation(fields: [orderSampleId], references: [id], onDelete: SetNull)
+
   /// `TECH_CARD_MATERIAL_LINE` | `ORDER_MATERIAL_REQUIREMENT`. Хранится
   /// строкой ради расширяемости (см. JSDoc выше).
   sourceType String?
@@ -3641,6 +3735,7 @@ model WorkshopNeed {
   @@index([calculationMethod])
   @@index([selectedSupplierId])
   @@index([selectedSupplierCatalogItemId])
+  @@index([orderSampleId])
 }
 
 // ---------------------------------------------------------------------------
@@ -5747,4 +5842,85 @@ model ConstructorTaskFile {
   direction String?
 
   @@index([taskId])
+}
+
+/// Сигнальный образец (`OrderSample`, MVP). См.
+/// `apps/api/src/modules/order-samples/*`,
+/// `docs/order-signal-sample-flow.md`, `docs/order-signal-sample-recon.md`.
+///
+/// Образец — отдельный sample-flow внутри заказа. Менеджер /
+/// помощник раскройщика запускает образец из карточки заказа,
+/// выбирает размер из заказа, количество, опциональный маршрут
+/// образца, стратегию материалов (`materialMode`) и признак
+/// «образец входит в тираж» (`countsTowardOrderQty`).
+///
+/// Связи:
+///   - `order`         — заказ-родитель;
+///   - `product/size`  — выбор из заказа (валидируется по `OrderItem`);
+///   - `routeTemplate` — опционально, маршрут именно образца (на MVP
+///                       метаинформация, без enforcement; sample-passport
+///                       ходит по тому же `OrderRouteStep[]`, что и тираж);
+///   - `passport`      — обратная связь от `Passport.sampleId` (см.
+///                       `Passport.sampleId` / `Passport.sample`).
+///
+/// MVP-инварианты (см. RECON `docs/order-signal-sample-recon.md §10`):
+///   - НЕ мутирует `OrderItem.qtyPlan` — эффект на тираж считается
+///     логически (`OrderSampleBulkEffectDto.remainingQty`);
+///   - НЕ создаёт записи `WorkshopNeed` в режиме `SAMPLE_ONLY` —
+///     materials preview-only;
+///   - НЕ удаляет sample-passport при `REJECTED` / `CANCELLED`;
+///   - При активном (нетерминальном) образце для пары
+///     `(orderId, productId, sizeId)` запуск второго блокируется
+///     409 `ORDER_SAMPLE_ALREADY_ACTIVE`.
+model OrderSample {
+  id        String @id @default(cuid())
+  orderId   String
+  productId String
+  sizeId    String
+  qty       Int    @default(1)
+
+  /// Маршрут образца (необязателен). На MVP — метаинформация: UI
+  /// показывает «маршрут образца отличается от заказа», но реального
+  /// второго `OrderRouteStep` snapshot для образца не создаётся.
+  routeTemplateId String?
+
+  materialMode         OrderSampleMaterialMode
+  /// Включает ли образец в тираж: при `true` после согласования
+  /// одна штука выбранного размера логически «съедается» из тиража
+  /// (UI отображает `remainingQty = qtyPlan − qty`). При `false`
+  /// образец остаётся отдельной единицей сверх тиража.
+  countsTowardOrderQty Boolean                 @default(false)
+
+  status OrderSampleStatus @default(IN_PROGRESS)
+
+  comment         String?
+  rejectionReason String?
+
+  createdById  String?
+  approvedById String?
+  rejectedById String?
+
+  createdAt   DateTime  @default(now())
+  approvedAt  DateTime?
+  rejectedAt  DateTime?
+  cancelledAt DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  product       Product        @relation(fields: [productId], references: [id])
+  size          Size           @relation(fields: [sizeId], references: [id])
+  routeTemplate RouteTemplate? @relation(fields: [routeTemplateId], references: [id])
+  passport      Passport?      @relation("OrderSamplePassport")
+
+  /// Строки потребности цеха, рассчитанные при запуске этого
+  /// образца (см. `WorkshopNeedsService.calculateForSampleInTx`).
+  /// `onDelete: SetNull` со стороны `WorkshopNeed.orderSampleId` —
+  /// удаление образца не сносит историю потребности.
+  workshopNeeds WorkshopNeed[]
+
+  @@index([orderId, status])
+  @@index([orderId, sizeId])
+  @@index([productId])
+  @@index([sizeId])
+  @@index([routeTemplateId])
 }
