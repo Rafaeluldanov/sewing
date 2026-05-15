@@ -452,7 +452,30 @@ export type AuditEntityType =
    * cancel-вызов на уже отменённом документе тоже идемпотентен —
    * сервис возвращает existing detail и event заново НЕ пишет.
    */
-  | 'FINISHED_GOODS_SHIPMENT';
+  | 'FINISHED_GOODS_SHIPMENT'
+  /**
+   * Сигнальный образец (`OrderSample`, MVP, см.
+   * `apps/api/src/modules/order-samples/*`,
+   * `prisma/schema.prisma::OrderSample`,
+   * `docs/order-signal-sample-flow.md`).
+   *
+   * События:
+   *   - `ORDER_SAMPLE_STARTED` — менеджер / помощник раскройщика
+   *     запустил образец, `entityId = OrderSample.id`, payload —
+   *     `{ orderId, productId, sizeId, qty, materialMode,
+   *        countsTowardOrderQty, passportId, passportNumber,
+   *        employeeId, timestamp }`. Пишется в той же транзакции,
+   *     что и `OrderSample.create` + `PassportsService.create`.
+   *   - `ORDER_SAMPLE_APPROVED` — менеджер согласовал. Payload —
+   *     `{ orderId, sizeId, qty, countsTowardOrderQty, employeeId,
+   *        timestamp }`. `OrderItem.qtyPlan` не мутируется
+   *     (см. RECON §10).
+   *   - `ORDER_SAMPLE_REJECTED` — менеджер отклонил. Payload —
+   *     `{ orderId, rejectionReason, employeeId, timestamp }`.
+   *   - `ORDER_SAMPLE_CANCELLED` — менеджер отменил. Payload —
+   *     `{ orderId, comment, employeeId, timestamp }`.
+   */
+  | 'ORDER_SAMPLE';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

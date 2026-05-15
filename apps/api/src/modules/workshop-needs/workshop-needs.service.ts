@@ -799,6 +799,255 @@ export class WorkshopNeedsService {
   }
 
   // -------------------------------------------------------------------------
+  // SAMPLE FLOW: расчёт потребности на сигнальный образец
+  // -------------------------------------------------------------------------
+
+  /**
+   * Расчёт потребности материалов для сигнального образца
+   * (`OrderSample`, см. `apps/api/src/modules/order-samples/*`,
+   * `docs/order-signal-sample-flow.md §«Material modes»`).
+   *
+   * Вызывается из `OrderSamplesService.start` ВНУТРИ той же
+   * `prisma.$transaction(tx => ...)`, что и `tx.orderSample.create` +
+   * `tx.passport.create`. Атомарность: если расчёт падает, образец
+   * не создаётся.
+   *
+   * Отличия от `calculateForOrder`:
+   *   - `items` подменяются на одну виртуальную строку
+   *     `[{ sizeId: sample.sizeId, qtyPlan: sample.qty }]` —
+   *     формулы `QTY_PER_UNIT` / `AREA_DENSITY` получают «1 единицу
+   *     выбранного размера», а не весь заказ;
+   *   - результирующие строки `WorkshopNeed` помечаются
+   *     `orderSampleId = sample.id` — bulk-list заказа их отличит;
+   *   - тиражные строки (с `orderSampleId = null`) **не трогаются**;
+   *   - `OrderApplication` / `PATTERN_PARAMETER_NORM` /
+   *     `PATTERN_SIZE_PARAMETER_VALUE` в sample-расчёт MVP **не
+   *     включаются** — это «потребность на единицу основной ткани
+   *     для пилотного отшива», не полный финансовый snapshot;
+   *   - если у заказа нет ни `TechCardMaterialLine`, ни snapshot-а
+   *     `OrderMaterialRequirement`, ни `PatternMaterialArea` — НЕ
+   *     бросаем `WorkshopNeedCalculationSourceException` (это
+   *     валидная ситуация: образец можно запустить и без техкарты,
+   *     потребность тогда не пишется). В таком случае возвращаем
+   *     `count = 0` и логируем warning через AuditLog.
+   *
+   * Возвращает количество созданных строк (для логирования из
+   * `OrderSamplesService`).
+   */
+  async calculateForSampleInTx(
+    tx: Prisma.TransactionClient,
+    sample: {
+      id: string;
+      orderId: string;
+      sizeId: string;
+      qty: number;
+      materialMode: string;
+    },
+    actorEmployeeId: string | null,
+  ): Promise<{ count: number; warnings: string[] }> {
+    const order = await tx.order.findUnique({
+      where: { id: sample.orderId },
+      include: {
+        items: { include: { size: true } },
+        materialRequirements: { orderBy: { sortOrder: 'asc' } },
+        techCard: { include: { materialLines: { orderBy: { sortOrder: 'asc' } } } },
+        patternItem: { include: { materialAreas: true } },
+      },
+    });
+    if (!order) {
+      // Не падаем — это вспомогательный шаг при создании sample;
+      // отсутствие заказа должно было быть отловлено выше в
+      // `OrderSamplesService.start`. Здесь — fail-soft.
+      return { count: 0, warnings: ['ORDER_NOT_FOUND'] };
+    }
+
+    // Виртуальные items: одна строка по выбранному размеру с qty
+    // образца. Если выбранный размер не присутствует в order.items
+    // (теоретически невозможно — `OrderSamplesService.start` уже
+    // валидирует), мы всё равно собираем строку из самого sample,
+    // без size-record (потом обогатим через order.items при наличии).
+    const sampleSizeRow = order.items.find((it) => it.sizeId === sample.sizeId);
+    if (!sampleSizeRow) {
+      return { count: 0, warnings: ['SAMPLE_SIZE_NOT_IN_ORDER_ITEMS'] };
+    }
+    const virtualItems = [
+      {
+        sizeId: sample.sizeId,
+        qtyPlan: sample.qty,
+        size: {
+          id: sampleSizeRow.size.id,
+          code: sampleSizeRow.size.code,
+          sortOrder: sampleSizeRow.size.sortOrder,
+        },
+      },
+    ];
+    const totalSampleQty = sample.qty;
+
+    // Источник материалов — тот же snapshot vs live tech card, что
+    // и в `calculateForOrder`. Для sample мы переиспользуем тот же
+    // выбор: если у заказа есть `OrderMaterialRequirement`-snapshot,
+    // считаем по нему (это согласовано с тиражом); иначе — live
+    // техкарта.
+    //
+    // ВАЖНО для sample: `OrderMaterialRequirement.totalQty` — это
+    // snapshot тиражного итога (`qtyPerUnit × Σ qtyPlan`). Если
+    // прокинуть его в `computeLine`, fallback QTY_PER_UNIT для
+    // snapshot вернёт `line.totalQty`, и потребность будет на
+    // ВЕСЬ заказ. Для sample мы хотим `qtyPerUnit × sample.qty`,
+    // поэтому при копировании snapshot-строк затираем `totalQty =
+    // null` — это заставит `computeLine` пересчитать через
+    // `qtyPerUnit × totalOrderQty (= sample.qty)`.
+    // ВАЖНО: даже для snapshot-источника мы выставляем
+    // `source = 'TECH_CARD_MATERIAL_LINE'` локально, чтобы
+    // `computeLine` пошёл по веткой QTY_PER_UNIT (qtyPerUnit × N),
+    // а не по snapshot-ветке (line.totalQty). Snapshot нам нужен
+    // лишь для enrichment (densityGsm, materialRole, цвет).
+    const hasSnapshot = order.materialRequirements.length > 0;
+    const sourceLines: SourceLine[] = hasSnapshot
+      ? order.materialRequirements.map((r) => ({
+          source: 'TECH_CARD_MATERIAL_LINE',
+          id: r.id,
+          name: r.name,
+          unit: r.unit,
+          qtyPerUnit: r.qtyPerUnit,
+          totalQty: null,
+          materialRole: r.materialRole,
+          fabricType: r.fabricType,
+          densityGsm: r.densityGsm,
+          plannedWidthCm: r.plannedWidthCm,
+          colorRule: r.colorRule,
+          fixedColorText: r.fixedColorText,
+          resolvedColorText: r.resolvedColorText,
+          hardwareSizeText: r.hardwareSizeText,
+          hardwareMaterialText: r.hardwareMaterialText,
+          materialImageUrl: r.materialImageUrl,
+          selectedColorText: r.selectedColorText,
+          requiresColorSelection: r.requiresColorSelection,
+        }))
+      : (order.techCard?.materialLines ?? []).map((l) => ({
+          source: 'TECH_CARD_MATERIAL_LINE',
+          id: l.id,
+          name: l.name,
+          unit: l.unit,
+          qtyPerUnit: l.qtyPerUnit,
+          totalQty: null,
+          materialRole: l.materialRole,
+          fabricType: l.fabricType,
+          densityGsm: l.densityGsm,
+          plannedWidthCm: l.plannedWidthCm,
+          colorRule: l.colorRule,
+          fixedColorText: l.fixedColorText,
+          resolvedColorText: null,
+          hardwareSizeText: l.hardwareSizeText,
+          hardwareMaterialText: l.hardwareMaterialText,
+          materialImageUrl: l.materialImageUrl,
+          selectedColorText: null,
+          requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
+        }));
+
+    // Без техкарты / snapshot — sample-потребность не пишется
+    // (fail-soft, см. JSDoc выше).
+    if (sourceLines.length === 0) {
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEEDS_CALCULATED_FOR_SAMPLE',
+          entityType: 'WORKSHOP_NEED',
+          entityId: sample.orderId,
+          employeeId: actorEmployeeId,
+          payload: {
+            orderId: sample.orderId,
+            orderSampleId: sample.id,
+            materialMode: sample.materialMode,
+            sampleQty: sample.qty,
+            sizeId: sample.sizeId,
+            count: 0,
+            note: 'NO_TECH_CARD_OR_SNAPSHOT',
+            timestamp: new Date().toISOString(),
+          },
+        },
+        tx,
+      );
+      return {
+        count: 0,
+        warnings: ['У заказа нет техкарты или snapshot материала — потребность на образец не рассчитана.'],
+      };
+    }
+
+    const warnings: string[] = [];
+    const computed: ComputedNeed[] = [];
+    for (const line of sourceLines) {
+      const c = this.computeLine({
+        line,
+        order: {
+          color: order.color,
+          patternItemId: order.patternItemId,
+        },
+        items: virtualItems,
+        materialAreas: order.patternItem?.materialAreas ?? [],
+        totalOrderQty: totalSampleQty,
+        warnings,
+      });
+      computed.push(c);
+    }
+
+    // Пишем строки `WorkshopNeed` с `orderSampleId` — это и есть
+    // отличие от тиражного `calculateForOrder` (там `orderSampleId`
+    // остаётся `null`).
+    for (const c of computed) {
+      await tx.workshopNeed.create({
+        data: {
+          orderId: sample.orderId,
+          orderSampleId: sample.id,
+          sourceType: c.sourceType,
+          sourceId: c.sourceId,
+          materialRole: c.materialRole,
+          sourceName: c.sourceName,
+          description: c.description,
+          fabricType: c.fabricType,
+          densityGsm: c.densityGsm,
+          plannedWidthCm: c.plannedWidthCm,
+          colorRule: c.colorRule,
+          fixedColorText: c.fixedColorText,
+          resolvedColorText: c.resolvedColorText,
+          totalAreaM2: c.totalAreaM2,
+          calculatedQty: c.calculatedQty,
+          unit: c.unit,
+          calculationMethod: c.calculationMethod,
+          calculationNote:
+            (c.calculationNote ? c.calculationNote + ' · ' : '') +
+            `Расчёт на сигнальный образец (qty=${sample.qty}, size=${sampleSizeRow.size.code})`,
+        },
+      });
+    }
+
+    await this.audit.log(
+      {
+        event: 'WORKSHOP_NEEDS_CALCULATED_FOR_SAMPLE',
+        entityType: 'WORKSHOP_NEED',
+        entityId: sample.orderId,
+        employeeId: actorEmployeeId,
+        payload: {
+          orderId: sample.orderId,
+          orderSampleId: sample.id,
+          materialMode: sample.materialMode,
+          sampleQty: sample.qty,
+          sizeId: sample.sizeId,
+          count: computed.length,
+          warningsCount: warnings.length,
+          timestamp: new Date().toISOString(),
+        },
+      },
+      tx,
+    );
+
+    this.logger.log(
+      `event=workshop_needs.calculate_for_sample orderId=${sample.orderId} sampleId=${sample.id} count=${computed.length} warnings=${warnings.length}`,
+    );
+
+    return { count: computed.length, warnings };
+  }
+
+  // -------------------------------------------------------------------------
   // INTERNAL: per-line computation
   // -------------------------------------------------------------------------
 
@@ -1799,6 +2048,7 @@ export class WorkshopNeedsService {
       nomenclatureSource,
       sourceType: row.sourceType,
       sourceId: row.sourceId,
+      orderSampleId: row.orderSampleId,
       materialRole: row.materialRole,
       sourceName: row.sourceName,
       description: row.description,

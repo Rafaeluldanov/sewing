@@ -3155,3 +3155,79 @@ export class MaterialStockInsufficientException extends HttpException {
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Сигнальный образец (см. `apps/api/src/modules/order-samples/*`,
+// `docs/order-signal-sample-flow.md`,
+// `packages/shared/src/order-samples.ts`).
+// ---------------------------------------------------------------------------
+
+export class OrderSampleNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_SAMPLE_NOT_FOUND',
+      'Сигнальный образец не найден',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+export class OrderSampleAlreadyActiveException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_SAMPLE_ALREADY_ACTIVE',
+      'По этой паре изделия и размера уже есть активный образец. Закройте его (Approve / Reject / Cancel) перед запуском нового.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class OrderSampleInvalidStatusException extends BusinessException {
+  constructor(currentStatus: string, action: string) {
+    super(
+      'ORDER_SAMPLE_INVALID_STATUS',
+      `Действие "${action}" недоступно для образца в статусе ${currentStatus}.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class OrderSampleSizeNotInOrderException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_SAMPLE_SIZE_NOT_IN_ORDER',
+      'Выбранный размер отсутствует в заказе.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+export class OrderSampleOrderInvalidStatusException extends BusinessException {
+  constructor(currentStatus: string) {
+    super(
+      'ORDER_SAMPLE_ORDER_INVALID_STATUS',
+      `Нельзя запустить образец у заказа в статусе ${currentStatus}.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class OrderSampleQtyExceedsOrderSizeQtyException extends BusinessException {
+  constructor(qty: number, orderSizeQty: number) {
+    super(
+      'ORDER_SAMPLE_QTY_EXCEEDS_ORDER_SIZE_QTY',
+      `Количество образца (${qty}) превышает план по размеру (${orderSizeQty}). При включении образца в тираж это невозможно.`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+export class OrderSampleRejectionReasonRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_SAMPLE_REJECTION_REASON_REQUIRED',
+      'Укажите причину отклонения образца.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}

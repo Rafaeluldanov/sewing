@@ -621,6 +621,20 @@ export interface WorkshopNeedDto {
   sourceType: WorkshopNeedSourceType | string | null;
   sourceId: string | null;
 
+  /**
+   * Сигнальный образец (MVP, см.
+   * `apps/api/src/modules/order-samples/*`,
+   * `docs/order-signal-sample-flow.md §«Material modes»`,
+   * `prisma/schema.prisma::WorkshopNeed.orderSampleId`).
+   *
+   * Если строка потребности была рассчитана в рамках запуска
+   * сигнального образца — здесь стоит id `OrderSample`. Тиражные
+   * строки (`WorkshopNeedsService.calculateForOrder`) имеют
+   * `orderSampleId = null`. UI карточки заказа фильтрует/группирует
+   * по этому полю.
+   */
+  orderSampleId: string | null;
+
   materialRole: MaterialRole | string | null;
   sourceName: string | null;
   description: string;

@@ -64,6 +64,11 @@ import { WorkInProgressModule } from '../work-in-progress/work-in-progress.modul
   ],
   controllers: [PassportsController, OrderPassportsController, CellsController],
   providers: [PassportsService, PassportNumberService],
-  exports: [PassportsService],
+  // `PassportNumberService` экспортирован для модуля «Сигнальный
+  // образец» (`apps/api/src/modules/order-samples/*`) — sample-flow
+  // создаёт sample-passport напрямую (свой набор side-effects:
+  // без enforce роли CUTTER, без immediate-начисления). Тиражным
+  // паспортам по-прежнему служит `PassportsService.create`.
+  exports: [PassportsService, PassportNumberService],
 })
 export class PassportsModule {}
