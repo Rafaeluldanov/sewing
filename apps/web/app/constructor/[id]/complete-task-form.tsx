@@ -7,9 +7,14 @@ import { completeTaskAction } from '../actions';
 
 /**
  * Форма «Завершить задачу». Для каждого размера из `task.sizeRows`
- * рендерим отдельный `<input type="file">` с уникальным name
- * (`file_<sizeId>`) — backend по этому префиксу матчит файлы с
- * `payload.sizeFiles[]`.
+ * рендерим:
+ *   - отдельный `<input type="file">` с уникальным name
+ *     (`file_<sizeId>`) — backend по этому префиксу матчит файлы с
+ *     `payload.sizeFiles[]`;
+ *   - два поля Кулирка/Кашкорсе (м пог. на изделие) — конструктор
+ *     может скорректировать значения, заданные менеджером, и они
+ *     попадут в номенклатуру (`PatternItemSizeParameterValue`) при
+ *     приёмке.
  *
  * Принимаем только `.dxf` (см. `PatternsStorageService.saveSizeFile`,
  * валидация `PATTERN_DXF_EXTENSIONS`). Если конструктор попытается
@@ -50,9 +55,9 @@ export function CompleteTaskForm({
         e.preventDefault();
         if (
           !window.confirm(
-            'Завершить задачу? После этого лекало станет ACTIVE и доступно ' +
-              'для запуска заказов в производство. Изменить файлы можно ' +
-              'будет только через раздел «Лекала» в админке.',
+            'Завершить задачу? После этого лекало уйдёт менеджеру на ' +
+              'приёмку. Скорректированные значения Кулирка/Кашкорсе ' +
+              'попадут в номенклатуру.',
           )
         ) {
           return;
@@ -68,38 +73,71 @@ export function CompleteTaskForm({
       }}
     >
       <p className="constructor-complete-form__hint">
-        Загрузите готовое DXF-лекало для каждого размера. По одному файлу на
-        размер.
+        Загрузите готовое DXF-лекало для каждого размера и при необходимости
+        поправьте Кулирка/Кашкорсе — м пог. на одно изделие. Эти значения
+        попадут в карточку номенклатуры.
       </p>
 
-      <div className="constructor-complete-form__rows">
-        {rowsWithSize.map((row) => {
-          const fieldName = `${COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX}${row.sizeId}`;
-          return (
-            <div key={row.id} className="constructor-complete-form__row">
-              <label
-                className="constructor-label"
-                htmlFor={`file-${row.sizeId}`}
-              >
-                Размер <strong>{row.sizeCodeSnapshot}</strong>
-              </label>
-              <input
-                type="file"
-                id={`file-${row.sizeId}`}
-                name={fieldName}
-                accept=".dxf"
-                required
-              />
-              <input type="hidden" name="sizeIds" value={row.sizeId} />
-            </div>
-          );
-        })}
-      </div>
+      <table className="constructor-table" style={{ width: '100%' }}>
+        <thead>
+          <tr>
+            <th style={{ textAlign: 'left' }}>Размер</th>
+            <th style={{ textAlign: 'left' }}>Кулирка, м пог.</th>
+            <th style={{ textAlign: 'left' }}>Кашкорсе, м пог.</th>
+            <th style={{ textAlign: 'left' }}>DXF-файл</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rowsWithSize.map((row) => {
+            const fieldName = `${COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX}${row.sizeId}`;
+            return (
+              <tr key={row.id}>
+                <td>
+                  <strong>{row.sizeCodeSnapshot}</strong>
+                </td>
+                <td>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    name={`kulirka_${row.sizeId}`}
+                    defaultValue={row.kulirkaMeters ?? ''}
+                    placeholder="м пог."
+                    style={{ width: 110, padding: '4px 6px' }}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    name={`kashkorse_${row.sizeId}`}
+                    defaultValue={row.kashkorseMeters ?? ''}
+                    placeholder="м пог."
+                    style={{ width: 110, padding: '4px 6px' }}
+                  />
+                </td>
+                <td>
+                  <input
+                    type="file"
+                    id={`file-${row.sizeId}`}
+                    name={fieldName}
+                    accept=".dxf"
+                    required
+                  />
+                </td>
+                <td style={{ display: 'none' }}>
+                  <input type="hidden" name="sizeIds" value={row.sizeId} />
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
 
       <button
         type="submit"
         className="constructor-btn constructor-btn--primary"
         disabled={pending}
+        style={{ marginTop: 12 }}
       >
         {pending ? 'Завершаем…' : 'Завершить и активировать лекало'}
       </button>

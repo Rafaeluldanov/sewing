@@ -375,6 +375,23 @@ export type UpdateConstructorTaskCommentDto = z.infer<
  * Один файл на размер. Версия в `PatternSizeFile.version` инкрементится
  * сервисом (не клиентом).
  */
+/**
+ * Скорректированные значения «Кулирка / Кашкорсе» (м пог. на изделие)
+ * по одному размеру задачи. Конструктор может изменить значения,
+ * заданные менеджером при создании задачи, и отправить вместе с
+ * лекалом. Применяются `updateMany((taskId, sizeId))` ДО переноса в
+ * `PatternItemSizeParameterValue`, поэтому в номенклатуру попадают
+ * уже скорректированные числа.
+ */
+export const CompleteConstructorTaskSizeRowInputSchema = z.object({
+  sizeId: z.string().min(1, 'sizeId обязателен'),
+  kulirkaMeters: DecimalMetersField,
+  kashkorseMeters: DecimalMetersField,
+});
+export type CompleteConstructorTaskSizeRowInputDto = z.infer<
+  typeof CompleteConstructorTaskSizeRowInputSchema
+>;
+
 export const CompleteConstructorTaskSchema = z.object({
   sizeFiles: z
     .array(
@@ -390,6 +407,31 @@ export const CompleteConstructorTaskSchema = z.object({
       }),
     )
     .min(1, 'Должен быть хотя бы один файл лекала')
+    .superRefine((rows, ctx) => {
+      const seen = new Set<string>();
+      for (let i = 0; i < rows.length; i += 1) {
+        const sid = rows[i]!.sizeId;
+        if (seen.has(sid)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: [i, 'sizeId'],
+            message: 'Размер уже указан — дубликаты не допускаются',
+          });
+        }
+        seen.add(sid);
+      }
+    }),
+  /**
+   * Опциональный массив скорректированных значений Кулирка/Кашкорсе.
+   * Если пуст / не передан — исходные значения из задачи остаются как
+   * есть. `sizeId` каждой строки должен соответствовать существующей
+   * `ConstructorTaskSizeRow` (защита от подделки sizeId — backend
+   * валидирует whitelist).
+   */
+  sizeRows: z
+    .array(CompleteConstructorTaskSizeRowInputSchema)
+    .max(64, 'Слишком много строк размеров (макс. 64)')
+    .default([])
     .superRefine((rows, ctx) => {
       const seen = new Set<string>();
       for (let i = 0; i < rows.length; i += 1) {

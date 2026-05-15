@@ -101,6 +101,17 @@ export async function completeTaskAction(
 
   const out = new FormData();
   const sizeFiles: Array<{ sizeId: string; fileFieldName: string }> = [];
+  /**
+   * Скорректированные конструктором значения «Кулирка / Кашкорсе»
+   * (м пог. на изделие). Пустое поле → null (значение очищено,
+   * `syncSizeParameterValuesFromTask` его не запишет в номенклатуру).
+   * Backend сам выполнит финальную zod-валидацию (диапазон, формат).
+   */
+  const sizeRows: Array<{
+    sizeId: string;
+    kulirkaMeters: string | null;
+    kashkorseMeters: string | null;
+  }> = [];
 
   for (const sizeId of sizeIds) {
     const fieldName = `${COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX}${sizeId}`;
@@ -113,9 +124,21 @@ export async function completeTaskAction(
     }
     out.append(fieldName, file, file.name);
     sizeFiles.push({ sizeId, fileFieldName: fieldName });
+
+    const kulirkaRaw = formData.get(`kulirka_${sizeId}`);
+    const kashkorseRaw = formData.get(`kashkorse_${sizeId}`);
+    const kulirka =
+      typeof kulirkaRaw === 'string' && kulirkaRaw.trim() !== ''
+        ? kulirkaRaw.trim().replace(',', '.')
+        : null;
+    const kashkorse =
+      typeof kashkorseRaw === 'string' && kashkorseRaw.trim() !== ''
+        ? kashkorseRaw.trim().replace(',', '.')
+        : null;
+    sizeRows.push({ sizeId, kulirkaMeters: kulirka, kashkorseMeters: kashkorse });
   }
 
-  out.append('payload', JSON.stringify({ sizeFiles }));
+  out.append('payload', JSON.stringify({ sizeFiles, sizeRows }));
 
   try {
     await completeConstructorTask(taskId, out);

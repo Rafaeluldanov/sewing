@@ -742,6 +742,50 @@ export class ConstructorTasksService {
         })),
       });
 
+      // Опциональная корректировка Кулирка/Кашкорсе конструктором.
+      // payload.sizeRows[] — те же sizeId-ы, что в task.sizeRows
+      // (валидируется по whitelist `taskSizeIds`). Применяем ДО
+      // `syncSizeParameterValuesFromTask`, чтобы в номенклатуру
+      // попали уже скорректированные числа.
+      if (payload.sizeRows && payload.sizeRows.length > 0) {
+        for (const sr of payload.sizeRows) {
+          if (!taskSizeIds.has(sr.sizeId)) {
+            throw new ConstructorTaskCompleteFilesMismatchException(
+              `sizeRows ссылается на размер ${sr.sizeId}, которого нет в задаче`,
+            );
+          }
+          await tx.constructorTaskSizeRow.updateMany({
+            where: { taskId, sizeId: sr.sizeId },
+            data: {
+              kulirkaMeters:
+                sr.kulirkaMeters == null
+                  ? null
+                  : new Prisma.Decimal(sr.kulirkaMeters),
+              kashkorseMeters:
+                sr.kashkorseMeters == null
+                  ? null
+                  : new Prisma.Decimal(sr.kashkorseMeters),
+            },
+          });
+        }
+      }
+
+      // Автоматически переносим Кулирка/Кашкорсе из строк задачи
+      // (`ConstructorTaskSizeRow`) в `PatternItemSizeParameterValue`
+      // лекала — раньше менеджер вручную заполнял блок «Погонные метры»
+      // на /admin/patterns/[id]. Маппинг по `roleKey` активных
+      // параметров категории с `inputType = LINEAR_M_BY_SIZE`:
+      //   - `MAIN_FABRIC` ← kulirkaMeters (Кулирка / основное полотно);
+      //   - `RIB`         ← kashkorseMeters (Кашкорсе / рибана).
+      // Параметров с другими `roleKey` маппинг не покрывает — те поля
+      // менеджер продолжит править руками. Если у лекала нет категории
+      // или подходящих активных параметров — секция остаётся пустой.
+      // Для REWORK сценария (повторный complete) делаем full-replace
+      // только в «допустимом окне» (`categoryParameterId IN allowed`),
+      // чтобы не задеть значения по другим параметрам, заданные
+      // вручную.
+      await this.syncSizeParameterValuesFromTask(tx, taskId, existing.patternItemId);
+
       await tx.constructorTask.update({
         where: { id: taskId },
         data: {
@@ -756,6 +800,87 @@ export class ConstructorTasksService {
     });
 
     return this.getOne(taskId);
+  }
+
+  /**
+   * Переносит Кулирка/Кашкорсе из `ConstructorTaskSizeRow` в
+   * `PatternItemSizeParameterValue` лекала. Вызывается из `complete`
+   * внутри транзакции. Безопасно вызывать повторно (full-replace в
+   * рамках «допустимого окна» категорийных параметров — см. logging).
+   */
+  private async syncSizeParameterValuesFromTask(
+    tx: Prisma.TransactionClient,
+    taskId: string,
+    patternItemId: string,
+  ): Promise<void> {
+    const pattern = await tx.patternItem.findUnique({
+      where: { id: patternItemId },
+      select: { categoryId: true },
+    });
+    if (!pattern?.categoryId) return;
+
+    const allowedParams = await tx.patternCategoryParameter.findMany({
+      where: {
+        categoryId: pattern.categoryId,
+        status: 'ACTIVE',
+        inputType: 'LINEAR_M_BY_SIZE',
+        roleKey: { in: ['MAIN_FABRIC', 'RIB'] },
+      },
+      select: {
+        id: true,
+        roleKey: true,
+        label: true,
+        inputType: true,
+        unit: true,
+      },
+    });
+    if (allowedParams.length === 0) return;
+
+    const sizeRows = await tx.constructorTaskSizeRow.findMany({
+      where: { taskId },
+      select: {
+        sizeId: true,
+        kulirkaMeters: true,
+        kashkorseMeters: true,
+      },
+    });
+
+    const valueRows: Prisma.PatternItemSizeParameterValueCreateManyInput[] = [];
+    for (const param of allowedParams) {
+      for (const row of sizeRows) {
+        if (!row.sizeId) continue;
+        const raw =
+          param.roleKey === 'MAIN_FABRIC'
+            ? row.kulirkaMeters
+            : param.roleKey === 'RIB'
+              ? row.kashkorseMeters
+              : null;
+        if (raw == null) continue;
+        valueRows.push({
+          patternItemId,
+          categoryParameterId: param.id,
+          sizeId: row.sizeId,
+          roleKey: param.roleKey,
+          labelSnapshot: param.label,
+          inputTypeSnapshot: param.inputType,
+          unit: param.unit,
+          value: raw,
+        });
+      }
+    }
+
+    const allowedIds = allowedParams.map((p) => p.id);
+    await tx.patternItemSizeParameterValue.deleteMany({
+      where: { patternItemId, categoryParameterId: { in: allowedIds } },
+    });
+    if (valueRows.length > 0) {
+      await tx.patternItemSizeParameterValue.createMany({ data: valueRows });
+    }
+    this.logger.log(
+      `event=constructor-task.sync_size_param_values task=${taskId} ` +
+        `pattern=${patternItemId} params=${allowedParams.length} ` +
+        `values=${valueRows.length}`,
+    );
   }
 
   /**
