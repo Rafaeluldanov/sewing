@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import {
   ArrowLeft,
   ClipboardList,
+  Copy,
   ExternalLink,
   FileDown,
   Paperclip,
@@ -242,12 +243,36 @@ export default async function AdminConstructorTaskDetailPage({
       {activeSizeFiles.length > 0 && (
         <div style={{ marginTop: '1rem' }}>
           <AdminCard>
-            <h3 className="admin-card__title">
-              Готовые лекала от конструктора{' '}
-              <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
-                ({activeSizeFiles.length})
-              </span>
-            </h3>
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                gap: 12,
+                flexWrap: 'wrap',
+                marginBottom: 8,
+              }}
+            >
+              <h3 className="admin-card__title" style={{ margin: 0 }}>
+                Готовые лекала от конструктора{' '}
+                <span
+                  className="admin-muted"
+                  style={{ fontSize: '0.85rem' }}
+                >
+                  ({activeSizeFiles.length})
+                </span>
+              </h3>
+              {task.status === 'DONE' && (
+                <Link
+                  href={`/admin/patterns/${task.patternItemId}?clone=1`}
+                  className="admin-btn admin-btn--ghost"
+                  title="Создать новую номенклатуру на основе этих DXF / категории / расхода"
+                >
+                  <Copy size={16} strokeWidth={1.6} aria-hidden />
+                  Создать ещё одну номенклатуру
+                </Link>
+              )}
+            </div>
             <ul
               style={{
                 listStyle: 'none',

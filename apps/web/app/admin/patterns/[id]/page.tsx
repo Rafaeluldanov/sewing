@@ -35,6 +35,7 @@ import {
   AdminTechInfo,
 } from '@/components/admin';
 import { statusTone } from '@/lib/admin-labels';
+import { ClonePatternModalHost } from './clone-modal-host';
 import { EditPatternForm } from './edit-form';
 import { PatternPreviewUploadForm } from './preview-upload-form';
 import { PatternSizesManager } from './pattern-sizes-manager';
@@ -130,6 +131,12 @@ export default async function AdminPatternDetailPage({
         </>
       }
     >
+      <ClonePatternModalHost
+        patternId={pattern.id}
+        patternName={pattern.name}
+        patternArticle={pattern.article}
+      />
+
       <div className="admin-grid-2">
         <div className="admin-stack">
           <AdminCard>

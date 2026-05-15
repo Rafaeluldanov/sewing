@@ -119,3 +119,20 @@ export interface CreateSizeState {
 }
 
 export const initialCreateSizeState: CreateSizeState = {};
+
+/**
+ * State модалки «Клонировать номенклатуру» (этап «Создать номенклатуру
+ * по готовому лекалу», см. `apps/web/app/admin/patterns/[id]/clone-modal.tsx`
+ * и `clonePatternAction` в `actions.ts`).
+ *
+ * При успехе action редиректит на новую карточку — `ok`/`successMessage`
+ * в UI не отображаются (state используется только как «канал ошибок»).
+ */
+export interface ClonePatternState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialClonePatternState: ClonePatternState = {};

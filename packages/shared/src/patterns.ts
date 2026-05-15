@@ -612,6 +612,37 @@ export type ReplacePatternItemSizeParameterValuesDto = z.infer<
 >;
 
 // ---------------------------------------------------------------------------
+// Clone DTO — этап «Создать номенклатуру по готовому лекалу»
+// (см. `apps/api/src/modules/patterns/patterns.service.ts::clone`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Запрос клонирования существующей номенклатуры в новую.
+ *
+ * Поля `name` / `article` опциональны: если не заданы, backend сам
+ * подберёт значения по исходному лекалу (`{name} (копия)` и первый
+ * свободный `{article}-2/3/…`). UI обычно передаёт оба поля
+ * предзаполненными, чтобы менеджер мог поправить ещё до создания.
+ *
+ * Клонируются: `name`/`description`/`categoryCode`/`categoryId`,
+ * активные `PatternSizeFile` (DXF копируются физически на диск под
+ * новыми `storedFileName`, `version = 1`), все `PatternMaterialArea`,
+ * все `PatternItemParameterNorm`, все `PatternItemSizeParameterValue`.
+ *
+ * НЕ копируется: `previewImageUrl` (превью у новой карточки пустое —
+ * менеджер загрузит своё), `legacyProductId` (UNIQUE, создастся по
+ * первой ссылке из заказа), связанная `ConstructorTask` (она 1:1 и
+ * относится к исходному pattern), архивные `PatternSizeFile`.
+ *
+ * Результат — `PatternDetailDto` новой номенклатуры со `status = ACTIVE`.
+ */
+export const ClonePatternSchema = z.object({
+  name: NameOptionalField.optional(),
+  article: ArticleOptionalField.optional(),
+});
+export type ClonePatternDto = z.infer<typeof ClonePatternSchema>;
+
+// ---------------------------------------------------------------------------
 // List query DTO
 // ---------------------------------------------------------------------------
 

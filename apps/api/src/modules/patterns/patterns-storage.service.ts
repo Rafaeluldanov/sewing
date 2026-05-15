@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { join, posix, resolve } from 'node:path';
 import {
   PATTERN_DXF_EXTENSIONS,
@@ -110,6 +110,103 @@ export class PatternsStorageService {
       publicUrl: `${this.publicPrefix}/${relativePath}`,
       storedFileName,
     };
+  }
+
+  /**
+   * Физически копирует существующий DXF-файл лекала в новую папку
+   * под новой номенклатурой. Источник определяется по сохранённому
+   * `fileUrl` (вида `/uploads/patterns/<src>/sizes/<sizeId>/<storedName>`).
+   *
+   * Расширение и имя нового файла генерируются заново — это даёт
+   * стабильное «безопасное» имя на диске, как и при `saveSizeFile`.
+   * Если у исходного URL расширение нестандартное (не входит в
+   * `PATTERN_DXF_EXTENSIONS`), бросаем `PatternUploadInvalidException`
+   * — это сигнал, что в БД лежит запись, которую uploader пропустил
+   * бы.
+   *
+   * Используется методом `PatternsService.clone` при создании новой
+   * номенклатуры по готовому лекалу. Физическое копирование (а не
+   * shared `storageKey`) гарантирует, что архивация / удаление одной
+   * номенклатуры не задевает другую.
+   */
+  async copySizeFile(
+    sourceFileUrl: string,
+    targetPatternId: string,
+    targetSizeId: string,
+  ): Promise<{ publicUrl: string; storedFileName: string }> {
+    const sourceRel = this.publicUrlToRelative(sourceFileUrl);
+    const sourceAbs = resolve(this.uploadsRoot, sourceRel);
+    if (
+      !sourceAbs.startsWith(this.uploadsRoot + '/') &&
+      sourceAbs !== this.uploadsRoot
+    ) {
+      this.logger.error(
+        `Path traversal attempt suppressed (source): ${sourceAbs} outside ${this.uploadsRoot}`,
+      );
+      throw new PatternUploadInvalidException('Недопустимый исходный путь файла.');
+    }
+
+    const sourceBasename = sourceRel.split('/').pop() ?? '';
+    const lastDot = sourceBasename.lastIndexOf('.');
+    if (lastDot <= 0 || lastDot === sourceBasename.length - 1) {
+      throw new PatternUploadInvalidException(
+        'У исходного файла нет расширения — клонирование невозможно.',
+      );
+    }
+    const ext = sourceBasename.slice(lastDot + 1).toLowerCase();
+    if (!(PATTERN_DXF_EXTENSIONS as readonly string[]).includes(ext)) {
+      throw new PatternUploadInvalidException(
+        `Недопустимое расширение «${ext}» у исходного DXF. Разрешены: ${PATTERN_DXF_EXTENSIONS.join(', ')}.`,
+      );
+    }
+
+    const storedFileName = this.makeStoredFileName(ext);
+    const targetRel = posix.join(
+      'patterns',
+      targetPatternId,
+      'sizes',
+      targetSizeId,
+      storedFileName,
+    );
+    const targetAbs = resolve(this.uploadsRoot, targetRel);
+    if (
+      !targetAbs.startsWith(this.uploadsRoot + '/') &&
+      targetAbs !== this.uploadsRoot
+    ) {
+      this.logger.error(
+        `Path traversal attempt suppressed (target): ${targetAbs} outside ${this.uploadsRoot}`,
+      );
+      throw new PatternUploadInvalidException('Недопустимый путь нового файла.');
+    }
+    await mkdir(targetAbs.slice(0, targetAbs.lastIndexOf('/')), {
+      recursive: true,
+    });
+    await copyFile(sourceAbs, targetAbs);
+    return {
+      publicUrl: `${this.publicPrefix}/${targetRel}`,
+      storedFileName,
+    };
+  }
+
+  /**
+   * Превращает публичный URL (`/uploads/patterns/...`) в относительный
+   * путь от `uploadsRoot`. Защищается от попыток подсунуть абсолютный
+   * URL или URL вне `publicPrefix` — такие записи в БД у нас не
+   * появляются нормальным flow, и `copySizeFile` правомерно их
+   * отвергает.
+   */
+  private publicUrlToRelative(publicUrl: string): string {
+    const prefix = `${this.publicPrefix}/`;
+    if (!publicUrl.startsWith(prefix)) {
+      throw new PatternUploadInvalidException(
+        'Исходный файл хранится вне локального каталога — клонирование невозможно.',
+      );
+    }
+    const rel = publicUrl.slice(prefix.length);
+    if (rel.includes('..')) {
+      throw new PatternUploadInvalidException('Недопустимый путь исходного файла.');
+    }
+    return rel;
   }
 
   // -------------------------------------------------------------------------

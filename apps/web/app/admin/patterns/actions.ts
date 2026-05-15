@@ -14,6 +14,7 @@
 import { revalidatePath, revalidateTag } from 'next/cache';
 import { redirect } from 'next/navigation';
 import {
+  ClonePatternSchema,
   CreatePatternSchema,
   MATERIAL_ROLES,
   ReplacePatternItemParameterNormInputSchema,
@@ -22,6 +23,7 @@ import {
   ReplacePatternItemSizeParameterValuesSchema,
   ReplacePatternMaterialAreaInputSchema,
   UpdatePatternSchema,
+  type ClonePatternDto,
   type CreatePatternDto,
   type MaterialRole,
   type ReplacePatternItemParameterNormInputDto,
@@ -41,6 +43,7 @@ import { createSize } from '@/lib/orders-api';
 import { ApiRequestError } from '@/lib/api';
 import {
   archivePatternSizeFile,
+  clonePattern,
   createPattern,
   replacePatternItemParameterNorms,
   replacePatternItemSizeParameterValues,
@@ -55,6 +58,7 @@ import {
   replacePatternCategoryParameters,
 } from '@/lib/pattern-categories-api';
 import type {
+  ClonePatternState,
   CreatePatternCategoryState,
   CreatePatternState,
   CreateSizeState,
@@ -142,6 +146,59 @@ export async function createPatternAction(
     const created = await createPattern(parsed.data);
     createdId = created.id;
     revalidatePath('/admin/patterns');
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
+  if (createdId) {
+    redirect(`/admin/patterns/${createdId}`);
+  }
+  return { ok: true };
+}
+
+/**
+ * Клонирование номенклатуры (этап «Создать номенклатуру по готовому
+ * лекалу»). Принимает FormData с `name` / `article` (оба опциональны;
+ * пустые/отсутствующие поля = «backend, подбери сам»).
+ *
+ * При успехе делает `redirect('/admin/patterns/<newId>')` —
+ * `redirect()` бросает исключение, поэтому всё, что идёт после
+ * успешного `clonePattern`, не исполнится. State используется только
+ * как «канал ошибок».
+ */
+export async function clonePatternAction(
+  sourceId: string,
+  _prev: ClonePatternState,
+  form: FormData,
+): Promise<ClonePatternState> {
+  const nameRaw = form.get('name');
+  const articleRaw = form.get('article');
+  const candidate: ClonePatternDto = {
+    name:
+      nameRaw === null
+        ? undefined
+        : String(nameRaw).trim() === ''
+          ? undefined
+          : String(nameRaw),
+    article:
+      articleRaw === null
+        ? undefined
+        : String(articleRaw).trim() === ''
+          ? undefined
+          : String(articleRaw),
+  };
+  const parsed = ClonePatternSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные',
+    };
+  }
+  let createdId: string | null = null;
+  try {
+    const created = await clonePattern(sourceId, parsed.data);
+    createdId = created.id;
+    revalidatePath('/admin/patterns');
+    revalidatePath(`/admin/patterns/${sourceId}`);
   } catch (e) {
     const x = explainApiError(e);
     return { error: x.error, errorRequestId: x.requestId };

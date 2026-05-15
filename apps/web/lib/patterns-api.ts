@@ -11,6 +11,7 @@
  * прокидывается автоматически (см. `lib/api.ts`).
  */
 import type {
+  ClonePatternDto,
   CreatePatternDto,
   ListPatternsQuery,
   PatternDetailDto,
@@ -59,6 +60,22 @@ export function updatePattern(
   return apiFetch<PatternDetailDto>(
     `/patterns/${encodeURIComponent(id)}`,
     { method: 'PATCH', body },
+  );
+}
+
+/**
+ * Клонировать существующую номенклатуру (`POST /api/patterns/:id/clone`).
+ * Этап «Создать номенклатуру по готовому лекалу». Backend копирует
+ * DXF / площади / погонные метры / нормы фурнитуры; если `name` /
+ * `article` не заданы, подбирает значения по исходному лекалу.
+ */
+export function clonePattern(
+  id: string,
+  body: ClonePatternDto,
+): Promise<PatternDetailDto> {
+  return apiFetch<PatternDetailDto>(
+    `/patterns/${encodeURIComponent(id)}/clone`,
+    { method: 'POST', body },
   );
 }
 
