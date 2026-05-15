@@ -491,6 +491,41 @@ export function buildOrderSummaryRows(
     buckets.OPERATION.push(summaryRow);
   }
 
+  // Строки зафиксированной сметы без `workshopNeedId` — это позиции,
+  // у которых нет потребности цеха, поэтому через material/operation
+  // rows они в сводку не попадают. Сейчас это «Разработка лекала»
+  // (`sourceType = PATTERN_DEVELOPMENT`, kind=OTHER). Берём именно из
+  // `currentCostEstimate`, чтобы «Сводно по заказу» совпадало с
+  // зафиксированным `OrderCostEstimate.totalCostRub` (а не с текущим
+  // значением поля заказа, которое могли поменять после расчёта).
+  for (const line of currentCostEstimate?.lines ?? []) {
+    if (line.sourceType !== 'PATTERN_DEVELOPMENT') continue;
+    const totalRub = toFiniteNumber(line.lineTotalRub);
+    const qty = toFiniteNumber(line.purchaseQty);
+    const price = toFiniteNumber(line.quotedPrice);
+    buckets.OTHER.push({
+      id: line.id,
+      // В union `sourceKind` нет отдельного значения под смету; для
+      // строки с заданным `totalRub` оно влияет только на ветку
+      // «нет суммы» в `computeOrderSummaryTotals` (которая тут не
+      // сработает). 'material' — нейтральный выбор.
+      sourceKind: 'material',
+      section: 'OTHER',
+      sectionLabel: ORDER_SUMMARY_SECTION_LABELS.OTHER,
+      article: line.description,
+      qty,
+      qtyDisplay: qty == null ? '—' : String(qty),
+      unit: line.unit,
+      priceDisplay: fmtRub(price),
+      priceCurrency: 'RUB',
+      totalRub,
+      totalDisplay: fmtRub(totalRub),
+      unitCostRub: null,
+      comment: null,
+      warnings: [],
+    });
+  }
+
   const sectionOrder: OrderSummarySection[] = [
     'MATERIAL',
     'HARDWARE',
