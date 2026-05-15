@@ -48,7 +48,7 @@ CREATE TABLE "PatternItemSizeParameterValue" (
   CONSTRAINT "PatternItemSizeParameterValue_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "PatternItemSizeParameterValue_pattern_param_size_uniq"
+CREATE UNIQUE INDEX "PatternItemSizeParameterValue_patternItemId_categoryParamet_key"
   ON "PatternItemSizeParameterValue"("patternItemId", "categoryParameterId", "sizeId");
 
 CREATE INDEX "PatternItemSizeParameterValue_patternItemId_idx"

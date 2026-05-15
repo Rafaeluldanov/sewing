@@ -42,7 +42,7 @@ CREATE TABLE "PatternItemParameterNorm" (
   CONSTRAINT "PatternItemParameterNorm_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "PatternItemParameterNorm_pattern_param_uniq"
+CREATE UNIQUE INDEX "PatternItemParameterNorm_patternItemId_categoryParameterId_key"
   ON "PatternItemParameterNorm"("patternItemId", "categoryParameterId");
 
 CREATE INDEX "PatternItemParameterNorm_patternItemId_idx"

@@ -68,7 +68,7 @@ CREATE TABLE "ConstructorTaskSizeRow" (
   "kashkorseMeters"  DECIMAL(10, 4)
 );
 
-CREATE UNIQUE INDEX "ConstructorTaskSizeRow_task_size_uniq"
+CREATE UNIQUE INDEX "ConstructorTaskSizeRow_taskId_sizeId_key"
   ON "ConstructorTaskSizeRow"("taskId", "sizeId");
 
 CREATE INDEX "ConstructorTaskSizeRow_taskId_sortOrder_idx"
