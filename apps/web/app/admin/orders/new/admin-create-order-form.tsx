@@ -1408,6 +1408,14 @@ export function SavedInlineProductCard({
             <dt style={{ color: '#475569' }}>Стоимость разработки лекала</dt>
             <dd style={{ margin: 0 }}>
               {payload.patternDevelopmentCostRub} ₽
+              <span
+                className="admin-muted"
+                style={{ fontSize: '0.8rem', marginLeft: 8 }}
+              >
+                {payload.patternDevelopmentCostInCostPrice
+                  ? '· входит в себестоимость'
+                  : '· не входит в себестоимость'}
+              </span>
             </dd>
           </>
         )}

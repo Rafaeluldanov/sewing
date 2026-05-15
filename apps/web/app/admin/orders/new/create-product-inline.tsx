@@ -72,6 +72,13 @@ export interface SavedInlineProductPayload {
   techCardId: string | null;
   techCardName: string | null;
   patternDevelopmentCostRub: string | null;
+  /**
+   * Чекбокс «входит в текущий расчёт себестоимости» рядом с полем
+   * стоимости разработки лекала. По умолчанию `true`. Backend при
+   * `true` и сумме > 0 добавит отдельную строку «Разработка лекала»
+   * в `OrderCostEstimate`.
+   */
+  patternDevelopmentCostInCostPrice: boolean;
   sizes: Array<{
     sizeId: string;
     sizeCode: string;
@@ -230,6 +237,13 @@ export function CreateProductInline({
   );
   const [devCost, setDevCost] = useState<string>(
     initialValue?.patternDevelopmentCostRub ?? '',
+  );
+  // По умолчанию чекбокс нажат (стоимость разработки входит в
+  // себестоимость) — см. ТЗ. При редактировании сохранённого изделия
+  // восстанавливаем прежний выбор; `?? true` для старых payload-ов
+  // без этого поля.
+  const [devCostInCostPrice, setDevCostInCostPrice] = useState<boolean>(
+    initialValue?.patternDevelopmentCostInCostPrice ?? true,
   );
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -526,15 +540,19 @@ export function CreateProductInline({
 
     setConstructorSubmitting(true);
     try {
-      // Собираем calc-payload из уже сохранённого изделия. ВАЖНО:
-      // `patternDevelopmentCostRub` в этот payload НЕ кладём — стоимость
-      // разработки касается только сценария «Сделать расчёт» (мы её
-      // не платим конструктору, а считаем себестоимость собственного
-      // лекала). См. ТЗ: «Отправить тянет все данные кроме стоимости
-      // разработки лекала».
+      // Собираем calc-payload из уже сохранённого изделия. Стоимость
+      // разработки лекала и чекбокс «входит в себестоимость» теперь
+      // тоже протягиваем — заказ из flow «Отправить конструктору»
+      // должен получить ту же строку «Разработка лекала» в
+      // себестоимости, что и обычный CREATE_FOR_CALCULATION (см.
+      // `ConstructorTasksService.saveDraft`,
+      // `order-cost-estimates.service.ts::completeCalculation`).
       const calcPayload = {
         categoryId: initialValue.categoryId,
         techCardId: initialValue.techCardId,
+        patternDevelopmentCostRub: initialValue.patternDevelopmentCostRub,
+        patternDevelopmentCostInCostPrice:
+          initialValue.patternDevelopmentCostInCostPrice,
         sizes: initialValue.sizes.map((s) => ({
           sizeId: s.sizeId,
           qtyPlan: s.qtyPlan,
@@ -638,6 +656,7 @@ export function CreateProductInline({
         techCardName,
         patternDevelopmentCostRub:
           devCost.trim() === '' ? null : devCost.trim().replace(',', '.'),
+        patternDevelopmentCostInCostPrice: devCostInCostPrice,
         sizes: sizesPayload,
       },
     });
@@ -887,22 +906,51 @@ export function CreateProductInline({
             )}
           </div>
 
-          {/* Стоимость разработки лекала. */}
+          {/* Стоимость разработки лекала + чекбокс «входит в
+              себестоимость». */}
           <div className="cpi-field">
             <label htmlFor="cpi-dev-cost">
               Стоимость разработки лекала, ₽
             </label>
-            <input
-              id="cpi-dev-cost"
-              type="text"
-              inputMode="decimal"
-              placeholder="0.00"
-              value={devCost}
-              onChange={(e) => setDevCost(e.target.value)}
-            />
+            <div
+              style={{
+                display: 'flex',
+                gap: 12,
+                alignItems: 'center',
+                flexWrap: 'wrap',
+              }}
+            >
+              <input
+                id="cpi-dev-cost"
+                type="text"
+                inputMode="decimal"
+                placeholder="0.00"
+                value={devCost}
+                onChange={(e) => setDevCost(e.target.value)}
+                style={{ flex: '0 1 160px' }}
+              />
+              <label
+                style={{
+                  display: 'inline-flex',
+                  gap: 6,
+                  alignItems: 'center',
+                  fontSize: '0.85rem',
+                  cursor: 'pointer',
+                  userSelect: 'none',
+                }}
+              >
+                <input
+                  type="checkbox"
+                  checked={devCostInCostPrice}
+                  onChange={(e) => setDevCostInCostPrice(e.target.checked)}
+                />
+                входит в текущий расчет себестоимости
+              </label>
+            </div>
             <span className="cpi-muted">
-              Управленческая метрика — в текущий расчёт себестоимости и
-              потребности цеха не входит.
+              {devCostInCostPrice
+                ? 'Сумма войдёт в себестоимость заказа отдельной строкой «Разработка лекала».'
+                : 'Управленческая метрика — в текущий расчёт себестоимости не входит.'}
             </span>
           </div>
 

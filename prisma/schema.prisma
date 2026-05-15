@@ -1320,9 +1320,15 @@ model Order {
   productCreationMode       String   @default("EXISTING_PATTERN")
   /// Стоимость разработки лекала из inline-сценария «Сделать расчёт»
   /// (см. `productCreationMode = CREATE_FOR_CALCULATION`).
-  /// Управленческое поле — НЕ участвует в `OrderCostEstimate` /
-  /// `WorkshopNeed` / `OrderOperationPlan` / складских движениях.
   patternDevelopmentCostRub Decimal? @db.Decimal(12, 2)
+  /// Включать ли `patternDevelopmentCostRub` в себестоимость заказа.
+  /// Управляется чекбоксом «входит в текущий расчёт себестоимости»
+  /// рядом с полем стоимости разработки (по умолчанию включён). Если
+  /// `true` и `patternDevelopmentCostRub > 0`, `completeCalculation`
+  /// добавляет отдельную строку `OrderCostEstimateLine` (kind=OTHER,
+  /// sourceType=PATTERN_DEVELOPMENT) и сумма входит в `totalCostRub`.
+  /// `WorkshopNeed` / складские движения не затрагиваются.
+  patternDevelopmentCostInCostPrice Boolean @default(true)
 
   @@index([status])
   @@index([orderDate])

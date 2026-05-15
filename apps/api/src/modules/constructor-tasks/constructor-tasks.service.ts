@@ -232,6 +232,19 @@ export class ConstructorTasksService {
             // на старте flow.
             techCardId: dto.calcPayload.techCardId ?? null,
             productCreationMode: 'SEND_TO_CONSTRUCTOR',
+            // Стоимость разработки лекала + чекбокс «входит в
+            // себестоимость» протягиваем из calc-вкладки так же, как
+            // CREATE_FOR_CALCULATION (`OrdersService.create`). Без
+            // этого заказ из flow КБ не получал строку «Разработка
+            // лекала» в `OrderCostEstimate`.
+            patternDevelopmentCostRub:
+              dto.calcPayload.patternDevelopmentCostRub == null
+                ? null
+                : new Prisma.Decimal(
+                    dto.calcPayload.patternDevelopmentCostRub,
+                  ),
+            patternDevelopmentCostInCostPrice:
+              dto.calcPayload.patternDevelopmentCostInCostPrice ?? true,
             items: {
               createMany: {
                 data: dto.calcPayload.sizes.map((s) => ({

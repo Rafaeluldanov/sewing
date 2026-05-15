@@ -785,6 +785,8 @@ export class OrdersService {
             calc.patternDevelopmentCostRub == null
               ? null
               : new Prisma.Decimal(calc.patternDevelopmentCostRub),
+          patternDevelopmentCostInCostPrice:
+            calc.patternDevelopmentCostInCostPrice ?? true,
           // items создаются только если размеры переданы. Допустимо
           // создать заказ-черновик без OrderItem'ов — расчёт потом
           // потребует их через `startCalculation` (`ORDER_ITEMS_REQUIRED`).
@@ -2777,6 +2779,8 @@ export class OrdersService {
       patternDevelopmentCostRub: order.patternDevelopmentCostRub
         ? order.patternDevelopmentCostRub.toString()
         : null,
+      patternDevelopmentCostInCostPrice:
+        order.patternDevelopmentCostInCostPrice ?? true,
       items: order.items.map((it) => {
         const s = sizes.find((x) => x.id === it.sizeId);
         return {

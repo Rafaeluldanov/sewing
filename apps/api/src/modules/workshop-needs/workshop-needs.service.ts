@@ -27,6 +27,7 @@ import {
   SupplierCatalogItemSupplierMismatchException,
   SupplierInactiveException,
   SupplierNotFoundException,
+  WorkshopNeedCalculationOverflowException,
   WorkshopNeedCalculationSourceException,
   WorkshopNeedNotFoundException,
   WorkshopNeedOrderItemsRequiredException,
@@ -732,6 +733,33 @@ export class WorkshopNeedsService {
       if (computedLinear) {
         methodLinearBySize++;
         computed.push(computedLinear);
+      }
+    }
+
+    // Гард переполнения: `WorkshopNeed.totalAreaM2 / calculatedQty` —
+    // `Decimal(14,4)`, абсолютное значение обязано быть < 10^10.
+    // Произведение «расход × тираж» при нереалистичном вводе
+    // (например, тираж в десятки миллионов штук или расход в тысячи
+    // единиц на изделие) выходит за предел, и без этой проверки
+    // Prisma уронит `numeric field overflow` → 500. Вместо этого
+    // даём адресную 400 с названием позиции и числом.
+    const DECIMAL_14_4_LIMIT = new Prisma.Decimal('1e10');
+    for (const c of computed) {
+      const overflowField =
+        c.calculatedQty.abs().greaterThanOrEqualTo(DECIMAL_14_4_LIMIT)
+          ? { name: 'расчётное количество', value: c.calculatedQty }
+          : c.totalAreaM2 != null &&
+              c.totalAreaM2.abs().greaterThanOrEqualTo(DECIMAL_14_4_LIMIT)
+            ? { name: 'суммарная площадь', value: c.totalAreaM2 }
+            : null;
+      if (overflowField) {
+        throw new WorkshopNeedCalculationOverflowException(
+          `Расчёт по позиции «${c.description}» даёт слишком большое ` +
+            `${overflowField.name} (${overflowField.value.toFixed(0)}). ` +
+            'Проверьте план тиража по размерам и расход на изделие ' +
+            '(площадь / погонные метры / норму) — скорее всего где-то ' +
+            'лишний ноль.',
+        );
       }
     }
 

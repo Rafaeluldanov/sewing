@@ -647,6 +647,24 @@ export const CreateOrderNewProductCalculationSchema = z
     techCardId: z.string().min(1).nullable().optional(),
     patternDevelopmentCostRub: PatternDevelopmentCostRubField,
     /**
+     * Чекбокс «входит в текущий расчёт себестоимости» рядом с полем
+     * «Стоимость разработки лекала». По умолчанию `true` (чекбокс
+     * нажат). Если `true` и `patternDevelopmentCostRub > 0`, backend
+     * `completeCalculation` добавит сумму отдельной строкой сметы и
+     * она войдёт в `OrderCostEstimate.totalCostRub`. Принимаем
+     * boolean / "true"/"false"/"on" строки от FormData — нормализуем
+     * к boolean, дефолт true.
+     */
+    patternDevelopmentCostInCostPrice: z
+      .union([z.boolean(), z.string()])
+      .optional()
+      .transform((v) => {
+        if (v === undefined) return true;
+        if (typeof v === 'boolean') return v;
+        const s = v.trim().toLowerCase();
+        return s === 'true' || s === 'on' || s === '1';
+      }),
+    /**
      * Размерная матрица — может быть пустой (заказ создаётся как
      * «черновик без размеров»). Для запуска расчёта потребуется
      * хотя бы одна строка с `qtyPlan > 0`.
@@ -1381,6 +1399,13 @@ export interface OrderListItemDto {
    * Заполняется только при `productCreationMode = CREATE_FOR_CALCULATION`.
    */
   patternDevelopmentCostRub?: string | number | null;
+  /**
+   * Входит ли стоимость разработки лекала в себестоимость заказа
+   * (см. `prisma/schema.prisma::Order.patternDevelopmentCostInCostPrice`).
+   * Default `true`. При `true` и `patternDevelopmentCostRub > 0` в
+   * `OrderCostEstimate` появляется отдельная строка «Разработка лекала».
+   */
+  patternDevelopmentCostInCostPrice?: boolean;
 }
 
 /**

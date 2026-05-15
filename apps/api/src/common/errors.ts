@@ -97,6 +97,28 @@ export class OrderItemsRequiredException extends BusinessException {
 }
 
 /**
+ * Расчёт потребности цеха дал число, не помещающееся в
+ * `WorkshopNeed`-колонку `Decimal(14,4)` (абсолютное значение должно
+ * быть < 10^10). Почти всегда это означает нереалистичный ввод:
+ * слишком большой тираж (`OrderItem.qtyPlan`) или расход на изделие
+ * (площадь / погонные метры / норма фурнитуры).
+ *
+ * Без этого гарда Prisma бросает `numeric field overflow`, который
+ * `GlobalExceptionFilter` отдаёт как 500 `INTERNAL_ERROR` — менеджер
+ * не понимает, что именно поправить. Сообщение формируется сервисом
+ * и адресно называет проблемную позицию и число.
+ */
+export class WorkshopNeedCalculationOverflowException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'WORKSHOP_NEED_CALCULATION_OVERFLOW',
+      message,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
  * Этап 2 «План операций на заказе» (см.
  * `docs/operation-time-norms-recon.md §11`,
  * `apps/api/src/modules/orders/order-operation-plan.service.ts`).

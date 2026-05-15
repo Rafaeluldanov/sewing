@@ -305,6 +305,7 @@ function parseNewProductCalculationJson(form: FormData): {
   categoryId?: string | null;
   techCardId?: string | null;
   patternDevelopmentCostRub?: string | null;
+  patternDevelopmentCostInCostPrice: boolean;
   sizes: {
     sizeId: string;
     qtyPlan: number;
@@ -365,6 +366,10 @@ function parseNewProductCalculationJson(form: FormData): {
       p.patternDevelopmentCostRub.length > 0
         ? p.patternDevelopmentCostRub
         : null,
+    // Дефолт `true` (чекбокс по умолчанию нажат). Только явный
+    // `false` в JSON выключает учёт в себестоимости.
+    patternDevelopmentCostInCostPrice:
+      p.patternDevelopmentCostInCostPrice === false ? false : true,
     sizes,
   };
 }

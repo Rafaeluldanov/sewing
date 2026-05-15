@@ -209,7 +209,7 @@ export class OrderCostEstimatesService {
     // полные. Меняется только финансовый итог заказа.
     const isMaterialsAndHardwareExcluded =
       (order.materialsAndHardwareCostPolicy ?? 'INCLUDE') === 'EXCLUDE';
-    const totalCostRub = computed.reduce((acc, c) => {
+    const linesTotalRub = computed.reduce((acc, c) => {
       if (
         isMaterialsAndHardwareExcluded &&
         (c.kind === 'MATERIAL' || c.kind === 'HARDWARE')
@@ -218,6 +218,25 @@ export class OrderCostEstimatesService {
       }
       return acc.add(c.lineTotalRub);
     }, new Prisma.Decimal(0));
+
+    // Стоимость разработки лекала — отдельной строкой сметы, если
+    // менеджер оставил чекбокс «входит в текущий расчёт себестоимости»
+    // включённым (см. `Order.patternDevelopmentCostInCostPrice`,
+    // `create-product-inline.tsx`). kind=OTHER («Прочее»), без
+    // `workshopNeedId` (это не складская потребность — закупка/выдача
+    // материалов не затрагиваются). `materialsAndHardwareCostPolicy`
+    // на неё не влияет — это услуга компании, не давальческое сырьё.
+    const devCostRaw = order.patternDevelopmentCostRub;
+    const developmentCost =
+      order.patternDevelopmentCostInCostPrice && devCostRaw != null
+        ? round2(new Prisma.Decimal(devCostRaw))
+        : null;
+    const includeDevelopmentLine =
+      developmentCost != null && developmentCost.greaterThan(0);
+
+    const totalCostRub = includeDevelopmentLine
+      ? linesTotalRub.add(developmentCost!)
+      : linesTotalRub;
 
     // Транзакция: создаём estimate + lines, обновляем snapshot-поля
     // заказа и переводим статус. Аудит — двумя строками
@@ -239,23 +258,46 @@ export class OrderCostEstimatesService {
           completedById: actorEmployeeId ?? null,
           comment: dto.comment ?? null,
           lines: {
-            create: computed.map((c) => ({
-              workshopNeedId: c.v.need.id,
-              sourceType: c.v.need.sourceType,
-              sourceId: c.v.need.sourceId,
-              kind: c.kind,
-              description: c.v.need.description,
-              unit: c.v.need.unit,
-              calculatedQty: c.v.need.calculatedQty,
-              purchaseQty: c.v.finalQty,
-              quotedPrice: c.v.quotedPrice,
-              quotedCurrency: c.v.currency,
-              usdRateRub: c.v.currency === 'USD' ? usdRateRub : null,
-              lineTotalOriginal: c.lineTotalOriginal,
-              lineTotalRub: c.lineTotalRub,
-              supplierNameSnapshot: c.supplierNameSnapshot,
-              purchaseItemNameSnapshot: c.purchaseItemNameSnapshot,
-            })),
+            create: [
+              ...computed.map((c) => ({
+                workshopNeedId: c.v.need.id,
+                sourceType: c.v.need.sourceType,
+                sourceId: c.v.need.sourceId,
+                kind: c.kind,
+                description: c.v.need.description,
+                unit: c.v.need.unit,
+                calculatedQty: c.v.need.calculatedQty,
+                purchaseQty: c.v.finalQty,
+                quotedPrice: c.v.quotedPrice,
+                quotedCurrency: c.v.currency,
+                usdRateRub: c.v.currency === 'USD' ? usdRateRub : null,
+                lineTotalOriginal: c.lineTotalOriginal,
+                lineTotalRub: c.lineTotalRub,
+                supplierNameSnapshot: c.supplierNameSnapshot,
+                purchaseItemNameSnapshot: c.purchaseItemNameSnapshot,
+              })),
+              ...(includeDevelopmentLine
+                ? [
+                    {
+                      workshopNeedId: null,
+                      sourceType: 'PATTERN_DEVELOPMENT',
+                      sourceId: order.patternItemId ?? null,
+                      kind: 'OTHER',
+                      description: 'Разработка лекала',
+                      unit: 'усл.',
+                      calculatedQty: null,
+                      purchaseQty: new Prisma.Decimal(1),
+                      quotedPrice: developmentCost!,
+                      quotedCurrency: 'RUB',
+                      usdRateRub: null,
+                      lineTotalOriginal: developmentCost!,
+                      lineTotalRub: developmentCost!,
+                      supplierNameSnapshot: null,
+                      purchaseItemNameSnapshot: null,
+                    },
+                  ]
+                : []),
+            ],
           },
         },
         include: {
@@ -288,7 +330,10 @@ export class OrderCostEstimatesService {
             usdRateRub: estimate.usdRateRub
               ? estimate.usdRateRub.toString()
               : null,
-            linesCount: computed.length,
+            linesCount: computed.length + (includeDevelopmentLine ? 1 : 0),
+            patternDevelopmentCostRub: includeDevelopmentLine
+              ? developmentCost!.toString()
+              : null,
           },
         },
         tx,
@@ -318,7 +363,7 @@ export class OrderCostEstimatesService {
     this.logger.log(
       `event=order.calculation.completed orderId=${orderId} estimateId=${result.id} ` +
         `version=${result.version} totalCostRub=${result.totalCostRub.toString()} ` +
-        `lines=${computed.length}`,
+        `lines=${computed.length + (includeDevelopmentLine ? 1 : 0)}`,
     );
 
     return this.toEstimateDto(result);
