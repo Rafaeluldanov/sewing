@@ -14248,6 +14248,52 @@ body:has(.admin-layout) .app-header { display: none !important; }
   white-space: pre-wrap;
 }
 
+/* Цветовой акцент карточки по статусу — чтобы статус был «выделен
+   цветом» во всех секциях одинаково заметно (а не только бейджем).
+   Реализован через inset box-shadow слева: насыщенный цвет (тон `-fg`),
+   без изменения геометрии (вёрстка не сдвигается). */
+.constructor-card {
+  box-shadow: inset 4px 0 0 0 transparent;
+}
+.constructor-card--status-new,
+.constructor-card--status-pending_accept {
+  box-shadow: inset 4px 0 0 0 var(--admin-warning-fg);
+}
+.constructor-card--status-in_progress {
+  box-shadow: inset 4px 0 0 0 var(--admin-primary-fg);
+}
+.constructor-card--status-rework {
+  box-shadow: inset 4px 0 0 0 var(--admin-danger-fg);
+}
+.constructor-card--status-done {
+  box-shadow: inset 4px 0 0 0 var(--admin-success-fg);
+}
+.constructor-card--status-cancelled {
+  box-shadow: inset 4px 0 0 0 var(--admin-muted);
+}
+
+/* Drag-and-drop «взять в работу» в кабинете конструктора.
+   Перетаскиваются только карточки из «Свободные»/«Доработка»
+   (.constructor-card--draggable); приёмник — секция «В работе у меня»
+   (.constructor-section--dropzone). Подсветка через outline, чтобы не
+   двигать вёрстку при drag-over. */
+.constructor-card--draggable {
+  cursor: grab;
+}
+.constructor-card--draggable:active {
+  cursor: grabbing;
+}
+.constructor-section--drop-active {
+  outline: 2px dashed var(--admin-primary, #2563eb);
+  outline-offset: 4px;
+  border-radius: 8px;
+  background: var(--admin-primary-soft);
+}
+.constructor-section--drop-busy {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
 .constructor-detail {
   display: flex;
   flex-direction: column;
@@ -14291,6 +14337,11 @@ body:has(.admin-layout) .app-header { display: none !important; }
   border-radius: var(--admin-radius-pill);
   letter-spacing: 0.02em;
   white-space: nowrap;
+  /* Рамка под цвет статуса (currentColor = `--admin-*-fg` из варианта).
+     Без неё бледные фоны NEW/IN_PROGRESS (warning-soft/primary-soft) на
+     белой карточке почти сливаются и статус кажется «без цвета». */
+  border: 1px solid currentColor;
+  display: inline-block;
 }
 .constructor-status--new,
 .constructor-status--pending_accept {
