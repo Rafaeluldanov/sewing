@@ -1,0 +1,411 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Доска движения тиража — в кабинете мастера (прототип)</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  /* Токены из apps/web/app/globals.css — чтобы выглядело как реальный кабинет */
+  :root{
+    --bg:#f5f7fb; --card:#fff; --muted:#f1f4f9; --tint:#eef3ff;
+    --fg:#0f172a; --fg-muted:#64748b; --fg-subtle:#94a3b8;
+    --border:#e6ebf2; --border-strong:#d3dae4;
+    --accent:#2563eb; --accent-hover:#1d4ed8; --accent-soft:#dbe6ff; --accent-fg:#1e3a8a;
+    --ok:#16a34a; --ok-soft:#dcfce7; --ok-fg:#166534;
+    --warn:#b45309; --warn-soft:#fef3c7; --warn-fg:#92400e;
+    --danger:#dc2626; --danger-soft:#fee2e2; --danger-fg:#991b1b;
+    --r-sm:8px; --r-md:12px; --r-lg:16px; --r-xl:22px; --r-pill:999px;
+  }
+  body{ font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; background:var(--bg); color:var(--fg); margin:0; }
+  .mp-shell{ background:var(--card); border:1px solid var(--border); border-radius:var(--r-lg); overflow:hidden; }
+  .mp-header{ display:flex; justify-content:space-between; gap:12px; padding:16px 20px; border-bottom:1px solid var(--border); }
+  .mp-title{ font-size:20px; font-weight:700; color:var(--fg); }
+  .mp-sub{ font-size:13px; color:var(--fg-muted); margin-top:2px; }
+  .mp-count{ display:inline-flex; align-items:center; justify-content:center; min-width:30px; height:30px; padding:0 8px; border-radius:var(--r-pill); background:var(--accent-soft); color:var(--accent-fg); font-weight:700; font-size:14px; }
+  .mp-logout{ display:inline-flex; align-items:center; gap:6px; padding:7px 12px; border:1px solid var(--border-strong); border-radius:var(--r-md); background:var(--card); color:var(--fg-muted); font-size:13px; cursor:pointer; }
+  .tabs{ display:flex; gap:6px; padding:12px 20px 0; }
+  .tab{ padding:9px 16px; border-radius:var(--r-pill); font-size:14px; font-weight:600; cursor:pointer; color:var(--fg-muted); background:transparent; border:1px solid transparent; }
+  .tab.is-active{ background:var(--accent); color:#fff; }
+  .tab.is-idle:hover{ background:var(--muted); }
+  .bar{ display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:14px 20px; font-size:13px; color:var(--fg-muted); }
+  .pill{ border:1px solid var(--border-strong); background:var(--card); border-radius:var(--r-md); padding:5px 10px; }
+  .note{ margin:0 20px 14px; border:1px solid #fde68a; background:var(--warn-soft); color:var(--warn-fg); border-radius:var(--r-md); padding:10px 14px; font-size:13px; line-height:1.5; }
+  table{ border-collapse:collapse; width:100%; }
+  th{ text-align:left; font-size:12.5px; font-weight:700; color:var(--fg-muted); padding:12px 14px; background:var(--muted); white-space:nowrap; }
+  td{ padding:10px 14px; vertical-align:top; border-top:1px solid var(--border); }
+  .rowhead{ position:sticky; left:0; background:var(--card); z-index:5; }
+  thead .rowhead{ background:var(--muted); }
+  /* Компактная ячейка «Сводно + топ-2» */
+  .cell{ width:100%; text-align:left; cursor:pointer; background:var(--muted); border:1px solid var(--border); border-radius:var(--r-md); padding:8px 10px; min-height:62px; }
+  .cell:hover{ border-color:var(--accent); background:var(--tint); }
+  .cell.empty{ background:transparent; border:1px dashed var(--border); cursor:default; color:var(--fg-subtle); display:flex; align-items:center; justify-content:center; }
+  .cell.empty:hover{ border-color:var(--border); background:transparent; }
+  .cell-top{ font-size:14px; font-weight:700; color:var(--fg); }
+  .cell-top .mut{ font-weight:500; color:var(--fg-muted); }
+  .cell-emps{ font-size:12px; color:var(--fg-muted); margin-top:3px; line-height:1.4; }
+  .cell-more{ font-size:12px; font-weight:600; color:var(--accent); margin-top:3px; }
+  .badge-def{ display:inline-block; margin-left:6px; padding:0 6px; border-radius:6px; background:var(--danger-soft); color:var(--danger-fg); font-size:11px; font-weight:700; }
+  .nr{ font-size:11px; color:var(--fg-subtle); margin-top:5px; }
+  /* Мобайл */
+  .phone{ width:392px; margin:0 auto; border:9px solid #1e293b; border-radius:34px; background:#1e293b; }
+  .phone-inner{ border-radius:26px; overflow:hidden; background:var(--bg); }
+  .acc{ border:1px solid var(--border); border-radius:var(--r-md); background:var(--card); overflow:hidden; }
+  .acc-head{ width:100%; display:flex; justify-content:space-between; align-items:center; padding:13px 16px; background:transparent; border:0; cursor:pointer; text-align:left; }
+  .stagecard{ background:var(--muted); border-radius:var(--r-md); padding:12px; }
+  /* Drill */
+  .ov{ position:fixed; inset:0; z-index:50; display:none; }
+  .ov.show{ display:block; }
+  .ov-bg{ position:absolute; inset:0; background:rgba(2,6,23,.42); }
+  .panel{ position:absolute; background:var(--card); box-shadow:0 20px 60px rgba(2,6,23,.3); transition:transform .2s ease; }
+  .panel-r{ right:0; top:0; height:100%; width:430px; max-width:92vw; transform:translateX(100%); }
+  .panel-b{ left:50%; bottom:0; width:392px; max-width:100%; transform:translate(-50%,100%); border-radius:18px 18px 0 0; }
+  .ov.show .panel{ transform:translateX(0); }
+  .ov.show .panel-b{ transform:translate(-50%,0); }
+  .ph-head{ display:flex; justify-content:space-between; align-items:flex-start; padding:14px 16px; border-bottom:1px solid var(--border); }
+  .x{ border:0; background:transparent; color:var(--fg-muted); font-size:16px; cursor:pointer; padding:4px 8px; border-radius:8px; }
+  .x:hover{ background:var(--muted); }
+  .emp-sec{ border:1px solid var(--border); border-radius:var(--r-md); margin-bottom:10px; overflow:hidden; }
+  .emp-sec-h{ display:flex; justify-content:space-between; align-items:center; padding:9px 12px; background:var(--muted); font-weight:600; font-size:14px; }
+  .pp{ display:flex; justify-content:space-between; align-items:center; padding:8px 12px; border-top:1px solid var(--border); font-size:13px; }
+  .link{ color:var(--accent); font-size:12px; cursor:pointer; background:none; border:0; }
+  .link:hover{ text-decoration:underline; }
+</style>
+</head>
+<body>
+
+<div class="max-w-[1280px] mx-auto p-4 sm:p-6">
+
+  <div class="mb-4 flex flex-wrap items-center justify-between gap-3">
+    <div>
+      <h1 class="text-lg font-semibold" style="color:var(--fg)">Прототип — доска движения тиража в кабинете мастера</h1>
+      <p class="text-sm" style="color:var(--fg-muted)">Статичный мок с тестовыми данными, бэкенда нет. Стиль и шапка — как реальный <code>/master</code>.</p>
+    </div>
+    <div class="inline-flex rounded-lg border p-1 text-sm" style="border-color:var(--border-strong);background:var(--card)">
+      <button id="bD" class="px-3 py-1.5 rounded-md font-medium" style="background:var(--accent);color:#fff">Десктоп / планшет</button>
+      <button id="bM" class="px-3 py-1.5 rounded-md font-medium" style="color:var(--fg-muted)">Телефон</button>
+    </div>
+  </div>
+
+  <!-- ===== ДЕСКТОП: кабинет мастера ===== -->
+  <div id="vD">
+    <div class="mp-shell">
+      <div class="mp-header">
+        <div>
+          <div class="mp-title">Мастер цеха</div>
+          <div class="mp-sub">Движение тиража по операциям. Строка — день выдачи кроя.</div>
+        </div>
+        <div class="flex items-start gap-3">
+          <span class="mp-count" title="Открытых вызовов">3</span>
+          <button class="mp-logout">⎋ Выйти</button>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <button class="tab is-idle">Вызовы <span style="opacity:.7">· 3</span></button>
+        <button class="tab is-active">Движение тиража</button>
+      </div>
+
+      <div class="note">
+        <b>Когорта по дате кроя.</b> Колонки — реальные операции (источник тот же, что «Экран цеха»):
+        Оверлок 1 → Киперка → Оверлок 2 → Распошив → ОТК → ВТО → Упаковка. Ячейка показывает <b>где сейчас</b> партия
+        (итог · сколько человек · топ-2). Клик по ячейке → полный разбор по людям и паспортам.
+      </div>
+
+      <div class="bar">
+        <span>Период кроя:</span>
+        <span class="pill">последние 14 дней ▾</span>
+        <span class="pill">Заказ: все ▾</span>
+        <span class="pill">Размер: все ▾</span>
+        <span class="ml-auto" style="color:var(--fg-subtle)">обновлено 2 мин назад · авто 60с</span>
+      </div>
+
+      <div style="overflow-x:auto">
+        <table style="min-width:1180px">
+          <thead id="dHead"></thead>
+          <tbody id="dBody"></tbody>
+        </table>
+      </div>
+      <div class="bar" style="color:var(--fg-subtle);font-size:12px;padding-top:0">
+        Ячейка фиксированной высоты при любом числе сотрудников. «не дошло N» — паспорта партии, ещё не достигшие операции.
+      </div>
+    </div>
+  </div>
+
+  <!-- ===== ТЕЛЕФОН: кабинет мастера ===== -->
+  <div id="vM" class="hidden">
+    <div class="phone">
+      <div class="phone-inner">
+        <div style="background:var(--card);border-bottom:1px solid var(--border);padding:14px 16px;display:flex;justify-content:space-between;align-items:flex-start">
+          <div>
+            <div style="font-size:18px;font-weight:700">Мастер цеха</div>
+            <div style="font-size:12px;color:var(--fg-muted);margin-top:2px">Движение тиража</div>
+          </div>
+          <span class="mp-count">3</span>
+        </div>
+        <div style="display:flex;gap:6px;padding:12px 14px 0">
+          <button class="tab is-idle" style="font-size:13px;padding:8px 14px">Вызовы</button>
+          <button class="tab is-active" style="font-size:13px;padding:8px 14px">Тираж</button>
+        </div>
+        <div id="mBody" style="max-height:600px;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:10px"></div>
+      </div>
+    </div>
+    <p class="mt-3 text-center text-xs" style="color:var(--fg-subtle)">Аккордеон по датам → стадии стопкой. Тап по стадии → нижний лист с разбором.</p>
+  </div>
+
+</div>
+
+<!-- Drill: правый drawer (десктоп) -->
+<div id="drawer" class="ov">
+  <div class="ov-bg" data-close></div>
+  <div class="panel panel-r">
+    <div class="ph-head">
+      <div><div id="dwT" style="font-weight:700"></div><div id="dwS" style="font-size:12px;color:var(--fg-muted);margin-top:2px"></div></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div id="dwL" style="height:calc(100% - 60px);overflow-y:auto;padding:14px"></div>
+  </div>
+</div>
+<!-- Drill: нижний лист (телефон) -->
+<div id="sheet" class="ov">
+  <div class="ov-bg" data-close></div>
+  <div class="panel panel-b">
+    <div class="ph-head">
+      <div><div id="shT" style="font-weight:700"></div><div id="shS" style="font-size:12px;color:var(--fg-muted);margin-top:2px"></div></div>
+      <button class="x" data-close>✕</button>
+    </div>
+    <div id="shL" style="max-height:62vh;overflow-y:auto;padding:14px"></div>
+  </div>
+</div>
+
+<script>
+// Реальные операции REFERENCE_OPERATIONS, маршрут с первой пошивочной операции
+const STAGES = [
+  { key:'overlock1', label:'Оверлок 1', code:'SEW_OVERLOCK_1' },
+  { key:'kiperka',   label:'Киперка',   code:'SEW_BINDING' },
+  { key:'overlock2', label:'Оверлок 2', code:'SEW_OVERLOCK_2' },
+  { key:'rasposhiv', label:'Распошив',  code:'SEW_COVERSTITCH' },
+  { key:'qc',        label:'ОТК',       code:'QC', defect:true },
+  { key:'wto',       label:'ВТО',       code:'WTO' },
+  { key:'packing',   label:'Упаковка',  code:'PACKING' },
+];
+
+const COHORTS = [
+  { date:'18.05.2026', order:'Заказ #1042 · Худи оверсайз', totalQty:24, passports:24,
+    issued:24, issuedQty:480, notPicked:1, inOpsQty:455, released:{pass:12,qty:238},
+    stages:{
+      overlock1:[{emp:'Аня Котова',n:6},{emp:'Лена Мороз',n:4},{emp:'Зоя Бек',n:3},{emp:'Оля Дан',n:2},{emp:'Ким Ро',n:1}],
+      kiperka:[{emp:'Зоя Бек',n:3}],
+      overlock2:[{emp:'Аня Котова',n:2}],
+      rasposhiv:[{emp:'Рита Сан',n:2}],
+      qc:[{emp:'Ира Сёмина',n:4,defects:2}],
+      wto:[{emp:'Олег Гай',n:2}],
+      packing:[{emp:'Маша Лоза',n:1}],
+      notReached:{ kiperka:8, overlock2:13, rasposhiv:15, qc:17, wto:21, packing:23 } } },
+  { date:'17.05.2026', order:'Заказ #1041 · Свитшот базовый', totalQty:30, passports:30,
+    issued:30, issuedQty:600, notPicked:0, inOpsQty:588, released:{pass:2,qty:40},
+    stages:{
+      overlock1:[{emp:'Аня Котова',n:5}],
+      kiperka:[{emp:'Зоя Бек',n:4},{emp:'Ника Лю',n:3}],
+      overlock2:[{emp:'Лена Мороз',n:3}],
+      rasposhiv:[{emp:'Рита Сан',n:3}],
+      qc:[{emp:'Ира Сёмина',n:6,defects:1},{emp:'Витя Лан',n:3,defects:0}],
+      wto:[{emp:'Олег Гай',n:4}],
+      packing:[{emp:'Маша Лоза',n:2}],
+      notReached:{ kiperka:21, overlock2:23, rasposhiv:25, qc:18, wto:24, packing:28 } } },
+  { date:'16.05.2026', order:'Заказ #1039 · Футболка print', totalQty:40, passports:40,
+    issued:40, issuedQty:820, notPicked:2, inOpsQty:770, released:{pass:38,qty:760},
+    stages:{
+      overlock1:[], kiperka:[], overlock2:[],
+      rasposhiv:[{emp:'Рита Сан',n:1}],
+      qc:[{emp:'Витя Лан',n:2,defects:0}],
+      wto:[{emp:'Олег Гай',n:4}],
+      packing:[{emp:'Маша Лоза',n:30},{emp:'Дима Рог',n:3}],
+      notReached:{ kiperka:0, overlock2:0, rasposhiv:0, qc:0, wto:6, packing:6 } } },
+];
+
+function fakePassports(n, stageKey, defects){
+  const a=[]; let left=defects||0;
+  const QTY=[8,12,15,18,20,24,30,10,16,22];
+  for(let i=0;i<Math.min(n,10);i++){
+    const def = (stageKey==='qc' && left>0) ? (left--, 1) : 0;
+    a.push({ num:'№'+(1000+Math.floor(Math.random()*900)), size:['S','M','L','XL'][i%4], qty:QTY[i%QTY.length], def });
+  }
+  return a;
+}
+
+// ---- Компактная ячейка: Сводно + топ-2 ----
+function cellHTML(c, sk){
+  const list=(c.stages[sk]||[]).slice().sort((a,b)=>b.n-a.n);
+  const nr=c.stages.notReached?.[sk]||0;
+  if(!list.length){
+    let h='<div class="cell empty">—</div>';
+    if(nr>0) h+=`<div class="nr">не дошло ${nr}</div>`;
+    return h;
+  }
+  const total=list.reduce((s,e)=>s+e.n,0);
+  const chel=list.length;
+  const def=list.reduce((s,e)=>s+(e.defects||0),0);
+  const top=list.slice(0,2).map(e=>`${e.emp.split(' ')[0]}·${e.n}`).join('  ');
+  const more=chel-2;
+  const defBadge=(sk==='qc'&&def>0)?`<span class="badge-def">брак ${def}</span>`:'';
+  return `<button class="cell" data-cohort="${c.date}" data-stage="${sk}">
+      <div class="cell-top">${total} <span class="mut">пасп · ${chel} чел</span>${defBadge}</div>
+      <div class="cell-emps">${top}</div>
+      ${more>0?`<div class="cell-more">ещё ${more} ▾</div>`:''}
+    </button>${nr>0?`<div class="nr">не дошло ${nr}</div>`:''}`;
+}
+
+// ---- Сверка партии (первый столбец): выдано vs взято в операцию ----
+function reconHTML(c){
+  const inOps = c.issued - (c.notPicked||0);
+  const bad = c.notPicked>0;
+  const chip = bad
+    ? `<div title="${c.notPicked} паспорт(ов) выдано, но не взято ни в одну операцию"
+         style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:var(--r-pill);
+         background:var(--danger-soft);color:var(--danger-fg);font-size:10.5px;font-weight:700;align-self:flex-start">
+         ⚠ ${c.notPicked} не взято</div>`
+    : `<div title="Все выданные паспорта взяты в операцию"
+         style="display:inline-flex;align-items:center;gap:4px;padding:2px 7px;border-radius:var(--r-pill);
+         background:var(--ok-soft);color:var(--ok-fg);font-size:10.5px;font-weight:700;align-self:flex-start">
+         ✓ все взяты</div>`;
+  return `<div style="margin-top:6px;border-top:1px solid var(--border);padding-top:6px;display:flex;flex-direction:column;gap:4px">
+      <div style="font-size:11px;line-height:1.35"><span style="color:var(--fg-muted)">Выдано</span>
+        <b>${c.issued} п</b> · <b>${c.issuedQty} шт</b></div>
+      ${chip}
+      <div style="font-size:11px;line-height:1.35"><span style="color:var(--fg-muted)">В работе</span>
+        <b>${inOps} п</b> · <b>${c.inOpsQty} шт</b></div>
+    </div>`;
+}
+
+// ---- Финальный столбец «Выпущено» (PACKED: паспорта + годные штуки) ----
+function releasedCell(c){
+  const r=c.released||{pass:0,qty:0};
+  const pct=c.issued?Math.round(r.pass/c.issued*100):0;
+  return `<button class="cell" data-cohort="${c.date}" data-stage="__released__"
+      style="background:var(--ok-soft);border-color:#bbf7d0">
+      <div class="cell-top" style="color:var(--ok-fg)">${r.pass} <span class="mut" style="color:var(--ok-fg);opacity:.85">пасп</span></div>
+      <div style="font-size:14px;font-weight:700;color:var(--ok-fg)">${r.qty} шт</div>
+      <div style="font-size:11px;color:var(--ok-fg);opacity:.8;margin-top:2px">${pct}% от выданного</div>
+    </button>`;
+}
+
+// ---- Десктоп ----
+function renderD(){
+  document.getElementById('dHead').innerHTML =
+    `<tr><th class="rowhead">Дата кроя</th>${STAGES.map(s=>`<th>${s.label}${s.defect?' <span style="font-weight:400;color:var(--fg-subtle)">(брак)</span>':''}</th>`).join('')}<th style="background:var(--ok-soft);color:var(--ok-fg)">Выпущено</th></tr>`;
+  document.getElementById('dBody').innerHTML = COHORTS.map(c=>`
+    <tr>
+      <td class="rowhead" style="min-width:158px;max-width:172px">
+        <div style="font-weight:700;font-size:13px">${c.date}</div>
+        <div style="font-size:10.5px;color:var(--fg-subtle);margin-top:2px;line-height:1.3">${c.order}</div>
+        ${reconHTML(c)}
+      </td>
+      ${STAGES.map(s=>`<td>${cellHTML(c,s.key)}</td>`).join('')}
+      <td>${releasedCell(c)}</td>
+    </tr>`).join('');
+}
+
+// ---- Телефон: аккордеон ----
+function renderM(){
+  document.getElementById('mBody').innerHTML = COHORTS.map((c,i)=>`
+    <div class="acc">
+      <button class="acc-head" data-acc="${i}">
+        <div>
+          <div style="font-weight:700">${c.date}</div>
+          <div style="font-size:11px;color:var(--fg-subtle)">${c.order}</div>
+          ${reconHTML(c)}
+        </div>
+        <span class="cr" style="color:var(--fg-subtle);transition:transform .15s">▾</span>
+      </button>
+      <div class="acc-b" style="display:none;border-top:1px solid var(--border);padding:12px;display:none;flex-direction:column;gap:8px">
+        ${STAGES.map(s=>`
+          <div class="stagecard">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+              <span style="font-size:14px;font-weight:700">${s.label}</span>
+              ${c.stages.notReached?.[s.key]>0?`<span style="font-size:11px;color:var(--fg-subtle)">не дошло ${c.stages.notReached[s.key]}</span>`:''}
+            </div>
+            ${cellHTML(c,s.key)}
+          </div>`).join('')}
+        <div class="stagecard" style="background:var(--ok-soft)">
+          <div style="display:flex;justify-content:space-between;align-items:center">
+            <span style="font-size:14px;font-weight:700;color:var(--ok-fg)">Выпущено</span>
+            <span style="font-size:12px;font-weight:700;color:var(--ok-fg)">${(c.released||{}).pass||0} пасп · ${(c.released||{}).qty||0} шт</span>
+          </div>
+        </div>
+      </div>
+    </div>`).join('');
+  document.querySelectorAll('.acc-head').forEach(h=>h.onclick=()=>{
+    const b=h.nextElementSibling, cr=h.querySelector('.cr');
+    const open=b.style.display==='flex';
+    b.style.display=open?'none':'flex'; cr.style.transform=open?'':'rotate(180deg)';
+  });
+}
+
+// ---- Drill: весь разбор стадии (все сотрудники + паспорта) ----
+function openDrill(cohortDate, sk, mobile){
+  const c=COHORTS.find(x=>x.date===cohortDate);
+  if(sk==='__released__'){
+    const r=c.released||{pass:0,qty:0};
+    const pts=fakePassports(r.pass,'packing',0);
+    const sumQty=pts.reduce((s,p)=>s+p.qty,0);
+    const body=`<div class="emp-sec">
+      <div class="emp-sec-h"><span>Выпущено (PACKED)</span><span style="color:var(--ok-fg);font-weight:700">${r.pass} пасп · ${r.qty} шт</span></div>
+      ${pts.map(p=>`<div class="pp">
+        <span><span style="display:inline-block;min-width:46px;text-align:center;padding:1px 6px;border-radius:6px;background:var(--ok-soft);color:var(--ok-fg);font-weight:700;font-size:12px;margin-right:8px">${p.qty} шт</span><b>${p.num}</b> <span style="color:var(--fg-muted)">разм ${p.size}</span></span>
+        <button class="link">вся история →</button></div>`).join('')}
+    </div>`;
+    const title=`Выпущено · ${cohortDate}`, sub=`${r.pass} паспорт(ов) · ${r.qty} шт годных`;
+    if(mobile){ shT.textContent=title; shS.textContent=sub; shL.innerHTML=body; sheet.classList.add('show'); }
+    else { dwT.textContent=title; dwS.textContent=sub; dwL.innerHTML=body; drawer.classList.add('show'); }
+    return;
+  }
+  const st=STAGES.find(s=>s.key===sk);
+  const list=(c.stages[sk]||[]).slice().sort((a,b)=>b.n-a.n);
+  const total=list.reduce((s,e)=>s+e.n,0);
+  const def=list.reduce((s,e)=>s+(e.defects||0),0);
+  let grandQty=0;
+  const body=list.map(e=>{
+    const pts=fakePassports(e.n, sk, e.defects||0);
+    const sumQty=pts.reduce((s,p)=>s+p.qty,0); grandQty+=sumQty;
+    return `<div class="emp-sec">
+      <div class="emp-sec-h"><span>${e.emp}</span><span style="color:var(--fg-muted);font-weight:500">${e.n} пасп · <b style="color:var(--fg)">${sumQty} шт</b>${e.defects?` · <span style="color:var(--danger-fg)">брак ${e.defects}</span>`:''}</span></div>
+      ${pts.map(p=>`<div class="pp">
+          <span><span style="display:inline-block;min-width:46px;text-align:center;padding:1px 6px;border-radius:6px;background:var(--accent-soft);color:var(--accent-fg);font-weight:700;font-size:12px;margin-right:8px">${p.qty} шт</span><b>${p.num}</b> <span style="color:var(--fg-muted)">разм ${p.size}</span>${p.def?` <span class="badge-def">брак ${p.def}</span>`:''}</span>
+          <button class="link">вся история →</button></div>`).join('')}
+    </div>`;
+  }).join('');
+  const title=`${st.label} · ${cohortDate}`;
+  const sub=`${total} пасп · ${grandQty} шт · ${list.length} сотрудник(ов)`+(def>0?` · брак ${def}`:'');
+  if(mobile){
+    shT.textContent=title; shS.textContent=sub; shL.innerHTML=body;
+    sheet.classList.add('show');
+  } else {
+    dwT.textContent=title; dwS.textContent=sub; dwL.innerHTML=body;
+    drawer.classList.add('show');
+  }
+}
+function closeDrill(){ drawer.classList.remove('show'); sheet.classList.remove('show'); }
+
+document.addEventListener('click',e=>{
+  const cell=e.target.closest('.cell');
+  if(cell && !cell.classList.contains('empty')){
+    const mobile=!document.getElementById('vM').classList.contains('hidden');
+    openDrill(cell.dataset.cohort, cell.dataset.stage, mobile);
+  }
+  if(e.target.matches('[data-close]')) closeDrill();
+});
+
+// device toggle
+function setV(m){
+  document.getElementById('vD').classList.toggle('hidden',m);
+  document.getElementById('vM').classList.toggle('hidden',!m);
+  bD.style.background=m?'transparent':'var(--accent)'; bD.style.color=m?'var(--fg-muted)':'#fff';
+  bM.style.background=m?'var(--accent)':'transparent'; bM.style.color=m?'#fff':'var(--fg-muted)';
+}
+bD.onclick=()=>setV(false); bM.onclick=()=>setV(true);
+
+renderD(); renderM();
+</script>
+</body>
+</html>
