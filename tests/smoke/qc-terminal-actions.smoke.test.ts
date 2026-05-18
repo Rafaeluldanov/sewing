@@ -17,7 +17,7 @@
  *      используется; scan-карточка — только когда паспорта нет.
  *   2. Обработка `removedFromQc` и поллинг свёрнутого состояния
  *      сохранены (паспорт ушёл дальше → detail сбрасывается).
- *   3. `QcWorkCard`: поле кол-ва брака предзаполнено `qtyCut`;
+ *   3. `QcWorkCard`: поле кол-ва брака по умолчанию 0 («брака нет»);
  *      панель действий `qc-card__sticky-actions`; до complete —
  *      «Добавить брак» (submit формы брака) + «Проверка выполнена»,
  *      после — «Сканировать другой паспорт»; «Обновить карточку» —
@@ -59,11 +59,11 @@ describe('QC terminal: рабочая карточка + закреплённа�
     expect(src).toMatch(/if \(!detail \|\| !detail\.qcCompletedAt\) return;/);
   });
 
-  test('QcWorkCard: prefill qtyCut, sticky-панель, swap кнопок, refresh-ссылка', () => {
+  test('QcWorkCard: брак=0 по умолчанию, sticky-панель, swap кнопок, refresh-ссылка', () => {
     const src = readSrc('apps/web/app/qc/qc-work-card.tsx');
 
-    // 1. Поле кол-ва брака предзаполнено количеством кроя из паспорта.
-    expect(src).toMatch(/defaultValue=\{detail\.qtyCut\}/);
+    // 1. Поле кол-ва брака по умолчанию 0 («брака нет»).
+    expect(src).toMatch(/defaultValue=\{0\}/);
 
     // 2. Закреплённая снизу панель действий.
     expect(src).toMatch(/qc-card__sticky-actions/);

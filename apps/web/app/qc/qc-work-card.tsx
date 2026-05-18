@@ -6,9 +6,8 @@
  * Чистый view + callbacks; state-машина — у родителя `QcTerminal`.
  *
  * UX (см. docs/screens.md §5, docs/flows.md §F5):
- *   - поле «Количество, шт.» в блоке брака предзаполняется кол-вом
- *     кроя из паспорта (`qtyCut`); ОТК уменьшает его вручную, если в
- *     брак уходит только часть;
+ *   - поле «Количество брака» по умолчанию 0 («брака нет»); если
+ *     брак есть — ОТК ставит фактическое число;
  *   - панель действий ЗАКРЕПЛЕНА снизу (sticky). Пока проверка не
  *     завершена — «Добавить брак» (submit формы брака через
  *     `form=`-атрибут) + «Проверка выполнена». После «Проверка
@@ -194,15 +193,13 @@ export function QcWorkCard({
             </div>
           </div>
           <div className="form-row">
-            <label htmlFor="qc-defect-qty">Количество, шт.</label>
+            <label htmlFor="qc-defect-qty">Количество брака, шт.</label>
             <div>
               {/*
-               * Предзаполняем количеством кроя из паспорта (`qtyCut`).
-               * `key` на форме = passportId: при сканировании другого
-               * паспорта форма перемонтируется и defaultValue
-               * подставляется заново. Если по паспорту уже фиксировали
-               * брак, qtyCut может превышать `remainingForDefect` (=
-               * max) — ОТК уменьшает вручную (см. подсказку ниже).
+               * По умолчанию 0 — «брака нет». Если брак есть, ОТК
+               * редактирует это число. `key` на форме = passportId:
+               * при сканировании другого паспорта форма
+               * перемонтируется и значение сбрасывается обратно в 0.
                */}
               <input
                 id="qc-defect-qty"
@@ -211,13 +208,13 @@ export function QcWorkCard({
                 min={1}
                 max={Math.max(detail.remainingForDefect, 1)}
                 step={1}
-                defaultValue={detail.qtyCut}
+                defaultValue={0}
                 required
                 disabled={pending || detail.remainingForDefect === 0}
               />
               <div className="hint">
-                Из паспорта: <strong>{detail.qtyCut}</strong> шт. ·
-                {' '}доступно к фиксации:{' '}
+                Это <strong>количество брака</strong>. 0 — брака нет;
+                {' '}укажите число, если есть брак. Доступно к фиксации:{' '}
                 <strong>{detail.remainingForDefect}</strong> шт.
               </div>
             </div>
