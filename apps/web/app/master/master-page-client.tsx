@@ -40,6 +40,7 @@ import { findMasterPassportByCodeAction } from './master-actions-actions';
 import { PassportActionsSheet } from './passport-actions-sheet';
 import { CutReleasePolicyCard } from './cut-release-policy-card';
 import { refreshCutReleasePolicyAction } from './cut-release-policy-actions';
+import { ProductionBoardView } from './production-board-view';
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -79,6 +80,9 @@ export function MasterPageClient({
     null,
   );
   const [archiveOpen, setArchiveOpen] = useState(false);
+  // Вкладки кабинета мастера: очередь вызовов (исторический экран) и
+  // новая «Движение тиража» (доска по дате выдачи кроя).
+  const [tab, setTab] = useState<'calls' | 'board'>('calls');
   const [toast, setToast] = useState<string | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
   // Stage 2 «Действия мастера»: открытый bottom-sheet ручных действий
@@ -280,6 +284,31 @@ export function MasterPageClient({
         </div>
       </header>
 
+      <div className="master-page__tabs" role="tablist">
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'calls'}
+          className={
+            'master-page__tab' + (tab === 'calls' ? ' is-active' : '')
+          }
+          onClick={() => setTab('calls')}
+        >
+          Вызовы{items.length > 0 ? ` · ${items.length}` : ''}
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'board'}
+          className={
+            'master-page__tab' + (tab === 'board' ? ' is-active' : '')
+          }
+          onClick={() => setTab('board')}
+        >
+          Движение тиража
+        </button>
+      </div>
+
       {error && (
         <div className="master-page__error" role="alert">
           {error}
@@ -292,6 +321,10 @@ export function MasterPageClient({
         </div>
       )}
 
+      {tab === 'board' && <ProductionBoardView />}
+
+      {tab === 'calls' && (
+        <>
       <button
         type="button"
         className="master-page__scan-passport"
@@ -361,6 +394,8 @@ export function MasterPageClient({
           )
         )}
       </section>
+        </>
+      )}
 
       {scannerMode !== null && (
         <QrScannerModal onScan={onScan} onClose={onCloseScanner} />

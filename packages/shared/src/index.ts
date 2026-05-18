@@ -40,6 +40,7 @@ export * from './constructor-tasks';
 export * from './display-screens';
 export * from './master-calls';
 export * from './master-actions';
+export * from './production-board';
 export * from './employee-qr';
 export * from './cut-release-policy';
 export * from './order-cut-issue-rules';
