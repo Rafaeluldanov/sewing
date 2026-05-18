@@ -58,7 +58,6 @@ import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
 import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
 import { Icon } from '@/components/icon';
 import { QcWorkCard } from './qc-work-card';
-import { QcCompletedRow } from './qc-completed-row';
 import {
   completeQcAction,
   lookupQcPassportAction,
@@ -300,122 +299,123 @@ function QcScanTerminal({ defectTypes }: ScanTerminalProps) {
     setScannerOpen(true);
   };
 
-  const primaryLabel = detail
-    ? 'Сканировать другой паспорт'
-    : 'Сканировать паспорт';
-
   // Logout/«Завершить смену» теперь в общем `SeamstressActionsMenu`
   // на уровне `QcTerminal`. Внутренний scan-terminal больше не
   // дублирует logout-форму, иначе на экране висели бы две точки
   // выхода (в углу и в три-точечном меню).
   return (
     <>
-      {detail && !detail.qcCompletedAt && (
+      {/*
+       * Пока паспорт открыт (`detail`) — большая рабочая карточка ОТК
+       * с закреплённой снизу панелью действий. Она остаётся видимой и
+       * ПОСЛЕ «Проверка выполнена» (бейдж + кнопка «Сканировать другой
+       * паспорт» в той же закреплённой панели). Карточка исчезает
+       * только когда `detail` сбрасывается в null: backend отдал
+       * `removedFromQc=true` (поллер ниже / refresh) либо ОТК нажал
+       * «Сканировать другой паспорт» (`handleScanNext`).
+       */}
+      {detail && (
         <QcWorkCard
           detail={detail}
           defectTypes={defectTypes}
           pending={isPending}
+          error={error}
+          info={info}
           onDefectSubmit={handleDefectSubmit}
           onComplete={handleComplete}
           onScanNext={handleScanNext}
           onRefresh={refresh}
         />
       )}
-      {/*
-       * После «Проверка выполнена» (`qcCompletedAt != null`) большая
-       * рабочая карточка сворачивается в одну компактную строку:
-       * паспорт ещё «висит» в окне, но без действий. Когда backend
-       * скажет `removedFromQc=true` (поллер выше или ручной refresh /
-       * следующий скан) — строка исчезнет полностью.
-       */}
-      {detail && detail.qcCompletedAt && <QcCompletedRow detail={detail} />}
 
-      <div className="scan-card scan-card--simple" aria-label="Сканировать паспорт">
-        <div>
-          <h2 className="scan-card__title">
-            <Icon name="qc" size={22} />
-            <span style={{ marginLeft: '0.45rem' }}>{primaryLabel}</span>
-          </h2>
-          <p className="scan-card__hint">
-            Сканируйте QR паспорта — откроется рабочая карточка ОТК.
-          </p>
-        </div>
-
-        {error && (
-          <div className="error-box" role="alert">
-            <div className="error-box__msg">{error.message}</div>
-            {error.requestId && (
-              <div className="error-box__rid">
-                req: <code>{error.requestId}</code>
-              </div>
-            )}
+      {!detail && (
+        <div className="scan-card scan-card--simple" aria-label="Сканировать паспорт">
+          <div>
+            <h2 className="scan-card__title">
+              <Icon name="qc" size={22} />
+              <span style={{ marginLeft: '0.45rem' }}>Сканировать паспорт</span>
+            </h2>
+            <p className="scan-card__hint">
+              Сканируйте QR паспорта — откроется рабочая карточка ОТК.
+            </p>
           </div>
-        )}
-        {info && !error && (
-          <div className="info-box" role="status">
-            {info}
-          </div>
-        )}
 
-        <button
-          type="button"
-          className="btn btn-primary btn-lg btn-block scan-card__primary-camera"
-          onClick={() => {
-            setError(null);
-            setInfo(null);
-            setScannerOpen(true);
-          }}
-          disabled={isPending}
-        >
-          <Icon name="scan" size={20} />
-          <span style={{ marginLeft: '0.4rem' }}>
-            {isPending ? 'Загрузка…' : primaryLabel}
-          </span>
-        </button>
+          {error && (
+            <div className="error-box" role="alert">
+              <div className="error-box__msg">{error.message}</div>
+              {error.requestId && (
+                <div className="error-box__rid">
+                  req: <code>{error.requestId}</code>
+                </div>
+              )}
+            </div>
+          )}
+          {info && !error && (
+            <div className="info-box" role="status">
+              {info}
+            </div>
+          )}
 
-        {manualOpen ? (
-          <form
-            onSubmit={handleManualSubmit}
-            className="seamstress-start__manual"
-            aria-label="Ввести код паспорта вручную"
-          >
-            <label
-              className="scan-card__input"
-              htmlFor="qc-passport-code"
-            >
-              <span className="scan-card__input-label">Код паспорта</span>
-              <input
-                id="qc-passport-code"
-                type="text"
-                inputMode="text"
-                autoComplete="off"
-                autoCapitalize="off"
-                autoCorrect="off"
-                spellCheck={false}
-                placeholder="Например, P-20260418-0001"
-                value={manualCode}
-                onChange={(e) => setManualCode(e.target.value)}
-                autoFocus
-              />
-            </label>
-            <button
-              type="submit"
-              className="btn btn-block"
-              disabled={isPending}
-            >
-              Найти паспорт
-            </button>
-          </form>
-        ) : (
           <button
             type="button"
-            className="scan-card__manual-toggle"
-            onClick={() => setManualOpen(true)}
+            className="btn btn-primary btn-lg btn-block scan-card__primary-camera"
+            onClick={() => {
+              setError(null);
+              setInfo(null);
+              setScannerOpen(true);
+            }}
+            disabled={isPending}
           >
-            Ввести код вручную
+            <Icon name="scan" size={20} />
+            <span style={{ marginLeft: '0.4rem' }}>
+              {isPending ? 'Загрузка…' : 'Сканировать паспорт'}
+            </span>
           </button>
-        )}
-      </div>
+
+          {manualOpen ? (
+            <form
+              onSubmit={handleManualSubmit}
+              className="seamstress-start__manual"
+              aria-label="Ввести код паспорта вручную"
+            >
+              <label
+                className="scan-card__input"
+                htmlFor="qc-passport-code"
+              >
+                <span className="scan-card__input-label">Код паспорта</span>
+                <input
+                  id="qc-passport-code"
+                  type="text"
+                  inputMode="text"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  placeholder="Например, P-20260418-0001"
+                  value={manualCode}
+                  onChange={(e) => setManualCode(e.target.value)}
+                  autoFocus
+                />
+              </label>
+              <button
+                type="submit"
+                className="btn btn-block"
+                disabled={isPending}
+              >
+                Найти паспорт
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="scan-card__manual-toggle"
+              onClick={() => setManualOpen(true)}
+            >
+              Ввести код вручную
+            </button>
+          )}
+        </div>
+      )}
 
       {scannerOpen && (
         <QrScannerModal

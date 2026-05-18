@@ -3,35 +3,53 @@
 /**
  * Рабочая карточка паспорта ОТК для scan-driven терминала `/qc`.
  *
- * Логика state машины — у `QcTerminal` (родитель). Этот компонент
- * чистый view + два callback-а:
- *   - `onDefectSubmit(formData)` — вызвать `recordDefectAction`
- *     для текущего паспорта (родитель сам биндит passportId);
- *   - `onComplete()` — вызвать `completeQcAction`.
+ * Чистый view + callbacks; state-машина — у родителя `QcTerminal`.
+ *
+ * UX (см. docs/screens.md §5, docs/flows.md §F5):
+ *   - поле «Количество, шт.» в блоке брака предзаполняется кол-вом
+ *     кроя из паспорта (`qtyCut`); ОТК уменьшает его вручную, если в
+ *     брак уходит только часть;
+ *   - панель действий ЗАКРЕПЛЕНА снизу (sticky). Пока проверка не
+ *     завершена — «Добавить брак» (submit формы брака через
+ *     `form=`-атрибут) + «Проверка выполнена». После «Проверка
+ *     выполнена» обе кнопки заменяются одной — «Сканировать другой
+ *     паспорт»;
+ *   - «Обновить карточку» — мелкая ссылка в теле карточки, вне
+ *     закреплённой панели (ручное обновление на всякий случай).
  *
  * Бизнес-правила (источник истины — backend, см. `QcService`):
- *   - блок «Зафиксировать брак» прячется, когда `canRecordDefect = false`
- *     (статус не IN_PROGRESS или весь крой уже отмечен браком);
- *   - кнопка «Проверка выполнена» прячется, когда `canCompleteQc = false`
- *     (терминальные статусы);
- *   - после успешного complete показываем бейдж «Проверка выполнена ⟨время⟩»,
- *     но кнопка остаётся доступной — повторное завершение разрешено
- *     (например, после фиксации дополнительного брака).
+ *   - блок «Зафиксировать брак» доступен только при `canRecordDefect`
+ *     и пока проверка не завершена;
+ *   - «Проверка выполнена» доступна только при `canCompleteQc`.
  */
 
 import { useRef } from 'react';
 import type { DefectTypeDto, QcPassportDetailDto } from '@sewing/shared/qc';
 import { PASSPORT_STATUS_LABELS } from '@/lib/passport-status-labels';
 
+interface ErrorState {
+  message: string;
+  requestId?: string;
+}
+
 interface Props {
   detail: QcPassportDetailDto;
   defectTypes: DefectTypeDto[];
   pending: boolean;
+  /** Ошибка/инфо последнего действия — раньше жили в scan-карточке
+   *  родителя; теперь, когда паспорт открыт, scan-карточка скрыта,
+   *  поэтому фидбек показываем прямо в карточке (над панелью). */
+  error: ErrorState | null;
+  info: string | null;
   onDefectSubmit: (form: FormData) => void;
   onComplete: () => void;
   onScanNext: () => void;
   onRefresh: () => void;
 }
+
+/** id формы брака: кнопка «Добавить брак» вынесена в закреплённую
+ *  панель (вне `<form>`) и сабмитит её через `form=`-атрибут. */
+const DEFECT_FORM_ID = 'qc-defect-form';
 
 function formatDateTime(iso: string | null): string {
   if (!iso) return '—';
@@ -44,6 +62,8 @@ export function QcWorkCard({
   detail,
   defectTypes,
   pending,
+  error,
+  info,
   onDefectSubmit,
   onComplete,
   onScanNext,
@@ -58,9 +78,15 @@ export function QcWorkCard({
     form.reset();
   };
 
-  const completedLabel = detail.qcCompletedAt
+  const completed = !!detail.qcCompletedAt;
+  const completedLabel = completed
     ? `Проверка выполнена · ${formatDateTime(detail.qcCompletedAt)}`
     : null;
+
+  // Блок брака — только в работе (не после complete) и пока backend
+  // разрешает фиксировать брак.
+  const showDefectForm = !completed && detail.canRecordDefect;
+  const showDefectEmpty = !completed && !detail.canRecordDefect;
 
   return (
     <section className="qc-card" aria-label="Карточка паспорта ОТК">
@@ -120,14 +146,28 @@ export function QcWorkCard({
         </div>
       </div>
 
+      {/* «Обновить карточку» — мелкая ссылка, вне закреплённой панели. */}
+      <div className="qc-card__refresh">
+        <button
+          type="button"
+          className="scan-card__manual-toggle"
+          onClick={onRefresh}
+          disabled={pending}
+        >
+          Обновить карточку
+        </button>
+      </div>
+
       {completedLabel && (
         <div className="info-box" role="status">
           {completedLabel}
         </div>
       )}
 
-      {detail.canRecordDefect ? (
+      {showDefectForm ? (
         <form
+          key={detail.passportId}
+          id={DEFECT_FORM_ID}
           ref={formRef}
           className="qc-card__defect-form"
           onSubmit={handleSubmit}
@@ -156,6 +196,14 @@ export function QcWorkCard({
           <div className="form-row">
             <label htmlFor="qc-defect-qty">Количество, шт.</label>
             <div>
+              {/*
+               * Предзаполняем количеством кроя из паспорта (`qtyCut`).
+               * `key` на форме = passportId: при сканировании другого
+               * паспорта форма перемонтируется и defaultValue
+               * подставляется заново. Если по паспорту уже фиксировали
+               * брак, qtyCut может превышать `remainingForDefect` (=
+               * max) — ОТК уменьшает вручную (см. подсказку ниже).
+               */}
               <input
                 id="qc-defect-qty"
                 name="qty"
@@ -163,12 +211,13 @@ export function QcWorkCard({
                 min={1}
                 max={Math.max(detail.remainingForDefect, 1)}
                 step={1}
-                defaultValue={1}
+                defaultValue={detail.qtyCut}
                 required
                 disabled={pending || detail.remainingForDefect === 0}
               />
               <div className="hint">
-                Доступно к фиксации:{' '}
+                Из паспорта: <strong>{detail.qtyCut}</strong> шт. ·
+                {' '}доступно к фиксации:{' '}
                 <strong>{detail.remainingForDefect}</strong> шт.
               </div>
             </div>
@@ -186,21 +235,14 @@ export function QcWorkCard({
               />
             </div>
           </div>
-          <button
-            type="submit"
-            className="btn btn-primary btn-block"
-            disabled={pending || detail.remainingForDefect === 0}
-          >
-            {pending ? 'Запись…' : 'Добавить брак'}
-          </button>
         </form>
-      ) : (
+      ) : showDefectEmpty ? (
         <div className="card empty qc-card__defect-empty">
           {detail.status !== 'IN_PROGRESS'
             ? 'Паспорт ещё не в работе или уже завершён — фиксировать брак нельзя.'
             : 'Все штуки этого паспорта уже отмечены как брак.'}
         </div>
-      )}
+      ) : null}
 
       {detail.defects.length > 0 && (
         <details className="qc-card__history">
@@ -222,33 +264,74 @@ export function QcWorkCard({
         </details>
       )}
 
-      <div className="qc-card__actions">
-        {detail.canCompleteQc && (
+      {error && (
+        <div className="error-box" role="alert">
+          <div className="error-box__msg">{error.message}</div>
+          {error.requestId && (
+            <div className="error-box__rid">
+              req: <code>{error.requestId}</code>
+            </div>
+          )}
+        </div>
+      )}
+      {info && !error && !completed && (
+        <div className="info-box" role="status">
+          {info}
+        </div>
+      )}
+
+      {/*
+       * Закреплённая снизу панель действий (sticky). До «Проверка
+       * выполнена» — «Добавить брак» (submit формы брака через
+       * form=DEFECT_FORM_ID) + «Проверка выполнена». После — одна
+       * кнопка «Сканировать другой паспорт». Fallback: если backend
+       * не разрешает ни брак, ни complete — даём скан, чтобы ОТК не
+       * застрял.
+       */}
+      <div className="qc-card__sticky-actions">
+        {completed ? (
           <button
             type="button"
-            className="btn btn-success btn-block btn-lg"
-            onClick={onComplete}
+            className="btn btn-primary btn-block btn-lg"
+            onClick={onScanNext}
             disabled={pending}
           >
-            {pending ? 'Сохраняем…' : 'Проверка выполнена'}
+            Сканировать другой паспорт
           </button>
+        ) : (
+          <>
+            {detail.canRecordDefect && (
+              <button
+                type="submit"
+                form={DEFECT_FORM_ID}
+                className="btn btn-primary btn-block"
+                disabled={pending || detail.remainingForDefect === 0}
+              >
+                {pending ? 'Запись…' : 'Добавить брак'}
+              </button>
+            )}
+            {detail.canCompleteQc && (
+              <button
+                type="button"
+                className="btn btn-success btn-block btn-lg"
+                onClick={onComplete}
+                disabled={pending}
+              >
+                {pending ? 'Сохраняем…' : 'Проверка выполнена'}
+              </button>
+            )}
+            {!detail.canRecordDefect && !detail.canCompleteQc && (
+              <button
+                type="button"
+                className="btn btn-block btn-lg"
+                onClick={onScanNext}
+                disabled={pending}
+              >
+                Сканировать другой паспорт
+              </button>
+            )}
+          </>
         )}
-        <button
-          type="button"
-          className="btn btn-block"
-          onClick={onScanNext}
-          disabled={pending}
-        >
-          Сканировать другой паспорт
-        </button>
-        <button
-          type="button"
-          className="scan-card__manual-toggle"
-          onClick={onRefresh}
-          disabled={pending}
-        >
-          Обновить карточку
-        </button>
       </div>
     </section>
   );

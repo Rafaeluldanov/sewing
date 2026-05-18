@@ -32,8 +32,20 @@ export default async function QcSectionLayout({
   return (
     <>
       {children}
-      {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
-      {showMasterCall ? <CallMasterButton /> : null}
+      {/*
+       * «Мой QR-код» и «Мастер» закреплены СВЕРХУ (а не в нижних
+       * углах): низ экрана отдан закреплённой панели действий ОТК
+       * (`.qc-card__sticky-actions`). Полоса прижата влево и не
+       * доходит до три-точечного меню справа (`.seamstress-actions`,
+       * top/right), чтобы его не перекрывать. Скоуп — только `/qc`;
+       * на остальных терминалах кнопки остаются FAB-ами в углах.
+       */}
+      {showEmployeeQr || showMasterCall ? (
+        <div className="qc-toolbar">
+          {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
+          {showMasterCall ? <CallMasterButton /> : null}
+        </div>
+      ) : null}
     </>
   );
 }

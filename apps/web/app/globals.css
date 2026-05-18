@@ -3832,12 +3832,28 @@ table.data-table td code {
   color: var(--color-fg-muted);
   font-size: 0.85rem;
 }
-.qc-card__actions {
+/* Закреплённая снизу панель действий ОТК (см.
+   apps/web/app/qc/qc-work-card.tsx). Прилипает к нижней кромке
+   вьюпорта, пока тело карточки скроллится; набор кнопок меняется
+   после «Проверка выполнена». Отрицательные поля растягивают панель
+   на всю ширину карточки поверх её паддингов. */
+.qc-card__sticky-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 5;
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  padding-top: 0.4rem;
-  border-top: 1px dashed var(--color-border);
+  margin: 0.4rem -1rem -1.05rem;
+  padding: 0.7rem 1rem calc(0.7rem + env(safe-area-inset-bottom, 0px));
+  background: #fff;
+  border-top: 1px solid var(--color-border);
+}
+/* «Обновить карточку» — мелкая ссылка, прижата вправо, вне панели. */
+.qc-card__refresh {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: -0.35rem;
 }
 
 @media (max-width: 380px) {
@@ -5114,6 +5130,35 @@ table.data-table td code {
     left: 0.75rem;
     bottom: calc(env(safe-area-inset-bottom, 0px) + 0.75rem);
   }
+}
+
+/* `/qc`: «Мой QR-код» + «Мастер» закреплены СВЕРХУ-СЛЕВА единой
+   полосой, а не FAB-ами в нижних углах (низ занят
+   `.qc-card__sticky-actions`). Полоса не доходит до три-точечного
+   меню справа (`.seamstress-actions`: right 0.4rem, ~40px), поэтому
+   его не перекрывает. Внутри полосы гасим `position: fixed` обеих
+   кнопок — позицию держит сам контейнер. Скоуп только `/qc`. */
+.qc-toolbar {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 0.4rem);
+  left: 0.5rem;
+  /* Зазор справа: 40px меню + его 0.4rem инсет + воздух. */
+  right: 3.4rem;
+  z-index: 80;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  gap: 0.5rem;
+  pointer-events: none;
+}
+.qc-toolbar .call-master-btn--fab,
+.qc-toolbar .employee-qr-btn--fab {
+  position: static;
+  inset: auto;
+  pointer-events: auto;
+}
+@media (max-width: 480px) {
+  .qc-toolbar { right: 3.1rem; }
 }
 
 /* Карточка модалки «Мой QR» — вариант общего .qr-modal__card. */
