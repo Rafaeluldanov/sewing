@@ -17,7 +17,9 @@
 # В .env.prod лежат:
 #   DB_PASSWORD            — пароль postgres (НЕ коммитить)
 #   NEXT_PUBLIC_API_URL    — публичный URL API для client bundle (build-time)
-#   PRISMA_AUTO_SYNC       — 0/1, см. apps/api/scripts/docker-entrypoint.sh
+#   PRISMA_AUTO_SYNC       — 0/1, см. apps/api/scripts/docker-entrypoint.sh.
+#                            На prod = 0: схему ведёт ТОЛЬКО migrate deploy,
+#                            db push на старте контейнера отключён.
 #
 # Никаких секретов в этом скрипте нет.
 #
@@ -30,6 +32,8 @@
 #   HEALTH_ATTEMPTS     — попыток healthcheck (default 30)
 #   HEALTH_DELAY_S      — пауза между попытками, сек (default 2)
 #   SKIP_MIGRATIONS=1   — пропустить шаг `prisma migrate deploy`
+#   SKIP_BACKUP=1       — пропустить авто-бэкап БД перед миграциями
+#   BACKUP_KEEP         — сколько последних predeploy-дампов хранить (default 20)
 # -----------------------------------------------------------------------------
 
 set -euo pipefail
@@ -44,6 +48,15 @@ COMPOSE_FILES=(
   -f docker-compose.base.yml
   -f docker-compose.prod.yml
 )
+
+# Базовый docker compose invocation (project + compose-файлы + env-file).
+# Определён здесь (а не внутри шага «up»), чтобы pre-deploy backup на
+# шаге 2 тоже мог им пользоваться.
+DC_BASE=(docker compose -p "${COMPOSE_PROJECT}" "${COMPOSE_FILES[@]}" --env-file "${ENV_FILE}")
+
+# Pre-deploy backup БД.
+BACKUP_DIR="${BACKUP_DIR:-${REPO_ROOT}/backups}"
+BACKUP_KEEP="${BACKUP_KEEP:-20}"
 
 # Healthcheck:
 #   - prod API listens on host :8081 (см. docker-compose.prod.yml).
@@ -93,10 +106,43 @@ GIT_COMMIT_SUBJECT="$(git log -1 --pretty=%s)"
 log "deploying commit: ${GIT_COMMIT_SHORT}  ${GIT_COMMIT_SUBJECT}"
 
 # -----------------------------------------------------------------------------
-# 2. Docker compose build + up
+# 2. Pre-deploy DB backup (ДО любых изменений схемы)
+#
+# Снимаем gzip-дамп прод-БД до `compose up` и `migrate deploy`, чтобы при
+# сломанной миграции был свежий restore-point. Если db-контейнер ещё не
+# поднят (самый первый деплой на чистом сервере — терять нечего), шаг
+# пропускается с предупреждением. Любой сбой pg_dump на работающей БД
+# валит деплой (set -euo pipefail): миграции без бэкапа не катаем.
+# Отключить точечно: SKIP_BACKUP=1.
 # -----------------------------------------------------------------------------
-DC_BASE=(docker compose -p "${COMPOSE_PROJECT}" "${COMPOSE_FILES[@]}" --env-file "${ENV_FILE}")
+if [ "${SKIP_BACKUP:-0}" = "1" ]; then
+  log "SKIP_BACKUP=1 → пропускаем pre-deploy backup БД"
+else
+  DB_CID="$("${DC_BASE[@]}" ps -q db 2>/dev/null || true)"
+  if [ -z "${DB_CID}" ] || \
+     [ "$(docker inspect -f '{{.State.Running}}' "${DB_CID}" 2>/dev/null || echo false)" != "true" ]; then
+    log "WARN: db-контейнер не запущен — пропускаю pre-deploy backup (чистая установка?)"
+  else
+    mkdir -p "${BACKUP_DIR}"
+    BACKUP_FILE="${BACKUP_DIR}/prod_$(date +%Y%m%d_%H%M%S)_predeploy_${GIT_COMMIT_SHORT}.sql.gz"
+    log "pre-deploy backup → ${BACKUP_FILE}"
+    # POSTGRES_USER=user / POSTGRES_DB=myapp зашиты в docker-compose.base.yml.
+    "${DC_BASE[@]}" exec -T db pg_dump -U user -d myapp --no-owner --no-privileges \
+      | gzip > "${BACKUP_FILE}"
+    if [ ! -s "${BACKUP_FILE}" ] || ! gzip -t "${BACKUP_FILE}"; then
+      echo "[deploy-prod] FATAL: pre-deploy backup пустой или битый: ${BACKUP_FILE}" >&2
+      exit 1
+    fi
+    log "backup OK ($(du -h "${BACKUP_FILE}" | cut -f1))"
+    # Ротация: оставляем только BACKUP_KEEP свежих predeploy-дампов.
+    ls -1t "${BACKUP_DIR}"/prod_*_predeploy_*.sql.gz 2>/dev/null \
+      | tail -n +"$((BACKUP_KEEP + 1))" | xargs -r rm -f || true
+  fi
+fi
 
+# -----------------------------------------------------------------------------
+# 3. Docker compose build + up
+# -----------------------------------------------------------------------------
 log "docker compose build"
 "${DC_BASE[@]}" build
 
@@ -104,27 +150,31 @@ log "docker compose up -d --remove-orphans"
 "${DC_BASE[@]}" up -d --remove-orphans
 
 # -----------------------------------------------------------------------------
-# 3. Prisma migrations (внутри контейнера api)
+# 4. Prisma migrations (внутри контейнера api)
 #
-# Каноническая команда для prod — `prisma migrate deploy`. Если она
-# падает (например, у вас миграционный history разъехался с фактической
-# БД, см. docs/deploy-ci-cd.md §«Migrations»), деплой НЕ валим:
-# api-контейнер при старте уже выполнил `prisma db push` через
-# entrypoint (PRISMA_AUTO_SYNC=1 в docker-compose.prod.yml).
-# Тогда схема в БД всё равно синхронизирована со schema.prisma.
+# `prisma migrate deploy` — ЕДИНСТВЕННЫЙ авторитетный путь схемы на prod
+# (PRISMA_AUTO_SYNC=0 в .env.prod: entrypoint больше НЕ делает db push и
+# схему молча не «чинит»). Поэтому падение миграции = ОСТАНОВКА деплоя:
+# сломанная миграция должна быть видна сразу, а не маскироваться. Бэкап
+# уже снят на шаге 2 — restore-point есть, разбирается оператор
+# (docs/deploy-ci-cd.md §«Migrations» + `prisma migrate status`).
+# Точечно пропустить миграции (на свой риск): SKIP_MIGRATIONS=1.
 # -----------------------------------------------------------------------------
 if [ "${SKIP_MIGRATIONS:-0}" != "1" ]; then
   log "prisma migrate deploy (inside api container)"
   if ! "${DC_BASE[@]}" exec -T api npx prisma migrate deploy --schema=prisma/schema.prisma; then
-    echo "[deploy-prod] WARN: prisma migrate deploy failed — schema may already be in sync" >&2
-    echo "[deploy-prod] WARN: continuing (PRISMA_AUTO_SYNC entrypoint runs on container start)" >&2
+    echo "[deploy-prod] FATAL: prisma migrate deploy failed — деплой остановлен." >&2
+    echo "[deploy-prod] Схема НЕ синхронизирована (db push отключён, PRISMA_AUTO_SYNC=0)." >&2
+    echo "[deploy-prod] Разбор: 'prisma migrate status' + docs/deploy-ci-cd.md §Migrations." >&2
+    echo "[deploy-prod] Restore-point: backups/prod_*_predeploy_${GIT_COMMIT_SHORT}.sql.gz" >&2
+    exit 1
   fi
 else
   log "SKIP_MIGRATIONS=1 → пропускаем prisma migrate deploy"
 fi
 
 # -----------------------------------------------------------------------------
-# 4. Status: containers + recent logs (best-effort)
+# 5. Status: containers + recent logs (best-effort)
 # -----------------------------------------------------------------------------
 log "docker compose ps"
 "${DC_BASE[@]}" ps
@@ -136,7 +186,7 @@ log "recent web logs (last 30 lines, best-effort)"
 "${DC_BASE[@]}" logs --tail=30 web 2>&1 || true
 
 # -----------------------------------------------------------------------------
-# 5. Healthcheck
+# 6. Healthcheck
 #
 # Принимаем 200 (есть валидная сессия) ИЛИ 401 (анонимный запрос — ожидаемо).
 # Любые 5xx, connection refused, timeout — ошибка деплоя.

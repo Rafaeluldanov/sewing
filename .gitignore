@@ -17,6 +17,10 @@ prisma/*.db-journal
 # storage
 storage/
 
+# prod DB dumps (auto-backup из scripts/deploy-prod.sh) — данные прод не версионируем
+backups/*.sql.gz
+backups/*.dump
+
 # patterns uploads (модуль «Лекала», MVP-1)
 apps/api/uploads/
 
