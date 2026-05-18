@@ -51,15 +51,3 @@ CREATE INDEX "CompanyDivision_isActive_idx" ON "CompanyDivision"("isActive");
 
 -- CreateIndex
 CREATE INDEX "CompanyDivision_sortOrder_idx" ON "CompanyDivision"("sortOrder");
-
--- RenameIndex
-ALTER INDEX "PatternItemParameterNorm_pattern_param_uniq" RENAME TO "PatternItemParameterNorm_patternItemId_categoryParameterId_key";
-
--- RenameIndex
-ALTER INDEX "PatternItemSizeParameterValue_pattern_param_size_uniq" RENAME TO "PatternItemSizeParameterValue_patternItemId_categoryParamet_key";
-
--- RenameIndex
-ALTER INDEX "PatternMaterialArea_pattern_size_role_uniq" RENAME TO "PatternMaterialArea_patternItemId_sizeId_materialRole_key";
-
--- RenameIndex
-ALTER INDEX "PatternSizeFile_pattern_size_version_uniq" RENAME TO "PatternSizeFile_patternItemId_sizeId_version_key";

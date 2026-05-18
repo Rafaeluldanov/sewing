@@ -816,16 +816,14 @@ export interface CompatibleTechCardDto {
   patternCategoryId: string | null;
   /**
    * Совместимость техкарты с группой номенклатуры:
-   *   - `FULL`    — все активные `AREA_M2_BY_SIZE` параметры
-   *     категории имеют соответствующую строку техкарты
-   *     с тем же `materialRole`;
+   *   - `FULL`    — все активные `AREA_M2_BY_SIZE` параметры категории
+   *     имеют соответствующую строку техкарты с тем же `materialRole`;
    *   - `PARTIAL` — часть roleKey-ов совпала, часть отсутствует;
    *   - `NONE`    — ни одной совпавшей пары.
    *
    * UI «Создать изделие» по умолчанию показывает все варианты,
-   * сортируя `FULL → PARTIAL → NONE`, и подсвечивает уровни.
-   * Backend `OrdersService.create` дополнительно валидирует строго:
-   * при `CREATE_FOR_CALCULATION` допустимо только `FULL`-совпадение
+   * сортируя `FULL → PARTIAL → NONE`. Backend `OrdersService.create`
+   * дополнительно валидирует строго при `CREATE_FOR_CALCULATION`
    * (иначе 409 `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY`).
    */
   compatibility: TechCardCompatibilityLevel;

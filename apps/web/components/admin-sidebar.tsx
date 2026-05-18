@@ -165,6 +165,11 @@ function buildSections(): SidebarItem[] {
     { href: '/admin/operations', label: 'Операции', Icon: Scissors },
     { href: '/admin/routes', label: 'Маршруты', Icon: Activity },
     { href: '/admin/tech-cards', label: 'Техкарты', Icon: ClipboardList },
+    {
+      href: '/admin/constructor-tasks',
+      label: 'Заявки конструктору',
+      Icon: ClipboardList,
+    },
     { href: '/admin/warehouses', label: 'Склады', Icon: Warehouse },
     { href: '/admin/printers', label: 'Принтеры', Icon: Printer },
     { href: '/admin/diagnostics', label: 'Диагностика', Icon: Search },

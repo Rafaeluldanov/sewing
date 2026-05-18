@@ -1,6 +1,17 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Package, Ruler, Scissors } from 'lucide-react';
+import {
+  ArrowLeft,
+  ArrowRight,
+  ClipboardList,
+  Package,
+  Ruler,
+  Scissors,
+} from 'lucide-react';
+import {
+  CONSTRUCTOR_TASK_STATUS_LABELS,
+  CONSTRUCTOR_TASK_STATUS_TONE,
+} from '@sewing/shared/constructor-tasks';
 import {
   PATTERN_ITEM_STATUS_LABELS,
   type PatternDetailDto,
@@ -24,6 +35,7 @@ import {
   AdminTechInfo,
 } from '@/components/admin';
 import { statusTone } from '@/lib/admin-labels';
+import { ClonePatternModalHost } from './clone-modal-host';
 import { EditPatternForm } from './edit-form';
 import { PatternPreviewUploadForm } from './preview-upload-form';
 import { PatternSizesManager } from './pattern-sizes-manager';
@@ -119,6 +131,12 @@ export default async function AdminPatternDetailPage({
         </>
       }
     >
+      <ClonePatternModalHost
+        patternId={pattern.id}
+        patternName={pattern.name}
+        patternArticle={pattern.article}
+      />
+
       <div className="admin-grid-2">
         <div className="admin-stack">
           <AdminCard>
@@ -165,6 +183,70 @@ export default async function AdminPatternDetailPage({
               </dd>
             </dl>
           </AdminCard>
+
+          {pattern.constructorTask && (
+            <AdminCard>
+              <AdminSectionHeader
+                icon={
+                  <ClipboardList size={18} strokeWidth={1.6} aria-hidden />
+                }
+                title="Источник"
+                hint="Лекало создано через flow «Отправить конструктору»"
+              />
+              <dl className="admin-deflist">
+                <dt>Задача</dt>
+                <dd>
+                  <Link
+                    href={`/admin/constructor-tasks/${pattern.constructorTask.id}`}
+                    className="admin-table__action-link"
+                  >
+                    Открыть задачу
+                    <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+                  </Link>
+                </dd>
+                <dt>Статус задачи</dt>
+                <dd>
+                  <AdminStatusBadge
+                    tone={
+                      CONSTRUCTOR_TASK_STATUS_TONE[
+                        pattern.constructorTask.status
+                      ]
+                    }
+                  >
+                    {
+                      CONSTRUCTOR_TASK_STATUS_LABELS[
+                        pattern.constructorTask.status
+                      ]
+                    }
+                  </AdminStatusBadge>
+                </dd>
+                <dt>Конструктор</dt>
+                <dd>
+                  {pattern.constructorTask.assignedToName ?? (
+                    <span className="admin-muted">не назначен</span>
+                  )}
+                </dd>
+                <dt>Отправлена</dt>
+                <dd>
+                  {new Date(
+                    pattern.constructorTask.createdAt,
+                  ).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}
+                </dd>
+                {pattern.constructorTask.acceptedAt && (
+                  <>
+                    <dt>Принята</dt>
+                    <dd>
+                      {new Date(
+                        pattern.constructorTask.acceptedAt,
+                      ).toLocaleString('ru-RU', {
+                        timeZone: 'Europe/Moscow',
+                      })}
+                    </dd>
+                  </>
+                )}
+              </dl>
+            </AdminCard>
+          )}
 
           <AdminCard>
             <AdminSectionHeader title="Редактирование" />

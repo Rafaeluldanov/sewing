@@ -64,15 +64,22 @@ export function replacePatternCategoryParameters(
   );
 }
 
+export function archivePatternCategory(
+  id: string,
+): Promise<PatternCategoryDto> {
+  return apiFetch<PatternCategoryDto>(
+    `/pattern-categories/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
+}
+
 /**
  * Inline-создание изделия из формы заказа (см.
  * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
  * `apps/api/src/modules/pattern-categories/pattern-categories.controller.ts`).
  *
- * Получить активные техкарты с оценкой совместимости по группе
- * номенклатуры (`FULL` / `PARTIAL` / `NONE` + matched/missing
- * roleKeys). UI селекта «Техкарта» использует ответ для подсветки
- * и фильтрации.
+ * Возвращает активные техкарты с оценкой совместимости по группе
+ * номенклатуры (`FULL` / `PARTIAL` / `NONE` + matched/missing roleKeys).
  */
 export function getCompatibleTechCards(
   categoryId: string,
@@ -80,15 +87,6 @@ export function getCompatibleTechCards(
   return apiFetch<CompatibleTechCardsResponseDto>(
     `/pattern-categories/${encodeURIComponent(categoryId)}/compatible-tech-cards`,
     { cache: 'no-store' },
-  );
-}
-
-export function archivePatternCategory(
-  id: string,
-): Promise<PatternCategoryDto> {
-  return apiFetch<PatternCategoryDto>(
-    `/pattern-categories/${encodeURIComponent(id)}`,
-    { method: 'DELETE' },
   );
 }
 

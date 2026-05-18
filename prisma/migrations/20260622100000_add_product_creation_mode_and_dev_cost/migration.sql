@@ -5,21 +5,9 @@
 --   apps/web/app/admin/orders/new/admin-create-order-form.tsx).
 --
 -- Добавляем три поля:
---   - Order.productCreationMode (String, default EXISTING_PATTERN) —
---     режим заведения изделия по заказу: 'EXISTING_PATTERN' (старый
---     путь) или 'CREATE_FOR_CALCULATION' (новый inline-сценарий).
---     Свободная строка ради расширяемости (зарезервировано
---     'SEND_TO_CONSTRUCTOR'); Zod-валидация в shared.
---   - Order.patternDevelopmentCostRub (Decimal(12,2)?) —
---     стоимость разработки лекала из формы создания заказа,
---     заполняется только в новом сценарии. Управленческое поле,
---     в текущий расчёт себестоимости/потребности НЕ входит.
---   - TechCardTemplate.patternCategoryId (TEXT?) — soft-привязка
---     техкарты к группе номенклатуры. NULL допустим (исторические
---     техкарты), используется как фильтр в селекте при inline-
---     создании и как hint для совместимости. Совместимость
---     (TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY) валидируется
---     отдельно по materialRole vs параметрам категории.
+--   - Order.productCreationMode (String, default EXISTING_PATTERN);
+--   - Order.patternDevelopmentCostRub (Decimal(12,2)?);
+--   - TechCardTemplate.patternCategoryId (TEXT?, onDelete SET NULL).
 
 ALTER TABLE "Order"
   ADD COLUMN "productCreationMode" TEXT NOT NULL DEFAULT 'EXISTING_PATTERN',

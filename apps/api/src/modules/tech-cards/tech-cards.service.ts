@@ -63,8 +63,6 @@ export class TechCardsService {
   async list(query: ListTechCardsQuery): Promise<TechCardTemplateSummaryDto[]> {
     const where: Prisma.TechCardTemplateWhereInput = {};
     if (query.isActive !== undefined) where.isActive = query.isActive;
-    // Этап «Inline-создание изделия из формы заказа»: фильтр по
-    // группе номенклатуры (см. `TechCardTemplate.patternCategoryId`).
     if (query.patternCategoryId) {
       where.patternCategoryId = query.patternCategoryId;
     }
@@ -217,11 +215,9 @@ export class TechCardsService {
   }
 
   /**
-   * Этап «Inline-создание изделия из формы заказа»: при привязке
-   * техкарты к группе номенклатуры (`patternCategoryId`) валидируем,
-   * что категория существует и `status = ACTIVE`. Аналог
-   * `OrdersService.assertPatternUsable` — soft-protection против
-   * прямого POST/PATCH со «зомби»-категорией.
+   * Inline-создание изделия из формы заказа: при привязке техкарты
+   * к группе номенклатуры (`patternCategoryId`) валидируем, что
+   * категория существует и `status = ACTIVE`.
    */
   private async assertPatternCategoryUsable(
     patternCategoryId: string,
@@ -241,9 +237,6 @@ export class TechCardsService {
   // -------------------------------------------------------------------------
 
   async create(dto: CreateTechCardDto): Promise<TechCardTemplateDetailDto> {
-    // Этап «Inline-создание изделия из формы заказа»: если передан
-    // patternCategoryId — проверяем existence и активность категории
-    // до открытия транзакции, чтобы UI получил адресную ошибку.
     if (dto.patternCategoryId) {
       await this.assertPatternCategoryUsable(dto.patternCategoryId);
     }
@@ -302,8 +295,6 @@ export class TechCardsService {
     });
     if (!existing) throw new TechCardNotFoundException();
 
-    // Этап «Inline-создание изделия из формы заказа»: при смене
-    // привязки на не-null валидируем категорию до открытия транзакции.
     if (dto.patternCategoryId) {
       await this.assertPatternCategoryUsable(dto.patternCategoryId);
     }
@@ -315,10 +306,6 @@ export class TechCardsService {
         if (dto.name !== undefined) data.name = dto.name;
         if (dto.isActive !== undefined) data.isActive = dto.isActive;
         if (dto.patternCategoryId !== undefined) {
-          // null = снять привязку; string = переустановить.
-          // Используем скалярную колонку (а не relation `connect/
-          // disconnect`), потому что в проекте есть mixed-style
-          // и через скалярный fk проще / типы стабильнее.
           (data as { patternCategoryId?: string | null }).patternCategoryId =
             dto.patternCategoryId;
         }

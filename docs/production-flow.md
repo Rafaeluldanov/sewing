@@ -75,6 +75,39 @@
 
 ---
 
+<a id="0a-signal-sample"></a>
+## 0a. Sample vs bulk (Сигнальный образец)
+
+См. `apps/api/src/modules/order-samples/*`,
+`docs/order-signal-sample-flow.md`,
+`docs/order-signal-sample-recon.md`,
+`prisma/schema.prisma::OrderSample` / `OrderSampleStatus` /
+`OrderSampleMaterialMode`.
+
+Сигнальный образец — отдельный sample-flow внутри заказа. С точки
+зрения этого документа:
+
+- sample-passport создаётся стандартным `PassportsService.create`,
+  движется по тому же маршруту и тем же `PassportEvent`-ам, что и
+  тиражный паспорт. **Отличие** одно: `Passport.sampleId !== null`
+  (FK на `OrderSample`).
+- Тиражные паспорта имеют `sampleId = null`. Все списки/aggregation
+  по паспортам по умолчанию **не различают** sample и bulk —
+  потребители, которым важно отделить sample, фильтруют через
+  `sampleId is null`.
+- Жизненный цикл sample-сущности (`OrderSample`) — отдельный (см.
+  `OrderSampleStatus`). Он **не** влияет на `PassportStatus` и не
+  меняет существующие переходы `CREATED → IN_PROGRESS → PACKED`.
+- Образец **не мутирует** `OrderItem.qtyPlan`: эффект на тираж
+  считается логически (`OrderSampleBulkEffectDto.remainingQty`).
+- Для `materialMode = SAMPLE_ONLY` потребности материалов **не**
+  пишутся в `WorkshopNeed` (preview-only в DTO); для `FULL_ORDER`
+  менеджер запускает существующий
+  `WorkshopNeedsService.calculateForOrder` обычной кнопкой
+  «Потребности цеха».
+
+---
+
 <a id="1-passport"></a>
 ## 1. Passport как агрегат-корень
 

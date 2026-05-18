@@ -118,13 +118,8 @@ export class PatternCategoriesController {
   }
 
   /**
-   * Inline-создание изделия из формы заказа (см.
-   * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`).
-   *
-   * Возвращает активные техкарты с компатибилити-оценкой по этой
-   * категории (`FULL` / `PARTIAL` / `NONE`) и списками
-   * `matchedRoleKeys` / `missingRoleKeys`. UI использует ответ для
-   * фильтрации/подсветки селекта «Техкарта».
+   * Inline-создание изделия из формы заказа: активные техкарты с
+   * compatibility-оценкой по этой категории.
    */
   @Get(':id/compatible-tech-cards')
   compatibleTechCards(

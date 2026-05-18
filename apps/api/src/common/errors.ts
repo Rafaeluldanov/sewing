@@ -77,6 +77,7 @@ export class OrderTechCardRequiredException extends BusinessException {
   }
 }
 
+
 /**
  * У заказа нет ни одной размерной строки с `qtyPlan > 0` — без
  * размерной матрицы расчёт чистой потребности невозможен.
@@ -90,6 +91,28 @@ export class OrderItemsRequiredException extends BusinessException {
     super(
       'ORDER_ITEMS_REQUIRED',
       'Чтобы перевести заказ в расчёт, заполните количество хотя бы по одному размеру.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Расчёт потребности цеха дал число, не помещающееся в
+ * `WorkshopNeed`-колонку `Decimal(14,4)` (абсолютное значение должно
+ * быть < 10^10). Почти всегда это означает нереалистичный ввод:
+ * слишком большой тираж (`OrderItem.qtyPlan`) или расход на изделие
+ * (площадь / погонные метры / норма фурнитуры).
+ *
+ * Без этого гарда Prisma бросает `numeric field overflow`, который
+ * `GlobalExceptionFilter` отдаёт как 500 `INTERNAL_ERROR` — менеджер
+ * не понимает, что именно поправить. Сообщение формируется сервисом
+ * и адресно называет проблемную позицию и число.
+ */
+export class WorkshopNeedCalculationOverflowException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'WORKSHOP_NEED_CALCULATION_OVERFLOW',
+      message,
       HttpStatus.BAD_REQUEST,
     );
   }
@@ -1182,7 +1205,7 @@ export class TechCardInactiveException extends BusinessException {
  * Техкарта несовместима с выбранной группой номенклатуры: хотя бы
  * один активный `PatternCategoryParameter(inputType=AREA_M2_BY_SIZE)`
  * не имеет соответствующей строки `TechCardMaterialLine.materialRole`.
- * UI получает `missingRoleKeys` через `details` и подсвечивает
+ * UI получает `missingRoleKeys` через payload и подсвечивает
  * недостающие роли.
  */
 export class TechCardNotCompatibleWithCategoryException extends HttpException {
@@ -1230,6 +1253,144 @@ export class TechCardImageUploadInvalidException extends BusinessException {
       'TECH_CARD_IMAGE_UPLOAD_INVALID',
       message,
       HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Загруженный файл вложения задачи конструктору не прошёл валидацию
+ * (размер / попытка path-traversal в `originalname`). Расширение файла
+ * НЕ ограничено — конструктору можно слать любые форматы. См.
+ * `ConstructorTasksStorageService.saveTaskFile`.
+ */
+export class ConstructorTaskFileInvalidException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'CONSTRUCTOR_TASK_FILE_INVALID',
+      message,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * `ConstructorTask` не найдена. Используется в админских GET-эндпоинтах
+ * `/api/constructor-tasks/:id`.
+ */
+export class ConstructorTaskNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_NOT_FOUND',
+      'Заявка конструктору не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Payload `saveConstructorDraftAction` ссылается на размер `Size.id`,
+ * которого нет в справочнике. Защита от подделки/несинхронизированной
+ * формы — UI заполняет sizeId из активных размеров заказа.
+ */
+export class ConstructorTaskSizeNotFoundException extends BusinessException {
+  constructor(sizeId: string) {
+    super(
+      'CONSTRUCTOR_TASK_SIZE_NOT_FOUND',
+      `Размер ${sizeId} не найден в справочнике`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Недопустимый переход статуса заявки конструктору (напр. cancel
+ * `DONE`-задачи — лекало уже передано, отменять нечего).
+ */
+export class ConstructorTaskInvalidTransitionException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'CONSTRUCTOR_TASK_INVALID_TRANSITION',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Конструктор пытается выполнить действие (assignSelf / updateComment /
+ * complete) с задачей, которую уже взял другой конструктор. ADMIN /
+ * SHOP_MANAGER эту проверку обходят (в контроллере мы не передаём
+ * `enforceOwnership = true` для них), поэтому исключение поднимается
+ * только для роли `CONSTRUCTOR`.
+ */
+export class ConstructorTaskAssignedToOtherException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_ASSIGNED_TO_OTHER',
+      'Задача уже назначена другому конструктору',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Попытка завершить задачу (`POST /:id/complete`), которая не находится
+ * в статусе `IN_PROGRESS`. Сценарии: задача ещё `NEW` (не взята в
+ * работу), уже `DONE` (повторное завершение), или `CANCELLED`.
+ */
+export class ConstructorTaskNotInProgressException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_NOT_IN_PROGRESS',
+      'Завершить можно только задачу в статусе «В работе»',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Набор `sizeId` в payload `complete` не совпадает с `task.sizeRows[]`
+ * — есть лишний размер либо нет файла на один из обязательных. UI
+ * рендерит по одному `<input type="file" name="file_<sizeId>">` на
+ * каждую строку task — обычно это значит, что пользователь не выбрал
+ * файл для всех полей.
+ */
+export class ConstructorTaskCompleteFilesMismatchException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'CONSTRUCTOR_TASK_COMPLETE_FILES_MISMATCH',
+      message,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Менеджер пытается принять (`POST /:id/accept`) задачу не в
+ * `PENDING_ACCEPT`. Сценарии: ещё не завершена конструктором (NEW /
+ * IN_PROGRESS / REWORK), уже принята (DONE) или отменена.
+ */
+export class ConstructorTaskAcceptInvalidException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_ACCEPT_INVALID',
+      'Принять можно только задачу в статусе «На приёмке»',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Менеджер пытается вернуть на доработку (`POST /:id/rework`) задачу
+ * не в `PENDING_ACCEPT`, либо payload пришёл невалидный (например,
+ * пустой комментарий).
+ */
+export class ConstructorTaskReworkInvalidException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'CONSTRUCTOR_TASK_REWORK_INVALID',
+      message,
+      HttpStatus.CONFLICT,
     );
   }
 }
@@ -2262,16 +2423,25 @@ export class WorkshopNeedsAlreadyReviewedException extends BusinessException {
 }
 
 /**
- * Не из чего считать потребность заказа: нет привязки к техкарте и
- * нет snapshot строк `OrderMaterialRequirement`. Без живой техкарты
- * (DRAFT) и без snapshot (запущенный заказ без техкарты в момент
- * `start()`) считать нечего.
+ * Не из чего считать потребность заказа. Универсальный код, конкретику
+ * передаём в message — менеджер сразу видит, что именно поправить:
+ *   - техкарта выбрана, но пустая (нет TechCardMaterialLine-ов);
+ *   - лекало без заполненных параметров (нет PatternMaterialArea-ов,
+ *     PatternItemParameterNorm-ов и PatternItemSizeParameterValue-ов),
+ *     при том что категория тоже не помогает (см. `isCategoryDriven`);
+ *   - вообще ничего не привязано (исторический generic-кейс).
+ *
+ * Конкретный текст конструируется в
+ * `WorkshopNeedsService.calculateForOrder` на месте throw, чтобы
+ * сообщение знало `techCardId`/`patternItemId` контекста.
  */
 export class WorkshopNeedCalculationSourceException extends BusinessException {
-  constructor() {
+  constructor(
+    message: string = 'Для расчёта потребности нужна техкарта или snapshot материалов.',
+  ) {
     super(
       'WORKSHOP_NEED_SOURCE_REQUIRED',
-      'Для расчёта потребности нужна техкарта или snapshot материалов.',
+      message,
       HttpStatus.UNPROCESSABLE_ENTITY,
     );
   }
@@ -3222,6 +3392,82 @@ export class MaterialStockInsufficientException extends HttpException {
         details,
       },
       HttpStatus.CONFLICT,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Сигнальный образец (см. `apps/api/src/modules/order-samples/*`,
+// `docs/order-signal-sample-flow.md`,
+// `packages/shared/src/order-samples.ts`).
+// ---------------------------------------------------------------------------
+
+export class OrderSampleNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_SAMPLE_NOT_FOUND',
+      'Сигнальный образец не найден',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+export class OrderSampleAlreadyActiveException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_SAMPLE_ALREADY_ACTIVE',
+      'По этой паре изделия и размера уже есть активный образец. Закройте его (Approve / Reject / Cancel) перед запуском нового.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class OrderSampleInvalidStatusException extends BusinessException {
+  constructor(currentStatus: string, action: string) {
+    super(
+      'ORDER_SAMPLE_INVALID_STATUS',
+      `Действие "${action}" недоступно для образца в статусе ${currentStatus}.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class OrderSampleSizeNotInOrderException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_SAMPLE_SIZE_NOT_IN_ORDER',
+      'Выбранный размер отсутствует в заказе.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+export class OrderSampleOrderInvalidStatusException extends BusinessException {
+  constructor(currentStatus: string) {
+    super(
+      'ORDER_SAMPLE_ORDER_INVALID_STATUS',
+      `Нельзя запустить образец у заказа в статусе ${currentStatus}.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class OrderSampleQtyExceedsOrderSizeQtyException extends BusinessException {
+  constructor(qty: number, orderSizeQty: number) {
+    super(
+      'ORDER_SAMPLE_QTY_EXCEEDS_ORDER_SIZE_QTY',
+      `Количество образца (${qty}) превышает план по размеру (${orderSizeQty}). При включении образца в тираж это невозможно.`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+export class OrderSampleRejectionReasonRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_SAMPLE_REJECTION_REASON_REQUIRED',
+      'Укажите причину отклонения образца.',
+      HttpStatus.BAD_REQUEST,
     );
   }
 }

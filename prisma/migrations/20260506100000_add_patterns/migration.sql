@@ -59,7 +59,7 @@ CREATE TABLE "PatternSizeFile" (
     CONSTRAINT "PatternSizeFile_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "PatternSizeFile_pattern_size_version_uniq"
+CREATE UNIQUE INDEX "PatternSizeFile_patternItemId_sizeId_version_key"
     ON "PatternSizeFile"("patternItemId", "sizeId", "version");
 CREATE INDEX "PatternSizeFile_patternItemId_idx" ON "PatternSizeFile"("patternItemId");
 
@@ -91,7 +91,7 @@ CREATE TABLE "PatternMaterialArea" (
     CONSTRAINT "PatternMaterialArea_pkey" PRIMARY KEY ("id")
 );
 
-CREATE UNIQUE INDEX "PatternMaterialArea_pattern_size_role_uniq"
+CREATE UNIQUE INDEX "PatternMaterialArea_patternItemId_sizeId_materialRole_key"
     ON "PatternMaterialArea"("patternItemId", "sizeId", "materialRole");
 CREATE INDEX "PatternMaterialArea_patternItemId_materialRole_idx"
     ON "PatternMaterialArea"("patternItemId", "materialRole");

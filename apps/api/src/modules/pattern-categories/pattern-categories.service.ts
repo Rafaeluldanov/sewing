@@ -116,20 +116,12 @@ export class PatternCategoriesService {
   }
 
   /**
-   * Inline-создание изделия из формы заказа (см.
-   * `apps/api/src/modules/pattern-categories/pattern-categories.controller.ts`,
-   * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`).
-   *
-   * Возвращает активные техкарты с оценкой совместимости по этой
-   * группе номенклатуры:
-   *   - `FULL`    — все активные `AREA_M2_BY_SIZE`-параметры категории
-   *     имеют соответствующую `TechCardMaterialLine.materialRole`;
-   *   - `PARTIAL` — часть roleKey-ов совпала, часть отсутствует;
-   *   - `NONE`    — нет ни одного совпавшего roleKey.
-   *
-   * Используется UI модалки «Создать изделие» для подсветки/фильтрации
-   * селекта «Техкарта». Backend `OrdersService.create` дополнительно
-   * валидирует строго при сохранении.
+   * Inline-создание изделия из формы заказа: активные техкарты с
+   * compatibility-оценкой по `AREA_M2_BY_SIZE`-параметрам категории.
+   * Сортируется `FULL → PARTIAL → NONE`, затем по `code`. Backend
+   * `OrdersService.create` валидирует совместимость строго при
+   * `CREATE_FOR_CALCULATION` (иначе 409
+   * `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY`).
    */
   async compatibleTechCards(
     categoryId: string,
@@ -144,8 +136,8 @@ export class PatternCategoriesService {
     const requiredRoleKeys = category.parameters
       .filter((p) => p.inputType === 'AREA_M2_BY_SIZE')
       .map((p) => p.roleKey);
-
     const requiredSet = new Set(requiredRoleKeys);
+
     const techCards = await this.prisma.techCardTemplate.findMany({
       where: { isActive: true },
       include: {
@@ -167,12 +159,7 @@ export class PatternCategoriesService {
         else missing.push(role);
       }
       let compatibility: TechCardCompatibilityLevel;
-      if (requiredSet.size === 0) {
-        // У категории нет AREA_M2_BY_SIZE параметров — любая
-        // техкарта считается «полностью совместимой» (нечего
-        // покрывать).
-        compatibility = 'FULL';
-      } else if (missing.length === 0) {
+      if (requiredSet.size === 0 || missing.length === 0) {
         compatibility = 'FULL';
       } else if (matched.length === 0) {
         compatibility = 'NONE';
@@ -192,7 +179,6 @@ export class PatternCategoriesService {
       };
     });
 
-    // Sort FULL → PARTIAL → NONE, затем по code asc.
     const order: Record<TechCardCompatibilityLevel, number> = {
       FULL: 0,
       PARTIAL: 1,

@@ -666,10 +666,8 @@ const OutsourceLinesField = z
  * Soft-привязка техкарты к группе номенклатуры (`PatternCategory`).
  * Этап «Inline-создание изделия из формы заказа»: окно создания
  * техкарты внутри модалки «Создать изделие» автоматически передаёт
- * `patternCategoryId` выбранной категории. На остальных формах
- * (admin `/admin/tech-cards/new`) поле опционально и nullable.
- *
- * `null` — снять привязку; `undefined` — не трогать колонку (на update).
+ * `patternCategoryId` выбранной категории. На остальных формах поле
+ * опционально и nullable.
  */
 const PatternCategoryIdOptionalField = z
   .string()
@@ -729,8 +727,6 @@ export const ListTechCardsQuerySchema = z.object({
   /**
    * Этап «Inline-создание изделия из формы заказа»: фильтр по
    * группе номенклатуры (`TechCardTemplate.patternCategoryId`).
-   * Используется селектом «Техкарта» в модалке «Создать изделие»,
-   * чтобы показать только техкарты выбранной категории.
    */
   patternCategoryId: z.string().min(1).optional(),
   search: z.string().trim().max(100).optional(),

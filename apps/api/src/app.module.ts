@@ -26,11 +26,13 @@ import { DashboardModule } from './modules/dashboard/dashboard.module.js';
 import { PrintersModule } from './modules/printers/printers.module.js';
 import { RoutesModule } from './modules/routes/routes.module.js';
 import { TechCardsModule } from './modules/tech-cards/tech-cards.module.js';
+import { ConstructorTasksModule } from './modules/constructor-tasks/constructor-tasks.module.js';
 import { DisplayScreensModule } from './modules/display-screens/display-screens.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { DiagnosticsModule } from './modules/diagnostics/diagnostics.module.js';
 import { MasterCallsModule } from './modules/master-calls/master-calls.module.js';
 import { MasterActionsModule } from './modules/master-actions/master-actions.module.js';
+import { ProductionBoardModule } from './modules/production-board/production-board.module.js';
 import { CutReleasePolicyModule } from './modules/cut-release-policy/cut-release-policy.module.js';
 import { OrderCutIssueRulesModule } from './modules/order-cut-issue-rules/order-cut-issue-rules.module.js';
 import { ClientsModule } from './modules/clients/clients.module.js';
@@ -47,6 +49,7 @@ import { OrderMaterialArrivalsModule } from './modules/order-material-arrivals/o
 import { SizesModule } from './modules/sizes/sizes.module.js';
 import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documents/payroll-accrual-documents.module.js';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module.js';
+import { OrderSamplesModule } from './modules/order-samples/order-samples.module.js';
 import { StockModule } from './modules/stock/stock.module.js';
 import { FinishedGoodsModule } from './modules/finished-goods/finished-goods.module.js';
 import { WorkInProgressModule } from './modules/work-in-progress/work-in-progress.module.js';
@@ -83,10 +86,12 @@ import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
     PrintersModule,
     RoutesModule,
     TechCardsModule,
+    ConstructorTasksModule,
     DisplayScreensModule,
     DiagnosticsModule,
     MasterCallsModule,
     MasterActionsModule,
+    ProductionBoardModule,
     CutReleasePolicyModule,
     OrderCutIssueRulesModule,
     ClientsModule,
@@ -103,6 +108,7 @@ import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
     SizesModule,
     PayrollAccrualDocumentsModule,
     MaterialIssuesModule,
+    OrderSamplesModule,
     StockModule,
     FinishedGoodsModule,
     WorkInProgressModule,

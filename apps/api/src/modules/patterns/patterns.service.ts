@@ -5,6 +5,7 @@ import {
   type MaterialRole,
 } from '@sewing/shared/material-roles';
 import type {
+  ClonePatternDto,
   CreatePatternDto,
   ListPatternsQuery,
   PatternDetailDto,
@@ -24,6 +25,7 @@ import type {
   PatternCategoryParameterDto,
 } from '@sewing/shared/pattern-categories';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { mapConstructorTaskSummary } from '../constructor-tasks/constructor-task-mappers.js';
 import {
   PatternArticleTakenException,
   PatternCategoryInactiveException,
@@ -214,6 +216,16 @@ export class PatternsService {
             },
           },
         },
+        // Этап «Конструкторское бюро»: связанная задача, если pattern
+        // создан через flow «Отправить конструктору». UI на
+        // `/admin/patterns/[id]` показывает карточку «Источник».
+        constructorTask: {
+          include: {
+            createdBy: { select: { fullName: true } },
+            assignedTo: { select: { fullName: true } },
+            _count: { select: { files: true, sizeRows: true } },
+          },
+        },
       },
     });
     if (!row) throw new PatternNotFoundException();
@@ -332,6 +344,245 @@ export class PatternsService {
       employeeId: actorEmployeeId ?? null,
     });
     return this.getOne(id);
+  }
+
+  // ===========================================================================
+  // CLONE — этап «Создать номенклатуру по готовому лекалу»
+  // ===========================================================================
+
+  /**
+   * Клонировать существующую номенклатуру в новую (`POST /api/patterns/:id/clone`).
+   *
+   * Зачем: менеджер уже принял готовое лекало (через flow КБ или
+   * руками) и хочет завести на его основе ещё одну номенклатуру —
+   * например, вариант той же модели для другого артикула. Вместо
+   * того чтобы заводить новую карточку и заново загружать DXF /
+   * заполнять площади / погонные метры / нормы фурнитуры, мы
+   * атомарно копируем всё содержимое исходного лекала.
+   *
+   * Что копируется:
+   *   - `name` / `description` / `categoryCode` / `categoryId`;
+   *   - активные `PatternSizeFile` (по одной свежей версии на
+   *     `sizeId`) — DXF копируются ФИЗИЧЕСКИ под новый `storedFileName`,
+   *     чтобы архивация / удаление одной номенклатуры не задевала другую;
+   *   - все `PatternMaterialArea`;
+   *   - все `PatternItemParameterNorm`;
+   *   - все `PatternItemSizeParameterValue`.
+   *
+   * Что НЕ копируется:
+   *   - `previewImageUrl` — превью у новой карточки пустое (менеджер
+   *     загрузит своё, чтобы две номенклатуры не выглядели
+   *     одинаково);
+   *   - `legacyProductId` — UNIQUE, создастся `OrdersService`
+   *     `ensureLegacyProductForPattern` по первой ссылке из заказа;
+   *   - связанная `ConstructorTask` — она 1:1 с исходным pattern и не
+   *     должна «уходить» в клон (иначе UI «Источник» на новой
+   *     карточке покажет чужую задачу).
+   *
+   * Артикул:
+   *   - если в payload пришёл `article`, используем его (упадёт с
+   *     `PatternArticleTakenException`, если уже занят — менеджер
+   *     поправит в модалке);
+   *   - иначе генерим первый свободный `{src.article}-2 / -3 / …` через
+   *     запрос-цикл по уникальному индексу (вне транзакции —
+   *     `findUnique` дешевле, чем поймать P2002 в транзакции и
+   *     развалить копирование DXF).
+   *
+   * Безопасность по диску: копирование DXF делается ВНЕ Prisma-транзакции
+   * (Prisma-транзакции не охватывают filesystem), затем все DB-вставки
+   * выполняются одной транзакцией. Если транзакция падает, остаются
+   * «осиротевшие» файлы — на MVP это приемлемо (так же ведёт себя
+   * `uploadSizeFile`, см. комментарий к классу).
+   */
+  async clone(
+    sourceId: string,
+    dto: ClonePatternDto,
+    actorEmployeeId?: string | null,
+  ): Promise<PatternDetailDto> {
+    const source = await this.prisma.patternItem.findUnique({
+      where: { id: sourceId },
+      include: {
+        sizeFiles: {
+          where: { status: 'ACTIVE' },
+          orderBy: [
+            { sizeId: 'asc' },
+            { version: 'desc' },
+            { createdAt: 'desc' },
+          ],
+        },
+        materialAreas: true,
+        parameterNorms: true,
+        sizeParameterValues: true,
+      },
+    });
+    if (!source) throw new PatternNotFoundException();
+
+    const desiredName =
+      dto.name && dto.name.trim() !== '' ? dto.name : `${source.name} (копия)`;
+    const desiredArticle =
+      dto.article && dto.article.trim() !== ''
+        ? dto.article
+        : await this.findNextFreeArticle(source.article);
+
+    // По одному активному DXF на sizeId — самый свежий (orderBy выше:
+    // сначала по version DESC, затем по createdAt DESC).
+    const latestBySize = new Map<string, (typeof source.sizeFiles)[number]>();
+    for (const sf of source.sizeFiles) {
+      if (!latestBySize.has(sf.sizeId)) latestBySize.set(sf.sizeId, sf);
+    }
+
+    // Шаг 1. Создаём новую карточку — здесь же ловим P2002 на `article`,
+    // чтобы не успеть скопировать DXF до выяснения конфликта.
+    let createdId: string;
+    try {
+      const created = await this.prisma.patternItem.create({
+        data: {
+          name: desiredName,
+          article: desiredArticle,
+          categoryCode: source.categoryCode,
+          categoryId: source.categoryId,
+          description: source.description,
+          status: 'ACTIVE',
+        },
+      });
+      createdId = created.id;
+    } catch (e) {
+      this.translateUniqueError(e);
+      throw e;
+    }
+
+    // Шаг 2. Физически копируем DXF в новую папку. Параллелим через
+    // Promise.all — файлы независимые, и под крупный набор размеров
+    // это заметно быстрее, чем sequential await.
+    const copyJobs = await Promise.all(
+      Array.from(latestBySize.values()).map(async (sf) => {
+        const saved = await this.storage.copySizeFile(
+          sf.fileUrl,
+          createdId,
+          sf.sizeId,
+        );
+        return {
+          sizeId: sf.sizeId,
+          fileUrl: saved.publicUrl,
+          originalFileName: sf.originalFileName,
+        };
+      }),
+    );
+
+    // Шаг 3. Все DB-вставки в одну транзакцию. Если упадёт — карточка
+    // и физические DXF остаются как «осиротевшие» (см. ADR в
+    // patterns-storage.service.ts), но дублей в БД не будет.
+    await this.prisma.$transaction(async (tx) => {
+      if (copyJobs.length > 0) {
+        await tx.patternSizeFile.createMany({
+          data: copyJobs.map((c) => ({
+            patternItemId: createdId,
+            sizeId: c.sizeId,
+            fileUrl: c.fileUrl,
+            originalFileName: c.originalFileName,
+            version: 1,
+            status: 'ACTIVE',
+            uploadedById: actorEmployeeId ?? null,
+          })),
+        });
+      }
+      if (source.materialAreas.length > 0) {
+        await tx.patternMaterialArea.createMany({
+          data: source.materialAreas.map((a) => ({
+            patternItemId: createdId,
+            sizeId: a.sizeId,
+            materialRole: a.materialRole,
+            areaM2: a.areaM2,
+            comment: a.comment,
+          })),
+        });
+      }
+      if (source.parameterNorms.length > 0) {
+        await tx.patternItemParameterNorm.createMany({
+          data: source.parameterNorms.map((n) => ({
+            patternItemId: createdId,
+            categoryParameterId: n.categoryParameterId,
+            roleKey: n.roleKey,
+            labelSnapshot: n.labelSnapshot,
+            inputTypeSnapshot: n.inputTypeSnapshot,
+            unit: n.unit,
+            qtyPerItem: n.qtyPerItem,
+            comment: n.comment,
+          })),
+        });
+      }
+      if (source.sizeParameterValues.length > 0) {
+        await tx.patternItemSizeParameterValue.createMany({
+          data: source.sizeParameterValues.map((v) => ({
+            patternItemId: createdId,
+            categoryParameterId: v.categoryParameterId,
+            sizeId: v.sizeId,
+            roleKey: v.roleKey,
+            labelSnapshot: v.labelSnapshot,
+            inputTypeSnapshot: v.inputTypeSnapshot,
+            unit: v.unit,
+            value: v.value,
+            comment: v.comment,
+          })),
+        });
+      }
+      await this.audit.log(
+        {
+          event: 'PATTERN_CLONED',
+          entityType: 'PATTERN',
+          entityId: createdId,
+          payload: {
+            sourceId,
+            sourceArticle: source.article,
+            sourceName: source.name,
+            name: desiredName,
+            article: desiredArticle,
+            categoryId: source.categoryId,
+            sizeFilesCount: copyJobs.length,
+            materialAreasCount: source.materialAreas.length,
+            parameterNormsCount: source.parameterNorms.length,
+            sizeParameterValuesCount: source.sizeParameterValues.length,
+          },
+          employeeId: actorEmployeeId ?? null,
+        },
+        tx,
+      );
+    });
+
+    this.logger.log(
+      `event=pattern.clone source=${sourceId} created=${createdId} ` +
+        `article="${desiredArticle}" sizeFiles=${copyJobs.length} ` +
+        `areas=${source.materialAreas.length} ` +
+        `norms=${source.parameterNorms.length} ` +
+        `sizeValues=${source.sizeParameterValues.length}`,
+    );
+    return this.getOne(createdId);
+  }
+
+  /**
+   * Найти первый свободный артикул `{base}-2 / -3 / …`. Используется,
+   * когда менеджер не задал артикул в модалке клонирования.
+   *
+   * Реализация: одной выборкой берём все `article LIKE '{base}-%'`,
+   * парсим суффикс как целое, выбираем `max + 1` (или 2, если суффиксов
+   * нет вовсе). Это дешевле, чем цикл `findUnique`, и при гонке
+   * последующий `create` всё равно поймает P2002 и менеджер увидит
+   * понятную 409.
+   */
+  private async findNextFreeArticle(baseArticle: string): Promise<string> {
+    const rows = await this.prisma.patternItem.findMany({
+      where: { article: { startsWith: `${baseArticle}-` } },
+      select: { article: true },
+    });
+    let maxSuffix = 1;
+    const prefixLen = baseArticle.length + 1;
+    for (const r of rows) {
+      const suffix = r.article.slice(prefixLen);
+      if (!/^\d+$/.test(suffix)) continue;
+      const n = Number.parseInt(suffix, 10);
+      if (Number.isFinite(n) && n > maxSuffix) maxSuffix = n;
+    }
+    return `${baseArticle}-${maxSuffix + 1}`;
   }
 
   /**
@@ -922,6 +1173,13 @@ export class PatternsService {
             _count: { select: { parameters: true; patterns: true } };
           };
         };
+        constructorTask: {
+          include: {
+            createdBy: { select: { fullName: true } };
+            assignedTo: { select: { fullName: true } };
+            _count: { select: { files: true; sizeRows: true } };
+          };
+        };
       };
     }>,
   ): PatternDetailDto {
@@ -1051,6 +1309,15 @@ export class PatternsService {
       materialAreas,
       parameterNorms,
       sizeParameterValues,
+      // Этап «Конструкторское бюро»: включаем patternItem-данные
+      // в summary (они нужны UI карточки «Источник» на /admin/patterns/[id]
+      // — название и артикул совпадают с самим лекалом).
+      constructorTask: row.constructorTask
+        ? mapConstructorTaskSummary({
+            ...row.constructorTask,
+            patternItem: { name: row.name, article: row.article },
+          })
+        : null,
     };
   }
 

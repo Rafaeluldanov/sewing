@@ -37,7 +37,7 @@ function formatDateTime(iso: string | null): string {
   if (!iso) return '—';
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '—';
-  return d.toLocaleString('ru-RU');
+  return d.toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' });
 }
 
 export function QcWorkCard({

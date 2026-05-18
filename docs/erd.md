@@ -57,6 +57,8 @@
 | `MasterCallStatus` | `OPEN`, `RESOLVED`, `CANCELLED` | `prisma/schema.prisma::enum MasterCallStatus` |
 | `OperationCategory` | `CUTTING`, `SEWING`, `QC`, `IRONING`, `PACKING` | `prisma/schema.prisma::enum OperationCategory` |
 | `OrderOutsourceExecutionStatus` | `PLANNED`, `ORDERED`, `RECEIVED` | `prisma/schema.prisma::enum OrderOutsourceExecutionStatus` |
+| `OrderSampleMaterialMode` | `SAMPLE_ONLY`, `FULL_ORDER` | `prisma/schema.prisma::enum OrderSampleMaterialMode` |
+| `OrderSampleStatus` | `IN_PROGRESS`, `READY_FOR_APPROVAL`, `APPROVED`, `REJECTED`, `CANCELLED` | `prisma/schema.prisma::enum OrderSampleStatus` |
 | `OrderStatus` | `DRAFT`, `CALCULATION`, `CALCULATION_DONE`, `IN_PRODUCTION`, `DONE`, `CANCELLED` | `prisma/schema.prisma::enum OrderStatus` |
 | `OutsourceTriggerType` | `MANUAL`, `CUT_READY` | `prisma/schema.prisma::enum OutsourceTriggerType` |
 | `PassportEventType` | `CREATED`, `OPERATION_STARTED`, `OPERATION_FINISHED`, `MOVED`, `DEFECT_RECORDED`, `CELL_PLACED`, `CELL_REMOVED`, `ISSUED_TO_EMPLOYEE`, `OPERATION_SCAN`, `QC_PASSED`, `WTO_PASSED`, `PACKED`, `CANCELLED` | `prisma/schema.prisma::enum PassportEventType` |
@@ -264,10 +266,30 @@
   `qtyDefect @default(0)`, `qtyGood`, `status: PassportStatus
   @default(CREATED)`. **Текущее размещение**: `currentOperationId?`,
   `currentEmployeeId?`, `currentCellId?`, `currentRouteStepIndex: Int?`.
-  `cutterId`, `creatorId`, `pdfUrl?`. Индексы:
+  `cutterId`, `creatorId`, `pdfUrl?`. **Sample link**: `sampleId? @unique
+  → OrderSample` (`onDelete: SetNull`), nullable — тиражные паспорта
+  имеют `sampleId = null` (см. `OrderSample` ниже,
+  `docs/order-signal-sample-flow.md`). Индексы:
   `(status, currentOperationId)`, `orderId`, `(sizeId, status)`,
   `createdAt`, `currentCellId`. **Глобальный uniqueness** на
   `BoxItem.passportId` обеспечивает одно вхождение в коробку.
+- **`OrderSample`** — сигнальный образец заказа (MVP, см.
+  `apps/api/src/modules/order-samples/*`,
+  `docs/order-signal-sample-flow.md`,
+  `docs/order-signal-sample-recon.md`). Поля: `orderId → Order`
+  (`onDelete: Cascade`), `productId → Product` (Restrict),
+  `sizeId → Size` (Restrict), `qty Int @default(1)`,
+  `routeTemplateId? → RouteTemplate` (`SetNull`, метаинформация),
+  `materialMode: OrderSampleMaterialMode`,
+  `countsTowardOrderQty Boolean @default(false)`,
+  `status: OrderSampleStatus @default(IN_PROGRESS)`, `comment?`,
+  `rejectionReason?`, `createdById? / approvedById? / rejectedById?`,
+  `approvedAt? / rejectedAt? / cancelledAt?`. 1:1 связь с
+  `Passport.sampleId` (`@unique`). Индексы: `(orderId, status)`,
+  `(orderId, sizeId)`, `productId`, `sizeId`, `routeTemplateId`.
+  Инварианты MVP — НЕ мутирует `OrderItem.qtyPlan`, НЕ пишет
+  `WorkshopNeed` в режиме `SAMPLE_ONLY`, НЕ удаляет sample-passport
+  при `REJECTED` / `CANCELLED` (см. RECON §10).
 - **`PassportEvent`** — лог событий паспорта. `type: PassportEventType`,
   `operationId?`, `fromOperationId?`, `employeeId?`, `qty?`, `defectQty?`,
   `cellId?`, `boxId?`, `payload: Json?`. Индексы:

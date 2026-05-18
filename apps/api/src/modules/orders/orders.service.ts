@@ -63,6 +63,7 @@ import {
   TechCardNotCompatibleWithCategoryException,
 } from '../../common/errors.js';
 import { aggregateOrder } from './order-aggregator.js';
+import { mapConstructorTaskSummary } from '../constructor-tasks/constructor-task-mappers.js';
 import { OrderCostEstimatesService } from './order-cost-estimates.service.js';
 import { OrderNumberService } from './order-number.service.js';
 import { OrderOperationPlanService } from './order-operation-plan.service.js';
@@ -81,7 +82,17 @@ type OrderWithItems = Prisma.OrderGetPayload<{
     materialRequirements: true;
     outsourceRequirements: true;
     client: true;
-    patternItem: true;
+    patternItem: {
+      include: {
+        constructorTask: {
+          include: {
+            createdBy: { select: { fullName: true } };
+            assignedTo: { select: { fullName: true } };
+            _count: { select: { files: true; sizeRows: true } };
+          };
+        };
+      };
+    };
     applications: true;
     /**
      * PHASE 1 «CompanyDivision как master-справочник» (см.
@@ -130,24 +141,22 @@ export class OrdersService {
     actorEmployeeId?: string | null,
   ): Promise<OrderDetailDto> {
     // Inline-создание изделия из формы заказа (см.
-    // `prisma/schema.prisma::Order.productCreationMode`,
-    // `OrderProductCreationModeSchema`). Если менеджер выбрал
-    // `CREATE_FOR_CALCULATION`, backend сам заводит `PatternItem` +
-    // `PatternMaterialArea[]` + technical `Product` по
-    // `newProductCalculation` в той же транзакции, что и сам заказ —
-    // см. `createWithInlinePattern` ниже.
+    // `prisma/schema.prisma::Order.productCreationMode`). Backend сам
+    // создаёт `PatternItem` + `PatternMaterialArea[]` + technical
+    // `Product` по `newProductCalculation` — см. `createWithInlinePattern`.
     const productMode = dto.productMode ?? 'EXISTING_PATTERN';
     if (productMode === 'CREATE_FOR_CALCULATION') {
       return this.createWithInlinePattern(dto, actorEmployeeId);
     }
-    if (productMode === 'SEND_TO_CONSTRUCTOR') {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'ORDER_SEND_TO_CONSTRUCTOR_NOT_IMPLEMENTED',
-        message:
-          'Вкладка «Отправить изделие конструктору» пока недоступна',
-      });
-    }
+    // SEND_TO_CONSTRUCTOR ведёт себя как EXISTING_PATTERN на уровне
+    // create: лекало уже создано отдельным server action-ом
+    // `saveConstructorDraftAction` (см. apps/web/app/admin/orders/new/
+    // constructor-task-action.ts), и в форме лежит `patternItemId`
+    // указывающий на DRAFT-pattern. Эта ветка отличается только тем,
+    // что мы записываем `productCreationMode = 'SEND_TO_CONSTRUCTOR'`
+    // в Order — чтобы UI карточки заказа знал, что лекало пока в
+    // разработке у конструктора. Сам путь создания идёт ниже по той
+    // же логике, что и EXISTING_PATTERN.
 
     // Этап «Номенклатура = Лекала» (см. `docs/recon-soft-integration.md
     // §«Номенклатура = Лекала»`): новая admin-форма присылает только
@@ -326,6 +335,17 @@ export class OrdersService {
               dto.materialsAndHardwareCostPolicy,
               'create',
             ) ?? 'INCLUDE',
+          // Этап «Отправить изделие конструктору»: если в DTO режим
+          // SEND_TO_CONSTRUCTOR — фиксируем это на заказе, чтобы UI
+          // мог показать плашку «Лекало в разработке у конструктора»
+          // и заблокировать запуск расчёта до возврата лекала.
+          // Для CREATE_FOR_CALCULATION эта ветка не используется
+          // (отдельный путь `createWithInlinePattern` выставляет
+          // productCreationMode сам, см. ниже).
+          productCreationMode:
+            productMode === 'SEND_TO_CONSTRUCTOR'
+              ? 'SEND_TO_CONSTRUCTOR'
+              : 'EXISTING_PATTERN',
           items: {
             create: dto.items.map((i) => ({
               productId: productIdForItems,
@@ -513,10 +533,25 @@ export class OrdersService {
         name: true,
         status: true,
         legacyProductId: true,
+        constructorTask: { select: { status: true } },
       },
     });
     if (!pattern) throw new PatternNotFoundException();
-    if (pattern.status !== 'ACTIVE') throw new PatternInactiveException();
+    // DRAFT-pattern допускается, если рядом висит активная
+    // `ConstructorTask` (NEW/IN_PROGRESS/PENDING_ACCEPT/REWORK) —
+    // менеджер собирает заказ вокруг лекала, которое ещё разрабатывает
+    // конструктор. Запуск в производство (`start`) всё равно требует
+    // ACTIVE — он валидируется отдельно. См. `assertPatternUsable`.
+    const taskStatus = pattern.constructorTask?.status;
+    const taskIsActive =
+      taskStatus === 'NEW' ||
+      taskStatus === 'IN_PROGRESS' ||
+      taskStatus === 'PENDING_ACCEPT' ||
+      taskStatus === 'REWORK';
+    const draftAllowed = pattern.status === 'DRAFT' && taskIsActive;
+    if (pattern.status !== 'ACTIVE' && !draftAllowed) {
+      throw new PatternInactiveException();
+    }
 
     // Уже привязан Product → используем его. Дополнительно проверяем,
     // что он реально существует (на случай ручного DELETE FROM
@@ -560,13 +595,12 @@ export class OrdersService {
   /**
    * Inline-сценарий «Создать изделие → Сделать расчёт» (см.
    * `prisma/schema.prisma::Order.productCreationMode`,
-   * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`).
+   * `apps/web/app/admin/orders/new/create-product-modal.tsx`).
    *
    * Атомарно создаёт `PatternItem` + `PatternMaterialArea[]` +
    * technical `Product` + `Order` + `OrderItem[]` в одной транзакции.
-   * Делает ровно те же snapshot-вызовы, что и стандартная ветка
-   * `create` (план операций, материальные требования из техкарты),
-   * чтобы дальнейший `startCalculation` проходил без отличий.
+   * Делает те же snapshot-вызовы, что и стандартная ветка create —
+   * `startCalculation` после этого проходит без отличий.
    */
   private async createWithInlinePattern(
     dto: CreateOrderDto,
@@ -574,8 +608,6 @@ export class OrdersService {
   ): Promise<OrderDetailDto> {
     const calc = dto.newProductCalculation;
     if (!calc) {
-      // Защитный fallback — Zod это уже проверил, но мы внутри сервиса
-      // не доверяем форме контракта.
       throw new BadRequestException({
         statusCode: 400,
         code: 'ORDER_NEW_PRODUCT_CALCULATION_REQUIRED',
@@ -584,72 +616,84 @@ export class OrdersService {
       });
     }
 
-    // 1. Валидируем выбранную категорию + загружаем активные параметры
-    //    AREA_M2_BY_SIZE — это «требуемый» набор roleKey для UI таблицы
-    //    расходов И для compatibility-проверки техкарты.
-    const category = await this.prisma.patternCategory.findUnique({
-      where: { id: calc.categoryId },
+    // Опционально: группа номенклатуры. Если выбрана, валидируем
+    // existence/активность и собираем `AREA_M2_BY_SIZE`-параметры
+    // для проверки совместимости areas[].roleKey. Если не выбрана —
+    // продолжаем без категории (PatternItem.categoryId = null).
+    type PatternCategoryWithParameters = Prisma.PatternCategoryGetPayload<{
       include: {
-        parameters: {
-          where: { status: 'ACTIVE' },
-          orderBy: { sortOrder: 'asc' },
+        parameters: { where: { status: 'ACTIVE' }; orderBy: { sortOrder: 'asc' } };
+      };
+    }>;
+    let category: PatternCategoryWithParameters | null = null;
+    let requiredRoleKeys = new Set<string>();
+    if (calc.categoryId) {
+      category = await this.prisma.patternCategory.findUnique({
+        where: { id: calc.categoryId },
+        include: {
+          parameters: {
+            where: { status: 'ACTIVE' },
+            orderBy: { sortOrder: 'asc' },
+          },
         },
-      },
-    });
-    if (!category) throw new PatternCategoryNotFoundException();
-    if (category.status !== 'ACTIVE') {
-      throw new PatternCategoryInactiveException();
-    }
-    const areaParameters = category.parameters.filter(
-      (p) => p.inputType === 'AREA_M2_BY_SIZE',
-    );
-    const requiredRoleKeys = new Set(areaParameters.map((p) => p.roleKey));
+      });
+      if (!category) throw new PatternCategoryNotFoundException();
+      if (category.status !== 'ACTIVE') {
+        throw new PatternCategoryInactiveException();
+      }
+      requiredRoleKeys = new Set(
+        category.parameters
+          .filter((p) => p.inputType === 'AREA_M2_BY_SIZE')
+          .map((p) => p.roleKey),
+      );
 
-    // 2. Валидируем `areas[].roleKey` входной матрицы — все они должны
-    //    входить в активные AREA_M2_BY_SIZE параметры категории. Иначе
-    //    отдаём адресную 400 (UI этого не должен допустить, но не
-    //    доверяем форме).
-    for (let i = 0; i < calc.sizes.length; i += 1) {
-      const row = calc.sizes[i];
-      for (let j = 0; j < row.areas.length; j += 1) {
-        const a = row.areas[j];
-        if (!requiredRoleKeys.has(a.roleKey)) {
-          throw new BadRequestException({
-            statusCode: 400,
-            code: 'ORDER_NEW_PRODUCT_AREA_ROLE_INVALID',
-            message: `Параметр «${a.roleKey}» не входит в группу «${category.name}»`,
-            path: ['newProductCalculation', 'sizes', i, 'areas', j, 'roleKey'],
-          });
+      // areas[].roleKey валидируем только если категория задана —
+      // иначе backend принимает любые строки (фактически их не должно
+      // быть, UI не покажет колонки расхода).
+      for (let i = 0; i < calc.sizes.length; i += 1) {
+        const row = calc.sizes[i];
+        for (let j = 0; j < row.areas.length; j += 1) {
+          const a = row.areas[j];
+          if (!requiredRoleKeys.has(a.roleKey)) {
+            throw new BadRequestException({
+              statusCode: 400,
+              code: 'ORDER_NEW_PRODUCT_AREA_ROLE_INVALID',
+              message: `Параметр «${a.roleKey}» не входит в группу «${category.name}»`,
+              path: ['newProductCalculation', 'sizes', i, 'areas', j, 'roleKey'],
+            });
+          }
         }
       }
     }
 
-    // 3. Валидируем размеры из размерной матрицы (existence) — `Size`
-    //    может быть удалён/архивирован, и FK на `PatternMaterialArea`
-    //    сразу даст FK-сбой; адресная 400 — лучше для UI.
-    const sizeIds = Array.from(new Set(calc.sizes.map((s) => s.sizeId)));
-    const knownSizes = await this.prisma.size.findMany({
-      where: { id: { in: sizeIds } },
-      select: { id: true },
-    });
-    if (knownSizes.length !== sizeIds.length) {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'SIZE_NOT_FOUND',
-        message: 'Один из размеров не найден в справочнике',
+    // Размеры — валидируем existence только если хоть один передан.
+    if (calc.sizes.length > 0) {
+      const sizeIds = Array.from(new Set(calc.sizes.map((s) => s.sizeId)));
+      const knownSizes = await this.prisma.size.findMany({
+        where: { id: { in: sizeIds } },
+        select: { id: true },
       });
+      if (knownSizes.length !== sizeIds.length) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'SIZE_NOT_FOUND',
+          message: 'Один из размеров не найден в справочнике',
+        });
+      }
     }
 
-    // 4. Валидируем техкарту: existence, активность, и совместимость
-    //    с категорией (см. `assertTechCardCompatibleWithCategory`).
-    await this.techCards.assertTechCardUsable(calc.techCardId);
-    await this.assertTechCardCompatibleWithCategory(
-      calc.techCardId,
-      requiredRoleKeys,
-    );
+    // Опционально: техкарта. Если выбрана — валидируем активность.
+    // Совместимость с категорией проверяем только когда заданы оба.
+    if (calc.techCardId) {
+      await this.techCards.assertTechCardUsable(calc.techCardId);
+      if (category && requiredRoleKeys.size > 0) {
+        await this.assertTechCardCompatibleWithCategory(
+          calc.techCardId,
+          requiredRoleKeys,
+        );
+      }
+    }
 
-    // 5. Validate routeTemplate / client / division / warehouse как в
-    //    обычной create-ветке (через те же helper-ы).
     if (dto.routeTemplateId) {
       await this.assertRouteTemplateUsable(dto.routeTemplateId);
     }
@@ -658,27 +702,19 @@ export class OrdersService {
     }
 
     const created = await this.prisma.$transaction(async (tx) => {
-      // 5.1 — номер заказа.
       const number = await this.numbers.nextNumber(tx);
 
-      // 5.2 — создаём PatternItem. `article = CUSTOM-<orderNumber>`
-      // — уникальный управленческий идентификатор, как требует ТЗ.
-      // Если случайно прилетел дубль `article` (гонка двух inline-
-      // создания с одинаковым номером — теоретически невозможна,
-      // потому что `Order.number` уникален) — Prisma отдаст P2002,
-      // мы пробросим как PATTERN_ARTICLE_TAKEN на фронт.
       const newPattern = await tx.patternItem.create({
         data: {
-          name: `${category.name} / заказ ${number}`,
+          name: category
+            ? `${category.name} / заказ ${number}`
+            : `Новое изделие · заказ ${number}`,
           article: `CUSTOM-${number}`,
-          categoryId: category.id,
+          categoryId: category?.id ?? null,
           status: 'ACTIVE',
         },
       });
 
-      // 5.3 — PatternMaterialArea[] из переданной размерной матрицы.
-      // Строки `(sizeId, materialRole, areaM2)` пишем целиком —
-      // areaM2 уже валидирован как Decimal(10,4) > 0.
       const materialAreasData: Prisma.PatternMaterialAreaCreateManyInput[] =
         [];
       for (const row of calc.sizes) {
@@ -697,15 +733,11 @@ export class OrdersService {
         });
       }
 
-      // 5.4 — technical Product через ensure-helper (он уже использует
-      // переданный tx-клиент).
       const legacyProductId = await this.ensureLegacyProductForPattern(
         newPattern.id,
         tx,
       );
 
-      // 5.5 — резолверы общих полей заказа (повторяем стандартную
-      // create-ветку через те же helper-ы).
       const companyDivisionIdForCreate =
         await this.resolveCompanyDivisionIdForOrder(
           tx,
@@ -722,7 +754,6 @@ export class OrdersService {
           dto.customerCurrency ?? undefined,
         );
 
-      // 5.6 — Order + nested items в одной транзакции.
       const orderRow = await tx.order.create({
         data: {
           number,
@@ -734,15 +765,13 @@ export class OrdersService {
           status: OrderStatus.DRAFT,
           companyDivisionId: companyDivisionIdForCreate,
           routeTemplateId: dto.routeTemplateId ?? null,
-          techCardId: calc.techCardId,
+          techCardId: calc.techCardId ?? null,
           patternItemId: newPattern.id,
           clientId: dto.clientId ?? null,
           customerUnitPrice:
-            customerUnitPrice === null
+            customerUnitPrice == null
               ? null
-              : customerUnitPrice === undefined
-                ? null
-                : new Prisma.Decimal(customerUnitPrice),
+              : new Prisma.Decimal(customerUnitPrice),
           customerCurrency: customerCurrency ?? null,
           finishedGoodsWarehouseId:
             finishedGoodsWarehouseIdForCreate ?? null,
@@ -751,30 +780,34 @@ export class OrdersService {
               dto.materialsAndHardwareCostPolicy,
               'create',
             ) ?? 'INCLUDE',
-          // Inline-сценарий: фиксируем режим заведения и опциональную
-          // стоимость разработки лекала.
           productCreationMode: 'CREATE_FOR_CALCULATION',
           patternDevelopmentCostRub:
             calc.patternDevelopmentCostRub == null
               ? null
               : new Prisma.Decimal(calc.patternDevelopmentCostRub),
-          items: {
-            create: calc.sizes.map((row) => ({
-              productId: legacyProductId,
-              sizeId: row.sizeId,
-              qtyPlan: row.qtyPlan,
-            })),
-          },
+          patternDevelopmentCostInCostPrice:
+            calc.patternDevelopmentCostInCostPrice ?? true,
+          // items создаются только если размеры переданы. Допустимо
+          // создать заказ-черновик без OrderItem'ов — расчёт потом
+          // потребует их через `startCalculation` (`ORDER_ITEMS_REQUIRED`).
+          ...(calc.sizes.length > 0
+            ? {
+                items: {
+                  create: calc.sizes.map((row) => ({
+                    productId: legacyProductId,
+                    sizeId: row.sizeId,
+                    qtyPlan: row.qtyPlan,
+                  })),
+                },
+              }
+            : {}),
         },
       });
 
-      // 5.7 — snapshot операций + маршрута + материальных требований,
-      // как в стандартной create-ветке.
       await this.orderOperationPlan.recalculateAndWrite(orderRow.id, tx);
       await this.syncOrderRouteStepsSnapshot(orderRow.id, tx);
       await this.rebuildMaterialRequirementsSnapshot(orderRow.id, tx);
 
-      // 5.8 — audit.
       await this.audit.log(
         {
           event: 'ORDER_CREATED',
@@ -795,7 +828,7 @@ export class OrdersService {
             patternItemId: orderRow.patternItemId,
             clientId: orderRow.clientId,
             productCreationMode: 'CREATE_FOR_CALCULATION',
-            inlinePatternCategoryId: category.id,
+            inlinePatternCategoryId: category?.id ?? null,
             inlinePatternMaterialAreaCount: materialAreasData.length,
             patternDevelopmentCostRub:
               calc.patternDevelopmentCostRub ?? null,
@@ -811,9 +844,9 @@ export class OrdersService {
   }
 
   /**
-   * Inline-создание изделия из формы заказа: проверяет, что у
-   * выбранной техкарты есть `TechCardMaterialLine.materialRole` для
-   * каждого `AREA_M2_BY_SIZE`-параметра категории. Иначе кидает 409
+   * Inline-создание изделия: проверяет, что у выбранной техкарты есть
+   * `TechCardMaterialLine.materialRole` для каждого `AREA_M2_BY_SIZE`-
+   * параметра категории. Иначе кидает 409
    * `TECH_CARD_NOT_COMPATIBLE_WITH_CATEGORY` с `missingRoleKeys`.
    */
   private async assertTechCardCompatibleWithCategory(
@@ -896,6 +929,13 @@ export class OrdersService {
             name: true,
             article: true,
             previewImageUrl: true,
+            // Этап «Конструкторское бюро»: один лёгкий select по
+            // связанной задаче — UI на `/admin/orders` показывает
+            // маленький бейдж рядом со статусом заказа, если задача
+            // в активном состоянии (NEW/IN_PROGRESS/PENDING_ACCEPT/REWORK).
+            constructorTask: {
+              select: { id: true, status: true },
+            },
           },
         },
         // PHASE 1: краткие реквизиты карточки подразделения для
@@ -977,6 +1017,7 @@ export class OrdersService {
       name: string;
       article: string;
       previewImageUrl: string | null;
+      constructorTask: { id: string; status: string } | null;
     } | null;
     patternNameSnapshot: string | null;
     patternArticleSnapshot: string | null;
@@ -1005,10 +1046,7 @@ export class OrdersService {
     operationTimePlanSec: number | null;
     operationPlanCalculatedAt: Date | null;
     operationPlanWarnings: Prisma.JsonValue | null;
-    /**
-     * Inline-создание изделия из формы заказа (см.
-     * `prisma/schema.prisma::Order.productCreationMode`).
-     */
+    /** Inline-создание изделия из формы заказа. */
     productCreationMode: string;
     patternDevelopmentCostRub: Prisma.Decimal | null;
     items: { qtyPlan: number; product: { id: string; name: string; color: string } | null }[];
@@ -1114,13 +1152,16 @@ export class OrdersService {
       operationPlanWarnings: normalizeOperationPlanWarnings(
         o.operationPlanWarnings,
       ),
-      // Inline-создание изделия из формы заказа: режим + стоимость
-      // разработки лекала. На остальных заказах режим — `EXISTING_PATTERN`,
-      // стоимость — `null`.
       productCreationMode: normalizeProductCreationMode(o.productCreationMode),
       patternDevelopmentCostRub: o.patternDevelopmentCostRub
         ? o.patternDevelopmentCostRub.toString()
         : null,
+      // Этап «Конструкторское бюро»: id и статус связанной задачи,
+      // если pattern был создан через flow «Отправить конструктору».
+      // UI на `/admin/orders` показывает маленький бейдж в колонке
+      // «Статус» только для активных статусов (см. шаблон).
+      constructorTaskId: o.patternItem?.constructorTask?.id ?? null,
+      constructorTaskStatus: o.patternItem?.constructorTask?.status ?? null,
     };
   }
 
@@ -1146,7 +1187,20 @@ export class OrdersService {
         // Soft-pattern MVP (этап 2 «Лекала»): полная карточка лекала
         // нужна детали для виджета `PatternPreviewCard` в UI карточки
         // заказа. Snapshot-поля лежат на `Order` напрямую.
-        patternItem: true,
+        // Этап «Конструкторское бюро»: подгружаем связанную задачу с
+        // именами создателя/назначенного — UI карточки заказа рендерит
+        // полную карточку «Конструкторское бюро» с действиями приёмки.
+        patternItem: {
+          include: {
+            constructorTask: {
+              include: {
+                createdBy: { select: { fullName: true } },
+                assignedTo: { select: { fullName: true } },
+                _count: { select: { files: true, sizeRows: true } },
+              },
+            },
+          },
+        },
         // Этап «Нанесение на заказе покупателя»: подгружаем
         // заказные нанесения, чтобы UI карточки (`/admin/orders/[id]`)
         // мог отрендерить блок «Нанесение» без отдельного запроса.
@@ -2011,6 +2065,24 @@ export class OrdersService {
       });
     }
 
+    // Этап «Конструкторское бюро»: запуск в производство требует
+    // именно `ACTIVE`-pattern. `assertPatternUsable` сейчас разрешает
+    // DRAFT при наличии активной `ConstructorTask` — это нужно для
+    // того, чтобы менеджер мог собирать заказ-черновик вокруг
+    // незавершённой задачи. Но `start()` — гейт качества: лекало
+    // должно быть принято менеджером (через `acceptConstructorTaskAction`),
+    // что переводит pattern в ACTIVE. Если pattern всё ещё DRAFT —
+    // запуск запрещён.
+    if (order.patternItemId) {
+      const p = await this.prisma.patternItem.findUnique({
+        where: { id: order.patternItemId },
+        select: { status: true },
+      });
+      if (p && p.status !== 'ACTIVE') {
+        throw new PatternInactiveException();
+      }
+    }
+
     // Soft-route MVP: snapshot маршрута фиксируется в момент запуска
     // заказа. Если шаблон не выбран — ничего не делаем (полная backward
     // compatibility со старым flow). Если выбран — копируем шаги в
@@ -2339,6 +2411,13 @@ export class OrdersService {
     if (!order.patternItemId) {
       throw new OrderPatternRequiredException();
     }
+    // Сознательно НЕ блокируем переход в расчёт на DRAFT-pattern с
+    // активной ConstructorTask: расчёт — управленческий этап
+    // («посчитать потребности, прикинуть себестоимость»), он не
+    // требует, чтобы лекало было «принято». Гейт качества стоит
+    // позже — в `start()` (запуск в производство), где pattern
+    // ОБЯЗАН быть ACTIVE. Если лекало изменится после accept от
+    // конструктора, менеджер пересчитает расчёт через `recalculate-plan`.
     if (!order.techCardId) {
       throw new OrderTechCardRequiredException();
     }
@@ -2691,15 +2770,17 @@ export class OrdersService {
       operationPlanSourceUpdatedAt: freshness.sourceUpdatedAt
         ? freshness.sourceUpdatedAt.toISOString()
         : null,
-      // Inline-создание изделия из формы заказа: режим и стоимость
-      // разработки лекала. Стандартные заказы получают default
-      // `EXISTING_PATTERN` + null.
+      // Inline-создание изделия из формы заказа: режим + стоимость
+      // разработки лекала. Default `EXISTING_PATTERN` + null для
+      // исторических заказов.
       productCreationMode: normalizeProductCreationMode(
         order.productCreationMode,
       ),
       patternDevelopmentCostRub: order.patternDevelopmentCostRub
         ? order.patternDevelopmentCostRub.toString()
         : null,
+      patternDevelopmentCostInCostPrice:
+        order.patternDevelopmentCostInCostPrice ?? true,
       items: order.items.map((it) => {
         const s = sizes.find((x) => x.id === it.sizeId);
         return {
@@ -2775,6 +2856,14 @@ export class OrdersService {
         : null,
       costEstimateVersion: order.costEstimateVersion ?? null,
       currentCostEstimate,
+      // Этап «Конструкторское бюро»: связанная задача `ConstructorTask`,
+      // если pattern был создан через flow «Отправить конструктору».
+      // UI карточки заказа рендерит блок «Конструкторское бюро» с
+      // действиями приёмки/возврата на доработку. `null` — у лекала
+      // нет связанной задачи (стандартный flow создания).
+      constructorTask: order.patternItem?.constructorTask
+        ? mapConstructorTaskSummary(order.patternItem.constructorTask)
+        : null,
       outsourceRequirements: order.outsourceRequirements
         .slice()
         .sort((a, b) => a.sortOrder - b.sortOrder)
@@ -3106,14 +3195,36 @@ export class OrdersService {
    * `prisma/schema.prisma`). UI по умолчанию показывает только
    * `ACTIVE`-лекала; backend дополнительно блокирует прямой POST/PATCH
    * с не-`ACTIVE` лекалом отдельной 409 PATTERN_INACTIVE.
+   *
+   * Исключение — DRAFT-pattern, у которого есть привязанная активная
+   * `ConstructorTask` (`NEW` / `IN_PROGRESS` / `PENDING_ACCEPT` /
+   * `REWORK`): такой pattern существует ровно потому, что менеджер
+   * отправил его конструктору и ждёт готового лекала. Заказ в DRAFT
+   * вокруг него — нормальный сценарий, его нужно разрешить менеджеру
+   * сохранять/редактировать. `assertOrderStartable` (в `start()`)
+   * по-прежнему блокирует запуск в производство — там pattern ОБЯЗАН
+   * быть ACTIVE, и accept-flow менеджера это гарантирует.
    */
   private async assertPatternUsable(patternItemId: string): Promise<void> {
     const p = await this.prisma.patternItem.findUnique({
       where: { id: patternItemId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        constructorTask: { select: { status: true } },
+      },
     });
     if (!p) throw new PatternNotFoundException();
-    if (p.status !== 'ACTIVE') throw new PatternInactiveException();
+    if (p.status === 'ACTIVE') return;
+    // DRAFT-pattern допускается, если есть незавершённая ConstructorTask.
+    const taskStatus = p.constructorTask?.status;
+    const taskIsActive =
+      taskStatus === 'NEW' ||
+      taskStatus === 'IN_PROGRESS' ||
+      taskStatus === 'PENDING_ACCEPT' ||
+      taskStatus === 'REWORK';
+    if (p.status === 'DRAFT' && taskIsActive) return;
+    throw new PatternInactiveException();
   }
 
   /**
@@ -3366,10 +3477,9 @@ function normalizeMaterialsAndHardwareCostPolicy(
 
 /**
  * Inline-создание изделия из формы заказа (см.
- * `prisma/schema.prisma::Order.productCreationMode`,
- * `OrderProductCreationModeSchema`). Нормализует значение из БД
- * (хранится свободной строкой) к whitelist-у, иначе fallback на
- * `EXISTING_PATTERN` (исторические заказы / ручные правки).
+ * `prisma/schema.prisma::Order.productCreationMode`). Нормализует
+ * значение из БД (хранится свободной строкой) к whitelist-у; иначе
+ * fallback на `EXISTING_PATTERN` (исторические заказы).
  */
 const ORDER_PRODUCT_CREATION_MODE_VALUES = [
   'EXISTING_PATTERN',

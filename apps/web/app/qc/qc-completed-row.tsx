@@ -31,6 +31,7 @@ function formatTime(iso: string | null): string | null {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return null;
   return d.toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow',
     hour: '2-digit',
     minute: '2-digit',
   });

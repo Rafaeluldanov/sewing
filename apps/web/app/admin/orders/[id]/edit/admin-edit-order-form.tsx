@@ -39,11 +39,13 @@
 
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
-import { useMemo, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { useMemo, useState, useTransition } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
   Grid3X3,
+  Plus,
   Save,
   Shirt,
   Workflow,
@@ -69,6 +71,7 @@ import {
 import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
+import type { PatternCategoryListItemDto } from '@sewing/shared/pattern-categories';
 import {
   AdminCard,
   AdminDateField,
@@ -78,11 +81,25 @@ import {
 } from '@/components/admin';
 import { formatOrderStatus } from '@/lib/admin-labels';
 import {
+  CreateProductInline,
+  type SavedConstructorDraftPayload,
+  type SavedInlineProductPayload,
+} from '@/app/admin/orders/new/create-product-inline';
+import {
+  SavedConstructorTaskCard,
+  SavedInlineProductCard,
+} from '@/app/admin/orders/new/admin-create-order-form';
+import {
+  attachConstructorTaskPatternToOrderAction,
+  createInlineProductForEditAction,
+} from './inline-product-actions';
+import {
   OrderHeroCard,
   type OrderHeroKpi,
 } from '@/components/orders/order-hero-card';
 import { OrderDetailTabs } from '@/components/orders/order-detail-tabs';
 import { OrderWorkspaceLayout } from '@/components/orders/order-workspace-layout';
+import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 import {
   updateAdminOrderAction,
   type FormActionState,
@@ -102,6 +119,12 @@ interface Props {
   techCards: TechCardTemplateSummaryDto[];
   clients: ClientDto[];
   patterns: PatternListItemDto[];
+  /**
+   * Активные группы номенклатуры — нужны модалке «Создать изделие»
+   * (`CreateProductInline`) в блоке «Изделие». На MVP в самом select-е
+   * лекала они не используются.
+   */
+  patternCategories: PatternCategoryListItemDto[];
   /**
    * Активные карточки `CompanyDivision` (см.
    * `docs/domain.md §«Подразделения заказа»`). Текущая привязка
@@ -161,10 +184,12 @@ export function AdminEditOrderForm({
   techCards,
   clients,
   patterns,
+  patternCategories,
   companyDivisions,
   warehouses,
   today,
 }: Props) {
+  const router = useRouter();
   const action = updateAdminOrderAction.bind(null, order.id);
   const [state, formAction] = useFormState(action, initialState);
 
@@ -197,6 +222,33 @@ export function AdminEditOrderForm({
     [patternItemId, patterns],
   );
 
+  // ── State machine блока «Изделие» (паритет с create-формой) ────────
+  // Те же 4 состояния, что на /admin/orders/new: EMPTY / SELECTING /
+  // CREATING / CREATED. Начальное состояние — CREATED, если у заказа
+  // уже есть `patternItemId`; иначе EMPTY (новый DRAFT-заказ без
+  // лекала). Транзитные изменения PATCH-ятся через server action
+  // (см. `inline-product-actions.ts`).
+  type ProductBlockMode = 'EMPTY' | 'SELECTING' | 'CREATING' | 'CREATED';
+  const initialProductBlockMode: ProductBlockMode = order.patternItemId
+    ? 'CREATED'
+    : 'EMPTY';
+  const [productBlockMode, setProductBlockMode] = useState<ProductBlockMode>(
+    initialProductBlockMode,
+  );
+  const [inlineInitialTab, setInlineInitialTab] = useState<
+    'calculate' | 'constructor'
+  >('calculate');
+  // Сохранённое в этой сессии inline-изделие (calc) или результат
+  // отправки конструктору. В отличие от create-формы, эти state-ы
+  // временные: после router.refresh они сбрасываются, и UI берёт
+  // текущую привязку из `order.patternItemId` (см. CREATED-render).
+  const [savedInlineProduct, setSavedInlineProduct] =
+    useState<SavedInlineProductPayload | null>(null);
+  const [savedConstructorTask, setSavedConstructorTask] =
+    useState<SavedConstructorDraftPayload | null>(null);
+  const [inlineError, setInlineError] = useState<string | null>(null);
+  const [isAttachingInline, startAttachInlineTransition] = useTransition();
+
   const orderDateValue = order.orderDate.slice(0, 10);
   const dueDateInitial = order.dueDate ? order.dueDate.slice(0, 10) : '';
   const [dueDate, setDueDate] = useState<string>(dueDateInitial);
@@ -214,6 +266,65 @@ export function AdminEditOrderForm({
     [initialQty],
   );
   const [sizesTotal, setSizesTotal] = useState<number>(initialTotal);
+
+  /**
+   * Колбэк, который CreateProductInline передаёт после клика
+   * «Сохранить изделие» (calc) или «Отправить» (constructor).
+   * Здесь — единственное отличие от create-формы: вместо записи в
+   * hidden inputs мы сразу зовём server action, чтобы attach-ить
+   * лекало к УЖЕ существующему заказу.
+   */
+  const handleInlineSave = (
+    result:
+      | { kind: 'calculate'; payload: SavedInlineProductPayload }
+      | { kind: 'constructor'; result: SavedConstructorDraftPayload },
+  ): void => {
+    setInlineError(null);
+    if (result.kind === 'calculate') {
+      // Запоминаем calc-payload в state на случай переключения на
+      // constructor-вкладку в этой же сессии модалки. Сам attach к
+      // заказу делаем в server action.
+      setSavedInlineProduct(result.payload);
+      setSavedConstructorTask(null);
+      startAttachInlineTransition(async () => {
+        const r = await createInlineProductForEditAction(
+          order.id,
+          result.payload,
+        );
+        if (!r.ok) {
+          setInlineError(r.error ?? 'Не удалось создать изделие');
+          return;
+        }
+        if (r.patternItemId) {
+          // Свежепривязанное лекало — обновляем state, hidden input
+          // подхватит его на следующем submit. router.refresh ниже
+          // подтянет актуальные `order` / `patterns`.
+          setPatternItemId(r.patternItemId);
+        }
+        setProductBlockMode('CREATED');
+        router.refresh();
+      });
+    } else {
+      // Constructor flow: server action в модалке уже создал DRAFT-
+      // PatternItem + ConstructorTask, сюда возвращается только
+      // result. Нам остаётся PATCH-нуть заказ, привязав patternItemId.
+      setSavedConstructorTask(result.result);
+      setSavedInlineProduct(null);
+      setPatternItemId(result.result.patternItemId);
+      startAttachInlineTransition(async () => {
+        const r = await attachConstructorTaskPatternToOrderAction(
+          order.id,
+          result.result.patternItemId,
+        );
+        if (!r.ok) {
+          setInlineError(r.error ?? 'Не удалось привязать лекало к заказу');
+          return;
+        }
+        setProductBlockMode('CREATED');
+        router.refresh();
+      });
+    }
+  };
 
   const currentClient = order.client;
 
@@ -589,83 +700,366 @@ export function AdminEditOrderForm({
       >
         <div className="order-tab-panel order-product-tab">
           <div className="admin-order-form__grid">
-            <AdminCard className="admin-order-card admin-order-card--product">
-              <header className="admin-order-card__header">
-                <span className="admin-order-card__icon admin-order-card__icon--pink">
-                  <Shirt size={18} strokeWidth={1.7} aria-hidden />
-                </span>
-                <h2 className="admin-order-card__title">Изделие</h2>
+            <AdminCard
+              className={
+                'admin-order-card admin-order-card--product' +
+                (productBlockMode === 'CREATING' ||
+                productBlockMode === 'CREATED'
+                  ? ' admin-order-card--full-row'
+                  : '')
+              }
+            >
+              <header className="admin-order-card__header admin-order-card__header--with-meta">
+                <div
+                  style={{ display: 'flex', alignItems: 'center', gap: 8 }}
+                >
+                  <span className="admin-order-card__icon admin-order-card__icon--pink">
+                    <Shirt size={18} strokeWidth={1.7} aria-hidden />
+                  </span>
+                  <h2 className="admin-order-card__title">Изделие</h2>
+                </div>
+                {/* Две кнопки шапки — паритет с create-формой.
+                    Только для DRAFT-заказа: на запущенном поменять
+                    лекало нельзя (backend всё равно отдаст 409). */}
+                {isDraft && (
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <button
+                      type="button"
+                      className={
+                        'admin-btn ' +
+                        (productBlockMode === 'SELECTING'
+                          ? 'admin-btn--primary'
+                          : 'admin-btn--ghost')
+                      }
+                      onClick={() => {
+                        setInlineError(null);
+                        setProductBlockMode('SELECTING');
+                      }}
+                      disabled={isAttachingInline}
+                    >
+                      Выбрать изделие
+                    </button>
+                    <button
+                      type="button"
+                      className={
+                        'admin-btn ' +
+                        (productBlockMode === 'CREATING' ||
+                        (productBlockMode === 'CREATED' &&
+                          (savedInlineProduct || savedConstructorTask))
+                          ? 'admin-btn--primary'
+                          : 'admin-btn--ghost')
+                      }
+                      onClick={() => {
+                        setInlineError(null);
+                        setInlineInitialTab('calculate');
+                        setProductBlockMode('CREATING');
+                      }}
+                      disabled={isAttachingInline}
+                    >
+                      Создать изделие
+                    </button>
+                  </div>
+                )}
               </header>
 
-              <div className="admin-form-grid">
-                <div className="admin-field">
-                  <label htmlFor="patternItemId">Номенклатура / лекало</label>
-                  <select
-                    id="patternItemId"
+              {/* EMPTY: подсказка + опционально цвет (чтобы у менеджера
+                  была возможность поменять только цвет, не трогая
+                  лекало). */}
+              {productBlockMode === 'EMPTY' && (
+                <>
+                  <p className="admin-muted" style={{ margin: 0 }}>
+                    К заказу не привязано лекало. Нажмите «Выбрать
+                    изделие», чтобы взять существующее, или «Создать
+                    изделие», чтобы завести inline.
+                  </p>
+                  <div
+                    className="admin-form-grid"
+                    style={{ marginTop: '0.5rem' }}
+                  >
+                    <div className="admin-field">
+                      <label htmlFor="color">Цвет</label>
+                      <input
+                        id="color"
+                        name="color"
+                        type="text"
+                        value={color}
+                        onChange={(e) => setColor(e.target.value)}
+                        placeholder="не задан"
+                        maxLength={64}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* SELECTING: тот же select лекала, что и был, +
+                  поле «Цвет». Submit формы отправит выбранный
+                  patternItemId штатным путём. */}
+              {productBlockMode === 'SELECTING' && (
+                <div className="admin-form-grid">
+                  <div className="admin-field">
+                    <label htmlFor="patternItemId">
+                      Номенклатура / лекало
+                    </label>
+                    <select
+                      id="patternItemId"
+                      name="patternItemId"
+                      value={patternItemId}
+                      onChange={(e) => setPatternItemId(e.target.value)}
+                      disabled={!isDraft}
+                      aria-describedby="patternItemId-hint"
+                    >
+                      <option value="">— без лекала —</option>
+                      {showCurrentPatternFallback && order.patternItemId && (
+                        <option value={order.patternItemId}>
+                          {order.patternName ??
+                            order.patternNameSnapshot ??
+                            'Текущее лекало'}
+                          {' — архивное'}
+                        </option>
+                      )}
+                      {patterns.map((pt) => (
+                        <option key={pt.id} value={pt.id}>
+                          {pt.name} · {pt.article}
+                          {pt.status !== 'ACTIVE' ? ` — ${pt.status}` : ''}
+                        </option>
+                      ))}
+                    </select>
+                    <span
+                      id="patternItemId-hint"
+                      className="admin-field__hint admin-muted"
+                    >
+                      Основная карточка изделия: превью, DXF и площади
+                      материалов.
+                    </span>
+                    {patterns.length === 0 && (
+                      <span className="admin-field__hint admin-muted">
+                        Список лекал пуст.{' '}
+                        <Link href="/admin/patterns/new">Добавить?</Link>
+                      </span>
+                    )}
+                    {fieldError('patternItemId') && (
+                      <span
+                        className="admin-field__hint"
+                        style={{ color: 'var(--admin-danger-fg)' }}
+                      >
+                        {fieldError('patternItemId')}
+                      </span>
+                    )}
+                  </div>
+
+                  <div className="admin-field">
+                    <label htmlFor="color">Цвет</label>
+                    <input
+                      id="color"
+                      name="color"
+                      type="text"
+                      value={color}
+                      onChange={(e) => setColor(e.target.value)}
+                      placeholder="не задан"
+                      maxLength={64}
+                    />
+                  </div>
+                </div>
+              )}
+
+              {/* CREATING: модалка inline-создания изделия (calc или
+                  constructor вкладки). После успешного save server
+                  action подвяжет лекало к заказу, мы вернёмся в
+                  CREATED-режим. patternItemId продолжаем держать
+                  hidden, чтобы submit заказа не сбросил FK. */}
+              {productBlockMode === 'CREATING' && (
+                <>
+                  <input
+                    type="hidden"
                     name="patternItemId"
                     value={patternItemId}
-                    onChange={(e) => setPatternItemId(e.target.value)}
-                    disabled={!isDraft}
-                    aria-describedby="patternItemId-hint"
+                  />
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      marginBottom: '0.5rem',
+                    }}
                   >
-                    <option value="">— без лекала —</option>
-                    {showCurrentPatternFallback && order.patternItemId && (
-                      <option value={order.patternItemId}>
-                        {order.patternName ??
-                          order.patternNameSnapshot ??
-                          'Текущее лекало'}
-                        {' — архивное'}
-                      </option>
+                    <strong>Создать изделие</strong>
+                    {isAttachingInline && (
+                      <span
+                        className="admin-muted"
+                        style={{ fontSize: '0.85rem' }}
+                      >
+                        Применяем к заказу…
+                      </span>
                     )}
-                    {patterns.map((pt) => (
-                      <option key={pt.id} value={pt.id}>
-                        {pt.name} · {pt.article}
-                        {pt.status !== 'ACTIVE' ? ` — ${pt.status}` : ''}
-                      </option>
-                    ))}
-                  </select>
-                  <span
-                    id="patternItemId-hint"
-                    className="admin-field__hint admin-muted"
-                  >
-                    Основная карточка изделия: превью, DXF и площади
-                    материалов.
-                  </span>
-                  {!isDraft ? (
-                    <span className="admin-field__hint admin-muted">
-                      Менять лекало можно только в DRAFT — у запущенного
-                      заказа уже зафиксирован snapshot полей лекала.
-                    </span>
-                  ) : patterns.length === 0 ? (
-                    <span className="admin-field__hint admin-muted">
-                      Список лекал пуст.{' '}
-                      <Link href="/admin/patterns/new">Добавить?</Link>
-                    </span>
-                  ) : null}
-                  {fieldError('patternItemId') && (
+                  </div>
+                  <CreateProductInline
+                    initialCategories={patternCategories}
+                    initialTechCards={techCards}
+                    initialPatterns={patterns}
+                    sizes={sizes}
+                    initialValue={savedInlineProduct}
+                    initialTab={inlineInitialTab}
+                    onCancel={() => {
+                      setInlineError(null);
+                      // Возвращаемся в осмысленное состояние: если
+                      // лекало уже привязано к заказу — CREATED,
+                      // иначе EMPTY.
+                      setProductBlockMode(
+                        order.patternItemId || patternItemId
+                          ? 'CREATED'
+                          : 'EMPTY',
+                      );
+                    }}
+                    onSave={handleInlineSave}
+                  />
+                  {inlineError && (
                     <span
-                      className="admin-field__hint"
-                      style={{ color: 'var(--admin-danger-fg)' }}
+                      className="error-box__msg"
+                      role="alert"
+                      style={{ fontSize: '0.85rem', marginTop: '0.5rem' }}
                     >
-                      {fieldError('patternItemId')}
+                      {inlineError}
                     </span>
                   )}
-                </div>
+                </>
+              )}
 
-                <div className="admin-field">
-                  <label htmlFor="color">Цвет</label>
+              {/* CREATED: лекало привязано. Показываем подходящую
+                  карточку и держим patternItemId в hidden input,
+                  чтобы submit заказа не сбросил FK. Поле «Цвет»
+                  выносим в отдельный grid под карточкой. */}
+              {productBlockMode === 'CREATED' && (
+                <>
                   <input
-                    id="color"
-                    name="color"
-                    type="text"
-                    value={color}
-                    onChange={(e) => setColor(e.target.value)}
-                    placeholder="не задан"
-                    maxLength={64}
+                    type="hidden"
+                    name="patternItemId"
+                    value={patternItemId}
                   />
-                </div>
-              </div>
+                  {savedInlineProduct ? (
+                    <SavedInlineProductCard
+                      payload={savedInlineProduct}
+                      onEdit={() => {
+                        setInlineInitialTab('calculate');
+                        setProductBlockMode('CREATING');
+                      }}
+                      onSendToConstructor={() => {
+                        setInlineInitialTab('constructor');
+                        setProductBlockMode('CREATING');
+                      }}
+                      onDelete={() => {
+                        setSavedInlineProduct(null);
+                        setSavedConstructorTask(null);
+                        setPatternItemId('');
+                        setProductBlockMode('EMPTY');
+                      }}
+                    />
+                  ) : savedConstructorTask ? (
+                    <SavedConstructorTaskCard
+                      task={savedConstructorTask}
+                      onDelete={() => {
+                        setSavedConstructorTask(null);
+                        setSavedInlineProduct(null);
+                        setPatternItemId('');
+                        setProductBlockMode('EMPTY');
+                      }}
+                    />
+                  ) : (
+                    <AttachedPatternSummaryCard
+                      patternItemId={patternItemId}
+                      patternName={
+                        patterns.find((p) => p.id === patternItemId)?.name ??
+                        order.patternName ??
+                        order.patternNameSnapshot ??
+                        null
+                      }
+                      patternArticle={
+                        patterns.find((p) => p.id === patternItemId)
+                          ?.article ?? null
+                      }
+                      isDraft={isDraft}
+                      onChangeExisting={() => {
+                        setSavedInlineProduct(null);
+                        setSavedConstructorTask(null);
+                        setProductBlockMode('SELECTING');
+                      }}
+                      onCreateNew={() => {
+                        setInlineInitialTab('calculate');
+                        setProductBlockMode('CREATING');
+                      }}
+                      onDetach={() => {
+                        setSavedInlineProduct(null);
+                        setSavedConstructorTask(null);
+                        setPatternItemId('');
+                        setProductBlockMode('EMPTY');
+                      }}
+                    />
+                  )}
+                  <div
+                    className="admin-form-grid"
+                    style={{ marginTop: '0.75rem' }}
+                  >
+                    <div className="admin-field">
+                      <label htmlFor="color">Цвет</label>
+                      <input
+                        id="color"
+                        name="color"
+                        type="text"
+                        value={color}
+                        onChange={(e) => setColor(e.target.value)}
+                        placeholder="не задан"
+                        maxLength={64}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* Hint про DRAFT-ограничение — показываем всегда, если
+                  заказ уже не в DRAFT, чтобы менеджер видел, почему
+                  кнопки в шапке отсутствуют. */}
+              {!isDraft && (
+                <span
+                  className="admin-field__hint admin-muted"
+                  style={{ marginTop: '0.5rem', display: 'block' }}
+                >
+                  Менять лекало можно только в DRAFT — у запущенного
+                  заказа уже зафиксирован snapshot полей лекала.
+                </span>
+              )}
             </AdminCard>
+
+            {/* «Заявки в КБ» — отдельная секция-карточка после блока
+                «Изделие». Источник — `order.constructorTask` (живёт в
+                server-data: после refresh показывает текущий статус
+                заявки), либо `savedConstructorTask` из in-session
+                state — карточку видно сразу, не дожидаясь refresh. */}
+            {(order.constructorTask || savedConstructorTask) && (
+              <OrderConstructorTaskCard
+                title="Заявки в КБ"
+                task={
+                  order.constructorTask ??
+                  (savedConstructorTask
+                    ? {
+                        id: savedConstructorTask.taskId,
+                        patternItemId: savedConstructorTask.patternItemId,
+                        patternName: savedConstructorTask.patternName,
+                        patternArticle: savedConstructorTask.patternArticle,
+                        status: 'NEW' as const,
+                        comment: '',
+                        createdAt: new Date().toISOString(),
+                        updatedAt: new Date().toISOString(),
+                        submittedAt: new Date().toISOString(),
+                        acceptedAt: null,
+                        createdByName: null,
+                        assignedToName: null,
+                        filesCount: savedConstructorTask.filesCount,
+                        sizeRowsCount: savedConstructorTask.sizeRowsCount,
+                      }
+                    : null)
+                }
+              />
+            )}
 
             <AdminCard className="admin-order-card admin-order-card--production">
               <header className="admin-order-card__header">
@@ -804,5 +1198,121 @@ export function AdminEditOrderForm({
         </div>
       </OrderWorkspaceLayout>
     </form>
+  );
+}
+
+/**
+ * Карточка-резюме для уже привязанного лекала (CREATED-режим, но
+ * лекало пришло из БД — не из текущей inline-сессии). В отличие от
+ * `SavedInlineProductCard` мы тут не имеем calc-payload-а (категория,
+ * размеры с qty и площади м²) — только id лекала, его имя и артикул.
+ *
+ * Поэтому кнопки тут проще: «Заменить» (→ SELECTING — выбрать другое),
+ * «Создать новое» (→ CREATING — inline создание) и «Отвязать»
+ * (→ EMPTY). «Редактировать»-режима нет: чтобы поправить площади
+ * существующего лекала, менеджер идёт на `/admin/patterns/<id>`.
+ */
+function AttachedPatternSummaryCard({
+  patternItemId,
+  patternName,
+  patternArticle,
+  isDraft,
+  onChangeExisting,
+  onCreateNew,
+  onDetach,
+}: {
+  patternItemId: string;
+  patternName: string | null;
+  patternArticle: string | null;
+  isDraft: boolean;
+  onChangeExisting: () => void;
+  onCreateNew: () => void;
+  onDetach: () => void;
+}) {
+  return (
+    <div
+      style={{
+        border: '1px solid #cbd5e1',
+        borderRadius: 8,
+        padding: '12px 14px',
+        background: '#f8fafc',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 8,
+      }}
+      data-testid="attached-pattern-summary-card"
+    >
+      <div
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+        }}
+      >
+        <strong style={{ fontSize: '0.95rem', color: '#0f172a' }}>
+          Привязано лекало
+        </strong>
+        {isDraft && (
+          <div style={{ display: 'flex', gap: 6 }}>
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost"
+              onClick={onChangeExisting}
+            >
+              Заменить
+            </button>
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost"
+              onClick={onCreateNew}
+            >
+              Создать новое
+            </button>
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost"
+              onClick={onDetach}
+              style={{ color: '#b91c1c' }}
+            >
+              Отвязать
+            </button>
+          </div>
+        )}
+      </div>
+      <dl
+        style={{
+          margin: 0,
+          display: 'grid',
+          gridTemplateColumns: 'auto 1fr',
+          gap: '4px 12px',
+          fontSize: '0.88rem',
+        }}
+      >
+        <dt style={{ color: '#475569' }}>Название</dt>
+        <dd style={{ margin: 0 }}>
+          {patternName ?? (
+            <span style={{ color: '#94a3b8' }}>не задано</span>
+          )}
+        </dd>
+        <dt style={{ color: '#475569' }}>Артикул</dt>
+        <dd style={{ margin: 0 }}>
+          {patternArticle ? (
+            <Link
+              href={`/admin/patterns/${patternItemId}`}
+              style={{ color: 'var(--admin-primary, #2563eb)' }}
+            >
+              {patternArticle}
+            </Link>
+          ) : (
+            <Link
+              href={`/admin/patterns/${patternItemId}`}
+              style={{ color: 'var(--admin-primary, #2563eb)' }}
+            >
+              Открыть карточку лекала
+            </Link>
+          )}
+        </dd>
+      </dl>
+    </div>
   );
 }

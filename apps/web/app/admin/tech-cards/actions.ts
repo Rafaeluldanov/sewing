@@ -12,6 +12,7 @@ import {
 } from '@sewing/shared/tech-cards';
 import { ApiRequestError } from '@/lib/api';
 import { getPattern } from '@/lib/patterns-api';
+import { getPatternCategory } from '@/lib/pattern-categories-api';
 import {
   createTechCard,
   updateTechCard,
@@ -434,6 +435,66 @@ export async function pullMaterialLinesFromPatternAction(
       };
     }
     return { ok: false, error: 'Не удалось загрузить номенклатуру' };
+  }
+}
+
+/**
+ * Возвращает шаблоны строк техкарты по группе номенклатур
+ * (`PatternCategory`). Используется кнопкой «Подтянуть из группы»
+ * в `tech-card-form.tsx` — менеджер выбирает группу, и в материальные
+ * требования техкарты подтягиваются заготовки строк по всем «активным»
+ * параметрам группы, описывающим материал.
+ *
+ * Источник — `PatternCategory.parameters` (а НЕ обход по дочерним
+ * номенклатурам). Фильтры:
+ *   - `status === 'ACTIVE'` — архивные параметры пропускаются;
+ *   - `inputType ∈ { QTY_PER_ITEM, LINEAR_M_BY_SIZE }` — это параметры,
+ *     описывающие материал (фурнитура на изделие и погонные метры);
+ *   - `AREA_M2_BY_SIZE` и `TEXT_ONLY` пропускаются: площади в техкарту
+ *     не идут (см. ТЗ §6), а TEXT_ONLY не описывает материал.
+ *
+ * Сами числовые значения в категории не хранятся — поэтому в техкарте
+ * UI поставит «1» как sentinel в `qtyPerUnit` (см.
+ * `handlePullFromCategory`).
+ */
+export async function pullMaterialLinesFromCategoryAction(
+  categoryId: string,
+): Promise<
+  | { ok: true; lines: PulledMaterialLineTemplate[]; categoryName: string }
+  | { ok: false; error: string }
+> {
+  const id = String(categoryId ?? '').trim();
+  if (id.length === 0) {
+    return { ok: false, error: 'Не выбрана группа номенклатур' };
+  }
+  try {
+    const category = await getPatternCategory(id);
+    const lines: PulledMaterialLineTemplate[] = [];
+    const params = Array.isArray(category.parameters) ? category.parameters : [];
+    for (const p of params) {
+      if (p.status !== 'ACTIVE') continue;
+      const inputType = p.inputType;
+      let sourceType: PulledMaterialLineSourceType | null = null;
+      if (inputType === 'QTY_PER_ITEM') sourceType = 'PARAMETER_NORM';
+      else if (inputType === 'LINEAR_M_BY_SIZE') sourceType = 'SIZE_PARAMETER_VALUE';
+      if (sourceType === null) continue;
+      lines.push({
+        roleKey: p.roleKey,
+        labelSnapshot: p.label,
+        unit: p.unit,
+        sourceType,
+        sourceId: p.id,
+      });
+    }
+    return { ok: true, lines, categoryName: category.name };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        error: `Не удалось загрузить группу: ${e.message}`,
+      };
+    }
+    return { ok: false, error: 'Не удалось загрузить группу' };
   }
 }
 

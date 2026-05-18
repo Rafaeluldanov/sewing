@@ -55,7 +55,18 @@ export type Role =
    * пользователям на MVP нет — primary workspace и единственная
    * осмысленная точка входа совпадают.
    */
-  | 'SHOPFLOOR_MASTER';
+  | 'SHOPFLOOR_MASTER'
+  /**
+   * Конструктор лекал (см. `apps/web/app/constructor/`,
+   * `apps/api/src/modules/constructor-tasks/`). Кабинет
+   * `/constructor` — single-workspace роль: видит назначенные на
+   * себя задачи + общий пул свободных, берёт в работу
+   * (`assignSelf` → IN_PROGRESS), завершает с загрузкой готовых
+   * DXF-лекал — backend атомарно переводит `PatternItem` в `ACTIVE`
+   * и `ConstructorTask` в `DONE`. Доступа к админке / заказам /
+   * терминалам цеха не имеет.
+   */
+  | 'CONSTRUCTOR';
 
 /**
  * Единственная страница, на которую пускают роль `DISPLAY`. Хранится
@@ -70,6 +81,13 @@ export const DISPLAY_ALLOWED_PATH = '/shopfloor/display';
  */
 export const SHOPFLOOR_MASTER_ALLOWED_PATH = '/master';
 
+/**
+ * Корневой путь кабинета конструктора. Middleware пускает роль
+ * `CONSTRUCTOR` только по путям, начинающимся с этого префикса
+ * (`/constructor`, `/constructor/<taskId>` и т.д.).
+ */
+export const CONSTRUCTOR_ALLOWED_PATH = '/constructor';
+
 export const QC_ALLOWED_ROLES: readonly Role[] = ['QC', 'SHOP_MANAGER', 'ADMIN'];
 export const WTO_ALLOWED_ROLES: readonly Role[] = [
   'IRONING',
@@ -78,6 +96,11 @@ export const WTO_ALLOWED_ROLES: readonly Role[] = [
 ];
 export const PACKING_ALLOWED_ROLES: readonly Role[] = [
   'PACKING',
+  'SHOP_MANAGER',
+  'ADMIN',
+];
+export const CONSTRUCTOR_ALLOWED_ROLES: readonly Role[] = [
+  'CONSTRUCTOR',
   'SHOP_MANAGER',
   'ADMIN',
 ];
@@ -112,6 +135,8 @@ export const SHOPFLOOR_MENU_HIDDEN_ROLES: readonly Role[] = [
   'DISPLAY',
   // У мастера цеха единственная точка входа — `/master`.
   'SHOPFLOOR_MASTER',
+  // У конструктора единственная точка входа — `/constructor`.
+  'CONSTRUCTOR',
 ];
 
 /**
@@ -143,6 +168,19 @@ export function canSeeWto(role: string | undefined | null): boolean {
 
 export function canSeePacking(role: string | undefined | null): boolean {
   return !!role && (PACKING_ALLOWED_ROLES as readonly string[]).includes(role);
+}
+
+/**
+ * Доступ к кабинету конструктора (`/constructor`). Сама роль —
+ * основной пользователь; ADMIN/SHOP_MANAGER оставлены в матрице,
+ * чтобы менеджер мог открыть тот же экран при необходимости (в
+ * пилоте полезно «забрать на себя» застрявшую задачу) — backend
+ * пропускает их через `enforceOwnership = false`.
+ */
+export function canSeeConstructor(role: string | undefined | null): boolean {
+  return (
+    !!role && (CONSTRUCTOR_ALLOWED_ROLES as readonly string[]).includes(role)
+  );
 }
 
 /**
@@ -252,6 +290,8 @@ const PRIMARY_WORKSPACE_BY_ROLE: Record<Role, string> = {
   DISPLAY: DISPLAY_ALLOWED_PATH,
   // SHOPFLOOR_MASTER — мобильный терминал `/master` (MVP).
   SHOPFLOOR_MASTER: SHOPFLOOR_MASTER_ALLOWED_PATH,
+  // CONSTRUCTOR — кабинет конструктора `/constructor` (single-workspace).
+  CONSTRUCTOR: CONSTRUCTOR_ALLOWED_PATH,
 };
 
 export function getPrimaryWorkspace(role: string | undefined | null): string {
@@ -295,6 +335,8 @@ const SINGLE_WORKSPACE_ROLES: readonly Role[] = [
   'DISPLAY',
   // У мастера цеха одна страница `/master` — мобильный терминал.
   'SHOPFLOOR_MASTER',
+  // У конструктора один экран `/constructor` — кабинет с задачами.
+  'CONSTRUCTOR',
 ];
 
 export function isSingleWorkspaceRole(
@@ -325,6 +367,8 @@ const WORKING_ROLES: readonly Role[] = [
   // SHOPFLOOR_MASTER пользуется тем же механизмом: login и `/`
   // ведут в `/master` (см. `getPrimaryWorkspace`).
   'SHOPFLOOR_MASTER',
+  // CONSTRUCTOR — single-workspace кабинет `/constructor`.
+  'CONSTRUCTOR',
 ];
 
 export function isWorkingRole(role: string | undefined | null): boolean {
@@ -350,6 +394,14 @@ export function isShopfloorMasterRole(
   role: string | undefined | null,
 ): boolean {
   return role === 'SHOPFLOOR_MASTER';
+}
+
+/**
+ * Роль «Конструктор». Аналог `isShopfloorMasterRole` — middleware
+ * редиректит конструктора с любых страниц на `/constructor`.
+ */
+export function isConstructorRole(role: string | undefined | null): boolean {
+  return role === 'CONSTRUCTOR';
 }
 
 /**

@@ -65,6 +65,10 @@ import {
 import type { AdminStatusTone } from '@/lib/admin-labels';
 import { formatOrderStatus, getOrderStatusTone } from '@/lib/admin-labels';
 import {
+  CONSTRUCTOR_TASK_STATUS_LABELS,
+  CONSTRUCTOR_TASK_STATUS_TONE,
+} from '@sewing/shared/constructor-tasks';
+import {
   formatDateRu,
   formatDaysLeft,
   formatProgressPercent,
@@ -401,11 +405,41 @@ function OrdersTable({ items }: { items: OrderListItemDto[] }) {
     {
       key: 'status',
       header: 'Статус',
-      render: (o) => (
-        <AdminStatusBadge tone={getOrderStatusTone(o.status)}>
-          {formatOrderStatus(o.status)}
-        </AdminStatusBadge>
-      ),
+      render: (o) => {
+        // Маленький бейдж конструкторской задачи показываем только для
+        // активных статусов: NEW/IN_PROGRESS/PENDING_ACCEPT/REWORK.
+        // DONE/CANCELLED оператору заказов неинтересны (лекало уже
+        // принято или задача отменена — заказ можно вести как обычно).
+        const taskStatus = o.constructorTaskStatus as
+          | keyof typeof CONSTRUCTOR_TASK_STATUS_LABELS
+          | null
+          | undefined;
+        const showTaskBadge =
+          taskStatus &&
+          taskStatus !== 'DONE' &&
+          taskStatus !== 'CANCELLED';
+        return (
+          <span
+            style={{
+              display: 'inline-flex',
+              gap: '0.35rem',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+            }}
+          >
+            <AdminStatusBadge tone={getOrderStatusTone(o.status)}>
+              {formatOrderStatus(o.status)}
+            </AdminStatusBadge>
+            {showTaskBadge && (
+              <AdminStatusBadge
+                tone={CONSTRUCTOR_TASK_STATUS_TONE[taskStatus]}
+              >
+                КБ: {CONSTRUCTOR_TASK_STATUS_LABELS[taskStatus]}
+              </AdminStatusBadge>
+            )}
+          </span>
+        );
+      },
     },
     {
       key: 'qty',

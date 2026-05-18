@@ -14,6 +14,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import {
+  ClonePatternSchema,
   CreatePatternSchema,
   ListPatternsQuerySchema,
   PATTERN_FILE_MAX_SIZE_BYTES,
@@ -21,6 +22,7 @@ import {
   ReplacePatternItemSizeParameterValuesSchema,
   ReplacePatternMaterialAreasSchema,
   UpdatePatternSchema,
+  type ClonePatternDto,
   type CreatePatternDto,
   type ListPatternsQuery,
   type PatternDetailDto,
@@ -79,6 +81,22 @@ export class PatternsController {
   @Get(':id')
   getOne(@Param('id') id: string): Promise<PatternDetailDto> {
     return this.patterns.getOne(id);
+  }
+
+  /**
+   * Клонирование номенклатуры (`POST /api/patterns/:id/clone`). Этап
+   * «Создать номенклатуру по готовому лекалу» — см.
+   * `PatternsService.clone`. Body опционален: если поля `name`/`article`
+   * не заданы, backend сам подбирает значения (см. сервис).
+   */
+  @Post(':id/clone')
+  clone(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(ClonePatternSchema))
+    body: ClonePatternDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<PatternDetailDto> {
+    return this.patterns.clone(id, body, user.employeeId);
   }
 
   @Patch(':id')

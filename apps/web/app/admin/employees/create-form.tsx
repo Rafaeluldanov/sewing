@@ -32,6 +32,7 @@ const ROLE_LABELS: Record<EmployeeRole, string> = {
   IRONING: 'ВТО',
   PACKING: 'Упаковка',
   SHOPFLOOR_MASTER: 'Мастер цеха',
+  CONSTRUCTOR: 'Конструктор',
 };
 
 const COMPENSATION_LABEL: Record<CompensationType, string> = {

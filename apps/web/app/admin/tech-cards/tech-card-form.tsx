@@ -17,6 +17,7 @@ import {
 } from '@sewing/shared/tech-cards';
 import {
   createTechCardAction,
+  pullMaterialLinesFromCategoryAction,
   pullMaterialLinesFromPatternAction,
   updateTechCardAction,
   uploadMaterialImageAction,
@@ -48,6 +49,17 @@ export interface PatternItemOption {
   article: string;
 }
 
+/**
+ * Лёгкое представление группы номенклатур (`PatternCategory`) для
+ * select-а «Подтянуть из группы». RSC-страница (new/[id]) подтягивает
+ * список через `listPatternCategories({ status: 'ACTIVE' })` и
+ * прокидывает сюда только plain `{ id, name }`.
+ */
+export interface PatternCategoryOption {
+  id: string;
+  name: string;
+}
+
 interface Props {
   mode: Mode;
   /** Только в режиме `edit` — текущее состояние техкарты. */
@@ -60,6 +72,13 @@ interface Props {
    * а не из категории.
    */
   patternItems?: PatternItemOption[];
+  /**
+   * Активные группы номенклатур (`PatternCategory`). Используются
+   * select-ом «Подтянуть из группы» во второй колонке блока
+   * «Материальные требования». Пустой список допустим — колонка
+   * просто покажет disabled-сообщение.
+   */
+  patternCategories?: PatternCategoryOption[];
 }
 
 interface MaterialRow {
@@ -171,6 +190,29 @@ function dedupeKey(roleKey: string, fabricType: string | null): string {
   return `${roleKey}::${normalizeDedupeFabric(fabricType)}`;
 }
 
+/**
+ * Создаёт `MaterialRow` из шаблона `{ roleKey, labelSnapshot, unit }`.
+ * Используется обоими pull-обработчиками — клик заменяет общий список
+ * строк техкарты тем, что пришло из выбранной номенклатуры/группы.
+ * Дефолтное правило цвета: для PACKAGING — «Указать в заказе», для
+ * тканевых ролей — «Цвет заказа» (см. legacy-комментарий ниже в
+ * handlePullFromNomenclature).
+ */
+function rowFromPulledLine(line: {
+  roleKey: string;
+  labelSnapshot: string;
+  unit: string;
+}): MaterialRow {
+  const isPackaging = line.roleKey === 'PACKAGING';
+  return emptyMaterialRow({
+    materialRole: line.roleKey,
+    fabricType: line.labelSnapshot,
+    unit: line.unit,
+    qtyPerUnit: '1',
+    colorRule: isPackaging ? 'ORDER_SELECTED_COLOR' : 'ORDER_COLOR',
+  });
+}
+
 const OUTSOURCE_TRIGGER_LABELS: Record<OutsourceTriggerType, string> = {
   MANUAL: 'Вручную',
   CUT_READY: 'Когда крой размещён в ячейки',
@@ -200,6 +242,20 @@ const PULL_FROM_NOMENCLATURE_HINT =
  */
 const PULL_FROM_NOMENCLATURE_EMPTY =
   'В номенклатуре нет заполненных норм или погонных метров. Нечего подтягивать.';
+
+/**
+ * Текст-подсказка рядом с кнопкой «Подтянуть из группы». Группа
+ * описывает только определения параметров (без числовых значений),
+ * поэтому в техкарту едут заготовки строк для каждого активного
+ * параметра с inputType ∈ { QTY_PER_ITEM, LINEAR_M_BY_SIZE }.
+ * Площади (AREA_M2_BY_SIZE) и текстовые услуги (TEXT_ONLY) НЕ
+ * подтягиваются.
+ */
+const PULL_FROM_CATEGORY_HINT =
+  'Подтягивает строки материалов из всех активных параметров группы: фурнитура на изделие и погонные метры. Площади и текстовые параметры не подтягиваются.';
+
+const PULL_FROM_CATEGORY_EMPTY =
+  'В группе нет параметров для подтягивания (фурнитуры на изделие или погонных метров).';
 
 const OUTSOURCE_LEGACY_HINT =
   'Старые внешние услуги сохранены как legacy. Новые нанесения задаются в заказе покупателя.';
@@ -248,6 +304,7 @@ export function TechCardForm({
   mode,
   template,
   patternItems,
+  patternCategories,
 }: Props) {
   // Защита от прода: prop `patternItems` ОБЯЗАН быть массивом, иначе
   // дальше `.map`/`.length` уронит весь рендер формы (и страницу
@@ -256,6 +313,11 @@ export function TechCardForm({
   // прокинут `undefined`/не-массив. Нормализуем явно.
   const safePatternItems: PatternItemOption[] = Array.isArray(patternItems)
     ? patternItems
+    : [];
+  const safePatternCategories: PatternCategoryOption[] = Array.isArray(
+    patternCategories,
+  )
+    ? patternCategories
     : [];
   // Идентификатор техкарты в режиме edit — нужен для upload-эндпоинта
   // изображения строки материала (см. ТЗ §5). В режиме `create`
@@ -299,6 +361,18 @@ export function TechCardForm({
   const [pullError, setPullError] = useState<string | null>(null);
   const [pullSummary, setPullSummary] = useState<string | null>(null);
   const [isPulling, startPullTransition] = useTransition();
+  // «Подтянуть из группы»: независимый state — собственный select,
+  // pending-индикатор и сообщения. Деление по двум блокам нужно,
+  // чтобы pending одной кнопки не блокировал и не подсвечивал ошибки
+  // другой.
+  const [pullCategoryId, setPullCategoryId] = useState<string>('');
+  const [pullCategoryError, setPullCategoryError] = useState<string | null>(
+    null,
+  );
+  const [pullCategorySummary, setPullCategorySummary] = useState<string | null>(
+    null,
+  );
+  const [isPullingCategory, startPullCategoryTransition] = useTransition();
   const [outsource, setOutsource] = useState<OutsourceRow[]>(() => {
     if (mode !== 'edit' || !template) return [];
     const lines = Array.isArray(template.outsourceLines)
@@ -345,45 +419,34 @@ export function TechCardForm({
   };
 
   /**
-   * «Подтянуть из номенклатуры» (см. ТЗ §1, §2, §3) — server action по
-   * выбранной номенклатуре (`PatternItem`) возвращает шаблоны строк
-   * материалов из ДВУХ источников:
-   *   - «Фурнитура и нормы» (`PatternItemParameterNorm` с
-   *     `qtyPerItem > 0`) — `sourceType === 'PARAMETER_NORM'`;
-   *   - «Погонные метры» (`PatternItemSizeParameterValue` с
-   *     `inputTypeSnapshot === 'LINEAR_M_BY_SIZE'` и хотя бы одним
-   *     `value > 0` по любому размеру) — `sourceType ===
-   *     'SIZE_PARAMETER_VALUE'`.
+   * «Подтянуть из номенклатуры» — server action по выбранной номенклатуре
+   * (`PatternItem`) возвращает шаблоны строк материалов из двух источников:
+   *   - «Фурнитура и нормы» (`PatternItemParameterNorm.qtyPerItem > 0`);
+   *   - «Погонные метры» (`PatternItemSizeParameterValue`
+   *     `LINEAR_M_BY_SIZE` с хотя бы одним `value > 0`).
    *
-   * Клиентская логика дедупликации (см. ТЗ §3):
-   *   1. Ключ существующих/добавленных строк: `materialRole +
-   *      normalized fabricType`.
-   *   2. Если есть строка с тем же materialRole и тем же fabricType —
-   *      пропускаем (skipped).
-   *   3. Если есть строка с тем же materialRole, но ПУСТЫМ fabricType —
-   *      обновляем у неё fabricType из шаблона (updated). Это закрывает
-   *      типичный кейс «менеджер заранее добавил пустую строку
-   *      MAIN_FABRIC, потом нажал Подтянуть» — мы не плодим
-   *      дублирующее «Основное полотно», а заполняем существующее.
-   *   4. Если строки нет — добавляем новую (added).
-   *
-   * Для PACKAGING несколько строк с разным fabricType (Молния /
-   * Кнопки / Люверсы) разрешены: ключ дедупликации различает их.
+   * Поведение: ПОЛНАЯ ЗАМЕНА списка строк материалов содержимым
+   * выбранной номенклатуры. То есть если ранее подтянули номенклатуру
+   * A и список наполнился её строками, а потом выбрали номенклатуру B —
+   * список заменяется на строки B. Старые строки (в т.ч. вручную
+   * заполненные) теряются: pull — это «снимок из источника», не merge.
+   * Дедупликация ВНУТРИ нового списка по `materialRole + fabricType`
+   * на случай, если источник вернёт два одинаковых параметра (фурнитура
+   * группы PACKAGING с разным `fabricType` остаётся как несколько
+   * строк — ключ их различает).
    *
    * Числовые значения нормы / погонных метров В ТЕХКАРТУ НЕ ПЕРЕНОСЯТСЯ
    * — они хранятся в номенклатуре и используются `WorkshopNeed`-ом.
-   * В техкарту едет только описание материала (см. ТЗ §1).
    *
-   * Работает и в режиме `create` (`/admin/tech-cards/new`) — никакого
-   * `techCardId` не нужно: action ходит в номенклатуру по её id.
+   * Работает и в режиме `create`, и в `edit`: никакого `techCardId` не
+   * нужно — action ходит в номенклатуру по её id.
    */
   const handlePullFromNomenclature = () => {
     setPullError(null);
     setPullSummary(null);
     // Двойная защита: и кнопка `disabled={pullPatternId === ''}`, и
-    // явный гард тут — server action `pullMaterialLinesFromPatternAction`
-    // НИКОГДА не должен вызываться с пустым id, иначе на backend
-    // полетит `getPattern('')` и UI получит непонятную 404.
+    // явный гард тут — server action никогда не должен вызываться с
+    // пустым id (иначе на backend полетит `getPattern('')`).
     const trimmedId = pullPatternId.trim();
     if (trimmedId === '') {
       setPullError('Выберите номенклатуру');
@@ -395,105 +458,64 @@ export function TechCardForm({
         setPullError(result.error);
         return;
       }
-      // ТЗ §4: пустой список — отдельное сообщение, чтобы менеджер
-      // понял, что в номенклатуре нет ни заполненных норм на изделие,
-      // ни заполненных погонных метров.
+      // Полная замена: если в источнике пусто — список тоже опустеет.
+      // Это важная часть UX: менеджер должен видеть СОДЕРЖИМОЕ выбранной
+      // номенклатуры, а не объединение с прошлой выборкой.
       if (result.lines.length === 0) {
+        setMaterials([]);
         setPullSummary(PULL_FROM_NOMENCLATURE_EMPTY);
         return;
       }
-      let addedCount = 0;
-      let skippedCount = 0;
-      let updatedCount = 0;
-      setMaterials((prev) => {
-        // Стартовая «карта существующих» — индексируем по дедуп-ключу,
-        // плюс по «частичному» ключу (только roleKey, fabricType
-        // пустой) — последний используется для апдейта пустого
-        // fabricType в существующей строке (см. ТЗ §3 правило 3).
-        const next: MaterialRow[] = prev.map((r) => ({ ...r }));
-        const fullKey = (
-          materialRole: string,
-          fabricType: string | null,
-        ): string => dedupeKey(materialRole, fabricType);
+      const seen = new Set<string>();
+      const next: MaterialRow[] = [];
+      for (const line of result.lines) {
+        const k = dedupeKey(line.roleKey, line.labelSnapshot);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        next.push(rowFromPulledLine(line));
+      }
+      setMaterials(next);
+      setPullSummary(`Подтянуто строк: ${next.length}. Список заменён.`);
+    });
+  };
 
-        for (const line of result.lines) {
-          const targetFullKey = fullKey(line.roleKey, line.labelSnapshot);
-          // 1) Точное совпадение → пропускаем.
-          const exactIdx = next.findIndex(
-            (r) => fullKey(r.materialRole, r.fabricType) === targetFullKey,
-          );
-          if (exactIdx >= 0) {
-            skippedCount += 1;
-            continue;
-          }
-          // 2) Тот же materialRole + пустой fabricType → апдейтим
-          //    существующую строку, а не добавляем дубль. Применяем
-          //    только к ОДНОЙ строке (первой подходящей) и сразу
-          //    помечаем её fabricType-ом из шаблона, чтобы следующая
-          //    итерация на этот же materialRole шла по правилу №1
-          //    (skip) или №3 (add new).
-          const emptyIdx = next.findIndex(
-            (r) =>
-              r.materialRole === line.roleKey &&
-              normalizeDedupeFabric(r.fabricType) === '',
-          );
-          if (emptyIdx >= 0) {
-            const existing = next[emptyIdx]!;
-            next[emptyIdx] = {
-              ...existing,
-              fabricType: line.labelSnapshot,
-              // Подставляем unit только если у существующей строки
-              // его не было — не затираем то, что менеджер уже мог
-              // ввести вручную.
-              unit: existing.unit && existing.unit.length > 0
-                ? existing.unit
-                : line.unit,
-            };
-            updatedCount += 1;
-            continue;
-          }
-          // 3) Новая строка. Безопасный дефолт правила цвета зависит
-          //    от роли: для PACKAGING (фурнитура) — «Указать в заказе»
-          //    (см. ТЗ §10 + существующее поведение), для тканевых
-          //    ролей — «Цвет заказа» (Основное полотно / Подкладка /
-          //    Дублерин / Флизелин обычно идут под общий цвет заказа).
-          const isPackaging = line.roleKey === 'PACKAGING';
-          next.push(
-            emptyMaterialRow({
-              materialRole: line.roleKey,
-              // ТЗ §2: `fabricType` = labelSnapshot параметра
-              // номенклатуры. Для PACKAGING это конкретное название
-              // фурнитуры («Молния»/«Кнопки»/«Люверсы»), для
-              // тканевых ролей — название параметра («Основное
-              // полотно» / «Подкладка» / …).
-              fabricType: line.labelSnapshot,
-              unit: line.unit,
-              // qtyPerUnit — legacy-поле обязательной shared schema.
-              // Реальные нормы лежат в источнике в номенклатуре и
-              // считаются `WorkshopNeed`-ом; в техкарте оставляем
-              // sentinel «1», менеджер при необходимости поправит.
-              qtyPerUnit: '1',
-              colorRule: isPackaging
-                ? 'ORDER_SELECTED_COLOR'
-                : 'ORDER_COLOR',
-            }),
-          );
-          addedCount += 1;
-        }
-        return next;
-      });
-
-      // ТЗ §4: формируем итоговое сообщение из трёх компонент. Если
-      // НИЧЕГО не произошло (например, всё уже было добавлено ранее)
-      // — всё равно пишем, что подтягивали (skip-counter).
-      const parts: string[] = [];
-      if (addedCount > 0) parts.push(`Добавлено строк: ${addedCount}`);
-      if (updatedCount > 0) parts.push(`Обновлено строк: ${updatedCount}`);
-      if (skippedCount > 0) parts.push(`Пропущено дублей: ${skippedCount}`);
-      setPullSummary(
-        parts.length > 0
-          ? parts.join('. ') + '.'
-          : PULL_FROM_NOMENCLATURE_EMPTY,
+  /**
+   * «Подтянуть из группы» — server action
+   * `pullMaterialLinesFromCategoryAction` возвращает шаблоны строк
+   * по активным параметрам выбранной группы. Поведение и правила те
+   * же, что у `handlePullFromNomenclature`: ПОЛНАЯ ЗАМЕНА общего
+   * списка строк материалов содержимым выбранной группы.
+   */
+  const handlePullFromCategory = () => {
+    setPullCategoryError(null);
+    setPullCategorySummary(null);
+    const trimmedId = pullCategoryId.trim();
+    if (trimmedId === '') {
+      setPullCategoryError('Выберите группу номенклатур');
+      return;
+    }
+    startPullCategoryTransition(async () => {
+      const result = await pullMaterialLinesFromCategoryAction(trimmedId);
+      if (!result.ok) {
+        setPullCategoryError(result.error);
+        return;
+      }
+      if (result.lines.length === 0) {
+        setMaterials([]);
+        setPullCategorySummary(PULL_FROM_CATEGORY_EMPTY);
+        return;
+      }
+      const seen = new Set<string>();
+      const next: MaterialRow[] = [];
+      for (const line of result.lines) {
+        const k = dedupeKey(line.roleKey, line.labelSnapshot);
+        if (seen.has(k)) continue;
+        seen.add(k);
+        next.push(rowFromPulledLine(line));
+      }
+      setMaterials(next);
+      setPullCategorySummary(
+        `Подтянуто строк: ${next.length}. Список заменён.`,
       );
     });
   };
@@ -564,29 +586,32 @@ export function TechCardForm({
           {MATERIAL_REQUIREMENTS_HINT}
         </p>
         {/*
-          «Подтянуть из номенклатуры» (см. ТЗ §1, §2, §4): отдельный
-          мини-блок с select-ом конкретной номенклатуры (PatternItem)
-          и кнопкой. Источников теперь два:
-            - `PatternItemParameterNorm` (qtyPerItem > 0) —
-              «Фурнитура и нормы»;
-            - `PatternItemSizeParameterValue` LINEAR_M_BY_SIZE
-              с хотя бы одним value > 0 — «Погонные метры».
-          Дедупликация по `materialRole + fabricType`; для PACKAGING
-          разрешены несколько строк (Молния / Кнопки / Люверсы); если
-          в форме уже есть строка с тем же materialRole, но пустым
-          fabricType — заполняем её, а не плодим дубль (см. ТЗ §3).
-          Клик не сохраняет техкарту, а только меняет local state
-          (см. `handlePullFromNomenclature`).
+          Два независимых источника подтягивания:
+            - слева — конкретная номенклатура (`PatternItem`):
+              «Фурнитура и нормы» + «Погонные метры» с непустыми
+              значениями;
+            - справа — группа номенклатур (`PatternCategory`):
+              активные параметры группы с inputType ∈
+              { QTY_PER_ITEM, LINEAR_M_BY_SIZE }.
+          Target один — общий список строк материалов под блоком.
+          Каждый клик ПОЛНОСТЬЮ ЗАМЕНЯЕТ список содержимым выбранного
+          источника (см. `handlePullFromNomenclature` /
+          `handlePullFromCategory`) — это даёт «снимок» из источника
+          вместо мерджа. Внутри одного pull дубликаты по
+          `materialRole + fabricType` свёрнуты.
         */}
-        {safePatternItems.length > 0 ? (
+        <div
+          className="admin-material-requirements__pull-grid"
+          style={{
+            display: 'grid',
+            gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
+            gap: '1rem',
+          }}
+        >
+          {/* ── Колонка 1: «Подтянуть из номенклатуры» ─────────────── */}
           <div
-            className="admin-material-requirements__pull"
-            style={{
-              display: 'flex',
-              flexWrap: 'wrap',
-              alignItems: 'center',
-              gap: '0.5rem',
-            }}
+            className="admin-stack admin-material-requirements__pull"
+            style={{ gap: '0.5rem' }}
           >
             <label
               htmlFor="tc-pull-pattern"
@@ -595,91 +620,170 @@ export function TechCardForm({
             >
               Номенклатура:
             </label>
-            <select
-              id="tc-pull-pattern"
-              value={pullPatternId}
-              onChange={(e) => setPullPatternId(e.target.value)}
-              style={{ minWidth: 260 }}
-              disabled={isPulling}
-              data-testid="tech-card-pull-pattern"
-            >
-              <option value="">— выберите номенклатуру —</option>
-              {safePatternItems.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name} · {p.article}
-                </option>
-              ))}
-            </select>
-            <button
-              type="button"
-              className="admin-btn admin-btn--ghost"
-              onClick={handlePullFromNomenclature}
-              disabled={isPulling || pullPatternId.trim() === ''}
-              data-testid="tech-card-pull-button"
-              title={
-                pullPatternId.trim() === ''
-                  ? 'Сначала выберите номенклатуру в списке слева'
-                  : PULL_FROM_NOMENCLATURE_HINT
-              }
-            >
-              {isPulling ? 'Подтягиваем…' : 'Подтянуть из номенклатуры'}
-            </button>
-            {/*
-              ТЗ §4: рядом с кнопкой видимая подсказка о том, что
-              подтягивается. Текст обязан содержать «заполненные
-              нормы фурнитуры и заполненные параметры погонных
-              метров» (см. smoke-тест). Сделан на всю ширину блока,
-              чтобы разместить под кнопкой/select-ом независимо от
-              переноса строк.
-            */}
-            <p
-              className="admin-muted admin-material-requirements__pull-hint"
-              data-testid="tech-card-pull-hint"
-              style={{
-                margin: 0,
-                fontSize: '0.8rem',
-                lineHeight: 1.45,
-                width: '100%',
-              }}
-            >
-              {PULL_FROM_NOMENCLATURE_HINT}
-            </p>
-            {pullError && (
-              <span
-                className="error-box__msg"
-                role="alert"
-                style={{ fontSize: '0.85rem' }}
-              >
-                {pullError}
-              </span>
-            )}
-            {pullSummary && (
-              <span
+            {safePatternItems.length > 0 ? (
+              <>
+                <select
+                  id="tc-pull-pattern"
+                  value={pullPatternId}
+                  onChange={(e) => setPullPatternId(e.target.value)}
+                  disabled={isPulling}
+                  data-testid="tech-card-pull-pattern"
+                >
+                  <option value="">— выберите номенклатуру —</option>
+                  {safePatternItems.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name} · {p.article}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="admin-btn admin-btn--ghost"
+                  onClick={handlePullFromNomenclature}
+                  disabled={isPulling || pullPatternId.trim() === ''}
+                  data-testid="tech-card-pull-button"
+                  title={
+                    pullPatternId.trim() === ''
+                      ? 'Сначала выберите номенклатуру выше'
+                      : PULL_FROM_NOMENCLATURE_HINT
+                  }
+                >
+                  {isPulling ? 'Подтягиваем…' : 'Подтянуть номенклатуры'}
+                </button>
+                <p
+                  className="admin-muted admin-material-requirements__pull-hint"
+                  data-testid="tech-card-pull-hint"
+                  style={{
+                    margin: 0,
+                    fontSize: '0.8rem',
+                    lineHeight: 1.45,
+                  }}
+                >
+                  {PULL_FROM_NOMENCLATURE_HINT}
+                </p>
+                {pullError && (
+                  <span
+                    className="error-box__msg"
+                    role="alert"
+                    style={{ fontSize: '0.85rem' }}
+                  >
+                    {pullError}
+                  </span>
+                )}
+                {pullSummary && (
+                  <span
+                    className="admin-muted"
+                    role="status"
+                    data-testid="tech-card-pull-summary"
+                    style={{ fontSize: '0.85rem' }}
+                  >
+                    {pullSummary}
+                  </span>
+                )}
+              </>
+            ) : (
+              <p
                 className="admin-muted"
-                role="status"
-                data-testid="tech-card-pull-summary"
-                style={{ fontSize: '0.85rem' }}
+                style={{ margin: 0, fontSize: '0.85rem' }}
+                data-testid="tech-card-pull-empty"
               >
-                {pullSummary}
-              </span>
+                Активных номенклатур пока нет — подтягивать материалы не из
+                чего. Заполните хотя бы одну активную номенклатуру с нормами
+                на изделие.
+              </p>
             )}
           </div>
-        ) : (
-          // Если активных номенклатур нет — кнопку «Подтянуть из
-          // номенклатуры» отрисовать нечем. Показываем понятное
-          // disabled-сообщение, чтобы менеджер не думал, что страница
-          // сломалась (см. ТЗ §5: «безопасное сообщение, если
-          // номенклатура не выбрана»).
-          <p
-            className="admin-muted"
-            style={{ margin: 0, fontSize: '0.85rem' }}
-            data-testid="tech-card-pull-empty"
+
+          {/* ── Колонка 2: «Подтянуть из группы номенклатур» ───────── */}
+          <div
+            className="admin-stack admin-material-requirements__pull"
+            style={{ gap: '0.5rem' }}
           >
-            Активных номенклатур пока нет — подтягивать материалы не из чего.
-            Заполните хотя бы одну активную номенклатуру с нормами на изделие,
-            и тогда здесь появится кнопка «Подтянуть из номенклатуры».
-          </p>
-        )}
+            <label
+              htmlFor="tc-pull-category"
+              className="admin-muted"
+              style={{ fontSize: '0.85rem' }}
+            >
+              Группа номенклатур:
+            </label>
+            {safePatternCategories.length > 0 ? (
+              <>
+                <select
+                  id="tc-pull-category"
+                  value={pullCategoryId}
+                  onChange={(e) => setPullCategoryId(e.target.value)}
+                  disabled={isPullingCategory}
+                  data-testid="tech-card-pull-category"
+                >
+                  <option value="">— выберите группу —</option>
+                  {safePatternCategories.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  type="button"
+                  className="admin-btn admin-btn--ghost"
+                  onClick={handlePullFromCategory}
+                  disabled={
+                    isPullingCategory || pullCategoryId.trim() === ''
+                  }
+                  data-testid="tech-card-pull-category-button"
+                  title={
+                    pullCategoryId.trim() === ''
+                      ? 'Сначала выберите группу выше'
+                      : PULL_FROM_CATEGORY_HINT
+                  }
+                >
+                  {isPullingCategory
+                    ? 'Подтягиваем…'
+                    : 'Подтянуть группу номенклатур'}
+                </button>
+                <p
+                  className="admin-muted"
+                  data-testid="tech-card-pull-category-hint"
+                  style={{
+                    margin: 0,
+                    fontSize: '0.8rem',
+                    lineHeight: 1.45,
+                  }}
+                >
+                  {PULL_FROM_CATEGORY_HINT}
+                </p>
+                {pullCategoryError && (
+                  <span
+                    className="error-box__msg"
+                    role="alert"
+                    style={{ fontSize: '0.85rem' }}
+                  >
+                    {pullCategoryError}
+                  </span>
+                )}
+                {pullCategorySummary && (
+                  <span
+                    className="admin-muted"
+                    role="status"
+                    data-testid="tech-card-pull-category-summary"
+                    style={{ fontSize: '0.85rem' }}
+                  >
+                    {pullCategorySummary}
+                  </span>
+                )}
+              </>
+            ) : (
+              <p
+                className="admin-muted"
+                style={{ margin: 0, fontSize: '0.85rem' }}
+                data-testid="tech-card-pull-category-empty"
+              >
+                Активных групп номенклатур пока нет — подтягивать не из
+                чего. Заведите группу с параметрами в разделе «Группы
+                номенклатур».
+              </p>
+            )}
+          </div>
+        </div>
         {materials.length === 0 ? (
           <p className="admin-muted" style={{ margin: 0, fontSize: '0.88rem' }}>
             Пока пусто — добавьте при необходимости.

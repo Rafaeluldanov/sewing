@@ -77,6 +77,7 @@ import {
   OrderWorkspaceLayout,
 } from '@/components/orders/order-workspace-layout';
 import { OrderActionCenter } from '@/components/orders/view/order-action-center';
+import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 import { OrderManagementHeader } from '@/components/orders/view/order-management-header';
 import { OrderViewTabs } from '@/components/orders/view/order-view-tabs';
 import {
@@ -89,6 +90,7 @@ import { OrderPlanTab } from '@/components/orders/view/tabs/order-plan-tab';
 import { OrderOperationsTab } from '@/components/orders/tabs/order-operations-tab';
 import { OrderSummaryTab } from '@/components/orders/tabs/order-summary-tab';
 import { OrderNeedsTab } from '@/components/orders/view/tabs/order-needs-tab';
+import { OrderSignalSampleTab } from '@/components/orders/view/tabs/order-signal-sample-tab';
 import { OrderHistoryTab } from '@/components/orders/view/tabs/order-history-tab';
 
 export const dynamic = 'force-dynamic';
@@ -153,6 +155,9 @@ export default async function AdminOrderDetailPage({
           <>
             <OrderManagementHeader order={order} passports={passports} />
             <OrderActionCenter order={order} passports={passports} />
+            {order.constructorTask && (
+              <OrderConstructorTaskCard task={order.constructorTask} />
+            )}
           </>
         }
         tabs={<OrderViewTabs orderId={order.id} activeTab={activeTab} />}
@@ -230,6 +235,21 @@ export default async function AdminOrderDetailPage({
           </div>
         )}
 
+        {activeTab === 'signalSample' && (
+          <div className="order-tab-panel">
+            {/*
+              Вкладка «Сигнальный образец» (MVP, см.
+              `docs/order-signal-sample-flow.md`,
+              `docs/order-signal-sample-recon.md`).
+
+              Запуск образца, согласование / отклонение / отмена,
+              отображение эффекта на тираж. backend модуль —
+              `apps/api/src/modules/order-samples/*`.
+            */}
+            <OrderSignalSampleTab order={order} canManage={isManager} />
+          </div>
+        )}
+
         {activeTab === 'history' && (
           <div className="order-tab-panel">
             {/*
@@ -252,6 +272,7 @@ export default async function AdminOrderDetailPage({
           activeTab !== 'operations' &&
           activeTab !== 'costSummary' &&
           activeTab !== 'needs' &&
+          activeTab !== 'signalSample' &&
           activeTab !== 'history' && (
             <OrderTabEmptyState
               title="Раздел не найден"

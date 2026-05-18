@@ -3,6 +3,7 @@ import { notFound } from 'next/navigation';
 import { ArrowLeft, ClipboardList } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { listPatterns } from '@/lib/patterns-api';
+import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { getTechCard } from '@/lib/tech-cards-api';
 import {
   AdminCard,
@@ -60,6 +61,18 @@ export default async function AdminTechCardDetailPage({ params }: Params) {
   } catch {
     patternItems = [];
   }
+  let patternCategories: { id: string; name: string }[] = [];
+  try {
+    const list = await listPatternCategories({ status: 'ACTIVE' });
+    if (Array.isArray(list)) {
+      patternCategories = list.map((c) => ({
+        id: String(c?.id ?? ''),
+        name: String(c?.name ?? ''),
+      }));
+    }
+  } catch {
+    patternCategories = [];
+  }
 
   return (
     <AdminPageShell
@@ -87,6 +100,7 @@ export default async function AdminTechCardDetailPage({ params }: Params) {
           mode="edit"
           template={template}
           patternItems={patternItems}
+          patternCategories={patternCategories}
         />
       </AdminCard>
 
