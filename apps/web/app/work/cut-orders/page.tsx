@@ -40,11 +40,14 @@ export default async function WorkCutOrdersPage({
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/work/cut-orders');
 
-  // Демо-режим серийного выпуска паспортов отличается только конечной
-  // страницей: вместо `/passports/new` ведём на `/passports/new-demo`.
-  // Логика выбора заказа (один/много/ни одного) не меняется.
-  const isDemo = searchParams?.mode === 'demo';
-  const newPassportPath = isDemo ? 'new-demo' : 'new';
+  // Серийный выпуск (размер + сетка по рулонам) — основной путь
+  // помощника раскройщика. Технически он включается query-параметром
+  // `mode=demo` (исторический ключ, не выпиливаем — лишний риск ради
+  // переименования маршрута): вместо `/passports/new` ведём на
+  // `/passports/new-demo`. Логика выбора заказа (один/много/ни одного)
+  // не меняется; одиночный `new` остаётся доступен прямым URL.
+  const isSerial = searchParams?.mode === 'demo';
+  const newPassportPath = isSerial ? 'new-demo' : 'new';
 
   let items: OrderListItemDto[] = [];
   let error: string | null = null;
@@ -70,9 +73,7 @@ export default async function WorkCutOrdersPage({
         <Link href="/work" className="cut-orders__back" aria-label="Назад">
           ←
         </Link>
-        <h1 className="cut-orders__title">
-          {isDemo ? 'Выберите заказ (демо)' : 'Выберите заказ'}
-        </h1>
+        <h1 className="cut-orders__title">Выберите заказ</h1>
       </header>
 
       {error && (

@@ -210,13 +210,18 @@ export function ActiveShiftPanel({ shift }: Props) {
  * визуального уровня:
  *
  *   1. **«Выпустить паспорт»** — переход к упрощённому выбору заказа
- *      на раскрое (`/work/cut-orders`). Этот server-route сам решает,
- *      что показать дальше:
+ *      на раскрое (`/work/cut-orders?mode=demo`). Этот server-route
+ *      сам решает, что показать дальше:
  *        - один заказ в `IN_PRODUCTION` → сразу `redirect` на
- *          `/orders/:id/passports/new` (помощник не выбирает руками);
+ *          `/orders/:id/passports/new-demo` (серийный выпуск: размер +
+ *          сетка по рулонам; помощник не выбирает заказ руками);
  *        - несколько заказов → короткий список карточек по названию
  *          позиции;
  *        - ни одного → empty state «Нет заказов на раскрое».
+ *      В том же блоке вторичная ссылка «Выпущенные паспорта»
+ *      (`/work/passports`). Одиночный выпуск
+ *      (`/orders/:id/passports/new`) остаётся в коде, но из этой
+ *      панели на него ссылки нет (UI-решение владельца).
  *
  *   2. **«Разместить на стеллаж»** — scan-driven session-flow без
  *      перехода на отдельный route. Открывает камеру → confirm-модалка
@@ -248,16 +253,25 @@ export function CutterAssistantWorkPanel() {
 
   return (
     <div className="seamstress-work cutter-assistant-work">
+      {/*
+       * Единственный блок выпуска: серийный выпуск паспортов (выбор
+       * размера, сетка по рулонам, одна кнопка). Ведёт на выбор заказа
+       * с `mode=demo` — `/work/cut-orders` отрешает на
+       * `/orders/:id/passports/new-demo`. Одиночный выпуск
+       * (`/orders/:id/passports/new`) остаётся в коде, но из панели
+       * помощника на него ссылки больше нет — сознательное UI-решение
+       * владельца (см. `docs/cutter-assistant-passport-release-recon.md`).
+       */}
       <div className="scan-card scan-card--simple">
         <div>
           <h2 className="scan-card__title">Выпустить паспорт</h2>
           <p className="scan-card__hint">
-            Откройте заказ на раскрое — паспорт будет создан в один тап.
+            Серийный выпуск: выбор размера, сетка по рулонам, одна кнопка.
           </p>
         </div>
         <Link
           className="btn btn-primary btn-lg btn-block"
-          href="/work/cut-orders"
+          href="/work/cut-orders?mode=demo"
           prefetch={false}
         >
           Выпустить паспорт
@@ -278,28 +292,6 @@ export function CutterAssistantWorkPanel() {
           prefetch={false}
         >
           Выпущенные паспорта
-        </Link>
-      </div>
-
-      {/*
-       * Демо-вариант серийного выпуска паспортов: размер + сетка рулонов
-       * + одна кнопка «Выпустить паспорта». Лежит рядом с обычной
-       * кнопкой, ведёт на тот же выбор заказа, но с `mode=demo` —
-       * `/work/cut-orders` отрешает на `/orders/:id/passports/new-demo`.
-       */}
-      <div className="scan-card scan-card--simple">
-        <div>
-          <h2 className="scan-card__title">Выпустить паспорт (демо)</h2>
-          <p className="scan-card__hint">
-            Серийный выпуск: выбор размера, сетка по рулонам, одна кнопка.
-          </p>
-        </div>
-        <Link
-          className="btn btn-primary btn-lg btn-block"
-          href="/work/cut-orders?mode=demo"
-          prefetch={false}
-        >
-          Выпустить паспорт
         </Link>
       </div>
 

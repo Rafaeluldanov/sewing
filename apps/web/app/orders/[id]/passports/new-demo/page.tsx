@@ -10,9 +10,11 @@ import { NewPassportDemoForm } from './new-passport-demo-form';
 export const dynamic = 'force-dynamic';
 
 /**
- * Демо-режим выпуска паспортов: помощник раскройщика выбирает размер,
+ * Серийный выпуск паспортов: помощник раскройщика выбирает размер,
  * указывает количество рулонов, заполняет сетку количеств по рулонам и
  * одним нажатием выпускает серию паспортов на выбранный размер.
+ * (Маршрут `new-demo` — исторический ключ; не переименовываем, чтобы
+ * не трогать рабочий контракт. UI слова «демо» больше не содержит.)
  *
  * Контракт с backend не меняем — внутри server action крутится цикл
  * по существующему `POST /api/passports` (по паспорту на каждый рулон
@@ -68,7 +70,7 @@ export default async function NewPassportDemoPage({
   return (
     <div>
       <div className="page-header">
-        <h1>Демо: выпуск паспортов по заказу {order.number}</h1>
+        <h1>Выпуск паспортов по заказу {order.number}</h1>
         <Link className="btn" href={backHref}>
           {backLabel}
         </Link>
