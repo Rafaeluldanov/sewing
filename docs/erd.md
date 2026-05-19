@@ -1281,6 +1281,43 @@ master-action'ом, удаление, упаковка прямо из ячей�
 
 ---
 
+### 3.11 ConstructorTask / ConstructorTaskSizeRow / ConstructorTaskFile
+
+Источник: `prisma/schema.prisma::ConstructorTask` /
+`ConstructorTaskSizeRow` / `ConstructorTaskFile`,
+`apps/api/src/modules/constructor-tasks/*`,
+`docs/api.md §10a «Constructor tasks»`.
+
+- Заявка конструктору на этапе «Отправить изделие конструктору» +
+  кабинет конструктора (`apps/web/app/constructor/`).
+- `ConstructorTask` 1:1 с `PatternItem` (`patternItemId @unique`,
+  `onDelete: Cascade`). Жизненный цикл в свободной строке `status`
+  (см. `@sewing/shared/constructor-tasks::CONSTRUCTOR_TASK_STATUSES`):
+  `NEW → IN_PROGRESS → PENDING_ACCEPT → DONE`, плюс `REWORK`
+  (возврат менеджером) и `CANCELLED`. DRAFT-фазы у задачи нет —
+  модалка либо сохраняет, либо ничего (orphan-DRAFT не плодим).
+- Актор-поля nullable с `onDelete: SetNull` (удаление сотрудника не
+  сносит аудиторскую запись задачи): `createdById` (менеджер,
+  relation `ConstructorTaskCreatedBy`), `assignedToId` (конструктор,
+  relation `ConstructorTaskAssignedTo`). Тайминги: `submittedAt`
+  (в MVP == `createdAt`), `acceptedAt` (приёмка `PENDING_ACCEPT →
+  DONE`; сбрасывается в `null` при rework).
+- `ConstructorTaskSizeRow` — строки таблицы «Размер / Кулирка /
+  Кашкорсе» (погонные метры на изделие). FK `sizeId` nullable
+  (`onDelete: SetNull`) + `sizeCodeSnapshot` (защита от
+  переименования/удаления `Size`). UNIQUE `(taskId, sizeId)`. На
+  сохранении backend создаёт `PatternMaterialArea` с конверсией
+  `areaM2 = linearMeters × CONSTRUCTOR_TASK_DEFAULT_FABRIC_WIDTH_M`.
+- `ConstructorTaskFile` — вложения (`onDelete: Cascade`), формат не
+  ограничен (валидация только по размеру). `direction` (`INITIAL` —
+  бриф менеджера при `saveDraft`; `REWORK` — файлы возврата при
+  `requestRework`); nullable для обратной совместимости (старые
+  записи UI трактует как `INITIAL`).
+- См. `docs/current-state.md` (роль `CONSTRUCTOR` + кабинет
+  `/constructor`).
+
+---
+
 ## 4. Что НЕ описано в этом документе (умышленно)
 
 PHASE 1 не повторяет:

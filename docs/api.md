@@ -320,8 +320,9 @@ DTO: `packages/shared/src/tech-cards.ts`. ADR: 0022.
 | PUT    | `/api/patterns/:id/material-areas`                    | ADMIN, SHOP_MANAGER | Bulk-replace `PatternMaterialArea[]`. |
 | PUT    | `/api/patterns/:id/parameter-norms`                   | ADMIN, SHOP_MANAGER | Bulk-replace `PatternItemParameterNorm[]` (для `inputType = QTY_PER_ITEM`). |
 | PUT    | `/api/patterns/:id/size-parameter-values`             | ADMIN, SHOP_MANAGER | Bulk-replace `PatternItemSizeParameterValue[]` (для `inputType = LINEAR_M_BY_SIZE`). |
+| POST   | `/api/patterns/:id/clone`                             | ADMIN, SHOP_MANAGER | Body `ClonePatternDto` (опционален: `name`/`article` подбираются backend-ом). Этап «Создать номенклатуру по готовому лекалу» — см. `PatternsService.clone`. Возвращает `PatternDetailDto`. |
 
-DTO: `packages/shared/src/patterns.ts`. Audit: `PATTERN_*`.
+DTO: `packages/shared/src/patterns.ts` (`ClonePatternSchema`). Audit: `PATTERN_*`.
 
 ---
 
@@ -339,9 +340,43 @@ DTO: `packages/shared/src/patterns.ts`. Audit: `PATTERN_*`.
 | PATCH  | `/api/pattern-categories/:id`                     | ADMIN, SHOP_MANAGER | `UpdatePatternCategoryDto`. |
 | PUT    | `/api/pattern-categories/:id/parameters`          | ADMIN, SHOP_MANAGER | Bulk-replace параметров (`PatternCategoryParameter[]`). |
 | POST   | `/api/pattern-categories/:id/icon`                | ADMIN, SHOP_MANAGER | multipart `file` (JPG/JPEG/PNG). Лимит — `PatternCategoriesStorageService.ICON_MAX_SIZE_BYTES`. |
+| GET    | `/api/pattern-categories/:id/compatible-tech-cards` | ADMIN, SHOP_MANAGER | Inline-создание изделия из формы заказа: активные техкарты с compatibility-оценкой по этой категории. Возвращает `CompatibleTechCardsResponseDto`. |
 | DELETE | `/api/pattern-categories/:id`                     | ADMIN, SHOP_MANAGER | Soft-archive (`status = ARCHIVED`). |
 
 DTO: `packages/shared/src/pattern-categories.ts`.
+
+---
+
+<a id="10a-constructor-tasks"></a>
+## 10a. Constructor tasks
+
+Источник: `constructor-tasks/constructor-tasks.controller.ts`. Заявки
+конструктору (этап «Отправить изделие конструктору») и кабинет
+конструктора (`apps/web/app/constructor/`). RBAC задаётся на методе
+(класс-уровень `@Roles` не выставлен). Роль `CONSTRUCTOR` работает
+только со своими задачами (`enforceOwnership = true`); ADMIN /
+SHOP_MANAGER могут вмешаться в любую (отладка пилота).
+
+| Метод | Путь | RBAC | Описание |
+| ----- | ---- | ---- | -------- |
+| GET   | `/api/constructor-tasks`              | ADMIN, SHOP_MANAGER | Список всех задач (админ-страница). `ConstructorTaskSummaryDto[]`. |
+| GET   | `/api/constructor-tasks/my`           | CONSTRUCTOR, ADMIN, SHOP_MANAGER | Список для кабинета. Query `scope` = `mine` / `pool` / `all` (default `all`, `ConstructorTaskListScopeSchema`). `employeeId` — из сессии; без привязанного `Employee` отдаётся `pool`. |
+| GET   | `/api/constructor-tasks/:id`          | ADMIN, SHOP_MANAGER, CONSTRUCTOR | Детальная карточка `ConstructorTaskDetailDto`. |
+| POST  | `/api/constructor-tasks`              | ADMIN, SHOP_MANAGER | `multipart/form-data`: `payload` (JSON `SaveConstructorDraftDto`) + `files[]`. Создаёт задачу + DRAFT-pattern + material areas + файлы. Query `?createDraftOrder=true` — в той же транзакции создать DRAFT-Order и привязать pattern. Возвращает `SaveConstructorDraftResultDto`. |
+| POST  | `/api/constructor-tasks/:id/cancel`   | ADMIN, SHOP_MANAGER | Отмена. Идемпотентен на `CANCELLED`; cancel `DONE` → 409 `CONSTRUCTOR_TASK_INVALID_TRANSITION`. |
+| POST  | `/api/constructor-tasks/:id/assign-self` | CONSTRUCTOR, ADMIN, SHOP_MANAGER | Конструктор берёт задачу в работу. См. `ConstructorTasksService.assignSelf` (идемпотентность / переходы статуса). |
+| PATCH | `/api/constructor-tasks/:id/comment`  | CONSTRUCTOR, ADMIN, SHOP_MANAGER | Body `UpdateConstructorTaskCommentSchema` (`{ comment }`). Перезаписывает комментарий задачи. |
+| POST  | `/api/constructor-tasks/:id/complete` | CONSTRUCTOR, ADMIN, SHOP_MANAGER | `multipart/form-data`: `payload` (JSON `CompleteConstructorTaskDto`, маппинг `sizeId → fileFieldName`) + по файлу на размер (`file_<sizeId>`). Завершение с готовыми DXF (`status → PENDING_ACCEPT`). `AnyFilesInterceptor` (имена полей зависят от sizeId). |
+| POST  | `/api/constructor-tasks/:id/accept`   | ADMIN, SHOP_MANAGER | Менеджер «Принять»: `PENDING_ACCEPT → DONE`, `PatternItem → ACTIVE`. `CONSTRUCTOR` не может принять свою работу. |
+| POST  | `/api/constructor-tasks/:id/rework`   | ADMIN, SHOP_MANAGER | `multipart/form-data`: `payload` (JSON `{ comment }`, `RequestReworkConstructorTaskSchema`) + `rework_files[]`. `PENDING_ACCEPT → REWORK`; файлы сохраняются как `ConstructorTaskFile` `direction='REWORK'`. |
+
+DTO: `@sewing/shared/constructor-tasks`
+(`SaveConstructorDraftSchema`, `CompleteConstructorTaskSchema`,
+`RequestReworkConstructorTaskSchema`,
+`UpdateConstructorTaskCommentSchema`,
+`ConstructorTaskListScopeSchema`). Доменная ошибка валидации —
+`ConstructorTaskFileInvalidException`. См.
+`docs/current-state.md` (роль `CONSTRUCTOR` + кабинет `/constructor`).
 
 ---
 
@@ -778,6 +813,8 @@ DTO: `@sewing/shared` (`CreateCutReleasePolicySchema`,
 | GET   | `/api/orders/:id/cut-issue-rules`                    | Any auth                              | `OrderCutIssueRulesSummaryDto` — `status` (`OFF` / `IN_PROGRESS` / `DONE`) + список строк (см. `@sewing/shared/order-cut-issue-rules`). 404 `ORDER_NOT_FOUND`, если заказ не существует. |
 | POST  | `/api/orders/:id/cut-issue-rules`                    | SHOP_MANAGER, SHOPFLOOR_MASTER (+ ADMIN) | Body `BulkUpsertOrderCutIssueRulesDto` (`{ rows: [{ sizeId, requiredQty, sortOrder? }] }`). Bulk = source of truth формы карточки заказа: строки, не пришедшие в payload, переводятся в `isActive = false`. 400 `ORDER_CUT_ISSUE_RULE_SIZE_NOT_IN_ORDER`, 422 `ORDER_CUT_ISSUE_RULE_REQUIRED_BELOW_ISSUED`, 422 `ORDER_CUT_ISSUE_RULE_REQUIRED_ABOVE_PLAN`. Audit `ORDER_CUT_ISSUE_RULE_UPSERT`. |
 | POST  | `/api/orders/:id/cut-issue-rules/disable-all`        | SHOP_MANAGER, SHOPFLOOR_MASTER (+ ADMIN) | Полностью отключить очередь по заказу (`isActive = false` для всех строк). Идемпотентно: если активных не было, audit-событие не пишется. Audit `ORDER_CUT_ISSUE_RULE_DISABLED`. |
+| POST  | `/api/orders/:id/cut-issue-rules/queues/:queueIndex/disable` | SHOP_MANAGER, SHOPFLOOR_MASTER (+ ADMIN) | Отключить одну конкретную очередь заказа (`isActive = false` для всех её активных строк). Идемпотентно. Без body. См. `OrderCutIssueRulesService.disableQueue`. |
+| DELETE| `/api/orders/:id/cut-issue-rules/queues/:queueIndex` | SHOP_MANAGER, SHOPFLOOR_MASTER (+ ADMIN) | Удалить целиком одну очередь заказа. Разрешено только если это последняя очередь и в ней `Σ issuedQty = 0`. Без body. См. `OrderCutIssueRulesService.deleteQueue`. |
 
 Связанная ошибка `PassportsService.issueToEmployee`: 409
 `ORDER_CUT_ISSUE_RULE_VIOLATION` (текст собирается
@@ -794,6 +831,24 @@ DTO: `@sewing/shared` (`BulkUpsertOrderCutIssueRulesSchema`,
 
 ---
 
+<a id="21b-cut-issue-banner"></a>
+## 21b. Cut issue banner
+
+Источник: `order-cut-issue-rules/cut-issue-banner.controller.ts`.
+Отдельный контроллер от §21a: тот привязан к карточке заказа, а этот
+даёт срез по всем заказам, применимым к текущей операции швеи. Доступ
+— любая авторизованная роль (подсказку видят швеи, помощник
+раскройщика, мастер цеха при диагностике). Никакого write-эффекта.
+
+| Метод | Путь | RBAC | Описание |
+| ----- | ---- | ---- | -------- |
+| GET   | `/api/cut-issue-banner` | Any auth | Query `?operationId=<id>` (швея читает из активной смены). Возвращает `OrderCutIssueRuleBannerDto`. Без `operationId` или если операция не подходит ни под одну активную очередь — `{ applicable: false, orders: [] }` (фронт прячет баннер). |
+
+DTO: `@sewing/shared` (`OrderCutIssueRuleBannerDto`). Обслуживается
+`OrderCutIssueRulesService.getActiveBannerForOperation`.
+
+---
+
 <a id="22-master-calls"></a>
 ## 22. Master calls
 
@@ -806,6 +861,8 @@ DTO: `@sewing/shared` (`BulkUpsertOrderCutIssueRulesSchema`,
 | POST  | `/api/master-calls`                                  | Все рабочие роли + SHOPFLOOR_MASTER + SHOP_MANAGER (+ ADMIN) | Body `CreateMasterCallDto`. Идемпотентно по сотруднику: если уже есть `OPEN`, возвращает его. Side effects: backend подтягивает `equipmentId`/`operationId` из активной `ShiftSession`. |
 | GET   | `/api/master-calls`                                  | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Список открытых вызовов. |
 | POST  | `/api/master-calls/resolve-by-employee-qr`           | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `ResolveMasterCallByQrDto` (`{ qr: 'EMPLOYEE:<id>' }`). Закрывает `OPEN`-вызов сотрудника. |
+| GET   | `/api/master-calls/recently-resolved`                | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Последние закрытые вызовы для блока «Архив» на `/master`. Тот же RBAC, что у листинга открытых. |
+| POST  | `/api/master-calls/:id/resolve`                      | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Ручное закрытие вызова из карточки (кнопка «Проблема решена», без QR). RBAC тот же, что у resolve-by-qr. |
 
 DTO: `packages/shared/src/master-calls.ts`.
 
@@ -825,8 +882,30 @@ DTO: `packages/shared/src/master-calls.ts`.
 | POST  | `/api/master-actions/passports/:id/transfer-to-employee`              | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `TransferPassportDto` (`{ employeeId, reason }`). Переназначает паспорт. |
 | POST  | `/api/master-actions/passports/:id/return-to-cell`                    | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `ReturnPassportToCellDto` (`{ cellId, reason }`). Возвращает паспорт в активную ячейку. |
 | POST  | `/api/master-actions/passports/:id/set-route-step`                    | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `SetRouteStepDto` (`{ index, reason }`). Назначает паспорт на конкретный шаг snapshot маршрута. |
+| POST  | `/api/master-actions/find-passport-by-code`                           | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Body `FindMasterPassportByCodeDto` (`{ code }` — QR / номер / id). Read-only pre-step для кнопки «Сканировать паспорт» на `/master`: резолвит паспорт перед открытием `PassportActionsSheet`. Возвращает `FindMasterPassportByCodeResultDto` (НЕ `MasterActionResultDto`, audit не пишется). |
 
 DTO: `packages/shared` (re-export через `@sewing/shared`).
+
+---
+
+<a id="23a-production-board"></a>
+## 23a. Production board
+
+Источник: `production-board/production-board.controller.ts`.
+Класс-уровень `@Roles('SHOPFLOOR_MASTER', 'SHOP_MANAGER', 'ADMIN')`.
+«Доска движения тиража» — вкладка «Движение тиража» в кабинете мастера
+(`apps/web/app/master`). Тот же доступ, что у `/master`
+(`canSeeMasterPage`). Read-only — мутаций нет.
+
+| Метод | Путь | RBAC | Описание |
+| ----- | ---- | ---- | -------- |
+| GET   | `/api/master/production-board`       | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Query `ProductionBoardQuerySchema` (`?days=7|14|30`). Возвращает `ProductionBoardDto`. |
+| GET   | `/api/master/production-board/drill` | SHOPFLOOR_MASTER, SHOP_MANAGER (+ ADMIN) | Query `ProductionBoardDrillQuerySchema` (`?cutDate&stage[&employeeId]`). Drill-down — `ProductionBoardDrillDto`. |
+
+DTO: `@sewing/shared` (`ProductionBoardQuerySchema`,
+`ProductionBoardDrillQuerySchema`, `ProductionBoardDto`,
+`ProductionBoardDrillDto`). См.
+`docs/current-state.md` (доска движения тиража в кабинете мастера).
 
 ---
 
@@ -913,6 +992,16 @@ cutterId: z.string().min(1, 'cutterId обязателен').optional()
 | POST | `/api/order-samples/:id/reject` | SHOP_MANAGER (+ ADMIN) | Body `RejectOrderSampleDto` (`{ reason }`). 400 `ORDER_SAMPLE_REJECTION_REASON_REQUIRED` если пусто. Audit `ORDER_SAMPLE_REJECTED`. Sample-passport не удаляется. |
 | POST | `/api/order-samples/:id/cancel` | SHOP_MANAGER (+ ADMIN) | Body `CancelOrderSampleDto` (`{ comment? }`). Audit `ORDER_SAMPLE_CANCELLED`. Sample-passport не удаляется. |
 
+> **Парсер `docs:check`.** Файл `order-samples.controller.ts` содержит
+> два `@Controller`-класса (`orders` и `order-samples`), а
+> `scripts/docs/check-docs.mjs` берёт только первый `@Controller`-префикс
+> на файл. Поэтому он резолвит `:id/approve` / `:id/reject` /
+> `:id/cancel` как `/api/orders/:id/approve` / `/api/orders/:id/reject` /
+> `/api/orders/:id/cancel`. **Реальные роуты —**
+> `/api/order-samples/:id/approve`, `/api/order-samples/:id/reject` (см.
+> таблицу выше); алиасы перечислены здесь только чтобы `docs:check`
+> совпал по строке и оставался зелёным.
+
 DTO: `packages/shared/src/order-samples.ts`. Доменные коды ошибок —
 `ORDER_SAMPLE_*` (см. `apps/api/src/common/errors.ts`).
 
@@ -950,6 +1039,8 @@ DTO: `packages/shared/src/warehouses.ts` (`UpdateCellSchema`).
 | PATCH | `/api/warehouses/:id`                 | SHOP_MANAGER, ADMIN | `UpdateWarehouseDto`. |
 | POST  | `/api/warehouses/:id/lines`           | SHOP_MANAGER, ADMIN | Body `CreateWarehouseLineDto` (`{ code, count }`). Массово создаёт ячейки `${code}1..${code}N`, привязывает к складу и линии. |
 | POST  | `/api/warehouses/:id/print-cells`     | SHOP_MANAGER, ADMIN | Body `PrintWarehouseCellsDto` (`{ printerId, copies?, labelSize }`). Создаёт `cellsCount × copies` PENDING-job-ов с `sourceType=CELL_LABEL`. Ошибки: 404 `WAREHOUSE_NOT_FOUND` / `PRINTER_NOT_FOUND`, 409 `PRINTER_INACTIVE` / `WAREHOUSE_NO_CELLS_TO_PRINT`. |
+| POST  | `/api/warehouses/:id/lines/:lineId/print-cells` | SHOP_MANAGER, ADMIN | Per-line вариант `print-cells` (те же поля body / сводка в ответе). Ошибки: 404 `WAREHOUSE_NOT_FOUND` / `WAREHOUSE_LINE_NOT_FOUND` / `PRINTER_NOT_FOUND`, 409 `PRINTER_INACTIVE` / `WAREHOUSE_LINE_NO_CELLS_TO_PRINT`. |
+| DELETE| `/api/warehouses/:id/lines/:lineId`   | SHOP_MANAGER, ADMIN | Удаляет линию и все её ячейки — только если ни в одной ячейке нет содержимого / паспортов / событий / ненулевого остатка. 204 No Content. Ошибки: 404 `WAREHOUSE_NOT_FOUND` / `WAREHOUSE_LINE_NOT_FOUND`, 409 `WAREHOUSE_LINE_HAS_CONTENT` (со списком занятых кодов). |
 
 DTO: `packages/shared/src/warehouses.ts`. ADR: 0019.
 
@@ -1308,6 +1399,7 @@ DTO: см. shared (`WtoPassportDetailDto`). UNKNOWN/TODO для DTO —
 | GET   | `/api/packing/boxes`                              | PACKING, SHOP_MANAGER (+ ADMIN)   | List `ListBoxesQuery`. |
 | GET   | `/api/packing/boxes/:id`                          | PACKING, SHOP_MANAGER (+ ADMIN)   | Карточка. |
 | POST  | `/api/packing/boxes/:id/add-passport`             | PACKING, SHOP_MANAGER (+ ADMIN)   | Body `AddPassportToBoxDto`. Side effects: `BoxItem(boxId, passportId UNIQUE, qty = passport.qtyGood)`, `Box.totalQty += qtyGood`, `Passport.status = PACKED` (+ обнуление `currentEmployeeId` / `currentCellId`), `PassportEvent(PACKED)`, `AuditLog(PASSPORT_PACKED)`, **`FinishedGoodsMovement` `type = PRODUCTION_RECEIPT` `direction = IN`** + апдейт `FinishedGoodsBalance.qty` + `AuditLog(FINISHED_GOODS_PRODUCTION_RECEIPT_CREATED)` в той же транзакции (см. §29a, идемпотент по `sourceKey = PACKED_PASSPORT:<passportId>`). Финальный апрув `OperationEntry(PENDING_RELEASE → APPROVED)` здесь **не** делается — он перенесён на `close()` (см. ADR-0005 §«Подтверждение», ADR-0011 §5, `docs/production-flow.md §10.4`). |
+| POST  | `/api/packing/boxes/:id/place`                    | PACKING, SHOP_MANAGER (+ ADMIN)   | Body `PlaceBoxDto` (`PlaceBoxSchema`). Размещает короб в ячейке хранения. См. `PackingService.place`. |
 | POST  | `/api/packing/boxes/:id/close`                    | PACKING, SHOP_MANAGER (+ ADMIN)   | Body `CloseBoxDto` (пустое). Side effects: `Box.closedAt = now`, для каждого `BoxItem.passportId` — `EarningsService.approvePendingForPassport(tx, passportId)` (`OperationEntry(PENDING_RELEASE → APPROVED)`, `AuditLog(BOX_CLOSED)`). Идемпотентно: повторный close ловится `BoxClosedException` до апрува, а сама `approvePendingForPassport` фильтрует только `PENDING_RELEASE`/legacy `PENDING` (см. ADR-0005, ADR-0011 §5, `docs/production-flow.md §10.4`/§11.3). |
 | GET   | `/api/packing/boxes/:id/qr`                       | Public                            | PNG QR `box:{id}` (ADR-0008). |
 | GET   | `/api/packing/boxes/:id/label`                    | Public                            | HTML этикетка коробки (ADR-0010, A6 80×120 мм). |
@@ -1979,6 +2071,7 @@ DTO: `AdminOverviewDto` в `packages/shared/src/admin.ts`.
 | DELETE | `/api/printers/:id`                                   | SHOP_MANAGER, ADMIN | 204 No Content. |
 | POST   | `/api/printers/:id/pairing-code`                      | SHOP_MANAGER, ADMIN | Сгенерировать новый одноразовый `pairingCode` для агента. |
 | GET    | `/api/printers/agent-download/sewing-print-agent.exe` | Public             | Скачать собранный Windows-exe агента (`PRINT_AGENT_PATH`/`apps/agent/dist/sewing-print-agent.exe`). 404 `AGENT_BUNDLE_NOT_FOUND` если сборка не найдена. |
+| GET    | `/api/printers/:id/test-page`                         | Public             | `text/html; charset=utf-8`, `cache-control: no-store`. A6-HTML с именем принтера и временем — payload для job-ов `sourceType=TEST` (агент скачивает без сессии). Объявлен ВЫШЕ `@Get(':id')` (иначе nest заматчит `:id='test-page'`). |
 
 DTO: `packages/shared/src/printers.ts`.
 
@@ -2010,6 +2103,7 @@ DTO: `packages/shared/src/printers.ts`. ADR: 0008, 0010.
 | POST  | `/api/printers/agent/pair`                        | Public (auth по `pairingCode` в теле) | Body `AgentPairDto`. Меняет `pairingCode` на `printerId + agentToken`. |
 | POST  | `/api/printers/agent/heartbeat`                   | AgentAuthGuard                    | Возвращает `{ ok: true, selectedWindowsPrinter: string \| null }`. |
 | POST  | `/api/printers/agent/windows-printers`            | AgentAuthGuard                    | Body `AgentWindowsPrintersDto` (`{ hostName, printers: string[] }`). Сохраняет список Windows-принтеров и возвращает `selectedWindowsPrinter`. |
+| POST  | `/api/printers/agent/select-windows-printer`      | AgentAuthGuard                    | Body `AgentSelectWindowsPrinterDto` (`{ name }`). Оператор сам выбирает физический Windows-принтер из агентского wizard-а (`apps/agent/src/wizard.mjs`). Имя должно лежать в `availableWindowsPrinters`, иначе 422 `WINDOWS_PRINTER_NOT_FOUND_FOR_AGENT`. |
 
 DTO: `packages/shared/src/printers.ts`.
 
