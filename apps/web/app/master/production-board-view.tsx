@@ -63,7 +63,7 @@ function StageCell({
 }: {
   c: ProductionBoardCohortDto;
   bucket: ProductionBoardStageBucketDto;
-  onOpen: (cutDate: string, stage: string) => void;
+  onOpen: (issueDate: string, stage: string) => void;
 }) {
   const empty = bucket.employees.length === 0;
   const top = bucket.employees
@@ -80,7 +80,7 @@ function StageCell({
         <button
           type="button"
           className="pboard__cell"
-          onClick={() => onOpen(c.cutDate, bucket.code)}
+          onClick={() => onOpen(c.issueDate, bucket.code)}
         >
           <div className="pboard__cell-top">
             {bucket.passports}{' '}
@@ -109,7 +109,7 @@ function ReleasedCell({
   onOpen,
 }: {
   c: ProductionBoardCohortDto;
-  onOpen: (cutDate: string, stage: string) => void;
+  onOpen: (issueDate: string, stage: string) => void;
 }) {
   const pct = c.issuedPassports
     ? Math.round((c.releasedPassports / c.issuedPassports) * 100)
@@ -118,7 +118,7 @@ function ReleasedCell({
     <button
       type="button"
       className="pboard__cell pboard__cell--released"
-      onClick={() => onOpen(c.cutDate, PRODUCTION_BOARD_RELEASED)}
+      onClick={() => onOpen(c.issueDate, PRODUCTION_BOARD_RELEASED)}
     >
       <div className="pboard__cell-top">
         {c.releasedPassports} <span className="pboard__muted">пасп</span>
@@ -152,10 +152,10 @@ export function ProductionBoardView() {
   }, [days, load]);
 
   const openDrill = useCallback(
-    async (cutDate: string, stage: string) => {
+    async (issueDate: string, stage: string) => {
       setDrillLoading(true);
       setDrill(null);
-      const r = await loadProductionBoardDrillAction({ cutDate, stage });
+      const r = await loadProductionBoardDrillAction({ issueDate, stage });
       if (r.ok) setDrill(r.data);
       else setError(r.error);
       setDrillLoading(false);
@@ -166,7 +166,7 @@ export function ProductionBoardView() {
   return (
     <div className="pboard">
       <div className="pboard__bar">
-        <span className="pboard__muted">Период кроя:</span>
+        <span className="pboard__muted">Период выдачи:</span>
         {PERIODS.map((p) => (
           <button
             key={p}
@@ -208,7 +208,7 @@ export function ProductionBoardView() {
             <table className="pboard__table">
               <thead>
                 <tr>
-                  <th className="pboard__rowhead">Дата кроя</th>
+                  <th className="pboard__rowhead">Дата выдачи</th>
                   {board.stages.map((s) => (
                     <th key={s.code}>
                       {s.label}
@@ -222,9 +222,9 @@ export function ProductionBoardView() {
               </thead>
               <tbody>
                 {board.cohorts.map((c) => (
-                  <tr key={c.cutDate}>
+                  <tr key={c.issueDate}>
                     <td className="pboard__rowhead">
-                      <div className="pboard__date">{c.cutDate}</div>
+                      <div className="pboard__date">{c.issueDate}</div>
                       <div className="pboard__order">{c.orderLabel}</div>
                       <ReconBlock c={c} />
                     </td>
@@ -245,19 +245,19 @@ export function ProductionBoardView() {
           {/* ===== Мобайл: аккордеон ===== */}
           <div className="pboard__mobile">
             {board.cohorts.map((c) => {
-              const isOpen = openAcc === c.cutDate;
+              const isOpen = openAcc === c.issueDate;
               return (
-                <div key={c.cutDate} className="pboard__acc">
+                <div key={c.issueDate} className="pboard__acc">
                   <button
                     type="button"
                     className="pboard__acc-head"
                     onClick={() =>
-                      setOpenAcc(isOpen ? null : c.cutDate)
+                      setOpenAcc(isOpen ? null : c.issueDate)
                     }
                     aria-expanded={isOpen}
                   >
                     <div>
-                      <div className="pboard__date">{c.cutDate}</div>
+                      <div className="pboard__date">{c.issueDate}</div>
                       <div className="pboard__order">{c.orderLabel}</div>
                       <ReconBlock c={c} />
                     </div>
@@ -322,7 +322,7 @@ export function ProductionBoardView() {
               <div>
                 <div className="pboard__panel-title">
                   {drill
-                    ? `${drill.stageLabel} · ${drill.cutDate}`
+                    ? `${drill.stageLabel} · ${drill.issueDate}`
                     : 'Загрузка…'}
                 </div>
                 {drill && (

@@ -25,7 +25,7 @@ export function getProductionBoardDrill(
   return apiFetch<ProductionBoardDrillDto>('/master/production-board/drill', {
     cache: 'no-store',
     searchParams: {
-      cutDate: query.cutDate,
+      issueDate: query.issueDate,
       stage: query.stage,
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
     },

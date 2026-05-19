@@ -4,20 +4,31 @@
  * в `apps/web/app/master`).
  *
  * Назначение: дать `SHOPFLOOR_MASTER` (и `SHOP_MANAGER` / `ADMIN`)
- * сводную картину «что происходит с кроем, выданным за день» —
+ * сводную картину «что происходит с кроем, ВЫДАННЫМ В РАБОТУ за день» —
  * по реальным операциям маршрута (источник тот же, что «Экран цеха»:
  * `REFERENCE_OPERATIONS`).
  *
- * Модель — «когорта по дате выдачи кроя»:
- *   - строка = день (`Passport.cutDate`, UTC);
- *   - первый блок = сверка `Выдано` (события `ISSUED_TO_EMPLOYEE`) vs
- *     `В работе` (паспорта с ≥1 `OPERATION_SCAN`); разница =
- *     «не взято в операцию»;
- *   - колонки = операции пошива и далее (Оверлок 1 → … → Упаковка);
+ * Модель — «когорта по дате выдачи кроя швеям»:
+ *   - строка = UTC-день ПЕРВОГО события `ISSUED_TO_EMPLOYEE` паспорта
+ *     (день, когда крой выдали в работу). НЕ `Passport.cutDate` —
+ *     крой, раскроенный 05.05 и выданный швеям 18.05, должен быть в
+ *     строке 18.05, иначе мастер «не видит вчерашнюю выдачу»;
+ *   - окно периода тоже по дате выдачи: паспорт попадает на доску,
+ *     если его `ISSUED_TO_EMPLOYEE` есть в окне последних N дней;
+ *   - первый блок = сверка `Выдано` (все паспорта когорты) vs
+ *     `В работе` (есть ≥1 `OPERATION_SCAN`/`STARTED`/`FINISHED`);
+ *     разница = «не взято в операцию»;
+ *   - колонки = РЕАЛЬНЫЕ операции маршрута заказов когорты
+ *     (`OrderRouteStep` snapshot, дедуп по операции, сорт по
+ *     `Operation.sortOrder`) — тот же источник и тот же резолвер
+ *     текущей операции паспорта, что у «Экрана цеха»
+ *     (`/api/shopfloor/display`). Сколько оверлоков реально в
+ *     маршруте — столько и колонок;
  *   - финал = `Выпущено` (`PassportStatus = PACKED`).
  *
- * Штуки: для «выдано» — `qtyCut` (физически выдано в крое); для
- * «в работе» / «выпущено» — `qtyGood` (за вычетом брака). Брак —
+ * Штуки: «выдано» / «в работе» / ячейки операций — `qtyCut`
+ * (физический объём кроя, как на «Экране цеха»); «выпущено» —
+ * `qtyGood` (за вычетом брака, как KPI display). Брак —
  * `Passport.qtyDefect`.
  */
 
@@ -32,7 +43,8 @@ export type ProductionBoardPeriod = (typeof PRODUCTION_BOARD_PERIODS)[number];
 export const DEFAULT_PRODUCTION_BOARD_PERIOD: ProductionBoardPeriod = 14;
 
 /**
- * Период доски в днях (включая сегодня) по `Passport.cutDate`.
+ * Период доски в днях (включая сегодня) по ДАТЕ ВЫДАЧИ кроя швеям
+ * (`ISSUED_TO_EMPLOYEE`), не по `Passport.cutDate`.
  * Допустимы 7/14/30; всё прочее мягко падает в дефолт (как у дашборда).
  */
 export const ProductionBoardQuerySchema = z.object({
@@ -54,23 +66,21 @@ export type ProductionBoardQuery = z.infer<typeof ProductionBoardQuerySchema>;
 // ---------------------------------------------------------------------------
 
 /**
- * Колонки доски = операции маршрута с первой пошивочной операции
- * (взятие кроя = первый Оверлок) до упаковки. `code` совпадает с
- * `REFERENCE_OPERATIONS.code` (`apps/api/src/modules/bootstrap`).
- * Раскладка паспорта по колонке — по `currentOperation.code`.
+ * Колонки доски — НЕ статический список. Они вычисляются на бэке из
+ * `OrderRouteStep` snapshot'ов заказов, чьи паспорта попали в окно
+ * когорты: каждая уникальная операция маршрута → одна колонка,
+ * порядок — по `Operation.sortOrder`. Это тот же источник операций,
+ * что у «Экрана цеха» (`buildSewingRoute` в `ShopfloorService`):
+ * сколько оверлоков / какие операции реально в маршруте — столько и
+ * таких колонок, без фантомных.
+ *
+ * `code` = `Operation.code` (совпадает с `REFERENCE_OPERATIONS.code`,
+ * `apps/api/src/modules/bootstrap`). Раскладка паспорта по колонке —
+ * через резолвер текущей операции (см.
+ * `ProductionBoardService.resolveCurrentOpId`), а не по сырому
+ * `currentOperation.code`. Поэтому тип кода стадии — открытый `string`.
  */
-export const PRODUCTION_BOARD_STAGES = [
-  { code: 'SEW_OVERLOCK_1', label: 'Оверлок 1' },
-  { code: 'SEW_BINDING', label: 'Киперка' },
-  { code: 'SEW_OVERLOCK_2', label: 'Оверлок 2' },
-  { code: 'SEW_COVERSTITCH', label: 'Распошив' },
-  { code: 'QC', label: 'ОТК' },
-  { code: 'WTO', label: 'ВТО' },
-  { code: 'PACKING', label: 'Упаковка' },
-] as const;
-
-export type ProductionBoardStageCode =
-  (typeof PRODUCTION_BOARD_STAGES)[number]['code'];
+export type ProductionBoardStageCode = string;
 
 /** Псевдо-стадия финального столбца «Выпущено» (статус PACKED). */
 export const PRODUCTION_BOARD_RELEASED = '__released__' as const;
@@ -102,8 +112,9 @@ export interface ProductionBoardStageBucketDto {
 }
 
 export interface ProductionBoardCohortDto {
-  /** UTC-дата `YYYY-MM-DD` (день `Passport.cutDate`). */
-  cutDate: string;
+  /** UTC-дата `YYYY-MM-DD` — день выдачи кроя швеям (первый
+   * `ISSUED_TO_EMPLOYEE` паспортов когорты). */
+  issueDate: string;
   orderId: string | null;
   orderLabel: string;
   /** Паспортов выдано (есть событие `ISSUED_TO_EMPLOYEE`). */
@@ -120,7 +131,7 @@ export interface ProductionBoardCohortDto {
   releasedPassports: number;
   /** Σ `qtyGood` выпущенных. */
   releasedQty: number;
-  /** Бакеты по операциям, в порядке `PRODUCTION_BOARD_STAGES`. */
+  /** Бакеты по операциям маршрута, в порядке `Operation.sortOrder`. */
   stages: ProductionBoardStageBucketDto[];
 }
 
@@ -138,9 +149,9 @@ export interface ProductionBoardDto {
 // ---------------------------------------------------------------------------
 
 export const ProductionBoardDrillQuerySchema = z.object({
-  /** UTC-дата `YYYY-MM-DD` когорты. */
-  cutDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
-  /** Код операции из `PRODUCTION_BOARD_STAGES` либо `__released__`. */
+  /** UTC-дата `YYYY-MM-DD` когорты (день выдачи кроя швеям). */
+  issueDate: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  /** `Operation.code` одной из колонок доски либо `__released__`. */
   stage: z.string().min(1),
   /** Сузить до конкретного сотрудника (опц.). */
   employeeId: z.string().min(1).optional(),
@@ -171,7 +182,7 @@ export interface ProductionBoardDrillEmployeeGroupDto {
 }
 
 export interface ProductionBoardDrillDto {
-  cutDate: string;
+  issueDate: string;
   stageLabel: string;
   totalPassports: number;
   totalQty: number;

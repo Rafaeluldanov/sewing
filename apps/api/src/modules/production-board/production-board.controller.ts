@@ -16,7 +16,7 @@ import { ProductionBoardService } from './production-board.service.js';
  * тиража», `apps/web/app/master`).
  *
  *   GET /api/master/production-board?days=7|14|30
- *   GET /api/master/production-board/drill?cutDate&stage[&employeeId]
+ *   GET /api/master/production-board/drill?issueDate&stage[&employeeId]
  *
  * RBAC: `SHOPFLOOR_MASTER`, `SHOP_MANAGER`, `ADMIN` — тот же доступ,
  * что у экрана `/master` (`canSeeMasterPage`). Read-only: контроллер
