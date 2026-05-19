@@ -36,8 +36,14 @@ interface Props {
   children: ReactNode;
 }
 
-/** Регулярка пути выпуска паспорта `/orders/<id>/passports/new`. */
-const PASSPORT_NEW_RE = /^\/orders\/[^/]+\/passports\/new\/?$/;
+/**
+ * Регулярка путей выпуска паспорта: `/orders/<id>/passports/new`
+ * (одиночный) и `/orders/<id>/passports/new-demo` (серийный — основной
+ * для помощника раскройщика). `new[\w-]*` ловит и любой будущий
+ * `/passports/new-*`-вариант, чтобы тёмный header не «протекал» на
+ * сфокусированный экран помощника при добавлении новых под-флоу.
+ */
+const PASSPORT_NEW_RE = /^\/orders\/[^/]+\/passports\/new[\w-]*\/?$/;
 
 /**
  * Тонкий клиентский враппер вокруг основного шапки приложения.
@@ -47,7 +53,8 @@ const PASSPORT_NEW_RE = /^\/orders\/[^/]+\/passports\/new\/?$/;
  *     чтобы экран был «белым и сфокусированным» (logout вынесен в
  *     `SeamstressActionsMenu`, информация о пользователе уже есть в
  *     RoleHeaderCard, дублировать не нужно);
- *   - на `/work*` и `/orders/:id/passports/new` для роли
+ *   - на `/work*` и `/orders/:id/passports/new` /
+ *     `/orders/:id/passports/new-demo` для роли
  *     `CUTTER_ASSISTANT` — то же самое: ему нужен один сфокусированный
  *     flow «Выпустить паспорт», глобальная навигация мешает (logout
  *     вынесен в три-точечное меню `SeamstressActionsMenu`, оно же
