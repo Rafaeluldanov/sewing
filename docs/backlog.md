@@ -132,6 +132,7 @@ characterization-тестом.
 
 - [`docs/order-signal-sample-recon.md`](./order-signal-sample-recon.md) — сигнальный образец (свежий, 18.05)
 - [`docs/production-cost-v2-recon.md`](./production-cost-v2-recon.md) — управленческий P&L v2
+- [`docs/production-cost-salary-allocation-recon.md`](./production-cost-salary-allocation-recon.md) — распределение окладной части в v2 (идея, не реализовано)
 - [`docs/operation-time-norms-recon.md`](./operation-time-norms-recon.md) — нормы времени операций
 - [`docs/workshop-needs-recon.md`](./workshop-needs-recon.md) — расчёт потребностей
 - [`docs/passport-piecework-payroll-recon.md`](./passport-piecework-payroll-recon.md) — сдельный расчёт по паспорту
