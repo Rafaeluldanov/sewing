@@ -14799,6 +14799,22 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .pboard__cell-top {
   font-size: 14px;
   font-weight: 700;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+/* «Дошло N» — главная цифра ячейки в накопительной модели партии
+   (см. `ProductionBoardStageBucketDto.received` shared-DTO). */
+.pboard__cell-received {
+  font-weight: 700;
+}
+/* «Выпущено N · сейчас K» — вторая строка ячейки. «Сейчас» приходит
+   через `bucket.passports`, см. `production-board-view.tsx`. */
+.pboard__cell-flow {
+  font-size: 12px;
+  color: var(--color-fg);
+  margin-top: 2px;
+  line-height: 1.4;
 }
 .pboard__cell-emps {
   font-size: 12px;
@@ -14838,11 +14854,6 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 .pboard__def-text {
   color: var(--color-danger-fg);
-}
-.pboard__nr {
-  font-size: 11px;
-  color: var(--color-fg-subtle);
-  margin-top: 5px;
 }
 
 .pboard__desktop {

@@ -65,42 +65,43 @@ function StageCell({
   bucket: ProductionBoardStageBucketDto;
   onOpen: (issueDate: string, stage: string) => void;
 }) {
-  const empty = bucket.employees.length === 0;
+  // Накопительная модель «партии на конвейере» (см.
+  // `ProductionBoardStageBucketDto` shared-DTO): ячейка пуста только
+  // если ни один паспорт когорты не коснулся этой колонки. Иначе
+  // показываем «дошло X / выпущено Y / сейчас K». Клик → drill-down
+  // с тем же списком «сейчас здесь», что и раньше (по `passports`).
+  const empty = bucket.received === 0;
+  const here = bucket.passports;
   const top = bucket.employees
     .slice(0, 2)
     .map((e) => `${e.employeeName.split(' ')[0]}·${e.passports}`)
     .join('  ');
   const more = bucket.employees.length - 2;
   const showDefect = bucket.code === 'QC' && bucket.defects > 0;
+  if (empty) {
+    return <div className="pboard__cell pboard__cell--empty">—</div>;
+  }
   return (
-    <>
-      {empty ? (
-        <div className="pboard__cell pboard__cell--empty">—</div>
-      ) : (
-        <button
-          type="button"
-          className="pboard__cell"
-          onClick={() => onOpen(c.issueDate, bucket.code)}
-        >
-          <div className="pboard__cell-top">
-            {bucket.passports}{' '}
-            <span className="pboard__muted">
-              пасп · {bucket.employees.length} чел
-            </span>
-            {showDefect && (
-              <span className="pboard__badge-def">брак {bucket.defects}</span>
-            )}
-          </div>
-          <div className="pboard__cell-emps">{top}</div>
-          {more > 0 && (
-            <div className="pboard__cell-more">ещё {more} ▾</div>
-          )}
-        </button>
-      )}
-      {bucket.notReached > 0 && (
-        <div className="pboard__nr">не дошло {bucket.notReached}</div>
-      )}
-    </>
+    <button
+      type="button"
+      className="pboard__cell"
+      onClick={() => onOpen(c.issueDate, bucket.code)}
+    >
+      <div className="pboard__cell-top">
+        <span className="pboard__cell-received">дошло {bucket.received}</span>
+        {showDefect && (
+          <span className="pboard__badge-def">брак {bucket.defects}</span>
+        )}
+      </div>
+      <div className="pboard__cell-flow">
+        <span>выпущено {bucket.released}</span>
+        {here > 0 && (
+          <span className="pboard__muted"> · сейчас {here}</span>
+        )}
+      </div>
+      {top && <div className="pboard__cell-emps">{top}</div>}
+      {more > 0 && <div className="pboard__cell-more">ещё {more} ▾</div>}
+    </button>
   );
 }
 
@@ -275,11 +276,6 @@ export function ProductionBoardView() {
                                 (s) => s.code === b.code,
                               )?.label ?? b.code}
                             </span>
-                            {b.notReached > 0 && (
-                              <span className="pboard__muted">
-                                не дошло {b.notReached}
-                              </span>
-                            )}
                           </div>
                           <StageCell
                             c={c}

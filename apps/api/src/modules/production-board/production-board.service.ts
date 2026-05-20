@@ -281,30 +281,59 @@ export class ProductionBoardService {
     // ≥1 из [OPERATION_SCAN, OPERATION_STARTED, OPERATION_FINISHED] —
     // согласуется с тем, что показывает «Экран цеха».
     const inOpsSet = new Set<string>();
+    // `finishedOpsByPassport` — operationId, на которых для паспорта
+    // есть `OPERATION_FINISHED`. Это источник правды для накопительной
+    // статистики «дошло/выпущено» по колонкам (см. формулу в
+    // `ProductionBoardStageBucketDto` shared-DTO).
+    const finishedOpsByPassport = new Map<string, Set<string>>();
     if (passports.length > 0) {
-      const ev = await this.prisma.passportEvent.groupBy({
-        by: ['passportId'],
-        where: {
-          passportId: { in: passports.map((p) => p.id) },
-          type: {
-            in: [
-              PassportEventType.OPERATION_SCAN,
-              PassportEventType.OPERATION_STARTED,
-              PassportEventType.OPERATION_FINISHED,
-            ],
+      const passIds = passports.map((p) => p.id);
+      const [inOpsRows, finishedRows] = await Promise.all([
+        this.prisma.passportEvent.groupBy({
+          by: ['passportId'],
+          where: {
+            passportId: { in: passIds },
+            type: {
+              in: [
+                PassportEventType.OPERATION_SCAN,
+                PassportEventType.OPERATION_STARTED,
+                PassportEventType.OPERATION_FINISHED,
+              ],
+            },
           },
-        },
-        _count: { _all: true },
-      });
-      for (const row of ev) inOpsSet.add(row.passportId);
+          _count: { _all: true },
+        }),
+        this.prisma.passportEvent.findMany({
+          where: {
+            passportId: { in: passIds },
+            type: PassportEventType.OPERATION_FINISHED,
+            operationId: { not: null },
+          },
+          select: { passportId: true, operationId: true },
+        }),
+      ]);
+      for (const row of inOpsRows) inOpsSet.add(row.passportId);
+      for (const ev of finishedRows) {
+        if (!ev.operationId) continue;
+        let s = finishedOpsByPassport.get(ev.passportId);
+        if (!s) {
+          s = new Set();
+          finishedOpsByPassport.set(ev.passportId, s);
+        }
+        s.add(ev.operationId);
+      }
     }
 
     // Когорта = UTC-день выдачи кроя швеям (первый ISSUED_TO_EMPLOYEE).
-    interface IssuedPos {
+    interface CohortPassport {
       orderId: string;
-      // Позиция паспорта в маршруте: PACKED → +∞ (прошёл всё);
-      // иначе `currentRouteStepIndex` (или -1, если ещё не известен).
-      reached: number;
+      isPacked: boolean;
+      // operationId, где сейчас находится паспорт (через резолвер).
+      // `null` — не на колонке доски (например, ещё в кройке / маршрут
+      // заказа не зафиксирован / PACKED).
+      currentOpId: string | null;
+      // Operation ids, на которых для этого паспорта есть OPERATION_FINISHED.
+      finishedOpIds: Set<string>;
     }
     interface Acc {
       issueDate: string;
@@ -316,7 +345,7 @@ export class ProductionBoardService {
       inOpsQty: number;
       releasedPassports: number;
       releasedQty: number;
-      // operationId -> employeeId -> aggregate
+      // operationId -> employeeId -> aggregate (паспорта «сейчас здесь»).
       buckets: Map<
         string,
         Map<
@@ -330,7 +359,9 @@ export class ProductionBoardService {
           }
         >
       >;
-      issuedPositions: IssuedPos[];
+      // Снимок паспортов когорты — для построения накопительной
+      // received/released по каждой колонке (см. формулу в shared-DTO).
+      passports: CohortPassport[];
     }
 
     const NO_EMP = '__none__';
@@ -349,7 +380,7 @@ export class ProductionBoardService {
           releasedPassports: 0,
           releasedQty: 0,
           buckets: new Map(),
-          issuedPositions: [],
+          passports: [],
         };
         cohorts.set(key, a);
       }
@@ -373,16 +404,22 @@ export class ProductionBoardService {
       // Каждый паспорт выборки выдан (есть ISSUED_TO_EMPLOYEE в окне).
       a.issuedPassports += 1;
       a.issuedQty += p.qtyCut;
-      a.issuedPositions.push({
-        orderId: p.orderId ?? '',
-        reached: isPacked
-          ? Number.POSITIVE_INFINITY
-          : p.currentRouteStepIndex ?? -1,
-      });
       if (isInOps) {
         a.inOpsPassports += 1;
         a.inOpsQty += p.qtyCut;
       }
+
+      const op = isPacked
+        ? null
+        : this.resolveColumnOp(p, sewingShiftByEmployee, opByOrderIndex);
+
+      a.passports.push({
+        orderId: p.orderId ?? '',
+        isPacked,
+        currentOpId: op && columns.has(op.id) ? op.id : null,
+        finishedOpIds: finishedOpsByPassport.get(p.id) ?? new Set(),
+      });
+
       if (isPacked) {
         a.releasedPassports += 1;
         a.releasedQty += p.qtyGood;
@@ -391,11 +428,6 @@ export class ProductionBoardService {
 
       // Раскладка по колонке — тем же резолвером, что у display
       // (активная операция ▶ либо ✔-буфер по шагу маршрута).
-      const op = this.resolveColumnOp(
-        p,
-        sewingShiftByEmployee,
-        opByOrderIndex,
-      );
       if (!op || !columns.has(op.id)) continue;
 
       let byEmp = a.buckets.get(op.id);
@@ -443,23 +475,55 @@ export class ProductionBoardService {
             );
             const qtyAt = employees.reduce((s, e) => s + e.qty, 0);
             const defectsAt = employees.reduce((s, e) => s + e.defects, 0);
-            // «Не дошло» — выданные паспорта, чья позиция в РЕАЛЬНОМ
-            // маршруте их заказа < индекса этой операции. Если у
-            // заказа паспорта этой операции в маршруте нет — паспорт
-            // не учитываем (колонка к нему неприменима). PACKED имеют
-            // reached=+∞ → в notReached не попадают.
-            const notReached = a.issuedPositions.filter((ip) => {
-              const oi = opIndexByOrder.get(ip.orderId)?.get(col.id);
-              if (oi === undefined) return false;
-              return ip.reached < oi;
-            }).length;
+
+            // Накопительные «дошло / выпущено» — см. формулу в shared-DTO
+            // `ProductionBoardStageBucketDto`. Считаем по снимку паспортов
+            // когорты, опираясь на `OPERATION_FINISHED`-события + статус
+            // PACKED + резолверную «сейчас здесь» (для первой операции
+            // свежевыданных паспортов без FINISHED-события).
+            let received = 0;
+            let released = 0;
+            for (const cp of a.passports) {
+              // Если у заказа этой операции нет в маршруте — паспорт
+              // не учитываем (колонка к нему неприменима).
+              const colIdxInOrder = opIndexByOrder.get(cp.orderId)?.get(col.id);
+              if (colIdxInOrder === undefined) continue;
+
+              // Дальше всех зашёл шаг = max(index по finished-операциям
+              // этого заказа). Если ни одной FINISHED нет → -1.
+              let furthest = -1;
+              const orderOpIdx = opIndexByOrder.get(cp.orderId);
+              if (orderOpIdx) {
+                for (const finOpId of cp.finishedOpIds) {
+                  const idx = orderOpIdx.get(finOpId);
+                  if (idx !== undefined && idx > furthest) furthest = idx;
+                }
+              }
+
+              if (cp.isPacked) {
+                received += 1;
+                released += 1;
+                continue;
+              }
+
+              // received: «коснулся» — finished на X-или-дальше ИЛИ
+              // сейчас стоит на X.
+              const finishedHere = furthest >= colIdxInOrder;
+              const currentlyHere = cp.currentOpId === col.id;
+              if (finishedHere || currentlyHere) received += 1;
+
+              // released: «сдал с X дальше» — finished строго позже X.
+              if (furthest > colIdxInOrder) released += 1;
+            }
+
             return {
               code: col.code,
               passports: passportsAt,
               qty: qtyAt,
               defects: defectsAt,
               employees,
-              notReached,
+              received,
+              released,
             };
           },
         );

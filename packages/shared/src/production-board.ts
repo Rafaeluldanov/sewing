@@ -102,13 +102,45 @@ export interface ProductionBoardEmployeeDto {
 
 export interface ProductionBoardStageBucketDto {
   code: ProductionBoardStageCode;
+  /**
+   * Паспорта когорты, **сейчас находящиеся** на этой операции (через
+   * резолвер `resolveColumnOp`: активная sewing-смена или ✔-буфер по
+   * шагу маршрута). Это «висящие» паспорта — кликом drill-down открывает
+   * именно их. `passports = received - released` для самой свежей
+   * когорты, но при дрейфе расчётов между событиями могут возникать
+   * мелкие расхождения, поэтому считаются независимо.
+   */
   passports: number;
   qty: number;
   defects: number;
   /** Отсортированы по `passports` убыв.; UI берёт топ-2 + «ещё N». */
   employees: ProductionBoardEmployeeDto[];
-  /** Паспорта когорты, ещё не дошедшие до этой операции по маршруту. */
-  notReached: number;
+  /**
+   * Накопительная статистика «партии на конвейере»:
+   *
+   *   - `received` — паспортов когорты, которые **коснулись** этой
+   *     операции (сейчас на ней + уже сдали дальше). Считается как
+   *     «сейчас на X» ∪ «есть `OPERATION_FINISHED` на X или дальше по
+   *     маршруту» ∪ PACKED (паспорт PACKED дошёл до всех колонок). Для
+   *     первой sewing-операции `received = issuedPassports` сразу после
+   *     выдачи кроя швее (выдача = швея сама забрала из ячейки = крой
+   *     попал в работу на её операции).
+   *   - `released` — паспортов когорты, которые **сданы с этой операции
+   *     дальше**: есть `OPERATION_FINISHED` на операции с индексом
+   *     строго больше, чем X; либо паспорт уже PACKED. Для PACKING
+   *     `released` == `releasedPassports` когорты.
+   *
+   * Свойства модели:
+   *   - `released ≤ received` всегда (нельзя сдать дальше, не дойдя);
+   *   - `passports = received - released` (то, что «зависло» здесь);
+   *   - монотонность: `received(X) ≥ received(X+1)` при движении по
+   *     маршруту вперёд (от выдачи к упаковке).
+   *
+   * См. `apps/api/src/modules/production-board/production-board.service.ts`,
+   * `docs/screens.md §«Доска движения тиража»`.
+   */
+  received: number;
+  released: number;
 }
 
 export interface ProductionBoardCohortDto {
