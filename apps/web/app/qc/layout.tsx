@@ -38,13 +38,12 @@ export default async function QcSectionLayout({
        * панели действий ОТК (`.qc-card__sticky-actions`). Столбик
        * стоит ПОД три-точечным меню `.seamstress-actions` (тот же
        * top/right), чтобы его не перекрывать. Кнопки внутри —
-       * icon-only 44×44 (см. `.qc-toolbar` в `globals.css`),
-       * занимают минимум места, имя берётся из `aria-label`. Скоуп —
-       * только `/qc`; на остальных терминалах кнопки остаются
-       * FAB-ами с подписью в нижних углах.
+       * icon-only 40×40 (см. `.employee-toolbar` в `globals.css`),
+       * занимают минимум места, имя берётся из `aria-label`.
+       * Идентичный тулбар стоит на `/work`, `/wto`, `/packing`.
        */}
       {showEmployeeQr || showMasterCall ? (
-        <div className="qc-toolbar">
+        <div className="employee-toolbar">
           {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
           {showMasterCall ? <CallMasterButton /> : null}
         </div>

@@ -5132,23 +5132,31 @@ table.data-table td code {
   }
 }
 
-/* `/qc`: «Мой QR-код» + «Мастер» закреплены СПРАВА вертикальным
-   столбиком, а не FAB-ами в нижних углах (низ занят
-   `.qc-card__sticky-actions`). Сверху-справа уже стоит три-точечное
-   меню `.seamstress-actions` (top 0.4rem, 40×40), поэтому столбик
+/* Терминалы сотрудников (`/work`, `/qc`, `/wto`, `/packing`):
+   «Мой QR-код» + «Мастер» закреплены СПРАВА вертикальным столбиком,
+   а не FAB-ами в нижних углах (низ часто занят прилипшей панелью
+   действий, напр. `.qc-card__sticky-actions`). Сверху-справа на
+   каждом из этих экранов уже стоит три-точечное меню
+   `.seamstress-actions` (top 0.4rem, 40×40), поэтому столбик
    начинается ПОД ним (top = safe-area + 0.4rem меню + 40px высота
-   меню + 0.5rem зазор ≈ safe-area + 3rem). Скоуп — только `/qc`.
+   меню + 60px зазор). Скоуп — все четыре терминала, оборачиваются
+   в layout'е раздела единым `.employee-toolbar`.
 
-   Кнопки внутри столбика — icon-only 44×44 (минимум места при
-   сохранении one-tap). Подписи скрываем, имя кнопки даёт `aria-label`
-   на самом `<button>`. Цветовая семантика «Мастера» (индиго → зелёный
-   при `data-state='called'`) и disabled-стейт остаются как было —
-   они и без текста сообщают статус. */
-.qc-toolbar {
+   Кнопки внутри столбика — icon-only 40×40 (минимум места при
+   сохранении one-tap, точно как trigger меню `.seamstress-actions`).
+   Подписи скрываем, имя кнопки даёт `aria-label` на самом `<button>`.
+   Цветовая семантика «Мастера» (индиго → зелёный при
+   `data-state='called'`) и disabled-стейт остаются как было — они и
+   без текста сообщают статус.
+
+   На `/master` (кабинет мастера) этот тулбар НЕ нужен: там нет
+   `.seamstress-actions` для якоря, а у мастера и нет кнопки «Мастер».
+   QR-кнопка там остаётся встроенной в страницу. */
+.employee-toolbar {
   position: fixed;
   /* safe-area + 0.4rem (инсет меню) + 40px (высота trigger'а
-     `.seamstress-actions__trigger`) + 60px зазор по просьбе. */
-  top: calc(env(safe-area-inset-top, 0px) + 0.4rem + 40px + 60px);
+     `.seamstress-actions__trigger`) + 80px зазор. */
+  top: calc(env(safe-area-inset-top, 0px) + 0.4rem + 40px + 80px);
   /* Выравниваем по правому краю с `.seamstress-actions` (position:
      absolute, right: 0.4rem внутри `.work`), а не с краем вьюпорта.
      `.work` — это контент `.app-main` с padding 1.25rem (0.85rem на
@@ -5163,18 +5171,18 @@ table.data-table td code {
   pointer-events: none;
 }
 @media (max-width: 640px) {
-  .qc-toolbar {
+  .employee-toolbar {
     right: calc(max((100vw - 1280px) / 2, 0px) + 0.85rem + 0.4rem);
   }
 }
-.qc-toolbar .call-master-btn--fab,
-.qc-toolbar .employee-qr-btn--fab {
+.employee-toolbar .call-master-btn--fab,
+.employee-toolbar .employee-qr-btn--fab {
   position: static;
   inset: auto;
   pointer-events: auto;
 }
-.qc-toolbar .call-master-btn,
-.qc-toolbar .employee-qr-btn {
+.employee-toolbar .call-master-btn,
+.employee-toolbar .employee-qr-btn {
   /* 40×40 — как `.seamstress-actions__trigger` (меню «⋯/Выйти»). */
   width: 40px;
   height: 40px;
@@ -5185,12 +5193,12 @@ table.data-table td code {
   justify-content: center;
   border-radius: 50%;
 }
-.qc-toolbar .call-master-btn__label,
-.qc-toolbar .employee-qr-btn__label {
+.employee-toolbar .call-master-btn__label,
+.employee-toolbar .employee-qr-btn__label {
   display: none;
 }
-.qc-toolbar .call-master-btn__icon,
-.qc-toolbar .employee-qr-btn__icon {
+.employee-toolbar .call-master-btn__icon,
+.employee-toolbar .employee-qr-btn__icon {
   width: 1.4rem;
   height: 1.4rem;
   font-size: 0.95rem;
