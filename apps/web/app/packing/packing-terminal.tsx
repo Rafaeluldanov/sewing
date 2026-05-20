@@ -198,6 +198,15 @@ function PackingMainTerminal({
   // «Карточка свёрнута» с кнопкой возврата и не дать упаковщику
   // потерять активную коробку (см. docs/packing-close-ui-recon.md §6).
   const [collapsedBoxId, setCollapsedBoxId] = useState<string | null>(null);
+  // Сворачивание секций списка «Открытые коробки» и «Ждут размещения»
+  // на Stage 1. По умолчанию свёрнуто, в шапке остаётся счётчик и
+  // кнопка обновления — упаковщик видит масштаб и при желании
+  // разворачивает. Состояние не сохраняется между сессиями: каждый
+  // вход в терминал стартует с чистого свёрнутого вида, чтобы primary-
+  // action «Создать коробку» был виден сразу.
+  const [openBoxesCollapsed, setOpenBoxesCollapsed] = useState(true);
+  const [closedUnplacedCollapsed, setClosedUnplacedCollapsed] =
+    useState(true);
   // Подпись свёрнутой коробки для баннера — чтобы не делать ещё один
   // запрос только ради номера. Заполняется одновременно с `collapsedBoxId`.
   const [collapsedBoxNumber, setCollapsedBoxNumber] = useState<string | null>(
@@ -599,6 +608,99 @@ function PackingMainTerminal({
           </div>
         )}
 
+        {/*
+         * Primary-action «Создать коробку» — самый верхний блок Stage 1
+         * (выше списков «Открытые коробки» и «Ждут размещения»).
+         * Размещение: сразу после баннера «Карточка свёрнута» (он
+         * сильнее как CTA: вернуться к МОЕЙ начатой коробке), но
+         * раньше списков чужих коробок. Списки ниже свёрнуты по
+         * умолчанию — упаковщик при необходимости раскроет.
+         */}
+        <div
+          className="scan-card scan-card--simple"
+          aria-label="Создать коробку"
+          style={{ marginBottom: '0.75rem' }}
+        >
+          <div>
+            <h2 className="scan-card__title">
+              <Icon name="packing" size={22} />
+              <span style={{ marginLeft: '0.45rem' }}>Новая коробка</span>
+            </h2>
+            <p className="scan-card__hint">
+              Откройте коробку — затем сканируйте паспорта. По умолчанию
+              рекомендуем лимит 100 шт.; можно задать другой, если
+              коробка нестандартная. Содержимое должно быть однородным
+              (одинаковое изделие, цвет и размер).
+            </p>
+          </div>
+
+          {error && (
+            <div className="error-box" role="alert">
+              <div className="error-box__msg">{error.message}</div>
+              {error.requestId && (
+                <div className="error-box__rid">
+                  req: <code>{error.requestId}</code>
+                </div>
+              )}
+            </div>
+          )}
+          {info && !error && (
+            <div className="info-box" role="status">
+              {info}
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="btn btn-primary btn-lg btn-block"
+            onClick={handleCreateBox}
+            disabled={isPending}
+          >
+            {isPending ? 'Создаём…' : 'Создать коробку'}
+          </button>
+
+          {manualOpen ? (
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                handleCreateBox();
+              }}
+              aria-label="Изменить лимит коробки"
+              className="seamstress-start__manual"
+            >
+              <label className="scan-card__input" htmlFor="packing-max-qty">
+                <span className="scan-card__input-label">Лимит, шт.</span>
+                <input
+                  id="packing-max-qty"
+                  type="number"
+                  min={1}
+                  step={1}
+                  inputMode="numeric"
+                  placeholder="100"
+                  value={maxQtyDraft}
+                  onChange={(e) => setMaxQtyDraft(e.target.value)}
+                  autoFocus
+                />
+              </label>
+              <button
+                type="submit"
+                className="btn btn-block"
+                disabled={isPending}
+              >
+                Создать с этим лимитом
+              </button>
+            </form>
+          ) : (
+            <button
+              type="button"
+              className="scan-card__manual-toggle"
+              onClick={() => setManualOpen(true)}
+            >
+              Указать другой лимит
+            </button>
+          )}
+        </div>
+
         {visibleOpenBoxes.length > 0 && (
           <section
             className="scan-card scan-card--simple packing-open-boxes"
@@ -614,12 +716,23 @@ function PackingMainTerminal({
                 gap: '0.5rem',
               }}
             >
-              <h2 className="scan-card__title" style={{ margin: 0 }}>
-                <Icon name="packing" size={22} />
-                <span style={{ marginLeft: '0.45rem' }}>
-                  Открытые коробки ({visibleOpenBoxes.length})
+              <button
+                type="button"
+                onClick={() => setOpenBoxesCollapsed((v) => !v)}
+                aria-expanded={!openBoxesCollapsed}
+                aria-controls="packing-open-boxes-body"
+                className="packing-section-toggle"
+              >
+                <span className="packing-section-toggle__caret" aria-hidden>
+                  {openBoxesCollapsed ? '▸' : '▾'}
                 </span>
-              </h2>
+                <h2 className="scan-card__title" style={{ margin: 0 }}>
+                  <Icon name="packing" size={22} />
+                  <span style={{ marginLeft: '0.45rem' }}>
+                    Открытые коробки ({visibleOpenBoxes.length})
+                  </span>
+                </h2>
+              </button>
               <button
                 type="button"
                 className="scan-card__manual-toggle"
@@ -629,11 +742,14 @@ function PackingMainTerminal({
                 {openBoxesLoading ? 'Обновляем…' : 'Обновить'}
               </button>
             </header>
+            {!openBoxesCollapsed && (
+              <>
             <p className="scan-card__hint">
               Все незакрытые коробки. Нажмите «Продолжить» — карточка
               откроется, можно сканировать паспорта или закрыть.
             </p>
             <ul
+              id="packing-open-boxes-body"
               className="packing-open-boxes__list"
               style={{
                 listStyle: 'none',
@@ -676,6 +792,8 @@ function PackingMainTerminal({
                 </li>
               ))}
             </ul>
+              </>
+            )}
           </section>
         )}
 
@@ -693,12 +811,23 @@ function PackingMainTerminal({
                 gap: '0.5rem',
               }}
             >
-              <h2 className="scan-card__title" style={{ margin: 0 }}>
-                <Icon name="packing" size={22} />
-                <span style={{ marginLeft: '0.45rem' }}>
-                  Ждут размещения ({closedUnplacedBoxes.length})
+              <button
+                type="button"
+                onClick={() => setClosedUnplacedCollapsed((v) => !v)}
+                aria-expanded={!closedUnplacedCollapsed}
+                aria-controls="packing-unplaced-boxes-body"
+                className="packing-section-toggle"
+              >
+                <span className="packing-section-toggle__caret" aria-hidden>
+                  {closedUnplacedCollapsed ? '▸' : '▾'}
                 </span>
-              </h2>
+                <h2 className="scan-card__title" style={{ margin: 0 }}>
+                  <Icon name="packing" size={22} />
+                  <span style={{ marginLeft: '0.45rem' }}>
+                    Ждут размещения ({closedUnplacedBoxes.length})
+                  </span>
+                </h2>
+              </button>
               <button
                 type="button"
                 className="scan-card__manual-toggle"
@@ -708,11 +837,14 @@ function PackingMainTerminal({
                 {closedUnplacedLoading ? 'Обновляем…' : 'Обновить'}
               </button>
             </header>
+            {!closedUnplacedCollapsed && (
+              <>
             <p className="scan-card__hint">
               Закрытые коробки, которые ещё не размещены в ячейку.
               Нажмите «Разместить» и отсканируйте QR ячейки склада.
             </p>
             <ul
+              id="packing-unplaced-boxes-body"
               style={{
                 listStyle: 'none',
                 padding: 0,
@@ -868,92 +1000,11 @@ function PackingMainTerminal({
                 );
               })}
             </ul>
+              </>
+            )}
           </section>
         )}
 
-        <div
-          className="scan-card scan-card--simple"
-          aria-label="Создать коробку"
-        >
-          <div>
-            <h2 className="scan-card__title">
-              <Icon name="packing" size={22} />
-              <span style={{ marginLeft: '0.45rem' }}>Новая коробка</span>
-            </h2>
-            <p className="scan-card__hint">
-              Откройте коробку — затем сканируйте паспорта. По умолчанию
-              рекомендуем лимит 100 шт.; можно задать другой, если
-              коробка нестандартная. Содержимое должно быть однородным
-              (одинаковое изделие, цвет и размер).
-            </p>
-          </div>
-
-          {error && (
-            <div className="error-box" role="alert">
-              <div className="error-box__msg">{error.message}</div>
-              {error.requestId && (
-                <div className="error-box__rid">
-                  req: <code>{error.requestId}</code>
-                </div>
-              )}
-            </div>
-          )}
-          {info && !error && (
-            <div className="info-box" role="status">
-              {info}
-            </div>
-          )}
-
-          <button
-            type="button"
-            className="btn btn-primary btn-lg btn-block"
-            onClick={handleCreateBox}
-            disabled={isPending}
-          >
-            {isPending ? 'Создаём…' : 'Создать коробку'}
-          </button>
-
-          {manualOpen ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleCreateBox();
-              }}
-              aria-label="Изменить лимит коробки"
-              className="seamstress-start__manual"
-            >
-              <label className="scan-card__input" htmlFor="packing-max-qty">
-                <span className="scan-card__input-label">Лимит, шт.</span>
-                <input
-                  id="packing-max-qty"
-                  type="number"
-                  min={1}
-                  step={1}
-                  inputMode="numeric"
-                  placeholder="100"
-                  value={maxQtyDraft}
-                  onChange={(e) => setMaxQtyDraft(e.target.value)}
-                  autoFocus
-                />
-              </label>
-              <button
-                type="submit"
-                className="btn btn-block"
-                disabled={isPending}
-              >
-                Создать с этим лимитом
-              </button>
-            </form>
-          ) : (
-            <button
-              type="button"
-              className="scan-card__manual-toggle"
-              onClick={() => setManualOpen(true)}
-            >
-              Указать другой лимит
-            </button>
-          )}
-        </div>
       </>
     );
   }
