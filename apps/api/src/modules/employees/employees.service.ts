@@ -1,10 +1,13 @@
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import bcrypt from 'bcryptjs';
 import { CompensationType, Prisma, Role } from '@prisma/client';
 import type {
   ActiveCutterListItemDto,
   CreateEmployeeDto,
+  EmployeeArchiveBlockerDto,
+  EmployeeBlockersResponse,
   EmployeeDetailDto,
+  EmployeeHardDeleteBlockerDto,
   EmployeeListItemDto,
   ListEmployeesQuery,
   UpdateEmployeeDto,
@@ -13,21 +16,31 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   CompanyDivisionInactiveException,
   CompanyDivisionNotFoundException,
+  EmployeeAdminTargetForbiddenException,
+  EmployeeArchiveBlockedException,
+  EmployeeCannotModifySelfException,
+  EmployeeDisplayCascadeAckRequiredException,
+  EmployeeHasHistoryException,
+  EmployeeLastAdminException,
   EmployeeLoginTakenException,
   EmployeeNotFoundException,
   EmployeeSalaryRateRequiredException,
 } from '../../common/errors.js';
+import { AuditService } from '../audit/audit.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { requiresSalaryRate } from './compensation.js';
 
 /**
  * Сервис управления сотрудниками (post-Шаг 18 / Шаг 19, ADR-0021,
  * + post-задача «Добавить сотрудника» с UI на `/admin/employees/new`).
  *
- * Скоуп MVP — read + management-поля (`compensationType`,
- * `salaryPerShift`, `active`) и минимальное создание новой карточки
+ * Скоуп — read + management-поля (`compensationType`,
+ * `salaryPerShift`, `active`), создание новой карточки
  * (`fullName`, `login`, `pinHash`, `role` и стартовая окладная
- * конфигурация). Удаление по-прежнему out-of-scope — менеджер
- * мягко гасит карточку через `active = false`.
+ * конфигурация), а также архивирование / восстановление / физическое
+ * удаление (см. `docs/employee-deletion-recon.md`,
+ * `archive` / `restore` / `hardDelete` ниже). Hard-delete доступен
+ * только для свежих пустых карточек — контроль через `getBlockers`.
  *
  * PIN хранится только как bcrypt-hash в `Employee.pinHash`, наружу не
  * отдаётся ни одним DTO (см. `toListDto` / `toDetailDto`). Тот же
@@ -39,7 +52,10 @@ const PIN_HASH_COST = 10;
 export class EmployeesService {
   private readonly logger = new Logger(EmployeesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // ===========================================================================
   // READ
@@ -275,6 +291,419 @@ export class EmployeesService {
       include: { companyDivision: true },
     });
     return toDetailDto(updated);
+  }
+
+  // ===========================================================================
+  // ARCHIVE / RESTORE / HARD-DELETE (см. `docs/employee-deletion-recon.md`)
+  // ===========================================================================
+
+  /**
+   * Превью «можно ли заархивировать или физически удалить» сотрудника.
+   * Возвращает структуру с двумя списками блокеров:
+   *
+   *   - `archiveBlockers` — открытая активность (смена, висящие
+   *     паспорта, открытые `MasterCall`, `REQUESTED`-заявки на
+   *     закрытие раскроя). Пока есть хотя бы один — `archiveAllowed = false`.
+   *   - `hardDeleteBlockers` — счётчики финансовой / производственной
+   *     истории (`OperationEntry`, `SalaryEntry`, `Passport*`,
+   *     `ShiftSession`, `Box`, `MasterCall`, `PassportDefect`,
+   *     `PayrollPayout`, `PayrollAccrualDocumentLine`). Пока есть
+   *     хотя бы один — `hardDeleteAllowed = false`.
+   *
+   * Backend пересчитывает то же самое при `POST /archive` /
+   * `DELETE`, чтобы между preflight и операцией не проехал race —
+   * этот endpoint только для UX.
+   */
+  async getBlockers(id: string): Promise<EmployeeBlockersResponse> {
+    const exists = await this.prisma.employee.findUnique({
+      where: { id },
+      select: { id: true, role: true },
+    });
+    if (!exists) throw new EmployeeNotFoundException();
+
+    const [
+      openShifts,
+      currentPassports,
+      openMasterCalls,
+      openClosureRequests,
+      operationEntries,
+      salaryEntries,
+      passportsAsCutter,
+      passportsAsCreator,
+      passportsAsCurrent,
+      passportDefects,
+      shiftSessions,
+      boxes,
+      masterCallsTotal,
+      masterCallsResolved,
+      payrollPayouts,
+      payrollAccrualLines,
+      displayScreen,
+    ] = await Promise.all([
+      this.prisma.shiftSession.count({
+        where: { employeeId: id, endedAt: null },
+      }),
+      this.prisma.passport.count({
+        where: { currentEmployeeId: id },
+      }),
+      this.prisma.masterCall.count({
+        where: { employeeId: id, status: 'OPEN' },
+      }),
+      this.prisma.cuttingClosureRequest.count({
+        where: { requestedByEmployeeId: id, status: 'REQUESTED' },
+      }),
+      this.prisma.operationEntry.count({ where: { employeeId: id } }),
+      this.prisma.salaryEntry.count({ where: { employeeId: id } }),
+      this.prisma.passport.count({ where: { cutterId: id } }),
+      this.prisma.passport.count({ where: { creatorId: id } }),
+      // Висящие паспорта (`currentEmployeeId`) попадают и в архив-,
+      // и в hard-delete-блокеры. Для hard-delete считаем все — даже
+      // если у сотрудника нет открытой смены, но паспорт привязан.
+      this.prisma.passport.count({ where: { currentEmployeeId: id } }),
+      this.prisma.passportDefect.count({ where: { createdByEmployeeId: id } }),
+      this.prisma.shiftSession.count({ where: { employeeId: id } }),
+      this.prisma.box.count({ where: { createdById: id } }),
+      this.prisma.masterCall.count({ where: { employeeId: id } }),
+      this.prisma.masterCall.count({ where: { resolvedById: id } }),
+      this.prisma.payrollPayout.count({
+        where: {
+          OR: [
+            { employeeId: id },
+            { createdById: id },
+            { issuedById: id },
+            { acknowledgedByEmployeeId: id },
+            { cancelledById: id },
+          ],
+        },
+      }),
+      this.prisma.payrollAccrualDocumentLine.count({
+        where: { employeeId: id },
+      }),
+      this.prisma.displayScreenConfig.findUnique({
+        where: { employeeId: id },
+        select: { id: true },
+      }),
+    ]);
+
+    const archiveBlockers: EmployeeArchiveBlockerDto[] = [];
+    if (openShifts > 0)
+      archiveBlockers.push({ kind: 'OPEN_SHIFT', count: openShifts });
+    if (currentPassports > 0)
+      archiveBlockers.push({
+        kind: 'CURRENT_PASSPORTS',
+        count: currentPassports,
+      });
+    if (openMasterCalls > 0)
+      archiveBlockers.push({
+        kind: 'OPEN_MASTER_CALLS',
+        count: openMasterCalls,
+      });
+    if (openClosureRequests > 0)
+      archiveBlockers.push({
+        kind: 'OPEN_CLOSURE_REQUESTS',
+        count: openClosureRequests,
+      });
+
+    // Все паспорта (cutter/creator/current) консолидируем в одну
+    // строку UI — «N паспортов в истории». Внутри считаем сумму с
+    // дедупликацией невозможной (один паспорт может быть и cutter,
+    // и creator одновременно), но фактически нас интересует «есть
+    // ли хоть что-то», а сумма даёт «масштаб» для оператора.
+    const passportTotal =
+      passportsAsCutter + passportsAsCreator + passportsAsCurrent;
+    const masterCallsTotalForBlockers = masterCallsTotal + masterCallsResolved;
+
+    const hardDeleteBlockers: EmployeeHardDeleteBlockerDto[] = [];
+    if (operationEntries > 0)
+      hardDeleteBlockers.push({
+        kind: 'OperationEntry',
+        count: operationEntries,
+      });
+    if (salaryEntries > 0)
+      hardDeleteBlockers.push({ kind: 'SalaryEntry', count: salaryEntries });
+    if (passportTotal > 0)
+      hardDeleteBlockers.push({ kind: 'Passport', count: passportTotal });
+    if (passportDefects > 0)
+      hardDeleteBlockers.push({
+        kind: 'PassportDefect',
+        count: passportDefects,
+      });
+    if (shiftSessions > 0)
+      hardDeleteBlockers.push({ kind: 'ShiftSession', count: shiftSessions });
+    if (boxes > 0) hardDeleteBlockers.push({ kind: 'Box', count: boxes });
+    if (masterCallsTotalForBlockers > 0)
+      hardDeleteBlockers.push({
+        kind: 'MasterCall',
+        count: masterCallsTotalForBlockers,
+      });
+    if (payrollPayouts > 0)
+      hardDeleteBlockers.push({ kind: 'PayrollPayout', count: payrollPayouts });
+    if (payrollAccrualLines > 0)
+      hardDeleteBlockers.push({
+        kind: 'PayrollAccrualDocumentLine',
+        count: payrollAccrualLines,
+      });
+
+    return {
+      archiveAllowed: archiveBlockers.length === 0,
+      hardDeleteAllowed: hardDeleteBlockers.length === 0,
+      hasDisplayScreenConfig: !!displayScreen,
+      archiveBlockers,
+      hardDeleteBlockers,
+    };
+  }
+
+  /**
+   * Мягкое удаление: `active = false`. UI/`AuthService` режут логин
+   * для archived карточек, но сама запись со всей историей остаётся
+   * в БД. Reverse — `restore()`.
+   *
+   * Guards:
+   *   - viewer !== target;
+   *   - SHOP_MANAGER не может архивировать ADMIN-а;
+   *   - нельзя архивировать последнего активного ADMIN-а;
+   *   - blockers из `getBlockers().archiveBlockers` должны быть пусты
+   *     (открытая смена / висящие паспорта / открытые MasterCall /
+   *     REQUESTED-заявки на закрытие раскроя).
+   *
+   * Идемпотентно: если карточка уже архивная (`active = false`),
+   * возвращается как есть (без аудита-noop, чтобы не зашумлять журнал).
+   */
+  async archive(id: string, viewer: AuthPrincipal): Promise<EmployeeDetailDto> {
+    const target = await this.prisma.employee.findUnique({
+      where: { id },
+      include: { companyDivision: true },
+    });
+    if (!target) throw new EmployeeNotFoundException();
+    if (!target.active) return toDetailDto(target);
+
+    this.assertCanModifyTarget(target, viewer);
+
+    if (target.role === Role.ADMIN) {
+      await this.assertNotLastActiveAdmin(target.id);
+    }
+
+    const blockers = await this.getBlockers(id);
+    if (!blockers.archiveAllowed) {
+      throw new EmployeeArchiveBlockedException();
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.employee.update({
+        where: { id },
+        data: { active: false },
+        include: { companyDivision: true },
+      });
+      await this.audit.log(
+        {
+          event: 'EMPLOYEE_ARCHIVED',
+          entityType: 'EMPLOYEE',
+          entityId: id,
+          payload: {
+            targetId: id,
+            targetSnapshot: {
+              fullName: target.fullName,
+              login: target.login,
+              role: target.role,
+            },
+          },
+          employeeId: viewer.employeeId,
+        },
+        tx,
+      );
+      return row;
+    });
+
+    this.logger.log(
+      `event=employee.archive id=${id} actor=${viewer.employeeId}`,
+    );
+    return toDetailDto(updated);
+  }
+
+  /**
+   * Снять архив. `active = false → true`. Guards проще, чем у
+   * `archive`/`hardDelete` — отказать может только конфликт
+   * `login @unique` (если за время в архиве кто-то завёл сотрудника
+   * с тем же login). На этот случай Prisma вернёт `P2002` —
+   * пробрасываем как `EMPLOYEE_LOGIN_TAKEN`, чтобы UI подсказал
+   * менеджеру вручную сменить login одному из них.
+   *
+   * Идемпотентно для уже активных карточек.
+   */
+  async restore(id: string, viewer: AuthPrincipal): Promise<EmployeeDetailDto> {
+    const target = await this.prisma.employee.findUnique({
+      where: { id },
+      include: { companyDivision: true },
+    });
+    if (!target) throw new EmployeeNotFoundException();
+    if (target.active) return toDetailDto(target);
+
+    // Управление ADMIN-учётками — только из-под ADMIN'а, как и archive.
+    this.assertCanModifyTarget(target, viewer);
+
+    let updated;
+    try {
+      updated = await this.prisma.$transaction(async (tx) => {
+        const row = await tx.employee.update({
+          where: { id },
+          data: { active: true },
+          include: { companyDivision: true },
+        });
+        await this.audit.log(
+          {
+            event: 'EMPLOYEE_RESTORED',
+            entityType: 'EMPLOYEE',
+            entityId: id,
+            payload: { targetId: id },
+            employeeId: viewer.employeeId,
+          },
+          tx,
+        );
+        return row;
+      });
+    } catch (e) {
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2002'
+      ) {
+        // На случай теоретического конфликта на login при включении
+        // (если когда-нибудь логика поменяется и login начнут
+        // суффиксовать при архиве). Сейчас в коде такого нет, но
+        // защита copy-paste-safe.
+        const target = (e.meta?.target as string[] | string | undefined) ?? [];
+        const fields = Array.isArray(target) ? target : [target];
+        if (fields.some((f) => String(f).includes('login'))) {
+          throw new EmployeeLoginTakenException();
+        }
+      }
+      throw e;
+    }
+
+    this.logger.log(
+      `event=employee.restore id=${id} actor=${viewer.employeeId}`,
+    );
+    return toDetailDto(updated);
+  }
+
+  /**
+   * Физическое удаление карточки. Только для свежесозданных пустых
+   * учёток: проверяем, что нет никакой финансовой / производственной
+   * истории. Полный список блокеров — `getBlockers().hardDeleteBlockers`.
+   *
+   * Guards:
+   *   - viewer.role === ADMIN (метод-уровневый RBAC);
+   *   - viewer !== target;
+   *   - target.role !== ADMIN || есть другой активный ADMIN;
+   *   - target.role !== DISPLAY || `ackDisplayCascade === true`
+   *     (так как `DisplayScreenConfig.employeeId @onDelete: Cascade`
+   *     каскадно снесёт привязанный экран);
+   *   - все blockers из `getBlockers` === 0.
+   *
+   * После DELETE строка пропадает из БД; в `AuditLog` остаётся снимок
+   * (`targetSnapshot`), чтобы расследование «куда делась учётка» имело
+   * за что зацепиться.
+   */
+  async hardDelete(
+    id: string,
+    viewer: AuthPrincipal,
+    opts: { ackDisplayCascade?: boolean } = {},
+  ): Promise<void> {
+    const target = await this.prisma.employee.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        fullName: true,
+        login: true,
+        role: true,
+        createdAt: true,
+        active: true,
+      },
+    });
+    if (!target) throw new EmployeeNotFoundException();
+
+    if (viewer.employeeId === target.id) {
+      throw new EmployeeCannotModifySelfException();
+    }
+    if (target.role === Role.ADMIN) {
+      await this.assertNotLastActiveAdmin(target.id);
+    }
+
+    const blockers = await this.getBlockers(id);
+    if (!blockers.hardDeleteAllowed) {
+      throw new EmployeeHasHistoryException();
+    }
+    if (blockers.hasDisplayScreenConfig && !opts.ackDisplayCascade) {
+      throw new EmployeeDisplayCascadeAckRequiredException();
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // Аудит ДО delete: после `employee.delete` мы не сможем
+      // привязать `employeeId` к строке журнала, если viewer удалил
+      // сам себя (этого мы выше уже не допустили), но порядок всё
+      // равно безопаснее «сначала зафиксировать, потом удалить».
+      await this.audit.log(
+        {
+          event: 'EMPLOYEE_DELETED',
+          entityType: 'EMPLOYEE',
+          entityId: id,
+          payload: {
+            targetSnapshot: {
+              fullName: target.fullName,
+              login: target.login,
+              role: target.role,
+              createdAt: target.createdAt.toISOString(),
+            },
+            hadActiveDisplayConfig: blockers.hasDisplayScreenConfig,
+          },
+          employeeId: viewer.employeeId,
+        },
+        tx,
+      );
+      await tx.employee.delete({ where: { id } });
+    });
+
+    this.logger.log(
+      `event=employee.delete id=${id} actor=${viewer.employeeId} login=${target.login} role=${target.role}`,
+    );
+  }
+
+  /**
+   * Общие guards для archive/restore/hard-delete:
+   *   - нельзя выполнять действие на самом себе;
+   *   - SHOP_MANAGER не может управлять ADMIN-учётками.
+   *
+   * Для hard-delete также требуется `viewer.role === ADMIN`, но эта
+   * проверка делается на уровне контроллера (`@Roles('ADMIN')` на
+   * методе), а не здесь — `EmployeesController` уже знает viewer.role.
+   */
+  private assertCanModifyTarget(
+    target: { id: string; role: Role },
+    viewer: AuthPrincipal,
+  ): void {
+    if (viewer.employeeId === target.id) {
+      throw new EmployeeCannotModifySelfException();
+    }
+    if (target.role === Role.ADMIN && viewer.role !== Role.ADMIN) {
+      throw new EmployeeAdminTargetForbiddenException();
+    }
+  }
+
+  /**
+   * Запрещает архивирование / удаление последнего активного ADMIN.
+   * Передаём `excludeId` — чтобы при операции над текущим ADMIN-ом
+   * считать «остальных» (без него).
+   */
+  private async assertNotLastActiveAdmin(excludeId: string): Promise<void> {
+    const otherActive = await this.prisma.employee.count({
+      where: {
+        role: Role.ADMIN,
+        active: true,
+        NOT: { id: excludeId },
+      },
+    });
+    if (otherActive === 0) {
+      throw new EmployeeLastAdminException();
+    }
   }
 
   // ===========================================================================

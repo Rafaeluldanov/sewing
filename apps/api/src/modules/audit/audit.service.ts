@@ -475,7 +475,32 @@ export type AuditEntityType =
    *   - `ORDER_SAMPLE_CANCELLED` — менеджер отменил. Payload —
    *     `{ orderId, comment, employeeId, timestamp }`.
    */
-  | 'ORDER_SAMPLE';
+  | 'ORDER_SAMPLE'
+  /**
+   * Карточки сотрудников (`Employee`, см.
+   * `apps/api/src/modules/employees/*`,
+   * `prisma/schema.prisma::Employee`,
+   * `docs/employee-deletion-recon.md`). События архивирования /
+   * восстановления / физического удаления:
+   *
+   *   - `EMPLOYEE_ARCHIVED` — менеджер отправил карточку в архив
+   *     (`POST /api/employees/:id/archive`, переход
+   *     `active = true → false`). Payload — `{ targetId,
+   *     targetSnapshot: { fullName, login, role } }`.
+   *   - `EMPLOYEE_RESTORED` — менеджер снял архив
+   *     (`POST /api/employees/:id/restore`,
+   *     `active = false → true`). Payload — `{ targetId }`.
+   *   - `EMPLOYEE_DELETED` — администратор физически удалил карточку
+   *     (`DELETE /api/employees/:id`). Карточка пропадает из БД, в
+   *     payload сохраняется снимок: `{ targetSnapshot: { fullName,
+   *     login, role, createdAt }, hadActiveDisplayConfig?: boolean }`.
+   *
+   * `entityId` — `Employee.id`. Для `EMPLOYEE_DELETED` id ссылается
+   * на уже удалённую строку — это сознательно, чтобы расследование
+   * «куда делась учётка X» могло искать по тому же id, что был у
+   * сотрудника при жизни.
+   */
+  | 'EMPLOYEE';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

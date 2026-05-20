@@ -1,8 +1,10 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Header,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -21,7 +23,8 @@ import {
 import { EMPLOYEE_QR_PREFIX } from '@sewing/shared/master-calls';
 import * as QRCode from 'qrcode';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { EmployeesService } from './employees.service.js';
 import { renderEmployeePrintHtml } from './employee-print.js';
 
@@ -95,6 +98,71 @@ export class EmployeesController {
     body: UpdateEmployeeDto,
   ) {
     return this.employees.update(id, body);
+  }
+
+  /**
+   * Preflight для блока archive / hard-delete (см.
+   * `docs/employee-deletion-recon.md §3-§4`). UI на основе ответа решает,
+   * какие кнопки доступны в строке таблицы и блоке «Опасная зона» на
+   * странице карточки. Сам по себе вызов идемпотентен и не меняет
+   * данные.
+   */
+  @Get(':id/blockers')
+  getBlockers(@Param('id') id: string) {
+    return this.employees.getBlockers(id);
+  }
+
+  /**
+   * Мягкое архивирование (`active = true → false`). Идемпотентно для
+   * уже архивных карточек. Falls back to `EMPLOYEE_ARCHIVE_BLOCKED`
+   * при наличии открытой смены / висящих паспортов / открытых
+   * `MasterCall` / `REQUESTED`-заявок на закрытие раскроя.
+   *
+   * RBAC — `SHOP_MANAGER`/`ADMIN` (от класс-уровневого `@Roles(...)`).
+   * SHOP_MANAGER не может архивировать ADMIN — guard в сервисе.
+   */
+  @Post(':id/archive')
+  archive(@Param('id') id: string, @CurrentUser() viewer: AuthPrincipal) {
+    return this.employees.archive(id, viewer);
+  }
+
+  /**
+   * Снять архив (`active = false → true`). Идемпотентно для уже
+   * активных карточек. RBAC — `SHOP_MANAGER`/`ADMIN` (от класс-уровневого
+   * декоратора).
+   */
+  @Post(':id/restore')
+  restore(@Param('id') id: string, @CurrentUser() viewer: AuthPrincipal) {
+    return this.employees.restore(id, viewer);
+  }
+
+  /**
+   * Физическое удаление карточки (`DELETE /api/employees/:id`).
+   *
+   * Метод-уровневый `@Roles('ADMIN')` переопределяет класс-уровневый
+   * `@Roles('SHOP_MANAGER', 'ADMIN')` — hard-delete сознательно
+   * доступен только администраторам, потому что операция необратима.
+   *
+   * 409 если есть финансовая/производственная история
+   * (`EMPLOYEE_HAS_HISTORY` — детали через `GET :id/blockers`).
+   * 409 если это DISPLAY-учётка с `DisplayScreenConfig` и нет
+   * `ackDisplayCascade=true` — менеджер должен явно подтвердить
+   * каскадный снос экрана (FK `onDelete: Cascade`).
+   *
+   * Возвращает `204 No Content` при успехе; снимок удалённой карточки
+   * остаётся в `AuditLog` (`EMPLOYEE_DELETED`).
+   */
+  @Roles('ADMIN')
+  @Delete(':id')
+  @HttpCode(204)
+  async delete(
+    @Param('id') id: string,
+    @CurrentUser() viewer: AuthPrincipal,
+    @Query('ackDisplayCascade') ackDisplayCascade?: string,
+  ): Promise<void> {
+    await this.employees.hardDelete(id, viewer, {
+      ackDisplayCascade: ackDisplayCascade === 'true',
+    });
   }
 
   /**

@@ -3,7 +3,13 @@
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
-import { createEmployee, updateEmployee } from '@/lib/employees-api';
+import {
+  archiveEmployee,
+  createEmployee,
+  deleteEmployee,
+  restoreEmployee,
+  updateEmployee,
+} from '@/lib/employees-api';
 import {
   COMPENSATION_TYPES,
   EMPLOYEE_ROLES,
@@ -250,5 +256,88 @@ export async function updateEmployeeAction(
       };
     }
     return { error: 'Не удалось сохранить сотрудника' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Archive / restore / hard-delete (см. `docs/employee-deletion-recon.md`).
+// Все три action'а — простой post-обёрток над API: backend всё валидирует
+// сам (RBAC, блокеры, last-admin, self), action только пробрасывает
+// ошибку и зовёт `revalidatePath` после успеха.
+// ---------------------------------------------------------------------------
+
+export interface DeleteEmployeeActionState {
+  ok?: true;
+  error?: string;
+  errorCode?: string;
+  errorRequestId?: string;
+}
+
+export async function archiveEmployeeAction(
+  employeeId: string,
+): Promise<DeleteEmployeeActionState> {
+  try {
+    await archiveEmployee(employeeId);
+    revalidatePath('/admin/employees');
+    revalidatePath(`/admin/employees/${employeeId}`);
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        error: e.message,
+        errorCode: e.code,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { error: 'Не удалось архивировать сотрудника' };
+  }
+}
+
+export async function restoreEmployeeAction(
+  employeeId: string,
+): Promise<DeleteEmployeeActionState> {
+  try {
+    await restoreEmployee(employeeId);
+    revalidatePath('/admin/employees');
+    revalidatePath(`/admin/employees/${employeeId}`);
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        error: e.message,
+        errorCode: e.code,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { error: 'Не удалось восстановить сотрудника' };
+  }
+}
+
+/**
+ * Hard-delete. Принимает дополнительный флаг `ackDisplayCascade` для
+ * случаев DISPLAY-учёток с привязанным экраном (`onDelete: Cascade`).
+ *
+ * При успехе делает `revalidate('/admin/employees')`. Возвращать
+ * `redirect` на список — нельзя из action'а без обёртки, поэтому
+ * вызывающий клиент сам делает `router.push('/admin/employees')` или
+ * полагается на закрытие модалки + revalidate.
+ */
+export async function deleteEmployeeAction(
+  employeeId: string,
+  opts: { ackDisplayCascade?: boolean } = {},
+): Promise<DeleteEmployeeActionState> {
+  try {
+    await deleteEmployee(employeeId, opts);
+    revalidatePath('/admin/employees');
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        error: e.message,
+        errorCode: e.code,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { error: 'Не удалось удалить сотрудника' };
   }
 }

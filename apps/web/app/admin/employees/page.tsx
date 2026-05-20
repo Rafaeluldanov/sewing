@@ -1,8 +1,10 @@
 import Link from 'next/link';
 import { ArrowRight, Plus, Users } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
+import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listEmployees } from '@/lib/employees-api';
 import type { EmployeeListItemDto } from '@sewing/shared/employees';
+import { EmployeeRowActions } from './row-actions';
 import {
   AdminCard,
   AdminEmptyState,
@@ -67,6 +69,10 @@ export default async function AdminEmployeesListPage({
         : 'Не удалось загрузить список сотрудников';
   }
 
+  // Текущий пользователь нужен на каждый ряд: чтобы скрыть «Архивировать» /
+  // «Удалить» на собственной карточке и спрятать hard-delete у не-ADMIN'а.
+  const viewer = await getCurrentUserOrNull();
+
   const tab = searchParams?.tab === 'archived' ? 'archived' : 'active';
   const active = items.filter((e) => e.active);
   const archived = items.filter((e) => !e.active);
@@ -116,7 +122,12 @@ export default async function AdminEmployeesListPage({
           </Link>
         </div>
 
-        <EmployeesTable items={pageItems} muted={tab === 'archived'} />
+        <EmployeesTable
+          items={pageItems}
+          muted={tab === 'archived'}
+          viewerId={viewer?.user.id ?? null}
+          viewerRole={viewer?.user.role ?? ''}
+        />
 
         <AdminPagination
           page={page}
@@ -134,9 +145,13 @@ export default async function AdminEmployeesListPage({
 function EmployeesTable({
   items,
   muted = false,
+  viewerId,
+  viewerRole,
 }: {
   items: EmployeeListItemDto[];
   muted?: boolean;
+  viewerId: string | null;
+  viewerRole: string;
 }) {
   const columns: AdminTableColumn<EmployeeListItemDto>[] = [
     {
@@ -170,17 +185,24 @@ function EmployeesTable({
       ),
     },
     {
-      key: 'open',
+      key: 'actions',
       header: '',
       isAction: true,
       render: (e) => (
-        <Link
-          href={`/admin/employees/${e.id}`}
-          className="admin-table__action-link"
-        >
-          Открыть
-          <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
-        </Link>
+        <div className="employee-row-actions">
+          <Link
+            href={`/admin/employees/${e.id}`}
+            className="admin-table__action-link"
+          >
+            Открыть
+            <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+          </Link>
+          <EmployeeRowActions
+            employee={e}
+            viewerId={viewerId}
+            viewerRole={viewerRole}
+          />
+        </div>
       ),
     },
   ];

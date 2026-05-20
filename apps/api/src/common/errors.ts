@@ -549,6 +549,104 @@ export class EmployeeLoginTakenException extends BusinessException {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Employee archive / delete (см. `docs/employee-deletion-recon.md`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Нельзя архивировать сотрудника: у него открыта смена / висят
+ * паспорта на `currentEmployeeId` / открыт `MasterCall` /
+ * `REQUESTED`-заявка на закрытие раскроя. Конкретный список блокеров
+ * UI получает из `GET /api/employees/:id/blockers`; ошибка нужна
+ * только для случая, когда состояние изменилось между preflight'ом и
+ * `POST /archive` (race).
+ */
+export class EmployeeArchiveBlockedException extends BusinessException {
+  constructor() {
+    super(
+      'EMPLOYEE_ARCHIVE_BLOCKED',
+      'Сотрудник занят: завершите смену / передайте паспорта / закройте вызовы мастера и попробуйте снова.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Нельзя физически удалить сотрудника: у него есть начисления,
+ * паспорта, смены или иная финансовая/производственная история.
+ * Менеджер должен заархивировать карточку, а не удалять. Detail —
+ * через `GET /api/employees/:id/blockers`.
+ */
+export class EmployeeHasHistoryException extends BusinessException {
+  constructor() {
+    super(
+      'EMPLOYEE_HAS_HISTORY',
+      'У сотрудника есть финансовая или производственная история — удаление невозможно. Заархивируйте карточку.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Менеджер пытается заархивировать или удалить сам себя. Запрещено —
+ * иначе администратор останется без доступа к собственной учётке.
+ */
+export class EmployeeCannotModifySelfException extends BusinessException {
+  constructor() {
+    super(
+      'EMPLOYEE_CANNOT_MODIFY_SELF',
+      'Нельзя выполнить это действие с собственной учётной записью.',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * Архивирование / удаление последнего активного ADMIN-сотрудника —
+ * запрещено: без него систему некому администрировать.
+ */
+export class EmployeeLastAdminException extends BusinessException {
+  constructor() {
+    super(
+      'EMPLOYEE_LAST_ADMIN',
+      'Это последний активный администратор — операция запрещена.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * `SHOP_MANAGER` пытается выполнить административное действие
+ * (archive / hard-delete) над сотрудником с ролью `ADMIN`. Управлять
+ * учётками `ADMIN` может только другой `ADMIN`.
+ */
+export class EmployeeAdminTargetForbiddenException extends BusinessException {
+  constructor() {
+    super(
+      'EMPLOYEE_ADMIN_TARGET_FORBIDDEN',
+      'Управление учётной записью администратора доступно только администратору.',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * Hard-delete пользователя с ролью `DISPLAY` каскадно снесёт
+ * `DisplayScreenConfig` (FK с `onDelete: Cascade`). Backend требует
+ * явное подтверждение через query/body `?ackDisplayCascade=true`,
+ * чтобы менеджер видел в UI чек-бокс «Я понимаю, что также удалится
+ * экран».
+ */
+export class EmployeeDisplayCascadeAckRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'EMPLOYEE_DISPLAY_CASCADE_ACK_REQUIRED',
+      'Это DISPLAY-учётка с привязанным экраном — для удаления требуется подтверждение каскадного сноса.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 /**
  * Дубликат `Employee.login` при создании display-экрана
  * (`POST /api/display-screens`). Семантически это та же P2002 на

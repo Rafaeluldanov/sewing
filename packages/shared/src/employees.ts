@@ -388,3 +388,71 @@ export interface EmployeeDetailDto extends EmployeeListItemDto {
    */
   cutterB2bSewingPercent?: number | null;
 }
+
+// ---------------------------------------------------------------------------
+// Delete / archive — blockers DTO
+// ---------------------------------------------------------------------------
+
+/**
+ * Виды финансовой и производственной истории, которые блокируют
+ * физическое удаление (`DELETE /api/employees/:id`) сотрудника.
+ * См. `docs/employee-deletion-recon.md §4`.
+ */
+export const EMPLOYEE_HARD_DELETE_BLOCKER_KINDS = [
+  'OperationEntry',
+  'SalaryEntry',
+  'Passport',
+  'PassportDefect',
+  'ShiftSession',
+  'Box',
+  'MasterCall',
+  'PayrollPayout',
+  'PayrollAccrualDocumentLine',
+] as const;
+export type EmployeeHardDeleteBlockerKind =
+  (typeof EMPLOYEE_HARD_DELETE_BLOCKER_KINDS)[number];
+
+export interface EmployeeHardDeleteBlockerDto {
+  kind: EmployeeHardDeleteBlockerKind;
+  count: number;
+}
+
+/**
+ * Виды «открытой активности», которые блокируют переход в архив
+ * (`POST /api/employees/:id/archive`). См. `docs/employee-deletion-recon.md §3.2`.
+ */
+export const EMPLOYEE_ARCHIVE_BLOCKER_KINDS = [
+  'OPEN_SHIFT',
+  'CURRENT_PASSPORTS',
+  'OPEN_MASTER_CALLS',
+  'OPEN_CLOSURE_REQUESTS',
+] as const;
+export type EmployeeArchiveBlockerKind =
+  (typeof EMPLOYEE_ARCHIVE_BLOCKER_KINDS)[number];
+
+export interface EmployeeArchiveBlockerDto {
+  kind: EmployeeArchiveBlockerKind;
+  count: number;
+}
+
+/**
+ * Превью «можно ли удалить или архивировать сотрудника». UI на основе
+ * этого решает, какие кнопки доступны в строке таблицы и на странице
+ * карточки. Backend пересчитывает это же при каждой попытке выполнить
+ * операцию, чтобы между preflight'ом и фактическим DELETE/POST не
+ * проехал race condition.
+ */
+export interface EmployeeBlockersResponse {
+  /** `true` — DELETE безопасен (никаких блокеров). */
+  hardDeleteAllowed: boolean;
+  /** `true` — `POST /archive` пройдёт (нет открытой активности). */
+  archiveAllowed: boolean;
+  /**
+   * `true` — у этого сотрудника есть привязанный
+   * `DisplayScreenConfig`. Hard-delete снесёт конфиг каскадом
+   * (`onDelete: Cascade`). UI должен явно предупредить.
+   */
+  hasDisplayScreenConfig: boolean;
+  hardDeleteBlockers: EmployeeHardDeleteBlockerDto[];
+  archiveBlockers: EmployeeArchiveBlockerDto[];
+}

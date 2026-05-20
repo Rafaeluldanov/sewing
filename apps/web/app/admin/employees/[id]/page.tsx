@@ -9,8 +9,10 @@ import {
   Users,
 } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
-import { getEmployee } from '@/lib/employees-api';
+import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { getEmployee, getEmployeeBlockers } from '@/lib/employees-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
+import { EmployeeDangerZone } from './danger-zone';
 import {
   AdminCard,
   AdminPageShell,
@@ -68,6 +70,18 @@ export default async function AdminEmployeeDetailPage({
     }
     throw e;
   }
+
+  // Blockers preflight для блока «Опасная зона». Если backend упал —
+  // показываем «опасную зону» в безопасном дефолте (всё запрещено),
+  // чтобы менеджер случайно не нажал «удалить» без preflight.
+  const viewer = await getCurrentUserOrNull();
+  const blockers = await getEmployeeBlockers(params.id).catch(() => ({
+    archiveAllowed: false,
+    hardDeleteAllowed: false,
+    hasDisplayScreenConfig: false,
+    archiveBlockers: [],
+    hardDeleteBlockers: [],
+  }));
 
   // PHASE 2 STEP 2: подгружаем активные подразделения для select-а
   // в форме. Если backend упал — рендерим без selectа (форма
@@ -288,6 +302,13 @@ export default async function AdminEmployeeDetailPage({
                 value: new Date(employee.createdAt).toLocaleString('ru-RU'),
               },
             ]}
+          />
+
+          <EmployeeDangerZone
+            employee={employee}
+            blockers={blockers}
+            viewerRole={viewer?.user.role ?? ''}
+            isSelf={viewer?.user.id === employee.id}
           />
         </div>
       </div>

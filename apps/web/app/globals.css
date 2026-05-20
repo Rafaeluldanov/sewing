@@ -15041,3 +15041,188 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 12px;
   margin-right: 8px;
 }
+
+/* -----------------------------------------------------------------------
+ * /admin/employees: row actions + danger zone + hard-delete modal
+ * (см. `apps/web/app/admin/employees/row-actions.tsx`,
+ * `apps/web/app/admin/employees/[id]/danger-zone.tsx`,
+ * `docs/employee-deletion-recon.md`).
+ * ----------------------------------------------------------------------- */
+
+.employee-row-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  white-space: nowrap;
+}
+
+.employee-row-actions__wrap {
+  position: relative;
+  display: inline-flex;
+}
+
+.employee-row-actions__inline {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.3rem 0.6rem;
+  border: 1px solid var(--admin-border);
+  border-radius: 6px;
+  background: #fff;
+  color: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+.employee-row-actions__inline:hover:not(:disabled),
+.employee-row-actions__inline:focus-visible {
+  background: #f1f5f9;
+  border-color: #cbd5e1;
+  outline: none;
+}
+.employee-row-actions__inline:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.employee-row-actions__error {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  min-width: 220px;
+  padding: 0.4rem 0.55rem;
+  font-size: 0.82rem;
+  background: var(--admin-danger-soft, #fee2e2);
+  color: var(--admin-danger-fg, #991b1b);
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  z-index: 21;
+}
+
+/* Danger zone -------------------------------------------------------------- */
+
+.employee-danger-zone {
+  display: flex;
+  flex-direction: column;
+  gap: 0.9rem;
+  margin-top: 1rem;
+  padding: 1rem 1.1rem;
+  border: 1px solid #fecaca;
+  border-radius: var(--radius-xl, 12px);
+  background: #fffafa;
+}
+.employee-danger-zone__head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  color: var(--admin-danger-fg, #991b1b);
+}
+.employee-danger-zone__title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 700;
+}
+.employee-danger-zone__row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.7rem 0;
+  border-top: 1px dashed #fecaca;
+}
+.employee-danger-zone__row:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+.employee-danger-zone__text {
+  flex: 1 1 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.92rem;
+}
+.employee-danger-zone__text strong {
+  font-size: 0.98rem;
+}
+.employee-danger-zone__text p {
+  margin: 0;
+}
+.employee-danger-zone__blockers {
+  margin: 0.2rem 0 0;
+  padding-left: 1.1rem;
+  color: var(--admin-danger-fg, #991b1b);
+  font-size: 0.85rem;
+}
+.employee-danger-zone__hint {
+  margin: 0.3rem 0 0;
+  font-size: 0.82rem;
+  color: var(--admin-muted);
+}
+.employee-danger-zone__error {
+  padding: 0.5rem 0.7rem;
+  background: var(--admin-danger-soft, #fee2e2);
+  color: var(--admin-danger-fg, #991b1b);
+  border: 1px solid #fecaca;
+  border-radius: 6px;
+  font-size: 0.88rem;
+}
+
+/* Hard-delete modal -------------------------------------------------------- */
+
+.hard-delete-modal__card {
+  max-width: 460px;
+  gap: 0.9rem;
+}
+.hard-delete-modal__summary {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 0.3rem 0.9rem;
+  margin: 0;
+  padding: 0.6rem 0.8rem;
+  background: #f8fafc;
+  border: 1px solid var(--admin-border);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+.hard-delete-modal__summary dt {
+  font-weight: 600;
+  color: var(--admin-muted);
+}
+.hard-delete-modal__summary dd {
+  margin: 0;
+}
+.hard-delete-modal__ack {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+  font-size: 0.88rem;
+  color: var(--admin-danger-fg, #991b1b);
+}
+.hard-delete-modal__ack input {
+  margin-top: 0.2rem;
+}
+.hard-delete-modal__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+.hard-delete-modal__field label {
+  font-size: 0.88rem;
+  font-weight: 500;
+}
+.hard-delete-modal__field input {
+  padding: 0.55rem 0.7rem;
+  font-size: 0.95rem;
+  border: 1px solid var(--admin-border);
+  border-radius: 6px;
+}
+.hard-delete-modal__field input:focus {
+  outline: 2px solid var(--admin-danger, #dc2626);
+  outline-offset: -1px;
+  border-color: var(--admin-danger, #dc2626);
+}
+.hard-delete-modal__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
