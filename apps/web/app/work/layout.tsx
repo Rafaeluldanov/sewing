@@ -35,8 +35,18 @@ export default async function WorkSectionLayout({
   return (
     <>
       {children}
-      {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
-      {showMasterCall ? <CallMasterButton /> : null}
+      {/*
+       * Кнопки «Мой QR-код» и «Мастер» — единый вертикальный
+       * столбик СПРАВА под три-точечным меню `.seamstress-actions`
+       * (см. `.employee-toolbar` в `globals.css`). Идентичная
+       * раскладка — на `/qc`, `/wto`, `/packing`.
+       */}
+      {showEmployeeQr || showMasterCall ? (
+        <div className="employee-toolbar">
+          {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
+          {showMasterCall ? <CallMasterButton /> : null}
+        </div>
+      ) : null}
     </>
   );
 }
