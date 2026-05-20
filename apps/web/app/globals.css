@@ -5155,8 +5155,8 @@ table.data-table td code {
 .employee-toolbar {
   position: fixed;
   /* safe-area + 0.4rem (инсет меню) + 40px (высота trigger'а
-     `.seamstress-actions__trigger`) + 60px зазор. */
-  top: calc(env(safe-area-inset-top, 0px) + 0.4rem + 40px + 60px);
+     `.seamstress-actions__trigger`) + 80px зазор. */
+  top: calc(env(safe-area-inset-top, 0px) + 0.4rem + 40px + 80px);
   /* Выравниваем по правому краю с `.seamstress-actions` (position:
      absolute, right: 0.4rem внутри `.work`), а не с краем вьюпорта.
      `.work` — это контент `.app-main` с padding 1.25rem (0.85rem на
