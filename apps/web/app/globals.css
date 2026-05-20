@@ -5132,24 +5132,40 @@ table.data-table td code {
   }
 }
 
-/* `/qc`: «Мой QR-код» + «Мастер» закреплены СВЕРХУ-СЛЕВА единой
-   полосой, а не FAB-ами в нижних углах (низ занят
-   `.qc-card__sticky-actions`). Полоса не доходит до три-точечного
-   меню справа (`.seamstress-actions`: right 0.4rem, ~40px), поэтому
-   его не перекрывает. Внутри полосы гасим `position: fixed` обеих
-   кнопок — позицию держит сам контейнер. Скоуп только `/qc`. */
+/* `/qc`: «Мой QR-код» + «Мастер» закреплены СПРАВА вертикальным
+   столбиком, а не FAB-ами в нижних углах (низ занят
+   `.qc-card__sticky-actions`). Сверху-справа уже стоит три-точечное
+   меню `.seamstress-actions` (top 0.4rem, 40×40), поэтому столбик
+   начинается ПОД ним (top = safe-area + 0.4rem меню + 40px высота
+   меню + 0.5rem зазор ≈ safe-area + 3rem). Скоуп — только `/qc`.
+
+   Кнопки внутри столбика — icon-only 44×44 (минимум места при
+   сохранении one-tap). Подписи скрываем, имя кнопки даёт `aria-label`
+   на самом `<button>`. Цветовая семантика «Мастера» (индиго → зелёный
+   при `data-state='called'`) и disabled-стейт остаются как было —
+   они и без текста сообщают статус. */
 .qc-toolbar {
   position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 0.4rem);
-  left: 0.5rem;
-  /* Зазор справа: 40px меню + его 0.4rem инсет + воздух. */
-  right: 3.4rem;
+  /* safe-area + 0.4rem (инсет меню) + 40px (высота trigger'а
+     `.seamstress-actions__trigger`) + 60px зазор по просьбе. */
+  top: calc(env(safe-area-inset-top, 0px) + 0.4rem + 40px + 60px);
+  /* Выравниваем по правому краю с `.seamstress-actions` (position:
+     absolute, right: 0.4rem внутри `.work`), а не с краем вьюпорта.
+     `.work` — это контент `.app-main` с padding 1.25rem (0.85rem на
+     <=640px) и max-width 1280px по центру; поэтому к 0.4rem меню
+     добавляем padding `.app-main` и зазор центрирования. */
+  right: calc(max((100vw - 1280px) / 2, 0px) + 1.25rem + 0.4rem);
   z-index: 80;
   display: flex;
-  flex-wrap: wrap;
-  align-items: flex-start;
+  flex-direction: column;
+  align-items: flex-end;
   gap: 0.5rem;
   pointer-events: none;
+}
+@media (max-width: 640px) {
+  .qc-toolbar {
+    right: calc(max((100vw - 1280px) / 2, 0px) + 0.85rem + 0.4rem);
+  }
 }
 .qc-toolbar .call-master-btn--fab,
 .qc-toolbar .employee-qr-btn--fab {
@@ -5157,8 +5173,27 @@ table.data-table td code {
   inset: auto;
   pointer-events: auto;
 }
-@media (max-width: 480px) {
-  .qc-toolbar { right: 3.1rem; }
+.qc-toolbar .call-master-btn,
+.qc-toolbar .employee-qr-btn {
+  /* 40×40 — как `.seamstress-actions__trigger` (меню «⋯/Выйти»). */
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+  border-radius: 50%;
+}
+.qc-toolbar .call-master-btn__label,
+.qc-toolbar .employee-qr-btn__label {
+  display: none;
+}
+.qc-toolbar .call-master-btn__icon,
+.qc-toolbar .employee-qr-btn__icon {
+  width: 1.4rem;
+  height: 1.4rem;
+  font-size: 0.95rem;
 }
 
 /* Карточка модалки «Мой QR» — вариант общего .qr-modal__card. */
