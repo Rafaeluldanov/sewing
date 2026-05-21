@@ -227,10 +227,6 @@ export function SeamstressActivePanel({
   return (
     <div className="seamstress-work">
       <CutIssueRuleBanner banner={cutIssueBanner} />
-      <CurrentWorkCard
-        items={currentWork}
-        shiftOperationId={shift.operationId}
-      />
 
       <div className="scan-card scan-card--simple" aria-label="Взять крой">
         <div>
@@ -329,6 +325,11 @@ export function SeamstressActivePanel({
           </button>
         )}
       </div>
+
+      <CurrentWorkCard
+        items={currentWork}
+        shiftOperationId={shift.operationId}
+      />
 
       {scannerOpen && (
         <QrScannerModal

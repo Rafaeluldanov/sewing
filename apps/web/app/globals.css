@@ -3375,6 +3375,31 @@ table.data-table td code {
   justify-content: space-between;
   gap: 0.75rem;
 }
+/* Кликабельная шапка-тогл (`<button>`-вариант) — сворачивает список
+   паспортов под нею. Сбрасываем дефолтные стили кнопки, чтобы внешне
+   шапка осталась идентичной неинтерактивной (см. current-work-card.tsx). */
+button.current-work__head--toggle {
+  width: 100%;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+button.current-work__head--toggle:hover .current-work__title,
+button.current-work__head--toggle:focus-visible .current-work__title {
+  color: var(--color-fg);
+}
+.current-work__caret {
+  flex-shrink: 0;
+  font-size: 0.9rem;
+  line-height: 1;
+  color: var(--color-fg-muted);
+  margin-left: 0.25rem;
+}
 .current-work__title {
   margin: 0;
   font-size: 0.78rem;

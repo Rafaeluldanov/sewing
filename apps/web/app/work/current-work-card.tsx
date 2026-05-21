@@ -14,8 +14,16 @@
  * значения, приглушённые подписи.
  */
 
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import type { CurrentWorkPassportDto } from '@sewing/shared/shifts';
+
+// Швея просила прятать длинный список «Сейчас в работе», чтобы быстрее
+// добираться до кнопки «Взять крой» (которую мы подняли над списком в
+// `seamstress-active-panel.tsx`). Состояние помним между сессиями, чтобы
+// после `router.refresh()` (приём/завершение кроя) свёрнутый список не
+// раскрывался обратно.
+const COLLAPSED_LS_KEY = 'seamstress.currentWork.collapsed.v1';
 
 interface Props {
   items: CurrentWorkPassportDto[];
@@ -37,7 +45,37 @@ function formatTime(iso: string | null | undefined): string | null {
 }
 
 export function CurrentWorkCard({ items, shiftOperationId }: Props) {
+  // Дефолт — раскрыто; читаем сохранённое значение в useEffect, чтобы не
+  // ломать гидрацию (server-render всегда стартует с тем же дефолтом).
+  const [collapsed, setCollapsed] = useState(false);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (window.localStorage.getItem(COLLAPSED_LS_KEY) === '1') {
+        setCollapsed(true);
+      }
+    } catch {
+      /* приватный режим/квота — игнорируем */
+    }
+  }, []);
+
+  const toggle = () => {
+    setCollapsed((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(COLLAPSED_LS_KEY, next ? '1' : '0');
+      } catch {
+        /* приватный режим/квота — состояние останется только в сессии */
+      }
+      return next;
+    });
+  };
+
   if (items.length === 0) {
+    // В пустом состоянии прятать нечего — оставляем неинтерактивную
+    // шапку, чтобы свёрнутый/развёрнутый тогл не мигал при появлении
+    // первого паспорта.
     return (
       <section
         className="current-work current-work--empty"
@@ -61,7 +99,13 @@ export function CurrentWorkCard({ items, shiftOperationId }: Props) {
 
   return (
     <section className="current-work" aria-label="Сейчас в работе">
-      <div className="current-work__head">
+      <button
+        type="button"
+        className="current-work__head current-work__head--toggle"
+        onClick={toggle}
+        aria-expanded={!collapsed}
+        aria-controls="current-work-list"
+      >
         <h3 className="current-work__title">Сейчас в работе</h3>
         <div
           className="current-work__summary"
@@ -75,16 +119,21 @@ export function CurrentWorkCard({ items, shiftOperationId }: Props) {
             {passportsCount}
           </span>
         </div>
-      </div>
-      <ul className="current-work__list">
-        {items.map((p) => (
-          <ActivePassportCard
-            key={p.id}
-            passport={p}
-            shiftOperationId={shiftOperationId}
-          />
-        ))}
-      </ul>
+        <span className="current-work__caret" aria-hidden="true">
+          {collapsed ? '▸' : '▾'}
+        </span>
+      </button>
+      {!collapsed && (
+        <ul className="current-work__list" id="current-work-list">
+          {items.map((p) => (
+            <ActivePassportCard
+              key={p.id}
+              passport={p}
+              shiftOperationId={shiftOperationId}
+            />
+          ))}
+        </ul>
+      )}
     </section>
   );
 }
