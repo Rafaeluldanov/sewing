@@ -14703,7 +14703,8 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 13px;
 }
 .pboard__period,
-.pboard__refresh {
+.pboard__refresh,
+.pboard__expand {
   border: 1px solid var(--color-border-strong);
   background: var(--color-bg-card);
   color: var(--color-fg-muted);
@@ -14712,6 +14713,16 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 13px;
   font-weight: 600;
   cursor: pointer;
+}
+/* Тогл «Растянуть/Свернуть» имеет смысл только на десктопе:
+   мобайл уже рендерит аккордеон вместо таблицы (см. медиазапрос ниже). */
+.pboard__expand {
+  display: none;
+}
+.pboard__expand[aria-pressed='true'] {
+  background: var(--color-accent);
+  border-color: var(--color-accent);
+  color: #fff;
 }
 .pboard__period.is-active {
   background: var(--color-accent);
@@ -14895,6 +14906,28 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .pboard__th-released {
   background: var(--color-ok-soft) !important;
   color: var(--color-ok-fg) !important;
+}
+
+/* Режим «растянуть» (см. `production-board-view.tsx`, кнопка `.pboard__expand`).
+   Только десктоп — мобайл всё равно прячет `.pboard__desktop` (см. ниже).
+   `.master-page` шириной 720px центрирован через `margin: 0 auto`, поэтому
+   приём `left: 50%; transform: translateX(-50%)` относительно родителя
+   совпадает с центром вьюпорта; ширина капается 1600px, чтобы на
+   ультравайдах матрица не растягивалась до неудобства. */
+@media (min-width: 861px) {
+  .pboard__expand {
+    display: inline-flex;
+    align-items: center;
+  }
+  .pboard--wide .pboard__desktop {
+    position: relative;
+    left: 50%;
+    transform: translateX(-50%);
+    width: min(calc(100vw - 2rem), 1600px);
+  }
+  .pboard--wide .pboard__table {
+    min-width: 100%;
+  }
 }
 
 .pboard__mobile {

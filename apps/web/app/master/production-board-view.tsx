@@ -26,6 +26,13 @@ import {
 
 const PERIODS = [7, 14, 30] as const;
 
+// Состояние «таблица растянута на всю ширину экрана» (только десктоп).
+// `.master-page` фиксирован на 720px, поэтому матрица «движение тиража»
+// в обычном режиме скроллится горизонтально. На больших мониторах мастер
+// просил иметь возможность раскрывать её на всю ширину — переключатель
+// рядом с «⟳ Обновить», состояние помнится между сессиями.
+const EXPANDED_LS_KEY = 'master.pboard.expanded.v1';
+
 function ReconBlock({ c }: { c: ProductionBoardCohortDto }) {
   const bad = c.notPickedPassports > 0;
   return (
@@ -138,6 +145,33 @@ export function ProductionBoardView() {
   const [openAcc, setOpenAcc] = useState<string | null>(null);
   const [drill, setDrill] = useState<ProductionBoardDrillDto | null>(null);
   const [drillLoading, setDrillLoading] = useState(false);
+  const [expanded, setExpanded] = useState(false);
+
+  // Читаем сохранённое состояние «растянуть» из localStorage уже после
+  // монтирования, чтобы не ломать гидрацию (server render всегда стартует
+  // в обычном режиме).
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    try {
+      if (window.localStorage.getItem(EXPANDED_LS_KEY) === '1') {
+        setExpanded(true);
+      }
+    } catch {
+      /* приватный режим/квота — молча игнорируем */
+    }
+  }, []);
+
+  const toggleExpanded = useCallback(() => {
+    setExpanded((prev) => {
+      const next = !prev;
+      try {
+        window.localStorage.setItem(EXPANDED_LS_KEY, next ? '1' : '0');
+      } catch {
+        /* приватный режим/квота — состояние сохраняется только в сессии */
+      }
+      return next;
+    });
+  }, []);
 
   const load = useCallback(async (d: number) => {
     setLoading(true);
@@ -165,7 +199,7 @@ export function ProductionBoardView() {
   );
 
   return (
-    <div className="pboard">
+    <div className={'pboard' + (expanded ? ' pboard--wide' : '')}>
       <div className="pboard__bar">
         <span className="pboard__muted">Период выдачи:</span>
         {PERIODS.map((p) => (
@@ -187,6 +221,19 @@ export function ProductionBoardView() {
           disabled={loading}
         >
           {loading ? 'Загрузка…' : '⟳ Обновить'}
+        </button>
+        <button
+          type="button"
+          className="pboard__expand"
+          onClick={toggleExpanded}
+          aria-pressed={expanded}
+          title={
+            expanded
+              ? 'Свернуть таблицу до обычной ширины'
+              : 'Растянуть таблицу на всю ширину экрана'
+          }
+        >
+          {expanded ? '⇔ Свернуть' : '⇔ Растянуть'}
         </button>
       </div>
 
