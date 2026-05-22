@@ -86,7 +86,11 @@ export class ProductionBoardService {
    *     `Passport.currentOperationId` ещё указывает на CUT_DIVISION, а
    *     доменно правильная операция швеи лежит в её активной
    *     `ShiftSession.operationId`. Для ОТК/ВТО/упаковки sewing-смены
-   *     нет → берём `currentOperation` (он уже корректен).
+   *     нет → берём `currentOperation` (он уже корректен). Если же
+   *     открытой смены нет, а `currentOperation` ещё кроечный (выдан, но
+   *     не отсканирован) — кладём паспорт на ПЕРВУЮ швейную операцию
+   *     маршрута заказа, иначе он пропадёт с доски, когда швея закроет
+   *     смену (положение «issued-but-not-scanned» жило только в смене).
    *
    *  2. БУФЕР (✔, `currentEmployeeId = null`). Швея сдала операцию,
    *     паспорт ждёт следующего шага. Display в этом случае ставит ✔
@@ -111,17 +115,51 @@ export class ProductionBoardService {
     opByOrderIndex: Map<string, Map<number, { id: string; code: string }>>,
   ): { id: string; code: string } | null {
     if (p.status !== PassportStatus.IN_PROGRESS) return null;
+
+    // Не-кроечные шаги маршрута ЭТОГО заказа (`opByOrderIndex` уже без
+    // кройки). Из них — два хелпера для fallback'а «выдан швее, но
+    // операция в паспорте ещё кроечная»:
+    //   isColumnOp   — операция реально присутствует как колонка маршрута;
+    //   firstSewingOp — первая (минимальный index) швейная операция.
+    const byOrder = p.orderId ? opByOrderIndex.get(p.orderId) : undefined;
+    const isColumnOp = (id: string): boolean => {
+      if (!byOrder) return false;
+      for (const o of byOrder.values()) if (o.id === id) return true;
+      return false;
+    };
+    const firstSewingOp = (): { id: string; code: string } | null => {
+      if (!byOrder) return null;
+      let minIdx = Infinity;
+      let op: { id: string; code: string } | null = null;
+      for (const [idx, o] of byOrder) {
+        if (idx < minIdx) {
+          minIdx = idx;
+          op = o;
+        }
+      }
+      return op;
+    };
+
     if (p.currentEmployeeId !== null) {
       const shiftOp = sewingShiftByEmployee.get(p.currentEmployeeId);
       if (shiftOp) return shiftOp;
-      return p.currentOperation;
+      // Открытой швейной смены нет. `currentOperation` может быть
+      // устаревшей кроечной операцией: паспорт выдан швее, но первый
+      // `OPERATION_SCAN` на швейную операцию не прошёл, а маршрут не
+      // сдвинулся с кройки (см. project_no_operation_scan_events). Если
+      // currentOperation — реальная колонка маршрута заказа (швея уже на
+      // ОТК/ВТО/упаковке либо была отсканирована), берём её. Иначе кладём
+      // паспорт на первую швейную операцию маршрута, чтобы выданный-но-
+      // не-начатый паспорт не исчезал с доски, как только швея закроет
+      // смену (без этого 114 шт «в работе» пропадали, 21.05.2026).
+      if (p.currentOperation && isColumnOp(p.currentOperation.id))
+        return p.currentOperation;
+      return firstSewingOp();
     }
     // Буфер: «закончил операцию, ждёт следующего шага» — позиция по
     // реальному шагу маршрута (как ✔ done на «Экране цеха»).
     if (p.currentRouteStepIndex === null || !p.orderId) return null;
-    return (
-      opByOrderIndex.get(p.orderId)?.get(p.currentRouteStepIndex) ?? null
-    );
+    return byOrder?.get(p.currentRouteStepIndex) ?? null;
   }
 
   async getBoard(query: ProductionBoardQuery): Promise<ProductionBoardDto> {
