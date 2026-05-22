@@ -48,6 +48,10 @@ function parseSteps(form: FormData): RouteTemplateStepInputDto[] {
   return sortedIds.map((operationId) => ({
     operationId,
     isOptional: form.get(`stepOptional[${operationId}]`) === 'on',
+    // «↕ параллельно с соседним»: шаг идёт параллельно с предыдущим в
+    // финальном порядке. Backend свернёт связанные соседние шаги в одну
+    // параллельную группу (`RoutesService.computeParallelGroups`).
+    parallelWithPrev: form.get(`stepParallel[${operationId}]`) === 'on',
   }));
 }
 

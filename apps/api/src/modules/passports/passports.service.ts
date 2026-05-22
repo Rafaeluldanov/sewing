@@ -50,6 +50,7 @@ import {
   PassportNotQcPassedException,
   PassportNotYoursException,
   PassportIssueBackwardException,
+  PassportParallelGroupIncompleteException,
   PassportScanBackwardException,
   PassportNotYoursToEditException,
   PassportOrderNotInProductionException,
@@ -1045,6 +1046,112 @@ export class PassportsService {
     return { passport: detail, cell: cellDetail };
   }
 
+  /**
+   * Порядок маршрута с учётом ПАРАЛЛЕЛЬНЫХ (взаимозаменяемых) групп
+   * (`OrderRouteStep.parallelGroup`). Используется в `issueToEmployee` /
+   * `scanOnOperation` / `completeOperationByEmployee` вместо «сырого»
+   * сравнения `index < currentRouteStepIndex`.
+   *
+   * Возвращает:
+   *   - `targetIndex` — индекс целевой операции в маршруте (`null`, если
+   *     операции нет в маршруте → enforcement не применяется, как раньше);
+   *   - `backward` — целевой шаг идёт РАНЬШЕ текущего по «свёрнутому»
+   *     рангу: операции одной параллельной группы делят общий ранг
+   *     (= минимальный index группы), поэтому взять КИПЕРКУ после
+   *     РАСПОШИВА (одна группа) — НЕ «назад»;
+   *   - `groupIncomplete` — целевой шаг стоит ПОСЛЕ некой параллельной
+   *     группы, в которой завершены ещё НЕ все операции (AND-гейт: на
+   *     ОТК нельзя, пока не сделаны и КИПЕРКА, и РАСПОШИВ).
+   *
+   * Без параллельных групп (`parallelGroup` везде `null`) поведение
+   * идентично прежнему: ранг = index, `groupIncomplete` всегда `false`.
+   */
+  private async evaluateRouteOrder(
+    passport: {
+      id: string;
+      orderId: string | null;
+      currentRouteStepIndex: number | null;
+    },
+    targetOperationId: string,
+  ): Promise<{
+    targetIndex: number | null;
+    backward: boolean;
+    groupIncomplete: boolean;
+  }> {
+    const none = { targetIndex: null, backward: false, groupIncomplete: false };
+    if (!passport.orderId) return none;
+    const steps = await this.prisma.orderRouteStep.findMany({
+      where: { orderId: passport.orderId },
+      select: { index: true, operationId: true, parallelGroup: true },
+    });
+    if (steps.length === 0) return none;
+
+    const groupMin = new Map<number, number>();
+    const groupMax = new Map<number, number>();
+    const groupOps = new Map<number, string[]>();
+    for (const s of steps) {
+      if (s.parallelGroup == null) continue;
+      groupMin.set(
+        s.parallelGroup,
+        Math.min(groupMin.get(s.parallelGroup) ?? s.index, s.index),
+      );
+      groupMax.set(
+        s.parallelGroup,
+        Math.max(groupMax.get(s.parallelGroup) ?? s.index, s.index),
+      );
+      const arr = groupOps.get(s.parallelGroup) ?? [];
+      arr.push(s.operationId);
+      groupOps.set(s.parallelGroup, arr);
+    }
+    // Групп-репрезентативный ранг шага (свёртка параллельной группы).
+    const rep = (index: number, group: number | null): number =>
+      group != null ? groupMin.get(group) ?? index : index;
+
+    const targetStep = steps.find((s) => s.operationId === targetOperationId);
+    if (!targetStep) return none; // не в маршруте — не enforce
+    const targetIndex = targetStep.index;
+    const targetRep = rep(targetIndex, targetStep.parallelGroup);
+
+    let backward = false;
+    if (passport.currentRouteStepIndex !== null) {
+      const curStep = steps.find(
+        (s) => s.index === passport.currentRouteStepIndex,
+      );
+      if (curStep) {
+        backward = targetRep < rep(curStep.index, curStep.parallelGroup);
+      }
+    }
+
+    // AND-гейт: параллельные группы, целиком стоящие ДО target, должны
+    // быть завершены полностью. Запрос завершённых операций — только если
+    // такие группы есть (в обычном маршруте без групп — пропускаем).
+    let groupIncomplete = false;
+    const groupsBefore: number[] = [];
+    for (const [g, gMax] of groupMax) {
+      if (gMax < targetIndex) groupsBefore.push(g);
+    }
+    if (groupsBefore.length > 0) {
+      const finished = await this.prisma.passportEvent.findMany({
+        where: {
+          passportId: passport.id,
+          type: PassportEventType.OPERATION_FINISHED,
+          operationId: { not: null },
+        },
+        select: { operationId: true },
+      });
+      const finishedSet = new Set(finished.map((e) => e.operationId));
+      for (const g of groupsBefore) {
+        const ops = groupOps.get(g) ?? [];
+        if (!ops.every((op) => finishedSet.has(op))) {
+          groupIncomplete = true;
+          break;
+        }
+      }
+    }
+
+    return { targetIndex, backward, groupIncomplete };
+  }
+
   // -------------------------------------------------------------------------
   // ISSUE (Шаг 6: «Получить крой»)
   // -------------------------------------------------------------------------
@@ -1132,17 +1239,21 @@ export class PassportsService {
     // `PASSPORT_COMPLETE_BACKWARD`, и паспорт «висел» у неё в работе
     // (инцидент 13.05.2026, 5 паспортов на КИПЕРКЕ после РАСПОШИВ).
     // Откат назад остаётся прерогативой мастера через `set-route-step`.
-    const issueMatchedStep = await this.prisma.orderRouteStep.findFirst({
-      where: { orderId: passport.orderId, operationId: session.operationId },
-      select: { index: true },
-    });
-    if (
-      issueMatchedStep &&
-      passport.currentRouteStepIndex !== null &&
-      issueMatchedStep.index < passport.currentRouteStepIndex
-    ) {
-      throw new PassportIssueBackwardException();
+    // Порядок маршрута с учётом параллельных групп (см. evaluateRouteOrder):
+    //   - backward → нельзя «получить крой» раньше текущего ранга (внутри
+    //     одной параллельной группы — можно, это не «назад»);
+    //   - groupIncomplete → нельзя выйти на операцию после параллельной
+    //     группы, пока не завершены все её операции (ОТК ждёт обе из
+    //     {КИПЕРКА, РАСПОШИВ}).
+    const issueOrder = await this.evaluateRouteOrder(
+      passport,
+      session.operationId,
+    );
+    if (issueOrder.backward) throw new PassportIssueBackwardException();
+    if (issueOrder.groupIncomplete) {
+      throw new PassportParallelGroupIncompleteException();
     }
+    const issueTargetIndex = issueOrder.targetIndex;
 
     // QC-gate для входа на ВТО — зеркало `scanOnOperation` (см.
     // docs/flows.md §F6 / ADR-0013). Раз issue теперь переводит паспорт
@@ -1231,9 +1342,8 @@ export class PassportsService {
             currentEmployeeId: employeeId,
             // Взять крой = встать на операцию смены (зеркало scan).
             currentOperationId: session.operationId,
-            currentRouteStepIndex: issueMatchedStep
-              ? issueMatchedStep.index
-              : passport.currentRouteStepIndex,
+            currentRouteStepIndex:
+              issueTargetIndex ?? passport.currentRouteStepIndex,
             status: PassportStatus.IN_PROGRESS,
           },
         });
@@ -1376,9 +1486,8 @@ export class PassportsService {
           currentEmployeeId: employeeId,
           // Взять крой = встать на операцию смены (зеркало scan).
           currentOperationId: session.operationId,
-          currentRouteStepIndex: issueMatchedStep
-            ? issueMatchedStep.index
-            : passport.currentRouteStepIndex,
+          currentRouteStepIndex:
+            issueTargetIndex ?? passport.currentRouteStepIndex,
           status: PassportStatus.IN_PROGRESS,
         },
       });
@@ -1536,32 +1645,23 @@ export class PassportsService {
         )
       : false;
 
-    // Если у заказа есть snapshot маршрута и отсканированная операция
-    // в нём встречается — двигаем `currentRouteStepIndex`. Если операция
-    // не из маршрута, оставляем прежнее значение (НЕ ломаем UI-подсказку,
-    // НЕ кидаем 409). См. `docs/domain.md §«Маршруты производства»`.
-    const matchedStep = await this.prisma.orderRouteStep.findFirst({
-      where: { orderId: passport.orderId, operationId: session.operationId },
-      select: { index: true },
-    });
-
-    // Запрещаем «брать» операцию, идущую в маршруте раньше уже
-    // зафиксированного шага паспорта: швея на «прошлой» операции не
-    // должна суметь перехватить паспорт назад. Симметрично
-    // `PASSPORT_COMPLETE_BACKWARD` в `completeOperationByEmployee` —
-    // откат назад остаётся прерогативой мастера через `set-route-step`.
-    // Идемпотентный re-scan той же операции (`sameOp && sameEmployee`)
-    // отрабатывает выше и сюда не доходит.
-    if (
-      matchedStep &&
-      passport.currentRouteStepIndex !== null &&
-      matchedStep.index < passport.currentRouteStepIndex
-    ) {
-      throw new PassportScanBackwardException();
+    // Порядок маршрута с учётом параллельных групп (см.
+    // `evaluateRouteOrder`). Запрещаем «брать» операцию раньше текущего
+    // ранга (внутри одной параллельной группы — можно, это не «назад»);
+    // и нельзя перейти на операцию после параллельной группы, пока её
+    // операции не завершены все (ОТК ждёт обе из {КИПЕРКА, РАСПОШИВ}).
+    // Идемпотентный re-scan (`sameOp && sameEmployee`) отрабатывает выше.
+    const scanOrder = await this.evaluateRouteOrder(
+      passport,
+      session.operationId,
+    );
+    if (scanOrder.backward) throw new PassportScanBackwardException();
+    if (scanOrder.groupIncomplete) {
+      throw new PassportParallelGroupIncompleteException();
     }
 
     const nextRouteStepIndex =
-      matchedStep !== null ? matchedStep.index : passport.currentRouteStepIndex;
+      scanOrder.targetIndex ?? passport.currentRouteStepIndex;
 
     await this.prisma.$transaction(async (tx) => {
       await tx.passport.update({
@@ -1729,23 +1829,18 @@ export class PassportsService {
     // соответствует завершаемой операции. Это нужно, чтобы корректно
     // обновить `currentRouteStepIndex` (для WIP-buffer ✔) и проверить,
     // что мы не пытаемся откатиться назад.
-    const completedStep = await this.prisma.orderRouteStep.findFirst({
-      where: {
-        orderId: passport.orderId,
-        operationId: completedOperationId,
-      },
-      select: { index: true, operationId: true },
-    });
-
-    // Откат назад запрещён: если завершаемый шаг стоит в маршруте
-    // раньше текущего, это либо ошибочный flow (швея на «прошлой»
-    // операции пытается «завершить» ещё раз), либо попытка обойти
-    // master-action. И то, и другое — 409 PASSPORT_COMPLETE_BACKWARD.
-    if (
-      completedStep &&
-      passport.currentRouteStepIndex !== null &&
-      completedStep.index < passport.currentRouteStepIndex
-    ) {
+    // Откат назад запрещён (с учётом параллельных групп — см.
+    // `evaluateRouteOrder`): если завершаемый шаг по «свёрнутому» рангу
+    // идёт раньше текущего, это ошибочный flow / обход master-action →
+    // 409 PASSPORT_COMPLETE_BACKWARD. Завершить операцию из той же
+    // параллельной группы (КИПЕРКА после РАСПОШИВА) — НЕ «назад».
+    // AND-гейт (`groupIncomplete`) к complete НЕ применяем: завершение
+    // самой операции группы всегда допустимо.
+    const completeOrder = await this.evaluateRouteOrder(
+      passport,
+      completedOperationId,
+    );
+    if (completeOrder.backward) {
       throw new PassportCompleteBackwardException();
     }
 
@@ -1756,7 +1851,7 @@ export class PassportsService {
       currentCellId: passport.currentCellId,
     };
     const nextRouteStepIndex =
-      completedStep?.index ?? passport.currentRouteStepIndex;
+      completeOrder.targetIndex ?? passport.currentRouteStepIndex;
     const afterSnapshot = {
       currentOperationId: completedOperationId,
       currentRouteStepIndex: nextRouteStepIndex,

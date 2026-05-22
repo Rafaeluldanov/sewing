@@ -77,6 +77,7 @@ export default async function AdminRoutesListPage({
             index: i + 1,
             name: s.operationName,
             category: opCategoryById.get(s.operationId) ?? null,
+            parallelGroup: s.parallelGroup,
           }));
         return { ...tpl, steps };
       } catch {

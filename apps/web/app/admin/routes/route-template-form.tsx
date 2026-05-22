@@ -2,7 +2,7 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
-import { ArrowDown, ArrowUp, Plus, Save, X } from 'lucide-react';
+import { ArrowDown, ArrowUp, ArrowUpDown, Plus, Save, X } from 'lucide-react';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
 import { groupOperationsByCategory } from '@sewing/shared/operations';
 import type { RouteTemplateDetailDto } from '@sewing/shared/routes';
@@ -30,6 +30,8 @@ interface Props {
 interface SelectedStep {
   operationId: string;
   isOptional: boolean;
+  /** «↕ параллельно с предыдущим шагом» — взаимозаменяемы по порядку. */
+  parallelWithPrev: boolean;
 }
 
 function SubmitButton({ mode }: { mode: Mode }) {
@@ -72,10 +74,17 @@ function SubmitButton({ mode }: { mode: Mode }) {
 export function RouteTemplateForm({ mode, operations, template }: Props) {
   const initialSelected: SelectedStep[] = useMemo(() => {
     if (mode !== 'edit' || !template) return [];
-    return template.steps
-      .slice()
-      .sort((a, b) => a.index - b.index)
-      .map((s) => ({ operationId: s.operationId, isOptional: s.isOptional }));
+    const ordered = template.steps.slice().sort((a, b) => a.index - b.index);
+    return ordered.map((s, i) => ({
+      operationId: s.operationId,
+      isOptional: s.isOptional,
+      // Тумблер «↕ параллельно с предыдущим» выводим из общей
+      // параллельной группы с шагом выше.
+      parallelWithPrev:
+        i > 0 &&
+        s.parallelGroup != null &&
+        s.parallelGroup === ordered[i - 1].parallelGroup,
+    }));
   }, [mode, template]);
 
   const [selected, setSelected] = useState<SelectedStep[]>(initialSelected);
@@ -120,8 +129,16 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
     setSelected((prev) => {
       const exists = prev.some((s) => s.operationId === operationId);
       if (exists) return prev.filter((s) => s.operationId !== operationId);
-      return [...prev, { operationId, isOptional: false }];
+      return [...prev, { operationId, isOptional: false, parallelWithPrev: false }];
     });
+  };
+
+  const setParallel = (operationId: string, value: boolean) => {
+    setSelected((prev) =>
+      prev.map((s) =>
+        s.operationId === operationId ? { ...s, parallelWithPrev: value } : s,
+      ),
+    );
   };
 
   const move = (operationId: string, direction: -1 | 1) => {
@@ -205,10 +222,25 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
             {selected.map((step, i) => {
               const op = operationsById.get(step.operationId);
               if (!op) return null;
+              const parallel = i > 0 && step.parallelWithPrev;
               return (
-                <li key={step.operationId} className="admin-step-edit__row">
+                <li
+                  key={step.operationId}
+                  className={`admin-step-edit__row${parallel ? ' admin-step-edit__row--parallel' : ''}`}
+                >
                   <span className="admin-step-edit__num">{i + 1}</span>
-                  <span className="admin-step-edit__name">{op.name}</span>
+                  <span className="admin-step-edit__name">
+                    {op.name}
+                    {parallel && (
+                      <span
+                        className="admin-step-edit__parallel-tag"
+                        title="Параллельно с шагом выше: порядок любой, обе операции — один этап"
+                      >
+                        <ArrowUpDown size={12} strokeWidth={1.8} aria-hidden />{' '}
+                        параллельно
+                      </span>
+                    )}
+                  </span>
                   <label
                     className="admin-step-edit__opt"
                     title="Шаг помечен как опциональный"
@@ -223,6 +255,19 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
                     />
                     опц.
                   </label>
+                  <button
+                    type="button"
+                    className={`admin-btn admin-btn--ghost admin-btn--icon${parallel ? ' admin-btn--active' : ''}`}
+                    onClick={() =>
+                      setParallel(step.operationId, !step.parallelWithPrev)
+                    }
+                    disabled={i === 0}
+                    aria-pressed={parallel}
+                    title="↕ Параллельно с предыдущим шагом (взаимозаменяемы по порядку)"
+                    aria-label="Параллельно с предыдущим шагом"
+                  >
+                    <ArrowUpDown size={14} strokeWidth={1.6} aria-hidden />
+                  </button>
                   <button
                     type="button"
                     className="admin-btn admin-btn--ghost admin-btn--icon"
@@ -259,6 +304,13 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
                     name={`stepOrder[${step.operationId}]`}
                     value={i}
                   />
+                  {parallel && (
+                    <input
+                      type="hidden"
+                      name={`stepParallel[${step.operationId}]`}
+                      value="on"
+                    />
+                  )}
                 </li>
               );
             })}

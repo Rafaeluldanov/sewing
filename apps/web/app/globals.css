@@ -8231,6 +8231,12 @@ body:has(.admin-layout) .app-header { display: none !important; }
   padding: 0 2px;
   user-select: none;
 }
+/* ⇄ между взаимозаменяемыми операциями (порядок любой). */
+.admin-route-steps__sep--parallel {
+  display: inline-flex;
+  align-items: center;
+  color: var(--admin-primary);
+}
 .admin-route-step {
   display: inline-flex;
   align-items: center;
@@ -8332,6 +8338,29 @@ body:has(.admin-layout) .app-header { display: none !important; }
   align-items: center;
   gap: 8px;
   flex-wrap: wrap;
+}
+
+/* Параллельный (взаимозаменяемый) шаг: связан с шагом выше в один этап.
+   Лёгкий левый акцент + чип «↕ параллельно» — порядок внутри пары любой. */
+.admin-step-edit__row--parallel {
+  border-left: 3px solid var(--admin-primary);
+  padding-left: 6px;
+  border-radius: 4px;
+  background: rgba(37, 99, 235, 0.06);
+}
+.admin-step-edit__parallel-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  margin-left: 8px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--admin-primary);
+  white-space: nowrap;
+}
+.admin-btn--active {
+  color: var(--admin-primary);
+  background: rgba(37, 99, 235, 0.12);
 }
 
 /* Admin date field --------------------------------------------------------

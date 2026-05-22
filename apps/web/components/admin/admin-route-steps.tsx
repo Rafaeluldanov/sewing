@@ -19,6 +19,7 @@
  */
 import {
   Activity,
+  ArrowLeftRight,
   CheckCircle2,
   Flame,
   Package,
@@ -35,6 +36,12 @@ export interface AdminRouteStep {
   name: string;
   /** Enum категории (CUTTING/SEWING/QC/IRONING/PACKING). Может быть пустым. */
   category?: string | null;
+  /**
+   * Номер параллельной (взаимозаменяемой) группы или `null`. Соседние
+   * шаги с одинаковым ненулевым значением соединяются значком ⇄ вместо
+   * стрелки → (порядок между ними любой).
+   */
+  parallelGroup?: number | null;
 }
 
 interface AdminRouteStepsProps {
@@ -97,11 +104,21 @@ export function AdminRouteSteps({
               </span>
               <span className="admin-route-step__name">{s.name}</span>
             </span>
-            {i < visible.length - 1 && (
-              <span className="admin-route-steps__sep" aria-hidden>
-                →
-              </span>
-            )}
+            {i < visible.length - 1 &&
+              (s.parallelGroup != null &&
+              s.parallelGroup === visible[i + 1].parallelGroup ? (
+                <span
+                  className="admin-route-steps__sep admin-route-steps__sep--parallel"
+                  title="Параллельные операции: порядок любой"
+                  aria-label="параллельно с"
+                >
+                  <ArrowLeftRight size={13} strokeWidth={1.8} aria-hidden />
+                </span>
+              ) : (
+                <span className="admin-route-steps__sep" aria-hidden>
+                  →
+                </span>
+              ))}
           </li>
         );
       })}

@@ -99,13 +99,15 @@ export class RoutesService {
    */
   async getActiveStepsForSnapshot(
     templateId: string,
-  ): Promise<{ index: number; operationId: string }[]> {
+  ): Promise<
+    { index: number; operationId: string; parallelGroup: number | null }[]
+  > {
     const template = await this.prisma.routeTemplate.findUnique({
       where: { id: templateId },
       include: {
         steps: {
           orderBy: { index: 'asc' },
-          select: { index: true, operationId: true },
+          select: { index: true, operationId: true, parallelGroup: true },
         },
       },
     });
@@ -113,6 +115,7 @@ export class RoutesService {
     return template.steps.map((s) => ({
       index: s.index,
       operationId: s.operationId,
+      parallelGroup: s.parallelGroup,
     }));
   }
 
@@ -136,12 +139,14 @@ export class RoutesService {
           },
         });
         if (dto.steps.length > 0) {
+          const groups = RoutesService.computeParallelGroups(dto.steps);
           await tx.routeTemplateStep.createMany({
             data: dto.steps.map((s, i) => ({
               templateId: created.id,
               index: i,
               operationId: s.operationId,
               isOptional: s.isOptional ?? false,
+              parallelGroup: groups[i],
             })),
           });
         }
@@ -259,14 +264,42 @@ export class RoutesService {
   ): Promise<void> {
     await tx.routeTemplateStep.deleteMany({ where: { templateId } });
     if (steps.length === 0) return;
+    const groups = RoutesService.computeParallelGroups(steps);
     await tx.routeTemplateStep.createMany({
       data: steps.map((s, i) => ({
         templateId,
         index: i,
         operationId: s.operationId,
         isOptional: s.isOptional ?? false,
+        parallelGroup: groups[i],
       })),
     });
+  }
+
+  /**
+   * Сворачивает соседние шаги, помеченные `parallelWithPrev`, в номера
+   * параллельных групп. Возвращает массив `parallelGroup` той же длины,
+   * что `steps` (`null` — обычный последовательный шаг). На первом шаге
+   * флаг игнорируется. Непрерывный «прогон» связанных шагов = одна
+   * группа: шаги i-1..i..i+1 с `parallelWithPrev` на i и i+1 → один
+   * номер. Номера локальны для шаблона (1,2,…), их абсолютное значение
+   * не важно — важна лишь общность у соседей.
+   */
+  private static computeParallelGroups(
+    steps: RouteTemplateStepInputDto[],
+  ): (number | null)[] {
+    const groups: (number | null)[] = steps.map(() => null);
+    let gid = 0;
+    for (let i = 1; i < steps.length; i += 1) {
+      if (steps[i].parallelWithPrev) {
+        if (groups[i - 1] === null) {
+          gid += 1;
+          groups[i - 1] = gid;
+        }
+        groups[i] = groups[i - 1];
+      }
+    }
+    return groups;
   }
 
   private async assertOperationsExist(operationIds: string[]): Promise<void> {
@@ -295,6 +328,7 @@ export class RoutesService {
       operationCode: s.operation.code,
       operationName: s.operation.name,
       isOptional: s.isOptional,
+      parallelGroup: s.parallelGroup,
     }));
     return {
       id: row.id,

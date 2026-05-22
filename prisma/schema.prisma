@@ -2451,6 +2451,12 @@ model RouteTemplateStep {
   /// На MVP не используется в enforcement, но фиксируется в данных,
   /// чтобы потом можно было реализовать «можно пропустить шаг».
   isOptional  Boolean @default(false)
+  /// Метка параллельной (взаимозаменяемой) группы. Соседние шаги одного
+  /// шаблона с одинаковым ненулевым `parallelGroup` образуют один этап:
+  /// внутри порядок любой, выход на следующий этап — только когда все
+  /// шаги группы завершены. `null` — обычный последовательный шаг.
+  /// Настраивается в редакторе маршрута (`/admin/routes/[id]`).
+  parallelGroup Int?
 
   template  RouteTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
   operation Operation     @relation(fields: [operationId], references: [id])
@@ -2469,6 +2475,11 @@ model OrderRouteStep {
   orderId     String
   index       Int
   operationId String
+  /// Снимок `RouteTemplateStep.parallelGroup` на момент старта заказа.
+  /// Шаги заказа с одинаковым ненулевым значением — взаимозаменяемый
+  /// этап (см. enforcement в `PassportsService`). `null` —
+  /// последовательный шаг.
+  parallelGroup Int?
 
   order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   operation Operation @relation(fields: [operationId], references: [id])

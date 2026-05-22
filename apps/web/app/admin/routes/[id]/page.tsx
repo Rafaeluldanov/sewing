@@ -76,6 +76,7 @@ export default async function AdminRouteTemplateDetailPage({ params }: Params) {
       index: i + 1,
       name: s.operationName,
       category: opCategoryById.get(s.operationId) ?? null,
+      parallelGroup: s.parallelGroup,
     }));
 
   return (

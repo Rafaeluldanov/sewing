@@ -1300,7 +1300,7 @@ export class OrdersService {
     const currentSteps = await tx.orderRouteStep.findMany({
       where: { orderId },
       orderBy: { index: 'asc' },
-      select: { index: true, operationId: true },
+      select: { index: true, operationId: true, parallelGroup: true },
     });
 
     if (!order.routeTemplateId) {
@@ -1320,7 +1320,9 @@ export class OrdersService {
       desiredSteps.every(
         (s, i) =>
           currentSteps[i]?.index === s.index &&
-          currentSteps[i]?.operationId === s.operationId,
+          currentSteps[i]?.operationId === s.operationId &&
+          (currentSteps[i]?.parallelGroup ?? null) ===
+            (s.parallelGroup ?? null),
       );
 
     if (equal) {
@@ -1334,6 +1336,7 @@ export class OrdersService {
           orderId,
           index: s.index,
           operationId: s.operationId,
+          parallelGroup: s.parallelGroup ?? null,
         })),
       });
     }
@@ -2102,7 +2105,11 @@ export class OrdersService {
     // без `OrderRouteStep[]`. Idempotent guard `existing === 0`
     // гарантирует, что мы не перепишем уже зафиксированный snapshot
     // (важно: на этой точке план считается immutable, ADR-0006).
-    let snapshotSteps: { index: number; operationId: string }[] = [];
+    let snapshotSteps: {
+      index: number;
+      operationId: string;
+      parallelGroup: number | null;
+    }[] = [];
     if (order.routeTemplateId) {
       snapshotSteps = await this.routes.getActiveStepsForSnapshot(
         order.routeTemplateId,
@@ -2182,6 +2189,7 @@ export class OrdersService {
               orderId: id,
               index: s.index,
               operationId: s.operationId,
+              parallelGroup: s.parallelGroup ?? null,
             })),
           });
         }
@@ -2802,6 +2810,7 @@ export class OrdersService {
           operationId: s.operationId,
           operationCode: s.operation.code,
           operationName: s.operation.name,
+          parallelGroup: s.parallelGroup,
         })),
       materialRequirements: order.materialRequirements
         .slice()

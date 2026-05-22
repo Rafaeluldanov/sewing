@@ -57,6 +57,15 @@ const RouteTemplateNameField = z
 export const RouteTemplateStepInputSchema = z.object({
   operationId: z.string().min(1, 'operationId обязателен'),
   isOptional: z.boolean().optional().default(false),
+  /**
+   * «Этот шаг идёт параллельно с предыдущим» (взаимозаменяемы по
+   * порядку). Backend сворачивает соседние шаги, связанные этим флагом,
+   * в одну параллельную группу (`RouteTemplateStep.parallelGroup`):
+   * порядок внутри группы любой, выход на следующий этап — когда все
+   * шаги группы завершены. На первом шаге игнорируется. UI — тумблер
+   * «↕ параллельно с соседним» в редакторе маршрута.
+   */
+  parallelWithPrev: z.boolean().optional().default(false),
 });
 export type RouteTemplateStepInputDto = z.infer<
   typeof RouteTemplateStepInputSchema
@@ -158,6 +167,13 @@ export interface RouteTemplateStepDto {
   operationCode: string;
   operationName: string;
   isOptional: boolean;
+  /**
+   * Номер параллельной группы или `null`. Соседние шаги с одинаковым
+   * ненулевым значением — взаимозаменяемый этап. Клиент выводит из этого
+   * состояние тумблера «↕ параллельно с соседним»:
+   * `parallelWithPrev = parallelGroup != null && parallelGroup === steps[i-1].parallelGroup`.
+   */
+  parallelGroup: number | null;
 }
 
 export interface RouteTemplateSummaryDto {
@@ -186,4 +202,6 @@ export interface OrderRouteStepDto {
   operationId: string;
   operationCode: string;
   operationName: string;
+  /** Снимок параллельной группы шага (см. `RouteTemplateStepDto`). */
+  parallelGroup: number | null;
 }
