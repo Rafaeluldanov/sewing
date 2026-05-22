@@ -165,22 +165,51 @@ export class ProductionBoardService {
   async getBoard(query: ProductionBoardQuery): Promise<ProductionBoardDto> {
     const { from, to } = this.window(query.days);
 
-    // Окно и когорта — по ДАТЕ ВЫДАЧИ кроя швеям (`ISSUED_TO_EMPLOYEE`),
-    // НЕ по `Passport.cutDate`. Берём все события выдачи в окне; день
-    // когорты паспорта = UTC-день его САМОГО РАННЕГО `ISSUED_TO_EMPLOYEE`
-    // в окне (если перевыдавали в рамках периода — берём первую выдачу).
-    const issueEvents = await this.prisma.passportEvent.findMany({
+    // Когорта — по ДАТЕ ВЫДАЧИ кроя швеям (`ISSUED_TO_EMPLOYEE`), НЕ по
+    // `Passport.cutDate`. День строки паспорта = UTC-день его АБСОЛЮТНО
+    // ПЕРВОЙ выдачи (когда тираж впервые ушёл в пошив), а НЕ первой
+    // выдачи «в пределах окна». Окно лишь решает, какие строки показать.
+    //
+    // Почему абсолютная, а не оконная: паспорт по ходу маршрута выдают
+    // несколько раз (каждый следующий работник «берёт крой» → новый
+    // `ISSUED`). При оконной привязке расширение окна 7→14 втягивало
+    // раннюю перевыдачу, и паспорт «переезжал» в более раннюю строку —
+    // один и тот же день показывал РАЗНЫЕ числа на 7/14/30 (инцидент
+    // 22.05.2026: ОВР строки 20.05, 7д≠14д на 11 паспортов). Абсолютная
+    // дата стабильна. Цена: партия, впервые выданная ДО начала окна, в
+    // коротком окне не показывается (её настоящая строка вне окна).
+    //
+    // Кандидаты — паспорта с хотя бы одной выдачей в окне; для них
+    // считаем абсолютно первую выдачу по ВСЕЙ истории, затем отбрасываем
+    // тех, чья первая выдача раньше окна.
+    const inWindowIssues = await this.prisma.passportEvent.findMany({
       where: {
         type: PassportEventType.ISSUED_TO_EMPLOYEE,
         createdAt: { gte: from, lte: to },
       },
-      select: { passportId: true, createdAt: true },
+      select: { passportId: true },
     });
+    const candidateIds = [
+      ...new Set(inWindowIssues.map((e) => e.passportId)),
+    ];
     const issueDateByPassport = new Map<string, Date>();
-    for (const e of issueEvents) {
-      const cur = issueDateByPassport.get(e.passportId);
-      if (!cur || e.createdAt < cur)
-        issueDateByPassport.set(e.passportId, e.createdAt);
+    if (candidateIds.length > 0) {
+      const allIssues = await this.prisma.passportEvent.findMany({
+        where: {
+          type: PassportEventType.ISSUED_TO_EMPLOYEE,
+          passportId: { in: candidateIds },
+        },
+        select: { passportId: true, createdAt: true },
+      });
+      for (const e of allIssues) {
+        const cur = issueDateByPassport.get(e.passportId);
+        if (!cur || e.createdAt < cur)
+          issueDateByPassport.set(e.passportId, e.createdAt);
+      }
+      // Первая выдача раньше окна → стабильная строка вне окна, не показываем.
+      for (const [pid, d] of issueDateByPassport) {
+        if (d < from) issueDateByPassport.delete(pid);
+      }
     }
     const passportIds = [...issueDateByPassport.keys()];
 
@@ -702,8 +731,12 @@ export class ProductionBoardService {
     const dayEnd = new Date(`${query.issueDate}T23:59:59.999Z`);
     const released = query.stage === PRODUCTION_BOARD_RELEASED;
 
-    // Когорта дня = паспорта, ВЫДАННЫЕ швеям в этот UTC-день
-    // (`ISSUED_TO_EMPLOYEE.createdAt`). Тот же ключ, что у доски.
+    // Когорта дня = паспорта, чья АБСОЛЮТНО ПЕРВАЯ выдача швеям пришлась
+    // на этот UTC-день. Тот же ключ, что у доски (`getBoard`): берём
+    // паспорта с выдачей в этот день, затем оставляем лишь тех, у кого
+    // это и есть первая выдача. Иначе перевыданный паспорт попал бы и в
+    // свою раннюю строку, и в этот день — drill разошёлся бы с доской, а
+    // числа дня зависели бы от окна (см. инцидент 22.05.2026).
     const issuedThatDay = await this.prisma.passportEvent.findMany({
       where: {
         type: PassportEventType.ISSUED_TO_EMPLOYEE,
@@ -711,9 +744,29 @@ export class ProductionBoardService {
       },
       select: { passportId: true },
     });
-    const dayPassportIds = [
+    const issuedThatDayIds = [
       ...new Set(issuedThatDay.map((e) => e.passportId)),
     ];
+    let dayPassportIds: string[] = [];
+    if (issuedThatDayIds.length > 0) {
+      const allIssues = await this.prisma.passportEvent.findMany({
+        where: {
+          type: PassportEventType.ISSUED_TO_EMPLOYEE,
+          passportId: { in: issuedThatDayIds },
+        },
+        select: { passportId: true, createdAt: true },
+      });
+      const firstByPassport = new Map<string, Date>();
+      for (const e of allIssues) {
+        const cur = firstByPassport.get(e.passportId);
+        if (!cur || e.createdAt < cur)
+          firstByPassport.set(e.passportId, e.createdAt);
+      }
+      dayPassportIds = issuedThatDayIds.filter((id) => {
+        const d = firstByPassport.get(id);
+        return d !== undefined && d >= dayStart;
+      });
+    }
 
     if (released) {
       // «Выпущено» — статус PACKED. Резолвер не нужен.
