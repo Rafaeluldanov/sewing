@@ -59,10 +59,14 @@ BACKUP_DIR="${BACKUP_DIR:-${REPO_ROOT}/backups}"
 BACKUP_KEEP="${BACKUP_KEEP:-20}"
 
 # Healthcheck:
-#   - prod API listens on host :8081 (см. docker-compose.prod.yml).
+#   - api НЕ публикуется на host-порт (8081 убран при вводе reverse proxy,
+#     см. docker-compose.prod.yml: api только `expose: 3001`). Поэтому
+#     healthcheck идёт через nginx на :443 с Host прод-домена — это
+#     проверяет связку nginx + api целиком, как видит её пользователь.
 #   - 401 UNAUTHENTICATED — корректный ответ /api/auth/me без cookie.
 #   - 200 — если CI/админ уже залогинен, тоже ок.
-API_HEALTH_URL="${API_HEALTH_URL:-http://127.0.0.1:8081/api/auth/me}"
+PROD_HOST="${PROD_HOST:-prod.teeon.ru}"
+API_HEALTH_URL="${API_HEALTH_URL:-https://127.0.0.1/api/auth/me}"
 HEALTH_ATTEMPTS="${HEALTH_ATTEMPTS:-30}"
 HEALTH_DELAY_S="${HEALTH_DELAY_S:-2}"
 
@@ -191,11 +195,13 @@ log "recent web logs (last 30 lines, best-effort)"
 # Принимаем 200 (есть валидная сессия) ИЛИ 401 (анонимный запрос — ожидаемо).
 # Любые 5xx, connection refused, timeout — ошибка деплоя.
 # -----------------------------------------------------------------------------
-log "healthcheck: ${API_HEALTH_URL} (accept 200 or 401)"
+log "healthcheck: ${API_HEALTH_URL} (Host: ${PROD_HOST}, accept 200 or 401)"
 attempt=0
 while :; do
   attempt=$((attempt + 1))
-  status="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "${API_HEALTH_URL}" || echo '000')"
+  # -k: cert выписан на ${PROD_HOST}, а стучимся в 127.0.0.1 (loopback).
+  # -H Host: nginx роутит по server_name на нужный vhost.
+  status="$(curl -sS -k -o /dev/null -w '%{http_code}' --max-time 5 -H "Host: ${PROD_HOST}" "${API_HEALTH_URL}" || echo '000')"
   case "${status}" in
     200|401)
       log "API healthy: HTTP ${status}"
