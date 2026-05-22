@@ -591,20 +591,16 @@ export class ProductionBoardService {
                 ?.get(col.id);
               if (colIdxInOrder === undefined) continue;
 
-              // Дальше всех зашёл шаг = max(index завершённых операций).
-              let furthest = -1;
-              const orderOpIdx = opIndexByOrder.get(cp.orderId);
-              if (orderOpIdx) {
-                for (const finOpId of cp.finishedOpIds) {
-                  const idx = orderOpIdx.get(finOpId);
-                  if (idx !== undefined && idx > furthest) furthest = idx;
-                }
-              }
-              const finishedHere = furthest >= colIdxInOrder;
+              // ПО-ОПЕРАЦИОННО (честно), без воронки: колонка отражает
+              // только то, что реально было НА этой операции.
+              //   выпущено(X) = есть OPERATION_FINISHED именно на X;
+              //   дошло(X)    = активны на X + закрыли X.
+              // Проскоченная операция (ОВР→РАСПОШИВ мимо КИПЕРКИ) даёт 0 —
+              // пропуск виден, а не маскируется «прошёл дальше».
+              const finishedThisOp = cp.finishedOpIds.has(col.id);
               const currentlyHere = cp.currentOpId === col.id;
 
-              if (cp.isPacked || finishedHere) {
-                // Завершил шаг (или прошёл дальше / упакован) → выпущено.
+              if (finishedThisOp) {
                 received += 1;
                 released += 1;
                 const finisher = finisherByPassportOp.get(
@@ -612,18 +608,16 @@ export class ProductionBoardService {
                 );
                 if (finisher)
                   attribute(finisher.id, finisher.fullName, true, cp);
-                else attribute(null, 'Прошло без скана', true, cp);
-              } else if (currentlyHere) {
-                // Стоит на X и ещё не завершил → активная работа.
+                else attribute(null, 'Закрыто', true, cp);
+              } else if (currentlyHere && cp.currentEmployeeId) {
+                // Активно работает X и ещё не закрыл.
                 received += 1;
-                if (cp.currentEmployeeId)
-                  attribute(
-                    cp.currentEmployeeId,
-                    cp.currentEmployeeName,
-                    false,
-                    cp,
-                  );
-                else attribute(null, 'В буфере', false, cp);
+                attribute(
+                  cp.currentEmployeeId,
+                  cp.currentEmployeeName,
+                  false,
+                  cp,
+                );
               }
             }
 
@@ -963,18 +957,16 @@ export class ProductionBoardService {
         : undefined;
       if (colIdx === undefined) continue;
 
-      // Дальше всех зашёл шаг = max(index завершённых операций).
-      let furthest = -1;
-      const orderOpIdx = opIndexByOrder.get(orderId);
-      const finIds = finishedOpsByPassport.get(p.id);
-      if (orderOpIdx && finIds) {
-        for (const finOpId of finIds) {
-          const idx = orderOpIdx.get(finOpId);
-          if (idx !== undefined && idx > furthest) furthest = idx;
-        }
-      }
-      const finishedHere = furthest >= colIdx;
-      const isPacked = p.status === PassportStatus.PACKED;
+      // ПО-ОПЕРАЦИОННО (зеркало getBoard): колонка отражает только то,
+      // что реально было НА этой операции.
+      //   - ВЫПУЩЕНО (released:true): есть OPERATION_FINISHED именно на X
+      //     → финишёр X (`finisherByPassport`), иначе «Закрыто» (FINISHED
+      //     без исполнителя — редко);
+      //   - В РАБОТЕ (released:false): активно работает X и ещё не закрыл.
+      // Проскоченную без скана операцию паспорт не «касается» → 0.
+      const finishedThisOp =
+        stageOpId !== null &&
+        (finishedOpsByPassport.get(p.id)?.has(stageOpId) ?? false);
       const op = this.resolveColumnOp(
         p,
         sewingShiftByEmployee,
@@ -982,16 +974,10 @@ export class ProductionBoardService {
       );
       const currentlyHere = op?.code === query.stage;
 
-      // Атрибуция — зеркало `getBoard` (накопительно, не по позиции):
-      //   - ВЫПУЩЕНО (released:true): завершил X-или-дальше / PACKED →
-      //     финишёр X (`finisherByPassport`), иначе «Прошло без скана»
-      //     (операцию проскочили без скана);
-      //   - В РАБОТЕ (released:false): стоит на X и ещё не завершил →
-      //     текущий исполнитель, иначе «В буфере».
       let gEmployeeId: string | null;
       let gEmployeeName: string;
       let gReleased: boolean;
-      if (isPacked || finishedHere) {
+      if (finishedThisOp) {
         gReleased = true;
         const finisher = finisherByPassport.get(p.id);
         if (finisher) {
@@ -999,19 +985,14 @@ export class ProductionBoardService {
           gEmployeeName = finisher.fullName;
         } else {
           gEmployeeId = null;
-          gEmployeeName = 'Прошло без скана';
+          gEmployeeName = 'Закрыто';
         }
-      } else if (currentlyHere) {
+      } else if (currentlyHere && p.currentEmployeeId !== null) {
         gReleased = false;
-        if (p.currentEmployeeId !== null) {
-          gEmployeeId = p.currentEmployeeId;
-          gEmployeeName = p.currentEmployee?.fullName ?? '—';
-        } else {
-          gEmployeeId = null;
-          gEmployeeName = 'В буфере';
-        }
+        gEmployeeId = p.currentEmployeeId;
+        gEmployeeName = p.currentEmployee?.fullName ?? '—';
       } else {
-        continue; // паспорт не коснулся этой стадии
+        continue; // паспорт не касался этой стадии
       }
 
       // Фильтр `query.employeeId` — матчит и активного, и финишёра
