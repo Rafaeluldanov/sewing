@@ -79,10 +79,10 @@ function StageCell({
   // с тем же списком «сейчас здесь», что и раньше (по `passports`).
   const empty = bucket.received === 0;
   const here = bucket.passports;
-  const top = bucket.employees
-    .slice(0, 2)
-    .map((e) => `${e.employeeName.split(' ')[0]}·${e.passports}`)
-    .join('  ');
+  // Топ-2 сотрудников: active (синий) и released (зелёный) идут одним
+  // списком, но каждая запись — отдельная плашка с собственным стилем.
+  // Бэк уже сортирует: сначала active по убыванию, потом released.
+  const topEmps = bucket.employees.slice(0, 2);
   const more = bucket.employees.length - 2;
   const showDefect = bucket.code === 'QC' && bucket.defects > 0;
   if (empty) {
@@ -101,12 +101,35 @@ function StageCell({
         )}
       </div>
       <div className="pboard__cell-flow">
-        <span>выпущено {bucket.released}</span>
+        <span className="pboard__cell-released-num">
+          выпущено {bucket.released}
+        </span>
         {here > 0 && (
-          <span className="pboard__muted"> · сейчас {here}</span>
+          <span className="pboard__cell-here-num"> · сейчас {here}</span>
         )}
       </div>
-      {top && <div className="pboard__cell-emps">{top}</div>}
+      {topEmps.length > 0 && (
+        <div className="pboard__cell-emps">
+          {topEmps.map((e, i) => {
+            const shortName =
+              e.employeeId === ''
+                ? 'буфер'
+                : e.employeeName.split(' ')[0] || e.employeeName;
+            return (
+              <span
+                key={`${e.employeeId || 'none'}:${e.released ? 'r' : 'a'}:${i}`}
+                className={
+                  'pboard__emp-chip' +
+                  (e.released ? ' pboard__emp-chip--released' : '')
+                }
+              >
+                {e.released && '✔ '}
+                {shortName}·{e.passports}
+              </span>
+            );
+          })}
+        </div>
+      )}
       {more > 0 && <div className="pboard__cell-more">ещё {more} ▾</div>}
     </button>
   );
@@ -393,9 +416,21 @@ export function ProductionBoardView() {
               )}
               {drill &&
                 drill.groups.map((g) => (
-                  <div key={g.employeeId ?? g.employeeName} className="pboard__emp-sec">
+                  <div
+                    key={
+                      (g.employeeId ?? g.employeeName) +
+                      (g.released ? ':r' : ':a')
+                    }
+                    className={
+                      'pboard__emp-sec' +
+                      (g.released ? ' pboard__emp-sec--released' : '')
+                    }
+                  >
                     <div className="pboard__emp-sec-h">
-                      <span>{g.employeeName}</span>
+                      <span>
+                        {g.released && '✔ '}
+                        {g.employeeName}
+                      </span>
                       <span className="pboard__muted">
                         {g.passports} пасп · <b>{g.qty} шт</b>
                         {g.defects > 0 && (

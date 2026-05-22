@@ -14845,18 +14845,51 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-weight: 700;
 }
 /* «Выпущено N · сейчас K» — вторая строка ячейки. «Сейчас» приходит
-   через `bucket.passports`, см. `production-board-view.tsx`. */
+   через `bucket.passports`, см. `production-board-view.tsx`.
+   Цветовая семантика по просьбе мастера (21.05.2026):
+     - «выпущено» — зелёным, как KPI «уже сдано с шага»;
+     - «сейчас»   — красным, как сигнал «висит, нужно следить». */
 .pboard__cell-flow {
   font-size: 12px;
   color: var(--color-fg);
   margin-top: 2px;
   line-height: 1.4;
 }
+.pboard__cell-released-num {
+  color: var(--color-ok-fg);
+  font-weight: 700;
+}
+.pboard__cell-here-num {
+  color: var(--color-danger-fg);
+  font-weight: 700;
+}
 .pboard__cell-emps {
   font-size: 12px;
   color: var(--color-fg-muted);
   margin-top: 3px;
   line-height: 1.4;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+/* Плашка-сотрудник в превью ячейки. Active — нейтральная,
+   released — зелёная (✔ закрыл операцию). Раздельные плашки
+   для одного и того же человека возможны: «Акмар·25» (active)
+   + «✔ Акмар·10» (released) — он одновременно и шьёт, и часть
+   уже сдал. */
+.pboard__emp-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-tint);
+  color: var(--color-fg-muted);
+  white-space: nowrap;
+}
+.pboard__emp-chip--released {
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
+  font-weight: 700;
 }
 .pboard__cell-more {
   font-size: 12px;
@@ -15080,6 +15113,17 @@ body:has(.admin-layout) .app-header { display: none !important; }
   border-radius: var(--radius-md);
   margin-bottom: 10px;
   overflow: hidden;
+}
+/* Released-группа в дрилл-панели: ✔ <Имя> = «он уже закрыл операцию,
+   паспорта ждут следующего исполнителя». Зелёная шапка целиком — отличить
+   от активной работы (нейтральный фон). См.
+   `production-board-view.tsx::ProductionBoardDrillEmployeeGroupDto.released`. */
+.pboard__emp-sec--released {
+  border-color: var(--color-ok-soft);
+}
+.pboard__emp-sec--released .pboard__emp-sec-h {
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
 }
 .pboard__emp-sec-h {
   display: flex;

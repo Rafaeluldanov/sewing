@@ -272,20 +272,32 @@ export class ProductionBoardService {
             : 1,
       );
 
-    // «Выдан» = паспорт в выборке (по определению есть
-    // `ISSUED_TO_EMPLOYEE` в окне). «В работе» = паспорт реально
-    // начат/выполнен на операции. ВАЖНО: нельзя завязываться только на
-    // `OPERATION_SCAN` — реальный воркфлоу пишет `ISSUED_TO_EMPLOYEE`
-    // → `OPERATION_FINISHED` без отдельного скана, и тогда ВСЁ
-    // выданное ложно висело бы как «не взято». Поэтому «в работе» =
-    // ≥1 из [OPERATION_SCAN, OPERATION_STARTED, OPERATION_FINISHED] —
-    // согласуется с тем, что показывает «Экран цеха».
+    // «Выдан» = паспорт в выборке. «В работе» = паспорт реально начат
+    // или завершён, ЛИБО прямо сейчас закреплён за швеёй
+    // (`currentEmployeeId != null AND status = IN_PROGRESS`).
+    //
+    // Раньше критерий был «есть ≥1 из [OPERATION_SCAN, OPERATION_STARTED,
+    // OPERATION_FINISHED]», но реальный флоу не пишет ни SCAN, ни
+    // STARTED (см. `project_no_operation_scan_events`); между
+    // `ISSUED_TO_EMPLOYEE` и `OPERATION_FINISHED` НИ ОДНОГО из этих
+    // событий нет. Из-за этого 25 паспортов, которые Акмарал прямо
+    // сейчас шьёт на ОВР, ложно попадали в чип «не взято» когорты
+    // (21.05.2026). Добавили `currentEmployeeId != null` — теперь
+    // «не взято» означает строго «выдано, но никто не работает и
+    // никто не завершал».
     const inOpsSet = new Set<string>();
     // `finishedOpsByPassport` — operationId, на которых для паспорта
-    // есть `OPERATION_FINISHED`. Это источник правды для накопительной
-    // статистики «дошло/выпущено» по колонкам (см. формулу в
-    // `ProductionBoardStageBucketDto` shared-DTO).
+    // есть `OPERATION_FINISHED`.
     const finishedOpsByPassport = new Map<string, Set<string>>();
+    // `finisherByPassportOp` — кто закрыл операцию X на паспорте
+    // (последний `OPERATION_FINISHED.employeeId` для (passportId,
+    // operationId)). Нужно для атрибуции «буферных» паспортов
+    // (`currentEmployeeId = null` после complete) реальному финишёру —
+    // вместо анонимной группы «В буфере» рисуем «✔ <фамилия>».
+    const finisherByPassportOp = new Map<
+      string,
+      { id: string; fullName: string }
+    >();
     if (passports.length > 0) {
       const passIds = passports.map((p) => p.id);
       const [inOpsRows, finishedRows] = await Promise.all([
@@ -309,7 +321,16 @@ export class ProductionBoardService {
             type: PassportEventType.OPERATION_FINISHED,
             operationId: { not: null },
           },
-          select: { passportId: true, operationId: true },
+          select: {
+            passportId: true,
+            operationId: true,
+            createdAt: true,
+            employee: { select: { id: true, fullName: true } },
+          },
+          // По убыванию — первый в выдаче по паре (passportId,operationId)
+          // станет финишёром-источником правды (`Map.set` ниже не
+          // перезаписывает после первого `has`).
+          orderBy: { createdAt: 'desc' },
         }),
       ]);
       for (const row of inOpsRows) inOpsSet.add(row.passportId);
@@ -321,6 +342,23 @@ export class ProductionBoardService {
           finishedOpsByPassport.set(ev.passportId, s);
         }
         s.add(ev.operationId);
+        const key = `${ev.passportId}:${ev.operationId}`;
+        if (ev.employee && !finisherByPassportOp.has(key)) {
+          finisherByPassportOp.set(key, {
+            id: ev.employee.id,
+            fullName: ev.employee.fullName,
+          });
+        }
+      }
+    }
+    // Доп.источник «в работе» — паспорт закреплён за сотрудником
+    // прямо сейчас (см. комментарий выше).
+    for (const p of passports) {
+      if (
+        p.currentEmployeeId !== null &&
+        p.status === PassportStatus.IN_PROGRESS
+      ) {
+        inOpsSet.add(p.id);
       }
     }
 
@@ -345,7 +383,11 @@ export class ProductionBoardService {
       inOpsQty: number;
       releasedPassports: number;
       releasedQty: number;
-      // operationId -> employeeId -> aggregate (паспорта «сейчас здесь»).
+      // operationId -> bucketKey -> aggregate. `bucketKey` =
+      // `${employeeId}:${released ? 'released' : 'active'}`. Один и тот
+      // же сотрудник может появиться в колонке дважды: активная работа
+      // (`released:false`) и им же закрытые паспорта в буфере
+      // (`released:true`) — UI рисует их раздельными плашками.
       buckets: Map<
         string,
         Map<
@@ -356,6 +398,7 @@ export class ProductionBoardService {
             passports: number;
             qty: number;
             defects: number;
+            released: boolean;
           }
         >
       >;
@@ -435,17 +478,48 @@ export class ProductionBoardService {
         byEmp = new Map();
         a.buckets.set(op.id, byEmp);
       }
-      const empKey = p.currentEmployeeId ?? NO_EMP;
-      let agg = byEmp.get(empKey);
+
+      // Кому атрибутировать паспорт в этой колонке:
+      //   - `currentEmployeeId != null` — активная работа, атрибутируем
+      //     текущему исполнителю с `released:false`;
+      //   - `currentEmployeeId == null` — буфер, паспорт уже закрыт.
+      //     Атрибутируем РЕАЛЬНОМУ финишёру `OPERATION_FINISHED` на
+      //     этой операции (`finisherByPassportOp`) с `released:true`.
+      //     Если по какой-то причине FINISHED не найден (data drift,
+      //     PASSPORT_COMPLETE_BACKWARD откат, ручная правка) — fallback
+      //     на анонимную «В буфере»-группу.
+      let aggEmployeeId: string | null;
+      let aggEmployeeName: string;
+      let released: boolean;
+      if (p.currentEmployeeId !== null) {
+        aggEmployeeId = p.currentEmployeeId;
+        aggEmployeeName = p.currentEmployee?.fullName ?? '—';
+        released = false;
+      } else {
+        const finisher = finisherByPassportOp.get(`${p.id}:${op.id}`);
+        if (finisher) {
+          aggEmployeeId = finisher.id;
+          aggEmployeeName = finisher.fullName;
+          released = true;
+        } else {
+          aggEmployeeId = null;
+          aggEmployeeName = 'В буфере';
+          released = true;
+        }
+      }
+      const bucketKey =
+        (aggEmployeeId ?? NO_EMP) + (released ? ':released' : ':active');
+      let agg = byEmp.get(bucketKey);
       if (!agg) {
         agg = {
-          employeeId: p.currentEmployeeId,
-          employeeName: p.currentEmployee?.fullName ?? 'Не назначен',
+          employeeId: aggEmployeeId,
+          employeeName: aggEmployeeName,
           passports: 0,
           qty: 0,
           defects: 0,
+          released,
         };
-        byEmp.set(empKey, agg);
+        byEmp.set(bucketKey, agg);
       }
       agg.passports += 1;
       agg.qty += p.qtyCut;
@@ -466,15 +540,33 @@ export class ProductionBoardService {
                     passports: e.passports,
                     qty: e.qty,
                     defects: e.defects,
+                    released: e.released,
                   }))
-                  .sort((m, n) => n.passports - m.passports)
+                  // Активная работа сверху, выпущенные — ниже.
+                  // Внутри каждой группы — по убыванию паспортов.
+                  .sort((m, n) => {
+                    if (m.released !== n.released)
+                      return m.released ? 1 : -1;
+                    return n.passports - m.passports;
+                  })
               : [];
+            // «Сейчас K» (`bucket.passports`) — только активная работа
+            // (`released:false`). `released:true` — это «выпущено им с
+            // этого шага», в счётчик «сейчас» не входит и попадает в
+            // `released` (см. инвариант `passports = received - released`
+            // в shared-DTO).
             const passportsAt = employees.reduce(
-              (s, e) => s + e.passports,
+              (s, e) => (e.released ? s : s + e.passports),
               0,
             );
-            const qtyAt = employees.reduce((s, e) => s + e.qty, 0);
-            const defectsAt = employees.reduce((s, e) => s + e.defects, 0);
+            const qtyAt = employees.reduce(
+              (s, e) => (e.released ? s : s + e.qty),
+              0,
+            );
+            const defectsAt = employees.reduce(
+              (s, e) => (e.released ? s : s + e.defects),
+              0,
+            );
 
             // Накопительные «дошло / выпущено» — см. формулу в shared-DTO
             // `ProductionBoardStageBucketDto`. Считаем по снимку паспортов
@@ -507,13 +599,18 @@ export class ProductionBoardService {
               }
 
               // received: «коснулся» — finished на X-или-дальше ИЛИ
-              // сейчас стоит на X.
+              // сейчас стоит на X (активная работа на этой колонке).
               const finishedHere = furthest >= colIdxInOrder;
               const currentlyHere = cp.currentOpId === col.id;
               if (finishedHere || currentlyHere) received += 1;
 
-              // released: «сдал с X дальше» — finished строго позже X.
-              if (furthest > colIdxInOrder) released += 1;
+              // released: «завершил этот шаг (или прошёл дальше)» —
+              // есть OPERATION_FINISHED на X-или-позже. Раньше было `>`
+              // (только сдан на следующий шаг), но тогда буфер не
+              // попадал в «выпущено N», что противоречит ожиданию
+              // мастера: «отОВРила = выпустила из ОВР», даже если
+              // следующая швея ещё не подхватила (21.05.2026).
+              if (finishedHere) released += 1;
             }
 
             return {
@@ -613,6 +710,7 @@ export class ProductionBoardService {
         passports: rows.length,
         qty: rows.reduce((s, r) => s + r.qty, 0),
         defects: rows.reduce((s, r) => s + r.defects, 0),
+        released: true,
         rows,
       };
       return {
@@ -710,12 +808,46 @@ export class ProductionBoardService {
       }
     }
 
-    // Метка операции (для заголовка панели) — имя из справочника по коду.
+    // Метка + ID операции для атрибуции «буферных» паспортов финишёру
+    // (см. `getBoard` → `finisherByPassportOp`).
     const opRow = await this.prisma.operation.findUnique({
       where: { code: query.stage },
-      select: { name: true },
+      select: { id: true, name: true },
     });
     const stageLabel = opRow?.name ?? query.stage;
+    const stageOpId = opRow?.id ?? null;
+
+    // Финишёры по паспортам кандидатам на ИМЕННО ЭТОЙ операции.
+    // Если у паспорта `currentEmployeeId = null` И есть
+    // OPERATION_FINISHED на `stageOpId`, атрибутируем группе финишёра
+    // с `released:true` (раздельный блок «✔ Имя»). Без финишёра
+    // (data drift / откат маршрута) — fallback анонимная «В буфере».
+    const finisherByPassport = new Map<
+      string,
+      { id: string; fullName: string }
+    >();
+    if (stageOpId && candidates.length > 0) {
+      const events = await this.prisma.passportEvent.findMany({
+        where: {
+          passportId: { in: candidates.map((p) => p.id) },
+          type: PassportEventType.OPERATION_FINISHED,
+          operationId: stageOpId,
+        },
+        select: {
+          passportId: true,
+          createdAt: true,
+          employee: { select: { id: true, fullName: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+      for (const ev of events) {
+        if (!ev.employee || finisherByPassport.has(ev.passportId)) continue;
+        finisherByPassport.set(ev.passportId, {
+          id: ev.employee.id,
+          fullName: ev.employee.fullName,
+        });
+      }
+    }
 
     const NO_EMP = '__none__';
     const groups = new Map<string, ProductionBoardDrillEmployeeGroupDto>();
@@ -726,8 +858,31 @@ export class ProductionBoardService {
         opByOrderIndex,
       );
       if (!op || op.code !== query.stage) continue;
-      if (query.employeeId && p.currentEmployeeId !== query.employeeId)
-        continue;
+
+      // Кому атрибутировать паспорт (зеркало `getBoard`).
+      let gEmployeeId: string | null;
+      let gEmployeeName: string;
+      let gReleased: boolean;
+      if (p.currentEmployeeId !== null) {
+        gEmployeeId = p.currentEmployeeId;
+        gEmployeeName = p.currentEmployee?.fullName ?? '—';
+        gReleased = false;
+      } else {
+        const finisher = finisherByPassport.get(p.id);
+        if (finisher) {
+          gEmployeeId = finisher.id;
+          gEmployeeName = finisher.fullName;
+          gReleased = true;
+        } else {
+          gEmployeeId = null;
+          gEmployeeName = 'В буфере';
+          gReleased = true;
+        }
+      }
+
+      // Фильтр `query.employeeId` — теперь матчит и активного, и финишёра
+      // (мастер может кликнуть на любую плашку).
+      if (query.employeeId && gEmployeeId !== query.employeeId) continue;
 
       const row: ProductionBoardPassportRowDto = {
         passportId: p.id,
@@ -735,17 +890,19 @@ export class ProductionBoardService {
         sizeCode: p.size?.code ?? '—',
         qty: p.qtyCut,
         defects: p.qtyDefect,
-        employeeName: p.currentEmployee?.fullName ?? null,
+        employeeName: gEmployeeName === '—' ? null : gEmployeeName,
       };
-      const gKey = p.currentEmployeeId ?? NO_EMP;
+      const gKey =
+        (gEmployeeId ?? NO_EMP) + (gReleased ? ':released' : ':active');
       let g = groups.get(gKey);
       if (!g) {
         g = {
-          employeeId: p.currentEmployeeId,
-          employeeName: p.currentEmployee?.fullName ?? 'Не назначен',
+          employeeId: gEmployeeId,
+          employeeName: gEmployeeName,
           passports: 0,
           qty: 0,
           defects: 0,
+          released: gReleased,
           rows: [],
         };
         groups.set(gKey, g);
@@ -756,9 +913,12 @@ export class ProductionBoardService {
       g.defects += p.qtyDefect;
     }
 
-    const groupList = [...groups.values()].sort(
-      (a, b) => b.passports - a.passports,
-    );
+    const groupList = [...groups.values()].sort((a, b) => {
+      // Активная работа сверху, выпущенные — ниже; по убыванию паспортов
+      // внутри каждой группы.
+      if (a.released !== b.released) return a.released ? 1 : -1;
+      return b.passports - a.passports;
+    });
     return {
       issueDate: query.issueDate,
       stageLabel,
