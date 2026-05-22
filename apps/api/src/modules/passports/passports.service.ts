@@ -1056,12 +1056,20 @@ export class PassportsService {
    *   - обнуляем `Passport.currentCellId`;
    *   - закрепляем паспорт за сотрудником (`currentEmployeeId`);
    *   - ставим `status = IN_PROGRESS`;
+   *   - переводим паспорт НА операцию смены (`currentOperationId =
+   *     session.operationId`, `currentRouteStepIndex = шаг маршрута`);
    *   - пишем событие `ISSUED_TO_EMPLOYEE` (operationId = session.operationId).
    *
-   * `currentOperationId` на этом шаге НЕ меняем: выдача — это ещё не
-   * перемещение на конкретную операцию. Первый `scan` у швеи на её
-   * рабочем месте создаст `OPERATION_SCAN` и переведёт паспорт на
-   * `session.operationId`.
+   * **Взять крой = встать на операцию.** «Деление кроя» (CUT_DIVISION) —
+   * операция кроильного цеха; швея берёт уже разделённый, готовый крой и
+   * сразу начинает свою ПЕРВУЮ швейную операцию (ОВР). Поэтому
+   * `issueToEmployee` переводит паспорт на `session.operationId` ровно
+   * как `scanOnOperation` — иначе паспорт всё время работы числился бы на
+   * CUT_DIVISION (исчезал с доски / в кабинете висел не на той операции).
+   * Раньше это было разделено (issue только закрепляет, scan двигает), но
+   * реальный флоу `OPERATION_SCAN` не пишет (см.
+   * project_no_operation_scan_events), и паспорт «зависал» на кройке до
+   * самого `OPERATION_FINISHED`.
    *
    * **Route-WIP исключение (soft-route MVP, см. `docs/domain.md §18`,
    * `docs/flows.md §F3a`).** Если у заказа есть snapshot маршрута и
@@ -1136,6 +1144,23 @@ export class PassportsService {
       throw new PassportIssueBackwardException();
     }
 
+    // QC-gate для входа на ВТО — зеркало `scanOnOperation` (см.
+    // docs/flows.md §F6 / ADR-0013). Раз issue теперь переводит паспорт
+    // НА операцию смены, «получить крой» прямо на ВТО (категория
+    // `IRONING`) без хотя бы одного `QC_PASSED` запрещаем — иначе
+    // issue-канал обходил бы ОТК так же, как раньше мог scan. Пропускаем,
+    // если паспорт уже на этой операции (идемпотентный re-issue).
+    if (
+      session.operation.category === OperationCategory.IRONING &&
+      passport.currentOperationId !== session.operationId
+    ) {
+      const qcPassed = await this.prisma.passportEvent.findFirst({
+        where: { passportId: passport.id, type: PassportEventType.QC_PASSED },
+        select: { id: true },
+      });
+      if (!qcPassed) throw new PassportNotQcPassedException();
+    }
+
     // «Очередь выдачи кроя по размерам» — pre-check ДО глобальной
     // `CutReleasePolicy`. Семантика та же, что у Stage 3: проверка
     // действует только на ПЕРВОЙ операции маршрута / категории
@@ -1204,6 +1229,11 @@ export class PassportsService {
           data: {
             currentCellId: null,
             currentEmployeeId: employeeId,
+            // Взять крой = встать на операцию смены (зеркало scan).
+            currentOperationId: session.operationId,
+            currentRouteStepIndex: issueMatchedStep
+              ? issueMatchedStep.index
+              : passport.currentRouteStepIndex,
             status: PassportStatus.IN_PROGRESS,
           },
         });
@@ -1344,6 +1374,11 @@ export class PassportsService {
         where: { id: passport.id },
         data: {
           currentEmployeeId: employeeId,
+          // Взять крой = встать на операцию смены (зеркало scan).
+          currentOperationId: session.operationId,
+          currentRouteStepIndex: issueMatchedStep
+            ? issueMatchedStep.index
+            : passport.currentRouteStepIndex,
           status: PassportStatus.IN_PROGRESS,
         },
       });
