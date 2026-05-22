@@ -431,12 +431,17 @@ export class ProductionBoardService {
 
     // Когорта = UTC-день выдачи кроя швеям (первый ISSUED_TO_EMPLOYEE).
     interface CohortPassport {
+      passportId: string;
       orderId: string;
       isPacked: boolean;
+      qtyCut: number;
+      qtyDefect: number;
       // operationId, где сейчас находится паспорт (через резолвер).
       // `null` — не на колонке доски (например, ещё в кройке / маршрут
       // заказа не зафиксирован / PACKED).
       currentOpId: string | null;
+      currentEmployeeId: string | null;
+      currentEmployeeName: string;
       // Operation ids, на которых для этого паспорта есть OPERATION_FINISHED.
       finishedOpIds: Set<string>;
     }
@@ -450,27 +455,10 @@ export class ProductionBoardService {
       inOpsQty: number;
       releasedPassports: number;
       releasedQty: number;
-      // operationId -> bucketKey -> aggregate. `bucketKey` =
-      // `${employeeId}:${released ? 'released' : 'active'}`. Один и тот
-      // же сотрудник может появиться в колонке дважды: активная работа
-      // (`released:false`) и им же закрытые паспорта в буфере
-      // (`released:true`) — UI рисует их раздельными плашками.
-      buckets: Map<
-        string,
-        Map<
-          string,
-          {
-            employeeId: string | null;
-            employeeName: string;
-            passports: number;
-            qty: number;
-            defects: number;
-            released: boolean;
-          }
-        >
-      >;
-      // Снимок паспортов когорты — для построения накопительной
-      // received/released по каждой колонке (см. формулу в shared-DTO).
+      // Снимок паспортов когорты — ЕДИНЫЙ источник и для накопительных
+      // received/released по колонке, и для разбивки по сотрудникам
+      // (плашки). Так число в ячейке и список в drill всегда совпадают:
+      // оба строятся из одного множества (см. формулу в shared-DTO).
       passports: CohortPassport[];
     }
 
@@ -489,7 +477,6 @@ export class ProductionBoardService {
           inOpsQty: 0,
           releasedPassports: 0,
           releasedQty: 0,
-          buckets: new Map(),
           passports: [],
         };
         cohorts.set(key, a);
@@ -523,74 +510,25 @@ export class ProductionBoardService {
         ? null
         : this.resolveColumnOp(p, sewingShiftByEmployee, opByOrderIndex);
 
+      // Снимок паспорта когорты. Разбивка по колонкам/сотрудникам и
+      // received/released строятся ниже из этого снимка — единым проходом,
+      // чтобы число в ячейке и список в drill совпадали.
       a.passports.push({
+        passportId: p.id,
         orderId: p.orderId ?? '',
         isPacked,
+        qtyCut: p.qtyCut,
+        qtyDefect: p.qtyDefect,
         currentOpId: op && columns.has(op.id) ? op.id : null,
+        currentEmployeeId: p.currentEmployeeId,
+        currentEmployeeName: p.currentEmployee?.fullName ?? '—',
         finishedOpIds: finishedOpsByPassport.get(p.id) ?? new Set(),
       });
 
       if (isPacked) {
         a.releasedPassports += 1;
         a.releasedQty += p.qtyGood;
-        continue; // в колонки-стадии PACKED не попадает
       }
-
-      // Раскладка по колонке — тем же резолвером, что у display
-      // (активная операция ▶ либо ✔-буфер по шагу маршрута).
-      if (!op || !columns.has(op.id)) continue;
-
-      let byEmp = a.buckets.get(op.id);
-      if (!byEmp) {
-        byEmp = new Map();
-        a.buckets.set(op.id, byEmp);
-      }
-
-      // Кому атрибутировать паспорт в этой колонке:
-      //   - `currentEmployeeId != null` — активная работа, атрибутируем
-      //     текущему исполнителю с `released:false`;
-      //   - `currentEmployeeId == null` — буфер, паспорт уже закрыт.
-      //     Атрибутируем РЕАЛЬНОМУ финишёру `OPERATION_FINISHED` на
-      //     этой операции (`finisherByPassportOp`) с `released:true`.
-      //     Если по какой-то причине FINISHED не найден (data drift,
-      //     PASSPORT_COMPLETE_BACKWARD откат, ручная правка) — fallback
-      //     на анонимную «В буфере»-группу.
-      let aggEmployeeId: string | null;
-      let aggEmployeeName: string;
-      let released: boolean;
-      if (p.currentEmployeeId !== null) {
-        aggEmployeeId = p.currentEmployeeId;
-        aggEmployeeName = p.currentEmployee?.fullName ?? '—';
-        released = false;
-      } else {
-        const finisher = finisherByPassportOp.get(`${p.id}:${op.id}`);
-        if (finisher) {
-          aggEmployeeId = finisher.id;
-          aggEmployeeName = finisher.fullName;
-          released = true;
-        } else {
-          aggEmployeeId = null;
-          aggEmployeeName = 'В буфере';
-          released = true;
-        }
-      }
-      const bucketKey =
-        (aggEmployeeId ?? NO_EMP) + (released ? ':released' : ':active');
-      let agg = byEmp.get(bucketKey);
-      if (!agg) {
-        agg = {
-          employeeId: aggEmployeeId,
-          employeeName: aggEmployeeName,
-          passports: 0,
-          qty: 0,
-          defects: 0,
-          released,
-        };
-        byEmp.set(bucketKey, agg);
-      }
-      agg.passports += 1;
-      agg.qty += p.qtyCut;
-      agg.defects += p.qtyDefect;
     }
 
     const cohortDtos: ProductionBoardCohortDto[] = [...cohorts.values()]
@@ -598,30 +536,116 @@ export class ProductionBoardService {
       .map((a) => {
         const stages: ProductionBoardStageBucketDto[] = orderedCols.map(
           (col) => {
-            const byEmp = a.buckets.get(col.id);
-            const employees: ProductionBoardEmployeeDto[] = byEmp
-              ? [...byEmp.values()]
-                  .map((e) => ({
-                    employeeId: e.employeeId ?? '',
-                    employeeName: e.employeeName,
-                    passports: e.passports,
-                    qty: e.qty,
-                    defects: e.defects,
-                    released: e.released,
-                  }))
-                  // Активная работа сверху, выпущенные — ниже.
-                  // Внутри каждой группы — по убыванию паспортов.
-                  .sort((m, n) => {
-                    if (m.released !== n.released)
-                      return m.released ? 1 : -1;
-                    return n.passports - m.passports;
-                  })
-              : [];
-            // «Сейчас K» (`bucket.passports`) — только активная работа
-            // (`released:false`). `released:true` — это «выпущено им с
-            // этого шага», в счётчик «сейчас» не входит и попадает в
-            // `released` (см. инвариант `passports = received - released`
-            // в shared-DTO).
+            // Единый проход по снимку когорты: и накопительные
+            // received/released, и разбивка по сотрудникам (плашки) — из
+            // ОДНОГО множества, чтобы число в ячейке совпадало со списком
+            // в drill (`getDrill` перечисляет ровно это множество).
+            //   - ВЫПУЩЕНО (released:true): паспорт завершил X-или-дальше
+            //     (`furthest >= idx`) либо PACKED. Атрибуция — финишёру X
+            //     (`finisherByPassportOp`); если X проскочили без скана
+            //     (finish только на более поздней операции) — анонимная
+            //     группа «Прошло без скана».
+            //   - АКТИВНО (released:false): стоит на X (резолвер) и ещё не
+            //     завершил → «Сейчас K».
+            const byKey = new Map<
+              string,
+              {
+                employeeId: string | null;
+                employeeName: string;
+                passports: number;
+                qty: number;
+                defects: number;
+                released: boolean;
+              }
+            >();
+            const attribute = (
+              employeeId: string | null,
+              employeeName: string,
+              isReleased: boolean,
+              cp: CohortPassport,
+            ): void => {
+              const k = (employeeId ?? NO_EMP) + (isReleased ? ':r' : ':a');
+              let agg = byKey.get(k);
+              if (!agg) {
+                agg = {
+                  employeeId,
+                  employeeName,
+                  passports: 0,
+                  qty: 0,
+                  defects: 0,
+                  released: isReleased,
+                };
+                byKey.set(k, agg);
+              }
+              agg.passports += 1;
+              agg.qty += cp.qtyCut;
+              agg.defects += cp.qtyDefect;
+            };
+
+            let received = 0;
+            let released = 0;
+            for (const cp of a.passports) {
+              // Колонка неприменима к заказу без этой операции в маршруте.
+              const colIdxInOrder = opIndexByOrder
+                .get(cp.orderId)
+                ?.get(col.id);
+              if (colIdxInOrder === undefined) continue;
+
+              // Дальше всех зашёл шаг = max(index завершённых операций).
+              let furthest = -1;
+              const orderOpIdx = opIndexByOrder.get(cp.orderId);
+              if (orderOpIdx) {
+                for (const finOpId of cp.finishedOpIds) {
+                  const idx = orderOpIdx.get(finOpId);
+                  if (idx !== undefined && idx > furthest) furthest = idx;
+                }
+              }
+              const finishedHere = furthest >= colIdxInOrder;
+              const currentlyHere = cp.currentOpId === col.id;
+
+              if (cp.isPacked || finishedHere) {
+                // Завершил шаг (или прошёл дальше / упакован) → выпущено.
+                received += 1;
+                released += 1;
+                const finisher = finisherByPassportOp.get(
+                  `${cp.passportId}:${col.id}`,
+                );
+                if (finisher)
+                  attribute(finisher.id, finisher.fullName, true, cp);
+                else attribute(null, 'Прошло без скана', true, cp);
+              } else if (currentlyHere) {
+                // Стоит на X и ещё не завершил → активная работа.
+                received += 1;
+                if (cp.currentEmployeeId)
+                  attribute(
+                    cp.currentEmployeeId,
+                    cp.currentEmployeeName,
+                    false,
+                    cp,
+                  );
+                else attribute(null, 'В буфере', false, cp);
+              }
+            }
+
+            const employees: ProductionBoardEmployeeDto[] = [
+              ...byKey.values(),
+            ]
+              .map((e) => ({
+                employeeId: e.employeeId ?? '',
+                employeeName: e.employeeName,
+                passports: e.passports,
+                qty: e.qty,
+                defects: e.defects,
+                released: e.released,
+              }))
+              // Активная работа сверху, выпущенные ниже; внутри — по убыв.
+              .sort((m, n) => {
+                if (m.released !== n.released) return m.released ? 1 : -1;
+                return n.passports - m.passports;
+              });
+
+            // «Сейчас K» = только активная работа (released:false).
+            // Инвариант shared-DTO: passports = received − released.
             const passportsAt = employees.reduce(
               (s, e) => (e.released ? s : s + e.passports),
               0,
@@ -634,51 +658,6 @@ export class ProductionBoardService {
               (s, e) => (e.released ? s : s + e.defects),
               0,
             );
-
-            // Накопительные «дошло / выпущено» — см. формулу в shared-DTO
-            // `ProductionBoardStageBucketDto`. Считаем по снимку паспортов
-            // когорты, опираясь на `OPERATION_FINISHED`-события + статус
-            // PACKED + резолверную «сейчас здесь» (для первой операции
-            // свежевыданных паспортов без FINISHED-события).
-            let received = 0;
-            let released = 0;
-            for (const cp of a.passports) {
-              // Если у заказа этой операции нет в маршруте — паспорт
-              // не учитываем (колонка к нему неприменима).
-              const colIdxInOrder = opIndexByOrder.get(cp.orderId)?.get(col.id);
-              if (colIdxInOrder === undefined) continue;
-
-              // Дальше всех зашёл шаг = max(index по finished-операциям
-              // этого заказа). Если ни одной FINISHED нет → -1.
-              let furthest = -1;
-              const orderOpIdx = opIndexByOrder.get(cp.orderId);
-              if (orderOpIdx) {
-                for (const finOpId of cp.finishedOpIds) {
-                  const idx = orderOpIdx.get(finOpId);
-                  if (idx !== undefined && idx > furthest) furthest = idx;
-                }
-              }
-
-              if (cp.isPacked) {
-                received += 1;
-                released += 1;
-                continue;
-              }
-
-              // received: «коснулся» — finished на X-или-дальше ИЛИ
-              // сейчас стоит на X (активная работа на этой колонке).
-              const finishedHere = furthest >= colIdxInOrder;
-              const currentlyHere = cp.currentOpId === col.id;
-              if (finishedHere || currentlyHere) received += 1;
-
-              // released: «завершил этот шаг (или прошёл дальше)» —
-              // есть OPERATION_FINISHED на X-или-позже. Раньше было `>`
-              // (только сдан на следующий шаг), но тогда буфер не
-              // попадал в «выпущено N», что противоречит ожиданию
-              // мастера: «отОВРила = выпустила из ОВР», даже если
-              // следующая швея ещё не подхватила (21.05.2026).
-              if (finishedHere) released += 1;
-            }
 
             return {
               code: col.code,
@@ -825,7 +804,9 @@ export class ProductionBoardService {
         : await this.prisma.passport.findMany({
       where: {
         id: { in: dayPassportIds },
-        status: PassportStatus.IN_PROGRESS,
+        // PACKED тоже: ячейка считает упакованные в received/released
+        // каждой пройденной стадии — drill должен их перечислять.
+        status: { in: [PassportStatus.IN_PROGRESS, PassportStatus.PACKED] },
       },
       select: {
         id: true,
@@ -854,6 +835,9 @@ export class ProductionBoardService {
       string,
       Map<number, { id: string; code: string }>
     >();
+    // Обратная карта `opId → index` по заказу — для furthest/colIdx
+    // (как `opIndexByOrder` в getBoard).
+    const opIndexByOrder = new Map<string, Map<string, number>>();
     if (drillOrderIds.length > 0) {
       const rs = await this.prisma.orderRouteStep.findMany({
         where: {
@@ -873,6 +857,35 @@ export class ProductionBoardService {
           opByOrderIndex.set(st.orderId, bi);
         }
         bi.set(st.index, { id: st.operation.id, code: st.operation.code });
+        let oi = opIndexByOrder.get(st.orderId);
+        if (!oi) {
+          oi = new Map();
+          opIndexByOrder.set(st.orderId, oi);
+        }
+        oi.set(st.operation.id, st.index);
+      }
+    }
+
+    // finishedOpIds по кандидатам — для накопительного «дошло/выпущено»
+    // (тот же снимок, что у getBoard), а не только текущая позиция.
+    const finishedOpsByPassport = new Map<string, Set<string>>();
+    if (candidates.length > 0) {
+      const finRows = await this.prisma.passportEvent.findMany({
+        where: {
+          passportId: { in: candidates.map((p) => p.id) },
+          type: PassportEventType.OPERATION_FINISHED,
+          operationId: { not: null },
+        },
+        select: { passportId: true, operationId: true },
+      });
+      for (const ev of finRows) {
+        if (!ev.operationId) continue;
+        let s = finishedOpsByPassport.get(ev.passportId);
+        if (!s) {
+          s = new Set();
+          finishedOpsByPassport.set(ev.passportId, s);
+        }
+        s.add(ev.operationId);
       }
     }
 
@@ -943,35 +956,65 @@ export class ProductionBoardService {
     const NO_EMP = '__none__';
     const groups = new Map<string, ProductionBoardDrillEmployeeGroupDto>();
     for (const p of candidates) {
+      const orderId = p.orderId ?? '';
+      // Колонка неприменима, если операции нет в маршруте заказа.
+      const colIdx = stageOpId
+        ? opIndexByOrder.get(orderId)?.get(stageOpId)
+        : undefined;
+      if (colIdx === undefined) continue;
+
+      // Дальше всех зашёл шаг = max(index завершённых операций).
+      let furthest = -1;
+      const orderOpIdx = opIndexByOrder.get(orderId);
+      const finIds = finishedOpsByPassport.get(p.id);
+      if (orderOpIdx && finIds) {
+        for (const finOpId of finIds) {
+          const idx = orderOpIdx.get(finOpId);
+          if (idx !== undefined && idx > furthest) furthest = idx;
+        }
+      }
+      const finishedHere = furthest >= colIdx;
+      const isPacked = p.status === PassportStatus.PACKED;
       const op = this.resolveColumnOp(
         p,
         sewingShiftByEmployee,
         opByOrderIndex,
       );
-      if (!op || op.code !== query.stage) continue;
+      const currentlyHere = op?.code === query.stage;
 
-      // Кому атрибутировать паспорт (зеркало `getBoard`).
+      // Атрибуция — зеркало `getBoard` (накопительно, не по позиции):
+      //   - ВЫПУЩЕНО (released:true): завершил X-или-дальше / PACKED →
+      //     финишёр X (`finisherByPassport`), иначе «Прошло без скана»
+      //     (операцию проскочили без скана);
+      //   - В РАБОТЕ (released:false): стоит на X и ещё не завершил →
+      //     текущий исполнитель, иначе «В буфере».
       let gEmployeeId: string | null;
       let gEmployeeName: string;
       let gReleased: boolean;
-      if (p.currentEmployeeId !== null) {
-        gEmployeeId = p.currentEmployeeId;
-        gEmployeeName = p.currentEmployee?.fullName ?? '—';
-        gReleased = false;
-      } else {
+      if (isPacked || finishedHere) {
+        gReleased = true;
         const finisher = finisherByPassport.get(p.id);
         if (finisher) {
           gEmployeeId = finisher.id;
           gEmployeeName = finisher.fullName;
-          gReleased = true;
+        } else {
+          gEmployeeId = null;
+          gEmployeeName = 'Прошло без скана';
+        }
+      } else if (currentlyHere) {
+        gReleased = false;
+        if (p.currentEmployeeId !== null) {
+          gEmployeeId = p.currentEmployeeId;
+          gEmployeeName = p.currentEmployee?.fullName ?? '—';
         } else {
           gEmployeeId = null;
           gEmployeeName = 'В буфере';
-          gReleased = true;
         }
+      } else {
+        continue; // паспорт не коснулся этой стадии
       }
 
-      // Фильтр `query.employeeId` — теперь матчит и активного, и финишёра
+      // Фильтр `query.employeeId` — матчит и активного, и финишёра
       // (мастер может кликнуть на любую плашку).
       if (query.employeeId && gEmployeeId !== query.employeeId) continue;
 
