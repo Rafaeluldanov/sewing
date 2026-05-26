@@ -21,8 +21,12 @@ import {
   DefectTypeNotFoundException,
   EmployeeInactiveException,
   EmployeeNotFoundException,
+  PassportNoFinishedOperationException,
   PassportNotQcableException,
+  PassportReworkAlreadyPendingException,
+  PassportReworkRouteStepMissingException,
 } from '../../common/errors.js';
+import { EarningsService } from '../earnings/earnings.service.js';
 
 /**
  * Сервис ОТК (Шаг 7).
@@ -44,6 +48,7 @@ export class QcService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly earnings: EarningsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -294,6 +299,172 @@ export class QcService {
     return this.loadDetail(passportId);
   }
 
+  // -------------------------------------------------------------------------
+  // Return to rework (role-terminal: «Вернуть на переделку»)
+  // -------------------------------------------------------------------------
+
+  /**
+   * ОТК нашёл брак и возвращает паспорт на предыдущий шаг (тому же
+   * исполнителю). См. `docs/flows.md §F5a`, обсуждение дизайна — в
+   * памяти проекта `project_qc_return_to_rework`.
+   *
+   * Инварианты:
+   *   - паспорт `IN_PROGRESS`;
+   *   - есть последний `OPERATION_FINISHED` — определяет target-операцию
+   *     и швею-финишёра (`employeeId` в событии — «кому возвращаем»);
+   *   - в текущем маршруте заказа есть `OrderRouteStep` под target —
+   *     иначе 409, edge-case (маршрут перерисовали после прохождения);
+   *   - не должно быть открытого rework (без последующего FINISHED) —
+   *     защита от двойного нажатия.
+   *
+   * Эффекты в одной транзакции:
+   *   1. Сдвигаем паспорт назад: `currentOperationId = target.operationId`,
+   *      `currentRouteStepIndex = target.index`, `currentEmployeeId = null`,
+   *      `currentCellId = null` (ячейку не используем — швея забирает
+   *      паспорт у ОТК физически).
+   *   2. Пишем `PassportEvent(OPERATION_REWORK_OPENED)` с
+   *      `operationId = target`, `employeeId = previousFinisher`,
+   *      `qty = qtyGood` (информационно).
+   *   3. Отзываем pending earning у швеи предыдущего прохода —
+   *      инвариант «оплата за изделие — один раз»: повторный
+   *      `OPERATION_FINISHED` потом создаст начисление финишёру
+   *      финального успешного прохода.
+   *   4. Аудит `QC_PASSPORT_RETURNED_TO_REWORK`.
+   *
+   * После возврата:
+   *   - `assertOperationNotFinished` пропускает повторную выдачу и
+   *     завершение target-операции (учитывает события только после
+   *     последнего `OPERATION_REWORK_OPENED`);
+   *   - QC-/WTO-/packing-гейты тоже считают `QC_PASSED`/`WTO_PASSED`
+   *     только после rework — паспорт должен снова пройти ОТК.
+   */
+  async returnToRework(
+    passportId: string,
+    actorEmployeeId: string,
+  ): Promise<QcPassportDetailDto> {
+    const passport = await this.prisma.passport.findUnique({
+      where: { id: passportId },
+    });
+    if (!passport) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'PASSPORT_NOT_FOUND',
+        message: 'Паспорт не найден',
+      });
+    }
+    if (passport.status !== PassportStatus.IN_PROGRESS) {
+      throw new PassportNotQcableException();
+    }
+
+    const actor = await this.prisma.employee.findUnique({
+      where: { id: actorEmployeeId },
+      select: { id: true, active: true },
+    });
+    if (!actor) throw new EmployeeNotFoundException();
+    if (!actor.active) throw new EmployeeInactiveException();
+
+    const lastFinished = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        type: PassportEventType.OPERATION_FINISHED,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { operationId: true, employeeId: true, createdAt: true },
+    });
+    if (!lastFinished || !lastFinished.operationId) {
+      throw new PassportNoFinishedOperationException();
+    }
+
+    // Защита от двойного нажатия: если по target-операции уже есть
+    // открытый rework (REWORK_OPENED позже последнего FINISHED) —
+    // второй raise не делаем. UI и так должен прятать кнопку
+    // (см. флаг `reworkPending` в `loadDetail`), но дублирование
+    // на бэке — на случай race-condition.
+    const openRework = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+        createdAt: { gt: lastFinished.createdAt },
+      },
+      select: { id: true },
+    });
+    if (openRework) throw new PassportReworkAlreadyPendingException();
+
+    const targetStep = await this.prisma.orderRouteStep.findFirst({
+      where: {
+        orderId: passport.orderId,
+        operationId: lastFinished.operationId,
+      },
+      select: { index: true, operationId: true },
+    });
+    if (!targetStep) throw new PassportReworkRouteStepMissingException();
+
+    const beforeSnapshot = {
+      currentOperationId: passport.currentOperationId,
+      currentRouteStepIndex: passport.currentRouteStepIndex,
+      currentEmployeeId: passport.currentEmployeeId,
+      currentCellId: passport.currentCellId,
+    };
+    const afterSnapshot = {
+      currentOperationId: targetStep.operationId,
+      currentRouteStepIndex: targetStep.index,
+      currentEmployeeId: null,
+      currentCellId: null,
+    };
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.passport.update({
+        where: { id: passportId },
+        data: {
+          currentOperationId: targetStep.operationId,
+          currentRouteStepIndex: targetStep.index,
+          currentEmployeeId: null,
+          currentCellId: null,
+        },
+      });
+      await tx.passportEvent.create({
+        data: {
+          passportId,
+          type: PassportEventType.OPERATION_REWORK_OPENED,
+          operationId: targetStep.operationId,
+          // `employeeId` события — «кому возвращаем» (последний
+          // финишёр). Это же поле использует UI /work, чтобы
+          // показать секцию «К переделке» у конкретной швеи.
+          employeeId: lastFinished.employeeId,
+          qty: passport.qtyGood,
+        },
+      });
+      const revoked = await this.earnings.revokePendingForOperation(
+        tx,
+        passportId,
+        targetStep.operationId,
+      );
+      await this.audit.log(
+        {
+          event: 'QC_PASSPORT_RETURNED_TO_REWORK',
+          entityType: 'PASSPORT',
+          entityId: passportId,
+          employeeId: actorEmployeeId,
+          payload: {
+            targetOperationId: targetStep.operationId,
+            targetRouteStepIndex: targetStep.index,
+            previousFinisherEmployeeId: lastFinished.employeeId,
+            qty: passport.qtyGood,
+            pendingEarningsRevoked: revoked,
+            before: beforeSnapshot,
+            after: afterSnapshot,
+          },
+        },
+        tx,
+      );
+    });
+
+    this.logger.log(
+      `event=qc.returnToRework passportId=${passportId} actorId=${actorEmployeeId} targetOperationId=${targetStep.operationId} previousFinisherEmployeeId=${lastFinished.employeeId ?? 'unknown'}`,
+    );
+    return this.loadDetail(passportId);
+  }
+
   async recordDefect(
     passportId: string,
     dto: CreatePassportDefectDto,
@@ -423,6 +594,28 @@ export class QcService {
       orderBy: { createdAt: 'desc' },
       select: { createdAt: true },
     });
+    // Последнее `OPERATION_FINISHED` — нужно для `canReturnToRework`
+    // и для проверки «есть ли открытый rework по этой операции».
+    const lastFinished = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        type: PassportEventType.OPERATION_FINISHED,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { operationId: true, createdAt: true },
+    });
+    const reworkPending = lastFinished
+      ? Boolean(
+          await this.prisma.passportEvent.findFirst({
+            where: {
+              passportId,
+              type: PassportEventType.OPERATION_REWORK_OPENED,
+              createdAt: { gt: lastFinished.createdAt },
+            },
+            select: { id: true },
+          }),
+        )
+      : false;
     // Backend-источник истины «паспорт ушёл из ОТК». QC-терминал
     // (`apps/web/app/qc/qc-terminal.tsx`) использует этот флаг, чтобы
     // схлопнутая строка «Проверено ОТК» исчезала, когда паспорт реально
@@ -477,13 +670,26 @@ export class QcService {
       createdAt: r.createdAt.toISOString(),
       updatedAt: r.updatedAt.toISOString(),
       defects,
+      // В состоянии открытого rework (паспорт уже отправлен на переделку
+      // и ждёт сканирования швеёй) ОТК ничего делать не должен —
+      // карточка показывается в read-only.
       canRecordDefect:
-        r.status === PassportStatus.IN_PROGRESS && remainingForDefect > 0,
+        !reworkPending &&
+        r.status === PassportStatus.IN_PROGRESS &&
+        remainingForDefect > 0,
       remainingForDefect,
       qcCompletedAt: lastQcPassed?.createdAt.toISOString() ?? null,
       canCompleteQc:
-        r.status === PassportStatus.IN_PROGRESS ||
-        (r.status === PassportStatus.PACKED && lastQcPassed === null),
+        !reworkPending &&
+        (r.status === PassportStatus.IN_PROGRESS ||
+          (r.status === PassportStatus.PACKED && lastQcPassed === null)),
+      // Кнопка «Вернуть на переделку» активна только если есть кому
+      // возвращать (есть OPERATION_FINISHED) и нет уже открытого rework.
+      canReturnToRework:
+        r.status === PassportStatus.IN_PROGRESS &&
+        lastFinished !== null &&
+        !reworkPending,
+      reworkPending,
       removedFromQc,
     };
   }

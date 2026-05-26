@@ -314,16 +314,39 @@ export class PackingService {
         const hasWto = routeSteps.some(
           (s) => s.operation.category === OperationCategory.IRONING,
         );
+        // После `OPERATION_REWORK_OPENED` (ОТК «вернуть на переделку»,
+        // см. `QcService.returnToRework`) старые `QC_PASSED`/`WTO_PASSED`
+        // не засчитываются — должен быть свежий, после последнего rework.
+        // Иначе паспорт после переделки проходил бы мимо ОТК/ВТО.
+        const lastRework = await tx.passportEvent.findFirst({
+          where: {
+            passportId: fresh.id,
+            type: PassportEventType.OPERATION_REWORK_OPENED,
+          },
+          orderBy: { createdAt: 'desc' },
+          select: { createdAt: true },
+        });
+        const afterRework = lastRework
+          ? { createdAt: { gt: lastRework.createdAt } }
+          : {};
         if (hasQc) {
           const qc = await tx.passportEvent.findFirst({
-            where: { passportId: fresh.id, type: PassportEventType.QC_PASSED },
+            where: {
+              passportId: fresh.id,
+              type: PassportEventType.QC_PASSED,
+              ...afterRework,
+            },
             select: { id: true },
           });
           if (!qc) throw new PassportNotQcPassedException();
         }
         if (hasWto) {
           const wto = await tx.passportEvent.findFirst({
-            where: { passportId: fresh.id, type: PassportEventType.WTO_PASSED },
+            where: {
+              passportId: fresh.id,
+              type: PassportEventType.WTO_PASSED,
+              ...afterRework,
+            },
             select: { id: true },
           });
           if (!wto) throw new PassportNotWtoPassedException();

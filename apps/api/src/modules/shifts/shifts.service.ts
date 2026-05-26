@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import type {
   CurrentWorkPassportDto,
+  ReworkPassportDto,
   ShiftMetaDto,
   ShiftSessionDto,
 } from '@sewing/shared/shifts';
@@ -271,6 +272,114 @@ export class ShiftsService {
           : null,
       };
     });
+  }
+
+  /**
+   * Список паспортов, возвращённых ОТК на переделку этому сотруднику
+   * (см. `QcService.returnToRework`, `docs/flows.md §F5a`).
+   *
+   * Источник — `PassportEvent(OPERATION_REWORK_OPENED)` с
+   * `employeeId = me`, без последующего `OPERATION_FINISHED` для
+   * той же пары `(passportId, operationId)`. То есть «открытый rework».
+   *
+   * Используется на `/work` для секции «К переделке от ОТК» —
+   * подсказка швее, какие паспорта нужно забрать у ОТК и довести.
+   * После того как швея сосканирует паспорт у станка и завершит
+   * операцию повторно, событие `OPERATION_FINISHED` закроет открытый
+   * rework, и паспорт автоматически уйдёт из этого списка.
+   */
+  async getMyReworkPassports(
+    employeeId: string,
+  ): Promise<ReworkPassportDto[]> {
+    const reworks = await this.prisma.passportEvent.findMany({
+      where: {
+        employeeId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+      },
+      select: {
+        passportId: true,
+        operationId: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (reworks.length === 0) return [];
+
+    // Дедуп по (passport, operationId) — оставляем самый свежий rework
+    // на эту пару. Если ОТК делал несколько циклов rework, нас
+    // интересует только последний.
+    const seen = new Set<string>();
+    const latest: typeof reworks = [];
+    for (const r of reworks) {
+      if (!r.operationId) continue;
+      const key = `${r.passportId}:${r.operationId}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      latest.push(r);
+    }
+
+    // Оставляем только «открытые» — те, после которых не было
+    // `OPERATION_FINISHED` для той же (passport, operation).
+    const open: typeof latest = [];
+    for (const r of latest) {
+      const finished = await this.prisma.passportEvent.findFirst({
+        where: {
+          passportId: r.passportId,
+          operationId: r.operationId,
+          type: PassportEventType.OPERATION_FINISHED,
+          createdAt: { gt: r.createdAt },
+        },
+        select: { id: true },
+      });
+      if (!finished) open.push(r);
+    }
+    if (open.length === 0) return [];
+
+    const passportIds = open.map((r) => r.passportId);
+    const passports = await this.prisma.passport.findMany({
+      where: {
+        id: { in: passportIds },
+        status: PassportStatus.IN_PROGRESS,
+      },
+      include: {
+        product: { select: { name: true } },
+        size: { select: { code: true } },
+        order: { select: { id: true, number: true } },
+      },
+    });
+    const passportById = new Map(passports.map((p) => [p.id, p]));
+
+    const operationIds = Array.from(
+      new Set(open.map((r) => r.operationId).filter((x): x is string => !!x)),
+    );
+    const operations = await this.prisma.operation.findMany({
+      where: { id: { in: operationIds } },
+      select: { id: true, code: true, name: true },
+    });
+    const operationById = new Map(operations.map((o) => [o.id, o]));
+
+    const items: ReworkPassportDto[] = [];
+    for (const r of open) {
+      const p = passportById.get(r.passportId);
+      if (!p) continue;
+      const op = r.operationId ? operationById.get(r.operationId) : null;
+      if (!op) continue;
+      items.push({
+        passportId: p.id,
+        passportNumber: p.number,
+        orderId: p.order.id,
+        orderNumber: p.order.number,
+        productName: p.product.name,
+        color: p.color,
+        sizeCode: p.size.code,
+        qtyCut: p.qtyCut,
+        qtyGood: p.qtyGood,
+        operationCode: op.code,
+        operationName: op.name,
+        reworkedAt: r.createdAt.toISOString(),
+      });
+    }
+    return items;
   }
 
   // -------------------------------------------------------------------------

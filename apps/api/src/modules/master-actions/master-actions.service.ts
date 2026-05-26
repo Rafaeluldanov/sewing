@@ -389,14 +389,27 @@ export class MasterActionsService {
 
     // По целевой операции уже есть `OPERATION_FINISHED` → запрещаем
     // вернуть на неё паспорт. По бизнес-инварианту операция считается
-    // закрытой безвозвратно для всех ролей, включая мастера. Для
-    // переделки по браку и аналогичных случаев — отдельный flow или
-    // прямая правка БД админом.
+    // закрытой безвозвратно для всех ролей, включая мастера.
+    // Исключение — переделка по браку: ОТК через `QcService.returnToRework`
+    // пишет `OPERATION_REWORK_OPENED`, и инвариант ослабляется до
+    // «нет `OPERATION_FINISHED` после последнего rework для пары
+    // (passport, operation)». Мастер, идущий после rework, тоже
+    // должен пройти эту проверку: текущий проход операции открыт.
+    const lastRework = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId: passport.id,
+        operationId: target.operationId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
     const finishedOnTarget = await this.prisma.passportEvent.findFirst({
       where: {
         passportId: passport.id,
         operationId: target.operationId,
         type: PassportEventType.OPERATION_FINISHED,
+        ...(lastRework ? { createdAt: { gt: lastRework.createdAt } } : {}),
       },
       select: { id: true },
     });

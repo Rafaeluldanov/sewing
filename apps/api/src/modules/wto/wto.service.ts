@@ -184,8 +184,24 @@ export class WtoService {
   // -------------------------------------------------------------------------
 
   private async assertQcPassed(passportId: string): Promise<void> {
+    // QC_PASSED считаем только после последнего `OPERATION_REWORK_OPENED`
+    // (см. `QcService.returnToRework`). Если ОТК вернул паспорт на
+    // переделку — старый QC_PASSED аннулируется, ВТО должна дождаться
+    // нового подтверждения ОТК.
+    const lastRework = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
     const qc = await this.prisma.passportEvent.findFirst({
-      where: { passportId, type: PassportEventType.QC_PASSED },
+      where: {
+        passportId,
+        type: PassportEventType.QC_PASSED,
+        ...(lastRework ? { createdAt: { gt: lastRework.createdAt } } : {}),
+      },
       select: { id: true },
     });
     if (!qc) throw new PassportNotQcPassedException();

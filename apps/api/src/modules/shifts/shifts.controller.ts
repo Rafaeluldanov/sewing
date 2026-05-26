@@ -59,6 +59,18 @@ export class ShiftsController {
     return this.shifts.getCurrentWork(user.employeeId);
   }
 
+  /**
+   * Список паспортов, возвращённых ОТК на переделку этому сотруднику
+   * (см. `ShiftsService.getMyReworkPassports`, `docs/flows.md §F5a`).
+   * Используется на `/work` для секции «К переделке от ОТК». Backend
+   * сам вырезает по сессии — клиент не может запросить чужой список
+   * (ADR-0014).
+   */
+  @Get('my-rework')
+  myRework(@CurrentUser() user: AuthPrincipal) {
+    return this.shifts.getMyReworkPassports(user.employeeId);
+  }
+
   @Get('meta')
   meta() {
     return this.shifts.getMeta();

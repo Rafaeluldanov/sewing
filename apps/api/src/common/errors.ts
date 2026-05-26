@@ -976,6 +976,51 @@ export class DefectExceedsRemainingException extends BusinessException {
   }
 }
 
+/**
+ * ОТК пытается «Вернуть на переделку», но по паспорту нет ни одного
+ * `OPERATION_FINISHED` — некому возвращать. Теоретически невозможно
+ * (ОТК получает паспорт только после прохождения хотя бы одной
+ * пошивной операции), но защита оставлена на случай ручной правки БД.
+ */
+export class PassportNoFinishedOperationException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_NO_FINISHED_OPERATION',
+      'У паспорта нет завершённых операций — некому возвращать на переделку.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * ОТК пытается «Вернуть на переделку», но в маршруте заказа нет шага
+ * с операцией предыдущего финиша (маршрут перерисовали уже после
+ * прохождения). Edge-case; решается мастером через `set-route-step`.
+ */
+export class PassportReworkRouteStepMissingException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_REWORK_ROUTE_STEP_MISSING',
+      'В текущем маршруте заказа нет шага под операцию предыдущего финиша. Обратитесь к мастеру цеха.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * ОТК пытается «Вернуть на переделку» паспорт, который уже отправлен
+ * на rework и ждёт сканирования швеёй. Защита от двойного нажатия.
+ */
+export class PassportReworkAlreadyPendingException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_REWORK_ALREADY_PENDING',
+      'Паспорт уже возвращён на переделку и ждёт сканирования швеёй.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // WTO / ironing (role-terminal)
 // ---------------------------------------------------------------------------

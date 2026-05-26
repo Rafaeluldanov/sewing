@@ -63,6 +63,7 @@ import {
   lookupQcPassportAction,
   recordDefectAction,
   refreshQcPassportAction,
+  returnToReworkAction,
 } from './actions';
 import { initialQcDefectState } from './form-state';
 
@@ -292,6 +293,37 @@ function QcScanTerminal({ defectTypes }: ScanTerminalProps) {
     });
   };
 
+  const handleReturnToRework = () => {
+    if (!detail) return;
+    const passportId = detail.passportId;
+    const finisherName = detail.currentEmployeeName ?? 'предыдущей швее';
+    // Действие отзывает pending earning — даём ОТК подтвердить.
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm(
+        `Вернуть ${detail.passportNumber} на переделку (${finisherName})?\n\n` +
+          `Pending-начисление за эту операцию будет отозвано.`,
+      )
+    ) {
+      return;
+    }
+    startTransition(async () => {
+      const res = await returnToReworkAction(passportId);
+      if (!res.ok) {
+        setError({ message: res.error, requestId: res.errorRequestId });
+        return;
+      }
+      setError(null);
+      // Карточка сразу закрывается — после rework паспорт уходит из
+      // окна ОТК, как после «Проверка выполнена». Краткий info-тост
+      // подскажет, кому ушёл вызов; терминал готов к следующему скану.
+      const targetName = res.detail.currentEmployeeName ?? finisherName;
+      setInfo(`Возврат на переделку отправлен: ${targetName}`);
+      playOperationCompletedSound();
+      setDetail(null);
+    });
+  };
+
   const handleScanNext = () => {
     setDetail(null);
     setError(null);
@@ -323,6 +355,7 @@ function QcScanTerminal({ defectTypes }: ScanTerminalProps) {
           info={info}
           onDefectSubmit={handleDefectSubmit}
           onComplete={handleComplete}
+          onReturnToRework={handleReturnToRework}
           onScanNext={handleScanNext}
           onRefresh={refresh}
         />

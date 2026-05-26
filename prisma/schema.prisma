@@ -181,6 +181,16 @@ enum PassportEventType {
   // меняется. Используется для derived-стадии `WTO_DONE` на экране
   // цеха и для свернутой строки в `/wto` после завершения.
   WTO_PASSED
+  // ОТК «Вернуть на переделку»: маркер открытия повторного прохода
+  // операции после обнаруженного брака. `operationId` = операция, на
+  // которую возвращаем (последний `OPERATION_FINISHED`), `employeeId`
+  // = швея-финишёр того прохода (для секции «К переделке» в /work),
+  // `qty` = `qtyGood` на момент возврата (информационно). Не меняет
+  // `Passport.status`. Cancel-инвариант «операция закрыта навсегда»
+  // ослабляется: `assertOperationNotFinished` теперь учитывает только
+  // `OPERATION_FINISHED` после последнего `OPERATION_REWORK_OPENED`
+  // для (passport, operation). См. docs/flows.md §F5a (rework).
+  OPERATION_REWORK_OPENED
   PACKED
   CANCELLED
 }

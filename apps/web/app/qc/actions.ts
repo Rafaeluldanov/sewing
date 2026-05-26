@@ -10,6 +10,7 @@ import {
   completeQcPassport,
   getQcPassport,
   recordPassportDefect,
+  returnQcPassportToRework,
 } from '@/lib/qc-api';
 import { findPassportByCode, scanPassport } from '@/lib/shifts-api';
 import type { QcDefectFormState } from './form-state';
@@ -178,6 +179,32 @@ export async function completeQcAction(
 ): Promise<QcCompleteResult> {
   try {
     const detail = await completeQcPassport(passportId);
+    revalidateForPassport(detail);
+    return { ok: true, detail };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+export type QcReturnToReworkResult =
+  | { ok: true; detail: QcPassportDetailDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+/**
+ * QC role-terminal: «Вернуть на переделку». Дёргаем
+ * `POST /api/qc/passports/:id/return-to-rework`, инвалидируем те же
+ * кэши, что и при `completeQcAction` — паспорт двинулся по pipeline.
+ * См. `QcService.returnToRework`, `docs/flows.md §F5a`.
+ */
+export async function returnToReworkAction(
+  passportId: string,
+): Promise<QcReturnToReworkResult> {
+  try {
+    const detail = await returnQcPassportToRework(passportId);
     revalidateForPassport(detail);
     return { ok: true, detail };
   } catch (e) {

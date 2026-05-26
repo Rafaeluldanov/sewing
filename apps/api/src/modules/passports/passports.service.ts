@@ -1271,8 +1271,22 @@ export class PassportsService {
       session.operation.category === OperationCategory.IRONING &&
       passport.currentOperationId !== session.operationId
     ) {
+      // QC_PASSED после последнего `OPERATION_REWORK_OPENED`. После rework
+      // паспорт должен снова пройти ОТК, прежде чем попасть на ВТО.
+      const lastRework = await this.prisma.passportEvent.findFirst({
+        where: {
+          passportId: passport.id,
+          type: PassportEventType.OPERATION_REWORK_OPENED,
+        },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      });
       const qcPassed = await this.prisma.passportEvent.findFirst({
-        where: { passportId: passport.id, type: PassportEventType.QC_PASSED },
+        where: {
+          passportId: passport.id,
+          type: PassportEventType.QC_PASSED,
+          ...(lastRework ? { createdAt: { gt: lastRework.createdAt } } : {}),
+        },
         select: { id: true },
       });
       if (!qcPassed) throw new PassportNotQcPassedException();
@@ -2337,11 +2351,27 @@ export class PassportsService {
     passportId: string,
     operationId: string,
   ): Promise<void> {
+    // Учитываем `OPERATION_FINISHED` только для текущего «прохода»
+    // операции. Если ОТК вернул паспорт на переделку
+    // (`OPERATION_REWORK_OPENED` для этой же пары passport+operation),
+    // отсчёт идёт от последнего rework — старые `OPERATION_FINISHED`
+    // относились к прошлому проходу и больше не блокируют. См.
+    // `QcService.returnToRework` и `docs/flows.md §F5a`.
+    const lastRework = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId,
+        operationId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
     const finished = await this.prisma.passportEvent.findFirst({
       where: {
         passportId,
         operationId,
         type: PassportEventType.OPERATION_FINISHED,
+        ...(lastRework ? { createdAt: { gt: lastRework.createdAt } } : {}),
       },
       select: { id: true },
     });

@@ -141,6 +141,34 @@ export const PassportCodeSchema = z
  * данные по сессии (`@CurrentUser`), никаких employeeId-параметров от
  * клиента (см. ADR-0014).
  */
+/**
+ * Один паспорт в секции «К переделке» у швеи (см.
+ * `apps/api/src/modules/shifts/shifts.service.ts::getMyReworkPassports`,
+ * `apps/web/app/work/seamstress-active-panel.tsx`). Источник —
+ * `PassportEvent(OPERATION_REWORK_OPENED)` с `employeeId = me` и без
+ * последующего `OPERATION_FINISHED` для пары (passport, operationId).
+ *
+ * Это не «в работе у меня» (`currentEmployeeId = me`) — паспорт ещё
+ * физически у ОТК / по дороге к швее. UI подсказывает: «забери
+ * паспорт у ОТК, потом сосканируй у своего станка как обычно».
+ */
+export interface ReworkPassportDto {
+  passportId: string;
+  passportNumber: string;
+  orderId: string;
+  orderNumber: string;
+  productName: string;
+  color: string;
+  sizeCode: string;
+  qtyCut: number;
+  qtyGood: number;
+  /** Операция, на которую возвращён паспорт (target rework). */
+  operationCode: string;
+  operationName: string;
+  /** Когда ОТК нажал «Вернуть на переделку» (для подписи «возвращён в HH:MM»). */
+  reworkedAt: string;
+}
+
 export interface CurrentWorkPassportDto {
   id: string;
   number: string;

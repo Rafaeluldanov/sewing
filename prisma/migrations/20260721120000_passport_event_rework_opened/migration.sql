@@ -1,0 +1,11 @@
+-- Добавляем значение `OPERATION_REWORK_OPENED` в Postgres-enum
+-- `PassportEventType` — маркер открытия повторного прохода операции
+-- после обнаруженного ОТК брака (см. docs/flows.md §F5a).
+--
+-- Postgres расширяет enum только через `ALTER TYPE … ADD VALUE`,
+-- порядковая позиция нового значения в БД больше, чем у `WTO_PASSED`
+-- — это нормально, UI-семантика не зависит от ordinal (см. ADR-0019).
+--
+-- IF NOT EXISTS — идемпотентно (на dev значение могло быть добавлено
+-- напрямую при разработке); на prod добавит, т.к. его ещё нет.
+ALTER TYPE "PassportEventType" ADD VALUE IF NOT EXISTS 'OPERATION_REWORK_OPENED';

@@ -358,6 +358,7 @@ export type PassportHistoryEventType =
   | 'OPERATION_SCAN'
   | 'QC_PASSED'
   | 'WTO_PASSED'
+  | 'OPERATION_REWORK_OPENED'
   | 'PACKED'
   | 'CANCELLED';
 
@@ -379,6 +380,7 @@ export const PASSPORT_EVENT_LABELS: Record<PassportHistoryEventType, string> = {
   OPERATION_SCAN: 'Скан на операции',
   QC_PASSED: 'ОТК пройдено',
   WTO_PASSED: 'ВТО пройдено',
+  OPERATION_REWORK_OPENED: 'Возврат на переделку',
   PACKED: 'Упакован',
   CANCELLED: 'Отменён',
 };

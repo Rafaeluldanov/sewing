@@ -67,4 +67,20 @@ export class QcController {
   ) {
     return this.qc.completeQc(id, user.employeeId);
   }
+
+  /**
+   * QC role-terminal: «Вернуть на переделку».
+   *
+   * Тело пустое — target-операция и швея-получатель определяются
+   * сервером по последнему `OPERATION_FINISHED` паспорта (см.
+   * `QcService.returnToRework`, `docs/flows.md §F5a`). RBAC такой же,
+   * как у `complete` (QC, SHOP_MANAGER, +ADMIN через RolesGuard).
+   */
+  @Post('passports/:id/return-to-rework')
+  returnToRework(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.qc.returnToRework(id, user.employeeId);
+  }
 }

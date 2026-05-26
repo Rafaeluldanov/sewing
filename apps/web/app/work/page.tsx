@@ -4,6 +4,7 @@ import {
   getCurrentShift,
   getCurrentWork,
   getCutIssueBanner,
+  getMyRework,
   getShiftMeta,
 } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
@@ -55,6 +56,20 @@ function formatTime(iso: string): string {
 async function loadCurrentWorkSafely() {
   try {
     return await getCurrentWork();
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) throw e;
+    return [];
+  }
+}
+
+/**
+ * Аккуратный загрузчик «к переделке от ОТК» — fail-soft, как
+ * `loadCurrentWorkSafely`: если backend упал, не ломаем весь /work
+ * (швея всё ещё должна видеть кнопку «Взять крой»).
+ */
+async function loadMyReworkSafely() {
+  try {
+    return await getMyRework();
   } catch (e) {
     if (!(e instanceof ApiRequestError)) throw e;
     return [];
@@ -198,15 +213,17 @@ export default async function WorkPage() {
         // проверки паспорта (см. ТЗ §1–§6, ADR-0014).
         isActive ? (
           await (async () => {
-            const [currentWork, cutIssueBanner] = await Promise.all([
+            const [currentWork, cutIssueBanner, myRework] = await Promise.all([
               loadCurrentWorkSafely(),
               loadCutIssueBannerSafely(currentShift!.operationId),
+              loadMyReworkSafely(),
             ]);
             return (
               <SeamstressActivePanel
                 shift={currentShift!}
                 currentWork={currentWork}
                 cutIssueBanner={cutIssueBanner}
+                myRework={myRework}
               />
             );
           })()

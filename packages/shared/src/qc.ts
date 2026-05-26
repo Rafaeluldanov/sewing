@@ -152,4 +152,20 @@ export interface QcPassportDetailDto extends QcPassportListItemDto {
    * больше не относится к ОТК.
    */
   removedFromQc: boolean;
+  /**
+   * Можно ли сейчас нажать «Вернуть на переделку». `true`, если
+   * паспорт `IN_PROGRESS`, есть кому возвращать (хотя бы один
+   * `OPERATION_FINISHED`) и нет уже открытого rework
+   * (`reworkPending === false`).
+   */
+  canReturnToRework: boolean;
+  /**
+   * `true`, если по паспорту был `OPERATION_REWORK_OPENED` после
+   * последнего `OPERATION_FINISHED` — то есть ОТК уже отправил его
+   * на переделку и ждёт, пока швея заберёт. В этом состоянии
+   * `canRecordDefect`/`canCompleteQc`/`canReturnToRework` все
+   * `false`, карточка показывается в read-only с баннером
+   * «Сейчас на переделке у …».
+   */
+  reworkPending: boolean;
 }

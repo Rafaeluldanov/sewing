@@ -61,6 +61,20 @@ export function completeQcPassport(id: string): Promise<QcPassportDetailDto> {
   );
 }
 
+/**
+ * QC role-terminal: «Вернуть на переделку». Body пустой — target
+ * (операция и швея-получатель) определяется сервером по последнему
+ * `OPERATION_FINISHED`. См. `QcService.returnToRework`.
+ */
+export function returnQcPassportToRework(
+  id: string,
+): Promise<QcPassportDetailDto> {
+  return apiFetch<QcPassportDetailDto>(
+    `/qc/passports/${encodeURIComponent(id)}/return-to-rework`,
+    { method: 'POST', body: {} },
+  );
+}
+
 export function listDefectTypes(): Promise<DefectTypeDto[]> {
   return apiFetch<DefectTypeDto[]>('/defect-types', {
     next: { revalidate: 300, tags: ['defect-types'] },

@@ -42,6 +42,9 @@ interface Props {
   info: string | null;
   onDefectSubmit: (form: FormData) => void;
   onComplete: () => void;
+  /** «Вернуть на переделку» — отдаём паспорт обратно швее, что только
+   *  что прислала его на ОТК. См. `docs/flows.md §F5a`. */
+  onReturnToRework: () => void;
   onScanNext: () => void;
   onRefresh: () => void;
 }
@@ -65,6 +68,7 @@ export function QcWorkCard({
   info,
   onDefectSubmit,
   onComplete,
+  onReturnToRework,
   onScanNext,
   onRefresh,
 }: Props) {
@@ -82,10 +86,17 @@ export function QcWorkCard({
     ? `Проверка выполнена · ${formatDateTime(detail.qcCompletedAt)}`
     : null;
 
-  // Блок брака — только в работе (не после complete) и пока backend
-  // разрешает фиксировать брак.
-  const showDefectForm = !completed && detail.canRecordDefect;
-  const showDefectEmpty = !completed && !detail.canRecordDefect;
+  // Read-only режим, когда ОТК уже отправил паспорт на переделку и
+  // ждёт сканирования швеёй. См. `QcService.returnToRework` —
+  // `reworkPending` приходит с бэка.
+  const reworkPending = detail.reworkPending;
+
+  // Блок брака — только в работе (не после complete, не в read-only
+  // rework-pending) и пока backend разрешает фиксировать брак.
+  const showDefectForm =
+    !completed && !reworkPending && detail.canRecordDefect;
+  const showDefectEmpty =
+    !completed && !reworkPending && !detail.canRecordDefect;
 
   return (
     <section className="qc-card" aria-label="Карточка паспорта ОТК">
@@ -156,6 +167,18 @@ export function QcWorkCard({
           Обновить карточку
         </button>
       </div>
+
+      {reworkPending && (
+        <div className="error-box" role="status">
+          <div className="error-box__msg">
+            Сейчас на переделке у{' '}
+            <strong>
+              {detail.currentEmployeeName ?? 'предыдущей швеи'}
+            </strong>
+            . Ждёт сканирования.
+          </div>
+        </div>
+      )}
 
       {completedLabel && (
         <div className="info-box" role="status">
@@ -286,7 +309,7 @@ export function QcWorkCard({
        * застрял.
        */}
       <div className="qc-card__sticky-actions">
-        {completed ? (
+        {completed || reworkPending ? (
           <button
             type="button"
             className="btn btn-primary btn-block btn-lg"
@@ -307,6 +330,16 @@ export function QcWorkCard({
                 {pending ? 'Запись…' : 'Добавить брак'}
               </button>
             )}
+            {detail.canReturnToRework && (
+              <button
+                type="button"
+                className="btn btn-block"
+                onClick={onReturnToRework}
+                disabled={pending}
+              >
+                {pending ? 'Возвращаем…' : '↺ Вернуть на переделку'}
+              </button>
+            )}
             {detail.canCompleteQc && (
               <button
                 type="button"
@@ -317,16 +350,18 @@ export function QcWorkCard({
                 {pending ? 'Сохраняем…' : 'Проверка выполнена'}
               </button>
             )}
-            {!detail.canRecordDefect && !detail.canCompleteQc && (
-              <button
-                type="button"
-                className="btn btn-block btn-lg"
-                onClick={onScanNext}
-                disabled={pending}
-              >
-                Сканировать другой паспорт
-              </button>
-            )}
+            {!detail.canRecordDefect &&
+              !detail.canCompleteQc &&
+              !detail.canReturnToRework && (
+                <button
+                  type="button"
+                  className="btn btn-block btn-lg"
+                  onClick={onScanNext}
+                  disabled={pending}
+                >
+                  Сканировать другой паспорт
+                </button>
+              )}
           </>
         )}
       </div>

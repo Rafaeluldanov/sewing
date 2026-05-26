@@ -27,6 +27,7 @@ import { useRouter } from 'next/navigation';
 import { ModalPortal } from '@/components/modal-portal';
 import type {
   CurrentWorkPassportDto,
+  ReworkPassportDto,
   ShiftSessionDto,
 } from '@sewing/shared/shifts';
 import type {
@@ -71,6 +72,14 @@ interface Props {
    * вместо `PassportConfirmModal`.
    */
   cutIssueBanner: OrderCutIssueRuleBannerDto;
+  /**
+   * Паспорта, возвращённые ОТК на переделку этой швее (см.
+   * `QcService.returnToRework`, `docs/flows.md §F5a`). Список
+   * — только подсказка «заберите у ОТК, потом сосканируйте у
+   * станка как обычно»; жёсткой привязки `currentEmployeeId`
+   * после rework нет. Источник — `GET /api/shifts/my-rework`.
+   */
+  myRework: ReworkPassportDto[];
 }
 
 /**
@@ -84,6 +93,7 @@ export function SeamstressActivePanel({
   shift,
   currentWork,
   cutIssueBanner,
+  myRework,
 }: Props) {
   const router = useRouter();
 
@@ -326,6 +336,8 @@ export function SeamstressActivePanel({
         )}
       </div>
 
+      {myRework.length > 0 && <ReworkSection items={myRework} />}
+
       <CurrentWorkCard
         items={currentWork}
         shiftOperationId={shift.operationId}
@@ -366,6 +378,39 @@ export function SeamstressActivePanel({
         />
       )}
     </div>
+  );
+}
+
+/**
+ * Секция «К переделке от ОТК» на /work. Показывается только если
+ * `myRework.length > 0` (см. `SeamstressActivePanel`). Источник —
+ * `GET /api/shifts/my-rework` (`ShiftsService.getMyReworkPassports`,
+ * `docs/flows.md §F5a`).
+ *
+ * Это подсказка: физически паспорт на столе у ОТК, швея подходит,
+ * забирает и сканирует у своего станка обычным сценарием «Взять
+ * крой». После завершения переделки и нового `OPERATION_FINISHED`
+ * паспорт автоматически уходит из этой секции.
+ */
+function ReworkSection({ items }: { items: ReworkPassportDto[] }) {
+  return (
+    <section className="card rework-section" aria-label="К переделке от ОТК">
+      <h2 className="card__title">
+        ⚠ К переделке от ОТК ({items.length})
+      </h2>
+      <p className="card__hint">
+        Заберите паспорт у ОТК и сосканируйте у своего станка кнопкой
+        «Взять крой».
+      </p>
+      <ul className="rework-section__list">
+        {items.map((p) => (
+          <li key={`${p.passportId}:${p.operationCode}`}>
+            <strong>{p.passportNumber}</strong> · {p.operationName} ·{' '}
+            {p.productName}, {p.color}, {p.sizeCode} · {p.qtyGood} шт.
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

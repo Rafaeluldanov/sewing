@@ -10,6 +10,7 @@
 
 import type {
   CurrentWorkPassportDto,
+  ReworkPassportDto,
   ShiftMetaDto,
   ShiftSessionDto,
   StartShiftDto,
@@ -33,6 +34,15 @@ export function getCurrentShift(): Promise<ShiftSessionDto | null> {
  */
 export function getCurrentWork(): Promise<CurrentWorkPassportDto[]> {
   return apiFetch<CurrentWorkPassportDto[]>('/shifts/current-work');
+}
+
+/**
+ * Паспорта, возвращённые ОТК на переделку текущему сотруднику.
+ * Используется на `/work` для секции «К переделке от ОТК». Backend
+ * сам вырезает по сессии (ADR-0014).
+ */
+export function getMyRework(): Promise<ReworkPassportDto[]> {
+  return apiFetch<ReworkPassportDto[]>('/shifts/my-rework');
 }
 
 export function startShift(body: StartShiftDto): Promise<ShiftSessionDto> {
