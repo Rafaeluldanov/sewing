@@ -36,6 +36,8 @@ import {
   PassportAlreadyPackedException,
   PassportCancelledException,
   PassportNotPackableException,
+  PassportNotQcPassedException,
+  PassportNotWtoPassedException,
 } from '../../common/errors.js';
 import { BoxNumberService } from './box-number.service.js';
 import { getApiUrl } from '../passports/qr.js';
@@ -292,6 +294,40 @@ export class PackingService {
         fresh.qtyGood <= 0
       ) {
         throw new PassportNotPackableException();
+      }
+
+      // Маршрутный гейт: ОТК → ВТО → упаковка строго последовательны.
+      // Сценарий `PackingService.addPassport` живёт мимо route-step
+      // enforcement из `PassportsService.scanOnOperation`, поэтому
+      // дублируем условие здесь: если у заказа в маршруте есть шаг
+      // категории QC — требуем `QC_PASSED`, если шаг IRONING —
+      // требуем `WTO_PASSED`. Заказы без соответствующего шага
+      // пропускают чек (как `evaluateRouteOrder`).
+      if (fresh.orderId) {
+        const routeSteps = await tx.orderRouteStep.findMany({
+          where: { orderId: fresh.orderId },
+          select: { operation: { select: { category: true } } },
+        });
+        const hasQc = routeSteps.some(
+          (s) => s.operation.category === OperationCategory.QC,
+        );
+        const hasWto = routeSteps.some(
+          (s) => s.operation.category === OperationCategory.IRONING,
+        );
+        if (hasQc) {
+          const qc = await tx.passportEvent.findFirst({
+            where: { passportId: fresh.id, type: PassportEventType.QC_PASSED },
+            select: { id: true },
+          });
+          if (!qc) throw new PassportNotQcPassedException();
+        }
+        if (hasWto) {
+          const wto = await tx.passportEvent.findFirst({
+            where: { passportId: fresh.id, type: PassportEventType.WTO_PASSED },
+            select: { id: true },
+          });
+          if (!wto) throw new PassportNotWtoPassedException();
+        }
       }
 
       // Однородность коробки (см. ADR-0011 §3).

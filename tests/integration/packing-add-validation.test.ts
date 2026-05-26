@@ -128,13 +128,14 @@ describeWithDb('integration — PackingService.addPassport validation (P0-1)', (
     productId?: string;
     sizeId?: string;
     color?: string;
+    orderId?: string;
   } = {}): Promise<string> {
     const random = Math.random().toString(36).slice(2, 8);
     const passport = await t.prisma.passport.create({
       data: {
         number: `P-PK-${random}`,
         qrCode: `passport:pk-${random}`,
-        orderId,
+        orderId: args.orderId ?? orderId,
         productId: args.productId ?? seed.product.id,
         sizeId: args.sizeId ?? seed.sizes.M,
         color: args.color ?? seed.product.color,
@@ -149,6 +150,53 @@ describeWithDb('integration — PackingService.addPassport validation (P0-1)', (
       },
     });
     return passport.id;
+  }
+
+  /**
+   * Создаёт отдельный заказ с маршрутом «ОТК → ВТО» (категории QC и
+   * IRONING) — используется кейсами `addPassport` route-aware gate.
+   * Без шагов QC/IRONING в маршруте route-aware gate пропускается
+   * (как `evaluateRouteOrder`), поэтому базовый `orderId` из
+   * `beforeEach` для этих тестов не подходит.
+   */
+  async function makeOrderWithQcWtoRoute(): Promise<string> {
+    const order = await t.prisma.order.create({
+      data: {
+        number: `O-PK-RT-${Math.random().toString(36).slice(2, 8)}`,
+        orderDate: new Date(),
+        color: seed.product.color,
+        status: 'IN_PRODUCTION',
+        companyDivisionId: seed.companyDivisions.MARKETPLACE.id,
+        items: {
+          create: {
+            productId: seed.product.id,
+            sizeId: seed.sizes.M,
+            qtyPlan: 100,
+          },
+        },
+        routeSteps: {
+          create: [
+            { index: 0, operationId: seed.operations.QC.id },
+            { index: 1, operationId: seed.operations.IRONING.id },
+          ],
+        },
+      },
+    });
+    return order.id;
+  }
+
+  /** Пишет `PassportEvent` нужного типа (для setup route-aware кейсов). */
+  async function writePassportEvent(
+    passportId: string,
+    type: 'QC_PASSED' | 'WTO_PASSED',
+  ): Promise<void> {
+    const op =
+      type === 'QC_PASSED' ? seed.operations.QC.id : seed.operations.IRONING.id;
+    const employee =
+      type === 'QC_PASSED' ? seed.employees.qc.id : seed.employees.ironing.id;
+    await t.prisma.passportEvent.create({
+      data: { passportId, type, employeeId: employee, operationId: op, qty: 0 },
+    });
   }
 
   /** Создаёт открытую коробку упаковщиком через HTTP. */
@@ -249,7 +297,7 @@ describeWithDb('integration — PackingService.addPassport validation (P0-1)', (
       qtyCut: 4,
       qtyGood: 4,
     });
-    const boxId = await createBox(10);
+    const boxId = await createBox();
 
     const res = await postAdd(boxId, { passportId });
     expect(res.status).toBe(201);
@@ -453,5 +501,52 @@ describeWithDb('integration — PackingService.addPassport validation (P0-1)', (
 
     // После второго вызова ничего не сдвинулось.
     expectNoSideEffects(afterFirst, await snapshot(boxId, passportId));
+  });
+
+  // ---------------------------------------------------------------------------
+  // 7. Маршрутный гейт ОТК → ВТО → упаковка.
+  //    Заказ с шагами QC и IRONING — без QC_PASSED / без WTO_PASSED
+  //    `addPassport` должен падать. С обоими — happy path.
+  // ---------------------------------------------------------------------------
+
+  test('route gate: без QC_PASSED → 409 PASSPORT_NOT_QC_PASSED, без сайд-эффектов', async () => {
+    const routeOrderId = await makeOrderWithQcWtoRoute();
+    const passportId = await makePassport({ orderId: routeOrderId });
+    const boxId = await createBox();
+    const before = await snapshot(boxId, passportId);
+
+    const res = await postAdd(boxId, { passportId });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PASSPORT_NOT_QC_PASSED');
+
+    expectNoSideEffects(before, await snapshot(boxId, passportId));
+  });
+
+  test('route gate: QC_PASSED есть, WTO_PASSED нет → 409 PASSPORT_NOT_WTO_PASSED, без сайд-эффектов', async () => {
+    const routeOrderId = await makeOrderWithQcWtoRoute();
+    const passportId = await makePassport({ orderId: routeOrderId });
+    await writePassportEvent(passportId, 'QC_PASSED');
+    const boxId = await createBox();
+    const before = await snapshot(boxId, passportId);
+
+    const res = await postAdd(boxId, { passportId });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PASSPORT_NOT_WTO_PASSED');
+
+    expectNoSideEffects(before, await snapshot(boxId, passportId));
+  });
+
+  test('route gate: и QC_PASSED, и WTO_PASSED — happy path', async () => {
+    const routeOrderId = await makeOrderWithQcWtoRoute();
+    const passportId = await makePassport({ orderId: routeOrderId });
+    await writePassportEvent(passportId, 'QC_PASSED');
+    await writePassportEvent(passportId, 'WTO_PASSED');
+    const boxId = await createBox();
+
+    const res = await postAdd(boxId, { passportId });
+    expect(res.status).toBe(201);
+    const after = await snapshot(boxId, passportId);
+    expect(after.passportStatus).toBe('PACKED');
+    expect(after.packedEventCount).toBe(1);
   });
 });

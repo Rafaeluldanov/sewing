@@ -997,7 +997,26 @@ export class PassportNotQcPassedException extends BusinessException {
   constructor() {
     super(
       'PASSPORT_NOT_QC_PASSED',
-      'Паспорт ещё не прошёл ОТК — принимать на ВТО нельзя.',
+      'Паспорт ещё не прошёл ОТК.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Паспорт пытаются упаковать, не пройдя ВТО.
+ *
+ * Источник истины — `PassportEvent(WTO_PASSED)`: ВТО нажимает «Завершить
+ * ВТО», и backend пишет соответствующее событие. Без него паспорт ещё
+ * не отглажен и упаковывать его нельзя. Симметрично `PASSPORT_NOT_QC_
+ * PASSED`, применяется в `PackingService.addPassport`, если в маршруте
+ * заказа есть шаг категории `IRONING`.
+ */
+export class PassportNotWtoPassedException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_NOT_WTO_PASSED',
+      'Паспорт ещё не прошёл ВТО — упаковывать нельзя.',
       HttpStatus.CONFLICT,
     );
   }
