@@ -55,13 +55,9 @@ function revalidateBox(box: BoxDetailDto): void {
 
 export async function createBoxAction(
   _prev: PackingFormState,
-  form: FormData,
+  _form: FormData,
 ): Promise<PackingFormState> {
-  const maxQtyRaw = String(form.get('maxQty') ?? '').trim();
-  const raw = {
-    maxQty: maxQtyRaw ? Number(maxQtyRaw) : undefined,
-  };
-  const parsed = CreateBoxSchema.safeParse(raw);
+  const parsed = CreateBoxSchema.safeParse({});
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? 'Невалидные данные' };
   }
@@ -93,7 +89,7 @@ export async function addPassportToBoxAction(
     const box = await addPassportToBox(boxId, parsed.data);
     revalidateBox(box);
     return {
-      info: `Паспорт добавлен. В коробке ${box.totalQty}/${box.maxQty} шт.`,
+      info: `Паспорт добавлен. В коробке ${box.totalQty} шт.`,
     };
   } catch (e) {
     return { error: explainApiError(e) };
@@ -236,18 +232,16 @@ export async function placeBoxTerminalAction(
 }
 
 /**
- * Создать новую коробку (опционально с уменьшенным maxQty).
+ * Создать новую коробку.
  *
  * `revalidate*` не делаем сами — терминал живёт в client-state, а
  * перезагрузка списка `/packing` (для менеджера) не нужна, пока
  * упаковщик не закроет коробку.
  */
-export async function createBoxTerminalAction(
-  maxQty?: number,
-): Promise<PackingTerminalResult<BoxDetailDto>> {
-  const parsed = CreateBoxSchema.safeParse(
-    maxQty === undefined ? {} : { maxQty },
-  );
+export async function createBoxTerminalAction(): Promise<
+  PackingTerminalResult<BoxDetailDto>
+> {
+  const parsed = CreateBoxSchema.safeParse({});
   if (!parsed.success) {
     return {
       ok: false,

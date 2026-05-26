@@ -1050,16 +1050,6 @@ export class BoxEmptyCloseException extends BusinessException {
   }
 }
 
-export class BoxCapacityExceededException extends BusinessException {
-  constructor(remaining: number) {
-    super(
-      'BOX_CAPACITY_EXCEEDED',
-      `В коробке осталось ${remaining} шт. до лимита — паспорт не помещается.`,
-      HttpStatus.UNPROCESSABLE_ENTITY,
-    );
-  }
-}
-
 export class PassportNotPackableException extends BusinessException {
   constructor() {
     super(

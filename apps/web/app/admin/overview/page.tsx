@@ -132,7 +132,7 @@ export default async function AdminOverviewPage() {
             <thead>
               <tr>
                 <th>Коробка</th>
-                <th>Заполнение</th>
+                <th>Упаковано</th>
                 <th>Партия</th>
                 <th>Создана</th>
               </tr>
@@ -144,7 +144,7 @@ export default async function AdminOverviewPage() {
                     <Link href={`/packing/boxes/${b.boxId}`}>{b.number}</Link>
                   </td>
                   <td>
-                    {b.totalQty} / {b.maxQty}
+                    {b.totalQty} шт.
                     <span className="admin-muted" style={{ fontSize: '0.8rem' }}>
                       {' '}
                       ({b.itemsCount})

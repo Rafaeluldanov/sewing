@@ -26,24 +26,6 @@ export function CreateBoxForm({ disabled = false }: { disabled?: boolean }) {
     <form action={formAction}>
       {state.error && <div className="error-box">{state.error}</div>}
       {state.info && <div className="info-box">{state.info}</div>}
-      <div className="form-row">
-        <label htmlFor="maxQty">Лимит, шт.</label>
-        <div>
-          <input
-            id="maxQty"
-            name="maxQty"
-            type="number"
-            min={1}
-            step={1}
-            placeholder="100"
-            disabled={disabled}
-          />
-          <div className="hint">
-            Рекомендуемая вместимость — 100 шт. Поле пустое — подставится
-            100; можно задать больше или меньше, если коробка нестандартная.
-          </div>
-        </div>
-      </div>
       <div className="actions-row">
         <SubmitButton disabled={disabled} />
       </div>

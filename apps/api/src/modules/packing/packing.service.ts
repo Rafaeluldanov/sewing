@@ -23,7 +23,6 @@ import type {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   BoxAlreadyPlacedException,
-  BoxCapacityExceededException,
   BoxClosedException,
   BoxEmptyCloseException,
   BoxHomogeneityViolatedException,
@@ -305,12 +304,6 @@ export class PackingService {
         ) {
           throw new BoxHomogeneityViolatedException();
         }
-      }
-
-      // Capacity.
-      const remaining = box.maxQty - box.totalQty;
-      if (fresh.qtyGood > remaining) {
-        throw new BoxCapacityExceededException(Math.max(remaining, 0));
       }
 
       await tx.boxItem.create({

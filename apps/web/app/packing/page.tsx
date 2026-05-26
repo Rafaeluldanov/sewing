@@ -240,7 +240,7 @@ export default async function PackingPage({
             <tr>
               <th>Коробка</th>
               <th>Содержимое</th>
-              <th className="num">Заполнение</th>
+              <th className="num">Упаковано</th>
               <th>Создана</th>
               <th>Закрыта</th>
               <th>Кто открыл</th>
@@ -264,7 +264,7 @@ export default async function PackingPage({
                 </td>
                 <td>{b.itemsCount} паспорт(ов)</td>
                 <td className="num">
-                  <strong>{b.totalQty}</strong> / {b.maxQty}
+                  <strong>{b.totalQty}</strong> шт.
                 </td>
                 <td>{formatDateTime(b.createdAt)}</td>
                 <td>{b.closedAt ? formatDateTime(b.closedAt) : '—'}</td>

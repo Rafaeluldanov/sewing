@@ -215,7 +215,6 @@ function PackingMainTerminal({
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
-  const [maxQtyDraft, setMaxQtyDraft] = useState('');
   const [error, setError] = useState<ErrorState | null>(null);
   const [info, setInfo] = useState<string | null>(null);
   // Свежесть последнего скана: подсвечиваем «✓ только что добавлен».
@@ -284,28 +283,17 @@ function PackingMainTerminal({
   }, [box, collapsedBoxId]);
 
   const handleCreateBox = () => {
-    const trimmed = maxQtyDraft.trim();
-    let parsedMax: number | undefined;
-    if (trimmed) {
-      const n = Number(trimmed);
-      if (!Number.isFinite(n) || !Number.isInteger(n) || n <= 0) {
-        setError({ message: 'Лимит должен быть целым положительным числом' });
-        return;
-      }
-      parsedMax = n;
-    }
     setError(null);
     setInfo(null);
     setLastAddedPassportId(null);
     startTransition(async () => {
-      const res = await createBoxTerminalAction(parsedMax);
+      const res = await createBoxTerminalAction();
       if (!res.ok) {
         setError({ message: res.error, requestId: res.errorRequestId });
         return;
       }
       setBox(res.data);
       setInfo(`Коробка ${res.data.number} открыта. Сканируйте паспорта.`);
-      setMaxQtyDraft('');
     });
   };
 
@@ -338,8 +326,8 @@ function PackingMainTerminal({
       playCutAcceptedSound();
       setInfo(
         justAdded
-          ? `Паспорт ${justAdded.passportNumber} упакован. В коробке ${res.data.totalQty}/${res.data.maxQty} шт.`
-          : `Паспорт уже был в коробке. ${res.data.totalQty}/${res.data.maxQty} шт.`,
+          ? `Паспорт ${justAdded.passportNumber} упакован. В коробке ${res.data.totalQty} шт.`
+          : `Паспорт уже был в коробке. ${res.data.totalQty} шт.`,
       );
     });
   };
@@ -392,7 +380,6 @@ function PackingMainTerminal({
       setLastAddedPassportId(null);
       setManualCode('');
       setManualOpen(false);
-      setMaxQtyDraft('');
       // После закрытия — список незакрытых коробок устаревает (только
       // что закрытая должна исчезнуть; коллеги могли открыть/закрыть
       // свои). Перечитываем backend, чтобы Stage 1 после «Создать
@@ -408,7 +395,6 @@ function PackingMainTerminal({
     setInfo(null);
     setManualCode('');
     setManualOpen(false);
-    setMaxQtyDraft('');
   };
 
   const handleRefresh = () => {
@@ -531,7 +517,6 @@ function PackingMainTerminal({
     );
     setManualCode('');
     setManualOpen(false);
-    setMaxQtyDraft('');
   };
 
   const handleRestoreCollapsedBox = () => {
@@ -658,47 +643,6 @@ function PackingMainTerminal({
           >
             {isPending ? 'Создаём…' : 'Создать коробку'}
           </button>
-
-          {manualOpen ? (
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                handleCreateBox();
-              }}
-              aria-label="Изменить лимит коробки"
-              className="seamstress-start__manual"
-            >
-              <label className="scan-card__input" htmlFor="packing-max-qty">
-                <span className="scan-card__input-label">Лимит, шт.</span>
-                <input
-                  id="packing-max-qty"
-                  type="number"
-                  min={1}
-                  step={1}
-                  inputMode="numeric"
-                  placeholder="100"
-                  value={maxQtyDraft}
-                  onChange={(e) => setMaxQtyDraft(e.target.value)}
-                  autoFocus
-                />
-              </label>
-              <button
-                type="submit"
-                className="btn btn-block"
-                disabled={isPending}
-              >
-                Создать с этим лимитом
-              </button>
-            </form>
-          ) : (
-            <button
-              type="button"
-              className="scan-card__manual-toggle"
-              onClick={() => setManualOpen(true)}
-            >
-              Указать другой лимит
-            </button>
-          )}
         </div>
 
         {visibleOpenBoxes.length > 0 && (
@@ -777,7 +721,7 @@ function PackingMainTerminal({
                   <div style={{ minWidth: 0 }}>
                     <strong>{b.number}</strong>
                     <div className="meta-line" style={{ margin: 0 }}>
-                      {b.totalQty}/{b.maxQty} шт. · {b.itemsCount} паспорт(ов)
+                      {b.totalQty} шт. · {b.itemsCount} паспорт(ов)
                       {b.createdByName ? ` · ${b.createdByName}` : ''}
                     </div>
                   </div>
@@ -1045,7 +989,7 @@ function PackingMainTerminal({
             <div>
               <dt>Упаковано</dt>
               <dd>
-                <strong>{box.totalQty}</strong> / {box.maxQty}
+                <strong>{box.totalQty}</strong> шт.
               </dd>
             </div>
           </dl>
@@ -1105,10 +1049,6 @@ function PackingMainTerminal({
   // ----------------------------------------------------------------------
   // Stage 2: коробка открыта — показываем карточку + сканирование.
   // ----------------------------------------------------------------------
-  const fillPercent = Math.min(
-    100,
-    Math.round((box.totalQty / Math.max(box.maxQty, 1)) * 100),
-  );
 
   return (
     <>
@@ -1137,9 +1077,9 @@ function PackingMainTerminal({
             <dd className="qc-card__size">{box.summary?.sizeCode ?? '—'}</dd>
           </div>
           <div>
-            <dt>Заполнение</dt>
+            <dt>Упаковано</dt>
             <dd>
-              <strong>{box.totalQty}</strong> / {box.maxQty} ({fillPercent}%)
+              <strong>{box.totalQty}</strong> шт.
             </dd>
           </div>
         </dl>

@@ -52,7 +52,6 @@ export default async function BoxDetailPage({
   const onPackingShift =
     !!shift && shift.active && shiftOperation?.category === 'PACKING';
 
-  const remaining = Math.max(box.maxQty - box.totalQty, 0);
   const isOpen = box.status === 'OPEN';
 
   return (
@@ -94,14 +93,10 @@ export default async function BoxDetailPage({
 
       <div className="summary-grid">
         <div className="summary-card">
-          <div className="summary-card__label">Заполнение</div>
+          <div className="summary-card__label">Упаковано</div>
           <div className="summary-card__value">
-            {box.totalQty} <span className="meta-line">/ {box.maxQty}</span>
+            {box.totalQty} <span className="meta-line">шт.</span>
           </div>
-        </div>
-        <div className="summary-card">
-          <div className="summary-card__label">Свободно</div>
-          <div className="summary-card__value">{remaining}</div>
         </div>
         <div className="summary-card">
           <div className="summary-card__label">Паспортов</div>
@@ -136,12 +131,12 @@ export default async function BoxDetailPage({
             </h2>
             <p className="meta-line" style={{ margin: '0 0 0.75rem' }}>
               Отсканируйте QR паспорта или введите номер
-              <code> P-…</code>. Свободно ещё {remaining} шт. Однородность
-              коробки (изделие/цвет/размер) проверяется автоматически.
+              <code> P-…</code>. Однородность коробки
+              (изделие/цвет/размер) проверяется автоматически.
             </p>
             <AddPassportForm
               boxId={box.id}
-              disabled={!onPackingShift || remaining === 0}
+              disabled={!onPackingShift}
             />
           </div>
 

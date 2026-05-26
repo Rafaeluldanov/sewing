@@ -15,8 +15,7 @@
  *       5. `BOX_CLOSED` для закрытой коробки;
  *       6. `BOX_HOMOGENEITY_VIOLATED` для product/size/color
  *          mismatch — отдельные тесты по каждому из трёх измерений;
- *       7. `BOX_CAPACITY_EXCEEDED` (422) при `qtyGood > maxQty - totalQty`;
- *       8. дубль add — повторный POST для уже упакованного паспорта
+ *       7. дубль add — повторный POST для уже упакованного паспорта
  *          ловит `PASSPORT_ALREADY_PACKED` без второго `BoxItem`,
  *          без второго `PASSPORT_PACKED` события и без второй записи
  *          в AuditLog.
@@ -153,11 +152,11 @@ describeWithDb('integration — PackingService.addPassport validation (P0-1)', (
   }
 
   /** Создаёт открытую коробку упаковщиком через HTTP. */
-  async function createBox(maxQty?: number): Promise<string> {
+  async function createBox(): Promise<string> {
     const res = await request(t.app.getHttpServer())
       .post('/api/packing/boxes')
       .set('Cookie', cookies.packer)
-      .send(maxQty !== undefined ? { maxQty } : {});
+      .send({});
     expect(res.status).toBe(201);
     return res.body.id as string;
   }
@@ -431,28 +430,7 @@ describeWithDb('integration — PackingService.addPassport validation (P0-1)', (
   });
 
   // ---------------------------------------------------------------------------
-  // 6. Capacity overflow: qtyGood > maxQty - totalQty → 422 BOX_CAPACITY.
-  // ---------------------------------------------------------------------------
-
-  test('capacity: qtyGood > maxQty-totalQty → 422 BOX_CAPACITY_EXCEEDED, без сайд-эффектов', async () => {
-    // maxQty=10. Добавляем p1 на 8 → totalQty=8, remaining=2.
-    // p2.qtyGood=3 — не помещается.
-    const p1 = await makePassport({ qtyCut: 8, qtyGood: 8 });
-    const p2 = await makePassport({ qtyCut: 3, qtyGood: 3 });
-    const boxId = await createBox(10);
-    await postAdd(boxId, { passportId: p1 }).expect(201);
-    const before = await snapshot(boxId, p2);
-    expect(before.boxTotalQty).toBe(8);
-
-    const res = await postAdd(boxId, { passportId: p2 });
-    expect(res.status).toBe(422);
-    expect(res.body.code).toBe('BOX_CAPACITY_EXCEEDED');
-
-    expectNoSideEffects(before, await snapshot(boxId, p2));
-  });
-
-  // ---------------------------------------------------------------------------
-  // 7. Дубль add: повторный add того же паспорта в ту же коробку
+  // 6. Дубль add: повторный add того же паспорта в ту же коробку
   //    после успешного add ловит PASSPORT_ALREADY_PACKED и не плодит
   //    второй BoxItem / второй PACKED event / второй audit.
   // ---------------------------------------------------------------------------
