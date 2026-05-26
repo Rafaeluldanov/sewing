@@ -721,6 +721,11 @@ function PackingMainTerminal({
                   <div style={{ minWidth: 0 }}>
                     <strong>{b.number}</strong>
                     <div className="meta-line" style={{ margin: 0 }}>
+                      {b.summary
+                        ? `${b.summary.productName} · ${b.summary.color} · ${b.summary.sizeCode}`
+                        : 'Пустая коробка · ждёт первый паспорт'}
+                    </div>
+                    <div className="meta-line" style={{ margin: 0 }}>
                       {b.totalQty} шт. · {b.itemsCount} паспорт(ов)
                       {b.createdByName ? ` · ${b.createdByName}` : ''}
                     </div>
@@ -825,6 +830,11 @@ function PackingMainTerminal({
                     >
                       <div style={{ minWidth: 0 }}>
                         <strong>{b.number}</strong>
+                        <div className="meta-line" style={{ margin: 0 }}>
+                          {b.summary
+                            ? `${b.summary.productName} · ${b.summary.color} · ${b.summary.sizeCode}`
+                            : 'Пустая коробка'}
+                        </div>
                         <div className="meta-line" style={{ margin: 0 }}>
                           {b.totalQty} шт. · {b.itemsCount} паспорт(ов)
                           {b.closedAt

@@ -170,14 +170,11 @@ export interface BoxListItemDto {
    * `prisma/schema.prisma::Box`).
    */
   placedInCell: { id: string; code: string } | null;
-}
-
-/** Карточка коробки (`GET /api/packing/boxes/:id`). */
-export interface BoxDetailDto extends BoxListItemDto {
-  items: BoxItemDto[];
   /**
    * Сводка по содержимому: одно изделие/цвет/размер на MVP (см. ADR-0011),
    * поэтому достаточно одной строки. `null`, если коробка пустая.
+   * Используется в списках упаковщика (`/packing` и терминал), чтобы
+   * сразу видеть размер партии без открытия карточки.
    */
   summary: {
     productName: string;
@@ -185,6 +182,11 @@ export interface BoxDetailDto extends BoxListItemDto {
     sizeId: string;
     sizeCode: string;
   } | null;
+}
+
+/** Карточка коробки (`GET /api/packing/boxes/:id`). */
+export interface BoxDetailDto extends BoxListItemDto {
+  items: BoxItemDto[];
   /** Готовая ссылка для печати этикетки (HTML). По аналогии с `Passport.printUrl`. */
   labelUrl: string;
 }

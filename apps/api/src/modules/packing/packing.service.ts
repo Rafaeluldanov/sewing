@@ -700,6 +700,18 @@ export class PackingService {
 
   private toListItem(row: BoxRow): BoxListItemDto {
     const status: BoxStatus = row.closedAt ? 'CLOSED' : 'OPEN';
+    // Однородность коробки (ADR-0011 §3): все паспорта одного изделия/
+    // цвета/размера, поэтому достаточно прочитать первого. Если коробка
+    // пустая — `summary = null`.
+    const first = row.items[0]?.passport;
+    const summary = first
+      ? {
+          productName: first.product.name,
+          color: first.color,
+          sizeId: first.sizeId,
+          sizeCode: first.size.code,
+        }
+      : null;
     return {
       id: row.id,
       number: row.number,
@@ -716,6 +728,7 @@ export class PackingService {
       placedInCell: row.placedInCell
         ? { id: row.placedInCell.id, code: row.placedInCell.code }
         : null,
+      summary,
     };
   }
 
@@ -740,16 +753,7 @@ export class PackingService {
         a.sizeSortOrder - b.sizeSortOrder ||
         a.createdAt.localeCompare(b.createdAt),
     );
-    const summary =
-      items.length > 0
-        ? {
-            productName: items[0].productName,
-            color: items[0].color,
-            sizeId: items[0].sizeId,
-            sizeCode: items[0].sizeCode,
-          }
-        : null;
     const labelUrl = `${getApiUrl()}/packing/boxes/${row.id}/label`;
-    return { ...base, items, summary, labelUrl };
+    return { ...base, items, labelUrl };
   }
 }

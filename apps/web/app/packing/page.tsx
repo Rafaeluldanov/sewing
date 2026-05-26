@@ -239,6 +239,7 @@ export default async function PackingPage({
           <thead>
             <tr>
               <th>Коробка</th>
+              <th>Партия</th>
               <th>Содержимое</th>
               <th className="num">Упаковано</th>
               <th>Создана</th>
@@ -261,6 +262,18 @@ export default async function PackingPage({
                       {BOX_STATUS_LABELS[b.status]}
                     </span>
                   </div>
+                </td>
+                <td>
+                  {b.summary ? (
+                    <>
+                      {b.summary.productName}
+                      <div className="meta-line">
+                        {b.summary.color} · {b.summary.sizeCode}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="meta-line">—</span>
+                  )}
                 </td>
                 <td>{b.itemsCount} паспорт(ов)</td>
                 <td className="num">
