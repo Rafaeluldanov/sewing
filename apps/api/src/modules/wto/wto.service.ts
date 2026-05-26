@@ -3,6 +3,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
+import type { Prisma } from '@prisma/client';
 import {
   OperationCategory,
   PassportEventType,
@@ -93,11 +94,26 @@ export class WtoService {
         message: 'Паспорт не найден',
       });
     }
-    if (
-      passport.status !== PassportStatus.IN_PROGRESS ||
-      passport.currentOperation?.category !== OperationCategory.IRONING
-    ) {
-      throw new PassportNotWtoableException();
+    // Допустим retroactive ВТО: status==PACKED, по паспорту ещё нет
+    // `WTO_PASSED`. Закрывает исторический бэклог упакованных без ВТО
+    // паспортов (до route-aware gate в `PackingService.addPassport`).
+    // Повторная попытка не пройдёт — `existing` ниже завернёт в
+    // идемпотентную ветку.
+    const isOnIroning =
+      passport.status === PassportStatus.IN_PROGRESS &&
+      passport.currentOperation?.category === OperationCategory.IRONING;
+    let retroactive = false;
+    if (!isOnIroning) {
+      if (passport.status === PassportStatus.PACKED) {
+        const alreadyWto = await this.prisma.passportEvent.findFirst({
+          where: { passportId, type: PassportEventType.WTO_PASSED },
+          select: { id: true },
+        });
+        if (alreadyWto) throw new PassportNotWtoableException();
+        retroactive = true;
+      } else {
+        throw new PassportNotWtoableException();
+      }
     }
     await this.assertQcPassed(passportId);
 
@@ -123,12 +139,22 @@ export class WtoService {
         select: { id: true },
       });
       if (existing) return;
+      // Для retroactive (`status==PACKED`) `currentOperationId` обычно
+      // не на категории IRONING — пытаемся достать operationId ВТО
+      // из маршрута заказа, иначе оставляем `currentOperationId`.
+      const operationId = retroactive
+        ? await resolveIroningOperationId(
+            tx,
+            passport.currentOperationId,
+            passport.orderId,
+          )
+        : passport.currentOperationId;
       await tx.passportEvent.create({
         data: {
           passportId,
           type: PassportEventType.WTO_PASSED,
           employeeId: actorEmployeeId,
-          operationId: passport.currentOperationId,
+          operationId,
           qty: passport.qtyGood,
         },
       });
@@ -140,7 +166,7 @@ export class WtoService {
           employeeId: actorEmployeeId,
           payload: {
             passportId,
-            operationId: passport.currentOperationId,
+            operationId,
             qty: passport.qtyGood,
           },
         },
@@ -224,6 +250,8 @@ export class WtoService {
     const isOnIroning =
       r.status === PassportStatus.IN_PROGRESS &&
       r.currentOperation?.category === OperationCategory.IRONING;
+    const canRetroactive =
+      r.status === PassportStatus.PACKED && lastWto === null;
 
     return {
       passportId: r.id,
@@ -250,8 +278,26 @@ export class WtoService {
       currentEmployeeName: r.currentEmployee?.fullName ?? null,
       wtoCompletedAt: lastWto?.createdAt.toISOString() ?? null,
       qcPassedAt: lastQc?.createdAt.toISOString() ?? null,
-      canCompleteWto: isOnIroning,
+      canCompleteWto: isOnIroning || canRetroactive,
       removedFromWto,
     };
   }
+}
+
+/**
+ * Резолвит `operationId` для записи `WTO_PASSED` в retroactive-случае:
+ * берём операцию категории IRONING из маршрута заказа. Если в маршруте
+ * такой нет (или заказ без маршрута) — fallback на `currentOperationId`.
+ */
+async function resolveIroningOperationId(
+  tx: Prisma.TransactionClient,
+  currentOperationId: string | null,
+  orderId: string | null,
+): Promise<string | null> {
+  if (!orderId) return currentOperationId;
+  const step = await tx.orderRouteStep.findFirst({
+    where: { orderId, operation: { category: OperationCategory.IRONING } },
+    select: { operationId: true },
+  });
+  return step?.operationId ?? currentOperationId;
 }

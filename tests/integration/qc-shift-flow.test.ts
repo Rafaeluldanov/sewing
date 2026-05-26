@@ -376,4 +376,61 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
       defectAuditCount: audit,
     };
   }
+
+  // ---------------------------------------------------------------------------
+  // Retroactive QC для PACKED-паспортов (исторический бэклог, упакованных
+  // до route-gate в `PackingService.addPassport`). Сервис разрешает
+  // ровно одну запись `QC_PASSED` для status==PACKED, чтобы оператор
+  // мог дозаписать ОТК через UI «Проверка выполнена».
+  // ---------------------------------------------------------------------------
+
+  test('completeQc на PACKED без QC_PASSED → 201, пишет QC_PASSED один раз; повторно → PASSPORT_NOT_QCABLE', async () => {
+    const passportId = await prepareInProgressPassport();
+    await t.prisma.passport.update({
+      where: { id: passportId },
+      data: { status: 'PACKED', currentEmployeeId: null, currentCellId: null },
+    });
+
+    const first = await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/complete`)
+      .set('Cookie', cookies.qc)
+      .send({});
+    expect(first.status).toBe(201);
+    expect(typeof first.body.qcCompletedAt).toBe('string');
+    expect(first.body.status).toBe('PACKED');
+
+    const qcEvents = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'QC_PASSED' },
+    });
+    expect(qcEvents).toBe(1);
+
+    // Повторный вызов после успешного retroactive — заворачиваем как
+    // «уже сделано» (PASSPORT_NOT_QCABLE), второй event не пишется.
+    const second = await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/complete`)
+      .set('Cookie', cookies.qc)
+      .send({});
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe('PASSPORT_NOT_QCABLE');
+
+    const qcEventsAfter = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'QC_PASSED' },
+    });
+    expect(qcEventsAfter).toBe(1);
+  });
+
+  test('QC detail карточка для PACKED без QC_PASSED показывает canCompleteQc=true', async () => {
+    const passportId = await prepareInProgressPassport();
+    await t.prisma.passport.update({
+      where: { id: passportId },
+      data: { status: 'PACKED', currentEmployeeId: null, currentCellId: null },
+    });
+
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/qc/passports/${passportId}`)
+      .set('Cookie', cookies.qc)
+      .expect(200);
+    expect(detail.body.canCompleteQc).toBe(true);
+    expect(detail.body.qcCompletedAt).toBeNull();
+  });
 });

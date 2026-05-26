@@ -68,7 +68,20 @@ export async function acceptOnWtoAction(
     // OPERATION_SCAN и/или возвращает no-op (если паспорт уже на ВТО).
     // Если QC-gate сработает — здесь же прилетит ошибка, и карточка
     // не откроется.
-    await scanPassport(lookup.id);
+    //
+    // Retroactive WTO для PACKED-паспортов: scan валит на
+    // `PASSPORT_ALREADY_PACKED`, но карточку всё-таки открываем —
+    // оператор сможет нажать «Завершить ВТО», backend пустит
+    // (см. `WtoService.completeWto`, ветка PACKED+no WTO_PASSED).
+    try {
+      await scanPassport(lookup.id);
+    } catch (e) {
+      if (
+        !(e instanceof ApiRequestError && e.code === 'PASSPORT_ALREADY_PACKED')
+      ) {
+        throw e;
+      }
+    }
     const detail = await getWtoPassport(lookup.id);
     return { ok: true, detail };
   } catch (e) {

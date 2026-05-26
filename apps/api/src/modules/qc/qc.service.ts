@@ -4,7 +4,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
-import { PassportEventType, PassportStatus } from '@prisma/client';
+import { OperationCategory, PassportEventType, PassportStatus } from '@prisma/client';
 import type {
   CreatePassportDefectDto,
   DefectTypeDto,
@@ -214,8 +214,21 @@ export class QcService {
         message: 'Паспорт не найден',
       });
     }
+    // Допустим retroactive QC: status==PACKED ровно один раз, если
+    // `QC_PASSED` ещё не записан. Закрывает исторический бэклог паспортов,
+    // которые упаковали до включения route-aware gate в `PackingService.
+    // addPassport`. Повторная попытка отсканировать PACKED-паспорт уже
+    // не пройдёт — `existing` ниже завернёт в идемпотентную ветку.
     if (passport.status !== PassportStatus.IN_PROGRESS) {
-      throw new PassportNotQcableException();
+      if (passport.status === PassportStatus.PACKED) {
+        const alreadyQc = await this.prisma.passportEvent.findFirst({
+          where: { passportId, type: PassportEventType.QC_PASSED },
+          select: { id: true },
+        });
+        if (alreadyQc) throw new PassportNotQcableException();
+      } else {
+        throw new PassportNotQcableException();
+      }
     }
     const actor = await this.prisma.employee.findUnique({
       where: { id: actorEmployeeId },
@@ -243,12 +256,20 @@ export class QcService {
         select: { id: true },
       });
       if (existing) return;
+      // Для retroactive (`status==PACKED`) `currentOperationId`, как
+      // правило, не на категории QC — пытаемся достать operationId
+      // ОТК из маршрута заказа, иначе оставляем `currentOperationId`.
+      const operationId = await resolveQcOperationId(
+        tx,
+        passport.currentOperationId,
+        passport.orderId,
+      );
       await tx.passportEvent.create({
         data: {
           passportId,
           type: PassportEventType.QC_PASSED,
           employeeId: actorEmployeeId,
-          operationId: passport.currentOperationId,
+          operationId,
           qty: passport.qtyGood,
         },
       });
@@ -260,7 +281,7 @@ export class QcService {
           employeeId: actorEmployeeId,
           payload: {
             passportId,
-            operationId: passport.currentOperationId,
+            operationId,
             qty: passport.qtyGood,
           },
         },
@@ -460,7 +481,9 @@ export class QcService {
         r.status === PassportStatus.IN_PROGRESS && remainingForDefect > 0,
       remainingForDefect,
       qcCompletedAt: lastQcPassed?.createdAt.toISOString() ?? null,
-      canCompleteQc: r.status === PassportStatus.IN_PROGRESS,
+      canCompleteQc:
+        r.status === PassportStatus.IN_PROGRESS ||
+        (r.status === PassportStatus.PACKED && lastQcPassed === null),
       removedFromQc,
     };
   }
@@ -487,4 +510,22 @@ export class QcService {
       createdByEmployeeName: d.createdByEmployee?.fullName ?? null,
     }));
   }
+}
+
+/**
+ * Резолвит `operationId` для записи `QC_PASSED` в retroactive-случае:
+ * берём операцию категории QC из маршрута заказа. Если в маршруте такой
+ * нет (или заказ без маршрута) — fallback на `currentOperationId`.
+ */
+async function resolveQcOperationId(
+  tx: Prisma.TransactionClient,
+  currentOperationId: string | null,
+  orderId: string | null,
+): Promise<string | null> {
+  if (!orderId) return currentOperationId;
+  const step = await tx.orderRouteStep.findFirst({
+    where: { orderId, operation: { category: OperationCategory.QC } },
+    select: { operationId: true },
+  });
+  return step?.operationId ?? currentOperationId;
 }

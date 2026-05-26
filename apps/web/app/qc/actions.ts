@@ -112,9 +112,22 @@ export async function lookupQcPassportAction(
     // в той же транзакции пишет OPERATION_SCAN и переключает
     // `passport.currentOperationId` на операцию категории QC. Это
     // двигает паспорт в bucket `QC` на shopfloor-проекции. Если
-    // session ОТК нет (или паспорт PACKED/CANCELLED) — здесь же
-    // прилетит ошибка, и карточка не откроется.
-    await scanPassport(lookup.id);
+    // session ОТК нет (или паспорт CANCELLED) — здесь же прилетит
+    // ошибка, и карточка не откроется.
+    //
+    // Retroactive QC для PACKED-паспортов: scan валит на
+    // `PASSPORT_ALREADY_PACKED`, но карточку всё-таки открываем —
+    // оператор сможет нажать «Проверка выполнена», backend пустит
+    // (см. `QcService.completeQc`, ветка PACKED+no QC_PASSED).
+    try {
+      await scanPassport(lookup.id);
+    } catch (e) {
+      if (
+        !(e instanceof ApiRequestError && e.code === 'PASSPORT_ALREADY_PACKED')
+      ) {
+        throw e;
+      }
+    }
     const detail = await getQcPassport(lookup.id);
     return { ok: true, detail };
   } catch (e) {

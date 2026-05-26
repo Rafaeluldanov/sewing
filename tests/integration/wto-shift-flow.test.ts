@@ -318,4 +318,79 @@ describeWithDb('integration — WTO shift-gated scan flow', () => {
     });
     expect(audit).toBe(1);
   });
+
+  // ---------------------------------------------------------------------------
+  // Retroactive WTO для PACKED-паспортов (исторический бэклог, упакованных
+  // до route-gate в `PackingService.addPassport`). Сервис разрешает
+  // ровно одну запись `WTO_PASSED` для status==PACKED, чтобы оператор
+  // мог дозаписать ВТО через UI «Завершить ВТО».
+  // ---------------------------------------------------------------------------
+
+  test('completeWto на PACKED с QC_PASSED, без WTO_PASSED → 201, пишет WTO_PASSED один раз; повторно → PASSPORT_NOT_WTOABLE', async () => {
+    const passportId = await prepareInProgressPassport(true);
+    await t.prisma.passport.update({
+      where: { id: passportId },
+      data: { status: 'PACKED', currentEmployeeId: null, currentCellId: null },
+    });
+
+    const first = await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({});
+    expect(first.status).toBe(201);
+    expect(typeof first.body.wtoCompletedAt).toBe('string');
+    expect(first.body.status).toBe('PACKED');
+
+    const wtoEvents = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'WTO_PASSED' },
+    });
+    expect(wtoEvents).toBe(1);
+
+    const second = await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({});
+    expect(second.status).toBe(409);
+    expect(second.body.code).toBe('PASSPORT_NOT_WTOABLE');
+
+    const wtoEventsAfter = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'WTO_PASSED' },
+    });
+    expect(wtoEventsAfter).toBe(1);
+  });
+
+  test('completeWto на PACKED без QC_PASSED → 409 PASSPORT_NOT_QC_PASSED (порядок ОТК→ВТО сохраняется)', async () => {
+    const passportId = await prepareInProgressPassport(false);
+    await t.prisma.passport.update({
+      where: { id: passportId },
+      data: { status: 'PACKED', currentEmployeeId: null, currentCellId: null },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/wto/passports/${passportId}/complete`)
+      .set('Cookie', cookies.ironing)
+      .send({});
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('PASSPORT_NOT_QC_PASSED');
+
+    const wtoEvents = await t.prisma.passportEvent.count({
+      where: { passportId, type: 'WTO_PASSED' },
+    });
+    expect(wtoEvents).toBe(0);
+  });
+
+  test('WTO detail для PACKED с QC_PASSED, без WTO_PASSED показывает canCompleteWto=true', async () => {
+    const passportId = await prepareInProgressPassport(true);
+    await t.prisma.passport.update({
+      where: { id: passportId },
+      data: { status: 'PACKED', currentEmployeeId: null, currentCellId: null },
+    });
+
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/wto/passports/${passportId}`)
+      .set('Cookie', cookies.ironing)
+      .expect(200);
+    expect(detail.body.canCompleteWto).toBe(true);
+    expect(detail.body.wtoCompletedAt).toBeNull();
+  });
 });
