@@ -21,6 +21,8 @@
 
 import { z } from 'zod';
 
+import { normalizeColor } from './colors';
+
 // ---------------------------------------------------------------------------
 // Schemas
 // ---------------------------------------------------------------------------
@@ -38,10 +40,13 @@ import { z } from 'zod';
  */
 const PolicyFilterFields = {
   color: z
-    .string()
-    .trim()
-    .min(1, 'Цвет не может быть пустой строкой')
-    .max(64, 'Слишком длинное название цвета')
+    .preprocess(
+      (v) => (typeof v === 'string' ? normalizeColor(v) : v),
+      z
+        .string()
+        .min(1, 'Цвет не может быть пустой строкой')
+        .max(64, 'Слишком длинное название цвета'),
+    )
     .nullish(),
   sizeId: z
     .string()

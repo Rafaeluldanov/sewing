@@ -27,6 +27,7 @@ import {
   type PlacePassportDto,
   type UpdatePassportDto,
 } from '@sewing/shared/passports';
+import { normalizeColor } from '@sewing/shared/colors';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   CellInactiveException,
@@ -201,7 +202,12 @@ export class PassportsService {
     }
 
     const product = orderItem.product;
-    const color = order.color ?? product.color;
+    // Цвет нормализуем при создании паспорта (даже если источник —
+    // legacy `Product.color` или ещё не нормализованный `Order.color`).
+    // Без этого однородность коробки в `PackingService.addPassport`
+    // ломалась на «Белый» vs «белый» из разных периодов (см.
+    // `packages/shared/src/colors.ts::normalizeColor`).
+    const color = normalizeColor(order.color ?? product.color);
 
     // creator = текущий пользователь сессии (см. ADR-0014).
     // cutter (раскройщик) с PHASE 2 STEP 3 определяется явно: либо

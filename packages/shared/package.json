@@ -55,6 +55,7 @@
     "./order-production-balance": "./src/order-production-balance.ts",
     "./production-cost": "./src/production-cost.ts",
     "./sizes": "./src/sizes.ts",
+    "./colors": "./src/colors.ts",
     "./config": "./src/config.ts"
   },
   "scripts": {

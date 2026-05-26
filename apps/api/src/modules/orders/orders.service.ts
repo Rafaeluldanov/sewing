@@ -21,6 +21,7 @@ import type {
   UpdateOrderDto,
 } from '@sewing/shared/orders';
 import { ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES } from '@sewing/shared/orders';
+import { normalizeColorOrNull } from '@sewing/shared/colors';
 import {
   evaluateOrderDeadline,
   type EvaluateOrderDeadlineInput,
@@ -277,13 +278,13 @@ export class OrdersService {
       // раньше, см. `docs/domain.md §5a`); в pattern-flow цвета по
       // умолчанию нет (карточка лекала больше не носит цвет — он
       // указывается в форме отдельно).
-      let resolvedColor: string | null = dto.color ?? null;
+      let resolvedColor: string | null = normalizeColorOrNull(dto.color);
       if (!resolvedColor && !dto.patternItemId && dto.productId) {
         const legacy = await tx.product.findUnique({
           where: { id: dto.productId },
           select: { color: true },
         });
-        resolvedColor = legacy?.color ?? null;
+        resolvedColor = normalizeColorOrNull(legacy?.color);
       }
 
       // Этап «Цена продажи за единицу»: если пришла цена > 0 без
@@ -760,7 +761,7 @@ export class OrdersService {
           customer: dto.customer ?? null,
           orderDate: new Date(dto.orderDate),
           dueDate: dto.dueDate ? new Date(dto.dueDate) : null,
-          color: dto.color ?? null,
+          color: normalizeColorOrNull(dto.color),
           comment: dto.comment ?? null,
           status: OrderStatus.DRAFT,
           companyDivisionId: companyDivisionIdForCreate,
@@ -1789,7 +1790,10 @@ export class OrdersService {
                 : dto.dueDate
                 ? new Date(dto.dueDate)
                 : null,
-            color: dto.color === undefined ? undefined : dto.color ?? null,
+            color:
+              dto.color === undefined
+                ? undefined
+                : normalizeColorOrNull(dto.color),
             comment:
               dto.comment === undefined ? undefined : dto.comment ?? null,
             routeTemplateId:

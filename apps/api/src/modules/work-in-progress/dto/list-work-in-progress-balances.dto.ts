@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { normalizeColor } from '@sewing/shared';
+
 const QueryBoolean = z
   .union([
     z.boolean(),
@@ -21,7 +23,12 @@ export const ListWorkInProgressBalancesQuerySchema = z
     orderId: z.string().trim().min(1).max(64).optional(),
     productId: z.string().trim().min(1).max(64).optional(),
     sizeId: z.string().trim().min(1).max(64).optional(),
-    color: z.string().trim().min(1).max(64).optional(),
+    color: z
+      .preprocess(
+        (v) => (typeof v === 'string' ? normalizeColor(v) : v),
+        z.string().min(1).max(64),
+      )
+      .optional(),
     warehouseId: z.string().trim().min(1).max(64).optional(),
     cellId: z.string().trim().min(1).max(64).optional(),
     /** Если `true`, отдаются только балансы с `qty > 0`. */

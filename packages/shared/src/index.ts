@@ -62,3 +62,4 @@ export * from './order-cost-estimates';
 export * from './order-production-balance';
 export * from './production-cost';
 export * from './sizes';
+export * from './colors';

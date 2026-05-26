@@ -16,6 +16,7 @@
 
 import { z } from 'zod';
 
+import { normalizeColor } from './colors';
 import type { OrderDeadlineEvaluation, OrderDeadlineStatus } from './order-deadlines';
 import { ORDER_DEADLINE_STATUSES } from './order-deadlines';
 import type { OrderCostEstimateDto } from './order-cost-estimates';
@@ -119,8 +120,8 @@ export const UpdateOrderMaterialRequirementColorSchema = z.object({
     (v) => {
       if (v === null || v === undefined) return null;
       if (typeof v !== 'string') return v;
-      const trimmed = v.trim();
-      return trimmed === '' ? null : trimmed;
+      const n = normalizeColor(v);
+      return n === '' ? null : n;
     },
     z
       .string()
@@ -716,7 +717,12 @@ export const CreateOrderSchema = z.object({
    * сервером значением `Product.color`, если явно не задан и заказ
    * заведён в legacy product-only flow (без `patternItemId`).
    */
-  color: z.string().trim().min(1).max(64).optional(),
+  color: z
+    .preprocess(
+      (v) => (typeof v === 'string' ? normalizeColor(v) : v),
+      z.string().min(1).max(64),
+    )
+    .optional(),
   comment: z.string().max(2000).optional(),
   customer: z.string().max(200).optional(),
   /**
@@ -977,7 +983,17 @@ export type CreateOrderItemDto = z.infer<typeof CreateOrderItemSchema>;
 export const UpdateOrderSchema = z.object({
   orderDate: DateStringSchema.optional(),
   productId: z.string().min(1).optional(),
-  color: z.string().trim().min(1).max(64).nullable().optional(),
+  color: z
+    .preprocess(
+      (v) => {
+        if (v === null || v === undefined) return v;
+        if (typeof v !== 'string') return v;
+        const n = normalizeColor(v);
+        return n === '' ? null : n;
+      },
+      z.string().min(1).max(64).nullable(),
+    )
+    .optional(),
   comment: z.string().max(2000).nullable().optional(),
   customer: z.string().max(200).nullable().optional(),
   /**
