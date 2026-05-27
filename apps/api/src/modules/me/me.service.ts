@@ -5,6 +5,20 @@ import type {
   EmployeeQrTokenPayload,
 } from '@sewing/shared/employee-qr';
 import { EMPLOYEE_QR_PAYLOAD_PREFIX } from '@sewing/shared/employee-qr';
+import type {
+  CompensationType as SharedCompensationType,
+  MeDailyDto,
+  MeDailyOperationDto,
+  MeHistoryDto,
+  MeHistoryDayDto,
+  MeHistoryQuery,
+} from '@sewing/shared/me-daily';
+import {
+  CompensationType as PrismaCompensationType,
+  EntryStatus,
+  Prisma,
+  SalaryEntrySource,
+} from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   EmployeeProfileNotFoundException,
@@ -18,17 +32,20 @@ import {
 import type { AuthPrincipal } from '../auth/auth.types.js';
 
 /**
- * Сервис личного кабинета сотрудника (`GET /api/me/*`, MVP).
+ * Сервис личного кабинета сотрудника (`GET /api/me/*`).
  *
- * На MVP выдаёт только «мой QR-код». Логика тривиальна, но сервис
- * вынесен отдельно из контроллера ради:
- *   1. Тестируемости (можно юнит-тестами проверить payload и TTL
- *      без HTTP-слоя);
- *   2. Повторного использования `signCurrentEmployeeQr` в смежных
- *      потоках (например, печать этикетки с подписанным токеном) —
- *      без дубля чтения `JWT_SECRET`;
- *   3. Явного централизованного места error-mapping'а
- *      (`EMPLOYEE_PROFILE_NOT_FOUND`, `EMPLOYEE_INACTIVE`).
+ * Содержит read-only методы, нужные для шапки/виджетов в кабинете:
+ *   - `buildEmployeeQr` — подписанный QR-код сотрудника;
+ *   - `getDaily` — выработка и начисления за сегодня (по Москве);
+ *   - `getHistory` — те же метрики по дням за последние N дней.
+ *
+ * Политика `PENDING` тут сознательно отличается от
+ * `EarningsService.summary`/`list` для не-менеджеров: в личном
+ * кабинете сотрудник видит свои `PENDING_RELEASE` (отдельной строкой
+ * с пометкой), потому что в течение дня основная часть его сделки
+ * сидит именно в этом статусе до закрытия коробки упаковщиком. Чужие
+ * pending по-прежнему недоступны (запрос строго по
+ * `viewer.employeeId`).
  */
 @Injectable()
 export class MeService {
@@ -46,11 +63,13 @@ export class MeService {
         'JWT_SECRET is missing or default — QR-токены будут подписаны dev-fallback секретом',
       );
     }
-    // Синхронизируем fallback с `AuthService`, чтобы один и тот же
-    // секрет подписывал session-cookie и QR-токен в dev-режиме.
     this.secret = secret || 'sewing-dev-fallback-secret';
     this.ttlSeconds = EMPLOYEE_QR_DEFAULT_TTL_SECONDS;
   }
+
+  // ===========================================================================
+  // QR-код сотрудника
+  // ===========================================================================
 
   /**
    * Выдаёт DTO ответа `GET /api/me/employee-qr`. Дополнительно
@@ -58,8 +77,7 @@ export class MeService {
    * defence-in-depth на случай, если `AuthGuard` в будущем ослабят.
    *
    * Ошибки:
-   *   - 404 `EMPLOYEE_PROFILE_NOT_FOUND` — карточки нет в БД
-   *     (сотрудника удалили между выдачей сессии и вызовом).
+   *   - 404 `EMPLOYEE_PROFILE_NOT_FOUND` — карточки нет в БД.
    *   - 403 `EMPLOYEE_INACTIVE` — карточка есть, но `active=false`.
    */
   async buildEmployeeQr(
@@ -95,10 +113,7 @@ export class MeService {
   }
 
   /**
-   * Проверка подписи QR-токена — вынесена в сервис, чтобы другие
-   * модули (например, будущий `/master/scan-employee-qr`) могли
-   * использовать её без дубля чтения секрета. На MVP не вызывается
-   * извне, но включена в unit-тест смежного сервиса.
+   * Проверка подписи QR-токена — для будущих master-flow.
    */
   verifyEmployeeQrToken(
     token: string,
@@ -106,4 +121,437 @@ export class MeService {
   ): EmployeeQrTokenPayload | null {
     return verifyEmployeeQrToken(token, { secret: this.secret }, now);
   }
+
+  // ===========================================================================
+  // GET /api/me/daily — выработка и начисления за сегодня
+  // ===========================================================================
+
+  /**
+   * Возвращает дневной snapshot для виджета «Мой день».
+   *
+   * Логика выдачи блоков зависит от `Employee.compensationType`:
+   *   - `PIECEWORK` → `piecework` есть (даже если 0 операций), `salary = null`;
+   *   - `SALARY`    → `piecework = null`, `salary` есть (с `amount = 0`, если
+   *     запись `SalaryEntry` за сегодня не появилась);
+   *   - `MIXED`     → оба блока;
+   *   - `null`/неизвестно → оба `null`, `total = 0` (UI прячет чип).
+   *
+   * Если карточка сотрудника удалена или деактивирована, метод
+   * возвращает пустой snapshot (а не бросает 403/404): кабинет уже
+   * прошёл `AuthGuard`, и для виджета достаточно «показать пусто и
+   * скрыть». 403/404 для деактивированной карточки уже отдаёт
+   * `buildEmployeeQr` — там это критично, тут — нет.
+   */
+  async getDaily(
+    principal: AuthPrincipal,
+    now: Date = new Date(),
+  ): Promise<MeDailyDto> {
+    const { date, startUtc, endUtc, dayDateUtc } = mskDayBounds(now);
+
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: principal.employeeId },
+      select: {
+        id: true,
+        active: true,
+        compensationType: true,
+        salaryPerShift: true,
+      },
+    });
+    if (!employee || !employee.active) {
+      return emptyDaily(date);
+    }
+
+    const compType = toSharedCompType(employee.compensationType);
+    const needsPiecework = compType === 'PIECEWORK' || compType === 'MIXED';
+    const needsSalary = compType === 'SALARY' || compType === 'MIXED';
+
+    const [pieceworkRows, salaryRow, openShift] = await Promise.all([
+      needsPiecework
+        ? this.prisma.operationEntry.findMany({
+            where: {
+              employeeId: employee.id,
+              createdAt: { gte: startUtc, lte: endUtc },
+            },
+            select: {
+              qty: true,
+              amount: true,
+              status: true,
+              operation: {
+                select: { id: true, code: true, name: true },
+              },
+            },
+          })
+        : Promise.resolve([]),
+      needsSalary
+        ? this.prisma.salaryEntry.findUnique({
+            where: {
+              SalaryEntry_employee_date_source_uniq: {
+                employeeId: employee.id,
+                date: dayDateUtc,
+                source: SalaryEntrySource.SHIFT_DAY,
+              },
+            },
+            select: { amount: true },
+          })
+        : Promise.resolve(null),
+      needsSalary
+        ? this.prisma.shiftSession.findFirst({
+            where: { employeeId: employee.id, endedAt: null },
+            orderBy: { startedAt: 'desc' },
+            select: { startedAt: true },
+          })
+        : Promise.resolve(null),
+    ]);
+
+    const piecework = needsPiecework
+      ? aggregatePieceworkRows(pieceworkRows)
+      : null;
+    const salary: MeDailyDto['salary'] = needsSalary
+      ? {
+          amount: decimalToNumber(salaryRow?.amount ?? null),
+          shiftOpen: !!openShift,
+          shiftStartedAt: openShift?.startedAt.toISOString() ?? null,
+          salaryPerShift: decimalToNumberOrNull(employee.salaryPerShift),
+          hasEntryToday: !!salaryRow,
+        }
+      : null;
+
+    const total =
+      (piecework?.totalAmount ?? 0) + (salary?.amount ?? 0);
+
+    return {
+      date,
+      compensationType: compType,
+      piecework,
+      salary,
+      total: roundMoneyNumber(total),
+    };
+  }
+
+  // ===========================================================================
+  // GET /api/me/history — история по дням
+  // ===========================================================================
+
+  /**
+   * История выработки и начислений по дням за последние `days` суток
+   * по Europe/Moscow (включая сегодня). Дни без активности
+   * включаются с нулями — UI рисует их как «выходной».
+   *
+   * Сделка считается по `OperationEntry.createdAt` (день создания),
+   * оклад — по `SalaryEntry.date`. Это согласуется с тем, как
+   * аналогичные дни отображаются в `/admin/payroll/daily`.
+   */
+  async getHistory(
+    principal: AuthPrincipal,
+    query: MeHistoryQuery,
+    now: Date = new Date(),
+  ): Promise<MeHistoryDto> {
+    const days = query.days;
+    const today = mskDayBounds(now);
+    const fromMskMidnight = new Date(today.startUtc);
+    fromMskMidnight.setUTCDate(fromMskMidnight.getUTCDate() - (days - 1));
+    const from = formatMskDate(fromMskMidnight);
+
+    const employee = await this.prisma.employee.findUnique({
+      where: { id: principal.employeeId },
+      select: { id: true, active: true },
+    });
+    if (!employee || !employee.active) {
+      return {
+        days,
+        from,
+        to: today.date,
+        items: buildEmptyHistoryDays(today.startUtc, days),
+        totalPieceworkAmount: 0,
+        totalSalaryAmount: 0,
+        totalAmount: 0,
+      };
+    }
+
+    const [pieceworkRows, salaryRows] = await Promise.all([
+      this.prisma.operationEntry.findMany({
+        where: {
+          employeeId: employee.id,
+          createdAt: { gte: fromMskMidnight, lte: today.endUtc },
+        },
+        select: {
+          qty: true,
+          amount: true,
+          status: true,
+          createdAt: true,
+        },
+      }),
+      this.prisma.salaryEntry.findMany({
+        where: {
+          employeeId: employee.id,
+          date: {
+            gte: dayDateUtcFromMskMidnight(fromMskMidnight),
+            lte: today.dayDateUtc,
+          },
+        },
+        select: { date: true, amount: true },
+      }),
+    ]);
+
+    // Один проход — собираем map(YYYY-MM-DD → агрегаты).
+    const byDate = new Map<string, MeHistoryDayDto>();
+    for (let i = 0; i < days; i++) {
+      const dayStart = new Date(fromMskMidnight);
+      dayStart.setUTCDate(dayStart.getUTCDate() + i);
+      const dateKey = formatMskDate(dayStart);
+      byDate.set(dateKey, {
+        date: dateKey,
+        pieceworkQty: 0,
+        pieceworkAmount: 0,
+        pieceworkApprovedAmount: 0,
+        pieceworkPendingAmount: 0,
+        salaryAmount: 0,
+        total: 0,
+        hasPending: false,
+      });
+    }
+
+    for (const row of pieceworkRows) {
+      const key = formatMskDate(row.createdAt);
+      const cell = byDate.get(key);
+      if (!cell) continue;
+      const amount = decimalToNumber(row.amount);
+      cell.pieceworkQty += row.qty;
+      cell.pieceworkAmount += amount;
+      if (
+        row.status === EntryStatus.PENDING_RELEASE ||
+        row.status === EntryStatus.PENDING
+      ) {
+        cell.pieceworkPendingAmount += amount;
+        cell.hasPending = true;
+      } else if (row.status === EntryStatus.APPROVED) {
+        cell.pieceworkApprovedAmount += amount;
+      }
+    }
+
+    for (const row of salaryRows) {
+      const key = formatMskDate(row.date);
+      const cell = byDate.get(key);
+      if (!cell) continue;
+      cell.salaryAmount += decimalToNumber(row.amount);
+    }
+
+    let totalPieceworkAmount = 0;
+    let totalSalaryAmount = 0;
+    for (const cell of byDate.values()) {
+      cell.pieceworkAmount = roundMoneyNumber(cell.pieceworkAmount);
+      cell.pieceworkApprovedAmount = roundMoneyNumber(
+        cell.pieceworkApprovedAmount,
+      );
+      cell.pieceworkPendingAmount = roundMoneyNumber(
+        cell.pieceworkPendingAmount,
+      );
+      cell.salaryAmount = roundMoneyNumber(cell.salaryAmount);
+      cell.total = roundMoneyNumber(cell.pieceworkAmount + cell.salaryAmount);
+      totalPieceworkAmount += cell.pieceworkAmount;
+      totalSalaryAmount += cell.salaryAmount;
+    }
+
+    const items = [...byDate.values()].sort((a, b) =>
+      a.date < b.date ? 1 : a.date > b.date ? -1 : 0,
+    );
+
+    return {
+      days,
+      from,
+      to: today.date,
+      items,
+      totalPieceworkAmount: roundMoneyNumber(totalPieceworkAmount),
+      totalSalaryAmount: roundMoneyNumber(totalSalaryAmount),
+      totalAmount: roundMoneyNumber(totalPieceworkAmount + totalSalaryAmount),
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// helpers (private to module)
+// ---------------------------------------------------------------------------
+
+/**
+ * Границы «сегодня по Москве» в UTC. Москва — UTC+3 без перехода на
+ * летнее время с 2014 года, поэтому смещение фиксированное и не
+ * требует Intl.
+ *
+ * Возвращает:
+ *   - `date`        — YYYY-MM-DD сегодняшнего MSK-дня;
+ *   - `startUtc`    — момент полуночи MSK (= 21:00 UTC предыдущего дня);
+ *   - `endUtc`      — конец дня MSK (= 20:59:59.999 UTC текущего/след. дня);
+ *   - `dayDateUtc`  — `Date` полуночи UTC того же календарного дня
+ *                     (для match с `SalaryEntry.date`, который Prisma
+ *                     хранит как полночь UTC).
+ */
+function mskDayBounds(now: Date): {
+  date: string;
+  startUtc: Date;
+  endUtc: Date;
+  dayDateUtc: Date;
+} {
+  const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+  const mskNowMs = now.getTime() + MSK_OFFSET_MS;
+  const mskNow = new Date(mskNowMs);
+  // YYYY-MM-DD в MSK берём через UTC-getter'ы у сдвинутой даты.
+  const y = mskNow.getUTCFullYear();
+  const m = mskNow.getUTCMonth();
+  const d = mskNow.getUTCDate();
+  // Полночь MSK в UTC = (Y-M-D 00:00:00 UTC) - 3h
+  const startUtc = new Date(Date.UTC(y, m, d) - MSK_OFFSET_MS);
+  const endUtc = new Date(startUtc.getTime() + 24 * 60 * 60 * 1000 - 1);
+  const dayDateUtc = new Date(Date.UTC(y, m, d));
+  return {
+    date: formatMskDateParts(y, m, d),
+    startUtc,
+    endUtc,
+    dayDateUtc,
+  };
+}
+
+function dayDateUtcFromMskMidnight(mskMidnightUtc: Date): Date {
+  // mskMidnightUtc — это UTC-момент полуночи MSK. Календарный день MSK
+  // соответствует полуночи UTC «того же дня» (yyyy-mm-dd).
+  const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+  const shifted = new Date(mskMidnightUtc.getTime() + MSK_OFFSET_MS);
+  return new Date(
+    Date.UTC(
+      shifted.getUTCFullYear(),
+      shifted.getUTCMonth(),
+      shifted.getUTCDate(),
+    ),
+  );
+}
+
+function formatMskDate(d: Date): string {
+  const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
+  const shifted = new Date(d.getTime() + MSK_OFFSET_MS);
+  return formatMskDateParts(
+    shifted.getUTCFullYear(),
+    shifted.getUTCMonth(),
+    shifted.getUTCDate(),
+  );
+}
+
+function formatMskDateParts(y: number, m0: number, d: number): string {
+  const mm = String(m0 + 1).padStart(2, '0');
+  const dd = String(d).padStart(2, '0');
+  return `${y}-${mm}-${dd}`;
+}
+
+function buildEmptyHistoryDays(
+  todayStartUtc: Date,
+  days: number,
+): MeHistoryDayDto[] {
+  const out: MeHistoryDayDto[] = [];
+  for (let i = 0; i < days; i++) {
+    const ds = new Date(todayStartUtc);
+    ds.setUTCDate(ds.getUTCDate() - i);
+    out.push({
+      date: formatMskDate(ds),
+      pieceworkQty: 0,
+      pieceworkAmount: 0,
+      pieceworkApprovedAmount: 0,
+      pieceworkPendingAmount: 0,
+      salaryAmount: 0,
+      total: 0,
+      hasPending: false,
+    });
+  }
+  return out;
+}
+
+function emptyDaily(date: string): MeDailyDto {
+  return {
+    date,
+    compensationType: null,
+    piecework: null,
+    salary: null,
+    total: 0,
+  };
+}
+
+function toSharedCompType(
+  type: PrismaCompensationType | null,
+): SharedCompensationType | null {
+  if (type === PrismaCompensationType.PIECEWORK) return 'PIECEWORK';
+  if (type === PrismaCompensationType.SALARY) return 'SALARY';
+  if (type === PrismaCompensationType.MIXED) return 'MIXED';
+  return null;
+}
+
+function aggregatePieceworkRows(
+  rows: Array<{
+    qty: number;
+    amount: Prisma.Decimal;
+    status: EntryStatus;
+    operation: { id: string; code: string; name: string };
+  }>,
+): MeDailyDto['piecework'] {
+  const byOp = new Map<string, MeDailyOperationDto>();
+  let totalQty = 0;
+  let approvedAmount = 0;
+  let pendingAmount = 0;
+  for (const row of rows) {
+    const amount = decimalToNumber(row.amount);
+    const op = row.operation;
+    const cell =
+      byOp.get(op.id) ??
+      ({
+        operationId: op.id,
+        operationCode: op.code,
+        operationName: op.name,
+        qty: 0,
+        amount: 0,
+        approvedAmount: 0,
+        pendingAmount: 0,
+      } satisfies MeDailyOperationDto);
+    cell.qty += row.qty;
+    cell.amount += amount;
+    if (
+      row.status === EntryStatus.PENDING_RELEASE ||
+      row.status === EntryStatus.PENDING
+    ) {
+      cell.pendingAmount += amount;
+      pendingAmount += amount;
+    } else if (row.status === EntryStatus.APPROVED) {
+      cell.approvedAmount += amount;
+      approvedAmount += amount;
+    }
+    totalQty += row.qty;
+    byOp.set(op.id, cell);
+  }
+
+  const byOperation = [...byOp.values()]
+    .map((c) => ({
+      ...c,
+      amount: roundMoneyNumber(c.amount),
+      approvedAmount: roundMoneyNumber(c.approvedAmount),
+      pendingAmount: roundMoneyNumber(c.pendingAmount),
+    }))
+    .sort((a, b) => b.amount - a.amount);
+
+  return {
+    byOperation,
+    totalQty,
+    totalAmount: roundMoneyNumber(approvedAmount + pendingAmount),
+    approvedAmount: roundMoneyNumber(approvedAmount),
+    pendingAmount: roundMoneyNumber(pendingAmount),
+  };
+}
+
+function decimalToNumber(value: Prisma.Decimal | null): number {
+  if (value === null || value === undefined) return 0;
+  return Number(value.toFixed(2));
+}
+
+function decimalToNumberOrNull(value: Prisma.Decimal | null): number | null {
+  if (value === null || value === undefined) return null;
+  return Number(value.toFixed(2));
+}
+
+function roundMoneyNumber(value: number): number {
+  if (!Number.isFinite(value)) return 0;
+  return Math.round(value * 100) / 100;
 }

@@ -42,6 +42,7 @@ export * from './master-calls';
 export * from './master-actions';
 export * from './production-board';
 export * from './employee-qr';
+export * from './me-daily';
 export * from './cut-release-policy';
 export * from './order-cut-issue-rules';
 export * from './order-deadlines';

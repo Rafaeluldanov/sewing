@@ -3,6 +3,7 @@ import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeEmployeeQrButton, canSeeWto } from '@/lib/rbac';
 import { CallMasterButton } from '@/components/call-master-button';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
+import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
 
 /**
  * Route-level guard для всего раздела `/wto/*`.
@@ -36,6 +37,7 @@ export default async function WtoSectionLayout({
        */}
       {showEmployeeQr || showMasterCall ? (
         <div className="employee-toolbar">
+          {showEmployeeQr ? <DailyEarningsChip /> : null}
           {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
           {showMasterCall ? <CallMasterButton /> : null}
         </div>

@@ -14289,6 +14289,11 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 1rem;
   font-weight: 600;
 }
+.constructor-shell__header-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.6rem;
+}
 .constructor-shell__main {
   padding: 1rem;
   max-width: 960px;
@@ -15399,4 +15404,260 @@ body:has(.admin-layout) .app-header { display: none !important; }
   color: var(--color-fg-muted, #64748b);
   font-size: 0.85rem;
   line-height: 1;
+}
+
+/* -----------------------------------------------------------------------
+ * «Мой день» — чип в `.employee-toolbar` + панель + история.
+ *
+ * Цель — единая точка входа сотрудника в свою дневную статистику:
+ * выработка (штуки), сумма начислений и пометка PENDING. Чип сидит
+ * рядом с «Мастер» и «Мой QR-код» в правом столбике; в отличие от
+ * круглых icon-only кнопок, у чипа сохраняется ширина под цифры,
+ * поэтому override `.employee-toolbar .my-day-chip` НЕ режет его
+ * до 40×40 (см. `.employee-toolbar .call-master-btn` выше). Inline-
+ * вариант (`.my-day-chip--inline`) — для `constructor-shell__header`,
+ * где нет `.employee-toolbar`.
+ * ----------------------------------------------------------------------- */
+.my-day-chip {
+  pointer-events: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.85rem;
+  border: 0;
+  border-radius: 999px;
+  background: #1e293b;
+  color: #ffffff;
+  font-size: 0.85rem;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
+  transition: background 0.15s ease, transform 0.1s ease;
+  white-space: nowrap;
+}
+.my-day-chip:hover:not(:disabled) {
+  background: #0f172a;
+}
+.my-day-chip:active:not(:disabled) {
+  transform: scale(0.97);
+}
+.my-day-chip__icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.3rem;
+  height: 1.3rem;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.18);
+  font-weight: 800;
+  font-size: 0.9rem;
+}
+.my-day-chip__label { white-space: nowrap; }
+
+/* Inline-вариант: бледно-индиго pill для constructor-shell и
+   будущих светлых шапок. */
+.my-day-chip--inline {
+  background: #e0e7ff;
+  color: #3730a3;
+  box-shadow: none;
+}
+.my-day-chip--inline:hover:not(:disabled) {
+  background: #c7d2fe;
+}
+.my-day-chip--inline .my-day-chip__icon {
+  background: #ffffff;
+  color: #3730a3;
+}
+
+/* Карточка модалки «Мой день». */
+.my-day-panel__card {
+  max-width: 380px;
+  gap: 0.9rem;
+}
+.my-day-panel__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  padding: 0.75rem 0;
+  border-top: 1px solid #e5e7eb;
+}
+.my-day-panel__section:first-of-type { border-top: 0; padding-top: 0; }
+.my-day-panel__section-title {
+  font-size: 0.8rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #64748b;
+}
+.my-day-panel__empty {
+  color: #64748b;
+  font-size: 0.9rem;
+}
+
+.my-day-panel__op-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+}
+.my-day-panel__op-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  gap: 0.6rem;
+  align-items: baseline;
+  font-size: 0.95rem;
+}
+.my-day-panel__op-name { color: #0f172a; font-weight: 500; }
+.my-day-panel__op-qty {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+  font-size: 0.85rem;
+}
+.my-day-panel__op-amount {
+  color: #0f172a;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+.my-day-panel__op-summary {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding-top: 0.5rem;
+  border-top: 1px dashed #e5e7eb;
+  font-size: 0.9rem;
+  color: #475569;
+}
+.my-day-panel__op-summary-total {
+  font-weight: 700;
+  color: #0f172a;
+  font-variant-numeric: tabular-nums;
+}
+.my-day-panel__pending {
+  display: flex;
+  gap: 0.4rem;
+  align-items: flex-start;
+  padding: 0.55rem 0.7rem;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #9a3412;
+  font-size: 0.85rem;
+}
+
+.my-day-panel__shift {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  color: #334155;
+}
+.my-day-panel__shift-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #16a34a;
+  box-shadow: 0 0 0 3px rgba(22, 163, 74, 0.18);
+}
+.my-day-panel__shift-empty { color: #94a3b8; }
+.my-day-panel__salary-amount {
+  font-size: 0.95rem;
+  color: #0f172a;
+}
+.my-day-panel__salary-amount strong {
+  font-variant-numeric: tabular-nums;
+  margin-left: 0.25rem;
+}
+.my-day-panel__salary-hint {
+  color: #94a3b8;
+  font-size: 0.85rem;
+  margin-left: 0.4rem;
+}
+
+.my-day-panel__total {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  padding: 0.65rem 0.8rem;
+  margin-top: 0.25rem;
+  border-radius: 10px;
+  background: #0f172a;
+  color: #ffffff;
+}
+.my-day-panel__total-label {
+  font-weight: 600;
+  font-size: 0.9rem;
+}
+.my-day-panel__total-value {
+  font-weight: 800;
+  font-size: 1.1rem;
+  font-variant-numeric: tabular-nums;
+}
+.my-day-panel__history-btn { margin-top: 0.25rem; }
+
+/* История — модалка с таблицей. */
+.my-history__card {
+  max-width: 560px;
+  gap: 0.6rem;
+}
+.my-history__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.88rem;
+}
+.my-history__table th,
+.my-history__table td {
+  padding: 0.45rem 0.5rem;
+  border-bottom: 1px solid #f1f5f9;
+  text-align: left;
+}
+.my-history__table thead th {
+  font-weight: 700;
+  color: #64748b;
+  font-size: 0.78rem;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+  border-bottom: 1px solid #e5e7eb;
+}
+.my-history__th-num,
+.my-history__td-num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.my-history__th-status,
+.my-history__td-status {
+  text-align: center;
+  width: 2.5rem;
+}
+.my-history__row--empty td { color: #cbd5e1; }
+.my-history__td-total { font-weight: 700; color: #0f172a; }
+.my-history__table tfoot td {
+  border-top: 2px solid #0f172a;
+  border-bottom: 0;
+  font-weight: 700;
+  color: #0f172a;
+}
+
+.my-history__chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.6rem;
+  height: 1.4rem;
+  padding: 0 0.4rem;
+  border-radius: 999px;
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+.my-history__chip--ok { background: #dcfce7; color: #166534; }
+.my-history__chip--pending { background: #ffedd5; color: #9a3412; }
+.my-history__chip--off { background: #f1f5f9; color: #94a3b8; font-weight: 500; }
+
+/* На узких экранах — сжимаем колонки таблицы, чтобы влезало. */
+@media (max-width: 480px) {
+  .my-history__card { max-width: 100%; }
+  .my-history__table { font-size: 0.82rem; }
+  .my-history__table th,
+  .my-history__table td { padding: 0.35rem 0.3rem; }
 }

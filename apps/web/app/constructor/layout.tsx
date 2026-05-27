@@ -2,6 +2,7 @@ import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeConstructor } from '@/lib/rbac';
 import { LogoutButton } from '@/components/logout-button';
+import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
 
 /**
  * Route-level guard для всего раздела `/constructor/*` (кабинет
@@ -31,7 +32,10 @@ export default async function ConstructorSectionLayout({
           <div className="constructor-shell__brand">Sewing · Конструктор</div>
           <div className="constructor-shell__name">{me.user.fullName}</div>
         </div>
-        <LogoutButton />
+        <div className="constructor-shell__header-actions">
+          <DailyEarningsChip className="my-day-chip--inline" />
+          <LogoutButton />
+        </div>
       </header>
       <main className="constructor-shell__main">{children}</main>
     </div>

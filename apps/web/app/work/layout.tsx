@@ -3,6 +3,7 @@ import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeEmployeeQrButton } from '@/lib/rbac';
 import { CallMasterButton } from '@/components/call-master-button';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
+import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
 
 /**
  * Section layout для `/work/*`.
@@ -43,6 +44,7 @@ export default async function WorkSectionLayout({
        */}
       {showEmployeeQr || showMasterCall ? (
         <div className="employee-toolbar">
+          {showEmployeeQr ? <DailyEarningsChip /> : null}
           {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
           {showMasterCall ? <CallMasterButton /> : null}
         </div>
