@@ -22,8 +22,12 @@
  *   - «Проверка выполнена» доступна только при `canCompleteQc`.
  */
 
-import { useRef } from 'react';
-import type { DefectTypeDto, QcPassportDetailDto } from '@sewing/shared/qc';
+import { useRef, useState } from 'react';
+import type {
+  DefectTypeDto,
+  EligibleReworkTargetDto,
+  QcPassportDetailDto,
+} from '@sewing/shared/qc';
 import { PASSPORT_STATUS_LABELS } from '@/lib/passport-status-labels';
 
 interface ErrorState {
@@ -42,9 +46,10 @@ interface Props {
   info: string | null;
   onDefectSubmit: (form: FormData) => void;
   onComplete: () => void;
-  /** «Вернуть на переделку» — отдаём паспорт обратно швее, что только
-   *  что прислала его на ОТК. См. `docs/flows.md §F5a`. */
-  onReturnToRework: () => void;
+  /** «Вернуть на переделку» — отдаём паспорт обратно швее на
+   *  выбранную SEW-операцию из `detail.eligibleReworkTargets`.
+   *  См. `docs/flows.md §F5a`. */
+  onReturnToRework: (targetOperationId: string) => void;
   onScanNext: () => void;
   onRefresh: () => void;
 }
@@ -73,12 +78,47 @@ export function QcWorkCard({
   onRefresh,
 }: Props) {
   const formRef = useRef<HTMLFormElement | null>(null);
+  // Локальное состояние picker'а «куда вернуть». Если eligibleReworkTargets
+  // содержит несколько SEW-операций — открываем inline-список с radio.
+  // Закрывается «Отмена» или успешным запуском возврата.
+  const [reworkPickerOpen, setReworkPickerOpen] = useState(false);
+  const [reworkPicked, setReworkPicked] = useState<string | null>(null);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const form = e.currentTarget;
     onDefectSubmit(new FormData(form));
     form.reset();
+  };
+
+  const handleReworkClick = () => {
+    setReworkPicked(detail.eligibleReworkTargets[0]?.operationId ?? null);
+    setReworkPickerOpen(true);
+  };
+
+  const handleReworkConfirm = () => {
+    if (!reworkPicked) return;
+    const target = detail.eligibleReworkTargets.find(
+      (t) => t.operationId === reworkPicked,
+    );
+    if (!target) return;
+    if (
+      typeof window !== 'undefined' &&
+      !window.confirm(
+        `Вернуть ${detail.passportNumber} на ${target.operationName} ` +
+          `(${target.finisherEmployeeName})?\n\n` +
+          `Pending-начисление за эту операцию будет отозвано.`,
+      )
+    ) {
+      return;
+    }
+    setReworkPickerOpen(false);
+    onReturnToRework(target.operationId);
+  };
+
+  const handleReworkCancel = () => {
+    setReworkPickerOpen(false);
+    setReworkPicked(null);
   };
 
   const completed = !!detail.qcCompletedAt;
@@ -173,8 +213,11 @@ export function QcWorkCard({
           <div className="error-box__msg">
             Сейчас на переделке у{' '}
             <strong>
-              {detail.currentEmployeeName ?? 'предыдущей швеи'}
+              {detail.reworkAssignment?.employeeName ?? 'предыдущей швеи'}
             </strong>
+            {detail.reworkAssignment
+              ? ` · ${detail.reworkAssignment.operationName}`
+              : null}
             . Ждёт сканирования.
           </div>
         </div>
@@ -308,6 +351,17 @@ export function QcWorkCard({
        * не разрешает ни брак, ни complete — даём скан, чтобы ОТК не
        * застрял.
        */}
+      {reworkPickerOpen && (
+        <ReworkPicker
+          targets={detail.eligibleReworkTargets}
+          picked={reworkPicked}
+          onChange={setReworkPicked}
+          onConfirm={handleReworkConfirm}
+          onCancel={handleReworkCancel}
+          pending={pending}
+        />
+      )}
+
       <div className="qc-card__sticky-actions">
         {completed || reworkPending ? (
           <button
@@ -318,7 +372,7 @@ export function QcWorkCard({
           >
             Сканировать другой паспорт
           </button>
-        ) : (
+        ) : reworkPickerOpen ? null : (
           <>
             {detail.canRecordDefect && (
               <button
@@ -334,7 +388,7 @@ export function QcWorkCard({
               <button
                 type="button"
                 className="btn btn-block"
-                onClick={onReturnToRework}
+                onClick={handleReworkClick}
                 disabled={pending}
               >
                 {pending ? 'Возвращаем…' : '↺ Вернуть на переделку'}
@@ -364,6 +418,79 @@ export function QcWorkCard({
               )}
           </>
         )}
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Inline picker «куда вернуть на переделку». Появляется в карточке
+ * ОТК при клике на «↺ Вернуть на переделку», когда в маршруте есть
+ * несколько SEW-операций (КИПЕРКА / ОВЕРЛОК / РАСПОШИВ и т.п.).
+ * Источник списка — `QcPassportDetailDto.eligibleReworkTargets`
+ * (см. `QcService.computeEligibleReworkTargets`).
+ *
+ * После выбора и клика «Вернуть» — нативный `confirm` с именем
+ * швеи-получателя, затем вызов `onReturnToRework(operationId)`.
+ */
+function ReworkPicker({
+  targets,
+  picked,
+  onChange,
+  onConfirm,
+  onCancel,
+  pending,
+}: {
+  targets: EligibleReworkTargetDto[];
+  picked: string | null;
+  onChange: (operationId: string) => void;
+  onConfirm: () => void;
+  onCancel: () => void;
+  pending: boolean;
+}) {
+  return (
+    <section
+      className="qc-card__rework-picker"
+      aria-label="Куда вернуть на переделку"
+    >
+      <h3 className="qc-card__section-title">Вернуть на переделку</h3>
+      <p className="hint">Выберите операцию и швею, которой возвращаем:</p>
+      <ul className="qc-card__rework-list">
+        {targets.map((t) => (
+          <li key={t.operationId}>
+            <label className="qc-card__rework-option">
+              <input
+                type="radio"
+                name="qc-rework-target"
+                value={t.operationId}
+                checked={picked === t.operationId}
+                onChange={() => onChange(t.operationId)}
+                disabled={pending}
+              />
+              <span>
+                <strong>{t.operationName}</strong> · {t.finisherEmployeeName}
+              </span>
+            </label>
+          </li>
+        ))}
+      </ul>
+      <div className="qc-card__rework-picker-actions">
+        <button
+          type="button"
+          className="btn btn-block"
+          onClick={onCancel}
+          disabled={pending}
+        >
+          Отмена
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary btn-block"
+          onClick={onConfirm}
+          disabled={pending || !picked}
+        >
+          {pending ? 'Возвращаем…' : 'Вернуть'}
+        </button>
       </div>
     </section>
   );

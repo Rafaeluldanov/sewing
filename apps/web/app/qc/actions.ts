@@ -109,6 +109,20 @@ export async function lookupQcPassportAction(
   }
   try {
     const lookup = await findPassportByCode(trimmed);
+    // Peek-detail-first (фикс инцидента 26.05.2026, см.
+    // `docs/flows.md §F5a`): если по паспорту открыт rework,
+    // повторный `scanOnOperation` категорией QC передвинул бы
+    // `currentRouteStepIndex` обратно на QC-шаг — и швея бы
+    // упёрлась в `PASSPORT_ISSUE_BACKWARD` при «Взять крой».
+    // Поэтому сначала peek-им детальку (без побочных эффектов),
+    // если `reworkPending` — открываем карточку в read-only без
+    // скана. Backend в этой ситуации тоже отдаёт
+    // `PASSPORT_REWORK_PENDING` на scan — это hard-guard на
+    // случай race-condition.
+    const peek = await getQcPassport(lookup.id);
+    if (peek.reworkPending) {
+      return { ok: true, detail: peek };
+    }
     // Сначала пробуем «принять» паспорт на операцию ОТК — backend
     // в той же транзакции пишет OPERATION_SCAN и переключает
     // `passport.currentOperationId` на операцию категории QC. Это
@@ -199,12 +213,20 @@ export type QcReturnToReworkResult =
  * `POST /api/qc/passports/:id/return-to-rework`, инвалидируем те же
  * кэши, что и при `completeQcAction` — паспорт двинулся по pipeline.
  * См. `QcService.returnToRework`, `docs/flows.md §F5a`.
+ *
+ * `targetOperationId` — выбранная ОТК операция из
+ * `eligibleReworkTargets`. Бэк сам резолвит швею-получателя по
+ * последнему `OPERATION_FINISHED` для этой операции.
  */
 export async function returnToReworkAction(
   passportId: string,
+  targetOperationId: string,
 ): Promise<QcReturnToReworkResult> {
   try {
-    const detail = await returnQcPassportToRework(passportId);
+    const detail = await returnQcPassportToRework(
+      passportId,
+      targetOperationId,
+    );
     revalidateForPassport(detail);
     return { ok: true, detail };
   } catch (e) {

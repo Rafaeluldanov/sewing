@@ -59,6 +59,26 @@ export const CreatePassportDefectSchema = z.object({
 export type CreatePassportDefectDto = z.infer<typeof CreatePassportDefectSchema>;
 
 // ---------------------------------------------------------------------------
+// Return to rework
+// ---------------------------------------------------------------------------
+
+/**
+ * Тело `POST /api/qc/passports/:id/return-to-rework`.
+ *
+ * `targetOperationId` — операция, на которую возвращаем паспорт.
+ * Должна быть в списке `QcPassportDetailDto.eligibleReworkTargets`
+ * (SEW-операция из маршрута, у которой есть `OPERATION_FINISHED`
+ * и нет открытого rework). Сервер берёт швею-получателя из
+ * последнего `OPERATION_FINISHED` для этой операции.
+ *
+ * См. `QcService.returnToRework`, `docs/flows.md §F5a`.
+ */
+export const ReturnToReworkSchema = z.object({
+  targetOperationId: z.string().min(1, 'Выберите операцию для возврата'),
+});
+export type ReturnToReworkDto = z.infer<typeof ReturnToReworkSchema>;
+
+// ---------------------------------------------------------------------------
 // QC list query
 // ---------------------------------------------------------------------------
 
@@ -114,6 +134,23 @@ export interface QcPassportListItemDto {
   updatedAt: string; // ISO
 }
 
+/**
+ * Один кандидат на возврат в переделку. Каждая SEW-операция из
+ * маршрута заказа, у которой есть `OPERATION_FINISHED` в истории
+ * паспорта и нет открытого rework, попадает в это перечисление.
+ * `finisher*` — швея, что финишировала эту операцию (последний
+ * `OPERATION_FINISHED` для пары `(passport, operation)`).
+ */
+export interface EligibleReworkTargetDto {
+  operationId: string;
+  operationCode: string;
+  operationName: string;
+  routeStepIndex: number;
+  finisherEmployeeId: string;
+  finisherEmployeeName: string;
+  finishedAt: string;
+}
+
 /** Карточка ОТК (`GET /api/qc/passports/:id`). */
 export interface QcPassportDetailDto extends QcPassportListItemDto {
   rollNumber: string;
@@ -154,11 +191,17 @@ export interface QcPassportDetailDto extends QcPassportListItemDto {
   removedFromQc: boolean;
   /**
    * Можно ли сейчас нажать «Вернуть на переделку». `true`, если
-   * паспорт `IN_PROGRESS`, есть кому возвращать (хотя бы один
-   * `OPERATION_FINISHED`) и нет уже открытого rework
-   * (`reworkPending === false`).
+   * паспорт `IN_PROGRESS`, `eligibleReworkTargets.length > 0` и нет
+   * уже открытого rework (`reworkPending === false`).
    */
   canReturnToRework: boolean;
+  /**
+   * Список операций, на которые можно вернуть паспорт. Заполняется
+   * только если `canReturnToRework`. UI рендерит из него radio-список
+   * и подставляет имя финишёра в подпись confirm-диалога. См.
+   * `EligibleReworkTargetDto`.
+   */
+  eligibleReworkTargets: EligibleReworkTargetDto[];
   /**
    * `true`, если по паспорту был `OPERATION_REWORK_OPENED` после
    * последнего `OPERATION_FINISHED` — то есть ОТК уже отправил его
@@ -168,4 +211,19 @@ export interface QcPassportDetailDto extends QcPassportListItemDto {
    * «Сейчас на переделке у …».
    */
   reworkPending: boolean;
+  /**
+   * Подробности активного rework для read-only баннера, если
+   * `reworkPending === true`. Берётся из последнего открытого
+   * `OPERATION_REWORK_OPENED` — здесь `employeeName` имя реальной
+   * швеи-получателя (а не текущего `currentEmployeeName`, которое
+   * после rework равно `null`). `null`, если rework не открыт.
+   */
+  reworkAssignment: {
+    operationId: string;
+    operationCode: string;
+    operationName: string;
+    employeeId: string;
+    employeeName: string;
+    reworkedAt: string;
+  } | null;
 }

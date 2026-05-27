@@ -52,6 +52,7 @@ import {
   PassportNotYoursException,
   PassportIssueBackwardException,
   PassportParallelGroupIncompleteException,
+  PassportReworkPendingException,
   PassportScanBackwardException,
   PassportNotYoursToEditException,
   PassportOrderNotInProductionException,
@@ -1630,6 +1631,21 @@ export class PassportsService {
       if (!qcPassed) throw new PassportNotQcPassedException();
     }
 
+    // Защита от race-condition «rework — ещё один scan на ОТК».
+    // Если у паспорта есть открытый `OPERATION_REWORK_OPENED` (нет
+    // последующего `OPERATION_FINISHED` для той же операции) — повторный
+    // scan категорией QC сдвинул бы `currentRouteStepIndex` обратно на
+    // QC-шаг, и швея бы упёрлась в `PASSPORT_ISSUE_BACKWARD` при «Взять
+    // крой» (инцидент 26.05.2026 на P-20260506-0069). ОТК должна
+    // дождаться, пока швея переделает и снова отдаст паспорт на ОТК
+    // (новый `OPERATION_FINISHED` закроет rework, и сканирование снова
+    // станет легитимным). См. `QcService.returnToRework`,
+    // `docs/flows.md §F5a`.
+    if (session.operation.category === OperationCategory.QC) {
+      const reworkPending = await this.hasOpenRework(passportId);
+      if (reworkPending) throw new PassportReworkPendingException();
+    }
+
     const sameOp = passport.currentOperationId === session.operationId;
     const sameEmployee = passport.currentEmployeeId === employeeId;
     if (sameOp && sameEmployee && passport.status === PassportStatus.IN_PROGRESS) {
@@ -2347,6 +2363,52 @@ export class PassportsService {
    * считается закрытой безвозвратно. Откат — только админом через
    * прямую правку БД.
    */
+  /**
+   * Есть ли по паспорту хоть один «открытый» rework — то есть
+   * `OPERATION_REWORK_OPENED` без последующего `OPERATION_FINISHED`
+   * для той же (passport, operation). Используется как guard в
+   * `scanOnOperation` (категория QC) и для UI-флага `reworkPending`
+   * в QC-сервисе (там есть локальная копия, чтобы не вешать
+   * cross-module зависимость на private-метод).
+   *
+   * Реализация: одним батчем достаём последние REWORK и FINISHED по
+   * `operationId`, сравниваем createdAt. Если для какого-то operationId
+   * последний event — REWORK_OPENED, значит rework открыт.
+   */
+  async hasOpenRework(passportId: string): Promise<boolean> {
+    const events = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        type: {
+          in: [
+            PassportEventType.OPERATION_REWORK_OPENED,
+            PassportEventType.OPERATION_FINISHED,
+          ],
+        },
+        operationId: { not: null },
+      },
+      select: { type: true, operationId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const lastByOp = new Map<
+      string,
+      { type: PassportEventType; createdAt: Date }
+    >();
+    for (const ev of events) {
+      if (!ev.operationId) continue;
+      if (!lastByOp.has(ev.operationId)) {
+        lastByOp.set(ev.operationId, {
+          type: ev.type,
+          createdAt: ev.createdAt,
+        });
+      }
+    }
+    for (const last of lastByOp.values()) {
+      if (last.type === PassportEventType.OPERATION_REWORK_OPENED) return true;
+    }
+    return false;
+  }
+
   private async assertOperationNotFinished(
     passportId: string,
     operationId: string,

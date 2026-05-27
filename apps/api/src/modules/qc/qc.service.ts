@@ -8,10 +8,12 @@ import { OperationCategory, PassportEventType, PassportStatus } from '@prisma/cl
 import type {
   CreatePassportDefectDto,
   DefectTypeDto,
+  EligibleReworkTargetDto,
   ListQcPassportsQuery,
   PassportDefectDto,
   QcPassportDetailDto,
   QcPassportListItemDto,
+  ReturnToReworkDto,
 } from '@sewing/shared/qc';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -25,6 +27,7 @@ import {
   PassportNotQcableException,
   PassportReworkAlreadyPendingException,
   PassportReworkRouteStepMissingException,
+  PassportReworkTargetNotEligibleException,
 } from '../../common/errors.js';
 import { EarningsService } from '../earnings/earnings.service.js';
 
@@ -340,6 +343,7 @@ export class QcService {
    */
   async returnToRework(
     passportId: string,
+    dto: ReturnToReworkDto,
     actorEmployeeId: string,
   ): Promise<QcPassportDetailDto> {
     const passport = await this.prisma.passport.findUnique({
@@ -363,41 +367,45 @@ export class QcService {
     if (!actor) throw new EmployeeNotFoundException();
     if (!actor.active) throw new EmployeeInactiveException();
 
-    const lastFinished = await this.prisma.passportEvent.findFirst({
-      where: {
-        passportId,
-        type: PassportEventType.OPERATION_FINISHED,
-      },
-      orderBy: { createdAt: 'desc' },
-      select: { operationId: true, employeeId: true, createdAt: true },
-    });
-    if (!lastFinished || !lastFinished.operationId) {
-      throw new PassportNoFinishedOperationException();
+    // Единый источник истины — `eligibleReworkTargets`. UI рендерит
+    // radio-список из этого же набора, бэк валидирует переданный
+    // `targetOperationId` против него. Внутри метода:
+    //   - проверяет, что хотя бы один OPERATION_FINISHED по паспорту
+    //     вообще есть (иначе `PassportNoFinishedOperationException`);
+    //   - проверяет, что target — SEW из маршрута без открытого rework.
+    const targets = await this.computeEligibleReworkTargets(passport.id, passport.orderId);
+    if (targets.length === 0) {
+      // Edge-case: маршрут перерисовали ПОСЛЕ прохождения SEW; или
+      // последний rework ещё не закрыт. Различаем для информативной
+      // ошибки.
+      const anyFinished = await this.prisma.passportEvent.findFirst({
+        where: {
+          passportId,
+          type: PassportEventType.OPERATION_FINISHED,
+        },
+        select: { id: true },
+      });
+      if (!anyFinished) throw new PassportNoFinishedOperationException();
+      const openSomewhere = await this.hasAnyOpenRework(passportId);
+      if (openSomewhere) throw new PassportReworkAlreadyPendingException();
+      throw new PassportReworkRouteStepMissingException();
     }
 
-    // Защита от двойного нажатия: если по target-операции уже есть
-    // открытый rework (REWORK_OPENED позже последнего FINISHED) —
-    // второй raise не делаем. UI и так должен прятать кнопку
-    // (см. флаг `reworkPending` в `loadDetail`), но дублирование
-    // на бэке — на случай race-condition.
-    const openRework = await this.prisma.passportEvent.findFirst({
-      where: {
-        passportId,
-        type: PassportEventType.OPERATION_REWORK_OPENED,
-        createdAt: { gt: lastFinished.createdAt },
-      },
-      select: { id: true },
-    });
-    if (openRework) throw new PassportReworkAlreadyPendingException();
+    const target = targets.find(
+      (t) => t.operationId === dto.targetOperationId,
+    );
+    if (!target) throw new PassportReworkTargetNotEligibleException();
 
-    const targetStep = await this.prisma.orderRouteStep.findFirst({
-      where: {
-        orderId: passport.orderId,
-        operationId: lastFinished.operationId,
-      },
-      select: { index: true, operationId: true },
-    });
-    if (!targetStep) throw new PassportReworkRouteStepMissingException();
+    // Адаптер под старые имена в дальнейшем коде транзакции.
+    const lastFinished = {
+      operationId: target.operationId,
+      employeeId: target.finisherEmployeeId,
+      createdAt: new Date(target.finishedAt),
+    };
+    const targetStep = {
+      index: target.routeStepIndex,
+      operationId: target.operationId,
+    };
 
     const beforeSnapshot = {
       currentOperationId: passport.currentOperationId,
@@ -604,18 +612,20 @@ export class QcService {
       orderBy: { createdAt: 'desc' },
       select: { operationId: true, createdAt: true },
     });
-    const reworkPending = lastFinished
-      ? Boolean(
-          await this.prisma.passportEvent.findFirst({
-            where: {
-              passportId,
-              type: PassportEventType.OPERATION_REWORK_OPENED,
-              createdAt: { gt: lastFinished.createdAt },
-            },
-            select: { id: true },
-          }),
-        )
-      : false;
+    const reworkPending = await this.hasAnyOpenRework(passportId);
+    // Кандидаты на возврат: SEW-операции из маршрута, у которых есть
+    // OPERATION_FINISHED и нет открытого rework. Если есть open rework
+    // где-либо — кандидатов не отдаём, кнопка прячется UI-флагом
+    // `canReturnToRework` (см. ниже).
+    const eligibleReworkTargets = reworkPending
+      ? []
+      : await this.computeEligibleReworkTargets(r.id, r.orderId);
+    // Для read-only баннера: подробности активного rework. Берём
+    // последний открытый `OPERATION_REWORK_OPENED` (его `employeeId`
+    // — целевая швея) и подтягиваем имя + название операции.
+    const reworkAssignment = reworkPending
+      ? await this.loadReworkAssignment(passportId)
+      : null;
     // Backend-источник истины «паспорт ушёл из ОТК». QC-терминал
     // (`apps/web/app/qc/qc-terminal.tsx`) использует этот флаг, чтобы
     // схлопнутая строка «Проверено ОТК» исчезала, когда паспорт реально
@@ -683,15 +693,230 @@ export class QcService {
         !reworkPending &&
         (r.status === PassportStatus.IN_PROGRESS ||
           (r.status === PassportStatus.PACKED && lastQcPassed === null)),
-      // Кнопка «Вернуть на переделку» активна только если есть кому
-      // возвращать (есть OPERATION_FINISHED) и нет уже открытого rework.
+      // Кнопка «Вернуть на переделку» активна, если есть хотя бы
+      // один eligible-кандидат и паспорт `IN_PROGRESS`. `reworkPending`
+      // обнуляет список выше, так что отдельный чек тут излишен.
       canReturnToRework:
         r.status === PassportStatus.IN_PROGRESS &&
-        lastFinished !== null &&
-        !reworkPending,
+        eligibleReworkTargets.length > 0,
+      eligibleReworkTargets,
       reworkPending,
+      reworkAssignment,
       removedFromQc,
     };
+  }
+
+  /**
+   * Подробности активного rework (для read-only баннера в QC-карточке).
+   * Возвращает данные последнего открытого `OPERATION_REWORK_OPENED`
+   * — той швее, что ждёт паспорт, и операции, на которую он возвращён.
+   */
+  private async loadReworkAssignment(passportId: string): Promise<{
+    operationId: string;
+    operationCode: string;
+    operationName: string;
+    employeeId: string;
+    employeeName: string;
+    reworkedAt: string;
+  } | null> {
+    const reworks = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+        operationId: { not: null },
+      },
+      select: {
+        operationId: true,
+        employeeId: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (reworks.length === 0) return null;
+
+    // Берём самый свежий rework, для которого ещё нет последующего
+    // FINISHED по той же операции (т.е. реально открытый).
+    for (const r of reworks) {
+      if (!r.operationId || !r.employeeId) continue;
+      const finishedAfter = await this.prisma.passportEvent.findFirst({
+        where: {
+          passportId,
+          operationId: r.operationId,
+          type: PassportEventType.OPERATION_FINISHED,
+          createdAt: { gt: r.createdAt },
+        },
+        select: { id: true },
+      });
+      if (finishedAfter) continue;
+      const [op, emp] = await Promise.all([
+        this.prisma.operation.findUnique({
+          where: { id: r.operationId },
+          select: { code: true, name: true },
+        }),
+        this.prisma.employee.findUnique({
+          where: { id: r.employeeId },
+          select: { fullName: true },
+        }),
+      ]);
+      if (!op || !emp) continue;
+      return {
+        operationId: r.operationId,
+        operationCode: op.code,
+        operationName: op.name,
+        employeeId: r.employeeId,
+        employeeName: emp.fullName,
+        reworkedAt: r.createdAt.toISOString(),
+      };
+    }
+    return null;
+  }
+
+  /**
+   * Возвращает SEW-операции из маршрута заказа, на которые можно
+   * вернуть паспорт. Условие eligibility:
+   *   - категория `SEWING`;
+   *   - по паспорту есть хотя бы один `OPERATION_FINISHED`;
+   *   - нет открытого rework для этой пары (passport, operation).
+   *
+   * Если у заказа нет маршрута — возвращаем пустой список (вернуть
+   * некуда). Имя финишёра берём из самого свежего `OPERATION_FINISHED`
+   * для каждой операции.
+   */
+  private async computeEligibleReworkTargets(
+    passportId: string,
+    orderId: string | null,
+  ): Promise<EligibleReworkTargetDto[]> {
+    if (!orderId) return [];
+    const steps = await this.prisma.orderRouteStep.findMany({
+      where: {
+        orderId,
+        operation: { category: OperationCategory.SEWING },
+      },
+      select: {
+        index: true,
+        operationId: true,
+        operation: { select: { code: true, name: true } },
+      },
+      orderBy: { index: 'asc' },
+    });
+    if (steps.length === 0) return [];
+
+    const operationIds = steps.map((s) => s.operationId);
+    // Тащим все события OPERATION_FINISHED и OPERATION_REWORK_OPENED
+    // для этих операций одним батчем, чтобы не плодить N+1. Для каждой
+    // операции возьмём самое свежее FINISHED и определим, не открыт ли
+    // rework позже него.
+    const events = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        operationId: { in: operationIds },
+        type: {
+          in: [
+            PassportEventType.OPERATION_FINISHED,
+            PassportEventType.OPERATION_REWORK_OPENED,
+          ],
+        },
+      },
+      select: {
+        type: true,
+        operationId: true,
+        employeeId: true,
+        createdAt: true,
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    type EventRow = {
+      type: PassportEventType;
+      operationId: string | null;
+      employeeId: string | null;
+      createdAt: Date;
+    };
+    const lastFinishedByOp = new Map<string, EventRow>();
+    const lastReworkByOp = new Map<string, EventRow>();
+    for (const ev of events) {
+      if (!ev.operationId) continue;
+      if (
+        ev.type === PassportEventType.OPERATION_FINISHED &&
+        !lastFinishedByOp.has(ev.operationId)
+      ) {
+        lastFinishedByOp.set(ev.operationId, ev);
+      }
+      if (
+        ev.type === PassportEventType.OPERATION_REWORK_OPENED &&
+        !lastReworkByOp.has(ev.operationId)
+      ) {
+        lastReworkByOp.set(ev.operationId, ev);
+      }
+    }
+
+    const eligibleSteps = steps.filter((s) => {
+      const finished = lastFinishedByOp.get(s.operationId);
+      if (!finished || !finished.employeeId) return false;
+      const rework = lastReworkByOp.get(s.operationId);
+      if (rework && rework.createdAt > finished.createdAt) return false;
+      return true;
+    });
+    if (eligibleSteps.length === 0) return [];
+
+    const finisherIds = Array.from(
+      new Set(
+        eligibleSteps
+          .map((s) => lastFinishedByOp.get(s.operationId)?.employeeId)
+          .filter((x): x is string => !!x),
+      ),
+    );
+    const employees = await this.prisma.employee.findMany({
+      where: { id: { in: finisherIds } },
+      select: { id: true, fullName: true },
+    });
+    const empById = new Map(employees.map((e) => [e.id, e.fullName]));
+
+    return eligibleSteps.map((s) => {
+      const fin = lastFinishedByOp.get(s.operationId)!;
+      return {
+        operationId: s.operationId,
+        operationCode: s.operation.code,
+        operationName: s.operation.name,
+        routeStepIndex: s.index,
+        finisherEmployeeId: fin.employeeId!,
+        finisherEmployeeName: empById.get(fin.employeeId!) ?? '—',
+        finishedAt: fin.createdAt.toISOString(),
+      };
+    });
+  }
+
+  /**
+   * Есть ли по паспорту хотя бы один «открытый» rework — то есть
+   * `OPERATION_REWORK_OPENED` без последующего `OPERATION_FINISHED`
+   * для той же (passport, operation). Локальный аналог
+   * `PassportsService.hasOpenRework`, чтобы не вешать cross-module
+   * зависимость; обе функции делают одно и то же по тем же таблицам.
+   */
+  private async hasAnyOpenRework(passportId: string): Promise<boolean> {
+    const events = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        type: {
+          in: [
+            PassportEventType.OPERATION_REWORK_OPENED,
+            PassportEventType.OPERATION_FINISHED,
+          ],
+        },
+        operationId: { not: null },
+      },
+      select: { type: true, operationId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    const lastByOp = new Map<string, PassportEventType>();
+    for (const ev of events) {
+      if (!ev.operationId) continue;
+      if (!lastByOp.has(ev.operationId)) lastByOp.set(ev.operationId, ev.type);
+    }
+    for (const t of lastByOp.values()) {
+      if (t === PassportEventType.OPERATION_REWORK_OPENED) return true;
+    }
+    return false;
   }
 
   private async loadDefects(passportId: string): Promise<PassportDefectDto[]> {

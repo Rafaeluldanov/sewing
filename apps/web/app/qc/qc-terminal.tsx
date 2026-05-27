@@ -293,32 +293,30 @@ function QcScanTerminal({ defectTypes }: ScanTerminalProps) {
     });
   };
 
-  const handleReturnToRework = () => {
+  const handleReturnToRework = (targetOperationId: string) => {
     if (!detail) return;
     const passportId = detail.passportId;
-    const finisherName = detail.currentEmployeeName ?? 'предыдущей швее';
-    // Действие отзывает pending earning — даём ОТК подтвердить.
-    if (
-      typeof window !== 'undefined' &&
-      !window.confirm(
-        `Вернуть ${detail.passportNumber} на переделку (${finisherName})?\n\n` +
-          `Pending-начисление за эту операцию будет отозвано.`,
-      )
-    ) {
-      return;
-    }
+    // Имя/операция для тоста — из выбранного eligible-target'а.
+    // `currentEmployeeName` использовать НЕЛЬЗЯ: после QC-скана это
+    // имя самой ОТК-оператора (инцидент 26.05.2026).
+    const target = detail.eligibleReworkTargets.find(
+      (t) => t.operationId === targetOperationId,
+    );
+    const targetEmployeeName = target?.finisherEmployeeName ?? 'швее';
+    const targetOperationName = target?.operationName ?? '';
+    // Confirm-диалог теперь показывается внутри ReworkPicker — здесь
+    // уже подтверждённый запуск экшена.
     startTransition(async () => {
-      const res = await returnToReworkAction(passportId);
+      const res = await returnToReworkAction(passportId, targetOperationId);
       if (!res.ok) {
         setError({ message: res.error, requestId: res.errorRequestId });
         return;
       }
       setError(null);
-      // Карточка сразу закрывается — после rework паспорт уходит из
-      // окна ОТК, как после «Проверка выполнена». Краткий info-тост
-      // подскажет, кому ушёл вызов; терминал готов к следующему скану.
-      const targetName = res.detail.currentEmployeeName ?? finisherName;
-      setInfo(`Возврат на переделку отправлен: ${targetName}`);
+      setInfo(
+        `Возврат отправлен: ${targetEmployeeName}` +
+          (targetOperationName ? ` · ${targetOperationName}` : ''),
+      );
       playOperationCompletedSound();
       setDetail(null);
     });

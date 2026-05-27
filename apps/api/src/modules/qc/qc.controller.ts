@@ -2,8 +2,10 @@ import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import {
   CreatePassportDefectSchema,
   ListQcPassportsQuerySchema,
+  ReturnToReworkSchema,
   type CreatePassportDefectDto,
   type ListQcPassportsQuery,
+  type ReturnToReworkDto,
 } from '@sewing/shared/qc';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { QcService } from './qc.service.js';
@@ -71,16 +73,19 @@ export class QcController {
   /**
    * QC role-terminal: «Вернуть на переделку».
    *
-   * Тело пустое — target-операция и швея-получатель определяются
-   * сервером по последнему `OPERATION_FINISHED` паспорта (см.
-   * `QcService.returnToRework`, `docs/flows.md §F5a`). RBAC такой же,
-   * как у `complete` (QC, SHOP_MANAGER, +ADMIN через RolesGuard).
+   * Body: `{ targetOperationId }` — операция, на которую возвращаем
+   * (одна из `QcPassportDetailDto.eligibleReworkTargets`). Бэк
+   * валидирует target через тот же helper, что строит eligible-список,
+   * и берёт швею-получателя из последнего `OPERATION_FINISHED` для
+   * этой операции. См. `QcService.returnToRework`,
+   * `docs/flows.md §F5a`. RBAC такой же, как у `complete`.
    */
   @Post('passports/:id/return-to-rework')
   returnToRework(
     @Param('id') id: string,
+    @Body(new ZodValidationPipe(ReturnToReworkSchema)) dto: ReturnToReworkDto,
     @CurrentUser() user: AuthPrincipal,
   ) {
-    return this.qc.returnToRework(id, user.employeeId);
+    return this.qc.returnToRework(id, dto, user.employeeId);
   }
 }

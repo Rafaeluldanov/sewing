@@ -1021,6 +1021,38 @@ export class PassportReworkAlreadyPendingException extends BusinessException {
   }
 }
 
+/**
+ * Сканирование паспорта на ОТК запрещено, пока открыт rework. Иначе
+ * scan переключает `currentRouteStepIndex` обратно на QC-шаг, и
+ * последующая выдача швее падает на `PASSPORT_ISSUE_BACKWARD`.
+ * Источник истины: ОТК должна дождаться, пока швея переделает.
+ */
+export class PassportReworkPendingException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_REWORK_PENDING',
+      'Паспорт сейчас на переделке у швеи. Дождитесь её сканирования у станка.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * ОТК пытается вернуть паспорт на операцию, которой нет в списке
+ * допустимых (не в маршруте, не SEWING, нет завершений, либо по ней
+ * уже открыт rework). Источник истины — `QcService.getQcDetail`
+ * (`eligibleReworkTargets`).
+ */
+export class PassportReworkTargetNotEligibleException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_REWORK_TARGET_NOT_ELIGIBLE',
+      'На эту операцию вернуть нельзя: она не из числа доступных для переделки.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // WTO / ironing (role-terminal)
 // ---------------------------------------------------------------------------
