@@ -14,6 +14,8 @@
  * месте, чтобы тесты и DTO `list-finished-goods-movements` ссылались
  * на тот же набор.
  */
+import { normalizeColor } from '@sewing/shared/colors';
+
 export const FINISHED_GOODS_MOVEMENT_TYPE = {
   PRODUCTION_RECEIPT: 'PRODUCTION_RECEIPT',
   REVERSAL: 'REVERSAL',
@@ -226,5 +228,5 @@ export function buildFinishedGoodsBalanceKey(params: {
 }): string {
   const wh = params.warehouseId ?? 'NO_WAREHOUSE';
   const cl = params.cellId ?? 'NO_CELL';
-  return `${params.orderId}:${params.productId}:${params.sizeId}:${params.color}:${wh}:${cl}`;
+  return `${params.orderId}:${params.productId}:${params.sizeId}:${normalizeColor(params.color)}:${wh}:${cl}`;
 }

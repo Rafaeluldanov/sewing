@@ -5,6 +5,8 @@ import {
   type WorkInProgressMovement,
 } from '@prisma/client';
 
+import { normalizeColor } from '@sewing/shared/colors';
+
 import { BusinessException } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
@@ -102,7 +104,7 @@ export class WorkInProgressService {
           orderId: params.orderId,
           productId: params.productId,
           sizeId: params.sizeId,
-          color: params.color,
+          color: normalizeColor(params.color),
           warehouseId: params.warehouseId ?? null,
           cellId: params.cellId ?? null,
         },
@@ -199,7 +201,7 @@ export class WorkInProgressService {
         orderId: params.orderId,
         productId: params.productId,
         sizeId: params.sizeId,
-        color: params.color,
+        color: normalizeColor(params.color),
         warehouseId: params.warehouseId ?? null,
         cellId: params.cellId ?? null,
         qty: params.qty,

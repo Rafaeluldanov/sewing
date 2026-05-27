@@ -8,6 +8,7 @@
  * продукции (`finished-goods.constants.ts`). Хранятся строкой в БД,
  * расширение без миграции.
  */
+import { normalizeColor } from '@sewing/shared/colors';
 
 export const WORK_IN_PROGRESS_MOVEMENT_TYPE = {
   /** Размещение паспорта в ячейку (`PassportsService.place`). */
@@ -87,6 +88,15 @@ export function buildWorkInProgressSourceKey(
  * `buildFinishedGoodsBalanceKey`):
  *
  *   `${orderId}:${productId}:${sizeId}:${color}:${warehouseId|NO_WAREHOUSE}:${cellId|NO_CELL}`
+ *
+ * `color` приводится к каноническому виду через `normalizeColor`
+ * (`lower+trim+collapse-spaces`), чтобы один и тот же остаток ловился
+ * независимо от регистра входа (`Белый` / `белый` / ` Белый `).
+ * Это страховка от рассинхрона между `Passport.color` (всегда
+ * нормализован при создании паспорта) и balance-row (см. инцидент
+ * 27.05.2026: миграция normalize_color_lower_trim понизила color, но
+ * balanceKey остался в старом регистре, и lookup перестал находить
+ * существующие балансы — `WIP_INSUFFICIENT_BALANCE: доступно 0`).
  */
 export function buildWorkInProgressBalanceKey(params: {
   orderId: string;
@@ -98,5 +108,5 @@ export function buildWorkInProgressBalanceKey(params: {
 }): string {
   const wh = params.warehouseId ?? 'NO_WAREHOUSE';
   const cl = params.cellId ?? 'NO_CELL';
-  return `${params.orderId}:${params.productId}:${params.sizeId}:${params.color}:${wh}:${cl}`;
+  return `${params.orderId}:${params.productId}:${params.sizeId}:${normalizeColor(params.color)}:${wh}:${cl}`;
 }
