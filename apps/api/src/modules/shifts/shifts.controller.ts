@@ -2,8 +2,10 @@ import { Body, Controller, Get, Post } from '@nestjs/common';
 import {
   StartShiftSchema,
   StopShiftSchema,
+  SwitchShiftOperationSchema,
   type StartShiftDto,
   type StopShiftDto,
+  type SwitchShiftOperationDto,
 } from '@sewing/shared/shifts';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { ShiftsService } from './shifts.service.js';
@@ -35,6 +37,22 @@ export class ShiftsController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.shifts.stop({ employeeId: user.employeeId });
+  }
+
+  /**
+   * Переключить операцию в активной смене без stop/start. Подробности
+   * и инварианты — `ShiftsService.switchOperation`.
+   */
+  @Post('switch-operation')
+  switchOperation(
+    @Body(new ZodValidationPipe(SwitchShiftOperationSchema))
+    dto: SwitchShiftOperationDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.shifts.switchOperation({
+      employeeId: user.employeeId,
+      operationId: dto.operationId,
+    });
   }
 
   @Get('current')

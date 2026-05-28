@@ -13,6 +13,7 @@ import {
   scanPassport,
   startShift,
   stopShift,
+  switchShiftOperation,
 } from '@/lib/shifts-api';
 import type { PassportLookupResponse, WorkFormState } from './state';
 
@@ -90,6 +91,25 @@ export async function stopShiftAction(
     await stopShift();
     revalidatePath('/work');
     return { info: 'Смена завершена' };
+  } catch (e) {
+    return { error: explainApiError(e), errorRequestId: errorRequestId(e) };
+  }
+}
+
+/**
+ * Сменить операцию в активной смене без stop/start. Backend требует,
+ * чтобы у швеи сейчас не было паспортов в работе
+ * (`SHIFT_HAS_ACTIVE_PASSPORTS`) — UI достаёт сообщение из ответа.
+ */
+export async function switchShiftOperationAction(
+  operationId: string,
+): Promise<WorkFormState> {
+  const id = operationId.trim();
+  if (!id) return { error: 'operationId обязателен' };
+  try {
+    await switchShiftOperation({ operationId: id });
+    revalidatePath('/work');
+    return { info: 'Операция смены изменена' };
   } catch (e) {
     return { error: explainApiError(e), errorRequestId: errorRequestId(e) };
   }

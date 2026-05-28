@@ -14,6 +14,7 @@ import type {
   ShiftMetaDto,
   ShiftSessionDto,
   StartShiftDto,
+  SwitchShiftOperationDto,
 } from '@sewing/shared/shifts';
 import type { OrderCutIssueRuleBannerDto } from '@sewing/shared';
 import type { PassportDetailDto } from '@sewing/shared/passports';
@@ -56,6 +57,15 @@ export function stopShift(): Promise<ShiftSessionDto> {
   return apiFetch<ShiftSessionDto>('/shifts/stop', {
     method: 'POST',
     body: {},
+  });
+}
+
+export function switchShiftOperation(
+  body: SwitchShiftOperationDto,
+): Promise<ShiftSessionDto> {
+  return apiFetch<ShiftSessionDto>('/shifts/switch-operation', {
+    method: 'POST',
+    body,
   });
 }
 

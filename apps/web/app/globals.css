@@ -2810,6 +2810,92 @@ table.data-table td code {
   justify-content: flex-end;
   margin-top: 0.5rem;
 }
+
+/* OperationSwitcher: chip над активной панелью /work + модалка выбора.
+   Логика — `apps/web/app/work/operation-switcher.tsx`. */
+.operation-switcher__chip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  padding: 0.55rem 0.9rem;
+  background: var(--color-bg-muted, rgba(15, 23, 42, 0.05));
+  border: 1px solid rgba(15, 23, 42, 0.08);
+  border-radius: var(--radius-md, 10px);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.operation-switcher__chip:hover {
+  background: rgba(15, 23, 42, 0.08);
+}
+.operation-switcher__chip-label {
+  font-size: 0.95rem;
+  color: var(--color-fg-muted);
+}
+.operation-switcher__chip-label strong {
+  color: var(--color-fg);
+  font-weight: 700;
+  margin-left: 0.25rem;
+}
+.operation-switcher__chip-cta {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--color-primary, #2563eb);
+  white-space: nowrap;
+}
+.operation-switcher__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.operation-switcher__option {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.85rem 1rem;
+  background: #fff;
+  border: 1px solid rgba(15, 23, 42, 0.12);
+  border-radius: var(--radius-md, 10px);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.operation-switcher__option:hover:not(:disabled) {
+  border-color: var(--color-primary, #2563eb);
+  background: rgba(37, 99, 235, 0.05);
+}
+.operation-switcher__option:disabled {
+  cursor: default;
+}
+.operation-switcher__option.is-active {
+  background: rgba(15, 23, 42, 0.04);
+  border-color: rgba(15, 23, 42, 0.18);
+}
+.operation-switcher__option-name {
+  flex: 1 1 auto;
+  font-size: 1rem;
+  font-weight: 600;
+}
+.operation-switcher__option-code {
+  font-size: 0.78rem;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.operation-switcher__option-badge {
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--color-fg-muted);
+  border: 1px solid rgba(15, 23, 42, 0.15);
+  padding: 0.1rem 0.4rem;
+  border-radius: 999px;
+}
 /* Cutter-assistant /work теперь имеет два action-card одного уровня
    (см. `active-shift-panel.tsx` → `CutterAssistantWorkPanel`). На
    мобильном они идут вертикальной колонкой как и у швеи; gap 1rem

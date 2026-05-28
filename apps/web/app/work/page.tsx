@@ -18,6 +18,8 @@ import {
 import { SeamstressShiftStart } from './seamstress-shift-start';
 import { SeamstressActivePanel } from './seamstress-active-panel';
 import { SeamstressActionsMenu } from './seamstress-actions-menu';
+import { OperationSwitcher } from './operation-switcher';
+import { operationsForEquipment } from '@/lib/equipment-operations';
 
 export const dynamic = 'force-dynamic';
 
@@ -218,13 +220,28 @@ export default async function WorkPage() {
               loadCutIssueBannerSafely(currentShift!.operationId),
               loadMyReworkSafely(),
             ]);
+            // Список операций, разрешённых на оборудовании текущей
+            // смены. Если 2+ — `OperationSwitcher` отрендерит chip
+            // «Сменить операцию», иначе вернёт null (см. компонент).
+            const currentEquipment = meta.equipment.find(
+              (e) => e.id === currentShift!.equipmentId,
+            );
+            const availableOperations = currentEquipment
+              ? operationsForEquipment(currentEquipment, meta.operations)
+              : [];
             return (
-              <SeamstressActivePanel
-                shift={currentShift!}
-                currentWork={currentWork}
-                cutIssueBanner={cutIssueBanner}
-                myRework={myRework}
-              />
+              <>
+                <OperationSwitcher
+                  shift={currentShift!}
+                  availableOperations={availableOperations}
+                />
+                <SeamstressActivePanel
+                  shift={currentShift!}
+                  currentWork={currentWork}
+                  cutIssueBanner={cutIssueBanner}
+                  myRework={myRework}
+                />
+              </>
             );
           })()
         ) : (

@@ -27,6 +27,28 @@ export type StartShiftDto = z.infer<typeof StartShiftSchema>;
 export const StopShiftSchema = z.object({}).strict();
 export type StopShiftDto = z.infer<typeof StopShiftSchema>;
 
+/**
+ * Тело `POST /api/shifts/switch-operation` — переключение операции в
+ * активной смене без закрытия/открытия. Используется, когда у швеи на
+ * одном оборудовании разрешено несколько операций (например, «Распошив
+ * подгиб» и «Распошив рукава» на распошивальной машине), и она хочет
+ * перейти с одной на другую без потери смены.
+ *
+ * `employeeId` берётся из сессии. Backend требует, чтобы у сотрудника
+ * сейчас не было ни одного паспорта с `currentEmployeeId = me`
+ * (`SHIFT_HAS_ACTIVE_PASSPORTS`) — иначе при `complete` событие
+ * `OPERATION_FINISHED` записалось бы на новую операцию вместо той,
+ * на которой паспорт реально делался.
+ */
+export const SwitchShiftOperationSchema = z
+  .object({
+    operationId: z.string().min(1, 'operationId обязателен'),
+  })
+  .strict();
+export type SwitchShiftOperationDto = z.infer<
+  typeof SwitchShiftOperationSchema
+>;
+
 export interface ShiftSessionDto {
   id: string;
   employeeId: string;

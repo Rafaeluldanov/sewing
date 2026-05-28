@@ -15,6 +15,7 @@ import {
   OperationInactiveException,
   OperationNotFoundException,
   ShiftAlreadyActiveException,
+  ShiftHasActivePassportsException,
   ShiftNotActiveException,
   ShiftOperationNotAllowedForEquipmentException,
 } from '../../common/errors.js';
@@ -102,6 +103,86 @@ export class ShiftsService {
       }
       throw e;
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // SWITCH OPERATION (на активной смене)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Меняет `operationId` у активной смены сотрудника без stop/start.
+   *
+   * Сценарий: на одном оборудовании у швеи разрешено несколько операций
+   * (например, «Распошив подгиб» и «Распошив рукава» на распошивальной
+   * машине). Чтобы не закрывать и не открывать смену заново, она
+   * переключает операцию одним движением.
+   *
+   * Инварианты:
+   *   - активная смена должна существовать (`SHIFT_NOT_ACTIVE`);
+   *   - целевая операция активна (`OPERATION_INACTIVE`/`OPERATION_NOT_FOUND`);
+   *   - целевая операция входит в allow-list `EquipmentOperation` для
+   *     текущего оборудования смены
+   *     (`SHIFT_OPERATION_NOT_ALLOWED_FOR_EQUIPMENT`);
+   *   - у сотрудника не должно быть паспортов
+   *     `currentEmployeeId = me AND status = IN_PROGRESS`
+   *     (`SHIFT_HAS_ACTIVE_PASSPORTS`). Это критично: на завершении
+   *     операции `PassportsService.completeOperationByEmployee` берёт
+   *     `session.operationId` (а не `passport.currentOperationId`), и
+   *     если переключить смену прямо во время работы — паспорт «уехал
+   *     бы» на новую операцию в событии `OPERATION_FINISHED`.
+   *
+   * Идемпотентность: переключение на ту же операцию не пишет update,
+   * возвращает текущий DTO. Окладные начисления не зависят от
+   * `operationId`, поэтому `syncDailySalary` не вызываем.
+   */
+  async switchOperation(dto: {
+    employeeId: string;
+    operationId: string;
+  }): Promise<ShiftSessionDto> {
+    const current = await this.findActiveByEmployee(dto.employeeId);
+    if (!current) throw new ShiftNotActiveException();
+
+    // No-op: тот же operationId — просто отдаём текущий DTO.
+    if (current.operationId === dto.operationId) {
+      return this.toDto(current);
+    }
+
+    const operation = await this.prisma.operation.findUnique({
+      where: { id: dto.operationId },
+    });
+    if (!operation) throw new OperationNotFoundException();
+    if (!operation.active) throw new OperationInactiveException();
+
+    const allowed = await this.prisma.equipmentOperation.findFirst({
+      where: {
+        equipmentId: current.equipmentId,
+        operationId: dto.operationId,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+    if (!allowed) throw new ShiftOperationNotAllowedForEquipmentException();
+
+    // Защита от записи OPERATION_FINISHED на «не ту» операцию (см. JSDoc
+    // и `ShiftHasActivePassportsException`). Достаточно одного попадания.
+    const stuck = await this.prisma.passport.findFirst({
+      where: {
+        currentEmployeeId: dto.employeeId,
+        status: PassportStatus.IN_PROGRESS,
+      },
+      select: { id: true },
+    });
+    if (stuck) throw new ShiftHasActivePassportsException();
+
+    const updated = await this.prisma.shiftSession.update({
+      where: { id: current.id },
+      data: { operationId: dto.operationId },
+      include: { employee: true, equipment: true, operation: true },
+    });
+    this.logger.log(
+      `event=shift.switch-operation employeeId=${dto.employeeId} from=${current.operationId} to=${dto.operationId}`,
+    );
+    return this.toDto(updated);
   }
 
   // -------------------------------------------------------------------------

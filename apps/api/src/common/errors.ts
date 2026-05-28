@@ -834,6 +834,25 @@ export class ShiftOperationNotAllowedForEquipmentException extends BusinessExcep
   }
 }
 
+/**
+ * Сотрудник пытается сменить операцию в активной смене
+ * (`POST /api/shifts/switch-operation`), пока у него ещё есть паспорта
+ * `currentEmployeeId = me AND status = IN_PROGRESS`. Запрещено: если
+ * переключить операцию в этот момент, при `completeOperationByEmployee`
+ * событие `OPERATION_FINISHED` зафиксируется на НОВОЙ операции вместо
+ * той, на которой паспорт реально шился (см. использование
+ * `session.operationId` в `PassportsService.completeOperationByEmployee`).
+ */
+export class ShiftHasActivePassportsException extends BusinessException {
+  constructor() {
+    super(
+      'SHIFT_HAS_ACTIVE_PASSPORTS',
+      'Сначала завершите все паспорта на текущей операции — потом можно переключиться.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class PassportNotInCellException extends BusinessException {
   constructor() {
     super(
