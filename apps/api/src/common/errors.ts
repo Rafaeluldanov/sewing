@@ -1789,19 +1789,21 @@ export class MasterOrderHasNoRouteSnapshotException extends BusinessException {
 
 /**
  * Мастер пытается переместить паспорт назад по маршруту
- * (target step index < currentRouteStepIndex), но не указал ячейку
- * (`cellQr` / `cellId`). По инварианту из `docs/flows.md`
- * («Master rollback») любое откат-движение должно завершаться явным
- * placement-ом в ячейку — иначе паспорт «зависнет в воздухе» (no
- * employee, no cell), и это нельзя будет отличить от ошибки в БД.
+ * (target step index < currentRouteStepIndex), но не указал ни ячейку
+ * (`cellQr` / `cellId`), ни сотрудника (`employeeQr` / `employeeId`).
+ * По инварианту из `docs/flows.md` («Master rollback») любое
+ * откат-движение должно заканчиваться явным placement-ом: либо паспорт
+ * ложится в ячейку, либо передаётся «из рук в руки» конкретному
+ * сотруднику — иначе он зависнет «в воздухе» (no employee, no cell),
+ * и это нельзя будет отличить от ошибки в БД.
  *
  * Бросается из `MasterActionsService.setRouteStep`.
  */
-export class MasterBackwardRouteRequiresCellException extends BusinessException {
+export class MasterBackwardRouteRequiresPlacementException extends BusinessException {
   constructor() {
     super(
-      'MASTER_BACKWARD_ROUTE_REQUIRES_CELL',
-      'Откат паспорта назад по маршруту разрешён только с одновременным размещением в ячейку. Укажите cellQr или cellId.',
+      'MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT',
+      'Откат паспорта назад по маршруту разрешён только с одновременным placement-ом. Укажите либо ячейку (cellQr/cellId), либо сотрудника (employeeQr/employeeId).',
       HttpStatus.BAD_REQUEST,
     );
   }

@@ -2490,7 +2490,7 @@ before })` и пишут в `AuditLog` (`MASTER_PASSPORT_*`,
 | `unassign`            | `MasterActionsService.unassign`     | `currentEmployeeId = null`. `currentOperationId` / `currentRouteStepIndex` сохраняются.                                          | `MASTER_PASSPORT_UNASSIGNED` |
 | `transferToEmployee`  | `MasterActionsService.transferToEmployee` | `currentEmployeeId = target`, `currentCellId = null`, `status = IN_PROGRESS`. Если у target активная смена с операцией из snapshot — двигаем `currentRouteStepIndex` / `currentOperationId`. | `MASTER_PASSPORT_TRANSFERRED` |
 | `returnToCell`        | `MasterActionsService.returnToCell` | `currentCellId = cell.id`, `currentEmployeeId = null`. `WorkInProgressMovement` `RETURN` IN + инкремент `WorkInProgressBalance.qty`. Идемпотентно: `noop = true` если уже в этой ячейке (WIP-движение не создаётся). | `MASTER_PASSPORT_RETURNED_TO_CELL` |
-| `setRouteStep`        | `MasterActionsService.setRouteStep` | `currentOperationId = op.id`, `currentRouteStepIndex = idx`, `currentEmployeeId = null`, `status = IN_PROGRESS`. **Forward**: `currentCellId = null`. **Backward**: обязательно требуется placement в ячейку (`MASTER_BACKWARD_ROUTE_REQUIRES_CELL` если нет cellQr/cellId), `currentCellId = cell.id`, `WorkInProgressMovement` `RETURN` IN + инкремент баланса. | `MASTER_PASSPORT_ROUTE_STEP_SET` (`payload: { direction: 'FORWARD' | 'BACKWARD', requiredCellPlacement: bool, cellId? }`) |
+| `setRouteStep`        | `MasterActionsService.setRouteStep` | `currentOperationId = op.id`, `currentRouteStepIndex = idx`, `status = IN_PROGRESS`. **Forward**: `currentEmployeeId = null`, `currentCellId = null`. **Backward**: обязателен ОДИН из placement'ов: ячейка (`currentCellId = cell.id`, `currentEmployeeId = null`, `WorkInProgressMovement` `RETURN` IN + инкремент баланса) либо сотрудник «из рук в руки» (`currentEmployeeId = target.id`, `currentCellId = null`, WIP не двигаем). Без placement'а — `MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT`. | `MASTER_PASSPORT_ROUTE_STEP_SET` (`payload: { direction: 'FORWARD' | 'BACKWARD', placement: 'CELL' | 'EMPLOYEE' | null, requiredCellPlacement?: true, cellId?, targetEmployeeId? }`) |
 
 Каждое действие требует обязательного `reason` (Zod-enum
 `MASTER_ACTION_REASONS = WRONG_SCAN | SHIFT_HANDOVER |
@@ -2512,7 +2512,10 @@ target-метаданные (`targetEmployeeId`, `cellId`/`cellCode`,
   `OrderRouteStep` заказа (`MASTER_ROUTE_STEP_NOT_IN_SNAPSHOT`);
   если у заказа snapshot нет — `MASTER_ORDER_HAS_NO_ROUTE_SNAPSHOT`.
 - `setRouteStep` назад без placement —
-  `MASTER_BACKWARD_ROUTE_REQUIRES_CELL` (400).
+  `MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT` (400). Допускаются два
+  placement'а на выбор: ячейка (`cellQr`/`cellId`) или сотрудник
+  (`employeeQr`/`employeeId`); указать оба сразу нельзя
+  (Zod-`VALIDATION_ERROR`).
 - `transferToEmployee` запрещён для несуществующего/неактивного
   target (`MASTER_TARGET_EMPLOYEE_NOT_FOUND`/`_INACTIVE`).
 - `returnToCell` запрещён для несуществующей/неактивной ячейки

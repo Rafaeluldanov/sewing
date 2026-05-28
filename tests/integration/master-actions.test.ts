@@ -380,13 +380,13 @@ describeWithDb('integration — master actions (Stage 2)', () => {
   // 4b. SET ROUTE STEP — backward движения (rollback) и required cell
   // -------------------------------------------------------------------------
 
-  test('set-route-step backward без cell → 400 MASTER_BACKWARD_ROUTE_REQUIRES_CELL', async () => {
+  test('set-route-step backward без placement → 400 MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT', async () => {
     // Паспорт стоит на шаге 2 (SEW_OVERLOCK_2), мастер пытается
-    // откатить на шаг 0 (CUT_DIVISION) без указания ячейки. По
-    // инварианту «нет тихого rollback» backend обязан отказать
-    // с понятным кодом ошибки до открытия транзакции — иначе
-    // паспорт окажется «в воздухе» (no employee + no cell), и это
-    // нельзя будет отличить от ошибки в БД.
+    // откатить на шаг 0 (CUT_DIVISION) без указания ни ячейки, ни
+    // сотрудника. По инварианту «нет тихого rollback» backend обязан
+    // отказать с понятным кодом ошибки до открытия транзакции —
+    // иначе паспорт окажется «в воздухе» (no employee + no cell),
+    // и это нельзя будет отличить от ошибки в БД.
     const { passportId } = await setupPassport({
       currentRouteStepIndex: 2,
       currentOperationCode: 'SEW_OVERLOCK_2',
@@ -397,7 +397,7 @@ describeWithDb('integration — master actions (Stage 2)', () => {
       .set('Cookie', cookies.master)
       .send({ reason: 'ROUTE_CORRECTION', routeStepIndex: 0 })
       .expect(400);
-    expect(res.body?.code).toBe('MASTER_BACKWARD_ROUTE_REQUIRES_CELL');
+    expect(res.body?.code).toBe('MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT');
 
     // Состояние паспорта не должно поменяться, audit-лог тоже не пишется
     // (проверка происходит до транзакции).
@@ -409,6 +409,27 @@ describeWithDb('integration — master actions (Stage 2)', () => {
       where: { entityType: 'PASSPORT', entityId: passportId },
     });
     expect(audits).toHaveLength(0);
+  });
+
+  test('set-route-step backward с cell И employee одновременно → 400 VALIDATION_ERROR', async () => {
+    // DTO-инвариант: оба placement'а сразу — противоречие («либо в
+    // ячейке, либо на человеке»). Zod refine отсекает ещё до сервиса.
+    const { passportId } = await setupPassport({
+      currentRouteStepIndex: 2,
+      currentOperationCode: 'SEW_OVERLOCK_2',
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/set-route-step`)
+      .set('Cookie', cookies.master)
+      .send({
+        reason: 'ROUTE_CORRECTION',
+        routeStepIndex: 0,
+        cellQr: seed.cells.A1.qrCode,
+        employeeQr: `EMPLOYEE:${seed.employees.seamstress.id}`,
+      })
+      .expect(400);
+    expect(res.body?.code).toBe('VALIDATION_ERROR');
   });
 
   test('set-route-step backward с cell: размещает в ячейку и пишет direction=BACKWARD', async () => {
@@ -475,6 +496,114 @@ describeWithDb('integration — master actions (Stage 2)', () => {
     expect(payload.cellId).toBe(cell.id);
     expect(payload.before.currentRouteStepIndex).toBe(2);
     expect(payload.after.currentRouteStepIndex).toBe(0);
+  });
+
+  test('set-route-step backward с employee: «из рук в руки», без ячейки и без WIP', async () => {
+    // Сценарий из жизни: паспорт ушёл на ВТО (idx=2), там заметили
+    // брак, ВТО физически отдаёт паспорт ОТК (idx=3 в нашем seed
+    // нет — берём idx=0 как любой более ранний шаг для backward).
+    // Мастер сканирует QR сотрудника-получателя → паспорт сразу
+    // садится на него, минуя ячейку. WIP-баланс не двигается
+    // (физически паспорт у человека, в ячейках его нет).
+    const target = await t.prisma.employee.create({
+      data: {
+        login: 'qc-target',
+        fullName: 'QC Target',
+        role: 'SEAMSTRESS',
+        active: true,
+        pinHash: '$2a$04$abcdefghijklmnopqrstuv',
+      },
+    });
+    const { passportId } = await setupPassport({
+      qtyCut: 5,
+      currentRouteStepIndex: 2,
+      currentOperationCode: 'SEW_OVERLOCK_2',
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/set-route-step`)
+      .set('Cookie', cookies.master)
+      .send({
+        reason: 'ROUTE_CORRECTION',
+        routeStepIndex: 0,
+        employeeQr: `EMPLOYEE:${target.id}`,
+      })
+      .expect(201);
+
+    expect(res.body.passport.currentRouteStepIndex).toBe(0);
+    expect(res.body.passport.currentOperation?.id).toBe(
+      seed.operations.CUT_DIVISION.id,
+    );
+    expect(res.body.passport.currentEmployeeId).toBe(target.id);
+    expect(res.body.passport.currentCell).toBeNull();
+
+    const inDb = await t.prisma.passport.findUnique({
+      where: { id: passportId },
+    });
+    expect(inDb?.currentRouteStepIndex).toBe(0);
+    expect(inDb?.currentEmployeeId).toBe(target.id);
+    expect(inDb?.currentCellId).toBeNull();
+    expect(inDb?.status).toBe('IN_PROGRESS');
+
+    // WIP не трогается на backward+employee — паспорт не в ячейке.
+    const wipBalance = await t.prisma.workInProgressBalance.findFirst({
+      where: { sizeId: seed.sizes.M },
+    });
+    expect(wipBalance).toBeNull();
+
+    const audits = await t.prisma.auditLog.findMany({
+      where: { entityType: 'PASSPORT', entityId: passportId },
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.event).toBe('MASTER_PASSPORT_ROUTE_STEP_SET');
+    const payload = audits[0]!.payload as {
+      direction?: string;
+      placement?: string;
+      requiredCellPlacement?: boolean;
+      cellId?: string;
+      targetEmployeeId?: string;
+    };
+    expect(payload.direction).toBe('BACKWARD');
+    expect(payload.placement).toBe('EMPLOYEE');
+    // requiredCellPlacement пишется только если placement = CELL —
+    // auditPayload не сериализует falsy значения. На backward+employee
+    // это поле должно отсутствовать.
+    expect(payload.requiredCellPlacement).toBeUndefined();
+    expect(payload.cellId).toBeUndefined();
+    expect(payload.targetEmployeeId).toBe(target.id);
+  });
+
+  test('set-route-step backward с employee: target деактивирован → 409 TARGET_EMPLOYEE_INACTIVE', async () => {
+    const target = await t.prisma.employee.create({
+      data: {
+        login: 'qc-inactive',
+        fullName: 'QC Inactive',
+        role: 'SEAMSTRESS',
+        active: false,
+        pinHash: '$2a$04$abcdefghijklmnopqrstuv',
+      },
+    });
+    const { passportId } = await setupPassport({
+      currentRouteStepIndex: 2,
+      currentOperationCode: 'SEW_OVERLOCK_2',
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/set-route-step`)
+      .set('Cookie', cookies.master)
+      .send({
+        reason: 'ROUTE_CORRECTION',
+        routeStepIndex: 0,
+        employeeId: target.id,
+      })
+      .expect(409);
+    expect(res.body?.code).toBe('TARGET_EMPLOYEE_INACTIVE');
+
+    // Состояние не поменялось — проверка до транзакции.
+    const inDb = await t.prisma.passport.findUnique({
+      where: { id: passportId },
+    });
+    expect(inDb?.currentRouteStepIndex).toBe(2);
   });
 
   test('set-route-step forward с placement не обязателен (FORWARD-направление)', async () => {

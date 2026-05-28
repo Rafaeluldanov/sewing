@@ -187,11 +187,19 @@ export type ReturnPassportToCellDto = z.infer<
  *
  * **Backward-движение** (target.index < currentRouteStepIndex): по
  * инварианту «нет тихого rollback» (см. `docs/flows.md
- * §«F-Master rollback»`) обязательно требуется размещение в ячейку
- * (`cellQr` или `cellId`). Иначе backend отвечает 400
- * `MASTER_BACKWARD_ROUTE_REQUIRES_CELL`. После применения паспорт
- * оказывается в указанной ячейке (`currentCellId = cell.id`,
- * `CellContent` увеличивается на `qtyCut`), `currentEmployeeId = null`.
+ * §«F-Master rollback»`) паспорт обязан попасть в идентифицируемое
+ * место. Допускается ОДИН из двух placement'ов:
+ *   - **ячейка** (`cellQr` / `cellId`) — паспорт ложится в ячейку,
+ *     `CellContent` увеличивается на `qtyCut`, `currentEmployeeId = null`;
+ *   - **сотрудник** (`employeeQr` / `employeeId`) — паспорт сразу
+ *     передаётся «из рук в руки» (например, ВТО заметил брак и тут же
+ *     отдал ОТК); `currentEmployeeId = employee.id`, `currentCellId = null`,
+ *     ячейка не нужна.
+ *
+ * Без любого из двух placement'ов backend отвечает 400
+ * `MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT`. Указывать одновременно
+ * cell и employee нельзя — это противоречит «либо в ячейке, либо на
+ * человеке».
  */
 export const SetRouteStepSchema = z
   .object({
@@ -199,12 +207,25 @@ export const SetRouteStepSchema = z
     routeStepIndex: z.number().int().min(0).max(1000).optional(),
     operationId: z.string().trim().min(1).max(64).optional(),
     ...CellTargetFields,
+    ...EmployeeTargetFields,
   })
   .refine(
     (v) => v.routeStepIndex !== undefined || Boolean(v.operationId),
     {
       message: 'Передайте routeStepIndex или operationId',
       path: ['routeStepIndex'],
+    },
+  )
+  .refine(
+    (v) => {
+      const hasCell = Boolean(v.cellQr || v.cellId);
+      const hasEmployee = Boolean(v.employeeQr || v.employeeId);
+      return !(hasCell && hasEmployee);
+    },
+    {
+      message:
+        'Укажите либо ячейку (cellQr/cellId), либо сотрудника (employeeQr/employeeId), но не оба сразу',
+      path: ['employeeQr'],
     },
   );
 export type SetRouteStepDto = z.infer<typeof SetRouteStepSchema>;

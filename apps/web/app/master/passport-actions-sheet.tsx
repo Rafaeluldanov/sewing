@@ -72,7 +72,7 @@ const ACTION_HINTS: Record<ActionId, string> = {
   returnToCell:
     'Вернуть паспорт в ячейку. CellContent увеличится на qtyCut. Используйте, если паспорт ошибочно выдан.',
   setRouteStep:
-    'Перевести паспорт на конкретный шаг маршрута заказа. Текущий владелец сбросится.',
+    'Перевести паспорт на конкретный шаг маршрута заказа. На откат назад потребуется указать, куда положить паспорт: сотруднику «из рук в руки» или в ячейку.',
 };
 
 export function PassportActionsSheet({
@@ -215,15 +215,44 @@ function ActionBody({
   const [routeStepIndex, setRouteStepIndex] = useState<number | ''>(
     passport.currentRouteStepIndex ?? '',
   );
+  // Placement выбирается только при backward-движении в setRouteStep:
+  // паспорт обязан куда-то приземлиться (ячейка ИЛИ сотрудник).
+  // По умолчанию 'employee' — «из рук в руки» это типичный сценарий
+  // (ВТО заметил брак → тут же отдал ОТК), без беготни до ячейки.
+  const [backwardPlacement, setBackwardPlacement] = useState<
+    'employee' | 'cell'
+  >('employee');
   const [scanner, setScanner] = useState<null | 'employee' | 'cell'>(null);
+
+  // currentRouteStepIndex может быть null (новый паспорт). Тогда отката
+  // нет — всё forward. Backward = выбран шаг строго раньше текущего.
+  const currentIdx = passport.currentRouteStepIndex ?? 0;
+  const isBackward =
+    action === 'setRouteStep' &&
+    typeof routeStepIndex === 'number' &&
+    routeStepIndex < currentIdx;
 
   const canConfirm = useMemo(() => {
     if (!reason) return false;
     if (action === 'transfer') return employeeQr.trim().length > 0;
     if (action === 'returnToCell') return cellQr.trim().length > 0;
-    if (action === 'setRouteStep') return routeStepIndex !== '';
+    if (action === 'setRouteStep') {
+      if (routeStepIndex === '') return false;
+      if (!isBackward) return true;
+      return backwardPlacement === 'employee'
+        ? employeeQr.trim().length > 0
+        : cellQr.trim().length > 0;
+    }
     return true;
-  }, [action, reason, employeeQr, cellQr, routeStepIndex]);
+  }, [
+    action,
+    reason,
+    employeeQr,
+    cellQr,
+    routeStepIndex,
+    isBackward,
+    backwardPlacement,
+  ]);
 
   const handleScan = useCallback(
     (decoded: string) => {
@@ -269,11 +298,21 @@ function ActionBody({
           cellQr: cellQr.trim(),
         });
       } else {
+        // Backward требует placement (ячейка ИЛИ сотрудник); forward
+        // placement не передаёт — backend по дизайну на forward
+        // никого не «привязывает», паспорт уходит «в воздух».
+        const placement =
+          isBackward && backwardPlacement === 'employee'
+            ? { employeeQr: employeeQr.trim() }
+            : isBackward && backwardPlacement === 'cell'
+              ? { cellQr: cellQr.trim() }
+              : {};
         res = await masterSetRouteStepAction(passport.id, {
           reason,
           comment: comment.trim() ? comment.trim() : undefined,
           routeStepIndex:
             typeof routeStepIndex === 'number' ? routeStepIndex : undefined,
+          ...placement,
         });
       }
     } finally {
@@ -287,11 +326,13 @@ function ActionBody({
     }
   }, [
     action,
+    backwardPlacement,
     busy,
     canConfirm,
     cellQr,
     comment,
     employeeQr,
+    isBackward,
     onClose,
     onError,
     onSuccess,
@@ -390,6 +431,76 @@ function ActionBody({
                 );
               })}
             </ul>
+          )}
+        </div>
+      )}
+
+      {/* Backward-движение по маршруту: паспорт обязан куда-то
+          приземлиться. Даём выбор «из рук в руки» (сотруднику) или
+          «в ячейку» — backend принимает один из двух. Скрыто на
+          forward, чтобы не путать. */}
+      {action === 'setRouteStep' && isBackward && (
+        <div className="master-actions-sheet__field">
+          <label className="master-actions-sheet__label">
+            Куда положить (возврат назад){' '}
+            <span className="master-actions-sheet__required">*</span>
+          </label>
+          <div className="master-actions-sheet__placement">
+            <label className="master-actions-sheet__placement-option">
+              <input
+                type="radio"
+                name="backwardPlacement"
+                value="employee"
+                checked={backwardPlacement === 'employee'}
+                onChange={() => setBackwardPlacement('employee')}
+              />
+              <span>Передать сотруднику (из рук в руки)</span>
+            </label>
+            <label className="master-actions-sheet__placement-option">
+              <input
+                type="radio"
+                name="backwardPlacement"
+                value="cell"
+                checked={backwardPlacement === 'cell'}
+                onChange={() => setBackwardPlacement('cell')}
+              />
+              <span>Положить в ячейку</span>
+            </label>
+          </div>
+          {backwardPlacement === 'employee' ? (
+            <div className="master-actions-sheet__row">
+              <input
+                type="text"
+                className="master-actions-sheet__input"
+                placeholder="EMPLOYEE:<id>"
+                value={employeeQr}
+                onChange={(e) => setEmployeeQr(e.target.value)}
+              />
+              <button
+                type="button"
+                className="master-actions-sheet__scan"
+                onClick={() => setScanner('employee')}
+              >
+                Сканировать QR
+              </button>
+            </div>
+          ) : (
+            <div className="master-actions-sheet__row">
+              <input
+                type="text"
+                className="master-actions-sheet__input"
+                placeholder="cell:<id> или код ячейки"
+                value={cellQr}
+                onChange={(e) => setCellQr(e.target.value)}
+              />
+              <button
+                type="button"
+                className="master-actions-sheet__scan"
+                onClick={() => setScanner('cell')}
+              >
+                Сканировать QR
+              </button>
+            </div>
           )}
         </div>
       )}

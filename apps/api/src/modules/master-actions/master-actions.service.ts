@@ -27,7 +27,7 @@ import { WorkInProgressService } from '../work-in-progress/work-in-progress.serv
 import {
   CellInactiveException,
   CellNotFoundException,
-  MasterBackwardRouteRequiresCellException,
+  MasterBackwardRouteRequiresPlacementException,
   MasterOrderHasNoRouteSnapshotException,
   MasterRouteStepNotInSnapshotException,
   MasterTargetEmployeeInactiveException,
@@ -346,17 +346,26 @@ export class MasterActionsService {
    * **Forward-движение** (target.index ≥ currentRouteStepIndex):
    * `currentEmployeeId = null`, `currentCellId = null` — паспорт уходит
    * «в воздух» и следующий сотрудник перехватит его штатным `scan` /
-   * `issue`.
+   * `issue`. Поля placement'а (`cellQr` / `employeeQr`) для forward
+   * игнорируются — на forward по дизайну никого не «привязываем».
    *
    * **Backward-движение** (target.index < currentRouteStepIndex): по
    * инварианту «нет тихого rollback» (см. `docs/flows.md
-   * §«F-Master rollback»`) обязательно требуется placement в ячейку
-   * (`cellQr` / `cellId`), иначе backend отвечает 400
-   * `MASTER_BACKWARD_ROUTE_REQUIRES_CELL`. Паспорт оказывается в
-   * указанной ячейке, `CellContent[size] += qtyCut`. Audit-payload
-   * содержит `direction: 'BACKWARD'`, `requiredCellPlacement: true`
-   * и `cellId` — этого достаточно, чтобы любая ретроспектива видела
-   * «кто, когда, откуда, куда, и куда положил».
+   * §«F-Master rollback»`) паспорт обязан попасть в идентифицируемое
+   * место. Допускается ОДИН из двух placement'ов:
+   *
+   *   - **ячейка** (`cellQr` / `cellId`) — паспорт ложится в ячейку,
+   *     `CellContent[size] += qtyCut`, `currentEmployeeId = null`.
+   *     Audit `placement: 'CELL'`, `cellId`/`cellCode`;
+   *   - **сотрудник** (`employeeQr` / `employeeId`) — паспорт уходит
+   *     «из рук в руки» (например, ВТО заметил брак и тут же отдал
+   *     ОТК): `currentEmployeeId = employee.id`, `currentCellId = null`,
+   *     WIP-движений нет (физически паспорт у человека, не в ячейке).
+   *     Audit `placement: 'EMPLOYEE'`, `targetEmployeeId`.
+   *
+   * Без любого из placement'ов — 400 `MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT`,
+   * чтобы паспорт не «зависал в воздухе» (no employee, no cell). Указать
+   * оба placement'а одновременно нельзя — Zod ловит на уровне DTO.
    */
   async setRouteStep(
     actor: AuthPrincipal,
@@ -423,28 +432,59 @@ export class MasterActionsService {
     const currentIdx = passport.currentRouteStepIndex ?? 0;
     const isBackward = target.index < currentIdx;
 
-    // Backward без placement → 400. Эта проверка идёт до открытия
-    // транзакции, чтобы не плодить пустые audit-логи.
+    // Backward требует placement: либо ячейка, либо сотрудник. Проверка
+    // идёт до открытия транзакции, чтобы не плодить пустые audit-логи.
+    // Zod уже отсёк «оба сразу», тут страхуемся ещё раз (и для типов).
+    const hasCellHint =
+      Boolean(dto.cellId && dto.cellId.length > 0) ||
+      Boolean(dto.cellQr && dto.cellQr.length > 0);
+    const hasEmployeeHint =
+      Boolean(dto.employeeId && dto.employeeId.length > 0) ||
+      Boolean(dto.employeeQr && dto.employeeQr.length > 0);
+
     let cell: {
       id: string;
       code: string;
       active: boolean;
       warehouseId: string | null;
     } | null = null;
+    let targetEmployee: { id: string; fullName: string } | null = null;
+
     if (isBackward) {
-      const hasCellHint =
-        Boolean(dto.cellId && dto.cellId.length > 0) ||
-        Boolean(dto.cellQr && dto.cellQr.length > 0);
-      if (!hasCellHint) {
-        throw new MasterBackwardRouteRequiresCellException();
+      if (!hasCellHint && !hasEmployeeHint) {
+        throw new MasterBackwardRouteRequiresPlacementException();
       }
-      cell = await this.resolveCell({ cellQr: dto.cellQr, cellId: dto.cellId });
-      if (!cell.active) throw new CellInactiveException();
+      if (hasEmployeeHint) {
+        // «Из рук в руки»: паспорт сразу садится на этого сотрудника
+        // на target-шаге. WIP не трогаем — физически он у человека.
+        const employeeId = await this.resolveEmployeeId({
+          employeeId: dto.employeeId,
+          employeeQr: dto.employeeQr,
+        });
+        const row = await this.prisma.employee.findUnique({
+          where: { id: employeeId },
+          select: { id: true, fullName: true, active: true },
+        });
+        if (!row) throw new MasterTargetEmployeeNotFoundException();
+        if (!row.active) throw new MasterTargetEmployeeInactiveException();
+        targetEmployee = { id: row.id, fullName: row.fullName };
+      } else {
+        cell = await this.resolveCell({
+          cellQr: dto.cellQr,
+          cellId: dto.cellId,
+        });
+        if (!cell.active) throw new CellInactiveException();
+      }
     }
 
     const before = this.snapshot(passport);
     const alreadyInThisCell =
       cell !== null && passport.currentCellId === cell.id;
+    const placement: 'CELL' | 'EMPLOYEE' | null = cell
+      ? 'CELL'
+      : targetEmployee
+        ? 'EMPLOYEE'
+        : null;
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const next = await tx.passport.update({
@@ -452,7 +492,7 @@ export class MasterActionsService {
         data: {
           currentOperationId: target!.operationId,
           currentRouteStepIndex: target!.index,
-          currentEmployeeId: null,
+          currentEmployeeId: targetEmployee ? targetEmployee.id : null,
           currentCellId: cell ? cell.id : null,
           status: PassportStatus.IN_PROGRESS,
         },
@@ -472,16 +512,21 @@ export class MasterActionsService {
             operationId: target!.operationId,
             routeStepIndex: target!.index,
             direction: isBackward ? 'BACKWARD' : 'FORWARD',
-            requiredCellPlacement: isBackward,
+            // requiredCellPlacement сохраняем для обратной совместимости
+            // (старые ретроспективы фильтруют по нему). Новое поле
+            // placement выражает выбор точнее: 'CELL' | 'EMPLOYEE' | null.
+            requiredCellPlacement: isBackward && placement === 'CELL',
+            placement,
             cellId: cell?.id,
             cellCode: cell?.code,
+            targetEmployeeId: targetEmployee?.id,
           }),
         },
         tx,
       );
       // Foundation полуфабриката: backward + cell = тот же return-in-cell
-      // паттерн, что и в `returnToCell`. Для forward / backward без
-      // cell-hint'а WIP не трогаем (паспорт уходит без размещения).
+      // паттерн, что и в `returnToCell`. Для forward / backward+employee
+      // WIP не трогаем — паспорт не оседает в ячейке.
       if (cell && !alreadyInThisCell && audit) {
         await this.workInProgress.recordReturnInTx(tx, {
           passport: {
@@ -501,7 +546,7 @@ export class MasterActionsService {
     });
 
     this.logger.log(
-      `event=master.setRouteStep passportId=${passportId} actor=${actor.employeeId} routeStepIndex=${target!.index} operationId=${target!.operationId} direction=${isBackward ? 'BACKWARD' : 'FORWARD'}${cell ? ` cellId=${cell.id}` : ''} reason=${dto.reason}`,
+      `event=master.setRouteStep passportId=${passportId} actor=${actor.employeeId} routeStepIndex=${target!.index} operationId=${target!.operationId} direction=${isBackward ? 'BACKWARD' : 'FORWARD'}${cell ? ` cellId=${cell.id}` : ''}${targetEmployee ? ` targetEmployeeId=${targetEmployee.id}` : ''} reason=${dto.reason}`,
     );
     return {
       passport: this.snapshot(updated),
@@ -624,7 +669,10 @@ export class MasterActionsService {
     }
   }
 
-  private async resolveEmployeeId(dto: TransferPassportDto): Promise<string> {
+  private async resolveEmployeeId(dto: {
+    employeeId?: string;
+    employeeQr?: string;
+  }): Promise<string> {
     if (dto.employeeId) return dto.employeeId;
     const fromQr = parseEmployeeQr(dto.employeeQr ?? '');
     if (!fromQr) {
@@ -711,6 +759,7 @@ export class MasterActionsService {
     noop?: boolean;
     direction?: 'FORWARD' | 'BACKWARD';
     requiredCellPlacement?: boolean;
+    placement?: 'CELL' | 'EMPLOYEE' | null;
   }): Prisma.InputJsonValue {
     const compact = (s: MasterActionPassportSnapshotDto) => ({
       currentEmployeeId: s.currentEmployeeId,
@@ -736,6 +785,7 @@ export class MasterActionsService {
     if (input.noop) payload.noop = true;
     if (input.direction) payload.direction = input.direction;
     if (input.requiredCellPlacement) payload.requiredCellPlacement = true;
+    if (input.placement) payload.placement = input.placement;
     return payload as Prisma.InputJsonValue;
   }
 }

@@ -267,7 +267,7 @@ describeWithDb('integration — passports.operation-finished block', () => {
     // Паспорт на SEW_OVERLOCK_2 (idx=2), SEW_OVERLOCK_1 уже завершена.
     // Мастер пытается откатить паспорт обратно на SEW_OVERLOCK_1 (с
     // указанием ячейки, чтобы не сработала прошлая защита
-    // MASTER_BACKWARD_ROUTE_REQUIRES_CELL).
+    // MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT).
     const cell = seed.cells.A1;
     const { passportId } = await setup({
       currentOperationCode: 'SEW_OVERLOCK_2',
