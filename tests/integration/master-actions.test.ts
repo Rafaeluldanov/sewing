@@ -573,6 +573,131 @@ describeWithDb('integration — master actions (Stage 2)', () => {
     expect(payload.targetEmployeeId).toBe(target.id);
   });
 
+  test('set-route-step backward+employee на завершённый шаг: переоткрывает гейт и садит на сотрудника', async () => {
+    // Семантика как в продакшен-кейсе «ОТК выпустил, ВТО нашёл брак»,
+    // но в seed-маршруте QC стоит ПОСЛЕ всех SEW, поэтому моделируем
+    // эквивалент на SEW-шагах: паспорт на QC (idx=3), на
+    // SEW_OVERLOCK_2 (idx=2) уже OPERATION_FINISHED, мастер
+    // возвращает на SEW_OVERLOCK_2 к новому сотруднику. Это то же
+    // backward на завершённую операцию — проверяем механику:
+    //   1) 201, паспорт на target у target-сотрудника,
+    //   2) автоматически записан OPERATION_REWORK_OPENED на target,
+    //   3) audit содержит reopenedFinishedTarget + previousFinisherEmployeeId.
+    const previousFinisher = seed.employees.seamstress;
+    const target = await t.prisma.employee.create({
+      data: {
+        login: 'recheck-target',
+        fullName: 'Перепроверяющий',
+        role: 'SEAMSTRESS',
+        active: true,
+        pinHash: '$2a$04$abcdefghijklmnopqrstuv',
+      },
+    });
+    const { passportId } = await setupPassport({
+      qtyCut: 6,
+      currentRouteStepIndex: 3,
+      currentOperationCode: 'QC',
+    });
+    // OPERATION_FINISHED на SEW_OVERLOCK_2 (idx=2) — операция, на
+    // которую возвращаем.
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId,
+        type: 'OPERATION_FINISHED',
+        operationId: seed.operations.SEW_OVERLOCK_2.id,
+        employeeId: previousFinisher.id,
+        qty: 6,
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/set-route-step`)
+      .set('Cookie', cookies.master)
+      .send({
+        reason: 'ROUTE_CORRECTION',
+        comment: 'нашли брак после выпуска',
+        routeStepIndex: 2,
+        employeeQr: `EMPLOYEE:${target.id}`,
+      })
+      .expect(201);
+
+    expect(res.body.passport.currentRouteStepIndex).toBe(2);
+    expect(res.body.passport.currentOperation?.id).toBe(
+      seed.operations.SEW_OVERLOCK_2.id,
+    );
+    expect(res.body.passport.currentEmployeeId).toBe(target.id);
+    expect(res.body.passport.currentCell).toBeNull();
+    expect(res.body.passport.status).toBe('IN_PROGRESS');
+
+    // OPERATION_REWORK_OPENED на target — гейт переоткрыт. employeeId
+    // события — previous финишёр (нужно для секции «К переделке» в UI
+    // и последующего revoke pending при настоящей переделке).
+    const rework = await t.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        type: 'OPERATION_REWORK_OPENED',
+        operationId: seed.operations.SEW_OVERLOCK_2.id,
+      },
+    });
+    expect(rework).toHaveLength(1);
+    expect(rework[0]!.employeeId).toBe(previousFinisher.id);
+    expect(rework[0]!.qty).toBe(6);
+
+    // Audit-payload подсвечивает re-open.
+    const audits = await t.prisma.auditLog.findMany({
+      where: { entityType: 'PASSPORT', entityId: passportId },
+    });
+    expect(audits).toHaveLength(1);
+    expect(audits[0]!.event).toBe('MASTER_PASSPORT_ROUTE_STEP_SET');
+    const payload = audits[0]!.payload as {
+      direction?: string;
+      placement?: string;
+      reopenedFinishedTarget?: boolean;
+      previousFinisherEmployeeId?: string;
+      targetEmployeeId?: string;
+    };
+    expect(payload.direction).toBe('BACKWARD');
+    expect(payload.placement).toBe('EMPLOYEE');
+    expect(payload.reopenedFinishedTarget).toBe(true);
+    expect(payload.previousFinisherEmployeeId).toBe(previousFinisher.id);
+    expect(payload.targetEmployeeId).toBe(target.id);
+  });
+
+  test('set-route-step FORWARD на завершённую op остаётся заблокирован 409', async () => {
+    // Контр-кейс к переоткрытию: forward (same-idx тоже считается
+    // не-backward) на завершённую операцию — блок сохраняется. Мастер
+    // не должен иметь возможность «пройти» по уже закрытой операции
+    // повторно вперёд: это противоречит инварианту «оплата за изделие
+    // — один раз».
+    const { passportId } = await setupPassport({
+      currentRouteStepIndex: 1,
+      currentOperationCode: 'SEW_OVERLOCK_1',
+    });
+    await t.prisma.passportEvent.create({
+      data: {
+        passportId,
+        type: 'OPERATION_FINISHED',
+        operationId: seed.operations.SEW_OVERLOCK_2.id,
+        employeeId: seed.employees.seamstress.id,
+        qty: 5,
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/passports/${passportId}/set-route-step`)
+      .set('Cookie', cookies.master)
+      .send({ reason: 'ROUTE_CORRECTION', routeStepIndex: 2 })
+      .expect(409);
+    expect(res.body?.code).toBe('MASTER_TARGET_OPERATION_ALREADY_FINISHED');
+
+    // OPERATION_REWORK_OPENED НЕ должен появиться — мы не давали
+    // переоткрывать на forward.
+    const rework = await t.prisma.passportEvent.findMany({
+      where: { passportId, type: 'OPERATION_REWORK_OPENED' },
+    });
+    expect(rework).toHaveLength(0);
+  });
+
   test('set-route-step backward с employee: target деактивирован → 409 TARGET_EMPLOYEE_INACTIVE', async () => {
     const target = await t.prisma.employee.create({
       data: {

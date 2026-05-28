@@ -1,6 +1,7 @@
 /**
  * Integration-тесты бизнес-правила «операция по паспорту, у которой
- * уже есть `OPERATION_FINISHED`, считается закрытой безвозвратно».
+ * уже есть `OPERATION_FINISHED`, считается закрытой безвозвратно»
+ * (с одним исключением для мастера, см. C).
  *
  * Покрываем:
  *   A. `POST /api/passports/:id/issue` → 409 `PASSPORT_OPERATION_ALREADY_FINISHED`,
@@ -10,10 +11,13 @@
  *      `PASSPORT_OPERATION_ALREADY_FINISHED` (defense-in-depth: обычно
  *      сюда не дойти, так как issue уже заблокирован, но прямой вызов
  *      по «застрявшему» state должен падать).
- *   C. `POST /api/master-actions/passports/:id/set-route-step` → 409
- *      `MASTER_TARGET_OPERATION_ALREADY_FINISHED`, когда мастер
- *      пытается вернуть паспорт на операцию с `OPERATION_FINISHED`
- *      (как backward, так и forward на ту же операцию).
+ *   C. `POST /api/master-actions/passports/:id/set-route-step`:
+ *      - **backward** на завершённую операцию (типовой кейс «ВТО нашёл
+ *        брак после выпуска ОТК») разрешён и автоматически переоткрывает
+ *        гейт (`OPERATION_REWORK_OPENED` на target);
+ *      - **forward / same-idx** на завершённую остаются заблокированы
+ *        `MASTER_TARGET_OPERATION_ALREADY_FINISHED` — повторно «пройти»
+ *        вперёд по уже закрытой операции мастер не может.
  *
  * Фон: см. инцидент 09.05.2026 (тех. долг — 60+ дубль-выдач у трёх швей
  * на ОВР/ФУЛ; данные расчищены вручную, защита введена этой задачей).
@@ -260,14 +264,18 @@ describeWithDb('integration — passports.operation-finished block', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // C. master.setRouteStep блокируется
+  // C. master.setRouteStep: backward переоткрывает, forward блокируется
   // ---------------------------------------------------------------------------
 
-  test('C. master setRouteStep backward на завершённую op → 409 MASTER_TARGET_OPERATION_ALREADY_FINISHED', async () => {
-    // Паспорт на SEW_OVERLOCK_2 (idx=2), SEW_OVERLOCK_1 уже завершена.
-    // Мастер пытается откатить паспорт обратно на SEW_OVERLOCK_1 (с
-    // указанием ячейки, чтобы не сработала прошлая защита
-    // MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT).
+  test('C. master setRouteStep backward на завершённую op переоткрывает гейт (OPERATION_REWORK_OPENED)', async () => {
+    // Сценарий из жизни: ОТК пропустил паспорт (OPERATION_FINISHED на
+    // ОТК-шаге), ВТО нашёл брак, мастер возвращает паспорт на ОТК для
+    // повторной проверки. Раньше backend отдавал 409 — паспорт
+    // считался безвозвратно ушедшим. После правки мастер на backward
+    // ИМЕЕТ право переоткрыть гейт: пишется OPERATION_REWORK_OPENED
+    // на target операцию (employeeId = последний финишёр), паспорт
+    // садится на placement. На SEW_OVERLOCK_1 как пример — семантика
+    // та же.
     const cell = seed.cells.A1;
     const { passportId } = await setup({
       currentOperationCode: 'SEW_OVERLOCK_2',
@@ -284,24 +292,43 @@ describeWithDb('integration — passports.operation-finished block', () => {
         routeStepIndex: 1,
         cellQr: cell.qrCode,
       })
-      .expect(409);
-    expect(res.body?.code).toBe('MASTER_TARGET_OPERATION_ALREADY_FINISHED');
-    expect(res.body?.message).toBe(
-      'Операция по этому паспорту уже завершена; вернуть паспорт на неё нельзя.',
-    );
+      .expect(201);
 
-    // Состояние паспорта не должно поменяться.
+    // Паспорт переехал на SEW_OVERLOCK_1 в указанную ячейку.
     const inDb = await t.prisma.passport.findUniqueOrThrow({
       where: { id: passportId },
     });
-    expect(inDb.currentRouteStepIndex).toBe(2);
-    expect(inDb.currentOperationId).toBe(seed.operations.SEW_OVERLOCK_2.id);
-    expect(inDb.currentCellId).toBeNull();
+    expect(inDb.currentRouteStepIndex).toBe(1);
+    expect(inDb.currentOperationId).toBe(seed.operations.SEW_OVERLOCK_1.id);
+    expect(inDb.currentCellId).toBe(cell.id);
 
+    // Записан OPERATION_REWORK_OPENED — гейт переоткрыт. employeeId
+    // события — швея, которая завершила target в setup().
+    const reworkEvents = await t.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        type: 'OPERATION_REWORK_OPENED',
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+      },
+    });
+    expect(reworkEvents).toHaveLength(1);
+    expect(reworkEvents[0]!.employeeId).toBe(seed.employees.seamstress.id);
+
+    // Audit фиксирует reopenedFinishedTarget = true.
     const audits = await t.prisma.auditLog.findMany({
       where: { entityType: 'PASSPORT', entityId: passportId },
     });
-    expect(audits).toHaveLength(0);
+    expect(audits).toHaveLength(1);
+    const payload = audits[0]!.payload as {
+      reopenedFinishedTarget?: boolean;
+      previousFinisherEmployeeId?: string;
+      direction?: string;
+    };
+    expect(payload.direction).toBe('BACKWARD');
+    expect(payload.reopenedFinishedTarget).toBe(true);
+    expect(payload.previousFinisherEmployeeId).toBe(
+      seed.employees.seamstress.id,
+    );
   });
 
   test('C-бис. master setRouteStep forward на чистую op проходит штатно', async () => {

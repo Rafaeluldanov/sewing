@@ -2490,7 +2490,7 @@ before })` и пишут в `AuditLog` (`MASTER_PASSPORT_*`,
 | `unassign`            | `MasterActionsService.unassign`     | `currentEmployeeId = null`. `currentOperationId` / `currentRouteStepIndex` сохраняются.                                          | `MASTER_PASSPORT_UNASSIGNED` |
 | `transferToEmployee`  | `MasterActionsService.transferToEmployee` | `currentEmployeeId = target`, `currentCellId = null`, `status = IN_PROGRESS`. Если у target активная смена с операцией из snapshot — двигаем `currentRouteStepIndex` / `currentOperationId`. | `MASTER_PASSPORT_TRANSFERRED` |
 | `returnToCell`        | `MasterActionsService.returnToCell` | `currentCellId = cell.id`, `currentEmployeeId = null`. `WorkInProgressMovement` `RETURN` IN + инкремент `WorkInProgressBalance.qty`. Идемпотентно: `noop = true` если уже в этой ячейке (WIP-движение не создаётся). | `MASTER_PASSPORT_RETURNED_TO_CELL` |
-| `setRouteStep`        | `MasterActionsService.setRouteStep` | `currentOperationId = op.id`, `currentRouteStepIndex = idx`, `status = IN_PROGRESS`. **Forward**: `currentEmployeeId = null`, `currentCellId = null`. **Backward**: обязателен ОДИН из placement'ов: ячейка (`currentCellId = cell.id`, `currentEmployeeId = null`, `WorkInProgressMovement` `RETURN` IN + инкремент баланса) либо сотрудник «из рук в руки» (`currentEmployeeId = target.id`, `currentCellId = null`, WIP не двигаем). Без placement'а — `MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT`. | `MASTER_PASSPORT_ROUTE_STEP_SET` (`payload: { direction: 'FORWARD' | 'BACKWARD', placement: 'CELL' | 'EMPLOYEE' | null, requiredCellPlacement?: true, cellId?, targetEmployeeId? }`) |
+| `setRouteStep`        | `MasterActionsService.setRouteStep` | `currentOperationId = op.id`, `currentRouteStepIndex = idx`, `status = IN_PROGRESS`. **Forward**: `currentEmployeeId = null`, `currentCellId = null`. **Backward**: обязателен ОДИН из placement'ов: ячейка (`currentCellId = cell.id`, `currentEmployeeId = null`, `WorkInProgressMovement` `RETURN` IN + инкремент баланса) либо сотрудник «из рук в руки» (`currentEmployeeId = target.id`, `currentCellId = null`, WIP не двигаем). Без placement'а — `MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT`. На backward для target с `OPERATION_FINISHED` гейт переоткрывается: пишется `OPERATION_REWORK_OPENED` на target (employeeId = последний финишёр); pending earnings ОТК НЕ отзываются — это решение последующего ОТК-прохода. | `MASTER_PASSPORT_ROUTE_STEP_SET` (`payload: { direction: 'FORWARD' \| 'BACKWARD', placement: 'CELL' \| 'EMPLOYEE' \| null, requiredCellPlacement?: true, cellId?, targetEmployeeId?, reopenedFinishedTarget?: true, previousFinisherEmployeeId? }`) |
 
 Каждое действие требует обязательного `reason` (Zod-enum
 `MASTER_ACTION_REASONS = WRONG_SCAN | SHIFT_HANDOVER |
@@ -2516,6 +2516,14 @@ target-метаданные (`targetEmployeeId`, `cellId`/`cellCode`,
   placement'а на выбор: ячейка (`cellQr`/`cellId`) или сотрудник
   (`employeeQr`/`employeeId`); указать оба сразу нельзя
   (Zod-`VALIDATION_ERROR`).
+- `setRouteStep` на target с уже записанным `OPERATION_FINISHED`:
+  - **forward / same-idx** → `MASTER_TARGET_OPERATION_ALREADY_FINISHED`
+    (409), инвариант «оплата за изделие — один раз» строгий;
+  - **backward** → разрешён и автоматически переоткрывает гейт
+    (`OPERATION_REWORK_OPENED` на target, `employeeId = последний
+    финишёр`), audit `reopenedFinishedTarget: true`. Сценарий:
+    ОТК пропустил паспорт, ВТО нашёл брак, мастер возвращает
+    паспорт на ОТК для повторной проверки.
 - `transferToEmployee` запрещён для несуществующего/неактивного
   target (`MASTER_TARGET_EMPLOYEE_NOT_FOUND`/`_INACTIVE`).
 - `returnToCell` запрещён для несуществующей/неактивной ячейки

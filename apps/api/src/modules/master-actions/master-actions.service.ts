@@ -366,6 +366,20 @@ export class MasterActionsService {
    * Без любого из placement'ов — 400 `MASTER_BACKWARD_ROUTE_REQUIRES_PLACEMENT`,
    * чтобы паспорт не «зависал в воздухе» (no employee, no cell). Указать
    * оба placement'а одновременно нельзя — Zod ловит на уровне DTO.
+   *
+   * **Backward на уже завершённую target-операцию.** Типичный кейс: ОТК
+   * выпустил паспорт, ВТО нашёл брак, мастер возвращает на ОТК для
+   * повторной проверки. По умолчанию `OPERATION_FINISHED` на target
+   * закрывает её безвозвратно (`MASTER_TARGET_OPERATION_ALREADY_FINISHED`),
+   * но на backward мастер ИМЕЕТ право переоткрыть гейт: в той же
+   * транзакции пишется `OPERATION_REWORK_OPENED` на target-операцию с
+   * `employeeId = последний финишёр` (как в `QcService.returnToRework`).
+   * Это снимает блок `assertOperationNotFinished` для следующего прохода
+   * и подсвечивает в audit `reopenedFinishedTarget: true` +
+   * `previousFinisherEmployeeId`. Сам мастер pending earnings НЕ отзывает
+   * — если повторная проверка подтвердит брак, ОТК сделает свой
+   * `returnToRework` к швее и pending швеи отзовутся штатно. На forward
+   * (включая same-idx) блок остаётся.
    */
   async setRouteStep(
     actor: AuthPrincipal,
@@ -396,14 +410,24 @@ export class MasterActionsService {
     }
     if (!target) throw new MasterRouteStepNotInSnapshotException();
 
-    // По целевой операции уже есть `OPERATION_FINISHED` → запрещаем
-    // вернуть на неё паспорт. По бизнес-инварианту операция считается
-    // закрытой безвозвратно для всех ролей, включая мастера.
-    // Исключение — переделка по браку: ОТК через `QcService.returnToRework`
-    // пишет `OPERATION_REWORK_OPENED`, и инвариант ослабляется до
-    // «нет `OPERATION_FINISHED` после последнего rework для пары
-    // (passport, operation)». Мастер, идущий после rework, тоже
-    // должен пройти эту проверку: текущий проход операции открыт.
+    // Определяем направление движения. Если у паспорта ещё нет
+    // currentRouteStepIndex (новый паспорт без скан-истории), считаем
+    // движение forward — откатывать назад нечего.
+    const currentIdx = passport.currentRouteStepIndex ?? 0;
+    const isBackward = target.index < currentIdx;
+
+    // По целевой операции уже есть `OPERATION_FINISHED` (не покрытый
+    // последующим rework) → по умолчанию запрещаем вернуть на неё
+    // паспорт: операция считается закрытой безвозвратно. Исключения:
+    //
+    //   - переделка по браку через ОТК: `QcService.returnToRework`
+    //     пишет `OPERATION_REWORK_OPENED`, и блок снимается;
+    //   - **backward-движение мастером**: типичный кейс — ОТК выпустил
+    //     паспорт, ВТО нашёл брак, мастер возвращает на ОТК для
+    //     повторной проверки. Технически это новый rework на target —
+    //     запишем `OPERATION_REWORK_OPENED` в той же транзакции ниже,
+    //     чтобы дальнейшие `assertOperationNotFinished` пропускали
+    //     повторный проход; на forward (включая same-idx) блок остаётся.
     const lastRework = await this.prisma.passportEvent.findFirst({
       where: {
         passportId: passport.id,
@@ -420,17 +444,12 @@ export class MasterActionsService {
         type: PassportEventType.OPERATION_FINISHED,
         ...(lastRework ? { createdAt: { gt: lastRework.createdAt } } : {}),
       },
-      select: { id: true },
+      select: { id: true, employeeId: true, qty: true },
     });
-    if (finishedOnTarget) {
+    if (finishedOnTarget && !isBackward) {
       throw new MasterTargetOperationAlreadyFinishedException();
     }
-
-    // Определяем направление движения. Если у паспорта ещё нет
-    // currentRouteStepIndex (новый паспорт без скан-истории), считаем
-    // движение forward — откатывать назад нечего.
-    const currentIdx = passport.currentRouteStepIndex ?? 0;
-    const isBackward = target.index < currentIdx;
+    const reopenFinishedTarget = Boolean(finishedOnTarget && isBackward);
 
     // Backward требует placement: либо ячейка, либо сотрудник. Проверка
     // идёт до открытия транзакции, чтобы не плодить пустые audit-логи.
@@ -487,6 +506,27 @@ export class MasterActionsService {
         : null;
 
     const updated = await this.prisma.$transaction(async (tx) => {
+      // Если возвращаем на уже завершённую операцию — пишем
+      // OPERATION_REWORK_OPENED ПЕРЕД update паспорта. Семантика та же,
+      // что у QcService.returnToRework: target-операция переоткрывается
+      // для нового прохода, employeeId события — последний финишёр
+      // (нужно UI «К переделке» и для дальнейшей логики revoke earnings,
+      // которую сам мастер не делает — это останется на ОТК).
+      // Earnings ОТК трогать НЕ будем — у мастера нет полномочий
+      // отменять выплаты. Если повторная проверка подтвердит брак, ОТК
+      // сделает свой returnToRework к швее и pending швеи отзовутся
+      // штатно.
+      if (reopenFinishedTarget && finishedOnTarget) {
+        await tx.passportEvent.create({
+          data: {
+            passportId: passport.id,
+            type: PassportEventType.OPERATION_REWORK_OPENED,
+            operationId: target!.operationId,
+            employeeId: finishedOnTarget.employeeId,
+            qty: finishedOnTarget.qty ?? passport.qtyGood ?? passport.qtyCut,
+          },
+        });
+      }
       const next = await tx.passport.update({
         where: { id: passport.id },
         data: {
@@ -520,6 +560,15 @@ export class MasterActionsService {
             cellId: cell?.id,
             cellCode: cell?.code,
             targetEmployeeId: targetEmployee?.id,
+            // reopenedFinishedTarget = true означает «откат на ранее
+            // завершённую операцию с переоткрытием гейта». UI/ретро
+            // могут показать это как «возврат на проверку», а не
+            // обычное перемещение по маршруту.
+            reopenedFinishedTarget: reopenFinishedTarget || undefined,
+            previousFinisherEmployeeId:
+              reopenFinishedTarget && finishedOnTarget
+                ? finishedOnTarget.employeeId ?? undefined
+                : undefined,
           }),
         },
         tx,
@@ -546,7 +595,7 @@ export class MasterActionsService {
     });
 
     this.logger.log(
-      `event=master.setRouteStep passportId=${passportId} actor=${actor.employeeId} routeStepIndex=${target!.index} operationId=${target!.operationId} direction=${isBackward ? 'BACKWARD' : 'FORWARD'}${cell ? ` cellId=${cell.id}` : ''}${targetEmployee ? ` targetEmployeeId=${targetEmployee.id}` : ''} reason=${dto.reason}`,
+      `event=master.setRouteStep passportId=${passportId} actor=${actor.employeeId} routeStepIndex=${target!.index} operationId=${target!.operationId} direction=${isBackward ? 'BACKWARD' : 'FORWARD'}${cell ? ` cellId=${cell.id}` : ''}${targetEmployee ? ` targetEmployeeId=${targetEmployee.id}` : ''}${reopenFinishedTarget ? ' reopenedFinishedTarget=true' : ''} reason=${dto.reason}`,
     );
     return {
       passport: this.snapshot(updated),
@@ -760,6 +809,8 @@ export class MasterActionsService {
     direction?: 'FORWARD' | 'BACKWARD';
     requiredCellPlacement?: boolean;
     placement?: 'CELL' | 'EMPLOYEE' | null;
+    reopenedFinishedTarget?: boolean;
+    previousFinisherEmployeeId?: string;
   }): Prisma.InputJsonValue {
     const compact = (s: MasterActionPassportSnapshotDto) => ({
       currentEmployeeId: s.currentEmployeeId,
@@ -786,6 +837,12 @@ export class MasterActionsService {
     if (input.direction) payload.direction = input.direction;
     if (input.requiredCellPlacement) payload.requiredCellPlacement = true;
     if (input.placement) payload.placement = input.placement;
+    if (input.reopenedFinishedTarget) {
+      payload.reopenedFinishedTarget = true;
+    }
+    if (input.previousFinisherEmployeeId) {
+      payload.previousFinisherEmployeeId = input.previousFinisherEmployeeId;
+    }
     return payload as Prisma.InputJsonValue;
   }
 }
