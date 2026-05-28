@@ -1632,17 +1632,24 @@ export class PassportsService {
     }
 
     // Защита от race-condition «rework — ещё один scan на ОТК».
-    // Если у паспорта есть открытый `OPERATION_REWORK_OPENED` (нет
-    // последующего `OPERATION_FINISHED` для той же операции) — повторный
+    // Если у паспорта есть открытый `OPERATION_REWORK_OPENED` НА ДРУГОЙ
+    // операции (типично — швея переделывает после ОТК-возврата), повторный
     // scan категорией QC сдвинул бы `currentRouteStepIndex` обратно на
     // QC-шаг, и швея бы упёрлась в `PASSPORT_ISSUE_BACKWARD` при «Взять
     // крой» (инцидент 26.05.2026 на P-20260506-0069). ОТК должна
-    // дождаться, пока швея переделает и снова отдаст паспорт на ОТК
-    // (новый `OPERATION_FINISHED` закроет rework, и сканирование снова
-    // станет легитимным). См. `QcService.returnToRework`,
-    // `docs/flows.md §F5a`.
+    // дождаться, пока швея переделает и снова отдаст паспорт на ОТК.
+    //
+    // Исключение — rework НА САМОЙ ОТК-операции: это сценарий «мастер
+    // вернул паспорт на повторную проверку через set-route-step backward»
+    // (см. `MasterActionsService.setRouteStep`, ветка
+    // `reopenFinishedTarget`). Тут ОТК наоборот ОБЯЗАН сканировать —
+    // паспорт стоит у него и ждёт re-check; гейт rework по своей же
+    // операции игнорируем. См. `docs/flows.md §F5a`.
     if (session.operation.category === OperationCategory.QC) {
-      const reworkPending = await this.hasOpenRework(passportId);
+      const reworkPending = await this.hasOpenRework(
+        passportId,
+        session.operationId,
+      );
       if (reworkPending) throw new PassportReworkPendingException();
     }
 
@@ -2374,8 +2381,17 @@ export class PassportsService {
    * Реализация: одним батчем достаём последние REWORK и FINISHED по
    * `operationId`, сравниваем createdAt. Если для какого-то operationId
    * последний event — REWORK_OPENED, значит rework открыт.
+   *
+   * `excludeOperationId` — операция, rework по которой не должен считаться
+   * блокирующим. Используется QC-гейтом в `scanOnOperation` для сценария
+   * «мастер вернул паспорт на ОТК через set-route-step backward»:
+   * REWORK_OPENED при этом висит на самой ОТК-операции, и ОТК наоборот
+   * обязан её отсканировать — не блокируем.
    */
-  async hasOpenRework(passportId: string): Promise<boolean> {
+  async hasOpenRework(
+    passportId: string,
+    excludeOperationId?: string | null,
+  ): Promise<boolean> {
     const events = await this.prisma.passportEvent.findMany({
       where: {
         passportId,
@@ -2403,7 +2419,8 @@ export class PassportsService {
         });
       }
     }
-    for (const last of lastByOp.values()) {
+    for (const [opId, last] of lastByOp) {
+      if (excludeOperationId && opId === excludeOperationId) continue;
       if (last.type === PassportEventType.OPERATION_REWORK_OPENED) return true;
     }
     return false;

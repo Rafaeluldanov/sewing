@@ -39,6 +39,18 @@ export class QcController {
     return this.qc.listForQc(query);
   }
 
+  /**
+   * Список паспортов, возвращённых мастером на ОТК через backward
+   * `set-route-step`. Используется баннером на `/qc` («Возвращены на
+   * повторную проверку: ...»). Источник истины — активная смена актора:
+   * если она не на категории QC, возвращается пустой список (см.
+   * `QcService.listIncomingReworks`).
+   */
+  @Get('incoming-reworks')
+  listIncomingReworks(@CurrentUser() user: AuthPrincipal) {
+    return this.qc.listIncomingReworks(user.employeeId);
+  }
+
   @Get('passports/:id')
   getOne(@Param('id') id: string) {
     return this.qc.getQcDetail(id);

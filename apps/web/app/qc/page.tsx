@@ -1,7 +1,7 @@
 import { redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { listDefectTypes } from '@/lib/qc-api';
+import { listDefectTypes, listQcIncomingReworks } from '@/lib/qc-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
 import { RoleHeaderCard } from '@/components/role-header-card';
 import { QcTerminal } from './qc-terminal';
@@ -81,6 +81,22 @@ export default async function QcPage() {
   const activeOperationCategory = operation?.category ?? null;
   const isShiftActive = !!(currentShift && currentShift.active);
 
+  // Список «вернули на повторную проверку» — для баннера над сканером.
+  // Тянем только при активной QC-смене, иначе бэк всё равно вернёт
+  // пустой список. fail-soft на ApiRequestError, чтобы временный сбой
+  // не превращал терминал в экран ошибки.
+  let incomingReworks: Awaited<
+    ReturnType<typeof listQcIncomingReworks>
+  >['items'] = [];
+  if (isShiftActive && activeOperationCategory === 'QC') {
+    try {
+      const res = await listQcIncomingReworks();
+      incomingReworks = res.items;
+    } catch (e) {
+      if (!(e instanceof ApiRequestError)) throw e;
+    }
+  }
+
   const headerFields = isShiftActive
     ? [
         {
@@ -117,6 +133,7 @@ export default async function QcPage() {
         employee={employee}
         initialShift={currentShift}
         activeOperationCategory={activeOperationCategory}
+        incomingReworks={incomingReworks}
       />
     </div>
   );

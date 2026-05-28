@@ -9,6 +9,7 @@ import type {
   DefectTypeDto,
   ListQcPassportsQuery,
   PassportDefectDto,
+  QcIncomingReworkDto,
   QcPassportDetailDto,
   QcPassportListItemDto,
 } from '@sewing/shared/qc';
@@ -75,6 +76,17 @@ export function returnQcPassportToRework(
     `/qc/passports/${encodeURIComponent(id)}/return-to-rework`,
     { method: 'POST', body: { targetOperationId } },
   );
+}
+
+/**
+ * Список паспортов, возвращённых мастером на ОТК через backward
+ * `set-route-step`. Используется баннером на `/qc`. См.
+ * `QcService.listIncomingReworks`.
+ */
+export function listQcIncomingReworks(): Promise<{
+  items: QcIncomingReworkDto[];
+}> {
+  return apiFetch<{ items: QcIncomingReworkDto[] }>('/qc/incoming-reworks');
 }
 
 export function listDefectTypes(): Promise<DefectTypeDto[]> {

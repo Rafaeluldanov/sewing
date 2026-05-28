@@ -226,4 +226,44 @@ export interface QcPassportDetailDto extends QcPassportListItemDto {
     employeeName: string;
     reworkedAt: string;
   } | null;
+  /**
+   * `true`, если паспорт сейчас стоит на ОТК-операции и по этой ОТК
+   * открыт `OPERATION_REWORK_OPENED` — то есть мастер цеха вернул
+   * паспорт на повторную проверку через `set-route-step backward`
+   * (см. `MasterActionsService.setRouteStep`, ветка
+   * `reopenFinishedTarget`). В этом состоянии:
+   *   - карточка показывается в рабочем режиме (а не read-only как при
+   *     обычном `reworkPending`);
+   *   - `qcCompletedAt` принудительно `null` — старый `QC_PASSED` от
+   *     предыдущего прохода не считаем за «уже проверено», иначе
+   *     сверху висел бы зелёный бейдж и ОТК подумал бы, что делать
+   *     ничего не надо;
+   *   - в UI поверх карточки рисуется плашка «Возвращён мастером на
+   *     повторную проверку», см. `apps/web/app/qc/qc-work-card.tsx`.
+   */
+  incomingReworkAtQc: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// Incoming reworks banner
+// ---------------------------------------------------------------------------
+
+/**
+ * Одна строка в баннере «Возвращены на повторную проверку» на /qc
+ * (`GET /api/qc/incoming-reworks`). Берётся из паспортов, что стоят
+ * на операции текущей ОТК-смены и по которым на этой же операции
+ * открыт `OPERATION_REWORK_OPENED` (мастер вернул через
+ * backward `set-route-step`). См. `QcService.listIncomingReworks`.
+ */
+export interface QcIncomingReworkDto {
+  passportId: string;
+  passportNumber: string;
+  orderNumber: string;
+  productName: string;
+  color: string;
+  sizeCode: string;
+  sizeSortOrder: number;
+  qtyGood: number;
+  /** ISO; момент `OPERATION_REWORK_OPENED` от мастера. */
+  returnedAt: string;
 }

@@ -43,7 +43,11 @@
  */
 
 import { useEffect, useState, useTransition } from 'react';
-import type { DefectTypeDto, QcPassportDetailDto } from '@sewing/shared/qc';
+import type {
+  DefectTypeDto,
+  QcIncomingReworkDto,
+  QcPassportDetailDto,
+} from '@sewing/shared/qc';
 import type {
   EmployeeLiteDto,
   ShiftMetaDto,
@@ -92,6 +96,14 @@ interface Props {
    * банер и предлагаем завершить смену через меню.
    */
   activeOperationCategory: string | null;
+  /**
+   * Паспорты, которые мастер вернул на эту ОТК-операцию через
+   * backward `set-route-step` и ждут повторной проверки. SSR-список
+   * из `GET /api/qc/incoming-reworks`; терминал рисует баннер над
+   * сканер-картой, чтобы ОТК сразу видел: «нужно отсканировать
+   * вернувшийся паспорт». См. `QcService.listIncomingReworks`.
+   */
+  incomingReworks: QcIncomingReworkDto[];
 }
 
 interface ErrorState {
@@ -105,6 +117,7 @@ export function QcTerminal({
   employee,
   initialShift,
   activeOperationCategory,
+  incomingReworks,
 }: Props) {
   const isShiftActive = !!(initialShift && initialShift.active);
   const onQcShift = isShiftActive && activeOperationCategory === 'QC';
@@ -121,7 +134,10 @@ export function QcTerminal({
       ) : !onQcShift ? (
         <WrongOperationCard operationName={initialShift!.operationName} />
       ) : (
-        <QcScanTerminal defectTypes={defectTypes} />
+        <QcScanTerminal
+          defectTypes={defectTypes}
+          incomingReworks={incomingReworks}
+        />
       )}
     </div>
   );
@@ -148,6 +164,7 @@ function WrongOperationCard({ operationName }: { operationName: string }) {
 
 interface ScanTerminalProps {
   defectTypes: DefectTypeDto[];
+  incomingReworks: QcIncomingReworkDto[];
 }
 
 /**
@@ -156,7 +173,7 @@ interface ScanTerminalProps {
  * как раньше — изменилась только обвязка в `QcTerminal` (start-shift
  * gate сверху, см. JSDoc файла).
  */
-function QcScanTerminal({ defectTypes }: ScanTerminalProps) {
+function QcScanTerminal({ defectTypes, incomingReworks }: ScanTerminalProps) {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
@@ -359,6 +376,10 @@ function QcScanTerminal({ defectTypes }: ScanTerminalProps) {
         />
       )}
 
+      {!detail && incomingReworks.length > 0 && (
+        <IncomingReworksBanner items={incomingReworks} />
+      )}
+
       {!detail && (
         <div className="scan-card scan-card--simple" aria-label="Сканировать паспорт">
           <div>
@@ -455,5 +476,57 @@ function QcScanTerminal({ defectTypes }: ScanTerminalProps) {
         />
       )}
     </>
+  );
+}
+
+/**
+ * Баннер «возвращены на повторную проверку» над сканер-картой.
+ *
+ * Источник — `QcService.listIncomingReworks`: паспорты, что мастер
+ * вернул на эту ОТК-операцию через backward `set-route-step`. Цель —
+ * чтобы ОТК увидел возврат сразу, ещё до того как соберётся
+ * сканировать. После скана `lookupQcPassportAction` откроет рабочую
+ * карточку с плашкой «Возвращён мастером…», и баннер пропадёт на
+ * следующем рендере страницы (SSR; на /qc стоит `force-dynamic`).
+ */
+function IncomingReworksBanner({ items }: { items: QcIncomingReworkDto[] }) {
+  const heading =
+    items.length === 1
+      ? 'Возвращён на повторную проверку'
+      : `Возвращены на повторную проверку (${items.length})`;
+  return (
+    <div
+      className="scan-card scan-card--simple"
+      role="status"
+      aria-label="Возвращены на повторную проверку"
+    >
+      <h2 className="scan-card__title">
+        <Icon name="warning" size={22} />
+        <span style={{ marginLeft: '0.45rem' }}>{heading}</span>
+      </h2>
+      <p className="scan-card__hint">
+        Отсканируйте QR паспорта, чтобы начать повторную проверку.
+      </p>
+      <ul
+        style={{
+          margin: 0,
+          padding: '0.25rem 0 0 1.1rem',
+          fontSize: '0.95rem',
+          lineHeight: 1.4,
+        }}
+      >
+        {items.map((p) => (
+          <li key={p.passportId}>
+            <strong>{p.passportNumber}</strong>
+            {' · '}
+            {p.productName}
+            {' · '}
+            {p.color}
+            {' · '}
+            {p.sizeCode}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

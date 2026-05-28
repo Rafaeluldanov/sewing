@@ -223,6 +223,13 @@ export function QcWorkCard({
         </div>
       )}
 
+      {detail.incomingReworkAtQc && (
+        <div className="info-box" role="status">
+          <strong>Возвращён мастером на повторную проверку.</strong>
+          {' '}Зафиксируйте брак (если есть) и нажмите «Проверка выполнена».
+        </div>
+      )}
+
       {completedLabel && (
         <div className="info-box" role="status">
           {completedLabel}
