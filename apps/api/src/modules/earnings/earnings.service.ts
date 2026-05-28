@@ -733,6 +733,13 @@ export class EarningsService {
       sizeId: string;
       qty: number;
       sourceEventId?: string | null;
+      /**
+       * Создать сразу `APPROVED` (а не `PENDING_RELEASE`). Нужен для
+       * retroactive-веток ВТО/ОТК на паспортах в статусе `PACKED`:
+       * закрытие коробки уже было, второго `approvePendingForPassport`
+       * не случится — иначе строка зависнет в pending навсегда.
+       */
+      approveImmediately?: boolean;
     },
   ): Promise<void> {
     if (!args.operationId || !args.employeeId) return;
@@ -763,6 +770,7 @@ export class EarningsService {
     if (!rate) return;
 
     const amount = roundMoney(rate.times(args.qty));
+    const approveImmediately = args.approveImmediately === true;
     await this.safeCreate(tx, {
       passportId: args.passportId,
       operationId: op.id,
@@ -770,11 +778,13 @@ export class EarningsService {
       qty: args.qty,
       ratePerUnit: rate,
       amount,
-      status: EntryStatus.PENDING_RELEASE,
+      status: approveImmediately
+        ? EntryStatus.APPROVED
+        : EntryStatus.PENDING_RELEASE,
       approvalMode: ApprovalMode.AFTER_RELEASE,
       sourceEventType: EarningSource.OPERATION_TRANSITION,
       sourceEventId: args.sourceEventId ?? null,
-      approvedAt: null,
+      approvedAt: approveImmediately ? new Date() : null,
     });
   }
 

@@ -227,8 +227,9 @@ export class QcService {
     // которые упаковали до включения route-aware gate в `PackingService.
     // addPassport`. Повторная попытка отсканировать PACKED-паспорт уже
     // не пройдёт — `existing` ниже завернёт в идемпотентную ветку.
+    const retroactive = passport.status === PassportStatus.PACKED;
     if (passport.status !== PassportStatus.IN_PROGRESS) {
-      if (passport.status === PassportStatus.PACKED) {
+      if (retroactive) {
         const alreadyQc = await this.prisma.passportEvent.findFirst({
           where: { passportId, type: PassportEventType.QC_PASSED },
           select: { id: true },
@@ -272,7 +273,7 @@ export class QcService {
         passport.currentOperationId,
         passport.orderId,
       );
-      await tx.passportEvent.create({
+      const createdEvent = await tx.passportEvent.create({
         data: {
           passportId,
           type: PassportEventType.QC_PASSED,
@@ -295,6 +296,21 @@ export class QcService {
         },
         tx,
       );
+      // Сдельное начисление за ОТК (как у швеи на `OPERATION_FINISHED`).
+      // Тихо пропускается, если у операции `pricingMode = SALARY_ONLY`,
+      // нет ставки или сотрудник на чистом окладе. Для retroactive-ветки
+      // (`status == PACKED`) выписываем сразу APPROVED — упаковка уже
+      // была, второго `approvePendingForPassport` не случится.
+      await this.earnings.createPendingForCompletedOperation(tx, {
+        passportId,
+        operationId,
+        employeeId: actorEmployeeId,
+        productId: passport.productId,
+        sizeId: passport.sizeId,
+        qty: passport.qtyGood,
+        sourceEventId: createdEvent.id,
+        approveImmediately: retroactive,
+      });
     });
     this.logger.log(
       `event=qc.complete passportId=${passportId} actorId=${actorEmployeeId}`,

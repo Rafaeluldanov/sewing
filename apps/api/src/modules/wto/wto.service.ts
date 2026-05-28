@@ -12,6 +12,7 @@ import {
 import type { WtoPassportDetailDto } from '@sewing/shared/wto';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { EarningsService } from '../earnings/earnings.service.js';
 import {
   EmployeeInactiveException,
   EmployeeNotFoundException,
@@ -46,6 +47,7 @@ export class WtoService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly earnings: EarningsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -86,6 +88,9 @@ export class WtoService {
     const passport = await this.prisma.passport.findUnique({
       where: { id: passportId },
       include: { currentOperation: { select: { category: true } } },
+      // productId/sizeId нужны для `createPendingForCompletedOperation`
+      // (ставка операции резолвится по размеру). `findUnique` уже
+      // включает все скалярные поля, явно дочитывать не нужно.
     });
     if (!passport) {
       throw new NotFoundException({
@@ -149,7 +154,7 @@ export class WtoService {
             passport.orderId,
           )
         : passport.currentOperationId;
-      await tx.passportEvent.create({
+      const createdEvent = await tx.passportEvent.create({
         data: {
           passportId,
           type: PassportEventType.WTO_PASSED,
@@ -172,6 +177,21 @@ export class WtoService {
         },
         tx,
       );
+      // Сдельное начисление за ВТО (как у швеи на `OPERATION_FINISHED`).
+      // Тихо пропускается, если у операции `pricingMode = SALARY_ONLY`,
+      // нет ставки или сотрудник на чистом окладе. Для retroactive-ветки
+      // (`status == PACKED`) выписываем сразу APPROVED — упаковка уже
+      // была, второго `approvePendingForPassport` не случится.
+      await this.earnings.createPendingForCompletedOperation(tx, {
+        passportId,
+        operationId,
+        employeeId: actorEmployeeId,
+        productId: passport.productId,
+        sizeId: passport.sizeId,
+        qty: passport.qtyGood,
+        sourceEventId: createdEvent.id,
+        approveImmediately: retroactive,
+      });
     });
     this.logger.log(
       `event=wto.complete passportId=${passportId} actorId=${actorEmployeeId}`,
