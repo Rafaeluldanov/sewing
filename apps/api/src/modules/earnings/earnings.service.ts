@@ -859,6 +859,71 @@ export class EarningsService {
   }
 
   // ===========================================================================
+  // RECONCILE: после изменения Passport.qtyGood
+  // ===========================================================================
+
+  /**
+   * Привести `OperationEntry.qty` всех сдельных начислений по паспорту к
+   * актуальному `qtyGood`. Сценарий: ОТК зафиксировал брак уже после того,
+   * как швеи/ВТО закрыли свои операции — их `OperationEntry` хранят
+   * `qty` снимком на момент завершения операции и сами не пересчитываются.
+   *
+   * Cutter (`sourceEventType = PASSPORT_CREATED`) сознательно не трогаем —
+   * раскройщик платится за `qtyCut` независимо от брака швеи.
+   *
+   * Уже выплаченные строки (в `PayrollPayoutLine`) пропускаем — менять
+   * сумму задним числом по закрытому выплатному документу нельзя; такие
+   * случаи возвращаются в `skipped[]` для разбора менеджером.
+   */
+  async reconcileToQtyGood(
+    tx: Prisma.TransactionClient,
+    passportId: string,
+  ): Promise<{
+    updated: number;
+    skipped: Array<{ id: string; reason: 'ALREADY_PAID' }>;
+  }> {
+    const passport = await tx.passport.findUnique({
+      where: { id: passportId },
+      select: { qtyGood: true },
+    });
+    if (!passport) return { updated: 0, skipped: [] };
+
+    const candidates = await tx.operationEntry.findMany({
+      where: {
+        passportId,
+        sourceEventType: { not: EarningSource.PASSPORT_CREATED },
+        qty: { gt: passport.qtyGood },
+      },
+      select: { id: true, ratePerUnit: true },
+    });
+    if (candidates.length === 0) return { updated: 0, skipped: [] };
+
+    const paid = await tx.payrollPayoutLine.findMany({
+      where: { operationEntryId: { in: candidates.map((c) => c.id) } },
+      select: { operationEntryId: true },
+    });
+    const paidIds = new Set(
+      paid.map((p) => p.operationEntryId).filter((x): x is string => !!x),
+    );
+
+    const skipped: Array<{ id: string; reason: 'ALREADY_PAID' }> = [];
+    let updated = 0;
+    for (const c of candidates) {
+      if (paidIds.has(c.id)) {
+        skipped.push({ id: c.id, reason: 'ALREADY_PAID' });
+        continue;
+      }
+      const amount = roundMoney(c.ratePerUnit.times(passport.qtyGood));
+      await tx.operationEntry.update({
+        where: { id: c.id },
+        data: { qty: passport.qtyGood, amount },
+      });
+      updated += 1;
+    }
+    return { updated, skipped };
+  }
+
+  // ===========================================================================
   // READ: list
   // ===========================================================================
 

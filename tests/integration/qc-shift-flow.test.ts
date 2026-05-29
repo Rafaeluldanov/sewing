@@ -27,6 +27,7 @@
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
+import { Prisma } from '@prisma/client';
 import {
   loginAs,
   startTestApp,
@@ -313,6 +314,134 @@ describeWithDb('integration — QC shift-gated scan flow', () => {
       where: { passportId, type: 'DEFECT_RECORDED' },
     });
     expect(events).toBe(1);
+  });
+
+  // ---------------------------------------------------------------------------
+  // recordDefect → авто-пересчёт сдельных OperationEntry до нового qtyGood.
+  // Правило цеха: финальная сдельная выработка по паспорту = qtyGood для
+  // ВСЕХ сдельных сотрудников (см. JSDoc `EarningsService.reconcileToQtyGood`).
+  // OperationEntry создаётся снапшотом при `OPERATION_FINISHED`; до фикса
+  // дефект, найденный после завершения операции, оставлял у швеи устаревший
+  // qty/amount, и она получала за брак как за годное.
+  // ---------------------------------------------------------------------------
+
+  test('recordDefect авто-пересчитывает сдельные OperationEntry до нового qtyGood, cutter не тронут', async () => {
+    const passportId = await prepareQcReady({ qtyCut: 10 });
+    // Симулируем, что швея и ВТО уже закрыли операции — у них есть
+    // APPROVED OperationEntry со снимком qty=10. Создаём напрямую, как
+    // в packing-close-idempotent.test.ts §2.
+    const seamstressEntry = await t.prisma.operationEntry.create({
+      data: {
+        passportId,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
+        qty: 10,
+        ratePerUnit: new Prisma.Decimal(50),
+        amount: new Prisma.Decimal(500),
+        status: 'APPROVED',
+        approvalMode: 'AFTER_RELEASE',
+        sourceEventType: 'OPERATION_TRANSITION',
+        approvedAt: new Date(),
+      },
+    });
+    // Cutter-начисление (PASSPORT_CREATED) — должно остаться нетронутым:
+    // раскройщик платится за qtyCut независимо от брака швеи.
+    const cutterEntry = await t.prisma.operationEntry.create({
+      data: {
+        passportId,
+        operationId: seed.operations.CUT_CUT.id,
+        employeeId: seed.employees.cutter.id,
+        qty: 10,
+        ratePerUnit: new Prisma.Decimal(7),
+        amount: new Prisma.Decimal(70),
+        status: 'APPROVED',
+        approvalMode: 'IMMEDIATE',
+        sourceEventType: 'PASSPORT_CREATED',
+        approvedAt: new Date(),
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/defects`)
+      .set('Cookie', cookies.qc)
+      .send({ defectTypeId: seed.defectType.id, qty: 3 });
+    expect(res.status).toBe(201);
+
+    const seamstressAfter = await t.prisma.operationEntry.findUniqueOrThrow({
+      where: { id: seamstressEntry.id },
+    });
+    expect(seamstressAfter.qty).toBe(7);
+    expect(seamstressAfter.amount.toFixed(2)).toBe('350.00');
+
+    // Cutter — не тронут, остался на исходном qty=10/amount=70.
+    const cutterAfter = await t.prisma.operationEntry.findUniqueOrThrow({
+      where: { id: cutterEntry.id },
+    });
+    expect(cutterAfter.qty).toBe(10);
+    expect(cutterAfter.amount.toFixed(2)).toBe('70.00');
+  });
+
+  test('recordDefect не трогает OperationEntry, уже включённую в PayrollPayoutLine', async () => {
+    const passportId = await prepareQcReady({ qtyCut: 10 });
+    const paidEntry = await t.prisma.operationEntry.create({
+      data: {
+        passportId,
+        operationId: seed.operations.SEW_OVERLOCK_1.id,
+        employeeId: seed.employees.seamstress.id,
+        qty: 10,
+        ratePerUnit: new Prisma.Decimal(50),
+        amount: new Prisma.Decimal(500),
+        status: 'APPROVED',
+        approvalMode: 'AFTER_RELEASE',
+        sourceEventType: 'OPERATION_TRANSITION',
+        approvedAt: new Date(),
+      },
+    });
+    // Симулируем, что этот entry уже выплачен — есть PayrollPayoutLine.
+    const payout = await t.prisma.payrollPayout.create({
+      data: {
+        employeeId: seed.employees.seamstress.id,
+        periodFrom: new Date('2026-04-01'),
+        periodTo: new Date('2026-04-30'),
+        status: 'ISSUED',
+        amountPieceworkRub: new Prisma.Decimal(500),
+        amountSalaryRub: new Prisma.Decimal(0),
+        amountTotalRub: new Prisma.Decimal(500),
+        createdById: seed.employees['shop-chief'].id,
+        issuedAt: new Date(),
+        issuedById: seed.employees['shop-chief'].id,
+      },
+    });
+    await t.prisma.payrollPayoutLine.create({
+      data: {
+        payoutId: payout.id,
+        kind: 'PIECEWORK',
+        operationEntryId: paidEntry.id,
+        amountRub: new Prisma.Decimal(500),
+        occurredOn: new Date('2026-04-15'),
+        snapshot: { qty: 10, ratePerUnit: 50 },
+      },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/qc/passports/${passportId}/defects`)
+      .set('Cookie', cookies.qc)
+      .send({ defectTypeId: seed.defectType.id, qty: 3 });
+    expect(res.status).toBe(201);
+
+    // Дефект всё равно зафиксирован — qtyGood=7.
+    const passport = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+      select: { qtyGood: true, qtyDefect: true },
+    });
+    expect(passport).toMatchObject({ qtyGood: 7, qtyDefect: 3 });
+
+    // А вот выплаченную строку — не трогаем.
+    const paidAfter = await t.prisma.operationEntry.findUniqueOrThrow({
+      where: { id: paidEntry.id },
+    });
+    expect(paidAfter.qty).toBe(10);
+    expect(paidAfter.amount.toFixed(2)).toBe('500.00');
   });
 
   test('recordDefect overflow → 422 DEFECT_EXCEEDS_REMAINING, без сайд-эффектов', async () => {

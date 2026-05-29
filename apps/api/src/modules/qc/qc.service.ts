@@ -657,7 +657,7 @@ export class QcService {
       throw new DefectExceedsRemainingException(remaining);
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    const reconcile = await this.prisma.$transaction(async (tx) => {
       // Перепроверяем границу под локом транзакции, чтобы две
       // одновременные фиксации брака не пробили `qtyGood >= 0`.
       const fresh = await tx.passport.findUnique({
@@ -708,11 +708,20 @@ export class QcService {
           },
         },
       });
+      // Авто-пересчёт сдельной выработки по паспорту: выработка = qtyGood
+      // для всех сдельных. Раскройщик и уже выплаченные строки не
+      // трогаются (см. `EarningsService.reconcileToQtyGood`).
+      return this.earnings.reconcileToQtyGood(tx, passportId);
     });
 
     this.logger.log(
-      `event=qc.defect passportId=${passportId} defectTypeId=${defectType.id} qty=${dto.qty} actorId=${actorEmployeeId}`,
+      `event=qc.defect passportId=${passportId} defectTypeId=${defectType.id} qty=${dto.qty} actorId=${actorEmployeeId} reconciled=${reconcile.updated} skippedPaid=${reconcile.skipped.length}`,
     );
+    if (reconcile.skipped.length > 0) {
+      this.logger.warn(
+        `event=qc.defect.reconcile.skipped passportId=${passportId} entryIds=${reconcile.skipped.map((s) => s.id).join(',')} reason=ALREADY_PAID`,
+      );
+    }
     return this.loadDetail(passportId);
   }
 
