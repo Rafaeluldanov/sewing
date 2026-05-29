@@ -303,10 +303,16 @@ export class PackingService {
       // категории QC — требуем `QC_PASSED`, если шаг IRONING —
       // требуем `WTO_PASSED`. Заказы без соответствующего шага
       // пропускают чек (как `evaluateRouteOrder`).
+      //
+      // Заодно выгребаем `operationId` шага PACKING — он попадёт в
+      // `PACKED.operationId` ниже, чтобы доска мастера могла рисовать
+      // «выпущено» на колонке упаковки по тому же `OPERATION_FINISHED`-
+      // стайл коду, что и пошив.
+      let packingOperationId: string | null = null;
       if (fresh.orderId) {
         const routeSteps = await tx.orderRouteStep.findMany({
           where: { orderId: fresh.orderId },
-          select: { operation: { select: { category: true } } },
+          select: { operation: { select: { id: true, category: true } } },
         });
         const hasQc = routeSteps.some(
           (s) => s.operation.category === OperationCategory.QC,
@@ -314,6 +320,10 @@ export class PackingService {
         const hasWto = routeSteps.some(
           (s) => s.operation.category === OperationCategory.IRONING,
         );
+        packingOperationId =
+          routeSteps.find(
+            (s) => s.operation.category === OperationCategory.PACKING,
+          )?.operation.id ?? null;
         // После `OPERATION_REWORK_OPENED` (ОТК «вернуть на переделку»,
         // см. `QcService.returnToRework`) старые `QC_PASSED`/`WTO_PASSED`
         // не засчитываются — должен быть свежий, после последнего rework.
@@ -414,6 +424,10 @@ export class PackingService {
         data: {
           passportId: fresh.id,
           type: PassportEventType.PACKED,
+          // operationId шага PACKING заказа: симметрия с
+          // `QC_PASSED.operationId` / `WTO_PASSED.operationId`. Используется
+          // доской мастера для «выпущено» на колонке упаковки.
+          operationId: packingOperationId,
           boxId: box.id,
           employeeId: actorEmployeeId,
           qty: fresh.qtyGood,

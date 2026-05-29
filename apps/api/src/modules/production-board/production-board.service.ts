@@ -385,7 +385,22 @@ export class ProductionBoardService {
         this.prisma.passportEvent.findMany({
           where: {
             passportId: { in: passIds },
-            type: PassportEventType.OPERATION_FINISHED,
+            // «Терминал на операции» = пошив закрылся через
+            // `OPERATION_FINISHED`, ОТК — через `QC_PASSED`, ВТО —
+            // через `WTO_PASSED`, упаковка — через `PACKED`. Все
+            // четыре события несут `operationId` шага и `employeeId`
+            // исполнителя, поэтому колонка доски считает их одинаково
+            // («дошло» / «выпущено» + атрибуция финишёру). До этого
+            // ОТК/ВТО/УПАКОВКА на доске всегда были пустыми, потому
+            // что считали только `OPERATION_FINISHED`.
+            type: {
+              in: [
+                PassportEventType.OPERATION_FINISHED,
+                PassportEventType.QC_PASSED,
+                PassportEventType.WTO_PASSED,
+                PassportEventType.PACKED,
+              ],
+            },
             operationId: { not: null },
           },
           select: {
