@@ -158,26 +158,40 @@ export function QrScannerModal({ onScan, onClose }: Props) {
             },
           );
 
-        try {
-          // `{ exact: 'environment' }` — это требование, а не подсказка:
-          // без `exact` браузер вправе молча взять фронталку (наблюдалось
-          // на части Android/iOS), что для сканера паспортов неприемлемо.
-          await startWith({ facingMode: { exact: 'environment' } });
-        } catch (e: unknown) {
-          // Если задней камеры физически нет (десктоп/планшет) — фолбэк
-          // на перечисление устройств. Для denied/insecure фолбэк бессмыслен —
-          // пробрасываем дальше.
+        // Каскад: пробуем заднюю камеру всё более мягкими способами.
+        // 1) exact — гарантия задней, но iOS Safari/часть Android-WebView
+        //    могут бросить NotAllowedError/OverconstrainedError на синтаксисе.
+        // 2) ideal — подсказка браузеру; на большинстве устройств этого
+        //    достаточно, но иногда выбирается фронталка.
+        // 3) enumerateDevices — ищем камеру с «задней» меткой.
+        // Сообщение «нет доступа» показываем только если ВСЕ три способа
+        // провалились (т.е. это правда отказ пользователя / нет HTTPS).
+        const attempts: Array<() => Promise<unknown>> = [
+          () => startWith({ facingMode: { exact: 'environment' } }),
+          () => startWith({ facingMode: 'environment' }),
+          async () => {
+            const cams = await mod.Html5Qrcode.getCameras();
+            if (!cams || cams.length === 0) throw new Error('no cameras');
+            const rear =
+              cams.find((c) =>
+                /back|rear|environment|задн|тыл/i.test(c.label),
+              ) ?? cams[cams.length - 1];
+            return startWith(rear.id);
+          },
+        ];
+        let lastErr: unknown = null;
+        let started = false;
+        for (const tryStart of attempts) {
           if (cancelled) return;
-          const cls = classifyError(e);
-          if (cls.kind !== 'overconstrained' && cls.kind !== 'no-device') throw e;
-          const cams = await mod.Html5Qrcode.getCameras();
-          if (!cams || cams.length === 0) throw e;
-          // Предпочитаем камеру с «задней» меткой — getCameras() возвращает
-          // устройства в порядке системы, и cams[0] часто оказывается фронталкой.
-          const rear =
-            cams.find((c) => /back|rear|environment|задн|тыл/i.test(c.label)) ?? cams[0];
-          await startWith(rear.id);
+          try {
+            await tryStart();
+            started = true;
+            break;
+          } catch (e: unknown) {
+            lastErr = e;
+          }
         }
+        if (!started) throw lastErr;
         if (!cancelled) setStarting(false);
       } catch (e: unknown) {
         if (cancelled) return;
