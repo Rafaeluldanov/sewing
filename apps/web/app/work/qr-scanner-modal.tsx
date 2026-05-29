@@ -159,21 +159,24 @@ export function QrScannerModal({ onScan, onClose }: Props) {
           );
 
         try {
-          // html5-qrcode валидирует facingMode сам и принимает только
-          // строку или { exact: ... } — `ideal` он отвергнет с ошибкой
-          // ещё до getUserMedia. Строка эквивалентна "ideal" на уровне
-          // браузера, поэтому её и используем.
-          await startWith({ facingMode: 'environment' });
+          // `{ exact: 'environment' }` — это требование, а не подсказка:
+          // без `exact` браузер вправе молча взять фронталку (наблюдалось
+          // на части Android/iOS), что для сканера паспортов неприемлемо.
+          await startWith({ facingMode: { exact: 'environment' } });
         } catch (e: unknown) {
-          // Если задней камеры физически нет (десктоп) или constraints
-          // не подходят — фолбэк на первую доступную камеру.
-          // Для denied/insecure фолбэк бессмыслен — пробрасываем дальше.
+          // Если задней камеры физически нет (десктоп/планшет) — фолбэк
+          // на перечисление устройств. Для denied/insecure фолбэк бессмыслен —
+          // пробрасываем дальше.
           if (cancelled) return;
           const cls = classifyError(e);
           if (cls.kind !== 'overconstrained' && cls.kind !== 'no-device') throw e;
           const cams = await mod.Html5Qrcode.getCameras();
           if (!cams || cams.length === 0) throw e;
-          await startWith(cams[0].id);
+          // Предпочитаем камеру с «задней» меткой — getCameras() возвращает
+          // устройства в порядке системы, и cams[0] часто оказывается фронталкой.
+          const rear =
+            cams.find((c) => /back|rear|environment|задн|тыл/i.test(c.label)) ?? cams[0];
+          await startWith(rear.id);
         }
         if (!cancelled) setStarting(false);
       } catch (e: unknown) {
