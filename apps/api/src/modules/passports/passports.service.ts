@@ -1132,24 +1132,55 @@ export class PassportsService {
     // AND-гейт: параллельные группы, целиком стоящие ДО target, должны
     // быть завершены полностью. Запрос завершённых операций — только если
     // такие группы есть (в обычном маршруте без групп — пропускаем).
+    //
+    // Substitute-правила (см. `OperationSubstitution`): если есть запись
+    // `(satisfiesOpId = X, substituteOpId = Y)`, то `OPERATION_FINISHED`
+    // на Y засчитывает закрытие X. Например, РАСПОШИВ (04) — заместитель
+    // Подгиб низа (0001) и Распошив рукав (16): когда станок «Подгиб
+    // низа» сломан, швея закрывает 04, и это считается эквивалентом
+    // пары. См. `prisma/migrations/20260729200000_add_operation_substitution`.
     let groupIncomplete = false;
     const groupsBefore: number[] = [];
     for (const [g, gMax] of groupMax) {
       if (gMax < targetIndex) groupsBefore.push(g);
     }
     if (groupsBefore.length > 0) {
-      const finished = await this.prisma.passportEvent.findMany({
-        where: {
-          passportId: passport.id,
-          type: PassportEventType.OPERATION_FINISHED,
-          operationId: { not: null },
-        },
-        select: { operationId: true },
-      });
+      const [finished, substitutes] = await Promise.all([
+        this.prisma.passportEvent.findMany({
+          where: {
+            passportId: passport.id,
+            type: PassportEventType.OPERATION_FINISHED,
+            operationId: { not: null },
+          },
+          select: { operationId: true },
+        }),
+        // Только substitutes для операций, реально стоящих в проверяемых
+        // группах — иначе тянули бы весь справочник.
+        this.prisma.operationSubstitution.findMany({
+          where: {
+            satisfiesOpId: {
+              in: [...groupsBefore.flatMap((g) => groupOps.get(g) ?? [])],
+            },
+          },
+          select: { satisfiesOpId: true, substituteOpId: true },
+        }),
+      ]);
       const finishedSet = new Set(finished.map((e) => e.operationId));
+      const substitutesFor = new Map<string, string[]>();
+      for (const s of substitutes) {
+        const arr = substitutesFor.get(s.satisfiesOpId) ?? [];
+        arr.push(s.substituteOpId);
+        substitutesFor.set(s.satisfiesOpId, arr);
+      }
+      const isSatisfied = (opId: string): boolean => {
+        if (finishedSet.has(opId)) return true;
+        const subs = substitutesFor.get(opId);
+        if (!subs) return false;
+        return subs.some((sub) => finishedSet.has(sub));
+      };
       for (const g of groupsBefore) {
         const ops = groupOps.get(g) ?? [];
-        if (!ops.every((op) => finishedSet.has(op))) {
+        if (!ops.every(isSatisfied)) {
           groupIncomplete = true;
           break;
         }

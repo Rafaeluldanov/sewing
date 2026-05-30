@@ -791,18 +791,43 @@ export class QcService {
     }
     if (groupsBefore.length === 0) return;
 
-    const finished = await this.prisma.passportEvent.findMany({
-      where: {
-        passportId,
-        type: PassportEventType.OPERATION_FINISHED,
-        operationId: { not: null },
-      },
-      select: { operationId: true },
-    });
+    // Substitute-правила (см. `OperationSubstitution`): закрытие
+    // substitute засчитывает satisfies (см. `evaluateRouteOrder` в
+    // `passports.service.ts`).
+    const [finished, substitutes] = await Promise.all([
+      this.prisma.passportEvent.findMany({
+        where: {
+          passportId,
+          type: PassportEventType.OPERATION_FINISHED,
+          operationId: { not: null },
+        },
+        select: { operationId: true },
+      }),
+      this.prisma.operationSubstitution.findMany({
+        where: {
+          satisfiesOpId: {
+            in: [...groupsBefore.flatMap((g) => groupOps.get(g) ?? [])],
+          },
+        },
+        select: { satisfiesOpId: true, substituteOpId: true },
+      }),
+    ]);
     const finishedSet = new Set(finished.map((e) => e.operationId));
+    const substitutesFor = new Map<string, string[]>();
+    for (const s of substitutes) {
+      const arr = substitutesFor.get(s.satisfiesOpId) ?? [];
+      arr.push(s.substituteOpId);
+      substitutesFor.set(s.satisfiesOpId, arr);
+    }
+    const isSatisfied = (opId: string): boolean => {
+      if (finishedSet.has(opId)) return true;
+      const subs = substitutesFor.get(opId);
+      if (!subs) return false;
+      return subs.some((sub) => finishedSet.has(sub));
+    };
     for (const g of groupsBefore) {
       const ops = groupOps.get(g) ?? [];
-      if (!ops.every((op) => finishedSet.has(op))) {
+      if (!ops.every(isSatisfied)) {
         throw new PassportParallelGroupIncompleteException();
       }
     }

@@ -671,9 +671,47 @@ model Operation {
   /// (если есть открытая смена) на момент создания вызова.
   masterCalls         MasterCall[]
 
+  /// Заместители для AND-гейта параллельной группы (см.
+  /// `OperationSubstitution`). Список «эта операция засчитывается как
+  /// substitute для других операций»: e.g. РАСПОШИВ (full) заместитель
+  /// для Подгиб низа и Распошив рукав.
+  substitutesFor      OperationSubstitution[]   @relation("SubstSubstitute")
+  /// И обратное: «эти заместители засчитывают мою OPERATION_FINISHED».
+  substitutedBy       OperationSubstitution[]   @relation("SubstSatisfies")
+
   @@index([sortOrder])
   @@index([category])
   @@index([pricingMode])
+}
+
+/// Substitute-правило для AND-гейта параллельной группы маршрута.
+///
+/// Означает: «`OPERATION_FINISHED` на `substituteOpId` засчитывает
+/// `OPERATION_FINISHED` на `satisfiesOpId` для целей `evaluateRouteOrder`
+/// (issue/scan) и `QcService` AND-гейта». Использовать для случаев,
+/// когда одна операция физически покрывает работу другой — например,
+/// generic РАСПОШИВ (04, ставка 20) делает и подгиб низа, и распошив
+/// рукава, поэтому если станок «Подгиб низа» сломан, швея закрывает 04
+/// одна, и это должно считаться эквивалентным закрытию пары (16, 0001).
+///
+/// Направление: однонаправленное. Закрытие substitute удовлетворяет
+/// satisfies, обратное не верно (закрытие только 16 не покрывает 04).
+///
+/// Сдельная (`OperationEntry`) не дублируется: substitute закрывает
+/// свою сдельную (за 04 — ставка 20), а satisfies НЕ создаёт отдельное
+/// начисление. Правила применяются только при чтении (route-gate),
+/// данные сдельной не трогаем.
+model OperationSubstitution {
+  id              String   @id @default(cuid())
+  satisfiesOpId   String
+  substituteOpId  String
+  createdAt       DateTime @default(now())
+
+  satisfiesOp  Operation @relation("SubstSatisfies", fields: [satisfiesOpId], references: [id], onDelete: Cascade)
+  substituteOp Operation @relation("SubstSubstitute", fields: [substituteOpId], references: [id], onDelete: Cascade)
+
+  @@unique([satisfiesOpId, substituteOpId])
+  @@index([substituteOpId])
 }
 
 /// Ставка операции по размеру (для `Operation.pricingMode = BY_SIZE`).
