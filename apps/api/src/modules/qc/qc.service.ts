@@ -26,6 +26,7 @@ import {
   EmployeeNotFoundException,
   PassportNoFinishedOperationException,
   PassportNotQcableException,
+  PassportParallelGroupIncompleteException,
   PassportReworkAlreadyPendingException,
   PassportReworkRouteStepMissingException,
   PassportReworkTargetNotEligibleException,
@@ -323,6 +324,18 @@ export class QcService {
     });
     if (!actor) throw new EmployeeNotFoundException();
     if (!actor.active) throw new EmployeeInactiveException();
+
+    // AND-гейт параллельной группы до ОТК. Зеркало
+    // `PassportsService.evaluateRouteOrder` (см. `passports.service.ts`):
+    // если в маршруте заказа есть параллельная группа целиком ДО шага
+    // ОТК — все её операции должны быть закрыты (`OPERATION_FINISHED`),
+    // иначе принимать ОТК нельзя. Это закрывает класс «застрял после
+    // ОТК на ВТО» (инцидент 28.05.2026 на чёрных футболках, см.
+    // `scripts/migrations/20260529_unblock_*`). Для retroactive
+    // (PACKED-паспорт без QC_PASSED) пропускаем — историю не лечим.
+    if (!retroactive) {
+      await this.assertParallelGroupCompleteForQc(passport.id, passport.orderId);
+    }
 
     // Сам event и аудит — в одной транзакции, чтобы инвариант
     // «либо и QC_PASSED, и AuditLog, либо ничего» соблюдался даже
@@ -728,6 +741,72 @@ export class QcService {
   // -------------------------------------------------------------------------
   // INTERNAL
   // -------------------------------------------------------------------------
+
+  /**
+   * AND-гейт параллельной группы перед `QC_PASSED`. Логика — зеркало
+   * `PassportsService.evaluateRouteOrder.groupIncomplete` для случая,
+   * когда target = шаг ОТК маршрута заказа: если есть параллельные
+   * группы, целиком стоящие ДО ОТК, все их операции должны быть
+   * закрыты `OPERATION_FINISHED` для этого паспорта. Если нет —
+   * бросаем `PassportParallelGroupIncompleteException`.
+   *
+   * Заказы без маршрута / без шага ОТК / без параллельных групп —
+   * пропускаем (no-op), как evaluateRouteOrder.
+   */
+  private async assertParallelGroupCompleteForQc(
+    passportId: string,
+    orderId: string | null,
+  ): Promise<void> {
+    if (!orderId) return;
+    const steps = await this.prisma.orderRouteStep.findMany({
+      where: { orderId },
+      select: {
+        index: true,
+        operationId: true,
+        parallelGroup: true,
+        operation: { select: { category: true } },
+      },
+    });
+    if (steps.length === 0) return;
+    const qcStep = steps.find(
+      (s) => s.operation.category === OperationCategory.QC,
+    );
+    if (!qcStep) return;
+
+    const groupMax = new Map<number, number>();
+    const groupOps = new Map<number, string[]>();
+    for (const s of steps) {
+      if (s.parallelGroup == null) continue;
+      groupMax.set(
+        s.parallelGroup,
+        Math.max(groupMax.get(s.parallelGroup) ?? s.index, s.index),
+      );
+      const arr = groupOps.get(s.parallelGroup) ?? [];
+      arr.push(s.operationId);
+      groupOps.set(s.parallelGroup, arr);
+    }
+    const groupsBefore: number[] = [];
+    for (const [g, gMax] of groupMax) {
+      if (gMax < qcStep.index) groupsBefore.push(g);
+    }
+    if (groupsBefore.length === 0) return;
+
+    const finished = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId,
+        type: PassportEventType.OPERATION_FINISHED,
+        operationId: { not: null },
+      },
+      select: { operationId: true },
+    });
+    const finishedSet = new Set(finished.map((e) => e.operationId));
+    for (const g of groupsBefore) {
+      const ops = groupOps.get(g) ?? [];
+      if (!ops.every((op) => finishedSet.has(op))) {
+        throw new PassportParallelGroupIncompleteException();
+      }
+    }
+  }
 
   private async loadDetail(passportId: string): Promise<QcPassportDetailDto> {
     const r = await this.prisma.passport.findUnique({
