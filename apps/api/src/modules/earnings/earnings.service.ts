@@ -769,7 +769,56 @@ export class EarningsService {
     const rate = await this.operations.resolveRate(op.id, args.sizeId, tx);
     if (!rate) return;
 
-    const amount = roundMoney(rate.times(args.qty));
+    const baseAmount = roundMoney(rate.times(args.qty));
+
+    // Substitute credit (см. `OperationSubstitution`, миграция
+    // `20260729200000_add_operation_substitution`).
+    //
+    // Сценарий: швея сначала закрыла «Распошив рукав» (16) с
+    // OperationEntry на 10/шт, потом сломался Подгиб низа, она
+    // добивает то же на тех же паспортах и закрывает «РАСПОШИВ» (04,
+    // ставка 20). 04 — substitute для 16 и 0001, поэтому здесь не
+    // должно быть двойной оплаты: вычитаем уже выплаченное по
+    // satisfied-операциям ЭТОМУ ЖЕ сотруднику на ЭТОМ ЖЕ паспорте.
+    //
+    // Уже существующие APPROVED/PENDING_RELEASE по satisfied-ops
+    // вычитаются из baseAmount. Если итог ≤ 0 — начисление не создаём
+    // вовсе (полностью покрыто substitute'ом предыдущих ops). Минусовых
+    // OperationEntry не пишем — это «корректировка», а не реверс.
+    const substituted = await tx.operationSubstitution.findMany({
+      where: { substituteOpId: op.id },
+      select: { satisfiesOpId: true },
+    });
+    let creditedAmount = baseAmount;
+    let creditedAgainst: { operationId: string; amount: string }[] = [];
+    if (substituted.length > 0) {
+      const prior = await tx.operationEntry.findMany({
+        where: {
+          passportId: args.passportId,
+          employeeId: employee.id,
+          operationId: { in: substituted.map((s) => s.satisfiesOpId) },
+          status: { in: [EntryStatus.APPROVED, EntryStatus.PENDING_RELEASE] },
+        },
+        select: { id: true, operationId: true, amount: true },
+      });
+      const priorSum = prior.reduce(
+        (acc, p) => acc.plus(p.amount),
+        baseAmount.minus(baseAmount), // нулевой Decimal того же типа
+      );
+      creditedAmount = roundMoney(baseAmount.minus(priorSum));
+      creditedAgainst = prior.map((p) => ({
+        operationId: p.operationId,
+        amount: p.amount.toString(),
+      }));
+      if (creditedAmount.lte(0)) {
+        // Полностью покрыто — ничего не создаём, но логируем для аудита.
+        this.logger.log(
+          `event=earnings.substitute.fullyCovered passportId=${args.passportId} employeeId=${employee.id} substituteOp=${op.id} baseAmount=${baseAmount.toString()} priorSum=${priorSum.toString()}`,
+        );
+        return;
+      }
+    }
+
     const approveImmediately = args.approveImmediately === true;
     await this.safeCreate(tx, {
       passportId: args.passportId,
@@ -777,7 +826,7 @@ export class EarningsService {
       employeeId: employee.id,
       qty: args.qty,
       ratePerUnit: rate,
-      amount,
+      amount: creditedAmount,
       status: approveImmediately
         ? EntryStatus.APPROVED
         : EntryStatus.PENDING_RELEASE,
@@ -786,6 +835,11 @@ export class EarningsService {
       sourceEventId: args.sourceEventId ?? null,
       approvedAt: approveImmediately ? new Date() : null,
     });
+    if (creditedAgainst.length > 0) {
+      this.logger.log(
+        `event=earnings.substitute.credited passportId=${args.passportId} employeeId=${employee.id} substituteOp=${op.id} baseAmount=${baseAmount.toString()} creditedAmount=${creditedAmount.toString()} against=${JSON.stringify(creditedAgainst)}`,
+      );
+    }
   }
 
   // ===========================================================================

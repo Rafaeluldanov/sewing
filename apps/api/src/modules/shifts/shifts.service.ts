@@ -165,14 +165,33 @@ export class ShiftsService {
 
     // Защита от записи OPERATION_FINISHED на «не ту» операцию (см. JSDoc
     // и `ShiftHasActivePassportsException`). Достаточно одного попадания.
-    const stuck = await this.prisma.passport.findFirst({
-      where: {
-        currentEmployeeId: dto.employeeId,
-        status: PassportStatus.IN_PROGRESS,
-      },
-      select: { id: true },
-    });
-    if (stuck) throw new ShiftHasActivePassportsException();
+    //
+    // Исключение для substitute-перехода: если новая операция в
+    // `OperationSubstitution` помечена substitute'ом для ТЕКУЩЕЙ, это
+    // легитимный fallback (сценарий «сломался станок Подгиб низа,
+    // швея-рукав закрывает full Распошив»). Швея добивает паспорта на
+    // руках уже под new op, EarningsService при `createPendingForCompletedOperation`
+    // вычитает уже выплаченную сдельную за satisfied-op (substitute credit),
+    // двойной оплаты не будет. См.
+    // `prisma/migrations/20260729200000_add_operation_substitution`.
+    const isSubstituteTransition =
+      (await this.prisma.operationSubstitution.findFirst({
+        where: {
+          satisfiesOpId: current.operationId,
+          substituteOpId: dto.operationId,
+        },
+        select: { id: true },
+      })) !== null;
+    if (!isSubstituteTransition) {
+      const stuck = await this.prisma.passport.findFirst({
+        where: {
+          currentEmployeeId: dto.employeeId,
+          status: PassportStatus.IN_PROGRESS,
+        },
+        select: { id: true },
+      });
+      if (stuck) throw new ShiftHasActivePassportsException();
+    }
 
     const updated = await this.prisma.shiftSession.update({
       where: { id: current.id },
