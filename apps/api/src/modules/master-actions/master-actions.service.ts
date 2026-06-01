@@ -632,6 +632,7 @@ export class MasterActionsService {
       },
       select: {
         id: true,
+        number: true,
         color: true,
         qtyCut: true,
         status: true,
@@ -663,7 +664,7 @@ export class MasterActionsService {
 
     const passport: MasterCallPassportDto = {
       id: row.id,
-      number: row.order.number,
+      number: row.number,
       size: row.size.code,
       color: row.color ?? null,
       qtyCut: row.qtyCut,
@@ -764,7 +765,7 @@ export class MasterActionsService {
   private snapshot(row: PassportRow): MasterActionPassportSnapshotDto {
     return {
       id: row.id,
-      number: row.order.number,
+      number: row.number,
       size: row.size.code,
       color: row.color ?? null,
       qtyCut: row.qtyCut,

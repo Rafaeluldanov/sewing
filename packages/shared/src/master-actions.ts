@@ -241,6 +241,7 @@ export type SetRouteStepDto = z.infer<typeof SetRouteStepSchema>;
  */
 export interface MasterActionPassportSnapshotDto {
   id: string;
+  /** Номер самого паспорта (`Passport.number`), НЕ номер заказа. */
   number: string;
   size: string;
   color: string | null;

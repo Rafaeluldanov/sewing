@@ -826,4 +826,24 @@ describeWithDb('integration — master actions (Stage 2)', () => {
       .expect(409);
     expect(res.body?.code).toBe('PASSPORT_TERMINAL');
   });
+
+  test('find-passport-by-code возвращает номер ПАСПОРТА, а не заказа', async () => {
+    const { passportId } = await setupPassport({ currentEmployeeId: null });
+    const passport = await t.prisma.passport.findUnique({
+      where: { id: passportId },
+      select: { number: true, order: { select: { number: true } } },
+    });
+    expect(passport?.number).toMatch(/^P-/);
+    expect(passport?.order.number).toMatch(/^O-/);
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/master-actions/find-passport-by-code`)
+      .set('Cookie', cookies.master)
+      .send({ code: passportId })
+      .expect(201);
+    // Регрессия: раньше `number` ошибочно = order.number.
+    expect(res.body.passport.number).toBe(passport!.number);
+    expect(res.body.passport.orderNumber).toBe(passport!.order.number);
+    expect(res.body.passport.number).not.toBe(res.body.passport.orderNumber);
+  });
 });

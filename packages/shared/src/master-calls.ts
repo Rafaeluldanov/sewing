@@ -140,7 +140,8 @@ export interface MasterCallRouteStepDto {
 export interface MasterCallPassportDto {
   /** `Passport.id` — нужен для action-эндпоинтов `/api/master-actions/passports/:id/...`. */
   id: string;
-  /** Короткий номер паспорта (`PassportNumber`/`Order.number`). */
+  /** Номер самого паспорта (`Passport.number`, например `P-20260505-0191`),
+   *  НЕ номер заказа — для заказа есть отдельное поле `orderNumber`. */
   number: string;
   /** Код размера (`Size.code`, например `M`). */
   size: string;

@@ -372,6 +372,7 @@ export class MasterCallsService {
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,
+        number: true,
         color: true,
         qtyCut: true,
         status: true,
@@ -432,7 +433,7 @@ export class MasterCallsService {
       const orderSteps = stepsByOrder.get(r.orderId) ?? [];
       arr.push({
         id: r.id,
-        number: r.order.number,
+        number: r.number,
         size: r.size.code,
         color: r.color ?? null,
         qtyCut: r.qtyCut,
