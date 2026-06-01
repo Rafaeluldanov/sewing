@@ -125,3 +125,130 @@ export function playOperationCompletedSound(): void {
     /* fail-soft: звук — только подтверждение */
   }
 }
+
+// ---------------------------------------------------------------------------
+// Тревога «пришёл брак от ОТК» (см. `seamstress-active-panel.tsx`,
+// секция переделок + поллинг `/shifts/my-rework`).
+//
+// Отличие от подтверждающих звуков выше: этот сигнал должен ПЕРЕБИВАТЬ
+// рутину — швея может в этот момент шить другой паспорт и не смотреть
+// на экран. Поэтому тембр громче и узнаваемо «тревожный» (три
+// восходящих гудка square-волной), а вибрация — длинный паттерн, а не
+// короткий тычок скана.
+//
+// Важная тонкость про autoplay: этот звук играет НЕ в момент user
+// gesture (его триггерит фоновый поллинг), поэтому браузер по
+// умолчанию заглушит свежесозданный AudioContext. Решение —
+// переиспользуем один общий контекст и «разблокируем» (resume) его на
+// первом же касании экрана через `armReworkAudio()`. После любого
+// тапа швеи (а она всё равно жмёт «Взять крой»/сканирует) контекст
+// остаётся «живым» на весь сеанс страницы.
+// ---------------------------------------------------------------------------
+
+interface WebkitWindow {
+  webkitAudioContext?: typeof AudioContext;
+}
+
+let sharedAlertCtx: AudioContext | null = null;
+let alertAudioArmed = false;
+
+function getSharedAlertCtx(): AudioContext | null {
+  if (typeof window === 'undefined') return null;
+  const Ctor: typeof AudioContext | undefined =
+    window.AudioContext ?? (window as unknown as WebkitWindow).webkitAudioContext;
+  if (!Ctor) return null;
+  if (!sharedAlertCtx) {
+    try {
+      sharedAlertCtx = new Ctor();
+    } catch {
+      return null;
+    }
+  }
+  return sharedAlertCtx;
+}
+
+/**
+ * Один раз навешивает обработчики на первые жесты пользователя, чтобы
+ * «разбудить» общий AudioContext тревоги. Без этого браузерная
+ * autoplay-политика молча глушит звук, который играет вне контекста
+ * клика (а тревога о браке прилетает из фонового поллинга).
+ *
+ * Идемпотентно: вызывать можно из любого числа эффектов — реальная
+ * подписка ставится единожды. Возвращает функцию-отписку (для cleanup
+ * в useEffect), хотя слушатели намеренно живут весь сеанс /work.
+ */
+export function armReworkAudio(): () => void {
+  if (typeof window === 'undefined' || alertAudioArmed) return () => {};
+  alertAudioArmed = true;
+  const unlock = () => {
+    const ctx = getSharedAlertCtx();
+    if (ctx && ctx.state === 'suspended') {
+      ctx.resume().catch(() => {
+        /* fail-soft */
+      });
+    }
+  };
+  window.addEventListener('pointerdown', unlock);
+  window.addEventListener('touchstart', unlock);
+  window.addEventListener('keydown', unlock);
+  return () => {
+    window.removeEventListener('pointerdown', unlock);
+    window.removeEventListener('touchstart', unlock);
+    window.removeEventListener('keydown', unlock);
+    alertAudioArmed = false;
+  };
+}
+
+/**
+ * Тревожный сигнал «пришёл брак»: три коротких восходящих гудка
+ * (880 → 880 → 1175 Гц) square-волной, общая длительность ~0.5 с.
+ * Громче и резче подтверждающих звуков — чтобы пробить шум цеха и
+ * привлечь внимание. Общий контекст не закрываем (он переиспользуется
+ * для повторов сигнала, пока открыт модал тревоги).
+ */
+export function playReworkAlertSound(): void {
+  const ctx = getSharedAlertCtx();
+  if (!ctx) return;
+  try {
+    if (ctx.state === 'suspended') {
+      ctx.resume().catch(() => {
+        /* fail-soft */
+      });
+    }
+    const now = ctx.currentTime;
+    const beeps: [number, number][] = [
+      [0.0, 880],
+      [0.18, 880],
+      [0.36, 1175],
+    ];
+    for (const [offset, freq] of beeps) {
+      const osc = ctx.createOscillator();
+      osc.type = 'square';
+      osc.frequency.setValueAtTime(freq, now + offset);
+      const gain = ctx.createGain();
+      gain.gain.setValueAtTime(0.0001, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.4, now + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.14);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now + offset);
+      osc.stop(now + offset + 0.16);
+    }
+  } catch {
+    /* fail-soft: тревога — поверх визуального модала, не критично */
+  }
+}
+
+/**
+ * Длинная вибрация-тревога «пришёл брак» (паттерн с паузами, ~0.8 с).
+ * Заметно отличается от короткого `triggerScanHaptic`. Молча ничего
+ * не делает там, где Vibration API недоступен (iOS Safari, десктоп).
+ */
+export function triggerReworkHaptic(): void {
+  if (typeof navigator === 'undefined') return;
+  try {
+    navigator.vibrate?.([200, 100, 200, 100, 200]);
+  } catch {
+    /* fail-soft */
+  }
+}

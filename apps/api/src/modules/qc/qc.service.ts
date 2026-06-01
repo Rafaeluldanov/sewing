@@ -32,6 +32,7 @@ import {
   PassportReworkTargetNotEligibleException,
 } from '../../common/errors.js';
 import { EarningsService } from '../earnings/earnings.service.js';
+import { PushService } from '../push/push.service.js';
 
 /**
  * Сервис ОТК (Шаг 7).
@@ -54,6 +55,7 @@ export class QcService {
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
     private readonly earnings: EarningsService,
+    private readonly push: PushService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -628,6 +630,21 @@ export class QcService {
     this.logger.log(
       `event=qc.returnToRework passportId=${passportId} actorId=${actorEmployeeId} targetOperationId=${targetStep.operationId} previousFinisherEmployeeId=${lastFinished.employeeId ?? 'unknown'}`,
     );
+
+    // Фоновый Web Push швее-финишёру: будит её устройство даже при
+    // свёрнутом приложении/потушенном экране, чтобы переделка
+    // приоритизировалась, а не ждала, пока она откроет /work. Строго
+    // ПОСЛЕ коммита и fire-and-forget — `notifyEmployee` не бросает,
+    // доставка пуша не влияет на ответ ОТК (см. `PushService`).
+    if (lastFinished.employeeId) {
+      void this.push.notifyEmployee(lastFinished.employeeId, {
+        tag: `rework:${passportId}:${targetStep.operationId}`,
+        title: '⚠ Пришёл брак от ОТК',
+        body: `${passport.number} · ${target.operationName} — заберите у ОТК и переделайте в первую очередь.`,
+        url: '/work',
+      });
+    }
+
     return this.loadDetail(passportId);
   }
 

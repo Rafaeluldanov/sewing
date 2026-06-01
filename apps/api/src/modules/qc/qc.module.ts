@@ -4,6 +4,7 @@ import { QcController } from './qc.controller.js';
 import { DefectTypesController } from './defect-types.controller.js';
 import { PassportDefectsController } from './passport-defects.controller.js';
 import { EarningsModule } from '../earnings/earnings.module.js';
+import { PushModule } from '../push/push.module.js';
 
 /**
  * Модуль ОТК и фиксации брака (Шаг 7 MVP).
@@ -14,7 +15,7 @@ import { EarningsModule } from '../earnings/earnings.module.js';
  * (см. `docs/flows.md §F5a`, инвариант «оплата за изделие — один раз»).
  */
 @Module({
-  imports: [EarningsModule],
+  imports: [EarningsModule, PushModule],
   controllers: [
     QcController,
     DefectTypesController,

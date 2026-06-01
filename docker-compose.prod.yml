@@ -48,6 +48,14 @@ services:
       PRISMA_AUTO_SYNC: ${PRISMA_AUTO_SYNC:-1}
       PRISMA_AUTO_SYNC_RETRIES: ${PRISMA_AUTO_SYNC_RETRIES:-15}
       PRISMA_AUTO_SYNC_ACCEPT_DATA_LOSS: ${PRISMA_AUTO_SYNC_ACCEPT_DATA_LOSS:-0}
+      # Web Push (VAPID) — фоновые уведомления о браке швеям. Задаются
+      # в .env.prod (gitignored). Без них push-модуль стартует в
+      # disabled-режиме: подписки сохраняются, отправка пропускается
+      # (см. apps/api/src/modules/push/push.service.ts). VAPID_SUBJECT
+      # по умолчанию = APP_URL.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     volumes:
       # Загруженные пользователем файлы (превью лекал, DXF по размерам,
       # иконки категорий). Persistent named volume — переживает любые

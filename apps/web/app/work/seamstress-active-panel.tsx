@@ -22,7 +22,7 @@
  * (см. `seamstress-actions-menu.tsx`).
  */
 
-import { useState, useTransition } from 'react';
+import { useCallback, useEffect, useRef, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { ModalPortal } from '@/components/modal-portal';
 import type {
@@ -42,13 +42,18 @@ import {
 import {
   acceptPassportForIssueAction,
   completePassportOperationAction,
+  loadMyReworkAction,
   lookupPassportAction,
 } from './actions';
 import { CurrentWorkCard } from './current-work-card';
 import { CutIssueRuleBanner } from './cut-issue-rule-banner';
+import { ReworkPushSetup } from './rework-push-setup';
 import {
+  armReworkAudio,
   playCutAcceptedSound,
   playOperationCompletedSound,
+  playReworkAlertSound,
+  triggerReworkHaptic,
 } from './feedback';
 
 interface Props {
@@ -89,6 +94,26 @@ interface Props {
  */
 type FlowMode = 'issue' | 'complete';
 
+/**
+ * Период фонового опроса `/shifts/my-rework`. У флоу нет push/SSE
+ * (см. `docs/flows.md §F5a`), поэтому новый брак детектим поллингом.
+ * 15 с — компромисс: швея узнаёт о возврате почти сразу, а нагрузка
+ * на API копеечная (1 запрос на швею раз в 15 с).
+ */
+const REWORK_POLL_INTERVAL_MS = 15_000;
+
+/**
+ * Пока открыт модал тревоги — повторяем звук, чтобы швея не
+ * «прослушала» единичный сигнал за станком. Останавливается в момент,
+ * когда она нажимает «Понятно».
+ */
+const REWORK_ALERT_REPEAT_MS = 4_000;
+
+/** Стабильный ключ записи переделки — как в списке `ReworkSection`. */
+function reworkKey(p: ReworkPassportDto): string {
+  return `${p.passportId}:${p.operationCode}`;
+}
+
 export function SeamstressActivePanel({
   shift,
   currentWork,
@@ -121,6 +146,76 @@ export function SeamstressActivePanel({
     expected: OrderCutIssueRuleBannerOrderDto;
   } | null>(null);
   const [isPending, startTransition] = useTransition();
+
+  // -------------------------------------------------------------------
+  // Тревога «пришёл брак от ОТК»
+  //
+  // Секция `ReworkSection` сама по себе пассивна — швея увидит её
+  // только если смотрит на экран. Чтобы возврат на переделку реально
+  // приоритизировался, поллим `/shifts/my-rework` и при появлении
+  // НОВОЙ записи (ключа, которого не было) поднимаем блокирующий
+  // модал + звук + вибрацию.
+  //
+  // `seenReworkRef` инициализируем текущими ключами из server-prop,
+  // чтобы НЕ трубить тревогу о браке, который уже висел на экране при
+  // загрузке смены, — сигналим только про действительно новые.
+  // -------------------------------------------------------------------
+  const seenReworkRef = useRef<Set<string>>(
+    new Set(myRework.map(reworkKey)),
+  );
+  const [reworkAlert, setReworkAlert] = useState<ReworkPassportDto[] | null>(
+    null,
+  );
+
+  const processRework = useCallback((list: ReworkPassportDto[]) => {
+    const fresh = list.filter((p) => !seenReworkRef.current.has(reworkKey(p)));
+    if (fresh.length === 0) return;
+    for (const p of fresh) seenReworkRef.current.add(reworkKey(p));
+    playReworkAlertSound();
+    triggerReworkHaptic();
+    // Накапливаем: если пока открыт модал прилетела ещё одна переделка,
+    // показываем все непогашенные разом.
+    setReworkAlert((prev) => [...(prev ?? []), ...fresh]);
+  }, []);
+
+  // «Будим» аудио-контекст на первом касании — иначе autoplay-политика
+  // заглушит тревогу, играющую вне user gesture (из поллинга).
+  useEffect(() => armReworkAudio(), []);
+
+  // Фоновый поллинг переделок.
+  useEffect(() => {
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const list = await loadMyReworkAction();
+        if (!cancelled) processRework(list);
+      } catch {
+        /* fail-soft: фоновый опрос не должен ломать рабочий экран */
+      }
+    };
+    const id = window.setInterval(tick, REWORK_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      window.clearInterval(id);
+    };
+  }, [processRework]);
+
+  // Новый брак мог приехать и через server-prop (после router.refresh
+  // на завершении операции). Прогоняем prop через тот же детектор —
+  // дубли отсекает `seenReworkRef`.
+  useEffect(() => {
+    processRework(myRework);
+  }, [myRework, processRework]);
+
+  // Повтор сигнала, пока модал тревоги открыт.
+  useEffect(() => {
+    if (!reworkAlert || reworkAlert.length === 0) return;
+    const id = window.setInterval(() => {
+      playReworkAlertSound();
+      triggerReworkHaptic();
+    }, REWORK_ALERT_REPEAT_MS);
+    return () => window.clearInterval(id);
+  }, [reworkAlert]);
 
   const lookup = (code: string, mode: FlowMode) => {
     const trimmed = code.trim();
@@ -338,6 +433,8 @@ export function SeamstressActivePanel({
 
       {myRework.length > 0 && <ReworkSection items={myRework} />}
 
+      <ReworkPushSetup />
+
       <CurrentWorkCard
         items={currentWork}
         shiftOperationId={shift.operationId}
@@ -377,6 +474,12 @@ export function SeamstressActivePanel({
           onClose={() => setWrongSize(null)}
         />
       )}
+      {reworkAlert && reworkAlert.length > 0 && (
+        <ReworkAlertModal
+          items={reworkAlert}
+          onAcknowledge={() => setReworkAlert(null)}
+        />
+      )}
     </div>
   );
 }
@@ -411,6 +514,66 @@ function ReworkSection({ items }: { items: ReworkPassportDto[] }) {
         ))}
       </ul>
     </section>
+  );
+}
+
+/**
+ * Блокирующий модал «Пришёл брак!» — поднимается из поллинга
+ * `/shifts/my-rework`, когда ОТК вернул швее новый паспорт на
+ * переделку (см. `SeamstressActivePanel`). В отличие от пассивной
+ * `ReworkSection`, перекрывает экран и сопровождается звуком +
+ * вибрацией (`feedback.ts`), который повторяется, пока швея не нажмёт
+ * «Понятно» — цель в том, чтобы переделка приоритизировалась, а не
+ * терялась на фоне текущей работы.
+ *
+ * Сознательно НЕ закрывается по клику на backdrop: подтверждение
+ * должно быть явным (иначе случайный тап по экрану за станком погасит
+ * тревогу незаметно).
+ */
+function ReworkAlertModal({
+  items,
+  onAcknowledge,
+}: {
+  items: ReworkPassportDto[];
+  onAcknowledge: () => void;
+}) {
+  return (
+    <ModalPortal>
+      <div className="modal-backdrop" role="presentation">
+        <div
+          className="modal modal--rework-alert"
+          role="alertdialog"
+          aria-modal="true"
+          aria-labelledby="rework-alert-title"
+        >
+          <h2 id="rework-alert-title" className="modal__title">
+            ⚠ Пришёл брак от ОТК ({items.length})
+          </h2>
+          <p className="modal__text">
+            Заберите паспорт у ОТК и сосканируйте у своего станка кнопкой
+            «Взять крой». Сделайте это в первую очередь.
+          </p>
+          <ul className="rework-section__list">
+            {items.map((p) => (
+              <li key={reworkKey(p)}>
+                <strong>{p.passportNumber}</strong> · {p.operationName} ·{' '}
+                {p.productName}, {p.color}, {p.sizeCode} · {p.qtyGood} шт.
+              </li>
+            ))}
+          </ul>
+          <div className="modal__actions">
+            <button
+              type="button"
+              className="btn btn-primary btn-lg btn-block"
+              onClick={onAcknowledge}
+              autoFocus
+            >
+              Понятно
+            </button>
+          </div>
+        </div>
+      </div>
+    </ModalPortal>
   );
 }
 

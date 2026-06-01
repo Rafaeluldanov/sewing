@@ -9,12 +9,14 @@ import { ApiRequestError } from '@/lib/api';
 import {
   completePassportOperation,
   findPassportByCode,
+  getMyRework,
   issuePassport,
   scanPassport,
   startShift,
   stopShift,
   switchShiftOperation,
 } from '@/lib/shifts-api';
+import type { ReworkPassportDto } from '@sewing/shared/shifts';
 import type { PassportLookupResponse, WorkFormState } from './state';
 
 /**
@@ -238,6 +240,26 @@ export async function completePassportOperationAction(
     (id) => completePassportOperation(id),
     'Операция завершена',
   );
+}
+
+/**
+ * Лёгкий поллинг секции «К переделке от ОТК» из клиента seamstress
+ * flow (`seamstress-active-panel.tsx`). Возвращает тот же список, что
+ * грузит `page.tsx` при server-render, но без `router.refresh()` —
+ * чтобы детектить новый брак и проиграть звуковую тревогу, не
+ * перерисовывая весь экран.
+ *
+ * Fail-soft, как `loadMyReworkSafely` в `page.tsx`: бизнес-ошибку
+ * backend гасим в пустой список (клиентский поллинг и так обёрнут в
+ * try/catch), чтобы не спамить ошибками в фоне.
+ */
+export async function loadMyReworkAction(): Promise<ReworkPassportDto[]> {
+  try {
+    return await getMyRework();
+  } catch (e) {
+    if (e instanceof ApiRequestError) return [];
+    throw e;
+  }
 }
 
 export async function issuePassportAction(

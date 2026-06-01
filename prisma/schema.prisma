@@ -941,6 +941,14 @@ model Employee {
   constructorTasksCreated  ConstructorTask[] @relation("ConstructorTaskCreatedBy")
   constructorTasksAssigned ConstructorTask[] @relation("ConstructorTaskAssignedTo")
 
+  /// Web Push: устройства/браузеры, на которые этот сотрудник
+  /// подписался получать фоновые уведомления (например, «пришёл
+  /// брак от ОТК» для швеи). Одна запись = одна push-подписка
+  /// конкретного браузера. `onDelete: Cascade` — удаление учётки
+  /// сносит её подписки. См. `model PushSubscription` ниже и
+  /// `apps/api/src/modules/push/*`.
+  pushSubscriptions PushSubscription[]
+
   @@index([role])
   @@index([compensationType])
   /// PHASE 2 STEP 2: фильтр payroll/period по подразделению пробивается
@@ -949,6 +957,40 @@ model Employee {
   /// `findMany({ where: { companyDivisionId } })` в сервисе сотрудников
   /// и payroll-агрегаторе.
   @@index([companyDivisionId])
+}
+
+/// Web Push-подписка одного браузера/устройства сотрудника
+/// (W3C Push API + VAPID). Создаётся, когда сотрудник нажал
+/// «Включить уведомления» в кабинете и браузер вернул
+/// `PushSubscription` (endpoint + ключи p256dh/auth). Бэкенд
+/// (`PushService`) шлёт на `endpoint` зашифрованный payload через
+/// библиотеку `web-push`; служба доставки браузера (FCM/Mozilla/
+/// Apple) будит service worker даже при свёрнутом приложении.
+///
+/// `endpoint` уникален глобально — это и есть адрес доставки;
+/// повторная подписка того же браузера обновляет существующую
+/// строку (upsert по endpoint). Просроченные подписки бэкенд
+/// удаляет, получив `404/410` от службы доставки.
+model PushSubscription {
+  id         String   @id @default(cuid())
+  employeeId String
+  endpoint   String   @unique
+  /// Публичный ключ клиента (base64url) — нужен web-push для
+  /// шифрования payload по ECDH.
+  p256dh     String
+  /// Auth-секрет подписки (base64url).
+  auth       String
+  /// User-Agent на момент подписки — чисто для диагностики, какой
+  /// именно девайс перестал получать пуши.
+  userAgent  String?
+  createdAt  DateTime @default(now())
+  /// Обновляется при каждом повторном subscribe того же браузера —
+  /// помогает чистить «мёртвые» подписки по возрасту.
+  lastSeenAt DateTime @default(now())
+
+  employee Employee @relation(fields: [employeeId], references: [id], onDelete: Cascade)
+
+  @@index([employeeId])
 }
 
 model Equipment {

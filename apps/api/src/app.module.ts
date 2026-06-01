@@ -55,6 +55,7 @@ import { FinishedGoodsModule } from './modules/finished-goods/finished-goods.mod
 import { WorkInProgressModule } from './modules/work-in-progress/work-in-progress.module.js';
 import { MeModule } from './modules/me/me.module.js';
 import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
+import { PushModule } from './modules/push/push.module.js';
 
 @Module({
   imports: [
@@ -114,6 +115,7 @@ import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
     WorkInProgressModule,
     MeModule,
     BootstrapModule,
+    PushModule,
   ],
 })
 export class AppModule {}

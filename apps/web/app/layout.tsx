@@ -24,6 +24,22 @@ import { Icon } from '@/components/icon';
 export const metadata: Metadata = {
   title: 'Sewing — управление производством',
   description: 'Система управления швейным производством (MVP)',
+  // PWA: manifest + иконки нужны, чтобы приложение можно было
+  // установить на «Домой». На iOS это ОБЯЗАТЕЛЬНО для Web Push —
+  // фоновые пуши приходят только в установленную PWA (iOS 16.4+).
+  manifest: '/manifest.webmanifest',
+  icons: {
+    icon: [
+      { url: '/icons/icon-192.png', sizes: '192x192', type: 'image/png' },
+      { url: '/icons/icon-512.png', sizes: '512x512', type: 'image/png' },
+    ],
+    apple: [{ url: '/icons/apple-touch-icon.png', sizes: '180x180' }],
+  },
+  appleWebApp: {
+    capable: true,
+    title: 'Sewing',
+    statusBarStyle: 'black-translucent',
+  },
 };
 
 export const viewport: Viewport = {

@@ -43,6 +43,12 @@ services:
       PRISMA_AUTO_SYNC: ${PRISMA_AUTO_SYNC:-0}
       PRISMA_AUTO_SYNC_RETRIES: ${PRISMA_AUTO_SYNC_RETRIES:-15}
       PRISMA_AUTO_SYNC_ACCEPT_DATA_LOSS: ${PRISMA_AUTO_SYNC_ACCEPT_DATA_LOSS:-0}
+      # Web Push (VAPID). Ключи берём из .env.dev. Без них push-модуль
+      # стартует в disabled-режиме (подписки сохраняются, отправка молча
+      # пропускается) — см. apps/api/src/modules/push/push.service.ts.
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      VAPID_SUBJECT: ${VAPID_SUBJECT:-}
     depends_on:
       - db
     networks:
