@@ -27,6 +27,7 @@ import {
   type MasterCallPassportDto,
 } from '@sewing/shared/master-calls';
 import type { CutReleasePolicyDto, SizeDto } from '@sewing/shared';
+import type { DefectTypeDto } from '@sewing/shared/qc';
 import { Icon } from '@/components/icon';
 import { QrScannerModal } from '@/app/work/qr-scanner-modal';
 import { logoutAction } from '@/app/(auth)/logout-action';
@@ -50,6 +51,8 @@ interface Props {
   initialResolved: MasterCallDto[];
   initialPolicy: CutReleasePolicyDto | null;
   sizes: SizeDto[];
+  /** Справочник видов брака для ОТК-действий мастера в PassportActionsSheet. */
+  defectTypes: DefectTypeDto[];
 }
 
 export function MasterPageClient({
@@ -58,6 +61,7 @@ export function MasterPageClient({
   initialResolved,
   initialPolicy,
   sizes,
+  defectTypes,
 }: Props) {
   const [items, setItems] = useState<MasterCallDto[]>(initialItems);
   const [resolved, setResolved] =
@@ -405,6 +409,7 @@ export function MasterPageClient({
         <PassportActionsSheet
           passport={actionsFor.passport}
           ownerFullName={actionsFor.ownerName}
+          defectTypes={defectTypes}
           onClose={() => setActionsFor(null)}
           onSuccess={(msg) => {
             showToast(msg);

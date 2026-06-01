@@ -7,6 +7,7 @@ import {
 } from '@/lib/master-calls-api';
 import { getActiveCutReleasePolicy } from '@/lib/cut-release-policy-api';
 import { listSizes } from '@/lib/orders-api';
+import { listMasterDefectTypes } from '@/lib/master-actions-api';
 import { canSeeEmployeeQrButton, canSeeMasterPage } from '@/lib/rbac';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { MasterPageClient } from './master-page-client';
@@ -69,6 +70,17 @@ export default async function MasterPage() {
     if (!(e instanceof ApiRequestError)) throw e;
   }
 
+  // Справочник видов брака для ОТК-действий мастера («зафиксировать
+  // брак» в PassportActionsSheet). Soft-fail: если API недоступен —
+  // пустой список, форма брака покажет «нет видов брака», остальной
+  // экран мастера работает.
+  let defectTypes: Awaited<ReturnType<typeof listMasterDefectTypes>> = [];
+  try {
+    defectTypes = await listMasterDefectTypes();
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) throw e;
+  }
+
   return (
     <>
       <MasterPageClient
@@ -77,6 +89,7 @@ export default async function MasterPage() {
         initialResolved={initialResolved}
         initialPolicy={initialPolicy}
         sizes={initialSizes}
+        defectTypes={defectTypes}
       />
       {canSeeEmployeeQrButton(me.user.role) ? (
         <EmployeeQrButton variant="floating" />

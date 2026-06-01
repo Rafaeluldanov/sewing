@@ -30,11 +30,19 @@ import {
   type MasterActionResultDto,
   type PassportHistoryDto,
 } from '@sewing/shared';
+import {
+  CreatePassportDefectSchema,
+  ReturnToReworkSchema,
+  type QcPassportDetailDto,
+} from '@sewing/shared/qc';
 import { ApiRequestError } from '@/lib/api';
 import { fetchPassportHistory } from '@/lib/passports-api';
 import {
   findMasterPassportByCode,
+  getMasterPassportQcDetail,
+  recordMasterPassportDefect,
   returnMasterPassportToCell,
+  returnMasterPassportToRework,
   setMasterPassportRouteStep,
   transferMasterPassport,
   unassignMasterPassport,
@@ -212,6 +220,89 @@ export async function findMasterPassportByCodeAction(
   try {
     const result = await findMasterPassportByCode(parsed.data.code);
     return { ok: true, result };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// ОТК-действия мастера: «зафиксировать брак» / «вернуть на доработку».
+// Делегируют в `QcService` на бэке (см. `master-actions.controller.ts`).
+// Все возвращают свежий `QcPassportDetailDto`, чтобы UI обновил карточку.
+// ---------------------------------------------------------------------------
+
+export type MasterQcDetailResult =
+  | { ok: true; detail: QcPassportDetailDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+/**
+ * ОТК-карточка паспорта для режимов «брак» / «возврат» в
+ * `PassportActionsSheet`. Read-only — `revalidatePath` не нужен.
+ */
+export async function fetchMasterQcDetailAction(
+  passportId: string,
+): Promise<MasterQcDetailResult> {
+  if (!passportId) return { ok: false, error: 'Не передан паспорт.' };
+  try {
+    const detail = await getMasterPassportQcDetail(passportId);
+    return { ok: true, detail };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/** Зафиксировать брак по паспорту (см. `QcService.recordDefect`). */
+export async function recordMasterDefectAction(
+  passportId: string,
+  raw: unknown,
+): Promise<MasterQcDetailResult> {
+  const parsed = CreatePassportDefectSchema.safeParse(raw);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные брака.',
+    };
+  }
+  try {
+    const detail = await recordMasterPassportDefect(passportId, parsed.data);
+    revalidatePath('/master');
+    return { ok: true, detail };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/** Вернуть паспорт на выбранную SEW-операцию (см. `QcService.returnToRework`). */
+export async function returnMasterToReworkAction(
+  passportId: string,
+  targetOperationId: string,
+): Promise<MasterQcDetailResult> {
+  const parsed = ReturnToReworkSchema.safeParse({ targetOperationId });
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Выберите операцию для возврата.',
+    };
+  }
+  try {
+    const detail = await returnMasterPassportToRework(
+      passportId,
+      parsed.data.targetOperationId,
+    );
+    revalidatePath('/master');
+    return { ok: true, detail };
   } catch (e) {
     return {
       ok: false,

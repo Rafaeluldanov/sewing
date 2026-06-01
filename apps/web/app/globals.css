@@ -5862,6 +5862,13 @@ body:has(.master-page) .app-main {
   border-color: #c7d2fe;
   background: #eef2ff;
 }
+/* ОТК-действия мастера («зафиксировать брак» / «вернуть на доработку»)
+   — тёплый акцент, чтобы визуально отделить контроль качества от
+   правок владельца/маршрута ниже. */
+.master-actions-sheet__menu-item--qc {
+  border-color: #fcd9b6;
+  background: #fff7ed;
+}
 .master-actions-sheet__history-status {
   margin: 0;
   color: #4b5563;

@@ -15,6 +15,11 @@ import type {
   TransferPassportDto,
   UnassignPassportDto,
 } from '@sewing/shared';
+import type {
+  CreatePassportDefectDto,
+  DefectTypeDto,
+  QcPassportDetailDto,
+} from '@sewing/shared/qc';
 import { apiFetch } from './api';
 
 export function unassignMasterPassport(
@@ -63,5 +68,45 @@ export function findMasterPassportByCode(
   return apiFetch<FindMasterPassportByCodeResultDto>(
     `/master-actions/find-passport-by-code`,
     { method: 'POST', body: { code } },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// ОТК-действия мастера (делегируют в QcService на бэке)
+// ---------------------------------------------------------------------------
+
+/** Справочник видов брака для формы «зафиксировать брак» в кабинете мастера. */
+export function listMasterDefectTypes(): Promise<DefectTypeDto[]> {
+  return apiFetch<DefectTypeDto[]>(`/master-actions/defect-types`);
+}
+
+/** ОТК-карточка паспорта (виды-независимый detail) для режимов брак/возврат. */
+export function getMasterPassportQcDetail(
+  passportId: string,
+): Promise<QcPassportDetailDto> {
+  return apiFetch<QcPassportDetailDto>(
+    `/master-actions/passports/${encodeURIComponent(passportId)}/qc-detail`,
+  );
+}
+
+/** Зафиксировать брак по паспорту (см. `QcService.recordDefect`). */
+export function recordMasterPassportDefect(
+  passportId: string,
+  body: CreatePassportDefectDto,
+): Promise<QcPassportDetailDto> {
+  return apiFetch<QcPassportDetailDto>(
+    `/master-actions/passports/${encodeURIComponent(passportId)}/defect`,
+    { method: 'POST', body },
+  );
+}
+
+/** Вернуть паспорт на выбранную SEW-операцию (см. `QcService.returnToRework`). */
+export function returnMasterPassportToRework(
+  passportId: string,
+  targetOperationId: string,
+): Promise<QcPassportDetailDto> {
+  return apiFetch<QcPassportDetailDto>(
+    `/master-actions/passports/${encodeURIComponent(passportId)}/return-to-rework`,
+    { method: 'POST', body: { targetOperationId } },
   );
 }
