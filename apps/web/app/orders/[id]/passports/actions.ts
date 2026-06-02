@@ -5,8 +5,11 @@ import { redirect } from 'next/navigation';
 import {
   CreatePassportSchema,
   PlacePassportSchema,
+  ReleaseFromRollsSchema,
   type CreatePassportDto,
   type PlacePassportDto,
+  type ReleaseFromRollsDto,
+  type ReleasedPassportLiteDto,
 } from '@sewing/shared/passports';
 import {
   CreateCuttingClosureRequestSchema,
@@ -17,6 +20,7 @@ import {
   createPassport,
   deletePassport,
   placePassport,
+  releaseFromRolls,
 } from '@/lib/passports-api';
 import { createCuttingClosureRequest } from '@/lib/cutting-closure-api';
 
@@ -289,6 +293,53 @@ export async function placePassportAction(
     return { error: explainApiError(e) };
   }
   return {};
+}
+
+// ---------------------------------------------------------------------------
+// РУЛОННЫЙ ВЫПУСК — помощник раскройщика (`CutterAssistantRollForm`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Результат рулонного выпуска для клиентской формы. `created` — паспорта
+ * этого выпуска (для печати), `skipped` — рулоны, пропущенные как уже
+ * выпущенные. На ошибке backend заполняется `error`.
+ */
+export interface ReleaseFromRollsActionResult {
+  created?: ReleasedPassportLiteDto[];
+  skipped?: number[];
+  error?: string;
+}
+
+/**
+ * Выпуск паспортов по выбранным рулонам. `orderId`, `sizeId`, `cutDate`
+ * и список `rollOrdinals` приходят из клиентской формы; количество и
+ * номер рулона backend берёт из задачи раскройщика, помощник руками
+ * ничего не вводит (см. `PassportsService.releaseFromRolls`).
+ */
+export async function releaseFromRollsAction(
+  orderId: string,
+  input: { sizeId: string; cutDate: string; rollOrdinals: number[] },
+): Promise<ReleaseFromRollsActionResult> {
+  const raw: ReleaseFromRollsDto = {
+    orderId,
+    sizeId: input.sizeId,
+    cutDate: input.cutDate,
+    rollOrdinals: input.rollOrdinals,
+  };
+  const parsed = ReleaseFromRollsSchema.safeParse(raw);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Невалидные данные' };
+  }
+  let result;
+  try {
+    result = await releaseFromRolls(parsed.data);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath('/work/cut-orders');
+  return { created: result.created, skipped: result.skipped };
 }
 
 // ---------------------------------------------------------------------------

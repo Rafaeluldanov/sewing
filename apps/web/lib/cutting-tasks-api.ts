@@ -2,6 +2,8 @@ import 'server-only';
 import type {
   CuttingTaskDetailDto,
   CuttingTaskSummaryDto,
+  OrderReadyForReleaseDto,
+  OrderReleaseStateDto,
   SaveCuttingTaskProgressDto,
 } from '@sewing/shared/cutting-tasks';
 import { apiFetch } from './api';
@@ -45,5 +47,22 @@ export function completeCuttingTask(
   return apiFetch<CuttingTaskDetailDto>(
     `/cutting-tasks/${encodeURIComponent(id)}/complete`,
     { method: 'POST', body },
+  );
+}
+
+/**
+ * Доска помощника раскройщика `/work/cut-orders`: заказы с завершённым
+ * раскроем, готовые к рулонному выпуску паспортов.
+ */
+export function listOrdersReadyForRelease(): Promise<OrderReadyForReleaseDto[]> {
+  return apiFetch<OrderReadyForReleaseDto[]>('/cutting-tasks/ready-for-release');
+}
+
+/** Данные заказа для рулонного выпуска (размеры, рулоны, выпущенные пары). */
+export function getOrderReleaseState(
+  orderId: string,
+): Promise<OrderReleaseStateDto> {
+  return apiFetch<OrderReleaseStateDto>(
+    `/cutting-tasks/by-order/${encodeURIComponent(orderId)}/release-state`,
   );
 }

@@ -7,6 +7,8 @@ import {
   type CuttingTaskSizeRowDto,
   type CuttingTaskStatus,
   type CuttingTaskSummaryDto,
+  type OrderReadyForReleaseDto,
+  type OrderReleaseStateDto,
   type SaveCuttingTaskProgressDto,
 } from '@sewing/shared/cutting-tasks';
 
@@ -95,6 +97,146 @@ export class CuttingTasksService {
       orderCustomer: task.order?.customer ?? null,
       sizeRows,
       rolls,
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // РУЛОННЫЙ ВЫПУСК (помощник раскройщика, CUTTER_ASSISTANT)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Доска помощника `/work/cut-orders`: заказы, по которым раскрой
+   * завершён (`CuttingTask = DONE`) и можно выпускать паспорта.
+   *
+   * `status` строки: `DONE`, если выпущены все ожидаемые пары
+   * `(размер, рулон)` (метка «Завершено»), иначе `NEW` (подсветка
+   * «новый»). Ожидаемая пара — размер с `perLayerQty > 0` × рулон с
+   * `layers > 0`. Выпущенная пара — наличие non-CANCELLED паспорта с
+   * соответствующим `rollOrdinal`.
+   */
+  async listReadyForRelease(): Promise<OrderReadyForReleaseDto[]> {
+    const tasks = await this.prisma.cuttingTask.findMany({
+      where: { status: 'DONE' },
+      orderBy: { completedAt: 'desc' },
+      take: 200,
+      include: {
+        order: {
+          select: {
+            number: true,
+            color: true,
+            items: {
+              take: 1,
+              select: { product: { select: { name: true } } },
+            },
+          },
+        },
+        sizeRows: { select: { sizeId: true, perLayerQty: true } },
+        rolls: { select: { ordinal: true, layers: true } },
+      },
+    });
+    if (tasks.length === 0) return [];
+
+    // Выпущенные пары `(sizeId, rollOrdinal)` по всем заказам одним
+    // запросом, чтобы не делать N+1.
+    const orderIds = tasks.map((t) => t.orderId);
+    const released = await this.prisma.passport.findMany({
+      where: {
+        orderId: { in: orderIds },
+        status: { not: 'CANCELLED' },
+        rollOrdinal: { not: null },
+      },
+      select: { orderId: true, sizeId: true, rollOrdinal: true },
+    });
+    const releasedByOrder = new Map<string, Set<string>>();
+    for (const p of released) {
+      const set = releasedByOrder.get(p.orderId) ?? new Set<string>();
+      set.add(`${p.sizeId}:${p.rollOrdinal}`);
+      releasedByOrder.set(p.orderId, set);
+    }
+
+    return tasks.map((t) => {
+      const sizes = t.sizeRows.filter((r) => r.sizeId && r.perLayerQty > 0);
+      const rolls = t.rolls.filter((r) => r.layers > 0);
+      const releasedSet = releasedByOrder.get(t.orderId) ?? new Set<string>();
+      let totalPairs = 0;
+      let releasedPairs = 0;
+      for (const s of sizes) {
+        for (const roll of rolls) {
+          totalPairs += 1;
+          if (releasedSet.has(`${s.sizeId}:${roll.ordinal}`)) releasedPairs += 1;
+        }
+      }
+      const status: OrderReadyForReleaseDto['status'] =
+        totalPairs > 0 && releasedPairs >= totalPairs ? 'DONE' : 'NEW';
+      return {
+        orderId: t.orderId,
+        orderNumber: t.order?.number ?? '—',
+        productName: t.order?.items[0]?.product?.name ?? '—',
+        color: t.order?.color ?? '—',
+        totalPairs,
+        releasedPairs,
+        status,
+      };
+    });
+  }
+
+  /**
+   * Данные для экрана выпуска по рулонам (`/orders/:id/passports/new`,
+   * ветка помощника). Размеры + рулоны из завершённой задачи раскройщика
+   * и карта уже выпущенных пар `(размер, рулон)`.
+   */
+  async getReleaseState(orderId: string): Promise<OrderReleaseStateDto> {
+    const task = await this.prisma.cuttingTask.findUnique({
+      where: { orderId },
+      include: {
+        order: {
+          select: {
+            number: true,
+            color: true,
+            items: {
+              take: 1,
+              select: { productId: true, product: { select: { name: true } } },
+            },
+          },
+        },
+        sizeRows: { orderBy: { sortOrder: 'asc' } },
+        rolls: { orderBy: { ordinal: 'asc' } },
+      },
+    });
+    if (!task) throw new CuttingTaskNotFoundException();
+
+    const released = await this.prisma.passport.findMany({
+      where: {
+        orderId,
+        status: { not: 'CANCELLED' },
+        rollOrdinal: { not: null },
+      },
+      select: { sizeId: true, rollOrdinal: true },
+    });
+
+    return {
+      orderId: task.orderId,
+      orderNumber: task.order?.number ?? '—',
+      productId: task.order?.items[0]?.productId ?? null,
+      productName: task.order?.items[0]?.product?.name ?? '—',
+      color: task.order?.color ?? '—',
+      cuttingTaskStatus: task.status as CuttingTaskStatus,
+      sizes: task.sizeRows
+        .filter((r) => r.sizeId)
+        .map((r) => ({
+          sizeId: r.sizeId as string,
+          sizeCode: r.sizeCodeSnapshot,
+          sortOrder: r.sortOrder,
+          perLayerQty: r.perLayerQty,
+          qtyPlan: r.qtyPlan,
+        })),
+      rolls: task.rolls
+        .filter((r) => r.layers > 0)
+        .map((r) => ({ ordinal: r.ordinal, layers: r.layers })),
+      released: released.map((p) => ({
+        sizeId: p.sizeId,
+        ordinal: p.rollOrdinal as number,
+      })),
     };
   }
 

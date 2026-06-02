@@ -84,6 +84,39 @@ export const CreatePassportSchema = z.object({
 export type CreatePassportDto = z.infer<typeof CreatePassportSchema>;
 
 /**
+ * Тело `POST /api/passports/release-from-rolls` — рулонный выпуск
+ * помощником раскройщика (`CUTTER_ASSISTANT`).
+ *
+ * В отличие от ручного `POST /api/passports`, здесь помощник ничего не
+ * вбивает: количество и номер рулона берутся из завершённой задачи
+ * раскройщика (`CuttingTask`). Помощник выбирает размер и набор рулонов
+ * (`rollOrdinals` — из `CuttingTaskRoll.ordinal`), а backend на каждый
+ * рулон создаёт паспорт с `qtyCut = слои рулона × раскладка размера`
+ * (`CuttingTaskSizeRow.perLayerQty`) и `rollOrdinal = ordinal`.
+ *
+ * - `cutterId` НЕ передаётся: сдельное начисление за раскрой идёт
+ *   автоматически на `CuttingTask.assignedToId` (раскройщик, выполнивший
+ *   задачу).
+ * - Идемпотентно: пары `(sizeId, ordinal)`, уже выпущенные ранее,
+ *   пропускаются (кейс «сломался принтер → продолжить с нужного рулона»,
+ *   защита от двойного клика).
+ */
+export const ReleaseFromRollsSchema = z.object({
+  orderId: z.string().min(1, 'orderId обязателен'),
+  sizeId: z.string().min(1, 'sizeId обязателен'),
+  cutDate: DateStringSchema,
+  rollOrdinals: z
+    .array(
+      z
+        .number({ invalid_type_error: 'ordinal должен быть числом' })
+        .int('ordinal должен быть целым')
+        .positive('ordinal должен быть > 0'),
+    )
+    .min(1, 'Выберите хотя бы один рулон'),
+});
+export type ReleaseFromRollsDto = z.infer<typeof ReleaseFromRollsSchema>;
+
+/**
  * Тело `PATCH /api/passports/:id` — редактирование полей паспорта,
  * пока он в статусе `CREATED` и ещё не «уехал» в производство.
  *
@@ -290,6 +323,28 @@ export interface PassportDetailDto extends PassportListItemDto {
 export interface PassportPlacementResultDto {
   passport: PassportDetailDto;
   cell: CellDetailDto;
+}
+
+/** Одна выпущенная по рулону строка в ответе `release-from-rolls`. */
+export interface ReleasedPassportLiteDto {
+  id: string;
+  number: string;
+  qtyCut: number;
+  rollNumber: string;
+  rollOrdinal: number;
+}
+
+/**
+ * Ответ `POST /api/passports/release-from-rolls`.
+ *
+ * `created` — паспорта, выпущенные этим запросом (для печати); может
+ * быть короче `rollOrdinals`, если часть пар `(sizeId, ordinal)` уже была
+ * выпущена ранее или у рулона `qty = 0`. `skipped` — `ordinal`-ы, которые
+ * пропущены как уже выпущенные (UI может показать «уже выпущено»).
+ */
+export interface ReleaseFromRollsResultDto {
+  created: ReleasedPassportLiteDto[];
+  skipped: number[];
 }
 
 /**

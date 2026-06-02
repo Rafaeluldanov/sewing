@@ -117,21 +117,25 @@ describeWithDb('integration — cutter attribution (PHASE 2 STEP 3)', () => {
   }
 
   // ---------------------------------------------------------------------------
-  // 1. creator-CUTTER без cutterId → начисление creator-у
+  // 1. RBAC: раскройщик (CUTTER) больше НЕ выпускает паспорта.
+  //
+  // Выпуск кроя передан помощнику (`CUTTER_ASSISTANT`) — преимущественно
+  // через рулонный `POST /api/passports/release-from-rolls`, где
+  // сдельное начисление автоматически идёт раскройщику задачи
+  // (`CuttingTask.assignedToId`). Ручной `POST /api/passports` остаётся
+  // менеджеру/админу. Раньше creator-CUTTER мог выпускать паспорт «на
+  // себя» — теперь это 403 (см. `passports-release-from-rolls.test.ts`).
   // ---------------------------------------------------------------------------
 
-  test('creator-CUTTER без cutterId → паспорт создан, начисление на creator', async () => {
+  test('creator-CUTTER больше не выпускает паспорт → 403, паспорт не создан', async () => {
     const r = await request(t.app.getHttpServer())
       .post('/api/passports')
       .set('Cookie', cookies.cutter)
       .send(passportBody());
-    expect(r.status).toBe(201);
+    expect(r.status).toBe(403);
 
-    const passportId: string = r.body.id;
-    expect(r.body.cutterId).toBe(seed.employees['cutter'].id);
-
-    const attributed = await immediateCutterEntryEmployee(passportId);
-    expect(attributed).toBe(seed.employees['cutter'].id);
+    const count = await t.prisma.passport.count({ where: { orderId } });
+    expect(count).toBe(0);
   });
 
   // ---------------------------------------------------------------------------

@@ -235,6 +235,67 @@ export interface CuttingTaskDetailDto extends CuttingTaskSummaryDto {
 }
 
 // ---------------------------------------------------------------------------
+// Рулонный выпуск паспортов помощником раскройщика (CUTTER_ASSISTANT)
+// ---------------------------------------------------------------------------
+
+/** Размер на экране выпуска: раскладка + план (read-only для помощника). */
+export interface ReleaseSizeDto {
+  sizeId: string;
+  sizeCode: string;
+  sortOrder: number;
+  /** «Количество размера на настиле» из задачи раскройщика. */
+  perLayerQty: number;
+  qtyPlan: number;
+}
+
+/** Рулон из задачи раскройщика для выпуска. */
+export interface ReleaseRollDto {
+  ordinal: number;
+  layers: number;
+}
+
+/**
+ * Ответ `GET /api/cutting-tasks/by-order/:orderId/release-state` — всё,
+ * что нужно помощнику, чтобы выпускать паспорта по рулонам без ручного
+ * ввода. Размеры и рулоны берутся из завершённой задачи раскройщика;
+ * `released` — пары `(sizeId, ordinal)`, по которым паспорт уже выпущен
+ * (рисуются как «выпущено» и не выпускаются повторно).
+ */
+export interface OrderReleaseStateDto {
+  orderId: string;
+  orderNumber: string;
+  productId: string | null;
+  productName: string;
+  color: string;
+  cuttingTaskStatus: CuttingTaskStatus;
+  sizes: ReleaseSizeDto[];
+  rolls: ReleaseRollDto[];
+  released: Array<{ sizeId: string; ordinal: number }>;
+}
+
+/**
+ * Строка доски помощника `/work/cut-orders` — заказ, у которого раскрой
+ * завершён (`CuttingTask = DONE`) и можно выпускать паспорта.
+ *
+ * `status`:
+ *   - `NEW`  — есть невыпущенные пары `(размер, рулон)` (подсветка «новый»);
+ *   - `DONE` — все пары выпущены (метка «Завершено»).
+ * Совпадает с подмножеством `CuttingTaskStatus`, чтобы переиспользовать
+ * `CUTTING_TASK_STATUS_LABELS` и CSS `constructor-card--status-*`.
+ */
+export interface OrderReadyForReleaseDto {
+  orderId: string;
+  orderNumber: string;
+  productName: string;
+  color: string;
+  /** Ожидаемых пар `(размер, рулон)` с qty > 0. */
+  totalPairs: number;
+  /** Уже выпущенных пар. */
+  releasedPairs: number;
+  status: Extract<CuttingTaskStatus, 'NEW' | 'DONE'>;
+}
+
+// ---------------------------------------------------------------------------
 // Helpers — расчёт итогов (используют и сервер-мапперы, и клиент)
 // ---------------------------------------------------------------------------
 

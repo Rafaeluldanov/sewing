@@ -10,6 +10,8 @@ import {
   SaveCuttingTaskProgressSchema,
   type CuttingTaskDetailDto,
   type CuttingTaskSummaryDto,
+  type OrderReadyForReleaseDto,
+  type OrderReleaseStateDto,
 } from '@sewing/shared/cutting-tasks';
 
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
@@ -38,6 +40,30 @@ export class CuttingTasksController {
   @Roles('CUTTER', 'SHOP_MANAGER', 'ADMIN')
   list(): Promise<CuttingTaskSummaryDto[]> {
     return this.tasks.listForCabinet();
+  }
+
+  /**
+   * Доска помощника раскройщика `/work/cut-orders`: заказы с завершённым
+   * раскроем, готовые к выпуску паспортов (со статусом «новый»/«завершено»).
+   * Объявлен ДО `@Get(':id')`, чтобы роутер не разрешил `ready-for-release`
+   * как `id`.
+   */
+  @Get('ready-for-release')
+  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  listReadyForRelease(): Promise<OrderReadyForReleaseDto[]> {
+    return this.tasks.listReadyForRelease();
+  }
+
+  /**
+   * Данные заказа для рулонного выпуска помощником: размеры (с раскладкой
+   * `на настиле`), рулоны и карта уже выпущенных пар `(размер, рулон)`.
+   */
+  @Get('by-order/:orderId/release-state')
+  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  getReleaseState(
+    @Param('orderId') orderId: string,
+  ): Promise<OrderReleaseStateDto> {
+    return this.tasks.getReleaseState(orderId);
   }
 
   @Get(':id')

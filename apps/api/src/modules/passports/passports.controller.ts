@@ -14,10 +14,13 @@ import type { Response } from 'express';
 import {
   CreatePassportSchema,
   PlacePassportSchema,
+  ReleaseFromRollsSchema,
   UpdatePassportSchema,
   type CreatePassportDto,
   type MyPassportListItem,
   type PlacePassportDto,
+  type ReleaseFromRollsDto,
+  type ReleaseFromRollsResultDto,
   type UpdatePassportDto,
 } from '@sewing/shared/passports';
 import { z } from 'zod';
@@ -47,13 +50,36 @@ import type { AuthPrincipal } from '../auth/auth.types.js';
 export class PassportsController {
   constructor(private readonly passports: PassportsService) {}
 
+  /**
+   * Ручной выпуск паспорта. RBAC: выпуск кроя теперь ведёт помощник
+   * раскройщика (`CUTTER_ASSISTANT`) — преимущественно через рулонный
+   * `release-from-rolls`. Ручная форма оставлена менеджеру/админу для
+   * правок и заказов без задачи раскроя. Раскройщик (`CUTTER`) паспорта
+   * больше НЕ выпускает — его рабочее место — только `/cutter`.
+   */
   @Post()
-  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER')
+  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER')
   create(
     @Body(new ZodValidationPipe(CreatePassportSchema)) dto: CreatePassportDto,
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.passports.create(dto, user.employeeId);
+  }
+
+  /**
+   * `POST /api/passports/release-from-rolls` — рулонный выпуск
+   * помощником раскройщика. Количество и рулоны берутся из завершённой
+   * задачи раскройщика (`CuttingTask`), помощник лишь выбирает размер и
+   * рулоны. Идемпотентно по парам `(размер, рулон)`. См.
+   * `PassportsService.releaseFromRolls`.
+   */
+  @Post('release-from-rolls')
+  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  releaseFromRolls(
+    @Body(new ZodValidationPipe(ReleaseFromRollsSchema)) dto: ReleaseFromRollsDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<ReleaseFromRollsResultDto> {
+    return this.passports.releaseFromRolls(dto, user.employeeId);
   }
 
   /**
@@ -107,7 +133,7 @@ export class PassportsController {
    * проверяется `creatorId === me`.
    */
   @Patch(':id')
-  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
   update(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(UpdatePassportSchema)) dto: UpdatePassportDto,
@@ -130,7 +156,7 @@ export class PassportsController {
    * «Удаление паспорта»`.
    */
   @Delete(':id')
-  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
   @HttpCode(204)
   async delete(
     @Param('id') id: string,
@@ -140,7 +166,7 @@ export class PassportsController {
   }
 
   @Post(':id/place')
-  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER')
+  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER')
   place(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(PlacePassportSchema)) dto: PlacePassportDto,

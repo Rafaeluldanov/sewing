@@ -1,70 +1,45 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import type { OrderListItemDto } from '@sewing/shared/orders';
+import type { OrderReadyForReleaseDto } from '@sewing/shared/cutting-tasks';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { listOrders } from '@/lib/orders-api';
+import { listOrdersReadyForRelease } from '@/lib/cutting-tasks-api';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Упрощённый «выбор заказа для выпуска паспорта» для роли
- * CUTTER_ASSISTANT (см. ТЗ «упрощение UX помощника раскройщика»).
+ * Доска помощника раскройщика (`CUTTER_ASSISTANT`): выбор заказа для
+ * выпуска паспортов.
  *
- * Поведение:
- *   - один заказ в `IN_PRODUCTION` → сразу редиректим на
- *     `/orders/:id/passports/new`, помощник вообще не видит этот
- *     экран (выбора-то нет);
- *   - несколько заказов → показываем короткий список карточек только
- *     с названием позиции/изделия и номером заказа; тап по карточке
- *     ведёт на тот же `/orders/:id/passports/new`;
- *   - ни одного → аккуратный empty state «Нет заказов на раскрое».
+ * Заказ появляется здесь автоматически, как только раскройщик завершил
+ * раскрой (`CuttingTask = DONE`) — источник `GET /api/cutting-tasks/
+ * ready-for-release`. Карточки подсвечены по статусу:
+ *   - «новый» (есть невыпущенные рулоны) — жёлтая полоса;
+ *   - «Завершено» (все рулоны по всем размерам выпущены) — зелёная
+ *     полоса + бейдж.
+ * Тап по карточке ведёт на рулонный выпуск `/orders/:id/passports/new`.
  *
- * Источник истины — backend: `GET /api/orders?status=IN_PRODUCTION`
- * уже разрешён `CUTTER_ASSISTANT` (см. `OrdersController.list` и
- * `docs/api.md §4`). Никаких новых endpoint-ов не заводим.
- *
- * Этот route намеренно живёт под `/work/*`, чтобы у CUTTER_ASSISTANT
- * был единый «mobile clean» контекст: верхний тёмный header скрывает
- * `AppHeader` именно по префиксу `/work` (и по точному пути выпуска
- * паспорта).
+ * Route живёт под `/work/*`, чтобы у помощника был единый «mobile clean»
+ * контекст (верхний `AppHeader` скрыт по префиксу `/work`).
  */
-export default async function WorkCutOrdersPage({
-  searchParams,
-}: {
-  searchParams?: { mode?: string };
-}) {
-  // Middleware уже редиректит анонимов, но дополнительно сверяемся:
-  // если cookie неактуальна, пусть лучше будет явный редирект, а не
-  // пустой UI с непонятной ошибкой 401 в консоли.
+export default async function WorkCutOrdersPage() {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/work/cut-orders');
 
-  // Серийный выпуск (размер + сетка по рулонам) — основной путь
-  // помощника раскройщика. Технически он включается query-параметром
-  // `mode=demo` (исторический ключ, не выпиливаем — лишний риск ради
-  // переименования маршрута): вместо `/passports/new` ведём на
-  // `/passports/new-demo`. Логика выбора заказа (один/много/ни одного)
-  // не меняется; одиночный `new` остаётся доступен прямым URL.
-  const isSerial = searchParams?.mode === 'demo';
-  const newPassportPath = isSerial ? 'new-demo' : 'new';
-
-  let items: OrderListItemDto[] = [];
+  let items: OrderReadyForReleaseDto[] = [];
   let error: string | null = null;
   try {
-    // Берём с запасом (200 — потолок схемы), но реально на пилоте в
-    // `IN_PRODUCTION` одновременно лежит < 10 заказов. Сортировка по
-    // `createdAt DESC` уже выставлена бэкендом по умолчанию.
-    const data = await listOrders({ status: 'IN_PRODUCTION', pageSize: 200 });
-    items = data.items;
+    items = await listOrdersReadyForRelease();
   } catch (e) {
     if (!(e instanceof ApiRequestError)) throw e;
     error = `[${e.code ?? 'API_ERROR'}] ${e.message}`;
   }
 
-  // Авто-выбор: один заказ → сразу выпуск паспорта.
-  if (!error && items.length === 1) {
-    redirect(`/orders/${items[0].id}/passports/${newPassportPath}`);
+  // Авто-выбор: ровно один заказ, по которому ещё есть что выпускать →
+  // сразу открываем выпуск, помощник не видит лишний экран.
+  const pending = items.filter((o) => o.status === 'NEW');
+  if (!error && pending.length === 1 && items.length === 1) {
+    redirect(`/orders/${pending[0].orderId}/passports/new`);
   }
 
   return (
@@ -84,9 +59,9 @@ export default async function WorkCutOrdersPage({
 
       {!error && items.length === 0 && (
         <div className="cut-orders__empty" role="status">
-          <div className="cut-orders__empty-title">Нет заказов на раскрое</div>
+          <div className="cut-orders__empty-title">Нет заказов на выпуск</div>
           <p className="cut-orders__empty-hint">
-            Когда менеджер запустит заказ в производство, он появится здесь.
+            Когда раскройщик завершит раскрой по заказу, он появится здесь.
           </p>
           <Link href="/work" className="btn btn-block">
             Назад
@@ -94,27 +69,46 @@ export default async function WorkCutOrdersPage({
         </div>
       )}
 
-      {!error && items.length > 1 && (
-        <ul className="cut-orders__list" aria-label="Заказы на раскрое">
-          {items.map((o) => (
-            <li key={o.id}>
-              <Link
-                className="cut-orders__card"
-                href={`/orders/${o.id}/passports/${newPassportPath}`}
-                prefetch={false}
-              >
-                <span className="cut-orders__card-title">
-                  {o.productName ?? 'Без изделия'}
-                </span>
-                <span className="cut-orders__card-meta">
-                  <span className="cut-orders__card-number">{o.number}</span>
-                  {o.color ? (
-                    <span className="cut-orders__card-color">· {o.color}</span>
-                  ) : null}
-                </span>
-              </Link>
-            </li>
-          ))}
+      {!error && items.length > 0 && (
+        <ul className="cut-orders__list" aria-label="Заказы на выпуск">
+          {items.map((o) => {
+            const done = o.status === 'DONE';
+            return (
+              <li key={o.orderId}>
+                <Link
+                  className={
+                    'cut-orders__card' +
+                    ` constructor-card--status-${done ? 'done' : 'new'}`
+                  }
+                  href={`/orders/${o.orderId}/passports/new`}
+                  prefetch={false}
+                >
+                  <span className="cut-orders__card-title">
+                    {o.productName}
+                    {done ? (
+                      <span
+                        className="constructor-status constructor-status--done"
+                        style={{ marginLeft: '0.5rem' }}
+                      >
+                        Завершено
+                      </span>
+                    ) : null}
+                  </span>
+                  <span className="cut-orders__card-meta">
+                    <span className="cut-orders__card-number">
+                      {o.orderNumber}
+                    </span>
+                    {o.color ? (
+                      <span className="cut-orders__card-color">· {o.color}</span>
+                    ) : null}
+                    <span className="cut-orders__card-color">
+                      · выпущено {o.releasedPairs}/{o.totalPairs}
+                    </span>
+                  </span>
+                </Link>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

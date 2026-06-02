@@ -15,6 +15,8 @@ import type {
   PassportListItemDto,
   PassportPlacementResultDto,
   PlacePassportDto,
+  ReleaseFromRollsDto,
+  ReleaseFromRollsResultDto,
   UpdatePassportDto,
 } from '@sewing/shared/passports';
 import { apiFetch } from './api';
@@ -23,6 +25,20 @@ export function createPassport(
   body: CreatePassportDto,
 ): Promise<PassportDetailDto> {
   return apiFetch<PassportDetailDto>('/passports', {
+    method: 'POST',
+    body,
+  });
+}
+
+/**
+ * `POST /api/passports/release-from-rolls` — рулонный выпуск помощником
+ * раскройщика: на каждый выбранный рулон выпускается паспорт с
+ * количеством из задачи раскройщика. См. `PassportsService.releaseFromRolls`.
+ */
+export function releaseFromRolls(
+  body: ReleaseFromRollsDto,
+): Promise<ReleaseFromRollsResultDto> {
+  return apiFetch<ReleaseFromRollsResultDto>('/passports/release-from-rolls', {
     method: 'POST',
     body,
   });

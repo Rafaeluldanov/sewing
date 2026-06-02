@@ -26,6 +26,8 @@ import {
   type PassportRouteHintDto,
   type PassportRouteStepLiteDto,
   type PlacePassportDto,
+  type ReleaseFromRollsDto,
+  type ReleaseFromRollsResultDto,
   type UpdatePassportDto,
 } from '@sewing/shared/passports';
 import type { BatchCompleteOperationsResultDto } from '@sewing/shared/shifts';
@@ -277,68 +279,321 @@ export class PassportsService {
     const initialRouteStepIndex = order.routeSteps.length > 0 ? 0 : null;
 
     const id = await this.prisma.$transaction(async (tx) => {
-      const number = await this.numbers.nextNumber(tx);
-      const created = await tx.passport.create({
-        data: {
-          number,
-          // qrCode UNIQUE NOT NULL — проставим финальный `passport:{id}`
-          // вторым шагом в этой же транзакции, когда узнаем id.
-          qrCode: `passport-pending:${number}`,
-          orderId: order.id,
-          productId: product.id,
-          sizeId: dto.sizeId,
-          color,
-          rollNumber: dto.rollNumber,
-          cutDate: new Date(dto.cutDate),
-          qtyPlan: dto.qtyCut,
-          qtyCut: dto.qtyCut,
-          qtyDefect: 0,
-          qtyGood: dto.qtyCut,
-          status: PassportStatus.CREATED,
-          currentOperationId: divisionOp.id,
-          currentEmployeeId: creator.id,
-          cutterId: cutter.id,
-          creatorId: creator.id,
-          currentRouteStepIndex: initialRouteStepIndex,
-        },
-      });
-      const qrCode = buildPassportQrPayload(created.id);
-      await tx.passport.update({
-        where: { id: created.id },
-        data: { qrCode },
-      });
-      await tx.passportEvent.create({
-        data: {
-          passportId: created.id,
-          type: PassportEventType.CREATED,
-          operationId: divisionOp.id,
-          employeeId: creator.id,
-          qty: dto.qtyCut,
-          payload: {
-            rollNumber: dto.rollNumber,
-            color,
-          },
-        },
-      });
-      // Шаг 9 (ADR-0005): immediate-начисление раскройщику. Делается в
-      // той же транзакции, чтобы паспорт и зарплата жили атомарно. При
-      // отсутствии ставки в `OperationRateBySize` для пары
-      // `(operationId, sizeId)` сервис кидает 422
-      // `OPERATION_RATE_MISSING` — это сознательный выбор: silent skip
-      // тут разрушит доверие к зарплате (см. `docs/flows.md §F2`).
-      await this.earnings.createImmediateForCutter(tx, {
-        passportId: created.id,
-        cutterId: cutter.id,
-        sizeId: dto.sizeId,
+      const lite = await this.createOnePassportInTx(tx, {
+        orderId: order.id,
         productId: product.id,
+        sizeId: dto.sizeId,
+        color,
+        rollNumber: dto.rollNumber,
+        rollOrdinal: null,
+        cutDate: new Date(dto.cutDate),
         qty: dto.qtyCut,
+        cutterId: cutter.id,
+        creatorId: creator.id,
+        divisionOpId: divisionOp.id,
+        initialRouteStepIndex,
       });
-      return created.id;
+      return lite.id;
     });
     this.logger.log(
       `event=passport.create passportId=${id} orderId=${order.id} sizeId=${dto.sizeId} qtyCut=${dto.qtyCut} creatorId=${creator.id}`,
     );
     return this.getOne(id);
+  }
+
+  /**
+   * Создаёт один паспорт внутри переданной транзакции: генерация номера,
+   * запись паспорта (+ финальный QR), событие `CREATED` и immediate-
+   * начисление раскройщику (ADR-0005). Общий код для ручного выпуска
+   * (`create`) и рулонного выпуска помощником (`releaseFromRolls`),
+   * чтобы инварианты «паспорт + зарплата атомарно» жили в одном месте.
+   *
+   * `rollOrdinal` — порядковый номер рулона из `CuttingTask` для
+   * рулонного выпуска; `null` для ручной формы.
+   */
+  private async createOnePassportInTx(
+    tx: Prisma.TransactionClient,
+    params: {
+      orderId: string;
+      productId: string;
+      sizeId: string;
+      color: string;
+      rollNumber: string;
+      rollOrdinal: number | null;
+      cutDate: Date;
+      qty: number;
+      cutterId: string;
+      creatorId: string;
+      divisionOpId: string;
+      initialRouteStepIndex: number | null;
+    },
+  ): Promise<{
+    id: string;
+    number: string;
+    qtyCut: number;
+    rollNumber: string;
+    rollOrdinal: number | null;
+  }> {
+    const number = await this.numbers.nextNumber(tx);
+    const created = await tx.passport.create({
+      data: {
+        number,
+        // qrCode UNIQUE NOT NULL — проставим финальный `passport:{id}`
+        // вторым шагом в этой же транзакции, когда узнаем id.
+        qrCode: `passport-pending:${number}`,
+        orderId: params.orderId,
+        productId: params.productId,
+        sizeId: params.sizeId,
+        color: params.color,
+        rollNumber: params.rollNumber,
+        rollOrdinal: params.rollOrdinal,
+        cutDate: params.cutDate,
+        qtyPlan: params.qty,
+        qtyCut: params.qty,
+        qtyDefect: 0,
+        qtyGood: params.qty,
+        status: PassportStatus.CREATED,
+        currentOperationId: params.divisionOpId,
+        currentEmployeeId: params.creatorId,
+        cutterId: params.cutterId,
+        creatorId: params.creatorId,
+        currentRouteStepIndex: params.initialRouteStepIndex,
+      },
+    });
+    const qrCode = buildPassportQrPayload(created.id);
+    await tx.passport.update({
+      where: { id: created.id },
+      data: { qrCode },
+    });
+    await tx.passportEvent.create({
+      data: {
+        passportId: created.id,
+        type: PassportEventType.CREATED,
+        operationId: params.divisionOpId,
+        employeeId: params.creatorId,
+        qty: params.qty,
+        payload: {
+          rollNumber: params.rollNumber,
+          color: params.color,
+        },
+      },
+    });
+    // Шаг 9 (ADR-0005): immediate-начисление раскройщику. Делается в той
+    // же транзакции, чтобы паспорт и зарплата жили атомарно. При
+    // отсутствии ставки в `OperationRateBySize` для пары
+    // `(operationId, sizeId)` сервис кидает 422 `OPERATION_RATE_MISSING`.
+    await this.earnings.createImmediateForCutter(tx, {
+      passportId: created.id,
+      cutterId: params.cutterId,
+      sizeId: params.sizeId,
+      productId: params.productId,
+      qty: params.qty,
+    });
+    return {
+      id: created.id,
+      number: created.number,
+      qtyCut: created.qtyCut,
+      rollNumber: created.rollNumber,
+      rollOrdinal: created.rollOrdinal,
+    };
+  }
+
+  /**
+   * Рулонный выпуск паспортов помощником раскройщика
+   * (`POST /api/passports/release-from-rolls`).
+   *
+   * Помощник ничего не вводит руками: количество и рулоны берутся из
+   * завершённой задачи раскройщика (`CuttingTask`). На каждый выбранный
+   * рулон создаётся паспорт с `qtyCut = слои рулона × раскладка размера`
+   * (`CuttingTaskRoll.layers × CuttingTaskSizeRow.perLayerQty`) и
+   * `rollOrdinal = ordinal`. Сдельное за раскрой идёт автоматически
+   * раскройщику задачи (`CuttingTask.assignedToId`).
+   *
+   * Идемпотентно: пары `(sizeId, ordinal)`, по которым паспорт уже
+   * выпущен (есть non-CANCELLED паспорт с этим `rollOrdinal`), —
+   * пропускаются. Это закрывает кейс «сломался принтер → продолжить с
+   * нужного рулона» и защищает от двойного клика. Сохраняются прежние
+   * инварианты: заказ в производстве, closure-блок (ADR-0018) и
+   * `Σ qtyCut ≤ остаток плана` по размеру.
+   */
+  async releaseFromRolls(
+    dto: ReleaseFromRollsDto,
+    creatorEmployeeId: string,
+  ): Promise<ReleaseFromRollsResultDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: dto.orderId },
+      include: {
+        items: { include: { product: true } },
+        passports: true,
+        routeSteps: { select: { id: true } },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    if (order.status !== OrderStatus.IN_PRODUCTION) {
+      throw new PassportOrderNotInProductionException();
+    }
+
+    const orderItem = order.items.find((it) => it.sizeId === dto.sizeId);
+    if (!orderItem) {
+      throw new PassportSizeNotInOrderException();
+    }
+
+    // ADR-0018: подтверждённое закрытие раскроя по строке блокирует выпуск.
+    const closed = await this.closure.hasApprovedClosure(
+      order.id,
+      orderItem.productId,
+      dto.sizeId,
+    );
+    if (closed) throw new PassportCuttingClosedException();
+
+    // Источник рулонов и раскладки — завершённая задача раскройщика.
+    const task = await this.prisma.cuttingTask.findUnique({
+      where: { orderId: order.id },
+      include: {
+        sizeRows: { select: { sizeId: true, perLayerQty: true } },
+        rolls: { select: { ordinal: true, layers: true } },
+      },
+    });
+    if (!task) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'CUTTING_TASK_NOT_FOUND',
+        message: 'Для заказа нет задачи раскроя.',
+      });
+    }
+    if (task.status !== 'DONE') {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'CUTTING_TASK_NOT_DONE',
+        message: 'Раскрой по заказу ещё не завершён — выпуск недоступен.',
+      });
+    }
+    const sizeRow = task.sizeRows.find((r) => r.sizeId === dto.sizeId);
+    if (!sizeRow) {
+      throw new PassportSizeNotInOrderException();
+    }
+    const perLayerQty = sizeRow.perLayerQty;
+    const rollByOrdinal = new Map(task.rolls.map((r) => [r.ordinal, r.layers]));
+
+    // Раскройщик для начислений — тот, кто выполнил задачу. Валидируем
+    // его так же, как явный `cutterId` (роль CUTTER + active).
+    if (!task.assignedToId) {
+      throw new CutterRequiredException();
+    }
+    const [creator, divisionOp, cutter] = await Promise.all([
+      this.prisma.employee.findUnique({ where: { id: creatorEmployeeId } }),
+      this.prisma.operation.findUnique({ where: { code: 'CUT_DIVISION' } }),
+      this.resolveCutter(task.assignedToId, {
+        id: '',
+        role: Role.CUTTER_ASSISTANT,
+        active: true,
+      }),
+    ]);
+    if (!creator) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'EMPLOYEE_NOT_FOUND',
+        message: 'Сотрудник-инициатор не найден.',
+      });
+    }
+    if (!divisionOp) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'OPERATION_NOT_FOUND',
+        message:
+          'В справочнике нет операции CUT_DIVISION. Восстановите её в /admin/operations или перезапустите API.',
+      });
+    }
+
+    const product = orderItem.product;
+    const color = normalizeColor(order.color ?? product.color);
+    const initialRouteStepIndex = order.routeSteps.length > 0 ? 0 : null;
+
+    // Уникализируем входные ordinal-ы, сохраняя порядок выбора.
+    const requested = [...new Set(dto.rollOrdinals)];
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Перечитываем уже выпущенные пары ВНУТРИ транзакции — защита от
+      // гонки двух параллельных выпусков по тем же рулонам.
+      const existing = await tx.passport.findMany({
+        where: {
+          orderId: order.id,
+          sizeId: dto.sizeId,
+          status: { not: PassportStatus.CANCELLED },
+        },
+        select: { qtyCut: true, rollOrdinal: true },
+      });
+      const releasedOrdinals = new Set<number>();
+      let cutBySize = 0;
+      for (const p of existing) {
+        cutBySize += p.qtyCut;
+        if (p.rollOrdinal != null) releasedOrdinals.add(p.rollOrdinal);
+      }
+      let remaining = orderItem.qtyPlan - cutBySize;
+
+      const created: ReleaseFromRollsResultDto['created'] = [];
+      const skipped: number[] = [];
+
+      for (const ordinal of requested) {
+        if (releasedOrdinals.has(ordinal)) {
+          skipped.push(ordinal);
+          continue;
+        }
+        const layers = rollByOrdinal.get(ordinal);
+        if (layers === undefined) {
+          throw new BadRequestException({
+            statusCode: 400,
+            code: 'CUTTING_ROLL_NOT_FOUND',
+            message: `Рулон №${ordinal} не относится к этой задаче раскроя.`,
+          });
+        }
+        const qty = layers * perLayerQty;
+        if (qty <= 0) {
+          // Рулон без слоёв / размер не на настиле — выпускать нечего.
+          skipped.push(ordinal);
+          continue;
+        }
+        if (qty > remaining) {
+          throw new PassportQtyExceedsRemainingException(Math.max(remaining, 0));
+        }
+        const lite = await this.createOnePassportInTx(tx, {
+          orderId: order.id,
+          productId: product.id,
+          sizeId: dto.sizeId,
+          color,
+          rollNumber: `Рулон ${ordinal}`,
+          rollOrdinal: ordinal,
+          cutDate: new Date(dto.cutDate),
+          qty,
+          cutterId: cutter.id,
+          creatorId: creator.id,
+          divisionOpId: divisionOp.id,
+          initialRouteStepIndex,
+        });
+        remaining -= qty;
+        releasedOrdinals.add(ordinal);
+        created.push({
+          id: lite.id,
+          number: lite.number,
+          qtyCut: lite.qtyCut,
+          rollNumber: lite.rollNumber,
+          rollOrdinal: ordinal,
+        });
+      }
+
+      return { created, skipped };
+    });
+
+    this.logger.log(
+      `event=passport.release-from-rolls orderId=${order.id} sizeId=${dto.sizeId} created=${result.created.length} skipped=${result.skipped.length} creatorId=${creator.id} cutterId=${cutter.id}`,
+    );
+    return result;
   }
 
   // -------------------------------------------------------------------------

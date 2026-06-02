@@ -1656,6 +1656,16 @@ model Passport {
   color      String
   rollNumber String
   cutDate    DateTime
+  /// Порядковый номер рулона (`CuttingTaskRoll.ordinal`), по которому
+  /// помощник раскройщика выпустил этот паспорт через рулонный выпуск
+  /// (`POST /api/passports/release-from-rolls`). По паре
+  /// `(orderId, sizeId, rollOrdinal)` определяется, какие рулоны размера
+  /// уже выпущены (защита от повторной печати, кейс «сломался принтер»).
+  /// `null` у паспортов, выпущенных старой ручной формой (где `rollNumber`
+  /// — свободный текст) и у исторических данных. FK на `CuttingTaskRoll`
+  /// сознательно НЕ ставим: строки рулонов пересоздаются при каждом
+  /// сохранении задачи раскройщика, а `ordinal` стабилен после `DONE`.
+  rollOrdinal Int?
   qtyPlan    Int
   qtyCut     Int
   qtyDefect  Int            @default(0)
@@ -1739,6 +1749,7 @@ model Passport {
   @@index([sizeId, status])
   @@index([createdAt])
   @@index([currentCellId])
+  @@index([orderId, sizeId, rollOrdinal])
 }
 
 // =========================
