@@ -1094,6 +1094,26 @@ export class PassportReworkTargetNotEligibleException extends BusinessException 
   }
 }
 
+/**
+ * Швея берёт/завершает паспорт, возвращённый ОТК на переделку, но
+ * операция этой переделки не разрешена на оборудовании её текущей смены
+ * (allow-list `EquipmentOperation`). Авто-определение операции по
+ * паспорту (см. `PassportsService.resolveOperationForPassport`) не имеет
+ * права молча закрыть rework на «не той» операции — иначе
+ * `OPERATION_FINISHED` зафиксируется неверно. Просим перейти на
+ * подходящее оборудование/операцию. Сообщение содержит имя нужной
+ * операции, чтобы швея сразу понимала, куда переключиться.
+ */
+export class PassportReworkOperationNotAllowedForShiftException extends BusinessException {
+  constructor(operationName: string) {
+    super(
+      'PASSPORT_REWORK_OPERATION_NOT_ALLOWED_FOR_SHIFT',
+      `Этот паспорт нужно переделать на операции «${operationName}» — она не разрешена на оборудовании вашей смены. Переключитесь на подходящее оборудование.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // WTO / ironing (role-terminal)
 // ---------------------------------------------------------------------------

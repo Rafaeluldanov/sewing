@@ -54,6 +54,7 @@ import {
   PassportNotYoursException,
   PassportIssueBackwardException,
   PassportParallelGroupIncompleteException,
+  PassportReworkOperationNotAllowedForShiftException,
   PassportReworkPendingException,
   PassportScanBackwardException,
   PassportNotYoursToEditException,
@@ -1217,6 +1218,111 @@ export class PassportsService {
     return { targetIndex, backward, groupIncomplete };
   }
 
+  /**
+   * Авто-определение операции, которую швея фактически берёт/завершает по
+   * этому паспорту.
+   *
+   * По умолчанию это операция её активной смены (`session.operationId`) —
+   * исторически и `issueToEmployee`, и `completeOperationByEmployee`
+   * писали события строго по смене («взять крой = встать на операцию
+   * смены»). Но если ОТК вернул паспорт на переделку
+   * (`OPERATION_REWORK_OPENED`), целевая операция задаётся самим
+   * паспортом, а не сменой: распошивщица могла уже переключиться на
+   * другую распошив-операцию (напр. «РАСПОШИВ» 04), и заставлять её
+   * вручную менять смену ради закрытия rework по «Распошив рукав» (16) —
+   * лишний шаг, из-за которого паспорт «висит» в «К переделке» (инцидент
+   * 02.06.2026).
+   *
+   * Поэтому: если у паспорта есть открытый rework и его операция
+   * **разрешена на оборудовании текущей смены** (allow-list
+   * `EquipmentOperation`) — возвращаем операцию переделки. Это не трогает
+   * `ShiftSession.operationId` (общий для всех паспортов на руках), а
+   * атрибутирует операцию **по-паспортно** — поэтому многозадачность
+   * (обычный крой + переделка на разных операциях) и пакетное завершение
+   * не запишут `OPERATION_FINISHED` на чужую операцию.
+   *
+   * Если операция переделки на оборудовании смены НЕ разрешена —
+   * `PassportReworkOperationNotAllowedForShiftException` с именем нужной
+   * операции (молча закрыть rework на «не той» операции нельзя). Когда
+   * смена уже стоит на нужной операции или открытых reworks нет —
+   * поведение прежнее (возвращаем `session.operationId`).
+   */
+  private async resolveOperationForPassport(
+    passport: { id: string; orderId: string | null },
+    session: { operationId: string; equipmentId: string },
+  ): Promise<string> {
+    // Все REWORK_OPENED по паспорту (свежие сверху). Дедупим по операции
+    // и оставляем только «открытые» — без последующего OPERATION_FINISHED
+    // для той же пары (passport, operation). Зеркалит логику
+    // `ShiftsService.getMyReworkPassports` и `assertOperationNotFinished`.
+    const reworks = await this.prisma.passportEvent.findMany({
+      where: {
+        passportId: passport.id,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+        operationId: { not: null },
+      },
+      select: { operationId: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (reworks.length === 0) return session.operationId;
+
+    const seen = new Set<string>();
+    const openOps: string[] = [];
+    for (const r of reworks) {
+      const op = r.operationId;
+      if (!op || seen.has(op)) continue;
+      seen.add(op);
+      const finished = await this.prisma.passportEvent.findFirst({
+        where: {
+          passportId: passport.id,
+          operationId: op,
+          type: PassportEventType.OPERATION_FINISHED,
+          createdAt: { gt: r.createdAt },
+        },
+        select: { id: true },
+      });
+      if (!finished) openOps.push(op);
+    }
+    if (openOps.length === 0) return session.operationId;
+
+    // Смена уже на нужной операции переделки — ничего не меняем
+    // (полностью прежнее поведение).
+    if (openOps.includes(session.operationId)) return session.operationId;
+
+    // Несколько открытых reworks — берём маршрут-раннюю операцию (логично
+    // переделывать по порядку маршрута), иначе первую попавшуюся.
+    let targetOp = openOps[0];
+    if (passport.orderId && openOps.length > 1) {
+      const steps = await this.prisma.orderRouteStep.findMany({
+        where: { orderId: passport.orderId, operationId: { in: openOps } },
+        select: { operationId: true },
+        orderBy: { index: 'asc' },
+      });
+      if (steps[0]) targetOp = steps[0].operationId;
+    }
+
+    // Операция переделки обязана быть в allow-list оборудования смены —
+    // иначе понятная ошибка (см. JSDoc выше).
+    const allowed = await this.prisma.equipmentOperation.findFirst({
+      where: {
+        equipmentId: session.equipmentId,
+        operationId: targetOp,
+        isActive: true,
+      },
+      select: { id: true },
+    });
+    if (!allowed) {
+      const op = await this.prisma.operation.findUnique({
+        where: { id: targetOp },
+        select: { name: true },
+      });
+      throw new PassportReworkOperationNotAllowedForShiftException(
+        op?.name ?? targetOp,
+      );
+    }
+    return targetOp;
+  }
+
   // -------------------------------------------------------------------------
   // ISSUE (Шаг 6: «Получить крой»)
   // -------------------------------------------------------------------------
@@ -1288,12 +1394,22 @@ export class PassportsService {
     });
     if (!session) throw new ShiftSessionRequiredException();
 
-    // Если операция текущей смены уже завершалась по этому паспорту —
+    // Операция, на которую встаёт паспорт: по умолчанию — операция смены,
+    // но для возвращённого ОТК паспорта берётся операция его переделки
+    // (см. `resolveOperationForPassport`). Так распошивщица «принимает»
+    // возврат по «Распошив рукав», стоя на смене «РАСПОШИВ», без ручного
+    // переключения смены; обычный поток не меняется.
+    const targetOperationId = await this.resolveOperationForPassport(
+      { id: passport.id, orderId: passport.orderId },
+      session,
+    );
+
+    // Если операция, на которую встаёт паспорт, уже завершалась по нему —
     // запрещаем повторную выдачу. Без этого scan на уже закрытой
     // операции создаёт второй `ISSUED_TO_EMPLOYEE` и паспорт начинает
     // «висеть» у швеи без OPERATION_FINISHED (см. инцидент 09.05.2026,
     // 60+ дубль-выдач у трёх швей).
-    await this.assertOperationNotFinished(passport.id, session.operationId);
+    await this.assertOperationNotFinished(passport.id, targetOperationId);
 
     // Запрещаем «получить крой» на операции, идущей в маршруте раньше
     // уже зафиксированного шага паспорта. Симметрично
@@ -1312,7 +1428,7 @@ export class PassportsService {
     //     {КИПЕРКА, РАСПОШИВ}).
     const issueOrder = await this.evaluateRouteOrder(
       passport,
-      session.operationId,
+      targetOperationId,
     );
     if (issueOrder.backward) throw new PassportIssueBackwardException();
     if (issueOrder.groupIncomplete) {
@@ -1419,8 +1535,9 @@ export class PassportsService {
           data: {
             currentCellId: null,
             currentEmployeeId: employeeId,
-            // Взять крой = встать на операцию смены (зеркало scan).
-            currentOperationId: session.operationId,
+            // Взять крой = встать на операцию паспорта (= операция смены,
+            // либо операция переделки для возврата ОТК; зеркало scan).
+            currentOperationId: targetOperationId,
             currentRouteStepIndex:
               issueTargetIndex ?? passport.currentRouteStepIndex,
             status: PassportStatus.IN_PROGRESS,
@@ -1431,7 +1548,7 @@ export class PassportsService {
             passportId: passport.id,
             type: PassportEventType.ISSUED_TO_EMPLOYEE,
             cellId: passport.currentCellId,
-            operationId: session.operationId,
+            operationId: targetOperationId,
             employeeId,
             qty: passport.qtyCut,
           },
@@ -1468,7 +1585,7 @@ export class PassportsService {
             payload: {
               mode: 'FROM_CELL',
               fromCellId: passport.currentCellId,
-              operationId: session.operationId,
+              operationId: targetOperationId,
               qty: passport.qtyCut,
             },
           },
@@ -1522,7 +1639,7 @@ export class PassportsService {
       });
 
       this.logger.log(
-        `event=passport.issue passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId} autoIssue=${autoIssueEnabled}`,
+        `event=passport.issue passportId=${passportId} employeeId=${employeeId} operationId=${targetOperationId} autoIssue=${autoIssueEnabled}`,
       );
       return this.getOne(passportId);
     }
@@ -1563,8 +1680,9 @@ export class PassportsService {
         where: { id: passport.id },
         data: {
           currentEmployeeId: employeeId,
-          // Взять крой = встать на операцию смены (зеркало scan).
-          currentOperationId: session.operationId,
+          // Взять крой = встать на операцию паспорта (= операция смены,
+          // либо операция переделки для возврата ОТК; зеркало scan).
+          currentOperationId: targetOperationId,
           currentRouteStepIndex:
             issueTargetIndex ?? passport.currentRouteStepIndex,
           status: PassportStatus.IN_PROGRESS,
@@ -1575,7 +1693,7 @@ export class PassportsService {
           passportId: passport.id,
           type: PassportEventType.ISSUED_TO_EMPLOYEE,
           // cellId = null — у route-WIP паспорта ячейки нет.
-          operationId: session.operationId,
+          operationId: targetOperationId,
           employeeId,
           qty: passport.qtyCut,
         },
@@ -1592,7 +1710,7 @@ export class PassportsService {
           employeeId,
           payload: {
             mode: 'ROUTE_WIP',
-            operationId: session.operationId,
+            operationId: targetOperationId,
             qty: passport.qtyCut,
           },
         },
@@ -1631,7 +1749,7 @@ export class PassportsService {
     });
 
     this.logger.log(
-      `event=passport.issue.routed passportId=${passportId} employeeId=${employeeId} operationId=${session.operationId} autoIssue=${autoIssueEnabled}`,
+      `event=passport.issue.routed passportId=${passportId} employeeId=${employeeId} operationId=${targetOperationId} autoIssue=${autoIssueEnabled}`,
     );
     return this.getOne(passportId);
   }
@@ -1912,11 +2030,20 @@ export class PassportsService {
     // — единственный достоверный источник «что фактически завершалось».
     const session = await this.prisma.shiftSession.findFirst({
       where: { employeeId, endedAt: null },
-      select: { operationId: true },
+      select: { operationId: true, equipmentId: true },
     });
     if (!session) throw new ShiftSessionRequiredException();
 
-    const completedOperationId = session.operationId;
+    // Операцию завершения берём из паспорта, а не вслепую из смены: если
+    // ОТК вернул паспорт на переделку на другой распошив-операции, чем
+    // стоит смена, авто-определяем её по паспорту (см.
+    // `resolveOperationForPassport`). Это убирает «пляску со сменами» при
+    // закрытии переделки и чинит пакетное завершение разнооперационных
+    // паспортов. Для обычного потока возвращает `session.operationId`.
+    const completedOperationId = await this.resolveOperationForPassport(
+      { id: passport.id, orderId: passport.orderId },
+      session,
+    );
 
     // Та же защита, что в `issueToEmployee`: если по этой паре
     // (passport, operation) уже зафиксировано `OPERATION_FINISHED`,
