@@ -41,6 +41,7 @@ export * from './display-screens';
 export * from './master-calls';
 export * from './master-actions';
 export * from './production-board';
+export * from './master-employee-stats';
 export * from './employee-qr';
 export * from './me-daily';
 export * from './cut-release-policy';

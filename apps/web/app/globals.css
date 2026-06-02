@@ -15300,6 +15300,144 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 
 /* -----------------------------------------------------------------------
+ * Кабинет мастера → вкладка «Сотрудники» (статистика «кто сколько
+ * сделал»). См. `apps/web/app/master/employee-stats-view.tsx`,
+ * `packages/shared/src/master-employee-stats.ts`. Overlay/панель drill
+ * переиспользуют `.pboard__overlay`/`.pboard__panel`.
+ * ----------------------------------------------------------------------- */
+
+.mstat__bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 10px 0 12px;
+}
+.mstat__presets {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+}
+.mstat__dates {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+}
+.mstat__date-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+}
+.mstat__date-field input[type='date'] {
+  padding: 5px 8px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+  background: var(--color-bg);
+  color: inherit;
+}
+
+.mstat__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.mstat__table th {
+  text-align: left;
+  padding: 6px 8px;
+  border-bottom: 2px solid var(--color-border);
+  color: var(--color-text-muted, #6b7280);
+  font-weight: 600;
+  white-space: nowrap;
+}
+.mstat__table td {
+  padding: 8px;
+  border-bottom: 1px solid var(--color-border);
+  vertical-align: middle;
+}
+.mstat__table th.mstat__num,
+.mstat__table td.mstat__num {
+  text-align: right;
+  white-space: nowrap;
+  width: 1%;
+}
+.mstat__row {
+  cursor: pointer;
+}
+.mstat__row:hover,
+.mstat__row:focus-visible {
+  background: var(--color-bg-muted);
+  outline: none;
+}
+.mstat__name {
+  font-weight: 600;
+}
+.mstat__role {
+  font-size: 11px;
+  color: var(--color-text-muted, #6b7280);
+}
+.mstat__td-ops {
+  max-width: 360px;
+}
+.mstat__ops {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mstat__op-chip {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 7px;
+  border-radius: 6px;
+  background: var(--color-accent-soft);
+  color: var(--color-accent-fg);
+  font-size: 12px;
+  white-space: nowrap;
+}
+.mstat__op-def {
+  color: var(--color-danger-fg);
+  font-weight: 700;
+  margin-left: 3px;
+}
+.mstat__op-more {
+  font-size: 11px;
+  color: var(--color-text-muted, #6b7280);
+  align-self: center;
+}
+.mstat__def {
+  color: var(--color-danger-fg);
+  font-weight: 700;
+}
+
+.mstat__drill-section {
+  margin-bottom: 14px;
+}
+.mstat__drill-h {
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--color-text-muted, #6b7280);
+  margin-bottom: 6px;
+}
+.mstat__drill-op,
+.mstat__drill-day {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 2px;
+  border-top: 1px solid var(--color-border);
+  font-size: 13px;
+}
+.mstat__drill-op-name {
+  font-weight: 600;
+}
+
+/* -----------------------------------------------------------------------
  * /admin/employees: row actions + danger zone + hard-delete modal
  * (см. `apps/web/app/admin/employees/row-actions.tsx`,
  * `apps/web/app/admin/employees/[id]/danger-zone.tsx`,

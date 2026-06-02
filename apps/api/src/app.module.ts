@@ -33,6 +33,7 @@ import { DiagnosticsModule } from './modules/diagnostics/diagnostics.module.js';
 import { MasterCallsModule } from './modules/master-calls/master-calls.module.js';
 import { MasterActionsModule } from './modules/master-actions/master-actions.module.js';
 import { ProductionBoardModule } from './modules/production-board/production-board.module.js';
+import { MasterEmployeeStatsModule } from './modules/master-employee-stats/master-employee-stats.module.js';
 import { CutReleasePolicyModule } from './modules/cut-release-policy/cut-release-policy.module.js';
 import { OrderCutIssueRulesModule } from './modules/order-cut-issue-rules/order-cut-issue-rules.module.js';
 import { ClientsModule } from './modules/clients/clients.module.js';
@@ -93,6 +94,7 @@ import { PushModule } from './modules/push/push.module.js';
     MasterCallsModule,
     MasterActionsModule,
     ProductionBoardModule,
+    MasterEmployeeStatsModule,
     CutReleasePolicyModule,
     OrderCutIssueRulesModule,
     ClientsModule,

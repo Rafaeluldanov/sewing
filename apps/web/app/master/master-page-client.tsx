@@ -42,6 +42,7 @@ import { PassportActionsSheet } from './passport-actions-sheet';
 import { CutReleasePolicyCard } from './cut-release-policy-card';
 import { refreshCutReleasePolicyAction } from './cut-release-policy-actions';
 import { ProductionBoardView } from './production-board-view';
+import { EmployeeStatsView } from './employee-stats-view';
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -86,7 +87,7 @@ export function MasterPageClient({
   const [archiveOpen, setArchiveOpen] = useState(false);
   // Вкладки кабинета мастера: очередь вызовов (исторический экран) и
   // новая «Движение тиража» (доска по дате выдачи кроя).
-  const [tab, setTab] = useState<'calls' | 'board'>('calls');
+  const [tab, setTab] = useState<'calls' | 'board' | 'employees'>('calls');
   const [toast, setToast] = useState<string | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
   // Stage 2 «Действия мастера»: открытый bottom-sheet ручных действий
@@ -311,6 +312,17 @@ export function MasterPageClient({
         >
           Движение тиража
         </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={tab === 'employees'}
+          className={
+            'master-page__tab' + (tab === 'employees' ? ' is-active' : '')
+          }
+          onClick={() => setTab('employees')}
+        >
+          Сотрудники
+        </button>
       </div>
 
       {error && (
@@ -326,6 +338,8 @@ export function MasterPageClient({
       )}
 
       {tab === 'board' && <ProductionBoardView />}
+
+      {tab === 'employees' && <EmployeeStatsView />}
 
       {tab === 'calls' && (
         <>
