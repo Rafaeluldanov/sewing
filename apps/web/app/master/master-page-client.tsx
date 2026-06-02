@@ -29,6 +29,7 @@ import {
 import type { CutReleasePolicyDto, SizeDto } from '@sewing/shared';
 import type { DefectTypeDto } from '@sewing/shared/qc';
 import { Icon } from '@/components/icon';
+import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { QrScannerModal } from '@/app/work/qr-scanner-modal';
 import { logoutAction } from '@/app/(auth)/logout-action';
 import {
@@ -54,6 +55,11 @@ interface Props {
   sizes: SizeDto[];
   /** Справочник видов брака для ОТК-действий мастера в PassportActionsSheet. */
   defectTypes: DefectTypeDto[];
+  /**
+   * Показывать ли кнопку «Мой QR-код» в шапке (роль прошла
+   * `canSeeEmployeeQrButton`). Гейт считается на сервере в `page.tsx`.
+   */
+  showEmployeeQr: boolean;
 }
 
 export function MasterPageClient({
@@ -63,6 +69,7 @@ export function MasterPageClient({
   initialPolicy,
   sizes,
   defectTypes,
+  showEmployeeQr,
 }: Props) {
   const [items, setItems] = useState<MasterCallDto[]>(initialItems);
   const [resolved, setResolved] =
@@ -276,6 +283,7 @@ export function MasterPageClient({
           >
             {items.length}
           </span>
+          {showEmployeeQr ? <EmployeeQrButton variant="inline" /> : null}
           <form action={logoutAction}>
             <button
               type="submit"

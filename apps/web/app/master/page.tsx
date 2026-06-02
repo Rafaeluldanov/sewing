@@ -9,7 +9,6 @@ import { getActiveCutReleasePolicy } from '@/lib/cut-release-policy-api';
 import { listSizes } from '@/lib/orders-api';
 import { listMasterDefectTypes } from '@/lib/master-actions-api';
 import { canSeeEmployeeQrButton, canSeeMasterPage } from '@/lib/rbac';
-import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { MasterPageClient } from './master-page-client';
 
 export const dynamic = 'force-dynamic';
@@ -82,18 +81,14 @@ export default async function MasterPage() {
   }
 
   return (
-    <>
-      <MasterPageClient
-        initialItems={initialItems ?? []}
-        initialError={initialError}
-        initialResolved={initialResolved}
-        initialPolicy={initialPolicy}
-        sizes={initialSizes}
-        defectTypes={defectTypes}
-      />
-      {canSeeEmployeeQrButton(me.user.role) ? (
-        <EmployeeQrButton variant="floating" />
-      ) : null}
-    </>
+    <MasterPageClient
+      initialItems={initialItems ?? []}
+      initialError={initialError}
+      initialResolved={initialResolved}
+      initialPolicy={initialPolicy}
+      sizes={initialSizes}
+      defectTypes={defectTypes}
+      showEmployeeQr={canSeeEmployeeQrButton(me.user.role)}
+    />
   );
 }
