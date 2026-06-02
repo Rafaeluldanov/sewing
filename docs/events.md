@@ -358,8 +358,15 @@ SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
 SALARY_ENTRY | PAYROLL_PAYOUT |
 PAYROLL_ACCRUAL_DOCUMENT |
-ORDER_SAMPLE
+ORDER_SAMPLE | EMPLOYEE | OPERATION
 ```
+
+- `EMPLOYEE` — событие `EMPLOYEE_DELETED` (физическое удаление пустой
+  учётки; снимок в `payload.targetSnapshot`).
+- `OPERATION` — событие `OPERATION_DELETED` (физическое удаление
+  нигде не использованной операции; `payload.targetSnapshot =
+  { code, name, category }`). Мягкое «удаление» (`active = false`)
+  идёт через обычный `update` и отдельного аудит-события не имеет.
 
 <a id="33-salary-entry"></a>
 

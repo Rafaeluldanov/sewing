@@ -2,7 +2,8 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, Calculator, Scissors } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
-import { getOperation } from '@/lib/operations-api';
+import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { getOperation, getOperationBlockers } from '@/lib/operations-api';
 import {
   AdminCard,
   AdminPageShell,
@@ -26,6 +27,7 @@ import {
 } from '@/lib/operation-economics';
 import type { OperationDetailDto } from '@sewing/shared/operations';
 import { OperationEditForm } from './edit-form';
+import { OperationDangerZone } from './delete-operation';
 
 export const dynamic = 'force-dynamic';
 
@@ -67,6 +69,15 @@ export default async function AdminOperationDetailPage({ params }: Params) {
     throw e;
   }
 
+  // Опасная зона (физическое удаление) — preflight блокеров и роль
+  // viewer'а. Роль нужна, чтобы скрыть/задизейблить удаление для
+  // не-ADMIN (backend всё равно вернёт 403). Если preflight упал —
+  // зону просто не показываем, карточка остаётся рабочей.
+  const [me, blockers] = await Promise.all([
+    getCurrentUserOrNull(),
+    getOperationBlockers(params.id).catch(() => null),
+  ]);
+
   return (
     <AdminPageShell
       icon={<Scissors size={22} strokeWidth={1.6} aria-hidden />}
@@ -103,6 +114,16 @@ export default async function AdminOperationDetailPage({ params }: Params) {
           <OperationEconomicsBlock operation={operation} />
         </AdminCard>
       </div>
+
+      {blockers && (
+        <AdminCard>
+          <OperationDangerZone
+            operation={operation}
+            blockers={blockers}
+            viewerRole={me?.user.role ?? ''}
+          />
+        </AdminCard>
+      )}
     </AdminPageShell>
   );
 }

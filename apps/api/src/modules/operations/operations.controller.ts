@@ -1,7 +1,9 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   Patch,
   Post,
@@ -10,12 +12,14 @@ import {
   CreateOperationSchema,
   UpdateOperationSchema,
   type CreateOperationDto,
+  type OperationBlockersResponse,
   type OperationDetailDto,
   type OperationSummaryDto,
   type UpdateOperationDto,
 } from '@sewing/shared/operations';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OperationsService } from './operations.service.js';
 
 /**
@@ -61,5 +65,41 @@ export class OperationsController {
     dto: UpdateOperationDto,
   ): Promise<OperationDetailDto> {
     return this.operations.update(id, dto);
+  }
+
+  /**
+   * Превью «можно ли физически удалить операцию» (см.
+   * `OperationsService.getBlockers`). UI по этому ответу решает,
+   * показывать ли кнопку «Удалить» (hard) или только
+   * «Деактивировать» (soft = `PATCH { isActive: false }`).
+   */
+  @Get(':id/blockers')
+  getBlockers(@Param('id') id: string): Promise<OperationBlockersResponse> {
+    return this.operations.getBlockers(id);
+  }
+
+  /**
+   * Физическое удаление операции (`DELETE /api/operations/:id`).
+   *
+   * Метод-уровневый `@Roles('ADMIN')` переопределяет класс-уровневый
+   * `@Roles('SHOP_MANAGER', 'ADMIN')` — hard-delete сознательно
+   * доступен только администраторам, потому что операция необратима.
+   *
+   * 409 (`OPERATION_IN_USE`), если на операцию есть любые ссылки
+   * (история / маршруты / substitute-правила); детали — через
+   * `GET :id/blockers`. Менеджеру остаётся мягкое удаление —
+   * `PATCH { isActive: false }`.
+   *
+   * Возвращает `204 No Content` при успехе; снимок удалённой операции
+   * остаётся в `AuditLog` (`OPERATION_DELETED`).
+   */
+  @Roles('ADMIN')
+  @Delete(':id')
+  @HttpCode(204)
+  async delete(
+    @Param('id') id: string,
+    @CurrentUser() viewer: AuthPrincipal,
+  ): Promise<void> {
+    await this.operations.remove(id, viewer);
   }
 }

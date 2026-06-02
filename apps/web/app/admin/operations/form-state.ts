@@ -29,3 +29,17 @@ export interface UpdateOperationState {
 }
 
 export const initialUpdateOperationState: UpdateOperationState = {};
+
+/**
+ * Состояние server action физического удаления операции
+ * (`deleteOperationAction`). При успехе action редиректит на список,
+ * поэтому состояние нужно только под ошибку (например, 409
+ * `OPERATION_IN_USE`, если операцию успели использовать между
+ * preflight'ом и нажатием «Удалить»).
+ */
+export interface DeleteOperationState {
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialDeleteOperationState: DeleteOperationState = {};

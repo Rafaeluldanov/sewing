@@ -500,7 +500,18 @@ export type AuditEntityType =
    * «куда делась учётка X» могло искать по тому же id, что был у
    * сотрудника при жизни.
    */
-  | 'EMPLOYEE';
+  | 'EMPLOYEE'
+  /**
+   * Управленческий справочник операций (см.
+   * `apps/api/src/modules/operations/*`, `prisma/schema.prisma::Operation`).
+   * Событие — `OPERATION_DELETED` (физическое удаление пустой,
+   * нигде не использованной операции; в `payload.targetSnapshot`
+   * хранится `{ code, name, category }`). `entityId` — `Operation.id`
+   * уже удалённой строки, по тому же принципу, что и `EMPLOYEE_DELETED`.
+   * Мягкое «удаление» (`active = false`) идёт через обычный `update`
+   * и отдельного аудит-события не имеет.
+   */
+  | 'OPERATION';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

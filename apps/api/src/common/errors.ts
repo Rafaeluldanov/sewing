@@ -736,6 +736,28 @@ export class OperationCodeTakenException extends BusinessException {
 }
 
 /**
+ * Нельзя физически удалить операцию: на неё ссылается
+ * производственная / финансовая история или конфигурация маршрутов
+ * (`OperationEntry`, `PassportEvent`, `OrderRouteStep`,
+ * `RouteTemplateStep`, `ShiftSession`, текущая операция паспорта,
+ * `MasterCall`, `OperationSubstitution`). Менеджер должен
+ * деактивировать операцию (`isActive = false`), а не удалять.
+ * Detail — через `GET /api/operations/:id/blockers`.
+ *
+ * Параллель к `EmployeeHasHistoryException`: hard-delete доступен
+ * только для свежесозданных, нигде не использованных операций.
+ */
+export class OperationInUseException extends BusinessException {
+  constructor() {
+    super(
+      'OPERATION_IN_USE',
+      'Операция используется в истории или маршрутах — удаление невозможно. Деактивируйте её.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Размер из `ratesBySize` не существует в справочнике `Size`. Защита
  * от подмены id — отдельная бизнес-ошибка вместо общего 500.
  */

@@ -2,14 +2,19 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma, type PricingMode } from '@prisma/client';
 import type {
   CreateOperationDto,
+  OperationBlockersResponse,
+  OperationDeleteBlockerDto,
   OperationDetailDto,
   OperationSummaryDto,
   TimeNormMode,
   UpdateOperationDto,
 } from '@sewing/shared/operations';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import {
   OperationCodeTakenException,
+  OperationInUseException,
   OperationNotFoundException,
   OperationRateDuplicateSizeException,
   OperationRateMissingException,
@@ -31,14 +36,24 @@ import {
  *
  * Сознательные ограничения MVP:
  *   - один тариф на пару `(operationId, sizeId)`, без истории;
- *   - без привязки к продукту/сотруднику/складу/селлеру;
- *   - удаление операции не поддерживаем — менеджер выключает `isActive`.
+ *   - без привязки к продукту/сотруднику/складу/селлеру.
+ *
+ * Удаление операции — двухуровневое (см. `getBlockers` / `remove`):
+ *   - мягкое (основной путь) — `update({ isActive: false })`: вся
+ *     история и тарифы остаются, операция уходит из рабочих списков;
+ *   - физическое (`remove`) — только для свежесозданных операций без
+ *     единой ссылки (история / маршруты / substitute-правила),
+ *     каскадно снимает только конфигурацию (тарифы, нормы, привязку
+ *     к станкам). Доступно лишь `ADMIN`.
  */
 @Injectable()
 export class OperationsService {
   private readonly logger = new Logger(OperationsService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // -------------------------------------------------------------------------
   // LIST
@@ -394,6 +409,150 @@ export class OperationsService {
           : ''),
     );
     return this.getOne(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // DELETE BLOCKERS (preflight «можно ли физически удалить»)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Считает все ссылки на операцию, которые делают физическое удаление
+   * небезопасным. Пока есть хотя бы одна — `hardDeleteAllowed = false`,
+   * и UI должен предлагать деактивацию (`isActive = false`) вместо
+   * удаления.
+   *
+   * Считаем именно «использование», а не конфигурацию: тарифы
+   * (`OperationRateBySize`), нормы (`OperationTimeNormBySize`) и
+   * привязку к станкам (`EquipmentOperation`) НЕ считаем — у них в
+   * схеме `onDelete: Cascade`, они уйдут вместе с операцией.
+   * `OperationSubstitution` каскадная, но мы её считаем сознательно:
+   * молча оборвать substitute-правило AND-гейта параллельной группы
+   * (см. [[project_operation_substitution]]) опаснее, чем тариф.
+   *
+   * Backend пересчитывает то же самое внутри `remove()`, чтобы между
+   * preflight'ом и `DELETE` не проехал race.
+   */
+  async getBlockers(id: string): Promise<OperationBlockersResponse> {
+    const exists = await this.prisma.operation.findUnique({
+      where: { id },
+      select: { id: true },
+    });
+    if (!exists) throw new OperationNotFoundException();
+
+    const [
+      operationEntries,
+      eventsOnOperation,
+      eventsFromOperation,
+      orderRouteSteps,
+      routeTemplateSteps,
+      shiftSessions,
+      currentPassports,
+      masterCalls,
+      substitutionsAsSatisfies,
+      substitutionsAsSubstitute,
+    ] = await Promise.all([
+      this.prisma.operationEntry.count({ where: { operationId: id } }),
+      this.prisma.passportEvent.count({ where: { operationId: id } }),
+      this.prisma.passportEvent.count({ where: { fromOperationId: id } }),
+      this.prisma.orderRouteStep.count({ where: { operationId: id } }),
+      this.prisma.routeTemplateStep.count({ where: { operationId: id } }),
+      this.prisma.shiftSession.count({ where: { operationId: id } }),
+      this.prisma.passport.count({ where: { currentOperationId: id } }),
+      this.prisma.masterCall.count({ where: { operationId: id } }),
+      this.prisma.operationSubstitution.count({
+        where: { satisfiesOpId: id },
+      }),
+      this.prisma.operationSubstitution.count({
+        where: { substituteOpId: id },
+      }),
+    ]);
+
+    const blockers: OperationDeleteBlockerDto[] = [];
+    if (operationEntries > 0)
+      blockers.push({ kind: 'OperationEntry', count: operationEntries });
+    // Оба направления события паспорта консолидируем в одну строку:
+    // оператору важно «есть ли история событий», а не разбивка по
+    // `operationId` / `fromOperationId`.
+    const passportEvents = eventsOnOperation + eventsFromOperation;
+    if (passportEvents > 0)
+      blockers.push({ kind: 'PassportEvent', count: passportEvents });
+    if (orderRouteSteps > 0)
+      blockers.push({ kind: 'OrderRouteStep', count: orderRouteSteps });
+    if (routeTemplateSteps > 0)
+      blockers.push({ kind: 'RouteTemplateStep', count: routeTemplateSteps });
+    if (shiftSessions > 0)
+      blockers.push({ kind: 'ShiftSession', count: shiftSessions });
+    if (currentPassports > 0)
+      blockers.push({ kind: 'CurrentPassport', count: currentPassports });
+    if (masterCalls > 0)
+      blockers.push({ kind: 'MasterCall', count: masterCalls });
+    const substitutions =
+      substitutionsAsSatisfies + substitutionsAsSubstitute;
+    if (substitutions > 0)
+      blockers.push({ kind: 'OperationSubstitution', count: substitutions });
+
+    return {
+      hardDeleteAllowed: blockers.length === 0,
+      blockers,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // REMOVE (физическое удаление — только для пустых операций)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Физическое удаление операции. Разрешено только когда `getBlockers`
+   * не нашёл ни одной ссылки (сценарий «создал по ошибке, нигде не
+   * использовал»). Иначе — `OperationInUseException` (409), и менеджер
+   * деактивирует операцию вместо удаления.
+   *
+   * Внутри транзакции каскад БД (`onDelete: Cascade`) сам снимает
+   * конфигурацию — `OperationRateBySize`, `OperationTimeNormBySize`,
+   * `EquipmentOperation` (и формально `OperationSubstitution`, но до
+   * сюда мы доходим только если их 0). Снимок удалённой операции
+   * остаётся в `AuditLog` (`OPERATION_DELETED`).
+   *
+   * RBAC (`ADMIN`-only) проверяется в контроллере; `viewer` нужен
+   * только чтобы проставить `employeeId` в аудит.
+   */
+  async remove(id: string, viewer: AuthPrincipal): Promise<void> {
+    const target = await this.prisma.operation.findUnique({
+      where: { id },
+      select: { id: true, code: true, name: true, category: true },
+    });
+    if (!target) throw new OperationNotFoundException();
+
+    const { hardDeleteAllowed } = await this.getBlockers(id);
+    if (!hardDeleteAllowed) {
+      throw new OperationInUseException();
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      // Аудит ДО delete — снимок ключевых полей, чтобы расследование
+      // «куда делась операция X» имело за что зацепиться.
+      await this.audit.log(
+        {
+          event: 'OPERATION_DELETED',
+          entityType: 'OPERATION',
+          entityId: id,
+          payload: {
+            targetSnapshot: {
+              code: target.code,
+              name: target.name,
+              category: target.category,
+            },
+          },
+          employeeId: viewer.employeeId,
+        },
+        tx,
+      );
+      await tx.operation.delete({ where: { id } });
+    });
+
+    this.logger.log(
+      `event=operation.delete id=${id} code=${target.code} actor=${viewer.employeeId}`,
+    );
   }
 
   // -------------------------------------------------------------------------

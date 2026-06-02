@@ -255,11 +255,17 @@ DTO: `packages/shared/src/shifts.ts`.
 | GET   | `/api/operations`     | SHOP_MANAGER, ADMIN | `OperationSummaryDto[]`. |
 | POST  | `/api/operations`     | SHOP_MANAGER, ADMIN | `CreateOperationDto`. Поддерживает `pricingMode` (`FIXED` / `BY_SIZE` / `SALARY_ONLY`), `timeNormMode` (`FIXED`/`BY_SIZE`), плановые `salaryPlanRubPerShift` / `salaryPlanShiftSeconds`, `producesFinishedGoods: boolean` (default `false`). |
 | GET   | `/api/operations/:id` | SHOP_MANAGER, ADMIN | `OperationDetailDto`. Включает `producesFinishedGoods: boolean`. |
-| PATCH | `/api/operations/:id` | SHOP_MANAGER, ADMIN | `UpdateOperationDto`. Полный full-replace по `OperationRateBySize` / `OperationTimeNormBySize` для соответствующих режимов. Поле `producesFinishedGoods` опционально — если передано, обновляется; иначе значение в БД не трогается. При включении флага последующие прохождения операции по паспорту начинают создавать `FinishedGoodsMovement PRODUCTION_RECEIPT IN` (`sourceKey = PACKED_PASSPORT:<passportId>`); уже выпущенные паспорты не пересоздаются. |
+| PATCH | `/api/operations/:id` | SHOP_MANAGER, ADMIN | `UpdateOperationDto`. Полный full-replace по `OperationRateBySize` / `OperationTimeNormBySize` для соответствующих режимов. Поле `producesFinishedGoods` опционально — если передано, обновляется; иначе значение в БД не трогается. При включении флага последующие прохождения операции по паспорту начинают создавать `FinishedGoodsMovement PRODUCTION_RECEIPT IN` (`sourceKey = PACKED_PASSPORT:<passportId>`); уже выпущенные паспорты не пересоздаются. Мягкое удаление операции — этот же PATCH с `isActive: false`. |
+| GET   | `/api/operations/:id/blockers` | SHOP_MANAGER, ADMIN | `OperationBlockersResponse`. Preflight «можно ли физически удалить»: `{ hardDeleteAllowed, blockers: [{ kind, count }] }`. Считает ссылки на операцию (`OperationEntry`, `PassportEvent`, `OrderRouteStep`, `RouteTemplateStep`, `ShiftSession`, текущая операция паспорта, `MasterCall`, `OperationSubstitution`). Конфигурация с `onDelete: Cascade` (тарифы, нормы, привязка к станкам) в блокеры не входит. |
+| DELETE | `/api/operations/:id` | **ADMIN** | Физическое удаление. Метод-уровневый `@Roles('ADMIN')` переопределяет класс-уровневый. `204` при успехе; каскад снимает только конфигурацию, в `AuditLog` пишется `OPERATION_DELETED`. `409 OPERATION_IN_USE`, если есть любые ссылки (детали — `GET :id/blockers`); тогда менеджеру остаётся мягкое удаление (`PATCH { isActive: false }`). |
 
 > Read-only `GET /api/sizes` уже отдаёт справочник для редактирования
 > ставок/норм; отдельных endpoints для `OperationRateBySize` /
 > `OperationTimeNormBySize` нет — они правятся через PATCH `/operations/:id`.
+>
+> Удаление операции — двухуровневое: мягкое (`PATCH { isActive: false }`,
+> основной путь, обратимо) и физическое (`DELETE`, только `ADMIN`, только
+> для нигде не использованных операций).
 
 DTO: `packages/shared/src/operations.ts`.
 
@@ -927,6 +933,7 @@ DTO: `@sewing/shared` (`ProductionBoardQuerySchema`,
 | POST  | `/api/passports/:id/issue`                    | Any auth                              | Body `IssuePassportDto` (бизнес-поля; `employeeId` берётся из сессии). Швея «получает крой»: снимает с ячейки, выставляет `currentEmployeeId = me`, `status = IN_PROGRESS`, `PassportEvent(ISSUED_TO_EMPLOYEE)`. Учитывает `CutReleasePolicy`. |
 | POST  | `/api/passports/:id/scan`                     | Any auth                              | Body `ScanPassportDto` (employee — из сессии). Любой скан = переход на `session.operationId`. Side effects: для предыдущей операции пишет `OperationEntry(PENDING_RELEASE)` (для пошива) и `PassportEvent(OPERATION_SCAN)`. Делает `QC-gate` для `IRONING` (`WTO_PASSED` обязателен). |
 | POST  | `/api/passports/:id/complete-operation`       | Any auth                              | Body `CompleteOperationDto` (пустое). Завершает текущую операцию владельца (`currentEmployeeId = me`, `status = IN_PROGRESS`). |
+| POST  | `/api/passports/batch/complete-operations`    | Any auth                              | Body `BatchCompleteOperationsDto` (`{ passportIds: string[] }`). Пакетное завершение операций швеи разом по нескольким своим паспортам (UX «Завершить выбранные» в «Текущий крой»). Каждый паспорт — отдельная транзакция через `completeOperationByEmployee`; партиальный успех → `{ completed, failed }` (см. F4b). |
 | POST  | `/api/passports/by-code`                      | Any auth                              | Body `{ code }` (QR `passport:{id}`, номер `P-…`, или голый id). Резолв без побочных эффектов. Возвращает паспорт + `routeHint.routeMismatchWithActiveShift` (read-only подсказка). |
 | GET   | `/api/passports/:id/print`                    | Public                                | HTML A6 печатная форма + QR `passport:{id}`. Используется принтер-станцией (ADR-0010). |
 | GET   | `/api/passports/:id/qr`                       | Public                                | PNG QR `passport:{id}` (ADR-0008). |

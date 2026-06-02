@@ -5,6 +5,7 @@
  */
 import type {
   CreateOperationDto,
+  OperationBlockersResponse,
   OperationDetailDto,
   OperationSummaryDto,
   UpdateOperationDto,
@@ -41,4 +42,30 @@ export function updateOperation(
     `/operations/${encodeURIComponent(id)}`,
     { method: 'PATCH', body },
   );
+}
+
+/**
+ * Превью «можно ли физически удалить операцию» (см.
+ * `OperationsService.getBlockers`). Используется server action перед
+ * показом кнопки «Удалить», чтобы не давать жать DELETE впустую.
+ */
+export function getOperationBlockers(
+  id: string,
+): Promise<OperationBlockersResponse> {
+  return apiFetch<OperationBlockersResponse>(
+    `/operations/${encodeURIComponent(id)}/blockers`,
+    { cache: 'no-store' },
+  );
+}
+
+/**
+ * Физическое удаление операции (`DELETE /api/operations/:id`,
+ * только `ADMIN`). 409 `OPERATION_IN_USE`, если на операцию есть
+ * ссылки — тогда остаётся мягкое удаление (`updateOperation` с
+ * `isActive: false`). Бэкенд отдаёт `204`, тело пустое.
+ */
+export function deleteOperation(id: string): Promise<void> {
+  return apiFetch<void>(`/operations/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
 }

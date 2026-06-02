@@ -7,7 +7,11 @@ import {
   getEquipment,
   updateEquipmentOperations,
 } from '@/lib/equipment-api';
-import { createOperation, updateOperation } from '@/lib/operations-api';
+import {
+  createOperation,
+  deleteOperation,
+  updateOperation,
+} from '@/lib/operations-api';
 import {
   OPERATION_CATEGORIES,
   PRICING_MODES,
@@ -20,6 +24,7 @@ import {
 import { toSeconds } from '@/lib/operations-time-norm';
 import type {
   CreateOperationState,
+  DeleteOperationState,
   UpdateOperationState,
 } from './form-state';
 
@@ -471,4 +476,39 @@ export async function updateOperationAction(
     }
     return { error: 'Не удалось сохранить операцию' };
   }
+}
+
+// ---------------------------------------------------------------------------
+// DELETE (физическое удаление — только ADMIN, только пустые операции)
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action физического удаления операции (`DELETE
+ * /api/operations/:id`). RBAC (`ADMIN`-only) и проверка ссылок —
+ * на backend (`OperationsService.remove` → `OPERATION_IN_USE`).
+ *
+ * Возвращает `{ error }` при отказе; при успехе — пустой объект, и
+ * клиент сам уводит на список (`router.push`), по тому же паттерну,
+ * что `deleteEmployeeAction`. Сценарий «нечего удалять, надо
+ * деактивировать» обрабатывает UI: кнопка «Удалить» доступна лишь
+ * когда preflight (`getOperationBlockers`) вернул
+ * `hardDeleteAllowed = true`. Но 409 всё равно обрабатываем — между
+ * preflight'ом и нажатием кто-то мог успеть использовать операцию.
+ */
+export async function deleteOperationAction(
+  operationId: string,
+): Promise<DeleteOperationState> {
+  try {
+    await deleteOperation(operationId);
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        errorRequestId: e.requestId,
+      };
+    }
+    return { error: 'Не удалось удалить операцию' };
+  }
+  revalidatePath('/admin/operations');
+  return {};
 }

@@ -918,3 +918,63 @@ export interface OperationDetailDto extends OperationSummaryDto {
    */
   sizes: Array<{ id: string; code: string; sortOrder: number }>;
 }
+
+// ---------------------------------------------------------------------------
+// Удаление операции (blockers)
+// ---------------------------------------------------------------------------
+
+/**
+ * Виды ссылок, которые блокируют физическое удаление операции
+ * (`DELETE /api/operations/:id`). Каждый соответствует обратной
+ * связи в `prisma/schema.prisma::Operation`:
+ *
+ *   - `OperationEntry`         — сдельные начисления (зарплатная история);
+ *   - `PassportEvent`          — события паспортов (аудит-история; считаем
+ *                                и `operationId`, и `fromOperationId`);
+ *   - `OrderRouteStep`         — шаги в маршрутах заказов;
+ *   - `RouteTemplateStep`      — шаги в шаблонах маршрутов;
+ *   - `ShiftSession`           — смены, открытые на этой операции;
+ *   - `CurrentPassport`        — паспорта, стоящие на этой операции сейчас
+ *                                (`Passport.currentOperationId`);
+ *   - `MasterCall`             — вызовы мастера, привязанные к операции;
+ *   - `OperationSubstitution`  — substitute-правила параллельной группы.
+ *
+ * Конфигурация, у которой в схеме стоит `onDelete: Cascade`
+ * (`OperationRateBySize`, `OperationTimeNormBySize`,
+ * `EquipmentOperation`), в блокеры НЕ входит — она снимается каскадно
+ * вместе с операцией. `OperationSubstitution` тоже каскадная, но мы
+ * выносим её в блокеры сознательно: молча оборвать substitute-правило
+ * AND-гейта опаснее, чем тариф, поэтому менеджер должен увидеть его и
+ * принять решение.
+ */
+export const OPERATION_DELETE_BLOCKER_KINDS = [
+  'OperationEntry',
+  'PassportEvent',
+  'OrderRouteStep',
+  'RouteTemplateStep',
+  'ShiftSession',
+  'CurrentPassport',
+  'MasterCall',
+  'OperationSubstitution',
+] as const;
+export type OperationDeleteBlockerKind =
+  (typeof OPERATION_DELETE_BLOCKER_KINDS)[number];
+
+export interface OperationDeleteBlockerDto {
+  kind: OperationDeleteBlockerKind;
+  count: number;
+}
+
+/**
+ * Превью «можно ли физически удалить операцию» (`GET
+ * /api/operations/:id/blockers`). UI на основе этого решает, показать
+ * ли кнопку «Удалить» (hard) или только «Деактивировать» (soft).
+ * Backend пересчитывает то же самое при самом `DELETE`, чтобы между
+ * preflight'ом и удалением не проехал race.
+ */
+export interface OperationBlockersResponse {
+  /** `true` — `DELETE` безопасен (никаких ссылок на операцию). */
+  hardDeleteAllowed: boolean;
+  /** Непустой список ссылок-блокеров (kind + count). */
+  blockers: OperationDeleteBlockerDto[];
+}
