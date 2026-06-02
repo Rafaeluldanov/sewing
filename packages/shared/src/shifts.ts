@@ -138,6 +138,49 @@ export type ScanPassportDto = z.infer<typeof ScanPassportSchema>;
 export const CompleteOperationSchema = z.object({}).strict();
 export type CompleteOperationDto = z.infer<typeof CompleteOperationSchema>;
 
+/**
+ * Тело `POST /api/passports/batch/complete-operations` — пакетное
+ * завершение операций швеёй сразу по нескольким паспортам, которые
+ * уже закреплены за ней (`Passport.currentEmployeeId = me`). UX на
+ * /work: швея отмечает чекбоксами карточки в «Текущий крой» и жмёт
+ * «Завершить выбранные», вместо посканного завершения по одному.
+ *
+ * Семантика — те же серверные проверки, что у одиночного
+ * `complete-operation`, выполняемые для каждого паспорта в своей
+ * транзакции (см. `PassportsService.completeOperationsBatch`):
+ * партиальный успех допустим, упавший паспорт не блокирует остальные.
+ * `employeeId` берётся из сессии (ADR-0014).
+ */
+export const BatchCompleteOperationsSchema = z
+  .object({
+    passportIds: z
+      .array(z.string().min(1, 'passportId обязателен'))
+      .min(1, 'Выберите хотя бы один паспорт')
+      .max(200, 'Слишком много паспортов за один раз'),
+  })
+  .strict();
+export type BatchCompleteOperationsDto = z.infer<
+  typeof BatchCompleteOperationsSchema
+>;
+
+/**
+ * Результат пакетного завершения. `completed` — паспорта, по которым
+ * операция закрылась; `failed` — те, что не удалось закрыть, с
+ * бизнес-кодом и готовым к показу сообщением (например, откат назад
+ * `PASSPORT_COMPLETE_BACKWARD` или незакрытая параллельная группа
+ * `PASSPORT_PARALLEL_GROUP_INCOMPLETE`). UI показывает сводку «закрыто
+ * N, не закрыто M» и перечисляет причины по `failed`.
+ */
+export interface BatchCompleteOperationsResultDto {
+  completed: { passportId: string; number: string }[];
+  failed: {
+    passportId: string;
+    number: string | null;
+    error: string;
+    code: string | null;
+  }[];
+}
+
 /** Тело `POST /api/passports/by-code/:code/*` — поиск по номеру/QR. */
 export const PassportCodeSchema = z
   .string()

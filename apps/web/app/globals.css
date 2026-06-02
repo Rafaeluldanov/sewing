@@ -3547,6 +3547,69 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   justify-content: space-between;
   gap: 0.5rem;
 }
+/* Чекбокс мультивыбора для пакетного завершения. Сидит слева от
+   номера паспорта; номер получает margin-right:auto, чтобы блок
+   «Из маршрута / принят» уезжал к правому краю как раньше. */
+.active-passport__select {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  align-self: center;
+  cursor: pointer;
+}
+.active-passport__select input {
+  width: 1.3rem;
+  height: 1.3rem;
+  accent-color: var(--color-accent, #2f6fed);
+  cursor: pointer;
+}
+.active-passport__head .active-passport__number {
+  margin-right: auto;
+}
+/* Подсветка выбранной карточки и карточки, которая не закрылась при
+   пакетном завершении (партиальный успех). */
+.active-passport--selected {
+  border-left-color: var(--color-accent, #2f6fed);
+  background: var(--color-bg-tint, #f5f8ff);
+}
+.active-passport--failed {
+  border-left-color: var(--color-danger, #d33);
+}
+.active-passport__failed {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-danger, #c0392b);
+}
+/* Тулбар «Выбрать все» над списком и кнопка «Завершить выбранные». */
+.current-work__select-bar {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.6rem;
+}
+.current-work__select-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+}
+.current-work__select-all input {
+  width: 1.2rem;
+  height: 1.2rem;
+  accent-color: var(--color-accent, #2f6fed);
+  cursor: pointer;
+}
+.current-work__actions {
+  margin-top: 0.85rem;
+}
+/* Модалка-сводка пакетного завершения — действия в ряд. */
+.modal--batch-complete .modal__actions {
+  display: flex;
+  gap: 0.6rem;
+  justify-content: flex-end;
+}
 /* Группа справа от номера паспорта: баджик «Из маршрута» (для
    route-WIP, см. `docs/domain.md §«Маршруты производства»») и время
    приёма. Стояли раньше отдельным span-ом; обернули в flex-контейнер,

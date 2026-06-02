@@ -9,6 +9,7 @@
  */
 
 import type {
+  BatchCompleteOperationsResultDto,
   CurrentWorkPassportDto,
   ReworkPassportDto,
   ShiftMetaDto,
@@ -99,6 +100,21 @@ export function completePassportOperation(id: string): Promise<PassportDetailDto
   return apiFetch<PassportDetailDto>(
     `/passports/${encodeURIComponent(id)}/complete-operation`,
     { method: 'POST', body: {} },
+  );
+}
+
+/**
+ * Пакетное завершение операций сразу по нескольким паспортам швеи
+ * (см. `PassportsService.completeOperationsBatch`). Партиальный успех:
+ * ответ `{ completed, failed }` — на backend каждый паспорт закрывается
+ * в своей транзакции, упавший не блокирует остальные.
+ */
+export function completePassportOperationsBatch(
+  passportIds: string[],
+): Promise<BatchCompleteOperationsResultDto> {
+  return apiFetch<BatchCompleteOperationsResultDto>(
+    '/passports/batch/complete-operations',
+    { method: 'POST', body: { passportIds } },
   );
 }
 

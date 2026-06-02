@@ -14,9 +14,16 @@
  * значения, приглушённые подписи.
  */
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
-import type { CurrentWorkPassportDto } from '@sewing/shared/shifts';
+import { useRouter } from 'next/navigation';
+import type {
+  BatchCompleteOperationsResultDto,
+  CurrentWorkPassportDto,
+} from '@sewing/shared/shifts';
+import { ModalPortal } from '@/components/modal-portal';
+import { batchCompletePassportsAction } from './actions';
+import { playOperationCompletedSound } from './feedback';
 
 // Швея просила прятать длинный список «Сейчас в работе», чтобы быстрее
 // добираться до кнопки «Взять крой» (которую мы подняли над списком в
@@ -45,9 +52,42 @@ function formatTime(iso: string | null | undefined): string | null {
 }
 
 export function CurrentWorkCard({ items, shiftOperationId }: Props) {
+  const router = useRouter();
   // Дефолт — раскрыто; читаем сохранённое значение в useEffect, чтобы не
   // ломать гидрацию (server-render всегда стартует с тем же дефолтом).
   const [collapsed, setCollapsed] = useState(false);
+
+  // -------------------------------------------------------------------
+  // Пакетное завершение (мультивыбор чекбоксами).
+  //
+  // Паспорта в этом списке уже закреплены за швеёй
+  // (`currentEmployeeId = me`), поэтому повторный скан для завершения
+  // не нужен — она отмечает нужные и жмёт «Завершить выбранные». На
+  // backend каждый паспорт закрывается в своей транзакции (партиальный
+  // успех), см. `batchCompletePassportsAction`.
+  // -------------------------------------------------------------------
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [batchError, setBatchError] = useState<string | null>(null);
+  const [batchErrorRequestId, setBatchErrorRequestId] = useState<
+    string | undefined
+  >(undefined);
+  const [failed, setFailed] = useState<
+    BatchCompleteOperationsResultDto['failed']
+  >([]);
+  const [isPending, startTransition] = useTransition();
+
+  // Список паспортов меняется после `router.refresh()` (завершённые
+  // уходят) — выкидываем из выбора всё, чего больше нет, и гасим
+  // устаревший список «не закрылось».
+  useEffect(() => {
+    const present = new Set(items.map((p) => p.id));
+    setSelected((prev) => {
+      const next = new Set([...prev].filter((id) => present.has(id)));
+      return next.size === prev.size ? prev : next;
+    });
+    setFailed((prev) => prev.filter((f) => present.has(f.passportId)));
+  }, [items]);
 
   useEffect(() => {
     if (typeof window === 'undefined') return;
@@ -69,6 +109,55 @@ export function CurrentWorkCard({ items, shiftOperationId }: Props) {
         /* приватный режим/квота — состояние останется только в сессии */
       }
       return next;
+    });
+  };
+
+  const toggleSelect = useCallback((id: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
+  const allSelected = items.length > 0 && selected.size === items.length;
+  const toggleSelectAll = () => {
+    setSelected(allSelected ? new Set() : new Set(items.map((p) => p.id)));
+  };
+
+  const selectedItems = useMemo(
+    () => items.filter((p) => selected.has(p.id)),
+    [items, selected],
+  );
+  const selectedUnits = selectedItems.reduce((acc, p) => acc + p.qtyGood, 0);
+
+  const runBatchComplete = () => {
+    const ids = selectedItems.map((p) => p.id);
+    if (ids.length === 0) return;
+    setBatchError(null);
+    setBatchErrorRequestId(undefined);
+    startTransition(async () => {
+      const res = await batchCompletePassportsAction(ids);
+      if (!res.ok || !res.result) {
+        setBatchError(res.error ?? 'Не удалось завершить операции');
+        setBatchErrorRequestId(res.errorRequestId);
+        setConfirmOpen(false);
+        return;
+      }
+      // Звук — как у одиночного завершения, ровно при подтверждённом
+      // backend SUCCESS (хотя бы один паспорт закрылся).
+      if (res.result.completed.length > 0) playOperationCompletedSound();
+      setFailed(res.result.failed);
+      setConfirmOpen(false);
+      // Снимаем выбор с тех, что закрылись; не закрывшиеся остаются
+      // отмеченными, чтобы швея видела, что ещё не ушло.
+      const completedIds = new Set(
+        res.result.completed.map((c) => c.passportId),
+      );
+      setSelected((prev) => new Set([...prev].filter((id) => !completedIds.has(id))));
+      // revalidatePath + refresh → закрытые паспорта уйдут из списка.
+      router.refresh();
     });
   };
 
@@ -124,26 +213,186 @@ export function CurrentWorkCard({ items, shiftOperationId }: Props) {
         </span>
       </button>
       {!collapsed && (
-        <ul className="current-work__list" id="current-work-list">
-          {items.map((p) => (
-            <ActivePassportCard
-              key={p.id}
-              passport={p}
-              shiftOperationId={shiftOperationId}
-            />
-          ))}
-        </ul>
+        <>
+          <div className="current-work__select-bar">
+            <label className="current-work__select-all">
+              <input
+                type="checkbox"
+                checked={allSelected}
+                ref={(el) => {
+                  if (el)
+                    el.indeterminate =
+                      selected.size > 0 && selected.size < items.length;
+                }}
+                onChange={toggleSelectAll}
+                disabled={isPending}
+              />
+              <span>
+                {allSelected ? 'Снять все' : 'Выбрать все'}
+                {selected.size > 0 && ` · ${selected.size}`}
+              </span>
+            </label>
+          </div>
+          <ul className="current-work__list" id="current-work-list">
+            {items.map((p) => (
+              <ActivePassportCard
+                key={p.id}
+                passport={p}
+                shiftOperationId={shiftOperationId}
+                selected={selected.has(p.id)}
+                onToggleSelect={() => toggleSelect(p.id)}
+                disabled={isPending}
+                failedReason={
+                  failed.find((f) => f.passportId === p.id)?.error ?? null
+                }
+              />
+            ))}
+          </ul>
+        </>
+      )}
+
+      {batchError && (
+        <div className="error-box" role="alert">
+          <div className="error-box__msg">{batchError}</div>
+          {batchErrorRequestId && (
+            <div className="error-box__rid">
+              req: <code>{batchErrorRequestId}</code>
+            </div>
+          )}
+        </div>
+      )}
+
+      {failed.length > 0 && !batchError && (
+        <div className="error-box" role="status">
+          <div className="error-box__msg">
+            Не удалось закрыть {failed.length}{' '}
+            {pluralPassports(failed.length)} — отмечены ниже. Остальные
+            завершены.
+          </div>
+        </div>
+      )}
+
+      {selected.size > 0 && (
+        <div className="current-work__actions">
+          <button
+            type="button"
+            className="btn btn-primary btn-lg btn-block"
+            onClick={() => {
+              setBatchError(null);
+              setBatchErrorRequestId(undefined);
+              setConfirmOpen(true);
+            }}
+            disabled={isPending}
+          >
+            {isPending
+              ? 'Завершаем…'
+              : `Завершить выбранные (${selected.size})`}
+          </button>
+        </div>
+      )}
+
+      {confirmOpen && (
+        <BatchCompleteConfirmModal
+          count={selectedItems.length}
+          units={selectedUnits}
+          pending={isPending}
+          onConfirm={runBatchComplete}
+          onCancel={() => {
+            if (isPending) return;
+            setConfirmOpen(false);
+          }}
+        />
       )}
     </section>
+  );
+}
+
+/** «паспорт / паспорта / паспортов» для русского счётчика. */
+function pluralPassports(n: number): string {
+  const mod10 = n % 10;
+  const mod100 = n % 100;
+  if (mod10 === 1 && mod100 !== 11) return 'паспорт';
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20))
+    return 'паспорта';
+  return 'паспортов';
+}
+
+/**
+ * Модалка-сводка перед пакетным завершением. В отличие от одиночного
+ * флоу здесь нет посканной визуальной сверки — паспорта уже в руках у
+ * швеи и закреплены за ней, поэтому подтверждаем числом: сколько
+ * паспортов и единиц закроется.
+ */
+function BatchCompleteConfirmModal({
+  count,
+  units,
+  pending,
+  onConfirm,
+  onCancel,
+}: {
+  count: number;
+  units: number;
+  pending: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <ModalPortal>
+      <div className="modal-backdrop" role="presentation" onClick={onCancel}>
+        <div
+          className="modal modal--batch-complete"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="batch-complete-title"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <h2 id="batch-complete-title" className="modal__title">
+            Завершить операцию по {count} {pluralPassports(count)}?
+          </h2>
+          <p className="modal__text">
+            Будет закрыто <b>{count}</b> {pluralPassports(count)} ·{' '}
+            <b>{units}</b> шт. Действие нельзя отменить — паспорта уйдут
+            из «Сейчас в работе».
+          </p>
+          <div className="modal__actions">
+            <button
+              type="button"
+              className="btn"
+              onClick={onCancel}
+              disabled={pending}
+            >
+              Отмена
+            </button>
+            <button
+              type="button"
+              className="btn btn-primary"
+              onClick={onConfirm}
+              disabled={pending}
+              autoFocus
+            >
+              {pending ? 'Завершаем…' : 'Завершить'}
+            </button>
+          </div>
+        </div>
+      </div>
+    </ModalPortal>
   );
 }
 
 function ActivePassportCard({
   passport: p,
   shiftOperationId,
+  selected,
+  onToggleSelect,
+  disabled,
+  failedReason,
 }: {
   passport: CurrentWorkPassportDto;
   shiftOperationId?: string;
+  selected: boolean;
+  onToggleSelect: () => void;
+  disabled: boolean;
+  failedReason: string | null;
 }) {
   const accepted = formatTime(p.acceptedAt);
   /**
@@ -164,8 +413,23 @@ function ActivePassportCard({
    */
   const isRouteWip = p.currentRouteStepIndex !== null;
   return (
-    <li className="active-passport">
+    <li
+      className={`active-passport${
+        selected ? ' active-passport--selected' : ''
+      }${failedReason ? ' active-passport--failed' : ''}`}
+    >
       <div className="active-passport__head">
+        <label
+          className="active-passport__select"
+          aria-label={`Выбрать паспорт ${p.number} для завершения`}
+        >
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={onToggleSelect}
+            disabled={disabled}
+          />
+        </label>
         <Link
           href={`/passports/${p.id}`}
           className="active-passport__number"
@@ -187,6 +451,12 @@ function ActivePassportCard({
           )}
         </div>
       </div>
+
+      {failedReason && (
+        <p className="active-passport__failed" role="status">
+          Не закрылось: {failedReason}
+        </p>
+      )}
 
       <div className="active-passport__product">
         {p.productName}

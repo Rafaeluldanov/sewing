@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -27,6 +28,7 @@ import {
   type PlacePassportDto,
   type UpdatePassportDto,
 } from '@sewing/shared/passports';
+import type { BatchCompleteOperationsResultDto } from '@sewing/shared/shifts';
 import { normalizeColor } from '@sewing/shared/colors';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
@@ -96,6 +98,31 @@ type PassportRow = Prisma.PassportGetPayload<{
  */
 interface GetOneOptions {
   employeeIdForRouteHint?: string;
+}
+
+/**
+ * Достаёт человеко-читаемое сообщение и бизнес-код из ошибки, брошенной
+ * `completeOperationByEmployee`, для строки `failed[]` пакетного ответа.
+ * `BusinessException`/Nest-исключения кладут `{ message, code }` в тело
+ * ответа (`HttpException.getResponse()`), его и разбираем; всё прочее
+ * сводим к нейтральному тексту без code.
+ */
+function describeBatchCompleteError(e: unknown): {
+  error: string;
+  code: string | null;
+} {
+  if (e instanceof HttpException) {
+    const res = e.getResponse();
+    if (res && typeof res === 'object') {
+      const obj = res as { message?: unknown; code?: unknown };
+      return {
+        error: typeof obj.message === 'string' ? obj.message : e.message,
+        code: typeof obj.code === 'string' ? obj.code : null,
+      };
+    }
+    return { error: e.message, code: null };
+  }
+  return { error: 'Не удалось завершить операцию', code: null };
 }
 
 @Injectable()
@@ -2027,6 +2054,58 @@ export class PassportsService {
       `event=passport.complete-operation passportId=${passportId} employeeId=${employeeId} completedOperationId=${completedOperationId}`,
     );
     return this.getOne(passportId);
+  }
+
+  /**
+   * Пакетное завершение операций сразу по нескольким паспортам швеи.
+   *
+   * Мотивация (UX /work): швея сначала набирает крой (сканирует много
+   * паспортов), а потом завершает их по одному. Этот метод позволяет
+   * закрыть выбранные разом — она отмечает чекбоксами карточки в
+   * «Текущий крой» и жмёт «Завершить выбранные».
+   *
+   * Здесь НЕТ новой бизнес-логики: каждый паспорт проходит через тот же
+   * `completeOperationByEmployee` (своя транзакция, событие
+   * `OPERATION_FINISHED`, начисление, аудит, выпуск ГП, проверки
+   * маршрута). Партиальный успех — сознательное решение: если один
+   * паспорт упал (откат назад, не твой, не в работе), остальные всё
+   * равно закрываются, а причина по упавшему возвращается в `failed`,
+   * чтобы UI показал адресное сообщение. Дубликаты id схлопываем,
+   * порядок сохраняем (детерминированный ответ для теста/лога).
+   */
+  async completeOperationsBatch(
+    passportIds: string[],
+    employeeId: string,
+  ): Promise<BatchCompleteOperationsResultDto> {
+    const unique = [...new Set(passportIds)];
+    const completed: BatchCompleteOperationsResultDto['completed'] = [];
+    const failed: BatchCompleteOperationsResultDto['failed'] = [];
+
+    for (const passportId of unique) {
+      try {
+        const p = await this.completeOperationByEmployee(passportId, employeeId);
+        completed.push({ passportId: p.id, number: p.number });
+      } catch (e) {
+        const { error, code } = describeBatchCompleteError(e);
+        // Номер нужен только для текста ошибки в UI; провал —
+        // исключительная ветка, поэтому лёгкий доп-запрос здесь
+        // не бьёт по happy-path.
+        const number = await this.prisma.passport
+          .findUnique({
+            where: { id: passportId },
+            select: { number: true },
+          })
+          .then((row) => row?.number ?? null)
+          .catch(() => null);
+        failed.push({ passportId, number, error, code });
+      }
+    }
+
+    this.logger.log(
+      `event=passport.complete-operation-batch employeeId=${employeeId} ` +
+        `requested=${unique.length} completed=${completed.length} failed=${failed.length}`,
+    );
+    return { completed, failed };
   }
 
   // -------------------------------------------------------------------------

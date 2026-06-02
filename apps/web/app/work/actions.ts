@@ -8,6 +8,7 @@ import {
 import { ApiRequestError } from '@/lib/api';
 import {
   completePassportOperation,
+  completePassportOperationsBatch,
   findPassportByCode,
   getMyRework,
   issuePassport,
@@ -16,7 +17,10 @@ import {
   stopShift,
   switchShiftOperation,
 } from '@/lib/shifts-api';
-import type { ReworkPassportDto } from '@sewing/shared/shifts';
+import type {
+  BatchCompleteOperationsResultDto,
+  ReworkPassportDto,
+} from '@sewing/shared/shifts';
 import type { PassportLookupResponse, WorkFormState } from './state';
 
 /**
@@ -240,6 +244,51 @@ export async function completePassportOperationAction(
     (id) => completePassportOperation(id),
     'Операция завершена',
   );
+}
+
+/**
+ * Результат пакетного завершения для клиента `/work`. `ok=false` —
+ * сам запрос не прошёл (сеть / 4xx-валидация); `ok=true` — запрос
+ * выполнен, но внутри `result.failed` могут быть паспорта, которые
+ * не закрылись (партиальный успех, см.
+ * `PassportsService.completeOperationsBatch`).
+ */
+export interface BatchCompleteActionResult {
+  ok: boolean;
+  result?: BatchCompleteOperationsResultDto;
+  error?: string;
+  errorRequestId?: string;
+}
+
+/**
+ * «Завершить выбранные» — пакетное завершение операций по паспортам,
+ * отмеченным чекбоксами в блоке «Текущий крой». Паспорта уже
+ * закреплены за швеёй (`currentEmployeeId = me`), повторный скан не
+ * нужен. Инвалидируем `/work` (чтобы закрытые паспорта ушли из
+ * «Текущий крой») и карточки успешно завершённых паспортов.
+ */
+export async function batchCompletePassportsAction(
+  passportIds: string[],
+): Promise<BatchCompleteActionResult> {
+  const ids = passportIds.map((id) => id.trim()).filter(Boolean);
+  if (ids.length === 0) {
+    return { ok: false, error: 'Выберите хотя бы один паспорт' };
+  }
+  try {
+    const result = await completePassportOperationsBatch(ids);
+    revalidatePath('/work');
+    for (const c of result.completed) {
+      revalidatePath(`/passports/${c.passportId}`);
+      revalidatePath(`/admin/passports/${c.passportId}`);
+    }
+    return { ok: true, result };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
 }
 
 /**

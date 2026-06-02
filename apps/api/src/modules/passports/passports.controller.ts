@@ -22,10 +22,12 @@ import {
 } from '@sewing/shared/passports';
 import { z } from 'zod';
 import {
+  BatchCompleteOperationsSchema,
   CompleteOperationSchema,
   IssuePassportSchema,
   PassportCodeSchema,
   ScanPassportSchema,
+  type BatchCompleteOperationsDto,
   type CompleteOperationDto,
   type IssuePassportDto,
   type ScanPassportDto,
@@ -186,6 +188,29 @@ export class PassportsController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.passports.completeOperationByEmployee(id, user.employeeId);
+  }
+
+  /**
+   * Пакетное завершение операций сразу по нескольким паспортам швеи
+   * (UX /work: отметила чекбоксами «Текущий крой» → «Завершить
+   * выбранные»). Тело — `{ passportIds: string[] }`; владелец берётся
+   * из сессии. Партиальный успех: ответ `{ completed, failed }`, где
+   * `failed` несёт бизнес-код и сообщение по каждому незакрытому
+   * паспорту (см. `PassportsService.completeOperationsBatch`).
+   *
+   * Объявлен ДО `@Post(':id/...')`-ничего не ломает (разные сегменты),
+   * но держим рядом с одиночным `complete-operation` для читаемости.
+   */
+  @Post('batch/complete-operations')
+  batchCompleteOperations(
+    @Body(new ZodValidationPipe(BatchCompleteOperationsSchema))
+    dto: BatchCompleteOperationsDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.passports.completeOperationsBatch(
+      dto.passportIds,
+      user.employeeId,
+    );
   }
 
   /**
