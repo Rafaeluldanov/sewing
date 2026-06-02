@@ -98,6 +98,10 @@ export function AppHeader({ role, children }: Props) {
   // панели. Подстраницы `/master/*` зарезервированы под будущие
   // под-экраны мастера и тоже считаются терминалом.
   const isMasterPath = pathname === '/master' || pathname.startsWith('/master/');
+  // Кабинет раскройщика — терминал по той же модели, что `/work`:
+  // верхней панели нет, действия сотрудника живут в `.employee-toolbar`
+  // (см. `apps/web/app/cutter/layout.tsx`).
+  const isCutterPath = pathname === '/cutter' || pathname.startsWith('/cutter/');
 
   const hideForSeamstress = role === 'SEAMSTRESS' && isWorkPath;
   const hideForCutterAssistant =
@@ -112,6 +116,7 @@ export function AppHeader({ role, children }: Props) {
   // у мастера всё равно не появится.
   const hideForShopfloorMaster =
     role === 'SHOPFLOOR_MASTER' || isMasterPath;
+  const hideForCutter = role === 'CUTTER' && isCutterPath;
 
   if (
     hideForSeamstress ||
@@ -120,7 +125,8 @@ export function AppHeader({ role, children }: Props) {
     hideForIroning ||
     hideForPacking ||
     hideForDisplay ||
-    hideForShopfloorMaster
+    hideForShopfloorMaster ||
+    hideForCutter
   )
     return null;
   return <header className="app-header">{children}</header>;

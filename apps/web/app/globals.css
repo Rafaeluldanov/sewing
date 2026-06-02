@@ -5371,6 +5371,32 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .employee-toolbar .employee-qr-btn__label {
   display: none;
 }
+/* «Выйти» в правом столбике (кабинет раскройщика): контейнер тулбара
+   `pointer-events: none`, поэтому форму возвращаем в клик; саму кнопку
+   приводим к тому же круглому icon-only FAB 40×40, что QR/Мастер. */
+.employee-toolbar form {
+  pointer-events: auto;
+}
+.employee-toolbar .app-header__logout {
+  width: 40px;
+  height: 40px;
+  min-width: 40px;
+  min-height: 40px;
+  padding: 0;
+  gap: 0;
+  justify-content: center;
+  border-radius: 50%;
+  background: #1e293b;
+  color: #ffffff;
+  border: 0;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
+}
+.employee-toolbar .app-header__logout:hover {
+  background: #0f172a;
+}
+.employee-toolbar .app-header__logout span {
+  display: none;
+}
 .employee-toolbar .call-master-btn__icon,
 .employee-toolbar .employee-qr-btn__icon {
   width: 1.4rem;
