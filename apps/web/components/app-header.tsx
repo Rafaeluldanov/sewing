@@ -102,6 +102,10 @@ export function AppHeader({ role, children }: Props) {
   // верхней панели нет, действия сотрудника живут в `.employee-toolbar`
   // (см. `apps/web/app/cutter/layout.tsx`).
   const isCutterPath = pathname === '/cutter' || pathname.startsWith('/cutter/');
+  // Кабинет конструктора — та же модель: своя шапка убрана, действия в
+  // `.employee-toolbar` (см. `apps/web/app/constructor/layout.tsx`).
+  const isConstructorPath =
+    pathname === '/constructor' || pathname.startsWith('/constructor/');
 
   const hideForSeamstress = role === 'SEAMSTRESS' && isWorkPath;
   const hideForCutterAssistant =
@@ -117,6 +121,7 @@ export function AppHeader({ role, children }: Props) {
   const hideForShopfloorMaster =
     role === 'SHOPFLOOR_MASTER' || isMasterPath;
   const hideForCutter = role === 'CUTTER' && isCutterPath;
+  const hideForConstructor = role === 'CONSTRUCTOR' && isConstructorPath;
 
   if (
     hideForSeamstress ||
@@ -126,7 +131,8 @@ export function AppHeader({ role, children }: Props) {
     hideForPacking ||
     hideForDisplay ||
     hideForShopfloorMaster ||
-    hideForCutter
+    hideForCutter ||
+    hideForConstructor
   )
     return null;
   return <header className="app-header">{children}</header>;
