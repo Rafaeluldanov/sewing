@@ -140,12 +140,22 @@ export interface QcPassportListItemDto {
  * паспорта и нет открытого rework, попадает в это перечисление.
  * `finisher*` — швея, что финишировала эту операцию (последний
  * `OPERATION_FINISHED` для пары `(passport, operation)`).
+ *
+ * Шаг может быть закрыт не своей операцией, а её `OperationSubstitution`
+ * (например, шаг «Распошив рукав» закрыт операцией «04 РАСПОШИВ» —
+ * см. AND-гейт параллельной группы в `QcService`). Тогда
+ * `operationId`/`routeStepIndex` остаются шага маршрута (куда
+ * возвращаем), а `finishedOperationId` — фактически закрытая операция
+ * (substitute): по ней брались `finisher*`/`finishedAt`, и по ней же
+ * надо отменять висящее начисление при возврате. Без substitute
+ * `finishedOperationId === operationId`.
  */
 export interface EligibleReworkTargetDto {
   operationId: string;
   operationCode: string;
   operationName: string;
   routeStepIndex: number;
+  finishedOperationId: string;
   finisherEmployeeId: string;
   finisherEmployeeName: string;
   finishedAt: string;

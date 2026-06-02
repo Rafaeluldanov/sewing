@@ -602,10 +602,14 @@ export class QcService {
           qty: passport.qtyGood,
         },
       });
+      // Начисление создаётся под фактически закрытой операцией: при
+      // substitute это `finishedOperationId` (напр. «04 РАСПОШИВ»), а
+      // не операция шага маршрута (напр. «16 Распошив рукав»). Снимаем
+      // pending именно по ней, иначе висящее начисление не отменится.
       const revoked = await this.earnings.revokePendingForOperation(
         tx,
         passportId,
-        targetStep.operationId,
+        target.finishedOperationId,
       );
       await this.audit.log(
         {
@@ -1120,14 +1124,40 @@ export class QcService {
     if (steps.length === 0) return [];
 
     const operationIds = steps.map((s) => s.operationId);
+
+    // Шаг маршрута может быть закрыт не своей операцией, а её
+    // substitute (см. `OperationSubstitution` и AND-гейт
+    // `assertParallelGroupCompleteForQc`): например «Распошив рукав»
+    // (16) и «Подгиб низа» (0001) фактически закрываются одной
+    // операцией «04 РАСПОШИВ». Прямой гейт ОТК это учитывает, поэтому
+    // возврат на переделку обязан учитывать симметрично — иначе по
+    // таким шагам нет «своего» FINISHED и они никогда не попадут в
+    // список переделки. Подтягиваем substitute-правила и считаем шаг
+    // выполненным, если закрыт он сам ЛИБО любой его substitute.
+    const substitutes = await this.prisma.operationSubstitution.findMany({
+      where: { satisfiesOpId: { in: operationIds } },
+      select: { satisfiesOpId: true, substituteOpId: true },
+    });
+    const substitutesFor = new Map<string, string[]>();
+    for (const s of substitutes) {
+      const arr = substitutesFor.get(s.satisfiesOpId) ?? [];
+      arr.push(s.substituteOpId);
+      substitutesFor.set(s.satisfiesOpId, arr);
+    }
+
     // Тащим все события OPERATION_FINISHED и OPERATION_REWORK_OPENED
-    // для этих операций одним батчем, чтобы не плодить N+1. Для каждой
-    // операции возьмём самое свежее FINISHED и определим, не открыт ли
-    // rework позже него.
+    // для этих операций (вместе с substitute) одним батчем, чтобы не
+    // плодить N+1. Для каждой операции возьмём самое свежее FINISHED и
+    // определим, не открыт ли rework позже него. REWORK всегда пишется
+    // на операцию шага маршрута (см. `returnToRework`), FINISHED может
+    // быть на substitute — поэтому объединяем множество операций.
+    const finishedOpIds = Array.from(
+      new Set([...operationIds, ...substitutesFor.values()].flat()),
+    );
     const events = await this.prisma.passportEvent.findMany({
       where: {
         passportId,
-        operationId: { in: operationIds },
+        operationId: { in: finishedOpIds },
         type: {
           in: [
             PassportEventType.OPERATION_FINISHED,
@@ -1168,21 +1198,42 @@ export class QcService {
       }
     }
 
-    const eligibleSteps = steps.filter((s) => {
-      const finished = lastFinishedByOp.get(s.operationId);
-      if (!finished || !finished.employeeId) return false;
-      const rework = lastReworkByOp.get(s.operationId);
-      if (rework && rework.createdAt > finished.createdAt) return false;
-      return true;
-    });
+    // Эффективный finish шага: предпочитаем «своё» событие, иначе —
+    // самое свежее FINISHED среди substitute-операций шага. Это и
+    // источник `finisher*`/`finishedAt`, и (через `operationId`
+    // события) фактически закрытая операция — её вернём в
+    // `finishedOperationId`, чтобы возврат отменил правильное
+    // начисление (оно создаётся под substitute, см. EarningsService).
+    const resolveFinished = (opId: string): EventRow | undefined => {
+      const own = lastFinishedByOp.get(opId);
+      if (own) return own;
+      let best: EventRow | undefined;
+      for (const sub of substitutesFor.get(opId) ?? []) {
+        const ev = lastFinishedByOp.get(sub);
+        if (ev && (!best || ev.createdAt > best.createdAt)) best = ev;
+      }
+      return best;
+    };
+
+    const eligibleSteps = steps
+      .map((s) => ({ step: s, fin: resolveFinished(s.operationId) }))
+      .filter(
+        (
+          x,
+        ): x is {
+          step: (typeof steps)[number];
+          fin: EventRow & { employeeId: string };
+        } => {
+          if (!x.fin || !x.fin.employeeId) return false;
+          const rework = lastReworkByOp.get(x.step.operationId);
+          if (rework && rework.createdAt > x.fin.createdAt) return false;
+          return true;
+        },
+      );
     if (eligibleSteps.length === 0) return [];
 
     const finisherIds = Array.from(
-      new Set(
-        eligibleSteps
-          .map((s) => lastFinishedByOp.get(s.operationId)?.employeeId)
-          .filter((x): x is string => !!x),
-      ),
+      new Set(eligibleSteps.map((x) => x.fin.employeeId)),
     );
     const employees = await this.prisma.employee.findMany({
       where: { id: { in: finisherIds } },
@@ -1190,18 +1241,19 @@ export class QcService {
     });
     const empById = new Map(employees.map((e) => [e.id, e.fullName]));
 
-    return eligibleSteps.map((s) => {
-      const fin = lastFinishedByOp.get(s.operationId)!;
-      return {
-        operationId: s.operationId,
-        operationCode: s.operation.code,
-        operationName: s.operation.name,
-        routeStepIndex: s.index,
-        finisherEmployeeId: fin.employeeId!,
-        finisherEmployeeName: empById.get(fin.employeeId!) ?? '—',
-        finishedAt: fin.createdAt.toISOString(),
-      };
-    });
+    return eligibleSteps.map(({ step, fin }) => ({
+      operationId: step.operationId,
+      operationCode: step.operation.code,
+      operationName: step.operation.name,
+      routeStepIndex: step.index,
+      // Фактически закрытая операция (она же — куда списывать
+      // начисление при возврате). Без substitute совпадает с
+      // `operationId`.
+      finishedOperationId: fin.operationId ?? step.operationId,
+      finisherEmployeeId: fin.employeeId,
+      finisherEmployeeName: empById.get(fin.employeeId) ?? '—',
+      finishedAt: fin.createdAt.toISOString(),
+    }));
   }
 
   /**
