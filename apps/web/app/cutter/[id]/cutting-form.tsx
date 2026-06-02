@@ -58,20 +58,21 @@ export function CuttingForm({ taskId, sizeRows, rolls, readOnly = false }: Props
   const [savedNote, setSavedNote] = useState<string | null>(null);
 
   // perLayerQty по размеру (строкой — это значения текстовых полей).
+  // 0 показываем пустым полем, чтобы ввод давал «5», а не «05».
   const [perLayer, setPerLayer] = useState<Record<string, string>>(() => {
     const init: Record<string, string> = {};
     for (const r of sizeRows) {
-      if (r.sizeId) init[r.sizeId] = String(r.perLayerQty);
+      if (r.sizeId) init[r.sizeId] = r.perLayerQty === 0 ? '' : String(r.perLayerQty);
     }
     return init;
   });
 
-  // Рабочий список рулонов.
+  // Рабочий список рулонов. 0 слоёв — тоже пустым полем.
   const [rollDrafts, setRollDrafts] = useState<RollDraft[]>(() =>
     rolls.map((r) => ({
       key: `roll-${r.id}`,
       ordinal: r.ordinal,
-      layers: String(r.layers),
+      layers: r.layers === 0 ? '' : String(r.layers),
     })),
   );
 
@@ -90,6 +91,12 @@ export function CuttingForm({ taskId, sizeRows, rolls, readOnly = false }: Props
     const per = clampInt(perLayer[sizeId] ?? '0', CUTTING_TASK_MAX_PER_LAYER_QTY);
     return totalLayers * per;
   }
+
+  // Итоговое количество штук по всему настилу = Σ «итог по размеру».
+  const grandTotalPieces = sizeRows.reduce(
+    (sum, r) => sum + perSizeTotal(r.sizeId),
+    0,
+  );
 
   // --- Мутаторы ------------------------------------------------------------
   function addRoll() {
@@ -221,8 +228,8 @@ export function CuttingForm({ taskId, sizeRows, rolls, readOnly = false }: Props
           </tbody>
           <tfoot>
             <tr>
-              <td colSpan={3}>Всего слоёв настила</td>
-              <td className="cutter-total">{totalLayers}</td>
+              <td colSpan={3}>Итого, шт</td>
+              <td className="cutter-total">{grandTotalPieces}</td>
             </tr>
           </tfoot>
         </table>
@@ -285,6 +292,9 @@ export function CuttingForm({ taskId, sizeRows, rolls, readOnly = false }: Props
             )}
           </tbody>
         </table>
+        <p className="cutter-layers-total">
+          Всего слоёв: <strong>{totalLayers}</strong>
+        </p>
         {!readOnly && (
           <button
             type="button"
