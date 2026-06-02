@@ -2160,6 +2160,25 @@ export class OrdersService {
     const captureSnapshot =
       patternForSnapshot !== null && !order.patternNameSnapshot;
 
+    // Кабинет раскройщика (роль CUTTER, см. `model CuttingTask`): запуск
+    // заказа в производство создаёт задачу на раскрой. Таблица-задание
+    // строится по размерам, поэтому агрегируем план по размеру
+    // (Σ `OrderItem.qtyPlan` по всем продуктам заказа) и подтягиваем
+    // коды/порядок размеров вне транзакции. Саму задачу создаём внутри
+    // tx (idempotent-guard по `orderId`).
+    const cuttingQtyBySizeId = new Map<string, number>();
+    for (const it of order.items) {
+      cuttingQtyBySizeId.set(
+        it.sizeId,
+        (cuttingQtyBySizeId.get(it.sizeId) ?? 0) + it.qtyPlan,
+      );
+    }
+    const cuttingSizes = await this.prisma.size.findMany({
+      where: { id: { in: [...cuttingQtyBySizeId.keys()] } },
+      select: { id: true, code: true, sortOrder: true },
+    });
+    cuttingSizes.sort((a, b) => a.sortOrder - b.sortOrder);
+
     await this.prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id },
@@ -2180,6 +2199,32 @@ export class OrdersService {
             : undefined,
         },
       });
+
+      // Задача на раскрой (кабинет раскройщика). Idempotent-guard: если
+      // по какой-то причине задача уже есть (ручной transition / повтор),
+      // не дублируем. `perLayerQty` остаётся 0 — его заполнит раскройщик.
+      const existingCutting = await tx.cuttingTask.count({
+        where: { orderId: id },
+      });
+      if (existingCutting === 0 && cuttingSizes.length > 0) {
+        await tx.cuttingTask.create({
+          data: {
+            orderId: id,
+            status: 'NEW',
+            sizeRows: {
+              createMany: {
+                data: cuttingSizes.map((s, idx) => ({
+                  sortOrder: (idx + 1) * 10,
+                  sizeId: s.id,
+                  sizeCodeSnapshot: s.code,
+                  qtyPlan: cuttingQtyBySizeId.get(s.id) ?? 0,
+                })),
+              },
+            },
+          },
+        });
+      }
+
       if (snapshotSteps.length > 0) {
         // Защита от двойного snapshot-а: если по какой-то причине
         // OrderRouteStep уже есть (ручной transition / админ-патч в

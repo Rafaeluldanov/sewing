@@ -14694,6 +14694,50 @@ body:has(.admin-layout) .app-header { display: none !important; }
   border-bottom: 0;
 }
 
+/* Кабинет раскройщика (`apps/web/app/cutter/*`) — переиспользует
+   `.constructor-*` chrome; здесь только специфика интерактивных таблиц
+   раскроя (редактируемые поля, живые итоги, управление рулонами). */
+.cutter-form {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+.cutter-table tfoot td {
+  border-top: 2px solid #cbd5e1;
+  font-weight: 600;
+  color: #1f2937;
+}
+.cutter-input {
+  width: 5.5rem;
+  max-width: 100%;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+.cutter-input:focus {
+  outline: none;
+  border-color: #2563eb;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+.cutter-total {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+.cutter-total--reached {
+  color: #16a34a;
+}
+.cutter-roll-remove {
+  padding: 0.2rem 0.55rem;
+  line-height: 1;
+}
+.cutter-actions {
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 0.6rem;
+}
+
 .constructor-files {
   list-style: none;
   padding: 0;

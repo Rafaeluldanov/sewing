@@ -476,6 +476,10 @@ model Size {
   /// со стороны строки задачи — удаление `Size` не сносит исторические
   /// строки задач, sizeCode сохраняется в `sizeCodeSnapshot`.
   constructorTaskSizeRows        ConstructorTaskSizeRow[]
+  /// Кабинет раскройщика: обратная связь от строк `CuttingTaskSizeRow`,
+  /// ссылающихся на размер. `onDelete: SetNull` со стороны строки —
+  /// удаление `Size` не сносит строки задачи (sizeCode в snapshot).
+  cuttingTaskSizeRows            CuttingTaskSizeRow[]
   /// Этап «Погонные метры по размерам»: обратная связь от значений
   /// `PatternItemSizeParameterValue`, привязанных к этому размеру.
   /// `onDelete: Cascade` — удаление размера каскадно сносит значения.
@@ -941,6 +945,13 @@ model Employee {
   constructorTasksCreated  ConstructorTask[] @relation("ConstructorTaskCreatedBy")
   constructorTasksAssigned ConstructorTask[] @relation("ConstructorTaskAssignedTo")
 
+  /// Кабинет раскройщика (роль `CUTTER`): задачи на раскрой, которые
+  /// этот сотрудник взял в работу (`CuttingTask.assignedToId`). Очередь
+  /// общая, но мы фиксируем, кто фактически раскроил — для аудита и
+  /// будущей передачи данных помощнику раскройщика. `onDelete: SetNull`
+  /// со стороны задачи — удаление учётки не сносит историю раскроя.
+  cuttingTasksAssigned     CuttingTask[]     @relation("CuttingTaskAssignedTo")
+
   /// Web Push: устройства/браузеры, на которые этот сотрудник
   /// подписался получать фоновые уведомления (например, «пришёл
   /// брак от ОТК» для швеи). Одна запись = одна push-подписка
@@ -1167,6 +1178,12 @@ model Order {
   passports             Passport[]
   closureRequests       CuttingClosureRequest[]
   routeSteps            OrderRouteStep[]
+  /// Кабинет раскройщика (роль `CUTTER`, см. `model CuttingTask` ниже,
+  /// `apps/api/src/modules/cutting-tasks/*`, `apps/web/app/cutter/*`).
+  /// 1:1 — одна задача на раскрой на заказ, создаётся автоматически при
+  /// `OrdersService.start()` (переход в `IN_PRODUCTION`). Nullable для
+  /// заказов, запущенных до появления модуля.
+  cuttingTask           CuttingTask?
   materialRequirements  OrderMaterialRequirement[]
   outsourceRequirements OrderOutsourceRequirement[]
   /// Этап 4А «Потребность цеха» (см. `model WorkshopNeed` ниже,
@@ -5943,6 +5960,110 @@ model ConstructorTaskFile {
   direction String?
 
   @@index([taskId])
+}
+
+/// Задача на раскрой для кабинета раскройщика (роль `CUTTER`). См.
+/// `apps/api/src/modules/cutting-tasks/*`, `apps/web/app/cutter/*`,
+/// `packages/shared/src/cutting-tasks.ts`.
+///
+/// Создаётся автоматически при `OrdersService.start()` (переход заказа
+/// в `IN_PRODUCTION`): 1:1 с заказом. В кабинет раскройщика попадает
+/// общая очередь (`status='NEW'`), любой раскройщик берёт задачу в
+/// работу (`start` → `IN_PROGRESS`, фиксируем `assignedToId`), вводит
+/// «количество размера на настиле» (`CuttingTaskSizeRow.perLayerQty`),
+/// настилает рулоны (`CuttingTaskRoll`), и завершает раскрой
+/// (`complete` → `DONE`).
+///
+/// Итоги НЕ хранятся: «всего слоёв» = Σ `CuttingTaskRoll.layers`,
+/// «итог по размеру» = всего слоёв × `perLayerQty` — считаются на лету
+/// (клиент в реальном времени, сервер в мапперах). Завершение раскроя
+/// на текущем этапе НЕ трогает `Passport` — данные дальше пойдут в
+/// кабинет помощника раскройщика отдельным шагом.
+model CuttingTask {
+  id      String @id @default(cuid())
+  orderId String @unique
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Жизненный цикл (свободная строка ради расширяемости, см.
+  /// `@sewing/shared/cutting-tasks::CUTTING_TASK_STATUSES`):
+  ///   - `NEW`         — заказ запущен, раскройщик ещё не взял;
+  ///   - `IN_PROGRESS` — раскройщик взял в работу, настилает рулоны;
+  ///   - `DONE`        — раскрой завершён;
+  ///   - `CANCELLED`   — заказ отменён / задача снята.
+  status String @default("NEW")
+
+  /// FK на `Employee.id` — раскройщик, который взял задачу в работу.
+  /// Nullable: в общей очереди задача до взятия ничья. `onDelete:
+  /// SetNull` — удаление учётки не сносит задачу.
+  assignedToId String?
+  assignedTo   Employee? @relation("CuttingTaskAssignedTo", fields: [assignedToId], references: [id], onDelete: SetNull)
+
+  /// Момент «Принять задание» (NEW → IN_PROGRESS) и «Раскрой завершён»
+  /// (IN_PROGRESS → DONE). Nullable до соответствующего перехода.
+  startedAt   DateTime?
+  completedAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sizeRows CuttingTaskSizeRow[]
+  rolls    CuttingTaskRoll[]
+
+  @@index([status])
+}
+
+/// Строка задания по размеру в задаче на раскрой. Снимок плана заказа
+/// (`qtyPlan` из `OrderItem`, агрегированный по размеру) + вводимое
+/// раскройщиком «количество размера на настиле» (`perLayerQty`).
+model CuttingTaskSizeRow {
+  id     String      @id @default(cuid())
+  taskId String
+  task   CuttingTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  /// Управленческий порядок отрисовки строк (по `Size.sortOrder`).
+  sortOrder Int
+
+  /// FK на `Size.id`. Nullable: удаление размера не теряет строку —
+  /// UI fallback-ит на `sizeCodeSnapshot`.
+  sizeId String?
+  size   Size?   @relation(fields: [sizeId], references: [id], onDelete: SetNull)
+
+  /// Снимок `Size.code` на момент создания задачи — защита от
+  /// переименования / удаления `Size`. Всегда заполнен.
+  sizeCodeSnapshot String
+
+  /// Плановое количество штук этого размера (Σ `OrderItem.qtyPlan` по
+  /// размеру на момент запуска заказа). Read-only для раскройщика.
+  qtyPlan Int
+
+  /// «Количество размера на настиле» (раскладка/маркер) — сколько штук
+  /// этого размера в одном слое настила. Вводит раскройщик в кабинете.
+  /// Дефолт 0 = «ещё не заполнено». «Итог по размеру» = Σ слоёв ×
+  /// `perLayerQty`.
+  perLayerQty Int @default(0)
+
+  @@unique([taskId, sizeId], name: "CuttingTaskSizeRow_task_size_uniq")
+  @@index([taskId, sortOrder])
+}
+
+/// Рулон настила в задаче на раскрой. Раскройщик добавляет рулоны
+/// («Рулон 1», «Рулон 2», …) и для каждого вводит количество слоёв.
+/// «Всего слоёв» = Σ `layers` по всем рулонам задачи.
+model CuttingTaskRoll {
+  id     String      @id @default(cuid())
+  taskId String
+  task   CuttingTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
+
+  /// Порядковый номер рулона в рамках задачи (1-based) — то, что
+  /// раскройщик видит как «Рулон N». Уникален в пределах задачи.
+  ordinal Int
+
+  /// Количество слоёв (настилов) в этом рулоне. Дефолт 0 = «ещё не
+  /// заполнено».
+  layers Int @default(0)
+
+  @@unique([taskId, ordinal], name: "CuttingTaskRoll_task_ordinal_uniq")
+  @@index([taskId, ordinal])
 }
 
 /// Сигнальный образец (`OrderSample`, MVP). См.

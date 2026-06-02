@@ -53,6 +53,14 @@ const SHOPFLOOR_MASTER_PATH = '/master';
 const CONSTRUCTOR_ROLE = 'CONSTRUCTOR';
 const CONSTRUCTOR_PATH = '/constructor';
 
+/**
+ * Учётка раскройщика. Кабинет `/cutter` — единственная осмысленная
+ * страница (single-workspace, как `CONSTRUCTOR`). Та же модель мягкого
+ * редиректа; security сидит в API-`AuthGuard`.
+ */
+const CUTTER_ROLE = 'CUTTER';
+const CUTTER_PATH = '/cutter';
+
 export function middleware(req: NextRequest): NextResponse {
   const { pathname } = req.nextUrl;
   if (
@@ -113,6 +121,17 @@ export function middleware(req: NextRequest): NextResponse {
     return NextResponse.redirect(url);
   }
 
+  if (
+    role === CUTTER_ROLE &&
+    !isCutterPath(pathname) &&
+    !isApiPath(pathname)
+  ) {
+    const url = req.nextUrl.clone();
+    url.pathname = CUTTER_PATH;
+    url.search = '';
+    return NextResponse.redirect(url);
+  }
+
   return NextResponse.next();
 }
 
@@ -132,6 +151,10 @@ function isConstructorPath(pathname: string): boolean {
     pathname === CONSTRUCTOR_PATH ||
     pathname.startsWith(`${CONSTRUCTOR_PATH}/`)
   );
+}
+
+function isCutterPath(pathname: string): boolean {
+  return pathname === CUTTER_PATH || pathname.startsWith(`${CUTTER_PATH}/`);
 }
 
 /**

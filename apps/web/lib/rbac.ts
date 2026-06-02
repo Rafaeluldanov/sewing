@@ -88,6 +88,13 @@ export const SHOPFLOOR_MASTER_ALLOWED_PATH = '/master';
  */
 export const CONSTRUCTOR_ALLOWED_PATH = '/constructor';
 
+/**
+ * Корневой путь кабинета раскройщика (роль `CUTTER`). Middleware
+ * пускает роль `CUTTER` только по путям с этим префиксом — та же
+ * single-workspace модель, что у `CONSTRUCTOR`.
+ */
+export const CUTTER_ALLOWED_PATH = '/cutter';
+
 export const QC_ALLOWED_ROLES: readonly Role[] = ['QC', 'SHOP_MANAGER', 'ADMIN'];
 export const WTO_ALLOWED_ROLES: readonly Role[] = [
   'IRONING',
@@ -101,6 +108,11 @@ export const PACKING_ALLOWED_ROLES: readonly Role[] = [
 ];
 export const CONSTRUCTOR_ALLOWED_ROLES: readonly Role[] = [
   'CONSTRUCTOR',
+  'SHOP_MANAGER',
+  'ADMIN',
+];
+export const CUTTER_ALLOWED_ROLES: readonly Role[] = [
+  'CUTTER',
   'SHOP_MANAGER',
   'ADMIN',
 ];
@@ -132,6 +144,8 @@ export const ORDERS_MENU_ALLOWED_ROLES: readonly Role[] = [
  */
 export const SHOPFLOOR_MENU_HIDDEN_ROLES: readonly Role[] = [
   'CUTTER_ASSISTANT',
+  // У раскройщика единственная точка входа — `/cutter`.
+  'CUTTER',
   'DISPLAY',
   // У мастера цеха единственная точка входа — `/master`.
   'SHOPFLOOR_MASTER',
@@ -181,6 +195,16 @@ export function canSeeConstructor(role: string | undefined | null): boolean {
   return (
     !!role && (CONSTRUCTOR_ALLOWED_ROLES as readonly string[]).includes(role)
   );
+}
+
+/**
+ * Доступ к кабинету раскройщика (`/cutter`). Роль `CUTTER` — основной
+ * пользователь; ADMIN/SHOP_MANAGER оставлены в матрице, чтобы менеджер
+ * мог открыть тот же экран и помочь с застрявшей задачей (очередь
+ * общая, владение не энфорсится).
+ */
+export function canSeeCutter(role: string | undefined | null): boolean {
+  return !!role && (CUTTER_ALLOWED_ROLES as readonly string[]).includes(role);
 }
 
 /**
@@ -264,7 +288,7 @@ export function canSeeProductionCost(
  * Маппинг:
  *   SEAMSTRESS         → `/work`
  *   CUTTER_ASSISTANT   → `/work`
- *   CUTTER             → `/work` (отдельного раскройного экрана пока нет)
+ *   CUTTER             → `/cutter` (кабинет раскройщика, single-workspace)
  *   IRONING            → `/wto` (scan-driven role-terminal,
  *                                см. `apps/web/app/wto/wto-terminal.tsx`)
  *   QC                 → `/qc`
@@ -279,7 +303,8 @@ export function canSeeProductionCost(
 const PRIMARY_WORKSPACE_BY_ROLE: Record<Role, string> = {
   ADMIN: '/',
   SHOP_MANAGER: '/',
-  CUTTER: '/work',
+  // CUTTER — кабинет раскройщика `/cutter` (single-workspace).
+  CUTTER: CUTTER_ALLOWED_PATH,
   CUTTER_ASSISTANT: '/work',
   SEAMSTRESS: '/work',
   IRONING: '/wto',
@@ -327,6 +352,8 @@ export function getPrimaryWorkspace(role: string | undefined | null): string {
 const SINGLE_WORKSPACE_ROLES: readonly Role[] = [
   'SEAMSTRESS',
   'CUTTER_ASSISTANT',
+  // У раскройщика один экран `/cutter` — кабинет с задачами на раскрой.
+  'CUTTER',
   'QC',
   'IRONING',
   'PACKING',
@@ -402,6 +429,14 @@ export function isShopfloorMasterRole(
  */
 export function isConstructorRole(role: string | undefined | null): boolean {
   return role === 'CONSTRUCTOR';
+}
+
+/**
+ * Роль «Раскройщик». Аналог `isConstructorRole` — middleware редиректит
+ * раскройщика с любых страниц на `/cutter`.
+ */
+export function isCutterRole(role: string | undefined | null): boolean {
+  return role === 'CUTTER';
 }
 
 /**

@@ -3695,3 +3695,39 @@ export class OrderSampleRejectionReasonRequiredException extends BusinessExcepti
     );
   }
 }
+
+// ---------------------------------------------------------------------------
+// Кабинет раскройщика (`CuttingTask`, роль CUTTER)
+// ---------------------------------------------------------------------------
+
+export class CuttingTaskNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'CUTTING_TASK_NOT_FOUND',
+      'Задача на раскрой не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+export class CuttingTaskInvalidTransitionException extends BusinessException {
+  constructor(message: string) {
+    super('CUTTING_TASK_INVALID_TRANSITION', message, HttpStatus.CONFLICT);
+  }
+}
+
+export class CuttingTaskNotInProgressException extends BusinessException {
+  constructor() {
+    super(
+      'CUTTING_TASK_NOT_IN_PROGRESS',
+      'Задача должна быть в работе — сначала примите задание',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class CuttingTaskPayloadInvalidException extends BusinessException {
+  constructor(message: string) {
+    super('CUTTING_TASK_PAYLOAD_INVALID', message, HttpStatus.BAD_REQUEST);
+  }
+}
