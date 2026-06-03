@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
-import { canSeeConstructor } from '@/lib/rbac';
+import { canSeeConstructor, canSeeEmployeeQrButton } from '@/lib/rbac';
+import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { LogoutButton } from '@/components/logout-button';
 import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
 
@@ -10,12 +11,14 @@ import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
  * `@Roles('CONSTRUCTOR', 'ADMIN', 'SHOP_MANAGER')`; этот guard убирает
  * «пустой экран 403» и редиректит лишних на главную.
  *
- * Шапки сверху нет: глобальный `<AppHeader>` для роли `CONSTRUCTOR` на
- * `/constructor` скрыт (см. `apps/web/components/app-header.tsx`), как у
- * остальных single-workspace терминалов. Вместо неё — боковой столбик
- * `.employee-toolbar` справа. Конструктор не цеховая роль: «Вызов
- * мастера» и «Мой QR-код» ему не нужны, поэтому в столбике только чип
- * «Мой день» (начисление) и «Выйти».
+ * Раскладка действий — та же, что у остальных терминалов, глобальный
+ * `<AppHeader>` для `CONSTRUCTOR` на `/constructor` скрыт (см.
+ * `apps/web/components/app-header.tsx`):
+ *   - «Выйти» — верхнее меню справа сверху (`.cabinet-topbar`);
+ *   - чип «Мой день» (начисление) — боковой столбик `.employee-toolbar`.
+ * «Мой QR-код» конструктору не показываем: роль не цеховая и в
+ * производственном потоке не сканируется (см. `canSeeEmployeeQrButton`),
+ * поэтому `showEmployeeQr` для неё `false`.
  */
 export default async function ConstructorSectionLayout({
   children,
@@ -26,12 +29,17 @@ export default async function ConstructorSectionLayout({
   if (!me) redirect('/login?next=/constructor');
   if (!canSeeConstructor(me.user.role)) redirect('/');
 
+  const showEmployeeQr = canSeeEmployeeQrButton(me.user.role);
+
   return (
     <div className="constructor-shell">
+      <div className="cabinet-topbar">
+        <LogoutButton />
+      </div>
       <main className="constructor-shell__main">{children}</main>
       <div className="employee-toolbar">
         <DailyEarningsChip />
-        <LogoutButton />
+        {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
       </div>
     </div>
   );

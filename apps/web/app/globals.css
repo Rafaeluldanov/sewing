@@ -5371,37 +5371,47 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .employee-toolbar .employee-qr-btn__label {
   display: none;
 }
-/* «Выйти» в правом столбике (кабинет раскройщика): контейнер тулбара
-   `pointer-events: none`, поэтому форму возвращаем в клик; саму кнопку
-   приводим к тому же круглому icon-only FAB 40×40, что QR/Мастер. */
-.employee-toolbar form {
-  pointer-events: auto;
-}
-.employee-toolbar .app-header__logout {
-  width: 40px;
-  height: 40px;
-  min-width: 40px;
-  min-height: 40px;
-  padding: 0;
-  gap: 0;
-  justify-content: center;
-  border-radius: 50%;
-  background: #1e293b;
-  color: #ffffff;
-  border: 0;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.28);
-}
-.employee-toolbar .app-header__logout:hover {
-  background: #0f172a;
-}
-.employee-toolbar .app-header__logout span {
-  display: none;
-}
 .employee-toolbar .call-master-btn__icon,
 .employee-toolbar .employee-qr-btn__icon {
   width: 1.4rem;
   height: 1.4rem;
   font-size: 0.95rem;
+}
+
+/* Кабинеты раскройщика (`/cutter`) и конструктора (`/constructor`)
+   используют светлый `.constructor-shell` (max-width контента 960px),
+   а не `.app-main` (1280px). Поэтому правый столбик `.employee-toolbar`
+   и верхнее меню «Выйти» (`.cabinet-topbar`) выравниваем по краю
+   960px-колонки, иначе на широком экране они уезжают вправо мимо
+   контента. На мобильном `max(...,0)=0` — прижимаются к краю вьюпорта,
+   как и на остальных терминалах. */
+.constructor-shell .employee-toolbar {
+  right: calc(max((100vw - 960px) / 2, 0px) + 1rem);
+}
+
+/* Верхнее меню сотрудника в светлых кабинетах: одна кнопка «Выйти»
+   в правом верхнем углу (по модели три-точечного меню помощника
+   раскройщика, но без «Завершить смену»). Стоит там же, где у
+   терминалов `.seamstress-actions` (top 0.4rem), поэтому боковой
+   столбик `.employee-toolbar` ложится под ним согласованно. */
+.cabinet-topbar {
+  position: fixed;
+  top: calc(env(safe-area-inset-top, 0px) + 0.4rem);
+  right: calc(max((100vw - 960px) / 2, 0px) + 1rem);
+  z-index: 81;
+}
+/* Базовый `.app-header__logout` рассчитан на тёмную шапку (светлый
+   текст, белёсая рамка) — на светлом фоне кабинета он невидим.
+   Перекрашиваем в тёмную pill, как чип «Мой день». */
+.cabinet-topbar .app-header__logout {
+  background: #1e293b;
+  color: #ffffff;
+  border: 0;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.22);
+}
+.cabinet-topbar .app-header__logout:hover {
+  background: #0f172a;
+  color: #ffffff;
 }
 
 /* Карточка модалки «Мой QR» — вариант общего .qr-modal__card. */
@@ -14469,30 +14479,6 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: flex;
   flex-direction: column;
 }
-.constructor-shell__header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 1rem;
-  padding: 0.75rem 1rem;
-  background: linear-gradient(120deg, #1d4ed8 0%, #2563eb 100%);
-  color: #fff;
-}
-.constructor-shell__brand {
-  font-size: 0.75rem;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  opacity: 0.85;
-}
-.constructor-shell__name {
-  font-size: 1rem;
-  font-weight: 600;
-}
-.constructor-shell__header-actions {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.6rem;
-}
 .constructor-shell__main {
   padding: 1rem;
   max-width: 960px;
@@ -15804,9 +15790,7 @@ body:has(.admin-layout) .app-header { display: none !important; }
  * рядом с «Мастер» и «Мой QR-код» в правом столбике; в отличие от
  * круглых icon-only кнопок, у чипа сохраняется ширина под цифры,
  * поэтому override `.employee-toolbar .my-day-chip` НЕ режет его
- * до 40×40 (см. `.employee-toolbar .call-master-btn` выше). Inline-
- * вариант (`.my-day-chip--inline`) — для `constructor-shell__header`,
- * где нет `.employee-toolbar`.
+ * до 40×40 (см. `.employee-toolbar .call-master-btn` выше).
  * ----------------------------------------------------------------------- */
 .my-day-chip {
   pointer-events: auto;
@@ -15844,21 +15828,6 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 0.9rem;
 }
 .my-day-chip__label { white-space: nowrap; }
-
-/* Inline-вариант: бледно-индиго pill для constructor-shell и
-   будущих светлых шапок. */
-.my-day-chip--inline {
-  background: #e0e7ff;
-  color: #3730a3;
-  box-shadow: none;
-}
-.my-day-chip--inline:hover:not(:disabled) {
-  background: #c7d2fe;
-}
-.my-day-chip--inline .my-day-chip__icon {
-  background: #ffffff;
-  color: #3730a3;
-}
 
 /* Карточка модалки «Мой день». */
 .my-day-panel__card {
