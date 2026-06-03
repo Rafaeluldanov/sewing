@@ -74,6 +74,11 @@ export function AppHeader({ role, children }: Props) {
   // header не «мигнул» во время гидрации client-роутинга.
   const isAdminPath = pathname === '/admin' || pathname.startsWith('/admin/');
   if (isAdminPath) return null;
+  // Страница логина — собственная вёрстка (`AuthShell`) с кнопкой «Войти»
+  // по центру. Верхний header с дублирующей кнопкой «Войти» здесь не нужен;
+  // прячем заранее (как `/admin`), чтобы шапка не мигнула при гидрации.
+  const isLoginPath = pathname === '/login' || pathname.startsWith('/login/');
+  if (isLoginPath) return null;
   const isWorkPath = pathname === '/work' || pathname.startsWith('/work/');
   const isPassportNewPath = PASSPORT_NEW_RE.test(pathname);
   // QC «терминал» — это ровно `/qc` (без подстраниц `/qc/passports/:id`,
