@@ -26,10 +26,9 @@ const ROLE_LABELS: Record<string, string> = {
  *     конструктор не scan-shift роль;
  *   - меню «⋯ → Выйти» в углу карты (`showActionsMenu`, `shiftActive`
  *     не передаём → только «Выйти», без «Завершить смену»);
- *   - чип «Мой день» — боковой столбик `.employee-toolbar`.
- * «Мой QR-код» конструктору не показываем: роль не цеховая и в
- * производственном потоке не сканируется (см. `canSeeEmployeeQrButton`),
- * поэтому `showEmployeeQr` для неё `false`.
+ *   - чип «Мой день» и «Мой QR-код» — боковой столбик
+ *     `.employee-toolbar`. «Вызов мастера» конструктору не нужен (роль
+ *     не цеховая), поэтому `CallMasterButton` здесь не рендерим.
  */
 export default async function ConstructorSectionLayout({
   children,

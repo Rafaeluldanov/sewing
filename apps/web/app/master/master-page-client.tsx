@@ -30,8 +30,9 @@ import type { CutReleasePolicyDto, SizeDto } from '@sewing/shared';
 import type { DefectTypeDto } from '@sewing/shared/qc';
 import { Icon } from '@/components/icon';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
+import { RoleHeaderCard } from '@/components/role-header-card';
+import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
 import { QrScannerModal } from '@/app/work/qr-scanner-modal';
-import { logoutAction } from '@/app/(auth)/logout-action';
 import {
   refreshOpenMasterCallsAction,
   refreshRecentlyResolvedMasterCallsAction,
@@ -56,10 +57,12 @@ interface Props {
   /** Справочник видов брака для ОТК-действий мастера в PassportActionsSheet. */
   defectTypes: DefectTypeDto[];
   /**
-   * Показывать ли кнопку «Мой QR-код» в шапке (роль прошла
+   * Показывать ли кнопку «Мой QR-код» (роль прошла
    * `canSeeEmployeeQrButton`). Гейт считается на сервере в `page.tsx`.
    */
   showEmployeeQr: boolean;
+  /** Имя мастера для синей шапки-профиля `RoleHeaderCard`. */
+  fullName: string;
 }
 
 export function MasterPageClient({
@@ -70,6 +73,7 @@ export function MasterPageClient({
   sizes,
   defectTypes,
   showEmployeeQr,
+  fullName,
 }: Props) {
   const [items, setItems] = useState<MasterCallDto[]>(initialItems);
   const [resolved, setResolved] =
@@ -267,35 +271,22 @@ export function MasterPageClient({
 
   return (
     <div className="master-page">
-      <header className="master-page__header">
-        <div>
-          <h1 className="master-page__title">Мастер цеха</h1>
-          <p className="master-page__subtitle">
-            Очередь активных вызовов. Чтобы закрыть — отсканируйте QR
-            сотрудника.
-          </p>
+      {/* Единая синяя шапка-профиль, как у остальных кабинетов
+          (RoleHeaderCard). «Выйти» — в три-точечном меню поверх угла
+          карты (`shiftActive=false` → только «Выйти»), «Мой QR-код» — в
+          боковом столбике. Счётчик открытых вызовов не дублируем: он уже
+          в табе «Вызовы · N». */}
+      <SeamstressActionsMenu shiftActive={false} />
+      <RoleHeaderCard
+        name={fullName}
+        role="Мастер цеха"
+        statusText="Очередь активных вызовов — отсканируйте QR сотрудника, чтобы закрыть"
+      />
+      {showEmployeeQr ? (
+        <div className="employee-toolbar">
+          <EmployeeQrButton variant="floating" />
         </div>
-        <div className="master-page__header-actions">
-          <span
-            className="master-page__count"
-            title="Открытых вызовов сейчас"
-            aria-label="Открытых вызовов"
-          >
-            {items.length}
-          </span>
-          {showEmployeeQr ? <EmployeeQrButton variant="inline" /> : null}
-          <form action={logoutAction}>
-            <button
-              type="submit"
-              className="master-page__logout"
-              aria-label="Выйти из аккаунта"
-            >
-              <Icon name="logout" size={16} />
-              <span>Выйти</span>
-            </button>
-          </form>
-        </div>
-      </header>
+      ) : null}
 
       <div className="master-page__tabs" role="tablist">
         <button

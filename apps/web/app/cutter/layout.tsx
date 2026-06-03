@@ -1,6 +1,7 @@
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeCutter, canSeeEmployeeQrButton } from '@/lib/rbac';
+import { CallMasterButton } from '@/components/call-master-button';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
 import { TerminalShell } from '@/components/terminal-shell';
@@ -25,8 +26,8 @@ const ROLE_LABELS: Record<string, string> = {
  *     раскрой не scan-shift роль;
  *   - меню «⋯ → Выйти» в углу карты (`showActionsMenu`, `shiftActive`
  *     не передаём → только «Выйти», без «Завершить смену»);
- *   - чип «Мой день» и «Мой QR-код» — боковой столбик
- *     `.employee-toolbar`. «Вызов мастера» здесь не нужен.
+ *   - чип «Мой день», «Мой QR-код» и «Вызов мастера» — боковой столбик
+ *     `.employee-toolbar` (раскройщику нужен полный набор, как швее/ОТК).
  */
 export default async function CutterSectionLayout({
   children,
@@ -48,6 +49,7 @@ export default async function CutterSectionLayout({
       <div className="employee-toolbar">
         <DailyEarningsChip />
         {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
+        <CallMasterButton />
       </div>
     </>
   );

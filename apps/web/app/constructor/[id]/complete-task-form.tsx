@@ -78,7 +78,8 @@ export function CompleteTaskForm({
         попадут в карточку номенклатуры.
       </p>
 
-      <table className="constructor-table" style={{ width: '100%' }}>
+      <div className="constructor-table-wrap">
+        <table className="constructor-table" style={{ width: '100%' }}>
         <thead>
           <tr>
             <th style={{ textAlign: 'left' }}>Размер</th>
@@ -131,7 +132,8 @@ export function CompleteTaskForm({
             );
           })}
         </tbody>
-      </table>
+        </table>
+      </div>
 
       <button
         type="submit"

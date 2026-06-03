@@ -23,9 +23,9 @@
  *     `router.refresh()` после действия (Завершить операцию и т.п.),
  *     которое уже зашито в существующих формах.
  *
- * Если данных нет (`compensationType === null` или сотрудник без
- * сделки и без оклада) — компонент не рендерит ничего: пустой чип
- * вводил бы пользователя в заблуждение.
+ * Чип показывается всегда, когда задан тип компенсации (даже при
+ * нулевой выработке: «0шт · 0₽» / «0₽»). Ничего не рендерим только если
+ * `compensationType === null` (расчёта у роли нет вовсе).
  */
 
 import { useCallback, useEffect, useState } from 'react';
@@ -65,8 +65,11 @@ export function DailyEarningsChip({ className }: DailyEarningsChipProps) {
   // Чип скрыт, пока не понятно, есть ли вообще что показывать.
   // Skeleton на первой загрузке выглядел бы шумно в углу терминала.
   if (loading && !data) return null;
+  // Показываем чип во всех кабинетах, где он размещён (кроме мастера —
+  // там его просто не рендерят), даже при нулевой выработке: для сделки
+  // это «0шт · 0₽», для оклада «0₽». Скрываем только если тип
+  // компенсации вообще не задан (показывать нечего и расчёта нет).
   if (!data || data.compensationType === null) return null;
-  if (!hasAnythingToShow(data)) return null;
 
   const chipLabel = formatChip(data);
   const chipClass = ['my-day-chip', className].filter(Boolean).join(' ');
@@ -93,14 +96,6 @@ export function DailyEarningsChip({ className }: DailyEarningsChipProps) {
       ) : null}
     </>
   );
-}
-
-function hasAnythingToShow(data: MeDailyDto): boolean {
-  if (data.piecework && data.piecework.byOperation.length > 0) return true;
-  if (data.salary && (data.salary.shiftOpen || data.salary.hasEntryToday))
-    return true;
-  if (data.salary && data.salary.salaryPerShift !== null) return true;
-  return false;
 }
 
 /**

@@ -490,9 +490,11 @@ export function canSeeDisplayPage(role: string | undefined | null): boolean {
  *
  * Кого включаем:
  *   - Все производственные/терминальные роли
- *     (`CUTTER`, `CUTTER_ASSISTANT`, `SEAMSTRESS`, `QC`, `IRONING`,
- *     `PACKING`) — им QR нужен, чтобы мастер/терминал быстро
- *     идентифицировал сотрудника вместо ручного ввода логина.
+ *     (`CUTTER`, `CUTTER_ASSISTANT`, `CONSTRUCTOR`, `SEAMSTRESS`, `QC`,
+ *     `IRONING`, `PACKING`) — им QR нужен, чтобы мастер/терминал быстро
+ *     идентифицировал сотрудника вместо ручного ввода логина
+ *     (`CONSTRUCTOR` — по решению: в кабинете оставляем QR, хотя в
+ *     цеховом потоке его не сканируют).
  *   - `SHOPFLOOR_MASTER` — по обратной логике: мастер тоже может
  *     оказаться «сканируемым» (например, на чужом терминале), а UI
  *     в `/master` проще держит единый паттерн «у каждого рабочего
@@ -508,6 +510,7 @@ export function canSeeDisplayPage(role: string | undefined | null): boolean {
 export const EMPLOYEE_QR_BUTTON_ALLOWED_ROLES: readonly Role[] = [
   'CUTTER',
   'CUTTER_ASSISTANT',
+  'CONSTRUCTOR',
   'SEAMSTRESS',
   'QC',
   'IRONING',

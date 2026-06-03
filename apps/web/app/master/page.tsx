@@ -89,6 +89,7 @@ export default async function MasterPage() {
       sizes={initialSizes}
       defectTypes={defectTypes}
       showEmployeeQr={canSeeEmployeeQrButton(me.user.role)}
+      fullName={me.user.fullName}
     />
   );
 }
