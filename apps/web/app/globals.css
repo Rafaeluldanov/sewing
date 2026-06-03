@@ -5381,38 +5381,13 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 /* Кабинеты раскройщика (`/cutter`) и конструктора (`/constructor`)
    используют светлый `.constructor-shell` (max-width контента 960px),
    а не `.app-main` (1280px). Поэтому правый столбик `.employee-toolbar`
-   и верхнее меню «Выйти» (`.cabinet-topbar`) выравниваем по краю
-   960px-колонки, иначе на широком экране они уезжают вправо мимо
-   контента. На мобильном `max(...,0)=0` — прижимаются к краю вьюпорта,
-   как и на остальных терминалах. */
+   выравниваем по краю 960px-колонки, иначе на широком экране он уезжает
+   вправо мимо контента. На мобильном `max(...,0)=0` — прижимается к
+   краю вьюпорта, как и на остальных терминалах. */
 .constructor-shell .employee-toolbar {
   right: calc(max((100vw - 960px) / 2, 0px) + 1rem);
 }
 
-/* Верхнее меню сотрудника в светлых кабинетах: одна кнопка «Выйти»
-   в правом верхнем углу (по модели три-точечного меню помощника
-   раскройщика, но без «Завершить смену»). Стоит там же, где у
-   терминалов `.seamstress-actions` (top 0.4rem), поэтому боковой
-   столбик `.employee-toolbar` ложится под ним согласованно. */
-.cabinet-topbar {
-  position: fixed;
-  top: calc(env(safe-area-inset-top, 0px) + 0.4rem);
-  right: calc(max((100vw - 960px) / 2, 0px) + 1rem);
-  z-index: 81;
-}
-/* Базовый `.app-header__logout` рассчитан на тёмную шапку (светлый
-   текст, белёсая рамка) — на светлом фоне кабинета он невидим.
-   Перекрашиваем в тёмную pill, как чип «Мой день». */
-.cabinet-topbar .app-header__logout {
-  background: #1e293b;
-  color: #ffffff;
-  border: 0;
-  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.22);
-}
-.cabinet-topbar .app-header__logout:hover {
-  background: #0f172a;
-  color: #ffffff;
-}
 
 /* Карточка модалки «Мой QR» — вариант общего .qr-modal__card. */
 .employee-qr-modal__card {
@@ -14485,6 +14460,9 @@ body:has(.admin-layout) .app-header { display: none !important; }
   width: 100%;
   margin: 0 auto;
   flex: 1;
+  /* Якорь для абсолютного `.seamstress-actions` (меню «⋯ → Выйти»
+     поверх угла синей `RoleHeaderCard`), как `.work` на `/work`. */
+  position: relative;
 }
 
 .constructor-page__title {
