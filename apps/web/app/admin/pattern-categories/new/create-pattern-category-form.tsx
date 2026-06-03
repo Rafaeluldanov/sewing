@@ -43,7 +43,15 @@ import {
   type ChangeEvent,
 } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
-import { Plus, Trash2, Upload, XCircle, AlertTriangle } from 'lucide-react';
+import {
+  Plus,
+  Trash2,
+  Upload,
+  XCircle,
+  AlertTriangle,
+  ChevronUp,
+  ChevronDown,
+} from 'lucide-react';
 import {
   PATTERN_CATEGORY_PARAMETER_GROUPS,
   PATTERN_CATEGORY_PARAMETER_INPUT_TYPE_LABELS,
@@ -438,6 +446,18 @@ export function CreatePatternCategoryForm() {
     setParameters((rows) => rows.filter((r) => r.uid !== uid));
   }, []);
 
+  const moveParameter = useCallback((uid: string, dir: -1 | 1) => {
+    setParameters((rows) => {
+      const idx = rows.findIndex((r) => r.uid === uid);
+      if (idx === -1) return rows;
+      const target = idx + dir;
+      if (target < 0 || target >= rows.length) return rows;
+      const next = [...rows];
+      [next[idx], next[target]] = [next[target], next[idx]];
+      return next;
+    });
+  }, []);
+
   const addParameter = useCallback(() => {
     setParameters((rows) => [...rows, makeRow()]);
   }, []);
@@ -816,14 +836,36 @@ export function CreatePatternCategoryForm() {
                       />
                     </td>
                     <td>
-                      <button
-                        type="button"
-                        className="admin-btn admin-btn--ghost"
-                        onClick={() => removeParameter(p.uid)}
-                        aria-label={`Удалить параметр «${p.label || '—'}»`}
-                      >
-                        <Trash2 size={14} strokeWidth={1.6} aria-hidden />
-                      </button>
+                      <div style={{ display: 'flex', gap: 4 }}>
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--ghost"
+                          onClick={() => moveParameter(p.uid, -1)}
+                          disabled={i === 0}
+                          aria-label={`Переместить параметр «${p.label || '—'}» вверх`}
+                          title="Вверх"
+                        >
+                          <ChevronUp size={14} strokeWidth={1.6} aria-hidden />
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--ghost"
+                          onClick={() => moveParameter(p.uid, 1)}
+                          disabled={i === parameters.length - 1}
+                          aria-label={`Переместить параметр «${p.label || '—'}» вниз`}
+                          title="Вниз"
+                        >
+                          <ChevronDown size={14} strokeWidth={1.6} aria-hidden />
+                        </button>
+                        <button
+                          type="button"
+                          className="admin-btn admin-btn--ghost"
+                          onClick={() => removeParameter(p.uid)}
+                          aria-label={`Удалить параметр «${p.label || '—'}»`}
+                        >
+                          <Trash2 size={14} strokeWidth={1.6} aria-hidden />
+                        </button>
+                      </div>
                     </td>
                   </tr>
                 );

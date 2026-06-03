@@ -92,8 +92,7 @@ function parseParametersFromForm(
           isRequiredRaw === 'true' ||
           isRequiredRaw === '1';
     // Sort order не показываем пользователю — порядок в UI задаёт
-    // порядок строк, которые менеджер передвигает кнопками вверх/вниз
-    // (TODO: на MVP кнопок нет, поэтому используем индекс ввода).
+    // порядок строк, которые менеджер передвигает кнопками ↑/↓.
     const sortOrder = (i + 1) * 10;
     const candidate = {
       roleKey,
