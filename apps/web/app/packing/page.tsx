@@ -4,7 +4,7 @@ import { listBoxes, BOX_STATUS_LABELS } from '@/lib/packing-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { ApiRequestError } from '@/lib/api';
-import { RoleHeaderCard } from '@/components/role-header-card';
+import { TerminalShell } from '@/components/terminal-shell';
 import { CreateBoxForm } from './create-box-form';
 import { PackingTerminal } from './packing-terminal';
 
@@ -115,18 +115,17 @@ export default async function PackingPage({
       : [];
 
     return (
-      <div className="work work--seamstress">
-        <RoleHeaderCard
-          name={employee.fullName}
-          role={ROLE_LABELS.PACKING}
-          fields={headerFields}
-          shiftActive={isShiftActive}
-          statusText={
-            isShiftActive
-              ? `Смена с ${formatTime(shift!.startedAt)}`
-              : 'Смена не начата — отсканируйте QR оборудования упаковки'
-          }
-        />
+      <TerminalShell
+        name={employee.fullName}
+        role={ROLE_LABELS.PACKING}
+        fields={headerFields}
+        shiftActive={isShiftActive}
+        statusText={
+          isShiftActive
+            ? `Смена с ${formatTime(shift!.startedAt)}`
+            : 'Смена не начата — отсканируйте QR оборудования упаковки'
+        }
+      >
         <PackingTerminal
           meta={meta}
           employee={employee}
@@ -135,7 +134,7 @@ export default async function PackingPage({
           initialOpenBoxes={initialOpenBoxes}
           initialClosedUnplacedBoxes={initialClosedUnplacedBoxes}
         />
-      </div>
+      </TerminalShell>
     );
   }
 

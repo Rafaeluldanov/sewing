@@ -3,7 +3,7 @@ import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listDefectTypes, listQcIncomingReworks } from '@/lib/qc-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
-import { RoleHeaderCard } from '@/components/role-header-card';
+import { TerminalShell } from '@/components/terminal-shell';
 import { QcTerminal } from './qc-terminal';
 
 export const dynamic = 'force-dynamic';
@@ -115,18 +115,17 @@ export default async function QcPage() {
   const roleLabel = ROLE_LABELS[employee.role] ?? employee.role;
 
   return (
-    <div className="work work--seamstress">
-      <RoleHeaderCard
-        name={employee.fullName}
-        role={roleLabel}
-        fields={headerFields}
-        shiftActive={isShiftActive}
-        statusText={
-          isShiftActive
-            ? `Смена с ${formatTime(currentShift!.startedAt)}`
-            : 'Смена не начата — отсканируйте QR рабочего места ОТК'
-        }
-      />
+    <TerminalShell
+      name={employee.fullName}
+      role={roleLabel}
+      fields={headerFields}
+      shiftActive={isShiftActive}
+      statusText={
+        isShiftActive
+          ? `Смена с ${formatTime(currentShift!.startedAt)}`
+          : 'Смена не начата — отсканируйте QR рабочего места ОТК'
+      }
+    >
       <QcTerminal
         defectTypes={defectTypes}
         meta={meta}
@@ -135,6 +134,6 @@ export default async function QcPage() {
         activeOperationCategory={activeOperationCategory}
         incomingReworks={incomingReworks}
       />
-    </div>
+    </TerminalShell>
   );
 }

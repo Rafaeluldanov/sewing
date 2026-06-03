@@ -2,7 +2,7 @@ import { redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
-import { RoleHeaderCard } from '@/components/role-header-card';
+import { TerminalShell } from '@/components/terminal-shell';
 import { WtoTerminal } from './wto-terminal';
 
 export const dynamic = 'force-dynamic';
@@ -91,24 +91,23 @@ export default async function WtoPage() {
   const roleLabel = ROLE_LABELS[employee.role] ?? employee.role;
 
   return (
-    <div className="work work--seamstress">
-      <RoleHeaderCard
-        name={employee.fullName}
-        role={roleLabel}
-        fields={headerFields}
-        shiftActive={isShiftActive}
-        statusText={
-          isShiftActive
-            ? `Смена с ${formatTime(currentShift!.startedAt)}`
-            : 'Смена не начата — отсканируйте QR рабочего места ВТО'
-        }
-      />
+    <TerminalShell
+      name={employee.fullName}
+      role={roleLabel}
+      fields={headerFields}
+      shiftActive={isShiftActive}
+      statusText={
+        isShiftActive
+          ? `Смена с ${formatTime(currentShift!.startedAt)}`
+          : 'Смена не начата — отсканируйте QR рабочего места ВТО'
+      }
+    >
       <WtoTerminal
         meta={meta}
         employee={employee}
         initialShift={currentShift}
         activeOperationCategory={activeOperationCategory}
       />
-    </div>
+    </TerminalShell>
   );
 }
