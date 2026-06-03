@@ -5388,6 +5388,17 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   right: calc(max((100vw - 960px) / 2, 0px) + 1rem);
 }
 
+/* Меню «⋯ → Выйти» (`.seamstress-actions`) живёт внутри
+   `.constructor-shell__main`, у которого `padding: 1rem`. Базовый
+   `.seamstress-actions` (absolute, top/right 0.4rem) считает позицию от
+   внешнего края этого паддинга, поэтому ⋯ вылезает на ~1rem выше и
+   правее синей карты. Сдвигаем внутрь на величину паддинга — ⋯ садится
+   в угол `RoleHeaderCard`, как над карточкой на `/work`. */
+.constructor-shell .seamstress-actions {
+  top: calc(env(safe-area-inset-top, 0px) + 1rem + 0.4rem);
+  right: calc(1rem + 0.4rem);
+}
+
 
 /* Карточка модалки «Мой QR» — вариант общего .qr-modal__card. */
 .employee-qr-modal__card {
