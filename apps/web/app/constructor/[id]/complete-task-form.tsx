@@ -93,10 +93,10 @@ export function CompleteTaskForm({
             const fieldName = `${COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX}${row.sizeId}`;
             return (
               <tr key={row.id}>
-                <td>
+                <td data-label="Размер">
                   <strong>{row.sizeCodeSnapshot}</strong>
                 </td>
-                <td>
+                <td data-label="Кулирка, м пог.">
                   <input
                     type="text"
                     inputMode="decimal"
@@ -106,7 +106,7 @@ export function CompleteTaskForm({
                     style={{ width: 110, padding: '4px 6px' }}
                   />
                 </td>
-                <td>
+                <td data-label="Кашкорсе, м пог.">
                   <input
                     type="text"
                     inputMode="decimal"
@@ -116,7 +116,7 @@ export function CompleteTaskForm({
                     style={{ width: 110, padding: '4px 6px' }}
                   />
                 </td>
-                <td>
+                <td data-label="DXF-файл">
                   <input
                     type="file"
                     id={`file-${row.sizeId}`}

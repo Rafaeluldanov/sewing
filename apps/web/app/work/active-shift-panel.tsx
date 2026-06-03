@@ -244,12 +244,24 @@ export function ActiveShiftPanel({ shift }: Props) {
  * для CUTTER_ASSISTANT — так мы не дублируем «Завершить смену» прямо
  * на белом экране.
  */
-export function CutterAssistantWorkPanel() {
+export function CutterAssistantWorkPanel({
+  pendingReleaseCount = 0,
+}: {
+  /**
+   * Сколько заказов с завершённым раскроем ещё ждут выпуска паспортов
+   * (есть невыпущенные пары). >0 → подсвечиваем блок «Выпустить
+   * паспорт» красным индикатором «есть задание». Считается на сервере
+   * в `/work/page.tsx` (`listOrdersReadyForRelease`).
+   */
+  pendingReleaseCount?: number;
+}) {
   const [shelfActive, setShelfActive] = useState(false);
 
   if (shelfActive) {
     return <ShelfPlacementPanel onClose={() => setShelfActive(false)} />;
   }
+
+  const hasPending = pendingReleaseCount > 0;
 
   return (
     <div className="seamstress-work cutter-assistant-work">
@@ -262,12 +274,28 @@ export function CutterAssistantWorkPanel() {
        * помощника на него ссылки больше нет — сознательное UI-решение
        * владельца (см. `docs/cutter-assistant-passport-release-recon.md`).
        */}
-      <div className="scan-card scan-card--simple">
-        <div>
-          <h2 className="scan-card__title">Выпустить паспорт</h2>
-          <p className="scan-card__hint">
-            Серийный выпуск: выбор размера, сетка по рулонам, одна кнопка.
-          </p>
+      <div
+        className={
+          'scan-card scan-card--simple' +
+          (hasPending ? ' scan-card--has-task' : '')
+        }
+      >
+        <div className="scan-card__head-row">
+          <div>
+            <h2 className="scan-card__title">Выпустить паспорт</h2>
+            <p className="scan-card__hint">
+              Серийный выпуск: выбор размера, сетка по рулонам, одна кнопка.
+            </p>
+          </div>
+          {hasPending ? (
+            <span
+              className="scan-card__task-badge"
+              title="Есть завершённый раскрой, ожидающий выпуска паспортов"
+            >
+              <span className="scan-card__task-dot" aria-hidden />
+              {pendingReleaseCount} к выпуску
+            </span>
+          ) : null}
         </div>
         <Link
           className="btn btn-primary btn-lg btn-block"

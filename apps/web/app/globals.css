@@ -1180,6 +1180,47 @@ table.data-table th.num { text-align: right; }
   color: var(--color-fg-muted);
   line-height: 1.45;
 }
+/* Шапка карточки с местом под индикатор «есть задание» справа
+   (помощник раскройщика: блок «Выпустить паспорт»). */
+.scan-card__head-row {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+/* Красный бейдж «N к выпуску» — есть завершённый раскрой, ожидающий
+   выпуска паспортов. Пульсирующая точка привлекает внимание. */
+.scan-card__task-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-shrink: 0;
+  background: #fee2e2;
+  color: #b91c1c;
+  font-size: 0.78rem;
+  font-weight: 700;
+  padding: 0.25rem 0.6rem;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+.scan-card__task-dot {
+  width: 0.55rem;
+  height: 0.55rem;
+  border-radius: 50%;
+  background: #dc2626;
+  box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.6);
+  animation: scan-task-pulse 1.8s ease-out infinite;
+}
+@keyframes scan-task-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.55); }
+  70% { box-shadow: 0 0 0 6px rgba(220, 38, 38, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0); }
+}
+/* Подсветка всей карточки, когда есть задание: тонкая красная рамка. */
+.scan-card--has-task {
+  border-color: #fca5a5;
+  box-shadow: 0 0 0 1px #fca5a5, var(--shadow-sm);
+}
 .scan-card__input {
   display: flex;
   flex-direction: column;
@@ -14677,23 +14718,63 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .constructor-table tbody tr:last-child td {
   border-bottom: 0;
 }
-/* Таблица «завершить задачу» с колонкой DXF-файла на узких экранах не
-   влезает (native `input[type=file]` распирал страницу). Оборачиваем в
-   горизонтальный скролл, чтобы оверфлоу оставался ВНУТРИ карточки, а не
-   ломал ширину страницы; file-input не даём вылезать за ячейку. */
+/* Таблица «завершить задачу» с колонкой DXF-файла. На десктопе —
+   обычная таблица; на узких экранах native `input[type=file]` не
+   сжимается и распирает строку, поэтому на ≤600px разворачиваем каждую
+   строку в карточку-стек (label сверху, поле на всю ширину). */
 .constructor-table-wrap {
   max-width: 100%;
-  overflow-x: auto;
-  -webkit-overflow-scrolling: touch;
 }
 .constructor-table input[type='file'] {
   max-width: 100%;
 }
 @media (max-width: 600px) {
-  /* На телефоне ужимаем числовые поля, чтобы 4 колонки помещались без
-     длинного горизонтального скролла. */
-  .constructor-table input[type='text'] {
-    width: 72px !important;
+  /* Стек только для редактируемой формы (обёрнута в
+     `.constructor-table-wrap`), read-only «Размерную таблицу» не
+     трогаем — она узкая и так помещается. */
+  .constructor-table-wrap .constructor-table thead {
+    display: none;
+  }
+  .constructor-table-wrap .constructor-table,
+  .constructor-table-wrap .constructor-table tbody,
+  .constructor-table-wrap .constructor-table tr,
+  .constructor-table-wrap .constructor-table td {
+    display: block;
+  }
+  .constructor-table-wrap .constructor-table tr {
+    border: 1px solid #e2e8f0;
+    border-radius: 8px;
+    padding: 0.5rem 0.7rem;
+    margin-bottom: 0.6rem;
+  }
+  .constructor-table-wrap .constructor-table td {
+    border-bottom: 0;
+    padding: 0.3rem 0;
+  }
+  /* Подпись колонки над полем (берётся из data-label ячейки). */
+  .constructor-table-wrap .constructor-table td::before {
+    content: attr(data-label);
+    display: block;
+    margin-bottom: 0.2rem;
+    font-size: 0.72rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #64748b;
+  }
+  /* «Размер» — заголовок карточки, без подписи. */
+  .constructor-table-wrap .constructor-table td[data-label='Размер'] {
+    font-size: 1.05rem;
+    margin-bottom: 0.25rem;
+  }
+  .constructor-table-wrap .constructor-table td[data-label='Размер']::before {
+    display: none;
+  }
+  /* Поля на всю ширину карточки — file-input больше не вылезает. */
+  .constructor-table-wrap .constructor-table input[type='text'],
+  .constructor-table-wrap .constructor-table input[type='file'] {
+    width: 100% !important;
+    max-width: 100%;
   }
 }
 

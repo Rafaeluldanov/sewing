@@ -8,6 +8,7 @@ import {
   getShiftMeta,
 } from '@/lib/shifts-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { listOrdersReadyForRelease } from '@/lib/cutting-tasks-api';
 import { getPrimaryWorkspace } from '@/lib/rbac';
 import { RoleHeaderCard } from '@/components/role-header-card';
 import { ShiftStartForm } from './shift-start-form';
@@ -159,6 +160,20 @@ export default async function WorkPage() {
   //     где спрятаны редкие/опасные действия (Завершить смену, Выйти).
   const useMobileCleanWork = isSeamstress || isCutterAssistant;
 
+  // Индикатор «есть задание на выпуск» для помощника раскройщика:
+  // сколько заказов с завершённым раскроем (`CuttingTask=DONE`) ещё
+  // имеют невыпущенные пары (DTO.status==='NEW'). Soft-fail: если API
+  // недоступен — 0, индикатор просто не покажем (как loadCurrentWork).
+  let pendingReleaseCount = 0;
+  if (isCutterAssistant && isActive) {
+    try {
+      const ready = await listOrdersReadyForRelease();
+      pendingReleaseCount = ready.filter((o) => o.status === 'NEW').length;
+    } catch (e) {
+      if (!(e instanceof ApiRequestError)) throw e;
+    }
+  }
+
   return (
     <div className={`work${useMobileCleanWork ? ' work--seamstress' : ''}`}>
       {useMobileCleanWork && (
@@ -203,7 +218,7 @@ export default async function WorkPage() {
         // стеллаж»). Кнопка «Завершить смену» по-прежнему живёт в
         // три-точечном меню `SeamstressActionsMenu` сверху.
         isActive ? (
-          <CutterAssistantWorkPanel />
+          <CutterAssistantWorkPanel pendingReleaseCount={pendingReleaseCount} />
         ) : (
           <SeamstressShiftStart meta={meta} employee={employee} />
         )
