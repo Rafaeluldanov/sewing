@@ -3,10 +3,9 @@ import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeConstructor, canSeeEmployeeQrButton } from '@/lib/rbac';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
-import { RoleHeaderCard } from '@/components/role-header-card';
-import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
+import { TerminalShell } from '@/components/terminal-shell';
 
-/** Подписи ролей для синей шапки-профиля (см. ниже). */
+/** Подписи ролей для синей шапки-профиля. */
 const ROLE_LABELS: Record<string, string> = {
   CONSTRUCTOR: 'Конструктор',
   SHOP_MANAGER: 'Начальник цеха',
@@ -19,15 +18,15 @@ const ROLE_LABELS: Record<string, string> = {
  * `@Roles('CONSTRUCTOR', 'ADMIN', 'SHOP_MANAGER')`; этот guard убирает
  * «пустой экран 403» и редиректит лишних на главную.
  *
- * Раскладка как на остальных терминалах, глобальный `<AppHeader>` для
+ * Раскладка — общий шаблон `TerminalShell` (`.work .work--seamstress`,
+ * как у ОТК/ВТО/упаковки/швеи), глобальный `<AppHeader>` для
  * `CONSTRUCTOR` на `/constructor` скрыт (см.
  * `apps/web/components/app-header.tsx`):
- *   - синяя шапка-профиль `RoleHeaderCard` (имя + роль) сверху — как в
- *     ОТК; полей смены нет (конструктор не scan-shift роль);
- *   - «Выйти» — то же три-точечное меню `SeamstressActionsMenu`, что у
- *     помощника раскройщика, поверх угла карты; `shiftActive={false}`
- *     убирает «Завершить смену», остаётся только «Выйти»;
- *   - чип «Мой день» (начисление) — боковой столбик `.employee-toolbar`.
+ *   - синяя `RoleHeaderCard` (имя + роль) сверху; полей смены нет —
+ *     конструктор не scan-shift роль;
+ *   - меню «⋯ → Выйти» в углу карты (`showActionsMenu`, `shiftActive`
+ *     не передаём → только «Выйти», без «Завершить смену»);
+ *   - чип «Мой день» — боковой столбик `.employee-toolbar`.
  * «Мой QR-код» конструктору не показываем: роль не цеховая и в
  * производственном потоке не сканируется (см. `canSeeEmployeeQrButton`),
  * поэтому `showEmployeeQr` для неё `false`.
@@ -45,16 +44,14 @@ export default async function ConstructorSectionLayout({
   const roleLabel = ROLE_LABELS[me.user.role] ?? me.user.role;
 
   return (
-    <div className="constructor-shell">
-      <main className="constructor-shell__main">
-        <SeamstressActionsMenu shiftActive={false} />
-        <RoleHeaderCard name={me.user.fullName} role={roleLabel} />
+    <>
+      <TerminalShell name={me.user.fullName} role={roleLabel} showActionsMenu>
         {children}
-      </main>
+      </TerminalShell>
       <div className="employee-toolbar">
         <DailyEarningsChip />
         {showEmployeeQr ? <EmployeeQrButton variant="floating" /> : null}
       </div>
-    </div>
+    </>
   );
 }
