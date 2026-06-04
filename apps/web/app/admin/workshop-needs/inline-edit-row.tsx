@@ -83,6 +83,13 @@ import {
   pricePerMeterToBobbin,
   pricePerBobbinToMeter,
 } from './thread-units';
+import {
+  isButtonNeed,
+  packagesToPieces,
+  piecesToPackages,
+  pricePerPackToPiece,
+  pricePerPieceToPack,
+} from './button-units';
 
 function isoToDateInput(iso: string | null): string {
   if (!iso) return '';
@@ -320,6 +327,19 @@ export function InlineEditWorkshopNeedRow({
   // ничего не меняем.
   const isThread = isThreadNeed(need.materialRole);
 
+  // Кнопки: считаются/хранятся поштучно, но закупщик покупает их
+  // упаковками. Поле «К закупке» заменяется на «Упаковок» + «Шт/упак»,
+  // «Цена за 1 шт» → «Цена за упаковку», «Сумма» = упаковок × цена за
+  // упаковку. В БД остаётся поштучно (purchaseQty = упаковок × шт/упак,
+  // quotedPrice = цена за упаковку ÷ шт/упак), а штук-в-упаковке
+  // хранится отдельной колонкой packSize (см. `./button-units`). Кнопки
+  // и нитки взаимоисключающи (нитки — не PACKAGING).
+  const isButton = isButtonNeed(
+    need.materialRole,
+    need.sourceName,
+    need.description,
+  );
+
   // Исходные значения в единицах ОТОБРАЖЕНИЯ (для ниток — ярды /
   // цена за бобину; иначе — как в БД). Считаем один раз: если поле
   // не редактировали, при сохранении отправим исходное значение из
@@ -340,6 +360,19 @@ export function InlineEditWorkshopNeedRow({
     initialPriceDisplay,
   );
   const [currency, setCurrency] = useState<string>(validInitialCurrency);
+
+  // Кнопки: исходные значения «Упаковок» / «Шт/упак» / «Цена за
+  // упаковку» восстанавливаем из поштучных purchaseQty / quotedPrice и
+  // сохранённого packSize.
+  const [packSizeValue, setPackSizeValue] = useState<string>(
+    need.packSize ?? '',
+  );
+  const [packagesValue, setPackagesValue] = useState<string>(
+    isButton ? piecesToPackages(need.purchaseQty, need.packSize) : '',
+  );
+  const [packPriceValue, setPackPriceValue] = useState<string>(
+    isButton ? pricePerPieceToPack(need.quotedPrice, need.packSize) : '',
+  );
 
   // Комментарий закупщика по умолчанию скрыт. Кнопка-toggle
   // показывает текущее значение (если есть) и раскрывает textarea
@@ -377,7 +410,11 @@ export function InlineEditWorkshopNeedRow({
   // Подпись единицы и поля цены. Для ниток — ярды / «Цена за 1 боб.»;
   // иначе — единица из БД и «Цена за 1 <unit>».
   const unitLabel = isThread ? 'ярд' : need.unit;
-  const priceLabel = isThread ? 'Цена за 1 боб.' : formatPriceLabel(need.unit);
+  const priceLabel = isThread
+    ? 'Цена за 1 боб.'
+    : isButton
+      ? 'Цена за упаковку'
+      : formatPriceLabel(need.unit);
 
   // «Нужно» (calculatedQty) в единицах отображения.
   const calcQtyDisplay = isThread
@@ -390,13 +427,36 @@ export function InlineEditWorkshopNeedRow({
   const baseQtyNum =
     purchaseQtyNum ?? parseDecimalString(calcQtyDisplay);
   const priceNum = parseDecimalString(quotedPriceValue);
-  const lineTotal =
-    priceNum !== null && baseQtyNum !== null
-      ? isThread
-        ? (baseQtyNum / YARDS_PER_BOBBIN) * priceNum
-        : priceNum * baseQtyNum
-      : null;
+  // Сумма: для кнопок — упаковок × цена за упаковку; для ниток —
+  // (ярды / 4000) × цена за боб.; иначе — цена за единицу × кол-во.
+  let lineTotal: number | null;
+  if (isButton) {
+    const packagesNum = parseDecimalString(packagesValue);
+    const packPriceNum = parseDecimalString(packPriceValue);
+    lineTotal =
+      packagesNum !== null && packPriceNum !== null
+        ? packagesNum * packPriceNum
+        : null;
+  } else if (priceNum !== null && baseQtyNum !== null) {
+    lineTotal = isThread
+      ? (baseQtyNum / YARDS_PER_BOBBIN) * priceNum
+      : priceNum * baseQtyNum;
+  } else {
+    lineTotal = null;
+  }
   const symbol = currencySymbol(currency);
+
+  // Кнопки: на backend уходит поштучно. purchaseQty (шт) = упаковок ×
+  // шт/упак, quotedPrice (за 1 шт) = цена за упаковку ÷ шт/упак,
+  // packSize = шт/упак. Пустые поля → '' (Zod нормализует в null).
+  const submitButtonQty =
+    packagesValue.trim() === '' || packSizeValue.trim() === ''
+      ? ''
+      : packagesToPieces(packagesValue, packSizeValue);
+  const submitButtonPrice =
+    packPriceValue.trim() === '' || packSizeValue.trim() === ''
+      ? ''
+      : pricePerPackToPiece(packPriceValue, packSizeValue);
 
   // Значения, которые реально уйдут на backend (всегда в метрах /
   // цене за метр). Если поле не редактировали — отправляем исходное
@@ -567,26 +627,84 @@ export function InlineEditWorkshopNeedRow({
         }
         data-cell="purchase"
       >
-        <label
-          htmlFor={`wnq-${need.id}`}
-          className="workshop-need-line__hint"
-        >
-          К закупке{isThread ? ', ярд' : ''}
-        </label>
-        <input
-          id={`wnq-${need.id}`}
-          /* Для ниток видимый input в ярдах НЕ сабмитим — backend
-             получает метры из скрытого поля ниже. */
-          name={isThread ? undefined : 'purchaseQty'}
-          type="text"
-          inputMode="decimal"
-          value={purchaseQtyValue}
-          onChange={(e) => setPurchaseQtyValue(e.target.value)}
-          placeholder={calcQtyDisplay}
-          disabled={isCancelled || isLockedByPo}
-        />
-        {isThread && !(isCancelled || isLockedByPo) && (
-          <input type="hidden" name="purchaseQty" value={submitPurchaseQty ?? ''} />
+        {isButton ? (
+          <>
+            {/* Кнопки покупаются упаковками. Видимые поля «Упаковок» /
+                «Шт/упак» НЕ сабмитятся напрямую — backend получает
+                поштучный purchaseQty и packSize из скрытых полей ниже. */}
+            <label
+              htmlFor={`wnq-${need.id}`}
+              className="workshop-need-line__hint"
+            >
+              Упаковок
+            </label>
+            <input
+              id={`wnq-${need.id}`}
+              type="text"
+              inputMode="decimal"
+              value={packagesValue}
+              onChange={(e) => setPackagesValue(e.target.value)}
+              placeholder="0"
+              disabled={isCancelled || isLockedByPo}
+            />
+            <label
+              htmlFor={`wnps-${need.id}`}
+              className="workshop-need-line__hint"
+            >
+              Шт/упак
+            </label>
+            <input
+              id={`wnps-${need.id}`}
+              type="text"
+              inputMode="decimal"
+              value={packSizeValue}
+              onChange={(e) => setPackSizeValue(e.target.value)}
+              placeholder="0"
+              disabled={isCancelled || isLockedByPo}
+            />
+            {!(isCancelled || isLockedByPo) && (
+              <>
+                <input
+                  type="hidden"
+                  name="purchaseQty"
+                  value={submitButtonQty}
+                />
+                <input
+                  type="hidden"
+                  name="packSize"
+                  value={packSizeValue.trim()}
+                />
+              </>
+            )}
+          </>
+        ) : (
+          <>
+            <label
+              htmlFor={`wnq-${need.id}`}
+              className="workshop-need-line__hint"
+            >
+              К закупке{isThread ? ', ярд' : ''}
+            </label>
+            <input
+              id={`wnq-${need.id}`}
+              /* Для ниток видимый input в ярдах НЕ сабмитим — backend
+                 получает метры из скрытого поля ниже. */
+              name={isThread ? undefined : 'purchaseQty'}
+              type="text"
+              inputMode="decimal"
+              value={purchaseQtyValue}
+              onChange={(e) => setPurchaseQtyValue(e.target.value)}
+              placeholder={calcQtyDisplay}
+              disabled={isCancelled || isLockedByPo}
+            />
+            {isThread && !(isCancelled || isLockedByPo) && (
+              <input
+                type="hidden"
+                name="purchaseQty"
+                value={submitPurchaseQty ?? ''}
+              />
+            )}
+          </>
         )}
       </div>
 
@@ -607,19 +725,27 @@ export function InlineEditWorkshopNeedRow({
         </label>
         <input
           id={`wnp-${need.id}`}
-          /* Для ниток видимый input — цена за бобину; backend получает
-             цену за метр из скрытого поля ниже. */
-          name={isThread ? undefined : 'quotedPrice'}
+          /* Для ниток видимый input — цена за бобину; для кнопок — цена
+             за упаковку. Backend получает цену за единицу (метр / штуку)
+             из скрытого поля ниже, поэтому видимый input не сабмитим. */
+          name={isThread || isButton ? undefined : 'quotedPrice'}
           type="text"
           inputMode="decimal"
-          value={quotedPriceValue}
-          onChange={(e) => setQuotedPriceValue(e.target.value)}
+          value={isButton ? packPriceValue : quotedPriceValue}
+          onChange={(e) =>
+            isButton
+              ? setPackPriceValue(e.target.value)
+              : setQuotedPriceValue(e.target.value)
+          }
           placeholder="0.00"
           disabled={isCancelled}
           aria-describedby={`wnp-hint-${need.id}`}
         />
         {isThread && !isCancelled && (
           <input type="hidden" name="quotedPrice" value={submitQuotedPrice ?? ''} />
+        )}
+        {isButton && !isCancelled && (
+          <input type="hidden" name="quotedPrice" value={submitButtonPrice} />
         )}
       </div>
 

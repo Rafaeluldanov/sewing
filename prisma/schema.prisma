@@ -3754,6 +3754,17 @@ model WorkshopNeed {
   /// закупщик не заполнил руками. НЕ копируется автоматически из
   /// `calculatedQty`.
   purchaseQty   Decimal? @db.Decimal(14, 4)
+  /// Штук в одной упаковке — только для строк по КНОПКАМ
+  /// (`materialRole = PACKAGING` + «кнопк» в имени/описании, см.
+  /// `apps/web/app/admin/workshop-needs/button-units.ts`). Закупщик
+  /// покупает кнопки упаковками: в форме `/admin/workshop-needs` он
+  /// вводит «Упаковок» / «Шт/упак» / «Цена за упаковку», но в БД всё
+  /// остаётся поштучно (`purchaseQty` = упаковок × `packSize`,
+  /// `quotedPrice` = цена за упаковку ÷ `packSize`). `packSize`
+  /// сохраняется отдельно, чтобы при перезагрузке восстановить
+  /// разбивку (из одной цифры штук её не вывести). `null` для всех
+  /// прочих строк — поведение единиц не меняется.
+  packSize      Decimal? @db.Decimal(14, 4)
   unit          String
 
   /// `AREA_DENSITY` | `QTY_PER_UNIT`. Свободная строка ради

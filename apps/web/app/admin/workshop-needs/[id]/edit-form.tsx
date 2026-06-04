@@ -61,6 +61,13 @@ import {
   pricePerMeterToBobbin,
   pricePerBobbinToMeter,
 } from '../thread-units';
+import {
+  isButtonNeed,
+  packagesToPieces,
+  piecesToPackages,
+  pricePerPackToPiece,
+  pricePerPieceToPack,
+} from '../button-units';
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -141,6 +148,14 @@ export function EditWorkshopNeedForm({
   // см. `../thread-units`. Конверсия только на фронте, остальные
   // единицы не трогаем.
   const isThread = isThreadNeed(need.materialRole);
+  // Кнопки: покупаются упаковками. «К закупке» → «Упаковок» + «Шт/упак»,
+  // «Цена за 1 шт» → «Цена за упаковку». В БД остаётся поштучно +
+  // отдельная колонка packSize (см. `../button-units`).
+  const isButton = isButtonNeed(
+    need.materialRole,
+    need.sourceName,
+    need.description,
+  );
   const initialPurchaseDisplay = isThread
     ? metersToYards(need.purchaseQty)
     : (need.purchaseQty ?? '');
@@ -153,6 +168,24 @@ export function EditWorkshopNeedForm({
   const [quotedPriceValue, setQuotedPriceValue] = useState<string>(
     initialPriceDisplay,
   );
+  // Кнопки: «Упаковок» / «Шт/упак» / «Цена за упаковку».
+  const [packSizeValue, setPackSizeValue] = useState<string>(
+    need.packSize ?? '',
+  );
+  const [packagesValue, setPackagesValue] = useState<string>(
+    isButton ? piecesToPackages(need.purchaseQty, need.packSize) : '',
+  );
+  const [packPriceValue, setPackPriceValue] = useState<string>(
+    isButton ? pricePerPieceToPack(need.quotedPrice, need.packSize) : '',
+  );
+  const submitButtonQty =
+    packagesValue.trim() === '' || packSizeValue.trim() === ''
+      ? ''
+      : packagesToPieces(packagesValue, packSizeValue);
+  const submitButtonPrice =
+    packPriceValue.trim() === '' || packSizeValue.trim() === ''
+      ? ''
+      : pricePerPackToPiece(packPriceValue, packSizeValue);
   const calcQtyDisplay = isThread
     ? metersToYards(need.calculatedQty)
     : need.calculatedQty;
@@ -174,34 +207,74 @@ export function EditWorkshopNeedForm({
     <>
       <form action={updateAction} className="admin-form">
         <div className="admin-form-grid">
-          <div className="admin-field">
-            <label htmlFor="need-purchaseQty">
-              К закупке ({purchaseUnitLabel})
-            </label>
-            <input
-              id="need-purchaseQty"
-              /* Для ниток видимый input в ярдах НЕ сабмитим — backend
-                 получает метры из скрытого поля ниже. */
-              name={isThread ? undefined : 'purchaseQty'}
-              type="text"
-              inputMode="decimal"
-              value={isThread ? purchaseQtyValue : undefined}
-              defaultValue={isThread ? undefined : (need.purchaseQty ?? '')}
-              onChange={
-                isThread
-                  ? (e) => setPurchaseQtyValue(e.target.value)
-                  : undefined
-              }
-              placeholder={`напр. ${calcQtyDisplay}`}
-            />
-            {isThread && (
+          {isButton ? (
+            <>
+              <div className="admin-field">
+                <label htmlFor="need-packages">Упаковок</label>
+                <input
+                  id="need-packages"
+                  type="text"
+                  inputMode="decimal"
+                  value={packagesValue}
+                  onChange={(e) => setPackagesValue(e.target.value)}
+                  placeholder="напр. 10"
+                />
+                {/* Кнопки покупаются упаковками: видимые поля не сабмитим,
+                    backend получает поштучный purchaseQty + packSize из
+                    скрытых полей. */}
+                <input type="hidden" name="purchaseQty" value={submitButtonQty} />
+                <input
+                  type="hidden"
+                  name="packSize"
+                  value={packSizeValue.trim()}
+                />
+              </div>
+              <div className="admin-field">
+                <label htmlFor="need-packSize">Штук в упаковке</label>
+                <input
+                  id="need-packSize"
+                  type="text"
+                  inputMode="decimal"
+                  value={packSizeValue}
+                  onChange={(e) => setPackSizeValue(e.target.value)}
+                  placeholder="напр. 100"
+                />
+                <small className="admin-muted" style={{ marginTop: 4 }}>
+                  В БД хранится поштучно: к закупке ={' '}
+                  {submitButtonQty || '—'} шт.
+                </small>
+              </div>
+            </>
+          ) : (
+            <div className="admin-field">
+              <label htmlFor="need-purchaseQty">
+                К закупке ({purchaseUnitLabel})
+              </label>
               <input
-                type="hidden"
-                name="purchaseQty"
-                value={submitPurchaseQty ?? ''}
+                id="need-purchaseQty"
+                /* Для ниток видимый input в ярдах НЕ сабмитим — backend
+                   получает метры из скрытого поля ниже. */
+                name={isThread ? undefined : 'purchaseQty'}
+                type="text"
+                inputMode="decimal"
+                value={isThread ? purchaseQtyValue : undefined}
+                defaultValue={isThread ? undefined : (need.purchaseQty ?? '')}
+                onChange={
+                  isThread
+                    ? (e) => setPurchaseQtyValue(e.target.value)
+                    : undefined
+                }
+                placeholder={`напр. ${calcQtyDisplay}`}
               />
-            )}
-          </div>
+              {isThread && (
+                <input
+                  type="hidden"
+                  name="purchaseQty"
+                  value={submitPurchaseQty ?? ''}
+                />
+              )}
+            </div>
+          )}
           <div className="admin-field">
             <label htmlFor="need-status">Статус</label>
             <select
@@ -365,21 +438,36 @@ export function EditWorkshopNeedForm({
                 не за весь объём. Backend / DTO / расчёт не меняли
                 — это только UI-подпись.
               */}
-              {isThread ? 'Цена за 1 боб.' : `Цена за 1 ${need.unit}`}
+              {isThread
+                ? 'Цена за 1 боб.'
+                : isButton
+                  ? 'Цена за упаковку'
+                  : `Цена за 1 ${need.unit}`}
             </label>
             <input
               id="need-price"
-              /* Для ниток видимый input — цена за бобину; backend
-                 получает цену за метр из скрытого поля ниже. */
-              name={isThread ? undefined : 'quotedPrice'}
+              /* Для ниток видимый input — цена за бобину; для кнопок —
+                 цена за упаковку. Backend получает цену за единицу из
+                 скрытого поля ниже, поэтому видимый input не сабмитим. */
+              name={isThread || isButton ? undefined : 'quotedPrice'}
               type="text"
               inputMode="decimal"
-              value={isThread ? quotedPriceValue : undefined}
-              defaultValue={isThread ? undefined : (need.quotedPrice ?? '')}
+              value={
+                isThread
+                  ? quotedPriceValue
+                  : isButton
+                    ? packPriceValue
+                    : undefined
+              }
+              defaultValue={
+                isThread || isButton ? undefined : (need.quotedPrice ?? '')
+              }
               onChange={
                 isThread
                   ? (e) => setQuotedPriceValue(e.target.value)
-                  : undefined
+                  : isButton
+                    ? (e) => setPackPriceValue(e.target.value)
+                    : undefined
               }
               placeholder="0.00"
             />
@@ -390,10 +478,20 @@ export function EditWorkshopNeedForm({
                 value={submitQuotedPrice ?? ''}
               />
             )}
+            {isButton && (
+              <input
+                type="hidden"
+                name="quotedPrice"
+                value={submitButtonPrice}
+              />
+            )}
             <small className="admin-muted" style={{ marginTop: 4 }}>
               {isThread
                 ? 'Цена за 1 бобину (4000 ярдов), не за весь объём.'
-                : `Цена за 1 ${need.unit}, не за весь объём.`}
+                : isButton
+                  ? 'Цена за упаковку. В БД хранится цена за 1 шт ='
+                    + ` ${submitButtonPrice || '—'}.`
+                  : `Цена за 1 ${need.unit}, не за весь объём.`}
             </small>
           </div>
           <div className="admin-field">

@@ -53,6 +53,13 @@ function buildUpdateDto(form: FormData): UpdateWorkshopNeedDto {
     const v = String(form.get('purchaseQty') ?? '').trim();
     dto.purchaseQty = v === '' ? null : v;
   }
+  // Кнопки: «штук в упаковке» (см. button-units.ts). Пустое → null
+  // (сброс упаковочного режима). Для прочих строк поле в форме
+  // отсутствует и DTO его не трогает.
+  if (form.has('packSize')) {
+    const v = String(form.get('packSize') ?? '').trim();
+    dto.packSize = v === '' ? null : v;
+  }
   if (form.has('status')) {
     const v = String(form.get('status') ?? '').trim();
     if (v !== '') dto.status = v as UpdateWorkshopNeedDto['status'];

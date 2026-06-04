@@ -178,6 +178,14 @@ export class WorkshopNeedsService {
       changedFields.push('purchaseQty');
     }
 
+    const packSize = trackOptional('packSize', (v) =>
+      v === null ? null : new Prisma.Decimal(v as string),
+    );
+    if (packSize.changed) {
+      data.packSize = packSize.value as Prisma.Decimal | null;
+      changedFields.push('packSize');
+    }
+
     if (dto.status !== undefined) {
       data.status = dto.status;
       changedFields.push('status');
@@ -268,6 +276,10 @@ export class WorkshopNeedsService {
                 dto.purchaseQty === undefined
                   ? undefined
                   : (dto.purchaseQty as string | null),
+              packSize:
+                dto.packSize === undefined
+                  ? undefined
+                  : (dto.packSize as string | null),
               status: dto.status,
               supplierNameText: dto.supplierNameText,
               purchaseItemNameText: dto.purchaseItemNameText,
@@ -2121,6 +2133,7 @@ export class WorkshopNeedsService {
       totalAreaM2: row.totalAreaM2 ? row.totalAreaM2.toString() : null,
       calculatedQty: row.calculatedQty.toString(),
       purchaseQty: row.purchaseQty ? row.purchaseQty.toString() : null,
+      packSize: row.packSize ? row.packSize.toString() : null,
       unit: row.unit,
       calculationMethod: row.calculationMethod,
       status: row.status,

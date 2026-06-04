@@ -307,6 +307,47 @@ const PurchaseQtyField: z.ZodType<string | null | undefined> = z
   }) as unknown as z.ZodType<string | null | undefined>;
 
 /**
+ * `packSize` — штук в упаковке для строк по кнопкам. Принимает
+ * `string | number | null | undefined`, валидирует как положительное
+ * число (до 4 знаков после точки), пустое/`null` → `null` (сброс
+ * упаковочного режима). Семантика идентична `PurchaseQtyField`.
+ */
+const PackSizeField: z.ZodType<string | null | undefined> = z
+  .union([z.string(), z.number(), z.null()])
+  .optional()
+  .transform((v, ctx) => {
+    if (v === undefined) return undefined;
+    if (v === null) return null;
+    const raw =
+      typeof v === 'number' ? String(v) : v.trim().replace(',', '.');
+    if (raw === '') return null;
+    if (!/^\d+(\.\d{1,4})?$/.test(raw)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Штук в упаковке: положительное число, не более 4 знаков после точки',
+      });
+      return z.NEVER;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Штук в упаковке должно быть > 0',
+      });
+      return z.NEVER;
+    }
+    if (n > WORKSHOP_NEED_QTY_MAX) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Штук в упаковке: значение выглядит ошибочным',
+      });
+      return z.NEVER;
+    }
+    return raw;
+  }) as unknown as z.ZodType<string | null | undefined>;
+
+/**
  * `quotedPrice` принимает `string | number | null | undefined`.
  * Допускает `0` (бесплатный материал), не допускает отрицательных.
  * Decimal(14,2).
@@ -497,6 +538,11 @@ const SelectedSupplierCatalogItemIdField = SelectedSupplierIdField;
 export const UpdateWorkshopNeedSchema = z
   .object({
     purchaseQty: PurchaseQtyField,
+    /**
+     * Штук в упаковке (только кнопки). См. `PackSizeField` и
+     * `WorkshopNeedDto.packSize`. `null` — сбросить упаковочный режим.
+     */
+    packSize: PackSizeField,
     status: WorkshopNeedStatusSchema.optional(),
     supplierNameText: SupplierNameField,
     purchaseItemNameText: PurchaseItemNameField,
@@ -523,6 +569,7 @@ export const UpdateWorkshopNeedSchema = z
   .refine(
     (obj) =>
       obj.purchaseQty !== undefined ||
+      obj.packSize !== undefined ||
       obj.status !== undefined ||
       obj.supplierNameText !== undefined ||
       obj.purchaseItemNameText !== undefined ||
@@ -653,6 +700,15 @@ export interface WorkshopNeedDto {
   calculatedQty: string;
   /** Decimal как строка; `null` пока закупщик не заполнил. */
   purchaseQty: string | null;
+  /**
+   * Штук в упаковке — только для строк по КНОПКАМ (см.
+   * `apps/web/app/admin/workshop-needs/button-units.ts`). Кнопки в БД
+   * остаются поштучно (`purchaseQty` = упаковок × `packSize`,
+   * `quotedPrice` = цена за упаковку ÷ `packSize`), а `packSize` хранит
+   * разбивку, чтобы UI восстановил «Упаковок» / «Цена за упаковку» при
+   * перезагрузке. `null` для всех прочих строк. Decimal как строка.
+   */
+  packSize: string | null;
   unit: string;
 
   calculationMethod: WorkshopNeedCalculationMethod | string;
