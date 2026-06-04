@@ -22,10 +22,8 @@ import { useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { Pencil, Plus, Trash2 } from 'lucide-react';
 import type { OrderLogisticsLineDto } from '@sewing/shared/orders';
-import {
-  deleteOrderLogisticsLineAction,
-  initialLogisticsLineFormState,
-} from '@/app/admin/orders/[id]/logistics-lines-actions';
+import { deleteOrderLogisticsLineAction } from '@/app/admin/orders/[id]/logistics-lines-actions';
+import { initialLogisticsLineFormState } from '@/app/admin/orders/[id]/logistics-lines-form-state';
 import { OrderLogisticsLineDialog } from './order-logistics-line-dialog';
 
 export function OrderLogisticsAddButton({ orderId }: { orderId: string }) {

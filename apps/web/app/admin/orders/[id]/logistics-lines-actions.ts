@@ -31,17 +31,10 @@ import {
   deleteOrderLogisticsLine,
   updateOrderLogisticsLine,
 } from '@/lib/orders-api';
-
-export interface LogisticsLineFormState {
-  ok?: boolean;
-  error?: string;
-  fieldErrors?: Record<string, string>;
-  successMessage?: string;
-  /** Меняется при каждом успешном submit — UI закрывает диалог по нему. */
-  doneToken?: string;
-}
-
-export const initialLogisticsLineFormState: LogisticsLineFormState = {};
+// Тип + начальное состояние живут в отдельном модуле — `'use server'`
+// файл может экспортировать только async-функции (иначе прод-сборка
+// падает с «can only export async functions, found object»).
+import type { LogisticsLineFormState } from './logistics-lines-form-state';
 
 function explainApiError(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {

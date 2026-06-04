@@ -34,9 +34,9 @@ import {
 } from '@sewing/shared/orders';
 import {
   createOrderLogisticsLineAction,
-  initialLogisticsLineFormState,
   updateOrderLogisticsLineAction,
 } from '@/app/admin/orders/[id]/logistics-lines-actions';
+import { initialLogisticsLineFormState } from '@/app/admin/orders/[id]/logistics-lines-form-state';
 
 interface Props {
   orderId: string;
