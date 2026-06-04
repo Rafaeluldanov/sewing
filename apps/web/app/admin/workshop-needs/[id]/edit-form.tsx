@@ -54,6 +54,13 @@ import {
   initialCancelWorkshopNeedState,
   initialUpdateWorkshopNeedState,
 } from '../form-state';
+import {
+  isThreadNeed,
+  metersToYards,
+  yardsToMeters,
+  pricePerMeterToBobbin,
+  pricePerBobbinToMeter,
+} from '../thread-units';
 
 function SubmitButton() {
   const { pending } = useFormStatus();
@@ -129,22 +136,71 @@ export function EditWorkshopNeedForm({
     !supplierChangedSinceLoad &&
     selectedSupplierCatalog.length > 0;
 
+  // Нитки: показываем «К закупке» в ярдах и цену за бобину
+  // (1 боб. = 4000 ярдов), но в БД храним метры / цену за метр —
+  // см. `../thread-units`. Конверсия только на фронте, остальные
+  // единицы не трогаем.
+  const isThread = isThreadNeed(need.materialRole);
+  const initialPurchaseDisplay = isThread
+    ? metersToYards(need.purchaseQty)
+    : (need.purchaseQty ?? '');
+  const initialPriceDisplay = isThread
+    ? pricePerMeterToBobbin(need.quotedPrice)
+    : (need.quotedPrice ?? '');
+  const [purchaseQtyValue, setPurchaseQtyValue] = useState<string>(
+    initialPurchaseDisplay,
+  );
+  const [quotedPriceValue, setQuotedPriceValue] = useState<string>(
+    initialPriceDisplay,
+  );
+  const calcQtyDisplay = isThread
+    ? metersToYards(need.calculatedQty)
+    : need.calculatedQty;
+  const purchaseUnitLabel = isThread ? 'ярд' : need.unit;
+  // Значения для backend — всегда метры / цена за метр. Неизменённое
+  // поле уходит исходным значением, чтобы не округлять round-trip.
+  const submitPurchaseQty = isThread
+    ? purchaseQtyValue === initialPurchaseDisplay
+      ? (need.purchaseQty ?? '')
+      : yardsToMeters(purchaseQtyValue)
+    : null;
+  const submitQuotedPrice = isThread
+    ? quotedPriceValue === initialPriceDisplay
+      ? (need.quotedPrice ?? '')
+      : pricePerBobbinToMeter(quotedPriceValue)
+    : null;
+
   return (
     <>
       <form action={updateAction} className="admin-form">
         <div className="admin-form-grid">
           <div className="admin-field">
             <label htmlFor="need-purchaseQty">
-              К закупке ({need.unit})
+              К закупке ({purchaseUnitLabel})
             </label>
             <input
               id="need-purchaseQty"
-              name="purchaseQty"
+              /* Для ниток видимый input в ярдах НЕ сабмитим — backend
+                 получает метры из скрытого поля ниже. */
+              name={isThread ? undefined : 'purchaseQty'}
               type="text"
               inputMode="decimal"
-              defaultValue={need.purchaseQty ?? ''}
-              placeholder={`напр. ${need.calculatedQty}`}
+              value={isThread ? purchaseQtyValue : undefined}
+              defaultValue={isThread ? undefined : (need.purchaseQty ?? '')}
+              onChange={
+                isThread
+                  ? (e) => setPurchaseQtyValue(e.target.value)
+                  : undefined
+              }
+              placeholder={`напр. ${calcQtyDisplay}`}
             />
+            {isThread && (
+              <input
+                type="hidden"
+                name="purchaseQty"
+                value={submitPurchaseQty ?? ''}
+              />
+            )}
           </div>
           <div className="admin-field">
             <label htmlFor="need-status">Статус</label>
@@ -309,18 +365,35 @@ export function EditWorkshopNeedForm({
                 не за весь объём. Backend / DTO / расчёт не меняли
                 — это только UI-подпись.
               */}
-              {`Цена за 1 ${need.unit}`}
+              {isThread ? 'Цена за 1 боб.' : `Цена за 1 ${need.unit}`}
             </label>
             <input
               id="need-price"
-              name="quotedPrice"
+              /* Для ниток видимый input — цена за бобину; backend
+                 получает цену за метр из скрытого поля ниже. */
+              name={isThread ? undefined : 'quotedPrice'}
               type="text"
               inputMode="decimal"
-              defaultValue={need.quotedPrice ?? ''}
+              value={isThread ? quotedPriceValue : undefined}
+              defaultValue={isThread ? undefined : (need.quotedPrice ?? '')}
+              onChange={
+                isThread
+                  ? (e) => setQuotedPriceValue(e.target.value)
+                  : undefined
+              }
               placeholder="0.00"
             />
+            {isThread && (
+              <input
+                type="hidden"
+                name="quotedPrice"
+                value={submitQuotedPrice ?? ''}
+              />
+            )}
             <small className="admin-muted" style={{ marginTop: 4 }}>
-              Цена за 1 {need.unit}, не за весь объём.
+              {isThread
+                ? 'Цена за 1 бобину (4000 ярдов), не за весь объём.'
+                : `Цена за 1 ${need.unit}, не за весь объём.`}
             </small>
           </div>
           <div className="admin-field">

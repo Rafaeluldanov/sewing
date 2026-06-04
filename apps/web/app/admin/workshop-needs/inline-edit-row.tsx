@@ -48,7 +48,7 @@
 
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import {
   ImageOff,
   Save,
@@ -75,6 +75,14 @@ import type { AdminStatusTone } from '@/lib/admin-labels';
 import { BulkCreatePoCheckbox } from './bulk-create-po';
 import { updateWorkshopNeedAction } from './actions';
 import { initialUpdateWorkshopNeedState } from './form-state';
+import {
+  YARDS_PER_BOBBIN,
+  isThreadNeed,
+  metersToYards,
+  yardsToMeters,
+  pricePerMeterToBobbin,
+  pricePerBobbinToMeter,
+} from './thread-units';
 
 function isoToDateInput(iso: string | null): string {
   if (!iso) return '';
@@ -247,6 +255,12 @@ export function InlineEditWorkshopNeedRow({
     initialUpdateWorkshopNeedState,
   );
 
+  // Ref на саму форму строки — нужен, чтобы при сворачивании блока
+  // комментария программно сабмитить тот же server-action, что и
+  // кнопка «Сохранить» (`requestSubmit`). Так введённый коммент
+  // персистится в БД сразу при «Скрыть», а не теряется.
+  const formRef = useRef<HTMLFormElement>(null);
+
   const initialCurrency = (need.quotedCurrency ?? '').toUpperCase();
   const validInitialCurrency = MONEY_CURRENCIES.includes(
     initialCurrency as (typeof MONEY_CURRENCIES)[number],
@@ -254,23 +268,46 @@ export function InlineEditWorkshopNeedRow({
     ? initialCurrency
     : '';
 
-  // Controlled-state — нужен ТОЛЬКО для preview «Сумма строки»
-  // (`finalQty × unit price`). Любая другая возможность была бы
-  // некорректна: backend получает ровно те же значения, что
-  // оказались в input/select на момент submit-а.
+  // Нитки: расход хранится в метрах, но закупщик работает в ярдах и
+  // покупает бобинами (1 боб. = 4000 ярдов). Конверсия — только на
+  // фронте; в БД и backend всё остаётся в метрах / цене за метр (см.
+  // `./thread-units`). Для остальных единиц (шт / м² / кг / компл)
+  // ничего не меняем.
+  const isThread = isThreadNeed(need.materialRole);
+
+  // Исходные значения в единицах ОТОБРАЖЕНИЯ (для ниток — ярды /
+  // цена за бобину; иначе — как в БД). Считаем один раз: если поле
+  // не редактировали, при сохранении отправим исходное значение из
+  // БД без обратной конверсии — так round-trip метры↔ярды не «плывёт».
+  const initialPurchaseDisplay = isThread
+    ? metersToYards(need.purchaseQty)
+    : (need.purchaseQty ?? '');
+  const initialPriceDisplay = isThread
+    ? pricePerMeterToBobbin(need.quotedPrice)
+    : (need.quotedPrice ?? '');
+
+  // Controlled-state — нужен для preview «Сумма строки» и (для ниток)
+  // для обратной конверсии при сохранении.
   const [purchaseQtyValue, setPurchaseQtyValue] = useState<string>(
-    need.purchaseQty ?? '',
+    initialPurchaseDisplay,
   );
   const [quotedPriceValue, setQuotedPriceValue] = useState<string>(
-    need.quotedPrice ?? '',
+    initialPriceDisplay,
   );
   const [currency, setCurrency] = useState<string>(validInitialCurrency);
 
-  const hasComment = (need.comment ?? '').trim().length > 0;
   // Комментарий закупщика по умолчанию скрыт. Кнопка-toggle
   // показывает текущее значение (если есть) и раскрывает textarea
   // для редактирования. SaaS-итерация: одинаково в lines/orders.
+  //
+  // Поле controlled (`commentValue`): иначе при сворачивании
+  // uncontrolled textarea демонтируется и заменяется hidden-input
+  // со старым значением из БД — введённый текст терялся бы.
+  const [commentValue, setCommentValue] = useState<string>(
+    need.comment ?? '',
+  );
   const [commentOpen, setCommentOpen] = useState<boolean>(false);
+  const hasComment = commentValue.trim().length > 0;
 
   const isCancelled = need.status === 'CANCELLED';
   const isLockedByPo =
@@ -292,18 +329,43 @@ export function InlineEditWorkshopNeedRow({
   const orderHref = `/admin/orders/${encodeURIComponent(need.orderId)}`;
   const detailHref = `/admin/workshop-needs/${encodeURIComponent(need.id)}`;
 
-  const priceLabel = formatPriceLabel(need.unit);
+  // Подпись единицы и поля цены. Для ниток — ярды / «Цена за 1 боб.»;
+  // иначе — единица из БД и «Цена за 1 <unit>».
+  const unitLabel = isThread ? 'ярд' : need.unit;
+  const priceLabel = isThread ? 'Цена за 1 боб.' : formatPriceLabel(need.unit);
 
-  // Line total preview: finalQty × unit price.
+  // «Нужно» (calculatedQty) в единицах отображения.
+  const calcQtyDisplay = isThread
+    ? metersToYards(need.calculatedQty)
+    : trimDecimal(need.calculatedQty);
+
+  // Line total preview. Для ниток: цена за бобину, количество в ярдах,
+  // сумма = (ярды / 4000) × цена за боб. Иначе: цена за единицу × кол-во.
   const purchaseQtyNum = parseDecimalString(purchaseQtyValue);
   const baseQtyNum =
-    purchaseQtyNum ?? parseDecimalString(need.calculatedQty);
+    purchaseQtyNum ?? parseDecimalString(calcQtyDisplay);
   const priceNum = parseDecimalString(quotedPriceValue);
   const lineTotal =
     priceNum !== null && baseQtyNum !== null
-      ? priceNum * baseQtyNum
+      ? isThread
+        ? (baseQtyNum / YARDS_PER_BOBBIN) * priceNum
+        : priceNum * baseQtyNum
       : null;
   const symbol = currencySymbol(currency);
+
+  // Значения, которые реально уйдут на backend (всегда в метрах /
+  // цене за метр). Если поле не редактировали — отправляем исходное
+  // значение из БД, чтобы конверсия туда-обратно не округляла.
+  const submitPurchaseQty = !isThread
+    ? null
+    : purchaseQtyValue === initialPurchaseDisplay
+      ? (need.purchaseQty ?? '')
+      : yardsToMeters(purchaseQtyValue);
+  const submitQuotedPrice = !isThread
+    ? null
+    : quotedPriceValue === initialPriceDisplay
+      ? (need.quotedPrice ?? '')
+      : pricePerBobbinToMeter(quotedPriceValue);
 
   // Базовый класс формы: в lines-mode — старый grid с превью/клиентом,
   // в orders-mode — компактный 10-колоночный SaaS-grid.
@@ -313,6 +375,7 @@ export function InlineEditWorkshopNeedRow({
 
   return (
     <form
+      ref={formRef}
       action={action}
       className={rootClassName}
       data-need-id={need.id}
@@ -445,8 +508,8 @@ export function InlineEditWorkshopNeedRow({
       >
         <span className="workshop-need-line__hint">Нужно</span>
         <strong className="workshop-need-line__qty-value">
-          {trimDecimal(need.calculatedQty)}
-          {need.unit ? ` ${need.unit}` : ''}
+          {calcQtyDisplay}
+          {unitLabel ? ` ${unitLabel}` : ''}
         </strong>
       </div>
 
@@ -463,18 +526,23 @@ export function InlineEditWorkshopNeedRow({
           htmlFor={`wnq-${need.id}`}
           className="workshop-need-line__hint"
         >
-          К закупке
+          К закупке{isThread ? ', ярд' : ''}
         </label>
         <input
           id={`wnq-${need.id}`}
-          name="purchaseQty"
+          /* Для ниток видимый input в ярдах НЕ сабмитим — backend
+             получает метры из скрытого поля ниже. */
+          name={isThread ? undefined : 'purchaseQty'}
           type="text"
           inputMode="decimal"
           value={purchaseQtyValue}
           onChange={(e) => setPurchaseQtyValue(e.target.value)}
-          placeholder={trimDecimal(need.calculatedQty)}
+          placeholder={calcQtyDisplay}
           disabled={isCancelled || isLockedByPo}
         />
+        {isThread && !(isCancelled || isLockedByPo) && (
+          <input type="hidden" name="purchaseQty" value={submitPurchaseQty ?? ''} />
+        )}
       </div>
 
       {/* === quotedPrice input (label = «Цена за 1 <unit>») === */}
@@ -494,7 +562,9 @@ export function InlineEditWorkshopNeedRow({
         </label>
         <input
           id={`wnp-${need.id}`}
-          name="quotedPrice"
+          /* Для ниток видимый input — цена за бобину; backend получает
+             цену за метр из скрытого поля ниже. */
+          name={isThread ? undefined : 'quotedPrice'}
           type="text"
           inputMode="decimal"
           value={quotedPriceValue}
@@ -503,6 +573,9 @@ export function InlineEditWorkshopNeedRow({
           disabled={isCancelled}
           aria-describedby={`wnp-hint-${need.id}`}
         />
+        {isThread && !isCancelled && (
+          <input type="hidden" name="quotedPrice" value={submitQuotedPrice ?? ''} />
+        )}
       </div>
 
       {/* === currency select === */}
@@ -711,10 +784,17 @@ export function InlineEditWorkshopNeedRow({
           }`}
           aria-expanded={commentOpen}
           aria-controls={`wnm-${need.id}`}
-          onClick={() => setCommentOpen((v) => !v)}
+          onClick={() => {
+            // При сворачивании (открыт → закрыт) авто-сохраняем строку
+            // на backend, чтобы введённый коммент персистился сразу.
+            if (commentOpen && !isCancelled) {
+              formRef.current?.requestSubmit();
+            }
+            setCommentOpen((v) => !v);
+          }}
           title={
             hasComment
-              ? `Комментарий: ${need.comment}`
+              ? `Комментарий: ${commentValue}`
               : 'Добавить комментарий'
           }
         >
@@ -761,7 +841,8 @@ export function InlineEditWorkshopNeedRow({
             id={`wnm-${need.id}`}
             name="comment"
             maxLength={1000}
-            defaultValue={need.comment ?? ''}
+            value={commentValue}
+            onChange={(e) => setCommentValue(e.target.value)}
             placeholder="—"
             disabled={isCancelled}
             rows={2}
@@ -771,7 +852,7 @@ export function InlineEditWorkshopNeedRow({
         <input
           type="hidden"
           name="comment"
-          value={need.comment ?? ''}
+          value={commentValue}
         />
       )}
 
