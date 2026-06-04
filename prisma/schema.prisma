@@ -709,6 +709,14 @@ model OperationSubstitution {
   id              String   @id @default(cuid())
   satisfiesOpId   String
   substituteOpId  String
+  /// Сворачивание сплит-маршрута распошива (см. `PassportsService`
+  /// `shouldCollapseSplitRoute`/`collapseSplitRoute`). Помечает, что
+  /// `satisfiesOpId` — «принимающая» операция параллельной группы (рукав),
+  /// т.е. её станок продолжает работать, когда сломался выделенный станок
+  /// другой операции группы (низ). Когда весь низ заказа закрывается на
+  /// рукавном станке, пара {рукав, низ} сворачивается в `substituteOpId`
+  /// (полный распошив). Для пары (16←04, 0001←04) флаг стоит у 16.
+  isReceivingStation Boolean @default(false)
   createdAt       DateTime @default(now())
 
   satisfiesOp  Operation @relation("SubstSatisfies", fields: [satisfiesOpId], references: [id], onDelete: Cascade)
@@ -1022,6 +1030,7 @@ model Equipment {
 
   shiftSessions     ShiftSession[]
   allowedOperations EquipmentOperation[]
+  passportEvents    PassportEvent[]
   printers          Printer[]
   /// Вызовы мастера, привязанные к этому оборудованию (когда вызов
   /// создан в рамках активной смены — backend копирует `equipmentId`
@@ -1763,6 +1772,13 @@ model PassportEvent {
   operationId     String?
   fromOperationId String?
   employeeId      String?
+  /// Станок, на котором фактически закрывалась/бралась операция (берётся
+  /// из активной `ShiftSession.equipmentId` в момент события). Нужен,
+  /// чтобы ретроспективно понимать, на каком оборудовании шла операция —
+  /// в частности для сворачивания сплит-маршрута распошива (закрыт ли низ
+  /// на рукавном станке). Nullable: старые события и события без смены
+  /// (системные) остаются без станка.
+  equipmentId     String?
   qty             Int?
   defectQty       Int?
   cellId          String?
@@ -1774,12 +1790,14 @@ model PassportEvent {
   operation     Operation? @relation("EventOperation", fields: [operationId], references: [id])
   fromOperation Operation? @relation("EventFromOperation", fields: [fromOperationId], references: [id])
   employee      Employee?  @relation("EventEmployee", fields: [employeeId], references: [id])
+  equipment     Equipment? @relation(fields: [equipmentId], references: [id])
   cell          Cell?      @relation(fields: [cellId], references: [id])
   box           Box?       @relation(fields: [boxId], references: [id])
 
   @@index([passportId, createdAt])
   @@index([type, createdAt])
   @@index([operationId, createdAt])
+  @@index([operationId, equipmentId])
 }
 
 // =========================
