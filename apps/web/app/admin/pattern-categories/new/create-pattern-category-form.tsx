@@ -51,6 +51,7 @@ import {
   AlertTriangle,
   ChevronUp,
   ChevronDown,
+  GripVertical,
 } from 'lucide-react';
 import {
   PATTERN_CATEGORY_PARAMETER_GROUPS,
@@ -391,6 +392,16 @@ export function CreatePatternCategoryForm() {
     }),
   ]);
 
+  // ---- Drag&drop строк параметров ---------------------------------------
+  // `armedUid` — строка «взведена» нажатием на ручку-грип (даёт `draggable`
+  // только этой строке, чтобы выделение текста в инпутах не начинало drag).
+  // `dragUid` — строка, которую сейчас тащим. `overUid` — строка-цель, над
+  // которой держим курсор (подсветка места вставки). Кроме drag&drop стрелки
+  // ↑/↓ остаются как доступный (клавиатурный) способ перестановки.
+  const [armedUid, setArmedUid] = useState<string | null>(null);
+  const [dragUid, setDragUid] = useState<string | null>(null);
+  const [overUid, setOverUid] = useState<string | null>(null);
+
   // ---- Иконка ------------------------------------------------------------
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [iconPreview, setIconPreview] = useState<string | null>(null);
@@ -456,6 +467,27 @@ export function CreatePatternCategoryForm() {
       [next[idx], next[target]] = [next[target], next[idx]];
       return next;
     });
+  }, []);
+
+  // Перенос строки `fromUid` на место строки `toUid` (drag&drop). В отличие
+  // от `moveParameter` (обмен соседей) — вырезает и вставляет, что позволяет
+  // перетаскивать сразу через несколько позиций.
+  const reorderParameter = useCallback((fromUid: string, toUid: string) => {
+    setParameters((rows) => {
+      const from = rows.findIndex((r) => r.uid === fromUid);
+      const to = rows.findIndex((r) => r.uid === toUid);
+      if (from === -1 || to === -1 || from === to) return rows;
+      const next = [...rows];
+      const [moved] = next.splice(from, 1);
+      next.splice(to, 0, moved!);
+      return next;
+    });
+  }, []);
+
+  const endDrag = useCallback(() => {
+    setArmedUid(null);
+    setDragUid(null);
+    setOverUid(null);
   }, []);
 
   const addParameter = useCallback(() => {
@@ -718,7 +750,42 @@ export function CreatePatternCategoryForm() {
                   p.inputType,
                 );
                 return (
-                  <tr key={p.uid}>
+                  <tr
+                    key={p.uid}
+                    draggable={armedUid === p.uid}
+                    onDragStart={(e) => {
+                      if (armedUid !== p.uid) {
+                        // Drag начался не с ручки (например, выделение текста
+                        // в инпуте) — не даём тащить строку.
+                        e.preventDefault();
+                        return;
+                      }
+                      setDragUid(p.uid);
+                      e.dataTransfer.effectAllowed = 'move';
+                      e.dataTransfer.setData('text/plain', p.uid);
+                    }}
+                    onDragOver={(e) => {
+                      if (!dragUid || dragUid === p.uid) return;
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = 'move';
+                      if (overUid !== p.uid) setOverUid(p.uid);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (dragUid && dragUid !== p.uid) {
+                        reorderParameter(dragUid, p.uid);
+                      }
+                      endDrag();
+                    }}
+                    onDragEnd={endDrag}
+                    style={{
+                      opacity: dragUid === p.uid ? 0.4 : 1,
+                      boxShadow:
+                        overUid === p.uid && dragUid !== p.uid
+                          ? 'inset 0 2px 0 0 var(--admin-accent, #2563eb)'
+                          : undefined,
+                    }}
+                  >
                     <td>
                       <input
                         name={`param_${i}_label`}
@@ -836,7 +903,33 @@ export function CreatePatternCategoryForm() {
                       />
                     </td>
                     <td>
-                      <div style={{ display: 'flex', gap: 4 }}>
+                      <div
+                        style={{
+                          display: 'flex',
+                          gap: 4,
+                          alignItems: 'center',
+                        }}
+                      >
+                        <span
+                          role="button"
+                          tabIndex={-1}
+                          className="admin-btn admin-btn--ghost"
+                          onMouseDown={() => setArmedUid(p.uid)}
+                          onMouseUp={() => setArmedUid(null)}
+                          aria-hidden="true"
+                          title="Перетащить (зажмите и тяните)"
+                          style={{
+                            cursor: dragUid === p.uid ? 'grabbing' : 'grab',
+                            display: 'inline-flex',
+                            touchAction: 'none',
+                          }}
+                        >
+                          <GripVertical
+                            size={14}
+                            strokeWidth={1.6}
+                            aria-hidden
+                          />
+                        </span>
                         <button
                           type="button"
                           className="admin-btn admin-btn--ghost"
