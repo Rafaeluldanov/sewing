@@ -26,6 +26,8 @@ import { AlertTriangle } from 'lucide-react';
 import type { OperationDetailDto } from '@sewing/shared/operations';
 import type {
   OrderDetailDto,
+  OrderLogisticsLineDto,
+  OrderLogisticsStatus,
   OrderRouteStepDto,
 } from '@sewing/shared/orders';
 import type { OrderProductionBalanceDto } from '@sewing/shared/order-production-balance';
@@ -47,10 +49,59 @@ import {
   type OrderOperationStatusTone,
   type OrderOperationTableRow,
 } from './build-order-operation-rows';
+import {
+  OrderLogisticsAddButton,
+  OrderLogisticsRowActions,
+} from './order-logistics-controls';
 
 interface Props {
   order: OrderDetailDto;
   passports: PassportListItemDto[];
+}
+
+/**
+ * Строки таблицы операций — объединение вычисляемых операций
+ * (`kind: 'operation'`) и ручных строк логистики (`kind: 'logistics'`),
+ * которые менеджер добавляет в конце таблицы. Логистика рендерится
+ * последними строками той же таблицы.
+ */
+type OperationRow = OrderOperationTableRow & { kind: 'operation' };
+interface LogisticsRow {
+  kind: 'logistics';
+  id: string;
+  rowNumber: string;
+  line: OrderLogisticsLineDto;
+}
+type UnifiedRow = OperationRow | LogisticsRow;
+
+const LOGISTICS_DATE_FORMATTER = new Intl.DateTimeFormat('ru-RU', {
+  // timeZone обязателен — иначе RSC считает по UTC, hydration «съезжает»
+  // и тихо ломает onClick в той же секции (см. feedback_hydration_timezone).
+  timeZone: 'Europe/Moscow',
+  day: '2-digit',
+  month: '2-digit',
+  year: 'numeric',
+});
+
+function formatLogisticsDeadline(iso: string | null): string | null {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return LOGISTICS_DATE_FORMATTER.format(d);
+}
+
+function logisticsStatusTone(status: OrderLogisticsStatus): AdminStatusTone {
+  switch (status) {
+    case 'DELIVERED':
+      return 'success';
+    case 'IN_TRANSIT':
+      return 'info';
+    case 'ORDERED':
+      return 'warning';
+    case 'CANCELLED':
+    default:
+      return 'muted';
+  }
 }
 
 const RUB_FORMATTER = new Intl.NumberFormat('ru-RU', {
@@ -301,10 +352,13 @@ function SummaryBlock({
   order,
   rows,
   productionBalance,
+  logisticsTotalRub,
 }: {
   order: OrderDetailDto;
   rows: OrderOperationTableRow[];
   productionBalance: OrderProductionBalanceDto | null;
+  /** Σ стоимости ручных строк логистики — плюсуется в итог (см. ТЗ). */
+  logisticsTotalRub: number;
 }) {
   const summary = summariseOrderOperationRows(rows);
   const qty = order.qtyPlanTotal;
@@ -320,10 +374,19 @@ function SummaryBlock({
     order.operationTimePlanSec != null
       ? Number(order.operationTimePlanSec)
       : null;
-  const totalCost =
+  // Базовая стоимость операций: snapshot backend-а либо web-side сумма.
+  const operationsCost =
     snapshotCost != null && Number.isFinite(snapshotCost)
       ? snapshotCost
       : summary.totalCostRub;
+  // Логистика плюсуется к итогу. Если по операциям стоимости нет
+  // (operationsCost === null), а логистика есть — итог = только логистика.
+  const totalCost =
+    operationsCost != null
+      ? operationsCost + logisticsTotalRub
+      : logisticsTotalRub > 0
+        ? logisticsTotalRub
+        : null;
   const totalTime =
     snapshotTime != null && Number.isFinite(snapshotTime)
       ? snapshotTime
@@ -503,78 +566,186 @@ export async function OrderOperationsUnifiedTable({ order, passports }: Props) {
     balanceByOperationId,
   });
 
+  // Ручные строки логистики идут последними строками той же таблицы
+  // (см. ТЗ «строка в конце таблицы»). Стоимость плюсуется в итог.
+  const logisticsLines = order.logisticsLines ?? [];
+  const logisticsRows: LogisticsRow[] = logisticsLines.map((line, i) => ({
+    kind: 'logistics',
+    id: line.id,
+    rowNumber: `Л${i + 1}`,
+    line,
+  }));
+  const operationRows: OperationRow[] = rows.map((r) => ({
+    ...r,
+    kind: 'operation',
+  }));
+  const unifiedRows: UnifiedRow[] = [...operationRows, ...logisticsRows];
+
+  const logisticsTotalRub = logisticsLines.reduce((acc, l) => {
+    const n = Number(l.costRub);
+    return Number.isFinite(n) ? acc + n : acc;
+  }, 0);
+
+  const emptyMoney = (
+    <span className="order-operations-table__money order-operations-table__money--empty">
+      —
+    </span>
+  );
+  const emptyDuration = (
+    <span className="order-operations-table__duration order-operations-table__duration--empty">
+      —
+    </span>
+  );
+  const emptyQty = <span className="order-operations-table__qty">—</span>;
+
   // Колонки таблицы: №, Операция, Статус, План, Ожидает, В работе,
-  // Выполнено, Норма, Цена, Время, Стоимость, Комментарий (12 колонок,
-  // см. ТЗ §2). Категории среди колонок нет (см. ТЗ §1).
-  const columns: AdminTableColumn<OrderOperationTableRow>[] = [
+  // Выполнено, Норма, Цена, Время, Стоимость, Комментарий + Действия
+  // (логистика). Категории среди колонок нет (см. ТЗ §1). Каждая ячейка
+  // ветвится по `kind`: операция — прежний рендер, логистика —
+  // name/status/срок/стоимость, остальное «—».
+  const columns: AdminTableColumn<UnifiedRow>[] = [
     {
       key: 'num',
       header: '№',
       align: 'right',
-      render: (row) => <NumberCell row={row} />,
+      render: (row) =>
+        row.kind === 'logistics' ? (
+          <span className="order-operations-table__qty">
+            <strong>{row.rowNumber}</strong>
+          </span>
+        ) : (
+          <NumberCell row={row} />
+        ),
     },
     {
       key: 'operation',
       header: 'Операция',
-      render: (row) => <OperationCell row={row} />,
+      render: (row) =>
+        row.kind === 'logistics' ? (
+          <span className="order-operations-table__op-name">
+            {row.line.name}{' '}
+            <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
+              · логистика
+            </span>
+          </span>
+        ) : (
+          <OperationCell row={row} />
+        ),
     },
     {
       key: 'status',
       header: 'Статус',
-      render: (row) => <StatusCell row={row} />,
+      render: (row) => {
+        if (row.kind === 'operation') return <StatusCell row={row} />;
+        if (!row.line.status) return <span className="admin-muted">—</span>;
+        return (
+          <div className="order-operations-table__status">
+            <AdminStatusBadge tone={logisticsStatusTone(row.line.status)}>
+              {row.line.statusLabel}
+            </AdminStatusBadge>
+          </div>
+        );
+      },
     },
     {
       key: 'plan',
       header: 'План',
       align: 'right',
-      render: (row) => <QtyCell value={row.plannedQty} />,
+      render: (row) =>
+        row.kind === 'logistics' ? emptyQty : <QtyCell value={row.plannedQty} />,
     },
     {
       key: 'waiting',
       header: 'Ожидает',
       align: 'right',
-      render: (row) => <QtyCell value={row.waitingQty} />,
+      render: (row) =>
+        row.kind === 'logistics' ? emptyQty : <QtyCell value={row.waitingQty} />,
     },
     {
       key: 'inProgress',
       header: 'В работе',
       align: 'right',
-      render: (row) => <QtyCell value={row.inProgressQty} />,
+      render: (row) =>
+        row.kind === 'logistics' ? (
+          emptyQty
+        ) : (
+          <QtyCell value={row.inProgressQty} />
+        ),
     },
     {
       key: 'completed',
       header: 'Выполнено',
       align: 'right',
-      render: (row) => <QtyCell value={row.completedQty} />,
+      render: (row) =>
+        row.kind === 'logistics' ? (
+          emptyQty
+        ) : (
+          <QtyCell value={row.completedQty} />
+        ),
     },
     {
       key: 'norm',
       header: 'Норма',
       align: 'right',
-      render: (row) => <NormCell row={row} />,
+      render: (row) =>
+        row.kind === 'logistics' ? emptyDuration : <NormCell row={row} />,
     },
     {
       key: 'price',
       header: 'Цена',
       align: 'right',
-      render: (row) => <PriceCell row={row} />,
+      render: (row) =>
+        row.kind === 'logistics' ? emptyMoney : <PriceCell row={row} />,
     },
     {
       key: 'time',
       header: 'Время',
       align: 'right',
-      render: (row) => <TimeCell row={row} />,
+      render: (row) =>
+        row.kind === 'logistics' ? emptyDuration : <TimeCell row={row} />,
     },
     {
       key: 'cost',
       header: 'Стоимость',
       align: 'right',
-      render: (row) => <CostCell row={row} />,
+      render: (row) =>
+        row.kind === 'logistics' ? (
+          <span className="order-operations-table__money">
+            {formatRub(Number(row.line.costRub))}
+          </span>
+        ) : (
+          <CostCell row={row} />
+        ),
     },
     {
       key: 'comment',
       header: 'Комментарий',
-      render: (row) => <CommentCell row={row} />,
+      render: (row) => {
+        if (row.kind === 'operation') return <CommentCell row={row} />;
+        const deadline = formatLogisticsDeadline(row.line.deliveryDeadline);
+        if (!deadline) {
+          return (
+            <span className="order-operations-table__comment order-operations-table__comment--empty">
+              —
+            </span>
+          );
+        }
+        return (
+          <div className="order-operations-table__comment">
+            Доставка: {deadline}
+          </div>
+        );
+      },
+    },
+    {
+      key: 'actions',
+      header: '',
+      align: 'right',
+      isAction: true,
+      render: (row) =>
+        row.kind === 'logistics' ? (
+          <OrderLogisticsRowActions orderId={order.id} line={row.line} />
+        ) : null,
     },
   ];
 
@@ -627,29 +798,43 @@ export async function OrderOperationsUnifiedTable({ order, passports }: Props) {
         </ul>
       )}
 
-      {rows.length === 0 ? (
-        <AdminEmptyState
-          title="Операций пока нет"
-          hint={
-            order.routeTemplateId
-              ? 'У выбранного шаблона маршрута нет шагов. Откройте /admin/routes и добавьте операции.'
-              : 'Выберите маршрут в редактировании заказа — план операций и их стоимость подтянутся сразу, до запуска производства.'
-          }
-        />
+      {unifiedRows.length === 0 ? (
+        <>
+          <AdminEmptyState
+            title="Операций пока нет"
+            hint={
+              order.routeTemplateId
+                ? 'У выбранного шаблона маршрута нет шагов. Откройте /admin/routes и добавьте операции.'
+                : 'Выберите маршрут в редактировании заказа — план операций и их стоимость подтянутся сразу, до запуска производства.'
+            }
+          />
+          {/* Логистику можно добавить даже без операций маршрута. */}
+          <div className="order-operations-table-card__logistics-add">
+            <OrderLogisticsAddButton orderId={order.id} />
+          </div>
+        </>
       ) : (
         <>
           <div className="order-operations-table-wrap">
             <AdminTable
               className="order-operations-table"
-              rows={rows}
+              rows={unifiedRows}
               columns={columns}
               rowKey={(r) => r.id}
             />
+          </div>
+          {/* Кнопка добавления ручной строки логистики — в конце таблицы. */}
+          <div
+            className="order-operations-table-card__logistics-add"
+            style={{ marginTop: 8 }}
+          >
+            <OrderLogisticsAddButton orderId={order.id} />
           </div>
           <SummaryBlock
             order={order}
             rows={rows}
             productionBalance={data.productionBalance}
+            logisticsTotalRub={logisticsTotalRub}
           />
         </>
       )}

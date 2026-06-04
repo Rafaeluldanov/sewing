@@ -151,6 +151,144 @@ export type UpdateOrderOutsourceRequirementStatusDto = z.infer<
 >;
 
 // ---------------------------------------------------------------------------
+// Order logistics lines (ручные строки логистики в таблице «Операции»
+// карточки заказа). Источник истины — Prisma-модель `OrderLogisticsLine`
+// + enum `OrderLogisticsStatus`. См.
+// `apps/api/src/modules/orders/orders.service.ts`,
+// `apps/web/components/orders/operations/*`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Статус ручной строки логистики заказа. Совпадает с Prisma enum
+ * `OrderLogisticsStatus`. Поле «Статус» в окне «Добавить поле»
+ * необязательно — его можно убрать перед сохранением, тогда на строке
+ * `status = null` (DTO отдаёт `null`, а не значение из этого списка).
+ */
+export const ORDER_LOGISTICS_STATUSES = [
+  'ORDERED',
+  'IN_TRANSIT',
+  'DELIVERED',
+  'CANCELLED',
+] as const;
+export const OrderLogisticsStatusSchema = z.enum(ORDER_LOGISTICS_STATUSES);
+export type OrderLogisticsStatus = z.infer<typeof OrderLogisticsStatusSchema>;
+
+/**
+ * Человекочитаемые подписи статусов логистики для UI (выпадающий
+ * список в окне + бейдж в таблице). Единая точка правды — UI словари
+ * не дублирует.
+ */
+export const ORDER_LOGISTICS_STATUS_LABELS: Record<
+  OrderLogisticsStatus,
+  string
+> = {
+  ORDERED: 'Заказано',
+  IN_TRANSIT: 'В пути',
+  DELIVERED: 'Доставлено',
+  CANCELLED: 'Отменено',
+};
+
+/**
+ * DTO ручной строки логистики заказа (отдаётся в
+ * `OrderDetailDto.logisticsLines`).
+ *
+ *   - `name`             — «Операция» (название строки), всегда есть;
+ *   - `status`           — выбранный статус или `null` (поле убрано);
+ *   - `statusLabel`      — derived-подпись статуса (или `null`);
+ *   - `deliveryDeadline` — «Сроки доставки», ISO-string или `null`;
+ *   - `costRub`          — «Стоимость» в рублях, Decimal сериализуется
+ *     строкой (как у `OrderMaterialRequirementDto.totalQty`).
+ */
+export interface OrderLogisticsLineDto {
+  id: string;
+  sortOrder: number;
+  name: string;
+  status: OrderLogisticsStatus | null;
+  statusLabel: string | null;
+  deliveryDeadline: string | null;
+  costRub: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * `costRub` приходит из формы строкой (`"1 200,50"`) или числом —
+ * нормализуем запятую и пробелы, валидируем как неотрицательное число.
+ * Источник истины формата — это место, чтобы api и web считали одинаково.
+ */
+const OrderLogisticsCostSchema = z.preprocess(
+  (v) => {
+    if (typeof v === 'number') return v;
+    if (typeof v === 'string') {
+      const cleaned = v.replace(/\s/g, '').replace(',', '.');
+      if (cleaned === '') return undefined;
+      const n = Number(cleaned);
+      return Number.isFinite(n) ? n : v;
+    }
+    return v;
+  },
+  z
+    .number({ invalid_type_error: 'Стоимость: укажите число' })
+    .min(0, 'Стоимость не может быть отрицательной')
+    .max(1_000_000_000, 'Стоимость слишком большая'),
+);
+
+/**
+ * `deliveryDeadline` — необязательная дата доставки. Принимаем ISO-
+ * строку (`YYYY-MM-DD` из `<input type="date">` или полный ISO) либо
+ * `null`/пустую строку → `null` (поле «Сроки доставки» убрано). На
+ * выходе — нормализованная ISO-строка либо `null`.
+ */
+const OrderLogisticsDeadlineSchema = z.preprocess(
+  (v) => {
+    if (v === null || v === undefined) return null;
+    if (typeof v === 'string') {
+      const trimmed = v.trim();
+      return trimmed === '' ? null : trimmed;
+    }
+    return v;
+  },
+  z
+    .string()
+    .refine((s) => !Number.isNaN(Date.parse(s)), {
+      message: 'Сроки доставки: некорректная дата',
+    })
+    .nullable(),
+);
+
+const OrderLogisticsNameSchema = z
+  .string({ required_error: 'Укажите операцию' })
+  .trim()
+  .min(1, 'Укажите операцию')
+  .max(200, 'Операция: не длиннее 200 символов');
+
+/**
+ * Тело `POST /api/orders/:id/logistics-lines` — создание ручной строки
+ * логистики. `name` и `costRub` обязательны (поля нельзя удалить в
+ * окне); `status` и `deliveryDeadline` опциональны — их поля можно
+ * убрать перед сохранением, тогда они `null`/отсутствуют.
+ */
+export const CreateOrderLogisticsLineSchema = z.object({
+  name: OrderLogisticsNameSchema,
+  costRub: OrderLogisticsCostSchema,
+  status: OrderLogisticsStatusSchema.nullish(),
+  deliveryDeadline: OrderLogisticsDeadlineSchema.optional(),
+});
+export type CreateOrderLogisticsLineDto = z.infer<
+  typeof CreateOrderLogisticsLineSchema
+>;
+
+/**
+ * Тело `PATCH /api/orders/:id/logistics-lines/:lineId` — правка строки.
+ * Контракт совпадает с create: UI отправляет полный набор полей (форма
+ * пере-собирается целиком), поэтому отдельной partial-схемы не вводим.
+ */
+export const UpdateOrderLogisticsLineSchema = CreateOrderLogisticsLineSchema;
+export type UpdateOrderLogisticsLineDto = z.infer<
+  typeof UpdateOrderLogisticsLineSchema
+>;
+
+// ---------------------------------------------------------------------------
 // Tech card snapshot DTO (см. `docs/domain.md §«Техкарты»`, ADR-0022)
 // ---------------------------------------------------------------------------
 
@@ -1491,6 +1629,15 @@ export interface OrderDetailDto
    * аналогична `materialRequirements`.
    */
   outsourceRequirements: OrderOutsourceRequirementDto[];
+  /**
+   * Ручные строки логистики/доставки заказа (см. `model
+   * OrderLogisticsLine`, `OrderLogisticsLineDto`). Менеджер добавляет
+   * их вручную в конце таблицы «Операции» карточки заказа. Опционально
+   * (`?`) для backward-compat: старые потребители без пересборки
+   * shared-пакета продолжают компилироваться. Backend всегда отдаёт
+   * массив (может быть пустым).
+   */
+  logisticsLines?: OrderLogisticsLineDto[];
   /**
    * Этап «Нанесение на заказе покупателя» (см. `model OrderApplication`,
    * `apps/api/src/modules/order-applications/*`,

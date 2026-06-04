@@ -5,22 +5,29 @@ import {
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
+  OrderLogisticsStatus,
   OrderOutsourceExecutionStatus,
   OrderStatus,
   PassportStatus,
 } from '@prisma/client';
 import type {
   CreateOrderDto,
+  CreateOrderLogisticsLineDto,
   ListOrdersQuery,
   OrderDeadlineDto,
   OrderDetailDto,
   OrderListItemDto,
+  OrderLogisticsLineDto,
   OrderMaterialsAndHardwareCostPolicy,
   OrderOutsourceDisplayStatus,
   Paginated,
   UpdateOrderDto,
+  UpdateOrderLogisticsLineDto,
 } from '@sewing/shared/orders';
-import { ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES } from '@sewing/shared/orders';
+import {
+  ORDER_LOGISTICS_STATUS_LABELS,
+  ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
+} from '@sewing/shared/orders';
 import { normalizeColorOrNull } from '@sewing/shared/colors';
 import {
   evaluateOrderDeadline,
@@ -47,6 +54,7 @@ import {
   OrderInvalidTransitionException,
   OrderItemsRequiredException,
   OrderLockedException,
+  OrderLogisticsLineNotFoundException,
   OrderMaterialRequirementColorNotRequiredException,
   OrderOperationPlanRecalculateNotAllowedException,
   OrderOutsourceRequirementInvalidTransitionException,
@@ -82,6 +90,7 @@ type OrderWithItems = Prisma.OrderGetPayload<{
     techCard: true;
     materialRequirements: true;
     outsourceRequirements: true;
+    logisticsLines: true;
     client: true;
     patternItem: {
       include: {
@@ -1184,6 +1193,9 @@ export class OrdersService {
         techCard: true,
         materialRequirements: { orderBy: { sortOrder: 'asc' } },
         outsourceRequirements: { orderBy: { sortOrder: 'asc' } },
+        // Ручные строки логистики заказа — рендерятся в конце таблицы
+        // «Операции» карточки заказа. Сортируем по `sortOrder`.
+        logisticsLines: { orderBy: { sortOrder: 'asc' } },
         client: true,
         // Soft-pattern MVP (этап 2 «Лекала»): полная карточка лекала
         // нужна детали для виджета `PatternPreviewCard` в UI карточки
@@ -2969,6 +2981,14 @@ export class OrdersService {
             displayStatusLabel,
           };
         }),
+      // Ручные строки логистики заказа (см. `model OrderLogisticsLine`).
+      // Decimal сериализуется строкой (как у material-requirements),
+      // даты — ISO-string; `statusLabel` derive из общего словаря, UI
+      // его не дублирует.
+      logisticsLines: (order.logisticsLines ?? [])
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((l) => mapLogisticsLineToDto(l)),
     };
   }
 
@@ -3123,6 +3143,95 @@ export class OrdersService {
         resolvedColorText: value,
       },
     });
+    return this.getOne(orderId);
+  }
+
+  // -------------------------------------------------------------------------
+  // ORDER LOGISTICS LINES (ручные строки логистики в таблице «Операции»)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Создать ручную строку логистики заказа (кнопка «Добавить поле» в
+   * конце таблицы «Операции» карточки заказа).
+   *
+   * `name` и `costRub` обязательны (поля нельзя удалить в окне);
+   * `status` и `deliveryDeadline` — опциональны (их поля можно убрать).
+   * Новая строка добавляется в конец: `sortOrder = max + 1`.
+   *
+   * Доступно в любом статусе заказа — это не snapshot маршрута/техкарты,
+   * а собственные редактируемые данные заказа, поэтому ORDER_LOCKED
+   * guard здесь не применяется (см. JSDoc `model OrderLogisticsLine`).
+   */
+  async addLogisticsLine(
+    orderId: string,
+    dto: CreateOrderLogisticsLineDto,
+  ): Promise<OrderDetailDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+
+    const last = await this.prisma.orderLogisticsLine.findFirst({
+      where: { orderId },
+      orderBy: { sortOrder: 'desc' },
+      select: { sortOrder: true },
+    });
+    const nextSortOrder = (last?.sortOrder ?? -1) + 1;
+
+    await this.prisma.orderLogisticsLine.create({
+      data: {
+        orderId,
+        sortOrder: nextSortOrder,
+        ...buildLogisticsLineData(dto),
+      },
+    });
+    return this.getOne(orderId);
+  }
+
+  /**
+   * Изменить существующую строку логистики. UI пере-собирает форму
+   * целиком, поэтому принимаем тот же контракт, что и create.
+   */
+  async updateLogisticsLine(
+    orderId: string,
+    lineId: string,
+    dto: UpdateOrderLogisticsLineDto,
+  ): Promise<OrderDetailDto> {
+    const line = await this.prisma.orderLogisticsLine.findFirst({
+      where: { id: lineId, orderId },
+      select: { id: true },
+    });
+    if (!line) {
+      throw new OrderLogisticsLineNotFoundException();
+    }
+    await this.prisma.orderLogisticsLine.update({
+      where: { id: lineId },
+      data: buildLogisticsLineData(dto),
+    });
+    return this.getOne(orderId);
+  }
+
+  /**
+   * Удалить строку логистики заказа.
+   */
+  async deleteLogisticsLine(
+    orderId: string,
+    lineId: string,
+  ): Promise<OrderDetailDto> {
+    const line = await this.prisma.orderLogisticsLine.findFirst({
+      where: { id: lineId, orderId },
+      select: { id: true },
+    });
+    if (!line) {
+      throw new OrderLogisticsLineNotFoundException();
+    }
+    await this.prisma.orderLogisticsLine.delete({ where: { id: lineId } });
     return this.getOne(orderId);
   }
 
@@ -3774,4 +3883,60 @@ function composeDisplayStatus(
   }
   // MANUAL + PLANNED — нейтральное состояние, UI ничего не дорисовывает.
   return { displayStatus: 'PLANNED', displayStatusLabel: null };
+}
+
+/**
+ * Нормализует тело create/update строки логистики в Prisma-данные:
+ * `deliveryDeadline` (ISO-string) → `Date | null`, `status` → enum или
+ * `null` (поле убрано), `costRub` → число (Prisma сам приведёт к
+ * Decimal). Одна точка правды для add/update, чтобы оба пути писали
+ * одинаково.
+ */
+function buildLogisticsLineData(
+  dto: CreateOrderLogisticsLineDto | UpdateOrderLogisticsLineDto,
+): {
+  name: string;
+  costRub: number;
+  status: OrderLogisticsStatus | null;
+  deliveryDeadline: Date | null;
+} {
+  return {
+    name: dto.name,
+    costRub: dto.costRub,
+    status: (dto.status ?? null) as OrderLogisticsStatus | null,
+    deliveryDeadline:
+      dto.deliveryDeadline != null && dto.deliveryDeadline !== ''
+        ? new Date(dto.deliveryDeadline)
+        : null,
+  };
+}
+
+/**
+ * Мапит строку `OrderLogisticsLine` в `OrderLogisticsLineDto`.
+ * Decimal → строка, даты → ISO-string, `statusLabel` derive из общего
+ * словаря `ORDER_LOGISTICS_STATUS_LABELS`.
+ */
+function mapLogisticsLineToDto(l: {
+  id: string;
+  sortOrder: number;
+  name: string;
+  status: OrderLogisticsStatus | null;
+  deliveryDeadline: Date | null;
+  costRub: Prisma.Decimal;
+  createdAt: Date;
+  updatedAt: Date;
+}): OrderLogisticsLineDto {
+  return {
+    id: l.id,
+    sortOrder: l.sortOrder,
+    name: l.name,
+    status: l.status,
+    statusLabel: l.status ? ORDER_LOGISTICS_STATUS_LABELS[l.status] : null,
+    deliveryDeadline: l.deliveryDeadline
+      ? l.deliveryDeadline.toISOString()
+      : null,
+    costRub: l.costRub.toString(),
+    createdAt: l.createdAt.toISOString(),
+    updatedAt: l.updatedAt.toISOString(),
+  };
 }

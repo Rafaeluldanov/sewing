@@ -340,6 +340,19 @@ enum OrderOutsourceExecutionStatus {
   RECEIVED
 }
 
+/// Статус ручной строки логистики заказа (см. `model OrderLogisticsLine`
+/// ниже, `docs/api.md §«orders»`). Менеджер выбирает значение из списка
+/// в окне «Добавить поле» во вкладке «Операции» карточки заказа.
+/// Nullable на строке — статус необязателен (его поле можно убрать
+/// при сохранении), поэтому enum описывает только сами значения, а
+/// «нет статуса» выражается через `null` в колонке.
+enum OrderLogisticsStatus {
+  ORDERED
+  IN_TRANSIT
+  DELIVERED
+  CANCELLED
+}
+
 /// Тип источника печати — что именно агент должен забрать по
 /// `payloadUrl` (печатная HTML-форма паспорта, QR паспорта,
 /// этикетка коробки, QR ячейки). На MVP это просто метка для UI и
@@ -1195,6 +1208,12 @@ model Order {
   cuttingTask           CuttingTask?
   materialRequirements  OrderMaterialRequirement[]
   outsourceRequirements OrderOutsourceRequirement[]
+  /// Ручные строки логистики/доставки заказа (см. `model
+  /// OrderLogisticsLine` ниже, `apps/api/src/modules/orders/*`). Менеджер
+  /// добавляет их вручную в конце таблицы «Операции» карточки заказа
+  /// (кнопка «Добавить поле»). Cascade — без заказа строка смысла не
+  /// имеет; это не snapshot техкарты, а собственные данные заказа.
+  logisticsLines        OrderLogisticsLine[]
   /// Этап 4А «Потребность цеха» (см. `model WorkshopNeed` ниже,
   /// `apps/api/src/modules/workshop-needs/*`,
   /// `docs/recon-soft-integration.md §«Этап 4А»`). Чистая
@@ -2910,6 +2929,44 @@ model OrderOutsourceRequirement {
 
   @@index([orderId, sortOrder])
   @@index([sourceTechCardLineId])
+}
+
+/// Ручная строка логистики/доставки заказа.
+///
+/// Менеджер добавляет такие строки вручную в конце таблицы «Операции»
+/// карточки заказа (`/admin/orders/[id]?tab=operations`, кнопка
+/// «Добавить поле»). В отличие от `OrderRouteStep` (вычисляемый
+/// snapshot маршрута) и `OrderOutsourceRequirement` (snapshot техкарты),
+/// это собственные редактируемые данные заказа: их можно создавать,
+/// править и удалять в любом статусе заказа.
+///
+/// Поля окна «Добавить поле»:
+///   - `name`             — «Операция» (название строки логистики),
+///     обязательное, удалить нельзя;
+///   - `status`           — «Статус» из списка `OrderLogisticsStatus`,
+///     поле можно убрать при сохранении → `null`;
+///   - `deliveryDeadline` — «Сроки доставки», поле можно убрать → `null`;
+///   - `costRub`          — «Стоимость» (руб), обязательное, удалить
+///     нельзя. Плюсуется в итоговую «Стоимость» под таблицей операций.
+model OrderLogisticsLine {
+  id               String                @id @default(cuid())
+  orderId          String
+  /// Порядок строки среди логистических строк заказа. Новые строки
+  /// добавляются в конец (max(sortOrder) + 1).
+  sortOrder        Int
+  name             String
+  /// Nullable: поле «Статус» можно убрать в окне перед сохранением.
+  status           OrderLogisticsStatus?
+  /// Nullable: поле «Сроки доставки» можно убрать в окне перед
+  /// сохранением. Хранится как дата (время не значимо).
+  deliveryDeadline DateTime?
+  costRub          Decimal               @db.Decimal(12, 2)
+  createdAt        DateTime              @default(now())
+  updatedAt        DateTime              @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@index([orderId, sortOrder])
 }
 
 // ---------------------------------------------------------------------------

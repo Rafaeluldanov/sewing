@@ -7,6 +7,7 @@
 
 import type {
   CreateOrderDto,
+  CreateOrderLogisticsLineDto,
   ListOrdersQuery,
   OrderDetailDto,
   OrderListItemDto,
@@ -16,6 +17,7 @@ import type {
   ProductDto,
   SizeDto,
   UpdateOrderDto,
+  UpdateOrderLogisticsLineDto,
 } from '@sewing/shared/orders';
 import type {
   CompleteOrderCalculationDto,
@@ -207,6 +209,55 @@ export function updateOrderOutsourceRequirementStatus(
     {
       method: 'POST',
       body: { executionStatus },
+    },
+  );
+}
+
+/**
+ * Ручные строки логистики заказа (таблица «Операции» карточки заказа).
+ * CRUD-обёртки поверх `/api/orders/:id/logistics-lines`. Все три ручки
+ * возвращают свежий `OrderDetailDto` — server action делает
+ * `revalidatePath`, и RSC перечитывает таблицу.
+ */
+export function addOrderLogisticsLine(
+  orderId: string,
+  body: CreateOrderLogisticsLineDto,
+): Promise<OrderDetailDto> {
+  return apiFetch<OrderDetailDto>(
+    `/orders/${encodeURIComponent(orderId)}/logistics-lines`,
+    {
+      method: 'POST',
+      body,
+    },
+  );
+}
+
+export function updateOrderLogisticsLine(
+  orderId: string,
+  lineId: string,
+  body: UpdateOrderLogisticsLineDto,
+): Promise<OrderDetailDto> {
+  return apiFetch<OrderDetailDto>(
+    `/orders/${encodeURIComponent(orderId)}/logistics-lines/${encodeURIComponent(
+      lineId,
+    )}`,
+    {
+      method: 'PATCH',
+      body,
+    },
+  );
+}
+
+export function deleteOrderLogisticsLine(
+  orderId: string,
+  lineId: string,
+): Promise<OrderDetailDto> {
+  return apiFetch<OrderDetailDto>(
+    `/orders/${encodeURIComponent(orderId)}/logistics-lines/${encodeURIComponent(
+      lineId,
+    )}`,
+    {
+      method: 'DELETE',
     },
   );
 }

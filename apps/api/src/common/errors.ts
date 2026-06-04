@@ -1748,6 +1748,21 @@ export class OrderOutsourceRequirementNotReadyException extends BusinessExceptio
   }
 }
 
+/**
+ * Ручная строка логистики заказа (`OrderLogisticsLine`) не найдена ни
+ * для указанного `:id` (заказа), ни для `:lineId`. Бросается
+ * `OrdersService.updateLogisticsLine` / `deleteLogisticsLine`.
+ */
+export class OrderLogisticsLineNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'ORDER_LOGISTICS_LINE_NOT_FOUND',
+      'Строка логистики не найдена в этом заказе',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Master actions (Stage 2 «Мастер цеха», см.
 // `apps/api/src/modules/master-actions/*`).

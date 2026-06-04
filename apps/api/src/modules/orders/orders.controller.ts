@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -8,14 +9,18 @@ import {
   Query,
 } from '@nestjs/common';
 import {
+  CreateOrderLogisticsLineSchema,
   CreateOrderSchema,
   ListOrdersQuerySchema,
+  UpdateOrderLogisticsLineSchema,
   UpdateOrderMaterialRequirementColorSchema,
   UpdateOrderOutsourceRequirementStatusSchema,
   UpdateOrderSchema,
   type CreateOrderDto,
+  type CreateOrderLogisticsLineDto,
   type ListOrdersQuery,
   type UpdateOrderDto,
+  type UpdateOrderLogisticsLineDto,
   type UpdateOrderMaterialRequirementColorDto,
   type UpdateOrderOutsourceRequirementStatusDto,
 } from '@sewing/shared/orders';
@@ -278,6 +283,40 @@ export class OrdersController {
       requirementId,
       dto.selectedColorText,
     );
+  }
+
+  // -------------------------------------------------------------------------
+  // Ручные строки логистики заказа (таблица «Операции» карточки заказа).
+  // CRUD без переходов статусов: это собственные редактируемые данные
+  // заказа, не snapshot. RBAC — `ADMIN`/`SHOP_MANAGER` (наследуется от
+  // `@Roles` на классе).
+  // -------------------------------------------------------------------------
+
+  @Post(':id/logistics-lines')
+  addLogisticsLine(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(CreateOrderLogisticsLineSchema))
+    dto: CreateOrderLogisticsLineDto,
+  ) {
+    return this.orders.addLogisticsLine(id, dto);
+  }
+
+  @Patch(':id/logistics-lines/:lineId')
+  updateLogisticsLine(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body(new ZodValidationPipe(UpdateOrderLogisticsLineSchema))
+    dto: UpdateOrderLogisticsLineDto,
+  ) {
+    return this.orders.updateLogisticsLine(id, lineId, dto);
+  }
+
+  @Delete(':id/logistics-lines/:lineId')
+  deleteLogisticsLine(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+  ) {
+    return this.orders.deleteLogisticsLine(id, lineId);
   }
 }
 
