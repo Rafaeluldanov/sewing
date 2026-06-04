@@ -130,6 +130,51 @@ function formatLineTotalNumber(n: number): string {
   });
 }
 
+/**
+ * Рендерит текст комментария, превращая URL (http/https) в
+ * кликабельные ссылки. Закупщик часто оставляет ссылку на
+ * поставщика / карточку товара — чтобы по ней можно было перейти,
+ * а не копировать руками. Ссылки открываются в новой вкладке;
+ * `stopPropagation` нужен, чтобы клик по ссылке не сворачивал
+ * родительский comment-блок.
+ */
+function renderCommentWithLinks(text: string): React.ReactNode[] {
+  const urlRe = /(https?:\/\/[^\s<>]+)/gu;
+  const parts: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let key = 0;
+  for (const match of text.matchAll(urlRe)) {
+    const url = match[0];
+    const start = match.index ?? 0;
+    if (start > lastIndex) {
+      parts.push(text.slice(lastIndex, start));
+    }
+    // Завершающую пунктуацию (точка/запятая/скобка) не включаем в href.
+    const trailingMatch = url.match(/[.,;:!?)\]]+$/u);
+    const trailing = trailingMatch ? trailingMatch[0] : '';
+    const href = trailing ? url.slice(0, url.length - trailing.length) : url;
+    parts.push(
+      <a
+        key={`lnk-${key}`}
+        href={href}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="workshop-order-need-row__comment-link"
+        onClick={(e) => e.stopPropagation()}
+      >
+        {href}
+      </a>,
+    );
+    if (trailing) parts.push(trailing);
+    key += 1;
+    lastIndex = start + url.length;
+  }
+  if (lastIndex < text.length) {
+    parts.push(text.slice(lastIndex));
+  }
+  return parts;
+}
+
 function currencySymbol(c: string | null | undefined): string {
   switch ((c ?? '').toUpperCase()) {
     case 'RUB':
@@ -849,11 +894,19 @@ export function InlineEditWorkshopNeedRow({
           />
         </div>
       ) : (
-        <input
-          type="hidden"
-          name="comment"
-          value={commentValue}
-        />
+        <>
+          <input type="hidden" name="comment" value={commentValue} />
+          {hasComment && (
+            <div
+              className="workshop-need-line__cell workshop-order-need-row__comment workshop-order-need-row__comment--readonly"
+              data-cell="comment-view"
+            >
+              <p className="workshop-order-need-row__comment-text">
+                {renderCommentWithLinks(commentValue)}
+              </p>
+            </div>
+          )}
+        </>
       )}
 
       {/*

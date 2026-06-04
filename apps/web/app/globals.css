@@ -11943,6 +11943,27 @@ body:has(.admin-layout) .app-header { display: none !important; }
   border-color: var(--admin-accent, #2563eb);
 }
 
+/* Свёрнутый read-only комментарий: текст под строкой с
+   кликабельными ссылками (см. `renderCommentWithLinks`). */
+.workshop-order-need-row__comment-text {
+  margin: 0;
+  font-size: 0.85rem;
+  line-height: 1.4;
+  color: var(--admin-text-muted, #5b6472);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.workshop-order-need-row__comment-link {
+  color: var(--admin-accent, #2563eb);
+  text-decoration: underline;
+  word-break: break-all;
+}
+
+.workshop-order-need-row__comment-link:hover {
+  text-decoration: none;
+}
+
 /* Compact-вариант формы «Завершить расчёт» в header карточки заказа.
    Render: одна строка label + input + кнопка. Без больших
    `admin-form-grid`-блоков. */
