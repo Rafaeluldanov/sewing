@@ -227,28 +227,31 @@ export class CutReadinessService {
     const patternChecks: CutReadinessCheckDto[] = [];
 
     if (order.patternItem) {
-      // 1. DXF по каждому размеру с qtyPlan > 0.
+      // 1. Файл лекала (PDF/PLT/DXF) по каждому размеру с qtyPlan > 0.
+      //    Размер-заглушка (ACTIVE, но fileUrl = null) НЕ считается
+      //    готовым — файл могли ещё не догрузить.
       const activeFilesBySize = new Map<string, number>();
       for (const f of order.patternItem.sizeFiles) {
         if (f.status !== 'ACTIVE') continue;
+        if (!f.fileUrl) continue;
         activeFilesBySize.set(
           f.sizeId,
           (activeFilesBySize.get(f.sizeId) ?? 0) + 1,
         );
       }
 
-      const missingDxfSizes: string[] = [];
+      const missingFileSizes: string[] = [];
       for (const item of itemsWithQty) {
         if (!activeFilesBySize.has(item.sizeId)) {
-          missingDxfSizes.push(item.size.code);
+          missingFileSizes.push(item.size.code);
         }
       }
-      if (missingDxfSizes.length > 0) {
+      if (missingFileSizes.length > 0) {
         patternChecks.push({
           key: 'pattern.sizeFiles.missing',
           status: 'BLOCKER',
-          title: 'Нет активного DXF по размерам',
-          message: `Не загружен DXF для размеров: ${missingDxfSizes.join(', ')}.`,
+          title: 'Нет файла лекала по размерам',
+          message: `Не загружен файл лекала (PDF/PLT/DXF) для размеров: ${missingFileSizes.join(', ')}.`,
           entityType: 'PATTERN_ITEM',
           entityId: order.patternItem.id,
         });
@@ -256,7 +259,7 @@ export class CutReadinessService {
         patternChecks.push({
           key: 'pattern.sizeFiles.ok',
           status: 'OK',
-          title: 'DXF по размерам загружены',
+          title: 'Файлы лекала по размерам загружены',
           message: `Активных размеров: ${activeFilesBySize.size}.`,
           entityType: 'PATTERN_ITEM',
           entityId: order.patternItem.id,
@@ -766,7 +769,7 @@ const CUT_READINESS_ORDER_INCLUDE = {
   patternItem: {
     include: {
       sizeFiles: {
-        select: { id: true, sizeId: true, status: true },
+        select: { id: true, sizeId: true, status: true, fileUrl: true },
       },
       materialAreas: {
         select: {

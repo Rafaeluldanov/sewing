@@ -456,6 +456,15 @@ export class PatternsService {
     // это заметно быстрее, чем sequential await.
     const copyJobs = await Promise.all(
       Array.from(latestBySize.values()).map(async (sf) => {
+        // Размер-заглушка (без файла) — копировать нечего, переносим
+        // как заглушку (fileUrl/originalFileName = null).
+        if (!sf.fileUrl) {
+          return {
+            sizeId: sf.sizeId,
+            fileUrl: null,
+            originalFileName: null,
+          };
+        }
         const saved = await this.storage.copySizeFile(
           sf.fileUrl,
           createdId,
@@ -650,7 +659,9 @@ export class PatternsService {
     file: UploadedFileLike | undefined,
     actorEmployeeId?: string | null,
   ): Promise<PatternDetailDto> {
-    if (!file) throw new PatternUploadMissingFileException();
+    // Файл необязателен: размер можно добавить БЕЗ файла (заглушка) —
+    // файл (PDF/PLT/DXF) догрузят позже. Если file есть — сохраняем и
+    // пишем fileUrl/originalFileName; если нет — создаём строку с null.
     const pattern = await this.prisma.patternItem.findUnique({
       where: { id: patternItemId },
       select: { id: true },
@@ -673,18 +684,16 @@ export class PatternsService {
     });
     const nextVersion = (top?.version ?? 0) + 1;
 
-    const saved = await this.storage.saveSizeFile(
-      patternItemId,
-      sizeId,
-      file,
-    );
+    const saved = file
+      ? await this.storage.saveSizeFile(patternItemId, sizeId, file)
+      : null;
 
     const created = await this.prisma.patternSizeFile.create({
       data: {
         patternItemId,
         sizeId,
-        fileUrl: saved.publicUrl,
-        originalFileName: file.originalname,
+        fileUrl: saved?.publicUrl ?? null,
+        originalFileName: file?.originalname ?? null,
         version: nextVersion,
         status: 'ACTIVE',
         uploadedById: actorEmployeeId ?? null,
@@ -692,7 +701,7 @@ export class PatternsService {
     });
     this.logger.log(
       `event=pattern.size_file_upload pattern=${patternItemId} size=${sizeId} ` +
-        `version=${nextVersion} url=${saved.publicUrl}`,
+        `version=${nextVersion} url=${saved?.publicUrl ?? '(no-file)'}`,
     );
     await this.audit.log({
       event: 'PATTERN_SIZE_FILE_UPLOADED',
@@ -702,9 +711,9 @@ export class PatternsService {
         fileId: created.id,
         sizeId,
         version: nextVersion,
-        fileUrl: saved.publicUrl,
-        originalFileName: file.originalname,
-        size: file.size,
+        fileUrl: saved?.publicUrl ?? null,
+        originalFileName: file?.originalname ?? null,
+        size: file?.size ?? null,
       },
       employeeId: actorEmployeeId ?? null,
     });

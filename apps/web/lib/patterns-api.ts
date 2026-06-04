@@ -99,14 +99,18 @@ export function uploadPatternPreview(
 export function uploadPatternSizeFile(
   patternId: string,
   sizeId: string,
-  file: File | Blob,
+  file: File | Blob | null,
   fileName?: string,
 ): Promise<PatternDetailDto> {
   const fd = new FormData();
-  if (fileName) {
-    fd.append('file', file, fileName);
-  } else {
-    fd.append('file', file);
+  // Файл необязателен: без него backend создаёт размер-заглушку
+  // (fileUrl = null), файл догружается позже.
+  if (file) {
+    if (fileName) {
+      fd.append('file', file, fileName);
+    } else {
+      fd.append('file', file);
+    }
   }
   return apiFetchMultipart<PatternDetailDto>(
     `/patterns/${encodeURIComponent(patternId)}/sizes/${encodeURIComponent(sizeId)}/file`,

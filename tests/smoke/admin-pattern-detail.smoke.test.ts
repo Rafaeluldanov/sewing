@@ -132,7 +132,7 @@ describe('admin/patterns/[id] — блок «Размеры номенклату
 
   test('заголовки блоков и подсказки на странице', () => {
     expect(src).toMatch(/Размеры номенклатуры/);
-    expect(src).toMatch(/DXF по размерам/);
+    expect(src).toMatch(/Файлы по размерам/);
     expect(src).toMatch(/Площади материалов/);
     // Подсказка про м² — по ТЗ.
     expect(src).toMatch(/Площади указываются в м²/);
@@ -150,14 +150,14 @@ describe('admin/patterns/[id] — блок «Размеры номенклату
   });
 
   test('empty-state, если активных размеров нет', () => {
-    // ТЗ-копи: «Размеры не добавлены» / «Добавьте размер и загрузите
-    // DXF, чтобы использовать его в заказах.»
+    // Копи: «Размеры не добавлены» / «Добавьте размер …». Файл лекала
+    // (PDF/PLT/DXF) теперь необязателен — можно догрузить позже.
     expect(src).toMatch(/Размеры не добавлены/);
-    expect(src).toMatch(/Добавьте размер и загрузите DXF/);
+    expect(src).toMatch(/Добавьте размер/);
     // Empty-state для «Площади материалов».
-    expect(src).toMatch(/Сначала добавьте размеры и загрузите DXF/);
-    // Empty-state для «DXF по размерам».
-    expect(src).toMatch(/DXF по размерам ещё не загружены/);
+    expect(src).toMatch(/Сначала добавьте размеры/);
+    // Empty-state для «Файлы по размерам».
+    expect(src).toMatch(/Файлы по размерам ещё не загружены/);
   });
 
   test('активные размеры рендерятся как чипсы (admin-size-plan__chip)', () => {
@@ -193,13 +193,13 @@ describe('admin/patterns/[id] — модалка «Добавить размер
       expect(src).toMatch(/effectiveSizes[\s\S]{0,200}availableSizes/);
     }
     expect(src).toMatch(/<select[\s\S]*?name="sizeId"/);
-    // Файл DXF обязателен.
+    // Файл лекала НЕобязателен (размер можно добавить без файла,
+    // догрузить позже) — поэтому отдельный input file присутствует,
+    // но без `required`.
     expect(src).toMatch(/type="file"/);
-    expect(src).toMatch(/required/);
-    // Принимаем только .dxf — accept собирается из
-    // PATTERN_DXF_EXTENSIONS, но ключевой контракт расширения
-    // совпадает с константой shared.
-    expect(src).toMatch(/PATTERN_DXF_EXTENSIONS/);
+    // accept собирается из PATTERN_FILE_EXTENSIONS (pdf/plt/dxf) —
+    // ключевой контракт расширений совпадает с константой shared.
+    expect(src).toMatch(/PATTERN_FILE_EXTENSIONS/);
   });
 
   test('копи-кнопок: «Отмена» и «Добавить»', () => {

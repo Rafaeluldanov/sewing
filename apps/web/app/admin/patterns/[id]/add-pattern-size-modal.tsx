@@ -11,7 +11,8 @@
  *     активных размерах (родитель уже передаёт сюда `availableSizes`).
  *   - Если все размеры уже добавлены — рисуем подсказку «Все размеры
  *     уже добавлены» и блокируем форму.
- *   - DXF-файл обязателен (хотя backend и сам отбьёт).
+ *   - Файл лекала (PDF/PLT/DXF) НЕобязателен: размер можно добавить
+ *     без файла (заглушка), файл догрузить позже кнопкой «Загрузить».
  *
  * После успешной загрузки server action делает `revalidatePath`,
  * сюда возвращается `state.ok = true`, мы:
@@ -36,7 +37,7 @@ import { useFormState, useFormStatus } from 'react-dom';
 import { useRouter } from 'next/navigation';
 import { CheckCircle, Plus, Ruler, X, XCircle } from 'lucide-react';
 import {
-  PATTERN_DXF_EXTENSIONS,
+  PATTERN_FILE_EXTENSIONS,
   type PatternSizeRefDto,
 } from '@sewing/shared/patterns';
 import { uploadPatternSizeFileAction } from '../actions';
@@ -109,7 +110,7 @@ export function AddPatternSizeModal({
   const [sizeId, setSizeId] = useState<string>(
     initialSelected?.id ?? effectiveSizes[0]?.id ?? '',
   );
-  const accept = PATTERN_DXF_EXTENSIONS.map((ext) => `.${ext}`).join(',');
+  const accept = PATTERN_FILE_EXTENSIONS.map((ext) => `.${ext}`).join(',');
 
   const dialogRef = useRef<HTMLDivElement | null>(null);
 
@@ -185,7 +186,8 @@ export function AddPatternSizeModal({
             <p className="admin-size-plan-modal__subtitle">
               Размер будет добавлен к этой номенклатуре. После этого
               он появится в погонных метрах, площадях материалов и
-              заказах. Для добавления загрузите файл лекала (DXF).
+              заказах. Файл лекала (PDF/PLT/DXF) можно загрузить сразу
+              или позже.
             </p>
           </div>
           <button
@@ -223,16 +225,18 @@ export function AddPatternSizeModal({
                   </select>
                 </div>
                 <div className="admin-field">
-                  <label htmlFor={`add-dxf-${patternId}`}>DXF-файл</label>
+                  <label htmlFor={`add-dxf-${patternId}`}>
+                    Файл лекала (PDF/PLT/DXF) — необязательно
+                  </label>
                   <input
                     id={`add-dxf-${patternId}`}
                     name="file"
                     type="file"
                     accept={accept}
-                    required
                   />
                   <small className="admin-muted">
-                    Допустимо только .{PATTERN_DXF_EXTENSIONS[0]}.
+                    Можно добавить размер без файла и догрузить его позже.
+                    Форматы: {PATTERN_FILE_EXTENSIONS.join(', ')}.
                   </small>
                 </div>
               </div>

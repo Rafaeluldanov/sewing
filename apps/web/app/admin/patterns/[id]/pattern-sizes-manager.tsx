@@ -6,7 +6,7 @@
  *
  *   1. «Размеры номенклатуры» — счётчик активных размеров + чипсы +
  *      кнопка «Добавить размер».
- *   2. «DXF по размерам» — таблица только активных размеров с
+ *   2. «Файлы по размерам» — таблица только активных размеров с
  *      историей файлов (текущая версия + архивные); per-row кнопки
  *      «Заменить» / «Архивировать».
  *   3. «Площади материалов» — `PatternMaterialAreasForm` поверх
@@ -260,7 +260,11 @@ export function PatternSizesManager({
               <li
                 key={e.size.id}
                 className="admin-size-plan__chip"
-                title={`Активный DXF: ${e.activeFile.originalFileName} (v${e.activeFile.version})`}
+                title={
+                  e.activeFile.fileUrl
+                    ? `Активный файл: ${e.activeFile.originalFileName} (v${e.activeFile.version})`
+                    : 'Размер без файла — файл можно догрузить позже'
+                }
               >
                 <span className="admin-size-plan__chip-code">
                   {e.size.code}
@@ -269,7 +273,7 @@ export function PatternSizesManager({
                   ·
                 </span>
                 <span className="admin-size-plan__chip-qty">
-                  v{e.activeFile.version}
+                  {e.activeFile.fileUrl ? `v${e.activeFile.version}` : 'без файла'}
                 </span>
               </li>
             ))}
@@ -278,7 +282,7 @@ export function PatternSizesManager({
           <AdminEmptyState
             icon={<Ruler size={24} strokeWidth={1.6} aria-hidden />}
             title="Размеры не добавлены"
-            hint="Добавьте размер и загрузите DXF, чтобы использовать его в заказах."
+            hint="Добавьте размер (файл лекала можно загрузить сразу или позже), чтобы использовать его в заказах."
             actions={
               <button
                 type="button"
@@ -300,7 +304,7 @@ export function PatternSizesManager({
       {/* ---------------------------------------------------- */}
       <AdminCard>
         <AdminSectionHeader
-          title="DXF по размерам"
+          title="Файлы по размерам"
           hint={
             hasActive ? `${activeSizes.length} активных` : undefined
           }
@@ -313,8 +317,8 @@ export function PatternSizesManager({
         ) : (
           <AdminEmptyState
             icon={<FileText size={26} strokeWidth={1.6} aria-hidden />}
-            title="DXF по размерам ещё не загружены"
-            hint="Добавьте размер — DXF загружается в той же модалке."
+            title="Файлы по размерам ещё не загружены"
+            hint="Добавьте размер — файл (PDF/PLT/DXF) можно загрузить в той же модалке или позже."
             actions={
               <button
                 type="button"
@@ -354,8 +358,8 @@ export function PatternSizesManager({
         ) : (
           <AdminEmptyState
             icon={<Ruler size={24} strokeWidth={1.6} aria-hidden />}
-            title="Сначала добавьте размеры и загрузите DXF"
-            hint="Площади материалов вводятся по активным размерам номенклатуры."
+            title="Сначала добавьте размеры"
+            hint="Площади материалов вводятся по активным размерам номенклатуры (файл лекала можно догрузить позже)."
             actions={
               <button
                 type="button"
@@ -429,18 +433,21 @@ function ActiveSizesFilesTable({
     {
       key: 'name',
       header: 'Файл',
-      render: (f) => (
-        <a
-          href={f.fileUrl}
-          target="_blank"
-          rel="noreferrer"
-          className="admin-table__action-link"
-          style={{ wordBreak: 'break-all' }}
-        >
-          <FileText size={14} strokeWidth={1.6} aria-hidden />
-          {f.originalFileName}
-        </a>
-      ),
+      render: (f) =>
+        f.fileUrl ? (
+          <a
+            href={f.fileUrl}
+            target="_blank"
+            rel="noreferrer"
+            className="admin-table__action-link"
+            style={{ wordBreak: 'break-all' }}
+          >
+            <FileText size={14} strokeWidth={1.6} aria-hidden />
+            {f.originalFileName}
+          </a>
+        ) : (
+          <span className="admin-muted">файл не загружен</span>
+        ),
     },
     {
       key: 'createdAt',
@@ -476,6 +483,7 @@ function ActiveSizesFilesTable({
             <ReplacePatternSizeFileForm
               patternId={patternId}
               sizeId={f.sizeId}
+              hasFile={f.fileUrl != null}
             />
             <ArchivePatternSizeFileForm
               patternId={patternId}

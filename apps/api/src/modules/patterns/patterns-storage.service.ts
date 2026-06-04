@@ -3,7 +3,7 @@ import { randomBytes } from 'node:crypto';
 import { copyFile, mkdir, writeFile } from 'node:fs/promises';
 import { join, posix, resolve } from 'node:path';
 import {
-  PATTERN_DXF_EXTENSIONS,
+  PATTERN_FILE_EXTENSIONS,
   PATTERN_FILE_MAX_SIZE_BYTES,
   PATTERN_PREVIEW_EXTENSIONS,
 } from '@sewing/shared/patterns';
@@ -95,7 +95,7 @@ export class PatternsStorageService {
     file: UploadedFileLike,
   ): Promise<{ publicUrl: string; storedFileName: string }> {
     const safeOriginal = this.normalizeOriginalName(file.originalname);
-    const ext = this.assertExtension(safeOriginal, PATTERN_DXF_EXTENSIONS);
+    const ext = this.assertExtension(safeOriginal, PATTERN_FILE_EXTENSIONS);
     this.assertSize(file);
     const storedFileName = this.makeStoredFileName(ext);
     const relativePath = posix.join(
@@ -154,9 +154,9 @@ export class PatternsStorageService {
       );
     }
     const ext = sourceBasename.slice(lastDot + 1).toLowerCase();
-    if (!(PATTERN_DXF_EXTENSIONS as readonly string[]).includes(ext)) {
+    if (!(PATTERN_FILE_EXTENSIONS as readonly string[]).includes(ext)) {
       throw new PatternUploadInvalidException(
-        `Недопустимое расширение «${ext}» у исходного DXF. Разрешены: ${PATTERN_DXF_EXTENSIONS.join(', ')}.`,
+        `Недопустимое расширение «${ext}» у исходного файла лекала. Разрешены: ${PATTERN_FILE_EXTENSIONS.join(', ')}.`,
       );
     }
 

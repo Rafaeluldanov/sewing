@@ -94,8 +94,15 @@ export type PatternSizeFileStatus = (typeof PATTERN_SIZE_FILE_STATUSES)[number];
  */
 export const PATTERN_PREVIEW_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'] as const;
 
-/** Разрешённые расширения DXF-файла. */
-export const PATTERN_DXF_EXTENSIONS = ['dxf'] as const;
+/**
+ * Разрешённые расширения файла лекала по размеру. Принимаем PDF/PLT/DXF
+ * (раньше был только DXF). Файл необязателен — размер может быть добавлен
+ * без файла, а файл догружается позже (см. `PatternSizeFile.fileUrl` nullable).
+ */
+export const PATTERN_FILE_EXTENSIONS = ['pdf', 'plt', 'dxf'] as const;
+
+/** @deprecated используйте `PATTERN_FILE_EXTENSIONS`. Оставлено как алиас. */
+export const PATTERN_DXF_EXTENSIONS = PATTERN_FILE_EXTENSIONS;
 
 /**
  * Лимит размера превью / DXF файла на upload (в байтах). 25 MB —
@@ -685,8 +692,10 @@ export interface PatternSizeFileDto {
   patternItemId: string;
   sizeId: string;
   size: PatternSizeRefDto;
-  fileUrl: string;
-  originalFileName: string;
+  /** `null`, если размер добавлен без файла (файл догрузят позже). */
+  fileUrl: string | null;
+  /** `null`, если размер добавлен без файла. */
+  originalFileName: string | null;
   version: number;
   status: PatternSizeFileStatus | string;
   uploadedById: string | null;

@@ -257,9 +257,10 @@ export async function uploadPatternPreviewAction(
 }
 
 /**
- * Загрузка DXF по конкретному размеру. `sizeId` приходит скрытым
- * полем формы — это удобнее, чем плодить отдельный action на каждый
- * размер. Backend сам выберет следующую версию.
+ * Загрузка файла лекала (PDF/PLT/DXF) по конкретному размеру. `sizeId`
+ * приходит скрытым полем формы. Файл НЕобязателен: без него размер
+ * добавляется как заглушка (fileUrl = null), файл догружается позже.
+ * Backend сам выберет следующую версию.
  */
 export async function uploadPatternSizeFileAction(
   patternId: string,
@@ -268,15 +269,17 @@ export async function uploadPatternSizeFileAction(
 ): Promise<UploadPatternFileState> {
   const sizeId = String(form.get('sizeId') ?? '').trim();
   if (!sizeId) return { error: 'Не выбран размер.' };
-  const file = form.get('file');
-  if (!(file instanceof File) || file.size === 0) {
-    return { error: 'Выберите DXF-файл.' };
-  }
+  const formFile = form.get('file');
+  const file =
+    formFile instanceof File && formFile.size > 0 ? formFile : null;
   try {
-    await uploadPatternSizeFile(patternId, sizeId, file, file.name);
+    await uploadPatternSizeFile(patternId, sizeId, file, file?.name);
     revalidatePath('/admin/patterns');
     revalidatePath(`/admin/patterns/${patternId}`);
-    return { ok: true, successMessage: 'Файл загружен.' };
+    return {
+      ok: true,
+      successMessage: file ? 'Файл загружен.' : 'Размер добавлен без файла.',
+    };
   } catch (e) {
     const x = explainApiError(e);
     return { error: x.error, errorRequestId: x.requestId };

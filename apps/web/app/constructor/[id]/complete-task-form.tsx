@@ -16,10 +16,12 @@ import { completeTaskAction } from '../actions';
  *     попадут в номенклатуру (`PatternItemSizeParameterValue`) при
  *     приёмке.
  *
- * Принимаем только `.dxf` (см. `PatternsStorageService.saveSizeFile`,
- * валидация `PATTERN_DXF_EXTENSIONS`). Если конструктор попытается
- * прислать PDF/JPG — backend отдаст `PATTERN_UPLOAD_INVALID`, мы
- * покажем сообщение под формой.
+ * Файл лекала НЕобязателен: задачу можно завершить без файлов вообще
+ * или приложив их к части размеров — недогруженные размеры
+ * зарегистрируются как заглушки, файл догрузят позже. Принимаем
+ * PDF/PLT/DXF (см. `PatternsStorageService.saveSizeFile`, валидация
+ * `PATTERN_FILE_EXTENSIONS`). Если прислать другой формат — backend
+ * отдаст `PATTERN_UPLOAD_INVALID`, покажем сообщение под формой.
  */
 export function CompleteTaskForm({
   taskId,
@@ -73,7 +75,8 @@ export function CompleteTaskForm({
       }}
     >
       <p className="constructor-complete-form__hint">
-        Загрузите готовое DXF-лекало для каждого размера и при необходимости
+        При наличии приложите файл лекала (PDF/PLT/DXF) к размерам — это
+        необязательно, файл можно догрузить позже. При необходимости
         поправьте Кулирка/Кашкорсе — м пог. на одно изделие. Эти значения
         попадут в карточку номенклатуры.
       </p>
@@ -85,7 +88,7 @@ export function CompleteTaskForm({
             <th style={{ textAlign: 'left' }}>Размер</th>
             <th style={{ textAlign: 'left' }}>Кулирка, м пог.</th>
             <th style={{ textAlign: 'left' }}>Кашкорсе, м пог.</th>
-            <th style={{ textAlign: 'left' }}>DXF-файл</th>
+            <th style={{ textAlign: 'left' }}>Файл (PDF/PLT/DXF)</th>
           </tr>
         </thead>
         <tbody>
@@ -116,13 +119,12 @@ export function CompleteTaskForm({
                     style={{ width: 110, padding: '4px 6px' }}
                   />
                 </td>
-                <td data-label="DXF-файл">
+                <td data-label="Файл (PDF/PLT/DXF)">
                   <input
                     type="file"
                     id={`file-${row.sizeId}`}
                     name={fieldName}
-                    accept=".dxf"
-                    required
+                    accept=".pdf,.plt,.dxf"
                   />
                 </td>
                 <td style={{ display: 'none' }}>

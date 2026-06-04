@@ -3394,7 +3394,7 @@ model PatternCategoryParameter {
   @@index([sortOrder])
 }
 
-/// DXF-файл лекала по конкретному размеру. Один `(patternItemId, sizeId)`
+/// Файл лекала (PDF/PLT/DXF) по конкретному размеру. Один `(patternItemId, sizeId)`
 /// может иметь несколько версий — менеджер загружает новую версию
 /// файла кнопкой «Заменить», старая остаётся как `ACTIVE` с младшим
 /// `version`. Удаление через UI = `status = ARCHIVED` (физически файл
@@ -3403,11 +3403,13 @@ model PatternSizeFile {
   id               String   @id @default(cuid())
   patternItemId    String
   sizeId           String
-  /// Публичный URL DXF-файла (`/uploads/patterns/<patternId>/sizes/<sizeId>/<file>`).
-  fileUrl          String
+  /// Публичный URL файла лекала (`/uploads/patterns/<patternId>/sizes/<sizeId>/<file>`).
+  /// `null`, если размер добавлен БЕЗ файла (заглушка) — файл догрузят позже,
+  /// в т.ч. после запуска заказа в производство. Допустимые форматы: PDF/PLT/DXF.
+  fileUrl          String?
   /// Исходное имя файла, как его сохранил менеджер (для UI и
-  /// «скачать» с понятным названием).
-  originalFileName String
+  /// «скачать» с понятным названием). `null` для размера-заглушки без файла.
+  originalFileName String?
   /// Версия в рамках `(patternItemId, sizeId)`. Считается сервисом как
   /// `max(version) + 1` при заливке нового файла; уникальность
   /// `(patternItemId, sizeId, version)` гарантируется БД.

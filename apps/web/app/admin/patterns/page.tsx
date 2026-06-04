@@ -133,7 +133,7 @@ export default async function AdminPatternsListPage({
     },
     {
       key: 'sizeFiles',
-      header: 'DXF',
+      header: 'Файлы',
       align: 'right',
       render: (p) => p.sizeFilesCount,
     },

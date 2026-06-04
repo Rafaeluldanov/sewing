@@ -592,14 +592,19 @@ export class ConstructorTasksService {
    *     REWORK конструктор тоже делает `assignSelf` → IN_PROGRESS);
    *   - задача обязана принадлежать текущему конструктору, если
    *     `enforceOwnership = true`;
-   *   - набор `sizeId` в `payload.sizeFiles` обязан совпадать с
-   *     `task.sizeRows[].sizeId` без лишних/недостающих;
+   *   - `payload.sizeFiles` может ссылаться ТОЛЬКО на размеры задачи
+   *     (лишние отвергаем); «недогруженные» размеры допустимы;
    *   - все `Size` существуют (защита от подделки);
-   *   - все `fileFieldName` присутствуют в multipart `files`.
+   *   - если для размера указан `fileFieldName` — файл обязан быть в
+   *     multipart `files`.
    *
-   * Phase 1 (вне транзакции): валидируем, грузим файлы через
+   * Файл лекала НЕобязателен: завершаем по всем размерам задачи, и для
+   * размера без файла создаётся строка-заглушка (`fileUrl = null`).
+   * Файл (PDF/PLT/DXF) догрузят позже — в т.ч. после запуска заказа.
+   *
+   * Phase 1 (вне транзакции): валидируем, грузим присланные файлы через
    * `PatternsStorageService.saveSizeFile` (он сам валидирует
-   * расширение DXF и размер).
+   * расширение PDF/PLT/DXF и размер).
    *
    * Phase 2 (одна транзакция):
    *   - читаем актуальную `version` для каждого `(patternItemId, sizeId)`
@@ -649,7 +654,9 @@ export class ConstructorTasksService {
       throw new ConstructorTaskAssignedToOtherException();
     }
 
-    // 1) Сверяем набор sizeId в payload с task.sizeRows.
+    // 1) Набор размеров задачи. Завершаем по ВСЕМ размерам задачи —
+    //    для каждого создадим строку PatternSizeFile (с файлом или
+    //    заглушкой). Файл лекала необязателен: его можно догрузить позже.
     const taskSizeIds = new Set(
       existing.sizeRows
         .map((r) => r.sizeId)
@@ -657,73 +664,74 @@ export class ConstructorTasksService {
     );
     const payloadSizeIds = new Set(payload.sizeFiles.map((sf) => sf.sizeId));
 
-    const missing = [...taskSizeIds].filter((sid) => !payloadSizeIds.has(sid));
+    // payload может ссылаться ТОЛЬКО на размеры задачи (защита от
+    // подделки). «Недогруженные» размеры теперь допустимы — они
+    // зарегистрируются как заглушки.
     const extra = [...payloadSizeIds].filter((sid) => !taskSizeIds.has(sid));
-    if (missing.length > 0 || extra.length > 0) {
-      const parts: string[] = [];
-      if (missing.length > 0) {
-        parts.push(`не загружены файлы для размеров: ${missing.join(', ')}`);
-      }
-      if (extra.length > 0) {
-        parts.push(`лишние размеры в payload: ${extra.join(', ')}`);
-      }
-      throw new ConstructorTaskCompleteFilesMismatchException(parts.join('; '));
+    if (extra.length > 0) {
+      throw new ConstructorTaskCompleteFilesMismatchException(
+        `лишние размеры в payload: ${extra.join(', ')}`,
+      );
     }
 
-    // 2) Маппим multipart-файлы по fieldname.
+    // 2) Маппим multipart-файлы по fieldname и связываем sizeId → файл.
     const filesByFieldName = new Map<string, UploadedFileLike>();
     for (const file of files) {
       filesByFieldName.set(file.fieldname, file);
     }
     const expectedPrefix = COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX;
+    const fileBySizeId = new Map<string, UploadedFileLike>();
     for (const sf of payload.sizeFiles) {
       if (!sf.fileFieldName.startsWith(expectedPrefix)) {
         throw new ConstructorTaskCompleteFilesMismatchException(
           `Поле ${sf.fileFieldName} не имеет обязательного префикса ${expectedPrefix}`,
         );
       }
-      if (!filesByFieldName.has(sf.fileFieldName)) {
+      const file = filesByFieldName.get(sf.fileFieldName);
+      if (!file) {
         throw new ConstructorTaskCompleteFilesMismatchException(
           `В multipart-запросе нет файла с полем ${sf.fileFieldName}`,
         );
       }
+      fileBySizeId.set(sf.sizeId, file);
     }
 
     // 3) Доп. проверка: все Size живы. Защита от подделки sizeId.
     const sizes = await this.prisma.size.findMany({
-      where: { id: { in: [...payloadSizeIds] } },
+      where: { id: { in: [...taskSizeIds] } },
       select: { id: true },
     });
     const sizeIdsAlive = new Set(sizes.map((s) => s.id));
-    for (const sid of payloadSizeIds) {
+    for (const sid of taskSizeIds) {
       if (!sizeIdsAlive.has(sid)) {
         throw new ConstructorTaskSizeNotFoundException(sid);
       }
     }
 
-    // 4) Phase 1: грузим файлы на диск через PatternsStorageService.
-    //    Он валидирует расширение/размер; PatternUploadInvalidException
-    //    пробросится наружу.
+    // 4) Phase 1: по каждому размеру задачи готовим запись. Если для
+    //    размера пришёл файл — грузим на диск (PatternsStorageService
+    //    валидирует расширение PDF/PLT/DXF и размер); иначе — заглушка
+    //    (fileUrl/originalFileName = null), файл догрузят позже.
     const savedFiles: Array<{
       sizeId: string;
-      publicUrl: string;
-      originalFileName: string;
-      contentType: string;
-      sizeBytes: number;
+      publicUrl: string | null;
+      originalFileName: string | null;
     }> = [];
-    for (const sf of payload.sizeFiles) {
-      const file = filesByFieldName.get(sf.fileFieldName)!;
+    for (const sizeId of taskSizeIds) {
+      const file = fileBySizeId.get(sizeId);
+      if (!file) {
+        savedFiles.push({ sizeId, publicUrl: null, originalFileName: null });
+        continue;
+      }
       const saved = await this.patternsStorage.saveSizeFile(
         existing.patternItemId,
-        sf.sizeId,
+        sizeId,
         file,
       );
       savedFiles.push({
-        sizeId: sf.sizeId,
+        sizeId,
         publicUrl: saved.publicUrl,
         originalFileName: file.originalname,
-        contentType: file.mimetype,
-        sizeBytes: file.size,
       });
     }
 
@@ -734,7 +742,7 @@ export class ConstructorTasksService {
         by: ['sizeId'],
         where: {
           patternItemId: existing.patternItemId,
-          sizeId: { in: [...payloadSizeIds] },
+          sizeId: { in: [...taskSizeIds] },
         },
         _max: { version: true },
       });

@@ -69,16 +69,16 @@ export async function updateCommentAction(
 }
 
 /**
- * Завершить задачу: собрать multipart с готовыми DXF-лекалами по
- * каждому размеру. Вход — FormData из client-формы:
- *   - `sizeIds` (несколько) — список sizeId-ов из `task.sizeRows`,
- *     для которых пользователь выбрал файлы;
- *   - `file_<sizeId>` — реальный файл (один на размер).
+ * Завершить задачу: собрать multipart с файлами лекала (PDF/PLT/DXF) по
+ * размерам. Файл необязателен — размеры без файла завершатся как
+ * заглушки, файл догрузят позже. Вход — FormData из client-формы:
+ *   - `sizeIds` (несколько) — список sizeId-ов из `task.sizeRows`;
+ *   - `file_<sizeId>` — файл (если выбран, один на размер).
  *
  * Здесь мы:
- *   1) фильтруем sizeIds, для которых реально есть `File` в форме;
- *   2) собираем `payload.sizeFiles[]` с маппингом sizeId → fileFieldName;
- *   3) создаём НОВЫЙ FormData (передавать оригинальный через сеть нельзя
+ *   1) для размеров, где реально есть `File`, собираем `payload.sizeFiles[]`
+ *      с маппингом sizeId → fileFieldName (пустой набор допустим);
+ *   2) создаём НОВЫЙ FormData (передавать оригинальный через сеть нельзя
  *      — там много лишнего), кладём JSON-payload + сами файлы.
  */
 export async function completeTaskAction(
@@ -116,14 +116,13 @@ export async function completeTaskAction(
   for (const sizeId of sizeIds) {
     const fieldName = `${COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX}${sizeId}`;
     const file = formData.get(fieldName);
-    if (!(file instanceof File) || file.size === 0) {
-      return {
-        ok: false,
-        error: `Не выбран файл для размера ${sizeId}`,
-      };
+    // Файл лекала необязателен: размер без файла зарегистрируется как
+    // заглушка, файл (PDF/PLT/DXF) догрузят позже. В payload.sizeFiles
+    // кладём только размеры, для которых файл реально выбран.
+    if (file instanceof File && file.size > 0) {
+      out.append(fieldName, file, file.name);
+      sizeFiles.push({ sizeId, fileFieldName: fieldName });
     }
-    out.append(fieldName, file, file.name);
-    sizeFiles.push({ sizeId, fileFieldName: fieldName });
 
     const kulirkaRaw = formData.get(`kulirka_${sizeId}`);
     const kashkorseRaw = formData.get(`kashkorse_${sizeId}`);

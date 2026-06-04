@@ -34,7 +34,7 @@ export default async function AdminPatternNewPage() {
     <AdminPageShell
       icon={<Scissors size={22} strokeWidth={1.6} aria-hidden />}
       title="Новое лекало"
-      subtitle="Минимум: название и артикул. Превью и DXF загрузите в карточке."
+      subtitle="Минимум: название и артикул. Превью и файлы лекала (PDF/PLT/DXF) загрузите в карточке."
       actions={
         <Link href="/admin/patterns" className="admin-btn admin-btn--ghost">
           <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />

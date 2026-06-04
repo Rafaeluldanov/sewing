@@ -406,7 +406,8 @@ export const CompleteConstructorTaskSchema = z.object({
           ),
       }),
     )
-    .min(1, 'Должен быть хотя бы один файл лекала')
+    // Файл лекала необязателен: задачу можно завершить без файлов вообще
+    // (размеры зарегистрируются как заглушки, файлы догрузят позже).
     .superRefine((rows, ctx) => {
       const seen = new Set<string>();
       for (let i = 0; i < rows.length; i += 1) {
