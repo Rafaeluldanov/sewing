@@ -600,11 +600,11 @@ export class ConstructorTasksService {
    *
    * Файл лекала НЕобязателен: завершаем по всем размерам задачи, и для
    * размера без файла создаётся строка-заглушка (`fileUrl = null`).
-   * Файл (PDF/PLT/DXF) догрузят позже — в т.ч. после запуска заказа.
+   * Файл (PDF/PLT/DXF/PLO) догрузят позже — в т.ч. после запуска заказа.
    *
    * Phase 1 (вне транзакции): валидируем, грузим присланные файлы через
    * `PatternsStorageService.saveSizeFile` (он сам валидирует
-   * расширение PDF/PLT/DXF и размер).
+   * расширение PDF/PLT/DXF/PLO и размер).
    *
    * Phase 2 (одна транзакция):
    *   - читаем актуальную `version` для каждого `(patternItemId, sizeId)`
@@ -710,7 +710,7 @@ export class ConstructorTasksService {
 
     // 4) Phase 1: по каждому размеру задачи готовим запись. Если для
     //    размера пришёл файл — грузим на диск (PatternsStorageService
-    //    валидирует расширение PDF/PLT/DXF и размер); иначе — заглушка
+    //    валидирует расширение PDF/PLT/DXF/PLO и размер); иначе — заглушка
     //    (fileUrl/originalFileName = null), файл догрузят позже.
     const savedFiles: Array<{
       sizeId: string;

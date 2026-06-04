@@ -69,7 +69,7 @@ export async function updateCommentAction(
 }
 
 /**
- * Завершить задачу: собрать multipart с файлами лекала (PDF/PLT/DXF) по
+ * Завершить задачу: собрать multipart с файлами лекала (PDF/PLT/DXF/PLO) по
  * размерам. Файл необязателен — размеры без файла завершатся как
  * заглушки, файл догрузят позже. Вход — FormData из client-формы:
  *   - `sizeIds` (несколько) — список sizeId-ов из `task.sizeRows`;
@@ -117,7 +117,7 @@ export async function completeTaskAction(
     const fieldName = `${COMPLETE_CONSTRUCTOR_TASK_FILE_FIELD_PREFIX}${sizeId}`;
     const file = formData.get(fieldName);
     // Файл лекала необязателен: размер без файла зарегистрируется как
-    // заглушка, файл (PDF/PLT/DXF) догрузят позже. В payload.sizeFiles
+    // заглушка, файл (PDF/PLT/DXF/PLO) догрузят позже. В payload.sizeFiles
     // кладём только размеры, для которых файл реально выбран.
     if (file instanceof File && file.size > 0) {
       out.append(fieldName, file, file.name);

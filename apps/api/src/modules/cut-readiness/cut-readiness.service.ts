@@ -227,7 +227,7 @@ export class CutReadinessService {
     const patternChecks: CutReadinessCheckDto[] = [];
 
     if (order.patternItem) {
-      // 1. Файл лекала (PDF/PLT/DXF) по каждому размеру с qtyPlan > 0.
+      // 1. Файл лекала (PDF/PLT/DXF/PLO) по каждому размеру с qtyPlan > 0.
       //    Размер-заглушка (ACTIVE, но fileUrl = null) НЕ считается
       //    готовым — файл могли ещё не догрузить.
       const activeFilesBySize = new Map<string, number>();
@@ -251,7 +251,7 @@ export class CutReadinessService {
           key: 'pattern.sizeFiles.missing',
           status: 'BLOCKER',
           title: 'Нет файла лекала по размерам',
-          message: `Не загружен файл лекала (PDF/PLT/DXF) для размеров: ${missingFileSizes.join(', ')}.`,
+          message: `Не загружен файл лекала (PDF/PLT/DXF/PLO) для размеров: ${missingFileSizes.join(', ')}.`,
           entityType: 'PATTERN_ITEM',
           entityId: order.patternItem.id,
         });

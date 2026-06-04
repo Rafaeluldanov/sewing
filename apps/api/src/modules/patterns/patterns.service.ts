@@ -660,7 +660,7 @@ export class PatternsService {
     actorEmployeeId?: string | null,
   ): Promise<PatternDetailDto> {
     // Файл необязателен: размер можно добавить БЕЗ файла (заглушка) —
-    // файл (PDF/PLT/DXF) догрузят позже. Если file есть — сохраняем и
+    // файл (PDF/PLT/DXF/PLO) догрузят позже. Если file есть — сохраняем и
     // пишем fileUrl/originalFileName; если нет — создаём строку с null.
     const pattern = await this.prisma.patternItem.findUnique({
       where: { id: patternItemId },

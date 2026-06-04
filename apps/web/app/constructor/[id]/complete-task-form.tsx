@@ -19,7 +19,7 @@ import { completeTaskAction } from '../actions';
  * Файл лекала НЕобязателен: задачу можно завершить без файлов вообще
  * или приложив их к части размеров — недогруженные размеры
  * зарегистрируются как заглушки, файл догрузят позже. Принимаем
- * PDF/PLT/DXF (см. `PatternsStorageService.saveSizeFile`, валидация
+ * PDF/PLT/DXF/PLO (см. `PatternsStorageService.saveSizeFile`, валидация
  * `PATTERN_FILE_EXTENSIONS`). Если прислать другой формат — backend
  * отдаст `PATTERN_UPLOAD_INVALID`, покажем сообщение под формой.
  */
@@ -75,7 +75,7 @@ export function CompleteTaskForm({
       }}
     >
       <p className="constructor-complete-form__hint">
-        При наличии приложите файл лекала (PDF/PLT/DXF) к размерам — это
+        При наличии приложите файл лекала (PDF/PLT/DXF/PLO) к размерам — это
         необязательно, файл можно догрузить позже. При необходимости
         поправьте Кулирка/Кашкорсе — м пог. на одно изделие. Эти значения
         попадут в карточку номенклатуры.
@@ -88,7 +88,7 @@ export function CompleteTaskForm({
             <th style={{ textAlign: 'left' }}>Размер</th>
             <th style={{ textAlign: 'left' }}>Кулирка, м пог.</th>
             <th style={{ textAlign: 'left' }}>Кашкорсе, м пог.</th>
-            <th style={{ textAlign: 'left' }}>Файл (PDF/PLT/DXF)</th>
+            <th style={{ textAlign: 'left' }}>Файл (PDF/PLT/DXF/PLO)</th>
           </tr>
         </thead>
         <tbody>
@@ -119,12 +119,12 @@ export function CompleteTaskForm({
                     style={{ width: 110, padding: '4px 6px' }}
                   />
                 </td>
-                <td data-label="Файл (PDF/PLT/DXF)">
+                <td data-label="Файл (PDF/PLT/DXF/PLO)">
                   <input
                     type="file"
                     id={`file-${row.sizeId}`}
                     name={fieldName}
-                    accept=".pdf,.plt,.dxf"
+                    accept=".pdf,.plt,.dxf,.plo"
                   />
                 </td>
                 <td style={{ display: 'none' }}>

@@ -318,7 +318,7 @@ export function PatternSizesManager({
           <AdminEmptyState
             icon={<FileText size={26} strokeWidth={1.6} aria-hidden />}
             title="Файлы по размерам ещё не загружены"
-            hint="Добавьте размер — файл (PDF/PLT/DXF) можно загрузить в той же модалке или позже."
+            hint="Добавьте размер — файл (PDF/PLT/DXF/PLO) можно загрузить в той же модалке или позже."
             actions={
               <button
                 type="button"

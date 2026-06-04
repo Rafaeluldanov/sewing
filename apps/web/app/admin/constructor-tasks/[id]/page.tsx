@@ -71,7 +71,7 @@ export default async function AdminConstructorTaskDetailPage({
     // Не критично — секция «Готовые лекала» просто не отрендерится.
   }
 
-  // Только реально загруженные файлы (PDF/PLT/DXF) — размеры-заглушки
+  // Только реально загруженные файлы (PDF/PLT/DXF/PLO) — размеры-заглушки
   // без файла (fileUrl = null) в секции «Готовые лекала» не показываем.
   const activeSizeFiles =
     pattern?.sizeFiles.filter(

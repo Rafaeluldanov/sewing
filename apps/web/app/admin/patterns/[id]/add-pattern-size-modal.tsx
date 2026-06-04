@@ -11,7 +11,7 @@
  *     активных размерах (родитель уже передаёт сюда `availableSizes`).
  *   - Если все размеры уже добавлены — рисуем подсказку «Все размеры
  *     уже добавлены» и блокируем форму.
- *   - Файл лекала (PDF/PLT/DXF) НЕобязателен: размер можно добавить
+ *   - Файл лекала (PDF/PLT/DXF/PLO) НЕобязателен: размер можно добавить
  *     без файла (заглушка), файл догрузить позже кнопкой «Загрузить».
  *
  * После успешной загрузки server action делает `revalidatePath`,
@@ -186,7 +186,7 @@ export function AddPatternSizeModal({
             <p className="admin-size-plan-modal__subtitle">
               Размер будет добавлен к этой номенклатуре. После этого
               он появится в погонных метрах, площадях материалов и
-              заказах. Файл лекала (PDF/PLT/DXF) можно загрузить сразу
+              заказах. Файл лекала (PDF/PLT/DXF/PLO) можно загрузить сразу
               или позже.
             </p>
           </div>
@@ -226,7 +226,7 @@ export function AddPatternSizeModal({
                 </div>
                 <div className="admin-field">
                   <label htmlFor={`add-dxf-${patternId}`}>
-                    Файл лекала (PDF/PLT/DXF) — необязательно
+                    Файл лекала (PDF/PLT/DXF/PLO) — необязательно
                   </label>
                   <input
                     id={`add-dxf-${patternId}`}

@@ -95,11 +95,11 @@ export type PatternSizeFileStatus = (typeof PATTERN_SIZE_FILE_STATUSES)[number];
 export const PATTERN_PREVIEW_EXTENSIONS = ['jpg', 'jpeg', 'png', 'webp'] as const;
 
 /**
- * Разрешённые расширения файла лекала по размеру. Принимаем PDF/PLT/DXF
+ * Разрешённые расширения файла лекала по размеру. Принимаем PDF/PLT/DXF/PLO
  * (раньше был только DXF). Файл необязателен — размер может быть добавлен
  * без файла, а файл догружается позже (см. `PatternSizeFile.fileUrl` nullable).
  */
-export const PATTERN_FILE_EXTENSIONS = ['pdf', 'plt', 'dxf'] as const;
+export const PATTERN_FILE_EXTENSIONS = ['pdf', 'plt', 'dxf', 'plo'] as const;
 
 /** @deprecated используйте `PATTERN_FILE_EXTENSIONS`. Оставлено как алиас. */
 export const PATTERN_DXF_EXTENSIONS = PATTERN_FILE_EXTENSIONS;
