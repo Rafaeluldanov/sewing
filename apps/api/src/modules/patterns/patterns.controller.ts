@@ -48,6 +48,8 @@ import type { UploadedFileLike } from './patterns-storage.service.js';
  *   POST   /api/patterns/:id/preview                               — загрузить превью
  *   POST   /api/patterns/:id/sizes/:sizeId/file                    — загрузить DXF (новая версия)
  *   DELETE /api/patterns/:id/sizes/:sizeId/file/:fileId            — архивировать DXF
+ *   POST   /api/patterns/:id/sizes/:sizeId/file/:fileId/restore    — восстановить из архива
+ *   DELETE /api/patterns/:id/sizes/:sizeId/file/:fileId/permanent  — удалить DXF навсегда
  *   PUT    /api/patterns/:id/material-areas                        — bulk-replace площадей
  *
  * RBAC — `ADMIN`/`SHOP_MANAGER` (см. требования к этапу). Файлы
@@ -109,6 +111,21 @@ export class PatternsController {
     return this.patterns.update(id, body, user.employeeId);
   }
 
+  /**
+   * Hard-delete архивной номенклатуры (этап «Удалить архивную запись
+   * навсегда»). Отдельный путь `:id/permanent`, чтобы не путать с
+   * архивацией DXF (`DELETE :id/sizes/...`). Сервис блокирует удаление,
+   * если лекало не `ARCHIVED` или на него ссылаются заказы
+   * (`PATTERN_DELETE_FORBIDDEN`).
+   */
+  @Delete(':id/permanent')
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<void> {
+    return this.patterns.remove(id, user.employeeId);
+  }
+
   @Post(':id/preview')
   @UseInterceptors(
     FileInterceptor('file', {
@@ -148,6 +165,31 @@ export class PatternsController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<PatternDetailDto> {
     return this.patterns.archiveSizeFile(id, sizeId, fileId, user.employeeId);
+  }
+
+  @Post(':id/sizes/:sizeId/file/:fileId/restore')
+  restoreSizeFile(
+    @Param('id') id: string,
+    @Param('sizeId') sizeId: string,
+    @Param('fileId') fileId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<PatternDetailDto> {
+    return this.patterns.restoreSizeFile(id, sizeId, fileId, user.employeeId);
+  }
+
+  @Delete(':id/sizes/:sizeId/file/:fileId/permanent')
+  deleteSizeFilePermanent(
+    @Param('id') id: string,
+    @Param('sizeId') sizeId: string,
+    @Param('fileId') fileId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<PatternDetailDto> {
+    return this.patterns.deleteSizeFilePermanent(
+      id,
+      sizeId,
+      fileId,
+      user.employeeId,
+    );
   }
 
   @Put(':id/material-areas')

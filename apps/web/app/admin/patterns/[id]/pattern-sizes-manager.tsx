@@ -6,9 +6,10 @@
  *
  *   1. «Размеры номенклатуры» — счётчик активных размеров + чипсы +
  *      кнопка «Добавить размер».
- *   2. «Файлы по размерам» — таблица только активных размеров с
- *      историей файлов (текущая версия + архивные); per-row кнопки
- *      «Заменить» / «Архивировать».
+ *   2. «Файлы по размерам» — две вкладки «Активные» / «Архив».
+ *      Активные: per-row «Заменить» / «Архивировать» / корзина.
+ *      Архив: все архивные файлы (в т.ч. размеров без активного
+ *      файла) с «Восстановить» / корзина.
  *   3. «Площади материалов» — `PatternMaterialAreasForm` поверх
  *      **только активных размеров**.
  *
@@ -29,7 +30,7 @@
  */
 
 import { useCallback, useMemo, useState } from 'react';
-import { FileText, Plus, Ruler } from 'lucide-react';
+import { Archive, FileText, Plus, Ruler } from 'lucide-react';
 import {
   type PatternMaterialAreaDto,
   type PatternSizeFileDto,
@@ -40,13 +41,13 @@ import {
   AdminCard,
   AdminEmptyState,
   AdminSectionHeader,
-  AdminStatusBadge,
   AdminTable,
   type AdminTableColumn,
 } from '@/components/admin';
-import { statusTone } from '@/lib/admin-labels';
 import { PatternMaterialAreasForm } from './material-areas-form';
 import { ArchivePatternSizeFileForm } from './archive-file-form';
+import { RestorePatternSizeFileForm } from './restore-file-form';
+import { DeletePatternSizeFileForm } from './delete-file-form';
 import { ReplacePatternSizeFileForm } from './replace-pattern-size-file-form';
 import { AddPatternSizeModal } from './add-pattern-size-modal';
 import { CreateSizeModal } from './create-size-modal';
@@ -168,13 +169,6 @@ export function PatternSizesManager({
         .slice()
         .sort((a, b) => a.sortOrder - b.sortOrder),
     [allSizes, activeSizeIds],
-  );
-
-  // Файлы, относящиеся к активным размерам (включая архивные версии
-  // тех же `sizeId`, чтобы менеджер видел историю замен).
-  const filesForActiveSizes = useMemo(
-    () => sizeFiles.filter((f) => activeSizeIds.has(f.sizeId)),
-    [sizeFiles, activeSizeIds],
   );
 
   const openModal = useCallback(() => setModalOpen(true), []);
@@ -300,40 +294,13 @@ export function PatternSizesManager({
       </AdminCard>
 
       {/* ---------------------------------------------------- */}
-      {/* 2. DXF по размерам — только активные размеры         */}
+      {/* 2. Файлы по размерам — вкладки «Активные» / «Архив»  */}
       {/* ---------------------------------------------------- */}
-      <AdminCard>
-        <AdminSectionHeader
-          title="Файлы по размерам"
-          hint={
-            hasActive ? `${activeSizes.length} активных` : undefined
-          }
-        />
-        {hasActive ? (
-          <ActiveSizesFilesTable
-            patternId={patternId}
-            files={filesForActiveSizes}
-          />
-        ) : (
-          <AdminEmptyState
-            icon={<FileText size={26} strokeWidth={1.6} aria-hidden />}
-            title="Файлы по размерам ещё не загружены"
-            hint="Добавьте размер — файл (PDF/PLT/DXF/PLO) можно загрузить в той же модалке или позже."
-            actions={
-              <button
-                type="button"
-                className="admin-btn admin-btn--primary"
-                onClick={openModal}
-                aria-haspopup="dialog"
-                aria-expanded={modalOpen}
-              >
-                <Plus size={16} strokeWidth={1.7} aria-hidden />
-                Добавить размер
-              </button>
-            }
-          />
-        )}
-      </AdminCard>
+      <PatternSizeFilesCard
+        patternId={patternId}
+        sizeFiles={sizeFiles}
+        onAddSize={openModal}
+      />
 
       {/* ---------------------------------------------------- */}
       {/* 3. Площади материалов — только активные размеры      */}
@@ -396,18 +363,135 @@ export function PatternSizesManager({
 }
 
 /**
- * Таблица DXF-файлов **по активным размерам**: одна строка на запись
- * (включая архивные версии тех же `sizeId` — менеджер видит, какие
- * версии были до текущей). Запись со `status = ACTIVE` имеет в
- * «Действиях» две кнопки: «Заменить» (загрузить новую версию) и
- * «Архивировать»; архивные строки — без действий.
+ * Карточка «Файлы по размерам» с двумя вкладками:
+ *
+ *   - **Активные** — файлы со `status = ACTIVE` (по строке на размер).
+ *     Действия: «Заменить» (новая версия), «Архивировать», корзина
+ *     (жёсткое удаление).
+ *   - **Архив** — файлы со `status = ARCHIVED` по **всем** размерам,
+ *     в т.ч. тем, у которых не осталось активного файла (раньше такие
+ *     записи вообще не показывались). Действия: «Восстановить»
+ *     (`ARCHIVED → ACTIVE`) и корзина.
+ *
+ * Корзина (`DeletePatternSizeFileForm`) есть в обеих вкладках — по
+ * решению задачи «жёсткое удаление везде». Архивация остаётся
+ * обратимой (через вкладку «Архив»), удаление — безвозвратное.
  */
-function ActiveSizesFilesTable({
+function PatternSizeFilesCard({
+  patternId,
+  sizeFiles,
+  onAddSize,
+}: {
+  patternId: string;
+  sizeFiles: readonly PatternSizeFileDto[];
+  onAddSize: () => void;
+}) {
+  const [tab, setTab] = useState<'active' | 'archived'>('active');
+
+  const activeFiles = useMemo(
+    () => sizeFiles.filter((f) => f.status === 'ACTIVE'),
+    [sizeFiles],
+  );
+  const archivedFiles = useMemo(
+    () => sizeFiles.filter((f) => f.status === 'ARCHIVED'),
+    [sizeFiles],
+  );
+
+  const hasAnyActive = activeFiles.length > 0;
+  const hasAnyArchived = archivedFiles.length > 0;
+
+  return (
+    <AdminCard>
+      <AdminSectionHeader
+        title="Файлы по размерам"
+        hint={`Активных: ${activeFiles.length} · В архиве: ${archivedFiles.length}`}
+        actions={
+          <span
+            className="admin-tabs"
+            role="tablist"
+            aria-label="Фильтр файлов по статусу"
+            style={{ marginBottom: 0 }}
+          >
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'active'}
+              className={`admin-tab ${tab === 'active' ? 'admin-tab--active' : ''}`}
+              onClick={() => setTab('active')}
+            >
+              <FileText size={14} strokeWidth={1.7} aria-hidden />
+              Активные ({activeFiles.length})
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={tab === 'archived'}
+              className={`admin-tab ${tab === 'archived' ? 'admin-tab--active' : ''}`}
+              onClick={() => setTab('archived')}
+            >
+              <Archive size={14} strokeWidth={1.7} aria-hidden />
+              Архив ({archivedFiles.length})
+            </button>
+          </span>
+        }
+      />
+
+      {tab === 'active' ? (
+        hasAnyActive ? (
+          <PatternSizeFilesTable
+            patternId={patternId}
+            files={activeFiles}
+            mode="active"
+          />
+        ) : (
+          <AdminEmptyState
+            icon={<FileText size={26} strokeWidth={1.6} aria-hidden />}
+            title="Активных файлов нет"
+            hint="Добавьте размер — файл (PDF/PLT/DXF/PLO) можно загрузить в той же модалке или позже."
+            actions={
+              <button
+                type="button"
+                className="admin-btn admin-btn--primary"
+                onClick={onAddSize}
+              >
+                <Plus size={16} strokeWidth={1.7} aria-hidden />
+                Добавить размер
+              </button>
+            }
+          />
+        )
+      ) : hasAnyArchived ? (
+        <PatternSizeFilesTable
+          patternId={patternId}
+          files={archivedFiles}
+          mode="archived"
+        />
+      ) : (
+        <AdminEmptyState
+          icon={<Archive size={26} strokeWidth={1.6} aria-hidden />}
+          title="В архиве пусто"
+          hint="Заархивированные файлы размеров появятся здесь — отсюда их можно восстановить или удалить навсегда."
+        />
+      )}
+    </AdminCard>
+  );
+}
+
+/**
+ * Таблица файлов размеров для одной вкладки. `mode` определяет набор
+ * действий в последней колонке:
+ *   - `active`   → «Заменить» + «Архивировать» + корзина;
+ *   - `archived` → «Восстановить» + корзина.
+ * Колонку «Статус» не рисуем — она избыточна (вкладка = один статус).
+ */
+function PatternSizeFilesTable({
   patternId,
   files,
+  mode,
 }: {
   patternId: string;
   files: PatternSizeFileDto[];
+  mode: 'active' | 'archived';
 }) {
   const rows = [...files].sort((a, b) => {
     if (a.size.sortOrder !== b.size.sortOrder) {
@@ -459,41 +543,41 @@ function ActiveSizesFilesTable({
       ),
     },
     {
-      key: 'status',
-      header: 'Статус',
-      render: (f) => (
-        <AdminStatusBadge tone={statusTone(f.status)}>
-          {f.status === 'ACTIVE'
-            ? 'Активен'
-            : f.status === 'ARCHIVED'
-              ? 'Архив'
-              : f.status}
-        </AdminStatusBadge>
-      ),
-    },
-    {
       key: 'actions',
       header: '',
       isAction: true,
-      render: (f) =>
-        f.status === 'ACTIVE' ? (
-          <span
-            style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}
-          >
-            <ReplacePatternSizeFileForm
-              patternId={patternId}
-              sizeId={f.sizeId}
-              hasFile={f.fileUrl != null}
-            />
-            <ArchivePatternSizeFileForm
+      render: (f) => (
+        <span
+          style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}
+        >
+          {mode === 'active' ? (
+            <>
+              <ReplacePatternSizeFileForm
+                patternId={patternId}
+                sizeId={f.sizeId}
+                hasFile={f.fileUrl != null}
+              />
+              <ArchivePatternSizeFileForm
+                patternId={patternId}
+                sizeId={f.sizeId}
+                fileId={f.id}
+              />
+            </>
+          ) : (
+            <RestorePatternSizeFileForm
               patternId={patternId}
               sizeId={f.sizeId}
               fileId={f.id}
             />
-          </span>
-        ) : (
-          <span className="admin-muted">—</span>
-        ),
+          )}
+          <DeletePatternSizeFileForm
+            patternId={patternId}
+            sizeId={f.sizeId}
+            fileId={f.id}
+            label={`${f.size.code} · v${f.version}`}
+          />
+        </span>
+      ),
     },
   ];
   return <AdminTable rows={rows} columns={columns} rowKey={(f) => f.id} />;

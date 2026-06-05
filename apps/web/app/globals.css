@@ -6746,6 +6746,7 @@ body:has(.display-screen) {
   font-weight: 500;
 }
 .admin-table__action-link:hover { text-decoration: underline; }
+.admin-table__action-link--danger { color: var(--admin-danger); }
 
 /* ---------------------------------------------------------------------------
    Status badge — мягкие пилюли с тоном.

@@ -31,6 +31,7 @@ import {
   PatternCategoryInactiveException,
   PatternCategoryNotFoundException,
   PatternMaterialRoleNotInCategoryException,
+  PatternDeleteForbiddenException,
   PatternNotFoundException,
   PatternParameterNormNotAllowedException,
   PatternSizeFileNotFoundException,
@@ -344,6 +345,59 @@ export class PatternsService {
       employeeId: actorEmployeeId ?? null,
     });
     return this.getOne(id);
+  }
+
+  /**
+   * Hard-delete номенклатуры (этап «Удалить архивную запись навсегда»).
+   *
+   * Политика «блокировать, если используется»
+   * (`PatternDeleteForbiddenException`):
+   *   1) удалять можно ТОЛЬКО архивную номенклатуру (`status =
+   *      ARCHIVED`) — это её soft-удалённое состояние;
+   *   2) блокируем, если на лекало ссылается хотя бы один заказ
+   *      (`Order.patternItemId`). FK — `SET NULL`, т.е. БД молча
+   *      обнулила бы snapshot исторических заказов; мы этого не хотим.
+   *
+   * Owned-дети (`PatternSizeFile` / `PatternMaterialArea` /
+   * `PatternItemParameterNorm` / `PatternItemSizeParameterValue` /
+   * `ConstructorTask`) уходят каскадом (`onDelete: Cascade`) — это
+   * части самой номенклатуры, не внешняя история.
+   */
+  async remove(id: string, actorEmployeeId?: string | null): Promise<void> {
+    const current = await this.prisma.patternItem.findUnique({
+      where: { id },
+      select: { id: true, name: true, article: true, status: true },
+    });
+    if (!current) throw new PatternNotFoundException();
+    if (current.status !== 'ARCHIVED') {
+      throw new PatternDeleteForbiddenException(
+        'Удалить навсегда можно только архивную номенклатуру. Сначала архивируйте её.',
+      );
+    }
+
+    const orderCount = await this.prisma.order.count({
+      where: { patternItemId: id },
+    });
+    if (orderCount > 0) {
+      throw new PatternDeleteForbiddenException(
+        `Нельзя удалить номенклатуру навсегда — на неё ссылается заказов: ${orderCount}. Сначала удалите / отвяжите эти заказы.`,
+      );
+    }
+
+    await this.prisma.patternItem.delete({ where: { id } });
+
+    this.logger.log(`event=pattern.delete id=${id} article=${current.article}`);
+    await this.audit.log({
+      event: 'PATTERN_DELETED',
+      entityType: 'PATTERN',
+      entityId: id,
+      payload: {
+        name: current.name,
+        article: current.article,
+        previousStatus: current.status,
+      },
+      employeeId: actorEmployeeId ?? null,
+    });
   }
 
   // ===========================================================================
@@ -749,6 +803,94 @@ export class PatternsService {
         sizeId,
         version: file.version,
         previousStatus: file.status,
+      },
+      employeeId: actorEmployeeId ?? null,
+    });
+    return this.getOne(patternItemId);
+  }
+
+  /**
+   * Восстановление архивного файла размера (`ARCHIVED → ACTIVE`).
+   * Обратная операция к `archiveSizeFile`. Если у того же `sizeId`
+   * уже есть другой активный файл — не трогаем его: размер просто
+   * получит два активных файла, и «активным» в UI станет старший по
+   * `version` (см. `computeActiveSizes` на фронте). Это сознательно
+   * простой вариант (см. решение в обсуждении задачи).
+   */
+  async restoreSizeFile(
+    patternItemId: string,
+    sizeId: string,
+    fileId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<PatternDetailDto> {
+    const file = await this.prisma.patternSizeFile.findFirst({
+      where: { id: fileId, patternItemId, sizeId },
+    });
+    if (!file) throw new PatternSizeFileNotFoundException();
+    if (file.status !== 'ACTIVE') {
+      await this.prisma.patternSizeFile.update({
+        where: { id: file.id },
+        data: { status: 'ACTIVE' },
+      });
+    }
+    this.logger.log(
+      `event=pattern.size_file_restore pattern=${patternItemId} ` +
+        `size=${sizeId} file=${fileId}`,
+    );
+    await this.audit.log({
+      event: 'PATTERN_SIZE_FILE_RESTORED',
+      entityType: 'PATTERN',
+      entityId: patternItemId,
+      payload: {
+        fileId: file.id,
+        sizeId,
+        version: file.version,
+        previousStatus: file.status,
+      },
+      employeeId: actorEmployeeId ?? null,
+    });
+    return this.getOne(patternItemId);
+  }
+
+  /**
+   * Жёсткое удаление файла размера: удаляем запись `PatternSizeFile`
+   * из БД и физический файл с диска. В отличие от архивации — это
+   * безвозвратно. Разрешено для любого статуса (ACTIVE/ARCHIVED) по
+   * решению задачи («корзина везде»).
+   *
+   * Заказы/паспорта ссылаются на снапшот лекала по `patternItemId`,
+   * а не на конкретный `PatternSizeFile`, поэтому отдельной проверки
+   * «файл используется заказом» тут нет (в отличие от hard-delete
+   * самого лекала). Сначала удаляем строку БД, затем best-effort
+   * чистим диск — если запись удалить не удалось, файл остаётся на
+   * месте.
+   */
+  async deleteSizeFilePermanent(
+    patternItemId: string,
+    sizeId: string,
+    fileId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<PatternDetailDto> {
+    const file = await this.prisma.patternSizeFile.findFirst({
+      where: { id: fileId, patternItemId, sizeId },
+    });
+    if (!file) throw new PatternSizeFileNotFoundException();
+    await this.prisma.patternSizeFile.delete({ where: { id: file.id } });
+    await this.storage.deleteSizeFile(file.fileUrl);
+    this.logger.log(
+      `event=pattern.size_file_delete pattern=${patternItemId} ` +
+        `size=${sizeId} file=${fileId}`,
+    );
+    await this.audit.log({
+      event: 'PATTERN_SIZE_FILE_DELETED',
+      entityType: 'PATTERN',
+      entityId: patternItemId,
+      payload: {
+        fileId: file.id,
+        sizeId,
+        version: file.version,
+        previousStatus: file.status,
+        fileUrl: file.fileUrl,
       },
       employeeId: actorEmployeeId ?? null,
     });

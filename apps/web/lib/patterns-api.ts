@@ -118,6 +118,18 @@ export function uploadPatternSizeFile(
   );
 }
 
+/**
+ * Hard-delete архивной номенклатуры (`DELETE /patterns/:id/permanent`).
+ * Backend блокирует удаление, если лекало не `ARCHIVED` или на него
+ * ссылаются заказы (409 `PATTERN_DELETE_FORBIDDEN`). Ответ пустой.
+ */
+export function deletePattern(id: string): Promise<void> {
+  return apiFetch<void>(
+    `/patterns/${encodeURIComponent(id)}/permanent`,
+    { method: 'DELETE' },
+  );
+}
+
 export function archivePatternSizeFile(
   patternId: string,
   sizeId: string,
@@ -125,6 +137,36 @@ export function archivePatternSizeFile(
 ): Promise<PatternDetailDto> {
   return apiFetch<PatternDetailDto>(
     `/patterns/${encodeURIComponent(patternId)}/sizes/${encodeURIComponent(sizeId)}/file/${encodeURIComponent(fileId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+/**
+ * Восстановить архивный файл размера (`ARCHIVED → ACTIVE`).
+ * `POST /patterns/:id/sizes/:sizeId/file/:fileId/restore`.
+ */
+export function restorePatternSizeFile(
+  patternId: string,
+  sizeId: string,
+  fileId: string,
+): Promise<PatternDetailDto> {
+  return apiFetch<PatternDetailDto>(
+    `/patterns/${encodeURIComponent(patternId)}/sizes/${encodeURIComponent(sizeId)}/file/${encodeURIComponent(fileId)}/restore`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * Жёсткое удаление файла размера (запись + файл с диска), безвозвратно.
+ * `DELETE /patterns/:id/sizes/:sizeId/file/:fileId/permanent`.
+ */
+export function deletePatternSizeFile(
+  patternId: string,
+  sizeId: string,
+  fileId: string,
+): Promise<PatternDetailDto> {
+  return apiFetch<PatternDetailDto>(
+    `/patterns/${encodeURIComponent(patternId)}/sizes/${encodeURIComponent(sizeId)}/file/${encodeURIComponent(fileId)}/permanent`,
     { method: 'DELETE' },
   );
 }

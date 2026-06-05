@@ -45,6 +45,9 @@ import {
   archivePatternSizeFile,
   clonePattern,
   createPattern,
+  deletePattern,
+  deletePatternSizeFile,
+  restorePatternSizeFile,
   replacePatternItemParameterNorms,
   replacePatternItemSizeParameterValues,
   replacePatternMaterialAreas,
@@ -232,6 +235,51 @@ export async function updatePatternAction(
 }
 
 /**
+ * Soft-archive номенклатуры — переводим `status = ARCHIVED` через
+ * существующий `PATCH /api/patterns/:id` (отдельного DELETE-эндпоинта
+ * у лекал нет; `UpdatePatternSchema.status` уже принимает `ARCHIVED`).
+ *
+ * Карточку из БД НЕ удаляем: snapshot-привязки заказов/паспортов
+ * (`Order.patternItemId`, `ConstructorTask`, нормы) сохраняются, лекало
+ * просто уходит из active-выборок (`listPatterns({ status: 'ACTIVE' })`),
+ * поэтому перестаёт предлагаться в формах заказа / техкарты.
+ *
+ * Без `redirect`: вызывается из client-кнопки через `useTransition`
+ * (см. `archive-pattern-button.tsx`), а `redirect()` бросает
+ * `NEXT_REDIRECT`, который попал бы в `catch` кнопки и показался как
+ * ошибка. После `revalidatePath` карточка перерисуется со статусом
+ * «Архив». Ошибки пробрасываем `Error`-ом — кнопка покажет их inline.
+ */
+export async function archivePatternAction(patternId: string): Promise<void> {
+  try {
+    await updatePattern(patternId, { status: 'ARCHIVED' });
+  } catch (e) {
+    throw new Error(explainApiError(e).error);
+  }
+  revalidatePath('/admin/patterns');
+  revalidatePath(`/admin/patterns/${patternId}`);
+}
+
+/**
+ * Hard-delete архивной номенклатуры (`DELETE /api/patterns/:id/permanent`).
+ * Зовётся из кнопки «Удалить навсегда» на карточке (видна только для
+ * `status = ARCHIVED`). Backend блокирует удаление, если на лекало
+ * ссылаются заказы (409 `PATTERN_DELETE_FORBIDDEN`) — пробрасываем
+ * текст `Error`-ом, кнопка покажет его inline.
+ *
+ * Без `redirect`: карточки лекала после удаления нет, навигацию на
+ * список делает client-кнопка (`router.push`) после успешного `await`.
+ */
+export async function deletePatternAction(patternId: string): Promise<void> {
+  try {
+    await deletePattern(patternId);
+  } catch (e) {
+    throw new Error(explainApiError(e).error);
+  }
+  revalidatePath('/admin/patterns');
+}
+
+/**
  * Загрузка превью карточки лекала. На input-е стоит accept-фильтр,
  * но финальная валидация (расширение / размер) идёт на backend
  * (`PatternsStorageService.savePreview`).
@@ -311,6 +359,52 @@ export async function archivePatternSizeFileAction(
     // рендер карточки покажет файл всё ещё активным.
     // eslint-disable-next-line no-console
     console.error('archivePatternSizeFile failed', explainApiError(e));
+  }
+  revalidatePath('/admin/patterns');
+  revalidatePath(`/admin/patterns/${patternId}`);
+}
+
+/**
+ * Восстановление архивного файла размера (`ARCHIVED → ACTIVE`).
+ * Обратная к `archivePatternSizeFileAction`. Вызывается из inline-
+ * кнопки «Восстановить» в архивной вкладке блока «Файлы по размерам».
+ *
+ * Бросает `Error` — кнопка (`restore-file-form.tsx`) ловит его через
+ * `useTransition` и показывает inline. После успеха `revalidatePath`
+ * перерисует карточку: файл вернётся в активную вкладку.
+ */
+export async function restorePatternSizeFileAction(
+  patternId: string,
+  sizeId: string,
+  fileId: string,
+): Promise<void> {
+  try {
+    await restorePatternSizeFile(patternId, sizeId, fileId);
+  } catch (e) {
+    throw new Error(explainApiError(e).error);
+  }
+  revalidatePath('/admin/patterns');
+  revalidatePath(`/admin/patterns/${patternId}`);
+}
+
+/**
+ * Жёсткое удаление файла размера (запись + файл с диска),
+ * безвозвратно. Вызывается из кнопки-корзины с подтверждением
+ * (`delete-file-form.tsx`) в обеих вкладках блока «Файлы по размерам».
+ *
+ * Бросает `Error` — кнопка ловит его через `useTransition` и
+ * показывает inline. После успеха `revalidatePath` перерисует
+ * карточку без удалённого файла.
+ */
+export async function deletePatternSizeFileAction(
+  patternId: string,
+  sizeId: string,
+  fileId: string,
+): Promise<void> {
+  try {
+    await deletePatternSizeFile(patternId, sizeId, fileId);
+  } catch (e) {
+    throw new Error(explainApiError(e).error);
   }
   revalidatePath('/admin/patterns');
   revalidatePath(`/admin/patterns/${patternId}`);

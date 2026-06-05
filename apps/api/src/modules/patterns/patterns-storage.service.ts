@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
-import { copyFile, mkdir, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, unlink, writeFile } from 'node:fs/promises';
 import { join, posix, resolve } from 'node:path';
 import {
   PATTERN_FILE_EXTENSIONS,
@@ -186,6 +186,50 @@ export class PatternsStorageService {
       publicUrl: `${this.publicPrefix}/${targetRel}`,
       storedFileName,
     };
+  }
+
+  /**
+   * Физически удалить файл размера с диска по его публичному URL.
+   * Используется при «жёстком удалении» записи `PatternSizeFile`
+   * (см. `PatternsService.deleteSizeFilePermanent`).
+   *
+   * Best-effort: если файла на диске уже нет (`ENOENT`) или URL
+   * лежит вне локального каталога (внешнее хранилище/legacy) — не
+   * валим операцию, просто логируем. Запись в БД всё равно удалится,
+   * а «осиротевший» файл максимум останется на диске (то же
+   * допущение, что и для orphan-файлов при сбое upload, см. шапку
+   * `PatternsService`).
+   */
+  async deleteSizeFile(fileUrl: string | null): Promise<void> {
+    if (!fileUrl) return;
+    let relative: string;
+    try {
+      relative = this.publicUrlToRelative(fileUrl);
+    } catch {
+      this.logger.warn(
+        `deleteSizeFile: URL вне локального каталога, пропускаем: ${fileUrl}`,
+      );
+      return;
+    }
+    const absolute = resolve(this.uploadsRoot, relative);
+    if (
+      !absolute.startsWith(this.uploadsRoot + '/') &&
+      absolute !== this.uploadsRoot
+    ) {
+      this.logger.error(
+        `deleteSizeFile: path traversal suppressed: ${absolute} outside ${this.uploadsRoot}`,
+      );
+      return;
+    }
+    try {
+      await unlink(absolute);
+    } catch (e) {
+      const code = (e as NodeJS.ErrnoException)?.code;
+      if (code === 'ENOENT') return;
+      this.logger.warn(
+        `deleteSizeFile: не удалось удалить ${absolute}: ${String(e)}`,
+      );
+    }
   }
 
   /**
