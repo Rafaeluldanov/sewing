@@ -31,9 +31,15 @@
  *     `customerUnitPrice`, `customerCurrency`, hidden
  *     `redirectTo="admin"`.
  *
- * Никаких autosave / drafts на load — заказ создаётся **только**
- * по нажатию submit. Hero и Product tab лежат внутри ОДНОГО
- * `<form>`, поэтому FormData собирается атомарно.
+ * Никаких autosave / drafts на load. Заказ-черновик (`status=DRAFT`)
+ * создаётся по явному действию пользователя двумя путями:
+ *   - «Создать заказ» (hero submit) — собирает весь `<form>` в FormData
+ *     и шлёт `createOrderAction`; Hero и Product tab лежат внутри ОДНОГО
+ *     `<form>`, поэтому FormData собирается атомарно;
+ *   - «Сохранить изделие» (вкладка «Сделать расчёт») — создаёт DRAFT-Order
+ *     сразу через `createOrderForCalculationAction` и редиректит на
+ *     `/admin/orders/[id]/edit`, чтобы изделие не терялось при перезагрузке
+ *     (см. проп `onSaveCalculateAsync` у `CreateProductInline`).
  */
 
 import Link from 'next/link';
@@ -95,6 +101,7 @@ import {
 } from '@/components/orders/order-detail-tabs-config';
 import {
   createOrderAction,
+  createOrderForCalculationAction,
   type FormActionState,
 } from '@/app/orders/actions';
 import { SizePlanSelector } from './size-plan-selector';
@@ -546,6 +553,61 @@ export function AdminCreateOrderForm({
                   // транзакции, чтобы избежать orphan-task без
                   // привязки к заказу.
                   createDraftOrderOnConstructor
+                  // Этап «Сохранить изделие = создать DRAFT-заказ»:
+                  // вместо локального state создаём реальный заказ
+                  // (productMode = CREATE_FOR_CALCULATION) с уже
+                  // заполненными полями шапки и уводим на edit-страницу,
+                  // где менеджер дозаполнит остальное. Заказ сразу в БД
+                  // — переживает перезагрузку и виден в `/admin/orders`
+                  // как «Черновик».
+                  onSaveCalculateAsync={async (payload) => {
+                    const dto = {
+                      orderDate: today,
+                      productMode: 'CREATE_FOR_CALCULATION' as const,
+                      newProductCalculation: {
+                        categoryId: payload.categoryId,
+                        techCardId: payload.techCardId,
+                        patternDevelopmentCostRub:
+                          payload.patternDevelopmentCostRub,
+                        patternDevelopmentCostInCostPrice:
+                          payload.patternDevelopmentCostInCostPrice,
+                        sizes: payload.sizes.map((s) => ({
+                          sizeId: s.sizeId,
+                          qtyPlan: s.qtyPlan,
+                          areas: s.areas.map((a) => ({
+                            roleKey: a.roleKey,
+                            areaM2: a.areaM2,
+                          })),
+                        })),
+                      },
+                      // Поля шапки на момент сохранения изделия —
+                      // что заполнено, то и сохраняем; пустые опускаем
+                      // (DRAFT допускает отсутствие).
+                      clientId: clientId || undefined,
+                      companyDivisionId: companyDivisionId || undefined,
+                      finishedGoodsWarehouseId:
+                        finishedGoodsWarehouseId || undefined,
+                      materialsAndHardwareCostPolicy,
+                      dueDate: dueDate || undefined,
+                      customerUnitPrice:
+                        customerUnitPrice.trim() === ''
+                          ? undefined
+                          : customerUnitPrice.trim(),
+                      customerCurrency,
+                      comment:
+                        comment.trim() === '' ? undefined : comment.trim(),
+                    };
+                    const res = await createOrderForCalculationAction(dto);
+                    if (res.ok && res.orderId) {
+                      router.push(`/admin/orders/${res.orderId}/edit`);
+                      return { ok: true };
+                    }
+                    return {
+                      ok: false,
+                      error:
+                        res.error ?? 'Не удалось создать черновик заказа',
+                    };
+                  }}
                   onCancel={() => {
                     // «Отмена» внутри inline-формы возвращает в EMPTY,
                     // если ничего не было сохранено, и в CREATED, если
@@ -556,6 +618,11 @@ export function AdminCreateOrderForm({
                   }}
                   onSave={(result) => {
                     if (result.kind === 'calculate') {
+                      // На `/admin/orders/new` ветка `calculate` не
+                      // вызывается: `onSaveCalculateAsync` (передан выше)
+                      // перехватывает «Сохранить изделие», создаёт
+                      // DRAFT-Order и уводит на edit. Оставлено как
+                      // безопасный fallback на случай отсутствия пропа.
                       setSavedInlineProduct(result.payload);
                       setSavedConstructorTask(null);
                       setProductBlockMode('CREATED');

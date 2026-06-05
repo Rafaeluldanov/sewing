@@ -178,6 +178,24 @@ interface Props {
    * `/admin/orders/[id]/edit` оставляем `false` — там заказ уже есть.
    */
   createDraftOrderOnConstructor?: boolean;
+  /**
+   * Этап «Сохранить изделие = создать DRAFT-заказ» (см.
+   * `admin-create-order-form.tsx`). Если проп передан, кнопка
+   * «Сохранить изделие» на вкладке «Сделать расчёт» НЕ кладёт
+   * изделие в локальный state через `onSave`, а вызывает этот
+   * async-колбэк — родитель создаёт реальный DRAFT-Order в БД и
+   * редиректит на `/admin/orders/[id]/edit`. Колбэк возвращает
+   * `{ ok, error }`: при `ok:false` показываем `error` прямо в форме
+   * и снимаем pending; при `ok:true` родитель уводит со страницы,
+   * поэтому форму НЕ закрываем сами.
+   *
+   * Если проп НЕ передан (страница редактирования заказа
+   * `/admin/orders/[id]/edit`) — поведение прежнее: синхронный
+   * `onSave({ kind:'calculate', ... })` в локальный state.
+   */
+  onSaveCalculateAsync?: (
+    payload: SavedInlineProductPayload,
+  ) => Promise<{ ok: boolean; error?: string }>;
 }
 
 let __rowSeq = 0;
@@ -212,6 +230,7 @@ export function CreateProductInline({
   initialPatterns = [],
   initialTab = 'calculate',
   createDraftOrderOnConstructor = false,
+  onSaveCalculateAsync,
 }: Props) {
   const [tab, setTab] = useState<TabId>(initialTab);
 
@@ -246,6 +265,10 @@ export function CreateProductInline({
     initialValue?.patternDevelopmentCostInCostPrice ?? true,
   );
   const [submitError, setSubmitError] = useState<string | null>(null);
+  // Pending для async-сценария «Сохранить изделие = создать DRAFT-заказ»
+  // (см. проп `onSaveCalculateAsync`). На странице редактирования заказа,
+  // где проп не передан, остаётся `false` — кнопка работает синхронно.
+  const [calcSubmitting, setCalcSubmitting] = useState(false);
 
   const [showCategoryWindow, setShowCategoryWindow] = useState(false);
   const [showTechCardWindow, setShowTechCardWindow] = useState(false);
@@ -604,7 +627,7 @@ export function CreateProductInline({
     }
   }
 
-  function onSubmit(e: FormEvent) {
+  async function onSubmit(e: FormEvent) {
     e.preventDefault();
     setSubmitError(null);
 
@@ -647,19 +670,39 @@ export function CreateProductInline({
       ? (techCards.find((t) => t.id === techCardId)?.name ?? null)
       : null;
 
-    onSave({
-      kind: 'calculate',
-      payload: {
-        categoryId: categoryId === '' ? null : categoryId,
-        categoryName,
-        techCardId: techCardId === '' ? null : techCardId,
-        techCardName,
-        patternDevelopmentCostRub:
-          devCost.trim() === '' ? null : devCost.trim().replace(',', '.'),
-        patternDevelopmentCostInCostPrice: devCostInCostPrice,
-        sizes: sizesPayload,
-      },
-    });
+    const payload: SavedInlineProductPayload = {
+      categoryId: categoryId === '' ? null : categoryId,
+      categoryName,
+      techCardId: techCardId === '' ? null : techCardId,
+      techCardName,
+      patternDevelopmentCostRub:
+        devCost.trim() === '' ? null : devCost.trim().replace(',', '.'),
+      patternDevelopmentCostInCostPrice: devCostInCostPrice,
+      sizes: sizesPayload,
+    };
+
+    // Сценарий `/admin/orders/new`: «Сохранить изделие» создаёт реальный
+    // DRAFT-Order в БД и уводит на edit-страницу (проп
+    // `onSaveCalculateAsync`). На странице редактирования заказа проп
+    // не передан — кладём изделие в локальный state как раньше.
+    if (onSaveCalculateAsync) {
+      setCalcSubmitting(true);
+      try {
+        const res = await onSaveCalculateAsync(payload);
+        if (!res.ok) {
+          setSubmitError(res.error ?? 'Не удалось создать черновик заказа');
+          setCalcSubmitting(false);
+        }
+        // При успехе родитель редиректит на `/admin/orders/[id]/edit`,
+        // поэтому pending НЕ снимаем — форма исчезнет вместе со страницей.
+      } catch {
+        setSubmitError('Не удалось создать черновик заказа');
+        setCalcSubmitting(false);
+      }
+      return;
+    }
+
+    onSave({ kind: 'calculate', payload });
   }
 
   return (
@@ -965,17 +1008,26 @@ export function CreateProductInline({
               type="button"
               className="cpi-btn cpi-btn--ghost"
               onClick={onCancel}
+              disabled={calcSubmitting}
             >
               Отмена
             </button>
-            {/* Локальное сохранение: тип "button" + ручной onClick,
-                чтобы не сабмитить родительский <form action={createOrderAction}>. */}
+            {/* type="button" + ручной onClick, чтобы не сабмитить
+                родительский <form action={createOrderAction}>. В сценарии
+                `/admin/orders/new` onSubmit создаёт DRAFT-Order и
+                редиректит на edit (проп onSaveCalculateAsync); на edit-
+                странице — локальное сохранение через onSave. */}
             <button
               type="button"
               className="cpi-btn cpi-btn--primary"
               onClick={onSubmit}
+              disabled={calcSubmitting}
             >
-              Сохранить изделие
+              {calcSubmitting
+                ? 'Создаём черновик заказа…'
+                : onSaveCalculateAsync
+                  ? 'Сохранить изделие и продолжить'
+                  : 'Сохранить изделие'}
             </button>
           </footer>
         </div>
