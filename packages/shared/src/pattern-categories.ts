@@ -618,12 +618,14 @@ const ParametersArraySchema = z
     //     `QTY_PER_ITEM` — это «описание / услуга», в `PatternMaterialArea`
     //     не попадает).
     //
-    // Дополнительно: `label` после trim не должен повторяться внутри
-    // категории — иначе UI рисует две одинаковые колонки и менеджер
-    // не отличит их визуально. На MVP считаем это soft guard
-    // (case-sensitive `trim`-сравнение).
+    // Дополнительно: пара `(label, unit)` после trim не должна
+    // повторяться внутри категории — иначе UI рисует две неотличимые
+    // колонки. Сам по себе `label` повторять РАЗРЕШЕНО, если у строк
+    // разная «Единица потребности»: например «Шнур» можно завести и в
+    // метрах (м), и в штуках (шт) для одного изделия. На MVP считаем
+    // это soft guard (case-sensitive `trim`-сравнение).
     const seenAreaRoleKeys = new Set<string>();
-    const seenLabels = new Set<string>();
+    const seenLabelUnits = new Set<string>();
     for (let i = 0; i < arr.length; i++) {
       const p = arr[i]!;
       if (p.inputType === 'AREA_M2_BY_SIZE') {
@@ -644,16 +646,22 @@ const ParametersArraySchema = z
       // Для LINEAR_M_BY_SIZE значения хранятся по
       // `categoryParameterId` (`PatternItemSizeParameterValue`),
       // поэтому повтор roleKey не делает сохранение неоднозначным.
-      const labelKey = p.label.trim();
-      if (labelKey !== '') {
-        if (seenLabels.has(labelKey)) {
+      const labelTrimmed = p.label.trim();
+      if (labelTrimmed !== '') {
+        // Ключ уникальности = (label, unit): один и тот же label с
+        // разными единицами потребности — это разные параметры.
+        const unitTrimmed = (p.unit ?? '').trim();
+        const labelUnitKey = `${labelTrimmed} ${unitTrimmed}`;
+        if (seenLabelUnits.has(labelUnitKey)) {
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [i, 'label'],
-            message: `Название «${labelKey}» уже использовано в другом параметре`,
+            message: `Название «${labelTrimmed}»${
+              unitTrimmed ? ` (${unitTrimmed})` : ''
+            } уже использовано в другом параметре с той же единицей`,
           });
         }
-        seenLabels.add(labelKey);
+        seenLabelUnits.add(labelUnitKey);
       }
     }
   });
