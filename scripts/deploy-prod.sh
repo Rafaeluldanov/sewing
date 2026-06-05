@@ -154,6 +154,36 @@ log "docker compose up -d --remove-orphans"
 "${DC_BASE[@]}" up -d --remove-orphans
 
 # -----------------------------------------------------------------------------
+# 3.5 nginx reload (re-resolve upstream IPs)
+#
+# `build` пересобирает образы web/api → `up -d` ПЕРЕСОЗДАЁТ их контейнеры и
+# docker выдаёт им новые IP (нередко web и api меняются местами в подсети).
+# nginx-контейнер при этом не меняется и не пересоздаётся, а upstream-блоки
+# (prod_web_upstream / prod_api_upstream в nginx.conf) резолвят хост ОДИН раз
+# на старте конфига и кэшируют IP навсегда (open-source nginx без `resolve`).
+# Итог: после деплоя весь трафик уходит в перепутанные контейнеры на чужие
+# порты → connection refused → 502 на всём сайте, пока кто-то вручную не
+# сделает reload. `nginx -s reload` перечитывает конфиг и перерезолвит хосты.
+#
+# Делаем ДО healthcheck (шаг 6 идёт через nginx) и только если nginx запущен
+# и конфиг валиден. Best-effort: если nginx по какой-то причине не поднят,
+# не валим деплой здесь — это поймает healthcheck.
+# -----------------------------------------------------------------------------
+NGINX_CID="$("${DC_BASE[@]}" ps -q nginx 2>/dev/null || true)"
+if [ -n "${NGINX_CID}" ] && \
+   [ "$(docker inspect -f '{{.State.Running}}' "${NGINX_CID}" 2>/dev/null || echo false)" = "true" ]; then
+  if "${DC_BASE[@]}" exec -T nginx nginx -t >/dev/null 2>&1; then
+    log "nginx -s reload (re-resolve upstream IPs after web/api recreate)"
+    "${DC_BASE[@]}" exec -T nginx nginx -s reload || \
+      log "WARN: nginx reload не удался — проверит healthcheck ниже"
+  else
+    log "WARN: nginx -t провалился — пропускаю reload (конфиг невалиден)"
+  fi
+else
+  log "WARN: nginx-контейнер не запущен — пропускаю reload"
+fi
+
+# -----------------------------------------------------------------------------
 # 4. Prisma migrations (внутри контейнера api)
 #
 # `prisma migrate deploy` — ЕДИНСТВЕННЫЙ авторитетный путь схемы на prod
