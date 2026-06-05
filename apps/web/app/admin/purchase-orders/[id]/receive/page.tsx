@@ -91,11 +91,16 @@ export default async function AdminPurchaseOrderReceivePage({
   ).includes(po.status);
 
   // Загружаем уже принятые суммы по каждой строке PO. Если backend
-  // упал — не валим страницу, просто не показываем «уже принято».
+  // упал — не валим страницу, но показываем предупреждение: без этих
+  // данных подсказка «осталось принять» и блок переприёмки неточны.
+  const warnings: string[] = [];
   let posted: PurchaseReceiptListItemDto[] = [];
   try {
     posted = await getPurchaseOrderReceipts(po.id);
   } catch {
+    warnings.push(
+      'Не удалось загрузить ранее принятые количества — подсказка «осталось принять» может быть неполной.',
+    );
     posted = [];
   }
   // Считаем суммы. Чтобы не дёргать N+1 на каждую строку, грузим
@@ -136,6 +141,9 @@ export default async function AdminPurchaseOrderReceivePage({
     try {
       cells = await listCells();
     } catch {
+      warnings.push(
+        'Не удалось загрузить список ячеек — поле «Ячейка» будет пустым.',
+      );
       cells = [];
     }
   }
@@ -191,6 +199,15 @@ export default async function AdminPurchaseOrderReceivePage({
             title="Документ приёмки"
             hint={`Строк к приёмке: ${po.lines.filter((l) => l.status !== 'CANCELLED').length}`}
           />
+          {warnings.length > 0 && (
+            <div
+              className="error-box"
+              role="alert"
+              style={{ marginBottom: 12 }}
+            >
+              {warnings.join(' ')}
+            </div>
+          )}
           <ReceivePurchaseOrderForm
             po={po}
             cells={cellOptions}

@@ -2974,6 +2974,21 @@ export class PurchaseOrderInvalidStatusTransitionException extends BusinessExcep
   }
 }
 
+/**
+ * Откат статуса PO на шаг назад (`reopen`: CONFIRMED → SENT,
+ * SENT → DRAFT) запрещён, потому что по заказу уже есть проведённая
+ * приёмка. Сначала отмените приёмки, потом откатывайте статус.
+ */
+export class PurchaseOrderHasReceiptsException extends BusinessException {
+  constructor() {
+    super(
+      'PURCHASE_ORDER_HAS_RECEIPTS',
+      'По заказу уже есть проведённые приёмки — сначала отмените их, затем откатывайте статус.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Purchase receipts (Этап 7А, см.
 // `apps/api/src/modules/purchase-receipts/*`,
@@ -3064,6 +3079,53 @@ export class PurchaseReceiptCellNotFoundException extends BusinessException {
       'PURCHASE_RECEIPT_CELL_NOT_FOUND',
       'Указанная ячейка не найдена.',
       HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Суммарное `Σ receivedQty` по строке PO (включая эту приёмку)
+ * превысило целевой `confirmedQty ?? qty`. Защита от переприёмки:
+ * нельзя принять больше, чем заказано/подтверждено и ещё не принято.
+ */
+export class PurchaseReceiptOverReceiptException extends BusinessException {
+  constructor(itemName: string, remaining: string, unit: string) {
+    super(
+      'PURCHASE_RECEIPT_OVER_RECEIPT',
+      `Нельзя принять больше, чем осталось по заказу. «${itemName}»: к приёмке доступно ${remaining} ${unit}.`,
+      HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * Попытка отредактировать строку приёмки в недопустимом состоянии:
+ *   - документ `CANCELLED` (правка отменённой приёмки запрещена);
+ *   - документ `POSTED`, а правится складское поле (`receivedQty`/
+ *     `cellId`) — это рассинхронит `StockMovement`. У проведённого
+ *     документа меняем только нескладские метаданные; чтобы
+ *     поправить количество/ячейку — отмените приёмку и оформите заново.
+ */
+export class PurchaseReceiptNotEditableException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'PURCHASE_RECEIPT_NOT_EDITABLE',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Провести (`POST /api/purchase-receipts/:id/post`) можно только
+ * документ в статусе `DRAFT`. POSTED/CANCELLED отдают эту 409.
+ */
+export class PurchaseReceiptNotDraftException extends BusinessException {
+  constructor(status: string) {
+    super(
+      'PURCHASE_RECEIPT_NOT_DRAFT',
+      `Провести можно только черновик приёмки. Текущий статус: ${status}.`,
+      HttpStatus.CONFLICT,
     );
   }
 }

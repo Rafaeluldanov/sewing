@@ -16,6 +16,7 @@ import type {
   ListPurchaseReceiptsQuery,
   PurchaseReceiptDetailDto,
   PurchaseReceiptListItemDto,
+  UpdatePurchaseReceiptLineDto,
 } from '@sewing/shared/purchase-receipts';
 import { apiFetch } from './api';
 
@@ -50,6 +51,26 @@ export function createPurchaseReceiptFromPurchaseOrder(
   return apiFetch<PurchaseReceiptDetailDto>(
     '/purchase-receipts/from-purchase-order',
     { method: 'POST', body },
+  );
+}
+
+export function postPurchaseReceipt(
+  id: string,
+): Promise<PurchaseReceiptDetailDto> {
+  return apiFetch<PurchaseReceiptDetailDto>(
+    `/purchase-receipts/${encodeURIComponent(id)}/post`,
+    { method: 'POST' },
+  );
+}
+
+export function updatePurchaseReceiptLine(
+  receiptId: string,
+  lineId: string,
+  body: UpdatePurchaseReceiptLineDto,
+): Promise<PurchaseReceiptDetailDto> {
+  return apiFetch<PurchaseReceiptDetailDto>(
+    `/purchase-receipts/${encodeURIComponent(receiptId)}/lines/${encodeURIComponent(lineId)}`,
+    { method: 'PATCH', body },
   );
 }
 

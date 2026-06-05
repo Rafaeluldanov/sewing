@@ -88,6 +88,15 @@ export function confirmPurchaseOrder(
   );
 }
 
+export function reopenPurchaseOrder(
+  id: string,
+): Promise<PurchaseOrderDetailDto> {
+  return apiFetch<PurchaseOrderDetailDto>(
+    `/purchase-orders/${encodeURIComponent(id)}/reopen`,
+    { method: 'POST' },
+  );
+}
+
 export function cancelPurchaseOrder(
   id: string,
 ): Promise<PurchaseOrderDetailDto> {

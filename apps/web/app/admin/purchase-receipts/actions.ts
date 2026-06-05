@@ -13,16 +13,21 @@ import { revalidatePath } from 'next/cache';
 import {
   CancelPurchaseReceiptSchema,
   CreatePurchaseReceiptFromPurchaseOrderSchema,
+  UpdatePurchaseReceiptLineSchema,
   type CancelPurchaseReceiptDto,
 } from '@sewing/shared/purchase-receipts';
 import { ApiRequestError } from '@/lib/api';
 import {
   cancelPurchaseReceipt,
   createPurchaseReceiptFromPurchaseOrder,
+  postPurchaseReceipt,
+  updatePurchaseReceiptLine,
 } from '@/lib/purchase-receipts-api';
 import type {
   CancelPurchaseReceiptState,
   CreatePurchaseReceiptState,
+  PostPurchaseReceiptState,
+  UpdatePurchaseReceiptLineState,
 } from './form-state';
 
 function explainApiError(e: unknown): {
@@ -63,6 +68,7 @@ type RawCreateInput = {
   purchaseOrderId: string;
   receivedAt: string | null;
   comment: string | null;
+  draft: boolean;
   lines: Array<{
     purchaseOrderLineId: string;
     receivedQty: string;
@@ -111,10 +117,14 @@ function buildCreateDto(
     });
   }
   const receivedAtRaw = String(form.get('receivedAt') ?? '').trim();
+  // `intent=draft` приходит от кнопки «Сохранить черновик». Кнопка
+  // «Принять поступление» отправляет `intent=post` (или ничего).
+  const draft = String(form.get('intent') ?? '').trim() === 'draft';
   return {
     purchaseOrderId,
     receivedAt: receivedAtRaw === '' ? null : receivedAtRaw,
     comment: readOptionalText(form, 'comment'),
+    draft,
     lines,
   };
 }
@@ -188,6 +198,93 @@ export async function cancelPurchaseReceiptAction(
     }
     revalidatePath('/admin/workshop-needs');
     return { ok: true, successMessage: 'Приёмка отменена.' };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
+}
+
+/**
+ * Провести черновик приёмки (`DRAFT → POSTED`). Здесь же на backend
+ * проверяется лимит переприёмки и двигаются остатки.
+ */
+export async function postPurchaseReceiptAction(
+  id: string,
+  _prev: PostPurchaseReceiptState,
+  _form: FormData,
+): Promise<PostPurchaseReceiptState> {
+  try {
+    const posted = await postPurchaseReceipt(id);
+    revalidatePath('/admin/purchase-receipts');
+    revalidatePath(`/admin/purchase-receipts/${id}`);
+    revalidatePath('/admin/purchase-orders');
+    if (posted.purchaseOrderId) {
+      revalidatePath(`/admin/purchase-orders/${posted.purchaseOrderId}`);
+    }
+    if (posted.customerOrderId) {
+      revalidatePath(`/admin/orders/${posted.customerOrderId}`);
+    }
+    revalidatePath('/admin/workshop-needs');
+    return { ok: true, successMessage: 'Приёмка проведена.' };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
+}
+
+/**
+ * Правка одной строки приёмки. Состав полей собирается в самой
+ * форме; здесь только то, что пришло (не передаём `undefined`-поля,
+ * чтобы не затирать значения).
+ */
+export async function updatePurchaseReceiptLineAction(
+  receiptId: string,
+  lineId: string,
+  _prev: UpdatePurchaseReceiptLineState,
+  form: FormData,
+): Promise<UpdatePurchaseReceiptLineState> {
+  const candidate: Record<string, string | null> = {};
+  // Поля, которые форма реально показывает. Пустая строка → null
+  // (очистить), отсутствие ключа в форме → поле не трогаем.
+  const textFields = [
+    'batchNumber',
+    'rollNumber',
+    'shade',
+    'locationNote',
+    'comment',
+  ] as const;
+  for (const f of textFields) {
+    if (form.has(f)) candidate[f] = readOptionalText(form, f);
+  }
+  for (const f of ['actualWidthCm', 'actualDensityGsm'] as const) {
+    if (form.has(f)) candidate[f] = readOptionalNumber(form, f);
+  }
+  // Складские поля приходят только для черновика (форма их прячет у
+  // проведённого документа).
+  if (form.has('receivedQty')) {
+    const v = String(form.get('receivedQty') ?? '').trim();
+    if (v !== '') candidate.receivedQty = v;
+  }
+  if (form.has('cellId')) candidate.cellId = readOptionalText(form, 'cellId');
+
+  const parsed = UpdatePurchaseReceiptLineSchema.safeParse(candidate);
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные',
+    };
+  }
+  try {
+    const updated = await updatePurchaseReceiptLine(
+      receiptId,
+      lineId,
+      parsed.data,
+    );
+    revalidatePath('/admin/purchase-receipts');
+    revalidatePath(`/admin/purchase-receipts/${receiptId}`);
+    if (updated.purchaseOrderId) {
+      revalidatePath(`/admin/purchase-orders/${updated.purchaseOrderId}`);
+    }
+    return { ok: true, successMessage: 'Строка обновлена.' };
   } catch (e) {
     const x = explainApiError(e);
     return { error: x.error, errorRequestId: x.requestId };

@@ -14,11 +14,11 @@
  * закупщик не хочет фиксировать место.
  */
 
-import { useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
-import { ClipboardCheck } from 'lucide-react';
+import { ClipboardCheck, FileText } from 'lucide-react';
 import {
   PURCHASE_ORDER_LINE_STATUS_LABELS,
   type PurchaseOrderDetailDto,
@@ -61,16 +61,49 @@ function lineLabel(status: string): string {
   );
 }
 
-function SubmitButton() {
+/**
+ * Остаток к приёмке по строке = (confirmedQty ?? qty) − уже принято.
+ * `null`, если посчитать нельзя (нет числовых данных). Отрицательный
+ * клиппится в 0.
+ */
+function computeRemaining(
+  line: PurchaseOrderLineDto,
+  receivedSum: string | null,
+): number | null {
+  const targetRaw = line.confirmedQty ?? line.qty;
+  const target = Number.parseFloat(targetRaw);
+  if (!Number.isFinite(target)) return null;
+  const already = receivedSum ? Number.parseFloat(receivedSum) : 0;
+  const remaining = target - (Number.isFinite(already) ? already : 0);
+  return remaining < 0 ? 0 : remaining;
+}
+
+function SubmitButton({
+  intent,
+  label,
+  pendingLabel,
+  className,
+  icon,
+  disabled,
+}: {
+  intent: 'post' | 'draft';
+  label: string;
+  pendingLabel: string;
+  className: string;
+  icon: React.ReactNode;
+  disabled?: boolean;
+}) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
-      className="admin-btn admin-btn--primary"
-      disabled={pending}
+      name="intent"
+      value={intent}
+      className={className}
+      disabled={pending || disabled}
     >
-      <ClipboardCheck size={16} strokeWidth={1.6} aria-hidden />
-      {pending ? 'Принимаем…' : 'Принять поступление'}
+      {icon}
+      {pending ? pendingLabel : label}
     </button>
   );
 }
@@ -93,9 +126,30 @@ export function ReceivePurchaseOrderForm({
   }, [state.ok, state.redirectTo, router]);
 
   // Прячем строки в CANCELLED — принимать нечего.
-  const visibleLines = po.lines.filter(
-    (l) => l.status !== 'CANCELLED',
-  );
+  const visibleLines = po.lines.filter((l) => l.status !== 'CANCELLED');
+
+  // Введённые количества по строкам — для подсветки переприёмки и
+  // блокировки кнопки «Принять поступление» (черновик можно сохранять
+  // и с превышением — поправят перед проведением).
+  const [qtyByLine, setQtyByLine] = useState<Record<string, string>>({});
+
+  const overLineIds = useMemo(() => {
+    const over: string[] = [];
+    for (const line of visibleLines) {
+      const remaining = computeRemaining(
+        line,
+        receivedByLineId[line.id]?.receivedSum ?? null,
+      );
+      if (remaining == null) continue;
+      const entered = Number.parseFloat(qtyByLine[line.id] ?? '');
+      if (Number.isFinite(entered) && entered > remaining + 1e-9) {
+        over.push(line.id);
+      }
+    }
+    return over;
+  }, [visibleLines, qtyByLine, receivedByLineId]);
+
+  const hasOver = overLineIds.length > 0;
 
   return (
     <form action={action} className="admin-stack">
@@ -133,8 +187,21 @@ export function ReceivePurchaseOrderForm({
               line={line}
               cells={cells}
               receivedSum={receivedByLineId[line.id]?.receivedSum ?? null}
+              value={qtyByLine[line.id] ?? ''}
+              onChange={(v) =>
+                setQtyByLine((prev) => ({ ...prev, [line.id]: v }))
+              }
+              over={overLineIds.includes(line.id)}
             />
           ))}
+        </div>
+      )}
+
+      {hasOver && (
+        <div className="error-box" role="alert">
+          По выделенным строкам введено больше, чем осталось принять.
+          «Принять поступление» недоступно — поправьте количество или
+          сохраните черновик.
         </div>
       )}
 
@@ -145,8 +212,22 @@ export function ReceivePurchaseOrderForm({
         </div>
       )}
 
-      <div className="admin-actions-row">
-        <SubmitButton />
+      <div className="admin-actions-row" style={{ flexWrap: 'wrap', gap: 8 }}>
+        <SubmitButton
+          intent="post"
+          label="Принять поступление"
+          pendingLabel="Принимаем…"
+          className="admin-btn admin-btn--primary"
+          icon={<ClipboardCheck size={16} strokeWidth={1.6} aria-hidden />}
+          disabled={hasOver}
+        />
+        <SubmitButton
+          intent="draft"
+          label="Сохранить черновик"
+          pendingLabel="Сохраняем…"
+          className="admin-btn"
+          icon={<FileText size={16} strokeWidth={1.6} aria-hidden />}
+        />
         <Link
           href={`/admin/purchase-orders/${po.id}`}
           className="admin-btn admin-btn--ghost"
@@ -162,12 +243,19 @@ function ReceiveLineRow({
   line,
   cells,
   receivedSum,
+  value,
+  onChange,
+  over,
 }: {
   line: PurchaseOrderLineDto;
   cells: CellOption[];
   receivedSum: string | null;
+  value: string;
+  onChange: (v: string) => void;
+  over: boolean;
 }) {
   const target = line.confirmedQty ?? line.qty;
+  const remaining = computeRemaining(line, receivedSum);
   return (
     <div
       className="admin-card"
@@ -209,6 +297,9 @@ function ReceiveLineRow({
               : ''}
             {' · Цель: '}
             {target} {line.unitSnapshot}
+            {remaining != null
+              ? ` · Осталось принять: ${remaining} ${line.unitSnapshot}`
+              : ''}
           </div>
           <div
             className="admin-muted"
@@ -230,7 +321,19 @@ function ReceiveLineRow({
             inputMode="decimal"
             placeholder="0"
             autoComplete="off"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            aria-invalid={over || undefined}
+            style={over ? { borderColor: '#dc2626' } : undefined}
           />
+          {over && (
+            <span
+              className="admin-muted"
+              style={{ color: '#dc2626', fontSize: '0.78rem', marginTop: 2 }}
+            >
+              Больше, чем осталось принять
+            </span>
+          )}
         </div>
         <div className="admin-field">
           <label htmlFor={`cellId-${line.id}`}>Ячейка</label>

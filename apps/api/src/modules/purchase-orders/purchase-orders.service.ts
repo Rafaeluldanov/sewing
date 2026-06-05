@@ -15,6 +15,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
+  PurchaseOrderHasReceiptsException,
   PurchaseOrderInvalidStatusTransitionException,
   PurchaseOrderLineNotFoundException,
   PurchaseOrderNeedAlreadyOrderedException,
@@ -666,6 +667,83 @@ export class PurchaseOrdersService {
             cancelledAt: now.toISOString(),
             restoredNeedIds,
           },
+        },
+        tx,
+      );
+    });
+
+    return this.get(id);
+  }
+
+  /**
+   * Откат статуса PO на шаг назад («переоткрыть»):
+   *   CONFIRMED → SENT   (снять подтверждение);
+   *   SENT      → DRAFT   (вернуть в черновик).
+   *
+   * Разрешён только если по заказу НЕТ проведённых приёмок
+   * (статус не `PARTIALLY_RECEIVED`/`RECEIVED` и нет POSTED-
+   * `PurchaseReceipt`). Иначе — `PurchaseOrderHasReceiptsException`.
+   * Это закрывает «тупик» прежней линейной машины статусов: раньше
+   * ошибочно отправленный/подтверждённый заказ можно было только
+   * отменить.
+   */
+  async reopen(
+    id: string,
+    actorEmployeeId?: string | null,
+  ): Promise<PurchaseOrderDetailDto> {
+    const current = await this.prisma.purchaseOrder.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    });
+    if (!current) throw new PurchaseOrderNotFoundException();
+
+    if (current.status !== 'CONFIRMED' && current.status !== 'SENT') {
+      throw new PurchaseOrderInvalidStatusTransitionException(
+        `Откатить статус можно только из SENT или CONFIRMED. Текущий статус: ${current.status}.`,
+      );
+    }
+
+    // Защита: нет ни одной активной (не CANCELLED) приёмки по заказу.
+    const activeReceipts = await this.prisma.purchaseReceipt.count({
+      where: { purchaseOrderId: id, status: { not: 'CANCELLED' } },
+    });
+    if (activeReceipts > 0) {
+      throw new PurchaseOrderHasReceiptsException();
+    }
+
+    const target: 'SENT' | 'DRAFT' =
+      current.status === 'CONFIRMED' ? 'SENT' : 'DRAFT';
+
+    await this.prisma.$transaction(async (tx) => {
+      if (target === 'SENT') {
+        // CONFIRMED → SENT: снимаем confirmedAt, строки CONFIRMED → SENT.
+        await tx.purchaseOrder.update({
+          where: { id },
+          data: { status: 'SENT', confirmedAt: null },
+        });
+        await tx.purchaseOrderLine.updateMany({
+          where: { purchaseOrderId: id, status: 'CONFIRMED' },
+          data: { status: 'SENT' },
+        });
+      } else {
+        // SENT → DRAFT: снимаем sentAt, строки SENT → DRAFT.
+        await tx.purchaseOrder.update({
+          where: { id },
+          data: { status: 'DRAFT', sentAt: null },
+        });
+        await tx.purchaseOrderLine.updateMany({
+          where: { purchaseOrderId: id, status: 'SENT' },
+          data: { status: 'DRAFT' },
+        });
+      }
+
+      await this.audit.log(
+        {
+          event: 'PURCHASE_ORDER_REOPENED',
+          entityType: 'PURCHASE_ORDER',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: { previousStatus: current.status, newStatus: target },
         },
         tx,
       );

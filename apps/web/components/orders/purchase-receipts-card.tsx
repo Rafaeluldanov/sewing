@@ -47,6 +47,8 @@ interface Props {
 
 function statusTone(status: string): AdminStatusTone {
   switch (status as PurchaseReceiptStatus) {
+    case 'DRAFT':
+      return 'info';
     case 'POSTED':
       return 'success';
     case 'CANCELLED':

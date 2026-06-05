@@ -56,6 +56,8 @@ interface SearchParams {
 
 function statusTone(status: string): AdminStatusTone {
   switch (status as PurchaseReceiptStatus) {
+    case 'DRAFT':
+      return 'info';
     case 'POSTED':
       return 'success';
     case 'CANCELLED':
@@ -112,11 +114,15 @@ export default async function AdminPurchaseReceiptsPage({
   }
 
   // Грузим поставщиков для селекта фильтра. Ошибка чтения не валит
-  // страницу — просто скрываем селект.
+  // страницу, но показываем предупреждение — иначе фильтр по
+  // поставщику молча исчезает.
   let suppliers: SupplierListItemDto[] = [];
+  let suppliersWarning: string | null = null;
   try {
     suppliers = await listSuppliers();
   } catch {
+    suppliersWarning =
+      'Не удалось загрузить список поставщиков — фильтр по поставщику недоступен.';
     suppliers = [];
   }
 
@@ -131,6 +137,11 @@ export default async function AdminPurchaseReceiptsPage({
       {error && (
         <div className="error-box" role="alert">
           {error}
+        </div>
+      )}
+      {suppliersWarning && (
+        <div className="error-box" role="alert">
+          {suppliersWarning}
         </div>
       )}
 
@@ -325,6 +336,12 @@ function PurchaseReceiptsTable({
       key: 'receivedAt',
       header: 'Принято',
       render: (pr) => formatDateTime(pr.receivedAt),
+    },
+    {
+      key: 'receivedBy',
+      header: 'Кто принял',
+      render: (pr) =>
+        pr.receivedByName ?? <span className="admin-muted">—</span>,
     },
     {
       key: 'status',

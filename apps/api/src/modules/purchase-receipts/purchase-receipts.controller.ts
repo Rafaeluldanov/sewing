@@ -5,6 +5,7 @@ import {
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   Query,
 } from '@nestjs/common';
@@ -12,9 +13,11 @@ import {
   CancelPurchaseReceiptSchema,
   CreatePurchaseReceiptFromPurchaseOrderSchema,
   ListPurchaseReceiptsQuerySchema,
+  UpdatePurchaseReceiptLineSchema,
   type CancelPurchaseReceiptDto,
   type CreatePurchaseReceiptFromPurchaseOrderDto,
   type ListPurchaseReceiptsQuery,
+  type UpdatePurchaseReceiptLineDto,
 } from '@sewing/shared/purchase-receipts';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
@@ -29,6 +32,8 @@ import { PurchaseReceiptsService } from './purchase-receipts.service.js';
  *   GET    /api/purchase-receipts
  *   GET    /api/purchase-receipts/:id
  *   POST   /api/purchase-receipts/from-purchase-order
+ *   PATCH  /api/purchase-receipts/:id/lines/:lineId
+ *   POST   /api/purchase-receipts/:id/post
  *   POST   /api/purchase-receipts/:id/cancel
  *
  * RBAC — `ADMIN`/`SHOP_MANAGER` (новые роли сознательно не вводим).
@@ -67,6 +72,22 @@ export class PurchaseReceiptsController {
       body,
       user.employeeId,
     );
+  }
+
+  @Patch(':id/lines/:lineId')
+  updateLine(
+    @Param('id') id: string,
+    @Param('lineId') lineId: string,
+    @Body(new ZodValidationPipe(UpdatePurchaseReceiptLineSchema))
+    body: UpdatePurchaseReceiptLineDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.purchaseReceipts.updateLine(id, lineId, body, user.employeeId);
+  }
+
+  @Post(':id/post')
+  post(@Param('id') id: string, @CurrentUser() user: AuthPrincipal) {
+    return this.purchaseReceipts.post(id, user.employeeId);
   }
 
   @Post(':id/cancel')

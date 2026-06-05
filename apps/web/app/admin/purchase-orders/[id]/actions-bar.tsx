@@ -17,11 +17,12 @@
  */
 
 import { useFormState, useFormStatus } from 'react-dom';
-import { CheckCircle, Send, XCircle } from 'lucide-react';
+import { CheckCircle, RotateCcw, Send, XCircle } from 'lucide-react';
 import type { PurchaseOrderDetailDto } from '@sewing/shared/purchase-orders';
 import {
   cancelPurchaseOrderAction,
   confirmPurchaseOrderAction,
+  reopenPurchaseOrderAction,
   sendPurchaseOrderAction,
 } from '../actions';
 import { initialPurchaseOrderActionState } from '../form-state';
@@ -59,6 +60,10 @@ export function PurchaseOrderActionsBar({
     confirmPurchaseOrderAction.bind(null, po.id),
     initialPurchaseOrderActionState,
   );
+  const [reopenState, reopenAction] = useFormState(
+    reopenPurchaseOrderAction.bind(null, po.id),
+    initialPurchaseOrderActionState,
+  );
   const [cancelState, cancelAction] = useFormState(
     cancelPurchaseOrderAction.bind(null, po.id),
     initialPurchaseOrderActionState,
@@ -66,16 +71,24 @@ export function PurchaseOrderActionsBar({
 
   const canSend = po.status === 'DRAFT';
   const canConfirm = po.status === 'DRAFT' || po.status === 'SENT';
+  // Откат «на шаг назад» доступен из SENT/CONFIRMED, пока по заказу
+  // нет проведённых приёмок (backend это перепроверяет и отдаёт
+  // PURCHASE_ORDER_HAS_RECEIPTS, если приёмки уже есть).
+  const canReopen = po.status === 'SENT' || po.status === 'CONFIRMED';
+  const reopenLabel =
+    po.status === 'CONFIRMED' ? 'Снять подтверждение' : 'Вернуть в черновик';
   const canCancel = po.status !== 'CANCELLED';
 
   const messages = [
     sendState.successMessage,
     confirmState.successMessage,
+    reopenState.successMessage,
     cancelState.successMessage,
   ].filter((m): m is string => !!m);
   const errors = [
     sendState.error,
     confirmState.error,
+    reopenState.error,
     cancelState.error,
   ].filter((e): e is string => !!e);
 
@@ -105,6 +118,16 @@ export function PurchaseOrderActionsBar({
             />
           </form>
         )}
+        {canReopen && (
+          <form action={reopenAction} style={{ display: 'inline-flex' }}>
+            <ActionButton
+              label={reopenLabel}
+              pendingLabel="Откатываем…"
+              className="admin-btn admin-btn--ghost"
+              icon={<RotateCcw size={16} strokeWidth={1.6} aria-hidden />}
+            />
+          </form>
+        )}
         {canCancel && (
           <form action={cancelAction} style={{ display: 'inline-flex' }}>
             <ActionButton
@@ -115,7 +138,7 @@ export function PurchaseOrderActionsBar({
             />
           </form>
         )}
-        {!canSend && !canConfirm && !canCancel && (
+        {!canSend && !canConfirm && !canReopen && !canCancel && (
           <span className="admin-muted">Заказ закрыт.</span>
         )}
       </div>

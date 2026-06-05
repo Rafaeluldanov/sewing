@@ -26,8 +26,10 @@ import {
   type PurchaseReceiptLineStatus,
   type PurchaseReceiptStatus,
 } from '@sewing/shared/purchase-receipts';
+import type { CellDetailDto } from '@sewing/shared/passports';
 import { ApiRequestError } from '@/lib/api';
 import { getPurchaseReceipt } from '@/lib/purchase-receipts-api';
+import { listCells } from '@/lib/passports-api';
 import {
   AdminCard,
   AdminEmptyState,
@@ -40,6 +42,8 @@ import {
 } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
 import { CancelPurchaseReceiptForm } from './cancel-form';
+import { PostPurchaseReceiptForm } from './post-form';
+import { EditPurchaseReceiptLineForm } from './edit-line-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,6 +53,8 @@ interface Params {
 
 function statusTone(status: string): AdminStatusTone {
   switch (status as PurchaseReceiptStatus) {
+    case 'DRAFT':
+      return 'info';
     case 'POSTED':
       return 'success';
     case 'CANCELLED':
@@ -66,6 +72,8 @@ function formatStatus(status: string): string {
 
 function lineStatusTone(status: string): AdminStatusTone {
   switch (status as PurchaseReceiptLineStatus) {
+    case 'DRAFT':
+      return 'info';
     case 'POSTED':
       return 'success';
     case 'CANCELLED':
@@ -98,6 +106,31 @@ export default async function AdminPurchaseReceiptDetailPage({
     if (e instanceof ApiRequestError && e.statusCode === 404) notFound();
     throw e;
   }
+
+  const isDraft = pr.status === 'DRAFT';
+  const isEditable = pr.status !== 'CANCELLED';
+
+  // Ячейки нужны только для правки складских полей черновика.
+  let cellOptions: { id: string; code: string; warehouseName: string | null }[] =
+    [];
+  if (isDraft) {
+    let cells: CellDetailDto[] = [];
+    try {
+      cells = await listCells();
+    } catch {
+      cells = [];
+    }
+    cellOptions = cells
+      .filter((c) => c.active)
+      .map((c) => ({
+        id: c.id,
+        code: c.code,
+        warehouseName: c.warehouse?.name ?? null,
+      }))
+      .sort((a, b) => a.code.localeCompare(b.code, 'ru'));
+  }
+
+  const activeLines = pr.lines.filter((l) => l.status !== 'CANCELLED');
 
   return (
     <AdminPageShell
@@ -236,9 +269,24 @@ export default async function AdminPurchaseReceiptDetailPage({
             </dl>
           </AdminCard>
 
-          {pr.status === 'POSTED' && (
+          {isEditable && (
             <AdminCard>
-              <AdminSectionHeader title="Действия" />
+              <AdminSectionHeader
+                title="Действия"
+                hint={isDraft ? 'черновик' : undefined}
+              />
+              {isDraft && (
+                <>
+                  <p className="admin-muted" style={{ marginTop: 0 }}>
+                    Черновик ещё не отражён на складе и не двигает
+                    статусы заказа. Отредактируйте строки ниже и
+                    проведите приёмку.
+                  </p>
+                  <div style={{ marginBottom: 12 }}>
+                    <PostPurchaseReceiptForm id={pr.id} />
+                  </div>
+                </>
+              )}
               <CancelPurchaseReceiptForm id={pr.id} />
             </AdminCard>
           )}
@@ -250,6 +298,37 @@ export default async function AdminPurchaseReceiptDetailPage({
             />
             <PurchaseReceiptLinesTable lines={pr.lines} />
           </AdminCard>
+
+          {isEditable && activeLines.length > 0 && (
+            <AdminCard>
+              <AdminSectionHeader
+                title="Редактирование строк"
+                hint={
+                  isDraft
+                    ? 'черновик: можно менять всё'
+                    : 'проведено: только метаданные'
+                }
+              />
+              {!isDraft && (
+                <p className="admin-muted" style={{ marginTop: 0 }}>
+                  Количество и ячейку у проведённой приёмки изменить
+                  нельзя — они уже на складе. Чтобы их поправить,
+                  отмените приёмку и оформите заново.
+                </p>
+              )}
+              <div className="admin-stack">
+                {activeLines.map((line) => (
+                  <EditPurchaseReceiptLineForm
+                    key={line.id}
+                    receiptId={pr.id}
+                    line={line}
+                    editableStock={isDraft}
+                    cells={cellOptions}
+                  />
+                ))}
+              </div>
+            </AdminCard>
+          )}
         </div>
 
         <div className="admin-stack">
@@ -334,6 +413,20 @@ function PurchaseReceiptLinesTable({
           ) : null}
         </div>
       ),
+    },
+    {
+      key: 'price',
+      header: 'Цена',
+      align: 'right',
+      render: (l) =>
+        l.priceSnapshot ? (
+          <span>
+            {l.priceSnapshot}
+            {l.currencySnapshot ? ` ${l.currencySnapshot}` : ''}
+          </span>
+        ) : (
+          <span className="admin-muted">—</span>
+        ),
     },
     {
       key: 'cell',

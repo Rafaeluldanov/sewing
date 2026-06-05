@@ -38,6 +38,7 @@ import { PurchaseOrdersService } from './purchase-orders.service.js';
  *   PATCH  /api/purchase-orders/:id/lines/:lineId
  *   POST   /api/purchase-orders/:id/send
  *   POST   /api/purchase-orders/:id/confirm
+ *   POST   /api/purchase-orders/:id/reopen
  *   POST   /api/purchase-orders/:id/cancel
  *
  * RBAC — `ADMIN`/`SHOP_MANAGER` (новые роли сознательно не вводим).
@@ -108,6 +109,11 @@ export class PurchaseOrdersController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.purchaseOrders.confirm(id, body, user.employeeId);
+  }
+
+  @Post(':id/reopen')
+  reopen(@Param('id') id: string, @CurrentUser() user: AuthPrincipal) {
+    return this.purchaseOrders.reopen(id, user.employeeId);
   }
 
   @Post(':id/cancel')

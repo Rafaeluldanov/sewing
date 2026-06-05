@@ -31,9 +31,14 @@ import { z } from 'zod';
 /**
  * Жизненный цикл документа приёмки:
  *
- * - `POSTED`    — нормальный документ; строки тоже `POSTED`,
+ * - `DRAFT`     — черновик: документ собран, но ещё не проведён.
+ *   Строки тоже `DRAFT`, статусы PO/PO-line/WorkshopNeed НЕ
+ *   пересчитываются, складские движения НЕ пишутся. Черновик
+ *   можно свободно редактировать (`PATCH .../lines/:lineId`) и
+ *   провести (`POST .../post`) или удалить отменой.
+ * - `POSTED`    — проведённый документ; строки тоже `POSTED`,
  *   статусы PO/PO-line/WorkshopNeed пересчитываются вверх
- *   (`PARTIALLY_RECEIVED`/`RECEIVED`);
+ *   (`PARTIALLY_RECEIVED`/`RECEIVED`), пишутся `StockMovement` (IN);
  * - `CANCELLED` — отменён; строки тоже `CANCELLED`, статусы
  *   PO/PO-line/WorkshopNeed пересчитываются вниз с учётом
  *   оставшихся `POSTED`-строк по другим документам.
@@ -41,7 +46,11 @@ import { z } from 'zod';
  * Расширение списка сводится к добавлению значения сюда + лейбла
  * в `PURCHASE_RECEIPT_STATUS_LABELS`, без миграции БД.
  */
-export const PURCHASE_RECEIPT_STATUSES = ['POSTED', 'CANCELLED'] as const;
+export const PURCHASE_RECEIPT_STATUSES = [
+  'DRAFT',
+  'POSTED',
+  'CANCELLED',
+] as const;
 export type PurchaseReceiptStatus = (typeof PURCHASE_RECEIPT_STATUSES)[number];
 export const PurchaseReceiptStatusSchema = z.enum(PURCHASE_RECEIPT_STATUSES);
 
@@ -49,6 +58,7 @@ export const PURCHASE_RECEIPT_STATUS_LABELS: Record<
   PurchaseReceiptStatus,
   string
 > = {
+  DRAFT: 'Черновик',
   POSTED: 'Принято',
   CANCELLED: 'Отменено',
 };
@@ -67,7 +77,11 @@ export const PURCHASE_RECEIPT_ACTIVE_STATUSES: ReadonlyArray<PurchaseReceiptStat
  * будущем строки начнут меняться независимо (например,
  * частичная отмена позиций без отмены документа).
  */
-export const PURCHASE_RECEIPT_LINE_STATUSES = ['POSTED', 'CANCELLED'] as const;
+export const PURCHASE_RECEIPT_LINE_STATUSES = [
+  'DRAFT',
+  'POSTED',
+  'CANCELLED',
+] as const;
 export type PurchaseReceiptLineStatus =
   (typeof PURCHASE_RECEIPT_LINE_STATUSES)[number];
 export const PurchaseReceiptLineStatusSchema = z.enum(
@@ -78,6 +92,7 @@ export const PURCHASE_RECEIPT_LINE_STATUS_LABELS: Record<
   PurchaseReceiptLineStatus,
   string
 > = {
+  DRAFT: 'Черновик',
   POSTED: 'Принято',
   CANCELLED: 'Отменено',
 };
@@ -313,12 +328,110 @@ export const CreatePurchaseReceiptFromPurchaseOrderSchema = z.object({
   purchaseOrderId: z.string().min(1, 'Не указан заказ поставщику'),
   receivedAt: ReceivedAtField,
   comment: CommentField,
+  /**
+   * Если `true` — документ создаётся в статусе `DRAFT`: строки не
+   * проводятся, статусы PO/потребности не пересчитываются, склад не
+   * двигается. Черновик можно отредактировать и провести позже
+   * (`POST /api/purchase-receipts/:id/post`). По умолчанию (`false`/
+   * `undefined`) — сразу `POSTED`.
+   */
+  draft: z.boolean().optional(),
   lines: z
     .array(CreatePurchaseReceiptLineFromPurchaseOrderSchema)
     .min(1, 'Нужна хотя бы одна строка приёмки'),
 });
 export type CreatePurchaseReceiptFromPurchaseOrderDto = z.infer<
   typeof CreatePurchaseReceiptFromPurchaseOrderSchema
+>;
+
+// ---------------------------------------------------------------------------
+// Update receipt line (правка строки после создания)
+// ---------------------------------------------------------------------------
+
+/**
+ * `receivedQty` для PATCH строки — опциональный (правится только у
+ * `DRAFT`-приёмки, backend это проверяет). Та же валидация, что и у
+ * `ReceivedQtyField`, но поле можно не передавать.
+ */
+const OptionalReceivedQtyField: z.ZodType<string | undefined> = z
+  .union([z.string(), z.number()])
+  .optional()
+  .transform((v, ctx) => {
+    if (v === undefined) return undefined;
+    const raw =
+      typeof v === 'number' ? String(v) : v.trim().replace(',', '.');
+    if (raw === '') {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Принятое количество не может быть пустым',
+      });
+      return z.NEVER;
+    }
+    if (!/^\d+(\.\d{1,4})?$/.test(raw)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message:
+          'Принятое количество: положительное число, не более 4 знаков после точки',
+      });
+      return z.NEVER;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Принятое количество должно быть > 0',
+      });
+      return z.NEVER;
+    }
+    if (n > PURCHASE_RECEIPT_QTY_MAX) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Принятое количество: значение выглядит ошибочным',
+      });
+      return z.NEVER;
+    }
+    return raw;
+  }) as unknown as z.ZodType<string | undefined>;
+
+/**
+ * Правка строки приёмки (`PATCH /api/purchase-receipts/:id/lines/:lineId`).
+ *
+ * Какие поля реально применятся — зависит от статуса документа
+ * (backend, `PurchaseReceiptsService.updateLine`):
+ *   - `DRAFT`  — можно править всё, включая `receivedQty` и `cellId`;
+ *   - `POSTED` — только нескладские метаданные (`batchNumber`,
+ *     `rollNumber`, `shade`, `actualWidthCm`, `actualDensityGsm`,
+ *     `locationNote`, `comment`). Правка `receivedQty`/`cellId` у
+ *     проведённого документа запрещена (рассинхронит склад) — для
+ *     этого приёмку отменяют и оформляют заново.
+ */
+export const UpdatePurchaseReceiptLineSchema = z
+  .object({
+    receivedQty: OptionalReceivedQtyField,
+    cellId: CellIdField,
+    batchNumber: BatchNumberField,
+    rollNumber: RollNumberField,
+    shade: ShadeField,
+    actualWidthCm: ActualWidthField,
+    actualDensityGsm: ActualDensityField,
+    locationNote: LocationNoteField,
+    comment: LineCommentField,
+  })
+  .refine(
+    (obj) =>
+      obj.receivedQty !== undefined ||
+      obj.cellId !== undefined ||
+      obj.batchNumber !== undefined ||
+      obj.rollNumber !== undefined ||
+      obj.shade !== undefined ||
+      obj.actualWidthCm !== undefined ||
+      obj.actualDensityGsm !== undefined ||
+      obj.locationNote !== undefined ||
+      obj.comment !== undefined,
+    'Нечего обновлять: укажите хотя бы одно поле',
+  );
+export type UpdatePurchaseReceiptLineDto = z.infer<
+  typeof UpdatePurchaseReceiptLineSchema
 >;
 
 // ---------------------------------------------------------------------------
@@ -387,6 +500,9 @@ export interface PurchaseReceiptListItemDto {
   status: PurchaseReceiptStatus | string;
   receivedAt: string;
   cancelledAt: string | null;
+  /** Кто принял — для колонки в списке. `null`, если автор неизвестен. */
+  receivedById: string | null;
+  receivedByName: string | null;
   linesCount: number;
   /**
    * Суммарное `Σ receivedQty` по активным (не CANCELLED) строкам

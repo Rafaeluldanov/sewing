@@ -14,6 +14,7 @@ import {
   type PurchaseReceiptDetailDto,
   type PurchaseReceiptLineDto,
   type PurchaseReceiptListItemDto,
+  type UpdatePurchaseReceiptLineDto,
 } from '@sewing/shared/purchase-receipts';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -24,7 +25,10 @@ import {
   PurchaseReceiptInvalidPurchaseOrderStatusException,
   PurchaseReceiptLineNotInOrderException,
   PurchaseReceiptLinesRequiredException,
+  PurchaseReceiptNotDraftException,
+  PurchaseReceiptNotEditableException,
   PurchaseReceiptNotFoundException,
+  PurchaseReceiptOverReceiptException,
   PurchaseReceiptQtyRequiredException,
 } from '../../common/errors.js';
 import { StockService } from '../stock/stock.service.js';
@@ -167,6 +171,8 @@ export class PurchaseReceiptsService {
       );
     }
 
+    const isDraft = dto.draft === true;
+
     // 2. Валидация строк приёмки.
     const lineById = new Map(purchaseOrder.lines.map((l) => [l.id, l]));
     for (const inputLine of dto.lines) {
@@ -181,6 +187,17 @@ export class PurchaseReceiptsService {
       if (qty.lessThanOrEqualTo(0)) {
         throw new PurchaseReceiptQtyRequiredException();
       }
+    }
+
+    // 2a. Защита от переприёмки — только для проводимого документа.
+    // Черновик не двигает остатки, поэтому его лимиты проверяем при
+    // проведении (`post`), а не сейчас.
+    if (!isDraft) {
+      await this.assertNoOverReceipt(
+        this.prisma,
+        (lineId) => lineById.get(lineId),
+        dto.lines,
+      );
     }
 
     // 3. Проверяем существование cellId (если переданы).
@@ -223,7 +240,7 @@ export class PurchaseReceiptsService {
           customerOrder: customerOrder
             ? { connect: { id: customerOrder.id } }
             : undefined,
-          status: 'POSTED',
+          status: isDraft ? 'DRAFT' : 'POSTED',
           receivedAt,
           receivedBy: actorEmployeeId
             ? { connect: { id: actorEmployeeId } }
@@ -262,7 +279,7 @@ export class PurchaseReceiptsService {
                   ? { connect: { id: inputLine.cellId } }
                   : undefined,
                 locationNote: inputLine.locationNote ?? null,
-                status: 'POSTED',
+                status: isDraft ? 'DRAFT' : 'POSTED',
                 comment: inputLine.comment ?? null,
               };
             }),
@@ -281,23 +298,29 @@ export class PurchaseReceiptsService {
         ),
       );
 
-      await this.recalcAfterChange(
-        tx,
-        purchaseOrder.id,
-        affectedPoLineIds,
-        affectedNeedIds,
-      );
+      // Черновик не проводится: статусы PO/потребности не трогаем,
+      // склад не двигаем. Это всё произойдёт при `post(...)`.
+      let stockMovementsCount = 0;
+      if (!isDraft) {
+        await this.recalcAfterChange(
+          tx,
+          purchaseOrder.id,
+          affectedPoLineIds,
+          affectedNeedIds,
+        );
 
-      // Foundation складского учёта: входящие движения по строкам
-      // приёмки. Идём в той же транзакции, чтобы либо «приёмка +
-      // остатки», либо «ничего». Метод сам soft-skip-ает строки без
-      // `workshopNeedId` / `unit` / `receivedQty <= 0` и идемпотентен
-      // по `StockMovement.sourceKey`.
-      const stockMovements = await this.stock.recordPurchaseReceiptInTx(
-        tx,
-        receipt.id,
-        actorEmployeeId ?? null,
-      );
+        // Foundation складского учёта: входящие движения по строкам
+        // приёмки. Идём в той же транзакции, чтобы либо «приёмка +
+        // остатки», либо «ничего». Метод сам soft-skip-ает строки без
+        // `workshopNeedId` / `unit` / `receivedQty <= 0` и идемпотентен
+        // по `StockMovement.sourceKey`.
+        const stockMovements = await this.stock.recordPurchaseReceiptInTx(
+          tx,
+          receipt.id,
+          actorEmployeeId ?? null,
+        );
+        stockMovementsCount = stockMovements.length;
+      }
 
       await this.audit.log(
         {
@@ -308,6 +331,7 @@ export class PurchaseReceiptsService {
           payload: {
             receiptId: receipt.id,
             receiptNumber: receipt.number,
+            draft: isDraft,
             purchaseOrderId: purchaseOrder.id,
             purchaseOrderNumber: purchaseOrder.number,
             customerOrderId: customerOrder?.id ?? null,
@@ -316,7 +340,7 @@ export class PurchaseReceiptsService {
             cellIds,
             affectedPoLineIds,
             affectedWorkshopNeedIds: affectedNeedIds,
-            stockMovementsCount: stockMovements.length,
+            stockMovementsCount,
           },
         },
         tx,
@@ -327,11 +351,343 @@ export class PurchaseReceiptsService {
 
     this.logger.log(
       `event=purchase_receipt.create id=${created.id} number=${created.number} ` +
+        `status=${isDraft ? 'DRAFT' : 'POSTED'} ` +
         `purchaseOrderId=${purchaseOrder.id} linesCount=${dto.lines.length} ` +
         `cellIds=${cellIds.length}`,
     );
 
     return this.get(created.id);
+  }
+
+  // ===========================================================================
+  // POST (провести черновик)
+  // ===========================================================================
+
+  /**
+   * Проводит черновик приёмки: `DRAFT → POSTED`. Здесь же
+   * проверяется лимит переприёмки (по актуальным остаткам PO),
+   * пересчитываются статусы PO/потребности и пишутся складские
+   * движения. Идемпотентность: повторный вызов на уже `POSTED`
+   * вернёт документ как есть.
+   */
+  async post(
+    id: string,
+    actorEmployeeId?: string | null,
+  ): Promise<PurchaseReceiptDetailDto> {
+    const current = await this.prisma.purchaseReceipt.findUnique({
+      where: { id },
+      include: {
+        purchaseOrder: { select: { id: true, status: true, number: true } },
+        lines: {
+          where: { status: { not: 'CANCELLED' } },
+          include: {
+            purchaseOrderLine: true,
+          },
+        },
+      },
+    });
+    if (!current) throw new PurchaseReceiptNotFoundException();
+    if (current.status === 'POSTED') {
+      // Идемпотентность: уже проведён.
+      return this.get(id);
+    }
+    if (current.status !== 'DRAFT') {
+      throw new PurchaseReceiptNotDraftException(current.status);
+    }
+
+    // PO должен всё ещё допускать приёмку.
+    if (
+      !(PURCHASE_ORDER_RECEIVABLE_STATUSES as readonly string[]).includes(
+        current.purchaseOrder.status,
+      )
+    ) {
+      throw new PurchaseReceiptInvalidPurchaseOrderStatusException(
+        current.purchaseOrder.status,
+      );
+    }
+
+    // Проверяем лимит переприёмки по актуальным остаткам PO.
+    const poLineById = new Map(
+      current.lines
+        .filter((l) => l.purchaseOrderLine)
+        .map((l) => [l.purchaseOrderLine!.id, l.purchaseOrderLine!] as const),
+    );
+    const requested = current.lines
+      .filter((l) => l.purchaseOrderLineId)
+      .map((l) => ({
+        purchaseOrderLineId: l.purchaseOrderLineId!,
+        receivedQty: l.receivedQty.toString(),
+      }));
+    await this.assertNoOverReceipt(
+      this.prisma,
+      (lineId) => poLineById.get(lineId),
+      requested,
+      id,
+    );
+
+    const affectedPoLineIds = Array.from(
+      new Set(
+        current.lines
+          .map((l) => l.purchaseOrderLineId)
+          .filter((v): v is string => !!v),
+      ),
+    );
+    const affectedNeedIds = Array.from(
+      new Set(
+        current.lines
+          .map((l) => l.workshopNeedId)
+          .filter((v): v is string => !!v),
+      ),
+    );
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.purchaseReceipt.update({
+        where: { id },
+        data: { status: 'POSTED' },
+      });
+      await tx.purchaseReceiptLine.updateMany({
+        where: { purchaseReceiptId: id, status: 'DRAFT' },
+        data: { status: 'POSTED' },
+      });
+
+      await this.recalcAfterChange(
+        tx,
+        current.purchaseOrderId,
+        affectedPoLineIds,
+        affectedNeedIds,
+      );
+
+      const stockMovements = await this.stock.recordPurchaseReceiptInTx(
+        tx,
+        id,
+        actorEmployeeId ?? null,
+      );
+
+      await this.audit.log(
+        {
+          event: 'PURCHASE_RECEIPT_POSTED',
+          entityType: 'PURCHASE_RECEIPT',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            receiptId: id,
+            receiptNumber: current.number,
+            purchaseOrderId: current.purchaseOrderId,
+            affectedPoLineIds,
+            affectedWorkshopNeedIds: affectedNeedIds,
+            stockMovementsCount: stockMovements.length,
+          },
+        },
+        tx,
+      );
+    });
+
+    this.logger.log(
+      `event=purchase_receipt.post id=${id} number=${current.number} ` +
+        `purchaseOrderId=${current.purchaseOrderId}`,
+    );
+
+    return this.get(id);
+  }
+
+  // ===========================================================================
+  // UPDATE LINE (правка строки приёмки)
+  // ===========================================================================
+
+  /**
+   * Правка строки приёмки. Что можно менять — зависит от статуса
+   * документа:
+   *   - `DRAFT`  — любое поле, включая `receivedQty` и `cellId`
+   *     (склад ещё не тронут);
+   *   - `POSTED` — только нескладские метаданные. Правка
+   *     `receivedQty`/`cellId` запрещена (`PurchaseReceiptNotEditableException`),
+   *     иначе разъедется с уже записанным `StockMovement`.
+   *   - `CANCELLED` — нельзя редактировать вовсе.
+   */
+  async updateLine(
+    id: string,
+    lineId: string,
+    dto: UpdatePurchaseReceiptLineDto,
+    actorEmployeeId?: string | null,
+  ): Promise<PurchaseReceiptDetailDto> {
+    const receipt = await this.prisma.purchaseReceipt.findUnique({
+      where: { id },
+      select: { id: true, status: true },
+    });
+    if (!receipt) throw new PurchaseReceiptNotFoundException();
+    if (receipt.status === 'CANCELLED') {
+      throw new PurchaseReceiptNotEditableException(
+        'Документ приёмки отменён — редактировать строки нельзя.',
+      );
+    }
+
+    const line = await this.prisma.purchaseReceiptLine.findUnique({
+      where: { id: lineId },
+    });
+    if (!line || line.purchaseReceiptId !== id) {
+      throw new PurchaseReceiptLineNotInOrderException();
+    }
+    if (line.status === 'CANCELLED') {
+      throw new PurchaseReceiptNotEditableException(
+        'Строка приёмки отменена — редактировать её нельзя.',
+      );
+    }
+
+    const isDraft = receipt.status === 'DRAFT';
+    const touchesStock =
+      dto.receivedQty !== undefined || dto.cellId !== undefined;
+    if (!isDraft && touchesStock) {
+      throw new PurchaseReceiptNotEditableException(
+        'У проведённой приёмки нельзя менять количество и ячейку — они уже отражены на складе. Отмените приёмку и оформите заново.',
+      );
+    }
+
+    // Проверяем существование ячейки (если меняется на конкретную).
+    if (dto.cellId) {
+      const cell = await this.prisma.cell.findUnique({
+        where: { id: dto.cellId },
+        select: { id: true },
+      });
+      if (!cell) throw new PurchaseReceiptCellNotFoundException();
+    }
+
+    const data: Prisma.PurchaseReceiptLineUpdateInput = {};
+    const changedFields: string[] = [];
+
+    if (dto.receivedQty !== undefined) {
+      data.receivedQty = new Prisma.Decimal(dto.receivedQty);
+      changedFields.push('receivedQty');
+    }
+    if (dto.cellId !== undefined) {
+      data.cell =
+        dto.cellId === null
+          ? { disconnect: true }
+          : { connect: { id: dto.cellId } };
+      changedFields.push('cellId');
+    }
+    if (dto.batchNumber !== undefined) {
+      data.batchNumber = dto.batchNumber;
+      changedFields.push('batchNumber');
+    }
+    if (dto.rollNumber !== undefined) {
+      data.rollNumber = dto.rollNumber;
+      changedFields.push('rollNumber');
+    }
+    if (dto.shade !== undefined) {
+      data.shade = dto.shade;
+      changedFields.push('shade');
+    }
+    if (dto.actualWidthCm !== undefined) {
+      data.actualWidthCm = dto.actualWidthCm;
+      changedFields.push('actualWidthCm');
+    }
+    if (dto.actualDensityGsm !== undefined) {
+      data.actualDensityGsm = dto.actualDensityGsm;
+      changedFields.push('actualDensityGsm');
+    }
+    if (dto.locationNote !== undefined) {
+      data.locationNote = dto.locationNote;
+      changedFields.push('locationNote');
+    }
+    if (dto.comment !== undefined) {
+      data.comment = dto.comment;
+      changedFields.push('comment');
+    }
+
+    if (Object.keys(data).length === 0) return this.get(id);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.purchaseReceiptLine.update({ where: { id: lineId }, data });
+      await this.audit.log(
+        {
+          event: 'PURCHASE_RECEIPT_LINE_UPDATED',
+          entityType: 'PURCHASE_RECEIPT',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: { lineId, status: receipt.status, changedFields },
+        },
+        tx,
+      );
+    });
+
+    return this.get(id);
+  }
+
+  /**
+   * Бросает `PurchaseReceiptOverReceiptException`, если по какой-либо
+   * строке PO суммарное `Σ receivedQty` (уже проведённое по другим
+   * приёмкам + запрашиваемое сейчас) превысит цель `confirmedQty ?? qty`.
+   *
+   * `excludeReceiptId` исключает строки этого же документа из
+   * «уже проведённого» — нужно при `post`, чтобы черновик не считал
+   * сам себя.
+   */
+  private async assertNoOverReceipt(
+    db: Prisma.TransactionClient,
+    getPoLine: (id: string) =>
+      | {
+          qty: Prisma.Decimal;
+          confirmedQty: Prisma.Decimal | null;
+          itemNameSnapshot: string;
+          unitSnapshot: string;
+        }
+      | undefined,
+    requested: { purchaseOrderLineId: string; receivedQty: string }[],
+    excludeReceiptId?: string,
+  ): Promise<void> {
+    // Суммируем запрашиваемое по строке PO.
+    const requestedByPoLine = new Map<string, Prisma.Decimal>();
+    for (const r of requested) {
+      const prev =
+        requestedByPoLine.get(r.purchaseOrderLineId) ?? new Prisma.Decimal(0);
+      requestedByPoLine.set(
+        r.purchaseOrderLineId,
+        prev.add(new Prisma.Decimal(r.receivedQty)),
+      );
+    }
+
+    const poLineIds = Array.from(requestedByPoLine.keys());
+    if (poLineIds.length === 0) return;
+
+    // Уже проведённое (POSTED) по этим строкам PO, кроме excludeReceiptId.
+    const existing = await db.purchaseReceiptLine.groupBy({
+      by: ['purchaseOrderLineId'],
+      where: {
+        purchaseOrderLineId: { in: poLineIds },
+        status: { in: PURCHASE_RECEIPT_LINE_ACTIVE_STATUSES as string[] },
+        ...(excludeReceiptId
+          ? { purchaseReceiptId: { not: excludeReceiptId } }
+          : {}),
+      },
+      _sum: { receivedQty: true },
+    });
+    const alreadyByPoLine = new Map<string, Prisma.Decimal>();
+    for (const row of existing) {
+      if (!row.purchaseOrderLineId) continue;
+      alreadyByPoLine.set(
+        row.purchaseOrderLineId,
+        row._sum.receivedQty ?? new Prisma.Decimal(0),
+      );
+    }
+
+    for (const [poLineId, requestedQty] of requestedByPoLine) {
+      const poLine = getPoLine(poLineId);
+      if (!poLine) continue;
+      const target = poLine.confirmedQty ?? poLine.qty;
+      const already = alreadyByPoLine.get(poLineId) ?? new Prisma.Decimal(0);
+      const total = already.add(requestedQty);
+      if (total.greaterThan(target)) {
+        const remaining = target.minus(already);
+        const remainingStr = remaining.lessThan(0)
+          ? '0'
+          : remaining.toString();
+        throw new PurchaseReceiptOverReceiptException(
+          poLine.itemNameSnapshot,
+          remainingStr,
+          poLine.unitSnapshot,
+        );
+      }
+    }
   }
 
   // ===========================================================================
@@ -486,6 +842,18 @@ export class PurchaseReceiptsService {
     poLineIds: string[],
     workshopNeedIds: string[],
   ): Promise<void> {
+    // «До приёмки» статус, к которому откатываемся при полной отмене.
+    // Если PO когда-либо подтверждался (`confirmedAt`) — это
+    // `CONFIRMED`, иначе `SENT`. Считаем один раз и переиспользуем и
+    // для строк, и для заголовка, чтобы они не разъезжались.
+    const poConfirm = await tx.purchaseOrder.findUnique({
+      where: { id: purchaseOrderId },
+      select: { confirmedAt: true },
+    });
+    const fallbackStatus: PurchaseOrderStatus = poConfirm?.confirmedAt
+      ? 'CONFIRMED'
+      : 'SENT';
+
     // 1. Пересчёт строк PO.
     if (poLineIds.length > 0) {
       const poLines = await tx.purchaseOrderLine.findMany({
@@ -493,7 +861,11 @@ export class PurchaseReceiptsService {
       });
       for (const line of poLines) {
         if (line.status === 'CANCELLED') continue;
-        const newStatus = await this.computePoLineStatus(tx, line);
+        const newStatus = await this.computePoLineStatus(
+          tx,
+          line,
+          fallbackStatus,
+        );
         if (newStatus !== line.status) {
           await tx.purchaseOrderLine.update({
             where: { id: line.id },
@@ -598,6 +970,7 @@ export class PurchaseReceiptsService {
       qty: Prisma.Decimal;
       confirmedQty: Prisma.Decimal | null;
     },
+    fallbackStatus: PurchaseOrderStatus,
   ): Promise<PurchaseOrderLineStatus | string> {
     const target = line.confirmedQty ?? line.qty;
     const sum = await tx.purchaseReceiptLine.aggregate({
@@ -609,20 +982,14 @@ export class PurchaseReceiptsService {
     });
     const received = sum._sum.receivedQty ?? new Prisma.Decimal(0);
     if (received.lessThanOrEqualTo(0)) {
-      // Откат к «до приёмки». Если строка была в DRAFT (через PATCH-
-      // правки) — оставляем; для нормального flow это будет SENT/
-      // CONFIRMED.
+      // Откат к «до приёмки». Восстанавливаем тот же статус, что и
+      // заголовок PO (`fallbackStatus`): `CONFIRMED`, если PO был
+      // подтверждён, иначе `SENT`. Так строка и шапка не разъезжаются.
       if (
         line.status === 'PARTIALLY_RECEIVED' ||
         line.status === 'RECEIVED'
       ) {
-        // Берём максимально безопасный «до приёмки» статус. На MVP
-        // мы не различаем «откатить в SENT» vs «в CONFIRMED» по
-        // одной только строке; используем CONFIRMED, потому что
-        // приёмка возможна только из CONFIRMED/SENT/PARTIALLY_RECEIVED,
-        // а для SENT-строки восстановить мы её всё равно не сможем
-        // без шапки. Это компромисс MVP, не принципиален.
-        return 'CONFIRMED';
+        return fallbackStatus;
       }
       return line.status;
     }
@@ -653,6 +1020,8 @@ export class PurchaseReceiptsService {
       status: row.status,
       receivedAt: row.receivedAt.toISOString(),
       cancelledAt: row.cancelledAt ? row.cancelledAt.toISOString() : null,
+      receivedById: row.receivedById,
+      receivedByName: row.receivedBy?.fullName ?? null,
       linesCount: row._count.lines,
       totalReceivedQty: this.computeTotalReceivedQty(row.lines),
       createdAt: row.createdAt.toISOString(),
@@ -765,6 +1134,7 @@ export class PurchaseReceiptsService {
 const PURCHASE_RECEIPT_LIST_INCLUDE = {
   purchaseOrder: { select: { id: true, number: true } },
   customerOrder: { select: { id: true, number: true } },
+  receivedBy: { select: { id: true, fullName: true } },
   lines: { select: { id: true, receivedQty: true, status: true } },
   _count: { select: { lines: true } },
 } as const satisfies Prisma.PurchaseReceiptInclude;

@@ -31,3 +31,22 @@ export interface CancelPurchaseReceiptState {
 
 export const initialCancelPurchaseReceiptState: CancelPurchaseReceiptState =
   {};
+
+export interface PostPurchaseReceiptState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialPostPurchaseReceiptState: PostPurchaseReceiptState = {};
+
+export interface UpdatePurchaseReceiptLineState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialUpdatePurchaseReceiptLineState: UpdatePurchaseReceiptLineState =
+  {};

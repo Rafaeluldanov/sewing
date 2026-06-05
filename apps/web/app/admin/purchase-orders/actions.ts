@@ -23,6 +23,7 @@ import {
   cancelPurchaseOrder,
   confirmPurchaseOrder,
   createPurchaseOrderFromNeeds,
+  reopenPurchaseOrder,
   sendPurchaseOrder,
   updatePurchaseOrder,
   updatePurchaseOrderLine,
@@ -240,6 +241,29 @@ export async function confirmPurchaseOrderAction(
       revalidatePath(`/admin/orders/${confirmed.customerOrderId}`);
     }
     return { ok: true, successMessage: 'Подтверждено поставщиком.' };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
+}
+
+export async function reopenPurchaseOrderAction(
+  id: string,
+  _prev: PurchaseOrderActionState,
+  _form: FormData,
+): Promise<PurchaseOrderActionState> {
+  try {
+    const reopened = await reopenPurchaseOrder(id);
+    revalidatePath('/admin/purchase-orders');
+    revalidatePath(`/admin/purchase-orders/${id}`);
+    if (reopened.customerOrderId) {
+      revalidatePath(`/admin/orders/${reopened.customerOrderId}`);
+    }
+    const label =
+      reopened.status === 'DRAFT'
+        ? 'Заказ возвращён в черновик.'
+        : 'Подтверждение снято — заказ снова «Отправлен».';
+    return { ok: true, successMessage: label };
   } catch (e) {
     const x = explainApiError(e);
     return { error: x.error, errorRequestId: x.requestId };
