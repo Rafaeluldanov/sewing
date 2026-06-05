@@ -163,7 +163,9 @@ describe('Prisma — модели OrderCostEstimate(+Line) и snapshot Order', (
       /workshopNeed\s+WorkshopNeed\?\s+@relation\(fields:\s*\[workshopNeedId\][^\)]*onDelete:\s*SetNull/,
     );
     // Денежные поля.
-    expect(schema).toMatch(/quotedPrice\s+Decimal\s+@db\.Decimal\(14,\s*2\)/);
+    // quotedPrice расширен до 14,4 — нужен для цены ниток (₽/м), см.
+    // миграцию 20260806100000_widen_quoted_price_decimals.
+    expect(schema).toMatch(/quotedPrice\s+Decimal\s+@db\.Decimal\(14,\s*4\)/);
     expect(schema).toMatch(/lineTotalRub\s+Decimal\s+@db\.Decimal\(14,\s*2\)/);
   });
 

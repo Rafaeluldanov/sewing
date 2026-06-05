@@ -350,7 +350,10 @@ const PackSizeField: z.ZodType<string | null | undefined> = z
 /**
  * `quotedPrice` принимает `string | number | null | undefined`.
  * Допускает `0` (бесплатный материал), не допускает отрицательных.
- * Decimal(14,2).
+ * Decimal(14,4) — до 4 знаков после точки. 4 (а не 2) нужно для
+ * ниток: закупщик вводит цену за бобину, а в БД кладётся цена за
+ * метр (`цена_за_боб ÷ 3657.6`), которая для дешёвых ниток имеет
+ * 4+ значащих знаков. См. `apps/web/.../thread-units.ts`.
  */
 const QuotedPriceField: z.ZodType<string | null | undefined> = z
   .union([z.string(), z.number(), z.null()])
@@ -361,10 +364,10 @@ const QuotedPriceField: z.ZodType<string | null | undefined> = z
     const raw =
       typeof v === 'number' ? String(v) : v.trim().replace(',', '.');
     if (raw === '') return null;
-    if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
+    if (!/^\d+(\.\d{1,4})?$/.test(raw)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        message: 'Цена: число, не более 2 знаков после точки',
+        message: 'Цена: число, не более 4 знаков после точки',
       });
       return z.NEVER;
     }

@@ -3843,7 +3843,10 @@ model WorkshopNeed {
   /// чёрный, рулон 50 м»). Этап 5: fallback к
   /// `selectedSupplierCatalogItem.name` (см. JSDoc выше).
   purchaseItemNameText String?
-  quotedPrice          Decimal?  @db.Decimal(14, 2)
+  /// Decimal(14,4): 4 знака нужны для ниток — UI вводит цену за
+  /// бобину, в БД кладётся цена за метр (`÷ 3657.6`), у дешёвых
+  /// ниток это 0.0xxx ₽/м. Для остальных материалов хватает 2.
+  quotedPrice          Decimal?  @db.Decimal(14, 4)
   quotedCurrency       String?
   expectedDeliveryDate DateTime?
 
@@ -4705,7 +4708,10 @@ model OrderCostEstimateLine {
   /// Сколько идём покупать (`WorkshopNeed.purchaseQty ?? calculatedQty`).
   purchaseQty   Decimal  @db.Decimal(14, 4)
 
-  quotedPrice    Decimal @db.Decimal(14, 2)
+  /// Decimal(14,4): snapshot из `WorkshopNeed.quotedPrice` (тоже
+  /// 14,4) — иначе цена ниток (₽/м) обрезалась бы до 2 знаков при
+  /// завершении расчёта.
+  quotedPrice    Decimal @db.Decimal(14, 4)
   quotedCurrency String
 
   /// Курс USD на момент завершения расчёта (snapshot из
