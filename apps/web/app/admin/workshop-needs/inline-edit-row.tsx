@@ -280,6 +280,11 @@ function SubmitButton({ compact }: { compact: boolean }) {
   );
 }
 
+export interface SupplierOption {
+  id: string;
+  name: string;
+}
+
 export interface InlineEditWorkshopNeedRowProps {
   need: WorkshopNeedListItemDto;
   /**
@@ -295,12 +300,22 @@ export interface InlineEditWorkshopNeedRowProps {
    * `view=orders` обычно отключено.
    */
   bulkSelect?: boolean;
+  /**
+   * Включён ли модуль «Поставщики» (feature-flag). Если да — в строке
+   * показывается выпадающий список поставщиков из справочника
+   * (`selectedSupplierId`), а текстовое поле остаётся как fallback.
+   */
+  suppliersEnabled?: boolean;
+  /** Активные поставщики справочника для выпадающего списка. */
+  suppliers?: SupplierOption[];
 }
 
 export function InlineEditWorkshopNeedRow({
   need,
   showOrderInfo = false,
   bulkSelect = false,
+  suppliersEnabled = false,
+  suppliers = [],
 }: InlineEditWorkshopNeedRowProps) {
   const [state, action] = useFormState(
     updateWorkshopNeedAction.bind(null, need.id),
@@ -815,7 +830,7 @@ export function InlineEditWorkshopNeedRow({
         )}
       </div>
 
-      {/* === Supplier (text fallback) === */}
+      {/* === Supplier: select из справочника (если включён модуль) + text fallback === */}
       <div
         className={
           showOrderInfo
@@ -825,11 +840,38 @@ export function InlineEditWorkshopNeedRow({
         data-cell="supplier"
       >
         <label
-          htmlFor={`wns-${need.id}`}
+          htmlFor={
+            suppliersEnabled ? `wnss-${need.id}` : `wns-${need.id}`
+          }
           className="workshop-need-line__hint"
         >
           Поставщик
         </label>
+        {suppliersEnabled && (
+          <select
+            id={`wnss-${need.id}`}
+            name="selectedSupplierId"
+            defaultValue={need.selectedSupplierId ?? ''}
+            disabled={isCancelled || isLockedByPo}
+            style={{ marginBottom: 4 }}
+          >
+            <option value="">— из справочника —</option>
+            {suppliers.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+            {/* Текущий выбранный поставщик, если он неактивен и не
+                попал в список активных — чтобы выбор не «исчезал». */}
+            {need.selectedSupplierId &&
+              need.selectedSupplierName &&
+              !suppliers.some((s) => s.id === need.selectedSupplierId) && (
+                <option value={need.selectedSupplierId}>
+                  {need.selectedSupplierName} (неактивен)
+                </option>
+              )}
+          </select>
+        )}
         <input
           id={`wns-${need.id}`}
           name="supplierNameText"
@@ -837,9 +879,11 @@ export function InlineEditWorkshopNeedRow({
           maxLength={200}
           defaultValue={need.supplierNameText ?? ''}
           placeholder={
-            need.selectedSupplierName
-              ? `Сейчас: ${need.selectedSupplierName}`
-              : '—'
+            suppliersEnabled
+              ? 'или текстом (fallback)'
+              : need.selectedSupplierName
+                ? `Сейчас: ${need.selectedSupplierName}`
+                : '—'
           }
           disabled={isCancelled}
         />

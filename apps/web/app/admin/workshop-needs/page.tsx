@@ -62,9 +62,11 @@ import {
   type WorkshopNeedListItemDto,
   type WorkshopNeedOrderCalculationFilter,
 } from '@sewing/shared/workshop-needs';
+import type { SupplierListItemDto } from '@sewing/shared/suppliers';
 import { ApiRequestError } from '@/lib/api';
 import { isFeatureEnabled } from '@/lib/feature-flags';
 import { listWorkshopNeeds } from '@/lib/workshop-needs-api';
+import { listSuppliers } from '@/lib/suppliers-api';
 import {
   AdminCard,
   AdminEmptyState,
@@ -80,7 +82,10 @@ import {
 } from '@/lib/admin-labels';
 import { BulkCreatePoProvider } from './bulk-create-po';
 import { CompleteCalculationForm } from './complete-calculation-form';
-import { InlineEditWorkshopNeedRow } from './inline-edit-row';
+import {
+  InlineEditWorkshopNeedRow,
+  type SupplierOption,
+} from './inline-edit-row';
 
 /**
  * Этап 6А «Заказы поставщикам». Bulk-создание PO из выбранных
@@ -90,6 +95,15 @@ import { InlineEditWorkshopNeedRow } from './inline-edit-row';
  */
 const FEATURE_PURCHASE_ORDERS_ENABLED = isFeatureEnabled(
   process.env.NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS,
+);
+
+/**
+ * Модуль «Поставщики». Когда включён — в строках потребности
+ * показывается выбор поставщика из справочника (`selectedSupplierId`),
+ * без которого нельзя создать заказ поставщику. Default-on.
+ */
+const FEATURE_SUPPLIERS_ENABLED = isFeatureEnabled(
+  process.env.NEXT_PUBLIC_FEATURE_SUPPLIERS,
 );
 
 export const dynamic = 'force-dynamic';
@@ -210,6 +224,22 @@ export default async function AdminWorkshopNeedsPage({
         : 'Не удалось загрузить потребности цеха';
   }
 
+  // Справочник поставщиков для inline-выбора в строках (нужен, чтобы
+  // проставить `selectedSupplierId` и создать заказ). Грузим только
+  // активных; ошибка чтения не валит страницу.
+  let supplierOptions: { id: string; name: string }[] = [];
+  if (FEATURE_SUPPLIERS_ENABLED) {
+    try {
+      const suppliers: SupplierListItemDto[] = await listSuppliers();
+      supplierOptions = suppliers
+        .filter((s) => s.status === 'ACTIVE')
+        .map((s) => ({ id: s.id, name: s.name }))
+        .sort((a, b) => a.name.localeCompare(b.name, 'ru'));
+    } catch {
+      supplierOptions = [];
+    }
+  }
+
   // Базовый набор query-параметров, который нужно пробросить в
   // переключатель режимов / пагинацию, чтобы фильтр не сбрасывался.
   // Намеренно НЕ сохраняем `status` — старый фильтр строки больше
@@ -321,12 +351,16 @@ export default async function AdminWorkshopNeedsPage({
           <OrdersView
             items={items}
             orderCalculationStatus={orderCalculationStatus}
+            suppliers={supplierOptions}
+            suppliersEnabled={FEATURE_SUPPLIERS_ENABLED}
           />
         ) : (
           <LinesView
             items={items}
             preserveFilters={preserveFilters}
             orderCalculationStatus={orderCalculationStatus}
+            suppliers={supplierOptions}
+            suppliersEnabled={FEATURE_SUPPLIERS_ENABLED}
           />
         )}
       </AdminCard>
@@ -432,20 +466,37 @@ function groupByOrder(
 function OrdersView({
   items,
   orderCalculationStatus,
+  suppliers,
+  suppliersEnabled,
 }: {
   items: WorkshopNeedListItemDto[];
   orderCalculationStatus: WorkshopNeedOrderCalculationFilter;
+  suppliers: SupplierOption[];
+  suppliersEnabled: boolean;
 }) {
   if (items.length === 0) {
     return <EmptyOrdersState filter={orderCalculationStatus} />;
   }
   const groups = groupByOrder(items);
-  return (
+  const body = (
     <div className="workshop-order-group-list">
       {groups.map((g) => (
-        <OrderNeedGroupCard key={g.orderId} group={g} />
+        <OrderNeedGroupCard
+          key={g.orderId}
+          group={g}
+          suppliers={suppliers}
+          suppliersEnabled={suppliersEnabled}
+          bulkSelect={FEATURE_PURCHASE_ORDERS_ENABLED}
+        />
       ))}
     </div>
+  );
+  // Bulk-создание заказа доступно и в «По заказам»: оборачиваем весь
+  // список в провайдер, чтобы чекбоксы строк и нижний тулбар работали.
+  return FEATURE_PURCHASE_ORDERS_ENABLED ? (
+    <BulkCreatePoProvider needs={items}>{body}</BulkCreatePoProvider>
+  ) : (
+    body
   );
 }
 
@@ -479,7 +530,17 @@ function EmptyOrdersState({
   );
 }
 
-function OrderNeedGroupCard({ group }: { group: OrderGroup }) {
+function OrderNeedGroupCard({
+  group,
+  suppliers,
+  suppliersEnabled,
+  bulkSelect,
+}: {
+  group: OrderGroup;
+  suppliers: SupplierOption[];
+  suppliersEnabled: boolean;
+  bulkSelect: boolean;
+}) {
   const { orderId, sample, needs } = group;
 
   // Раскладываем строки по типу. Стабильный порядок секций — Материалы
@@ -614,7 +675,14 @@ function OrderNeedGroupCard({ group }: { group: OrderGroup }) {
       <div className="workshop-order-group-card__body">
         {(['MATERIAL', 'HARDWARE', 'APPLICATION', 'OTHER'] as const).map((k) =>
           buckets[k].length > 0 ? (
-            <NeedSection key={k} kind={k} needs={buckets[k]} />
+            <NeedSection
+              key={k}
+              kind={k}
+              needs={buckets[k]}
+              suppliers={suppliers}
+              suppliersEnabled={suppliersEnabled}
+              bulkSelect={bulkSelect}
+            />
           ) : null,
         )}
       </div>
@@ -625,9 +693,15 @@ function OrderNeedGroupCard({ group }: { group: OrderGroup }) {
 function NeedSection({
   kind,
   needs,
+  suppliers,
+  suppliersEnabled,
+  bulkSelect,
 }: {
   kind: WorkshopNeedKind;
   needs: WorkshopNeedListItemDto[];
+  suppliers: SupplierOption[];
+  suppliersEnabled: boolean;
+  bulkSelect: boolean;
 }) {
   return (
     <section
@@ -645,7 +719,9 @@ function NeedSection({
             key={n.id}
             need={n}
             showOrderInfo={false}
-            bulkSelect={false}
+            bulkSelect={bulkSelect}
+            suppliers={suppliers}
+            suppliersEnabled={suppliersEnabled}
           />
         ))}
       </div>
@@ -661,10 +737,14 @@ function LinesView({
   items,
   preserveFilters,
   orderCalculationStatus,
+  suppliers,
+  suppliersEnabled,
 }: {
   items: WorkshopNeedListItemDto[];
   preserveFilters: PreserveFilters;
   orderCalculationStatus: WorkshopNeedOrderCalculationFilter;
+  suppliers: SupplierOption[];
+  suppliersEnabled: boolean;
 }) {
   // Пагинируем уже отфильтрованный набор. Параметры пагинации в
   // searchParams живут отдельно (`page` / `pageSize`); их подменяет
@@ -685,6 +765,8 @@ function LinesView({
         rows={pageItems}
         bulkSelect={FEATURE_PURCHASE_ORDERS_ENABLED}
         orderCalculationStatus={orderCalculationStatus}
+        suppliers={suppliers}
+        suppliersEnabled={suppliersEnabled}
       />
       <AdminPagination
         page={page}
@@ -702,10 +784,14 @@ function NeedsLinesList({
   rows,
   bulkSelect,
   orderCalculationStatus,
+  suppliers,
+  suppliersEnabled,
 }: {
   rows: WorkshopNeedListItemDto[];
   bulkSelect: boolean;
   orderCalculationStatus: WorkshopNeedOrderCalculationFilter;
+  suppliers: SupplierOption[];
+  suppliersEnabled: boolean;
 }) {
   if (rows.length === 0) {
     return <EmptyOrdersState filter={orderCalculationStatus} />;
@@ -718,6 +804,8 @@ function NeedsLinesList({
           need={n}
           showOrderInfo
           bulkSelect={bulkSelect}
+          suppliers={suppliers}
+          suppliersEnabled={suppliersEnabled}
         />
       ))}
     </div>
