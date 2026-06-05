@@ -56,15 +56,17 @@ function parse(value: string | null | undefined): number | null {
 }
 
 /**
- * Форматирует число в decimal-строку без «хвоста» нулей. До 6 знаков
- * после запятой — этого с запасом хватает, чтобы round-trip
- * метры↔ярды и цена/м↔цена/боб не «плыл» на отредактированных полях.
+ * Форматирует число в decimal-строку без «хвоста» нулей. До 4 знаков
+ * после запятой — ровно столько, сколько хранят колонки
+ * `WorkshopNeed.purchaseQty` / `quotedPrice` (оба `Decimal(14,4)`).
+ * Больше нельзя: Zod-валидатор (`@sewing/shared/workshop-needs`)
+ * отбракует значение с 5+ знаками, а БД всё равно округлила бы до 4.
  * (Неотредактированные поля и так сохраняются исходным значением —
  * см. inline-edit-row.)
  */
 function fmt(n: number): string {
   if (!Number.isFinite(n)) return '';
-  const s = n.toFixed(6);
+  const s = n.toFixed(4);
   return s.includes('.') ? s.replace(/0+$/u, '').replace(/\.$/u, '') : s;
 }
 
