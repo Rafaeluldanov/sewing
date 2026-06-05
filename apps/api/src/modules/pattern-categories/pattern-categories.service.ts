@@ -17,6 +17,7 @@ import {
 } from '@sewing/shared/pattern-categories';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  PatternCategoryDeleteForbiddenException,
   PatternCategoryNotFoundException,
   PatternCategorySlugTakenException,
   PatternUploadMissingFileException,
@@ -358,6 +359,65 @@ export class PatternCategoriesService {
       employeeId: actorEmployeeId ?? null,
     });
     return this.get(id);
+  }
+
+  /**
+   * Hard-delete категории номенклатуры (этап «Удалить архивную запись
+   * навсегда»).
+   *
+   * Политика «блокировать, если используется»
+   * (`PatternCategoryDeleteForbiddenException`):
+   *   1) удалять можно ТОЛЬКО архивную категорию (`status = ARCHIVED`);
+   *   2) блокируем, если на категорию ссылаются лекала
+   *      (`PatternItem.categoryId`) или техкарты
+   *      (`TechCardTemplate.patternCategoryId`). Оба FK — `SET NULL`,
+   *      т.е. БД молча обнулила бы привязку; мы этого не хотим.
+   *
+   * Параметры категории (`PatternCategoryParameter`) уходят каскадом, а
+   * вместе с ними — и зависящие от них нормы/значения лекал
+   * (`categoryParameterId` тоже `Cascade`); но раз лекал у категории
+   * уже нет (проверка выше), таких норм и не существует.
+   */
+  async remove(
+    id: string,
+    actorEmployeeId?: string | null,
+  ): Promise<void> {
+    const current = await this.prisma.patternCategory.findUnique({
+      where: { id },
+      select: { id: true, name: true, slug: true, status: true },
+    });
+    if (!current) throw new PatternCategoryNotFoundException();
+    if (current.status !== 'ARCHIVED') {
+      throw new PatternCategoryDeleteForbiddenException(
+        'Удалить навсегда можно только архивную категорию. Сначала архивируйте её.',
+      );
+    }
+
+    const [patternCount, techCardCount] = await Promise.all([
+      this.prisma.patternItem.count({ where: { categoryId: id } }),
+      this.prisma.techCardTemplate.count({ where: { patternCategoryId: id } }),
+    ]);
+    if (patternCount > 0 || techCardCount > 0) {
+      const parts: string[] = [];
+      if (patternCount > 0) parts.push(`номенклатур: ${patternCount}`);
+      if (techCardCount > 0) parts.push(`техкарт: ${techCardCount}`);
+      throw new PatternCategoryDeleteForbiddenException(
+        `Нельзя удалить категорию навсегда — на неё ссылаются (${parts.join(
+          ', ',
+        )}). Сначала переназначьте или удалите их.`,
+      );
+    }
+
+    await this.prisma.patternCategory.delete({ where: { id } });
+
+    this.logger.log(`event=pattern_category.delete id=${id}`);
+    await this.audit.log({
+      event: 'PATTERN_CATEGORY_DELETED',
+      entityType: 'PATTERN_CATEGORY',
+      entityId: id,
+      payload: { name: current.name, slug: current.slug },
+      employeeId: actorEmployeeId ?? null,
+    });
   }
 
   // ===========================================================================

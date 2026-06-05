@@ -28,6 +28,7 @@ import {
 import { ApiRequestError } from '@/lib/api';
 import {
   cancelOrder,
+  deleteOrder,
   completeOrder,
   completeOrderCalculation,
   createOrder,
@@ -825,6 +826,29 @@ export async function cancelOrderAction(id: string): Promise<void> {
   revalidatePath(`/orders/${id}`);
   revalidatePath('/admin/orders');
   revalidatePath(`/admin/orders/${id}`);
+}
+
+/**
+ * Hard-delete отменённого заказа (этап «Удалить архивную запись
+ * навсегда»). Зовётся из кнопки «Удалить навсегда» в
+ * `OrderManagementHeader` (видна только для `CANCELLED`). Backend
+ * блокирует удаление, если по заказу есть производственная история
+ * (409 `ORDER_DELETE_FORBIDDEN`) — пробрасываем текст в `Error`,
+ * кнопка покажет его inline.
+ *
+ * Без `redirect` здесь: карточки заказа после удаления больше нет,
+ * поэтому навигацию на список делает client-кнопка (`router.push`)
+ * после успешного `await`. Мы лишь ревалидируем список.
+ */
+export async function deleteOrderAction(id: string): Promise<void> {
+  try {
+    await deleteOrder(id);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    throw new Error(explainApiError(e));
+  }
+  revalidatePath('/orders');
+  revalidatePath('/admin/orders');
 }
 
 /**

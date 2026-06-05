@@ -34,6 +34,7 @@ import {
 import { ApiRequestError } from '@/lib/api';
 import {
   archivePatternCategory,
+  deletePatternCategory,
   replacePatternCategoryParameters,
   updatePatternCategory,
   uploadPatternCategoryIcon,
@@ -226,4 +227,26 @@ export async function archivePatternCategoryPageAction(
   revalidatePath(`/admin/pattern-categories/${id}`);
   // Редирект бросает специальное исключение Next.js — код после не выполняется.
   redirect('/admin/patterns');
+}
+
+/**
+ * Hard-delete архивной категории
+ * (`DELETE /api/pattern-categories/:id/permanent`). Зовётся из кнопки
+ * «Удалить навсегда» на карточке (видна только для `status =
+ * ARCHIVED`). Backend блокирует удаление, если на категорию ссылаются
+ * лекала/техкарты (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`) —
+ * пробрасываем текст `Error`-ом, кнопка покажет его inline.
+ *
+ * Без `redirect`: карточки категории после удаления нет, навигацию на
+ * список делает client-кнопка (`router.push`) после успешного `await`.
+ */
+export async function deletePatternCategoryPageAction(
+  id: string,
+): Promise<void> {
+  try {
+    await deletePatternCategory(id);
+  } catch (e) {
+    throw new Error(explainApiError(e).error);
+  }
+  revalidatePath('/admin/patterns');
 }

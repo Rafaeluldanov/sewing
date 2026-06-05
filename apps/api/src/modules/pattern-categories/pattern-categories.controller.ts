@@ -135,4 +135,19 @@ export class PatternCategoriesController {
   ): Promise<PatternCategoryDto> {
     return this.service.archive(id, user.employeeId);
   }
+
+  /**
+   * Hard-delete архивной категории (этап «Удалить архивную запись
+   * навсегда»). Отдельный путь `:id/permanent`, чтобы не конфликтовать
+   * с `DELETE :id` (soft-archive). Сервис блокирует удаление, если
+   * категория не `ARCHIVED` или на неё ссылаются лекала/техкарты
+   * (`PATTERN_CATEGORY_DELETE_FORBIDDEN`).
+   */
+  @Delete(':id/permanent')
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<void> {
+    return this.service.remove(id, user.employeeId);
+  }
 }

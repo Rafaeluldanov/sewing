@@ -51,6 +51,7 @@ import {
   ClientInactiveException,
   ClientNotFoundException,
   OrderInvalidStatusTransitionException,
+  OrderDeleteForbiddenException,
   OrderInvalidTransitionException,
   OrderItemsRequiredException,
   OrderLockedException,
@@ -2675,6 +2676,88 @@ export class OrdersService {
       data: { status: OrderStatus.CANCELLED },
     });
     return this.getOne(id);
+  }
+
+  /**
+   * Hard-delete заказа (этап «Удалить архивную запись навсегда»).
+   *
+   * Политика «блокировать, если используется» (см.
+   * `OrderDeleteForbiddenException`):
+   *   1) удалять можно ТОЛЬКО отменённый заказ (`status = CANCELLED`) —
+   *      отмена и есть soft-архив заказа;
+   *   2) блокируем, если по заказу уже есть производственные артефакты,
+   *      которые мы НЕ хотим терять: паспорта (`Passport`) или запросы
+   *      закрытия кроя (`CuttingClosureRequest`). Оба FK — `RESTRICT`,
+   *      т.е. БД и так не дала бы удалить, но мы отбиваем заранее с
+   *      понятным текстом и количеством.
+   *
+   * Если проверки пройдены — заказ «пустой» (план без производства).
+   * `OrderItem` — тоже `RESTRICT`-связь, но это структурная часть
+   * заказа (не история), поэтому сносим её явно в транзакции, а затем
+   * `order.delete()` каскадом убирает CASCADE-детей (route steps,
+   * requirements, cut-rules, logistics, cost estimate, sample) и
+   * `SET NULL`-ит ссылки `PurchaseOrder/PurchaseReceipt.customerOrderId`.
+   */
+  async remove(id: string, actorEmployeeId?: string | null): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: { id: true, number: true, status: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    if (order.status !== OrderStatus.CANCELLED) {
+      throw new OrderDeleteForbiddenException(
+        'Удалить навсегда можно только отменённый заказ. Сначала отмените заказ.',
+      );
+    }
+
+    const [passportCount, cutClosureCount] = await Promise.all([
+      this.prisma.passport.count({ where: { orderId: id } }),
+      this.prisma.cuttingClosureRequest.count({ where: { orderId: id } }),
+    ]);
+    if (passportCount > 0 || cutClosureCount > 0) {
+      const parts: string[] = [];
+      if (passportCount > 0) parts.push(`паспортов: ${passportCount}`);
+      if (cutClosureCount > 0)
+        parts.push(`запросов закрытия кроя: ${cutClosureCount}`);
+      throw new OrderDeleteForbiddenException(
+        `Нельзя удалить заказ навсегда — по нему есть производственная история (${parts.join(
+          ', ',
+        )}). Эти данные удалять нельзя.`,
+      );
+    }
+
+    try {
+      await this.prisma.$transaction([
+        this.prisma.orderItem.deleteMany({ where: { orderId: id } }),
+        this.prisma.order.delete({ where: { id } }),
+      ]);
+    } catch (e) {
+      // P2003 — FK-ограничение (RESTRICT) на каком-то ещё не учтённом
+      // потомке. Транзакция атомарна (ничего не удалилось), отдаём
+      // понятную 409 вместо 500.
+      if (
+        e instanceof Prisma.PrismaClientKnownRequestError &&
+        e.code === 'P2003'
+      ) {
+        throw new OrderDeleteForbiddenException(
+          'Нельзя удалить заказ навсегда — на него ещё ссылаются связанные записи. Это производственные данные, удалять их нельзя.',
+        );
+      }
+      throw e;
+    }
+
+    await this.audit.log({
+      event: 'ORDER_DELETED',
+      entityType: 'ORDER',
+      entityId: id,
+      payload: { number: order.number, previousStatus: order.status },
+      employeeId: actorEmployeeId ?? null,
+    });
   }
 
   // -------------------------------------------------------------------------

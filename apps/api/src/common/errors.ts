@@ -3850,3 +3850,38 @@ export class CuttingTaskPayloadInvalidException extends BusinessException {
     super('CUTTING_TASK_PAYLOAD_INVALID', message, HttpStatus.BAD_REQUEST);
   }
 }
+
+// ---------------------------------------------------------------------------
+// Hard-delete (этап «Удалить архивную запись навсегда»)
+//
+// Архивирование — soft (status/isActive). Hard-delete = физическое
+// удаление строки. Политика «блокировать, если используется»: удалять
+// можно только запись, которая (а) уже в архивном/терминальном
+// состоянии и (б) ни на что не завязана (нет заказов / паспортов /
+// snapshot-ссылок). Иначе — адресная 409 с количеством блокирующих
+// ссылок, чтобы менеджер понял, что именно мешает.
+// ---------------------------------------------------------------------------
+
+export class OrderDeleteForbiddenException extends BusinessException {
+  constructor(message: string) {
+    super('ORDER_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
+  }
+}
+
+export class PatternDeleteForbiddenException extends BusinessException {
+  constructor(message: string) {
+    super('PATTERN_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
+  }
+}
+
+export class PatternCategoryDeleteForbiddenException extends BusinessException {
+  constructor(message: string) {
+    super('PATTERN_CATEGORY_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
+  }
+}
+
+export class TechCardDeleteForbiddenException extends BusinessException {
+  constructor(message: string) {
+    super('TECH_CARD_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
+  }
+}

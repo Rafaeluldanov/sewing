@@ -20,6 +20,7 @@ import {
   PatternCategoryInactiveException,
   PatternCategoryNotFoundException,
   TechCardCodeTakenException,
+  TechCardDeleteForbiddenException,
   TechCardImageUploadMissingFileException,
   TechCardInactiveException,
   TechCardMaterialLineNotFoundException,
@@ -374,6 +375,61 @@ export class TechCardsService {
       `event=tech_card.update id=${id} fields=${Object.keys(dto).join(',')}`,
     );
     return this.getOne(id);
+  }
+
+  /**
+   * Hard-delete техкарты (этап «Удалить архивную запись навсегда»).
+   *
+   * На MVP DELETE техкарты намеренно не выставлялся (см. JSDoc
+   * `TechCardsController`): карта может быть зашита в snapshot заказов.
+   * Поэтому действует политика «блокировать, если используется»
+   * (`TechCardDeleteForbiddenException`):
+   *   1) удалять можно ТОЛЬКО деактивированную карту (`isActive =
+   *      false`) — это её soft-удалённое состояние;
+   *   2) блокируем, если на карту ссылается хотя бы один заказ
+   *      (`Order.techCardId`, FK `SET NULL`) ИЛИ её строки уже попали
+   *      в snapshot потребностей заказа (`OrderMaterialRequirement` /
+   *      `OrderOutsourceRequirement.sourceTechCardLineId`).
+   *
+   * Строки карты (`TechCardMaterialLine` / `TechCardOutsourceLine`)
+   * уходят каскадом — это части самой карты.
+   */
+  async remove(id: string): Promise<void> {
+    const tpl = await this.prisma.techCardTemplate.findUnique({
+      where: { id },
+      select: { id: true, code: true, name: true, isActive: true },
+    });
+    if (!tpl) throw new TechCardNotFoundException();
+    if (tpl.isActive) {
+      throw new TechCardDeleteForbiddenException(
+        'Удалить навсегда можно только архивную (неактивную) техкарту. Сначала архивируйте её.',
+      );
+    }
+
+    const [orderCount, matReqCount, outReqCount] = await Promise.all([
+      this.prisma.order.count({ where: { techCardId: id } }),
+      this.prisma.orderMaterialRequirement.count({
+        where: { sourceTechCardLine: { techCardId: id } },
+      }),
+      this.prisma.orderOutsourceRequirement.count({
+        where: { sourceTechCardLine: { techCardId: id } },
+      }),
+    ]);
+    const snapshotRefs = matReqCount + outReqCount;
+    if (orderCount > 0 || snapshotRefs > 0) {
+      const parts: string[] = [];
+      if (orderCount > 0) parts.push(`заказов: ${orderCount}`);
+      if (snapshotRefs > 0)
+        parts.push(`строк в потребностях заказов: ${snapshotRefs}`);
+      throw new TechCardDeleteForbiddenException(
+        `Нельзя удалить техкарту навсегда — она используется (${parts.join(
+          ', ',
+        )}). Эти заказы хранят её snapshot.`,
+      );
+    }
+
+    await this.prisma.techCardTemplate.delete({ where: { id } });
+    this.logger.log(`event=tech_card.delete id=${id} code=${tpl.code}`);
   }
 
   // -------------------------------------------------------------------------

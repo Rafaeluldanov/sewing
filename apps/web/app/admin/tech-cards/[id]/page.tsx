@@ -14,6 +14,8 @@ import {
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
 import { TechCardForm } from '../tech-card-form';
+import { ArchiveTechCardButton } from './archive-tech-card-button';
+import { DeleteTechCardButton } from './delete-tech-card-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -85,6 +87,16 @@ export default async function AdminTechCardDetailPage({ params }: Params) {
             <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
             К списку
           </Link>
+          <ArchiveTechCardButton
+            techCardId={template.id}
+            techCardName={template.name}
+            isActive={template.isActive}
+          />
+          <DeleteTechCardButton
+            techCardId={template.id}
+            techCardName={template.name}
+            isActive={template.isActive}
+          />
           <AdminStatusBadge tone={statusTone(template.isActive)}>
             {formatStatus(template.isActive)}
           </AdminStatusBadge>

@@ -15,6 +15,7 @@ import { getPattern } from '@/lib/patterns-api';
 import { getPatternCategory } from '@/lib/pattern-categories-api';
 import {
   createTechCard,
+  deleteTechCard,
   updateTechCard,
   uploadTechCardMaterialLineImage,
 } from '@/lib/tech-cards-api';
@@ -661,4 +662,60 @@ export async function updateTechCardAction(
     return explainApiError(e, 'Не удалось обновить техкарту');
   }
   return { ok: true, successMessage: 'Техкарта обновлена' };
+}
+
+/**
+ * Soft-delete техкарты — деактивация (`isActive = false`) через
+ * существующий `PATCH /api/tech-cards/:id`. Hard-delete у техкарт
+ * намеренно не выставлен (см. JSDoc `TechCardsController`): карта может
+ * быть зашита в snapshot заказов (`OrderMaterialRequirement` /
+ * `OrderOutsourceRequirement` ссылаются на её строки), поэтому строку
+ * из БД не удаляем — она просто уходит из активного справочника
+ * (`/orders/new` подгружает только `isActive: true`).
+ *
+ * Без `redirect`: action вызывается из client-кнопки через
+ * `useTransition` (`archive-tech-card-button.tsx`), а `redirect()`
+ * бросил бы `NEXT_REDIRECT` прямо в её `catch`. После `revalidatePath`
+ * карточка перерисуется со статусом «Неактивна». Ошибку пробрасываем
+ * `Error`-ом — кнопка покажет её inline.
+ */
+export async function archiveTechCardAction(id: string): Promise<void> {
+  try {
+    await updateTechCard(id, { isActive: false });
+  } catch (e) {
+    const msg =
+      e instanceof ApiRequestError
+        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        : 'Не удалось архивировать техкарту';
+    throw new Error(msg);
+  }
+  revalidatePath('/admin/tech-cards');
+  revalidatePath(`/admin/tech-cards/${id}`);
+  revalidatePath('/orders/new');
+}
+
+/**
+ * Hard-delete архивной (неактивной) техкарты
+ * (`DELETE /api/tech-cards/:id/permanent`). Зовётся из кнопки «Удалить
+ * навсегда» на карточке (видна только для `isActive = false`). Backend
+ * блокирует удаление, если карта используется в заказах/snapshot
+ * (409 `TECH_CARD_DELETE_FORBIDDEN`) — пробрасываем текст `Error`-ом.
+ *
+ * Без `redirect`: карточки техкарты после удаления нет, навигацию на
+ * список делает client-кнопка (`router.push`) после успешного `await`.
+ */
+export async function deleteTechCardPermanentAction(
+  id: string,
+): Promise<void> {
+  try {
+    await deleteTechCard(id);
+  } catch (e) {
+    const msg =
+      e instanceof ApiRequestError
+        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        : 'Не удалось удалить техкарту';
+    throw new Error(msg);
+  }
+  revalidatePath('/admin/tech-cards');
+  revalidatePath('/orders/new');
 }

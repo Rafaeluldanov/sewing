@@ -238,6 +238,21 @@ export class OrdersController {
   }
 
   /**
+   * Hard-delete отменённого заказа (этап «Удалить архивную запись
+   * навсегда»). Доступно ADMIN/SHOP_MANAGER (class-level guard; ADMIN
+   * проходит всегда). Сервис блокирует удаление, если заказ не
+   * `CANCELLED` или по нему есть производственная история
+   * (`ORDER_DELETE_FORBIDDEN`).
+   */
+  @Delete(':id')
+  remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<void> {
+    return this.orders.remove(id, user.employeeId);
+  }
+
+  /**
    * MVP-3 (ADR-0022 §«Manual execution status»): ручной перевод
    * операционного статуса внешней потребности заказа.
    *

@@ -37,6 +37,8 @@ import {
 import { statusTone } from '@/lib/admin-labels';
 import { ClonePatternModalHost } from './clone-modal-host';
 import { EditPatternForm } from './edit-form';
+import { ArchivePatternButton } from './archive-pattern-button';
+import { DeletePatternButton } from './delete-pattern-button';
 import { PatternPreviewUploadForm } from './preview-upload-form';
 import { PatternSizesManager } from './pattern-sizes-manager';
 import { PatternItemParameterNormsForm } from './parameter-norms-form';
@@ -251,6 +253,16 @@ export default async function AdminPatternDetailPage({
           <AdminCard>
             <AdminSectionHeader title="Редактирование" />
             <EditPatternForm pattern={pattern} categories={categories} />
+            <ArchivePatternButton
+              patternId={pattern.id}
+              patternName={pattern.name}
+              status={pattern.status}
+            />
+            <DeletePatternButton
+              patternId={pattern.id}
+              patternName={pattern.name}
+              status={pattern.status}
+            />
           </AdminCard>
 
           <PatternSizesManager

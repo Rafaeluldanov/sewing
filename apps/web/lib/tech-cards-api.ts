@@ -61,6 +61,19 @@ export function updateTechCard(
 }
 
 /**
+ * Hard-delete архивной (неактивной) техкарты
+ * (`DELETE /tech-cards/:id/permanent`). Backend блокирует удаление,
+ * если карта активна или используется в заказах/snapshot-потребностях
+ * (409 `TECH_CARD_DELETE_FORBIDDEN`). Ответ пустой.
+ */
+export function deleteTechCard(id: string): Promise<void> {
+  return apiFetch<void>(
+    `/tech-cards/${encodeURIComponent(id)}/permanent`,
+    { method: 'DELETE' },
+  );
+}
+
+/**
  * Загружает JPG/JPEG/PNG-изображение для конкретной строки материала
  * техкарты (`POST /api/tech-cards/:techCardId/material-lines/:lineId/image`,
  * multipart/form-data, поле `file`). Этап «Изображение материала»

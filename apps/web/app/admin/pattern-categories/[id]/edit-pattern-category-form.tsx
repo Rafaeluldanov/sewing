@@ -67,6 +67,7 @@ import {
   archivePatternCategoryPageAction,
   editPatternCategoryPageAction,
 } from './actions';
+import { DeletePatternCategoryButton } from './delete-pattern-category-button';
 import {
   initialEditPatternCategoryPageState,
   type EditPatternCategoryPageState,
@@ -720,6 +721,13 @@ export function EditPatternCategoryForm({ category }: Props) {
           </div>
         )}
       </form>
+
+      {/* Hard-delete: компонент сам рисует кнопку только для ARCHIVED. */}
+      <DeletePatternCategoryButton
+        categoryId={category.id}
+        categoryName={category.name}
+        status={category.status}
+      />
     </>
   );
 }

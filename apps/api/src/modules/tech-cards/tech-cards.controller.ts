@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   Patch,
@@ -73,6 +74,19 @@ export class TechCardsController {
     dto: UpdateTechCardDto,
   ): Promise<TechCardTemplateDetailDto> {
     return this.techCards.update(id, dto);
+  }
+
+  /**
+   * Hard-delete архивной (неактивной) техкарты — этап «Удалить архивную
+   * запись навсегда». Soft-deactivation (`isActive=false`) остаётся
+   * основным сценарием; permanent-удаление сервис разрешает только если
+   * карта неактивна и нигде не используется
+   * (`TECH_CARD_DELETE_FORBIDDEN`).
+   */
+  @Delete(':id/permanent')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  remove(@Param('id') id: string): Promise<void> {
+    return this.techCards.remove(id);
   }
 
   /**

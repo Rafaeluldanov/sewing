@@ -74,6 +74,20 @@ export function archivePatternCategory(
 }
 
 /**
+ * Hard-delete архивной категории
+ * (`DELETE /pattern-categories/:id/permanent`). Backend блокирует
+ * удаление, если категория не `ARCHIVED` или на неё ссылаются
+ * лекала/техкарты (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`). Ответ
+ * пустой.
+ */
+export function deletePatternCategory(id: string): Promise<void> {
+  return apiFetch<void>(
+    `/pattern-categories/${encodeURIComponent(id)}/permanent`,
+    { method: 'DELETE' },
+  );
+}
+
+/**
  * Inline-создание изделия из формы заказа (см.
  * `apps/web/app/admin/orders/new/admin-create-order-form.tsx`,
  * `apps/api/src/modules/pattern-categories/pattern-categories.controller.ts`).

@@ -146,6 +146,18 @@ export function cancelOrder(id: string): Promise<OrderDetailDto> {
 }
 
 /**
+ * Hard-delete отменённого заказа (`DELETE /orders/:id`). Backend
+ * блокирует удаление, если заказ не `CANCELLED` или по нему есть
+ * производственная история (409 `ORDER_DELETE_FORBIDDEN`). Тело ответа
+ * пустое — возвращаем `void`.
+ */
+export function deleteOrder(id: string): Promise<void> {
+  return apiFetch<void>(`/orders/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
+/**
  * Этап 2 «План операций на заказе» (см.
  * `docs/operation-time-norms-recon.md §11`,
  * `apps/api/src/modules/orders/orders.controller.ts::recalculateOperationPlan`):

@@ -57,6 +57,7 @@ import {
   resolveOrderNomenclature,
 } from '@/lib/order-nomenclature';
 import { CancelOrderButton } from './cancel-order-button';
+import { DeleteOrderButton } from './delete-order-button';
 import { CompleteOrderButton } from './complete-order-button';
 import { RecalculateOperationPlanButton } from '@/components/orders/recalculate-operation-plan-button';
 import { ReopenCalculationButton } from '@/components/orders/reopen-calculation-button';
@@ -357,6 +358,8 @@ export function OrderManagementHeader({ order, passports }: Props) {
         {showCancel && (
           <CancelOrderButton orderId={order.id} status={status} />
         )}
+        {/* Hard-delete: компонент сам рисует кнопку только для CANCELLED. */}
+        <DeleteOrderButton orderId={order.id} status={status} />
         {showIssuePassport && (
           <Link
             href={`/orders/${order.id}/passports/new`}
