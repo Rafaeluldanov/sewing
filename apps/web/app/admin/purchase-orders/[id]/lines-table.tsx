@@ -19,11 +19,48 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { CheckCircle, Save, XCircle } from 'lucide-react';
-import type { PurchaseOrderLineDto } from '@sewing/shared/purchase-orders';
+import {
+  PURCHASE_ORDER_LINE_STATUS_LABELS,
+  type PurchaseOrderLineDto,
+  type PurchaseOrderLineStatus,
+} from '@sewing/shared/purchase-orders';
 import { AdminEmptyState, AdminStatusBadge } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
 import { updatePurchaseOrderLineAction } from '../actions';
 import { initialUpdatePurchaseOrderLineState } from '../form-state';
+
+/**
+ * Тон/лейбл статуса строки считаем тут, внутри клиентского
+ * компонента. Раньше эти функции прокидывались пропсами из RSC —
+ * но функции нельзя сериализовать в Client Component, и в prod-сборке
+ * это валило страницу карточки PO server-side исключением
+ * (digest 1250889687).
+ */
+function lineStatusTone(status: string): AdminStatusTone {
+  switch (status as PurchaseOrderLineStatus) {
+    case 'DRAFT':
+      return 'info';
+    case 'SENT':
+      return 'warning';
+    case 'CONFIRMED':
+      return 'success';
+    case 'PARTIALLY_RECEIVED':
+      return 'warning';
+    case 'RECEIVED':
+      return 'success';
+    case 'CANCELLED':
+      return 'danger';
+    default:
+      return 'muted';
+  }
+}
+
+function formatLineStatus(status: string): string {
+  return (
+    PURCHASE_ORDER_LINE_STATUS_LABELS[status as PurchaseOrderLineStatus] ??
+    status
+  );
+}
 
 function SmallSubmit() {
   const { pending } = useFormStatus();
@@ -48,16 +85,9 @@ function isoToDateInput(iso: string | null): string {
 interface Props {
   orderId: string;
   lines: PurchaseOrderLineDto[];
-  statusTone: (status: string) => AdminStatusTone;
-  formatStatus: (status: string) => string;
 }
 
-export function PurchaseOrderLinesTable({
-  orderId,
-  lines,
-  statusTone,
-  formatStatus,
-}: Props) {
+export function PurchaseOrderLinesTable({ orderId, lines }: Props) {
   if (lines.length === 0) {
     return (
       <AdminEmptyState title="В заказе пока нет строк" hint="Это странно — обычно строки создаются вместе с PO. Проверьте лог." />
@@ -66,13 +96,7 @@ export function PurchaseOrderLinesTable({
   return (
     <div className="admin-stack" style={{ gap: 12 }}>
       {lines.map((line) => (
-        <LineCard
-          key={line.id}
-          orderId={orderId}
-          line={line}
-          statusTone={statusTone}
-          formatStatus={formatStatus}
-        />
+        <LineCard key={line.id} orderId={orderId} line={line} />
       ))}
     </div>
   );
@@ -81,13 +105,9 @@ export function PurchaseOrderLinesTable({
 function LineCard({
   orderId,
   line,
-  statusTone,
-  formatStatus,
 }: {
   orderId: string;
   line: PurchaseOrderLineDto;
-  statusTone: (status: string) => AdminStatusTone;
-  formatStatus: (status: string) => string;
 }) {
   const [state, action] = useFormState(
     updatePurchaseOrderLineAction.bind(null, orderId, line.id),
@@ -144,8 +164,8 @@ function LineCard({
             </div>
           )}
         </div>
-        <AdminStatusBadge tone={statusTone(line.status)}>
-          {formatStatus(line.status)}
+        <AdminStatusBadge tone={lineStatusTone(line.status)}>
+          {formatLineStatus(line.status)}
         </AdminStatusBadge>
       </div>
 

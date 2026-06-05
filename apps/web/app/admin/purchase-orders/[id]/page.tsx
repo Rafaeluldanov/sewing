@@ -21,9 +21,7 @@ import {
   ShoppingCart,
 } from 'lucide-react';
 import {
-  PURCHASE_ORDER_LINE_STATUS_LABELS,
   PURCHASE_ORDER_STATUS_LABELS,
-  type PurchaseOrderLineStatus,
   type PurchaseOrderStatus,
 } from '@sewing/shared/purchase-orders';
 import { ApiRequestError } from '@/lib/api';
@@ -82,32 +80,6 @@ function statusTone(status: string): AdminStatusTone {
 function formatStatus(status: string): string {
   return (
     PURCHASE_ORDER_STATUS_LABELS[status as PurchaseOrderStatus] ?? status
-  );
-}
-
-function lineStatusTone(status: string): AdminStatusTone {
-  switch (status as PurchaseOrderLineStatus) {
-    case 'DRAFT':
-      return 'info';
-    case 'SENT':
-      return 'warning';
-    case 'CONFIRMED':
-      return 'success';
-    case 'PARTIALLY_RECEIVED':
-      return 'warning';
-    case 'RECEIVED':
-      return 'success';
-    case 'CANCELLED':
-      return 'danger';
-    default:
-      return 'muted';
-  }
-}
-
-function formatLineStatus(status: string): string {
-  return (
-    PURCHASE_ORDER_LINE_STATUS_LABELS[status as PurchaseOrderLineStatus] ??
-    status
   );
 }
 
@@ -252,12 +224,7 @@ export default async function AdminPurchaseOrderDetailPage({ params }: Params) {
               title="Строки заказа"
               hint={`${po.lines.length}`}
             />
-            <PurchaseOrderLinesTable
-              orderId={po.id}
-              lines={po.lines}
-              statusTone={lineStatusTone}
-              formatStatus={formatLineStatus}
-            />
+            <PurchaseOrderLinesTable orderId={po.id} lines={po.lines} />
           </AdminCard>
 
           {FEATURE_PURCHASE_RECEIPTS_ENABLED && (
