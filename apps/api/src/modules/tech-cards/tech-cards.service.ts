@@ -402,7 +402,7 @@ export class TechCardsService {
     if (!tpl) throw new TechCardNotFoundException();
     if (tpl.isActive) {
       throw new TechCardDeleteForbiddenException(
-        'Удалить навсегда можно только архивную (неактивную) техкарту. Сначала архивируйте её.',
+        'Удалить навсегда можно только архивную (неактивную) техкарту. Как удалить: сначала нажмите «Архивировать», затем кнопку «Удалить навсегда».',
       );
     }
 
@@ -422,9 +422,9 @@ export class TechCardsService {
       if (snapshotRefs > 0)
         parts.push(`строк в потребностях заказов: ${snapshotRefs}`);
       throw new TechCardDeleteForbiddenException(
-        `Нельзя удалить техкарту навсегда — она используется (${parts.join(
+        `Эту техкарту удалить навсегда нельзя: её используют ${parts.join(
           ', ',
-        )}). Эти заказы хранят её snapshot.`,
+        )}. Заказы хранят её snapshot, поэтому удалить карту можно только после удаления этих заказов. Если они нужны — просто оставьте карту в архиве: в новые заказы неактивные не предлагаются.`,
       );
     }
 

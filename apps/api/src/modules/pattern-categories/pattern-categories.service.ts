@@ -389,7 +389,7 @@ export class PatternCategoriesService {
     if (!current) throw new PatternCategoryNotFoundException();
     if (current.status !== 'ARCHIVED') {
       throw new PatternCategoryDeleteForbiddenException(
-        'Удалить навсегда можно только архивную категорию. Сначала архивируйте её.',
+        'Удалить навсегда можно только архивную категорию. Как удалить: сначала нажмите «Архивировать», затем кнопку «Удалить навсегда».',
       );
     }
 
@@ -402,9 +402,9 @@ export class PatternCategoriesService {
       if (patternCount > 0) parts.push(`номенклатур: ${patternCount}`);
       if (techCardCount > 0) parts.push(`техкарт: ${techCardCount}`);
       throw new PatternCategoryDeleteForbiddenException(
-        `Нельзя удалить категорию навсегда — на неё ссылаются (${parts.join(
+        `Эту категорию удалить навсегда нельзя: к ней привязаны ${parts.join(
           ', ',
-        )}). Сначала переназначьте или удалите их.`,
+        )}. Как удалить: откройте каждую такую номенклатуру/техкарту и выберите ей другую категорию (или удалите её), после этого категория удалится. Если они нужны — оставьте категорию в архиве.`,
       );
     }
 

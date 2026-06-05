@@ -329,7 +329,13 @@ export async function deletePatternAction(patternId: string): Promise<void> {
   try {
     await deletePattern(patternId);
   } catch (e) {
-    throw new Error(explainApiError(e).error);
+    // Только человекочитаемый текст из 409 (без технического кода) —
+    // backend сам объясняет «почему нельзя и как удалить правильно».
+    throw new Error(
+      e instanceof ApiRequestError
+        ? e.message
+        : 'Не удалось удалить номенклатуру. Попробуйте обновить страницу и повторить.',
+    );
   }
   revalidatePath('/admin/patterns');
 }

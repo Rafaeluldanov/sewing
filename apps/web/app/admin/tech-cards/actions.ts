@@ -710,11 +710,13 @@ export async function deleteTechCardPermanentAction(
   try {
     await deleteTechCard(id);
   } catch (e) {
-    const msg =
+    // Только человекочитаемый текст из 409 (без технического кода) —
+    // backend сам объясняет «почему нельзя и как удалить правильно».
+    throw new Error(
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
-        : 'Не удалось удалить техкарту';
-    throw new Error(msg);
+        ? e.message
+        : 'Не удалось удалить техкарту. Попробуйте обновить страницу и повторить.',
+    );
   }
   revalidatePath('/admin/tech-cards');
   revalidatePath('/orders/new');

@@ -845,7 +845,14 @@ export async function deleteOrderAction(id: string): Promise<void> {
     await deleteOrder(id);
   } catch (e) {
     if (isNextRedirect(e)) throw e;
-    throw new Error(explainApiError(e));
+    // Показываем пользователю ТОЛЬКО человекочитаемый текст из 409
+    // (без технического кода) — backend уже формулирует адресно
+    // «почему нельзя и как удалить правильно».
+    throw new Error(
+      e instanceof ApiRequestError
+        ? e.message
+        : 'Не удалось удалить заказ. Попробуйте обновить страницу и повторить.',
+    );
   }
   revalidatePath('/orders');
   revalidatePath('/admin/orders');
