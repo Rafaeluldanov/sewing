@@ -58,7 +58,10 @@ import {
 import {
   archivePatternCategory,
   createPatternCategory,
+  deletePatternCategory,
+  getPatternCategory,
   replacePatternCategoryParameters,
+  updatePatternCategory,
 } from '@/lib/pattern-categories-api';
 import type {
   ClonePatternState,
@@ -258,6 +261,58 @@ export async function archivePatternAction(patternId: string): Promise<void> {
   }
   revalidatePath('/admin/patterns');
   revalidatePath(`/admin/patterns/${patternId}`);
+}
+
+/**
+ * Удаление категории номенклатуры «в один клик» прямо со списка
+ * `/admin/patterns` (чип-фильтр).
+ *
+ * Backend разрешает hard-delete только для архивной категории
+ * (`status = ARCHIVED`) и блокирует, если на неё ссылаются
+ * лекала/техкарты (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`). Чтобы у
+ * менеджера была одна понятная кнопка «Удалить», оркеструем тут:
+ *
+ *   1) узнаём текущий статус (`GET /pattern-categories/:id`);
+ *   2) если категория активна — архивируем
+ *      (`DELETE /pattern-categories/:id`, soft);
+ *   3) удаляем навсегда (`DELETE /pattern-categories/:id/permanent`).
+ *
+ * Если шаг 3 заблокирован (категорию используют лекала/техкарты), а мы
+ * только что её архивировали на шаге 2 — возвращаем статус обратно в
+ * `ACTIVE`, чтобы категория не «исчезла» из активного фильтра, и
+ * пробрасываем человекочитаемый текст 409. Так инвариант сохраняется:
+ * категория либо удалена, либо осталась ровно в том статусе, что была.
+ */
+export async function deleteCategoryFromPatternsAction(
+  categoryId: string,
+): Promise<void> {
+  let wasActive = false;
+  try {
+    const before = await getPatternCategory(categoryId);
+    if (before.status !== 'ARCHIVED') {
+      wasActive = true;
+      await archivePatternCategory(categoryId);
+    }
+    await deletePatternCategory(categoryId);
+  } catch (e) {
+    // Откатываем транзитный архив, чтобы активная категория не пропала.
+    if (wasActive) {
+      try {
+        await updatePatternCategory(categoryId, { status: 'ACTIVE' });
+      } catch {
+        // best-effort: если откат не удался, категория останется в
+        // архиве — её всё ещё видно в блоке «Архив» и можно вернуть.
+      }
+    }
+    // Только человекочитаемый текст из 409 (без технического кода) —
+    // backend сам объясняет «почему нельзя и как удалить правильно».
+    throw new Error(
+      e instanceof ApiRequestError
+        ? e.message
+        : 'Не удалось удалить категорию. Попробуйте обновить страницу и повторить.',
+    );
+  }
+  revalidatePath('/admin/patterns');
 }
 
 /**

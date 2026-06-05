@@ -21,6 +21,7 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import { statusTone } from '@/lib/admin-labels';
+import { DeleteCategoryChipButton } from './delete-category-chip-button';
 
 export const dynamic = 'force-dynamic';
 
@@ -58,6 +59,7 @@ export default async function AdminPatternsListPage({
 
   let items: PatternListItemDto[] = [];
   let categories: PatternCategoryListItemDto[] = [];
+  let archivedCategories: PatternCategoryListItemDto[] = [];
   let error: string | null = null;
   try {
     items = await listPatterns({
@@ -72,10 +74,18 @@ export default async function AdminPatternsListPage({
         : 'Не удалось загрузить список лекал';
   }
   try {
-    categories = await listPatternCategories({ status: 'ACTIVE' });
+    // Активные категории — основной фильтр; архивные грузим отдельно,
+    // чтобы их можно было удалить навсегда или вернуть прямо из списка
+    // (иначе архивная категория становится недостижимой — отдельной
+    // страницы-списка категорий нет).
+    [categories, archivedCategories] = await Promise.all([
+      listPatternCategories({ status: 'ACTIVE' }),
+      listPatternCategories({ status: 'ARCHIVED' }),
+    ]);
   } catch {
     // graceful — категории фильтра не блокируют страницу.
     categories = [];
+    archivedCategories = [];
   }
 
   const { pageItems, page, pageSize, total } = paginate(items, searchParams);
@@ -228,6 +238,13 @@ export default async function AdminPatternsListPage({
       {/* ------------------------------------------------------ */}
       <AdminCard>
         <div
+          className="admin-muted"
+          style={{ fontSize: '0.85rem', marginBottom: 10 }}
+        >
+          Фильтр по группе номенклатуры. Наведите на категорию, чтобы её
+          отредактировать (карандаш) или удалить (корзина).
+        </div>
+        <div
           aria-label="Фильтр по категориям"
           style={{
             display: 'flex',
@@ -242,7 +259,6 @@ export default async function AdminPatternsListPage({
               status: status || undefined,
             })}
             active={!categoryId}
-            title="Все категории"
             ariaLabel="Фильтр: все категории"
           >
             Все
@@ -256,17 +272,19 @@ export default async function AdminPatternsListPage({
                 categoryId: c.id,
               })}
               active={categoryId === c.id}
-              title={c.name}
               ariaLabel={`Фильтр: ${c.name}`}
               editHref={`/admin/pattern-categories/${c.id}`}
               editAriaLabel={`Редактировать категорию: ${c.name}`}
+              deleteCategoryId={c.id}
+              deleteCategoryName={c.name}
             >
               <CategoryChipIcon
                 iconImageUrl={c.iconImageUrl}
                 iconKey={c.iconKey}
                 alt={c.name}
-                variant="filter"
+                variant="row"
               />
+              <span className="pattern-category-filter__label">{c.name}</span>
             </CategoryFilterChip>
           ))}
           {categories.length === 0 && (
@@ -276,6 +294,57 @@ export default async function AdminPatternsListPage({
             </span>
           )}
         </div>
+
+        {/* Архивные категории: показываем отдельным приглушённым рядом,
+            чтобы их можно было удалить навсегда или вернуть в работу
+            (иначе после архивации категория становилась недостижимой). */}
+        {archivedCategories.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div
+              className="admin-muted"
+              style={{ fontSize: '0.8rem', marginBottom: 8 }}
+            >
+              В архиве
+            </div>
+            <div
+              aria-label="Архивные категории"
+              style={{
+                display: 'flex',
+                gap: 8,
+                flexWrap: 'wrap',
+                alignItems: 'center',
+              }}
+            >
+              {archivedCategories.map((c) => (
+                <CategoryFilterChip
+                  key={c.id}
+                  href={buildHref('/admin/patterns', {
+                    search: search || undefined,
+                    status: status || undefined,
+                    categoryId: c.id,
+                  })}
+                  active={categoryId === c.id}
+                  archived
+                  ariaLabel={`Фильтр: ${c.name} (в архиве)`}
+                  editHref={`/admin/pattern-categories/${c.id}`}
+                  editAriaLabel={`Открыть категорию: ${c.name}`}
+                  deleteCategoryId={c.id}
+                  deleteCategoryName={c.name}
+                >
+                  <CategoryChipIcon
+                    iconImageUrl={c.iconImageUrl}
+                    iconKey={c.iconKey}
+                    alt={c.name}
+                    variant="row"
+                  />
+                  <span className="pattern-category-filter__label">
+                    {c.name}
+                  </span>
+                </CategoryFilterChip>
+              ))}
+            </div>
+          </div>
+        )}
       </AdminCard>
 
       <AdminCard>
@@ -376,16 +445,20 @@ function buildHref(
 }
 
 /**
- * Чип-фильтр категории. Если задан `editHref`, чип становится
- * wrapper-ом из двух sibling-link-ов:
- *   - основная зона (`<Link>` с иконкой) фильтрует список лекал;
- *   - маленькая кнопка-ссылка `Pencil` (`pattern-category-filter__edit`)
- *     ведёт на страницу редактирования категории.
+ * Чип-фильтр категории. Подписан названием категории (этап «Подписать
+ * группы номенклатуры»): внутри `children` — иконка + текстовый label.
  *
- * Edit-link скрыт по умолчанию (`opacity: 0`) и появляется на hover
- * родителя или focus-visible внутри (см. CSS в `globals.css`).
- * Сознательно НЕ оборачиваем edit-link в основной `<Link>` — у HTML
- * нельзя вкладывать `<a>` в `<a>` (валидно только sibling-схема).
+ * Если заданы `editHref` / `deleteCategoryId`, чип становится
+ * wrapper-ом, где рядом с основной фильтр-ссылкой лежит кластер
+ * действий (`pattern-category-filter__actions`):
+ *   - `Pencil` (`<Link>`) ведёт на страницу редактирования категории;
+ *   - `DeleteCategoryChipButton` (client) удаляет категорию «в один
+ *     клик» через server-action.
+ *
+ * Кластер скрыт по умолчанию (`opacity: 0`) и появляется на hover
+ * родителя или focus-within (см. CSS в `globals.css`). Сознательно НЕ
+ * вкладываем эти контролы в основной `<Link>` — у HTML нельзя вкладывать
+ * интерактив в `<a>` (валидно только sibling-схема).
  *
  * Кнопка «Все категории» вызывается без `editHref` → возвращается к
  * простому одиночному Link-варианту, чтобы не плодить пустую обёртку.
@@ -394,51 +467,65 @@ function CategoryFilterChip({
   href,
   active,
   children,
-  title,
+  archived,
   ariaLabel,
   editHref,
   editAriaLabel,
+  deleteCategoryId,
+  deleteCategoryName,
 }: {
   href: string;
   active: boolean;
   children: React.ReactNode;
-  title?: string;
+  archived?: boolean;
   ariaLabel?: string;
   editHref?: string;
   editAriaLabel?: string;
+  deleteCategoryId?: string;
+  deleteCategoryName?: string;
 }) {
   const filterLink = (
     <Link
       href={href}
       className={
-        active
+        (active
           ? 'admin-btn admin-btn--primary'
-          : 'admin-btn admin-btn--ghost'
+          : 'admin-btn admin-btn--ghost') +
+        (archived ? ' pattern-category-filter__link--archived' : '')
       }
       aria-current={active ? 'page' : undefined}
-      title={title}
       aria-label={ariaLabel}
-      style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}
+      style={{ display: 'inline-flex', gap: 8, alignItems: 'center' }}
     >
       {children}
     </Link>
   );
 
-  if (!editHref) {
+  if (!editHref && !deleteCategoryId) {
     return filterLink;
   }
 
   return (
     <span className="pattern-category-filter">
       {filterLink}
-      <Link
-        href={editHref}
-        className="pattern-category-filter__edit"
-        aria-label={editAriaLabel}
-        title={editAriaLabel}
-      >
-        <Pencil size={12} strokeWidth={1.7} aria-hidden />
-      </Link>
+      <span className="pattern-category-filter__actions">
+        {editHref && (
+          <Link
+            href={editHref}
+            className="pattern-category-filter__act"
+            aria-label={editAriaLabel}
+            title={editAriaLabel}
+          >
+            <Pencil size={12} strokeWidth={1.7} aria-hidden />
+          </Link>
+        )}
+        {deleteCategoryId && deleteCategoryName && (
+          <DeleteCategoryChipButton
+            categoryId={deleteCategoryId}
+            categoryName={deleteCategoryName}
+          />
+        )}
+      </span>
     </span>
   );
 }

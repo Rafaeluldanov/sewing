@@ -10960,10 +10960,48 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: inline-flex;
 }
 
-.pattern-category-filter__edit {
+/* Текстовый label категории внутри чипа-фильтра (этап «Подписать
+   группы номенклатуры»). Иконка остаётся слева через `gap` на самой
+   ссылке; запас справа — чтобы кластер действий не перекрывал текст. */
+.pattern-category-filter__label {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.pattern-category-filter .admin-btn {
+  padding-right: 14px;
+}
+
+/* Приглушённый вид для архивных категорий. */
+.pattern-category-filter__link--archived {
+  opacity: 0.6;
+}
+
+.pattern-category-filter__link--archived:hover {
+  opacity: 0.85;
+}
+
+/* Кластер действий (карандаш + корзина) в правом-верхнем углу чипа.
+   Скрыт по умолчанию, появляется на hover/focus-within родителя. */
+.pattern-category-filter__actions {
   position: absolute;
-  top: -6px;
-  right: -6px;
+  top: -8px;
+  right: -8px;
+  display: inline-flex;
+  gap: 4px;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+  z-index: 2;
+}
+
+.pattern-category-filter:hover .pattern-category-filter__actions,
+.pattern-category-filter:focus-within .pattern-category-filter__actions {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.pattern-category-filter__act {
   width: 22px;
   height: 22px;
   border-radius: 50%;
@@ -10973,34 +11011,40 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  opacity: 0;
-  pointer-events: none;
-  transition: opacity 120ms ease, transform 120ms ease;
+  transition: transform 120ms ease, background 120ms ease,
+    border-color 120ms ease;
   box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
-  z-index: 2;
   padding: 0;
   text-decoration: none;
+  cursor: pointer;
 }
 
-.pattern-category-filter:hover .pattern-category-filter__edit,
-.pattern-category-filter:focus-within .pattern-category-filter__edit {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.pattern-category-filter__edit:focus-visible {
-  opacity: 1;
-  pointer-events: auto;
-  outline: 2px solid var(--admin-accent, #2563eb);
-  outline-offset: 2px;
-}
-
-.pattern-category-filter__edit:hover {
+.pattern-category-filter__act:hover {
   background: var(--admin-soft, #f1f5f9);
   transform: scale(1.05);
 }
 
-.pattern-category-filter__edit svg {
+.pattern-category-filter__act:focus-visible {
+  outline: 2px solid var(--admin-accent, #2563eb);
+  outline-offset: 2px;
+}
+
+.pattern-category-filter__act:disabled {
+  opacity: 0.6;
+  cursor: progress;
+}
+
+.pattern-category-filter__act--danger {
+  color: var(--admin-danger, #dc2626);
+  border-color: var(--admin-danger-border, #fecaca);
+}
+
+.pattern-category-filter__act--danger:hover {
+  background: var(--admin-danger-soft, #fef2f2);
+  border-color: var(--admin-danger, #dc2626);
+}
+
+.pattern-category-filter__act svg {
   width: 12px;
   height: 12px;
 }
