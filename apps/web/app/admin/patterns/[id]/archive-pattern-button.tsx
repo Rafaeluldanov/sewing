@@ -1,13 +1,14 @@
 'use client';
 
 /**
- * `ArchivePatternButton` — кнопка «Архивировать номенклатуру» на
- * карточке `/admin/patterns/[id]`.
+ * `ArchivePatternButton` — кнопка «Архивировать» на карточке
+ * `/admin/patterns/[id]`.
  *
- * Явный destructive-аффорданс рядом с формой редактирования (по
- * образцу «Отменить заказ» / «Архивировать категорию»). Статус
- * номенклатуры можно сменить и через `<select>` в форме, но эта
- * кнопка даёт быстрый «один клик + подтверждение» сценарий.
+ * Живёт в слоте `actions` шапки страницы — рядом с «К списку» и
+ * бейджем статуса, консистентно с `ArchiveTechCardButton` на
+ * `/admin/tech-cards/[id]`. Статус номенклатуры можно сменить и через
+ * `<select>` в форме редактирования, но эта кнопка даёт быстрый
+ * «один клик + подтверждение» сценарий.
  *
  * Поведение:
  *   - **confirmation**: `window.confirm` с именем лекала;
@@ -61,14 +62,7 @@ export function ArchivePatternButton({ patternId, patternName, status }: Props) 
   };
 
   return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 6,
-        marginTop: 16,
-      }}
-    >
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <button
         type="button"
         className="admin-btn admin-btn--danger"
@@ -77,7 +71,7 @@ export function ArchivePatternButton({ patternId, patternName, status }: Props) 
         aria-busy={pending}
       >
         <ArchiveX size={16} strokeWidth={1.6} aria-hidden />
-        {pending ? 'Архивируем…' : 'Архивировать номенклатуру'}
+        {pending ? 'Архивируем…' : 'Архивировать'}
       </button>
       {error && (
         <div className="error-box" role="alert">

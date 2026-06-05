@@ -306,12 +306,17 @@ export const PATTERN_CATEGORY_PARAMETER_GROUPS: readonly PatternCategoryParamete
     defaultInputType: 'LINEAR_M_BY_SIZE',
   },
   {
+    // Наполнитель (синтепон / холлофайбер / спанбонд): потребность
+    // считается в выбранной на номенклатуре единице — либо «м» (рулон),
+    // либо «кг» (вес). По умолчанию норма задаётся на изделие
+    // (QTY_PER_ITEM), потребность = норма × кол-во в выбранной единице;
+    // TEXT_ONLY оставляем для чисто описательных позиций.
     roleKey: 'FILLER',
     label: 'Наполнитель',
-    allowedUnits: ['г/м²', 'кг'],
-    defaultUnit: 'г/м²',
-    allowedInputTypes: ['TEXT_ONLY', 'QTY_PER_ITEM'],
-    defaultInputType: 'TEXT_ONLY',
+    allowedUnits: ['м', 'кг'],
+    defaultUnit: 'м',
+    allowedInputTypes: ['QTY_PER_ITEM', 'TEXT_ONLY'],
+    defaultInputType: 'QTY_PER_ITEM',
   },
   {
     roleKey: 'INTERLINING',

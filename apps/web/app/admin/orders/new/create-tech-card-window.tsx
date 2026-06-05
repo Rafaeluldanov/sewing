@@ -246,7 +246,17 @@ export function CreateTechCardWindow({
   const [pullError, setPullError] = useState<string | null>(null);
   const [pullSummary, setPullSummary] = useState<string | null>(null);
   const [isPulling, startPullTransition] = useTransition();
-  const [pullCategoryId, setPullCategoryId] = useState<string>('');
+  // Преднаполняем селект «Подтянуть группу номенклатур» уже выбранной/
+  // созданной в форме изделия группой (`patternCategoryId`), если она
+  // есть в списке доступных групп. Так менеджеру достаточно нажать
+  // «Подтянуть группу номенклатур» — не надо повторно искать ту же
+  // группу в выпадашке.
+  const [pullCategoryId, setPullCategoryId] = useState<string>(() =>
+    patternCategoryId &&
+    safePatternCategories.some((c) => c.id === patternCategoryId)
+      ? patternCategoryId
+      : '',
+  );
   const [pullCategoryError, setPullCategoryError] = useState<string | null>(
     null,
   );

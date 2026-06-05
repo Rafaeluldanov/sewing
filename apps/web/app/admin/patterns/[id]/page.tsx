@@ -127,6 +127,11 @@ export default async function AdminPatternDetailPage({
             <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
             К списку
           </Link>
+          <ArchivePatternButton
+            patternId={pattern.id}
+            patternName={pattern.name}
+            status={pattern.status}
+          />
           <AdminStatusBadge tone={statusTone(pattern.status)}>
             {formatStatusLabel(pattern.status)}
           </AdminStatusBadge>
@@ -253,11 +258,6 @@ export default async function AdminPatternDetailPage({
           <AdminCard>
             <AdminSectionHeader title="Редактирование" />
             <EditPatternForm pattern={pattern} categories={categories} />
-            <ArchivePatternButton
-              patternId={pattern.id}
-              patternName={pattern.name}
-              status={pattern.status}
-            />
             <DeletePatternButton
               patternId={pattern.id}
               patternName={pattern.name}

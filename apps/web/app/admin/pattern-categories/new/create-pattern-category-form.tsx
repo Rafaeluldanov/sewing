@@ -236,8 +236,8 @@ const TEMPLATES: Template[] = [
       {
         label: 'Наполнитель',
         roleKey: 'FILLER',
-        inputType: 'TEXT_ONLY',
-        unit: 'г/м²',
+        inputType: 'QTY_PER_ITEM',
+        unit: 'м',
         isRequired: false,
       },
       {

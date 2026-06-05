@@ -201,6 +201,42 @@ export type ConstructorTaskSizeRowInputDto = z.infer<
  *     при активации лекала, поэтому именно м пог — caz та же единица,
  *     что использует форма «Погонные метры» на /admin/patterns/[id].
  */
+/**
+ * Общая проверка таблицы «Размер / Кулирка / Кашкорсе» для всех
+ * сценариев отправки конструктору: хотя бы одно значение метража
+ * заполнено + нет дублей размеров. Вынесена в функцию, чтобы
+ * `SaveConstructorDraftSchema` (новое лекало) и
+ * `CreateConstructorTaskForPatternSchema` (существующее лекало)
+ * валидировали одинаково.
+ */
+function refineConstructorTaskSizeRows(
+  rows: ConstructorTaskSizeRowInputDto[],
+  ctx: z.RefinementCtx,
+): void {
+  const hasAnyMeters = rows.some(
+    (r) => r.kulirkaMeters != null || r.kashkorseMeters != null,
+  );
+  if (!hasAnyMeters) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      message:
+        'Заполните хотя бы одно значение Кулирки или Кашкорсе — иначе нечего отправлять конструктору',
+    });
+  }
+  const seenSizeIds = new Set<string>();
+  for (let i = 0; i < rows.length; i += 1) {
+    const sid = rows[i]!.sizeId;
+    if (seenSizeIds.has(sid)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: [i, 'sizeId'],
+        message: 'Размер уже добавлен — дубликаты не допускаются',
+      });
+    }
+    seenSizeIds.add(sid);
+  }
+}
+
 export const SaveConstructorDraftSchema = z.object({
   calcPayload: CreateOrderNewProductCalculationSchema,
   comment: z
@@ -212,33 +248,45 @@ export const SaveConstructorDraftSchema = z.object({
     .array(ConstructorTaskSizeRowInputSchema)
     .min(1, 'Добавьте хотя бы один размер')
     .max(64, 'Слишком много строк размеров (макс. 64)')
-    .superRefine((rows, ctx) => {
-      const hasAnyMeters = rows.some(
-        (r) => r.kulirkaMeters != null || r.kashkorseMeters != null,
-      );
-      if (!hasAnyMeters) {
-        ctx.addIssue({
-          code: z.ZodIssueCode.custom,
-          message:
-            'Заполните хотя бы одно значение Кулирки или Кашкорсе — иначе нечего отправлять конструктору',
-        });
-      }
-      const seenSizeIds = new Set<string>();
-      for (let i = 0; i < rows.length; i += 1) {
-        const sid = rows[i]!.sizeId;
-        if (seenSizeIds.has(sid)) {
-          ctx.addIssue({
-            code: z.ZodIssueCode.custom,
-            path: [i, 'sizeId'],
-            message: 'Размер уже добавлен — дубликаты не допускаются',
-          });
-        }
-        seenSizeIds.add(sid);
-      }
-    }),
+    .superRefine(refineConstructorTaskSizeRows),
 });
 
 export type SaveConstructorDraftDto = z.infer<typeof SaveConstructorDraftSchema>;
+
+// ---------------------------------------------------------------------------
+// Input schema: «Отправить конструктору» для УЖЕ существующего лекала
+// ---------------------------------------------------------------------------
+
+/**
+ * Payload для `POST /api/constructor-tasks/for-pattern`. В отличие от
+ * {@link SaveConstructorDraftSchema}, НЕ создаёт новое лекало: задача
+ * привязывается к уже существующему `PatternItem` (`patternItemId`).
+ * Используется, когда менеджер отправляет конструктору номенклатуру,
+ * созданную через «Сохранить изделие» (она уже в БД, но без файла
+ * лекала) — из карточки заказа `/admin/orders/[id]/edit` или из
+ * карточки номенклатуры `/admin/patterns/[id]`.
+ *
+ * `calcPayload` тут не нужен — категория/площади уже лежат у лекала
+ * (`PatternMaterialArea`). Нужны только `sizeRows` (погонные метры
+ * Кулирка/Кашкорсе на изделие), комментарий и файлы (multipart).
+ */
+export const CreateConstructorTaskForPatternSchema = z.object({
+  patternItemId: z.string().min(1, 'Не указано лекало'),
+  comment: z
+    .string()
+    .max(4000, 'Комментарий слишком длинный (макс. 4000 символов)')
+    .transform((v) => v.trim())
+    .default(''),
+  sizeRows: z
+    .array(ConstructorTaskSizeRowInputSchema)
+    .min(1, 'Добавьте хотя бы один размер')
+    .max(64, 'Слишком много строк размеров (макс. 64)')
+    .superRefine(refineConstructorTaskSizeRows),
+});
+
+export type CreateConstructorTaskForPatternDto = z.infer<
+  typeof CreateConstructorTaskForPatternSchema
+>;
 
 // ---------------------------------------------------------------------------
 // Output DTOs
