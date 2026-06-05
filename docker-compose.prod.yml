@@ -79,6 +79,15 @@ services:
         # Если переопределяете в .env.prod — указывайте ТОЛЬКО https://prod.teeon.ru/api
         # (либо `/api` для same-origin), иначе client уйдёт мимо nginx.
         NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://prod.teeon.ru/api}
+        # Фиче-флаги admin-модулей — тоже build-time (вшиваются в bundle).
+        # Дефолт `1` (включено): без явной передачи модули «Поставщики» /
+        # «Заказы поставщикам» и выбор поставщика из справочника на
+        # потребности могли не появляться в проде. См. feature-flags.ts.
+        NEXT_PUBLIC_FEATURE_PATTERNS: ${NEXT_PUBLIC_FEATURE_PATTERNS:-1}
+        NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS: ${NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS:-1}
+        NEXT_PUBLIC_FEATURE_SUPPLIERS: ${NEXT_PUBLIC_FEATURE_SUPPLIERS:-1}
+        NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS: ${NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS:-1}
+        NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS: ${NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS:-1}
     # Прямой проброс host:80 убран: порт 80 теперь занят nginx-сервисом
     # (TLS-терминатор для https://prod.teeon.ru, ACME-challenge для
     # Let's Encrypt). web доступен только в docker-сети по имени `web:3000`.

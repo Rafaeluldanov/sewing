@@ -23,6 +23,22 @@ WORKDIR /app
 ARG NEXT_PUBLIC_API_URL=http://localhost:8081/api
 ENV NEXT_PUBLIC_API_URL=$NEXT_PUBLIC_API_URL
 
+# Фиче-флаги admin-модулей тоже вшиваются в client-bundle на этапе
+# `next build` (а не в runtime!). Без явной передачи на сборке они
+# оказывались undefined и зависели от «эпохи» логики `isFeatureEnabled`.
+# Фиксируем дефолт `1` (включено), переопределяется через build.args /
+# .env.prod. См. `apps/web/lib/feature-flags.ts`.
+ARG NEXT_PUBLIC_FEATURE_PATTERNS=1
+ARG NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS=1
+ARG NEXT_PUBLIC_FEATURE_SUPPLIERS=1
+ARG NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS=1
+ARG NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS=1
+ENV NEXT_PUBLIC_FEATURE_PATTERNS=$NEXT_PUBLIC_FEATURE_PATTERNS
+ENV NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS=$NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS
+ENV NEXT_PUBLIC_FEATURE_SUPPLIERS=$NEXT_PUBLIC_FEATURE_SUPPLIERS
+ENV NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS=$NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS
+ENV NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS=$NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS
+
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/packages ./packages
 COPY package*.json ./
