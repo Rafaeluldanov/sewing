@@ -81,6 +81,10 @@ import {
 } from '@/components/admin';
 import { formatOrderStatus } from '@/lib/admin-labels';
 import {
+  SendPatternToConstructorButton,
+  type SendPatternToConstructorSize,
+} from '@/components/constructor/send-pattern-to-constructor';
+import {
   CreateProductInline,
   type SavedConstructorDraftPayload,
   type SavedInlineProductPayload,
@@ -260,6 +264,20 @@ export function AdminEditOrderForm({
     for (const it of order.items) map[it.sizeId] = it.qtyPlan;
     return map;
   }, [order.items]);
+
+  // Размеры заказа для модалки «Отправить конструктору» — по строкам
+  // заказа, код размера достаём из справочника (`sortedSizes`).
+  const orderConstructorSizes = useMemo<SendPatternToConstructorSize[]>(() => {
+    const codeById = new Map(sortedSizes.map((s) => [s.id, s.code]));
+    const seen = new Set<string>();
+    const out: SendPatternToConstructorSize[] = [];
+    for (const it of order.items) {
+      if (seen.has(it.sizeId)) continue;
+      seen.add(it.sizeId);
+      out.push({ sizeId: it.sizeId, sizeCode: codeById.get(it.sizeId) ?? it.sizeId });
+    }
+    return out;
+  }, [order.items, sortedSizes]);
 
   const initialTotal = useMemo(
     () => Object.values(initialQty).reduce((s, n) => s + n, 0),
@@ -977,6 +995,10 @@ export function AdminEditOrderForm({
                         patterns.find((p) => p.id === patternItemId)
                           ?.article ?? null
                       }
+                      canSendToConstructor={
+                        !order.constructorTask && !savedConstructorTask
+                      }
+                      constructorSizes={orderConstructorSizes}
                       isDraft={isDraft}
                       onChangeExisting={() => {
                         setSavedInlineProduct(null);
@@ -1220,6 +1242,8 @@ function AttachedPatternSummaryCard({
   onChangeExisting,
   onCreateNew,
   onDetach,
+  canSendToConstructor,
+  constructorSizes,
 }: {
   patternItemId: string;
   patternName: string | null;
@@ -1228,6 +1252,14 @@ function AttachedPatternSummaryCard({
   onChangeExisting: () => void;
   onCreateNew: () => void;
   onDetach: () => void;
+  /**
+   * Показывать ли кнопку «Отправить конструктору». `false`, если у
+   * лекала уже есть заявка КБ (1:1) — карточку заявки рендерит
+   * отдельная секция ниже.
+   */
+  canSendToConstructor: boolean;
+  /** Размеры заказа для таблицы погонных метров в модалке КБ. */
+  constructorSizes: SendPatternToConstructorSize[];
 }) {
   return (
     <div
@@ -1254,6 +1286,14 @@ function AttachedPatternSummaryCard({
         </strong>
         {isDraft && (
           <div style={{ display: 'flex', gap: 6 }}>
+            {canSendToConstructor && (
+              <SendPatternToConstructorButton
+                patternItemId={patternItemId}
+                patternName={patternName ?? 'Лекало'}
+                sizes={constructorSizes}
+                buttonClassName="admin-btn admin-btn--primary"
+              />
+            )}
             <button
               type="button"
               className="admin-btn admin-btn--ghost"
@@ -1279,6 +1319,13 @@ function AttachedPatternSummaryCard({
           </div>
         )}
       </div>
+      {isDraft && canSendToConstructor && (
+        <p style={{ margin: 0, fontSize: '0.8rem', color: '#64748b' }}>
+          Файл лекала ещё не приложен. Можно отправить лекало
+          конструктору на разработку — заявка появится в разделе «Заявки
+          конструктору» и в карточке заказа.
+        </p>
+      )}
       <dl
         style={{
           margin: 0,

@@ -1641,6 +1641,23 @@ export class ConstructorTaskReworkInvalidException extends BusinessException {
 }
 
 /**
+ * Попытка создать заявку конструктору для лекала, у которого она уже
+ * есть (`ConstructorTask.patternItemId` — `@unique`, строго 1:1).
+ * Используется в `createForExistingPattern` («Отправить конструктору»
+ * из карточки заказа / номенклатуры). Менеджеру предлагаем открыть
+ * существующую заявку в разделе «Заявки конструктору».
+ */
+export class ConstructorTaskAlreadyExistsException extends BusinessException {
+  constructor() {
+    super(
+      'CONSTRUCTOR_TASK_ALREADY_EXISTS',
+      'У этого лекала уже есть заявка конструктору — откройте её в разделе «Заявки конструктору».',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Multipart-запрос upload-а изображения строки материала техкарты
  * пришёл без файла (`file` пустое или отсутствует).
  */

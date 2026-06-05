@@ -35,6 +35,21 @@ export function saveConstructorTaskDraft(
   return apiFetchMultipart<SaveConstructorDraftResultDto>(path, formData);
 }
 
+/**
+ * Создать заявку конструктору для уже существующего лекала
+ * (`POST /constructor-tasks/for-pattern`). Multipart: поле `payload`
+ * (JSON `CreateConstructorTaskForPatternDto`) + `files`. В отличие от
+ * `saveConstructorTaskDraft`, нового лекала не создаёт.
+ */
+export function createConstructorTaskForPattern(
+  formData: FormData,
+): Promise<SaveConstructorDraftResultDto> {
+  return apiFetchMultipart<SaveConstructorDraftResultDto>(
+    '/constructor-tasks/for-pattern',
+    formData,
+  );
+}
+
 export function cancelConstructorTask(
   id: string,
 ): Promise<ConstructorTaskDetailDto> {

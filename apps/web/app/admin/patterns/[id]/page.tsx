@@ -39,6 +39,7 @@ import { ClonePatternModalHost } from './clone-modal-host';
 import { EditPatternForm } from './edit-form';
 import { ArchivePatternButton } from './archive-pattern-button';
 import { DeletePatternButton } from './delete-pattern-button';
+import { SendPatternToConstructorButton } from '@/components/constructor/send-pattern-to-constructor';
 import { PatternPreviewUploadForm } from './preview-upload-form';
 import { PatternSizesManager } from './pattern-sizes-manager';
 import { PatternItemParameterNormsForm } from './parameter-norms-form';
@@ -113,6 +114,28 @@ export default async function AdminPatternDetailPage({
     categories = [];
   }
 
+  // Размеры лекала для модалки «Отправить конструктору» — берём из
+  // `sizeFiles` (дедуп по sizeId, сортировка по справочнику).
+  const patternSizesForConstructor = (() => {
+    const seen = new Map<string, { sizeId: string; sizeCode: string; sortOrder: number }>();
+    for (const f of pattern.sizeFiles) {
+      if (!seen.has(f.sizeId)) {
+        seen.set(f.sizeId, {
+          sizeId: f.sizeId,
+          sizeCode: f.size.code,
+          sortOrder: f.size.sortOrder,
+        });
+      }
+    }
+    return Array.from(seen.values())
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map(({ sizeId, sizeCode }) => ({ sizeId, sizeCode }));
+  })();
+  // Кнопку показываем только если у лекала ещё нет заявки КБ (1:1) и
+  // оно не в архиве — backend всё равно отдаст 409, но прячем заранее.
+  const canSendToConstructor =
+    !pattern.constructorTask && pattern.status !== 'ARCHIVED';
+
   return (
     <AdminPageShell
       icon={<Scissors size={22} strokeWidth={1.6} aria-hidden />}
@@ -127,6 +150,14 @@ export default async function AdminPatternDetailPage({
             <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
             К списку
           </Link>
+          {canSendToConstructor && (
+            <SendPatternToConstructorButton
+              patternItemId={pattern.id}
+              patternName={pattern.name}
+              sizes={patternSizesForConstructor}
+              buttonClassName="admin-btn admin-btn--ghost"
+            />
+          )}
           <ArchivePatternButton
             patternId={pattern.id}
             patternName={pattern.name}

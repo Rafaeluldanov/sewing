@@ -12,6 +12,7 @@ import {
   type ConstructorTaskListScope,
   type ConstructorTaskSizeRowDto,
   type ConstructorTaskSummaryDto,
+  type CreateConstructorTaskForPatternDto,
   type SaveConstructorDraftDto,
   type SaveConstructorDraftResultDto,
 } from '@sewing/shared/constructor-tasks';
@@ -19,6 +20,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   ConstructorTaskAcceptInvalidException,
+  ConstructorTaskAlreadyExistsException,
   ConstructorTaskAssignedToOtherException,
   ConstructorTaskCompleteFilesMismatchException,
   ConstructorTaskFileInvalidException,
@@ -27,6 +29,7 @@ import {
   ConstructorTaskNotInProgressException,
   ConstructorTaskReworkInvalidException,
   ConstructorTaskSizeNotFoundException,
+  PatternNotFoundException,
 } from '../../common/errors.js';
 import { ConstructorTasksStorageService } from './constructor-tasks-storage.service.js';
 import { mapConstructorTaskSummary } from './constructor-task-mappers.js';
@@ -307,6 +310,131 @@ export class ConstructorTasksService {
       sizeRowsCount: dto.sizeRows.length,
       filesCount,
       orderId: created.orderId,
+    };
+  }
+
+  /**
+   * Создать `ConstructorTask` (status=NEW) для УЖЕ существующего
+   * лекала (`PatternItem`). В отличие от {@link saveDraft}, НЕ создаёт
+   * новое лекало и НЕ трогает `PatternMaterialArea` (площади уже у
+   * лекала). Используется, когда менеджер отправляет конструктору
+   * номенклатуру, заведённую через «Сохранить изделие» (она ACTIVE в
+   * БД, но реального файла лекала нет) — из карточки заказа
+   * `/admin/orders/[id]/edit` или карточки номенклатуры
+   * `/admin/patterns/[id]`.
+   *
+   * Статус лекала намеренно НЕ меняем: `accept`/`complete` всё равно
+   * нормализуют его в `ACTIVE`, а до готовности файла крой и так
+   * блокируется (нет `PatternSizeFile.fileUrl`). `ConstructorTask`
+   * 1:1 с лекалом (`@unique`), поэтому при наличии уже созданной
+   * задачи возвращаем 409 `CONSTRUCTOR_TASK_ALREADY_EXISTS`.
+   *
+   * @param dto      — провалидированный payload (zod): patternItemId,
+   *                   comment, sizeRows.
+   * @param files    — массив multipart-файлов; может быть пуст.
+   * @param actorEmployeeId — id сотрудника-инициатора (createdById).
+   */
+  async createForExistingPattern(
+    dto: CreateConstructorTaskForPatternDto,
+    files: UploadedFileLike[],
+    actorEmployeeId: string | null,
+  ): Promise<SaveConstructorDraftResultDto> {
+    if (files.length > CONSTRUCTOR_TASK_FILE_MAX_COUNT) {
+      throw new ConstructorTaskFileInvalidException(
+        `Слишком много файлов: лимит ${CONSTRUCTOR_TASK_FILE_MAX_COUNT}.`,
+      );
+    }
+
+    // 1) Лекало должно существовать; задачи у него ещё быть не должно
+    //    (1:1). Параллельно валидируем все sizeId таблицы.
+    const [pattern, existingTask, foundSizes] = await Promise.all([
+      this.prisma.patternItem.findUnique({
+        where: { id: dto.patternItemId },
+        select: { id: true, name: true, article: true },
+      }),
+      this.prisma.constructorTask.findUnique({
+        where: { patternItemId: dto.patternItemId },
+        select: { id: true },
+      }),
+      this.prisma.size.findMany({
+        where: { id: { in: dto.sizeRows.map((r) => r.sizeId) } },
+        select: { id: true },
+      }),
+    ]);
+    if (!pattern) throw new PatternNotFoundException();
+    if (existingTask) throw new ConstructorTaskAlreadyExistsException();
+    const foundSizeIds = new Set(foundSizes.map((s) => s.id));
+    for (const row of dto.sizeRows) {
+      if (!foundSizeIds.has(row.sizeId)) {
+        throw new ConstructorTaskSizeNotFoundException(row.sizeId);
+      }
+    }
+
+    // 2) Создаём задачу + строки размеров (площади НЕ трогаем —
+    //    они уже у лекала). Транзакция не обязательна (одна запись с
+    //    nested create), но оставляем для атомарности sizeRows.
+    const task = await this.prisma.constructorTask.create({
+      data: {
+        patternItemId: pattern.id,
+        status: 'NEW',
+        comment: dto.comment,
+        createdById: actorEmployeeId,
+        submittedAt: new Date(),
+        sizeRows: {
+          createMany: {
+            data: dto.sizeRows.map((row, idx) => ({
+              sortOrder: (idx + 1) * 10,
+              sizeId: row.sizeId,
+              sizeCodeSnapshot: row.sizeCodeSnapshot,
+              kulirkaMeters:
+                row.kulirkaMeters == null
+                  ? null
+                  : new Prisma.Decimal(row.kulirkaMeters),
+              kashkorseMeters:
+                row.kashkorseMeters == null
+                  ? null
+                  : new Prisma.Decimal(row.kashkorseMeters),
+            })),
+          },
+        },
+      },
+      select: { id: true },
+    });
+
+    // 3) Файлы — вторым шагом (storage не транзакционен), идентично
+    //    `saveDraft`.
+    let filesCount = 0;
+    if (files.length > 0) {
+      const savedFiles: Array<{
+        publicUrl: string;
+        originalFileName: string;
+        contentType: string;
+        sizeBytes: number;
+      }> = [];
+      for (const file of files) {
+        const saved = await this.storage.saveTaskFile(task.id, file);
+        savedFiles.push(saved);
+      }
+      await this.prisma.constructorTaskFile.createMany({
+        data: savedFiles.map((s) => ({
+          taskId: task.id,
+          fileUrl: s.publicUrl,
+          originalFileName: s.originalFileName,
+          contentType: s.contentType,
+          sizeBytes: s.sizeBytes,
+        })),
+      });
+      filesCount = savedFiles.length;
+    }
+
+    return {
+      taskId: task.id,
+      patternItemId: pattern.id,
+      patternName: pattern.name,
+      patternArticle: pattern.article,
+      sizeRowsCount: dto.sizeRows.length,
+      filesCount,
+      orderId: null,
     };
   }
 

@@ -23,6 +23,7 @@ import {
   CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES,
   CompleteConstructorTaskSchema,
   ConstructorTaskListScopeSchema,
+  CreateConstructorTaskForPatternSchema,
   REWORK_CONSTRUCTOR_TASK_FILE_FIELD,
   RequestReworkConstructorTaskSchema,
   SaveConstructorDraftSchema,
@@ -389,6 +390,59 @@ export class ConstructorTasksController {
       Array.isArray(files) ? files : [],
       user.employeeId ?? null,
       createDraftOrder,
+    );
+  }
+
+  /**
+   * Создать заявку конструктору для УЖЕ существующего лекала (без
+   * создания нового PatternItem). Используется кнопкой «Отправить
+   * конструктору» на карточке заказа `/admin/orders/[id]/edit` и
+   * карточке номенклатуры `/admin/patterns/[id]`.
+   *
+   * Запрос: `multipart/form-data`, как у `POST /` — поле `payload`
+   * (JSON `CreateConstructorTaskForPatternDto`) + `files` (file[]).
+   */
+  @Post('for-pattern')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  @UseInterceptors(
+    FilesInterceptor('files', CONSTRUCTOR_TASK_FILE_MAX_COUNT, {
+      storage: memoryStorage(),
+      limits: {
+        fileSize: CONSTRUCTOR_TASK_FILE_MAX_SIZE_BYTES,
+      },
+    }),
+  )
+  async createForPattern(
+    @Body('payload') payloadRaw: string | undefined,
+    @UploadedFiles() files: UploadedFileLike[] | undefined,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<SaveConstructorDraftResultDto> {
+    if (typeof payloadRaw !== 'string' || payloadRaw.trim() === '') {
+      throw new ConstructorTaskFileInvalidException(
+        'Поле payload обязательно — передайте JSON с patternItemId, sizeRows и комментарием.',
+      );
+    }
+    let payloadJson: unknown;
+    try {
+      payloadJson = JSON.parse(payloadRaw);
+    } catch {
+      throw new ConstructorTaskFileInvalidException(
+        'Поле payload содержит невалидный JSON.',
+      );
+    }
+    const parsed = CreateConstructorTaskForPatternSchema.safeParse(payloadJson);
+    if (!parsed.success) {
+      throw new ConstructorTaskFileInvalidException(
+        parsed.error.issues
+          .map((i) => i.message)
+          .filter(Boolean)
+          .join('; ') || 'Невалидный payload.',
+      );
+    }
+    return this.tasks.createForExistingPattern(
+      parsed.data,
+      Array.isArray(files) ? files : [],
+      user.employeeId ?? null,
     );
   }
 }
