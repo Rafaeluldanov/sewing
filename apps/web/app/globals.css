@@ -4468,6 +4468,36 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .display-screen__updated {
   font-variant-numeric: tabular-nums;
 }
+/* Кнопка «Выйти» на мониторе. AppHeader (и его logout) на этом экране
+   скрыт, поэтому выход живёт в шапке самой витрины. Спокойный outline-
+   стиль, чтобы не конкурировать со статус-чипом и KPI. */
+.display-screen__logout-form {
+  display: inline-flex;
+  margin: 0;
+}
+.display-screen__logout {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--display-fg-muted);
+  border-radius: 0.5rem;
+  background: transparent;
+  color: var(--display-fg-muted);
+  font: inherit;
+  font-size: clamp(0.8rem, 0.95vw, 0.95rem);
+  line-height: 1;
+  cursor: pointer;
+  transition:
+    color 0.15s ease,
+    border-color 0.15s ease,
+    background 0.15s ease;
+}
+.display-screen__logout:hover {
+  color: var(--display-crit);
+  border-color: var(--display-crit);
+  background: rgba(0, 0, 0, 0.03);
+}
 
 /* KPI row ------------------------------------------------------------------ */
 .display-kpi {
@@ -12472,6 +12502,22 @@ body:has(.admin-layout) .app-header { display: none !important; }
   text-transform: uppercase;
 }
 
+/* Строка подписи поля: лейбл + иконка-инфо. Фиксированная высота
+   (≈ 2 строки лейбла) держит все инпуты строки на одной линии вне
+   зависимости от того, переносится подпись на 2 строки или нет. */
+.order-hero-card__field-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
+  min-height: 2rem;
+}
+
+.order-hero-card__field-head label {
+  flex: 1 1 auto;
+  min-width: 0;
+  line-height: 1.25;
+}
+
 .order-hero-card__field input,
 .order-hero-card__field select,
 .order-hero-card__field textarea {
@@ -12506,6 +12552,75 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .order-hero-card__field-error {
   font-size: 0.75rem;
   color: var(--admin-danger-fg, #b91c1c);
+}
+
+/* Иконка-инфо рядом с подписью поля + тултип (заменяет текстовые
+   подсказки под инпутом). */
+.order-hero-card__field-info {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 1.05rem;
+  height: 1.05rem;
+  margin-top: -0.05rem;
+  border-radius: 50%;
+  color: var(--admin-muted);
+  cursor: help;
+  outline: none;
+}
+
+.order-hero-card__field-info:hover,
+.order-hero-card__field-info:focus-visible {
+  color: var(--admin-accent, #2563eb);
+}
+
+.order-hero-card__field-info:focus-visible {
+  box-shadow: 0 0 0 2px var(--admin-accent-soft, rgba(37, 99, 235, 0.35));
+}
+
+.order-hero-card__field-tip {
+  position: absolute;
+  bottom: calc(100% + 0.4rem);
+  left: 50%;
+  transform: translateX(-50%) translateY(0.2rem);
+  z-index: 30;
+  width: max-content;
+  max-width: 240px;
+  padding: 0.45rem 0.6rem;
+  border-radius: 8px;
+  background: var(--admin-text, #0f172a);
+  color: #fff;
+  font-size: 0.75rem;
+  font-weight: 400;
+  line-height: 1.35;
+  text-transform: none;
+  letter-spacing: normal;
+  white-space: normal;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.25);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 120ms ease, transform 120ms ease;
+}
+
+.order-hero-card__field-tip::after {
+  content: '';
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  border: 5px solid transparent;
+  border-top-color: var(--admin-text, #0f172a);
+}
+
+.order-hero-card__field-info:hover .order-hero-card__field-tip,
+.order-hero-card__field-info:focus .order-hero-card__field-tip,
+.order-hero-card__field-info:focus-visible .order-hero-card__field-tip {
+  opacity: 1;
+  visibility: visible;
+  transform: translateX(-50%) translateY(0);
 }
 
 .order-hero-card__price-row {

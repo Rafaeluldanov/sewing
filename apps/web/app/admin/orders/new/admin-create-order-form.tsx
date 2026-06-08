@@ -50,6 +50,7 @@ import {
   AlertCircle,
   ArrowLeft,
   ImageIcon,
+  Info,
   Plus,
   Save,
   Shirt,
@@ -791,13 +792,13 @@ function BasicsCreateFields({
   onCommentChange: (v: string) => void;
   fieldError: (key: string) => string | undefined;
 }) {
-  const selectedDivisionCard = companyDivisions.find(
-    (d) => d.id === companyDivisionId,
-  );
   return (
     <div className="order-hero-card__basic-grid">
       <div className="order-hero-card__field">
-        <label htmlFor="companyDivisionId">Подразделение</label>
+        <div className="order-hero-card__field-head">
+          <label htmlFor="companyDivisionId">Подразделение</label>
+          <FieldInfo text="Подразделение заказа. Для нестандартных подразделений (не «Маркетплейс» и не B2B) дисплей работает по той же логике, что B2B." />
+        </div>
         <select
           id="companyDivisionId"
           name="companyDivisionId"
@@ -814,23 +815,15 @@ function BasicsCreateFields({
             </option>
           ))}
         </select>
-        {selectedDivisionCard?.code &&
-          selectedDivisionCard.code !== 'MARKETPLACE' &&
-          selectedDivisionCard.code !== 'OTHER' && (
-            <span
-              className="order-hero-card__field-hint"
-              style={{ fontSize: '0.78rem' }}
-            >
-              Для подразделения «{selectedDivisionCard.name}» дисплей
-              работает по той же логике, что B2B.
-            </span>
-          )}
       </div>
 
       <div className="order-hero-card__field">
-        <label htmlFor="finishedGoodsWarehouseId">
-          Склад выпуска готовой продукции
-        </label>
+        <div className="order-hero-card__field-head">
+          <label htmlFor="finishedGoodsWarehouseId">
+            Склад готовой продукции
+          </label>
+          <FieldInfo text="Склад, на который должна поступить готовая продукция после производства / упаковки. Это не склад материалов." />
+        </div>
         <select
           id="finishedGoodsWarehouseId"
           name="finishedGoodsWarehouseId"
@@ -847,16 +840,15 @@ function BasicsCreateFields({
             </option>
           ))}
         </select>
-        <span className="order-hero-card__field-hint">
-          Склад, на который должна поступить готовая продукция после
-          производства / упаковки. Это не склад материалов.
-        </span>
       </div>
 
       <div className="order-hero-card__field">
-        <label htmlFor="materialsAndHardwareCostPolicy">
-          Учет материалов и фурнитуры в себестоимости
-        </label>
+        <div className="order-hero-card__field-head">
+          <label htmlFor="materialsAndHardwareCostPolicy">
+            Учёт материалов и фурнитуры
+          </label>
+          <FieldInfo text="Если материалы или фурнитуру предоставляет клиент, выберите «Не учитывать». Потребность по количеству всё равно будет рассчитана и показана, но стоимость материалов и фурнитуры не войдёт в себестоимость заказа." />
+        </div>
         <select
           id="materialsAndHardwareCostPolicy"
           name="materialsAndHardwareCostPolicy"
@@ -875,16 +867,12 @@ function BasicsCreateFields({
             </option>
           ))}
         </select>
-        <span className="order-hero-card__field-hint">
-          Если материалы или фурнитуру предоставляет клиент, выберите
-          «Не учитывать». Потребность по количеству всё равно будет
-          рассчитана и показана, но стоимость материалов и фурнитуры
-          не войдёт в себестоимость заказа.
-        </span>
       </div>
 
       <div className="order-hero-card__field">
-        <label htmlFor="dueDate">Срок сдачи</label>
+        <div className="order-hero-card__field-head">
+          <label htmlFor="dueDate">Срок сдачи</label>
+        </div>
         <AdminDateField
           id="dueDate"
           name="dueDate"
@@ -895,7 +883,12 @@ function BasicsCreateFields({
       </div>
 
       <div className="order-hero-card__field">
-        <label htmlFor="clientId">Клиент</label>
+        <div className="order-hero-card__field-head">
+          <label htmlFor="clientId">Клиент</label>
+          {clients.length === 0 && (
+            <FieldInfo text="Список клиентов пуст — добавьте клиента в разделе «Клиенты»." />
+          )}
+        </div>
         <select
           id="clientId"
           name="clientId"
@@ -909,16 +902,12 @@ function BasicsCreateFields({
             </option>
           ))}
         </select>
-        {clients.length === 0 && (
-          <span className="order-hero-card__field-hint">
-            Список клиентов пуст.{' '}
-            <Link href="/admin/clients/new">Добавить?</Link>
-          </span>
-        )}
       </div>
 
       <div className="order-hero-card__field order-hero-card__field--price">
-        <label htmlFor="customerUnitPrice">Цена за 1 шт</label>
+        <div className="order-hero-card__field-head">
+          <label htmlFor="customerUnitPrice">Цена за 1 шт</label>
+        </div>
         <div className="order-hero-card__price-row">
           <input
             id="customerUnitPrice"
@@ -953,7 +942,9 @@ function BasicsCreateFields({
       </div>
 
       <div className="order-hero-card__field order-hero-card__field--comment">
-        <label htmlFor="comment">Комментарий</label>
+        <div className="order-hero-card__field-head">
+          <label htmlFor="comment">Комментарий</label>
+        </div>
         <textarea
           id="comment"
           name="comment"
@@ -969,6 +960,29 @@ function BasicsCreateFields({
           не выбран из справочника (управленческое поле). */}
       <input type="hidden" name="customer" value="" />
     </div>
+  );
+}
+
+/**
+ * Иконка-инфо рядом с подписью поля. Заменяет текстовые подсказки
+ * под инпутами (`order-hero-card__field-hint`): описание поля больше
+ * не растягивает строку грид-сетки и не сбивает выравнивание инпутов.
+ * Текст показывается тултипом по наведению и по фокусу (доступно с
+ * клавиатуры). `aria-label` дублирует текст для скринридеров.
+ */
+function FieldInfo({ text }: { text: string }) {
+  return (
+    <span
+      className="order-hero-card__field-info"
+      tabIndex={0}
+      role="note"
+      aria-label={text}
+    >
+      <Info size={13} strokeWidth={1.8} aria-hidden />
+      <span className="order-hero-card__field-tip" role="tooltip">
+        {text}
+      </span>
+    </span>
   );
 }
 
