@@ -234,7 +234,7 @@ function NomenclaturePreview({
         className="workshop-order-preview workshop-order-preview--sm workshop-order-preview--empty"
         aria-label={alt}
       >
-        <ImageOff size={14} strokeWidth={1.4} aria-hidden />
+        <ImageOff size={12} strokeWidth={1.4} aria-hidden />
       </span>
     );
   }
