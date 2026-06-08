@@ -8,7 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
-import { Package, Scissors, Search, type LucideIcon } from 'lucide-react';
+import { LogOut, Package, Scissors, Search, type LucideIcon } from 'lucide-react';
 import {
   SHOPFLOOR_DISPLAY_MATRIX_STAGES,
   SHOPFLOOR_STAGE_LABELS,
@@ -24,6 +24,7 @@ import {
   type ShopfloorSummaryDto,
 } from '@sewing/shared/shopfloor';
 import { getApiBaseUrl } from '@/lib/api-base';
+import { logoutAction } from '@/app/(auth)/logout-action';
 
 interface Props {
   initialSummary: ShopfloorDisplayDto | null;
@@ -737,6 +738,22 @@ export function ShopfloorDisplayBoard({
               ? `обновлено ${formatAgo(now.getTime() - snap.lastSuccessAt)}`
               : 'нет данных'}
           </span>
+          {/*
+            Выход с монитора. Кнопка-форма с server action `logoutAction`
+            (httpOnly session-cookie чистится на сервере) — работает даже
+            без JS, что важно для зального терминала. Глобальный AppHeader
+            на этом экране скрыт, поэтому единственный logout живёт здесь.
+          */}
+          <form action={logoutAction} className="display-screen__logout-form">
+            <button
+              type="submit"
+              className="display-screen__logout"
+              title="Выйти из учётной записи монитора"
+            >
+              <LogOut size={14} aria-hidden="true" />
+              <span>Выйти</span>
+            </button>
+          </form>
         </div>
       </header>
 
