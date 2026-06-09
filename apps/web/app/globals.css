@@ -11504,7 +11504,7 @@ body:has(.admin-layout) .app-header { display: none !important; }
     120px                       /* expected date */
     minmax(150px, 0.8fr)        /* status (select + badge) */
     auto;                       /* save + detail link */
-  gap: 6px 10px;
+  gap: 6px 8px;
   align-items: end;
   padding: 0.5rem 0.6rem;
   border-radius: 8px;
@@ -11516,19 +11516,26 @@ body:has(.admin-layout) .app-header { display: none !important; }
    «Тип». Bulk-чекбокс приходит первым, если включён feature-flag
    `purchase-orders` (см. компонент). */
 .workshop-need-line--with-order {
+  /* 13 колонок — самый «тесный» layout. Минимумы намеренно сжаты,
+     чтобы сумма колонок укладывалась в контент-область рабочих
+     экранов (~1440px), а не уезжала за правый край, обрезая колонку
+     «Сохранить»/«Подробнее». Если экран всё же ýже суммы — список
+     `.workshop-need-line-list` даёт горизонтальный скролл, так что
+     последняя колонка никогда не клипается насмерть (была причина
+     «таблица не влезает в окно»). */
   grid-template-columns:
     auto                        /* bulk checkbox (optional) */
-    minmax(170px, 1.1fr)        /* preview + order number + client */
-    minmax(90px, 0.6fr)         /* kind badge */
-    minmax(220px, 1.4fr)        /* description */
-    90px                        /* calc qty */
-    100px                       /* purchase qty */
-    110px                       /* unit price */
-    90px                        /* currency */
-    110px                       /* line total */
-    minmax(140px, 1fr)          /* supplier text */
+    minmax(150px, 1fr)          /* preview + order number + client */
+    minmax(64px, auto)          /* kind badge */
+    minmax(180px, 1.3fr)        /* description */
+    74px                        /* calc qty */
+    86px                        /* purchase qty */
+    96px                        /* unit price */
+    80px                        /* currency */
+    96px                        /* line total */
+    minmax(120px, 0.9fr)        /* supplier text */
     120px                       /* expected date */
-    minmax(150px, 0.8fr)        /* status */
+    minmax(128px, 0.7fr)        /* status */
     auto;                       /* save + detail link */
 }
 
@@ -11546,6 +11553,12 @@ body:has(.admin-layout) .app-header { display: none !important; }
   list-style: none;
   margin: 0;
   padding: 0;
+  /* Safety-net: если 13-колоночная строка всё же шире контент-области
+     (узкий ноутбук между 1200px и суммой колонок), список скроллится
+     по горизонтали, а не обрезает последнюю колонку «Сохранить» /
+     «Подробнее» за краем окна. На <=1199px строка сворачивается в
+     карточку (@media ниже) и скролл не нужен. */
+  overflow-x: auto;
 }
 
 /* ---------------------------------------------------------------------------
