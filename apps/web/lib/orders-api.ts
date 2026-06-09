@@ -15,6 +15,7 @@ import type {
   OrderStatus,
   Paginated,
   ProductDto,
+  SetOrderRouteModeDto,
   SizeDto,
   UpdateOrderDto,
   UpdateOrderLogisticsLineDto,
@@ -71,6 +72,24 @@ export function startOrder(id: string): Promise<OrderDetailDto> {
   return apiFetch<OrderDetailDto>(`/orders/${encodeURIComponent(id)}/start`, {
     method: 'POST',
   });
+}
+
+/**
+ * Ручное переопределение адаптивного режима сплит-распошива заказа
+ * (`PATCH /orders/:id/route-mode`). AUTO / FORCE_SPLIT / FORCE_COLLAPSED.
+ * Работает и в IN_PRODUCTION — рантайм-настройка распошива.
+ */
+export function setOrderRouteMode(
+  id: string,
+  body: SetOrderRouteModeDto,
+): Promise<OrderDetailDto> {
+  return apiFetch<OrderDetailDto>(
+    `/orders/${encodeURIComponent(id)}/route-mode`,
+    {
+      method: 'PATCH',
+      body,
+    },
+  );
 }
 
 /**

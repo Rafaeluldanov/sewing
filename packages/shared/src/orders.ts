@@ -1226,6 +1226,20 @@ export const UpdateOrderSchema = z.object({
 export type UpdateOrderDto = z.infer<typeof UpdateOrderSchema>;
 
 // ---------------------------------------------------------------------------
+// Route mode override (адаптивный сплит-распошив)
+// ---------------------------------------------------------------------------
+
+/** Зеркалит prisma enum `RouteModeOverride` (поле `Order.routeModeOverride`). */
+export const ROUTE_MODE_OVERRIDES = ['AUTO', 'FORCE_SPLIT', 'FORCE_COLLAPSED'] as const;
+export type RouteModeOverride = (typeof ROUTE_MODE_OVERRIDES)[number];
+
+/** Тело ручки `PATCH /orders/:id/route-mode`. */
+export const SetOrderRouteModeSchema = z.object({
+  routeModeOverride: z.enum(ROUTE_MODE_OVERRIDES),
+});
+export type SetOrderRouteModeDto = z.infer<typeof SetOrderRouteModeSchema>;
+
+// ---------------------------------------------------------------------------
 // List query DTO
 // ---------------------------------------------------------------------------
 
@@ -1404,6 +1418,13 @@ export interface OrderListItemDto {
   routeTemplateId: string | null;
   routeTemplateCode: string | null;
   routeTemplateName: string | null;
+  /**
+   * Ручное переопределение адаптивного режима сплит-распошива (см.
+   * `apps/api/src/modules/passports/route-mode.ts`). AUTO — режим
+   * вычисляется на лету; FORCE_SPLIT / FORCE_COLLAPSED — мастер фиксирует
+   * две колонки распошива / одну. Меняется ручкой `PATCH /orders/:id/route-mode`.
+   */
+  routeModeOverride: RouteModeOverride;
   /**
    * Soft-pattern MVP (этап 2 «Лекала»): краткая ссылка на выбранное
    * лекало для `/admin/orders` и виджетов превью.

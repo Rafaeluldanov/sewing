@@ -150,6 +150,20 @@ enum OrderStatus {
   CANCELLED
 }
 
+/// Ручное переопределение адаптивного режима сплит-распошива заказа
+/// (см. `apps/api/src/modules/passports/route-mode.ts::modeForOrder`).
+///
+/// AUTO — режим вычисляется на лету по обстановке (занят ли выделенный
+/// низ-станок). FORCE_SPLIT / FORCE_COLLAPSED — мастер жёстко фиксирует
+/// две колонки распошива / одну, мимо авто-сигнала. Страховка от залипших
+/// смен и дребезга. Снапшот маршрута (`OrderRouteStep`) при этом НЕ
+/// меняется — режим влияет только на трактовку распошива и монитор цеха.
+enum RouteModeOverride {
+  AUTO
+  FORCE_SPLIT
+  FORCE_COLLAPSED
+}
+
 enum PassportStatus {
   CREATED
   IN_PROGRESS
@@ -1153,6 +1167,13 @@ model Order {
   /// не выбрал шаблон — backward-compatible.
   routeTemplateId String?
   routeTemplate   RouteTemplate? @relation(fields: [routeTemplateId], references: [id])
+
+  /// Ручное переопределение адаптивного режима сплит-распошива (см.
+  /// `RouteModeOverride` и `route-mode.ts`). По умолчанию AUTO — режим
+  /// SPLIT/COLLAPSED вычисляется на лету по активным сменам; мастер может
+  /// зафиксировать FORCE_SPLIT / FORCE_COLLAPSED на заказе. Менять можно и
+  /// в IN_PRODUCTION (в отличие от DRAFT-only полей).
+  routeModeOverride RouteModeOverride @default(AUTO)
 
   /// Tech-card MVP (см. `TechCardTemplate` ниже и `docs/domain.md
   /// §«Техкарты»`, ADR-0022). Опциональная ссылка на шаблон техкарты,

@@ -14392,6 +14392,64 @@ body:has(.admin-layout) .app-header { display: none !important; }
   }
 }
 
+/* --- Route mode toggle (адаптивный сплит-распошив) --------------------- */
+
+.order-plan-tab__route-mode {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: var(--admin-space-sm) 0;
+}
+
+.admin-deflist__subtitle {
+  font-size: 0.8rem;
+  color: var(--admin-text-muted, #6b7280);
+}
+
+.route-mode-toggle__row {
+  display: inline-flex;
+  gap: 4px;
+  padding: 3px;
+  border-radius: 8px;
+  background: var(--admin-surface-muted, #f1f5f9);
+  width: fit-content;
+}
+
+.route-mode-toggle__btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0;
+  padding: 4px 12px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--admin-text-muted, #6b7280);
+  cursor: pointer;
+  line-height: 1.15;
+}
+
+.route-mode-toggle__btn:hover:not(:disabled) {
+  background: var(--admin-surface, #fff);
+}
+
+.route-mode-toggle__btn--active {
+  background: var(--admin-surface, #fff);
+  border-color: var(--admin-border, #d1d5db);
+  color: var(--admin-text, #111827);
+  cursor: default;
+}
+
+.route-mode-toggle__btn-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+}
+
+.route-mode-toggle__btn-hint {
+  font-size: 0.68rem;
+  opacity: 0.8;
+}
+
 /* --- Passports tab ------------------------------------------------------ */
 
 .order-passports-tab__filters {

@@ -23,6 +23,16 @@ import type {
   ShopfloorStateQuery,
 } from '@sewing/shared/shopfloor';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import {
+  findCollapsibleGroup,
+  type CollapsiblePlan,
+} from '../passports/route-collapse.js';
+import {
+  collapseSewingView,
+  hasDedicatedLowStation,
+  modeForOrder,
+  type CollapseSpec,
+} from '../passports/route-mode.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import {
   normalizeColor,
@@ -854,6 +864,10 @@ export class ShopfloorService {
         // уезжали бы в «Без цвета» и перепутали бы матрицу.
         color: true,
         items: { select: { sizeId: true } },
+        // Ручной override адаптивного режима сплит-распошива (route-mode):
+        // AUTO/FORCE_SPLIT/FORCE_COLLAPSED. Влияет на слияние колонок
+        // распошива в мониторе (см. applyCollapsedSewingView ниже).
+        routeModeOverride: true,
       },
     });
 
@@ -881,6 +895,9 @@ export class ShopfloorService {
             select: {
               orderId: true,
               index: true,
+              // parallelGroup нужен `findCollapsibleGroup` для распознавания
+              // сворачиваемой группы распошива (route-mode).
+              parallelGroup: true,
               operation: {
                 select: { id: true, name: true, sortOrder: true },
               },
@@ -1070,6 +1087,96 @@ export class ShopfloorService {
     // паспорт = партия из N изделий). Это согласуется с матрицей
     // `/shopfloor/display`, где все остальные бакеты тоже считаются
     // в штуках.
+    // --- Адаптивный режим сплит-распошива (route-mode, Вариант B) ---
+    // Снапшот маршрута НЕ трогаем; «сплит vs схлоп» вычисляем на лету и
+    // сливаем колонки распошива у COLLAPSED-заказов прямо в проекции
+    // монитора (см. `collapseSewingView`). Для обычных заказов карта пустая
+    // — оверхед только один запрос справочника подстановок.
+    const collapseByOrder = new Map<string, CollapseSpec>();
+    if (routeSteps.length > 0) {
+      const substitutions = await this.prisma.operationSubstitution.findMany({
+        select: {
+          satisfiesOpId: true,
+          substituteOpId: true,
+          isReceivingStation: true,
+        },
+      });
+      const plansByOrder = new Map<string, CollapsiblePlan>();
+      const stepsByOrderForPlan = new Map<
+        string,
+        { index: number; operationId: string; parallelGroup: number | null }[]
+      >();
+      for (const s of routeSteps) {
+        const arr = stepsByOrderForPlan.get(s.orderId) ?? [];
+        arr.push({
+          index: s.index,
+          operationId: s.operation.id,
+          parallelGroup: s.parallelGroup,
+        });
+        stepsByOrderForPlan.set(s.orderId, arr);
+      }
+      for (const [orderId, steps] of stepsByOrderForPlan) {
+        const plan = findCollapsibleGroup(steps, substitutions);
+        if (plan) plansByOrder.set(orderId, plan);
+      }
+      if (plansByOrder.size > 0) {
+        const receivingOpIds = new Set<string>();
+        const dedicatedOpIds = new Set<string>();
+        const targetOpIds = new Set<string>();
+        for (const plan of plansByOrder.values()) {
+          receivingOpIds.add(plan.receivingOpId);
+          receivingOpIds.add(plan.targetOpId);
+          targetOpIds.add(plan.targetOpId);
+          for (const op of plan.dedicatedOpIds) dedicatedOpIds.add(op);
+        }
+        const [receivingEq, lowSessions, targetOps] = await Promise.all([
+          this.prisma.equipmentOperation.findMany({
+            where: { isActive: true, operationId: { in: [...receivingOpIds] } },
+            select: { equipmentId: true },
+          }),
+          this.prisma.shiftSession.findMany({
+            where: { endedAt: null, operationId: { in: [...dedicatedOpIds] } },
+            select: { operationId: true, equipmentId: true },
+          }),
+          this.prisma.operation.findMany({
+            where: { id: { in: [...targetOpIds] } },
+            select: { id: true, name: true, sortOrder: true },
+          }),
+        ]);
+        const receivingEquipmentIds = new Set(receivingEq.map((e) => e.equipmentId));
+        // v1-сигнал «выделенный низ-станок занят» — цеховой (один podgib-niza
+        // на цех): активная смена на низ-операции на станке, НЕ умеющем
+        // принимать рукав/полный распошив. Когда занят — все сплит-заказы
+        // показывают две колонки; когда нет — одну. Дребезг между паспортами
+        // отсутствует (сигнал по смене, не по held-паспорту); крайние случаи
+        // и залипшие смены закрывает FORCE_* override.
+        const dedicatedLowActive = hasDedicatedLowStation(
+          lowSessions,
+          [...dedicatedOpIds],
+          receivingEquipmentIds,
+        );
+        const targetMeta = new Map(targetOps.map((o) => [o.id, o]));
+        const overrideByOrder = new Map(
+          activeOrders.map((o) => [o.id, o.routeModeOverride]),
+        );
+        for (const [orderId, plan] of plansByOrder) {
+          const mode = modeForOrder({
+            override: overrideByOrder.get(orderId) ?? 'AUTO',
+            plan,
+            dedicatedLowActive,
+          });
+          if (mode !== 'COLLAPSED') continue;
+          const meta = targetMeta.get(plan.targetOpId);
+          collapseByOrder.set(orderId, {
+            mergeOpIds: plan.mergeOpIds,
+            targetOpId: plan.targetOpId,
+            targetName: meta?.name ?? 'Распошив',
+            targetSortOrder: meta?.sortOrder ?? 0,
+          });
+        }
+      }
+    }
+
     const sewingRouteInput = passports.map((p) => ({
       orderId: p.orderId,
       sizeId: p.sizeId,
@@ -1088,9 +1195,16 @@ export class ShopfloorService {
         ? sewingShiftByEmployee.get(p.currentEmployeeId)?.id ?? null
         : null,
     }));
-    const sewingRoute = buildSewingRoute(
-      sewingRouteInput,
+    // Слияние колонок распошива у COLLAPSED-заказов (no-op, если карта
+    // пуста). Снапшот в БД не меняется — трансформ только для проекции.
+    const collapsedView = collapseSewingView(
       routeSteps,
+      sewingRouteInput,
+      collapseByOrder,
+    );
+    const sewingRoute = buildSewingRoute(
+      collapsedView.passports,
+      collapsedView.steps,
       sizes,
       orderItemSizes,
       orderColors,

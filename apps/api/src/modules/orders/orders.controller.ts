@@ -13,12 +13,14 @@ import {
   CreateOrderSchema,
   ListOrdersQuerySchema,
   UpdateOrderLogisticsLineSchema,
+  SetOrderRouteModeSchema,
   UpdateOrderMaterialRequirementColorSchema,
   UpdateOrderOutsourceRequirementStatusSchema,
   UpdateOrderSchema,
   type CreateOrderDto,
   type CreateOrderLogisticsLineDto,
   type ListOrdersQuery,
+  type SetOrderRouteModeDto,
   type UpdateOrderDto,
   type UpdateOrderLogisticsLineDto,
   type UpdateOrderMaterialRequirementColorDto,
@@ -97,6 +99,21 @@ export class OrdersController {
   @Post(':id/start')
   start(@Param('id') id: string, @CurrentUser() user: AuthPrincipal) {
     return this.orders.start(id, user.employeeId);
+  }
+
+  /**
+   * Ручное переопределение адаптивного режима сплит-распошива заказа
+   * (AUTO / FORCE_SPLIT / FORCE_COLLAPSED). В отличие от `update`, работает
+   * и в IN_PRODUCTION — это рантайм-настройка распошива, а не состав заказа.
+   * См. `OrdersService.setRouteModeOverride` и `route-mode.ts`.
+   */
+  @Patch(':id/route-mode')
+  setRouteMode(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(SetOrderRouteModeSchema)) dto: SetOrderRouteModeDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.orders.setRouteModeOverride(id, dto.routeModeOverride, user.employeeId);
   }
 
   /**

@@ -67,6 +67,7 @@ import {
   resolveOrderNomenclature,
 } from '@/lib/order-nomenclature';
 import { PatternPreviewCard } from '@/components/orders/pattern-preview-card';
+import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
 
 interface Props {
   order: OrderDetailDto;
@@ -233,6 +234,16 @@ export function OrderPlanTab({
                 )}
               </dd>
             </dl>
+            {(order.routeTemplateName?.toLowerCase().includes('сплит') ||
+              order.routeModeOverride !== 'AUTO') && (
+              <div className="order-plan-tab__route-mode">
+                <span className="admin-deflist__subtitle">Режим распошива</span>
+                <RouteModeToggle
+                  orderId={order.id}
+                  current={order.routeModeOverride}
+                />
+              </div>
+            )}
             <RouteStepsList steps={order.routeSteps} />
             {order.operationPlanIsStale && (
               <p

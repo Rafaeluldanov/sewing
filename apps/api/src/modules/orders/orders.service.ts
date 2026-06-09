@@ -21,6 +21,7 @@ import type {
   OrderMaterialsAndHardwareCostPolicy,
   OrderOutsourceDisplayStatus,
   Paginated,
+  RouteModeOverride,
   UpdateOrderDto,
   UpdateOrderLogisticsLineDto,
 } from '@sewing/shared/orders';
@@ -1022,6 +1023,7 @@ export class OrdersService {
     companyDivision: { id: string; code: string; name: string } | null;
     routeTemplateId: string | null;
     routeTemplate: { code: string; name: string } | null;
+    routeModeOverride: RouteModeOverride;
     patternItemId: string | null;
     patternItem: {
       id: string;
@@ -1111,6 +1113,7 @@ export class OrdersService {
       routeTemplateId: o.routeTemplateId,
       routeTemplateCode: o.routeTemplate?.code ?? null,
       routeTemplateName: o.routeTemplate?.name ?? null,
+      routeModeOverride: o.routeModeOverride,
       // Soft-pattern MVP (этап 2 «Лекала»): live-поля карточки
       // лекала + snapshot-поля заказа. UI выбирает, что показать
       // (см. правило в `OrderListItemDto`-комментарии).
@@ -1238,6 +1241,54 @@ export class OrdersService {
         }
       : null;
     return this.toDetailDto(order, product, order.color ?? product?.color ?? null);
+  }
+
+  /**
+   * Ручное переопределение адаптивного режима сплит-распошива заказа
+   * (см. `apps/api/src/modules/passports/route-mode.ts`).
+   *
+   * AUTO — режим SPLIT/COLLAPSED вычисляется на лету по активным сменам;
+   * FORCE_SPLIT / FORCE_COLLAPSED — мастер фиксирует режим вручную (страховка
+   * от залипших смен и дребезга). В отличие от план-полей, меняется и в
+   * IN_PRODUCTION — это рантайм-настройка, а не состав заказа. Снапшот
+   * маршрута (`OrderRouteStep`) НЕ трогаем: режим влияет только на трактовку
+   * распошива и монитор цеха. На завершённом/отменённом заказе бессмысленно.
+   */
+  async setRouteModeOverride(
+    id: string,
+    override: RouteModeOverride,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderDetailDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: { id: true, status: true, routeModeOverride: true },
+    });
+    if (!order) {
+      throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Заказ не найден' });
+    }
+    if (
+      order.status === OrderStatus.DONE ||
+      order.status === OrderStatus.CANCELLED
+    ) {
+      throw new BadRequestException({
+        code: 'ORDER_INVALID_STATUS_TRANSITION',
+        message: 'Режим распошива нельзя менять у завершённого или отменённого заказа',
+      });
+    }
+    if (order.routeModeOverride !== override) {
+      await this.prisma.order.update({
+        where: { id },
+        data: { routeModeOverride: override },
+      });
+      await this.audit.log({
+        event: 'ORDER_ROUTE_MODE_OVERRIDE_SET',
+        entityType: 'ORDER',
+        entityId: id,
+        employeeId: actorEmployeeId ?? null,
+        payload: { before: order.routeModeOverride, after: override },
+      });
+    }
+    return this.getOne(id);
   }
 
   // -------------------------------------------------------------------------
@@ -2856,6 +2907,7 @@ export class OrdersService {
       routeTemplateId: order.routeTemplateId,
       routeTemplateCode: order.routeTemplate?.code ?? null,
       routeTemplateName: order.routeTemplate?.name ?? null,
+      routeModeOverride: order.routeModeOverride,
       techCardId: order.techCardId,
       techCardCode: order.techCard?.code ?? null,
       techCardName: order.techCard?.name ?? null,

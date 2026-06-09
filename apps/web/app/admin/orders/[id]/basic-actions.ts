@@ -42,11 +42,13 @@
 
 import { revalidatePath } from 'next/cache';
 import {
+  ROUTE_MODE_OVERRIDES,
   UpdateOrderSchema,
+  type RouteModeOverride,
   type UpdateOrderDto,
 } from '@sewing/shared/orders';
 import { ApiRequestError } from '@/lib/api';
-import { updateOrder } from '@/lib/orders-api';
+import { setOrderRouteMode, updateOrder } from '@/lib/orders-api';
 
 export interface UpdateOrderBasicsActionState {
   ok?: boolean;
@@ -144,4 +146,36 @@ export async function updateOrderBasicsAction(
   revalidatePath('/orders');
   revalidatePath(`/orders/${orderId}`);
   return { ok: true, successMessage: 'Основное сохранено' };
+}
+
+export interface SetRouteModeActionState {
+  ok?: boolean;
+  error?: string;
+}
+
+/**
+ * Server action тумблера адаптивного режима сплит-распошива (AUTO /
+ * FORCE_SPLIT / FORCE_COLLAPSED). См. `OrdersService.setRouteModeOverride`
+ * и `route-mode.ts`. Меняет только трактовку распошива и монитор цеха —
+ * снапшот маршрута не трогается.
+ */
+export async function setOrderRouteModeAction(
+  orderId: string,
+  _prev: SetRouteModeActionState,
+  form: FormData,
+): Promise<SetRouteModeActionState> {
+  const value = String(form.get('routeModeOverride') ?? '');
+  if (!ROUTE_MODE_OVERRIDES.includes(value as RouteModeOverride)) {
+    return { error: 'Недопустимый режим распошива' };
+  }
+  try {
+    await setOrderRouteMode(orderId, {
+      routeModeOverride: value as RouteModeOverride,
+    });
+  } catch (e) {
+    return { error: explainApiError(e) };
+  }
+  revalidatePath(`/admin/orders/${orderId}`);
+  revalidatePath(`/orders/${orderId}`);
+  return { ok: true };
 }

@@ -32,14 +32,6 @@ import {
 } from '@sewing/shared/passports';
 import type { BatchCompleteOperationsResultDto } from '@sewing/shared/shifts';
 import { normalizeColor } from '@sewing/shared/colors';
-import {
-  findCollapsibleGroup,
-  shouldCollapse,
-  buildCollapsedSteps,
-  remapPassport,
-  type CollapsiblePlan,
-  type RouteStepLite,
-} from './route-collapse.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   CellInactiveException,
@@ -1405,8 +1397,26 @@ export class PassportsService {
     const rep = (index: number, group: number | null): number =>
       group != null ? groupMin.get(group) ?? index : index;
 
-    const targetStep = steps.find((s) => s.operationId === targetOperationId);
-    if (!targetStep) return none; // не в маршруте — не enforce
+    // Substitution-aware резолв целевого шага. Прямой случай — операция
+    // стоит в снимке маршрута. Иначе она может быть ЗАМЕСТИТЕЛЕМ (полный
+    // распошив 04), которого в сплит-снимке нет, но он закрывает операции
+    // группы (низ 0001 + рукав 16). Тогда позиционируем паспорт по этим
+    // закрываемым шагам — это нужно после отказа от необратимого
+    // сворачивания маршрута (Вариант B, см. route-mode.ts): снимок всегда
+    // сплит, а швея физически закрывает один 04.
+    let targetStep = steps.find((s) => s.operationId === targetOperationId);
+    if (!targetStep) {
+      const subs = await this.prisma.operationSubstitution.findMany({
+        where: { substituteOpId: targetOperationId },
+        select: { satisfiesOpId: true },
+      });
+      const satisfies = new Set(subs.map((s) => s.satisfiesOpId));
+      const merged = steps.filter((s) => satisfies.has(s.operationId));
+      if (merged.length === 0) return none; // не в маршруте и не заместитель
+      // Виртуальный целевой шаг = самый поздний из закрываемых (паспорт
+      // прошёл весь распошив целиком). Параллельная группа — их общая.
+      targetStep = merged.reduce((a, b) => (b.index > a.index ? b : a));
+    }
     const targetIndex = targetStep.index;
     const targetRep = rep(targetIndex, targetStep.parallelGroup);
 
@@ -1479,180 +1489,6 @@ export class PassportsService {
     }
 
     return { targetIndex, backward, groupIncomplete };
-  }
-
-  /**
-   * Сворачивание сплит-маршрута распошива (см. `route-collapse.ts`).
-   *
-   * Вызывается после завершения операции внутри той же транзакции. Собирает
-   * из БД данные для чистого предиката `shouldCollapse` и, если пора,
-   * переписывает `OrderRouteStep` заказа (пара низ+рукав → один полный
-   * распошив) и переиндексирует паспорта. Дёшево для обычных заказов:
-   * выходит сразу, если у заказа нет сворачиваемой параллельной группы или
-   * завершённая операция в неё не входит.
-   */
-  private async maybeCollapseSplitRoute(
-    orderId: string | null,
-    completedOperationId: string,
-    tx: Prisma.TransactionClient,
-  ): Promise<void> {
-    if (!orderId) return;
-
-    const steps: RouteStepLite[] = await tx.orderRouteStep.findMany({
-      where: { orderId },
-      select: { index: true, operationId: true, parallelGroup: true },
-    });
-    const substitutions = await tx.operationSubstitution.findMany({
-      select: {
-        satisfiesOpId: true,
-        substituteOpId: true,
-        isReceivingStation: true,
-      },
-    });
-    const plan = findCollapsibleGroup(steps, substitutions);
-    if (!plan) return;
-    // Реагируем только когда завершилась операция из сворачиваемой группы —
-    // иначе незачем считать переходы.
-    const inGroup =
-      plan.mergeOpIds.includes(completedOperationId) ||
-      plan.keepOpIds.includes(completedOperationId);
-    if (!inGroup) return;
-
-    // Оборудование, умеющее принимать (рукав / полный распошив).
-    const receivingEq = await tx.equipmentOperation.findMany({
-      where: {
-        isActive: true,
-        operationId: { in: [plan.receivingOpId, plan.targetOpId] },
-      },
-      select: { equipmentId: true },
-    });
-    const receivingEquipmentIds = new Set(receivingEq.map((e) => e.equipmentId));
-
-    // Закрытия низа/полного по паспортам заказа — для детекции перехода.
-    const finishes = await tx.passportEvent.findMany({
-      where: {
-        passport: { orderId },
-        type: PassportEventType.OPERATION_FINISHED,
-        operationId: { in: [...plan.dedicatedOpIds, plan.targetOpId] },
-      },
-      select: { operationId: true, equipmentId: true },
-    });
-
-    // Паспорта, прямо сейчас удерживаемые на выделенной низ-операции, и
-    // станок их держателя (из открытой смены).
-    const heldPassports = await tx.passport.findMany({
-      where: {
-        orderId,
-        currentEmployeeId: { not: null },
-        currentOperationId: { in: plan.dedicatedOpIds },
-      },
-      select: { currentEmployeeId: true },
-    });
-    const holderIds = [
-      ...new Set(
-        heldPassports
-          .map((p) => p.currentEmployeeId)
-          .filter((id): id is string => id != null),
-      ),
-    ];
-    const sessions = holderIds.length
-      ? await tx.shiftSession.findMany({
-          where: { employeeId: { in: holderIds }, endedAt: null },
-          select: { employeeId: true, equipmentId: true },
-        })
-      : [];
-    const empToEquip = new Map(sessions.map((s) => [s.employeeId, s.equipmentId]));
-    const heldOnLow = heldPassports.map((p) => ({
-      holderEquipmentId: p.currentEmployeeId
-        ? empToEquip.get(p.currentEmployeeId) ?? null
-        : null,
-    }));
-
-    const collapse = shouldCollapse({
-      plan,
-      receivingEquipmentIds,
-      lowOrFullFinishes: finishes.map((f) => ({
-        operationId: f.operationId as string,
-        equipmentId: f.equipmentId,
-      })),
-      heldOnLow,
-    });
-    if (!collapse) return;
-
-    await this.collapseSplitRoute(orderId, steps, plan, tx);
-  }
-
-  /**
-   * Переписывает snapshot маршрута заказа: убирает пару низ+рукав, ставит
-   * один шаг «полный распошив», переиндексирует паспорта. Идемпотентно.
-   */
-  private async collapseSplitRoute(
-    orderId: string,
-    steps: RouteStepLite[],
-    plan: CollapsiblePlan,
-    tx: Prisma.TransactionClient,
-  ): Promise<void> {
-    // Идемпотентность: если merge-шагов уже нет, выходим.
-    if (!steps.some((s) => plan.mergeOpIds.includes(s.operationId))) return;
-
-    const result = buildCollapsedSteps(steps, plan);
-    const oldStepsByIndex = new Map(steps.map((s) => [s.index, s]));
-
-    await tx.orderRouteStep.deleteMany({ where: { orderId } });
-    await tx.orderRouteStep.createMany({
-      data: result.newSteps.map((s) => ({
-        orderId,
-        index: s.index,
-        operationId: s.operationId,
-        parallelGroup: s.parallelGroup,
-      })),
-    });
-
-    const passports = await tx.passport.findMany({
-      where: { orderId, currentRouteStepIndex: { not: null } },
-      select: {
-        id: true,
-        currentRouteStepIndex: true,
-        currentOperationId: true,
-      },
-    });
-    let reindexed = 0;
-    for (const p of passports) {
-      const remap = remapPassport(p, oldStepsByIndex, result, plan);
-      if (!remap) continue;
-      if (
-        remap.currentRouteStepIndex === p.currentRouteStepIndex &&
-        remap.currentOperationId === p.currentOperationId
-      ) {
-        continue;
-      }
-      await tx.passport.update({
-        where: { id: p.id },
-        data: {
-          currentRouteStepIndex: remap.currentRouteStepIndex,
-          currentOperationId: remap.currentOperationId,
-        },
-      });
-      reindexed++;
-    }
-
-    await this.audit.log(
-      {
-        event: 'ROUTE_SPLIT_COLLAPSED',
-        entityType: 'ORDER',
-        entityId: orderId,
-        payload: {
-          parallelGroup: plan.parallelGroup,
-          removedOpIds: plan.mergeOpIds,
-          targetOpId: plan.targetOpId,
-          reindexed,
-        },
-      },
-      tx,
-    );
-    this.logger.log(
-      `event=route.split-collapsed orderId=${orderId} targetOpId=${plan.targetOpId} removed=${plan.mergeOpIds.join(',')} reindexed=${reindexed}`,
-    );
   }
 
   /**
@@ -2616,12 +2452,12 @@ export class PassportsService {
           },
         );
       }
-      // Автосворачивание сплит-маршрута распошива: если весь низ заказа
-      // «переехал» на рукавный станок, пара низ+рукав сворачивается в один
-      // полный распошив (см. `maybeCollapseSplitRoute`). Читает свежее
-      // событие OPERATION_FINISHED (с equipmentId), созданное выше в этой
-      // же транзакции.
-      await this.maybeCollapseSplitRoute(passport.orderId, completedOperationId, tx);
+      // Сплит-распошив больше НЕ сворачивает снапшот маршрута здесь
+      // (Вариант B, см. route-mode.ts): снимок всегда остаётся сплитом,
+      // а «сплит vs схлоп» вычисляется на лету для гейта и монитора. Гейт
+      // инвариантен к режиму — 04 засчитывает и низ, и рукав через
+      // OperationSubstitution (см. evaluateRouteOrder, substitution-aware
+      // резолв целевого шага).
     });
 
     this.logger.log(

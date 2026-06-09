@@ -1,27 +1,18 @@
 /**
- * Автосворачивание сплит-маршрута распошива (чистая логика, без Prisma).
+ * Распознавание сворачиваемой группы сплит-распошива (чистая логика).
  *
  * Контекст. Сплит-маршрут (маршрут 02, чёрные футболки) держит распошив
  * параллельной группой из «Распошив рукав» (16) + «Подгиб низа» (0001)
- * (+ «Киперка» 03). Когда у заказа НЕ остаётся ни одного станка, который
- * делает низ ОТДЕЛЬНО — весь низ «переехал» на рукавный станок, — пара
- * {рукав, низ} должна свернуться в одну операцию «Распошив» (04).
+ * (+ «Киперка» 03). Пара {рукав, низ} взаимозаменяема с одним полным
+ * «Распошивом» (04) через `OperationSubstitution`.
  *
- * Сигнал перехода (по согласованию с заказчиком): паспорт, взятый под низ,
- * закрывается на станке, где шьют рукав (рукав-capable оборудование), либо
- * закрывается полным распошивом (04) на таком станке. Статус смены
- * сломавшегося низ-станка значения не имеет.
- *
- * Правило (см. `shouldCollapse`):
- *   collapse  ⟺  был хотя бы один такой переход (crossover)
- *               И сейчас ни один паспорт заказа не делает низ на ВЫДЕЛЕННОМ
- *               низ-станке (т.е. удерживается на низ-операции, а смена
- *               держателя — на станке, не умеющем рукав).
- * Для одного станка низа первый переход сразу сворачивает; для двух —
- * пока второй станок ещё держит низ, `collapse` остаётся false.
- *
- * Вся логика — чистые функции над уже выбранными из БД данными, чтобы
- * покрыть юнит-тестами без живой базы (см. `route-collapse.spec.ts`).
+ * Раньше этот модуль ещё и НЕОБРАТИМО переписывал снапшот маршрута
+ * (пара → один 04). От этого отказались в пользу адаптивного режима,
+ * вычисляемого на лету (Вариант B, см. `route-mode.ts`): снапшот всегда
+ * остаётся сплитом. Здесь осталась только распознавалка группы —
+ * `findCollapsibleGroup`, — которой пользуется резолвер режима, чтобы
+ * понять, какие операции образуют сворачиваемую пару (низ+рукав), кто из
+ * них принимающий (рукав), а кто выделенный (низ).
  */
 
 export interface RouteStepLite {
@@ -64,8 +55,7 @@ export interface CollapsiblePlan {
  * принимающая (`isReceivingStation`) — рукав. Остальные участники группы
  * остаются (`keepOpIds`).
  *
- * Идемпотентность: если `mergeOpIds`-шагов в маршруте уже нет (заказ
- * свёрнут), для этой группы вернётся null.
+ * Возвращает null, если у заказа нет такой группы (обычный маршрут).
  */
 export function findCollapsibleGroup(
   steps: readonly RouteStepLite[],
@@ -114,140 +104,4 @@ export function findCollapsibleGroup(
     }
   }
   return null;
-}
-
-/**
- * Удержание паспорта на низ-операции в момент оценки.
- */
-export interface HeldLowPassport {
-  /** equipmentId открытой смены держателя (null — смены нет/неизвестно). */
-  holderEquipmentId: string | null;
-}
-
-export interface ShouldCollapseInput {
-  plan: CollapsiblePlan;
-  /**
-   * equipmentId, которые УМЕЮТ принимать (рукав/полный распошив): активные
-   * `EquipmentOperation` на receivingOpId или targetOpId.
-   */
-  receivingEquipmentIds: ReadonlySet<string>;
-  /**
-   * Закрытия (OPERATION_FINISHED) низ/полного по паспортам заказа:
-   * пара (operationId, equipmentId). equipmentId может быть null (старые
-   * события без станка — в расчёте перехода игнорируются).
-   */
-  lowOrFullFinishes: ReadonlyArray<{ operationId: string; equipmentId: string | null }>;
-  /** Паспорта заказа, прямо сейчас удерживаемые на низ-операции. */
-  heldOnLow: readonly HeldLowPassport[];
-}
-
-/**
- * Главный предикат: пора ли сворачивать сплит-маршрут заказа.
- *
- * crossover — был ли хоть один переход «низ закрыт на рукавном станке» (или
- * полный распошив 04 закрыт на таком станке).
- * stillSeparate — держит ли сейчас хоть один паспорт низ на ВЫДЕЛЕННОМ
- * низ-станке (смена держателя не умеет рукав).
- */
-export function shouldCollapse(input: ShouldCollapseInput): boolean {
-  const { plan, receivingEquipmentIds, lowOrFullFinishes, heldOnLow } = input;
-  const dedicated = new Set(plan.dedicatedOpIds);
-
-  const crossover = lowOrFullFinishes.some(
-    (f) =>
-      f.equipmentId != null &&
-      receivingEquipmentIds.has(f.equipmentId) &&
-      (dedicated.has(f.operationId) || f.operationId === plan.targetOpId),
-  );
-  if (!crossover) return false;
-
-  const stillSeparate = heldOnLow.some(
-    (h) => h.holderEquipmentId != null && !receivingEquipmentIds.has(h.holderEquipmentId),
-  );
-  return !stillSeparate;
-}
-
-export interface CollapseStepsResult {
-  newSteps: RouteStepLite[];
-  /** operationId -> новый index (включая mergeOps → index целевого шага). */
-  opToNewIndex: Map<string, number>;
-  /** Новый index целевого шага (полный распошив). */
-  targetIndex: number;
-}
-
-/**
- * Строит новый список шагов: убирает merge-шаги (низ+рукав), вставляет один
- * шаг targetOpId на минимальный из освободившихся индексов merge-шагов.
- * Остальные шаги (включая киперку) сохраняют свои индексы — пересчёт
- * сквозной нумерации не нужен (index лишь уникален и задаёт порядок).
- *
- * parallelGroup целевого шага: сохраняется, если в группе остаётся ещё
- * хотя бы один участник (киперка) — тогда «полный распошив» по-прежнему
- * параллелен киперке. Если кроме merge в группе никого не было — группа
- * вырождается, ставим parallelGroup = null (обычный последовательный шаг).
- */
-export function buildCollapsedSteps(
-  steps: readonly RouteStepLite[],
-  plan: CollapsiblePlan,
-): CollapseStepsResult {
-  const merge = new Set(plan.mergeOpIds);
-  const mergeIndexes = steps
-    .filter((s) => merge.has(s.operationId))
-    .map((s) => s.index);
-  const targetIndex = Math.min(...mergeIndexes);
-
-  const survivesGroup = plan.keepOpIds.length > 0;
-  const newSteps: RouteStepLite[] = steps
-    .filter((s) => !merge.has(s.operationId))
-    .map((s) => ({ ...s }));
-  newSteps.push({
-    index: targetIndex,
-    operationId: plan.targetOpId,
-    parallelGroup: survivesGroup ? plan.parallelGroup : null,
-  });
-  newSteps.sort((a, b) => a.index - b.index);
-
-  const opToNewIndex = new Map<string, number>();
-  for (const s of newSteps) opToNewIndex.set(s.operationId, s.index);
-  // Паспорта, стоящие на низ/рукаве, переезжают на целевой шаг.
-  for (const op of plan.mergeOpIds) opToNewIndex.set(op, targetIndex);
-
-  return { newSteps, opToNewIndex, targetIndex };
-}
-
-export interface PassportRemapInput {
-  currentRouteStepIndex: number | null;
-  currentOperationId: string | null;
-}
-
-export interface PassportRemapResult {
-  currentRouteStepIndex: number;
-  /** Новая текущая операция (для merge-паспортов = targetOpId), иначе прежняя. */
-  currentOperationId: string | null;
-}
-
-/**
- * Пересчитывает `currentRouteStepIndex`/`currentOperationId` паспорта после
- * сворачивания. Возвращает null, если паспорт трогать не нужно (нет индекса
- * маршрута, либо его операцию не удалось сопоставить новому шагу).
- */
-export function remapPassport(
-  passport: PassportRemapInput,
-  oldStepsByIndex: ReadonlyMap<number, RouteStepLite>,
-  collapse: CollapseStepsResult,
-  plan: CollapsiblePlan,
-): PassportRemapResult | null {
-  if (passport.currentRouteStepIndex == null) return null;
-  const opId =
-    passport.currentOperationId ??
-    oldStepsByIndex.get(passport.currentRouteStepIndex)?.operationId ??
-    null;
-  if (opId == null) return null;
-  const newIndex = collapse.opToNewIndex.get(opId);
-  if (newIndex == null) return null; // операции нет в новом маршруте — не трогаем
-  const isMerge = plan.mergeOpIds.includes(opId);
-  return {
-    currentRouteStepIndex: newIndex,
-    currentOperationId: isMerge ? plan.targetOpId : passport.currentOperationId,
-  };
 }

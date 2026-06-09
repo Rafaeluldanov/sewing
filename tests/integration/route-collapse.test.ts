@@ -1,13 +1,17 @@
 /**
- * Integration-тест автосворачивания сплит-маршрута распошива.
+ * Integration-тест адаптивного сплит-распошива (Вариант B, см. route-mode.ts).
  *
- * Гоняет РЕАЛЬНЫЙ `PassportsService.completeOperationByEmployee` (с хуком
- * `maybeCollapseSplitRoute` внутри транзакции) против тестовой БД и
+ * Необратимое сворачивание снапшота маршрута УДАЛЕНО. Теперь снимок всегда
+ * остаётся сплитом, а полный распошив (04) засчитывается через
+ * `OperationSubstitution`. Гоняет РЕАЛЬНЫЙ
+ * `PassportsService.completeOperationByEmployee` против тестовой БД и
  * проверяет, что:
- *   1. когда низ закрывается на рукавном станке и больше никто не держит
- *      низ отдельно — `OrderRouteStep` заказа сворачивается (пара
- *      рукав+низ → один полный распошив), а паспорта переиндексируются;
- *   2. пока второй станок ещё держит низ отдельно — сворачивания нет.
+ *   1. закрытие полного распошива (04) на сплит-снимке НЕ меняет
+ *      `OrderRouteStep` заказа, но корректно позиционирует паспорт по
+ *      распошив-группе (substitution-aware индексация: паспорт встаёт на
+ *      максимальный индекс merge-группы, операция = 04);
+ *   2. снимок маршрута никогда не сворачивается, сколько бы паспортов ни
+ *      закрыли распошив через 04.
  *
  * Запускается только при заданном `TEST_DATABASE_URL` (см.
  * `tests/utils/db.ts`); иначе сьют тихо skip-ается.
@@ -193,70 +197,62 @@ describeWithDb('split-route collapse (integration)', () => {
     if (ctx?.t) await stopTestApp(ctx.t);
   });
 
-  test('низ закрыт на рукавном станке, никто не держит низ → маршрут свёрнут', async () => {
+  test('полный распошив (04) на сплит-снимке: маршрут НЕ сворачивается, паспорт встаёт на распошив-группу', async () => {
     const { prisma, passports, ops, sleeveStationId } = ctx;
-    const seamstressId = ctx.t.prisma
-      ? (await prisma.employee.findFirstOrThrow({ where: { login: 'seamstress' } })).id
-      : '';
+    const seamstressId = (await prisma.employee.findFirstOrThrow({ where: { login: 'seamstress' } })).id;
     const orderId = await makeSplitOrder(`O-${SUFFIX}-A`);
-    // Паспорт стоит на низе, держит швея, чья смена — на рукавном станке.
+    // Паспорт стоит на низе; швея закрывает его полным распошивом (04) на
+    // рукав-способном станке (смена на операции 04).
     const passportId = await makePassport(orderId, `P-${SUFFIX}-A1`, {
       currentOperationId: ops.low,
       currentRouteStepIndex: 3,
       currentEmployeeId: seamstressId,
     });
-    await openShift(seamstressId, sleeveStationId, ops.low);
+    await openShift(seamstressId, sleeveStationId, ops.full);
 
     await passports.completeOperationByEmployee(passportId, seamstressId);
 
+    // Снимок маршрута НЕ изменился: рукав и низ на месте, полного нет.
     const steps = await prisma.orderRouteStep.findMany({
       where: { orderId },
       orderBy: { index: 'asc' },
     });
     const stepOps = steps.map((s) => s.operationId);
-    expect(stepOps).not.toContain(ops.sleeve);
-    expect(stepOps).not.toContain(ops.low);
-    expect(stepOps).toContain(ops.full);
+    expect(stepOps).toContain(ops.sleeve);
+    expect(stepOps).toContain(ops.low);
+    expect(stepOps).not.toContain(ops.full);
 
-    const target = steps.find((s) => s.operationId === ops.full)!;
-    expect(target.index).toBe(2); // минимальный освободившийся merge-индекс
-    expect(target.parallelGroup).toBe(2); // киперка осталась параллельной
-
+    // Substitution-aware индексация: паспорт встал на максимальный индекс
+    // merge-группы (низ idx3 > рукав idx2), операция = полный распошив 04.
     const p = await prisma.passport.findUniqueOrThrow({ where: { id: passportId } });
     expect(p.currentOperationId).toBe(ops.full);
-    expect(p.currentRouteStepIndex).toBe(2);
+    expect(p.currentRouteStepIndex).toBe(3);
+
+    // Закрытие записано как OPERATION_FINISHED по 04 (засчитывает низ+рукав).
+    const finished = await prisma.passportEvent.findFirst({
+      where: { passportId, type: 'OPERATION_FINISHED', operationId: ops.full },
+    });
+    expect(finished).not.toBeNull();
   });
 
-  test('второй станок ещё держит низ отдельно → маршрут НЕ свёрнут', async () => {
-    const { prisma, passports, ops, sleeveStationId, lowStationId } = ctx;
+  test('сколько бы паспортов ни закрыли распошив через 04 — снимок остаётся сплитом', async () => {
+    const { prisma, passports, ops, sleeveStationId } = ctx;
     const seamstressId = (await prisma.employee.findFirstOrThrow({ where: { login: 'seamstress' } })).id;
-    // Вторая швея на выделенном низ-станке.
-    const seamstress2 = await prisma.employee.upsert({
-      where: { login: `seamstress2-${SUFFIX}` },
-      create: { login: `seamstress2-${SUFFIX}`, fullName: 'Seamstress 2', role: 'SEAMSTRESS', active: true, pinHash: 'x' },
-      update: {},
-    });
-
     const orderId = await makeSplitOrder(`O-${SUFFIX}-B`);
-    const crossPassport = await makePassport(orderId, `P-${SUFFIX}-B1`, {
-      currentOperationId: ops.low,
-      currentRouteStepIndex: 3,
-      currentEmployeeId: seamstressId,
-    });
-    // Второй паспорт держит вторая швея на низ-станке (низ ещё идёт отдельно).
-    await makePassport(orderId, `P-${SUFFIX}-B2`, {
-      currentOperationId: ops.low,
-      currentRouteStepIndex: 3,
-      currentEmployeeId: seamstress2.id,
-    });
-    await openShift(seamstressId, sleeveStationId, ops.low);
-    await openShift(seamstress2.id, lowStationId, ops.low);
 
-    await passports.completeOperationByEmployee(crossPassport, seamstressId);
+    for (const n of [1, 2, 3]) {
+      const pid = await makePassport(orderId, `P-${SUFFIX}-B${n}`, {
+        currentOperationId: ops.low,
+        currentRouteStepIndex: 3,
+        currentEmployeeId: seamstressId,
+      });
+      await openShift(seamstressId, sleeveStationId, ops.full);
+      await passports.completeOperationByEmployee(pid, seamstressId);
+    }
 
     const steps = await prisma.orderRouteStep.findMany({ where: { orderId } });
     const stepOps = steps.map((s) => s.operationId);
-    // Сплит сохранён: рукав и низ на месте, полного распошива нет.
+    // Сплит сохранён независимо от числа закрытий через 04.
     expect(stepOps).toContain(ops.sleeve);
     expect(stepOps).toContain(ops.low);
     expect(stepOps).not.toContain(ops.full);
