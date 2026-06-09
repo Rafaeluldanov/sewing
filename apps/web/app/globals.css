@@ -11388,6 +11388,11 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: flex;
   flex-direction: column;
   gap: 6px;
+  /* Container-query контекст для compact orders-row: строка меряет
+     ширину этого списка (внутри карточки заказа), а не вьюпорта —
+     иначе с учётом сайдбара поля «не влезали» и обрезались. См.
+     `@container wnorows` ниже. */
+  container: wnorows / inline-size;
 }
 
 /* Backward-compat: старый класс `.workshop-need-section__list`
@@ -11623,12 +11628,13 @@ body:has(.admin-layout) .app-header { display: none !important; }
   list-style: none;
   margin: 0;
   padding: 0;
-  /* Safety-net: если 13-колоночная строка всё же шире контент-области
-     (узкий ноутбук между 1200px и суммой колонок), список скроллится
-     по горизонтали, а не обрезает последнюю колонку «Сохранить» /
-     «Подробнее» за краем окна. На <=1199px строка сворачивается в
-     карточку (@media ниже) и скролл не нужен. */
-  overflow-x: auto;
+  /* Container-query контекст: строки перестраиваются по ШИРИНЕ САМОГО
+     СПИСКА, а не вьюпорта. Это и есть фикс «не влезает в окно»: вьюпорт
+     не учитывает сайдбар админки (~280px), поэтому @media-брейкпоинт
+     складывал строку слишком поздно и 13-колоночный грид обрезал
+     колонку «Сохранить»/«Подробнее». `@container` ниже меряет реально
+     доступную ширину. */
+  container: wnlines / inline-size;
 }
 
 /* ---------------------------------------------------------------------------
@@ -11868,15 +11874,22 @@ body:has(.admin-layout) .app-header { display: none !important; }
   margin-top: 4px;
 }
 
-/* На узком экране (≤1199px) разворачиваемся в карточку: каждая
-   ячейка получает свою строку, поля растягиваются на всю ширину.
-   Это сохраняет inline-семантику (одна потребность = одна форма)
-   и одновременно делает её юзабельной на планшете. */
-@media (max-width: 1199px) {
+/* Когда ширина СПИСКА (не вьюпорта) меньше, чем нужно горизонтальной
+   13-колоночной строке (~1430px), сворачиваемся в аккуратную карточку.
+   Пороги заданы с запасом над реальной суммой колонок, чтобы строка
+   никогда не клипалась за краем контент-области.
+
+   Тиры (по ширине контейнера `.workshop-need-line-list`):
+     < 1480px — карточка 4 колонки (плотно, но всё видно);
+     < 1040px — 2 колонки (планшет);
+     <  680px — 1 колонка (телефон).
+   Order / Description / Save / Comment всегда на всю ширину. */
+@container wnlines (max-width: 1480px) {
   .workshop-need-line,
   .workshop-need-line--with-order {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     grid-auto-flow: row dense;
+    align-items: end;
   }
 
   .workshop-need-line__cell--order,
@@ -11889,10 +11902,18 @@ body:has(.admin-layout) .app-header { display: none !important; }
     flex-direction: row;
     flex-wrap: wrap;
     justify-content: flex-end;
+    align-items: center;
   }
 }
 
-@media (max-width: 720px) {
+@container wnlines (max-width: 1040px) {
+  .workshop-need-line,
+  .workshop-need-line--with-order {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+@container wnlines (max-width: 680px) {
   .workshop-need-line,
   .workshop-need-line--with-order {
     grid-template-columns: minmax(0, 1fr);
@@ -12190,13 +12211,20 @@ body:has(.admin-layout) .app-header { display: none !important; }
   flex-basis: 100%;
 }
 
-/* Responsive для compact orders-row.
-   ≤1199px: row сворачивается в две колонки, описание / save —
-   на всю ширину; высота строки ≈ 2 ряда. */
-@media (max-width: 1199px) {
+/* Responsive для compact orders-row — по ШИРИНЕ СПИСКА
+   `.workshop-need-section__rows` (container query), а не вьюпорта.
+   Десктопная 10-колоночная строка требует ~1300px; ниже — карточка.
+   Пороги с запасом, чтобы поля не клипались за краем карточки заказа.
+
+   Тиры (по ширине контейнера `wnorows`):
+     < 1340px — карточка 4 колонки;
+     <  940px — 2 колонки;
+     <  620px — 1 колонка. */
+@container wnorows (max-width: 1340px) {
   .workshop-order-need-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-columns: repeat(4, minmax(0, 1fr));
     grid-auto-flow: row dense;
+    align-items: end;
     min-height: 0;
   }
 
@@ -12209,11 +12237,18 @@ body:has(.admin-layout) .app-header { display: none !important; }
 
   .workshop-order-need-row__cell--save {
     justify-content: flex-end;
+    align-items: center;
   }
 }
 
-/* ≤720px: stacked-карточка, каждая ячейка в свою строку. */
-@media (max-width: 720px) {
+@container wnorows (max-width: 940px) {
+  .workshop-order-need-row {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+}
+
+/* Узкий контейнер: stacked-карточка, каждая ячейка в свою строку. */
+@container wnorows (max-width: 620px) {
   .workshop-order-need-row {
     grid-template-columns: minmax(0, 1fr);
     padding: 12px;
@@ -12222,7 +12257,12 @@ body:has(.admin-layout) .app-header { display: none !important; }
   .workshop-order-need-row__cell {
     grid-column: 1 / -1;
   }
+}
 
+/* Карточка заказа — ancestor контейнера `wnorows`, поэтому её
+   адаптив остаётся на вьюпорт-`@media` (container query не умеет
+   стилизовать предка своего контейнера). */
+@media (max-width: 720px) {
   .workshop-order-group-card {
     padding: 14px;
   }
