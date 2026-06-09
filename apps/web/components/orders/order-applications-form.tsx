@@ -50,6 +50,11 @@ import {
 interface Props {
   orderId: string;
   initial: OrderApplicationDto[];
+  /**
+   * Размеры заказа для адресации нанесения «на выбранные размеры»
+   * (этап «Нанесение по размерам»). Прокидываются в редактор.
+   */
+  availableSizes?: { id: string; code: string }[];
 }
 
 function SubmitButton() {
@@ -66,7 +71,11 @@ function SubmitButton() {
   );
 }
 
-export function OrderApplicationsForm({ orderId, initial }: Props) {
+export function OrderApplicationsForm({
+  orderId,
+  initial,
+  availableSizes = [],
+}: Props) {
   // bind(null, orderId) — стандартный паттерн server-actions с
   // дополнительным id-параметром (см. `material-areas-form.tsx`,
   // `replacePatternMaterialAreasAction.bind(null, patternId)`).
@@ -83,7 +92,10 @@ export function OrderApplicationsForm({ orderId, initial }: Props) {
       className="admin-order-applications-form"
       style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
     >
-      <OrderApplicationsEditor initial={initial.map(applicationRowFromDto)} />
+      <OrderApplicationsEditor
+        initial={initial.map(applicationRowFromDto)}
+        availableSizes={availableSizes}
+      />
 
       <div
         style={{

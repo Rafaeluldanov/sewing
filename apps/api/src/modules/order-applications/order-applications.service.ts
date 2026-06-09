@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { OrderStatus, Prisma, type OrderApplication } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
 import {
   ORDER_APPLICATION_STAGE_LABELS,
   ORDER_APPLICATION_STATUS_LABELS,
@@ -68,6 +68,15 @@ export class OrderApplicationsService {
     const rows = await this.prisma.orderApplication.findMany({
       where: { orderId },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      include: {
+        // Адресация по размерам (этап «Нанесение по размерам»).
+        // Сортировка по `Size.sortOrder` — стабильный для UI порядок
+        // (S, M, L, …).
+        sizes: {
+          include: { size: true },
+          orderBy: { size: { sortOrder: 'asc' } },
+        },
+      },
     });
     return rows.map((r) => this.toDto(r));
   }
@@ -83,7 +92,14 @@ export class OrderApplicationsService {
   ): Promise<OrderApplicationDto[]> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        // Размеры заказа — чтобы отфильтровать адресацию нанесений
+        // только на реально существующие в заказе размеры (защита от
+        // рассинхрона UI и FK-ошибок).
+        items: { select: { sizeId: true } },
+      },
     });
     if (!order) {
       throw new NotFoundException({
@@ -95,16 +111,27 @@ export class OrderApplicationsService {
       throw new OrderApplicationOrderLockedException();
     }
 
+    const orderSizeIds = new Set(order.items.map((it) => it.sizeId));
+
     const existing = await this.prisma.orderApplication.findMany({
       where: { orderId },
       select: { id: true, type: true, stage: true },
     });
 
     await this.prisma.$transaction(async (tx) => {
+      // Удаление нанесений каскадом сносит их `OrderApplicationSize`
+      // (onDelete: Cascade), отдельный deleteMany не нужен.
       await tx.orderApplication.deleteMany({ where: { orderId } });
-      if (dto.applications.length > 0) {
-        await tx.orderApplication.createMany({
-          data: dto.applications.map((app) => ({
+      // Вложенный create на каждое нанесение (а не createMany), чтобы
+      // в одной транзакции создать и адресацию по размерам
+      // (`OrderApplicationSize`). Размеры фильтруем по фактическим
+      // размерам заказа и дедупим по `sizeId`.
+      for (const app of dto.applications) {
+        const sizeRows = dedupeBySizeId(app.sizes ?? []).filter((s) =>
+          orderSizeIds.has(s.sizeId),
+        );
+        await tx.orderApplication.create({
+          data: {
             orderId,
             type: app.type,
             stage: app.stage,
@@ -123,7 +150,19 @@ export class OrderApplicationsService {
             comment: app.comment ?? null,
             fileUrl: app.fileUrl ?? null,
             status: app.status ?? 'PLANNED',
-          })),
+            sizes:
+              sizeRows.length > 0
+                ? {
+                    create: sizeRows.map((s) => ({
+                      sizeId: s.sizeId,
+                      quantity:
+                        s.quantity == null
+                          ? null
+                          : new Prisma.Decimal(s.quantity),
+                    })),
+                  }
+                : undefined,
+          },
         });
       }
 
@@ -156,7 +195,7 @@ export class OrderApplicationsService {
   // INTERNAL
   // -------------------------------------------------------------------------
 
-  private toDto(row: OrderApplication): OrderApplicationDto {
+  private toDto(row: OrderApplicationWithSizes): OrderApplicationDto {
     const type = row.type as OrderApplicationType;
     const stage = row.stage as OrderApplicationStage;
     const status = row.status as OrderApplicationStatus;
@@ -179,6 +218,11 @@ export class OrderApplicationsService {
       fileUrl: row.fileUrl,
       status,
       statusLabel: ORDER_APPLICATION_STATUS_LABELS[status] ?? row.status,
+      sizes: row.sizes.map((s) => ({
+        sizeId: s.sizeId,
+        sizeCode: s.size.code,
+        quantity: s.quantity ? s.quantity.toString() : null,
+      })),
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     };
@@ -190,3 +234,27 @@ export class OrderApplicationsService {
     return out;
   }
 }
+
+/**
+ * Прибраться от дублей размеров внутри одного нанесения: оставляем
+ * первое вхождение каждого `sizeId`. БД защищена `@@unique`, но
+ * фильтруем заранее, чтобы транзакция не падала на дубле.
+ */
+function dedupeBySizeId<T extends { sizeId: string }>(rows: T[]): T[] {
+  const seen = new Set<string>();
+  const out: T[] = [];
+  for (const r of rows) {
+    if (seen.has(r.sizeId)) continue;
+    seen.add(r.sizeId);
+    out.push(r);
+  }
+  return out;
+}
+
+/**
+ * Тип строки `OrderApplication` с подгруженной адресацией по размерам
+ * (`sizes[].size`). Совпадает с include в `listForOrder`.
+ */
+type OrderApplicationWithSizes = Prisma.OrderApplicationGetPayload<{
+  include: { sizes: { include: { size: true } } };
+}>;

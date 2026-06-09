@@ -220,11 +220,31 @@ const unitOptional = z.preprocess(
 // ---------------------------------------------------------------------------
 
 /**
+ * Одна адресация нанесения на размер заказа (этап «Нанесение по
+ * размерам / части тиража»).
+ *   - `sizeId` обязателен;
+ *   - `quantity` опционально: null/пусто = «весь этот размер»
+ *     (фоллбэк на `OrderItem.qtyPlan`), число = «N штук размера».
+ */
+export const OrderApplicationSizeInputSchema = z.object({
+  sizeId: z.string().min(1, 'Не выбран размер'),
+  quantity: decimalQuantityOptional,
+});
+
+export type OrderApplicationSizeInput = z.infer<
+  typeof OrderApplicationSizeInputSchema
+>;
+
+/**
  * Одна строка ввода в `PUT /api/orders/:id/applications`. Поля:
  *   - `type` обязателен;
  *   - `stage` обязателен (CUT_PARTS / FINISHED_ITEM);
  *   - размеры/количество/cnt цветов — необязательно, но если задано
  *     — валидируется как «> 0».
+ *   - `sizes` — адресация по размерам (этап «Нанесение по размерам»).
+ *     Пустой массив = нанесение на весь тираж. Непустой = нанесение
+ *     только на перечисленные размеры; в этом случае order-level
+ *     `quantity` игнорируется (количество берётся по каждому размеру).
  *   - `status` опционален, дефолт `PLANNED` на бэке.
  */
 export const OrderApplicationInputSchema = z.object({
@@ -241,6 +261,16 @@ export const OrderApplicationInputSchema = z.object({
   comment: optionalNullableString(2000, 'Комментарий'),
   fileUrl: optionalNullableString(2000, 'Ссылка на файл'),
   status: OrderApplicationStatusSchema.optional(),
+  sizes: z
+    .array(OrderApplicationSizeInputSchema)
+    // Один размер не может фигурировать в нанесении дважды (совпадает с
+    // `@@unique([applicationId, sizeId])` в БД).
+    .refine(
+      (rows) => new Set(rows.map((r) => r.sizeId)).size === rows.length,
+      { message: 'Размер указан дважды в одном нанесении' },
+    )
+    .optional()
+    .default([]),
 });
 
 export type OrderApplicationInput = z.infer<typeof OrderApplicationInputSchema>;
@@ -271,6 +301,16 @@ export type ReplaceOrderApplicationsDto = z.infer<
  * `statusLabel` — backend сразу подставляет лейблы, чтобы UI не
  * дублировал словари при каждом рендере.
  */
+/**
+ * Адресация нанесения на один размер заказа в DTO. `quantity` —
+ * строка (Decimal) или null = «весь размер».
+ */
+export interface OrderApplicationSizeDto {
+  sizeId: string;
+  sizeCode: string;
+  quantity: string | null;
+}
+
 export interface OrderApplicationDto {
   id: string;
   orderId: string;
@@ -290,8 +330,39 @@ export interface OrderApplicationDto {
   fileUrl: string | null;
   status: OrderApplicationStatus;
   statusLabel: string;
+  /**
+   * Адресация по размерам (этап «Нанесение по размерам / части
+   * тиража»). Пустой массив = нанесение на весь тираж. Непустой =
+   * нанесение только на эти размеры.
+   */
+  sizes: OrderApplicationSizeDto[];
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Человекочитаемое описание «области применения» нанесения — для
+ * read-only карточки заказа, описания потребности цеха и т.п.
+ *   - нет размеров → «Весь тираж» или «N <unit> из тиража», если задан
+ *     order-level `quantity`;
+ *   - есть размеры → «M — 10 шт, L — весь размер».
+ */
+export function describeApplicationScope(
+  app: Pick<OrderApplicationDto, 'quantity' | 'unit' | 'sizes'>,
+): string {
+  if (app.sizes.length > 0) {
+    return app.sizes
+      .map((s) =>
+        s.quantity != null
+          ? `${s.sizeCode} — ${s.quantity} ${app.unit}`
+          : `${s.sizeCode} — весь размер`,
+      )
+      .join(', ');
+  }
+  if (app.quantity != null) {
+    return `${app.quantity} ${app.unit} из тиража`;
+  }
+  return 'Весь тираж';
 }
 
 /**

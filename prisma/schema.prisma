@@ -494,6 +494,11 @@ model Size {
 
   passports                      Passport[]
   orderItems                     OrderItem[]
+  /// Этап «Нанесение по размерам / части тиража»: обратная связь от
+  /// строк `OrderApplicationSize`, адресующих нанесение на этот размер.
+  /// `onDelete: Restrict` со стороны строки защищает размер от удаления,
+  /// пока на него ссылается нанесение.
+  applicationSizes               OrderApplicationSize[]
   operationRatesBySize           OperationRateBySize[]
   closureRequests                CuttingClosureRequest[]
   patternSizeFiles               PatternSizeFile[]
@@ -4600,6 +4605,20 @@ model OrderApplication {
   /// `DONE` (выполнено) | `CANCELLED`. Хранится строкой.
   status String @default("PLANNED")
 
+  /// Адресация нанесения по размерам (этап «Нанесение по размерам /
+  /// части тиража»). Семантика:
+  ///   - НЕТ строк `sizes` → нанесение применяется ко всему тиражу;
+  ///     количество берётся из `quantity` (если задано) либо из
+  ///     `Σ OrderItem.qtyPlan`;
+  ///   - ЕСТЬ строки `sizes` → нанесение применяется только к
+  ///     перечисленным размерам; на размер количество берётся из
+  ///     `OrderApplicationSize.quantity` (если задано) либо из
+  ///     `OrderItem.qtyPlan` этого размера. В этом случае
+  ///     order-level `quantity` игнорируется.
+  /// Несколько разных нанесений на одно изделие = несколько строк
+  /// `OrderApplication` у заказа (каждая со своей адресацией).
+  sizes OrderApplicationSize[]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -4607,6 +4626,40 @@ model OrderApplication {
   @@index([type])
   @@index([stage])
   @@index([status])
+}
+
+/// Адресация одного нанесения (`OrderApplication`) на конкретный
+/// размер заказа (этап «Нанесение по размерам / части тиража»).
+///
+/// Дизайн:
+///   - связь many-to-many «нанесение ↔ размер» через явную таблицу,
+///     чтобы на каждый выбранный размер хранить своё `quantity`
+///     (например, «10 шт размера M» + «5 шт размера L» одним
+///     нанесением);
+///   - `quantity` nullable: null = «весь этот размер» (фоллбэк на
+///     `OrderItem.qtyPlan`), число = «N штук этого размера»;
+///   - `@@unique([applicationId, sizeId])` — один размер не может
+///     быть добавлен в нанесение дважды;
+///   - `onDelete: Cascade` со стороны нанесения (удалили нанесение —
+///     ушли его size-строки); `onDelete: Restrict` со стороны Size
+///     (как у `OrderItem`/`OrderCutIssueRule` — размер из справочника
+///     нельзя удалить, пока на него ссылается нанесение).
+model OrderApplicationSize {
+  id String @id @default(cuid())
+
+  applicationId String
+  application   OrderApplication @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+
+  sizeId String
+  size   Size   @relation(fields: [sizeId], references: [id])
+
+  /// Количество нанесений на этот размер. null = «весь размер»
+  /// (фоллбэк на `OrderItem.qtyPlan`), число = «N штук размера».
+  quantity Decimal? @db.Decimal(14, 4)
+
+  @@unique([applicationId, sizeId])
+  @@index([applicationId])
+  @@index([sizeId])
 }
 
 // ---------------------------------------------------------------------------

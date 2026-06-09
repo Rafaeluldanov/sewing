@@ -1328,7 +1328,12 @@ function ProductCreateTab({
           Параметры нанесения хранятся в заказе. На крое блокируется
           раскладка, пока параметры не заполнены.
         </p>
-        <OrderApplicationsEditor />
+        <OrderApplicationsEditor
+          availableSizes={availableSizes.map((s) => ({
+            id: s.id,
+            code: s.code,
+          }))}
+        />
       </AdminCard>
 
       <AdminCard className="admin-order-card admin-order-card--sizes">

@@ -19,7 +19,10 @@
  * Backend / DTO / API не меняем — это чистая presentation-обёртка.
  */
 import { Stamp } from 'lucide-react';
-import type { OrderApplicationDto } from '@sewing/shared/order-applications';
+import {
+  describeApplicationScope,
+  type OrderApplicationDto,
+} from '@sewing/shared/order-applications';
 import type { OrderStatus } from '@sewing/shared/orders';
 import {
   AdminCard,
@@ -41,6 +44,13 @@ interface Props {
    *     `ORDER_APPLICATION_ORDER_LOCKED`).
    */
   orderStatus: OrderStatus;
+  /**
+   * Размеры заказа для адресации нанесения «на выбранные размеры»
+   * (этап «Нанесение по размерам»). Нужны только в DRAFT-режиме
+   * (форма). Если не переданы — режим «выбранные размеры» в форме
+   * будет недоступен.
+   */
+  sizes?: { id: string; code: string }[];
 }
 
 function statusTone(status: string): AdminStatusTone {
@@ -58,7 +68,11 @@ function statusTone(status: string): AdminStatusTone {
   }
 }
 
-export async function OrderApplicationsCard({ orderId, orderStatus }: Props) {
+export async function OrderApplicationsCard({
+  orderId,
+  orderStatus,
+  sizes = [],
+}: Props) {
   let applications: OrderApplicationDto[] = [];
   let loadError: string | null = null;
   try {
@@ -101,6 +115,7 @@ export async function OrderApplicationsCard({ orderId, orderStatus }: Props) {
         <OrderApplicationsForm
           orderId={orderId}
           initial={applications}
+          availableSizes={sizes}
         />
       ) : (
         <ReadOnlyList applications={applications} />
@@ -155,14 +170,8 @@ function ReadOnlyList({
                 <dd>{app.colorsCount}</dd>
               </>
             )}
-            {app.quantity != null && (
-              <>
-                <dt>Количество</dt>
-                <dd>
-                  {app.quantity} {app.unit}
-                </dd>
-              </>
-            )}
+            <dt>Применить к</dt>
+            <dd>{describeApplicationScope(app)}</dd>
             {app.colorText && (
               <>
                 <dt>Цвет / описание</dt>

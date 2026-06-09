@@ -125,6 +125,68 @@ describeWithDb('integration — order applications', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // 1b. Адресация по размерам (этап «Нанесение по размерам / части тиража»)
+  // ---------------------------------------------------------------------------
+
+  test('PUT/GET /applications с адресацией по размерам', async () => {
+    // Заказ на два размера: S=5, M=3.
+    const orderId = await createOrder(t, seed, cookies.manager, {
+      items: [
+        { sizeId: seed.sizes.S, qtyPlan: 5 },
+        { sizeId: seed.sizes.M, qtyPlan: 3 },
+      ],
+    });
+
+    const put = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({
+        applications: [
+          {
+            type: 'SCREEN_PRINT',
+            stage: 'FINISHED_ITEM',
+            placement: 'грудь',
+            // order-level quantity игнорируется при адресации по размерам.
+            quantity: '999',
+            sizes: [
+              { sizeId: seed.sizes.S, quantity: '2' }, // 2 штуки размера S
+              { sizeId: seed.sizes.M }, // весь размер M (qty не задан)
+              { sizeId: seed.sizes.L, quantity: '9' }, // L нет в заказе → отфильтруется
+            ],
+          },
+        ],
+      });
+    expect(put.status).toBe(200);
+    expect(put.body.length).toBe(1);
+    const app = put.body[0];
+    // Размер L отфильтрован (не присутствует в заказе) — остались S и M.
+    expect(app.sizes.length).toBe(2);
+    const byCode: Record<string, any> = Object.fromEntries(
+      app.sizes.map((s: any) => [s.sizeCode, s]),
+    );
+    expect(byCode.S.quantity).toBe('2');
+    expect(byCode.M.quantity).toBeNull();
+    // При адресации по размерам order-level quantity обнуляется.
+    expect(app.quantity).toBeNull();
+
+    // В БД ровно 2 строки OrderApplicationSize, привязанные к заказу.
+    const inDb = await t.prisma.orderApplicationSize.findMany({
+      where: { application: { orderId } },
+    });
+    expect(inDb.length).toBe(2);
+
+    // GET возвращает ту же адресацию.
+    const get = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager);
+    expect(get.status).toBe(200);
+    expect(get.body[0].sizes.map((s: any) => s.sizeCode).sort()).toEqual([
+      'M',
+      'S',
+    ]);
+  });
+
+  // ---------------------------------------------------------------------------
   // 2. OrderDetail.applications
   // ---------------------------------------------------------------------------
 

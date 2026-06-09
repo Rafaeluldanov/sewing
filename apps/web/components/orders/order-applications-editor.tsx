@@ -46,6 +46,23 @@ import {
  * строкой, чтобы корректно работать с `<input value=…>` без
  * NaN-маневров. Конвертация в payload — в `rowToInput` ниже.
  */
+/**
+ * Адресация нанесения на один размер в UI-форме. `quantity` — строка
+ * (пусто = «весь размер»).
+ */
+export interface ApplicationSizeRow {
+  sizeId: string;
+  quantity: string;
+}
+
+/**
+ * Область применения нанесения:
+ *   - `ORDER` — на весь тираж (опционально N штук через `quantity`);
+ *   - `SIZES` — только на выбранные размеры (`sizes`), с поразмерным
+ *     количеством.
+ */
+export type ApplicationScope = 'ORDER' | 'SIZES';
+
 export interface ApplicationRow {
   /** Локальный ключ React (id из DTO для существующих, random для новых). */
   key: string;
@@ -55,7 +72,12 @@ export interface ApplicationRow {
   widthMm: string;
   heightMm: string;
   colorsCount: string;
+  /** Область применения (весь тираж / выбранные размеры). */
+  scope: ApplicationScope;
+  /** Количество для scope=ORDER (пусто = весь тираж). */
   quantity: string;
+  /** Адресация по размерам для scope=SIZES. */
+  sizes: ApplicationSizeRow[];
   unit: string;
   colorText: string;
   description: string;
@@ -73,7 +95,9 @@ export function blankApplicationRow(): ApplicationRow {
     widthMm: '',
     heightMm: '',
     colorsCount: '',
+    scope: 'ORDER',
     quantity: '',
+    sizes: [],
     unit: 'шт',
     colorText: '',
     description: '',
@@ -94,7 +118,14 @@ export function applicationRowFromDto(
     widthMm: app.widthMm == null ? '' : String(app.widthMm),
     heightMm: app.heightMm == null ? '' : String(app.heightMm),
     colorsCount: app.colorsCount == null ? '' : String(app.colorsCount),
+    // Если у нанесения есть адресация по размерам — открываем редактор
+    // в режиме SIZES; иначе «весь тираж».
+    scope: app.sizes.length > 0 ? 'SIZES' : 'ORDER',
     quantity: app.quantity ?? '',
+    sizes: app.sizes.map((s) => ({
+      sizeId: s.sizeId,
+      quantity: s.quantity ?? '',
+    })),
     unit: app.unit ?? 'шт',
     colorText: app.colorText ?? '',
     description: app.description ?? '',
@@ -127,6 +158,19 @@ function rowToInput(row: ApplicationRow): Record<string, unknown> {
     if (s === '') return null;
     return s;
   };
+  // Адресация по размерам (этап «Нанесение по размерам»):
+  //   - scope=SIZES → шлём только выбранные размеры (с поразмерным
+  //     количеством), order-level `quantity` обнуляем;
+  //   - scope=ORDER → размеров нет, шлём order-level `quantity`.
+  const isSizes = row.scope === 'SIZES';
+  const sizes = isSizes
+    ? row.sizes
+        .filter((s) => s.sizeId.trim() !== '')
+        .map((s) => ({
+          sizeId: s.sizeId,
+          quantity: parseDecimalString(s.quantity),
+        }))
+    : [];
   return {
     type: row.type,
     stage: row.stage,
@@ -134,7 +178,8 @@ function rowToInput(row: ApplicationRow): Record<string, unknown> {
     widthMm: parseInt(row.widthMm),
     heightMm: parseInt(row.heightMm),
     colorsCount: parseInt(row.colorsCount),
-    quantity: parseDecimalString(row.quantity),
+    quantity: isSizes ? null : parseDecimalString(row.quantity),
+    sizes,
     unit: trim(row.unit) ?? undefined,
     colorText: trim(row.colorText),
     description: trim(row.description),
@@ -168,12 +213,21 @@ interface Props {
    * (Next.js `pending`-state коротковременный).
    */
   disabled?: boolean;
+  /**
+   * Размеры заказа для адресации нанесения «на выбранные размеры»
+   * (этап «Нанесение по размерам»). В форме создания заказа — размеры
+   * выбранного лекала; в DRAFT-карточке — фактические размеры заказа.
+   * Если список пуст — режим «выбранные размеры» недоступен (нанесение
+   * можно завести только на весь тираж).
+   */
+  availableSizes?: { id: string; code: string }[];
 }
 
 export function OrderApplicationsEditor({
   initial = [],
   inputName = 'applicationsJson',
   disabled = false,
+  availableSizes = [],
 }: Props) {
   const [rows, setRows] = useState<ApplicationRow[]>(() => [...initial]);
 
@@ -181,6 +235,8 @@ export function OrderApplicationsEditor({
     () => JSON.stringify(rows.map(rowToInput)),
     [rows],
   );
+
+  const hasSizes = availableSizes.length > 0;
 
   function updateRow(idx: number, patch: Partial<ApplicationRow>): void {
     setRows((curr) =>
@@ -192,6 +248,34 @@ export function OrderApplicationsEditor({
   }
   function removeRow(idx: number): void {
     setRows((curr) => curr.filter((_, i) => i !== idx));
+  }
+  /** Включить/выключить размер в адресации нанесения. */
+  function toggleSize(idx: number, sizeId: string, on: boolean): void {
+    setRows((curr) =>
+      curr.map((r, i) => {
+        if (i !== idx) return r;
+        const sizes = on
+          ? r.sizes.some((s) => s.sizeId === sizeId)
+            ? r.sizes
+            : [...r.sizes, { sizeId, quantity: '' }]
+          : r.sizes.filter((s) => s.sizeId !== sizeId);
+        return { ...r, sizes };
+      }),
+    );
+  }
+  /** Поразмерное количество (пусто = весь размер). */
+  function setSizeQty(idx: number, sizeId: string, quantity: string): void {
+    setRows((curr) =>
+      curr.map((r, i) => {
+        if (i !== idx) return r;
+        return {
+          ...r,
+          sizes: r.sizes.map((s) =>
+            s.sizeId === sizeId ? { ...s, quantity } : s,
+          ),
+        };
+      }),
+    );
   }
 
   return (
@@ -297,6 +381,112 @@ export function OrderApplicationsEditor({
             </button>
           </div>
 
+          {/* Область применения (этап «Нанесение по размерам»):
+              весь тираж / выбранные размеры с поразмерным количеством. */}
+          <div className="admin-order-applications__scope">
+            <span className="admin-order-applications__scope-label">
+              Применить к
+            </span>
+            <div className="admin-order-applications__scope-modes">
+              <label className="admin-order-applications__radio">
+                <input
+                  type="radio"
+                  name={`app-scope-${row.key}`}
+                  checked={row.scope === 'ORDER'}
+                  onChange={() => updateRow(idx, { scope: 'ORDER' })}
+                />
+                <span>Весь тираж</span>
+              </label>
+              <label
+                className="admin-order-applications__radio"
+                title={
+                  hasSizes
+                    ? undefined
+                    : 'Сначала выберите лекало и план по размерам'
+                }
+                style={hasSizes ? undefined : { opacity: 0.5 }}
+              >
+                <input
+                  type="radio"
+                  name={`app-scope-${row.key}`}
+                  checked={row.scope === 'SIZES'}
+                  disabled={!hasSizes}
+                  onChange={() => updateRow(idx, { scope: 'SIZES' })}
+                />
+                <span>Выбранные размеры</span>
+              </label>
+            </div>
+
+            {row.scope === 'ORDER' ? (
+              <label
+                style={{ ...fieldStyle, maxWidth: 220 }}
+                className="admin-order-applications__scope-qty"
+              >
+                <span>Количество из тиража</span>
+                <input
+                  type="number"
+                  min={0}
+                  step="any"
+                  value={row.quantity}
+                  onChange={(e) =>
+                    updateRow(idx, { quantity: e.target.value })
+                  }
+                  placeholder="пусто = весь тираж"
+                />
+              </label>
+            ) : hasSizes ? (
+              <div className="admin-order-applications__sizes">
+                {availableSizes.map((sz) => {
+                  const sel = row.sizes.find((s) => s.sizeId === sz.id);
+                  const checked = sel != null;
+                  return (
+                    <div
+                      key={sz.id}
+                      className={
+                        'admin-order-applications__size-chip' +
+                        (checked
+                          ? ' admin-order-applications__size-chip--on'
+                          : '')
+                      }
+                    >
+                      <label className="admin-order-applications__size-toggle">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={(e) =>
+                            toggleSize(idx, sz.id, e.target.checked)
+                          }
+                        />
+                        <span>{sz.code}</span>
+                      </label>
+                      {checked && (
+                        <input
+                          type="number"
+                          min={0}
+                          step="any"
+                          className="admin-order-applications__size-qty"
+                          value={sel?.quantity ?? ''}
+                          onChange={(e) =>
+                            setSizeQty(idx, sz.id, e.target.value)
+                          }
+                          placeholder="всё"
+                          title="Количество на этот размер (пусто = весь размер)"
+                        />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            ) : (
+              <div
+                className="admin-muted"
+                style={{ fontSize: '0.8rem' }}
+              >
+                Нет доступных размеров для адресации.
+              </div>
+            )}
+          </div>
+
           <div
             style={{
               display: 'grid',
@@ -348,18 +538,6 @@ export function OrderApplicationsEditor({
                 value={row.colorsCount}
                 onChange={(e) =>
                   updateRow(idx, { colorsCount: e.target.value })
-                }
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>Количество</span>
-              <input
-                type="number"
-                min={0}
-                step="any"
-                value={row.quantity}
-                onChange={(e) =>
-                  updateRow(idx, { quantity: e.target.value })
                 }
               />
             </label>

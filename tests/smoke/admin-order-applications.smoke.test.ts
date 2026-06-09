@@ -198,7 +198,10 @@ describe('Backend module order-applications', () => {
     expect(src).toMatch(/replaceForOrder/);
     expect(src).toMatch(/this\.prisma\.\$transaction/);
     expect(src).toMatch(/orderApplication\.deleteMany/);
-    expect(src).toMatch(/orderApplication\.createMany/);
+    // Этап «Нанесение по размерам»: вложенный create на каждое
+    // нанесение (а не createMany), чтобы в той же транзакции создать
+    // адресацию по размерам (`OrderApplicationSize`).
+    expect(src).toMatch(/orderApplication\.create\(/);
     expect(src).toMatch(/ORDER_APPLICATIONS_REPLACED/);
     // ORDER_APPLICATION_ORDER_LOCKED при не-DRAFT.
     expect(src).toMatch(/OrderApplicationOrderLockedException/);

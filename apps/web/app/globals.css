@@ -10340,6 +10340,76 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 0.85rem;
 }
 
+/* Этап «Нанесение по размерам / части тиража»: блок «Применить к»
+   в редакторе нанесения (весь тираж / выбранные размеры). Редактор
+   живёт в client-компоненте с inline-стилями полей; здесь — только
+   стиль адресации по размерам, чтобы чипы размеров и поразмерное
+   количество выглядели аккуратно. */
+.admin-order-applications__scope {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px dashed var(--admin-border, #e5e7eb);
+  border-radius: 6px;
+  background: var(--admin-surface-subtle, #fafafa);
+}
+
+.admin-order-applications__scope-label {
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--admin-muted, #6b7280);
+}
+
+.admin-order-applications__scope-modes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.9rem;
+}
+
+.admin-order-applications__radio {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.admin-order-applications__sizes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.admin-order-applications__size-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.25rem 0.5rem;
+  border: 1px solid var(--admin-border, #e5e7eb);
+  border-radius: 999px;
+  background: var(--admin-surface, #fff);
+}
+
+.admin-order-applications__size-chip--on {
+  border-color: var(--admin-accent, #6366f1);
+  background: var(--admin-accent-soft, #eef2ff);
+}
+
+.admin-order-applications__size-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.admin-order-applications__size-qty {
+  width: 4.5rem;
+  font-size: 0.8rem;
+  padding: 0.1rem 0.35rem;
+}
+
 /* ---------------------------------------------------------------------------
    /admin/orders/[id] — блок «Готовность к крою»: компактные
    статусы и горизонтальный скролл таблицы материалов.

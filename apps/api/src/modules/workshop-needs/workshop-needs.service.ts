@@ -402,7 +402,17 @@ export class WorkshopNeedsService {
         // `TechCardOutsourceLine` остаются как legacy fallback —
         // backend на этом этапе их в потребности не превращает,
         // но и не удаляет (см. ТЗ §«Не удалять old TechCardOutsourceLine»).
-        applications: { orderBy: { createdAt: 'asc' } },
+        applications: {
+          orderBy: { createdAt: 'asc' },
+          // Адресация по размерам (этап «Нанесение по размерам»):
+          // нужна для поразмерного расчёта `calculatedQty`.
+          include: {
+            sizes: {
+              include: { size: true },
+              orderBy: { size: { sortOrder: 'asc' } },
+            },
+          },
+        },
       },
     });
     if (!order) {
@@ -607,9 +617,18 @@ export class WorkshopNeedsService {
     // `Σ qtyPlan` (всё изделие = одно нанесение). Описание собираем
     // в человекочитаемой форме: «<Тип>, <stage label>, <место>,
     // <WxH>, <цвет/описание>».
+    // Поразмерный план (qtyPlan по sizeId) — фоллбэк количества для
+    // нанесений, адресованных на размер без явного количества.
+    const sizeQtyById = new Map(
+      order.items.map((it) => [it.sizeId, it.qtyPlan]),
+    );
     for (const app of order.applications ?? []) {
       if (app.status === 'CANCELLED') continue;
-      const computedApp = this.computeApplication(app, totalOrderQty);
+      const computedApp = this.computeApplication(
+        app,
+        totalOrderQty,
+        sizeQtyById,
+      );
       methodQtyPerUnit++;
       computed.push(computedApp);
     }
@@ -1287,8 +1306,14 @@ export class WorkshopNeedsService {
       description: string | null;
       quantity: Prisma.Decimal | null;
       unit: string;
+      sizes: {
+        sizeId: string;
+        quantity: Prisma.Decimal | null;
+        size: { code: string };
+      }[];
     },
     totalOrderQty: number,
+    sizeQtyById: Map<string, number>,
   ): ComputedNeed {
     const type = app.type as OrderApplicationType;
     const stage = app.stage as OrderApplicationStage;
@@ -1308,14 +1333,37 @@ export class WorkshopNeedsService {
     }
     if (app.colorText) parts.push(app.colorText);
     if (app.description) parts.push(app.description);
-    const description = parts.join(', ');
 
-    const calculatedQty = app.quantity
-      ? new Prisma.Decimal(app.quantity).toDecimalPlaces(
-          4,
-          Prisma.Decimal.ROUND_HALF_UP,
-        )
-      : new Prisma.Decimal(totalOrderQty);
+    // Адресация по размерам (этап «Нанесение по размерам»):
+    //   - есть размеры → количество = Σ по размерам (на размер берём
+    //     заданное `quantity` либо `qtyPlan` этого размера);
+    //   - нет размеров → как раньше: order-level `quantity` либо
+    //     `Σ qtyPlan` (весь тираж = одно нанесение на изделие).
+    let calculatedQty: Prisma.Decimal;
+    if (app.sizes.length > 0) {
+      let sum = new Prisma.Decimal(0);
+      const sizeParts: string[] = [];
+      for (const sr of app.sizes) {
+        const q =
+          sr.quantity != null
+            ? new Prisma.Decimal(sr.quantity)
+            : new Prisma.Decimal(sizeQtyById.get(sr.sizeId) ?? 0);
+        sum = sum.plus(q);
+        sizeParts.push(
+          sr.quantity != null ? `${sr.size.code}×${q.toString()}` : sr.size.code,
+        );
+      }
+      calculatedQty = sum.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+      parts.push(`размеры: ${sizeParts.join(', ')}`);
+    } else {
+      calculatedQty = app.quantity
+        ? new Prisma.Decimal(app.quantity).toDecimalPlaces(
+            4,
+            Prisma.Decimal.ROUND_HALF_UP,
+          )
+        : new Prisma.Decimal(totalOrderQty);
+    }
+    const description = parts.join(', ');
 
     return {
       sourceType: 'ORDER_APPLICATION',

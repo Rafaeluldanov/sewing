@@ -105,7 +105,7 @@ type OrderWithItems = Prisma.OrderGetPayload<{
         };
       };
     };
-    applications: true;
+    applications: { include: { sizes: { include: { size: true } } } };
     /**
      * PHASE 1 «CompanyDivision как master-справочник» (см.
      * `prisma/schema.prisma::Order.companyDivisionId`,
@@ -310,6 +310,10 @@ export class OrdersService {
         );
 
       const number = await this.numbers.nextNumber(tx);
+      // Размеры заказа — для фильтрации адресации нанесений по размерам
+      // (этап «Нанесение по размерам»): создаём `OrderApplicationSize`
+      // только для размеров, реально присутствующих в `dto.items`.
+      const orderSizeIdSet = new Set(dto.items.map((i) => i.sizeId));
       const created = await tx.order.create({
         data: {
           number,
@@ -378,24 +382,47 @@ export class OrdersService {
           applications:
             dto.applications && dto.applications.length > 0
               ? {
-                  create: dto.applications.map((app) => ({
-                    type: app.type,
-                    stage: app.stage,
-                    placement: app.placement ?? null,
-                    widthMm: app.widthMm ?? null,
-                    heightMm: app.heightMm ?? null,
-                    colorsCount: app.colorsCount ?? null,
-                    quantity:
-                      app.quantity == null
-                        ? null
-                        : new Prisma.Decimal(app.quantity),
-                    unit: app.unit ?? 'шт',
-                    colorText: app.colorText ?? null,
-                    description: app.description ?? null,
-                    comment: app.comment ?? null,
-                    fileUrl: app.fileUrl ?? null,
-                    status: app.status ?? 'PLANNED',
-                  })),
+                  create: dto.applications.map((app) => {
+                    // Адресация по размерам (этап «Нанесение по
+                    // размерам»): оставляем только размеры, реально
+                    // присутствующие в заказе, и дедупим по `sizeId`.
+                    const sizeRows = (app.sizes ?? [])
+                      .filter((s) => orderSizeIdSet.has(s.sizeId))
+                      .filter(
+                        (s, i, arr) =>
+                          arr.findIndex((x) => x.sizeId === s.sizeId) === i,
+                      );
+                    return {
+                      type: app.type,
+                      stage: app.stage,
+                      placement: app.placement ?? null,
+                      widthMm: app.widthMm ?? null,
+                      heightMm: app.heightMm ?? null,
+                      colorsCount: app.colorsCount ?? null,
+                      quantity:
+                        app.quantity == null
+                          ? null
+                          : new Prisma.Decimal(app.quantity),
+                      unit: app.unit ?? 'шт',
+                      colorText: app.colorText ?? null,
+                      description: app.description ?? null,
+                      comment: app.comment ?? null,
+                      fileUrl: app.fileUrl ?? null,
+                      status: app.status ?? 'PLANNED',
+                      sizes:
+                        sizeRows.length > 0
+                          ? {
+                              create: sizeRows.map((s) => ({
+                                sizeId: s.sizeId,
+                                quantity:
+                                  s.quantity == null
+                                    ? null
+                                    : new Prisma.Decimal(s.quantity),
+                              })),
+                            }
+                          : undefined,
+                    };
+                  }),
                 }
               : undefined,
         },
@@ -1222,7 +1249,16 @@ export class OrdersService {
         // заказные нанесения, чтобы UI карточки (`/admin/orders/[id]`)
         // мог отрендерить блок «Нанесение» без отдельного запроса.
         // Сортировка по `createdAt` — стабильная для UI порядок строк.
-        applications: { orderBy: { createdAt: 'asc' } },
+        applications: {
+          orderBy: { createdAt: 'asc' },
+          // Адресация по размерам (этап «Нанесение по размерам»).
+          include: {
+            sizes: {
+              include: { size: true },
+              orderBy: { size: { sortOrder: 'asc' } },
+            },
+          },
+        },
         // PHASE 1: краткие реквизиты карточки подразделения для
         // `OrderDetailDto.companyDivision`. См. `toDetailDto`.
         companyDivision: true,
@@ -3937,6 +3973,11 @@ function applicationRowToDto(row: {
   comment: string | null;
   fileUrl: string | null;
   status: string;
+  sizes: {
+    sizeId: string;
+    quantity: Prisma.Decimal | null;
+    size: { code: string };
+  }[];
   createdAt: Date;
   updatedAt: Date;
 }): OrderApplicationDto {
@@ -3962,6 +4003,11 @@ function applicationRowToDto(row: {
     fileUrl: row.fileUrl,
     status,
     statusLabel: ORDER_APPLICATION_STATUS_LABELS[status] ?? row.status,
+    sizes: row.sizes.map((s) => ({
+      sizeId: s.sizeId,
+      sizeCode: s.size.code,
+      quantity: s.quantity ? s.quantity.toString() : null,
+    })),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
   };
