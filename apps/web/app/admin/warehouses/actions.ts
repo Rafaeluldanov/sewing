@@ -6,7 +6,7 @@ import type {
   PrintWarehouseCellsDto,
   PrintWarehouseCellsResultDto,
 } from '@sewing/shared/warehouses';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listCells } from '@/lib/passports-api';
 import {
   createStockAdjustment,
@@ -64,7 +64,7 @@ export async function createWarehouseAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -109,7 +109,7 @@ export async function updateWarehouseAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -144,7 +144,7 @@ export async function assignCellToWarehouseAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -195,7 +195,7 @@ export async function createWarehouseLineAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -215,7 +215,7 @@ export async function detachCellFromWarehouseAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -255,7 +255,7 @@ export async function printWarehouseCellsAction(
       return {
         ok: false,
         code: e.code,
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -282,7 +282,7 @@ export async function printWarehouseLineCellsAction(
       return {
         ok: false,
         code: e.code,
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -313,7 +313,7 @@ export async function deleteWarehouseLineAction(
     if (e instanceof ApiRequestError) {
       return {
         code: e.code,
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }

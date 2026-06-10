@@ -29,7 +29,7 @@ import {
   type CreateTechCardDto,
   type TechCardTemplateDetailDto,
 } from '@sewing/shared/tech-cards';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   createPatternCategory,
   getCompatibleTechCards,
@@ -149,8 +149,7 @@ export async function uploadCategoryIconFromOrderModalAction(
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить запрос';
 }

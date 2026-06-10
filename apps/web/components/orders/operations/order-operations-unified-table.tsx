@@ -39,7 +39,7 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getOperation } from '@/lib/operations-api';
 import { getOrderProductionBalance } from '@/lib/order-production-balance-api';
 import { formatDurationSec } from '@/lib/operations-time-norm';
@@ -319,7 +319,7 @@ async function loadData(
       } catch (e) {
         const msg =
           e instanceof ApiRequestError
-            ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+            ? errorText(e)
             : 'Не удалось загрузить операцию';
         loadErrors.push(`Операция ${id}: ${msg}`);
       }
@@ -331,7 +331,7 @@ async function loadData(
       ? getOrderProductionBalance(orderId).catch((e) => {
           const msg =
             e instanceof ApiRequestError
-              ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+              ? errorText(e)
               : 'Не удалось загрузить балансировку';
           loadErrors.push(`Балансировка: ${msg}`);
           return null;

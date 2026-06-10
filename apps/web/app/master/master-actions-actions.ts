@@ -35,7 +35,7 @@ import {
   ReturnToReworkSchema,
   type QcPassportDetailDto,
 } from '@sewing/shared/qc';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { fetchPassportHistory } from '@/lib/passports-api';
 import {
   findMasterPassportByCode,
@@ -50,8 +50,7 @@ import {
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить действие';
 }

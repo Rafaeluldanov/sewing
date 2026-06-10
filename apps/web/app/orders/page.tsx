@@ -6,7 +6,7 @@ import {
   type OrderSort,
   ORDER_SORTS,
 } from '@sewing/shared/orders';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listOrders, ORDER_STATUS_LABELS } from '@/lib/orders-api';
 import {
   ORDER_NOMENCLATURE_SOURCE_BADGE,
@@ -72,7 +72,7 @@ export default async function OrdersListPage({ searchParams }: PageProps) {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить заказы';
     data = { items: [], total: 0, page: 1, pageSize: query.pageSize };
   }

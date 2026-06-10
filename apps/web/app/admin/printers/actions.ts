@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   createPrinter,
   createPrintJob,
@@ -64,7 +64,7 @@ export async function createPrinterAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -98,7 +98,7 @@ export async function updatePrinterAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -131,7 +131,7 @@ export async function selectWindowsPrinterAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -152,7 +152,7 @@ export async function generatePairingCodeAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -172,7 +172,7 @@ export async function testPrintAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -190,7 +190,7 @@ export async function deletePrinterAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }

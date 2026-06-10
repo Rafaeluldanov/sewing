@@ -6,7 +6,7 @@ import {
   type PatternListItemDto,
 } from '@sewing/shared/patterns';
 import type { PatternCategoryListItemDto } from '@sewing/shared/pattern-categories';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listPatterns } from '@/lib/patterns-api';
 import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { resolvePatternCategoryIcon } from '@/lib/pattern-category-icon';
@@ -70,7 +70,7 @@ export default async function AdminPatternsListPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список лекал';
   }
   try {

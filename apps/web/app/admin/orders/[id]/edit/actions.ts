@@ -56,7 +56,7 @@ import {
   type OrderStatus,
   type UpdateOrderDto,
 } from '@sewing/shared/orders';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { updateOrder } from '@/lib/orders-api';
 
 export interface FormActionState {
@@ -186,8 +186,7 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить запрос';
 }

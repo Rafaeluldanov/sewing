@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ArrowRight, ClipboardList, Plus } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listTechCards } from '@/lib/tech-cards-api';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
 import {
@@ -39,7 +39,7 @@ export default async function AdminTechCardsListPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список техкарт';
   }
 

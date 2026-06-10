@@ -1,5 +1,5 @@
 import { RefreshCw, Search } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getDiagnosticConsistencyReport } from '@/lib/admin-api';
 import type {
   DiagnosticConsistencyReportDto,
@@ -30,7 +30,7 @@ export default async function AdminDiagnosticsPage() {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить отчёт диагностики';
   }
 

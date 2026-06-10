@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ArrowRight, ClipboardList } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listConstructorTasks } from '@/lib/constructor-tasks-api';
 import type { ConstructorTaskSummaryDto } from '@sewing/shared/constructor-tasks';
 import {
@@ -48,7 +48,7 @@ export default async function AdminConstructorTasksListPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список заявок конструктору';
   }
 

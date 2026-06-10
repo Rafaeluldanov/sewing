@@ -32,7 +32,7 @@ import {
   type CutReadinessDto,
 } from '@sewing/shared/cut-readiness';
 import type { OrderStatus } from '@sewing/shared/orders';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getOrderCutReadiness } from '@/lib/cut-readiness-api';
 import { MaterialArrivedButton } from '@/components/orders/material-arrived-button';
 import { RevokeMaterialArrivalButton } from '@/components/orders/revoke-material-arrival-button';
@@ -102,7 +102,7 @@ export async function ManualMaterialArrivalActions({
       cutReadiness = null;
       loadError =
         e instanceof ApiRequestError
-          ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+          ? errorText(e)
           : 'Не удалось загрузить готовность к крою';
     }
   }

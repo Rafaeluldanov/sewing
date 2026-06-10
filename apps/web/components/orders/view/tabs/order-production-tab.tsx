@@ -42,7 +42,7 @@ import {
   AdminTable,
   type AdminTableColumn,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getShopfloorState } from '@/lib/shopfloor-api';
 import { Activity, BarChart3, Package } from 'lucide-react';
 import { OrderFinishedGoodsShipmentSection } from '@/components/orders/finished-goods/order-finished-goods-shipment-section';
@@ -130,7 +130,7 @@ export async function OrderProductionTab({ order, canManage }: Props) {
       shopfloor = await getShopfloorState(order.id);
     } catch (e) {
       if (e instanceof ApiRequestError) {
-        shopfloorError = `${e.message}${e.code ? ` (${e.code})` : ''}`;
+        shopfloorError = errorText(e);
       } else {
         shopfloorError = 'Не удалось получить состояние цеха';
       }

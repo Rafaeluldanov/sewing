@@ -7,7 +7,7 @@ import {
   type CreateCuttingClosureRequestDto,
   type ReviewCuttingClosureRequestDto,
 } from '@sewing/shared/cutting-closure';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   approveCuttingClosureRequest,
   createCuttingClosureRequest,
@@ -21,8 +21,7 @@ export interface CuttingClosureFormState {
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить запрос';
 }

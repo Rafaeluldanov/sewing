@@ -13,7 +13,7 @@ import type {
   PayrollEmployeeSalaryEntryDto,
   PayrollEmployeeShiftDto,
 } from '@sewing/shared/payroll';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getPayrollEmployee } from '@/lib/payroll-api';
 import {
   AdminCard,
@@ -73,7 +73,7 @@ export default async function AdminPayrollEmployeePage({
     }
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить карточку сотрудника';
   }
 

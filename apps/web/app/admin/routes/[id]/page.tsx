@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { Activity, ArrowLeft, Trash2 } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getRouteTemplate } from '@/lib/routes-api';
 import { getShiftMeta } from '@/lib/shifts-api';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
@@ -53,7 +53,7 @@ export default async function AdminRouteTemplateDetailPage({ params }: Params) {
   } catch (e) {
     metaError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список операций.';
     operations = template.steps.map((s) => ({
       id: s.operationId,

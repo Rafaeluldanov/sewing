@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   updateEquipment,
   updateEquipmentOperations,
@@ -59,7 +59,7 @@ export async function updateEquipmentOperationsAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -96,7 +96,7 @@ export async function updateEquipmentDisplayNumberAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -136,7 +136,7 @@ export async function updateEquipmentNameAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }

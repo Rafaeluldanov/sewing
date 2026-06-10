@@ -9,7 +9,7 @@
  */
 
 import { revalidatePath } from 'next/cache';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { acknowledgePayrollPayout } from '@/lib/payroll-payouts-api';
 
 export interface AckPayoutState {
@@ -36,7 +36,7 @@ export async function acknowledgePayrollPayoutAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
       };
     }
     return { error: 'Не удалось подтвердить получение' };

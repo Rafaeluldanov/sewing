@@ -30,7 +30,7 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getOrderApplications } from '@/lib/order-applications-api';
 import type { AdminStatusTone } from '@/lib/admin-labels';
 import { OrderApplicationsForm } from './order-applications-form';
@@ -80,7 +80,7 @@ export async function OrderApplicationsCard({
   } catch (e) {
     loadError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить нанесения';
   }
 

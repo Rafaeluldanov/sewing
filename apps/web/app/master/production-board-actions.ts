@@ -13,7 +13,7 @@ import type {
   ProductionBoardDrillQuery,
   ProductionBoardDto,
 } from '@sewing/shared';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getProductionBoard,
   getProductionBoardDrill,
@@ -21,8 +21,7 @@ import {
 
 function explain(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось загрузить доску';
 }

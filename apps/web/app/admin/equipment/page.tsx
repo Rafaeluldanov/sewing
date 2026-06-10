@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Factory, Plus } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listEquipment } from '@/lib/equipment-api';
 import type { EquipmentSummaryDto } from '@sewing/shared/equipment';
 import {
@@ -55,7 +55,7 @@ export default async function AdminEquipmentListPage() {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список оборудования';
   }
 

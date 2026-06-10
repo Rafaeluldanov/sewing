@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { createEquipment } from '@/lib/equipment-api';
 import type { CreateEquipmentState } from './form-state';
 
@@ -51,7 +51,7 @@ export async function createEquipmentAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }

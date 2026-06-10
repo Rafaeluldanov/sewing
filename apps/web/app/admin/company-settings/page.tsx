@@ -1,7 +1,7 @@
 import { Settings } from 'lucide-react';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { CompanySettingsDto } from '@sewing/shared/company-settings';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getCompanySettings,
   listCompanyDivisions,
@@ -46,7 +46,7 @@ export default async function AdminCompanySettingsPage() {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить настройки компании';
   }
 

@@ -21,7 +21,7 @@ import {
   type CreateCompanyDivisionDto,
   type UpdateCompanyDivisionDto,
 } from '@sewing/shared/company-divisions';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   createCompanyDivision,
   updateCompanyDivision,
@@ -39,7 +39,7 @@ const ADMIN_PATH = '/admin/company-settings';
 function explainApiError(e: unknown): { error: string; requestId?: string } {
   if (e instanceof ApiRequestError) {
     return {
-      error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+      error: errorText(e),
       requestId: e.requestId,
     };
   }

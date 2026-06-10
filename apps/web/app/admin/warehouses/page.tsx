@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Activity, ArrowRight, Plus, Warehouse } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listWarehouses } from '@/lib/warehouses-api';
 import {
   listStockBalances,
@@ -186,7 +186,7 @@ async function WarehousesListTabPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список складов';
   }
 
@@ -350,7 +350,7 @@ async function BalancesTabPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить остатки склада';
   }
 
@@ -537,7 +537,7 @@ async function MovementsTabPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить журнал движений склада';
   }
 

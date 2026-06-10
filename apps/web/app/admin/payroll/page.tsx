@@ -12,7 +12,7 @@ import type {
   PayrollPeriodEmployeeRowDto,
   PayrollPeriodPageDto,
 } from '@sewing/shared/payroll';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getPayrollPeriod } from '@/lib/payroll-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
 import { listEmployees } from '@/lib/employees-api';
@@ -95,7 +95,7 @@ export default async function AdminPayrollPeriodPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить ведомость зарплаты';
   }
 

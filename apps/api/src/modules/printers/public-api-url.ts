@@ -27,6 +27,7 @@
  */
 import type { Request } from 'express';
 import { API_PREFIX } from '@sewing/shared/config';
+import { PrintPublicApiUrlNotConfiguredException } from '../../common/errors.js';
 
 export function resolvePublicApiBaseUrl(req: Request): string {
   const fromEnv = firstNonEmpty(
@@ -52,11 +53,10 @@ export function resolvePublicApiBaseUrl(req: Request): string {
   const candidate = host ? `${proto}://${host}${API_PREFIX}` : '';
   if (candidate && !isLoopbackHost(host)) return candidate;
 
-  throw new Error(
-    'Не задан публичный адрес API для payloadUrl print job-а. ' +
-      'Укажите PUBLIC_API_URL или APP_URL в окружении backend-а. ' +
-      'INTERNAL_API_URL/loopback использовать нельзя — агенту он недоступен.',
-  );
+  // Конфигурация окружения не задана — отдаём пользователю понятную
+  // 503 (вместо сырой 500 «Внутренняя ошибка»), а детали для devops
+  // («укажите PUBLIC_API_URL/APP_URL, loopback нельзя») остаются в коде.
+  throw new PrintPublicApiUrlNotConfiguredException();
 }
 
 function firstNonEmpty(...vals: Array<string | undefined>): string | null {

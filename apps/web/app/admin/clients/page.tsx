@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { ArrowRight, Building2, Plus } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listClients } from '@/lib/clients-api';
 import {
   AdminCard,
@@ -52,7 +52,7 @@ export default async function AdminClientsListPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список клиентов';
   }
 

@@ -25,7 +25,7 @@ import {
   type RejectOrderSampleDto,
   type StartOrderSampleDto,
 } from '@sewing/shared/order-samples';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   approveOrderSample,
   cancelOrderSample,
@@ -41,8 +41,7 @@ import type { OrderSampleFormState } from '@/lib/order-samples-domain';
 
 function explainApiError(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return fallback;
 }

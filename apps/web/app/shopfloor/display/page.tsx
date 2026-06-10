@@ -1,4 +1,4 @@
-import { ApiRequestError } from '@/lib/api';
+import { errorText } from '@/lib/api';
 import { getShopfloorDisplaySummary } from '@/lib/shopfloor-api';
 import { ShopfloorDisplayBoard } from './display-board';
 
@@ -65,10 +65,7 @@ export default async function ShopfloorDisplayPage({
       divisionCode ?? undefined,
     );
   } catch (e) {
-    initialError =
-      e instanceof ApiRequestError
-        ? `display: ${e.message}${e.code ? ` (${e.code})` : ''}`
-        : 'display: не удалось загрузить данные';
+    initialError = errorText(e, 'display: не удалось загрузить данные');
   }
 
   return (

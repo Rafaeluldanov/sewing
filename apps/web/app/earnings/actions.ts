@@ -1,7 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { updateSalaryEntry } from '@/lib/salary-api';
 
 /**
@@ -69,7 +69,7 @@ export async function updateSalaryEntryAction(
 function apiError(e: unknown, fallback: string): UpdateSalaryEntryState {
   if (e instanceof ApiRequestError) {
     return {
-      error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+      error: errorText(e),
       errorRequestId: e.requestId,
     };
   }

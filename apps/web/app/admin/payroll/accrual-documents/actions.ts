@@ -14,7 +14,7 @@ import {
   CreatePayrollAccrualDocumentSchema,
   UpdatePayrollAccrualDocumentLineSchema,
 } from '@sewing/shared/payroll-accrual-documents';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   cancelPayrollAccrualDocument,
   createPayrollAccrualDocument,
@@ -39,7 +39,7 @@ function detailPath(id: string): string {
 function explainApiError(e: unknown): { error: string; requestId?: string } {
   if (e instanceof ApiRequestError) {
     return {
-      error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+      error: errorText(e),
       requestId: e.requestId,
     };
   }

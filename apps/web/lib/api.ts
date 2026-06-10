@@ -46,6 +46,63 @@ export class ApiRequestError extends Error {
   }
 }
 
+/**
+ * Понятный для человека текст ошибки для показа пользователю.
+ *
+ * Решение от 10.06.2026: технический `code` (`ORDER_LOCKED`,
+ * `WIP_INSUFFICIENT_BALANCE`, …) пользователю НЕ показываем — он уходит в
+ * логи API и в `requestId`-ссылку для поддержки, а в интерфейсе остаётся
+ * только русское сообщение. Раньше код приклеивался к фразе как
+ * `«… (ORDER_LOCKED)»` / `«[CODE] …»` — это и убираем здесь централизованно.
+ *
+ * Логика:
+ *   - `VALIDATION_ERROR` → берём конкретное сообщение по полю из `issues`
+ *     (там написано, что именно заполнить), а не общий текст;
+ *   - обычная бизнес-ошибка → русское `message` из API как есть;
+ *   - если `message` пустой или это англоязычный HTTP-статус
+ *     (`Bad Request` — когда тело ответа не пришло), подставляем понятный
+ *     запасной текст по коду, иначе — переданный `fallback`.
+ */
+const FRIENDLY_BY_CODE: Record<string, string> = {
+  INTERNAL_ERROR:
+    'Что-то пошло не так на сервере. Повторите попытку, а если не помогает — сообщите в поддержку и назовите код запроса.',
+  VALIDATION_ERROR: 'Проверьте правильность заполнения полей формы.',
+  UNIQUE_VIOLATION: 'Такая запись уже существует.',
+  FOREIGN_KEY_VIOLATION:
+    'Нельзя выполнить: запись связана с другими данными.',
+  NOT_FOUND: 'Запись не найдена.',
+  UNAUTHENTICATED: 'Сессия истекла. Войдите в систему заново.',
+  FORBIDDEN: 'У вашей роли нет доступа к этому действию.',
+};
+
+const ENGLISH_STATUS_TEXT = new Set([
+  'Bad Request',
+  'Unauthorized',
+  'Forbidden',
+  'Not Found',
+  'Conflict',
+  'Unprocessable Entity',
+  'Internal Server Error',
+  'Service Unavailable',
+  'Bad Gateway',
+  'Gateway Timeout',
+]);
+
+export function errorText(
+  e: unknown,
+  fallback = 'Не удалось выполнить запрос. Попробуйте ещё раз.',
+): string {
+  if (e instanceof ApiRequestError) {
+    if (e.code === 'VALIDATION_ERROR' && e.issues && e.issues.length > 0) {
+      return e.issues[0]?.message ?? FRIENDLY_BY_CODE.VALIDATION_ERROR;
+    }
+    const msg = e.message?.trim();
+    if (msg && !ENGLISH_STATUS_TEXT.has(msg)) return msg;
+    return (e.code && FRIENDLY_BY_CODE[e.code]) || fallback;
+  }
+  return fallback;
+}
+
 interface ApiRequestInit extends Omit<RequestInit, 'body'> {
   body?: unknown;
   searchParams?: Record<string, string | number | undefined | null>;

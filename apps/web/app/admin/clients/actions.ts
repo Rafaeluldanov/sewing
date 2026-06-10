@@ -18,7 +18,7 @@ import {
   type CreateClientDto,
   type UpdateClientDto,
 } from '@sewing/shared/clients';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { createClient, updateClient } from '@/lib/clients-api';
 import type {
   CreateClientState,
@@ -28,7 +28,7 @@ import type {
 function explainApiError(e: unknown): { error: string; requestId?: string } {
   if (e instanceof ApiRequestError) {
     return {
-      error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+      error: errorText(e),
       requestId: e.requestId,
     };
   }

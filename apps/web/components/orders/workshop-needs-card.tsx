@@ -44,7 +44,7 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getOrderWorkshopNeeds } from '@/lib/workshop-needs-api';
 import type { AdminStatusTone } from '@/lib/admin-labels';
 import { CalculateWorkshopNeedsForm } from './workshop-needs-calculate-form';
@@ -100,7 +100,7 @@ export async function WorkshopNeedsCard({ orderId, orderStatus }: Props) {
   } catch (e) {
     loadError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить потребности';
   }
 

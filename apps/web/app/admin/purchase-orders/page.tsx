@@ -28,7 +28,7 @@ import {
   type SupplierListItemDto,
   type SupplierStatus,
 } from '@sewing/shared/suppliers';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listPurchaseOrders } from '@/lib/purchase-orders-api';
 import { listSuppliers } from '@/lib/suppliers-api';
 import {
@@ -117,7 +117,7 @@ export default async function AdminPurchaseOrdersPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить заказы поставщикам';
   }
 

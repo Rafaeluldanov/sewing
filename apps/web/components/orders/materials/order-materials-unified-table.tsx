@@ -56,7 +56,7 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { formatDateRu } from '@/lib/date-format';
 import { getOrderCutReadiness } from '@/lib/cut-readiness-api';
 import { getOrderPurchaseOrders } from '@/lib/purchase-orders-api';
@@ -599,7 +599,7 @@ async function loadData(orderId: string): Promise<LoadedData> {
     } catch (e) {
       const msg =
         e instanceof ApiRequestError
-          ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+          ? errorText(e)
           : 'Не удалось загрузить данные';
       loadErrors.push(`${errorPrefix}: ${msg}`);
       return fallback;

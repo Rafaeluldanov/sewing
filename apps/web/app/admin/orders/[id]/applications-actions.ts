@@ -40,7 +40,7 @@ import {
   ReplaceOrderApplicationsSchema,
   type ReplaceOrderApplicationsDto,
 } from '@sewing/shared/order-applications';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { replaceOrderApplications } from '@/lib/order-applications-api';
 
 export interface OrderApplicationsFormState {
@@ -70,8 +70,7 @@ function parseApplicationsJson(form: FormData): unknown {
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось сохранить нанесения';
 }

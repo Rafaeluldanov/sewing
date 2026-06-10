@@ -1,7 +1,7 @@
 import { Fragment } from 'react';
 import Link from 'next/link';
 import { ArrowRight, Plus, Scissors } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listOperations } from '@/lib/operations-api';
 import {
   groupOperationsByCategory,
@@ -139,7 +139,7 @@ export default async function AdminOperationsListPage() {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список операций';
   }
 

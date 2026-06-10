@@ -10,7 +10,7 @@ import {
   type OutsourceTriggerType,
   type TechCardOutsourceLineInputDto,
 } from '@sewing/shared/tech-cards';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getPattern } from '@/lib/patterns-api';
 import { getPatternCategory } from '@/lib/pattern-categories-api';
 import {
@@ -502,7 +502,7 @@ export async function pullMaterialLinesFromCategoryAction(
 function explainApiError(e: unknown, fallback: string): TechCardFormState {
   if (e instanceof ApiRequestError) {
     return {
-      error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+      error: errorText(e),
       errorRequestId: e.requestId,
     };
   }
@@ -685,7 +685,7 @@ export async function archiveTechCardAction(id: string): Promise<void> {
   } catch (e) {
     const msg =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось архивировать техкарту';
     throw new Error(msg);
   }

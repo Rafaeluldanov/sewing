@@ -1,4 +1,4 @@
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getShopfloorState,
   listShopfloorOrders,
@@ -29,7 +29,7 @@ export default async function ShopfloorPage({ searchParams }: PageProps) {
   } catch (e) {
     initialError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить состояние цеха';
     initialState = {
       updatedAt: new Date().toISOString(),

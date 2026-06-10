@@ -2,7 +2,7 @@
 
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { createDisplayScreen } from '@/lib/display-screens-api';
 import type { CreateDisplayScreenDto } from '@sewing/shared/display-screens';
 import type { CreateDisplayScreenState } from './form-state';
@@ -72,7 +72,7 @@ export async function createDisplayScreenAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }

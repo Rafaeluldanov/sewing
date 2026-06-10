@@ -2,14 +2,13 @@
 
 import { revalidatePath, revalidateTag } from 'next/cache';
 import type { WtoPassportDetailDto } from '@sewing/shared/wto';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { completeWtoPassport, getWtoPassport } from '@/lib/wto-api';
 import { findPassportByCode, scanPassport } from '@/lib/shifts-api';
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить запрос';
 }

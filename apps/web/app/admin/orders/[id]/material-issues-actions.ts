@@ -37,7 +37,7 @@ import {
   type CreateMaterialIssueDto,
   type ReturnMaterialIssueDto,
 } from '@sewing/shared/material-issues';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   cancelMaterialIssue,
   createMaterialIssue,
@@ -62,8 +62,7 @@ export const initialMaterialIssueFormState: MaterialIssueFormState = {};
 
 function explainApiError(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return fallback;
 }

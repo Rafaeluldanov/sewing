@@ -45,7 +45,7 @@ import {
   AdminEmptyState,
   AdminSectionHeader,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getMaterialIssue,
   listOrderMaterialIssues,
@@ -134,7 +134,7 @@ function formatRubSum(value: string): string {
 
 function toErrorMessage(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {
-    return `${e.message}${e.code ? ` (${e.code})` : ''}`;
+    return errorText(e);
   }
   return fallback;
 }

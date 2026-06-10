@@ -31,7 +31,7 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getPurchaseOrderReceipts } from '@/lib/purchase-receipts-api';
 import type { AdminStatusTone } from '@/lib/admin-labels';
 
@@ -75,7 +75,7 @@ export async function PurchaseOrderReceiptsCard({
   } catch (e) {
     loadError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить приёмки';
   }
 

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { MonitorSmartphone, Plus } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listDisplayScreens } from '@/lib/display-screens-api';
 import type { DisplayScreenListItemDto } from '@sewing/shared/display-screens';
 import {
@@ -30,7 +30,7 @@ export default async function AdminDisplayScreensListPage() {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список display-экранов';
   }
 

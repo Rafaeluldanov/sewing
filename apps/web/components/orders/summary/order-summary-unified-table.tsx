@@ -91,7 +91,7 @@ import {
   AdminTable,
   type AdminTableColumn,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getOrderCutReadiness } from '@/lib/cut-readiness-api';
 import { listOrderMaterialIssues } from '@/lib/material-issues-api';
 import { getOperation } from '@/lib/operations-api';
@@ -186,7 +186,7 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
     } catch (e) {
       const msg =
         e instanceof ApiRequestError
-          ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+          ? errorText(e)
           : 'Не удалось загрузить данные';
       loadErrors.push(`${errorPrefix}: ${msg}`);
       return fallback;
@@ -247,7 +247,7 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
       } catch (e) {
         const msg =
           e instanceof ApiRequestError
-            ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+            ? errorText(e)
             : 'Не удалось загрузить операцию';
         loadErrors.push(`Операция ${id}: ${msg}`);
       }
@@ -262,7 +262,7 @@ async function loadData(order: OrderDetailDto): Promise<LoadedData> {
     } catch (e) {
       const msg =
         e instanceof ApiRequestError
-          ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+          ? errorText(e)
           : 'Не удалось загрузить балансировку';
       loadErrors.push(`Балансировка: ${msg}`);
     }

@@ -33,7 +33,7 @@ import {
   AdminEmptyState,
   AdminSectionHeader,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   listFinishedGoodsBalances,
   listOrderFinishedGoodsShipments,
@@ -72,7 +72,7 @@ export async function OrderFinishedGoodsShipmentSection({
   } catch (e) {
     balancesError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить остатки готовой продукции';
   }
 
@@ -81,7 +81,7 @@ export async function OrderFinishedGoodsShipmentSection({
   } catch (e) {
     shipmentsError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить отгрузки готовой продукции';
   }
 

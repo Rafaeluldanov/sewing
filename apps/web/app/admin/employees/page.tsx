@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ArrowRight, Plus, Users } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listEmployees } from '@/lib/employees-api';
 import type { EmployeeListItemDto } from '@sewing/shared/employees';
@@ -65,7 +65,7 @@ export default async function AdminEmployeesListPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список сотрудников';
   }
 

@@ -6,7 +6,7 @@ import {
   UpdatePassportSchema,
   type UpdatePassportDto,
 } from '@sewing/shared/passports';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { deletePassport, updatePassport } from '@/lib/passports-api';
 
 /**
@@ -29,8 +29,7 @@ import { deletePassport, updatePassport } from '@/lib/passports-api';
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить запрос';
 }

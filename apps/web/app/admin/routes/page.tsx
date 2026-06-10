@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Activity, ArrowRight, Plus } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { getShiftMeta } from '@/lib/shifts-api';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
@@ -51,7 +51,7 @@ export default async function AdminRoutesListPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список шаблонов маршрутов';
   }
 

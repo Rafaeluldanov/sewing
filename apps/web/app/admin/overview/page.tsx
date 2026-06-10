@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Activity, RefreshCw } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getAdminOverview } from '@/lib/admin-api';
 import type { AdminOverviewDto } from '@sewing/shared/admin';
 import {
@@ -26,7 +26,7 @@ export default async function AdminOverviewPage() {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить операционный обзор';
   }
 

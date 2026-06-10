@@ -16,7 +16,7 @@ import {
   UpdatePurchaseReceiptLineSchema,
   type CancelPurchaseReceiptDto,
 } from '@sewing/shared/purchase-receipts';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   cancelPurchaseReceipt,
   createPurchaseReceiptFromPurchaseOrder,
@@ -37,7 +37,7 @@ function explainApiError(e: unknown): {
 } {
   if (e instanceof ApiRequestError) {
     return {
-      error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+      error: errorText(e),
       code: e.code,
       requestId: e.requestId,
     };

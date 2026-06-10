@@ -5,7 +5,7 @@ import {
   StartShiftSchema,
   type StartShiftDto,
 } from '@sewing/shared/shifts';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   completePassportOperation,
   completePassportOperationsBatch,
@@ -52,8 +52,7 @@ function explainApiError(e: unknown): string {
     if (e.code && RAW_API_ERROR_CODES.has(e.code)) {
       return e.message;
     }
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить запрос';
 }

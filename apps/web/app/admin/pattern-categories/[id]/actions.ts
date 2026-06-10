@@ -31,7 +31,7 @@ import {
   type ReplacePatternCategoryParametersDto,
   type UpdatePatternCategoryDto,
 } from '@sewing/shared/pattern-categories';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   archivePatternCategory,
   deletePatternCategory,
@@ -47,7 +47,7 @@ import {
 function explainApiError(e: unknown): { error: string; requestId?: string } {
   if (e instanceof ApiRequestError) {
     return {
-      error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+      error: errorText(e),
       requestId: e.requestId,
     };
   }

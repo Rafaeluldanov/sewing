@@ -25,7 +25,7 @@ import {
   type CreateOrderLogisticsLineDto,
   type UpdateOrderLogisticsLineDto,
 } from '@sewing/shared/orders';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   addOrderLogisticsLine,
   deleteOrderLogisticsLine,
@@ -38,8 +38,7 @@ import type { LogisticsLineFormState } from './logistics-lines-form-state';
 
 function explainApiError(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return fallback;
 }

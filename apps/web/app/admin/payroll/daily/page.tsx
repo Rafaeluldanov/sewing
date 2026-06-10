@@ -14,7 +14,7 @@ import type {
   PayrollDailyEmployeeRowDto,
   PayrollDailyPageDto,
 } from '@sewing/shared/payroll';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getPayrollDaily } from '@/lib/payroll-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
 import {
@@ -70,7 +70,7 @@ export default async function AdminPayrollDailyPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить дневной отчёт';
   }
 

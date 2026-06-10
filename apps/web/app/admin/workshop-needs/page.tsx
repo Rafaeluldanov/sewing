@@ -63,7 +63,7 @@ import {
   type WorkshopNeedOrderCalculationFilter,
 } from '@sewing/shared/workshop-needs';
 import type { SupplierListItemDto } from '@sewing/shared/suppliers';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { isFeatureEnabled } from '@/lib/feature-flags';
 import { listWorkshopNeeds } from '@/lib/workshop-needs-api';
 import { listSuppliers } from '@/lib/suppliers-api';
@@ -220,7 +220,7 @@ export default async function AdminWorkshopNeedsPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить потребности цеха';
   }
 

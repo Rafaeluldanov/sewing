@@ -52,7 +52,7 @@ import {
   AdminTable,
   type AdminTableColumn,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getOrderCutReadiness } from '@/lib/cut-readiness-api';
 import type { AdminStatusTone } from '@/lib/admin-labels';
 import { MaterialArrivedButton } from './material-arrived-button';
@@ -125,7 +125,7 @@ export async function CutReadinessCard({ orderId, orderStatus }: Props) {
   } catch (e) {
     loadError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить готовность к крою';
   }
 

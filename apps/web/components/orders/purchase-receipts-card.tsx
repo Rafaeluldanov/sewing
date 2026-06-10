@@ -34,7 +34,7 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
 } from '@/components/admin';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getOrderPurchaseReceipts,
   getPurchaseReceipt,
@@ -77,7 +77,7 @@ export async function PurchaseReceiptsCard({ orderId }: Props) {
   } catch (e) {
     loadError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить поступления';
   }
 

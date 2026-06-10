@@ -5,7 +5,7 @@ import {
   type PayrollAccrualDocumentListItemDto,
   type PayrollAccrualDocumentStatus,
 } from '@sewing/shared/payroll-accrual-documents';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listPayrollAccrualDocuments } from '@/lib/payroll-accrual-documents-api';
 import {
   AdminCard,
@@ -65,7 +65,7 @@ export default async function AdminAccrualDocumentsPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить документы начисления';
   }
 

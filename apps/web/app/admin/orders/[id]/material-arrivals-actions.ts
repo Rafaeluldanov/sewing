@@ -28,7 +28,7 @@ import {
   type CreateOrderMaterialArrivalOverrideDto,
   type RevokeOrderMaterialArrivalOverrideDto,
 } from '@sewing/shared/order-material-arrivals';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   markOrderMaterialArrived,
   revokeOrderMaterialArrivalOverride,
@@ -46,8 +46,7 @@ export const initialOrderMaterialArrivalsFormState: OrderMaterialArrivalsFormSta
 
 function explainApiError(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return fallback;
 }

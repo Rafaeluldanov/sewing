@@ -6,7 +6,7 @@ import {
   ROUTE_TEMPLATE_CODE_PATTERN,
   type RouteTemplateStepInputDto,
 } from '@sewing/shared/routes';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   createRouteTemplate,
   deleteRouteTemplate,
@@ -88,7 +88,7 @@ export async function createRouteTemplateAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }
@@ -130,7 +130,7 @@ export async function updateRouteTemplateAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return {
-        error: `${e.message}${e.code ? ` (${e.code})` : ''}`,
+        error: errorText(e),
         errorRequestId: e.requestId,
       };
     }

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { Activity, ArrowLeft } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getShiftMeta } from '@/lib/shifts-api';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
 import {
@@ -26,7 +26,7 @@ export default async function AdminRoutesNewPage() {
   } catch (e) {
     metaError =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список операций — добавьте шаги позже.';
     operations = [];
   }

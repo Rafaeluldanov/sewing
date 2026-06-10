@@ -18,7 +18,7 @@ import {
   Warehouse,
   type LucideIcon,
 } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { getProductionDashboard } from '@/lib/dashboard-api';
 import {
   PRODUCTION_DASHBOARD_PERIODS,
@@ -63,7 +63,7 @@ export default async function ProductionDashboardPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить дашборд';
   }
 

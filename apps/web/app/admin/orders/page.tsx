@@ -45,7 +45,7 @@ import {
   ORDER_DEADLINE_SORT_PRIORITY,
   ORDER_DEADLINE_STATUSES,
 } from '@sewing/shared/order-deadlines';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listOrders } from '@/lib/orders-api';
 import {
   ORDER_NOMENCLATURE_SOURCE_BADGE,
@@ -167,7 +167,7 @@ export default async function AdminOrdersPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить заказы';
   }
 

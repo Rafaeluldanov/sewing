@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { ArrowRight, Plus, Printer } from 'lucide-react';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listPrinters } from '@/lib/printers-api';
 import type { PrinterSummaryDto } from '@sewing/shared/printers';
 import { formatRole } from '@/lib/admin-labels';
@@ -57,7 +57,7 @@ export default async function AdminPrintersPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список принтеров';
   }
 

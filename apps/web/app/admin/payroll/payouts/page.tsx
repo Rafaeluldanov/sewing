@@ -11,7 +11,7 @@ import {
   type PayrollPayoutDto,
   type PayrollPayoutStatus,
 } from '@sewing/shared/payroll-payouts';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listPayrollPayouts } from '@/lib/payroll-payouts-api';
 import { listEmployees } from '@/lib/employees-api';
 import {
@@ -77,7 +77,7 @@ export default async function AdminPayrollPayoutsPage({
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список выплат';
   }
 

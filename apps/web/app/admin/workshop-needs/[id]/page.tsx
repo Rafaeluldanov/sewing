@@ -29,7 +29,7 @@ import type {
   SupplierCatalogItemDto,
   SupplierListItemDto,
 } from '@sewing/shared/suppliers';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { isFeatureEnabled } from '@/lib/feature-flags';
 import { getWorkshopNeed } from '@/lib/workshop-needs-api';
 import {
@@ -144,12 +144,10 @@ export default async function AdminWorkshopNeedDetailPage({ params }: Params) {
     try {
       suppliers = await listSuppliers({ status: 'ACTIVE' });
     } catch (e) {
-      suppliersError =
-        e instanceof ApiRequestError
-          ? `Не удалось загрузить поставщиков: ${e.message}${
-              e.code ? ` (${e.code})` : ''
-            }`
-          : 'Не удалось загрузить список поставщиков';
+      suppliersError = errorText(
+        e,
+        'Не удалось загрузить список поставщиков',
+      );
     }
     if (need.selectedSupplierId) {
       try {

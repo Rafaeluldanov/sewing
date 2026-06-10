@@ -1,4 +1,4 @@
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listCuttingTasks } from '@/lib/cutting-tasks-api';
 import { type CuttingTaskSummaryDto } from '@sewing/shared/cutting-tasks';
 import { CutterBoard } from './cutter-board';
@@ -23,7 +23,7 @@ export default async function CutterCabinetPage() {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список задач';
   }
 

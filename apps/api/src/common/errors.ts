@@ -3902,3 +3902,23 @@ export class TechCardDeleteForbiddenException extends BusinessException {
     super('TECH_CARD_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
   }
 }
+
+export class CutReleasePolicyNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'CUT_RELEASE_POLICY_NOT_FOUND',
+      'Правило выпуска кроя не найдено — возможно, его уже удалили. Обновите страницу.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+export class PrintPublicApiUrlNotConfiguredException extends BusinessException {
+  constructor() {
+    super(
+      'PRINT_PUBLIC_API_URL_NOT_CONFIGURED',
+      'Печать недоступна: на сервере не настроен публичный адрес API (PUBLIC_API_URL / APP_URL). Обратитесь к администратору.',
+      HttpStatus.SERVICE_UNAVAILABLE,
+    );
+  }
+}

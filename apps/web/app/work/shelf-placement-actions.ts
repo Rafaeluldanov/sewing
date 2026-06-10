@@ -19,7 +19,7 @@
  */
 
 import { revalidatePath, revalidateTag } from 'next/cache';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { findCellByCode, placePassport } from '@/lib/passports-api';
 import { findPassportByCode } from '@/lib/shifts-api';
 import type { CellDetailDto } from '@sewing/shared/passports';
@@ -71,8 +71,7 @@ export type ShelfPlaceResponse =
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить запрос';
 }

@@ -23,7 +23,7 @@ import {
   ResolveMasterCallByQrSchema,
   type MasterCallDto,
 } from '@sewing/shared/master-calls';
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import {
   createMasterCall,
   listOpenMasterCalls,
@@ -34,8 +34,7 @@ import {
 
 function explainApiError(e: unknown): string {
   if (e instanceof ApiRequestError) {
-    const prefix = e.code ? `[${e.code}] ` : '';
-    return `${prefix}${e.message}`;
+    return errorText(e);
   }
   return 'Не удалось выполнить запрос';
 }

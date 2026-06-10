@@ -1,4 +1,4 @@
-import { ApiRequestError } from '@/lib/api';
+import { ApiRequestError, errorText } from '@/lib/api';
 import { listConstructorTasksForMe } from '@/lib/constructor-tasks-api';
 import { type ConstructorTaskSummaryDto } from '@sewing/shared/constructor-tasks';
 import { ConstructorBoard } from './constructor-board';
@@ -24,7 +24,7 @@ export default async function ConstructorCabinetPage() {
   } catch (e) {
     error =
       e instanceof ApiRequestError
-        ? `${e.message}${e.code ? ` (${e.code})` : ''}`
+        ? errorText(e)
         : 'Не удалось загрузить список задач';
   }
 

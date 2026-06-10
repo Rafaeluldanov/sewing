@@ -9,6 +9,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
+  CutReleasePolicyNotFoundException,
   CutReleasePolicyViolationException,
   PassportSizeNotInOrderException,
 } from '../../common/errors.js';
@@ -146,10 +147,7 @@ export class CutReleasePolicyService {
       where: { id },
     });
     if (!current) {
-      // Нет смысла плодить отдельную бизнес-ошибку — используем общий
-      // 404 без выделенного code: `update` редко вызывается, и UI
-      // обычно показывает универсальный текст «не найдено».
-      throw new Error('CUT_RELEASE_POLICY_NOT_FOUND');
+      throw new CutReleasePolicyNotFoundException();
     }
 
     if (dto.sizeId !== undefined && dto.sizeId !== null) {
@@ -223,7 +221,7 @@ export class CutReleasePolicyService {
       where: { id },
     });
     if (!current) {
-      throw new Error('CUT_RELEASE_POLICY_NOT_FOUND');
+      throw new CutReleasePolicyNotFoundException();
     }
 
     if (!current.isActive) {
