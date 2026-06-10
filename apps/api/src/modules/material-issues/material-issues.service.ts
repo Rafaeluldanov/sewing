@@ -782,6 +782,8 @@ export class MaterialIssuesService {
         if (requestedQty.greaterThan(remaining)) {
           throw new MaterialIssueReturnQtyExceedsAvailableException({
             materialIssueLineId: sourceLine.id,
+            description: sourceLine.description,
+            unit: sourceLine.unit,
             requestedQty: requestedQty.toString(),
             availableQty: remaining.toString(),
           });

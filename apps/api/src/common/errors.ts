@@ -3649,14 +3649,20 @@ export class MaterialIssueReturnQtyExceedsAvailableException extends HttpExcepti
   constructor(
     public readonly details: {
       materialIssueLineId: string;
+      description?: string;
+      unit?: string;
       requestedQty: string;
       availableQty: string;
     },
   ) {
+    // Показываем название материала (не сырой ID строки) и единицу —
+    // числа уже объясняют суть, ID был бесполезен пользователю.
+    const what = details.description?.trim() || 'материал';
+    const unit = details.unit?.trim() ? ` ${details.unit.trim()}` : '';
     super(
       {
         statusCode: HttpStatus.CONFLICT,
-        message: `Запрошенное количество к возврату по строке ${details.materialIssueLineId} (${details.requestedQty}) превышает доступное (${details.availableQty})`,
+        message: `Нельзя вернуть «${what}»: запрошено ${details.requestedQty}${unit}, а доступно к возврату только ${details.availableQty}${unit}.`,
         code: 'MATERIAL_ISSUE_RETURN_QTY_EXCEEDS_AVAILABLE',
         details,
       },
