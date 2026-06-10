@@ -146,8 +146,22 @@ export class OrderCostEstimatesService {
     }
 
     if (errors.length > 0) {
+      // Раньше показывали только число «(N)» — непонятно, что чинить.
+      // Теперь перечисляем конкретные строки и причину (первые 5, чтобы
+      // не раздувать сообщение), детали по строкам также в `details`.
+      const MAX_LISTED = 5;
+      const listed = errors
+        .slice(0, MAX_LISTED)
+        .map((e) => `«${e.description || 'без названия'}» — ${e.reason}`)
+        .join('; ');
+      const rest =
+        errors.length > MAX_LISTED ? ` и ещё ${errors.length - MAX_LISTED}` : '';
+      const head =
+        errors.length === 1
+          ? 'Нельзя завершить расчёт — заполните данные по строке: '
+          : `Нельзя завершить расчёт — заполните данные по ${errors.length} строкам: `;
       throw new OrderCalculationIncompleteException(
-        `Не все строки готовы к завершению расчёта (${errors.length}).`,
+        `${head}${listed}${rest}.`,
         errors,
       );
     }
