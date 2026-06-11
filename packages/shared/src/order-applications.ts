@@ -261,6 +261,11 @@ export const OrderApplicationInputSchema = z.object({
   comment: optionalNullableString(2000, 'Комментарий'),
   fileUrl: optionalNullableString(2000, 'Ссылка на файл'),
   status: OrderApplicationStatusSchema.optional(),
+  // Комплект нанесений (этап «Комплекты нанесений»): groupKey —
+  // стабильный id комплекта, groupLabel — название. Оба пустые =
+  // одиночное нанесение.
+  groupKey: optionalNullableString(60, 'Комплект'),
+  groupLabel: optionalNullableString(120, 'Название комплекта'),
   sizes: z
     .array(OrderApplicationSizeInputSchema)
     // Один размер не может фигурировать в нанесении дважды (совпадает с
@@ -330,6 +335,14 @@ export interface OrderApplicationDto {
   fileUrl: string | null;
   status: OrderApplicationStatus;
   statusLabel: string;
+  /**
+   * Комплект нанесений (этап «Комплекты нанесений»). `groupKey` —
+   * стабильный id комплекта, `groupLabel` — его название. Оба null =
+   * одиночное нанесение (вне комплекта). У всех нанесений одного
+   * комплекта одинаковая адресация (`quantity`/`sizes`).
+   */
+  groupKey: string | null;
+  groupLabel: string | null;
   /**
    * Адресация по размерам (этап «Нанесение по размерам / части
    * тиража»). Пустой массив = нанесение на весь тираж. Непустой =

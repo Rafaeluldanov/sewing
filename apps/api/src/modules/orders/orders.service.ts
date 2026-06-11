@@ -409,6 +409,8 @@ export class OrdersService {
                       comment: app.comment ?? null,
                       fileUrl: app.fileUrl ?? null,
                       status: app.status ?? 'PLANNED',
+                      groupKey: app.groupKey ?? null,
+                      groupLabel: app.groupLabel ?? null,
                       sizes:
                         sizeRows.length > 0
                           ? {
@@ -3973,6 +3975,8 @@ function applicationRowToDto(row: {
   comment: string | null;
   fileUrl: string | null;
   status: string;
+  groupKey: string | null;
+  groupLabel: string | null;
   sizes: {
     sizeId: string;
     quantity: Prisma.Decimal | null;
@@ -4003,6 +4007,8 @@ function applicationRowToDto(row: {
     fileUrl: row.fileUrl,
     status,
     statusLabel: ORDER_APPLICATION_STATUS_LABELS[status] ?? row.status,
+    groupKey: row.groupKey,
+    groupLabel: row.groupLabel,
     sizes: row.sizes.map((s) => ({
       sizeId: s.sizeId,
       sizeCode: s.size.code,

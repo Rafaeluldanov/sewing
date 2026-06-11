@@ -21,12 +21,23 @@
  *     контролируемый row в `OrderApplicationInput`-совместимый
  *     объект (числа из строк, пустые строки в null).
  *
+ * Комплекты (этап «Комплекты нанесений»):
+ *   - нанесения можно объединять в «комплект на изделие» (перёд +
+ *     спина + рукав на одной модели). У комплекта одна общая
+ *     «Применить к» (весь тираж / выбранные размеры) — её правка
+ *     синхронизируется на все нанесения комплекта. Группировка
+ *     хранится на каждом нанесении (`groupKey`/`groupLabel`),
+ *     адресация (`quantity`/`sizes`) — тоже на каждом, поэтому
+ *     потребность цеха даёт отдельную строку на каждый принт.
+ *   - одиночные нанесения (вне комплекта) живут как раньше, со своей
+ *     персональной «Применить к».
+ *
  * Источник правды для словарей типа/stage/статуса —
  * `@sewing/shared/order-applications`, чтобы UI-форма и backend
  * Zod-схема не разъезжались.
  */
 
-import { Plus, Trash2 } from 'lucide-react';
+import { Copy, Plus, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import {
   ORDER_APPLICATION_STAGES,
@@ -41,11 +52,6 @@ import {
   type OrderApplicationType,
 } from '@sewing/shared/order-applications';
 
-/**
- * Локальное представление строки в UI-форме. Все числовые поля —
- * строкой, чтобы корректно работать с `<input value=…>` без
- * NaN-маневров. Конвертация в payload — в `rowToInput` ниже.
- */
 /**
  * Адресация нанесения на один размер в UI-форме. `quantity` — строка
  * (пусто = «весь размер»).
@@ -84,6 +90,18 @@ export interface ApplicationRow {
   comment: string;
   fileUrl: string;
   status: OrderApplicationStatus;
+  /**
+   * Комплект (этап «Комплекты нанесений»): `groupKey` — стабильный id
+   * комплекта (null = одиночное нанесение), `groupLabel` — его
+   * название. Нанесения одного комплекта имеют одинаковые
+   * `scope`/`quantity`/`sizes` (синхронизируются UI).
+   */
+  groupKey: string | null;
+  groupLabel: string;
+}
+
+function genGroupKey(): string {
+  return `kit-${Math.random().toString(36).slice(2)}`;
 }
 
 export function blankApplicationRow(): ApplicationRow {
@@ -104,6 +122,8 @@ export function blankApplicationRow(): ApplicationRow {
     comment: '',
     fileUrl: '',
     status: 'PLANNED',
+    groupKey: null,
+    groupLabel: '',
   };
 }
 
@@ -132,6 +152,8 @@ export function applicationRowFromDto(
     comment: app.comment ?? '',
     fileUrl: app.fileUrl ?? '',
     status: app.status,
+    groupKey: app.groupKey ?? null,
+    groupLabel: app.groupLabel ?? '',
   };
 }
 
@@ -186,7 +208,15 @@ function rowToInput(row: ApplicationRow): Record<string, unknown> {
     comment: trim(row.comment),
     fileUrl: trim(row.fileUrl),
     status: row.status,
+    // Комплект: groupLabel имеет смысл только при наличии groupKey.
+    groupKey: row.groupKey,
+    groupLabel: row.groupKey ? trim(row.groupLabel) : null,
   };
+}
+
+interface SizeOption {
+  id: string;
+  code: string;
 }
 
 interface Props {
@@ -202,25 +232,21 @@ interface Props {
    * это контракт `buildCreateDto` (`apps/web/app/orders/actions.ts`)
    * и `saveOrderApplicationsAction`
    * (`apps/web/app/admin/orders/[id]/applications-actions.ts`).
-   * Поменять имя имеет смысл только для нестандартных вызывающих —
-   * в текущей кодовой базе всегда стоит дефолт.
    */
   inputName?: string;
   /**
    * Если форма уже сабмитится / валится — блокируем кнопки
    * «Добавить» / «Удалить», чтобы пользователь не вмешивался в
-   * процесс сохранения. Не блокирует поля ввода — это сознательно
-   * (Next.js `pending`-state коротковременный).
+   * процесс сохранения.
    */
   disabled?: boolean;
   /**
    * Размеры заказа для адресации нанесения «на выбранные размеры»
    * (этап «Нанесение по размерам»). В форме создания заказа — размеры
    * выбранного лекала; в DRAFT-карточке — фактические размеры заказа.
-   * Если список пуст — режим «выбранные размеры» недоступен (нанесение
-   * можно завести только на весь тираж).
+   * Если список пуст — режим «выбранные размеры» недоступен.
    */
-  availableSizes?: { id: string; code: string }[];
+  availableSizes?: SizeOption[];
 }
 
 export function OrderApplicationsEditor({
@@ -236,46 +262,141 @@ export function OrderApplicationsEditor({
     [rows],
   );
 
-  const hasSizes = availableSizes.length > 0;
+  // -------------------------------------------------------------------------
+  // Группировка строк в блоки для рендера: комплект (kit) или одиночное
+  // нанесение (solo). Порядок — по первому появлению groupKey.
+  // -------------------------------------------------------------------------
+  const blocks = useMemo(() => {
+    type Block =
+      | { kind: 'kit'; key: string; idxs: number[] }
+      | { kind: 'solo'; idx: number };
+    const out: Block[] = [];
+    const kitByKey = new Map<string, { kind: 'kit'; key: string; idxs: number[] }>();
+    rows.forEach((r, i) => {
+      if (r.groupKey) {
+        let b = kitByKey.get(r.groupKey);
+        if (!b) {
+          b = { kind: 'kit', key: r.groupKey, idxs: [] };
+          kitByKey.set(r.groupKey, b);
+          out.push(b);
+        }
+        b.idxs.push(i);
+      } else {
+        out.push({ kind: 'solo', idx: i });
+      }
+    });
+    return out;
+  }, [rows]);
 
+  // -------------------------------------------------------------------------
+  // Мутаторы строк
+  // -------------------------------------------------------------------------
   function updateRow(idx: number, patch: Partial<ApplicationRow>): void {
-    setRows((curr) =>
-      curr.map((r, i) => (i === idx ? { ...r, ...patch } : r)),
-    );
-  }
-  function addRow(): void {
-    setRows((curr) => [...curr, blankApplicationRow()]);
+    setRows((curr) => curr.map((r, i) => (i === idx ? { ...r, ...patch } : r)));
   }
   function removeRow(idx: number): void {
     setRows((curr) => curr.filter((_, i) => i !== idx));
   }
-  /** Включить/выключить размер в адресации нанесения. */
+  /** Включить/выключить размер у одного нанесения (одиночное). */
   function toggleSize(idx: number, sizeId: string, on: boolean): void {
     setRows((curr) =>
-      curr.map((r, i) => {
-        if (i !== idx) return r;
-        const sizes = on
-          ? r.sizes.some((s) => s.sizeId === sizeId)
-            ? r.sizes
-            : [...r.sizes, { sizeId, quantity: '' }]
-          : r.sizes.filter((s) => s.sizeId !== sizeId);
-        return { ...r, sizes };
-      }),
+      curr.map((r, i) => (i === idx ? withSizeToggled(r, sizeId, on) : r)),
     );
   }
-  /** Поразмерное количество (пусто = весь размер). */
   function setSizeQty(idx: number, sizeId: string, quantity: string): void {
     setRows((curr) =>
-      curr.map((r, i) => {
-        if (i !== idx) return r;
-        return {
-          ...r,
-          sizes: r.sizes.map((s) =>
-            s.sizeId === sizeId ? { ...s, quantity } : s,
-          ),
-        };
-      }),
+      curr.map((r, i) => (i === idx ? withSizeQty(r, sizeId, quantity) : r)),
     );
+  }
+  function addSolo(): void {
+    setRows((curr) => [...curr, blankApplicationRow()]);
+  }
+
+  // -------------------------------------------------------------------------
+  // Мутаторы комплектов (применяются ко ВСЕМ нанесениям группы)
+  // -------------------------------------------------------------------------
+  function mapGroup(
+    key: string,
+    fn: (r: ApplicationRow) => ApplicationRow,
+  ): void {
+    setRows((curr) => curr.map((r) => (r.groupKey === key ? fn(r) : r)));
+  }
+  function setKitScope(key: string, scope: ApplicationScope): void {
+    mapGroup(key, (r) => ({ ...r, scope }));
+  }
+  function setKitQuantity(key: string, quantity: string): void {
+    mapGroup(key, (r) => ({ ...r, quantity }));
+  }
+  function setKitLabel(key: string, label: string): void {
+    mapGroup(key, (r) => ({ ...r, groupLabel: label }));
+  }
+  function kitToggleSize(key: string, sizeId: string, on: boolean): void {
+    mapGroup(key, (r) => withSizeToggled(r, sizeId, on));
+  }
+  function kitSetSizeQty(key: string, sizeId: string, quantity: string): void {
+    mapGroup(key, (r) => withSizeQty(r, sizeId, quantity));
+  }
+  /** Добавить нанесение в комплект — наследует область применения. */
+  function addToKit(key: string): void {
+    setRows((curr) => {
+      const first = curr.find((r) => r.groupKey === key);
+      const base = blankApplicationRow();
+      const next: ApplicationRow = first
+        ? {
+            ...base,
+            groupKey: key,
+            groupLabel: first.groupLabel,
+            scope: first.scope,
+            quantity: first.quantity,
+            sizes: first.sizes.map((s) => ({ ...s })),
+          }
+        : { ...base, groupKey: key };
+      const lastIdx = lastIndexOfGroup(curr, key);
+      if (lastIdx < 0) return [...curr, next];
+      const copy = [...curr];
+      copy.splice(lastIdx + 1, 0, next);
+      return copy;
+    });
+  }
+  /** Дублировать весь комплект (новый groupKey, копии всех нанесений). */
+  function duplicateKit(key: string): void {
+    setRows((curr) => {
+      const members = curr.filter((r) => r.groupKey === key);
+      if (members.length === 0) return curr;
+      const newKey = genGroupKey();
+      const label = `${members[0].groupLabel || 'Комплект'} (копия)`;
+      const copies = members.map((m) => ({
+        ...m,
+        key: `new-${Math.random().toString(36).slice(2)}`,
+        groupKey: newKey,
+        groupLabel: label,
+        sizes: m.sizes.map((s) => ({ ...s })),
+      }));
+      const lastIdx = lastIndexOfGroup(curr, key);
+      const at = (lastIdx < 0 ? curr.length - 1 : lastIdx) + 1;
+      const copy = [...curr];
+      copy.splice(at, 0, ...copies);
+      return copy;
+    });
+  }
+  function removeKit(key: string): void {
+    setRows((curr) => curr.filter((r) => r.groupKey !== key));
+  }
+  function addKit(): void {
+    const newKey = genGroupKey();
+    setRows((curr) => {
+      const kitCount = new Set(
+        curr.filter((r) => r.groupKey).map((r) => r.groupKey),
+      ).size;
+      return [
+        ...curr,
+        {
+          ...blankApplicationRow(),
+          groupKey: newKey,
+          groupLabel: `Комплект ${kitCount + 1}`,
+        },
+      ];
+    });
   }
 
   return (
@@ -294,307 +415,105 @@ export function OrderApplicationsEditor({
         </div>
       )}
 
-      {rows.map((row, idx) => (
-        <div
-          key={row.key}
-          className="admin-order-applications__row"
-          style={{
-            border: '1px solid var(--admin-border, #e5e7eb)',
-            borderRadius: 6,
-            padding: 12,
-            display: 'flex',
-            flexDirection: 'column',
-            gap: 8,
-          }}
-        >
-          <div
-            style={{
-              display: 'flex',
-              gap: 8,
-              flexWrap: 'wrap',
-              alignItems: 'flex-end',
-            }}
-          >
-            <label style={fieldStyle}>
-              <span>Тип</span>
-              <select
-                value={row.type}
-                onChange={(e) =>
-                  updateRow(idx, {
-                    type: e.target.value as OrderApplicationType,
-                  })
-                }
-              >
-                {ORDER_APPLICATION_TYPES.map((t) => (
-                  <option key={t} value={t}>
-                    {ORDER_APPLICATION_TYPE_LABELS[t]}
-                  </option>
-                ))}
-              </select>
-            </label>
+      {blocks.map((block) => {
+        if (block.kind === 'solo') {
+          const idx = block.idx;
+          const row = rows[idx];
+          return (
+            <div key={row.key} className="admin-order-applications__row">
+              {renderRowHeader(row, idx, false)}
+              <ScopeControls
+                radioName={`app-scope-${row.key}`}
+                scope={row.scope}
+                quantity={row.quantity}
+                sizes={row.sizes}
+                availableSizes={availableSizes}
+                onScope={(s) => updateRow(idx, { scope: s })}
+                onQuantity={(v) => updateRow(idx, { quantity: v })}
+                onToggleSize={(sizeId, on) => toggleSize(idx, sizeId, on)}
+                onSizeQty={(sizeId, v) => setSizeQty(idx, sizeId, v)}
+              />
+              {renderRowGrid(row, idx)}
+            </div>
+          );
+        }
 
-            <label style={fieldStyle}>
-              <span>Когда выполняется</span>
-              <select
-                value={row.stage}
-                onChange={(e) =>
-                  updateRow(idx, {
-                    stage: e.target.value as OrderApplicationStage,
-                  })
-                }
+        // kit
+        const first = rows[block.idxs[0]];
+        return (
+          <div key={block.key} className="admin-order-applications__kit">
+            <div className="admin-order-applications__kit-head">
+              <input
+                type="text"
+                className="admin-order-applications__kit-name"
+                value={first.groupLabel}
+                onChange={(e) => setKitLabel(block.key, e.target.value)}
+                placeholder="Название комплекта (например: Перёд + спина)"
+              />
+              <button
+                type="button"
+                className="admin-btn admin-btn--ghost"
+                onClick={() => removeKit(block.key)}
+                disabled={disabled}
+                title="Удалить комплект целиком"
               >
-                {ORDER_APPLICATION_STAGES.map((s) => (
-                  <option key={s} value={s}>
-                    {ORDER_APPLICATION_STAGE_LABELS[s]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <label style={fieldStyle}>
-              <span>Статус</span>
-              <select
-                value={row.status}
-                onChange={(e) =>
-                  updateRow(idx, {
-                    status: e.target.value as OrderApplicationStatus,
-                  })
-                }
-              >
-                {ORDER_APPLICATION_STATUSES.map((s) => (
-                  <option key={s} value={s}>
-                    {ORDER_APPLICATION_STATUS_LABELS[s]}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <button
-              type="button"
-              className="admin-btn admin-btn--ghost"
-              onClick={() => removeRow(idx)}
-              title="Удалить нанесение"
-              disabled={disabled}
-              style={{ marginLeft: 'auto' }}
-            >
-              <Trash2 size={14} strokeWidth={1.6} aria-hidden /> Удалить
-            </button>
-          </div>
-
-          {/* Область применения (этап «Нанесение по размерам»):
-              весь тираж / выбранные размеры с поразмерным количеством. */}
-          <div className="admin-order-applications__scope">
-            <span className="admin-order-applications__scope-label">
-              Применить к
-            </span>
-            <div className="admin-order-applications__scope-modes">
-              <label className="admin-order-applications__radio">
-                <input
-                  type="radio"
-                  name={`app-scope-${row.key}`}
-                  checked={row.scope === 'ORDER'}
-                  onChange={() => updateRow(idx, { scope: 'ORDER' })}
-                />
-                <span>Весь тираж</span>
-              </label>
-              <label
-                className="admin-order-applications__radio"
-                title={
-                  hasSizes
-                    ? undefined
-                    : 'Сначала выберите лекало и план по размерам'
-                }
-                style={hasSizes ? undefined : { opacity: 0.5 }}
-              >
-                <input
-                  type="radio"
-                  name={`app-scope-${row.key}`}
-                  checked={row.scope === 'SIZES'}
-                  disabled={!hasSizes}
-                  onChange={() => updateRow(idx, { scope: 'SIZES' })}
-                />
-                <span>Выбранные размеры</span>
-              </label>
+                <Trash2 size={14} strokeWidth={1.6} aria-hidden /> Удалить
+                комплект
+              </button>
             </div>
 
-            {row.scope === 'ORDER' ? (
-              <label
-                style={{ ...fieldStyle, maxWidth: 220 }}
-                className="admin-order-applications__scope-qty"
-              >
-                <span>Количество из тиража</span>
-                <input
-                  type="number"
-                  min={0}
-                  step="any"
-                  value={row.quantity}
-                  onChange={(e) =>
-                    updateRow(idx, { quantity: e.target.value })
-                  }
-                  placeholder="пусто = весь тираж"
-                />
-              </label>
-            ) : hasSizes ? (
-              <div className="admin-order-applications__sizes">
-                {availableSizes.map((sz) => {
-                  const sel = row.sizes.find((s) => s.sizeId === sz.id);
-                  const checked = sel != null;
-                  return (
-                    <div
-                      key={sz.id}
-                      className={
-                        'admin-order-applications__size-chip' +
-                        (checked
-                          ? ' admin-order-applications__size-chip--on'
-                          : '')
-                      }
-                    >
-                      <label className="admin-order-applications__size-toggle">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={(e) =>
-                            toggleSize(idx, sz.id, e.target.checked)
-                          }
-                        />
-                        <span>{sz.code}</span>
-                      </label>
-                      {checked && (
-                        <input
-                          type="number"
-                          min={0}
-                          step="any"
-                          className="admin-order-applications__size-qty"
-                          value={sel?.quantity ?? ''}
-                          onChange={(e) =>
-                            setSizeQty(idx, sz.id, e.target.value)
-                          }
-                          placeholder="всё"
-                          title="Количество на этот размер (пусто = весь размер)"
-                        />
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-            ) : (
-              <div
-                className="admin-muted"
-                style={{ fontSize: '0.8rem' }}
-              >
-                Нет доступных размеров для адресации.
-              </div>
-            )}
-          </div>
+            <ScopeControls
+              radioName={`kit-scope-${block.key}`}
+              scope={first.scope}
+              quantity={first.quantity}
+              sizes={first.sizes}
+              availableSizes={availableSizes}
+              onScope={(s) => setKitScope(block.key, s)}
+              onQuantity={(v) => setKitQuantity(block.key, v)}
+              onToggleSize={(sizeId, on) =>
+                kitToggleSize(block.key, sizeId, on)
+              }
+              onSizeQty={(sizeId, v) => kitSetSizeQty(block.key, sizeId, v)}
+            />
 
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-              gap: 8,
-            }}
-          >
-            <label style={fieldStyle}>
-              <span>Место</span>
-              <input
-                type="text"
-                value={row.placement}
-                onChange={(e) =>
-                  updateRow(idx, { placement: e.target.value })
-                }
-                placeholder="Например: грудь"
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>Ширина, мм</span>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={row.widthMm}
-                onChange={(e) =>
-                  updateRow(idx, { widthMm: e.target.value })
-                }
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>Высота, мм</span>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={row.heightMm}
-                onChange={(e) =>
-                  updateRow(idx, { heightMm: e.target.value })
-                }
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>Кол-во цветов</span>
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={row.colorsCount}
-                onChange={(e) =>
-                  updateRow(idx, { colorsCount: e.target.value })
-                }
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>Единица</span>
-              <input
-                type="text"
-                value={row.unit}
-                onChange={(e) => updateRow(idx, { unit: e.target.value })}
-              />
-            </label>
-            <label style={fieldStyle}>
-              <span>Цвет / описание</span>
-              <input
-                type="text"
-                value={row.colorText}
-                onChange={(e) =>
-                  updateRow(idx, { colorText: e.target.value })
-                }
-                placeholder="белый, PMS 185 C, …"
-              />
-            </label>
-            <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
-              <span>Описание</span>
-              <input
-                type="text"
-                value={row.description}
-                onChange={(e) =>
-                  updateRow(idx, { description: e.target.value })
-                }
-                placeholder="Текст принта / описание макета"
-              />
-            </label>
-            <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
-              <span>Комментарий</span>
-              <input
-                type="text"
-                value={row.comment}
-                onChange={(e) =>
-                  updateRow(idx, { comment: e.target.value })
-                }
-              />
-            </label>
-            <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
-              <span>Ссылка на файл макета</span>
-              <input
-                type="url"
-                value={row.fileUrl}
-                onChange={(e) =>
-                  updateRow(idx, { fileUrl: e.target.value })
-                }
-                placeholder="https://…"
-              />
-            </label>
+            <div className="admin-order-applications__kit-members">
+              {block.idxs.map((idx) => {
+                const row = rows[idx];
+                return (
+                  <div
+                    key={row.key}
+                    className="admin-order-applications__kit-member"
+                  >
+                    {renderRowHeader(row, idx, true)}
+                    {renderRowGrid(row, idx)}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="admin-order-applications__kit-actions">
+              <button
+                type="button"
+                className="admin-btn admin-btn--ghost"
+                onClick={() => addToKit(block.key)}
+                disabled={disabled}
+              >
+                <Plus size={14} strokeWidth={1.6} aria-hidden /> Нанесение в
+                комплект
+              </button>
+              <button
+                type="button"
+                className="admin-btn admin-btn--ghost"
+                onClick={() => duplicateKit(block.key)}
+                disabled={disabled}
+              >
+                <Copy size={14} strokeWidth={1.6} aria-hidden /> Дублировать
+                комплект
+              </button>
+            </div>
           </div>
-        </div>
-      ))}
+        );
+      })}
 
       <div
         style={{
@@ -607,12 +526,350 @@ export function OrderApplicationsEditor({
         <button
           type="button"
           className="admin-btn admin-btn--ghost"
-          onClick={addRow}
+          onClick={addSolo}
           disabled={disabled}
         >
           <Plus size={14} strokeWidth={1.6} aria-hidden /> Добавить нанесение
         </button>
+        <button
+          type="button"
+          className="admin-btn admin-btn--ghost"
+          onClick={addKit}
+          disabled={disabled}
+        >
+          <Plus size={14} strokeWidth={1.6} aria-hidden /> Новый комплект
+        </button>
       </div>
+    </div>
+  );
+
+  // -------------------------------------------------------------------------
+  // Рендер полей одного нанесения (без блока «Применить к»).
+  // -------------------------------------------------------------------------
+  function renderRowHeader(
+    row: ApplicationRow,
+    idx: number,
+    inKit: boolean,
+  ): JSX.Element {
+    return (
+      <div
+        style={{
+          display: 'flex',
+          gap: 8,
+          flexWrap: 'wrap',
+          alignItems: 'flex-end',
+        }}
+      >
+        <label style={fieldStyle}>
+          <span>Тип</span>
+          <select
+            value={row.type}
+            onChange={(e) =>
+              updateRow(idx, { type: e.target.value as OrderApplicationType })
+            }
+          >
+            {ORDER_APPLICATION_TYPES.map((t) => (
+              <option key={t} value={t}>
+                {ORDER_APPLICATION_TYPE_LABELS[t]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={fieldStyle}>
+          <span>Когда выполняется</span>
+          <select
+            value={row.stage}
+            onChange={(e) =>
+              updateRow(idx, { stage: e.target.value as OrderApplicationStage })
+            }
+          >
+            {ORDER_APPLICATION_STAGES.map((s) => (
+              <option key={s} value={s}>
+                {ORDER_APPLICATION_STAGE_LABELS[s]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label style={fieldStyle}>
+          <span>Статус</span>
+          <select
+            value={row.status}
+            onChange={(e) =>
+              updateRow(idx, {
+                status: e.target.value as OrderApplicationStatus,
+              })
+            }
+          >
+            {ORDER_APPLICATION_STATUSES.map((s) => (
+              <option key={s} value={s}>
+                {ORDER_APPLICATION_STATUS_LABELS[s]}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <button
+          type="button"
+          className="admin-btn admin-btn--ghost"
+          onClick={() => removeRow(idx)}
+          title={inKit ? 'Убрать нанесение из комплекта' : 'Удалить нанесение'}
+          disabled={disabled}
+          style={{ marginLeft: 'auto' }}
+        >
+          <Trash2 size={14} strokeWidth={1.6} aria-hidden />{' '}
+          {inKit ? 'Убрать' : 'Удалить'}
+        </button>
+      </div>
+    );
+  }
+
+  function renderRowGrid(row: ApplicationRow, idx: number): JSX.Element {
+    return (
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
+          gap: 8,
+        }}
+      >
+        <label style={fieldStyle}>
+          <span>Место</span>
+          <input
+            type="text"
+            value={row.placement}
+            onChange={(e) => updateRow(idx, { placement: e.target.value })}
+            placeholder="Например: грудь"
+          />
+        </label>
+        <label style={fieldStyle}>
+          <span>Ширина, мм</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={row.widthMm}
+            onChange={(e) => updateRow(idx, { widthMm: e.target.value })}
+          />
+        </label>
+        <label style={fieldStyle}>
+          <span>Высота, мм</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={row.heightMm}
+            onChange={(e) => updateRow(idx, { heightMm: e.target.value })}
+          />
+        </label>
+        <label style={fieldStyle}>
+          <span>Кол-во цветов</span>
+          <input
+            type="number"
+            min={1}
+            step={1}
+            value={row.colorsCount}
+            onChange={(e) => updateRow(idx, { colorsCount: e.target.value })}
+          />
+        </label>
+        <label style={fieldStyle}>
+          <span>Единица</span>
+          <input
+            type="text"
+            value={row.unit}
+            onChange={(e) => updateRow(idx, { unit: e.target.value })}
+          />
+        </label>
+        <label style={fieldStyle}>
+          <span>Цвет / описание</span>
+          <input
+            type="text"
+            value={row.colorText}
+            onChange={(e) => updateRow(idx, { colorText: e.target.value })}
+            placeholder="белый, PMS 185 C, …"
+          />
+        </label>
+        <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
+          <span>Описание</span>
+          <input
+            type="text"
+            value={row.description}
+            onChange={(e) => updateRow(idx, { description: e.target.value })}
+            placeholder="Текст принта / описание макета"
+          />
+        </label>
+        <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
+          <span>Комментарий</span>
+          <input
+            type="text"
+            value={row.comment}
+            onChange={(e) => updateRow(idx, { comment: e.target.value })}
+          />
+        </label>
+        <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
+          <span>Ссылка на файл макета</span>
+          <input
+            type="url"
+            value={row.fileUrl}
+            onChange={(e) => updateRow(idx, { fileUrl: e.target.value })}
+            placeholder="https://…"
+          />
+        </label>
+      </div>
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Pure-хелперы строк (вне компонента — не зависят от state).
+// ---------------------------------------------------------------------------
+function withSizeToggled(
+  r: ApplicationRow,
+  sizeId: string,
+  on: boolean,
+): ApplicationRow {
+  const has = r.sizes.some((s) => s.sizeId === sizeId);
+  const sizes = on
+    ? has
+      ? r.sizes
+      : [...r.sizes, { sizeId, quantity: '' }]
+    : r.sizes.filter((s) => s.sizeId !== sizeId);
+  return { ...r, sizes };
+}
+
+function withSizeQty(
+  r: ApplicationRow,
+  sizeId: string,
+  quantity: string,
+): ApplicationRow {
+  return {
+    ...r,
+    sizes: r.sizes.map((s) => (s.sizeId === sizeId ? { ...s, quantity } : s)),
+  };
+}
+
+function lastIndexOfGroup(rows: ApplicationRow[], key: string): number {
+  let last = -1;
+  rows.forEach((r, i) => {
+    if (r.groupKey === key) last = i;
+  });
+  return last;
+}
+
+// ---------------------------------------------------------------------------
+// Блок «Применить к» (общий для одиночного нанесения и комплекта).
+// ---------------------------------------------------------------------------
+interface ScopeControlsProps {
+  radioName: string;
+  scope: ApplicationScope;
+  quantity: string;
+  sizes: ApplicationSizeRow[];
+  availableSizes: SizeOption[];
+  onScope: (scope: ApplicationScope) => void;
+  onQuantity: (value: string) => void;
+  onToggleSize: (sizeId: string, on: boolean) => void;
+  onSizeQty: (sizeId: string, value: string) => void;
+}
+
+function ScopeControls({
+  radioName,
+  scope,
+  quantity,
+  sizes,
+  availableSizes,
+  onScope,
+  onQuantity,
+  onToggleSize,
+  onSizeQty,
+}: ScopeControlsProps): JSX.Element {
+  const hasSizes = availableSizes.length > 0;
+  return (
+    <div className="admin-order-applications__scope">
+      <span className="admin-order-applications__scope-label">Применить к</span>
+      <div className="admin-order-applications__scope-modes">
+        <label className="admin-order-applications__radio">
+          <input
+            type="radio"
+            name={radioName}
+            checked={scope === 'ORDER'}
+            onChange={() => onScope('ORDER')}
+          />
+          <span>Весь тираж</span>
+        </label>
+        <label
+          className="admin-order-applications__radio"
+          title={hasSizes ? undefined : 'Сначала выберите лекало и план по размерам'}
+          style={hasSizes ? undefined : { opacity: 0.5 }}
+        >
+          <input
+            type="radio"
+            name={radioName}
+            checked={scope === 'SIZES'}
+            disabled={!hasSizes}
+            onChange={() => onScope('SIZES')}
+          />
+          <span>Выбранные размеры</span>
+        </label>
+      </div>
+
+      {scope === 'ORDER' ? (
+        <label
+          style={{ ...fieldStyle, maxWidth: 220 }}
+          className="admin-order-applications__scope-qty"
+        >
+          <span>Количество из тиража</span>
+          <input
+            type="number"
+            min={0}
+            step="any"
+            value={quantity}
+            onChange={(e) => onQuantity(e.target.value)}
+            placeholder="пусто = весь тираж"
+          />
+        </label>
+      ) : hasSizes ? (
+        <div className="admin-order-applications__sizes">
+          {availableSizes.map((sz) => {
+            const sel = sizes.find((s) => s.sizeId === sz.id);
+            const checked = sel != null;
+            return (
+              <div
+                key={sz.id}
+                className={
+                  'admin-order-applications__size-chip' +
+                  (checked ? ' admin-order-applications__size-chip--on' : '')
+                }
+              >
+                <label className="admin-order-applications__size-toggle">
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={(e) => onToggleSize(sz.id, e.target.checked)}
+                  />
+                  <span>{sz.code}</span>
+                </label>
+                {checked && (
+                  <input
+                    type="number"
+                    min={0}
+                    step="any"
+                    className="admin-order-applications__size-qty"
+                    value={sel?.quantity ?? ''}
+                    onChange={(e) => onSizeQty(sz.id, e.target.value)}
+                    placeholder="всё"
+                    title="Количество на этот размер (пусто = весь размер)"
+                  />
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="admin-muted" style={{ fontSize: '0.8rem' }}>
+          Нет доступных размеров для адресации.
+        </div>
+      )}
     </div>
   );
 }

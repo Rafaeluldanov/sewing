@@ -150,6 +150,8 @@ export class OrderApplicationsService {
             comment: app.comment ?? null,
             fileUrl: app.fileUrl ?? null,
             status: app.status ?? 'PLANNED',
+            groupKey: app.groupKey ?? null,
+            groupLabel: app.groupLabel ?? null,
             sizes:
               sizeRows.length > 0
                 ? {
@@ -218,6 +220,8 @@ export class OrderApplicationsService {
       fileUrl: row.fileUrl,
       status,
       statusLabel: ORDER_APPLICATION_STATUS_LABELS[status] ?? row.status,
+      groupKey: row.groupKey,
+      groupLabel: row.groupLabel,
       sizes: row.sizes.map((s) => ({
         sizeId: s.sizeId,
         sizeCode: s.size.code,

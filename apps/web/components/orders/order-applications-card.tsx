@@ -138,10 +138,71 @@ function ReadOnlyList({
       />
     );
   }
+
+  // Группируем по комплектам (этап «Комплекты нанесений»): нанесения
+  // одного комплекта показываем под общим заголовком с одной «Применить
+  // к» (она одинаковая у всех участников). Одиночные — как раньше.
+  type Block =
+    | { kind: 'kit'; key: string; label: string; apps: OrderApplicationDto[] }
+    | { kind: 'solo'; app: OrderApplicationDto };
+  const blocks: Block[] = [];
+  const kitByKey = new Map<string, Extract<Block, { kind: 'kit' }>>();
+  for (const app of applications) {
+    if (app.groupKey) {
+      let b = kitByKey.get(app.groupKey);
+      if (!b) {
+        b = {
+          kind: 'kit',
+          key: app.groupKey,
+          label: app.groupLabel ?? 'Комплект',
+          apps: [],
+        };
+        kitByKey.set(app.groupKey, b);
+        blocks.push(b);
+      }
+      b.apps.push(app);
+    } else {
+      blocks.push({ kind: 'solo', app });
+    }
+  }
+
   return (
-    <ul className="admin-order-applications__list">
-      {applications.map((app) => (
-        <li key={app.id} className="admin-order-applications__item">
+    <div className="admin-order-applications__blocks">
+      {blocks.map((block) =>
+        block.kind === 'kit' ? (
+          <div key={block.key} className="admin-order-applications__kit-ro">
+            <div className="admin-order-applications__kit-ro-head">
+              <Stamp size={14} strokeWidth={1.7} aria-hidden />
+              <strong>{block.label || 'Комплект'}</strong>
+              <span className="admin-order-applications__kit-ro-scope">
+                {describeApplicationScope(block.apps[0])}
+              </span>
+            </div>
+            <ul className="admin-order-applications__list">
+              {block.apps.map((app) => (
+                <ApplicationItem key={app.id} app={app} hideScope />
+              ))}
+            </ul>
+          </div>
+        ) : (
+          <ul key={block.app.id} className="admin-order-applications__list">
+            <ApplicationItem app={block.app} />
+          </ul>
+        ),
+      )}
+    </div>
+  );
+}
+
+function ApplicationItem({
+  app,
+  hideScope = false,
+}: {
+  app: OrderApplicationDto;
+  hideScope?: boolean;
+}) {
+  return (
+    <li className="admin-order-applications__item">
           <div className="admin-order-applications__item-head">
             <strong>{app.typeLabel}</strong>
             <AdminStatusBadge tone="muted">{app.stageLabel}</AdminStatusBadge>
@@ -170,8 +231,12 @@ function ReadOnlyList({
                 <dd>{app.colorsCount}</dd>
               </>
             )}
-            <dt>Применить к</dt>
-            <dd>{describeApplicationScope(app)}</dd>
+            {!hideScope && (
+              <>
+                <dt>Применить к</dt>
+                <dd>{describeApplicationScope(app)}</dd>
+              </>
+            )}
             {app.colorText && (
               <>
                 <dt>Цвет / описание</dt>
@@ -201,8 +266,6 @@ function ReadOnlyList({
               </>
             )}
           </dl>
-        </li>
-      ))}
-    </ul>
+    </li>
   );
 }
