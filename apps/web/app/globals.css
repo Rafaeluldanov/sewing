@@ -11388,11 +11388,6 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: flex;
   flex-direction: column;
   gap: 6px;
-  /* Container-query контекст для compact orders-row: строка меряет
-     ширину этого списка (внутри карточки заказа), а не вьюпорта —
-     иначе с учётом сайдбара поля «не влезали» и обрезались. См.
-     `@container wnorows` ниже. */
-  container: wnorows / inline-size;
 }
 
 /* Backward-compat: старый класс `.workshop-need-section__list`
@@ -11924,132 +11919,6 @@ body:has(.admin-layout) .app-header { display: none !important; }
   }
 }
 
-/* ---------------------------------------------------------------------------
-   /admin/workshop-needs?view=orders — компактная SaaS-строка
-   потребности (`.workshop-order-need-row`). Используется внутри
-   `.workshop-order-group-card__body > .workshop-need-section` и
-   рендерится тем же `<InlineEditWorkshopNeedRow showOrderInfo={false}>`,
-   что и `view=lines`, но с упрощённой 10-колоночной сеткой:
-
-     1. Описание                           (minmax(260px, 1.8fr))
-     2. Нужно (calculatedQty)              (90px)
-     3. К закупке (purchaseQty)            (100px)
-     4. Цена за 1 <unit>                   (110px)
-     5. Валюта (RUB / USD)                 (90px)
-     6. Сумма                              (110px)
-     7. Поставщик (text fallback)          (minmax(130px, 1fr))
-     8. Дата поставки                      (118px)
-     9. Статус                             (128px)
-     10. Save (icon-кнопка) + comment-toggle  (auto)
-
-   Высота строки на desktop ≈ 64px (18px–22px поля + 8px отступы).
-   Без preview / order number / клиента / типа — они уже в header
-   карточки заказа. Без detail-link «Подробнее» — закупщик и так
-   уже знает, в каком заказе он находится. Комментарий скрыт по
-   умолчанию (см. `.workshop-order-need-row__comment-toggle`).
-   --------------------------------------------------------------------------- */
-
-.workshop-order-need-row {
-  display: grid;
-  grid-template-columns:
-    minmax(260px, 1.8fr)        /* description */
-    90px                        /* calc qty */
-    100px                       /* purchase qty */
-    110px                       /* unit price */
-    90px                        /* currency */
-    110px                       /* line total */
-    minmax(130px, 1fr)          /* supplier text */
-    118px                       /* expected date */
-    128px                       /* status */
-    auto;                       /* save + comment toggle */
-  gap: 8px;
-  align-items: center;
-  padding: 8px 12px;
-  border-radius: 12px;
-  background: #fff;
-  border: 1px solid var(--admin-border, #e3e9f2);
-  min-height: 56px;
-}
-
-.workshop-order-need-row + .workshop-order-need-row {
-  margin-top: 0;
-}
-
-.workshop-order-need-row__cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.workshop-order-need-row__description {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  min-width: 0;
-}
-
-.workshop-order-need-row__description .workshop-need-line__description-text {
-  font-size: 1rem;
-  font-weight: 600;
-  line-height: 1.3;
-}
-
-.workshop-order-need-row__cell--calc,
-.workshop-order-need-row__cell--total {
-  align-items: flex-end;
-  text-align: right;
-}
-
-.workshop-order-need-row__cell--save {
-  flex-direction: row;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 6px;
-  align-self: stretch;
-}
-
-/* Поля в orders-режиме компактнее: 32–36px высота, мягкая граница. */
-.workshop-order-need-row__field input[type="text"],
-.workshop-order-need-row__field input[type="date"],
-.workshop-order-need-row__field select {
-  width: 100%;
-  font-size: 0.83rem;
-  padding: 4px 8px;
-  min-height: 32px;
-  height: 32px;
-  box-sizing: border-box;
-  border-radius: 6px;
-  border: 1px solid var(--admin-border, #e3e9f2);
-  background: #fff;
-}
-
-.workshop-order-need-row__field input[type="text"]:focus,
-.workshop-order-need-row__field input[type="date"]:focus,
-.workshop-order-need-row__field select:focus {
-  outline: 2px solid var(--admin-accent, #2563eb);
-  outline-offset: -1px;
-  border-color: var(--admin-accent, #2563eb);
-}
-
-.workshop-order-need-row__save {
-  font-size: 0.78rem;
-  padding: 0;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  white-space: nowrap;
-}
-
-.workshop-order-need-row__save-text {
-  font-size: 0.85rem;
-  line-height: 1;
-}
-
 /* Comment-toggle: маленькая ghost-кнопка в правом краю строки.
    Если комментарий уже сохранён — добавляется маленький dot-бейдж
    справа от label, чтобы закупщик видел, что коммент есть. */
@@ -12209,54 +12078,6 @@ body:has(.admin-layout) .app-header { display: none !important; }
 
 .workshop-need-complete-form--compact .workshop-need-complete-form__alert {
   flex-basis: 100%;
-}
-
-/* Responsive для compact orders-row — по ШИРИНЕ СПИСКА
-   `.workshop-need-section__rows` (container query), а не вьюпорта.
-   Десктопная 10-колоночная строка требует ~1300px; ниже — карточка.
-   Пороги с запасом, чтобы поля не клипались за краем карточки заказа.
-
-   Тиры (по ширине контейнера `wnorows`):
-     < 1340px — карточка 4 колонки;
-     <  940px — 2 колонки;
-     <  620px — 1 колонка. */
-@container wnorows (max-width: 1340px) {
-  .workshop-order-need-row {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    grid-auto-flow: row dense;
-    align-items: end;
-    min-height: 0;
-  }
-
-  .workshop-order-need-row__description,
-  .workshop-order-need-row__cell--save,
-  .workshop-order-need-row__comment-toggle,
-  .workshop-order-need-row__comment {
-    grid-column: 1 / -1;
-  }
-
-  .workshop-order-need-row__cell--save {
-    justify-content: flex-end;
-    align-items: center;
-  }
-}
-
-@container wnorows (max-width: 940px) {
-  .workshop-order-need-row {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  }
-}
-
-/* Узкий контейнер: stacked-карточка, каждая ячейка в свою строку. */
-@container wnorows (max-width: 620px) {
-  .workshop-order-need-row {
-    grid-template-columns: minmax(0, 1fr);
-    padding: 12px;
-  }
-
-  .workshop-order-need-row__cell {
-    grid-column: 1 / -1;
-  }
 }
 
 /* Карточка заказа — ancestor контейнера `wnorows`, поэтому её

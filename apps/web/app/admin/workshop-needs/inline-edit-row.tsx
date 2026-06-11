@@ -248,25 +248,8 @@ function NomenclaturePreview({
   );
 }
 
-function SubmitButton({ compact }: { compact: boolean }) {
+function SubmitButton() {
   const { pending } = useFormStatus();
-  if (compact) {
-    return (
-      <button
-        type="submit"
-        className="admin-btn admin-btn--primary workshop-order-need-row__save"
-        disabled={pending}
-        title="Сохранить изменения"
-        aria-label="Сохранить"
-      >
-        {pending ? (
-          <span className="workshop-order-need-row__save-text">…</span>
-        ) : (
-          <CheckCircle2 size={16} strokeWidth={1.8} aria-hidden />
-        )}
-      </button>
-    );
-  }
   return (
     <button
       type="submit"
@@ -503,11 +486,11 @@ export function InlineEditWorkshopNeedRow({
       ? (need.quotedPrice ?? '')
       : pricePerBobbinToMeter(quotedPriceValue);
 
-  // Базовый класс формы: в lines-mode — старый grid с превью/клиентом,
-  // в orders-mode — компактный 10-колоночный SaaS-grid.
-  const rootClassName = showOrderInfo
-    ? 'workshop-need-line workshop-need-inline-form workshop-need-line--with-order'
-    : 'workshop-order-need-row workshop-need-inline-form';
+  // Базовый класс формы lines-mode — горизонтальный grid с превью /
+  // клиентом / типом. Сюда попадаем только при showOrderInfo=true:
+  // orders-mode отрисован выше отдельной зональной формой `.wn-zrow`.
+  const rootClassName =
+    'workshop-need-line workshop-need-inline-form workshop-need-line--with-order';
 
   // Secondary-строка описания: размер фурнитуры · материал · цвет
   // (см. ТЗ §5). Считаем один раз — переиспользуется в обоих макетах.
@@ -859,7 +842,7 @@ export function InlineEditWorkshopNeedRow({
       action={action}
       className={rootClassName}
       data-need-id={need.id}
-      data-variant={showOrderInfo ? 'lines' : 'orders'}
+      data-variant="lines"
     >
       {/* === checkbox bulk-PO (только в view=lines) === */}
       {bulkSelect && (
@@ -915,11 +898,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === Description === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--description'
-            : 'workshop-order-need-row__cell workshop-order-need-row__description'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--description'}
         data-cell="description"
       >
         <div className="workshop-need-line__description-row">
@@ -979,11 +958,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === calculatedQty + unit === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--calc'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--calc'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--calc'}
         data-cell="calc"
       >
         <span className="workshop-need-line__hint">Нужно</span>
@@ -995,11 +970,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === purchaseQty input === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--purchase'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--purchase workshop-order-need-row__field'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--purchase'}
         data-cell="purchase"
       >
         {isButton ? (
@@ -1085,11 +1056,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === quotedPrice input (label = «Цена за 1 <unit>») === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--price'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--price workshop-order-need-row__field'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--price'}
         data-cell="price"
       >
         <label
@@ -1126,11 +1093,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === currency select === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--currency'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--currency workshop-order-need-row__field'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--currency'}
         data-cell="currency"
       >
         <label
@@ -1157,11 +1120,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === computed line total: finalQty × unit price === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--total'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--total'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--total'}
         data-cell="total"
       >
         <span className="workshop-need-line__hint">Сумма</span>
@@ -1192,11 +1151,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === Supplier: select из справочника (если включён модуль) + text fallback === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--supplier'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--supplier workshop-order-need-row__field'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--supplier'}
         data-cell="supplier"
       >
         <label
@@ -1251,11 +1206,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === expected delivery date === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--date'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--date workshop-order-need-row__field'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--date'}
         data-cell="date"
       >
         <label
@@ -1275,11 +1226,7 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === status === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--status'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--status workshop-order-need-row__field'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--status'}
         data-cell="status"
       >
         <label
@@ -1310,14 +1257,10 @@ export function InlineEditWorkshopNeedRow({
 
       {/* === Save button + detail link === */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-need-line__cell--save'
-            : 'workshop-order-need-row__cell workshop-order-need-row__cell--save'
-        }
+        className={'workshop-need-line__cell workshop-need-line__cell--save'}
         data-cell="save"
       >
-        <SubmitButton compact={!showOrderInfo} />
+        <SubmitButton />
         {showOrderInfo && (
           <Link
             href={detailHref}
@@ -1339,11 +1282,7 @@ export function InlineEditWorkshopNeedRow({
         меняли.
       */}
       <div
-        className={
-          showOrderInfo
-            ? 'workshop-need-line__cell workshop-order-need-row__comment-toggle workshop-order-need-row__comment-toggle--lines'
-            : 'workshop-order-need-row__cell workshop-order-need-row__comment-toggle'
-        }
+        className={'workshop-need-line__cell workshop-order-need-row__comment-toggle workshop-order-need-row__comment-toggle--lines'}
         data-cell="comment-toggle"
       >
         <button
