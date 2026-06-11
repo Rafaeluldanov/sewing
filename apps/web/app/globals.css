@@ -12278,6 +12278,321 @@ body:has(.admin-layout) .app-header { display: none !important; }
   }
 }
 
+/* ===========================================================================
+   /admin/workshop-needs?view=orders — ЗОНАЛЬНАЯ строка потребности
+   (`.wn-zrow`). Заменяет прежнюю 10-колоночную ленту, которая на
+   реальной ширине (контент-область минус сайдбар < 1340px) схлопывалась
+   в 4-колоночную «кашу» `auto-flow dense` без видимой группировки и с
+   разновысокими полями.
+   ---------------------------------------------------------------------------
+   Поля неоднородны по смыслу, поэтому строка собрана из трёх зон-блоков
+   с подписями и подложкой:
+     • РАСЧЁТ    (read-only вывод системы): описание + «Нужно N ед.»;
+     • ЗАКУПКА   (ввод закупщика + итог):   К закупке · Цена · Валюта → Сумма;
+     • ЛОГИСТИКА (процесс):                 Поставщик · Поставка · Статус · ✔.
+   Зоны — flex-айтемы: на широком layout идут в ряд, на узком переносятся
+   в стек целиком (группировка сохраняется на любой ширине). Все контролы
+   фиксированной высоты `--wn-fh` → поля в зоне выровнены.
+   Используется только в orders-режиме (`showOrderInfo=false`); построчный
+   вид `view=lines` остаётся на прежней `.workshop-need-line`.
+   =========================================================================== */
+
+.wn-zrow {
+  --wn-fh: 34px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: stretch;
+  background: #fff;
+  border: 1px solid var(--admin-border, #e3e9f2);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.wn-zrow + .wn-zrow {
+  margin-top: 8px;
+}
+
+.wn-zone {
+  flex: 1 1 300px;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  border-radius: 10px;
+  padding: 8px 10px;
+}
+
+.wn-zone--calc {
+  flex-grow: 1.25;
+  background: var(--admin-soft, #f8fafc);
+}
+
+.wn-zone--buy {
+  flex-grow: 1.35;
+  background: #f6f9ff;
+}
+
+.wn-zone--log {
+  flex-grow: 1.15;
+  background: #fafafa;
+}
+
+.wn-zone__cap {
+  font-size: 0.62rem;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--admin-muted, #64748b);
+  padding-bottom: 5px;
+  border-bottom: 2px solid var(--wn-cap-tone, var(--admin-border, #e2e8f0));
+}
+
+.wn-zone--buy .wn-zone__cap {
+  color: var(--admin-accent, #2563eb);
+  --wn-cap-tone: #93c5fd;
+}
+
+.wn-zone__body {
+  flex: 1;
+  min-width: 0;
+}
+
+/* --- общие поля внутри зон --- */
+.wn-field {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.wn-field__lab {
+  font-size: 0.62rem;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--admin-text-muted, #94a3b8);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wn-zrow input[type='text'],
+.wn-zrow input[type='date'],
+.wn-zrow select {
+  width: 100%;
+  box-sizing: border-box;
+  height: var(--wn-fh);
+  font-size: 0.85rem;
+  padding: 4px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--admin-border, #dbe2ea);
+  background: #fff;
+}
+
+.wn-zrow input:focus,
+.wn-zrow select:focus {
+  outline: 2px solid var(--admin-accent, #2563eb);
+  outline-offset: -1px;
+  border-color: var(--admin-accent, #2563eb);
+}
+
+.wn-zrow input:disabled,
+.wn-zrow select:disabled {
+  background: var(--admin-soft, #f1f5f9);
+  color: var(--admin-muted, #94a3b8);
+}
+
+/* read-only вывод расчёта — «чип» той же высоты, визуально не редактируемый */
+.wn-readout {
+  align-items: stretch;
+}
+
+.wn-readout__box {
+  height: var(--wn-fh);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  width: 100%;
+  box-sizing: border-box;
+  padding: 0 10px;
+  border-radius: 7px;
+  border: 1px dashed #cbd5e1;
+  background: #eef2f7;
+  font-size: 0.9rem;
+  font-weight: 700;
+  color: var(--admin-text, #1e293b);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.wn-readout--sum .wn-readout__box {
+  border-style: solid;
+  border-color: #bcd3f5;
+  background: #eaf2ff;
+  color: var(--admin-accent, #1d4ed8);
+}
+
+/* --- РАСЧЁТ: описание + «Нужно» --- */
+.wn-zone__body--calc {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+
+.wn-desc {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.wn-desc__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.wn-desc__img {
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  object-fit: cover;
+  flex: 0 0 auto;
+  background: var(--admin-soft, #f1f5f9);
+}
+
+.wn-desc__text {
+  font-size: 0.92rem;
+  font-weight: 600;
+  line-height: 1.3;
+  word-break: break-word;
+}
+
+.wn-desc__meta {
+  font-size: 0.74rem;
+  color: var(--admin-muted, #64748b);
+  line-height: 1.25;
+}
+
+.wn-desc__warning {
+  align-self: flex-start;
+  margin-top: 2px;
+  padding: 2px 8px;
+  font-size: 0.72rem;
+  line-height: 1.3;
+  border-radius: 999px;
+  background: var(--admin-tone-warning-bg, #fef3c7);
+  color: var(--admin-tone-warning-fg, #92400e);
+}
+
+.wn-zone__body--calc .wn-readout {
+  flex: 0 0 92px;
+}
+
+/* --- ЗАКУПКА: К закупке · Цена · Валюта, ниже = Сумма --- */
+.wn-zone__body--buy {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.wn-zone__body--buy > .wn-field {
+  flex: 1 1 78px;
+}
+
+.wn-zone__body--buy > .wn-readout--sum {
+  flex: 1 1 100%;
+}
+
+/* --- ЛОГИСТИКА: Поставщик (вся ширина) · Поставка · Статус · ✔ --- */
+.wn-zone__body--log {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-end;
+}
+
+.wn-zone__body--log > .wn-field--supplier {
+  flex: 1 1 100%;
+}
+
+.wn-zone__body--log > .wn-field--supplier select {
+  margin-bottom: 4px;
+}
+
+.wn-zone__body--log > .wn-field--date {
+  flex: 1 1 120px;
+}
+
+.wn-zone__body--log > .wn-field--status {
+  flex: 2 1 130px;
+}
+
+.wn-zone__body--log > .wn-field--save {
+  flex: 0 0 auto;
+  align-self: flex-end;
+}
+
+.wn-zone__body--log .wn-save {
+  height: var(--wn-fh);
+  min-width: 42px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--admin-accent, #2563eb);
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.wn-zone__body--log .wn-save:disabled {
+  opacity: 0.55;
+  cursor: default;
+}
+
+/* --- подвал строки: comment-toggle + раскрытый коммент + алерты --- */
+.wn-zrow__foot {
+  flex: 1 1 100%;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.wn-zrow__comment {
+  flex: 1 1 100%;
+}
+
+.wn-zrow__comment textarea {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 0.85rem;
+  padding: 6px 8px;
+  border-radius: 7px;
+  border: 1px solid var(--admin-border, #e3e9f2);
+  background: #fff;
+  resize: vertical;
+  min-height: 52px;
+}
+
+.wn-zrow__comment-view {
+  flex: 1 1 100%;
+}
+
+.wn-zrow .wn-zrow__alert {
+  flex: 1 1 100%;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.78rem;
+}
+
 /* ============================================================================
    Карточка операции — компактный блок «Экономика операции» (BY_SIZE).
    ----------------------------------------------------------------------------

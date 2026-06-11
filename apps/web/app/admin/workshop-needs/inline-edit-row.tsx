@@ -280,6 +280,22 @@ function SubmitButton({ compact }: { compact: boolean }) {
   );
 }
 
+/** Save-кнопка зонального orders-макета (иконка ✓, `.wn-save`). */
+function ZoneSaveButton() {
+  const { pending } = useFormStatus();
+  return (
+    <button
+      type="submit"
+      className="wn-save"
+      disabled={pending}
+      title="Сохранить изменения"
+      aria-label="Сохранить"
+    >
+      {pending ? '…' : <CheckCircle2 size={16} strokeWidth={1.8} aria-hidden />}
+    </button>
+  );
+}
+
 export interface SupplierOption {
   id: string;
   name: string;
@@ -492,6 +508,350 @@ export function InlineEditWorkshopNeedRow({
   const rootClassName = showOrderInfo
     ? 'workshop-need-line workshop-need-inline-form workshop-need-line--with-order'
     : 'workshop-order-need-row workshop-need-inline-form';
+
+  // Secondary-строка описания: размер фурнитуры · материал · цвет
+  // (см. ТЗ §5). Считаем один раз — переиспользуется в обоих макетах.
+  const descSecondaryParts: string[] = [];
+  if (need.hardwareSizeText) descSecondaryParts.push(need.hardwareSizeText);
+  if (need.hardwareMaterialText)
+    descSecondaryParts.push(need.hardwareMaterialText);
+  if (need.selectedColorText)
+    descSecondaryParts.push(`цвет ${need.selectedColorText}`);
+  const descSecondary =
+    descSecondaryParts.length > 0 ? descSecondaryParts.join(' · ') : null;
+
+  // ---------------------------------------------------------------------------
+  // orders-режим (`showOrderInfo=false`, /admin/workshop-needs?view=orders):
+  // строка собрана из трёх зон-блоков «Расчёт / Закупка / Логистика»
+  // (см. globals.css `.wn-zrow`). Поля сгруппированы по смыслу, read-only
+  // выводы вынесены в чипы, на реальной ширине зоны переносятся в стек
+  // целиком — без прежней 4-колоночной «каши».
+  // ---------------------------------------------------------------------------
+  if (!showOrderInfo) {
+    return (
+      <form
+        ref={formRef}
+        action={action}
+        className="wn-zrow workshop-need-inline-form"
+        data-need-id={need.id}
+        data-variant="orders"
+      >
+        {/* === ЗОНА: Расчёт (read-only вывод системы) === */}
+        <section className="wn-zone wn-zone--calc">
+          <div className="wn-zone__cap">Расчёт</div>
+          <div className="wn-zone__body wn-zone__body--calc">
+            <div className="wn-desc">
+              <div className="wn-desc__row">
+                {bulkSelect && <BulkCreatePoCheckbox need={need} />}
+                {need.materialImageUrl && (
+                  /* eslint-disable-next-line @next/next/no-img-element */
+                  <img
+                    className="wn-desc__img"
+                    src={need.materialImageUrl}
+                    alt={need.sourceName ?? need.description}
+                  />
+                )}
+                <span className="wn-desc__text">{need.description}</span>
+              </div>
+              {descSecondary && (
+                <span className="wn-desc__meta">{descSecondary}</span>
+              )}
+              {need.calculationNote && (
+                <span className="wn-desc__meta" title={need.calculationNote}>
+                  {need.calculationNote}
+                </span>
+              )}
+              {need.requiresColorSelection && !need.selectedColorText && (
+                <span
+                  className="wn-desc__warning"
+                  role="status"
+                  title="Цвет нужно указать в заказе"
+                >
+                  Цвет нужно указать в заказе
+                </span>
+              )}
+            </div>
+            <div className="wn-field wn-readout">
+              <span className="wn-field__lab">Нужно</span>
+              <div className="wn-readout__box">
+                {calcQtyDisplay}
+                {unitLabel ? ` ${unitLabel}` : ''}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* === ЗОНА: Закупка (ввод закупщика + итог) === */}
+        <section className="wn-zone wn-zone--buy">
+          <div className="wn-zone__cap">Закупка</div>
+          <div className="wn-zone__body wn-zone__body--buy">
+            {isButton ? (
+              <>
+                <label className="wn-field">
+                  <span className="wn-field__lab">Упаковок</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={packagesValue}
+                    onChange={(e) => setPackagesValue(e.target.value)}
+                    placeholder="0"
+                    disabled={isCancelled || isLockedByPo}
+                  />
+                </label>
+                <label className="wn-field">
+                  <span className="wn-field__lab">Шт/упак</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={packSizeValue}
+                    onChange={(e) => setPackSizeValue(e.target.value)}
+                    placeholder="0"
+                    disabled={isCancelled || isLockedByPo}
+                  />
+                </label>
+                {!(isCancelled || isLockedByPo) && (
+                  <>
+                    <input type="hidden" name="purchaseQty" value={submitButtonQty} />
+                    <input type="hidden" name="packSize" value={packSizeValue.trim()} />
+                  </>
+                )}
+              </>
+            ) : (
+              <label className="wn-field">
+                <span className="wn-field__lab">
+                  К закупке{isThread ? ', ярд' : ''}
+                </span>
+                <input
+                  name={isThread ? undefined : 'purchaseQty'}
+                  type="text"
+                  inputMode="decimal"
+                  value={purchaseQtyValue}
+                  onChange={(e) => setPurchaseQtyValue(e.target.value)}
+                  placeholder={calcQtyDisplay}
+                  disabled={isCancelled || isLockedByPo}
+                />
+                {isThread && !(isCancelled || isLockedByPo) && (
+                  <input
+                    type="hidden"
+                    name="purchaseQty"
+                    value={submitPurchaseQty ?? ''}
+                  />
+                )}
+              </label>
+            )}
+
+            <label className="wn-field">
+              <span className="wn-field__lab">{priceLabel}</span>
+              <input
+                name={isThread || isButton ? undefined : 'quotedPrice'}
+                type="text"
+                inputMode="decimal"
+                value={isButton ? packPriceValue : quotedPriceValue}
+                onChange={(e) =>
+                  isButton
+                    ? setPackPriceValue(e.target.value)
+                    : setQuotedPriceValue(e.target.value)
+                }
+                placeholder="0.00"
+                disabled={isCancelled}
+              />
+              {isThread && !isCancelled && (
+                <input type="hidden" name="quotedPrice" value={submitQuotedPrice ?? ''} />
+              )}
+              {isButton && !isCancelled && (
+                <input type="hidden" name="quotedPrice" value={submitButtonPrice} />
+              )}
+            </label>
+
+            <label className="wn-field">
+              <span className="wn-field__lab">Валюта</span>
+              <select
+                name="quotedCurrency"
+                value={currency}
+                onChange={(e) => setCurrency(e.target.value)}
+                disabled={isCancelled}
+              >
+                <option value="">—</option>
+                {MONEY_CURRENCIES.map((c) => (
+                  <option key={c} value={c}>
+                    {MONEY_CURRENCY_LABELS[c]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="wn-field wn-readout wn-readout--sum">
+              <span className="wn-field__lab">Сумма</span>
+              <div className="wn-readout__box" aria-live="polite">
+                {lineTotal !== null ? (
+                  <>
+                    = {formatLineTotalNumber(lineTotal)}
+                    {symbol ? ` ${symbol}` : ''}
+                  </>
+                ) : (
+                  '—'
+                )}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {/* === ЗОНА: Логистика (поставщик · дата · статус · сохранить) === */}
+        <section className="wn-zone wn-zone--log">
+          <div className="wn-zone__cap">Логистика</div>
+          <div className="wn-zone__body wn-zone__body--log">
+            <div className="wn-field wn-field--supplier">
+              <span className="wn-field__lab">Поставщик</span>
+              {suppliersEnabled && (
+                <select
+                  name="selectedSupplierId"
+                  defaultValue={need.selectedSupplierId ?? ''}
+                  disabled={isCancelled || isLockedByPo}
+                >
+                  <option value="">— из справочника —</option>
+                  {suppliers.map((s) => (
+                    <option key={s.id} value={s.id}>
+                      {s.name}
+                    </option>
+                  ))}
+                  {need.selectedSupplierId &&
+                    need.selectedSupplierName &&
+                    !suppliers.some((s) => s.id === need.selectedSupplierId) && (
+                      <option value={need.selectedSupplierId}>
+                        {need.selectedSupplierName} (неактивен)
+                      </option>
+                    )}
+                </select>
+              )}
+              <input
+                name="supplierNameText"
+                type="text"
+                maxLength={200}
+                defaultValue={need.supplierNameText ?? ''}
+                placeholder={
+                  suppliersEnabled
+                    ? 'или текстом (fallback)'
+                    : need.selectedSupplierName
+                      ? `Сейчас: ${need.selectedSupplierName}`
+                      : '—'
+                }
+                disabled={isCancelled}
+              />
+            </div>
+
+            <label className="wn-field wn-field--date">
+              <span className="wn-field__lab">Поставка</span>
+              <input
+                name="expectedDeliveryDate"
+                type="date"
+                defaultValue={isoToDateInput(need.expectedDeliveryDate)}
+                disabled={isCancelled}
+              />
+            </label>
+
+            <label className="wn-field wn-field--status">
+              <span className="wn-field__lab">Статус</span>
+              <select
+                name="status"
+                defaultValue={need.status}
+                disabled={isCancelled || isLockedByPo}
+              >
+                {WORKSHOP_NEED_STATUSES.map((s) => (
+                  <option key={s} value={s}>
+                    {WORKSHOP_NEED_STATUS_LABELS[s as WorkshopNeedStatus]}
+                  </option>
+                ))}
+              </select>
+            </label>
+
+            <div className="wn-field wn-field--save">
+              <span className="wn-field__lab" aria-hidden>
+                &nbsp;
+              </span>
+              <ZoneSaveButton />
+            </div>
+          </div>
+        </section>
+
+        {/* === Подвал: коммент-toggle + раскрытый коммент + алерты === */}
+        <div className="wn-zrow__foot">
+          <button
+            type="button"
+            className={`admin-btn admin-btn--ghost workshop-order-need-row__comment-button${
+              commentOpen ? ' workshop-order-need-row__comment-button--open' : ''
+            }${hasComment ? ' workshop-order-need-row__comment-button--has' : ''}`}
+            aria-expanded={commentOpen}
+            aria-controls={`wnm-${need.id}`}
+            onClick={() => {
+              if (commentOpen && !isCancelled) {
+                formRef.current?.requestSubmit();
+              }
+              setCommentOpen((v) => !v);
+            }}
+            title={hasComment ? `Комментарий: ${commentValue}` : 'Добавить комментарий'}
+          >
+            {commentOpen ? (
+              <ChevronUp size={14} strokeWidth={1.6} aria-hidden />
+            ) : (
+              <MessageSquare size={14} strokeWidth={1.6} aria-hidden />
+            )}
+            <span className="workshop-order-need-row__comment-button-label">
+              {commentOpen
+                ? 'Скрыть'
+                : hasComment
+                  ? 'Комментарий есть'
+                  : 'Комментарий'}
+            </span>
+            {hasComment && !commentOpen && (
+              <span className="workshop-order-need-row__comment-dot" aria-hidden />
+            )}
+          </button>
+        </div>
+
+        {commentOpen ? (
+          <div className="wn-zrow__comment">
+            <label htmlFor={`wnm-${need.id}`} className="wn-field__lab">
+              Комментарий закупщика
+            </label>
+            <textarea
+              id={`wnm-${need.id}`}
+              name="comment"
+              maxLength={1000}
+              value={commentValue}
+              onChange={(e) => setCommentValue(e.target.value)}
+              placeholder="—"
+              disabled={isCancelled}
+              rows={2}
+            />
+          </div>
+        ) : (
+          <>
+            <input type="hidden" name="comment" value={commentValue} />
+            {hasComment && (
+              <div className="wn-zrow__comment-view workshop-order-need-row__comment workshop-order-need-row__comment--readonly">
+                <p className="workshop-order-need-row__comment-text">
+                  {renderCommentWithLinks(commentValue)}
+                </p>
+              </div>
+            )}
+          </>
+        )}
+
+        {state.error && (
+          <div className="error-box wn-zrow__alert" role="alert">
+            <XCircle size={14} strokeWidth={1.6} aria-hidden />
+            <span>{state.error}</span>
+          </div>
+        )}
+        {state.ok && state.successMessage && (
+          <div className="success-box wn-zrow__alert" role="status">
+            <CheckCircle2 size={14} strokeWidth={1.6} aria-hidden />
+            <span>{state.successMessage}</span>
+          </div>
+        )}
+      </form>
+    );
+  }
 
   return (
     <form
