@@ -55,6 +55,8 @@
     "./order-samples": "./src/order-samples.ts",
     "./order-production-balance": "./src/order-production-balance.ts",
     "./production-cost": "./src/production-cost.ts",
+    "./order-actual-materials": "./src/order-actual-materials.ts",
+    "./treasury": "./src/treasury.ts",
     "./sizes": "./src/sizes.ts",
     "./cutting-tasks": "./src/cutting-tasks.ts",
     "./colors": "./src/colors.ts",
