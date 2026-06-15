@@ -215,9 +215,17 @@ export default async function AdminProductionCostPage({
       title="Себестоимость производства"
       subtitle="По номенклатуре, заказам, операциям и сотрудникам"
       actions={
-        <Link href="/production-cost" className="admin-btn admin-btn--ghost">
-          Дневной отчёт цеха
-        </Link>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Link
+            href="/admin/production-cost/materials-fact"
+            className="admin-btn"
+          >
+            Материалы: план → факт
+          </Link>
+          <Link href="/production-cost" className="admin-btn admin-btn--ghost">
+            Дневной отчёт цеха
+          </Link>
+        </div>
       }
     >
       {error && (

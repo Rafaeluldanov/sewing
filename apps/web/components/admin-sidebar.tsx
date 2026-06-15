@@ -49,6 +49,7 @@ import {
   ShoppingCart,
   Truck,
   Users,
+  Wallet,
   Warehouse,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -137,6 +138,17 @@ const FEATURE_PURCHASE_ORDERS_ENABLED = isFeatureEnabled(
  */
 const FEATURE_PURCHASE_RECEIPTS_ENABLED = isFeatureEnabled(
   process.env.NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS,
+);
+
+/**
+ * Feature-flag для модуля «Казначейство» (Treasury, Фаза 0 — журнал
+ * движения ДС, см. `apps/api/src/modules/treasury/*`). Та же логика
+ * default-on, что у остальных: backend `/api/treasury/*` доступен под
+ * `ADMIN`/`SHOP_MANAGER` всегда, флаг гейтит только пункт sidebar.
+ * Кладём рядом с «Себестоимостью» — UI-кластер «Финансы».
+ */
+const FEATURE_TREASURY_ENABLED = isFeatureEnabled(
+  process.env.NEXT_PUBLIC_FEATURE_TREASURY,
 );
 
 function buildSections(): SidebarItem[] {
@@ -278,6 +290,19 @@ function buildSections(): SidebarItem[] {
       href: '/admin/purchase-receipts',
       label: 'Приёмка поставок',
       Icon: ClipboardCheck,
+    });
+  }
+  if (FEATURE_TREASURY_ENABLED) {
+    // «Казначейство» — журнал движения ДС (Фаза 0). Кладём рядом с
+    // «Себестоимостью», образуя UI-кластер «Финансы». Fallback — в конец.
+    const pcIdx = items.findIndex(
+      (i) => i.href === '/admin/production-cost',
+    );
+    const insertAt = pcIdx >= 0 ? pcIdx + 1 : items.length;
+    items.splice(insertAt, 0, {
+      href: '/admin/treasury',
+      label: 'Казначейство',
+      Icon: Wallet,
     });
   }
   return items;
