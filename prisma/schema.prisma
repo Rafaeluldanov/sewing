@@ -1000,6 +1000,12 @@ model Employee {
   /// `apps/api/src/modules/push/*`.
   pushSubscriptions PushSubscription[]
 
+  /// Казначейство (Фаза 0): проводки журнала ДДС, проведённые этим
+  /// сотрудником (`CashFlowEntry.postedById`). `onDelete: SetNull` со
+  /// стороны проводки — журнал append-only и должен уцелеть при
+  /// деактивации учётки. См. `model CashFlowEntry` ниже.
+  cashFlowEntriesPosted CashFlowEntry[] @relation("CashFlowEntryPostedBy")
+
   @@index([role])
   @@index([compensationType])
   /// PHASE 2 STEP 2: фильтр payroll/period по подразделению пробивается
@@ -6324,4 +6330,271 @@ model OrderSample {
   @@index([productId])
   @@index([sizeId])
   @@index([routeTemplateId])
+}
+
+// =========================
+// КАЗНАЧЕЙСТВО — Фаза 0: журнал движения денежных средств (ДДС)
+// Источник идей: дизайн-контракт модуля «Казначейство» (fin.cash_flow_entry,
+// инварианты INV-1/4/7). Сильно урезано под один цех: RUB-only, без
+// мультивалюты/эквайринга/выписок/outbox. Связь с долгом — soft-ссылка.
+// =========================
+
+/// Тип счёта движения денежных средств. Единая таблица `CashAccount`
+/// с дискриминатором `kind` (решение по аналогии с §11.1 дизайн-контракта:
+/// один FK из журнала вместо полиморфизма bank/cash на разные таблицы).
+enum CashAccountKind {
+  /// Расчётный счёт (безналичные).
+  BANK
+  /// Касса (наличные).
+  CASH
+}
+
+/// Направление проводки журнала ДДС. Знак суммы несёт `direction`,
+/// `CashFlowEntry.amount` всегда ≥ 0 (как в дизайн-контракте §3.1).
+enum CashFlowDirection {
+  /// Поступление (приход).
+  IN
+  /// Расход (списание).
+  OUT
+}
+
+/// Источник проводки журнала ДДС — на какой «долг»/основание ссылается
+/// движение денег. `sourceId` — soft-ссылка без FK, т.к. полиморфно:
+/// оплата поставщику (PurchaseOrder), выплата зарплаты (PayrollPayout),
+/// поступление, перемещение и т.д.
+enum CashFlowSource {
+  /// Оплата поставщику (Фаза 1, основание — `PurchaseOrder`).
+  SUPPLIER_PAYMENT
+  /// Выплата зарплаты (Фаза 1, основание — `PayrollPayout`).
+  PAYROLL_PAYOUT
+  /// Поступление денег от клиента.
+  CUSTOMER_INCOME
+  /// Перемещение между счетами (пара проводок IN/OUT).
+  TRANSFER
+  /// Ручная корректировка / ввод начальных остатков.
+  ADJUSTMENT
+  /// Прочее основание.
+  OTHER
+}
+
+/// Счёт движения денежных средств — «где лежат деньги»: касса или
+/// расчётный счёт. Единая таблица с дискриминатором `kind` (Фаза 0
+/// казначейства). Остаток НЕ хранится отдельным полем — считается как
+/// Σ(IN) − Σ(OUT) проводок `CashFlowEntry` по счёту (журнал = источник
+/// истины, проекции остатков добавим позже при необходимости).
+model CashAccount {
+  id        String          @id @default(cuid())
+  kind      CashAccountKind
+  /// Человекочитаемое имя («Касса цеха», «Р/с Сбер»).
+  name      String
+  /// Валюта счёта. На MVP всегда `RUB` (мультивалюты нет).
+  currency  String          @default("RUB")
+  /// Неактивный счёт скрыт из селектов новых проводок; история уцелеет.
+  isActive  Boolean         @default(true)
+  comment   String?
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  entries          CashFlowEntry[]
+  supplierPayments SupplierPayment[]
+
+  @@index([kind])
+  @@index([isActive])
+}
+
+/// Статья движения ДС (ДДС) — классификатор проводок для отчётов и
+/// план-факта: «оплата поставщику», «зарплата», «налоги», «аренда»,
+/// «поступление от клиента». `direction` — мягкий намёк для группировки
+/// в UI (`null` = статья применима к обоим направлениям); проводку он НЕ
+/// ограничивает.
+model CashFlowItem {
+  id        String             @id @default(cuid())
+  name      String
+  /// Необязательный короткий код для интеграций/отчётов.
+  code      String?
+  /// Намёк направления (для UI/группировки), НЕ enforce.
+  direction CashFlowDirection?
+  isActive  Boolean            @default(true)
+  /// Признак «накладные расходы» (аренда, свет, и т.п.). OUT-проводки по
+  /// таким статьям распределяются на заказы в фактической себестоимости
+  /// (Себестоимость, Фаза 2, срез 3). По умолчанию false.
+  isOverhead Boolean           @default(false)
+  comment   String?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  entries          CashFlowEntry[]
+  supplierPayments SupplierPayment[]
+
+  @@index([isActive])
+}
+
+/// Журнал движения денежных средств — единственный источник истины
+/// «где деньги» (аналог `fin.cash_flow_entry` дизайн-контракта, сильно
+/// урезанный под один цех, RUB-only).
+///
+/// APPEND-ONLY (INV-7): строки не редактируются и не удаляются (поэтому
+/// нет `updatedAt`). Исправление = сторно-проводка (`isStorno = true`) с
+/// обратным `direction` и ссылкой `reversalOfId` на исходную строку.
+/// Остаток счёта = Σ(IN) − Σ(OUT) по ВСЕМ строкам — сторно при таком
+/// знаке учитывается автоматически.
+///
+/// Идемпотентность проводки (INV-4): `@@unique(registrarType,
+/// registrarId, lineNo, isStorno)` — повторное проведение одного
+/// документа-регистратора не двоит движение. Сервис ловит P2002
+/// (паттерн `safeCreate`, ADR-0012).
+model CashFlowEntry {
+  id String @id @default(cuid())
+
+  accountId String
+  account   CashAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  direction CashFlowDirection
+  /// Сумма проводки в валюте счёта, всегда ≥ 0. Знак несёт `direction`.
+  /// Округление ROUND_HALF_UP применяется на границе записи в сервисе.
+  amount    Decimal           @db.Decimal(14, 2)
+
+  itemId String
+  item   CashFlowItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  /// Полиморфное основание проводки (долг/документ). `sourceId` —
+  /// soft-ссылка без FK (разные таблицы: PurchaseOrder/PayrollPayout/…).
+  source   CashFlowSource @default(OTHER)
+  sourceId String?
+
+  /// Сторно-флаг (INV-7). Сторно создаётся отдельной строкой с обратным
+  /// `direction`, тем же `registrar*` и `isStorno = true`.
+  isStorno     Boolean        @default(false)
+  /// Ссылка на исходную проводку, которую сторнирует эта строка.
+  reversalOfId String?
+  reversalOf   CashFlowEntry?  @relation("CashFlowEntryStorno", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversals    CashFlowEntry[] @relation("CashFlowEntryStorno")
+
+  /// Документ-регистратор для идемпотентности (INV-4). На Фазе 0 —
+  /// `MANUAL`; на Фазе 1 — `SUPPLIER_PAYMENT` / `PAYROLL_PAYOUT`.
+  registrarType String
+  registrarId   String
+  lineNo        Int    @default(1)
+
+  note       String?
+  /// Момент проводки («когда деньги двинулись»). Отделён от `createdAt`
+  /// (когда строку завели в системе).
+  postedAt   DateTime  @default(now())
+  postedById String?
+  postedBy   Employee? @relation("CashFlowEntryPostedBy", fields: [postedById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+
+  @@unique([registrarType, registrarId, lineNo, isStorno])
+  @@index([accountId, postedAt])
+  @@index([itemId, postedAt])
+  @@index([source, sourceId])
+  @@index([postedAt])
+}
+
+// =========================
+// КАЗНАЧЕЙСТВО — Фаза 1: расход поставщикам (SupplierPayment)
+// Документ оплаты поставщику поверх закупочного контура. Жизненный цикл
+// DRAFT → APPROVED → PAID; на PAID атомарно пишет проводку
+// CashFlowEntry(OUT, source=SUPPLIER_PAYMENT) через TreasuryService.
+// Связи с `Supplier`/`PurchaseOrder` — SOFT (id + snapshot, без FK):
+// закупочный контур — соседний концерн, не вводим жёсткую связь, как и
+// `settlement_object` в дизайн-контракте (soft-FK через границу).
+// =========================
+
+/// Статус документа оплаты поставщику.
+enum SupplierPaymentStatus {
+  /// Черновик: заведён, движения ДС нет.
+  DRAFT
+  /// Согласован (санкционирован), но ещё не оплачен.
+  APPROVED
+  /// Оплачен: проведена проводка `CashFlowEntry(OUT)`.
+  PAID
+  /// Отменён (до оплаты).
+  CANCELLED
+}
+
+/// Оплата поставщику (Фаза 1 казначейства).
+///
+/// «Санкционировал → оплатил»: заявка-документ поверх `PurchaseOrder`.
+/// Проведение (`PAID`) атомарно создаёт проводку журнала ДДС
+/// (`CashFlowEntry`, `source=SUPPLIER_PAYMENT`, `registrarType=
+/// 'SUPPLIER_PAYMENT'`, `registrarId=payment.id`) — идемпотентно по
+/// unique-индексу журнала (повторная оплата ловится как P2002).
+/// Отмена оплаченного — только сторно проводки в журнале (PAID не
+/// откатывается напрямую).
+///
+/// Связи с поставщиком и заказом поставщику — soft (id + snapshot, без
+/// FK), чтобы не связывать закупочный контур с казначейским жёстко.
+model SupplierPayment {
+  id String @id @default(cuid())
+
+  /// Поставщик (soft-ссылка на `Supplier`, без FK) + снимок имени.
+  supplierId           String
+  supplierNameSnapshot String
+
+  /// Заказ поставщику, который оплачиваем (soft-ссылка на
+  /// `PurchaseOrder`, опц.) + снимок номера.
+  purchaseOrderId             String?
+  purchaseOrderNumberSnapshot String?
+
+  /// Счёт, с которого уходят деньги (касса/расчётный счёт).
+  accountId String
+  account   CashAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+
+  /// Статья ДДС (обычно «оплата поставщику»).
+  itemId String
+  item   CashFlowItem @relation(fields: [itemId], references: [id], onDelete: Restrict)
+
+  amount Decimal @db.Decimal(14, 2)
+
+  status  SupplierPaymentStatus @default(DRAFT)
+  comment String?
+
+  /// Проводка журнала, созданная при оплате (soft-ссылка на
+  /// `CashFlowEntry.id`, выставляется на переходе в `PAID`).
+  cashFlowEntryId String?
+
+  /// Аудит-лайт: id сотрудников по шагам ЖЦ (soft, без FK на Employee).
+  createdById   String?
+  approvedById  String?
+  paidById      String?
+  cancelledById String?
+  cancelReason  String?
+
+  createdAt   DateTime  @default(now())
+  approvedAt  DateTime?
+  paidAt      DateTime?
+  cancelledAt DateTime?
+  updatedAt   DateTime  @updatedAt
+
+  @@index([supplierId])
+  @@index([purchaseOrderId])
+  @@index([status, createdAt])
+}
+
+// =========================
+// КАЗНАЧЕЙСТВО — настройки модуля (Фаза 1)
+// =========================
+
+/// Настройки казначейства (singleton, как `CompanySettings`).
+///
+/// Пока хранит «зарплатный» счёт и статью ДДС по умолчанию: если оба
+/// заданы, выдача `PayrollPayout` (переход в ISSUED) автоматически пишет
+/// расходную проводку журнала ДС. Если не заданы — выдача работает как
+/// раньше (опт-ин, нулевая регрессия). Связи soft (id без FK) —
+/// валидируются в сервисе.
+model TreasurySettings {
+  /// Всегда `"default"` — singleton.
+  id        String  @id @default("default")
+  /// Marker singleton-инварианта (`true` + `@unique`).
+  singleton Boolean @unique @default(true)
+
+  /// «Зарплатный» счёт списания (soft-ссылка на `CashAccount`).
+  salaryAccountId String?
+  /// Статья ДДС для зарплаты (soft-ссылка на `CashFlowItem`).
+  salaryItemId    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
