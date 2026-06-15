@@ -3928,3 +3928,103 @@ export class PrintPublicApiUrlNotConfiguredException extends BusinessException {
     );
   }
 }
+
+// ===========================================================================
+// Казначейство (Фаза 0 — журнал ДДС)
+// ===========================================================================
+
+export class CashAccountNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'CASH_ACCOUNT_NOT_FOUND',
+      'Счёт ДС не найден — возможно, его удалили. Обновите страницу.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+export class CashAccountInactiveException extends BusinessException {
+  constructor() {
+    super(
+      'CASH_ACCOUNT_INACTIVE',
+      'Счёт ДС неактивен — проводки по нему запрещены.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class CashFlowItemNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'CASH_FLOW_ITEM_NOT_FOUND',
+      'Статья ДДС не найдена — возможно, её удалили. Обновите страницу.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+export class CashFlowItemInactiveException extends BusinessException {
+  constructor() {
+    super(
+      'CASH_FLOW_ITEM_INACTIVE',
+      'Статья ДДС неактивна — выберите другую.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class CashFlowEntryNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'CASH_FLOW_ENTRY_NOT_FOUND',
+      'Проводка журнала ДДС не найдена.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+export class CashFlowEntryAlreadyReversedException extends BusinessException {
+  constructor() {
+    super(
+      'CASH_FLOW_ENTRY_ALREADY_REVERSED',
+      'Проводка уже сторнирована — повторное сторно запрещено.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class CashFlowEntryStornoNotAllowedException extends BusinessException {
+  constructor(message = 'Сторнировать можно только обычную проводку, не сторно.') {
+    super('CASH_FLOW_ENTRY_STORNO_NOT_ALLOWED', message, HttpStatus.CONFLICT);
+  }
+}
+
+// ===========================================================================
+// Казначейство, Фаза 1 — оплата поставщику (SupplierPayment)
+// ===========================================================================
+
+export class SupplierPaymentNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'SUPPLIER_PAYMENT_NOT_FOUND',
+      'Оплата поставщику не найдена — возможно, её удалили. Обновите страницу.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+export class SupplierPaymentInvalidStatusException extends BusinessException {
+  constructor(message: string) {
+    super('SUPPLIER_PAYMENT_INVALID_STATUS', message, HttpStatus.CONFLICT);
+  }
+}
+
+export class SupplierPaymentAlreadyPaidException extends BusinessException {
+  constructor() {
+    super(
+      'SUPPLIER_PAYMENT_ALREADY_PAID',
+      'Оплата уже проведена — повторное проведение запрещено. Для отмены сторнируйте проводку в журнале.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}

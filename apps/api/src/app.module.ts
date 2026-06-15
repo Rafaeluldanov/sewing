@@ -58,6 +58,7 @@ import { WorkInProgressModule } from './modules/work-in-progress/work-in-progres
 import { MeModule } from './modules/me/me.module.js';
 import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
 import { PushModule } from './modules/push/push.module.js';
+import { TreasuryModule } from './modules/treasury/treasury.module.js';
 
 @Module({
   imports: [
@@ -85,6 +86,7 @@ import { PushModule } from './modules/push/push.module.js';
     PayrollPayoutsModule,
     EmployeesModule,
     CostsModule,
+    TreasuryModule,
     DashboardModule,
     PrintersModule,
     RoutesModule,

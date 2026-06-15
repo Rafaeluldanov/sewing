@@ -23,6 +23,7 @@ import {
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { AuditService } from '../audit/audit.service.js';
 import { isSalaryManager } from '../salary/salary.constants.js';
+import { TreasuryService } from '../treasury/treasury.service.js';
 
 /**
  * Сервис «Выплата зарплаты сотруднику» (PHASE 3 STEP 2).
@@ -62,6 +63,7 @@ export class PayrollPayoutsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly treasury: TreasuryService,
   ) {}
 
   // ===========================================================================
@@ -370,6 +372,16 @@ export class PayrollPayoutsService {
         },
       });
 
+      // Казначейство (Фаза 1, опт-ин): если задан зарплатный счёт+статья —
+      // пишем расходную проводку журнала ДС в той же транзакции. Если не
+      // настроено — ничего не делаем, выдача работает как раньше.
+      await this.treasury.postPayrollPayoutTx(tx, {
+        payoutId: updated.id,
+        amount: updated.amountTotalRub,
+        employeeId: viewer.employeeId,
+        note: `Выплата зарплаты: ${updated.employeeId}`,
+      });
+
       await this.audit.log(
         {
           event: 'PAYROLL_PAYOUT_ISSUED',
@@ -513,6 +525,19 @@ export class PayrollPayoutsService {
           },
         },
       });
+
+      // Казначейство (Фаза 1): если выплата была выдана и по ней есть
+      // проводка журнала ДС — сторнируем её в той же транзакции, чтобы
+      // остаток не «повис». Для черновика проводки нет — ничего не делаем.
+      if (fromStatus === PayrollPayoutStatus.ISSUED) {
+        await this.treasury.stornoByRegistrarTx(tx, {
+          registrarType: 'PAYROLL_PAYOUT',
+          registrarId: id,
+          stornoRegistrarType: 'PAYROLL_PAYOUT_STORNO',
+          employeeId: viewer.employeeId,
+          note: 'Сторно: отмена выплаты зарплаты',
+        });
+      }
 
       await this.audit.log(
         {
