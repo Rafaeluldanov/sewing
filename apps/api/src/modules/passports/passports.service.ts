@@ -56,6 +56,7 @@ import {
   PassportNotYoursException,
   PassportIssueBackwardException,
   PassportParallelGroupIncompleteException,
+  PassportPrecedingStepIncompleteException,
   PassportReworkOperationNotAllowedForShiftException,
   PassportReworkPendingException,
   PassportScanBackwardException,
@@ -1367,12 +1368,23 @@ export class PassportsService {
     targetIndex: number | null;
     backward: boolean;
     groupIncomplete: boolean;
+    sequentialIncomplete: boolean;
   }> {
-    const none = { targetIndex: null, backward: false, groupIncomplete: false };
+    const none = {
+      targetIndex: null,
+      backward: false,
+      groupIncomplete: false,
+      sequentialIncomplete: false,
+    };
     if (!passport.orderId) return none;
     const steps = await this.prisma.orderRouteStep.findMany({
       where: { orderId: passport.orderId },
-      select: { index: true, operationId: true, parallelGroup: true },
+      select: {
+        index: true,
+        operationId: true,
+        parallelGroup: true,
+        operation: { select: { category: true } },
+      },
     });
     if (steps.length === 0) return none;
 
@@ -1421,18 +1433,33 @@ export class PassportsService {
     const targetRep = rep(targetIndex, targetStep.parallelGroup);
 
     let backward = false;
+    let currentRep: number | null = null;
     if (passport.currentRouteStepIndex !== null) {
       const curStep = steps.find(
         (s) => s.index === passport.currentRouteStepIndex,
       );
       if (curStep) {
-        backward = targetRep < rep(curStep.index, curStep.parallelGroup);
+        currentRep = rep(curStep.index, curStep.parallelGroup);
+        backward = targetRep < currentRep;
       }
     }
 
-    // AND-гейт: параллельные группы, целиком стоящие ДО target, должны
-    // быть завершены полностью. Запрос завершённых операций — только если
-    // такие группы есть (в обычном маршруте без групп — пропускаем).
+    // Какие шаги обязаны быть завершены ДО входа на target:
+    //
+    //  1. AND-гейт параллельных групп: группа, целиком стоящая ДО target
+    //     (`gMax < targetIndex`), должна быть закрыта полностью — ОТК ждёт
+    //     обе из {КИПЕРКА, РАСПОШИВ}. → `groupIncomplete`.
+    //
+    //  2. Последовательные ШВЕЙНЫЕ шаги (вне параллельной группы), лежащие
+    //     строго между текущим рангом паспорта и target, должны быть
+    //     завершены — нельзя перепрыгнуть незакрытую швейную операцию
+    //     вперёд (инцидент 16.06.2026: КИПЕРКА взята минуя ОВР/ФУЛ).
+    //     → `sequentialIncomplete`. Ограничение `SEWING` принципиально:
+    //     только швейные операции пишут `OPERATION_FINISHED` (крой
+    //     закрывается при выпуске, ОТК/ВТО — на собственных гейтах), так
+    //     что требовать завершения CUTTING/QC/IRONING было бы ложной
+    //     блокировкой. `currentRep == null` (паспорт ещё не в маршруте) →
+    //     проверку пропускаем, как и backward.
     //
     // Substitute-правила (см. `OperationSubstitution`): если есть запись
     // `(satisfiesOpId = X, substituteOpId = Y)`, то `OPERATION_FINISHED`
@@ -1440,12 +1467,33 @@ export class PassportsService {
     // Подгиб низа (0001) и Распошив рукав (16): когда станок «Подгиб
     // низа» сломан, швея закрывает 04, и это считается эквивалентом
     // пары. См. `prisma/migrations/20260729200000_add_operation_substitution`.
-    let groupIncomplete = false;
     const groupsBefore: number[] = [];
     for (const [g, gMax] of groupMax) {
       if (gMax < targetIndex) groupsBefore.push(g);
     }
-    if (groupsBefore.length > 0) {
+    const sequentialBefore =
+      currentRep === null
+        ? []
+        : steps.filter(
+            (s) =>
+              s.parallelGroup == null &&
+              s.operation.category === OperationCategory.SEWING &&
+              rep(s.index, s.parallelGroup) > currentRep! &&
+              rep(s.index, s.parallelGroup) < targetRep,
+          );
+
+    let groupIncomplete = false;
+    let sequentialIncomplete = false;
+    // Запрос завершённых операций — только если есть что проверять
+    // (обычный линейный маршрут без пропусков групп/швейных шагов —
+    // пропускаем оба SELECT-а).
+    if (groupsBefore.length > 0 || sequentialBefore.length > 0) {
+      // Только substitutes для операций, реально проверяемых здесь —
+      // иначе тянули бы весь справочник.
+      const opsToCheck = [
+        ...groupsBefore.flatMap((g) => groupOps.get(g) ?? []),
+        ...sequentialBefore.map((s) => s.operationId),
+      ];
       const [finished, substitutes] = await Promise.all([
         this.prisma.passportEvent.findMany({
           where: {
@@ -1455,14 +1503,8 @@ export class PassportsService {
           },
           select: { operationId: true },
         }),
-        // Только substitutes для операций, реально стоящих в проверяемых
-        // группах — иначе тянули бы весь справочник.
         this.prisma.operationSubstitution.findMany({
-          where: {
-            satisfiesOpId: {
-              in: [...groupsBefore.flatMap((g) => groupOps.get(g) ?? [])],
-            },
-          },
+          where: { satisfiesOpId: { in: opsToCheck } },
           select: { satisfiesOpId: true, substituteOpId: true },
         }),
       ]);
@@ -1486,9 +1528,12 @@ export class PassportsService {
           break;
         }
       }
+      if (!sequentialBefore.every((s) => isSatisfied(s.operationId))) {
+        sequentialIncomplete = true;
+      }
     }
 
-    return { targetIndex, backward, groupIncomplete };
+    return { targetIndex, backward, groupIncomplete, sequentialIncomplete };
   }
 
   /**
@@ -1706,6 +1751,9 @@ export class PassportsService {
     if (issueOrder.backward) throw new PassportIssueBackwardException();
     if (issueOrder.groupIncomplete) {
       throw new PassportParallelGroupIncompleteException();
+    }
+    if (issueOrder.sequentialIncomplete) {
+      throw new PassportPrecedingStepIncompleteException();
     }
     const issueTargetIndex = issueOrder.targetIndex;
 
@@ -2152,6 +2200,9 @@ export class PassportsService {
     if (scanOrder.backward) throw new PassportScanBackwardException();
     if (scanOrder.groupIncomplete) {
       throw new PassportParallelGroupIncompleteException();
+    }
+    if (scanOrder.sequentialIncomplete) {
+      throw new PassportPrecedingStepIncompleteException();
     }
 
     const nextRouteStepIndex =

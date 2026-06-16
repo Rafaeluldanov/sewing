@@ -373,4 +373,107 @@ describeWithDb('integration — passports.operation-finished block', () => {
       .expect(409);
     expect(res.body?.code).toBe('MASTER_TARGET_OPERATION_ALREADY_FINISHED');
   });
+
+  // ---------------------------------------------------------------------------
+  // D. Гейт «нельзя перепрыгнуть незавершённый швейный шаг вперёд»
+  //    (PASSPORT_PRECEDING_STEP_INCOMPLETE). Инцидент 16.06.2026:
+  //    P-20260611-0004 взяли на КИПЕРКУ (idx 3) минуя ОВР/ФУЛ (idx 2),
+  //    т.к. backward/groupIncomplete не ловят forward-skip одиночного
+  //    шага. Здесь аналог: SEW_OVERLOCK_2 (idx 2) при незакрытом
+  //    SEW_OVERLOCK_1 (idx 1), паспорт ещё на CUT_DIVISION (idx 0).
+  // ---------------------------------------------------------------------------
+
+  test('D. issue: пропуск незавершённого швейного шага вперёд → 409 PASSPORT_PRECEDING_STEP_INCOMPLETE', async () => {
+    const { passportId } = await setup({
+      currentOperationCode: 'CUT_DIVISION',
+      currentRouteStepIndex: 0,
+      shiftOperationCode: 'SEW_OVERLOCK_2',
+      placeInCell: false,
+      finishedOps: [],
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(409);
+    expect(res.body?.code).toBe('PASSPORT_PRECEDING_STEP_INCOMPLETE');
+
+    // Состояние не меняется: не закрепился, нового ISSUED-события нет.
+    const inDb = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(inDb.currentEmployeeId).toBeNull();
+    expect(inDb.currentRouteStepIndex).toBe(0);
+    const issueEvents = await t.prisma.passportEvent.findMany({
+      where: { passportId, type: 'ISSUED_TO_EMPLOYEE' },
+    });
+    expect(issueEvents).toHaveLength(0);
+  });
+
+  test('D-2. scan: тот же пропуск через /scan → 409 PASSPORT_PRECEDING_STEP_INCOMPLETE', async () => {
+    const { passportId } = await setup({
+      currentOperationCode: 'CUT_DIVISION',
+      currentRouteStepIndex: 0,
+      shiftOperationCode: 'SEW_OVERLOCK_2',
+      placeInCell: false,
+      finishedOps: [],
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/scan`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(409);
+    expect(res.body?.code).toBe('PASSPORT_PRECEDING_STEP_INCOMPLETE');
+  });
+
+  test('D-3. issue: предыдущий швейный шаг завершён → переход вперёд проходит', async () => {
+    // Контр-кейс: SEW_OVERLOCK_1 закрыт (OPERATION_FINISHED) → выход на
+    // SEW_OVERLOCK_2 минуя «застрявший» idx разрешён.
+    const { passportId } = await setup({
+      currentOperationCode: 'CUT_DIVISION',
+      currentRouteStepIndex: 0,
+      shiftOperationCode: 'SEW_OVERLOCK_2',
+      placeInCell: false,
+      finishedOps: ['SEW_OVERLOCK_1'],
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const inDb = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(inDb.currentOperationId).toBe(seed.operations.SEW_OVERLOCK_2.id);
+    expect(inDb.currentRouteStepIndex).toBe(2);
+  });
+
+  test('D-4. issue: переход на НЕПОСРЕДСТВЕННО следующий швейный шаг не блокируется', async () => {
+    // Happy-path: паспорт на CUT_DIVISION (idx 0), берёт первый швейный
+    // шаг SEW_OVERLOCK_1 (idx 1) — между ними нет незакрытых швейных
+    // шагов (крой CUTTING не считается), гейт пропускает.
+    const { passportId } = await setup({
+      currentOperationCode: 'CUT_DIVISION',
+      currentRouteStepIndex: 0,
+      shiftOperationCode: 'SEW_OVERLOCK_1',
+      placeInCell: false,
+      finishedOps: [],
+    });
+
+    await request(t.app.getHttpServer())
+      .post(`/api/passports/${passportId}/issue`)
+      .set('Cookie', cookies.seamstress)
+      .send({})
+      .expect(201);
+
+    const inDb = await t.prisma.passport.findUniqueOrThrow({
+      where: { id: passportId },
+    });
+    expect(inDb.currentOperationId).toBe(seed.operations.SEW_OVERLOCK_1.id);
+    expect(inDb.currentRouteStepIndex).toBe(1);
+  });
 });
