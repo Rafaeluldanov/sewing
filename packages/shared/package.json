@@ -42,6 +42,7 @@
     "./cut-release-policy": "./src/cut-release-policy.ts",
     "./order-deadlines": "./src/order-deadlines.ts",
     "./material-roles": "./src/material-roles.ts",
+    "./material-characteristics": "./src/material-characteristics.ts",
     "./patterns": "./src/patterns.ts",
     "./pattern-categories": "./src/pattern-categories.ts",
     "./workshop-needs": "./src/workshop-needs.ts",

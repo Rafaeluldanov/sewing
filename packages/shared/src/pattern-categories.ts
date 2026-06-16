@@ -323,7 +323,10 @@ export const PATTERN_CATEGORY_PARAMETER_GROUPS: readonly PatternCategoryParamete
   {
     roleKey: 'INTERLINING',
     label: 'Дублерин / клеевые',
-    allowedUnits: ['м пог.', 'м²', 'кг'],
+    // «м» — для паутинки и клеевой кромки (см. подтипы PAUTINKA/GLUE_EDGE
+    // в material-characteristics.ts); «м пог.»/«м²»/«кг» — для дублерина,
+    // флизелина, бортовки.
+    allowedUnits: ['м пог.', 'м²', 'кг', 'м'],
     defaultUnit: 'м пог.',
     allowedInputTypes: ['LINEAR_M_BY_SIZE', 'AREA_M2_BY_SIZE'],
     defaultInputType: 'LINEAR_M_BY_SIZE',
@@ -341,7 +344,9 @@ export const PATTERN_CATEGORY_PARAMETER_GROUPS: readonly PatternCategoryParamete
     // показывает «Фурнитура», слово «Упаковка» пользователю не видно.
     roleKey: 'PACKAGING',
     label: 'Фурнитура',
-    allowedUnits: ['шт', 'м'],
+    // «м/шт» — для шнура и подвяза (продаются и в метрах, и поштучно;
+    // см. подтипы CORD/KNIT_CUFF в material-characteristics.ts).
+    allowedUnits: ['шт', 'м', 'м/шт'],
     defaultUnit: 'шт',
     allowedInputTypes: ['QTY_PER_ITEM'],
     defaultInputType: 'QTY_PER_ITEM',
