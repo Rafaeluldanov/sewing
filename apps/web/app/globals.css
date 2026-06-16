@@ -817,6 +817,9 @@ table.data-table th.num { text-align: right; }
    радиусы и тени общие со всем приложением.
    ============================================================= */
 .auth-screen {
+  /* `100vh` — fallback для Safari < 15.4 / старых WebView, не знающих
+     `dvh`; современные браузеры перезаписывают строкой ниже. */
+  min-height: 100vh;
   min-height: 100dvh;
   display: flex;
   align-items: center;
@@ -4169,6 +4172,8 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .bulk-print-modal__card {
   width: min(100%, 720px);
   max-width: none;
+  /* `vh`-fallback для Safari < 15.4 (см. `.auth-screen`). */
+  max-height: calc(100vh - 2rem);
   max-height: calc(100dvh - 2rem);
   padding: 0;
   gap: 0;
@@ -5770,6 +5775,8 @@ body:has(.master-page) .app-main {
 }
 .master-actions-sheet__card {
   width: min(100%, 520px);
+  /* `vh`-fallback для Safari < 15.4 (см. `.auth-screen`). */
+  max-height: 92vh;
   max-height: 92dvh;
   overflow-y: auto;
   background: #fff;
@@ -9682,6 +9689,8 @@ body:has(.admin-layout) .app-header { display: none !important; }
 
 .admin-size-plan-modal {
   width: min(420px, 100%);
+  /* `vh`-fallback для Safari < 15.4 (см. `.auth-screen`). */
+  max-height: calc(100vh - 2rem);
   max-height: calc(100dvh - 2rem);
   margin: auto;
   background: var(--admin-surface);

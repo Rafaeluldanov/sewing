@@ -27,5 +27,20 @@
     "eslint": "^8.57.1",
     "eslint-config-next": "^14.2.15",
     "typescript": "^5.5.4"
+  },
+  "//browserslist": "Явный таргет, чтобы autoprefixer (встроенный в Next PostCSS) предсказуемо добавлял -webkit- префиксы (backdrop-filter и пр.) для старых Safari цеховых маков. ВАЖНО: autoprefixer НЕ полифиллит :has()/dvh — для них в globals.css вручную добавлены fallback'и.",
+  "browserslist": {
+    "production": [
+      ">0.5%",
+      "last 2 versions",
+      "Safari >= 13",
+      "iOS >= 13",
+      "not dead"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
   }
 }
