@@ -53,6 +53,7 @@ function explainApiError(e: unknown): { error: string; requestId?: string } {
 const SETTINGS_FIELDS = [
   'legalName',
   'shortName',
+  'prefix',
   'inn',
   'kpp',
   'ogrn',

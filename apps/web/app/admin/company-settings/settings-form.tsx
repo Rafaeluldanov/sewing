@@ -6,6 +6,7 @@ import type { CompanySettingsDto } from '@sewing/shared/company-settings';
 import {
   COMPANY_SETTINGS_NAME_MAX_LENGTH,
   COMPANY_SETTINGS_SHORT_NAME_MAX_LENGTH,
+  COMPANY_SETTINGS_PREFIX_MAX_LENGTH,
   COMPANY_SETTINGS_ADDRESS_MAX_LENGTH,
   COMPANY_SETTINGS_PHONE_MAX_LENGTH,
   COMPANY_SETTINGS_EMAIL_MAX_LENGTH,
@@ -81,6 +82,17 @@ export function CompanySettingsForm({
               defaultValue={settings.shortName ?? ''}
               maxLength={COMPANY_SETTINGS_SHORT_NAME_MAX_LENGTH}
               placeholder="ШФ-1"
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="company-prefix">Префикс</label>
+            <input
+              id="company-prefix"
+              name="prefix"
+              type="text"
+              defaultValue={settings.prefix ?? ''}
+              maxLength={COMPANY_SETTINGS_PREFIX_MAX_LENGTH}
+              placeholder="ШФ"
             />
           </div>
           <div className="admin-field">

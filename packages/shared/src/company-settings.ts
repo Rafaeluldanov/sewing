@@ -30,6 +30,7 @@ import { z } from 'zod';
 
 export const COMPANY_SETTINGS_NAME_MAX_LENGTH = 300;
 export const COMPANY_SETTINGS_SHORT_NAME_MAX_LENGTH = 120;
+export const COMPANY_SETTINGS_PREFIX_MAX_LENGTH = 16;
 export const COMPANY_SETTINGS_ADDRESS_MAX_LENGTH = 500;
 export const COMPANY_SETTINGS_PHONE_MAX_LENGTH = 64;
 export const COMPANY_SETTINGS_EMAIL_MAX_LENGTH = 200;
@@ -113,6 +114,10 @@ const LegalNameField = optionalNullableString(
 const ShortNameField = optionalNullableString(
   COMPANY_SETTINGS_SHORT_NAME_MAX_LENGTH,
   'Краткое название',
+);
+const PrefixField = optionalNullableString(
+  COMPANY_SETTINGS_PREFIX_MAX_LENGTH,
+  'Префикс',
 );
 
 /** ИНН: 10 (юрлица) или 12 цифр (ИП). */
@@ -202,6 +207,7 @@ export const UpdateCompanySettingsSchema = z
   .object({
     legalName: LegalNameField,
     shortName: ShortNameField,
+    prefix: PrefixField,
     inn: InnField,
     kpp: KppField,
     ogrn: OgrnField,
@@ -235,6 +241,7 @@ export interface CompanySettingsDto {
   id: string;
   legalName: string | null;
   shortName: string | null;
+  prefix: string | null;
   inn: string | null;
   kpp: string | null;
   ogrn: string | null;

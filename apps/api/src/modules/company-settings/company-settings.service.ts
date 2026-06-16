@@ -378,6 +378,7 @@ export interface EffectiveMaterialStockSettings {
 const UPDATABLE_STRING_FIELDS = [
   'legalName',
   'shortName',
+  'prefix',
   'inn',
   'kpp',
   'ogrn',
@@ -410,6 +411,7 @@ function toDto(c: CompanySettingsRow): CompanySettingsDto {
     id: c.id,
     legalName: c.legalName,
     shortName: c.shortName,
+    prefix: c.prefix,
     inn: c.inn,
     kpp: c.kpp,
     ogrn: c.ogrn,
