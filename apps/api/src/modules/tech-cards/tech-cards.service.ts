@@ -14,6 +14,10 @@ import type {
   UpdateTechCardDto,
 } from '@sewing/shared/tech-cards';
 import { isKnownTechCardMaterialRoleKey } from '@sewing/shared/tech-cards';
+import {
+  legacyColumnsToCharacteristics,
+  type MaterialCharacteristics,
+} from '@sewing/shared/material-characteristics';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
@@ -142,6 +146,9 @@ export class TechCardsService {
       hardwareMaterialText: string | null;
       materialImageUrl: string | null;
       materialImageOriginalFileName: string | null;
+      // Фаза 2 «Характеристики номенклатуры»: snapshot подтипа и значений.
+      subtypeKey: string | null;
+      characteristics: MaterialCharacteristics | null;
     }[];
     outsourceLines: {
       id: string;
@@ -187,6 +194,10 @@ export class TechCardsService {
         hardwareMaterialText: l.hardwareMaterialText,
         materialImageUrl: l.materialImageUrl,
         materialImageOriginalFileName: l.materialImageOriginalFileName,
+        // Фаза 2 «Характеристики номенклатуры».
+        subtypeKey: l.subtypeKey,
+        characteristics:
+          (l.characteristics as MaterialCharacteristics | null) ?? null,
       })),
       outsourceLines: tpl.outsourceLines.map((l) => ({
         id: l.id,
@@ -519,21 +530,62 @@ export class TechCardsService {
     // заказа от «висячих» значений (например, если менеджер сначала
     // выбрал PACKAGING и заполнил «Размер», а потом сменил роль).
     const isHardwareRole = line.materialRole === 'PACKAGING';
-    const hardwareSizeText = isHardwareRole
-      ? line.hardwareSizeText ?? null
-      : null;
+    // Фаза 2 «Характеристики номенклатуры»: characteristics — источник
+    // истины, если форма их прислала; иначе собираем из явных legacy-
+    // полей (backward-compat со старой формой). Затем ЗЕРКАЛИМ legacy-
+    // колонки из characteristics, чтобы downstream (cut-readiness,
+    // себестоимость, snapshot заказа) продолжал читать привычные
+    // densityGsm/plannedWidthCm/hardware* без изменений.
+    const sentChars =
+      line.characteristics && Object.keys(line.characteristics).length > 0
+        ? line.characteristics
+        : null;
+    const chars: MaterialCharacteristics =
+      sentChars ??
+      legacyColumnsToCharacteristics({
+        densityGsm: line.densityGsm,
+        plannedWidthCm: line.plannedWidthCm,
+        hardwareSizeText: line.hardwareSizeText,
+        hardwareMaterialText: line.hardwareMaterialText,
+      });
+    const toInt = (v: unknown): number | null => {
+      if (v === null || v === undefined || v === '') return null;
+      const n = Number(v);
+      return Number.isInteger(n) && n > 0 ? n : null;
+    };
+    const toText = (v: unknown): string | null => {
+      if (v === null || v === undefined) return null;
+      const s = String(v).trim();
+      return s === '' ? null : s;
+    };
+    // Роль-зависимая очистка (инвариант прошлых этапов): density/
+    // rollWidth — только для не-PACKAGING; size/material — только для
+    // PACKAGING. Иначе после смены роли остались бы «висячие» значения.
+    const densityGsm = isHardwareRole ? null : toInt(chars.density);
+    const plannedWidthCm = isHardwareRole ? null : toInt(chars.rollWidth);
+    const hardwareSizeText = isHardwareRole ? toText(chars.size) : null;
     const hardwareMaterialText = isHardwareRole
-      ? line.hardwareMaterialText ?? null
+      ? toText(chars.material)
       : null;
-    // Этап «Фурнитура: скрыть плотность и ширину рулона» (см. ТЗ §7):
-    // densityGsm и plannedWidthCm применимы только к ткани/полотну.
-    // Для PACKAGING принудительно зачищаем в null — иначе после
-    // смены роли с MAIN_FABRIC на PACKAGING случайно остались бы
-    // «висячие» значения, которые потом ушли бы в snapshot заказа.
-    const densityGsm = isHardwareRole ? null : line.densityGsm ?? null;
-    const plannedWidthCm = isHardwareRole
-      ? null
-      : line.plannedWidthCm ?? null;
+    // Итоговый characteristics в БД: зеркало legacy-колонок (после
+    // роль-очистки) + новые характеристики без legacy-колонки
+    // (type/length/thickness/holesCount/width) из присланных формой.
+    const cleanedChars: MaterialCharacteristics = {};
+    if (densityGsm != null) cleanedChars.density = densityGsm;
+    if (plannedWidthCm != null) cleanedChars.rollWidth = plannedWidthCm;
+    if (hardwareSizeText != null) cleanedChars.size = hardwareSizeText;
+    if (hardwareMaterialText != null) cleanedChars.material = hardwareMaterialText;
+    if (sentChars) {
+      for (const [k, v] of Object.entries(sentChars)) {
+        if (k === 'density' || k === 'rollWidth' || k === 'size' || k === 'material') {
+          continue;
+        }
+        if (v === null || v === undefined || v === '') continue;
+        cleanedChars[k] = v;
+      }
+    }
+    const characteristics =
+      Object.keys(cleanedChars).length > 0 ? cleanedChars : null;
     // Этап «Доработка UI и контракта техкарты» (см. ТЗ §1): для НОВЫХ
     // строк roleKey должен быть из `PATTERN_CATEGORY_PARAMETER_GROUPS`.
     // Legacy (`existingRoleKeys` приходит из старой техкарты при
@@ -573,6 +625,8 @@ export class TechCardsService {
       materialImageUrl: line.materialImageUrl ?? null,
       materialImageOriginalFileName:
         line.materialImageOriginalFileName ?? null,
+      subtypeKey: line.subtypeKey && line.subtypeKey.length ? line.subtypeKey : null,
+      characteristics: characteristics ?? Prisma.DbNull,
     };
   }
 
@@ -628,6 +682,10 @@ export class TechCardsService {
         hardwareMaterialText: l.hardwareMaterialText,
         materialImageUrl: l.materialImageUrl,
         materialImageOriginalFileName: l.materialImageOriginalFileName,
+        // Фаза 2 «Характеристики номенклатуры».
+        subtypeKey: l.subtypeKey,
+        characteristics:
+          (l.characteristics as MaterialCharacteristics | null) ?? null,
       }));
     const outsourceLines: TechCardOutsourceLineDto[] = row.outsourceLines
       .slice()

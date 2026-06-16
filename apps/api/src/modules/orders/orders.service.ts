@@ -2395,6 +2395,10 @@ export class OrdersService {
               hardwareMaterialText: l.hardwareMaterialText,
               materialImageUrl: l.materialImageUrl,
               materialImageOriginalFileName: l.materialImageOriginalFileName,
+              // Фаза 2 «Характеристики номенклатуры»: snapshot подтипа
+              // и значений характеристик.
+              subtypeKey: l.subtypeKey,
+              characteristics: l.characteristics ?? Prisma.DbNull,
             })),
           });
         }
@@ -3700,6 +3704,10 @@ export class OrdersService {
         hardwareMaterialText: l.hardwareMaterialText,
         materialImageUrl: l.materialImageUrl,
         materialImageOriginalFileName: l.materialImageOriginalFileName,
+        // Фаза 2 «Характеристики номенклатуры»: перенос в пересобранный
+        // snapshot.
+        subtypeKey: l.subtypeKey,
+        characteristics: l.characteristics ?? Prisma.DbNull,
       };
     });
 

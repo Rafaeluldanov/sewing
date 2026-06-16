@@ -30,6 +30,10 @@ import {
   getPatternCategoryParameterGroupConfig,
   getPatternCategoryParameterGroupLabel,
 } from './pattern-categories';
+import {
+  MaterialCharacteristicsSchema,
+  type MaterialCharacteristics,
+} from './material-characteristics';
 
 /**
  * Регулярка roleKey-а строки техкарты (тот же стиль, что
@@ -561,6 +565,19 @@ const MaterialImageOriginalFileNameField = makeOptionalTextField({
   label: 'Имя файла изображения',
 });
 
+// Фаза 2 «Характеристики номенклатуры»: подтип материала + значения
+// характеристик. Оба nullable/optional — backward-compatible (старые
+// клиенты их не шлют). subtypeKey — свободная строка (whitelist —
+// `MATERIAL_SUBTYPES`), валидируется мягко (как materialRole).
+const SubtypeKeyField = z
+  .string()
+  .trim()
+  .max(64, 'Подтип не длиннее 64 символов')
+  .nullable()
+  .optional();
+
+const CharacteristicsField = MaterialCharacteristicsSchema.nullable().optional();
+
 // ---------------------------------------------------------------------------
 // Line input DTO
 // ---------------------------------------------------------------------------
@@ -605,6 +622,8 @@ export const TechCardMaterialLineInputSchema = z
     hardwareMaterialText: HardwareMaterialTextField,
     materialImageUrl: MaterialImageUrlField,
     materialImageOriginalFileName: MaterialImageOriginalFileNameField,
+    subtypeKey: SubtypeKeyField,
+    characteristics: CharacteristicsField,
   })
   .superRefine((line, ctx) => {
     if (line.colorRule === 'FIXED_COLOR') {
@@ -786,6 +805,15 @@ export interface TechCardMaterialLineDto {
    */
   materialImageUrl: string | null;
   materialImageOriginalFileName: string | null;
+  /**
+   * Фаза 2 «Характеристики номенклатуры»: ключ подтипа материала
+   * (whitelist — `MATERIAL_SUBTYPES`) и значения характеристик
+   * `{ ключ: значение }` (см. `MATERIAL_CHARACTERISTICS`). Цвет здесь
+   * не хранится (он в `colorRule`/`fixedColorText`). Оба nullable —
+   * старые строки отдают null.
+   */
+  subtypeKey: string | null;
+  characteristics: MaterialCharacteristics | null;
 }
 
 export interface TechCardOutsourceLineDto {
