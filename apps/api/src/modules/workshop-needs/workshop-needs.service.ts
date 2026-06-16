@@ -19,6 +19,10 @@ import {
   type OrderApplicationStage,
   type OrderApplicationType,
 } from '@sewing/shared/order-applications';
+import {
+  getMaterialCharacteristic,
+  type MaterialCharacteristics,
+} from '@sewing/shared/material-characteristics';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -618,6 +622,8 @@ export class WorkshopNeedsService {
           // могли обогатить description строки потребности.
           hardwareSizeText: r.hardwareSizeText,
           hardwareMaterialText: r.hardwareMaterialText,
+          characteristics:
+            (r.characteristics as MaterialCharacteristics | null) ?? null,
           materialImageUrl: r.materialImageUrl,
           selectedColorText: r.selectedColorText,
           requiresColorSelection: r.requiresColorSelection,
@@ -638,6 +644,8 @@ export class WorkshopNeedsService {
           resolvedColorText: null,
           hardwareSizeText: l.hardwareSizeText,
           hardwareMaterialText: l.hardwareMaterialText,
+          characteristics:
+            (l.characteristics as MaterialCharacteristics | null) ?? null,
           materialImageUrl: l.materialImageUrl,
           // Live-техкарта не хранит per-order selectedColorText —
           // менеджер заполняет его уже на snapshot заказа после
@@ -1178,6 +1186,8 @@ export class WorkshopNeedsService {
           resolvedColorText: r.resolvedColorText,
           hardwareSizeText: r.hardwareSizeText,
           hardwareMaterialText: r.hardwareMaterialText,
+          characteristics:
+            (r.characteristics as MaterialCharacteristics | null) ?? null,
           materialImageUrl: r.materialImageUrl,
           selectedColorText: r.selectedColorText,
           requiresColorSelection: r.requiresColorSelection,
@@ -1198,6 +1208,8 @@ export class WorkshopNeedsService {
           resolvedColorText: null,
           hardwareSizeText: l.hardwareSizeText,
           hardwareMaterialText: l.hardwareMaterialText,
+          characteristics:
+            (l.characteristics as MaterialCharacteristics | null) ?? null,
           materialImageUrl: l.materialImageUrl,
           selectedColorText: null,
           requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
@@ -2136,6 +2148,29 @@ export class WorkshopNeedsService {
     if (line.plannedWidthCm != null) {
       parts.push(`ширина ${line.plannedWidthCm} см`);
     }
+    // Фаза 2 «Характеристики номенклатуры»: обогащаем описание
+    // характеристиками подтипа без legacy-колонки + размер/материал
+    // фурнитуры. density/rollWidth уже показаны выше — их пропускаем.
+    const chars = line.characteristics ?? {};
+    for (const key of [
+      'type',
+      'material',
+      'size',
+      'width',
+      'thickness',
+      'length',
+      'holesCount',
+    ]) {
+      const v = chars[key];
+      if (v == null || v === '') continue;
+      const def = getMaterialCharacteristic(key);
+      const unit = def?.unit ? ` ${def.unit}` : '';
+      if (key === 'type') parts.push(`тип: ${v}`);
+      else if (key === 'size') parts.push(`размер ${v}${unit}`);
+      else if (key === 'length') parts.push(`длина ${v}${unit}`);
+      else if (key === 'holesCount') parts.push(`${v} прокол(ов)`);
+      else parts.push(`${v}${unit}`);
+    }
     // Pretty-join: первая часть — «название» / «характеристика», дальше
     // через запятую. Получается «Кулирка 180 г/м², чёрный, ширина 180 см».
     if (parts.length === 1) return parts[0];
@@ -2742,6 +2777,12 @@ interface SourceLine {
   materialImageUrl: string | null;
   selectedColorText: string | null;
   requiresColorSelection: boolean;
+  /**
+   * Фаза 2 «Характеристики номенклатуры»: значения характеристик
+   * подтипа для обогащения `description` (тип/размер/материал/длина/
+   * толщина/ширина/кол-во проколов). null — старые строки.
+   */
+  characteristics: MaterialCharacteristics | null;
 }
 
 /**
