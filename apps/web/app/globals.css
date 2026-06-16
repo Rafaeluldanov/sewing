@@ -10410,6 +10410,93 @@ body:has(.admin-layout) .app-header { display: none !important; }
   padding: 0.1rem 0.35rem;
 }
 
+/* Карточка одиночного нанесения в редакторе (раньше — inline-border). */
+.admin-order-applications__row {
+  border: 1px solid var(--admin-border, #e5e7eb);
+  border-radius: 6px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* Этап «Комплекты нанесений»: карточка комплекта в редакторе. */
+.admin-order-applications__kit {
+  border: 1px solid var(--admin-accent, #6366f1);
+  border-radius: 8px;
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--admin-accent-soft, #eef2ff);
+}
+
+.admin-order-applications__kit-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-order-applications__kit-name {
+  flex: 1 1 240px;
+  font-weight: 600;
+  font-size: 0.95rem;
+  padding: 0.3rem 0.5rem;
+}
+
+.admin-order-applications__kit-members {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.admin-order-applications__kit-member {
+  border: 1px solid var(--admin-border, #e5e7eb);
+  border-radius: 6px;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--admin-surface, #fff);
+}
+
+.admin-order-applications__kit-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* Read-only: группировка нанесений по комплектам в карточке заказа. */
+.admin-order-applications__blocks {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+}
+
+.admin-order-applications__kit-ro {
+  border: 1px solid var(--admin-accent, #6366f1);
+  border-radius: 8px;
+  padding: 0.5rem 0.7rem;
+  background: var(--admin-accent-soft, #eef2ff);
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+.admin-order-applications__kit-ro-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 0.92rem;
+}
+
+.admin-order-applications__kit-ro-scope {
+  margin-left: auto;
+  font-size: 0.8rem;
+  color: var(--admin-muted, #6b7280);
+}
+
 /* ---------------------------------------------------------------------------
    /admin/orders/[id] — блок «Готовность к крою»: компактные
    статусы и горизонтальный скролл таблицы материалов.

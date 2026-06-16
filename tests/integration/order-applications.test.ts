@@ -125,6 +125,52 @@ describeWithDb('integration — order applications', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // 1c. Комплекты нанесений (этап «Комплекты нанесений»)
+  // ---------------------------------------------------------------------------
+
+  test('PUT/GET /applications сохраняет комплект (groupKey/groupLabel)', async () => {
+    const orderId = await createDraftOrder(t, seed, cookies.manager);
+
+    const put = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({
+        applications: [
+          // Два нанесения одного комплекта «Перёд + спина».
+          {
+            type: 'SCREEN_PRINT',
+            stage: 'FINISHED_ITEM',
+            placement: 'грудь',
+            groupKey: 'kit-1',
+            groupLabel: 'Перёд + спина',
+          },
+          {
+            type: 'SCREEN_PRINT',
+            stage: 'FINISHED_ITEM',
+            placement: 'спина',
+            groupKey: 'kit-1',
+            groupLabel: 'Перёд + спина',
+          },
+          // Одиночное нанесение (вне комплекта).
+          { type: 'EMBROIDERY', stage: 'FINISHED_ITEM', placement: 'рукав' },
+        ],
+      });
+    expect(put.status).toBe(200);
+    expect(put.body.length).toBe(3);
+
+    const get = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager);
+    expect(get.status).toBe(200);
+    const kit = get.body.filter((a: any) => a.groupKey === 'kit-1');
+    expect(kit.length).toBe(2);
+    expect(kit.every((a: any) => a.groupLabel === 'Перёд + спина')).toBe(true);
+    const solo = get.body.filter((a: any) => a.groupKey == null);
+    expect(solo.length).toBe(1);
+    expect(solo[0].groupLabel).toBeNull();
+  });
+
+  // ---------------------------------------------------------------------------
   // 1b. Адресация по размерам (этап «Нанесение по размерам / части тиража»)
   // ---------------------------------------------------------------------------
 
