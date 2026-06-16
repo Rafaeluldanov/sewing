@@ -18,13 +18,12 @@ import {
   ExternalLink,
 } from 'lucide-react';
 import {
-  MATERIAL_ROLE_LABELS,
   WORKSHOP_NEED_CALCULATION_METHOD_LABELS,
   WORKSHOP_NEED_STATUS_LABELS,
-  type MaterialRole,
   type WorkshopNeedCalculationMethod,
   type WorkshopNeedStatus,
 } from '@sewing/shared/workshop-needs';
+import { getTechCardMaterialRoleLabel } from '@sewing/shared/tech-cards';
 import type {
   SupplierCatalogItemDto,
   SupplierListItemDto,
@@ -113,7 +112,11 @@ function formatMethod(method: string): string {
 
 function formatRole(role: string | null): string {
   if (!role) return '—';
-  return MATERIAL_ROLE_LABELS[role as MaterialRole] ?? role;
+  // Через общий резолвер: сначала категорийные группы из 9
+  // (FILLER → «Наполнитель», PACKAGING → «Фурнитура», ...), затем
+  // legacy `MATERIAL_ROLE_LABELS`. Прямой lookup в MATERIAL_ROLE_LABELS
+  // показывал бы сырой roleKey и запрещённую ТЗ «Упаковку».
+  return getTechCardMaterialRoleLabel(role);
 }
 
 function formatDateTime(iso: string | null): string {

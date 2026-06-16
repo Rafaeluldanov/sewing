@@ -313,7 +313,9 @@ export const PATTERN_CATEGORY_PARAMETER_GROUPS: readonly PatternCategoryParamete
     // TEXT_ONLY оставляем для чисто описательных позиций.
     roleKey: 'FILLER',
     label: 'Наполнитель',
-    allowedUnits: ['м', 'кг'],
+    // Синтепон закупают в «м пог.» (с пересчётом через плотность),
+    // искусственный пух — в «кг»; «м» оставлен для рулонных позиций.
+    allowedUnits: ['м', 'м пог.', 'кг'],
     defaultUnit: 'м',
     allowedInputTypes: ['QTY_PER_ITEM', 'TEXT_ONLY'],
     defaultInputType: 'QTY_PER_ITEM',

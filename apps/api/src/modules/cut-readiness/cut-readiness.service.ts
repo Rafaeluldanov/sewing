@@ -11,7 +11,7 @@ import {
   type CutReadinessDto,
   type CutReadinessStatus,
 } from '@sewing/shared/cut-readiness';
-import { MATERIAL_ROLE_LABELS } from '@sewing/shared/material-roles';
+import { getTechCardMaterialRoleLabel } from '@sewing/shared/tech-cards';
 import {
   ORDER_APPLICATION_TYPE_LABELS,
   isOrderApplicationDataFilled,
@@ -706,10 +706,10 @@ export class CutReadinessService {
 
     return {
       materialRole: role,
-      roleLabel:
-        role in MATERIAL_ROLE_LABELS
-          ? MATERIAL_ROLE_LABELS[role as keyof typeof MATERIAL_ROLE_LABELS]
-          : null,
+      // Общий резолвер: категорийные группы из 9 + legacy fallback.
+      // Для cut-blocking ролей (MAIN_FABRIC/RIB/LINING) лейбл есть
+      // всегда; резолвер делает поле устойчивым к любым roleKey.
+      roleLabel: getTechCardMaterialRoleLabel(role),
       description: need.description,
       targetQty: targetStr,
       calculatedQty: calculatedQty.toString(),
