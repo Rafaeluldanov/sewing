@@ -487,3 +487,77 @@ export const MaterialCharacteristicsSchema = z.record(
 export type MaterialCharacteristics = z.infer<
   typeof MaterialCharacteristicsSchema
 >;
+
+// ---------------------------------------------------------------------------
+// Пер­еходные хелперы (Фаза 1): legacy-колонки ↔ characteristics, описание
+// ---------------------------------------------------------------------------
+
+/** Подмножество строки материала с legacy-колонками (для бэкфилла). */
+export interface MaterialLineLegacyColumns {
+  densityGsm?: number | null;
+  plannedWidthCm?: number | null;
+  hardwareSizeText?: string | null;
+  hardwareMaterialText?: string | null;
+}
+
+/**
+ * Собрать `characteristics` из legacy-колонок (Фаза 1, бэкфилл и
+ * зеркалирование). Маппинг — по `legacyColumn` из
+ * `MATERIAL_CHARACTERISTICS`. null/empty пропускаются. Цвет не входит
+ * (он в `colorRule`).
+ */
+export function legacyColumnsToCharacteristics(
+  line: MaterialLineLegacyColumns,
+): MaterialCharacteristics {
+  const out: MaterialCharacteristics = {};
+  for (const def of MATERIAL_CHARACTERISTICS) {
+    if (!def.legacyColumn) continue;
+    const raw = line[def.legacyColumn];
+    if (raw === null || raw === undefined) continue;
+    if (typeof raw === 'string' && raw.trim() === '') continue;
+    out[def.key] = raw;
+  }
+  return out;
+}
+
+/**
+ * Человекочитаемое описание материала из подтипа + характеристик
+ * (+ цвет, который приходит отдельно из `colorRule`-механизма).
+ * Пример: «Молния, чёрный, тип: спираль, металл, размер 5, длина 60 см».
+ * Незнакомый подтип → собираем из переданных характеристик как есть.
+ */
+export function buildMaterialDescription(
+  subtypeKey: string | null | undefined,
+  characteristics: MaterialCharacteristics | null | undefined,
+  opts?: { color?: string | null; fallbackName?: string | null },
+): string {
+  const subtype = subtypeKey ? getMaterialSubtype(subtypeKey) : null;
+  const parts: string[] = [];
+
+  const head = subtype?.label ?? opts?.fallbackName ?? '';
+  if (head) parts.push(head);
+
+  const color = opts?.color?.trim();
+  if (color) parts.push(color);
+
+  const values = characteristics ?? {};
+  // Порядок — как у подтипа (если известен), иначе по каталогу.
+  const orderedKeys = subtype
+    ? subtype.characteristics.map((c) => c.key)
+    : MATERIAL_CHARACTERISTICS.map((c) => c.key);
+
+  for (const key of orderedKeys) {
+    const raw = values[key];
+    if (raw === null || raw === undefined || raw === '') continue;
+    const def = getMaterialCharacteristic(key);
+    const unit = def?.unit ? ` ${def.unit}` : '';
+    // «Тип» выводим с лейблом для однозначности; остальные — значением.
+    if (key === 'type') parts.push(`тип: ${raw}`);
+    else if (key === 'size') parts.push(`размер ${raw}${unit}`);
+    else if (key === 'length') parts.push(`длина ${raw}${unit}`);
+    else if (key === 'holesCount') parts.push(`${raw} прокол(ов)`);
+    else parts.push(`${raw}${unit}`);
+  }
+
+  return parts.join(', ');
+}

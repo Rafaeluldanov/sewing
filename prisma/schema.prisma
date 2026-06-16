@@ -949,6 +949,11 @@ model Employee {
   /// (`OrderCostEstimate.revokedById`).
   revokedOrderCostEstimates   OrderCostEstimate[] @relation("OrderCostEstimateRevoker")
 
+  /// Этап «Корректировка материалов после просчёта» (см.
+  /// `model OrderExtraCost` ниже). Прочие расходы, добавленные этим
+  /// сотрудником. `onDelete: SetNull` со стороны `OrderExtraCost.createdById`.
+  createdOrderExtraCosts OrderExtraCost[] @relation("OrderExtraCostCreator")
+
   /// Этап «Ручная отметка поступления материала» (см.
   /// `model OrderMaterialArrivalOverride` ниже,
   /// `apps/api/src/modules/order-material-arrivals/*`).
@@ -1293,6 +1298,17 @@ model Order {
   /// прочие — `REVOKED`). Снос заказа сносит и историю — расчёты
   /// без заказа смысла не имеют.
   costEstimates OrderCostEstimate[]
+
+  /// Этап «Корректировка материалов после просчёта» (см.
+  /// `model OrderExtraCost` ниже, `apps/api/src/modules/order-extra-costs/*`).
+  ///
+  /// Прочие / непредвиденные расходы по заказу (логистика, аутсорс,
+  /// штрафы, разработка лекала и т.п.), которые менеджер добавляет уже
+  /// после отправки на просчёт. С `includeInCostPrice=true` каждая
+  /// строка вливается в `OrderCostEstimateLine` (kind=OTHER,
+  /// sourceType=EXTRA_COST) при завершении/пересчёте себестоимости.
+  /// Cascade — без заказа расход смысла не имеет.
+  extraCosts OrderExtraCost[]
 
   /// Этап «Ручная отметка поступления материала» (см.
   /// `model OrderMaterialArrivalOverride` ниже,
@@ -2793,6 +2809,15 @@ model TechCardMaterialLine {
   /// nullable + backward-compatible.
   materialImageUrl              String?
   materialImageOriginalFileName String?
+  /// Фаза 1 «Характеристики номенклатуры»: ключ подтипа материала
+  /// (см. `MATERIAL_SUBTYPES` в `@sewing/shared/material-characteristics`).
+  /// nullable — старые строки и группа «Маркировка» (Фаза 3) без подтипа.
+  subtypeKey                    String?
+  /// Фаза 1: значения характеристик подтипа `{ ключ: значение }` (см.
+  /// `MATERIAL_CHARACTERISTICS`). Цвет здесь НЕ хранится — он остаётся в
+  /// `colorRule`/`fixedColorText`. В Фазе 1 заполняется бэкфиллом из
+  /// legacy-колонок; форма (Фаза 2) пишет сюда напрямую.
+  characteristics               Json?
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 
@@ -2905,6 +2930,15 @@ model OrderMaterialRequirement {
   hardwareMaterialText          String?
   materialImageUrl              String?
   materialImageOriginalFileName String?
+  /// Фаза 1 «Характеристики номенклатуры»: ключ подтипа материала
+  /// (см. `MATERIAL_SUBTYPES` в `@sewing/shared/material-characteristics`).
+  /// nullable — старые строки и группа «Маркировка» (Фаза 3) без подтипа.
+  subtypeKey                    String?
+  /// Фаза 1: значения характеристик подтипа `{ ключ: значение }` (см.
+  /// `MATERIAL_CHARACTERISTICS`). Цвет здесь НЕ хранится — он остаётся в
+  /// `colorRule`/`fixedColorText`. В Фазе 1 заполняется бэкфиллом из
+  /// legacy-колонок; форма (Фаза 2) пишет сюда напрямую.
+  characteristics               Json?
   createdAt                     DateTime @default(now())
 
   order              Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -3798,9 +3832,21 @@ model WorkshopNeed {
   orderSampleId String?
   orderSample   OrderSample? @relation(fields: [orderSampleId], references: [id], onDelete: SetNull)
 
-  /// `TECH_CARD_MATERIAL_LINE` | `ORDER_MATERIAL_REQUIREMENT`. Хранится
-  /// строкой ради расширяемости (см. JSDoc выше).
+  /// `TECH_CARD_MATERIAL_LINE` | `ORDER_MATERIAL_REQUIREMENT` |
+  /// `MANUAL_ADDITION`. Хранится строкой ради расширяемости (см. JSDoc выше).
   sourceType String?
+
+  /// Этап «Корректировка материалов после просчёта» (см.
+  /// `apps/api/src/modules/workshop-needs/*::createManual`).
+  ///
+  /// `true` — строку добавил человек руками уже после старта расчёта
+  /// (sourceType=`MANUAL_ADDITION`), чтобы покрыть непредвиденный расход
+  /// материала внутри заказа. Только ручные строки можно редактировать
+  /// целиком (`description`/`calculatedQty`/`unit`) и физически удалять —
+  /// системные строки из техкарты остаются неизменяемым snapshot'ом и
+  /// гасятся только через `cancel`. `WorkshopNeedsService.calculateForOrder`
+  /// (пересчёт системных строк) ручные строки не трогает.
+  isManual Boolean @default(false)
   /// `id` исходной строки в источнике (`TechCardMaterialLine.id` или
   /// `OrderMaterialRequirement.id`). Без FK: исходная строка может
   /// быть удалена позже, а потребность должна уцелеть для аудита.
@@ -3917,6 +3963,15 @@ model WorkshopNeed {
   /// UI показывает его как warning-строку под `description`.
   calculationNote String?
 
+  /// Фаза 1 «Характеристики номенклатуры»: ключ подтипа материала
+  /// (см. `MATERIAL_SUBTYPES` в `@sewing/shared/material-characteristics`).
+  /// nullable — старые потребности и «Маркировка» (Фаза 3) без подтипа.
+  subtypeKey      String?
+  /// Фаза 1: значения характеристик подтипа `{ ключ: значение }` (см.
+  /// `MATERIAL_CHARACTERISTICS`). Цвет здесь НЕ хранится. Бэкфилл из
+  /// legacy-колонок; расчёт/снапшот пишут сюда в Фазе 2.
+  characteristics Json?
+
   calculatedAt DateTime @default(now())
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
@@ -3988,6 +4043,7 @@ model WorkshopNeed {
   @@index([selectedSupplierId])
   @@index([selectedSupplierCatalogItemId])
   @@index([orderSampleId])
+  @@index([isManual])
 }
 
 // ---------------------------------------------------------------------------
@@ -4832,6 +4888,66 @@ model OrderCostEstimateLine {
   @@index([estimateId])
   @@index([workshopNeedId])
   @@index([kind])
+}
+
+// ---------------------------------------------------------------------------
+// OrderExtraCost (этап «Корректировка материалов после просчёта»)
+//
+// См. `apps/api/src/modules/order-extra-costs/*`,
+// `packages/shared/src/order-extra-costs.ts`,
+// `apps/web/components/orders/order-extra-costs-card.tsx`.
+//
+// Назначение: дать ADMIN/SHOP_MANAGER возможность учесть непредвиденные
+// расходы по заказу (логистика, аутсорс, штрафы и т.п.), которые
+// «вылезают» уже после отправки на просчёт, когда состав/материалы из
+// техкарты править нельзя. Это управленческая строка, НЕ складская
+// операция: WorkshopNeed / остатки / движения не затрагиваются.
+//
+// При `includeInCostPrice = true` каждая строка добавляется в
+// `OrderCostEstimateLine` (kind=OTHER, sourceType=EXTRA_COST) при
+// `completeCalculation` / `recalculateCostEstimate` и входит в
+// `OrderCostEstimate.totalCostRub`. Поле-предшественник
+// `Order.patternDevelopmentCostRub` сохраняется как отдельный частный
+// случай и вливается тем же способом.
+model OrderExtraCost {
+  id String @id @default(cuid())
+
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Человекочитаемое описание расхода («Доставка ткани из Турции»,
+  /// «Аутсорс вышивки», «Штраф за срыв срока»). Попадает в
+  /// `OrderCostEstimateLine.description`.
+  description String
+
+  /// Сумма расхода в исходной валюте (`currency`). Decimal(14,2) — копейки.
+  amount   Decimal @db.Decimal(14, 2)
+  /// `RUB` | `USD` — валюта суммы. USD конвертируется в рубли по
+  /// `OrderCostEstimate.usdRateRub` на момент завершения/пересчёта.
+  currency String  @default("RUB")
+
+  /// Включать ли расход в себестоимость заказа. Если `true`,
+  /// `completeCalculation` / `recalculateCostEstimate` добавляет
+  /// отдельную строку `OrderCostEstimateLine`. Если `false` — строка
+  /// остаётся справочной (видна в карточке, но в `totalCostRub` не входит).
+  includeInCostPrice Boolean @default(true)
+
+  /// Статус заказа на момент добавления расхода (`CALCULATION` /
+  /// `CALCULATION_DONE` / `IN_PRODUCTION`) — для аудита «когда вылез
+  /// непредвиденный расход».
+  createdAtStatus String?
+
+  comment String?
+
+  /// Кто добавил расход. `onDelete: SetNull` — деактивация учётки не
+  /// сносит управленческую строку.
+  createdById String?
+  createdBy   Employee? @relation("OrderExtraCostCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([orderId])
 }
 
 // ---------------------------------------------------------------------------
