@@ -25,7 +25,10 @@ import {
   type BulkUpsertOrderCutIssueRulesDto,
   type OrderCutIssueRulesSummaryDto,
 } from '@sewing/shared';
-import { CreateManualWorkshopNeedSchema } from '@sewing/shared/workshop-needs';
+import {
+  CreateManualWorkshopNeedSchema,
+  UpdateWorkshopNeedSchema,
+} from '@sewing/shared/workshop-needs';
 import {
   CreateOrderExtraCostSchema,
   UpdateOrderExtraCostSchema,
@@ -49,6 +52,7 @@ import {
 import {
   createManualWorkshopNeed,
   deleteManualWorkshopNeed,
+  updateWorkshopNeed,
 } from '@/lib/workshop-needs-api';
 import {
   createOrderExtraCost,
@@ -1101,6 +1105,30 @@ export async function createManualWorkshopNeedAction(
   }
   try {
     await createManualWorkshopNeed(orderId, parsed.data);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidateOrderPaths(orderId);
+  return { ok: true };
+}
+
+/**
+ * Изменить ручную строку потребности (состав: описание / ед. / кол-во /
+ * роль / цена). Backend отбивает попытку править системные snapshot-
+ * строки (409 `WORKSHOP_NEED_NOT_MANUAL`).
+ */
+export async function updateManualWorkshopNeedAction(
+  orderId: string,
+  needId: string,
+  input: unknown,
+): Promise<MaterialCorrectionActionState> {
+  const parsed = UpdateWorkshopNeedSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Проверьте поля формы' };
+  }
+  try {
+    await updateWorkshopNeed(needId, parsed.data);
   } catch (e) {
     if (isNextRedirect(e)) throw e;
     return { error: explainApiError(e) };

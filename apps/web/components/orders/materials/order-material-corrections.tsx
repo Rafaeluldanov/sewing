@@ -34,6 +34,7 @@ import {
   deleteManualWorkshopNeedAction,
   deleteOrderExtraCostAction,
   recalculateOrderCostEstimateAction,
+  updateManualWorkshopNeedAction,
   updateOrderExtraCostAction,
 } from '@/app/orders/actions';
 
@@ -70,6 +71,7 @@ export function OrderMaterialCorrections({
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
   const [showMaterialForm, setShowMaterialForm] = useState(false);
+  const [editingNeedId, setEditingNeedId] = useState<string | null>(null);
   const [showCostForm, setShowCostForm] = useState(false);
   const [editingCostId, setEditingCostId] = useState<string | null>(null);
   const [usdRate, setUsdRate] = useState('');
@@ -154,27 +156,57 @@ export function OrderMaterialCorrections({
                   borderTop: '1px solid rgba(0,0,0,0.06)',
                 }}
               >
-                <div style={{ minWidth: 0, flex: 1 }}>
-                  <div style={{ fontWeight: 500 }}>{n.description}</div>
-                  <div className="admin-muted" style={{ fontSize: '0.78rem', marginTop: 2 }}>
-                    {n.calculatedQty} {n.unit}
-                    {n.quotedPrice
-                      ? ` · ${formatMoney(n.quotedPrice, n.quotedCurrency ?? 'RUB')}/${n.unit}`
-                      : ''}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="admin-btn admin-btn--ghost"
-                  disabled={pending}
-                  title="Удалить материал"
-                  onClick={() => {
-                    if (!window.confirm(`Удалить «${n.description}»?`)) return;
-                    run(() => deleteManualWorkshopNeedAction(orderId, n.id));
-                  }}
-                >
-                  <Trash2 size={15} strokeWidth={1.6} aria-hidden />
-                </button>
+                {editingNeedId === n.id ? (
+                  <ManualMaterialForm
+                    disabled={pending}
+                    initial={n}
+                    onCancel={() => setEditingNeedId(null)}
+                    onSubmit={(payload) =>
+                      run(
+                        () => updateManualWorkshopNeedAction(orderId, n.id, payload),
+                        () => setEditingNeedId(null),
+                      )
+                    }
+                  />
+                ) : (
+                  <>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 500 }}>{n.description}</div>
+                      <div className="admin-muted" style={{ fontSize: '0.78rem', marginTop: 2 }}>
+                        {n.calculatedQty} {n.unit}
+                        {n.quotedPrice
+                          ? ` · ${formatMoney(n.quotedPrice, n.quotedCurrency ?? 'RUB')}/${n.unit}`
+                          : ''}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn--ghost"
+                        disabled={pending}
+                        title="Изменить материал"
+                        onClick={() => {
+                          setShowMaterialForm(false);
+                          setEditingNeedId(n.id);
+                        }}
+                      >
+                        <Pencil size={15} strokeWidth={1.6} aria-hidden />
+                      </button>
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn--ghost"
+                        disabled={pending}
+                        title="Удалить материал"
+                        onClick={() => {
+                          if (!window.confirm(`Удалить «${n.description}»?`)) return;
+                          run(() => deleteManualWorkshopNeedAction(orderId, n.id));
+                        }}
+                      >
+                        <Trash2 size={15} strokeWidth={1.6} aria-hidden />
+                      </button>
+                    </div>
+                  </>
+                )}
               </li>
             ))}
           </ul>
@@ -366,24 +398,26 @@ interface ManualMaterialPayload {
 
 function ManualMaterialForm({
   disabled,
+  initial,
   onCancel,
   onSubmit,
 }: {
   disabled: boolean;
+  initial?: WorkshopNeedListItemDto;
   onCancel: () => void;
   onSubmit: (payload: ManualMaterialPayload) => void;
 }) {
-  const [description, setDescription] = useState('');
-  const [unit, setUnit] = useState('');
-  const [qty, setQty] = useState('');
-  const [role, setRole] = useState('');
-  const [price, setPrice] = useState('');
-  const [currency, setCurrency] = useState('RUB');
+  const [description, setDescription] = useState(initial?.description ?? '');
+  const [unit, setUnit] = useState(initial?.unit ?? '');
+  const [qty, setQty] = useState(initial?.calculatedQty ?? '');
+  const [role, setRole] = useState(initial?.materialRole ?? '');
+  const [price, setPrice] = useState(initial?.quotedPrice ?? '');
+  const [currency, setCurrency] = useState(initial?.quotedCurrency ?? 'RUB');
 
   return (
     <form
       className="admin-inline-form"
-      style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4 }}
+      style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 4, flex: 1 }}
       onSubmit={(e) => {
         e.preventDefault();
         onSubmit({
@@ -462,7 +496,7 @@ function ManualMaterialForm({
       </div>
       <div style={{ display: 'flex', gap: 8 }}>
         <button type="submit" className="admin-btn admin-btn--primary" disabled={disabled}>
-          Добавить
+          {initial ? 'Сохранить' : 'Добавить'}
         </button>
         <button
           type="button"
