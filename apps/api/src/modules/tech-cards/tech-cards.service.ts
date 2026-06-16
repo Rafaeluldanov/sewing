@@ -540,14 +540,19 @@ export class TechCardsService {
       line.characteristics && Object.keys(line.characteristics).length > 0
         ? line.characteristics
         : null;
-    const chars: MaterialCharacteristics =
-      sentChars ??
-      legacyColumnsToCharacteristics({
+    // Поэлементный merge: legacy-поля дают density/rollWidth/size/
+    // material, присланные characteristics добавляют/перекрывают новые
+    // ключи (type/length/thickness/holesCount/width). Так форма может
+    // слать только новые характеристики, не теряя legacy-значения.
+    const chars: MaterialCharacteristics = {
+      ...legacyColumnsToCharacteristics({
         densityGsm: line.densityGsm,
         plannedWidthCm: line.plannedWidthCm,
         hardwareSizeText: line.hardwareSizeText,
         hardwareMaterialText: line.hardwareMaterialText,
-      });
+      }),
+      ...(sentChars ?? {}),
+    };
     const toInt = (v: unknown): number | null => {
       if (v === null || v === undefined || v === '') return null;
       const n = Number(v);
@@ -575,14 +580,12 @@ export class TechCardsService {
     if (plannedWidthCm != null) cleanedChars.rollWidth = plannedWidthCm;
     if (hardwareSizeText != null) cleanedChars.size = hardwareSizeText;
     if (hardwareMaterialText != null) cleanedChars.material = hardwareMaterialText;
-    if (sentChars) {
-      for (const [k, v] of Object.entries(sentChars)) {
-        if (k === 'density' || k === 'rollWidth' || k === 'size' || k === 'material') {
-          continue;
-        }
-        if (v === null || v === undefined || v === '') continue;
-        cleanedChars[k] = v;
+    for (const [k, v] of Object.entries(chars)) {
+      if (k === 'density' || k === 'rollWidth' || k === 'size' || k === 'material') {
+        continue;
       }
+      if (v === null || v === undefined || v === '') continue;
+      cleanedChars[k] = v;
     }
     const characteristics =
       Object.keys(cleanedChars).length > 0 ? cleanedChars : null;

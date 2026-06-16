@@ -131,6 +131,10 @@ type RawMaterialLineInput = {
   hardwareMaterialText: string | null;
   materialImageUrl: string | null;
   materialImageOriginalFileName: string | null;
+  // Фаза 2 «Характеристики номенклатуры»: подтип + значения новых
+  // характеристик (ключи без legacy-колонки приходят как `char_<key>`).
+  subtypeKey: string | null;
+  characteristics: Record<string, string> | null;
 };
 
 function buildMaterialLines(form: FormData): RawMaterialLineInput[] {
@@ -155,6 +159,16 @@ function buildMaterialLines(form: FormData): RawMaterialLineInput[] {
       const materialImageOriginalFileName = trimOrNull(
         'materialImageOriginalFileName',
       );
+      // Фаза 2: подтип + новые характеристики (`char_<key>` → объект).
+      const subtypeKey = trimOrNull('subtypeKey');
+      const characteristics: Record<string, string> = {};
+      for (const [k, v] of Object.entries(r)) {
+        if (!k.startsWith('char_')) continue;
+        const val = (v ?? '').trim();
+        if (val === '') continue;
+        characteristics[k.slice('char_'.length)] = val;
+      }
+      const hasCharacteristics = Object.keys(characteristics).length > 0;
 
       // Legacy поля больше не показываются пользователю — они едут
       // hidden-инпутами и могут содержать значения старой техкарты.
@@ -182,7 +196,9 @@ function buildMaterialLines(form: FormData): RawMaterialLineInput[] {
         hardwareSizeText != null ||
         hardwareMaterialText != null ||
         materialImageUrl != null ||
-        materialImageOriginalFileName != null;
+        materialImageOriginalFileName != null ||
+        subtypeKey != null ||
+        hasCharacteristics;
       if (!hasAnyContent) return null;
 
       const name =
@@ -215,6 +231,8 @@ function buildMaterialLines(form: FormData): RawMaterialLineInput[] {
         hardwareMaterialText,
         materialImageUrl,
         materialImageOriginalFileName,
+        subtypeKey,
+        characteristics: hasCharacteristics ? characteristics : null,
       };
     })
     .filter((r): r is RawMaterialLineInput => r !== null);

@@ -16,6 +16,12 @@ import {
   isKnownTechCardMaterialRoleKey,
 } from '@sewing/shared/tech-cards';
 import {
+  getMaterialCharacteristic,
+  getMaterialSubtype,
+  getMaterialSubtypesByGroup,
+  resolveRequiredCharacteristicKeys,
+} from '@sewing/shared/material-characteristics';
+import {
   createTechCardAction,
   pullMaterialLinesFromCategoryAction,
   pullMaterialLinesFromPatternAction,
@@ -113,6 +119,13 @@ interface MaterialRow {
   // `APPLICATION` со старых техкарт) сохраняются в state как есть и
   // отрисовываются как read-only `(legacy)` опция.
   materialRole: string;
+  // Фаза 2 «Характеристики номенклатуры»: ключ подтипа (Молния,
+  // Кашкорсе, Дублерин, ...; whitelist — `MATERIAL_SUBTYPES`) и
+  // значения «новых» характеристик без legacy-колонки (type/length/
+  // thickness/holesCount/width). Legacy-характеристики (плотность/
+  // ширина рулона/размер/материал) остаются в dedicated-полях ниже.
+  subtypeKey: string;
+  characteristics: Record<string, string>;
   fabricType: string;
   densityGsm: string;
   plannedWidthCm: string;
@@ -139,6 +152,11 @@ interface OutsourceRow {
   triggerType: OutsourceTriggerType;
 }
 
+// Характеристики с legacy-колонкой рендерятся отдельными полями
+// (плотность/ширина рулона/размер/материал) — их НЕ дублируем в
+// динамическом блоке характеристик подтипа.
+const LEGACY_CHARACTERISTIC_KEYS = ['density', 'rollWidth', 'size', 'material'];
+
 let __rowKeySeq = 0;
 function nextKey(): string {
   __rowKeySeq += 1;
@@ -154,6 +172,8 @@ function emptyMaterialRow(seed: Partial<MaterialRow> = {}): MaterialRow {
     qtyPerUnit: '',
     note: '',
     materialRole: '',
+    subtypeKey: '',
+    characteristics: {},
     fabricType: '',
     densityGsm: '',
     plannedWidthCm: '',
@@ -341,6 +361,15 @@ export function TechCardForm({
       qtyPerUnit: l.qtyPerUnit,
       note: l.note ?? '',
       materialRole: l.materialRole ?? '',
+      subtypeKey: l.subtypeKey ?? '',
+      // В state-е строки держим только «новые» характеристики (без
+      // legacy-колонки) — legacy лежат в densityGsm/plannedWidthCm/
+      // hardware*. Значения приводим к строке для контролируемых input-ов.
+      characteristics: Object.fromEntries(
+        Object.entries(l.characteristics ?? {})
+          .filter(([k]) => !LEGACY_CHARACTERISTIC_KEYS.includes(k))
+          .map(([k, v]) => [k, String(v)]),
+      ),
       fabricType: l.fabricType ?? '',
       densityGsm: l.densityGsm == null ? '' : String(l.densityGsm),
       plannedWidthCm:
@@ -1040,6 +1069,20 @@ function MaterialRowCard({
   const isLegacyRole =
     row.materialRole !== '' &&
     !isKnownTechCardMaterialRoleKey(row.materialRole);
+  // Фаза 2 «Характеристики номенклатуры»: подтипы выбранной группы,
+  // выбранный подтип и его «новые» характеристики (без legacy-колонки).
+  const subtypeOptions = getMaterialSubtypesByGroup(row.materialRole);
+  const subtype = row.subtypeKey ? getMaterialSubtype(row.subtypeKey) : null;
+  const requiredCharKeys = new Set(
+    row.subtypeKey
+      ? resolveRequiredCharacteristicKeys(row.subtypeKey, row.unit || 'кг')
+      : [],
+  );
+  const dynamicCharKeys = subtype
+    ? subtype.characteristics
+        .map((c) => c.key)
+        .filter((k) => !LEGACY_CHARACTERISTIC_KEYS.includes(k))
+    : [];
   return (
     <div
       className="admin-card admin-material-row"
@@ -1100,6 +1143,10 @@ function MaterialRowCard({
             onChange={(e) =>
               onChange({
                 materialRole: e.target.value,
+                // Смена группы обнуляет подтип и его характеристики —
+                // старый подтип принадлежал другой группе.
+                subtypeKey: '',
+                characteristics: {},
               })
             }
             style={{ width: '100%' }}
@@ -1134,6 +1181,88 @@ function MaterialRowCard({
             )}
           </select>
         </div>
+        {/*
+          Фаза 2 «Характеристики номенклатуры»: подтип материала
+          (Молния / Кашкорсе / Дублерин / ...). Показываем select только
+          если у выбранной группы есть подтипы; иначе сохраняем текущее
+          значение hidden-инпутом (backward-compat).
+        */}
+        {subtypeOptions.length > 0 ? (
+          <div className="admin-field">
+            <label htmlFor={`mat-${row.key}-subtype`}>Подтип</label>
+            <select
+              id={`mat-${row.key}-subtype`}
+              name={`material[${row.key}][subtypeKey]`}
+              value={row.subtypeKey}
+              onChange={(e) =>
+                onChange({ subtypeKey: e.target.value, characteristics: {} })
+              }
+              style={{ width: '100%' }}
+            >
+              <option value="">— не задано —</option>
+              {subtypeOptions.map((s) => (
+                <option key={s.subtypeKey} value={s.subtypeKey}>
+                  {s.label}
+                </option>
+              ))}
+              {row.subtypeKey &&
+                !subtypeOptions.some(
+                  (s) => s.subtypeKey === row.subtypeKey,
+                ) && (
+                  <option value={row.subtypeKey}>
+                    {row.subtypeKey} (legacy)
+                  </option>
+                )}
+            </select>
+          </div>
+        ) : (
+          row.subtypeKey && (
+            <input
+              type="hidden"
+              name={`material[${row.key}][subtypeKey]`}
+              value={row.subtypeKey}
+            />
+          )
+        )}
+        {/*
+          Динамические характеристики подтипа без legacy-колонки
+          (Тип / Длина / Толщина / Ширина / Кол-во проколов). Legacy-
+          характеристики (плотность/ширина рулона/размер/материал)
+          рендерятся отдельными полями ниже. `*` — обязательная.
+        */}
+        {dynamicCharKeys.map((k) => {
+          const def = getMaterialCharacteristic(k);
+          const label = def
+            ? def.unit
+              ? `${def.label}, ${def.unit}`
+              : def.label
+            : k;
+          const isRequired = requiredCharKeys.has(k);
+          return (
+            <div className="admin-field" key={k}>
+              <label htmlFor={`mat-${row.key}-char-${k}`}>
+                {label}
+                {isRequired ? ' *' : ''}
+              </label>
+              <input
+                id={`mat-${row.key}-char-${k}`}
+                name={`material[${row.key}][char_${k}]`}
+                type={def?.valueType === 'number' ? 'number' : 'text'}
+                value={row.characteristics[k] ?? ''}
+                required={isRequired}
+                onChange={(e) =>
+                  onChange({
+                    characteristics: {
+                      ...row.characteristics,
+                      [k]: e.target.value,
+                    },
+                  })
+                }
+                style={{ width: '100%' }}
+              />
+            </div>
+          );
+        })}
         <div className="admin-field">
           <label htmlFor={`mat-${row.key}-fabric`}>
             Характеристика полотна
