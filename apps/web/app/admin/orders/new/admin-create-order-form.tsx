@@ -106,6 +106,7 @@ import {
   type FormActionState,
 } from '@/app/orders/actions';
 import { SizePlanSelector } from './size-plan-selector';
+import { TechCardCombobox } from './tech-card-combobox';
 import {
   CreateProductInline,
   type SavedConstructorDraftPayload,
@@ -507,6 +508,7 @@ export function AdminCreateOrderForm({
             techCardId={techCardId}
             onTechCardIdChange={setTechCardId}
             techCards={techCards}
+            patternCategories={patternCategories}
             routeTemplateId={routeTemplateId}
             onRouteTemplateIdChange={setRouteTemplateId}
             routeTemplates={routeTemplates}
@@ -1003,6 +1005,7 @@ function ProductCreateTab({
   techCardId,
   onTechCardIdChange,
   techCards,
+  patternCategories,
   routeTemplateId,
   onRouteTemplateIdChange,
   routeTemplates,
@@ -1033,6 +1036,8 @@ function ProductCreateTab({
   techCardId: string;
   onTechCardIdChange: (v: string) => void;
   techCards: TechCardTemplateSummaryDto[];
+  /** Группы номенклатуры — папки в комбобоксе выбора техкарты. */
+  patternCategories: PatternCategoryListItemDto[];
   routeTemplateId: string;
   onRouteTemplateIdChange: (v: string) => void;
   routeTemplates: RouteTemplateSummaryDto[];
@@ -1250,19 +1255,14 @@ function ProductCreateTab({
         <div className="admin-form-grid">
           <div className="admin-field">
             <label htmlFor="techCardId">Техкарта</label>
-            <select
+            <TechCardCombobox
               id="techCardId"
               name="techCardId"
               value={techCardId}
-              onChange={(e) => onTechCardIdChange(e.target.value)}
-            >
-              <option value="">— без техкарты —</option>
-              {techCards.map((tc) => (
-                <option key={tc.id} value={tc.id}>
-                  {tc.name}
-                </option>
-              ))}
-            </select>
+              onChange={onTechCardIdChange}
+              techCards={techCards}
+              categories={patternCategories}
+            />
           </div>
 
           <div className="admin-field">

@@ -7570,6 +7570,194 @@ body:has(.admin-layout) .app-header { display: none !important; }
   gap: 0.5rem;
 }
 
+/* Комбобокс выбора техкарты с группировкой по группам номенклатуры
+   (см. `app/admin/orders/new/tech-card-combobox.tsx`). Папки-группы
+   разворачиваются по клику, сверху — строка поиска. Внешне совпадает
+   с обычным `.admin-field > select` в закрытом состоянии. */
+.tc-combobox {
+  position: relative;
+  width: 100%;
+}
+
+.tc-combobox__trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+.tc-combobox__trigger:focus-visible {
+  outline: none;
+  border-color: var(--admin-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+
+.tc-combobox__value {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-combobox__value--placeholder {
+  color: var(--admin-muted);
+}
+
+.tc-combobox__caret {
+  flex: 0 0 auto;
+  color: var(--admin-muted);
+}
+
+.tc-combobox__panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 320px;
+  border-radius: 10px;
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
+  overflow: hidden;
+}
+
+.tc-combobox__search {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.5rem 0.6rem;
+  border-bottom: 1px solid var(--admin-border);
+  color: var(--admin-muted);
+}
+
+.tc-combobox__search-input {
+  flex: 1 1 auto;
+  border: none;
+  background: transparent;
+  color: var(--admin-text);
+  font: inherit;
+  outline: none;
+}
+
+.tc-combobox__search-clear {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: none;
+  background: transparent;
+  color: var(--admin-muted);
+  cursor: pointer;
+  padding: 0.1rem;
+  border-radius: 6px;
+}
+
+.tc-combobox__search-clear:hover {
+  color: var(--admin-text);
+  background: rgba(148, 163, 184, 0.18);
+}
+
+.tc-combobox__list {
+  overflow-y: auto;
+  padding: 0.25rem;
+}
+
+.tc-combobox__empty {
+  padding: 0.75rem;
+  color: var(--admin-muted);
+  font-size: 0.88rem;
+  text-align: center;
+}
+
+.tc-combobox__folder {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  padding: 0.45rem 0.5rem;
+  border: none;
+  background: transparent;
+  color: var(--admin-text);
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.tc-combobox__folder:hover {
+  background: rgba(148, 163, 184, 0.14);
+}
+
+.tc-combobox__folder-icon {
+  flex: 0 0 auto;
+  color: var(--admin-primary);
+}
+
+.tc-combobox__folder-name {
+  flex: 1 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-combobox__folder-count {
+  flex: 0 0 auto;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--admin-muted);
+  background: rgba(148, 163, 184, 0.16);
+  border-radius: 999px;
+  padding: 0.05rem 0.45rem;
+}
+
+.tc-combobox__cards {
+  display: flex;
+  flex-direction: column;
+  padding-left: 1.35rem;
+}
+
+.tc-combobox__card {
+  display: block;
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: none;
+  background: transparent;
+  color: var(--admin-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tc-combobox__card:hover {
+  background: rgba(148, 163, 184, 0.14);
+}
+
+.tc-combobox__card.is-selected {
+  background: rgba(37, 99, 235, 0.12);
+  color: var(--admin-primary);
+  font-weight: 600;
+}
+
+.tc-combobox__card--reset {
+  color: var(--admin-muted);
+}
+
 .admin-field__hint {
   color: var(--admin-muted);
   font-size: 0.82rem;
