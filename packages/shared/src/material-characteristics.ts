@@ -408,8 +408,10 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
     subtypeKey: 'KNIT_COLLAR',
     label: 'Вязаный воротник',
     groupRoleKey: 'PACKAGING',
+    // Ввод — в штуках; потребность считают и в штуках, и в метрах
+    // (решение пользователя 16.06.2026).
     defaultUnit: 'шт',
-    allowedUnits: ['шт'],
+    allowedUnits: ['шт', 'м/шт'],
     characteristics: [{ key: 'material' }],
   },
   {
