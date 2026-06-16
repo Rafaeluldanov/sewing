@@ -158,6 +158,28 @@ export function reopenOrderCalculation(
   );
 }
 
+/**
+ * Этап «Корректировка материалов после просчёта»: пересчитать
+ * себестоимость БЕЗ смены статуса заказа
+ * (`POST /api/orders/:id/recalculate-cost-estimate`). Текущий
+ * `COMPLETED`-расчёт помечается `REVOKED`, создаётся новая версия из
+ * актуальных `WorkshopNeed` + `OrderExtraCost`. Разрешено из
+ * `CALCULATION_DONE` и `IN_PRODUCTION`. Тело — то же
+ * `CompleteOrderCalculationDto` (курс USD нужен только при USD-строках).
+ */
+export function recalculateOrderCostEstimate(
+  id: string,
+  body: CompleteOrderCalculationDto = {},
+): Promise<OrderCostEstimateDto> {
+  return apiFetch<OrderCostEstimateDto>(
+    `/orders/${encodeURIComponent(id)}/recalculate-cost-estimate`,
+    {
+      method: 'POST',
+      body,
+    },
+  );
+}
+
 export function cancelOrder(id: string): Promise<OrderDetailDto> {
   return apiFetch<OrderDetailDto>(`/orders/${encodeURIComponent(id)}/cancel`, {
     method: 'POST',

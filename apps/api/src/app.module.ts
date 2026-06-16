@@ -48,6 +48,7 @@ import { PurchaseReceiptsModule } from './modules/purchase-receipts/purchase-rec
 import { CutReadinessModule } from './modules/cut-readiness/cut-readiness.module.js';
 import { OrderApplicationsModule } from './modules/order-applications/order-applications.module.js';
 import { OrderMaterialArrivalsModule } from './modules/order-material-arrivals/order-material-arrivals.module.js';
+import { OrderExtraCostsModule } from './modules/order-extra-costs/order-extra-costs.module.js';
 import { SizesModule } from './modules/sizes/sizes.module.js';
 import { PayrollAccrualDocumentsModule } from './modules/payroll-accrual-documents/payroll-accrual-documents.module.js';
 import { MaterialIssuesModule } from './modules/material-issues/material-issues.module.js';
@@ -112,6 +113,7 @@ import { TreasuryModule } from './modules/treasury/treasury.module.js';
     CutReadinessModule,
     OrderApplicationsModule,
     OrderMaterialArrivalsModule,
+    OrderExtraCostsModule,
     SizesModule,
     PayrollAccrualDocumentsModule,
     MaterialIssuesModule,

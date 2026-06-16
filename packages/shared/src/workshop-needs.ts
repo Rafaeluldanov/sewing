@@ -178,6 +178,16 @@ export const WORKSHOP_NEED_SOURCE_TYPES = [
    * Расчёт делает `WorkshopNeedsService.computeMaterialAreaByRole`.
    */
   'PATTERN_MATERIAL_AREA',
+  /**
+   * Этап «Корректировка материалов после просчёта» (см.
+   * `apps/api/src/modules/workshop-needs/*::createManual`,
+   * `prisma/schema.prisma::WorkshopNeed.isManual`). Строку добавил
+   * человек руками уже после старта расчёта, чтобы покрыть
+   * непредвиденный расход материала внутри заказа. Такие строки имеют
+   * `isManual = true`, их можно редактировать целиком и физически
+   * удалять; системный пересчёт (`calculateForOrder`) их не трогает.
+   */
+  'MANUAL_ADDITION',
 ] as const;
 export type WorkshopNeedSourceType =
   (typeof WORKSHOP_NEED_SOURCE_TYPES)[number];
@@ -514,6 +524,119 @@ export type CalculateWorkshopNeedsDto = z.infer<
 >;
 
 // ---------------------------------------------------------------------------
+// Manual addition DTO (этап «Корректировка материалов после просчёта»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Обязательное положительное количество (для ручной строки). В отличие
+ * от `PurchaseQtyField`, не допускает `null` и `undefined` — это
+ * `calculatedQty` создаваемой строки. До 4 знаков после точки.
+ */
+const RequiredPositiveQtyField: z.ZodType<string> = z
+  .union([z.string(), z.number()])
+  .transform((v, ctx) => {
+    const raw = typeof v === 'number' ? String(v) : v.trim().replace(',', '.');
+    if (raw === '' || !/^\d+(\.\d{1,4})?$/.test(raw)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Количество: положительное число, не более 4 знаков после точки',
+      });
+      return z.NEVER;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Количество должно быть > 0',
+      });
+      return z.NEVER;
+    }
+    if (n > WORKSHOP_NEED_QTY_MAX) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Количество: значение выглядит ошибочным',
+      });
+      return z.NEVER;
+    }
+    return raw;
+  }) as unknown as z.ZodType<string>;
+
+/**
+ * Опциональное положительное количество (для редактирования
+ * `calculatedQty` ручной строки). Не допускает `null` — у строки всегда
+ * есть `calculatedQty`. `undefined` — поле не пришло.
+ */
+const OptionalPositiveQtyField: z.ZodType<string | undefined> = z
+  .union([z.string(), z.number()])
+  .optional()
+  .transform((v, ctx) => {
+    if (v === undefined) return undefined;
+    const raw = typeof v === 'number' ? String(v) : v.trim().replace(',', '.');
+    if (raw === '' || !/^\d+(\.\d{1,4})?$/.test(raw)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Количество: положительное число, не более 4 знаков после точки',
+      });
+      return z.NEVER;
+    }
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Количество должно быть > 0',
+      });
+      return z.NEVER;
+    }
+    if (n > WORKSHOP_NEED_QTY_MAX) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Количество: значение выглядит ошибочным',
+      });
+      return z.NEVER;
+    }
+    return raw;
+  }) as unknown as z.ZodType<string | undefined>;
+
+/**
+ * Тело `POST /api/orders/:id/workshop-needs` — ручное добавление строки
+ * потребности (непредвиденный расход материала). Создаётся с
+ * `isManual = true`, `sourceType = MANUAL_ADDITION`, статусом по
+ * умолчанию `REVIEWED` (строку завёл человек, она сразу «проверена»).
+ *
+ * Закупочные/ценовые поля опциональны — менеджер может сначала только
+ * зафиксировать сам факт расхода, а цену/поставщика проставить позже
+ * через обычный `PATCH`.
+ */
+export const CreateManualWorkshopNeedSchema = z.object({
+  description: z
+    .string()
+    .trim()
+    .min(1, 'Укажите описание материала')
+    .max(WORKSHOP_NEED_DESCRIPTION_MAX_LENGTH),
+  unit: z
+    .string()
+    .trim()
+    .min(1, 'Укажите единицу измерения')
+    .max(WORKSHOP_NEED_UNIT_MAX_LENGTH),
+  /** Чистая потребность, которую вводит человек. Обязательна, > 0. */
+  calculatedQty: RequiredPositiveQtyField,
+  /**
+   * Роль материала (`MAIN_FABRIC` / `PACKAGING` / … — определяет UI-секцию).
+   * Опциональна: если не указана, строка попадёт в «Прочее».
+   */
+  materialRole: MaterialRoleSchema.nullable().optional(),
+  purchaseQty: PurchaseQtyField,
+  quotedPrice: QuotedPriceField,
+  quotedCurrency: QuotedCurrencyField,
+  supplierNameText: SupplierNameField,
+  purchaseItemNameText: PurchaseItemNameField,
+  comment: CommentField,
+});
+export type CreateManualWorkshopNeedDto = z.infer<
+  typeof CreateManualWorkshopNeedSchema
+>;
+
+// ---------------------------------------------------------------------------
 // Update DTO (закупщик)
 // ---------------------------------------------------------------------------
 
@@ -540,6 +663,27 @@ const SelectedSupplierCatalogItemIdField = SelectedSupplierIdField;
 
 export const UpdateWorkshopNeedSchema = z
   .object({
+    /**
+     * Этап «Корректировка материалов после просчёта»: поля
+     * `description` / `unit` / `materialRole` / `calculatedQty`
+     * редактируются ТОЛЬКО для ручных строк (`isManual = true`). Для
+     * системных snapshot-строк backend вернёт 409 — их состав менять
+     * нельзя (см. `WorkshopNeedsService.update`).
+     */
+    description: z
+      .string()
+      .trim()
+      .min(1, 'Описание не может быть пустым')
+      .max(WORKSHOP_NEED_DESCRIPTION_MAX_LENGTH)
+      .optional(),
+    unit: z
+      .string()
+      .trim()
+      .min(1, 'Единица измерения не может быть пустой')
+      .max(WORKSHOP_NEED_UNIT_MAX_LENGTH)
+      .optional(),
+    materialRole: MaterialRoleSchema.nullable().optional(),
+    calculatedQty: OptionalPositiveQtyField,
     purchaseQty: PurchaseQtyField,
     /**
      * Штук в упаковке (только кнопки). См. `PackSizeField` и
@@ -571,6 +715,10 @@ export const UpdateWorkshopNeedSchema = z
   })
   .refine(
     (obj) =>
+      obj.description !== undefined ||
+      obj.unit !== undefined ||
+      obj.materialRole !== undefined ||
+      obj.calculatedQty !== undefined ||
       obj.purchaseQty !== undefined ||
       obj.packSize !== undefined ||
       obj.status !== undefined ||
@@ -670,6 +818,14 @@ export interface WorkshopNeedDto {
 
   sourceType: WorkshopNeedSourceType | string | null;
   sourceId: string | null;
+
+  /**
+   * Этап «Корректировка материалов после просчёта»: `true` — строку
+   * добавил человек руками (sourceType=`MANUAL_ADDITION`). UI рисует
+   * для неё кнопки «редактировать» / «удалить» и плашку «ручная»;
+   * системные строки остаются read-only snapshot'ом.
+   */
+  isManual: boolean;
 
   /**
    * Сигнальный образец (MVP, см.

@@ -6921,6 +6921,33 @@ body:has(.display-screen) {
   color: var(--admin-primary-fg);
 }
 
+/*
+ * Базовый инпут/селект для inline-форм управленческих карточек
+ * (этап «Корректировка материалов после просчёта» и далее). Совпадает
+ * по визуалу с `.admin-btn` (рамка/радиус/поверхность), чтобы формы в
+ * карточках выглядели единообразно.
+ */
+.admin-input {
+  display: inline-flex;
+  width: 100%;
+  padding: 0.5rem 0.7rem;
+  border-radius: 10px;
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font-size: 0.85rem;
+  line-height: 1.2;
+}
+.admin-input:focus {
+  outline: none;
+  border-color: var(--admin-primary);
+  box-shadow: 0 0 0 3px var(--admin-primary-soft);
+}
+.admin-input:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
 /* ---------------------------------------------------------------------------
    Admin home dashboard — крупные карточки разделов.
    --------------------------------------------------------------------------- */

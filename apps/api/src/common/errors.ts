@@ -118,6 +118,51 @@ export class WorkshopNeedCalculationOverflowException extends BusinessException 
   }
 }
 
+// ---------------------------------------------------------------------------
+// Корректировка материалов после просчёта (ручные строки + прочие расходы)
+// ---------------------------------------------------------------------------
+
+/**
+ * Менеджер пытается добавить/править/удалить материал или прочий расход
+ * на заказе в неподходящем статусе. Корректировка разрешена только в
+ * `CALCULATION` / `CALCULATION_DONE` / `IN_PRODUCTION` (см.
+ * `OrderMaterialCorrectionService` / `WorkshopNeedsService.createManual`).
+ * В `DRAFT` состав ведётся обычным редактированием заказа, в
+ * `DONE`/`CANCELLED` заказ закрыт. Сообщение формирует сервис, чтобы
+ * назвать текущий статус.
+ */
+export class OrderMaterialCorrectionStatusException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'ORDER_MATERIAL_CORRECTION_INVALID_STATUS',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Менеджер пытается редактировать состав (description / unit /
+ * materialRole / calculatedQty) или физически удалить СИСТЕМНУЮ строку
+ * потребности (`isManual = false`). Такие строки — неизменяемый snapshot
+ * из техкарты; их можно только гасить через `cancel`. Менять состав
+ * разрешено только у ручных строк (`isManual = true`).
+ */
+export class WorkshopNeedNotManualException extends BusinessException {
+  constructor(
+    message = 'Системную строку потребности нельзя править или удалять — её можно только отменить. Состав меняется у ручных строк.',
+  ) {
+    super('WORKSHOP_NEED_NOT_MANUAL', message, HttpStatus.CONFLICT);
+  }
+}
+
+/** Прочий расход (`OrderExtraCost`) не найден. */
+export class OrderExtraCostNotFoundException extends BusinessException {
+  constructor(message = 'Прочий расход не найден') {
+    super('ORDER_EXTRA_COST_NOT_FOUND', message, HttpStatus.NOT_FOUND);
+  }
+}
+
 /**
  * Этап 2 «План операций на заказе» (см.
  * `docs/operation-time-norms-recon.md §11`,

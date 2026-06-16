@@ -1,14 +1,19 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  HttpCode,
   Param,
   Post,
 } from '@nestjs/common';
 import {
   CalculateWorkshopNeedsSchema,
+  CreateManualWorkshopNeedSchema,
   type CalculateWorkshopNeedsDto,
   type CalculateWorkshopNeedsResultDto,
+  type CreateManualWorkshopNeedDto,
+  type WorkshopNeedDto,
   type WorkshopNeedListItemDto,
 } from '@sewing/shared/workshop-needs';
 
@@ -46,6 +51,34 @@ export class WorkshopNeedsOrderController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<CalculateWorkshopNeedsResultDto> {
     return this.needs.calculateForOrder(orderId, dto, user.employeeId);
+  }
+
+  /**
+   * Этап «Корректировка материалов после просчёта»: ручное добавление
+   * строки потребности (непредвиденный расход материала). Разрешено в
+   * `CALCULATION` / `CALCULATION_DONE` / `IN_PRODUCTION`.
+   */
+  @Post(':id/workshop-needs/manual')
+  createManual(
+    @Param('id') orderId: string,
+    @Body(new ZodValidationPipe(CreateManualWorkshopNeedSchema))
+    dto: CreateManualWorkshopNeedDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<WorkshopNeedDto> {
+    return this.needs.createManual(orderId, dto, user.employeeId);
+  }
+
+  /**
+   * Удаление ручной строки потребности. Системные snapshot-строки
+   * удалять нельзя (409 `WORKSHOP_NEED_NOT_MANUAL`) — их гасят `cancel`.
+   */
+  @Delete(':id/workshop-needs/:needId')
+  @HttpCode(204)
+  async deleteManual(
+    @Param('needId') needId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<void> {
+    await this.needs.deleteManual(needId, user.employeeId);
   }
 
   @Get(':id/workshop-needs')

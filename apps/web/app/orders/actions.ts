@@ -25,6 +25,11 @@ import {
   type BulkUpsertOrderCutIssueRulesDto,
   type OrderCutIssueRulesSummaryDto,
 } from '@sewing/shared';
+import { CreateManualWorkshopNeedSchema } from '@sewing/shared/workshop-needs';
+import {
+  CreateOrderExtraCostSchema,
+  UpdateOrderExtraCostSchema,
+} from '@sewing/shared/order-extra-costs';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   cancelOrder,
@@ -32,6 +37,7 @@ import {
   completeOrder,
   completeOrderCalculation,
   createOrder,
+  recalculateOrderCostEstimate,
   recalculateOrderOperationPlan,
   reopenOrderCalculation,
   startCalculationOrder,
@@ -40,6 +46,15 @@ import {
   updateOrderMaterialRequirementColor,
   updateOrderOutsourceRequirementStatus,
 } from '@/lib/orders-api';
+import {
+  createManualWorkshopNeed,
+  deleteManualWorkshopNeed,
+} from '@/lib/workshop-needs-api';
+import {
+  createOrderExtraCost,
+  deleteOrderExtraCost,
+  updateOrderExtraCost,
+} from '@/lib/order-extra-costs-api';
 import {
   disableOrderCutIssueQueue,
   disableOrderCutIssueRules,
@@ -1052,6 +1067,139 @@ export async function disableOrderCutIssueRulesAction(
   revalidatePath(`/orders/${orderId}`);
   revalidatePath(`/admin/orders/${orderId}`);
   return { ok: true, summary };
+}
+
+// ---------------------------------------------------------------------------
+// Корректировка материалов после просчёта (этап «Корректировка
+// материалов после просчёта»): ручные строки потребности + прочие
+// расходы + пересчёт себестоимости без смены статуса заказа.
+// ---------------------------------------------------------------------------
+
+export interface MaterialCorrectionActionState extends FormActionState {
+  ok?: boolean;
+}
+
+function revalidateOrderPaths(orderId: string): void {
+  revalidatePath('/admin/workshop-needs');
+  revalidatePath('/admin/orders');
+  revalidatePath(`/admin/orders/${orderId}`);
+  revalidatePath(`/orders/${orderId}`);
+}
+
+/**
+ * Добавить ручную строку потребности (непредвиденный расход материала).
+ * Валидируем тем же `CreateManualWorkshopNeedSchema`, что и backend —
+ * клиент уже проверил форму, это defense-in-depth + понятный текст.
+ */
+export async function createManualWorkshopNeedAction(
+  orderId: string,
+  input: unknown,
+): Promise<MaterialCorrectionActionState> {
+  const parsed = CreateManualWorkshopNeedSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Проверьте поля формы' };
+  }
+  try {
+    await createManualWorkshopNeed(orderId, parsed.data);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidateOrderPaths(orderId);
+  return { ok: true };
+}
+
+/** Удалить ручную строку потребности. */
+export async function deleteManualWorkshopNeedAction(
+  orderId: string,
+  needId: string,
+): Promise<MaterialCorrectionActionState> {
+  try {
+    await deleteManualWorkshopNeed(orderId, needId);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidateOrderPaths(orderId);
+  return { ok: true };
+}
+
+/** Добавить прочий / непредвиденный расход по заказу. */
+export async function createOrderExtraCostAction(
+  orderId: string,
+  input: unknown,
+): Promise<MaterialCorrectionActionState> {
+  const parsed = CreateOrderExtraCostSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Проверьте поля формы' };
+  }
+  try {
+    await createOrderExtraCost(orderId, parsed.data);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidateOrderPaths(orderId);
+  return { ok: true };
+}
+
+/** Изменить прочий расход. */
+export async function updateOrderExtraCostAction(
+  orderId: string,
+  costId: string,
+  input: unknown,
+): Promise<MaterialCorrectionActionState> {
+  const parsed = UpdateOrderExtraCostSchema.safeParse(input);
+  if (!parsed.success) {
+    return { error: parsed.error.issues[0]?.message ?? 'Проверьте поля формы' };
+  }
+  try {
+    await updateOrderExtraCost(orderId, costId, parsed.data);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidateOrderPaths(orderId);
+  return { ok: true };
+}
+
+/** Удалить прочий расход. */
+export async function deleteOrderExtraCostAction(
+  orderId: string,
+  costId: string,
+): Promise<MaterialCorrectionActionState> {
+  try {
+    await deleteOrderExtraCost(orderId, costId);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidateOrderPaths(orderId);
+  return { ok: true };
+}
+
+/**
+ * Пересчитать себестоимость без смены статуса заказа (для
+ * `CALCULATION_DONE` / `IN_PRODUCTION`). Текущий расчёт ревокируется,
+ * создаётся новая версия из актуальных потребностей и прочих расходов.
+ * `usdRateRub` нужен только если в строках есть USD —
+ * `ORDER_CALCULATION_USD_RATE_REQUIRED` пробрасывается inline.
+ */
+export async function recalculateOrderCostEstimateAction(
+  orderId: string,
+  usdRateRub?: string | null,
+): Promise<MaterialCorrectionActionState> {
+  try {
+    await recalculateOrderCostEstimate(orderId, {
+      usdRateRub: usdRateRub && usdRateRub.trim() !== '' ? usdRateRub : null,
+      comment: null,
+    });
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidateOrderPaths(orderId);
+  return { ok: true };
 }
 
 function isNextRedirect(e: unknown): boolean {

@@ -11,6 +11,7 @@
 import type {
   CalculateWorkshopNeedsDto,
   CalculateWorkshopNeedsResultDto,
+  CreateManualWorkshopNeedDto,
   ListWorkshopNeedsQuery,
   UpdateWorkshopNeedDto,
   WorkshopNeedDto,
@@ -83,5 +84,34 @@ export function getOrderWorkshopNeeds(
   return apiFetch<WorkshopNeedListItemDto[]>(
     `/orders/${encodeURIComponent(orderId)}/workshop-needs`,
     { cache: 'no-store' },
+  );
+}
+
+/**
+ * Этап «Корректировка материалов после просчёта»: ручное добавление
+ * строки потребности (непредвиденный расход материала). Разрешено в
+ * `CALCULATION` / `CALCULATION_DONE` / `IN_PRODUCTION`.
+ */
+export function createManualWorkshopNeed(
+  orderId: string,
+  body: CreateManualWorkshopNeedDto,
+): Promise<WorkshopNeedDto> {
+  return apiFetch<WorkshopNeedDto>(
+    `/orders/${encodeURIComponent(orderId)}/workshop-needs/manual`,
+    { method: 'POST', body },
+  );
+}
+
+/**
+ * Удаление ручной строки потребности (только `isManual = true`).
+ * Системные snapshot-строки удалять нельзя (409 `WORKSHOP_NEED_NOT_MANUAL`).
+ */
+export function deleteManualWorkshopNeed(
+  orderId: string,
+  needId: string,
+): Promise<void> {
+  return apiFetch<void>(
+    `/orders/${encodeURIComponent(orderId)}/workshop-needs/${encodeURIComponent(needId)}`,
+    { method: 'DELETE' },
   );
 }

@@ -175,6 +175,23 @@ export class OrdersController {
   }
 
   /**
+   * Этап «Корректировка материалов после просчёта»: пересчитать
+   * себестоимость БЕЗ смены статуса заказа. Текущий `COMPLETED`-расчёт
+   * помечается `REVOKED`, создаётся новая версия из актуальных
+   * `WorkshopNeed` + `OrderExtraCost`. Разрешено из `CALCULATION_DONE`
+   * и `IN_PRODUCTION`. Тело — то же `CompleteOrderCalculationSchema`.
+   */
+  @Post(':id/recalculate-cost-estimate')
+  recalculateCostEstimate(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(CompleteOrderCalculationSchema))
+    dto: CompleteOrderCalculationDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.costEstimates.recalculateCostEstimate(id, dto, user.employeeId);
+  }
+
+  /**
    * Этап 2 «План операций на заказе» (см.
    * `docs/operation-time-norms-recon.md §11`,
    * `apps/api/src/modules/orders/order-operation-plan.service.ts`):

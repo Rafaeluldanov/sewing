@@ -167,6 +167,17 @@ export type AuditEntityType =
    */
   | 'ORDER_COST_ESTIMATE'
   /**
+   * Прочие / непредвиденные расходы заказа (этап «Корректировка
+   * материалов после просчёта», см.
+   * `apps/api/src/modules/order-extra-costs/*`,
+   * `prisma/schema.prisma::OrderExtraCost`). События:
+   *   - `ORDER_EXTRA_COST_CREATED` / `ORDER_EXTRA_COST_UPDATED` /
+   *     `ORDER_EXTRA_COST_DELETED` — CRUD строки расхода,
+   *     `entityId = OrderExtraCost.id` (детали — orderId / amount /
+   *     currency / includeInCostPrice).
+   */
+  | 'ORDER_EXTRA_COST'
+  /**
    * Ручная отметка «Материал поступил» (этап «Ручная отметка
    * поступления материала», см.
    * `apps/api/src/modules/order-material-arrivals/*`,

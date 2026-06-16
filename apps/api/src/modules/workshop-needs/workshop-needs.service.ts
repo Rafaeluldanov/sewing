@@ -7,6 +7,7 @@ import { Prisma, type WorkshopNeed } from '@prisma/client';
 import type {
   CalculateWorkshopNeedsDto,
   CalculateWorkshopNeedsResultDto,
+  CreateManualWorkshopNeedDto,
   ListWorkshopNeedsQuery,
   UpdateWorkshopNeedDto,
   WorkshopNeedDto,
@@ -30,9 +31,11 @@ import {
   WorkshopNeedCalculationOverflowException,
   WorkshopNeedCalculationSourceException,
   WorkshopNeedNotFoundException,
+  WorkshopNeedNotManualException,
   WorkshopNeedOrderItemsRequiredException,
   WorkshopNeedsAlreadyReviewedException,
 } from '../../common/errors.js';
+import { assertOrderMaterialCorrectionAllowed } from '../../common/order-material-correction.js';
 
 /**
  * Реализация модуля «Потребность цеха» (Этап 4А, см.
@@ -157,8 +160,39 @@ export class WorkshopNeedsService {
     });
     if (!existing) throw new WorkshopNeedNotFoundException();
 
+    // Этап «Корректировка материалов после просчёта»: состав строки
+    // (description / unit / materialRole / calculatedQty) можно менять
+    // ТОЛЬКО у ручных строк. Для системных snapshot-строк из техкарты
+    // эти поля неизменяемы — закупщик правит лишь purchaseQty / цену /
+    // поставщика / статус.
+    const wantsCompositionChange =
+      dto.description !== undefined ||
+      dto.unit !== undefined ||
+      dto.materialRole !== undefined ||
+      dto.calculatedQty !== undefined;
+    if (wantsCompositionChange && !existing.isManual) {
+      throw new WorkshopNeedNotManualException();
+    }
+
     const data: Prisma.WorkshopNeedUpdateInput = {};
     const changedFields: string[] = [];
+
+    if (dto.description !== undefined) {
+      data.description = dto.description;
+      changedFields.push('description');
+    }
+    if (dto.unit !== undefined) {
+      data.unit = dto.unit;
+      changedFields.push('unit');
+    }
+    if (dto.materialRole !== undefined) {
+      data.materialRole = dto.materialRole;
+      changedFields.push('materialRole');
+    }
+    if (dto.calculatedQty !== undefined) {
+      data.calculatedQty = new Prisma.Decimal(dto.calculatedQty);
+      changedFields.push('calculatedQty');
+    }
 
     function trackOptional<K extends keyof UpdateWorkshopNeedDto>(
       key: K,
@@ -272,6 +306,10 @@ export class WorkshopNeedsService {
             // сериализуем строкой, как и в DTO — чтобы payload был
             // самодостаточен и не требовал отдельного типа.
             after: {
+              description: dto.description,
+              unit: dto.unit,
+              materialRole: dto.materialRole,
+              calculatedQty: dto.calculatedQty,
               purchaseQty:
                 dto.purchaseQty === undefined
                   ? undefined
@@ -344,6 +382,128 @@ export class WorkshopNeedsService {
       );
     });
     return this.getOne(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // MANUAL ADDITION / DELETE (этап «Корректировка материалов после просчёта»)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Ручное добавление строки потребности (непредвиденный расход
+   * материала). Разрешено только когда заказ уже на просчёте или в
+   * производстве (`CALCULATION` / `CALCULATION_DONE` / `IN_PRODUCTION`) —
+   * до этого состав ведётся обычным редактированием заказа, после
+   * `DONE`/`CANCELLED` заказ закрыт.
+   *
+   * Строка создаётся с `isManual = true`, `sourceType = MANUAL_ADDITION`,
+   * статусом `REVIEWED` (её завёл человек — она сразу «проверена»). На
+   * себестоимость влияет только после `completeCalculation` /
+   * `recalculateCostEstimate`.
+   */
+  async createManual(
+    orderId: string,
+    dto: CreateManualWorkshopNeedDto,
+    actorEmployeeId?: string | null,
+  ): Promise<WorkshopNeedDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, status: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        statusCode: 404,
+        message: 'Заказ не найден',
+        code: 'ORDER_NOT_FOUND',
+      });
+    }
+    assertOrderMaterialCorrectionAllowed(order.status);
+
+    const created = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.workshopNeed.create({
+        data: {
+          orderId,
+          isManual: true,
+          sourceType: 'MANUAL_ADDITION',
+          materialRole: dto.materialRole ?? null,
+          description: dto.description,
+          unit: dto.unit,
+          calculationMethod: 'QTY_PER_UNIT',
+          status: 'REVIEWED',
+          calculatedQty: new Prisma.Decimal(dto.calculatedQty),
+          purchaseQty:
+            dto.purchaseQty == null
+              ? null
+              : new Prisma.Decimal(dto.purchaseQty),
+          quotedPrice:
+            dto.quotedPrice == null
+              ? null
+              : new Prisma.Decimal(dto.quotedPrice),
+          quotedCurrency: dto.quotedCurrency ?? null,
+          supplierNameText: dto.supplierNameText ?? null,
+          purchaseItemNameText: dto.purchaseItemNameText ?? null,
+          comment: dto.comment ?? null,
+        },
+      });
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEED_MANUAL_CREATED',
+          entityType: 'WORKSHOP_NEED',
+          entityId: row.id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId,
+            orderStatus: order.status,
+            description: dto.description,
+            unit: dto.unit,
+            calculatedQty: dto.calculatedQty,
+          },
+        },
+        tx,
+      );
+      return row;
+    });
+
+    this.logger.log(
+      `event=workshop_need.manual_create id=${created.id} order=${orderId}`,
+    );
+    return this.getOne(created.id);
+  }
+
+  /**
+   * Физическое удаление ручной строки потребности. Системные snapshot-
+   * строки (`isManual = false`) удалять нельзя — для них есть только
+   * `cancel` (см. `WorkshopNeedNotManualException`). Разрешено в тех же
+   * статусах, что и добавление.
+   */
+  async deleteManual(
+    id: string,
+    actorEmployeeId?: string | null,
+  ): Promise<void> {
+    const existing = await this.prisma.workshopNeed.findUnique({
+      where: { id },
+      include: { order: { select: { status: true } } },
+    });
+    if (!existing) throw new WorkshopNeedNotFoundException();
+    if (!existing.isManual) throw new WorkshopNeedNotManualException();
+    assertOrderMaterialCorrectionAllowed(existing.order.status);
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.workshopNeed.delete({ where: { id } });
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEED_MANUAL_DELETED',
+          entityType: 'WORKSHOP_NEED',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId: existing.orderId,
+            description: existing.description,
+          },
+        },
+        tx,
+      );
+    });
+    this.logger.log(`event=workshop_need.manual_delete id=${id}`);
   }
 
   // -------------------------------------------------------------------------
@@ -797,12 +957,19 @@ export class WorkshopNeedsService {
     // 5. Транзакция: удаляем нужные строки и пишем новые.
     const created = await this.prisma.$transaction(async (tx) => {
       if (force) {
-        await tx.workshopNeed.deleteMany({ where: { orderId } });
+        // Ручные строки (`isManual = true`, этап «Корректировка
+        // материалов после просчёта») — НЕ системные, пересчёт их не
+        // трогает даже в force-режиме: их завёл человек руками под
+        // непредвиденный расход.
+        await tx.workshopNeed.deleteMany({
+          where: { orderId, isManual: false },
+        });
       } else {
         // Только CALCULATED — REVIEWED/PURCHASE_PLANNED/CANCELLED не
-        // трогаем (см. ADR/ТЗ Этапа 4А).
+        // трогаем (см. ADR/ТЗ Этапа 4А). Ручные строки тоже мимо
+        // (они создаются в статусе REVIEWED и с `isManual = true`).
         await tx.workshopNeed.deleteMany({
-          where: { orderId, status: 'CALCULATED' },
+          where: { orderId, status: 'CALCULATED', isManual: false },
         });
       }
 
@@ -2168,6 +2335,7 @@ export class WorkshopNeedsService {
       nomenclatureSource,
       sourceType: row.sourceType,
       sourceId: row.sourceId,
+      isManual: row.isManual,
       orderSampleId: row.orderSampleId,
       materialRole: row.materialRole,
       sourceName: row.sourceName,

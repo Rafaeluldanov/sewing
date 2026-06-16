@@ -1,5 +1,5 @@
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { OrderStatus, Prisma, type Order } from '@prisma/client';
 import {
   ORDER_COST_ESTIMATE_LINE_KIND_LABELS,
   type CompleteOrderCalculationDto,
@@ -12,6 +12,7 @@ import {
   getWorkshopNeedKind,
   type MoneyCurrency,
 } from '@sewing/shared/workshop-needs';
+import { ORDER_EXTRA_COST_SOURCE_TYPE } from '@sewing/shared/order-extra-costs';
 import {
   OrderCalculationIncompleteException,
   OrderCalculationInvalidStatusException,
@@ -51,36 +52,39 @@ export class OrderCostEstimatesService {
   ) {}
 
   /**
-   * Завершить расчёт по заказу: посчитать `OrderCostEstimate` из
-   * активных `WorkshopNeed`, перевести заказ в `CALCULATION_DONE`.
+   * Единый билдер строк сметы — общий для `completeCalculation` и
+   * `recalculateCostEstimate`. Собирает строки из:
+   *   - активных `WorkshopNeed` (исключая CANCELLED) — материалы /
+   *     фурнитура / нанесение, с валидацией «К закупке» / цены / валюты;
+   *   - `OrderExtraCost` с `includeInCostPrice = true` — прочие /
+   *     непредвиденные расходы (kind=OTHER, sourceType=EXTRA_COST);
+   *   - стоимости разработки лекала (`patternDevelopmentCostRub`).
    *
-   * Возвращает только что созданный `OrderCostEstimateDto` —
-   * `OrdersService.getOne` подгрузит его как `currentCostEstimate`
-   * на следующем GET, отдельный round-trip за заказом не делаем.
+   * Курс USD (`usdRateInput`) обязателен, если хотя бы одна строка
+   * (потребность ИЛИ прочий расход) в USD. `materialsAndHardwareCostPolicy
+   * = EXCLUDE` исключает строки MATERIAL/HARDWARE из итога (но не из
+   * самих строк); прочие расходы и разработка лекала — услуги компании,
+   * в итог входят всегда.
+   *
+   * Бросает `OrderCalculationIncompleteException` /
+   * `OrderCalculationUsdRateRequiredException` до изменения данных.
    */
-  async completeCalculation(
-    orderId: string,
-    dto: CompleteOrderCalculationDto,
-    actorEmployeeId?: string | null,
-  ): Promise<OrderCostEstimateDto> {
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-    });
-    if (!order) {
-      throw new NotFoundException({
-        code: 'ORDER_NOT_FOUND',
-        message: 'Заказ не найден',
-      });
-    }
-    if (order.status !== OrderStatus.CALCULATION) {
-      throw new OrderCalculationInvalidStatusException(
-        `Завершить расчёт можно только из статуса «Расчёт» (текущий: ${order.status}).`,
-      );
-    }
+  private async assembleEstimatePlan(
+    order: Order,
+    usdRateInput: string | null | undefined,
+  ): Promise<{
+    lineCreates: Prisma.OrderCostEstimateLineUncheckedCreateWithoutEstimateInput[];
+    totalCostRub: Prisma.Decimal;
+    usdRateRub: Prisma.Decimal | null;
+    linesCount: number;
+    includeDevelopmentLine: boolean;
+    developmentCost: Prisma.Decimal | null;
+    extraCostsCount: number;
+  }> {
+    const orderId = order.id;
 
-    // Берём ВСЕ строки (исключая CANCELLED) — это и есть «активные»
-    // потребности заказа. Сортируем стабильно по createdAt+id, чтобы
-    // строки расчёта ложились в предсказуемом порядке.
+    // Берём ВСЕ строки потребности (исключая CANCELLED) — это «активные»
+    // потребности заказа. Стабильная сортировка по createdAt+id.
     const needs = await this.prisma.workshopNeed.findMany({
       where: { orderId, NOT: { status: 'CANCELLED' } },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
@@ -90,8 +94,12 @@ export class OrderCostEstimatesService {
       },
     });
 
-    // Валидация строк до изменения данных. Считаем суммы в Decimal,
-    // чтобы не терять точность копеек.
+    // Прочие / непредвиденные расходы, помеченные «в себестоимость».
+    const extraCosts = await this.prisma.orderExtraCost.findMany({
+      where: { orderId, includeInCostPrice: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+
     type ValidLine = {
       need: (typeof needs)[number];
       finalQty: Prisma.Decimal;
@@ -146,9 +154,6 @@ export class OrderCostEstimatesService {
     }
 
     if (errors.length > 0) {
-      // Раньше показывали только число «(N)» — непонятно, что чинить.
-      // Теперь перечисляем конкретные строки и причину (первые 5, чтобы
-      // не раздувать сообщение), детали по строкам также в `details`.
       const MAX_LISTED = 5;
       const listed = errors
         .slice(0, MAX_LISTED)
@@ -158,28 +163,31 @@ export class OrderCostEstimatesService {
         errors.length > MAX_LISTED ? ` и ещё ${errors.length - MAX_LISTED}` : '';
       const head =
         errors.length === 1
-          ? 'Нельзя завершить расчёт — заполните данные по строке: '
-          : `Нельзя завершить расчёт — заполните данные по ${errors.length} строкам: `;
+          ? 'Нельзя сохранить расчёт — заполните данные по строке: '
+          : `Нельзя сохранить расчёт — заполните данные по ${errors.length} строкам: `;
       throw new OrderCalculationIncompleteException(
         `${head}${listed}${rest}.`,
         errors,
       );
     }
 
-    // Курс USD: обязателен, если есть USD-строки. На MVP считаем
-    // только USD→RUB; для RUB-only заказа курс может быть null.
+    // Прочие расходы в USD тоже требуют курса.
+    for (const e of extraCosts) {
+      if ((e.currency ?? '').toUpperCase() === 'USD') hasUsd = true;
+    }
+
+    // Курс USD: обязателен, если есть USD-строки. На MVP только USD→RUB.
     let usdRateRub: Prisma.Decimal | null = null;
     if (hasUsd) {
-      if (!dto.usdRateRub) {
+      if (!usdRateInput) {
         throw new OrderCalculationUsdRateRequiredException();
       }
-      usdRateRub = new Prisma.Decimal(dto.usdRateRub);
+      usdRateRub = new Prisma.Decimal(usdRateInput);
       if (!usdRateRub.greaterThan(0)) {
         throw new OrderCalculationUsdRateRequiredException();
       }
     }
 
-    // Считаем итоги по строкам. Округление к 2 знакам — копейки.
     const round2 = (d: Prisma.Decimal): Prisma.Decimal =>
       d.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
 
@@ -192,14 +200,12 @@ export class OrderCostEstimatesService {
       const kind = getWorkshopNeedKind({
         sourceType: v.need.sourceType,
         calculationMethod: v.need.calculationMethod,
+        materialRole: v.need.materialRole,
       });
       const supplierNameSnapshot =
-        (v.need as unknown as { selectedSupplier?: { name: string } | null })
-          .selectedSupplier?.name ?? v.need.supplierNameText ?? null;
+        v.need.selectedSupplier?.name ?? v.need.supplierNameText ?? null;
       const purchaseItemNameSnapshot =
-        (v.need as unknown as {
-          selectedSupplierCatalogItem?: { name: string } | null;
-        }).selectedSupplierCatalogItem?.name ??
+        v.need.selectedSupplierCatalogItem?.name ??
         v.need.purchaseItemNameText ??
         null;
       return {
@@ -212,18 +218,12 @@ export class OrderCostEstimatesService {
       };
     });
 
-    // Упрощённый MVP давальческого сырья / фурнитуры клиента (см.
-    // `prisma/schema.prisma::Order.materialsAndHardwareCostPolicy`,
-    // `docs/current-state.md §«Давальческое сырьё клиента»`).
-    // Если у заказа политика `EXCLUDE`, строки MATERIAL и HARDWARE
-    // не участвуют в totalCostRub. APPLICATION (нанесение) и OTHER
-    // продолжают учитываться — это услуги/нанесения компании.
-    // Сами строки сохраняются как есть (со своим `lineTotalRub`),
-    // чтобы план/факт по количеству и snapshot для аудита остались
-    // полные. Меняется только финансовый итог заказа.
+    // Давальческое сырьё / фурнитура клиента: при политике EXCLUDE
+    // строки MATERIAL/HARDWARE не входят в итог (см.
+    // `Order.materialsAndHardwareCostPolicy`).
     const isMaterialsAndHardwareExcluded =
       (order.materialsAndHardwareCostPolicy ?? 'INCLUDE') === 'EXCLUDE';
-    const linesTotalRub = computed.reduce((acc, c) => {
+    let linesTotalRub = computed.reduce((acc, c) => {
       if (
         isMaterialsAndHardwareExcluded &&
         (c.kind === 'MATERIAL' || c.kind === 'HARDWARE')
@@ -233,13 +233,59 @@ export class OrderCostEstimatesService {
       return acc.add(c.lineTotalRub);
     }, new Prisma.Decimal(0));
 
-    // Стоимость разработки лекала — отдельной строкой сметы, если
-    // менеджер оставил чекбокс «входит в текущий расчёт себестоимости»
-    // включённым (см. `Order.patternDevelopmentCostInCostPrice`,
-    // `create-product-inline.tsx`). kind=OTHER («Прочее»), без
-    // `workshopNeedId` (это не складская потребность — закупка/выдача
-    // материалов не затрагиваются). `materialsAndHardwareCostPolicy`
-    // на неё не влияет — это услуга компании, не давальческое сырьё.
+    const needLineCreates: Prisma.OrderCostEstimateLineUncheckedCreateWithoutEstimateInput[] =
+      computed.map((c) => ({
+        workshopNeedId: c.v.need.id,
+        sourceType: c.v.need.sourceType,
+        sourceId: c.v.need.sourceId,
+        kind: c.kind,
+        description: c.v.need.description,
+        unit: c.v.need.unit,
+        calculatedQty: c.v.need.calculatedQty,
+        purchaseQty: c.v.finalQty,
+        quotedPrice: c.v.quotedPrice,
+        quotedCurrency: c.v.currency,
+        usdRateRub: c.v.currency === 'USD' ? usdRateRub : null,
+        lineTotalOriginal: c.lineTotalOriginal,
+        lineTotalRub: c.lineTotalRub,
+        supplierNameSnapshot: c.supplierNameSnapshot,
+        purchaseItemNameSnapshot: c.purchaseItemNameSnapshot,
+      }));
+
+    // Прочие / непредвиденные расходы (kind=OTHER, sourceType=EXTRA_COST).
+    // В итог входят всегда (это услуги/затраты компании, не давальческое
+    // сырьё). USD конвертируется по тому же курсу.
+    const extraCostLineCreates: Prisma.OrderCostEstimateLineUncheckedCreateWithoutEstimateInput[] =
+      extraCosts.map((e) => {
+        const amount = round2(new Prisma.Decimal(e.amount));
+        const currency =
+          (e.currency ?? 'RUB').toUpperCase() === 'USD' ? 'USD' : 'RUB';
+        const lineTotalRub =
+          currency === 'USD' && usdRateRub
+            ? round2(amount.mul(usdRateRub))
+            : amount;
+        linesTotalRub = linesTotalRub.add(lineTotalRub);
+        return {
+          workshopNeedId: null,
+          sourceType: ORDER_EXTRA_COST_SOURCE_TYPE,
+          sourceId: e.id,
+          kind: 'OTHER',
+          description: e.description,
+          unit: 'усл.',
+          calculatedQty: null,
+          purchaseQty: new Prisma.Decimal(1),
+          quotedPrice: amount,
+          quotedCurrency: currency,
+          usdRateRub: currency === 'USD' ? usdRateRub : null,
+          lineTotalOriginal: amount,
+          lineTotalRub,
+          supplierNameSnapshot: null,
+          purchaseItemNameSnapshot: null,
+        };
+      });
+
+    // Разработка лекала — отдельной строкой, если чекбокс «входит в
+    // себестоимость» включён (см. `Order.patternDevelopmentCostInCostPrice`).
     const devCostRaw = order.patternDevelopmentCostRub;
     const developmentCost =
       order.patternDevelopmentCostInCostPrice && devCostRaw != null
@@ -248,9 +294,91 @@ export class OrderCostEstimatesService {
     const includeDevelopmentLine =
       developmentCost != null && developmentCost.greaterThan(0);
 
-    const totalCostRub = includeDevelopmentLine
-      ? linesTotalRub.add(developmentCost!)
-      : linesTotalRub;
+    const developmentLineCreates: Prisma.OrderCostEstimateLineUncheckedCreateWithoutEstimateInput[] =
+      includeDevelopmentLine
+        ? [
+            {
+              workshopNeedId: null,
+              sourceType: 'PATTERN_DEVELOPMENT',
+              sourceId: order.patternItemId ?? null,
+              kind: 'OTHER',
+              description: 'Разработка лекала',
+              unit: 'усл.',
+              calculatedQty: null,
+              purchaseQty: new Prisma.Decimal(1),
+              quotedPrice: developmentCost!,
+              quotedCurrency: 'RUB',
+              usdRateRub: null,
+              lineTotalOriginal: developmentCost!,
+              lineTotalRub: developmentCost!,
+              supplierNameSnapshot: null,
+              purchaseItemNameSnapshot: null,
+            },
+          ]
+        : [];
+
+    const totalCostRub = round2(
+      includeDevelopmentLine
+        ? linesTotalRub.add(developmentCost!)
+        : linesTotalRub,
+    );
+
+    const lineCreates = [
+      ...needLineCreates,
+      ...extraCostLineCreates,
+      ...developmentLineCreates,
+    ];
+
+    return {
+      lineCreates,
+      totalCostRub,
+      usdRateRub,
+      linesCount: lineCreates.length,
+      includeDevelopmentLine,
+      developmentCost,
+      extraCostsCount: extraCostLineCreates.length,
+    };
+  }
+
+  /**
+   * Завершить расчёт по заказу: посчитать `OrderCostEstimate` из
+   * активных `WorkshopNeed`, перевести заказ в `CALCULATION_DONE`.
+   *
+   * Возвращает только что созданный `OrderCostEstimateDto` —
+   * `OrdersService.getOne` подгрузит его как `currentCostEstimate`
+   * на следующем GET, отдельный round-trip за заказом не делаем.
+   */
+  async completeCalculation(
+    orderId: string,
+    dto: CompleteOrderCalculationDto,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderCostEstimateDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    if (order.status !== OrderStatus.CALCULATION) {
+      throw new OrderCalculationInvalidStatusException(
+        `Завершить расчёт можно только из статуса «Расчёт» (текущий: ${order.status}).`,
+      );
+    }
+
+    // Сборка строк сметы (потребности + прочие расходы + разработка
+    // лекала) — единый билдер, общий с `recalculateCostEstimate`.
+    const plan = await this.assembleEstimatePlan(order, dto.usdRateRub);
+    const {
+      lineCreates,
+      totalCostRub,
+      usdRateRub,
+      linesCount,
+      includeDevelopmentLine,
+      developmentCost,
+    } = plan;
 
     // Транзакция: создаём estimate + lines, обновляем snapshot-поля
     // заказа и переводим статус. Аудит — двумя строками
@@ -267,52 +395,11 @@ export class OrderCostEstimatesService {
           orderId,
           version: nextVersion,
           status: 'COMPLETED',
-          totalCostRub: round2(totalCostRub),
+          totalCostRub,
           usdRateRub,
           completedById: actorEmployeeId ?? null,
           comment: dto.comment ?? null,
-          lines: {
-            create: [
-              ...computed.map((c) => ({
-                workshopNeedId: c.v.need.id,
-                sourceType: c.v.need.sourceType,
-                sourceId: c.v.need.sourceId,
-                kind: c.kind,
-                description: c.v.need.description,
-                unit: c.v.need.unit,
-                calculatedQty: c.v.need.calculatedQty,
-                purchaseQty: c.v.finalQty,
-                quotedPrice: c.v.quotedPrice,
-                quotedCurrency: c.v.currency,
-                usdRateRub: c.v.currency === 'USD' ? usdRateRub : null,
-                lineTotalOriginal: c.lineTotalOriginal,
-                lineTotalRub: c.lineTotalRub,
-                supplierNameSnapshot: c.supplierNameSnapshot,
-                purchaseItemNameSnapshot: c.purchaseItemNameSnapshot,
-              })),
-              ...(includeDevelopmentLine
-                ? [
-                    {
-                      workshopNeedId: null,
-                      sourceType: 'PATTERN_DEVELOPMENT',
-                      sourceId: order.patternItemId ?? null,
-                      kind: 'OTHER',
-                      description: 'Разработка лекала',
-                      unit: 'усл.',
-                      calculatedQty: null,
-                      purchaseQty: new Prisma.Decimal(1),
-                      quotedPrice: developmentCost!,
-                      quotedCurrency: 'RUB',
-                      usdRateRub: null,
-                      lineTotalOriginal: developmentCost!,
-                      lineTotalRub: developmentCost!,
-                      supplierNameSnapshot: null,
-                      purchaseItemNameSnapshot: null,
-                    },
-                  ]
-                : []),
-            ],
-          },
+          lines: { create: lineCreates },
         },
         include: {
           lines: { orderBy: { createdAt: 'asc' } },
@@ -344,7 +431,7 @@ export class OrderCostEstimatesService {
             usdRateRub: estimate.usdRateRub
               ? estimate.usdRateRub.toString()
               : null,
-            linesCount: computed.length + (includeDevelopmentLine ? 1 : 0),
+            linesCount,
             patternDevelopmentCostRub: includeDevelopmentLine
               ? developmentCost!.toString()
               : null,
@@ -377,7 +464,7 @@ export class OrderCostEstimatesService {
     this.logger.log(
       `event=order.calculation.completed orderId=${orderId} estimateId=${result.id} ` +
         `version=${result.version} totalCostRub=${result.totalCostRub.toString()} ` +
-        `lines=${computed.length + (includeDevelopmentLine ? 1 : 0)}`,
+        `lines=${linesCount}`,
     );
 
     return this.toEstimateDto(result);
@@ -484,6 +571,131 @@ export class OrderCostEstimatesService {
       },
     });
     return full ? this.toEstimateDto(full) : null;
+  }
+
+  /**
+   * Пересчитать себестоимость БЕЗ смены статуса заказа (этап
+   * «Корректировка материалов после просчёта»).
+   *
+   * В отличие от `reopen → complete`, этот метод не откатывает заказ в
+   * `CALCULATION`: он помечает текущий `COMPLETED`-расчёт как `REVOKED`
+   * и сразу создаёт новую `COMPLETED`-версию из актуальных
+   * `WorkshopNeed` + `OrderExtraCost`. Нужен, чтобы учесть ручные
+   * материалы и непредвиденные расходы, добавленные уже после фиксации
+   * себестоимости — в том числе когда заказ в `IN_PRODUCTION` (reopen
+   * там запрещён, т.к. от себестоимости зависят production-данные).
+   *
+   * Разрешён из `CALCULATION_DONE` и `IN_PRODUCTION`. Для заказа без
+   * активного расчёта (например, в `CALCULATION`) — пользоваться
+   * `completeCalculation`.
+   */
+  async recalculateCostEstimate(
+    orderId: string,
+    dto: CompleteOrderCalculationDto,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderCostEstimateDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    if (
+      order.status !== OrderStatus.CALCULATION_DONE &&
+      order.status !== OrderStatus.IN_PRODUCTION
+    ) {
+      throw new OrderCalculationInvalidStatusException(
+        `Пересчитать себестоимость можно только для заказа в статусе «Расчёт завершён» или «В производстве» (текущий: ${order.status}).`,
+      );
+    }
+
+    const plan = await this.assembleEstimatePlan(order, dto.usdRateRub);
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      // Отзываем текущий активный расчёт (если есть).
+      const active = await tx.orderCostEstimate.findFirst({
+        where: { orderId, status: 'COMPLETED' },
+        orderBy: { version: 'desc' },
+      });
+      if (active) {
+        await tx.orderCostEstimate.update({
+          where: { id: active.id },
+          data: {
+            status: 'REVOKED',
+            revokedAt: new Date(),
+            revokedById: actorEmployeeId ?? null,
+          },
+        });
+      }
+
+      const lastVersionAgg = await tx.orderCostEstimate.aggregate({
+        where: { orderId },
+        _max: { version: true },
+      });
+      const nextVersion = (lastVersionAgg._max.version ?? 0) + 1;
+
+      const estimate = await tx.orderCostEstimate.create({
+        data: {
+          orderId,
+          version: nextVersion,
+          status: 'COMPLETED',
+          totalCostRub: plan.totalCostRub,
+          usdRateRub: plan.usdRateRub,
+          completedById: actorEmployeeId ?? null,
+          comment: dto.comment ?? null,
+          lines: { create: plan.lineCreates },
+        },
+        include: {
+          lines: { orderBy: { createdAt: 'asc' } },
+          completedBy: { select: { id: true, fullName: true } },
+          revokedBy: { select: { id: true, fullName: true } },
+        },
+      });
+
+      // Обновляем ТОЛЬКО snapshot-поля себестоимости — статус заказа
+      // НЕ трогаем (заказ остаётся в CALCULATION_DONE / IN_PRODUCTION).
+      await tx.order.update({
+        where: { id: orderId },
+        data: {
+          costEstimateTotalRub: estimate.totalCostRub,
+          costEstimateCompletedAt: estimate.completedAt,
+          costEstimateVersion: estimate.version,
+        },
+      });
+
+      await this.audit.log(
+        {
+          event: 'ORDER_COST_ESTIMATE_RECALCULATED',
+          entityType: 'ORDER_COST_ESTIMATE',
+          entityId: estimate.id,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId,
+            orderStatus: order.status,
+            revokedEstimateId: active?.id ?? null,
+            revokedVersion: active?.version ?? null,
+            version: estimate.version,
+            totalCostRub: estimate.totalCostRub.toString(),
+            linesCount: plan.linesCount,
+            extraCostsCount: plan.extraCostsCount,
+          },
+        },
+        tx,
+      );
+
+      return estimate;
+    });
+
+    this.logger.log(
+      `event=order.cost_estimate.recalculated orderId=${orderId} ` +
+        `estimateId=${result.id} version=${result.version} ` +
+        `totalCostRub=${result.totalCostRub.toString()} lines=${plan.linesCount}`,
+    );
+
+    return this.toEstimateDto(result);
   }
 
   /**

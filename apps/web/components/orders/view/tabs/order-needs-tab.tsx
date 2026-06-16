@@ -62,11 +62,16 @@ import {
   AdminEmptyState,
   AdminSectionHeader,
 } from '@/components/admin';
+import type { OrderExtraCostDto } from '@sewing/shared/order-extra-costs';
+import type { WorkshopNeedListItemDto } from '@sewing/shared/workshop-needs';
 import {
   getMaterialIssue,
   listOrderMaterialIssues,
 } from '@/lib/material-issues-api';
+import { getOrderWorkshopNeeds } from '@/lib/workshop-needs-api';
+import { listOrderExtraCosts } from '@/lib/order-extra-costs-api';
 import { ManualMaterialArrivalActions } from '@/components/orders/materials/manual-material-arrival-actions';
+import { OrderMaterialCorrections } from '@/components/orders/materials/order-material-corrections';
 import { MaterialIssuesSection } from '@/components/orders/material-issues/material-issues-section';
 import { OrderMaterialsUnifiedTable } from '@/components/orders/materials/order-materials-unified-table';
 import { OrderPlannedCostSummaryCard } from '@/components/orders/order-planned-cost-summary-card';
@@ -125,6 +130,32 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
     .map(([, d]) => d)
     .filter((d): d is MaterialIssueDetailDto => d !== undefined);
 
+  // Этап «Корректировка материалов после просчёта»: ручные строки
+  // потребности + прочие расходы. Грузим только для менеджеров и только
+  // в статусах, где корректировка разрешена (см.
+  // `assertOrderMaterialCorrectionAllowed` на бэке) — на DRAFT/DONE/
+  // CANCELLED блок не нужен. Падение fetch-а не валит вкладку.
+  const correctionAllowed =
+    canManage &&
+    (order.status === 'CALCULATION' ||
+      order.status === 'CALCULATION_DONE' ||
+      order.status === 'IN_PRODUCTION');
+  let manualNeeds: WorkshopNeedListItemDto[] = [];
+  let extraCosts: OrderExtraCostDto[] = [];
+  if (correctionAllowed) {
+    try {
+      const needs = await getOrderWorkshopNeeds(order.id);
+      manualNeeds = needs.filter((n) => n.isManual);
+    } catch {
+      manualNeeds = [];
+    }
+    try {
+      extraCosts = await listOrderExtraCosts(order.id);
+    } catch {
+      extraCosts = [];
+    }
+  }
+
   return (
     <div className="order-needs-tab">
       {noNeeds && order.status === 'DRAFT' ? (
@@ -165,6 +196,16 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
             orderId={order.id}
             orderStatus={order.status}
           />
+
+          {correctionAllowed && (
+            <OrderMaterialCorrections
+              orderId={order.id}
+              orderStatus={order.status}
+              manualNeeds={manualNeeds}
+              extraCosts={extraCosts}
+              hasActiveCostEstimate={order.currentCostEstimate != null}
+            />
+          )}
 
           {/*
             Фактический расход материалов — документы MaterialIssue /
