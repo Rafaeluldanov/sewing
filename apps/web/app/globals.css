@@ -13682,23 +13682,74 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 
 .order-materials-table-wrap {
+  /* Внешняя обёртка — НЕ scroll-контейнер. Скролл живёт на внутреннем
+     `.admin-table-wrap` (см. ниже), чтобы sticky-колонки прилипали к
+     одному прокручиваемому предку. Здесь только не даём блоку вытолкнуть
+     грид карточки. */
   width: 100%;
-  overflow-x: auto;
+  max-width: 100%;
+  min-width: 0;
+  overflow: visible;
 }
 
 .order-materials-table {
   /* AdminTable монтирует <div class="admin-table-wrap"><table class="admin-table"/>.
-     Здесь мы скоупим стили под наш режим: компактный padding, font 13px,
-     горизонтальный скролл на узких экранах. После добавления колонок
-     «План / факт» и «Стоимость план / факт» (frontend-итерация
-     «план/факт» поверх MaterialIssue) min-width немного выросло —
-     иначе ячейки сжимаются и плохо читаются. */
-  min-width: 1380px;
+     Этот div — единственный горизонтальный scroll-контейнер таблицы.
+     База `.admin-table-wrap` имеет `overflow: hidden` (под border-radius);
+     переопределяем X на `auto`, чтобы 1380px-таблица прокручивалась
+     ВНУТРИ карточки, а не вылезала за неё и не обрезалась. min-width
+     здесь НЕ ставим — ширину держит только таблица ниже, а div
+     остаётся `max-width: 100%`. overflow-y оставляем hidden (из
+     shorthand базы) — высоту это не режет (контент по высоте влезает),
+     зато sticky-колонки прилипают именно к этому контейнеру. */
   font-size: 0.81rem;
+  max-width: 100%;
+  overflow-x: auto;
 }
 
 .order-materials-table-wrap .admin-table {
+  /* 14 колонок (роль … комментарий) — таблице нужна минимальная ширина,
+     чтобы поля не сжимались в кашу. Перебор ширины уезжает в
+     горизонтальный скролл внутреннего `.admin-table-wrap`. */
   min-width: 1380px;
+}
+
+/* Sticky leading columns (Роль + Описание): при горизонтальном скролле
+   контекст строки остаётся виден. Прилипают к scroll-контейнеру
+   `.order-materials-table` (внутренний `.admin-table-wrap` с
+   overflow-x: auto). Фиксируем ширину 1-й колонки, чтобы offset 2-й был
+   стабилен. */
+.order-materials-table .admin-table th:first-child,
+.order-materials-table .admin-table td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  width: 116px;
+  min-width: 116px;
+  max-width: 116px;
+}
+.order-materials-table .admin-table th:nth-child(2),
+.order-materials-table .admin-table td:nth-child(2) {
+  position: sticky;
+  left: 116px;
+  z-index: 1;
+  /* правая граница-«тень» отделяет липкую зону от прокручиваемой */
+  box-shadow: inset -1px 0 0 var(--admin-border);
+}
+/* Заголовки липких колонок — над липкими ячейками тела. */
+.order-materials-table .admin-table thead th:first-child,
+.order-materials-table .admin-table thead th:nth-child(2) {
+  z-index: 3;
+}
+/* Непрозрачный фон, чтобы прокручиваемые ячейки не просвечивали.
+   thead уже имеет `background: var(--admin-soft)`. */
+.order-materials-table .admin-table tbody td:first-child,
+.order-materials-table .admin-table tbody td:nth-child(2) {
+  background: var(--admin-surface);
+}
+.order-materials-table .admin-table tbody tr:hover td:first-child,
+.order-materials-table .admin-table tbody tr:hover td:nth-child(2) {
+  background: var(--admin-soft);
 }
 
 .order-materials-table-wrap .admin-table th,
@@ -13710,7 +13761,11 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .order-materials-table__role {
   font-weight: 600;
   color: var(--admin-text);
-  white-space: nowrap;
+  /* В sticky-колонке фиксированной ширины (116px) длинные роли
+     («Дополнительное полотно», «Дублерин / клеевые») переносим, а не
+     обрезаем. */
+  white-space: normal;
+  word-break: break-word;
 }
 
 .order-materials-table__description {
@@ -14035,12 +14090,23 @@ body:has(.admin-layout) .app-header { display: none !important; }
   .order-materials-table-card {
     padding: 0.55rem 0.65rem;
   }
-  .order-materials-table,
   .order-materials-table-wrap .admin-table {
     min-width: 1100px;
   }
   .order-materials-table__comment {
     max-width: none;
+  }
+  /* На узком экране глобальный card-collapse делает ячейки блоками —
+     sticky/фиксированная ширина 1-й и 2-й колонок тут только мешают. */
+  .order-materials-table .admin-table th:first-child,
+  .order-materials-table .admin-table td:first-child,
+  .order-materials-table .admin-table th:nth-child(2),
+  .order-materials-table .admin-table td:nth-child(2) {
+    position: static;
+    width: auto;
+    min-width: 0;
+    max-width: none;
+    box-shadow: none;
   }
 }
 
