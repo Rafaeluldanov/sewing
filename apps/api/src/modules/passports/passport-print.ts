@@ -10,6 +10,13 @@
  * QR-код вставляется как `<img src="data:image/png;base64,...">` —
  * payload генерируется через `qrcode` (см. ADR-0008: `passport:{id}`).
  * Дополнительно отображается человекочитаемый URL на UI-домене.
+ *
+ * Помимо одиночной формы (`renderPassportPrintHtml`) экспортируем
+ * пакетную (`renderPassportsPrintHtml`) — один HTML-документ, в котором
+ * каждый паспорт печатается своей этикеткой (новая страница на каждый
+ * лист). Её открывает кнопка «Распечатать» помощника раскройщика, когда
+ * на рабочем месте нет настроенного принтера-агента (браузерный fallback,
+ * как у одиночного `<PrintButton>`).
  */
 
 import type { PassportDetailDto } from '@sewing/shared/passports';
@@ -44,39 +51,20 @@ function formatNowDateTime(): string {
   return `${date} ${time}`;
 }
 
-export function renderPassportPrintHtml(opts: RenderOptions): string {
-  const p = opts.passport;
-  const rows: Array<[string, string]> = [
-    ['Заказ', p.orderNumber],
-    ['Изделие', p.productName],
-    ['Цвет', p.color],
-    ['Размер', p.sizeCode],
-    ['Количество', String(p.qtyCut)],
-    ['Номер рулона', p.rollNumber],
-    ['Дата кроя', formatDate(p.cutDate)],
-    ['Раскройщик', p.cutterName],
-    ['Создал', p.creatorName],
-  ];
-  const tableRows = rows
-    .map(
-      ([k, v]) =>
-        `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`,
-    )
-    .join('');
-
-  const printedAt = formatNowDateTime();
-
-  return `<!doctype html>
-<html lang="ru">
-<head>
-  <meta charset="utf-8" />
-  <title>Паспорт ${escapeHtml(p.number)}</title>
-  <style>
+/**
+ * Общая вёрстка этикетки. Едина для одиночной и пакетной печати, чтобы
+ * лист выглядел одинаково независимо от точки входа.
+ *
+ * `.sheet + .sheet { page-break-before: always }` ниже гарантирует, что в
+ * пакетном документе каждый следующий паспорт начинается с новой
+ * страницы; для одиночного документа это правило безвредно (второго
+ * `.sheet` нет, лишних пустых страниц не добавляется).
+ */
+const PASSPORT_PRINT_STYLES = `
     @page { size: 70mm 120mm; margin: 0; }
     * { box-sizing: border-box; }
     html, body {
       width: 70mm;
-      height: 120mm;
       margin: 0;
       padding: 0;
       background: #fff;
@@ -97,6 +85,10 @@ export function renderPassportPrintHtml(opts: RenderOptions): string {
       overflow: hidden;
       page-break-inside: avoid;
       break-inside: avoid;
+    }
+    .sheet + .sheet {
+      page-break-before: always;
+      break-before: page;
     }
     .top {
       display: flex;
@@ -195,11 +187,13 @@ export function renderPassportPrintHtml(opts: RenderOptions): string {
       color: #fff;
       text-decoration: none;
       font-size: 9pt;
+      border: 0;
+      cursor: pointer;
     }
     @media screen {
-      body { background: #e5e7eb; padding: 8px; height: auto; width: auto; }
+      body { background: #e5e7eb; padding: 8px; width: auto; }
       .sheet {
-        margin: 0 auto;
+        margin: 0 auto 8px;
         border: 1px solid #cbd5e1;
         box-shadow: 0 1px 4px rgba(0,0,0,0.1);
       }
@@ -212,11 +206,41 @@ export function renderPassportPrintHtml(opts: RenderOptions): string {
         page-break-inside: avoid;
         break-inside: avoid;
       }
-    }
-  </style>
-</head>
-<body>
-  <div class="sheet">
+    }`;
+
+/**
+ * Вёрстка одной этикетки (`<div class="sheet">…`).
+ *
+ * `withPrintButton` управляет встроенной кнопкой «Печать»: у одиночной
+ * формы она внутри листа (как было), у пакетной — листы без кнопок, одна
+ * общая кнопка «Печать всех» рендерится в шапке документа.
+ */
+function renderPassportSheet(
+  opts: RenderOptions,
+  withPrintButton: boolean,
+): string {
+  const p = opts.passport;
+  const rows: Array<[string, string]> = [
+    ['Заказ', p.orderNumber],
+    ['Изделие', p.productName],
+    ['Цвет', p.color],
+    ['Размер', p.sizeCode],
+    ['Количество', String(p.qtyCut)],
+    ['Номер рулона', p.rollNumber],
+    ['Дата кроя', formatDate(p.cutDate)],
+    ['Раскройщик', p.cutterName],
+    ['Создал', p.creatorName],
+  ];
+  const tableRows = rows
+    .map(
+      ([k, v]) =>
+        `<tr><th>${escapeHtml(k)}</th><td>${escapeHtml(v)}</td></tr>`,
+    )
+    .join('');
+
+  const printedAt = formatNowDateTime();
+
+  return `<div class="sheet">
     <div class="top">
       <span class="ts">${escapeHtml(printedAt)}</span>
       <span class="no">${escapeHtml(p.number)}</span>
@@ -228,11 +252,79 @@ export function renderPassportPrintHtml(opts: RenderOptions): string {
       <div class="url">${escapeHtml(opts.webUrl)}</div>
     </div>
     <table class="fields">${tableRows}</table>
-    <hr class="bottom-rule" />
+    <hr class="bottom-rule" />${
+      withPrintButton
+        ? `
     <div class="actions">
       <a href="javascript:window.print()" class="btn">Печать</a>
-    </div>
+    </div>`
+        : ''
+    }
+  </div>`;
+}
+
+export function renderPassportPrintHtml(opts: RenderOptions): string {
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Паспорт ${escapeHtml(opts.passport.number)}</title>
+  <style>${PASSPORT_PRINT_STYLES}
+  </style>
+</head>
+<body>
+  ${renderPassportSheet(opts, true)}
+</body>
+</html>`;
+}
+
+/**
+ * Пакетная печать: один документ, в нём по одной этикетке на паспорт.
+ * Открывается помощником раскройщика как браузерный fallback кнопки
+ * «Распечатать» (когда принтер-агент не настроен). Каждая этикетка — на
+ * своей странице 70×120 мм; одна общая кнопка «Печать всех» в шапке
+ * (видна только на экране, скрыта при печати).
+ */
+export function renderPassportsPrintHtml(items: RenderOptions[]): string {
+  const sheets = items
+    .map((it) => renderPassportSheet(it, false))
+    .join('\n  ');
+  const count = items.length;
+  return `<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8" />
+  <title>Паспорта (${count})</title>
+  <style>${PASSPORT_PRINT_STYLES}
+    /* В пакетном документе высота тела растёт под все листы; фикс 120mm
+       из общих стилей нужен только одиночной этикетке. */
+    html, body { height: auto; }
+    .toolbar {
+      position: sticky;
+      top: 0;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+      max-width: 70mm;
+      margin: 0 auto 8px;
+      padding: 6px 8px;
+      background: #fff;
+      border: 1px solid #cbd5e1;
+      border-radius: 4px;
+      font-size: 10pt;
+    }
+    @media print {
+      .toolbar { display: none !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <span>Паспортов к печати: ${count}</span>
+    <a href="javascript:window.print()" class="btn">Печать всех</a>
   </div>
+  ${sheets}
 </body>
 </html>`;
 }

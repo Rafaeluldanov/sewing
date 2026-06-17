@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -8,6 +9,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
   Res,
 } from '@nestjs/common';
 import type { Response } from 'express';
@@ -40,7 +42,10 @@ const PassportByCodeSchema = z.object({ code: PassportCodeSchema });
 type PassportByCodeDto = z.infer<typeof PassportByCodeSchema>;
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { PassportsService } from './passports.service.js';
-import { renderPassportPrintHtml } from './passport-print.js';
+import {
+  renderPassportPrintHtml,
+  renderPassportsPrintHtml,
+} from './passport-print.js';
 import { buildPassportQrPayload, buildPassportWebUrl } from './qr.js';
 import * as QRCode from 'qrcode';
 import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
@@ -101,6 +106,68 @@ export class PassportsController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<MyPassportListItem[]> {
     return this.passports.listMineRecent(user.employeeId);
+  }
+
+  /**
+   * `GET /api/passports/print-batch?ids=a,b,c` — пакетная печатная форма:
+   * один HTML-документ, в котором по одной этикетке на паспорт (каждая на
+   * своей странице 70×120 мм). Открывает кнопка «Распечатать» помощника
+   * раскройщика как браузерный fallback, когда на рабочем месте нет
+   * настроенного принтера-агента. Public — печать из киоск-режима, как у
+   * одиночного `:id/print`.
+   *
+   * Объявлен ДО `@Get(':id')`, иначе роутер разрешит `print-batch` как
+   * `id = "print-batch"` (см. тот же приём у `my-recent`). Отсутствующие
+   * id молча пропускаются — печатаем то, что найдено.
+   */
+  @Public()
+  @Get('print-batch')
+  @Header('content-type', 'text/html; charset=utf-8')
+  async printBatch(@Query('ids') idsRaw?: string): Promise<string> {
+    const ids = [
+      ...new Set(
+        (idsRaw ?? '')
+          .split(',')
+          .map((s) => s.trim())
+          .filter((s) => s.length > 0),
+      ),
+    ].slice(0, 500);
+    if (ids.length === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PRINT_BATCH_EMPTY',
+        message: 'Не передан список паспортов для печати',
+      });
+    }
+
+    const items: Array<{
+      passport: Awaited<ReturnType<PassportsService['getOne']>>;
+      qrDataUrl: string;
+      webUrl: string;
+    }> = [];
+    for (const id of ids) {
+      let passport;
+      try {
+        passport = await this.passports.getOne(id);
+      } catch {
+        continue; // отсутствующий паспорт молча пропускаем
+      }
+      const qrDataUrl = await QRCode.toDataURL(buildPassportQrPayload(id), {
+        errorCorrectionLevel: 'M',
+        margin: 1,
+        width: 320,
+      });
+      items.push({ passport, qrDataUrl, webUrl: buildPassportWebUrl(id) });
+    }
+
+    if (items.length === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PRINT_BATCH_NOT_FOUND',
+        message: 'Ни один из переданных паспортов не найден',
+      });
+    }
+    return renderPassportsPrintHtml(items);
   }
 
   @Get(':id')

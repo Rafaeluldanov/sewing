@@ -5,8 +5,8 @@ import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import type { ReleaseRollDto, ReleaseSizeDto } from '@sewing/shared/cutting-tasks';
 import type { ReleasedPassportLiteDto } from '@sewing/shared/passports';
-import { PrintButton } from '@/components/print-button';
-import { buildPassportPrintPath } from '@/lib/browser-api-paths';
+import { sendPassportPrintJobsBatch } from '@/components/print-button-actions';
+import { buildPassportsBatchPrintPath } from '@/lib/browser-api-paths';
 import { releaseFromRollsAction } from '../actions';
 
 interface Props {
@@ -63,6 +63,17 @@ export function CutterAssistantRollForm({
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState<SuccessState | null>(null);
   const [pending, startTransition] = useTransition();
+
+  // ---- Печать на экране успеха: выбор паспортов чекбоксами + одна кнопка --
+  // `printSel` — id выбранных к печати паспортов (по умолчанию все
+  // выпущенные). `printPending` — отдельный transition, чтобы печать не
+  // блокировала навигацию.
+  const [printSel, setPrintSel] = useState<Set<string>>(new Set());
+  const [printFeedback, setPrintFeedback] = useState<{
+    kind: 'ok' | 'err';
+    text: string;
+  } | null>(null);
+  const [printPending, startPrintTransition] = useTransition();
 
   const selectedSize = sortedSizes.find((s) => s.sizeId === sizeId);
   const perLayerQty = selectedSize?.perLayerQty ?? 0;
@@ -127,17 +138,76 @@ export function CutterAssistantRollForm({
         setError(res.error);
         return;
       }
-      setSuccess({ created: res.created ?? [], skipped: res.skipped ?? [] });
+      const created = res.created ?? [];
+      setSuccess({ created, skipped: res.skipped ?? [] });
+      // По умолчанию к печати выбраны все только что выпущенные паспорта —
+      // помощник снимает галочки только с ненужных.
+      setPrintSel(new Set(created.map((p) => p.id)));
+      setPrintFeedback(null);
     });
   };
 
-  // ---- Успешный выпуск: список паспортов с печатью ------------------------
+  const togglePrint = (id: string) => {
+    setPrintSel((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handlePrintSelected = (ids: string[]) => {
+    if (ids.length === 0) return;
+    setPrintFeedback(null);
+    startPrintTransition(async () => {
+      const res = await sendPassportPrintJobsBatch(ids);
+      if (res.ok) {
+        const failedNote =
+          res.failed && res.failed > 0
+            ? ` · не ушло: ${res.failed}${
+                res.firstError ? ` (${res.firstError})` : ''
+              }`
+            : '';
+        setPrintFeedback({
+          kind: res.printed === 0 ? 'err' : 'ok',
+          text: `Отправлено на принтер: ${res.printed ?? 0}${failedNote}`,
+        });
+        return;
+      }
+      // Нет принтера на рабочем месте — открываем браузерную печатную форму
+      // со всеми выбранными паспортами (как fallback одиночной кнопки).
+      if (res.noPrinter) {
+        if (typeof window !== 'undefined') {
+          window.open(buildPassportsBatchPrintPath(ids), '_blank', 'noopener');
+        }
+        setPrintFeedback({
+          kind: 'ok',
+          text: 'Принтер не настроен — открыта печать выбранных в браузере.',
+        });
+        return;
+      }
+      setPrintFeedback({
+        kind: 'err',
+        text: res.error ?? 'Не удалось отправить на печать.',
+      });
+    });
+  };
+
+  // ---- Успешный выпуск: чекбоксы по паспортам + одна кнопка «Распечатать» --
   if (success) {
+    const created = success.created;
+    const allPrintSelected =
+      created.length > 0 && created.every((p) => printSel.has(p.id));
+    const toggleAllPrint = () =>
+      setPrintSel(
+        allPrintSelected ? new Set() : new Set(created.map((p) => p.id)),
+      );
+
     return (
       <div className="card">
         <div className="success-box">
           <strong>
-            Выпущено паспортов: {success.created.length}
+            Выпущено паспортов: {created.length}
             {selectedSize ? ` · размер ${selectedSize.sizeCode}` : ''}
           </strong>
           {success.skipped.length > 0 && (
@@ -150,36 +220,84 @@ export function CutterAssistantRollForm({
           )}
         </div>
 
-        {success.created.length > 0 && (
-          <ul className="constructor-list" style={{ marginTop: '0.6rem' }}>
-            {success.created.map((p) => (
-              <li key={p.id} className="constructor-list__item">
-                <div
-                  className="form-row"
-                  style={{ alignItems: 'center', marginBottom: 0 }}
-                >
-                  <div>
-                    <strong>Паспорт {p.number}</strong>
-                    <div className="hint">
-                      {p.rollNumber} · {p.qtyCut} шт
+        {created.length > 0 && (
+          <>
+            <div
+              className="actions-row"
+              style={{ marginTop: '0.6rem', marginBottom: '0.4rem' }}
+            >
+              <button
+                type="button"
+                className="btn"
+                onClick={toggleAllPrint}
+                disabled={printPending}
+              >
+                {allPrintSelected ? 'Снять выбор' : 'Выбрать все'}
+              </button>
+            </div>
+
+            <ul className="constructor-list">
+              {created.map((p) => (
+                <li key={p.id} className="constructor-list__item">
+                  <label
+                    className="form-row"
+                    style={{
+                      alignItems: 'center',
+                      marginBottom: 0,
+                      gap: '0.6rem',
+                      cursor: 'pointer',
+                    }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={printSel.has(p.id)}
+                      disabled={printPending}
+                      onChange={() => togglePrint(p.id)}
+                      aria-label={`Паспорт ${p.number}`}
+                    />
+                    <div>
+                      <strong>Паспорт {p.number}</strong>
+                      <div className="hint">
+                        {p.rollNumber} · {p.qtyCut} шт
+                      </div>
                     </div>
-                  </div>
-                  <PrintButton
-                    sourceType="PASSPORT_PRINT"
-                    sourceId={p.id}
-                    fallbackHref={buildPassportPrintPath(p.id)}
-                    label="Распечатать"
-                  />
-                </div>
-              </li>
-            ))}
-          </ul>
+                  </label>
+                </li>
+              ))}
+            </ul>
+
+            <div className="actions-row">
+              <button
+                type="button"
+                className="btn btn-primary"
+                onClick={() => handlePrintSelected([...printSel])}
+                disabled={printPending || printSel.size === 0}
+              >
+                {printPending
+                  ? 'Печатаем…'
+                  : `Распечатать (${printSel.size})`}
+              </button>
+            </div>
+            {printFeedback && (
+              <span
+                className="meta-line"
+                style={{
+                  color:
+                    printFeedback.kind === 'ok'
+                      ? 'var(--color-ok-fg)'
+                      : 'var(--color-danger-fg)',
+                }}
+              >
+                {printFeedback.text}
+              </span>
+            )}
+          </>
         )}
 
         <div className="actions-row">
           <button
             type="button"
-            className="btn btn-primary"
+            className="btn"
             onClick={() => {
               setSuccess(null);
               setSelected(new Set());

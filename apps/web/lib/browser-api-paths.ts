@@ -27,6 +27,17 @@ export function buildPassportQrPath(id: string): string {
   return `/api/passports/${encodeURIComponent(id)}/qr`;
 }
 
+/**
+ * Пакетная печатная форма паспортов (`/api/passports/print-batch?ids=…`) —
+ * один документ со всеми этикетками. Открывается кнопкой «Распечатать»
+ * помощника раскройщика, когда принтер-агент не настроен (браузерный
+ * fallback, как `buildPassportPrintPath` для одиночного).
+ */
+export function buildPassportsBatchPrintPath(ids: string[]): string {
+  const param = ids.map((id) => encodeURIComponent(id)).join(',');
+  return `/api/passports/print-batch?ids=${param}`;
+}
+
 export function buildEquipmentPrintPath(id: string): string {
   return `/api/equipment/${encodeURIComponent(id)}/print`;
 }
