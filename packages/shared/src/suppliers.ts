@@ -80,6 +80,19 @@ export const SUPPLIER_WEBSITE_MAX_LENGTH = 300;
 export const SUPPLIER_ADDRESS_MAX_LENGTH = 500;
 export const SUPPLIER_COMMENT_MAX_LENGTH = 2000;
 
+/**
+ * Банковские/платёжные реквизиты (используются заявками на оплату, см.
+ * `@sewing/shared/supplier-payment-requests`). Свободные строки без
+ * форматных проверок на MVP.
+ */
+export const SUPPLIER_LEGAL_NAME_MAX_LENGTH = 300;
+export const SUPPLIER_INN_MAX_LENGTH = 32;
+export const SUPPLIER_KPP_MAX_LENGTH = 32;
+export const SUPPLIER_BANK_NAME_MAX_LENGTH = 300;
+export const SUPPLIER_BANK_ACCOUNT_MAX_LENGTH = 64;
+export const SUPPLIER_BANK_BIK_MAX_LENGTH = 32;
+export const SUPPLIER_BANK_CORR_ACCOUNT_MAX_LENGTH = 64;
+
 export const SUPPLIER_CONTACT_NAME_MAX_LENGTH = 200;
 export const SUPPLIER_CONTACT_POSITION_MAX_LENGTH = 200;
 export const SUPPLIER_CONTACT_EMAIL_MAX_LENGTH = 200;
@@ -344,6 +357,29 @@ const SupplierCommentField = optionalNullableText(
   'Комментарий',
 );
 
+const SupplierLegalNameField = optionalNullableText(
+  SUPPLIER_LEGAL_NAME_MAX_LENGTH,
+  'Юр. название',
+);
+const SupplierInnField = optionalNullableText(SUPPLIER_INN_MAX_LENGTH, 'ИНН');
+const SupplierKppField = optionalNullableText(SUPPLIER_KPP_MAX_LENGTH, 'КПП');
+const SupplierBankNameField = optionalNullableText(
+  SUPPLIER_BANK_NAME_MAX_LENGTH,
+  'Банк',
+);
+const SupplierBankAccountField = optionalNullableText(
+  SUPPLIER_BANK_ACCOUNT_MAX_LENGTH,
+  'Расчётный счёт',
+);
+const SupplierBankBikField = optionalNullableText(
+  SUPPLIER_BANK_BIK_MAX_LENGTH,
+  'БИК',
+);
+const SupplierBankCorrAccountField = optionalNullableText(
+  SUPPLIER_BANK_CORR_ACCOUNT_MAX_LENGTH,
+  'Корр. счёт',
+);
+
 // ---------------------------------------------------------------------------
 // Supplier list query
 // ---------------------------------------------------------------------------
@@ -372,6 +408,13 @@ export const CreateSupplierSchema = z.object({
   website: SupplierWebsiteField,
   address: SupplierAddressField,
   comment: SupplierCommentField,
+  legalName: SupplierLegalNameField,
+  inn: SupplierInnField,
+  kpp: SupplierKppField,
+  bankName: SupplierBankNameField,
+  bankAccount: SupplierBankAccountField,
+  bankBik: SupplierBankBikField,
+  bankCorrAccount: SupplierBankCorrAccountField,
   status: SupplierStatusSchema.optional(),
 });
 export type CreateSupplierDto = z.infer<typeof CreateSupplierSchema>;
@@ -383,6 +426,13 @@ export const UpdateSupplierSchema = z
     website: SupplierWebsiteField,
     address: SupplierAddressField,
     comment: SupplierCommentField,
+    legalName: SupplierLegalNameField,
+    inn: SupplierInnField,
+    kpp: SupplierKppField,
+    bankName: SupplierBankNameField,
+    bankAccount: SupplierBankAccountField,
+    bankBik: SupplierBankBikField,
+    bankCorrAccount: SupplierBankCorrAccountField,
     status: SupplierStatusSchema.optional(),
   })
   .refine(
@@ -392,6 +442,13 @@ export const UpdateSupplierSchema = z
       obj.website !== undefined ||
       obj.address !== undefined ||
       obj.comment !== undefined ||
+      obj.legalName !== undefined ||
+      obj.inn !== undefined ||
+      obj.kpp !== undefined ||
+      obj.bankName !== undefined ||
+      obj.bankAccount !== undefined ||
+      obj.bankBik !== undefined ||
+      obj.bankCorrAccount !== undefined ||
       obj.status !== undefined,
     'Нечего обновлять: укажите хотя бы одно поле',
   );
@@ -651,6 +708,14 @@ export interface SupplierListItemDto {
   website: string | null;
   address: string | null;
   comment: string | null;
+  /** Платёжные реквизиты (для заявок на оплату). Все nullable. */
+  legalName: string | null;
+  inn: string | null;
+  kpp: string | null;
+  bankName: string | null;
+  bankAccount: string | null;
+  bankBik: string | null;
+  bankCorrAccount: string | null;
   status: SupplierStatus | string;
   createdAt: string;
   updatedAt: string;

@@ -48,6 +48,7 @@
     "./workshop-needs": "./src/workshop-needs.ts",
     "./suppliers": "./src/suppliers.ts",
     "./purchase-orders": "./src/purchase-orders.ts",
+    "./supplier-payment-requests": "./src/supplier-payment-requests.ts",
     "./purchase-receipts": "./src/purchase-receipts.ts",
     "./cut-readiness": "./src/cut-readiness.ts",
     "./order-applications": "./src/order-applications.ts",

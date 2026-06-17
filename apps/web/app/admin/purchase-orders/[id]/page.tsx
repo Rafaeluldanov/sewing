@@ -39,6 +39,7 @@ import { EditPurchaseOrderForm } from './edit-form';
 import { PurchaseOrderActionsBar } from './actions-bar';
 import { PurchaseOrderLinesTable } from './lines-table';
 import { PurchaseOrderReceiptsCard } from './receipts-card';
+import { PaymentRequestsCard } from './payment-requests-card';
 
 /**
  * Этап 7А «Приёмка поставок»: блок «Приёмки» в карточке PO. Гейтится
@@ -218,6 +219,14 @@ export default async function AdminPurchaseOrderDetailPage({ params }: Params) {
               <EditPurchaseOrderForm po={po} />
             </div>
           </AdminCard>
+
+          <PaymentRequestsCard
+            purchaseOrderId={po.id}
+            supplierId={po.supplierId}
+            supplierName={po.supplierNameSnapshot}
+            totalAmount={po.totalAmount}
+            currency={po.lines[0]?.currency ?? null}
+          />
 
           <AdminCard>
             <AdminSectionHeader

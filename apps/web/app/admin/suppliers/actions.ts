@@ -56,8 +56,19 @@ function explainApiError(e: unknown): { error: string; requestId?: string } {
 // Suppliers
 // ---------------------------------------------------------------------------
 
+/** Банковские реквизиты — те же имена полей в create/update формах. */
+const REQUISITE_FIELDS = [
+  'legalName',
+  'inn',
+  'kpp',
+  'bankName',
+  'bankAccount',
+  'bankBik',
+  'bankCorrAccount',
+] as const;
+
 function buildCreateSupplierDto(form: FormData): CreateSupplierDto {
-  return {
+  const dto: CreateSupplierDto = {
     name: String(form.get('name') ?? '').trim(),
     phone: form.get('phone') === null ? undefined : String(form.get('phone') ?? ''),
     website:
@@ -67,6 +78,10 @@ function buildCreateSupplierDto(form: FormData): CreateSupplierDto {
     comment:
       form.get('comment') === null ? undefined : String(form.get('comment') ?? ''),
   };
+  for (const f of REQUISITE_FIELDS) {
+    if (form.get(f) !== null) dto[f] = String(form.get(f) ?? '');
+  }
+  return dto;
 }
 
 function buildUpdateSupplierDto(form: FormData): UpdateSupplierDto {
@@ -78,6 +93,9 @@ function buildUpdateSupplierDto(form: FormData): UpdateSupplierDto {
   if (form.get('website') !== null) dto.website = String(form.get('website') ?? '');
   if (form.get('address') !== null) dto.address = String(form.get('address') ?? '');
   if (form.get('comment') !== null) dto.comment = String(form.get('comment') ?? '');
+  for (const f of REQUISITE_FIELDS) {
+    if (form.get(f) !== null) dto[f] = String(form.get(f) ?? '');
+  }
   if (form.get('status') !== null) {
     dto.status = String(form.get('status') ?? '').trim() as
       | 'ACTIVE'

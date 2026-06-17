@@ -91,6 +91,49 @@ export function CreateSupplierForm() {
         />
       </div>
 
+      <fieldset
+        style={{
+          border: '1px solid #e2e8f0',
+          borderRadius: 8,
+          padding: '12px 14px',
+          margin: 0,
+        }}
+      >
+        <legend style={{ fontSize: '0.85rem', fontWeight: 600, padding: '0 6px' }}>
+          Реквизиты для оплаты (необязательно)
+        </legend>
+        <div className="admin-form-grid">
+          <div className="admin-field">
+            <label htmlFor="supplier-legalName">Юр. название</label>
+            <input id="supplier-legalName" name="legalName" type="text" maxLength={300} placeholder='ООО «…»' />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-inn">ИНН</label>
+            <input id="supplier-inn" name="inn" type="text" maxLength={32} />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-kpp">КПП</label>
+            <input id="supplier-kpp" name="kpp" type="text" maxLength={32} />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-bankName">Банк</label>
+            <input id="supplier-bankName" name="bankName" type="text" maxLength={300} />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-bankAccount">Расчётный счёт</label>
+            <input id="supplier-bankAccount" name="bankAccount" type="text" maxLength={64} />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-bankBik">БИК</label>
+            <input id="supplier-bankBik" name="bankBik" type="text" maxLength={32} />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-bankCorrAccount">Корр. счёт</label>
+            <input id="supplier-bankCorrAccount" name="bankCorrAccount" type="text" maxLength={64} />
+          </div>
+        </div>
+      </fieldset>
+
       {state.error && (
         <div className="error-box" role="alert">
           <XCircle size={16} strokeWidth={1.6} aria-hidden /> {state.error}

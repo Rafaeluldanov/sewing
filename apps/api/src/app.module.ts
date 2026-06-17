@@ -44,6 +44,7 @@ import { PatternCategoriesModule } from './modules/pattern-categories/pattern-ca
 import { WorkshopNeedsModule } from './modules/workshop-needs/workshop-needs.module.js';
 import { SuppliersModule } from './modules/suppliers/suppliers.module.js';
 import { PurchaseOrdersModule } from './modules/purchase-orders/purchase-orders.module.js';
+import { SupplierPaymentRequestsModule } from './modules/supplier-payment-requests/supplier-payment-requests.module.js';
 import { PurchaseReceiptsModule } from './modules/purchase-receipts/purchase-receipts.module.js';
 import { CutReadinessModule } from './modules/cut-readiness/cut-readiness.module.js';
 import { OrderApplicationsModule } from './modules/order-applications/order-applications.module.js';
@@ -109,6 +110,7 @@ import { TreasuryModule } from './modules/treasury/treasury.module.js';
     WorkshopNeedsModule,
     SuppliersModule,
     PurchaseOrdersModule,
+    SupplierPaymentRequestsModule,
     PurchaseReceiptsModule,
     CutReadinessModule,
     OrderApplicationsModule,

@@ -55,6 +55,7 @@ export * from './pattern-categories';
 export * from './workshop-needs';
 export * from './suppliers';
 export * from './purchase-orders';
+export * from './supplier-payment-requests';
 export * from './purchase-receipts';
 export * from './cut-readiness';
 export * from './order-applications';

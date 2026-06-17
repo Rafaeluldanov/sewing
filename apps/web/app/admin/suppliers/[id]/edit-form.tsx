@@ -112,6 +112,96 @@ export function EditSupplierForm({
         />
       </div>
 
+      <fieldset
+        style={{
+          border: '1px solid #e2e8f0',
+          borderRadius: 8,
+          padding: '12px 14px',
+          margin: 0,
+        }}
+      >
+        <legend style={{ fontSize: '0.85rem', fontWeight: 600, padding: '0 6px' }}>
+          Реквизиты для оплаты
+        </legend>
+        <p className="admin-muted" style={{ marginTop: 0, fontSize: '0.82rem' }}>
+          Используются при создании заявки на оплату по заказу поставщику —
+          подставляются автоматически (в заявке их можно отредактировать).
+        </p>
+        <div className="admin-form-grid">
+          <div className="admin-field">
+            <label htmlFor="supplier-edit-legalName">Юр. название</label>
+            <input
+              id="supplier-edit-legalName"
+              name="legalName"
+              type="text"
+              maxLength={300}
+              defaultValue={supplier.legalName ?? ''}
+              placeholder='ООО «…»'
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-edit-inn">ИНН</label>
+            <input
+              id="supplier-edit-inn"
+              name="inn"
+              type="text"
+              maxLength={32}
+              defaultValue={supplier.inn ?? ''}
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-edit-kpp">КПП</label>
+            <input
+              id="supplier-edit-kpp"
+              name="kpp"
+              type="text"
+              maxLength={32}
+              defaultValue={supplier.kpp ?? ''}
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-edit-bankName">Банк</label>
+            <input
+              id="supplier-edit-bankName"
+              name="bankName"
+              type="text"
+              maxLength={300}
+              defaultValue={supplier.bankName ?? ''}
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-edit-bankAccount">Расчётный счёт</label>
+            <input
+              id="supplier-edit-bankAccount"
+              name="bankAccount"
+              type="text"
+              maxLength={64}
+              defaultValue={supplier.bankAccount ?? ''}
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-edit-bankBik">БИК</label>
+            <input
+              id="supplier-edit-bankBik"
+              name="bankBik"
+              type="text"
+              maxLength={32}
+              defaultValue={supplier.bankBik ?? ''}
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="supplier-edit-bankCorrAccount">Корр. счёт</label>
+            <input
+              id="supplier-edit-bankCorrAccount"
+              name="bankCorrAccount"
+              type="text"
+              maxLength={64}
+              defaultValue={supplier.bankCorrAccount ?? ''}
+            />
+          </div>
+        </div>
+      </fieldset>
+
       {state.error && (
         <div className="error-box" role="alert">
           <XCircle size={16} strokeWidth={1.6} aria-hidden /> {state.error}

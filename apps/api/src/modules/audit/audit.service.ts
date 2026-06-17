@@ -135,6 +135,15 @@ export type AuditEntityType =
    */
   | 'PURCHASE_ORDER'
   /**
+   * Заявки на оплату поставщику (см.
+   * `apps/api/src/modules/supplier-payment-requests/*`,
+   * `prisma/schema.prisma::SupplierPaymentRequest`). События:
+   *   - `SUPPLIER_PAYMENT_REQUEST_CREATED` — заявка выписана по PO,
+   *     `entityId = SupplierPaymentRequest.id` (детали в payload:
+   *     purchaseOrderId, amount, stagesCount, filesCount).
+   */
+  | 'SUPPLIER_PAYMENT_REQUEST'
+  /**
    * Документы приёмки (Этап 7А, см.
    * `apps/api/src/modules/purchase-receipts/*`,
    * `prisma/schema.prisma::PurchaseReceipt`). События:

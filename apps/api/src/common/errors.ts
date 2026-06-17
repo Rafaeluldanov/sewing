@@ -3077,6 +3077,41 @@ export class PurchaseOrderHasReceiptsException extends BusinessException {
 }
 
 // ---------------------------------------------------------------------------
+// Supplier payment requests (заявки на оплату поставщику, см.
+// `apps/api/src/modules/supplier-payment-requests/*`,
+// `prisma/schema.prisma::SupplierPaymentRequest`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Заявка на оплату (`SupplierPaymentRequest`) не найдена. Бросается из
+ * `SupplierPaymentRequestsService.get`.
+ */
+export class SupplierPaymentRequestNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'SUPPLIER_PAYMENT_REQUEST_NOT_FOUND',
+      'Заявка на оплату не найдена',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Невалидное вложение заявки на оплату (нет имени файла, пустой файл,
+ * превышен лимит размера и т.п.). Бросается из
+ * `SupplierPaymentRequestsStorageService`.
+ */
+export class SupplierPaymentRequestFileInvalidException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'SUPPLIER_PAYMENT_REQUEST_FILE_INVALID',
+      message,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Purchase receipts (Этап 7А, см.
 // `apps/api/src/modules/purchase-receipts/*`,
 // `prisma/schema.prisma::PurchaseReceipt` / `PurchaseReceiptLine`).

@@ -4138,6 +4138,25 @@ model Supplier {
   website   String?
   address   String?
   comment   String?
+
+  /// Банковские/платёжные реквизиты поставщика (этап «Заявки на оплату
+  /// поставщику», см. `model SupplierPaymentRequest`). Все nullable —
+  /// заполняются по мере необходимости из карточки `/admin/suppliers`.
+  /// В заявку на оплату копируются снимком (`*Snapshot`-поля
+  /// `SupplierPaymentRequest`) и там редактируемы — поздняя правка
+  /// карточки не меняет уже выписанные заявки.
+  /// `legalName` — юр. название (для платёжки), отдельно от бытового
+  /// `name`. Остальное — стандартный блок р/с: ИНН/КПП, банк, р/с, БИК,
+  /// корр-счёт. Никаких форматных проверок (контрольный разряд ИНН и
+  /// т.п.) на MVP не делаем — свободные строки.
+  legalName       String?
+  inn             String?
+  kpp             String?
+  bankName        String?
+  bankAccount     String?
+  bankBik         String?
+  bankCorrAccount String?
+
   /// Статус карточки. Дефолт `ACTIVE`. Хранится строкой, чтобы расширять
   /// список без миграции (см. `SUPPLIER_STATUSES` в
   /// `@sewing/shared/suppliers`). UI скрывает не-`ACTIVE` поставщиков
@@ -4364,11 +4383,162 @@ model PurchaseOrder {
   /// ручного удаления PO нет — только `CANCELLED`).
   purchaseReceipts PurchaseReceipt[]
 
+  /// Заявки на оплату поставщику, выписанные по этому PO (см.
+  /// `model SupplierPaymentRequest`). `onDelete: Cascade` со стороны
+  /// заявки — на MVP PO не удаляется (только `CANCELLED`), но если
+  /// удаление появится, заявки уйдут вместе с документом.
+  paymentRequests SupplierPaymentRequest[]
+
   @@index([supplierId])
   @@index([customerOrderId])
   @@index([status])
   @@index([expectedDeliveryDate])
   @@index([createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Supplier payment requests (этап «Заявки на оплату поставщику»)
+//
+// Заявка на оплату — платёжный документ ПОВЕРХ закупочного контура,
+// выписывается внутри карточки `PurchaseOrder`: «оплатить поставщику X
+// сумму Y по реквизитам Z, разбив на этапы (предоплата 30% / остаток
+// 70% и т.п.)». Это вышестоящий документ относительно казначейской
+// `SupplierPayment`:
+//   - заявка создаётся закупщиком/менеджером БЕЗ выбора счёта/статьи
+//     ДДС (это решение казначея);
+//   - на следующем шаге каждый этап заявки «забирается» казначейством
+//     и превращается в `SupplierPayment` (DRAFT→APPROVED→PAID c
+//     проводкой `CashFlowEntry`), привязка — soft через
+//     `SupplierPaymentRequestStage.supplierPaymentId`.
+//
+// Snapshot-инварианты (см. `SupplierPaymentRequestsService.create`):
+//   - в момент создания фиксируем supplier-snapshot (`supplierId` +
+//     `supplierNameSnapshot`) и снимок реквизитов (`*Snapshot`-поля),
+//     которые можно отредактировать прямо в заявке, не трогая карточку
+//     `Supplier`;
+//   - `purchaseOrderId` — hard-FK (заявка не существует без PO);
+//   - `supplierId` — soft (id без FK) + snapshot, как в
+//     `SupplierPayment`: платёжный контур не связываем с справочником
+//     поставщиков жёстко.
+//
+// Статусы (свободная строка, без Prisma enum — расширяется без
+// миграции; см. `@sewing/shared/supplier-payment-requests`):
+//   - `DRAFT`      — черновик, можно править;
+//   - `SUBMITTED`  — передана в казначейство (на оплату);
+//   - `CANCELLED`  — отменена.
+// ---------------------------------------------------------------------------
+
+model SupplierPaymentRequest {
+  id     String @id @default(cuid())
+  /// Уникальный человекочитаемый номер вида `PR-YYYYMMDD-NNNN`
+  /// (`PR` = Payment Request). Генерация — `SupplierPaymentRequestNumberService`
+  /// по той же схеме, что `PurchaseOrderNumberService`.
+  number String @unique
+
+  /// Заказ поставщику, по которому выписана заявка. Hard-FK,
+  /// `onDelete: Cascade` — заявка живёт внутри PO.
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+
+  /// Поставщик (soft-ссылка на `Supplier`, без FK) + снимок имени.
+  /// Soft — по той же причине, что у `SupplierPayment`: платёжный
+  /// контур не вводит жёсткую связь со справочником.
+  supplierId           String
+  supplierNameSnapshot String
+
+  /// Снимок платёжных реквизитов на момент создания заявки. Копируются
+  /// из `Supplier.*`, далее редактируются прямо в заявке. Все nullable.
+  legalNameSnapshot       String?
+  innSnapshot             String?
+  kppSnapshot             String?
+  bankNameSnapshot        String?
+  bankAccountSnapshot     String?
+  bankBikSnapshot         String?
+  bankCorrAccountSnapshot String?
+
+  /// Общая сумма заявки. Этапы (`stages`) делят её по процентам.
+  amount   Decimal @db.Decimal(14, 2)
+  /// Валюта (на MVP обычно `RUB`). Свободная строка для согласованности
+  /// с `PurchaseOrderLine.currency`.
+  currency String?
+
+  /// Жизненный цикл заявки (свободная строка). См. комментарий выше.
+  status String @default("DRAFT")
+
+  comment String?
+
+  /// Кто создал заявку (soft, без FK на `Employee` — как аудит-лайт в
+  /// казначействе `SupplierPayment.createdById`).
+  createdById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  stages SupplierPaymentRequestStage[]
+  files  SupplierPaymentRequestFile[]
+
+  @@index([purchaseOrderId])
+  @@index([supplierId])
+  @@index([status, createdAt])
+}
+
+/// Этап оплаты внутри заявки (`SupplierPaymentRequest`). UI добавляет
+/// этапы кнопкой «Добавить этап»: процент от общей суммы → авто-сумма.
+/// Контроль «Σ процентов = 100%» — мягкий (предупреждение в UI), в БД
+/// не enforce-им: заявка может быть сохранена с любым раскладом.
+model SupplierPaymentRequestStage {
+  id        String                 @id @default(cuid())
+  requestId String
+  request   SupplierPaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+
+  /// Порядковый номер этапа (1, 2, …) для стабильной сортировки и
+  /// подписи «Этап N» в UI.
+  sortOrder Int
+
+  /// Процент от `SupplierPaymentRequest.amount`. Decimal(7,4) —
+  /// допускает дробные доли (например 33.3333%).
+  percent Decimal @db.Decimal(7, 4)
+  /// Сумма этапа = round(amount × percent / 100, 2). Хранится явно
+  /// (а не только процент), чтобы платёжка/казначейство видели
+  /// зафиксированную сумму, не пересчитывая.
+  amount  Decimal @db.Decimal(14, 2)
+
+  /// Плановая дата оплаты этапа. Nullable.
+  plannedPayDate DateTime?
+
+  /// Статус этапа (свободная строка): `PENDING` — ждёт оплаты,
+  /// дальше казначейство проставит `PAID` при проведении.
+  status String @default("PENDING")
+
+  /// Soft-крюк на казначейскую оплату (`SupplierPayment.id`),
+  /// созданную из этого этапа. Выставляется на следующем шаге
+  /// «заявка → казначейство». Пока всегда `null`.
+  supplierPaymentId String?
+
+  comment String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([requestId, sortOrder])
+}
+
+/// Вложение заявки на оплату (счёт/инвойс и доп. документы). 0..N
+/// файлов. URL — публичный путь на диске
+/// `apps/api/uploads/supplier-payment-requests/<requestId>/...`
+/// (см. `SupplierPaymentRequestsStorageService`). Зеркалит
+/// `ConstructorTaskFile`: формат не ограничен, валидация по размеру.
+model SupplierPaymentRequestFile {
+  id               String                 @id @default(cuid())
+  requestId        String
+  request          SupplierPaymentRequest @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  fileUrl          String
+  originalFileName String
+  contentType      String
+  sizeBytes        Int
+  createdAt        DateTime               @default(now())
+
+  @@index([requestId])
 }
 
 /// Строка закупочного документа: одна `WorkshopNeed` → одна

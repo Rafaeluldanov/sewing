@@ -107,6 +107,13 @@ export class SuppliersService {
         website: dto.website ?? null,
         address: dto.address ?? null,
         comment: dto.comment ?? null,
+        legalName: dto.legalName ?? null,
+        inn: dto.inn ?? null,
+        kpp: dto.kpp ?? null,
+        bankName: dto.bankName ?? null,
+        bankAccount: dto.bankAccount ?? null,
+        bankBik: dto.bankBik ?? null,
+        bankCorrAccount: dto.bankCorrAccount ?? null,
         status: dto.status ?? 'ACTIVE',
       },
     });
@@ -142,6 +149,15 @@ export class SuppliersService {
     if (dto.website !== undefined) data.website = dto.website;
     if (dto.address !== undefined) data.address = dto.address;
     if (dto.comment !== undefined) data.comment = dto.comment;
+    if (dto.legalName !== undefined) data.legalName = dto.legalName;
+    if (dto.inn !== undefined) data.inn = dto.inn;
+    if (dto.kpp !== undefined) data.kpp = dto.kpp;
+    if (dto.bankName !== undefined) data.bankName = dto.bankName;
+    if (dto.bankAccount !== undefined) data.bankAccount = dto.bankAccount;
+    if (dto.bankBik !== undefined) data.bankBik = dto.bankBik;
+    if (dto.bankCorrAccount !== undefined) {
+      data.bankCorrAccount = dto.bankCorrAccount;
+    }
     if (dto.status !== undefined) data.status = dto.status;
 
     if (Object.keys(data).length === 0) return this.get(id);
@@ -501,6 +517,13 @@ export class SuppliersService {
       website: row.website,
       address: row.address,
       comment: row.comment,
+      legalName: row.legalName,
+      inn: row.inn,
+      kpp: row.kpp,
+      bankName: row.bankName,
+      bankAccount: row.bankAccount,
+      bankBik: row.bankBik,
+      bankCorrAccount: row.bankCorrAccount,
       status: row.status,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
