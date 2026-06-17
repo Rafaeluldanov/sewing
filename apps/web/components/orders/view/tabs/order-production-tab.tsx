@@ -20,10 +20,12 @@
  * `ShopfloorRowDto` — бэкенд не трогаем.
  *
  * Что СОЗНАТЕЛЬНО остаётся отдельно:
- *   - ЖУРНАЛ отгрузок (`OrderFinishedGoodsShipmentSection`) — это лог
- *     событий (дата / номер / статус / отмена), а не разрез по
- *     размеру, в матрицу его впихивать нельзя. Превью балансов из
- *     него переехало в колонку «К отгрузке».
+ *   - ОТГРУЗКА: блок «Отгрузка готовой продукции» (превью остатков +
+ *     журнал документов) убран — созданные отгрузки теперь живут в
+ *     отдельной таблице «Отгрузка». В этой вкладке осталась только
+ *     кнопка «Создать отгрузку» в шапке карточки «Производство по
+ *     размерам» (открывает модалку), а превью балансов отражено
+ *     колонкой «К отгрузке» матрицы.
  *   - список паспортов (вкладка «Паспорта»), материалы (вкладка
  *     «Потребности»), hero-метрики (шапка).
  *
@@ -53,9 +55,10 @@ import { getShopfloorState } from '@/lib/shopfloor-api';
 import {
   listFinishedGoodsBalances,
   listOrderFinishedGoodsShipments,
+  type FinishedGoodsBalanceListItem,
 } from '@/lib/finished-goods-api';
 import { Activity, BarChart3, Layers, Lock, Workflow } from 'lucide-react';
-import { OrderFinishedGoodsShipmentSection } from '@/components/orders/finished-goods/order-finished-goods-shipment-section';
+import { CreateFinishedGoodsShipmentButton } from '@/components/orders/finished-goods/create-finished-goods-shipment-button';
 import { OrderMaterialColorsCard } from '@/components/orders/view/order-material-colors-card';
 import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
 import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
@@ -169,12 +172,17 @@ export async function OrderProductionTab({
   // грузим всегда и мягко деградируем при ошибке.
   const readyToShipBySize = new Map<string, number>();
   const shippedBySize = new Map<string, number>();
+  // Остатки готовой продукции (positiveOnly) питают и колонку «К
+  // отгрузке» матрицы, и форму кнопки «Создать отгрузку» в шапке
+  // карточки «Производство по размерам».
+  let shipmentBalances: FinishedGoodsBalanceListItem[] = [];
   try {
     const balances = await listFinishedGoodsBalances({
       orderId: order.id,
       positiveOnly: true,
       limit: 200,
     });
+    shipmentBalances = balances.items;
     for (const b of balances.items) {
       readyToShipBySize.set(
         b.sizeId,
@@ -281,6 +289,14 @@ export async function OrderProductionTab({
               ? `Цех: срез ${formatTime(shopfloor.updatedAt)}`
               : 'План и отгрузка; цех — после запуска'
           }
+          actions={
+            canManage && shipmentBalances.length > 0 ? (
+              <CreateFinishedGoodsShipmentButton
+                orderId={order.id}
+                balances={shipmentBalances}
+              />
+            ) : null
+          }
         />
         {shopfloorError && (
           <p className="order-prod-tab__shopfloor-warning">
@@ -306,22 +322,18 @@ export async function OrderProductionTab({
       </AdminCard>
 
       {/*
-       * Журнал отгрузок остаётся отдельно: это лог документов
-       * (дата / номер / отмена), не разрез по размеру. Превью
-       * балансов из него переехало в колонку «К отгрузке» матрицы.
-       */}
-      <OrderFinishedGoodsShipmentSection
-        orderId={order.id}
-        canManage={canManage}
-      />
-
-      {/*
+       * Блок «Отгрузка готовой продукции» (превью остатков + журнал
+       * отгрузок) убран: созданные отгрузки теперь живут в отдельной
+       * таблице «Отгрузка». Здесь осталась только кнопка «Создать
+       * отгрузку» — она переехала в правый верхний угол карточки
+       * «Производство по размерам» (см. `actions` выше).
+       *
        * Блоки «Цвета по строкам техкарты» и «Очередь выдачи кроя по
        * размерам» переехали сюда из удалённой вкладки «План» (см.
        * `OrderMaterialColorsCard`, `OrderCutIssueRulesCard`). По
        * просьбе — в самом конце вкладки «Производство»: это
        * настроечные блоки, идут после основного производственного
-       * среза и журнала отгрузок.
+       * среза.
        */}
       <OrderMaterialColorsCard order={order} />
 
