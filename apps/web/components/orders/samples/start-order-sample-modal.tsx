@@ -135,6 +135,13 @@ export function StartOrderSampleModal({
           aria-modal="true"
           aria-labelledby={titleId}
           className="admin-size-plan-modal"
+          style={{
+            // Образцовая форма заметно выше «клона» — даём шире окно и
+            // позволяем пользователю растягивать его вручную (resize).
+            width: 'min(680px, 100%)',
+            maxWidth: 'calc(100vw - 2rem)',
+            resize: 'both',
+          }}
         >
           <header className="admin-size-plan-modal__header">
             <div className="admin-size-plan-modal__titles">
@@ -156,7 +163,19 @@ export function StartOrderSampleModal({
             </button>
           </header>
 
-          <form action={formAction} className="admin-form" style={{ margin: 0 }}>
+          <form
+            action={formAction}
+            className="admin-form"
+            style={{
+              // Форма — flex-колонка во всю высоту модалки, чтобы body
+              // прокручивался, а footer с кнопкой запуска всегда был виден.
+              margin: 0,
+              display: 'flex',
+              flexDirection: 'column',
+              flex: '1 1 auto',
+              minHeight: 0,
+            }}
+          >
             <div className="admin-size-plan-modal__body">
               <div style={{ marginTop: 0 }}>
                 <label htmlFor="sizeId">Размер из заказа</label>
