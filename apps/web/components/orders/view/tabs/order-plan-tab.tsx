@@ -7,12 +7,7 @@
  *   - продукт / лекало (snapshot или live);
  *   - цвет;
  *   - размеры и плановые количества (`OrderItem[]`);
- *   - маршрут / операции (snapshot `OrderRouteStep[]`);
- *   - привязка к шаблону техкарты (id + название, snapshot
- *     материалов и outsource — в вкладке «Потребности»);
  *   - дата заказа, срок (read-only meta);
- *   - флаг устарелости плана операций (без таблицы цифр — это
- *     уже агрегаты, а не план; см. вкладку «Производство»);
  *   - блок «Цвета по строкам техкарты» (этап «Указать в заказе»,
  *     см. ТЗ §4): primary input для строк
  *     `OrderMaterialRequirement.requiresColorSelection = true`
@@ -21,6 +16,9 @@
  *     остаётся derived view + warning, не source of truth.
  *
  * Что СОЗНАТЕЛЬНО НЕ показываем:
+ *   - маршрут / операции (snapshot `OrderRouteStep[]`) и флаг
+ *     устарелости плана операций — переехали во вкладку
+ *     «Производство»;
  *   - production progress / факты — это во вкладке «Производство»;
  *   - размеры в таблице из `sizeBreakdown` — здесь чисто план,
  *     а не план/факт;
@@ -36,25 +34,16 @@ import type {
   OrderDetailDto,
   OrderItemDto,
   OrderMaterialRequirementDto,
-  OrderRouteStepDto,
 } from '@sewing/shared/orders';
 import type { OrderCutIssueRulesSummaryDto } from '@sewing/shared';
 import {
   TECH_CARD_MATERIAL_COLOR_RULE_LABELS,
   getTechCardMaterialRoleLabel,
 } from '@sewing/shared/tech-cards';
-import {
-  Calendar,
-  Layers,
-  Lock,
-  Package,
-  Palette,
-  Workflow,
-} from 'lucide-react';
+import { Calendar, Lock, Package, Palette } from 'lucide-react';
 import {
   AdminCard,
   AdminEmptyState,
-  AdminRouteSteps,
   AdminSectionHeader,
   AdminSizeGrid,
   AdminStatusBadge,
@@ -67,7 +56,6 @@ import {
   resolveOrderNomenclature,
 } from '@/lib/order-nomenclature';
 import { PatternPreviewCard } from '@/components/orders/pattern-preview-card';
-import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
 
 interface Props {
   order: OrderDetailDto;
@@ -198,63 +186,6 @@ export function OrderPlanTab({
               />
             ) : (
               <PlanItemsGrid items={order.items} />
-            )}
-          </AdminCard>
-
-          <AdminCard className="admin-order-detail-card-compact">
-            <AdminSectionHeader
-              icon={<Workflow size={18} strokeWidth={1.7} aria-hidden />}
-              title="Маршрут операций"
-              hint={
-                order.routeTemplateName ?? order.techCardName ?? undefined
-              }
-              actions={
-                isStarted ? (
-                  <AdminStatusBadge tone="muted">
-                    <Lock size={12} strokeWidth={1.7} aria-hidden /> snapshot
-                  </AdminStatusBadge>
-                ) : null
-              }
-            />
-            <dl className="admin-deflist">
-              <dt>Шаблон маршрута</dt>
-              <dd>
-                {order.routeTemplateName ? (
-                  <strong>{order.routeTemplateName}</strong>
-                ) : (
-                  <span className="admin-muted">не выбран</span>
-                )}
-              </dd>
-              <dt>Шаблон техкарты</dt>
-              <dd>
-                {order.techCardName ? (
-                  <strong>{order.techCardName}</strong>
-                ) : (
-                  <span className="admin-muted">не выбран</span>
-                )}
-              </dd>
-            </dl>
-            {(order.routeTemplateName?.toLowerCase().includes('сплит') ||
-              order.routeModeOverride !== 'AUTO') && (
-              <div className="order-plan-tab__route-mode">
-                <span className="admin-deflist__subtitle">Режим распошива</span>
-                <RouteModeToggle
-                  orderId={order.id}
-                  current={order.routeModeOverride}
-                />
-              </div>
-            )}
-            <RouteStepsList steps={order.routeSteps} />
-            {order.operationPlanIsStale && (
-              <p
-                className="admin-muted"
-                style={{ marginTop: 8, fontSize: '0.85rem' }}
-              >
-                <Layers size={12} strokeWidth={1.7} aria-hidden /> План
-                операций устарел:{' '}
-                {order.operationPlanStaleReason ??
-                  'после расчёта менялись операции, ставки или нормы времени.'}
-              </p>
             )}
           </AdminCard>
 
@@ -487,25 +418,3 @@ function PlanItemsGrid({ items }: { items: OrderItemDto[] }) {
   return <AdminSizeGrid sizes={sizes} values={planValues} readOnly />;
 }
 
-function RouteStepsList({ steps }: { steps: OrderRouteStepDto[] }) {
-  if (steps.length === 0) {
-    return (
-      <p className="admin-muted" style={{ marginTop: 8, fontSize: '0.85rem' }}>
-        Маршрут не зафиксирован — заказ ещё не запущен либо запущен без
-        шаблона.
-      </p>
-    );
-  }
-  const adminSteps = [...steps]
-    .sort((a, b) => a.index - b.index)
-    .map((s) => ({
-      id: s.id,
-      index: s.index + 1,
-      name: s.operationName,
-    }));
-  return (
-    <div style={{ marginTop: 8 }}>
-      <AdminRouteSteps steps={adminSteps} dense />
-    </div>
-  );
-}

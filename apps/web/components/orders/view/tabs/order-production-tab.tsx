@@ -32,6 +32,7 @@
  */
 import type {
   OrderDetailDto,
+  OrderRouteStepDto,
   OrderSizeBreakdownRow,
   OrderSummary,
 } from '@sewing/shared/orders';
@@ -42,7 +43,9 @@ import type {
 import {
   AdminCard,
   AdminEmptyState,
+  AdminRouteSteps,
   AdminSectionHeader,
+  AdminStatusBadge,
 } from '@/components/admin';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getShopfloorState } from '@/lib/shopfloor-api';
@@ -50,8 +53,9 @@ import {
   listFinishedGoodsBalances,
   listOrderFinishedGoodsShipments,
 } from '@/lib/finished-goods-api';
-import { Activity, BarChart3 } from 'lucide-react';
+import { Activity, BarChart3, Layers, Lock, Workflow } from 'lucide-react';
 import { OrderFinishedGoodsShipmentSection } from '@/components/orders/finished-goods/order-finished-goods-shipment-section';
+import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
 
 interface Props {
   order: OrderDetailDto;
@@ -121,6 +125,12 @@ export async function OrderProductionTab({ order, canManage }: Props) {
   // незачем. Подключаем только для `IN_PRODUCTION` и `DONE`.
   const shopfloorEligible =
     order.status === 'IN_PRODUCTION' || order.status === 'DONE';
+  // Маршрут — snapshot после запуска (ADR-0006): показываем плашку
+  // «snapshot» в тех же статусах, что и на бывшей вкладке «План».
+  const isStarted =
+    order.status === 'IN_PRODUCTION' ||
+    order.status === 'DONE' ||
+    order.status === 'CANCELLED';
 
   let shopfloor: ShopfloorStateDto | null = null;
   let shopfloorError: string | null = null;
@@ -191,6 +201,58 @@ export async function OrderProductionTab({ order, canManage }: Props) {
             <KpiCard key={k.label} {...k} />
           ))}
         </div>
+      </AdminCard>
+
+      <AdminCard className="admin-order-detail-card-compact">
+        <AdminSectionHeader
+          icon={<Workflow size={18} strokeWidth={1.7} aria-hidden />}
+          title="Маршрут операций"
+          hint={order.routeTemplateName ?? order.techCardName ?? undefined}
+          actions={
+            isStarted ? (
+              <AdminStatusBadge tone="muted">
+                <Lock size={12} strokeWidth={1.7} aria-hidden /> snapshot
+              </AdminStatusBadge>
+            ) : null
+          }
+        />
+        <dl className="admin-deflist">
+          <dt>Шаблон маршрута</dt>
+          <dd>
+            {order.routeTemplateName ? (
+              <strong>{order.routeTemplateName}</strong>
+            ) : (
+              <span className="admin-muted">не выбран</span>
+            )}
+          </dd>
+          <dt>Шаблон техкарты</dt>
+          <dd>
+            {order.techCardName ? (
+              <strong>{order.techCardName}</strong>
+            ) : (
+              <span className="admin-muted">не выбран</span>
+            )}
+          </dd>
+        </dl>
+        {(order.routeTemplateName?.toLowerCase().includes('сплит') ||
+          order.routeModeOverride !== 'AUTO') && (
+          <div className="order-plan-tab__route-mode">
+            <span className="admin-deflist__subtitle">Режим распошива</span>
+            <RouteModeToggle
+              orderId={order.id}
+              current={order.routeModeOverride}
+            />
+          </div>
+        )}
+        <RouteStepsList steps={order.routeSteps} />
+        {order.operationPlanIsStale && (
+          <p className="admin-muted" style={{ marginTop: 8, fontSize: '0.85rem' }}>
+            <Layers size={12} strokeWidth={1.7} aria-hidden /> План операций
+            устарел:{' '}
+            {order.operationPlanStaleReason ??
+              'после расчёта менялись операции, ставки или нормы времени.'}
+          </p>
+        )}
       </AdminCard>
 
       <AdminCard className="order-prod-tab__matrix-card">
@@ -449,6 +511,29 @@ function ProductionMatrix({
           </tr>
         </tfoot>
       </table>
+    </div>
+  );
+}
+
+function RouteStepsList({ steps }: { steps: OrderRouteStepDto[] }) {
+  if (steps.length === 0) {
+    return (
+      <p className="admin-muted" style={{ marginTop: 8, fontSize: '0.85rem' }}>
+        Маршрут не зафиксирован — заказ ещё не запущен либо запущен без
+        шаблона.
+      </p>
+    );
+  }
+  const adminSteps = [...steps]
+    .sort((a, b) => a.index - b.index)
+    .map((s) => ({
+      id: s.id,
+      index: s.index + 1,
+      name: s.operationName,
+    }));
+  return (
+    <div style={{ marginTop: 8 }}>
+      <AdminRouteSteps steps={adminSteps} dense />
     </div>
   );
 }
