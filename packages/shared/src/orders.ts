@@ -473,6 +473,9 @@ export interface OrderOutsourceRequirementDto {
  *   Из этого статуса допустимо: (а) запустить заказ в производство
  *   (`start()` принимает CALCULATION_DONE так же, как CALCULATION /
  *   DRAFT), (б) вернуть на пересчёт (`reopenCalculation`).
+ * - `SAMPLE_PRODUCTION` — производство сигнального образца: образец
+ *   запущен (`OrderSamplesService.start`) без запуска тиража; тиражный
+ *   крой/паспорта не создаются. Дальше → `IN_PRODUCTION` (полный запуск).
  * - `IN_PRODUCTION`    — запущен в производство, план иммутабелен (ADR-0006)
  * - `DONE`             — завершён (ручной перевод на Шаге 4)
  * - `CANCELLED`        — отменён
@@ -486,12 +489,40 @@ export const ORDER_STATUSES = [
   'DRAFT',
   'CALCULATION',
   'CALCULATION_DONE',
+  'SAMPLE_PRODUCTION',
   'IN_PRODUCTION',
   'DONE',
   'CANCELLED',
 ] as const;
 export const OrderStatusSchema = z.enum(ORDER_STATUSES);
 export type OrderStatus = z.infer<typeof OrderStatusSchema>;
+
+/**
+ * Статусы заказа, из которых разрешён запуск сигнального образца
+ * (`OrderSamplesService.start`). Источник истины — используется и в
+ * backend-гейте, и в web-UI (кнопка «Запустить образец»):
+ *   - `CALCULATION` / `CALCULATION_DONE` — образец запускается без
+ *     тиража, заказ переходит в `SAMPLE_PRODUCTION`;
+ *   - `SAMPLE_PRODUCTION` — можно запустить ещё образец (статус не
+ *     меняется);
+ *   - `IN_PRODUCTION` — образец параллельно с тиражом (статус не
+ *     меняется).
+ * `DRAFT` исключён намеренно: образец требует рассчитанного плана
+ * (маршрут/техкарта зафиксированы на этапе расчёта). `DONE` /
+ * `CANCELLED` — заказ закрыт.
+ */
+export const ORDER_SAMPLE_LAUNCHABLE_STATUSES = [
+  'CALCULATION',
+  'CALCULATION_DONE',
+  'SAMPLE_PRODUCTION',
+  'IN_PRODUCTION',
+] as const satisfies readonly OrderStatus[];
+
+export function isOrderSampleLaunchable(status: OrderStatus): boolean {
+  return (ORDER_SAMPLE_LAUNCHABLE_STATUSES as readonly OrderStatus[]).includes(
+    status,
+  );
+}
 
 /**
  * Человекочитаемые лейблы статуса заказа. Источник истины для всех
@@ -505,6 +536,7 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   DRAFT: 'Черновик',
   CALCULATION: 'Расчёт',
   CALCULATION_DONE: 'Расчёт завершён',
+  SAMPLE_PRODUCTION: 'Производство сигнального образца',
   IN_PRODUCTION: 'В производстве',
   DONE: 'Завершён',
   CANCELLED: 'Отменён',
@@ -1363,6 +1395,16 @@ export interface OrderListItemDto {
   orderDate: string; // ISO
   createdAt: string; // ISO
   updatedAt: string; // ISO
+  /**
+   * Момент перехода заказа в производство (… → IN_PRODUCTION),
+   * проставляется один раз в `OrdersService.start()`. `null` — заказ
+   * ещё не запущен в производство. Управленческое поле «Ввод в
+   * производство» в карточке заказа.
+   *
+   * Опционально (`?`) для backward-compat: старые потребители без
+   * пересборки shared-пакета продолжают компилироваться.
+   */
+  inProductionAt?: string | null;
   status: OrderStatus;
   productId: string | null;
   productName: string | null;

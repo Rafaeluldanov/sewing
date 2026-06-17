@@ -118,19 +118,33 @@ export class OrderSamplesService {
     if (!order) {
       throw new OrderSampleOrderInvalidStatusException('NOT_FOUND');
     }
-    if (
-      order.status === OrderStatus.DONE ||
-      order.status === OrderStatus.CANCELLED
-    ) {
+    // Сигнальный образец можно запустить, НЕ запуская весь тираж в
+    // производство. Допустимые статусы (см.
+    // `@sewing/shared/orders::ORDER_SAMPLE_LAUNCHABLE_STATUSES` — тот
+    // же список использует web-UI для кнопки «Запустить образец»):
+    //   - `CALCULATION` / `CALCULATION_DONE` — образец без тиража,
+    //     заказ переводится в `SAMPLE_PRODUCTION` (ниже, в транзакции);
+    //   - `SAMPLE_PRODUCTION` — ещё один образец, статус не меняется;
+    //   - `IN_PRODUCTION` — образец параллельно тиражу (старый flow),
+    //     статус не меняется.
+    // `DRAFT` исключён: образцу нужен рассчитанный план (маршрут /
+    // техкарта фиксируются на этапе расчёта). `DONE` / `CANCELLED` —
+    // заказ закрыт.
+    const SAMPLE_LAUNCHABLE: OrderStatus[] = [
+      OrderStatus.CALCULATION,
+      OrderStatus.CALCULATION_DONE,
+      OrderStatus.SAMPLE_PRODUCTION,
+      OrderStatus.IN_PRODUCTION,
+    ];
+    if (!SAMPLE_LAUNCHABLE.includes(order.status)) {
       throw new OrderSampleOrderInvalidStatusException(order.status);
     }
-    // Для MVP запуск образца допустим только в IN_PRODUCTION — это
-    // повторяет жёсткое правило тиражных паспортов
-    // (см. `PassportsService.create` гард). Хотим, чтобы кнопка не
-    // появилась раньше времени — UI проверяет тот же статус.
-    if (order.status !== OrderStatus.IN_PRODUCTION) {
-      throw new OrderSampleOrderInvalidStatusException(order.status);
-    }
+    // Перевод заказа в «Производство сигнального образца» нужен только
+    // из «расчётных» статусов. Из `SAMPLE_PRODUCTION` / `IN_PRODUCTION`
+    // статус уже корректный — не трогаем.
+    const shouldEnterSampleProduction =
+      order.status === OrderStatus.CALCULATION ||
+      order.status === OrderStatus.CALCULATION_DONE;
 
     // Резолвим OrderItem: если productId передан — точное совпадение
     // (orderId, productId, sizeId); иначе — единственную строку по
@@ -232,6 +246,20 @@ export class OrderSamplesService {
           createdById: actorEmployeeId,
         },
       });
+
+      // Запуск образца из «расчётных» статусов переводит заказ в
+      // «Производство сигнального образца» — отдельный этап ДО полного
+      // запуска тиража. Тиражный крой (`CuttingTask`) и тиражные
+      // паспорта здесь НЕ создаются: это делает `OrdersService.start`
+      // при последующем «Запустить в производство». Снапшоты маршрута /
+      // техкарты уже зафиксированы на этапе расчёта, поэтому sample-
+      // passport движется по обычному /work-маршруту.
+      if (shouldEnterSampleProduction) {
+        await tx.order.update({
+          where: { id: orderId },
+          data: { status: OrderStatus.SAMPLE_PRODUCTION },
+        });
+      }
 
       const passportNumber = await this.passportNumbers.nextNumber(tx);
       const passport = await tx.passport.create({

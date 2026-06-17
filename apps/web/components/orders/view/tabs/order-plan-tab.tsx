@@ -2,26 +2,24 @@
  * `OrderPlanTab` — вкладка «План» управленческой карточки
  * `/admin/orders/[id]?tab=plan`.
  *
- * Показывает только исходный план / snapshot заказа (см. ТЗ
- * «Вкладка План»):
- *   - продукт / лекало (snapshot или live);
- *   - цвет;
- *   - размеры и плановые количества (`OrderItem[]`);
- *   - дата заказа, срок (read-only meta);
+ * Показывает план-специфичные блоки заказа (см. ТЗ «Вкладка План»):
  *   - блок «Цвета по строкам техкарты» (этап «Указать в заказе»,
  *     см. ТЗ §4): primary input для строк
  *     `OrderMaterialRequirement.requiresColorSelection = true`
  *     через reusable `MaterialColorForm`. Source of truth —
  *     `OrderMaterialRequirement.selectedColorText`; `WorkshopNeed`
- *     остаётся derived view + warning, не source of truth.
+ *     остаётся derived view + warning, не source of truth;
+ *   - блок «Очередь выдачи кроя по размерам»;
+ *   - превью лекала (aside).
  *
  * Что СОЗНАТЕЛЬНО НЕ показываем:
+ *   - продукт / лекало / цвет / артикул / даты — переехали в
+ *     постоянную шапку заказа (`OrderManagementHeader`);
+ *   - таблицу «План по размерам» — убрана из вкладки;
  *   - маршрут / операции (snapshot `OrderRouteStep[]`) и флаг
  *     устарелости плана операций — переехали во вкладку
  *     «Производство»;
  *   - production progress / факты — это во вкладке «Производство»;
- *   - размеры в таблице из `sizeBreakdown` — здесь чисто план,
- *     а не план/факт;
  *   - материалы / outsource — это во вкладке «Потребности».
  *
  * После запуска заказа в производство этот snapshot не должен
@@ -32,7 +30,6 @@
  */
 import type {
   OrderDetailDto,
-  OrderItemDto,
   OrderMaterialRequirementDto,
 } from '@sewing/shared/orders';
 import type { OrderCutIssueRulesSummaryDto } from '@sewing/shared';
@@ -40,21 +37,15 @@ import {
   TECH_CARD_MATERIAL_COLOR_RULE_LABELS,
   getTechCardMaterialRoleLabel,
 } from '@sewing/shared/tech-cards';
-import { Calendar, Lock, Package, Palette } from 'lucide-react';
+import { Lock, Palette } from 'lucide-react';
 import {
   AdminCard,
   AdminEmptyState,
   AdminSectionHeader,
-  AdminSizeGrid,
   AdminStatusBadge,
 } from '@/components/admin';
 import { MaterialColorForm } from '@/components/orders/materials/material-color-form';
 import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
-import { formatDateRu } from '@/lib/date-format';
-import {
-  ORDER_NOMENCLATURE_SOURCE_BADGE,
-  resolveOrderNomenclature,
-} from '@/lib/order-nomenclature';
 import { PatternPreviewCard } from '@/components/orders/pattern-preview-card';
 
 interface Props {
@@ -83,112 +74,10 @@ export function OrderPlanTab({
   cutIssueRulesSummary,
   canManageCutIssueRules,
 }: Props) {
-  const nomenclature = resolveOrderNomenclature(order);
-  const isStarted =
-    order.status === 'IN_PRODUCTION' ||
-    order.status === 'DONE' ||
-    order.status === 'CANCELLED';
-
   return (
     <div className="order-plan-tab">
       <div className="order-plan-tab__grid">
         <div className="order-plan-tab__col-main">
-          <AdminCard className="admin-order-detail-card-compact">
-            <AdminSectionHeader
-              icon={<Package size={18} strokeWidth={1.7} aria-hidden />}
-              title="Продукт"
-              hint={
-                isStarted
-                  ? 'snapshot · план иммутабельный'
-                  : 'может меняться до запуска в производство'
-              }
-            />
-            <dl className="admin-deflist">
-              <dt>Номенклатура / лекало</dt>
-              <dd>
-                {nomenclature.name ? (
-                  <span>
-                    <strong>{nomenclature.name}</strong>
-                    {nomenclature.source === 'legacyProduct' && (
-                      <span
-                        className="admin-order-item-card__source-badge"
-                        title="Историческое изделие без карточки лекала"
-                        style={{ marginLeft: 6 }}
-                      >
-                        {ORDER_NOMENCLATURE_SOURCE_BADGE.legacyProduct}
-                      </span>
-                    )}
-                  </span>
-                ) : (
-                  <span className="admin-muted">не выбрано</span>
-                )}
-              </dd>
-              {nomenclature.article && (
-                <>
-                  <dt>Артикул</dt>
-                  <dd>{nomenclature.article}</dd>
-                </>
-              )}
-              <dt>Цвет</dt>
-              <dd>
-                {order.color ? (
-                  <strong>{order.color}</strong>
-                ) : (
-                  <span className="admin-muted">не задан</span>
-                )}
-              </dd>
-            </dl>
-          </AdminCard>
-
-          <AdminCard className="admin-order-detail-card-compact">
-            <AdminSectionHeader
-              icon={<Calendar size={18} strokeWidth={1.7} aria-hidden />}
-              title="Сроки и meta"
-            />
-            <dl className="admin-deflist">
-              <dt>Дата заказа</dt>
-              <dd>{formatDateRu(order.orderDate)}</dd>
-              <dt>Срок сдачи</dt>
-              <dd>{formatDateRu(order.dueDate)}</dd>
-              <dt>Создан</dt>
-              <dd>{formatDateRu(order.createdAt)}</dd>
-              {order.comment && (
-                <>
-                  <dt>Комментарий менеджера</dt>
-                  <dd>{order.comment}</dd>
-                </>
-              )}
-            </dl>
-          </AdminCard>
-
-          <AdminCard className="admin-order-detail-card-compact">
-            <AdminSectionHeader
-              icon={<Package size={18} strokeWidth={1.7} aria-hidden />}
-              title="План по размерам"
-              hint={
-                order.items.length > 0
-                  ? `Итого: ${order.qtyPlanTotal.toLocaleString('ru-RU')} шт`
-                  : undefined
-              }
-              actions={
-                isStarted ? (
-                  <AdminStatusBadge tone="muted">
-                    <Lock size={12} strokeWidth={1.7} aria-hidden /> snapshot
-                  </AdminStatusBadge>
-                ) : null
-              }
-            />
-            {order.items.length === 0 ? (
-              <AdminEmptyState
-                icon={<Package size={26} strokeWidth={1.6} aria-hidden />}
-                title="План по размерам не заполнен"
-                hint="Добавьте размеры и количества в форме редактирования."
-              />
-            ) : (
-              <PlanItemsGrid items={order.items} />
-            )}
-          </AdminCard>
-
           <OrderMaterialColorsCard order={order} />
 
           <OrderCutIssueRulesCard
@@ -408,13 +297,5 @@ function OrderMaterialColorRow({
       )}
     </li>
   );
-}
-
-function PlanItemsGrid({ items }: { items: OrderItemDto[] }) {
-  const sorted = [...items].sort((a, b) => a.sizeSortOrder - b.sizeSortOrder);
-  const sizes = sorted.map((i) => ({ id: i.sizeId, name: i.sizeCode }));
-  const planValues: Record<string, number> = {};
-  for (const item of sorted) planValues[item.sizeId] = item.qtyPlan;
-  return <AdminSizeGrid sizes={sizes} values={planValues} readOnly />;
 }
 

@@ -148,6 +148,8 @@ export function formatStatus(
       return 'Расчёт';
     case 'CALCULATION_DONE':
       return 'Расчёт завершён';
+    case 'SAMPLE_PRODUCTION':
+      return 'Производство сигнального образца';
     case 'IN_PRODUCTION':
       return 'В работе';
     case 'IN_PROGRESS':
@@ -206,6 +208,9 @@ const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   // Этап «Себестоимость заказа»: расчёт зафиксирован, готов к запуску
   // в производство либо к возврату на пересчёт.
   CALCULATION_DONE: 'Расчёт завершён',
+  // Этап «Производство сигнального образца»: образец запущен без
+  // запуска тиража (см. `OrderSamplesService.start`).
+  SAMPLE_PRODUCTION: 'Сигнальный образец',
   IN_PRODUCTION: 'В производстве',
   DONE: 'Готов',
   CANCELLED: 'Отменён',
@@ -249,6 +254,11 @@ export function getOrderStatusTone(
       return 'warning';
     case 'CALCULATION_DONE':
       return 'info';
+    // «Производство сигнального образца» — промежуточный этап до
+    // полного запуска тиража, помечаем янтарным (warning), чтобы
+    // визуально отличался от синего IN_PRODUCTION.
+    case 'SAMPLE_PRODUCTION':
+      return 'warning';
     case 'IN_PRODUCTION':
       return 'info';
     case 'DONE':
@@ -284,6 +294,7 @@ export function statusTone(
     case 'ACTIVE':
       return 'success';
     case 'CALCULATION':
+    case 'SAMPLE_PRODUCTION':
       return 'warning';
     case 'CALCULATION_DONE':
       return 'info';

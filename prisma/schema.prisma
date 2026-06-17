@@ -145,6 +145,25 @@ enum OrderStatus {
   /// UI-порядок статусов задаётся явно (см.
   /// `@sewing/shared/orders::ORDER_STATUSES`).
   CALCULATION_DONE
+  /// Этап «Производство сигнального образца» (см.
+  /// `apps/api/src/modules/order-samples/order-samples.service.ts::start`).
+  ///
+  /// Заказ запустили в работу по сигнальному образцу, НЕ запуская
+  /// весь тираж: из `CALCULATION` / `CALCULATION_DONE` менеджер жмёт
+  /// «Запустить образец» — backend создаёт `OrderSample` + sample-
+  /// passport и переводит заказ в этот статус. Тиражный крой
+  /// (`CuttingTask`) и тиражные паспорта при этом НЕ создаются.
+  ///
+  /// Из этого статуса заказ идёт дальше в полноценный запуск тиража:
+  /// `OrdersService.start` принимает `SAMPLE_PRODUCTION` наравне с
+  /// `DRAFT` / `CALCULATION` / `CALCULATION_DONE` и переводит в
+  /// `IN_PRODUCTION` (со снапшотами и крой-задачей). Образцы можно
+  /// запускать и из `IN_PRODUCTION` — тогда статус заказа не меняется.
+  ///
+  /// Postgres enum расширяется только через `ALTER TYPE … ADD VALUE`,
+  /// поэтому новое значение лежит в конце БД-порядка. UI-порядок
+  /// задаётся явно (`@sewing/shared/orders::ORDER_STATUSES`).
+  SAMPLE_PRODUCTION
   IN_PRODUCTION
   DONE
   CANCELLED
@@ -1159,6 +1178,13 @@ model Order {
   status    OrderStatus @default(DRAFT)
   createdAt DateTime    @default(now())
   updatedAt DateTime    @updatedAt
+  /// Момент перехода заказа в производство (… → IN_PRODUCTION).
+  /// Проставляется один раз в `OrdersService.start()` при смене
+  /// статуса. Nullable: для заказов, ещё не запущенных в производство,
+  /// и для исторических заказов (backfill при миграции заполнил по
+  /// `updatedAt` уже находящихся в IN_PRODUCTION/DONE). Управленческое
+  /// поле «Ввод в производство» в карточке заказа.
+  inProductionAt DateTime?
 
   /// Подразделение заказа — FK на master-справочник `CompanyDivision`
   /// (см. `docs/domain.md §«Подразделения заказа»`,

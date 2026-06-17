@@ -32,7 +32,20 @@ export interface OrderSamplesCardProps {
   samples: OrderSampleListItemDto[];
   sizes: StartOrderSampleSizeOption[];
   routeTemplates: StartOrderSampleRouteOption[];
+  /**
+   * Управление существующими образцами (согласовать / отклонить /
+   * отменить строку) — по роли менеджера. Доступно вне зависимости от
+   * статуса заказа, чтобы можно было довести образец до согласования
+   * даже после запуска тиража.
+   */
   canManage: boolean;
+  /**
+   * Можно ли ЗАПУСТИТЬ новый сигнальный образец. Зависит и от роли, и
+   * от статуса заказа (см.
+   * `@sewing/shared/orders::isOrderSampleLaunchable`): из DRAFT /
+   * DONE / CANCELLED кнопку «Запустить образец» не показываем.
+   */
+  canStart: boolean;
 }
 
 function ActionButton({ label }: { label: string }): React.ReactElement {
@@ -135,6 +148,7 @@ export function OrderSamplesCard({
   sizes,
   routeTemplates,
   canManage,
+  canStart,
 }: OrderSamplesCardProps): React.ReactElement {
   const [openModal, setOpenModal] = useState(false);
 
@@ -148,7 +162,7 @@ export function OrderSamplesCard({
         }}
       >
         <h2 style={{ margin: 0 }}>Сигнальный образец</h2>
-        {canManage ? (
+        {canStart ? (
           <button
             type="button"
             className="admin-btn admin-btn--primary"

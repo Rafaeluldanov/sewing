@@ -1037,6 +1037,7 @@ export class OrdersService {
     orderDate: Date;
     createdAt: Date;
     updatedAt: Date;
+    inProductionAt: Date | null;
     status: OrderStatus;
     color: string | null;
     comment: string | null;
@@ -1119,6 +1120,7 @@ export class OrdersService {
       orderDate: o.orderDate.toISOString(),
       createdAt: o.createdAt.toISOString(),
       updatedAt: o.updatedAt.toISOString(),
+      inProductionAt: o.inProductionAt ? o.inProductionAt.toISOString() : null,
       status: o.status,
       productId: product?.id ?? null,
       productName: product?.name ?? null,
@@ -2155,15 +2157,18 @@ export class OrdersService {
     // Этап «Расчёт» / «Себестоимость заказа» — мягкий gate-keeper:
     // разрешаем стартовать из `DRAFT` (старый flow), `CALCULATION`
     // (расчёт начат, но себестоимость ещё не зафиксирована — мягкое
-    // legacy-разрешение) и `CALCULATION_DONE` (рекомендуемый new
-    // flow: запускаем заказ только после явного «Завершить расчёт»).
+    // legacy-разрешение), `CALCULATION_DONE` (рекомендуемый new flow:
+    // запускаем заказ только после явного «Завершить расчёт») и
+    // `SAMPLE_PRODUCTION` (по заказу запущен сигнальный образец, теперь
+    // запускаем весь тираж — см. `OrderSamplesService.start`).
     if (
       order.status !== OrderStatus.DRAFT &&
       order.status !== OrderStatus.CALCULATION &&
-      order.status !== OrderStatus.CALCULATION_DONE
+      order.status !== OrderStatus.CALCULATION_DONE &&
+      order.status !== OrderStatus.SAMPLE_PRODUCTION
     ) {
       throw new OrderInvalidTransitionException(
-        'В производство можно запустить только заказ в статусе DRAFT, «Расчёт» или «Расчёт завершён»',
+        'В производство можно запустить только заказ в статусе DRAFT, «Расчёт», «Расчёт завершён» или «Производство сигнального образца»',
       );
     }
     if (order.items.length === 0) {
@@ -2286,6 +2291,11 @@ export class OrdersService {
         where: { id },
         data: {
           status: OrderStatus.IN_PRODUCTION,
+          // Этап «Ввод в производство»: фиксируем момент запуска один
+          // раз, в той же транзакции, что и смена статуса. Колонка
+          // nullable и до этого момента всегда null, так что перезаписи
+          // не происходит.
+          inProductionAt: new Date(),
           // Soft-pattern MVP (этап 2 «Лекала»): фиксируем snapshot в
           // той же транзакции, что смена статуса, если ещё не
           // зафиксирован. `undefined` в Prisma update не трогает
@@ -2924,6 +2934,9 @@ export class OrdersService {
       orderDate: order.orderDate.toISOString(),
       createdAt: order.createdAt.toISOString(),
       updatedAt: order.updatedAt.toISOString(),
+      inProductionAt: order.inProductionAt
+        ? order.inProductionAt.toISOString()
+        : null,
       status: order.status,
       productId: product?.id ?? null,
       productName: product?.name ?? null,

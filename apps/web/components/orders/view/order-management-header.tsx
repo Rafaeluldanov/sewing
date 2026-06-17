@@ -123,11 +123,17 @@ export function OrderManagementHeader({ order, passports }: Props) {
   // DRAFT             → «Перевести в расчёт» + «Пересчитать план» + «Отменить» + «Редактировать»
   // CALCULATION       → «Запустить в производство» + «Пересчитать план» + «Отменить»
   // CALCULATION_DONE  → «Запустить в производство» + «Вернуть на пересчёт» + «Отменить»
+  // SAMPLE_PRODUCTION → «Запустить в производство» (полный тираж) + «Отменить»
   // IN_PRODUCTION     → «Завершить» + «Отменить» + «Выпустить паспорт»
   // DONE / CANCELLED  → нет действий (read-only)
   const showStartCalc = status === 'DRAFT';
+  // Полный запуск тиража доступен и из «Производства сигнального
+  // образца»: образец уже в работе, менеджер запускает весь тираж
+  // (backend `OrdersService.start` принимает SAMPLE_PRODUCTION).
   const showStartProd =
-    status === 'CALCULATION' || status === 'CALCULATION_DONE';
+    status === 'CALCULATION' ||
+    status === 'CALCULATION_DONE' ||
+    status === 'SAMPLE_PRODUCTION';
   const showRecalcPlan = status === 'DRAFT' || status === 'CALCULATION';
   const showReopenCalc = status === 'CALCULATION_DONE';
   const showComplete = status === 'IN_PRODUCTION';
@@ -135,6 +141,7 @@ export function OrderManagementHeader({ order, passports }: Props) {
     status === 'DRAFT' ||
     status === 'CALCULATION' ||
     status === 'CALCULATION_DONE' ||
+    status === 'SAMPLE_PRODUCTION' ||
     status === 'IN_PRODUCTION';
   const showEdit = status === 'DRAFT';
 
@@ -172,7 +179,18 @@ export function OrderManagementHeader({ order, passports }: Props) {
 
         <HeaderField
           icon={<Calendar size={14} strokeWidth={1.7} aria-hidden />}
-          label="Срок"
+          label="Дата заказа"
+        >
+          {order.orderDate ? (
+            <strong>{formatDateRu(order.orderDate)}</strong>
+          ) : (
+            <span className="admin-muted">не задана</span>
+          )}
+        </HeaderField>
+
+        <HeaderField
+          icon={<Calendar size={14} strokeWidth={1.7} aria-hidden />}
+          label="Срок сдачи"
           hint={
             deadline?.daysLeft != null
               ? formatDaysLeft(deadline.daysLeft)
@@ -193,6 +211,17 @@ export function OrderManagementHeader({ order, passports }: Props) {
           )}
         </HeaderField>
 
+        <HeaderField
+          icon={<Calendar size={14} strokeWidth={1.7} aria-hidden />}
+          label="Ввод в производство"
+        >
+          {order.inProductionAt ? (
+            <strong>{formatDateRu(order.inProductionAt)}</strong>
+          ) : (
+            <span className="admin-muted">—</span>
+          )}
+        </HeaderField>
+
         <HeaderField label="Изделие / лекало">
           {nomenclature.name ? (
             <span>
@@ -209,6 +238,14 @@ export function OrderManagementHeader({ order, passports }: Props) {
             </span>
           ) : (
             <span className="admin-muted">не выбрано</span>
+          )}
+        </HeaderField>
+
+        <HeaderField label="Артикул">
+          {nomenclature.article ? (
+            <strong>{nomenclature.article}</strong>
+          ) : (
+            <span className="admin-muted">не задан</span>
           )}
         </HeaderField>
 
@@ -321,6 +358,12 @@ export function OrderManagementHeader({ order, passports }: Props) {
             <span className="admin-muted">план не задан</span>
           )}
         </HeaderField>
+
+        {order.comment && (
+          <HeaderField label="Комментарий менеджера">
+            <span>{order.comment}</span>
+          </HeaderField>
+        )}
       </div>
 
       {/* Stale-warning для плана операций — короткая плашка,

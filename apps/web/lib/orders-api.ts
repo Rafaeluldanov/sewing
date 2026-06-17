@@ -358,6 +358,9 @@ export const ORDER_STATUS_LABELS: Record<OrderStatus, string> = {
   CALCULATION: 'Расчёт',
   // Этап «Себестоимость заказа»: расчёт зафиксирован.
   CALCULATION_DONE: 'Расчёт завершён',
+  // Этап «Производство сигнального образца»: образец запущен без
+  // запуска тиража (см. `OrderSamplesService.start`).
+  SAMPLE_PRODUCTION: 'Производство сигнального образца',
   IN_PRODUCTION: 'В производстве',
   DONE: 'Завершён',
   CANCELLED: 'Отменён',

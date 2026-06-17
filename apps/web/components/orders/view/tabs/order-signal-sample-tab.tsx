@@ -12,6 +12,7 @@
  */
 
 import type { OrderDetailDto } from '@sewing/shared/orders';
+import { isOrderSampleLaunchable } from '@sewing/shared/orders';
 import { listOrderSamples } from '@/lib/order-samples-api';
 import { listRouteTemplates } from '@/lib/routes-api';
 import { OrderSamplesCard } from '@/components/orders/samples/order-samples-card';
@@ -50,6 +51,13 @@ export async function OrderSignalSampleTab({
     qtyPlan: it.qtyPlan,
   }));
 
+  // Запуск нового образца — по роли И по статусу заказа: из DRAFT /
+  // DONE / CANCELLED кнопку не показываем (backend всё равно отобьёт).
+  // Управление уже запущенными образцами (`canManage`) от статуса не
+  // зависит — образец можно довести до согласования и после запуска
+  // тиража.
+  const canStart = canManage && isOrderSampleLaunchable(order.status);
+
   return (
     <OrderSamplesCard
       orderId={order.id}
@@ -57,6 +65,7 @@ export async function OrderSignalSampleTab({
       sizes={sizes}
       routeTemplates={routes}
       canManage={canManage}
+      canStart={canStart}
     />
   );
 }

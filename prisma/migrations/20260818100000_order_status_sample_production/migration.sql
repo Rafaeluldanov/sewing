@@ -1,0 +1,22 @@
+-- Этап «Производство сигнального образца»: добавляем статус
+-- `SAMPLE_PRODUCTION` в enum `OrderStatus`.
+-- См. `prisma/schema.prisma` (`enum OrderStatus`),
+-- `apps/api/src/modules/order-samples/order-samples.service.ts`
+-- (`OrderSamplesService.start` — запуск образца без запуска тиража),
+-- `apps/api/src/modules/orders/orders.service.ts`
+-- (`OrdersService.start` принимает SAMPLE_PRODUCTION как источник).
+--
+-- Дизайн миграции:
+--   * Postgres-enum расширяется только через `ALTER TYPE ... ADD VALUE`.
+--     Миграция additive: старые значения (`DRAFT`, `CALCULATION`,
+--     `CALCULATION_DONE`, `IN_PRODUCTION`, `DONE`, `CANCELLED`)
+--     сохраняют порядковые позиции, backfill не требуется.
+--   * Колонку `Order.status` не трогаем: существующие заказы остаются
+--     в своих статусах. Новый статус выставляется только при запуске
+--     образца через сервис.
+--
+-- ВАЖНО: `ALTER TYPE ... ADD VALUE` нельзя выполнять внутри транзакции
+-- (Postgres ограничение). Prisma допускает «raw» миграции с одним
+-- `ALTER TYPE` (см. `20260514100000_add_order_status_calculation`).
+
+ALTER TYPE "OrderStatus" ADD VALUE 'SAMPLE_PRODUCTION';
