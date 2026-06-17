@@ -9,6 +9,7 @@ import type {
   OperationDetailDto,
   OperationSummaryDto,
   UpdateOperationDto,
+  UpdateOperationEquipmentDto,
 } from '@sewing/shared/operations';
 import { apiFetch } from './api';
 
@@ -40,6 +41,22 @@ export function updateOperation(
 ): Promise<OperationDetailDto> {
   return apiFetch<OperationDetailDto>(
     `/operations/${encodeURIComponent(id)}`,
+    { method: 'PATCH', body },
+  );
+}
+
+/**
+ * Привязка операции к набору оборудования со стороны операции
+ * (`PATCH /api/operations/:id/equipment`). Replace-all: `equipmentIds`
+ * становятся единственными активными привязками операции. Зеркало
+ * `updateEquipmentOperations` из `equipment-api.ts`.
+ */
+export function updateOperationEquipment(
+  id: string,
+  body: UpdateOperationEquipmentDto,
+): Promise<OperationDetailDto> {
+  return apiFetch<OperationDetailDto>(
+    `/operations/${encodeURIComponent(id)}/equipment`,
     { method: 'PATCH', body },
   );
 }

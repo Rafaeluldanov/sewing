@@ -1,9 +1,10 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, Calculator, Scissors } from 'lucide-react';
+import { ArrowLeft, Calculator, Scissors, Wrench } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getOperation, getOperationBlockers } from '@/lib/operations-api';
+import { listEquipment } from '@/lib/equipment-api';
 import {
   AdminCard,
   AdminPageShell,
@@ -27,6 +28,7 @@ import {
 } from '@/lib/operation-economics';
 import type { OperationDetailDto } from '@sewing/shared/operations';
 import { OperationEditForm } from './edit-form';
+import { OperationEquipmentForm } from './equipment-form';
 import { OperationDangerZone } from './delete-operation';
 
 export const dynamic = 'force-dynamic';
@@ -73,9 +75,10 @@ export default async function AdminOperationDetailPage({ params }: Params) {
   // viewer'а. Роль нужна, чтобы скрыть/задизейблить удаление для
   // не-ADMIN (backend всё равно вернёт 403). Если preflight упал —
   // зону просто не показываем, карточка остаётся рабочей.
-  const [me, blockers] = await Promise.all([
+  const [me, blockers, equipment] = await Promise.all([
     getCurrentUserOrNull(),
     getOperationBlockers(params.id).catch(() => null),
+    listEquipment().catch(() => []),
   ]);
 
   return (
@@ -114,6 +117,19 @@ export default async function AdminOperationDetailPage({ params }: Params) {
           <OperationEconomicsBlock operation={operation} />
         </AdminCard>
       </div>
+
+      <AdminCard>
+        <AdminSectionHeader
+          icon={<Wrench size={18} strokeWidth={1.6} aria-hidden />}
+          title="Оборудование"
+          hint={
+            <span className="admin-muted">
+              На каких станках разрешена операция
+            </span>
+          }
+        />
+        <OperationEquipmentForm operation={operation} equipment={equipment} />
+      </AdminCard>
 
       {blockers && (
         <AdminCard>

@@ -820,6 +820,33 @@ export const UpdateOperationSchema = z
   );
 export type UpdateOperationDto = z.infer<typeof UpdateOperationSchema>;
 
+/**
+ * Привязка операции к набору оборудования со стороны операции
+ * (`PATCH /api/operations/:id/equipment`). Зеркало
+ * `UpdateEquipmentOperationsSchema` (см. `equipment.ts`), но pivot —
+ * по операции: задаём полный набор станков, на которых операция
+ * разрешена.
+ *
+ * Семантика — replace-all по данной операции: переданные `equipmentIds`
+ * становятся единственными активными привязками; не переданные ранее
+ * существовавшие привязки удаляются. В отличие от equipment-side,
+ * `sortOrder` остальных операций на станке не переназначается —
+ * добавляемая операция дописывается в хвост списка станка, чтобы не
+ * перетасовать порядок в `/work` (см. `OperationsService.updateEquipment`).
+ */
+export const UpdateOperationEquipmentSchema = z
+  .object({
+    equipmentIds: z
+      .array(z.string().min(1))
+      .refine((arr) => new Set(arr).size === arr.length, {
+        message: 'Оборудование передано дважды',
+      }),
+  })
+  .strict();
+export type UpdateOperationEquipmentDto = z.infer<
+  typeof UpdateOperationEquipmentSchema
+>;
+
 // ---------------------------------------------------------------------------
 // Response DTO
 // ---------------------------------------------------------------------------
@@ -917,6 +944,30 @@ export interface OperationDetailDto extends OperationSummaryDto {
    * чтобы фронт не делал отдельный запрос к `/catalog/sizes`.
    */
   sizes: Array<{ id: string; code: string; sortOrder: number }>;
+  /**
+   * Оборудование, на котором операция сейчас разрешена (активные
+   * привязки `EquipmentOperation`). Источник для чек-листа на карточке
+   * операции (`/admin/operations/[id]`). Управляется через
+   * `PATCH /api/operations/:id/equipment`. Дублирует связь, которую
+   * можно вести и со стороны оборудования (`/admin/equipment/[id]`) —
+   * это две ручки к одной таблице.
+   */
+  equipment: OperationEquipmentLinkDto[];
+}
+
+/** Привязка операции к одному станку (см. `OperationDetailDto.equipment`). */
+export interface OperationEquipmentLinkDto {
+  equipmentId: string;
+  code: string;
+  name: string;
+  /** Ручной отображаемый номер станка (физическая маркировка) или `null`. */
+  displayNumber: string | null;
+  /**
+   * `true` — привязка и сам станок активны (операция реально доступна
+   * на станке в `/work`). Неактивные станки в чек-листе отмечаем, но
+   * визуально приглушаем.
+   */
+  isActive: boolean;
 }
 
 // ---------------------------------------------------------------------------

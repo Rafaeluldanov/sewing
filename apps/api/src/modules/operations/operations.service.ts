@@ -13,6 +13,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import {
+  EquipmentNotFoundException,
   OperationCodeTakenException,
   OperationInUseException,
   OperationNotFoundException,
@@ -89,6 +90,10 @@ export class OperationsService {
           include: { size: true },
           orderBy: { size: { sortOrder: 'asc' } },
         },
+        equipmentOperations: {
+          include: { equipment: true },
+          orderBy: { equipment: { code: 'asc' } },
+        },
       },
     });
     if (!row) throw new OperationNotFoundException();
@@ -115,7 +120,106 @@ export class OperationsService {
         code: s.code,
         sortOrder: s.sortOrder,
       })),
+      equipment: row.equipmentOperations.map((eo) => ({
+        equipmentId: eo.equipment.id,
+        code: eo.equipment.code,
+        name: eo.equipment.name,
+        displayNumber: eo.equipment.displayNumber,
+        isActive: eo.isActive && eo.equipment.active,
+      })),
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // EQUIPMENT BINDING (operation-side pivot)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Привязка операции к набору оборудования со стороны операции
+   * (`PATCH /api/operations/:id/equipment`). Зеркало
+   * `EquipmentService.updateOperations`, но pivot — по операции:
+   * переданные `equipmentIds` становятся единственными активными
+   * привязками операции (replace-all), лишние — удаляются.
+   *
+   * Ключевое отличие от equipment-side: мы НЕ переназначаем `sortOrder`
+   * остальных операций на станке. Equipment-side задаёт порядок всего
+   * списка операций станка (`(i+1)*10`); здесь мы трогаем ровно одну
+   * операцию, поэтому добавляемую привязку дописываем в хвост станка
+   * (`max(sortOrder) + 10`), а существующие лишь реактивируем. Так
+   * порядок операций в `/work` на каждом станке остаётся прежним.
+   */
+  async updateEquipment(
+    operationId: string,
+    equipmentIds: string[],
+  ): Promise<OperationDetailDto> {
+    const operation = await this.prisma.operation.findUnique({
+      where: { id: operationId },
+      select: { id: true },
+    });
+    if (!operation) throw new OperationNotFoundException();
+
+    // Валидируем переданные equipmentId до старта транзакции — так
+    // диагностируем «битый» id одной 404 вместо общей FK-ошибки.
+    if (equipmentIds.length > 0) {
+      const found = await this.prisma.equipment.findMany({
+        where: { id: { in: equipmentIds } },
+        select: { id: true },
+      });
+      if (found.length !== equipmentIds.length) {
+        throw new EquipmentNotFoundException();
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const existing = await tx.equipmentOperation.findMany({
+        where: { operationId },
+        select: { id: true, equipmentId: true },
+      });
+      const wantedSet = new Set(equipmentIds);
+      const existingSet = new Set(existing.map((e) => e.equipmentId));
+
+      const toDelete = existing
+        .filter((e) => !wantedSet.has(e.equipmentId))
+        .map((e) => e.id);
+      if (toDelete.length > 0) {
+        await tx.equipmentOperation.deleteMany({
+          where: { id: { in: toDelete } },
+        });
+      }
+
+      for (const equipmentId of equipmentIds) {
+        if (existingSet.has(equipmentId)) {
+          // Уже привязана — только гарантируем активность, порядок на
+          // станке не трогаем.
+          await tx.equipmentOperation.update({
+            where: {
+              EquipmentOperation_equipment_operation_uniq: {
+                equipmentId,
+                operationId,
+              },
+            },
+            data: { isActive: true },
+          });
+          continue;
+        }
+        // Новая привязка — дописываем в хвост списка операций станка,
+        // чтобы не перетасовать существующий порядок в `/work`.
+        const last = await tx.equipmentOperation.findFirst({
+          where: { equipmentId },
+          orderBy: { sortOrder: 'desc' },
+          select: { sortOrder: true },
+        });
+        const sortOrder = (last?.sortOrder ?? 0) + 10;
+        await tx.equipmentOperation.create({
+          data: { equipmentId, operationId, sortOrder, isActive: true },
+        });
+      }
+    });
+
+    this.logger.log(
+      `event=operation.update-equipment id=${operationId} equipment=${equipmentIds.length}`,
+    );
+    return this.getOne(operationId);
   }
 
   // -------------------------------------------------------------------------

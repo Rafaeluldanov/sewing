@@ -11,6 +11,7 @@ import {
   createOperation,
   deleteOperation,
   updateOperation,
+  updateOperationEquipment,
 } from '@/lib/operations-api';
 import {
   OPERATION_CATEGORIES,
@@ -475,6 +476,55 @@ export async function updateOperationAction(
       };
     }
     return { error: 'Не удалось сохранить операцию' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// UPDATE EQUIPMENT (привязка операции к станкам со стороны операции)
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action блока «Оборудование» на карточке операции. Отдельная
+ * форма (свой Save), не смешивается с правкой тарифа/нормы — по тому
+ * же принципу, что три раздельные формы в карточке оборудования.
+ *
+ * Чек-лист шлёт все отмеченные станки одним name `equipmentIds`. В
+ * отличие от create-action здесь не нужен цикл по станкам: backend
+ * `PATCH /api/operations/:id/equipment` сам атомарно сводит набор
+ * (replace-all по операции, не перетасовывая порядок операций на
+ * станке — см. `OperationsService.updateEquipment`).
+ */
+export async function updateOperationEquipmentAction(
+  operationId: string,
+  _prev: UpdateOperationState,
+  form: FormData,
+): Promise<UpdateOperationState> {
+  const equipmentIds = Array.from(
+    new Set(
+      form
+        .getAll('equipmentIds')
+        .map((v) => String(v).trim())
+        .filter((v) => v.length > 0),
+    ),
+  );
+
+  try {
+    await updateOperationEquipment(operationId, { equipmentIds });
+    revalidatePath(`/admin/operations/${operationId}`);
+    revalidatePath('/admin/equipment');
+    revalidatePath('/work');
+    return {
+      ok: true,
+      successMessage: 'Привязка к оборудованию сохранена.',
+    };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        error: errorText(e),
+        errorRequestId: e.requestId,
+      };
+    }
+    return { error: 'Не удалось сохранить привязку к оборудованию' };
   }
 }
 

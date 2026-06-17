@@ -10,12 +10,14 @@ import {
 } from '@nestjs/common';
 import {
   CreateOperationSchema,
+  UpdateOperationEquipmentSchema,
   UpdateOperationSchema,
   type CreateOperationDto,
   type OperationBlockersResponse,
   type OperationDetailDto,
   type OperationSummaryDto,
   type UpdateOperationDto,
+  type UpdateOperationEquipmentDto,
 } from '@sewing/shared/operations';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
@@ -65,6 +67,23 @@ export class OperationsController {
     dto: UpdateOperationDto,
   ): Promise<OperationDetailDto> {
     return this.operations.update(id, dto);
+  }
+
+  /**
+   * Привязка операции к набору оборудования со стороны операции
+   * (`PATCH /api/operations/:id/equipment`). Зеркало
+   * `PATCH /api/equipment/:id/operations`: те же роли, та же таблица
+   * `EquipmentOperation`, но pivot — по операции. Удобно при заведении
+   * нового станка: открыл операцию → отметил станки → сохранил, и
+   * операция сразу доступна на них в `/work`.
+   */
+  @Patch(':id/equipment')
+  updateEquipment(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdateOperationEquipmentSchema))
+    dto: UpdateOperationEquipmentDto,
+  ): Promise<OperationDetailDto> {
+    return this.operations.updateEquipment(id, dto.equipmentIds);
   }
 
   /**
