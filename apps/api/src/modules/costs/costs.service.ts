@@ -9,7 +9,7 @@ import {
 } from '@sewing/shared/costs';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { isSalaryEligible } from '../employees/compensation.js';
-import { PassportDurationsService } from './passport-durations.service.js';
+import { PassportRealCostService } from './passport-real-cost.service.js';
 
 /**
  * `MaterialIssue.status` для проведённого документа фактического
@@ -74,7 +74,7 @@ const MATERIAL_ISSUE_STATUS_POSTED = 'POSTED';
 export class CostsService {
   constructor(
     private readonly prisma: PrismaService,
-    private readonly durations: PassportDurationsService,
+    private readonly passportRealCost: PassportRealCostService,
   ) {}
 
   async getProductionCost(
@@ -82,13 +82,20 @@ export class CostsService {
   ): Promise<ProductionCostResponseDto> {
     const { from, to, dateFromIso, dateToIso } = resolvePeriod(query);
 
-    // 1) Длительности всех стадий за период.
-    const stages = await this.durations.listForPeriod(from, to);
+    // 1) Разнос оклада по паспортам + учтённые минуты по сотруднику×дню.
+    //    Источник — реальные интервалы `ISSUED_TO_EMPLOYEE →
+    //    OPERATION_FINISHED` с делением нахлёстов (см.
+    //    `PassportRealCostService.apportionedSalaryForPeriod`), а не
+    //    `OPERATION_SCAN` (которого в реальном флоу нет). Это покрывает
+    //    все окладные операции: ОТК/ВТО/упаковку/деление кроя/настил.
+    const salary = await this.passportRealCost.apportionedSalaryForPeriod(
+      from,
+      to,
+    );
 
-    // 2) Подгружаем employee.salaryPerShift для всех участников стадий
-    //    + всех сотрудников с окладным начислением (источник «у этого
-    //    человека был оклад в этот день»).
-    const employeeIdsFromStages = new Set(stages.map((s) => s.employeeId));
+    // 2) Подгружаем `employee.salaryPerShift` для расчёта простоя:
+    //    сотрудники с окладным начислением (`SalaryEntry`) за этот день.
+    const employeeIdsFromStages = new Set<string>();
     const salaryEntries = await this.prisma.salaryEntry.findMany({
       where: {
         date: { gte: from, lte: to },
@@ -155,18 +162,6 @@ export class CostsService {
     const pieceworkByPassport = new Map<string, number>();
     for (const r of pieceworkRows) {
       pieceworkByPassport.set(r.passportId, decimalToNumber(r._sum.amount));
-    }
-
-    // 5) Стадии по паспортам — для распределения salary доли по
-    //    выпущенным изделиям.
-    const stagesByPassport = new Map<
-      string,
-      Array<{ employeeId: string; durationMinutes: number }>
-    >();
-    for (const s of stages) {
-      const arr = stagesByPassport.get(s.passportId) ?? [];
-      arr.push({ employeeId: s.employeeId, durationMinutes: s.durationMinutes });
-      stagesByPassport.set(s.passportId, arr);
     }
 
     // 5a) Фактический расход материалов по паспортам периода (нетто).
@@ -260,24 +255,20 @@ export class CostsService {
       day.producedUnits += qty;
       const piece = pieceworkByPassport.get(ev.passportId) ?? 0;
       day.pieceworkCost += piece;
-      const passportStages = stagesByPassport.get(ev.passportId) ?? [];
-      let salaryShare = 0;
-      for (const st of passportStages) {
-        const rate = employeeRate.get(st.employeeId) ?? 0;
-        salaryShare += rate * st.durationMinutes;
-      }
-      day.salaryCost += salaryShare;
+      day.salaryCost += salary.rubByPassport.get(ev.passportId) ?? 0;
       day.materialCost += materialCostByPassport.get(ev.passportId) ?? 0;
     }
 
-    // 7) Учтённые минуты (по дню окончания стадии).
-    for (const s of stages) {
-      const dayKey = toDateKey(s.completedAt);
+    // 7) Учтённые (разнесённые) минуты по сотруднику×дню — для простоя.
+    for (const [key, minutes] of salary.trackedMinutesByEmpDay) {
+      const sep = key.lastIndexOf('|');
+      const employeeId = key.slice(0, sep);
+      const dayKey = key.slice(sep + 1);
       const day = ensureDay(dayMap, dayKey);
-      day.trackedMinutes += s.durationMinutes;
+      day.trackedMinutes += minutes;
       day.trackedByEmployee.set(
-        s.employeeId,
-        (day.trackedByEmployee.get(s.employeeId) ?? 0) + s.durationMinutes,
+        employeeId,
+        (day.trackedByEmployee.get(employeeId) ?? 0) + minutes,
       );
     }
 
@@ -380,8 +371,9 @@ function toDayDto(d: MutableDay): ProductionCostDayDto {
     salaryCost: sal,
     materialCost: mat,
     totalCost: round2(piece + sal + mat),
-    trackedMinutes: d.trackedMinutes,
-    idleMinutes: d.idleMinutes,
+    // Разнесённые минуты дробные — для экрана округляем до целых.
+    trackedMinutes: Math.round(d.trackedMinutes),
+    idleMinutes: Math.round(d.idleMinutes),
     idleCost: round2(d.idleCost),
   };
 }

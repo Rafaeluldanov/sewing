@@ -127,3 +127,73 @@ export interface ProductionCostResponseDto {
   days: ProductionCostDayDto[];
   summary: ProductionCostSummaryDto;
 }
+
+// ---------------------------------------------------------------------------
+// Себестоимость одного паспорта (факт) — `GET /api/costs/passport/:id`
+// ---------------------------------------------------------------------------
+
+/**
+ * Одна строка распределённого оклада в себестоимости паспорта: сколько
+ * реального (разнесённого по параллельным паспортам) времени конкретный
+ * окладной сотрудник потратил на этот паспорт в рамках одной операции, и
+ * во что это обошлось (`minutes × оклад/480`).
+ */
+export interface PassportCostSalaryLineDto {
+  operationId: string | null;
+  operationCode: string | null;
+  operationName: string | null;
+  employeeId: string;
+  employeeName: string;
+  /** Разнесённые реальные минуты (округлены до 1 знака). */
+  minutes: number;
+  /** `minutes × minuteRate` (округлено до копеек). */
+  rub: number;
+}
+
+/**
+ * Фактическая себестоимость одного паспорта (см. `docs/domain.md §17`).
+ *
+ *   total = material(нетто) + piecework(APPROVED) + salary(разнесённый оклад)
+ *   perUnit = total / qtyGood
+ *
+ * Окладная часть считается из реального времени `ISSUED_TO_EMPLOYEE →
+ * OPERATION_FINISHED` (для ОТК/ВТО/упаковки — по разрыву терминальных
+ * событий) с разносом нахлёстов между одновременно удерживаемыми
+ * паспортами. Простой на единицу НЕ распределяется (знаменатель = 480).
+ */
+export interface PassportCostDto {
+  passportId: string;
+  passportNumber: string;
+  productName: string | null;
+  sizeCode: string | null;
+  qtyGood: number;
+  /** Σ `MaterialIssue.totalCost` − возвраты (POSTED), 0 если политика EXCLUDE. */
+  materialCost: number;
+  /** Σ `OperationEntry.amount` (APPROVED). */
+  pieceworkCost: number;
+  /** Σ разнесённого оклада по всем окладным сотрудникам/операциям. */
+  salaryCost: number;
+  /** `materialCost + pieceworkCost + salaryCost`. */
+  totalCost: number;
+  /** `totalCost / qtyGood` (или 0 при нулевом выпуске). */
+  perUnitCost: number;
+  /** Детализация окладной части. */
+  salaryLines: PassportCostSalaryLineDto[];
+  /**
+   * `true`, если суммы взяты из финализированного снимка
+   * (`PassportCostSnapshot.status = FINAL`) — стабильное аудируемое
+   * значение. `false` — live-расчёт (день упаковщика ещё может
+   * дополняться, разнос оклада предварительный).
+   */
+  isFinal: boolean;
+  /** Когда снимок финализирован (ISO), или `null` для live-расчёта. */
+  finalizedAt: string | null;
+}
+
+/** Результат финализации дня (`POST /api/costs/snapshots/finalize`). */
+export interface FinalizeDayResultDto {
+  /** UTC-дата, за которую финализированы снимки (`YYYY-MM-DD`). */
+  date: string;
+  /** Сколько паспортов получили `FINAL`-снимок. */
+  finalized: number;
+}

@@ -7,6 +7,7 @@
  */
 
 import type {
+  PassportCostDto,
   ProductionCostQuery,
   ProductionCostResponseDto,
 } from '@sewing/shared/costs';
@@ -21,4 +22,15 @@ export function getProductionCost(
       dateTo: query.dateTo,
     },
   });
+}
+
+/**
+ * Фактическая себестоимость одного паспорта (материал + сдельная +
+ * разнесённый оклад) с детализацией окладной части. RBAC backend —
+ * `SHOP_MANAGER`/`ADMIN` (см. `costs.controller.ts`).
+ */
+export function getPassportCost(passportId: string): Promise<PassportCostDto> {
+  return apiFetch<PassportCostDto>(
+    `/costs/passport/${encodeURIComponent(passportId)}`,
+  );
 }

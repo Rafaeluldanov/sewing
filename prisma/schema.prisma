@@ -1808,6 +1808,11 @@ model Passport {
   boxItems BoxItem[]
   defects  PassportDefect[]
 
+  /// Снимок фактической себестоимости паспорта (см.
+  /// `model PassportCostSnapshot`, `PassportRealCostService`). Один
+  /// паспорт ↔ один снимок (создаётся финализацией конца дня).
+  costSnapshot PassportCostSnapshot?
+
   /// Этап «Фактический расход материалов по заказу» (см.
   /// `model MaterialIssue` ниже). Документы расхода, опционально
   /// привязанные к конкретному паспорту (production batch). На MVP
@@ -1992,6 +1997,46 @@ model SalaryEntry {
   @@unique([employeeId, date, source], name: "SalaryEntry_employee_date_source_uniq")
   @@index([employeeId, date])
   @@index([date])
+}
+
+/// Снимок фактической себестоимости единицы паспорта (см.
+/// `docs/domain.md §17`, `apps/api/.../costs/passport-real-cost.service.ts`).
+/// Одна строка на паспорт.
+///
+///   total = material(нетто) + piecework(APPROVED) + разнесённый оклад
+///   perUnit = total / qtyGood
+///
+/// `status`:
+///   - `PRELIMINARY` — посчитан до закрытия дня упаковщика; разнос оклада
+///     по упаковке предварительный (k параллельных паспортов ещё не
+///     финальный);
+///   - `FINAL` — пересчитан финализацией конца дня
+///     (`PassportRealCostService.finalizeDay`), значение стабильно и
+///     аудируемо. Хранится строкой по тому же паттерну, что прочие
+///     статусы (расширяется без миграции).
+///
+/// Снимок — это «застывшая» себестоимость для отчётности/аудита; live-
+/// расчёт (`getForPassport`) всегда корректен и используется, пока
+/// `FINAL`-снимка нет.
+model PassportCostSnapshot {
+  id               String    @id @default(cuid())
+  passportId       String    @unique
+  qtyGood          Int
+  materialCostRub  Decimal   @db.Decimal(12, 2)
+  pieceworkCostRub Decimal   @db.Decimal(12, 2)
+  salaryCostRub    Decimal   @db.Decimal(12, 2)
+  totalCostRub     Decimal   @db.Decimal(12, 2)
+  perUnitCostRub   Decimal   @db.Decimal(12, 2)
+  status           String    @default("PRELIMINARY")
+  /// Дата упаковки (UTC `DATE`) — ключ дня для финализации.
+  packedDate       DateTime  @db.Date
+  computedAt       DateTime  @default(now())
+  finalizedAt      DateTime?
+  updatedAt        DateTime  @updatedAt
+
+  passport Passport @relation(fields: [passportId], references: [id], onDelete: Cascade)
+
+  @@index([packedDate, status])
 }
 
 /// Выплата зарплаты сотруднику за период (PHASE 3, см.

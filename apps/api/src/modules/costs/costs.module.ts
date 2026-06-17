@@ -12,6 +12,7 @@ import { Module } from '@nestjs/common';
 import { CostsController } from './costs.controller.js';
 import { CostsService } from './costs.service.js';
 import { PassportDurationsService } from './passport-durations.service.js';
+import { PassportRealCostService } from './passport-real-cost.service.js';
 import { ProductionCostV2Controller } from './production-cost-v2.controller.js';
 import { ProductionCostV2Service } from './production-cost-v2.service.js';
 import { OrderActualMaterialsController } from './order-actual-materials.controller.js';
@@ -26,9 +27,15 @@ import { OrderActualMaterialsService } from './order-actual-materials.service.js
   providers: [
     CostsService,
     PassportDurationsService,
+    PassportRealCostService,
     ProductionCostV2Service,
     OrderActualMaterialsService,
   ],
-  exports: [CostsService, PassportDurationsService, ProductionCostV2Service],
+  exports: [
+    CostsService,
+    PassportDurationsService,
+    PassportRealCostService,
+    ProductionCostV2Service,
+  ],
 })
 export class CostsModule {}

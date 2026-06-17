@@ -20,6 +20,7 @@ import {
   type ProductionCostV2Query,
 } from '@sewing/shared/production-cost';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { PassportRealCostService } from './passport-real-cost.service.js';
 
 /**
  * Сервис управленческого отчёта «Себестоимость производства v2»
@@ -48,7 +49,10 @@ import { PrismaService } from '../../prisma/prisma.service.js';
  */
 @Injectable()
 export class ProductionCostV2Service {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly passportRealCost: PassportRealCostService,
+  ) {}
 
   async getReport(
     query: ProductionCostV2Query,
@@ -56,6 +60,14 @@ export class ProductionCostV2Service {
     const { from, to, dateFromIso, dateToIso } = resolvePeriod(query);
     const entryStatus: ProductionCostV2EntryStatus =
       query.status ?? 'APPROVED';
+
+    // Разнесённый оклад окладников по паспортам за период — для
+    // `salaryAllocatedCostRub` (по выпущенным паспортам, см. шаг 4).
+    // Источник — реальные интервалы `ISSUED_TO_EMPLOYEE →
+    // OPERATION_FINISHED` с делением нахлёстов (см. `PassportRealCostService`).
+    const apportionedSalary =
+      await this.passportRealCost.apportionedSalaryForPeriod(from, to);
+    const salaryByOrderId = new Map<string, Prisma.Decimal>();
 
     // -------------------------------------------------------------------
     // 1. OperationEntry в окне периода с фильтрами
@@ -296,6 +308,14 @@ export class ProductionCostV2Service {
       if (ev.passport.status !== PassportStatus.PACKED) continue;
       seenPackedPassports.add(ev.passportId);
       const orderId = ev.passport.orderId;
+      // Оклад этого выпущенного паспорта → заказу.
+      const salRub = apportionedSalary.rubByPassport.get(ev.passportId);
+      if (salRub) {
+        salaryByOrderId.set(
+          orderId,
+          (salaryByOrderId.get(orderId) ?? new Prisma.Decimal(0)).add(salRub),
+        );
+      }
       const qty = ev.passport.qtyGood ?? 0;
       const ord =
         releasedByOrderId.get(orderId) ??
@@ -662,7 +682,9 @@ export class ProductionCostV2Service {
       const operationPieceworkCostRub = round2(
         acc.operationPieceworkCostRub,
       );
-      const salaryAllocatedCostRub = new Prisma.Decimal(0);
+      const salaryAllocatedCostRub = round2(
+        salaryByOrderId.get(acc.meta.orderId) ?? new Prisma.Decimal(0),
+      );
       const totalCostRub = round2(
         operationPieceworkCostRub
           .add(mat.materialCostRub)

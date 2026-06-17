@@ -39,6 +39,7 @@ import { notFound } from 'next/navigation';
 import {
   ArrowLeft,
   ClipboardCheck,
+  Coins,
   Package,
   PackageOpen,
   Printer,
@@ -48,6 +49,8 @@ import {
 } from 'lucide-react';
 import { ApiRequestError } from '@/lib/api';
 import { getPassport, listCells } from '@/lib/passports-api';
+import { getPassportCost } from '@/lib/costs-api';
+import type { PassportCostDto } from '@sewing/shared/costs';
 import { listPassportDefects } from '@/lib/qc-api';
 import {
   EARNING_STATUS_LABELS,
@@ -152,6 +155,17 @@ export default async function AdminPassportDetailPage({ params }: Params) {
   const totalPending = earnings
     .filter((e) => e.status === 'PENDING_RELEASE')
     .reduce((s, e) => s + e.amount, 0);
+
+  // Фактическая себестоимость паспорта — только менеджерам. Fail-soft:
+  // расчёт не должен ронять карточку, если событий/данных ещё нет.
+  let passportCost: PassportCostDto | null = null;
+  if (isManager) {
+    try {
+      passportCost = await getPassportCost(passport.id);
+    } catch {
+      passportCost = null;
+    }
+  }
 
   // Печатные формы и QR живут на API — относительные пути.
   // `/api/...` идёт через nginx-proxy, см. legacy-страницу.
@@ -353,6 +367,92 @@ export default async function AdminPassportDetailPage({ params }: Params) {
               </div>
             )}
           </AdminCard>
+
+          {isManager && (
+            <AdminCard>
+              <AdminSectionHeader
+                icon={<Coins size={18} strokeWidth={1.7} aria-hidden />}
+                title="Себестоимость (факт)"
+                hint={
+                  passportCost && passportCost.qtyGood > 0
+                    ? `${formatMoney(passportCost.perUnitCost)} ₽ / шт · годных ${passportCost.qtyGood}`
+                    : undefined
+                }
+              />
+              {passportCost ? (
+                <>
+                  <div className="admin-passport-fields">
+                    <FieldRow label="Материал (нетто)">
+                      {formatMoney(passportCost.materialCost)} ₽
+                    </FieldRow>
+                    <FieldRow label="Сдельная (подтв.)">
+                      {formatMoney(passportCost.pieceworkCost)} ₽
+                    </FieldRow>
+                    <FieldRow label="Оклад (разнесён)">
+                      {formatMoney(passportCost.salaryCost)} ₽
+                    </FieldRow>
+                    <FieldRow label="Итого на паспорт">
+                      <strong>{formatMoney(passportCost.totalCost)} ₽</strong>
+                    </FieldRow>
+                    <FieldRow label="На единицу">
+                      <strong>{formatMoney(passportCost.perUnitCost)} ₽</strong>
+                      {' / шт'}
+                    </FieldRow>
+                    <FieldRow label="Статус">
+                      {passportCost.isFinal ? (
+                        <span>✓ Финализировано</span>
+                      ) : (
+                        <span className="admin-muted">
+                          Предварительно (день ещё не закрыт)
+                        </span>
+                      )}
+                    </FieldRow>
+                  </div>
+                  {passportCost.salaryLines.length > 0 && (
+                    <div
+                      className="admin-passport-earnings"
+                      style={{ marginTop: '0.75rem' }}
+                    >
+                      <div
+                        className="admin-muted"
+                        style={{ marginBottom: '0.4rem', fontSize: '0.85rem' }}
+                      >
+                        Разнос оклада по реальному времени:
+                      </div>
+                      <table className="admin-table">
+                        <thead>
+                          <tr>
+                            <th>Операция</th>
+                            <th>Сотрудник</th>
+                            <th style={{ textAlign: 'right' }}>Мин</th>
+                            <th style={{ textAlign: 'right' }}>Сумма</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {passportCost.salaryLines.map((l, i) => (
+                            <tr key={`${l.employeeId}-${l.operationId ?? 'na'}-${i}`}>
+                              <td>{l.operationName ?? l.operationCode ?? '—'}</td>
+                              <td>{l.employeeName}</td>
+                              <td style={{ textAlign: 'right' }}>{l.minutes}</td>
+                              <td style={{ textAlign: 'right' }}>
+                                <strong>{formatMoney(l.rub)} ₽</strong>
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
+                </>
+              ) : (
+                <AdminEmptyState
+                  icon={<Coins size={26} strokeWidth={1.6} aria-hidden />}
+                  title="Расчёт недоступен"
+                  hint="Себестоимость считается по событиям выпуска. Появится, когда по паспорту пройдут операции (материал, сдельная, оклад)."
+                />
+              )}
+            </AdminCard>
+          )}
         </div>
 
         <div className="admin-stack">
