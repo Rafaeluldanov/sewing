@@ -47,6 +47,8 @@ import {
 } from '@sewing/shared/order-deadlines';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { listOrders } from '@/lib/orders-api';
+import { listClients } from '@/lib/clients-api';
+import { listCompanyDivisions } from '@/lib/company-settings-api';
 import {
   ORDER_NOMENCLATURE_SOURCE_BADGE,
   resolveOrderNomenclature,
@@ -79,6 +81,8 @@ export const dynamic = 'force-dynamic';
 interface SearchParams {
   search?: string;
   status?: string;
+  clientId?: string;
+  companyDivisionId?: string;
   deadline?: string;
   sort?: string;
   page?: string;
@@ -151,6 +155,8 @@ export default async function AdminOrdersPage({
   const query: ListOrdersQuery = {
     search: searchParams?.search?.trim() || undefined,
     status: parseStatus(searchParams?.status),
+    clientId: searchParams?.clientId?.trim() || undefined,
+    companyDivisionId: searchParams?.companyDivisionId?.trim() || undefined,
     deadline: deadlineFilter,
     sort: parseSort(searchParams?.sort),
     page: Math.max(1, Number(searchParams?.page ?? 1) || 1),
@@ -160,16 +166,29 @@ export default async function AdminOrdersPage({
   let items: OrderListItemDto[] = [];
   let total = 0;
   let error: string | null = null;
-  try {
-    const data = await listOrders(query);
-    items = data.items;
-    total = data.total;
-  } catch (e) {
+  // Списки для селектов-фильтров «Клиент» / «Подразделение». Тянем
+  // параллельно с заказами; сбой любого справочника не должен ронять
+  // страницу — тогда просто показываем фильтр без опций.
+  const [ordersResult, clientsResult, divisionsResult] =
+    await Promise.allSettled([
+      listOrders(query),
+      listClients(),
+      listCompanyDivisions(),
+    ]);
+  if (ordersResult.status === 'fulfilled') {
+    items = ordersResult.value.items;
+    total = ordersResult.value.total;
+  } else {
+    const e = ordersResult.reason;
     error =
       e instanceof ApiRequestError
         ? errorText(e)
         : 'Не удалось загрузить заказы';
   }
+  const clients =
+    clientsResult.status === 'fulfilled' ? clientsResult.value : [];
+  const divisions =
+    divisionsResult.status === 'fulfilled' ? divisionsResult.value : [];
 
   // Дефолтная управленческая сортировка: OVERDUE → AT_RISK → ON_TRACK
   // → NO_DUE_DATE → DONE; внутри бакета — ближайший dueDate выше.
@@ -189,6 +208,8 @@ export default async function AdminOrdersPage({
   const preserveParams: Record<string, string | undefined> = {
     search: query.search,
     status: query.status,
+    clientId: query.clientId,
+    companyDivisionId: query.companyDivisionId,
     deadline: query.deadline,
     sort: query.sort,
   };
@@ -227,6 +248,8 @@ export default async function AdminOrdersPage({
           preserve={{
             search: query.search,
             status: query.status,
+            clientId: query.clientId,
+            companyDivisionId: query.companyDivisionId,
             sort: query.sort,
           }}
         />
@@ -257,6 +280,36 @@ export default async function AdminOrdersPage({
               {ORDER_STATUSES.map((s) => (
                 <option key={s} value={s}>
                   {formatOrderStatus(s)}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="admin-field">
+            <label htmlFor="orders-client">Клиент</label>
+            <select
+              id="orders-client"
+              name="clientId"
+              defaultValue={query.clientId ?? ''}
+            >
+              <option value="">Все клиенты</option>
+              {clients.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="admin-field">
+            <label htmlFor="orders-division">Подразделение</label>
+            <select
+              id="orders-division"
+              name="companyDivisionId"
+              defaultValue={query.companyDivisionId ?? ''}
+            >
+              <option value="">Все подразделения</option>
+              {divisions.map((d) => (
+                <option key={d.id} value={d.id}>
+                  {d.code} — {d.name}
                 </option>
               ))}
             </select>
@@ -353,15 +406,23 @@ function OrdersTable({ items }: { items: OrderListItemDto[] }) {
       key: 'number',
       header: 'Номер',
       render: (o) => (
-        <div>
-          <span className="admin-table__primary">{o.number}</span>
-          {(o.client?.name || o.customer) && (
-            <div className="admin-table__hint">
-              {o.client?.name ?? o.customer}
-            </div>
-          )}
-        </div>
+        <span className="admin-table__primary">{o.number}</span>
       ),
+    },
+    {
+      key: 'client',
+      header: 'Клиент',
+      render: (o) => <ClientCell o={o} />,
+    },
+    {
+      key: 'division',
+      header: 'Подразд.',
+      render: (o) =>
+        o.companyDivision ? (
+          <span title={o.companyDivision.name}>{o.companyDivision.code}</span>
+        ) : (
+          <span className="admin-muted">—</span>
+        ),
     },
     {
       key: 'product',
@@ -495,6 +556,32 @@ function OrdersTable({ items }: { items: OrderListItemDto[] }) {
       }
     />
   );
+}
+
+/**
+ * Колонка «Клиент» в списке заказов. До этого имя клиента жило
+ * мелким хинтом под номером заказа — теперь это отдельный столбец,
+ * чтобы менеджеру было удобнее сканировать список по клиентам.
+ *
+ * Если заказ привязан к карточке клиента (`o.client`), имя кликабельно
+ * и ведёт в `/admin/clients/[id]`. Старый free-text `o.customer`
+ * (заказы без привязки к справочнику) показываем как простой текст.
+ */
+function ClientCell({ o }: { o: OrderListItemDto }) {
+  if (o.client) {
+    return (
+      <Link
+        href={`/admin/clients/${o.client.id}`}
+        className="admin-link"
+      >
+        {o.client.name}
+      </Link>
+    );
+  }
+  if (o.customer) {
+    return <span>{o.customer}</span>;
+  }
+  return <span className="admin-muted">—</span>;
 }
 
 /**

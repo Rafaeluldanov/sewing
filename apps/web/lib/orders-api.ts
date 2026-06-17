@@ -40,6 +40,7 @@ export function listOrders(query: Partial<ListOrdersQuery> = {}): Promise<
       // покрывала весь `ListOrdersQuerySchema`.
       deadline: query.deadline,
       clientId: query.clientId,
+      companyDivisionId: query.companyDivisionId,
       page: query.page,
       pageSize: query.pageSize,
       sort: query.sort,

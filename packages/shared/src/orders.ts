@@ -1303,6 +1303,13 @@ export const ListOrdersQuerySchema = z.object({
    */
   clientId: z.string().min(1).optional(),
   /**
+   * Управленческий фильтр заказов по подразделению-исполнителю
+   * (FK `Order.companyDivisionId` → master-справочник `CompanyDivision`).
+   * Backend честно фильтрует через `Order.companyDivisionId = …`.
+   * Используется селектом «Подразделение» в `/admin/orders`.
+   */
+  companyDivisionId: z.string().min(1).optional(),
+  /**
    * Фильтр по бакету «контроля сроков» (см. `evaluateOrderDeadline`).
    * Backend применяет фильтр после вычисления `deadline.status` для
    * каждого заказа в текущем срезе; учитывает все заказы, даже без

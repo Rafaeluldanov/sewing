@@ -920,6 +920,8 @@ export class OrdersService {
     const where: Prisma.OrderWhereInput = {};
     if (query.status) where.status = query.status;
     if (query.clientId) where.clientId = query.clientId;
+    if (query.companyDivisionId)
+      where.companyDivisionId = query.companyDivisionId;
     if (query.search && query.search.length > 0) {
       where.number = { contains: query.search, mode: 'insensitive' };
     }
