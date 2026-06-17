@@ -86,7 +86,6 @@ import {
 } from '@/components/orders/view/order-view-tabs-config';
 import { OrderProductionTab } from '@/components/orders/view/tabs/order-production-tab';
 import { OrderPassportsTab } from '@/components/orders/view/tabs/order-passports-tab';
-import { OrderPlanTab } from '@/components/orders/view/tabs/order-plan-tab';
 import { OrderOperationsTab } from '@/components/orders/tabs/order-operations-tab';
 import { OrderSummaryTab } from '@/components/orders/tabs/order-summary-tab';
 import { OrderNeedsTab } from '@/components/orders/view/tabs/order-needs-tab';
@@ -164,7 +163,11 @@ export default async function AdminOrderDetailPage({
       >
         {activeTab === 'production' && (
           <div className="order-tab-panel">
-            <OrderProductionTab order={order} canManage={isManager} />
+            <OrderProductionTab
+              order={order}
+              canManage={isManager}
+              cutIssueRulesSummary={cutIssueRulesSummary}
+            />
           </div>
         )}
 
@@ -176,16 +179,6 @@ export default async function AdminOrderDetailPage({
               routeSteps={order.routeSteps}
               canIssuePassport={canIssuePassport}
               canDelete={isManager}
-            />
-          </div>
-        )}
-
-        {activeTab === 'plan' && (
-          <div className="order-tab-panel">
-            <OrderPlanTab
-              order={order}
-              cutIssueRulesSummary={cutIssueRulesSummary}
-              canManageCutIssueRules={isManager}
             />
           </div>
         )}
@@ -268,7 +261,6 @@ export default async function AdminOrderDetailPage({
             и UI не оказался пустым в случае будущей рассинхронизации. */}
         {activeTab !== 'production' &&
           activeTab !== 'passports' &&
-          activeTab !== 'plan' &&
           activeTab !== 'operations' &&
           activeTab !== 'costSummary' &&
           activeTab !== 'needs' &&

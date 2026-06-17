@@ -2,7 +2,7 @@
  * Smoke-тест алерта «Указать цвет» в `OrderActionCenter` карточки
  * заказа `/admin/orders/[id]` (этап «Указать в заказе», см. ТЗ §4).
  *
- * Архитектурное правило (см. JSDoc `OrderPlanTab` и
+ * Архитектурное правило (см. JSDoc `OrderMaterialColorsCard` и
  * `MaterialColorForm`):
  *
  *   - Source of truth по «цвету позиции в заказе» —
@@ -11,9 +11,9 @@
  *   - `WorkshopNeed` намеренно НЕ source of truth — поэтому
  *     ActionCenter смотрит на `order.materialRequirements`, а НЕ на
  *     `WorkshopNeed[]`.
- *   - CTA ведёт на вкладку «План» к anchor-блоку
+ *   - CTA ведёт на вкладку «Производство» к anchor-блоку
  *     `#order-material-colors`, где живёт primary-edit (reusable
- *     `MaterialColorForm`).
+ *     `MaterialColorForm`). Раньше блок был во вкладке «План».
  *   - Алерт показываем для статусов, где действие имеет смысл
  *     (DRAFT / CALCULATION / CALCULATION_DONE / IN_PRODUCTION).
  *     На DONE / CANCELLED не шумим.
@@ -52,12 +52,12 @@ describe('OrderActionCenter — алерт «По строкам техкарт�
     );
   });
 
-  test('CTA ведёт на вкладку «План» к anchor #order-material-colors', () => {
+  test('CTA ведёт на вкладку «Производство» к anchor #order-material-colors', () => {
     // Принимаем оба эквивалентных варианта склейки строки —
-    // template literal `${orderTabHref('plan')}#...` или
-    // конкатенацию `orderTabHref('plan') + '#...'`.
+    // template literal `${orderTabHref('production')}#...` или
+    // конкатенацию `orderTabHref('production') + '#...'`.
     expect(src).toMatch(
-      /(?:\$\{orderTabHref\('plan'\)\}#order-material-colors|orderTabHref\('plan'\)\s*\+\s*'#order-material-colors')/,
+      /(?:\$\{orderTabHref\('production'\)\}#order-material-colors|orderTabHref\('production'\)\s*\+\s*'#order-material-colors')/,
     );
     expect(src).toMatch(/label:\s*'Указать цвет'/);
   });

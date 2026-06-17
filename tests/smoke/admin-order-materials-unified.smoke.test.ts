@@ -214,11 +214,13 @@ describe('OrderMaterialsUnifiedTable — единая таблица матер�
     expect(src).toMatch(/imageUrl/);
   });
 
-  test('рядом с warning «Цвет нужно указать в заказе» есть CTA «Указать цвет» во вкладку «План»', () => {
-    // Текст CTA + ссылка на новую карточку заказа.
+  test('рядом с warning «Цвет нужно указать в заказе» есть CTA «Указать цвет» во вкладку «Производство»', () => {
+    // Текст CTA + ссылка на карточку заказа.
     expect(src).toMatch(/Указать цвет/);
-    // CTA ведёт на ?tab=plan#order-material-colors (см. ТЗ §C).
-    expect(src).toMatch(/\?tab=plan#order-material-colors/);
+    // CTA ведёт на ?tab=production#order-material-colors (блок «Цвета
+    // по строкам техкарты» переехал из удалённой вкладки «План» в
+    // «Производство», см. ТЗ §C).
+    expect(src).toMatch(/\?tab=production#order-material-colors/);
     expect(src).toMatch(/data-testid="order-materials-color-cta"/);
     // orderId прокидывается из таблицы внутрь DescriptionCell, не
     // придумывается на месте — иначе стабильной ссылки не будет.
@@ -226,8 +228,8 @@ describe('OrderMaterialsUnifiedTable — единая таблица матер�
   });
 
   test('таблица НЕ становится source of truth по цвету: нет inline-формы / PATCH-логики', () => {
-    // Primary-edit для selectedColorText живёт в OrderPlanTab, в
-    // Needs остаются только warning + CTA-ссылка.
+    // Primary-edit для selectedColorText живёт в OrderMaterialColorsCard
+    // (вкладка «Производство»), в Needs остаются только warning + CTA-ссылка.
     expect(src).not.toMatch(/MaterialColorForm/);
     expect(src).not.toMatch(/updateOrderMaterialRequirementColor/);
     expect(src).not.toMatch(/<form\b/);

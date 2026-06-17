@@ -79,7 +79,7 @@ function buildAlerts(
             label: 'Открыть редактирование',
             href: `/admin/orders/${order.id}/edit`,
           }
-        : { label: 'Открыть план', href: orderTabHref('plan') },
+        : { label: 'Открыть производство', href: orderTabHref('production') },
     });
   }
 
@@ -115,10 +115,10 @@ function buildAlerts(
       icon: <Palette size={16} strokeWidth={1.7} aria-hidden />,
       title: 'По строкам техкарты нужно указать цвет для заказа',
       hint:
-        'Откройте вкладку «План» и заполните цвет для строк техкарты с правилом «Указать в заказе».',
+        'Откройте вкладку «Производство» и заполните цвет для строк техкарты с правилом «Указать в заказе».',
       cta: {
         label: 'Указать цвет',
-        href: `${orderTabHref('plan')}#order-material-colors`,
+        href: `${orderTabHref('production')}#order-material-colors`,
       },
     });
   }
@@ -131,7 +131,7 @@ function buildAlerts(
       icon: <Rocket size={16} strokeWidth={1.7} aria-hidden />,
       title: 'Заказ ещё в черновике',
       hint: 'Переведите в расчёт, а затем запустите в производство — действия в шапке выше.',
-      cta: { label: 'Открыть план', href: orderTabHref('plan') },
+      cta: { label: 'Открыть производство', href: orderTabHref('production') },
     });
   } else if (status === 'CALCULATION') {
     alerts.push({

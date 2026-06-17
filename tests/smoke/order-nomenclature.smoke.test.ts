@@ -144,46 +144,37 @@ describe('apps/web/lib/order-nomenclature.ts — единый resolver', () => {
 // 2. /admin/orders/[id]/page.tsx — блок «Изделие» использует resolver
 // ---------------------------------------------------------------------------
 
-describe('admin/orders/[id] — номенклатура в OrderManagementHeader + OrderPlanTab', () => {
+describe('admin/orders/[id] — номенклатура в OrderManagementHeader', () => {
   // Order management redesign: блок «Изделие» как самостоятельная
   // секция страницы /admin/orders/[id] больше не существует — данные
-  // показывает компактная шапка `OrderManagementHeader` (поле
-  // «Изделие / лекало» + бейдж legacy) и отдельный блок «Продукт» в
-  // вкладке «План» (`OrderPlanTab`). Оба зовут единый
+  // показывает компактная шапка `OrderManagementHeader` (поля
+  // «Изделие / лекало» + «Артикул» + бейдж legacy). Вкладка «План»
+  // удалена; продукт/артикул переехали в шапку. Шапка зовёт единый
   // `resolveOrderNomenclature`.
   const headerSrc = read(
     'apps/web/components/orders/view/order-management-header.tsx',
   );
-  const planSrc = read(
-    'apps/web/components/orders/view/tabs/order-plan-tab.tsx',
-  );
 
-  test('импортирует resolveOrderNomenclature и пользуется им (header + plan tab)', () => {
-    for (const src of [headerSrc, planSrc]) {
-      expect(src).toMatch(/from '@\/lib\/order-nomenclature'/);
-      expect(src).toMatch(/resolveOrderNomenclature\(order\)/);
-    }
+  test('импортирует resolveOrderNomenclature и пользуется им', () => {
+    expect(headerSrc).toMatch(/from '@\/lib\/order-nomenclature'/);
+    expect(headerSrc).toMatch(/resolveOrderNomenclature\(order\)/);
   });
 
   test('основное название берётся из resolver-а, а не из productName', () => {
-    for (const src of [headerSrc, planSrc]) {
-      expect(src).toMatch(/<strong>\{nomenclature\.name\}<\/strong>/);
-      expect(src).not.toMatch(
-        /<strong>\{order\.productName \?\? '—'\}<\/strong>/,
-      );
-    }
+    expect(headerSrc).toMatch(/<strong>\{nomenclature\.name\}<\/strong>/);
+    expect(headerSrc).not.toMatch(
+      /<strong>\{order\.productName \?\? '—'\}<\/strong>/,
+    );
   });
 
   test('legacy-бейдж рисуется только для resolver.source === legacyProduct', () => {
-    for (const src of [headerSrc, planSrc]) {
-      expect(src).toMatch(/nomenclature\.source === 'legacyProduct'/);
-      expect(src).toMatch(/ORDER_NOMENCLATURE_SOURCE_BADGE\.legacyProduct/);
-    }
+    expect(headerSrc).toMatch(/nomenclature\.source === 'legacyProduct'/);
+    expect(headerSrc).toMatch(/ORDER_NOMENCLATURE_SOURCE_BADGE\.legacyProduct/);
   });
 
-  test('OrderPlanTab показывает «Артикул» из resolver-а', () => {
-    expect(planSrc).toMatch(/<dt>Артикул<\/dt>/);
-    expect(planSrc).toMatch(/\{nomenclature\.article\}/);
+  test('шапка показывает «Артикул» из resolver-а', () => {
+    expect(headerSrc).toMatch(/label="Артикул"/);
+    expect(headerSrc).toMatch(/\{nomenclature\.article\}/);
   });
 });
 

@@ -284,24 +284,16 @@ describe('/admin/orders/new — Admin Order Form (Order workspace v2)', () => {
 // 3. /admin/orders/[id] — read-only сетка размеров (контракт сохранён)
 // ---------------------------------------------------------------------------
 
-describe('/admin/orders/[id] — план по размерам в OrderPlanTab (read-only)', () => {
-  const planSrc = read(
-    'apps/web/components/orders/view/tabs/order-plan-tab.tsx',
-  );
+describe('/admin/orders/[id] — план по размерам переехал в OrderProductionTab', () => {
+  // Вкладка «План» удалена; отдельная read-only таблица «План по
+  // размерам» (`AdminSizeGrid`) тоже убрана. Размерный срез теперь
+  // живёт только в производственной матрице `OrderProductionTab`
+  // (sizeBreakdown с планом, фактом раскроя и остатком).
   const productionSrc = read(
     'apps/web/components/orders/view/tabs/order-production-tab.tsx',
   );
 
-  test('OrderPlanTab использует AdminSizeGrid (read-only)', () => {
-    expect(planSrc).toMatch(/AdminSizeGrid/);
-    expect(planSrc).toMatch(/readOnly/);
-    expect(planSrc).toMatch(/План по размерам/);
-  });
-
   test('OrderProductionTab показывает sizeBreakdown с фактом раскроя (qtyCutFact)', () => {
-    // Order management redesign: размерный production-breakdown
-    // переехал в `OrderProductionTab` — там же sizeBreakdown с
-    // фактом раскроя и остатком.
     expect(productionSrc).toMatch(/sizeBreakdown/);
     expect(productionSrc).toMatch(/qtyCutFact/);
   });

@@ -273,11 +273,10 @@ describe('/admin/orders/[id] — управленческая карточка (
     expect(pageSrc).toMatch(/orderId=\{order\.id\}/);
   });
 
-  test('страница рендерит ровно 7 management-вкладок', () => {
+  test('страница рендерит ровно 6 management-вкладок', () => {
     for (const tab of [
       'production',
       'passports',
-      'plan',
       'operations',
       'costSummary',
       'needs',
@@ -308,9 +307,9 @@ describe('/admin/orders/[id] — управленческая карточка (
     expect(pageSrc).toMatch(
       /activeTab === 'passports'[\s\S]*?<OrderPassportsTab\b/,
     );
-    expect(pageSrc).toMatch(
-      /activeTab === 'plan'[\s\S]*?<OrderPlanTab\b/,
-    );
+    // Вкладка «План» удалена — её настроечные блоки переехали в
+    // «Производство», продукт/даты — в шапку заказа.
+    expect(pageSrc).not.toMatch(/activeTab === 'plan'/);
     expect(pageSrc).toMatch(
       /activeTab === 'operations'[\s\S]*?<OrderOperationsTab\b/,
     );
@@ -329,7 +328,8 @@ describe('/admin/orders/[id] — управленческая карточка (
     expect(pageSrc).toMatch(
       /from '@\/components\/orders\/view\/tabs\/order-passports-tab'/,
     );
-    expect(pageSrc).toMatch(
+    // order-plan-tab удалён — больше не импортируется страницей.
+    expect(pageSrc).not.toMatch(
       /from '@\/components\/orders\/view\/tabs\/order-plan-tab'/,
     );
     // Операции — профильный компонент, переехавший из старой раскладки;
@@ -393,22 +393,22 @@ describe('/admin/orders/[id] — управленческая карточка (
 // 3a. ORDER_VIEW_TABS — единственный источник правды по management-вкладкам
 // ---------------------------------------------------------------------------
 
-describe('ORDER_VIEW_TABS — 7 management-вкладок в фиксированном порядке', () => {
-  test('конфиг содержит ровно 7 вкладок и поддерживает parseOrderViewTab', () => {
+describe('ORDER_VIEW_TABS — management-вкладки в фиксированном порядке', () => {
+  test('конфиг содержит вкладки в порядке и поддерживает parseOrderViewTab', () => {
     const src = read(
       'apps/web/components/orders/view/order-view-tabs-config.ts',
     );
-    // «Операции» возвращены между «План» и «Сводно по заказу»;
-    // «Сводно по заказу» (`costSummary`) — отдельная финансовая
-    // вкладка между «Операции» и «Потребности». Менеджер читает
-    // карточку как «факт → объекты → план → операции → деньги →
-    // обеспечение → аудит». Идентификатор `costSummary` (а не
-    // `summary`) сознательно отделён от старого generic-summary,
-    // который раньше создавал путаницу.
+    // Вкладка «План» удалена: её настроечные блоки переехали в
+    // «Производство», продукт/даты — в шапку заказа. «Сводно по
+    // заказу» (`costSummary`) — отдельная финансовая вкладка между
+    // «Операции» и «Потребности». Менеджер читает карточку как
+    // «факт → объекты → операции → деньги → обеспечение → аудит».
+    // Идентификатор `costSummary` (а не `summary`) сознательно
+    // отделён от старого generic-summary, который раньше создавал
+    // путаницу.
     const expected = [
       "id: 'production'",
       "id: 'passports'",
-      "id: 'plan'",
       "id: 'operations'",
       "id: 'costSummary'",
       "id: 'needs'",
@@ -421,9 +421,10 @@ describe('ORDER_VIEW_TABS — 7 management-вкладок в фиксирова�
       expect(idx).toBeGreaterThan(prev);
       prev = idx;
     }
+    // Удалённая вкладка «План» не должна вернуться в конфиг.
+    expect(src).not.toMatch(/id: 'plan'/);
     expect(src).toMatch(/label: 'Производство'/);
     expect(src).toMatch(/label: 'Паспорта'/);
-    expect(src).toMatch(/label: 'План'/);
     expect(src).toMatch(/label: 'Операции'/);
     expect(src).toMatch(/label: 'Сводно по заказу'/);
     expect(src).toMatch(/label: 'Потребности'/);

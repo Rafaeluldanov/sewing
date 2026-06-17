@@ -1,19 +1,23 @@
 /**
- * Smoke-тест нового primary-input-а «Цвет позиции» во вкладке «План»
- * управленческой карточки заказа `/admin/orders/[id]?tab=plan` (этап
- * «Указать в заказе», см. ТЗ §4 + recon «UI gap, не backend gap»).
+ * Smoke-тест primary-input-а «Цвет позиции» во вкладке
+ * «Производство» управленческой карточки заказа
+ * `/admin/orders/[id]?tab=production` (этап «Указать в заказе», см.
+ * ТЗ §4 + recon «UI gap, не backend gap»). Блок жил во вкладке
+ * «План», после её удаления переехал в `OrderMaterialColorsCard`,
+ * который рендерится в `OrderProductionTab`.
  *
  * Source-of-truth и ownership-правила (живут в JSDoc
- * `OrderPlanTab` / `MaterialColorForm`):
+ * `OrderMaterialColorsCard` / `MaterialColorForm`):
  *
  *   - `OrderMaterialRequirement.selectedColorText` остаётся
  *     единственным source of truth по «цвету позиции в заказе».
  *   - `WorkshopNeed` намеренно НЕ становится source of truth, он
  *     остаётся derived view + warning.
- *   - Primary-edit для `selectedColorText` живёт в новой вкладке
- *     «План» (`OrderPlanTab` → блок «Цвета по строкам техкарты»).
+ *   - Primary-edit для `selectedColorText` живёт в блоке «Цвета по
+ *     строкам техкарты» (`OrderMaterialColorsCard`) во вкладке
+ *     «Производство».
  *   - В вкладке «Потребности» (`OrderMaterialsUnifiedTable`)
- *     остаётся только warning + CTA-ссылка в План.
+ *     остаётся только warning + CTA-ссылка в «Производство».
  *   - Reusable-форма лежит в
  *     `apps/web/components/orders/materials/material-color-form.tsx`,
  *     legacy `apps/web/app/orders/[id]/material-color-form.tsx`
@@ -102,12 +106,12 @@ describe('legacy material-color-form.tsx — только re-export', () => {
 });
 
 // ---------------------------------------------------------------------------
-// 3. OrderPlanTab имеет блок «Цвета по строкам техкарты»
+// 3. OrderMaterialColorsCard имеет блок «Цвета по строкам техкарты»
 // ---------------------------------------------------------------------------
 
-describe('OrderPlanTab — primary input для selectedColorText', () => {
+describe('OrderMaterialColorsCard — primary input для selectedColorText', () => {
   const src = read(
-    'apps/web/components/orders/view/tabs/order-plan-tab.tsx',
+    'apps/web/components/orders/view/order-material-colors-card.tsx',
   );
 
   test('импортирует reusable MaterialColorForm из components/orders/materials', () => {

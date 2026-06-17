@@ -1,105 +1,8 @@
 /**
- * `OrderPlanTab` — вкладка «План» управленческой карточки
- * `/admin/orders/[id]?tab=plan`.
- *
- * Показывает план-специфичные блоки заказа (см. ТЗ «Вкладка План»):
- *   - блок «Цвета по строкам техкарты» (этап «Указать в заказе»,
- *     см. ТЗ §4): primary input для строк
- *     `OrderMaterialRequirement.requiresColorSelection = true`
- *     через reusable `MaterialColorForm`. Source of truth —
- *     `OrderMaterialRequirement.selectedColorText`; `WorkshopNeed`
- *     остаётся derived view + warning, не source of truth;
- *   - блок «Очередь выдачи кроя по размерам»;
- *   - превью лекала (aside).
- *
- * Что СОЗНАТЕЛЬНО НЕ показываем:
- *   - продукт / лекало / цвет / артикул / даты — переехали в
- *     постоянную шапку заказа (`OrderManagementHeader`);
- *   - таблицу «План по размерам» — убрана из вкладки;
- *   - маршрут / операции (snapshot `OrderRouteStep[]`) и флаг
- *     устарелости плана операций — переехали во вкладку
- *     «Производство»;
- *   - production progress / факты — это во вкладке «Производство»;
- *   - материалы / outsource — это во вкладке «Потребности».
- *
- * После запуска заказа в производство этот snapshot не должен
- * меняться (ADR-0006); поэтому на карточке нет edit-контролов —
- * редактирование идёт через `/admin/orders/[id]/edit`.
- *
- * Backend / DTO / Prisma не задействованы — это presentation-слой.
- */
-import type {
-  OrderDetailDto,
-  OrderMaterialRequirementDto,
-} from '@sewing/shared/orders';
-import type { OrderCutIssueRulesSummaryDto } from '@sewing/shared';
-import {
-  TECH_CARD_MATERIAL_COLOR_RULE_LABELS,
-  getTechCardMaterialRoleLabel,
-} from '@sewing/shared/tech-cards';
-import { Lock, Palette } from 'lucide-react';
-import {
-  AdminCard,
-  AdminEmptyState,
-  AdminSectionHeader,
-  AdminStatusBadge,
-} from '@/components/admin';
-import { MaterialColorForm } from '@/components/orders/materials/material-color-form';
-import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
-import { PatternPreviewCard } from '@/components/orders/pattern-preview-card';
-
-interface Props {
-  order: OrderDetailDto;
-  /**
-   * Sводка «Очередь выдачи кроя по размерам» (см.
-   * `apps/web/components/orders/order-cut-issue-rules-card.tsx`,
-   * `apps/api/src/modules/order-cut-issue-rules/*`,
-   * `docs/order-flow.md §«Очередь выдачи кроя»`). Получаем готовой
-   * из admin-page (`/admin/orders/[id]?tab=plan`), чтобы не делать
-   * дополнительный запрос внутри tab-компонента.
-   */
-  cutIssueRulesSummary: OrderCutIssueRulesSummaryDto;
-  /**
-   * `true` для `SHOP_MANAGER` / `SHOPFLOOR_MASTER` / `ADMIN` (см.
-   * RBAC backend-эндпоинтов). На admin-карточке layout уже пускает
-   * только менеджерскую тройку, поэтому фактически всегда `true`,
-   * но проп оставлен явным, чтобы tab-компонент не привязывался к
-   * особенностям layout-а.
-   */
-  canManageCutIssueRules: boolean;
-}
-
-export function OrderPlanTab({
-  order,
-  cutIssueRulesSummary,
-  canManageCutIssueRules,
-}: Props) {
-  return (
-    <div className="order-plan-tab">
-      <div className="order-plan-tab__grid">
-        <div className="order-plan-tab__col-main">
-          <OrderMaterialColorsCard order={order} />
-
-          <OrderCutIssueRulesCard
-            orderId={order.id}
-            orderItems={order.items}
-            initialSummary={cutIssueRulesSummary}
-            canManage={canManageCutIssueRules}
-          />
-        </div>
-
-        <div className="order-plan-tab__col-aside">
-          <PatternPreviewCard order={order} />
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Card-блок «Цвета по строкам техкарты» (этап «Указать в заказе»,
- * см. ТЗ §4) — primary input для `selectedColorText` строк
- * `OrderMaterialRequirement.requiresColorSelection = true`.
+ * `OrderMaterialColorsCard` — card-блок «Цвета по строкам техкарты»
+ * (этап «Указать в заказе», см. ТЗ §4) — primary input для
+ * `selectedColorText` строк `OrderMaterialRequirement.requiresColorSelection
+ * = true`.
  *
  * Source of truth — `OrderMaterialRequirement.selectedColorText`.
  * `WorkshopNeed` намеренно НЕ становится source of truth: он
@@ -117,12 +20,33 @@ export function OrderPlanTab({
  *
  * Anchor `id="order-material-colors"` нужен ссылке-CTA из вкладки
  * «Потребности» (`OrderMaterialsUnifiedTable` →
- * `?tab=plan#order-material-colors`) и алерту в
+ * `?tab=production#order-material-colors`) и алерту в
  * `OrderActionCenter`. Дополнительно у каждой строки есть
  * `id={mreq-${id}-color}` — на случай прицельной ссылки на
  * конкретную позицию.
+ *
+ * Раньше блок жил во вкладке «План»; после её удаления переехал во
+ * вкладку «Производство» (`OrderProductionTab`). Вынесен в отдельный
+ * файл, чтобы production-tab оставался читаемым.
  */
-function OrderMaterialColorsCard({ order }: { order: OrderDetailDto }) {
+import type {
+  OrderDetailDto,
+  OrderMaterialRequirementDto,
+} from '@sewing/shared/orders';
+import {
+  TECH_CARD_MATERIAL_COLOR_RULE_LABELS,
+  getTechCardMaterialRoleLabel,
+} from '@sewing/shared/tech-cards';
+import { Lock, Palette } from 'lucide-react';
+import {
+  AdminCard,
+  AdminEmptyState,
+  AdminSectionHeader,
+  AdminStatusBadge,
+} from '@/components/admin';
+import { MaterialColorForm } from '@/components/orders/materials/material-color-form';
+
+export function OrderMaterialColorsCard({ order }: { order: OrderDetailDto }) {
   const rows = order.materialRequirements.filter(
     (m) => m.requiresColorSelection === true,
   );
@@ -139,7 +63,7 @@ function OrderMaterialColorsCard({ order }: { order: OrderDetailDto }) {
       className="admin-order-detail-card-compact"
       // anchor для CTA «Указать цвет» во вкладке «Потребности» и
       // алерта в OrderActionCenter — ссылка ведёт на
-      // `?tab=plan#order-material-colors`.
+      // `?tab=production#order-material-colors`.
     >
       <div id="order-material-colors">
         <AdminSectionHeader
@@ -298,4 +222,3 @@ function OrderMaterialColorRow({
     </li>
   );
 }
-

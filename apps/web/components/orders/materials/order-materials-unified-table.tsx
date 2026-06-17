@@ -253,13 +253,14 @@ function DescriptionCell({
   orderId: string;
 }) {
   // CTA «Указать цвет» (см. ТЗ §C «Needs UI»): рядом с warning
-  // даём ссылку на новую вкладку «План» к блоку выбора цвета.
-  // Anchor `#order-material-colors` — единственный стабильный
-  // ключ, доступный из row на этом шаге: row.id — это
+  // даём ссылку на вкладку «Производство» к блоку выбора цвета
+  // (блок «Цвета по строкам техкарты» переехал туда из удалённой
+  // вкладки «План»). Anchor `#order-material-colors` — единственный
+  // стабильный ключ, доступный из row на этом шаге: row.id — это
   // `WorkshopNeed.id`, а не `OrderMaterialRequirement.id`, и
   // расширять backend под per-row deep-link мы намеренно не
   // хотим (см. ТЗ §F «Не менять»).
-  const colorCtaHref = `/admin/orders/${orderId}?tab=plan#order-material-colors`;
+  const colorCtaHref = `/admin/orders/${orderId}?tab=production#order-material-colors`;
   return (
     <div className="order-materials-table__description">
       {row.imageUrl && (

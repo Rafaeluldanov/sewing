@@ -333,21 +333,24 @@ describe('/admin/orders/[id] — клиент, срок и маршрут в к�
     const headerSrc = read(
       'apps/web/components/orders/view/order-management-header.tsx',
     );
-    // В шапке есть поля «Клиент» и «Срок».
+    // В шапке есть поля «Клиент», «Дата заказа» и «Срок сдачи»
+    // (последнее раньше называлось «Срок»; даты подняты в шапку из
+    // удалённой вкладки «План»).
     expect(headerSrc).toMatch(/label="Клиент"/);
-    expect(headerSrc).toMatch(/label="Срок"/);
+    expect(headerSrc).toMatch(/label="Дата заказа"/);
+    expect(headerSrc).toMatch(/label="Срок сдачи"/);
     // «Просрочен» — это `deadline.status === 'OVERDUE'`, бейдж
     // приходит из backend через `deadline.label / deadline.tone`.
     expect(headerSrc).toMatch(/deadline\b/);
   });
 
-  test('маршрут заказа рендерится через AdminRouteSteps в OrderPlanTab', () => {
-    // Маршрут переехал во вкладку «План». На самой странице импорт
-    // больше не нужен.
-    const planSrc = read(
-      'apps/web/components/orders/view/tabs/order-plan-tab.tsx',
+  test('маршрут заказа рендерится через AdminRouteSteps в OrderProductionTab', () => {
+    // Маршрут живёт во вкладке «Производство» (вкладка «План»
+    // удалена). На самой странице импорт больше не нужен.
+    const productionSrc = read(
+      'apps/web/components/orders/view/tabs/order-production-tab.tsx',
     );
-    expect(planSrc).toMatch(/AdminRouteSteps/);
+    expect(productionSrc).toMatch(/AdminRouteSteps/);
   });
 
   test('используется AdminPageShell + OrderWorkspaceLayout', () => {

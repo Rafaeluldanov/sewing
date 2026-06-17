@@ -36,6 +36,7 @@ import type {
   OrderSizeBreakdownRow,
   OrderSummary,
 } from '@sewing/shared/orders';
+import type { OrderCutIssueRulesSummaryDto } from '@sewing/shared';
 import type {
   ShopfloorRowDto,
   ShopfloorStateDto,
@@ -55,17 +56,29 @@ import {
 } from '@/lib/finished-goods-api';
 import { Activity, BarChart3, Layers, Lock, Workflow } from 'lucide-react';
 import { OrderFinishedGoodsShipmentSection } from '@/components/orders/finished-goods/order-finished-goods-shipment-section';
+import { OrderMaterialColorsCard } from '@/components/orders/view/order-material-colors-card';
+import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
 import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
 
 interface Props {
   order: OrderDetailDto;
   /**
    * ADMIN / SHOP_MANAGER — определяет видимость кнопки «Создать
-   * отгрузку» в блоке готовой продукции. Layout `/admin/*` уже
-   * пускает только этих ролей, флаг нужен для симметрии с
-   * остальными action-блоками карточки заказа.
+   * отгрузку» в блоке готовой продукции и управление блоками «Цвета
+   * по строкам техкарты» / «Очередь выдачи кроя» (переехали сюда из
+   * удалённой вкладки «План»). Layout `/admin/*` уже пускает только
+   * этих ролей, флаг нужен для симметрии с остальными action-блоками
+   * карточки заказа.
    */
   canManage: boolean;
+  /**
+   * Сводка «Очередь выдачи кроя по размерам» (см.
+   * `apps/web/components/orders/order-cut-issue-rules-card.tsx`).
+   * Получаем готовой из admin-page (`/admin/orders/[id]`), чтобы не
+   * делать дополнительный запрос внутри tab-компонента. Раньше блок
+   * жил во вкладке «План».
+   */
+  cutIssueRulesSummary: OrderCutIssueRulesSummaryDto;
 }
 
 interface KpiCardProps {
@@ -117,7 +130,11 @@ function buildKpis(summary: OrderSummary): KpiCardProps[] {
   ];
 }
 
-export async function OrderProductionTab({ order, canManage }: Props) {
+export async function OrderProductionTab({
+  order,
+  canManage,
+  cutIssueRulesSummary,
+}: Props) {
   // Stage buckets имеют смысл только когда заказ реально едет в
   // производстве: до запуска (DRAFT/CALCULATION/CALCULATION_DONE)
   // паспортов нет, проекция пуста, а endpoint `/api/shopfloor/state`
@@ -295,6 +312,23 @@ export async function OrderProductionTab({ order, canManage }: Props) {
        */}
       <OrderFinishedGoodsShipmentSection
         orderId={order.id}
+        canManage={canManage}
+      />
+
+      {/*
+       * Блоки «Цвета по строкам техкарты» и «Очередь выдачи кроя по
+       * размерам» переехали сюда из удалённой вкладки «План» (см.
+       * `OrderMaterialColorsCard`, `OrderCutIssueRulesCard`). По
+       * просьбе — в самом конце вкладки «Производство»: это
+       * настроечные блоки, идут после основного производственного
+       * среза и журнала отгрузок.
+       */}
+      <OrderMaterialColorsCard order={order} />
+
+      <OrderCutIssueRulesCard
+        orderId={order.id}
+        orderItems={order.items}
+        initialSummary={cutIssueRulesSummary}
         canManage={canManage}
       />
     </div>
