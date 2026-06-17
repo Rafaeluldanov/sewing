@@ -14928,9 +14928,145 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 
 .order-prod-tab__shopfloor-warning {
-  margin: 0;
+  margin: 0 0 0.6rem;
   font-size: 0.85rem;
   color: var(--admin-muted);
+}
+
+/* --- Объединённая матрица «размер × этап» -------------------------------- */
+
+.order-prod-matrix__scroll {
+  overflow-x: auto;
+}
+
+.order-prod-matrix {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.84rem;
+  white-space: nowrap;
+}
+
+.order-prod-matrix th,
+.order-prod-matrix td {
+  padding: 0.35rem 0.55rem;
+  border-bottom: 1px solid var(--admin-border);
+  text-align: right;
+}
+
+.order-prod-matrix__num {
+  font-variant-numeric: tabular-nums;
+}
+
+.order-prod-matrix__size {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  text-align: left;
+  font-weight: 700;
+  background: var(--admin-card-bg, #fff);
+}
+
+/* Шапка групп */
+.order-prod-matrix__group-row th {
+  text-align: center;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--admin-muted);
+  border-bottom: 1px solid var(--admin-border);
+}
+
+.order-prod-matrix__group {
+  background: rgba(15, 23, 42, 0.03);
+}
+
+.order-prod-matrix__group--wip {
+  background: var(--admin-danger-bg, #fee2e2);
+}
+
+.order-prod-matrix__group--ship {
+  background: var(--admin-success-bg, #dcfce7);
+}
+
+.order-prod-matrix__legend {
+  display: inline-block;
+  margin-left: 0.4rem;
+  font-size: 0.66rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  text-transform: none;
+  opacity: 0.7;
+}
+
+.order-prod-matrix__sub-row th {
+  font-size: 0.72rem;
+  font-weight: 600;
+  color: var(--admin-muted);
+  border-bottom: 2px solid var(--admin-border);
+}
+
+/* Граница между группами колонок */
+.order-prod-matrix__group-end {
+  border-right: 2px solid var(--admin-border);
+}
+
+/* Хвост воронки — отгрузка */
+.order-prod-matrix__finished {
+  font-weight: 600;
+  color: #15803d;
+}
+
+.order-prod-matrix__ready {
+  color: #1d4ed8;
+}
+
+/* Ячейки «В цеху сейчас» */
+.order-prod-matrix__wip {
+  text-align: center;
+}
+
+.order-prod-matrix__wip--foot {
+  background: rgba(15, 23, 42, 0.02);
+}
+
+.order-prod-matrix__wip-empty {
+  color: var(--admin-muted);
+  opacity: 0.5;
+}
+
+.order-prod-matrix__wip-chips {
+  display: inline-flex;
+  flex-direction: column;
+  gap: 0.15rem;
+  align-items: stretch;
+}
+
+.order-prod-matrix__chip {
+  display: inline-block;
+  padding: 0.05rem 0.35rem;
+  border-radius: 6px;
+  font-size: 0.76rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+
+.order-prod-matrix__chip--now {
+  background: var(--admin-danger-bg, #fee2e2);
+  color: #b91c1c;
+}
+
+.order-prod-matrix__chip--done {
+  background: var(--admin-success-bg, #dcfce7);
+  color: #15803d;
+}
+
+.order-prod-matrix__totals th,
+.order-prod-matrix__totals td {
+  border-top: 2px solid var(--admin-border);
+  border-bottom: none;
+  font-weight: 700;
+  background: rgba(15, 23, 42, 0.03);
 }
 
 /* --- Plan tab ----------------------------------------------------------- */

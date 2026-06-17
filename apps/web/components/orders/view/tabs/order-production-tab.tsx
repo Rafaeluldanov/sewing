@@ -2,49 +2,55 @@
  * `OrderProductionTab` — вкладка «Производство» управленческой
  * карточки `/admin/orders/[id]?tab=production`.
  *
- * Показывает производственный срез заказа (см. ТЗ
- * «Вкладка Производство»):
- *   - KPI «План / Раскроено / В пошиве / ОТК / ВТО / Упаковано /
- *     Выпущено / Брак / Δ» из `OrderSummary`;
- *   - таблица «по размерам» из `OrderSizeBreakdownRow[]`;
- *   - текущие stage-buckets по заказу — блок «Цех сейчас»,
- *     данные из `GET /api/shopfloor/state?orderId=…`. Backend не
- *     меняли — это уже существующая read-only проекция;
- *   - блок «Отгрузка готовой продукции»
- *     (`OrderFinishedGoodsShipmentSection`) — частичная отгрузка
- *     остатков `FinishedGoodsBalance` с созданием
- *     `FinishedGoodsMovement type=SHIPMENT direction=OUT` (см.
- *     `apps/api/src/modules/finished-goods/finished-goods.service.ts::createShipmentForOrder`,
- *     `docs/current-state.md §«Отгрузка готовой продукции»`).
+ * ПРОТОТИП объединённой таблицы (см. обсуждение «объединить три
+ * таблицы вкладки производство»). Раньше срез заказа жил в ТРЁХ
+ * раздельных таблицах:
+ *   - «По размерам»  — плановая воронка (`OrderSizeBreakdownRow[]`):
+ *     план / раскроено / Δ / брак — НАКОПИТЕЛЬНЫЕ величины;
+ *   - «Цех сейчас»   — где паспорта стоят ПРЯМО СЕЙЧАС
+ *     (`GET /api/shopfloor/state`, бакеты CUT/SEWING/QC/QC_DONE/…);
+ *   - «Отгрузка» (превью балансов готовой продукции).
  *
- * Что СОЗНАТЕЛЬНО НЕ показываем:
- *   - список паспортов (он во вкладке «Паспорта»);
- *   - материалы / outsource / cost (вкладка «Потребности»);
- *   - метрики hero (тираж, выручка, маржа) — это в шапке.
+ * Теперь это ОДНА матрица «размер × этап» (`ProductionMatrix`) со
+ * сгруппированной шапкой, читаемая слева направо как сквозная
+ * воронка: План → В цеху сейчас → Отгрузка. Группа «В цеху сейчас»
+ * повторяет модель доски монитора — на каждом этапе показываем
+ * «▶ в работе сейчас» (красным) и «✔ выполнено, ждёт следующий шаг»
+ * (зелёным буфером). Данные `*_DONE` для этого уже есть в
+ * `ShopfloorRowDto` — бэкенд не трогаем.
  *
- * Backend / DTO / Prisma не задействованы здесь — это presentation-
- * слой. Shipment-секция фетчит данные сама и инкапсулирует свой UI.
+ * Что СОЗНАТЕЛЬНО остаётся отдельно:
+ *   - ЖУРНАЛ отгрузок (`OrderFinishedGoodsShipmentSection`) — это лог
+ *     событий (дата / номер / статус / отмена), а не разрез по
+ *     размеру, в матрицу его впихивать нельзя. Превью балансов из
+ *     него переехало в колонку «К отгрузке».
+ *   - список паспортов (вкладка «Паспорта»), материалы (вкладка
+ *     «Потребности»), hero-метрики (шапка).
+ *
+ * Backend / DTO / Prisma здесь не задействованы — это presentation-
+ * слой, склейка трёх готовых read-only проекций по `sizeId`.
  */
 import type {
   OrderDetailDto,
   OrderSizeBreakdownRow,
   OrderSummary,
 } from '@sewing/shared/orders';
-import {
-  SHOPFLOOR_STAGE_LABELS,
-  type ShopfloorRowDto,
-  type ShopfloorStateDto,
+import type {
+  ShopfloorRowDto,
+  ShopfloorStateDto,
 } from '@sewing/shared/shopfloor';
 import {
   AdminCard,
   AdminEmptyState,
   AdminSectionHeader,
-  AdminTable,
-  type AdminTableColumn,
 } from '@/components/admin';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getShopfloorState } from '@/lib/shopfloor-api';
-import { Activity, BarChart3, Package } from 'lucide-react';
+import {
+  listFinishedGoodsBalances,
+  listOrderFinishedGoodsShipments,
+} from '@/lib/finished-goods-api';
+import { Activity, BarChart3 } from 'lucide-react';
 import { OrderFinishedGoodsShipmentSection } from '@/components/orders/finished-goods/order-finished-goods-shipment-section';
 
 interface Props {
@@ -96,12 +102,7 @@ function buildKpis(summary: OrderSummary): KpiCardProps[] {
     {
       label: 'Δ крой − план',
       value: summary.qtyDeltaTotal,
-      tone:
-        summary.qtyDeltaTotal === 0
-          ? 'neutral'
-          : summary.qtyDeltaTotal > 0
-            ? 'warning'
-            : 'warning',
+      tone: summary.qtyDeltaTotal === 0 ? 'neutral' : 'warning',
       hint:
         summary.qtyDeltaTotal === 0
           ? null
@@ -116,10 +117,8 @@ export async function OrderProductionTab({ order, canManage }: Props) {
   // Stage buckets имеют смысл только когда заказ реально едет в
   // производстве: до запуска (DRAFT/CALCULATION/CALCULATION_DONE)
   // паспортов нет, проекция пуста, а endpoint `/api/shopfloor/state`
-  // на DRAFT-заказ может отдать 4xx (см.
-  // `apps/api/src/modules/shopfloor/shopfloor.service.ts`). После
-  // CANCELLED тоже грузить незачем — только лишний round-trip.
-  // Подключаем только для `IN_PRODUCTION` и `DONE`.
+  // на DRAFT-заказ может отдать 4xx. После CANCELLED тоже грузить
+  // незачем. Подключаем только для `IN_PRODUCTION` и `DONE`.
   const shopfloorEligible =
     order.status === 'IN_PRODUCTION' || order.status === 'DONE';
 
@@ -129,15 +128,55 @@ export async function OrderProductionTab({ order, canManage }: Props) {
     try {
       shopfloor = await getShopfloorState(order.id);
     } catch (e) {
-      if (e instanceof ApiRequestError) {
-        shopfloorError = errorText(e);
-      } else {
-        shopfloorError = 'Не удалось получить состояние цеха';
-      }
+      shopfloorError =
+        e instanceof ApiRequestError
+          ? errorText(e)
+          : 'Не удалось получить состояние цеха';
     }
   }
 
+  // «Готово к отгрузке» (остаток на складе ГП) и «Отгружено» (Σ
+  // POSTED-строк отгрузок) сводим к уровню размера, чтобы показать
+  // хвост воронки прямо в матрице. Оба endpoint-а — read-only списки,
+  // фильтрованные по orderId; на DRAFT просто отдают пусто, поэтому
+  // грузим всегда и мягко деградируем при ошибке.
+  const readyToShipBySize = new Map<string, number>();
+  const shippedBySize = new Map<string, number>();
+  try {
+    const balances = await listFinishedGoodsBalances({
+      orderId: order.id,
+      positiveOnly: true,
+      limit: 200,
+    });
+    for (const b of balances.items) {
+      readyToShipBySize.set(
+        b.sizeId,
+        (readyToShipBySize.get(b.sizeId) ?? 0) + b.qty,
+      );
+    }
+  } catch {
+    // Колонка «К отгрузке» останется пустой — не роняем весь срез.
+  }
+  try {
+    const shipments = await listOrderFinishedGoodsShipments(order.id);
+    for (const s of shipments) {
+      if (s.status !== 'POSTED') continue;
+      for (const line of s.lines) {
+        shippedBySize.set(
+          line.sizeId,
+          (shippedBySize.get(line.sizeId) ?? 0) + line.qty,
+        );
+      }
+    }
+  } catch {
+    // Колонка «Отгружено» останется пустой.
+  }
+
   const kpis = buildKpis(order.summary);
+  const shopBySize = new Map<string, ShopfloorRowDto>();
+  if (shopfloor) {
+    for (const r of shopfloor.rows) shopBySize.set(r.sizeId, r);
+  }
 
   return (
     <div className="order-prod-tab">
@@ -154,69 +193,43 @@ export async function OrderProductionTab({ order, canManage }: Props) {
         </div>
       </AdminCard>
 
-      <AdminCard className="order-prod-tab__breakdown-card">
+      <AdminCard className="order-prod-tab__matrix-card">
         <AdminSectionHeader
-          icon={<Package size={18} strokeWidth={1.7} aria-hidden />}
-          title="По размерам"
+          icon={<Activity size={18} strokeWidth={1.7} aria-hidden />}
+          title="Производство по размерам"
           hint={
-            order.sizeBreakdown.length > 0
-              ? `${order.sizeBreakdown.length} строк`
-              : undefined
+            shopfloor
+              ? `Цех: срез ${formatTime(shopfloor.updatedAt)}`
+              : 'План и отгрузка; цех — после запуска'
           }
         />
+        {shopfloorError && (
+          <p className="order-prod-tab__shopfloor-warning">
+            Не удалось получить срез цеха: {shopfloorError}. Колонки
+            «В цеху сейчас» пусты, остальной срез показан.
+          </p>
+        )}
         {order.sizeBreakdown.length === 0 ? (
           <AdminEmptyState
-            icon={<Package size={26} strokeWidth={1.6} aria-hidden />}
+            icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}
             title="План по размерам не заполнен"
             hint="Добавьте строки в плане — затем заказ можно перевести в расчёт."
           />
         ) : (
-          <BreakdownTable rows={order.sizeBreakdown} />
-        )}
-      </AdminCard>
-
-      <AdminCard className="order-prod-tab__shopfloor-card">
-        <AdminSectionHeader
-          icon={<Activity size={18} strokeWidth={1.7} aria-hidden />}
-          title="Цех сейчас"
-          hint={
-            shopfloor
-              ? `Срез: ${formatTime(shopfloor.updatedAt)}`
-              : undefined
-          }
-        />
-        {!shopfloorEligible ? (
-          <AdminEmptyState
-            icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}
-            title="Матрица цеха появится после запуска заказа в производство"
-            hint={
-              order.status === 'CANCELLED'
-                ? 'Заказ отменён — производственная проекция не строится.'
-                : 'Пока заказ в DRAFT/расчёте паспортов нет, и срез по этапам не имеет смысла. После «Запустить в производство» здесь появится живая матрица «размер × этап».'
-            }
-          />
-        ) : shopfloorError ? (
-          <p className="order-prod-tab__shopfloor-warning">
-            Не удалось получить срез цеха: {shopfloorError}. Это блок
-            «по живым паспортам», на остальной экран он не влияет.
-          </p>
-        ) : shopfloor && shopfloor.rows.length > 0 ? (
-          <ShopfloorMatrix rows={shopfloor.rows} />
-        ) : (
-          <AdminEmptyState
-            icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}
-            title="Пока нет живых паспортов"
-            hint="Срез заполнится, когда раскройщик выпустит первую партию по этому заказу."
+          <ProductionMatrix
+            rows={order.sizeBreakdown}
+            shopBySize={shopBySize}
+            shopfloorEligible={shopfloorEligible}
+            readyToShipBySize={readyToShipBySize}
+            shippedBySize={shippedBySize}
           />
         )}
       </AdminCard>
 
       {/*
-       * Блок «Отгрузка готовой продукции» — частичная отгрузка по
-       * заказу. Это единственное UI-место, где живёт shipment-flow
-       * (см. `docs/current-state.md §«Отгрузка готовой продукции»`):
-       * отдельной страницы /admin/finished-goods нет, sidebar
-       * не меняется, OrderViewTabs не получил новой вкладки.
+       * Журнал отгрузок остаётся отдельно: это лог документов
+       * (дата / номер / отмена), не разрез по размеру. Превью
+       * балансов из него переехало в колонку «К отгрузке» матрицы.
        */}
       <OrderFinishedGoodsShipmentSection
         orderId={order.id}
@@ -237,151 +250,281 @@ function formatTime(iso: string): string {
   }
 }
 
-/**
- * Таблица «по размерам» — один источник истины для производственного
- * среза заказа. Та же сетка колонок, что в legacy-`/orders/[id]`,
- * но без дублирования summary в KPI выше (KPI рисуем итогами, а
- * таблица — разбивкой).
- */
-function BreakdownTable({ rows }: { rows: OrderSizeBreakdownRow[] }) {
-  const sorted = [...rows].sort((a, b) => a.sizeSortOrder - b.sizeSortOrder);
-  const columns: AdminTableColumn<OrderSizeBreakdownRow>[] = [
-    {
-      key: 'size',
-      header: 'Размер',
-      render: (r) => <strong>{r.sizeCode}</strong>,
-    },
-    { key: 'plan', header: 'План', align: 'right', render: (r) => r.qtyPlan },
-    {
-      key: 'cut',
-      header: 'Раскроено',
-      align: 'right',
-      render: (r) => r.qtyCutFact,
-    },
-    {
-      key: 'inSew',
-      header: 'В пошиве',
-      align: 'right',
-      render: (r) => r.qtyInSewing,
-    },
-    { key: 'qc', header: 'ОТК', align: 'right', render: (r) => r.qtyQc },
-    { key: 'wto', header: 'ВТО', align: 'right', render: (r) => r.qtyWto },
-    {
-      key: 'pack',
-      header: 'Упаковка',
-      align: 'right',
-      render: (r) => r.qtyPacking,
-    },
-    {
-      key: 'finished',
-      header: 'Выпущено',
-      align: 'right',
-      render: (r) => r.qtyFinished,
-    },
-    {
-      key: 'defect',
-      header: 'Брак',
-      align: 'right',
-      render: (r) => (
-        <span style={{ color: r.qtyDefect > 0 ? '#b91c1c' : undefined }}>
-          {r.qtyDefect}
-        </span>
-      ),
-    },
-    {
-      key: 'remaining',
-      header: 'Остаток',
-      align: 'right',
-      render: (r) => r.qtyRemaining,
-    },
-    {
-      key: 'delta',
-      header: 'Δ',
-      align: 'right',
-      render: (r) => (
-        <span
-          style={{
-            color:
-              r.qtyDelta === 0
-                ? undefined
-                : r.qtyDelta > 0
-                  ? '#1f7a1f'
-                  : '#b91c1c',
-          }}
-        >
-          {r.qtyDelta}
-        </span>
-      ),
-    },
-  ];
-  return <AdminTable rows={sorted} columns={columns} rowKey={(r) => r.sizeId} />;
+interface ProductionMatrixProps {
+  rows: OrderSizeBreakdownRow[];
+  shopBySize: Map<string, ShopfloorRowDto>;
+  /** До запуска в производство колонки «В цеху сейчас» = прочерк. */
+  shopfloorEligible: boolean;
+  readyToShipBySize: Map<string, number>;
+  shippedBySize: Map<string, number>;
 }
 
 /**
- * Матрица «размер × stage» по живым паспортам заказа.
- * Источник истины — `getShopfloorState(orderId)` (бакеты CUT / SEWING /
- * QC / QC_DONE / WTO / WTO_DONE / PACKING / FINISHED, см. ADR-0013).
+ * Объединённая матрица «размер × этап» — единый источник истины
+ * производственного среза заказа. Склеивает три проекции по `sizeId`:
+ * план (`OrderSizeBreakdownRow`), живой цех (`ShopfloorRowDto`) и
+ * хвост отгрузки (балансы ГП + Σ POSTED-отгрузок).
  *
- * Это **дополняет**, а не дублирует таблицу `BreakdownTable` выше:
- * `BreakdownTable` показывает агрегаты заказа (план/факт/брак), а
- * матрица — где конкретно паспорта стоят прямо сейчас.
+ * Группа «В цеху сейчас» повторяет доску монитора: ▶ — в работе на
+ * этапе сейчас (красным), ✔ — выполнено и ждёт следующий шаг (буфер,
+ * зелёным). Бакет CUT = «раскроено, ждёт швею» → показываем как ✔
+ * (готов к пошиву); SEWING/PACKING — только ▶ (промежуточного
+ * «done»-бакета у них в проекции нет); QC/WTO — пара ▶/✔.
  */
-function ShopfloorMatrix({ rows }: { rows: ShopfloorRowDto[] }) {
+function ProductionMatrix({
+  rows,
+  shopBySize,
+  shopfloorEligible,
+  readyToShipBySize,
+  shippedBySize,
+}: ProductionMatrixProps) {
   const sorted = [...rows].sort((a, b) => a.sizeSortOrder - b.sizeSortOrder);
-  const columns: AdminTableColumn<ShopfloorRowDto>[] = [
-    {
-      key: 'size',
-      header: 'Размер',
-      render: (r) => <strong>{r.sizeCode}</strong>,
-    },
-    {
-      key: 'cut',
-      header: SHOPFLOOR_STAGE_LABELS.CUT,
-      align: 'right',
-      render: (r) => r.qtyCut,
-    },
-    {
-      key: 'sew',
-      header: SHOPFLOOR_STAGE_LABELS.SEWING,
-      align: 'right',
-      render: (r) => r.qtySewing,
-    },
-    {
-      key: 'qc',
-      header: SHOPFLOOR_STAGE_LABELS.QC,
-      align: 'right',
-      render: (r) => r.qtyQc,
-    },
-    {
-      key: 'qcDone',
-      header: SHOPFLOOR_STAGE_LABELS.QC_DONE,
-      align: 'right',
-      render: (r) => r.qtyQcDone,
-    },
-    {
-      key: 'wto',
-      header: SHOPFLOOR_STAGE_LABELS.WTO,
-      align: 'right',
-      render: (r) => r.qtyWto,
-    },
-    {
-      key: 'wtoDone',
-      header: SHOPFLOOR_STAGE_LABELS.WTO_DONE,
-      align: 'right',
-      render: (r) => r.qtyWtoDone,
-    },
-    {
-      key: 'packing',
-      header: SHOPFLOOR_STAGE_LABELS.PACKING,
-      align: 'right',
-      render: (r) => r.qtyPacking,
-    },
-    {
-      key: 'finished',
-      header: SHOPFLOOR_STAGE_LABELS.FINISHED,
-      align: 'right',
-      render: (r) => r.qtyFinished,
-    },
-  ];
-  return <AdminTable rows={sorted} columns={columns} rowKey={(r) => r.sizeId} />;
+
+  // Итоги по колонкам — собираем за один проход.
+  const totals = {
+    plan: 0,
+    cut: 0,
+    delta: 0,
+    defect: 0,
+    wCut: 0,
+    wSew: 0,
+    wQc: 0,
+    wQcDone: 0,
+    wWto: 0,
+    wWtoDone: 0,
+    wPack: 0,
+    finished: 0,
+    ready: 0,
+    shipped: 0,
+  };
+
+  const body = sorted.map((r) => {
+    const sf = shopBySize.get(r.sizeId);
+    const ready = readyToShipBySize.get(r.sizeId) ?? 0;
+    const shipped = shippedBySize.get(r.sizeId) ?? 0;
+
+    totals.plan += r.qtyPlan;
+    totals.cut += r.qtyCutFact;
+    totals.delta += r.qtyDelta;
+    totals.defect += r.qtyDefect;
+    totals.finished += r.qtyFinished;
+    totals.ready += ready;
+    totals.shipped += shipped;
+    if (sf) {
+      totals.wCut += sf.qtyCut;
+      totals.wSew += sf.qtySewing;
+      totals.wQc += sf.qtyQc;
+      totals.wQcDone += sf.qtyQcDone;
+      totals.wWto += sf.qtyWto;
+      totals.wWtoDone += sf.qtyWtoDone;
+      totals.wPack += sf.qtyPacking;
+    }
+
+    return (
+      <tr key={r.sizeId}>
+        <th scope="row" className="order-prod-matrix__size">
+          {r.sizeCode}
+        </th>
+        {/* План */}
+        <td className="order-prod-matrix__num">{r.qtyPlan}</td>
+        <td className="order-prod-matrix__num">{r.qtyCutFact}</td>
+        <td className="order-prod-matrix__num">
+          <DeltaValue value={r.qtyDelta} />
+        </td>
+        <td className="order-prod-matrix__num order-prod-matrix__group-end">
+          <span style={{ color: r.qtyDefect > 0 ? '#b91c1c' : undefined }}>
+            {r.qtyDefect}
+          </span>
+        </td>
+        {/* В цеху сейчас (▶ в работе / ✔ готово к следующему шагу) */}
+        <WipCell eligible={shopfloorEligible} done={sf?.qtyCut} />
+        <WipCell eligible={shopfloorEligible} now={sf?.qtySewing} />
+        <WipCell
+          eligible={shopfloorEligible}
+          now={sf?.qtyQc}
+          done={sf?.qtyQcDone}
+        />
+        <WipCell
+          eligible={shopfloorEligible}
+          now={sf?.qtyWto}
+          done={sf?.qtyWtoDone}
+        />
+        <WipCell
+          eligible={shopfloorEligible}
+          now={sf?.qtyPacking}
+          groupEnd
+        />
+        {/* Отгрузка */}
+        <td className="order-prod-matrix__num order-prod-matrix__finished">
+          {r.qtyFinished}
+        </td>
+        <td className="order-prod-matrix__num order-prod-matrix__ready">
+          {ready}
+        </td>
+        <td className="order-prod-matrix__num">{shipped}</td>
+      </tr>
+    );
+  });
+
+  return (
+    <div className="order-prod-matrix__scroll">
+      <table className="order-prod-matrix">
+        <thead>
+          <tr className="order-prod-matrix__group-row">
+            <th rowSpan={2} className="order-prod-matrix__size">
+              Размер
+            </th>
+            <th colSpan={4} className="order-prod-matrix__group">
+              План
+            </th>
+            <th
+              colSpan={5}
+              className="order-prod-matrix__group order-prod-matrix__group--wip"
+            >
+              В цеху сейчас <span className="order-prod-matrix__legend">▶ в работе · ✔ готово</span>
+            </th>
+            <th
+              colSpan={3}
+              className="order-prod-matrix__group order-prod-matrix__group--ship"
+            >
+              Отгрузка
+            </th>
+          </tr>
+          <tr className="order-prod-matrix__sub-row">
+            <th>План</th>
+            <th>Раскр.</th>
+            <th>Δ</th>
+            <th className="order-prod-matrix__group-end">Брак</th>
+            <th>Крой</th>
+            <th>Пошив</th>
+            <th>ОТК</th>
+            <th>ВТО</th>
+            <th className="order-prod-matrix__group-end">Упак.</th>
+            <th>Выпущено</th>
+            <th>К отгр.</th>
+            <th>Отгруж.</th>
+          </tr>
+        </thead>
+        <tbody>{body}</tbody>
+        <tfoot>
+          <tr className="order-prod-matrix__totals">
+            <th scope="row" className="order-prod-matrix__size">
+              Итого
+            </th>
+            <td className="order-prod-matrix__num">{totals.plan}</td>
+            <td className="order-prod-matrix__num">{totals.cut}</td>
+            <td className="order-prod-matrix__num">
+              <DeltaValue value={totals.delta} />
+            </td>
+            <td className="order-prod-matrix__num order-prod-matrix__group-end">
+              {totals.defect}
+            </td>
+            <WipCell eligible={shopfloorEligible} done={totals.wCut} foot />
+            <WipCell eligible={shopfloorEligible} now={totals.wSew} foot />
+            <WipCell
+              eligible={shopfloorEligible}
+              now={totals.wQc}
+              done={totals.wQcDone}
+              foot
+            />
+            <WipCell
+              eligible={shopfloorEligible}
+              now={totals.wWto}
+              done={totals.wWtoDone}
+              foot
+            />
+            <WipCell
+              eligible={shopfloorEligible}
+              now={totals.wPack}
+              groupEnd
+              foot
+            />
+            <td className="order-prod-matrix__num order-prod-matrix__finished">
+              {totals.finished}
+            </td>
+            <td className="order-prod-matrix__num order-prod-matrix__ready">
+              {totals.ready}
+            </td>
+            <td className="order-prod-matrix__num">{totals.shipped}</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+function DeltaValue({ value }: { value: number }) {
+  return (
+    <span
+      style={{
+        color: value === 0 ? undefined : value > 0 ? '#1f7a1f' : '#b91c1c',
+      }}
+    >
+      {value}
+    </span>
+  );
+}
+
+interface WipCellProps {
+  eligible: boolean;
+  /** ▶ — в работе на этапе сейчас (красным). */
+  now?: number;
+  /** ✔ — выполнено, ждёт следующий шаг (буфер, зелёным). */
+  done?: number;
+  /** Правая граница группы «В цеху сейчас». */
+  groupEnd?: boolean;
+  /** Строка итогов — приглушаем фон. */
+  foot?: boolean;
+}
+
+/**
+ * Ячейка этапа группы «В цеху сейчас». Повторяет доску монитора:
+ * красная плашка «▶ N» (в работе) и/или зелёная «✔ N» (готово к
+ * следующему шагу). До запуска в производство — прочерк; на этапе
+ * без движения — приглушённая точка.
+ */
+function WipCell({ eligible, now, done, groupEnd, foot }: WipCellProps) {
+  const cls = [
+    'order-prod-matrix__num',
+    'order-prod-matrix__wip',
+    groupEnd ? 'order-prod-matrix__group-end' : '',
+    foot ? 'order-prod-matrix__wip--foot' : '',
+  ]
+    .filter(Boolean)
+    .join(' ');
+
+  if (!eligible) {
+    return (
+      <td className={cls}>
+        <span className="order-prod-matrix__wip-empty">—</span>
+      </td>
+    );
+  }
+
+  const n = now ?? 0;
+  const d = done ?? 0;
+  if (n === 0 && d === 0) {
+    return (
+      <td className={cls}>
+        <span className="order-prod-matrix__wip-empty">·</span>
+      </td>
+    );
+  }
+
+  return (
+    <td className={cls}>
+      <span className="order-prod-matrix__wip-chips">
+        {n > 0 && (
+          <span className="order-prod-matrix__chip order-prod-matrix__chip--now">
+            ▶ {n}
+          </span>
+        )}
+        {d > 0 && (
+          <span className="order-prod-matrix__chip order-prod-matrix__chip--done">
+            ✔ {d}
+          </span>
+        )}
+      </span>
+    </td>
+  );
 }
