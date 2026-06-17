@@ -258,30 +258,33 @@ describe('/admin/workshop-needs UI — enrichment + warning', () => {
   );
   const page = read('apps/web/app/admin/workshop-needs/page.tsx');
 
-  test('inline-edit-row передаёт materialRole в getWorkshopNeedKind', () => {
-    expect(inline).toMatch(
-      /getWorkshopNeedKind\({[\s\S]*?materialRole:\s*need\.materialRole/,
-    );
+  test('классификация секции (getWorkshopNeedKind) живёт в page.tsx, а не в строке', () => {
+    // Бейдж типа убран из строки вместе с построчным режимом —
+    // классификацию по секциям (Материалы/Фурнитура/...) делает
+    // только page.tsx (OrderNeedGroupCard).
+    expect(inline).not.toMatch(/getWorkshopNeedKind/);
   });
 
-  test('page.tsx (OrderNeedGroupCard) тоже передаёт materialRole в getWorkshopNeedKind', () => {
+  test('page.tsx (OrderNeedGroupCard) передаёт materialRole в getWorkshopNeedKind', () => {
     expect(page).toMatch(
       /getWorkshopNeedKind\({[\s\S]*?materialRole:\s*need\.materialRole/,
     );
   });
 
-  test('inline-edit-row рисует hardware-meta строку (size · material · цвет)', () => {
-    expect(inline).toMatch(/workshop-need-line__hardware-meta/);
+  test('inline-edit-row рисует secondary-строку (size · material · цвет)', () => {
+    // В зональной строке вторичная подпись — зона «Расчёт», класс
+    // `wn-desc__meta`, собирается из descSecondaryParts.
+    expect(inline).toMatch(/wn-desc__meta/);
     expect(inline).toMatch(/need\.hardwareSizeText/);
     expect(inline).toMatch(/need\.hardwareMaterialText/);
     expect(inline).toMatch(/need\.selectedColorText/);
     // Использует разделитель «·».
-    expect(inline).toMatch(/secondaryParts\.join\(' · '\)/);
+    expect(inline).toMatch(/descSecondaryParts\.join\(' · '\)/);
   });
 
   test('inline-edit-row рисует preview изображения материала', () => {
     expect(inline).toMatch(/need\.materialImageUrl/);
-    expect(inline).toMatch(/workshop-need-line__material-image/);
+    expect(inline).toMatch(/wn-desc__img/);
   });
 
   test('inline-edit-row показывает warning «Цвет нужно указать в заказе»', () => {
@@ -289,7 +292,7 @@ describe('/admin/workshop-needs UI — enrichment + warning', () => {
       /need\.requiresColorSelection\s*&&\s*!need\.selectedColorText/,
     );
     expect(inline).toMatch(/Цвет нужно указать в заказе/);
-    expect(inline).toMatch(/workshop-need-line__color-warning/);
+    expect(inline).toMatch(/wn-desc__warning/);
   });
 });
 

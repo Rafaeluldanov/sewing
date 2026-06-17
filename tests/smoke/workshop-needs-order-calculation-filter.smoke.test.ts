@@ -221,9 +221,12 @@ describe('/admin/workshop-needs — UI «Статус расчёта»', () => {
     expect(src).not.toMatch(/listWorkshopNeeds\(\{[\s\S]*?status:/);
   });
 
-  test('preserveFilters сохраняет orderCalculationStatus, но не status', () => {
-    expect(src).toMatch(/preserveFilters/);
-    expect(src).toMatch(/orderCalculationStatus,/);
+  test('Фильтр сохраняет orderCalculationStatus, но не status', () => {
+    // preserveFilters-объект удалён вместе с переключателем режимов;
+    // orderCalculationStatus берётся из searchParams и проставляется
+    // в форму фильтра, а старый `status` строки не используется.
+    expect(src).toMatch(/orderCalculationStatus/);
+    expect(src).toMatch(/defaultValue=\{orderCalculationStatus\}/);
     expect(src).not.toMatch(/status:\s*status\s*\|\|\s*undefined/);
   });
 

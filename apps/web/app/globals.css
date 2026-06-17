@@ -12697,6 +12697,14 @@ body:has(.admin-layout) .app-header { display: none !important; }
   margin-top: 2px;
 }
 
+/* Ссылка «Подробности» → полная карточка /admin/workshop-needs/[id].
+   Прижата вправо подвала строки, отдельно от comment-toggle слева. */
+.wn-zrow__detail-link {
+  margin-left: auto;
+  font-size: 0.78rem;
+  white-space: nowrap;
+}
+
 .wn-zrow__comment {
   flex: 1 1 100%;
 }

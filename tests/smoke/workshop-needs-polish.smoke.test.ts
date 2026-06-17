@@ -264,20 +264,18 @@ describe('WorkshopNeedsService — include/toDto polish', () => {
 describe('/admin/workshop-needs — view toggle и группировка', () => {
   const src = read('apps/web/app/admin/workshop-needs/page.tsx');
 
-  test('Переключатель режимов «По заказам» / «Построчно»', () => {
-    expect(src).toMatch(/По заказам/);
-    expect(src).toMatch(/Построчно/);
-    expect(src).toMatch(/workshop-needs-view-toggle/);
-    // Через query-param view=orders / view=lines.
-    expect(src).toMatch(/view:\s*'orders'/);
-    expect(src).toMatch(/view:\s*'lines'/);
+  test('Единственный режим — группировка по заказам (переключатель убран)', () => {
+    // Прежний построчный режим и переключатель «По заказам / Построчно»
+    // удалены — осталась только группировка по заказу.
+    expect(src).not.toMatch(/workshop-needs-view-toggle/);
+    expect(src).not.toMatch(/Построчно/);
+    expect(src).not.toMatch(/view:\s*'lines'/);
+    expect(src).toMatch(/OrdersView/);
   });
 
-  test('Default view = orders', () => {
-    // parseView('lines') → 'lines', иначе 'orders'.
-    expect(src).toMatch(
-      /parseView\([\s\S]*?return\s+raw\s*===\s*'lines'\s*\?\s*'lines'\s*:\s*'orders'/,
-    );
+  test('Параметр ?view и parseView удалены', () => {
+    expect(src).not.toMatch(/parseView/);
+    expect(src).not.toMatch(/ViewMode/);
   });
 
   test('Group view группирует по orderId и рисует OrderNeedGroupCard', () => {
@@ -313,29 +311,24 @@ describe('/admin/workshop-needs — view toggle и группировка', () =
     expect(src).toMatch(/workshop-order-preview--md/);
   });
 
-  test('Lines view сохранён + содержит колонку Заказ/клиент', () => {
-    // Polish-итерация «Компактное inline-редактирование»: lines
-    // view рендерит строку через `<InlineEditWorkshopNeedRow>`
-    // напрямую (без обёртки `NeedLineCard`). Внутри компонента уже
-    // есть превью + клиент + бейдж типа + bulk-чекбокс — карточка
-    // не нужна. Lines-list оборачивает строки списком.
-    //
-    // SaaS-итерация «Карточка заказа»: бейдж типа в page.tsx
-    // больше не рендерится — секция (Материалы/Фурнитура/...) уже
-    // подписана label-ом, а в lines-режиме бейдж рисуется внутри
-    // самого `InlineEditWorkshopNeedRow`. Поэтому проверяем только
-    // KIND-лейблы из shared (используются в секциях).
-    expect(src).toMatch(/LinesView/);
-    expect(src).toMatch(/NeedsLinesList/);
+  test('Построчный режим удалён, вход в карточку — ссылка «Подробности»', () => {
+    // Прежний построчный вид (LinesView / NeedsLinesList) и проп
+    // showOrderInfo удалены. Вход в полную карточку
+    // /admin/workshop-needs/[id] — по ссылке «Подробности» прямо
+    // в зональной строке потребности.
+    expect(src).not.toMatch(/LinesView/);
+    expect(src).not.toMatch(/NeedsLinesList/);
     expect(src).toMatch(/InlineEditWorkshopNeedRow/);
-    expect(src).toMatch(/showOrderInfo/);
-    expect(src).toMatch(/WORKSHOP_NEED_KIND_LABELS/);
-    // Бейдж «Тип» живёт внутри inline-edit-row (для view=lines).
     const inline = readFileSync(
       path.join(repoRoot, 'apps/web/app/admin/workshop-needs/inline-edit-row.tsx'),
       'utf8',
     );
-    expect(inline).toMatch(/workshop-need-kind-badge/);
+    expect(inline).toMatch(/Подробности/);
+    expect(inline).toMatch(/wn-zrow__detail-link/);
+    // Ссылка ведёт на карточку /admin/workshop-needs/[id].
+    expect(inline).toMatch(
+      /\/admin\/workshop-needs\/\$\{encodeURIComponent\(need\.id\)\}/,
+    );
   });
 
   test('Empty states зависят от orderCalculationStatus', () => {
@@ -348,20 +341,17 @@ describe('/admin/workshop-needs — view toggle и группировка', () =
     expect(src).toMatch(/Переведите заказ в статус «Расчёт»/);
   });
 
-  test('BulkCreatePo + фильтры (search / orderCalculationStatus / orderId) сохраняются', () => {
-    // BulkCreatePoProvider оборачивает список в `view=lines`,
-    // если включён feature-flag покупательских заказов.
-    // BulkCreatePoCheckbox теперь рендерится внутри строки
-    // `InlineEditWorkshopNeedRow` (см. ту же ячейку
-    // `data-cell="check"`), а не на верхнем уровне page.tsx.
+  test('BulkCreatePo + фильтры (search / orderCalculationStatus / orderId)', () => {
+    // BulkCreatePoProvider оборачивает сгруппированный по заказам
+    // список (OrdersView), если включён feature-flag покупательских
+    // заказов. BulkCreatePoCheckbox рендерится внутри строки
+    // `InlineEditWorkshopNeedRow`, а не на верхнем уровне page.tsx.
     expect(src).toMatch(/BulkCreatePoProvider/);
-    expect(src).toMatch(/preserveFilters/);
-    // search / orderCalculationStatus / orderId передаются и в форме
-    // фильтра, и в переключателе режимов / пагинации. Старый
-    // `status` (по `WorkshopNeed.status`) больше НЕ сохраняется —
-    // см. JSDoc файла, страница его игнорирует.
-    expect(src).toMatch(/search:\s*search\s*\|\|\s*undefined/);
-    expect(src).toMatch(/orderId:\s*orderId\s*\|\|\s*undefined/);
+    // search / orderCalculationStatus / orderId — параметры фильтра
+    // верхнего уровня. Старый `status` (по `WorkshopNeed.status`)
+    // страница НЕ использует — см. JSDoc файла, она его игнорирует.
+    expect(src).toMatch(/searchParams\?\.search/);
+    expect(src).toMatch(/searchParams\?\.orderId/);
     expect(src).toMatch(/orderCalculationStatus,/);
     expect(src).not.toMatch(/status:\s*status\s*\|\|\s*undefined/);
     // Bulk-чекбокс живёт внутри inline-edit-row.
@@ -470,19 +460,23 @@ describe('/admin/workshop-needs?view=orders — SaaS-карточка заказ
     expect(page).toMatch(/workshop-need-section__rows/);
   });
 
-  test('view=orders передаёт showOrderInfo={false}, view=lines — showOrderInfo (true)', () => {
-    expect(page).toMatch(/showOrderInfo=\{false\}/);
-    // В lines-ветке проп без значения == true (или явно).
-    expect(page).toMatch(/showOrderInfo\b(?![=])|showOrderInfo=\{true\}/);
+  test('строки группы рендерятся через InlineEditWorkshopNeedRow без showOrderInfo', () => {
+    // Проп showOrderInfo удалён вместе с построчным режимом.
+    expect(page).not.toMatch(/showOrderInfo/);
+    expect(page).toMatch(/<InlineEditWorkshopNeedRow/);
   });
 
-  test('inline-edit-row: showOrderInfo=false → grid `.workshop-order-need-row`, без preview/order/client', () => {
-    // Корневой grid компактной строки.
-    expect(inline).toMatch(/workshop-order-need-row workshop-need-inline-form/);
-    // Превью / order-number / клиент рендерятся только при
-    // showOrderInfo (через `showOrderInfo &&`).
-    expect(inline).toMatch(/showOrderInfo\s*&&/);
-    expect(inline).toMatch(/data-cell="order"/);
+  test('inline-edit-row: зональная строка `.wn-zrow`, превью/клиент — в header карточки', () => {
+    // Корневой зональный grid строки.
+    expect(inline).toMatch(/wn-zrow workshop-need-inline-form/);
+    expect(inline).toMatch(/data-variant="orders"/);
+    expect(inline).toMatch(/wn-zone--calc/);
+    expect(inline).toMatch(/wn-zone--buy/);
+    expect(inline).toMatch(/wn-zone--log/);
+    // showOrderInfo больше нет — единственный режим.
+    expect(inline).not.toMatch(/showOrderInfo/);
+    // order-info ячейки строкой не рендерятся (они в header карточки).
+    expect(inline).not.toMatch(/data-cell="order"/);
     // Bulk-чекбокс пускается только при `bulkSelect`.
     expect(inline).toMatch(/bulkSelect\s*&&/);
   });
@@ -490,7 +484,6 @@ describe('/admin/workshop-needs?view=orders — SaaS-карточка заказ
   test('inline-edit-row: комментарий скрыт по умолчанию, есть toggle', () => {
     // useState для collapse + кнопка-toggle.
     expect(inline).toMatch(/setCommentOpen/);
-    expect(inline).toMatch(/workshop-order-need-row__comment-toggle\b/);
     expect(inline).toMatch(/workshop-order-need-row__comment-button\b/);
     // Закрытое состояние — hidden input с тем же `name="comment"`,
     // чтобы submit отправлял текущее значение.
@@ -504,37 +497,20 @@ describe('/admin/workshop-needs?view=orders — SaaS-карточка заказ
     expect(inline).toMatch(/Комментарий есть/);
   });
 
-  test('CSS: `.workshop-order-need-row` — горизонтальный 10-колоночный grid', () => {
-    expect(css).toMatch(/\.workshop-order-need-row\s*\{/);
-    expect(css).toMatch(
-      /\.workshop-order-need-row\s*\{[\s\S]*?display:\s*grid/,
-    );
-    expect(css).toMatch(
-      /\.workshop-order-need-row\s*\{[\s\S]*?grid-template-columns:/,
-    );
-    // Компактные элементы строки.
-    expect(css).toMatch(/\.workshop-order-need-row__description\b/);
-    expect(css).toMatch(/\.workshop-order-need-row__cell\b/);
-    expect(css).toMatch(/\.workshop-order-need-row__field\b/);
-    expect(css).toMatch(/\.workshop-order-need-row__save\b/);
-    expect(css).toMatch(/\.workshop-order-need-row__comment-toggle\b/);
-    expect(css).toMatch(/\.workshop-order-need-row__comment\b/);
+  test('CSS: зональная строка `.wn-zrow` + зоны / поля / save / подвал', () => {
+    expect(css).toMatch(/\.wn-zrow\b/);
+    expect(css).toMatch(/\.wn-zone\b/);
+    expect(css).toMatch(/\.wn-field\b/);
+    expect(css).toMatch(/\.wn-save\b/);
+    expect(css).toMatch(/\.wn-zrow__foot\b/);
+    // Ссылка «Подробности» в подвале строки.
+    expect(css).toMatch(/\.wn-zrow__detail-link\b/);
   });
 
-  test('CSS: secstion-label и compact heights', () => {
+  test('CSS: section-label / rows + компактная save-кнопка зоны', () => {
     expect(css).toMatch(/\.workshop-need-section__label\b/);
     expect(css).toMatch(/\.workshop-need-section__rows\b/);
-    // Поля 32–36px, save-кнопка 36×36 — компактная SaaS-строка.
-    expect(css).toMatch(
-      /\.workshop-order-need-row__field[\s\S]*?min-height:\s*32px/,
-    );
-    expect(css).toMatch(
-      /\.workshop-order-need-row__save[\s\S]*?height:\s*36px/,
-    );
-    // Высота строки на desktop ≈ 56px (target 56–72px).
-    expect(css).toMatch(
-      /\.workshop-order-need-row\s*\{[\s\S]*?min-height:\s*56px/,
-    );
+    expect(css).toMatch(/\.wn-save\b/);
   });
 
   test('CSS: SaaS-карточка заказа имеет identity / preview / actions / body', () => {

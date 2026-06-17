@@ -20,24 +20,21 @@
  *   технический query-param `status` (см. `workshop-needs-api.ts`).
  *   Старый bookmark `?status=...` страница сознательно игнорирует.
  *
- * Polish-итерация (`?view=`):
- *   - `view=orders` (default) — потребности группируются в карточки
- *     по заказу. В заголовке группы — превью изделия / клиент /
- *     номенклатура / цвет / срок / статус заказа; внутри —
- *     четыре секции «Материалы / Фурнитура / Нанесение / Прочее»,
- *     группировка по `getWorkshopNeedKind(sourceType, calculationMethod)`
- *     из `@sewing/shared/workshop-needs`.
- *   - `view=lines` — построчный вид (одна потребность = одна
- *     полная строка) с улучшенными колонками («Заказ + клиент +
- *     превью», «Номенклатура», бейдж «Тип»).
+ * Единственный режим — группировка по заказу: потребности
+ * собираются в карточки по заказу. В заголовке группы — превью
+ * изделия / клиент / номенклатура / цвет / срок / статус заказа;
+ * внутри — четыре секции «Материалы / Фурнитура / Нанесение /
+ * Прочее», группировка по `getWorkshopNeedKind(...)` из
+ * `@sewing/shared/workshop-needs`. Прежний построчный вид
+ * (`?view=lines`) убран; вход в полную карточку
+ * `/admin/workshop-needs/[id]` теперь по ссылке «Подробности»
+ * прямо в строке потребности.
  *
- * Polish-итерация «Компактное inline-редактирование»:
- *   В обоих режимах (orders / lines) строка потребности использует
- *   один и тот же компонент `<InlineEditWorkshopNeedRow>` — это
- *   гарантирует, что закупщик правит цену/валюту/qty/поставщика
- *   в одинаковом UI, в каком бы режиме он ни был. В `view=orders`
- *   мы передаём `showOrderInfo = false` — превью/клиент уже в
- *   header группы заказа, поэтому строка ещё компактнее.
+ * Компактное inline-редактирование:
+ *   Строка потребности — компонент `<InlineEditWorkshopNeedRow>`:
+ *   закупщик правит цену/валюту/qty/поставщика/дату/статус прямо
+ *   в строке, не открывая карточку `[id]`. Превью/клиент уже в
+ *   header группы заказа, поэтому строка компактная.
  *
  * Backend: `GET /api/workshop-needs` (см.
  * `apps/api/src/modules/workshop-needs/*`). Никакой пагинации на сервере
@@ -71,10 +68,8 @@ import {
   AdminCard,
   AdminEmptyState,
   AdminPageShell,
-  AdminPagination,
   AdminSectionHeader,
   AdminStatusBadge,
-  paginate,
 } from '@/components/admin';
 import {
   formatOrderStatus,
@@ -108,8 +103,6 @@ const FEATURE_SUPPLIERS_ENABLED = isFeatureEnabled(
 
 export const dynamic = 'force-dynamic';
 
-type ViewMode = 'orders' | 'lines';
-
 interface SearchParams {
   page?: string;
   pageSize?: string;
@@ -126,11 +119,6 @@ interface SearchParams {
   status?: string;
   orderCalculationStatus?: string;
   orderId?: string;
-  view?: string;
-}
-
-function parseView(raw: string | undefined): ViewMode {
-  return raw === 'lines' ? 'lines' : 'orders';
 }
 
 function parseOrderCalculationStatus(
@@ -207,7 +195,6 @@ export default async function AdminWorkshopNeedsPage({
   const orderCalculationStatus = parseOrderCalculationStatus(
     searchParams?.orderCalculationStatus,
   );
-  const view = parseView(searchParams?.view);
 
   let items: WorkshopNeedListItemDto[] = [];
   let error: string | null = null;
@@ -240,16 +227,6 @@ export default async function AdminWorkshopNeedsPage({
     }
   }
 
-  // Базовый набор query-параметров, который нужно пробросить в
-  // переключатель режимов / пагинацию, чтобы фильтр не сбрасывался.
-  // Намеренно НЕ сохраняем `status` — старый фильтр строки больше
-  // не существует на этой странице.
-  const preserveFilters = {
-    search: search || undefined,
-    orderCalculationStatus,
-    orderId: orderId || undefined,
-  } as const;
-
   const hasNonDefaultFilter =
     Boolean(search) ||
     Boolean(orderId) ||
@@ -279,12 +256,6 @@ export default async function AdminWorkshopNeedsPage({
           className="admin-form-grid"
           style={{ marginTop: 4 }}
         >
-          {/*
-           * Сохраняем активный режим в форме — иначе нажатие «Применить»
-           * сбросит view на default. Скрытое поле проще, чем
-           * вшивать `view=` в `action`.
-           */}
-          <input type="hidden" name="view" value={view} />
           <div className="admin-field">
             <label htmlFor="needSearch">Поиск</label>
             <input
@@ -325,11 +296,7 @@ export default async function AdminWorkshopNeedsPage({
             </button>
             {hasNonDefaultFilter && (
               <Link
-                href={
-                  view === 'lines'
-                    ? '/admin/workshop-needs?view=lines'
-                    : '/admin/workshop-needs'
-                }
+                href="/admin/workshop-needs"
                 className="admin-btn admin-btn--ghost"
               >
                 Сбросить
@@ -345,86 +312,14 @@ export default async function AdminWorkshopNeedsPage({
           hint={`Всего: ${items.length}`}
         />
 
-        <ViewToggle view={view} preserveFilters={preserveFilters} />
-
-        {view === 'orders' ? (
-          <OrdersView
-            items={items}
-            orderCalculationStatus={orderCalculationStatus}
-            suppliers={supplierOptions}
-            suppliersEnabled={FEATURE_SUPPLIERS_ENABLED}
-          />
-        ) : (
-          <LinesView
-            items={items}
-            preserveFilters={preserveFilters}
-            orderCalculationStatus={orderCalculationStatus}
-            suppliers={supplierOptions}
-            suppliersEnabled={FEATURE_SUPPLIERS_ENABLED}
-          />
-        )}
+        <OrdersView
+          items={items}
+          orderCalculationStatus={orderCalculationStatus}
+          suppliers={supplierOptions}
+          suppliersEnabled={FEATURE_SUPPLIERS_ENABLED}
+        />
       </AdminCard>
     </AdminPageShell>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// View toggle: «По заказам» / «Построчно»
-// ---------------------------------------------------------------------------
-
-function buildHref(
-  base: string,
-  params: Record<string, string | undefined>,
-): string {
-  const search = new URLSearchParams();
-  for (const [k, v] of Object.entries(params)) {
-    if (v && v.length > 0) search.set(k, v);
-  }
-  const qs = search.toString();
-  return qs ? `${base}?${qs}` : base;
-}
-
-interface PreserveFilters {
-  search?: string | undefined;
-  orderCalculationStatus?: WorkshopNeedOrderCalculationFilter | undefined;
-  orderId?: string | undefined;
-}
-
-function ViewToggle({
-  view,
-  preserveFilters,
-}: {
-  view: ViewMode;
-  preserveFilters: PreserveFilters;
-}) {
-  const ordersHref = buildHref('/admin/workshop-needs', {
-    ...preserveFilters,
-    view: 'orders',
-  });
-  const linesHref = buildHref('/admin/workshop-needs', {
-    ...preserveFilters,
-    view: 'lines',
-  });
-  return (
-    <div
-      className="admin-tabs workshop-needs-view-toggle"
-      style={{ marginTop: -4, marginBottom: 8 }}
-    >
-      <Link
-        href={ordersHref}
-        className={`admin-tab ${view === 'orders' ? 'admin-tab--active' : ''}`}
-        prefetch={false}
-      >
-        По заказам
-      </Link>
-      <Link
-        href={linesHref}
-        className={`admin-tab ${view === 'lines' ? 'admin-tab--active' : ''}`}
-        prefetch={false}
-      >
-        Построчно
-      </Link>
-    </div>
   );
 }
 
@@ -718,7 +613,6 @@ function NeedSection({
           <InlineEditWorkshopNeedRow
             key={n.id}
             need={n}
-            showOrderInfo={false}
             bulkSelect={bulkSelect}
             suppliers={suppliers}
             suppliersEnabled={suppliersEnabled}
@@ -726,93 +620,5 @@ function NeedSection({
         ))}
       </div>
     </section>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// View: Построчно
-// ---------------------------------------------------------------------------
-
-function LinesView({
-  items,
-  preserveFilters,
-  orderCalculationStatus,
-  suppliers,
-  suppliersEnabled,
-}: {
-  items: WorkshopNeedListItemDto[];
-  preserveFilters: PreserveFilters;
-  orderCalculationStatus: WorkshopNeedOrderCalculationFilter;
-  suppliers: SupplierOption[];
-  suppliersEnabled: boolean;
-}) {
-  // Пагинируем уже отфильтрованный набор. Параметры пагинации в
-  // searchParams живут отдельно (`page` / `pageSize`); их подменяет
-  // `paginate(...)`.
-  const { pageItems, page, pageSize, total } = paginate(items, {});
-
-  return (
-    <>
-      {/*
-        Этап «Себестоимость заказа» (см.
-        `apps/web/app/admin/workshop-needs/inline-edit-row.tsx`):
-        строки в режиме «Построчно» — компактные inline-формы прямо
-        в строке. Закупщик может править цену / валюту / количество /
-        поставщика / дату / комментарий, не открывая отдельную
-        карточку `[id]`.
-      */}
-      <NeedsLinesList
-        rows={pageItems}
-        bulkSelect={FEATURE_PURCHASE_ORDERS_ENABLED}
-        orderCalculationStatus={orderCalculationStatus}
-        suppliers={suppliers}
-        suppliersEnabled={suppliersEnabled}
-      />
-      <AdminPagination
-        page={page}
-        pageSize={pageSize}
-        total={total}
-        basePath="/admin/workshop-needs"
-        preserveParams={{ ...preserveFilters, view: 'lines' }}
-        label="строк"
-      />
-    </>
-  );
-}
-
-function NeedsLinesList({
-  rows,
-  bulkSelect,
-  orderCalculationStatus,
-  suppliers,
-  suppliersEnabled,
-}: {
-  rows: WorkshopNeedListItemDto[];
-  bulkSelect: boolean;
-  orderCalculationStatus: WorkshopNeedOrderCalculationFilter;
-  suppliers: SupplierOption[];
-  suppliersEnabled: boolean;
-}) {
-  if (rows.length === 0) {
-    return <EmptyOrdersState filter={orderCalculationStatus} />;
-  }
-  const body = (
-    <div className="workshop-need-line-list">
-      {rows.map((n) => (
-        <InlineEditWorkshopNeedRow
-          key={n.id}
-          need={n}
-          showOrderInfo
-          bulkSelect={bulkSelect}
-          suppliers={suppliers}
-          suppliersEnabled={suppliersEnabled}
-        />
-      ))}
-    </div>
-  );
-  return bulkSelect ? (
-    <BulkCreatePoProvider needs={rows}>{body}</BulkCreatePoProvider>
-  ) : (
-    body
   );
 }

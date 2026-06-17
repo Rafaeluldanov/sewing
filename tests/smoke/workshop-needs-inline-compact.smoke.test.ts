@@ -41,13 +41,11 @@ const DETAIL_FORM =
 const CSS = 'apps/web/app/globals.css';
 
 describe('Workshop needs — компактное inline-редактирование', () => {
-  test('inline-edit-row использует grid `.workshop-need-line`, а не вертикальный admin-form-grid', () => {
+  test('inline-edit-row использует зональный grid `.wn-zrow`, а не вертикальный admin-form-grid', () => {
     const src = read(INLINE);
-    // Grid-класс строки (template literal в JSX).
-    expect(src).toMatch(/workshop-need-line workshop-need-inline-form/);
-    // Старый «двумерный» admin-form-grid layout полностью удалён
-    // из JSX (но может оставаться в JSDoc-комментариях). Берём
-    // только className-присвоения.
+    // Зональный grid строки (className в JSX).
+    expect(src).toMatch(/wn-zrow workshop-need-inline-form/);
+    // Старый «двумерный» admin-form-grid layout полностью удалён из JSX.
     expect(src).not.toMatch(/className="admin-form-grid"/);
     expect(src).not.toMatch(/className=\{?"admin-form-grid/);
   });
@@ -78,25 +76,22 @@ describe('Workshop needs — компактное inline-редактирова�
     expect(src).toMatch(/'\$'/);
   });
 
-  test('inline-edit-row принимает showOrderInfo / bulkSelect-пропы', () => {
+  test('inline-edit-row принимает bulkSelect-проп (showOrderInfo удалён)', () => {
     const src = read(INLINE);
-    expect(src).toMatch(
-      /showOrderInfo\?:\s*boolean/,
-    );
     expect(src).toMatch(/bulkSelect\?:\s*boolean/);
-    // Order info рендерится только при showOrderInfo = true.
-    expect(src).toMatch(/showOrderInfo\s*&&/);
+    // Bulk-чекбокс рендерится только при bulkSelect.
+    expect(src).toMatch(/bulkSelect\s*&&/);
+    // Проп showOrderInfo удалён вместе с построчным режимом.
+    expect(src).not.toMatch(/showOrderInfo/);
   });
 
-  test('page.tsx подключает InlineEditWorkshopNeedRow в обоих режимах (lines + orders)', () => {
+  test('page.tsx подключает InlineEditWorkshopNeedRow в группировке по заказу', () => {
     const src = read(PAGE);
-    // В lines view — с showOrderInfo (полная строка с превью + клиент + тип).
-    expect(src).toMatch(/showOrderInfo/);
-    // В orders view (внутри NeedSection) — без showOrderInfo.
-    expect(src).toMatch(/showOrderInfo=\{false\}/);
-    // Тот же компонент используется в обеих ветках.
-    const matches = src.match(/InlineEditWorkshopNeedRow/g) ?? [];
-    expect(matches.length).toBeGreaterThanOrEqual(2);
+    // Единственный режим — группировка по заказу (внутри NeedSection),
+    // проп showOrderInfo удалён.
+    expect(src).not.toMatch(/showOrderInfo/);
+    expect(src).toMatch(/<InlineEditWorkshopNeedRow/);
+    expect(src).toMatch(/NeedSection/);
   });
 
   test('CSS .workshop-need-line — горизонтальный grid с фиксированными колонками', () => {
@@ -137,25 +132,24 @@ describe('Workshop needs — компактное inline-редактирова�
 // Комментарий закупщика — collapse-блок, скрытый по умолчанию.
 
 describe('Workshop needs — SaaS-карточка заказа (view=orders)', () => {
-  test('inline-edit-row: showOrderInfo=false → корневой grid `.workshop-order-need-row`', () => {
+  test('inline-edit-row: корневой зональный grid `.wn-zrow`', () => {
     const src = read(INLINE);
-    expect(src).toMatch(
-      /workshop-order-need-row workshop-need-inline-form/,
-    );
-    // showOrderInfo=true должен оставаться lines-grid.
-    expect(src).toMatch(
-      /workshop-need-line workshop-need-inline-form workshop-need-line--with-order/,
-    );
+    expect(src).toMatch(/wn-zrow workshop-need-inline-form/);
+    expect(src).toMatch(/data-variant="orders"/);
+    // Превью / orderNumber / клиент строкой не рендерятся — они в
+    // header карточки заказа (page.tsx), а не в самой строке.
+    expect(src).not.toMatch(/data-cell="order"/);
   });
 
-  test('inline-edit-row: order info / kind badge / detail-link скрыты в orders-режиме', () => {
+  test('inline-edit-row: order info / kind badge убраны, detail-link «Подробности» всегда виден', () => {
     const src = read(INLINE);
-    // Order info ставится за `showOrderInfo &&`.
-    expect(src).toMatch(/\{showOrderInfo\s*&&/);
-    // Kind badge тоже за `showOrderInfo &&` (только в lines).
-    expect(src).toMatch(/showOrderInfo\s*&&[\s\S]*?workshop-need-kind-badge/);
-    // detail-link («Подробнее») рендерится только в showOrderInfo.
-    expect(src).toMatch(/showOrderInfo\s*&&[\s\S]*?Подробнее/);
+    // Order-info ячейка и бейдж типа жили только в построчном режиме —
+    // удалены вместе с ним.
+    expect(src).not.toMatch(/data-cell="order"/);
+    expect(src).not.toMatch(/workshop-need-kind-badge/);
+    // Ссылка «Подробности» → карточка [id] теперь в подвале строки.
+    expect(src).toMatch(/wn-zrow__detail-link/);
+    expect(src).toMatch(/Подробности/);
   });
 
   test('inline-edit-row: комментарий — collapse через client state', () => {
@@ -179,33 +173,18 @@ describe('Workshop needs — SaaS-карточка заказа (view=orders)', 
     expect(src).toMatch(/workshop-order-need-row__comment-dot/);
   });
 
-  test('inline-edit-row: save-кнопка в orders-режиме — компактная icon-кнопка', () => {
+  test('inline-edit-row: save-кнопка зоны «Логистика» — компактная icon-кнопка ZoneSaveButton', () => {
     const src = read(INLINE);
-    // SubmitButton имеет режим compact; в showOrderInfo=false
-    // используется именно он.
-    expect(src).toMatch(/SubmitButton\s+compact=\{!showOrderInfo\}/);
-    expect(src).toMatch(/workshop-order-need-row__save\b/);
+    expect(src).toMatch(/ZoneSaveButton/);
+    expect(src).toMatch(/wn-save/);
   });
 
-  test('CSS: `.workshop-order-need-row` — 10-колоночный grid + 56px row height', () => {
+  test('CSS: `.wn-zrow` — зональный grid строки (зоны / поля / save)', () => {
     const src = read(CSS);
-    // 10 колонок: minmax + 8 фикс + auto.
-    expect(src).toMatch(
-      /\.workshop-order-need-row\s*\{[\s\S]*?display:\s*grid[\s\S]*?grid-template-columns:[\s\S]*?minmax\(260px,\s*1\.8fr\)/,
-    );
-    expect(src).toMatch(
-      /\.workshop-order-need-row\s*\{[\s\S]*?gap:\s*8px/,
-    );
-    expect(src).toMatch(
-      /\.workshop-order-need-row\s*\{[\s\S]*?min-height:\s*56px/,
-    );
-    // Поля 32px, save-кнопка 36×36.
-    expect(src).toMatch(
-      /\.workshop-order-need-row__field[\s\S]*?min-height:\s*32px/,
-    );
-    expect(src).toMatch(
-      /\.workshop-order-need-row__save\s*\{[\s\S]*?height:\s*36px/,
-    );
+    expect(src).toMatch(/\.wn-zrow\b/);
+    expect(src).toMatch(/\.wn-zone\b/);
+    expect(src).toMatch(/\.wn-field\b/);
+    expect(src).toMatch(/\.wn-save\b/);
   });
 
   test('CSS: comment-toggle / comment / responsive 1199px и 720px для orders-row', () => {

@@ -288,18 +288,16 @@ describe('Web — /admin/workshop-needs inline edit', () => {
     expect(src).toMatch(/Сохранить/);
   });
 
-  test('page.tsx (workshop-needs) рендерит inline-edit в view=lines', () => {
-    // Polish-итерация «Компактное inline-редактирование»: lines
-    // view рендерит `<InlineEditWorkshopNeedRow showOrderInfo>`
-    // напрямую (без обёртки `NeedLineCard`). Тот же компонент
-    // используется в `view=orders` (внутри `OrderNeedGroupCard`/
-    // `NeedSection`) с `showOrderInfo={false}`, чтобы закупщик
-    // мог редактировать строки и в группе заказа.
+  test('page.tsx (workshop-needs) рендерит inline-edit в группировке по заказу', () => {
+    // Единственный режим — группировка по заказу: строки рисуются
+    // `<InlineEditWorkshopNeedRow>` внутри `OrderNeedGroupCard`/
+    // `NeedSection`. Прежний построчный режим (NeedsLinesList /
+    // showOrderInfo) удалён.
     const src = read('apps/web/app/admin/workshop-needs/page.tsx');
     expect(src).toMatch(/InlineEditWorkshopNeedRow/);
-    expect(src).toMatch(/NeedsLinesList/);
-    // showOrderInfo передаётся в обоих режимах.
-    expect(src).toMatch(/showOrderInfo/);
+    expect(src).toMatch(/NeedSection/);
+    expect(src).not.toMatch(/NeedsLinesList/);
+    expect(src).not.toMatch(/showOrderInfo/);
     // CompleteCalculationForm появляется в grouped view.
     expect(src).toMatch(/CompleteCalculationForm/);
   });
