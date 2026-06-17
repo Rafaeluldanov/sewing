@@ -251,15 +251,15 @@ describe('WorkshopNeedsService — расчёт по нормам фурниту
 // 5. Frontend — страница, форма, server action
 // ---------------------------------------------------------------------------
 
-describe('admin/patterns/[id] — блок «Фурнитура и нормы»', () => {
+describe('admin/patterns/[id] — блок «Нормы на изделие»', () => {
   test('страница подключает PatternItemParameterNormsForm', () => {
     const src = read(PAGE);
     expect(src).toMatch(/from '\.\/parameter-norms-form'/);
     expect(src).toMatch(/<PatternItemParameterNormsForm\b/);
-    expect(src).toMatch(/Фурнитура и нормы/);
+    expect(src).toMatch(/Нормы на изделие/);
   });
 
-  test('форма «Фурнитура и нормы» — клиентский компонент, не показывает roleKey', () => {
+  test('форма «Нормы на изделие» — клиентский компонент, не показывает roleKey', () => {
     expect(exists(FORM)).toBe(true);
     const src = read(FORM);
     expect(src.startsWith("'use client'")).toBe(true);
@@ -269,7 +269,7 @@ describe('admin/patterns/[id] — блок «Фурнитура и нормы»'
     expect(src).not.toMatch(/\{parameter\.roleKey\}/);
     // Терминология ТЗ §6.
     expect(src).toMatch(/Норма на изделие/);
-    expect(src).toMatch(/Фурнитура/);
+    expect(src).toMatch(/Параметр/);
     expect(src).toMatch(/Единица/);
     expect(src).toMatch(/Комментарий/);
   });

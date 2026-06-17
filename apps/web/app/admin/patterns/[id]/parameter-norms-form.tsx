@@ -91,8 +91,9 @@ export function PatternItemParameterNormsForm({
   if (visibleParameters.length === 0) {
     return (
       <div className="admin-muted" role="status">
-        В категории нет параметров фурнитуры. Добавьте параметры типа
-        «Количество на изделие» в категории.
+        В категории нет параметров с вводом «Количество на изделие».
+        Добавьте такие параметры (нитки, наполнитель, фурнитура,
+        маркировка) в категории.
       </div>
     );
   }
@@ -108,7 +109,7 @@ export function PatternItemParameterNormsForm({
         <table className="admin-table">
           <thead>
             <tr>
-              <th>Фурнитура</th>
+              <th>Параметр</th>
               <th style={{ width: 140 }}>Норма на изделие</th>
               <th style={{ width: 80 }}>Единица</th>
               <th>Комментарий</th>

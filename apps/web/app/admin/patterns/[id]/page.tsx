@@ -317,8 +317,8 @@ export default async function AdminPatternDetailPage({
           <AdminCard>
             <AdminSectionHeader
               icon={<Package size={18} strokeWidth={1.6} aria-hidden />}
-              title="Фурнитура и нормы"
-              hint="Норма «количество на изделие» по фурнитуре категории"
+              title="Нормы на изделие"
+              hint="Норма «количество на изделие» по параметрам категории (нитки, наполнитель, фурнитура, маркировка)"
             />
             <PatternParameterNormsBlock pattern={pattern} />
           </AdminCard>
