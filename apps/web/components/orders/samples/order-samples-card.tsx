@@ -3,8 +3,8 @@
 /**
  * `OrderSamplesCard` — карточка «Сигнальный образец» в карточке заказа
  * `/admin/orders/[id]?tab=signalSample`. Список запущенных образцов
- * + кнопка «Запустить образец» (открывает `StartOrderSampleModal` в
- * стиле inline-формы, см. `CreateFinishedGoodsShipmentDialog`).
+ * + кнопка «Запустить образец» (открывает `StartOrderSampleModal` —
+ * overlay-модалку в стиле `ClonePatternModal`).
  *
  * Серверный компонент-обёртка готовит данные (samples, sizes, routes)
  * и передаёт сюда; вся интерактивная часть — клиентская.
@@ -148,7 +148,7 @@ export function OrderSamplesCard({
         }}
       >
         <h2 style={{ margin: 0 }}>Сигнальный образец</h2>
-        {canManage && !openModal ? (
+        {canManage ? (
           <button
             type="button"
             className="admin-btn admin-btn--primary"
@@ -160,14 +160,12 @@ export function OrderSamplesCard({
       </header>
 
       {openModal ? (
-        <div style={{ marginTop: 12 }}>
-          <StartOrderSampleModal
-            orderId={orderId}
-            sizes={sizes}
-            routeTemplates={routeTemplates}
-            onClose={() => setOpenModal(false)}
-          />
-        </div>
+        <StartOrderSampleModal
+          orderId={orderId}
+          sizes={sizes}
+          routeTemplates={routeTemplates}
+          onClose={() => setOpenModal(false)}
+        />
       ) : null}
 
       {samples.length === 0 ? (
