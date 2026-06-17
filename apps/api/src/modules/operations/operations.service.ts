@@ -677,11 +677,20 @@ export class OperationsService {
    * Принимает опциональный `tx`, чтобы вызываться из той же транзакции,
    * что и создание `OperationEntry`. В EarningsService это критично —
    * см. ADR-0012 и `EarningsService.createImmediateForCutter`.
+   *
+   * `orderId` (опционально): если передан, для режима `FIXED` сначала
+   * ищется переопределённая расценка изделия в snapshot-е маршрута
+   * (`OrderRouteStep.rateOverride` по паре orderId+operationId). Если
+   * override задан — он вытесняет `Operation.fixedRate`. Это «цена
+   * операции зависит от изделия»: одна операция «Оверлок» на всю
+   * систему, но в каждом тираже своя расценка. Для `BY_SIZE` и
+   * `SALARY_ONLY` override не применяется (размерная матрица / оклад).
    */
   async resolveRate(
     operationId: string,
     sizeId: string,
     tx?: Prisma.TransactionClient,
+    orderId?: string | null,
   ): Promise<Prisma.Decimal | null> {
     const client: Prisma.TransactionClient | PrismaService = tx ?? this.prisma;
     const op = await client.operation.findUnique({
@@ -693,14 +702,25 @@ export class OperationsService {
     if (op.pricingMode === 'SALARY_ONLY') return null;
 
     if (op.pricingMode === 'FIXED') {
-      if (!op.fixedRate) {
+      // Переопределение расценки изделием (snapshot маршрута заказа).
+      // `findFirst`, а не `findUnique`: на `OrderRouteStep` нет
+      // уникального индекса (orderId, operationId), но операция в
+      // маршруте встречается не более одного раза.
+      const override = orderId
+        ? await client.orderRouteStep.findFirst({
+            where: { orderId, operationId, rateOverride: { not: null } },
+            select: { rateOverride: true },
+          })
+        : null;
+      const rate = override?.rateOverride ?? op.fixedRate;
+      if (!rate) {
         const sz = await client.size.findUnique({
           where: { id: sizeId },
           select: { code: true },
         });
         throw new OperationRateMissingException(op.code, sz?.code ?? sizeId);
       }
-      return op.fixedRate;
+      return rate;
     }
 
     // BY_SIZE

@@ -1405,7 +1405,12 @@ export class OrdersService {
     const currentSteps = await tx.orderRouteStep.findMany({
       where: { orderId },
       orderBy: { index: 'asc' },
-      select: { index: true, operationId: true, parallelGroup: true },
+      select: {
+        index: true,
+        operationId: true,
+        parallelGroup: true,
+        rateOverride: true,
+      },
     });
 
     if (!order.routeTemplateId) {
@@ -1422,13 +1427,21 @@ export class OrdersService {
 
     const equal =
       desiredSteps.length === currentSteps.length &&
-      desiredSteps.every(
-        (s, i) =>
-          currentSteps[i]?.index === s.index &&
-          currentSteps[i]?.operationId === s.operationId &&
-          (currentSteps[i]?.parallelGroup ?? null) ===
-            (s.parallelGroup ?? null),
-      );
+      desiredSteps.every((s, i) => {
+        const cur = currentSteps[i];
+        const curRate = cur?.rateOverride ?? null;
+        const wantRate = s.rateOverride ?? null;
+        const rateEq =
+          curRate === null
+            ? wantRate === null
+            : wantRate !== null && curRate.equals(wantRate);
+        return (
+          cur?.index === s.index &&
+          cur?.operationId === s.operationId &&
+          (cur?.parallelGroup ?? null) === (s.parallelGroup ?? null) &&
+          rateEq
+        );
+      });
 
     if (equal) {
       return { steps: desiredSteps.length, replaced: false };
@@ -1442,6 +1455,7 @@ export class OrdersService {
           index: s.index,
           operationId: s.operationId,
           parallelGroup: s.parallelGroup ?? null,
+          rateOverride: s.rateOverride ?? null,
         })),
       });
     }
@@ -2220,6 +2234,7 @@ export class OrdersService {
       index: number;
       operationId: string;
       parallelGroup: number | null;
+      rateOverride: Prisma.Decimal | null;
     }[] = [];
     if (order.routeTemplateId) {
       snapshotSteps = await this.routes.getActiveStepsForSnapshot(
@@ -2351,6 +2366,7 @@ export class OrdersService {
               index: s.index,
               operationId: s.operationId,
               parallelGroup: s.parallelGroup ?? null,
+              rateOverride: s.rateOverride ?? null,
             })),
           });
         }
@@ -3062,6 +3078,8 @@ export class OrdersService {
           operationCode: s.operation.code,
           operationName: s.operation.name,
           parallelGroup: s.parallelGroup,
+          rateOverride:
+            s.rateOverride != null ? s.rateOverride.toNumber() : null,
         })),
       materialRequirements: order.materialRequirements
         .slice()

@@ -2686,6 +2686,16 @@ model RouteTemplateStep {
   /// шаги группы завершены. `null` — обычный последовательный шаг.
   /// Настраивается в редакторе маршрута (`/admin/routes/[id]`).
   parallelGroup Int?
+  /// Переопределение сдельной расценки операции **для этого изделия**
+  /// (см. ТЗ «цена операции зависит от изделия»). `null` — берётся
+  /// дефолт `Operation.fixedRate`; задано — эта сумма вытесняет
+  /// дефолт в расчёте зарплаты и плановой себестоимости. Применяется
+  /// только к операциям `pricingMode = FIXED` (для `BY_SIZE` цена
+  /// остаётся размерной матрицей `OperationRateBySize`, для
+  /// `SALARY_ONLY` сделки нет). Снимок едет в `OrderRouteStep.rateOverride`
+  /// при старте заказа — поздняя правка шаблона не трогает запущенные
+  /// тиражи. Источник истины при чтении — `OperationsService.resolveRate`.
+  rateOverride  Decimal? @db.Decimal(12, 2)
 
   template  RouteTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
   operation Operation     @relation(fields: [operationId], references: [id])
@@ -2709,6 +2719,13 @@ model OrderRouteStep {
   /// этап (см. enforcement в `PassportsService`). `null` —
   /// последовательный шаг.
   parallelGroup Int?
+  /// Снимок `RouteTemplateStep.rateOverride` на момент старта заказа:
+  /// сдельная расценка операции, переопределённая для этого изделия.
+  /// `null` — расценка по дефолту операции (`Operation.fixedRate`).
+  /// Читается в `OperationsService.resolveRate` (через `orderId`) и в
+  /// расчёте B2B-базы закройщика — поздняя правка шаблона маршрута уже
+  /// не влияет на запущенный тираж.
+  rateOverride  Decimal? @db.Decimal(12, 2)
 
   order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   operation Operation @relation(fields: [operationId], references: [id])

@@ -24,6 +24,28 @@ export const ROUTE_TEMPLATE_CODE_PATTERN = /^[A-Z0-9][A-Z0-9_-]{0,47}$/;
 export const ROUTE_TEMPLATE_CODE_MAX_LENGTH = 48;
 export const ROUTE_TEMPLATE_NAME_MAX_LENGTH = 120;
 export const ROUTE_TEMPLATE_MAX_STEPS = 200;
+/** Потолок переопределения сдельной расценки (₽/шт) — защита от опечаток. */
+export const ROUTE_STEP_RATE_OVERRIDE_MAX = 1_000_000;
+
+/**
+ * Переопределение сдельной расценки операции «для изделия»
+ * (`RouteTemplateStep.rateOverride`). `null`/не задано — расценка по
+ * дефолту операции. Деньги, поэтому ≤ 2 знака после запятой и ≥ 0.
+ * Применяется только к операциям `pricingMode = FIXED` (бэкенд тихо
+ * игнорирует override для BY_SIZE / SALARY_ONLY).
+ */
+const RouteStepRateOverrideField = z
+  .number({ invalid_type_error: 'Расценка должна быть числом' })
+  .nonnegative('Расценка не может быть отрицательной')
+  .max(
+    ROUTE_STEP_RATE_OVERRIDE_MAX,
+    `Расценка не больше ${ROUTE_STEP_RATE_OVERRIDE_MAX} ₽`,
+  )
+  .refine(
+    (v) => Number.isInteger(Math.round(v * 100)) && Math.abs(v * 100 - Math.round(v * 100)) < 1e-9,
+    'Расценка: не больше 2 знаков после запятой',
+  )
+  .nullable();
 
 const RouteTemplateCodeField = z
   .string()
@@ -66,6 +88,13 @@ export const RouteTemplateStepInputSchema = z.object({
    * «↕ параллельно с соседним» в редакторе маршрута.
    */
   parallelWithPrev: z.boolean().optional().default(false),
+  /**
+   * Переопределение сдельной расценки операции для этого изделия
+   * (`RouteTemplateStep.rateOverride`). `null`/не задано — берётся
+   * дефолт `Operation.fixedRate`. Действует только для операций
+   * `pricingMode = FIXED` (см. `OperationsService.resolveRate`).
+   */
+  rateOverride: RouteStepRateOverrideField.optional().default(null),
 });
 export type RouteTemplateStepInputDto = z.infer<
   typeof RouteTemplateStepInputSchema
@@ -174,6 +203,12 @@ export interface RouteTemplateStepDto {
    * `parallelWithPrev = parallelGroup != null && parallelGroup === steps[i-1].parallelGroup`.
    */
   parallelGroup: number | null;
+  /**
+   * Переопределённая сдельная расценка операции для этого изделия
+   * (₽/шт) или `null` (расценка по дефолту операции). Значимо только
+   * для операций `pricingMode = FIXED`.
+   */
+  rateOverride: number | null;
 }
 
 export interface RouteTemplateSummaryDto {
@@ -204,4 +239,10 @@ export interface OrderRouteStepDto {
   operationName: string;
   /** Снимок параллельной группы шага (см. `RouteTemplateStepDto`). */
   parallelGroup: number | null;
+  /**
+   * Снимок переопределённой расценки операции для изделия (₽/шт) или
+   * `null` (расценка по дефолту операции). Зафиксирован при старте
+   * заказа из `RouteTemplateStep.rateOverride`.
+   */
+  rateOverride: number | null;
 }

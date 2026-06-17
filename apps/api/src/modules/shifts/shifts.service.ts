@@ -535,6 +535,8 @@ export class ShiftsService {
         category: o.category,
         sortOrder: o.sortOrder,
         active: o.active,
+        pricingMode: o.pricingMode,
+        fixedRate: o.fixedRate != null ? o.fixedRate.toNumber() : null,
       })),
     };
   }

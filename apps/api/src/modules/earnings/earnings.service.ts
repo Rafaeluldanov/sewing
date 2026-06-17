@@ -216,6 +216,9 @@ export class EarningsService {
       args.operationId,
       args.sizeId,
       tx,
+      // Цена раскроя тоже может быть переопределена изделием через
+      // snapshot маршрута (`OrderRouteStep.rateOverride`).
+      args.orderId,
     );
     if (!rate) return;
 
@@ -566,6 +569,7 @@ export class EarningsService {
               select: {
                 index: true,
                 operationId: true,
+                rateOverride: true,
                 operation: {
                   select: {
                     id: true,
@@ -647,13 +651,16 @@ export class EarningsService {
 
       let rate: Prisma.Decimal | null = null;
       if (op.pricingMode === 'FIXED') {
-        if (op.fixedRate === null || op.fixedRate === undefined) {
+        // Переопределение изделием (snapshot маршрута) вытесняет дефолт
+        // операции — та же логика, что в `OperationsService.resolveRate`.
+        const effectiveRate = step.rateOverride ?? op.fixedRate;
+        if (effectiveRate === null || effectiveRate === undefined) {
           warnings.push(
             `Операция ${op.code}: FIXED без fixedRate, пропущена`,
           );
           continue;
         }
-        rate = op.fixedRate;
+        rate = effectiveRate;
       } else if (op.pricingMode === 'BY_SIZE') {
         const row = await tx.operationRateBySize.findUnique({
           where: {
@@ -766,7 +773,18 @@ export class EarningsService {
     if (!employee || !employee.active) return;
     if (!isPieceworkEligible(employee.compensationType)) return;
 
-    const rate = await this.operations.resolveRate(op.id, args.sizeId, tx);
+    // orderId нужен, чтобы resolveRate подхватил переопределённую
+    // изделием расценку (`OrderRouteStep.rateOverride`) для FIXED-операций.
+    const passportForOrder = await tx.passport.findUnique({
+      where: { id: args.passportId },
+      select: { orderId: true },
+    });
+    const rate = await this.operations.resolveRate(
+      op.id,
+      args.sizeId,
+      tx,
+      passportForOrder?.orderId ?? null,
+    );
     if (!rate) return;
 
     const baseAmount = roundMoney(rate.times(args.qty));

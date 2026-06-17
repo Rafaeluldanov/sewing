@@ -52,7 +52,26 @@ function parseSteps(form: FormData): RouteTemplateStepInputDto[] {
     // финальном порядке. Backend свернёт связанные соседние шаги в одну
     // параллельную группу (`RoutesService.computeParallelGroups`).
     parallelWithPrev: form.get(`stepParallel[${operationId}]`) === 'on',
+    // Переопределение сдельной расценки операции для изделия. Пустое
+    // поле / не FIXED-операция (input не отрендерен) → null = дефолт
+    // операции. Бэкенд игнорирует override для BY_SIZE / SALARY_ONLY.
+    rateOverride: parseRate(form.get(`stepRate[${operationId}]`)),
   }));
+}
+
+/**
+ * Парсит сдельную расценку из FormData. Пустая строка / `null` /
+ * невалидное число → `null` (значит «по умолчанию операции»).
+ * Отрицательные значения отбрасываем в `null` — Zod на бэкенде всё
+ * равно отвергнет, но так UI не отправит заведомо мусор.
+ */
+function parseRate(raw: FormDataEntryValue | null): number | null {
+  if (raw === null) return null;
+  const s = String(raw).trim();
+  if (s === '') return null;
+  const n = Number(s);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return n;
 }
 
 export async function createRouteTemplateAction(

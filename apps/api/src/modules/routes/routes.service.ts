@@ -100,14 +100,24 @@ export class RoutesService {
   async getActiveStepsForSnapshot(
     templateId: string,
   ): Promise<
-    { index: number; operationId: string; parallelGroup: number | null }[]
+    {
+      index: number;
+      operationId: string;
+      parallelGroup: number | null;
+      rateOverride: Prisma.Decimal | null;
+    }[]
   > {
     const template = await this.prisma.routeTemplate.findUnique({
       where: { id: templateId },
       include: {
         steps: {
           orderBy: { index: 'asc' },
-          select: { index: true, operationId: true, parallelGroup: true },
+          select: {
+            index: true,
+            operationId: true,
+            parallelGroup: true,
+            rateOverride: true,
+          },
         },
       },
     });
@@ -116,6 +126,7 @@ export class RoutesService {
       index: s.index,
       operationId: s.operationId,
       parallelGroup: s.parallelGroup,
+      rateOverride: s.rateOverride,
     }));
   }
 
@@ -147,6 +158,7 @@ export class RoutesService {
               operationId: s.operationId,
               isOptional: s.isOptional ?? false,
               parallelGroup: groups[i],
+              rateOverride: s.rateOverride ?? null,
             })),
           });
         }
@@ -272,6 +284,7 @@ export class RoutesService {
         operationId: s.operationId,
         isOptional: s.isOptional ?? false,
         parallelGroup: groups[i],
+        rateOverride: s.rateOverride ?? null,
       })),
     });
   }
@@ -329,6 +342,7 @@ export class RoutesService {
       operationName: s.operation.name,
       isOptional: s.isOptional,
       parallelGroup: s.parallelGroup,
+      rateOverride: s.rateOverride != null ? s.rateOverride.toNumber() : null,
     }));
     return {
       id: row.id,

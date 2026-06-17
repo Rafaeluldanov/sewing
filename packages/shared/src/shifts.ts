@@ -100,6 +100,19 @@ export interface OperationLiteDto {
   category: string;
   sortOrder: number;
   active: boolean;
+  /**
+   * Способ оплаты операции (`FIXED` | `BY_SIZE` | `SALARY_ONLY`).
+   * Опционально: не все источники `OperationLiteDto` его заполняют.
+   * Редактор маршрута использует его, чтобы показывать поле
+   * «расценка для изделия» только у сдельных `FIXED`-операций.
+   */
+  pricingMode?: string;
+  /**
+   * Дефолтная сдельная расценка операции (₽/шт) для `pricingMode = FIXED`
+   * или `null`. Показывается в UI как «по умолчанию N ₽», поверх
+   * которой задаётся переопределение для конкретного изделия.
+   */
+  fixedRate?: number | null;
 }
 
 /** Ответ `GET /api/shifts/meta` — всё нужное для формы старта смены. */

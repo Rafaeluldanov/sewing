@@ -101,6 +101,7 @@ export class OrderOperationPlanService {
                 index: true,
                 isOptional: true,
                 operationId: true,
+                rateOverride: true,
                 operation: {
                   select: {
                     id: true,
@@ -266,8 +267,12 @@ export class OrderOperationPlanService {
             rate = null;
           }
         } else if (op.pricingMode === 'FIXED') {
-          if (op.fixedRate != null) {
-            rate = op.fixedRate;
+          // Переопределение расценки изделием (RouteTemplateStep.
+          // rateOverride) вытесняет дефолт операции — план себестоимости
+          // должен совпадать с фактическим начислением (resolveRate).
+          const effectiveRate = step.rateOverride ?? op.fixedRate;
+          if (effectiveRate != null) {
+            rate = effectiveRate;
           } else {
             warningsSet.add(
               `Нет ставки операции «${opLabel}» — план по этой операции не учтён`,

@@ -32,6 +32,12 @@ interface SelectedStep {
   isOptional: boolean;
   /** «↕ параллельно с предыдущим шагом» — взаимозаменяемы по порядку. */
   parallelWithPrev: boolean;
+  /**
+   * Переопределённая сдельная расценка операции для этого изделия
+   * (₽/шт) или `null` — расценка по дефолту операции. Значимо только
+   * для `pricingMode = FIXED`.
+   */
+  rateOverride: number | null;
 }
 
 function SubmitButton({ mode }: { mode: Mode }) {
@@ -84,6 +90,7 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
         i > 0 &&
         s.parallelGroup != null &&
         s.parallelGroup === ordered[i - 1].parallelGroup,
+      rateOverride: s.rateOverride,
     }));
   }, [mode, template]);
 
@@ -129,8 +136,24 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
     setSelected((prev) => {
       const exists = prev.some((s) => s.operationId === operationId);
       if (exists) return prev.filter((s) => s.operationId !== operationId);
-      return [...prev, { operationId, isOptional: false, parallelWithPrev: false }];
+      return [
+        ...prev,
+        {
+          operationId,
+          isOptional: false,
+          parallelWithPrev: false,
+          rateOverride: null,
+        },
+      ];
     });
+  };
+
+  const setRate = (operationId: string, value: number | null) => {
+    setSelected((prev) =>
+      prev.map((s) =>
+        s.operationId === operationId ? { ...s, rateOverride: value } : s,
+      ),
+    );
   };
 
   const setParallel = (operationId: string, value: boolean) => {
@@ -255,6 +278,40 @@ export function RouteTemplateForm({ mode, operations, template }: Props) {
                     />
                     опц.
                   </label>
+                  {op.pricingMode === 'FIXED' && (
+                    <label
+                      className="admin-step-edit__rate"
+                      title="Сдельная расценка этой операции для данного изделия. Пусто — берётся цена операции по умолчанию."
+                      style={{
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: 4,
+                        fontSize: '0.82rem',
+                      }}
+                    >
+                      <input
+                        type="number"
+                        inputMode="decimal"
+                        min={0}
+                        step="0.01"
+                        name={`stepRate[${step.operationId}]`}
+                        value={step.rateOverride ?? ''}
+                        placeholder={
+                          op.fixedRate != null ? String(op.fixedRate) : '—'
+                        }
+                        onChange={(e) => {
+                          const raw = e.target.value.trim();
+                          setRate(
+                            step.operationId,
+                            raw === '' ? null : Number(raw),
+                          );
+                        }}
+                        style={{ width: 80 }}
+                        aria-label="Расценка операции для изделия, ₽/шт"
+                      />
+                      ₽/шт
+                    </label>
+                  )}
                   <button
                     type="button"
                     className={`admin-btn admin-btn--ghost admin-btn--icon${parallel ? ' admin-btn--active' : ''}`}
