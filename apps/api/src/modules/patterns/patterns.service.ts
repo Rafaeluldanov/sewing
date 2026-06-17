@@ -1387,6 +1387,7 @@ export class PatternsService {
             id: p.id,
             categoryId: p.categoryId,
             roleKey: p.roleKey,
+            subtypeKey: p.subtypeKey,
             label: p.label,
             inputType: p.inputType,
             unit: p.unit,

@@ -63,6 +63,10 @@ import {
   getPatternCategoryParameterGroupConfig,
   type PatternCategoryParameterInputType,
 } from '@sewing/shared/pattern-categories';
+import {
+  getMaterialSubtype,
+  getMaterialSubtypesByGroup,
+} from '@sewing/shared/material-characteristics';
 import { createPatternCategoryPageAction } from './actions';
 import {
   initialCreatePatternCategoryPageState,
@@ -84,6 +88,12 @@ interface ParameterRow {
    * лейбл из `PATTERN_CATEGORY_PARAMETER_GROUPS`.
    */
   roleKey: string;
+  /**
+   * Ключ подтипа из `MATERIAL_SUBTYPES` (таблица TEEON.pdf). `null` =
+   * «Другое» (ручной ввод названия). При выборе подтипа авто-заполняются
+   * название, «Ввод» и «Единица».
+   */
+  subtypeKey: string | null;
   /** Тип ввода (выбор «Как заполнять»). */
   inputType: PatternCategoryParameterInputType;
   /** Единица измерения (whitelist по группе). */
@@ -109,6 +119,7 @@ function makeRow(overrides: Partial<ParameterRow> = {}): ParameterRow {
     uid: makeUid(),
     label: '',
     roleKey,
+    subtypeKey: null,
     inputType,
     unit,
     isRequired: false,
@@ -322,9 +333,10 @@ const TEMPLATES: Template[] = [
 
 function syncRowOnRoleChange(row: ParameterRow, nextRoleKey: string): ParameterRow {
   const config = getPatternCategoryParameterGroupConfig(nextRoleKey);
+  // Смена группы сбрасывает подтип: подтипы привязаны к группе.
   if (!config) {
     // Custom-группа: оставляем что есть, но обновляем roleKey.
-    return { ...row, roleKey: nextRoleKey };
+    return { ...row, roleKey: nextRoleKey, subtypeKey: null };
   }
   const allowedInputTypes = config.allowedInputTypes;
   const inputType = (allowedInputTypes as readonly string[]).includes(
@@ -336,7 +348,40 @@ function syncRowOnRoleChange(row: ParameterRow, nextRoleKey: string): ParameterR
   const unit = (allowedUnits as readonly string[]).includes(row.unit)
     ? row.unit
     : config.defaultUnit;
-  return { ...row, roleKey: nextRoleKey, inputType, unit };
+  return { ...row, roleKey: nextRoleKey, subtypeKey: null, inputType, unit };
+}
+
+// Выбор подтипа из таблицы TEEON.pdf авто-заполняет название, «Ввод» и
+// «Единицу» (значения остаются редактируемыми). Пустой выбор = «Другое»
+// (ручной ввод) — поля не трогаем, только сбрасываем subtypeKey.
+function syncRowOnSubtypeChange(
+  row: ParameterRow,
+  nextSubtypeKey: string,
+): ParameterRow {
+  if (nextSubtypeKey === '') {
+    return { ...row, subtypeKey: null };
+  }
+  const subtype = getMaterialSubtype(nextSubtypeKey);
+  if (!subtype) return { ...row, subtypeKey: nextSubtypeKey };
+  const config = getPatternCategoryParameterGroupConfig(row.roleKey);
+  const inputType =
+    config &&
+    !(config.allowedInputTypes as readonly string[]).includes(
+      subtype.defaultInputType,
+    )
+      ? config.defaultInputType
+      : subtype.defaultInputType;
+  const allowedUnits = config?.allowedUnits ?? subtype.allowedUnits;
+  const unit = (allowedUnits as readonly string[]).includes(subtype.defaultUnit)
+    ? subtype.defaultUnit
+    : (config?.defaultUnit ?? subtype.defaultUnit);
+  return {
+    ...row,
+    subtypeKey: nextSubtypeKey,
+    label: subtype.label,
+    inputType,
+    unit,
+  };
 }
 
 function syncRowOnInputTypeChange(
@@ -439,6 +484,12 @@ export function CreatePatternCategoryForm() {
           let next = { ...r, ...patch };
           if (patch.roleKey !== undefined && patch.roleKey !== r.roleKey) {
             next = syncRowOnRoleChange(next, patch.roleKey);
+          }
+          if (
+            patch.subtypeKey !== undefined &&
+            patch.subtypeKey !== r.subtypeKey
+          ) {
+            next = syncRowOnSubtypeChange(next, patch.subtypeKey ?? '');
           }
           if (
             patch.inputType !== undefined &&
@@ -697,14 +748,16 @@ export function CreatePatternCategoryForm() {
               <col />
               <col />
               <col />
+              <col />
               <col className="pattern-category-param-table__unit-col" />
               <col className="pattern-category-param-table__required-col" />
               <col className="pattern-category-param-table__actions-col" />
             </colgroup>
             <thead>
               <tr>
-                <th>Название параметра</th>
                 <th>Группа параметра</th>
+                <th>Параметр</th>
+                <th>Название параметра</th>
                 <th>
                   Ввод в номенклатуре
                   <div
@@ -737,6 +790,9 @@ export function CreatePatternCategoryForm() {
                 const groupConfig = getPatternCategoryParameterGroupConfig(
                   p.roleKey,
                 );
+                const subtypes = groupConfig
+                  ? getMaterialSubtypesByGroup(p.roleKey)
+                  : [];
                 const allowedInputTypes =
                   groupConfig?.allowedInputTypes ??
                   (Object.keys(
@@ -787,20 +843,6 @@ export function CreatePatternCategoryForm() {
                     }}
                   >
                     <td>
-                      <input
-                        name={`param_${i}_label`}
-                        type="text"
-                        required
-                        maxLength={100}
-                        value={p.label}
-                        onChange={(e) =>
-                          updateParameter(p.uid, { label: e.target.value })
-                        }
-                        placeholder="Например: Основное полотно"
-                        style={{ width: 200 }}
-                      />
-                    </td>
-                    <td>
                       <select
                         name={`param_${i}_roleKey`}
                         value={p.roleKey}
@@ -824,6 +866,47 @@ export function CreatePatternCategoryForm() {
                           </option>
                         ))}
                       </select>
+                    </td>
+                    <td>
+                      {/* Подтип из таблицы TEEON.pdf для выбранной
+                          группы. «Другое (вручную)» = свободный ввод
+                          названия (subtypeKey пуст). */}
+                      <input
+                        type="hidden"
+                        name={`param_${i}_subtypeKey`}
+                        value={p.subtypeKey ?? ''}
+                      />
+                      <select
+                        value={p.subtypeKey ?? ''}
+                        onChange={(e) =>
+                          updateParameter(p.uid, {
+                            subtypeKey: e.target.value || null,
+                          })
+                        }
+                        aria-label="Параметр (подтип)"
+                        disabled={subtypes.length === 0}
+                      >
+                        <option value="">Другое (вручную)</option>
+                        {subtypes.map((s) => (
+                          <option key={s.subtypeKey} value={s.subtypeKey}>
+                            {s.label}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        name={`param_${i}_label`}
+                        type="text"
+                        required
+                        maxLength={100}
+                        value={p.label}
+                        onChange={(e) =>
+                          updateParameter(p.uid, { label: e.target.value })
+                        }
+                        placeholder="Например: Основное полотно"
+                        style={{ width: 200 }}
+                      />
                     </td>
                     <td>
                       <select

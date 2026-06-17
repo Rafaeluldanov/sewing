@@ -113,6 +113,67 @@ describeWithDb('integration — pattern-categories', () => {
     expect(got.body.parameters).toHaveLength(2);
   });
 
+  test('параметр с подтипом (FILLER/SINTEPON) сохраняет и возвращает subtypeKey', async () => {
+    const r = await request(t.app.getHttpServer())
+      .post('/api/pattern-categories')
+      .set('Cookie', t.adminCookie)
+      .send({
+        name: 'Жилетки на синтепоне',
+        iconKey: 'PACKAGE',
+        parameters: [
+          {
+            roleKey: 'FILLER',
+            subtypeKey: 'SINTEPON',
+            label: 'Синтепон',
+            inputType: 'LINEAR_M_BY_SIZE',
+            unit: 'м пог.',
+          },
+        ],
+      })
+      .expect(201);
+    expect(r.body.parameters).toHaveLength(1);
+    expect(r.body.parameters[0].subtypeKey).toBe('SINTEPON');
+    expect(r.body.parameters[0].roleKey).toBe('FILLER');
+
+    // Параметр «Другое» (без подтипа) сохраняется с subtypeKey = null.
+    const r2 = await request(t.app.getHttpServer())
+      .post('/api/pattern-categories')
+      .set('Cookie', t.adminCookie)
+      .send({
+        name: 'Категория ручная',
+        iconKey: 'PACKAGE',
+        parameters: [
+          {
+            roleKey: 'MAIN_FABRIC',
+            label: 'Своё полотно',
+            inputType: 'LINEAR_M_BY_SIZE',
+          },
+        ],
+      })
+      .expect(201);
+    expect(r2.body.parameters[0].subtypeKey).toBeNull();
+  });
+
+  test('подтип чужой группы (PACKAGING + SINTEPON) отклоняется', async () => {
+    await request(t.app.getHttpServer())
+      .post('/api/pattern-categories')
+      .set('Cookie', t.adminCookie)
+      .send({
+        name: 'Битая категория',
+        iconKey: 'PACKAGE',
+        parameters: [
+          {
+            roleKey: 'PACKAGING',
+            subtypeKey: 'SINTEPON',
+            label: 'Синтепон',
+            inputType: 'QTY_PER_ITEM',
+            unit: 'шт',
+          },
+        ],
+      })
+      .expect(400);
+  });
+
   // -------------------------------------------------------------------------
   // 2. Лекало с категорией
   // -------------------------------------------------------------------------

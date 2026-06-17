@@ -3458,6 +3458,16 @@ model PatternCategoryParameter {
   /// параметрах категории; без категории — fallback на глобальный
   /// `MATERIAL_ROLES`.
   roleKey     String
+  /// Ключ подтипа материала из `@sewing/shared::MATERIAL_SUBTYPES`
+  /// (`SINTEPON` / `ZIPPER` / `DUBLERIN` / ...). Выбирается в форме
+  /// категории вторым шагом после группы (`roleKey`): группа →
+  /// конкретный параметр из таблицы TEEON.pdf. `null` = параметр
+  /// заведён вручную («Другое»), как в legacy-категориях. Если задан —
+  /// `MaterialSubtypeConfig.groupRoleKey` обязан совпадать с `roleKey`
+  /// (валидируется в shared-Zod `PatternCategoryParameterInputSchema`).
+  /// Хранение строкой (без enum) — расширение каталога не требует
+  /// миграции.
+  subtypeKey  String?
   /// Человекочитаемое название параметра — UI рисует его в шапке
   /// колонки таблицы «Площади материалов» (например, «Основной
   /// материал», «Кашкорсе»).

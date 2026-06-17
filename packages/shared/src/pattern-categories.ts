@@ -32,6 +32,8 @@
 
 import { z } from 'zod';
 
+import { getMaterialSubtype } from './material-characteristics';
+
 // ---------------------------------------------------------------------------
 // Constants / whitelists
 // ---------------------------------------------------------------------------
@@ -560,6 +562,16 @@ export const PatternCategoryParameterInputSchema = z
      * со старыми категориями.
      */
     unit: UnitField.optional(),
+    /**
+     * Ключ подтипа из `MATERIAL_SUBTYPES` (см. `./material-characteristics`).
+     * Заполняется, когда параметр выбран из таблицы TEEON.pdf
+     * (группа → подтип). `null`/не задан = «Другое» (ручной ввод
+     * названия), как в legacy-категориях.
+     */
+    subtypeKey: optionalNullableString(
+      PATTERN_CATEGORY_PARAMETER_ROLE_KEY_MAX_LENGTH,
+      'Ключ подтипа',
+    ),
     isRequired: z.boolean().optional(),
     sortOrder: z.number().int().min(0).max(100000).optional(),
     status: PatternCategoryParameterStatusSchema.optional(),
@@ -580,6 +592,27 @@ export const PatternCategoryParameterInputSchema = z
         message:
           'Для типа «Площадь по размерам» единица должна быть «м²» (или не задана).',
       });
+    }
+
+    // Если параметр привязан к подтипу из каталога — подтип обязан
+    // существовать и принадлежать выбранной группе (`roleKey`).
+    // Это гарантирует, что «Синтепон» нельзя завести под группой
+    // «Фурнитура» и т.п. `null` (вариант «Другое») проверку проходит.
+    if (value.subtypeKey != null) {
+      const subtype = getMaterialSubtype(value.subtypeKey);
+      if (!subtype) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['subtypeKey'],
+          message: `Неизвестный подтип материала: «${value.subtypeKey}».`,
+        });
+      } else if (subtype.groupRoleKey !== value.roleKey) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['subtypeKey'],
+          message: `Подтип «${subtype.label}» относится к другой группе параметров.`,
+        });
+      }
     }
   });
 export type PatternCategoryParameterInputDto = z.infer<
@@ -771,6 +804,12 @@ export interface PatternCategoryParameterDto {
   id: string;
   categoryId: string;
   roleKey: string;
+  /**
+   * Ключ подтипа из `MATERIAL_SUBTYPES` (`SINTEPON` / `ZIPPER` / ...),
+   * если параметр выбран из таблицы TEEON.pdf. `null` = «Другое»
+   * (ручной ввод названия).
+   */
+  subtypeKey: string | null;
   label: string;
   inputType: PatternCategoryParameterInputType | string;
   unit: string;

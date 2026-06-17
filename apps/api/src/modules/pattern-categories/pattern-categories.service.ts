@@ -231,6 +231,7 @@ export class PatternCategoriesService {
             data: parameters.map((p) => ({
               categoryId: cat.id,
               roleKey: p.roleKey,
+              subtypeKey: p.subtypeKey ?? null,
               label: p.label,
               inputType: p.inputType,
               unit: p.unit,
@@ -506,6 +507,7 @@ export class PatternCategoriesService {
             (p: ReturnType<typeof applyParameterDefaults>) => ({
               categoryId: id,
               roleKey: p.roleKey,
+              subtypeKey: p.subtypeKey ?? null,
               label: p.label,
               inputType: p.inputType,
               unit: p.unit,
@@ -576,6 +578,7 @@ function toDetailDto(row: CategoryWithIncludes): PatternCategoryDto {
     id: p.id,
     categoryId: p.categoryId,
     roleKey: p.roleKey,
+    subtypeKey: p.subtypeKey,
     label: p.label,
     inputType: p.inputType,
     unit: p.unit,

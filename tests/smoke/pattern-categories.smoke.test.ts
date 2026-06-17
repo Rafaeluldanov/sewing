@@ -1231,3 +1231,40 @@ describe('admin/pattern-categories — компактная колонка «Е�
     }
   });
 });
+
+// ---------------------------------------------------------------------------
+// «Группа → параметр (подтип)»: вторая колонка форм — выпадающий список
+// подтипов из таблицы TEEON.pdf (`MATERIAL_SUBTYPES`) + «Другое (вручную)».
+// ---------------------------------------------------------------------------
+
+describe('admin/pattern-categories — выбор параметра подтипом', () => {
+  for (const [name, rel] of [
+    ['create', CAT_NEW_FORM],
+    ['edit', CAT_EDIT_FORM],
+  ] as const) {
+    test(`форма ${name}: колонка «Параметр» — select подтипов группы + «Другое»`, () => {
+      const src = read(rel);
+      // Источник списка — каталог подтипов по группе.
+      expect(src).toMatch(/getMaterialSubtypesByGroup/);
+      // Скрытое поле submit-а подтипа.
+      expect(src).toMatch(/param_\$\{i\}_subtypeKey/);
+      // Заголовок колонки и опция ручного ввода.
+      expect(src).toMatch(/<th>Параметр<\/th>/);
+      expect(src).toMatch(/Другое \(вручную\)/);
+    });
+  }
+
+  test('shared: subtypeKey валидируется в схеме параметра категории', () => {
+    const src = read(SHARED);
+    expect(src).toMatch(/subtypeKey/);
+    expect(src).toMatch(/getMaterialSubtype\b/);
+  });
+
+  test('schema: PatternCategoryParameter.subtypeKey + аддитивная миграция', () => {
+    expect(read(SCHEMA)).toMatch(/subtypeKey\s+String\?/);
+    const mig =
+      'prisma/migrations/20260816100000_pattern_category_parameter_subtype_key/migration.sql';
+    expect(exists(mig)).toBe(true);
+    expect(read(mig)).toMatch(/ADD COLUMN "subtypeKey"/);
+  });
+});

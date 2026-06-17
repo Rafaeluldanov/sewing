@@ -91,11 +91,19 @@ function parseParametersFromForm(
         : isRequiredRaw === 'on' ||
           isRequiredRaw === 'true' ||
           isRequiredRaw === '1';
+    // Подтип из таблицы TEEON.pdf (группа → параметр). Пусто = «Другое»
+    // (ручной ввод названия) → subtypeKey остаётся null.
+    const subtypeKeyRaw = form.get(`param_${i}_subtypeKey`);
+    const subtypeKey =
+      subtypeKeyRaw === null
+        ? undefined
+        : String(subtypeKeyRaw).trim() || undefined;
     // Sort order не показываем пользователю — порядок в UI задаёт
     // порядок строк, которые менеджер передвигает кнопками ↑/↓.
     const sortOrder = (i + 1) * 10;
     const candidate = {
       roleKey,
+      subtypeKey,
       label,
       inputType,
       unit,

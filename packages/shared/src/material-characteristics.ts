@@ -24,6 +24,8 @@
 
 import { z } from 'zod';
 
+import type { PatternCategoryParameterInputType } from './pattern-categories';
+
 // ---------------------------------------------------------------------------
 // Каталог характеристик
 // ---------------------------------------------------------------------------
@@ -150,6 +152,16 @@ export interface MaterialSubtypeConfig {
   defaultUnit: string;
   /** Допустимые единицы (подмножество `allowedUnits` группы). */
   allowedUnits: readonly string[];
+  /**
+   * Тип ввода в номенклатуре по TEEON.pdf для ЭТОГО подтипа. Внутри
+   * одной группы он может различаться: синтепон вводится «по размерам»
+   * (`LINEAR_M_BY_SIZE`, «м пог.»), а искусственный пух — нормой
+   * «кг на изделие» (`QTY_PER_ITEM`). При выборе подтипа в форме
+   * категории это значение подставляется в колонку «Ввод». Обязан
+   * входить в `allowedInputTypes` своей группы
+   * (`PATTERN_CATEGORY_PARAMETER_GROUPS[groupRoleKey]`).
+   */
+  defaultInputType: PatternCategoryParameterInputType;
   /** Применимые характеристики (без «Цвета» — он через colorRule). */
   characteristics: readonly MaterialSubtypeCharacteristic[];
 }
@@ -172,6 +184,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   // --- Полотна (Цвет; ЕСЛИ КГ → ширина рулона + плотность) ---------------
   {
     subtypeKey: 'MAIN_FABRIC',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Основное полотно',
     groupRoleKey: 'MAIN_FABRIC',
     defaultUnit: 'м пог.',
@@ -180,6 +193,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'ADDITIONAL_FABRIC',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Дополнительное полотно',
     groupRoleKey: 'ADDITIONAL_FABRIC',
     defaultUnit: 'м пог.',
@@ -188,6 +202,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'LINING',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Подкладка',
     groupRoleKey: 'LINING',
     defaultUnit: 'м пог.',
@@ -197,6 +212,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   // --- Рибана / кашкорсе (Цвет) -----------------------------------------
   {
     subtypeKey: 'RIB',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Рибана',
     groupRoleKey: 'RIB',
     defaultUnit: 'м пог.',
@@ -205,6 +221,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'KASHKORSE',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Кашкорсе',
     groupRoleKey: 'RIB',
     defaultUnit: 'м пог.',
@@ -214,6 +231,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   // --- Клеевые материалы -------------------------------------------------
   {
     subtypeKey: 'DUBLERIN',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Дублерин',
     groupRoleKey: 'INTERLINING',
     defaultUnit: 'м пог.',
@@ -222,6 +240,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'FLIZELIN',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Флизелин',
     groupRoleKey: 'INTERLINING',
     defaultUnit: 'м пог.',
@@ -230,6 +249,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'PAUTINKA',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Паутинка',
     groupRoleKey: 'INTERLINING',
     defaultUnit: 'м',
@@ -238,6 +258,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'GLUE_EDGE',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Клеевая кромка',
     groupRoleKey: 'INTERLINING',
     defaultUnit: 'м',
@@ -246,6 +267,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'BORTOVKA',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Бортовка',
     groupRoleKey: 'INTERLINING',
     defaultUnit: 'м пог.',
@@ -255,6 +277,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   // --- Наполнитель -------------------------------------------------------
   {
     subtypeKey: 'SINTEPON',
+    defaultInputType: 'LINEAR_M_BY_SIZE',
     label: 'Синтепон',
     groupRoleKey: 'FILLER',
     defaultUnit: 'м пог.',
@@ -263,6 +286,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'ARTIFICIAL_DOWN',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Искусственный пух',
     groupRoleKey: 'FILLER',
     defaultUnit: 'кг',
@@ -272,6 +296,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   // --- Нитки -------------------------------------------------------------
   {
     subtypeKey: 'THREAD',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Нитки',
     groupRoleKey: 'THREAD',
     defaultUnit: 'м',
@@ -281,6 +306,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   // --- Фурнитура ---------------------------------------------------------
   {
     subtypeKey: 'ZIPPER',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Молния',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -294,6 +320,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'SNAP_BUTTON',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Кнопка',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -302,6 +329,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'EYELET',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Люверс',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -310,6 +338,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'FASTEX',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Фастекс',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -318,6 +347,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'CORD_LOCK',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Фиксатор',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -326,6 +356,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'RING',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Кольцо',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -334,6 +365,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'HALF_RING',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Полукольцо',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -342,6 +374,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'CORD_END',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Концевик',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -350,6 +383,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'WEBBING',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Стропа',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'м',
@@ -358,6 +392,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'TAPE',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Лента',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'м',
@@ -366,6 +401,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'PIPING',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Кант',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'м',
@@ -374,6 +410,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'ELASTIC',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Резинка',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'м',
@@ -382,6 +419,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'HAT_ELASTIC',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Шляпная резинка',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'м',
@@ -390,6 +428,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'CORD',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Шнур',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'м',
@@ -398,6 +437,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'KNIT_CUFF',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Подвяз',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
@@ -406,6 +446,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'KNIT_COLLAR',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Вязаный воротник',
     groupRoleKey: 'PACKAGING',
     // Ввод — в штуках; потребность считают и в штуках, и в метрах
@@ -416,6 +457,7 @@ export const MATERIAL_SUBTYPES: readonly MaterialSubtypeConfig[] = [
   },
   {
     subtypeKey: 'BUTTON',
+    defaultInputType: 'QTY_PER_ITEM',
     label: 'Пуговица',
     groupRoleKey: 'PACKAGING',
     defaultUnit: 'шт',
