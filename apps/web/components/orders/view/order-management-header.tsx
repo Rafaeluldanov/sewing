@@ -35,7 +35,6 @@ import {
   CheckCircle2,
   ClipboardList,
   Pencil,
-  Plus,
   Truck,
   User,
 } from 'lucide-react';
@@ -138,7 +137,6 @@ export function OrderManagementHeader({ order, passports }: Props) {
     status === 'CALCULATION_DONE' ||
     status === 'IN_PRODUCTION';
   const showEdit = status === 'DRAFT';
-  const showIssuePassport = status === 'IN_PRODUCTION';
 
   return (
     <section
@@ -360,16 +358,6 @@ export function OrderManagementHeader({ order, passports }: Props) {
         )}
         {/* Hard-delete: компонент сам рисует кнопку только для CANCELLED. */}
         <DeleteOrderButton orderId={order.id} status={status} />
-        {showIssuePassport && (
-          <Link
-            href={`/orders/${order.id}/passports/new`}
-            className="admin-btn admin-btn--primary"
-            title="Перейти к выпуску паспорта по этому заказу"
-          >
-            <Plus size={16} strokeWidth={1.6} aria-hidden />
-            Выпустить паспорт
-          </Link>
-        )}
         {showEdit && (
           <Link
             href={`/admin/orders/${order.id}/edit`}
