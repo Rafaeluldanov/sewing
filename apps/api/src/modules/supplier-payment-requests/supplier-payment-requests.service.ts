@@ -6,6 +6,7 @@ import type {
   SupplierPaymentRequestFileDto,
   SupplierPaymentRequestListItemDto,
   SupplierPaymentRequestStageDto,
+  UpdateSupplierPaymentRequestDto,
 } from '@sewing/shared/supplier-payment-requests';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -183,6 +184,161 @@ export class SupplierPaymentRequestsService {
     });
 
     return this.get(created.id);
+  }
+
+  // ===========================================================================
+  // UPDATE
+  // ===========================================================================
+
+  /**
+   * Редактировать заявку. Сумма/реквизиты/комментарий/статус
+   * перезаписываются; этапы пересоздаются целиком (полная замена набора,
+   * сумма этапа пересчитывается так же, как при создании); вложения —
+   * `keepFileIds` оставить, прочие удалить, `files` добавить.
+   */
+  async update(
+    id: string,
+    dto: UpdateSupplierPaymentRequestDto,
+    files: UploadedFileLike[],
+    actorEmployeeId?: string | null,
+  ): Promise<SupplierPaymentRequestDetailDto> {
+    const existing = await this.prisma.supplierPaymentRequest.findUnique({
+      where: { id },
+      include: { files: true },
+    });
+    if (!existing) throw new SupplierPaymentRequestNotFoundException();
+
+    const amount = new Prisma.Decimal(dto.amount);
+
+    // Сумма этапа = round(amount × percent / 100, 2). sortOrder — 1..N.
+    const stagesData = dto.stages.map((stage, index) => {
+      const percent = new Prisma.Decimal(stage.percent);
+      const stageAmount = amount.mul(percent).div(100).toDecimalPlaces(2);
+      return {
+        sortOrder: index + 1,
+        percent,
+        amount: stageAmount,
+        plannedPayDate: stage.plannedPayDate
+          ? new Date(stage.plannedPayDate)
+          : null,
+        status: 'PENDING',
+        comment: stage.comment ?? null,
+      };
+    });
+
+    const keep = new Set(dto.keepFileIds ?? []);
+    const filesToRemove = existing.files.filter((f) => !keep.has(f.id));
+
+    await this.prisma.$transaction(async (tx) => {
+      // Этапы заменяем целиком: на MVP у них нет связи с оплатой
+      // (`supplierPaymentId` всегда null), пересоздать безопасно.
+      await tx.supplierPaymentRequestStage.deleteMany({
+        where: { requestId: id },
+      });
+      if (filesToRemove.length > 0) {
+        await tx.supplierPaymentRequestFile.deleteMany({
+          where: { id: { in: filesToRemove.map((f) => f.id) } },
+        });
+      }
+      await tx.supplierPaymentRequest.update({
+        where: { id },
+        data: {
+          amount,
+          currency: dto.currency ?? 'RUB',
+          comment: dto.comment ?? null,
+          status: dto.status ?? existing.status,
+          // Реквизиты — снимок: форма редактирования всегда шлёт текущие
+          // значения (или явный null = очистка), берём как есть.
+          legalNameSnapshot: dto.legalName ?? null,
+          innSnapshot: dto.inn ?? null,
+          kppSnapshot: dto.kpp ?? null,
+          bankNameSnapshot: dto.bankName ?? null,
+          bankAccountSnapshot: dto.bankAccount ?? null,
+          bankBikSnapshot: dto.bankBik ?? null,
+          bankCorrAccountSnapshot: dto.bankCorrAccount ?? null,
+          stages: { create: stagesData },
+        },
+      });
+    });
+
+    // Файлы — вне транзакции (диск не транзакционен, как при создании):
+    // сначала чистим удалённые, затем дописываем новые.
+    for (const f of filesToRemove) {
+      await this.storage.deleteByPublicUrl(f.fileUrl);
+    }
+    let addedFiles = 0;
+    for (const file of files) {
+      const saved = await this.storage.saveRequestFile(id, file);
+      await this.prisma.supplierPaymentRequestFile.create({
+        data: {
+          requestId: id,
+          fileUrl: saved.publicUrl,
+          originalFileName: saved.originalFileName,
+          contentType: saved.contentType,
+          sizeBytes: saved.sizeBytes,
+        },
+      });
+      addedFiles += 1;
+    }
+
+    this.logger.log(
+      `event=supplier_payment_request.update id=${id} amount=${amount.toString()} ` +
+        `stages=${stagesData.length} filesKept=${keep.size} ` +
+        `filesRemoved=${filesToRemove.length} filesAdded=${addedFiles}`,
+    );
+    await this.audit.log({
+      event: 'SUPPLIER_PAYMENT_REQUEST_UPDATED',
+      entityType: 'SUPPLIER_PAYMENT_REQUEST',
+      entityId: id,
+      payload: {
+        amount: amount.toString(),
+        status: dto.status ?? existing.status,
+        stagesCount: stagesData.length,
+        filesRemoved: filesToRemove.length,
+        filesAdded: addedFiles,
+      },
+      employeeId: actorEmployeeId ?? null,
+    });
+
+    return this.get(id);
+  }
+
+  // ===========================================================================
+  // DELETE
+  // ===========================================================================
+
+  /**
+   * Удалить заявку целиком. Каскад БД (`onDelete: Cascade`) уберёт этапы
+   * и строки файлов; физические файлы с диска удаляем сами (после
+   * успешного удаления записи).
+   */
+  async delete(id: string, actorEmployeeId?: string | null): Promise<void> {
+    const existing = await this.prisma.supplierPaymentRequest.findUnique({
+      where: { id },
+      include: { files: true },
+    });
+    if (!existing) throw new SupplierPaymentRequestNotFoundException();
+
+    await this.prisma.supplierPaymentRequest.delete({ where: { id } });
+    for (const f of existing.files) {
+      await this.storage.deleteByPublicUrl(f.fileUrl);
+    }
+
+    this.logger.log(
+      `event=supplier_payment_request.delete id=${id} ` +
+        `po=${existing.purchaseOrderId} files=${existing.files.length}`,
+    );
+    await this.audit.log({
+      event: 'SUPPLIER_PAYMENT_REQUEST_DELETED',
+      entityType: 'SUPPLIER_PAYMENT_REQUEST',
+      entityId: id,
+      payload: {
+        purchaseOrderId: existing.purchaseOrderId,
+        number: existing.number,
+        filesCount: existing.files.length,
+      },
+      employeeId: actorEmployeeId ?? null,
+    });
   }
 }
 

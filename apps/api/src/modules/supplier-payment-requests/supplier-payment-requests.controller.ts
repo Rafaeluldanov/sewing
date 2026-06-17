@@ -2,20 +2,24 @@ import { FilesInterceptor } from '@nestjs/platform-express';
 import {
   Body,
   Controller,
+  Delete,
   Get,
   HttpCode,
   HttpStatus,
   Param,
+  Patch,
   Post,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
 import { memoryStorage } from 'multer';
+import type { z } from 'zod';
 import {
   CreateSupplierPaymentRequestSchema,
   SUPPLIER_PAYMENT_REQUEST_FILE_FIELD,
   SUPPLIER_PAYMENT_REQUEST_FILE_MAX_COUNT,
   SUPPLIER_PAYMENT_REQUEST_FILE_MAX_SIZE_BYTES,
+  UpdateSupplierPaymentRequestSchema,
   type SupplierPaymentRequestDetailDto,
   type SupplierPaymentRequestListItemDto,
 } from '@sewing/shared/supplier-payment-requests';
@@ -27,17 +31,34 @@ import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
 import { SupplierPaymentRequestsService } from './supplier-payment-requests.service.js';
 
 /**
+ * Multipart-интерсептор вложений заявки — общий для создания (POST) и
+ * редактирования (PATCH): счёт/инвойс + доп. документы (0..N).
+ */
+const PaymentRequestFilesInterceptor = FilesInterceptor(
+  SUPPLIER_PAYMENT_REQUEST_FILE_FIELD,
+  SUPPLIER_PAYMENT_REQUEST_FILE_MAX_COUNT,
+  {
+    storage: memoryStorage(),
+    limits: { fileSize: SUPPLIER_PAYMENT_REQUEST_FILE_MAX_SIZE_BYTES },
+  },
+);
+
+/**
  * Заявки на оплату поставщику (см.
  * `prisma/schema.prisma::SupplierPaymentRequest`).
  *
- *   GET  /api/purchase-orders/:purchaseOrderId/payment-requests — список
- *        заявок по заказу поставщику;
- *   POST /api/purchase-orders/:purchaseOrderId/payment-requests — создать
- *        заявку (multipart: `payload` JSON + `files[]` вложения);
- *   GET  /api/supplier-payment-requests/:id — детальная карточка заявки.
+ *   GET    /api/purchase-orders/:purchaseOrderId/payment-requests — список
+ *          заявок по заказу поставщику;
+ *   POST   /api/purchase-orders/:purchaseOrderId/payment-requests — создать
+ *          заявку (multipart: `payload` JSON + `files[]` вложения);
+ *   GET    /api/supplier-payment-requests/:id — детальная карточка заявки;
+ *   PATCH  /api/supplier-payment-requests/:id — редактировать заявку
+ *          (multipart, как при создании; `payload.keepFileIds` — какие
+ *          прежние вложения оставить);
+ *   DELETE /api/supplier-payment-requests/:id — удалить заявку.
  *
  * Без класс-префикса: первые два маршрута живут под `/purchase-orders`,
- * третий — под `/supplier-payment-requests`. Коллизии с
+ * остальные — под `/supplier-payment-requests`. Коллизии с
  * `PurchaseOrdersController` нет (его `:id` короче нашего
  * `:purchaseOrderId/payment-requests`).
  *
@@ -74,22 +95,64 @@ export class SupplierPaymentRequestsController {
    */
   @Post('purchase-orders/:purchaseOrderId/payment-requests')
   @HttpCode(HttpStatus.CREATED)
-  @UseInterceptors(
-    FilesInterceptor(
-      SUPPLIER_PAYMENT_REQUEST_FILE_FIELD,
-      SUPPLIER_PAYMENT_REQUEST_FILE_MAX_COUNT,
-      {
-        storage: memoryStorage(),
-        limits: { fileSize: SUPPLIER_PAYMENT_REQUEST_FILE_MAX_SIZE_BYTES },
-      },
-    ),
-  )
+  @UseInterceptors(PaymentRequestFilesInterceptor)
   async create(
     @Param('purchaseOrderId') purchaseOrderId: string,
     @Body('payload') payloadRaw: string | undefined,
     @UploadedFiles() files: UploadedFileLike[] | undefined,
     @CurrentUser() user: AuthPrincipal,
   ): Promise<SupplierPaymentRequestDetailDto> {
+    const dto = this.parsePayload(payloadRaw, CreateSupplierPaymentRequestSchema);
+    return this.requests.create(
+      purchaseOrderId,
+      dto,
+      Array.isArray(files) ? files : [],
+      user.employeeId ?? null,
+    );
+  }
+
+  /**
+   * Редактировать заявку на оплату. Запрос `multipart/form-data`, как у
+   * создания: `payload` (JSON `UpdateSupplierPaymentRequestDto`) +
+   * `files` (новые вложения). Прежние вложения сохраняются только если
+   * их id перечислены в `payload.keepFileIds`.
+   */
+  @Patch('supplier-payment-requests/:id')
+  @UseInterceptors(PaymentRequestFilesInterceptor)
+  async update(
+    @Param('id') id: string,
+    @Body('payload') payloadRaw: string | undefined,
+    @UploadedFiles() files: UploadedFileLike[] | undefined,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<SupplierPaymentRequestDetailDto> {
+    const dto = this.parsePayload(payloadRaw, UpdateSupplierPaymentRequestSchema);
+    return this.requests.update(
+      id,
+      dto,
+      Array.isArray(files) ? files : [],
+      user.employeeId ?? null,
+    );
+  }
+
+  /** Удалить заявку на оплату (вместе с этапами и вложениями). */
+  @Delete('supplier-payment-requests/:id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<void> {
+    await this.requests.delete(id, user.employeeId ?? null);
+  }
+
+  /**
+   * Разобрать поле `payload` (JSON-строка multipart-запроса) указанной
+   * Zod-схемой. Кидает `SupplierPaymentRequestFileInvalidException`
+   * (400) с человекочитаемым сообщением — единым для POST/PATCH.
+   */
+  private parsePayload<S extends z.ZodTypeAny>(
+    payloadRaw: string | undefined,
+    schema: S,
+  ): z.infer<S> {
     if (typeof payloadRaw !== 'string' || payloadRaw.trim() === '') {
       throw new SupplierPaymentRequestFileInvalidException(
         'Поле payload обязательно — передайте JSON с суммой и этапами.',
@@ -103,7 +166,7 @@ export class SupplierPaymentRequestsController {
         'Поле payload содержит невалидный JSON.',
       );
     }
-    const parsed = CreateSupplierPaymentRequestSchema.safeParse(payloadJson);
+    const parsed = schema.safeParse(payloadJson);
     if (!parsed.success) {
       throw new SupplierPaymentRequestFileInvalidException(
         parsed.error.issues
@@ -112,11 +175,6 @@ export class SupplierPaymentRequestsController {
           .join('; ') || 'Невалидный payload.',
       );
     }
-    return this.requests.create(
-      purchaseOrderId,
-      parsed.data,
-      Array.isArray(files) ? files : [],
-      user.employeeId ?? null,
-    );
+    return parsed.data;
   }
 }

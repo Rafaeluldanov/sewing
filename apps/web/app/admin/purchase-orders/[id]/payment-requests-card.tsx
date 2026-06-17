@@ -21,6 +21,7 @@ import {
   CreatePaymentRequestDialog,
   type PaymentRequestRequisitesPrefill,
 } from './create-payment-request-dialog';
+import { PaymentRequestRowActions } from './payment-request-row-actions';
 
 const EMPTY_REQUISITES: PaymentRequestRequisitesPrefill = {
   legalName: null,
@@ -131,6 +132,7 @@ export async function PaymentRequestsCard({
                 <th style={{ textAlign: 'center' }}>Этапов</th>
                 <th style={{ textAlign: 'center' }}>Файлов</th>
                 <th>Создана</th>
+                <th style={{ textAlign: 'right' }}>Действия</th>
               </tr>
             </thead>
             <tbody>
@@ -150,6 +152,14 @@ export async function PaymentRequestsCard({
                   <td style={{ textAlign: 'center' }}>{r.stagesCount}</td>
                   <td style={{ textAlign: 'center' }}>{r.filesCount}</td>
                   <td>{formatDateTime(r.createdAt)}</td>
+                  <td style={{ textAlign: 'right' }}>
+                    <PaymentRequestRowActions
+                      purchaseOrderId={purchaseOrderId}
+                      requestId={r.id}
+                      requestNumber={r.number}
+                      supplierName={supplierName}
+                    />
+                  </td>
                 </tr>
               ))}
             </tbody>

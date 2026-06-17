@@ -321,6 +321,55 @@ export type CreateSupplierPaymentRequestDto = z.infer<
   typeof CreateSupplierPaymentRequestSchema
 >;
 
+// ---------------------------------------------------------------------------
+// Update
+// ---------------------------------------------------------------------------
+
+/**
+ * Редактирование существующей заявки
+ * (`PATCH /supplier-payment-requests/:id`, multipart как при создании).
+ *
+ * Семантика «полной замены»:
+ *   - сумма / валюта / реквизиты / комментарий перезаписываются
+ *     значениями формы (реквизиты в заявке — снимок, форма всегда шлёт
+ *     текущие, в т.ч. явный `null` = очистка);
+ *   - `stages` ПОЛНОСТЬЮ заменяют прежний набор и пересчитываются
+ *     (на MVP казначейство не подключено — у этапов нет связи с оплатой,
+ *     пересоздать безопасно);
+ *   - `keepFileIds` — id прежних вложений, которые сохранить; остальные
+ *     удаляются (файл с диска + строка), новые приходят полями `files`;
+ *   - `status` — необязательная смена статуса заявки (DRAFT/SUBMITTED/
+ *     CANCELLED); не передан — статус не меняется.
+ */
+export const UpdateSupplierPaymentRequestSchema = z.object({
+  amount: AmountRequiredField,
+  currency: CurrencyField,
+  comment: CommentField,
+  status: SupplierPaymentRequestStatusSchema.optional(),
+
+  legalName: LegalNameField,
+  inn: InnField,
+  kpp: KppField,
+  bankName: BankNameField,
+  bankAccount: BankAccountField,
+  bankBik: BankBikField,
+  bankCorrAccount: BankCorrAccountField,
+
+  stages: z
+    .array(CreateSupplierPaymentRequestStageSchema)
+    .min(1, 'Нужен хотя бы один этап оплаты')
+    .max(
+      SUPPLIER_PAYMENT_REQUEST_STAGE_MAX_COUNT,
+      `Не более ${SUPPLIER_PAYMENT_REQUEST_STAGE_MAX_COUNT} этапов`,
+    ),
+
+  /** id прежних вложений, которые нужно сохранить (остальные удалить). */
+  keepFileIds: z.array(z.string().min(1)).optional().default([]),
+});
+export type UpdateSupplierPaymentRequestDto = z.infer<
+  typeof UpdateSupplierPaymentRequestSchema
+>;
+
 /** Имя файлового поля в multipart-запросе создания заявки. */
 export const SUPPLIER_PAYMENT_REQUEST_FILE_FIELD = 'files';
 

@@ -47,3 +47,28 @@ export function createSupplierPaymentRequest(
     formData,
   );
 }
+
+/**
+ * Редактировать заявку на оплату. `formData` собирается на клиенте так
+ * же, как при создании (поле `payload` с JSON + повторяющееся поле
+ * `files` для новых вложений; какие прежние оставить — в
+ * `payload.keepFileIds`).
+ */
+export function updateSupplierPaymentRequest(
+  id: string,
+  formData: FormData,
+): Promise<SupplierPaymentRequestDetailDto> {
+  return apiFetchMultipart<SupplierPaymentRequestDetailDto>(
+    `/supplier-payment-requests/${encodeURIComponent(id)}`,
+    formData,
+    { method: 'PATCH' },
+  );
+}
+
+/** Удалить заявку на оплату (вместе с этапами и вложениями). */
+export function deleteSupplierPaymentRequest(id: string): Promise<void> {
+  return apiFetch<void>(
+    `/supplier-payment-requests/${encodeURIComponent(id)}`,
+    { method: 'DELETE' },
+  );
+}
