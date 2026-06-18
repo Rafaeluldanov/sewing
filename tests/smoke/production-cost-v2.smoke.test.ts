@@ -35,6 +35,7 @@ import {
   PRODUCTION_COST_MATRIX_OP_KINDS,
   PRODUCTION_COST_V2_ENTRY_STATUSES,
   ProductionCostV2QuerySchema,
+  type ProductionCostFilterOptionsDto,
   type ProductionCostMatrixCellDto,
   type ProductionCostMatrixOperationRowDto,
   type ProductionCostMatrixSizeColumnDto,
@@ -186,6 +187,7 @@ describe('Production Cost v2 — shared contract', () => {
           qty: 5,
           rub: '150.00',
           unitCostAvg: '30.00',
+          minutes: 0,
           cells: [cell],
         },
       ],
@@ -215,6 +217,19 @@ describe('Production Cost v2 — shared contract', () => {
     expect(salary.unitCostAvg).toBeNull();
     expect(column.releasedQty).toBe(5);
   });
+
+  test('ProductionCostFilterOptionsDto: справочники фильтров (id+label)', () => {
+    const opts: ProductionCostFilterOptionsDto = {
+      patterns: [{ id: 'p1', label: 'Футболка', sublabel: 'TS-001' }],
+      orders: [{ id: 'o1', label: 'O-001', sublabel: 'ООО Ромашка' }],
+      clients: [{ id: 'c1', label: 'ООО Ромашка' }],
+      employees: [{ id: 'e1', label: 'Иванова' }],
+      operations: [{ id: 'op1', label: 'Оверлок', sublabel: '01' }],
+    };
+    expect(opts.patterns[0]!.id).toBe('p1');
+    expect(opts.orders[0]!.sublabel).toBe('ООО Ромашка');
+    expect(opts.clients[0]!.sublabel).toBeUndefined();
+  });
 });
 
 describe('Production Cost v2 — backend wiring', () => {
@@ -235,6 +250,21 @@ describe('Production Cost v2 — backend wiring', () => {
     expect(src).toMatch(/@Controller\('admin\/production-cost'\)/);
     expect(src).toMatch(/@Get\('v2'\)/);
     expect(src).toMatch(/ZodValidationPipe\(ProductionCostV2QuerySchema\)/);
+    // Эндпоинт справочников для выпадающих фильтров.
+    expect(src).toMatch(/@Get\('v2\/filter-options'\)/);
+  });
+
+  test('Сервис отдаёт справочники фильтров (getFilterOptions, только findMany)', () => {
+    const src = readSrc(
+      'apps/api/src/modules/costs/production-cost-v2.service.ts',
+    );
+    expect(src).toMatch(/getFilterOptions/);
+    // лекало/клиент/сотрудник/заказ/операция — лёгкие проекции.
+    expect(src).toMatch(/patternItem\.findMany/);
+    expect(src).toMatch(/client\.findMany/);
+    expect(src).toMatch(/employee\.findMany/);
+    expect(src).toMatch(/order\.findMany/);
+    expect(src).toMatch(/operation\.findMany/);
   });
 
   test('Сервис использует OperationEntry как факт операций', () => {
@@ -368,5 +398,38 @@ describe('Production Cost v2 — frontend page', () => {
     expect(src).toMatch(/Выпущено, шт/);
     // Сдельные раскрываются в сотрудников.
     expect(src).toMatch(/Операция \/ Сотрудник/);
+    // Компактные стили (помещается на экран) + прилипающая колонка.
+    expect(src).toMatch(/cost-matrix-wrap/);
+    expect(src).toMatch(/cost-matrix__sticky/);
+    // Окладные тоже раскрываются в сотрудников.
+    expect(src).toMatch(/op\.employees\.map/);
+    // У окладных строк «Кол-во» = разнесённое время (мин), «За 1 ед.» = ₽/мин
+    // (те же данные, что в табе «Операции / сотрудники»).
+    expect(src).toMatch(/isSalary\s*\n?\s*\? formatMinutes\(op\.minutes\)/);
+    expect(src).toMatch(/formatRubPerMinute\(op\.rub, op\.minutes\)/);
+  });
+
+  test('Фильтры — выпадающие combobox с поиском (не ввод по ID)', () => {
+    const page = readSrc('apps/web/app/admin/production-cost/page.tsx');
+    expect(page).toMatch(/ProductionCostFilters/);
+    expect(page).toMatch(/getProductionCostFilterOptions/);
+    // Старые «сырые ID» поля убраны.
+    expect(page).not.toMatch(/placeholder="patternItemId"/);
+    expect(page).not.toMatch(/Лекало \(ID\)/);
+
+    const combo = readSrc(
+      'apps/web/app/admin/production-cost/filter-combobox.tsx',
+    );
+    // combobox с поиском и скрытым полем id для GET-формы.
+    expect(combo).toMatch(/role="combobox"/);
+    expect(combo).toMatch(/role="listbox"/);
+    expect(combo).toMatch(/type="hidden"/);
+
+    const filters = readSrc(
+      'apps/web/app/admin/production-cost/production-cost-filters.tsx',
+    );
+    for (const f of ['patternItemId', 'orderId', 'clientId', 'employeeId']) {
+      expect(filters).toMatch(new RegExp(`name="${f}"`));
+    }
   });
 });

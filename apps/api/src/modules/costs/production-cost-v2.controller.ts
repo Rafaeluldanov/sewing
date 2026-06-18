@@ -41,4 +41,14 @@ export class ProductionCostV2Controller {
     if (!user) throw new UnauthorizedException();
     return this.service.getReport(query);
   }
+
+  /**
+   * Справочники для выпадающих фильтров отчёта (лекало / заказ / клиент /
+   * сотрудник / операция). Тот же RBAC, что и сам отчёт.
+   */
+  @Get('v2/filter-options')
+  getFilterOptions(@CurrentUser() user: AuthPrincipal | undefined) {
+    if (!user) throw new UnauthorizedException();
+    return this.service.getFilterOptions();
+  }
 }

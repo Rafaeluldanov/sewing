@@ -10,6 +10,7 @@
  */
 
 import type {
+  ProductionCostFilterOptionsDto,
   ProductionCostReportDto,
   ProductionCostV2Query,
 } from '@sewing/shared/production-cost';
@@ -30,4 +31,11 @@ export function getProductionCostV2(
       status: query.status,
     },
   });
+}
+
+export function getProductionCostFilterOptions(): Promise<ProductionCostFilterOptionsDto> {
+  return apiFetch<ProductionCostFilterOptionsDto>(
+    '/admin/production-cost/v2/filter-options',
+    { cache: 'no-store' },
+  );
 }

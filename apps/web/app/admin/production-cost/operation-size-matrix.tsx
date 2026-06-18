@@ -6,21 +6,23 @@
  *
  * Склеивает три исторических разреза в один:
  *
- *   - строки — операции (сдельные раскрываются в сотрудников, окладные —
- *     нет, у них вместо `qty` разнесённые минуты);
+ *   - строки — операции; **и сдельные, и окладные раскрываются в
+ *     сотрудников** (chevron). Сдельные (PIECEWORK) считают `qty`/`за 1
+ *     ед.`; окладные (SALARY: ОТК/ВТО/Упаковка/Деление кроя) берут ₽ из
+ *     разнесённого времени и не имеют сдельного `qty` (там «—»);
  *   - колонки — размеры; в ячейках ₽ начислений/оклада **или** количество
  *     (переключатель ₽/шт);
  *   - правый блок — Кол-во / Сумма / За 1 ед. по строке;
  *   - футер — «Итого» по колонкам и отдельная строка «Выпущено, шт»
- *     (`Passport.qtyGood`, PACKED — это другая метрика, не qty операций).
+ *     (`Passport.qtyGood`, PACKED — другая метрика, не qty операций).
  *
  * Данные приходят готовыми из бэка
  * (`ProductionCostNomenclatureGroupDto.operationMatrix` / `sizeColumns`),
  * компонент только рендерит + держит локальный UI-стейт (режим ячеек,
- * раскрытие операций).
+ * раскрытие операций). Стили — `.cost-matrix*` в `globals.css`
+ * (компактные, со скроллом и прилипающей первой колонкой).
  */
 import { Fragment, useState } from 'react';
-import type { CSSProperties } from 'react';
 import { ChevronDown, ChevronRight, Coins, Hash } from 'lucide-react';
 import type {
   ProductionCostMatrixCellDto,
@@ -53,6 +55,26 @@ function formatQty(value: number | null): string {
   return value.toLocaleString('ru-RU');
 }
 
+/**
+ * «Кол-во» окладной строки = разнесённое реальное время (мин). Те же
+ * данные, что в табе «Операции / сотрудники» (колонка «Время, мин»).
+ */
+function formatMinutes(value: number | null): string {
+  if (!value) return '—';
+  return `${value.toLocaleString('ru-RU')} мин`;
+}
+
+/**
+ * «За 1 ед.» окладной строки = ₽/мин (`rub / minutes`), как в табе
+ * «Операции / сотрудники» (колонка «₽ / мин»).
+ */
+function formatRubPerMinute(rub: string, minutes: number): string {
+  if (!minutes) return '—';
+  const perMin = Number(rub) / minutes;
+  if (!Number.isFinite(perMin)) return '—';
+  return `${formatMoney(perMin)} ₽/мин`;
+}
+
 function cellText(cell: ProductionCostMatrixCellDto, mode: CellMode): string {
   if (mode === 'rub') {
     const num = Number(cell.rub);
@@ -60,21 +82,6 @@ function cellText(cell: ProductionCostMatrixCellDto, mode: CellMode): string {
   }
   return cell.qty ? formatQty(cell.qty) : '—';
 }
-
-const RIGHT: CSSProperties = { textAlign: 'right', whiteSpace: 'nowrap' };
-const STICKY_HEAD: CSSProperties = {
-  position: 'sticky',
-  left: 0,
-  zIndex: 2,
-  textAlign: 'left',
-  background: 'var(--admin-card-bg)',
-};
-const STICKY_CELL: CSSProperties = {
-  position: 'sticky',
-  left: 0,
-  zIndex: 1,
-  background: 'var(--admin-card-bg)',
-};
 
 export function OperationSizeMatrix({
   nomenclatureName,
@@ -102,10 +109,7 @@ export function OperationSizeMatrix({
     (acc, op) => acc + Number(op.rub),
     0,
   );
-  const totalReleased = sizeColumns.reduce(
-    (acc, s) => acc + s.releasedQty,
-    0,
-  );
+  const totalReleased = sizeColumns.reduce((acc, s) => acc + s.releasedQty, 0);
 
   return (
     <div style={{ marginTop: 16 }}>
@@ -134,34 +138,35 @@ export function OperationSizeMatrix({
         }
       />
       <div
-        style={{
-          fontSize: 12,
-          color: 'var(--admin-muted)',
-          marginBottom: 8,
-        }}
+        style={{ fontSize: 12, color: 'var(--admin-muted)', marginBottom: 8 }}
       >
-        Строки — операции (сдельные раскрываются в сотрудников, окладные
-        помечены «оклад»). В ячейках по размерам —{' '}
-        {mode === 'rub' ? 'сумма, ₽' : 'количество, шт'}. «Выпущено» — годные
-        упакованные единицы (PACKED), отдельная от выработки метрика.
+        Строки — операции (раскрываются в сотрудников; окладные помечены
+        «оклад»). В ячейках по размерам —{' '}
+        {mode === 'rub' ? 'сумма, ₽' : 'количество, шт'}. У окладных операций
+        «Кол-во» — это разнесённое время (мин), «За 1 ед.» — ₽/мин (как в табе
+        «Операции / сотрудники»). «Выпущено» — годные упакованные единицы
+        (PACKED), отдельная от выработки метрика.
       </div>
 
       {!hasData ? (
         <div style={{ color: 'var(--admin-muted)' }}>—</div>
       ) : (
-        <div className="admin-table-wrap">
-          <table className="admin-table" style={{ fontSize: 13 }}>
+        <div className="cost-matrix-wrap">
+          <table className="cost-matrix">
             <thead>
               <tr>
-                <th style={STICKY_HEAD}>Операция / Сотрудник</th>
+                <th className="cost-matrix__sticky">Операция / Сотрудник</th>
                 {sizeColumns.map((s) => (
-                  <th key={s.sizeId ?? s.sizeCode} style={RIGHT}>
+                  <th
+                    key={s.sizeId ?? s.sizeCode}
+                    className="cost-matrix__num"
+                  >
                     {s.sizeCode}
                   </th>
                 ))}
-                <th style={RIGHT}>Кол-во</th>
-                <th style={RIGHT}>Сумма, ₽</th>
-                <th style={RIGHT}>За 1 ед.</th>
+                <th className="cost-matrix__num">Кол-во</th>
+                <th className="cost-matrix__num">Сумма, ₽</th>
+                <th className="cost-matrix__num">За 1 ед.</th>
               </tr>
             </thead>
             <tbody>
@@ -169,15 +174,14 @@ export function OperationSizeMatrix({
                 const key = `${op.kind}:${op.operationId}`;
                 const isOpen = expanded[key] ?? false;
                 const hasEmployees = op.employees.length > 0;
+                const isSalary = op.kind === 'SALARY';
                 return (
                   <Fragment key={key}>
                     <tr>
-                      <td style={STICKY_CELL}>
+                      <td className="cost-matrix__sticky">
                         <button
                           type="button"
-                          onClick={
-                            hasEmployees ? () => toggle(key) : undefined
-                          }
+                          onClick={hasEmployees ? () => toggle(key) : undefined}
                           aria-expanded={hasEmployees ? isOpen : undefined}
                           style={{
                             display: 'inline-flex',
@@ -194,17 +198,9 @@ export function OperationSizeMatrix({
                         >
                           {hasEmployees ? (
                             isOpen ? (
-                              <ChevronDown
-                                size={14}
-                                strokeWidth={1.6}
-                                aria-hidden
-                              />
+                              <ChevronDown size={14} strokeWidth={1.6} aria-hidden />
                             ) : (
-                              <ChevronRight
-                                size={14}
-                                strokeWidth={1.6}
-                                aria-hidden
-                              />
+                              <ChevronRight size={14} strokeWidth={1.6} aria-hidden />
                             )
                           ) : (
                             <span
@@ -213,7 +209,7 @@ export function OperationSizeMatrix({
                             />
                           )}
                           <strong>{op.operationName}</strong>
-                          {op.kind === 'SALARY' && (
+                          {isSalary && (
                             <span
                               style={{
                                 fontSize: 11,
@@ -230,26 +226,32 @@ export function OperationSizeMatrix({
                         </button>
                       </td>
                       {op.cells.map((c, i) => (
-                        <td key={i} style={RIGHT}>
+                        <td key={i} className="cost-matrix__num">
                           {cellText(c, mode)}
                         </td>
                       ))}
-                      <td style={RIGHT}>
-                        {op.kind === 'SALARY' ? '—' : formatQty(op.qty)}
+                      <td className="cost-matrix__num">
+                        {isSalary
+                          ? formatMinutes(op.minutes)
+                          : formatQty(op.qty)}
                       </td>
-                      <td style={RIGHT}>
+                      <td className="cost-matrix__num">
                         <strong>{formatMoney(op.rub)}</strong>
                       </td>
-                      <td style={RIGHT}>
-                        {op.unitCostAvg ? formatMoney(op.unitCostAvg) : '—'}
+                      <td className="cost-matrix__num">
+                        {isSalary
+                          ? formatRubPerMinute(op.rub, op.minutes)
+                          : op.unitCostAvg
+                            ? formatMoney(op.unitCostAvg)
+                            : '—'}
                       </td>
                     </tr>
                     {isOpen &&
                       op.employees.map((emp) => (
                         <tr key={emp.employeeId}>
                           <td
+                            className="cost-matrix__sticky"
                             style={{
-                              ...STICKY_CELL,
                               paddingLeft: 32,
                               color: 'var(--admin-muted)',
                             }}
@@ -257,16 +259,24 @@ export function OperationSizeMatrix({
                             {emp.employeeName}
                           </td>
                           {emp.cells.map((c, i) => (
-                            <td key={i} style={RIGHT}>
+                            <td key={i} className="cost-matrix__num">
                               {cellText(c, mode)}
                             </td>
                           ))}
-                          <td style={RIGHT}>{formatQty(emp.qty)}</td>
-                          <td style={RIGHT}>{formatMoney(emp.rub)}</td>
-                          <td style={RIGHT}>
-                            {emp.unitCostAvg
-                              ? formatMoney(emp.unitCostAvg)
-                              : '—'}
+                          <td className="cost-matrix__num">
+                            {isSalary
+                              ? formatMinutes(emp.minutes)
+                              : formatQty(emp.qty)}
+                          </td>
+                          <td className="cost-matrix__num">
+                            {formatMoney(emp.rub)}
+                          </td>
+                          <td className="cost-matrix__num">
+                            {isSalary
+                              ? formatRubPerMinute(emp.rub, emp.minutes)
+                              : emp.unitCostAvg
+                                ? formatMoney(emp.unitCostAvg)
+                                : '—'}
                           </td>
                         </tr>
                       ))}
@@ -276,13 +286,13 @@ export function OperationSizeMatrix({
             </tbody>
             <tfoot>
               <tr>
-                <td style={STICKY_CELL}>
+                <td className="cost-matrix__sticky">
                   <strong>
                     {mode === 'rub' ? 'Итого операции, ₽' : 'Итого операции, шт'}
                   </strong>
                 </td>
                 {colSums.map((sum, i) => (
-                  <td key={i} style={RIGHT}>
+                  <td key={i} className="cost-matrix__num">
                     {sum
                       ? mode === 'rub'
                         ? formatMoney(sum)
@@ -290,24 +300,24 @@ export function OperationSizeMatrix({
                       : '—'}
                   </td>
                 ))}
-                <td style={RIGHT}>{formatQty(totalQty)}</td>
-                <td style={RIGHT}>
+                <td className="cost-matrix__num">{formatQty(totalQty)}</td>
+                <td className="cost-matrix__num">
                   <strong>{formatMoney(totalRub)}</strong>
                 </td>
-                <td style={RIGHT}>—</td>
+                <td className="cost-matrix__num">—</td>
               </tr>
               <tr>
-                <td style={STICKY_CELL}>Выпущено, шт</td>
+                <td className="cost-matrix__sticky">Выпущено, шт</td>
                 {sizeColumns.map((s, i) => (
-                  <td key={i} style={RIGHT}>
+                  <td key={i} className="cost-matrix__num">
                     {s.releasedQty ? formatQty(s.releasedQty) : '—'}
                   </td>
                 ))}
-                <td style={RIGHT}>
+                <td className="cost-matrix__num">
                   <strong>{formatQty(totalReleased)}</strong>
                 </td>
-                <td style={RIGHT}>—</td>
-                <td style={RIGHT}>—</td>
+                <td className="cost-matrix__num">—</td>
+                <td className="cost-matrix__num">—</td>
               </tr>
             </tfoot>
           </table>

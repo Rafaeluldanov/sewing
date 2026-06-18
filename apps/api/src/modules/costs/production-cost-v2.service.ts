@@ -8,6 +8,7 @@ import {
 import {
   PRODUCTION_COST_MATERIAL_SOURCE_LABELS,
   type ProductionCostEmployeeAggregateDto,
+  type ProductionCostFilterOptionsDto,
   type ProductionCostMatrixCellDto,
   type ProductionCostMatrixEmployeeRowDto,
   type ProductionCostMatrixOperationRowDto,
@@ -391,6 +392,7 @@ export class ProductionCostV2Service {
               minutes: 0,
               rub: 0,
               bySize: new Map<string, MatrixSalaryCellAcc>(),
+              byEmp: new Map<string, MatrixSalaryEmpAcc>(),
             } satisfies MatrixSalaryOpAcc);
           op.minutes += ln.minutes;
           op.rub += ln.rub;
@@ -405,6 +407,31 @@ export class ProductionCostV2Service {
           cell.minutes += ln.minutes;
           cell.rub += ln.rub;
           op.bySize.set(sizeKey, cell);
+
+          // Окладные операции тоже раскрываются в сотрудников (как сдельные).
+          const emp =
+            op.byEmp.get(ln.employeeId) ??
+            ({
+              employeeName: ln.employeeName ?? ln.employeeId,
+              minutes: 0,
+              rub: 0,
+              bySize: new Map<string, MatrixSalaryCellAcc>(),
+            } satisfies MatrixSalaryEmpAcc);
+          emp.minutes += ln.minutes;
+          emp.rub += ln.rub;
+          const empCell =
+            emp.bySize.get(sizeKey) ??
+            ({
+              sizeId: ev.passport.sizeId ?? null,
+              sizeCode,
+              minutes: 0,
+              rub: 0,
+            } satisfies MatrixSalaryCellAcc);
+          empCell.minutes += ln.minutes;
+          empCell.rub += ln.rub;
+          emp.bySize.set(sizeKey, empCell);
+          op.byEmp.set(ln.employeeId, emp);
+
           m.salaryOps.set(ln.operationId, op);
         }
       }
@@ -1183,6 +1210,63 @@ export class ProductionCostV2Service {
       warnings: Array.from(warnings).sort(),
     };
   }
+
+  /**
+   * Справочники для выпадающих фильтров отчёта (лекало / заказ / клиент /
+   * сотрудник / операция). Лёгкие проекции `id + label`, read-only.
+   * Заказы ограничиваем последними 1000 (для combobox с клиентским
+   * поиском этого с запасом; самые свежие — вверху).
+   */
+  async getFilterOptions(): Promise<ProductionCostFilterOptionsDto> {
+    const [patterns, clients, employees, orders, operations] =
+      await Promise.all([
+        this.prisma.patternItem.findMany({
+          select: { id: true, name: true, article: true },
+          orderBy: { name: 'asc' },
+        }),
+        this.prisma.client.findMany({
+          select: { id: true, name: true },
+          orderBy: { name: 'asc' },
+        }),
+        this.prisma.employee.findMany({
+          select: { id: true, fullName: true },
+          orderBy: { fullName: 'asc' },
+        }),
+        this.prisma.order.findMany({
+          select: {
+            id: true,
+            number: true,
+            client: { select: { name: true } },
+          },
+          orderBy: { createdAt: 'desc' },
+          take: 1000,
+        }),
+        this.prisma.operation.findMany({
+          select: { id: true, name: true, code: true },
+          orderBy: { name: 'asc' },
+        }),
+      ]);
+
+    return {
+      patterns: patterns.map((p) => ({
+        id: p.id,
+        label: p.name ?? '—',
+        sublabel: p.article ?? null,
+      })),
+      orders: orders.map((o) => ({
+        id: o.id,
+        label: o.number,
+        sublabel: o.client?.name ?? null,
+      })),
+      clients: clients.map((c) => ({ id: c.id, label: c.name })),
+      employees: employees.map((e) => ({ id: e.id, label: e.fullName })),
+      operations: operations.map((o) => ({
+        id: o.id,
+        label: o.name,
+        sublabel: o.code ?? null,
+      })),
+    };
+  }
 }
 
 // =============================================================================
@@ -1468,12 +1552,19 @@ type MatrixSalaryCellAcc = {
   minutes: number;
   rub: number;
 };
+type MatrixSalaryEmpAcc = {
+  employeeName: string;
+  minutes: number;
+  rub: number;
+  bySize: Map<string, MatrixSalaryCellAcc>;
+};
 type MatrixSalaryOpAcc = {
   operationName: string;
   operationCategory: string;
   minutes: number;
   rub: number;
   bySize: Map<string, MatrixSalaryCellAcc>;
+  byEmp: Map<string, MatrixSalaryEmpAcc>;
 };
 type NomMatrixAcc = {
   pieceOps: Map<string, MatrixPieceOpAcc>;
@@ -1564,6 +1655,7 @@ function buildOperationMatrix(
               emp.qty > 0
                 ? round2(emp.amount.div(new Prisma.Decimal(emp.qty))).toFixed(2)
                 : null,
+            minutes: 0,
             cells: pieceCells(emp.bySize),
           }))
           .sort((a, b) => a.employeeName.localeCompare(b.employeeName));
@@ -1586,18 +1678,33 @@ function buildOperationMatrix(
       .sort((a, b) => a.operationName.localeCompare(b.operationName));
 
     const salaryRows = Array.from(m.salaryOps.entries())
-      .map(([opId, op]) => ({
-        operationId: opId,
-        operationName: op.operationName,
-        operationCategory: op.operationCategory,
-        kind: 'SALARY' as const,
-        qty: 0,
-        rub: num2(op.rub),
-        unitCostAvg: null,
-        minutes: round1Number(op.minutes),
-        cells: salaryCells(op.bySize),
-        employees: [],
-      }))
+      .map(([opId, op]) => {
+        const employees: ProductionCostMatrixEmployeeRowDto[] = Array.from(
+          op.byEmp.entries(),
+        )
+          .map(([empId, emp]) => ({
+            employeeId: empId,
+            employeeName: emp.employeeName,
+            qty: 0,
+            rub: num2(emp.rub),
+            unitCostAvg: null,
+            minutes: round1Number(emp.minutes),
+            cells: salaryCells(emp.bySize),
+          }))
+          .sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+        return {
+          operationId: opId,
+          operationName: op.operationName,
+          operationCategory: op.operationCategory,
+          kind: 'SALARY' as const,
+          qty: 0,
+          rub: num2(op.rub),
+          unitCostAvg: null,
+          minutes: round1Number(op.minutes),
+          cells: salaryCells(op.bySize),
+          employees,
+        };
+      })
       .sort((a, b) => a.operationName.localeCompare(b.operationName));
 
     operationMatrix.push(...pieceRows, ...salaryRows);

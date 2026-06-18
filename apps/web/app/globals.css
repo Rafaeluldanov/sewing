@@ -6786,6 +6786,131 @@ body:has(.display-screen) {
 .admin-table__action-link--danger { color: var(--admin-danger); }
 
 /* ---------------------------------------------------------------------------
+ * Объединённая матрица отчёта «Себестоимость» (operation-size-matrix.tsx).
+ * Компактная, на всю ширину карточки; при нехватке места — горизонтальный
+ * скролл, а первая колонка «Операция / Сотрудник» прилипает слева.
+ * Отдельно от `.admin-table`, чтобы не наследовать крупный padding и
+ * мобильный card-reflow (он ломает матрицу).
+ * ------------------------------------------------------------------------- */
+.cost-matrix-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--admin-border);
+  border-radius: var(--admin-radius-card);
+  background: var(--admin-surface);
+}
+.cost-matrix {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 0.78rem;
+}
+.cost-matrix thead th {
+  text-align: left;
+  font-weight: 600;
+  font-size: 0.7rem;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--admin-muted);
+  padding: 0.45rem 0.55rem;
+  background: var(--admin-soft);
+  border-bottom: 1px solid var(--admin-border);
+  white-space: nowrap;
+}
+.cost-matrix tbody td,
+.cost-matrix tfoot td {
+  padding: 0.4rem 0.55rem;
+  border-top: 1px solid var(--admin-border);
+  vertical-align: middle;
+  color: var(--admin-text);
+}
+.cost-matrix tbody tr:first-child td { border-top: 0; }
+.cost-matrix tfoot td {
+  background: var(--admin-soft);
+  border-top: 2px solid var(--admin-border);
+}
+.cost-matrix tbody tr:hover td { background: var(--admin-soft); }
+.cost-matrix__num { text-align: right; white-space: nowrap; }
+.cost-matrix__sticky {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--admin-surface);
+  border-right: 1px solid var(--admin-border);
+}
+.cost-matrix thead th.cost-matrix__sticky { z-index: 2; background: var(--admin-soft); }
+.cost-matrix tfoot td.cost-matrix__sticky { background: var(--admin-soft); }
+.cost-matrix tbody tr:hover td.cost-matrix__sticky { background: var(--admin-soft); }
+
+/* Поисковый combobox фильтров отчёта (filter-combobox.tsx). */
+.cost-combo { position: relative; }
+.cost-combo__control {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.cost-combo__control input[type='text'] {
+  padding: 0.6rem 0.75rem;
+  border-radius: 10px;
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+  width: 100%;
+  transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+.cost-combo__control input[type='text']:focus {
+  outline: none;
+  border-color: var(--admin-primary);
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.15);
+}
+.cost-combo__clear {
+  position: absolute;
+  right: 8px;
+  top: 50%;
+  transform: translateY(-50%);
+  display: inline-flex;
+  border: none;
+  background: none;
+  color: var(--admin-muted);
+  cursor: pointer;
+  padding: 2px;
+  border-radius: 6px;
+}
+.cost-combo__clear:hover { color: var(--admin-text); background: var(--admin-soft); }
+.cost-combo__menu {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 260px;
+  overflow-y: auto;
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  box-shadow: var(--admin-shadow-soft);
+  padding: 4px;
+}
+.cost-combo__option {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  background: none;
+  cursor: pointer;
+  padding: 6px 8px;
+  border-radius: 8px;
+  color: var(--admin-text);
+  font-size: 0.85rem;
+}
+.cost-combo__option:hover,
+.cost-combo__option[data-active='true'] { background: var(--admin-soft); }
+.cost-combo__option-sub { font-size: 0.72rem; color: var(--admin-muted); }
+.cost-combo__empty { padding: 8px; color: var(--admin-muted); font-size: 0.82rem; }
+
+/* ---------------------------------------------------------------------------
    Status badge — мягкие пилюли с тоном.
    --------------------------------------------------------------------------- */
 

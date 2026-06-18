@@ -32,17 +32,16 @@ import {
   ClipboardList,
   Coins,
   Factory,
-  Filter,
   Layers,
   PackageCheck,
   Receipt,
-  RotateCcw,
   Tag,
   TrendingUp,
   Users,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type {
+  ProductionCostFilterOptionsDto,
   ProductionCostMaterialSource,
   ProductionCostNomenclatureGroupDto,
   ProductionCostOperationLineDto,
@@ -51,15 +50,18 @@ import type {
   ProductionCostSalaryOperationDto,
 } from '@sewing/shared/production-cost';
 import { PRODUCTION_COST_MATERIAL_SOURCE_LABELS } from '@sewing/shared/production-cost';
-import { getProductionCostV2 } from '@/lib/production-cost-api';
+import {
+  getProductionCostFilterOptions,
+  getProductionCostV2,
+} from '@/lib/production-cost-api';
 import {
   AdminCard,
-  AdminDateField,
   AdminEmptyState,
   AdminPageShell,
   AdminSectionHeader,
 } from '@/components/admin';
 import { OperationSizeMatrix } from './operation-size-matrix';
+import { ProductionCostFilters } from './production-cost-filters';
 
 export const dynamic = 'force-dynamic';
 
@@ -168,6 +170,21 @@ export default async function AdminProductionCostPage({
         : 'Не удалось загрузить отчёт по себестоимости';
   }
 
+  // Справочники для выпадающих фильтров (combobox). Не критичны: при
+  // ошибке combobox просто будут пустыми, отчёт работает.
+  let filterOptions: ProductionCostFilterOptionsDto = {
+    patterns: [],
+    orders: [],
+    clients: [],
+    employees: [],
+    operations: [],
+  };
+  try {
+    filterOptions = await getProductionCostFilterOptions();
+  } catch {
+    // ignore — fallback к пустым спискам
+  }
+
   const hasFilters = Boolean(
     dateFrom ||
       dateTo ||
@@ -247,101 +264,18 @@ export default async function AdminProductionCostPage({
               </h2>
             </div>
 
-            <form method="get" className="admin-form-grid">
-              <input type="hidden" name="tab" value={tab} />
-              <div className="admin-field">
-                <label htmlFor="dateFrom">С даты</label>
-                <AdminDateField
-                  id="dateFrom"
-                  name="dateFrom"
-                  defaultValue={dateFrom ?? ''}
-                />
-              </div>
-              <div className="admin-field">
-                <label htmlFor="dateTo">По дату</label>
-                <AdminDateField
-                  id="dateTo"
-                  name="dateTo"
-                  defaultValue={dateTo ?? ''}
-                />
-              </div>
-              <div className="admin-field">
-                <label htmlFor="patternItemId">Лекало (ID)</label>
-                <input
-                  id="patternItemId"
-                  name="patternItemId"
-                  type="text"
-                  defaultValue={patternItemId ?? ''}
-                  placeholder="patternItemId"
-                  autoComplete="off"
-                />
-              </div>
-              <div className="admin-field">
-                <label htmlFor="orderId">Заказ (ID)</label>
-                <input
-                  id="orderId"
-                  name="orderId"
-                  type="text"
-                  defaultValue={orderId ?? ''}
-                  placeholder="orderId"
-                  autoComplete="off"
-                />
-              </div>
-              <div className="admin-field">
-                <label htmlFor="clientId">Клиент (ID)</label>
-                <input
-                  id="clientId"
-                  name="clientId"
-                  type="text"
-                  defaultValue={clientId ?? ''}
-                  placeholder="clientId"
-                  autoComplete="off"
-                />
-              </div>
-              <div className="admin-field">
-                <label htmlFor="employeeId">Сотрудник (ID)</label>
-                <input
-                  id="employeeId"
-                  name="employeeId"
-                  type="text"
-                  defaultValue={employeeId ?? ''}
-                  placeholder="employeeId"
-                  autoComplete="off"
-                />
-              </div>
-              <div className="admin-field">
-                <label htmlFor="operationId">Операция (ID)</label>
-                <input
-                  id="operationId"
-                  name="operationId"
-                  type="text"
-                  defaultValue={operationId ?? ''}
-                  placeholder="operationId"
-                  autoComplete="off"
-                />
-              </div>
-              <div
-                className="admin-field admin-field--inline"
-                style={{ alignSelf: 'end' }}
-              >
-                <button
-                  type="submit"
-                  className="admin-btn admin-btn--primary"
-                >
-                  <Filter size={14} strokeWidth={1.6} aria-hidden />
-                  Применить
-                </button>
-                {hasFilters && (
-                  <Link
-                    href="/admin/production-cost"
-                    className="admin-btn admin-btn--ghost"
-                  >
-                    <RotateCcw size={14} strokeWidth={1.6} aria-hidden />
-                    Сбросить
-                  </Link>
-                )}
-              </div>
-            </form>
+            <ProductionCostFilters
+              tab={tab}
+              dateFrom={dateFrom}
+              dateTo={dateTo}
+              patternItemId={patternItemId}
+              orderId={orderId}
+              clientId={clientId}
+              employeeId={employeeId}
+              operationId={operationId}
+              hasFilters={hasFilters}
+              options={filterOptions}
+            />
           </AdminCard>
 
           {data.warnings.length > 0 && (

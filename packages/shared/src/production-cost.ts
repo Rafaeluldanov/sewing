@@ -314,7 +314,7 @@ export interface ProductionCostMatrixCellDto {
   rub: string;
 }
 
-/** Подстрока-сотрудник внутри сдельной операции матрицы. */
+/** Подстрока-сотрудник внутри операции матрицы (сдельной или окладной). */
 export interface ProductionCostMatrixEmployeeRowDto {
   employeeId: string;
   employeeName: string;
@@ -322,6 +322,13 @@ export interface ProductionCostMatrixEmployeeRowDto {
   rub: string;
   /** `rub / qty`, либо `null` при `qty = 0`. */
   unitCostAvg: string | null;
+  /**
+   * Разнесённые минуты сотрудника по окладной операции; `0` для сдельных
+   * подстрок. Для окладных строк UI показывает это как «Кол-во» (мин) и
+   * `rub / minutes` как «За 1 ед.» (₽/мин) — те же данные, что в табе
+   * «Операции / сотрудники».
+   */
+  minutes: number;
   cells: ProductionCostMatrixCellDto[];
 }
 
@@ -420,6 +427,33 @@ export interface ProductionCostNomenclatureGroupDto {
    * обратной совместимости контракта).
    */
   operationMatrix: ProductionCostMatrixOperationRowDto[];
+}
+
+// ---------------------------------------------------------------------------
+// Filter options (для выпадающих фильтров отчёта с поиском)
+// ---------------------------------------------------------------------------
+
+/** Один вариант выпадающего фильтра (id + человекочитаемая подпись). */
+export interface ProductionCostFilterOptionDto {
+  id: string;
+  label: string;
+  /** Доп. подпись: артикул лекала / клиент заказа / код операции. */
+  sublabel?: string | null;
+}
+
+/**
+ * Справочники для фильтров отчёта «Себестоимость» (лекало / заказ /
+ * клиент / сотрудник / операция). Отдаются отдельным лёгким эндпоинтом
+ * `GET /api/admin/production-cost/v2/filter-options` (тот же RBAC, что и
+ * сам отчёт), чтобы UI показывал выпадающие списки с поиском, а не
+ * требовал ввода сырых ID.
+ */
+export interface ProductionCostFilterOptionsDto {
+  patterns: ProductionCostFilterOptionDto[];
+  orders: ProductionCostFilterOptionDto[];
+  clients: ProductionCostFilterOptionDto[];
+  employees: ProductionCostFilterOptionDto[];
+  operations: ProductionCostFilterOptionDto[];
 }
 
 // ---------------------------------------------------------------------------
