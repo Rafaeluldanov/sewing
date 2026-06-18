@@ -905,6 +905,17 @@ model Employee {
   /// `onDelete: SetNull` — снос подразделения не сносит сотрудника.
   companyDivisionId      String?
   companyDivision        CompanyDivision? @relation(fields: [companyDivisionId], references: [id], onDelete: SetNull)
+  /// Статья ДДС для выплат зарплаты этому сотруднику (казначейство,
+  /// см. `CashFlowItem`). При выдаче выплаты (`PayrollPayout.ISSUED`)
+  /// расходная проводка журнала ДС берёт именно эту статью —
+  /// переопределяя глобальную `TreasurySettings.salaryItemId`
+  /// (см. `TreasuryService.postPayrollPayoutTx`). `null` — статья у
+  /// сотрудника не задана, проводка использует глобальную из настроек
+  /// казначейства; если и там пусто — проводка не пишется (опт-ин,
+  /// нулевая регрессия). `onDelete: SetNull` со стороны `CashFlowItem`
+  /// — удаление статьи лишь обнуляет привязку у карточек сотрудников.
+  salaryCashFlowItemId   String?
+  salaryCashFlowItem     CashFlowItem?    @relation("EmployeeSalaryCashFlowItem", fields: [salaryCashFlowItemId], references: [id], onDelete: SetNull)
   active                 Boolean          @default(true)
   createdAt              DateTime         @default(now())
 
@@ -1038,6 +1049,7 @@ model Employee {
   /// `findMany({ where: { companyDivisionId } })` в сервисе сотрудников
   /// и payroll-агрегаторе.
   @@index([companyDivisionId])
+  @@index([salaryCashFlowItemId])
 }
 
 /// Web Push-подписка одного браузера/устройства сотрудника
@@ -6849,6 +6861,10 @@ model CashFlowItem {
   /// `Supplier.defaultCashFlowItemId`). `onDelete: SetNull` со стороны
   /// `Supplier` — удаление статьи лишь обнуляет дефолт у карточек.
   defaultForSuppliers Supplier[] @relation("SupplierDefaultCashFlowItem")
+  /// Сотрудники, для которых эта статья выбрана для выплат зарплаты
+  /// (см. `Employee.salaryCashFlowItemId`). `onDelete: SetNull` со
+  /// стороны `Employee` — удаление статьи лишь обнуляет привязку.
+  salaryEmployees     Employee[] @relation("EmployeeSalaryCashFlowItem")
 
   @@index([isActive])
 }

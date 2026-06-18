@@ -379,6 +379,9 @@ export class PayrollPayoutsService {
         payoutId: updated.id,
         amount: updated.amountTotalRub,
         employeeId: viewer.employeeId,
+        // Получатель выплаты — для per-сотрудник статьи ДДС
+        // (`Employee.salaryCashFlowItemId`), переопределяющей глобальную.
+        recipientEmployeeId: updated.employeeId,
         note: `Выплата зарплаты: ${updated.employeeId}`,
       });
 

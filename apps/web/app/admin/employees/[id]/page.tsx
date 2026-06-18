@@ -12,6 +12,7 @@ import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getEmployee, getEmployeeBlockers } from '@/lib/employees-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
+import { listCashFlowItems } from '@/lib/treasury-api';
 import { EmployeeDangerZone } from './danger-zone';
 import {
   AdminCard,
@@ -94,6 +95,14 @@ export default async function AdminEmployeeDetailPage({
     code: d.code,
     name: d.name,
   }));
+
+  // Активные статьи ДДС для select-а «Статья ДДС (выплаты)» в форме
+  // «Доступ». Падение казначейства не должно ронять карточку сотрудника
+  // — деградируем до пустого списка (select покажет только опцию
+  // «— из настроек казначейства —» + текущую привязку, если она есть).
+  const cashFlowItems = await listCashFlowItems({ activeOnly: true }).catch(
+    () => [],
+  );
 
   const qrUrl = buildEmployeeQrPath(employee.id);
   const printUrl = buildEmployeePrintPath(employee.id);
@@ -212,6 +221,20 @@ export default async function AdminEmployeeDetailPage({
                   <span className="admin-muted">— без привязки —</span>
                 )}
               </dd>
+              <dt>Статья ДДС (выплаты)</dt>
+              <dd>
+                {employee.salaryCashFlowItemId ? (
+                  employee.salaryCashFlowItemName ?? (
+                    <code style={{ fontSize: '0.85rem' }}>
+                      {employee.salaryCashFlowItemId}
+                    </code>
+                  )
+                ) : (
+                  <span className="admin-muted">
+                    — из настроек казначейства —
+                  </span>
+                )}
+              </dd>
               <dt>В системе с</dt>
               <dd>{formatDateOnly(employee.createdAt)}</dd>
             </dl>
@@ -230,6 +253,7 @@ export default async function AdminEmployeeDetailPage({
             <EmployeeEditForm
               employee={employee}
               divisionOptions={divisionOptions}
+              cashFlowItems={cashFlowItems}
             />
           </AdminCard>
 

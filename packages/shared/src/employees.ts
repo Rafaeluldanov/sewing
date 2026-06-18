@@ -196,6 +196,24 @@ const CompanyDivisionIdField = z
     return v;
   });
 
+/**
+ * Статья ДДС для выплат зарплаты сотруднику (id `CashFlowItem` из
+ * казначейства, см. `Employee.salaryCashFlowItemId`). Пустую строку /
+ * whitespace / `null` нормализуем в `null` («статья не задана» —
+ * проводка по выплате возьмёт глобальную `TreasurySettings.salaryItemId`).
+ * Жёстко не cuid-валидируем (id могут быть не cuid в импортах) — наличие
+ * статьи backend проверяет отдельно (`CashFlowItemNotFoundException`).
+ */
+const SalaryCashFlowItemIdField = z.preprocess(
+  (v) => {
+    if (v === null || v === undefined) return null;
+    if (typeof v !== 'string') return v;
+    const trimmed = v.trim();
+    return trimmed === '' ? null : trimmed;
+  },
+  z.string().max(40, 'Некорректная статья ДДС').nullable().optional(),
+);
+
 export const UpdateEmployeeSchema = z
   .object({
     compensationType: CompensationTypeSchema.optional(),
@@ -218,6 +236,14 @@ export const UpdateEmployeeSchema = z
      * проверяет backend.
      */
     companyDivisionId: CompanyDivisionIdField.optional(),
+    /**
+     * Статья ДДС для выплат зарплаты (`Employee.salaryCashFlowItemId`,
+     * `CashFlowItem.id`). `undefined` — не трогаем колонку; `null` или
+     * пустая строка — стираем привязку (проводка по выплате возьмёт
+     * глобальную `TreasurySettings.salaryItemId`); ID — привязываем.
+     * Наличие/корректность статьи проверяет backend.
+     */
+    salaryCashFlowItemId: SalaryCashFlowItemIdField,
   })
   .refine(
     (obj) =>
@@ -225,8 +251,9 @@ export const UpdateEmployeeSchema = z
       obj.salaryPerShift !== undefined ||
       obj.active !== undefined ||
       obj.cutterB2bSewingPercent !== undefined ||
-      obj.companyDivisionId !== undefined,
-    'Нечего обновлять: укажите compensationType, salaryPerShift, active, cutterB2bSewingPercent или companyDivisionId',
+      obj.companyDivisionId !== undefined ||
+      obj.salaryCashFlowItemId !== undefined,
+    'Нечего обновлять: укажите compensationType, salaryPerShift, active, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
   );
 export type UpdateEmployeeDto = z.infer<typeof UpdateEmployeeSchema>;
 
@@ -308,6 +335,14 @@ export const CreateEmployeeSchema = z
      * подразделение в `/admin/employees/[id]`.
      */
     companyDivisionId: CompanyDivisionIdField.optional(),
+    /**
+     * Статья ДДС для выплат зарплаты (`Employee.salaryCashFlowItemId`).
+     * Опционально и nullable: `null` / пустая строка / `undefined` —
+     * сотрудник создаётся без привязки (проводка по выплате возьмёт
+     * глобальную статью из настроек казначейства). Менеджер потом
+     * проставит статью в `/admin/employees/[id]`.
+     */
+    salaryCashFlowItemId: SalaryCashFlowItemIdField,
   })
   .superRefine((obj, ctx) => {
     if (
@@ -387,6 +422,19 @@ export interface EmployeeDetailDto extends EmployeeListItemDto {
    * `null`).
    */
   cutterB2bSewingPercent?: number | null;
+  /**
+   * Статья ДДС для выплат зарплаты (`Employee.salaryCashFlowItemId`,
+   * `CashFlowItem.id`). `null` — статья у сотрудника не задана; при
+   * выдаче выплаты расходная проводка журнала ДС возьмёт глобальную
+   * `TreasurySettings.salaryItemId`. `salaryCashFlowItemName` — имя
+   * привязанной статьи (для read-вида/селекта, `null` если не задана).
+   *
+   * Поля опциональны (`?`) для backward-compat — старые потребители
+   * shared-пакета без пересборки продолжают компилироваться. Backend
+   * всегда отдаёт оба ключа.
+   */
+  salaryCashFlowItemId?: string | null;
+  salaryCashFlowItemName?: string | null;
 }
 
 // ---------------------------------------------------------------------------

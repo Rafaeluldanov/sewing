@@ -184,6 +184,13 @@ export async function updateEmployeeAction(
   const divisionRaw = hasDivisionKey
     ? String(form.get('companyDivisionId') ?? '').trim()
     : null;
+  // Статья ДДС для выплат. Та же семантика «ключа нет — не трогаем
+  // колонку»: select показан для всех сотрудников, поэтому ключ обычно
+  // есть; пустое значение → `null` (снять привязку).
+  const hasSalaryItemKey = form.has('salaryCashFlowItemId');
+  const salaryItemRaw = hasSalaryItemKey
+    ? String(form.get('salaryCashFlowItemId') ?? '').trim()
+    : null;
 
   if (!isCompensationType(compensationRaw)) {
     return { error: 'Выберите тип компенсации' };
@@ -241,6 +248,13 @@ export async function updateEmployeeAction(
   if (hasDivisionKey) {
     dto.companyDivisionId =
       divisionRaw === '' || divisionRaw === null ? null : divisionRaw;
+  }
+
+  // Статья ДДС для выплат: ключ есть, пустая строка → `null` (снять
+  // привязку, проводка возьмёт глобальную статью); id → привязать.
+  if (hasSalaryItemKey) {
+    dto.salaryCashFlowItemId =
+      salaryItemRaw === '' || salaryItemRaw === null ? null : salaryItemRaw;
   }
 
   try {

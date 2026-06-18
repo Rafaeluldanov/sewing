@@ -14,6 +14,7 @@ import type {
 } from '@sewing/shared/employees';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  CashFlowItemNotFoundException,
   CompanyDivisionInactiveException,
   CompanyDivisionNotFoundException,
   EmployeeAdminTargetForbiddenException,
@@ -48,6 +49,17 @@ import { requiresSalaryRate } from './compensation.js';
  */
 const PIN_HASH_COST = 10;
 
+/**
+ * Единый include для чтения карточки сотрудника. Кроме подразделения
+ * подтягиваем привязанную статью ДДС для выплат
+ * (`Employee.salaryCashFlowItem`) — её id/имя уходят в `EmployeeDetailDto`
+ * (read-вид карточки + дефолт селекта в форме «Доступ»).
+ */
+const EMPLOYEE_DETAIL_INCLUDE = {
+  companyDivision: true,
+  salaryCashFlowItem: { select: { id: true, name: true } },
+} as const satisfies Prisma.EmployeeInclude;
+
 @Injectable()
 export class EmployeesService {
   private readonly logger = new Logger(EmployeesService.name);
@@ -81,7 +93,7 @@ export class EmployeesService {
     const rows = await this.prisma.employee.findMany({
       where,
       orderBy: [{ active: 'desc' }, { fullName: 'asc' }],
-      include: { companyDivision: true },
+      include: EMPLOYEE_DETAIL_INCLUDE,
     });
     return rows.map(toListDto);
   }
@@ -89,7 +101,7 @@ export class EmployeesService {
   async get(id: string): Promise<EmployeeDetailDto> {
     const row = await this.prisma.employee.findUnique({
       where: { id },
-      include: { companyDivision: true },
+      include: EMPLOYEE_DETAIL_INCLUDE,
     });
     if (!row) throw new EmployeeNotFoundException();
     return toDetailDto(row);
@@ -161,6 +173,13 @@ export class EmployeesService {
       await this.assertCompanyDivisionUsable(dto.companyDivisionId);
     }
 
+    // Статья ДДС для выплат: если задана — должна существовать (активность
+    // не требуем — список селекта отдаёт только активные, но привязать
+    // можно и ранее выбранную, позже деактивированную статью).
+    if (dto.salaryCashFlowItemId) {
+      await this.assertCashFlowItemExists(dto.salaryCashFlowItemId);
+    }
+
     const pinHash = await bcrypt.hash(dto.pin, PIN_HASH_COST);
 
     let created;
@@ -189,9 +208,13 @@ export class EmployeesService {
               ? null
               : new Prisma.Decimal(dto.cutterB2bSewingPercent.toFixed(2)),
           companyDivisionId: dto.companyDivisionId ?? null,
+          // Статья ДДС для выплат зарплаты (переопределяет глобальную
+          // `TreasurySettings.salaryItemId` в проводке по выплате).
+          // `null` — не задана, проводка возьмёт глобальную статью.
+          salaryCashFlowItemId: dto.salaryCashFlowItemId ?? null,
           active: dto.active ?? true,
         },
-        include: { companyDivision: true },
+        include: EMPLOYEE_DETAIL_INCLUDE,
       });
     } catch (e) {
       if (
@@ -253,6 +276,15 @@ export class EmployeesService {
       await this.assertCompanyDivisionUsable(dto.companyDivisionId);
     }
 
+    // Статья ДДС для выплат: если менеджер выбрал статью — она должна
+    // существовать. `null` (снять привязку) не валидируем.
+    if (
+      dto.salaryCashFlowItemId !== undefined &&
+      dto.salaryCashFlowItemId !== null
+    ) {
+      await this.assertCashFlowItemExists(dto.salaryCashFlowItemId);
+    }
+
     const data: Prisma.EmployeeUpdateInput = {};
     if (dto.compensationType !== undefined) {
       data.compensationType = dto.compensationType as CompensationType;
@@ -284,11 +316,19 @@ export class EmployeesService {
           ? { disconnect: true }
           : { connect: { id: dto.companyDivisionId } };
     }
+    if (dto.salaryCashFlowItemId !== undefined) {
+      // `null` — снять привязку (проводка по выплате возьмёт глобальную
+      // статью из настроек казначейства), иначе — привязать выбранную.
+      data.salaryCashFlowItem =
+        dto.salaryCashFlowItemId === null
+          ? { disconnect: true }
+          : { connect: { id: dto.salaryCashFlowItemId } };
+    }
 
     const updated = await this.prisma.employee.update({
       where: { id },
       data,
-      include: { companyDivision: true },
+      include: EMPLOYEE_DETAIL_INCLUDE,
     });
     return toDetailDto(updated);
   }
@@ -472,7 +512,7 @@ export class EmployeesService {
   async archive(id: string, viewer: AuthPrincipal): Promise<EmployeeDetailDto> {
     const target = await this.prisma.employee.findUnique({
       where: { id },
-      include: { companyDivision: true },
+      include: EMPLOYEE_DETAIL_INCLUDE,
     });
     if (!target) throw new EmployeeNotFoundException();
     if (!target.active) return toDetailDto(target);
@@ -492,7 +532,7 @@ export class EmployeesService {
       const row = await tx.employee.update({
         where: { id },
         data: { active: false },
-        include: { companyDivision: true },
+        include: EMPLOYEE_DETAIL_INCLUDE,
       });
       await this.audit.log(
         {
@@ -533,7 +573,7 @@ export class EmployeesService {
   async restore(id: string, viewer: AuthPrincipal): Promise<EmployeeDetailDto> {
     const target = await this.prisma.employee.findUnique({
       where: { id },
-      include: { companyDivision: true },
+      include: EMPLOYEE_DETAIL_INCLUDE,
     });
     if (!target) throw new EmployeeNotFoundException();
     if (target.active) return toDetailDto(target);
@@ -547,7 +587,7 @@ export class EmployeesService {
         const row = await tx.employee.update({
           where: { id },
           data: { active: true },
-          include: { companyDivision: true },
+          include: EMPLOYEE_DETAIL_INCLUDE,
         });
         await this.audit.log(
           {
@@ -726,6 +766,23 @@ export class EmployeesService {
     if (!div) throw new CompanyDivisionNotFoundException();
     if (!div.isActive) throw new CompanyDivisionInactiveException();
   }
+
+  /**
+   * Гард для `Employee.salaryCashFlowItemId` в create/update: выбранная
+   * статья ДДС должна существовать (`CASH_FLOW_ITEM_NOT_FOUND`).
+   * Активность НЕ требуем — менеджер мог привязать статью, которую
+   * позже деактивировали; форсировать смену при правке карточки не
+   * нужно (та же логика, что у `Supplier.defaultCashFlowItemId`).
+   * Снять привязку (`null`) всегда можно — этот метод вызывается только
+   * для непустого id.
+   */
+  private async assertCashFlowItemExists(itemId: string): Promise<void> {
+    const row = await this.prisma.cashFlowItem.findUnique({
+      where: { id: itemId },
+      select: { id: true },
+    });
+    if (!row) throw new CashFlowItemNotFoundException();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -733,7 +790,7 @@ export class EmployeesService {
 // ---------------------------------------------------------------------------
 
 type EmployeeRow = Prisma.EmployeeGetPayload<{
-  include: { companyDivision: true };
+  include: typeof EMPLOYEE_DETAIL_INCLUDE;
 }>;
 
 function toListDto(e: EmployeeRow): EmployeeListItemDto {
@@ -764,5 +821,7 @@ function toDetailDto(e: EmployeeRow): EmployeeDetailDto {
       e.cutterB2bSewingPercent === null
         ? null
         : Number(e.cutterB2bSewingPercent),
+    salaryCashFlowItemId: e.salaryCashFlowItemId,
+    salaryCashFlowItemName: e.salaryCashFlowItem?.name ?? null,
   };
 }

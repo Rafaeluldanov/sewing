@@ -8,6 +8,10 @@ import {
   type CompensationType,
   type EmployeeDetailDto,
 } from '@sewing/shared/employees';
+import {
+  CASH_FLOW_DIRECTION_LABELS,
+  type CashFlowItemDto,
+} from '@sewing/shared/treasury';
 import { updateEmployeeAction } from '../actions';
 import {
   initialUpdateEmployeeState,
@@ -56,6 +60,13 @@ interface Props {
    * её к опциям, помеченную меткой `(отключено)`.
    */
   divisionOptions?: DivisionOption[];
+  /**
+   * Активные статьи ДДС из казначейства для select-а «Статья ДДС
+   * (выплаты)». Подгружается на странице карточки. Если массив пустой
+   * (нет активных или backend упал) — select всё равно рендерится с
+   * опцией «— из настроек казначейства —» (=снять привязку).
+   */
+  cashFlowItems?: CashFlowItemDto[];
 }
 
 /**
@@ -68,7 +79,11 @@ interface Props {
  *   - `active`           (мягкий «архив»)
  *   - `companyDivisionId` (PHASE 2 STEP 2)
  */
-export function EmployeeEditForm({ employee, divisionOptions = [] }: Props) {
+export function EmployeeEditForm({
+  employee,
+  divisionOptions = [],
+  cashFlowItems = [],
+}: Props) {
   const [compensationType, setCompensationType] = useState<CompensationType>(
     employee.compensationType,
   );
@@ -120,6 +135,13 @@ export function EmployeeEditForm({ employee, divisionOptions = [] }: Props) {
   const requiresRate =
     compensationType === 'SALARY' || compensationType === 'MIXED';
 
+  // Если у сотрудника уже привязана статья ДДС, которой нет в активном
+  // списке (например, её деактивировали) — добавим её отдельной опцией,
+  // чтобы сохранение формы случайно не обнулило привязку.
+  const salaryItemMissingCurrent =
+    !!employee.salaryCashFlowItemId &&
+    !cashFlowItems.some((i) => i.id === employee.salaryCashFlowItemId);
+
   return (
     <form action={formAction} className="admin-form">
       <div className="admin-form-grid">
@@ -139,6 +161,50 @@ export function EmployeeEditForm({ employee, divisionOptions = [] }: Props) {
               </option>
             ))}
           </select>
+        </div>
+
+        {/*
+          Статья ДДС для выплат зарплаты этому сотруднику. Переопределяет
+          глобальную «зарплатную» статью из настроек казначейства в
+          расходной проводке журнала ДС при выдаче выплаты. Пустое
+          значение → проводка берёт глобальную статью (или не пишется,
+          если и она не задана). Показываем для всех — выплаты бывают и
+          у сдельщиков, и у окладников. Список ведётся в разделе
+          «Казначейство → Статьи ДДС».
+        */}
+        <div className="admin-field">
+          <label htmlFor="emp-salary-dds-item">Статья ДДС (выплаты)</label>
+          <select
+            id="emp-salary-dds-item"
+            name="salaryCashFlowItemId"
+            defaultValue={employee.salaryCashFlowItemId ?? ''}
+            aria-describedby="emp-salary-dds-item-hint"
+          >
+            <option value="">— из настроек казначейства —</option>
+            {salaryItemMissingCurrent && employee.salaryCashFlowItemId && (
+              <option value={employee.salaryCashFlowItemId}>
+                {employee.salaryCashFlowItemName ?? 'Текущая статья'}{' '}
+                (неактивна)
+              </option>
+            )}
+            {cashFlowItems.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+                {item.direction
+                  ? ` · ${CASH_FLOW_DIRECTION_LABELS[item.direction]}`
+                  : ''}
+                {item.code ? ` (${item.code})` : ''}
+              </option>
+            ))}
+          </select>
+          <span
+            id="emp-salary-dds-item-hint"
+            className="admin-field__hint admin-muted"
+          >
+            При выдаче зарплаты этому сотруднику проводка в кассу пойдёт
+            по выбранной статье. «— из настроек казначейства —» — берётся
+            общая зарплатная статья (Казначейство → Настройки).
+          </span>
         </div>
 
         {/*

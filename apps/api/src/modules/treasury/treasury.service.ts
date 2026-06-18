@@ -446,9 +446,18 @@ export class TreasuryService {
 
   /**
    * Проводка расхода по выдаче зарплаты (`PayrollPayout.ISSUED`).
-   * Опт-ин: пишет проводку ТОЛЬКО если в настройках заданы активные
-   * зарплатный счёт и статья и сумма > 0. Иначе ничего не делает —
-   * выдача выплат работает как раньше (нулевая регрессия).
+   * Опт-ин: пишет проводку ТОЛЬКО если задан активный зарплатный счёт,
+   * есть статья ДДС и сумма > 0. Иначе ничего не делает — выдача выплат
+   * работает как раньше (нулевая регрессия).
+   *
+   * Статья ДДС резолвится так: если у сотрудника-получателя
+   * (`recipientEmployeeId`) задана `Employee.salaryCashFlowItemId` — берём
+   * её; иначе fallback на глобальную `TreasurySettings.salaryItemId`.
+   * Резолвленная статья (как и счёт) должна быть активна — иначе проводка
+   * не пишется (тот же контракт «опт-ин, активные», что и раньше).
+   *
+   * `employeeId` — кто проводит (актор/постящий, `postedById`), это НЕ
+   * получатель выплаты; получатель приходит отдельным `recipientEmployeeId`.
    * Идемпотентно по `registrarType='PAYROLL_PAYOUT', registrarId=payoutId`.
    */
   async postPayrollPayoutTx(
@@ -457,6 +466,8 @@ export class TreasuryService {
       payoutId: string;
       amount: Prisma.Decimal.Value;
       employeeId: string;
+      /** Получатель выплаты — источник per-сотрудник статьи ДДС. */
+      recipientEmployeeId?: string | null;
       note?: string | null;
     },
   ): Promise<{ id: string } | null> {
@@ -467,8 +478,20 @@ export class TreasuryService {
       where: { id: 'default' },
     });
     const accountId = settings?.salaryAccountId;
-    const itemId = settings?.salaryItemId;
-    if (!accountId || !itemId) return null;
+    if (!accountId) return null;
+
+    // Per-сотрудник статья ДДС переопределяет глобальную из настроек.
+    let itemId = settings?.salaryItemId ?? null;
+    if (input.recipientEmployeeId) {
+      const recipient = await tx.employee.findUnique({
+        where: { id: input.recipientEmployeeId },
+        select: { salaryCashFlowItemId: true },
+      });
+      if (recipient?.salaryCashFlowItemId) {
+        itemId = recipient.salaryCashFlowItemId;
+      }
+    }
+    if (!itemId) return null;
 
     const [account, item] = await Promise.all([
       tx.cashAccount.findUnique({ where: { id: accountId } }),
