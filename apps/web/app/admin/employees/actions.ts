@@ -257,30 +257,6 @@ export async function updateEmployeeAction(
       salaryItemRaw === '' || salaryItemRaw === null ? null : salaryItemRaw;
   }
 
-  // Фича «несколько ролей»: набор ролей доступа (чекбоксы) + основная
-  // (radio). Скрытый маркер `rolesPresent` сигналит, что форма «Доступ»
-  // была отрендерена (иначе роли не трогаем). Backend дополнительно
-  // держит инвариант «набор содержит основную» и режет выдачу ADMIN
-  // не-админом.
-  if (form.has('rolesPresent')) {
-    const rolesRaw = form
-      .getAll('roles')
-      .map((v) => String(v))
-      .filter((v): v is EmployeeRole => isEmployeeRole(v));
-    const primaryRaw = String(form.get('primaryRole') ?? '').trim();
-    if (rolesRaw.length === 0) {
-      return { error: 'Выберите хотя бы одну роль' };
-    }
-    if (!isEmployeeRole(primaryRaw)) {
-      return { error: 'Выберите основную роль' };
-    }
-    if (!rolesRaw.includes(primaryRaw)) {
-      return { error: 'Основная роль должна быть среди выбранных' };
-    }
-    dto.role = primaryRaw;
-    dto.roles = rolesRaw;
-  }
-
   try {
     await updateEmployee(employeeId, dto);
     revalidatePath('/admin/employees');
@@ -294,6 +270,55 @@ export async function updateEmployeeAction(
       };
     }
     return { error: 'Не удалось сохранить сотрудника' };
+  }
+}
+
+/**
+ * Назначение ролей сотруднику из раздела «Настройки → Роли сотрудников»
+ * (фича «несколько ролей»). Отдельный action (а не часть
+ * `updateEmployeeAction`): редактирование ролей вынесено из карточки
+ * сотрудника в меню настроек — выбираем сотрудника и прикрепляем роли.
+ *
+ * Тело FormData: набор `roles` (чекбоксы) + `primaryRole` (radio).
+ * Backend (`UpdateEmployeeSchema` + `EmployeesService.update`) держит
+ * инвариант «набор содержит основную роль», режет выдачу ADMIN
+ * не-админом и защищает последнего администратора.
+ */
+export async function updateEmployeeRolesAction(
+  employeeId: string,
+  _prev: UpdateEmployeeState,
+  form: FormData,
+): Promise<UpdateEmployeeState> {
+  const rolesRaw = form
+    .getAll('roles')
+    .map((v) => String(v))
+    .filter((v): v is EmployeeRole => isEmployeeRole(v));
+  const primaryRaw = String(form.get('primaryRole') ?? '').trim();
+  if (rolesRaw.length === 0) {
+    return { error: 'Выберите хотя бы одну роль' };
+  }
+  if (!isEmployeeRole(primaryRaw)) {
+    return { error: 'Выберите основную роль' };
+  }
+  if (!rolesRaw.includes(primaryRaw)) {
+    return { error: 'Основная роль должна быть среди выбранных' };
+  }
+
+  const dto: UpdateEmployeeDto = { role: primaryRaw, roles: rolesRaw };
+  try {
+    await updateEmployee(employeeId, dto);
+    revalidatePath('/admin/company-settings');
+    revalidatePath('/admin/employees');
+    revalidatePath(`/admin/employees/${employeeId}`);
+    return { ok: true, successMessage: 'Роли сохранены.' };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        error: errorText(e),
+        errorRequestId: e.requestId,
+      };
+    }
+    return { error: 'Не удалось сохранить роли' };
   }
 }
 

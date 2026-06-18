@@ -5,7 +5,6 @@ import { useFormState, useFormStatus } from 'react-dom';
 import { Save } from 'lucide-react';
 import {
   COMPENSATION_TYPES,
-  EMPLOYEE_ROLES,
   type CompensationType,
   type EmployeeDetailDto,
 } from '@sewing/shared/employees';
@@ -13,7 +12,6 @@ import {
   CASH_FLOW_DIRECTION_LABELS,
   type CashFlowItemDto,
 } from '@sewing/shared/treasury';
-import { formatRole } from '@/lib/admin-labels';
 import { updateEmployeeAction } from '../actions';
 import {
   initialUpdateEmployeeState,
@@ -69,12 +67,6 @@ interface Props {
    * опцией «— из настроек казначейства —» (=снять привязку).
    */
   cashFlowItems?: CashFlowItemDto[];
-  /**
-   * Фича «несколько ролей»: может ли текущий пользователь выдавать/
-   * снимать роль ADMIN (= он сам ADMIN). Для SHOP_MANAGER строка ADMIN
-   * в списке ролей заблокирована (backend всё равно режет эскалацию).
-   */
-  canAssignAdmin?: boolean;
 }
 
 /**
@@ -91,44 +83,7 @@ export function EmployeeEditForm({
   employee,
   divisionOptions = [],
   cashFlowItems = [],
-  canAssignAdmin = false,
 }: Props) {
-  // Фича «несколько ролей»: набор ролей доступа (чекбоксы) + основная
-  // роль (radio). Инвариант «основная всегда в наборе» держим в стейте
-  // (нельзя снять чекбокс основной; выбор основной добавляет её в набор).
-  const [selectedRoles, setSelectedRoles] = useState<Set<string>>(
-    () =>
-      new Set(
-        employee.roles && employee.roles.length > 0
-          ? employee.roles
-          : [employee.role],
-      ),
-  );
-  const [primaryRole, setPrimaryRole] = useState<string>(employee.role);
-
-  function toggleRole(r: string) {
-    setSelectedRoles((prev) => {
-      if (prev.has(r)) {
-        // Нельзя снять основную роль — сначала выберите другую основную.
-        if (r === primaryRole) return prev;
-        const next = new Set(prev);
-        next.delete(r);
-        return next;
-      }
-      const next = new Set(prev);
-      next.add(r);
-      return next;
-    });
-  }
-
-  function setPrimary(r: string) {
-    setSelectedRoles((prev) => {
-      const next = new Set(prev);
-      next.add(r); // основная всегда входит в набор
-      return next;
-    });
-    setPrimaryRole(r);
-  }
 
   const [compensationType, setCompensationType] = useState<CompensationType>(
     employee.compensationType,
@@ -153,10 +108,7 @@ export function EmployeeEditForm({
   const [companyDivisionId, setCompanyDivisionId] = useState<string>(
     employee.companyDivisionId ?? '',
   );
-  // B2B-процент имеет смысл для основной роли CUTTER (так же читает
-  // EarningsService). Реагируем на выбранную основную роль, а не на
-  // сохранённую — чтобы поле появлялось сразу при смене основной.
-  const isCutter = primaryRole === CUTTER_ROLE;
+  const isCutter = employee.role === CUTTER_ROLE;
 
   // Если текущая привязка указывает на soft-deleted подразделение
   // (его нет в `divisionOptions`), добавим запись «(отключено)»,
@@ -193,69 +145,6 @@ export function EmployeeEditForm({
 
   return (
     <form action={formAction} className="admin-form">
-      {/*
-        Фича «несколько ролей»: чекбоксы всех assignable-ролей + radio
-        «основная». Скрытый `rolesPresent` сообщает server-action, что
-        форма ролей отрендерена (иначе роли не трогаем). Backend держит
-        инвариант «набор содержит основную» и режет выдачу ADMIN
-        не-админом — UI лишь прячет недоступное.
-      */}
-      <div className="admin-field admin-roles">
-        <label>Роли доступа</label>
-        <input type="hidden" name="rolesPresent" value="1" />
-        <div className="admin-roles__list">
-          {EMPLOYEE_ROLES.map((r) => {
-            const checked = selectedRoles.has(r);
-            const isPrimary = primaryRole === r;
-            const adminLocked = r === 'ADMIN' && !canAssignAdmin;
-            return (
-              <div key={r} className="admin-roles__row">
-                <label className="admin-roles__check">
-                  <input
-                    type="checkbox"
-                    name={adminLocked ? undefined : 'roles'}
-                    value={r}
-                    checked={checked}
-                    disabled={adminLocked}
-                    onChange={adminLocked ? undefined : () => toggleRole(r)}
-                  />
-                  <span>{formatRole(r)}</span>
-                </label>
-                <label className="admin-roles__primary admin-muted">
-                  <input
-                    type="radio"
-                    name={adminLocked ? undefined : 'primaryRole'}
-                    value={r}
-                    checked={isPrimary}
-                    disabled={adminLocked || !checked}
-                    onChange={adminLocked ? undefined : () => setPrimary(r)}
-                  />
-                  <span>основная</span>
-                </label>
-                {/*
-                  Сохраняем текущую ADMIN-привязку, когда менеджер не
-                  вправе её менять: disabled-инпуты не попадают в FormData,
-                  поэтому без этих hidden значений сохранение «съело» бы
-                  ADMIN и backend вернул бы ошибку эскалации.
-                */}
-                {adminLocked && checked && (
-                  <input type="hidden" name="roles" value="ADMIN" />
-                )}
-                {adminLocked && isPrimary && (
-                  <input type="hidden" name="primaryRole" value="ADMIN" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <span className="admin-field__hint admin-muted">
-          Отметьте все роли, к которым у сотрудника есть доступ. «Основная»
-          определяет рабочий экран по умолчанию; переключаться между
-          участками сотрудник может сканом рабочего места.
-          {!canAssignAdmin ? ' Роль «Администратор» назначает только администратор.' : ''}
-        </span>
-      </div>
-
       <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="emp-comp-type">Тип компенсации</label>

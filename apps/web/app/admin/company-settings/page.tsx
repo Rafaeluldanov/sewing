@@ -1,15 +1,19 @@
 import { Settings } from 'lucide-react';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { CompanySettingsDto } from '@sewing/shared/company-settings';
+import type { EmployeeListItemDto } from '@sewing/shared/employees';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getCompanySettings,
   listCompanyDivisions,
 } from '@/lib/company-settings-api';
+import { listEmployees } from '@/lib/employees-api';
+import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { AdminPageShell } from '@/components/admin';
 import { CompanySettingsForm } from './settings-form';
 import { DivisionsSection } from './divisions-section';
 import { MaterialStockDivisionOverridesSection } from './material-stock-division-overrides-section';
+import { EmployeeRolesSection } from './employee-roles-section';
 
 export const dynamic = 'force-dynamic';
 
@@ -50,6 +54,17 @@ export default async function AdminCompanySettingsPage() {
         : 'Не удалось загрузить настройки компании';
   }
 
+  // Список сотрудников + права текущего пользователя для секции «Роли
+  // сотрудников». Падение этих запросов не должно ронять страницу
+  // настроек — деградируем до пустого списка / без права на ADMIN.
+  const [employees, viewer] = await Promise.all([
+    listEmployees().catch((): EmployeeListItemDto[] => []),
+    getCurrentUserOrNull().catch(() => null),
+  ]);
+  const canAssignAdmin = (viewer?.user.roles ?? [viewer?.user.role]).includes(
+    'ADMIN',
+  );
+
   return (
     <AdminPageShell
       icon={<Settings size={22} strokeWidth={1.6} aria-hidden />}
@@ -70,6 +85,10 @@ export default async function AdminCompanySettingsPage() {
         />
       )}
       {settings && <DivisionsSection divisions={divisions} />}
+      <EmployeeRolesSection
+        employees={employees}
+        canAssignAdmin={canAssignAdmin}
+      />
     </AdminPageShell>
   );
 }

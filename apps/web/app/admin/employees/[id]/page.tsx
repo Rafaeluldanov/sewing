@@ -254,9 +254,6 @@ export default async function AdminEmployeeDetailPage({
               employee={employee}
               divisionOptions={divisionOptions}
               cashFlowItems={cashFlowItems}
-              canAssignAdmin={(viewer?.user.roles ?? [viewer?.user.role]).includes(
-                'ADMIN',
-              )}
             />
           </AdminCard>
 
