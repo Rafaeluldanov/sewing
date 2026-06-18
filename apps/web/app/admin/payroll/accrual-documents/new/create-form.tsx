@@ -8,6 +8,7 @@
  */
 
 import { useFormState, useFormStatus } from 'react-dom';
+import type { EmployeeListItemDto } from '@sewing/shared/employees';
 import { createPayrollAccrualDocumentAction } from '../actions';
 import type { AccrualDocumentActionState } from '../actions';
 
@@ -18,10 +19,18 @@ function todayIso(): string {
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
 }
 
-export function CreateAccrualDocumentForm() {
+export function CreateAccrualDocumentForm({
+  employees,
+}: {
+  employees: EmployeeListItemDto[];
+}) {
   const [state, formAction] = useFormState(
     createPayrollAccrualDocumentAction,
     initialState,
+  );
+
+  const sortedEmployees = [...employees].sort((a, b) =>
+    a.fullName.localeCompare(b.fullName, 'ru'),
   );
 
   return (
@@ -58,6 +67,22 @@ export function CreateAccrualDocumentForm() {
         />
         <p className="admin-hint">
           В документ войдут начисления и окладные дни до этой даты включительно.
+        </p>
+      </div>
+
+      <div className="admin-field">
+        <label htmlFor="create-ad-employee">Сотрудник</label>
+        <select id="create-ad-employee" name="employeeId" defaultValue="">
+          <option value="">— все сотрудники —</option>
+          {sortedEmployees.map((e) => (
+            <option key={e.id} value={e.id}>
+              {e.fullName}
+            </option>
+          ))}
+        </select>
+        <p className="admin-hint">
+          Оставьте «все сотрудники», чтобы начислить всем сразу, или выберите
+          одного — документ сформируется только по нему.
         </p>
       </div>
 

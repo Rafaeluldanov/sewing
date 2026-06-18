@@ -5,16 +5,22 @@ import {
   AdminPageShell,
   AdminSectionHeader,
 } from '@/components/admin';
+import { listEmployees } from '@/lib/employees-api';
 import { CreateAccrualDocumentForm } from './create-form';
+
+export const dynamic = 'force-dynamic';
 
 /**
  * Страница создания документа начисления зарплаты (PHASE 3 STEP 6.3).
  *
- * Менеджер указывает `accrualDate` — дату расчёта включительно.
- * Система включает в документ все неоплаченные утверждённые начисления
- * и окладные дни до этой даты.
+ * Менеджер указывает `accrualDate` — дату расчёта включительно — и
+ * опционально конкретного сотрудника (иначе документ формируется по
+ * всем сотрудникам). Система включает в документ все неоплаченные
+ * утверждённые начисления и окладные дни до этой даты.
  */
-export default function AdminNewAccrualDocumentPage() {
+export default async function AdminNewAccrualDocumentPage() {
+  const employees = await listEmployees({ active: true }).catch(() => []);
+
   return (
     <AdminPageShell
       icon={<BadgeRussianRuble size={22} strokeWidth={1.6} aria-hidden />}
@@ -36,9 +42,10 @@ export default function AdminNewAccrualDocumentPage() {
           style={{ marginBottom: '1rem', fontSize: '0.9rem' }}
         >
           Документ включит только неоплаченные утверждённые начисления и
-          окладные дни до выбранной даты включительно.
+          окладные дни до выбранной даты включительно. Можно ограничить
+          документ одним сотрудником.
         </p>
-        <CreateAccrualDocumentForm />
+        <CreateAccrualDocumentForm employees={employees} />
       </AdminCard>
     </AdminPageShell>
   );

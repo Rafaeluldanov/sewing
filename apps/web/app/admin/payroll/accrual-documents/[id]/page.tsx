@@ -147,7 +147,11 @@ export default async function AdminAccrualDocumentDetailPage({
     <AdminPageShell
       icon={<BadgeRussianRuble size={22} strokeWidth={1.6} aria-hidden />}
       title="Документ начисления"
-      subtitle={`Дата: ${formatDate(doc.accrualDate)}`}
+      subtitle={
+        doc.employee
+          ? `Дата: ${formatDate(doc.accrualDate)} · ${doc.employee.fullName}`
+          : `Дата: ${formatDate(doc.accrualDate)}`
+      }
       actions={
         <Link
           href="/admin/payroll/accrual-documents"
@@ -173,6 +177,16 @@ export default async function AdminAccrualDocumentDetailPage({
           </dd>
           <dt>Дата начисления</dt>
           <dd>{formatDate(doc.accrualDate)}</dd>
+          <dt>Охват</dt>
+          <dd>
+            {doc.employee ? (
+              <Link href={`/admin/employees/${doc.employee.id}`}>
+                {doc.employee.fullName}
+              </Link>
+            ) : (
+              'Все сотрудники'
+            )}
+          </dd>
           {doc.managerComment && (
             <>
               <dt>Комментарий менеджера</dt>

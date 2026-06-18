@@ -82,7 +82,7 @@ export class PayrollAccrualDocumentsService {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
-        include: { _count: { select: { lines: true } } },
+        include: documentListInclude,
       }),
     ]);
 
@@ -101,12 +101,7 @@ export class PayrollAccrualDocumentsService {
   async get(id: string, _viewer: AuthPrincipal): Promise<PayrollAccrualDocumentDto> {
     const row = await this.prisma.payrollAccrualDocument.findUnique({
       where: { id },
-      include: {
-        lines: {
-          include: { employee: { select: employeeSelect } },
-          orderBy: [{ createdAt: 'asc' }],
-        },
-      },
+      include: documentDetailInclude,
     });
     if (!row) throw new PayrollAccrualDocumentNotFoundException();
     return toDto(row, row.lines);
@@ -122,11 +117,14 @@ export class PayrollAccrualDocumentsService {
   ): Promise<PayrollAccrualDocumentDto> {
     const accrualDateParsed = parseDateOnly(dto.accrualDate);
 
+    const employeeFilterId = dto.employeeId ?? null;
+
     return this.prisma.$transaction(async (tx) => {
       const doc = await tx.payrollAccrualDocument.create({
         data: {
           accrualDate: accrualDateParsed,
           status: 'DRAFT',
+          employeeId: employeeFilterId,
           managerComment: dto.managerComment ?? null,
           createdById: viewer.employeeId,
           totalPieceworkRub: new Prisma.Decimal(0),
@@ -136,16 +134,11 @@ export class PayrollAccrualDocumentsService {
         },
       });
 
-      await this.computeLines(tx, doc.id, accrualDateParsed, new Map());
+      await this.computeLines(tx, doc.id, accrualDateParsed, new Map(), employeeFilterId);
 
       const updated = await tx.payrollAccrualDocument.findUnique({
         where: { id: doc.id },
-        include: {
-          lines: {
-            include: { employee: { select: employeeSelect } },
-            orderBy: [{ createdAt: 'asc' }],
-          },
-        },
+        include: documentDetailInclude,
       });
       if (!updated) throw new PayrollAccrualDocumentNotFoundException();
 
@@ -164,6 +157,7 @@ export class PayrollAccrualDocumentsService {
           payload: {
             documentId: doc.id,
             accrualDate: dto.accrualDate,
+            employeeId: employeeFilterId,
             linesCount: updated.lines.length,
             totalToPayRub: roundMoneyNumber(totals.totalToPayRub),
             createdById: viewer.employeeId,
@@ -219,8 +213,8 @@ export class PayrollAccrualDocumentsService {
       // Удалить старые строки.
       await tx.payrollAccrualDocumentLine.deleteMany({ where: { documentId: id } });
 
-      // Пересчитать.
-      await this.computeLines(tx, id, row.accrualDate, manualMap);
+      // Пересчитать (сохраняя охват документа: один сотрудник или все).
+      await this.computeLines(tx, id, row.accrualDate, manualMap, row.employeeId ?? null);
 
       const updatedLines = await tx.payrollAccrualDocumentLine.findMany({
         where: { documentId: id },
@@ -232,12 +226,7 @@ export class PayrollAccrualDocumentsService {
       const updated = await tx.payrollAccrualDocument.update({
         where: { id },
         data: totals,
-        include: {
-          lines: {
-            include: { employee: { select: employeeSelect } },
-            orderBy: [{ createdAt: 'asc' }],
-          },
-        },
+        include: documentDetailInclude,
       });
 
       await this.audit.log(
@@ -323,12 +312,7 @@ export class PayrollAccrualDocumentsService {
       const updated = await tx.payrollAccrualDocument.update({
         where: { id },
         data: totals,
-        include: {
-          lines: {
-            include: { employee: { select: employeeSelect } },
-            orderBy: [{ createdAt: 'asc' }],
-          },
-        },
+        include: documentDetailInclude,
       });
 
       await this.audit.log(
@@ -366,12 +350,7 @@ export class PayrollAccrualDocumentsService {
     return this.prisma.$transaction(async (tx) => {
       const doc = await tx.payrollAccrualDocument.findUnique({
         where: { id },
-        include: {
-          lines: {
-            include: { employee: { select: employeeSelect } },
-            orderBy: [{ createdAt: 'asc' }],
-          },
-        },
+        include: documentDetailInclude,
       });
       if (!doc) throw new PayrollAccrualDocumentNotFoundException();
       if (doc.status !== 'DRAFT') {
@@ -553,12 +532,7 @@ export class PayrollAccrualDocumentsService {
           paidAt,
           paidById: viewer.employeeId,
         },
-        include: {
-          lines: {
-            include: { employee: { select: employeeSelect } },
-            orderBy: [{ createdAt: 'asc' }],
-          },
-        },
+        include: documentDetailInclude,
       });
 
       await this.audit.log(
@@ -612,12 +586,7 @@ export class PayrollAccrualDocumentsService {
           cancelledById: viewer.employeeId,
           cancelReason: dto.reason ?? null,
         },
-        include: {
-          lines: {
-            include: { employee: { select: employeeSelect } },
-            orderBy: [{ createdAt: 'asc' }],
-          },
-        },
+        include: documentDetailInclude,
       });
 
       await this.audit.log(
@@ -655,6 +624,8 @@ export class PayrollAccrualDocumentsService {
    *     (payout.status ∈ DRAFT/ISSUED/ACKNOWLEDGED);
    *   - `SalaryEntry`: date ≤ accrualDate;
    *     исключить те, что уже в активных PayrollPayoutLine.
+   *   - если задан `employeeFilterId` — учитываются только начисления
+   *     этого сотрудника (документ по одному сотруднику);
    *   - Группировка по employeeId.
    *   - Строка создаётся только если amountPieceworkRub + amountSalaryRub > 0
    *     OR manualAdjustRub != 0 (из manualMap).
@@ -664,6 +635,7 @@ export class PayrollAccrualDocumentsService {
     documentId: string,
     accrualDate: Date,
     manualMap: Map<string, { manualAdjustRub: Prisma.Decimal; manualComment: string | null }>,
+    employeeFilterId: string | null,
   ): Promise<void> {
     const cutoff = endOfDayUtc(accrualDate);
 
@@ -698,6 +670,7 @@ export class PayrollAccrualDocumentsService {
       where: {
         status: EntryStatus.APPROVED,
         createdAt: { lte: cutoff },
+        ...(employeeFilterId ? { employeeId: employeeFilterId } : {}),
         ...(usedOpIds.size > 0 ? { id: { notIn: Array.from(usedOpIds) } } : {}),
       },
       orderBy: [{ employeeId: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
@@ -707,6 +680,7 @@ export class PayrollAccrualDocumentsService {
     const salEntries = await tx.salaryEntry.findMany({
       where: {
         date: { lte: accrualDate },
+        ...(employeeFilterId ? { employeeId: employeeFilterId } : {}),
         ...(usedSalIds.size > 0 ? { id: { notIn: Array.from(usedSalIds) } } : {}),
       },
       orderBy: [{ employeeId: 'asc' }, { date: 'asc' }, { id: 'asc' }],
@@ -733,7 +707,9 @@ export class PayrollAccrualDocumentsService {
     }
 
     // Добавить employeeId из manualMap, у которых нет начислений (для сохранения manual строк).
+    // При фильтре по сотруднику — только его (другие manual-строки в охват не входят).
     for (const [empId] of manualMap) {
+      if (employeeFilterId && empId !== employeeFilterId) continue;
       if (!byEmployee.has(empId)) {
         byEmployee.set(empId, { opEntries: [], salEntries: [] });
       }
@@ -822,12 +798,25 @@ const employeeSelect = {
   role: true,
 } as const;
 
+/**
+ * Стандартный include для карточки документа: сотрудник-охват (если задан)
+ * и строки с их сотрудниками.
+ */
+const documentDetailInclude = {
+  employee: { select: employeeSelect },
+  lines: {
+    include: { employee: { select: employeeSelect } },
+    orderBy: [{ createdAt: 'asc' }],
+  },
+} satisfies Prisma.PayrollAccrualDocumentInclude;
+
+const documentListInclude = {
+  employee: { select: employeeSelect },
+  _count: { select: { lines: true } },
+} satisfies Prisma.PayrollAccrualDocumentInclude;
+
 type DocRow = Prisma.PayrollAccrualDocumentGetPayload<{
-  include: {
-    lines: {
-      include: { employee: { select: typeof employeeSelect } };
-    };
-  };
+  include: typeof documentDetailInclude;
 }>;
 
 type LineRow = Prisma.PayrollAccrualDocumentLineGetPayload<{
@@ -835,7 +824,7 @@ type LineRow = Prisma.PayrollAccrualDocumentLineGetPayload<{
 }>;
 
 type ListRow = Prisma.PayrollAccrualDocumentGetPayload<{
-  include: { _count: { select: { lines: true } } };
+  include: typeof documentListInclude;
 }>;
 
 function toListItemDto(row: ListRow): PayrollAccrualDocumentListItemDto {
@@ -843,6 +832,8 @@ function toListItemDto(row: ListRow): PayrollAccrualDocumentListItemDto {
     id: row.id,
     accrualDate: toDateOnly(row.accrualDate),
     status: row.status,
+    employeeId: row.employeeId ?? null,
+    employee: toEmployeeDto(row.employee),
     totalPieceworkRub: roundMoneyNumber(row.totalPieceworkRub),
     totalSalaryRub: roundMoneyNumber(row.totalSalaryRub),
     totalAdjustRub: roundMoneyNumber(row.totalAdjustRub),
@@ -853,6 +844,15 @@ function toListItemDto(row: ListRow): PayrollAccrualDocumentListItemDto {
     cancelledAt: row.cancelledAt ? row.cancelledAt.toISOString() : null,
     linesCount: row._count.lines,
   };
+}
+
+/** Маппинг сотрудника-охвата документа в DTO (или `null`). */
+function toEmployeeDto(
+  employee: { id: string; fullName: string; role: string } | null,
+): { id: string; fullName: string; role: string } | null {
+  return employee
+    ? { id: employee.id, fullName: employee.fullName, role: employee.role }
+    : null;
 }
 
 function toLineDto(line: LineRow): PayrollAccrualDocumentLineDto {
@@ -892,6 +892,8 @@ function toDto(
     id: row.id,
     accrualDate: toDateOnly(row.accrualDate),
     status: row.status,
+    employeeId: row.employeeId ?? null,
+    employee: toEmployeeDto(row.employee),
     totalPieceworkRub: roundMoneyNumber(row.totalPieceworkRub),
     totalSalaryRub: roundMoneyNumber(row.totalSalaryRub),
     totalAdjustRub: roundMoneyNumber(row.totalAdjustRub),

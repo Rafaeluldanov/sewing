@@ -1009,6 +1009,7 @@ model Employee {
   payrollAccrualDocumentsCreated   PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentCreatedBy")
   payrollAccrualDocumentsPaid      PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentPaidBy")
   payrollAccrualDocumentsCancelled PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentCancelledBy")
+  payrollAccrualDocumentsScoped    PayrollAccrualDocument[]     @relation("PayrollAccrualDocumentEmployee")
   payrollAccrualDocumentLines      PayrollAccrualDocumentLine[]
 
   /// Этап «Отправить изделие конструктору»: обратные связи на
@@ -2167,6 +2168,12 @@ model PayrollAccrualDocument {
   accrualDate DateTime                     @db.Date
   status      PayrollAccrualDocumentStatus @default(DRAFT)
 
+  /// Фильтр по сотруднику. Если задан — документ формируется только
+  /// по этому сотруднику (одна строка). `null` — по всем сотрудникам
+  /// с неоплаченными начислениями (поведение по умолчанию). Хранится,
+  /// чтобы пересчёт (`recompute`) сохранял охват документа.
+  employeeId String?
+
   /// Snapshot-итоги по документу. Заполняются при формировании и
   /// пересчёте строк. После PAID не пересчитываются автоматически.
   totalPieceworkRub Decimal @default(0) @db.Decimal(12, 2)
@@ -2189,6 +2196,7 @@ model PayrollAccrualDocument {
   createdBy   Employee  @relation("PayrollAccrualDocumentCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
   paidBy      Employee? @relation("PayrollAccrualDocumentPaidBy", fields: [paidById], references: [id], onDelete: SetNull)
   cancelledBy Employee? @relation("PayrollAccrualDocumentCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  employee    Employee? @relation("PayrollAccrualDocumentEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
 
   lines PayrollAccrualDocumentLine[]
 
@@ -2196,6 +2204,7 @@ model PayrollAccrualDocument {
   @@index([createdById])
   @@index([paidById])
   @@index([cancelledById])
+  @@index([employeeId])
   @@index([createdAt])
 }
 

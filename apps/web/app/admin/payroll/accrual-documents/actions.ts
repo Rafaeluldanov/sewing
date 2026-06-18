@@ -56,6 +56,7 @@ export async function createPayrollAccrualDocumentAction(
 ): Promise<AccrualDocumentActionState> {
   const raw = {
     accrualDate: String(form.get('accrualDate') ?? '').trim(),
+    employeeId: String(form.get('employeeId') ?? '').trim() || null,
     managerComment:
       form.get('managerComment') !== null
         ? String(form.get('managerComment') ?? '').trim() || null

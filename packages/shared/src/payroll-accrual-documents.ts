@@ -75,9 +75,17 @@ const OptionalCommentField = z
  * Тело `POST /api/payroll/accrual-documents`. Создаёт `DRAFT`-документ
  * начисления зарплаты на дату. Сервис формирует строки из начислений
  * `OperationEntry` / `SalaryEntry` с датой ≤ `accrualDate`.
+ *
+ * `employeeId` — опциональный фильтр по сотруднику. Если задан, документ
+ * формируется только по этому сотруднику (одна строка). Не задан /
+ * пустая строка → по всем сотрудникам с неоплаченными начислениями.
  */
 export const CreatePayrollAccrualDocumentSchema = z.object({
   accrualDate: DateOnlySchema,
+  employeeId: z
+    .union([z.string().trim().min(1).max(40), z.literal(''), z.null()])
+    .optional()
+    .transform((v) => (v ? v : null)),
   managerComment: OptionalCommentField,
 });
 export type CreatePayrollAccrualDocumentDto = z.infer<
@@ -184,6 +192,12 @@ export interface PayrollAccrualDocumentDto {
   /** ISO-дата без времени, `YYYY-MM-DD`. */
   accrualDate: string;
   status: PayrollAccrualDocumentStatus;
+  /**
+   * Сотрудник, по которому ограничен документ. `null` — документ
+   * сформирован по всем сотрудникам.
+   */
+  employeeId: string | null;
+  employee: PayrollAccrualDocumentEmployeeDto | null;
   totalPieceworkRub: number;
   totalSalaryRub: number;
   totalAdjustRub: number;
@@ -208,6 +222,9 @@ export interface PayrollAccrualDocumentListItemDto {
   id: string;
   accrualDate: string;
   status: PayrollAccrualDocumentStatus;
+  /** Сотрудник, по которому ограничен документ. `null` — по всем. */
+  employeeId: string | null;
+  employee: PayrollAccrualDocumentEmployeeDto | null;
   totalPieceworkRub: number;
   totalSalaryRub: number;
   totalAdjustRub: number;

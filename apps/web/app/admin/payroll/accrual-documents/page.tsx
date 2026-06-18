@@ -88,6 +88,11 @@ export default async function AdminAccrualDocumentsPage({
       ),
     },
     {
+      key: 'scope',
+      header: 'Охват',
+      render: (d) => (d.employee ? d.employee.fullName : 'Все'),
+    },
+    {
       key: 'linesCount',
       header: 'Сотрудников',
       align: 'right',
