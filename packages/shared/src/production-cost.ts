@@ -290,6 +290,85 @@ export interface ProductionCostOrderGroupDto {
 }
 
 // ---------------------------------------------------------------------------
+// Объединённая матрица «операции · сотрудники · размеры»
+// ---------------------------------------------------------------------------
+//
+// Это «склейка» исторических трёх разрезов (`operationBreakdown` /
+// `employeeBreakdown` / `sizeBreakdown`) в один: строки — операции
+// (сдельные раскрываются в сотрудников, окладные — нет), колонки —
+// размеры, в ячейках ₽ или количество (переключатель в UI), снизу —
+// строка выпуска по размерам. См. UI `/admin/production-cost`.
+
+/**
+ * Ячейка матрицы на пересечении «строка (операция/сотрудник) × размер».
+ *
+ *   - для сдельных строк: `qty` = Σ `OperationEntry.qty` в этом размере,
+ *     `rub` = Σ `OperationEntry.amount`;
+ *   - для окладных строк: `qty = 0`, `rub` — разнесённый оклад по этому
+ *     размеру (минуты × оклад / 480).
+ */
+export interface ProductionCostMatrixCellDto {
+  sizeId: string | null;
+  sizeCode: string;
+  qty: number;
+  rub: string;
+}
+
+/** Подстрока-сотрудник внутри сдельной операции матрицы. */
+export interface ProductionCostMatrixEmployeeRowDto {
+  employeeId: string;
+  employeeName: string;
+  qty: number;
+  rub: string;
+  /** `rub / qty`, либо `null` при `qty = 0`. */
+  unitCostAvg: string | null;
+  cells: ProductionCostMatrixCellDto[];
+}
+
+export const PRODUCTION_COST_MATRIX_OP_KINDS = [
+  'PIECEWORK',
+  'SALARY',
+] as const;
+export type ProductionCostMatrixOpKind =
+  (typeof PRODUCTION_COST_MATRIX_OP_KINDS)[number];
+
+/**
+ * Строка-операция объединённой матрицы.
+ *
+ *   - `PIECEWORK` — сдельная (факт `OperationEntry`), раскрывается в
+ *     сотрудников (`employees`), есть `qty` / `unitCostAvg`;
+ *   - `SALARY` — окладная (ОТК / ВТО / Упаковка / Деление кроя):
+ *     стоимость из разнесённого реального времени, без сдельного `qty`
+ *     (`qty = 0`, `unitCostAvg = null`) и без сотрудников-подстрок
+ *     (`employees = []`); вместо них — `minutes`.
+ */
+export interface ProductionCostMatrixOperationRowDto {
+  operationId: string;
+  operationName: string;
+  operationCategory: string;
+  kind: ProductionCostMatrixOpKind;
+  /** Σ `OperationEntry.qty` (сдельные); `0` для окладных. */
+  qty: number;
+  /** Σ ₽ (начисления для сдельных, разнесённый оклад для окладных). */
+  rub: string;
+  /** `rub / qty`; `null` для окладных или при `qty = 0`. */
+  unitCostAvg: string | null;
+  /** Разнесённые минуты (окладные); `0` для сдельных. */
+  minutes: number;
+  cells: ProductionCostMatrixCellDto[];
+  /** Сотрудники-подстроки (только сдельные); пусто для окладных. */
+  employees: ProductionCostMatrixEmployeeRowDto[];
+}
+
+/** Колонка-размер матрицы + выпуск (для строки-футера «Выпущено, шт»). */
+export interface ProductionCostMatrixSizeColumnDto {
+  sizeId: string | null;
+  sizeCode: string;
+  /** `Σ Passport.qtyGood` (PACKED) в этом размере. */
+  releasedQty: number;
+}
+
+// ---------------------------------------------------------------------------
 // Nomenclature group (главный разрез)
 // ---------------------------------------------------------------------------
 
@@ -329,6 +408,18 @@ export interface ProductionCostNomenclatureGroupDto {
   operationBreakdown: ProductionCostOperationAggregateDto[];
   employeeBreakdown: ProductionCostEmployeeAggregateDto[];
   sizeBreakdown: ProductionCostSizeAggregateDto[];
+
+  /**
+   * Колонки-размеры объединённой матрицы операций (порядок — по
+   * `sizeCode`). Пусто, если в группе нет ни операций, ни выпуска.
+   */
+  sizeColumns: ProductionCostMatrixSizeColumnDto[];
+  /**
+   * Объединённая матрица «операции · сотрудники · размеры» — единый
+   * разрез вместо трёх раздельных `*Breakdown` (те оставлены для
+   * обратной совместимости контракта).
+   */
+  operationMatrix: ProductionCostMatrixOperationRowDto[];
 }
 
 // ---------------------------------------------------------------------------

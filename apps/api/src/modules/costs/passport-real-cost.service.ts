@@ -514,12 +514,24 @@ export class PassportRealCostService {
   ): Promise<
     Pick<
       ApportionedSalary,
-      'rubByPassport' | 'trackedMinutesByEmpDay' | 'salaryByOperation'
+      | 'rubByPassport'
+      | 'linesByPassport'
+      | 'trackedMinutesByEmpDay'
+      | 'salaryByOperation'
     >
   > {
-    const { rubByPassport, trackedMinutesByEmpDay, salaryByOperation } =
-      await this.apportionSalary(from, to);
-    return { rubByPassport, trackedMinutesByEmpDay, salaryByOperation };
+    const {
+      rubByPassport,
+      linesByPassport,
+      trackedMinutesByEmpDay,
+      salaryByOperation,
+    } = await this.apportionSalary(from, to);
+    return {
+      rubByPassport,
+      linesByPassport,
+      trackedMinutesByEmpDay,
+      salaryByOperation,
+    };
   }
 
   private async salaryFor(

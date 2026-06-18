@@ -32,8 +32,12 @@ import path from 'node:path';
 import { describe, expect, test } from 'vitest';
 import {
   PRODUCTION_COST_MATERIAL_SOURCE_LABELS,
+  PRODUCTION_COST_MATRIX_OP_KINDS,
   PRODUCTION_COST_V2_ENTRY_STATUSES,
   ProductionCostV2QuerySchema,
+  type ProductionCostMatrixCellDto,
+  type ProductionCostMatrixOperationRowDto,
+  type ProductionCostMatrixSizeColumnDto,
   type ProductionCostOperationLineDto,
   type ProductionCostReportDto,
 } from '@sewing/shared/production-cost';
@@ -153,6 +157,63 @@ describe('Production Cost v2 — shared contract', () => {
     expect(empty.orderGroups).toHaveLength(0);
     expect(empty.operationLines).toHaveLength(0);
     expect(empty.warnings).toHaveLength(0);
+  });
+
+  test('Объединённая матрица: типы строк/ячеек/колонок валидны', () => {
+    expect(PRODUCTION_COST_MATRIX_OP_KINDS).toContain('PIECEWORK');
+    expect(PRODUCTION_COST_MATRIX_OP_KINDS).toContain('SALARY');
+
+    const cell: ProductionCostMatrixCellDto = {
+      sizeId: null,
+      sizeCode: 'M',
+      qty: 5,
+      rub: '150.00',
+    };
+    const piecework: ProductionCostMatrixOperationRowDto = {
+      operationId: 'op-1',
+      operationName: 'Оверлок',
+      operationCategory: 'SEWING',
+      kind: 'PIECEWORK',
+      qty: 5,
+      rub: '150.00',
+      unitCostAvg: '30.00',
+      minutes: 0,
+      cells: [cell],
+      employees: [
+        {
+          employeeId: 'e1',
+          employeeName: 'Иванова',
+          qty: 5,
+          rub: '150.00',
+          unitCostAvg: '30.00',
+          cells: [cell],
+        },
+      ],
+    };
+    // Окладная строка: без сдельного qty/сотрудников, со временем.
+    const salary: ProductionCostMatrixOperationRowDto = {
+      operationId: 'op-otk',
+      operationName: 'ОТК',
+      operationCategory: 'QC',
+      kind: 'SALARY',
+      qty: 0,
+      rub: '50.00',
+      unitCostAvg: null,
+      minutes: 12,
+      cells: [{ sizeId: null, sizeCode: 'M', qty: 0, rub: '50.00' }],
+      employees: [],
+    };
+    const column: ProductionCostMatrixSizeColumnDto = {
+      sizeId: null,
+      sizeCode: 'M',
+      releasedQty: 5,
+    };
+
+    expect(piecework.kind).toBe('PIECEWORK');
+    expect(piecework.employees[0]!.cells[0]!.rub).toBe('150.00');
+    expect(salary.kind).toBe('SALARY');
+    expect(salary.unitCostAvg).toBeNull();
+    expect(column.releasedQty).toBe(5);
   });
 });
 
@@ -284,5 +345,28 @@ describe('Production Cost v2 — frontend page', () => {
   test('Фронт-API ходит в `/admin/production-cost/v2`', () => {
     const src = readSrc('apps/web/lib/production-cost-api.ts');
     expect(src).toMatch(/\/admin\/production-cost\/v2/);
+  });
+
+  test('Разрез лекала — одна объединённая матрица (OperationSizeMatrix), не три карточки', () => {
+    const page = readSrc('apps/web/app/admin/production-cost/page.tsx');
+    expect(page).toMatch(/OperationSizeMatrix/);
+    // Старые отдельные карточки разрезов убраны.
+    expect(page).not.toMatch(/BreakdownCard/);
+  });
+
+  test('Компонент матрицы: тумблер ₽/шт, метка «оклад», футеры «Итого»/«Выпущено»', () => {
+    const src = readSrc(
+      'apps/web/app/admin/production-cost/operation-size-matrix.tsx',
+    );
+    // Переключатель режима ячеек.
+    expect(src).toMatch(/₽/);
+    expect(src).toMatch(/шт/);
+    // Окладные строки помечаются.
+    expect(src).toMatch(/оклад/);
+    // Футеры: итог по колонкам + строка выпуска.
+    expect(src).toMatch(/Итого операции/);
+    expect(src).toMatch(/Выпущено, шт/);
+    // Сдельные раскрываются в сотрудников.
+    expect(src).toMatch(/Операция \/ Сотрудник/);
   });
 });

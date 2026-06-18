@@ -59,6 +59,7 @@ import {
   AdminPageShell,
   AdminSectionHeader,
 } from '@/components/admin';
+import { OperationSizeMatrix } from './operation-size-matrix';
 
 export const dynamic = 'force-dynamic';
 
@@ -616,117 +617,13 @@ function NomenclatureTab({
       </div>
 
       {groups.map((g) => (
-        <div
-          key={`${g.nomenclatureKey}-breakdown`}
-          style={{ marginTop: 16 }}
-        >
-          <AdminSectionHeader
-            title={`${g.nomenclatureName ?? '—'} · разрез`}
-            hint={
-              g.nomenclatureArticle
-                ? `Артикул: ${g.nomenclatureArticle}`
-                : undefined
-            }
-          />
-          <div
-            style={{
-              display: 'grid',
-              gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))',
-              gap: 12,
-            }}
-          >
-            <BreakdownCard title="Операции" Icon={Factory}>
-              {g.operationBreakdown.length === 0 ? (
-                <div style={{ color: 'var(--admin-muted)' }}>—</div>
-              ) : (
-                <table className="admin-table" style={{ fontSize: 13 }}>
-                  <thead>
-                    <tr>
-                      <th>Операция</th>
-                      <th style={{ textAlign: 'right' }}>Кол-во</th>
-                      <th style={{ textAlign: 'right' }}>Сумма, ₽</th>
-                      <th style={{ textAlign: 'right' }}>За 1 ед.</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.operationBreakdown.map((op) => (
-                      <tr key={op.operationId}>
-                        <td>{op.operationName}</td>
-                        <td style={{ textAlign: 'right' }}>
-                          {formatQty(op.qty)}
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          {formatMoney(op.amount)}
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          {formatMoney(op.unitCostAvg)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </BreakdownCard>
-            <BreakdownCard title="Сотрудники" Icon={Users}>
-              {g.employeeBreakdown.length === 0 ? (
-                <div style={{ color: 'var(--admin-muted)' }}>—</div>
-              ) : (
-                <table className="admin-table" style={{ fontSize: 13 }}>
-                  <thead>
-                    <tr>
-                      <th>Сотрудник</th>
-                      <th style={{ textAlign: 'right' }}>Кол-во</th>
-                      <th style={{ textAlign: 'right' }}>Сумма, ₽</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.employeeBreakdown.map((e) => (
-                      <tr key={e.employeeId}>
-                        <td>{e.employeeName}</td>
-                        <td style={{ textAlign: 'right' }}>
-                          {formatQty(e.qty)}
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          {formatMoney(e.amount)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </BreakdownCard>
-            <BreakdownCard title="Размеры" Icon={Tag}>
-              {g.sizeBreakdown.length === 0 ? (
-                <div style={{ color: 'var(--admin-muted)' }}>—</div>
-              ) : (
-                <table className="admin-table" style={{ fontSize: 13 }}>
-                  <thead>
-                    <tr>
-                      <th>Размер</th>
-                      <th style={{ textAlign: 'right' }}>Выпущено, шт</th>
-                      <th style={{ textAlign: 'right' }}>
-                        Операции, ₽
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {g.sizeBreakdown.map((s) => (
-                      <tr key={`${s.sizeId ?? 'na'}-${s.sizeCode}`}>
-                        <td>{s.sizeCode}</td>
-                        <td style={{ textAlign: 'right' }}>
-                          {formatQty(s.releasedQty)}
-                        </td>
-                        <td style={{ textAlign: 'right' }}>
-                          {formatMoney(s.operationCostRub)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              )}
-            </BreakdownCard>
-          </div>
-        </div>
+        <OperationSizeMatrix
+          key={`${g.nomenclatureKey}-matrix`}
+          nomenclatureName={g.nomenclatureName}
+          nomenclatureArticle={g.nomenclatureArticle}
+          sizeColumns={g.sizeColumns}
+          operationMatrix={g.operationMatrix}
+        />
       ))}
     </AdminCard>
   );
@@ -1117,42 +1014,5 @@ function TabLink({
       <Icon size={14} strokeWidth={1.6} aria-hidden />
       {label}
     </Link>
-  );
-}
-
-function BreakdownCard({
-  title,
-  Icon,
-  children,
-}: {
-  title: string;
-  Icon: LucideIcon;
-  children: React.ReactNode;
-}) {
-  return (
-    <div
-      style={{
-        border: '1px solid var(--admin-border)',
-        borderRadius: 8,
-        padding: 12,
-        background: 'var(--admin-card-bg)',
-      }}
-    >
-      <div
-        style={{
-          display: 'flex',
-          alignItems: 'center',
-          gap: 6,
-          fontSize: 13,
-          fontWeight: 600,
-          marginBottom: 8,
-          color: 'var(--admin-muted)',
-        }}
-      >
-        <Icon size={13} strokeWidth={1.6} aria-hidden />
-        {title}
-      </div>
-      {children}
-    </div>
   );
 }

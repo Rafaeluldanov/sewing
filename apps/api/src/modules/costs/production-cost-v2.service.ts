@@ -8,6 +8,10 @@ import {
 import {
   PRODUCTION_COST_MATERIAL_SOURCE_LABELS,
   type ProductionCostEmployeeAggregateDto,
+  type ProductionCostMatrixCellDto,
+  type ProductionCostMatrixEmployeeRowDto,
+  type ProductionCostMatrixOperationRowDto,
+  type ProductionCostMatrixSizeColumnDto,
   type ProductionCostMaterialSource,
   type ProductionCostNomenclatureGroupDto,
   type ProductionCostOperationAggregateDto,
@@ -164,6 +168,19 @@ export class ProductionCostV2Service {
         },
       },
     });
+
+    // Аккумулятор объединённой матрицы «операции · сотрудники · размеры»
+    // по ключу номенклатуры. Сдельные строки заполняются из `entries`
+    // (шаг 6), окладные — из разнесённого оклада PACKED-паспортов (шаг 4).
+    const matrixByNom = new Map<string, NomMatrixAcc>();
+    const ensureMatrix = (nomKey: string): NomMatrixAcc => {
+      let m = matrixByNom.get(nomKey);
+      if (!m) {
+        m = { pieceOps: new Map(), salaryOps: new Map(), sizeMeta: new Map() };
+        matrixByNom.set(nomKey, m);
+      }
+      return m;
+    };
 
     // -------------------------------------------------------------------
     // 2. Финализированные паспорта (`PACKED`) в окне периода
@@ -344,6 +361,53 @@ export class ProductionCostV2Service {
           return fresh;
         })();
       sizeAgg.releasedQty += qty;
+
+      // Матрица: окладные операции этого PACKED-паспорта раскладываем по
+      // лекалу × размеру (разнесённое реальное время × оклад/480).
+      const salaryLines = apportionedSalary.linesByPassport.get(ev.passportId);
+      const ordOfPassport = ev.passport.order;
+      if (salaryLines && salaryLines.length > 0 && ordOfPassport) {
+        const nomKey = nomenclatureKeyFor({
+          patternItemId: ordOfPassport.patternItemId,
+          patternNameSnapshot: ordOfPassport.patternNameSnapshot,
+          patternArticleSnapshot: ordOfPassport.patternArticleSnapshot,
+          patternItemName: ordOfPassport.patternItem?.name ?? null,
+          patternItemArticle: ordOfPassport.patternItem?.article ?? null,
+        });
+        const m = ensureMatrix(nomKey);
+        m.sizeMeta.set(sizeKey, {
+          sizeId: ev.passport.sizeId ?? null,
+          sizeCode,
+        });
+        for (const ln of salaryLines) {
+          if (!ln.operationId) continue;
+          const meta = apportionedSalary.salaryByOperation.get(ln.operationId);
+          const op =
+            m.salaryOps.get(ln.operationId) ??
+            ({
+              operationName:
+                ln.operationName ?? meta?.operationName ?? ln.operationId,
+              operationCategory: meta?.operationCategory ?? '',
+              minutes: 0,
+              rub: 0,
+              bySize: new Map<string, MatrixSalaryCellAcc>(),
+            } satisfies MatrixSalaryOpAcc);
+          op.minutes += ln.minutes;
+          op.rub += ln.rub;
+          const cell =
+            op.bySize.get(sizeKey) ??
+            ({
+              sizeId: ev.passport.sizeId ?? null,
+              sizeCode,
+              minutes: 0,
+              rub: 0,
+            } satisfies MatrixSalaryCellAcc);
+          cell.minutes += ln.minutes;
+          cell.rub += ln.rub;
+          op.bySize.set(sizeKey, cell);
+          m.salaryOps.set(ln.operationId, op);
+        }
+      }
     }
 
     // Метаданные заказа (orderNumber/clientName/nomenclature) могут
@@ -539,6 +603,67 @@ export class ProductionCostV2Service {
       szAgg.qty += e.qty;
       szAgg.amount = szAgg.amount.add(amount);
       acc.operationLinesBySize.set(sizeKey, szAgg);
+
+      // Матрица: сдельная операция × сотрудник × размер по лекалу.
+      const orderForMatrix = e.passport?.order;
+      if (orderForMatrix) {
+        const nomKey = nomenclatureKeyFor({
+          patternItemId: orderForMatrix.patternItemId,
+          patternNameSnapshot: orderForMatrix.patternNameSnapshot,
+          patternArticleSnapshot: orderForMatrix.patternArticleSnapshot,
+          patternItemName: orderForMatrix.patternItem?.name ?? null,
+          patternItemArticle: orderForMatrix.patternItem?.article ?? null,
+        });
+        const m = ensureMatrix(nomKey);
+        const sizeIdForCell = e.passport?.sizeId ?? null;
+        m.sizeMeta.set(sizeKey, { sizeId: sizeIdForCell, sizeCode });
+        const mop =
+          m.pieceOps.get(e.operationId) ??
+          ({
+            operationName: e.operation?.name ?? '—',
+            operationCategory: e.operation?.category ?? 'OTHER',
+            qty: 0,
+            amount: new Prisma.Decimal(0),
+            bySize: new Map<string, MatrixCellAcc>(),
+            byEmp: new Map<string, MatrixPieceEmpAcc>(),
+          } satisfies MatrixPieceOpAcc);
+        mop.qty += e.qty;
+        mop.amount = mop.amount.add(amount);
+        const opCell =
+          mop.bySize.get(sizeKey) ??
+          ({
+            sizeId: sizeIdForCell,
+            sizeCode,
+            qty: 0,
+            amount: new Prisma.Decimal(0),
+          } satisfies MatrixCellAcc);
+        opCell.qty += e.qty;
+        opCell.amount = opCell.amount.add(amount);
+        mop.bySize.set(sizeKey, opCell);
+        const memp =
+          mop.byEmp.get(e.employeeId) ??
+          ({
+            employeeName: e.employee?.fullName ?? '—',
+            qty: 0,
+            amount: new Prisma.Decimal(0),
+            bySize: new Map<string, MatrixCellAcc>(),
+          } satisfies MatrixPieceEmpAcc);
+        memp.qty += e.qty;
+        memp.amount = memp.amount.add(amount);
+        const empCell =
+          memp.bySize.get(sizeKey) ??
+          ({
+            sizeId: sizeIdForCell,
+            sizeCode,
+            qty: 0,
+            amount: new Prisma.Decimal(0),
+          } satisfies MatrixCellAcc);
+        empCell.qty += e.qty;
+        empCell.amount = empCell.amount.add(amount);
+        memp.bySize.set(sizeKey, empCell);
+        mop.byEmp.set(e.employeeId, memp);
+        m.pieceOps.set(e.operationId, mop);
+      }
     }
 
     // -------------------------------------------------------------------
@@ -975,6 +1100,11 @@ export class ProductionCostV2Service {
       }
       sizeBreakdown.sort((a, b) => a.sizeCode.localeCompare(b.sizeCode));
 
+      const { sizeColumns, operationMatrix } = buildOperationMatrix(
+        matrixByNom.get(acc.key),
+        acc.sizeByKey,
+      );
+
       nomenclatureGroups.push({
         nomenclatureKey: acc.key,
         patternItemId: acc.patternItemId,
@@ -1004,6 +1134,8 @@ export class ProductionCostV2Service {
         operationBreakdown,
         employeeBreakdown,
         sizeBreakdown,
+        sizeColumns,
+        operationMatrix,
       });
     }
     nomenclatureGroups.sort((a, b) => {
@@ -1296,6 +1428,182 @@ function computeTotals(
 
 function round2(d: Prisma.Decimal): Prisma.Decimal {
   return d.toDecimalPlaces(2, Prisma.Decimal.ROUND_HALF_UP);
+}
+
+function num2(n: number): string {
+  return round2(new Prisma.Decimal(Number.isFinite(n) ? n : 0)).toFixed(2);
+}
+
+function round1Number(n: number): number {
+  return Number.isFinite(n) ? Math.round(n * 10) / 10 : 0;
+}
+
+// ---------------------------------------------------------------------------
+// Объединённая матрица «операции · сотрудники · размеры»
+// ---------------------------------------------------------------------------
+
+type MatrixCellAcc = {
+  sizeId: string | null;
+  sizeCode: string;
+  qty: number;
+  amount: Prisma.Decimal;
+};
+type MatrixPieceEmpAcc = {
+  employeeName: string;
+  qty: number;
+  amount: Prisma.Decimal;
+  bySize: Map<string, MatrixCellAcc>;
+};
+type MatrixPieceOpAcc = {
+  operationName: string;
+  operationCategory: string;
+  qty: number;
+  amount: Prisma.Decimal;
+  bySize: Map<string, MatrixCellAcc>;
+  byEmp: Map<string, MatrixPieceEmpAcc>;
+};
+type MatrixSalaryCellAcc = {
+  sizeId: string | null;
+  sizeCode: string;
+  minutes: number;
+  rub: number;
+};
+type MatrixSalaryOpAcc = {
+  operationName: string;
+  operationCategory: string;
+  minutes: number;
+  rub: number;
+  bySize: Map<string, MatrixSalaryCellAcc>;
+};
+type NomMatrixAcc = {
+  pieceOps: Map<string, MatrixPieceOpAcc>;
+  salaryOps: Map<string, MatrixSalaryOpAcc>;
+  sizeMeta: Map<string, { sizeId: string | null; sizeCode: string }>;
+};
+
+type NomSizeAcc = {
+  sizeId: string | null;
+  sizeCode: string;
+  releasedQty: number;
+  operationCostRub: Prisma.Decimal;
+};
+
+/**
+ * Сворачивает аккумулятор матрицы (`NomMatrixAcc`) + выпуск по размерам
+ * (`sizeByKey`) в DTO: упорядоченные колонки-размеры и строки-операции
+ * (сдельные — с сотрудниками-подстроками, затем окладные). Колонки =
+ * объединение размеров, встреченных в операциях и в выпуске; порядок —
+ * по `sizeCode`.
+ */
+function buildOperationMatrix(
+  m: NomMatrixAcc | undefined,
+  sizeByKey: Map<string, NomSizeAcc>,
+): {
+  sizeColumns: ProductionCostMatrixSizeColumnDto[];
+  operationMatrix: ProductionCostMatrixOperationRowDto[];
+} {
+  const sizeKeys = new Map<string, { sizeId: string | null; sizeCode: string }>();
+  if (m) for (const [k, v] of m.sizeMeta) sizeKeys.set(k, v);
+  for (const [k, v] of sizeByKey) {
+    if (!sizeKeys.has(k))
+      sizeKeys.set(k, { sizeId: v.sizeId, sizeCode: v.sizeCode });
+  }
+  const ordered = Array.from(sizeKeys.entries())
+    .map(([key, v]) => ({
+      key,
+      sizeId: v.sizeId,
+      sizeCode: v.sizeCode,
+      releasedQty: sizeByKey.get(key)?.releasedQty ?? 0,
+    }))
+    .sort((a, b) => a.sizeCode.localeCompare(b.sizeCode));
+
+  const sizeColumns: ProductionCostMatrixSizeColumnDto[] = ordered.map((s) => ({
+    sizeId: s.sizeId,
+    sizeCode: s.sizeCode,
+    releasedQty: s.releasedQty,
+  }));
+
+  const pieceCells = (
+    bySize: Map<string, MatrixCellAcc>,
+  ): ProductionCostMatrixCellDto[] =>
+    ordered.map((s) => {
+      const c = bySize.get(s.key);
+      return {
+        sizeId: s.sizeId,
+        sizeCode: s.sizeCode,
+        qty: c?.qty ?? 0,
+        rub: c ? round2(c.amount).toFixed(2) : '0.00',
+      };
+    });
+  const salaryCells = (
+    bySize: Map<string, MatrixSalaryCellAcc>,
+  ): ProductionCostMatrixCellDto[] =>
+    ordered.map((s) => {
+      const c = bySize.get(s.key);
+      return {
+        sizeId: s.sizeId,
+        sizeCode: s.sizeCode,
+        qty: 0,
+        rub: c ? num2(c.rub) : '0.00',
+      };
+    });
+
+  const operationMatrix: ProductionCostMatrixOperationRowDto[] = [];
+  if (m) {
+    const pieceRows = Array.from(m.pieceOps.entries())
+      .map(([opId, op]) => {
+        const employees: ProductionCostMatrixEmployeeRowDto[] = Array.from(
+          op.byEmp.entries(),
+        )
+          .map(([empId, emp]) => ({
+            employeeId: empId,
+            employeeName: emp.employeeName,
+            qty: emp.qty,
+            rub: round2(emp.amount).toFixed(2),
+            unitCostAvg:
+              emp.qty > 0
+                ? round2(emp.amount.div(new Prisma.Decimal(emp.qty))).toFixed(2)
+                : null,
+            cells: pieceCells(emp.bySize),
+          }))
+          .sort((a, b) => a.employeeName.localeCompare(b.employeeName));
+        return {
+          operationId: opId,
+          operationName: op.operationName,
+          operationCategory: op.operationCategory,
+          kind: 'PIECEWORK' as const,
+          qty: op.qty,
+          rub: round2(op.amount).toFixed(2),
+          unitCostAvg:
+            op.qty > 0
+              ? round2(op.amount.div(new Prisma.Decimal(op.qty))).toFixed(2)
+              : null,
+          minutes: 0,
+          cells: pieceCells(op.bySize),
+          employees,
+        };
+      })
+      .sort((a, b) => a.operationName.localeCompare(b.operationName));
+
+    const salaryRows = Array.from(m.salaryOps.entries())
+      .map(([opId, op]) => ({
+        operationId: opId,
+        operationName: op.operationName,
+        operationCategory: op.operationCategory,
+        kind: 'SALARY' as const,
+        qty: 0,
+        rub: num2(op.rub),
+        unitCostAvg: null,
+        minutes: round1Number(op.minutes),
+        cells: salaryCells(op.bySize),
+        employees: [],
+      }))
+      .sort((a, b) => a.operationName.localeCompare(b.operationName));
+
+    operationMatrix.push(...pieceRows, ...salaryRows);
+  }
+
+  return { sizeColumns, operationMatrix };
 }
 
 function startOfUtcDay(d: Date): Date {
