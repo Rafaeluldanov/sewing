@@ -244,7 +244,7 @@ export async function createSupplierPaymentAction(
     await createSupplierPayment(parsed.data);
     revalidatePath('/admin/treasury/payments');
     revalidatePath('/admin/treasury');
-    return { ok: true, successMessage: 'Заявка на оплату создана.' };
+    return { ok: true, successMessage: 'Заявка на расход создана.' };
   } catch (e) {
     const x = explainApiError(e);
     return { error: x.error, errorRequestId: x.requestId };

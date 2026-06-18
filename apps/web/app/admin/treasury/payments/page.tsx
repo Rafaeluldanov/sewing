@@ -98,13 +98,13 @@ export default async function SupplierPaymentsPage() {
     error =
       e instanceof ApiRequestError
         ? errorText(e)
-        : 'Не удалось загрузить оплаты поставщикам';
+        : 'Не удалось загрузить заявки на расход';
   }
 
   return (
     <AdminPageShell
       icon={<Truck size={22} strokeWidth={1.6} aria-hidden />}
-      title="Оплаты поставщикам"
+      title="Заявки на расход"
       subtitle="Заявка → согласование → оплата (проводка в журнал ДС)"
       actions={
         <Link href="/admin/treasury" className="admin-btn admin-btn--ghost">
@@ -119,7 +119,7 @@ export default async function SupplierPaymentsPage() {
       )}
 
       <AdminCard>
-        <AdminSectionHeader title="Новая заявка на оплату" />
+        <AdminSectionHeader title="Новая заявка на расход" />
         <NewPaymentForm
           suppliers={suppliers}
           accounts={accounts}
@@ -192,7 +192,7 @@ function PaymentsTable({ payments }: { payments: SupplierPaymentDto[] }) {
         <AdminEmptyState
           icon={<Truck size={26} strokeWidth={1.6} aria-hidden />}
           title="Заявок пока нет"
-          hint="Создайте заявку на оплату поставщику в форме выше."
+          hint="Создайте заявку на расход в форме выше."
         />
       }
     />

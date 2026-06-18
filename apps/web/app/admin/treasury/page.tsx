@@ -103,7 +103,7 @@ export default async function TreasuryPage() {
         <div style={{ display: 'flex', gap: 8 }}>
           <Link href="/admin/treasury/payments" className="admin-btn">
             <Truck size={16} strokeWidth={1.6} aria-hidden />
-            Оплаты поставщикам
+            Заявки на расход
           </Link>
           <Link href="/admin/treasury/accounts" className="admin-btn">
             <Banknote size={16} strokeWidth={1.6} aria-hidden />
