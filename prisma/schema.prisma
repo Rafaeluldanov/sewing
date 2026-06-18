@@ -7054,6 +7054,19 @@ enum SupplierPaymentStatus {
   CANCELLED
 }
 
+/// Вид заявки на расход (`SupplierPayment`). Документ обобщён: помимо
+/// оплаты поставщику он представляет и выплату зарплаты сотруднику
+/// (создаётся автоматически при «Выплатить» в зарплатах, см.
+/// `PayrollPayout`/`PayrollAccrualDocument`). `direction` проводки
+/// всегда OUT; различается лишь контрагент (`supplier*` vs `employee*`).
+enum ExpensePaymentKind {
+  /// Оплата поставщику (заполнены `supplierId`/`supplierNameSnapshot`).
+  SUPPLIER
+  /// Выплата зарплаты сотруднику (заполнены
+  /// `employeeId`/`employeeNameSnapshot`, привязка `payrollPayoutId`).
+  SALARY
+}
+
 /// Оплата поставщику (Фаза 1 казначейства).
 ///
 /// «Санкционировал → оплатил»: заявка-документ поверх `PurchaseOrder`.
@@ -7069,9 +7082,25 @@ enum SupplierPaymentStatus {
 model SupplierPayment {
   id String @id @default(cuid())
 
+  /// Вид заявки на расход: оплата поставщику или выплата зарплаты.
+  /// Дефолт `SUPPLIER` — историческое поведение (ручные заявки из
+  /// казначейства). `SALARY` создаётся автоматически при выплате.
+  kind ExpensePaymentKind @default(SUPPLIER)
+
   /// Поставщик (soft-ссылка на `Supplier`, без FK) + снимок имени.
-  supplierId           String
-  supplierNameSnapshot String
+  /// Nullable: заполнены только у `kind = SUPPLIER`.
+  supplierId           String?
+  supplierNameSnapshot String?
+
+  /// Сотрудник-получатель зарплаты (soft-ссылка на `Employee`, без FK)
+  /// + снимок ФИО. Заполнены только у `kind = SALARY`.
+  employeeId           String?
+  employeeNameSnapshot String?
+
+  /// Выплата зарплаты, породившая эту заявку (`PayrollPayout.id`, soft).
+  /// `@unique` — одна заявка на расход на одну выплату (идемпотентность
+  /// авто-создания при «Выплатить»). Заполнено только у `kind = SALARY`.
+  payrollPayoutId String? @unique
 
   /// Заказ поставщику, который оплачиваем (soft-ссылка на
   /// `PurchaseOrder`, опц.) + снимок номера.
@@ -7109,6 +7138,8 @@ model SupplierPayment {
   updatedAt   DateTime  @updatedAt
 
   @@index([supplierId])
+  @@index([employeeId])
+  @@index([kind])
   @@index([purchaseOrderId])
   @@index([status, createdAt])
 }

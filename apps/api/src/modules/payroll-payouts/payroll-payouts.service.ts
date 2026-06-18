@@ -372,17 +372,16 @@ export class PayrollPayoutsService {
         },
       });
 
-      // Казначейство (Фаза 1, опт-ин): если задан зарплатный счёт+статья —
-      // пишем расходную проводку журнала ДС в той же транзакции. Если не
-      // настроено — ничего не делаем, выдача работает как раньше.
-      await this.treasury.postPayrollPayoutTx(tx, {
+      // Казначейство (Фаза 1, опт-ин): при выдаче создаём заявку на расход
+      // (`SupplierPayment`, kind=SALARY, DRAFT) со статьёй ДДС сотрудника
+      // (fallback — глобальная). Движения денег ещё нет — проводка журнала
+      // ДС пишется позже, на шаге «Оплатить» заявку. Если казначейство не
+      // настроено — заявка не создаётся, выдача работает как раньше.
+      await this.treasury.createSalaryExpenseRequestTx(tx, {
         payoutId: updated.id,
+        employeeId: updated.employeeId,
         amount: updated.amountTotalRub,
-        employeeId: viewer.employeeId,
-        // Получатель выплаты — для per-сотрудник статьи ДДС
-        // (`Employee.salaryCashFlowItemId`), переопределяющей глобальную.
-        recipientEmployeeId: updated.employeeId,
-        note: `Выплата зарплаты: ${updated.employeeId}`,
+        postedById: viewer.employeeId,
       });
 
       await this.audit.log(
@@ -529,16 +528,16 @@ export class PayrollPayoutsService {
         },
       });
 
-      // Казначейство (Фаза 1): если выплата была выдана и по ней есть
-      // проводка журнала ДС — сторнируем её в той же транзакции, чтобы
-      // остаток не «повис». Для черновика проводки нет — ничего не делаем.
+      // Казначейство (Фаза 1): при отмене выданной выплаты отменяем
+      // связанную заявку на расход, если она ещё не оплачена
+      // (`DRAFT`/`APPROVED` → `CANCELLED`). Если заявка уже оплачена —
+      // не трогаем: деньги двинулись, исправление через сторно журнала.
+      // Для черновика выплаты заявки нет — ничего не делаем.
       if (fromStatus === PayrollPayoutStatus.ISSUED) {
-        await this.treasury.stornoByRegistrarTx(tx, {
-          registrarType: 'PAYROLL_PAYOUT',
-          registrarId: id,
-          stornoRegistrarType: 'PAYROLL_PAYOUT_STORNO',
+        await this.treasury.cancelSalaryExpenseRequestByPayoutTx(tx, {
+          payoutId: id,
           employeeId: viewer.employeeId,
-          note: 'Сторно: отмена выплаты зарплаты',
+          reason: 'Отмена выплаты зарплаты',
         });
       }
 

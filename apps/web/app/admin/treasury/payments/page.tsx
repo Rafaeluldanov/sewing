@@ -8,6 +8,7 @@
 import Link from 'next/link';
 import { ArrowLeft, Truck } from 'lucide-react';
 import {
+  EXPENSE_PAYMENT_KIND_LABELS,
   SUPPLIER_PAYMENT_STATUS_LABELS,
   type SupplierPaymentDto,
   type SupplierPaymentStatus,
@@ -144,10 +145,15 @@ function PaymentsTable({ payments }: { payments: SupplierPaymentDto[] }) {
       render: (p) => formatDate(p.createdAt),
     },
     {
-      key: 'supplier',
-      header: 'Поставщик',
+      key: 'payee',
+      header: 'Контрагент',
       render: (p) => (
-        <span className="admin-table__primary">{p.supplierName}</span>
+        <span className="admin-table__primary">
+          {p.payeeName ?? <span className="admin-muted">—</span>}
+          <span className="admin-muted" style={{ marginLeft: 8, fontSize: '0.8rem' }}>
+            {EXPENSE_PAYMENT_KIND_LABELS[p.kind]}
+          </span>
+        </span>
       ),
     },
     {

@@ -271,8 +271,22 @@ export interface TreasuryBalancesDto {
 }
 
 // ---------------------------------------------------------------------------
-// SupplierPayment — оплата поставщику (Фаза 1)
+// SupplierPayment — заявка на расход (Фаза 1): оплата поставщику ИЛИ зарплата
 // ---------------------------------------------------------------------------
+
+/**
+ * Вид заявки на расход (зеркало Prisma `ExpensePaymentKind`).
+ * `SUPPLIER` — оплата поставщику (ручная из казначейства).
+ * `SALARY` — выплата зарплаты сотруднику (создаётся автоматически при
+ * «Выплатить» в зарплатах; проводка — на шаге «Оплатить» заявку).
+ */
+export const EXPENSE_PAYMENT_KINDS = ['SUPPLIER', 'SALARY'] as const;
+export type ExpensePaymentKind = (typeof EXPENSE_PAYMENT_KINDS)[number];
+export const ExpensePaymentKindSchema = z.enum(EXPENSE_PAYMENT_KINDS);
+export const EXPENSE_PAYMENT_KIND_LABELS: Record<ExpensePaymentKind, string> = {
+  SUPPLIER: 'Поставщику',
+  SALARY: 'Зарплата',
+};
 
 export const SUPPLIER_PAYMENT_STATUSES = [
   'DRAFT',
@@ -315,6 +329,8 @@ export type CancelSupplierPaymentDto = z.infer<
 export const ListSupplierPaymentsQuerySchema = z.object({
   status: SupplierPaymentStatusSchema.optional(),
   supplierId: z.string().min(1).optional(),
+  /** Фильтр по виду заявки (поставщик/зарплата). */
+  kind: ExpensePaymentKindSchema.optional(),
   limit: z.coerce.number().int().min(1).max(500).optional(),
 });
 export type ListSupplierPaymentsQuery = z.infer<
@@ -323,8 +339,21 @@ export type ListSupplierPaymentsQuery = z.infer<
 
 export interface SupplierPaymentDto {
   id: string;
-  supplierId: string;
-  supplierName: string;
+  /** Вид заявки: оплата поставщику или выплата зарплаты. */
+  kind: ExpensePaymentKind;
+  /** Заполнены только у `kind = SUPPLIER`. */
+  supplierId: string | null;
+  supplierName: string | null;
+  /** Заполнены только у `kind = SALARY`. */
+  employeeId: string | null;
+  employeeName: string | null;
+  /** Выплата, породившая заявку (`kind = SALARY`). */
+  payrollPayoutId: string | null;
+  /**
+   * Контрагент для отображения: имя поставщика или ФИО сотрудника
+   * (в зависимости от `kind`). `null` — снимок не заполнен.
+   */
+  payeeName: string | null;
   purchaseOrderId: string | null;
   purchaseOrderNumber: string | null;
   accountId: string;

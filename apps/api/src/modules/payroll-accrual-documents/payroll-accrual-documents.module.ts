@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { TreasuryModule } from '../treasury/treasury.module.js';
 import { PayrollAccrualDocumentsController } from './payroll-accrual-documents.controller.js';
 import { PayrollAccrualDocumentsService } from './payroll-accrual-documents.service.js';
 
@@ -16,6 +17,7 @@ import { PayrollAccrualDocumentsService } from './payroll-accrual-documents.serv
  * `AuditService` подключается через глобальный `AuditModule`.
  */
 @Module({
+  imports: [TreasuryModule],
   controllers: [PayrollAccrualDocumentsController],
   providers: [PayrollAccrualDocumentsService],
 })

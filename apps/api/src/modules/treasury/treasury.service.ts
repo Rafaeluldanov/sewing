@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { ExpensePaymentKind, Prisma, SupplierPaymentStatus } from '@prisma/client';
 import { randomUUID } from 'node:crypto';
 import type {
   CashAccountDto,
@@ -445,30 +445,32 @@ export class TreasuryService {
   // ===========================================================================
 
   /**
-   * Проводка расхода по выдаче зарплаты (`PayrollPayout.ISSUED`).
-   * Опт-ин: пишет проводку ТОЛЬКО если задан активный зарплатный счёт,
-   * есть статья ДДС и сумма > 0. Иначе ничего не делает — выдача выплат
-   * работает как раньше (нулевая регрессия).
+   * Авто-создание заявки на расход (`SupplierPayment`, `kind = SALARY`)
+   * при выдаче зарплаты (`PayrollPayout.ISSUED`). Заявка появляется в
+   * разделе казначейства «Заявки на расход» в статусе `DRAFT` —
+   * движения денег ещё нет; проводка журнала ДС пишется позже, на шаге
+   * «Оплатить» заявку (`SupplierPaymentService.pay`).
    *
-   * Статья ДДС резолвится так: если у сотрудника-получателя
-   * (`recipientEmployeeId`) задана `Employee.salaryCashFlowItemId` — берём
-   * её; иначе fallback на глобальную `TreasurySettings.salaryItemId`.
-   * Резолвленная статья (как и счёт) должна быть активна — иначе проводка
-   * не пишется (тот же контракт «опт-ин, активные», что и раньше).
+   * Опт-ин: заявка создаётся ТОЛЬКО если задан зарплатный счёт
+   * (`TreasurySettings.salaryAccountId`), резолвится активная статья ДДС
+   * и сумма > 0. Иначе ничего не делает (нулевая регрессия): «Выплатить»
+   * работает, но заявка не появляется, пока казначейство не настроено.
    *
-   * `employeeId` — кто проводит (актор/постящий, `postedById`), это НЕ
-   * получатель выплаты; получатель приходит отдельным `recipientEmployeeId`.
-   * Идемпотентно по `registrarType='PAYROLL_PAYOUT', registrarId=payoutId`.
+   * Статья ДДС: `Employee.salaryCashFlowItemId` (если задана) →
+   * иначе fallback на глобальную `TreasurySettings.salaryItemId`.
+   *
+   * Идемпотентно по `SupplierPayment.payrollPayoutId @unique` — повторный
+   * вызов по той же выплате ловится P2002 и возвращает уже существующую
+   * (или `null`).
    */
-  async postPayrollPayoutTx(
+  async createSalaryExpenseRequestTx(
     tx: Prisma.TransactionClient,
     input: {
       payoutId: string;
-      amount: Prisma.Decimal.Value;
       employeeId: string;
-      /** Получатель выплаты — источник per-сотрудник статьи ДДС. */
-      recipientEmployeeId?: string | null;
-      note?: string | null;
+      amount: Prisma.Decimal.Value;
+      /** Кто проводит «Выплатить» (аудит-лайт `createdById`). */
+      postedById: string;
     },
   ): Promise<{ id: string } | null> {
     const amount = this.okr1c(input.amount);
@@ -478,42 +480,58 @@ export class TreasuryService {
       where: { id: 'default' },
     });
     const accountId = settings?.salaryAccountId;
-    if (!accountId) return null;
-
-    // Per-сотрудник статья ДДС переопределяет глобальную из настроек.
-    let itemId = settings?.salaryItemId ?? null;
-    if (input.recipientEmployeeId) {
-      const recipient = await tx.employee.findUnique({
-        where: { id: input.recipientEmployeeId },
-        select: { salaryCashFlowItemId: true },
-      });
-      if (recipient?.salaryCashFlowItemId) {
-        itemId = recipient.salaryCashFlowItemId;
-      }
+    if (!accountId) {
+      this.logger.warn(
+        `salary expense request skipped: no salaryAccountId configured (payoutId=${input.payoutId})`,
+      );
+      return null;
     }
-    if (!itemId) return null;
+
+    const employee = await tx.employee.findUnique({
+      where: { id: input.employeeId },
+      select: { fullName: true, salaryCashFlowItemId: true },
+    });
+
+    // Статья сотрудника переопределяет глобальную зарплатную.
+    const itemId = employee?.salaryCashFlowItemId ?? settings?.salaryItemId ?? null;
+    if (!itemId) {
+      this.logger.warn(
+        `salary expense request skipped: no ДДС item (employee/global) for payoutId=${input.payoutId}`,
+      );
+      return null;
+    }
 
     const [account, item] = await Promise.all([
       tx.cashAccount.findUnique({ where: { id: accountId } }),
       tx.cashFlowItem.findUnique({ where: { id: itemId } }),
     ]);
-    if (!account || !account.isActive || !item || !item.isActive) return null;
+    if (!account || !account.isActive || !item || !item.isActive) {
+      this.logger.warn(
+        `salary expense request skipped: account/item inactive (payoutId=${input.payoutId})`,
+      );
+      return null;
+    }
 
     try {
-      return await this.postEntryTx(tx, {
-        accountId,
-        itemId,
-        direction: 'OUT',
-        amount,
-        source: 'PAYROLL_PAYOUT',
-        sourceId: input.payoutId,
-        registrarType: 'PAYROLL_PAYOUT',
-        registrarId: input.payoutId,
-        note: input.note ?? 'Выплата зарплаты',
-        postedById: input.employeeId,
+      const row = await tx.supplierPayment.create({
+        data: {
+          kind: ExpensePaymentKind.SALARY,
+          supplierId: null,
+          supplierNameSnapshot: null,
+          employeeId: input.employeeId,
+          employeeNameSnapshot: employee?.fullName ?? null,
+          payrollPayoutId: input.payoutId,
+          accountId,
+          itemId,
+          amount,
+          status: SupplierPaymentStatus.DRAFT,
+          createdById: input.postedById,
+        },
+        select: { id: true },
       });
+      return row;
     } catch (e) {
-      // INV-4: проводка по этой выплате уже есть — не двоим
+      // payrollPayoutId @unique — заявка по этой выплате уже создана.
       if (
         e instanceof Prisma.PrismaClientKnownRequestError &&
         e.code === 'P2002'
@@ -522,6 +540,41 @@ export class TreasuryService {
       }
       throw e;
     }
+  }
+
+  /**
+   * Отмена заявки на расход, привязанной к выплате (`payrollPayoutId`),
+   * при отмене самой выплаты. Отменяем только ещё не оплаченную заявку
+   * (`DRAFT`/`APPROVED`) → `CANCELLED`. Если заявка уже `PAID` (проводка
+   * есть) — не трогаем: деньги уже двинулись, исправление через сторно
+   * журнала (как у оплаты поставщику). `null`, если заявки нет/не
+   * подлежит отмене.
+   */
+  async cancelSalaryExpenseRequestByPayoutTx(
+    tx: Prisma.TransactionClient,
+    input: { payoutId: string; employeeId: string; reason?: string | null },
+  ): Promise<{ id: string } | null> {
+    const request = await tx.supplierPayment.findUnique({
+      where: { payrollPayoutId: input.payoutId },
+      select: { id: true, status: true },
+    });
+    if (!request) return null;
+    if (
+      request.status !== SupplierPaymentStatus.DRAFT &&
+      request.status !== SupplierPaymentStatus.APPROVED
+    ) {
+      return null;
+    }
+    return tx.supplierPayment.update({
+      where: { id: request.id },
+      data: {
+        status: SupplierPaymentStatus.CANCELLED,
+        cancelledById: input.employeeId,
+        cancelledAt: new Date(),
+        cancelReason: input.reason ?? 'Отмена выплаты зарплаты',
+      },
+      select: { id: true },
+    });
   }
 
   /**

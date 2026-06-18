@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { Prisma, SupplierPaymentStatus } from '@prisma/client';
+import { ExpensePaymentKind, Prisma, SupplierPaymentStatus } from '@prisma/client';
 import type {
   SupplierPaymentDto,
   CreateSupplierPaymentDto,
@@ -49,6 +49,7 @@ export class SupplierPaymentService {
     const where: Prisma.SupplierPaymentWhereInput = {};
     if (query.status) where.status = query.status;
     if (query.supplierId) where.supplierId = query.supplierId;
+    if (query.kind) where.kind = query.kind as ExpensePaymentKind;
     const rows = await this.prisma.supplierPayment.findMany({
       where,
       orderBy: { createdAt: 'desc' },
@@ -170,17 +171,24 @@ export class SupplierPaymentService {
     if (!item.isActive) throw new CashFlowItemInactiveException();
 
     try {
+      const isSalary = pre.kind === ExpensePaymentKind.SALARY;
       const updated = await this.prisma.$transaction(async (tx) => {
         const entry = await this.treasury.postEntryTx(tx, {
           accountId: pre.accountId,
           itemId: pre.itemId,
           direction: 'OUT',
           amount: pre.amount,
-          source: 'SUPPLIER_PAYMENT',
+          // Журнал ДС: источник по виду заявки. registrarType
+          // оставляем единым ('SUPPLIER_PAYMENT') — это ключ
+          // идемпотентности по `registrarId = заявка.id`, общий для
+          // обоих видов расхода.
+          source: isSalary ? 'PAYROLL_PAYOUT' : 'SUPPLIER_PAYMENT',
           sourceId: pre.id,
           registrarType: 'SUPPLIER_PAYMENT',
           registrarId: pre.id,
-          note: `Оплата поставщику: ${pre.supplierNameSnapshot}`,
+          note: isSalary
+            ? `Выплата зарплаты: ${pre.employeeNameSnapshot ?? ''}`.trim()
+            : `Оплата поставщику: ${pre.supplierNameSnapshot ?? ''}`.trim(),
           postedById: employeeId,
         });
         return tx.supplierPayment.update({
@@ -247,8 +255,12 @@ export class SupplierPaymentService {
 
   private map(r: {
     id: string;
-    supplierId: string;
-    supplierNameSnapshot: string;
+    kind: ExpensePaymentKind;
+    supplierId: string | null;
+    supplierNameSnapshot: string | null;
+    employeeId: string | null;
+    employeeNameSnapshot: string | null;
+    payrollPayoutId: string | null;
     purchaseOrderId: string | null;
     purchaseOrderNumberSnapshot: string | null;
     accountId: string;
@@ -265,10 +277,19 @@ export class SupplierPaymentService {
     account: { name: string };
     item: { name: string };
   }): SupplierPaymentDto {
+    const payeeName =
+      r.kind === ExpensePaymentKind.SALARY
+        ? r.employeeNameSnapshot
+        : r.supplierNameSnapshot;
     return {
       id: r.id,
+      kind: r.kind,
       supplierId: r.supplierId,
       supplierName: r.supplierNameSnapshot,
+      employeeId: r.employeeId,
+      employeeName: r.employeeNameSnapshot,
+      payrollPayoutId: r.payrollPayoutId,
+      payeeName,
       purchaseOrderId: r.purchaseOrderId,
       purchaseOrderNumber: r.purchaseOrderNumberSnapshot,
       accountId: r.accountId,

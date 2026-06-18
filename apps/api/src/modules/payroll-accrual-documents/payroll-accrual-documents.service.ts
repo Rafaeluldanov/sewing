@@ -24,6 +24,7 @@ import {
 } from '../../common/errors.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { AuditService } from '../audit/audit.service.js';
+import { TreasuryService } from '../treasury/treasury.service.js';
 
 /**
  * Сервис «Документ начисления зарплаты» (PHASE 3 STEP 6.2–6.4).
@@ -49,6 +50,7 @@ export class PayrollAccrualDocumentsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly treasury: TreasuryService,
   ) {}
 
   // ===========================================================================
@@ -518,6 +520,18 @@ export class PayrollAccrualDocumentsService {
         await tx.payrollAccrualDocumentLine.update({
           where: { id: line.id },
           data: { payoutId: payout.id },
+        });
+
+        // Казначейство (Фаза 1, опт-ин): создаём заявку на расход
+        // (`SupplierPayment`, kind=SALARY, DRAFT) на эту выплату со
+        // статьёй ДДС сотрудника (fallback — глобальная). Проводка ДС
+        // появится позже, на «Оплатить» заявку. Если казначейство не
+        // настроено — заявка не создаётся (выплата работает как раньше).
+        await this.treasury.createSalaryExpenseRequestTx(tx, {
+          payoutId: payout.id,
+          employeeId: line.employeeId,
+          amount: line.amountToPayRub,
+          postedById: viewer.employeeId,
         });
 
         payoutsCreated += 1;
