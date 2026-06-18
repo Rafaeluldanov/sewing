@@ -3,6 +3,7 @@ import Link from 'next/link';
 import './globals.css';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import {
+  canSeeAdmin,
   canSeeHome,
   canSeeOrdersMenu,
   canSeePackingMenu,
@@ -18,6 +19,7 @@ import { MobileNav } from '@/components/mobile-nav';
 import { AppHeader } from '@/components/app-header';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { canSeeEmployeeQrButton } from '@/lib/rbac';
+import { SwitchWorkplaceButton } from '@/components/workplace/switch-workplace-button';
 import { ChunkErrorGuard } from '@/components/chunk-error-guard';
 import { Icon } from '@/components/icon';
 
@@ -57,6 +59,10 @@ export default async function RootLayout({
   const me = await getCurrentUserOrNull();
   const isStaff = !!me;
   const role = me?.user.role;
+  // Фича «несколько ролей»: навигация/доступ считаются по полному
+  // набору ролей (`me.user.roles`), а не только по основной. Fallback
+  // `[role]` — для старых сессий без поля в payload.
+  const roles = me?.user.roles ?? (role ? [role] : []);
   // Backend всё равно режет доступ через `@Roles(...)`, но для UX
   // прячем недоступные ссылки, чтобы роль не упиралась в forbidden
   // экран. Матрица — `apps/web/lib/rbac.ts`.
@@ -83,15 +89,16 @@ export default async function RootLayout({
   // У SEAMSTRESS и CUTTER_ASSISTANT (`isSingleWorkspaceRole`) ниже
   // целиком прячем `MobileNav` — экран должен выглядеть как один
   // сфокусированный терминал, без глобальной навигации.
-  const showHome = canSeeHome(role);
-  const showWork = canSeeWorkTab(role);
-  const showQc = canSeeQcMenu(role);
-  const showWto = canSeeWtoMenu(role);
-  const showPacking = canSeePackingMenu(role);
-  const showOrders = canSeeOrdersMenu(role);
-  const showShopfloor = canSeeShopfloorMenu(role);
-  const showProductionCost = canSeeProductionCost(role);
-  const singleWorkspace = isSingleWorkspaceRole(role);
+  const showHome = canSeeHome(roles);
+  const showWork = canSeeWorkTab(roles);
+  const showQc = canSeeQcMenu(roles);
+  const showWto = canSeeWtoMenu(roles);
+  const showPacking = canSeePackingMenu(roles);
+  const showOrders = canSeeOrdersMenu(roles);
+  const showShopfloor = canSeeShopfloorMenu(roles);
+  const showProductionCost = canSeeProductionCost(roles);
+  const showAdmin = canSeeAdmin(roles);
+  const singleWorkspace = isSingleWorkspaceRole(roles);
   return (
     <html lang="ru">
       <body>
@@ -115,7 +122,7 @@ export default async function RootLayout({
             {showProductionCost && (
               <Link href="/production-cost"><Icon name="production-cost" /><span>Себестоимость</span></Link>
             )}
-            {me && (me.user.role === 'SHOP_MANAGER' || me.user.role === 'ADMIN') && (
+            {showAdmin && (
               <>
                 <Link href="/admin/production-dashboard"><Icon name="dashboard" /><span>Дашборд</span></Link>
                 <Link href="/admin/overview"><Icon name="overview" /><span>Обзор</span></Link>
@@ -136,7 +143,7 @@ export default async function RootLayout({
                   {me.user.fullName}
                 </span>
                 <span className="app-header__user-role">{me.user.role}</span>
-                {canSeeEmployeeQrButton(me.user.role) ? (
+                {canSeeEmployeeQrButton(roles) ? (
                   <EmployeeQrButton variant="inline" />
                 ) : null}
                 <LogoutButton />
@@ -161,6 +168,12 @@ export default async function RootLayout({
             showOrders={showOrders}
           />
         ) : null}
+        {/*
+          Фича «несколько ролей»: плавающая кнопка «Сменить рабочее
+          место» — только для совместителей (2+ роли). Сканом QR участка
+          сотрудник переключается между своими терминалами.
+        */}
+        {isStaff && roles.length > 1 ? <SwitchWorkplaceButton /> : null}
       </body>
     </html>
   );

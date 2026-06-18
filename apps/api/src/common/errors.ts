@@ -728,6 +728,52 @@ export class EquipmentInactiveException extends BusinessException {
 }
 
 /**
+ * Фича «смена роли сканом рабочего места» (`POST /api/me/switch-workplace`).
+ * Отсканированное оборудование не привязано к роли (`Equipment.role IS
+ * NULL`) — переключиться на него нельзя, менеджер должен задать роль
+ * рабочего места в `/admin/equipment`.
+ */
+export class WorkplaceNoRoleException extends BusinessException {
+  constructor() {
+    super(
+      'WORKPLACE_NO_ROLE',
+      'У этого рабочего места не задана роль — обратитесь к начальнику цеха.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Роль отсканированного рабочего места не входит в набор ролей
+ * сотрудника (`Employee.roles`). Переключение запрещено.
+ */
+export class WorkplaceRoleForbiddenException extends BusinessException {
+  constructor() {
+    super(
+      'WORKPLACE_ROLE_FORBIDDEN',
+      'У вас нет доступа к этому участку.',
+      HttpStatus.FORBIDDEN,
+    );
+  }
+}
+
+/**
+ * При переключении рабочего места у сотрудника есть незавершённая
+ * работа (открытая смена с паспортом на руках). Требуется явное
+ * подтверждение — UI повторит запрос с `force: true`. Код синхронен
+ * с `WORKPLACE_SWITCH_CONFIRM_REQUIRED_CODE` из `@sewing/shared/workplace`.
+ */
+export class WorkplaceSwitchConfirmRequiredException extends BusinessException {
+  constructor() {
+    super(
+      'WORKPLACE_SWITCH_CONFIRM_REQUIRED',
+      'У вас есть незавершённая работа. Закрыть смену и перейти на другой участок?',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Дубликат `Equipment.code`. Уникальность гарантирована БД, но мы
  * перехватываем P2002 в `EquipmentService` и отдаём бизнес-ошибку
  * с понятным текстом и стабильным `code`, чтобы UI мог подсветить

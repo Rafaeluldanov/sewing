@@ -161,8 +161,28 @@ function EmployeesTable({
     },
     {
       key: 'role',
-      header: 'Роль',
-      render: (e) => formatRole(e.role),
+      header: 'Роли',
+      // Фича «несколько ролей»: показываем весь набор; основная — первой
+      // и помечена жирным. Fallback на одиночную роль для старых DTO.
+      render: (e) => {
+        const roles = e.roles && e.roles.length > 0 ? e.roles : [e.role];
+        const ordered = [e.role, ...roles.filter((r) => r !== e.role)];
+        return (
+          <span>
+            {ordered.map((r, i) => (
+              <span key={r}>
+                {i > 0 ? ', ' : ''}
+                <span
+                  style={r === e.role ? { fontWeight: 600 } : undefined}
+                  title={r === e.role ? 'Основная роль' : undefined}
+                >
+                  {formatRole(r)}
+                </span>
+              </span>
+            ))}
+          </span>
+        );
+      },
     },
     {
       key: 'compensation',

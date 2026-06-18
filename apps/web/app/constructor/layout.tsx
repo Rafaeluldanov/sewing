@@ -37,9 +37,11 @@ export default async function ConstructorSectionLayout({
 }) {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/constructor');
-  if (!canSeeConstructor(me.user.role)) redirect('/');
+  // Фича «несколько ролей»: доступ по всему набору ролей.
+  const roles = me.user.roles ?? [me.user.role];
+  if (!canSeeConstructor(roles)) redirect('/');
 
-  const showEmployeeQr = canSeeEmployeeQrButton(me.user.role);
+  const showEmployeeQr = canSeeEmployeeQrButton(roles);
   const roleLabel = ROLE_LABELS[me.user.role] ?? me.user.role;
 
   return (

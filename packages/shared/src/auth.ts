@@ -45,7 +45,21 @@ export interface AuthUserDto {
   id: string;
   login: string;
   fullName: string;
+  /** Основная роль (`Employee.role`) — дефолтный рабочий экран. */
   role: string;
+  /**
+   * Полный набор ролей доступа (`Employee.roles`, фича «несколько
+   * ролей»). Всегда содержит `role`. На него опираются web-RBAC
+   * (`canSee*`) и навигация. Опционально (`?`) для backward-compat —
+   * backend всегда отдаёт массив.
+   */
+  roles?: string[];
+  /**
+   * Текущая активная роль (`Employee.activeRole`) — последняя, на
+   * которую переключились сканом рабочего места. `null`/отсутствует —
+   * лендинг берётся из `role`.
+   */
+  activeRole?: string | null;
 }
 
 export interface LoginResponseDto {

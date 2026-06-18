@@ -95,6 +95,29 @@ export const CONSTRUCTOR_ALLOWED_PATH = '/constructor';
  */
 export const CUTTER_ALLOWED_PATH = '/cutter';
 
+/**
+ * Фича «несколько ролей» (18.06.2026): RBAC-хелперы теперь принимают
+ * либо одну роль (как раньше — основная/активная), либо весь набор
+ * ролей доступа (`Employee.roles`). Доступ есть, если ХОТЯ БЫ ОДНА роль
+ * проходит проверку. Так старые вызовы с одной строкой остаются
+ * валидны, а layout/навигация передают полный массив.
+ */
+export type RolesInput = string | readonly string[] | null | undefined;
+
+function toRoleList(input: RolesInput): string[] {
+  if (!input) return [];
+  return Array.isArray(input)
+    ? (input as readonly string[]).filter((r): r is string => !!r)
+    : [input as string];
+}
+
+function anyRoleIn(input: RolesInput, allowed: readonly string[]): boolean {
+  const list = toRoleList(input);
+  if (list.length === 0) return false;
+  const set = new Set<string>(allowed as readonly string[]);
+  return list.some((r) => set.has(r));
+}
+
 export const QC_ALLOWED_ROLES: readonly Role[] = ['QC', 'SHOP_MANAGER', 'ADMIN'];
 export const WTO_ALLOWED_ROLES: readonly Role[] = [
   'IRONING',
@@ -172,16 +195,16 @@ export const PRODUCTION_COST_ALLOWED_ROLES: readonly Role[] = [
   'SHOP_MANAGER',
 ];
 
-export function canSeeQc(role: string | undefined | null): boolean {
-  return !!role && (QC_ALLOWED_ROLES as readonly string[]).includes(role);
+export function canSeeQc(roles: RolesInput): boolean {
+  return anyRoleIn(roles, QC_ALLOWED_ROLES);
 }
 
-export function canSeeWto(role: string | undefined | null): boolean {
-  return !!role && (WTO_ALLOWED_ROLES as readonly string[]).includes(role);
+export function canSeeWto(roles: RolesInput): boolean {
+  return anyRoleIn(roles, WTO_ALLOWED_ROLES);
 }
 
-export function canSeePacking(role: string | undefined | null): boolean {
-  return !!role && (PACKING_ALLOWED_ROLES as readonly string[]).includes(role);
+export function canSeePacking(roles: RolesInput): boolean {
+  return anyRoleIn(roles, PACKING_ALLOWED_ROLES);
 }
 
 /**
@@ -191,10 +214,8 @@ export function canSeePacking(role: string | undefined | null): boolean {
  * пилоте полезно «забрать на себя» застрявшую задачу) — backend
  * пропускает их через `enforceOwnership = false`.
  */
-export function canSeeConstructor(role: string | undefined | null): boolean {
-  return (
-    !!role && (CONSTRUCTOR_ALLOWED_ROLES as readonly string[]).includes(role)
-  );
+export function canSeeConstructor(roles: RolesInput): boolean {
+  return anyRoleIn(roles, CONSTRUCTOR_ALLOWED_ROLES);
 }
 
 /**
@@ -203,8 +224,8 @@ export function canSeeConstructor(role: string | undefined | null): boolean {
  * мог открыть тот же экран и помочь с застрявшей задачей (очередь
  * общая, владение не энфорсится).
  */
-export function canSeeCutter(role: string | undefined | null): boolean {
-  return !!role && (CUTTER_ALLOWED_ROLES as readonly string[]).includes(role);
+export function canSeeCutter(roles: RolesInput): boolean {
+  return anyRoleIn(roles, CUTTER_ALLOWED_ROLES);
 }
 
 /**
@@ -227,20 +248,24 @@ export function canSeeCutter(role: string | undefined | null): boolean {
  * ADMIN остаётся в матрице — у админа в шапке должен быть полный
  * набор разделов для отладки и поддержки.
  */
-export function canSeeQcMenu(role: string | undefined | null): boolean {
-  return canSeeQc(role) && role !== 'SHOP_MANAGER';
+export function canSeeQcMenu(roles: RolesInput): boolean {
+  // Фича «несколько ролей»: пункт «ОТК» в меню показываем тем, кто
+  // реально выполняет роль QC (или ADMIN — у него полный набор для
+  // отладки). Чистому SHOP_MANAGER пункт не нужен (работает через
+  // дашборды), но менеджер-совместитель QC+SHOP_MANAGER его увидит.
+  return anyRoleIn(roles, ['QC', 'ADMIN']);
 }
 
-export function canSeeWtoMenu(role: string | undefined | null): boolean {
-  return canSeeWto(role) && role !== 'SHOP_MANAGER';
+export function canSeeWtoMenu(roles: RolesInput): boolean {
+  return anyRoleIn(roles, ['IRONING', 'ADMIN']);
 }
 
-export function canSeePackingMenu(role: string | undefined | null): boolean {
-  return canSeePacking(role) && role !== 'SHOP_MANAGER';
+export function canSeePackingMenu(roles: RolesInput): boolean {
+  return anyRoleIn(roles, ['PACKING', 'ADMIN']);
 }
 
-export function canSeeOrders(role: string | undefined | null): boolean {
-  return !!role && (ORDERS_ALLOWED_ROLES as readonly string[]).includes(role);
+export function canSeeOrders(roles: RolesInput): boolean {
+  return anyRoleIn(roles, ORDERS_ALLOWED_ROLES);
 }
 
 /**
@@ -248,10 +273,8 @@ export function canSeeOrders(role: string | undefined | null): boolean {
  * Отличается от `canSeeOrders` тем, что не пускает CUTTER_ASSISTANT
  * (см. матрицу выше).
  */
-export function canSeeOrdersMenu(role: string | undefined | null): boolean {
-  return (
-    !!role && (ORDERS_MENU_ALLOWED_ROLES as readonly string[]).includes(role)
-  );
+export function canSeeOrdersMenu(roles: RolesInput): boolean {
+  return anyRoleIn(roles, ORDERS_MENU_ALLOWED_ROLES);
 }
 
 /**
@@ -259,22 +282,22 @@ export function canSeeOrdersMenu(role: string | undefined | null): boolean {
  * умолчанию доступно всем залогиненным ролям, кроме перечисленных в
  * `SHOPFLOOR_MENU_HIDDEN_ROLES`.
  */
-export function canSeeShopfloorMenu(role: string | undefined | null): boolean {
-  if (!role) return false;
-  return !(SHOPFLOOR_MENU_HIDDEN_ROLES as readonly string[]).includes(role);
+export function canSeeShopfloorMenu(roles: RolesInput): boolean {
+  // Показываем пункт «Цех», если ХОТЯ БЫ одна роль сотрудника не входит
+  // в «спрятанные» (single-workspace) роли. Чистый CUTTER/DISPLAY/… не
+  // увидит, а совместитель с обычной ролью — увидит.
+  const list = toRoleList(roles);
+  if (list.length === 0) return false;
+  const hidden = new Set<string>(SHOPFLOOR_MENU_HIDDEN_ROLES as readonly string[]);
+  return list.some((r) => !hidden.has(r));
 }
 
-export function canSeeAdmin(role: string | undefined | null): boolean {
-  return !!role && (ADMIN_ALLOWED_ROLES as readonly string[]).includes(role);
+export function canSeeAdmin(roles: RolesInput): boolean {
+  return anyRoleIn(roles, ADMIN_ALLOWED_ROLES);
 }
 
-export function canSeeProductionCost(
-  role: string | undefined | null,
-): boolean {
-  return (
-    !!role &&
-    (PRODUCTION_COST_ALLOWED_ROLES as readonly string[]).includes(role)
-  );
+export function canSeeProductionCost(roles: RolesInput): boolean {
+  return anyRoleIn(roles, PRODUCTION_COST_ALLOWED_ROLES);
 }
 
 /**
@@ -366,12 +389,13 @@ const SINGLE_WORKSPACE_ROLES: readonly Role[] = [
   'CONSTRUCTOR',
 ];
 
-export function isSingleWorkspaceRole(
-  role: string | undefined | null,
-): boolean {
-  return (
-    !!role && (SINGLE_WORKSPACE_ROLES as readonly string[]).includes(role)
-  );
+export function isSingleWorkspaceRole(roles: RolesInput): boolean {
+  // Фича «несколько ролей»: «одно рабочее окно» — это про сотрудника с
+  // РОВНО ОДНОЙ ролью, и она single-workspace. Совместитель (2+ роли)
+  // получает полноценную навигацию, его не запираем на один экран.
+  const list = toRoleList(roles);
+  if (list.length !== 1) return false;
+  return (SINGLE_WORKSPACE_ROLES as readonly string[]).includes(list[0]!);
 }
 
 /**
@@ -453,10 +477,8 @@ export const MASTER_PAGE_ALLOWED_ROLES: readonly Role[] = [
   'SHOP_MANAGER',
 ];
 
-export function canSeeMasterPage(role: string | undefined | null): boolean {
-  return (
-    !!role && (MASTER_PAGE_ALLOWED_ROLES as readonly string[]).includes(role)
-  );
+export function canSeeMasterPage(roles: RolesInput): boolean {
+  return anyRoleIn(roles, MASTER_PAGE_ALLOWED_ROLES);
 }
 
 /**
@@ -477,10 +499,8 @@ export const DISPLAY_PAGE_ALLOWED_ROLES: readonly Role[] = [
   'SHOP_MANAGER',
 ];
 
-export function canSeeDisplayPage(role: string | undefined | null): boolean {
-  return (
-    !!role && (DISPLAY_PAGE_ALLOWED_ROLES as readonly string[]).includes(role)
-  );
+export function canSeeDisplayPage(roles: RolesInput): boolean {
+  return anyRoleIn(roles, DISPLAY_PAGE_ALLOWED_ROLES);
 }
 
 /**
@@ -520,13 +540,8 @@ export const EMPLOYEE_QR_BUTTON_ALLOWED_ROLES: readonly Role[] = [
   'SHOP_MANAGER',
 ];
 
-export function canSeeEmployeeQrButton(
-  role: string | undefined | null,
-): boolean {
-  return (
-    !!role &&
-    (EMPLOYEE_QR_BUTTON_ALLOWED_ROLES as readonly string[]).includes(role)
-  );
+export function canSeeEmployeeQrButton(roles: RolesInput): boolean {
+  return anyRoleIn(roles, EMPLOYEE_QR_BUTTON_ALLOWED_ROLES);
 }
 
 /**
@@ -536,9 +551,12 @@ export function canSeeEmployeeQrButton(
  * workspace, либо дублирует его — поэтому отдельный пункт «Главная»
  * не нужен. Для менеджеров/админов оставляем как есть.
  */
-export function canSeeHome(role: string | undefined | null): boolean {
-  if (!role) return false;
-  return !isWorkingRole(role);
+export function canSeeHome(roles: RolesInput): boolean {
+  // Показываем «Главную», если ХОТЯ БЫ одна роль не является
+  // производственной (для совместителя с менеджерской ролью — да).
+  const list = toRoleList(roles);
+  if (list.length === 0) return false;
+  return list.some((r) => !isWorkingRole(r));
 }
 
 /**
@@ -556,6 +574,6 @@ export function canSeeHome(role: string | undefined | null): boolean {
  * операции по своим guards, а не по этому UI-флагу. Полный набор
  * пунктов сохраняем только за ADMIN — для отладки и поддержки.
  */
-export function canSeeWorkTab(role: string | undefined | null): boolean {
-  return role === 'ADMIN';
+export function canSeeWorkTab(roles: RolesInput): boolean {
+  return toRoleList(roles).includes('ADMIN');
 }

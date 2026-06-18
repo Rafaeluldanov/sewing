@@ -17,20 +17,34 @@ import {
 } from 'lucide-react';
 import type { EquipmentDetailDto } from '@sewing/shared/equipment';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
+import { EMPLOYEE_ROLES } from '@sewing/shared/employees';
 import { GroupedOperationSelect } from '@/components/admin';
+import { formatRole } from '@/lib/admin-labels';
 import {
   updateEquipmentDisplayNumberAction,
   updateEquipmentNameAction,
   updateEquipmentOperationsAction,
+  updateEquipmentRoleAction,
 } from './actions';
 import {
   initialUpdateDisplayNumberState,
   initialUpdateNameState,
   initialUpdateOperationsState,
+  initialUpdateRoleState,
   type UpdateDisplayNumberState,
   type UpdateNameState,
   type UpdateOperationsState,
+  type UpdateRoleState,
 } from './form-state';
+
+/**
+ * Роли, назначаемые «рабочему месту» для скан-переключения (фича
+ * «смена роли сканом»). Управленческие роли исключены — это не
+ * сканируемые участки.
+ */
+const WORKPLACE_ROLE_OPTIONS = EMPLOYEE_ROLES.filter(
+  (r) => r !== 'ADMIN' && r !== 'SHOP_MANAGER',
+);
 
 interface Props {
   equipment: EquipmentDetailDto;
@@ -153,6 +167,72 @@ export function EquipmentDisplayNumberForm({
           placeholder="например, 1"
           autoComplete="off"
         />
+      </div>
+
+      <div className="admin-actions-row">
+        <SaveButton label="Сохранить" />
+      </div>
+
+      {state.error && (
+        <div
+          role="alert"
+          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
+        >
+          <XCircle size={14} strokeWidth={1.6} aria-hidden /> {state.error}
+          {state.errorRequestId && (
+            <span className="admin-muted" style={{ marginLeft: 6 }}>
+              req: <code>{state.errorRequestId}</code>
+            </span>
+          )}
+        </div>
+      )}
+      {state.ok && (
+        <div role="status" className="admin-muted" style={{ fontSize: '0.88rem' }}>
+          Сохранено.
+        </div>
+      )}
+    </form>
+  );
+}
+
+/**
+ * Точечная форма роли «рабочего места» (`Equipment.role`, фича «смена
+ * роли сканом»). Пустое значение = снять привязку (`null`). Если роль
+ * задана, сотрудник, отсканировав QR этого оборудования в кабинете,
+ * переключается на терминал указанной роли.
+ */
+export function EquipmentRoleForm({
+  equipment,
+}: {
+  equipment: EquipmentDetailDto;
+}) {
+  const action = updateEquipmentRoleAction.bind(null, equipment.id);
+  const [state, formAction] = useFormState<UpdateRoleState, FormData>(
+    action,
+    initialUpdateRoleState,
+  );
+
+  return (
+    <form action={formAction} className="admin-form">
+      <div className="admin-field">
+        <label htmlFor="equipment-role">Роль участка</label>
+        <select
+          id="equipment-role"
+          name="role"
+          defaultValue={equipment.role ?? ''}
+        >
+          <option value="">— без роли —</option>
+          {WORKPLACE_ROLE_OPTIONS.map((r) => (
+            <option key={r} value={r}>
+              {formatRole(r)}
+            </option>
+          ))}
+        </select>
+        <span className="admin-field__hint admin-muted">
+          Сканируя QR этого рабочего места, сотрудник переключается на
+          терминал выбранной роли (если она входит в его роли доступа).
+          «— без роли —» — рабочее место не участвует в переключении.
+        </span>
       </div>
 
       <div className="admin-actions-row">

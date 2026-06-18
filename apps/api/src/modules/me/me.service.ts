@@ -13,16 +13,27 @@ import type {
   MeHistoryDayDto,
   MeHistoryQuery,
 } from '@sewing/shared/me-daily';
+import type {
+  SwitchWorkplaceDto,
+  SwitchWorkplaceResultDto,
+} from '@sewing/shared/workplace';
 import {
   CompensationType as PrismaCompensationType,
   EntryStatus,
+  PassportStatus,
   Prisma,
+  type Role,
   SalaryEntrySource,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   EmployeeProfileNotFoundException,
   EmployeeInactiveForbiddenException,
+  EquipmentInactiveException,
+  EquipmentNotFoundException,
+  WorkplaceNoRoleException,
+  WorkplaceRoleForbiddenException,
+  WorkplaceSwitchConfirmRequiredException,
 } from '../../common/errors.js';
 import {
   EMPLOYEE_QR_DEFAULT_TTL_SECONDS,
@@ -120,6 +131,109 @@ export class MeService {
     now: Date = new Date(),
   ): EmployeeQrTokenPayload | null {
     return verifyEmployeeQrToken(token, { secret: this.secret }, now);
+  }
+
+  // ===========================================================================
+  // POST /api/me/switch-workplace — смена активной роли сканом рабочего места
+  // ===========================================================================
+
+  /**
+   * Переключает активный рабочий экран сотрудника, сканируя QR
+   * «рабочего места» (`Equipment.qrCode = equipment:{id}`). Фича
+   * «несколько ролей» (см. `Equipment.role`, `Employee.roles/activeRole`).
+   *
+   * Алгоритм:
+   *   1. Резолвим оборудование по коду (формат `equipment:{id}`, голый
+   *      `id` или человекочитаемый `Equipment.code`).
+   *   2. Оборудование должно быть активным и иметь привязанную роль
+   *      (`Equipment.role`), иначе `WORKPLACE_NO_ROLE`.
+   *   3. Роль рабочего места обязана входить в `Employee.roles`
+   *      сотрудника, иначе `WORKPLACE_ROLE_FORBIDDEN`.
+   *   4. Если есть открытая смена с незавершённой работой (паспорт на
+   *      руках, `currentEmployeeId = me AND status = IN_PROGRESS`) и не
+   *      передан `force` — `409 WORKPLACE_SWITCH_CONFIRM_REQUIRED`
+   *      (UI показывает подтверждение и повторяет с `force: true`).
+   *   5. Закрываем открытую смену (если была) и проставляем
+   *      `Employee.activeRole`. Куда вести пользователя, решает фронт
+   *      по возвращённой роли (`getPrimaryWorkspace`).
+   *
+   * Окладную синхронизацию при закрытии смены не дёргаем: `SalaryEntry`
+   * за день уже создан на старте смены (см. `ShiftsService.start`),
+   * а оклад не зависит от факта закрытия.
+   */
+  async switchWorkplace(
+    principal: AuthPrincipal,
+    dto: SwitchWorkplaceDto,
+  ): Promise<SwitchWorkplaceResultDto> {
+    const equipment = await this.resolveEquipmentByCode(dto.code);
+    if (!equipment) throw new EquipmentNotFoundException();
+    if (!equipment.active) throw new EquipmentInactiveException();
+    if (!equipment.role) throw new WorkplaceNoRoleException();
+
+    const role = equipment.role as Role;
+    if (!principal.roles.includes(role)) {
+      throw new WorkplaceRoleForbiddenException();
+    }
+
+    const activeShift = await this.prisma.shiftSession.findFirst({
+      where: { employeeId: principal.employeeId, endedAt: null },
+      select: { id: true },
+    });
+    let closedShiftId: string | null = null;
+    if (activeShift) {
+      if (!dto.force) {
+        const unfinished = await this.prisma.passport.count({
+          where: {
+            currentEmployeeId: principal.employeeId,
+            status: PassportStatus.IN_PROGRESS,
+          },
+        });
+        if (unfinished > 0) {
+          throw new WorkplaceSwitchConfirmRequiredException();
+        }
+      }
+      await this.prisma.shiftSession.update({
+        where: { id: activeShift.id },
+        data: { endedAt: new Date() },
+      });
+      closedShiftId = activeShift.id;
+    }
+
+    await this.prisma.employee.update({
+      where: { id: principal.employeeId },
+      data: { activeRole: role },
+    });
+
+    this.logger.log(
+      `event=me.switch-workplace employeeId=${principal.employeeId} equipmentId=${equipment.id} role=${role} closedShift=${closedShiftId ?? 'none'}`,
+    );
+
+    return {
+      role,
+      equipmentId: equipment.id,
+      equipmentName: equipment.name,
+      equipmentDisplayNumber: equipment.displayNumber,
+      closedShiftId,
+    };
+  }
+
+  /**
+   * Резолвит `Equipment` по сырой строке из QR-сканера. Поддерживает те
+   * же три формата, что и `matchEquipmentByCode` на фронте:
+   *   - `equipment:{id}` (ADR-0008) → ищем по `id`;
+   *   - голый `id` (если QR уже распарсен) → по `id`;
+   *   - человекочитаемый `Equipment.code` → по `code`.
+   */
+  private async resolveEquipmentByCode(raw: string) {
+    const trimmed = raw.trim();
+    const candidate = trimmed.startsWith('equipment:')
+      ? trimmed.slice('equipment:'.length)
+      : trimmed;
+    const byId = await this.prisma.equipment.findUnique({
+      where: { id: candidate },
+    });
+    if (byId) return byId;
+    return this.prisma.equipment.findUnique({ where: { code: candidate } });
   }
 
   // ===========================================================================

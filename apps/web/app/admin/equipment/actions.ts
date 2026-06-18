@@ -32,6 +32,9 @@ export async function createEquipmentAction(
 
   const code = String(form.get('code') ?? '').trim();
   const displayNumber = String(form.get('displayNumber') ?? '').trim();
+  // Роль «рабочего места» (фича «смена роли сканом»). Пусто → null
+  // (без привязки). Валидное значение проверит backend Zod-схема.
+  const role = String(form.get('role') ?? '').trim();
   const operationIds = form
     .getAll('operationIds')
     .map((v) => String(v).trim())
@@ -43,6 +46,7 @@ export async function createEquipmentAction(
       name,
       code: code.length > 0 ? code : undefined,
       displayNumber: displayNumber.length > 0 ? displayNumber : null,
+      role: role.length > 0 ? role : null,
       operationIds: operationIds.length > 0 ? operationIds : undefined,
     });
     createdId = created.id;

@@ -23,9 +23,11 @@ export default async function WtoSectionLayout({
 }) {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/wto');
-  if (!canSeeWto(me.user.role)) redirect('/');
-  const showMasterCall = me.user.role === 'IRONING';
-  const showEmployeeQr = canSeeEmployeeQrButton(me.user.role);
+  // Фича «несколько ролей»: доступ по всему набору ролей.
+  const roles = me.user.roles ?? [me.user.role];
+  if (!canSeeWto(roles)) redirect('/');
+  const showMasterCall = roles.includes('IRONING');
+  const showEmployeeQr = canSeeEmployeeQrButton(roles);
   return (
     <>
       {children}

@@ -23,6 +23,14 @@ import type { Role } from '@prisma/client';
 export interface SessionPayload {
   sub: string;
   role: Role;
+  /**
+   * Полный набор ролей доступа (`Employee.roles`, фича «несколько
+   * ролей»). Опционально для backward-compat: старые токены без поля
+   * валидны — потребитель делает fallback `[role]`. Кладётся в payload,
+   * чтобы web-middleware (edge, без БД) мог принимать решения о
+   * редиректах для мульти-ролевых учёток.
+   */
+  roles?: Role[];
   iat: number;
   exp: number;
   v: 1;

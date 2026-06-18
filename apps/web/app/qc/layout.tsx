@@ -23,13 +23,17 @@ export default async function QcSectionLayout({
 }) {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/qc');
-  if (!canSeeQc(me.user.role)) redirect('/');
+  // Фича «несколько ролей»: доступ по всему набору (`me.user.roles`),
+  // а не только по основной роли — совместитель с QC во второй роли
+  // тоже попадает в раздел.
+  const roles = me.user.roles ?? [me.user.role];
+  if (!canSeeQc(roles)) redirect('/');
   // Кнопка «Мастер» — только для роли терминала (`QC`). Менеджер /
   // админ заходит сюда наблюдательно и звать мастера со своих
   // экранов им не нужно (см. `docs/flows.md §«Вызов мастера»`,
   // backend `@Roles(...)` всё равно отрежет лишних).
-  const showMasterCall = me.user.role === 'QC';
-  const showEmployeeQr = canSeeEmployeeQrButton(me.user.role);
+  const showMasterCall = roles.includes('QC');
+  const showEmployeeQr = canSeeEmployeeQrButton(roles);
   return (
     <>
       {children}

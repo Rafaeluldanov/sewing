@@ -31,7 +31,7 @@ export const dynamic = 'force-dynamic';
 export default async function MasterPage() {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/master');
-  if (!canSeeMasterPage(me.user.role)) redirect('/');
+  if (!canSeeMasterPage(me.user.roles ?? me.user.role)) redirect('/');
 
   let initialItems = null;
   let initialError: string | null = null;
@@ -88,7 +88,7 @@ export default async function MasterPage() {
       initialPolicy={initialPolicy}
       sizes={initialSizes}
       defectTypes={defectTypes}
-      showEmployeeQr={canSeeEmployeeQrButton(me.user.role)}
+      showEmployeeQr={canSeeEmployeeQrButton(me.user.roles ?? me.user.role)}
       fullName={me.user.fullName}
     />
   );

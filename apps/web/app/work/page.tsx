@@ -112,9 +112,17 @@ export default async function WorkPage() {
   // pipeline. Делаем server-side редирект в их собственный
   // терминал; backend всё равно режет операции по `@Roles(...)`,
   // но мы убираем сам шанс увидеть чужой экран.
-  const primary = getPrimaryWorkspace(me.user.role);
-  if (primary !== '/work' && primary !== '/') {
-    redirect(primary);
+  // Фича «несколько ролей»: пускаем на /work, если ХОТЯ БЫ одна роль
+  // сотрудника может его использовать (primary workspace = `/work`) или
+  // это менеджер/админ (primary `/`). Иначе уводим в его активный/
+  // основной workspace (чужой seamstress-экран показывать не нужно).
+  const roles = me.user.roles ?? [me.user.role];
+  const allowsWork = roles.some((r) => {
+    const p = getPrimaryWorkspace(r);
+    return p === '/work' || p === '/';
+  });
+  if (!allowsWork) {
+    redirect(getPrimaryWorkspace(me.user.activeRole ?? me.user.role));
   }
 
   const meta = await getShiftMeta();

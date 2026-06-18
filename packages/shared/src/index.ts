@@ -71,3 +71,4 @@ export * from './order-extra-costs';
 export * from './treasury';
 export * from './sizes';
 export * from './colors';
+export * from './workplace';

@@ -257,6 +257,30 @@ export async function updateEmployeeAction(
       salaryItemRaw === '' || salaryItemRaw === null ? null : salaryItemRaw;
   }
 
+  // Фича «несколько ролей»: набор ролей доступа (чекбоксы) + основная
+  // (radio). Скрытый маркер `rolesPresent` сигналит, что форма «Доступ»
+  // была отрендерена (иначе роли не трогаем). Backend дополнительно
+  // держит инвариант «набор содержит основную» и режет выдачу ADMIN
+  // не-админом.
+  if (form.has('rolesPresent')) {
+    const rolesRaw = form
+      .getAll('roles')
+      .map((v) => String(v))
+      .filter((v): v is EmployeeRole => isEmployeeRole(v));
+    const primaryRaw = String(form.get('primaryRole') ?? '').trim();
+    if (rolesRaw.length === 0) {
+      return { error: 'Выберите хотя бы одну роль' };
+    }
+    if (!isEmployeeRole(primaryRaw)) {
+      return { error: 'Выберите основную роль' };
+    }
+    if (!rolesRaw.includes(primaryRaw)) {
+      return { error: 'Основная роль должна быть среди выбранных' };
+    }
+    dto.role = primaryRaw;
+    dto.roles = rolesRaw;
+  }
+
   try {
     await updateEmployee(employeeId, dto);
     revalidatePath('/admin/employees');

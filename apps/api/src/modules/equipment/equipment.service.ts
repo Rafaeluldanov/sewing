@@ -10,7 +10,7 @@ import {
   OPERATION_CATEGORY_ORDER,
   type OperationCategory,
 } from '@sewing/shared/operations';
-import { Prisma } from '@prisma/client';
+import { Prisma, type Role } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   EquipmentCodeTakenException,
@@ -69,6 +69,7 @@ export class EquipmentService {
       name: eq.name,
       displayNumber: eq.displayNumber,
       active: eq.active,
+      role: eq.role ?? null,
       allowedOperationsCount: eq._count.allowedOperations,
       operationCategories: this.collectCategories(
         eq.allowedOperations.map((l) => l.operation.category),
@@ -215,6 +216,7 @@ export class EquipmentService {
       name: row.name,
       displayNumber: row.displayNumber,
       active: row.active,
+      role: row.role ?? null,
       allowedOperations: allowed,
     };
   }
@@ -246,6 +248,11 @@ export class EquipmentService {
     if (dto.name !== undefined) data.name = dto.name;
     if (dto.displayNumber !== undefined) {
       data.displayNumber = dto.displayNumber;
+    }
+    if (dto.role !== undefined) {
+      // `null` — снять привязку к роли; роль — рабочее место станет
+      // точкой скан-переключения (фича «смена роли сканом»).
+      data.role = (dto.role as Role | null) ?? null;
     }
     if (Object.keys(data).length > 0) {
       await this.prisma.equipment.update({
@@ -307,6 +314,7 @@ export class EquipmentService {
             code,
             name: dto.name,
             displayNumber: dto.displayNumber ?? null,
+            role: (dto.role as Role | null) ?? null,
             // qrCode UNIQUE NOT NULL — сначала ставим временный, ниже обновим.
             qrCode: `equipment-pending:${code}`,
             active: true,

@@ -20,9 +20,11 @@ export default async function PackingSectionLayout({
 }) {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/packing');
-  if (!canSeePacking(me.user.role)) redirect('/');
-  const showMasterCall = me.user.role === 'PACKING';
-  const showEmployeeQr = canSeeEmployeeQrButton(me.user.role);
+  // Фича «несколько ролей»: доступ по всему набору ролей.
+  const roles = me.user.roles ?? [me.user.role];
+  if (!canSeePacking(roles)) redirect('/');
+  const showMasterCall = roles.includes('PACKING');
+  const showEmployeeQr = canSeeEmployeeQrButton(roles);
   return (
     <>
       {children}

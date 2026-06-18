@@ -276,12 +276,20 @@ const EQUIPMENT: ReadonlyArray<{
   code: string;
   name: string;
   displayNumber: string;
+  /**
+   * Роль «рабочего места» (фича «смена роли сканом», `Equipment.role`).
+   * Сканируя QR станка/участка, сотрудник переключается на терминал
+   * этой роли. Раскройный стол → CUTTER, швейные станки → SEAMSTRESS,
+   * участки ОТК/ВТО/Упаковки → QC/IRONING/PACKING.
+   */
+  role: Role;
   allowedOperations: readonly string[];
 }> = [
   {
     code: 'cutting-table-01',
     name: 'Стол раскройный 01',
     displayNumber: '1',
+    role: 'CUTTER',
     allowedOperations: [
       'CUT_DIVISION',
       'CUT_BASE_PREP',
@@ -289,13 +297,13 @@ const EQUIPMENT: ReadonlyArray<{
       'CUT_ISSUE',
     ],
   },
-  { code: 'overlock-01',       name: 'Оверлок 01',                displayNumber: '1', allowedOperations: ['SEW_OVERLOCK_1', 'SEW_OVERLOCK_2'] },
-  { code: 'binding-01',        name: 'Машина киперка 01',         displayNumber: '1', allowedOperations: ['SEW_BINDING'] },
-  { code: 'overlock-02',       name: 'Оверлок 02',                displayNumber: '2', allowedOperations: ['SEW_OVERLOCK_1', 'SEW_OVERLOCK_2'] },
-  { code: 'coverstitch-01',    name: 'Распошивальная 01',         displayNumber: '1', allowedOperations: ['SEW_COVERSTITCH'] },
-  { code: 'qc-station-01',     name: 'Рабочее место ОТК 01',      displayNumber: '1', allowedOperations: ['QC'] },
-  { code: 'wto-station-01',    name: 'Рабочее место ВТО 01',      displayNumber: '1', allowedOperations: ['WTO'] },
-  { code: 'packing-station-01', name: 'Рабочее место упаковки 01', displayNumber: '1', allowedOperations: ['PACKING'] },
+  { code: 'overlock-01',       name: 'Оверлок 01',                displayNumber: '1', role: 'SEAMSTRESS', allowedOperations: ['SEW_OVERLOCK_1', 'SEW_OVERLOCK_2'] },
+  { code: 'binding-01',        name: 'Машина киперка 01',         displayNumber: '1', role: 'SEAMSTRESS', allowedOperations: ['SEW_BINDING'] },
+  { code: 'overlock-02',       name: 'Оверлок 02',                displayNumber: '2', role: 'SEAMSTRESS', allowedOperations: ['SEW_OVERLOCK_1', 'SEW_OVERLOCK_2'] },
+  { code: 'coverstitch-01',    name: 'Распошивальная 01',         displayNumber: '1', role: 'SEAMSTRESS', allowedOperations: ['SEW_COVERSTITCH'] },
+  { code: 'qc-station-01',     name: 'Рабочее место ОТК 01',      displayNumber: '1', role: 'QC',        allowedOperations: ['QC'] },
+  { code: 'wto-station-01',    name: 'Рабочее место ВТО 01',      displayNumber: '1', role: 'IRONING',   allowedOperations: ['WTO'] },
+  { code: 'packing-station-01', name: 'Рабочее место упаковки 01', displayNumber: '1', role: 'PACKING',   allowedOperations: ['PACKING'] },
 ];
 
 async function seedEquipment(opByCode: Record<string, string>) {
@@ -319,19 +327,27 @@ async function seedEquipment(opByCode: Record<string, string>) {
       !existing ||
       existing.displayNumber === null ||
       existing.displayNumber === '';
+    // Роль рабочего места (фича «смена роли сканом»): на create ставим
+    // каноничную из seed; на update — только если в БД ещё пусто
+    // (NULL), чтобы re-seed не затирал роль, заданную вручную в админке.
+    const shouldSetRole = !existing || existing.role === null;
     const row = await prisma.equipment.upsert({
       where: { code: eq.code },
       create: {
         code: eq.code,
         name: eq.name,
         displayNumber: eq.displayNumber,
+        role: eq.role,
         // qrCode UNIQUE NOT NULL — ставим временный плейсхолдер, сразу обновим ниже.
         qrCode: `equipment-pending:${eq.code}`,
         active: true,
       },
-      update: shouldSetDisplayNumber
-        ? { name: eq.name, active: true, displayNumber: eq.displayNumber }
-        : { name: eq.name, active: true },
+      update: {
+        name: eq.name,
+        active: true,
+        ...(shouldSetDisplayNumber ? { displayNumber: eq.displayNumber } : {}),
+        ...(shouldSetRole ? { role: eq.role } : {}),
+      },
     });
     const targetQr = `equipment:${row.id}`;
     if (row.qrCode !== targetQr) {

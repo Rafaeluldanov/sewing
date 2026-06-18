@@ -28,3 +28,12 @@ export interface UpdateNameState {
 }
 
 export const initialUpdateNameState: UpdateNameState = {};
+
+// Роль «рабочего места» (фича «смена роли сканом»).
+export interface UpdateRoleState {
+  ok?: boolean;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialUpdateRoleState: UpdateRoleState = {};

@@ -96,8 +96,9 @@ export class EmployeesController {
     @Param('id') id: string,
     @Body(new ZodValidationPipe(UpdateEmployeeSchema))
     body: UpdateEmployeeDto,
+    @CurrentUser() viewer: AuthPrincipal,
   ) {
-    return this.employees.update(id, body);
+    return this.employees.update(id, body, viewer);
   }
 
   /**

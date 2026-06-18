@@ -10,6 +10,7 @@ import type {
   UpdateDisplayNumberState,
   UpdateNameState,
   UpdateOperationsState,
+  UpdateRoleState,
 } from './form-state';
 
 /**
@@ -141,5 +142,39 @@ export async function updateEquipmentNameAction(
       };
     }
     return { error: 'Не удалось сохранить изменения' };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// role (роль «рабочего места» для скан-переключения, фича «несколько ролей»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Server action для `Equipment.role`. Тонкая обёртка над
+ * `PATCH /api/equipment/:id`. Пустое значение → `null` (снять привязку
+ * к роли — рабочее место перестаёт участвовать в скан-переключении).
+ * Валидность роли проверяет backend Zod-схема (`UpdateEquipmentSchema`).
+ */
+export async function updateEquipmentRoleAction(
+  equipmentId: string,
+  _prev: UpdateRoleState,
+  form: FormData,
+): Promise<UpdateRoleState> {
+  const raw = form.get('role');
+  const role = (typeof raw === 'string' ? raw : '').trim();
+
+  try {
+    await updateEquipment(equipmentId, { role: role.length > 0 ? role : null });
+    revalidatePath('/admin/equipment');
+    revalidatePath(`/admin/equipment/${equipmentId}`);
+    return { ok: true };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        error: errorText(e),
+        errorRequestId: e.requestId,
+      };
+    }
+    return { error: 'Не удалось сохранить роль рабочего места' };
   }
 }

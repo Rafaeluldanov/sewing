@@ -13,8 +13,19 @@ import {
   type LucideIcon,
 } from 'lucide-react';
 import type { OperationLiteDto } from '@sewing/shared/shifts';
+import { EMPLOYEE_ROLES } from '@sewing/shared/employees';
 import { GroupedOperationSelect } from '@/components/admin';
+import { formatRole } from '@/lib/admin-labels';
 import { createEquipmentAction } from './actions';
+
+/**
+ * Роли, которые имеет смысл назначать «рабочему месту» для
+ * скан-переключения (фича «смена роли сканом»). Управленческие роли
+ * (ADMIN/SHOP_MANAGER) — это не сканируемые участки, поэтому исключены.
+ */
+const WORKPLACE_ROLE_OPTIONS = EMPLOYEE_ROLES.filter(
+  (r) => r !== 'ADMIN' && r !== 'SHOP_MANAGER',
+);
 import {
   initialCreateEquipmentState,
   type CreateEquipmentState,
@@ -112,6 +123,22 @@ export function CreateEquipmentForm({ operations }: Props) {
             placeholder="опционально"
             autoComplete="off"
           />
+        </div>
+        <div className="admin-field">
+          <label htmlFor="eq-role">Роль участка</label>
+          <select id="eq-role" name="role" defaultValue="">
+            <option value="">— без роли —</option>
+            {WORKPLACE_ROLE_OPTIONS.map((r) => (
+              <option key={r} value={r}>
+                {formatRole(r)}
+              </option>
+            ))}
+          </select>
+          <span className="admin-field__hint admin-muted">
+            Если задана, сотрудник со сканом QR этого рабочего места
+            переключается на терминал этой роли (нужна для участков
+            ОТК/ВТО/Упаковка/Крой).
+          </span>
         </div>
       </div>
 

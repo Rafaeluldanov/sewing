@@ -16,6 +16,6 @@ export default async function ProductionCostLayout({
 }) {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/production-cost');
-  if (!canSeeProductionCost(me.user.role)) redirect('/');
+  if (!canSeeProductionCost(me.user.roles ?? me.user.role)) redirect('/');
   return <>{children}</>;
 }

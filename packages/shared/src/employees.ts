@@ -50,6 +50,21 @@ export const EMPLOYEE_ROLES = [
 export const EmployeeRoleSchema = z.enum(EMPLOYEE_ROLES);
 export type EmployeeRole = z.infer<typeof EmployeeRoleSchema>;
 
+/**
+ * Нормализует набор ролей доступа сотрудника (фича «несколько ролей»,
+ * см. `Employee.roles`). Гарантирует ИНВАРИАНТ «основная роль входит в
+ * набор» и дедуплицирует значения с сохранением порядка (основная —
+ * первой). Используется и на бэкенде (`EmployeesService`), и на фронте
+ * (форма «Доступ»), чтобы правило было в одном месте.
+ */
+export function normalizeAssignedRoles(
+  primary: string,
+  roles: readonly string[] | undefined | null,
+): string[] {
+  const set = new Set<string>([primary, ...(roles ?? [])]);
+  return Array.from(set);
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -220,6 +235,23 @@ export const UpdateEmployeeSchema = z
     salaryPerShift: SalaryPerShiftField.optional(),
     active: z.boolean().optional(),
     /**
+     * Основная роль сотрудника (`Employee.role`). Фича «несколько
+     * ролей» (18.06.2026): эту роль выбирают «звёздочкой» в форме
+     * «Доступ» — она определяет рабочий экран/лендинг и остаётся
+     * единственной категориальной ролью для зарплаты/дашбордов.
+     * `undefined` — основную роль не меняем. Backend проверяет, что
+     * она входит в итоговый `roles` (инвариант).
+     */
+    role: EmployeeRoleSchema.optional(),
+    /**
+     * Полный набор ролей ДОСТУПА (`Employee.roles`). Чекбоксы в форме
+     * «Доступ». ИНВАРИАНТ: набор всегда содержит основную роль —
+     * backend дополняет его `role` через `normalizeAssignedRoles`,
+     * даже если UI её не прислал. `undefined` — набор не трогаем.
+     * RBAC: SHOP_MANAGER не может добавить/снять `ADMIN`.
+     */
+    roles: z.array(EmployeeRoleSchema).min(1, 'Нужна хотя бы одна роль').optional(),
+    /**
      * Процент B2B-начисления закройщика. Опционально на уровне DTO:
      * `undefined` — backend не трогает колонку; `null` или пустая
      * строка — стирает значение (backend возьмёт fallback из ENV).
@@ -250,10 +282,12 @@ export const UpdateEmployeeSchema = z
       obj.compensationType !== undefined ||
       obj.salaryPerShift !== undefined ||
       obj.active !== undefined ||
+      obj.role !== undefined ||
+      obj.roles !== undefined ||
       obj.cutterB2bSewingPercent !== undefined ||
       obj.companyDivisionId !== undefined ||
       obj.salaryCashFlowItemId !== undefined,
-    'Нечего обновлять: укажите compensationType, salaryPerShift, active, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
+    'Нечего обновлять: укажите compensationType, salaryPerShift, active, role, roles, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
   );
 export type UpdateEmployeeDto = z.infer<typeof UpdateEmployeeSchema>;
 
@@ -316,6 +350,13 @@ export const CreateEmployeeSchema = z
     login: LoginField,
     pin: PinField,
     role: EmployeeRoleSchema,
+    /**
+     * Фича «несколько ролей»: дополнительный доступ при создании.
+     * `undefined` — сотрудник создаётся с набором из одной основной
+     * роли (`roles = [role]`). Backend всё равно прогоняет через
+     * `normalizeAssignedRoles`, гарантируя присутствие `role`.
+     */
+    roles: z.array(EmployeeRoleSchema).min(1).optional(),
     compensationType: CompensationTypeSchema.default('PIECEWORK'),
     salaryPerShift: SalaryPerShiftField.optional(),
     active: z.boolean().optional(),
@@ -369,7 +410,20 @@ export interface EmployeeListItemDto {
   id: string;
   fullName: string;
   login: string;
+  /** Основная роль (`Employee.role`) — для категоризации/лендинга. */
   role: string;
+  /**
+   * Полный набор ролей доступа (`Employee.roles`, фича «несколько
+   * ролей»). Всегда содержит `role`. Опционально на уровне типа (`?`)
+   * для backward-compat со старыми потребителями shared-пакета —
+   * backend всегда отдаёт массив.
+   */
+  roles?: string[];
+  /**
+   * Последняя роль, на которую сотрудник переключился сканом рабочего
+   * места (`Employee.activeRole`). `null` — переключения не было.
+   */
+  activeRole?: string | null;
   compensationType: CompensationType;
   salaryPerShift: number | null;
   active: boolean;

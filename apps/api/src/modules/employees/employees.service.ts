@@ -12,6 +12,7 @@ import type {
   ListEmployeesQuery,
   UpdateEmployeeDto,
 } from '@sewing/shared/employees';
+import { normalizeAssignedRoles } from '@sewing/shared/employees';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   CashFlowItemNotFoundException,
@@ -76,7 +77,10 @@ export class EmployeesService {
   async list(query: ListEmployeesQuery): Promise<EmployeeListItemDto[]> {
     const where: Prisma.EmployeeWhereInput = {};
     if (query.active !== undefined) where.active = query.active;
-    if (query.role) where.role = query.role as Role;
+    // Фича «несколько ролей»: фильтр «по роли» матчит набор доступа
+    // (`roles has`), а не только основную роль — менеджер ищет всех,
+    // кто умеет выполнять роль, включая совместителей.
+    if (query.role) where.roles = { has: query.role as Role };
     if (query.compensationType) {
       where.compensationType = query.compensationType as CompensationType;
     }
@@ -190,6 +194,10 @@ export class EmployeesService {
           login: dto.login,
           pinHash,
           role: dto.role as Role,
+          // Фича «несколько ролей»: набор доступа всегда содержит
+          // основную роль (`normalizeAssignedRoles`). Если менеджер не
+          // прислал доп. роли — получаем `[role]`, поведение прежнее.
+          roles: normalizeAssignedRoles(dto.role, dto.roles) as Role[],
           compensationType: dto.compensationType as CompensationType,
           salaryPerShift:
             dto.salaryPerShift === undefined || dto.salaryPerShift === null
@@ -247,9 +255,59 @@ export class EmployeesService {
    * Если patch ломает инвариант — бросаем `EMPLOYEE_SALARY_RATE_REQUIRED`.
    * Это ловится на UI и подсвечивается на форме ставки.
    */
-  async update(id: string, dto: UpdateEmployeeDto): Promise<EmployeeDetailDto> {
+  async update(
+    id: string,
+    dto: UpdateEmployeeDto,
+    viewer: AuthPrincipal,
+  ): Promise<EmployeeDetailDto> {
     const current = await this.prisma.employee.findUnique({ where: { id } });
     if (!current) throw new EmployeeNotFoundException();
+
+    // -------------------------------------------------------------------------
+    // Фича «несколько ролей»: смена основной роли и/или набора доступа.
+    // -------------------------------------------------------------------------
+    const wantsRoleChange = dto.role !== undefined || dto.roles !== undefined;
+    let nextPrimary: Role | undefined;
+    let nextRoles: Role[] | undefined;
+    let roleChanged = false;
+    if (wantsRoleChange) {
+      nextPrimary = (dto.role ?? current.role) as Role;
+      // Инвариант «набор содержит основную роль» держим централизованно.
+      nextRoles = normalizeAssignedRoles(
+        nextPrimary,
+        dto.roles ?? (current.roles as Role[]),
+      ) as Role[];
+
+      const currentRoles =
+        current.roles && current.roles.length > 0
+          ? (current.roles as Role[])
+          : [current.role as Role];
+      // No-op: форма всегда шлёт role+roles, но фактической смены может
+      // не быть (менеджер правит только зарплату). Тогда не запускаем
+      // RBAC/последний-админ и не пишем колонки — иначе SHOP_MANAGER не
+      // смог бы сохранить даже compensation у ADMIN-карточки.
+      roleChanged =
+        nextPrimary !== current.role || !sameRoleSet(nextRoles, currentRoles);
+
+      if (roleChanged) {
+        const viewerIsAdmin = viewer.roles.includes(Role.ADMIN);
+        const targetIsAdmin = currentRoles.includes(Role.ADMIN);
+        const willBeAdmin = nextRoles.includes(Role.ADMIN);
+
+        // RBAC: только ADMIN управляет ADMIN-доступом — не-админ не может
+        // ни трогать роли админа, ни выдать роль ADMIN кому-либо (защита
+        // от эскалации привилегий начальником цеха).
+        if (!viewerIsAdmin && (targetIsAdmin || willBeAdmin)) {
+          throw new EmployeeAdminTargetForbiddenException();
+        }
+
+        // Защита последнего активного админа: нельзя снять ADMIN с
+        // единственного оставшегося.
+        if (targetIsAdmin && !willBeAdmin) {
+          await this.assertNotLastActiveAdmin(id);
+        }
+      }
+    }
 
     const next = {
       compensationType: dto.compensationType ?? current.compensationType,
@@ -286,6 +344,19 @@ export class EmployeesService {
     }
 
     const data: Prisma.EmployeeUpdateInput = {};
+    if (roleChanged && nextPrimary && nextRoles) {
+      data.role = nextPrimary;
+      data.roles = { set: nextRoles };
+      // Если активная роль (последнее сканированное рабочее место)
+      // больше не входит в набор — сбрасываем её, чтобы лендинг не
+      // указывал на недоступный теперь экран.
+      if (
+        current.activeRole &&
+        !nextRoles.includes(current.activeRole as Role)
+      ) {
+        data.activeRole = null;
+      }
+    }
     if (dto.compensationType !== undefined) {
       data.compensationType = dto.compensationType as CompensationType;
     }
@@ -519,7 +590,7 @@ export class EmployeesService {
 
     this.assertCanModifyTarget(target, viewer);
 
-    if (target.role === Role.ADMIN) {
+    if (isAdminEmployee(target)) {
       await this.assertNotLastActiveAdmin(target.id);
     }
 
@@ -655,6 +726,7 @@ export class EmployeesService {
         fullName: true,
         login: true,
         role: true,
+        roles: true,
         createdAt: true,
         active: true,
       },
@@ -664,7 +736,7 @@ export class EmployeesService {
     if (viewer.employeeId === target.id) {
       throw new EmployeeCannotModifySelfException();
     }
-    if (target.role === Role.ADMIN) {
+    if (isAdminEmployee(target)) {
       await this.assertNotLastActiveAdmin(target.id);
     }
 
@@ -717,26 +789,30 @@ export class EmployeesService {
    * методе), а не здесь — `EmployeesController` уже знает viewer.role.
    */
   private assertCanModifyTarget(
-    target: { id: string; role: Role },
+    target: { id: string; role: Role; roles?: Role[] },
     viewer: AuthPrincipal,
   ): void {
     if (viewer.employeeId === target.id) {
       throw new EmployeeCannotModifySelfException();
     }
-    if (target.role === Role.ADMIN && viewer.role !== Role.ADMIN) {
+    // Фича «несколько ролей»: «админ» — это любой, у кого ADMIN в
+    // наборе ролей (а не только основная роль). И viewer тоже «админ»,
+    // если ADMIN среди его ролей.
+    if (isAdminEmployee(target) && !viewer.roles.includes(Role.ADMIN)) {
       throw new EmployeeAdminTargetForbiddenException();
     }
   }
 
   /**
-   * Запрещает архивирование / удаление последнего активного ADMIN.
-   * Передаём `excludeId` — чтобы при операции над текущим ADMIN-ом
-   * считать «остальных» (без него).
+   * Запрещает архивирование / удаление / снятие роли у последнего
+   * активного ADMIN. «Админ» считается по наличию ADMIN в `roles`
+   * (фича «несколько ролей»). Передаём `excludeId` — чтобы при операции
+   * над текущим ADMIN-ом считать «остальных» (без него).
    */
   private async assertNotLastActiveAdmin(excludeId: string): Promise<void> {
     const otherActive = await this.prisma.employee.count({
       where: {
-        role: Role.ADMIN,
+        roles: { has: Role.ADMIN },
         active: true,
         NOT: { id: excludeId },
       },
@@ -793,12 +869,37 @@ type EmployeeRow = Prisma.EmployeeGetPayload<{
   include: typeof EMPLOYEE_DETAIL_INCLUDE;
 }>;
 
+/**
+ * «Сотрудник является администратором» — фича «несколько ролей»:
+ * ADMIN может быть как основной ролью, так и одной из ролей доступа.
+ * Учитываем оба места (с fallback на основную роль, если набор пуст —
+ * старые строки).
+ */
+function isAdminEmployee(e: {
+  role: Role;
+  roles?: Role[] | null;
+}): boolean {
+  if (e.roles && e.roles.length > 0) return e.roles.includes(Role.ADMIN);
+  return e.role === Role.ADMIN;
+}
+
+/** Сравнение двух наборов ролей как множеств (порядок не важен). */
+function sameRoleSet(a: Role[], b: Role[]): boolean {
+  if (a.length !== b.length) return false;
+  const sb = new Set<Role>(b);
+  return a.every((r) => sb.has(r));
+}
+
 function toListDto(e: EmployeeRow): EmployeeListItemDto {
   return {
     id: e.id,
     fullName: e.fullName,
     login: e.login,
     role: e.role,
+    // ИНВАРИАНТ «roles содержит role»: для старых строк с пустым
+    // набором отдаём `[role]`, чтобы UI/RBAC всегда видели роль.
+    roles: e.roles && e.roles.length > 0 ? e.roles : [e.role],
+    activeRole: e.activeRole ?? null,
     compensationType: e.compensationType,
     salaryPerShift: e.salaryPerShift === null ? null : Number(e.salaryPerShift),
     active: e.active,

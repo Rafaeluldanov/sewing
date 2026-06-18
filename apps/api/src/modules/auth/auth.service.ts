@@ -71,12 +71,24 @@ export class AuthService {
    * Создаёт session-cookie для сотрудника. Используется при логине,
    * а в тестах — для прямого получения cookie без формы.
    */
-  issueSession(employee: Pick<Employee, 'id' | 'role' | 'login' | 'fullName'>): {
+  issueSession(
+    employee: Pick<
+      Employee,
+      'id' | 'role' | 'login' | 'fullName'
+    > & { roles?: Role[]; activeRole?: Role | null },
+  ): {
     user: AuthPrincipal;
     cookie: { name: string; value: string; attrs: CookieAttributes };
   } {
+    // ИНВАРИАНТ «roles содержит role»: для старых учёток без набора
+    // (или если вызвали с узким Pick) откатываемся к `[role]`.
+    const roles =
+      employee.roles && employee.roles.length > 0
+        ? employee.roles
+        : [employee.role];
+    const activeRole = employee.activeRole ?? null;
     const { token, expiresAt } = signSession(
-      { sub: employee.id, role: employee.role },
+      { sub: employee.id, role: employee.role, roles },
       { secret: this.secret, ttlSeconds: this.ttlSeconds },
     );
     const attrs = buildSessionCookieAttributes({
@@ -87,6 +99,8 @@ export class AuthService {
     const user: AuthPrincipal = {
       employeeId: employee.id,
       role: employee.role,
+      roles,
+      activeRole,
       login: employee.login,
       fullName: employee.fullName,
     };
@@ -131,12 +145,29 @@ export class AuthService {
     if (!payload) return null;
     const employee = await this.prisma.employee.findUnique({
       where: { id: payload.sub },
-      select: { id: true, role: true, login: true, fullName: true, active: true },
+      select: {
+        id: true,
+        role: true,
+        roles: true,
+        activeRole: true,
+        login: true,
+        fullName: true,
+        active: true,
+      },
     });
     if (!employee || !employee.active) return null;
+    // Свежий набор ролей из БД (не из payload) — чтобы смена ролей в
+    // админке вступала в силу сразу, до перевыпуска токена. Fallback
+    // `[role]` поддерживает инвариант для старых строк.
+    const roles =
+      employee.roles && employee.roles.length > 0
+        ? (employee.roles as Role[])
+        : [employee.role as Role];
     return {
       employeeId: employee.id,
       role: employee.role as Role,
+      roles,
+      activeRole: (employee.activeRole as Role | null) ?? null,
       login: employee.login,
       fullName: employee.fullName,
     };

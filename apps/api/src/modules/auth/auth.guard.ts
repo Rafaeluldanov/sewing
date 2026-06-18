@@ -54,7 +54,13 @@ export class AuthGuard implements CanActivate {
       [context.getHandler(), context.getClass()],
     );
     if (required && required.length > 0) {
-      if (principal.role !== 'ADMIN' && !required.includes(principal.role)) {
+      // Фича «несколько ролей»: доступ есть, если ЛЮБАЯ из ролей
+      // сотрудника (`principal.roles`, инвариант — содержит `role`)
+      // входит в требуемый список. ADMIN по-прежнему проходит везде.
+      const roles = principal.roles;
+      const allowed =
+        roles.includes('ADMIN') || required.some((r) => roles.includes(r));
+      if (!allowed) {
         throw new ForbiddenException({
           statusCode: 403,
           code: 'FORBIDDEN_ROLE',

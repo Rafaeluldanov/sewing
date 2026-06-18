@@ -22,6 +22,6 @@ export default async function ShopfloorDisplayLayout({
 }) {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/shopfloor/display');
-  if (!canSeeDisplayPage(me.user.role)) redirect('/');
+  if (!canSeeDisplayPage(me.user.roles ?? me.user.role)) redirect('/');
   return <>{children}</>;
 }

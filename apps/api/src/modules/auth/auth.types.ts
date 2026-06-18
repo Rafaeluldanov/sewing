@@ -10,7 +10,22 @@ import type { Request } from 'express';
  */
 export interface AuthPrincipal {
   employeeId: string;
+  /**
+   * ОСНОВНАЯ роль (`Employee.role`) — для категоризации и дефолтного
+   * экрана. RBAC опирается на `roles` (см. ниже), а не на это поле.
+   */
   role: Role;
+  /**
+   * Полный набор ролей доступа (`Employee.roles`, фича «несколько
+   * ролей»). ИНВАРИАНТ: всегда содержит `role`. На него опирается
+   * `AuthGuard` при проверке `@Roles(...)`.
+   */
+  roles: Role[];
+  /**
+   * Текущая активная роль (`Employee.activeRole`) — последняя, на
+   * которую переключились сканом рабочего места. `null` — берётся `role`.
+   */
+  activeRole: Role | null;
   /** Логин (`Employee.login`) для удобства логирования и UI. */
   login: string;
   /** ФИО для шапки UI. */

@@ -1,7 +1,10 @@
-import { Controller, Get, Inject, Query } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Inject, Post, Query } from '@nestjs/common';
 import type { EmployeeQrResponseDto } from '@sewing/shared/employee-qr';
 import type { MeDailyDto, MeHistoryDto } from '@sewing/shared/me-daily';
 import { MeHistoryQuerySchema } from '@sewing/shared/me-daily';
+import type { SwitchWorkplaceResultDto } from '@sewing/shared/workplace';
+import { SwitchWorkplaceSchema } from '@sewing/shared/workplace';
+import type { SwitchWorkplaceDto } from '@sewing/shared/workplace';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { UnauthenticatedException } from '../../common/errors.js';
 import { CurrentUser } from '../auth/auth.decorators.js';
@@ -53,5 +56,24 @@ export class MeController {
   ): Promise<MeHistoryDto> {
     if (!principal) throw new UnauthenticatedException();
     return this.me.getHistory(principal, query);
+  }
+
+  /**
+   * Смена активной роли сканом «рабочего места» (фича «несколько
+   * ролей»). Тело — `{ code, force? }`, где `code` — сырая строка из
+   * QR-сканера (`equipment:{id}`). При незавершённой работе и без
+   * `force` вернётся `409 WORKPLACE_SWITCH_CONFIRM_REQUIRED` — UI
+   * показывает подтверждение и повторяет с `force: true`. Скоупится по
+   * `principal` (нельзя переключить чужой кабинет).
+   */
+  @Post('switch-workplace')
+  @HttpCode(200)
+  async switchWorkplace(
+    @CurrentUser() principal: AuthPrincipal | undefined,
+    @Body(new ZodValidationPipe(SwitchWorkplaceSchema))
+    body: SwitchWorkplaceDto,
+  ): Promise<SwitchWorkplaceResultDto> {
+    if (!principal) throw new UnauthenticatedException();
+    return this.me.switchWorkplace(principal, body);
   }
 }

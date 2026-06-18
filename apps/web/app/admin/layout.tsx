@@ -33,7 +33,7 @@ export default async function AdminSectionLayout({
 }) {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/admin');
-  if (!canSeeAdmin(me.user.role)) redirect('/');
+  if (!canSeeAdmin(me.user.roles ?? me.user.role)) redirect('/');
   return (
     <div className="admin-layout">
       <AdminSidebar />

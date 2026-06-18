@@ -63,6 +63,7 @@
     "./sizes": "./src/sizes.ts",
     "./cutting-tasks": "./src/cutting-tasks.ts",
     "./colors": "./src/colors.ts",
+    "./workplace": "./src/workplace.ts",
     "./config": "./src/config.ts"
   },
   "scripts": {

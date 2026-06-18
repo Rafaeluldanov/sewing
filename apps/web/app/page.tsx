@@ -15,5 +15,7 @@ export default async function HomePage(): Promise<never> {
   if (!me) {
     redirect('/login');
   }
-  redirect(getDefaultRouteForRole(me.user.role));
+  // Фича «несколько ролей»: лендинг по активной роли (последнее
+  // сканированное рабочее место), иначе — по основной.
+  redirect(getDefaultRouteForRole(me.user.activeRole ?? me.user.role));
 }

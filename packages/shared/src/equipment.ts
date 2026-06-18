@@ -11,6 +11,37 @@
 
 import { z } from 'zod';
 
+import { EMPLOYEE_ROLES } from './employees';
+
+/**
+ * Роль «рабочего места» (`Equipment.role`, фича «смена роли сканом»,
+ * 18.06.2026). Сканируя QR этого оборудования в кабинете, сотрудник
+ * переключается на терминал указанной роли (если она входит в его
+ * `Employee.roles`). Допустимые значения — те же assignable-роли, что
+ * и у сотрудника (`EMPLOYEE_ROLES`, без `DISPLAY`). `null`/пустая
+ * строка — рабочее место не привязано к роли (в скан-переключении не
+ * участвует), `undefined` — поле не трогаем (для PATCH).
+ *
+ * Реализовано через `z.string().refine(...)`, а не `z.enum`, чтобы
+ * вход и выход поля были одного типа (`string | null | undefined`):
+ * иначе расхождение input/output ломает вывод дженерика
+ * `ZodValidationPipe` на контроллере (см. equipment.controller.ts).
+ */
+const RoleStringField = z
+  .string()
+  .refine(
+    (v) => (EMPLOYEE_ROLES as readonly string[]).includes(v),
+    'Недопустимая роль рабочего места',
+  );
+const WorkplaceRoleField = z
+  .union([RoleStringField, z.literal(''), z.null()])
+  .optional()
+  .transform((v): string | null | undefined => {
+    if (v === undefined) return undefined;
+    if (v === null || v === '') return null;
+    return v;
+  });
+
 /**
  * Запись разрешённой операции для конкретной единицы оборудования.
  *
@@ -45,6 +76,11 @@ export interface EquipmentDetailDto {
    */
   displayNumber: string | null;
   active: boolean;
+  /**
+   * Роль «рабочего места» для скан-переключения (`Equipment.role`,
+   * фича «смена роли сканом»). `null` — не привязано к роли.
+   */
+  role: string | null;
   /** Только активные операции, отсортированы по `sortOrder` (asc). */
   allowedOperations: EquipmentOperationLinkDto[];
 }
@@ -58,6 +94,8 @@ export interface EquipmentSummaryDto {
   /** См. `EquipmentDetailDto.displayNumber`. */
   displayNumber: string | null;
   active: boolean;
+  /** Роль «рабочего места» (`Equipment.role`). `null` — не привязано. */
+  role: string | null;
   /** Сколько активных операций сейчас разрешено для этого оборудования. */
   allowedOperationsCount: number;
   /**
@@ -159,6 +197,13 @@ export const CreateEquipmentSchema = z.object({
       'Код оборудования — только латинские строчные буквы, цифры и дефис, до 64 символов',
     ),
   displayNumber: DisplayNumberField,
+  /**
+   * Роль «рабочего места» (`Equipment.role`). Опционально: `null` /
+   * пустая строка / `undefined` — без привязки к роли. Для участков
+   * ОТК/ВТО/Упаковка/Крой менеджер выбирает соответствующую роль,
+   * чтобы рабочее место участвовало в скан-переключении.
+   */
+  role: WorkplaceRoleField,
   operationIds: OperationIdsField.optional(),
 });
 export type CreateEquipmentDto = z.infer<typeof CreateEquipmentSchema>;
@@ -188,9 +233,18 @@ export const UpdateEquipmentSchema = z
   .object({
     name: NameField.optional(),
     displayNumber: DisplayNumberField,
+    /**
+     * Роль «рабочего места» (`Equipment.role`). `undefined` — не
+     * трогаем; `null` / пустая строка — снять привязку к роли; роль —
+     * привязать (рабочее место станет точкой скан-переключения).
+     */
+    role: WorkplaceRoleField,
   })
   .refine(
-    (obj) => obj.name !== undefined || obj.displayNumber !== undefined,
+    (obj) =>
+      obj.name !== undefined ||
+      obj.displayNumber !== undefined ||
+      obj.role !== undefined,
     'Нечего обновлять: укажите хотя бы одно поле',
   );
 export type UpdateEquipmentDto = z.infer<typeof UpdateEquipmentSchema>;

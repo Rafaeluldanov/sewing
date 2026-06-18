@@ -27,12 +27,13 @@ export default async function WorkSectionLayout({
 }) {
   const me = await getCurrentUserOrNull();
   if (!me) redirect('/login?next=/work');
-  const role = me.user.role;
+  // Фича «несколько ролей»: считаем по всему набору ролей.
+  const roles = me.user.roles ?? [me.user.role];
   const showMasterCall =
-    role === 'SEAMSTRESS' ||
-    role === 'CUTTER' ||
-    role === 'CUTTER_ASSISTANT';
-  const showEmployeeQr = canSeeEmployeeQrButton(role);
+    roles.includes('SEAMSTRESS') ||
+    roles.includes('CUTTER') ||
+    roles.includes('CUTTER_ASSISTANT');
+  const showEmployeeQr = canSeeEmployeeQrButton(roles);
   return (
     <>
       {children}

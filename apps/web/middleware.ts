@@ -88,11 +88,20 @@ export function middleware(req: NextRequest): NextResponse {
     return NextResponse.redirect(url);
   }
 
-  // Soft-проверка роли: если это display-аккаунт, не пускаем на чужие
-  // страницы. Парсинг payload без верификации подписи — этого достаточно
-  // для UX-роутинга, security сидит в API-AuthGuard.
-  const role = readRoleFromCookie(cookie.value);
-  if (role === DISPLAY_ROLE && !isDisplayPath(pathname)) {
+  // Soft-проверка роли: если это «запертая» single-workspace учётка, не
+  // пускаем на чужие страницы. Парсинг payload без верификации подписи —
+  // этого достаточно для UX-роутинга, security сидит в API-AuthGuard.
+  //
+  // Фича «несколько ролей» (18.06.2026): запираем на один экран ТОЛЬКО
+  // если у сотрудника РОВНО ОДНА роль и она single-workspace. У
+  // совместителя (2+ роли) полноценная навигация — middleware его не
+  // редиректит, а доступ к конкретным экранам режет API-AuthGuard и
+  // web-RBAC по полному набору ролей. DISPLAY всегда единственная роль
+  // служебной учётки, поэтому остаётся запертым.
+  const roles = readRolesFromCookie(cookie.value);
+  const lockRole = roles.length === 1 ? roles[0] : null;
+
+  if (lockRole === DISPLAY_ROLE && !isDisplayPath(pathname)) {
     const url = req.nextUrl.clone();
     url.pathname = DISPLAY_PATH;
     url.search = '';
@@ -100,7 +109,7 @@ export function middleware(req: NextRequest): NextResponse {
   }
 
   if (
-    role === SHOPFLOOR_MASTER_ROLE &&
+    lockRole === SHOPFLOOR_MASTER_ROLE &&
     !isShopfloorMasterPath(pathname) &&
     !isApiPath(pathname)
   ) {
@@ -111,7 +120,7 @@ export function middleware(req: NextRequest): NextResponse {
   }
 
   if (
-    role === CONSTRUCTOR_ROLE &&
+    lockRole === CONSTRUCTOR_ROLE &&
     !isConstructorPath(pathname) &&
     !isApiPath(pathname)
   ) {
@@ -122,7 +131,7 @@ export function middleware(req: NextRequest): NextResponse {
   }
 
   if (
-    role === CUTTER_ROLE &&
+    lockRole === CUTTER_ROLE &&
     !isCutterPath(pathname) &&
     !isApiPath(pathname)
   ) {
@@ -175,7 +184,29 @@ function isApiPath(pathname: string): boolean {
  * Edge runtime поддерживает `atob`, поэтому базовый base64 декодер
  * работает без `Buffer`.
  */
-function readRoleFromCookie(token: string): string | null {
+/**
+ * Полный набор ролей доступа из payload session-cookie (фича «несколько
+ * ролей»). Старые токены без `roles` → fallback `[role]`. Возвращает
+ * пустой массив, если cookie не разбирается.
+ */
+function readRolesFromCookie(token: string): string[] {
+  const payload = decodeCookiePayload(token);
+  if (!payload) return [];
+  if (Array.isArray(payload.roles) && payload.roles.length > 0) {
+    return payload.roles.filter((r): r is string => typeof r === 'string');
+  }
+  return payload.role ? [payload.role] : [];
+}
+
+/**
+ * Декодирует JSON-payload cookie без проверки подписи. Формат токена —
+ * `base64url(json).base64url(sig)` (см. `apps/api/src/modules/auth/session.ts`).
+ * Edge runtime поддерживает `atob`, поэтому base64 декодер работает без
+ * `Buffer`.
+ */
+function decodeCookiePayload(
+  token: string,
+): { role?: string; roles?: unknown[] } | null {
   if (!token || typeof token !== 'string') return null;
   const dot = token.indexOf('.');
   if (dot <= 0) return null;
@@ -185,12 +216,12 @@ function readRoleFromCookie(token: string): string | null {
     const base64 = padded.replace(/-/g, '+').replace(/_/g, '/');
     const json = atob(base64);
     const parsed: unknown = JSON.parse(json);
-    if (
-      parsed &&
-      typeof parsed === 'object' &&
-      typeof (parsed as Record<string, unknown>).role === 'string'
-    ) {
-      return (parsed as { role: string }).role;
+    if (parsed && typeof parsed === 'object') {
+      const obj = parsed as Record<string, unknown>;
+      return {
+        role: typeof obj.role === 'string' ? obj.role : undefined,
+        roles: Array.isArray(obj.roles) ? obj.roles : undefined,
+      };
     }
     return null;
   } catch {

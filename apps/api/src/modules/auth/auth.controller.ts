@@ -52,6 +52,8 @@ export class AuthController {
         login: user.login,
         fullName: user.fullName,
         role: user.role,
+        roles: user.roles,
+        activeRole: user.activeRole,
       },
     };
   }
@@ -78,6 +80,8 @@ export class AuthController {
         login: principal.login,
         fullName: principal.fullName,
         role: principal.role,
+        roles: principal.roles,
+        activeRole: principal.activeRole,
       },
     };
   }

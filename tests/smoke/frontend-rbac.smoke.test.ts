@@ -297,14 +297,16 @@ describe('legacy /work disabled for QC / IRONING / PACKING', () => {
     const src = readSrc('apps/web/app/work/page.tsx');
     // Используем ту же матрицу, что и login/корневой `/`.
     expect(src).toMatch(/getPrimaryWorkspace/);
-    // Условие: для всех ролей, у которых primary workspace не `/work`
-    // и не `/`, делаем серверный redirect в их собственный терминал.
-    expect(src).toMatch(/primary !== '\/work' && primary !== '\/'/);
-    expect(src).toMatch(/redirect\(primary\)/);
+    // Фича «несколько ролей» (18.06.2026): на /work пускаем, если ХОТЯ
+    // БЫ одна роль сотрудника может его использовать (primary `/work`
+    // или менеджерский `/`). Иначе — серверный redirect в его активный/
+    // основной workspace. Логика — флаг `allowsWork`.
+    expect(src).toMatch(/allowsWork/);
+    expect(src).toMatch(/redirect\(getPrimaryWorkspace\(/);
     // Редирект должен срабатывать ДО любых тяжёлых API-вызовов
     // (`getShiftMeta` / `getCurrentShift`), иначе QC будет дёргать
     // backend ради экрана, который ему не покажется.
-    const idxRedirect = src.indexOf('redirect(primary)');
+    const idxRedirect = src.indexOf('redirect(getPrimaryWorkspace(');
     const idxMeta = src.indexOf('getShiftMeta(');
     const idxCurrentShift = src.indexOf('getCurrentShift(');
     expect(idxRedirect).toBeGreaterThan(0);

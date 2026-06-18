@@ -16,6 +16,7 @@ import {
   EquipmentDisplayNumberForm,
   EquipmentNameForm,
   EquipmentOperationsEditor,
+  EquipmentRoleForm,
 } from './edit-form';
 
 export const dynamic = 'force-dynamic';
@@ -92,6 +93,7 @@ export default async function AdminEquipmentDetailPage({ params }: Params) {
             <AdminSectionHeader title="Основное" />
             <EquipmentNameForm equipment={equipment} />
             <EquipmentDisplayNumberForm equipment={equipment} />
+            <EquipmentRoleForm equipment={equipment} />
           </AdminCard>
 
           <AdminCard>
