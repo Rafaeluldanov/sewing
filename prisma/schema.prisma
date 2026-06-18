@@ -542,6 +542,9 @@ model Size {
   /// rates / OperationEntry) этой связи не использует — это отдельный
   /// плановый контур (см. `docs/operation-time-norms-recon.md §10`).
   operationTimeNormsBySize       OperationTimeNormBySize[]
+  /// Поразмерные переопределения расценки/нормы операций в рамках
+  /// конкретного заказа (см. `OrderRouteStepSizeOverride`).
+  orderRouteStepSizeOverrides    OrderRouteStepSizeOverride[]
   /// Этап «Очередь выдачи кроя по размерам» (см.
   /// `prisma/schema.prisma::OrderCutIssueRule`,
   /// `docs/domain.md §«Очередь выдачи кроя»`). Обратная связь от строк
@@ -2813,19 +2816,70 @@ model OrderRouteStep {
   /// последовательный шаг.
   parallelGroup Int?
   /// Снимок `RouteTemplateStep.rateOverride` на момент старта заказа:
-  /// сдельная расценка операции, переопределённая для этого изделия.
-  /// `null` — расценка по дефолту операции (`Operation.fixedRate`).
-  /// Читается в `OperationsService.resolveRate` (через `orderId`) и в
-  /// расчёте B2B-базы закройщика — поздняя правка шаблона маршрута уже
-  /// не влияет на запущенный тираж.
+  /// сдельная расценка операции (`pricingMode = FIXED`), переопределённая
+  /// **для этого заказа**. `null` — расценка по дефолту операции
+  /// (`Operation.fixedRate`). После создания снимка источник истины —
+  /// сам снимок: правка шаблона маршрута на запущенный тираж не влияет,
+  /// а менеджер может переопределить расценку прямо в карточке заказа
+  /// (блок «Операции», `PUT /api/orders/:id/route-overrides`). Читается
+  /// в `OperationsService.resolveRate` (через `orderId`), в расчёте
+  /// B2B-базы закройщика и в плане себестоимости (`OrderOperationPlanService`).
   rateOverride  Decimal? @db.Decimal(12, 2)
+  /// Переопределение **нормы времени** операции (`timeNormMode = FIXED`)
+  /// в секундах **для этого заказа**. `null` — норма по дефолту операции
+  /// (`Operation.timeNormSec`). Это плановый контур: норму времени читают
+  /// `OrderOperationPlanService` (плановое время/себестоимость окладных)
+  /// и `OrderProductionBalanceService` (узкое место); payroll её не
+  /// читает. Поразмерное переопределение нормы — в `OrderRouteStepSizeOverride`.
+  timeNormSecOverride Int?
 
   order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   operation Operation @relation(fields: [operationId], references: [id])
+  /// Поразмерные переопределения расценки/нормы для операций с
+  /// `pricingMode = BY_SIZE` / `timeNormMode = BY_SIZE` (см.
+  /// `OrderRouteStepSizeOverride`).
+  sizeOverrides OrderRouteStepSizeOverride[]
 
   @@unique([orderId, index])
   @@index([orderId])
   @@index([operationId])
+}
+
+/// Поразмерное переопределение расценки и/или нормы времени операции
+/// **в рамках одного заказа** (для операций с `pricingMode = BY_SIZE`
+/// и/или `timeNormMode = BY_SIZE`). Это per-order аналог справочных
+/// `OperationRateBySize` / `OperationTimeNormBySize`: одна операция на
+/// всю систему, но в конкретном тираже своя поразмерная цена/норма,
+/// без правки справочника операции и без правки шаблона маршрута.
+///
+/// `null` в `rate` / `seconds` означает «по этому размеру переопределения
+/// нет — берётся дефолт операции». Читают: `OperationsService.resolveRate`
+/// (BY_SIZE-расценка через `orderId`), B2B-база закройщика,
+/// `OrderOperationPlanService` (план), `OrderProductionBalanceService`
+/// (нормы). Снимок привязан к `OrderRouteStep`, а не к операции напрямую,
+/// чтобы переживать ре-синк снимка маршрута (см.
+/// `OrdersService.syncOrderRouteStepsSnapshot`).
+model OrderRouteStepSizeOverride {
+  id               String   @id @default(cuid())
+  orderRouteStepId String
+  sizeId           String
+  /// Переопределённая сдельная ставка за единицу для размера
+  /// (`pricingMode = BY_SIZE`). `null` — ставка по дефолту операции
+  /// (`OperationRateBySize`).
+  rate             Decimal? @db.Decimal(12, 2)
+  /// Переопределённая норма времени в секундах для размера
+  /// (`timeNormMode = BY_SIZE`). `null` — норма по дефолту операции
+  /// (`OperationTimeNormBySize`).
+  seconds          Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  routeStep OrderRouteStep @relation(fields: [orderRouteStepId], references: [id], onDelete: Cascade)
+  size      Size           @relation(fields: [sizeId], references: [id])
+
+  @@unique([orderRouteStepId, sizeId], name: "OrderRouteStepSizeOverride_step_size_uniq")
+  @@index([orderRouteStepId])
+  @@index([sizeId])
 }
 
 // ---------------------------------------------------------------------------

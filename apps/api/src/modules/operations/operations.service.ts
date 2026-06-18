@@ -678,13 +678,16 @@ export class OperationsService {
    * что и создание `OperationEntry`. В EarningsService это критично —
    * см. ADR-0012 и `EarningsService.createImmediateForCutter`.
    *
-   * `orderId` (опционально): если передан, для режима `FIXED` сначала
-   * ищется переопределённая расценка изделия в snapshot-е маршрута
-   * (`OrderRouteStep.rateOverride` по паре orderId+operationId). Если
-   * override задан — он вытесняет `Operation.fixedRate`. Это «цена
-   * операции зависит от изделия»: одна операция «Оверлок» на всю
-   * систему, но в каждом тираже своя расценка. Для `BY_SIZE` и
-   * `SALARY_ONLY` override не применяется (размерная матрица / оклад).
+   * `orderId` (опционально): если передан, расценка сначала ищется в
+   * per-order переопределениях snapshot-а маршрута заказа, и только
+   * затем берётся дефолт операции:
+   *   - `FIXED`   → `OrderRouteStep.rateOverride` (по паре
+   *     orderId+operationId) вытесняет `Operation.fixedRate`;
+   *   - `BY_SIZE` → `OrderRouteStepSizeOverride.rate` (по шагу заказа и
+   *     размеру) вытесняет `OperationRateBySize`.
+   * Это «цена операции внутри заказа»: одна операция «Оверлок» на всю
+   * систему, но в конкретном тираже своя расценка — справочник операции
+   * при этом НЕ меняется. Для `SALARY_ONLY` сделки нет (оклад).
    */
   async resolveRate(
     operationId: string,
@@ -723,7 +726,23 @@ export class OperationsService {
       return rate;
     }
 
-    // BY_SIZE
+    // BY_SIZE: сначала поразмерное переопределение заказа (snapshot
+    // маршрута, `OrderRouteStepSizeOverride.rate`) — «цена операции
+    // внутри заказа», далее дефолт операции (`OperationRateBySize`).
+    // Переопределение действует только внутри заказа, справочник
+    // операции не трогается.
+    if (orderId) {
+      const override = await client.orderRouteStepSizeOverride.findFirst({
+        where: {
+          sizeId,
+          rate: { not: null },
+          routeStep: { orderId, operationId },
+        },
+        select: { rate: true },
+      });
+      if (override?.rate != null) return override.rate;
+    }
+
     const row = await client.operationRateBySize.findUnique({
       where: {
         OperationRateBySize_operation_size_uniq: {
@@ -805,6 +824,7 @@ export class OperationsService {
     operationId: string,
     sizeId: string,
     tx?: Prisma.TransactionClient,
+    orderId?: string | null,
   ): Promise<number | null> {
     const client: Prisma.TransactionClient | PrismaService = tx ?? this.prisma;
     const op = await client.operation.findUnique({
@@ -814,10 +834,33 @@ export class OperationsService {
     if (!op) throw new OperationNotFoundException();
 
     if (op.timeNormMode === 'FIXED') {
+      // Переопределение нормы времени внутри заказа (snapshot маршрута)
+      // вытесняет дефолт операции; справочник операции не трогается.
+      if (orderId) {
+        const override = await client.orderRouteStep.findFirst({
+          where: { orderId, operationId, timeNormSecOverride: { not: null } },
+          select: { timeNormSecOverride: true },
+        });
+        if (override?.timeNormSecOverride != null) {
+          return override.timeNormSecOverride;
+        }
+      }
       return op.timeNormSec ?? null;
     }
 
-    // BY_SIZE
+    // BY_SIZE: поразмерное переопределение заказа, затем дефолт операции.
+    if (orderId) {
+      const override = await client.orderRouteStepSizeOverride.findFirst({
+        where: {
+          sizeId,
+          seconds: { not: null },
+          routeStep: { orderId, operationId },
+        },
+        select: { seconds: true },
+      });
+      if (override?.seconds != null) return override.seconds;
+    }
+
     const row = await client.operationTimeNormBySize.findUnique({
       where: {
         OperationTimeNormBySize_operation_size_uniq: {

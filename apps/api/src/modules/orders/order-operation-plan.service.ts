@@ -165,6 +165,40 @@ export class OrderOperationPlanService {
       };
     }
 
+    // Per-order переопределения расценок/норм (snapshot маршрута заказа).
+    // Источник истины для заказа — снимок: правки внутри заказа (блок
+    // «Операции» → «Редактировать маршрут заказа») попадают в план
+    // себестоимости/времени, НЕ меняя справочник операции и шаблон
+    // маршрута. Ключ — operationId (операция в маршруте не повторяется).
+    const snapshotSteps = await tx.orderRouteStep.findMany({
+      where: { orderId },
+      select: {
+        operationId: true,
+        rateOverride: true,
+        timeNormSecOverride: true,
+        sizeOverrides: { select: { sizeId: true, rate: true, seconds: true } },
+      },
+    });
+    const overridesByOp = new Map(
+      snapshotSteps.map((s) => {
+        const rateBySize = new Map<string, Prisma.Decimal>();
+        const secondsBySize = new Map<string, number>();
+        for (const o of s.sizeOverrides) {
+          if (o.rate != null) rateBySize.set(o.sizeId, o.rate);
+          if (o.seconds != null) secondsBySize.set(o.sizeId, o.seconds);
+        }
+        return [
+          s.operationId,
+          {
+            rateOverride: s.rateOverride,
+            timeNormSecOverride: s.timeNormSecOverride,
+            rateBySize,
+            secondsBySize,
+          },
+        ] as const;
+      }),
+    );
+
     const warningsSet = new Set<string>();
     let totalCost = new Prisma.Decimal(0);
     let totalTimeSec = 0;
@@ -181,6 +215,8 @@ export class OrderOperationPlanService {
         continue;
       }
       const opLabel = op.name || op.code;
+      // Снимок per-order переопределений этой операции (если есть).
+      const ov = overridesByOp.get(op.id);
 
       const ratesBySize = new Map<string, Prisma.Decimal>();
       for (const r of op.ratesBySize) ratesBySize.set(r.sizeId, r.rate);
@@ -211,8 +247,10 @@ export class OrderOperationPlanService {
         // ----- Время (считаем первым; SALARY_ONLY-деньги зависят от него) -----
         let timeSec: number | null = null;
         if (op.timeNormMode === 'FIXED') {
-          if (op.timeNormSec != null) {
-            timeSec = op.timeNormSec;
+          // Норма времени внутри заказа вытесняет дефолт операции.
+          const fixedTime = ov?.timeNormSecOverride ?? op.timeNormSec;
+          if (fixedTime != null) {
+            timeSec = fixedTime;
           } else {
             warningsSet.add(
               `Нет нормы времени операции «${opLabel}»`,
@@ -220,8 +258,9 @@ export class OrderOperationPlanService {
             timeSec = null;
           }
         } else {
-          // BY_SIZE
-          const t = timeNormsBySize.get(item.sizeId);
+          // BY_SIZE: поразмерное переопределение заказа, затем дефолт.
+          const t = ov?.secondsBySize.get(item.sizeId) ??
+            timeNormsBySize.get(item.sizeId);
           if (t != null) {
             timeSec = t;
           } else {
@@ -267,10 +306,13 @@ export class OrderOperationPlanService {
             rate = null;
           }
         } else if (op.pricingMode === 'FIXED') {
-          // Переопределение расценки изделием (RouteTemplateStep.
-          // rateOverride) вытесняет дефолт операции — план себестоимости
-          // должен совпадать с фактическим начислением (resolveRate).
-          const effectiveRate = step.rateOverride ?? op.fixedRate;
+          // Переопределение расценки внутри заказа (snapshot маршрута,
+          // `OrderRouteStep.rateOverride`) вытесняет дефолт операции —
+          // план себестоимости должен совпадать с фактическим
+          // начислением (`resolveRate`). Если у операции нет строки
+          // снимка (дивергенция), берём расценку шаблона.
+          const effectiveRate =
+            (ov ? ov.rateOverride : step.rateOverride) ?? op.fixedRate;
           if (effectiveRate != null) {
             rate = effectiveRate;
           } else {
@@ -280,7 +322,8 @@ export class OrderOperationPlanService {
             rate = null;
           }
         } else if (op.pricingMode === 'BY_SIZE') {
-          const r = ratesBySize.get(item.sizeId);
+          // Поразмерное переопределение заказа, затем дефолт операции.
+          const r = ov?.rateBySize.get(item.sizeId) ?? ratesBySize.get(item.sizeId);
           if (r != null) {
             rate = r;
           } else {

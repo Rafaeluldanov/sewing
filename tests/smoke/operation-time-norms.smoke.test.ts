@@ -284,7 +284,11 @@ describe('Этап 1 — НЕ трогаем payroll/Order/Cost/WorkshopNeed/Pas
   for (const file of forbiddenInFiles) {
     test(`${file} не упоминает timeNormSec / timeNormMode / OperationTimeNormBySize`, () => {
       const src = readSrc(file);
-      expect(src).not.toMatch(/timeNormSec/);
+      // `timeNormSecOverride` — это per-order переопределение нормы
+      // ВНУТРИ ЗАКАЗА (снимок маршрута, фича «редактирование операции
+      // в заказе»), а не чтение справочной нормы операции, которое
+      // запрещал Этап 1. Поэтому суффикс `Override` исключаем из запрета.
+      expect(src).not.toMatch(/timeNormSec(?!Override)/);
       expect(src).not.toMatch(/timeNormMode/);
       expect(src).not.toMatch(/OperationTimeNormBySize/);
       expect(src).not.toMatch(/resolveTimeNormSec/);

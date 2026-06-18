@@ -196,6 +196,30 @@ export class OrderProductionBalanceService {
 
     const globalWarnings: string[] = [];
 
+    // Per-order переопределения нормы времени (snapshot маршрута заказа):
+    // правки нормы внутри заказа должны менять оценку узкого места, не
+    // трогая справочник операции. Ключ — operationId.
+    const snapshotSteps = await this.prisma.orderRouteStep.findMany({
+      where: { orderId },
+      select: {
+        operationId: true,
+        timeNormSecOverride: true,
+        sizeOverrides: { select: { sizeId: true, seconds: true } },
+      },
+    });
+    const timeOverridesByOp = new Map(
+      snapshotSteps.map((s) => {
+        const secondsBySize = new Map<string, number>();
+        for (const o of s.sizeOverrides) {
+          if (o.seconds != null) secondsBySize.set(o.sizeId, o.seconds);
+        }
+        return [
+          s.operationId,
+          { timeNormSecOverride: s.timeNormSecOverride, secondsBySize },
+        ] as const;
+      }),
+    );
+
     // Шаг 1. Считаем workSec для каждого ОБЯЗАТЕЛЬНОГО шага маршрута.
     const lines: BalanceLineDraft[] = [];
     for (const step of order.routeTemplate.steps) {
@@ -207,6 +231,7 @@ export class OrderProductionBalanceService {
       }
       const opLabel = op.name || op.code;
       const lineWarnings: string[] = [];
+      const ov = timeOverridesByOp.get(op.id);
 
       const timeNormsBySize = new Map<string, number>();
       for (const t of op.timeNormsBySize) {
@@ -220,15 +245,17 @@ export class OrderProductionBalanceService {
         const sizeCode = item.size?.code ?? item.sizeId;
         let timeSec: number | null = null;
         if (op.timeNormMode === 'FIXED') {
-          if (op.timeNormSec != null) {
-            timeSec = op.timeNormSec;
+          const fixedTime = ov?.timeNormSecOverride ?? op.timeNormSec;
+          if (fixedTime != null) {
+            timeSec = fixedTime;
           } else {
             lineWarnings.push(`Нет нормы времени операции «${opLabel}»`);
             timeSec = null;
           }
         } else {
-          // BY_SIZE
-          const t = timeNormsBySize.get(item.sizeId);
+          // BY_SIZE: поразмерное переопределение заказа, затем дефолт.
+          const t = ov?.secondsBySize.get(item.sizeId) ??
+            timeNormsBySize.get(item.sizeId);
           if (t != null) {
             timeSec = t;
           } else {

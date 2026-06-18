@@ -53,6 +53,15 @@ import {
   OrderLogisticsAddButton,
   OrderLogisticsRowActions,
 } from './order-logistics-controls';
+import {
+  OrderRouteOverridesEditor,
+  type RouteOverrideEditorSize,
+  type RouteOverrideEditorStep,
+} from './order-route-overrides-editor';
+
+/** Заказ нельзя редактировать (расценки/нормы операций) в финальных
+ *  статусах — совпадает с гейтом бэкенда `updateRouteOverrides`. */
+const ROUTE_OVERRIDES_LOCKED_STATUSES = new Set(['DONE', 'CANCELLED']);
 
 interface Props {
   order: OrderDetailDto;
@@ -586,6 +595,63 @@ export async function OrderOperationsUnifiedTable({ order, passports }: Props) {
     return Number.isFinite(n) ? acc + n : acc;
   }, 0);
 
+  // Данные режима «Редактировать маршрут заказа» (расценки/нормы внутри
+  // заказа). Дефолты операции тянем из уже загруженных `OperationDetailDto`,
+  // текущие переопределения — из снимка `order.routeSteps`.
+  const canEditRouteOverrides = !ROUTE_OVERRIDES_LOCKED_STATUSES.has(
+    order.status,
+  );
+  const editorSizes: RouteOverrideEditorSize[] = (() => {
+    const m = new Map<string, { id: string; code: string; sortOrder: number }>();
+    for (const it of order.items) {
+      if (!m.has(it.sizeId)) {
+        m.set(it.sizeId, {
+          id: it.sizeId,
+          code: it.sizeCode,
+          sortOrder: it.sizeSortOrder,
+        });
+      }
+    }
+    return [...m.values()]
+      .sort((a, b) => a.sortOrder - b.sortOrder)
+      .map(({ id, code }) => ({ id, code }));
+  })();
+  const editorSteps: RouteOverrideEditorStep[] = [...order.routeSteps]
+    .sort((a, b) => a.index - b.index)
+    .map((step) => {
+      const op = data.operationsById.get(step.operationId) ?? null;
+      const ratesBySize: Record<string, number> = {};
+      const timeNormsBySize: Record<string, number> = {};
+      if (op) {
+        for (const r of op.ratesBySize) ratesBySize[r.sizeId] = Number(r.rate);
+        for (const t of op.timeNormsBySize) {
+          timeNormsBySize[t.sizeId] = Number(t.seconds);
+        }
+      }
+      const sizeOverrides: Record<
+        string,
+        { rate: number | null; seconds: number | null }
+      > = {};
+      for (const o of step.sizeOverrides) {
+        sizeOverrides[o.sizeId] = { rate: o.rate, seconds: o.seconds };
+      }
+      return {
+        stepId: step.id,
+        rowNumber: step.index + 1,
+        operationName: step.operationName,
+        operationCode: step.operationCode,
+        pricingMode: op?.pricingMode ?? null,
+        timeNormMode: op?.timeNormMode ?? null,
+        fixedRate: op?.fixedRate != null ? Number(op.fixedRate) : null,
+        timeNormSec: op?.timeNormSec ?? null,
+        ratesBySize,
+        timeNormsBySize,
+        rateOverride: step.rateOverride,
+        timeNormSecOverride: step.timeNormSecOverride,
+        sizeOverrides,
+      };
+    });
+
   const emptyMoney = (
     <span className="order-operations-table__money order-operations-table__money--empty">
       —
@@ -814,29 +880,48 @@ export async function OrderOperationsUnifiedTable({ order, passports }: Props) {
           </div>
         </>
       ) : (
-        <>
-          <div className="order-operations-table-wrap">
-            <AdminTable
-              className="order-operations-table"
-              rows={unifiedRows}
-              columns={columns}
-              rowKey={(r) => r.id}
-            />
-          </div>
-          {/* Кнопка добавления ручной строки логистики — в конце таблицы. */}
-          <div
-            className="order-operations-table-card__logistics-add"
-            style={{ marginTop: 8 }}
-          >
-            <OrderLogisticsAddButton orderId={order.id} />
-          </div>
-          <SummaryBlock
-            order={order}
-            rows={rows}
-            productionBalance={data.productionBalance}
-            logisticsTotalRub={logisticsTotalRub}
-          />
-        </>
+        (() => {
+          // Read-only содержимое блока (таблица + логистика + итог).
+          // В режиме «Редактировать маршрут заказа» оно заменяется формой
+          // редактора; в финальных статусах редактор не подключаем.
+          const readOnlyContent = (
+            <>
+              <div className="order-operations-table-wrap">
+                <AdminTable
+                  className="order-operations-table"
+                  rows={unifiedRows}
+                  columns={columns}
+                  rowKey={(r) => r.id}
+                />
+              </div>
+              {/* Кнопка добавления ручной строки логистики — в конце таблицы. */}
+              <div
+                className="order-operations-table-card__logistics-add"
+                style={{ marginTop: 8 }}
+              >
+                <OrderLogisticsAddButton orderId={order.id} />
+              </div>
+              <SummaryBlock
+                order={order}
+                rows={rows}
+                productionBalance={data.productionBalance}
+                logisticsTotalRub={logisticsTotalRub}
+              />
+            </>
+          );
+
+          if (!canEditRouteOverrides) return readOnlyContent;
+
+          return (
+            <OrderRouteOverridesEditor
+              orderId={order.id}
+              sizes={editorSizes}
+              steps={editorSteps}
+            >
+              {readOnlyContent}
+            </OrderRouteOverridesEditor>
+          );
+        })()
       )}
     </div>
   );

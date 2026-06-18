@@ -20,7 +20,10 @@ import { normalizeColor } from './colors';
 import type { OrderDeadlineEvaluation, OrderDeadlineStatus } from './order-deadlines';
 import { ORDER_DEADLINE_STATUSES } from './order-deadlines';
 import type { OrderCostEstimateDto } from './order-cost-estimates';
-import type { OrderRouteStepDto } from './routes';
+import type {
+  OrderRouteStepDto,
+  OrderRouteStepSizeOverrideDto,
+} from './routes';
 import type {
   OutsourceTriggerType,
   TechCardMaterialColorRule,
@@ -41,6 +44,7 @@ import { MoneyCurrencySchema, type MoneyCurrency } from './money';
  * поверхности модуля «Заказы».
  */
 export type { OrderRouteStepDto };
+export type { OrderRouteStepSizeOverrideDto };
 
 /**
  * Re-export типа триггера активации внешней потребности — чтобы UI

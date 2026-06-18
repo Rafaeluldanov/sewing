@@ -113,7 +113,12 @@ describe('Backend: resolveRate + snapshot + earnings используют overri
     const src = readSrc(
       'apps/api/src/modules/orders/order-operation-plan.service.ts',
     );
-    expect(src).toMatch(/step\.rateOverride\s*\?\?\s*op\.fixedRate/);
+    // Эффективная FIXED-расценка плана: per-order оверрайд снимка заказа
+    // (`ov.rateOverride`) вытесняет дефолт, при дивергенции — расценка
+    // шаблона (`step.rateOverride`), затем `op.fixedRate`. План должен
+    // совпадать с фактическим начислением (`resolveRate`).
+    expect(src).toMatch(/step\.rateOverride\)\s*\?\?\s*op\.fixedRate/);
+    expect(src).toMatch(/ov\s*\?\s*ov\.rateOverride/);
   });
 });
 

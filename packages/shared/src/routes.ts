@@ -47,6 +47,27 @@ const RouteStepRateOverrideField = z
   )
   .nullable();
 
+/** Потолок переопределения нормы времени (сек/шт) — ~11.5 суток, защита
+ *  от опечаток. Совпадает с потолком `Operation.timeNormSec`. */
+export const ROUTE_STEP_TIME_NORM_SEC_OVERRIDE_MAX = 1_000_000;
+
+/**
+ * Переопределение нормы времени операции (сек/шт) **в рамках заказа**
+ * (`OrderRouteStep.timeNormSecOverride` для FIXED, либо
+ * `OrderRouteStepSizeOverride.seconds` для BY_SIZE). `null` — норма по
+ * дефолту операции. Целое число секунд ≥ 0; плановый контур (payroll не
+ * читает).
+ */
+const RouteStepTimeNormSecOverrideField = z
+  .number({ invalid_type_error: 'Норма времени должна быть числом' })
+  .int('Норма времени: целое число секунд')
+  .nonnegative('Норма времени не может быть отрицательной')
+  .max(
+    ROUTE_STEP_TIME_NORM_SEC_OVERRIDE_MAX,
+    `Норма времени не больше ${ROUTE_STEP_TIME_NORM_SEC_OVERRIDE_MAX} сек`,
+  )
+  .nullable();
+
 const RouteTemplateCodeField = z
   .string()
   .trim()
@@ -240,9 +261,86 @@ export interface OrderRouteStepDto {
   /** Снимок параллельной группы шага (см. `RouteTemplateStepDto`). */
   parallelGroup: number | null;
   /**
-   * Снимок переопределённой расценки операции для изделия (₽/шт) или
-   * `null` (расценка по дефолту операции). Зафиксирован при старте
-   * заказа из `RouteTemplateStep.rateOverride`.
+   * Переопределённая сдельная расценка операции (₽/шт) **в этом заказе**
+   * или `null` (расценка по дефолту операции). Изначально снимок
+   * `RouteTemplateStep.rateOverride`, далее редактируется прямо в заказе
+   * (`PUT /api/orders/:id/route-overrides`). Действует для
+   * `pricingMode = FIXED`.
    */
   rateOverride: number | null;
+  /**
+   * Переопределённая норма времени операции (сек/шт) **в этом заказе**
+   * или `null` (норма по дефолту операции `Operation.timeNormSec`).
+   * Действует для `timeNormMode = FIXED`. Плановый контур.
+   */
+  timeNormSecOverride: number | null;
+  /**
+   * Поразмерные переопределения расценки/нормы **в этом заказе** для
+   * операций `pricingMode = BY_SIZE` / `timeNormMode = BY_SIZE`. Пустой
+   * массив — переопределений нет.
+   */
+  sizeOverrides: OrderRouteStepSizeOverrideDto[];
 }
+
+/**
+ * Поразмерное переопределение расценки/нормы операции в рамках заказа
+ * (снимок `OrderRouteStepSizeOverride`). `null` в поле — по этому размеру
+ * переопределения нет, берётся дефолт операции.
+ */
+export interface OrderRouteStepSizeOverrideDto {
+  sizeId: string;
+  /** Переопределённая ставка ₽/шт для размера (`pricingMode = BY_SIZE`). */
+  rate: number | null;
+  /** Переопределённая норма сек/шт для размера (`timeNormMode = BY_SIZE`). */
+  seconds: number | null;
+}
+
+// ---------------------------------------------------------------------------
+// Per-order route overrides — запись (PUT /api/orders/:id/route-overrides)
+// ---------------------------------------------------------------------------
+
+/**
+ * Поразмерный оверрайд в запросе. `rate`/`seconds` = `null` снимает
+ * переопределение по этому размеру.
+ */
+export const OrderRouteStepSizeOverrideInputSchema = z.object({
+  sizeId: z.string().min(1, 'sizeId обязателен'),
+  rate: RouteStepRateOverrideField.optional().default(null),
+  seconds: RouteStepTimeNormSecOverrideField.optional().default(null),
+});
+export type OrderRouteStepSizeOverrideInputDto = z.infer<
+  typeof OrderRouteStepSizeOverrideInputSchema
+>;
+
+/**
+ * Один шаг снимка маршрута заказа в запросе на правку оверрайдов.
+ * Адресуется по `stepId` (`OrderRouteStep.id`). Все поля переопределений
+ * опциональны; не переданное поле трактуется как «оставить без
+ * изменения» на бэкенде (см. `OrdersService.updateRouteOverrides`).
+ */
+export const OrderRouteStepOverrideInputSchema = z.object({
+  stepId: z.string().min(1, 'stepId обязателен'),
+  rateOverride: RouteStepRateOverrideField.optional(),
+  timeNormSecOverride: RouteStepTimeNormSecOverrideField.optional(),
+  sizeOverrides: z
+    .array(OrderRouteStepSizeOverrideInputSchema)
+    .max(200, 'Слишком много поразмерных строк')
+    .optional(),
+});
+export type OrderRouteStepOverrideInputDto = z.infer<
+  typeof OrderRouteStepOverrideInputSchema
+>;
+
+/**
+ * Тело `PUT /api/orders/:id/route-overrides` — правки расценок/норм
+ * операций в рамках заказа (режим «Редактировать маршрут заказа» →
+ * «Сохранить всё»). Не трогает справочник `Operation` и шаблон маршрута.
+ */
+export const UpdateOrderRouteOverridesSchema = z.object({
+  steps: z
+    .array(OrderRouteStepOverrideInputSchema)
+    .max(ROUTE_TEMPLATE_MAX_STEPS, `Максимум ${ROUTE_TEMPLATE_MAX_STEPS} шагов`),
+});
+export type UpdateOrderRouteOverridesDto = z.infer<
+  typeof UpdateOrderRouteOverridesSchema
+>;

@@ -6,8 +6,13 @@ import {
   Param,
   Patch,
   Post,
+  Put,
   Query,
 } from '@nestjs/common';
+import {
+  UpdateOrderRouteOverridesSchema,
+  type UpdateOrderRouteOverridesDto,
+} from '@sewing/shared/routes';
 import {
   CreateOrderLogisticsLineSchema,
   CreateOrderSchema,
@@ -217,6 +222,27 @@ export class OrdersController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.orders.recalculateOperationPlan(id, user.employeeId);
+  }
+
+  /**
+   * Правка расценок / норм времени операций **в рамках заказа** (блок
+   * «Операции» карточки заказа → «Редактировать маршрут заказа» →
+   * «Сохранить всё»). Не трогает справочник `Operation` и шаблон
+   * маршрута — переопределения живут только на снимке маршрута заказа
+   * (`OrderRouteStep` / `OrderRouteStepSizeOverride`).
+   *
+   * RBAC: `ADMIN` / `SHOP_MANAGER` (наследуется от `@Roles` на классе).
+   * Backend валидирует статус (нельзя у `DONE` / `CANCELLED`) и
+   * принадлежность шагов/размеров заказу.
+   */
+  @Put(':id/route-overrides')
+  updateRouteOverrides(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(UpdateOrderRouteOverridesSchema))
+    dto: UpdateOrderRouteOverridesDto,
+    @CurrentUser() user: AuthPrincipal,
+  ) {
+    return this.orders.updateRouteOverrides(id, dto, user.employeeId);
   }
 
   /**

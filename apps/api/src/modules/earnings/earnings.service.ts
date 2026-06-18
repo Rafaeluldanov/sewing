@@ -662,22 +662,37 @@ export class EarningsService {
         }
         rate = effectiveRate;
       } else if (op.pricingMode === 'BY_SIZE') {
-        const row = await tx.operationRateBySize.findUnique({
+        // Поразмерное переопределение расценки внутри заказа (snapshot
+        // маршрута) вытесняет дефолт `OperationRateBySize`; та же логика,
+        // что в `OperationsService.resolveRate`. Справочник не трогается.
+        const override = await tx.orderRouteStepSizeOverride.findFirst({
           where: {
-            OperationRateBySize_operation_size_uniq: {
-              operationId: op.id,
-              sizeId: passport.sizeId,
-            },
+            sizeId: passport.sizeId,
+            rate: { not: null },
+            routeStep: { orderId: passport.orderId, operationId: op.id },
           },
           select: { rate: true },
         });
-        if (!row) {
-          warnings.push(
-            `Операция ${op.code}: BY_SIZE без ставки для размера паспорта, пропущена`,
-          );
-          continue;
+        let bySizeRate = override?.rate ?? null;
+        if (bySizeRate == null) {
+          const row = await tx.operationRateBySize.findUnique({
+            where: {
+              OperationRateBySize_operation_size_uniq: {
+                operationId: op.id,
+                sizeId: passport.sizeId,
+              },
+            },
+            select: { rate: true },
+          });
+          if (!row) {
+            warnings.push(
+              `Операция ${op.code}: BY_SIZE без ставки для размера паспорта, пропущена`,
+            );
+            continue;
+          }
+          bySizeRate = row.rate;
         }
-        rate = row.rate;
+        rate = bySizeRate;
       } else {
         // Неизвестный pricingMode — на будущее. Не падаем.
         warnings.push(

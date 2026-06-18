@@ -29,6 +29,7 @@ import {
   ORDER_LOGISTICS_STATUS_LABELS,
   ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
 } from '@sewing/shared/orders';
+import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
 import { normalizeColorOrNull } from '@sewing/shared/colors';
 import {
   evaluateOrderDeadline,
@@ -88,7 +89,7 @@ type OrderWithItems = Prisma.OrderGetPayload<{
     items: { include: { size: true } };
     passports: true;
     routeTemplate: true;
-    routeSteps: { include: { operation: true } };
+    routeSteps: { include: { operation: true; sizeOverrides: true } };
     techCard: true;
     materialRequirements: true;
     outsourceRequirements: true;
@@ -432,7 +433,7 @@ export class OrdersService {
           items: { include: { size: true } },
           passports: true,
           routeTemplate: true,
-          routeSteps: { include: { operation: true } },
+          routeSteps: { include: { operation: true, sizeOverrides: true } },
           techCard: true,
           materialRequirements: true,
           outsourceRequirements: true,
@@ -1225,7 +1226,7 @@ export class OrdersService {
         routeTemplate: true,
         routeSteps: {
           orderBy: { index: 'asc' },
-          include: { operation: true },
+          include: { operation: true, sizeOverrides: true },
         },
         techCard: true,
         materialRequirements: { orderBy: { sortOrder: 'asc' } },
@@ -1412,6 +1413,10 @@ export class OrdersService {
         operationId: true,
         parallelGroup: true,
         rateOverride: true,
+        timeNormSecOverride: true,
+        sizeOverrides: {
+          select: { sizeId: true, rate: true, seconds: true },
+        },
       },
     });
 
@@ -1427,38 +1432,60 @@ export class OrdersService {
       order.routeTemplateId,
     );
 
-    const equal =
+    // Сравниваем ТОЛЬКО структуру маршрута (набор операций, их порядок и
+    // параллельные группы). Per-order оверрайды расценки/нормы
+    // (`rateOverride` / `timeNormSecOverride` / `sizeOverrides`)
+    // принадлежат заказу и НЕ зависят от расценок шаблона — поэтому
+    // правка расценки в шаблоне маршрута не триггерит ре-синк и не
+    // перетирает правки, сделанные внутри заказа («Редактировать
+    // маршрут заказа»). См. ТЗ «суммы внутри заказа действуют только
+    // внутри заказа».
+    const structureEqual =
       desiredSteps.length === currentSteps.length &&
       desiredSteps.every((s, i) => {
         const cur = currentSteps[i];
-        const curRate = cur?.rateOverride ?? null;
-        const wantRate = s.rateOverride ?? null;
-        const rateEq =
-          curRate === null
-            ? wantRate === null
-            : wantRate !== null && curRate.equals(wantRate);
         return (
           cur?.index === s.index &&
           cur?.operationId === s.operationId &&
-          (cur?.parallelGroup ?? null) === (s.parallelGroup ?? null) &&
-          rateEq
+          (cur?.parallelGroup ?? null) === (s.parallelGroup ?? null)
         );
       });
 
-    if (equal) {
+    if (structureEqual) {
       return { steps: desiredSteps.length, replaced: false };
     }
 
+    // Структура изменилась — пересоздаём снимок, СОХРАНЯЯ per-order
+    // оверрайды для операций, которые остаются в маршруте (ключ —
+    // `operationId`, операция в маршруте не повторяется). Новые операции
+    // получают сид расценки из шаблона (`RouteTemplateStep.rateOverride`);
+    // норма времени и поразмерные оверрайды — только из правок заказа.
+    const preserved = new Map(
+      currentSteps.map((s) => [s.operationId, s] as const),
+    );
+
     await tx.orderRouteStep.deleteMany({ where: { orderId } });
-    if (desiredSteps.length > 0) {
-      await tx.orderRouteStep.createMany({
-        data: desiredSteps.map((s) => ({
+    for (const s of desiredSteps) {
+      const carry = preserved.get(s.operationId);
+      await tx.orderRouteStep.create({
+        data: {
           orderId,
           index: s.index,
           operationId: s.operationId,
           parallelGroup: s.parallelGroup ?? null,
-          rateOverride: s.rateOverride ?? null,
-        })),
+          rateOverride: carry ? carry.rateOverride : (s.rateOverride ?? null),
+          timeNormSecOverride: carry?.timeNormSecOverride ?? null,
+          sizeOverrides:
+            carry && carry.sizeOverrides.length > 0
+              ? {
+                  create: carry.sizeOverrides.map((o) => ({
+                    sizeId: o.sizeId,
+                    rate: o.rate,
+                    seconds: o.seconds,
+                  })),
+                }
+              : undefined,
+        },
       });
     }
     return { steps: desiredSteps.length, replaced: true };
@@ -1566,6 +1593,144 @@ export class OrdersService {
     });
 
     void result;
+    return this.getOne(id);
+  }
+
+  // -------------------------------------------------------------------------
+  // ROUTE OVERRIDES — per-order расценки/нормы (без правки справочника)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Правка расценок и норм времени операций **в рамках одного заказа**
+   * (блок «Операции» → «Редактировать маршрут заказа» → «Сохранить
+   * всё»). Источник истины — снимок `OrderRouteStep` заказа; справочник
+   * операций (ставки и нормы, в т.ч. поразмерные) и шаблон маршрута НЕ
+   * меняются — правки действуют только внутри заказа (см. ТЗ «суммы
+   * внутри заказа не переписывают сумму внутри операции»).
+   *
+   * Семантика полей запроса:
+   *   - `rateOverride` / `timeNormSecOverride` (FIXED-режимы): `undefined`
+   *     — не трогать; `null` — снять переопределение (вернуться к дефолту
+   *     операции); число — задать.
+   *   - `sizeOverrides` (BY_SIZE-режимы): если массив передан, он —
+   *     ПОЛНЫЙ набор поразмерных правок шага (replace-all): строки с
+   *     `rate=null && seconds=null` удаляются, остальные — пересоздаются.
+   *     `undefined` — поразмерные правки не трогаем.
+   *
+   * Разрешено во всех статусах, кроме `DONE` / `CANCELLED`. Плановый
+   * snapshot (`Order.operationCostPlanRub` / `operationTimePlanSec`)
+   * пересчитывается только в `DRAFT` / `CALCULATION` — после запуска он
+   * заморожен по контракту (см. `OrderOperationPlanService`).
+   */
+  async updateRouteOverrides(
+    id: string,
+    dto: UpdateOrderRouteOverridesDto,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderDetailDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        items: { select: { sizeId: true } },
+        routeSteps: { select: { id: true } },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    if (
+      order.status === OrderStatus.DONE ||
+      order.status === OrderStatus.CANCELLED
+    ) {
+      throw new BadRequestException({
+        code: 'ORDER_ROUTE_OVERRIDES_NOT_ALLOWED',
+        message:
+          'Править расценки/нормы операций нельзя у завершённого или отменённого заказа.',
+      });
+    }
+
+    const stepIds = new Set(order.routeSteps.map((s) => s.id));
+    const orderSizeIds = new Set(order.items.map((it) => it.sizeId));
+
+    // Валидация до записи: каждый шаг принадлежит заказу, каждый размер —
+    // из плана заказа (защита от чужих snapshot-ов и опечаток).
+    for (const step of dto.steps) {
+      if (!stepIds.has(step.stepId)) {
+        throw new BadRequestException({
+          code: 'ORDER_ROUTE_STEP_NOT_FOUND',
+          message: `Шаг маршрута ${step.stepId} не принадлежит заказу.`,
+        });
+      }
+      for (const so of step.sizeOverrides ?? []) {
+        if (!orderSizeIds.has(so.sizeId)) {
+          throw new BadRequestException({
+            code: 'ORDER_ROUTE_OVERRIDE_SIZE_INVALID',
+            message: `Размер ${so.sizeId} не входит в план заказа.`,
+          });
+        }
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const step of dto.steps) {
+        const data: Prisma.OrderRouteStepUpdateInput = {};
+        if (step.rateOverride !== undefined) {
+          data.rateOverride = step.rateOverride;
+        }
+        if (step.timeNormSecOverride !== undefined) {
+          data.timeNormSecOverride = step.timeNormSecOverride;
+        }
+        if (Object.keys(data).length > 0) {
+          await tx.orderRouteStep.update({ where: { id: step.stepId }, data });
+        }
+
+        if (step.sizeOverrides !== undefined) {
+          // Replace-all поразмерных правок шага: сносим прежние и
+          // создаём только непустые (задан rate и/или seconds).
+          await tx.orderRouteStepSizeOverride.deleteMany({
+            where: { orderRouteStepId: step.stepId },
+          });
+          const rows = step.sizeOverrides.filter(
+            (o) => o.rate != null || o.seconds != null,
+          );
+          if (rows.length > 0) {
+            await tx.orderRouteStepSizeOverride.createMany({
+              data: rows.map((o) => ({
+                orderRouteStepId: step.stepId,
+                sizeId: o.sizeId,
+                rate: o.rate,
+                seconds: o.seconds,
+              })),
+            });
+          }
+        }
+      }
+
+      // Плановый snapshot пересчитываем только пока заказ не запущен —
+      // после старта план заморожен (см. `OrderOperationPlanService`).
+      if (
+        order.status === OrderStatus.DRAFT ||
+        order.status === OrderStatus.CALCULATION
+      ) {
+        await this.orderOperationPlan.recalculateAndWrite(id, tx);
+      }
+
+      await this.audit.log(
+        {
+          event: 'ORDER_ROUTE_OVERRIDES_UPDATED',
+          entityType: 'ORDER',
+          entityId: id,
+          employeeId: actorEmployeeId ?? null,
+          payload: { steps: dto.steps.length },
+        },
+        tx,
+      );
+    });
+
     return this.getOne(id);
   }
 
@@ -3082,6 +3247,12 @@ export class OrdersService {
           parallelGroup: s.parallelGroup,
           rateOverride:
             s.rateOverride != null ? s.rateOverride.toNumber() : null,
+          timeNormSecOverride: s.timeNormSecOverride ?? null,
+          sizeOverrides: s.sizeOverrides.map((o) => ({
+            sizeId: o.sizeId,
+            rate: o.rate != null ? o.rate.toNumber() : null,
+            seconds: o.seconds ?? null,
+          })),
         })),
       materialRequirements: order.materialRequirements
         .slice()

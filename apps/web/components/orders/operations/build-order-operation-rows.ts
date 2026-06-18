@@ -171,6 +171,63 @@ function formatSecondsHuman(total: number): string {
 }
 
 // ---------------------------------------------------------------------------
+// Эффективные значения с учётом per-order переопределений
+// (`OrderRouteStep.rateOverride` / `timeNormSecOverride` /
+// `OrderRouteStepSizeOverride`). Переопределение заказа вытесняет дефолт
+// операции — read-only дисплей должен совпадать с тем, что считает
+// backend (`resolveRate` / `OrderOperationPlanService`). См. ТЗ «суммы
+// внутри заказа действуют только внутри заказа».
+// ---------------------------------------------------------------------------
+
+function effFixedRate(
+  op: OperationDetailDto,
+  step: OrderRouteStepDto,
+): number | null {
+  if (step.rateOverride != null && Number.isFinite(step.rateOverride)) {
+    return step.rateOverride;
+  }
+  return op.fixedRate != null && Number.isFinite(Number(op.fixedRate))
+    ? Number(op.fixedRate)
+    : null;
+}
+
+function effSizeRate(
+  op: OperationDetailDto,
+  step: OrderRouteStepDto,
+  sizeId: string,
+): number | null {
+  const ov = step.sizeOverrides.find((o) => o.sizeId === sizeId);
+  if (ov?.rate != null && Number.isFinite(ov.rate)) return ov.rate;
+  const row = op.ratesBySize.find((r) => r.sizeId === sizeId);
+  return row && Number.isFinite(Number(row.rate)) ? Number(row.rate) : null;
+}
+
+function effFixedSec(
+  op: OperationDetailDto,
+  step: OrderRouteStepDto,
+): number | null {
+  if (step.timeNormSecOverride != null && Number.isFinite(step.timeNormSecOverride)) {
+    return step.timeNormSecOverride;
+  }
+  return op.timeNormSec != null && Number.isFinite(op.timeNormSec)
+    ? op.timeNormSec
+    : null;
+}
+
+function effSizeSec(
+  op: OperationDetailDto,
+  step: OrderRouteStepDto,
+  sizeId: string,
+): number | null {
+  const ov = step.sizeOverrides.find((o) => o.sizeId === sizeId);
+  if (ov?.seconds != null && Number.isFinite(ov.seconds)) return ov.seconds;
+  const row = op.timeNormsBySize.find((t) => t.sizeId === sizeId);
+  return row && Number.isFinite(Number(row.seconds))
+    ? Number(row.seconds)
+    : null;
+}
+
+// ---------------------------------------------------------------------------
 // Pricing label resolver
 // ---------------------------------------------------------------------------
 
@@ -182,6 +239,7 @@ interface PriceResolution {
 function resolvePriceLabel(
   op: OperationDetailDto | null,
   uniqueOrderSizeIds: string[],
+  step: OrderRouteStepDto,
 ): PriceResolution {
   const warnings: string[] = [];
   if (!op) {
@@ -192,19 +250,21 @@ function resolvePriceLabel(
     return { label: 'окладная', warnings };
   }
   if (op.pricingMode === 'FIXED') {
-    if (op.fixedRate == null || !Number.isFinite(op.fixedRate)) {
+    const rate = effFixedRate(op, step);
+    if (rate == null) {
       warnings.push('Нет ставки');
       return { label: '—', warnings };
     }
-    return { label: formatRub(Number(op.fixedRate)), warnings };
+    return { label: formatRub(rate), warnings };
   }
   if (op.pricingMode === 'BY_SIZE') {
     // ТЗ §4: если в заказе один размер — показать ставку для этого
-    // размера; иначе диапазон / «по размерам».
+    // размера; иначе диапазон / «по размерам». Учитываем поразмерные
+    // переопределения заказа.
     const ratesForOrder: number[] = [];
     for (const sid of uniqueOrderSizeIds) {
-      const row = op.ratesBySize.find((r) => r.sizeId === sid);
-      if (row && Number.isFinite(row.rate)) ratesForOrder.push(Number(row.rate));
+      const r = effSizeRate(op, step, sid);
+      if (r != null) ratesForOrder.push(r);
     }
     if (ratesForOrder.length === 0) {
       warnings.push('Нет ставки');
@@ -233,6 +293,7 @@ function resolveNormLabel(
   op: OperationDetailDto | null,
   itemsBySize: Map<string, number>,
   uniqueOrderSizeIds: string[],
+  step: OrderRouteStepDto,
 ): NormResolution {
   const warnings: string[] = [];
   if (!op) {
@@ -241,7 +302,7 @@ function resolveNormLabel(
   }
   const mode = op.timeNormMode;
   if (mode === 'FIXED') {
-    const sec = op.timeNormSec;
+    const sec = effFixedSec(op, step);
     if (sec == null || !Number.isFinite(sec) || sec <= 0) {
       warnings.push('Нет нормы времени');
       return { label: '—', warnings, totalTimeSec: null };
@@ -261,13 +322,13 @@ function resolveNormLabel(
     for (const sid of uniqueOrderSizeIds) {
       const qty = itemsBySize.get(sid) ?? 0;
       if (qty <= 0) continue;
-      const row = op.timeNormsBySize.find((t) => t.sizeId === sid);
-      if (!row || !Number.isFinite(row.seconds) || row.seconds <= 0) {
+      const sec = effSizeSec(op, step, sid);
+      if (sec == null || !Number.isFinite(sec) || sec <= 0) {
         missing += 1;
         continue;
       }
-      secsForOrder.push(Number(row.seconds));
-      totalSec += qty * Number(row.seconds);
+      secsForOrder.push(sec);
+      totalSec += qty * sec;
     }
     if (secsForOrder.length === 0) {
       warnings.push('Нет нормы времени');
@@ -308,6 +369,7 @@ function resolveCost(
   itemsBySize: Map<string, number>,
   totalQty: number,
   totalTimeSec: number | null,
+  step: OrderRouteStepDto,
 ): CostResolution {
   const warnings: string[] = [];
   if (!op) {
@@ -315,14 +377,15 @@ function resolveCost(
     return { lineTotalRub: null, fallbackLabel: null, warnings };
   }
   if (op.pricingMode === 'FIXED') {
-    if (op.fixedRate == null || !Number.isFinite(op.fixedRate)) {
+    const rate = effFixedRate(op, step);
+    if (rate == null) {
       return { lineTotalRub: null, fallbackLabel: null, warnings };
     }
     if (totalQty <= 0) {
       return { lineTotalRub: null, fallbackLabel: null, warnings };
     }
     return {
-      lineTotalRub: Number(op.fixedRate) * totalQty,
+      lineTotalRub: rate * totalQty,
       fallbackLabel: null,
       warnings,
     };
@@ -332,9 +395,9 @@ function resolveCost(
     let priced = 0;
     for (const [sid, qty] of itemsBySize.entries()) {
       if (qty <= 0) continue;
-      const row = op.ratesBySize.find((r) => r.sizeId === sid);
-      if (!row || !Number.isFinite(row.rate)) continue;
-      total += Number(row.rate) * qty;
+      const r = effSizeRate(op, step, sid);
+      if (r == null) continue;
+      total += r * qty;
       priced += 1;
     }
     if (priced === 0) {
@@ -528,9 +591,15 @@ export function buildOrderOperationRows(
       completed: buckets.completed,
     });
 
-    const norm = resolveNormLabel(op, itemsBySize, uniqueOrderSizeIds);
-    const price = resolvePriceLabel(op, uniqueOrderSizeIds);
-    const cost = resolveCost(op, itemsBySize, plannedQty, norm.totalTimeSec);
+    const norm = resolveNormLabel(op, itemsBySize, uniqueOrderSizeIds, step);
+    const price = resolvePriceLabel(op, uniqueOrderSizeIds, step);
+    const cost = resolveCost(
+      op,
+      itemsBySize,
+      plannedQty,
+      norm.totalTimeSec,
+      step,
+    );
 
     const warnings = new Set<string>();
     for (const w of norm.warnings) warnings.add(w);

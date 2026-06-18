@@ -25,6 +25,7 @@ import type {
   OrderCostEstimateDto,
   ReopenOrderCalculationDto,
 } from '@sewing/shared/order-cost-estimates';
+import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
 import { apiFetch } from './api';
 
 export function listOrders(query: Partial<ListOrdersQuery> = {}): Promise<
@@ -312,6 +313,26 @@ export function deleteOrderLogisticsLine(
     )}`,
     {
       method: 'DELETE',
+    },
+  );
+}
+
+/**
+ * Правка расценок / норм времени операций **в рамках заказа** (блок
+ * «Операции» → «Редактировать маршрут заказа»). Шлёт полный набор
+ * правок одним запросом (`PUT /orders/:id/route-overrides`); бэкенд
+ * пишет переопределения на снимок маршрута заказа, не трогая справочник
+ * операций и шаблон.
+ */
+export function updateOrderRouteOverrides(
+  orderId: string,
+  body: UpdateOrderRouteOverridesDto,
+): Promise<OrderDetailDto> {
+  return apiFetch<OrderDetailDto>(
+    `/orders/${encodeURIComponent(orderId)}/route-overrides`,
+    {
+      method: 'PUT',
+      body,
     },
   );
 }
