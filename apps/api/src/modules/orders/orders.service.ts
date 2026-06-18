@@ -1414,6 +1414,7 @@ export class OrdersService {
         parallelGroup: true,
         rateOverride: true,
         timeNormSecOverride: true,
+        pricingModeOverride: true,
         sizeOverrides: {
           select: { sizeId: true, rate: true, seconds: true },
         },
@@ -1475,6 +1476,7 @@ export class OrdersService {
           parallelGroup: s.parallelGroup ?? null,
           rateOverride: carry ? carry.rateOverride : (s.rateOverride ?? null),
           timeNormSecOverride: carry?.timeNormSecOverride ?? null,
+          pricingModeOverride: carry?.pricingModeOverride ?? null,
           sizeOverrides:
             carry && carry.sizeOverrides.length > 0
               ? {
@@ -1633,7 +1635,14 @@ export class OrdersService {
         id: true,
         status: true,
         items: { select: { sizeId: true } },
-        routeSteps: { select: { id: true } },
+        routeSteps: {
+          select: {
+            id: true,
+            operation: {
+              select: { code: true, name: true, fixedRate: true },
+            },
+          },
+        },
       },
     });
     if (!order) {
@@ -1653,13 +1662,16 @@ export class OrdersService {
       });
     }
 
-    const stepIds = new Set(order.routeSteps.map((s) => s.id));
+    const stepById = new Map(order.routeSteps.map((s) => [s.id, s] as const));
     const orderSizeIds = new Set(order.items.map((it) => it.sizeId));
 
     // Валидация до записи: каждый шаг принадлежит заказу, каждый размер —
-    // из плана заказа (защита от чужих snapshot-ов и опечаток).
+    // из плана заказа (защита от чужих snapshot-ов и опечаток); при
+    // переключении операции на сделку (`FIXED`) обязана быть расценка,
+    // иначе payroll упадёт `OperationRateMissingException` на сканировании.
     for (const step of dto.steps) {
-      if (!stepIds.has(step.stepId)) {
+      const orderStep = stepById.get(step.stepId);
+      if (!orderStep) {
         throw new BadRequestException({
           code: 'ORDER_ROUTE_STEP_NOT_FOUND',
           message: `Шаг маршрута ${step.stepId} не принадлежит заказу.`,
@@ -1673,11 +1685,26 @@ export class OrdersService {
           });
         }
       }
+      if (step.pricingModeOverride === 'FIXED') {
+        const hasRate =
+          step.rateOverride != null || orderStep.operation.fixedRate != null;
+        if (!hasRate) {
+          const label =
+            orderStep.operation.name || orderStep.operation.code;
+          throw new BadRequestException({
+            code: 'ORDER_ROUTE_OVERRIDE_RATE_REQUIRED',
+            message: `Операция «${label}»: при переводе на сделку задайте расценку (₽/шт).`,
+          });
+        }
+      }
     }
 
     await this.prisma.$transaction(async (tx) => {
       for (const step of dto.steps) {
         const data: Prisma.OrderRouteStepUpdateInput = {};
+        if (step.pricingModeOverride !== undefined) {
+          data.pricingModeOverride = step.pricingModeOverride;
+        }
         if (step.rateOverride !== undefined) {
           data.rateOverride = step.rateOverride;
         }
@@ -3248,6 +3275,7 @@ export class OrdersService {
           rateOverride:
             s.rateOverride != null ? s.rateOverride.toNumber() : null,
           timeNormSecOverride: s.timeNormSecOverride ?? null,
+          pricingModeOverride: s.pricingModeOverride ?? null,
           sizeOverrides: s.sizeOverrides.map((o) => ({
             sizeId: o.sizeId,
             rate: o.rate != null ? o.rate.toNumber() : null,

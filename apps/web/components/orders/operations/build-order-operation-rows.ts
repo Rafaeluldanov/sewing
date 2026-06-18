@@ -246,10 +246,13 @@ function resolvePriceLabel(
     warnings.push('Нет данных об операции');
     return { label: '—', warnings };
   }
-  if (op.pricingMode === 'SALARY_ONLY') {
+  // Эффективный способ оплаты: переопределение заказа (оклад ⇄ сделка)
+  // вытесняет дефолт операции (см. `OperationsService.resolveRate`).
+  const mode = step.pricingModeOverride ?? op.pricingMode;
+  if (mode === 'SALARY_ONLY') {
     return { label: 'окладная', warnings };
   }
-  if (op.pricingMode === 'FIXED') {
+  if (mode === 'FIXED') {
     const rate = effFixedRate(op, step);
     if (rate == null) {
       warnings.push('Нет ставки');
@@ -257,7 +260,7 @@ function resolvePriceLabel(
     }
     return { label: formatRub(rate), warnings };
   }
-  if (op.pricingMode === 'BY_SIZE') {
+  if (mode === 'BY_SIZE') {
     // ТЗ §4: если в заказе один размер — показать ставку для этого
     // размера; иначе диапазон / «по размерам». Учитываем поразмерные
     // переопределения заказа.
@@ -376,7 +379,9 @@ function resolveCost(
     warnings.push('Нет данных об операции');
     return { lineTotalRub: null, fallbackLabel: null, warnings };
   }
-  if (op.pricingMode === 'FIXED') {
+  // Эффективный способ оплаты с учётом переопределения заказа.
+  const mode = step.pricingModeOverride ?? op.pricingMode;
+  if (mode === 'FIXED') {
     const rate = effFixedRate(op, step);
     if (rate == null) {
       return { lineTotalRub: null, fallbackLabel: null, warnings };
@@ -390,7 +395,7 @@ function resolveCost(
       warnings,
     };
   }
-  if (op.pricingMode === 'BY_SIZE') {
+  if (mode === 'BY_SIZE') {
     let total = 0;
     let priced = 0;
     for (const [sid, qty] of itemsBySize.entries()) {
@@ -409,7 +414,7 @@ function resolveCost(
       warnings,
     };
   }
-  if (op.pricingMode === 'SALARY_ONLY') {
+  if (mode === 'SALARY_ONLY') {
     // Если у операции заданы salaryPlanRubPerShift + shiftSeconds +
     // нормы времени — считаем как (timeSec × ставка_за_секунду).
     const ratePerShift = op.salaryPlanRubPerShift;
@@ -638,7 +643,9 @@ export function buildOrderOperationRows(
       completedQty: buckets.completed,
       normLabel: norm.label,
       priceLabel: price.label,
-      pricingMode: op?.pricingMode ?? null,
+      // Эффективный способ оплаты (с учётом переопределения заказа) —
+      // чтобы data-attribute/tooltip совпадали с тем, что показано.
+      pricingMode: op ? (step.pricingModeOverride ?? op.pricingMode) : null,
       timeNormMode: op?.timeNormMode ?? null,
       totalTimeSec,
       lineTotalRub: cost.lineTotalRub,

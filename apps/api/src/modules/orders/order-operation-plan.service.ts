@@ -176,6 +176,7 @@ export class OrderOperationPlanService {
         operationId: true,
         rateOverride: true,
         timeNormSecOverride: true,
+        pricingModeOverride: true,
         sizeOverrides: { select: { sizeId: true, rate: true, seconds: true } },
       },
     });
@@ -192,6 +193,7 @@ export class OrderOperationPlanService {
           {
             rateOverride: s.rateOverride,
             timeNormSecOverride: s.timeNormSecOverride,
+            pricingModeOverride: s.pricingModeOverride,
             rateBySize,
             secondsBySize,
           },
@@ -285,8 +287,12 @@ export class OrderOperationPlanService {
         //                       salaryPlanShiftSeconds) × qty.
         //     Если плановая ставка не задана — cost = 0 + warning,
         //     заказ не блокируется (см. ТЗ §6).
+        // Эффективный способ оплаты: переопределение заказа (оклад ⇄
+        // сделка, `pricingModeOverride`) вытесняет дефолт операции — план
+        // должен совпадать с фактическим начислением (`resolveRate`).
+        const effMode = ov?.pricingModeOverride ?? op.pricingMode;
         let rate: Prisma.Decimal | null = null;
-        if (op.pricingMode === 'SALARY_ONLY') {
+        if (effMode === 'SALARY_ONLY') {
           if (salaryCostPerSec === null) {
             // Плановая ставка не задана — добавляем warning один раз
             // на операцию (Set схлопнет повторы) и не считаем деньги.
@@ -305,7 +311,7 @@ export class OrderOperationPlanService {
             // считать нечем — warning о норме уже выдан выше.
             rate = null;
           }
-        } else if (op.pricingMode === 'FIXED') {
+        } else if (effMode === 'FIXED') {
           // Переопределение расценки внутри заказа (snapshot маршрута,
           // `OrderRouteStep.rateOverride`) вытесняет дефолт операции —
           // план себестоимости должен совпадать с фактическим
@@ -321,7 +327,7 @@ export class OrderOperationPlanService {
             );
             rate = null;
           }
-        } else if (op.pricingMode === 'BY_SIZE') {
+        } else if (effMode === 'BY_SIZE') {
           // Поразмерное переопределение заказа, затем дефолт операции.
           const r = ov?.rateBySize.get(item.sizeId) ?? ratesBySize.get(item.sizeId);
           if (r != null) {

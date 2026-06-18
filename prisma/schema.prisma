@@ -2832,6 +2832,16 @@ model OrderRouteStep {
   /// и `OrderProductionBalanceService` (узкое место); payroll её не
   /// читает. Поразмерное переопределение нормы — в `OrderRouteStepSizeOverride`.
   timeNormSecOverride Int?
+  /// Переопределение **способа оплаты** операции **для этого заказа**:
+  /// оклад ⇄ сделка (и поразмерная сделка). `null` — режим по дефолту
+  /// операции (`Operation.pricingMode`). Эффективный режим расчёта денег
+  /// = `pricingModeOverride ?? operation.pricingMode`; на нём ветвятся
+  /// `OperationsService.resolveRate`, B2B-база закройщика и план
+  /// себестоимости. Справочник операции не меняется — переключение
+  /// действует только внутри заказа. Расценка при переключении в `FIXED`
+  /// берётся из `rateOverride` (а если у операции нет `fixedRate` —
+  /// `rateOverride` обязателен), в `BY_SIZE` — из `OrderRouteStepSizeOverride`.
+  pricingModeOverride PricingMode?
 
   order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
   operation Operation @relation(fields: [operationId], references: [id])

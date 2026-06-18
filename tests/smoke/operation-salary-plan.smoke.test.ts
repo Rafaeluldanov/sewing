@@ -136,9 +136,11 @@ describe('Прайс-плана окладных — OperationsService', () => {
   test('resolveRate НЕ изменён (контракт сохраняется)', () => {
     expect(src).toMatch(/async\s+resolveRate\(/);
     expect(src).toMatch(/OperationRateMissingException/);
-    // SALARY_ONLY → null
+    // SALARY_ONLY → null. Режим теперь эффективный (`mode = override?.
+    // pricingModeOverride ?? op.pricingMode`) — заказ может переключать
+    // оклад ⇄ сделку, но контракт «оклад → null» сохраняется.
     expect(src).toMatch(
-      /if\s+\(op\.pricingMode\s+===\s+'SALARY_ONLY'\)\s+return\s+null/,
+      /if\s+\(mode\s+===\s+'SALARY_ONLY'\)\s+return\s+null/,
     );
   });
 
@@ -168,7 +170,7 @@ describe('Прайс-плана окладных — OrderOperationPlanService',
     // Допускаем `Prisma.Decimal(0)` где-то ещё (totalCost инициализация),
     // но не в ветке SALARY_ONLY.
     const salaryBranch = src.match(
-      /op\.pricingMode\s*===\s*'SALARY_ONLY'[\s\S]*?\n\s{8}\}\s+else\s+if/,
+      /effMode\s*===\s*'SALARY_ONLY'[\s\S]*?\n\s{8}\}\s+else\s+if/,
     );
     expect(salaryBranch).not.toBeNull();
     const branchSrc = salaryBranch?.[0] ?? '';

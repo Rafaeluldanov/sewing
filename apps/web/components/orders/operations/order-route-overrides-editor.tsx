@@ -3,26 +3,27 @@
 /**
  * `OrderRouteOverridesEditor` — режим «Редактировать маршрут заказа» в
  * блоке «Операции» карточки заказа. Позволяет менеджеру переопределить
- * расценку (₽/шт) и норму времени (сек/шт) операций **в рамках этого
- * заказа**, не меняя справочник операций и шаблон маршрута.
- *
- * Поддержаны оба режима операции:
- *   - `FIXED`   — одно значение (расценка / норма);
- *   - `BY_SIZE` — поразмерная под-сетка инпутов (по размерам заказа).
+ * **в рамках этого заказа** (не меняя справочник операций и шаблон):
+ *   - способ оплаты операции: Оклад ⇄ Сделка ⇄ Сделка по размерам;
+ *   - расценку (₽/шт) — для сделки;
+ *   - норму времени (сек/шт) — FIXED одно значение или BY_SIZE поразмерно.
  *
  * Вне режима редактирования рендерится `children` — обычная серверная
  * таблица операций. По кнопке вся таблица заменяется формой с инпутами и
- * одной кнопкой «Сохранить всё» (см. ТЗ выбор «Режим редактирования
- * таблицы»). Сабмит идёт через server action
+ * одной кнопкой «Сохранить всё». Сабмит идёт через server action
  * `saveOrderRouteOverridesAction` → `PUT /orders/:id/route-overrides`.
  *
  * Пустой инпут = «без переопределения» (берётся дефолт операции,
- * показанный в placeholder). Источник истины — снимок маршрута заказа.
+ * показанный в placeholder). При переводе операции на сделку расценку
+ * нужно задать, если у операции нет своей (`fixedRate`/поразмерной) —
+ * иначе сохранение заблокировано. Источник истины — снимок маршрута
+ * заказа; справочник операции не меняется.
  */
 
 import { useEffect, useMemo, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { Pencil } from 'lucide-react';
+import type { PricingMode } from '@sewing/shared/operations';
 import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
 import { formatDurationSec } from '@/lib/operations-time-norm';
 import { saveOrderRouteOverridesAction } from '@/app/admin/orders/[id]/route-overrides-actions';
@@ -38,14 +39,16 @@ export interface RouteOverrideEditorStep {
   rowNumber: number;
   operationName: string;
   operationCode: string;
-  pricingMode: 'FIXED' | 'BY_SIZE' | 'SALARY_ONLY' | null;
+  /** Способ оплаты по справочнику операции (дефолт). */
+  pricingMode: PricingMode | null;
   timeNormMode: 'FIXED' | 'BY_SIZE' | null;
-  /** Дефолты операции — для placeholder. */
+  /** Дефолты операции — для placeholder / валидации. */
   fixedRate: number | null;
   timeNormSec: number | null;
   ratesBySize: Record<string, number>;
   timeNormsBySize: Record<string, number>;
   /** Текущие переопределения заказа. */
+  pricingModeOverride: PricingMode | null;
   rateOverride: number | null;
   timeNormSecOverride: number | null;
   sizeOverrides: Record<string, { rate: number | null; seconds: number | null }>;
@@ -60,6 +63,14 @@ interface Props {
 }
 
 type FieldMap = Record<string, string>;
+type ModeMap = Record<string, PricingMode>;
+
+const MODE_LABELS: Record<PricingMode, string> = {
+  SALARY_ONLY: 'Оклад',
+  FIXED: 'Сделка',
+  BY_SIZE: 'Сделка по размерам',
+};
+const MODE_OPTIONS: PricingMode[] = ['SALARY_ONLY', 'FIXED', 'BY_SIZE'];
 
 const rateKey = (stepId: string, sizeId?: string) =>
   sizeId ? `r:${stepId}:${sizeId}` : `r:${stepId}`;
@@ -69,28 +80,31 @@ const timeKey = (stepId: string, sizeId?: string) =>
 const numToStr = (v: number | null): string =>
   v != null && Number.isFinite(v) ? String(v) : '';
 
+/** Эффективный способ оплаты операции в заказе (override ?? дефолт). */
+function effectiveMode(step: RouteOverrideEditorStep): PricingMode {
+  return step.pricingModeOverride ?? step.pricingMode ?? 'SALARY_ONLY';
+}
+
+function buildInitialModes(steps: RouteOverrideEditorStep[]): ModeMap {
+  const out: ModeMap = {};
+  for (const s of steps) out[s.stepId] = effectiveMode(s);
+  return out;
+}
+
 function buildInitial(
   steps: RouteOverrideEditorStep[],
   sizes: RouteOverrideEditorSize[],
 ): FieldMap {
+  // Инициализируем все возможные поля (режим может меняться на лету) из
+  // текущих переопределений заказа; неиспользуемые ключи игнорируются.
   const out: FieldMap = {};
   for (const step of steps) {
-    if (step.pricingMode === 'FIXED') {
-      out[rateKey(step.stepId)] = numToStr(step.rateOverride);
-    }
-    if (step.timeNormMode === 'FIXED') {
-      out[timeKey(step.stepId)] = numToStr(step.timeNormSecOverride);
-    }
-    if (step.pricingMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE') {
-      for (const sz of sizes) {
-        const ov = step.sizeOverrides[sz.id];
-        if (step.pricingMode === 'BY_SIZE') {
-          out[rateKey(step.stepId, sz.id)] = numToStr(ov?.rate ?? null);
-        }
-        if (step.timeNormMode === 'BY_SIZE') {
-          out[timeKey(step.stepId, sz.id)] = numToStr(ov?.seconds ?? null);
-        }
-      }
+    out[rateKey(step.stepId)] = numToStr(step.rateOverride);
+    out[timeKey(step.stepId)] = numToStr(step.timeNormSecOverride);
+    for (const sz of sizes) {
+      const ov = step.sizeOverrides[sz.id];
+      out[rateKey(step.stepId, sz.id)] = numToStr(ov?.rate ?? null);
+      out[timeKey(step.stepId, sz.id)] = numToStr(ov?.seconds ?? null);
     }
   }
   return out;
@@ -106,7 +120,6 @@ function parseRate(s: string | undefined): Parsed {
   if (t === '') return { value: null, invalid: false };
   const n = Number(t.replace(',', '.'));
   if (!Number.isFinite(n) || n < 0) return { value: null, invalid: true };
-  // деньги — не больше 2 знаков после запятой (как на бэкенде).
   if (Math.abs(n * 100 - Math.round(n * 100)) > 1e-9) {
     return { value: n, invalid: true };
   }
@@ -123,23 +136,33 @@ function parseSec(s: string | undefined): Parsed {
   return { value: n, invalid: false };
 }
 
+type StepOverrideOut = {
+  stepId: string;
+  pricingModeOverride?: PricingMode | null;
+  rateOverride?: number | null;
+  timeNormSecOverride?: number | null;
+  sizeOverrides?: { sizeId: string; rate: number | null; seconds: number | null }[];
+};
+
 function buildPayload(
   values: FieldMap,
+  modes: ModeMap,
   steps: RouteOverrideEditorStep[],
   sizes: RouteOverrideEditorSize[],
 ): { dto: UpdateOrderRouteOverridesDto; invalid: boolean } {
   let invalid = false;
-  const outSteps = steps.map((step) => {
-    const out: {
-      stepId: string;
-      rateOverride?: number | null;
-      timeNormSecOverride?: number | null;
-      sizeOverrides?: { sizeId: string; rate: number | null; seconds: number | null }[];
-    } = { stepId: step.stepId };
+  const outSteps: StepOverrideOut[] = steps.map((step) => {
+    const selMode = modes[step.stepId] ?? effectiveMode(step);
+    const out: StepOverrideOut = { stepId: step.stepId };
+    // null — если совпадает с дефолтом операции (нет переопределения).
+    out.pricingModeOverride =
+      step.pricingMode != null && selMode === step.pricingMode ? null : selMode;
 
-    if (step.pricingMode === 'FIXED') {
+    if (selMode === 'FIXED') {
       const p = parseRate(values[rateKey(step.stepId)]);
       if (p.invalid) invalid = true;
+      // При сделке нужна расценка, если у операции нет своей fixedRate.
+      if (p.value == null && step.fixedRate == null) invalid = true;
       out.rateOverride = p.value;
     }
     if (step.timeNormMode === 'FIXED') {
@@ -147,13 +170,14 @@ function buildPayload(
       if (p.invalid) invalid = true;
       out.timeNormSecOverride = p.value;
     }
-    if (step.pricingMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE') {
+    if (selMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE') {
       out.sizeOverrides = sizes.map((sz) => {
         let rate: number | null = null;
         let seconds: number | null = null;
-        if (step.pricingMode === 'BY_SIZE') {
+        if (selMode === 'BY_SIZE') {
           const p = parseRate(values[rateKey(step.stepId, sz.id)]);
           if (p.invalid) invalid = true;
+          if (p.value == null && step.ratesBySize[sz.id] == null) invalid = true;
           rate = p.value;
         }
         if (step.timeNormMode === 'BY_SIZE') {
@@ -199,6 +223,7 @@ export function OrderRouteOverridesEditor({
   const [values, setValues] = useState<FieldMap>(() =>
     buildInitial(steps, sizes),
   );
+  const [modes, setModes] = useState<ModeMap>(() => buildInitialModes(steps));
   const [state, formAction] = useFormState(
     saveOrderRouteOverridesAction.bind(null, orderId),
     initialRouteOverridesFormState,
@@ -211,25 +236,20 @@ export function OrderRouteOverridesEditor({
   }, [state.ok, state.doneToken]);
 
   const built = useMemo(
-    () => buildPayload(values, steps, sizes),
-    [values, steps, sizes],
+    () => buildPayload(values, modes, steps, sizes),
+    [values, modes, steps, sizes],
   );
 
   const setField = (key: string, val: string) =>
     setValues((prev) => ({ ...prev, [key]: val }));
+  const setMode = (stepId: string, mode: PricingMode) =>
+    setModes((prev) => ({ ...prev, [stepId]: mode }));
 
   const startEditing = () => {
     setValues(buildInitial(steps, sizes));
+    setModes(buildInitialModes(steps));
     setEditing(true);
   };
-
-  const editableSteps = steps.filter(
-    (s) =>
-      s.pricingMode === 'FIXED' ||
-      s.pricingMode === 'BY_SIZE' ||
-      s.timeNormMode === 'FIXED' ||
-      s.timeNormMode === 'BY_SIZE',
-  );
 
   if (!editing) {
     return (
@@ -245,8 +265,8 @@ export function OrderRouteOverridesEditor({
             type="button"
             className="admin-btn admin-btn--ghost"
             onClick={startEditing}
-            disabled={editableSteps.length === 0}
-            title="Изменить расценки и нормы операций в рамках этого заказа"
+            disabled={steps.length === 0}
+            title="Изменить способ оплаты, расценки и нормы операций в рамках этого заказа"
             data-testid="order-route-overrides-edit"
           >
             <Pencil size={14} strokeWidth={1.6} aria-hidden /> Редактировать
@@ -276,24 +296,22 @@ export function OrderRouteOverridesEditor({
       >
         <strong>Редактирование маршрута заказа</strong>
         <span className="admin-muted" style={{ fontSize: '0.78rem' }}>
-          Расценки и нормы действуют только в этом заказе и не меняют
-          справочник операций.
+          Способ оплаты, расценки и нормы действуют только в этом заказе и не
+          меняют справочник операций.
         </span>
       </div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
         {steps.map((step) => {
-          const editableRate =
-            step.pricingMode === 'FIXED' || step.pricingMode === 'BY_SIZE';
-          const editableTime =
-            step.timeNormMode === 'FIXED' || step.timeNormMode === 'BY_SIZE';
+          const selMode = modes[step.stepId] ?? effectiveMode(step);
           const showSizeGrid =
-            step.pricingMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE';
+            selMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE';
 
           return (
             <div
               key={step.stepId}
               data-operation-code={step.operationCode}
+              data-pricing-mode={selMode}
               style={{
                 border: '1px solid var(--admin-border, #e5e7eb)',
                 borderRadius: 8,
@@ -311,12 +329,35 @@ export function OrderRouteOverridesEditor({
                 <span style={{ minWidth: 22, fontWeight: 600 }}>
                   {step.rowNumber}
                 </span>
-                <span style={{ flex: '1 1 160px', fontWeight: 500 }}>
+                <span style={{ flex: '1 1 150px', fontWeight: 500 }}>
                   {step.operationName}
                 </span>
 
-                {/* Цена (FIXED) */}
-                {step.pricingMode === 'FIXED' && (
+                {/* Способ оплаты: Оклад / Сделка / Сделка по размерам */}
+                <label
+                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
+                >
+                  <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
+                    Оплата
+                  </span>
+                  <select
+                    value={selMode}
+                    onChange={(e) =>
+                      setMode(step.stepId, e.target.value as PricingMode)
+                    }
+                    style={{ padding: '2px 6px', fontSize: '0.78rem' }}
+                    aria-label={`Способ оплаты операции ${step.operationName}`}
+                  >
+                    {MODE_OPTIONS.map((m) => (
+                      <option key={m} value={m}>
+                        {MODE_LABELS[m]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+
+                {/* Цена (только для сделки FIXED) */}
+                {selMode === 'FIXED' && (
                   <label
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
                   >
@@ -343,13 +384,8 @@ export function OrderRouteOverridesEditor({
                     </span>
                   </label>
                 )}
-                {step.pricingMode === 'SALARY_ONLY' && (
-                  <span className="admin-muted" style={{ fontSize: '0.74rem' }}>
-                    окладная
-                  </span>
-                )}
 
-                {/* Норма (FIXED) */}
+                {/* Норма времени FIXED (отдельная ось от оплаты) */}
                 {step.timeNormMode === 'FIXED' && (
                   <label
                     style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
@@ -380,15 +416,10 @@ export function OrderRouteOverridesEditor({
                     </span>
                   </label>
                 )}
-
-                {!editableRate && !editableTime && (
-                  <span className="admin-muted" style={{ fontSize: '0.74rem' }}>
-                    —
-                  </span>
-                )}
               </div>
 
-              {/* Поразмерная под-сетка (BY_SIZE) */}
+              {/* Поразмерная под-сетка: расценка (если сделка по размерам)
+                  и/или норма (если timeNormMode = BY_SIZE). */}
               {showSizeGrid && (
                 <div
                   style={{
@@ -416,7 +447,7 @@ export function OrderRouteOverridesEditor({
                       >
                         {sz.code}
                       </span>
-                      {step.pricingMode === 'BY_SIZE' && (
+                      {selMode === 'BY_SIZE' && (
                         <label
                           style={{
                             display: 'inline-flex',
@@ -496,8 +527,8 @@ export function OrderRouteOverridesEditor({
           role="alert"
           style={{ color: '#dc2626', fontSize: '0.78rem', marginTop: 8 }}
         >
-          Проверьте значения: расценка ≥ 0 (до 2 знаков), норма — целое число
-          секунд ≥ 0.
+          Проверьте значения: при переводе на сделку задайте расценку; расценка
+          ≥ 0 (до 2 знаков), норма — целое число секунд ≥ 0.
         </div>
       )}
       {state.error && (
@@ -516,6 +547,7 @@ export function OrderRouteOverridesEditor({
           className="admin-btn admin-btn--ghost"
           onClick={() => {
             setValues(buildInitial(steps, sizes));
+            setModes(buildInitialModes(steps));
             setEditing(false);
           }}
         >

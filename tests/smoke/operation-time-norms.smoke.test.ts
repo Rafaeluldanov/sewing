@@ -301,7 +301,10 @@ describe('Этап 1 — НЕ трогаем payroll/Order/Cost/WorkshopNeed/Pas
     );
     // SALARY_ONLY → null, FIXED → fixedRate или OperationRateMissingException,
     // BY_SIZE → OperationRateBySize или OperationRateMissingException.
-    expect(src).toMatch(/if\s+\(op\.pricingMode\s+===\s+'SALARY_ONLY'\)\s+return\s+null/);
+    // Режим эффективный (`mode = override?.pricingModeOverride ??
+    // op.pricingMode`): заказ может переключать оклад ⇄ сделку, контракт
+    // веток сохраняется.
+    expect(src).toMatch(/if\s+\(mode\s+===\s+'SALARY_ONLY'\)\s+return\s+null/);
     expect(src).toMatch(/op\.fixedRate/);
     expect(src).toMatch(/operationRateBySize\.findUnique/);
   });

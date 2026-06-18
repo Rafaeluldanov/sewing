@@ -15,6 +15,7 @@
  */
 
 import { z } from 'zod';
+import { PRICING_MODES, type PricingMode } from './operations';
 
 // ---------------------------------------------------------------------------
 // Reusable fields
@@ -275,6 +276,13 @@ export interface OrderRouteStepDto {
    */
   timeNormSecOverride: number | null;
   /**
+   * Переопределённый способ оплаты операции **в этом заказе** (оклад ⇄
+   * сделка ⇄ поразмерная сделка) или `null` (режим по дефолту операции
+   * `Operation.pricingMode`). Эффективный режим = `pricingModeOverride ??
+   * pricingMode операции`; на нём ветвятся расчёт денег (payroll/план).
+   */
+  pricingModeOverride: PricingMode | null;
+  /**
    * Поразмерные переопределения расценки/нормы **в этом заказе** для
    * операций `pricingMode = BY_SIZE` / `timeNormMode = BY_SIZE`. Пустой
    * массив — переопределений нет.
@@ -320,6 +328,12 @@ export type OrderRouteStepSizeOverrideInputDto = z.infer<
  */
 export const OrderRouteStepOverrideInputSchema = z.object({
   stepId: z.string().min(1, 'stepId обязателен'),
+  /**
+   * Способ оплаты операции в этом заказе (оклад ⇄ сделка). `null` —
+   * сбросить на режим операции; не передано — не менять. Действует
+   * только внутри заказа, справочник операции не трогается.
+   */
+  pricingModeOverride: z.enum(PRICING_MODES).nullable().optional(),
   rateOverride: RouteStepRateOverrideField.optional(),
   timeNormSecOverride: RouteStepTimeNormSecOverrideField.optional(),
   sizeOverrides: z

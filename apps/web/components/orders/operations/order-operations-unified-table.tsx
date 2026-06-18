@@ -646,6 +646,7 @@ export async function OrderOperationsUnifiedTable({ order, passports }: Props) {
         timeNormSec: op?.timeNormSec ?? null,
         ratesBySize,
         timeNormsBySize,
+        pricingModeOverride: step.pricingModeOverride,
         rateOverride: step.rateOverride,
         timeNormSecOverride: step.timeNormSecOverride,
         sizeOverrides,

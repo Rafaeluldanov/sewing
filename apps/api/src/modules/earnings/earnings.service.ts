@@ -570,6 +570,7 @@ export class EarningsService {
                 index: true,
                 operationId: true,
                 rateOverride: true,
+                pricingModeOverride: true,
                 operation: {
                   select: {
                     id: true,
@@ -640,9 +641,13 @@ export class EarningsService {
 
     for (const step of sewingSteps) {
       const op = step.operation;
+      // Эффективный способ оплаты: переопределение заказа (оклад ⇄
+      // сделка) вытесняет дефолт операции. Та же логика, что в
+      // `OperationsService.resolveRate`.
+      const mode = step.pricingModeOverride ?? op.pricingMode;
       // SALARY_ONLY-операции в base не попадают (они не дают
       // деньги швеям и не должны давать B2B-base закройщику).
-      if (op.pricingMode === 'SALARY_ONLY') {
+      if (mode === 'SALARY_ONLY') {
         warnings.push(
           `Операция ${op.code}: pricingMode = SALARY_ONLY, не учитывается в B2B base`,
         );
@@ -650,7 +655,7 @@ export class EarningsService {
       }
 
       let rate: Prisma.Decimal | null = null;
-      if (op.pricingMode === 'FIXED') {
+      if (mode === 'FIXED') {
         // Переопределение изделием (snapshot маршрута) вытесняет дефолт
         // операции — та же логика, что в `OperationsService.resolveRate`.
         const effectiveRate = step.rateOverride ?? op.fixedRate;
@@ -661,7 +666,7 @@ export class EarningsService {
           continue;
         }
         rate = effectiveRate;
-      } else if (op.pricingMode === 'BY_SIZE') {
+      } else if (mode === 'BY_SIZE') {
         // Поразмерное переопределение расценки внутри заказа (snapshot
         // маршрута) вытесняет дефолт `OperationRateBySize`; та же логика,
         // что в `OperationsService.resolveRate`. Справочник не трогается.
@@ -706,7 +711,7 @@ export class EarningsService {
         operationId: op.id,
         operationCode: op.code,
         operationName: op.name,
-        pricingMode: op.pricingMode,
+        pricingMode: mode,
         rate,
         qty: qtyForCompensation,
         amount,

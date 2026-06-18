@@ -702,19 +702,31 @@ export class OperationsService {
     });
     if (!op) throw new OperationNotFoundException();
 
-    if (op.pricingMode === 'SALARY_ONLY') return null;
+    // Снимок маршрута заказа может переопределять для этой операции и
+    // СПОСОБ ОПЛАТЫ (оклад ⇄ сделка, `pricingModeOverride`), и расценку
+    // (`rateOverride` / поразмерный `OrderRouteStepSizeOverride.rate`).
+    // Действует только внутри заказа — справочник операции не трогается.
+    // `findFirst`, а не `findUnique`: на `OrderRouteStep` нет уникального
+    // индекса (orderId, operationId), но операция в маршруте встречается
+    // не более одного раза. Поразмерный оверрайд берём сразу по `sizeId`.
+    const override = orderId
+      ? await client.orderRouteStep.findFirst({
+          where: { orderId, operationId },
+          select: {
+            pricingModeOverride: true,
+            rateOverride: true,
+            sizeOverrides: { where: { sizeId }, select: { rate: true } },
+          },
+        })
+      : null;
 
-    if (op.pricingMode === 'FIXED') {
-      // Переопределение расценки изделием (snapshot маршрута заказа).
-      // `findFirst`, а не `findUnique`: на `OrderRouteStep` нет
-      // уникального индекса (orderId, operationId), но операция в
-      // маршруте встречается не более одного раза.
-      const override = orderId
-        ? await client.orderRouteStep.findFirst({
-            where: { orderId, operationId, rateOverride: { not: null } },
-            select: { rateOverride: true },
-          })
-        : null;
+    // Эффективный режим расчёта денег: оверрайд заказа вытесняет дефолт
+    // операции.
+    const mode = override?.pricingModeOverride ?? op.pricingMode;
+
+    if (mode === 'SALARY_ONLY') return null;
+
+    if (mode === 'FIXED') {
       const rate = override?.rateOverride ?? op.fixedRate;
       if (!rate) {
         const sz = await client.size.findUnique({
@@ -726,22 +738,11 @@ export class OperationsService {
       return rate;
     }
 
-    // BY_SIZE: сначала поразмерное переопределение заказа (snapshot
-    // маршрута, `OrderRouteStepSizeOverride.rate`) — «цена операции
-    // внутри заказа», далее дефолт операции (`OperationRateBySize`).
-    // Переопределение действует только внутри заказа, справочник
-    // операции не трогается.
-    if (orderId) {
-      const override = await client.orderRouteStepSizeOverride.findFirst({
-        where: {
-          sizeId,
-          rate: { not: null },
-          routeStep: { orderId, operationId },
-        },
-        select: { rate: true },
-      });
-      if (override?.rate != null) return override.rate;
-    }
+    // BY_SIZE: сначала поразмерное переопределение заказа
+    // (`OrderRouteStepSizeOverride.rate`), далее дефолт операции
+    // (`OperationRateBySize`).
+    const sizeOverrideRate = override?.sizeOverrides?.[0]?.rate ?? null;
+    if (sizeOverrideRate != null) return sizeOverrideRate;
 
     const row = await client.operationRateBySize.findUnique({
       where: {
