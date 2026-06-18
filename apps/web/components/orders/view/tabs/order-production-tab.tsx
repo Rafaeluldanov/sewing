@@ -36,7 +36,6 @@ import type {
   OrderDetailDto,
   OrderRouteStepDto,
   OrderSizeBreakdownRow,
-  OrderSummary,
 } from '@sewing/shared/orders';
 import type { OrderCutIssueRulesSummaryDto } from '@sewing/shared';
 import type {
@@ -57,7 +56,7 @@ import {
   listOrderFinishedGoodsShipments,
   type FinishedGoodsBalanceListItem,
 } from '@/lib/finished-goods-api';
-import { Activity, BarChart3, Layers, Lock, Workflow } from 'lucide-react';
+import { Activity, Layers, Lock, Workflow } from 'lucide-react';
 import { CreateFinishedGoodsShipmentButton } from '@/components/orders/finished-goods/create-finished-goods-shipment-button';
 import { OrderMaterialColorsCard } from '@/components/orders/view/order-material-colors-card';
 import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
@@ -82,55 +81,6 @@ interface Props {
    * жил во вкладке «План».
    */
   cutIssueRulesSummary: OrderCutIssueRulesSummaryDto;
-}
-
-interface KpiCardProps {
-  label: string;
-  value: number;
-  tone?: 'neutral' | 'success' | 'warning' | 'danger';
-  hint?: string | null;
-}
-
-function KpiCard({ label, value, tone = 'neutral', hint }: KpiCardProps) {
-  return (
-    <div
-      className={`order-prod-tab__kpi order-prod-tab__kpi--${tone}`}
-      title={hint ?? undefined}
-    >
-      <span className="order-prod-tab__kpi-label">{label}</span>
-      <span className="order-prod-tab__kpi-value">
-        {value.toLocaleString('ru-RU')}
-      </span>
-    </div>
-  );
-}
-
-function buildKpis(summary: OrderSummary): KpiCardProps[] {
-  return [
-    { label: 'План всего', value: summary.qtyPlanTotal, tone: 'neutral' },
-    { label: 'Раскроено', value: summary.qtyCutFactTotal, tone: 'neutral' },
-    { label: 'В пошиве', value: summary.qtyInSewingTotal, tone: 'neutral' },
-    { label: 'На ОТК', value: summary.qtyQcTotal, tone: 'neutral' },
-    { label: 'На ВТО', value: summary.qtyWtoTotal, tone: 'neutral' },
-    { label: 'На упаковке', value: summary.qtyPackingTotal, tone: 'neutral' },
-    { label: 'Выпущено', value: summary.qtyFinishedTotal, tone: 'success' },
-    {
-      label: 'Брак',
-      value: summary.qtyDefectTotal,
-      tone: summary.qtyDefectTotal > 0 ? 'danger' : 'neutral',
-    },
-    {
-      label: 'Δ крой − план',
-      value: summary.qtyDeltaTotal,
-      tone: summary.qtyDeltaTotal === 0 ? 'neutral' : 'warning',
-      hint:
-        summary.qtyDeltaTotal === 0
-          ? null
-          : summary.qtyDeltaTotal > 0
-            ? 'Раскроено больше плана — план иммутабельный (ADR-0006).'
-            : 'Раскроено меньше плана — раскройщик ещё не закрыл норму.',
-    },
-  ];
 }
 
 export async function OrderProductionTab({
@@ -207,7 +157,6 @@ export async function OrderProductionTab({
     // Колонка «Отгружено» останется пустой.
   }
 
-  const kpis = buildKpis(order.summary);
   const shopBySize = new Map<string, ShopfloorRowDto>();
   if (shopfloor) {
     for (const r of shopfloor.rows) shopBySize.set(r.sizeId, r);
@@ -215,19 +164,6 @@ export async function OrderProductionTab({
 
   return (
     <div className="order-prod-tab">
-      <AdminCard className="order-prod-tab__kpi-card">
-        <AdminSectionHeader
-          icon={<BarChart3 size={18} strokeWidth={1.7} aria-hidden />}
-          title="Прогресс по стадиям"
-          hint="Источник: агрегаты заказа (паспорта)"
-        />
-        <div className="order-prod-tab__kpi-grid">
-          {kpis.map((k) => (
-            <KpiCard key={k.label} {...k} />
-          ))}
-        </div>
-      </AdminCard>
-
       <AdminCard className="admin-order-detail-card-compact">
         <AdminSectionHeader
           icon={<Workflow size={18} strokeWidth={1.7} aria-hidden />}
