@@ -146,6 +146,7 @@ describe('Production Cost v2 — shared contract', () => {
       nomenclatureGroups: [],
       orderGroups: [],
       operationLines: [],
+      salaryOperationBreakdown: [],
       warnings: [],
     };
     expect(empty.nomenclatureGroups).toHaveLength(0);

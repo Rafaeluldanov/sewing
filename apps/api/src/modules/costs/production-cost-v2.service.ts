@@ -14,6 +14,7 @@ import {
   type ProductionCostOperationLineDto,
   type ProductionCostOrderGroupDto,
   type ProductionCostReportDto,
+  type ProductionCostSalaryOperationDto,
   type ProductionCostSizeAggregateDto,
   type ProductionCostTotalsDto,
   type ProductionCostV2EntryStatus,
@@ -1023,6 +1024,21 @@ export class ProductionCostV2Service {
       );
     }
 
+    // Окладные операции (ОТК/ВТО/Упаковка/Деление кроя) — отдельная
+    // таблица из разнесённого реального времени (у них нет OperationEntry).
+    const salaryOperationBreakdown: ProductionCostSalaryOperationDto[] =
+      Array.from(apportionedSalary.salaryByOperation.entries())
+        .map(([operationId, agg]) => ({
+          operationId,
+          operationName: agg.operationName,
+          operationCategory: agg.operationCategory,
+          minutes: agg.minutes,
+          rub: agg.rub.toFixed(2),
+          rubPerMinute:
+            agg.minutes > 0 ? (agg.rub / agg.minutes).toFixed(2) : null,
+        }))
+        .sort((a, b) => Number(b.rub) - Number(a.rub));
+
     return {
       dateFrom: dateFromIso,
       dateTo: dateToIso,
@@ -1031,6 +1047,7 @@ export class ProductionCostV2Service {
       nomenclatureGroups,
       orderGroups,
       operationLines,
+      salaryOperationBreakdown,
       warnings: Array.from(warnings).sort(),
     };
   }

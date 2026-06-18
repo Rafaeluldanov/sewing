@@ -136,6 +136,27 @@ export interface ProductionCostOperationAggregateDto {
 }
 
 /**
+ * Агрегат окладной (`SALARY_ONLY`) операции в отчёте «Себестоимость».
+ *
+ * Эти операции (ОТК / ВТО / Упаковка / Деление кроя) НЕ создают
+ * `OperationEntry`, поэтому их нет в `operationBreakdown` / `operationLines`
+ * (те строятся из сдельных начислений). Стоимость берётся из движка
+ * разноса реального времени (`PassportRealCostService`): разнесённые
+ * минуты × (оклад / 480).
+ */
+export interface ProductionCostSalaryOperationDto {
+  operationId: string;
+  operationName: string;
+  operationCategory: string;
+  /** Σ разнесённых реальных минут по операции за период. */
+  minutes: number;
+  /** Σ ₽ оклада, отнесённого на эту операцию. */
+  rub: string;
+  /** `rub / minutes` — стоимость минуты (≈ ставка окладника). */
+  rubPerMinute: string | null;
+}
+
+/**
  * Агрегат «Сотрудник внутри лекала» (см.
  * `ProductionCostNomenclatureGroupDto.employeeBreakdown`).
  */
@@ -349,6 +370,13 @@ export interface ProductionCostReportDto {
   orderGroups: ProductionCostOrderGroupDto[];
   /** Детальная расшифровка операций (без обязательной колонки «Паспорт»). */
   operationLines: ProductionCostOperationLineDto[];
+  /**
+   * Окладные операции (ОТК / ВТО / Упаковка / Деление кроя) — отдельная
+   * таблица: у них нет `OperationEntry`, стоимость считается из
+   * разнесённого реального времени. Пусто, если за период по окладным
+   * операциям не было событий/окладников.
+   */
+  salaryOperationBreakdown: ProductionCostSalaryOperationDto[];
   /**
    * Человекочитаемые предупреждения: USD без курса, отсутствие
    * cost-estimate, не распределённый оклад и т. п.

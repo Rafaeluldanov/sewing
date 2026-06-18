@@ -48,6 +48,7 @@ import type {
   ProductionCostOperationLineDto,
   ProductionCostOrderGroupDto,
   ProductionCostReportDto,
+  ProductionCostSalaryOperationDto,
 } from '@sewing/shared/production-cost';
 import { PRODUCTION_COST_MATERIAL_SOURCE_LABELS } from '@sewing/shared/production-cost';
 import { getProductionCostV2 } from '@/lib/production-cost-api';
@@ -473,7 +474,10 @@ export default async function AdminProductionCostPage({
           )}
           {tab === 'orders' && <OrdersTab groups={data.orderGroups} />}
           {tab === 'operations' && (
-            <OperationsTab lines={data.operationLines} />
+            <OperationsTab
+              lines={data.operationLines}
+              salaryOperations={data.salaryOperationBreakdown}
+            />
           )}
         </>
       )}
@@ -845,26 +849,31 @@ function OrdersTab({ groups }: { groups: ProductionCostOrderGroupDto[] }) {
 
 function OperationsTab({
   lines,
+  salaryOperations,
 }: {
   lines: ProductionCostOperationLineDto[];
+  salaryOperations: ProductionCostSalaryOperationDto[];
 }) {
-  if (lines.length === 0) {
+  if (lines.length === 0 && salaryOperations.length === 0) {
     return (
       <AdminCard>
         <AdminEmptyState
           icon={<Receipt size={26} strokeWidth={1.6} aria-hidden />}
           title="Нет данных"
-          hint="За выбранный период начислений не было."
+          hint="За выбранный период начислений и окладных операций не было."
         />
       </AdminCard>
     );
   }
   return (
-    <AdminCard>
-      <AdminSectionHeader
-        title="Операции / сотрудники"
-        hint={`${lines.length} ${pluralizeEntries(lines.length)}`}
-      />
+    <>
+      <SalaryOperationsTable rows={salaryOperations} />
+      {lines.length > 0 && (
+        <AdminCard>
+          <AdminSectionHeader
+            title="Операции / сотрудники (сдельные)"
+            hint={`${lines.length} ${pluralizeEntries(lines.length)}`}
+          />
       <div
         style={{
           fontSize: 12,
@@ -931,6 +940,67 @@ function OperationsTab({
                 </td>
                 <td data-label="За 1 ед." style={{ textAlign: 'right' }}>
                   {l.unitCost ? formatMoney(l.unitCost) : '—'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+        </AdminCard>
+      )}
+    </>
+  );
+}
+
+/**
+ * Таблица окладных операций (ОТК / ВТО / Упаковка / Деление кроя).
+ * У них нет `OperationEntry`, поэтому стоимость берётся из разнесённого
+ * реального времени (`PassportRealCostService`): минуты × оклад/480.
+ */
+function SalaryOperationsTable({
+  rows,
+}: {
+  rows: ProductionCostSalaryOperationDto[];
+}) {
+  if (rows.length === 0) return null;
+  return (
+    <AdminCard>
+      <AdminSectionHeader
+        title="Окладные операции (по времени)"
+        hint={`${rows.length} ${pluralizeEntries(rows.length)}`}
+      />
+      <div
+        style={{
+          fontSize: 12,
+          color: 'var(--admin-muted)',
+          marginBottom: 8,
+        }}
+      >
+        ОТК / ВТО / Упаковка / Деление кроя — без сдельных начислений.
+        Стоимость = разнесённое реальное время × (оклад / 480).
+      </div>
+      <div className="admin-table-wrap">
+        <table className="admin-table">
+          <thead>
+            <tr>
+              <th>Операция</th>
+              <th style={{ textAlign: 'right' }}>Время, мин</th>
+              <th style={{ textAlign: 'right' }}>₽ / мин</th>
+              <th style={{ textAlign: 'right' }}>Сумма, ₽</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r) => (
+              <tr key={r.operationId}>
+                <td data-label="Операция">{r.operationName}</td>
+                <td data-label="Время" style={{ textAlign: 'right' }}>
+                  {formatQty(r.minutes)}
+                </td>
+                <td data-label="₽ / мин" style={{ textAlign: 'right' }}>
+                  {r.rubPerMinute ? formatMoney(r.rubPerMinute) : '—'}
+                </td>
+                <td data-label="Сумма" style={{ textAlign: 'right' }}>
+                  <strong>{formatMoney(r.rub)}</strong>
                 </td>
               </tr>
             ))}

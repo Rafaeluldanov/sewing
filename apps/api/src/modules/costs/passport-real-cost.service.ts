@@ -41,6 +41,20 @@ export interface ApportionedSalary {
   linesByPassport: Map<string, PassportCostSalaryLineDto[]>;
   /** Учтённые (разнесённые) минуты по ключу `${employeeId}|${YYYY-MM-DD}`. */
   trackedMinutesByEmpDay: Map<string, number>;
+  /**
+   * Агрегат разнесённого оклада ПО ОПЕРАЦИЯМ за окно (для таблицы
+   * операций отчёта «Себестоимость»). Ключ — `operationId`; операции без
+   * `operationId` (теоретические старые события) не агрегируются.
+   */
+  salaryByOperation: Map<
+    string,
+    {
+      operationName: string;
+      operationCategory: string;
+      minutes: number;
+      rub: number;
+    }
+  >;
 }
 
 /**
@@ -313,6 +327,7 @@ export class PassportRealCostService {
       rubByPassport: new Map(),
       linesByPassport: new Map(),
       trackedMinutesByEmpDay: new Map(),
+      salaryByOperation: new Map(),
     };
 
     // 1) Кандидаты — исполнители терминальных событий в окне.
@@ -400,6 +415,8 @@ export class PassportRealCostService {
         rub: number;
       }>
     >();
+    // Сырой агрегат оклада по операциям (минуты/₽), до подписей.
+    const byOpRaw = new Map<string, { minutes: number; rub: number }>();
 
     for (const [key, dayEvents] of byEmpDay) {
       const employeeId = key.slice(0, key.lastIndexOf('|'));
@@ -418,7 +435,13 @@ export class PassportRealCostService {
           a.passportId,
           (rubByPassport.get(a.passportId) ?? 0) + rub,
         );
-        if (a.operationId) operationIds.add(a.operationId);
+        if (a.operationId) {
+          operationIds.add(a.operationId);
+          const op = byOpRaw.get(a.operationId) ?? { minutes: 0, rub: 0 };
+          op.minutes += a.minutes;
+          op.rub += rub;
+          byOpRaw.set(a.operationId, op);
+        }
         const arr = rawByPassport.get(a.passportId) ?? [];
         arr.push({ operationId: a.operationId, employeeId, minutes: a.minutes, rub });
         rawByPassport.set(a.passportId, arr);
@@ -430,13 +453,28 @@ export class PassportRealCostService {
     }
 
     // Подписи операций.
-    const opMeta = new Map<string, { code: string; name: string }>();
+    const opMeta = new Map<
+      string,
+      { code: string; name: string; category: string }
+    >();
     if (operationIds.size > 0) {
       const ops = await this.prisma.operation.findMany({
         where: { id: { in: Array.from(operationIds) } },
-        select: { id: true, code: true, name: true },
+        select: { id: true, code: true, name: true, category: true },
       });
-      for (const o of ops) opMeta.set(o.id, { code: o.code, name: o.name });
+      for (const o of ops) {
+        opMeta.set(o.id, { code: o.code, name: o.name, category: o.category });
+      }
+    }
+    const salaryByOperation: ApportionedSalary['salaryByOperation'] = new Map();
+    for (const [opId, agg] of byOpRaw) {
+      const meta = opMeta.get(opId);
+      salaryByOperation.set(opId, {
+        operationName: meta?.name ?? opId,
+        operationCategory: meta?.category ?? '',
+        minutes: round1(agg.minutes),
+        rub: round2(agg.rub),
+      });
     }
     const linesByPassport = new Map<string, PassportCostSalaryLineDto[]>();
     for (const [pid, raws] of rawByPassport) {
@@ -457,7 +495,12 @@ export class PassportRealCostService {
       );
     }
 
-    return { rubByPassport, linesByPassport, trackedMinutesByEmpDay };
+    return {
+      rubByPassport,
+      linesByPassport,
+      trackedMinutesByEmpDay,
+      salaryByOperation,
+    };
   }
 
   /**
@@ -468,12 +511,15 @@ export class PassportRealCostService {
   async apportionedSalaryForPeriod(
     from: Date,
     to: Date,
-  ): Promise<Pick<ApportionedSalary, 'rubByPassport' | 'trackedMinutesByEmpDay'>> {
-    const { rubByPassport, trackedMinutesByEmpDay } = await this.apportionSalary(
-      from,
-      to,
-    );
-    return { rubByPassport, trackedMinutesByEmpDay };
+  ): Promise<
+    Pick<
+      ApportionedSalary,
+      'rubByPassport' | 'trackedMinutesByEmpDay' | 'salaryByOperation'
+    >
+  > {
+    const { rubByPassport, trackedMinutesByEmpDay, salaryByOperation } =
+      await this.apportionSalary(from, to);
+    return { rubByPassport, trackedMinutesByEmpDay, salaryByOperation };
   }
 
   private async salaryFor(

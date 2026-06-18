@@ -553,6 +553,60 @@ describeWithDb('integration — production cost v2 (управленческий
       expect(typeof line.passportNumber).toBe('string');
     }
   });
+
+  test('окладные операции (ОТК) попадают в salaryOperationBreakdown, но не в сдельную таблицу', async () => {
+    const day = utcDay('2026-04-22');
+    // ОТК-сотрудник на оклад: 4800/смена → 10 ₽/мин.
+    await t.prisma.employee.update({
+      where: { id: seed.employees.qc.id },
+      data: {
+        compensationType: 'SALARY',
+        salaryPerShift: new Prisma.Decimal(4800),
+      },
+    });
+    const passport = await createPackedPassport(t, seed, {
+      qtyPlan: 5,
+      qtyGood: 5,
+      cutDate: day,
+    });
+    // ОТК держал паспорт 6 минут (ISSUED→FINISHED, operationId = QC).
+    await t.prisma.passportEvent.createMany({
+      data: [
+        {
+          passportId: passport.id,
+          type: 'ISSUED_TO_EMPLOYEE',
+          operationId: seed.operations.QC.id,
+          employeeId: seed.employees.qc.id,
+          createdAt: new Date('2026-04-22T08:00:00.000Z'),
+        },
+        {
+          passportId: passport.id,
+          type: 'OPERATION_FINISHED',
+          operationId: seed.operations.QC.id,
+          employeeId: seed.employees.qc.id,
+          createdAt: new Date('2026-04-22T08:06:00.000Z'),
+        },
+      ],
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/admin/production-cost/v2')
+      .query({ dateFrom: '2026-04-22', dateTo: '2026-04-22' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const body = res.body as ProductionCostReportLike;
+
+    const qc = body.salaryOperationBreakdown.find(
+      (r) => r.operationName === 'ОТК',
+    );
+    expect(qc).toBeDefined();
+    expect(qc!.minutes).toBeCloseTo(6, 1);
+    expect(Number(qc!.rub)).toBeCloseTo(60, 2); // 6 мин × 10 ₽/мин
+    // В сдельной таблице ОТК нет (SALARY_ONLY → нет OperationEntry).
+    expect(
+      body.operationLines.some((l) => l.operationName === 'ОТК'),
+    ).toBe(false);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -609,6 +663,14 @@ interface ProductionCostReportLike {
     unitCost: string | null;
     passportId?: string;
     passportNumber?: string;
+  }>;
+  salaryOperationBreakdown: Array<{
+    operationId: string;
+    operationName: string;
+    operationCategory: string;
+    minutes: number;
+    rub: string;
+    rubPerMinute: string | null;
   }>;
   warnings: string[];
 }
