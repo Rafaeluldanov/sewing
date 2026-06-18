@@ -13,9 +13,11 @@ import {
   SUPPLIER_PAYMENT_REQUEST_STATUS_LABELS,
   type SupplierPaymentRequestStatus,
 } from '@sewing/shared/supplier-payment-requests';
+import type { SupplierListItemDto } from '@sewing/shared/suppliers';
 import { AdminCard, AdminSectionHeader, AdminStatusBadge } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
-import { getSupplier } from '@/lib/suppliers-api';
+import { getSupplier, listSuppliers } from '@/lib/suppliers-api';
+import { listCashFlowItems } from '@/lib/treasury-api';
 import { listPurchaseOrderPaymentRequests } from '@/lib/supplier-payment-requests-api';
 import {
   CreatePaymentRequestDialog,
@@ -82,10 +84,13 @@ export async function PaymentRequestsCard({
   totalAmount: string | null;
   currency: string | null;
 }) {
-  const [requests, supplier] = await Promise.all([
-    listPurchaseOrderPaymentRequests(purchaseOrderId).catch(() => []),
-    getSupplier(supplierId).catch(() => null),
-  ]);
+  const [requests, supplier, activeSuppliers, cashFlowItems] =
+    await Promise.all([
+      listPurchaseOrderPaymentRequests(purchaseOrderId).catch(() => []),
+      getSupplier(supplierId).catch(() => null),
+      listSuppliers({ status: 'ACTIVE' }).catch(() => []),
+      listCashFlowItems({ activeOnly: true }).catch(() => []),
+    ]);
 
   const requisites: PaymentRequestRequisitesPrefill = supplier
     ? {
@@ -98,6 +103,13 @@ export async function PaymentRequestsCard({
         bankCorrAccount: supplier.bankCorrAccount,
       }
     : EMPTY_REQUISITES;
+
+  // Список плательщиков: активные поставщики + сам поставщик заказа, даже
+  // если он в архиве (иначе дефолт в селекте не выберется).
+  const suppliers: SupplierListItemDto[] = [...activeSuppliers];
+  if (supplier && !suppliers.some((s) => s.id === supplier.id)) {
+    suppliers.unshift(supplier);
+  }
 
   return (
     <AdminCard>
@@ -112,6 +124,11 @@ export async function PaymentRequestsCard({
             defaultAmount={totalAmount}
             defaultCurrency={currency}
             requisites={requisites}
+            suppliers={suppliers}
+            cashFlowItems={cashFlowItems}
+            initialSupplierId={supplierId}
+            initialCashFlowItemId={supplier?.defaultCashFlowItemId ?? null}
+            initialCashFlowItemName={supplier?.defaultCashFlowItemName ?? null}
           />
         }
       />
@@ -129,6 +146,7 @@ export async function PaymentRequestsCard({
                 <th>Номер</th>
                 <th>Статус</th>
                 <th style={{ textAlign: 'right' }}>Сумма</th>
+                <th>Статья ДДС</th>
                 <th style={{ textAlign: 'center' }}>Этапов</th>
                 <th style={{ textAlign: 'center' }}>Файлов</th>
                 <th>Создана</th>
@@ -149,6 +167,11 @@ export async function PaymentRequestsCard({
                   <td style={{ textAlign: 'right', whiteSpace: 'nowrap' }}>
                     {formatMoney(r.amount, r.currency)}
                   </td>
+                  <td>
+                    {r.cashFlowItemNameSnapshot ?? (
+                      <span className="admin-muted">—</span>
+                    )}
+                  </td>
                   <td style={{ textAlign: 'center' }}>{r.stagesCount}</td>
                   <td style={{ textAlign: 'center' }}>{r.filesCount}</td>
                   <td>{formatDateTime(r.createdAt)}</td>
@@ -158,6 +181,7 @@ export async function PaymentRequestsCard({
                       requestId={r.id}
                       requestNumber={r.number}
                       supplierName={supplierName}
+                      cashFlowItems={cashFlowItems}
                     />
                   </td>
                 </tr>

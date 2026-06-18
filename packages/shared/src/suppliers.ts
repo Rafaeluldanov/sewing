@@ -380,6 +380,22 @@ const SupplierBankCorrAccountField = optionalNullableText(
   'Корр. счёт',
 );
 
+/**
+ * Статья ДДС по умолчанию (id `CashFlowItem` из казначейства). Пустую
+ * строку / whitespace нормализует в `null` («без статьи»). Не cuid-валидируем
+ * жёстко (id могут быть и не cuid в импортах) — backend проверяет наличие
+ * статьи отдельно (`CashFlowItemNotFoundException`).
+ */
+const SupplierDefaultCashFlowItemIdField = z.preprocess(
+  (v) => {
+    if (v === null || v === undefined) return null;
+    if (typeof v !== 'string') return v;
+    const trimmed = v.trim();
+    return trimmed === '' ? null : trimmed;
+  },
+  z.string().max(40, 'Некорректная статья ДДС').nullable().optional(),
+);
+
 // ---------------------------------------------------------------------------
 // Supplier list query
 // ---------------------------------------------------------------------------
@@ -415,6 +431,7 @@ export const CreateSupplierSchema = z.object({
   bankAccount: SupplierBankAccountField,
   bankBik: SupplierBankBikField,
   bankCorrAccount: SupplierBankCorrAccountField,
+  defaultCashFlowItemId: SupplierDefaultCashFlowItemIdField,
   status: SupplierStatusSchema.optional(),
 });
 export type CreateSupplierDto = z.infer<typeof CreateSupplierSchema>;
@@ -433,6 +450,7 @@ export const UpdateSupplierSchema = z
     bankAccount: SupplierBankAccountField,
     bankBik: SupplierBankBikField,
     bankCorrAccount: SupplierBankCorrAccountField,
+    defaultCashFlowItemId: SupplierDefaultCashFlowItemIdField,
     status: SupplierStatusSchema.optional(),
   })
   .refine(
@@ -449,6 +467,7 @@ export const UpdateSupplierSchema = z
       obj.bankAccount !== undefined ||
       obj.bankBik !== undefined ||
       obj.bankCorrAccount !== undefined ||
+      obj.defaultCashFlowItemId !== undefined ||
       obj.status !== undefined,
     'Нечего обновлять: укажите хотя бы одно поле',
   );
@@ -716,6 +735,14 @@ export interface SupplierListItemDto {
   bankAccount: string | null;
   bankBik: string | null;
   bankCorrAccount: string | null;
+  /**
+   * Статья ДДС по умолчанию (казначейство). `defaultCashFlowItemId` —
+   * id `CashFlowItem` (или `null`), `defaultCashFlowItemName` — его имя
+   * для показа без доп. запроса (резолвится на backend, `null` если не
+   * задана или статья удалена).
+   */
+  defaultCashFlowItemId: string | null;
+  defaultCashFlowItemName: string | null;
   status: SupplierStatus | string;
   createdAt: string;
   updatedAt: string;

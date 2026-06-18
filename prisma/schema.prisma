@@ -4202,6 +4202,13 @@ model Supplier {
   bankBik         String?
   bankCorrAccount String?
 
+  /// Статья ДДС по умолчанию для платежей этому поставщику (казначейство,
+  /// см. `model CashFlowItem`). Hard-FK c `onDelete: SetNull` — удаление
+  /// статьи лишь обнуляет дефолт у карточки, саму карточку не трогает.
+  /// Подставляется при создании оплаты/заявки поставщику в казначействе.
+  defaultCashFlowItemId String?
+  defaultCashFlowItem   CashFlowItem? @relation("SupplierDefaultCashFlowItem", fields: [defaultCashFlowItemId], references: [id], onDelete: SetNull)
+
   /// Статус карточки. Дефолт `ACTIVE`. Хранится строкой, чтобы расширять
   /// список без миграции (см. `SUPPLIER_STATUSES` в
   /// `@sewing/shared/suppliers`). UI скрывает не-`ACTIVE` поставщиков
@@ -4231,6 +4238,7 @@ model Supplier {
 
   @@index([status])
   @@index([name])
+  @@index([defaultCashFlowItemId])
 }
 
 /// Контакт менеджера у поставщика (one-to-many от `Supplier`).
@@ -4487,9 +4495,20 @@ model SupplierPaymentRequest {
 
   /// Поставщик (soft-ссылка на `Supplier`, без FK) + снимок имени.
   /// Soft — по той же причине, что у `SupplierPayment`: платёжный
-  /// контур не вводит жёсткую связь со справочником.
+  /// контур не вводит жёсткую связь со справочником. Плательщик по
+  /// умолчанию — поставщик заказа (`PurchaseOrder.supplierId`), но в
+  /// форме создания заявки его можно сменить на любого активного
+  /// (тогда сюда едет выбранный id + снимок его имени).
   supplierId           String
   supplierNameSnapshot String
+
+  /// Статья ДДС (казначейство) для передачи заявки в оплату. Soft-ссылка
+  /// на `CashFlowItem` (без FK, как `supplierId`) + снимок имени. По
+  /// умолчанию берётся из карточки поставщика
+  /// (`Supplier.defaultCashFlowItemId`), в форме заявки редактируема.
+  /// Снимок имени переживает переименование/удаление статьи.
+  cashFlowItemId           String?
+  cashFlowItemNameSnapshot String?
 
   /// Снимок платёжных реквизитов на момент создания заявки. Копируются
   /// из `Supplier.*`, далее редактируются прямо в заявке. Все nullable.
@@ -4524,6 +4543,7 @@ model SupplierPaymentRequest {
 
   @@index([purchaseOrderId])
   @@index([supplierId])
+  @@index([cashFlowItemId])
   @@index([status, createdAt])
 }
 
@@ -6825,6 +6845,10 @@ model CashFlowItem {
 
   entries          CashFlowEntry[]
   supplierPayments SupplierPayment[]
+  /// Поставщики, для которых эта статья выбрана дефолтной (см.
+  /// `Supplier.defaultCashFlowItemId`). `onDelete: SetNull` со стороны
+  /// `Supplier` — удаление статьи лишь обнуляет дефолт у карточек.
+  defaultForSuppliers Supplier[] @relation("SupplierDefaultCashFlowItem")
 
   @@index([isActive])
 }

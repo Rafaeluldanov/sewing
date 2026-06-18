@@ -2862,6 +2862,24 @@ export class SupplierInactiveException extends BusinessException {
 }
 
 /**
+ * Удаление поставщика заблокировано: на него выписаны заказы
+ * поставщику (`PurchaseOrder`, hard-FK `onDelete: Restrict`). Чтобы не
+ * «потерять» закупочные документы, физическое удаление запрещаем —
+ * предлагаем архивировать карточку (`status = INACTIVE`). Контакты и
+ * каталог удаляются каскадом, поэтому блокируем только по PO.
+ */
+export class SupplierHasPurchaseOrdersException extends BusinessException {
+  constructor(count: number) {
+    super(
+      'SUPPLIER_HAS_PURCHASE_ORDERS',
+      `Нельзя удалить поставщика: на него выписано заказов — ${count}. ` +
+        'Архивируйте карточку (статус «Неактивен») вместо удаления.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Контакт поставщика не найден. Бросается из
  * `SuppliersService.updateContact/deleteContact`, либо когда указан
  * `contactId`, не принадлежащий заданному `supplierId`.

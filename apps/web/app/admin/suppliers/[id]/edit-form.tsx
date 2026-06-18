@@ -7,6 +7,10 @@ import {
   SUPPLIER_STATUS_LABELS,
   type SupplierDetailDto,
 } from '@sewing/shared/suppliers';
+import {
+  CASH_FLOW_DIRECTION_LABELS,
+  type CashFlowItemDto,
+} from '@sewing/shared/treasury';
 import { updateSupplierAction } from '../actions';
 import {
   initialUpdateSupplierState,
@@ -34,13 +38,23 @@ function SubmitButton() {
  */
 export function EditSupplierForm({
   supplier,
+  cashFlowItems,
 }: {
   supplier: SupplierDetailDto;
+  /** Активные статьи ДДС из казначейства для выпадающего списка. */
+  cashFlowItems: CashFlowItemDto[];
 }) {
   const [state, formAction] = useFormState<UpdateSupplierState, FormData>(
     updateSupplierAction.bind(null, supplier.id),
     initialUpdateSupplierState,
   );
+
+  // Если у поставщика уже выбрана статья, которой нет в активном списке
+  // (например, её деактивировали) — добавим её отдельной опцией, чтобы
+  // сохранение формы случайно не обнулило привязку.
+  const missingCurrent =
+    supplier.defaultCashFlowItemId &&
+    !cashFlowItems.some((i) => i.id === supplier.defaultCashFlowItemId);
 
   return (
     <form action={formAction} className="admin-form">
@@ -127,6 +141,34 @@ export function EditSupplierForm({
           Используются при создании заявки на оплату по заказу поставщику —
           подставляются автоматически (в заявке их можно отредактировать).
         </p>
+        <div className="admin-field">
+          <label htmlFor="supplier-edit-ddsItem">Статья ДДС (казначейство)</label>
+          <select
+            id="supplier-edit-ddsItem"
+            name="defaultCashFlowItemId"
+            defaultValue={supplier.defaultCashFlowItemId ?? ''}
+          >
+            <option value="">— не выбрана —</option>
+            {missingCurrent && supplier.defaultCashFlowItemId && (
+              <option value={supplier.defaultCashFlowItemId}>
+                {supplier.defaultCashFlowItemName ?? 'Текущая статья'} (неактивна)
+              </option>
+            )}
+            {cashFlowItems.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name}
+                {item.direction
+                  ? ` · ${CASH_FLOW_DIRECTION_LABELS[item.direction]}`
+                  : ''}
+                {item.code ? ` (${item.code})` : ''}
+              </option>
+            ))}
+          </select>
+          <span className="admin-muted" style={{ fontSize: '0.78rem' }}>
+            Статья по умолчанию для оплат этому поставщику. Список ведётся в
+            разделе «Казначейство → Статьи ДДС».
+          </span>
+        </div>
         <div className="admin-form-grid">
           <div className="admin-field">
             <label htmlFor="supplier-edit-legalName">Юр. название</label>

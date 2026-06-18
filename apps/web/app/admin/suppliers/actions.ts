@@ -30,6 +30,7 @@ import {
   createSupplier,
   createSupplierCatalogItem,
   createSupplierContact,
+  deleteSupplier,
   deleteSupplierContact,
   updateSupplier,
   updateSupplierCatalogItem,
@@ -81,6 +82,9 @@ function buildCreateSupplierDto(form: FormData): CreateSupplierDto {
   for (const f of REQUISITE_FIELDS) {
     if (form.get(f) !== null) dto[f] = String(form.get(f) ?? '');
   }
+  if (form.get('defaultCashFlowItemId') !== null) {
+    dto.defaultCashFlowItemId = String(form.get('defaultCashFlowItemId') ?? '');
+  }
   return dto;
 }
 
@@ -95,6 +99,9 @@ function buildUpdateSupplierDto(form: FormData): UpdateSupplierDto {
   if (form.get('comment') !== null) dto.comment = String(form.get('comment') ?? '');
   for (const f of REQUISITE_FIELDS) {
     if (form.get(f) !== null) dto[f] = String(form.get(f) ?? '');
+  }
+  if (form.get('defaultCashFlowItemId') !== null) {
+    dto.defaultCashFlowItemId = String(form.get('defaultCashFlowItemId') ?? '');
   }
   if (form.get('status') !== null) {
     dto.status = String(form.get('status') ?? '').trim() as
@@ -147,6 +154,27 @@ export async function updateSupplierAction(
     const x = explainApiError(e);
     return { error: x.error, errorRequestId: x.requestId };
   }
+}
+
+/**
+ * Физическое удаление поставщика. Бросает человекочитаемую ошибку
+ * (её показывает клиент), если backend заблокировал удаление —
+ * например `SUPPLIER_HAS_PURCHASE_ORDERS` (на поставщика выписаны
+ * заказы). После успеха карточки больше нет — клиент уводит в список.
+ */
+export async function deleteSupplierPageAction(
+  supplierId: string,
+): Promise<void> {
+  try {
+    await deleteSupplier(supplierId);
+  } catch (e) {
+    throw new Error(
+      e instanceof ApiRequestError
+        ? errorText(e)
+        : 'Не удалось удалить поставщика. Обновите страницу и повторите.',
+    );
+  }
+  revalidatePath('/admin/suppliers');
 }
 
 // ---------------------------------------------------------------------------

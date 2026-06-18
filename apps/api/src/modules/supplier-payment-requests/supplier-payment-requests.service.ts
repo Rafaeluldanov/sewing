@@ -12,7 +12,9 @@ import type {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
+  CashFlowItemNotFoundException,
   PurchaseOrderNotFoundException,
+  SupplierNotFoundException,
   SupplierPaymentRequestNotFoundException,
 } from '../../common/errors.js';
 import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
@@ -90,11 +92,29 @@ export class SupplierPaymentRequestsService {
     });
     if (!po) throw new PurchaseOrderNotFoundException();
 
+    // Плательщик: по умолчанию поставщик заказа, но форма может выбрать
+    // другого активного — тогда снимаем его имя/реквизиты. Имя для
+    // снимка берём из снимка PO, если плательщик совпадает с заказом,
+    // иначе — актуальное имя выбранной карточки.
+    let payer = po.supplier;
+    let supplierNameSnapshot = po.supplierNameSnapshot;
+    if (dto.supplierId && dto.supplierId !== po.supplierId) {
+      const chosen = await this.prisma.supplier.findUnique({
+        where: { id: dto.supplierId },
+      });
+      if (!chosen) throw new SupplierNotFoundException();
+      payer = chosen;
+      supplierNameSnapshot = chosen.name;
+    }
+
+    // Статья ДДС: снимаем имя по id (если выбрана). null = без статьи.
+    const cashFlowItem = await this.resolveCashFlowItem(dto.cashFlowItemId);
+
     const amount = new Prisma.Decimal(dto.amount);
 
     // Снимок реквизитов: значение из формы (даже явный `null` = очистка)
     // имеет приоритет; если поле в форме не пришло — берём из карточки
-    // поставщика.
+    // поставщика-плательщика.
     const pick = (
       formValue: string | null | undefined,
       supplierValue: string | null,
@@ -124,17 +144,19 @@ export class SupplierPaymentRequestsService {
         data: {
           number,
           purchaseOrderId: po.id,
-          supplierId: po.supplierId,
-          supplierNameSnapshot: po.supplierNameSnapshot,
-          legalNameSnapshot: pick(dto.legalName, po.supplier.legalName),
-          innSnapshot: pick(dto.inn, po.supplier.inn),
-          kppSnapshot: pick(dto.kpp, po.supplier.kpp),
-          bankNameSnapshot: pick(dto.bankName, po.supplier.bankName),
-          bankAccountSnapshot: pick(dto.bankAccount, po.supplier.bankAccount),
-          bankBikSnapshot: pick(dto.bankBik, po.supplier.bankBik),
+          supplierId: payer.id,
+          supplierNameSnapshot,
+          cashFlowItemId: cashFlowItem.id,
+          cashFlowItemNameSnapshot: cashFlowItem.name,
+          legalNameSnapshot: pick(dto.legalName, payer.legalName),
+          innSnapshot: pick(dto.inn, payer.inn),
+          kppSnapshot: pick(dto.kpp, payer.kpp),
+          bankNameSnapshot: pick(dto.bankName, payer.bankName),
+          bankAccountSnapshot: pick(dto.bankAccount, payer.bankAccount),
+          bankBikSnapshot: pick(dto.bankBik, payer.bankBik),
           bankCorrAccountSnapshot: pick(
             dto.bankCorrAccount,
-            po.supplier.bankCorrAccount,
+            payer.bankCorrAccount,
           ),
           amount,
           currency: dto.currency ?? 'RUB',
@@ -175,7 +197,8 @@ export class SupplierPaymentRequestsService {
       entityId: created.id,
       payload: {
         purchaseOrderId: po.id,
-        supplierId: po.supplierId,
+        supplierId: payer.id,
+        cashFlowItemId: cashFlowItem.id,
         amount: amount.toString(),
         stagesCount: stagesData.length,
         filesCount: savedFiles,
@@ -207,6 +230,9 @@ export class SupplierPaymentRequestsService {
       include: { files: true },
     });
     if (!existing) throw new SupplierPaymentRequestNotFoundException();
+
+    // Статья ДДС: снимок-замена (как реквизиты). Имя резолвим по id.
+    const cashFlowItem = await this.resolveCashFlowItem(dto.cashFlowItemId);
 
     const amount = new Prisma.Decimal(dto.amount);
 
@@ -247,6 +273,8 @@ export class SupplierPaymentRequestsService {
           currency: dto.currency ?? 'RUB',
           comment: dto.comment ?? null,
           status: dto.status ?? existing.status,
+          cashFlowItemId: cashFlowItem.id,
+          cashFlowItemNameSnapshot: cashFlowItem.name,
           // Реквизиты — снимок: форма редактирования всегда шлёт текущие
           // значения (или явный null = очистка), берём как есть.
           legalNameSnapshot: dto.legalName ?? null,
@@ -340,6 +368,28 @@ export class SupplierPaymentRequestsService {
       employeeId: actorEmployeeId ?? null,
     });
   }
+
+  // ===========================================================================
+  // Helpers
+  // ===========================================================================
+
+  /**
+   * Резолв статьи ДДС по id для снимка `{ id, name }`. `null`/`undefined`
+   * → `{ id: null, name: null }` (без статьи). Несуществующий id →
+   * `CashFlowItemNotFoundException` (UI предлагает только активные, но от
+   * гонок и прямого API защищаемся).
+   */
+  private async resolveCashFlowItem(
+    itemId: string | null | undefined,
+  ): Promise<{ id: string | null; name: string | null }> {
+    if (!itemId) return { id: null, name: null };
+    const item = await this.prisma.cashFlowItem.findUnique({
+      where: { id: itemId },
+      select: { id: true, name: true },
+    });
+    if (!item) throw new CashFlowItemNotFoundException();
+    return { id: item.id, name: item.name };
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -367,6 +417,8 @@ function toListItemDto(
     purchaseOrderId: row.purchaseOrderId,
     supplierId: row.supplierId,
     supplierNameSnapshot: row.supplierNameSnapshot,
+    cashFlowItemId: row.cashFlowItemId,
+    cashFlowItemNameSnapshot: row.cashFlowItemNameSnapshot,
     amount: row.amount.toString(),
     currency: row.currency,
     status: row.status,

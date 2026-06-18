@@ -18,8 +18,10 @@ import type {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
+  CashFlowItemNotFoundException,
   SupplierCatalogItemNotFoundException,
   SupplierContactNotFoundException,
+  SupplierHasPurchaseOrdersException,
   SupplierNotFoundException,
 } from '../../common/errors.js';
 
@@ -73,6 +75,7 @@ export class SuppliersService {
       where,
       orderBy: [{ status: 'asc' }, { name: 'asc' }],
       include: {
+        defaultCashFlowItem: { select: { id: true, name: true } },
         _count: { select: { contacts: true, catalogItems: true } },
       },
     });
@@ -83,6 +86,7 @@ export class SuppliersService {
     const row = await this.prisma.supplier.findUnique({
       where: { id },
       include: {
+        defaultCashFlowItem: { select: { id: true, name: true } },
         contacts: {
           orderBy: [{ isPrimary: 'desc' }, { name: 'asc' }],
         },
@@ -100,6 +104,7 @@ export class SuppliersService {
     dto: CreateSupplierDto,
     actorEmployeeId?: string | null,
   ): Promise<SupplierDetailDto> {
+    await this.assertCashFlowItemExists(dto.defaultCashFlowItemId ?? null);
     const created = await this.prisma.supplier.create({
       data: {
         name: dto.name,
@@ -114,6 +119,7 @@ export class SuppliersService {
         bankAccount: dto.bankAccount ?? null,
         bankBik: dto.bankBik ?? null,
         bankCorrAccount: dto.bankCorrAccount ?? null,
+        defaultCashFlowItemId: dto.defaultCashFlowItemId ?? null,
         status: dto.status ?? 'ACTIVE',
       },
     });
@@ -158,6 +164,13 @@ export class SuppliersService {
     if (dto.bankCorrAccount !== undefined) {
       data.bankCorrAccount = dto.bankCorrAccount;
     }
+    if (dto.defaultCashFlowItemId !== undefined) {
+      await this.assertCashFlowItemExists(dto.defaultCashFlowItemId);
+      data.defaultCashFlowItem =
+        dto.defaultCashFlowItemId === null
+          ? { disconnect: true }
+          : { connect: { id: dto.defaultCashFlowItemId } };
+    }
     if (dto.status !== undefined) data.status = dto.status;
 
     if (Object.keys(data).length === 0) return this.get(id);
@@ -192,6 +205,41 @@ export class SuppliersService {
       employeeId: actorEmployeeId ?? null,
     });
     return this.get(updated.id);
+  }
+
+  /**
+   * Физическое удаление поставщика. Каскадом уходят контакты и каталог
+   * (`onDelete: Cascade`), у `WorkshopNeed`/`PurchaseReceipt` ссылка
+   * обнуляется (`SetNull`). Удаление блокируется, если на поставщика
+   * выписаны заказы поставщику (`PurchaseOrder`, `onDelete: Restrict`) —
+   * тогда предлагаем архивировать карточку (`status = INACTIVE`).
+   */
+  async delete(id: string, actorEmployeeId?: string | null): Promise<void> {
+    const current = await this.prisma.supplier.findUnique({
+      where: { id },
+      include: { _count: { select: { purchaseOrders: true } } },
+    });
+    if (!current) throw new SupplierNotFoundException();
+    if (current._count.purchaseOrders > 0) {
+      throw new SupplierHasPurchaseOrdersException(
+        current._count.purchaseOrders,
+      );
+    }
+
+    await this.prisma.supplier.delete({ where: { id } });
+    this.logger.log(
+      `event=supplier.delete id=${id} name="${current.name}"`,
+    );
+    await this.audit.log({
+      event: 'SUPPLIER_DELETED',
+      entityType: 'SUPPLIER',
+      entityId: id,
+      payload: {
+        name: current.name,
+        status: current.status,
+      },
+      employeeId: actorEmployeeId ?? null,
+    });
   }
 
   // ===========================================================================
@@ -501,13 +549,33 @@ export class SuppliersService {
     if (!row) throw new SupplierNotFoundException();
   }
 
+  /**
+   * Проверяем, что выбранная статья ДДС существует (если задана).
+   * Неактивные статьи разрешаем: дропдаун в UI предлагает только
+   * активные, но уже привязанную и позже деактивированную статью не
+   * заставляем менять при правке карточки. `null` — снятие дефолта.
+   */
+  private async assertCashFlowItemExists(
+    itemId: string | null,
+  ): Promise<void> {
+    if (!itemId) return;
+    const row = await this.prisma.cashFlowItem.findUnique({
+      where: { id: itemId },
+      select: { id: true },
+    });
+    if (!row) throw new CashFlowItemNotFoundException();
+  }
+
   // ---------------------------------------------------------------------------
   // Mappers
   // ---------------------------------------------------------------------------
 
   private toListItemDto(
     row: Prisma.SupplierGetPayload<{
-      include: { _count: { select: { contacts: true; catalogItems: true } } };
+      include: {
+        defaultCashFlowItem: { select: { id: true; name: true } };
+        _count: { select: { contacts: true; catalogItems: true } };
+      };
     }>,
   ): SupplierListItemDto {
     return {
@@ -524,6 +592,8 @@ export class SuppliersService {
       bankAccount: row.bankAccount,
       bankBik: row.bankBik,
       bankCorrAccount: row.bankCorrAccount,
+      defaultCashFlowItemId: row.defaultCashFlowItemId,
+      defaultCashFlowItemName: row.defaultCashFlowItem?.name ?? null,
       status: row.status,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
@@ -535,6 +605,7 @@ export class SuppliersService {
   private toDetailDto(
     row: Prisma.SupplierGetPayload<{
       include: {
+        defaultCashFlowItem: { select: { id: true; name: true } };
         contacts: true;
         catalogItems: true;
         _count: { select: { contacts: true; catalogItems: true } };

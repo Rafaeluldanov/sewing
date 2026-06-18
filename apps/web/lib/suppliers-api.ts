@@ -61,6 +61,17 @@ export function updateSupplier(
   });
 }
 
+/**
+ * Физическое удаление поставщика (`DELETE /suppliers/:id`). Backend
+ * блокирует удаление 409-кой (`SUPPLIER_HAS_PURCHASE_ORDERS`), если на
+ * поставщика выписаны заказы — тогда карточку нужно архивировать.
+ */
+export function deleteSupplier(id: string): Promise<void> {
+  return apiFetch<void>(`/suppliers/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Contacts
 // ---------------------------------------------------------------------------

@@ -18,8 +18,10 @@ import {
   SUPPLIER_STATUS_LABELS,
   type SupplierStatus,
 } from '@sewing/shared/suppliers';
+import type { CashFlowItemDto } from '@sewing/shared/treasury';
 import { ApiRequestError } from '@/lib/api';
 import { getSupplier } from '@/lib/suppliers-api';
+import { listCashFlowItems } from '@/lib/treasury-api';
 import {
   AdminCard,
   AdminPageShell,
@@ -30,6 +32,7 @@ import {
 import type { AdminStatusTone } from '@/lib/admin-labels';
 import { CatalogSection } from './catalog-section';
 import { ContactsSection } from './contacts-section';
+import { DeleteSupplierCard } from './delete-supplier-card';
 import { EditSupplierForm } from './edit-form';
 
 export const dynamic = 'force-dynamic';
@@ -70,6 +73,16 @@ export default async function AdminSupplierDetailPage({
     throw e;
   }
 
+  // Активные статьи ДДС для выпадающего списка в форме. Падение
+  // казначейства не должно ронять карточку поставщика — деградируем
+  // до пустого списка (поле просто покажет «— не выбрана —»).
+  let cashFlowItems: CashFlowItemDto[] = [];
+  try {
+    cashFlowItems = await listCashFlowItems({ activeOnly: true });
+  } catch {
+    cashFlowItems = [];
+  }
+
   return (
     <AdminPageShell
       icon={<Truck size={22} strokeWidth={1.6} aria-hidden />}
@@ -108,6 +121,12 @@ export default async function AdminSupplierDetailPage({
               <dt>Комментарий</dt>
               <dd>
                 {supplier.comment ?? <span className="admin-muted">—</span>}
+              </dd>
+              <dt>Статья ДДС</dt>
+              <dd>
+                {supplier.defaultCashFlowItemName ?? (
+                  <span className="admin-muted">—</span>
+                )}
               </dd>
               <dt>Статус</dt>
               <dd>
@@ -152,7 +171,18 @@ export default async function AdminSupplierDetailPage({
 
           <AdminCard>
             <AdminSectionHeader title="Редактирование" />
-            <EditSupplierForm supplier={supplier} />
+            <EditSupplierForm
+              supplier={supplier}
+              cashFlowItems={cashFlowItems}
+            />
+          </AdminCard>
+
+          <AdminCard>
+            <AdminSectionHeader title="Удаление" />
+            <DeleteSupplierCard
+              supplierId={supplier.id}
+              supplierName={supplier.name}
+            />
           </AdminCard>
         </div>
 

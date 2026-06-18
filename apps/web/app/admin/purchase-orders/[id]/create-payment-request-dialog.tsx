@@ -9,6 +9,8 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Wallet } from 'lucide-react';
+import type { SupplierListItemDto } from '@sewing/shared/suppliers';
+import type { CashFlowItemDto } from '@sewing/shared/treasury';
 import {
   PaymentRequestFormModal,
   type PaymentRequestRequisitesPrefill,
@@ -23,6 +25,15 @@ interface Props {
   defaultAmount: string | null;
   defaultCurrency?: string | null;
   requisites: PaymentRequestRequisitesPrefill;
+  /** Активные поставщики для выбора плательщика (с реквизитами + ДДС). */
+  suppliers: SupplierListItemDto[];
+  /** Активные статьи ДДС для выпадающего списка. */
+  cashFlowItems: CashFlowItemDto[];
+  /** Поставщик заказа — плательщик по умолчанию. */
+  initialSupplierId: string;
+  /** Статья ДДС поставщика заказа — дефолт. */
+  initialCashFlowItemId: string | null;
+  initialCashFlowItemName?: string | null;
 }
 
 export function CreatePaymentRequestDialog({
@@ -31,6 +42,11 @@ export function CreatePaymentRequestDialog({
   defaultAmount,
   defaultCurrency,
   requisites,
+  suppliers,
+  cashFlowItems,
+  initialSupplierId,
+  initialCashFlowItemId,
+  initialCashFlowItemName,
 }: Props) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
@@ -53,6 +69,11 @@ export function CreatePaymentRequestDialog({
         onSaved={() => router.refresh()}
         purchaseOrderId={purchaseOrderId}
         supplierName={supplierName}
+        suppliers={suppliers}
+        cashFlowItems={cashFlowItems}
+        initialSupplierId={initialSupplierId}
+        initialCashFlowItemId={initialCashFlowItemId}
+        initialCashFlowItemName={initialCashFlowItemName}
         initialAmount={defaultAmount}
         initialCurrency={defaultCurrency ?? null}
         initialRequisites={requisites}

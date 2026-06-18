@@ -14,6 +14,7 @@ import { useCallback, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Loader2, Pencil, Trash2 } from 'lucide-react';
 import type { SupplierPaymentRequestDetailDto } from '@sewing/shared/supplier-payment-requests';
+import type { CashFlowItemDto } from '@sewing/shared/treasury';
 import { PaymentRequestFormModal } from './payment-request-form-modal';
 import {
   deleteSupplierPaymentRequestAction,
@@ -25,6 +26,8 @@ interface Props {
   requestId: string;
   requestNumber: string;
   supplierName: string;
+  /** Активные статьи ДДС — для выпадающего списка в форме редактирования. */
+  cashFlowItems: CashFlowItemDto[];
 }
 
 export function PaymentRequestRowActions({
@@ -32,6 +35,7 @@ export function PaymentRequestRowActions({
   requestId,
   requestNumber,
   supplierName,
+  cashFlowItems,
 }: Props) {
   const router = useRouter();
   const [detail, setDetail] = useState<SupplierPaymentRequestDetailDto | null>(
@@ -121,6 +125,10 @@ export function PaymentRequestRowActions({
           purchaseOrderId={purchaseOrderId}
           requestId={requestId}
           supplierName={supplierName}
+          cashFlowItems={cashFlowItems}
+          initialSupplierId={detail.supplierId}
+          initialCashFlowItemId={detail.cashFlowItemId}
+          initialCashFlowItemName={detail.cashFlowItemNameSnapshot}
           initialAmount={detail.amount}
           initialCurrency={detail.currency}
           initialComment={detail.comment}

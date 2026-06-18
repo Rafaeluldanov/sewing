@@ -39,6 +39,11 @@ import {
   SUPPLIER_PAYMENT_REQUEST_STATUS_LABELS,
   type SupplierPaymentRequestStatus,
 } from '@sewing/shared/supplier-payment-requests';
+import type { SupplierListItemDto } from '@sewing/shared/suppliers';
+import {
+  CASH_FLOW_DIRECTION_LABELS,
+  type CashFlowItemDto,
+} from '@sewing/shared/treasury';
 import { ModalPortal } from '@/components/modal-portal';
 import {
   createSupplierPaymentRequestAction,
@@ -81,6 +86,21 @@ interface Props {
   supplierName: string;
   /** id заявки — обязателен в edit-режиме. */
   requestId?: string;
+
+  /**
+   * Список активных поставщиков для выбора плательщика (create-режим).
+   * Содержит реквизиты и дефолтную статью ДДС — авто-подстановка идёт из
+   * этого списка без доп. запроса. В edit-режиме можно не передавать.
+   */
+  suppliers?: SupplierListItemDto[];
+  /** Активные статьи ДДС (казначейство) для выпадающего списка. */
+  cashFlowItems: CashFlowItemDto[];
+  /** Поставщик-плательщик по умолчанию (create — из заказа, edit — из заявки). */
+  initialSupplierId: string;
+  /** Статья ДДС по умолчанию (create — из карточки поставщика, edit — из заявки). */
+  initialCashFlowItemId: string | null;
+  /** Имя статьи ДДС по умолчанию — для опции, если статья уже неактивна. */
+  initialCashFlowItemName?: string | null;
 
   /** Начальные значения (create — предзаполнение, edit — из заявки). */
   initialAmount: string | null;
@@ -130,6 +150,11 @@ export function PaymentRequestFormModal({
   purchaseOrderId,
   supplierName,
   requestId,
+  suppliers,
+  cashFlowItems,
+  initialSupplierId,
+  initialCashFlowItemId,
+  initialCashFlowItemName,
   initialAmount,
   initialCurrency,
   initialComment,
@@ -139,6 +164,7 @@ export function PaymentRequestFormModal({
   existingFiles,
 }: Props) {
   const isEdit = mode === 'edit';
+  const supplierOptions = suppliers ?? [];
 
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -147,6 +173,10 @@ export function PaymentRequestFormModal({
   const [currency, setCurrency] = useState('RUB');
   const [comment, setComment] = useState('');
   const [status, setStatus] = useState<string>('DRAFT');
+  const [supplierId, setSupplierId] = useState(initialSupplierId);
+  const [cashFlowItemId, setCashFlowItemId] = useState(
+    initialCashFlowItemId ?? '',
+  );
   const [req, setReq] = useState<PaymentRequestRequisitesPrefill>(initialRequisites);
   const [stages, setStages] = useState<PaymentRequestStageRow[]>([DEFAULT_STAGE]);
   const [files, setFiles] = useState<File[]>([]);
@@ -164,6 +194,8 @@ export function PaymentRequestFormModal({
     setCurrency((initialCurrency ?? 'RUB') || 'RUB');
     setComment(initialComment ?? '');
     setStatus(initialStatus ?? 'DRAFT');
+    setSupplierId(initialSupplierId);
+    setCashFlowItemId(initialCashFlowItemId ?? '');
     setReq(initialRequisites);
     setStages(
       initialStages && initialStages.length > 0
@@ -179,6 +211,38 @@ export function PaymentRequestFormModal({
     if (submitting) return;
     onClose();
   }, [submitting, onClose]);
+
+  // Смена поставщика-плательщика (create-режим): подтягиваем реквизиты и
+  // дефолтную статью ДДС прямо из переданного списка — без доп. запроса.
+  const onSupplierChange = useCallback(
+    (nextId: string) => {
+      setSupplierId(nextId);
+      const s = supplierOptions.find((x) => x.id === nextId);
+      if (!s) return;
+      setReq({
+        legalName: s.legalName,
+        inn: s.inn,
+        kpp: s.kpp,
+        bankName: s.bankName,
+        bankAccount: s.bankAccount,
+        bankBik: s.bankBik,
+        bankCorrAccount: s.bankCorrAccount,
+      });
+      setCashFlowItemId(s.defaultCashFlowItemId ?? '');
+    },
+    [supplierOptions],
+  );
+
+  // Если выбранная статья ДДС не входит в активный список (например, её
+  // деактивировали) — покажем её отдельной опцией, чтобы не «потерять».
+  const cashFlowMissing =
+    cashFlowItemId !== '' &&
+    !cashFlowItems.some((i) => i.id === cashFlowItemId);
+  const cashFlowMissingName =
+    supplierOptions.find((s) => s.defaultCashFlowItemId === cashFlowItemId)
+      ?.defaultCashFlowItemName ??
+    initialCashFlowItemName ??
+    'Текущая статья';
 
   const totalNum = parseNum(amount);
   const stageView = useMemo(
@@ -289,6 +353,7 @@ export function PaymentRequestFormModal({
         amount: amount.trim().replace(',', '.'),
         currency: currency.trim() || null,
         comment: comment.trim() || null,
+        cashFlowItemId: cashFlowItemId || null,
         legalName: req.legalName ?? '',
         inn: req.inn ?? '',
         kpp: req.kpp ?? '',
@@ -306,6 +371,9 @@ export function PaymentRequestFormModal({
       if (isEdit) {
         payload.status = status;
         payload.keepFileIds = keptFiles.map((f) => f.id);
+      } else {
+        // Плательщик (по умолчанию поставщик заказа, мог быть изменён).
+        payload.supplierId = supplierId || undefined;
       }
 
       const fd = new FormData();
@@ -393,6 +461,29 @@ export function PaymentRequestFormModal({
             </header>
 
             <form className="spr-form" onSubmit={onSubmit}>
+              {!isEdit && supplierOptions.length > 0 && (
+                <div className="spr-field">
+                  <label htmlFor="spr-supplier">Поставщик (плательщик)</label>
+                  <select
+                    id="spr-supplier"
+                    value={supplierId}
+                    onChange={(e) => onSupplierChange(e.target.value)}
+                    disabled={submitting}
+                  >
+                    {supplierOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.name}
+                        {s.status !== 'ACTIVE' ? ' (неактивен)' : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="spr-muted">
+                    Реквизиты и статья ДДС подтягиваются из карточки
+                    выбранного поставщика. По умолчанию — поставщик заказа.
+                  </span>
+                </div>
+              )}
+
               <div className="spr-grid-2">
                 <div className="spr-field">
                   <label htmlFor="spr-amount">Сумма заявки</label>
@@ -418,6 +509,36 @@ export function PaymentRequestFormModal({
                     disabled={submitting}
                   />
                 </div>
+              </div>
+
+              <div className="spr-field">
+                <label htmlFor="spr-dds">Статья ДДС (казначейство)</label>
+                <select
+                  id="spr-dds"
+                  value={cashFlowItemId}
+                  onChange={(e) => setCashFlowItemId(e.target.value)}
+                  disabled={submitting}
+                >
+                  <option value="">— не выбрана —</option>
+                  {cashFlowMissing && (
+                    <option value={cashFlowItemId}>
+                      {cashFlowMissingName} (неактивна)
+                    </option>
+                  )}
+                  {cashFlowItems.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.name}
+                      {item.direction
+                        ? ` · ${CASH_FLOW_DIRECTION_LABELS[item.direction]}`
+                        : ''}
+                      {item.code ? ` (${item.code})` : ''}
+                    </option>
+                  ))}
+                </select>
+                <span className="spr-muted">
+                  По какой статье пойдёт оплата в казначействе. По умолчанию —
+                  статья из карточки поставщика.
+                </span>
               </div>
 
               {isEdit && (

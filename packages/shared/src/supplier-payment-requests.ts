@@ -170,6 +170,26 @@ const BankCorrAccountField = optionalNullableText(
 );
 
 /**
+ * Soft-id (`Supplier.id` плательщика или `CashFlowItem.id` статьи ДДС).
+ * Пустую строку / whitespace нормализует в `null`. Не cuid-валидируем
+ * жёстко — наличие проверяет backend (`SupplierNotFoundException` /
+ * `CashFlowItemNotFoundException`).
+ */
+function optionalSoftId() {
+  return z.preprocess(
+    (v) => {
+      if (v === null || v === undefined) return null;
+      if (typeof v !== 'string') return v;
+      const trimmed = v.trim();
+      return trimmed === '' ? null : trimmed;
+    },
+    z.string().max(40, 'Некорректный идентификатор').nullable().optional(),
+  );
+}
+const PayerSupplierIdField = optionalSoftId();
+const CashFlowItemIdField = optionalSoftId();
+
+/**
  * Обязательная положительная сумма (Decimal(14,2)). Принимает
  * `string | number`, нормализует запятую в точку, отдаёт строку
  * (`Prisma.Decimal` принимает её как есть).
@@ -297,6 +317,18 @@ export type CreateSupplierPaymentRequestStageDto = z.infer<
  * `SUPPLIER_PAYMENT_REQUEST_FILE_FIELD`.
  */
 export const CreateSupplierPaymentRequestSchema = z.object({
+  /**
+   * Поставщик-плательщик. По умолчанию (не передан) — поставщик заказа.
+   * В форме можно выбрать любого активного: тогда сюда едет его id, а
+   * backend снимает его имя/реквизиты.
+   */
+  supplierId: PayerSupplierIdField,
+  /**
+   * Статья ДДС (казначейство). По умолчанию — `defaultCashFlowItemId`
+   * выбранного поставщика, в форме редактируема. `null` — без статьи.
+   */
+  cashFlowItemId: CashFlowItemIdField,
+
   amount: AmountRequiredField,
   currency: CurrencyField,
   comment: CommentField,
@@ -342,6 +374,9 @@ export type CreateSupplierPaymentRequestDto = z.infer<
  *     CANCELLED); не передан — статус не меняется.
  */
 export const UpdateSupplierPaymentRequestSchema = z.object({
+  /** Статья ДДС (казначейство), снимок-замена (как реквизиты). */
+  cashFlowItemId: CashFlowItemIdField,
+
   amount: AmountRequiredField,
   currency: CurrencyField,
   comment: CommentField,
@@ -404,6 +439,13 @@ export interface SupplierPaymentRequestListItemDto {
   purchaseOrderId: string;
   supplierId: string;
   supplierNameSnapshot: string;
+  /**
+   * Статья ДДС (казначейство): `cashFlowItemId` — soft-ссылка на
+   * `CashFlowItem` (`null` если не выбрана), `cashFlowItemNameSnapshot` —
+   * снимок имени для показа без доп. запроса.
+   */
+  cashFlowItemId: string | null;
+  cashFlowItemNameSnapshot: string | null;
   amount: string;
   currency: string | null;
   status: SupplierPaymentRequestStatus | string;

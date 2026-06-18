@@ -42,6 +42,7 @@ import { SuppliersService } from './suppliers.service.js';
  *   GET    /api/suppliers/:id
  *   POST   /api/suppliers
  *   PATCH  /api/suppliers/:id
+ *   DELETE /api/suppliers/:id    (физическое удаление; блок при наличии PO)
  *
  *   POST   /api/suppliers/:id/contacts
  *   PATCH  /api/suppliers/:id/contacts/:contactId
@@ -54,8 +55,9 @@ import { SuppliersService } from './suppliers.service.js';
  *
  * RBAC — `ADMIN` / `SHOP_MANAGER` (новые роли сознательно не вводим).
  *
- * Удаление поставщика физически НЕ делаем — `PATCH status = INACTIVE`
- * через общий endpoint обновления.
+ * Поставщика можно либо архивировать (`PATCH status = INACTIVE`), либо
+ * удалить физически (`DELETE`). Удаление блокируется, если на карточку
+ * выписаны заказы поставщику (`PurchaseOrder`, `onDelete: Restrict`).
  */
 @Controller('suppliers')
 @Roles('ADMIN', 'SHOP_MANAGER')
@@ -96,6 +98,21 @@ export class SuppliersController {
     @CurrentUser() user: AuthPrincipal,
   ) {
     return this.suppliers.update(id, body, user.employeeId);
+  }
+
+  /**
+   * Физическое удаление поставщика. Блокируется 409-кой
+   * (`SUPPLIER_HAS_PURCHASE_ORDERS`), если на него выписаны заказы
+   * поставщику — тогда карточку нужно архивировать (`status = INACTIVE`).
+   * Контакты и каталог уходят каскадом.
+   */
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async remove(
+    @Param('id') id: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<void> {
+    await this.suppliers.delete(id, user.employeeId);
   }
 
   // ---------------------------------------------------------------------------
