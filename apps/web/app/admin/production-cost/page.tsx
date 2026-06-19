@@ -234,46 +234,19 @@ export default async function AdminProductionCostPage({
       title="Себестоимость производства"
       subtitle="По номенклатуре, заказам, операциям и сотрудникам"
       actions={
-        <div
-          style={{
-            display: 'flex',
-            gap: 12,
-            alignItems: 'center',
-            flexWrap: 'wrap',
-            justifyContent: 'flex-end',
-          }}
-        >
-          {data && (
-            <div style={{ display: 'flex', gap: 8 }}>
-              <HeaderStat
-                label="Себестоимость"
-                value={`${formatMoney(
-                  Number(data.totals.totalCostRub) +
-                    Number(data.totals.salaryWorkingCostRub),
-                )} ₽`}
-                sub="материалы + сделка + оклад"
-              />
-              <HeaderStat
-                label="Простой"
-                value={`${formatMoney(data.totals.idleSalaryCostRub)} ₽`}
-                sub={`${formatQty(
-                  Math.round(data.totals.idleSalaryMinutes),
-                )} мин по окладу`}
-                tone="var(--admin-orange-fg)"
-              />
-            </div>
-          )}
-          <div style={{ display: 'flex', gap: 8 }}>
-            <Link
-              href="/admin/production-cost/materials-fact"
-              className="admin-btn"
-            >
-              Материалы: план → факт
-            </Link>
-            <Link href="/production-cost" className="admin-btn admin-btn--ghost">
-              Дневной отчёт цеха
-            </Link>
-          </div>
+        <div style={{ display: 'flex', gap: 8 }}>
+          <Link
+            href="/admin/production-cost/materials-fact"
+            className="admin-btn"
+          >
+            Материалы: план → факт
+          </Link>
+          <Link
+            href="/admin/production-cost/report"
+            className="admin-btn admin-btn--ghost"
+          >
+            Отчёт
+          </Link>
         </div>
       }
     >
@@ -941,54 +914,6 @@ function CostKpi({ tone, Icon, label, value, hint }: CostKpiProps) {
       </div>
       <div className="admin-kpi-card__value">{value}</div>
       {hint && <div className="admin-kpi-card__sub">{hint}</div>}
-    </div>
-  );
-}
-
-/**
- * Компактная плашка мини-отчёта в шапке (правый верхний угол):
- * «Себестоимость» и «Простой» за выбранный период. Меньше, чем
- * `CostKpi`, чтобы помещаться рядом с кнопками действий.
- */
-function HeaderStat({
-  label,
-  value,
-  sub,
-  tone,
-}: {
-  label: string;
-  value: string;
-  sub?: string;
-  tone?: string;
-}) {
-  return (
-    <div
-      style={{
-        display: 'flex',
-        flexDirection: 'column',
-        gap: 1,
-        padding: '6px 12px',
-        borderRadius: 10,
-        border: '1px solid var(--admin-border)',
-        minWidth: 130,
-      }}
-    >
-      <span
-        style={{
-          fontSize: 11,
-          color: 'var(--admin-muted)',
-          textTransform: 'uppercase',
-          letterSpacing: 0.3,
-        }}
-      >
-        {label}
-      </span>
-      <strong style={{ fontSize: 16, color: tone ?? 'var(--admin-fg)' }}>
-        {value}
-      </strong>
-      {sub && (
-        <span style={{ fontSize: 11, color: 'var(--admin-muted)' }}>{sub}</span>
-      )}
     </div>
   );
 }
