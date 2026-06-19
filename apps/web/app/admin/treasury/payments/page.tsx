@@ -140,6 +140,16 @@ export default async function SupplierPaymentsPage() {
 function PaymentsTable({ payments }: { payments: SupplierPaymentDto[] }) {
   const columns: AdminTableColumn<SupplierPaymentDto>[] = [
     {
+      key: 'number',
+      header: 'Номер',
+      render: (p) =>
+        p.number ? (
+          <code style={{ fontSize: '0.82rem' }}>{p.number}</code>
+        ) : (
+          <span className="admin-muted">—</span>
+        ),
+    },
+    {
       key: 'createdAt',
       header: 'Дата',
       render: (p) => formatDate(p.createdAt),

@@ -339,6 +339,11 @@ export type ListSupplierPaymentsQuery = z.infer<
 
 export interface SupplierPaymentDto {
   id: string;
+  /**
+   * Номер заявки `ПРЕФИКС-YYYYMMDD-NNNN` (`ЗП-` зарплата, `РС-` поставщик).
+   * `null` у старых заявок, заведённых до ввода нумерации.
+   */
+  number: string | null;
   /** Вид заявки: оплата поставщику или выплата зарплаты. */
   kind: ExpensePaymentKind;
   /** Заполнены только у `kind = SUPPLIER`. */

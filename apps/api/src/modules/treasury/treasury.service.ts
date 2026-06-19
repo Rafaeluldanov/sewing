@@ -22,6 +22,7 @@ import type {
 } from '@sewing/shared/treasury';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ExpensePaymentNumberService } from './expense-payment-number.service.js';
 import {
   CashAccountInactiveException,
   CashAccountNotFoundException,
@@ -52,7 +53,10 @@ import {
 export class TreasuryService {
   private readonly logger = new Logger(TreasuryService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly expenseNumber: ExpensePaymentNumberService,
+  ) {}
 
   // ===========================================================================
   // Деньги
@@ -553,8 +557,13 @@ export class TreasuryService {
     }
 
     try {
+      const number = await this.expenseNumber.nextNumber(
+        tx,
+        ExpensePaymentKind.SALARY,
+      );
       const row = await tx.supplierPayment.create({
         data: {
+          number,
           kind: ExpensePaymentKind.SALARY,
           supplierId: null,
           supplierNameSnapshot: null,

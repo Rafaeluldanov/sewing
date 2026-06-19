@@ -20,6 +20,7 @@ import {
   SupplierPaymentNotFoundException,
 } from '../../common/errors.js';
 import { TreasuryService } from './treasury.service.js';
+import { ExpensePaymentNumberService } from './expense-payment-number.service.js';
 
 /**
  * Оплата поставщику (Фаза 1 казначейства).
@@ -39,6 +40,7 @@ export class SupplierPaymentService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly treasury: TreasuryService,
+    private readonly expenseNumber: ExpensePaymentNumberService,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -104,20 +106,28 @@ export class SupplierPaymentService {
       poNumber = po.number;
     }
 
-    const row = await this.prisma.supplierPayment.create({
-      data: {
-        supplierId: supplier.id,
-        supplierNameSnapshot: supplier.name,
-        purchaseOrderId: dto.purchaseOrderId ?? null,
-        purchaseOrderNumberSnapshot: poNumber,
-        accountId: dto.accountId,
-        itemId: dto.itemId,
-        amount: new Prisma.Decimal(dto.amount),
-        status: SupplierPaymentStatus.DRAFT,
-        comment: dto.comment ?? null,
-        createdById: employeeId,
-      },
-      include: { account: true, item: true },
+    const row = await this.prisma.$transaction(async (tx) => {
+      const number = await this.expenseNumber.nextNumber(
+        tx,
+        ExpensePaymentKind.SUPPLIER,
+      );
+      return tx.supplierPayment.create({
+        data: {
+          number,
+          kind: ExpensePaymentKind.SUPPLIER,
+          supplierId: supplier.id,
+          supplierNameSnapshot: supplier.name,
+          purchaseOrderId: dto.purchaseOrderId ?? null,
+          purchaseOrderNumberSnapshot: poNumber,
+          accountId: dto.accountId,
+          itemId: dto.itemId,
+          amount: new Prisma.Decimal(dto.amount),
+          status: SupplierPaymentStatus.DRAFT,
+          comment: dto.comment ?? null,
+          createdById: employeeId,
+        },
+        include: { account: true, item: true },
+      });
     });
     return this.map(row);
   }
@@ -303,6 +313,7 @@ export class SupplierPaymentService {
 
   private map(r: {
     id: string;
+    number: string | null;
     kind: ExpensePaymentKind;
     supplierId: string | null;
     supplierNameSnapshot: string | null;
@@ -331,6 +342,7 @@ export class SupplierPaymentService {
         : r.supplierNameSnapshot;
     return {
       id: r.id,
+      number: r.number,
       kind: r.kind,
       supplierId: r.supplierId,
       supplierName: r.supplierNameSnapshot,

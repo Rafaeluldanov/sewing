@@ -3,6 +3,7 @@ import { TreasuryController } from './treasury.controller.js';
 import { TreasuryService } from './treasury.service.js';
 import { SupplierPaymentController } from './supplier-payment.controller.js';
 import { SupplierPaymentService } from './supplier-payment.service.js';
+import { ExpensePaymentNumberService } from './expense-payment-number.service.js';
 
 /**
  * Модуль «Казначейство» (Фаза 0 — журнал движения денежных средств).
@@ -23,7 +24,11 @@ import { SupplierPaymentService } from './supplier-payment.service.js';
  */
 @Module({
   controllers: [TreasuryController, SupplierPaymentController],
-  providers: [TreasuryService, SupplierPaymentService],
+  providers: [
+    TreasuryService,
+    SupplierPaymentService,
+    ExpensePaymentNumberService,
+  ],
   exports: [TreasuryService, SupplierPaymentService],
 })
 export class TreasuryModule {}
