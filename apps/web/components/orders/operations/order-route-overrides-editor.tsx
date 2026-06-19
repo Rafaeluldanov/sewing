@@ -20,12 +20,11 @@
  * заказа; справочник операции не меняется.
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { Fragment, useEffect, useMemo, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { Pencil } from 'lucide-react';
 import type { PricingMode } from '@sewing/shared/operations';
 import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
-import { formatDurationSec } from '@/lib/operations-time-norm';
 import { saveOrderRouteOverridesAction } from '@/app/admin/orders/[id]/route-overrides-actions';
 import { initialRouteOverridesFormState } from '@/app/admin/orders/[id]/route-overrides-form-state';
 
@@ -208,9 +207,17 @@ function SaveButton({ disabled }: { disabled: boolean }) {
 }
 
 const inputStyle: React.CSSProperties = {
-  width: 90,
-  padding: '2px 6px',
-  fontSize: '0.78rem',
+  width: '100%',
+  padding: '3px 6px',
+  fontSize: '0.8rem',
+};
+
+// Единая раскладка колонок строки операции: № · Операция · Оплата ·
+// Цена · Норма. Одинаковый шаблон в шапке и в строках выравнивает поля
+// по столбцам (фикс-ширины + одна гибкая колонка имени).
+const GRID_COLS = '30px minmax(140px, 1fr) 188px 116px 116px';
+const headerTitleStyle: React.CSSProperties = {
+  fontSize: '0.7rem',
 };
 
 export function OrderRouteOverridesEditor({
@@ -301,223 +308,222 @@ export function OrderRouteOverridesEditor({
         </span>
       </div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
-        {steps.map((step) => {
+      <div
+        style={{
+          display: 'grid',
+          gridTemplateColumns: GRID_COLS,
+          columnGap: 12,
+          rowGap: 8,
+          alignItems: 'center',
+        }}
+      >
+        {/* Шапка столбцов — единицы измерения тут, чтобы ячейки строк
+            оставались голыми инпутами и ровно вставали в столбцы. */}
+        <div />
+        <div className="admin-muted" style={headerTitleStyle}>
+          Операция
+        </div>
+        <div className="admin-muted" style={headerTitleStyle}>
+          Оплата
+        </div>
+        <div className="admin-muted" style={headerTitleStyle}>
+          Цена, ₽/шт
+        </div>
+        <div className="admin-muted" style={headerTitleStyle}>
+          Норма, сек/шт
+        </div>
+
+        {steps.map((step, i) => {
           const selMode = modes[step.stepId] ?? effectiveMode(step);
           const showSizeGrid =
             selMode === 'BY_SIZE' || step.timeNormMode === 'BY_SIZE';
 
           return (
-            <div
-              key={step.stepId}
-              data-operation-code={step.operationCode}
-              data-pricing-mode={selMode}
-              style={{
-                border: '1px solid var(--admin-border, #e5e7eb)',
-                borderRadius: 8,
-                padding: '8px 10px',
-              }}
-            >
+            <Fragment key={step.stepId}>
+              {/* Разделитель между операциями (на всю ширину). */}
+              {i > 0 && (
+                <div
+                  style={{
+                    gridColumn: '1 / -1',
+                    borderTop: '1px solid var(--admin-border, #eef0f3)',
+                  }}
+                />
+              )}
+
+              {/* № */}
+              <div style={{ fontWeight: 600, textAlign: 'right' }}>
+                {step.rowNumber}
+              </div>
+
+              {/* Операция */}
               <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: 10,
-                  flexWrap: 'wrap',
-                }}
+                data-operation-code={step.operationCode}
+                data-pricing-mode={selMode}
+                style={{ fontWeight: 500, minWidth: 0 }}
               >
-                <span style={{ minWidth: 22, fontWeight: 600 }}>
-                  {step.rowNumber}
-                </span>
-                <span style={{ flex: '1 1 150px', fontWeight: 500 }}>
-                  {step.operationName}
-                </span>
+                {step.operationName}
+              </div>
 
-                {/* Способ оплаты: Оклад / Сделка / Сделка по размерам */}
-                <label
-                  style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                >
-                  <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
-                    Оплата
-                  </span>
-                  <select
-                    value={selMode}
-                    onChange={(e) =>
-                      setMode(step.stepId, e.target.value as PricingMode)
+              {/* Оплата */}
+              <select
+                value={selMode}
+                onChange={(e) =>
+                  setMode(step.stepId, e.target.value as PricingMode)
+                }
+                style={{ width: '100%', padding: '3px 6px', fontSize: '0.8rem' }}
+                aria-label={`Способ оплаты операции ${step.operationName}`}
+              >
+                {MODE_OPTIONS.map((m) => (
+                  <option key={m} value={m}>
+                    {MODE_LABELS[m]}
+                  </option>
+                ))}
+              </select>
+
+              {/* Цена */}
+              <div>
+                {selMode === 'FIXED' ? (
+                  <input
+                    type="number"
+                    inputMode="decimal"
+                    min={0}
+                    step="0.01"
+                    style={inputStyle}
+                    value={values[rateKey(step.stepId)] ?? ''}
+                    placeholder={
+                      step.fixedRate != null ? String(step.fixedRate) : '—'
                     }
-                    style={{ padding: '2px 6px', fontSize: '0.78rem' }}
-                    aria-label={`Способ оплаты операции ${step.operationName}`}
-                  >
-                    {MODE_OPTIONS.map((m) => (
-                      <option key={m} value={m}>
-                        {MODE_LABELS[m]}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-
-                {/* Цена (только для сделки FIXED) */}
-                {selMode === 'FIXED' && (
-                  <label
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
-                      Цена
-                    </span>
-                    <input
-                      type="number"
-                      inputMode="decimal"
-                      min={0}
-                      step="0.01"
-                      style={inputStyle}
-                      value={values[rateKey(step.stepId)] ?? ''}
-                      placeholder={
-                        step.fixedRate != null ? String(step.fixedRate) : '—'
-                      }
-                      onChange={(e) =>
-                        setField(rateKey(step.stepId), e.target.value)
-                      }
-                      aria-label={`Расценка операции ${step.operationName}, ₽/шт`}
-                    />
-                    <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
-                      ₽/шт
-                    </span>
-                  </label>
-                )}
-
-                {/* Норма времени FIXED (отдельная ось от оплаты) */}
-                {step.timeNormMode === 'FIXED' && (
-                  <label
-                    style={{ display: 'inline-flex', alignItems: 'center', gap: 4 }}
-                  >
-                    <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
-                      Норма
-                    </span>
-                    <input
-                      type="number"
-                      inputMode="numeric"
-                      min={0}
-                      step="1"
-                      style={inputStyle}
-                      value={values[timeKey(step.stepId)] ?? ''}
-                      placeholder={
-                        step.timeNormSec != null ? String(step.timeNormSec) : '—'
-                      }
-                      onChange={(e) =>
-                        setField(timeKey(step.stepId), e.target.value)
-                      }
-                      aria-label={`Норма времени операции ${step.operationName}, сек/шт`}
-                    />
-                    <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
-                      сек/шт
-                      {step.timeNormSec != null && (
-                        <> · по умолч. {formatDurationSec(step.timeNormSec)}</>
-                      )}
-                    </span>
-                  </label>
+                    onChange={(e) =>
+                      setField(rateKey(step.stepId), e.target.value)
+                    }
+                    aria-label={`Расценка операции ${step.operationName}, ₽/шт`}
+                  />
+                ) : (
+                  <span className="admin-muted" style={{ fontSize: '0.74rem' }}>
+                    {selMode === 'BY_SIZE' ? 'по размерам ↓' : '—'}
+                  </span>
                 )}
               </div>
 
-              {/* Поразмерная под-сетка: расценка (если сделка по размерам)
-                  и/или норма (если timeNormMode = BY_SIZE). */}
+              {/* Норма */}
+              <div>
+                {step.timeNormMode === 'FIXED' ? (
+                  <input
+                    type="number"
+                    inputMode="numeric"
+                    min={0}
+                    step="1"
+                    style={inputStyle}
+                    value={values[timeKey(step.stepId)] ?? ''}
+                    placeholder={
+                      step.timeNormSec != null ? String(step.timeNormSec) : '—'
+                    }
+                    onChange={(e) =>
+                      setField(timeKey(step.stepId), e.target.value)
+                    }
+                    aria-label={`Норма времени операции ${step.operationName}, сек/шт`}
+                  />
+                ) : (
+                  <span className="admin-muted" style={{ fontSize: '0.74rem' }}>
+                    {step.timeNormMode === 'BY_SIZE' ? 'по размерам ↓' : '—'}
+                  </span>
+                )}
+              </div>
+
+              {/* Поразмерная под-сетка (на всю ширину строки): расценка
+                  (если сделка по размерам) и/или норма (BY_SIZE). */}
               {showSizeGrid && (
                 <div
                   style={{
-                    marginTop: 8,
-                    display: 'flex',
-                    flexDirection: 'column',
-                    gap: 4,
+                    gridColumn: '1 / -1',
+                    paddingLeft: 42,
+                    paddingTop: 2,
+                    paddingBottom: 2,
                   }}
                 >
-                  <span className="admin-muted" style={{ fontSize: '0.72rem' }}>
+                  <div
+                    className="admin-muted"
+                    style={{ fontSize: '0.72rem', marginBottom: 4 }}
+                  >
                     По размерам (пусто = ставка/норма операции):
-                  </span>
-                  {sizes.map((sz) => (
-                    <div
-                      key={sz.id}
-                      style={{
-                        display: 'flex',
-                        alignItems: 'center',
-                        gap: 8,
-                        flexWrap: 'wrap',
-                      }}
-                    >
-                      <span
-                        style={{ minWidth: 48, fontSize: '0.78rem', fontWeight: 500 }}
-                      >
-                        {sz.code}
-                      </span>
-                      {selMode === 'BY_SIZE' && (
-                        <label
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                        >
-                          <input
-                            type="number"
-                            inputMode="decimal"
-                            min={0}
-                            step="0.01"
-                            style={inputStyle}
-                            value={values[rateKey(step.stepId, sz.id)] ?? ''}
-                            placeholder={
-                              step.ratesBySize[sz.id] != null
-                                ? String(step.ratesBySize[sz.id])
-                                : '—'
-                            }
-                            onChange={(e) =>
-                              setField(rateKey(step.stepId, sz.id), e.target.value)
-                            }
-                            aria-label={`Расценка ${step.operationName} для ${sz.code}, ₽/шт`}
-                          />
-                          <span
-                            className="admin-muted"
-                            style={{ fontSize: '0.72rem' }}
-                          >
-                            ₽/шт
-                          </span>
-                        </label>
-                      )}
-                      {step.timeNormMode === 'BY_SIZE' && (
-                        <label
-                          style={{
-                            display: 'inline-flex',
-                            alignItems: 'center',
-                            gap: 4,
-                          }}
-                        >
-                          <input
-                            type="number"
-                            inputMode="numeric"
-                            min={0}
-                            step="1"
-                            style={inputStyle}
-                            value={values[timeKey(step.stepId, sz.id)] ?? ''}
-                            placeholder={
-                              step.timeNormsBySize[sz.id] != null
-                                ? String(step.timeNormsBySize[sz.id])
-                                : '—'
-                            }
-                            onChange={(e) =>
-                              setField(timeKey(step.stepId, sz.id), e.target.value)
-                            }
-                            aria-label={`Норма ${step.operationName} для ${sz.code}, сек/шт`}
-                          />
-                          <span
-                            className="admin-muted"
-                            style={{ fontSize: '0.72rem' }}
-                          >
-                            сек/шт
-                          </span>
-                        </label>
-                      )}
+                  </div>
+                  <div
+                    style={{
+                      display: 'grid',
+                      gridTemplateColumns: '56px 116px 116px',
+                      columnGap: 12,
+                      rowGap: 4,
+                      alignItems: 'center',
+                    }}
+                  >
+                    <div className="admin-muted" style={headerTitleStyle}>
+                      Размер
                     </div>
-                  ))}
+                    <div className="admin-muted" style={headerTitleStyle}>
+                      {selMode === 'BY_SIZE' ? 'Цена, ₽/шт' : ''}
+                    </div>
+                    <div className="admin-muted" style={headerTitleStyle}>
+                      {step.timeNormMode === 'BY_SIZE' ? 'Норма, сек/шт' : ''}
+                    </div>
+                    {sizes.map((sz) => (
+                      <Fragment key={sz.id}>
+                        <div style={{ fontWeight: 500, fontSize: '0.78rem' }}>
+                          {sz.code}
+                        </div>
+                        <div>
+                          {selMode === 'BY_SIZE' ? (
+                            <input
+                              type="number"
+                              inputMode="decimal"
+                              min={0}
+                              step="0.01"
+                              style={inputStyle}
+                              value={values[rateKey(step.stepId, sz.id)] ?? ''}
+                              placeholder={
+                                step.ratesBySize[sz.id] != null
+                                  ? String(step.ratesBySize[sz.id])
+                                  : '—'
+                              }
+                              onChange={(e) =>
+                                setField(
+                                  rateKey(step.stepId, sz.id),
+                                  e.target.value,
+                                )
+                              }
+                              aria-label={`Расценка ${step.operationName} для ${sz.code}, ₽/шт`}
+                            />
+                          ) : null}
+                        </div>
+                        <div>
+                          {step.timeNormMode === 'BY_SIZE' ? (
+                            <input
+                              type="number"
+                              inputMode="numeric"
+                              min={0}
+                              step="1"
+                              style={inputStyle}
+                              value={values[timeKey(step.stepId, sz.id)] ?? ''}
+                              placeholder={
+                                step.timeNormsBySize[sz.id] != null
+                                  ? String(step.timeNormsBySize[sz.id])
+                                  : '—'
+                              }
+                              onChange={(e) =>
+                                setField(
+                                  timeKey(step.stepId, sz.id),
+                                  e.target.value,
+                                )
+                              }
+                              aria-label={`Норма ${step.operationName} для ${sz.code}, сек/шт`}
+                            />
+                          ) : null}
+                        </div>
+                      </Fragment>
+                    ))}
+                  </div>
                 </div>
               )}
-            </div>
+            </Fragment>
           );
         })}
       </div>
