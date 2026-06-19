@@ -606,6 +606,71 @@ describeWithDb('integration — production cost v2 (управленческий
     expect(
       body.operationLines.some((l) => l.operationName === 'ОТК'),
     ).toBe(false);
+
+    // Рабочая (разнесённая) окладная часть = 6 мин × 10 ₽ = 60 ₽.
+    expect(Number(body.totals.salaryWorkingCostRub)).toBeCloseTo(60, 2);
+    expect(body.totals.salaryWorkingMinutes).toBeCloseTo(6, 1);
+    // Без `SalaryEntry` (никто не отмечен «на смене») простоя нет.
+    expect(Number(body.totals.idleSalaryCostRub)).toBeCloseTo(0, 2);
+    expect(body.totals.idleSalaryMinutes).toBeCloseTo(0, 1);
+  });
+
+  test('простой по окладной части: 480 − разнесённое время × ставка', async () => {
+    const day = utcDay('2026-04-23');
+    // ОТК-сотрудник на оклад: 4800/смена → 10 ₽/мин.
+    await t.prisma.employee.update({
+      where: { id: seed.employees.qc.id },
+      data: {
+        compensationType: 'SALARY',
+        salaryPerShift: new Prisma.Decimal(4800),
+      },
+    });
+    // Был на смене в этот день (источник простоя — `SalaryEntry`).
+    await t.prisma.salaryEntry.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        date: day,
+        amount: new Prisma.Decimal(4800),
+      },
+    });
+    const passport = await createPackedPassport(t, seed, {
+      qtyPlan: 5,
+      qtyGood: 5,
+      cutDate: day,
+    });
+    // ОТК держал паспорт 6 минут → разнесено 6 мин, простой = 474 мин.
+    await t.prisma.passportEvent.createMany({
+      data: [
+        {
+          passportId: passport.id,
+          type: 'ISSUED_TO_EMPLOYEE',
+          operationId: seed.operations.QC.id,
+          employeeId: seed.employees.qc.id,
+          createdAt: new Date('2026-04-23T08:00:00.000Z'),
+        },
+        {
+          passportId: passport.id,
+          type: 'OPERATION_FINISHED',
+          operationId: seed.operations.QC.id,
+          employeeId: seed.employees.qc.id,
+          createdAt: new Date('2026-04-23T08:06:00.000Z'),
+        },
+      ],
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .get('/api/admin/production-cost/v2')
+      .query({ dateFrom: '2026-04-23', dateTo: '2026-04-23' })
+      .set('Cookie', cookies.manager);
+    expect(res.status).toBe(200);
+    const body = res.body as ProductionCostReportLike;
+
+    // Рабочая часть = 6 мин × 10 ₽ = 60 ₽.
+    expect(Number(body.totals.salaryWorkingCostRub)).toBeCloseTo(60, 2);
+    expect(body.totals.salaryWorkingMinutes).toBeCloseTo(6, 1);
+    // Простой = (480 − 6) мин × 10 ₽ = 4740 ₽.
+    expect(body.totals.idleSalaryMinutes).toBeCloseTo(474, 1);
+    expect(Number(body.totals.idleSalaryCostRub)).toBeCloseTo(4740, 2);
   });
 });
 
@@ -619,6 +684,10 @@ interface ProductionCostReportLike {
     operationPieceworkCostRub: string;
     totalCostRub: string;
     marginRub: string;
+    salaryWorkingCostRub: string;
+    salaryWorkingMinutes: number;
+    idleSalaryCostRub: string;
+    idleSalaryMinutes: number;
   };
   nomenclatureGroups: Array<{
     nomenclatureKey: string;

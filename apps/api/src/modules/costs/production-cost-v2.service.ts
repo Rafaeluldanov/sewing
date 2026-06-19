@@ -25,7 +25,9 @@ import {
   type ProductionCostV2EntryStatus,
   type ProductionCostV2Query,
 } from '@sewing/shared/production-cost';
+import { SHIFT_MINUTES } from '@sewing/shared/costs';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { isSalaryEligible } from '../employees/compensation.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
 
 /**
@@ -1174,7 +1176,17 @@ export class ProductionCostV2Service {
     // -------------------------------------------------------------------
     // 10. Totals
     // -------------------------------------------------------------------
-    const totals = computeTotals(nomenclatureGroups);
+    // Окладная часть за период: «рабочая» (разнесённое время × ставка) и
+    // «простой» (max(0, 480 − разнесённое) × ставка) — для мини-отчёта
+    // «Себестоимость / Простой» в шапке. В `totalCostRub` оклад не входит
+    // (он не распределяется по номенклатуре), поэтому считаем отдельно.
+    const salarySplit = await this.computeSalarySplit(
+      from,
+      to,
+      apportionedSalary.rubByPassport,
+      apportionedSalary.trackedMinutesByEmpDay,
+    );
+    const totals = computeTotals(nomenclatureGroups, salarySplit);
 
     // Honest disclosure об оклaде (всегда в MVP):
     if (totals.operationPieceworkCostRub !== '0.00') {
@@ -1208,6 +1220,94 @@ export class ProductionCostV2Service {
       operationLines,
       salaryOperationBreakdown,
       warnings: Array.from(warnings).sort(),
+    };
+  }
+
+  /**
+   * Разбивает окладную часть периода на «рабочую» и «простой».
+   *
+   *   - рабочая часть = Σ разнесённого оклада по паспортам
+   *     (= Σ учтённых минут × ставка); это реально потраченное на
+   *     изготовление время окладников;
+   *   - простой = Σ max(0, 480 − учтённые минуты) × ставка по окладникам,
+   *     у которых за этот день есть `SalaryEntry` (был на смене).
+   *
+   * Формула простоя — та же, что в дневном отчёте
+   * (`CostsService.getProductionCost`, шаги 7–8): держим обе реализации в
+   * синхроне. `trackedMinutesByEmpDay` берём из уже посчитанного разноса,
+   * чтобы не гонять апортионмент второй раз.
+   */
+  private async computeSalarySplit(
+    from: Date,
+    to: Date,
+    rubByPassport: Map<string, number>,
+    trackedMinutesByEmpDay: Map<string, number>,
+  ): Promise<{
+    workingRub: number;
+    workingMinutes: number;
+    idleRub: number;
+    idleMinutes: number;
+  }> {
+    let workingRub = 0;
+    for (const v of rubByPassport.values()) workingRub += v;
+    let workingMinutes = 0;
+    for (const m of trackedMinutesByEmpDay.values()) workingMinutes += m;
+
+    // Окладники, у кого за день есть `SalaryEntry` — «был на смене»
+    // (ровно этот источник использует CostsService, см. ADR-0021).
+    const salaryEntries = await this.prisma.salaryEntry.findMany({
+      where: { date: { gte: from, lte: to } },
+      select: { employeeId: true, date: true },
+    });
+    if (salaryEntries.length === 0) {
+      return {
+        workingRub,
+        workingMinutes: round1Number(workingMinutes),
+        idleRub: 0,
+        idleMinutes: 0,
+      };
+    }
+
+    const employeeIds = Array.from(
+      new Set(salaryEntries.map((s) => s.employeeId)),
+    );
+    const employees = await this.prisma.employee.findMany({
+      where: { id: { in: employeeIds } },
+      select: { id: true, compensationType: true, salaryPerShift: true },
+    });
+    const minuteRate = new Map<string, number>();
+    for (const e of employees) {
+      const perShift = e.salaryPerShift ? Number(e.salaryPerShift) : 0;
+      const perMinute = perShift > 0 ? perShift / SHIFT_MINUTES : 0;
+      if (perMinute > 0 && isSalaryEligible(e.compensationType)) {
+        minuteRate.set(e.id, perMinute);
+      }
+    }
+
+    // Уникальные пары «сотрудник × день на смене».
+    const onShift = new Set<string>();
+    for (const s of salaryEntries) {
+      onShift.add(`${s.employeeId}|${toDateKey(s.date)}`);
+    }
+
+    let idleMinutes = 0;
+    let idleRub = 0;
+    for (const key of onShift) {
+      const sep = key.lastIndexOf('|');
+      const employeeId = key.slice(0, sep);
+      const rate = minuteRate.get(employeeId) ?? 0;
+      if (rate <= 0) continue;
+      const tracked = trackedMinutesByEmpDay.get(key) ?? 0;
+      const idle = Math.max(0, SHIFT_MINUTES - tracked);
+      idleMinutes += idle;
+      idleRub += idle * rate;
+    }
+
+    return {
+      workingRub,
+      workingMinutes: round1Number(workingMinutes),
+      idleRub,
+      idleMinutes: round1Number(idleMinutes),
     };
   }
 
@@ -1438,6 +1538,12 @@ function classifyWorkshopNeed(
 
 function computeTotals(
   groups: ProductionCostNomenclatureGroupDto[],
+  salarySplit: {
+    workingRub: number;
+    workingMinutes: number;
+    idleRub: number;
+    idleMinutes: number;
+  },
 ): ProductionCostTotalsDto {
   let releasedQty = 0;
   let passportsCount = 0;
@@ -1507,6 +1613,10 @@ function computeTotals(
     unitCostRub: unitCostRub ? unitCostRub.toFixed(2) : null,
     marginRub: marginRub.toFixed(2),
     marginPercent: marginPercent ? marginPercent.toFixed(2) : null,
+    salaryWorkingCostRub: num2(salarySplit.workingRub),
+    salaryWorkingMinutes: salarySplit.workingMinutes,
+    idleSalaryCostRub: num2(salarySplit.idleRub),
+    idleSalaryMinutes: salarySplit.idleMinutes,
   };
 }
 
