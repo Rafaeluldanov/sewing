@@ -384,7 +384,9 @@ export class TreasuryService {
     });
     const salaryAccountId = row?.salaryAccountId ?? null;
     const salaryItemId = row?.salaryItemId ?? null;
-    const [account, item] = await Promise.all([
+    const supplierAccountId = row?.supplierAccountId ?? null;
+    const supplierItemId = row?.supplierItemId ?? null;
+    const [account, item, supplierAccount, supplierItem] = await Promise.all([
       salaryAccountId
         ? this.prisma.cashAccount.findUnique({
             where: { id: salaryAccountId },
@@ -397,12 +399,28 @@ export class TreasuryService {
             select: { name: true },
           })
         : Promise.resolve(null),
+      supplierAccountId
+        ? this.prisma.cashAccount.findUnique({
+            where: { id: supplierAccountId },
+            select: { name: true },
+          })
+        : Promise.resolve(null),
+      supplierItemId
+        ? this.prisma.cashFlowItem.findUnique({
+            where: { id: supplierItemId },
+            select: { name: true },
+          })
+        : Promise.resolve(null),
     ]);
     return {
       salaryAccountId,
       salaryAccountName: account?.name ?? null,
       salaryItemId,
       salaryItemName: item?.name ?? null,
+      supplierAccountId,
+      supplierAccountName: supplierAccount?.name ?? null,
+      supplierItemId,
+      supplierItemName: supplierItem?.name ?? null,
     };
   }
 
@@ -423,18 +441,40 @@ export class TreasuryService {
       if (!it) throw new CashFlowItemNotFoundException();
       if (!it.isActive) throw new CashFlowItemInactiveException();
     }
+    if (dto.supplierAccountId) {
+      const a = await this.prisma.cashAccount.findUnique({
+        where: { id: dto.supplierAccountId },
+      });
+      if (!a) throw new CashAccountNotFoundException();
+      if (!a.isActive) throw new CashAccountInactiveException();
+    }
+    if (dto.supplierItemId) {
+      const it = await this.prisma.cashFlowItem.findUnique({
+        where: { id: dto.supplierItemId },
+      });
+      if (!it) throw new CashFlowItemNotFoundException();
+      if (!it.isActive) throw new CashFlowItemInactiveException();
+    }
     await this.prisma.treasurySettings.upsert({
       where: { id: 'default' },
       create: {
         id: 'default',
         salaryAccountId: dto.salaryAccountId ?? null,
         salaryItemId: dto.salaryItemId ?? null,
+        supplierAccountId: dto.supplierAccountId ?? null,
+        supplierItemId: dto.supplierItemId ?? null,
       },
       update: {
         salaryAccountId:
           dto.salaryAccountId === undefined ? undefined : dto.salaryAccountId,
         salaryItemId:
           dto.salaryItemId === undefined ? undefined : dto.salaryItemId,
+        supplierAccountId:
+          dto.supplierAccountId === undefined
+            ? undefined
+            : dto.supplierAccountId,
+        supplierItemId:
+          dto.supplierItemId === undefined ? undefined : dto.supplierItemId,
       },
     });
     return this.getSettings();

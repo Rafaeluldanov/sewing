@@ -18,6 +18,7 @@ import {
   SupplierPaymentRequestNotFoundException,
 } from '../../common/errors.js';
 import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
+import { SupplierPaymentService } from '../treasury/supplier-payment.service.js';
 import { SupplierPaymentRequestNumberService } from './supplier-payment-request-number.service.js';
 import { SupplierPaymentRequestsStorageService } from './supplier-payment-requests-storage.service.js';
 
@@ -44,6 +45,7 @@ export class SupplierPaymentRequestsService {
     private readonly audit: AuditService,
     private readonly numberService: SupplierPaymentRequestNumberService,
     private readonly storage: SupplierPaymentRequestsStorageService,
+    private readonly supplierPayments: SupplierPaymentService,
   ) {}
 
   // ===========================================================================
@@ -140,7 +142,7 @@ export class SupplierPaymentRequestsService {
 
     const created = await this.prisma.$transaction(async (tx) => {
       const number = await this.numberService.nextNumber(tx);
-      return tx.supplierPaymentRequest.create({
+      const row = await tx.supplierPaymentRequest.create({
         data: {
           number,
           purchaseOrderId: po.id,
@@ -167,6 +169,22 @@ export class SupplierPaymentRequestsService {
         },
         select: { id: true },
       });
+      return { id: row.id, number };
+    });
+
+    // Хэндофф в казначейство: по каждому этапу — черновик «заявки на
+    // расход» (`SupplierPayment`). Best-effort и опт-ин: если в настройках
+    // не задан счёт для оплат поставщикам — не делаем ничего (нулевая
+    // регрессия); сбой по одному этапу не валит создание заявки.
+    await this.autoCreateExpenseRequests({
+      requestId: created.id,
+      requestNumber: created.number,
+      supplierId: payer.id,
+      supplierNameSnapshot,
+      purchaseOrderId: po.id,
+      purchaseOrderNumber: po.number,
+      cashFlowItemId: cashFlowItem.id,
+      actorEmployeeId,
     });
 
     // Файлы пишем после создания заявки (запись на диск не транзакционна,
@@ -372,6 +390,72 @@ export class SupplierPaymentRequestsService {
   // ===========================================================================
   // Helpers
   // ===========================================================================
+
+  /**
+   * Хэндофф «заявка на оплату → казначейство». По каждому этапу заявки
+   * создаём черновик «заявки на расход» (`SupplierPayment`) и привязываем
+   * его к этапу (`stage.supplierPaymentId`).
+   *
+   * Опт-ин: счёт берётся из `TreasurySettings.supplierAccountId`; если он
+   * не задан — ничего не делаем (нулевая регрессия). Статья ДДС — из
+   * заявки (`cashFlowItemId`), иначе fallback `supplierItemId` из настроек.
+   * Best-effort: сбой по одному этапу логируем и идём дальше, создание
+   * заявки на оплату не валится.
+   */
+  private async autoCreateExpenseRequests(params: {
+    requestId: string;
+    requestNumber: string;
+    supplierId: string;
+    supplierNameSnapshot: string;
+    purchaseOrderId: string;
+    purchaseOrderNumber: string;
+    cashFlowItemId: string | null;
+    actorEmployeeId?: string | null;
+  }): Promise<void> {
+    const settings = await this.prisma.treasurySettings.findUnique({
+      where: { id: 'default' },
+      select: { supplierAccountId: true, supplierItemId: true },
+    });
+    const accountId = settings?.supplierAccountId ?? null;
+    const itemId = params.cashFlowItemId ?? settings?.supplierItemId ?? null;
+    if (!accountId || !itemId) {
+      this.logger.log(
+        `event=supplier_payment_request.handoff_skipped request=${params.requestId} ` +
+          `accountConfigured=${Boolean(accountId)} itemResolved=${Boolean(itemId)}`,
+      );
+      return;
+    }
+
+    const stages = await this.prisma.supplierPaymentRequestStage.findMany({
+      where: { requestId: params.requestId },
+      orderBy: { sortOrder: 'asc' },
+    });
+    for (const stage of stages) {
+      if (stage.supplierPaymentId) continue;
+      try {
+        const payment = await this.supplierPayments.createDraftFromRequestStage({
+          supplierId: params.supplierId,
+          supplierNameSnapshot: params.supplierNameSnapshot,
+          purchaseOrderId: params.purchaseOrderId,
+          purchaseOrderNumberSnapshot: params.purchaseOrderNumber,
+          accountId,
+          itemId,
+          amount: stage.amount,
+          comment: `Заявка ${params.requestNumber}, этап ${stage.sortOrder}`,
+          createdById: params.actorEmployeeId ?? null,
+        });
+        await this.prisma.supplierPaymentRequestStage.update({
+          where: { id: stage.id },
+          data: { supplierPaymentId: payment.id },
+        });
+      } catch (e) {
+        this.logger.warn(
+          `event=supplier_payment_request.handoff_failed request=${params.requestId} ` +
+            `stage=${stage.id} error=${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
+  }
 
   /**
    * Резолв статьи ДДС по id для снимка `{ id, name }`. `null`/`undefined`

@@ -7166,6 +7166,17 @@ model TreasurySettings {
   /// Статья ДДС для зарплаты (soft-ссылка на `CashFlowItem`).
   salaryItemId    String?
 
+  /// Счёт списания по умолчанию для оплат поставщикам (soft-ссылка на
+  /// `CashAccount`). Если задан, создание заявки на оплату внутри заказа
+  /// поставщику автоматически формирует по каждому этапу черновик
+  /// «заявки на расход» (`SupplierPayment`) на этом счёте. Пусто — авто-
+  /// создание не срабатывает (опт-ин, нулевая регрессия).
+  supplierAccountId String?
+  /// Статья ДДС по умолчанию для оплат поставщикам (soft-ссылка на
+  /// `CashFlowItem`). Fallback, если в заявке на оплату статья не выбрана
+  /// (обычно она приходит из карточки поставщика).
+  supplierItemId    String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }

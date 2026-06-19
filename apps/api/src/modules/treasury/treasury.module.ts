@@ -24,6 +24,6 @@ import { SupplierPaymentService } from './supplier-payment.service.js';
 @Module({
   controllers: [TreasuryController, SupplierPaymentController],
   providers: [TreasuryService, SupplierPaymentService],
-  exports: [TreasuryService],
+  exports: [TreasuryService, SupplierPaymentService],
 })
 export class TreasuryModule {}

@@ -86,6 +86,48 @@ export function SettingsForm({
         </div>
       </div>
 
+      <p className="admin-muted" style={{ marginBottom: 0 }}>
+        Если задать «счёт для оплат поставщикам» — при создании заявки на
+        оплату внутри заказа поставщику по каждому этапу автоматически
+        появится черновик «заявки на расход» в казначействе на этом счёте.
+        Статья ДДС берётся из заявки, а это поле — запасной вариант.
+        Оставьте счёт пустым, чтобы заявки на расход не создавались.
+      </p>
+      <div className="admin-form-grid">
+        <div className="admin-field">
+          <label htmlFor="set-supplier-account">Счёт для оплат поставщикам</label>
+          <select
+            id="set-supplier-account"
+            name="supplierAccountId"
+            defaultValue={settings.supplierAccountId ?? ''}
+          >
+            <option value="">— не задано —</option>
+            {accounts.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="admin-field">
+          <label htmlFor="set-supplier-item">
+            Статья ДДС для оплат поставщикам (по умолчанию)
+          </label>
+          <select
+            id="set-supplier-item"
+            name="supplierItemId"
+            defaultValue={settings.supplierItemId ?? ''}
+          >
+            <option value="">— не задано —</option>
+            {items.map((it) => (
+              <option key={it.id} value={it.id}>
+                {it.name}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {state.error && (
         <div className="error-box" role="alert">
           <XCircle size={16} strokeWidth={1.6} aria-hidden /> {state.error}

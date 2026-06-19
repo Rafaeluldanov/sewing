@@ -314,6 +314,8 @@ export async function updateTreasurySettingsAction(
   const parsed = UpdateTreasurySettingsSchema.safeParse({
     salaryAccountId: optStr(form, 'salaryAccountId') ?? null,
     salaryItemId: optStr(form, 'salaryItemId') ?? null,
+    supplierAccountId: optStr(form, 'supplierAccountId') ?? null,
+    supplierItemId: optStr(form, 'supplierItemId') ?? null,
   });
   if (!parsed.success) {
     return { error: parsed.error.issues[0]?.message ?? 'Невалидные данные' };

@@ -385,6 +385,10 @@ export const UpdateTreasurySettingsSchema = z.object({
   salaryAccountId: z.string().min(1).nullable().optional(),
   /** Статья ДДС для зарплаты (id `CashFlowItem`) или `null`. */
   salaryItemId: z.string().min(1).nullable().optional(),
+  /** Счёт по умолчанию для оплат поставщикам (id `CashAccount`) или `null`. */
+  supplierAccountId: z.string().min(1).nullable().optional(),
+  /** Статья ДДС по умолчанию для оплат поставщикам (id `CashFlowItem`) или `null`. */
+  supplierItemId: z.string().min(1).nullable().optional(),
 });
 export type UpdateTreasurySettingsDto = z.infer<
   typeof UpdateTreasurySettingsSchema
@@ -395,4 +399,13 @@ export interface TreasurySettingsDto {
   salaryAccountName: string | null;
   salaryItemId: string | null;
   salaryItemName: string | null;
+  /**
+   * Дефолты для авто-создания «заявок на расход» из заявок на оплату
+   * поставщику. `supplierAccountId` — счёт списания (если задан —
+   * хэндофф в казначейство включён), `supplierItemId` — fallback статьи ДДС.
+   */
+  supplierAccountId: string | null;
+  supplierAccountName: string | null;
+  supplierItemId: string | null;
+  supplierItemName: string | null;
 }

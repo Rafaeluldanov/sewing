@@ -122,6 +122,54 @@ export class SupplierPaymentService {
     return this.map(row);
   }
 
+  /**
+   * Хэндофф «заявка на оплату → казначейство»: создаём ЧЕРНОВИК заявки
+   * на расход (`SupplierPayment`, kind SUPPLIER) из этапа заявки на
+   * оплату. Снимки имени/№PO берём из заявки. Бросает, если счёт/статья
+   * ДДС не найдены или неактивны — вызывающий (хэндофф) ловит и
+   * продолжает (best-effort, опт-ин).
+   */
+  async createDraftFromRequestStage(input: {
+    supplierId: string;
+    supplierNameSnapshot: string;
+    purchaseOrderId: string | null;
+    purchaseOrderNumberSnapshot: string | null;
+    accountId: string;
+    itemId: string;
+    amount: Prisma.Decimal;
+    comment: string | null;
+    createdById: string | null;
+  }): Promise<SupplierPaymentDto> {
+    const account = await this.prisma.cashAccount.findUnique({
+      where: { id: input.accountId },
+    });
+    if (!account) throw new CashAccountNotFoundException();
+    if (!account.isActive) throw new CashAccountInactiveException();
+    const item = await this.prisma.cashFlowItem.findUnique({
+      where: { id: input.itemId },
+    });
+    if (!item) throw new CashFlowItemNotFoundException();
+    if (!item.isActive) throw new CashFlowItemInactiveException();
+
+    const row = await this.prisma.supplierPayment.create({
+      data: {
+        kind: ExpensePaymentKind.SUPPLIER,
+        supplierId: input.supplierId,
+        supplierNameSnapshot: input.supplierNameSnapshot,
+        purchaseOrderId: input.purchaseOrderId,
+        purchaseOrderNumberSnapshot: input.purchaseOrderNumberSnapshot,
+        accountId: input.accountId,
+        itemId: input.itemId,
+        amount: input.amount,
+        status: SupplierPaymentStatus.DRAFT,
+        comment: input.comment,
+        createdById: input.createdById,
+      },
+      include: { account: true, item: true },
+    });
+    return this.map(row);
+  }
+
   // ---------------------------------------------------------------------------
   // Согласование (DRAFT → APPROVED)
   // ---------------------------------------------------------------------------

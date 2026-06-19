@@ -29,6 +29,10 @@ export default async function TreasurySettingsPage() {
     salaryAccountName: null,
     salaryItemId: null,
     salaryItemName: null,
+    supplierAccountId: null,
+    supplierAccountName: null,
+    supplierItemId: null,
+    supplierItemName: null,
   };
   let accounts: Awaited<ReturnType<typeof listCashAccounts>> = [];
   let items: Awaited<ReturnType<typeof listCashFlowItems>> = [];
@@ -63,7 +67,10 @@ export default async function TreasurySettingsPage() {
         </div>
       )}
       <AdminCard>
-        <AdminSectionHeader title="Зарплата" hint="автопроводка при выдаче" />
+        <AdminSectionHeader
+          title="Автопроводки"
+          hint="зарплата и оплаты поставщикам"
+        />
         <SettingsForm settings={settings} accounts={accounts} items={items} />
       </AdminCard>
     </AdminPageShell>
