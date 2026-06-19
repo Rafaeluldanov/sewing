@@ -17,6 +17,7 @@
  * отчёта (`../page.tsx`); считается окладной разнос в
  * `ProductionCostV2Service.computeSalarySplit`.
  */
+import type { CSSProperties } from 'react';
 import Link from 'next/link';
 import { CalendarRange, Filter, RotateCcw, Tag, Timer } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
@@ -57,6 +58,12 @@ function formatMinutes(value: number): string {
   if (!Number.isFinite(value)) return '—';
   return Math.round(value).toLocaleString('ru-RU');
 }
+
+const subLabelStyle: CSSProperties = {
+  display: 'block',
+  fontSize: 11,
+  color: 'var(--admin-muted)',
+};
 
 export default async function ProductionCostReportPage({
   searchParams,
@@ -278,26 +285,31 @@ function IdleBreakdown({
           </thead>
           <tbody>
             <tr>
-              <td data-label="Показатель">Разнесённое (рабочее) время</td>
+              <td data-label="Показатель">
+                Рабочее (разнесённое) время
+                <span style={subLabelStyle}>
+                  оплачено и учтено в себестоимости
+                </span>
+              </td>
               <td data-label="Значение" style={{ textAlign: 'right' }}>
                 {formatMinutes(totals.salaryWorkingMinutes)} мин
               </td>
             </tr>
             <tr>
-              <td data-label="Показатель">Время простоя</td>
+              <td data-label="Показатель">
+                Время простоя
+                <span style={subLabelStyle}>480 × смены − рабочее время</span>
+              </td>
               <td data-label="Значение" style={{ textAlign: 'right' }}>
                 {formatMinutes(totals.idleSalaryMinutes)} мин
               </td>
             </tr>
             <tr>
-              <td data-label="Показатель">Оклад (рабочая часть)</td>
-              <td data-label="Значение" style={{ textAlign: 'right' }}>
-                {formatMoney(totals.salaryWorkingCostRub)} ₽
-              </td>
-            </tr>
-            <tr>
               <td data-label="Показатель">
                 <strong>Сумма простоя</strong>
+                <span style={subLabelStyle}>
+                  время простоя × ставка (оклад / 480)
+                </span>
               </td>
               <td data-label="Значение" style={{ textAlign: 'right' }}>
                 <strong>{formatMoney(idle)} ₽</strong>
