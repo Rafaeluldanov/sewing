@@ -877,12 +877,24 @@ export class ProductionBoardService {
 
     // finishedOpIds по кандидатам — для накопительного «дошло/выпущено»
     // (тот же снимок, что у getBoard), а не только текущая позиция.
+    // Пошив закрывается через OPERATION_FINISHED, ОТК — QC_PASSED, ВТО —
+    // WTO_PASSED, упаковка — PACKED; все четыре несут operationId шага.
+    // Без всех четырёх типов drill не узнаёт прошедших ОТК/ВТО/упаковку
+    // (они «закрылись» не OPERATION_FINISHED) — и список по клику расходился
+    // с числом в ячейке, которое getBoard уже считает по этим же событиям.
     const finishedOpsByPassport = new Map<string, Set<string>>();
     if (candidates.length > 0) {
       const finRows = await this.prisma.passportEvent.findMany({
         where: {
           passportId: { in: candidates.map((p) => p.id) },
-          type: PassportEventType.OPERATION_FINISHED,
+          type: {
+            in: [
+              PassportEventType.OPERATION_FINISHED,
+              PassportEventType.QC_PASSED,
+              PassportEventType.WTO_PASSED,
+              PassportEventType.PACKED,
+            ],
+          },
           operationId: { not: null },
         },
         select: { passportId: true, operationId: true },
@@ -931,8 +943,9 @@ export class ProductionBoardService {
     const stageOpId = opRow?.id ?? null;
 
     // Финишёры по паспортам кандидатам на ИМЕННО ЭТОЙ операции.
-    // Если у паспорта `currentEmployeeId = null` И есть
-    // OPERATION_FINISHED на `stageOpId`, атрибутируем группе финишёра
+    // Если у паспорта `currentEmployeeId = null` И есть закрывающее событие
+    // на `stageOpId` (OPERATION_FINISHED — пошив, QC_PASSED — ОТК,
+    // WTO_PASSED — ВТО, PACKED — упаковка), атрибутируем группе финишёра
     // с `released:true` (раздельный блок «✔ Имя»). Без финишёра
     // (data drift / откат маршрута) — fallback анонимная «В буфере».
     const finisherByPassport = new Map<
@@ -943,7 +956,14 @@ export class ProductionBoardService {
       const events = await this.prisma.passportEvent.findMany({
         where: {
           passportId: { in: candidates.map((p) => p.id) },
-          type: PassportEventType.OPERATION_FINISHED,
+          type: {
+            in: [
+              PassportEventType.OPERATION_FINISHED,
+              PassportEventType.QC_PASSED,
+              PassportEventType.WTO_PASSED,
+              PassportEventType.PACKED,
+            ],
+          },
           operationId: stageOpId,
         },
         select: {
@@ -974,9 +994,9 @@ export class ProductionBoardService {
 
       // ПО-ОПЕРАЦИОННО (зеркало getBoard): колонка отражает только то,
       // что реально было НА этой операции.
-      //   - ВЫПУЩЕНО (released:true): есть OPERATION_FINISHED именно на X
-      //     → финишёр X (`finisherByPassport`), иначе «Закрыто» (FINISHED
-      //     без исполнителя — редко);
+      //   - ВЫПУЩЕНО (released:true): есть закрывающее событие именно на X
+      //     (OPERATION_FINISHED/QC_PASSED/WTO_PASSED/PACKED) → финишёр X
+      //     (`finisherByPassport`), иначе «Закрыто» (без исполнителя — редко);
       //   - В РАБОТЕ (released:false): активно работает X и ещё не закрыл.
       // Проскоченную без скана операцию паспорт не «касается» → 0.
       const finishedThisOp =
