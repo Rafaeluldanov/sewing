@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  type OnModuleInit,
+  type OnModuleDestroy,
+} from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
 import type { TenantInfo } from './tenant.types.js';
 
@@ -25,7 +30,7 @@ const DEFAULT_CONNECTION_LIMIT = 5;
  * (применять на provision/migrate deploy, а не лениво).
  */
 @Injectable()
-export class PrismaClientManager implements OnModuleDestroy {
+export class PrismaClientManager implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PrismaClientManager.name);
   /** Map сохраняет порядок вставки → используем его как LRU. */
   private readonly clients = new Map<string, PrismaClient>();
@@ -137,6 +142,28 @@ export class PrismaClientManager implements OnModuleDestroy {
       }
     }
     this.invariantsApplied.add(tenantId);
+  }
+
+  onModuleInit(): void {
+    // Бюджет коннектов: при полном прогреве пул держит до
+    // cacheMax × connection_limit бэкенд-коннектов к Postgres (+ пул
+    // control-plane). Если это превышает заданный потолок кластера
+    // (TENANT_DB_MAX_CONNECTIONS) — громко предупреждаем: иначе под нагрузкой
+    // ensureClient начнёт ловить «too many clients» (риск №2 плана, → PgBouncer).
+    const limit = Number(
+      process.env.TENANT_CONNECTION_LIMIT ?? DEFAULT_CONNECTION_LIMIT,
+    );
+    const budget = this.cacheMax * limit;
+    const ceiling = Number(process.env.TENANT_DB_MAX_CONNECTIONS ?? 0);
+    this.logger.log(
+      `event=tenant.pool.budget cacheMax=${this.cacheMax} connLimit=${limit} maxBackendConns=${budget}`,
+    );
+    if (ceiling > 0 && budget > ceiling) {
+      this.logger.warn(
+        `Бюджет коннектов ${budget} превышает потолок ${ceiling} (TENANT_DB_MAX_CONNECTIONS): ` +
+          'снизьте TENANT_CLIENT_CACHE_MAX/TENANT_CONNECTION_LIMIT или поставьте PgBouncer.',
+      );
+    }
   }
 
   async onModuleDestroy(): Promise<void> {

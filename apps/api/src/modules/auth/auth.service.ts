@@ -7,6 +7,8 @@ import {
   InvalidCredentialsException,
 } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ControlPlaneService } from '../../prisma/control-plane.service.js';
+import { TenantContext } from '../../prisma/tenant-context.js';
 import { signSession, verifySession, type SessionPayload } from './session.js';
 import {
   buildSessionCookieAttributes,
@@ -26,6 +28,9 @@ export class AuthService {
   constructor(
     @Inject(PrismaService) private readonly prisma: PrismaService,
     @Inject(ConfigService) config: ConfigService,
+    @Inject(TenantContext) private readonly tenantContext: TenantContext,
+    @Inject(ControlPlaneService)
+    private readonly controlPlane: ControlPlaneService,
   ) {
     const secret = config.get<string>('JWT_SECRET') ?? '';
     if (!secret || secret === 'change-me-in-prod') {
@@ -87,8 +92,12 @@ export class AuthService {
         ? employee.roles
         : [employee.role];
     const activeRole = employee.activeRole ?? null;
+    // Привязываем сессию к текущему тенанту (мультитенантность). Берём из
+    // TenantContext без throw: при логине вне HTTP-контекста (тесты) или в
+    // single-tenant токен выпускается без `tid`, и проверка не применяется.
+    const tid = this.tenantContext.getStore()?.tenantId;
     const { token, expiresAt } = signSession(
-      { sub: employee.id, role: employee.role, roles },
+      { sub: employee.id, role: employee.role, roles, ...(tid ? { tid } : {}) },
       { secret: this.secret, ttlSeconds: this.ttlSeconds },
     );
     const attrs = buildSessionCookieAttributes({
@@ -143,6 +152,17 @@ export class AuthService {
   async resolvePrincipal(token: string): Promise<AuthPrincipal | null> {
     const payload = verifySession(token, { secret: this.secret });
     if (!payload) return null;
+    // Tenant-binding (мультитенантность): при включённом control-plane токен
+    // обязан быть привязан к ТЕКУЩЕМУ резолвнутому тенанту. Иначе — подделка
+    // домена/заголовка или legacy-токен без `tid`: отвергаем ДО любого
+    // обращения к БД (чтобы не трогать чужую тенант-БД). В single-tenant
+    // (control-plane выключен) проверка не применяется — поведение прежнее.
+    if (this.controlPlane.isEnabled()) {
+      const currentTenantId = this.tenantContext.getStore()?.tenantId ?? null;
+      if (!payload.tid || payload.tid !== currentTenantId) {
+        return null;
+      }
+    }
     const employee = await this.prisma.employee.findUnique({
       where: { id: payload.sub },
       select: {

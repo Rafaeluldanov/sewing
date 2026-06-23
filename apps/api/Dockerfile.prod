@@ -19,6 +19,10 @@ COPY prisma ./prisma
 COPY apps/api ./apps/api
 COPY apps/agent ./apps/agent
 COPY tsconfig.json ./tsconfig.json
+# Скрипты оркестрации тенантов (мультитенантность): deploy-prod.sh при
+# включённом control-plane гоняет `tsx scripts/tenants/migrate-all.ts` ВНУТРИ
+# api-контейнера — без этого COPY файла нет и control-plane-деплой падает.
+COPY scripts ./scripts
 
 RUN npm ci
 RUN npm run build --workspace=@sewing/api
@@ -49,6 +53,9 @@ COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api ./apps/api
 COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/prisma ./prisma
+# Скрипты оркестрации тенантов — нужны в рантайме для tenant:migrate-all
+# (см. builder и scripts/deploy-prod.sh §4b).
+COPY --from=builder /app/scripts ./scripts
 # Только готовый exe из builder — без node_modules агента, без src.
 # Путь должен совпадать с одним из кандидатов в
 # `PrintersController.resolveAgentBundlePath()`.

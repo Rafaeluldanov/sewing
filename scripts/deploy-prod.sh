@@ -208,6 +208,29 @@ else
 fi
 
 # -----------------------------------------------------------------------------
+# 4b. Мультитенантность (DB-per-tenant): если включён control-plane, обычный
+# `migrate deploy` выше затронул только дефолтную БД. Дополнительно:
+#   - control-plane:push — синхронизировать схему реестра тенантов;
+#   - tenant:migrate-all — прокатить prisma/schema.prisma по ВСЕМ тенант-БД
+#     (иначе у непервого тенанта будет «column does not exist» в рантайме).
+# Гейт по наличию CONTROL_PLANE_DATABASE_URL в api-контейнере: single-tenant
+# деплой не затрагивается. Падение = остановка (как и основной migrate).
+# -----------------------------------------------------------------------------
+if [ "${SKIP_MIGRATIONS:-0}" != "1" ] && \
+   "${DC_BASE[@]}" exec -T api sh -lc '[ -n "$CONTROL_PLANE_DATABASE_URL" ]'; then
+  log "control-plane обнаружен → control-plane:push + tenant:migrate-all"
+  if ! "${DC_BASE[@]}" exec -T api npx prisma db push --schema=prisma/control-plane/schema.prisma --skip-generate; then
+    echo "[deploy-prod] FATAL: control-plane db push failed — деплой остановлен." >&2
+    exit 1
+  fi
+  if ! "${DC_BASE[@]}" exec -T api npx tsx scripts/tenants/migrate-all.ts; then
+    echo "[deploy-prod] FATAL: tenant:migrate-all failed (version skew выше) — деплой остановлен." >&2
+    echo "[deploy-prod] Докатить отставших: повторный запуск tenant:migrate-all." >&2
+    exit 1
+  fi
+fi
+
+# -----------------------------------------------------------------------------
 # 5. Status: containers + recent logs (best-effort)
 # -----------------------------------------------------------------------------
 log "docker compose ps"
