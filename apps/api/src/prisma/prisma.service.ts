@@ -1,73 +1,80 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import type { Provider } from '@nestjs/common';
 import { PrismaClient } from '@prisma/client';
+import { PrismaClientManager } from './prisma-client-manager.js';
+import { TenantContext } from './tenant-context.js';
 
 /**
- * Prisma client с обёрткой Nest lifecycle.
+ * Единая точка инжекта Prisma для всех ~84 сервисов.
  *
- * `onModuleInit` дополнительно создаёт partial unique index, который
- * нельзя выразить в `schema.prisma` декларативно (Prisma не поддерживает
- * `@@unique(..., where: ...)`):
+ * Исторически это был singleton `PrismaClient`. Под DB-per-tenant это
+ * больше НЕ один клиент: реальный объект под токеном `PrismaService` —
+ * Proxy, который на каждое обращение (`.order`, `.$transaction`,
+ * `.$queryRaw`, ...) форвардит вызов на `PrismaClient` ТЕКУЩЕГО тенанта
+ * (id берётся из `TenantContext`, клиент — из `PrismaClientManager`).
  *
- *   CREATE UNIQUE INDEX shift_session_active_employee_uniq
- *     ON "ShiftSession" ("employeeId") WHERE "endedAt" IS NULL;
+ * Благодаря Proxy все сервисы продолжают писать `this.prisma.order
+ * .findMany(...)` без изменений — выбор БД скрыт здесь.
  *
- * Это закрепляет инвариант «один открытый shift на сотрудника» на
- * уровне БД, чтобы service-side guard не оставался единственной
- * защитой (см. ADR-0015 «DB invariants MVP 1.1»). Команда идемпотентна
- * (`IF NOT EXISTS`), её безопасно гонять при каждом старте.
+ * Класс оставлен как DI-токен и тип (структурно = `PrismaClient`).
+ * `abstract` — потому что он НЕ инстанцируется через `new`: инстанс
+ * создаёт фабрика `prismaServiceProvider` (Proxy). Lifecycle-хуки
+ * ($connect / $disconnect / инварианты) переехали в `PrismaClientManager`
+ * и `TenantResolverMiddleware`.
  */
-@Injectable()
-export class PrismaService
-  extends PrismaClient
-  implements OnModuleInit, OnModuleDestroy
-{
-  private readonly logger = new Logger(PrismaService.name);
+export abstract class PrismaService extends PrismaClient {}
 
-  async onModuleInit(): Promise<void> {
-    await this.$connect();
-    this.logger.log('Prisma connected');
-    await this.applyMvp11Invariants();
-  }
+/**
+ * Служебные свойства, которые фреймворк/рантайм читают с инстанса
+ * провайдера ВНЕ контекста запроса (на старте/остановке), когда тенант
+ * ещё не выбран:
+ *   - `then` — NestJS делает `await factoryReturnValue` (await читает
+ *     `.then`); Proxy не должен притворяться thenable;
+ *   - lifecycle-хуки — NestJS проверяет их наличие на каждом провайдере.
+ * На такие пробы (и на symbol-интроспекцию) вне контекста отдаём
+ * `undefined`, НЕ резолвя тенанта. Реальные же обращения к Prisma
+ * (`.order`, `.$transaction`, ...) вне контекста по-прежнему дают
+ * громкую понятную ошибку из `requireTenantId()`.
+ */
+const FRAMEWORK_PROBES = new Set<string>([
+  'then',
+  'onModuleInit',
+  'onModuleDestroy',
+  'onApplicationBootstrap',
+  'onApplicationShutdown',
+  'beforeApplicationShutdown',
+]);
 
-  async onModuleDestroy(): Promise<void> {
-    await this.$disconnect();
-  }
-
-  private async applyMvp11Invariants(): Promise<void> {
-    try {
-      await this.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "shift_session_active_employee_uniq"
-           ON "ShiftSession" ("employeeId")
-           WHERE "endedAt" IS NULL`,
-      );
-    } catch (err) {
-      // Не валим старт API — иначе невозможно будет починить мусорные
-      // данные через сам API. Подробности — в логе.
-      this.logger.warn(
-        `Не удалось применить partial unique index shift_session_active_employee_uniq: ${(err as Error).message}`,
-      );
-    }
-
-    // Закрытие раскроя по размеру (ADR-0018): по одной активной
-    // (REQUESTED) и по одной подтверждённой (APPROVED) заявке на
-    // строку `(orderId, productId, sizeId)`. Декларативно через
-    // `@@unique` Prisma этого не выражает (нет partial-where в
-    // generator), поэтому держим в БД явно.
-    try {
-      await this.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "cutting_closure_request_active_uniq"
-           ON "CuttingClosureRequest" ("orderId", "productId", "sizeId")
-           WHERE "status" = 'REQUESTED'`,
-      );
-      await this.$executeRawUnsafe(
-        `CREATE UNIQUE INDEX IF NOT EXISTS "cutting_closure_request_approved_uniq"
-           ON "CuttingClosureRequest" ("orderId", "productId", "sizeId")
-           WHERE "status" = 'APPROVED'`,
-      );
-    } catch (err) {
-      this.logger.warn(
-        `Не удалось применить partial unique indexes для CuttingClosureRequest: ${(err as Error).message}`,
-      );
-    }
-  }
+/**
+ * Proxy, делегирующий все обращения на клиент текущего тенанта.
+ * Функции биндятся на реальный клиент (чтобы `this` в `$transaction`/raw
+ * указывал на него); делегаты моделей (`client.order`) — объекты,
+ * возвращаются как есть и работают со своим `this`.
+ */
+export function createTenantPrismaProxy(
+  manager: PrismaClientManager,
+  context: TenantContext,
+): PrismaService {
+  return new Proxy({} as PrismaService, {
+    get(_target, prop) {
+      if (
+        (typeof prop === 'symbol' || FRAMEWORK_PROBES.has(prop)) &&
+        !context.getStore()
+      ) {
+        return undefined;
+      }
+      const tenantId = context.requireTenantId();
+      const client = manager.getReadyClient(tenantId);
+      const value = Reflect.get(client, prop, client);
+      return typeof value === 'function'
+        ? (value as (...args: unknown[]) => unknown).bind(client)
+        : value;
+    },
+  });
 }
+
+export const prismaServiceProvider: Provider = {
+  provide: PrismaService,
+  useFactory: (manager: PrismaClientManager, context: TenantContext) =>
+    createTenantPrismaProxy(manager, context),
+  inject: [PrismaClientManager, TenantContext],
+};

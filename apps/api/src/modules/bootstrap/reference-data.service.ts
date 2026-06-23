@@ -1,6 +1,9 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { OperationCategory, PricingMode, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { PrismaClientManager } from '../../prisma/prisma-client-manager.js';
+import { TenantContext } from '../../prisma/tenant-context.js';
+import { TenantRegistry } from '../../prisma/tenant-registry.service.js';
 import {
   REFERENCE_OPERATIONS,
   REFERENCE_SIZES,
@@ -37,13 +40,30 @@ import {
 export class ReferenceDataBootstrapService implements OnApplicationBootstrap {
   private readonly logger = new Logger(ReferenceDataBootstrapService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly registry: TenantRegistry,
+    private readonly manager: PrismaClientManager,
+    private readonly context: TenantContext,
+  ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    const operations = await this.ensureOperations();
-    const sizes = await this.ensureSizes();
-    this.logger.log(
-      `event=bootstrap.reference-data.ready operations.created=${operations.created} operations.existing=${operations.existing} sizes.created=${sizes.created} sizes.existing=${sizes.existing}`,
+    // Boot-хук работает ВНЕ HTTP-запроса → TenantContext не установлен
+    // middleware-ом. В Фазе 0 (один тенант) сидим дефолтного тенанта явно,
+    // обернув работу в его контекст. В Фазе 2 этот хук отключается, а сид
+    // справочников переедет в скрипт провижининга тенанта (create-tenant) —
+    // справочники нужно создавать на каждую тенант-БД при её заведении.
+    const tenant = this.registry.getDefault();
+    await this.manager.ensureClient(tenant);
+    await this.context.run(
+      { tenantId: tenant.id, slug: tenant.slug },
+      async () => {
+        const operations = await this.ensureOperations();
+        const sizes = await this.ensureSizes();
+        this.logger.log(
+          `event=bootstrap.reference-data.ready operations.created=${operations.created} operations.existing=${operations.existing} sizes.created=${sizes.created} sizes.existing=${sizes.existing}`,
+        );
+      },
     );
   }
 
