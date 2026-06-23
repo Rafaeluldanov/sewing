@@ -14,7 +14,7 @@
  *   запроса (`next/headers`) и форвардим их в API-fetch.
  */
 
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { getServerApiUrl } from './config';
 
 export interface ApiError {
@@ -142,6 +142,8 @@ export async function apiFetch<T>(
     const cookieHeader = readForwardCookie();
     if (cookieHeader) headers.cookie = cookieHeader;
   }
+  const tenantHost = readForwardTenantHost();
+  if (tenantHost) headers['x-tenant-host'] = tenantHost;
   const res = await fetch(url, {
     method: init.method ?? 'GET',
     headers,
@@ -200,6 +202,8 @@ export async function apiFetchMultipart<T>(
   };
   const cookieHeader = readForwardCookie();
   if (cookieHeader) headers.cookie = cookieHeader;
+  const tenantHost = readForwardTenantHost();
+  if (tenantHost) headers['x-tenant-host'] = tenantHost;
   const res = await fetch(url, {
     method: init.method ?? 'POST',
     headers,
@@ -243,6 +247,24 @@ function readForwardCookie(): string | null {
     const all = cookies().getAll();
     if (all.length === 0) return null;
     return all.map((c) => `${c.name}=${c.value}`).join('; ');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Хост текущего запроса пользователя — форвардим его в API заголовком
+ * `x-tenant-host`, чтобы под мультитенантностью API определил тенанта по
+ * домену клиента, а не по внутреннему `api:3001` (web→api SSR-прокси).
+ * `x-forwarded-host` (от nginx) приоритетнее `host`. Вне запроса — null.
+ */
+function readForwardTenantHost(): string | null {
+  try {
+    const h = headers();
+    const value = h.get('x-forwarded-host') ?? h.get('host');
+    if (!value) return null;
+    const first = value.split(',')[0]?.trim();
+    return first && first.length > 0 ? first : null;
   } catch {
     return null;
   }

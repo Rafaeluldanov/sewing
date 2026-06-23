@@ -2,6 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { OperationCategory, PricingMode, Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { PrismaClientManager } from '../../prisma/prisma-client-manager.js';
+import { ControlPlaneService } from '../../prisma/control-plane.service.js';
 import { TenantContext } from '../../prisma/tenant-context.js';
 import { TenantRegistry } from '../../prisma/tenant-registry.service.js';
 import {
@@ -45,14 +46,23 @@ export class ReferenceDataBootstrapService implements OnApplicationBootstrap {
     private readonly registry: TenantRegistry,
     private readonly manager: PrismaClientManager,
     private readonly context: TenantContext,
+    private readonly controlPlane: ControlPlaneService,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
-    // Boot-хук работает ВНЕ HTTP-запроса → TenantContext не установлен
-    // middleware-ом. В Фазе 0 (один тенант) сидим дефолтного тенанта явно,
-    // обернув работу в его контекст. В Фазе 2 этот хук отключается, а сид
-    // справочников переедет в скрипт провижининга тенанта (create-tenant) —
-    // справочники нужно создавать на каждую тенант-БД при её заведении.
+    // Под control-plane (мультитенантность) этот boot-хук ОТКЛЮЧЁН: сид
+    // справочников переехал в скрипт провижининга тенанта (create-tenant),
+    // т.к. справочники нужны в каждой тенант-БД, а getDefault() сеял бы только
+    // env DATABASE_URL — БД, которая может не соответствовать ни одному тенанту.
+    if (this.controlPlane.isEnabled()) {
+      this.logger.log(
+        'event=bootstrap.reference-data.skipped reason=control-plane-enabled',
+      );
+      return;
+    }
+    // Single-tenant: boot-хук работает ВНЕ HTTP-запроса → TenantContext не
+    // установлен middleware-ом, поэтому сидим дефолтного тенанта явно, обернув
+    // работу в его контекст.
     const tenant = this.registry.getDefault();
     await this.manager.ensureClient(tenant);
     await this.context.run(

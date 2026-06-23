@@ -23,6 +23,12 @@ COPY tsconfig.json ./tsconfig.json
 RUN npm ci
 RUN npm run build --workspace=@sewing/api
 RUN npx prisma generate --schema=prisma/schema.prisma
+# Второй Prisma-клиент (control-plane, мультитенантность): отдельная схема и
+# отдельный output node_modules/.prisma/control-plane-client. ControlPlaneService
+# импортирует его на верхнем уровне (всегда, даже в single-tenant), поэтому без
+# генерации рантайм падает с MODULE_NOT_FOUND. node_modules копируется в runtime
+# ниже, так что отдельный COPY не нужен.
+RUN npx prisma generate --schema=prisma/control-plane/schema.prisma
 
 # Сборка Windows-бинарника агента. esbuild сначала собирает self-contained
 # CJS-бандл (см. apps/agent/package.json scripts.bundle), затем

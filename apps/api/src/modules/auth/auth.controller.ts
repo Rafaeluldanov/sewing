@@ -77,7 +77,9 @@ export class AuthController {
   }
 
   @Get('me')
-  me(@CurrentUser() principal: AuthPrincipal | undefined): MeResponseDto {
+  async me(
+    @CurrentUser() principal: AuthPrincipal | undefined,
+  ): Promise<MeResponseDto> {
     if (!principal) throw new UnauthenticatedException();
     return {
       user: {
@@ -88,9 +90,10 @@ export class AuthController {
         roles: principal.roles,
         activeRole: principal.activeRole,
       },
-      // Runtime-набор модулей тенанта (не зашит в web-билд). См.
-      // FeatureModulesService и packages/shared/src/auth.ts (Фаза 1).
-      modules: this.featureModules.resolve(),
+      // Runtime-набор модулей тенанта (не зашит в web-билд). Источник —
+      // control-plane TenantModule или env (single-tenant). См.
+      // FeatureModulesService и packages/shared/src/auth.ts.
+      modules: await this.featureModules.resolve(),
     };
   }
 }

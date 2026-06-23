@@ -27,6 +27,11 @@ services:
       NODE_ENV: development
       API_PORT: 3001
       DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/myapp
+      # Мультитенантность (DB-per-tenant): БД реестра тенантов. Пусто ⇒
+      # single-tenant fallback (control-plane выключен). Чтобы включить —
+      # задайте CONTROL_PLANE_DATABASE_URL в .env.dev, напр.
+      # postgresql://user:${DB_PASSWORD}@db:5432/control_plane и пересоздайте api.
+      CONTROL_PLANE_DATABASE_URL: ${CONTROL_PLANE_DATABASE_URL:-}
       # Публичные URL dev-окружения. По умолчанию — https://dev.teeon.ru
       # (за nginx-сервисом prod-инсталляции). Локально без nginx переопределите
       # в .env.dev на http://localhost:3000.

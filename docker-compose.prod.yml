@@ -29,6 +29,10 @@ services:
       NODE_ENV: production
       API_PORT: 3001
       DATABASE_URL: postgresql://user:${DB_PASSWORD}@db:5432/myapp
+      # Мультитенантность (DB-per-tenant): БД реестра тенантов. Пусто ⇒
+      # single-tenant fallback (control-plane выключен) — текущее поведение.
+      # Включение: задать CONTROL_PLANE_DATABASE_URL в .env.prod.
+      CONTROL_PLANE_DATABASE_URL: ${CONTROL_PLANE_DATABASE_URL:-}
       # Публичные URL — используются для CORS-whitelist, формирования
       # абсолютных ссылок и Domain в session-cookie. Дефолты прибиты к
       # prod.teeon.ru, поэтому даже без .env.prod конфиг будет валидный.

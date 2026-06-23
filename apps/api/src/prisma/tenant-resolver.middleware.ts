@@ -31,8 +31,22 @@ export class TenantResolverMiddleware implements NestMiddleware {
   ) {}
 
   async use(req: Request, res: Response, next: NextFunction): Promise<void> {
-    const host = req.headers.host;
-    const tenant = this.registry.resolveByHost(host);
+    // Liveness (`/api/health`) НЕ должен зависеть от резолва тенанта — контракт
+    // «всегда 200, если процесс жив» (health.controller, nginx/docker liveness,
+    // deploy-stage health-gate). Под control-plane неизвестный Host иначе дал бы
+    // 404. `/ready` сознательно НЕ исключаем: он проверяет БД и требует тенанта.
+    if (req.path === '/health' || req.path.endsWith('/health')) {
+      next();
+      return;
+    }
+    // Приоритет у `x-tenant-host`: web проксирует SSR-запросы на api с
+    // собственным Host (`api:3001`), поэтому пользовательский домен он
+    // форвардит явным заголовком (см. apps/web/lib/api.ts). Прямые вызовы
+    // (curl/healthcheck) используют обычный Host.
+    const forwarded = req.headers['x-tenant-host'];
+    const host =
+      (Array.isArray(forwarded) ? forwarded[0] : forwarded) ?? req.headers.host;
+    const tenant = await this.registry.resolveByHost(host);
     if (!tenant) {
       this.logger.warn(`event=tenant.unknown host=${host ?? '(none)'}`);
       res.status(404).json({ error: 'UNKNOWN_TENANT', host: host ?? null });

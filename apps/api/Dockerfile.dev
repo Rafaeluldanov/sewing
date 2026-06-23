@@ -16,6 +16,10 @@ RUN npm ci
 # Generate Prisma Client заранее — start:dev не вызывает build,
 # а без сгенерированного клиента nest упадёт.
 RUN npx prisma generate --schema=prisma/schema.prisma
+# Второй клиент (control-plane, мультитенантность) — ControlPlaneService
+# импортирует его всегда, поэтому генерируем и его, иначе свежий dev-стек
+# (или пересозданный анонимный том node_modules) падает с MODULE_NOT_FOUND.
+RUN npx prisma generate --schema=prisma/control-plane/schema.prisma
 
 EXPOSE 3001
 

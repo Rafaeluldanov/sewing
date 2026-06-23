@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService, prismaServiceProvider } from './prisma.service.js';
 import { PrismaClientManager } from './prisma-client-manager.js';
+import { ControlPlaneService } from './control-plane.service.js';
 import { TenantContext } from './tenant-context.js';
 import { TenantRegistry } from './tenant-registry.service.js';
 import { TenantResolverMiddleware } from './tenant-resolver.middleware.js';
@@ -25,6 +26,7 @@ import { TenantResolverMiddleware } from './tenant-resolver.middleware.js';
 @Global()
 @Module({
   providers: [
+    ControlPlaneService,
     TenantContext,
     TenantRegistry,
     PrismaClientManager,
@@ -32,6 +34,7 @@ import { TenantResolverMiddleware } from './tenant-resolver.middleware.js';
   ],
   exports: [
     PrismaService,
+    ControlPlaneService,
     TenantContext,
     TenantRegistry,
     PrismaClientManager,

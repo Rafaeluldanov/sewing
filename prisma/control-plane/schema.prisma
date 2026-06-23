@@ -1,0 +1,91 @@
+// Control-plane схема мультитенантности (DB-per-tenant, Фаза 2).
+//
+// Это ОТДЕЛЬНАЯ БД и ОТДЕЛЬНЫЙ Prisma-клиент (свой `output`), не путать с
+// основной `prisma/schema.prisma` (она описывает БД одного тенанта). Здесь
+// — реестр тенантов: какие компании есть, по каким доменам они доступны,
+// какие модули включены и до какой миграции докатана каждая тенант-БД.
+//
+// Источник данных для рантайма (TenantRegistry / FeatureModulesService) и
+// для скриптов оркестрации миграций / провижининга тенанта.
+//
+// Генерация клиента (host и dev-контейнер):
+//   npx prisma generate --schema=prisma/control-plane/schema.prisma
+// Импорт в коде: `import { PrismaClient } from '.prisma/control-plane-client'`.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../../node_modules/.prisma/control-plane-client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("CONTROL_PLANE_DATABASE_URL")
+}
+
+enum TenantStatus {
+  ACTIVE
+  SUSPENDED
+}
+
+/// Один тенант = одна компания = одна БД (в общем Postgres-кластере).
+model Tenant {
+  id   String @id @default(cuid())
+  /// Стабильный машинный slug (поддомен по умолчанию, ключ кэшей).
+  slug String @unique
+  /// Человекочитаемое название компании (для админки control-plane).
+  name String
+
+  status TenantStatus @default(ACTIVE)
+
+  /// Connection string на БД именно этого тенанта (включая creds).
+  /// Хранится здесь, чтобы один app-инстанс мог обслуживать всех.
+  dbUrl String
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  domains    TenantDomain[]
+  modules    TenantModule[]
+  migration  TenantMigration?
+}
+
+/// Хост → тенант. Поддерживает и поддомены (`crm1.teeon.ru`), и
+/// собственные домены клиента — резолвер не различает, ищет по `host`.
+model TenantDomain {
+  id        String  @id @default(cuid())
+  host      String  @unique
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Основной домен тенанта (для редиректов/писем). Необязателен.
+  isPrimary Boolean @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([tenantId])
+}
+
+/// Включённость модуля для тенанта (runtime feature-флаги, Фаза 1→2).
+/// `moduleKey` совпадает с `FEATURE_MODULE_KEYS` из packages/shared/src/auth.ts.
+/// Отсутствие строки трактуется как default-on (см. FeatureModulesService).
+model TenantModule {
+  id        String  @id @default(cuid())
+  tenantId  String
+  tenant    Tenant  @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  moduleKey String
+  enabled   Boolean @default(true)
+
+  @@unique([tenantId, moduleKey])
+  @@index([tenantId])
+}
+
+/// До какой миграции докатана БД тенанта (отслеживание version skew
+/// оркестратором миграций). Одна строка на тенанта.
+model TenantMigration {
+  id            String   @id @default(cuid())
+  tenantId      String   @unique
+  tenant        Tenant   @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+  /// Имя последней успешно применённой миграции (папка в prisma/migrations).
+  lastMigration String?
+  /// Итог последнего прогона оркестратора: ok | failed.
+  lastStatus    String?
+  updatedAt     DateTime @updatedAt
+}
