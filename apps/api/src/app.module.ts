@@ -61,6 +61,7 @@ import { MeModule } from './modules/me/me.module.js';
 import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
 import { PushModule } from './modules/push/push.module.js';
 import { TreasuryModule } from './modules/treasury/treasury.module.js';
+import { SuperadminModule } from './modules/superadmin/superadmin.module.js';
 
 @Module({
   imports: [
@@ -126,6 +127,7 @@ import { TreasuryModule } from './modules/treasury/treasury.module.js';
     MeModule,
     BootstrapModule,
     PushModule,
+    SuperadminModule,
   ],
 })
 export class AppModule {}

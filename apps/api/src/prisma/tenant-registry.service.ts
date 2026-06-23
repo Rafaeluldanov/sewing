@@ -97,6 +97,20 @@ export class TenantRegistry {
     }
   }
 
+  /**
+   * Сброс кэша резолва. Вызывается из панели супер-админа (тот же процесс)
+   * сразу после изменения статуса/доменов тенанта — чтобы правка вступала в
+   * силу немедленно, а не через TTL.
+   */
+  invalidateAll(): void {
+    this.cache.clear();
+  }
+
+  invalidateHost(host: string | undefined): void {
+    const key = this.normalizeHost(host);
+    if (key) this.cache.delete(key);
+  }
+
   /** Список активных тенантов — для оркестратора миграций (скрипты). */
   async list(): Promise<TenantInfo[]> {
     if (!this.controlPlane.isEnabled()) return [this.defaultTenant];

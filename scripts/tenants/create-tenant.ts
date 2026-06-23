@@ -97,9 +97,21 @@ function parseArgs(): Args {
     dbName,
     hosts: hosts.length > 0 ? hosts : [`${slug}.localhost`],
     adminLogin: single['admin-login'] ?? 'admin',
-    adminPassword: required(single, 'admin-password'),
+    // Пароль предпочтительно через env (не светится в `ps`/argv, CWE-214);
+    // --admin-password оставлен для ручного CLI-запуска.
+    adminPassword: requirePassword(single['admin-password']),
     adminName: single['admin-name'] ?? 'Администратор',
   };
+}
+
+function requirePassword(fromArg: string | undefined): string {
+  const v = process.env.TENANT_ADMIN_PASSWORD ?? fromArg;
+  if (!v) {
+    throw new Error(
+      'Пароль админа не задан: укажите TENANT_ADMIN_PASSWORD (env) или --admin-password',
+    );
+  }
+  return v;
 }
 
 function required(map: Record<string, string>, key: string): string {

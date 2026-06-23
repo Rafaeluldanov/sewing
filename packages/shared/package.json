@@ -60,6 +60,7 @@
     "./order-actual-materials": "./src/order-actual-materials.ts",
     "./order-extra-costs": "./src/order-extra-costs.ts",
     "./treasury": "./src/treasury.ts",
+    "./superadmin": "./src/superadmin.ts",
     "./sizes": "./src/sizes.ts",
     "./cutting-tasks": "./src/cutting-tasks.ts",
     "./colors": "./src/colors.ts",

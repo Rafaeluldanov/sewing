@@ -43,6 +43,13 @@ enum Role {
   /// `ConstructorTask.status` IN_PROGRESS → DONE. Доступа к
   /// admin-разделам/заказам/ценам не имеет.
   CONSTRUCTOR
+  /// Супер-админ control-plane (мультитенантность, Фаза 4). КРОСС-тенантная
+  /// роль: управляет реестром тенантов (создание/suspend, домены, модули,
+  /// статус миграций) через панель `/superadmin`. ВАЖНО: это НЕ tenant-ADMIN —
+  /// доступ к `/api/superadmin/*` даёт ТОЛЬКО эта роль (SuperadminGuard не
+  /// пускает обычного ADMIN). Технически — Employee в системном (default)
+  /// тенанте с этой ролью; войти может только через домен default-тенанта.
+  SUPERADMIN
 }
 
 enum OperationCategory {

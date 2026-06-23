@@ -22,12 +22,15 @@
 import { getPrimaryWorkspace } from './rbac';
 
 const ADMIN_HOME_PATH = '/admin';
+const SUPERADMIN_HOME_PATH = '/superadmin';
 const ANON_PATH = '/login';
 
 export function getDefaultRouteForRole(
   role: string | null | undefined,
 ): string {
   if (!role) return ANON_PATH;
+  // Супер-админ control-plane (мультитенантность) — отдельный landing.
+  if (role === 'SUPERADMIN') return SUPERADMIN_HOME_PATH;
   if (role === 'ADMIN' || role === 'SHOP_MANAGER') return ADMIN_HOME_PATH;
   const primary = getPrimaryWorkspace(role);
   // Если primary workspace — корень `/`, значит роль unknown / без

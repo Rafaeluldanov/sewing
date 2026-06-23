@@ -66,7 +66,13 @@ export type Role =
    * и `ConstructorTask` в `DONE`. Доступа к админке / заказам /
    * терминалам цеха не имеет.
    */
-  | 'CONSTRUCTOR';
+  | 'CONSTRUCTOR'
+  /**
+   * Супер-админ control-plane (мультитенантность, Фаза 4). КРОСС-тенантная
+   * роль: панель `/superadmin` (реестр тенантов). НЕ равна tenant-ADMIN —
+   * `canSeeSuperadmin` пускает ТОЛЬКО эту роль.
+   */
+  | 'SUPERADMIN';
 
 /**
  * Единственная страница, на которую пускают роль `DISPLAY`. Хранится
@@ -296,6 +302,16 @@ export function canSeeAdmin(roles: RolesInput): boolean {
   return anyRoleIn(roles, ADMIN_ALLOWED_ROLES);
 }
 
+/**
+ * Доступ к панели супер-админа control-plane `/superadmin` (Фаза 4).
+ * ВАЖНО: ТОЛЬКО роль `SUPERADMIN` — обычный `ADMIN` сюда НЕ входит (это
+ * кросс-тенантная панель, а ADMIN тенант-скоупный). Зеркалит SuperadminGuard.
+ */
+export const SUPERADMIN_ALLOWED_ROLES: readonly Role[] = ['SUPERADMIN'];
+export function canSeeSuperadmin(roles: RolesInput): boolean {
+  return anyRoleIn(roles, SUPERADMIN_ALLOWED_ROLES);
+}
+
 export function canSeeProductionCost(roles: RolesInput): boolean {
   return anyRoleIn(roles, PRODUCTION_COST_ALLOWED_ROLES);
 }
@@ -340,6 +356,8 @@ const PRIMARY_WORKSPACE_BY_ROLE: Record<Role, string> = {
   SHOPFLOOR_MASTER: SHOPFLOOR_MASTER_ALLOWED_PATH,
   // CONSTRUCTOR — кабинет конструктора `/constructor` (single-workspace).
   CONSTRUCTOR: CONSTRUCTOR_ALLOWED_PATH,
+  // SUPERADMIN — панель control-plane `/superadmin` (кросс-тенантная роль).
+  SUPERADMIN: '/superadmin',
 };
 
 export function getPrimaryWorkspace(role: string | undefined | null): string {
