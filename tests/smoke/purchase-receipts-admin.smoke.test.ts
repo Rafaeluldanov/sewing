@@ -51,8 +51,9 @@ describe('Purchase receipts (Этап 7А) — smoke', () => {
 
   test('Sidebar показывает пункт «Приёмка поставок» только за фичефлагом', () => {
     const src = readSrc('apps/web/components/admin-sidebar.tsx');
-    expect(src).toMatch(/NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS/);
-    expect(src).toMatch(/FEATURE_PURCHASE_RECEIPTS_ENABLED/);
+    // Runtime-гейт: пункт строится при `modules.purchaseReceipts`
+    // (набор с сервера через /api/auth/me), а не из build-time env.
+    expect(src).toMatch(/modules\.purchaseReceipts/);
     expect(src).toMatch(/Приёмка поставок/);
     expect(src).toMatch(/\/admin\/purchase-receipts/);
   });
@@ -228,8 +229,8 @@ describe('Purchase receipts (Этап 7А) — smoke', () => {
     expect(actions).toMatch(/cancelPurchaseReceiptAction/);
   });
 
-  test('.env.example документирует NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS', () => {
+  test('.env.example документирует FEATURE_PURCHASE_RECEIPTS', () => {
     const src = readSrc('.env.example');
-    expect(src).toMatch(/NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS/);
+    expect(src).toMatch(/FEATURE_PURCHASE_RECEIPTS/);
   });
 });

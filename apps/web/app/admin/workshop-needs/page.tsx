@@ -61,7 +61,7 @@ import {
 } from '@sewing/shared/workshop-needs';
 import type { SupplierListItemDto } from '@sewing/shared/suppliers';
 import { ApiRequestError, errorText } from '@/lib/api';
-import { isFeatureEnabled } from '@/lib/feature-flags';
+import { getModules } from '@/lib/modules';
 import { listWorkshopNeeds } from '@/lib/workshop-needs-api';
 import { listSuppliers } from '@/lib/suppliers-api';
 import {
@@ -82,24 +82,10 @@ import {
   type SupplierOption,
 } from './inline-edit-row';
 
-/**
- * Этап 6А «Заказы поставщикам». Bulk-создание PO из выбранных
- * потребностей включается тем же feature-flag, что и сам раздел
- * `/admin/purchase-orders` — иначе toolbar бессмысленен. Default-on
- * (см. `isFeatureEnabled` / `@/lib/feature-flags`).
- */
-const FEATURE_PURCHASE_ORDERS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS,
-);
-
-/**
- * Модуль «Поставщики». Когда включён — в строках потребности
- * показывается выбор поставщика из справочника (`selectedSupplierId`),
- * без которого нельзя создать заказ поставщику. Default-on.
- */
-const FEATURE_SUPPLIERS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_SUPPLIERS,
-);
+// Модули «Поставщики» / «Заказы поставщикам» гейтят inline-блоки этой
+// страницы (выбор поставщика в строках, bulk-создание PO). Под
+// мультитенантность набор приходит в рантайме — `getModules()` ниже
+// внутри компонента, а не из build-time `NEXT_PUBLIC_FEATURE_*`.
 
 export const dynamic = 'force-dynamic';
 
@@ -196,6 +182,8 @@ export default async function AdminWorkshopNeedsPage({
     searchParams?.orderCalculationStatus,
   );
 
+  const modules = await getModules();
+
   let items: WorkshopNeedListItemDto[] = [];
   let error: string | null = null;
   try {
@@ -215,7 +203,7 @@ export default async function AdminWorkshopNeedsPage({
   // проставить `selectedSupplierId` и создать заказ). Грузим только
   // активных; ошибка чтения не валит страницу.
   let supplierOptions: { id: string; name: string }[] = [];
-  if (FEATURE_SUPPLIERS_ENABLED) {
+  if (modules.suppliers) {
     try {
       const suppliers: SupplierListItemDto[] = await listSuppliers();
       supplierOptions = suppliers
@@ -316,7 +304,8 @@ export default async function AdminWorkshopNeedsPage({
           items={items}
           orderCalculationStatus={orderCalculationStatus}
           suppliers={supplierOptions}
-          suppliersEnabled={FEATURE_SUPPLIERS_ENABLED}
+          suppliersEnabled={modules.suppliers}
+          purchaseOrdersEnabled={modules.purchaseOrders}
         />
       </AdminCard>
     </AdminPageShell>
@@ -363,11 +352,13 @@ function OrdersView({
   orderCalculationStatus,
   suppliers,
   suppliersEnabled,
+  purchaseOrdersEnabled,
 }: {
   items: WorkshopNeedListItemDto[];
   orderCalculationStatus: WorkshopNeedOrderCalculationFilter;
   suppliers: SupplierOption[];
   suppliersEnabled: boolean;
+  purchaseOrdersEnabled: boolean;
 }) {
   if (items.length === 0) {
     return <EmptyOrdersState filter={orderCalculationStatus} />;
@@ -381,14 +372,14 @@ function OrdersView({
           group={g}
           suppliers={suppliers}
           suppliersEnabled={suppliersEnabled}
-          bulkSelect={FEATURE_PURCHASE_ORDERS_ENABLED}
+          bulkSelect={purchaseOrdersEnabled}
         />
       ))}
     </div>
   );
   // Bulk-создание заказа доступно и в «По заказам»: оборачиваем весь
   // список в провайдер, чтобы чекбоксы строк и нижний тулбар работали.
-  return FEATURE_PURCHASE_ORDERS_ENABLED ? (
+  return purchaseOrdersEnabled ? (
     <BulkCreatePoProvider needs={items}>{body}</BulkCreatePoProvider>
   ) : (
     body

@@ -3,6 +3,7 @@ import { APP_GUARD } from '@nestjs/core';
 import { AuthService } from './auth.service.js';
 import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
+import { FeatureModulesService } from './feature-modules.service.js';
 
 /**
  * Auth-модуль (MVP 1.1, ADR-0014).
@@ -19,6 +20,7 @@ import { AuthGuard } from './auth.guard.js';
   controllers: [AuthController],
   providers: [
     AuthService,
+    FeatureModulesService,
     {
       provide: APP_GUARD,
       useClass: AuthGuard,

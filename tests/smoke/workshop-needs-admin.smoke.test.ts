@@ -43,8 +43,9 @@ describe('Workshop needs (Этап 4А) — smoke', () => {
 
   test('Sidebar показывает пункт «Потребность цеха» только за фичефлагом', () => {
     const src = readSrc('apps/web/components/admin-sidebar.tsx');
-    expect(src).toMatch(/NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS/);
-    expect(src).toMatch(/FEATURE_WORKSHOP_NEEDS_ENABLED/);
+    // Runtime-гейт: пункт строится при `modules.workshopNeeds` (набор
+    // приходит с сервера через /api/auth/me), а не из build-time env.
+    expect(src).toMatch(/modules\.workshopNeeds/);
     expect(src).toMatch(/Потребность цеха/);
     expect(src).toMatch(/\/admin\/workshop-needs/);
   });
@@ -156,8 +157,8 @@ describe('Workshop needs (Этап 4А) — smoke', () => {
     expect(src).toMatch(/CREATE INDEX "WorkshopNeed_calculationMethod_idx"/);
   });
 
-  test('.env.example документирует NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS', () => {
+  test('.env.example документирует FEATURE_WORKSHOP_NEEDS', () => {
     const src = readSrc('.env.example');
-    expect(src).toMatch(/NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS/);
+    expect(src).toMatch(/FEATURE_WORKSHOP_NEEDS/);
   });
 });

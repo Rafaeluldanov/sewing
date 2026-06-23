@@ -25,7 +25,7 @@ import {
   type PurchaseOrderStatus,
 } from '@sewing/shared/purchase-orders';
 import { ApiRequestError } from '@/lib/api';
-import { isFeatureEnabled } from '@/lib/feature-flags';
+import { getModules } from '@/lib/modules';
 import { getPurchaseOrder } from '@/lib/purchase-orders-api';
 import {
   AdminCard,
@@ -41,17 +41,10 @@ import { PurchaseOrderLinesTable } from './lines-table';
 import { PurchaseOrderReceiptsCard } from './receipts-card';
 import { PaymentRequestsCard } from './payment-requests-card';
 
-/**
- * Этап 7А «Приёмка поставок»: блок «Приёмки» в карточке PO. Гейтится
- * feature-flag-ом, чтобы на пилоте без модуля приёмки блок не
- * появлялся вовсе. Backend `/api/purchase-orders/:id/receipts`
- * остаётся доступным под `ADMIN`/`SHOP_MANAGER` в любом случае —
- * флаг гейтит только UI. Default-on (см. `isFeatureEnabled` /
- * `@/lib/feature-flags`).
- */
-const FEATURE_PURCHASE_RECEIPTS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS,
-);
+// Этап 7А «Приёмка поставок»: блок «Приёмки» в карточке PO гейтится
+// модулем `purchaseReceipts`. Backend `/api/purchase-orders/:id/receipts`
+// доступен под `ADMIN`/`SHOP_MANAGER` всегда — модуль прячет только UI.
+// Набор берётся в рантайме через `getModules()` (а не build-time флаг).
 
 export const dynamic = 'force-dynamic';
 
@@ -101,6 +94,8 @@ export default async function AdminPurchaseOrderDetailPage({ params }: Params) {
     if (e instanceof ApiRequestError && e.statusCode === 404) notFound();
     throw e;
   }
+
+  const modules = await getModules();
 
   return (
     <AdminPageShell
@@ -236,7 +231,7 @@ export default async function AdminPurchaseOrderDetailPage({ params }: Params) {
             <PurchaseOrderLinesTable orderId={po.id} lines={po.lines} />
           </AdminCard>
 
-          {FEATURE_PURCHASE_RECEIPTS_ENABLED && (
+          {modules.purchaseReceipts && (
             <PurchaseOrderReceiptsCard
               purchaseOrderId={po.id}
               purchaseOrderStatus={po.status}

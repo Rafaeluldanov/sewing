@@ -36,10 +36,10 @@ export default async function AdminSectionLayout({
   if (!canSeeAdmin(me.user.roles ?? me.user.role)) redirect('/');
   return (
     <div className="admin-layout">
-      <AdminSidebar />
+      <AdminSidebar modules={me.modules} />
       <div className="admin-layout__content">
         <div className="admin-layout__mobile-bar">
-          <AdminSidebarMobileToggle />
+          <AdminSidebarMobileToggle modules={me.modules} />
         </div>
         {children}
       </div>

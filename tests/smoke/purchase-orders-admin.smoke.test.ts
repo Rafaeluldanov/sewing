@@ -46,8 +46,9 @@ describe('Purchase orders (Этап 6А) — smoke', () => {
 
   test('Sidebar показывает пункт «Заказы поставщикам» только за фичефлагом', () => {
     const src = readSrc('apps/web/components/admin-sidebar.tsx');
-    expect(src).toMatch(/NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS/);
-    expect(src).toMatch(/FEATURE_PURCHASE_ORDERS_ENABLED/);
+    // Runtime-гейт: пункт строится при `modules.purchaseOrders`
+    // (набор с сервера через /api/auth/me), а не из build-time env.
+    expect(src).toMatch(/modules\.purchaseOrders/);
     expect(src).toMatch(/Заказы поставщикам/);
     expect(src).toMatch(/\/admin\/purchase-orders/);
   });
@@ -206,8 +207,8 @@ describe('Purchase orders (Этап 6А) — smoke', () => {
     expect(src).toMatch(/ORDERED:\s*['"]Заказано поставщику['"]/);
   });
 
-  test('.env.example документирует NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS', () => {
+  test('.env.example документирует FEATURE_PURCHASE_ORDERS', () => {
     const src = readSrc('.env.example');
-    expect(src).toMatch(/NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS/);
+    expect(src).toMatch(/FEATURE_PURCHASE_ORDERS/);
   });
 });

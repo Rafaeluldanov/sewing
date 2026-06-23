@@ -29,7 +29,7 @@ import type {
   SupplierListItemDto,
 } from '@sewing/shared/suppliers';
 import { ApiRequestError, errorText } from '@/lib/api';
-import { isFeatureEnabled } from '@/lib/feature-flags';
+import { getModules } from '@/lib/modules';
 import { getWorkshopNeed } from '@/lib/workshop-needs-api';
 import {
   listSupplierCatalog,
@@ -46,30 +46,11 @@ import type { AdminStatusTone } from '@/lib/admin-labels';
 import { EditWorkshopNeedForm } from './edit-form';
 import { CreatePoFromSingleNeed } from '../create-po-button';
 
-/**
- * Feature-flag для модуля «Поставщики» (Этап 5). Server-side
- * `process.env.NEXT_PUBLIC_*` инлайнится Next.js-ом и работает
- * одинаково в RSC. Если флаг явно выключен (`=0`/`=false`/`=off`),
- * селекты supplier/catalog в UI не показываются — текстовые
- * `supplierNameText` / `purchaseItemNameText` остаются единственным
- * интерфейсом. Default-on (см. `isFeatureEnabled` /
- * `@/lib/feature-flags`).
- */
-const FEATURE_SUPPLIERS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_SUPPLIERS,
-);
-
-/**
- * Feature-flag для модуля «Заказы поставщикам» (Этап 6А, см.
- * `apps/api/src/modules/purchase-orders/*`). Гейтит только UI-блок
- * «Создать заказ поставщику» в карточке потребности; сам backend
- * `/api/purchase-orders` остаётся доступным под `ADMIN`/`SHOP_MANAGER`
- * в любом случае. Default-on (см. `isFeatureEnabled` /
- * `@/lib/feature-flags`).
- */
-const FEATURE_PURCHASE_ORDERS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS,
-);
+// Модули «Поставщики» (Этап 5) и «Заказы поставщикам» (Этап 6А) гейтят
+// inline-блоки этой карточки (селекты supplier/catalog в форме, блок
+// «Создать заказ поставщику»). Backend `/api/*` доступен под
+// `ADMIN`/`SHOP_MANAGER` всегда. Набор модулей берётся в рантайме через
+// `getModules()` внутри компонента (а не build-time `NEXT_PUBLIC_FEATURE_*`).
 
 export const dynamic = 'force-dynamic';
 
@@ -133,6 +114,8 @@ export default async function AdminWorkshopNeedDetailPage({ params }: Params) {
     throw e;
   }
 
+  const modules = await getModules();
+
   // Этап 5: подгружаем список активных поставщиков и каталог уже
   // выбранного. Грузим только при включённом feature-flag, чтобы
   // выключенный модуль вообще не дёргал /api/suppliers.
@@ -143,7 +126,7 @@ export default async function AdminWorkshopNeedDetailPage({ params }: Params) {
   let suppliers: SupplierListItemDto[] = [];
   let catalog: SupplierCatalogItemDto[] = [];
   let suppliersError: string | null = null;
-  if (FEATURE_SUPPLIERS_ENABLED) {
+  if (modules.suppliers) {
     try {
       suppliers = await listSuppliers({ status: 'ACTIVE' });
     } catch (e) {
@@ -330,13 +313,13 @@ export default async function AdminWorkshopNeedDetailPage({ params }: Params) {
             )}
             <EditWorkshopNeedForm
               need={need}
-              suppliersEnabled={FEATURE_SUPPLIERS_ENABLED}
+              suppliersEnabled={modules.suppliers}
               suppliers={suppliers}
               selectedSupplierCatalog={catalog}
             />
           </AdminCard>
 
-          {FEATURE_PURCHASE_ORDERS_ENABLED && (
+          {modules.purchaseOrders && (
             <AdminCard>
               <AdminSectionHeader
                 title="Заказ поставщику"

@@ -66,7 +66,61 @@ export interface LoginResponseDto {
   user: AuthUserDto;
 }
 
-export type MeResponseDto = LoginResponseDto;
+// ---------------------------------------------------------------------------
+// Feature-модули (runtime, не build-time)
+// ---------------------------------------------------------------------------
+
+/**
+ * Канонические ключи модулей, которые гейтят admin-навигацию и inline-блоки
+ * в карточках. Единый источник для backend (резолвер) и web (потребитель).
+ */
+export const FEATURE_MODULE_KEYS = [
+  'patterns',
+  'workshopNeeds',
+  'suppliers',
+  'purchaseOrders',
+  'purchaseReceipts',
+  'treasury',
+] as const;
+
+export type FeatureModuleKey = (typeof FEATURE_MODULE_KEYS)[number];
+
+/** Карта «модуль → включён ли» для текущего тенанта. */
+export type ModuleFlags = Record<FeatureModuleKey, boolean>;
+
+const DISABLED_MODULE_VALUES = new Set([
+  '0',
+  'false',
+  'off',
+  'no',
+  'disabled',
+]);
+
+/**
+ * Договор default-on (раньше жил во фронте как `isFeatureEnabled`):
+ *   - `undefined` / пустая строка                 → включено;
+ *   - `'0'|'false'|'off'|'no'|'disabled'`         → выключено;
+ *   - любое другое значение                       → включено.
+ * Лучше показать готовый модуль и собрать обратную связь, чем тихо
+ * спрятать выкаченную страницу.
+ */
+export function isModuleEnabledValue(value: string | undefined | null): boolean {
+  if (value == null) return true;
+  const trimmed = value.trim();
+  if (trimmed === '') return true;
+  return !DISABLED_MODULE_VALUES.has(trimmed.toLowerCase());
+}
+
+/**
+ * Ответ `GET /api/auth/me`: текущий пользователь + включённые модули.
+ *
+ * `modules` приходят С СЕРВЕРА в рантайме (НЕ зашиты в web-билд через
+ * `NEXT_PUBLIC_FEATURE_*`). Это нужно для мультитенантности: один web-билд
+ * обслуживает тенантов с разным набором модулей (Фаза 1 дорожной карты).
+ */
+export interface MeResponseDto extends LoginResponseDto {
+  modules: ModuleFlags;
+}
 
 // ---------------------------------------------------------------------------
 // Health / Ready (MVP 1.1)

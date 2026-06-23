@@ -9,6 +9,7 @@ import {
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { UnauthenticatedException } from '../../common/errors.js';
 import { AuthService } from './auth.service.js';
+import { FeatureModulesService } from './feature-modules.service.js';
 import { CurrentUser, Public } from './auth.decorators.js';
 import type { AuthPrincipal } from './auth.types.js';
 import {
@@ -32,7 +33,11 @@ export class AuthController {
   // через esbuild) не эмитит `design:paramtypes` — без явного декоратора
   // Nest DI не подставит AuthService, и `this.auth` окажется `undefined`
   // уже на `/api/auth/login`.
-  constructor(@Inject(AuthService) private readonly auth: AuthService) {}
+  constructor(
+    @Inject(AuthService) private readonly auth: AuthService,
+    @Inject(FeatureModulesService)
+    private readonly featureModules: FeatureModulesService,
+  ) {}
 
   @Public()
   @Post('login')
@@ -83,6 +88,9 @@ export class AuthController {
         roles: principal.roles,
         activeRole: principal.activeRole,
       },
+      // Runtime-набор модулей тенанта (не зашит в web-билд). См.
+      // FeatureModulesService и packages/shared/src/auth.ts (Фаза 1).
+      modules: this.featureModules.resolve(),
     };
   }
 }

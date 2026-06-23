@@ -54,7 +54,7 @@ import {
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { logoutAction } from '@/app/(auth)/logout-action';
-import { isFeatureEnabled } from '@/lib/feature-flags';
+import type { ModuleFlags } from '@sewing/shared/auth';
 
 interface SidebarItem {
   href: string;
@@ -65,93 +65,20 @@ interface SidebarItem {
 }
 
 /**
- * Feature-flag для модуля «Лекала» (Patterns MVP-1, см.
- * `apps/api/src/modules/patterns/*` и
- * `docs/recon-soft-integration.md`).
+ * Раньше тут жили `const FEATURE_*_ENABLED = isFeatureEnabled(process.env
+ * .NEXT_PUBLIC_FEATURE_*)` — флаги зашивались в web-билд на этапе сборки.
+ * Под мультитенантность (Фаза 1 дорожной карты) набор модулей приходит в
+ * РАНТАЙМЕ с сервера (`GET /api/auth/me` → `modules`) и передаётся в
+ * `AdminSidebar`/`AdminSidebarMobileToggle` пропсом `modules`, а
+ * `buildSections` принимает его параметром. Так один web-билд обслуживает
+ * тенантов с разным набором модулей. Договор default-on и ключи модулей —
+ * `packages/shared/src/auth.ts` (`ModuleFlags`, `isModuleEnabledValue`).
  *
- * `process.env.NEXT_PUBLIC_*` инлайнится Next.js-ом во время сборки и
- * доступен в client-компонентах (`'use client'`) — в отличие от
- * server-only `process.env.FEATURE_PATTERNS`. Логика гейта:
- * `isFeatureEnabled` (см. `@/lib/feature-flags`) — модуль виден по
- * умолчанию (если переменная не задана), скрыт только при явном
- * `NEXT_PUBLIC_FEATURE_PATTERNS=0` / `false` / `off` / `no` /
- * `disabled`. Backend это никак не затрагивает — API остаётся
- * доступным под `ADMIN`/`SHOP_MANAGER`, чтобы можно было дёргать его
- * напрямую (curl / интеграционные тесты), пока UI прячется за флагом.
+ * Backend модули не гейтит: `/api/*` остаётся доступным под
+ * `ADMIN`/`SHOP_MANAGER` всегда, `modules` прячут только UI-навигацию и
+ * inline-блоки в карточках.
  */
-const FEATURE_PATTERNS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_PATTERNS,
-);
-
-/**
- * Feature-flag для модуля «Потребность цеха» (Workshop Needs, Этап 4А,
- * см. `apps/api/src/modules/workshop-needs/*`,
- * `docs/recon-soft-integration.md §«Этап 4А»`). Та же логика, что у
- * `FEATURE_PATTERNS_ENABLED`: backend `/api/workshop-needs` доступен
- * под `ADMIN`/`SHOP_MANAGER` всегда, флаг гейтит только пункт в
- * sidebar (и блок в карточке заказа), чтобы выкатывать модуль
- * закупщика постепенно. Default-on (см. `isFeatureEnabled`).
- */
-const FEATURE_WORKSHOP_NEEDS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_WORKSHOP_NEEDS,
-);
-
-/**
- * Feature-flag для модуля «Поставщики» (Suppliers, Этап 5, см.
- * `apps/api/src/modules/suppliers/*`,
- * `docs/recon-soft-integration.md §«Этап 5»`). Та же логика, что у
- * `FEATURE_PATTERNS_ENABLED`/`FEATURE_WORKSHOP_NEEDS_ENABLED`:
- * backend `/api/suppliers` доступен под `ADMIN`/`SHOP_MANAGER`
- * всегда, флаг гейтит только пункт в sidebar (и selectы поставщика
- * в `WorkshopNeed`-форме). Default-on (см. `isFeatureEnabled`).
- */
-const FEATURE_SUPPLIERS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_SUPPLIERS,
-);
-
-/**
- * Feature-flag для модуля «Заказы поставщикам» (Purchase Orders,
- * Этап 6А, см. `apps/api/src/modules/purchase-orders/*`,
- * `docs/recon-soft-integration.md §«Этап 6А»`). Та же логика, что у
- * `FEATURE_SUPPLIERS_ENABLED`: backend `/api/purchase-orders`
- * доступен под `ADMIN`/`SHOP_MANAGER` всегда, флаг гейтит только
- * пункт в sidebar и блоки в карточках workshop-need / order.
- * Default-on (см. `isFeatureEnabled`).
- */
-const FEATURE_PURCHASE_ORDERS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_PURCHASE_ORDERS,
-);
-
-/**
- * Feature-flag для модуля «Приёмка поставок» (Purchase Receipts,
- * Этап 7А, см. `apps/api/src/modules/purchase-receipts/*`,
- * `docs/recon-soft-integration.md §«Этап 7А»`). Та же логика, что у
- * `FEATURE_PURCHASE_ORDERS_ENABLED`: backend
- * `/api/purchase-receipts` доступен под `ADMIN`/`SHOP_MANAGER`
- * всегда, флаг гейтит только пункт в sidebar и блоки в карточках
- * заказа покупателя / заказа поставщику. Default-on (см.
- * `isFeatureEnabled`).
- *
- * Сознательная граница MVP: PR — это фиксация факта поступления и
- * места хранения, не складская бухгалтерия. CellContent /
- * MaterialStock / FabricRoll этим модулем НЕ создаются.
- */
-const FEATURE_PURCHASE_RECEIPTS_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_PURCHASE_RECEIPTS,
-);
-
-/**
- * Feature-flag для модуля «Казначейство» (Treasury, Фаза 0 — журнал
- * движения ДС, см. `apps/api/src/modules/treasury/*`). Та же логика
- * default-on, что у остальных: backend `/api/treasury/*` доступен под
- * `ADMIN`/`SHOP_MANAGER` всегда, флаг гейтит только пункт sidebar.
- * Кладём рядом с «Себестоимостью» — UI-кластер «Финансы».
- */
-const FEATURE_TREASURY_ENABLED = isFeatureEnabled(
-  process.env.NEXT_PUBLIC_FEATURE_TREASURY,
-);
-
-function buildSections(): SidebarItem[] {
+function buildSections(modules: ModuleFlags): SidebarItem[] {
   const items: SidebarItem[] = [
     { href: '/admin', label: 'Обзор', Icon: Home, match: ['/admin/overview'] },
     {
@@ -192,7 +119,7 @@ function buildSections(): SidebarItem[] {
       match: ['/production-cost'],
     },
   ];
-  if (FEATURE_PATTERNS_ENABLED) {
+  if (modules.patterns) {
     // Вставляем рядом с «Техкартами» — менеджеру так легче найти:
     // лекало семантически близко к техкарте, обе сущности про
     // «как устроено изделие».
@@ -206,7 +133,7 @@ function buildSections(): SidebarItem[] {
       Icon: Scissors,
     });
   }
-  if (FEATURE_WORKSHOP_NEEDS_ENABLED) {
+  if (modules.workshopNeeds) {
     // «Потребность цеха» — рабочее место закупщика (Этап 4А). Кладём
     // следом за «Складами»: семантически это про «материалы», и
     // менеджеру логично искать пункт в нижней «логистической»
@@ -221,7 +148,7 @@ function buildSections(): SidebarItem[] {
       Icon: PackageSearch,
     });
   }
-  if (FEATURE_SUPPLIERS_ENABLED) {
+  if (modules.suppliers) {
     // «Поставщики» — справочник контрагентов (Этап 5). Кладём
     // следом за «Потребностью цеха», чтобы оба «закупочных» пункта
     // были рядом. Если флаг workshop-needs выключен — встаём после
@@ -240,7 +167,7 @@ function buildSections(): SidebarItem[] {
       Icon: Truck,
     });
   }
-  if (FEATURE_PURCHASE_ORDERS_ENABLED) {
+  if (modules.purchaseOrders) {
     // «Заказы поставщикам» — Этап 6А, закупочный документ. Кладём
     // следом за «Поставщиками», чтобы все «закупочные» пункты
     // (потребности → поставщики → заказы поставщикам) шли подряд.
@@ -263,7 +190,7 @@ function buildSections(): SidebarItem[] {
       Icon: ShoppingCart,
     });
   }
-  if (FEATURE_PURCHASE_RECEIPTS_ENABLED) {
+  if (modules.purchaseReceipts) {
     // «Приёмка поставок» — Этап 7А, документ фактической приёмки.
     // Кладём сразу за «Заказами поставщикам», чтобы цепочка
     // «потребности → поставщики → заказы поставщикам → приёмка»
@@ -292,7 +219,7 @@ function buildSections(): SidebarItem[] {
       Icon: ClipboardCheck,
     });
   }
-  if (FEATURE_TREASURY_ENABLED) {
+  if (modules.treasury) {
     // «Казначейство» — журнал движения ДС (Фаза 0). Кладём рядом с
     // «Себестоимостью», образуя UI-кластер «Финансы». Fallback — в конец.
     const pcIdx = items.findIndex(
@@ -307,8 +234,6 @@ function buildSections(): SidebarItem[] {
   }
   return items;
 }
-
-const SECTIONS: SidebarItem[] = buildSections();
 
 function isActive(item: SidebarItem, pathname: string): boolean {
   if (item.href === '/admin') {
@@ -365,8 +290,9 @@ function isSettingsActive(pathname: string): boolean {
   );
 }
 
-export function AdminSidebar() {
+export function AdminSidebar({ modules }: { modules: ModuleFlags }) {
   const pathname = usePathname() ?? '/admin';
+  const sections = buildSections(modules);
   return (
     <aside className="admin-sidebar" aria-label="Разделы админки">
       <div className="admin-sidebar__brand">
@@ -377,7 +303,7 @@ export function AdminSidebar() {
       </div>
       <nav className="admin-sidebar__nav" aria-label="Навигация">
         <ul>
-          {SECTIONS.map((item) => {
+          {sections.map((item) => {
             const active = isActive(item, pathname);
             const Icon = item.Icon;
             return (
@@ -414,8 +340,13 @@ export function AdminSidebar() {
  * Десктопный sidebar и mobile drawer — два разных DOM-узла, которые
  * прячутся друг от друга через CSS (`@media (max-width: 900px)`).
  */
-export function AdminSidebarMobileToggle() {
+export function AdminSidebarMobileToggle({
+  modules,
+}: {
+  modules: ModuleFlags;
+}) {
   const pathname = usePathname() ?? '/admin';
+  const sections = buildSections(modules);
   return (
     <details className="admin-sidebar-mobile">
       <summary className="admin-sidebar-mobile__summary" aria-label="Открыть меню">
@@ -424,7 +355,7 @@ export function AdminSidebarMobileToggle() {
       </summary>
       <nav className="admin-sidebar-mobile__panel" aria-label="Разделы админки">
         <ul>
-          {SECTIONS.map((item) => {
+          {sections.map((item) => {
             const active = isActive(item, pathname);
             const Icon = item.Icon;
             return (
