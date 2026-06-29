@@ -291,6 +291,11 @@ const EQUIPMENT: ReadonlyArray<{
     displayNumber: '1',
     role: 'CUTTER',
     allowedOperations: [
+      // `CUT_CUT` («Раскрой») — операция смены раскройщика: сканируя QR
+      // раскройного стола на `/cutter`, он открывает смену именно на ней
+      // (табель + часы для SALARY/MIXED). Держим первой, чтобы форма
+      // старта смены пред-выбирала её одной рукой.
+      'CUT_CUT',
       'CUT_DIVISION',
       'CUT_BASE_PREP',
       'CUT_RIBANA_PREP',
