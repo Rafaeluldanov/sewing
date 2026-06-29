@@ -118,7 +118,7 @@ describeWithDb('integration — employees create (POST /api/employees)', () => {
     });
   });
 
-  test('SHOP_MANAGER создаёт SALARY-сотрудника со ставкой за смену', async () => {
+  test('SHOP_MANAGER создаёт SALARY-сотрудника с почасовой ставкой', async () => {
     const res = await request(t.app.getHttpServer())
       .post('/api/employees')
       .set('Cookie', cookies.manager)
@@ -128,14 +128,14 @@ describeWithDb('integration — employees create (POST /api/employees)', () => {
         pin: 'pin-9876',
         role: 'QC',
         compensationType: 'SALARY',
-        salaryPerShift: '1500.50',
+        salaryPerHour: '1500.50',
       });
     expect(res.status).toBe(201);
     expect(res.body).toMatchObject({
       login: 'sidorov',
       role: 'QC',
       compensationType: 'SALARY',
-      salaryPerShift: 1500.5,
+      salaryPerHour: 1500.5,
     });
   });
 
@@ -158,7 +158,7 @@ describeWithDb('integration — employees create (POST /api/employees)', () => {
   // 2. Окладной инвариант
   // ---------------------------------------------------------------------------
 
-  test('SALARY без salaryPerShift → 400 VALIDATION_ERROR (Zod superRefine)', async () => {
+  test('SALARY без salaryPerHour → 400 VALIDATION_ERROR (Zod superRefine)', async () => {
     const res = await request(t.app.getHttpServer())
       .post('/api/employees')
       .set('Cookie', cookies.manager)
@@ -177,7 +177,7 @@ describeWithDb('integration — employees create (POST /api/employees)', () => {
     expect(inDb).toBeNull();
   });
 
-  test('MIXED с нулевой salaryPerShift → 400 (zero не считается positive)', async () => {
+  test('MIXED с нулевой salaryPerHour → 400 (zero не считается positive)', async () => {
     const res = await request(t.app.getHttpServer())
       .post('/api/employees')
       .set('Cookie', cookies.manager)
@@ -187,7 +187,7 @@ describeWithDb('integration — employees create (POST /api/employees)', () => {
         pin: 'pin-1234',
         role: 'SEAMSTRESS',
         compensationType: 'MIXED',
-        salaryPerShift: 0,
+        salaryPerHour: 0,
       });
     expect(res.status).toBe(400);
     expect(res.body.code).toBe('VALIDATION_ERROR');

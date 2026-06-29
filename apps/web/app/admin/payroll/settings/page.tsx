@@ -24,7 +24,7 @@ export const dynamic = 'force-dynamic';
  *
  *   - ставки операций (`Operation.fixedRate` / `OperationRateBySize`,
  *     ADR-0020) — `/admin/operations`;
- *   - дневная окладная ставка (`Employee.salaryPerShift`,
+ *   - почасовая окладная ставка (`Employee.salaryPerHour`,
  *     ADR-0021) — `/admin/employees`;
  *   - подразделения для группировок и UI-фильтров —
  *     `/admin/company-settings` (см. `docs/domain.md
@@ -70,7 +70,7 @@ export default function AdminPayrollSettingsPage() {
               icon={<Users size={18} strokeWidth={1.6} aria-hidden />}
               href="/admin/employees"
               title="Ставки сотрудников"
-              hint="Дневной оклад (Employee.salaryPerShift) и compensationType (ADR-0021)"
+              hint="Почасовая ставка (Employee.salaryPerHour) и compensationType (ADR-0021)"
             />
           </li>
           <li>

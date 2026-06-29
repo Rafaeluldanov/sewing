@@ -888,11 +888,25 @@ model Employee {
   /// создаётся, пока менеджер не переключит сотрудника в `SALARY`
   /// или `MIXED` через `/admin/employees`.
   compensationType       CompensationType @default(PIECEWORK)
-  /// Ставка за один отработанный день/смену. Читается модулем
-  /// `salary` для `compensationType ∈ { SALARY, MIXED }`. Для
-  /// `PIECEWORK` хранится `null` и игнорируется. Валидируется в
-  /// `EmployeesService.update` (см. `apps/api/src/modules/employees`).
+  /// LEGACY. Историческая «ставка за один отработанный день/смену».
+  /// С переходом окладного контура на ПОЧАСОВУЮ оплату (см.
+  /// `salaryPerHour` ниже и `SalaryService.syncDailySalary`) больше
+  /// НЕ участвует в расчёте зарплаты. Колонка сохранена ради
+  /// истории и одноразового бэкфилла `salaryPerHour = salaryPerShift / 8`
+  /// (миграция `*_add_salary_per_hour`). Форма сотрудника её больше
+  /// не редактирует. Удалять отдельной миграцией, когда история
+  /// будет не нужна.
   salaryPerShift         Decimal?         @db.Decimal(12, 2)
+  /// Почасовая ставка (₽/час) — единственная ставка окладного контура
+  /// после перехода на повременную оплату. Читается
+  /// `SalaryService.syncDailySalary` для `compensationType ∈
+  /// { SALARY, MIXED }`: дневной `SalaryEntry.amount =
+  /// Σ(закрытые ShiftSession длительности в секундах) / 3600 ×
+  /// salaryPerHour`. Незакрытые смены (`endedAt = null`) в расчёт не
+  /// идут. Для `PIECEWORK` хранится `null` и игнорируется.
+  /// Обязательность для SALARY/MIXED валидируется в
+  /// `EmployeesService.create/update` (`requiresSalaryRate`).
+  salaryPerHour          Decimal?         @db.Decimal(12, 2)
   /// Процент начисления закройщика для B2B-заказов (см.
   /// `docs/payroll-cutter-compensation-recon.md §«Настраиваемый
   /// процент»`, `packages/shared/src/cutter-compensation.ts`).
@@ -1993,10 +2007,12 @@ model OperationEntry {
 /// единственный путь автогенерации (см. `SalaryService.syncDailyForEmployee`):
 ///
 ///   - если у сотрудника `compensationType ∈ { SALARY, MIXED }`,
-///   - и в этот день существует хотя бы одна `ShiftSession`
-///     (даже не закрытая, даже несколько сессий подряд),
-///   - то создаётся (или обновляется по `salaryPerShift`) ровно
-///     одна запись с `amount = Employee.salaryPerShift`.
+///   - и в этот день есть хотя бы одна ЗАКРЫТАЯ `ShiftSession`
+///     (`endedAt != null`; несколько сессий за день суммируются —
+///     активная смена у человека одна, перекрытий нет),
+///   - то создаётся (или обновляется) ровно одна запись с
+///     `amount = Σ(длительности закрытых смен в сек) / 3600 ×
+///     Employee.salaryPerHour` (повременная оплата).
 ///
 /// `editedManually = true` означает, что начальник производства
 /// руками поправил сумму (переработка / ушёл раньше / полсмены) и
@@ -2009,10 +2025,18 @@ model SalaryEntry {
   /// календарной дате: одна запись на сотрудника на день, независимо
   /// от часового пояса смены и количества смен в этот день.
   date               DateTime          @db.Date
-  /// Сумма выплаты за этот день. По умолчанию = `Employee.salaryPerShift`
-  /// в момент первой sync; ручная правка через `PATCH
-  /// /api/salary/:id` заменяет её и поднимает `editedManually = true`.
+  /// Сумма выплаты за этот день. Авто-расчёт (повременная оплата):
+  /// `workedSeconds / 3600 × Employee.salaryPerHour`, округлённо до
+  /// копеек. Ручная правка через `PATCH /api/salary/:id` заменяет её
+  /// и поднимает `editedManually = true`.
   amount             Decimal           @db.Decimal(12, 2)
+  /// Сколько секунд отработано в этот день по ЗАКРЫТЫМ сменам
+  /// (`Σ (ShiftSession.endedAt − startedAt)`), на основе которых
+  /// посчитан `amount`. `null` для исторических записей, созданных до
+  /// перехода на почасовую оплату (тогда amount был плоской ставкой за
+  /// смену). Хранится для прозрачности ведомости («N ч × ставка») и
+  /// аудита; не пересчитывается для `editedManually`/locked-записей.
+  workedSeconds      Int?
   source             SalaryEntrySource @default(SHIFT_DAY)
   /// Флаг ручной правки. Sync-логика проверяет его перед тем, как
   /// синхронизировать `amount` со ставкой сотрудника: если стоит

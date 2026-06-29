@@ -112,12 +112,12 @@ export class CostsService {
       select: {
         id: true,
         compensationType: true,
-        salaryPerShift: true,
+        salaryPerHour: true,
       },
     });
     const employeeRate = new Map<string, number>();
     for (const e of employees) {
-      const minute = computeMinuteRate(e.salaryPerShift);
+      const minute = computeMinuteRate(e.salaryPerHour);
       if (minute > 0 && isSalaryEligible(e.compensationType)) {
         employeeRate.set(e.id, minute);
       } else {
@@ -413,11 +413,19 @@ function computeSummary(
   };
 }
 
-function computeMinuteRate(rate: Prisma.Decimal | null | undefined): number {
-  if (rate === null || rate === undefined) return 0;
-  const num = decimalToNumber(rate);
+/**
+ * ₽/минуту оклада для разноса простоя. Источник — почасовая ставка
+ * `Employee.salaryPerHour` (повременка): минута = ставка/час ÷ 60.
+ * При бэкфилле `salaryPerHour = salaryPerShift / 8` (SHIFT_MINUTES =
+ * 480) численно совпадает с прежним `salaryPerShift / SHIFT_MINUTES`.
+ */
+function computeMinuteRate(
+  ratePerHour: Prisma.Decimal | null | undefined,
+): number {
+  if (ratePerHour === null || ratePerHour === undefined) return 0;
+  const num = decimalToNumber(ratePerHour);
   if (num <= 0) return 0;
-  return num / SHIFT_MINUTES;
+  return num / 60;
 }
 
 function decimalToNumber(

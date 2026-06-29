@@ -64,7 +64,9 @@ describe('admin/employees/new — отдельная страница созда
     // платим» — `compensationType` (см. `docs/domain.md §9a`,
     // ADR-0021 + post-задача «remove paymentType»).
     expect(src).not.toMatch(/name="paymentType"/);
-    expect(src).toMatch(/name="salaryPerShift"/);
+    // Повременная оплата (ADR-0021 ревизия 2026-06): форма собирает
+    // почасовую ставку `salaryPerHour` вместо legacy «за смену».
+    expect(src).toMatch(/name="salaryPerHour"/);
     // Submit на отдельной странице создания. Admin UI 2.6: текст
     // кнопки сократили до «Создать», как у остальных compact-форм.
     expect(src).toMatch(/Создать/);

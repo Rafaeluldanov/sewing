@@ -364,7 +364,16 @@ function SalaryEntriesTable({
       key: 'source',
       header: 'Источник',
       render: (s) =>
-        s.source === 'SHIFT_DAY' ? 'Оклад за смену' : 'Ручное',
+        s.source === 'SHIFT_DAY' ? 'Оклад за день' : 'Ручное',
+    },
+    {
+      key: 'hours',
+      header: 'Часы',
+      align: 'right',
+      render: (s) =>
+        s.workedSeconds !== null && s.workedSeconds > 0
+          ? `${(s.workedSeconds / 3600).toFixed(1)} ч`
+          : '—',
     },
     {
       key: 'amount',

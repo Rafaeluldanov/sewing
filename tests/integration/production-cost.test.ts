@@ -69,27 +69,29 @@ describeWithDb('integration — production cost (Себестоимость вы
       admin: t.adminCookie,
     };
 
-    // ОТК / ВТО / упаковка — на оклад с понятной ставкой:
-    // 480 ₽/смена → 1 ₽/мин. Это упрощает арифметику тестов.
+    // ОТК / ВТО / упаковка — на оклад с понятной ПОЧАСОВОЙ ставкой:
+    // 60 ₽/ч → 1 ₽/мин (повременка, computeMinuteRate = ставка/час ÷ 60).
+    // Численно эквивалентно прежним 480 ₽/смена / 480 мин. Упрощает
+    // арифметику тестов — cost-ассерты ниже не меняются.
     await t.prisma.employee.update({
       where: { id: seed.employees.qc.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(480),
+        salaryPerHour: new Prisma.Decimal(60),
       },
     });
     await t.prisma.employee.update({
       where: { id: seed.employees.ironing.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(480),
+        salaryPerHour: new Prisma.Decimal(60),
       },
     });
     await t.prisma.employee.update({
       where: { id: seed.employees.packer.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(480),
+        salaryPerHour: new Prisma.Decimal(60),
       },
     });
   });

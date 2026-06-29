@@ -191,9 +191,9 @@ function EmployeesTable({
     },
     {
       key: 'rate',
-      header: 'Ставка за смену',
+      header: 'Ставка, ₽/час',
       align: 'right',
-      render: (e) => formatMoney(e.salaryPerShift),
+      render: (e) => formatMoney(e.salaryPerHour),
     },
     {
       key: 'status',

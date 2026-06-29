@@ -159,9 +159,9 @@ function SalaryBlock({ data }: { data: MeDailyDto }) {
       </div>
       <div className="my-day-panel__salary-amount">
         Начислено за день: <strong>{formatRub(sal.amount)}</strong>
-        {sal.amount === 0 && sal.salaryPerShift !== null ? (
+        {sal.amount === 0 && sal.salaryPerHour !== null ? (
           <span className="my-day-panel__salary-hint">
-            (ставка: {formatRub(sal.salaryPerShift)})
+            (ставка: {formatRub(sal.salaryPerHour)}/час)
           </span>
         ) : null}
       </div>

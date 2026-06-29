@@ -1273,12 +1273,15 @@ export class ProductionCostV2Service {
     );
     const employees = await this.prisma.employee.findMany({
       where: { id: { in: employeeIds } },
-      select: { id: true, compensationType: true, salaryPerShift: true },
+      select: { id: true, compensationType: true, salaryPerHour: true },
     });
     const minuteRate = new Map<string, number>();
     for (const e of employees) {
-      const perShift = e.salaryPerShift ? Number(e.salaryPerShift) : 0;
-      const perMinute = perShift > 0 ? perShift / SHIFT_MINUTES : 0;
+      // Повременка: ₽/мин = ставка/час ÷ 60. При бэкфилле
+      // `salaryPerHour = salaryPerShift / 8` (SHIFT_MINUTES = 480)
+      // совпадает с прежним `salaryPerShift / SHIFT_MINUTES`.
+      const perHour = e.salaryPerHour ? Number(e.salaryPerHour) : 0;
+      const perMinute = perHour > 0 ? perHour / 60 : 0;
       if (perMinute > 0 && isSalaryEligible(e.compensationType)) {
         minuteRate.set(e.id, perMinute);
       }

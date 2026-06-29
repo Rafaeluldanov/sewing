@@ -52,12 +52,13 @@ describeWithDb('integration — payroll payouts lock-by-line (PHASE 3 STEP 3)', 
     await refreshAdminCookie(t);
 
     // ОТК — на оклад: иначе SalaryEntry физически нельзя создать
-    // через sync-путь (для `reset` тоже нужна `salaryPerShift`).
+    // через sync-путь (для `reset` тоже нужна `salaryPerHour`).
+    // 375 ₽/ч × 8 ч = 3000 ₽ — совпадает с прежними суммами тестов.
     await t.prisma.employee.update({
       where: { id: seed.employees.qc.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(3000),
+        salaryPerHour: new Prisma.Decimal(375),
       },
     });
 
@@ -235,6 +236,19 @@ describeWithDb('integration — payroll payouts lock-by-line (PHASE 3 STEP 3)', 
       .send({});
     expect(issued.status).toBe(200);
     expect(issued.body.status).toBe('ISSUED');
+
+    // Закрытая смена 8 ч в этот же день — чтобы sync посчитал ненулевую
+    // сумму (8 × 375 = 3000) и реально дошёл до locked-guard (а не вышел
+    // раньше из-за нулевых часов). Lock должен silent-skip-нуть запись.
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        startedAt: new Date(today.getTime() + 8 * 3600 * 1000),
+        endedAt: new Date(today.getTime() + 16 * 3600 * 1000),
+      },
+    });
 
     // start shift в этот же день — sync должен silent-skip-нуть
     // locked entry. Не падать.

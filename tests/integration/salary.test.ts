@@ -67,19 +67,20 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
       fullName: admin.fullName,
     });
 
-    // ОТК / упаковка — на оклад с ставкой; сменим тип компенсации.
+    // ОТК / упаковка — на оклад с ПОЧАСОВОЙ ставкой (повременка,
+    // ADR-0021 ревизия 2026-06); сменим тип компенсации.
     await t.prisma.employee.update({
       where: { id: seed.employees.qc.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(3000),
+        salaryPerHour: new Prisma.Decimal(300),
       },
     });
     await t.prisma.employee.update({
       where: { id: seed.employees.packer.id },
       data: {
         compensationType: 'MIXED',
-        salaryPerShift: new Prisma.Decimal(2500),
+        salaryPerHour: new Prisma.Decimal(250),
       },
     });
     // Швея остаётся PIECEWORK.
@@ -94,19 +95,57 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
     };
   });
 
+  /**
+   * Заводит ЗАКРЫТУЮ смену сотрудника на `hours` часов «сегодня»
+   * (повременка считает только закрытые смены) и триггерит окладный
+   * sync, открывая новую смену тем же сотрудником. Открытая смена в
+   * расчёт не идёт (`endedAt = null`), поэтому начисление = ровно
+   * `hours × salaryPerHour`. Возвращает запланированную сумму удобства
+   * ради не нужно — тест считает её сам.
+   */
+  async function accrueClosedShift(params: {
+    cookie: string;
+    employeeId: string;
+    equipmentId: string;
+    operationId: string;
+    hours: number;
+  }): Promise<void> {
+    const start = new Date();
+    start.setHours(8, 0, 0, 0);
+    const end = new Date(start.getTime() + params.hours * 3600 * 1000);
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: params.employeeId,
+        equipmentId: params.equipmentId,
+        operationId: params.operationId,
+        startedAt: start,
+        endedAt: end,
+      },
+    });
+    // Триггер `syncDailySalary` — открытие новой смены (она сама в
+    // расчёт не входит, т.к. ещё не закрыта).
+    await request(t.app.getHttpServer())
+      .post('/api/shifts/start')
+      .set('Cookie', params.cookie)
+      .send({ equipmentId: params.equipmentId, operationId: params.operationId })
+      .expect((r) => {
+        if (r.status >= 300) throw new Error(JSON.stringify(r.body));
+      });
+  }
+
   // -------------------------------------------------------------------------
   // 1. SALARY: shift opens → salary entry appears
   // -------------------------------------------------------------------------
 
-  test('SALARY-сотрудник: открытие смены создаёт дневной оклад', async () => {
-    const start = await request(t.app.getHttpServer())
-      .post('/api/shifts/start')
-      .set('Cookie', cookies.qc)
-      .send({
-        equipmentId: seed.equipment['qc-station-01'].id,
-        operationId: seed.operations.QC.id,
-      });
-    expect(start.status).toBeLessThan(300);
+  test('SALARY-сотрудник: закрытая смена создаёт дневной оклад по часам', async () => {
+    // 8 ч × 300 ₽/ч = 2400 ₽.
+    await accrueClosedShift({
+      cookie: cookies.qc,
+      employeeId: seed.employees.qc.id,
+      equipmentId: seed.equipment['qc-station-01'].id,
+      operationId: seed.operations.QC.id,
+      hours: 8,
+    });
 
     const list = await request(t.app.getHttpServer())
       .get('/api/salary')
@@ -114,7 +153,8 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
     expect(list.status).toBe(200);
     expect(list.body.total).toBe(1);
     expect(list.body.items[0].employeeId).toBe(seed.employees.qc.id);
-    expect(list.body.items[0].amount).toBeCloseTo(3000, 2);
+    expect(list.body.items[0].amount).toBeCloseTo(2400, 2);
+    expect(list.body.items[0].workedSeconds).toBe(8 * 3600);
     expect(list.body.items[0].source).toBe('SHIFT_DAY');
     expect(list.body.items[0].editedManually).toBe(false);
   });
@@ -151,21 +191,15 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
   // 3. MIXED: salary appears, piecework still works
   // -------------------------------------------------------------------------
 
-  test('MIXED-сотрудник: открытие смены создаёт оклад и не мешает сдельщине', async () => {
-    await request(t.app.getHttpServer())
-      .post('/api/shifts/start')
-      .set('Cookie', cookies.packer)
-      .send({
-        equipmentId: seed.equipment['packing-station-01'].id,
-        operationId: seed.operations.PACKING.id,
-      })
-      .expect((res) => {
-        if (res.status >= 300) {
-          throw new Error(
-            `start shift failed: ${res.status} ${JSON.stringify(res.body)}`,
-          );
-        }
-      });
+  test('MIXED-сотрудник: закрытая смена создаёт почасовой оклад и не мешает сдельщине', async () => {
+    // 8 ч × 250 ₽/ч = 2000 ₽.
+    await accrueClosedShift({
+      cookie: cookies.packer,
+      employeeId: seed.employees.packer.id,
+      equipmentId: seed.equipment['packing-station-01'].id,
+      operationId: seed.operations.PACKING.id,
+      hours: 8,
+    });
 
     // Окладная запись создана.
     const salary = await request(t.app.getHttpServer())
@@ -174,7 +208,7 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
       .set('Cookie', cookies.manager);
     expect(salary.status).toBe(200);
     expect(salary.body.total).toBe(1);
-    expect(salary.body.items[0].amount).toBeCloseTo(2500, 2);
+    expect(salary.body.items[0].amount).toBeCloseTo(2000, 2);
 
     // Сдельщина: руками создаём piecework-строку для упаковщика и
     // убеждаемся, что она существует параллельно с окладной (т.е. модель
@@ -208,6 +242,20 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
   // -------------------------------------------------------------------------
 
   test('повторный start/stop в один день не плодит окладные дубли', async () => {
+    // Сначала закрытая смена (повременка считает только закрытые), чтобы
+    // sync вообще создавал запись; затем серия start/stop в тот же день
+    // должна upsert-ить ровно одну строку.
+    const seedStart = new Date();
+    seedStart.setHours(8, 0, 0, 0);
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        startedAt: seedStart,
+        endedAt: new Date(seedStart.getTime() + 6 * 3600 * 1000),
+      },
+    });
     // start → stop → start → stop → start (5 sync-вызовов).
     const startReq = () =>
       request(t.app.getHttpServer())
@@ -288,8 +336,23 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
       },
     });
 
+    // Закрытая смена в этот же день — чтобы sync посчитал ненулевую
+    // сумму и реально дошёл до guard `editedManually` (а не вышел
+    // раньше из-за нулевых часов).
+    const closedStart = new Date();
+    closedStart.setHours(8, 0, 0, 0);
+    await t.prisma.shiftSession.create({
+      data: {
+        employeeId: seed.employees.qc.id,
+        equipmentId: seed.equipment['qc-station-01'].id,
+        operationId: seed.operations.QC.id,
+        startedAt: closedStart,
+        endedAt: new Date(closedStart.getTime() + 8 * 3600 * 1000),
+      },
+    });
+
     // Стартуем смену в этот же день — sync должен оставить amount
-    // неизменным.
+    // неизменным (запись editedManually).
     await request(t.app.getHttpServer())
       .post('/api/shifts/start')
       .set('Cookie', cookies.qc)
@@ -385,21 +448,21 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
     expect(forbidden.status).toBe(403);
   });
 
-  test('PATCH /api/employees/:id меняет compensationType + salaryPerShift', async () => {
+  test('PATCH /api/employees/:id меняет compensationType + salaryPerHour', async () => {
     const res = await request(t.app.getHttpServer())
       .patch(`/api/employees/${seed.employees.cutter.id}`)
       .set('Cookie', cookies.manager)
-      .send({ compensationType: 'SALARY', salaryPerShift: 4200 });
+      .send({ compensationType: 'SALARY', salaryPerHour: 420 });
     expect(res.status).toBe(200);
     expect(res.body.compensationType).toBe('SALARY');
-    expect(res.body.salaryPerShift).toBeCloseTo(4200, 2);
+    expect(res.body.salaryPerHour).toBeCloseTo(420, 2);
   });
 
   test('PATCH /api/employees/:id запрещает SALARY без ставки', async () => {
     const res = await request(t.app.getHttpServer())
       .patch(`/api/employees/${seed.employees.cutter.id}`)
       .set('Cookie', cookies.manager)
-      .send({ compensationType: 'SALARY', salaryPerShift: null });
+      .send({ compensationType: 'SALARY', salaryPerHour: null });
     expect(res.status).toBe(422);
     expect(res.body.code).toBe('EMPLOYEE_SALARY_RATE_REQUIRED');
   });
@@ -408,17 +471,26 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
   // 9. RESET: вернуть запись под автоматику
   // -------------------------------------------------------------------------
 
-  test('PATCH с reset=true сбрасывает editedManually и пересчитывает amount по ставке', async () => {
-    const entry = await t.prisma.salaryEntry.create({
-      data: {
-        employeeId: seed.employees.qc.id,
-        date: new Date('2026-04-12'),
-        amount: new Prisma.Decimal(9999),
-        source: 'SHIFT_DAY',
-        editedManually: true,
-        managerComment: 'Что-то странное',
-      },
+  test('PATCH с reset=true сбрасывает editedManually и пересчитывает amount по часам', async () => {
+    // Реальный sync создаёт запись по закрытой смене (10 ч × 300 = 3000),
+    // менеджер правит сумму руками, reset возвращает её к почасовому
+    // расчёту того же дня.
+    await accrueClosedShift({
+      cookie: cookies.qc,
+      employeeId: seed.employees.qc.id,
+      equipmentId: seed.equipment['qc-station-01'].id,
+      operationId: seed.operations.QC.id,
+      hours: 10,
     });
+    const entry = await t.prisma.salaryEntry.findFirstOrThrow({
+      where: { employeeId: seed.employees.qc.id },
+    });
+    await request(t.app.getHttpServer())
+      .patch(`/api/salary/${entry.id}`)
+      .set('Cookie', cookies.manager)
+      .send({ amount: 9999, managerComment: 'Что-то странное' })
+      .expect(200);
+
     const res = await request(t.app.getHttpServer())
       .patch(`/api/salary/${entry.id}`)
       .set('Cookie', cookies.manager)
@@ -473,25 +545,38 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
   });
 
   test('PATCH /api/salary/:id с reset=true пишет SALARY_ENTRY_RESET с reset:true', async () => {
-    const entry = await t.prisma.salaryEntry.create({
+    // Запись создаёт реальный sync по закрытой смене (10 ч × 300 = 3000;
+    // sync аудит НЕ пишет). Ставим editedManually напрямую (тоже без
+    // аудита), чтобы в журнале осталась ровно одна запись — RESET.
+    await accrueClosedShift({
+      cookie: cookies.qc,
+      employeeId: seed.employees.qc.id,
+      equipmentId: seed.equipment['qc-station-01'].id,
+      operationId: seed.operations.QC.id,
+      hours: 10,
+    });
+    const created = await t.prisma.salaryEntry.findFirstOrThrow({
+      where: { employeeId: seed.employees.qc.id },
+    });
+    const entryDate = created.date.toISOString().slice(0, 10);
+    await t.prisma.salaryEntry.update({
+      where: { id: created.id },
       data: {
-        employeeId: seed.employees.qc.id,
-        date: new Date('2026-04-16'),
         amount: new Prisma.Decimal(7777),
-        source: 'SHIFT_DAY',
         editedManually: true,
         managerComment: 'Старая правка',
         editedByEmployeeId: seed.employees['shop-chief'].id,
       },
     });
+
     const res = await request(t.app.getHttpServer())
-      .patch(`/api/salary/${entry.id}`)
+      .patch(`/api/salary/${created.id}`)
       .set('Cookie', cookies.manager)
       .send({ reset: true });
     expect(res.status).toBe(200);
 
     const auditRows = await t.prisma.auditLog.findMany({
-      where: { entityType: 'SALARY_ENTRY', entityId: entry.id },
+      where: { entityType: 'SALARY_ENTRY', entityId: created.id },
       orderBy: { createdAt: 'asc' },
     });
     expect(auditRows).toHaveLength(1);
@@ -500,9 +585,9 @@ describeWithDb('integration — salary entries (ADR-0021)', () => {
     expect(log.employeeId).toBe(seed.employees['shop-chief'].id);
     const payload = log.payload as Record<string, unknown>;
     expect(payload.reset).toBe(true);
-    expect(payload.salaryEntryId).toBe(entry.id);
+    expect(payload.salaryEntryId).toBe(created.id);
     expect(payload.employeeId).toBe(seed.employees.qc.id);
-    expect(payload.date).toBe('2026-04-16');
+    expect(payload.date).toBe(entryDate);
     const before = payload.before as Record<string, unknown>;
     const after = payload.after as Record<string, unknown>;
     expect(before.amount).toBeCloseTo(7777, 2);

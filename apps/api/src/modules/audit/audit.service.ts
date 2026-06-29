@@ -254,7 +254,8 @@ export type AuditEntityType =
    *   - `SALARY_ENTRY_RESET` — менеджер прислал `reset = true`. Запись
    *     возвращается под автоматический sync: `editedManually = false`,
    *     `managerComment = null`, `editedByEmployeeId = null`,
-   *     `amount = employee.salaryPerShift`. Payload — тот же набор
+   *     `amount` пересчитан по почасовой ставке (закрытые смены ×
+   *     `salaryPerHour`). Payload — тот же набор
    *     полей, что у `SALARY_ENTRY_UPDATED`, но с `reset: true` и
    *     `after.editedManually = false` / `after.managerComment = null`.
    *

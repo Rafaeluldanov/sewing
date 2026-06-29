@@ -62,7 +62,7 @@ export async function createEmployeeAction(
   const pin = String(form.get('pin') ?? '');
   const roleRaw = String(form.get('role') ?? '').trim();
   const compensationRaw = String(form.get('compensationType') ?? '').trim();
-  const salaryRaw = String(form.get('salaryPerShift') ?? '').trim();
+  const salaryRaw = String(form.get('salaryPerHour') ?? '').trim();
   const cutterB2bRaw = String(
     form.get('cutterB2bSewingPercent') ?? '',
   ).trim();
@@ -98,18 +98,18 @@ export async function createEmployeeAction(
 
   if (salaryRaw === '') {
     if (compensationRaw !== 'PIECEWORK') {
-      return { error: 'Для SALARY/MIXED обязательно укажите ставку за смену' };
+      return { error: 'Для SALARY/MIXED обязательно укажите почасовую ставку' };
     }
-    dto.salaryPerShift = null;
+    dto.salaryPerHour = null;
   } else {
     const num = Number(salaryRaw.replace(',', '.'));
     if (!Number.isFinite(num) || num < 0) {
-      return { error: 'Введите валидную ставку за смену' };
+      return { error: 'Введите валидную почасовую ставку' };
     }
     if (num === 0 && compensationRaw !== 'PIECEWORK') {
       return { error: 'Для SALARY/MIXED ставка должна быть больше нуля' };
     }
-    dto.salaryPerShift = num;
+    dto.salaryPerHour = num;
   }
 
   // Процент B2B-начисления закройщика. См.
@@ -167,7 +167,7 @@ export async function updateEmployeeAction(
   form: FormData,
 ): Promise<UpdateEmployeeState> {
   const compensationRaw = String(form.get('compensationType') ?? '').trim();
-  const salaryRaw = String(form.get('salaryPerShift') ?? '').trim();
+  const salaryRaw = String(form.get('salaryPerHour') ?? '').trim();
   const active = form.get('active') === 'on';
   // FormData может НЕ содержать ключ `cutterB2bSewingPercent`
   // (для не-CUTTER ролей UI поле не рендерит). `form.get(...)`
@@ -203,18 +203,18 @@ export async function updateEmployeeAction(
 
   if (salaryRaw === '') {
     if (compensationRaw !== 'PIECEWORK') {
-      return { error: 'Для SALARY/MIXED обязательно укажите ставку за смену' };
+      return { error: 'Для SALARY/MIXED обязательно укажите почасовую ставку' };
     }
-    dto.salaryPerShift = null;
+    dto.salaryPerHour = null;
   } else {
     const num = Number(salaryRaw.replace(',', '.'));
     if (!Number.isFinite(num) || num < 0) {
-      return { error: 'Введите валидную ставку за смену' };
+      return { error: 'Введите валидную почасовую ставку' };
     }
     if (num === 0 && compensationRaw !== 'PIECEWORK') {
       return { error: 'Для SALARY/MIXED ставка должна быть больше нуля' };
     }
-    dto.salaryPerShift = num;
+    dto.salaryPerHour = num;
   }
 
   // Процент B2B-начисления закройщика — см.

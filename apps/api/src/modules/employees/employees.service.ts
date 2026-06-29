@@ -148,9 +148,9 @@ export class EmployeesService {
    * Инварианты:
    *   - `login` уникален (`Employee.login @unique`); конфликт
    *     транслируется в `EMPLOYEE_LOGIN_TAKEN` (409);
-   *   - окладная пара `(compensationType, salaryPerShift)` валидируется
+   *   - окладная пара `(compensationType, salaryPerHour)` валидируется
    *     тем же правилом, что и в `update`: для `SALARY`/`MIXED`
-   *     обязателен положительный `salaryPerShift`. Это уже зеркалит
+   *     обязателен положительный `salaryPerHour`. Это уже зеркалит
    *     `CreateEmployeeSchema.superRefine`, но мы дублируем guard на
    *     сервисе, чтобы не зависеть от того, что наружу однажды появится
    *     ещё один путь записи (например, импорт).
@@ -162,9 +162,9 @@ export class EmployeesService {
   async create(dto: CreateEmployeeDto): Promise<EmployeeDetailDto> {
     if (
       requiresSalaryRate(dto.compensationType as CompensationType) &&
-      (dto.salaryPerShift === null ||
-        dto.salaryPerShift === undefined ||
-        dto.salaryPerShift <= 0)
+      (dto.salaryPerHour === null ||
+        dto.salaryPerHour === undefined ||
+        dto.salaryPerHour <= 0)
     ) {
       throw new EmployeeSalaryRateRequiredException();
     }
@@ -199,6 +199,13 @@ export class EmployeesService {
           // прислал доп. роли — получаем `[role]`, поведение прежнее.
           roles: normalizeAssignedRoles(dto.role, dto.roles) as Role[],
           compensationType: dto.compensationType as CompensationType,
+          // Повременная оплата: основная ставка — почасовая.
+          salaryPerHour:
+            dto.salaryPerHour === undefined || dto.salaryPerHour === null
+              ? null
+              : new Prisma.Decimal(dto.salaryPerHour.toFixed(2)),
+          // LEGACY «за смену»: больше не участвует в расчёте, но если
+          // значение всё же пришло (импорт/совместимость) — сохраняем.
           salaryPerShift:
             dto.salaryPerShift === undefined || dto.salaryPerShift === null
               ? null
@@ -250,7 +257,7 @@ export class EmployeesService {
 
   /**
    * Точечный patch management-полей. Инвариант ADR-0021:
-   *   - `compensationType in (SALARY, MIXED)` ⇒ `salaryPerShift > 0`.
+   *   - `compensationType in (SALARY, MIXED)` ⇒ `salaryPerHour > 0`.
    *
    * Если patch ломает инвариант — бросаем `EMPLOYEE_SALARY_RATE_REQUIRED`.
    * Это ловится на UI и подсвечивается на форме ставки.
@@ -311,18 +318,18 @@ export class EmployeesService {
 
     const next = {
       compensationType: dto.compensationType ?? current.compensationType,
-      salaryPerShift:
-        dto.salaryPerShift !== undefined
-          ? dto.salaryPerShift
-          : current.salaryPerShift !== null
-          ? Number(current.salaryPerShift)
+      salaryPerHour:
+        dto.salaryPerHour !== undefined
+          ? dto.salaryPerHour
+          : current.salaryPerHour !== null
+          ? Number(current.salaryPerHour)
           : null,
       active: dto.active ?? current.active,
     };
 
     if (
       requiresSalaryRate(next.compensationType) &&
-      (next.salaryPerShift === null || next.salaryPerShift <= 0)
+      (next.salaryPerHour === null || next.salaryPerHour <= 0)
     ) {
       throw new EmployeeSalaryRateRequiredException();
     }
@@ -360,7 +367,15 @@ export class EmployeesService {
     if (dto.compensationType !== undefined) {
       data.compensationType = dto.compensationType as CompensationType;
     }
+    if (dto.salaryPerHour !== undefined) {
+      data.salaryPerHour =
+        dto.salaryPerHour === null
+          ? null
+          : new Prisma.Decimal(dto.salaryPerHour.toFixed(2));
+    }
     if (dto.salaryPerShift !== undefined) {
+      // LEGACY: форма больше не шлёт это поле, но если пришло —
+      // сохраняем (в расчёте зарплаты не участвует).
       data.salaryPerShift =
         dto.salaryPerShift === null
           ? null
@@ -901,6 +916,7 @@ function toListDto(e: EmployeeRow): EmployeeListItemDto {
     roles: e.roles && e.roles.length > 0 ? e.roles : [e.role],
     activeRole: e.activeRole ?? null,
     compensationType: e.compensationType,
+    salaryPerHour: e.salaryPerHour === null ? null : Number(e.salaryPerHour),
     salaryPerShift: e.salaryPerShift === null ? null : Number(e.salaryPerShift),
     active: e.active,
     createdAt: e.createdAt.toISOString(),
