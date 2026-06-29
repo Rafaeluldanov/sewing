@@ -317,11 +317,17 @@ export interface ReleaseFromRollsActionResult {
  */
 export async function releaseFromRollsAction(
   orderId: string,
-  input: { sizeId: string; cutDate: string; rollOrdinals: number[] },
+  input: {
+    layOrdinal: number;
+    sizeId: string;
+    cutDate: string;
+    rollOrdinals: number[];
+  },
 ): Promise<ReleaseFromRollsActionResult> {
   const raw: ReleaseFromRollsDto = {
     orderId,
     sizeId: input.sizeId,
+    layOrdinal: input.layOrdinal,
     cutDate: input.cutDate,
     rollOrdinals: input.rollOrdinals,
   };

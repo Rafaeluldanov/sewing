@@ -3,12 +3,13 @@ import { Prisma } from '@prisma/client';
 import {
   computeCuttingTotals,
   type CuttingTaskDetailDto,
-  type CuttingTaskRollDto,
+  type CuttingTaskLayDto,
   type CuttingTaskSizeRowDto,
   type CuttingTaskStatus,
   type CuttingTaskSummaryDto,
   type OrderReadyForReleaseDto,
   type OrderReleaseStateDto,
+  type ReleaseLayDto,
   type SaveCuttingTaskProgressDto,
 } from '@sewing/shared/cutting-tasks';
 
@@ -25,7 +26,13 @@ import {
  *
  * Создание задачи живёт в `OrdersService.start()` (в той же транзакции,
  * что перевод заказа в `IN_PRODUCTION`) — здесь только чтение и действия
- * раскройщика: взять в работу, сохранить прогресс настила, завершить.
+ * раскройщика: взять в работу, сохранить прогресс раскладов, завершить.
+ *
+ * Раскрой многораскладный: в одном заказе раскройщик делает несколько
+ * раскладов (`CuttingTaskLay`), в каждом — свой набор выбранных размеров
+ * с «на настиле» (`CuttingTaskLaySize`) и свои рулоны (`CuttingTaskRoll`).
+ * План по размерам (`CuttingTaskSizeRow.qtyPlan`) — общий снимок заказа,
+ * read-only.
  *
  * Очередь общая (см. ТЗ кабинета): задачу видит и берёт любой
  * раскройщик; `assignedToId` фиксирует, кто фактически взял (для аудита
@@ -41,9 +48,13 @@ export class CuttingTasksService {
   private readonly summaryInclude = {
     order: { select: { number: true, color: true, customer: true } },
     assignedTo: { select: { fullName: true } },
-    sizeRows: { select: { sizeId: true, perLayerQty: true } },
-    rolls: { select: { layers: true } },
-    _count: { select: { sizeRows: true, rolls: true } },
+    lays: {
+      select: {
+        laySizes: { select: { sizeId: true, perLayerQty: true } },
+        rolls: { select: { layers: true } },
+      },
+    },
+    _count: { select: { sizeRows: true, lays: true } },
   } satisfies Prisma.CuttingTaskInclude;
 
   // ---------------------------------------------------------------------------
@@ -72,8 +83,14 @@ export class CuttingTasksService {
         order: { select: { number: true, color: true, customer: true } },
         assignedTo: { select: { fullName: true } },
         sizeRows: { orderBy: { sortOrder: 'asc' } },
-        rolls: { orderBy: { ordinal: 'asc' } },
-        _count: { select: { sizeRows: true, rolls: true } },
+        lays: {
+          orderBy: { ordinal: 'asc' },
+          include: {
+            laySizes: { orderBy: { sortOrder: 'asc' } },
+            rolls: { orderBy: { ordinal: 'asc' } },
+          },
+        },
+        _count: { select: { sizeRows: true, lays: true } },
       },
     });
     if (!task) throw new CuttingTaskNotFoundException();
@@ -84,19 +101,28 @@ export class CuttingTasksService {
       sizeId: r.sizeId,
       sizeCodeSnapshot: r.sizeCodeSnapshot,
       qtyPlan: r.qtyPlan,
-      perLayerQty: r.perLayerQty,
     }));
-    const rolls: CuttingTaskRollDto[] = task.rolls.map((r) => ({
-      id: r.id,
-      ordinal: r.ordinal,
-      layers: r.layers,
+    const lays: CuttingTaskLayDto[] = task.lays.map((l) => ({
+      id: l.id,
+      ordinal: l.ordinal,
+      sizes: l.laySizes.map((s) => ({
+        sizeId: s.sizeId,
+        sizeCodeSnapshot: s.sizeCodeSnapshot,
+        sortOrder: s.sortOrder,
+        perLayerQty: s.perLayerQty,
+      })),
+      rolls: l.rolls.map((r) => ({
+        id: r.id,
+        ordinal: r.ordinal,
+        layers: r.layers,
+      })),
     }));
 
     return {
       ...this.toSummary(task),
       orderCustomer: task.order?.customer ?? null,
       sizeRows,
-      rolls,
+      lays,
     };
   }
 
@@ -108,11 +134,12 @@ export class CuttingTasksService {
    * Доска помощника `/work/cut-orders`: заказы, по которым раскрой
    * завершён (`CuttingTask = DONE`) и можно выпускать паспорта.
    *
-   * `status` строки: `DONE`, если выпущены все ожидаемые пары
-   * `(размер, рулон)` (метка «Завершено»), иначе `NEW` (подсветка
-   * «новый»). Ожидаемая пара — размер с `perLayerQty > 0` × рулон с
-   * `layers > 0`. Выпущенная пара — наличие non-CANCELLED паспорта с
-   * соответствующим `rollOrdinal`.
+   * `status` строки: `DONE`, если выпущены все ожидаемые тройки
+   * `(расклад, размер, рулон)` (метка «Завершено»), иначе `NEW`
+   * (подсветка «новый»). Ожидаемая тройка — в раскладе размер с
+   * `perLayerQty > 0` × рулон с `layers > 0`. Выпущенная — наличие
+   * non-CANCELLED паспорта с соответствующими `cuttingLayOrdinal` +
+   * `rollOrdinal`.
    */
   async listReadyForRelease(): Promise<OrderReadyForReleaseDto[]> {
     const tasks = await this.prisma.cuttingTask.findMany({
@@ -130,40 +157,55 @@ export class CuttingTasksService {
             },
           },
         },
-        sizeRows: { select: { sizeId: true, perLayerQty: true } },
-        rolls: { select: { ordinal: true, layers: true } },
+        lays: {
+          select: {
+            ordinal: true,
+            laySizes: { select: { sizeId: true, perLayerQty: true } },
+            rolls: { select: { ordinal: true, layers: true } },
+          },
+        },
       },
     });
     if (tasks.length === 0) return [];
 
-    // Выпущенные пары `(sizeId, rollOrdinal)` по всем заказам одним
-    // запросом, чтобы не делать N+1.
+    // Выпущенные тройки `(layOrdinal, sizeId, rollOrdinal)` по всем
+    // заказам одним запросом, чтобы не делать N+1.
     const orderIds = tasks.map((t) => t.orderId);
     const released = await this.prisma.passport.findMany({
       where: {
         orderId: { in: orderIds },
         status: { not: 'CANCELLED' },
         rollOrdinal: { not: null },
+        cuttingLayOrdinal: { not: null },
       },
-      select: { orderId: true, sizeId: true, rollOrdinal: true },
+      select: {
+        orderId: true,
+        sizeId: true,
+        rollOrdinal: true,
+        cuttingLayOrdinal: true,
+      },
     });
     const releasedByOrder = new Map<string, Set<string>>();
     for (const p of released) {
       const set = releasedByOrder.get(p.orderId) ?? new Set<string>();
-      set.add(`${p.sizeId}:${p.rollOrdinal}`);
+      set.add(`${p.cuttingLayOrdinal}:${p.sizeId}:${p.rollOrdinal}`);
       releasedByOrder.set(p.orderId, set);
     }
 
     return tasks.map((t) => {
-      const sizes = t.sizeRows.filter((r) => r.sizeId && r.perLayerQty > 0);
-      const rolls = t.rolls.filter((r) => r.layers > 0);
       const releasedSet = releasedByOrder.get(t.orderId) ?? new Set<string>();
       let totalPairs = 0;
       let releasedPairs = 0;
-      for (const s of sizes) {
-        for (const roll of rolls) {
-          totalPairs += 1;
-          if (releasedSet.has(`${s.sizeId}:${roll.ordinal}`)) releasedPairs += 1;
+      for (const lay of t.lays) {
+        const sizes = lay.laySizes.filter((s) => s.sizeId && s.perLayerQty > 0);
+        const rolls = lay.rolls.filter((r) => r.layers > 0);
+        for (const s of sizes) {
+          for (const roll of rolls) {
+            totalPairs += 1;
+            if (releasedSet.has(`${lay.ordinal}:${s.sizeId}:${roll.ordinal}`)) {
+              releasedPairs += 1;
+            }
+          }
         }
       }
       const status: OrderReadyForReleaseDto['status'] =
@@ -182,8 +224,9 @@ export class CuttingTasksService {
 
   /**
    * Данные для экрана выпуска по рулонам (`/orders/:id/passports/new`,
-   * ветка помощника). Размеры + рулоны из завершённой задачи раскройщика
-   * и карта уже выпущенных пар `(размер, рулон)`.
+   * ветка помощника). Расклады (с размерами и рулонами) из завершённой
+   * задачи раскройщика и карта уже выпущенных троек `(расклад, размер,
+   * рулон)`.
    */
   async getReleaseState(orderId: string): Promise<OrderReleaseStateDto> {
     const task = await this.prisma.cuttingTask.findUnique({
@@ -199,20 +242,49 @@ export class CuttingTasksService {
             },
           },
         },
-        sizeRows: { orderBy: { sortOrder: 'asc' } },
-        rolls: { orderBy: { ordinal: 'asc' } },
+        sizeRows: { select: { sizeId: true, qtyPlan: true } },
+        lays: {
+          orderBy: { ordinal: 'asc' },
+          include: {
+            laySizes: { orderBy: { sortOrder: 'asc' } },
+            rolls: { orderBy: { ordinal: 'asc' } },
+          },
+        },
       },
     });
     if (!task) throw new CuttingTaskNotFoundException();
+
+    // План по размеру — общий для всех раскладов (снимок заказа).
+    const planBySize = new Map<string, number>();
+    for (const r of task.sizeRows) {
+      if (r.sizeId) planBySize.set(r.sizeId, r.qtyPlan);
+    }
 
     const released = await this.prisma.passport.findMany({
       where: {
         orderId,
         status: { not: 'CANCELLED' },
         rollOrdinal: { not: null },
+        cuttingLayOrdinal: { not: null },
       },
-      select: { sizeId: true, rollOrdinal: true },
+      select: { sizeId: true, rollOrdinal: true, cuttingLayOrdinal: true },
     });
+
+    const lays: ReleaseLayDto[] = task.lays.map((l) => ({
+      ordinal: l.ordinal,
+      sizes: l.laySizes
+        .filter((s) => s.sizeId)
+        .map((s) => ({
+          sizeId: s.sizeId as string,
+          sizeCode: s.sizeCodeSnapshot,
+          sortOrder: s.sortOrder,
+          perLayerQty: s.perLayerQty,
+          qtyPlan: planBySize.get(s.sizeId as string) ?? 0,
+        })),
+      rolls: l.rolls
+        .filter((r) => r.layers > 0)
+        .map((r) => ({ ordinal: r.ordinal, layers: r.layers })),
+    }));
 
     return {
       orderId: task.orderId,
@@ -221,19 +293,9 @@ export class CuttingTasksService {
       productName: task.order?.items[0]?.product?.name ?? '—',
       color: task.order?.color ?? '—',
       cuttingTaskStatus: task.status as CuttingTaskStatus,
-      sizes: task.sizeRows
-        .filter((r) => r.sizeId)
-        .map((r) => ({
-          sizeId: r.sizeId as string,
-          sizeCode: r.sizeCodeSnapshot,
-          sortOrder: r.sortOrder,
-          perLayerQty: r.perLayerQty,
-          qtyPlan: r.qtyPlan,
-        })),
-      rolls: task.rolls
-        .filter((r) => r.layers > 0)
-        .map((r) => ({ ordinal: r.ordinal, layers: r.layers })),
+      lays,
       released: released.map((p) => ({
+        layOrdinal: p.cuttingLayOrdinal as number,
         sizeId: p.sizeId,
         ordinal: p.rollOrdinal as number,
       })),
@@ -281,9 +343,8 @@ export class CuttingTasksService {
   }
 
   /**
-   * Сохранить прогресс настила (автосейв из формы): перезаписать
-   * `perLayerQty` строк-размеров и весь набор рулонов. Требует статус
-   * `IN_PROGRESS`.
+   * Сохранить прогресс (автосейв из формы): полностью перезаписать набор
+   * раскладов задачи. Требует статус `IN_PROGRESS`.
    */
   async saveProgress(
     id: string,
@@ -312,9 +373,11 @@ export class CuttingTasksService {
   }
 
   /**
-   * Общая запись прогресса. `markDone` дополнительно переводит задачу в
-   * `DONE`. Всё в одной транзакции: либо прогресс сохранён целиком (и,
-   * если просили, статус сменён), либо ничего.
+   * Общая запись прогресса. Полностью заменяет набор раскладов (replace,
+   * не diff): индекс расклада в `dto.lays` → `ordinal` (1-based).
+   * `markDone` дополнительно переводит задачу в `DONE`. Всё в одной
+   * транзакции: либо прогресс сохранён целиком (и, если просили, статус
+   * сменён), либо ничего.
    */
   private async persistProgress(
     id: string,
@@ -326,7 +389,9 @@ export class CuttingTasksService {
       select: {
         id: true,
         status: true,
-        sizeRows: { select: { id: true, sizeId: true } },
+        sizeRows: {
+          select: { sizeId: true, sizeCodeSnapshot: true, sortOrder: true },
+        },
       },
     });
     if (!task) throw new CuttingTaskNotFoundException();
@@ -334,38 +399,63 @@ export class CuttingTasksService {
       throw new CuttingTaskNotInProgressException();
     }
 
-    // Валидируем sizeId из payload по whitelist реальных строк задачи —
-    // защита от подделки. `perLayerQty` пишем только в свои строки.
-    const sizeIdToRowId = new Map<string, string>();
+    // Снимок плана задачи — whitelist допустимых размеров + источник
+    // sizeCodeSnapshot/sortOrder для строк расклада. Размер из payload,
+    // которого нет в плане задачи, отвергаем (защита от подделки).
+    const sizeMeta = new Map<
+      string,
+      { sizeCodeSnapshot: string; sortOrder: number }
+    >();
     for (const r of task.sizeRows) {
-      if (r.sizeId) sizeIdToRowId.set(r.sizeId, r.id);
+      if (r.sizeId) {
+        sizeMeta.set(r.sizeId, {
+          sizeCodeSnapshot: r.sizeCodeSnapshot,
+          sortOrder: r.sortOrder,
+        });
+      }
     }
-    for (const sr of dto.sizeRows) {
-      if (!sizeIdToRowId.has(sr.sizeId)) {
-        throw new CuttingTaskPayloadInvalidException(
-          `Размер ${sr.sizeId} не относится к этой задаче`,
-        );
+    for (const lay of dto.lays) {
+      for (const ls of lay.laySizes) {
+        if (!sizeMeta.has(ls.sizeId)) {
+          throw new CuttingTaskPayloadInvalidException(
+            `Размер ${ls.sizeId} не относится к этой задаче`,
+          );
+        }
       }
     }
 
     await this.prisma.$transaction(async (tx) => {
-      for (const sr of dto.sizeRows) {
-        await tx.cuttingTaskSizeRow.update({
-          where: { id: sizeIdToRowId.get(sr.sizeId)! },
-          data: { perLayerQty: sr.perLayerQty },
-        });
-      }
+      // Полная замена раскладов: каскад снесёт laySizes и rolls.
+      await tx.cuttingTaskLay.deleteMany({ where: { taskId: id } });
 
-      // Рулоны — полная замена (replace, не diff): проще и совпадает с
-      // UX «таблица рулонов целиком приходит из формы».
-      await tx.cuttingTaskRoll.deleteMany({ where: { taskId: id } });
-      if (dto.rolls.length > 0) {
-        await tx.cuttingTaskRoll.createMany({
-          data: dto.rolls.map((r) => ({
+      for (let i = 0; i < dto.lays.length; i += 1) {
+        const lay = dto.lays[i]!;
+        await tx.cuttingTaskLay.create({
+          data: {
             taskId: id,
-            ordinal: r.ordinal,
-            layers: r.layers,
-          })),
+            ordinal: i + 1,
+            laySizes: {
+              createMany: {
+                data: lay.laySizes.map((ls) => {
+                  const meta = sizeMeta.get(ls.sizeId)!;
+                  return {
+                    sizeId: ls.sizeId,
+                    sizeCodeSnapshot: meta.sizeCodeSnapshot,
+                    sortOrder: meta.sortOrder,
+                    perLayerQty: ls.perLayerQty,
+                  };
+                }),
+              },
+            },
+            rolls: {
+              createMany: {
+                data: lay.rolls.map((r) => ({
+                  ordinal: r.ordinal,
+                  layers: r.layers,
+                })),
+              },
+            },
+          },
         });
       }
 
@@ -393,11 +483,13 @@ export class CuttingTasksService {
     completedAt: Date | null;
     order: { number: string; color: string | null } | null;
     assignedTo: { fullName: string } | null;
-    sizeRows: Array<{ sizeId: string | null; perLayerQty: number }>;
-    rolls: Array<{ layers: number }>;
-    _count: { sizeRows: number; rolls: number };
+    lays: Array<{
+      laySizes: Array<{ sizeId: string | null; perLayerQty: number }>;
+      rolls: Array<{ layers: number }>;
+    }>;
+    _count: { sizeRows: number; lays: number };
   }): CuttingTaskSummaryDto {
-    const { totalLayers } = computeCuttingTotals(t.sizeRows, t.rolls);
+    const { totalLayers, rollsCount } = computeCuttingTotals(t.lays);
     return {
       id: t.id,
       orderId: t.orderId,
@@ -406,7 +498,8 @@ export class CuttingTasksService {
       status: t.status as CuttingTaskStatus,
       assignedToName: t.assignedTo?.fullName ?? null,
       sizeRowsCount: t._count.sizeRows,
-      rollsCount: t._count.rolls,
+      laysCount: t._count.lays,
+      rollsCount,
       totalLayers,
       createdAt: t.createdAt.toISOString(),
       updatedAt: t.updatedAt.toISOString(),

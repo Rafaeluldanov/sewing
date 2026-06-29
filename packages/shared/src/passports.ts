@@ -89,21 +89,27 @@ export type CreatePassportDto = z.infer<typeof CreatePassportSchema>;
  *
  * В отличие от ручного `POST /api/passports`, здесь помощник ничего не
  * вбивает: количество и номер рулона берутся из завершённой задачи
- * раскройщика (`CuttingTask`). Помощник выбирает размер и набор рулонов
- * (`rollOrdinals` — из `CuttingTaskRoll.ordinal`), а backend на каждый
- * рулон создаёт паспорт с `qtyCut = слои рулона × раскладка размера`
- * (`CuttingTaskSizeRow.perLayerQty`) и `rollOrdinal = ordinal`.
+ * раскройщика (`CuttingTask`). Помощник выбирает расклад (`layOrdinal`),
+ * размер и набор рулонов (`rollOrdinals` — из `CuttingTaskRoll.ordinal` в
+ * этом раскладе), а backend на каждый рулон создаёт паспорт с
+ * `qtyCut = слои рулона × раскладка размера в этом раскладе`
+ * (`CuttingTaskLaySize.perLayerQty`) и `rollOrdinal = ordinal`,
+ * `cuttingLayOrdinal = layOrdinal`.
  *
  * - `cutterId` НЕ передаётся: сдельное начисление за раскрой идёт
  *   автоматически на `CuttingTask.assignedToId` (раскройщик, выполнивший
  *   задачу).
- * - Идемпотентно: пары `(sizeId, ordinal)`, уже выпущенные ранее,
- *   пропускаются (кейс «сломался принтер → продолжить с нужного рулона»,
- *   защита от двойного клика).
+ * - Идемпотентно: тройки `(layOrdinal, sizeId, ordinal)`, уже выпущенные
+ *   ранее, пропускаются (кейс «сломался принтер → продолжить с нужного
+ *   рулона», защита от двойного клика).
  */
 export const ReleaseFromRollsSchema = z.object({
   orderId: z.string().min(1, 'orderId обязателен'),
   sizeId: z.string().min(1, 'sizeId обязателен'),
+  layOrdinal: z
+    .number({ invalid_type_error: 'layOrdinal должен быть числом' })
+    .int('layOrdinal должен быть целым')
+    .positive('layOrdinal должен быть > 0'),
   cutDate: DateStringSchema,
   rollOrdinals: z
     .array(
@@ -338,9 +344,9 @@ export interface ReleasedPassportLiteDto {
  * Ответ `POST /api/passports/release-from-rolls`.
  *
  * `created` — паспорта, выпущенные этим запросом (для печати); может
- * быть короче `rollOrdinals`, если часть пар `(sizeId, ordinal)` уже была
- * выпущена ранее или у рулона `qty = 0`. `skipped` — `ordinal`-ы, которые
- * пропущены как уже выпущенные (UI может показать «уже выпущено»).
+ * быть короче `rollOrdinals`, если часть троек `(layOrdinal, sizeId,
+ * ordinal)` уже была выпущена ранее или у рулона `qty = 0`. `skipped` —
+ * `ordinal`-ы, пропущенные как уже выпущенные (UI покажет «уже выпущено»).
  */
 export interface ReleaseFromRollsResultDto {
   created: ReleasedPassportLiteDto[];

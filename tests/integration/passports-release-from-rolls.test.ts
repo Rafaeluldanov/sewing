@@ -4,21 +4,23 @@
  * `PassportsService.releaseFromRolls`).
  *
  * Контекст: раскрой и выпуск разведены по ролям. Раскройщик (`CUTTER`)
- * ведёт `CuttingTask` (раскладка `perLayerQty` по размерам + рулоны со
- * слоями) и завершает её (`DONE`). После этого выпуск паспортов целиком
- * у помощника (`CUTTER_ASSISTANT`): он выбирает размер и рулоны, а
- * количество и номер рулона backend берёт из задачи. На каждый рулон —
- * один паспорт с `qtyCut = слои рулона × раскладка размера`.
+ * ведёт `CuttingTask` многораскладно (`CuttingTaskLay`: выбранные размеры
+ * с `perLayerQty` + рулоны со слоями) и завершает её (`DONE`). После
+ * этого выпуск паспортов целиком у помощника (`CUTTER_ASSISTANT`): он
+ * выбирает расклад, размер и рулоны, а количество и номер рулона backend
+ * берёт из расклада. На каждый рулон — один паспорт с `qtyCut = слои
+ * рулона × раскладка размера в раскладе`.
  *
  * Проверяем:
- *   1. Выпуск одного рулона: qty = layers × perLayerQty, rollOrdinal
- *      проставлен, сдельное за раскрой ушло раскройщику задачи
- *      (`CuttingTask.assignedToId`), а не помощнику.
+ *   1. Выпуск одного рулона: qty = layers × perLayerQty, rollOrdinal +
+ *      cuttingLayOrdinal проставлены, сдельное за раскрой ушло раскройщику
+ *      задачи (`CuttingTask.assignedToId`), а не помощнику.
  *   2. Идемпотентность: повторный выпуск того же рулона пропускается
  *      (`skipped`), дубля паспорта нет (кейс «сломался принтер»).
  *   3. «Выбрать все рулоны» = пакетный выпуск всех рулонов размера.
- *   4. `release-state` отдаёт размеры (с `perLayerQty`), рулоны и
- *      выпущенные пары; `ready-for-release` считает статус NEW/DONE.
+ *   4. `release-state` отдаёт расклады (с размерами/`perLayerQty` и
+ *      рулонами) и выпущенные тройки; `ready-for-release` считает статус
+ *      NEW/DONE.
  *   5. Остаток плана: qty > остатка → 422 PASSPORT_QTY_EXCEEDS_REMAINING.
  *   6. RBAC: раскройщик (`CUTTER`) больше не выпускает паспорта (403 на
  *      `POST /api/passports`).
@@ -83,8 +85,9 @@ describeWithDb('integration — release passports from rolls', () => {
   // ---------------------------------------------------------------------------
 
   /**
-   * Заказ IN_PRODUCTION + завершённая задача раскройщика с раскладкой по
-   * размеру M (`perLayerQty`) и рулонами (`ordinal/layers`). Раскройщик
+   * Заказ IN_PRODUCTION + завершённая задача раскройщика с одним
+   * раскладом («Расклад 1»): размер M на настиле (`perLayerQty`) и рулоны
+   * (`ordinal/layers`). План — на уровне задачи (`sizeRows`). Раскройщик
    * задачи = seed `cutter`.
    */
   async function setupOrderWithCuttingTask(opts: {
@@ -122,10 +125,22 @@ describeWithDb('integration — release passports from rolls', () => {
             sizeId,
             sizeCodeSnapshot: 'M',
             qtyPlan: opts.qtyPlan,
-            perLayerQty: opts.perLayerQty,
           },
         },
-        rolls: { create: opts.rolls },
+        lays: {
+          create: {
+            ordinal: 1,
+            laySizes: {
+              create: {
+                sizeId,
+                sizeCodeSnapshot: 'M',
+                sortOrder: 10,
+                perLayerQty: opts.perLayerQty,
+              },
+            },
+            rolls: { create: opts.rolls },
+          },
+        },
       },
     });
   }
@@ -134,6 +149,7 @@ describeWithDb('integration — release passports from rolls', () => {
     return {
       orderId,
       sizeId,
+      layOrdinal: 1,
       cutDate: '2026-06-02T00:00:00.000Z',
       rollOrdinals,
     };
@@ -177,10 +193,17 @@ describeWithDb('integration — release passports from rolls', () => {
 
     const dbPassport = await t.prisma.passport.findUnique({
       where: { id: p.id },
-      select: { rollOrdinal: true, qtyCut: true, cutterId: true, sizeId: true },
+      select: {
+        rollOrdinal: true,
+        cuttingLayOrdinal: true,
+        qtyCut: true,
+        cutterId: true,
+        sizeId: true,
+      },
     });
     expect(dbPassport).toMatchObject({
       rollOrdinal: 1,
+      cuttingLayOrdinal: 1,
       qtyCut: 20,
       cutterId: seed.employees['cutter'].id,
       sizeId,
@@ -278,10 +301,12 @@ describeWithDb('integration — release passports from rolls', () => {
       .set('Cookie', cookies.assistant);
     expect(state0.status).toBe(200);
     expect(state0.body.cuttingTaskStatus).toBe('DONE');
-    expect(state0.body.sizes).toEqual([
+    expect(state0.body.lays).toHaveLength(1);
+    expect(state0.body.lays[0].ordinal).toBe(1);
+    expect(state0.body.lays[0].sizes).toEqual([
       expect.objectContaining({ sizeId, perLayerQty: 2, qtyPlan: 100 }),
     ]);
-    expect(state0.body.rolls).toHaveLength(2);
+    expect(state0.body.lays[0].rolls).toHaveLength(2);
     expect(state0.body.released).toEqual([]);
 
     const ready0 = await request(t.app.getHttpServer())

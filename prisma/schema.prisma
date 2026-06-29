@@ -531,6 +531,10 @@ model Size {
   /// ссылающихся на размер. `onDelete: SetNull` со стороны строки —
   /// удаление `Size` не сносит строки задачи (sizeCode в snapshot).
   cuttingTaskSizeRows            CuttingTaskSizeRow[]
+  /// Кабинет раскройщика: обратная связь от строк раскладов
+  /// (`CuttingTaskLaySize`) — выбранные в раскладе размеры с «на настиле».
+  /// `onDelete: SetNull` со стороны строки (sizeCode в snapshot).
+  cuttingTaskLaySizes            CuttingTaskLaySize[]
   /// Этап «Погонные метры по размерам»: обратная связь от значений
   /// `PatternItemSizeParameterValue`, привязанных к этому размеру.
   /// `onDelete: Cascade` — удаление размера каскадно сносит значения.
@@ -1817,14 +1821,22 @@ model Passport {
   cutDate    DateTime
   /// Порядковый номер рулона (`CuttingTaskRoll.ordinal`), по которому
   /// помощник раскройщика выпустил этот паспорт через рулонный выпуск
-  /// (`POST /api/passports/release-from-rolls`). По паре
-  /// `(orderId, sizeId, rollOrdinal)` определяется, какие рулоны размера
-  /// уже выпущены (защита от повторной печати, кейс «сломался принтер»).
-  /// `null` у паспортов, выпущенных старой ручной формой (где `rollNumber`
-  /// — свободный текст) и у исторических данных. FK на `CuttingTaskRoll`
-  /// сознательно НЕ ставим: строки рулонов пересоздаются при каждом
-  /// сохранении задачи раскройщика, а `ordinal` стабилен после `DONE`.
+  /// (`POST /api/passports/release-from-rolls`). По тройке
+  /// `(sizeId, cuttingLayOrdinal, rollOrdinal)` определяется, какие рулоны
+  /// размера в раскладе уже выпущены (защита от повторной печати, кейс
+  /// «сломался принтер»). `null` у паспортов, выпущенных старой ручной
+  /// формой (где `rollNumber` — свободный текст) и у исторических данных.
+  /// FK на `CuttingTaskRoll` сознательно НЕ ставим: строки рулонов
+  /// пересоздаются при каждом сохранении задачи раскройщика, а `ordinal`
+  /// стабилен после `DONE`.
   rollOrdinal Int?
+  /// Номер расклада (`CuttingTaskLay.ordinal`), из которого выпущен рулон.
+  /// Номера рулонов уникальны лишь в пределах расклада, поэтому рулонная
+  /// идентичность паспорта — тройка `(sizeId, cuttingLayOrdinal,
+  /// rollOrdinal)`. `null` у ручного выпуска и исторических данных
+  /// (миграция бэкфиллит `1` выпущенным паспортам — старый единственный
+  /// расклад). FK не ставим по той же причине, что у `rollOrdinal`.
+  cuttingLayOrdinal Int?
   qtyPlan    Int
   qtyCut     Int
   qtyDefect  Int            @default(0)
@@ -1913,7 +1925,7 @@ model Passport {
   @@index([sizeId, status])
   @@index([createdAt])
   @@index([currentCellId])
-  @@index([orderId, sizeId, rollOrdinal])
+  @@index([orderId, sizeId, cuttingLayOrdinal, rollOrdinal])
 }
 
 // =========================
@@ -6710,16 +6722,21 @@ model ConstructorTaskFile {
 /// Создаётся автоматически при `OrdersService.start()` (переход заказа
 /// в `IN_PRODUCTION`): 1:1 с заказом. В кабинет раскройщика попадает
 /// общая очередь (`status='NEW'`), любой раскройщик берёт задачу в
-/// работу (`start` → `IN_PROGRESS`, фиксируем `assignedToId`), вводит
-/// «количество размера на настиле» (`CuttingTaskSizeRow.perLayerQty`),
-/// настилает рулоны (`CuttingTaskRoll`), и завершает раскрой
+/// работу (`start` → `IN_PROGRESS`, фиксируем `assignedToId`), составляет
+/// один или несколько раскладов (`CuttingTaskLay`): в каждом выбирает
+/// размеры с «количеством на настиле» (`CuttingTaskLaySize.perLayerQty`)
+/// и настилает рулоны (`CuttingTaskRoll`), и завершает раскрой
 /// (`complete` → `DONE`).
 ///
-/// Итоги НЕ хранятся: «всего слоёв» = Σ `CuttingTaskRoll.layers`,
-/// «итог по размеру» = всего слоёв × `perLayerQty` — считаются на лету
-/// (клиент в реальном времени, сервер в мапперах). Завершение раскроя
-/// на текущем этапе НЕ трогает `Passport` — данные дальше пойдут в
-/// кабинет помощника раскройщика отдельным шагом.
+/// План по размерам (`CuttingTaskSizeRow.qtyPlan`) — снимок заказа,
+/// общий для всех раскладов и read-only для раскройщика.
+///
+/// Итоги НЕ хранятся: «всего слоёв» = Σ `CuttingTaskRoll.layers` по
+/// всем раскладам, «итог по размеру» = Σ по раскладам (слои расклада ×
+/// `CuttingTaskLaySize.perLayerQty`) — считаются на лету (клиент в
+/// реальном времени, сервер в мапперах). Завершение раскроя на текущем
+/// этапе НЕ трогает `Passport` — данные дальше пойдут в кабинет
+/// помощника раскройщика отдельным шагом.
 model CuttingTask {
   id      String @id @default(cuid())
   orderId String @unique
@@ -6748,14 +6765,16 @@ model CuttingTask {
   updatedAt DateTime @updatedAt
 
   sizeRows CuttingTaskSizeRow[]
-  rolls    CuttingTaskRoll[]
+  lays     CuttingTaskLay[]
 
   @@index([status])
 }
 
-/// Строка задания по размеру в задаче на раскрой. Снимок плана заказа
-/// (`qtyPlan` из `OrderItem`, агрегированный по размеру) + вводимое
-/// раскройщиком «количество размера на настиле» (`perLayerQty`).
+/// Строка задания по размеру в задаче на раскрой — снимок плана заказа
+/// (`qtyPlan` из `OrderItem`, агрегированный по размеру). Это список
+/// размеров заказа, из которого раскройщик выбирает чекбоксом размеры
+/// в каждый расклад (`CuttingTaskLaySize`). `qtyPlan` общий для всех
+/// раскладов и read-only для раскройщика.
 model CuttingTaskSizeRow {
   id     String      @id @default(cuid())
   taskId String
@@ -6777,34 +6796,84 @@ model CuttingTaskSizeRow {
   /// размеру на момент запуска заказа). Read-only для раскройщика.
   qtyPlan Int
 
-  /// «Количество размера на настиле» (раскладка/маркер) — сколько штук
-  /// этого размера в одном слое настила. Вводит раскройщик в кабинете.
-  /// Дефолт 0 = «ещё не заполнено». «Итог по размеру» = Σ слоёв ×
-  /// `perLayerQty`.
-  perLayerQty Int @default(0)
-
   @@unique([taskId, sizeId], name: "CuttingTaskSizeRow_task_size_uniq")
   @@index([taskId, sortOrder])
 }
 
-/// Рулон настила в задаче на раскрой. Раскройщик добавляет рулоны
-/// («Рулон 1», «Рулон 2», …) и для каждого вводит количество слоёв.
-/// «Всего слоёв» = Σ `layers` по всем рулонам задачи.
-model CuttingTaskRoll {
+/// Расклад («Расклад 1», «Расклад 2», …) внутри задачи на раскрой. В
+/// одном заказе раскройщик делает несколько раскладов: в каждом — свой
+/// набор выбранных размеров с «на настиле» (`CuttingTaskLaySize`) и свои
+/// рулоны (`CuttingTaskRoll`). Нумерация сквозная в рамках задачи
+/// (`ordinal`, 1-based) — то, что видно как «Расклад N».
+model CuttingTaskLay {
   id     String      @id @default(cuid())
   taskId String
   task   CuttingTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
-  /// Порядковый номер рулона в рамках задачи (1-based) — то, что
-  /// раскройщик видит как «Рулон N». Уникален в пределах задачи.
+  /// Порядковый номер расклада в рамках задачи (1-based). Уникален в
+  /// пределах задачи; используется как `Passport.cuttingLayOrdinal` при
+  /// выпуске паспортов помощником.
+  ordinal Int
+
+  createdAt DateTime @default(now())
+
+  laySizes CuttingTaskLaySize[]
+  rolls    CuttingTaskRoll[]
+
+  @@unique([taskId, ordinal], name: "CuttingTaskLay_task_ordinal_uniq")
+  @@index([taskId, ordinal])
+}
+
+/// Выбранный в раскладе размер с «количеством на настиле». Раскройщик
+/// отмечает чекбоксом размеры заказа (`CuttingTaskSizeRow`) и для каждого
+/// в этом раскладе вводит `perLayerQty` — сколько штук размера в одном
+/// слое настила. Один размер может входить в несколько раскладов с разным
+/// `perLayerQty`. «Итог по размеру» = Σ по раскладам (Σ слоёв расклада ×
+/// `perLayerQty`).
+model CuttingTaskLaySize {
+  id    String         @id @default(cuid())
+  layId String
+  lay   CuttingTaskLay @relation(fields: [layId], references: [id], onDelete: Cascade)
+
+  /// FK на `Size.id`. Nullable: удаление размера не теряет строку —
+  /// UI fallback-ит на `sizeCodeSnapshot`.
+  sizeId String?
+  size   Size?   @relation(fields: [sizeId], references: [id], onDelete: SetNull)
+
+  /// Снимок `Size.code` на момент сохранения — защита от
+  /// переименования / удаления `Size`. Всегда заполнен.
+  sizeCodeSnapshot String
+
+  /// Управленческий порядок отрисовки (копия `Size.sortOrder`, как в
+  /// `CuttingTaskSizeRow`).
+  sortOrder Int
+
+  /// «Количество размера на настиле» (раскладка/маркер) в этом раскладе.
+  /// Дефолт 0 = «ещё не заполнено».
+  perLayerQty Int @default(0)
+
+  @@unique([layId, sizeId], name: "CuttingTaskLaySize_lay_size_uniq")
+  @@index([layId, sortOrder])
+}
+
+/// Рулон настила в раскладе. Раскройщик добавляет рулоны («Рулон 1»,
+/// «Рулон 2», …) в каждом раскладе и для каждого вводит количество слоёв.
+/// «Всего слоёв» расклада = Σ `layers` по его рулонам.
+model CuttingTaskRoll {
+  id    String         @id @default(cuid())
+  layId String
+  lay   CuttingTaskLay @relation(fields: [layId], references: [id], onDelete: Cascade)
+
+  /// Порядковый номер рулона в рамках расклада (1-based) — то, что
+  /// раскройщик видит как «Рулон N». Уникален в пределах расклада.
   ordinal Int
 
   /// Количество слоёв (настилов) в этом рулоне. Дефолт 0 = «ещё не
   /// заполнено».
   layers Int @default(0)
 
-  @@unique([taskId, ordinal], name: "CuttingTaskRoll_task_ordinal_uniq")
-  @@index([taskId, ordinal])
+  @@unique([layId, ordinal], name: "CuttingTaskRoll_lay_ordinal_uniq")
+  @@index([layId, ordinal])
 }
 
 /// Сигнальный образец (`OrderSample`, MVP). См.

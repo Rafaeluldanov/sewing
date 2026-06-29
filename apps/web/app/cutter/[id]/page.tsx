@@ -134,7 +134,7 @@ export default async function CutterTaskDetailPage({ params }: PageProps) {
         <CuttingForm
           taskId={task.id}
           sizeRows={task.sizeRows}
-          rolls={task.rolls}
+          lays={task.lays}
         />
       ) : null}
 
@@ -148,7 +148,7 @@ export default async function CutterTaskDetailPage({ params }: PageProps) {
           <CuttingForm
             taskId={task.id}
             sizeRows={task.sizeRows}
-            rolls={task.rolls}
+            lays={task.lays}
             readOnly
           />
         </>

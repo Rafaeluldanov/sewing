@@ -2523,7 +2523,9 @@ export class OrdersService {
 
       // Задача на раскрой (кабинет раскройщика). Idempotent-guard: если
       // по какой-то причине задача уже есть (ручной transition / повтор),
-      // не дублируем. `perLayerQty` остаётся 0 — его заполнит раскройщик.
+      // не дублируем. `sizeRows` — снимок плана (источник выбора размеров
+      // в расклады); сразу заводим пустой «Расклад 1» (ordinal=1), его
+      // наполнит раскройщик.
       const existingCutting = await tx.cuttingTask.count({
         where: { orderId: id },
       });
@@ -2542,6 +2544,7 @@ export class OrdersService {
                 })),
               },
             },
+            lays: { create: { ordinal: 1 } },
           },
         });
       }

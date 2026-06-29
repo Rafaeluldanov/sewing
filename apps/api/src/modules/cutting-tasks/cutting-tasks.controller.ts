@@ -91,8 +91,9 @@ export class CuttingTasksController {
   }
 
   /**
-   * Автосохранение прогресса настила: `perLayerQty` по размерам + весь
-   * набор рулонов. Тело валидируется `SaveCuttingTaskProgressSchema`.
+   * Автосохранение прогресса: полная замена набора раскладов задачи
+   * (размеры с «на настиле» + рулоны). Тело валидируется
+   * `SaveCuttingTaskProgressSchema`.
    */
   @Patch(':id')
   @Roles('CUTTER', 'SHOP_MANAGER', 'ADMIN')

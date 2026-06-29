@@ -15975,6 +15975,28 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 1.15rem;
   font-variant-numeric: tabular-nums;
 }
+.cutter-lay {
+  border: 1px solid #e2e8f0;
+  border-left: 4px solid #2563eb;
+}
+.cutter-lay__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+  flex-wrap: wrap;
+}
+.cutter-lay-remove {
+  padding: 0.25rem 0.6rem;
+  line-height: 1;
+  color: #b91c1c;
+}
+.cutter-row--off {
+  color: #94a3b8;
+}
+.cutter-row--off strong {
+  font-weight: 400;
+}
 
 .constructor-files {
   list-style: none;
