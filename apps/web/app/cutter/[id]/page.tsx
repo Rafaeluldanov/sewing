@@ -1,7 +1,8 @@
 import Link from 'next/link';
-import { notFound } from 'next/navigation';
+import { notFound, redirect } from 'next/navigation';
 import { ApiRequestError } from '@/lib/api';
 import { getCuttingTask } from '@/lib/cutting-tasks-api';
+import { getCurrentShift } from '@/lib/shifts-api';
 import {
   CUTTING_TASK_STATUS_LABELS,
   type CuttingTaskDetailDto,
@@ -24,6 +25,19 @@ interface PageProps {
  *   - `CANCELLED`   → заметка.
  */
 export default async function CutterTaskDetailPage({ params }: PageProps) {
+  // Гейт смены: раскрой — scan-shift роль (см. `cutter/page.tsx`).
+  // Доска `/cutter` уже закрыта сменой, но прямой переход на
+  // `/cutter/<id>` минуя её недопустим — без активной смены отправляем
+  // на доску, где предложат «Начать смену». fail-soft на ApiRequestError
+  // тем же идиомом, что и доска: ошибку трактуем как «смены нет».
+  let currentShift = null;
+  try {
+    currentShift = await getCurrentShift();
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) throw e;
+  }
+  if (!(currentShift && currentShift.active)) redirect('/cutter');
+
   let task: CuttingTaskDetailDto;
   try {
     task = await getCuttingTask(params.id);
