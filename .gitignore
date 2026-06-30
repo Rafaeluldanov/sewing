@@ -24,6 +24,9 @@ backups/*.dump
 # patterns uploads (модуль «Лекала», MVP-1)
 apps/api/uploads/
 
+# uploads-артефакты прогона integration-тестов
+tests/apps/api/uploads/
+
 # editor
 .idea/
 .vscode/
