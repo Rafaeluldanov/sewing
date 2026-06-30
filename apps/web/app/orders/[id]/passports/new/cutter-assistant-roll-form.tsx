@@ -96,14 +96,12 @@ export function CutterAssistantRollForm({
   } | null>(null);
   const [printPending, startPrintTransition] = useTransition();
 
-  // ---- «Выпустить ещё раз»: повторная печать уже выпущенного паспорта -------
-  // (например, завис принтер). Новый паспорт не создаём — только переотправка
-  // на печать существующего. Фидбек привязан к рулону (`ordinal`).
-  const [reprintingOrdinal, setReprintingOrdinal] = useState<number | null>(
-    null,
-  );
+  // ---- «Выпустить ещё раз»: повторная печать уже выпущенных паспортов -------
+  // (например, завис принтер). Новые паспорта не создаём — только
+  // переотправка существующих на печать. Запускается той же нижней кнопкой
+  // (она меняет подпись), когда выбраны уже выпущенные рулоны; кнопок у
+  // каждого рулона больше нет.
   const [reprintFeedback, setReprintFeedback] = useState<{
-    ordinal: number;
     kind: 'ok' | 'err';
     text: string;
   } | null>(null);
@@ -136,18 +134,22 @@ export function CutterAssistantRollForm({
     return { releasedForSize: set, releasedPassportByOrdinal: byOrdinal };
   }, [released, layOrdinal, sizeId]);
 
-  const releasableOrdinals = useMemo(
+  // Выбирать можно любой рулон со слоями — и невыпущенный (новый паспорт),
+  // и уже выпущенный (повторная печать). Блокируем только рулоны без слоёв
+  // (размер не на этом настиле).
+  const selectableOrdinals = useMemo(
     () =>
       rolls
-        .filter((r) => !releasedForSize.has(r.ordinal) && r.layers * perLayerQty > 0)
+        .filter((r) => r.layers * perLayerQty > 0)
         .map((r) => r.ordinal),
-    [rolls, releasedForSize, perLayerQty],
+    [rolls, perLayerQty],
   );
 
   // Смена размера сбрасывает выбор: набор выпущенных и количества другие.
   useEffect(() => {
     setSelected(new Set());
     setError(null);
+    setReprintFeedback(null);
   }, [sizeId]);
 
   const toggleRoll = (ordinal: number) => {
@@ -160,12 +162,18 @@ export function CutterAssistantRollForm({
   };
 
   const allSelected =
-    releasableOrdinals.length > 0 &&
-    releasableOrdinals.every((o) => selected.has(o));
+    selectableOrdinals.length > 0 &&
+    selectableOrdinals.every((o) => selected.has(o));
 
   const toggleAll = () => {
-    setSelected(allSelected ? new Set() : new Set(releasableOrdinals));
+    setSelected(allSelected ? new Set() : new Set(selectableOrdinals));
   };
+
+  // Если ВСЕ выбранные рулоны уже выпущены — нижняя кнопка переключается на
+  // повторную печать (а не создаёт паспорта). Смешанный выбор трактуем как
+  // обычный выпуск: уже выпущенные рулоны backend идемпотентно пропустит.
+  const selectedAllReleased =
+    selected.size > 0 && [...selected].every((o) => releasedForSize.has(o));
 
   const selectedQty = rolls.reduce(
     (acc, r) => acc + (selected.has(r.ordinal) ? r.layers * perLayerQty : 0),
@@ -241,44 +249,47 @@ export function CutterAssistantRollForm({
     });
   };
 
-  // Повторная печать одного уже выпущенного паспорта. Переиспользует тот же
-  // batch-механизм печати (PrintJob + браузерный fallback), что и экран
-  // успеха, но без создания паспорта — кейс «принтер завис, печатаем заново».
-  const handleReprint = (passportId: string, ordinal: number) => {
+  // Повторная печать выбранных уже выпущенных паспортов (нижняя кнопка в
+  // режиме «выпустить ещё раз»). Переиспользует тот же batch-механизм печати
+  // (PrintJob + браузерный fallback), что и экран успеха, но без создания
+  // паспортов — кейс «принтер завис, печатаем заново».
+  const handleReprintSelected = () => {
+    const ids = [...selected]
+      .map((o) => releasedPassportByOrdinal.get(o)?.id)
+      .filter((id): id is string => Boolean(id));
+    if (ids.length === 0) return;
     setReprintFeedback(null);
-    setReprintingOrdinal(ordinal);
     startReprintTransition(async () => {
-      const res = await sendPassportPrintJobsBatch([passportId]);
+      const res = await sendPassportPrintJobsBatch(ids);
       if (res.ok) {
+        const failedNote =
+          res.failed && res.failed > 0
+            ? ` · не ушло: ${res.failed}${
+                res.firstError ? ` (${res.firstError})` : ''
+              }`
+            : '';
         setReprintFeedback({
-          ordinal,
-          kind: res.printed && res.printed > 0 ? 'ok' : 'err',
-          text:
-            res.printed && res.printed > 0
-              ? 'Отправлено на принтер повторно.'
-              : `Не ушло${res.firstError ? ` (${res.firstError})` : ''}`,
+          kind: res.printed === 0 ? 'err' : 'ok',
+          text: `Отправлено на принтер повторно: ${res.printed ?? 0}${failedNote}`,
         });
       } else if (res.noPrinter) {
         if (typeof window !== 'undefined') {
           window.open(
-            buildPassportsBatchPrintPath([passportId]),
+            buildPassportsBatchPrintPath(ids),
             '_blank',
             'noopener',
           );
         }
         setReprintFeedback({
-          ordinal,
           kind: 'ok',
-          text: 'Принтер не настроен — открыта печать в браузере.',
+          text: 'Принтер не настроен — открыта печать выбранных в браузере.',
         });
       } else {
         setReprintFeedback({
-          ordinal,
           kind: 'err',
           text: res.error ?? 'Не удалось отправить на печать.',
         });
       }
-      setReprintingOrdinal(null);
     });
   };
 
@@ -537,7 +548,7 @@ export function CutterAssistantRollForm({
                       type="button"
                       className="btn"
                       onClick={toggleAll}
-                      disabled={disabled || releasableOrdinals.length === 0}
+                      disabled={disabled || selectableOrdinals.length === 0}
                     >
                       {allSelected ? 'Снять выбор' : 'Выбрать все рулоны'}
                     </button>
@@ -556,14 +567,16 @@ export function CutterAssistantRollForm({
                       {rolls.map((r) => {
                         const qty = r.layers * perLayerQty;
                         const isReleased = releasedForSize.has(r.ordinal);
-                        const isReleasable = !isReleased && qty > 0;
+                        // Выбрать можно любой рулон со слоями: невыпущенный →
+                        // новый паспорт, уже выпущенный → повторная печать.
+                        const isSelectable = qty > 0;
                         return (
                           <tr key={r.ordinal}>
                             <td>
                               <input
                                 type="checkbox"
                                 checked={selected.has(r.ordinal)}
-                                disabled={disabled || !isReleasable}
+                                disabled={disabled || !isSelectable}
                                 onChange={() => toggleRoll(r.ordinal)}
                                 aria-label={`Рулон ${r.ordinal}`}
                               />
@@ -573,59 +586,9 @@ export function CutterAssistantRollForm({
                             <td>{qty}</td>
                             <td>
                               {isReleased ? (
-                                (() => {
-                                  const pass = releasedPassportByOrdinal.get(
-                                    r.ordinal,
-                                  );
-                                  const fb =
-                                    reprintFeedback &&
-                                    reprintFeedback.ordinal === r.ordinal
-                                      ? reprintFeedback
-                                      : null;
-                                  return (
-                                    <div
-                                      style={{
-                                        display: 'flex',
-                                        alignItems: 'center',
-                                        gap: '0.5rem',
-                                        flexWrap: 'wrap',
-                                      }}
-                                    >
-                                      <span className="constructor-status constructor-status--done">
-                                        ✔ выпущено
-                                      </span>
-                                      {pass && (
-                                        <button
-                                          type="button"
-                                          className="btn btn-ghost"
-                                          onClick={() =>
-                                            handleReprint(pass.id, r.ordinal)
-                                          }
-                                          disabled={reprintPending}
-                                          aria-label={`Выпустить ещё раз паспорт ${pass.number}`}
-                                        >
-                                          {reprintPending &&
-                                          reprintingOrdinal === r.ordinal
-                                            ? 'Печатаем…'
-                                            : 'Выпустить ещё раз'}
-                                        </button>
-                                      )}
-                                      {fb && (
-                                        <span
-                                          className="hint"
-                                          style={{
-                                            color:
-                                              fb.kind === 'ok'
-                                                ? 'var(--color-ok-fg)'
-                                                : 'var(--color-danger-fg)',
-                                          }}
-                                        >
-                                          {fb.text}
-                                        </span>
-                                      )}
-                                    </div>
-                                  );
-                                })()
+                                <span className="constructor-status constructor-status--done">
+                                  ✔ выпущено
+                                </span>
                               ) : qty === 0 ? (
                                 <span className="hint">размер не на настиле</span>
                               ) : null}
@@ -657,15 +620,34 @@ export function CutterAssistantRollForm({
         <button
           type="button"
           className="btn btn-primary"
-          onClick={handleRelease}
-          disabled={disabled || pending || selected.size === 0}
+          onClick={selectedAllReleased ? handleReprintSelected : handleRelease}
+          disabled={disabled || pending || reprintPending || selected.size === 0}
         >
-          {pending ? 'Выпускаем…' : 'Выпустить паспорт'}
+          {selectedAllReleased
+            ? reprintPending
+              ? 'Печатаем…'
+              : 'Выпустить ещё раз паспорт'
+            : pending
+              ? 'Выпускаем…'
+              : 'Выпустить паспорт'}
         </button>
         <Link href="/work/cut-orders" className="btn btn-ghost">
           Отмена
         </Link>
       </div>
+      {reprintFeedback && (
+        <span
+          className="meta-line"
+          style={{
+            color:
+              reprintFeedback.kind === 'ok'
+                ? 'var(--color-ok-fg)'
+                : 'var(--color-danger-fg)',
+          }}
+        >
+          {reprintFeedback.text}
+        </span>
+      )}
     </div>
   );
 }
