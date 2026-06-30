@@ -55,6 +55,7 @@
 | `ops.md` | OUTDATED | Не покрывает агентскую печатную станцию (`apps/agent`), production-cost-v2, материнские override-ы. |
 | `deploy-stage.md` | OK | Релевантна для stage.teeon.ru, синхронизирована с `.env.example`. |
 | `deploy-uploads-static-routing.md` | OK | nginx-роутинг `/uploads/*` остаётся актуальным. |
+| [`multitenancy.md`](./multitenancy.md) | **OK** | Мультитенантность DB-per-tenant: модель, окружения (dev/prod/teeon.ru), архитектура, фазы 0–4 (что сделано), runbook включения и что осталось. |
 | `recon-soft-integration.md` | OK | Документ-«лестница» этапов внедрения; работающий план. |
 | `prelaunch-cleanup-recon.md` | OK | Cleanup-план перед запуском; рабочий. |
 | `production-cost-v2-recon.md` | OK | Описывает работающий `/api/admin/production-cost/v2`. |
