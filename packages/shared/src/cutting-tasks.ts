@@ -307,13 +307,24 @@ export interface ReleaseLayDto {
   rolls: ReleaseLayRollDto[];
 }
 
+/** Уже выпущенный рулон — тройка `(layOrdinal, sizeId, ordinal)` + сам паспорт. */
+export interface ReleasedRollDto {
+  layOrdinal: number;
+  sizeId: string;
+  ordinal: number;
+  /** Id уже выпущенного паспорта — для повторной печати «выпустить ещё раз». */
+  passportId: string;
+  /** Номер паспорта (подпись/доступность кнопки повторного выпуска). */
+  passportNumber: string;
+}
+
 /**
  * Ответ `GET /api/cutting-tasks/by-order/:orderId/release-state` — всё,
  * что нужно помощнику, чтобы выпускать паспорта по рулонам без ручного
  * ввода. Расклады (с размерами и рулонами) берутся из завершённой задачи
- * раскройщика; `released` — тройки `(layOrdinal, sizeId, ordinal)`, по
- * которым паспорт уже выпущен (рисуются как «выпущено» и не выпускаются
- * повторно).
+ * раскройщика; `released` — рулоны, по которым паспорт уже выпущен
+ * (рисуются как «выпущено», повторно не выпускаются, но их паспорт можно
+ * распечатать ещё раз — кейс «завис принтер»).
  */
 export interface OrderReleaseStateDto {
   orderId: string;
@@ -323,7 +334,7 @@ export interface OrderReleaseStateDto {
   color: string;
   cuttingTaskStatus: CuttingTaskStatus;
   lays: ReleaseLayDto[];
-  released: Array<{ layOrdinal: number; sizeId: string; ordinal: number }>;
+  released: ReleasedRollDto[];
 }
 
 /**

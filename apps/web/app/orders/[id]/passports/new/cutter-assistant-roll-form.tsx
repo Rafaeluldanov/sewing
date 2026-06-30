@@ -3,7 +3,7 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, useTransition } from 'react';
-import type { ReleaseLayDto } from '@sewing/shared/cutting-tasks';
+import type { ReleaseLayDto, ReleasedRollDto } from '@sewing/shared/cutting-tasks';
 import type { ReleasedPassportLiteDto } from '@sewing/shared/passports';
 import { sendPassportPrintJobsBatch } from '@/components/print-button-actions';
 import { buildPassportsBatchPrintPath } from '@/lib/browser-api-paths';
@@ -16,8 +16,8 @@ interface Props {
   color: string;
   /** Расклады из завершённой задачи раскройщика. */
   lays: ReleaseLayDto[];
-  /** Уже выпущенные тройки `(расклад, размер, рулон)`. */
-  released: Array<{ layOrdinal: number; sizeId: string; ordinal: number }>;
+  /** Уже выпущенные рулоны `(расклад, размер, рулон)` + их паспорт. */
+  released: ReleasedRollDto[];
   today: string;
   disabled: boolean;
 }
@@ -39,7 +39,8 @@ interface SuccessState {
  * проставляет backend.
  *
  * Уже выпущенные тройки `(расклад, размер, рулон)` помечены «выпущено» и
- * не выбираются повторно.
+ * не выпускаются повторно (новый паспорт не плодим), но их паспорт можно
+ * распечатать ещё раз кнопкой «Выпустить ещё раз» — кейс «завис принтер».
  */
 export function CutterAssistantRollForm({
   orderId,
@@ -90,6 +91,19 @@ export function CutterAssistantRollForm({
   } | null>(null);
   const [printPending, startPrintTransition] = useTransition();
 
+  // ---- «Выпустить ещё раз»: повторная печать уже выпущенного паспорта -------
+  // (например, завис принтер). Новый паспорт не создаём — только переотправка
+  // на печать существующего. Фидбек привязан к рулону (`ordinal`).
+  const [reprintingOrdinal, setReprintingOrdinal] = useState<number | null>(
+    null,
+  );
+  const [reprintFeedback, setReprintFeedback] = useState<{
+    ordinal: number;
+    kind: 'ok' | 'err';
+    text: string;
+  } | null>(null);
+  const [reprintPending, startReprintTransition] = useTransition();
+
   // Смена расклада: переключаем размер на первый размер нового расклада и
   // сбрасываем выбор рулонов.
   useEffect(() => {
@@ -103,13 +117,18 @@ export function CutterAssistantRollForm({
   const selectedSize = sortedSizes.find((s) => s.sizeId === sizeId);
   const perLayerQty = selectedSize?.perLayerQty ?? 0;
 
-  // Уже выпущенные рулоны для выбранной пары (расклад, размер).
-  const releasedForSize = useMemo(() => {
+  // Уже выпущенные рулоны для выбранной пары (расклад, размер): набор
+  // ordinal'ов + карта `ordinal → паспорт` для повторной печати.
+  const { releasedForSize, releasedPassportByOrdinal } = useMemo(() => {
     const set = new Set<number>();
+    const byOrdinal = new Map<number, { id: string; number: string }>();
     for (const r of released) {
-      if (r.layOrdinal === layOrdinal && r.sizeId === sizeId) set.add(r.ordinal);
+      if (r.layOrdinal === layOrdinal && r.sizeId === sizeId) {
+        set.add(r.ordinal);
+        byOrdinal.set(r.ordinal, { id: r.passportId, number: r.passportNumber });
+      }
     }
-    return set;
+    return { releasedForSize: set, releasedPassportByOrdinal: byOrdinal };
   }, [released, layOrdinal, sizeId]);
 
   const releasableOrdinals = useMemo(
@@ -210,6 +229,47 @@ export function CutterAssistantRollForm({
         kind: 'err',
         text: res.error ?? 'Не удалось отправить на печать.',
       });
+    });
+  };
+
+  // Повторная печать одного уже выпущенного паспорта. Переиспользует тот же
+  // batch-механизм печати (PrintJob + браузерный fallback), что и экран
+  // успеха, но без создания паспорта — кейс «принтер завис, печатаем заново».
+  const handleReprint = (passportId: string, ordinal: number) => {
+    setReprintFeedback(null);
+    setReprintingOrdinal(ordinal);
+    startReprintTransition(async () => {
+      const res = await sendPassportPrintJobsBatch([passportId]);
+      if (res.ok) {
+        setReprintFeedback({
+          ordinal,
+          kind: res.printed && res.printed > 0 ? 'ok' : 'err',
+          text:
+            res.printed && res.printed > 0
+              ? 'Отправлено на принтер повторно.'
+              : `Не ушло${res.firstError ? ` (${res.firstError})` : ''}`,
+        });
+      } else if (res.noPrinter) {
+        if (typeof window !== 'undefined') {
+          window.open(
+            buildPassportsBatchPrintPath([passportId]),
+            '_blank',
+            'noopener',
+          );
+        }
+        setReprintFeedback({
+          ordinal,
+          kind: 'ok',
+          text: 'Принтер не настроен — открыта печать в браузере.',
+        });
+      } else {
+        setReprintFeedback({
+          ordinal,
+          kind: 'err',
+          text: res.error ?? 'Не удалось отправить на печать.',
+        });
+      }
+      setReprintingOrdinal(null);
     });
   };
 
@@ -483,9 +543,59 @@ export function CutterAssistantRollForm({
                             <td>{qty}</td>
                             <td>
                               {isReleased ? (
-                                <span className="constructor-status constructor-status--done">
-                                  ✔ выпущено
-                                </span>
+                                (() => {
+                                  const pass = releasedPassportByOrdinal.get(
+                                    r.ordinal,
+                                  );
+                                  const fb =
+                                    reprintFeedback &&
+                                    reprintFeedback.ordinal === r.ordinal
+                                      ? reprintFeedback
+                                      : null;
+                                  return (
+                                    <div
+                                      style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '0.5rem',
+                                        flexWrap: 'wrap',
+                                      }}
+                                    >
+                                      <span className="constructor-status constructor-status--done">
+                                        ✔ выпущено
+                                      </span>
+                                      {pass && (
+                                        <button
+                                          type="button"
+                                          className="btn btn-ghost"
+                                          onClick={() =>
+                                            handleReprint(pass.id, r.ordinal)
+                                          }
+                                          disabled={reprintPending}
+                                          aria-label={`Выпустить ещё раз паспорт ${pass.number}`}
+                                        >
+                                          {reprintPending &&
+                                          reprintingOrdinal === r.ordinal
+                                            ? 'Печатаем…'
+                                            : 'Выпустить ещё раз'}
+                                        </button>
+                                      )}
+                                      {fb && (
+                                        <span
+                                          className="hint"
+                                          style={{
+                                            color:
+                                              fb.kind === 'ok'
+                                                ? 'var(--color-ok-fg)'
+                                                : 'var(--color-danger-fg)',
+                                          }}
+                                        >
+                                          {fb.text}
+                                        </span>
+                                      )}
+                                    </div>
+                                  );
+                                })()
                               ) : qty === 0 ? (
                                 <span className="hint">размер не на настиле</span>
                               ) : null}

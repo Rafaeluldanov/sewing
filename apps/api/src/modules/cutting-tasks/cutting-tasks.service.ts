@@ -267,7 +267,13 @@ export class CuttingTasksService {
         rollOrdinal: { not: null },
         cuttingLayOrdinal: { not: null },
       },
-      select: { sizeId: true, rollOrdinal: true, cuttingLayOrdinal: true },
+      select: {
+        id: true,
+        number: true,
+        sizeId: true,
+        rollOrdinal: true,
+        cuttingLayOrdinal: true,
+      },
     });
 
     const lays: ReleaseLayDto[] = task.lays.map((l) => ({
@@ -298,6 +304,8 @@ export class CuttingTasksService {
         layOrdinal: p.cuttingLayOrdinal as number,
         sizeId: p.sizeId,
         ordinal: p.rollOrdinal as number,
+        passportId: p.id,
+        passportNumber: p.number,
       })),
     };
   }
