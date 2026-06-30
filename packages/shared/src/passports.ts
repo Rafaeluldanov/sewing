@@ -341,16 +341,39 @@ export interface ReleasedPassportLiteDto {
 }
 
 /**
+ * Уведомление «выпуск превысил план размера» (см.
+ * `ReleaseFromRollsResultDto.overCut`).
+ *
+ * Перекрой НЕ блокирует печать: настил иногда даёт больше плана (лишний
+ * слой, запас под подмену брака), а раскрой уже физически выполнен.
+ * Backend выставляет это поле, когда суммарный выпуск по размеру (по всем
+ * раскладам заказа) превысил `OrderItem.qtyPlan`, чтобы UI показал
+ * нотификацию.
+ */
+export interface ReleaseOverCutDto {
+  sizeId: string;
+  /** План заказа по размеру (`OrderItem.qtyPlan`). */
+  planQty: number;
+  /** Сколько выпущено по размеру суммарно после этого запроса. */
+  cutQty: number;
+  /** На сколько `cutQty` превышает `planQty` (всегда > 0). */
+  overBy: number;
+}
+
+/**
  * Ответ `POST /api/passports/release-from-rolls`.
  *
  * `created` — паспорта, выпущенные этим запросом (для печати); может
  * быть короче `rollOrdinals`, если часть троек `(layOrdinal, sizeId,
  * ordinal)` уже была выпущена ранее или у рулона `qty = 0`. `skipped` —
  * `ordinal`-ы, пропущенные как уже выпущенные (UI покажет «уже выпущено»).
+ * `overCut` — уведомление о перекрое плана размера (печать не блокируется);
+ * `null`, если выпуск в пределах плана.
  */
 export interface ReleaseFromRollsResultDto {
   created: ReleasedPassportLiteDto[];
   skipped: number[];
+  overCut: ReleaseOverCutDto | null;
 }
 
 /**

@@ -418,8 +418,14 @@ export class PassportsService {
    * паспорт уже выпущен, — пропускаются. Это закрывает кейс «сломался
    * принтер → продолжить с нужного рулона» и защищает от двойного клика.
    * Сохраняются прежние инварианты: заказ в производстве, closure-блок
-   * (ADR-0018) и `Σ qtyCut ≤ остаток плана` по размеру (суммарно по всем
-   * раскладам).
+   * (ADR-0018).
+   *
+   * Перекрой плана НЕ блокирует выпуск (в отличие от ручного
+   * `create`/`update`): настил иногда даёт больше плана размера (лишний
+   * слой, запас под подмену брака), а раскрой уже физически выполнен —
+   * последний рулон оформляется паспортом как есть. Когда суммарный
+   * выпуск по размеру (по всем раскладам) превышает `OrderItem.qtyPlan`,
+   * результат содержит `overCut` — уведомление для UI (печать идёт).
    */
   async releaseFromRolls(
     dto: ReleaseFromRollsDto,
@@ -562,7 +568,9 @@ export class PassportsService {
           releasedOrdinals.add(p.rollOrdinal);
         }
       }
-      let remaining = orderItem.qtyPlan - cutBySize;
+      // Идём от уже выпущенного по размеру; перекрой плана допустим —
+      // считаем итог, чтобы отдать уведомление `overCut` (см. docstring).
+      let cutAfter = cutBySize;
 
       const created: ReleaseFromRollsResultDto['created'] = [];
       const skipped: number[] = [];
@@ -586,9 +594,8 @@ export class PassportsService {
           skipped.push(ordinal);
           continue;
         }
-        if (qty > remaining) {
-          throw new PassportQtyExceedsRemainingException(Math.max(remaining, 0));
-        }
+        // Перекрой плана размера НЕ блокирует выпуск — печатаем как есть,
+        // а превышение отдадим в `overCut` ниже (UI покажет нотификацию).
         const lite = await this.createOnePassportInTx(tx, {
           orderId: order.id,
           productId: product.id,
@@ -604,7 +611,7 @@ export class PassportsService {
           divisionOpId: divisionOp.id,
           initialRouteStepIndex,
         });
-        remaining -= qty;
+        cutAfter += qty;
         releasedOrdinals.add(ordinal);
         created.push({
           id: lite.id,
@@ -615,11 +622,22 @@ export class PassportsService {
         });
       }
 
-      return { created, skipped };
+      const overBy = cutAfter - orderItem.qtyPlan;
+      const overCut =
+        overBy > 0
+          ? {
+              sizeId: dto.sizeId,
+              planQty: orderItem.qtyPlan,
+              cutQty: cutAfter,
+              overBy,
+            }
+          : null;
+
+      return { created, skipped, overCut };
     });
 
     this.logger.log(
-      `event=passport.release-from-rolls orderId=${order.id} layOrdinal=${dto.layOrdinal} sizeId=${dto.sizeId} created=${result.created.length} skipped=${result.skipped.length} creatorId=${creator.id} cutterId=${cutter.id}`,
+      `event=passport.release-from-rolls orderId=${order.id} layOrdinal=${dto.layOrdinal} sizeId=${dto.sizeId} created=${result.created.length} skipped=${result.skipped.length}${result.overCut ? ` overCut=${result.overCut.overBy}` : ''} creatorId=${creator.id} cutterId=${cutter.id}`,
     );
     return result;
   }

@@ -21,7 +21,8 @@
  *   4. `release-state` отдаёт расклады (с размерами/`perLayerQty` и
  *      рулонами) и выпущенные тройки; `ready-for-release` считает статус
  *      NEW/DONE.
- *   5. Остаток плана: qty > остатка → 422 PASSPORT_QTY_EXCEEDS_REMAINING.
+ *   5. Перекрой плана: qty > остатка НЕ блокирует выпуск — паспорт
+ *      выпускается, в ответе `overCut` (уведомление о превышении плана).
  *   6. RBAC: раскройщик (`CUTTER`) больше не выпускает паспорта (403 на
  *      `POST /api/passports`).
  */
@@ -339,11 +340,12 @@ describeWithDb('integration — release passports from rolls', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 5. Остаток плана
+  // 5. Перекрой плана — НЕ блокирует выпуск, отдаёт уведомление `overCut`
   // ---------------------------------------------------------------------------
 
-  test('qty рулона превышает остаток плана → 422 PASSPORT_QTY_EXCEEDS_REMAINING', async () => {
-    // План 15, а рулон даёт 10×2 = 20 > 15.
+  test('qty рулона превышает остаток плана → 201, паспорт выпущен + overCut', async () => {
+    // План 15, а рулон даёт 10×2 = 20 > 15. Настил уже физически нарезан —
+    // выпуск не блокируем, а возвращаем уведомление о перекрое.
     await setupOrderWithCuttingTask({
       qtyPlan: 15,
       perLayerQty: 2,
@@ -354,11 +356,33 @@ describeWithDb('integration — release passports from rolls', () => {
       .post('/api/passports/release-from-rolls')
       .set('Cookie', cookies.assistant)
       .send(releaseBody([1]));
-    expect(r.status).toBe(422);
-    expect(r.body.code).toBe('QTY_EXCEEDS_REMAINING_PLAN');
+    expect(r.status).toBe(201);
+    expect(r.body.created).toHaveLength(1);
+    expect(r.body.created[0].qtyCut).toBe(20);
+    expect(r.body.overCut).toMatchObject({
+      sizeId,
+      planQty: 15,
+      cutQty: 20,
+      overBy: 5,
+    });
 
     const count = await t.prisma.passport.count({ where: { orderId } });
-    expect(count).toBe(0);
+    expect(count).toBe(1);
+  });
+
+  test('выпуск в пределах плана → overCut = null', async () => {
+    await setupOrderWithCuttingTask({
+      qtyPlan: 100,
+      perLayerQty: 2,
+      rolls: [{ ordinal: 1, layers: 10 }],
+    });
+
+    const r = await request(t.app.getHttpServer())
+      .post('/api/passports/release-from-rolls')
+      .set('Cookie', cookies.assistant)
+      .send(releaseBody([1]));
+    expect(r.status).toBe(201);
+    expect(r.body.overCut).toBeNull();
   });
 
   // ---------------------------------------------------------------------------

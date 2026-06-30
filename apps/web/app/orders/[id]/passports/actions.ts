@@ -10,6 +10,7 @@ import {
   type PlacePassportDto,
   type ReleaseFromRollsDto,
   type ReleasedPassportLiteDto,
+  type ReleaseOverCutDto,
 } from '@sewing/shared/passports';
 import {
   CreateCuttingClosureRequestSchema,
@@ -301,11 +302,14 @@ export async function placePassportAction(
 /**
  * Результат рулонного выпуска для клиентской формы. `created` — паспорта
  * этого выпуска (для печати), `skipped` — рулоны, пропущенные как уже
- * выпущенные. На ошибке backend заполняется `error`.
+ * выпущенные, `overCut` — уведомление о перекрое плана размера (печать не
+ * блокируется; `null`/отсутствует, если выпуск в пределах плана). На
+ * ошибке backend заполняется `error`.
  */
 export interface ReleaseFromRollsActionResult {
   created?: ReleasedPassportLiteDto[];
   skipped?: number[];
+  overCut?: ReleaseOverCutDto | null;
   error?: string;
 }
 
@@ -344,7 +348,11 @@ export async function releaseFromRollsAction(
   }
   revalidatePath(`/orders/${orderId}`);
   revalidatePath('/work/cut-orders');
-  return { created: result.created, skipped: result.skipped };
+  return {
+    created: result.created,
+    skipped: result.skipped,
+    overCut: result.overCut,
+  };
 }
 
 // ---------------------------------------------------------------------------

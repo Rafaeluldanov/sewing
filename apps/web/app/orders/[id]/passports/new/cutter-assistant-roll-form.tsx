@@ -4,7 +4,10 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, useTransition } from 'react';
 import type { ReleaseLayDto, ReleasedRollDto } from '@sewing/shared/cutting-tasks';
-import type { ReleasedPassportLiteDto } from '@sewing/shared/passports';
+import type {
+  ReleasedPassportLiteDto,
+  ReleaseOverCutDto,
+} from '@sewing/shared/passports';
 import { sendPassportPrintJobsBatch } from '@/components/print-button-actions';
 import { buildPassportsBatchPrintPath } from '@/lib/browser-api-paths';
 import { releaseFromRollsAction } from '../actions';
@@ -25,6 +28,8 @@ interface Props {
 interface SuccessState {
   created: ReleasedPassportLiteDto[];
   skipped: number[];
+  /** Уведомление о перекрое плана размера (печать не блокировалась). */
+  overCut: ReleaseOverCutDto | null;
 }
 
 /**
@@ -182,7 +187,11 @@ export function CutterAssistantRollForm({
         return;
       }
       const created = res.created ?? [];
-      setSuccess({ created, skipped: res.skipped ?? [] });
+      setSuccess({
+        created,
+        skipped: res.skipped ?? [],
+        overCut: res.overCut ?? null,
+      });
       setPrintSel(new Set(created.map((p) => p.id)));
       setPrintFeedback(null);
     });
@@ -300,6 +309,27 @@ export function CutterAssistantRollForm({
             </div>
           )}
         </div>
+
+        {success.overCut && (
+          <div
+            className="meta-line"
+            role="status"
+            style={{
+              marginTop: '0.6rem',
+              padding: '0.6rem 0.8rem',
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--color-warn-soft)',
+              color: 'var(--color-warn-fg)',
+            }}
+          >
+            Уведомление: по размеру{' '}
+            <strong>{selectedSize?.sizeCode ?? '—'}</strong> выпущено{' '}
+            <strong>{success.overCut.cutQty}</strong> шт при плане{' '}
+            <strong>{success.overCut.planQty}</strong> — на{' '}
+            <strong>{success.overCut.overBy}</strong> больше. Печать не
+            заблокирована.
+          </div>
+        )}
 
         {created.length > 0 && (
           <>
