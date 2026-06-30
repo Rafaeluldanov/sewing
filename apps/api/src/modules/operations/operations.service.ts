@@ -773,7 +773,7 @@ export class OperationsService {
    * **плановой** себестоимости окладных операций
    * (`pricingMode = SALARY_ONLY`). Это не фактическая зарплата —
    * payroll (`SalaryService`, `EarningsService`,
-   * `Employee.salaryPerShift`) этой формулы не использует.
+   * `Employee.salaryPerHour`) этой формулы не использует.
    *
    * Контракт:
    *   - `salaryPlanRubPerShift = null` → `null` (план для окладных

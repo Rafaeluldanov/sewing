@@ -433,7 +433,12 @@ export default async function EarningsListPage({
                 <td>{formatDateOnly(s.date)}</td>
                 {isManager && <td>{s.employeeFullName}</td>}
                 <td>
-                  {s.source === 'SHIFT_DAY' ? 'Оклад за смену' : 'Ручное'}
+                  {s.source === 'SHIFT_DAY' ? 'Оклад за день' : 'Ручное'}
+                  {s.workedSeconds !== null && s.workedSeconds > 0 && (
+                    <div className="meta-line">
+                      {(s.workedSeconds / 3600).toFixed(1)} ч
+                    </div>
+                  )}
                   {s.editedManually && (
                     <div className="meta-line">
                       исправлено вручную

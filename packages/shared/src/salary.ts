@@ -4,11 +4,10 @@
  * Источник истины — backend (`/api/salary/*`). Источник правил —
  * `docs/domain.md §9a`, `docs/api.md §10a`, ADR-0021.
  *
- * Скоуп MVP сознательно ограничен:
- *   - один источник `SHIFT_DAY` — «в этот день была хотя бы одна
- *     `ShiftSession`»;
- *   - один тариф `Employee.salaryPerShift`, без коэффициентов
- *     half-day/нагрузки;
+ * Скоуп:
+ *   - один источник `SHIFT_DAY` — закрытые `ShiftSession` за день;
+ *   - повременная оплата: `amount = workedSeconds / 3600 ×
+ *     Employee.salaryPerHour` (см. `SalaryService.syncDailySalary`);
  *   - ручная правка делает только две вещи: сумма + комментарий.
  */
 
@@ -108,10 +107,10 @@ export type SalarySummaryQuery = z.infer<typeof SalarySummaryQuerySchema>;
  * инвариант «один день — одна окладная запись».
  *
  * `reset = true` — снять флаг «исправлено вручную» и вернуть запись
- * под автоматическую sync-логику. Полезно, если менеджер передумал
- * и хочет, чтобы сумма снова повторяла `salaryPerShift`. Это
- * сбрасывает amount к ставке сотрудника на текущий момент. Если
- * `reset = true`, остальные поля игнорируются.
+ * под автоматическую sync-логику. Полезно, если менеджер передумал:
+ * amount пересчитывается по почасовой ставке за тот же день
+ * (закрытые смены × `salaryPerHour`). Если `reset = true`, остальные
+ * поля игнорируются.
  */
 export const UpdateSalaryEntrySchema = z
   .object({
@@ -147,6 +146,13 @@ export interface SalaryEntryDto {
   /** ISO-дата без времени, `YYYY-MM-DD`. */
   date: string;
   amount: number;
+  /**
+   * Отработанные секунды за день по закрытым сменам, на основе которых
+   * посчитан `amount` (повременная оплата). `null` для исторических
+   * записей до перехода на почасовую оплату и для `source = MANUAL`.
+   * UI делит на 3600 для показа часов.
+   */
+  workedSeconds: number | null;
   source: SalaryEntrySource;
   editedManually: boolean;
   managerComment: string | null;

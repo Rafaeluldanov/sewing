@@ -162,15 +162,15 @@ export default async function AdminEmployeeDetailPage({
               {(employee.compensationType === 'SALARY' ||
                 employee.compensationType === 'MIXED') && (
                 <>
-                  <dt>Ставка за смену</dt>
+                  <dt>Ставка, ₽/час</dt>
                   <dd>
-                    {employee.salaryPerShift !== null ? (
+                    {employee.salaryPerHour !== null ? (
                       <>
-                        {employee.salaryPerShift.toLocaleString('ru-RU', {
+                        {employee.salaryPerHour.toLocaleString('ru-RU', {
                           minimumFractionDigits: 2,
                           maximumFractionDigits: 2,
                         })}{' '}
-                        ₽
+                        ₽/час
                       </>
                     ) : (
                       <span className="admin-muted">

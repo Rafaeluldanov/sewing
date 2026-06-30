@@ -57,14 +57,13 @@ export function isSalaryEligible(type: CompensationType): boolean {
 }
 
 /**
- * Должен ли быть задан `Employee.salaryPerShift > 0` для этого типа?
+ * Должен ли быть задан `Employee.salaryPerHour > 0` для этого типа?
  *
- * Тождественно `isSalaryEligible`: окладную ставку требуем ровно тогда,
- * когда сотрудник её получает. Заведено отдельным именем, чтобы guard
- * в `EmployeesService.create/update` читался как «требуется ставка»,
- * а не как «получает оклад» — это два разных вопроса с одним ответом
- * на сегодня, и они могут разъехаться (например, если когда-то появится
- * `SALARY` без рейтинга по часовой логике).
+ * Тождественно `isSalaryEligible`: почасовую ставку требуем ровно
+ * тогда, когда сотрудник получает оклад. Заведено отдельным именем,
+ * чтобы guard в `EmployeesService.create/update` читался как
+ * «требуется ставка», а не как «получает оклад» — это два разных
+ * вопроса с одним ответом на сегодня, и они могут разъехаться.
  */
 export function requiresSalaryRate(type: CompensationType): boolean {
   return isSalaryEligible(type);

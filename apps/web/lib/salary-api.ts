@@ -16,9 +16,20 @@ import type {
 import { apiFetch } from './api';
 
 export const SALARY_SOURCE_LABELS: Record<SalaryEntryDto['source'], string> = {
-  SHIFT_DAY: 'Оклад за смену',
+  SHIFT_DAY: 'Оклад за день',
   MANUAL: 'Ручное начисление',
 };
+
+/**
+ * Часы из `SalaryEntry.workedSeconds` для отображения в ведомости
+ * (повременная оплата). `null` → `null` (исторические записи без
+ * учёта секунд или ручные начисления). Округление до 0.1 ч.
+ */
+export function formatWorkedHours(workedSeconds: number | null): string | null {
+  if (workedSeconds === null || workedSeconds <= 0) return null;
+  const hours = workedSeconds / 3600;
+  return `${hours.toFixed(1)} ч`;
+}
 
 export function listSalary(
   query: Partial<ListSalaryQuery> = {},

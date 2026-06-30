@@ -71,8 +71,8 @@ export interface MeDailySalaryDto {
   shiftOpen: boolean;
   /** ISO-метка начала смены, если она открыта. Иначе `null`. */
   shiftStartedAt: string | null;
-  /** Ставка из `Employee.salaryPerShift` (для подсказки в UI). */
-  salaryPerShift: number | null;
+  /** Почасовая ставка `Employee.salaryPerHour` (₽/час, подсказка в UI). */
+  salaryPerHour: number | null;
   /** `true`, если запись `SalaryEntry` за сегодня уже есть. */
   hasEntryToday: boolean;
 }

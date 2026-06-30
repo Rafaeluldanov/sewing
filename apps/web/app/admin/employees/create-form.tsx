@@ -37,7 +37,7 @@ const ROLE_LABELS: Record<EmployeeRole, string> = {
 
 const COMPENSATION_LABEL: Record<CompensationType, string> = {
   PIECEWORK: 'Сдельная',
-  SALARY: 'Оклад за смену',
+  SALARY: 'Оклад (почасовой)',
   MIXED: 'Оклад + сдельная',
 };
 
@@ -83,7 +83,7 @@ export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
   const [compensationType, setCompensationType] = useState<CompensationType>(
     'PIECEWORK',
   );
-  const [salaryPerShift, setSalaryPerShift] = useState<string>('');
+  const [salaryPerHour, setSalaryPerHour] = useState<string>('');
   // B2B-процент закройщика. Поле имеет смысл только для роли
   // CUTTER (см. `docs/payroll-cutter-compensation-recon.md`); UI
   // прячет его для всех остальных ролей.
@@ -184,20 +184,20 @@ export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
         </div>
 
         {/*
-          PHASE 2 STEP 5: «ставка за смену» только для SALARY/MIXED.
-          Для PIECEWORK поле не рендерится — FormData чистая, backend
-          получит `salaryPerShift = null` и сохранит без ставки.
+          Почасовая ставка — только для SALARY/MIXED (повременная
+          оплата). Для PIECEWORK поле не рендерится — FormData чистая,
+          backend получит `salaryPerHour = null` и сохранит без ставки.
         */}
         {requiresRate && (
           <div className="admin-field">
-            <label htmlFor="emp-salary-per-shift">Ставка за смену, ₽</label>
+            <label htmlFor="emp-salary-per-hour">Ставка, ₽/час</label>
             <input
-              id="emp-salary-per-shift"
-              name="salaryPerShift"
+              id="emp-salary-per-hour"
+              name="salaryPerHour"
               type="text"
               inputMode="decimal"
-              value={salaryPerShift}
-              onChange={(e) => setSalaryPerShift(e.target.value)}
+              value={salaryPerHour}
+              onChange={(e) => setSalaryPerHour(e.target.value)}
               placeholder="обязательно"
               required
               autoComplete="off"

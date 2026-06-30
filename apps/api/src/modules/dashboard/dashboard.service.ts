@@ -378,7 +378,7 @@ export class DashboardService {
         id: true,
         role: true,
         compensationType: true,
-        salaryPerShift: true,
+        salaryPerHour: true,
       },
     });
     const employeeById = new Map(employees.map((e) => [e.id, e]));
@@ -430,7 +430,7 @@ export class DashboardService {
       for (const m of a.trackedByEmployee.values()) trackedMinutes += m;
       for (const empId of a.salariedEmps) {
         const emp = employeeById.get(empId)!;
-        const minute = computeMinuteRate(emp.salaryPerShift);
+        const minute = computeMinuteRate(emp.salaryPerHour);
         if (minute <= 0) continue;
         const tracked = a.trackedByEmployee.get(empId) ?? 0;
         const idle = Math.max(0, SHIFT_MINUTES - tracked);
@@ -634,11 +634,24 @@ function mapEmployeeRoleToDashboardRole(
   }
 }
 
-function computeMinuteRate(rate: Prisma.Decimal | null | undefined): number {
-  if (rate === null || rate === undefined) return 0;
-  const num = typeof rate === 'number' ? rate : Number(rate.toFixed(2));
+/**
+ * ₽/минуту для разноса оклада на минуты простоя. Источник —
+ * `Employee.salaryPerHour` (повременная оплата): минута = ставка/час
+ * ÷ 60. Раньше считалось от legacy `salaryPerShift` / SHIFT_MINUTES;
+ * при бэкфилле `salaryPerHour = salaryPerShift / 8` (SHIFT_MINUTES =
+ * 480) результат для существующих сотрудников не меняется, а новые
+ * окладники (без legacy `salaryPerShift`) больше не выпадают из разноса.
+ */
+function computeMinuteRate(
+  ratePerHour: Prisma.Decimal | null | undefined,
+): number {
+  if (ratePerHour === null || ratePerHour === undefined) return 0;
+  const num =
+    typeof ratePerHour === 'number'
+      ? ratePerHour
+      : Number(ratePerHour.toFixed(2));
   if (num <= 0) return 0;
-  return num / SHIFT_MINUTES;
+  return num / 60;
 }
 
 function round2(n: number): number {

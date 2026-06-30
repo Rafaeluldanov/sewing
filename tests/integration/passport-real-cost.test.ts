@@ -5,7 +5,7 @@
  * Проверяем end-to-end на живых событиях:
  *   1) одиночный паспорт: материал(0) + сдельная(APPROVED) + оклад,
  *      где оклад = реальный интервал `ISSUED_TO_EMPLOYEE →
- *      OPERATION_FINISHED` × (salaryPerShift / 480);
+ *      OPERATION_FINISHED` × (salaryPerHour / 60);
  *   2) разнос оклада: один окладник держит ДВА паспорта одновременно
  *      10 минут → каждому достаётся ровно по 5 минут (деление 1/k);
  *   3) RBAC: рабочему роль не положена.
@@ -20,9 +20,10 @@ import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
 import { describeWithDb, resetDatabase } from '../utils/db';
 import { seedMinimal, type SeedResult } from '../utils/seed';
 
-// Оклад смены 4800 ₽ / 480 мин = 10 ₽/мин — удобно для проверки.
-const SALARY_PER_SHIFT = 4800;
-const MINUTE_RATE = SALARY_PER_SHIFT / 480; // = 10
+// Почасовая ставка 600 ₽/ч / 60 = 10 ₽/мин — удобно для проверки
+// (повременка; эквивалентно прежним 4800 ₽/смена / 480 мин).
+const SALARY_PER_HOUR = 600;
+const MINUTE_RATE = SALARY_PER_HOUR / 60; // = 10
 
 // Фиксированная база времени (не Date.now) — сервис считает окно по
 // датам самих событий, поэтому конкретная дата не важна, важна
@@ -54,7 +55,7 @@ describeWithDb('integration — себестоимость паспорта (ф�
       where: { id: seed.employees.qc.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(SALARY_PER_SHIFT),
+        salaryPerHour: new Prisma.Decimal(SALARY_PER_HOUR),
       },
     });
   });

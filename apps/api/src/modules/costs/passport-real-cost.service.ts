@@ -69,7 +69,7 @@ export interface ApportionedSalary {
  *      для ОТК/ВТО/упаковки), capped `MAX_STAGE_MINUTES_PER_PASSPORT`;
  *   2. `apportionEmployeeTime` делит нахлёсты между одновременно
  *      удерживаемыми паспортами;
- *   3. минуты × (`salaryPerShift` / `SHIFT_MINUTES`) = ₽ оклада на паспорт.
+ *   3. минуты × (`salaryPerHour` / 60) = ₽ оклада на паспорт.
  *
  * Разнос требует ПОЛНОГО потока событий сотрудника за день (иначе деление
  * «1/k» посчитает k неверно), поэтому события грузятся по сотруднику за
@@ -354,14 +354,14 @@ export class PassportRealCostService {
         id: true,
         fullName: true,
         compensationType: true,
-        salaryPerShift: true,
+        salaryPerHour: true,
       },
     });
     const rateByEmployee = new Map<string, number>();
     const nameByEmployee = new Map<string, string>();
     for (const e of employees) {
       nameByEmployee.set(e.id, e.fullName);
-      const minute = computeMinuteRate(e.salaryPerShift);
+      const minute = computeMinuteRate(e.salaryPerHour);
       if (minute > 0 && isSalaryEligible(e.compensationType)) {
         rateByEmployee.set(e.id, minute);
       }
@@ -568,11 +568,19 @@ export class PassportRealCostService {
 // helpers
 // ---------------------------------------------------------------------------
 
-function computeMinuteRate(rate: Prisma.Decimal | null | undefined): number {
-  if (rate === null || rate === undefined) return 0;
-  const num = decimalToNumber(rate);
+/**
+ * ₽/минуту оклада для разноса на паспорт. Источник — почасовая ставка
+ * `Employee.salaryPerHour` (повременка): минута = ставка/час ÷ 60.
+ * При бэкфилле `salaryPerHour = salaryPerShift / 8` (SHIFT_MINUTES =
+ * 480) численно совпадает с прежним `salaryPerShift / SHIFT_MINUTES`.
+ */
+function computeMinuteRate(
+  ratePerHour: Prisma.Decimal | null | undefined,
+): number {
+  if (ratePerHour === null || ratePerHour === undefined) return 0;
+  const num = decimalToNumber(ratePerHour);
   if (num <= 0) return 0;
-  return num / SHIFT_MINUTES;
+  return num / 60;
 }
 
 function decimalToNumber(

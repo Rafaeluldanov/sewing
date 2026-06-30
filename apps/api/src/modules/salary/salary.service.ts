@@ -43,10 +43,13 @@ import { AuditService } from '../audit/audit.service.js';
  *    `editedManually`, вернуть запись под автоматический sync и
  *    выставить `amount = employee.salaryPerShift`.
  *
- * Бизнес-правила:
- *   - источник истины «день отработан» — наличие хотя бы одной
- *     `ShiftSession` с `startedAt::date == date`. Длительность и
- *     закрытие смены не учитываем (см. ADR-0021).
+ * Бизнес-правила (повременная оплата, см. ADR-0021 rev.2):
+ *   - сумма за день = `Σ(длительности ЗАКРЫТЫХ ShiftSession за день) /
+ *     3600 × Employee.salaryPerHour`. Открытые смены (`endedAt = null`)
+ *     не учитываются — часы по ним ещё неизвестны. Если за день нет ни
+ *     одной закрытой смены — запись не создаётся (и существующая не
+ *     обнуляется): дисциплина закрытия смены, иначе менеджер правит
+ *     сумму руками.
  *   - `compensationType` сотрудника решает, нужно ли вообще
  *     создавать запись. Спрашиваем у `isSalaryEligible` (ADR-0021):
  *     `SALARY`/`MIXED` ⇒ да, `PIECEWORK` ⇒ никогда.
@@ -76,25 +79,22 @@ export class SalaryService {
    *                   на корневом клиенте
    *
    * Алгоритм:
-   * 1. Загружаем `Employee.compensationType` + `salaryPerShift`. Если
-   *    `!isSalaryEligible(...)` (т.е. `PIECEWORK`) или сотрудник
-   *    неактивен — выходим.
-   * 2. Считаем количество `ShiftSession` за этот день. Если 0 —
-   *    выходим (синхронизация только «вверх», окладные за дни без
-   *    смен мы не создаём, а уже созданные не удаляем — менеджер мог
-   *    оплатить «ручной» день, см. `source = MANUAL` ниже).
-   * 3. Если `salaryPerShift = null` — выходим. Это аномальное
-   *    состояние (инвариант запрещает SALARY/MIXED без ставки), но
-   *    падать в `START SHIFT`/`STOP SHIFT` из-за этого нельзя.
+   * 1. Загружаем `Employee.compensationType` + `salaryPerHour`. Если
+   *    `!isSalaryEligible(...)` (т.е. `PIECEWORK`), сотрудник неактивен
+   *    или `salaryPerHour = null` — выходим (последнее аномально, но
+   *    падать в START/STOP SHIFT нельзя).
+   * 2. Суммируем длительности ЗАКРЫТЫХ `ShiftSession` за этот день
+   *    (`computeWorkedSeconds`). Если 0 — выходим: ещё нет закрытых
+   *    смен, считать нечего (создавать пустую запись или обнулять
+   *    существующую не будем — следующий `stop` пересчитает).
+   * 3. `amount = worked / 3600 × salaryPerHour` (округление до копеек).
    * 4. `upsert` по `(employeeId, date, source = SHIFT_DAY)`:
-   *      - update: только если `editedManually = false` →
-   *        `amount = salaryPerShift`;
-   *      - create: новая запись с `source = SHIFT_DAY` и
-   *        `amount = salaryPerShift`.
-   *    Если `editedManually = true`, `amount` не трогаем — но запись
-   *    всё равно `upsert`-аем, чтобы запомнить факт «смена в этот день
-   *    была» (на текущий момент это нужно для будущей аналитики и
-   *    самого факта существования записи; никаких полей не меняется).
+   *      - update: только если `editedManually = false` и запись не
+   *        в выплате → `amount` + `workedSeconds`;
+   *      - create: новая запись с `source = SHIFT_DAY`, `amount`,
+   *        `workedSeconds`.
+   *    Если `editedManually = true` (или запись locked) — ничего не
+   *    трогаем, возвращаем как есть.
    */
   async syncDailySalary(
     employeeId: string,
@@ -109,27 +109,38 @@ export class SalaryService {
         id: true,
         active: true,
         compensationType: true,
-        salaryPerShift: true,
+        salaryPerHour: true,
       },
     });
     if (!employee || !employee.active) return null;
     if (!isSalaryEligible(employee.compensationType)) return null;
-    if (employee.salaryPerShift === null) {
-      // SALARY/MIXED без ставки — на момент sync это аномалия, но
-      // ронять `start/stop shift` нельзя. Просто ничего не делаем.
+    if (employee.salaryPerHour === null) {
+      // SALARY/MIXED без почасовой ставки — на момент sync это аномалия
+      // (инвариант `requiresSalaryRate` её запрещает), но ронять
+      // `start/stop shift` нельзя. Просто ничего не делаем.
       return null;
     }
 
-    const dayEnd = endOfDay(date);
-    const shiftCount = await tx.shiftSession.count({
-      where: {
-        employeeId,
-        startedAt: { gte: day, lte: dayEnd },
-      },
-    });
-    if (shiftCount === 0) return null;
+    // Повременная оплата: считаем фактически отработанные секунды за
+    // день ТОЛЬКО по закрытым сменам (`endedAt != null`). Открытая
+    // смена в расчёт не идёт — пока сотрудник её не закрыл, часы
+    // неизвестны. Несколько закрытых смен за день суммируются: активная
+    // смена у человека одна (partial-unique индекс), интервалы не
+    // перекрываются, поэтому сумма длительностей = реальное время.
+    const worked = await computeWorkedSeconds(
+      tx,
+      employeeId,
+      day,
+      endOfDay(date),
+    );
+    if (worked <= 0) {
+      // Ещё нет ни одной закрытой смены за день (например, sync на
+      // `start`, когда смену только открыли). Не создаём пустую запись
+      // и не обнуляем существующую — следующий `stop` пересчитает.
+      return null;
+    }
 
-    const rate = new Prisma.Decimal(employee.salaryPerShift);
+    const amount = hourlyAmount(employee.salaryPerHour, worked);
 
     // Ищем существующую запись, чтобы решить, можно ли перезаписывать
     // amount. `upsert` сам по себе уважает `editedManually` через
@@ -160,7 +171,7 @@ export class SalaryService {
       }
       const updated = await tx.salaryEntry.update({
         where: { id: existing.id },
-        data: { amount: roundMoney(rate) },
+        data: { amount, workedSeconds: worked },
         include: salaryInclude,
       });
       return toDto(updated);
@@ -171,7 +182,8 @@ export class SalaryService {
         data: {
           employeeId,
           date: day,
-          amount: roundMoney(rate),
+          amount,
+          workedSeconds: worked,
           source: SalaryEntrySource.SHIFT_DAY,
         },
         include: salaryInclude,
@@ -270,9 +282,10 @@ export class SalaryService {
    *
    * Поведение:
    *   - `reset = true` → снять флаг, вернуть запись под автоматику и
-   *     выставить `amount = employee.salaryPerShift`. Если ставка не
-   *     задана, бросаем `SALARY_RATE_MISSING` — иначе пришлось бы
-   *     обнулить сумму, что менеджер вряд ли имел в виду.
+   *     пересчитать `amount` по почасовой ставке за тот же день
+   *     (закрытые смены × `salaryPerHour`). Если ставка не задана,
+   *     бросаем `SALARY_RATE_MISSING` — иначе пришлось бы обнулить
+   *     сумму, что менеджер вряд ли имел в виду.
    *   - иначе обновляем то, что пришло (`amount` и/или
    *     `managerComment`), ставим `editedManually = true`,
    *     `editedByEmployeeId = viewer.employeeId`.
@@ -327,17 +340,26 @@ export class SalaryService {
     if (dto.reset) {
       const employee = await this.prisma.employee.findUnique({
         where: { id: entry.employeeId },
-        select: { salaryPerShift: true },
+        select: { salaryPerHour: true },
       });
-      if (!employee || employee.salaryPerShift === null) {
+      if (!employee || employee.salaryPerHour === null) {
         throw new SalaryReentryWithoutRateException();
       }
-      const newAmount = roundMoney(new Prisma.Decimal(employee.salaryPerShift));
+      // Возврат под автоматику = пересчёт по почасовой ставке за тот же
+      // день (по закрытым сменам), а не «плоская ставка за смену».
+      const worked = await computeWorkedSeconds(
+        this.prisma,
+        entry.employeeId,
+        startOfDay(entry.date),
+        endOfDay(entry.date),
+      );
+      const newAmount = hourlyAmount(employee.salaryPerHour, worked);
       const updated = await this.prisma.$transaction(async (tx) => {
         const row = await tx.salaryEntry.update({
           where: { id },
           data: {
             amount: newAmount,
+            workedSeconds: worked,
             editedManually: false,
             managerComment: null,
             editedByEmployeeId: null,
@@ -484,6 +506,7 @@ function toDto(row: SalaryRow): SalaryEntryDto {
     employeeFullName: row.employee.fullName,
     date: toDateOnly(row.date),
     amount: roundMoneyNumber(row.amount),
+    workedSeconds: row.workedSeconds ?? null,
     source: row.source,
     editedManually: row.editedManually,
     managerComment: row.managerComment ?? null,
@@ -546,6 +569,53 @@ function toDateOnly(d: Date): string {
 
 function roundMoney(amount: Prisma.Decimal): Prisma.Decimal {
   return new Prisma.Decimal(amount.toFixed(2));
+}
+
+/**
+ * Сумма отработанных секунд за день по ЗАКРЫТЫМ сменам сотрудника.
+ *
+ * Берём только `ShiftSession` с `endedAt != null`, начавшиеся в
+ * пределах `[dayStart, dayEnd]`, и складываем длительности
+ * `endedAt − startedAt`. Активная смена у сотрудника одна (partial-
+ * unique индекс `shift_session_active_employee_uniq`), значит
+ * интервалы не перекрываются и простая сумма = реально отработанное
+ * время без задвоений. Открытые смены игнорируются — часы по ним
+ * ещё неизвестны (повременка «строго start→end»).
+ */
+async function computeWorkedSeconds(
+  tx: Prisma.TransactionClient | PrismaService,
+  employeeId: string,
+  dayStart: Date,
+  dayEnd: Date,
+): Promise<number> {
+  const sessions = await tx.shiftSession.findMany({
+    where: {
+      employeeId,
+      startedAt: { gte: dayStart, lte: dayEnd },
+      endedAt: { not: null },
+    },
+    select: { startedAt: true, endedAt: true },
+  });
+  let total = 0;
+  for (const s of sessions) {
+    if (!s.endedAt) continue;
+    const sec = Math.floor((s.endedAt.getTime() - s.startedAt.getTime()) / 1000);
+    if (sec > 0) total += sec;
+  }
+  return total;
+}
+
+/**
+ * Денежная сумма повременной оплаты: `workedSeconds / 3600 ×
+ * ratePerHour`, округлённая до копеек. Decimal-арифметика — без
+ * float-погрешности на копейках.
+ */
+function hourlyAmount(
+  ratePerHour: Prisma.Decimal,
+  workedSeconds: number,
+): Prisma.Decimal {
+  const hours = new Prisma.Decimal(workedSeconds).div(3600);
+  return roundMoney(new Prisma.Decimal(ratePerHour).mul(hours));
 }
 
 function roundMoneyNumber(

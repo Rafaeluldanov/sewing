@@ -70,11 +70,12 @@ export function normalizeAssignedRoles(
 // ---------------------------------------------------------------------------
 
 /**
- * Денежная сумма `Decimal(12,2)`. На запросе принимаем `number | string`,
+ * Денежная ставка `Decimal(12,2)` (используется и для `salaryPerHour`,
+ * и для legacy `salaryPerShift`). На запросе принимаем `number | string`,
  * нормализуем до неотрицательного числа c двумя знаками после запятой.
  * `null` означает «убрать ставку» — допустимо только для `PIECEWORK`.
  */
-const SalaryPerShiftField = z
+const SalaryRateField = z
   .union([z.number(), z.string(), z.null()])
   .transform((v, ctx) => {
     if (v === null || v === '' || v === undefined) {
@@ -188,7 +189,8 @@ export type ListEmployeesQuery = z.infer<typeof ListEmployeesQuerySchema>;
  *
  * Скоуп MVP — только management-поля:
  *   - `compensationType` (PIECEWORK|SALARY|MIXED)
- *   - `salaryPerShift`   (ставка за смену; обязательна для SALARY/MIXED)
+ *   - `salaryPerHour`    (почасовая ставка; обязательна для SALARY/MIXED)
+ *   - `salaryPerShift`   (legacy «за смену»; в расчёте не участвует)
  *   - `active`           (мягкий «архив»)
  *
  * Логин/PIN/роль/ФИО админ меняет напрямую через Prisma seed/console:
@@ -196,7 +198,7 @@ export type ListEmployeesQuery = z.infer<typeof ListEmployeesQuerySchema>;
  * фактор), и в MVP они отсутствуют.
  *
  * Серверная инвариант-проверка: для `compensationType in (SALARY, MIXED)`
- * после применения patch обязан быть положительный `salaryPerShift`.
+ * после применения patch обязан быть положительный `salaryPerHour`.
  */
 /**
  * PHASE 2 STEP 2: ID подразделения (CompanyDivision). Опциональное
@@ -232,7 +234,10 @@ const SalaryCashFlowItemIdField = z.preprocess(
 export const UpdateEmployeeSchema = z
   .object({
     compensationType: CompensationTypeSchema.optional(),
-    salaryPerShift: SalaryPerShiftField.optional(),
+    /** Почасовая ставка (₽/час). Обязательна для SALARY/MIXED. */
+    salaryPerHour: SalaryRateField.optional(),
+    /** LEGACY «за смену»: в расчёте не участвует, форма не редактирует. */
+    salaryPerShift: SalaryRateField.optional(),
     active: z.boolean().optional(),
     /**
      * Основная роль сотрудника (`Employee.role`). Фича «несколько
@@ -280,6 +285,7 @@ export const UpdateEmployeeSchema = z
   .refine(
     (obj) =>
       obj.compensationType !== undefined ||
+      obj.salaryPerHour !== undefined ||
       obj.salaryPerShift !== undefined ||
       obj.active !== undefined ||
       obj.role !== undefined ||
@@ -287,7 +293,7 @@ export const UpdateEmployeeSchema = z
       obj.cutterB2bSewingPercent !== undefined ||
       obj.companyDivisionId !== undefined ||
       obj.salaryCashFlowItemId !== undefined,
-    'Нечего обновлять: укажите compensationType, salaryPerShift, active, role, roles, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
+    'Нечего обновлять: укажите compensationType, salaryPerHour, active, role, roles, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
   );
 export type UpdateEmployeeDto = z.infer<typeof UpdateEmployeeSchema>;
 
@@ -334,12 +340,12 @@ const PinField = z
  * в системе:
  *   - `fullName`, `login`, `pin` — паспортная часть и креденшелы;
  *   - `role` — определяет доступные экраны;
- *   - `compensationType` (default `PIECEWORK`), `salaryPerShift?` —
+ *   - `compensationType` (default `PIECEWORK`), `salaryPerHour?` —
  *     единая управленческая ось «как платим»: `PIECEWORK`/`MIXED`
  *     участвуют в сдельном `EarningsService`, `SALARY`/`MIXED`
- *     получают дневной оклад через `SalaryService`. Инвариант
- *     `UpdateEmployeeSchema`: для `SALARY`/`MIXED` обязательна
- *     положительная ставка за смену.
+ *     получают дневной оклад через `SalaryService` (повременная
+ *     оплата). Инвариант: для `SALARY`/`MIXED` обязательна
+ *     положительная почасовая ставка.
  *
  * Историческое поле `Employee.salaryBase` («месячный оклад») удалено
  * в PHASE 2 STEP 1 — payroll-движок его никогда не использовал.
@@ -358,7 +364,10 @@ export const CreateEmployeeSchema = z
      */
     roles: z.array(EmployeeRoleSchema).min(1).optional(),
     compensationType: CompensationTypeSchema.default('PIECEWORK'),
-    salaryPerShift: SalaryPerShiftField.optional(),
+    /** Почасовая ставка (₽/час). Обязательна для SALARY/MIXED. */
+    salaryPerHour: SalaryRateField.optional(),
+    /** LEGACY «за смену»: в расчёте не участвует, форма не редактирует. */
+    salaryPerShift: SalaryRateField.optional(),
     active: z.boolean().optional(),
     /**
      * Процент B2B-начисления закройщика (см.
@@ -388,15 +397,15 @@ export const CreateEmployeeSchema = z
   .superRefine((obj, ctx) => {
     if (
       (obj.compensationType === 'SALARY' || obj.compensationType === 'MIXED') &&
-      (obj.salaryPerShift === null ||
-        obj.salaryPerShift === undefined ||
-        obj.salaryPerShift <= 0)
+      (obj.salaryPerHour === null ||
+        obj.salaryPerHour === undefined ||
+        obj.salaryPerHour <= 0)
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
-        path: ['salaryPerShift'],
+        path: ['salaryPerHour'],
         message:
-          'Для SALARY/MIXED обязательно укажите положительную ставку за смену',
+          'Для SALARY/MIXED обязательно укажите положительную почасовую ставку',
       });
     }
   });
@@ -425,6 +434,9 @@ export interface EmployeeListItemDto {
    */
   activeRole?: string | null;
   compensationType: CompensationType;
+  /** Почасовая ставка (₽/час). `null` для PIECEWORK / не заданной. */
+  salaryPerHour: number | null;
+  /** LEGACY «за смену»: больше не участвует в расчёте зарплаты. */
   salaryPerShift: number | null;
   active: boolean;
   createdAt: string;

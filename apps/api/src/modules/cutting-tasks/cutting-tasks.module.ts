@@ -5,7 +5,7 @@ import { CuttingTasksService } from './cutting-tasks.service.js';
 /**
  * «Кабинет раскройщика» (роль `CUTTER`). См.:
  *   - `prisma/schema.prisma::CuttingTask` / `CuttingTaskSizeRow` /
- *     `CuttingTaskRoll`;
+ *     `CuttingTaskLay` / `CuttingTaskLaySize` / `CuttingTaskRoll`;
  *   - `apps/web/app/cutter/*` — кабинет раскройщика;
  *   - `packages/shared/src/cutting-tasks.ts` — контракты.
  *

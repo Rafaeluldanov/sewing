@@ -84,7 +84,7 @@ describeWithDb('integration — payroll period (PHASE 1, read-only)', () => {
       where: { id: seed.employees.qc.id },
       data: {
         compensationType: 'SALARY',
-        salaryPerShift: new Prisma.Decimal(3000),
+        salaryPerHour: new Prisma.Decimal(375),
       },
     });
 

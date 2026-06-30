@@ -538,6 +538,10 @@ model Size {
   /// ссылающихся на размер. `onDelete: SetNull` со стороны строки —
   /// удаление `Size` не сносит строки задачи (sizeCode в snapshot).
   cuttingTaskSizeRows            CuttingTaskSizeRow[]
+  /// Кабинет раскройщика: обратная связь от строк раскладов
+  /// (`CuttingTaskLaySize`) — выбранные в раскладе размеры с «на настиле».
+  /// `onDelete: SetNull` со стороны строки (sizeCode в snapshot).
+  cuttingTaskLaySizes            CuttingTaskLaySize[]
   /// Этап «Погонные метры по размерам»: обратная связь от значений
   /// `PatternItemSizeParameterValue`, привязанных к этому размеру.
   /// `onDelete: Cascade` — удаление размера каскадно сносит значения.
@@ -895,11 +899,25 @@ model Employee {
   /// создаётся, пока менеджер не переключит сотрудника в `SALARY`
   /// или `MIXED` через `/admin/employees`.
   compensationType       CompensationType @default(PIECEWORK)
-  /// Ставка за один отработанный день/смену. Читается модулем
-  /// `salary` для `compensationType ∈ { SALARY, MIXED }`. Для
-  /// `PIECEWORK` хранится `null` и игнорируется. Валидируется в
-  /// `EmployeesService.update` (см. `apps/api/src/modules/employees`).
+  /// LEGACY. Историческая «ставка за один отработанный день/смену».
+  /// С переходом окладного контура на ПОЧАСОВУЮ оплату (см.
+  /// `salaryPerHour` ниже и `SalaryService.syncDailySalary`) больше
+  /// НЕ участвует в расчёте зарплаты. Колонка сохранена ради
+  /// истории и одноразового бэкфилла `salaryPerHour = salaryPerShift / 8`
+  /// (миграция `*_add_salary_per_hour`). Форма сотрудника её больше
+  /// не редактирует. Удалять отдельной миграцией, когда история
+  /// будет не нужна.
   salaryPerShift         Decimal?         @db.Decimal(12, 2)
+  /// Почасовая ставка (₽/час) — единственная ставка окладного контура
+  /// после перехода на повременную оплату. Читается
+  /// `SalaryService.syncDailySalary` для `compensationType ∈
+  /// { SALARY, MIXED }`: дневной `SalaryEntry.amount =
+  /// Σ(закрытые ShiftSession длительности в секундах) / 3600 ×
+  /// salaryPerHour`. Незакрытые смены (`endedAt = null`) в расчёт не
+  /// идут. Для `PIECEWORK` хранится `null` и игнорируется.
+  /// Обязательность для SALARY/MIXED валидируется в
+  /// `EmployeesService.create/update` (`requiresSalaryRate`).
+  salaryPerHour          Decimal?         @db.Decimal(12, 2)
   /// Процент начисления закройщика для B2B-заказов (см.
   /// `docs/payroll-cutter-compensation-recon.md §«Настраиваемый
   /// процент»`, `packages/shared/src/cutter-compensation.ts`).
@@ -1810,14 +1828,22 @@ model Passport {
   cutDate    DateTime
   /// Порядковый номер рулона (`CuttingTaskRoll.ordinal`), по которому
   /// помощник раскройщика выпустил этот паспорт через рулонный выпуск
-  /// (`POST /api/passports/release-from-rolls`). По паре
-  /// `(orderId, sizeId, rollOrdinal)` определяется, какие рулоны размера
-  /// уже выпущены (защита от повторной печати, кейс «сломался принтер»).
-  /// `null` у паспортов, выпущенных старой ручной формой (где `rollNumber`
-  /// — свободный текст) и у исторических данных. FK на `CuttingTaskRoll`
-  /// сознательно НЕ ставим: строки рулонов пересоздаются при каждом
-  /// сохранении задачи раскройщика, а `ordinal` стабилен после `DONE`.
+  /// (`POST /api/passports/release-from-rolls`). По тройке
+  /// `(sizeId, cuttingLayOrdinal, rollOrdinal)` определяется, какие рулоны
+  /// размера в раскладе уже выпущены (защита от повторной печати, кейс
+  /// «сломался принтер»). `null` у паспортов, выпущенных старой ручной
+  /// формой (где `rollNumber` — свободный текст) и у исторических данных.
+  /// FK на `CuttingTaskRoll` сознательно НЕ ставим: строки рулонов
+  /// пересоздаются при каждом сохранении задачи раскройщика, а `ordinal`
+  /// стабилен после `DONE`.
   rollOrdinal Int?
+  /// Номер расклада (`CuttingTaskLay.ordinal`), из которого выпущен рулон.
+  /// Номера рулонов уникальны лишь в пределах расклада, поэтому рулонная
+  /// идентичность паспорта — тройка `(sizeId, cuttingLayOrdinal,
+  /// rollOrdinal)`. `null` у ручного выпуска и исторических данных
+  /// (миграция бэкфиллит `1` выпущенным паспортам — старый единственный
+  /// расклад). FK не ставим по той же причине, что у `rollOrdinal`.
+  cuttingLayOrdinal Int?
   qtyPlan    Int
   qtyCut     Int
   qtyDefect  Int            @default(0)
@@ -1906,7 +1932,7 @@ model Passport {
   @@index([sizeId, status])
   @@index([createdAt])
   @@index([currentCellId])
-  @@index([orderId, sizeId, rollOrdinal])
+  @@index([orderId, sizeId, cuttingLayOrdinal, rollOrdinal])
 }
 
 // =========================
@@ -2000,10 +2026,12 @@ model OperationEntry {
 /// единственный путь автогенерации (см. `SalaryService.syncDailyForEmployee`):
 ///
 ///   - если у сотрудника `compensationType ∈ { SALARY, MIXED }`,
-///   - и в этот день существует хотя бы одна `ShiftSession`
-///     (даже не закрытая, даже несколько сессий подряд),
-///   - то создаётся (или обновляется по `salaryPerShift`) ровно
-///     одна запись с `amount = Employee.salaryPerShift`.
+///   - и в этот день есть хотя бы одна ЗАКРЫТАЯ `ShiftSession`
+///     (`endedAt != null`; несколько сессий за день суммируются —
+///     активная смена у человека одна, перекрытий нет),
+///   - то создаётся (или обновляется) ровно одна запись с
+///     `amount = Σ(длительности закрытых смен в сек) / 3600 ×
+///     Employee.salaryPerHour` (повременная оплата).
 ///
 /// `editedManually = true` означает, что начальник производства
 /// руками поправил сумму (переработка / ушёл раньше / полсмены) и
@@ -2016,10 +2044,18 @@ model SalaryEntry {
   /// календарной дате: одна запись на сотрудника на день, независимо
   /// от часового пояса смены и количества смен в этот день.
   date               DateTime          @db.Date
-  /// Сумма выплаты за этот день. По умолчанию = `Employee.salaryPerShift`
-  /// в момент первой sync; ручная правка через `PATCH
-  /// /api/salary/:id` заменяет её и поднимает `editedManually = true`.
+  /// Сумма выплаты за этот день. Авто-расчёт (повременная оплата):
+  /// `workedSeconds / 3600 × Employee.salaryPerHour`, округлённо до
+  /// копеек. Ручная правка через `PATCH /api/salary/:id` заменяет её
+  /// и поднимает `editedManually = true`.
   amount             Decimal           @db.Decimal(12, 2)
+  /// Сколько секунд отработано в этот день по ЗАКРЫТЫМ сменам
+  /// (`Σ (ShiftSession.endedAt − startedAt)`), на основе которых
+  /// посчитан `amount`. `null` для исторических записей, созданных до
+  /// перехода на почасовую оплату (тогда amount был плоской ставкой за
+  /// смену). Хранится для прозрачности ведомости («N ч × ставка») и
+  /// аудита; не пересчитывается для `editedManually`/locked-записей.
+  workedSeconds      Int?
   source             SalaryEntrySource @default(SHIFT_DAY)
   /// Флаг ручной правки. Sync-логика проверяет его перед тем, как
   /// синхронизировать `amount` со ставкой сотрудника: если стоит
@@ -6693,16 +6729,21 @@ model ConstructorTaskFile {
 /// Создаётся автоматически при `OrdersService.start()` (переход заказа
 /// в `IN_PRODUCTION`): 1:1 с заказом. В кабинет раскройщика попадает
 /// общая очередь (`status='NEW'`), любой раскройщик берёт задачу в
-/// работу (`start` → `IN_PROGRESS`, фиксируем `assignedToId`), вводит
-/// «количество размера на настиле» (`CuttingTaskSizeRow.perLayerQty`),
-/// настилает рулоны (`CuttingTaskRoll`), и завершает раскрой
+/// работу (`start` → `IN_PROGRESS`, фиксируем `assignedToId`), составляет
+/// один или несколько раскладов (`CuttingTaskLay`): в каждом выбирает
+/// размеры с «количеством на настиле» (`CuttingTaskLaySize.perLayerQty`)
+/// и настилает рулоны (`CuttingTaskRoll`), и завершает раскрой
 /// (`complete` → `DONE`).
 ///
-/// Итоги НЕ хранятся: «всего слоёв» = Σ `CuttingTaskRoll.layers`,
-/// «итог по размеру» = всего слоёв × `perLayerQty` — считаются на лету
-/// (клиент в реальном времени, сервер в мапперах). Завершение раскроя
-/// на текущем этапе НЕ трогает `Passport` — данные дальше пойдут в
-/// кабинет помощника раскройщика отдельным шагом.
+/// План по размерам (`CuttingTaskSizeRow.qtyPlan`) — снимок заказа,
+/// общий для всех раскладов и read-only для раскройщика.
+///
+/// Итоги НЕ хранятся: «всего слоёв» = Σ `CuttingTaskRoll.layers` по
+/// всем раскладам, «итог по размеру» = Σ по раскладам (слои расклада ×
+/// `CuttingTaskLaySize.perLayerQty`) — считаются на лету (клиент в
+/// реальном времени, сервер в мапперах). Завершение раскроя на текущем
+/// этапе НЕ трогает `Passport` — данные дальше пойдут в кабинет
+/// помощника раскройщика отдельным шагом.
 model CuttingTask {
   id      String @id @default(cuid())
   orderId String @unique
@@ -6731,14 +6772,16 @@ model CuttingTask {
   updatedAt DateTime @updatedAt
 
   sizeRows CuttingTaskSizeRow[]
-  rolls    CuttingTaskRoll[]
+  lays     CuttingTaskLay[]
 
   @@index([status])
 }
 
-/// Строка задания по размеру в задаче на раскрой. Снимок плана заказа
-/// (`qtyPlan` из `OrderItem`, агрегированный по размеру) + вводимое
-/// раскройщиком «количество размера на настиле» (`perLayerQty`).
+/// Строка задания по размеру в задаче на раскрой — снимок плана заказа
+/// (`qtyPlan` из `OrderItem`, агрегированный по размеру). Это список
+/// размеров заказа, из которого раскройщик выбирает чекбоксом размеры
+/// в каждый расклад (`CuttingTaskLaySize`). `qtyPlan` общий для всех
+/// раскладов и read-only для раскройщика.
 model CuttingTaskSizeRow {
   id     String      @id @default(cuid())
   taskId String
@@ -6760,34 +6803,84 @@ model CuttingTaskSizeRow {
   /// размеру на момент запуска заказа). Read-only для раскройщика.
   qtyPlan Int
 
-  /// «Количество размера на настиле» (раскладка/маркер) — сколько штук
-  /// этого размера в одном слое настила. Вводит раскройщик в кабинете.
-  /// Дефолт 0 = «ещё не заполнено». «Итог по размеру» = Σ слоёв ×
-  /// `perLayerQty`.
-  perLayerQty Int @default(0)
-
   @@unique([taskId, sizeId], name: "CuttingTaskSizeRow_task_size_uniq")
   @@index([taskId, sortOrder])
 }
 
-/// Рулон настила в задаче на раскрой. Раскройщик добавляет рулоны
-/// («Рулон 1», «Рулон 2», …) и для каждого вводит количество слоёв.
-/// «Всего слоёв» = Σ `layers` по всем рулонам задачи.
-model CuttingTaskRoll {
+/// Расклад («Расклад 1», «Расклад 2», …) внутри задачи на раскрой. В
+/// одном заказе раскройщик делает несколько раскладов: в каждом — свой
+/// набор выбранных размеров с «на настиле» (`CuttingTaskLaySize`) и свои
+/// рулоны (`CuttingTaskRoll`). Нумерация сквозная в рамках задачи
+/// (`ordinal`, 1-based) — то, что видно как «Расклад N».
+model CuttingTaskLay {
   id     String      @id @default(cuid())
   taskId String
   task   CuttingTask @relation(fields: [taskId], references: [id], onDelete: Cascade)
 
-  /// Порядковый номер рулона в рамках задачи (1-based) — то, что
-  /// раскройщик видит как «Рулон N». Уникален в пределах задачи.
+  /// Порядковый номер расклада в рамках задачи (1-based). Уникален в
+  /// пределах задачи; используется как `Passport.cuttingLayOrdinal` при
+  /// выпуске паспортов помощником.
+  ordinal Int
+
+  createdAt DateTime @default(now())
+
+  laySizes CuttingTaskLaySize[]
+  rolls    CuttingTaskRoll[]
+
+  @@unique([taskId, ordinal], name: "CuttingTaskLay_task_ordinal_uniq")
+  @@index([taskId, ordinal])
+}
+
+/// Выбранный в раскладе размер с «количеством на настиле». Раскройщик
+/// отмечает чекбоксом размеры заказа (`CuttingTaskSizeRow`) и для каждого
+/// в этом раскладе вводит `perLayerQty` — сколько штук размера в одном
+/// слое настила. Один размер может входить в несколько раскладов с разным
+/// `perLayerQty`. «Итог по размеру» = Σ по раскладам (Σ слоёв расклада ×
+/// `perLayerQty`).
+model CuttingTaskLaySize {
+  id    String         @id @default(cuid())
+  layId String
+  lay   CuttingTaskLay @relation(fields: [layId], references: [id], onDelete: Cascade)
+
+  /// FK на `Size.id`. Nullable: удаление размера не теряет строку —
+  /// UI fallback-ит на `sizeCodeSnapshot`.
+  sizeId String?
+  size   Size?   @relation(fields: [sizeId], references: [id], onDelete: SetNull)
+
+  /// Снимок `Size.code` на момент сохранения — защита от
+  /// переименования / удаления `Size`. Всегда заполнен.
+  sizeCodeSnapshot String
+
+  /// Управленческий порядок отрисовки (копия `Size.sortOrder`, как в
+  /// `CuttingTaskSizeRow`).
+  sortOrder Int
+
+  /// «Количество размера на настиле» (раскладка/маркер) в этом раскладе.
+  /// Дефолт 0 = «ещё не заполнено».
+  perLayerQty Int @default(0)
+
+  @@unique([layId, sizeId], name: "CuttingTaskLaySize_lay_size_uniq")
+  @@index([layId, sortOrder])
+}
+
+/// Рулон настила в раскладе. Раскройщик добавляет рулоны («Рулон 1»,
+/// «Рулон 2», …) в каждом раскладе и для каждого вводит количество слоёв.
+/// «Всего слоёв» расклада = Σ `layers` по его рулонам.
+model CuttingTaskRoll {
+  id    String         @id @default(cuid())
+  layId String
+  lay   CuttingTaskLay @relation(fields: [layId], references: [id], onDelete: Cascade)
+
+  /// Порядковый номер рулона в рамках расклада (1-based) — то, что
+  /// раскройщик видит как «Рулон N». Уникален в пределах расклада.
   ordinal Int
 
   /// Количество слоёв (настилов) в этом рулоне. Дефолт 0 = «ещё не
   /// заполнено».
   layers Int @default(0)
 
-  @@unique([taskId, ordinal], name: "CuttingTaskRoll_task_ordinal_uniq")
-  @@index([taskId, ordinal])
+  @@unique([layId, ordinal], name: "CuttingTaskRoll_lay_ordinal_uniq")
+  @@index([layId, ordinal])
 }
 
 /// Сигнальный образец (`OrderSample`, MVP). См.

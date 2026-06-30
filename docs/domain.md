@@ -1630,9 +1630,11 @@ Pure-функции в `apps/api/src/modules/employees/compensation.ts` —
   используется `EmployeesService.create/update` как guard перед
   `EMPLOYEE_SALARY_RATE_REQUIRED`.
 
-`Employee.salaryPerShift Decimal(12,2)?` — обязателен для
-`SALARY`/`MIXED` (инвариант
-`requiresSalaryRate ⇒ salaryPerShift > 0`).
+`Employee.salaryPerHour Decimal(12,2)?` — почасовая ставка (₽/час),
+обязателен для `SALARY`/`MIXED` (инвариант
+`requiresSalaryRate ⇒ salaryPerHour > 0`). Повременная оплата, см.
+ADR-0021 (ревизия 2026-06). Legacy `Employee.salaryPerShift` сохранён
+в БД, но в расчёте не участвует.
 Историческое поле `Employee.salaryBase` («месячный оклад») удалено в
 PHASE 2 STEP 1 — payroll-движок его никогда не использовал.
 
@@ -1816,19 +1818,20 @@ createdAt, updatedAt`. Уникальность —
 #### `syncDailySalary(employeeId, date, tx?)`
 
 Создаёт/обновляет ровно одну `SalaryEntry` на пару `(employeeId,
-date)` для `source = SHIFT_DAY`. Безопасно вызывать любое
-количество раз. Алгоритм:
+date)` для `source = SHIFT_DAY`. Повременная оплата (ревизия 2026-06,
+см. ADR-0021). Безопасно вызывать любое количество раз. Алгоритм:
 
-1. Грузит `Employee.compensationType`/`salaryPerShift`/`active`.
-   `PIECEWORK` или `!active` → return null.
-2. Считает количество `ShiftSession` за UTC-сутки. 0 → return null.
-3. `salaryPerShift === null` → return null (аномалия, но не валим
-   `start/stop shift`).
+1. Грузит `Employee.compensationType`/`salaryPerHour`/`active`.
+   `PIECEWORK`, `!active` или `salaryPerHour === null` → return null.
+2. Суммирует длительности ЗАКРЫТЫХ `ShiftSession` за сутки
+   (`workedSeconds`, открытые `endedAt = null` игнорируются). `0` →
+   return null (нет закрытых смен — считать нечего).
+3. `amount = workedSeconds / 3600 × salaryPerHour` (до копеек).
 4. `upsert` по `(employeeId, date, source = SHIFT_DAY)`:
-   - update только если `editedManually = false` →
-     `amount = salaryPerShift`;
-   - создание новой → `amount = salaryPerShift, source: SHIFT_DAY`;
-   - если `editedManually = true` — `amount` не трогается.
+   - update только если `editedManually = false` и запись не в
+     выплате → `amount` + `workedSeconds`;
+   - создание новой → `amount`, `workedSeconds`, `source: SHIFT_DAY`;
+   - если `editedManually = true` / locked — не трогается.
 
 Точки вызова — `ShiftsService.start` / `ShiftsService.stop` через
 `safeSyncSalary` (fail-soft логер: ошибка sync **не валит** сам

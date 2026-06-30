@@ -268,7 +268,7 @@ export class MeService {
         id: true,
         active: true,
         compensationType: true,
-        salaryPerShift: true,
+        salaryPerHour: true,
       },
     });
     if (!employee || !employee.active) {
@@ -325,7 +325,7 @@ export class MeService {
           amount: decimalToNumber(salaryRow?.amount ?? null),
           shiftOpen: !!openShift,
           shiftStartedAt: openShift?.startedAt.toISOString() ?? null,
-          salaryPerShift: decimalToNumberOrNull(employee.salaryPerShift),
+          salaryPerHour: decimalToNumberOrNull(employee.salaryPerHour),
           hasEntryToday: !!salaryRow,
         }
       : null;

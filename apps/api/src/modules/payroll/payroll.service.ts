@@ -700,7 +700,7 @@ export class PayrollService {
         login: true,
         role: true,
         compensationType: true,
-        salaryPerShift: true,
+        salaryPerHour: true,
         active: true,
         companyDivision: { select: { id: true, code: true, name: true } },
       },
@@ -795,6 +795,7 @@ export class PayrollService {
       id: s.id,
       date: toDateOnly(s.date),
       amount: roundMoneyNumber(s.amount),
+      workedSeconds: s.workedSeconds ?? null,
       source: s.source,
       editedManually: s.editedManually,
       managerComment: s.managerComment ?? null,
@@ -827,8 +828,8 @@ export class PayrollService {
         login: employee.login,
         role: employee.role,
         compensationType: employee.compensationType,
-        salaryPerShift: employee.salaryPerShift
-          ? Number(employee.salaryPerShift)
+        salaryPerHour: employee.salaryPerHour
+          ? Number(employee.salaryPerHour)
           : null,
         active: employee.active,
         companyDivisionId: employee.companyDivision?.id ?? null,

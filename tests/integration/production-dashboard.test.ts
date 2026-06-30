@@ -57,13 +57,14 @@ describeWithDb('integration — production dashboard (Дашборд начал�
       admin: t.adminCookie,
     };
 
-    // Унифицируем оплату ОТК/ВТО/Упаковки: 480 ₽/смена → 1 ₽/мин.
+    // Унифицируем оплату ОТК/ВТО/Упаковки: 60 ₽/ч → 1 ₽/мин
+    // (повременка; эквивалентно прежним 480 ₽/смена / 480 мин).
     for (const role of ['qc', 'ironing', 'packer'] as const) {
       await t.prisma.employee.update({
         where: { id: seed.employees[role].id },
         data: {
           compensationType: 'SALARY',
-          salaryPerShift: new Prisma.Decimal(480),
+          salaryPerHour: new Prisma.Decimal(60),
         },
       });
     }

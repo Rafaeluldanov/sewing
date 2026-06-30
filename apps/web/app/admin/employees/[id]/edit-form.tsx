@@ -20,7 +20,7 @@ import {
 
 const COMPENSATION_LABEL: Record<CompensationType, string> = {
   PIECEWORK: 'Сдельная',
-  SALARY: 'Оклад за смену',
+  SALARY: 'Оклад (почасовой)',
   MIXED: 'Оклад + сдельная',
 };
 
@@ -75,7 +75,7 @@ interface Props {
  *
  * Меняет только то, что MVP даёт менеджеру (см. ADR-0021):
  *   - `compensationType` (PIECEWORK | SALARY | MIXED)
- *   - `salaryPerShift`   (обязательна для SALARY/MIXED)
+ *   - `salaryPerHour`    (почасовая ставка; обязательна для SALARY/MIXED)
  *   - `active`           (мягкий «архив»)
  *   - `companyDivisionId` (PHASE 2 STEP 2)
  */
@@ -88,9 +88,9 @@ export function EmployeeEditForm({
   const [compensationType, setCompensationType] = useState<CompensationType>(
     employee.compensationType,
   );
-  const [salaryPerShift, setSalaryPerShift] = useState<string>(
-    employee.salaryPerShift !== null
-      ? employee.salaryPerShift.toString()
+  const [salaryPerHour, setSalaryPerHour] = useState<string>(
+    employee.salaryPerHour !== null
+      ? employee.salaryPerHour.toString()
       : '',
   );
   // B2B-процент закройщика. См.
@@ -209,25 +209,24 @@ export function EmployeeEditForm({
         </div>
 
         {/*
-          PHASE 2 STEP 5: «ставка за смену» имеет смысл только для
-          SALARY/MIXED — для PIECEWORK поле прятали и раньше через
-          UI-подсказку, теперь скрываем по-настоящему. Для PIECEWORK
-          FormData ничего не отправит и backend (`UpdateEmployeeSchema`)
-          оставит `salaryPerShift = null` без правки. Если менеджер
-          переключится на SALARY/MIXED, поле появится; обязательность
-          гарантирует backend — без ставки PATCH вернёт
-          `EMPLOYEE_SALARY_RATE_REQUIRED`.
+          Почасовая ставка имеет смысл только для SALARY/MIXED
+          (повременная оплата) — для PIECEWORK поле скрыто. Для
+          PIECEWORK FormData ничего не отправит и backend
+          (`UpdateEmployeeSchema`) оставит `salaryPerHour = null` без
+          правки. Если менеджер переключится на SALARY/MIXED, поле
+          появится; обязательность гарантирует backend — без ставки
+          PATCH вернёт `EMPLOYEE_SALARY_RATE_REQUIRED`.
         */}
         {requiresRate && (
           <div className="admin-field">
-            <label htmlFor="emp-salary-per-shift">Ставка за смену, ₽</label>
+            <label htmlFor="emp-salary-per-hour">Ставка, ₽/час</label>
             <input
-              id="emp-salary-per-shift"
-              name="salaryPerShift"
+              id="emp-salary-per-hour"
+              name="salaryPerHour"
               type="text"
               inputMode="decimal"
-              value={salaryPerShift}
-              onChange={(e) => setSalaryPerShift(e.target.value)}
+              value={salaryPerHour}
+              onChange={(e) => setSalaryPerHour(e.target.value)}
               placeholder="обязательно"
               required
               autoComplete="off"

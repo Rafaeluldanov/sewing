@@ -287,6 +287,7 @@ export class PassportsService {
         color,
         rollNumber: dto.rollNumber,
         rollOrdinal: null,
+        cuttingLayOrdinal: null,
         cutDate: new Date(dto.cutDate),
         qty: dto.qtyCut,
         cutterId: cutter.id,
@@ -321,6 +322,7 @@ export class PassportsService {
       color: string;
       rollNumber: string;
       rollOrdinal: number | null;
+      cuttingLayOrdinal: number | null;
       cutDate: Date;
       qty: number;
       cutterId: string;
@@ -348,6 +350,7 @@ export class PassportsService {
         color: params.color,
         rollNumber: params.rollNumber,
         rollOrdinal: params.rollOrdinal,
+        cuttingLayOrdinal: params.cuttingLayOrdinal,
         cutDate: params.cutDate,
         qtyPlan: params.qty,
         qtyCut: params.qty,
@@ -404,18 +407,25 @@ export class PassportsService {
    * (`POST /api/passports/release-from-rolls`).
    *
    * Помощник ничего не вводит руками: количество и рулоны берутся из
-   * завершённой задачи раскройщика (`CuttingTask`). На каждый выбранный
-   * рулон создаётся паспорт с `qtyCut = слои рулона × раскладка размера`
-   * (`CuttingTaskRoll.layers × CuttingTaskSizeRow.perLayerQty`) и
-   * `rollOrdinal = ordinal`. Сдельное за раскрой идёт автоматически
-   * раскройщику задачи (`CuttingTask.assignedToId`).
+   * выбранного расклада завершённой задачи раскройщика (`CuttingTaskLay`).
+   * На каждый выбранный рулон создаётся паспорт с `qtyCut = слои рулона ×
+   * раскладка размера в этом раскладе` (`CuttingTaskRoll.layers ×
+   * CuttingTaskLaySize.perLayerQty`), `rollOrdinal = ordinal` и
+   * `cuttingLayOrdinal = layOrdinal`. Сдельное за раскрой идёт
+   * автоматически раскройщику задачи (`CuttingTask.assignedToId`).
    *
-   * Идемпотентно: пары `(sizeId, ordinal)`, по которым паспорт уже
-   * выпущен (есть non-CANCELLED паспорт с этим `rollOrdinal`), —
-   * пропускаются. Это закрывает кейс «сломался принтер → продолжить с
-   * нужного рулона» и защищает от двойного клика. Сохраняются прежние
-   * инварианты: заказ в производстве, closure-блок (ADR-0018) и
-   * `Σ qtyCut ≤ остаток плана` по размеру.
+   * Идемпотентно: тройки `(layOrdinal, sizeId, ordinal)`, по которым
+   * паспорт уже выпущен, — пропускаются. Это закрывает кейс «сломался
+   * принтер → продолжить с нужного рулона» и защищает от двойного клика.
+   * Сохраняются прежние инварианты: заказ в производстве, closure-блок
+   * (ADR-0018).
+   *
+   * Перекрой плана НЕ блокирует выпуск (в отличие от ручного
+   * `create`/`update`): настил иногда даёт больше плана размера (лишний
+   * слой, запас под подмену брака), а раскрой уже физически выполнен —
+   * последний рулон оформляется паспортом как есть. Когда суммарный
+   * выпуск по размеру (по всем раскладам) превышает `OrderItem.qtyPlan`,
+   * результат содержит `overCut` — уведомление для UI (печать идёт).
    */
   async releaseFromRolls(
     dto: ReleaseFromRollsDto,
@@ -453,12 +463,18 @@ export class PassportsService {
     );
     if (closed) throw new PassportCuttingClosedException();
 
-    // Источник рулонов и раскладки — завершённая задача раскройщика.
+    // Источник рулонов и раскладки — выбранный расклад завершённой
+    // задачи раскройщика.
     const task = await this.prisma.cuttingTask.findUnique({
       where: { orderId: order.id },
       include: {
-        sizeRows: { select: { sizeId: true, perLayerQty: true } },
-        rolls: { select: { ordinal: true, layers: true } },
+        lays: {
+          where: { ordinal: dto.layOrdinal },
+          include: {
+            laySizes: { select: { sizeId: true, perLayerQty: true } },
+            rolls: { select: { ordinal: true, layers: true } },
+          },
+        },
       },
     });
     if (!task) {
@@ -475,12 +491,20 @@ export class PassportsService {
         message: 'Раскрой по заказу ещё не завершён — выпуск недоступен.',
       });
     }
-    const sizeRow = task.sizeRows.find((r) => r.sizeId === dto.sizeId);
-    if (!sizeRow) {
+    const lay = task.lays[0];
+    if (!lay) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'CUTTING_LAY_NOT_FOUND',
+        message: `Расклад №${dto.layOrdinal} не относится к этой задаче раскроя.`,
+      });
+    }
+    const laySize = lay.laySizes.find((r) => r.sizeId === dto.sizeId);
+    if (!laySize) {
       throw new PassportSizeNotInOrderException();
     }
-    const perLayerQty = sizeRow.perLayerQty;
-    const rollByOrdinal = new Map(task.rolls.map((r) => [r.ordinal, r.layers]));
+    const perLayerQty = laySize.perLayerQty;
+    const rollByOrdinal = new Map(lay.rolls.map((r) => [r.ordinal, r.layers]));
 
     // Раскройщик для начислений — тот, кто выполнил задачу. Валидируем
     // его так же, как явный `cutterId` (роль CUTTER + active).
@@ -528,15 +552,25 @@ export class PassportsService {
           sizeId: dto.sizeId,
           status: { not: PassportStatus.CANCELLED },
         },
-        select: { qtyCut: true, rollOrdinal: true },
+        select: { qtyCut: true, rollOrdinal: true, cuttingLayOrdinal: true },
       });
+      // `cutBySize` — по всему размеру (все расклады): остаток плана общий.
+      // `releasedOrdinals` — только рулоны ЭТОГО расклада: повтор рулона в
+      // другом раскладе — самостоятельная пара.
       const releasedOrdinals = new Set<number>();
       let cutBySize = 0;
       for (const p of existing) {
         cutBySize += p.qtyCut;
-        if (p.rollOrdinal != null) releasedOrdinals.add(p.rollOrdinal);
+        if (
+          p.rollOrdinal != null &&
+          p.cuttingLayOrdinal === dto.layOrdinal
+        ) {
+          releasedOrdinals.add(p.rollOrdinal);
+        }
       }
-      let remaining = orderItem.qtyPlan - cutBySize;
+      // Идём от уже выпущенного по размеру; перекрой плана допустим —
+      // считаем итог, чтобы отдать уведомление `overCut` (см. docstring).
+      let cutAfter = cutBySize;
 
       const created: ReleaseFromRollsResultDto['created'] = [];
       const skipped: number[] = [];
@@ -560,16 +594,16 @@ export class PassportsService {
           skipped.push(ordinal);
           continue;
         }
-        if (qty > remaining) {
-          throw new PassportQtyExceedsRemainingException(Math.max(remaining, 0));
-        }
+        // Перекрой плана размера НЕ блокирует выпуск — печатаем как есть,
+        // а превышение отдадим в `overCut` ниже (UI покажет нотификацию).
         const lite = await this.createOnePassportInTx(tx, {
           orderId: order.id,
           productId: product.id,
           sizeId: dto.sizeId,
           color,
-          rollNumber: `Рулон ${ordinal}`,
+          rollNumber: `Расклад ${dto.layOrdinal} · Рулон ${ordinal}`,
           rollOrdinal: ordinal,
+          cuttingLayOrdinal: dto.layOrdinal,
           cutDate: new Date(dto.cutDate),
           qty,
           cutterId: cutter.id,
@@ -577,7 +611,7 @@ export class PassportsService {
           divisionOpId: divisionOp.id,
           initialRouteStepIndex,
         });
-        remaining -= qty;
+        cutAfter += qty;
         releasedOrdinals.add(ordinal);
         created.push({
           id: lite.id,
@@ -588,11 +622,22 @@ export class PassportsService {
         });
       }
 
-      return { created, skipped };
+      const overBy = cutAfter - orderItem.qtyPlan;
+      const overCut =
+        overBy > 0
+          ? {
+              sizeId: dto.sizeId,
+              planQty: orderItem.qtyPlan,
+              cutQty: cutAfter,
+              overBy,
+            }
+          : null;
+
+      return { created, skipped, overCut };
     });
 
     this.logger.log(
-      `event=passport.release-from-rolls orderId=${order.id} sizeId=${dto.sizeId} created=${result.created.length} skipped=${result.skipped.length} creatorId=${creator.id} cutterId=${cutter.id}`,
+      `event=passport.release-from-rolls orderId=${order.id} layOrdinal=${dto.layOrdinal} sizeId=${dto.sizeId} created=${result.created.length} skipped=${result.skipped.length}${result.overCut ? ` overCut=${result.overCut.overBy}` : ''} creatorId=${creator.id} cutterId=${cutter.id}`,
     );
     return result;
   }

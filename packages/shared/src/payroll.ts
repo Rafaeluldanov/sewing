@@ -297,7 +297,8 @@ export interface PayrollEmployeeDetailEmployeeDto {
   login: string;
   role: string;
   compensationType: CompensationType;
-  salaryPerShift: number | null;
+  /** Почасовая ставка `Employee.salaryPerHour` (₽/час). */
+  salaryPerHour: number | null;
   active: boolean;
   /**
    * PHASE 2 STEP 2: подразделение, к которому привязан сотрудник
@@ -347,6 +348,8 @@ export interface PayrollEmployeeSalaryEntryDto {
   id: string;
   date: string;
   amount: number;
+  /** Отработанные секунды за день (закрытые смены). `null` — историч./MANUAL. */
+  workedSeconds: number | null;
   source: 'SHIFT_DAY' | 'MANUAL';
   editedManually: boolean;
   managerComment: string | null;

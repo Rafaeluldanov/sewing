@@ -142,11 +142,11 @@ export class DisplayScreensService {
             pinHash,
             role: Role.DISPLAY,
             // Дисплей — не реальный сотрудник; «оклад» проставлять
-            // нечем и не нужно. SALARY без `salaryPerShift` по
+            // нечем и не нужно. SALARY без `salaryPerHour` по
             // payroll-инвариантам даёт ноль в `SalaryService` и не
             // мешает existing flow. См. ADR-0021 §«SALARY».
             compensationType: CompensationType.SALARY,
-            salaryPerShift: null,
+            salaryPerHour: null,
             active: true,
           },
         });

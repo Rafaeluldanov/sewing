@@ -71,8 +71,7 @@ export default async function NewPassportPage({
           orderNumber={release.orderNumber}
           productName={release.productName}
           color={release.color}
-          sizes={release.sizes}
-          rolls={release.rolls}
+          lays={release.lays}
           released={release.released}
           today={today}
           disabled={!cuttingDone}

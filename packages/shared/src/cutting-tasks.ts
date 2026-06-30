@@ -3,7 +3,7 @@
  *
  * См.:
  *   - `prisma/schema.prisma::CuttingTask` / `CuttingTaskSizeRow` /
- *     `CuttingTaskRoll`;
+ *     `CuttingTaskLay` / `CuttingTaskLaySize` / `CuttingTaskRoll`;
  *   - `apps/api/src/modules/cutting-tasks/*`;
  *   - `apps/web/app/cutter/*`.
  *
@@ -13,8 +13,10 @@
  *      строками-заданием по размерам (план из `OrderItem`).
  *   2. Раскройщик в кабинете видит общую очередь, берёт задачу в работу
  *      (`start` → `IN_PROGRESS`).
- *   3. Вводит «количество размера на настиле» (`perLayerQty`) и
- *      настилает рулоны (`rolls`: номер + слои). Итоги считаются на лету.
+ *   3. Составляет один или несколько раскладов (`lays`): в каждом
+ *      выбирает чекбоксом размеры с «количеством на настиле»
+ *      (`perLayerQty`) и настилает рулоны (номер + слои). Итоги по
+ *      размеру суммируются по всем раскладам и считаются на лету.
  *   4. Когда итог приблизился к плану — жмёт «Раскрой завершён»
  *      (`complete` → `DONE`).
  *
@@ -74,7 +76,9 @@ export const CUTTING_TASK_STATUS_TONE: Record<
 
 /** Максимум строк-размеров в одной задаче (с запасом). */
 export const CUTTING_TASK_MAX_SIZE_ROWS = 64;
-/** Максимум рулонов в одной задаче. */
+/** Максимум раскладов в одной задаче (с запасом). */
+export const CUTTING_TASK_MAX_LAYS = 50;
+/** Максимум рулонов в одном раскладе. */
 export const CUTTING_TASK_MAX_ROLLS = 500;
 /** Верхняя граница «штук размера на настиле» (защита от опечаток). */
 export const CUTTING_TASK_MAX_PER_LAYER_QTY = 1000;
@@ -111,22 +115,23 @@ function nonNegativeIntField(max: number, label: string) {
 }
 
 /**
- * Строка ввода «размер → количество на настиле». `qtyPlan` НЕ
- * принимаем от клиента — план фиксируется при создании задачи и
- * read-only для раскройщика.
+ * Строка ввода размера в раскладе «размер → количество на настиле».
+ * `qtyPlan` НЕ принимаем от клиента — план фиксируется при создании
+ * задачи и read-only для раскройщика. Присутствие строки = размер
+ * выбран чекбоксом в этот расклад.
  */
-export const CuttingTaskSizeRowInputSchema = z.object({
+export const CuttingTaskLaySizeInputSchema = z.object({
   sizeId: z.string().min(1, 'Размер обязателен'),
   perLayerQty: nonNegativeIntField(
     CUTTING_TASK_MAX_PER_LAYER_QTY,
     'Количество на настиле',
   ),
 });
-export type CuttingTaskSizeRowInputDto = z.infer<
-  typeof CuttingTaskSizeRowInputSchema
+export type CuttingTaskLaySizeInputDto = z.infer<
+  typeof CuttingTaskLaySizeInputSchema
 >;
 
-/** Строка ввода рулона «номер → слои». */
+/** Строка ввода рулона «номер → слои» (в рамках расклада). */
 export const CuttingTaskRollInputSchema = z.object({
   ordinal: z
     .number({ invalid_type_error: 'Номер рулона должен быть числом' })
@@ -138,18 +143,16 @@ export const CuttingTaskRollInputSchema = z.object({
 export type CuttingTaskRollInputDto = z.infer<typeof CuttingTaskRollInputSchema>;
 
 /**
- * Payload для `PATCH /api/cutting-tasks/:id` (автосохранение прогресса)
- * и `POST /api/cutting-tasks/:id/complete` (финальное сохранение +
- * перевод в DONE). Полностью перезаписывает `perLayerQty` строк и набор
- * рулонов задачи (replace, не diff).
- *
- * `sizeRows` опционален: на ранних автосейвах раскройщик мог ещё не
- * трогать таблицу размеров. `rolls` тоже опционален (пустой настил).
+ * Один расклад в payload сохранения: выбранные размеры (`laySizes`) и
+ * рулоны (`rolls`) этого расклада. Порядок раскладов в массиве задаёт
+ * их нумерацию («Расклад 1» — первый элемент). Оба поля опциональны:
+ * на ранних автосейвах раскройщик мог ещё ничего не выбрать / не
+ * настелить.
  */
-export const SaveCuttingTaskProgressSchema = z.object({
-  sizeRows: z
-    .array(CuttingTaskSizeRowInputSchema)
-    .max(CUTTING_TASK_MAX_SIZE_ROWS, 'Слишком много строк размеров')
+export const CuttingTaskLayInputSchema = z.object({
+  laySizes: z
+    .array(CuttingTaskLaySizeInputSchema)
+    .max(CUTTING_TASK_MAX_SIZE_ROWS, 'Слишком много размеров в раскладе')
     .default([])
     .superRefine((rows, ctx) => {
       const seen = new Set<string>();
@@ -159,7 +162,7 @@ export const SaveCuttingTaskProgressSchema = z.object({
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [i, 'sizeId'],
-            message: 'Размер повторяется — дубликаты не допускаются',
+            message: 'Размер повторяется в раскладе — дубликаты не допускаются',
           });
         }
         seen.add(sid);
@@ -177,12 +180,29 @@ export const SaveCuttingTaskProgressSchema = z.object({
           ctx.addIssue({
             code: z.ZodIssueCode.custom,
             path: [i, 'ordinal'],
-            message: `Рулон №${ord} повторяется`,
+            message: `Рулон №${ord} повторяется в раскладе`,
           });
         }
         seen.add(ord);
       }
     }),
+});
+export type CuttingTaskLayInputDto = z.infer<typeof CuttingTaskLayInputSchema>;
+
+/**
+ * Payload для `PATCH /api/cutting-tasks/:id` (автосохранение прогресса)
+ * и `POST /api/cutting-tasks/:id/complete` (финальное сохранение +
+ * перевод в DONE). Полностью перезаписывает набор раскладов задачи
+ * (replace, не diff) — индекс элемента в `lays` = `ordinal` расклада
+ * (1-based).
+ *
+ * `lays` опционален: на ранних автосейвах раскладов может ещё не быть.
+ */
+export const SaveCuttingTaskProgressSchema = z.object({
+  lays: z
+    .array(CuttingTaskLayInputSchema)
+    .max(CUTTING_TASK_MAX_LAYS, 'Слишком много раскладов')
+    .default([]),
 });
 export type SaveCuttingTaskProgressDto = z.infer<
   typeof SaveCuttingTaskProgressSchema
@@ -192,6 +212,11 @@ export type SaveCuttingTaskProgressDto = z.infer<
 // Output DTOs
 // ---------------------------------------------------------------------------
 
+/**
+ * Строка плана по размеру (снимок заказа) — список размеров, из которого
+ * раскройщик выбирает чекбоксом размеры в каждый расклад. `qtyPlan`
+ * общий для всех раскладов и read-only.
+ */
 export interface CuttingTaskSizeRowDto {
   id: string;
   sortOrder: number;
@@ -199,7 +224,14 @@ export interface CuttingTaskSizeRowDto {
   sizeCodeSnapshot: string;
   /** Плановое количество штук этого размера (read-only). */
   qtyPlan: number;
-  /** Введённое раскройщиком «количество размера на настиле». */
+}
+
+/** Выбранный в раскладе размер с «количеством на настиле». */
+export interface CuttingTaskLaySizeDto {
+  sizeId: string | null;
+  sizeCodeSnapshot: string;
+  sortOrder: number;
+  /** Введённое раскройщиком «количество размера на настиле» в раскладе. */
   perLayerQty: number;
 }
 
@@ -207,6 +239,14 @@ export interface CuttingTaskRollDto {
   id: string;
   ordinal: number;
   layers: number;
+}
+
+/** Расклад: выбранные размеры + рулоны. `ordinal` — «Расклад N». */
+export interface CuttingTaskLayDto {
+  id: string;
+  ordinal: number;
+  sizes: CuttingTaskLaySizeDto[];
+  rolls: CuttingTaskRollDto[];
 }
 
 export interface CuttingTaskSummaryDto {
@@ -218,8 +258,11 @@ export interface CuttingTaskSummaryDto {
   status: CuttingTaskStatus;
   assignedToName: string | null;
   sizeRowsCount: number;
+  /** Число раскладов в задаче. */
+  laysCount: number;
+  /** Σ рулонов по всем раскладам. */
   rollsCount: number;
-  /** Σ слоёв по всем рулонам — удобно показать прямо в списке. */
+  /** Σ слоёв по всем рулонам всех раскладов — удобно показать в списке. */
   totalLayers: number;
   createdAt: string;
   updatedAt: string;
@@ -230,36 +273,58 @@ export interface CuttingTaskSummaryDto {
 export interface CuttingTaskDetailDto extends CuttingTaskSummaryDto {
   /** Свободный текст клиента/комментарий заказа — справочно. */
   orderCustomer: string | null;
+  /** План по размерам (снимок заказа) — что доступно для выбора в расклады. */
   sizeRows: CuttingTaskSizeRowDto[];
-  rolls: CuttingTaskRollDto[];
+  /** Расклады задачи (≥1; «Расклад N» по `ordinal`). */
+  lays: CuttingTaskLayDto[];
 }
 
 // ---------------------------------------------------------------------------
 // Рулонный выпуск паспортов помощником раскройщика (CUTTER_ASSISTANT)
 // ---------------------------------------------------------------------------
 
-/** Размер на экране выпуска: раскладка + план (read-only для помощника). */
-export interface ReleaseSizeDto {
+/** Размер расклада на экране выпуска: раскладка + план (read-only). */
+export interface ReleaseLaySizeDto {
   sizeId: string;
   sizeCode: string;
   sortOrder: number;
-  /** «Количество размера на настиле» из задачи раскройщика. */
+  /** «Количество размера на настиле» в этом раскладе. */
   perLayerQty: number;
+  /** Плановое количество штук размера в заказе (общее, не по раскладу). */
   qtyPlan: number;
 }
 
-/** Рулон из задачи раскройщика для выпуска. */
-export interface ReleaseRollDto {
+/** Рулон расклада для выпуска. */
+export interface ReleaseLayRollDto {
   ordinal: number;
   layers: number;
+}
+
+/** Расклад на экране выпуска: размеры + рулоны. `ordinal` — «Расклад N». */
+export interface ReleaseLayDto {
+  ordinal: number;
+  sizes: ReleaseLaySizeDto[];
+  rolls: ReleaseLayRollDto[];
+}
+
+/** Уже выпущенный рулон — тройка `(layOrdinal, sizeId, ordinal)` + сам паспорт. */
+export interface ReleasedRollDto {
+  layOrdinal: number;
+  sizeId: string;
+  ordinal: number;
+  /** Id уже выпущенного паспорта — для повторной печати «выпустить ещё раз». */
+  passportId: string;
+  /** Номер паспорта (подпись/доступность кнопки повторного выпуска). */
+  passportNumber: string;
 }
 
 /**
  * Ответ `GET /api/cutting-tasks/by-order/:orderId/release-state` — всё,
  * что нужно помощнику, чтобы выпускать паспорта по рулонам без ручного
- * ввода. Размеры и рулоны берутся из завершённой задачи раскройщика;
- * `released` — пары `(sizeId, ordinal)`, по которым паспорт уже выпущен
- * (рисуются как «выпущено» и не выпускаются повторно).
+ * ввода. Расклады (с размерами и рулонами) берутся из завершённой задачи
+ * раскройщика; `released` — рулоны, по которым паспорт уже выпущен
+ * (рисуются как «выпущено», повторно не выпускаются, но их паспорт можно
+ * распечатать ещё раз — кейс «завис принтер»).
  */
 export interface OrderReleaseStateDto {
   orderId: string;
@@ -268,9 +333,8 @@ export interface OrderReleaseStateDto {
   productName: string;
   color: string;
   cuttingTaskStatus: CuttingTaskStatus;
-  sizes: ReleaseSizeDto[];
-  rolls: ReleaseRollDto[];
-  released: Array<{ sizeId: string; ordinal: number }>;
+  lays: ReleaseLayDto[];
+  released: ReleasedRollDto[];
 }
 
 /**
@@ -288,9 +352,9 @@ export interface OrderReadyForReleaseDto {
   orderNumber: string;
   productName: string;
   color: string;
-  /** Ожидаемых пар `(размер, рулон)` с qty > 0. */
+  /** Ожидаемых троек `(расклад, размер, рулон)` с qty > 0. */
   totalPairs: number;
-  /** Уже выпущенных пар. */
+  /** Уже выпущенных троек. */
   releasedPairs: number;
   status: Extract<CuttingTaskStatus, 'NEW' | 'DONE'>;
 }
@@ -300,29 +364,51 @@ export interface OrderReadyForReleaseDto {
 // ---------------------------------------------------------------------------
 
 export interface CuttingTaskTotals {
-  /** Σ слоёв по всем рулонам. */
+  /** Σ слоёв по всем рулонам всех раскладов. */
   totalLayers: number;
-  /** Итог по каждому размеру: `sizeId → totalLayers × perLayerQty`. */
+  /** Σ рулонов по всем раскладам. */
+  rollsCount: number;
+  /**
+   * Итог по каждому размеру: `sizeId → Σ по раскладам (слои расклада ×
+   * perLayerQty размера в раскладе)`.
+   */
   perSizeTotal: Record<string, number>;
 }
 
-/**
- * Считает «всего слоёв» и «итог по размеру». Чистая функция — одинаково
- * работает на сервере (мапперы summary/detail) и на клиенте (живой
- * пересчёт в форме раскроя).
- */
-export function computeCuttingTotals(
-  sizeRows: Array<{ sizeId: string | null; perLayerQty: number }>,
-  rolls: Array<{ layers: number }>,
-): CuttingTaskTotals {
-  const totalLayers = rolls.reduce(
+/** Σ слоёв расклада = Σ `layers` по его рулонам. */
+export function layTotalLayers(rolls: Array<{ layers: number }>): number {
+  return rolls.reduce(
     (sum, r) => sum + (Number.isFinite(r.layers) ? r.layers : 0),
     0,
   );
+}
+
+/**
+ * Считает «всего слоёв» и «итог по размеру» по набору раскладов. Чистая
+ * функция — одинаково работает на сервере (мапперы summary/detail) и на
+ * клиенте (живой пересчёт в форме раскроя).
+ *
+ * Итог по размеру суммируется по всем раскладам: один размер может
+ * входить в несколько раскладов с разным `perLayerQty`.
+ */
+export function computeCuttingTotals(
+  lays: Array<{
+    laySizes: Array<{ sizeId: string | null; perLayerQty: number }>;
+    rolls: Array<{ layers: number }>;
+  }>,
+): CuttingTaskTotals {
+  let totalLayers = 0;
+  let rollsCount = 0;
   const perSizeTotal: Record<string, number> = {};
-  for (const row of sizeRows) {
-    if (!row.sizeId) continue;
-    perSizeTotal[row.sizeId] = totalLayers * (row.perLayerQty ?? 0);
+  for (const lay of lays) {
+    const layLayers = layTotalLayers(lay.rolls);
+    totalLayers += layLayers;
+    rollsCount += lay.rolls.length;
+    for (const s of lay.laySizes) {
+      if (!s.sizeId) continue;
+      perSizeTotal[s.sizeId] =
+        (perSizeTotal[s.sizeId] ?? 0) + layLayers * (s.perLayerQty ?? 0);
+    }
   }
-  return { totalLayers, perSizeTotal };
+  return { totalLayers, rollsCount, perSizeTotal };
 }

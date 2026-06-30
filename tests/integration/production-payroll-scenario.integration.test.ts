@@ -163,7 +163,7 @@ interface ReportEmployee {
   login: string;
   role: string;
   compensationType: string;
-  salaryPerShift: number | null;
+  salaryPerHour: number | null;
 }
 
 interface ScenarioReport {
@@ -264,15 +264,15 @@ async function createScenarioEmployees(
     key: ActorKey;
     role: Role;
     compensationType: 'PIECEWORK' | 'SALARY' | 'MIXED';
-    salaryPerShift: number | null;
+    salaryPerHour: number | null;
   };
   const specs: Spec[] = [
-    { key: 'manager', role: 'SHOP_MANAGER', compensationType: 'SALARY', salaryPerShift: 1500 },
-    { key: 'cutter', role: 'CUTTER', compensationType: 'PIECEWORK', salaryPerShift: null },
-    { key: 'seamstress', role: 'SEAMSTRESS', compensationType: 'MIXED', salaryPerShift: 1000 },
-    { key: 'qc', role: 'QC', compensationType: 'SALARY', salaryPerShift: 900 },
-    { key: 'ironing', role: 'IRONING', compensationType: 'SALARY', salaryPerShift: 900 },
-    { key: 'packer', role: 'PACKING', compensationType: 'SALARY', salaryPerShift: 900 },
+    { key: 'manager', role: 'SHOP_MANAGER', compensationType: 'SALARY', salaryPerHour: 1500 },
+    { key: 'cutter', role: 'CUTTER', compensationType: 'PIECEWORK', salaryPerHour: null },
+    { key: 'seamstress', role: 'SEAMSTRESS', compensationType: 'MIXED', salaryPerHour: 1000 },
+    { key: 'qc', role: 'QC', compensationType: 'SALARY', salaryPerHour: 900 },
+    { key: 'ironing', role: 'IRONING', compensationType: 'SALARY', salaryPerHour: 900 },
+    { key: 'packer', role: 'PACKING', compensationType: 'SALARY', salaryPerHour: 900 },
   ];
   const out = {} as Record<ActorKey, ReportEmployee>;
   for (const s of specs) {
@@ -284,8 +284,8 @@ async function createScenarioEmployees(
         fullName,
         role: s.role,
         compensationType: s.compensationType,
-        salaryPerShift:
-          s.salaryPerShift === null ? null : new Prisma.Decimal(s.salaryPerShift),
+        salaryPerHour:
+          s.salaryPerHour === null ? null : new Prisma.Decimal(s.salaryPerHour),
         active: true,
         pinHash,
       },
@@ -295,7 +295,7 @@ async function createScenarioEmployees(
       login: created.login,
       role: created.role,
       compensationType: created.compensationType,
-      salaryPerShift: s.salaryPerShift,
+      salaryPerHour: s.salaryPerHour,
     };
   }
   return out;
@@ -333,6 +333,18 @@ async function startShift(
 }
 
 async function stopShift(t: TestApp, cookie: string): Promise<void> {
+  // Повременная оплата (ADR-0021 ревизия 2026-06): закрытая смена
+  // нулевой длительности не даёт оклада. Смены в сценарии
+  // последовательны (одна активная за раз), поэтому безопасно сместить
+  // startedAt единственной открытой смены к началу суток — тогда у
+  // закрытой смены появляется ненулевая длительность и SALARY/MIXED
+  // получают `SalaryEntry` за сегодня (внутри payroll-периода).
+  const startOfToday = new Date();
+  startOfToday.setUTCHours(0, 0, 0, 0);
+  await t.prisma.shiftSession.updateMany({
+    where: { endedAt: null },
+    data: { startedAt: startOfToday },
+  });
   await request(t.app.getHttpServer())
     .post('/api/shifts/stop')
     .set('Cookie', cookie)
@@ -570,9 +582,15 @@ async function cleanupByPrefix(
       });
       counts.ShiftSession += shs.count;
     }
-    // Order — каскад снесёт OrderItem / OrderRouteStep / WorkshopNeed
-    // и т.п. (см. `prisma/schema.prisma` ON DELETE CASCADE).
+    // Order. У `OrderItem.orderId` нет `ON DELETE CASCADE`
+    // (см. `prisma/schema.prisma::OrderItem`), поэтому строки заказа
+    // удаляем явно ДО самого заказа — иначе FK `OrderItem_orderId_fkey`
+    // ловит P2003. Остальные дети заказа (OrderRouteStep / WorkshopNeed
+    // и т.п.) каскадируются.
     if (orderIds.length) {
+      await tx.orderItem.deleteMany({
+        where: { orderId: { in: orderIds } },
+      });
       const ords = await tx.order.deleteMany({
         where: { id: { in: orderIds } },
       });
@@ -665,8 +683,8 @@ function printReport(r: ScenarioReport): void {
   for (const key of ['manager', 'cutter', 'seamstress', 'qc', 'ironing', 'packer'] as const) {
     const e = r.employees[key];
     const sps =
-      e.salaryPerShift !== null && e.salaryPerShift !== undefined
-        ? ` salaryPerShift=${e.salaryPerShift}`
+      e.salaryPerHour !== null && e.salaryPerHour !== undefined
+        ? ` salaryPerHour=${e.salaryPerHour}`
         : '';
     lines.push(
       `  ${key.padEnd(11)} ${e.id}  login=${e.login} role=${e.role} comp=${e.compensationType}${sps}`,

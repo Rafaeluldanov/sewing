@@ -3,8 +3,11 @@
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useEffect, useMemo, useState, useTransition } from 'react';
-import type { ReleaseRollDto, ReleaseSizeDto } from '@sewing/shared/cutting-tasks';
-import type { ReleasedPassportLiteDto } from '@sewing/shared/passports';
+import type { ReleaseLayDto, ReleasedRollDto } from '@sewing/shared/cutting-tasks';
+import type {
+  ReleasedPassportLiteDto,
+  ReleaseOverCutDto,
+} from '@sewing/shared/passports';
 import { sendPassportPrintJobsBatch } from '@/components/print-button-actions';
 import { buildPassportsBatchPrintPath } from '@/lib/browser-api-paths';
 import { releaseFromRollsAction } from '../actions';
@@ -14,10 +17,10 @@ interface Props {
   orderNumber: string;
   productName: string;
   color: string;
-  sizes: ReleaseSizeDto[];
-  rolls: ReleaseRollDto[];
-  /** Уже выпущенные пары `(размер, рулон)`. */
-  released: Array<{ sizeId: string; ordinal: number }>;
+  /** Расклады из завершённой задачи раскройщика. */
+  lays: ReleaseLayDto[];
+  /** Уже выпущенные рулоны `(расклад, размер, рулон)` + их паспорт. */
+  released: ReleasedRollDto[];
   today: string;
   disabled: boolean;
 }
@@ -25,39 +28,60 @@ interface Props {
 interface SuccessState {
   created: ReleasedPassportLiteDto[];
   skipped: number[];
+  /** Уведомление о перекрое плана размера (печать не блокировалась). */
+  overCut: ReleaseOverCutDto | null;
 }
 
 /**
- * Рулонный выпуск паспортов помощником раскройщика.
+ * Рулонный выпуск паспортов помощником раскройщика — по раскладам.
  *
- * Помощник ничего не вводит руками: размеры и рулоны приходят из
- * завершённой задачи раскройщика. Он выбирает размер, отмечает рулоны
- * («Выбрать все» или по одному — кейс «сломался принтер, продолжить с
- * нужного рулона») и жмёт «Выпустить паспорт». Количество на каждый
- * рулон = `слои рулона × раскладка размера на настиле` — считается и
- * показывается тут же, но окончательно его проставляет backend.
+ * Помощник ничего не вводит руками: расклады с размерами и рулонами
+ * приходят из завершённой задачи раскройщика. Он выбирает расклад (если
+ * их несколько), размер, отмечает рулоны («Выбрать все» или по одному —
+ * кейс «сломался принтер, продолжить с нужного рулона») и жмёт «Выпустить
+ * паспорт». Количество на каждый рулон = `слои рулона × раскладка размера
+ * в этом раскладе` — считается и показывается тут же, окончательно его
+ * проставляет backend.
  *
- * Уже выпущенные пары `(размер, рулон)` помечены «выпущено» и не
- * выбираются повторно.
+ * Уже выпущенные тройки `(расклад, размер, рулон)` помечены «выпущено» и
+ * не выпускаются повторно (новый паспорт не плодим), но их паспорт можно
+ * распечатать ещё раз кнопкой «Выпустить ещё раз» — кейс «завис принтер».
  */
 export function CutterAssistantRollForm({
   orderId,
   orderNumber,
   productName,
   color,
-  sizes,
-  rolls,
+  lays,
   released,
   today,
   disabled,
 }: Props) {
   const router = useRouter();
-  const sortedSizes = useMemo(
-    () => [...sizes].sort((a, b) => a.sortOrder - b.sortOrder),
-    [sizes],
+  const sortedLays = useMemo(
+    () => [...lays].sort((a, b) => a.ordinal - b.ordinal),
+    [lays],
   );
+
+  const [layOrdinal, setLayOrdinal] = useState<number>(
+    () => sortedLays[0]?.ordinal ?? 0,
+  );
+  const selectedLay = useMemo(
+    () => sortedLays.find((l) => l.ordinal === layOrdinal) ?? sortedLays[0],
+    [sortedLays, layOrdinal],
+  );
+
+  const sortedSizes = useMemo(
+    () =>
+      selectedLay
+        ? [...selectedLay.sizes].sort((a, b) => a.sortOrder - b.sortOrder)
+        : [],
+    [selectedLay],
+  );
+  const rolls = selectedLay?.rolls ?? [];
+
   const [sizeId, setSizeId] = useState<string>(
-    () => sortedSizes[0]?.sizeId ?? '',
+    () => sortedLays[0]?.sizes.slice().sort((a, b) => a.sortOrder - b.sortOrder)[0]?.sizeId ?? '',
   );
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -65,9 +89,6 @@ export function CutterAssistantRollForm({
   const [pending, startTransition] = useTransition();
 
   // ---- Печать на экране успеха: выбор паспортов чекбоксами + одна кнопка --
-  // `printSel` — id выбранных к печати паспортов (по умолчанию все
-  // выпущенные). `printPending` — отдельный transition, чтобы печать не
-  // блокировала навигацию.
   const [printSel, setPrintSel] = useState<Set<string>>(new Set());
   const [printFeedback, setPrintFeedback] = useState<{
     kind: 'ok' | 'err';
@@ -75,32 +96,60 @@ export function CutterAssistantRollForm({
   } | null>(null);
   const [printPending, startPrintTransition] = useTransition();
 
+  // ---- «Выпустить ещё раз»: повторная печать уже выпущенных паспортов -------
+  // (например, завис принтер). Новые паспорта не создаём — только
+  // переотправка существующих на печать. Запускается той же нижней кнопкой
+  // (она меняет подпись), когда выбраны уже выпущенные рулоны; кнопок у
+  // каждого рулона больше нет.
+  const [reprintFeedback, setReprintFeedback] = useState<{
+    kind: 'ok' | 'err';
+    text: string;
+  } | null>(null);
+  const [reprintPending, startReprintTransition] = useTransition();
+
+  // Смена расклада: переключаем размер на первый размер нового расклада и
+  // сбрасываем выбор рулонов.
+  useEffect(() => {
+    const first = sortedSizes[0]?.sizeId ?? '';
+    setSizeId(first);
+    setSelected(new Set());
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [layOrdinal]);
+
   const selectedSize = sortedSizes.find((s) => s.sizeId === sizeId);
   const perLayerQty = selectedSize?.perLayerQty ?? 0;
 
-  // Уже выпущенные рулоны для выбранного размера.
-  const releasedForSize = useMemo(() => {
+  // Уже выпущенные рулоны для выбранной пары (расклад, размер): набор
+  // ordinal'ов + карта `ordinal → паспорт` для повторной печати.
+  const { releasedForSize, releasedPassportByOrdinal } = useMemo(() => {
     const set = new Set<number>();
+    const byOrdinal = new Map<number, { id: string; number: string }>();
     for (const r of released) {
-      if (r.sizeId === sizeId) set.add(r.ordinal);
+      if (r.layOrdinal === layOrdinal && r.sizeId === sizeId) {
+        set.add(r.ordinal);
+        byOrdinal.set(r.ordinal, { id: r.passportId, number: r.passportNumber });
+      }
     }
-    return set;
-  }, [released, sizeId]);
+    return { releasedForSize: set, releasedPassportByOrdinal: byOrdinal };
+  }, [released, layOrdinal, sizeId]);
 
-  // Рулоны, которые сейчас можно выпустить по выбранному размеру:
-  // ещё не выпущены и дают положительное количество.
-  const releasableOrdinals = useMemo(
+  // Выбирать можно любой рулон со слоями — и невыпущенный (новый паспорт),
+  // и уже выпущенный (повторная печать). Блокируем только рулоны без слоёв
+  // (размер не на этом настиле).
+  const selectableOrdinals = useMemo(
     () =>
       rolls
-        .filter((r) => !releasedForSize.has(r.ordinal) && r.layers * perLayerQty > 0)
+        .filter((r) => r.layers * perLayerQty > 0)
         .map((r) => r.ordinal),
-    [rolls, releasedForSize, perLayerQty],
+    [rolls, perLayerQty],
   );
 
   // Смена размера сбрасывает выбор: набор выпущенных и количества другие.
   useEffect(() => {
     setSelected(new Set());
     setError(null);
+    setReprintFeedback(null);
   }, [sizeId]);
 
   const toggleRoll = (ordinal: number) => {
@@ -113,12 +162,18 @@ export function CutterAssistantRollForm({
   };
 
   const allSelected =
-    releasableOrdinals.length > 0 &&
-    releasableOrdinals.every((o) => selected.has(o));
+    selectableOrdinals.length > 0 &&
+    selectableOrdinals.every((o) => selected.has(o));
 
   const toggleAll = () => {
-    setSelected(allSelected ? new Set() : new Set(releasableOrdinals));
+    setSelected(allSelected ? new Set() : new Set(selectableOrdinals));
   };
+
+  // Если ВСЕ выбранные рулоны уже выпущены — нижняя кнопка переключается на
+  // повторную печать (а не создаёт паспорта). Смешанный выбор трактуем как
+  // обычный выпуск: уже выпущенные рулоны backend идемпотентно пропустит.
+  const selectedAllReleased =
+    selected.size > 0 && [...selected].every((o) => releasedForSize.has(o));
 
   const selectedQty = rolls.reduce(
     (acc, r) => acc + (selected.has(r.ordinal) ? r.layers * perLayerQty : 0),
@@ -130,6 +185,7 @@ export function CutterAssistantRollForm({
     setError(null);
     startTransition(async () => {
       const res = await releaseFromRollsAction(orderId, {
+        layOrdinal,
         sizeId,
         cutDate: today,
         rollOrdinals: [...selected],
@@ -139,9 +195,11 @@ export function CutterAssistantRollForm({
         return;
       }
       const created = res.created ?? [];
-      setSuccess({ created, skipped: res.skipped ?? [] });
-      // По умолчанию к печати выбраны все только что выпущенные паспорта —
-      // помощник снимает галочки только с ненужных.
+      setSuccess({
+        created,
+        skipped: res.skipped ?? [],
+        overCut: res.overCut ?? null,
+      });
       setPrintSel(new Set(created.map((p) => p.id)));
       setPrintFeedback(null);
     });
@@ -174,8 +232,6 @@ export function CutterAssistantRollForm({
         });
         return;
       }
-      // Нет принтера на рабочем месте — открываем браузерную печатную форму
-      // со всеми выбранными паспортами (как fallback одиночной кнопки).
       if (res.noPrinter) {
         if (typeof window !== 'undefined') {
           window.open(buildPassportsBatchPrintPath(ids), '_blank', 'noopener');
@@ -190,6 +246,50 @@ export function CutterAssistantRollForm({
         kind: 'err',
         text: res.error ?? 'Не удалось отправить на печать.',
       });
+    });
+  };
+
+  // Повторная печать выбранных уже выпущенных паспортов (нижняя кнопка в
+  // режиме «выпустить ещё раз»). Переиспользует тот же batch-механизм печати
+  // (PrintJob + браузерный fallback), что и экран успеха, но без создания
+  // паспортов — кейс «принтер завис, печатаем заново».
+  const handleReprintSelected = () => {
+    const ids = [...selected]
+      .map((o) => releasedPassportByOrdinal.get(o)?.id)
+      .filter((id): id is string => Boolean(id));
+    if (ids.length === 0) return;
+    setReprintFeedback(null);
+    startReprintTransition(async () => {
+      const res = await sendPassportPrintJobsBatch(ids);
+      if (res.ok) {
+        const failedNote =
+          res.failed && res.failed > 0
+            ? ` · не ушло: ${res.failed}${
+                res.firstError ? ` (${res.firstError})` : ''
+              }`
+            : '';
+        setReprintFeedback({
+          kind: res.printed === 0 ? 'err' : 'ok',
+          text: `Отправлено на принтер повторно: ${res.printed ?? 0}${failedNote}`,
+        });
+      } else if (res.noPrinter) {
+        if (typeof window !== 'undefined') {
+          window.open(
+            buildPassportsBatchPrintPath(ids),
+            '_blank',
+            'noopener',
+          );
+        }
+        setReprintFeedback({
+          kind: 'ok',
+          text: 'Принтер не настроен — открыта печать выбранных в браузере.',
+        });
+      } else {
+        setReprintFeedback({
+          kind: 'err',
+          text: res.error ?? 'Не удалось отправить на печать.',
+        });
+      }
     });
   };
 
@@ -209,6 +309,7 @@ export function CutterAssistantRollForm({
           <strong>
             Выпущено паспортов: {created.length}
             {selectedSize ? ` · размер ${selectedSize.sizeCode}` : ''}
+            {` · расклад ${layOrdinal}`}
           </strong>
           {success.skipped.length > 0 && (
             <div style={{ marginTop: '0.4rem' }}>
@@ -219,6 +320,27 @@ export function CutterAssistantRollForm({
             </div>
           )}
         </div>
+
+        {success.overCut && (
+          <div
+            className="meta-line"
+            role="status"
+            style={{
+              marginTop: '0.6rem',
+              padding: '0.6rem 0.8rem',
+              borderRadius: 'var(--radius-md)',
+              background: 'var(--color-warn-soft)',
+              color: 'var(--color-warn-fg)',
+            }}
+          >
+            Уведомление: по размеру{' '}
+            <strong>{selectedSize?.sizeCode ?? '—'}</strong> выпущено{' '}
+            <strong>{success.overCut.cutQty}</strong> шт при плане{' '}
+            <strong>{success.overCut.planQty}</strong> — на{' '}
+            <strong>{success.overCut.overBy}</strong> больше. Печать не
+            заблокирована.
+          </div>
+        )}
 
         {created.length > 0 && (
           <>
@@ -301,8 +423,6 @@ export function CutterAssistantRollForm({
             onClick={() => {
               setSuccess(null);
               setSelected(new Set());
-              // Перечитываем серверные данные, чтобы только что выпущенные
-              // рулоны показались как «выпущено».
               router.refresh();
             }}
           >
@@ -316,7 +436,7 @@ export function CutterAssistantRollForm({
     );
   }
 
-  // ---- Основная форма выбора размера и рулонов ----------------------------
+  // ---- Основная форма: расклад → размер → рулоны --------------------------
   return (
     <div className="card">
       {error && <div className="error-box">{error}</div>}
@@ -331,142 +451,203 @@ export function CutterAssistantRollForm({
         </div>
       </div>
 
-      <div className="form-row">
-        <label id="release-sizeId-label">Размер</label>
-        <div>
-          {sortedSizes.length === 0 ? (
-            <div className="hint">— в задаче раскроя нет размеров —</div>
-          ) : (
-            <div
-              className="size-picker"
-              role="radiogroup"
-              aria-labelledby="release-sizeId-label"
-            >
-              {sortedSizes.map((s) => {
-                const isActive = sizeId === s.sizeId;
-                return (
-                  <label
-                    key={s.sizeId}
-                    className={
-                      'size-picker__option' + (isActive ? ' is-active' : '')
-                    }
-                  >
-                    <input
-                      type="radio"
-                      name="release-sizeId"
-                      value={s.sizeId}
-                      checked={isActive}
-                      onChange={(e) => setSizeId(e.target.value)}
-                      className="size-picker__input"
-                    />
-                    <span className="size-picker__code">{s.sizeCode}</span>
-                    {/* Новое требование: подпись «количество размера на
-                        настиле» прямо под размером. */}
-                    <span className="size-picker__meta">
-                      на настиле: {s.perLayerQty}
-                    </span>
-                  </label>
-                );
-              })}
+      {sortedLays.length === 0 ? (
+        <div className="hint">— в задаче раскроя нет раскладов —</div>
+      ) : (
+        <>
+          {sortedLays.length > 1 && (
+            <div className="form-row">
+              <label id="release-lay-label">Расклад</label>
+              <div
+                className="size-picker"
+                role="radiogroup"
+                aria-labelledby="release-lay-label"
+              >
+                {sortedLays.map((l) => {
+                  const isActive = l.ordinal === layOrdinal;
+                  return (
+                    <label
+                      key={l.ordinal}
+                      className={
+                        'size-picker__option' + (isActive ? ' is-active' : '')
+                      }
+                    >
+                      <input
+                        type="radio"
+                        name="release-lay"
+                        value={l.ordinal}
+                        checked={isActive}
+                        onChange={() => setLayOrdinal(l.ordinal)}
+                        className="size-picker__input"
+                      />
+                      <span className="size-picker__code">Расклад {l.ordinal}</span>
+                      <span className="size-picker__meta">
+                        размеров: {l.sizes.length}
+                      </span>
+                    </label>
+                  );
+                })}
+              </div>
             </div>
           )}
-        </div>
-      </div>
 
-      <div className="form-row">
-        <label>Рулоны</label>
-        <div>
-          {rolls.length === 0 ? (
-            <div className="hint">
-              В задаче раскроя нет рулонов со слоями — выпускать нечего.
-            </div>
-          ) : (
-            <>
-              <div
-                className="actions-row"
-                style={{ marginTop: 0, marginBottom: '0.5rem' }}
-              >
-                <button
-                  type="button"
-                  className="btn"
-                  onClick={toggleAll}
-                  disabled={disabled || releasableOrdinals.length === 0}
+          <div className="form-row">
+            <label id="release-sizeId-label">Размер</label>
+            <div>
+              {sortedSizes.length === 0 ? (
+                <div className="hint">— в этом раскладе нет размеров —</div>
+              ) : (
+                <div
+                  className="size-picker"
+                  role="radiogroup"
+                  aria-labelledby="release-sizeId-label"
                 >
-                  {allSelected ? 'Снять выбор' : 'Выбрать все рулоны'}
-                </button>
-              </div>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th></th>
-                    <th>Рулон</th>
-                    <th>Слоёв</th>
-                    <th>Паспортов</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {rolls.map((r) => {
-                    const qty = r.layers * perLayerQty;
-                    const isReleased = releasedForSize.has(r.ordinal);
-                    const isReleasable = !isReleased && qty > 0;
+                  {sortedSizes.map((s) => {
+                    const isActive = sizeId === s.sizeId;
                     return (
-                      <tr key={r.ordinal}>
-                        <td>
-                          <input
-                            type="checkbox"
-                            checked={selected.has(r.ordinal)}
-                            disabled={disabled || !isReleasable}
-                            onChange={() => toggleRoll(r.ordinal)}
-                            aria-label={`Рулон ${r.ordinal}`}
-                          />
-                        </td>
-                        <td>Рулон {r.ordinal}</td>
-                        <td>{r.layers}</td>
-                        <td>{qty}</td>
-                        <td>
-                          {isReleased ? (
-                            <span className="constructor-status constructor-status--done">
-                              ✔ выпущено
-                            </span>
-                          ) : qty === 0 ? (
-                            <span className="hint">размер не на настиле</span>
-                          ) : null}
-                        </td>
-                      </tr>
+                      <label
+                        key={s.sizeId}
+                        className={
+                          'size-picker__option' + (isActive ? ' is-active' : '')
+                        }
+                      >
+                        <input
+                          type="radio"
+                          name="release-sizeId"
+                          value={s.sizeId}
+                          checked={isActive}
+                          onChange={(e) => setSizeId(e.target.value)}
+                          className="size-picker__input"
+                        />
+                        <span className="size-picker__code">{s.sizeCode}</span>
+                        <span className="size-picker__meta">
+                          на настиле: {s.perLayerQty}
+                        </span>
+                      </label>
                     );
                   })}
-                  <tr>
-                    <td></td>
-                    <td>
-                      <strong>Итого к выпуску</strong>
-                    </td>
-                    <td></td>
-                    <td>
-                      <strong>{selectedQty}</strong>
-                    </td>
-                    <td></td>
-                  </tr>
-                </tbody>
-              </table>
-            </>
-          )}
-        </div>
-      </div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="form-row">
+            <label>Рулоны</label>
+            <div>
+              {rolls.length === 0 ? (
+                <div className="hint">
+                  В этом раскладе нет рулонов со слоями — выпускать нечего.
+                </div>
+              ) : (
+                <>
+                  <div
+                    className="actions-row"
+                    style={{ marginTop: 0, marginBottom: '0.5rem' }}
+                  >
+                    <button
+                      type="button"
+                      className="btn"
+                      onClick={toggleAll}
+                      disabled={disabled || selectableOrdinals.length === 0}
+                    >
+                      {allSelected ? 'Снять выбор' : 'Выбрать все рулоны'}
+                    </button>
+                  </div>
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th></th>
+                        <th>Рулон</th>
+                        <th>Слоёв</th>
+                        <th>Паспортов</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {rolls.map((r) => {
+                        const qty = r.layers * perLayerQty;
+                        const isReleased = releasedForSize.has(r.ordinal);
+                        // Выбрать можно любой рулон со слоями: невыпущенный →
+                        // новый паспорт, уже выпущенный → повторная печать.
+                        const isSelectable = qty > 0;
+                        return (
+                          <tr key={r.ordinal}>
+                            <td>
+                              <input
+                                type="checkbox"
+                                checked={selected.has(r.ordinal)}
+                                disabled={disabled || !isSelectable}
+                                onChange={() => toggleRoll(r.ordinal)}
+                                aria-label={`Рулон ${r.ordinal}`}
+                              />
+                            </td>
+                            <td>Рулон {r.ordinal}</td>
+                            <td>{r.layers}</td>
+                            <td>{qty}</td>
+                            <td>
+                              {isReleased ? (
+                                <span className="constructor-status constructor-status--done">
+                                  ✔ выпущено
+                                </span>
+                              ) : qty === 0 ? (
+                                <span className="hint">размер не на настиле</span>
+                              ) : null}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                      <tr>
+                        <td></td>
+                        <td>
+                          <strong>Итого к выпуску</strong>
+                        </td>
+                        <td></td>
+                        <td>
+                          <strong>{selectedQty}</strong>
+                        </td>
+                        <td></td>
+                      </tr>
+                    </tbody>
+                  </table>
+                </>
+              )}
+            </div>
+          </div>
+        </>
+      )}
 
       <div className="actions-row">
         <button
           type="button"
           className="btn btn-primary"
-          onClick={handleRelease}
-          disabled={disabled || pending || selected.size === 0}
+          onClick={selectedAllReleased ? handleReprintSelected : handleRelease}
+          disabled={disabled || pending || reprintPending || selected.size === 0}
         >
-          {pending ? 'Выпускаем…' : 'Выпустить паспорт'}
+          {selectedAllReleased
+            ? reprintPending
+              ? 'Печатаем…'
+              : 'Выпустить ещё раз паспорт'
+            : pending
+              ? 'Выпускаем…'
+              : 'Выпустить паспорт'}
         </button>
         <Link href="/work/cut-orders" className="btn btn-ghost">
           Отмена
         </Link>
       </div>
+      {reprintFeedback && (
+        <span
+          className="meta-line"
+          style={{
+            color:
+              reprintFeedback.kind === 'ok'
+                ? 'var(--color-ok-fg)'
+                : 'var(--color-danger-fg)',
+          }}
+        >
+          {reprintFeedback.text}
+        </span>
+      )}
     </div>
   );
 }

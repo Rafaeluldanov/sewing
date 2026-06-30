@@ -22,7 +22,7 @@ export const COMPENSATION_LABELS: Record<
   string
 > = {
   PIECEWORK: 'Сдельная',
-  SALARY: 'Оклад за смену',
+  SALARY: 'Оклад (почасовой)',
   MIXED: 'Оклад + сдельная',
 };
 
