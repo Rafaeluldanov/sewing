@@ -103,7 +103,13 @@ export default async function SuperadminTenantDetailPage({ params }: Params) {
                     key={d.id}
                     style={{ display: 'flex', alignItems: 'center', gap: 8 }}
                   >
-                    <strong>{d.host}</strong>
+                    <a
+                      href={`https://${d.host}`}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <strong>{d.host}</strong>
+                    </a>
                     {d.isPrimary && (
                       <AdminStatusBadge tone="info">основной</AdminStatusBadge>
                     )}

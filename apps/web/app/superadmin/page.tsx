@@ -86,7 +86,19 @@ export default async function SuperadminTenantsPage() {
                     {t.domains.length === 0 ? (
                       <span className="admin-muted">—</span>
                     ) : (
-                      t.domains.map((d) => d.host).join(', ')
+                      t.domains.map((d, i) => (
+                        <span key={d.id}>
+                          {i > 0 && ', '}
+                          <a
+                            href={`https://${d.host}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="admin-table__action-link"
+                          >
+                            {d.host}
+                          </a>
+                        </span>
+                      ))
                     )}
                   </td>
                   <td>{t.dbName}</td>
