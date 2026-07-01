@@ -21,24 +21,18 @@ export default async function SuperadminLayout({
   if (!me) redirect('/login?next=/superadmin');
   if (!canSeeSuperadmin(me.user.roles ?? me.user.role)) redirect('/');
   return (
-    <div className="admin-layout">
-      <div className="admin-layout__content" style={{ maxWidth: 1100, margin: '0 auto' }}>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: 10,
-            padding: '12px 0 4px',
-            color: 'var(--admin-muted, #667085)',
-          }}
-        >
-          <ShieldCheck size={18} strokeWidth={1.6} aria-hidden />
-          <Link href="/superadmin" style={{ fontWeight: 600 }}>
-            Control-plane · Тенанты
-          </Link>
-          <span style={{ marginLeft: 'auto', fontSize: 13 }}>{me.user.fullName}</span>
+    <div className="admin-layout admin-layout--plain">
+      <div className="admin-layout__content">
+        <div className="superadmin-shell">
+          <div className="superadmin-topbar">
+            <ShieldCheck size={18} strokeWidth={1.6} aria-hidden />
+            <Link href="/superadmin" className="superadmin-topbar__brand">
+              Control-plane · Тенанты
+            </Link>
+            <span className="superadmin-topbar__user">{me.user.fullName}</span>
+          </div>
+          {children}
         </div>
-        {children}
       </div>
     </div>
   );

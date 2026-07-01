@@ -7414,6 +7414,35 @@ body:has(.admin-layout) .app-header__nav { display: none; }
   .admin-layout__mobile-bar { display: block; }
 }
 
+/* Superadmin control-plane — одноколоночная раскладка без sidebar.
+   Раздел `/superadmin` переиспользует `.admin-layout` только ради
+   body:has()-стилей (скрытый header, admin-фон, full-width `.app-main`),
+   но НЕ имеет колонки-sidebar. Базовый грид `240px minmax(0, 1fr)`
+   без второго ребёнка запихивал контент в первую 240px-колонку —
+   раздел «сплющивался» в левую полосу. Здесь колонку-sidebar убираем. */
+.admin-layout--plain {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Шапка раздела супер-админа: узкая строка с иконкой, ссылкой на список
+   тенантов и именем пользователя. Горизонтальный паддинг совпадает с
+   `.admin-page-shell` (--admin-space-lg), чтобы ссылка была на одной
+   вертикали с заголовком страницы ниже. `max-width`/`margin` совпадают
+   с `.superadmin-content`, чтобы шапка и контент центрировались вместе. */
+.superadmin-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+}
+.superadmin-topbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--admin-space-md) var(--admin-space-lg) 0;
+  color: var(--admin-muted);
+}
+.superadmin-topbar__brand { font-weight: 600; }
+.superadmin-topbar__user { margin-left: auto; font-size: 13px; }
+
 /* Dashboard stats — счётчик внутри карточки.
    --------------------------------------------------------------------------- */
 
