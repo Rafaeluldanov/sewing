@@ -13,7 +13,7 @@ import {
   type LoginResponseDto,
   type MeResponseDto,
 } from '@sewing/shared/auth';
-import { apiFetch, ApiRequestError } from './api';
+import { apiFetch, ApiRequestError, readForwardTenantHost } from './api';
 
 /**
  * Минимальная runtime-валидация ответа `POST /api/auth/login`.
@@ -49,7 +49,13 @@ export async function getCurrentUserOrNull(): Promise<MeResponseDto | null> {
  * Возвращает либо `{ ok: true, user }`, либо `{ ok: false, message, code }`.
  *
  * Делаем `fetch` руками (не через `apiFetch`), потому что нам нужно
- * прочитать `Set-Cookie` заголовок ответа — `apiFetch` его теряет.
+ * прочитать `Set-Cookie` заголовок ответа — `apiFetch` его теряет. Но
+ * `x-tenant-host` форвардим так же, как `apiFetch`: без него API резолвит
+ * тенанта по внутреннему Host `api:3001` (→ дефолтный тенант) и подписывает
+ * токен чужим `tid`. Тогда последующие браузерные запросы на домен тенанта
+ * (напр. demo2.teeon.ru) резолвят другой `tid`, tid-claim не сходится → 401 →
+ * бесконечный редирект на /login. Логин должен бить ровно в того тенанта, на
+ * чьём домене находится пользователь.
  */
 export async function loginAndPersistSession(
   body: LoginRequestDto,
@@ -59,6 +65,7 @@ export async function loginAndPersistSession(
 > {
   const { getServerApiUrl } = await import('./config');
   const url = `${getServerApiUrl()}/auth/login`;
+  const tenantHost = readForwardTenantHost();
   let res: Response;
   try {
     res = await fetch(url, {
@@ -66,6 +73,7 @@ export async function loginAndPersistSession(
       headers: {
         'content-type': 'application/json',
         accept: 'application/json',
+        ...(tenantHost ? { 'x-tenant-host': tenantHost } : {}),
       },
       body: JSON.stringify(body),
       cache: 'no-store',

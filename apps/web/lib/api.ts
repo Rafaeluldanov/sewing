@@ -258,7 +258,7 @@ function readForwardCookie(): string | null {
  * домену клиента, а не по внутреннему `api:3001` (web→api SSR-прокси).
  * `x-forwarded-host` (от nginx) приоритетнее `host`. Вне запроса — null.
  */
-function readForwardTenantHost(): string | null {
+export function readForwardTenantHost(): string | null {
   try {
     const h = headers();
     const value = h.get('x-forwarded-host') ?? h.get('host');
