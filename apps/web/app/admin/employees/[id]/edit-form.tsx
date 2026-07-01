@@ -145,7 +145,14 @@ export function EmployeeEditForm({
 
   return (
     <form action={formAction} className="admin-form">
-      <div className="admin-form-grid">
+      {/*
+        Тип компенсации и почасовая ставка — в одной строке: ставка
+        появляется, когда менеджер выбирает SALARY/MIXED, и логично
+        стоит вплотную к типу оплаты. `align-items: start`, чтобы поля
+        выравнивались по верху (а не растягивались по самому высокому
+        соседу) — иначе при переключении типа вёрстка «плывёт».
+      */}
+      <div className="admin-form-grid" style={{ alignItems: 'start' }}>
         <div className="admin-field">
           <label htmlFor="emp-comp-type">Тип компенсации</label>
           <select
@@ -165,14 +172,46 @@ export function EmployeeEditForm({
         </div>
 
         {/*
-          Статья ДДС для выплат зарплаты этому сотруднику. Переопределяет
-          глобальную «зарплатную» статью из настроек казначейства в
-          расходной проводке журнала ДС при выдаче выплаты. Пустое
-          значение → проводка берёт глобальную статью (или не пишется,
-          если и она не задана). Показываем для всех — выплаты бывают и
-          у сдельщиков, и у окладников. Список ведётся в разделе
-          «Казначейство → Статьи ДДС».
+          Почасовая ставка имеет смысл только для SALARY/MIXED
+          (повременная оплата) — для PIECEWORK поле скрыто. Для
+          PIECEWORK FormData ничего не отправит и backend
+          (`UpdateEmployeeSchema`) оставит `salaryPerHour = null` без
+          правки. Если менеджер переключится на SALARY/MIXED, поле
+          появится; обязательность гарантирует backend — без ставки
+          PATCH вернёт `EMPLOYEE_SALARY_RATE_REQUIRED`.
         */}
+        {requiresRate && (
+          <div className="admin-field">
+            <label htmlFor="emp-salary-per-hour">Ставка, ₽/час</label>
+            <input
+              id="emp-salary-per-hour"
+              name="salaryPerHour"
+              type="text"
+              inputMode="decimal"
+              value={salaryPerHour}
+              onChange={(e) => setSalaryPerHour(e.target.value)}
+              placeholder="обязательно"
+              required
+              autoComplete="off"
+            />
+          </div>
+        )}
+      </div>
+
+      {/*
+        Статья ДДС для выплат зарплаты этому сотруднику. Переопределяет
+        глобальную «зарплатную» статью из настроек казначейства в
+        расходной проводке журнала ДС при выдаче выплаты. Пустое
+        значение → проводка берёт глобальную статью (или не пишется,
+        если и она не задана). Показываем для всех — выплаты бывают и
+        у сдельщиков, и у окладников. Список ведётся в разделе
+        «Казначейство → Статьи ДДС».
+
+        Отдельной строкой (не в сетке с типом/ставкой): её многострочная
+        подсказка раньше растягивала соседние ячейки грида по высоте и
+        «кривила» верстку.
+      */}
+      <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="emp-salary-dds-item">Статья ДДС (выплаты)</label>
           <select
@@ -207,42 +246,22 @@ export function EmployeeEditForm({
             общая зарплатная статья (Казначейство → Настройки).
           </span>
         </div>
+      </div>
 
-        {/*
-          Почасовая ставка имеет смысл только для SALARY/MIXED
-          (повременная оплата) — для PIECEWORK поле скрыто. Для
-          PIECEWORK FormData ничего не отправит и backend
-          (`UpdateEmployeeSchema`) оставит `salaryPerHour = null` без
-          правки. Если менеджер переключится на SALARY/MIXED, поле
-          появится; обязательность гарантирует backend — без ставки
-          PATCH вернёт `EMPLOYEE_SALARY_RATE_REQUIRED`.
-        */}
-        {requiresRate && (
-          <div className="admin-field">
-            <label htmlFor="emp-salary-per-hour">Ставка, ₽/час</label>
-            <input
-              id="emp-salary-per-hour"
-              name="salaryPerHour"
-              type="text"
-              inputMode="decimal"
-              value={salaryPerHour}
-              onChange={(e) => setSalaryPerHour(e.target.value)}
-              placeholder="обязательно"
-              required
-              autoComplete="off"
-            />
-          </div>
-        )}
-
-        <div className="admin-field admin-field--inline">
-          <input
-            id="emp-active"
-            type="checkbox"
-            name="active"
-            defaultChecked={employee.active}
-          />
-          <label htmlFor="emp-active">Активен</label>
-        </div>
+      {/*
+        «Активен» — отдельной строкой, вне сетки полей. Inline-чекбокс в
+        общей `admin-form-grid` растягивался на высоту соседней ячейки и
+        «плавал» по центру (кривой вид рядом с длинными полями). На своей
+        строке он прижат к левому краю и не прыгает при появлении ставки.
+      */}
+      <div className="admin-field admin-field--inline">
+        <input
+          id="emp-active"
+          type="checkbox"
+          name="active"
+          defaultChecked={employee.active}
+        />
+        <label htmlFor="emp-active">Активен</label>
       </div>
 
       {/*
