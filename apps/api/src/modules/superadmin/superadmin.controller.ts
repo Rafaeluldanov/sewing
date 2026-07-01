@@ -10,10 +10,12 @@ import {
 import {
   AddDomainSchema,
   CreateTenantSchema,
+  DeleteTenantSchema,
   SetModuleSchema,
   SetStatusSchema,
   type AddDomainDto,
   type CreateTenantDto,
+  type DeleteTenantDto,
   type SetModuleDto,
   type SetStatusDto,
 } from '@sewing/shared/superadmin';
@@ -78,5 +80,17 @@ export class SuperadminController {
     @Param('domainId') domainId: string,
   ) {
     return this.superadmin.removeDomain(id, domainId);
+  }
+
+  /**
+   * НЕОБРАТИМОЕ удаление тенанта: backup → DROP DATABASE → дерегистрация.
+   * Тело с `confirmSlug` — подтверждение (должно совпасть со slug тенанта).
+   */
+  @Delete('tenants/:id')
+  deleteTenant(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(DeleteTenantSchema)) body: DeleteTenantDto,
+  ) {
+    return this.superadmin.deleteTenant(id, body);
   }
 }

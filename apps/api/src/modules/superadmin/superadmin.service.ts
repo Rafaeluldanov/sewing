@@ -13,11 +13,14 @@ import type {
   AddDomainDto,
   CreateTenantDto,
   CreateTenantResultDto,
+  DeleteTenantDto,
+  DeleteTenantResultDto,
   SetModuleDto,
   SetStatusDto,
   TenantSummaryDto,
 } from '@sewing/shared/superadmin';
 import { ControlPlaneService } from '../../prisma/control-plane.service.js';
+import { PrismaClientManager } from '../../prisma/prisma-client-manager.js';
 import { TenantRegistry } from '../../prisma/tenant-registry.service.js';
 
 const execFileAsync = promisify(execFile);
@@ -34,6 +37,7 @@ export class SuperadminService {
   constructor(
     private readonly controlPlane: ControlPlaneService,
     private readonly registry: TenantRegistry,
+    private readonly clientManager: PrismaClientManager,
   ) {}
 
   async listTenants(): Promise<TenantSummaryDto[]> {
@@ -145,6 +149,76 @@ export class SuperadminService {
       return {
         ok: false,
         slug: dto.slug,
+        log: tail(`${e.stdout ?? ''}${e.stderr ?? ''}\n${e.message ?? ''}`),
+      };
+    }
+  }
+
+  /**
+   * Удаление тенанта (НЕОБРАТИМО): backup → DROP DATABASE → дерегистрация.
+   * Пред-проверки здесь дают внятные HTTP-ошибки (409/404); тяжёлые DB-операции
+   * делегируются проверенному скрипту `scripts/tenants/delete-tenant.ts` (тот же
+   * скрипт годен для CLI на проде, где панель ещё не задеплоена). Скрипт
+   * повторяет гарды защитно (defense-in-depth).
+   */
+  async deleteTenant(id: string, dto: DeleteTenantDto): Promise<DeleteTenantResultDto> {
+    const t = await this.controlPlane.client.tenant.findUnique({ where: { id } });
+    if (!t) throw new NotFoundException({ code: 'TENANT_NOT_FOUND', message: 'Тенант не найден' });
+
+    // Гард 1: удалять можно только приостановленного — удаление двухшаговое,
+    // случайный клик по активному тенанту не сносит живой бизнес.
+    if (t.status !== 'SUSPENDED') {
+      throw new ConflictException({
+        code: 'TENANT_NOT_SUSPENDED',
+        message:
+          'Сначала приостановите тенанта — удаление возможно только из статуса «Приостановлен».',
+      });
+    }
+    // Гард 2: дефолтного тенанта (single-tenant fallback) удалять нельзя.
+    const defId = process.env.DEFAULT_TENANT_ID ?? 'default';
+    const defSlug = process.env.DEFAULT_TENANT_SLUG ?? 'default';
+    if (t.id === defId || t.slug === defSlug) {
+      throw new ConflictException({
+        code: 'TENANT_DEFAULT_PROTECTED',
+        message: 'Дефолтного тенанта удалить нельзя.',
+      });
+    }
+    // Гард 3: подтверждение slug (defense-in-depth к UI type-to-confirm).
+    if (dto.confirmSlug.trim() !== t.slug) {
+      throw new ConflictException({
+        code: 'TENANT_CONFIRM_MISMATCH',
+        message: 'Подтверждение не совпадает со slug тенанта.',
+      });
+    }
+
+    // Освобождаем пул ЭТОГО процесса ДО DROP: иначе останется мёртвый клиент,
+    // указывающий на удалённую БД (тенант уже SUSPENDED ⇒ резолвер его не
+    // отдаёт, новых ensureClient не будет).
+    await this.clientManager.release(t.id);
+
+    const repoRoot = this.resolveRepoRoot();
+    const script = path.join(repoRoot, 'scripts/tenants/delete-tenant.ts');
+    const args = ['tsx', script, '--id', t.id, '--confirm', t.slug];
+    try {
+      const { stdout, stderr } = await execFileAsync('npx', args, {
+        cwd: repoRoot,
+        env: { ...process.env },
+        timeout: 180_000,
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      this.registry.invalidateAll();
+      this.logger.log(`event=superadmin.tenant.deleted slug=${t.slug}`);
+      return { ok: true, slug: t.slug, log: tail(stdout + stderr) };
+    } catch (err) {
+      const e = err as { stdout?: string; stderr?: string; message?: string };
+      // Реестр перечитываем в любом случае — вдруг запись успела уйти.
+      this.registry.invalidateAll();
+      this.logger.warn(
+        `event=superadmin.tenant.delete_failed slug=${t.slug}: ${e.message ?? ''}`,
+      );
+      return {
+        ok: false,
+        slug: t.slug,
         log: tail(`${e.stdout ?? ''}${e.stderr ?? ''}\n${e.message ?? ''}`),
       };
     }

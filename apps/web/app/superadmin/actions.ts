@@ -1,9 +1,11 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import {
   AddDomainSchema,
   CreateTenantSchema,
+  DeleteTenantSchema,
   SetModuleSchema,
   SetStatusSchema,
 } from '@sewing/shared/superadmin';
@@ -11,11 +13,16 @@ import { ApiRequestError, errorText } from '@/lib/api';
 import {
   addTenantDomain,
   createTenant,
+  deleteTenant,
   removeTenantDomain,
   setTenantModule,
   setTenantStatus,
 } from '@/lib/superadmin-api';
-import type { AddDomainState, CreateTenantState } from './form-state';
+import type {
+  AddDomainState,
+  CreateTenantState,
+  DeleteTenantState,
+} from './form-state';
 
 function revalidateTenant(id: string): void {
   revalidatePath('/superadmin');
@@ -87,6 +94,38 @@ export async function addDomainAction(
       error: e instanceof ApiRequestError ? errorText(e) : 'Не удалось добавить домен',
     };
   }
+}
+
+/**
+ * НЕОБРАТИМОЕ удаление тенанта (client useFormState — показываем ошибку/лог).
+ * bind по tenantId. При успехе — redirect на список (карточка исчезла).
+ */
+export async function deleteTenantAction(
+  tenantId: string,
+  _prev: DeleteTenantState,
+  formData: FormData,
+): Promise<DeleteTenantState> {
+  const parsed = DeleteTenantSchema.safeParse({
+    confirmSlug: String(formData.get('confirmSlug') ?? ''),
+  });
+  if (!parsed.success) {
+    return {
+      error: parsed.error.issues[0]?.message ?? 'Введите slug для подтверждения',
+    };
+  }
+  let result;
+  try {
+    result = await deleteTenant(tenantId, parsed.data);
+  } catch (e) {
+    return {
+      error: e instanceof ApiRequestError ? errorText(e) : 'Не удалось удалить тенанта',
+    };
+  }
+  if (!result.ok) {
+    return { error: `Удаление не завершено для «${result.slug}».`, log: result.log };
+  }
+  revalidatePath('/superadmin');
+  redirect('/superadmin');
 }
 
 /** Провижининг нового тенанта (client useFormState — показываем лог). */

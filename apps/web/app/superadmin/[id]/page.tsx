@@ -17,6 +17,7 @@ import {
   setStatusAction,
 } from '../actions';
 import { AddDomainForm } from '../add-domain-form';
+import { DeleteTenantForm } from '../delete-tenant-form';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +40,11 @@ export default async function SuperadminTenantDetailPage({ params }: Params) {
   }
 
   const active = tenant.status === 'ACTIVE';
+  // Дефолтного тенанта (single-tenant fallback) удалять нельзя — не рисуем
+  // danger-zone вовсе, чтобы не смущать оператора неработающей кнопкой.
+  const isDefault =
+    tenant.id === (process.env.DEFAULT_TENANT_ID ?? 'default') ||
+    tenant.slug === (process.env.DEFAULT_TENANT_SLUG ?? 'default');
 
   return (
     <AdminPageShell
@@ -169,6 +175,33 @@ export default async function SuperadminTenantDetailPage({ params }: Params) {
           />
         </div>
       </div>
+
+      {/* Опасная зона — необратимое удаление. Только для не-дефолтного тенанта;
+          сама кнопка доступна лишь из статуса «Приостановлен». */}
+      {!isDefault && (
+        <AdminCard>
+          <AdminSectionHeader title="Опасная зона" hint="необратимо" />
+          {active ? (
+            <p className="admin-muted">
+              Удаление доступно только для приостановленного тенанта. Сначала
+              нажмите «Приостановить» — это снимает домены с резолва, живого
+              трафика к БД не остаётся, и только тогда БД можно безопасно
+              удалить.
+            </p>
+          ) : (
+            <>
+              <p className="admin-muted">
+                Удаляет тенанта <strong>{tenant.slug}</strong> НЕОБРАТИМО:
+                снимается бэкап-дамп (<code>backups/tenants/…</code>), затем{' '}
+                <code>DROP DATABASE {tenant.dbName}</code> и запись из
+                control-plane (каскадом домены и модули). Восстановление —
+                только из бэкап-дампа вручную.
+              </p>
+              <DeleteTenantForm tenantId={tenant.id} slug={tenant.slug} />
+            </>
+          )}
+        </AdminCard>
+      )}
     </AdminPageShell>
   );
 }

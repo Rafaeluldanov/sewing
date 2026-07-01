@@ -74,6 +74,27 @@ export class PrismaClientManager implements OnModuleInit, OnModuleDestroy {
     return client;
   }
 
+  /**
+   * Закрыть и выселить кэшированный клиент тенанта. Вызывается при УДАЛЕНИИ
+   * тенанта — ПЕРЕД `DROP DATABASE`: пул этого процесса надо освободить, иначе
+   * останется мёртвый `PrismaClient`, указывающий на несуществующую БД (а
+   * Postgres не даст удалить БД с активной сессией). Идемпотентно: нет клиента
+   * в кэше — просто no-op.
+   */
+  async release(tenantId: string): Promise<void> {
+    const client = this.clients.get(tenantId);
+    this.clients.delete(tenantId);
+    this.invariantsApplied.delete(tenantId);
+    if (client) {
+      await client.$disconnect().catch((err) =>
+        this.logger.warn(
+          `Ошибка disconnect при release клиента ${tenantId}: ${(err as Error).message}`,
+        ),
+      );
+      this.logger.log(`event=tenant.client.released tenant=${tenantId}`);
+    }
+  }
+
   /** LRU-touch: переставить ключ в конец (most-recently-used). */
   private touch(tenantId: string): PrismaClient | undefined {
     const client = this.clients.get(tenantId);

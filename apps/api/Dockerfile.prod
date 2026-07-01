@@ -48,7 +48,9 @@ RUN npm run build:win --workspace=@sewing/agent
 FROM node:20-bookworm-slim
 WORKDIR /app
 
-RUN apt-get update -y && apt-get install -y openssl ca-certificates && rm -rf /var/lib/apt/lists/*
+# postgresql-client — pg_dump для бэкапа БД тенанта перед удалением
+# (scripts/tenants/delete-tenant.ts). Bookworm ⇒ PG15 = версия сервера.
+RUN apt-get update -y && apt-get install -y openssl ca-certificates postgresql-client && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/apps/api ./apps/api

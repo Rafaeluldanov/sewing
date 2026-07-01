@@ -93,3 +93,19 @@ export interface CreateTenantResultDto {
   /** Хвост вывода провижининга (для показа оператору). */
   log: string;
 }
+
+export const DeleteTenantSchema = z.object({
+  /**
+   * Подтверждение: оператор обязан ввести точный slug удаляемого тенанта —
+   * защита от случайного удаления (как ввод имени репозитория на GitHub).
+   */
+  confirmSlug: z.string().trim().min(1, 'Введите slug для подтверждения'),
+});
+export type DeleteTenantDto = z.infer<typeof DeleteTenantSchema>;
+
+export interface DeleteTenantResultDto {
+  ok: boolean;
+  slug: string;
+  /** Хвост вывода удаления (backup → DROP → дерегистрация) для оператора. */
+  log: string;
+}

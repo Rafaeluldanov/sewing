@@ -6,6 +6,8 @@ import type {
   AddDomainDto,
   CreateTenantDto,
   CreateTenantResultDto,
+  DeleteTenantDto,
+  DeleteTenantResultDto,
   SetModuleDto,
   SetStatusDto,
   TenantSummaryDto,
@@ -71,5 +73,15 @@ export function removeTenantDomain(
   return apiFetch<TenantSummaryDto>(
     `/superadmin/tenants/${encodeURIComponent(id)}/domains/${encodeURIComponent(domainId)}`,
     { method: 'DELETE' },
+  );
+}
+
+export function deleteTenant(
+  id: string,
+  body: DeleteTenantDto,
+): Promise<DeleteTenantResultDto> {
+  return apiFetch<DeleteTenantResultDto>(
+    `/superadmin/tenants/${encodeURIComponent(id)}`,
+    { method: 'DELETE', body },
   );
 }

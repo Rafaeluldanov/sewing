@@ -20,6 +20,8 @@ storage/
 # prod DB dumps (auto-backup из scripts/deploy-prod.sh) — данные прод не версионируем
 backups/*.sql.gz
 backups/*.dump
+# бэкап-дампы БД тенантов перед удалением (scripts/tenants/delete-tenant.ts)
+backups/tenants/
 
 # patterns uploads (модуль «Лекала», MVP-1)
 apps/api/uploads/

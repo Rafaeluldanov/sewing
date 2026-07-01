@@ -19,3 +19,11 @@ export interface AddDomainState {
 }
 
 export const initialAddDomainState: AddDomainState = {};
+
+export interface DeleteTenantState {
+  error?: string;
+  /** Хвост лога удаления (при частичном/неуспешном удалении). */
+  log?: string;
+}
+
+export const initialDeleteTenantState: DeleteTenantState = {};
