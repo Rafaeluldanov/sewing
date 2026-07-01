@@ -77,6 +77,9 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-https://dev.teeon.ru/api}
       NEXT_PUBLIC_APP_URL: ${NEXT_PUBLIC_APP_URL:-https://dev.teeon.ru}
       APP_URL: ${APP_URL:-https://dev.teeon.ru}
+      # Базовый домен для авто-подстановки host в форме «Создать тенанта»
+      # (/superadmin): host = <slug>.<этот домен>. На dev — dev.teeon.ru.
+      TENANT_BASE_DOMAIN: ${TENANT_BASE_DOMAIN:-dev.teeon.ru}
       INTERNAL_API_URL: http://api:3001/api
       API_URL: http://api:3001/api
       # Стабильный ключ для Next.js Server Actions (см. .env.dev / .env.prod).

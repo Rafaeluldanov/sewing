@@ -20,8 +20,9 @@ function modulesSummary(t: TenantSummaryDto): string {
 
 export default async function SuperadminTenantsPage() {
   // Базовый домен для авто-подстановки host в форме создания (runtime, не
-  // build-time NEXT_PUBLIC_*): на dev — localhost (`<slug>.localhost`), на
-  // prod задаётся TENANT_BASE_DOMAIN=teeon.ru в .env.prod.
+  // build-time NEXT_PUBLIC_*): пер-окружение — dev ⇒ dev.teeon.ru,
+  // prod ⇒ prod.teeon.ru (прокидывается в web через docker-compose.*.yml).
+  // Фолбэк localhost — только если переменная вообще не задана.
   const tenantBaseDomain = process.env.TENANT_BASE_DOMAIN?.trim() || 'localhost';
   let tenants: TenantSummaryDto[] = [];
   let error: string | null = null;
