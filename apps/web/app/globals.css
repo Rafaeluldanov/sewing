@@ -871,7 +871,7 @@ table.data-table th.num { text-align: right; }
   width: 44px;
   height: 44px;
   border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--color-accent), #60a5fa);
+  background: linear-gradient(150deg, #f7c23a, #e2402f);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -879,6 +879,7 @@ table.data-table th.num { text-align: right; }
   font-weight: 700;
   font-size: 1.1rem;
   letter-spacing: 0.04em;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.05);
 }
 .auth-screen__title {
   margin: 0;
@@ -942,17 +943,17 @@ table.data-table th.num { text-align: right; }
   margin-top: 0.35rem;
   width: 100%;
   min-height: var(--tap-min);
-  border: none;
+  border: 1px solid var(--btn-primary-edge);
   border-radius: var(--radius-md);
-  background: var(--color-accent);
-  color: #fff;
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
   font-size: 1.05rem;
   font-weight: 700;
   cursor: pointer;
-  box-shadow: 0 6px 18px -8px rgba(47, 127, 209, 0.6);
+  box-shadow: none;
   transition: background 0.15s, transform 0.05s;
 }
-.auth-screen__submit:hover { background: var(--color-accent-hover); }
+.auth-screen__submit:hover { background: var(--btn-primary-bg-hover); }
 .auth-screen__submit:active { transform: translateY(1px); }
 .auth-screen__submit:disabled {
   opacity: 0.6;
