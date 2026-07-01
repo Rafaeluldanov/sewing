@@ -28,6 +28,7 @@ const PUBLIC_PATH_PREFIXES = [
   '/_next',
   '/favicon',
   '/assets',
+  '/fonts', // самохостинг PT Sans (public/fonts) — нужен и на /login до авторизации
   '/api/health', // health-проксирование, если оно когда-нибудь появится в next
 ];
 
@@ -234,5 +235,5 @@ function decodeCookiePayload(
  * favicon. Точная фильтрация (login и т.п.) — внутри функции выше.
  */
 export const config = {
-  matcher: ['/((?!_next/static|_next/image|favicon.ico).*)'],
+  matcher: ['/((?!_next/static|_next/image|favicon.ico|fonts).*)'],
 };
