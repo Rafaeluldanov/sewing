@@ -19,6 +19,10 @@ function modulesSummary(t: TenantSummaryDto): string {
 }
 
 export default async function SuperadminTenantsPage() {
+  // Базовый домен для авто-подстановки host в форме создания (runtime, не
+  // build-time NEXT_PUBLIC_*): на dev — localhost (`<slug>.localhost`), на
+  // prod задаётся TENANT_BASE_DOMAIN=teeon.ru в .env.prod.
+  const tenantBaseDomain = process.env.TENANT_BASE_DOMAIN?.trim() || 'localhost';
   let tenants: TenantSummaryDto[] = [];
   let error: string | null = null;
   try {
@@ -109,7 +113,7 @@ export default async function SuperadminTenantsPage() {
           title="Создать тенанта"
           hint="CREATE DB → миграции → сид → админ → регистрация"
         />
-        <CreateTenantForm />
+        <CreateTenantForm baseDomain={tenantBaseDomain} />
       </AdminCard>
     </AdminPageShell>
   );
