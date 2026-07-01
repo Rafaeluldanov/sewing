@@ -148,11 +148,10 @@ export function EmployeeEditForm({
       {/*
         Тип компенсации и почасовая ставка — в одной строке: ставка
         появляется, когда менеджер выбирает SALARY/MIXED, и логично
-        стоит вплотную к типу оплаты. `align-items: start`, чтобы поля
-        выравнивались по верху (а не растягивались по самому высокому
-        соседу) — иначе при переключении типа вёрстка «плывёт».
+        стоит вплотную к типу оплаты. Выравнивание по верху обеспечивает
+        базовый `.admin-form-grid` (`align-items: start`).
       */}
-      <div className="admin-form-grid" style={{ alignItems: 'start' }}>
+      <div className="admin-form-grid">
         <div className="admin-field">
           <label htmlFor="emp-comp-type">Тип компенсации</label>
           <select

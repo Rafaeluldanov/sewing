@@ -7656,6 +7656,14 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
   gap: var(--admin-space-md);
+  /*
+    Поля выравниваем по верху, а не растягиваем по высоте самого высокого
+    соседа (дефолт grid — `stretch`). Иначе короткое поле в строке с полем,
+    у которого длинная подсказка (`admin-field__hint`), растягивалось, и
+    низ контролов не совпадал; а inline-чекбокс всплывал по центру пустой
+    высокой ячейки. См. `.admin-form-grid > .admin-field--inline` ниже.
+  */
+  align-items: start;
 }
 
 /* -----------------------------------------------------------------------------
@@ -7723,6 +7731,18 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+
+/*
+  Inline-чекбокс («Активен» и т.п.) как ячейка сетки формы. Базовый
+  `align-items: start` прижал бы «галочку» к верху строки — на уровень
+  ЛЕЙБЛОВ соседних полей, выше их контролов. Прижимаем к низу, чтобы
+  чекбокс стоял на одной линии с input/select соседей. Раньше это
+  чинили точечно (`style={{ alignSelf: 'end' }}`) в отдельных формах —
+  теперь правило одно на все `.admin-form-grid`.
+*/
+.admin-form-grid > .admin-field--inline {
+  align-self: end;
 }
 
 /* Комбобокс выбора техкарты с группировкой по группам номенклатуры
