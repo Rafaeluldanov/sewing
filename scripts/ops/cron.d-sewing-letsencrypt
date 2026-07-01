@@ -1,0 +1,30 @@
+# -----------------------------------------------------------------------------
+# Cron-задачи для Let's Encrypt сертификатов проекта sewing.
+#
+# 1) renewal — раз в неделю, понедельник 03:17. Certbot сам решит, нужен ли
+#    реальный rewrite (renew случается только если до истечения < 30 дней).
+#    Выбраны "нечётные" минуты, чтобы не совпадать с другими типовыми job'ами.
+#
+# 2) check — каждый день 04:17. Логирует срок жизни ВСЕХ сертификатов
+#    (авто-обнаружение /etc/letsencrypt/live/*) и помечает WARN, если осталось
+#    < 30 дней. Если auto-renew по какой-то причине не сработал, в
+#    /var/log/sewing-cert-check.log появятся WARN.
+#
+# 3) enable-demo2-dev — каждый день 04:47. Turnkey-активация demo2.dev.teeon.ru:
+#    no-op, пока в публичном DNS нет A-записи; как только владелец зоны добавит
+#    *.dev / demo2.dev → IP, скрипт сам выпустит cert (HTTP-01) и включит vhost.
+#    Идемпотентен — после успеха тихо выходит. Лог: /var/log/sewing-enable-demo2-dev.log
+#
+# Логи:
+#   tail -n 30 /var/log/sewing-cert-renew.log
+#   tail -n 30 /var/log/sewing-cert-check.log
+#   tail -n 30 /var/log/sewing-enable-demo2-dev.log
+#
+# Ротация — /etc/logrotate.d/sewing-letsencrypt.
+# -----------------------------------------------------------------------------
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+17 3 * * 1  root  /usr/local/bin/sewing-cert-renew.sh
+17 4 * * *  root  /usr/local/bin/sewing-cert-check.sh
+47 4 * * *  root  /usr/local/bin/sewing-enable-demo2-dev.sh
