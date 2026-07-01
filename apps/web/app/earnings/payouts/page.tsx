@@ -39,11 +39,11 @@ function statusStyle(status: PayrollPayoutDto['status']): React.CSSProperties {
     case 'ISSUED':
       return { background: '#fef9c3', color: '#854d0e', border: '1px solid #fde047' };
     case 'ACKNOWLEDGED':
-      return { background: '#dcfce7', color: '#166534', border: '1px solid #86efac' };
+      return { background: '#e4f4e6', color: '#2f7d4e', border: '1px solid #a9d9b5' };
     case 'CANCELLED':
-      return { background: '#f3f4f6', color: '#6b7280', border: '1px solid #d1d5db' };
+      return { background: '#f1f1ef', color: '#5f5f5c', border: '1px solid #d4d4d0' };
     default:
-      return { background: '#f3f4f6', color: '#374151', border: '1px solid #d1d5db' };
+      return { background: '#f1f1ef', color: '#374151', border: '1px solid #d4d4d0' };
   }
 }
 

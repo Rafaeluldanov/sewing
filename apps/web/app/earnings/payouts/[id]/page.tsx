@@ -62,21 +62,21 @@ function statusStyle(
       };
     case 'ACKNOWLEDGED':
       return {
-        background: '#dcfce7',
-        color: '#166534',
-        border: '1px solid #86efac',
+        background: '#e4f4e6',
+        color: '#2f7d4e',
+        border: '1px solid #a9d9b5',
       };
     case 'CANCELLED':
       return {
-        background: '#f3f4f6',
-        color: '#6b7280',
-        border: '1px solid #d1d5db',
+        background: '#f1f1ef',
+        color: '#5f5f5c',
+        border: '1px solid #d4d4d0',
       };
     default:
       return {
-        background: '#f3f4f6',
+        background: '#f1f1ef',
         color: '#374151',
-        border: '1px solid #d1d5db',
+        border: '1px solid #d4d4d0',
       };
   }
 }
@@ -203,25 +203,25 @@ export default async function EmployeePayoutDetailPage({
             margin: 0,
           }}
         >
-          <dt style={{ color: '#6b7280', fontWeight: 500 }}>Период</dt>
+          <dt style={{ color: '#5f5f5c', fontWeight: 500 }}>Период</dt>
           <dd style={{ margin: 0 }}>
             {formatDate(payout.periodFrom)} — {formatDate(payout.periodTo)}
           </dd>
           {payout.issuedAt && (
             <>
-              <dt style={{ color: '#6b7280', fontWeight: 500 }}>Выдано</dt>
+              <dt style={{ color: '#5f5f5c', fontWeight: 500 }}>Выдано</dt>
               <dd style={{ margin: 0 }}>{formatDateTime(payout.issuedAt)}</dd>
             </>
           )}
           {payout.acknowledgedAt && (
             <>
-              <dt style={{ color: '#6b7280', fontWeight: 500 }}>Подтверждено</dt>
+              <dt style={{ color: '#5f5f5c', fontWeight: 500 }}>Подтверждено</dt>
               <dd style={{ margin: 0 }}>{formatDateTime(payout.acknowledgedAt)}</dd>
             </>
           )}
           {payout.managerComment && (
             <>
-              <dt style={{ color: '#6b7280', fontWeight: 500 }}>Комментарий</dt>
+              <dt style={{ color: '#5f5f5c', fontWeight: 500 }}>Комментарий</dt>
               <dd style={{ margin: 0 }}>{payout.managerComment}</dd>
             </>
           )}
@@ -258,7 +258,7 @@ export default async function EmployeePayoutDetailPage({
                           style={{
                             display: 'block',
                             fontSize: '0.8rem',
-                            color: '#6b7280',
+                            color: '#5f5f5c',
                             marginTop: '0.15rem',
                           }}
                         >
@@ -288,7 +288,7 @@ export default async function EmployeePayoutDetailPage({
           >
             Подтверждение получения
           </h2>
-          <p style={{ color: '#6b7280', marginBottom: '1rem', marginTop: 0 }}>
+          <p style={{ color: '#5f5f5c', marginBottom: '1rem', marginTop: 0 }}>
             Нажмите кнопку ниже, чтобы подтвердить, что вы получили эту
             выплату.
           </p>
@@ -299,11 +299,11 @@ export default async function EmployeePayoutDetailPage({
       {payout.status === 'ACKNOWLEDGED' && (
         <div
           style={{
-            background: '#dcfce7',
-            border: '1px solid #86efac',
+            background: '#e4f4e6',
+            border: '1px solid #a9d9b5',
             borderRadius: '0.5rem',
             padding: '0.875rem 1rem',
-            color: '#166534',
+            color: '#2f7d4e',
             fontWeight: 500,
           }}
         >
@@ -314,11 +314,11 @@ export default async function EmployeePayoutDetailPage({
       {payout.status === 'CANCELLED' && (
         <div
           style={{
-            background: '#f3f4f6',
-            border: '1px solid #d1d5db',
+            background: '#f1f1ef',
+            border: '1px solid #d4d4d0',
             borderRadius: '0.5rem',
             padding: '0.875rem 1rem',
-            color: '#6b7280',
+            color: '#5f5f5c',
           }}
         >
           Эта выплата была отменена.

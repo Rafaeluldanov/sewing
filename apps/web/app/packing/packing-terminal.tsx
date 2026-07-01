@@ -714,7 +714,7 @@ function PackingMainTerminal({
                     justifyContent: 'space-between',
                     gap: '0.5rem',
                     padding: '0.6rem 0.75rem',
-                    border: '1px solid var(--color-border, #e2e8f0)',
+                    border: '1px solid var(--color-border, #e4e4e1)',
                     borderRadius: '0.5rem',
                   }}
                 >
@@ -813,10 +813,10 @@ function PackingMainTerminal({
                       flexDirection: 'column',
                       gap: '0.5rem',
                       padding: '0.6rem 0.75rem',
-                      border: '1px solid var(--color-border, #e2e8f0)',
+                      border: '1px solid var(--color-border, #e4e4e1)',
                       borderRadius: '0.5rem',
                       background: isPlacingThis
-                        ? 'var(--color-surface-soft, #f8fafc)'
+                        ? 'var(--color-bg-soft, #f7f7f6)'
                         : undefined,
                     }}
                   >

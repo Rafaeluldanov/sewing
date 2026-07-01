@@ -37,11 +37,11 @@ export function AckButton({ ackAction }: { ackAction: BoundAction }) {
         <div
           role="status"
           style={{
-            background: '#dcfce7',
-            border: '1px solid #86efac',
+            background: '#e4f4e6',
+            border: '1px solid #a9d9b5',
             borderRadius: '0.5rem',
             padding: '0.75rem 1rem',
-            color: '#166534',
+            color: '#2f7d4e',
             marginBottom: '0.75rem',
             fontWeight: 500,
           }}
@@ -66,7 +66,7 @@ function SubmitButton() {
         display: 'inline-flex',
         alignItems: 'center',
         gap: '0.5rem',
-        background: '#16a34a',
+        background: '#2e9e4a',
         color: '#fff',
         border: 'none',
         borderRadius: '0.5rem',
