@@ -49,7 +49,11 @@ export class PrintersService {
       orderBy: { createdAt: 'desc' },
       include: {
         equipment: { select: { id: true, name: true, code: true } },
-        _count: { select: { jobs: { where: { status: 'PENDING' } } } },
+        // «В очереди» = ещё не закрытые: PENDING (ждут) + SENT (агент
+        // печатает прямо сейчас). Оба показываем менеджеру как незавершённые.
+        _count: {
+          select: { jobs: { where: { status: { in: ['PENDING', 'SENT'] } } } },
+        },
       },
     });
     const now = Date.now();

@@ -127,6 +127,10 @@ export async function createPassportDemoBatchAction(
       await createPrintJob({
         sourceType: 'PASSPORT_PRINT',
         sourceId: createdPassport.id,
+        // Детерминированный ключ на созданный паспорт: авто-печать
+        // каждого паспорта уйдёт максимум один раз, даже если действие
+        // случайно доставится дважды.
+        idempotencyKey: `autoprint:${createdPassport.id}`,
       });
       printed++;
     } catch (e) {

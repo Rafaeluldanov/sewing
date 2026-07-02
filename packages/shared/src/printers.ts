@@ -29,7 +29,19 @@ import { EmployeeRoleSchema, type EmployeeRole } from './employees';
 export const PRINTER_TYPES = ['PASSPORT', 'QR', 'LABEL', 'DEFAULT'] as const;
 export type PrinterType = (typeof PRINTER_TYPES)[number];
 
-export const PRINT_JOB_STATUSES = ['PENDING', 'PRINTED', 'FAILED'] as const;
+export const PRINT_JOB_STATUSES = [
+  'PENDING',
+  /**
+   * Агент «захватил» job и печатает прямо сейчас (`pollForAgent`
+   * атомарно перевёл PENDING → SENT). Пока job в этом статусе, его не
+   * получит ни повторный поллинг, ни второй агент на том же принтере —
+   * защита от повторной физической печати. См. `PrintJobStatus` в
+   * `schema.prisma`.
+   */
+  'SENT',
+  'PRINTED',
+  'FAILED',
+] as const;
 export type PrintJobStatus = (typeof PRINT_JOB_STATUSES)[number];
 
 export const PRINT_JOB_SOURCES = [
@@ -138,6 +150,8 @@ export interface PrintJobDto {
   status: PrintJobStatus;
   errorMessage: string | null;
   createdAt: string;
+  /** Когда агент захватил job в печать (PENDING → SENT). */
+  sentAt: string | null;
   completedAt: string | null;
   /**
    * Имя физического Windows-принтера, на который должен печатать
@@ -305,12 +319,24 @@ export const CreatePrintJobSchema = z.object({
    * это поле пустым и опирается на смену.
    */
   printerId: z.string().min(1).optional(),
+  /**
+   * Идемпотентный ключ клиента. Если передан — повторная доставка того
+   * же запроса (ретрай транспорта, двойной dispatch) с тем же ключом
+   * НЕ создаёт второй job, а возвращает уже созданный. Генерируется на
+   * каждое логическое нажатие «Печать» (fresh UUID), поэтому осознанная
+   * перепечать по кнопке — это новый ключ и новый job. Опционален:
+   * bulk-батчи и старые клиенты его не шлют.
+   */
+  idempotencyKey: z.string().trim().min(1).max(128).optional(),
 });
 export type CreatePrintJobDto = z.infer<typeof CreatePrintJobSchema>;
 
 /**
  * Тело `PATCH /api/print-jobs/:id` от агента: «напечатано» или
- * «упало». На MVP допускаем только переход PENDING → PRINTED/FAILED.
+ * «упало». Допускаем переход из «открытых» статусов (PENDING/SENT) в
+ * терминальные PRINTED/FAILED. Обычно к моменту PATCH-а job уже в
+ * SENT (агент захватил его на поллинге), но PENDING тоже принимаем на
+ * случай старого агента/сервера.
  */
 export const UpdatePrintJobStatusSchema = z
   .object({

@@ -16,6 +16,19 @@ import {
 import { resolveCandidateRoles } from './printer-role-resolution.js';
 
 /**
+ * Сколько job может провисеть в `SENT` (агент захватил, но не прислал
+ * PATCH), прежде чем мы посчитаем его «зависшим» и переведём в FAILED.
+ * Штатно агент подтверждает результат за секунды (скачать + напечатать
+ * + PATCH). 3 минуты — с запасом на медленный термопринтер и разовый
+ * сетевой сбой, но заметно короче, чем «оператор ушёл на обед».
+ */
+const STALE_SENT_MS = 3 * 60 * 1000;
+
+const STALE_SENT_MESSAGE =
+  'Агент не подтвердил печать вовремя (задание зависло). ' +
+  'Проверьте принтер и при необходимости перепечатайте вручную.';
+
+/**
  * Сервис заданий на печать (`PrintJob`). Содержит:
  *   1. логику выбора принтера по активной смене сотрудника;
  *   2. сборку `payloadUrl` — мы НЕ дублируем рендер, а берём
@@ -41,6 +54,18 @@ export class PrintJobsService {
     dto: CreatePrintJobDto,
     apiBaseUrl: string,
   ): Promise<PrintJobDto> {
+    // Идемпотентность: если этот ключ уже создавал job (двойная
+    // доставка запроса, ретрай транспорта) — возвращаем его как есть,
+    // не резолвя принтер заново и, главное, не плодя вторую печать.
+    if (dto.idempotencyKey) {
+      const existing = await this.prisma.printJob.findUnique({
+        where: { idempotencyKey: dto.idempotencyKey },
+      });
+      if (existing) {
+        return this.toDto(existing, await this.printerSelection(existing.printerId));
+      }
+    }
+
     const printer = await this.resolvePrinter(employeeId, dto.printerId);
     if (!printer.isActive) throw new PrinterInactiveException();
     // Для TEST используем сам принтер как sourceId — payloadUrl
@@ -51,16 +76,42 @@ export class PrintJobsService {
     const sourceId =
       dto.sourceType === 'TEST' ? dto.sourceId ?? printer.id : dto.sourceId;
     const payloadUrl = buildPayloadUrl(apiBaseUrl, dto.sourceType, sourceId);
-    const created = await this.prisma.printJob.create({
-      data: {
-        printerId: printer.id,
-        sourceType: dto.sourceType,
-        sourceId: sourceId ?? null,
-        payloadUrl,
-        status: 'PENDING',
-      },
+    try {
+      const created = await this.prisma.printJob.create({
+        data: {
+          printerId: printer.id,
+          sourceType: dto.sourceType,
+          sourceId: sourceId ?? null,
+          payloadUrl,
+          status: 'PENDING',
+          idempotencyKey: dto.idempotencyKey ?? null,
+        },
+      });
+      return this.toDto(created, printer.selectedWindowsPrinter);
+    } catch (err) {
+      // Гонка: параллельный запрос с тем же idempotencyKey успел
+      // создать job между нашим findUnique и create. Вернём его.
+      if (
+        dto.idempotencyKey &&
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const existing = await this.prisma.printJob.findUnique({
+          where: { idempotencyKey: dto.idempotencyKey },
+        });
+        if (existing) return this.toDto(existing, printer.selectedWindowsPrinter);
+      }
+      throw err;
+    }
+  }
+
+  /** Текущий выбранный Windows-принтер для логического принтера (для DTO). */
+  private async printerSelection(printerId: string): Promise<string | null> {
+    const p = await this.prisma.printer.findUnique({
+      where: { id: printerId },
+      select: { selectedWindowsPrinter: true },
     });
-    return this.toDto(created, printer.selectedWindowsPrinter);
+    return p?.selectedWindowsPrinter ?? null;
   }
 
   // -------------------------------------------------------------------------
@@ -132,22 +183,59 @@ export class PrintJobsService {
   // -------------------------------------------------------------------------
 
   /**
-   * Агент опрашивает: «есть ли работа?». Возвращаем ОДНО задание (FIFO
-   * по `createdAt`), и одновременно обновляем `lastSeenAt` принтера —
-   * это и есть наш heartbeat. Состояние job-а пока не меняем: статус
-   * перейдёт только при `updateStatus` от того же агента.
+   * Агент опрашивает: «есть ли работа?». Обновляем `lastSeenAt`
+   * принтера (heartbeat), свипаем «зависшие» SENT и АТОМАРНО захватываем
+   * ОДНО задание (FIFO по `createdAt`), переводя его PENDING → SENT.
+   *
+   * Захват сделан compare-and-swap-ом (`updateMany` с условием
+   * `status: 'PENDING'`): если два поллинга (повторный запрос того же
+   * агента или второй агент на том же принтере) стартуют одновременно,
+   * успех получит только один — второму `updateMany` вернёт count=0 и
+   * job ему не достанется. Это и есть защита от двойной физической
+   * печати одного паспорта: пока job в SENT, его больше никто не
+   * заберёт.
    *
    * Возвращаем массив, чтобы оставить простор для будущей пакетной
-   * выдачи (несколько принтеров на агенте, бачи), но на MVP всегда
-   * 0 или 1 элемент.
+   * выдачи, но по-прежнему всегда 0 или 1 элемент.
    */
   async pollForAgent(printerId: string): Promise<PrintJobDto[]> {
     const selectedWindowsPrinter = await this.printers.heartbeat(printerId);
-    const job = await this.prisma.printJob.findFirst({
-      where: { printerId, status: 'PENDING' },
-      orderBy: { createdAt: 'asc' },
+
+    // Свип «зависших» SENT: агент захватил job, но так и не прислал
+    // PATCH за STALE_SENT_MS (упал/отвалилась сеть). Переводим в
+    // FAILED, а НЕ обратно в PENDING — сознательно: документ мог уже
+    // выйти из принтера, и слепая перепечать — это ровно тот баг,
+    // который мы чиним. Менеджер увидит FAILED и при необходимости
+    // перепечатает вручную.
+    await this.prisma.printJob.updateMany({
+      where: {
+        printerId,
+        status: 'SENT',
+        sentAt: { lt: new Date(Date.now() - STALE_SENT_MS) },
+      },
+      data: {
+        status: 'FAILED',
+        errorMessage: STALE_SENT_MESSAGE,
+        completedAt: new Date(),
+      },
     });
-    return job ? [this.toDto(job, selectedWindowsPrinter)] : [];
+
+    const claimed = await this.prisma.$transaction(async (tx) => {
+      const next = await tx.printJob.findFirst({
+        where: { printerId, status: 'PENDING' },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true },
+      });
+      if (!next) return null;
+      const res = await tx.printJob.updateMany({
+        where: { id: next.id, status: 'PENDING' },
+        data: { status: 'SENT', sentAt: new Date() },
+      });
+      if (res.count === 0) return null; // проиграли гонку за этот job
+      return tx.printJob.findUnique({ where: { id: next.id } });
+    });
+
+    return claimed ? [this.toDto(claimed, selectedWindowsPrinter)] : [];
   }
 
   // -------------------------------------------------------------------------
@@ -162,7 +250,13 @@ export class PrintJobsService {
     const job = await this.prisma.printJob.findUnique({ where: { id: jobId } });
     if (!job) throw new PrintJobNotFoundException();
     if (job.printerId !== printerId) throw new PrintJobNotFoundException();
-    if (job.status !== 'PENDING') throw new PrintJobAlreadyClosedException();
+    // Открытые статусы: PENDING (старый агент/сервер) и SENT (агент
+    // захватил job на поллинге — штатный путь). Терминальные PRINTED/
+    // FAILED повторно не закрываем: если job успел просвипаться в
+    // FAILED, поздний PATCH от агента получит 409 и будет проглочен.
+    if (job.status !== 'PENDING' && job.status !== 'SENT') {
+      throw new PrintJobAlreadyClosedException();
+    }
 
     const updated = await this.prisma.printJob.update({
       where: { id: jobId },
@@ -258,6 +352,7 @@ export class PrintJobsService {
       status: row.status,
       errorMessage: row.errorMessage,
       createdAt: row.createdAt.toISOString(),
+      sentAt: row.sentAt ? row.sentAt.toISOString() : null,
       completedAt: row.completedAt ? row.completedAt.toISOString() : null,
       selectedWindowsPrinter,
     };

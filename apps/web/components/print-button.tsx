@@ -3,6 +3,7 @@
 import { useTransition, useState } from 'react';
 import type { PrintJobSource } from '@sewing/shared/printers';
 import { Icon } from './icon';
+import { newIdempotencyKey } from '@/lib/idempotency';
 import { sendPrintJob } from './print-button-actions';
 
 interface Props {
@@ -43,8 +44,12 @@ export function PrintButton({
 
   function handleClick() {
     setFeedback(null);
+    // Свежий ключ на каждое нажатие: осознанная повторная печать — это
+    // новый ключ и новый job, а вот случайная двойная доставка ЭТОГО
+    // запроса (ретрай транспорта) свернётся на бэке в один job.
+    const idempotencyKey = newIdempotencyKey();
     startTransition(async () => {
-      const res = await sendPrintJob({ sourceType, sourceId });
+      const res = await sendPrintJob({ sourceType, sourceId, idempotencyKey });
       if (res.ok) {
         setFeedback({
           kind: 'ok',

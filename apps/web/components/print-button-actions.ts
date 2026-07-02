@@ -1,6 +1,7 @@
 'use server';
 
 import { ApiRequestError } from '@/lib/api';
+import { newIdempotencyKey } from '@/lib/idempotency';
 import { createPrintJob } from '@/lib/printers-api';
 import type { PrintJobSource } from '@sewing/shared/printers';
 
@@ -22,11 +23,17 @@ export interface SendPrintJobResult {
 export async function sendPrintJob(input: {
   sourceType: PrintJobSource;
   sourceId?: string;
+  /**
+   * Идемпотентный ключ. Если не передан — генерируем свежий здесь, так
+   * что любой вызов защищён от двойной доставки в рамках самого себя.
+   */
+  idempotencyKey?: string;
 }): Promise<SendPrintJobResult> {
   try {
     const job = await createPrintJob({
       sourceType: input.sourceType,
       sourceId: input.sourceId,
+      idempotencyKey: input.idempotencyKey ?? newIdempotencyKey(),
     });
     return { ok: true, jobId: job.id, printerId: job.printerId };
   } catch (e) {

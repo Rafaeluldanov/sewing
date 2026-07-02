@@ -351,8 +351,12 @@ export async function processJob(apiUrl, token, job, dirs, state) {
 
 /**
  * PATCH результата с проглатыванием ошибки: если сервер недоступен —
- * мы не должны убить процесс, просто залогируем. На следующей итерации
- * job снова будет PENDING и его подберут заново (см. backend rules).
+ * мы не должны убить процесс, просто залогируем. Job при этом остаётся
+ * на сервере в статусе SENT (мы его уже захватили на поллинге), поэтому
+ * повторный поллинг его НЕ подберёт и НЕ перепечатает. Если PATCH так и
+ * не дойдёт, сервер сам переведёт «зависший» SENT в FAILED по таймауту
+ * (см. `PrintJobsService.pollForAgent` / `STALE_SENT_MS`) — вслепую
+ * документ не перепечатывается.
  */
 async function safePatch(apiUrl, token, jobId, status, errorMessage) {
   try {
