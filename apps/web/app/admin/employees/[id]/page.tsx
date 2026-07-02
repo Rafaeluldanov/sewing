@@ -4,6 +4,7 @@ import {
   ArrowLeft,
   ArrowRight,
   BadgeRussianRuble,
+  Clock3,
   Printer,
   ScanLine,
   Users,
@@ -255,6 +256,23 @@ export default async function AdminEmployeeDetailPage({
               divisionOptions={divisionOptions}
               cashFlowItems={cashFlowItems}
             />
+          </AdminCard>
+
+          <AdminCard>
+            <AdminSectionHeader title="Тайм-трекер" />
+            <p className="admin-muted" style={{ marginTop: 0 }}>
+              Рабочий день во времени: начало сеанса, какие операции
+              выполнялись внутри смены и её завершение. Сводка за неделю/месяц
+              (часы, выработка, брак) и таймлайн каждого сеанса. Read-only.
+            </p>
+            <Link
+              href={`/admin/employees/${employee.id}/time-tracker`}
+              className="admin-btn admin-btn--primary"
+            >
+              <Clock3 size={16} strokeWidth={1.6} aria-hidden />
+              Открыть тайм-трекер
+              <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+            </Link>
           </AdminCard>
 
           <AdminCard>
