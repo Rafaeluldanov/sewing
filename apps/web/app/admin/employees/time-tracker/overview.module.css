@@ -1,0 +1,214 @@
+/*
+ * «Тайм-трекер» — обзор всех сотрудников (список-уровень). Опирается на
+ * ЕРП-токены из globals.css. Таблицу рисует AdminTable; здесь — только
+ * переключатель периода, KPI-плитки и индикатор «на смене».
+ */
+
+.tnum {
+  font-variant-numeric: tabular-nums;
+}
+
+/* переключатель периода */
+.periodBar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+  margin-bottom: 18px;
+}
+.seg {
+  display: inline-flex;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 8px;
+  overflow: hidden;
+  background: var(--color-bg-card);
+}
+.segItem {
+  padding: 8px 18px;
+  border-right: 1px solid var(--color-border-strong);
+  color: var(--color-fg-muted);
+  font-size: 0.9rem;
+  text-decoration: none;
+}
+.segItem:last-child {
+  border-right: none;
+}
+.segItem:hover {
+  background: var(--color-bg-soft);
+}
+.segOn {
+  background: var(--color-bg-tint);
+  color: var(--btn-primary-fg);
+  font-weight: 700;
+}
+.rangeLabel {
+  color: var(--color-fg-muted);
+  font-size: 0.9rem;
+}
+.rangeLabel strong {
+  color: var(--color-fg);
+}
+
+/* KPI-плитки */
+.kpis {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 12px;
+  margin-bottom: 18px;
+}
+.kpi {
+  background: var(--color-bg-card);
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  padding: 14px 15px;
+}
+.kpiLbl {
+  font-size: 0.688rem;
+  font-weight: 700;
+  letter-spacing: 0.9px;
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+}
+.kpiVal {
+  font-size: 1.625rem;
+  font-weight: 700;
+  letter-spacing: -0.5px;
+  line-height: 1;
+  margin-top: 9px;
+  font-variant-numeric: tabular-nums;
+}
+.kpiVal small {
+  font-size: 0.875rem;
+  font-weight: 700;
+  color: var(--color-fg-subtle);
+  margin-left: 2px;
+}
+.kpiFoot {
+  font-size: 0.75rem;
+  color: var(--color-fg-subtle);
+  margin-top: 7px;
+}
+.kpiLive .kpiVal {
+  color: var(--color-ok-fg);
+}
+.kpiWarn .kpiVal {
+  color: var(--color-danger-fg);
+}
+
+/* индикатор «на смене» */
+.who {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+}
+.dotLive {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-ok);
+  position: relative;
+  flex: none;
+}
+.dotLive::after {
+  content: "";
+  position: absolute;
+  inset: -4px;
+  border-radius: 50%;
+  background: var(--color-ok);
+  opacity: 0.35;
+  animation: ttPulse 1.8s ease-out infinite;
+}
+.dotOff {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-border-strong);
+  flex: none;
+}
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 11px;
+  border-radius: 13px;
+  font-size: 0.78rem;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.badgeOn {
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
+}
+.badgeOff {
+  background: var(--color-bg-muted);
+  color: var(--color-fg-subtle);
+}
+.badge .k {
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-weight: 400;
+}
+
+.muted {
+  color: var(--color-fg-subtle);
+}
+.zero {
+  color: var(--color-fg-subtle);
+}
+.bad {
+  color: var(--color-danger-fg);
+  font-weight: 700;
+}
+.drill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-accent);
+  font-weight: 700;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.drill:hover {
+  color: var(--color-accent-hover);
+  text-decoration: underline;
+}
+
+.note {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  color: var(--color-fg-subtle);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  margin: 18px 2px 0;
+}
+.note b {
+  color: var(--color-fg-muted);
+}
+
+@keyframes ttPulse {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.5;
+  }
+  100% {
+    transform: scale(2.1);
+    opacity: 0;
+  }
+}
+
+@media (max-width: 900px) {
+  .kpis {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+@media (max-width: 560px) {
+  .kpis {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .dotLive::after {
+    animation: none;
+  }
+}

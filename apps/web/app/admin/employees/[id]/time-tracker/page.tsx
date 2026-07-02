@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { ArrowLeft, ChevronRight, Clock3, Info } from 'lucide-react';
+import { ArrowLeft, ChevronRight, Clock3, Info, Users } from 'lucide-react';
 import type {
   TimeTrackingDto,
   TimeTrackingEventDto,
@@ -10,131 +10,25 @@ import { ApiRequestError } from '@/lib/api';
 import { getEmployeeTimeTracking } from '@/lib/time-tracking-api';
 import { AdminPageShell } from '@/components/admin';
 import { formatRole } from '@/lib/admin-labels';
+import {
+  MSK,
+  cap,
+  computeRange,
+  eachDay,
+  fmtDayTitle,
+  fmtDurLabel,
+  fmtRangeLabel,
+  fmtTime,
+  moscowToday,
+  noon,
+  normalizeAnchor,
+  normalizePeriod,
+  ru,
+  type TtPeriod,
+} from '@/lib/time-tracker-period';
 import styles from './time-tracker.module.css';
 
 export const dynamic = 'force-dynamic';
-
-type Period = 'day' | 'week' | 'month';
-
-const MSK = 'Europe/Moscow';
-const MSK_OFFSET_MS = 3 * 60 * 60 * 1000;
-
-// ---------------------------------------------------------------------------
-// Даты (московский день; см. допущение в time-tracking.ts — на дневных
-// сменах цеха московский день совпадает с UTC-днём окна на бэке).
-// ---------------------------------------------------------------------------
-
-function pad2(n: number): string {
-  return n < 10 ? `0${n}` : String(n);
-}
-
-/** Сегодняшний московский день как `YYYY-MM-DD`. */
-function moscowToday(): string {
-  const msk = new Date(Date.now() + MSK_OFFSET_MS);
-  return `${msk.getUTCFullYear()}-${pad2(msk.getUTCMonth() + 1)}-${pad2(
-    msk.getUTCDate(),
-  )}`;
-}
-
-/** Полдень UTC выбранного дня — безопасный «якорь» для арифметики дат. */
-function noon(dayStr: string): Date {
-  return new Date(`${dayStr}T12:00:00.000Z`);
-}
-
-function addDays(dayStr: string, delta: number): string {
-  const d = noon(dayStr);
-  d.setUTCDate(d.getUTCDate() + delta);
-  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(
-    d.getUTCDate(),
-  )}`;
-}
-
-/** Вычисляет диапазон `[from; to]` под выбранный период и якорный день. */
-function computeRange(period: Period, anchor: string): { from: string; to: string } {
-  if (period === 'day') return { from: anchor, to: anchor };
-  if (period === 'week') {
-    const wd = noon(anchor).getUTCDay(); // 0=вс..6=сб
-    const backToMonday = (wd + 6) % 7;
-    const from = addDays(anchor, -backToMonday);
-    return { from, to: addDays(from, 6) };
-  }
-  // month
-  const a = noon(anchor);
-  const y = a.getUTCFullYear();
-  const m = a.getUTCMonth();
-  const from = `${y}-${pad2(m + 1)}-01`;
-  const lastDay = new Date(Date.UTC(y, m + 1, 0)).getUTCDate();
-  return { from, to: `${y}-${pad2(m + 1)}-${pad2(lastDay)}` };
-}
-
-function eachDay(from: string, to: string): string[] {
-  const out: string[] = [];
-  let cur = from;
-  // страховка от бесконечного цикла
-  for (let i = 0; i < 400 && cur <= to; i += 1) {
-    out.push(cur);
-    cur = addDays(cur, 1);
-  }
-  return out;
-}
-
-// ---------------------------------------------------------------------------
-// Форматирование
-// ---------------------------------------------------------------------------
-
-function fmtTime(iso: string): string {
-  return new Date(iso).toLocaleTimeString('ru-RU', {
-    timeZone: MSK,
-    hour: '2-digit',
-    minute: '2-digit',
-  });
-}
-
-function fmtHM(totalMinutes: number): { h: number; m: number } {
-  return { h: Math.floor(totalMinutes / 60), m: totalMinutes % 60 };
-}
-
-function fmtDurLabel(totalMinutes: number): string {
-  const { h, m } = fmtHM(totalMinutes);
-  if (h > 0) return `${h} ч ${pad2(m)} м`;
-  return `${m} м`;
-}
-
-function cap(s: string): string {
-  return s.length ? s[0].toUpperCase() + s.slice(1) : s;
-}
-
-function fmtDayTitle(dayStr: string): string {
-  return cap(
-    noon(dayStr).toLocaleDateString('ru-RU', {
-      timeZone: MSK,
-      weekday: 'long',
-      day: 'numeric',
-      month: 'long',
-    }),
-  );
-}
-
-function fmtShort(dayStr: string): string {
-  return noon(dayStr).toLocaleDateString('ru-RU', {
-    timeZone: MSK,
-    day: 'numeric',
-    month: 'short',
-  });
-}
-
-function fmtRangeLabel(period: Period, from: string, to: string): string {
-  if (period === 'day') return fmtDayTitle(from);
-  const year = noon(to).toLocaleDateString('ru-RU', {
-    timeZone: MSK,
-    year: 'numeric',
-  });
-  return `${fmtShort(from)} — ${fmtShort(to)} ${year}`;
-}
-
-function ru(n: number): string {
-  return n.toLocaleString('ru-RU');
-}
 
 function passportSub(ev: TimeTrackingEventDto): string {
   const parts: string[] = [];
@@ -360,14 +254,8 @@ export default async function EmployeeTimeTrackerPage({
   params: { id: string };
   searchParams: { period?: string; date?: string };
 }) {
-  const period: Period =
-    searchParams.period === 'day' || searchParams.period === 'month'
-      ? searchParams.period
-      : 'week';
-  const anchor =
-    searchParams.date && /^\d{4}-\d{2}-\d{2}$/.test(searchParams.date)
-      ? searchParams.date
-      : moscowToday();
+  const period = normalizePeriod(searchParams.period);
+  const anchor = normalizeAnchor(searchParams.date);
   const { from, to } = computeRange(period, anchor);
 
   let data: TimeTrackingDto;
@@ -379,7 +267,7 @@ export default async function EmployeeTimeTrackerPage({
   }
 
   const basePath = `/admin/employees/${params.id}/time-tracker`;
-  const periods: Array<{ key: Period; label: string }> = [
+  const periods: Array<{ key: TtPeriod; label: string }> = [
     { key: 'day', label: 'День' },
     { key: 'week', label: 'Неделя' },
     { key: 'month', label: 'Месяц' },
@@ -417,10 +305,22 @@ export default async function EmployeeTimeTrackerPage({
       title={data.employeeName}
       subtitle={`Тайм-трекер · ${formatRole(data.role)}`}
       actions={
-        <Link href={`/admin/employees/${params.id}`} className="admin-btn admin-btn--ghost">
-          <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
-          К карточке
-        </Link>
+        <>
+          <Link
+            href="/admin/employees/time-tracker"
+            className="admin-btn admin-btn--ghost"
+          >
+            <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
+            К обзору
+          </Link>
+          <Link
+            href={`/admin/employees/${params.id}`}
+            className="admin-btn admin-btn--ghost"
+          >
+            <Users size={16} strokeWidth={1.6} aria-hidden />
+            Карточка
+          </Link>
+        </>
       }
     >
       {/* период */}

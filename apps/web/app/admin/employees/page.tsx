@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { ArrowRight, Plus, Users } from 'lucide-react';
+import { ArrowRight, Clock3, Plus, Users } from 'lucide-react';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listEmployees } from '@/lib/employees-api';
@@ -86,13 +86,22 @@ export default async function AdminEmployeesListPage({
       title="Сотрудники"
       subtitle={`Активных: ${active.length} · Архив: ${archived.length}`}
       actions={
-        <Link
-          href="/admin/employees/new"
-          className="admin-btn admin-btn--primary"
-        >
-          <Plus size={16} strokeWidth={1.6} aria-hidden />
-          Добавить
-        </Link>
+        <>
+          <Link
+            href="/admin/employees/time-tracker"
+            className="admin-btn admin-btn--ghost"
+          >
+            <Clock3 size={16} strokeWidth={1.6} aria-hidden />
+            Тайм-трекер
+          </Link>
+          <Link
+            href="/admin/employees/new"
+            className="admin-btn admin-btn--primary"
+          >
+            <Plus size={16} strokeWidth={1.6} aria-hidden />
+            Добавить
+          </Link>
+        </>
       }
     >
       {error && (

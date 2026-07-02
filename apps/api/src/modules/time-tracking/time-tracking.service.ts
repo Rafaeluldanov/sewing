@@ -6,6 +6,8 @@ import type {
   TimeTrackingEventDto,
   TimeTrackingQuery,
   TimeTrackingSessionDto,
+  TimeTrackingSummaryDto,
+  TimeTrackingSummaryRowDto,
 } from '@sewing/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { MasterEmployeeStatsService } from '../master-employee-stats/master-employee-stats.service.js';
@@ -41,6 +43,142 @@ export class TimeTrackingService {
   /** UTC-`YYYY-MM-DD` из Date (день сеанса/брака). */
   private dayKey(d: Date): string {
     return d.toISOString().slice(0, 10);
+  }
+
+  /**
+   * Обзор ВСЕХ активных сотрудников за период (список-уровень вкладки).
+   * Строка = сотрудник + его часы/сеансы/выработка/брак + «на смене
+   * сейчас». Провал в строку → `getTimeTracking` (таймлайн сеансов).
+   *
+   * Объёмы небольшие (десятки сотрудников, сотни сеансов/событий за
+   * неделю) — тянем плоские срезы и сворачиваем в памяти, без N+1.
+   */
+  async getSummary(query: TimeTrackingQuery): Promise<TimeTrackingSummaryDto> {
+    const win = this.window(query.from, query.to);
+    const now = new Date();
+
+    const employees = await this.prisma.employee.findMany({
+      where: { active: true },
+      select: { id: true, fullName: true, role: true },
+      orderBy: { fullName: 'asc' },
+    });
+    const empIds = employees.map((e) => e.id);
+    if (empIds.length === 0) {
+      return { from: query.from, to: query.to, rows: [] };
+    }
+
+    // Сеансы в окне (для часов/счётчика), открытые сеансы СЕЙЧАС
+    // (для «на смене»), завершения в окне (выработка), и брак — из
+    // проверенной агрегации master-stats.
+    const [sessions, openNow, finished, stats] = await Promise.all([
+      this.prisma.shiftSession.findMany({
+        where: { employeeId: { in: empIds }, startedAt: { gte: win.from, lte: win.to } },
+        select: { employeeId: true, startedAt: true, endedAt: true },
+      }),
+      this.prisma.shiftSession.findMany({
+        where: { employeeId: { in: empIds }, endedAt: null },
+        select: {
+          employeeId: true,
+          startedAt: true,
+          equipment: { select: { code: true } },
+          operation: { select: { name: true } },
+        },
+      }),
+      this.prisma.passportEvent.findMany({
+        where: {
+          employeeId: { in: empIds },
+          type: PassportEventType.OPERATION_FINISHED,
+          createdAt: { gte: win.from, lte: win.to },
+        },
+        select: { employeeId: true, qty: true, createdAt: true },
+      }),
+      this.masterStats.getStats({ from: query.from, to: query.to }),
+    ]);
+
+    const defectsByEmp = new Map(
+      stats.rows.map((r) => [r.employeeId, r.totalDefects]),
+    );
+
+    // Сворачиваем сеансы: минуты + счётчик + последняя активность.
+    const sessAgg = new Map<
+      string,
+      { minutes: number; count: number; lastAt: number }
+    >();
+    for (const s of sessions) {
+      const end = s.endedAt ?? now;
+      const minutes = Math.max(
+        0,
+        Math.round((end.getTime() - s.startedAt.getTime()) / 60000),
+      );
+      const a = sessAgg.get(s.employeeId) ?? { minutes: 0, count: 0, lastAt: 0 };
+      a.minutes += minutes;
+      a.count += 1;
+      a.lastAt = Math.max(a.lastAt, s.startedAt.getTime());
+      sessAgg.set(s.employeeId, a);
+    }
+
+    // Открытые сеансы «сейчас» → на смене + текущий станок/операция.
+    const openByEmp = new Map<
+      string,
+      { equipmentCode: string | null; operationName: string | null }
+    >();
+    for (const o of openNow) {
+      // Один активный сеанс на сотрудника (инвариант), но на всякий
+      // случай не перетираем уже найденный.
+      if (!openByEmp.has(o.employeeId)) {
+        openByEmp.set(o.employeeId, {
+          equipmentCode: o.equipment?.code ?? null,
+          operationName: o.operation?.name ?? null,
+        });
+      }
+    }
+
+    // Завершения: операции + штуки + последняя активность.
+    const finAgg = new Map<
+      string,
+      { ops: number; qty: number; lastAt: number }
+    >();
+    for (const f of finished) {
+      const a = finAgg.get(f.employeeId ?? '') ?? { ops: 0, qty: 0, lastAt: 0 };
+      a.ops += 1;
+      a.qty += f.qty ?? 0;
+      a.lastAt = Math.max(a.lastAt, f.createdAt.getTime());
+      if (f.employeeId) finAgg.set(f.employeeId, a);
+    }
+
+    const rows: TimeTrackingSummaryRowDto[] = employees.map((e) => {
+      const s = sessAgg.get(e.id);
+      const f = finAgg.get(e.id);
+      const open = openByEmp.get(e.id);
+      const minutes = s?.minutes ?? 0;
+      const qty = f?.qty ?? 0;
+      const lastAt = Math.max(s?.lastAt ?? 0, f?.lastAt ?? 0);
+      return {
+        employeeId: e.id,
+        employeeName: e.fullName,
+        role: e.role,
+        onShift: !!open,
+        currentEquipmentCode: open?.equipmentCode ?? null,
+        currentOperationName: open?.operationName ?? null,
+        totalMinutes: minutes,
+        sessionsCount: s?.count ?? 0,
+        operationsCount: f?.ops ?? 0,
+        qtyGood: qty,
+        defects: defectsByEmp.get(e.id) ?? 0,
+        perHour: minutes > 0 ? Math.round(qty / (minutes / 60)) : 0,
+        lastActivityAt: lastAt > 0 ? new Date(lastAt).toISOString() : null,
+      };
+    });
+
+    // На смене — сверху; затем по отработанному времени, затем по выработке.
+    rows.sort(
+      (a, b) =>
+        Number(b.onShift) - Number(a.onShift) ||
+        b.totalMinutes - a.totalMinutes ||
+        b.qtyGood - a.qtyGood,
+    );
+
+    return { from: query.from, to: query.to, rows };
   }
 
   async getTimeTracking(

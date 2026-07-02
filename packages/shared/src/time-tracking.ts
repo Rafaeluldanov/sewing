@@ -148,3 +148,42 @@ export interface TimeTrackingDto {
   /** Сеансы периода, новые сверху; события внутри — по возрастанию. */
   sessions: TimeTrackingSessionDto[];
 }
+
+// ---------------------------------------------------------------------------
+// Обзор ВСЕХ сотрудников (список-уровень вкладки «Сотрудники»)
+// ---------------------------------------------------------------------------
+
+/**
+ * Строка обзорной таблицы «Тайм-трекер» по одному сотруднику за период.
+ * Провал в строку → per-employee `TimeTrackingDto` (таймлайн сеансов).
+ */
+export interface TimeTrackingSummaryRowDto {
+  employeeId: string;
+  employeeName: string;
+  /** `Employee.role` (основная роль, enum). */
+  role: string;
+  /** Есть ли открытый сеанс ПРЯМО СЕЙЧАС (вне зависимости от периода). */
+  onShift: boolean;
+  /** Станок/операция текущего открытого сеанса (если `onShift`). */
+  currentEquipmentCode: string | null;
+  currentOperationName: string | null;
+  /** Отработано минут за период (открытый сеанс — до `now`). */
+  totalMinutes: number;
+  sessionsCount: number;
+  /** Закрытых операций за период. */
+  operationsCount: number;
+  qtyGood: number;
+  /** Брак за период (finisher attribution, как в master-stats). */
+  defects: number;
+  /** Выработка/час (по факту завершений), 0 если минут нет. */
+  perHour: number;
+  /** Последняя активность (последнее завершение/старт сеанса), ISO или null. */
+  lastActivityAt: string | null;
+}
+
+export interface TimeTrackingSummaryDto {
+  from: string;
+  to: string;
+  /** Все активные сотрудники (в т.ч. с нулевой активностью в периоде). */
+  rows: TimeTrackingSummaryRowDto[];
+}

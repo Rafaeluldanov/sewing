@@ -3,6 +3,7 @@ import {
   TimeTrackingQuerySchema,
   type TimeTrackingDto,
   type TimeTrackingQuery,
+  type TimeTrackingSummaryDto,
 } from '@sewing/shared';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { Roles } from '../auth/auth.decorators.js';
@@ -21,6 +22,19 @@ import { TimeTrackingService } from './time-tracking.service.js';
 @Controller('admin/employees')
 export class TimeTrackingController {
   constructor(private readonly service: TimeTrackingService) {}
+
+  /**
+   * Обзор всех сотрудников за период (список-уровень вкладки). Статический
+   * сегмент — объявлен ДО `:id/...`, чтобы `time-tracker-summary` не был
+   * принят за `:id`.
+   */
+  @Get('time-tracker-summary')
+  summary(
+    @Query(new ZodValidationPipe(TimeTrackingQuerySchema))
+    query: TimeTrackingQuery,
+  ): Promise<TimeTrackingSummaryDto> {
+    return this.service.getSummary(query);
+  }
 
   @Get(':id/time-tracking')
   get(
