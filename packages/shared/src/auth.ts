@@ -85,6 +85,25 @@ export const FEATURE_MODULE_KEYS = [
 
 export type FeatureModuleKey = (typeof FEATURE_MODULE_KEYS)[number];
 
+/**
+ * Человекочитаемые названия модулей — как называются соответствующие
+ * разделы в админке. Используются в панели супер-админа вместо «сырых»
+ * ключей. Единый источник для backend и web.
+ */
+export const FEATURE_MODULE_LABELS: Record<FeatureModuleKey, string> = {
+  patterns: 'Лекала / Номенклатура',
+  workshopNeeds: 'Потребность цеха',
+  suppliers: 'Поставщики',
+  purchaseOrders: 'Заказы поставщикам',
+  purchaseReceipts: 'Приёмка поставок',
+  treasury: 'Казначейство',
+};
+
+/** Название модуля по ключу; неизвестный ключ отдаём как есть. */
+export function moduleLabel(key: string): string {
+  return FEATURE_MODULE_LABELS[key as FeatureModuleKey] ?? key;
+}
+
 /** Карта «модуль → включён ли» для текущего тенанта. */
 export type ModuleFlags = Record<FeatureModuleKey, boolean>;
 

@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { Building2, ArrowRight } from 'lucide-react';
 import type { TenantSummaryDto } from '@sewing/shared/superadmin';
+import { moduleLabel } from '@sewing/shared/auth';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { listTenants } from '@/lib/superadmin-api';
 import {
@@ -14,7 +15,9 @@ import { CreateTenantForm } from './create-tenant-form';
 export const dynamic = 'force-dynamic';
 
 function modulesSummary(t: TenantSummaryDto): string {
-  const off = t.modules.filter((m) => !m.enabled).map((m) => m.moduleKey);
+  const off = t.modules
+    .filter((m) => !m.enabled)
+    .map((m) => moduleLabel(m.moduleKey));
   return off.length === 0 ? 'все включены' : `выкл: ${off.join(', ')}`;
 }
 

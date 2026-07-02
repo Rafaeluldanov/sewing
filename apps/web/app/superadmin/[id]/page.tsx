@@ -2,6 +2,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { ArrowLeft, Building2 } from 'lucide-react';
 import type { TenantSummaryDto } from '@sewing/shared/superadmin';
+import { moduleLabel } from '@sewing/shared/auth';
 import { ApiRequestError } from '@/lib/api';
 import { getTenant } from '@/lib/superadmin-api';
 import {
@@ -146,7 +147,7 @@ export default async function SuperadminTenantDetailPage({ params }: Params) {
                   <AdminStatusBadge tone={m.enabled ? 'success' : 'muted'}>
                     {m.enabled ? 'вкл' : 'выкл'}
                   </AdminStatusBadge>
-                  <span>{m.moduleKey}</span>
+                  <span>{moduleLabel(m.moduleKey)}</span>
                   {!m.explicit && (
                     <span className="admin-muted" style={{ fontSize: 12 }}>
                       (дефолт)
