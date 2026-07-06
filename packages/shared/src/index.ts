@@ -73,3 +73,4 @@ export * from './treasury';
 export * from './sizes';
 export * from './colors';
 export * from './workplace';
+export * from './colorways';

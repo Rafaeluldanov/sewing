@@ -38,6 +38,7 @@ import { MasterEmployeeStatsModule } from './modules/master-employee-stats/maste
 import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module.js';
 import { CutReleasePolicyModule } from './modules/cut-release-policy/cut-release-policy.module.js';
 import { OrderCutIssueRulesModule } from './modules/order-cut-issue-rules/order-cut-issue-rules.module.js';
+import { OrderColorwaysModule } from './modules/order-colorways/order-colorways.module.js';
 import { ClientsModule } from './modules/clients/clients.module.js';
 import { CompanySettingsModule } from './modules/company-settings/company-settings.module.js';
 import { PatternsModule } from './modules/patterns/patterns.module.js';
@@ -106,6 +107,7 @@ import { SuperadminModule } from './modules/superadmin/superadmin.module.js';
     TimeTrackingModule,
     CutReleasePolicyModule,
     OrderCutIssueRulesModule,
+    OrderColorwaysModule,
     ClientsModule,
     CompanySettingsModule,
     PatternsModule,

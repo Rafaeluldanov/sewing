@@ -1,0 +1,65 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import {
+  UpsertOrderColorwaySchema,
+  type OrderColorwaysDto,
+  type UpsertOrderColorwayDto,
+} from '@sewing/shared';
+import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
+import { Roles } from '../auth/auth.decorators.js';
+import { OrderColorwaysService } from './order-colorways.service.js';
+
+/**
+ * REST-контракт фичи «Расцветки заказа» под префиксом
+ * `/api/orders/:id/colorways`. GET открыт любой авторизованной роли,
+ * write-эндпоинты — менеджерам заказа (`ADMIN` / `SHOP_MANAGER`).
+ *
+ * Все write-методы возвращают свежий полный `OrderColorwaysDto`, чтобы
+ * UI обновлял состояние из одного источника (как `order-cut-issue-rules`).
+ */
+@Controller('orders/:id/colorways')
+export class OrderColorwaysController {
+  constructor(private readonly service: OrderColorwaysService) {}
+
+  @Get()
+  list(@Param('id') orderId: string): Promise<OrderColorwaysDto> {
+    return this.service.listForOrder(orderId);
+  }
+
+  @Post()
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  create(
+    @Param('id') orderId: string,
+    @Body(new ZodValidationPipe(UpsertOrderColorwaySchema))
+    dto: UpsertOrderColorwayDto,
+  ): Promise<OrderColorwaysDto> {
+    return this.service.create(orderId, dto);
+  }
+
+  @Patch(':variantId')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  update(
+    @Param('id') orderId: string,
+    @Param('variantId') variantId: string,
+    @Body(new ZodValidationPipe(UpsertOrderColorwaySchema))
+    dto: UpsertOrderColorwayDto,
+  ): Promise<OrderColorwaysDto> {
+    return this.service.update(orderId, variantId, dto);
+  }
+
+  @Delete(':variantId')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  remove(
+    @Param('id') orderId: string,
+    @Param('variantId') variantId: string,
+  ): Promise<OrderColorwaysDto> {
+    return this.service.remove(orderId, variantId);
+  }
+}

@@ -529,6 +529,8 @@ model Size {
 
   passports                      Passport[]
   orderItems                     OrderItem[]
+  /// Фича «Расцветки»: поразмерный план расцветки (`OrderVariantSize`).
+  orderVariantSizes              OrderVariantSize[]
   /// Этап «Нанесение по размерам / части тиража»: обратная связь от
   /// строк `OrderApplicationSize`, адресующих нанесение на этот размер.
   /// `onDelete: Restrict` со стороны строки защищает размер от удаления,
@@ -1337,6 +1339,13 @@ model Order {
   patternPreviewSnapshotUrl String?
 
   items                 OrderItem[]
+  /// Фича «Расцветки» (colorways, FEATURE_COLORWAYS): заказ может нести
+  /// несколько расцветок (`OrderVariant`), у каждой свой цвет + своя
+  /// техкарта материалов + свой поразмерный план. Аддитивно: миграция
+  /// заводит по одной расцветке (#0) на каждый заказ, `Order.color` /
+  /// `Order.techCardId` остаются «зеркалом первой расцветки». Пока
+  /// расцветка одна — поведение системы прежнее.
+  variants              OrderVariant[]
   passports             Passport[]
   closureRequests       CuttingClosureRequest[]
   routeSteps            OrderRouteStep[]
@@ -1724,6 +1733,69 @@ model OrderItem {
 
   @@unique([orderId, productId, sizeId])
   @@index([productId, sizeId])
+}
+
+/// Расцветка заказа (colorway) — фича «разные цвета для разных размеров,
+/// у каждого цвета своя техкарта» (флаг `FEATURE_COLORWAYS`).
+///
+/// Один заказ = одна или несколько расцветок. Каждая несёт:
+///   - `color`      — цвет расцветки (свободная строка, как `Order.color`
+///     / `Passport.color`);
+///   - `techCardId` — свою техкарту материалов (`null` → берётся
+///     `Order.techCardId`, зеркало);
+///   - `sizes`      — свой поразмерный план (`OrderVariantSize`).
+/// Маршрут операций остаётся общим на заказ (по цвету не варьируется).
+///
+/// Обратная совместимость (важно для обратимого прод-теста): это чисто
+/// АДДИТИВНАЯ структура. Миграция создаёт по одной расцветке (#0) на
+/// каждый существующий заказ из `Order.color` + `Order.techCardId` и
+/// зеркалит `OrderItem` в `OrderVariantSize`. `OrderItem` НЕ трогается —
+/// он остаётся агрегированным планом заказа и источником истины для
+/// текущего производства/раскроя. Пока фича под флагом, сведение
+/// поразмерного плана по цветам в производственный контур — поздняя
+/// фаза. Откат = выключить флаг; новые таблицы просто не читаются.
+model OrderVariant {
+  id      String @id @default(cuid())
+  orderId String
+  /// Порядок расцветки в заказе (0-based). `#0` — «первичная» (зеркало
+  /// `Order.color` / `Order.techCardId`). Уникален в рамках заказа.
+  ordinal Int
+  /// Цвет расцветки (свободная строка). Источник цвета паспортов этой
+  /// расцветки в поздней фазе; сейчас — presentation + план.
+  color   String
+  /// Своя техкарта материалов расцветки. `null` — наследуется
+  /// `Order.techCardId` (зеркало первичной расцветки).
+  techCardId String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order    Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  techCard TechCardTemplate? @relation(fields: [techCardId], references: [id])
+  sizes    OrderVariantSize[]
+
+  @@unique([orderId, ordinal])
+  @@index([orderId])
+  @@index([techCardId])
+}
+
+/// Поразмерный план одной расцветки (`OrderVariant`) — сколько штук
+/// какого размера в этом цвете. Аддитивный аналог `OrderItem.qtyPlan`,
+/// но в разрезе расцветки: один размер (напр. `M`) живёт в нескольких
+/// расцветках с разным количеством. На первом срезе фичи `OrderItem`
+/// остаётся агрегатом заказа, а это — источник истины для UI расцветок.
+model OrderVariantSize {
+  id        String @id @default(cuid())
+  variantId String
+  sizeId    String
+  qtyPlan   Int    @default(0)
+
+  variant OrderVariant @relation(fields: [variantId], references: [id], onDelete: Cascade)
+  size    Size         @relation(fields: [sizeId], references: [id])
+
+  @@unique([variantId, sizeId])
+  @@index([variantId])
+  @@index([sizeId])
 }
 
 /// Этап «Очередь выдачи кроя по размерам» (см.
@@ -2993,6 +3065,9 @@ model TechCardTemplate {
   materialLines  TechCardMaterialLine[]
   outsourceLines TechCardOutsourceLine[]
   orders         Order[]
+  /// Фича «Расцветки»: техкарта может быть выбрана расцветкой заказа
+  /// (`OrderVariant.techCard`) — своя техкарта материалов на цвет.
+  orderVariants  OrderVariant[]
 
   @@index([isActive])
   @@index([patternCategoryId])

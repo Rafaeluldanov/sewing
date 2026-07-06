@@ -66,11 +66,15 @@ import { notFound } from 'next/navigation';
 import { Package } from 'lucide-react';
 import type { OrderDetailDto } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
+import type { OrderColorwaysDto } from '@sewing/shared';
 import { ApiRequestError } from '@/lib/api';
 import { getOrder } from '@/lib/orders-api';
 import { listOrderPassports } from '@/lib/passports-api';
 import { getOrderCutIssueRules } from '@/lib/order-cut-issue-rules-api';
+import { getOrderColorways } from '@/lib/colorways-api';
+import { isColorwaysEnabled } from '@/lib/feature-flags';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorways-block';
 import { AdminPageShell } from '@/components/admin';
 import {
   OrderTabEmptyState,
@@ -135,6 +139,18 @@ export default async function AdminOrderDetailPage({
   // тут, чтобы tab-компонент остался синхронным.
   const cutIssueRulesSummary = await getOrderCutIssueRules(order.id);
 
+  // Фича «Расцветки» (FEATURE_COLORWAYS): аддитивный блок в шапке
+  // карточки. Флаг OFF на проде по умолчанию, ON на dev. Ошибку
+  // запроса глушим — блок просто не рисуется, карточка не падает.
+  let colorways: OrderColorwaysDto | null = null;
+  if (isColorwaysEnabled()) {
+    try {
+      colorways = await getOrderColorways(order.id);
+    } catch {
+      colorways = null;
+    }
+  }
+
   const clientName = order.client?.name ?? order.customer ?? null;
   const canIssuePassport = order.status === 'IN_PRODUCTION';
   // Подразделение заказа — FK на `CompanyDivision` (см.
@@ -154,6 +170,9 @@ export default async function AdminOrderDetailPage({
           <>
             <OrderManagementHeader order={order} passports={passports} />
             <OrderActionCenter order={order} passports={passports} />
+            {colorways && (
+              <OrderColorwaysBlock orderId={order.id} initial={colorways} />
+            )}
             {order.constructorTask && (
               <OrderConstructorTaskCard task={order.constructorTask} />
             )}
