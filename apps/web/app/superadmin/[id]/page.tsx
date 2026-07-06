@@ -71,7 +71,7 @@ export default async function SuperadminTenantDetailPage({ params }: Params) {
             <p className="admin-muted">
               {active
                 ? 'Тенант активен — резолвится по своим доменам.'
-                : 'Тенант приостановлен — домены отдают 404 UNKNOWN_TENANT.'}
+                : 'Тенант приостановлен — домены отдают 403 TENANT_SUSPENDED.'}
             </p>
             <form action={setStatusAction}>
               <input type="hidden" name="tenantId" value={tenant.id} />

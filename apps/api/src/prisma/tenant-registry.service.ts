@@ -1,9 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ControlPlaneService } from './control-plane.service.js';
-import type { TenantInfo } from './tenant.types.js';
+import type { TenantInfo, TenantResolution } from './tenant.types.js';
 
 interface CacheEntry {
-  tenant: TenantInfo | null;
+  resolution: TenantResolution;
   expiresAt: number;
 }
 
@@ -61,31 +61,37 @@ export class TenantRegistry {
 
   /**
    * Резолв тенанта по Host.
-   *   - single-tenant: всегда дефолтный тенант;
-   *   - control-plane: lookup в `TenantDomain` (кэш TTL), `null` если хост
-   *     неизвестен или тенант не ACTIVE.
+   *   - single-tenant: всегда дефолтный тенант (`active`);
+   *   - control-plane: lookup в `TenantDomain` (кэш TTL). Различаем `suspended`
+   *     (тенант есть, но приостановлен) и `unknown` (хост не привязан) — чтобы
+   *     middleware отдал разные ответы, а web показал корректную заглушку.
    */
-  async resolveByHost(host: string | undefined): Promise<TenantInfo | null> {
-    if (!this.controlPlane.isEnabled()) return this.defaultTenant;
+  async resolveByHost(host: string | undefined): Promise<TenantResolution> {
+    if (!this.controlPlane.isEnabled()) {
+      return { outcome: 'active', tenant: this.defaultTenant };
+    }
 
     const key = this.normalizeHost(host);
-    if (!key) return null;
+    if (!key) return { outcome: 'unknown' };
 
     const cached = this.cache.get(key);
     if (cached && cached.expiresAt > Date.now()) {
       // LRU-touch: переставляем в конец как most-recently-used.
       this.cache.delete(key);
       this.cache.set(key, cached);
-      return cached.tenant;
+      return cached.resolution;
     }
 
-    const tenant = await this.lookupByHost(key);
-    // Негативный результат (неизвестный/неактивный хост) кэшируем коротко,
-    // чтобы только что заведённый тенант стал виден быстро; позитивный — на TTL.
-    const ttl = tenant ? this.cacheTtlMs : Math.min(this.cacheTtlMs, 5_000);
-    this.cache.set(key, { tenant, expiresAt: Date.now() + ttl });
+    const resolution = await this.lookupByHost(key);
+    // Негативный результат (неизвестный/приостановленный хост) кэшируем коротко,
+    // чтобы правка статуса/доменов стала видна быстро; позитивный — на TTL.
+    const ttl =
+      resolution.outcome === 'active'
+        ? this.cacheTtlMs
+        : Math.min(this.cacheTtlMs, 5_000);
+    this.cache.set(key, { resolution, expiresAt: Date.now() + ttl });
     this.evictCache();
-    return tenant;
+    return resolution;
   }
 
   /** LRU-вытеснение записей кэша резолва сверх `cacheMax` (по порядку вставки). */
@@ -120,18 +126,20 @@ export class TenantRegistry {
     return tenants.map((t) => ({ id: t.id, slug: t.slug, dbUrl: t.dbUrl }));
   }
 
-  private async lookupByHost(host: string): Promise<TenantInfo | null> {
+  private async lookupByHost(host: string): Promise<TenantResolution> {
     const domain = await this.controlPlane.client.tenantDomain.findUnique({
       where: { host },
       include: { tenant: true },
     });
-    if (!domain || domain.tenant.status !== 'ACTIVE') {
-      return null;
-    }
+    if (!domain) return { outcome: 'unknown' };
+    if (domain.tenant.status !== 'ACTIVE') return { outcome: 'suspended' };
     return {
-      id: domain.tenant.id,
-      slug: domain.tenant.slug,
-      dbUrl: domain.tenant.dbUrl,
+      outcome: 'active',
+      tenant: {
+        id: domain.tenant.id,
+        slug: domain.tenant.slug,
+        dbUrl: domain.tenant.dbUrl,
+      },
     };
   }
 

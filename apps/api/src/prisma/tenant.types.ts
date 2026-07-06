@@ -16,3 +16,19 @@ export interface TenantInfo {
   /** Connection string на БД именно этого тенанта. */
   dbUrl: string;
 }
+
+/**
+ * Итог резолва Host → тенант. Различаем три исхода, чтобы middleware мог
+ * отдать разные ответы, а web — показать корректную заглушку:
+ *   - `active`    — известный ACTIVE тенант, запрос обслуживаем;
+ *   - `suspended` — тенант существует, но приостановлен (403 TENANT_SUSPENDED,
+ *     заглушка «обратитесь к администратору сервиса»);
+ *   - `unknown`   — хост не привязан ни к одному тенанту (404 UNKNOWN_TENANT).
+ *
+ * Раньше `suspended` и `unknown` схлопывались в один `null` → оба давали
+ * 404 UNKNOWN_TENANT, и приостановленный тенант выглядел как «Not Found».
+ */
+export type TenantResolution =
+  | { outcome: 'active'; tenant: TenantInfo }
+  | { outcome: 'suspended' }
+  | { outcome: 'unknown' };

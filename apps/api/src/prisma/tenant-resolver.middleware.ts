@@ -46,12 +46,33 @@ export class TenantResolverMiddleware implements NestMiddleware {
     const forwarded = req.headers['x-tenant-host'];
     const host =
       (Array.isArray(forwarded) ? forwarded[0] : forwarded) ?? req.headers.host;
-    const tenant = await this.registry.resolveByHost(host);
-    if (!tenant) {
-      this.logger.warn(`event=tenant.unknown host=${host ?? '(none)'}`);
-      res.status(404).json({ error: 'UNKNOWN_TENANT', host: host ?? null });
+    const resolution = await this.registry.resolveByHost(host);
+    // Приостановленный тенант ≠ неизвестный хост: web показывает по этим ответам
+    // разные заглушки. Тело несёт и `error` (историческая форма), и
+    // `code`/`message` — чтобы клиентский `apiFetch` подхватил понятный текст.
+    if (resolution.outcome === 'suspended') {
+      this.logger.warn(`event=tenant.suspended host=${host ?? '(none)'}`);
+      res.status(403).json({
+        statusCode: 403,
+        error: 'TENANT_SUSPENDED',
+        code: 'TENANT_SUSPENDED',
+        message: 'Рабочее пространство приостановлено',
+        host: host ?? null,
+      });
       return;
     }
+    if (resolution.outcome === 'unknown') {
+      this.logger.warn(`event=tenant.unknown host=${host ?? '(none)'}`);
+      res.status(404).json({
+        statusCode: 404,
+        error: 'UNKNOWN_TENANT',
+        code: 'UNKNOWN_TENANT',
+        message: 'Рабочее пространство не найдено',
+        host: host ?? null,
+      });
+      return;
+    }
+    const tenant = resolution.tenant;
     try {
       await this.manager.ensureClient(tenant);
     } catch (err) {
