@@ -204,6 +204,18 @@ export class OrderProductionDocumentService {
     const nomenclatureArticle =
       order.patternItem?.article ?? order.patternArticleSnapshot ?? null;
 
+    // Себестоимость за единицу: план — по плановому количеству; факт — по
+    // фактически выпущенному годному (Σ qtyGood). На незавершённом заказе
+    // фактическая единичная с/с частичная (см. плашку готовности).
+    const planUnitCost =
+      qtyPlanTotal > 0 ? this.m(planDirect.div(qtyPlanTotal)) : null;
+    const factUnitCost =
+      qtyGoodTotal > 0 ? this.m(factDirect.div(qtyGoodTotal)) : null;
+    const unitCostVariance =
+      planUnitCost != null && factUnitCost != null
+        ? this.m(factUnitCost.sub(planUnitCost))
+        : null;
+
     return {
       header: {
         orderId: order.id,
@@ -224,6 +236,10 @@ export class OrderProductionDocumentService {
           order.customerUnitPrice != null
             ? (order.customerCurrency ?? 'RUB')
             : null,
+        planUnitCostRub: planUnitCost != null ? planUnitCost.toFixed(2) : null,
+        factUnitCostRub: factUnitCost != null ? factUnitCost.toFixed(2) : null,
+        unitCostVarianceRub:
+          unitCostVariance != null ? unitCostVariance.toFixed(2) : null,
       },
       materials,
       operations,

@@ -45,6 +45,48 @@ function Stat({
   );
 }
 
+function rub2(value: string | null): string {
+  if (value == null) return '—';
+  const n = Number(value);
+  if (!Number.isFinite(n)) return value;
+  return new Intl.NumberFormat('ru-RU', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(n);
+}
+
+/** Крупная плитка себестоимости за единицу (план / факт / разница). */
+function UnitCostTile({
+  label,
+  value,
+  accent,
+  sign,
+}: {
+  label: string;
+  value: string | null;
+  accent?: string;
+  sign?: boolean;
+}) {
+  const n = value != null ? Number(value) : null;
+  const prefix = sign && n != null && n > 0 ? '+' : '';
+  return (
+    <div style={{ minWidth: 150 }}>
+      <div style={{ color: 'var(--admin-muted)', fontSize: 12 }}>{label}</div>
+      <div
+        style={{
+          fontSize: 24,
+          fontWeight: 800,
+          color: accent,
+          fontVariantNumeric: 'tabular-nums',
+          lineHeight: 1.2,
+        }}
+      >
+        {value != null ? `${prefix}${rub2(value)} ₽` : '—'}
+      </div>
+    </div>
+  );
+}
+
 export default async function OrderProductionDocumentPage({
   params,
 }: {
@@ -68,6 +110,15 @@ export default async function OrderProductionDocumentPage({
     h && h.readinessPct >= 100
       ? 'var(--admin-success, #15803d)'
       : undefined;
+  const unitVar = h?.unitCostVarianceRub != null ? Number(h.unitCostVarianceRub) : null;
+  const unitVarAccent =
+    unitVar == null
+      ? undefined
+      : unitVar > 0
+        ? 'var(--admin-danger, #b91c1c)' // дороже плана
+        : unitVar < 0
+          ? 'var(--admin-success, #15803d)' // дешевле плана
+          : undefined;
 
   return (
     <AdminPageShell
@@ -115,6 +166,34 @@ export default async function OrderProductionDocumentPage({
       {h && document && (
         <>
           <AdminCard>
+            <div
+              style={{
+                display: 'flex',
+                flexWrap: 'wrap',
+                gap: 32,
+                rowGap: 16,
+                alignItems: 'flex-end',
+                paddingBottom: 16,
+                marginBottom: 16,
+                borderBottom: '1px solid var(--admin-border, #e5e7eb)',
+              }}
+            >
+              <UnitCostTile
+                label="Плановая с/с за единицу"
+                value={h.planUnitCostRub}
+              />
+              <UnitCostTile
+                label="Фактическая с/с за единицу"
+                value={h.factUnitCostRub}
+                accent={unitVarAccent}
+              />
+              <UnitCostTile
+                label="Разница на единицу"
+                value={h.unitCostVarianceRub}
+                accent={unitVarAccent}
+                sign
+              />
+            </div>
             <div
               style={{
                 display: 'flex',

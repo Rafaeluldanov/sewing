@@ -162,6 +162,20 @@ export interface OrderProductionDocumentHeaderDto {
   /** Выручка = `customerUnitPrice × qtyPlan` (только RUB; иначе `null`). */
   revenueRub: string | null;
   revenueCurrency: string | null;
+  /**
+   * Плановая прямая себестоимость за единицу = прямая с/с (план) ÷
+   * плановое количество. `null`, если `qtyPlan = 0`.
+   */
+  planUnitCostRub: string | null;
+  /**
+   * Фактическая прямая себестоимость за единицу = прямая с/с (факт,
+   * списание + операции) ÷ фактически выпущено годного (Σ qtyGood).
+   * `null`, если годного пока нет (нечего делить). На незавершённом
+   * заказе значение частичное.
+   */
+  factUnitCostRub: string | null;
+  /** `factUnit − planUnit` (Decimal-строка; «+» = дороже плана). `null`, если нет одной из частей. */
+  unitCostVarianceRub: string | null;
 }
 
 /** Итоги документа. */
