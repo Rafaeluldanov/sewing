@@ -17,6 +17,7 @@
 import { z } from 'zod';
 
 import { normalizeColor } from './colors';
+import { ColorwaySizeInputSchema } from './colorways';
 import type { OrderDeadlineEvaluation, OrderDeadlineStatus } from './order-deadlines';
 import { ORDER_DEADLINE_STATUSES } from './order-deadlines';
 import type { OrderCostEstimateDto } from './order-cost-estimates';
@@ -1042,6 +1043,25 @@ export const CreateOrderSchema = z.object({
     })
     .optional()
     .default([]),
+  /**
+   * Фича «Расцветки» (FEATURE_COLORWAYS): опциональный список расцветок
+   * заказа — цвет + своя техкарта материалов + поразмерный план. Когда
+   * передан, backend создаёт `OrderVariant` / `OrderVariantSize` в той
+   * же транзакции, что и заказ. `items` (агрегированный план заказа)
+   * фронт считает как Σ по всем цветам — производство/раскрой продолжают
+   * работать по агрегату. Отсутствие / пустой массив = заказ без явных
+   * расцветок: backend заведёт одну расцветку #0 из `color` + `items`
+   * (зеркало). Полная backward-compat со старым flow.
+   */
+  variants: z
+    .array(
+      z.object({
+        color: z.string().trim().min(1, 'Укажите цвет расцветки').max(60),
+        techCardId: z.string().min(1).nullable().optional(),
+        sizes: z.array(ColorwaySizeInputSchema).default([]),
+      }),
+    )
+    .optional(),
 }).superRefine((dto, ctx) => {
   const mode = dto.productMode ?? 'EXISTING_PATTERN';
   const hasPattern =

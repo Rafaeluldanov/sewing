@@ -106,6 +106,11 @@ import {
   type FormActionState,
 } from '@/app/orders/actions';
 import { SizePlanSelector } from './size-plan-selector';
+import {
+  OrderColorwaysFieldset,
+  makeEmptyColorway,
+  type ColorwayDraft,
+} from './order-create-colorways';
 import { TechCardCombobox } from './tech-card-combobox';
 import {
   CreateProductInline,
@@ -151,6 +156,13 @@ interface Props {
    */
   warehouses: WarehouseSummaryDto[];
   today: string;
+  /**
+   * Фича «Расцветки» (FEATURE_COLORWAYS): включает блок расцветок в
+   * форме создания (цвет × размер + своя техкарта на цвет) вместо
+   * одиночного поля «Цвет» + размерной матрицы. Флаг вычисляет
+   * серверный `page.tsx` (`isColorwaysEnabled()`) и прокидывает сюда.
+   */
+  colorwaysEnabled: boolean;
 }
 
 const initialState: FormActionState = {};
@@ -184,6 +196,7 @@ export function AdminCreateOrderForm({
   companyDivisions,
   warehouses,
   today,
+  colorwaysEnabled,
 }: Props) {
   // Состояния блока «Изделие»:
   //   - EMPTY      — стартовое, тело пустое, в шапке две кнопки;
@@ -285,6 +298,13 @@ export function AdminCreateOrderForm({
 
   const [quantities, setQuantities] = useState<Record<string, number>>({});
 
+  // Фича «Расцветки»: список расцветок формы создания (цвет + техкарта +
+  // количества по размерам). Стартуем с одной пустой. Из неё считаем
+  // агрегат `quantities` (Σ по цветам) + цвет заказа + `variantsJson`.
+  const [colorways, setColorways] = useState<ColorwayDraft[]>(() => [
+    makeEmptyColorway(),
+  ]);
+
   const fieldError = (key: string): string | undefined =>
     state.fieldErrors?.[key];
 
@@ -316,6 +336,41 @@ export function AdminCreateOrderForm({
       return changed ? next : prev;
     });
   }, [availableSizeIds]);
+
+  // Фича «Расцветки»: расцветки → агрегат заказа. `qty[<sizeId>]` = Σ по
+  // цветам (только доступные размеры и qty>0), цвет заказа = первый
+  // непустой. Работает только при включённой фиче — иначе источник
+  // `quantities` остаётся `SizePlanSelector`. Не создаёт цикла: зависит
+  // от `colorways`, а меняет только `quantities`/`color`.
+  useEffect(() => {
+    if (!colorwaysEnabled) return;
+    const agg: Record<string, number> = {};
+    for (const cw of colorways) {
+      for (const [sizeId, qty] of Object.entries(cw.sizes)) {
+        if (availableSizeIds.has(sizeId) && qty > 0) {
+          agg[sizeId] = (agg[sizeId] ?? 0) + qty;
+        }
+      }
+    }
+    setQuantities(agg);
+    setColor(colorways.find((c) => c.color.trim())?.color.trim() ?? '');
+  }, [colorways, colorwaysEnabled, availableSizeIds]);
+
+  // Полезная нагрузка `variantsJson` — только непустые расцветки (цвет
+  // задан) и размеры с qty>0. Пусто → не шлём (бэк заведёт расцветку #0).
+  const variantsPayload = useMemo(
+    () =>
+      colorways
+        .map((cw) => ({
+          color: cw.color.trim(),
+          techCardId: cw.techCardId,
+          sizes: Object.entries(cw.sizes)
+            .filter(([sid, q]) => availableSizeIds.has(sid) && q > 0)
+            .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan })),
+        }))
+        .filter((cw) => cw.color.length > 0 && cw.sizes.length > 0),
+    [colorways, availableSizeIds],
+  );
 
   const handleQuantitiesChange = useCallback(
     (next: Record<string, number>) => {
@@ -410,6 +465,19 @@ export function AdminCreateOrderForm({
       <input type="hidden" name="redirectTo" value="admin" />
       <input type="hidden" name="orderDate" value={today} />
       <input type="hidden" name="status" value="DRAFT" />
+      {/* Фича «Расцветки»: под флагом «Цвет» и расцветки заказа сабмитятся
+          отсюда (в `ProductCreateTab` видимый инпут «Цвет» скрыт). `color`
+          = первый непустой цвет, `variantsJson` = все расцветки. */}
+      {colorwaysEnabled && (
+        <>
+          <input type="hidden" name="color" value={color} />
+          <input
+            type="hidden"
+            name="variantsJson"
+            value={JSON.stringify(variantsPayload)}
+          />
+        </>
+      )}
 
       {state.error && (
         <div role="alert" className="admin-order-form__error">
@@ -517,6 +585,9 @@ export function AdminCreateOrderForm({
             availableSizes={availableSizes}
             quantities={quantities}
             onQuantitiesChange={handleQuantitiesChange}
+            colorwaysEnabled={colorwaysEnabled}
+            colorways={colorways}
+            onColorwaysChange={setColorways}
             sizesTotal={sizesTotal}
             totalLabel={totalLabel}
             fieldError={fieldError}
@@ -1014,6 +1085,9 @@ function ProductCreateTab({
   availableSizes,
   quantities,
   onQuantitiesChange,
+  colorwaysEnabled,
+  colorways,
+  onColorwaysChange,
   sizesTotal,
   totalLabel,
   fieldError,
@@ -1046,6 +1120,9 @@ function ProductCreateTab({
   availableSizes: SizeDto[];
   quantities: Record<string, number>;
   onQuantitiesChange: (v: Record<string, number>) => void;
+  colorwaysEnabled: boolean;
+  colorways: ColorwayDraft[];
+  onColorwaysChange: (v: ColorwayDraft[]) => void;
   sizesTotal: number;
   totalLabel: string;
   fieldError: (key: string) => string | undefined;
@@ -1161,18 +1238,23 @@ function ProductCreateTab({
                 </select>
               </div>
 
-              <div className="admin-field">
-                <label htmlFor="color">Цвет</label>
-                <input
-                  id="color"
-                  name="color"
-                  type="text"
-                  value={color}
-                  onChange={(e) => onColorChange(e.target.value)}
-                  placeholder="не задан"
-                  maxLength={64}
-                />
-              </div>
+              {/* Фича «Расцветки»: под флагом цвет(а) заводятся в блоке
+                  «Расцветки» ниже, поэтому одиночное поле «Цвет» скрываем
+                  (его сабмитит скрытый input в родителе). */}
+              {!colorwaysEnabled && (
+                <div className="admin-field">
+                  <label htmlFor="color">Цвет</label>
+                  <input
+                    id="color"
+                    name="color"
+                    type="text"
+                    value={color}
+                    onChange={(e) => onColorChange(e.target.value)}
+                    placeholder="не задан"
+                    maxLength={64}
+                  />
+                </div>
+              )}
 
               {/* Подсказки и ошибки выносим под обе колонки, чтобы они
                   не влияли на выравнивание input-а «Цвет» в верхней
@@ -1356,6 +1438,15 @@ function ProductCreateTab({
             Справочник размеров пуст. Добавьте размеры, прежде чем создавать
             заказ.
           </p>
+        ) : colorwaysEnabled ? (
+          // Фича «Расцветки»: цвет × размер вместо одиночной размерной
+          // матрицы. Родитель считает из этого агрегат `qty[]` и `variantsJson`.
+          <OrderColorwaysFieldset
+            availableSizes={availableSizes}
+            techCards={techCards}
+            value={colorways}
+            onChange={onColorwaysChange}
+          />
         ) : (
           <SizePlanSelector
             allSizes={sortedSizes}

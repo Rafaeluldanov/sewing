@@ -452,6 +452,52 @@ export class OrdersService {
           finishedGoodsWarehouse: true,
         },
       });
+
+      // Фича «Расцветки» (FEATURE_COLORWAYS): создаём `OrderVariant` /
+      // `OrderVariantSize` в ТОЙ ЖЕ транзакции. Если фронт прислал явные
+      // расцветки (`dto.variants`) — из них; иначе одна расцветка #0 из
+      // цвета заказа + агрегата `items` (зеркало). Так у КАЖДОГО нового
+      // заказа всегда есть хотя бы одна расцветка — как у бэкфилл-миграции.
+      // `items` остаётся источником истины для производства/раскроя;
+      // расцветки — аддитивная деталь (Σ по цветам = агрегат items).
+      const variantInputs =
+        dto.variants && dto.variants.length > 0
+          ? dto.variants.map((v) => ({
+              color: v.color,
+              techCardId: v.techCardId ?? null,
+              sizes: v.sizes ?? [],
+            }))
+          : [
+              {
+                color: resolvedColor ?? '',
+                techCardId: null as string | null,
+                sizes: dto.items.map((i) => ({
+                  sizeId: i.sizeId,
+                  qtyPlan: i.qtyPlan,
+                })),
+              },
+            ];
+      for (let ordinal = 0; ordinal < variantInputs.length; ordinal += 1) {
+        const v = variantInputs[ordinal];
+        // Схлопываем дубли размеров и выкидываем нулевые строки.
+        const bySize = new Map<string, number>();
+        for (const s of v.sizes) {
+          bySize.set(s.sizeId, (bySize.get(s.sizeId) ?? 0) + s.qtyPlan);
+        }
+        const sizeRows = [...bySize.entries()]
+          .filter(([, q]) => q > 0)
+          .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan }));
+        await tx.orderVariant.create({
+          data: {
+            orderId: created.id,
+            ordinal,
+            color: v.color,
+            techCardId: v.techCardId,
+            sizes: { create: sizeRows },
+          },
+        });
+      }
+
       // Этап 2 «План операций на заказе» (см.
       // `docs/operation-time-norms-recon.md §11`): после фиксации
       // заказа и его items в той же транзакции считаем snapshot

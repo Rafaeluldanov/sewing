@@ -37,6 +37,7 @@ import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listClients } from '@/lib/clients-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
+import { isColorwaysEnabled } from '@/lib/feature-flags';
 import { listSizes } from '@/lib/orders-api';
 import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { listPatterns } from '@/lib/patterns-api';
@@ -162,6 +163,7 @@ export default async function AdminOrderNewPage() {
         companyDivisions={companyDivisions}
         warehouses={warehouses}
         today={today}
+        colorwaysEnabled={isColorwaysEnabled()}
       />
     </AdminPageShell>
   );
