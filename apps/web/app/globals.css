@@ -7345,14 +7345,62 @@ body:has(.admin-layout) .app-header__nav { display: none; }
   justify-content: center;
 }
 
-.admin-sidebar__nav { flex: 1 1 auto; min-height: 0; overflow-y: auto; }
-.admin-sidebar__nav ul {
+.admin-sidebar__nav {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+.admin-sidebar__nav ul,
+.admin-sidebar-mobile__panel ul {
   list-style: none;
   padding: 0;
   margin: 0;
   display: grid;
   gap: 2px;
 }
+
+/* Сворачиваемые группы разделов ------------------------------------------- */
+
+.admin-sidebar__group {
+  display: grid;
+  gap: 2px;
+  margin-top: 0.5rem;
+}
+
+.admin-sidebar__group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  width: 100%;
+  padding: 0.4rem 0.7rem 0.25rem;
+  background: none;
+  border: 0;
+  cursor: pointer;
+  color: var(--admin-muted);
+  font: inherit;
+  font-size: 0.7rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+.admin-sidebar__group-header:hover { color: var(--admin-text); }
+
+.admin-sidebar__group-title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.admin-sidebar__group-chevron {
+  flex: 0 0 auto;
+  color: var(--admin-muted);
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+.admin-sidebar__group-chevron--open { transform: rotate(0deg); }
 
 .admin-sidebar__link {
   display: flex;
@@ -7423,13 +7471,6 @@ body:has(.admin-layout) .app-header__nav { display: none; }
   border: 1px solid var(--admin-border);
   border-radius: 14px;
   box-shadow: var(--admin-shadow-soft);
-}
-.admin-sidebar-mobile__panel ul {
-  list-style: none;
-  padding: 0;
-  margin: 0;
-  display: grid;
-  gap: 2px;
 }
 
 @media (max-width: 900px) {
