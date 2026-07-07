@@ -17320,36 +17320,246 @@ body:has(.admin-layout) .app-header { display: none !important; }
  * Роли доступа сотрудника (фича «несколько ролей», /admin/employees/[id]).
  * Список чекбоксов всех assignable-ролей + radio «основная».
  * ======================================================================== */
-.admin-roles__list {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
-  gap: 0.35rem 1rem;
-  margin-top: 0.4rem;
+/* ===========================================================================
+ * «Роли сотрудников» (вкладка «Доступ») — обзор-список + чипы-переключатели.
+ * ======================================================================== */
+
+/* Акцентный read-only чип основной роли (поверх базового .admin-chip). */
+.admin-chip--primary {
+  background: var(--admin-primary-soft);
+  border-color: var(--admin-primary);
+  color: var(--admin-text);
 }
-.admin-roles__row {
+.admin-chip--primary .admin-chip__icon { color: var(--admin-primary); }
+
+.admin-role-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 12px 0 4px;
+  padding: 7px 12px;
+  border: 1px solid var(--admin-border);
+  border-radius: 10px;
+  background: var(--admin-surface);
+  color: var(--admin-muted);
+}
+.admin-role-search input {
+  flex: 1 1 auto;
+  min-width: 0;
+  border: 0;
+  background: none;
+  color: var(--admin-text);
+  font-size: 0.92rem;
+  outline: none;
+}
+.admin-role-search__count {
+  flex: 0 0 auto;
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
+
+.admin-role-rows {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+}
+.admin-role-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 2px;
+  border-top: 1px solid var(--admin-border);
+}
+.admin-role-row:first-child { border-top: 0; }
+.admin-role-row__name {
+  flex: 0 0 200px;
+  font-weight: 500;
+  color: var(--admin-text);
+}
+.admin-role-row__body { flex: 1 1 auto; min-width: 0; }
+.admin-role-row__edit { flex: 0 0 auto; }
+.admin-role-row--editing {
+  flex-direction: column;
+  align-items: stretch;
+}
+.admin-role-row--editing .admin-role-row__name {
+  flex: none;
+  margin-bottom: 6px;
+}
+@media (max-width: 640px) {
+  .admin-role-row { flex-wrap: wrap; }
+  .admin-role-row__name { flex-basis: 100%; }
+}
+
+/* Чипы-переключатели в редакторе. */
+.admin-role-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.admin-role-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 30px;
+  padding: 0 12px;
+  border-radius: 999px;
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  color: var(--admin-muted);
+  font-size: 0.85rem;
+}
+.admin-role-chip--on {
+  padding-right: 3px;
+  background: var(--admin-primary-soft);
+  border-color: var(--admin-primary-soft);
+  color: var(--admin-text);
+}
+.admin-role-chip--primary { border-color: var(--admin-primary); }
+.admin-role-chip__toggle {
+  border: 0;
+  background: none;
+  padding: 0;
+  margin: 0;
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+  line-height: 1;
+}
+.admin-role-chip__toggle:disabled { cursor: not-allowed; opacity: 0.55; }
+.admin-role-chip__star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--admin-muted);
+  cursor: pointer;
+}
+.admin-role-chip__star:hover { background: var(--admin-border); color: var(--admin-text); }
+.admin-role-chip__star:disabled { cursor: not-allowed; opacity: 0.55; }
+.admin-role-chip--primary .admin-role-chip__star { color: var(--admin-primary); }
+
+/* ===========================================================================
+ * Панель интеграции (вкладка «Интеграции»): статус, тумблер, подзаголовки.
+ * ======================================================================== */
+
+.admin-integration-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  font-size: 0.9rem;
+}
+.admin-integration-status--off {
+  background: var(--admin-soft);
+  color: var(--admin-muted);
+}
+.admin-integration-status--ok {
+  background: var(--admin-success-soft);
+  border-color: var(--admin-success);
+  color: var(--admin-success-fg);
+}
+.admin-integration-status--warn {
+  background: var(--admin-warning-soft);
+  border-color: var(--admin-warning);
+  color: var(--admin-warning-fg);
+}
+.admin-integration-status--error {
+  background: var(--admin-danger-soft);
+  border-color: var(--admin-danger);
+  color: var(--admin-danger-fg);
+}
+
+.admin-toggle-row {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 0.75rem;
-  padding: 0.25rem 0.1rem;
-  border-bottom: 1px solid var(--admin-border, rgba(148, 163, 184, 0.18));
-}
-.admin-roles__check,
-.admin-roles__primary {
-  display: inline-flex;
-  align-items: center;
-  gap: 0.4rem;
+  gap: 16px;
+  padding: 12px 14px;
+  border: 1px solid var(--admin-border);
+  border-radius: 12px;
+  background: var(--admin-surface);
   cursor: pointer;
-  font-size: 0.9rem;
 }
-.admin-roles__primary {
-  font-size: 0.8rem;
-  white-space: nowrap;
+.admin-toggle-row__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
 }
-.admin-roles__check input:disabled + span,
-.admin-roles__primary input:disabled + span {
-  opacity: 0.5;
-  cursor: not-allowed;
+
+/* Тумблер-свитч (checkbox, визуально скрытый над дорожкой). */
+.admin-switch {
+  position: relative;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 24px;
+}
+.admin-switch input[type='checkbox'] {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+.admin-switch__track {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: var(--admin-border);
+  transition: background 0.15s ease;
+}
+.admin-switch__thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+  transition: transform 0.15s ease;
+}
+.admin-switch input[type='checkbox']:checked ~ .admin-switch__track {
+  background: var(--admin-primary);
+}
+.admin-switch input[type='checkbox']:checked ~ .admin-switch__thumb {
+  transform: translateX(18px);
+}
+.admin-switch input[type='checkbox']:focus-visible ~ .admin-switch__track {
+  outline: 2px solid var(--admin-primary);
+  outline-offset: 2px;
+}
+
+.admin-subhead {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--admin-muted);
+}
+.admin-note {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--admin-muted);
+}
+.admin-hr {
+  border: 0;
+  border-top: 1px solid var(--admin-border);
+  margin: 18px 0 4px;
 }
 
 /* ===========================================================================

@@ -1,8 +1,8 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
-import { Save, ShieldCheck } from 'lucide-react';
+import { Pencil, Save, Search, ShieldCheck, Star, X, XCircle } from 'lucide-react';
 import {
   EMPLOYEE_ROLES,
   type EmployeeListItemDto,
@@ -19,10 +19,47 @@ interface Props {
   employees: EmployeeListItemDto[];
   /**
    * Может ли текущий пользователь выдавать/снимать роль ADMIN (= он сам
-   * ADMIN). Для SHOP_MANAGER строка ADMIN заблокирована (backend всё
-   * равно режет эскалацию привилегий).
+   * ADMIN). Для SHOP_MANAGER чип ADMIN заблокирован (backend всё равно
+   * режет эскалацию привилегий).
    */
   canAssignAdmin: boolean;
+}
+
+/** Роли сотрудника в порядке «основная → остальные» (без дублей). */
+function orderedRoles(employee: EmployeeListItemDto): string[] {
+  const set =
+    employee.roles && employee.roles.length > 0
+      ? employee.roles
+      : [employee.role];
+  return [employee.role, ...set.filter((r) => r !== employee.role)];
+}
+
+/** Read-only чипы ролей: основная — с ★ и акцентом. */
+function RoleChipsReadonly({ employee }: { employee: EmployeeListItemDto }) {
+  return (
+    <div className="admin-chip-list">
+      {orderedRoles(employee).map((r) => {
+        const isPrimary = r === employee.role;
+        return (
+          <span
+            key={r}
+            className={'admin-chip' + (isPrimary ? ' admin-chip--primary' : '')}
+          >
+            {isPrimary && (
+              <Star
+                className="admin-chip__icon"
+                size={13}
+                strokeWidth={1.6}
+                fill="currentColor"
+                aria-hidden
+              />
+            )}
+            {formatRole(r)}
+          </span>
+        );
+      })}
+    </div>
+  );
 }
 
 function SaveButton() {
@@ -33,131 +70,131 @@ function SaveButton() {
       className="admin-btn admin-btn--primary"
       disabled={pending}
     >
-      <Save size={16} strokeWidth={1.6} aria-hidden />
-      {pending ? 'Сохраняем…' : 'Сохранить роли'}
+      <Save size={15} strokeWidth={1.6} aria-hidden />
+      {pending ? 'Сохраняем…' : 'Сохранить'}
     </button>
   );
 }
 
 /**
- * Редактор ролей одного сотрудника: чекбоксы всех assignable-ролей +
- * radio «основная». Вынесен отдельным компонентом и монтируется заново
- * (через `key={employee.id}` у родителя) при смене сотрудника — так
- * `useFormState`/локальный стейт чекбоксов сбрасываются на нового.
+ * Инлайн-редактор ролей одного сотрудника. Роли — переключаемые чипы:
+ * клик по телу чипа включает/выключает доступ, ★ на выбранном чипе делает
+ * роль основной. Значения уходят в server action скрытыми input'ами
+ * (`roles` — много, `primaryRole` — один), поэтому disabled/ADMIN-логика
+ * не завязана на нативные form-контролы.
  */
 function EmployeeRolesEditor({
   employee,
   canAssignAdmin,
+  onDone,
 }: {
   employee: EmployeeListItemDto;
   canAssignAdmin: boolean;
+  onDone: () => void;
 }) {
-  const [selectedRoles, setSelectedRoles] = useState<Set<string>>(
-    () =>
-      new Set(
-        employee.roles && employee.roles.length > 0
-          ? employee.roles
-          : [employee.role],
-      ),
+  const [selected, setSelected] = useState<Set<string>>(
+    () => new Set(orderedRoles(employee)),
   );
-  const [primaryRole, setPrimaryRole] = useState<string>(employee.role);
+  const [primary, setPrimary] = useState<string>(employee.role);
 
-  const action = updateEmployeeRolesAction.bind(null, employee.id);
   const [state, formAction] = useFormState<UpdateEmployeeState, FormData>(
-    action,
+    updateEmployeeRolesAction.bind(null, employee.id),
     initialUpdateEmployeeState,
   );
 
-  function toggleRole(r: string) {
-    setSelectedRoles((prev) => {
-      if (prev.has(r)) {
-        if (r === primaryRole) return prev; // основную не снять
-        const next = new Set(prev);
-        next.delete(r);
-        return next;
-      }
+  // Успех → закрываем редактор. Обзор обновится сам: action ревалидирует
+  // /admin/company-settings, страница перечитает сотрудников.
+  useEffect(() => {
+    if (state.ok) onDone();
+  }, [state.ok, onDone]);
+
+  function toggle(r: string) {
+    setSelected((prev) => {
       const next = new Set(prev);
-      next.add(r);
+      if (next.has(r)) {
+        next.delete(r);
+        if (r === primary) {
+          // Сняли основную — переносим ★ на первую из оставшихся.
+          const fallback = [...next][0];
+          if (fallback) setPrimary(fallback);
+        }
+      } else {
+        next.add(r);
+      }
       return next;
     });
   }
 
-  function setPrimary(r: string) {
-    setSelectedRoles((prev) => {
-      const next = new Set(prev);
-      next.add(r);
-      return next;
-    });
-    setPrimaryRole(r);
+  function makePrimary(r: string) {
+    setSelected((prev) => (prev.has(r) ? prev : new Set(prev).add(r)));
+    setPrimary(r);
   }
 
   return (
-    <form action={formAction} className="admin-form">
-      <div className="admin-field admin-roles">
-        <div className="admin-roles__list">
-          {EMPLOYEE_ROLES.map((r) => {
-            const checked = selectedRoles.has(r);
-            const isPrimary = primaryRole === r;
-            const adminLocked = r === 'ADMIN' && !canAssignAdmin;
-            return (
-              <div key={r} className="admin-roles__row">
-                <label className="admin-roles__check">
-                  <input
-                    type="checkbox"
-                    name={adminLocked ? undefined : 'roles'}
-                    value={r}
-                    checked={checked}
-                    disabled={adminLocked}
-                    onChange={adminLocked ? undefined : () => toggleRole(r)}
+    <form action={formAction} className="admin-stack" style={{ gap: 10 }}>
+      <div className="admin-role-chips">
+        {EMPLOYEE_ROLES.map((r) => {
+          const on = selected.has(r);
+          const isPrimary = on && primary === r;
+          const adminLocked = r === 'ADMIN' && !canAssignAdmin;
+          return (
+            <span
+              key={r}
+              className={
+                'admin-role-chip' +
+                (on ? ' admin-role-chip--on' : '') +
+                (isPrimary ? ' admin-role-chip--primary' : '')
+              }
+            >
+              <button
+                type="button"
+                className="admin-role-chip__toggle"
+                disabled={adminLocked}
+                aria-pressed={on}
+                onClick={() => toggle(r)}
+              >
+                {formatRole(r)}
+              </button>
+              {on && (
+                <button
+                  type="button"
+                  className="admin-role-chip__star"
+                  disabled={adminLocked}
+                  aria-pressed={isPrimary}
+                  title={isPrimary ? 'Основная роль' : 'Сделать основной'}
+                  onClick={() => makePrimary(r)}
+                >
+                  <Star
+                    size={13}
+                    strokeWidth={1.6}
+                    fill={isPrimary ? 'currentColor' : 'none'}
+                    aria-hidden
                   />
-                  <span>{formatRole(r)}</span>
-                </label>
-                <label className="admin-roles__primary admin-muted">
-                  <input
-                    type="radio"
-                    name={adminLocked ? undefined : 'primaryRole'}
-                    value={r}
-                    checked={isPrimary}
-                    disabled={adminLocked || !checked}
-                    onChange={adminLocked ? undefined : () => setPrimary(r)}
-                  />
-                  <span>основная</span>
-                </label>
-                {adminLocked && checked && (
-                  <input type="hidden" name="roles" value="ADMIN" />
-                )}
-                {adminLocked && isPrimary && (
-                  <input type="hidden" name="primaryRole" value="ADMIN" />
-                )}
-              </div>
-            );
-          })}
-        </div>
-        <span className="admin-field__hint admin-muted">
-          Отметьте все роли, к которым у сотрудника есть доступ. «Основная»
-          определяет рабочий экран по умолчанию; переключаться между
-          участками сотрудник может сканом рабочего места.
-          {!canAssignAdmin
-            ? ' Роль «Администратор» назначает только администратор.'
-            : ''}
-        </span>
+                </button>
+              )}
+            </span>
+          );
+        })}
       </div>
 
-      <div className="admin-actions-row">
-        <SaveButton />
-      </div>
+      {/* Значения для server action */}
+      {[...selected].map((r) => (
+        <input key={r} type="hidden" name="roles" value={r} />
+      ))}
+      <input type="hidden" name="primaryRole" value={primary} />
 
-      {state.successMessage && (
-        <div role="status" className="admin-muted" style={{ fontSize: '0.88rem' }}>
-          {state.successMessage}
-        </div>
-      )}
+      <span className="admin-field__hint admin-muted">
+        Клик по роли — доступ вкл/выкл. ★ — основная роль (рабочий экран по
+        умолчанию); переключаться между участками сотрудник может сканом
+        рабочего места.
+        {!canAssignAdmin
+          ? ' Роль «Администратор» назначает только администратор.'
+          : ''}
+      </span>
+
       {state.error && (
-        <div
-          role="alert"
-          style={{ color: 'var(--admin-danger-fg)', fontSize: '0.88rem' }}
-        >
-          {state.error}
+        <div className="error-box" role="alert">
+          <XCircle size={16} strokeWidth={1.6} aria-hidden /> {state.error}
           {state.errorRequestId && (
             <span className="admin-muted" style={{ marginLeft: 6 }}>
               req: <code>{state.errorRequestId}</code>
@@ -165,19 +202,32 @@ function EmployeeRolesEditor({
           )}
         </div>
       )}
+
+      <div className="admin-actions-row">
+        <SaveButton />
+        <button
+          type="button"
+          className="admin-btn admin-btn--ghost"
+          onClick={onDone}
+        >
+          <X size={15} strokeWidth={1.6} aria-hidden />
+          Отмена
+        </button>
+      </div>
     </form>
   );
 }
 
 /**
- * Секция «Роли сотрудников» в «Настройках компании»
- * (`/admin/company-settings`). По ТЗ редактирование ролей живёт в меню
- * настроек, а не в карточке сотрудника: выбираем сотрудника из списка и
- * прикрепляем к нему роли (несколько ролей, фича 18.06.2026).
+ * Секция «Роли сотрудников» в «Настройках компании» (вкладка «Доступ»).
+ * По ТЗ редактирование ролей живёт в настройках, а не в карточке
+ * сотрудника.
  *
- * Источник истины — backend `PATCH /api/employees/:id` (поля
- * `role`/`roles`). RBAC (`SHOP_MANAGER`/`ADMIN`, запрет эскалации
- * ADMIN, защита последнего админа) — на сервере.
+ * UX: обзор-список всех активных сотрудников — сразу видно, у кого какие
+ * роли (чипы, ★ = основная). Поиск по имени; правка — инлайн по кнопке
+ * «Изменить» (одна строка за раз). Источник истины — backend
+ * `PATCH /api/employees/:id` (`role`/`roles`); RBAC (SHOP_MANAGER/ADMIN,
+ * запрет эскалации ADMIN, защита последнего админа) — на сервере.
  */
 export function EmployeeRolesSection({ employees, canAssignAdmin }: Props) {
   const active = useMemo(
@@ -187,47 +237,82 @@ export function EmployeeRolesSection({ employees, canAssignAdmin }: Props) {
         .sort((a, b) => a.fullName.localeCompare(b.fullName, 'ru')),
     [employees],
   );
-  const [selectedId, setSelectedId] = useState<string>('');
-  const selected = active.find((e) => e.id === selectedId) ?? null;
+
+  const [query, setQuery] = useState('');
+  const [editingId, setEditingId] = useState<string>('');
+  const stopEditing = useCallback(() => setEditingId(''), []);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return active;
+    return active.filter((e) => e.fullName.toLowerCase().includes(q));
+  }, [active, query]);
 
   return (
     <AdminCard>
       <AdminSectionHeader
         icon={<ShieldCheck size={18} strokeWidth={1.6} aria-hidden />}
         title="Роли сотрудников"
+        hint="Доступы каждого сотрудника. Основная роль (★) — рабочий экран по умолчанию."
       />
-      <p className="admin-muted" style={{ marginTop: 0, fontSize: '0.9rem' }}>
-        Выберите сотрудника и прикрепите роли доступа. Одна из ролей —
-        основная (рабочий экран по умолчанию).
-      </p>
 
-      <div className="admin-field">
-        <label htmlFor="role-employee">Сотрудник</label>
-        <select
-          id="role-employee"
-          value={selectedId}
-          onChange={(e) => setSelectedId(e.target.value)}
-        >
-          <option value="">— выберите сотрудника —</option>
-          {active.map((e) => (
-            <option key={e.id} value={e.id}>
-              {e.fullName} · {formatRole(e.role)}
-              {e.roles && e.roles.length > 1 ? ` (+${e.roles.length - 1})` : ''}
-            </option>
-          ))}
-        </select>
+      <div className="admin-role-search">
+        <Search size={16} strokeWidth={1.6} aria-hidden />
+        <input
+          type="search"
+          placeholder="Поиск по имени…"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          aria-label="Поиск сотрудника"
+        />
+        <span className="admin-muted admin-role-search__count">
+          {filtered.length} из {active.length}
+        </span>
       </div>
 
-      {selected ? (
-        <EmployeeRolesEditor
-          key={selected.id}
-          employee={selected}
-          canAssignAdmin={canAssignAdmin}
-        />
-      ) : (
-        <p className="admin-muted" style={{ fontSize: '0.88rem' }}>
-          Сотрудник не выбран.
+      {filtered.length === 0 ? (
+        <p className="admin-muted" style={{ fontSize: '0.9rem', marginTop: 8 }}>
+          {active.length === 0
+            ? 'Активных сотрудников нет.'
+            : 'Никого не нашлось.'}
         </p>
+      ) : (
+        <ul className="admin-role-rows">
+          {filtered.map((e) => {
+            const editing = editingId === e.id;
+            return (
+              <li
+                key={e.id}
+                className={
+                  'admin-role-row' + (editing ? ' admin-role-row--editing' : '')
+                }
+              >
+                <div className="admin-role-row__name">{e.fullName}</div>
+                <div className="admin-role-row__body">
+                  {editing ? (
+                    <EmployeeRolesEditor
+                      employee={e}
+                      canAssignAdmin={canAssignAdmin}
+                      onDone={stopEditing}
+                    />
+                  ) : (
+                    <RoleChipsReadonly employee={e} />
+                  )}
+                </div>
+                {!editing && (
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn--ghost admin-role-row__edit"
+                    onClick={() => setEditingId(e.id)}
+                  >
+                    <Pencil size={14} strokeWidth={1.6} aria-hidden />
+                    Изменить
+                  </button>
+                )}
+              </li>
+            );
+          })}
+        </ul>
       )}
     </AdminCard>
   );
