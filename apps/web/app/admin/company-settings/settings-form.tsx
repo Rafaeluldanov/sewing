@@ -203,6 +203,102 @@ export function CompanySettingsForm({
       </AdminCard>
 
       <AdminCard>
+        <AdminSectionHeader title="Банковские реквизиты" />
+        <div className="admin-form-grid">
+          <div className="admin-field">
+            <label htmlFor="company-bankName">Название банка</label>
+            <input
+              id="company-bankName"
+              name="bankName"
+              type="text"
+              defaultValue={settings.bankName ?? ''}
+              maxLength={COMPANY_SETTINGS_BANK_NAME_MAX_LENGTH}
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="company-bik">БИК</label>
+            <input
+              id="company-bik"
+              name="bik"
+              type="text"
+              inputMode="numeric"
+              defaultValue={settings.bik ?? ''}
+              maxLength={9}
+              placeholder="9 цифр"
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="company-settlementAccount">Расчётный счёт</label>
+            <input
+              id="company-settlementAccount"
+              name="settlementAccount"
+              type="text"
+              inputMode="numeric"
+              defaultValue={settings.settlementAccount ?? ''}
+              maxLength={20}
+              placeholder="20 цифр"
+            />
+          </div>
+          <div className="admin-field">
+            <label htmlFor="company-correspondentAccount">
+              Корреспондентский счёт
+            </label>
+            <input
+              id="company-correspondentAccount"
+              name="correspondentAccount"
+              type="text"
+              inputMode="numeric"
+              defaultValue={settings.correspondentAccount ?? ''}
+              maxLength={20}
+              placeholder="20 цифр"
+            />
+          </div>
+        </div>
+      </AdminCard>
+
+      {state.error && (
+        <div className="error-box" role="alert">
+          <XCircle size={16} strokeWidth={1.6} aria-hidden /> {state.error}
+        </div>
+      )}
+      {state.ok && state.successMessage && (
+        <div className="success-box" role="status">
+          <CheckCircle size={16} strokeWidth={1.6} aria-hidden />{' '}
+          {state.successMessage}
+        </div>
+      )}
+
+      <div className="admin-actions-row">
+        <SubmitButton />
+      </div>
+    </form>
+  );
+}
+
+/**
+ * Отдельная форма блока «Материалы и склад» — два глобальных флага
+ * учётной политики. Вынесена из `CompanySettingsForm` в собственный
+ * `<form>`, потому что на вкладке настроек живёт в теме «Подразделения
+ * и склад» (рядом с переопределениями по цехам), а не среди реквизитов.
+ *
+ * Шлёт в тот же `updateCompanySettingsAction`. Action пофайлово-частичный:
+ * строковые поля без значения в `FormData` (null) не трогаются, а булевы
+ * флаги — только при hidden-маркере `${name}__present`. Поэтому сохранение
+ * флагов не затирает реквизиты, а сохранение реквизитов — флаги.
+ */
+export function MaterialStockSettingsForm({
+  settings,
+}: {
+  settings: CompanySettingsDto;
+}) {
+  const [state, formAction] = useFormState<
+    UpdateCompanySettingsState,
+    FormData
+  >(updateCompanySettingsAction, initialUpdateCompanySettingsState);
+
+  return (
+    <form action={formAction} className="admin-form admin-stack">
+      <AdminCard>
         <AdminSectionHeader title="Материалы и склад" />
         {/*
           Hidden-marker-ы, чтобы server action мог отличить «чекбокс
@@ -257,60 +353,6 @@ export function CompanySettingsForm({
             при недостатке остатка. При включённом автосписании выдача кроя
             тоже может быть заблокирована.
           </span>
-        </div>
-      </AdminCard>
-
-      <AdminCard>
-        <AdminSectionHeader title="Банковские реквизиты" />
-        <div className="admin-form-grid">
-          <div className="admin-field">
-            <label htmlFor="company-bankName">Название банка</label>
-            <input
-              id="company-bankName"
-              name="bankName"
-              type="text"
-              defaultValue={settings.bankName ?? ''}
-              maxLength={COMPANY_SETTINGS_BANK_NAME_MAX_LENGTH}
-            />
-          </div>
-          <div className="admin-field">
-            <label htmlFor="company-bik">БИК</label>
-            <input
-              id="company-bik"
-              name="bik"
-              type="text"
-              inputMode="numeric"
-              defaultValue={settings.bik ?? ''}
-              maxLength={9}
-              placeholder="9 цифр"
-            />
-          </div>
-          <div className="admin-field">
-            <label htmlFor="company-settlementAccount">Расчётный счёт</label>
-            <input
-              id="company-settlementAccount"
-              name="settlementAccount"
-              type="text"
-              inputMode="numeric"
-              defaultValue={settings.settlementAccount ?? ''}
-              maxLength={20}
-              placeholder="20 цифр"
-            />
-          </div>
-          <div className="admin-field">
-            <label htmlFor="company-correspondentAccount">
-              Корреспондентский счёт
-            </label>
-            <input
-              id="company-correspondentAccount"
-              name="correspondentAccount"
-              type="text"
-              inputMode="numeric"
-              defaultValue={settings.correspondentAccount ?? ''}
-              maxLength={20}
-              placeholder="20 цифр"
-            />
-          </div>
         </div>
       </AdminCard>
 
