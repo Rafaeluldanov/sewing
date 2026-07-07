@@ -322,7 +322,19 @@ export function AdminCreateOrderForm({
     [availableSizes],
   );
 
+  // Все размеры справочника. Колонки расцветок могут выходить за размеры
+  // лекала (кнопка «+» в блоке расцветок), поэтому агрегат `qty[]` и
+  // `variantsJson` считаем по этому набору, а не только по размерам лекала.
+  const allSizeIds = useMemo(
+    () => new Set(sortedSizes.map((s) => s.id)),
+    [sortedSizes],
+  );
+
   useEffect(() => {
+    // В режиме расцветок количества полностью выводятся из `colorways`
+    // (эффект ниже) и могут включать доп.размеры сверх лекала — здесь их
+    // не подрезаем.
+    if (colorwaysEnabled) return;
     setQuantities((prev) => {
       let changed = false;
       const next: Record<string, number> = {};
@@ -335,7 +347,7 @@ export function AdminCreateOrderForm({
       }
       return changed ? next : prev;
     });
-  }, [availableSizeIds]);
+  }, [availableSizeIds, colorwaysEnabled]);
 
   // Фича «Расцветки»: расцветки → агрегат заказа. `qty[<sizeId>]` = Σ по
   // цветам (только доступные размеры и qty>0), цвет заказа = первый
@@ -347,14 +359,14 @@ export function AdminCreateOrderForm({
     const agg: Record<string, number> = {};
     for (const cw of colorways) {
       for (const [sizeId, qty] of Object.entries(cw.sizes)) {
-        if (availableSizeIds.has(sizeId) && qty > 0) {
+        if (allSizeIds.has(sizeId) && qty > 0) {
           agg[sizeId] = (agg[sizeId] ?? 0) + qty;
         }
       }
     }
     setQuantities(agg);
     setColor(colorways.find((c) => c.color.trim())?.color.trim() ?? '');
-  }, [colorways, colorwaysEnabled, availableSizeIds]);
+  }, [colorways, colorwaysEnabled, allSizeIds]);
 
   // Полезная нагрузка `variantsJson` — только непустые расцветки (цвет
   // задан) и размеры с qty>0. Пусто → не шлём (бэк заведёт расцветку #0).
@@ -365,11 +377,11 @@ export function AdminCreateOrderForm({
           color: cw.color.trim(),
           techCardId: cw.techCardId,
           sizes: Object.entries(cw.sizes)
-            .filter(([sid, q]) => availableSizeIds.has(sid) && q > 0)
+            .filter(([sid, q]) => allSizeIds.has(sid) && q > 0)
             .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan })),
         }))
         .filter((cw) => cw.color.length > 0 && cw.sizes.length > 0),
-    [colorways, availableSizeIds],
+    [colorways, allSizeIds],
   );
 
   const handleQuantitiesChange = useCallback(
@@ -1326,6 +1338,59 @@ function ProductCreateTab({
           / CREATED / EMPTY скрываем — данные либо заполняются внутри
           inline-формы, либо ещё не нужны. */}
       {isSelecting && (<>
+      <AdminCard className="admin-order-card admin-order-card--sizes">
+        <header className="admin-order-card__header admin-order-card__header--with-meta">
+          <h2 className="admin-order-card__title">План по размерам</h2>
+          <span
+            className={
+              'admin-order-card__meta' +
+              (sizesTotal > 0 ? ' admin-order-card__meta--active' : '')
+            }
+            aria-live="polite"
+          >
+            <span className="admin-order-card__meta-label">Итого:</span>{' '}
+            <span className="admin-order-card__meta-value">{totalLabel}</span>
+          </span>
+        </header>
+
+        {sortedSizes.length === 0 ? (
+          <p className="admin-muted" style={{ margin: 0 }}>
+            Справочник размеров пуст. Добавьте размеры, прежде чем создавать
+            заказ.
+          </p>
+        ) : colorwaysEnabled ? (
+          // Фича «Расцветки»: цвет × размер вместо одиночной размерной
+          // матрицы. Родитель считает из этого агрегат `qty[]` и `variantsJson`.
+          <OrderColorwaysFieldset
+            availableSizes={availableSizes}
+            allSizes={sortedSizes}
+            techCards={techCards}
+            value={colorways}
+            onChange={onColorwaysChange}
+          />
+        ) : (
+          <SizePlanSelector
+            allSizes={sortedSizes}
+            availableSizes={availableSizes}
+            quantities={quantities}
+            onQuantitiesChange={onQuantitiesChange}
+            selectedPatternName={selectedPattern?.name ?? null}
+            selectedPatternArticle={selectedPattern?.article ?? null}
+          />
+        )}
+
+        <div className="admin-size-plan__hidden-inputs" hidden aria-hidden>
+          {sortedSizes.map((s) => (
+            <input
+              key={s.id}
+              type="hidden"
+              name={`qty[${s.id}]`}
+              value={String(quantities[s.id] ?? 0)}
+            />
+          ))}
+        </div>
+      </AdminCard>
+
       <AdminCard className="admin-order-card admin-order-card--production">
         <header className="admin-order-card__header">
           <span className="admin-order-card__icon admin-order-card__icon--blue">
@@ -1335,17 +1400,22 @@ function ProductCreateTab({
         </header>
 
         <div className="admin-form-grid">
-          <div className="admin-field">
-            <label htmlFor="techCardId">Техкарта</label>
-            <TechCardCombobox
-              id="techCardId"
-              name="techCardId"
-              value={techCardId}
-              onChange={onTechCardIdChange}
-              techCards={techCards}
-              categories={patternCategories}
-            />
-          </div>
+          {/* Фича «Расцветки»: техкарта выбирается на КАЖДЫЙ цвет в блоке
+              «План по размерам», поэтому общий выбор техкарты здесь прячем,
+              чтобы не дублировать. Без расцветок — обычный выбор техкарты. */}
+          {!colorwaysEnabled && (
+            <div className="admin-field">
+              <label htmlFor="techCardId">Техкарта</label>
+              <TechCardCombobox
+                id="techCardId"
+                name="techCardId"
+                value={techCardId}
+                onChange={onTechCardIdChange}
+                techCards={techCards}
+                categories={patternCategories}
+              />
+            </div>
+          )}
 
           <div className="admin-field">
             <label htmlFor="routeTemplateId">Маршрут</label>
@@ -1418,57 +1488,6 @@ function ProductCreateTab({
         />
       </AdminCard>
 
-      <AdminCard className="admin-order-card admin-order-card--sizes">
-        <header className="admin-order-card__header admin-order-card__header--with-meta">
-          <h2 className="admin-order-card__title">План по размерам</h2>
-          <span
-            className={
-              'admin-order-card__meta' +
-              (sizesTotal > 0 ? ' admin-order-card__meta--active' : '')
-            }
-            aria-live="polite"
-          >
-            <span className="admin-order-card__meta-label">Итого:</span>{' '}
-            <span className="admin-order-card__meta-value">{totalLabel}</span>
-          </span>
-        </header>
-
-        {sortedSizes.length === 0 ? (
-          <p className="admin-muted" style={{ margin: 0 }}>
-            Справочник размеров пуст. Добавьте размеры, прежде чем создавать
-            заказ.
-          </p>
-        ) : colorwaysEnabled ? (
-          // Фича «Расцветки»: цвет × размер вместо одиночной размерной
-          // матрицы. Родитель считает из этого агрегат `qty[]` и `variantsJson`.
-          <OrderColorwaysFieldset
-            availableSizes={availableSizes}
-            techCards={techCards}
-            value={colorways}
-            onChange={onColorwaysChange}
-          />
-        ) : (
-          <SizePlanSelector
-            allSizes={sortedSizes}
-            availableSizes={availableSizes}
-            quantities={quantities}
-            onQuantitiesChange={onQuantitiesChange}
-            selectedPatternName={selectedPattern?.name ?? null}
-            selectedPatternArticle={selectedPattern?.article ?? null}
-          />
-        )}
-
-        <div className="admin-size-plan__hidden-inputs" hidden aria-hidden>
-          {sortedSizes.map((s) => (
-            <input
-              key={s.id}
-              type="hidden"
-              name={`qty[${s.id}]`}
-              value={String(quantities[s.id] ?? 0)}
-            />
-          ))}
-        </div>
-      </AdminCard>
       </>)}
     </>
   );
