@@ -29,6 +29,7 @@
     "./clients": "./src/clients.ts",
     "./company-settings": "./src/company-settings.ts",
     "./company-divisions": "./src/company-divisions.ts",
+    "./integration": "./src/integration.ts",
     "./costs": "./src/costs.ts",
     "./dashboard": "./src/dashboard.ts",
     "./printers": "./src/printers.ts",

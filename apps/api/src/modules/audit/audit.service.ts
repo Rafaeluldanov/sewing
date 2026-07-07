@@ -222,6 +222,17 @@ export type AuditEntityType =
    */
   | 'COMPANY_SETTINGS'
   /**
+   * Настройки интеграции с внешним ERP upgifts (singleton, см.
+   * `apps/api/src/modules/integrations/*`,
+   * `prisma/schema.prisma::IntegrationSettings`,
+   * `docs/upgifts-integration.md`). Событие:
+   *   - `INTEGRATION_SETTINGS_UPDATED` — менеджер сохранил настройки
+   *     подключения к upgifts. `entityId` всегда `"default"`; payload
+   *     содержит список изменённых полей (без секретов — пароль в
+   *     audit не пишется).
+   */
+  | 'INTEGRATION_SETTINGS'
+  /**
    * Подразделения компании (управленческий справочник, см.
    * `apps/api/src/modules/company-settings/company-divisions.*`,
    * `prisma/schema.prisma::CompanyDivision`). События:

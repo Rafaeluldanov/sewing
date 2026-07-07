@@ -54,6 +54,10 @@ services:
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY:-}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
       VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+      # Модуль «Интеграции» (upgifts): ключ AES-256-GCM для шифрования
+      # пароля сервисного аккаунта at-rest. Без него сохранение пароля
+      # интеграции отклоняется (см. secret-box.ts). Задаётся в .env.dev.
+      INTEGRATION_SECRET_KEY: ${INTEGRATION_SECRET_KEY:-}
     depends_on:
       - db
     networks:

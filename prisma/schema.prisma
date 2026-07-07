@@ -5715,6 +5715,64 @@ model CompanySettings {
 }
 
 // ---------------------------------------------------------------------------
+// IntegrationSettings — singleton-настройки интеграции с внешним ERP
+// upgifts (erp.upgifts.ru). Полный дизайн — `docs/upgifts-integration.md`.
+// ---------------------------------------------------------------------------
+//
+// Фаза 1: подключение к upgifts (сервисный аккаунт per-org) + флаг
+// включения. Топология v1 — sewing выступает клиентом REST API upgifts
+// (JWT: `POST /auth/token` по tenant+email+password → Bearer). Пароль
+// хранится ЗАШИФРОВАННЫМ (`upgiftsPasswordEnc`, AES-256-GCM на env
+// `INTEGRATION_SECRET_KEY`, см.
+// `apps/api/src/modules/integrations/secret-box.ts`) — первый секрет
+// проекта, шифруемый at-rest. Наружу (в `IntegrationSettingsDto`) пароль
+// НЕ отдаётся — только флаг `hasPassword`.
+//
+// Настройки живут в БД тенанта (DB-per-tenant): каждый тенант держит
+// свою связку с upgifts независимо.
+model IntegrationSettings {
+  /// Всегда `"default"` — singleton (одна связка с upgifts на тенант).
+  id String @id @default("default")
+
+  /// Marker singleton-инварианта (`@unique` ⇒ максимум одна строка).
+  singleton Boolean @unique @default(true)
+
+  /// Мастер-выключатель интеграции. `true` разрешён сервисом только при
+  /// заполненных baseUrl+tenant+email+password (проверка в
+  /// `IntegrationsService.update`). При `false` исходящие вызовы к
+  /// upgifts не делаются.
+  upgiftsEnabled Boolean @default(false)
+
+  /// Base URL API upgifts (без завершающего слэша), напр.
+  /// `https://erp.upgifts.ru` или dev `http://159.194.208.75:8000`.
+  upgiftsBaseUrl String?
+
+  /// Идентификатор тенанта upgifts (поле `tenant` в `POST /auth/token`).
+  upgiftsTenant String?
+
+  /// Email сервисного аккаунта upgifts.
+  upgiftsEmail String?
+
+  /// Пароль сервисного аккаунта, ЗАШИФРОВАННЫЙ AES-256-GCM
+  /// (`v1.<base64(iv|tag|ciphertext)>`). Никогда не отдаётся наружу;
+  /// расшифровывается только в рантайме исходящего вызова.
+  upgiftsPasswordEnc String?
+
+  /// `organization_id` upgifts по умолчанию (нужен части операций, напр.
+  /// запись себестоимости). Опционален на Фазе 1.
+  upgiftsOrganizationId String?
+
+  /// Момент последней УСПЕШНОЙ проверки соединения (`GET /auth/me`).
+  lastConnectionOkAt DateTime?
+
+  /// Текст последней ошибки соединения (null, если последняя проверка ок).
+  lastConnectionError String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+// ---------------------------------------------------------------------------
 // CompanyDivision — master-справочник «Подразделения компании».
 // ---------------------------------------------------------------------------
 //

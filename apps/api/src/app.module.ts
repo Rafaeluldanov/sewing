@@ -64,6 +64,7 @@ import { BootstrapModule } from './modules/bootstrap/bootstrap.module.js';
 import { PushModule } from './modules/push/push.module.js';
 import { TreasuryModule } from './modules/treasury/treasury.module.js';
 import { SuperadminModule } from './modules/superadmin/superadmin.module.js';
+import { IntegrationsModule } from './modules/integrations/integrations.module.js';
 
 @Module({
   imports: [
@@ -132,6 +133,7 @@ import { SuperadminModule } from './modules/superadmin/superadmin.module.js';
     BootstrapModule,
     PushModule,
     SuperadminModule,
+    IntegrationsModule,
   ],
 })
 export class AppModule {}

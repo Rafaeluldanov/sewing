@@ -7773,6 +7773,8 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .admin-field > input[type='number'],
 .admin-field > input[type='password'],
 .admin-field > input[type='email'],
+.admin-field > input[type='url'],
+.admin-field > input[type='tel'],
 .admin-field > input[type='date'],
 .admin-field > select,
 .admin-field > textarea {

@@ -1,0 +1,21 @@
+import { Module } from '@nestjs/common';
+import { IntegrationsController } from './integrations.controller.js';
+import { IntegrationsService } from './integrations.service.js';
+import { UpgiftsClient } from './upgifts-client.service.js';
+
+/**
+ * Модуль «Интеграции» — связь швейного ERP с внешним ERP upgifts
+ * (erp.upgifts.ru). Фаза 1: настройки подключения (сервисный аккаунт
+ * per-org) + проверка соединения. Полный дизайн + фазы —
+ * `docs/upgifts-integration.md`.
+ *
+ * Топология v1: sewing — клиент REST API upgifts (JWT). Своя inbound-API
+ * не поднимается. Пароль сервисного аккаунта шифруется at-rest
+ * (`secret-box.ts`). `AuditService` берётся из глобального `AuditModule`.
+ */
+@Module({
+  controllers: [IntegrationsController],
+  providers: [IntegrationsService, UpgiftsClient],
+  exports: [IntegrationsService, UpgiftsClient],
+})
+export class IntegrationsModule {}
