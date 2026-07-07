@@ -606,7 +606,13 @@ function OrdersTab({ groups }: { groups: ProductionCostOrderGroupDto[] }) {
             {groups.map((g) => (
               <tr key={g.orderId}>
                 <td data-label="Заказ">
-                  <strong>{g.orderNumber}</strong>
+                  <Link
+                    href={`/admin/production-cost/order/${g.orderId}`}
+                    className="admin-table__primary"
+                    title="Открыть документ производства (план → факт)"
+                  >
+                    <strong>{g.orderNumber}</strong>
+                  </Link>
                 </td>
                 <td data-label="Клиент">{g.clientName ?? '—'}</td>
                 <td data-label="Номенклатура">

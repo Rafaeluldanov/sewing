@@ -58,6 +58,7 @@
     "./order-production-balance": "./src/order-production-balance.ts",
     "./production-cost": "./src/production-cost.ts",
     "./order-actual-materials": "./src/order-actual-materials.ts",
+    "./order-production-document": "./src/order-production-document.ts",
     "./order-extra-costs": "./src/order-extra-costs.ts",
     "./treasury": "./src/treasury.ts",
     "./superadmin": "./src/superadmin.ts",

@@ -17,6 +17,7 @@ import { ProductionCostV2Controller } from './production-cost-v2.controller.js';
 import { ProductionCostV2Service } from './production-cost-v2.service.js';
 import { OrderActualMaterialsController } from './order-actual-materials.controller.js';
 import { OrderActualMaterialsService } from './order-actual-materials.service.js';
+import { OrderProductionDocumentService } from './order-production-document.service.js';
 
 @Module({
   controllers: [
@@ -30,6 +31,7 @@ import { OrderActualMaterialsService } from './order-actual-materials.service.js
     PassportRealCostService,
     ProductionCostV2Service,
     OrderActualMaterialsService,
+    OrderProductionDocumentService,
   ],
   exports: [
     CostsService,
