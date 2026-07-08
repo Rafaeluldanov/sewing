@@ -241,8 +241,23 @@ export class OrdersService {
     }
     // Tech card MVP (ADR-0022): аналогично route — soft-protection
     // против UI, который раздаёт неактивные значения.
-    if (dto.techCardId) {
-      await this.techCards.assertTechCardUsable(dto.techCardId);
+    //
+    // Фича «Расцветки» (FEATURE_COLORWAYS): форма создания при
+    // включённых расцветках ПРЯЧЕТ общий выбор техкарты и раздаёт её
+    // на каждый цвет (`dto.variants[].techCardId`), поэтому order-level
+    // `dto.techCardId` приходит пустым. Но и гейт `startCalculation`, и
+    // расчёт `WorkshopNeedsService` (материалы считаются по
+    // `order.techCard.materialLines`) смотрят ИМЕННО на order-level
+    // `Order.techCardId` — без него любой расцветочный заказ упирался в
+    // `ORDER_TECH_CARD_REQUIRED` и не мог уйти в расчёт. Поэтому, если
+    // общий techCardId не задан, поднимаем его из первой расцветки с
+    // техкартой (обычно все расцветки несут одну и ту же техкарту).
+    const resolvedTechCardId =
+      dto.techCardId ??
+      dto.variants?.find((v) => v.techCardId)?.techCardId ??
+      null;
+    if (resolvedTechCardId) {
+      await this.techCards.assertTechCardUsable(resolvedTechCardId);
     }
     // Client ref MVP: при наличии clientId проверяем существование и
     // активность клиента до открытия транзакции — по тем же причинам,

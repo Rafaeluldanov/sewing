@@ -745,23 +745,30 @@ export async function startOrderAction(id: string): Promise<void> {
  * обёртку `startCalculationOrder`. Ошибки backend-а (адресные коды
  * `ORDER_PATTERN_REQUIRED` / `ORDER_TECH_CARD_REQUIRED` /
  * `ORDER_ITEMS_REQUIRED` / `ORDER_INVALID_STATUS_TRANSITION` /
- * `WORKSHOP_NEEDS_ALREADY_REVIEWED`) пробрасываются через
- * `explainApiError`. Client-component сам решает, как их показать.
+ * `WORKSHOP_NEEDS_ALREADY_REVIEWED`) отдаём client-у как `{ error }`,
+ * а НЕ `throw`: в продовой сборке Next.js вырезает message брошенных
+ * из server-action ошибок и подменяет generic-ом «An error occurred
+ * in the Server Components render… digest», из-за чего осмысленный
+ * текст `explainApiError` до пользователя не долетал (см. кнопку
+ * `StartCalculationButton`). Возврат `{ error }` сохраняет текст.
  *
  * После успеха ревалидируем как новый admin-роут карточки заказа
  * (там кнопка живёт), так и список и легаси-карточку.
  */
-export async function startCalculationOrderAction(id: string): Promise<void> {
+export async function startCalculationOrderAction(
+  id: string,
+): Promise<{ ok?: boolean; error?: string }> {
   try {
     await startCalculationOrder(id);
   } catch (e) {
     if (isNextRedirect(e)) throw e;
-    throw new Error(explainApiError(e));
+    return { error: explainApiError(e) };
   }
   revalidatePath('/orders');
   revalidatePath(`/orders/${id}`);
   revalidatePath('/admin/orders');
   revalidatePath(`/admin/orders/${id}`);
+  return { ok: true };
 }
 
 export async function completeOrderAction(id: string): Promise<void> {

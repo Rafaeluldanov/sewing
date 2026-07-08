@@ -41,8 +41,16 @@ export function StartCalculationButton({ orderId }: Props) {
     setError(null);
     startTransition(async () => {
       try {
-        await startCalculationOrderAction(orderId);
+        // Action возвращает `{ error }` (а не throw) — в проде Next.js
+        // вырезает текст брошенных из server-action ошибок, поэтому
+        // осмысленное сообщение приходит только через возвращаемое поле.
+        const result = await startCalculationOrderAction(orderId);
+        if (result?.error) {
+          setError(result.error);
+        }
       } catch (e) {
+        // Фолбэк на непредвиденный сбой транспорта (не бизнес-ошибку):
+        // текст всё равно будет generic-ом из-за prod-редакции.
         setError(
           e instanceof Error
             ? e.message
