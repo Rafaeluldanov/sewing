@@ -3861,9 +3861,23 @@ export class OrdersService {
    *      подняться на заказ; (б) гейт `startCalculation` пропускает
    *      при техкарте order-level ИЛИ у любой расцветки. Пишем только
    *      если значение реально меняется (idempotent).
-   *   2. Пересборка снимка `OrderMaterialRequirement[]` из текущих
-   *      техкарт расцветок.
-   *   3. Пересчёт потребностей — ТОЛЬКО в `CALCULATION` (в `DRAFT` их
+   *   2. **Пересборка агрегата `OrderItem` = Σ `OrderVariantSize.qtyPlan`
+   *      по размеру** (union размеров всех расцветок). `OrderItem` —
+   *      объявленный «источник истины для производства/раскроя»; правки
+   *      расцветок раньше его не трогали, из-за чего «общий план по
+   *      размерам» устаревал (жалоба «не обновляется общий план после
+   *      корректировки количества по размеру»). От свежего `OrderItem`
+   *      производны: карточка «План по размерам», раскрой
+   *      (`CuttingTaskSizeRow`), баланс/payroll, потребность нанесений
+   *      (`OrderApplication` order-level) и single-variant fast-path
+   *      снимка/потребности — все они читали устаревший агрегат
+   *      (жалоба «потребность неправильно считается»).
+   *   3. Пересборка снимка `OrderMaterialRequirement[]` (ПОСЛЕ п.2 —
+   *      single-variant fast-path читает `OrderItem`) + пересчёт
+   *      операционного плана (`operationCostPlanRub`/`Sec`) и снимка
+   *      шагов маршрута (`recalculateAndWrite` + `syncOrderRouteSteps`),
+   *      которые тоже производны от `OrderItem`.
+   *   4. Пересчёт потребностей — ТОЛЬКО в `CALCULATION` (в `DRAFT` их
    *      ещё нет; появятся при «Перевести в расчёт»). `force = false`:
    *      если менеджер уже проверил строки (`REVIEWED` /
    *      `PURCHASE_PLANNED`), `calculateForOrder` пробросит
@@ -3874,6 +3888,11 @@ export class OrdersService {
    *
    * После `start()` (`IN_PRODUCTION` / `DONE` / `CANCELLED`) снимок
    * иммутабелен (ADR-0006) — молча выходим, ничего не пересчитывая.
+   * TODO (известные хвосты, вне этого фикса): правка расцветки в
+   * `CALCULATION_DONE` / `SAMPLE_PRODUCTION` — тихий no-op (гейт
+   * `canTouchSnapshot`); обратная рассинхронизация — order-level форма
+   * редактирования пишет `OrderItem` напрямую, не трогая
+   * `OrderVariantSize` (нужен UI-гейт «грид readonly при расцветках»).
    */
   async resyncColorwayDerived(
     orderId: string,
@@ -3885,9 +3904,15 @@ export class OrdersService {
         id: true,
         status: true,
         techCardId: true,
+        // productId для пересборки агрегата OrderItem (все строки
+        // заказа делят один legacy Product заказа).
+        items: { select: { productId: true }, take: 1 },
         variants: {
           orderBy: { ordinal: 'asc' },
-          select: { techCardId: true },
+          select: {
+            techCardId: true,
+            sizes: { select: { sizeId: true, qtyPlan: true } },
+          },
         },
       },
     });
@@ -3903,6 +3928,24 @@ export class OrdersService {
       order.techCardId ??
       null;
 
+    // Агрегат OrderItem = Σ OrderVariantSize.qtyPlan по размеру (union
+    // размеров всех расцветок; нулевые строки выкидываем). productId
+    // берём из существующих строк (все делят один). Если строк нет или
+    // тираж нулевой — агрегат не трогаем (вырожденный случай, не
+    // затираем заказ вслепую).
+    const aggregatedSizeQty = new Map<string, number>();
+    for (const v of order.variants) {
+      for (const s of v.sizes) {
+        if (s.qtyPlan > 0) {
+          aggregatedSizeQty.set(
+            s.sizeId,
+            (aggregatedSizeQty.get(s.sizeId) ?? 0) + s.qtyPlan,
+          );
+        }
+      }
+    }
+    const itemsProductId = order.items[0]?.productId ?? null;
+
     await this.prisma.$transaction(async (tx) => {
       if (bridgedTechCardId !== order.techCardId) {
         await tx.order.update({
@@ -3910,7 +3953,27 @@ export class OrdersService {
           data: { techCardId: bridgedTechCardId },
         });
       }
+      // OrderItem := Σ OrderVariantSize ДО снимка/плана — их
+      // single-variant fast-path и операционный план читают OrderItem.
+      // deleteMany+createMany безопасно: на OrderItem.id нет обратных FK
+      // (проверено schema.prisma), тот же приём в `update()`/`start()`.
+      if (itemsProductId && aggregatedSizeQty.size > 0) {
+        await tx.orderItem.deleteMany({ where: { orderId } });
+        await tx.orderItem.createMany({
+          data: [...aggregatedSizeQty.entries()].map(([sizeId, qtyPlan]) => ({
+            orderId,
+            productId: itemsProductId,
+            sizeId,
+            qtyPlan,
+          })),
+        });
+      }
       await this.rebuildMaterialRequirementsSnapshot(orderId, tx);
+      // Операционный план (стоимость/время) и снимок шагов маршрута —
+      // производные от OrderItem; держим их свежими вместе с агрегатом
+      // (тот же порядок вызовов, что в create()/update()-DRAFT).
+      await this.orderOperationPlan.recalculateAndWrite(orderId, tx);
+      await this.syncOrderRouteStepsSnapshot(orderId, tx);
     });
 
     if (order.status === OrderStatus.CALCULATION) {
