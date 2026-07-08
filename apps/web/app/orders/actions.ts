@@ -150,6 +150,55 @@ function parseApplicationsJson(
 }
 
 /**
+ * Фича «Расцветки» (FEATURE_COLORWAYS): парсим hidden `variantsJson`,
+ * который рисует форма создания заказа (`admin-create-order-form.tsx`),
+ * в `CreateOrderDto['variants']`. Каждая расцветка — цвет + опциональная
+ * техкарта + поразмерный план (`{sizeId, qtyPlan}`).
+ *
+ * Как и `applications`: жёстких ошибок здесь не бросаем и мусор молча
+ * отбрасываем — финальную валидацию делает `CreateOrderSchema.variants`.
+ * Пусто / нет поля / пустой массив → `undefined`: backend заведёт одну
+ * расцветку #0 из `color` + `items` (зеркало) — полная backward-compat.
+ */
+function parseVariantsJson(form: FormData): CreateOrderDto['variants'] {
+  const raw = form.get('variantsJson');
+  if (raw === null) return undefined;
+  const text = String(raw).trim();
+  if (text === '' || text === '[]') return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+
+  const out: NonNullable<CreateOrderDto['variants']> = [];
+  for (const v of parsed) {
+    if (!v || typeof v !== 'object') continue;
+    const rec = v as Record<string, unknown>;
+    const color = typeof rec.color === 'string' ? rec.color.trim() : '';
+    if (color === '') continue;
+    const techCardId =
+      typeof rec.techCardId === 'string' && rec.techCardId.length > 0
+        ? rec.techCardId
+        : null;
+    const sizesRaw = Array.isArray(rec.sizes) ? rec.sizes : [];
+    const sizes: { sizeId: string; qtyPlan: number }[] = [];
+    for (const s of sizesRaw) {
+      if (!s || typeof s !== 'object') continue;
+      const sr = s as Record<string, unknown>;
+      const sizeId = typeof sr.sizeId === 'string' ? sr.sizeId : '';
+      const qtyPlan =
+        typeof sr.qtyPlan === 'number' ? Math.trunc(sr.qtyPlan) : 0;
+      if (sizeId !== '' && qtyPlan > 0) sizes.push({ sizeId, qtyPlan });
+    }
+    if (sizes.length > 0) out.push({ color, techCardId, sizes });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
+/**
  * Этап «Цена продажи за единицу»: парсим оба поля из FormData по
  * единому контракту:
  *   - поля нет в форме → undefined → backend не трогает колонку
@@ -277,6 +326,9 @@ function buildCreateDto(form: FormData): CreateOrderDto {
     materialsAndHardwareCostPolicy:
       parseMaterialsAndHardwareCostPolicy(form),
     applications,
+    // Фича «Расцветки»: расцветки заказа из формы создания. `undefined`
+    // (флаг выключен / не многоцветный) → backend заведёт расцветку #0.
+    variants: parseVariantsJson(form),
     customerUnitPrice,
     customerCurrency,
     ...(inlineCalc
