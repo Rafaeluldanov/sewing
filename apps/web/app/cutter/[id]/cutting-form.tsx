@@ -9,6 +9,7 @@ import {
   CUTTING_TASK_MAX_ROLLS,
   type CuttingTaskLayDto,
   type CuttingTaskSizeRowDto,
+  type CuttingTaskVariantDto,
   type SaveCuttingTaskProgressDto,
 } from '@sewing/shared/cutting-tasks';
 import {
@@ -36,6 +37,8 @@ interface RollDraft {
   key: string;
   ordinal: number;
   layers: string;
+  /** Ф3 «Расцветки»: id расцветки рулона (`OrderVariant`) или `null`. */
+  variantId: string | null;
 }
 
 interface LayDraft {
@@ -51,6 +54,12 @@ interface Props {
   sizeRows: CuttingTaskSizeRowDto[];
   /** Существующие расклады задачи. */
   lays: CuttingTaskLayDto[];
+  /**
+   * Ф3 «Расцветки»: расцветки заказа. >1 расцветки → на каждый рулон
+   * показываем селект цвета; ≤1 → рулоны молча берут единственную
+   * расцветку (или `null`).
+   */
+  variants: CuttingTaskVariantDto[];
   readOnly?: boolean;
 }
 
@@ -72,11 +81,22 @@ function layFromDto(dto: CuttingTaskLayDto): LayDraft {
       key: `roll-${r.id}`,
       ordinal: r.ordinal,
       layers: r.layers === 0 ? '' : String(r.layers),
+      variantId: r.variantId,
     })),
   };
 }
 
-export function CuttingForm({ taskId, sizeRows, lays, readOnly = false }: Props) {
+export function CuttingForm({
+  taskId,
+  sizeRows,
+  lays,
+  variants,
+  readOnly = false,
+}: Props) {
+  // Ф3: дефолтная расцветка нового рулона — первая (для одноцветного
+  // заказа это единственная расцветка #0; UI-селект не показываем).
+  const defaultVariantId = variants[0]?.id ?? null;
+  const multiColor = variants.length > 1;
   const router = useRouter();
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
@@ -178,10 +198,24 @@ export function CuttingForm({ taskId, sizeRows, lays, readOnly = false }: Props)
         ...lay,
         rolls: [
           ...lay.rolls,
-          { key: nextKey('roll'), ordinal: nextOrdinal, layers: '' },
+          {
+            key: nextKey('roll'),
+            ordinal: nextOrdinal,
+            layers: '',
+            variantId: defaultVariantId,
+          },
         ],
       };
     });
+  }
+
+  function setRollVariant(layKey: string, rollKey: string, variantId: string) {
+    updateLay(layKey, (lay) => ({
+      ...lay,
+      rolls: lay.rolls.map((r) =>
+        r.key === rollKey ? { ...r, variantId: variantId || null } : r,
+      ),
+    }));
   }
 
   function removeRoll(layKey: string, rollKey: string) {
@@ -209,6 +243,7 @@ export function CuttingForm({ taskId, sizeRows, lays, readOnly = false }: Props)
         rolls: lay.rolls.map((r) => ({
           ordinal: r.ordinal,
           layers: clampInt(r.layers, CUTTING_TASK_MAX_LAYERS),
+          variantId: r.variantId,
         })),
       })),
     };
@@ -265,6 +300,9 @@ export function CuttingForm({ taskId, sizeRows, lays, readOnly = false }: Props)
             onAddRoll={() => addRoll(lay.key)}
             onRemoveRoll={(rollKey) => removeRoll(lay.key, rollKey)}
             onSetRollLayers={(rollKey, v) => setRollLayers(lay.key, rollKey, v)}
+            onSetRollVariant={(rollKey, v) => setRollVariant(lay.key, rollKey, v)}
+            variants={variants}
+            multiColor={multiColor}
             onRemove={() => removeLay(lay.key)}
             disabled={pending}
           />
@@ -370,6 +408,9 @@ interface LayBlockProps {
   onAddRoll: () => void;
   onRemoveRoll: (rollKey: string) => void;
   onSetRollLayers: (rollKey: string, value: string) => void;
+  onSetRollVariant: (rollKey: string, variantId: string) => void;
+  variants: CuttingTaskVariantDto[];
+  multiColor: boolean;
   onRemove: () => void;
   disabled: boolean;
 }
@@ -388,6 +429,9 @@ function LayBlock({
   onAddRoll,
   onRemoveRoll,
   onSetRollLayers,
+  onSetRollVariant,
+  variants,
+  multiColor,
   onRemove,
   disabled,
 }: LayBlockProps) {
@@ -495,13 +539,17 @@ function LayBlock({
           <tr>
             <th>Рулон</th>
             <th>Слоёв</th>
+            {multiColor && <th>Цвет</th>}
             {!readOnly && <th aria-label="Удалить" />}
           </tr>
         </thead>
         <tbody>
           {lay.rolls.length === 0 ? (
             <tr>
-              <td colSpan={readOnly ? 2 : 3} className="constructor-muted">
+              <td
+                colSpan={2 + (multiColor ? 1 : 0) + (readOnly ? 0 : 1)}
+                className="constructor-muted"
+              >
                 Рулоны ещё не добавлены.
               </td>
             </tr>
@@ -525,6 +573,27 @@ function LayBlock({
                     />
                   )}
                 </td>
+                {multiColor && (
+                  <td>
+                    {readOnly ? (
+                      variants.find((v) => v.id === r.variantId)?.color ?? '—'
+                    ) : (
+                      <select
+                        className="cutter-input"
+                        value={r.variantId ?? ''}
+                        onChange={(e) => onSetRollVariant(r.key, e.target.value)}
+                        disabled={disabled}
+                        aria-label={`Цвет рулона ${r.ordinal}`}
+                      >
+                        {variants.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.color}
+                          </option>
+                        ))}
+                      </select>
+                    )}
+                  </td>
+                )}
                 {!readOnly && (
                   <td>
                     <button

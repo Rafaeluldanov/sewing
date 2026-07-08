@@ -1773,6 +1773,10 @@ model OrderVariant {
   order    Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
   techCard TechCardTemplate? @relation(fields: [techCardId], references: [id])
   sizes    OrderVariantSize[]
+  /// Ф3 «Расцветки в раскрое»: рулоны настила, привязанные к этой
+  /// расцветке (`CuttingTaskRoll.variant`). Паспорта из них красятся в
+  /// `color` этой расцветки.
+  cuttingRolls CuttingTaskRoll[]
 
   @@unique([orderId, ordinal])
   @@index([orderId])
@@ -7032,8 +7036,20 @@ model CuttingTaskRoll {
   /// заполнено».
   layers Int @default(0)
 
+  /// Фича «Расцветки» (Ф3, флаг `FEATURE_COLORWAYS`): расцветка рулона.
+  /// Настил многоцветный — на один стол кладут разноцветные рулоны и
+  /// режут одним маркером; каждый рулон = один цвет. Паспорта, выпущенные
+  /// из рулона, красятся в `variant.color`. `null` — рулон без явной
+  /// расцветки (исторические данные / одноцветный заказ): выпуск падает
+  /// на `Order.color` (расцветка #0). Маркер (`CuttingTaskLaySize.perLayerQty`)
+  /// остаётся общим на настил — по цвету не варьируется. `onDelete: SetNull`
+  /// — снос расцветки не сносит рулон.
+  variantId String?
+  variant   OrderVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+
   @@unique([layId, ordinal], name: "CuttingTaskRoll_lay_ordinal_uniq")
   @@index([layId, ordinal])
+  @@index([variantId])
 }
 
 /// Сигнальный образец (`OrderSample`, MVP). См.

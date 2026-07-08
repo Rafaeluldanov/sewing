@@ -139,6 +139,13 @@ export const CuttingTaskRollInputSchema = z.object({
     .min(1, 'Номер рулона начинается с 1')
     .max(CUTTING_TASK_MAX_ROLLS, `Номер рулона не больше ${CUTTING_TASK_MAX_ROLLS}`),
   layers: nonNegativeIntField(CUTTING_TASK_MAX_LAYERS, 'Слоёв в рулоне'),
+  /**
+   * Ф3 «Расцветки»: id расцветки заказа (`OrderVariant`), в цвет которой
+   * пойдут паспорта из этого рулона. `null`/не задан — рулон без явной
+   * расцветки (выпуск падёт на расцветку #0 / `Order.color`). Backend
+   * проверяет принадлежность расцветки заказу задачи.
+   */
+  variantId: z.string().min(1).nullable().optional(),
 });
 export type CuttingTaskRollInputDto = z.infer<typeof CuttingTaskRollInputSchema>;
 
@@ -239,6 +246,17 @@ export interface CuttingTaskRollDto {
   id: string;
   ordinal: number;
   layers: number;
+  /** Ф3 «Расцветки»: id расцветки рулона (`OrderVariant`) или `null`. */
+  variantId: string | null;
+  /** Цвет расцветки рулона (подпись/свотч), `null` если не задана. */
+  variantColor: string | null;
+}
+
+/** Расцветка заказа для выбора цвета рулона в кабинете раскроя. */
+export interface CuttingTaskVariantDto {
+  id: string;
+  ordinal: number;
+  color: string;
 }
 
 /** Расклад: выбранные размеры + рулоны. `ordinal` — «Расклад N». */
@@ -277,6 +295,12 @@ export interface CuttingTaskDetailDto extends CuttingTaskSummaryDto {
   sizeRows: CuttingTaskSizeRowDto[];
   /** Расклады задачи (≥1; «Расклад N» по `ordinal`). */
   lays: CuttingTaskLayDto[];
+  /**
+   * Ф3 «Расцветки»: расцветки заказа — источник выбора цвета рулона
+   * (свотчи/селект в кабинете раскроя). Одна расцветка = одноцветный
+   * заказ (выбор не нужен); несколько = раскройщик красит рулоны.
+   */
+  variants: CuttingTaskVariantDto[];
 }
 
 // ---------------------------------------------------------------------------
@@ -298,6 +322,10 @@ export interface ReleaseLaySizeDto {
 export interface ReleaseLayRollDto {
   ordinal: number;
   layers: number;
+  /** Ф3 «Расцветки»: id расцветки рулона или `null`. */
+  variantId: string | null;
+  /** Цвет расцветки рулона — помощник видит, в какой цвет выпускает. */
+  variantColor: string | null;
 }
 
 /** Расклад на экране выпуска: размеры + рулоны. `ordinal` — «Расклад N». */

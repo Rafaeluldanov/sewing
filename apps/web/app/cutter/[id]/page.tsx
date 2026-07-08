@@ -135,6 +135,7 @@ export default async function CutterTaskDetailPage({ params }: PageProps) {
           taskId={task.id}
           sizeRows={task.sizeRows}
           lays={task.lays}
+          variants={task.variants}
         />
       ) : null}
 
@@ -149,6 +150,7 @@ export default async function CutterTaskDetailPage({ params }: PageProps) {
             taskId={task.id}
             sizeRows={task.sizeRows}
             lays={task.lays}
+            variants={task.variants}
             readOnly
           />
         </>

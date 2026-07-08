@@ -472,7 +472,15 @@ export class PassportsService {
           where: { ordinal: dto.layOrdinal },
           include: {
             laySizes: { select: { sizeId: true, perLayerQty: true } },
-            rolls: { select: { ordinal: true, layers: true } },
+            // Ф3 «Расцветки»: рулон несёт расцветку — паспорт красится в
+            // её цвет (а не в общий `order.color`).
+            rolls: {
+              select: {
+                ordinal: true,
+                layers: true,
+                variant: { select: { color: true } },
+              },
+            },
           },
         },
       },
@@ -505,6 +513,11 @@ export class PassportsService {
     }
     const perLayerQty = laySize.perLayerQty;
     const rollByOrdinal = new Map(lay.rolls.map((r) => [r.ordinal, r.layers]));
+    // Ф3 «Расцветки»: цвет паспорта по рулону. `null`/пусто → падаем на
+    // общий цвет заказа (одноцветный заказ / исторические рулоны).
+    const rollColorByOrdinal = new Map(
+      lay.rolls.map((r) => [r.ordinal, r.variant?.color ?? null]),
+    );
 
     // Раскройщик для начислений — тот, кто выполнил задачу. Валидируем
     // его так же, как явный `cutterId` (роль CUTTER + active).
@@ -537,7 +550,10 @@ export class PassportsService {
     }
 
     const product = orderItem.product;
-    const color = normalizeColor(order.color ?? product.color);
+    // Ф3 «Расцветки»: базовый цвет заказа — фолбэк, если у рулона нет
+    // расцветки (одноцветный заказ / исторические данные). Цвет каждого
+    // паспорта считаем по его рулону в цикле ниже.
+    const fallbackColor = normalizeColor(order.color ?? product.color);
     const initialRouteStepIndex = order.routeSteps.length > 0 ? 0 : null;
 
     // Уникализируем входные ordinal-ы, сохраняя порядок выбора.
@@ -594,13 +610,19 @@ export class PassportsService {
           skipped.push(ordinal);
           continue;
         }
+        // Ф3 «Расцветки»: цвет паспорта = цвет расцветки рулона (или
+        // фолбэк цвета заказа, если рулон без расцветки).
+        const rollColor = rollColorByOrdinal.get(ordinal);
+        const passportColor = rollColor
+          ? normalizeColor(rollColor)
+          : fallbackColor;
         // Перекрой плана размера НЕ блокирует выпуск — печатаем как есть,
         // а превышение отдадим в `overCut` ниже (UI покажет нотификацию).
         const lite = await this.createOnePassportInTx(tx, {
           orderId: order.id,
           productId: product.id,
           sizeId: dto.sizeId,
-          color,
+          color: passportColor,
           rollNumber: `Расклад ${dto.layOrdinal} · Рулон ${ordinal}`,
           rollOrdinal: ordinal,
           cuttingLayOrdinal: dto.layOrdinal,

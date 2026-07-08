@@ -80,14 +80,29 @@ export class CuttingTasksService {
     const task = await this.prisma.cuttingTask.findUnique({
       where: { id },
       include: {
-        order: { select: { number: true, color: true, customer: true } },
+        order: {
+          select: {
+            number: true,
+            color: true,
+            customer: true,
+            // Ф3 «Расцветки»: расцветки заказа — источник выбора цвета
+            // рулона в кабинете раскроя.
+            variants: {
+              orderBy: { ordinal: 'asc' },
+              select: { id: true, ordinal: true, color: true },
+            },
+          },
+        },
         assignedTo: { select: { fullName: true } },
         sizeRows: { orderBy: { sortOrder: 'asc' } },
         lays: {
           orderBy: { ordinal: 'asc' },
           include: {
             laySizes: { orderBy: { sortOrder: 'asc' } },
-            rolls: { orderBy: { ordinal: 'asc' } },
+            rolls: {
+              orderBy: { ordinal: 'asc' },
+              include: { variant: { select: { color: true } } },
+            },
           },
         },
         _count: { select: { sizeRows: true, lays: true } },
@@ -115,6 +130,8 @@ export class CuttingTasksService {
         id: r.id,
         ordinal: r.ordinal,
         layers: r.layers,
+        variantId: r.variantId,
+        variantColor: r.variant?.color ?? null,
       })),
     }));
 
@@ -123,6 +140,11 @@ export class CuttingTasksService {
       orderCustomer: task.order?.customer ?? null,
       sizeRows,
       lays,
+      variants: (task.order?.variants ?? []).map((v) => ({
+        id: v.id,
+        ordinal: v.ordinal,
+        color: v.color,
+      })),
     };
   }
 
@@ -247,7 +269,10 @@ export class CuttingTasksService {
           orderBy: { ordinal: 'asc' },
           include: {
             laySizes: { orderBy: { sortOrder: 'asc' } },
-            rolls: { orderBy: { ordinal: 'asc' } },
+            rolls: {
+              orderBy: { ordinal: 'asc' },
+              include: { variant: { select: { color: true } } },
+            },
           },
         },
       },
@@ -289,7 +314,12 @@ export class CuttingTasksService {
         })),
       rolls: l.rolls
         .filter((r) => r.layers > 0)
-        .map((r) => ({ ordinal: r.ordinal, layers: r.layers })),
+        .map((r) => ({
+          ordinal: r.ordinal,
+          layers: r.layers,
+          variantId: r.variantId,
+          variantColor: r.variant?.color ?? null,
+        })),
     }));
 
     return {
@@ -400,12 +430,19 @@ export class CuttingTasksService {
         sizeRows: {
           select: { sizeId: true, sizeCodeSnapshot: true, sortOrder: true },
         },
+        // Ф3 «Расцветки»: допустимые расцветки заказа — whitelist для
+        // `roll.variantId` (защита от подделки чужого id).
+        order: { select: { variants: { select: { id: true } } } },
       },
     });
     if (!task) throw new CuttingTaskNotFoundException();
     if (opts.requireInProgress && task.status !== 'IN_PROGRESS') {
       throw new CuttingTaskNotInProgressException();
     }
+
+    const variantIdSet = new Set(
+      (task.order?.variants ?? []).map((v) => v.id),
+    );
 
     // Снимок плана задачи — whitelist допустимых размеров + источник
     // sizeCodeSnapshot/sortOrder для строк расклада. Размер из payload,
@@ -427,6 +464,14 @@ export class CuttingTasksService {
         if (!sizeMeta.has(ls.sizeId)) {
           throw new CuttingTaskPayloadInvalidException(
             `Размер ${ls.sizeId} не относится к этой задаче`,
+          );
+        }
+      }
+      // Ф3: расцветка рулона должна принадлежать заказу задачи.
+      for (const r of lay.rolls) {
+        if (r.variantId && !variantIdSet.has(r.variantId)) {
+          throw new CuttingTaskPayloadInvalidException(
+            `Расцветка ${r.variantId} не относится к этому заказу`,
           );
         }
       }
@@ -460,6 +505,7 @@ export class CuttingTasksService {
                 data: lay.rolls.map((r) => ({
                   ordinal: r.ordinal,
                   layers: r.layers,
+                  variantId: r.variantId ?? null,
                 })),
               },
             },

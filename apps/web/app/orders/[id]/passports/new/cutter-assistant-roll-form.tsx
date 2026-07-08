@@ -12,6 +12,23 @@ import { sendPassportPrintJobsBatch } from '@/components/print-button-actions';
 import { buildPassportsBatchPrintPath } from '@/lib/browser-api-paths';
 import { releaseFromRollsAction } from '../actions';
 
+// Ф3 «Расцветки»: декоративный свотч цвета рулона по названию (основа→hex).
+const ROLL_COLOR_STEMS: ReadonlyArray<readonly [string, string]> = [
+  ['бел', '#f2f2f0'], ['черн', '#222222'], ['красн', '#d23b3b'],
+  ['оранж', '#e8823a'], ['желт', '#e8b73a'], ['зелен', '#2e9e4a'],
+  ['голуб', '#5cb3e8'], ['фиолет', '#8a5cd1'], ['розов', '#e87ba8'],
+  ['бордов', '#7b1f2b'], ['корич', '#8a5a2b'], ['беж', '#e3d3b3'],
+  ['бирюз', '#1fb6a6'], ['серебр', '#c9ccd1'], ['син', '#2f7fd1'],
+  ['сер', '#8a8a86'],
+];
+function rollSwatch(name: string): string {
+  const q = name.trim().toLowerCase().replace(/ё/g, 'е');
+  for (const [stem, hex] of ROLL_COLOR_STEMS) {
+    if (q.startsWith(stem)) return hex;
+  }
+  return '#b7c3d0';
+}
+
 interface Props {
   orderId: string;
   orderNumber: string;
@@ -79,6 +96,18 @@ export function CutterAssistantRollForm({
     [selectedLay],
   );
   const rolls = selectedLay?.rolls ?? [];
+
+  // Ф3 «Расцветки»: показываем колонку «Цвет» рулона только если в раскрое
+  // реально несколько цветов (иначе одноцветный заказ — колонка лишняя).
+  const multiColor = useMemo(() => {
+    const colors = new Set<string>();
+    for (const l of lays) {
+      for (const r of l.rolls) {
+        if (r.variantColor) colors.add(r.variantColor);
+      }
+    }
+    return colors.size > 1;
+  }, [lays]);
 
   const [sizeId, setSizeId] = useState<string>(
     () => sortedLays[0]?.sizes.slice().sort((a, b) => a.sortOrder - b.sortOrder)[0]?.sizeId ?? '',
@@ -558,6 +587,7 @@ export function CutterAssistantRollForm({
                       <tr>
                         <th></th>
                         <th>Рулон</th>
+                        {multiColor && <th>Цвет</th>}
                         <th>Слоёв</th>
                         <th>Паспортов</th>
                         <th></th>
@@ -582,6 +612,34 @@ export function CutterAssistantRollForm({
                               />
                             </td>
                             <td>Рулон {r.ordinal}</td>
+                            {multiColor && (
+                              <td>
+                                {r.variantColor ? (
+                                  <span
+                                    style={{
+                                      display: 'inline-flex',
+                                      alignItems: 'center',
+                                      gap: 6,
+                                    }}
+                                  >
+                                    <span
+                                      style={{
+                                        width: 12,
+                                        height: 12,
+                                        borderRadius: '50%',
+                                        background: rollSwatch(r.variantColor),
+                                        border: '1px solid rgba(0,0,0,.15)',
+                                        flex: 'none',
+                                      }}
+                                      aria-hidden
+                                    />
+                                    {r.variantColor}
+                                  </span>
+                                ) : (
+                                  <span className="hint">—</span>
+                                )}
+                              </td>
+                            )}
                             <td>{r.layers}</td>
                             <td>{qty}</td>
                             <td>
@@ -601,6 +659,7 @@ export function CutterAssistantRollForm({
                         <td>
                           <strong>Итого к выпуску</strong>
                         </td>
+                        {multiColor && <td></td>}
                         <td></td>
                         <td>
                           <strong>{selectedQty}</strong>
