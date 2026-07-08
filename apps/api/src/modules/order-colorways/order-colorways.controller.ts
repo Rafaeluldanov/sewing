@@ -13,7 +13,8 @@ import {
   type UpsertOrderColorwayDto,
 } from '@sewing/shared';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrderColorwaysService } from './order-colorways.service.js';
 
 /**
@@ -39,8 +40,9 @@ export class OrderColorwaysController {
     @Param('id') orderId: string,
     @Body(new ZodValidationPipe(UpsertOrderColorwaySchema))
     dto: UpsertOrderColorwayDto,
+    @CurrentUser() user: AuthPrincipal,
   ): Promise<OrderColorwaysDto> {
-    return this.service.create(orderId, dto);
+    return this.service.create(orderId, dto, user.employeeId);
   }
 
   @Patch(':variantId')
@@ -50,8 +52,9 @@ export class OrderColorwaysController {
     @Param('variantId') variantId: string,
     @Body(new ZodValidationPipe(UpsertOrderColorwaySchema))
     dto: UpsertOrderColorwayDto,
+    @CurrentUser() user: AuthPrincipal,
   ): Promise<OrderColorwaysDto> {
-    return this.service.update(orderId, variantId, dto);
+    return this.service.update(orderId, variantId, dto, user.employeeId);
   }
 
   @Delete(':variantId')
@@ -59,7 +62,8 @@ export class OrderColorwaysController {
   remove(
     @Param('id') orderId: string,
     @Param('variantId') variantId: string,
+    @CurrentUser() user: AuthPrincipal,
   ): Promise<OrderColorwaysDto> {
-    return this.service.remove(orderId, variantId);
+    return this.service.remove(orderId, variantId, user.employeeId);
   }
 }

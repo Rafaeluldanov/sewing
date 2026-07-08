@@ -3839,6 +3839,90 @@ export class OrdersService {
   }
 
   /**
+   * Фича «Расцветки» (FEATURE_COLORWAYS): пересинхронизировать
+   * производные снимка/потребностей после правки расцветок в модуле
+   * `order-colorways` (create/update/remove расцветки).
+   *
+   * Мотивация: правка `OrderVariant`/`OrderVariantSize` сама по себе
+   * НЕ трогала ни снимок материалов (`OrderMaterialRequirement[]`), ни
+   * потребности цеха (`WorkshopNeed`) — они оставались от прошлого
+   * `startCalculation`. Симптом: у заказа поменяли техкарту расцветки,
+   * а потребности не изменились (O-20260708-0001, 08.07.2026 —
+   * розовая расцветка переключена на другую техкарту, но снимок и
+   * потребности продолжали ссылаться на прежнюю). Здесь повторяем те
+   * же snapshot-вызовы, что делают `create()` / `startCalculation()`.
+   *
+   * Что делаем (только пока снимок ещё не «заморожен», т.е. до запуска
+   * производства — `DRAFT` / `CALCULATION`):
+   *   1. Мост order-level `techCardId` ← первая расцветка с техкартой.
+   *      Нужен: (а) single-variant fast-path снимка читает именно
+   *      `order.techCardId` (см. `rebuildMaterialRequirementsSnapshot`),
+   *      поэтому смена техкарты единственной расцветки обязана
+   *      подняться на заказ; (б) гейт `startCalculation` пропускает
+   *      при техкарте order-level ИЛИ у любой расцветки. Пишем только
+   *      если значение реально меняется (idempotent).
+   *   2. Пересборка снимка `OrderMaterialRequirement[]` из текущих
+   *      техкарт расцветок.
+   *   3. Пересчёт потребностей — ТОЛЬКО в `CALCULATION` (в `DRAFT` их
+   *      ещё нет; появятся при «Перевести в расчёт»). `force = false`:
+   *      если менеджер уже проверил строки (`REVIEWED` /
+   *      `PURCHASE_PLANNED`), `calculateForOrder` пробросит
+   *      `WORKSHOP_NEEDS_ALREADY_REVIEWED` — молча перетирать
+   *      проверенное нельзя (правка расцветки тогда завершится этой
+   *      ошибкой; сама расцветка к этому моменту уже сохранена
+   *      вызывающим модулем).
+   *
+   * После `start()` (`IN_PRODUCTION` / `DONE` / `CANCELLED`) снимок
+   * иммутабелен (ADR-0006) — молча выходим, ничего не пересчитывая.
+   */
+  async resyncColorwayDerived(
+    orderId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        status: true,
+        techCardId: true,
+        variants: {
+          orderBy: { ordinal: 'asc' },
+          select: { techCardId: true },
+        },
+      },
+    });
+    if (!order) return;
+
+    const canTouchSnapshot =
+      order.status === OrderStatus.DRAFT ||
+      order.status === OrderStatus.CALCULATION;
+    if (!canTouchSnapshot) return;
+
+    const bridgedTechCardId =
+      order.variants.find((v) => v.techCardId)?.techCardId ??
+      order.techCardId ??
+      null;
+
+    await this.prisma.$transaction(async (tx) => {
+      if (bridgedTechCardId !== order.techCardId) {
+        await tx.order.update({
+          where: { id: orderId },
+          data: { techCardId: bridgedTechCardId },
+        });
+      }
+      await this.rebuildMaterialRequirementsSnapshot(orderId, tx);
+    });
+
+    if (order.status === OrderStatus.CALCULATION) {
+      await this.workshopNeeds.calculateForOrder(
+        orderId,
+        { force: false },
+        actorEmployeeId ?? null,
+      );
+    }
+  }
+
+  /**
    * Этап «Указать в заказе» (см. ТЗ §2): пересобрать snapshot
    * `OrderMaterialRequirement[]` по live-строкам техкарты заказа.
    *

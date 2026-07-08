@@ -9,6 +9,7 @@ import type {
   UpsertOrderColorwayDto,
 } from '@sewing/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { OrdersService } from '../orders/orders.service.js';
 
 /**
  * Модуль «Расцветки заказа» (colorways) — суб-ресурс карточки заказа.
@@ -21,10 +22,19 @@ import { PrismaService } from '../../prisma/prisma.service.js';
  *
  * Инвариант: у заказа всегда есть хотя бы одна расцветка (#0 —
  * «первичная», зеркало `Order.color`). Последнюю удалить нельзя.
+ *
+ * Побочный эффект правок расцветок: после любой мутации (create/
+ * update/remove) зовём `OrdersService.resyncColorwayDerived`, чтобы
+ * снимок материалов и потребности цеха следовали за техкартой/тиражом
+ * расцветки. Без этого правка техкарты расцветки не меняла потребности
+ * (они считаются один раз в `startCalculation` и замораживались).
  */
 @Injectable()
 export class OrderColorwaysService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly orders: OrdersService,
+  ) {}
 
   // -------------------------------------------------------------------------
   // READ
@@ -78,6 +88,7 @@ export class OrderColorwaysService {
   async create(
     orderId: string,
     dto: UpsertOrderColorwayDto,
+    actorEmployeeId?: string | null,
   ): Promise<OrderColorwaysDto> {
     await this.assertOrder(orderId);
     await this.assertTechCard(dto.techCardId);
@@ -101,6 +112,7 @@ export class OrderColorwaysService {
       },
     });
 
+    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
     return this.listForOrder(orderId);
   }
 
@@ -108,6 +120,7 @@ export class OrderColorwaysService {
     orderId: string,
     variantId: string,
     dto: UpsertOrderColorwayDto,
+    actorEmployeeId?: string | null,
   ): Promise<OrderColorwaysDto> {
     await this.assertOrder(orderId);
     const variant = await this.prisma.orderVariant.findFirst({
@@ -138,10 +151,15 @@ export class OrderColorwaysService {
       }),
     ]);
 
+    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
     return this.listForOrder(orderId);
   }
 
-  async remove(orderId: string, variantId: string): Promise<OrderColorwaysDto> {
+  async remove(
+    orderId: string,
+    variantId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderColorwaysDto> {
     await this.assertOrder(orderId);
     const count = await this.prisma.orderVariant.count({ where: { orderId } });
     if (count <= 1) {
@@ -163,6 +181,7 @@ export class OrderColorwaysService {
       });
     }
     await this.prisma.orderVariant.delete({ where: { id: variantId } });
+    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
     return this.listForOrder(orderId);
   }
 
