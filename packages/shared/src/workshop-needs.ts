@@ -841,6 +841,19 @@ export interface WorkshopNeedDto {
    */
   orderSampleId: string | null;
 
+  /**
+   * Фича «Расцветки» (FEATURE_COLORWAYS): к какой расцветке
+   * (`OrderVariant`) относится строка потребности. Потребность
+   * считается по КАЖДОЙ расцветке — своя техкарта × поразмерный план
+   * цвета (см. `WorkshopNeedsService.calculateForOrder`). `null` —
+   * order-level (заказ с ≤1 расцветкой / нанесение / ручная строка).
+   * `variantColor` — snapshot цвета расцветки на момент расчёта
+   * (UI подписывает цветные строки, не обращаясь к живому варианту).
+   * Оба поля additive и nullable — старые строки остаются валидными.
+   */
+  orderVariantId: string | null;
+  variantColor: string | null;
+
   materialRole: MaterialRole | string | null;
   sourceName: string | null;
   description: string;

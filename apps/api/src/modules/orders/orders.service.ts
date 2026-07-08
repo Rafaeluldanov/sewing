@@ -341,7 +341,12 @@ export class OrdersService {
           status: OrderStatus.DRAFT,
           companyDivisionId: companyDivisionIdForCreate,
           routeTemplateId: dto.routeTemplateId ?? null,
-          techCardId: dto.techCardId ?? null,
+          // Фича «Расцветки»: если общий techCardId не задан (форма
+          // расцветок его прячет), берём техкарту первой расцветки как
+          // «первичную» order-level — это зеркало variant #0
+          // (`OrderVariant.techCardId=null` = наследует Order.techCardId)
+          // и дефолт для legacy-кода, читающего order.techCardId.
+          techCardId: resolvedTechCardId,
           patternItemId: dto.patternItemId ?? null,
           clientId: dto.clientId ?? null,
           customerUnitPrice:
@@ -546,7 +551,7 @@ export class OrdersService {
       // в заказе» до перевода в производство. На существующих
       // заказах snapshot пересоберётся при следующем `update` /
       // `startCalculation`.
-      if (dto.techCardId) {
+      if (resolvedTechCardId) {
         await this.rebuildMaterialRequirementsSnapshot(created.id, tx);
       }
 
@@ -2636,55 +2641,14 @@ export class OrdersService {
         const existingMat = await tx.orderMaterialRequirement.count({
           where: { orderId: id },
         });
-        if (existingMat === 0 && techCardLines.materialLines.length > 0) {
-          await tx.orderMaterialRequirement.createMany({
-            data: techCardLines.materialLines.map((l) => ({
-              orderId: id,
-              sourceTechCardLineId: l.id,
-              sortOrder: l.sortOrder,
-              name: l.name,
-              unit: l.unit,
-              qtyPerUnit: l.qtyPerUnit,
-              totalQty: l.qtyPerUnit.mul(baseDecimal),
-              note: l.note,
-              // Этап 3 «Потребности цеха» (см.
-              // `docs/recon-soft-integration.md §«Этап 3»`):
-              // snapshot новых полей строки техкарты + derived
-              // `resolvedColorText` по `colorRule`. Если поля не
-              // заполнены в техкарте — в snapshot ляжет `null`,
-              // старт заказа НЕ блокируем (этап 3, backward-compat).
-              materialRole: l.materialRole,
-              fabricType: l.fabricType,
-              densityGsm: l.densityGsm,
-              plannedWidthCm: l.plannedWidthCm,
-              colorRule: l.colorRule,
-              fixedColorText: l.fixedColorText,
-              resolvedColorText: resolveColorText(
-                l.colorRule,
-                l.fixedColorText,
-                order.color,
-              ),
-              // Этап «Указать в заказе» (см. ТЗ §4): если правило
-              // `ORDER_SELECTED_COLOR`, фиксируем флаг в snapshot.
-              // Цвет по позиции менеджер позже введёт через action,
-              // и `resolvedColorText` синхронизируется с
-              // `selectedColorText` (см.
-              // `OrdersService.updateMaterialRequirementColor`).
-              requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
-              selectedColorText: null,
-              // Этап «Фурнитура / изображение материала»: snapshot-
-              // копии. Для роли != PACKAGING сервис техкарты уже
-              // зачистил hardware* в null, здесь просто переносим.
-              hardwareSizeText: l.hardwareSizeText,
-              hardwareMaterialText: l.hardwareMaterialText,
-              materialImageUrl: l.materialImageUrl,
-              materialImageOriginalFileName: l.materialImageOriginalFileName,
-              // Фаза 2 «Характеристики номенклатуры»: snapshot подтипа
-              // и значений характеристик.
-              subtypeKey: l.subtypeKey,
-              characteristics: l.characteristics ?? Prisma.DbNull,
-            })),
-          });
+        if (existingMat === 0) {
+          // Фича «Расцветки»: снимок материалов — per-variant (единый
+          // билдер `rebuildMaterialRequirementsSnapshot`). Раньше здесь
+          // был inline order-level `createMany`; переиспользуем билдер,
+          // чтобы прямой старт DRAFT→производство давал те же per-color
+          // строки, что и расчёт. Гейт `existingMat === 0` сохраняет
+          // введённый менеджером цвет — существующий snapshot не трогаем.
+          await this.rebuildMaterialRequirementsSnapshot(id, tx);
         }
         const existingOuts = await tx.orderOutsourceRequirement.count({
           where: { orderId: id },
@@ -2842,7 +2806,7 @@ export class OrdersService {
   ): Promise<OrderDetailDto> {
     const order = await this.prisma.order.findUnique({
       where: { id },
-      include: { items: true },
+      include: { items: true, variants: { select: { techCardId: true } } },
     });
     if (!order) {
       throw new NotFoundException({
@@ -2865,7 +2829,14 @@ export class OrdersService {
     // позже — в `start()` (запуск в производство), где pattern
     // ОБЯЗАН быть ACTIVE. Если лекало изменится после accept от
     // конструктора, менеджер пересчитает расчёт через `recalculate-plan`.
-    if (!order.techCardId) {
+    //
+    // Фича «Расцветки»: техкарта может быть задана НЕ на заказ, а на
+    // каждую расцветку (`OrderVariant.techCardId`) — форма расцветок
+    // прячет общий выбор. Пропускаем, если есть хотя бы одна техкарта:
+    // order-level или у любой расцветки. Снимок/расчёт дальше идут
+    // per-variant (см. `rebuildMaterialRequirementsSnapshot`,
+    // `WorkshopNeedsService.calculateForOrder`).
+    if (!order.techCardId && !order.variants.some((v) => v.techCardId)) {
       throw new OrderTechCardRequiredException();
     }
     const totalQty = order.items.reduce((s, it) => s + it.qtyPlan, 0);
@@ -3909,6 +3880,17 @@ export class OrdersService {
         color: true,
         techCardId: true,
         items: { select: { qtyPlan: true } },
+        // Фича «Расцветки» (FEATURE_COLORWAYS): снимок строится ПО
+        // КАЖДОЙ расцветке — своя техкарта × поразмерный план цвета.
+        variants: {
+          orderBy: { ordinal: 'asc' },
+          select: {
+            id: true,
+            color: true,
+            techCardId: true,
+            sizes: { select: { qtyPlan: true } },
+          },
+        },
       },
     });
     if (!order) return;
@@ -3917,6 +3899,7 @@ export class OrdersService {
       where: { orderId },
       select: {
         id: true,
+        orderVariantId: true,
         sourceTechCardLineId: true,
         materialRole: true,
         fabricType: true,
@@ -3926,30 +3909,66 @@ export class OrdersService {
       },
     });
 
-    if (!order.techCardId) {
+    // Группы снимка. ≤1 расцветки → одна order-level группа
+    // (`variantId = null`): числа и поведение байт-в-байт как раньше
+    // (техкарта заказа × Σ OrderItem.qtyPlan), плюс две новые null-колонки.
+    // Это же обходит дрейф `OrderItem`↔`OrderVariantSize` при обычном
+    // `update()` (варианты ведёт отдельный модуль расцветок). ≥2 расцветок
+    // → группа на расцветку: своя техкарта (`variant.techCardId ??
+    // order.techCardId`), свой тираж (Σ `OrderVariantSize.qtyPlan`), свой
+    // цвет. Группа без эффективной техкарты или с нулевым тиражом строк не даёт.
+    type SnapshotGroup = {
+      variantId: string | null;
+      variantColor: string | null;
+      color: string | null;
+      techCardId: string | null;
+      qty: number;
+    };
+    const groups: SnapshotGroup[] =
+      order.variants.length <= 1
+        ? [
+            {
+              variantId: null,
+              variantColor: null,
+              color: order.color,
+              techCardId: order.techCardId,
+              qty: order.items.reduce((s, it) => s + it.qtyPlan, 0),
+            },
+          ]
+        : order.variants.map((v) => ({
+            variantId: v.id,
+            variantColor: v.color,
+            color: v.color,
+            techCardId: v.techCardId ?? order.techCardId,
+            qty: v.sizes.reduce((s, sz) => s + sz.qtyPlan, 0),
+          }));
+    const effectiveGroups = groups.filter((g) => g.techCardId && g.qty > 0);
+
+    // Ни одной группы с техкартой → снимок стираем (консистентность с
+    // отсутствием привязки, как раньше при `!order.techCardId`).
+    if (effectiveGroups.length === 0) {
       if (existing.length > 0) {
-        await tx.orderMaterialRequirement.deleteMany({
-          where: { orderId },
-        });
+        await tx.orderMaterialRequirement.deleteMany({ where: { orderId } });
       }
       return;
     }
 
-    const lines = await this.techCards.getLinesForSnapshot(order.techCardId);
-    const baseQty = order.items.reduce((s, it) => s + it.qtyPlan, 0);
-    const baseDecimal = new Prisma.Decimal(baseQty);
-
-    // Map для preserve-а selectedColorText. Ключ выбирается по
-    // sourceTechCardLineId, fallback — по композитному ключу
-    // role|fabricType|hardwareSize|hardwareMaterial. Композитный ключ
-    // спасает кейс «строка шаблона удалена и создана заново с теми
-    // же атрибутами», когда sourceTechCardLineId уже не совпадёт.
+    // Map для preserve-а selectedColorText. Ключ = (расцветка, строка):
+    // orderVariantId ('' для order-level) + sourceTechCardLineId /
+    // композитный ключ role|fabricType|hardwareSize|hardwareMaterial.
+    // Так введённый менеджером цвет на молнии СЕРОЙ расцветки не
+    // переезжает на РОЗОВУЮ. Композитный ключ спасает кейс «строка
+    // шаблона удалена и создана заново с теми же атрибутами».
+    const vk = (variantId: string | null) => variantId ?? '';
     const prevBySourceId = new Map<string, string>();
     const prevByCompositeKey = new Map<string, string>();
     for (const r of existing) {
       if (!r.selectedColorText) continue;
       if (r.sourceTechCardLineId) {
-        prevBySourceId.set(r.sourceTechCardLineId, r.selectedColorText);
+        prevBySourceId.set(
+          `${vk(r.orderVariantId)}|${r.sourceTechCardLineId}`,
+          r.selectedColorText,
+        );
       }
       const compositeKey = composeMaterialMatchKey(
         r.materialRole,
@@ -3958,54 +3977,78 @@ export class OrdersService {
         r.hardwareMaterialText,
       );
       if (compositeKey) {
-        prevByCompositeKey.set(compositeKey, r.selectedColorText);
+        prevByCompositeKey.set(
+          `${vk(r.orderVariantId)}|${compositeKey}`,
+          r.selectedColorText,
+        );
       }
     }
 
-    const data = lines.materialLines.map((l) => {
-      const prevSelected =
-        prevBySourceId.get(l.id) ??
-        prevByCompositeKey.get(
-          composeMaterialMatchKey(
-            l.materialRole,
-            l.fabricType,
-            l.hardwareSizeText,
-            l.hardwareMaterialText,
-          ) ?? '',
-        ) ??
-        null;
-      const isOrderSelected = l.colorRule === 'ORDER_SELECTED_COLOR';
-      const resolvedColorText = isOrderSelected
-        ? prevSelected
-        : resolveColorText(l.colorRule, l.fixedColorText, order.color);
-      return {
-        orderId,
-        sourceTechCardLineId: l.id,
-        sortOrder: l.sortOrder,
-        name: l.name,
-        unit: l.unit,
-        qtyPerUnit: l.qtyPerUnit,
-        totalQty: l.qtyPerUnit.mul(baseDecimal),
-        note: l.note,
-        materialRole: l.materialRole,
-        fabricType: l.fabricType,
-        densityGsm: l.densityGsm,
-        plannedWidthCm: l.plannedWidthCm,
-        colorRule: l.colorRule,
-        fixedColorText: l.fixedColorText,
-        resolvedColorText,
-        requiresColorSelection: isOrderSelected,
-        selectedColorText: isOrderSelected ? prevSelected : null,
-        hardwareSizeText: l.hardwareSizeText,
-        hardwareMaterialText: l.hardwareMaterialText,
-        materialImageUrl: l.materialImageUrl,
-        materialImageOriginalFileName: l.materialImageOriginalFileName,
-        // Фаза 2 «Характеристики номенклатуры»: перенос в пересобранный
-        // snapshot.
-        subtypeKey: l.subtypeKey,
-        characteristics: l.characteristics ?? Prisma.DbNull,
-      };
-    });
+    // Кэш строк техкарты — расцветки часто делят одну техкарту.
+    const linesCache = new Map<
+      string,
+      Awaited<ReturnType<TechCardsService['getLinesForSnapshot']>>
+    >();
+    const getLines = async (techCardId: string) => {
+      const cached = linesCache.get(techCardId);
+      if (cached) return cached;
+      const loaded = await this.techCards.getLinesForSnapshot(techCardId);
+      linesCache.set(techCardId, loaded);
+      return loaded;
+    };
+
+    const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
+    for (const g of effectiveGroups) {
+      const lines = await getLines(g.techCardId as string);
+      const baseDecimal = new Prisma.Decimal(g.qty);
+      for (const l of lines.materialLines) {
+        const prevSelected =
+          prevBySourceId.get(`${vk(g.variantId)}|${l.id}`) ??
+          prevByCompositeKey.get(
+            `${vk(g.variantId)}|${
+              composeMaterialMatchKey(
+                l.materialRole,
+                l.fabricType,
+                l.hardwareSizeText,
+                l.hardwareMaterialText,
+              ) ?? ''
+            }`,
+          ) ??
+          null;
+        const isOrderSelected = l.colorRule === 'ORDER_SELECTED_COLOR';
+        const resolvedColorText = isOrderSelected
+          ? prevSelected
+          : resolveColorText(l.colorRule, l.fixedColorText, g.color);
+        data.push({
+          orderId,
+          orderVariantId: g.variantId,
+          variantColor: g.variantColor,
+          sourceTechCardLineId: l.id,
+          sortOrder: l.sortOrder,
+          name: l.name,
+          unit: l.unit,
+          qtyPerUnit: l.qtyPerUnit,
+          totalQty: l.qtyPerUnit.mul(baseDecimal),
+          note: l.note,
+          materialRole: l.materialRole,
+          fabricType: l.fabricType,
+          densityGsm: l.densityGsm,
+          plannedWidthCm: l.plannedWidthCm,
+          colorRule: l.colorRule,
+          fixedColorText: l.fixedColorText,
+          resolvedColorText,
+          requiresColorSelection: isOrderSelected,
+          selectedColorText: isOrderSelected ? prevSelected : null,
+          hardwareSizeText: l.hardwareSizeText,
+          hardwareMaterialText: l.hardwareMaterialText,
+          materialImageUrl: l.materialImageUrl,
+          materialImageOriginalFileName: l.materialImageOriginalFileName,
+          // Фаза 2 «Характеристики номенклатуры»: перенос в пересобранный snapshot.
+          subtypeKey: l.subtypeKey,
+          characteristics: l.characteristics ?? Prisma.DbNull,
+        });
+      }
+    }
 
     // deleteMany + createMany ради простоты: WorkshopNeed.sourceId не
     // имеет FK на OrderMaterialRequirement (см. schema.prisma и

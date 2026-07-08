@@ -1777,6 +1777,12 @@ model OrderVariant {
   /// расцветке (`CuttingTaskRoll.variant`). Паспорта из них красятся в
   /// `color` этой расцветки.
   cuttingRolls CuttingTaskRoll[]
+  /// Расчёт потребности по расцветкам: snapshot материалов и строки
+  /// потребности цеха, посчитанные для этой расцветки (см.
+  /// `WorkshopNeedsService.calculateForOrder`). `onDelete: SetNull`
+  /// со стороны обеих таблиц — удаление расцветки не сносит историю.
+  materialRequirements OrderMaterialRequirement[]
+  workshopNeeds        WorkshopNeed[]
 
   @@unique([orderId, ordinal])
   @@index([orderId])
@@ -3215,6 +3221,15 @@ model TechCardOutsourceLine {
 model OrderMaterialRequirement {
   id                            String   @id @default(cuid())
   orderId                       String
+  /// Фича «Расцветки» (FEATURE_COLORWAYS): snapshot строится ПО КАЖДОЙ
+  /// расцветке (`OrderVariant`) — своя техкарта × поразмерный план
+  /// цвета (см. `OrdersService.rebuildMaterialRequirementsSnapshot`).
+  /// `null` = order-level (заказ с ≤1 расцветкой / legacy). `variantColor`
+  /// — snapshot цвета расцветки. `onDelete: SetNull` — удаление расцветки
+  /// не сносит snapshot-строку.
+  orderVariantId                String?
+  orderVariant                  OrderVariant? @relation(fields: [orderVariantId], references: [id], onDelete: SetNull)
+  variantColor                  String?
   /// Ссылка на исходную строку шаблона (для аудита). Nullable: если
   /// строку шаблона потом удалили, snapshot заказа продолжает жить с
   /// `null`-ом тут (см. ADR-0022 §«snapshot independence»).
@@ -3289,6 +3304,7 @@ model OrderMaterialRequirement {
   @@index([orderId, sortOrder])
   @@index([sourceTechCardLineId])
   @@index([materialRole])
+  @@index([orderVariantId])
 }
 
 /// Snapshot строки внешнего подрядного размещения на конкретном заказе.
@@ -4184,6 +4200,19 @@ model WorkshopNeed {
   orderSampleId String?
   orderSample   OrderSample? @relation(fields: [orderSampleId], references: [id], onDelete: SetNull)
 
+  /// Фича «Расцветки» (FEATURE_COLORWAYS): потребность считается ПО
+  /// КАЖДОЙ расцветке (`OrderVariant`) — своя техкарта × поразмерный
+  /// план цвета (см. `WorkshopNeedsService.calculateForOrder`). Здесь —
+  /// id расцветки, к которой относится строка. `null` = order-level
+  /// (legacy-заказ / нанесение / ручная строка). `variantColor` —
+  /// snapshot цвета расцветки на момент расчёта (UI/отчёты не должны
+  /// зависеть от живого варианта). `onDelete: SetNull` — удаление
+  /// расцветки не сносит историческую потребность (тот же инвариант,
+  /// что у `orderSampleId` / `sourceId`).
+  orderVariantId String?
+  orderVariant   OrderVariant? @relation(fields: [orderVariantId], references: [id], onDelete: SetNull)
+  variantColor   String?
+
   /// `TECH_CARD_MATERIAL_LINE` | `ORDER_MATERIAL_REQUIREMENT` |
   /// `MANUAL_ADDITION`. Хранится строкой ради расширяемости (см. JSDoc выше).
   sourceType String?
@@ -4395,6 +4424,7 @@ model WorkshopNeed {
   @@index([selectedSupplierId])
   @@index([selectedSupplierCatalogItemId])
   @@index([orderSampleId])
+  @@index([orderVariantId])
   @@index([isManual])
 }
 

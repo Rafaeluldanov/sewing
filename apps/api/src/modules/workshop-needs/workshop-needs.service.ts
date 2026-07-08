@@ -577,6 +577,21 @@ export class WorkshopNeedsService {
             },
           },
         },
+        // Фича «Расцветки» (FEATURE_COLORWAYS): при ≥2 расцветках
+        // потребность считается ПО КАЖДОЙ — своя техкарта (live-fallback,
+        // если у расцветки нет строк снимка) × поразмерный план цвета
+        // (`OrderVariantSize`). Снимок (`materialRequirements`) уже несёт
+        // `orderVariantId`, поэтому основной путь идёт через него; live-
+        // техкарта расцветки — страховка для частично-legacy снимка.
+        variants: {
+          orderBy: { ordinal: 'asc' },
+          include: {
+            techCard: {
+              include: { materialLines: { orderBy: { sortOrder: 'asc' } } },
+            },
+            sizes: { include: { size: true } },
+          },
+        },
       },
     });
     if (!order) {
@@ -600,61 +615,137 @@ export class WorkshopNeedsService {
     const hasSnapshot = order.materialRequirements.length > 0;
     const useSnapshot = hasSnapshot;
 
-    const sourceLines: SourceLine[] = useSnapshot
-      ? order.materialRequirements.map((r) => ({
-          source: 'ORDER_MATERIAL_REQUIREMENT',
-          id: r.id,
-          name: r.name,
-          unit: r.unit,
-          qtyPerUnit: r.qtyPerUnit,
-          totalQty: r.totalQty,
-          materialRole: r.materialRole,
-          fabricType: r.fabricType,
-          densityGsm: r.densityGsm,
-          plannedWidthCm: r.plannedWidthCm,
-          colorRule: r.colorRule,
-          fixedColorText: r.fixedColorText,
-          resolvedColorText: r.resolvedColorText,
-          // Этап «Исправить формирование Потребности цеха» (см. ТЗ §5):
-          // snapshot хранит дополнительные поля для фурнитуры /
-          // изображения / выбора цвета — переносим их в SourceLine,
-          // чтобы `computeParameterNorm` / `computeMaterialAreaByRole`
-          // могли обогатить description строки потребности.
-          hardwareSizeText: r.hardwareSizeText,
-          hardwareMaterialText: r.hardwareMaterialText,
-          characteristics:
-            (r.characteristics as MaterialCharacteristics | null) ?? null,
-          materialImageUrl: r.materialImageUrl,
-          selectedColorText: r.selectedColorText,
-          requiresColorSelection: r.requiresColorSelection,
-        }))
-      : (order.techCard?.materialLines ?? []).map((l) => ({
-          source: 'TECH_CARD_MATERIAL_LINE',
-          id: l.id,
-          name: l.name,
-          unit: l.unit,
-          qtyPerUnit: l.qtyPerUnit,
-          totalQty: null,
-          materialRole: l.materialRole,
-          fabricType: l.fabricType,
-          densityGsm: l.densityGsm,
-          plannedWidthCm: l.plannedWidthCm,
-          colorRule: l.colorRule,
-          fixedColorText: l.fixedColorText,
-          resolvedColorText: null,
-          hardwareSizeText: l.hardwareSizeText,
-          hardwareMaterialText: l.hardwareMaterialText,
-          characteristics:
-            (l.characteristics as MaterialCharacteristics | null) ?? null,
-          materialImageUrl: l.materialImageUrl,
-          // Live-техкарта не хранит per-order selectedColorText —
-          // менеджер заполняет его уже на snapshot заказа после
-          // `startCalculation` (см. `OrdersService.updateMaterialRequirementColor`).
-          // Для DRAFT-заказа без snapshot значение null + флаг
-          // выводим из `colorRule = ORDER_SELECTED_COLOR`.
-          selectedColorText: null,
-          requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
-        }));
+    // Маппинг «строки снимка / строки техкарты → SourceLine». Вынесен в
+    // хелперы, потому что при расцветках вызывается ОТДЕЛЬНО для каждой
+    // расцветки (свой поднабор строк снимка / своя live-техкарта).
+    const mapSnapshotRows = (
+      rows: typeof order.materialRequirements,
+    ): SourceLine[] =>
+      rows.map((r) => ({
+        source: 'ORDER_MATERIAL_REQUIREMENT',
+        id: r.id,
+        name: r.name,
+        unit: r.unit,
+        qtyPerUnit: r.qtyPerUnit,
+        totalQty: r.totalQty,
+        materialRole: r.materialRole,
+        fabricType: r.fabricType,
+        densityGsm: r.densityGsm,
+        plannedWidthCm: r.plannedWidthCm,
+        colorRule: r.colorRule,
+        fixedColorText: r.fixedColorText,
+        resolvedColorText: r.resolvedColorText,
+        // Этап «Исправить формирование Потребности цеха» (см. ТЗ §5):
+        // snapshot хранит дополнительные поля для фурнитуры /
+        // изображения / выбора цвета — переносим их в SourceLine,
+        // чтобы `computeParameterNorm` / `computeMaterialAreaByRole`
+        // могли обогатить description строки потребности.
+        hardwareSizeText: r.hardwareSizeText,
+        hardwareMaterialText: r.hardwareMaterialText,
+        characteristics:
+          (r.characteristics as MaterialCharacteristics | null) ?? null,
+        materialImageUrl: r.materialImageUrl,
+        selectedColorText: r.selectedColorText,
+        requiresColorSelection: r.requiresColorSelection,
+      }));
+    const mapTechCardLines = (
+      lines: NonNullable<typeof order.techCard>['materialLines'],
+    ): SourceLine[] =>
+      lines.map((l) => ({
+        source: 'TECH_CARD_MATERIAL_LINE',
+        id: l.id,
+        name: l.name,
+        unit: l.unit,
+        qtyPerUnit: l.qtyPerUnit,
+        totalQty: null,
+        materialRole: l.materialRole,
+        fabricType: l.fabricType,
+        densityGsm: l.densityGsm,
+        plannedWidthCm: l.plannedWidthCm,
+        colorRule: l.colorRule,
+        fixedColorText: l.fixedColorText,
+        resolvedColorText: null,
+        hardwareSizeText: l.hardwareSizeText,
+        hardwareMaterialText: l.hardwareMaterialText,
+        characteristics:
+          (l.characteristics as MaterialCharacteristics | null) ?? null,
+        materialImageUrl: l.materialImageUrl,
+        // Live-техкарта не хранит per-order selectedColorText —
+        // менеджер заполняет его уже на snapshot заказа после
+        // `startCalculation` (см. `OrdersService.updateMaterialRequirementColor`).
+        // Для DRAFT-заказа без snapshot значение null + флаг
+        // выводим из `colorRule = ORDER_SELECTED_COLOR`.
+        selectedColorText: null,
+        requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
+      }));
+
+    // -----------------------------------------------------------------------
+    // Фича «Расцветки» (FEATURE_COLORWAYS): строим ГРУППЫ расчёта.
+    //   - ≤1 расцветки → одна order-level группа (`variantId=null`):
+    //     количества из `OrderItem`, sourceLines как раньше (snapshot или
+    //     live-техкарта заказа). Числа байт-в-байт как до фичи, обходит
+    //     дрейф `OrderItem`↔`OrderVariantSize`.
+    //   - ≥2 расцветок → группа на расцветку: количества из
+    //     `OrderVariantSize`, sourceLines из строк снимка ЭТОЙ расцветки
+    //     (fallback — live-техкарта расцветки/заказа для частично-legacy
+    //     снимка), цвет = `variant.color`.
+    // Нанесения (`OrderApplication`) считаются ОТДЕЛЬНО, один раз (ниже).
+    // -----------------------------------------------------------------------
+    type CalcItem = {
+      sizeId: string;
+      qtyPlan: number;
+      size: { id: string; code: string; sortOrder: number };
+    };
+    type VariantGroup = {
+      orderVariantId: string | null;
+      variantColor: string | null;
+      color: string | null;
+      items: CalcItem[];
+      totalQty: number;
+      sourceLines: SourceLine[];
+    };
+    const variantGroups: VariantGroup[] =
+      order.variants.length <= 1
+        ? [
+            {
+              orderVariantId: null,
+              variantColor: null,
+              color: order.color,
+              items: order.items.map((it) => ({
+                sizeId: it.sizeId,
+                qtyPlan: it.qtyPlan,
+                size: it.size,
+              })),
+              totalQty: totalOrderQty,
+              sourceLines: hasSnapshot
+                ? mapSnapshotRows(order.materialRequirements)
+                : mapTechCardLines(order.techCard?.materialLines ?? []),
+            },
+          ]
+        : order.variants.map((v) => {
+            const variantSnapshotRows = order.materialRequirements.filter(
+              (r) => r.orderVariantId === v.id,
+            );
+            const sourceLines =
+              variantSnapshotRows.length > 0
+                ? mapSnapshotRows(variantSnapshotRows)
+                : mapTechCardLines(
+                    (v.techCard ?? order.techCard)?.materialLines ?? [],
+                  );
+            const items: CalcItem[] = v.sizes.map((s) => ({
+              sizeId: s.sizeId,
+              qtyPlan: s.qtyPlan,
+              size: s.size,
+            }));
+            return {
+              orderVariantId: v.id,
+              variantColor: v.color,
+              color: v.color,
+              items,
+              totalQty: items.reduce((sum, it) => sum + it.qtyPlan, 0),
+              sourceLines,
+            };
+          });
 
     // -----------------------------------------------------------------------
     // Этап «Исправить формирование Потребности цеха» (см. ТЗ §2 и §3):
@@ -677,7 +768,10 @@ export class WorkshopNeedsService {
           (order.patternItem?.materialAreas?.length ?? 0) > 0),
     );
 
-    if (sourceLines.length === 0 && !isCategoryDriven) {
+    if (
+      !isCategoryDriven &&
+      variantGroups.every((g) => g.sourceLines.length === 0)
+    ) {
       // Конструируем адресное сообщение — менеджер сразу должен
       // понять, ЧТО именно поправить, без открытия логов. Три типичных
       // случая:
@@ -758,145 +852,24 @@ export class WorkshopNeedsService {
     // `WorkshopNeed`. Это позволяет историческим номенклатурам
     // продолжать считаться, как раньше.
     // -----------------------------------------------------------------------
-    if (!isCategoryDriven) {
-      for (const line of sourceLines) {
-        const computedLine = this.computeLine({
-          line,
-          order: {
-            color: order.color,
-            patternItemId: order.patternItemId,
-          },
-          items: order.items,
-          materialAreas: order.patternItem?.materialAreas ?? [],
-          totalOrderQty,
-          warnings,
-        });
-        if (computedLine.calculationMethod === 'AREA_DENSITY')
-          methodAreaDensity++;
-        else methodQtyPerUnit++;
-        computed.push(computedLine);
-      }
-    }
-
-    // Этап «Нанесение на заказе покупателя»: для каждого активного
-    // `OrderApplication` создаём одну строку `WorkshopNeed` с
-    // `sourceType = ORDER_APPLICATION`, `materialRole = APPLICATION`.
-    // `calculatedQty` берём из `quantity` нанесения, fallback на
-    // `Σ qtyPlan` (всё изделие = одно нанесение). Описание собираем
-    // в человекочитаемой форме: «<Тип>, <stage label>, <место>,
-    // <WxH>, <цвет/описание>».
-    // Поразмерный план (qtyPlan по sizeId) — фоллбэк количества для
-    // нанесений, адресованных на размер без явного количества.
-    const sizeQtyById = new Map(
-      order.items.map((it) => [it.sizeId, it.qtyPlan]),
-    );
-    for (const app of order.applications ?? []) {
-      if (app.status === 'CANCELLED') continue;
-      const computedApp = this.computeApplication(
-        app,
-        totalOrderQty,
-        sizeQtyById,
-      );
-      methodQtyPerUnit++;
-      computed.push(computedApp);
-    }
-
-    // Этап «Исправить формирование Потребности цеха» (см. ТЗ §3):
-    // для category-driven заказа AREA_M2_BY_SIZE-параметры превращаются
-    // в строки потребности напрямую из `PatternMaterialArea`
-    // (по одной строке на materialRole). Это убирает «лишние ткани
-    // из техкарты под которые нет площади в лекале» — например,
-    // Спанбонд / Синтепон, которые в техкарте есть, но в номенклатуре
-    // площадь по ним не заполнена.
+    // Pattern-derived группировки — общие для всех расцветок (лекало
+    // одно на заказ), поэтому строим ОДИН раз до цикла по расцветкам.
     //
-    // Для legacy-заказа PATTERN_MATERIAL_AREA НЕ генерится:
-    // вся ответственность за AREA_DENSITY остаётся на
-    // `computeLine` (который AREA-data берёт ровно из той же
-    // таблицы, но через техкартовую строку как точку входа).
-    let methodMaterialArea = 0;
+    // areasByRole — площади `PatternMaterialArea` по роли материала
+    // (только для category-driven; иначе AREA_DENSITY считает computeLine).
+    const areasByRole = new Map<
+      string,
+      { sizeId: string; areaM2: Prisma.Decimal }[]
+    >();
     if (isCategoryDriven) {
-      const areasByRole = new Map<
-        string,
-        { sizeId: string; areaM2: Prisma.Decimal }[]
-      >();
       for (const a of order.patternItem?.materialAreas ?? []) {
         const arr = areasByRole.get(a.materialRole) ?? [];
         arr.push({ sizeId: a.sizeId, areaM2: a.areaM2 });
         areasByRole.set(a.materialRole, arr);
       }
-      for (const [role, areas] of areasByRole) {
-        const matchedLine = this.findEnrichmentLine({
-          roleKey: role,
-          labelSnapshot: null,
-          sourceLines,
-        });
-        const computedArea = this.computeMaterialAreaByRole({
-          role,
-          areas,
-          items: order.items,
-          matchedLine,
-          orderColor: order.color,
-          warnings,
-        });
-        if (computedArea) {
-          if (computedArea.calculationMethod === 'AREA_DENSITY')
-            methodAreaDensity++;
-          else methodQtyPerUnit++;
-          methodMaterialArea++;
-          computed.push(computedArea);
-        }
-      }
     }
-
-    // Этап «Фурнитура и нормы»: для каждой `PatternItemParameterNorm`
-    // (где `qtyPerItem > 0` — пустые нормы вообще не создаются на
-    // стороне `PatternsService.replaceParameterNorms`) создаём
-    // отдельную строку `WorkshopNeed` с
-    // `sourceType = PATTERN_PARAMETER_NORM`, `sourceId = norm.id`.
-    //
-    // Несколько норм с одинаковым `roleKey = PACKAGING` НЕ
-    // объединяются в одну строку — Люверсы / Шнур / Наконечники
-    // должны стать отдельными `WorkshopNeed` (см. ТЗ §8 «WorkshopNeed
-    // calculation»). Группировка идёт по `sourceId = norm.id`.
-    //
-    // Этап «Исправить формирование Потребности цеха» (см. ТЗ §5):
-    // для каждой нормы ищем подходящую строку техкарты по правилам
-    // `findEnrichmentLine` (`materialRole + label` → fallback
-    // single-role-match). Найденная строка обогащает description
-    // данными «<labelSnapshot>, <hardwareSizeText>, <hardwareMaterialText>,
-    // <цвет>», даёт colorRule / fixedColorText / selectedColorText,
-    // плюс прокидывает картинку через `materialImageUrl` (она
-    // потом попадёт в DTO через `toDto`).
-    for (const norm of order.patternItem?.parameterNorms ?? []) {
-      if (norm.inputTypeSnapshot !== 'QTY_PER_ITEM') continue;
-      const matchedLine = this.findEnrichmentLine({
-        roleKey: norm.roleKey,
-        labelSnapshot: norm.labelSnapshot,
-        sourceLines,
-      });
-      const computedNorm = this.computeParameterNorm(
-        norm,
-        totalOrderQty,
-        matchedLine,
-        order.color,
-      );
-      methodQtyPerUnit++;
-      computed.push(computedNorm);
-    }
-
-    // Этап «Погонные метры по размерам»: для каждого параметра
-    // категории с `inputTypeSnapshot = LINEAR_M_BY_SIZE` (см.
-    // `PatternItemSizeParameterValue`) создаём ОДНУ строку
-    // `WorkshopNeed`. Значения группируются по
-    // `categoryParameterId` — для одного параметра несколько
-    // значений по разным размерам объединяются в одну строку
-    // (это и есть «погонные метры по размерам = одна позиция
-    // материала, считается по размерной матрице»).
-    //
-    // Формула: `calculatedQty = Σ(value × OrderItem.qtyPlan)` по
-    // тем размерам, которые есть И в значениях, И в размерной
-    // матрице заказа. Размеры, для которых значение не задано,
-    // дают warning в `calculationNote`.
+    // linearByParam — погонные метры по размерам, сгруппированные по
+    // параметру категории (см. `PatternItemSizeParameterValue`).
     const linearByParam = new Map<
       string,
       Array<{
@@ -919,20 +892,137 @@ export class WorkshopNeedsService {
       });
       linearByParam.set(v.categoryParameterId, list);
     }
+    let methodMaterialArea = 0;
     let methodLinearBySize = 0;
-    for (const [categoryParameterId, values] of linearByParam) {
-      const computedLinear = this.computeLinearBySizeParameter({
-        categoryParameterId,
-        values,
-        items: order.items,
-        sourceLines,
-        orderColor: order.color,
-        warnings,
-      });
-      if (computedLinear) {
-        methodLinearBySize++;
-        computed.push(computedLinear);
+
+    // -----------------------------------------------------------------------
+    // Фича «Расцветки»: считаем ПО КАЖДОЙ группе-расцветке. Внутри — те
+    // же хелперы, но с per-variant количествами (`g.items`/`g.totalQty`),
+    // строками источника (`g.sourceLines`) и цветом (`g.color`). Каждую
+    // готовую строку ШТАМПУЕМ id/цветом расцветки (хелперы об этом не
+    // знают, остаются чистыми). Для ≤1 расцветки цикл идёт один раз с
+    // order-level входами → числа байт-в-байт как раньше.
+    // -----------------------------------------------------------------------
+    for (const g of variantGroups) {
+      const stamp = (c: ComputedNeed): ComputedNeed => {
+        c.orderVariantId = g.orderVariantId;
+        c.variantColor = g.variantColor;
+        return c;
+      };
+
+      // Legacy line-based расчёт (не category-driven): каждая строка
+      // источника (снимок / техкарта расцветки) → своя потребность.
+      if (!isCategoryDriven) {
+        for (const line of g.sourceLines) {
+          const computedLine = this.computeLine({
+            line,
+            order: {
+              color: g.color,
+              patternItemId: order.patternItemId,
+            },
+            items: g.items,
+            materialAreas: order.patternItem?.materialAreas ?? [],
+            totalOrderQty: g.totalQty,
+            warnings,
+          });
+          if (computedLine.calculationMethod === 'AREA_DENSITY')
+            methodAreaDensity++;
+          else methodQtyPerUnit++;
+          computed.push(stamp(computedLine));
+        }
       }
+
+      // Category-driven: AREA_M2_BY_SIZE-площади → строки напрямую из
+      // `PatternMaterialArea` (по одной на materialRole), количество —
+      // по поразмерному плану расцветки, обогащение — из техкарты
+      // расцветки. Это убирает «лишние ткани из техкарты, под которые
+      // нет площади в лекале».
+      if (isCategoryDriven) {
+        for (const [role, areas] of areasByRole) {
+          const matchedLine = this.findEnrichmentLine({
+            roleKey: role,
+            labelSnapshot: null,
+            sourceLines: g.sourceLines,
+          });
+          const computedArea = this.computeMaterialAreaByRole({
+            role,
+            areas,
+            items: g.items,
+            matchedLine,
+            orderColor: g.color,
+            warnings,
+          });
+          if (computedArea) {
+            if (computedArea.calculationMethod === 'AREA_DENSITY')
+              methodAreaDensity++;
+            else methodQtyPerUnit++;
+            methodMaterialArea++;
+            computed.push(stamp(computedArea));
+          }
+        }
+      }
+
+      // Нормы фурнитуры (`PatternItemParameterNorm`, QTY_PER_ITEM) — по
+      // одной строке на норму, количество по тиражу расцветки. Несколько
+      // норм с одним roleKey НЕ схлопываются (группировка по norm.id).
+      // matchedLine — обогащение из строк техкарты расцветки.
+      for (const norm of order.patternItem?.parameterNorms ?? []) {
+        if (norm.inputTypeSnapshot !== 'QTY_PER_ITEM') continue;
+        const matchedLine = this.findEnrichmentLine({
+          roleKey: norm.roleKey,
+          labelSnapshot: norm.labelSnapshot,
+          sourceLines: g.sourceLines,
+        });
+        const computedNorm = this.computeParameterNorm(
+          norm,
+          g.totalQty,
+          matchedLine,
+          g.color,
+        );
+        methodQtyPerUnit++;
+        computed.push(stamp(computedNorm));
+      }
+
+      // Погонные метры по размерам (LINEAR_M_BY_SIZE) — одна строка на
+      // параметр; `calculatedQty = Σ(value × qtyPlan)` по размерам
+      // расцветки.
+      for (const [categoryParameterId, values] of linearByParam) {
+        const computedLinear = this.computeLinearBySizeParameter({
+          categoryParameterId,
+          values,
+          items: g.items,
+          sourceLines: g.sourceLines,
+          orderColor: g.color,
+          warnings,
+        });
+        if (computedLinear) {
+          methodLinearBySize++;
+          computed.push(stamp(computedLinear));
+        }
+      }
+    }
+
+    // Этап «Нанесение на заказе покупателя»: считаем ОДИН раз, order-level
+    // (`orderVariantId = null`). Нанесение не варьируется по цвету —
+    // расчёт по расцветкам дал бы двойной счёт. Для каждого активного
+    // `OrderApplication` создаём одну строку `WorkshopNeed` с
+    // `sourceType = ORDER_APPLICATION`, `materialRole = APPLICATION`.
+    // `calculatedQty` берём из `quantity` нанесения, fallback на
+    // `Σ qtyPlan` (всё изделие = одно нанесение). Поразмерный план
+    // (qtyPlan по sizeId) — фоллбэк количества для нанесений,
+    // адресованных на размер без явного количества.
+    const sizeQtyById = new Map(
+      order.items.map((it) => [it.sizeId, it.qtyPlan]),
+    );
+    for (const app of order.applications ?? []) {
+      if (app.status === 'CANCELLED') continue;
+      const computedApp = this.computeApplication(
+        app,
+        totalOrderQty,
+        sizeQtyById,
+      );
+      methodQtyPerUnit++;
+      computed.push(computedApp);
     }
 
     // Гард переполнения: `WorkshopNeed.totalAreaM2 / calculatedQty` —
@@ -986,6 +1076,10 @@ export class WorkshopNeedsService {
         const row = await tx.workshopNeed.create({
           data: {
             orderId,
+            // Фича «Расцветки»: привязка строки к расцветке + snapshot
+            // её цвета. null — order-level (нанесение / single-variant).
+            orderVariantId: c.orderVariantId ?? null,
+            variantColor: c.variantColor ?? null,
             sourceType: c.sourceType,
             sourceId: c.sourceId,
             materialRole: c.materialRole,
@@ -2372,6 +2466,8 @@ export class WorkshopNeedsService {
       sourceId: row.sourceId,
       isManual: row.isManual,
       orderSampleId: row.orderSampleId,
+      orderVariantId: row.orderVariantId,
+      variantColor: row.variantColor,
       materialRole: row.materialRole,
       sourceName: row.sourceName,
       description: row.description,
@@ -2479,6 +2575,11 @@ const WORKSHOP_NEED_INCLUDE = {
       materialRequirements: {
         select: {
           id: true,
+          // Фича «Расцветки»: enrichment строк потребности обязан
+          // выбирать snapshot-строку ТОЙ ЖЕ расцветки, иначе цвет /
+          // картинка утекут от чужого цвета (см.
+          // `resolveWorkshopNeedEnrichment`).
+          orderVariantId: true,
           materialRole: true,
           name: true,
           fabricType: true,
@@ -2567,6 +2668,8 @@ type WorkshopNeedRowWithRelations = WorkshopNeed & {
 
 interface EnrichmentRequirementRow {
   id: string;
+  /** Фича «Расцветки»: расцветка snapshot-строки (для фильтра enrichment). */
+  orderVariantId: string | null;
   materialRole: string | null;
   name: string;
   fabricType: string | null;
@@ -2666,7 +2769,17 @@ function resolveWorkshopNeedEnrichment(
   if (typeof role === 'string' && role.length > 0) {
     const target = normalizeMatchKey(row.sourceName);
 
-    const reqMatches = requirements.filter((r) => r.materialRole === role);
+    // Фича «Расцветки»: снимок строится по КАЖДОЙ расцветке, поэтому по
+    // одной роли теперь несколько snapshot-строк (по числу цветов). Без
+    // этого фильтра role-fallback (`length === 1` / первое совпадение)
+    // утянул бы `selectedColorText` / картинку / requiresColorSelection
+    // от ЧУЖОЙ расцветки. Сужаем до строк той же расцветки, что и сама
+    // строка потребности (`null` order-level матчит только `null`).
+    const reqMatches = requirements.filter(
+      (r) =>
+        r.materialRole === role &&
+        r.orderVariantId === row.orderVariantId,
+    );
     const reqExact = reqMatches.find(
       (r) =>
         target.length > 0 &&
@@ -2826,4 +2939,13 @@ interface ComputedNeed {
   unit: string;
   calculationMethod: 'AREA_DENSITY' | 'QTY_PER_UNIT' | 'LINEAR_M_BY_SIZE';
   calculationNote: string | null;
+  /**
+   * Фича «Расцветки»: к какой расцветке относится строка. Проставляется
+   * ШТАМПОМ в per-variant цикле `calculateForOrder` (хелперы расчёта
+   * остаются чистыми и их не знают). `undefined`/`null` — order-level
+   * (нанесение / single-variant / legacy). `variantColor` — snapshot
+   * цвета расцветки.
+   */
+  orderVariantId?: string | null;
+  variantColor?: string | null;
 }
