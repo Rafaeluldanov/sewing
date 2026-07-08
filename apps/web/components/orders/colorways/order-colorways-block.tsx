@@ -16,6 +16,7 @@
  */
 
 import { useMemo, useState, useTransition } from 'react';
+import { useRouter } from 'next/navigation';
 import { Palette, Plus, Trash2, Save, Info, Loader2 } from 'lucide-react';
 import type { OrderColorwaysDto } from '@sewing/shared';
 import {
@@ -63,6 +64,7 @@ export function OrderColorwaysBlock({
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [pending, startTransition] = useTransition();
+  const router = useRouter();
 
   const sizeCode = useMemo(
     () => new Map(data.sizes.map((s) => [s.id, s.code])),
@@ -78,6 +80,15 @@ export function OrderColorwaysBlock({
         Object.fromEntries(r.data.variants.map((v) => [v.id, toDraft(v)])),
       );
       setError(null);
+      // Правка расцветки на бэке пересобирает агрегат OrderItem
+      // (Σ OrderVariantSize) — см. `OrdersService.resyncColorwayDerived`.
+      // Но карточка заказа («План по размерам», итог qtyPlanTotal в шапке,
+      // размерный breakdown) рендерится server-компонентом из `getOrder`
+      // и без ревалидации показывает старый план. `router.refresh()`
+      // перезапрашивает серверные данные → план наверху меняется вслед
+      // за расцветкой. Локальный state блока (`data`/`drafts`) уже
+      // обновлён из ответа, поэтому сам блок не «мигает».
+      router.refresh();
     } else {
       setError(r.error ?? 'Ошибка');
     }
