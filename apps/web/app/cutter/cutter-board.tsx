@@ -5,20 +5,30 @@ import {
   CUTTING_TASK_STATUS_LABELS,
   type CuttingTaskSummaryDto,
 } from '@sewing/shared/cutting-tasks';
+import type { RecutSessionDto } from '@sewing/shared/recut';
+import { RecutPanel } from './recut-panel';
 
 /**
  * Клиентский слой главного экрана кабинета раскройщика (данные приходят
  * готовыми секциями из серверного `page.tsx`). Список карточек, каждая
- * — крупная кликабельная ссылка на `/cutter/<id>`.
+ * — крупная кликабельная ссылка на `/cutter/<id>`. Сверху — панель
+ * «Подкрой» (отдельный таймер по заказу, `RecutPanel`).
  */
 interface Props {
   inProgress: CuttingTaskSummaryDto[];
   fresh: CuttingTaskSummaryDto[];
   done: CuttingTaskSummaryDto[];
+  recutActive: RecutSessionDto | null;
   loadError?: string | null;
 }
 
-export function CutterBoard({ inProgress, fresh, done, loadError = null }: Props) {
+export function CutterBoard({
+  inProgress,
+  fresh,
+  done,
+  recutActive,
+  loadError = null,
+}: Props) {
   return (
     <div className="constructor-page">
       <h1 className="constructor-page__title">Раскрой</h1>
@@ -28,6 +38,8 @@ export function CutterBoard({ inProgress, fresh, done, loadError = null }: Props
           {loadError}
         </div>
       )}
+
+      <RecutPanel active={recutActive} />
 
       <Section
         title="В работе"

@@ -1,8 +1,10 @@
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listCuttingTasks } from '@/lib/cutting-tasks-api';
+import { getActiveRecut } from '@/lib/recut-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
 import { type CuttingTaskSummaryDto } from '@sewing/shared/cutting-tasks';
+import { type RecutSessionDto } from '@sewing/shared/recut';
 import { redirect } from 'next/navigation';
 import { SeamstressShiftStart } from '@/app/work/seamstress-shift-start';
 import { CutterBoard } from './cutter-board';
@@ -65,6 +67,15 @@ export default async function CutterCabinetPage() {
         : 'Не удалось загрузить список задач';
   }
 
+  // Активный подкрой (для панели «Подкрой»). fail-soft: сбой не должен
+  // ронять доску — покажем панель в состоянии «начать подкрой».
+  let recutActive: RecutSessionDto | null = null;
+  try {
+    recutActive = await getActiveRecut();
+  } catch (e) {
+    if (!(e instanceof ApiRequestError)) throw e;
+  }
+
   const inProgress = tasks.filter((t) => t.status === 'IN_PROGRESS');
   const fresh = tasks.filter((t) => t.status === 'NEW');
   const done = tasks.filter((t) => t.status === 'DONE');
@@ -74,6 +85,7 @@ export default async function CutterCabinetPage() {
       inProgress={inProgress}
       fresh={fresh}
       done={done}
+      recutActive={recutActive}
       loadError={error}
     />
   );

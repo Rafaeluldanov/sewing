@@ -17,7 +17,7 @@ import { z } from 'zod';
 // Enums (зеркало Prisma)
 // ---------------------------------------------------------------------------
 
-export const SALARY_ENTRY_SOURCES = ['SHIFT_DAY', 'MANUAL'] as const;
+export const SALARY_ENTRY_SOURCES = ['SHIFT_DAY', 'MANUAL', 'RECUT'] as const;
 export const SalaryEntrySourceSchema = z.enum(SALARY_ENTRY_SOURCES);
 export type SalaryEntrySource = z.infer<typeof SalaryEntrySourceSchema>;
 

@@ -28,6 +28,7 @@ import { RoutesModule } from './modules/routes/routes.module.js';
 import { TechCardsModule } from './modules/tech-cards/tech-cards.module.js';
 import { ConstructorTasksModule } from './modules/constructor-tasks/constructor-tasks.module.js';
 import { CuttingTasksModule } from './modules/cutting-tasks/cutting-tasks.module.js';
+import { RecutModule } from './modules/recut/recut.module.js';
 import { DisplayScreensModule } from './modules/display-screens/display-screens.module.js';
 import { AuditModule } from './modules/audit/audit.module.js';
 import { DiagnosticsModule } from './modules/diagnostics/diagnostics.module.js';
@@ -99,6 +100,7 @@ import { IntegrationsModule } from './modules/integrations/integrations.module.j
     TechCardsModule,
     ConstructorTasksModule,
     CuttingTasksModule,
+    RecutModule,
     DisplayScreensModule,
     DiagnosticsModule,
     MasterCallsModule,

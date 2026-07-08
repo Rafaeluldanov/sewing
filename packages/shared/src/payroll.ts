@@ -350,7 +350,7 @@ export interface PayrollEmployeeSalaryEntryDto {
   amount: number;
   /** Отработанные секунды за день (закрытые смены). `null` — историч./MANUAL. */
   workedSeconds: number | null;
-  source: 'SHIFT_DAY' | 'MANUAL';
+  source: 'SHIFT_DAY' | 'MANUAL' | 'RECUT';
   editedManually: boolean;
   managerComment: string | null;
   editedByEmployeeId: string | null;

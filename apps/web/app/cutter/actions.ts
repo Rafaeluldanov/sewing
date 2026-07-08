@@ -15,7 +15,17 @@ import {
   saveCuttingTaskProgress,
   startCuttingTask,
 } from '@/lib/cutting-tasks-api';
+import {
+  cancelRecut,
+  completeRecut,
+  searchRecutOrders,
+  startRecut,
+} from '@/lib/recut-api';
 import type { SaveCuttingTaskProgressDto } from '@sewing/shared/cutting-tasks';
+import type {
+  RecutOrderSearchItemDto,
+  RecutSessionDto,
+} from '@sewing/shared/recut';
 
 export interface CutterActionResult {
   ok: boolean;
@@ -74,5 +84,76 @@ export async function completeCuttingTaskAction(
     return { ok: true };
   } catch (e) {
     return { ok: false, error: explainError(e, 'Не удалось завершить раскрой') };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Подкрой (`RecutSession`) — см. `apps/web/app/cutter/recut-panel.tsx`
+// ---------------------------------------------------------------------------
+
+export type RecutActionResult =
+  | { ok: true; session: RecutSessionDto | null }
+  | { ok: false; error: string };
+
+/** Поиск заказа по номеру для запуска подкроя (вызывается из клиента). */
+export async function searchRecutOrdersAction(
+  q: string,
+): Promise<RecutOrderSearchItemDto[]> {
+  const term = (q ?? '').trim();
+  if (term.length === 0) return [];
+  try {
+    return await searchRecutOrders(term);
+  } catch {
+    // Поиск — вспомогательный: сетевой сбой не должен ронять экран,
+    // отдаём пустой список (пользователь повторит ввод).
+    return [];
+  }
+}
+
+/** «Начать подкрой» по выбранному заказу. */
+export async function startRecutAction(
+  orderId: string,
+): Promise<RecutActionResult> {
+  if (!orderId || typeof orderId !== 'string') {
+    return { ok: false, error: 'Не выбран заказ' };
+  }
+  try {
+    const session = await startRecut(orderId);
+    revalidatePath('/cutter');
+    return { ok: true, session };
+  } catch (e) {
+    return { ok: false, error: explainError(e, 'Не удалось начать подкрой') };
+  }
+}
+
+/** «Завершить подкрой». */
+export async function completeRecutAction(
+  id: string,
+): Promise<RecutActionResult> {
+  if (!id || typeof id !== 'string') {
+    return { ok: false, error: 'Неверный id подкроя' };
+  }
+  try {
+    const session = await completeRecut(id);
+    revalidatePath('/cutter');
+    return { ok: true, session };
+  } catch (e) {
+    return { ok: false, error: explainError(e, 'Не удалось завершить подкрой') };
+  }
+}
+
+/** «Отменить подкрой» (без оплаты). */
+export async function cancelRecutAction(
+  id: string,
+): Promise<RecutActionResult> {
+  if (!id || typeof id !== 'string') {
+    return { ok: false, error: 'Неверный id подкроя' };
+  }
+  try {
+    const session = await cancelRecut(id);
+    revalidatePath('/cutter');
+    return { ok: true, session };
+  } catch (e) {
+    return { ok: false, error: explainError(e, 'Не удалось отменить подкрой') };
   }
 }

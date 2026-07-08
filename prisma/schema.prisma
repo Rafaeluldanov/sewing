@@ -92,6 +92,12 @@ enum CompensationType {
 enum SalaryEntrySource {
   SHIFT_DAY
   MANUAL
+  /// «Подкрой» — почасовая ДОПЛАТА сверх смены за докрой недостающих/
+  /// бракованных деталей (`model RecutSession`). Отдельная строка
+  /// ведомости: сумма = Σ(длительность закрытых подкроев за день) /
+  /// 3600 × `Employee.salaryPerHour`. Время подкроя при этом остаётся
+  /// и в `SHIFT_DAY` (сознательная доплата, не вычитается из смены).
+  RECUT
 }
 
 /// Жизненный цикл вызова мастера цеха (`MasterCall`, MVP).
@@ -978,6 +984,7 @@ model Employee {
   createdAt              DateTime         @default(now())
 
   shiftSessions    ShiftSession[]
+  recutSessions    RecutSession[]
   eventsAsActor    PassportEvent[]  @relation("EventEmployee")
   operationEntries OperationEntry[]
   salaryEntries    SalaryEntry[]
@@ -1170,6 +1177,7 @@ model Equipment {
   createdAt     DateTime @default(now())
 
   shiftSessions     ShiftSession[]
+  recutSessions     RecutSession[]
   allowedOperations EquipmentOperation[]
   passportEvents    PassportEvent[]
   printers          Printer[]
@@ -1224,7 +1232,61 @@ model ShiftSession {
   equipment Equipment @relation(fields: [equipmentId], references: [id])
   operation Operation @relation(fields: [operationId], references: [id])
 
+  recutSessions RecutSession[]
+
   @@index([employeeId, endedAt])
+}
+
+/// «Подкрой» — отдельная хронометрируемая активность раскройщика
+/// (роль `CUTTER`) по заказу: докрой недостающих/бракованных деталей,
+/// который может понадобиться даже по уже ЗАВЕРШЁННОМУ заказу
+/// (`Order.status = DONE`). Это НЕ `CuttingTask` и НЕ `Passport`:
+/// подкрой не выпускает паспортов, не трогает статус/план заказа и
+/// не связан с раскладами — просто таймер `start → stop`, привязанный
+/// к заказу и сотруднику.
+///
+/// Доступен только в рамках открытой смены раскройщика
+/// (`ShiftSession`); `equipmentId`/`shiftSessionId` снимаются с
+/// активной смены на момент запуска (контекст/аудит).
+///
+/// Оплата (см. `SalaryService.syncDailyRecut`): почасовая ДОПЛАТА
+/// сверх смены. При завершении фиксируем `workedSeconds =
+/// endedAt − startedAt`, снимок часовой ставки (`ratePerHour =
+/// Employee.salaryPerHour`) и `amount = ratePerHour × workedSeconds /
+/// 3600`. Дневной агрегат ложится отдельной строкой
+/// `SalaryEntry(source = RECUT)` — время подкроя при этом остаётся и
+/// в часах смены (`SHIFT_DAY`), т.е. это сознательная доплата.
+model RecutSession {
+  id             String    @id @default(cuid())
+  orderId        String
+  employeeId     String
+  /// Стол/оборудование из активной смены на момент запуска (контекст).
+  equipmentId    String?
+  /// Смена, в рамках которой шёл подкрой (для отчётности/аудита).
+  shiftSessionId String?
+  /// `ACTIVE` — идёт прямо сейчас (endedAt = null); `DONE` — завершён
+  /// раскройщиком; `CANCELLED` — отменён (без оплаты). Свободная
+  /// строка по образцу `CuttingTask.status`.
+  status         String    @default("ACTIVE")
+  startedAt      DateTime  @default(now())
+  endedAt        DateTime?
+  /// Снимок часовой ставки на момент завершения (`Employee.salaryPerHour`).
+  ratePerHour    Decimal?  @db.Decimal(12, 2)
+  /// Отработанные секунды (`endedAt − startedAt`), фиксируются при завершении.
+  workedSeconds  Int?
+  /// Рассчитанная доплата = `ratePerHour × workedSeconds / 3600`.
+  amount         Decimal?  @db.Decimal(12, 2)
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  employee     Employee      @relation(fields: [employeeId], references: [id])
+  equipment    Equipment?    @relation(fields: [equipmentId], references: [id], onDelete: SetNull)
+  shiftSession ShiftSession? @relation(fields: [shiftSessionId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId, status])
+  @@index([orderId])
+  @@index([employeeId, startedAt])
 }
 
 // =========================
@@ -1355,6 +1417,9 @@ model Order {
   /// `OrdersService.start()` (переход в `IN_PRODUCTION`). Nullable для
   /// заказов, запущенных до появления модуля.
   cuttingTask           CuttingTask?
+  /// Подкрои по заказу (`model RecutSession`) — докрой деталей,
+  /// возможен даже после завершения заказа. Не влияет на статус заказа.
+  recutSessions         RecutSession[]
   materialRequirements  OrderMaterialRequirement[]
   outsourceRequirements OrderOutsourceRequirement[]
   /// Ручные строки логистики/доставки заказа (см. `model

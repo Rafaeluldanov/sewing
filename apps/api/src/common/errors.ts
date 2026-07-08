@@ -4044,6 +4044,66 @@ export class CuttingTaskPayloadInvalidException extends BusinessException {
 }
 
 // ---------------------------------------------------------------------------
+// Подкрой (`RecutSession`, роль CUTTER)
+// ---------------------------------------------------------------------------
+
+/**
+ * Раскройщик пытается начать подкрой без открытой смены. Подкрой —
+ * активность в рамках смены (часы смены = почасовая оплата, доска
+ * `/cutter` и так закрыта за сменой); без смены запускать нельзя.
+ */
+export class RecutNoActiveShiftException extends BusinessException {
+  constructor() {
+    super(
+      'RECUT_NO_ACTIVE_SHIFT',
+      'Смена не начата — отсканируйте QR раскройного стола, затем начните подкрой.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * У раскройщика уже идёт другой подкрой. Одновременно активен только
+ * один (partial-unique индекс `recut_session_active_employee_uniq` +
+ * явная проверка). Сначала завершите текущий.
+ */
+export class RecutAlreadyActiveException extends BusinessException {
+  constructor() {
+    super(
+      'RECUT_ALREADY_ACTIVE',
+      'У вас уже идёт подкрой — сначала завершите его.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class RecutNotFoundException extends BusinessException {
+  constructor() {
+    super('RECUT_NOT_FOUND', 'Подкрой не найден', HttpStatus.NOT_FOUND);
+  }
+}
+
+/**
+ * Завершить/отменить можно только идущий (`ACTIVE`) подкрой. Если он
+ * уже `DONE`/`CANCELLED` — повторное действие отклоняется.
+ */
+export class RecutNotActiveException extends BusinessException {
+  constructor() {
+    super(
+      'RECUT_NOT_ACTIVE',
+      'Подкрой уже завершён или отменён.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class RecutOrderNotFoundException extends BusinessException {
+  constructor() {
+    super('RECUT_ORDER_NOT_FOUND', 'Заказ не найден', HttpStatus.NOT_FOUND);
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Hard-delete (этап «Удалить архивную запись навсегда»)
 //
 // Архивирование — soft (status/isActive). Hard-delete = физическое

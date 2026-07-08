@@ -213,6 +213,116 @@ export class SalaryService {
     }
   }
 
+  /**
+   * «Подкрой» (`SalaryEntrySource.RECUT`): почасовая ДОПЛАТА сверх смены
+   * за завершённые подкрои сотрудника за день (`model RecutSession`).
+   *
+   * Считается ОТДЕЛЬНОЙ строкой ведомости `(employee, date, RECUT)` — в
+   * дополнение к `SHIFT_DAY`. Время подкроя при этом НЕ вычитается из
+   * часов смены: подкрой идёт внутри смены, но оплачивается доплатой
+   * сверху (сознательное решение, см. `RecutService`). Сумма =
+   * `Σ(workedSeconds завершённых подкроев за день) / 3600 ×
+   * Employee.salaryPerHour`.
+   *
+   * Полностью зеркалит `syncDailySalary` (та же эксплуатация
+   * `editedManually` / lock-by-line / P2002-гонки), меняется лишь
+   * источник времени (`computeRecutSeconds`) и `source`. Вызывается
+   * `RecutService` fail-soft на завершении/отмене подкроя.
+   */
+  async syncDailyRecut(
+    employeeId: string,
+    date: Date,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<SalaryEntryDto | null> {
+    const day = startOfDay(date);
+
+    const employee = await tx.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        active: true,
+        compensationType: true,
+        salaryPerHour: true,
+      },
+    });
+    if (!employee || !employee.active) return null;
+    // Оплата подкроя — почасовая, поэтому нужна та же почасовая
+    // eligibility, что и у смены: SALARY/MIXED со ставкой. Чистому
+    // PIECEWORK без `salaryPerHour` строку не создаём (подкрой всё равно
+    // залогирован в `RecutSession`, но денег без часовой ставки нет).
+    if (!isSalaryEligible(employee.compensationType)) return null;
+    if (employee.salaryPerHour === null) return null;
+
+    const worked = await computeRecutSeconds(
+      tx,
+      employeeId,
+      day,
+      endOfDay(date),
+    );
+    if (worked <= 0) {
+      // Ещё нет ни одного завершённого подкроя за день (например, sync
+      // на отмене единственного, ещё не завершённого подкроя). Пустую
+      // запись не создаём.
+      return null;
+    }
+
+    const amount = hourlyAmount(employee.salaryPerHour, worked);
+
+    const existing = await tx.salaryEntry.findUnique({
+      where: {
+        SalaryEntry_employee_date_source_uniq: {
+          employeeId,
+          date: day,
+          source: SalaryEntrySource.RECUT,
+        },
+      },
+      include: salaryInclude,
+    });
+
+    if (existing) {
+      if (existing.editedManually) return toDto(existing);
+      if (await isSalaryEntryLocked(tx, existing.id)) return toDto(existing);
+      const updated = await tx.salaryEntry.update({
+        where: { id: existing.id },
+        data: { amount, workedSeconds: worked },
+        include: salaryInclude,
+      });
+      return toDto(updated);
+    }
+
+    try {
+      const created = await tx.salaryEntry.create({
+        data: {
+          employeeId,
+          date: day,
+          amount,
+          workedSeconds: worked,
+          source: SalaryEntrySource.RECUT,
+        },
+        include: salaryInclude,
+      });
+      return toDto(created);
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const row = await tx.salaryEntry.findUnique({
+          where: {
+            SalaryEntry_employee_date_source_uniq: {
+              employeeId,
+              date: day,
+              source: SalaryEntrySource.RECUT,
+            },
+          },
+          include: salaryInclude,
+        });
+        return row ? toDto(row) : null;
+      }
+      throw err;
+    }
+  }
+
   // ===========================================================================
   // READ: list
   // ===========================================================================
@@ -601,6 +711,34 @@ async function computeWorkedSeconds(
     if (!s.endedAt) continue;
     const sec = Math.floor((s.endedAt.getTime() - s.startedAt.getTime()) / 1000);
     if (sec > 0) total += sec;
+  }
+  return total;
+}
+
+/**
+ * Сумма секунд завершённых подкроев (`RecutSession`, `status = DONE`)
+ * сотрудника за день. Берём зафиксированный при завершении
+ * `workedSeconds`; сессии, начавшиеся в пределах `[dayStart, dayEnd]`.
+ * `ACTIVE`/`CANCELLED` не учитываются (первые ещё идут, вторые не
+ * оплачиваются). Используется `SalaryService.syncDailyRecut`.
+ */
+async function computeRecutSeconds(
+  tx: Prisma.TransactionClient | PrismaService,
+  employeeId: string,
+  dayStart: Date,
+  dayEnd: Date,
+): Promise<number> {
+  const sessions = await tx.recutSession.findMany({
+    where: {
+      employeeId,
+      status: 'DONE',
+      startedAt: { gte: dayStart, lte: dayEnd },
+    },
+    select: { workedSeconds: true },
+  });
+  let total = 0;
+  for (const s of sessions) {
+    if (s.workedSeconds && s.workedSeconds > 0) total += s.workedSeconds;
   }
   return total;
 }
