@@ -159,6 +159,33 @@ export function resolveOrderNomenclature(
 }
 
 /**
+ * URL карточки лекала (`/admin/patterns/[id]`) для заказа — или
+ * `null`, если карточки нет и ссылку рисовать не нужно.
+ *
+ * Ссылка живёт только пока у заказа есть live-привязка к
+ * `PatternItem`: `source` = `'snapshot'` | `'pattern'` И задан
+ * `patternItemId`. Для legacy-заказов (`source = 'legacyProduct'`)
+ * и пустых (`'none'`) карточки лекала нет — legacy `Product`
+ * сознательно скрыт (см. `OrdersService.ensureLegacyProductForPattern`),
+ * поэтому ссылку не даём.
+ *
+ * Единая точка правды: href отсюда берут `PatternPreviewCard`
+ * (на обеих карточках заказа) и мета-блок «Изделие / лекало» в
+ * админ-карточке `/admin/orders/[id]`, чтобы «проваливание» в
+ * карточку лекала было доступно из одного и того же набора
+ * состояний заказа независимо от точки клика.
+ */
+export function resolveOrderPatternHref(
+  order: OrderNomenclatureSource,
+): string | null {
+  const { source } = resolveOrderNomenclature(order);
+  if ((source === 'snapshot' || source === 'pattern') && order.patternItemId) {
+    return `/admin/patterns/${order.patternItemId}`;
+  }
+  return null;
+}
+
+/**
  * Человеческие лейблы для бейджа источника. Используются и в
  * `PatternPreviewCard`, и в блоке «Изделие» — чтобы менеджер видел
  * один и тот же текст в обоих местах.

@@ -46,6 +46,7 @@ import Link from 'next/link';
 import {
   ORDER_NOMENCLATURE_SOURCE_BADGE,
   resolveOrderNomenclature,
+  resolveOrderPatternHref,
   type OrderNomenclatureSource,
   type OrderNomenclatureSourceTag,
 } from '@/lib/order-nomenclature';
@@ -93,11 +94,11 @@ export function PatternPreviewCard({ order, variant = 'admin' }: Props) {
 
   // Ссылка на карточку лекала живёт только пока есть live `patternItemId`
   // (snapshot или live PatternItem). Для legacy-заказов без
-  // `patternItemId` ссылки нет — Product сознательно скрыт.
-  const patternHref =
-    (r.source === 'snapshot' || r.source === 'pattern') && order.patternItemId
-      ? `/admin/patterns/${order.patternItemId}`
-      : null;
+  // `patternItemId` ссылки нет — Product сознательно скрыт. Правило
+  // «когда давать ссылку» вынесено в общий `resolveOrderPatternHref`,
+  // чтобы «проваливание» в карточку лекала совпадало во всех точках
+  // карточки заказа (превью + мета-блок «Изделие / лекало»).
+  const patternHref = resolveOrderPatternHref(order);
 
   // Цвет бейджа: snapshot — фиолетовый, pattern — зелёный, legacy —
   // нейтральный серый. UI карточки заказа подсвечивает «снимок» и
@@ -221,7 +222,8 @@ export function PatternPreviewCard({ order, variant = 'admin' }: Props) {
               {patternHref ? (
                 <Link
                   href={patternHref}
-                  style={{ color: 'inherit', textDecoration: 'none' }}
+                  title="Открыть карточку лекала"
+                  style={{ color: 'var(--color-accent)' }}
                 >
                   {r.name ?? '—'}
                 </Link>

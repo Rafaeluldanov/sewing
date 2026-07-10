@@ -54,6 +54,7 @@ import {
 import {
   ORDER_NOMENCLATURE_SOURCE_BADGE,
   resolveOrderNomenclature,
+  resolveOrderPatternHref,
 } from '@/lib/order-nomenclature';
 import { CancelOrderButton } from './cancel-order-button';
 import { DeleteOrderButton } from './delete-order-button';
@@ -104,6 +105,7 @@ export function OrderManagementHeader({ order, passports }: Props) {
   const statusTone: AdminStatusTone = getOrderStatusTone(status);
   const statusLabel = formatOrderStatus(status);
   const nomenclature = resolveOrderNomenclature(order);
+  const patternHref = resolveOrderPatternHref(order);
   const clientName = order.client?.name ?? order.customer ?? null;
   const deadline = order.deadline ?? null;
   const deadlineTone: AdminStatusTone | null = deadline
@@ -225,7 +227,17 @@ export function OrderManagementHeader({ order, passports }: Props) {
         <HeaderField label="Изделие / лекало">
           {nomenclature.name ? (
             <span>
-              <strong>{nomenclature.name}</strong>
+              {patternHref ? (
+                <Link
+                  href={patternHref}
+                  title="Открыть карточку лекала"
+                  style={{ color: 'var(--color-accent)' }}
+                >
+                  <strong>{nomenclature.name}</strong>
+                </Link>
+              ) : (
+                <strong>{nomenclature.name}</strong>
+              )}
               {nomenclature.source === 'legacyProduct' && (
                 <span
                   className="admin-order-item-card__source-badge"
