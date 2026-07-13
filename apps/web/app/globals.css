@@ -7509,6 +7509,31 @@ body:has(.admin-layout) .app-header__nav { display: none; }
 }
 .superadmin-topbar__brand { font-weight: 600; }
 .superadmin-topbar__user { margin-left: auto; font-size: 13px; }
+/* «Выйти» — единственный выход из аккаунта в этом разделе: глобальная шапка
+   под `.admin-layout` скрыта, а сайдбара с logout (как в `/admin`) здесь нет.
+   Тон — muted, как у `.admin-sidebar__logout`: без агрессивного красного. */
+.superadmin-topbar__logout {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0.3rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid var(--admin-border);
+  background: transparent;
+  color: var(--admin-muted);
+  font-size: 13px;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: background 0.12s ease, color 0.12s ease;
+}
+.superadmin-topbar__logout:hover {
+  background: var(--admin-soft);
+  color: var(--admin-text);
+}
+.superadmin-topbar__logout:focus-visible {
+  outline: 2px solid var(--admin-primary);
+  outline-offset: 2px;
+}
 
 /* Dashboard stats — счётчик внутри карточки.
    --------------------------------------------------------------------------- */
