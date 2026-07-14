@@ -15,6 +15,7 @@ import type {
 } from '@sewing/shared/tech-cards';
 import { isKnownTechCardMaterialRoleKey } from '@sewing/shared/tech-cards';
 import {
+  getMaterialCharacteristic,
   legacyColumnsToCharacteristics,
   type MaterialCharacteristics,
 } from '@sewing/shared/material-characteristics';
@@ -793,6 +794,141 @@ export class TechCardsService {
   }
 
   // -------------------------------------------------------------------------
+  // «Сохранить как новый шаблон» (из техкарты расцветки заказа)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Вынести техкарту расцветки заказа в справочник как НОВЫЙ шаблон.
+   *
+   * Уезжает СТРУКТУРА: строки снимка + определения параметров (включая ad-hoc,
+   * заведённые в заказе). Значения — НЕТ.
+   *
+   * Ключевой момент — ЗАНУЛЕНИЕ параметризованных ячеек. Строка снимка несёт
+   * уже ПОДСТАВЛЕННОЕ значение (плотность 190), и если скопировать её как есть,
+   * новый шаблон унесёт «190 г/м²» намертво ВМЕСТЕ с параметром «плотность» —
+   * то есть воспроизведёт ровно ту болезнь шаблонов-близнецов, ради которой
+   * фича делается. Поэтому ячейку, за которую отвечает параметр, обнуляем.
+   *
+   * Исключение — NOT NULL-колонки (`name`, `unit`, `qtyPerUnit`): обнулить их
+   * нельзя, поэтому оставляем как есть — в заказе они всё равно будут
+   * перекрыты значением параметра.
+   *
+   * Заказ не трогаем: `OrderVariant.techCardId` на новый шаблон не
+   * перенаправляем — иначе сменился бы источник, снимок ре-материализовался бы
+   * и правки заказа стёрлись. Мостик работает только наружу.
+   */
+  async createFromOrderSnapshot(
+    orderId: string,
+    orderVariantId: string | null,
+    dto: { code: string; name: string },
+  ): Promise<TechCardTemplateDetailDto> {
+    const [rows, params] = await Promise.all([
+      this.prisma.orderMaterialRequirement.findMany({
+        where: { orderId, orderVariantId },
+        orderBy: { sortOrder: 'asc' },
+      }),
+      this.prisma.orderTechCardParameter.findMany({
+        where: { orderId, orderVariantId },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      }),
+    ]);
+
+    if (rows.length === 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'ORDER_TECH_CARD_EMPTY',
+        message:
+          'У этой расцветки нет строк материалов — выносить в справочник нечего.',
+      });
+    }
+
+    let createdId: string;
+    try {
+      createdId = await this.prisma.$transaction(async (tx) => {
+        const created = await tx.techCardTemplate.create({
+          data: { code: dto.code, name: dto.name, isActive: true },
+        });
+
+        await tx.techCardMaterialLine.createMany({
+          data: rows.map((r, i) => {
+            const bindings = (r.parameterBindings ??
+              null) as TechCardParameterBindings | null;
+            const cells = stripParameterizedCells(
+              {
+                fabricType: r.fabricType,
+                note: r.note,
+                densityGsm: r.densityGsm,
+                plannedWidthCm: r.plannedWidthCm,
+                hardwareSizeText: r.hardwareSizeText,
+                hardwareMaterialText: r.hardwareMaterialText,
+                characteristics:
+                  (r.characteristics as MaterialCharacteristics | null) ?? null,
+              },
+              bindings,
+            );
+            return {
+              techCardId: created.id,
+              sortOrder: (i + 1) * 10,
+              name: r.name,
+              unit: r.unit,
+              qtyPerUnit: r.qtyPerUnit,
+              note: cells.note,
+              materialRole: r.materialRole,
+              fabricType: cells.fabricType,
+              densityGsm: cells.densityGsm,
+              plannedWidthCm: cells.plannedWidthCm,
+              colorRule: r.colorRule,
+              fixedColorText: r.fixedColorText,
+              hardwareSizeText: cells.hardwareSizeText,
+              hardwareMaterialText: cells.hardwareMaterialText,
+              materialImageUrl: r.materialImageUrl,
+              materialImageOriginalFileName: r.materialImageOriginalFileName,
+              subtypeKey: r.subtypeKey,
+              characteristics: cells.characteristics ?? Prisma.DbNull,
+              parameterBindings: bindings
+                ? (bindings as Prisma.InputJsonValue)
+                : Prisma.DbNull,
+            };
+          }),
+        });
+
+        if (params.length > 0) {
+          await tx.techCardParameter.createMany({
+            data: params.map((p, i) => ({
+              techCardId: created.id,
+              key: p.key,
+              label: p.label,
+              inputType: p.inputType,
+              options: p.options
+                ? (p.options as Prisma.InputJsonValue)
+                : Prisma.DbNull,
+              unit: p.unit,
+              isRequired: p.isRequired,
+              // Значение остаётся в заказе — в шаблон уезжает только структура.
+              defaultValue: null,
+              owner: p.owner,
+              sortOrder: p.sortOrder || (i + 1) * 10,
+            })),
+          });
+        }
+
+        await this.assertBindingsResolvable(tx, created.id);
+        return created.id;
+      });
+    } catch (e) {
+      this.translateUniqueError(e);
+      throw e;
+    }
+
+    this.logger.log(
+      `event=tech_card.create_from_order id=${createdId} code=${dto.code} ` +
+        `order=${orderId} variant=${orderVariantId ?? 'order-level'} ` +
+        `lines=${rows.length} params=${params.length}`,
+    );
+    return this.getOne(createdId);
+  }
+
+  // -------------------------------------------------------------------------
   // Параметры техкарты (фича «Параметры техкарт»)
   // -------------------------------------------------------------------------
 
@@ -897,4 +1033,71 @@ export class TechCardsService {
       throw new TechCardCodeTakenException();
     }
   }
+}
+
+/**
+ * Убрать из ячеек значения, за которые отвечают параметры.
+ *
+ * Нужно ровно в одном месте — при выносе техкарты заказа в справочник
+ * (`createFromOrderSnapshot`). Строка снимка несёт уже подставленное значение,
+ * и без зануления новый шаблон унёс бы «190 г/м²» намертво вместе с параметром
+ * «плотность» — то есть породил бы очередного близнеца.
+ *
+ * Снимаем и из `characteristics`-JSON, и из legacy-колонки: downstream читает
+ * старые колонки, и «забытая» плотность там всплыла бы как значение по
+ * умолчанию, которого технолог не задавал.
+ *
+ * NOT NULL-колонки (`name`, `unit`, `qtyPerUnit`) не трогаем — обнулить их
+ * нельзя; в заказе они всё равно перекроются значением параметра.
+ */
+function stripParameterizedCells(
+  cells: {
+    fabricType: string | null;
+    note: string | null;
+    densityGsm: number | null;
+    plannedWidthCm: number | null;
+    hardwareSizeText: string | null;
+    hardwareMaterialText: string | null;
+    characteristics: MaterialCharacteristics | null;
+  },
+  bindings: TechCardParameterBindings | null,
+): typeof cells {
+  if (!bindings || Object.keys(bindings).length === 0) return cells;
+
+  const next = {
+    ...cells,
+    characteristics: cells.characteristics ? { ...cells.characteristics } : null,
+  };
+
+  for (const field of Object.keys(bindings)) {
+    if (field === 'core:fabricType') next.fabricType = null;
+    if (field === 'core:note') next.note = null;
+    if (!field.startsWith('char:')) continue;
+
+    const charKey = field.slice('char:'.length);
+    if (next.characteristics) delete next.characteristics[charKey];
+
+    const def = getMaterialCharacteristic(charKey);
+    switch (def?.legacyColumn) {
+      case 'densityGsm':
+        next.densityGsm = null;
+        break;
+      case 'plannedWidthCm':
+        next.plannedWidthCm = null;
+        break;
+      case 'hardwareSizeText':
+        next.hardwareSizeText = null;
+        break;
+      case 'hardwareMaterialText':
+        next.hardwareMaterialText = null;
+        break;
+      default:
+        break;
+    }
+  }
+
+  if (next.characteristics && Object.keys(next.characteristics).length === 0) {
+    next.characteristics = null;
+  }
+  return next;
 }

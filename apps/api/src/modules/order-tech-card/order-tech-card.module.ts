@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common';
 
 import { OrdersModule } from '../orders/orders.module.js';
+import { TechCardsModule } from '../tech-cards/tech-cards.module.js';
 import { OrderTechCardController } from './order-tech-card.controller.js';
+import { OrderTechCardTemplateController } from './order-tech-card-template.controller.js';
 import { OrderTechCardService } from './order-tech-card.service.js';
 
 /**
@@ -13,8 +15,10 @@ import { OrderTechCardService } from './order-tech-card.service.js';
  * `OrdersModule` про этот модуль ничего не знает.
  */
 @Module({
-  imports: [OrdersModule],
-  controllers: [OrderTechCardController],
+  // TechCardsModule — ради `createFromOrderSnapshot` («сохранить как шаблон»):
+  // знание о том, КАК писать шаблон, остаётся в модуле техкарт.
+  imports: [OrdersModule, TechCardsModule],
+  controllers: [OrderTechCardController, OrderTechCardTemplateController],
   providers: [OrderTechCardService],
   exports: [OrderTechCardService],
 })

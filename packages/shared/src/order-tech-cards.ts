@@ -112,4 +112,26 @@ export type CreateOrderTechCardParameterDto = z.infer<
   typeof CreateOrderTechCardParameterSchema
 >;
 
+/**
+ * Вынести техкарту расцветки в справочник как НОВЫЙ шаблон.
+ *
+ * Уезжает СТРУКТУРА: строки материалов + определения параметров (включая
+ * ad-hoc, заведённые в заказе). Значения — НЕ уезжают: иначе новый шаблон
+ * унесёт «190 г/м²» намертво вместе с параметром «плотность», то есть
+ * воспроизведёт ровно ту болезнь близнецов, ради которой фича и делается.
+ *
+ * Заказ при этом не трогаем: на новый шаблон он не перенаправляется.
+ * Мостик работает только наружу — «что меняем внутри заказа, внутри заказа
+ * и остаётся».
+ */
+export const SaveOrderTechCardAsTemplateSchema = z.object({
+  /** Чью техкарту выносим. null = order-level группа (0–1 расцветка). */
+  orderVariantId: z.string().min(1).nullish(),
+  code: z.string().trim().min(1, 'Укажите код техкарты').max(64),
+  name: z.string().trim().min(1, 'Укажите название техкарты').max(200),
+});
+export type SaveOrderTechCardAsTemplateDto = z.infer<
+  typeof SaveOrderTechCardAsTemplateSchema
+>;
+
 export type { OrderTechCardParameterDto };
