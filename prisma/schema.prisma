@@ -1421,6 +1421,8 @@ model Order {
   /// возможен даже после завершения заказа. Не влияет на статус заказа.
   recutSessions         RecutSession[]
   materialRequirements  OrderMaterialRequirement[]
+  /// Фича «Параметры техкарт»: слоты + значения по расцветкам этого заказа.
+  techCardParameters    OrderTechCardParameter[]
   outsourceRequirements OrderOutsourceRequirement[]
   /// Ручные строки логистики/доставки заказа (см. `model
   /// OrderLogisticsLine` ниже, `apps/api/src/modules/orders/*`). Менеджер
@@ -1848,6 +1850,8 @@ model OrderVariant {
   /// со стороны обеих таблиц — удаление расцветки не сносит историю.
   materialRequirements OrderMaterialRequirement[]
   workshopNeeds        WorkshopNeed[]
+  /// Фича «Параметры техкарт»: значения параметров принадлежат расцветке.
+  techCardParameters   OrderTechCardParameter[]
 
   @@unique([orderId, ordinal])
   @@index([orderId])
@@ -3143,9 +3147,58 @@ model TechCardTemplate {
   /// Фича «Расцветки»: техкарта может быть выбрана расцветкой заказа
   /// (`OrderVariant.techCard`) — своя техкарта материалов на цвет.
   orderVariants  OrderVariant[]
+  /// Фича «Параметры техкарт»: слоты, значения которых вводятся в заказе.
+  parameters     TechCardParameter[]
 
   @@index([isActive])
   @@index([patternCategoryId])
+}
+
+/// ПАРАМЕТР ТЕХКАРТЫ — именованный слот, подставляемый в ЯЧЕЙКУ строки
+/// материала («Полотно основное → плотность»). Значение вводится в ЗАКАЗЕ,
+/// на каждой расцветке отдельно.
+///
+/// Зачем: сегодня плотность/состав зашиты в строку жёстко, поэтому «190 г/м²
+/// вместо 160» требует шаблон-близнец. Один шаблон с параметром заменяет
+/// четыре копии, отличающихся одним числом.
+///
+/// Это ОБОБЩЕНИЕ уже работающего `colorRule = ORDER_SELECTED_COLOR`: там
+/// шаблон говорит «спроси менеджера», а снапшот заказа получает пустое поле
+/// под ввод. ЦВЕТ из-под параметров сознательно выведен — за него по-прежнему
+/// отвечает `colorRule`; два писателя в одну ячейку дали бы молчаливый баг.
+///
+/// НЕ ПУТАТЬ с `PatternCategoryParameter`: тот про НОРМЫ РАСХОДА ПО РАЗМЕРАМ
+/// в номенклатуре (ось = размер), здесь — слот в ячейке строки материала
+/// (ось = расцветка заказа). Контракт: `@sewing/shared/tech-card-parameters`.
+///
+/// Привязка «параметр → ячейка» лежит НЕ здесь, а JSON-колонкой
+/// `TechCardMaterialLine.parameterBindings` — потому что `TechCardsService`
+/// сохраняет шаблон через deleteMany+createMany строк, id пересоздаются, и
+/// внешний ключ на строку отваливался бы при каждом сейве.
+model TechCardParameter {
+  id           String   @id @default(cuid())
+  techCardId   String
+  /// lower_snake, уникален в рамках техкарты. На него ссылаются биндинги.
+  key          String
+  label        String
+  /// NUMBER | TEXT | ENUM. Строкой — список расширяется без миграции.
+  inputType    String   @default("TEXT")
+  /// Для ENUM — массив допустимых значений.
+  options      Json?
+  unit         String?
+  isRequired   Boolean  @default(true)
+  defaultValue String?
+  /// MANUAL | ERP. Задел под интеграцию: ERP-параметры заполняет коммерсант
+  /// на своей стороне, в PLM они приезжают заблокированными.
+  owner        String   @default("MANUAL")
+  sortOrder    Int      @default(100)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  techCard TechCardTemplate @relation(fields: [techCardId], references: [id], onDelete: Cascade)
+
+  @@unique([techCardId, key])
+  @@index([techCardId, sortOrder])
 }
 
 /// Строка материала в шаблоне техкарты. На MVP — простая линейная
@@ -3231,6 +3284,16 @@ model TechCardMaterialLine {
   /// `colorRule`/`fixedColorText`. В Фазе 1 заполняется бэкфиллом из
   /// legacy-колонок; форма (Фаза 2) пишет сюда напрямую.
   characteristics               Json?
+  /// Фича «Параметры техкарт»: привязка ячеек этой строки к параметрам —
+  /// `{ "<целевая ячейка>": "<ключ параметра>" }`, например
+  /// `{ "char:density": "main_density", "core:fabricType": "composition" }`.
+  /// Ячейки — из whitelist `TECH_CARD_PARAMETER_TARGETS`.
+  ///
+  /// JSON, а не таблица со ссылкой на строку: `TechCardsService.update`
+  /// сохраняет шаблон через deleteMany+createMany, поэтому id строк
+  /// пересоздаются при каждом сейве и FK бы отваливался. Привязка едет
+  /// вместе со строкой — и в шаблоне, и в снапшоте заказа.
+  parameterBindings             Json?
   createdAt                     DateTime @default(now())
   updatedAt                     DateTime @updatedAt
 
@@ -3361,6 +3424,14 @@ model OrderMaterialRequirement {
   /// `colorRule`/`fixedColorText`. В Фазе 1 заполняется бэкфиллом из
   /// legacy-колонок; форма (Фаза 2) пишет сюда напрямую.
   characteristics               Json?
+  /// Фича «Параметры техкарт»: копия `TechCardMaterialLine.parameterBindings`
+  /// в снапшоте. Именно она (а не шаблон) определяет, какие ячейки этой
+  /// строки заказа питаются параметрами — поэтому ad-hoc привязку можно
+  /// завести прямо в заказе, не трогая справочник.
+  ///
+  /// Пересборка снапшота (`deleteMany` + `createMany`) сохраняет это поле
+  /// через preserve-мапы, как и `selectedColorText`.
+  parameterBindings             Json?
   createdAt                     DateTime @default(now())
 
   order              Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
@@ -3370,6 +3441,63 @@ model OrderMaterialRequirement {
   @@index([sourceTechCardLineId])
   @@index([materialRole])
   @@index([orderVariantId])
+}
+
+/// ПАРАМЕТР ТЕХКАРТЫ ВНУТРИ ЗАКАЗА: определение + ЗНАЧЕНИЕ в одной строке.
+///
+/// Значения всегда принадлежат РАСЦВЕТКЕ — наследования «уровень заказа →
+/// расцветка» сознательно нет (оно порождает вопрос «унаследовано или
+/// переопределено» и второй источник истины; ровно на этом мы уже горели
+/// с зеркалами `Order.techCardId` / `OrderVariant.techCardId`). От повторного
+/// ввода спасает «применить ко всем расцветкам» — разовое копирование.
+///
+/// Определение и значение вместе, потому что гранулярность совпадает: у
+/// каждой расцветки своя техкарта → свой набор параметров. Отдельная таблица
+/// значений дала бы join 1:1 без единой новой степени свободы.
+///
+/// `orderVariantId` НУЛЛАБЕЛЬНЫЙ — та же семантика, что у
+/// `OrderMaterialRequirement.orderVariantId`: снапшот заказа с 0–1 расцветкой
+/// живёт order-level группой. Плюс `createWithInlinePattern` создаёт заказы
+/// вообще без `OrderVariant` — при жёстком FK такие заказы навсегда упёрлись
+/// бы в гейт `ORDER_SPEC_INCOMPLETE`.
+///
+/// Пересборка снапшота эту таблицу НЕ трогает: значения переживают любой
+/// пересчёт тиража.
+model OrderTechCardParameter {
+  id                String    @id @default(cuid())
+  orderId           String
+  /// null = order-level группа (0–1 расцветка), см. JSDoc модели.
+  orderVariantId    String?
+  key               String
+  label             String
+  inputType         String    @default("TEXT")
+  options           Json?
+  unit              String?
+  isRequired        Boolean   @default(true)
+  sortOrder         Int       @default(100)
+  /// MANUAL | ERP — владелец параметра (задел под интеграцию).
+  owner             String    @default("MANUAL")
+  /// Из какого шаблона материализован. null → параметр заведён в заказе
+  /// (ad-hoc): только такие можно удалять.
+  sourceTechCardId  String?
+  /// `TechCardParameter.id` на момент материализации. Без FK: строки шаблона
+  /// и параметры пересоздаются при сейве справочника, ссылка нужна только
+  /// для аудита.
+  sourceParameterId String?
+  /// Значение всегда строкой; парсится по `inputType`. null/'' = не заполнено.
+  value             String?
+  /// MANUAL | TEMPLATE | ERP — откуда взялось значение.
+  valueSource       String    @default("MANUAL")
+  valueUpdatedAt    DateTime?
+  valueUpdatedById  String?
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  order        Order         @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  orderVariant OrderVariant? @relation(fields: [orderVariantId], references: [id], onDelete: Cascade)
+
+  @@index([orderId])
+  @@index([orderId, orderVariantId])
 }
 
 /// Snapshot строки внешнего подрядного размещения на конкретном заказе.

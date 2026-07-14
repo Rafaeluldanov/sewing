@@ -52,6 +52,7 @@ export * from './order-cut-issue-rules';
 export * from './order-deadlines';
 export * from './material-roles';
 export * from './material-characteristics';
+export * from './tech-card-parameters';
 export * from './patterns';
 export * from './pattern-categories';
 export * from './workshop-needs';
