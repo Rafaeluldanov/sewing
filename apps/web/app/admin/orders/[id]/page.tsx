@@ -67,11 +67,13 @@ import { Package } from 'lucide-react';
 import type { OrderDetailDto } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 import type { OrderColorwaysDto } from '@sewing/shared';
+import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
 import { ApiRequestError } from '@/lib/api';
 import { getOrder } from '@/lib/orders-api';
 import { listOrderPassports } from '@/lib/passports-api';
 import { getOrderCutIssueRules } from '@/lib/order-cut-issue-rules-api';
 import { getOrderColorways } from '@/lib/colorways-api';
+import { getOrderTechCardParameters } from '@/lib/order-tech-card-api';
 import { isColorwaysEnabled } from '@/lib/feature-flags';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorways-block';
@@ -143,11 +145,18 @@ export default async function AdminOrderDetailPage({
   // карточки. Флаг OFF на проде по умолчанию, ON на dev. Ошибку
   // запроса глушим — блок просто не рисуется, карточка не падает.
   let colorways: OrderColorwaysDto | null = null;
+  // Фича «Параметры техкарт»: слоты и их значения по расцветкам. Живут в том
+  // же блоке (плитка расцветки показывает, сколько ещё не заполнено).
+  let techCardParams: OrderTechCardParametersDto | null = null;
   if (isColorwaysEnabled()) {
     try {
-      colorways = await getOrderColorways(order.id);
+      [colorways, techCardParams] = await Promise.all([
+        getOrderColorways(order.id),
+        getOrderTechCardParameters(order.id),
+      ]);
     } catch {
       colorways = null;
+      techCardParams = null;
     }
   }
 
@@ -171,7 +180,19 @@ export default async function AdminOrderDetailPage({
             <OrderManagementHeader order={order} passports={passports} />
             <OrderActionCenter order={order} passports={passports} />
             {colorways && (
-              <OrderColorwaysBlock orderId={order.id} initial={colorways} />
+              <OrderColorwaysBlock
+                orderId={order.id}
+                initial={colorways}
+                techCardParams={techCardParams}
+                // Расцветки редактируемы только пока план не заморожен
+                // (DRAFT/CALCULATION) — то же окно, что и бэкенд-гайд
+                // `ORDER_COLORWAYS_LOCKED`. Иначе блок показываем read-only,
+                // чтобы форма не «сохраняла» правки, которые не поднимутся в
+                // общий план заказа.
+                editable={
+                  order.status === 'DRAFT' || order.status === 'CALCULATION'
+                }
+              />
             )}
             {order.constructorTask && (
               <OrderConstructorTaskCard task={order.constructorTask} />

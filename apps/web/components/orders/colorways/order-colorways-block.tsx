@@ -17,6 +17,8 @@
 
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
+import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
+import { ColorwayParamsWindow } from './colorway-params-window';
 import { Palette, Plus, Trash2, Save, Info, Loader2 } from 'lucide-react';
 import type { OrderColorwaysDto } from '@sewing/shared';
 import {
@@ -50,19 +52,69 @@ function toDraft(v: OrderColorwaysDto['variants'][number]): Draft {
   };
 }
 
+/**
+ * Сводка по параметрам расцветки для плитки: сколько заполнено из скольких.
+ * Считаем ОБЯЗАТЕЛЬНЫЕ — именно они держат гейт `ORDER_SPEC_INCOMPLETE`.
+ * null → у расцветки нет параметров (или данные не пришли), строку не рисуем.
+ */
+function paramSummary(
+  params: OrderTechCardParametersDto | null | undefined,
+  variantId: string,
+): { filled: number; total: number; missing: number } | null {
+  if (!params) return null;
+  // При 0–1 расцветке снимок (и параметры) живут order-level группой
+  // (`orderVariantId = null`) — та же логика, что на бэке.
+  const group =
+    params.variants.find((g) => g.orderVariantId === variantId) ??
+    (params.variants.length === 1 && params.variants[0].orderVariantId === null
+      ? params.variants[0]
+      : undefined);
+  if (!group) return null;
+  const required = group.parameters.filter((p) => p.isRequired);
+  if (required.length === 0) return null;
+  const missing = group.missingRequiredCount;
+  return {
+    filled: required.length - missing,
+    total: required.length,
+    missing,
+  };
+}
+
 export function OrderColorwaysBlock({
   orderId,
   initial,
+  editable = true,
+  techCardParams = null,
 }: {
   orderId: string;
   initial: OrderColorwaysDto;
+  /**
+   * Можно ли сейчас редактировать расцветки. Совпадает с бэкенд-окном
+   * (`DRAFT`/`CALCULATION`): только там правка расцветки поднимается в
+   * агрегат `OrderItem`. Иначе блок read-only, а любые мутации бэкенд
+   * отклонит (`ORDER_COLORWAYS_LOCKED`) — чтобы форма не «сохраняла»
+   * правки, которые не изменят общий план заказа.
+   */
+  editable?: boolean;
+  /**
+   * Фича «Параметры техкарт»: слоты и значения по расцветкам. Плитка
+   * показывает, сколько обязательных ещё не заполнено, и открывает окно.
+   * null — фича не отдала данные (карточка не должна из-за этого падать).
+   */
+  techCardParams?: OrderTechCardParametersDto | null;
 }) {
+  const ro = !editable;
   const [data, setData] = useState<OrderColorwaysDto>(initial);
   const [drafts, setDrafts] = useState<Record<string, Draft>>(() =>
     Object.fromEntries(data.variants.map((v) => [v.id, toDraft(v)])),
   );
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Какую расцветку открыли в окне параметров. undefined = окно закрыто
+  // (null — валидное значение: order-level группа при 0–1 расцветке).
+  const [paramsFor, setParamsFor] = useState<string | null | undefined>(
+    undefined,
+  );
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -176,25 +228,46 @@ export function OrderColorwaysBlock({
   return (
     <section className="cwl">
       <BlockStyles />
+      {paramsFor !== undefined && techCardParams && (
+        <ColorwayParamsWindow
+          orderId={orderId}
+          initial={techCardParams}
+          variantId={paramsFor}
+          onClose={() => setParamsFor(undefined)}
+        />
+      )}
       <header className="cwl-head">
         <h2>
           <Palette size={18} strokeWidth={1.8} aria-hidden /> Расцветки
           <span className="cwl-badge">{data.variants.length}</span>
         </h2>
-        <button
-          type="button"
-          className="admin-btn admin-btn--primary"
-          onClick={addColorway}
-          disabled={pending}
-        >
-          {pending && busyId === '__new__' ? (
-            <Loader2 size={15} className="cwl-spin" aria-hidden />
-          ) : (
-            <Plus size={15} strokeWidth={2} aria-hidden />
-          )}{' '}
-          Добавить расцветку
-        </button>
+        {!ro && (
+          <button
+            type="button"
+            className="admin-btn admin-btn--primary"
+            onClick={addColorway}
+            disabled={pending}
+          >
+            {pending && busyId === '__new__' ? (
+              <Loader2 size={15} className="cwl-spin" aria-hidden />
+            ) : (
+              <Plus size={15} strokeWidth={2} aria-hidden />
+            )}{' '}
+            Добавить расцветку
+          </button>
+        )}
       </header>
+
+      {ro && (
+        <div className="cwl-locked">
+          <Info size={16} strokeWidth={1.8} aria-hidden />
+          <span>
+            План заказа заморожен (расчёт запущен или заказ в производстве),
+            поэтому расцветки только для просмотра: правка не изменит общий
+            план заказа. Чтобы редактировать — верните заказ на пересчёт.
+          </span>
+        </div>
+      )}
 
       {error && <div className="cwl-error">{error}</div>}
 
@@ -219,18 +292,45 @@ export function OrderColorwaysBlock({
                   value={d.color}
                   onChange={(e) => patchDraft(v.id, { color: e.target.value })}
                   placeholder="Цвет"
+                  disabled={ro}
                 />
-                <button
-                  type="button"
-                  className="cwl-icon"
-                  aria-label="Удалить расцветку"
-                  disabled={!canDelete || pending}
-                  title={canDelete ? 'Удалить расцветку' : 'Нельзя удалить последнюю расцветку'}
-                  onClick={() => removeColorway(v.id)}
-                >
-                  <Trash2 size={15} strokeWidth={1.8} aria-hidden />
-                </button>
+                {!ro && (
+                  <button
+                    type="button"
+                    className="cwl-icon"
+                    aria-label="Удалить расцветку"
+                    disabled={!canDelete || pending}
+                    title={canDelete ? 'Удалить расцветку' : 'Нельзя удалить последнюю расцветку'}
+                    onClick={() => removeColorway(v.id)}
+                  >
+                    <Trash2 size={15} strokeWidth={1.8} aria-hidden />
+                  </button>
+                )}
               </div>
+
+              {paramSummary(techCardParams, v.id) && (
+                <div className="cwl-params">
+                  <span
+                    className={
+                      paramSummary(techCardParams, v.id)!.missing > 0
+                        ? 'cwl-params__stat cwl-params__stat--missing'
+                        : 'cwl-params__stat'
+                    }
+                  >
+                    Параметры {paramSummary(techCardParams, v.id)!.filled} из{' '}
+                    {paramSummary(techCardParams, v.id)!.total}
+                  </span>
+                  <button
+                    type="button"
+                    className="cwl-params__btn"
+                    onClick={() => setParamsFor(v.id)}
+                  >
+                    {paramSummary(techCardParams, v.id)!.missing > 0
+                      ? 'Заполнить'
+                      : 'Открыть'}
+                  </button>
+                </div>
+              )}
 
               <label className="cwl-field">
                 <span className="cwl-label">Техкарта материалов</span>
@@ -240,6 +340,7 @@ export function OrderColorwaysBlock({
                   onChange={(e) =>
                     patchDraft(v.id, { techCardId: e.target.value || null })
                   }
+                  disabled={ro}
                 >
                   <option value="">— по умолчанию заказа —</option>
                   {data.techCards.map((t) => (
@@ -261,18 +362,21 @@ export function OrderColorwaysBlock({
                         onChange={(e) =>
                           setQty(v.id, s.sizeId, Math.max(0, +e.target.value || 0))
                         }
+                        disabled={ro}
                       />
-                      <button
-                        type="button"
-                        className="cwl-size__x"
-                        aria-label="Убрать размер"
-                        onClick={() => removeSize(v.id, s.sizeId)}
-                      >
-                        ×
-                      </button>
+                      {!ro && (
+                        <button
+                          type="button"
+                          className="cwl-size__x"
+                          aria-label="Убрать размер"
+                          onClick={() => removeSize(v.id, s.sizeId)}
+                        >
+                          ×
+                        </button>
+                      )}
                     </div>
                   ))}
-                  {addable.length > 0 && (
+                  {!ro && addable.length > 0 && (
                     <select
                       className="cwl-add-size"
                       value=""
@@ -294,19 +398,21 @@ export function OrderColorwaysBlock({
                     ? (data.techCards.find((t) => t.id === d.techCardId)?.name ?? 'своя техкарта')
                     : 'техкарта заказа'}
                 </span>
-                <button
-                  type="button"
-                  className="admin-btn admin-btn--ghost cwl-save"
-                  onClick={() => saveVariant(v.id)}
-                  disabled={pending}
-                >
-                  {busy ? (
-                    <Loader2 size={14} className="cwl-spin" aria-hidden />
-                  ) : (
-                    <Save size={14} strokeWidth={1.8} aria-hidden />
-                  )}{' '}
-                  Сохранить
-                </button>
+                {!ro && (
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn--ghost cwl-save"
+                    onClick={() => saveVariant(v.id)}
+                    disabled={pending}
+                  >
+                    {busy ? (
+                      <Loader2 size={14} className="cwl-spin" aria-hidden />
+                    ) : (
+                      <Save size={14} strokeWidth={1.8} aria-hidden />
+                    )}{' '}
+                    Сохранить
+                  </button>
+                )}
               </footer>
             </article>
           );
@@ -348,7 +454,21 @@ function BlockStyles() {
 .cwl-head h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; }
 .cwl-badge { display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px;
   padding:0 6px; border-radius:999px; background:var(--color-bg-muted); color:var(--color-fg-muted); font-size:12px; font-weight:700; }
+/* Фича «Параметры техкарт»: сводка на плитке расцветки. Незаполненное
+   подсвечиваем — именно оно держит гейт «Перевести в расчёт». */
+.cwl-params { display:flex; align-items:center; justify-content:space-between; gap:8px;
+  padding:6px 8px; margin-bottom:8px; border-radius:8px; background:var(--color-bg-muted); }
+.cwl-params__stat { font-size:12.5px; color:var(--color-fg-muted); }
+.cwl-params__stat--missing { color:var(--color-warn-fg); font-weight:700; }
+.cwl-params__btn { border:none; background:none; padding:0; cursor:pointer;
+  font-size:12.5px; font-weight:700; color:var(--color-accent-fg); }
+.cwl-params__btn:hover { text-decoration:underline; }
 .cwl-error { padding:9px 12px; border-radius:8px; background:var(--color-danger-soft); color:var(--color-danger-fg); font-size:13px; }
+.cwl-locked { display:flex; align-items:flex-start; gap:8px; padding:10px 12px; border-radius:9px;
+  background:var(--color-warning-soft,var(--color-bg-muted)); color:var(--color-fg-muted);
+  border:1px solid var(--color-border); font-size:12.5px; line-height:1.45; }
+.cwl-locked svg { flex:none; margin-top:1px; }
+.cwl-input:disabled, .cwl-size input:disabled { opacity:.65; cursor:not-allowed; background:var(--color-bg-muted); }
 .cwl-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:12px; }
 .cwl-card { position:relative; border:1px solid var(--color-border); border-radius:12px; padding:12px 12px 10px;
   display:flex; flex-direction:column; gap:11px; background:var(--color-bg); overflow:hidden; }
