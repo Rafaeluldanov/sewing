@@ -39,6 +39,11 @@ import type {
   OutsourceTriggerType,
   TechCardMaterialColorRule,
 } from '@sewing/shared/tech-cards';
+import { applyParametersToCells } from '@sewing/shared/tech-card-parameters';
+import type {
+  TechCardParameterBindings,
+  TechCardParameterValue,
+} from '@sewing/shared/tech-card-parameters';
 import {
   ORDER_APPLICATION_STAGE_LABELS,
   ORDER_APPLICATION_STATUS_LABELS,
@@ -4053,6 +4058,9 @@ export class OrdersService {
         hardwareSizeText: true,
         hardwareMaterialText: true,
         selectedColorText: true,
+        // Фича «Параметры техкарт»: ad-hoc привязки, заведённые в заказе,
+        // обязаны пережить пересборку (как и selectedColorText).
+        parameterBindings: true,
       },
     });
 
@@ -4109,7 +4117,32 @@ export class OrdersService {
     const vk = (variantId: string | null) => variantId ?? '';
     const prevBySourceId = new Map<string, string>();
     const prevByCompositeKey = new Map<string, string>();
+    // Те же два ключа — для ad-hoc привязок параметров, заведённых в заказе.
+    const prevBindingsBySourceId = new Map<string, TechCardParameterBindings>();
+    const prevBindingsByCompositeKey = new Map<string, TechCardParameterBindings>();
     for (const r of existing) {
+      const compositeKey = composeMaterialMatchKey(
+        r.materialRole,
+        r.fabricType,
+        r.hardwareSizeText,
+        r.hardwareMaterialText,
+      );
+      const bindings = (r.parameterBindings ??
+        null) as TechCardParameterBindings | null;
+      if (bindings && Object.keys(bindings).length > 0) {
+        if (r.sourceTechCardLineId) {
+          prevBindingsBySourceId.set(
+            `${vk(r.orderVariantId)}|${r.sourceTechCardLineId}`,
+            bindings,
+          );
+        }
+        if (compositeKey) {
+          prevBindingsByCompositeKey.set(
+            `${vk(r.orderVariantId)}|${compositeKey}`,
+            bindings,
+          );
+        }
+      }
       if (!r.selectedColorText) continue;
       if (r.sourceTechCardLineId) {
         prevBySourceId.set(
@@ -4117,12 +4150,6 @@ export class OrdersService {
           r.selectedColorText,
         );
       }
-      const compositeKey = composeMaterialMatchKey(
-        r.materialRole,
-        r.fabricType,
-        r.hardwareSizeText,
-        r.hardwareMaterialText,
-      );
       if (compositeKey) {
         prevByCompositeKey.set(
           `${vk(r.orderVariantId)}|${compositeKey}`,
@@ -4144,55 +4171,103 @@ export class OrdersService {
       return loaded;
     };
 
+    // Фича «Параметры техкарт»: слоты шаблона материализуются в заказ (по
+    // расцветке), значения переживают пересборку — они в своей таблице.
+    // Делаем ДО построения строк: подстановка читает уже готовые значения.
+    const valuesByGroup = await this.materializeTechCardParameters(
+      orderId,
+      effectiveGroups,
+      getLines,
+      tx,
+    );
+
     const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
     for (const g of effectiveGroups) {
       const lines = await getLines(g.techCardId as string);
       const baseDecimal = new Prisma.Decimal(g.qty);
+      const paramValues =
+        valuesByGroup.get(vk(g.variantId)) ??
+        new Map<string, TechCardParameterValue>();
       for (const l of lines.materialLines) {
+        const compositeKey = `${vk(g.variantId)}|${
+          composeMaterialMatchKey(
+            l.materialRole,
+            l.fabricType,
+            l.hardwareSizeText,
+            l.hardwareMaterialText,
+          ) ?? ''
+        }`;
         const prevSelected =
           prevBySourceId.get(`${vk(g.variantId)}|${l.id}`) ??
-          prevByCompositeKey.get(
-            `${vk(g.variantId)}|${
-              composeMaterialMatchKey(
-                l.materialRole,
-                l.fabricType,
-                l.hardwareSizeText,
-                l.hardwareMaterialText,
-              ) ?? ''
-            }`,
-          ) ??
+          prevByCompositeKey.get(compositeKey) ??
           null;
         const isOrderSelected = l.colorRule === 'ORDER_SELECTED_COLOR';
         const resolvedColorText = isOrderSelected
           ? prevSelected
           : resolveColorText(l.colorRule, l.fixedColorText, g.color);
+
+        // Привязки: ad-hoc из заказа имеют приоритет над шаблонными —
+        // «что меняем внутри заказа, внутри заказа и остаётся».
+        const bindings =
+          prevBindingsBySourceId.get(`${vk(g.variantId)}|${l.id}`) ??
+          prevBindingsByCompositeKey.get(compositeKey) ??
+          l.parameterBindings ??
+          null;
+
+        // Подстановка значений в ячейки. `applyParametersToCells` сама
+        // зеркалит characteristics ↔ legacy-колонки — без этого плотность
+        // из параметра не доехала бы до расчёта потребности.
+        const { cells } = applyParametersToCells(
+          {
+            name: l.name,
+            unit: l.unit,
+            qtyPerUnit: l.qtyPerUnit.toString(),
+            note: l.note,
+            materialRole: l.materialRole,
+            fabricType: l.fabricType,
+            densityGsm: l.densityGsm,
+            plannedWidthCm: l.plannedWidthCm,
+            hardwareSizeText: l.hardwareSizeText,
+            hardwareMaterialText: l.hardwareMaterialText,
+            characteristics: l.characteristics,
+          },
+          bindings,
+          paramValues,
+        );
+        // qtyPerUnit сам может быть параметром (`core:qtyPerUnit`), поэтому
+        // тираж считаем ПОСЛЕ подстановки.
+        const qtyPerUnit = new Prisma.Decimal(cells.qtyPerUnit);
+
         data.push({
           orderId,
           orderVariantId: g.variantId,
           variantColor: g.variantColor,
           sourceTechCardLineId: l.id,
           sortOrder: l.sortOrder,
-          name: l.name,
-          unit: l.unit,
-          qtyPerUnit: l.qtyPerUnit,
-          totalQty: l.qtyPerUnit.mul(baseDecimal),
-          note: l.note,
-          materialRole: l.materialRole,
-          fabricType: l.fabricType,
-          densityGsm: l.densityGsm,
-          plannedWidthCm: l.plannedWidthCm,
+          name: cells.name,
+          unit: cells.unit,
+          qtyPerUnit,
+          totalQty: qtyPerUnit.mul(baseDecimal),
+          note: cells.note,
+          materialRole: cells.materialRole,
+          fabricType: cells.fabricType,
+          densityGsm: cells.densityGsm,
+          plannedWidthCm: cells.plannedWidthCm,
           colorRule: l.colorRule,
           fixedColorText: l.fixedColorText,
           resolvedColorText,
           requiresColorSelection: isOrderSelected,
           selectedColorText: isOrderSelected ? prevSelected : null,
-          hardwareSizeText: l.hardwareSizeText,
-          hardwareMaterialText: l.hardwareMaterialText,
+          hardwareSizeText: cells.hardwareSizeText,
+          hardwareMaterialText: cells.hardwareMaterialText,
           materialImageUrl: l.materialImageUrl,
           materialImageOriginalFileName: l.materialImageOriginalFileName,
           // Фаза 2 «Характеристики номенклатуры»: перенос в пересобранный snapshot.
           subtypeKey: l.subtypeKey,
-          characteristics: l.characteristics ?? Prisma.DbNull,
+          characteristics: cells.characteristics ?? Prisma.DbNull,
+          parameterBindings: bindings
+            ? (bindings as Prisma.InputJsonValue)
+            : Prisma.DbNull,
         });
       }
     }
@@ -4209,6 +4284,144 @@ export class OrdersService {
     if (data.length > 0) {
       await tx.orderMaterialRequirement.createMany({ data });
     }
+  }
+
+  /**
+   * Фича «Параметры техкарт»: материализовать слоты шаблона в заказ и вернуть
+   * значения по группам снимка (ключ — `orderVariantId ?? ''`).
+   *
+   * Правила:
+   *   - ЗНАЧЕНИЯ НЕ ТЕРЯЮТСЯ. Слот уже есть в заказе → обновляем только его
+   *     определение (лейбл, тип, обязательность), значение не трогаем. Именно
+   *     поэтому параметры живут в своей таблице, а не в снимке: снимок
+   *     пересоздаётся при каждом изменении тиража (deleteMany + createMany).
+   *   - AD-HOC СЛОТЫ (заведённые в заказе, `sourceTechCardId = null`) не
+   *     удаляются никогда — «что меняем внутри заказа, внутри заказа и
+   *     остаётся». Удаляются только слоты из шаблона, которых в шаблоне
+   *     больше нет.
+   *   - Новый слот получает значение из соседней группы с тем же ключом (если
+   *     есть), иначе — `defaultValue` шаблона. Это спасает переход
+   *     «1 расцветка ↔ 2 расцветки», где идентичность группы меняется
+   *     (`orderVariantId: null` ↔ `id`), и даёт разумный дефолт при добавлении
+   *     новой расцветки на ту же техкарту.
+   */
+  private async materializeTechCardParameters(
+    orderId: string,
+    groups: { variantId: string | null; techCardId: string | null }[],
+    getLines: (
+      techCardId: string,
+    ) => Promise<Awaited<ReturnType<TechCardsService['getLinesForSnapshot']>>>,
+    tx: Prisma.TransactionClient,
+  ): Promise<Map<string, Map<string, TechCardParameterValue>>> {
+    const vk = (variantId: string | null) => variantId ?? '';
+
+    const existing = await tx.orderTechCardParameter.findMany({
+      where: { orderId },
+      orderBy: [{ orderVariantId: 'asc' }, { createdAt: 'asc' }],
+    });
+
+    // Fallback «значение того же ключа из соседней группы» — первое непустое.
+    const fallbackByKey = new Map<string, { value: string; valueSource: string }>();
+    for (const p of existing) {
+      if (!p.value || p.value.trim() === '') continue;
+      if (!fallbackByKey.has(p.key)) {
+        fallbackByKey.set(p.key, { value: p.value, valueSource: p.valueSource });
+      }
+    }
+
+    const liveGroupKeys = new Set(groups.map((g) => vk(g.variantId)));
+    const result = new Map<string, Map<string, TechCardParameterValue>>();
+
+    for (const g of groups) {
+      const gk = vk(g.variantId);
+      const tplParams = g.techCardId
+        ? (await getLines(g.techCardId)).parameters
+        : [];
+      const inGroup = existing.filter((p) => vk(p.orderVariantId) === gk);
+      const byKey = new Map(inGroup.map((p) => [p.key, p] as const));
+      const tplKeys = new Set(tplParams.map((p) => p.key));
+
+      for (const tp of tplParams) {
+        const current = byKey.get(tp.key);
+        if (current) {
+          // Определение освежаем, ЗНАЧЕНИЕ не трогаем.
+          await tx.orderTechCardParameter.update({
+            where: { id: current.id },
+            data: {
+              label: tp.label,
+              inputType: tp.inputType,
+              options: tp.options
+                ? (tp.options as Prisma.InputJsonValue)
+                : Prisma.DbNull,
+              unit: tp.unit,
+              isRequired: tp.isRequired,
+              sortOrder: tp.sortOrder,
+              owner: tp.owner,
+              sourceTechCardId: g.techCardId,
+              sourceParameterId: tp.id,
+            },
+          });
+          continue;
+        }
+        const seeded = fallbackByKey.get(tp.key);
+        const created = await tx.orderTechCardParameter.create({
+          data: {
+            orderId,
+            orderVariantId: g.variantId,
+            key: tp.key,
+            label: tp.label,
+            inputType: tp.inputType,
+            options: tp.options
+              ? (tp.options as Prisma.InputJsonValue)
+              : Prisma.DbNull,
+            unit: tp.unit,
+            isRequired: tp.isRequired,
+            sortOrder: tp.sortOrder,
+            owner: tp.owner,
+            sourceTechCardId: g.techCardId,
+            sourceParameterId: tp.id,
+            value: seeded?.value ?? tp.defaultValue ?? null,
+            valueSource: seeded ? seeded.valueSource : 'TEMPLATE',
+          },
+        });
+        byKey.set(tp.key, created);
+      }
+
+      // Слот пропал из шаблона → убираем. Ad-hoc (sourceTechCardId = null)
+      // не трогаем.
+      const stale = inGroup.filter(
+        (p) => p.sourceTechCardId !== null && !tplKeys.has(p.key),
+      );
+      if (stale.length > 0) {
+        await tx.orderTechCardParameter.deleteMany({
+          where: { id: { in: stale.map((p) => p.id) } },
+        });
+        for (const p of stale) byKey.delete(p.key);
+      }
+
+      const values = new Map<string, TechCardParameterValue>();
+      for (const [key, p] of byKey) {
+        values.set(key, {
+          key,
+          value: p.value,
+          isRequired: p.isRequired,
+          inputType: p.inputType as TechCardParameterValue['inputType'],
+        });
+      }
+      result.set(gk, values);
+    }
+
+    // Группы, которых больше нет (расцветку удалили, тираж обнулили, техкарту
+    // сняли) → их слоты осиротели. Значения таких групп не сохраняем: снимок
+    // для них тоже стирается.
+    const orphaned = existing.filter((p) => !liveGroupKeys.has(vk(p.orderVariantId)));
+    if (orphaned.length > 0) {
+      await tx.orderTechCardParameter.deleteMany({
+        where: { id: { in: orphaned.map((p) => p.id) } },
+      });
+    }
+
+    return result;
   }
 }
 

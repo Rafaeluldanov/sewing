@@ -1,0 +1,73 @@
+import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
+import {
+  CreateOrderTechCardParameterSchema,
+  SetOrderTechCardParameterValueSchema,
+  type CreateOrderTechCardParameterDto,
+  type OrderTechCardParametersDto,
+  type SetOrderTechCardParameterValueDto,
+} from '@sewing/shared/order-tech-cards';
+
+import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { OrderTechCardService } from './order-tech-card.service.js';
+
+/**
+ * Параметры техкарты внутри заказа. Зеркало `OrderColorwaysController`:
+ * все write-методы возвращают свежий полный DTO — единый источник для UI.
+ */
+@Controller('orders/:id/tech-card-parameters')
+export class OrderTechCardController {
+  constructor(private readonly service: OrderTechCardService) {}
+
+  @Get()
+  list(@Param('id') orderId: string): Promise<OrderTechCardParametersDto> {
+    return this.service.listForOrder(orderId);
+  }
+
+  /** Заполнить значение слота (пустая строка = очистить). */
+  @Patch(':parameterId')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  setValue(
+    @Param('id') orderId: string,
+    @Param('parameterId') parameterId: string,
+    @Body(new ZodValidationPipe(SetOrderTechCardParameterValueSchema))
+    dto: SetOrderTechCardParameterValueDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.service.setValue(orderId, parameterId, dto, user.employeeId);
+  }
+
+  /** Разовое копирование значения в остальные расцветки (не связь). */
+  @Post(':parameterId/apply-to-all-variants')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  applyToAll(
+    @Param('id') orderId: string,
+    @Param('parameterId') parameterId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.service.applyToAllVariants(orderId, parameterId, user.employeeId);
+  }
+
+  /** Ad-hoc слот: нужен только в этом заказе, шаблон не трогаем. */
+  @Post()
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  createAdHoc(
+    @Param('id') orderId: string,
+    @Body(new ZodValidationPipe(CreateOrderTechCardParameterSchema))
+    dto: CreateOrderTechCardParameterDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.service.createAdHoc(orderId, dto, user.employeeId);
+  }
+
+  @Delete(':parameterId')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  removeAdHoc(
+    @Param('id') orderId: string,
+    @Param('parameterId') parameterId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.service.removeAdHoc(orderId, parameterId, user.employeeId);
+  }
+}
