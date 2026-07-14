@@ -6,7 +6,9 @@ import {
 import type { TechCardTemplateDetailDto } from '@sewing/shared/tech-cards';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
+import { OrdersService } from '../orders/orders.service.js';
 import { TechCardsService } from '../tech-cards/tech-cards.service.js';
 
 /**
@@ -19,7 +21,25 @@ import { TechCardsService } from '../tech-cards/tech-cards.service.js';
  */
 @Controller('orders/:id/tech-card')
 export class OrderTechCardTemplateController {
-  constructor(private readonly techCards: TechCardsService) {}
+  constructor(
+    private readonly techCards: TechCardsService,
+    private readonly orders: OrdersService,
+  ) {}
+
+  /**
+   * «Обновить из шаблона» — обратный клапан к принципу «шаблон читается один
+   * раз». Действие РАЗРУШИТЕЛЬНОЕ: структура строк перезаписывается шаблоном,
+   * правки, сделанные в заказе, теряются. Значения параметров переживают.
+   */
+  @Post('reload-from-template')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  async reload(
+    @Param('id') orderId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<{ ok: true }> {
+    await this.orders.reloadTechCardFromTemplate(orderId, user.employeeId);
+    return { ok: true };
+  }
 
   @Post('save-as-template')
   @Roles('ADMIN', 'SHOP_MANAGER')

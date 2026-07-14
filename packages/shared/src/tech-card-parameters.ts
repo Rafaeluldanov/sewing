@@ -328,13 +328,58 @@ export interface ApplyParametersResult {
 }
 
 /**
+ * Очистить ячейку, за которую отвечает незаполненный параметр.
+ * NOT NULL-колонки (`name`, `unit`, `qtyPerUnit`) не трогаем — их нельзя
+ * обнулить, у них остаётся прежнее значение.
+ */
+function clearCell(cells: MaterialLineCells, field: string): void {
+  if (field === 'core:fabricType') {
+    cells.fabricType = null;
+    return;
+  }
+  if (field === 'core:note') {
+    cells.note = null;
+    return;
+  }
+  if (!field.startsWith('char:')) return;
+  const charKey = field.slice('char:'.length);
+  if (cells.characteristics) delete cells.characteristics[charKey];
+  // Зеркальную legacy-колонку тоже: `normalizeMaterialLineCells` ниже
+  // восстановил бы её из старого значения колонки.
+  const def = MATERIAL_CHARACTERISTICS.find((c) => c.key === charKey);
+  switch (def?.legacyColumn) {
+    case 'densityGsm':
+      cells.densityGsm = null;
+      break;
+    case 'plannedWidthCm':
+      cells.plannedWidthCm = null;
+      break;
+    case 'hardwareSizeText':
+      cells.hardwareSizeText = null;
+      break;
+    case 'hardwareMaterialText':
+      cells.hardwareMaterialText = null;
+      break;
+    default:
+      break;
+  }
+}
+
+/**
  * ЕДИНСТВЕННАЯ точка подстановки значений параметров в ячейки строки.
  *
- * Незаполненный параметр НЕ обнуляет ячейку — в ней остаётся значение из
- * шаблона (или null). Такая строка просто не получит подставленного
- * значения, а заказ не пустят в расчёт (гейт `ORDER_SPEC_INCOMPLETE`).
- * Обнуление было бы хуже: `WorkshopNeedsService` увидел бы `densityGsm =
- * null` и молча посчитал бы потребность по другой ветке.
+ * ЯЧЕЙКА ПРИНАДЛЕЖИТ ПАРАМЕТРУ. Если параметр не заполнен, ячейка ОЧИЩАЕТСЯ,
+ * а не сохраняет значение из шаблона. Иначе получили бы тихо устаревшие
+ * данные: технолог стёр плотность, а в снимке осталось прежнее число и уехало
+ * в закупку. Значение «по умолчанию» задаётся у самого параметра
+ * (`defaultValue`), а не остатком в ячейке — так у значения ровно один
+ * владелец.
+ *
+ * Исключение — NOT NULL-колонки (`name`, `unit`, `qtyPerUnit`): обнулить их
+ * нельзя, поэтому у них сохраняется прежнее значение.
+ *
+ * Незаполненный ОБЯЗАТЕЛЬНЫЙ параметр попадает в `missingRequiredKeys` —
+ * заказ не пустят в расчёт (гейт `ORDER_SPEC_INCOMPLETE`).
  */
 export function applyParametersToCells(
   base: MaterialLineCells,
@@ -361,6 +406,7 @@ export function applyParametersToCells(
     const raw = param.value == null ? '' : param.value.trim();
     if (raw === '') {
       if (param.isRequired) missingRequiredKeys.push(paramKey);
+      clearCell(next, field);
       continue;
     }
 

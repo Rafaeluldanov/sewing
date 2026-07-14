@@ -137,9 +137,10 @@ describe('базовые ячейки строки', () => {
 });
 
 describe('незаполненные и битые значения', () => {
-  test('пустой обязательный параметр → missingRequiredKeys, ячейка НЕ обнуляется', () => {
-    // Обнуление было бы хуже пустоты: WorkshopNeeds увидел бы densityGsm=null
-    // и молча посчитал потребность по другой ветке.
+  test('пустой параметр ОЧИЩАЕТ свою ячейку — иначе она тихо устареет', () => {
+    // Ячейка принадлежит параметру. Сохрани мы прежние 160 — технолог стёр
+    // плотность, а в закупку уехало бы старое число. Дефолт задаётся у
+    // параметра (defaultValue), а не остатком в ячейке.
     const { cells, missingRequiredKeys } = applyParametersToCells(
       fabricLine({ densityGsm: 160, characteristics: { density: 160 } }),
       { 'char:density': 'main_density' },
@@ -147,7 +148,8 @@ describe('незаполненные и битые значения', () => {
     );
 
     expect(missingRequiredKeys).toEqual(['main_density']);
-    expect(cells.densityGsm).toBe(160);
+    expect(cells.densityGsm).toBeNull();
+    expect(cells.characteristics?.density).toBeUndefined();
   });
 
   test('пустой НЕобязательный параметр не попадает в missing', () => {

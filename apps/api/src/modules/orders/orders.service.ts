@@ -1,6 +1,8 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
@@ -39,6 +41,7 @@ import type {
   OutsourceTriggerType,
   TechCardMaterialColorRule,
 } from '@sewing/shared/tech-cards';
+import type { MaterialCharacteristics } from '@sewing/shared/material-characteristics';
 import { applyParametersToCells } from '@sewing/shared/tech-card-parameters';
 import type {
   TechCardParameterBindings,
@@ -136,6 +139,9 @@ type ProductLite = { id: string; name: string; color: string };
 
 @Injectable()
 export class OrdersService {
+  /** Статический — в сервисе нет инстанс-логгера, а заводить его сейчас незачем. */
+  private static readonly log = new Logger(OrdersService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly numbers: OrderNumberService,
@@ -3914,6 +3920,62 @@ export class OrdersService {
    * редактирования пишет `OrderItem` напрямую, не трогая
    * `OrderVariantSize` (нужен UI-гейт «грид readonly при расцветках»).
    */
+  /**
+   * ФАЗА 2, осознанный клапан: «Обновить из шаблона».
+   *
+   * Раз пересборка больше не ходит в справочник, менеджеру нужен способ
+   * подтянуть изменившийся шаблон вручную. Действие РАЗРУШИТЕЛЬНОЕ: структура
+   * строк заказа перезаписывается шаблоном, ad-hoc строки и правки ячеек
+   * теряются. Значения параметров переживают — они в своей таблице и
+   * переносятся по ключу.
+   *
+   * Окно то же, что у расцветок: DRAFT/CALCULATION (иначе снимок заморожен и
+   * `resyncColorwayDerived` всё равно сделал бы no-op).
+   */
+  async reloadTechCardFromTemplate(
+    orderId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    if (
+      order.status !== OrderStatus.DRAFT &&
+      order.status !== OrderStatus.CALCULATION
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ORDER_TECH_CARD_LOCKED',
+        message:
+          'Обновить техкарту из шаблона можно только в черновике и на этапе расчёта.',
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.rebuildMaterialRequirementsSnapshot(orderId, tx, {
+        reloadFromTemplate: true,
+      });
+      await this.orderOperationPlan.recalculateAndWrite(orderId, tx);
+      await this.syncOrderRouteStepsSnapshot(orderId, tx);
+    });
+
+    if (order.status === OrderStatus.CALCULATION) {
+      await this.workshopNeeds.calculateForOrder(
+        orderId,
+        { force: false },
+        actorEmployeeId ?? null,
+      );
+    }
+    OrdersService.log.log(`event=order.tech_card_reloaded order=${orderId}`);
+  }
+
   async resyncColorwayDerived(
     orderId: string,
     actorEmployeeId?: string | null,
@@ -4039,6 +4101,15 @@ export class OrdersService {
   private async rebuildMaterialRequirementsSnapshot(
     orderId: string,
     tx: Prisma.TransactionClient,
+    opts?: {
+      /**
+       * ФАЗА 2: перечитать шаблон принудительно, даже если техкарта группы не
+       * менялась. Осознанный клапан — кнопка «Обновить из шаблона»: сносит
+       * правки структуры, сделанные в заказе. Значения параметров переживают
+       * (они в своей таблице).
+       */
+      reloadFromTemplate?: boolean;
+    },
   ): Promise<void> {
     const order = await tx.order.findUnique({
       where: { id: orderId },
@@ -4076,6 +4147,19 @@ export class OrdersService {
         // Фича «Параметры техкарт»: ad-hoc привязки, заведённые в заказе,
         // обязаны пережить пересборку (как и selectedColorText).
         parameterBindings: true,
+        // ФАЗА 2: из какого шаблона материализована группа + поля, нужные для
+        // пересчёта БЕЗ похода в шаблон.
+        sourceTechCardId: true,
+        colorRule: true,
+        fixedColorText: true,
+        requiresColorSelection: true,
+        qtyPerUnit: true,
+        name: true,
+        unit: true,
+        note: true,
+        densityGsm: true,
+        plannedWidthCm: true,
+        characteristics: true,
       },
     });
 
@@ -4196,8 +4280,103 @@ export class OrdersService {
       tx,
     );
 
-    const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
+    // ─────────────────────────────────────────────────────────────────────
+    // ФАЗА 2. Группа перечитывает ШАБЛОН только если:
+    //   - строк ещё нет (заказ только создан / техкарту только выбрали), либо
+    //   - техкарту группы СМЕНИЛИ (`sourceTechCardId` разошёлся), либо
+    //   - явно попросили «Обновить из шаблона».
+    // Иначе — только ПЕРЕСЧЁТ количеств и подстановка параметров: структура и
+    // правки, сделанные в заказе, остаются на месте.
+    //
+    // Это и есть принцип «что меняем внутри заказа, внутри заказа и остаётся»:
+    // правка шаблона в справочнике больше не протекает в черновики.
+    // ─────────────────────────────────────────────────────────────────────
+    const existingByGroup = new Map<string, typeof existing>();
+    for (const r of existing) {
+      const gk = vk(r.orderVariantId);
+      const list = existingByGroup.get(gk) ?? [];
+      list.push(r);
+      existingByGroup.set(gk, list);
+    }
+
+    const groupsToMaterialize: typeof effectiveGroups = [];
+    const groupsToRecompute: typeof effectiveGroups = [];
     for (const g of effectiveGroups) {
+      const rows = existingByGroup.get(vk(g.variantId)) ?? [];
+      const cameFromAnotherTemplate = rows.some(
+        (r) => r.sourceTechCardId !== g.techCardId,
+      );
+      if (
+        opts?.reloadFromTemplate ||
+        rows.length === 0 ||
+        cameFromAnotherTemplate
+      ) {
+        groupsToMaterialize.push(g);
+      } else {
+        groupsToRecompute.push(g);
+      }
+    }
+
+    // Пересчёт: количества + подстановка параметров, БЕЗ похода в шаблон.
+    for (const g of groupsToRecompute) {
+      const baseDecimal = new Prisma.Decimal(g.qty);
+      const paramValues =
+        valuesByGroup.get(vk(g.variantId)) ??
+        new Map<string, TechCardParameterValue>();
+      for (const r of existingByGroup.get(vk(g.variantId)) ?? []) {
+        const bindings = (r.parameterBindings ??
+          null) as TechCardParameterBindings | null;
+        const { cells } = applyParametersToCells(
+          {
+            name: r.name,
+            unit: r.unit,
+            qtyPerUnit: r.qtyPerUnit.toString(),
+            note: r.note,
+            materialRole: r.materialRole,
+            fabricType: r.fabricType,
+            densityGsm: r.densityGsm,
+            plannedWidthCm: r.plannedWidthCm,
+            hardwareSizeText: r.hardwareSizeText,
+            hardwareMaterialText: r.hardwareMaterialText,
+            characteristics:
+              (r.characteristics as MaterialCharacteristics | null) ?? null,
+          },
+          bindings,
+          paramValues,
+        );
+        const qtyPerUnit = new Prisma.Decimal(cells.qtyPerUnit);
+        await tx.orderMaterialRequirement.update({
+          where: { id: r.id },
+          data: {
+            variantColor: g.variantColor,
+            qtyPerUnit,
+            totalQty: qtyPerUnit.mul(baseDecimal),
+            // Цвет расцветки мог измениться — правило то же, что при
+            // материализации: `ORDER_SELECTED_COLOR` держит введённый вручную
+            // цвет, остальные правила резолвятся от цвета группы.
+            resolvedColorText: r.requiresColorSelection
+              ? r.selectedColorText
+              : resolveColorText(
+                  r.colorRule as TechCardMaterialColorRule | null,
+                  r.fixedColorText,
+                  g.color,
+                ),
+            name: cells.name,
+            unit: cells.unit,
+            note: cells.note,
+            fabricType: cells.fabricType,
+            densityGsm: cells.densityGsm,
+            plannedWidthCm: cells.plannedWidthCm,
+            hardwareSizeText: cells.hardwareSizeText,
+            hardwareMaterialText: cells.hardwareMaterialText,
+            characteristics: cells.characteristics ?? Prisma.DbNull,
+          },
+        });
+      }
+    }
+
+    const data: Prisma.OrderMaterialRequirementCreateManyInput[] = [];
+    for (const g of groupsToMaterialize) {
       const lines = await getLines(g.techCardId as string);
       const baseDecimal = new Prisma.Decimal(g.qty);
       const paramValues =
@@ -4283,17 +4462,27 @@ export class OrdersService {
           parameterBindings: bindings
             ? (bindings as Prisma.InputJsonValue)
             : Prisma.DbNull,
+          sourceTechCardId: g.techCardId,
         });
       }
     }
 
-    // deleteMany + createMany ради простоты: WorkshopNeed.sourceId не
-    // имеет FK на OrderMaterialRequirement (см. schema.prisma и
-    // ADR-0022 §«snapshot independence»), поэтому пересборка snapshot-а
-    // не валит ранее посчитанные потребности.
-    if (existing.length > 0) {
+    // Сносим строки ТОЛЬКО тех групп, которые перематериализуем, плюс группы,
+    // которых больше нет (расцветку удалили, тираж обнулили, техкарту сняли).
+    // Группы на пересчёте не трогаем — иначе потеряли бы правки, сделанные в
+    // заказе. deleteMany безопасен: WorkshopNeed.sourceId не имеет FK на
+    // снимок (ADR-0022 §«snapshot independence»).
+    const liveGroupKeys = new Set(effectiveGroups.map((g) => vk(g.variantId)));
+    const recomputeKeys = new Set(groupsToRecompute.map((g) => vk(g.variantId)));
+    const idsToDelete = existing
+      .filter((r) => {
+        const gk = vk(r.orderVariantId);
+        return !liveGroupKeys.has(gk) || !recomputeKeys.has(gk);
+      })
+      .map((r) => r.id);
+    if (idsToDelete.length > 0) {
       await tx.orderMaterialRequirement.deleteMany({
-        where: { orderId },
+        where: { id: { in: idsToDelete } },
       });
     }
     if (data.length > 0) {
