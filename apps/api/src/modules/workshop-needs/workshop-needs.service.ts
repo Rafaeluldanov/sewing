@@ -38,6 +38,7 @@ import {
   WorkshopNeedNotManualException,
   WorkshopNeedOrderItemsRequiredException,
   WorkshopNeedsAlreadyReviewedException,
+  WorkshopNeedsHaveStockException,
 } from '../../common/errors.js';
 import { assertOrderMaterialCorrectionAllowed } from '../../common/order-material-correction.js';
 
@@ -1050,6 +1051,23 @@ export class WorkshopNeedsService {
             'лишний ноль.',
         );
       }
+    }
+
+    // 4.5. Защита складского остатка от каскадного удаления.
+    // Пересчёт удаляет системные строки WorkshopNeed и создаёт новые с
+    // другими id. По строкам, на которые уже завязаны складские движения
+    // (StockBalance / StockMovement, `onDelete: Cascade`), удаление
+    // снесло бы физический остаток и весь журнал движений — при том что
+    // документы приёмки/расхода намеренно переживают удаление (SetNull).
+    // Не даём молча стереть остаток: блокируем пересчёт с адресной 409.
+    const deleteWhere = force
+      ? { orderId, isManual: false }
+      : { orderId, status: 'CALCULATED', isManual: false };
+    const needsWithStock = await this.prisma.workshopNeed.count({
+      where: { ...deleteWhere, stockMovements: { some: {} } },
+    });
+    if (needsWithStock > 0) {
+      throw new WorkshopNeedsHaveStockException();
     }
 
     // 5. Транзакция: удаляем нужные строки и пишем новые.

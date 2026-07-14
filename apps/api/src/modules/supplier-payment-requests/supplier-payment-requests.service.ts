@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, SupplierPaymentStatus } from '@prisma/client';
 import type {
   CreateSupplierPaymentRequestDto,
   SupplierPaymentRequestDetailDto,
@@ -15,6 +15,7 @@ import {
   CashFlowItemNotFoundException,
   PurchaseOrderNotFoundException,
   SupplierNotFoundException,
+  SupplierPaymentRequestHandedOffException,
   SupplierPaymentRequestNotFoundException,
 } from '../../common/errors.js';
 import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
@@ -245,9 +246,43 @@ export class SupplierPaymentRequestsService {
   ): Promise<SupplierPaymentRequestDetailDto> {
     const existing = await this.prisma.supplierPaymentRequest.findUnique({
       where: { id },
-      include: { files: true },
+      include: {
+        files: true,
+        // Нужны связи этапов с казначейством (`supplierPaymentId`), чтобы
+        // при пересоздании этапов не осиротить «заявки на расход».
+        stages: { select: { id: true, supplierPaymentId: true } },
+        purchaseOrder: { select: { number: true } },
+      },
     });
     if (!existing) throw new SupplierPaymentRequestNotFoundException();
+
+    // Синхронизация с казначейством. Этапы ниже пересоздаются целиком,
+    // поэтому уже переданные в казну «заявки на расход» (`SupplierPayment`)
+    // осиротели бы на старой сумме. Разбираем связанные платежи:
+    //   - APPROVED/PAID — трогать нельзя, блокируем правку (409);
+    //   - DRAFT         — отменяем в той же транзакции и пересоздаём
+    //     хэндофф под новые суммы после коммита.
+    const linkedPaymentIds = existing.stages
+      .map((s) => s.supplierPaymentId)
+      .filter((x): x is string => x !== null);
+    let draftPaymentIdsToCancel: string[] = [];
+    if (linkedPaymentIds.length > 0) {
+      const linkedPayments = await this.prisma.supplierPayment.findMany({
+        where: { id: { in: linkedPaymentIds } },
+        select: { id: true, status: true },
+      });
+      const hasCommitted = linkedPayments.some(
+        (p) =>
+          p.status === SupplierPaymentStatus.APPROVED ||
+          p.status === SupplierPaymentStatus.PAID,
+      );
+      if (hasCommitted) {
+        throw new SupplierPaymentRequestHandedOffException();
+      }
+      draftPaymentIdsToCancel = linkedPayments
+        .filter((p) => p.status === SupplierPaymentStatus.DRAFT)
+        .map((p) => p.id);
+    }
 
     // Статья ДДС: снимок-замена (как реквизиты). Имя резолвим по id.
     const cashFlowItem = await this.resolveCashFlowItem(dto.cashFlowItemId);
@@ -274,8 +309,22 @@ export class SupplierPaymentRequestsService {
     const filesToRemove = existing.files.filter((f) => !keep.has(f.id));
 
     await this.prisma.$transaction(async (tx) => {
-      // Этапы заменяем целиком: на MVP у них нет связи с оплатой
-      // (`supplierPaymentId` всегда null), пересоздать безопасно.
+      // Отменяем связанные с этапами черновики «заявок на расход» перед
+      // пересозданием этапов — иначе они остались бы висеть на старой
+      // сумме без ссылки на этап (движения ДС у DRAFT ещё нет, отмена
+      // безопасна). Новые черновики создаст хэндофф после коммита.
+      if (draftPaymentIdsToCancel.length > 0) {
+        await tx.supplierPayment.updateMany({
+          where: { id: { in: draftPaymentIdsToCancel } },
+          data: {
+            status: SupplierPaymentStatus.CANCELLED,
+            cancelledById: actorEmployeeId ?? null,
+            cancelledAt: new Date(),
+            cancelReason: 'Заявка на оплату отредактирована — этапы пересозданы',
+          },
+        });
+      }
+      // Этапы заменяем целиком; связанные черновики уже отменены выше.
       await tx.supplierPaymentRequestStage.deleteMany({
         where: { requestId: id },
       });
@@ -305,6 +354,22 @@ export class SupplierPaymentRequestsService {
           stages: { create: stagesData },
         },
       });
+    });
+
+    // Пересоздаём хэндофф в казначейство под новые этапы/суммы: старые
+    // черновики отменены в транзакции, новые этапы ещё без
+    // `supplierPaymentId`, поэтому autoCreateExpenseRequests заведёт
+    // свежие «заявки на расход». Опт-ин и best-effort, как при создании
+    // (если счёт для оплат поставщикам не настроен — no-op).
+    await this.autoCreateExpenseRequests({
+      requestId: id,
+      requestNumber: existing.number,
+      supplierId: existing.supplierId,
+      supplierNameSnapshot: existing.supplierNameSnapshot,
+      purchaseOrderId: existing.purchaseOrderId,
+      purchaseOrderNumber: existing.purchaseOrder.number,
+      cashFlowItemId: cashFlowItem.id,
+      actorEmployeeId,
     });
 
     // Файлы — вне транзакции (диск не транзакционен, как при создании):

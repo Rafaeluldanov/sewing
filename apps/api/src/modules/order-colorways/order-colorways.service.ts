@@ -1,8 +1,10 @@
 import {
   BadRequestException,
+  ConflictException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { OrderStatus } from '@prisma/client';
 import type {
   OrderColorwayDto,
   OrderColorwaysDto,
@@ -28,6 +30,14 @@ import { OrdersService } from '../orders/orders.service.js';
  * снимок материалов и потребности цеха следовали за техкартой/тиражом
  * расцветки. Без этого правка техкарты расцветки не меняла потребности
  * (они считаются один раз в `startCalculation` и замораживались).
+ *
+ * Окно редактирования: мутации разрешены ТОЛЬКО в `DRAFT` / `CALCULATION`
+ * — том же окне, где `resyncColorwayDerived` пересобирает агрегат
+ * `OrderItem` (`canTouchSnapshot`). После запуска расчёта/производства
+ * план заказа заморожен (ADR-0006), и правка расцветки НЕ поднялась бы в
+ * `OrderItem` — раньше это был тихий no-op: форма «сохраняла», а общий
+ * план заказа не менялся. Теперь такие правки отклоняются адресной 409
+ * (`ORDER_COLORWAYS_LOCKED`), а UI показывает блок read-only.
  */
 @Injectable()
 export class OrderColorwaysService {
@@ -90,7 +100,7 @@ export class OrderColorwaysService {
     dto: UpsertOrderColorwayDto,
     actorEmployeeId?: string | null,
   ): Promise<OrderColorwaysDto> {
-    await this.assertOrder(orderId);
+    await this.assertEditableOrder(orderId);
     await this.assertTechCard(dto.techCardId);
 
     const last = await this.prisma.orderVariant.findFirst({
@@ -122,7 +132,7 @@ export class OrderColorwaysService {
     dto: UpsertOrderColorwayDto,
     actorEmployeeId?: string | null,
   ): Promise<OrderColorwaysDto> {
-    await this.assertOrder(orderId);
+    await this.assertEditableOrder(orderId);
     const variant = await this.prisma.orderVariant.findFirst({
       where: { id: variantId, orderId },
       select: { id: true },
@@ -160,7 +170,7 @@ export class OrderColorwaysService {
     variantId: string,
     actorEmployeeId?: string | null,
   ): Promise<OrderColorwaysDto> {
-    await this.assertOrder(orderId);
+    await this.assertEditableOrder(orderId);
     const count = await this.prisma.orderVariant.count({ where: { orderId } });
     if (count <= 1) {
       throw new BadRequestException({
@@ -189,16 +199,35 @@ export class OrderColorwaysService {
   // helpers
   // -------------------------------------------------------------------------
 
-  private async assertOrder(orderId: string): Promise<void> {
+  /**
+   * Заказ существует И расцветки сейчас можно менять. Окно правки —
+   * `DRAFT` / `CALCULATION` (см. `canTouchSnapshot` в
+   * `resyncColorwayDerived`): только в нём правка расцветки поднимается в
+   * агрегат `OrderItem`. После заморозки (CALCULATION_DONE и далее) молча
+   * писать `OrderVariantSize` нельзя — общий план заказа не изменится, а
+   * форма «сохранит»; вместо этого отклоняем адресной 409.
+   */
+  private async assertEditableOrder(orderId: string): Promise<void> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
-      select: { id: true },
+      select: { status: true },
     });
     if (!order) {
       throw new NotFoundException({
         statusCode: 404,
         code: 'ORDER_NOT_FOUND',
         message: 'Заказ не найден',
+      });
+    }
+    if (
+      order.status !== OrderStatus.DRAFT &&
+      order.status !== OrderStatus.CALCULATION
+    ) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ORDER_COLORWAYS_LOCKED',
+        message:
+          'Расцветки можно менять только пока заказ в статусе «Черновик» или «Расчёт». После запуска расчёта/производства общий план заказа заморожен, и правка расцветки его не изменит. Чтобы редактировать — верните заказ на пересчёт.',
       });
     }
   }
