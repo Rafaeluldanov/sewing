@@ -76,6 +76,21 @@ export default defineConfig({
         find: /^@sewing\/api\/(.+)$/,
         replacement: path.resolve(apiSrc, '$1'),
       },
+      {
+        // `ControlPlaneService` импортирует сгенерённый клиент по «голому»
+        // специфику `.prisma/control-plane-client` (кастомный output в
+        // `prisma/control-plane/schema.prisma`). Node его резолвит из
+        // node_modules, а vite — нет, и любой integration-тест падал ещё на
+        // загрузке AppModule: «Failed to load url .prisma/control-plane-client».
+        //
+        // Клиент генерится командой:
+        //   npx prisma generate --schema=prisma/control-plane/schema.prisma
+        find: /^\.prisma\/control-plane-client$/,
+        replacement: path.resolve(
+          __dirname,
+          '../node_modules/.prisma/control-plane-client/index.js',
+        ),
+      },
     ],
     extensions: ['.ts', '.js', '.json'],
   },
