@@ -4150,6 +4150,7 @@ export class OrdersService {
         // ФАЗА 2: из какого шаблона материализована группа + поля, нужные для
         // пересчёта БЕЗ похода в шаблон.
         sourceTechCardId: true,
+        isManual: true,
         colorRule: true,
         fixedColorText: true,
         requiresColorSelection: true,
@@ -4302,7 +4303,11 @@ export class OrdersService {
     const groupsToMaterialize: typeof effectiveGroups = [];
     const groupsToRecompute: typeof effectiveGroups = [];
     for (const g of effectiveGroups) {
-      const rows = existingByGroup.get(vk(g.variantId)) ?? [];
+      // Решаем ТОЛЬКО по строкам из шаблона: ручные строки шаблон не описывает,
+      // и их наличие/отсутствие ничего не говорит о том, надо ли его перечитать.
+      const rows = (existingByGroup.get(vk(g.variantId)) ?? []).filter(
+        (r) => !r.isManual,
+      );
       const cameFromAnotherTemplate = rows.some(
         (r) => r.sourceTechCardId !== g.techCardId,
       );
@@ -4318,12 +4323,23 @@ export class OrdersService {
     }
 
     // Пересчёт: количества + подстановка параметров, БЕЗ похода в шаблон.
-    for (const g of groupsToRecompute) {
+    //
+    // Группа на пересчёте → пересчитываем ВСЕ её строки. Группа на
+    // перематериализации → её шаблонные строки будут созданы заново, но РУЧНЫЕ
+    // переживают, и их тираж тоже надо пересчитать — иначе после смены техкарты
+    // у ручной строки остался бы totalQty от прежнего плана.
+    const recomputeSet = new Set(groupsToRecompute.map((g) => vk(g.variantId)));
+    for (const g of effectiveGroups) {
+      const gk = vk(g.variantId);
+      const isRecomputeGroup = recomputeSet.has(gk);
+      const rows = (existingByGroup.get(gk) ?? []).filter(
+        (r) => isRecomputeGroup || r.isManual,
+      );
+      if (rows.length === 0) continue;
       const baseDecimal = new Prisma.Decimal(g.qty);
       const paramValues =
-        valuesByGroup.get(vk(g.variantId)) ??
-        new Map<string, TechCardParameterValue>();
-      for (const r of existingByGroup.get(vk(g.variantId)) ?? []) {
+        valuesByGroup.get(gk) ?? new Map<string, TechCardParameterValue>();
+      for (const r of rows) {
         const bindings = (r.parameterBindings ??
           null) as TechCardParameterBindings | null;
         const { cells } = applyParametersToCells(
@@ -4472,12 +4488,19 @@ export class OrdersService {
     // Группы на пересчёте не трогаем — иначе потеряли бы правки, сделанные в
     // заказе. deleteMany безопасен: WorkshopNeed.sourceId не имеет FK на
     // снимок (ADR-0022 §«snapshot independence»).
+    //
+    // РУЧНЫЕ строки (`isManual`) не сносим НИКОГДА, пока их группа жива — даже
+    // при смене техкарты и при «Обновить из шаблона»: шаблон о них не знает,
+    // значит и заменить их собой не может. Исчезла сама группа (удалили
+    // расцветку) — уходят вместе с ней, оставлять их сиротами нельзя.
     const liveGroupKeys = new Set(effectiveGroups.map((g) => vk(g.variantId)));
     const recomputeKeys = new Set(groupsToRecompute.map((g) => vk(g.variantId)));
     const idsToDelete = existing
       .filter((r) => {
         const gk = vk(r.orderVariantId);
-        return !liveGroupKeys.has(gk) || !recomputeKeys.has(gk);
+        if (!liveGroupKeys.has(gk)) return true; // группы больше нет
+        if (r.isManual) return false; // добавлена в заказе — не наша забота
+        return !recomputeKeys.has(gk); // группа перематериализуется
       })
       .map((r) => r.id);
     if (idsToDelete.length > 0) {

@@ -9,6 +9,7 @@
  */
 
 import type {
+  CreateOrderTechCardLineDto,
   CreateOrderTechCardParameterDto,
   OrderTechCardParametersDto,
   SaveOrderTechCardAsTemplateDto,
@@ -68,6 +69,42 @@ export function deleteOrderTechCardParameter(
   return apiFetch<OrderTechCardParametersDto>(
     `${base(orderId)}/${encodeURIComponent(parameterId)}`,
     { method: 'DELETE' },
+  );
+}
+
+/** Добавить строку материала прямо в заказ (её нет в шаблоне). */
+export function createOrderTechCardLine(
+  orderId: string,
+  body: CreateOrderTechCardLineDto,
+): Promise<OrderTechCardParametersDto> {
+  return apiFetch<OrderTechCardParametersDto>(
+    `/orders/${encodeURIComponent(orderId)}/tech-card/lines`,
+    { method: 'POST', body },
+  );
+}
+
+/** Убрать строку, добавленную в заказе (шаблонную — нельзя). */
+export function deleteOrderTechCardLine(
+  orderId: string,
+  requirementId: string,
+): Promise<OrderTechCardParametersDto> {
+  return apiFetch<OrderTechCardParametersDto>(
+    `/orders/${encodeURIComponent(orderId)}/tech-card/lines/${encodeURIComponent(requirementId)}`,
+    { method: 'DELETE' },
+  );
+}
+
+/**
+ * «Обновить из шаблона» — обратный клапан к принципу «шаблон читается один раз».
+ * РАЗРУШИТЕЛЬНО: структура строк заказа перезаписывается шаблоном. Значения
+ * параметров переживают (они в своей таблице).
+ */
+export function reloadOrderTechCardFromTemplate(
+  orderId: string,
+): Promise<{ ok: true }> {
+  return apiFetch<{ ok: true }>(
+    `/orders/${encodeURIComponent(orderId)}/tech-card/reload-from-template`,
+    { method: 'POST' },
   );
 }
 

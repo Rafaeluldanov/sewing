@@ -1,7 +1,9 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import type {
+  CreateOrderTechCardLineDto,
   CreateOrderTechCardParameterDto,
+  OrderTechCardLineDto,
   OrderTechCardParametersDto,
   OrderTechCardTargetOptionDto,
   OrderTechCardVariantParamsDto,
@@ -78,7 +80,14 @@ export class OrderTechCardService {
           id: true,
           orderVariantId: true,
           name: true,
+          unit: true,
+          qtyPerUnit: true,
+          totalQty: true,
           materialRole: true,
+          fabricType: true,
+          resolvedColorText: true,
+          selectedColorText: true,
+          isManual: true,
           parameterBindings: true,
         },
       }),
@@ -137,6 +146,18 @@ export class OrderTechCardService {
         .filter((p) => vk(p.orderVariantId) === gk)
         .map((p) => this.toParamDto(p, rows));
 
+      const lines: OrderTechCardLineDto[] = rows.map((r) => ({
+        id: r.id,
+        name: r.name,
+        unit: r.unit,
+        qtyPerUnit: r.qtyPerUnit.toString(),
+        totalQty: r.totalQty.toString(),
+        materialRole: r.materialRole,
+        fabricType: r.fabricType,
+        colorText: r.selectedColorText ?? r.resolvedColorText ?? null,
+        isManual: r.isManual,
+      }));
+
       return {
         orderVariantId: g.orderVariantId,
         color: g.color,
@@ -147,6 +168,7 @@ export class OrderTechCardService {
           (p) => p.isRequired && (p.value == null || p.value.trim() === ''),
         ).length,
         targets,
+        lines,
       };
     });
 
@@ -375,6 +397,101 @@ export class OrderTechCardService {
     await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
     this.logger.log(
       `event=order_tech_card.adhoc_removed order=${orderId} key=${param.key}`,
+    );
+    return this.listForOrder(orderId);
+  }
+
+  /**
+   * Добавить строку материала прямо в заказ (усилительная лента, которой нет в
+   * шаблоне).
+   *
+   * `isManual = true` — такая строка не сносится пересборкой даже при смене
+   * техкарты: шаблон о ней не знает, значит и заменить её собой не может.
+   * Это и есть «что меняем внутри заказа, внутри заказа и остаётся».
+   *
+   * `totalQty` считаем не здесь: `resyncColorwayDerived` сразу пересоберёт
+   * производные и проставит тираж — один путь, без второго калькулятора.
+   */
+  async createManualLine(
+    orderId: string,
+    dto: CreateOrderTechCardLineDto,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderTechCardParametersDto> {
+    await this.assertEditableOrder(orderId);
+    const variantId = dto.orderVariantId ?? null;
+
+    // Порядок: ручные строки идут после шаблонных.
+    const last = await this.prisma.orderMaterialRequirement.findFirst({
+      where: { orderId, orderVariantId: variantId },
+      orderBy: { sortOrder: 'desc' },
+      select: { sortOrder: true, variantColor: true },
+    });
+
+    const colorText = dto.colorText?.trim() || null;
+    await this.prisma.orderMaterialRequirement.create({
+      data: {
+        orderId,
+        orderVariantId: variantId,
+        variantColor: last?.variantColor ?? null,
+        isManual: true,
+        // Из шаблона не приходила — источника нет.
+        sourceTechCardLineId: null,
+        sourceTechCardId: null,
+        sortOrder: (last?.sortOrder ?? 0) + 10,
+        name: dto.name,
+        unit: dto.unit,
+        qtyPerUnit: new Prisma.Decimal(dto.qtyPerUnit),
+        totalQty: new Prisma.Decimal(0),
+        note: dto.note ?? null,
+        materialRole: dto.materialRole ?? null,
+        fabricType: dto.fabricType ?? null,
+        // Цвет задаётся прямо здесь: правило `colorRule` — свойство шаблона, а
+        // у ручной строки шаблона нет.
+        colorRule: colorText ? 'FIXED_COLOR' : 'NO_COLOR',
+        fixedColorText: colorText,
+        resolvedColorText: colorText,
+        requiresColorSelection: false,
+      },
+    });
+
+    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    this.logger.log(
+      `event=order_tech_card.manual_line_created order=${orderId} name=${dto.name}`,
+    );
+    return this.listForOrder(orderId);
+  }
+
+  /** Удалить можно только РУЧНУЮ строку: пришедшая из шаблона правится в шаблоне. */
+  async removeManualLine(
+    orderId: string,
+    requirementId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderTechCardParametersDto> {
+    await this.assertEditableOrder(orderId);
+    const row = await this.prisma.orderMaterialRequirement.findFirst({
+      where: { id: requirementId, orderId },
+      select: { id: true, isManual: true, name: true },
+    });
+    if (!row) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'ORDER_MATERIAL_REQUIREMENT_NOT_FOUND',
+        message: 'Строка материала не найдена в этом заказе.',
+      });
+    }
+    if (!row.isManual) {
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ORDER_MATERIAL_LINE_FROM_TEMPLATE',
+        message:
+          'Эта строка пришла из шаблона техкарты — убрать её можно только в справочнике.',
+      });
+    }
+
+    await this.prisma.orderMaterialRequirement.delete({ where: { id: row.id } });
+    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    this.logger.log(
+      `event=order_tech_card.manual_line_removed order=${orderId} name=${row.name}`,
     );
     return this.listForOrder(orderId);
   }

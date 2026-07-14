@@ -49,6 +49,8 @@ export interface OrderTechCardVariantParamsDto {
   missingRequiredCount: number;
   /** Куда можно привязать новый параметр. */
   targets: OrderTechCardTargetOptionDto[];
+  /** Строки материалов этой расцветки — из шаблона и добавленные в заказе. */
+  lines: OrderTechCardLineDto[];
 }
 
 export interface OrderTechCardParametersDto {
@@ -132,6 +134,52 @@ export const SaveOrderTechCardAsTemplateSchema = z.object({
 });
 export type SaveOrderTechCardAsTemplateDto = z.infer<
   typeof SaveOrderTechCardAsTemplateSchema
+>;
+
+// ---------------------------------------------------------------------------
+// Ручные строки материала (добавленные прямо в заказе)
+// ---------------------------------------------------------------------------
+
+/** Строка материала расцветки: из шаблона или добавленная в заказе. */
+export interface OrderTechCardLineDto {
+  /** `OrderMaterialRequirement.id`. */
+  id: string;
+  name: string;
+  unit: string;
+  /** Decimal как строка. */
+  qtyPerUnit: string;
+  totalQty: string;
+  materialRole: string | null;
+  fabricType: string | null;
+  colorText: string | null;
+  /** true — добавлена прямо в заказе; шаблон о ней не знает. */
+  isManual: boolean;
+}
+
+/**
+ * Добавить строку материала прямо в заказ (усилительная лента, которой нет в
+ * шаблоне). Строка живёт в заказе и НЕ сносится пересборкой — даже при смене
+ * техкарты: шаблон о ней не знает, значит и заменить её собой не может.
+ */
+export const CreateOrderTechCardLineSchema = z.object({
+  /** null = order-level группа (заказ с 0–1 расцветкой). */
+  orderVariantId: z.string().min(1).nullish(),
+  name: z.string().trim().min(1, 'Укажите название материала').max(200),
+  unit: z.string().trim().min(1, 'Укажите единицу измерения').max(20),
+  qtyPerUnit: z
+    .string()
+    .trim()
+    .refine((v) => Number.isFinite(Number(v)) && Number(v) > 0, {
+      message: 'Норма расхода — положительное число',
+    }),
+  materialRole: z.string().trim().max(40).nullish(),
+  fabricType: z.string().trim().max(120).nullish(),
+  note: z.string().trim().max(500).nullish(),
+  /** Цвет строки: пусто = «не задан» (как `NO_COLOR` в шаблоне). */
+  colorText: z.string().trim().max(120).nullish(),
+});
+export type CreateOrderTechCardLineDto = z.infer<
+  typeof CreateOrderTechCardLineSchema
 >;
 
 export type { OrderTechCardParameterDto };

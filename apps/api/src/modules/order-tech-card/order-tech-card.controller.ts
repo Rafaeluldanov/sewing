@@ -1,7 +1,9 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post } from '@nestjs/common';
 import {
+  CreateOrderTechCardLineSchema,
   CreateOrderTechCardParameterSchema,
   SetOrderTechCardParameterValueSchema,
+  type CreateOrderTechCardLineDto,
   type CreateOrderTechCardParameterDto,
   type OrderTechCardParametersDto,
   type SetOrderTechCardParameterValueDto,
@@ -69,5 +71,37 @@ export class OrderTechCardController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<OrderTechCardParametersDto> {
     return this.service.removeAdHoc(orderId, parameterId, user.employeeId);
+  }
+}
+
+/**
+ * Строки материала, добавленные прямо в заказ (усилительная лента, которой нет
+ * в шаблоне). Живут в заказе и не сносятся пересборкой — шаблон о них не знает.
+ *
+ * Отдельный контроллер, потому что префикс другой: строки — не параметры.
+ */
+@Controller('orders/:id/tech-card/lines')
+export class OrderTechCardLinesController {
+  constructor(private readonly service: OrderTechCardService) {}
+
+  @Post()
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  create(
+    @Param('id') orderId: string,
+    @Body(new ZodValidationPipe(CreateOrderTechCardLineSchema))
+    dto: CreateOrderTechCardLineDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.service.createManualLine(orderId, dto, user.employeeId);
+  }
+
+  @Delete(':requirementId')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  remove(
+    @Param('id') orderId: string,
+    @Param('requirementId') requirementId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.service.removeManualLine(orderId, requirementId, user.employeeId);
   }
 }

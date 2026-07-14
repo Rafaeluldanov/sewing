@@ -23,8 +23,11 @@ import {
 
 import {
   applyTechCardParamToAllAction,
+  createTechCardLineAction,
   createTechCardParamAction,
+  deleteTechCardLineAction,
   deleteTechCardParamAction,
+  reloadTechCardFromTemplateAction,
   saveTechCardAsTemplateAction,
   setTechCardParamValueAction,
   type TechCardParamsActionResult,
@@ -37,6 +40,14 @@ interface Props {
   variantId: string | null;
   onClose: () => void;
 }
+
+/** Новая строка материала, добавляемая прямо в заказ. */
+const emptyLine = {
+  name: '',
+  unit: '',
+  qtyPerUnit: '',
+  colorText: '',
+};
 
 const emptyAdHoc = {
   label: '',
@@ -62,6 +73,7 @@ export function ColorwayParamsWindow({
   const [saveAs, setSaveAs] = useState<{ code: string; name: string } | null>(
     null,
   );
+  const [newLine, setNewLine] = useState<typeof emptyLine | null>(null);
   const router = useRouter();
 
   const group: OrderTechCardVariantParamsDto | undefined = data.variants.find(
@@ -232,6 +244,121 @@ export function ColorwayParamsWindow({
         </ul>
       )}
 
+      {/* Материалы расцветки: из шаблона и добавленные прямо здесь.
+          Добавленные не сносятся пересборкой — шаблон о них не знает. */}
+      <div className="admin-tcp__lines">
+        <div className="group-label">Материалы</div>
+        <ul>
+          {group.lines.map((l) => (
+            <li key={l.id} className={l.isManual ? 'is-manual' : undefined}>
+              <span className="nm">{l.name}</span>
+              {l.colorText && <span className="admin-muted">, {l.colorText}</span>}
+              <span className="admin-muted">
+                {' '}
+                — {l.qtyPerUnit} {l.unit}/шт, итого {l.totalQty} {l.unit}
+              </span>
+              {l.isManual && (
+                <>
+                  <span className="admin-badge">добавлена в заказе</span>
+                  {!ro && (
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn--ghost admin-btn--danger"
+                      disabled={pending}
+                      onClick={() =>
+                        startTransition(async () =>
+                          apply(await deleteTechCardLineAction(orderId, l.id)),
+                        )
+                      }
+                    >
+                      Убрать
+                    </button>
+                  )}
+                </>
+              )}
+            </li>
+          ))}
+        </ul>
+
+        {!ro &&
+          (newLine === null ? (
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost"
+              onClick={() => setNewLine({ ...emptyLine })}
+            >
+              + Добавить материал
+            </button>
+          ) : (
+            <div className="admin-tcp__adhoc">
+              <input
+                type="text"
+                placeholder="Название (Лента усилительная)"
+                value={newLine.name}
+                onChange={(e) =>
+                  setNewLine((s) => (s ? { ...s, name: e.target.value } : s))
+                }
+              />
+              <input
+                type="text"
+                placeholder="Ед. изм. (м)"
+                value={newLine.unit}
+                onChange={(e) =>
+                  setNewLine((s) => (s ? { ...s, unit: e.target.value } : s))
+                }
+              />
+              <input
+                type="text"
+                placeholder="Норма на изделие (0.9)"
+                value={newLine.qtyPerUnit}
+                onChange={(e) =>
+                  setNewLine((s) => (s ? { ...s, qtyPerUnit: e.target.value } : s))
+                }
+              />
+              <input
+                type="text"
+                placeholder="Цвет (необязательно)"
+                value={newLine.colorText}
+                onChange={(e) =>
+                  setNewLine((s) => (s ? { ...s, colorText: e.target.value } : s))
+                }
+              />
+              <button
+                type="button"
+                className="admin-btn admin-btn--primary"
+                disabled={
+                  pending ||
+                  !newLine.name.trim() ||
+                  !newLine.unit.trim() ||
+                  !newLine.qtyPerUnit.trim()
+                }
+                onClick={() =>
+                  startTransition(async () => {
+                    const r = await createTechCardLineAction(orderId, {
+                      orderVariantId: variantId,
+                      name: newLine.name.trim(),
+                      unit: newLine.unit.trim(),
+                      qtyPerUnit: newLine.qtyPerUnit.trim(),
+                      colorText: newLine.colorText.trim() || null,
+                    });
+                    if (r.ok) setNewLine(null);
+                    apply(r);
+                  })
+                }
+              >
+                Добавить
+              </button>
+              <button
+                type="button"
+                className="admin-btn admin-btn--ghost"
+                onClick={() => setNewLine(null)}
+              >
+                Отмена
+              </button>
+            </div>
+          ))}
+      </div>
+
       {!ro && (
         <div className="admin-tcp__foot">
           {adHoc === null ? (
@@ -276,6 +403,30 @@ export function ColorwayParamsWindow({
               }}
             />
           )}
+
+          {/* Обратный клапан к принципу «шаблон читается один раз»: правки
+              справочника в заказ сами не приезжают, но подтянуть их можно
+              осознанно. Действие разрушительное — поэтому подтверждение. */}
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            disabled={pending}
+            title="Перечитать шаблон: структура строк заказа будет перезаписана"
+            onClick={() => {
+              const ok = window.confirm(
+                'Перечитать техкарту из шаблона?\n\n' +
+                  'Строки, пришедшие из шаблона, будут заменены на актуальные. ' +
+                  'Материалы, добавленные вами в заказе, и заполненные значения ' +
+                  'параметров сохранятся.',
+              );
+              if (!ok) return;
+              startTransition(async () =>
+                apply(await reloadTechCardFromTemplateAction(orderId)),
+              );
+            }}
+          >
+            Обновить из шаблона
+          </button>
 
           {saveAs === null ? (
             <button

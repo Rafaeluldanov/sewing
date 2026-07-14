@@ -14,6 +14,7 @@
 
 import { revalidatePath } from 'next/cache';
 import {
+  CreateOrderTechCardLineSchema,
   CreateOrderTechCardParameterSchema,
   SaveOrderTechCardAsTemplateSchema,
   SetOrderTechCardParameterValueSchema,
@@ -23,8 +24,12 @@ import {
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   applyOrderTechCardParameterToAll,
+  createOrderTechCardLine,
   createOrderTechCardParameter,
+  deleteOrderTechCardLine,
   deleteOrderTechCardParameter,
+  getOrderTechCardParameters,
+  reloadOrderTechCardFromTemplate,
   saveOrderTechCardAsTemplate,
   setOrderTechCardParameterValue,
 } from '@/lib/order-tech-card-api';
@@ -123,6 +128,68 @@ export async function deleteTechCardParamAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return { ok: false, error: errorText(e, 'Не удалось удалить параметр') };
+    }
+    throw e;
+  }
+}
+
+/** Добавить строку материала прямо в заказ (её нет в шаблоне). */
+export async function createTechCardLineAction(
+  orderId: string,
+  payload: unknown,
+): Promise<TechCardParamsActionResult> {
+  const parsed = CreateOrderTechCardLineSchema.safeParse(payload);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные строки',
+    };
+  }
+  try {
+    const data = await createOrderTechCardLine(orderId, parsed.data);
+    revalidateOrder(orderId);
+    return { ok: true, data };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, error: errorText(e, 'Не удалось добавить материал') };
+    }
+    throw e;
+  }
+}
+
+export async function deleteTechCardLineAction(
+  orderId: string,
+  requirementId: string,
+): Promise<TechCardParamsActionResult> {
+  try {
+    const data = await deleteOrderTechCardLine(orderId, requirementId);
+    revalidateOrder(orderId);
+    return { ok: true, data };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, error: errorText(e, 'Не удалось убрать материал') };
+    }
+    throw e;
+  }
+}
+
+/**
+ * «Обновить из шаблона»: подтянуть изменившийся справочник в этот заказ.
+ * Действие РАЗРУШИТЕЛЬНОЕ — правки структуры, сделанные в заказе, теряются;
+ * значения параметров переживают. Эндпоинт отдаёт {ok}, поэтому свежий DTO
+ * перечитываем отдельно — окно обновляется из одного источника, как везде.
+ */
+export async function reloadTechCardFromTemplateAction(
+  orderId: string,
+): Promise<TechCardParamsActionResult> {
+  try {
+    await reloadOrderTechCardFromTemplate(orderId);
+    const data = await getOrderTechCardParameters(orderId);
+    revalidateOrder(orderId);
+    return { ok: true, data };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, error: errorText(e, 'Не удалось обновить из шаблона') };
     }
     throw e;
   }
