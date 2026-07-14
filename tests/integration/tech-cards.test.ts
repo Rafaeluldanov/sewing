@@ -745,7 +745,9 @@ describeWithDb('integration — tech cards (MVP, ADR-0022)', () => {
       resolvedColorText: string | null;
     }>;
     const byName = (n: string) => reqs.find((r) => r.name === n)!;
-    expect(byName('Кулирка').resolvedColorText).toBe('Чёрный');
+    // Цвет нормализуется в нижний регистр (`normalizeColorOrNull`) — см. фикс
+    // дрейфа balanceKey «Белый» vs «белый».
+    expect(byName('Кулирка').resolvedColorText).toBe('чёрный');
     expect(byName('Кулирка').requiresColorSelection).toBe(false);
     expect(byName('Подклад чёрный').resolvedColorText).toBe('чёрный');
     expect(byName('Подклад чёрный').requiresColorSelection).toBe(false);
@@ -815,10 +817,10 @@ describeWithDb('integration — tech cards (MVP, ADR-0022)', () => {
     const main = fabrics.find((r) => r.name === 'Кулирка')!;
     const zipper = fabrics.find((r) => r.name === 'Молния')!;
     // ORDER_COLOR следует за новым Order.color.
-    expect(main.resolvedColorText).toBe('Зелёный');
+    expect(main.resolvedColorText).toBe('зелёный');
     // ORDER_SELECTED_COLOR не теряет введённое значение.
-    expect(zipper.selectedColorText).toBe('Бордо');
-    expect(zipper.resolvedColorText).toBe('Бордо');
+    expect(zipper.selectedColorText).toBe('бордо');
+    expect(zipper.resolvedColorText).toBe('бордо');
   });
 
   test('E2c. start() переиспользует snapshot и сохраняет selectedColorText', async () => {
@@ -865,8 +867,8 @@ describeWithDb('integration — tech cards (MVP, ADR-0022)', () => {
     expect(after.body.status).toBe('IN_PRODUCTION');
     const req = after.body.materialRequirements[0];
     // start() не пересоздаёт snapshot — введённый цвет уцелел.
-    expect(req.selectedColorText).toBe('Бордо');
-    expect(req.resolvedColorText).toBe('Бордо');
+    expect(req.selectedColorText).toBe('бордо');
+    expect(req.resolvedColorText).toBe('бордо');
     expect(req.requiresColorSelection).toBe(true);
   });
 

@@ -28,6 +28,8 @@ describeWithDb('integration — параметры техкарт', () => {
   let t: TestApp;
   let seed: SeedResult;
   let manager: string;
+  /** Лекало заказа: `startCalculation` требует его первым же гейтом. */
+  let patternItemId: string;
 
   beforeAll(async () => {
     t = await startTestApp();
@@ -39,6 +41,14 @@ describeWithDb('integration — параметры техкарт', () => {
     await resetDatabase(t.prisma);
     seed = await seedMinimal(t.prisma);
     manager = loginAs(t, seed.employees['shop-chief']);
+    const pattern = await t.prisma.patternItem.create({
+      data: {
+        name: 'Худи',
+        article: `ART-${Date.now().toString(36)}`,
+        status: 'ACTIVE',
+      },
+    });
+    patternItemId = pattern.id;
   });
 
   /** Шаблон с параметром «плотность», привязанным к ячейке строки полотна. */
@@ -47,7 +57,7 @@ describeWithDb('integration — параметры техкарт', () => {
     defaultValue?: string | null;
     qtyPerUnit?: string;
   }): Promise<string> {
-    const res = await request(t.server)
+    const res = await request(t.app.getHttpServer())
       .post('/api/tech-cards')
       .set('Cookie', manager)
       .send({
@@ -84,12 +94,12 @@ describeWithDb('integration — параметры техкарт', () => {
 
   /** Заказ с двумя расцветками на одной техкарте. */
   async function createOrderWithTwoColorways(techCardId: string): Promise<string> {
-    const res = await request(t.server)
+    const res = await request(t.app.getHttpServer())
       .post('/api/orders')
       .set('Cookie', manager)
       .send({
         orderDate: '2026-07-14T00:00:00.000Z',
-        productId: seed.product.id,
+        patternItemId,
         techCardId,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
         variants: [
@@ -119,7 +129,7 @@ describeWithDb('integration — параметры техкарт', () => {
     const techCardId = await createParametricTechCard();
     const orderId = await createOrderWithTwoColorways(techCardId);
 
-    const params = await request(t.server)
+    const params = await request(t.app.getHttpServer())
       .get(`/api/orders/${orderId}/tech-card-parameters`)
       .set('Cookie', manager)
       .expect(200);
@@ -151,7 +161,7 @@ describeWithDb('integration — параметры техкарт', () => {
     const techCardId = await createParametricTechCard();
     const orderId = await createOrderWithTwoColorways(techCardId);
 
-    const params = await request(t.server)
+    const params = await request(t.app.getHttpServer())
       .get(`/api/orders/${orderId}/tech-card-parameters`)
       .set('Cookie', manager)
       .expect(200);
@@ -159,7 +169,7 @@ describeWithDb('integration — параметры техкарт', () => {
       (v: { color: string }) => v.color === 'Чёрный',
     );
 
-    await request(t.server)
+    await request(t.app.getHttpServer())
       .patch(`/api/orders/${orderId}/tech-card-parameters/${black.parameters[0].id}`)
       .set('Cookie', manager)
       .send({ value: '220' })
@@ -170,7 +180,7 @@ describeWithDb('integration — параметры техкарт', () => {
     expect(byColor).toEqual({ Белый: 190, Чёрный: 220 });
 
     // Значение вне списка ENUM отбивается.
-    await request(t.server)
+    await request(t.app.getHttpServer())
       .patch(`/api/orders/${orderId}/tech-card-parameters/${black.parameters[0].id}`)
       .set('Cookie', manager)
       .send({ value: '999' })
@@ -181,7 +191,7 @@ describeWithDb('integration — параметры техкарт', () => {
     const techCardId = await createParametricTechCard({ defaultValue: null });
     const orderId = await createOrderWithTwoColorways(techCardId);
 
-    const res = await request(t.server)
+    const res = await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/start-calculation`)
       .set('Cookie', manager)
       .expect(400);
@@ -207,7 +217,7 @@ describeWithDb('integration — параметры техкарт', () => {
     const white = variants.find((v) => v.color === 'Белый')!;
 
     // Шаблон в справочнике изменился.
-    await request(t.server)
+    await request(t.app.getHttpServer())
       .patch(`/api/tech-cards/${techCardId}`)
       .set('Cookie', manager)
       .send({
@@ -226,7 +236,7 @@ describeWithDb('integration — параметры техкарт', () => {
       .expect(200);
 
     // Пересборка заказа (самый частый путь — правка расцветки).
-    await request(t.server)
+    await request(t.app.getHttpServer())
       .patch(`/api/orders/${orderId}/colorways/${white.id}`)
       .set('Cookie', manager)
       .send({
@@ -245,7 +255,7 @@ describeWithDb('integration — параметры техкарт', () => {
     expect(Number(whiteRow.totalQty)).toBeCloseTo(42, 4);
 
     // Осознанный клапан подтягивает шаблон.
-    await request(t.server)
+    await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/tech-card/reload-from-template`)
       .set('Cookie', manager)
       .expect(201);
@@ -259,7 +269,7 @@ describeWithDb('integration — параметры техкарт', () => {
 
   test('строка, добавленная в заказе, переживает смену техкарты', async () => {
     const techCardId = await createParametricTechCard();
-    const other = await request(t.server)
+    const other = await request(t.app.getHttpServer())
       .post('/api/tech-cards')
       .set('Cookie', manager)
       .send({
@@ -281,7 +291,7 @@ describeWithDb('integration — параметры техкарт', () => {
     const variants = await t.prisma.orderVariant.findMany({ where: { orderId } });
     const black = variants.find((v) => v.color === 'Чёрный')!;
 
-    await request(t.server)
+    await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/tech-card/lines`)
       .set('Cookie', manager)
       .send({
@@ -299,7 +309,7 @@ describeWithDb('integration — параметры техкарт', () => {
     expect(Number(manual?.totalQty)).toBeCloseTo(36, 4);
 
     // Смена техкарты расцветки: шаблонная строка заменяется, ручная — нет.
-    await request(t.server)
+    await request(t.app.getHttpServer())
       .patch(`/api/orders/${orderId}/colorways/${black.id}`)
       .set('Cookie', manager)
       .send({
@@ -320,7 +330,7 @@ describeWithDb('integration — параметры техкарт', () => {
 
     // Убрать строку из шаблона через этот эндпоинт нельзя.
     const fromTemplate = blackRows.find((r) => !r.isManual)!;
-    const res = await request(t.server)
+    const res = await request(t.app.getHttpServer())
       .delete(`/api/orders/${orderId}/tech-card/lines/${fromTemplate.id}`)
       .set('Cookie', manager)
       .expect(409);

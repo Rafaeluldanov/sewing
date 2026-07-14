@@ -16,11 +16,11 @@ import { AppModule } from '@sewing/api/app.module';
 import { GlobalExceptionFilter } from '@sewing/api/common/global-exception.filter';
 import { requestIdMiddleware } from '@sewing/api/common/request-id.middleware';
 import { AuthService } from '@sewing/api/modules/auth/auth.service';
-import { PrismaService } from '@sewing/api/prisma/prisma.service';
+import type { PrismaService } from '@sewing/api/prisma/prisma.service';
 import { API_PREFIX } from '@sewing/shared/config';
 import { SESSION_COOKIE_NAME, serializeCookie } from '@sewing/api/modules/auth/cookie';
 import bcrypt from 'bcryptjs';
-import type { Role } from '@prisma/client';
+import { PrismaClient, type Role } from '@prisma/client';
 
 export interface TestApp {
   app: INestApplication;
@@ -59,7 +59,20 @@ export async function startTestApp(): Promise<TestApp> {
   app.useGlobalFilters(new GlobalExceptionFilter());
   await app.init();
 
-  const prisma = app.get(PrismaService);
+  // ВАЖНО: НЕ берём `PrismaService` из контейнера.
+  //
+  // После перехода на мультитенантность `PrismaService` — это Proxy, который на
+  // каждом обращении требует `TenantContext` и уже подготовленный клиент
+  // тенанта (их ставит `TenantResolverMiddleware`). Для HTTP-запросов это
+  // работает: supertest идёт через middleware, тенант резолвится (в
+  // single-tenant режиме — `default`). Но утилиты тестов (`seedMinimal`,
+  // `resetDatabase`, `ensureSystemAdmin`) дёргают Prisma НАПРЯМУЮ, вне запроса —
+  // и падали с «TenantContext не установлен».
+  //
+  // Поэтому тестам даём ПРЯМОЙ клиент к той же БД (`DATABASE_URL` выставлен из
+  // `TEST_DATABASE_URL` в `tests/utils/db.ts`). Приложение ходит своим клиентом,
+  // тесты — своим; база одна, данные общие.
+  const prisma = new PrismaClient() as unknown as PrismaService;
   const auth = app.get(AuthService);
 
   const admin = await ensureSystemAdmin(prisma);
@@ -75,6 +88,8 @@ export async function startTestApp(): Promise<TestApp> {
 }
 
 export async function stopTestApp(t: TestApp): Promise<void> {
+  // Прямой клиент тестов — наш, приложение его не закроет.
+  await (t.prisma as unknown as PrismaClient).$disconnect().catch(() => undefined);
   await t.app.close();
 }
 
