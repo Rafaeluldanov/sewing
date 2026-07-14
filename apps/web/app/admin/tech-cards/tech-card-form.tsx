@@ -3,6 +3,11 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { useRef, useState, useTransition } from 'react';
 import { Check, ImageIcon, Plus, Save, Trash2, Upload } from 'lucide-react';
+import {
+  TECH_CARD_PARAMETER_INPUT_TYPES,
+  TECH_CARD_PARAMETER_INPUT_TYPE_LABELS,
+  TECH_CARD_PARAMETER_TARGETS,
+} from '@sewing/shared/tech-card-parameters';
 import type {
   OutsourceTriggerType,
   TechCardMaterialColorRule,
@@ -161,6 +166,45 @@ let __rowKeySeq = 0;
 function nextKey(): string {
   __rowKeySeq += 1;
   return `r${Date.now().toString(36)}_${__rowKeySeq}`;
+}
+
+/** Стабильный ключ строки материала, пришедшей из БД (см. init `materials`). */
+function lineRowKey(lineId: string): string {
+  return `line_${lineId}`;
+}
+
+/**
+ * Слот техкарты в форме. `paramKey` — стабильный технический ключ: на него
+ * ссылаются привязки ячеек и значения в заказах, поэтому при переименовании
+ * лейбла он НЕ меняется.
+ */
+interface ParameterRow {
+  key: string;
+  paramKey: string;
+  label: string;
+  inputType: string;
+  /** Для ENUM: значения через запятую («160, 190, 220»). */
+  options: string;
+  unit: string;
+  isRequired: boolean;
+  defaultValue: string;
+  /** Ключ строки материала, в ячейку которой подставляется значение. */
+  targetRowKey: string;
+  /** Ячейка этой строки (`char:density`, `core:qtyPerUnit`, ...). */
+  targetField: string;
+}
+
+let __paramKeySeq = 0;
+/** Технический ключ нового слота: пользователю не показывается. */
+function nextParamKey(existing: ParameterRow[]): string {
+  __paramKeySeq += 1;
+  let candidate = `param_${existing.length + __paramKeySeq}`;
+  const taken = new Set(existing.map((p) => p.paramKey));
+  while (taken.has(candidate)) {
+    __paramKeySeq += 1;
+    candidate = `param_${existing.length + __paramKeySeq}`;
+  }
+  return candidate;
 }
 
 function emptyMaterialRow(seed: Partial<MaterialRow> = {}): MaterialRow {
@@ -354,7 +398,10 @@ export function TechCardForm({
       ? template.materialLines
       : [];
     return lines.map((l) => ({
-      key: nextKey(),
+      // Детерминированный ключ (а не nextKey()): на него ссылается параметр,
+      // и без стабильности привязка «ячейка → параметр» не восстановилась бы
+      // при открытии формы.
+      key: lineRowKey(l.id),
       existingLineId: l.id,
       name: l.name,
       unit: l.unit,
@@ -416,6 +463,46 @@ export function TechCardForm({
       note: l.note ?? '',
       triggerType: l.triggerType,
     }));
+  });
+
+  // Фича «Параметры техкарт»: слоты, значение которых вводится в заказе.
+  // Ключ (`key`) — стабильный идентификатор слота: по нему значения в заказе
+  // находят свой параметр, поэтому при переименовании лейбла он НЕ меняется.
+  const [parameters, setParameters] = useState<ParameterRow[]>(() => {
+    if (mode !== 'edit' || !template) return [];
+    const list = Array.isArray(template.parameters) ? template.parameters : [];
+    // Восстанавливаем, в какую ячейку какой строки смотрит параметр: в БД это
+    // хранится на СТРОКЕ (`parameterBindings`), а в форме удобнее показывать
+    // как свойство параметра.
+    const lines = Array.isArray(template.materialLines)
+      ? template.materialLines
+      : [];
+    return list.map((p) => {
+      let targetRowKey = '';
+      let targetField = '';
+      for (const l of lines) {
+        const found = Object.entries(l.parameterBindings ?? {}).find(
+          ([, key]) => key === p.key,
+        );
+        if (found) {
+          targetRowKey = lineRowKey(l.id);
+          targetField = found[0];
+          break;
+        }
+      }
+      return {
+        key: nextKey(),
+        paramKey: p.key,
+        label: p.label,
+        inputType: p.inputType,
+        options: (p.options ?? []).join(', '),
+        unit: p.unit ?? '',
+        isRequired: p.isRequired,
+        defaultValue: p.defaultValue ?? '',
+        targetRowKey,
+        targetField,
+      };
+    });
   });
 
   const [createState, createAction] = useFormState<TechCardFormState, FormData>(
@@ -595,6 +682,229 @@ export function TechCardForm({
           <label htmlFor="tc-active">Активна</label>
         </div>
       </div>
+
+      <section className="admin-stack admin-tech-card-params">
+        <div className="admin-actions-row admin-actions-row--split">
+          <strong>Параметры техкарты</strong>
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            onClick={() =>
+              setParameters((p) => [
+                ...p,
+                {
+                  key: nextKey(),
+                  paramKey: nextParamKey(p),
+                  label: '',
+                  inputType: 'TEXT',
+                  options: '',
+                  unit: '',
+                  isRequired: true,
+                  defaultValue: '',
+                  targetRowKey: '',
+                  targetField: '',
+                },
+              ])
+            }
+          >
+            <Plus size={14} strokeWidth={1.6} aria-hidden />
+            Добавить параметр
+          </button>
+        </div>
+        <p className="admin-muted">
+          Параметр — это ячейка строки материала, значение которой заполняется
+          не здесь, а в заказе, по каждой расцветке отдельно. Один шаблон
+          с параметром «Плотность» заменяет несколько почти одинаковых техкарт.
+        </p>
+
+        {parameters.length === 0 ? (
+          <p className="admin-muted">
+            Пока нет: все ячейки строк заданы жёстко.
+          </p>
+        ) : (
+          <div className="admin-table-wrap">
+            <table className="admin-table admin-table--compact">
+              <thead>
+                <tr>
+                  <th>Название</th>
+                  <th>Тип</th>
+                  <th>Значения списка</th>
+                  <th>Ед.</th>
+                  <th>Подставляется в</th>
+                  <th>Обяз.</th>
+                  <th>По умолчанию</th>
+                  <th aria-label="Действия" />
+                </tr>
+              </thead>
+              <tbody>
+                {parameters.map((p) => (
+                  <tr key={p.key}>
+                    <td>
+                      <input type="hidden" name={`parameter[${p.key}][key]`} value={p.paramKey} />
+                      <input
+                        type="text"
+                        name={`parameter[${p.key}][label]`}
+                        value={p.label}
+                        maxLength={120}
+                        placeholder="Плотность полотна"
+                        onChange={(e) =>
+                          setParameters((prev) =>
+                            prev.map((r) =>
+                              r.key === p.key ? { ...r, label: e.target.value } : r,
+                            ),
+                          )
+                        }
+                      />
+                    </td>
+                    <td>
+                      <select
+                        name={`parameter[${p.key}][inputType]`}
+                        value={p.inputType}
+                        onChange={(e) =>
+                          setParameters((prev) =>
+                            prev.map((r) =>
+                              r.key === p.key
+                                ? { ...r, inputType: e.target.value }
+                                : r,
+                            ),
+                          )
+                        }
+                      >
+                        {TECH_CARD_PARAMETER_INPUT_TYPES.map((t) => (
+                          <option key={t} value={t}>
+                            {TECH_CARD_PARAMETER_INPUT_TYPE_LABELS[t]}
+                          </option>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        name={`parameter[${p.key}][options]`}
+                        value={p.options}
+                        disabled={p.inputType !== 'ENUM'}
+                        placeholder="160, 190, 220"
+                        onChange={(e) =>
+                          setParameters((prev) =>
+                            prev.map((r) =>
+                              r.key === p.key ? { ...r, options: e.target.value } : r,
+                            ),
+                          )
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        name={`parameter[${p.key}][unit]`}
+                        value={p.unit}
+                        maxLength={20}
+                        placeholder="г/м²"
+                        onChange={(e) =>
+                          setParameters((prev) =>
+                            prev.map((r) =>
+                              r.key === p.key ? { ...r, unit: e.target.value } : r,
+                            ),
+                          )
+                        }
+                      />
+                    </td>
+                    <td>
+                      {/* Главное поле: без цели значение параметра некуда
+                          подставить — он бы ни на что не влиял. */}
+                      <select
+                        name={`parameter[${p.key}][target]`}
+                        value={
+                          p.targetRowKey && p.targetField
+                            ? `${p.targetRowKey}|${p.targetField}`
+                            : ''
+                        }
+                        onChange={(e) => {
+                          const [rowKey = '', field = ''] =
+                            e.target.value.split('|');
+                          setParameters((prev) =>
+                            prev.map((r) =>
+                              r.key === p.key
+                                ? { ...r, targetRowKey: rowKey, targetField: field }
+                                : r,
+                            ),
+                          );
+                        }}
+                      >
+                        <option value="">— не подставляется —</option>
+                        {materials.map((m) => (
+                          <optgroup
+                            key={m.key}
+                            label={m.name || m.fabricType || 'Без названия'}
+                          >
+                            {TECH_CARD_PARAMETER_TARGETS.map((t) => (
+                              <option
+                                key={`${m.key}|${t.field}`}
+                                value={`${m.key}|${t.field}`}
+                              >
+                                {t.label}
+                                {t.unit ? `, ${t.unit}` : ''}
+                              </option>
+                            ))}
+                          </optgroup>
+                        ))}
+                      </select>
+                    </td>
+                    <td>
+                      <input
+                        type="checkbox"
+                        name={`parameter[${p.key}][isRequired]`}
+                        value="on"
+                        checked={p.isRequired}
+                        onChange={(e) =>
+                          setParameters((prev) =>
+                            prev.map((r) =>
+                              r.key === p.key
+                                ? { ...r, isRequired: e.target.checked }
+                                : r,
+                            ),
+                          )
+                        }
+                      />
+                    </td>
+                    <td>
+                      <input
+                        type="text"
+                        name={`parameter[${p.key}][defaultValue]`}
+                        value={p.defaultValue}
+                        maxLength={200}
+                        placeholder="190"
+                        onChange={(e) =>
+                          setParameters((prev) =>
+                            prev.map((r) =>
+                              r.key === p.key
+                                ? { ...r, defaultValue: e.target.value }
+                                : r,
+                            ),
+                          )
+                        }
+                      />
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="admin-btn admin-btn--ghost admin-btn--danger"
+                        onClick={() =>
+                          setParameters((prev) =>
+                            prev.filter((r) => r.key !== p.key),
+                          )
+                        }
+                      >
+                        Удалить
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
 
       <section className="admin-stack admin-material-requirements">
         <div className="admin-actions-row admin-actions-row--split">
@@ -1101,6 +1411,13 @@ function MaterialRowCard({
         создана в новом UI и пустая — `actions.ts::buildMaterialLines`
         подменит их на безопасный fallback (см. doc-комментарий).
       */}
+      {/* Ключ строки в форме: по нему параметр находит свою целевую ячейку
+          (см. `buildParameters` в actions.ts). В БД не уходит. */}
+      <input
+        type="hidden"
+        name={`material[${row.key}][formKey]`}
+        value={row.key}
+      />
       <input
         type="hidden"
         name={`material[${row.key}][name]`}

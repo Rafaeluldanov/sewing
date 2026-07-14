@@ -76,12 +76,10 @@ function fallbackMaterialName(opts: {
  * порядок появления ключей в форме — backend нормализует `sortOrder`
  * как `(i + 1) * 10`. См. `TechCardsService.create/update`.
  */
-function parseLines<T extends 'material' | 'outsource'>(
+function parseLines<T extends 'material' | 'outsource' | 'parameter'>(
   form: FormData,
   prefix: T,
-): T extends 'material'
-  ? Array<Record<string, string>>
-  : Array<Record<string, string>> {
+): Array<Record<string, string>> {
   const re = new RegExp(`^${prefix}\\[([^\\]]+)\\]\\[([^\\]]+)\\]$`);
   const orderKeys: string[] = [];
   const seen = new Set<string>();
@@ -135,9 +133,77 @@ type RawMaterialLineInput = {
   // характеристик (ключи без legacy-колонки приходят как `char_<key>`).
   subtypeKey: string | null;
   characteristics: Record<string, string> | null;
+  // Фича «Параметры техкарт»: ячейки строки, питающиеся параметрами.
+  parameterBindings: Record<string, string> | null;
 };
 
-function buildMaterialLines(form: FormData): RawMaterialLineInput[] {
+/**
+ * Фича «Параметры техкарт»: слоты + их цели.
+ *
+ * В форме цель («в какую ячейку какой строки») — свойство ПАРАМЕТРА, так
+ * менеджеру понятнее. В БД она хранится на СТРОКЕ (`parameterBindings`),
+ * потому что id строк шаблона пересоздаются при каждом сейве и внешний ключ
+ * с параметра на строку отваливался бы. Здесь и происходит разворот.
+ */
+function buildParameters(form: FormData): {
+  parameters: Array<{
+    key: string;
+    label: string;
+    inputType: string;
+    options?: string[];
+    unit: string | null;
+    isRequired: boolean;
+    defaultValue: string | null;
+  }>;
+  bindingsByRowKey: Map<string, Record<string, string>>;
+} {
+  const parameters: ReturnType<typeof buildParameters>['parameters'] = [];
+  const bindingsByRowKey = new Map<string, Record<string, string>>();
+
+  for (const r of parseLines(form, 'parameter')) {
+    const key = (r.key ?? '').trim();
+    const label = (r.label ?? '').trim();
+    // Слот без названия — пустая строка формы, молча пропускаем (как и
+    // пустые строки материалов).
+    if (!key || !label) continue;
+
+    const inputType = (r.inputType ?? 'TEXT').trim() || 'TEXT';
+    const optionsRaw = (r.options ?? '').trim();
+    const options =
+      inputType === 'ENUM' && optionsRaw !== ''
+        ? optionsRaw
+            .split(',')
+            .map((o) => o.trim())
+            .filter((o) => o !== '')
+        : undefined;
+
+    parameters.push({
+      key,
+      label,
+      inputType,
+      options,
+      unit: (r.unit ?? '').trim() || null,
+      // Чекбокс не приходит в FormData, когда снят.
+      isRequired: r.isRequired === 'on',
+      defaultValue: (r.defaultValue ?? '').trim() || null,
+    });
+
+    const target = (r.target ?? '').trim();
+    if (!target) continue;
+    const [rowKey, field] = target.split('|');
+    if (!rowKey || !field) continue;
+    const current = bindingsByRowKey.get(rowKey) ?? {};
+    current[field] = key;
+    bindingsByRowKey.set(rowKey, current);
+  }
+
+  return { parameters, bindingsByRowKey };
+}
+
+function buildMaterialLines(
+  form: FormData,
+  bindingsByRowKey?: Map<string, Record<string, string>>,
+): RawMaterialLineInput[] {
   return parseLines(form, 'material')
     .map((r): RawMaterialLineInput | null => {
       // Этап «Техкарта = материальные требования»: новые «видимые»
@@ -233,6 +299,9 @@ function buildMaterialLines(form: FormData): RawMaterialLineInput[] {
         materialImageOriginalFileName,
         subtypeKey,
         characteristics: hasCharacteristics ? characteristics : null,
+        // Привязка приходит от ПАРАМЕТРА (там менеджер выбирает цель) и
+        // раскладывается по строкам через `formKey` — см. `buildParameters`.
+        parameterBindings: bindingsByRowKey?.get((r.formKey ?? '').trim()) ?? null,
       };
     })
     .filter((r): r is RawMaterialLineInput => r !== null);
@@ -544,12 +613,14 @@ export async function createTechCardAction(
   }
   if (name.length === 0) return { error: 'Название техкарты обязательно' };
 
+  const techCardParameters = buildParameters(form);
   const parsed = CreateTechCardSchema.safeParse({
     code,
     name,
     isActive,
-    materialLines: buildMaterialLines(form),
+    materialLines: buildMaterialLines(form, techCardParameters.bindingsByRowKey),
     outsourceLines: buildOutsourceLines(form),
+    parameters: techCardParameters.parameters,
   });
   if (!parsed.success) {
     return {
@@ -658,12 +729,14 @@ export async function updateTechCardAction(
   }
   if (name.length === 0) return { error: 'Название техкарты обязательно' };
 
+  const techCardParameters = buildParameters(form);
   const parsed = UpdateTechCardSchema.safeParse({
     code,
     name,
     isActive,
-    materialLines: buildMaterialLines(form),
+    materialLines: buildMaterialLines(form, techCardParameters.bindingsByRowKey),
     outsourceLines: buildOutsourceLines(form),
+    parameters: techCardParameters.parameters,
   });
   if (!parsed.success) {
     return {
