@@ -39,3 +39,7 @@ apps/api/apps/
 
 # Claude Code harness runtime lock (not source)
 .claude/scheduled_tasks.lock
+
+# входящие файлы на разбор (xlsx и т.п.) — в git не кладём, только README
+docs/upload/*
+!docs/upload/README.md
