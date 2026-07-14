@@ -25,6 +25,12 @@ import {
   type MaterialRole,
 } from './material-roles';
 import {
+  TechCardParameterBindingsSchema,
+  TechCardParameterInputSchema,
+  type TechCardParameterBindings,
+  type TechCardParameterDto,
+} from './tech-card-parameters';
+import {
   PATTERN_CATEGORY_PARAMETER_GROUPS,
   PATTERN_CATEGORY_PARAMETER_ROLE_KEY_MAX_LENGTH,
   getPatternCategoryParameterGroupConfig,
@@ -269,6 +275,8 @@ export const TECH_CARD_LINE_IMAGE_MAX_SIZE_BYTES = 5 * 1024 * 1024;
 export const TECH_CARD_LINE_DENSITY_GSM_MAX = 10000;
 export const TECH_CARD_LINE_PLANNED_WIDTH_CM_MAX = 1000;
 export const TECH_CARD_MAX_LINES_PER_SECTION = 200;
+/** Фича «Параметры техкарт»: разумный потолок слотов на одну техкарту. */
+export const TECH_CARD_MAX_PARAMETERS = 50;
 
 const TechCardCodeField = z
   .string()
@@ -624,6 +632,14 @@ export const TechCardMaterialLineInputSchema = z
     materialImageOriginalFileName: MaterialImageOriginalFileNameField,
     subtypeKey: SubtypeKeyField,
     characteristics: CharacteristicsField,
+    /**
+     * Фича «Параметры техкарт»: какие ячейки этой строки питаются
+     * параметрами — `{ "char:density": "main_density" }`. Ключи ячеек —
+     * из `TECH_CARD_PARAMETER_TARGETS`; значения — ключи параметров,
+     * объявленных в `parameters` этой же техкарты (проверяется
+     * кросс-валидацией на уровне карты, см. `withParameterCrossChecks`).
+     */
+    parameterBindings: TechCardParameterBindingsSchema.nullish(),
   })
   .superRefine((line, ctx) => {
     if (line.colorRule === 'FIXED_COLOR') {
@@ -677,6 +693,60 @@ const OutsourceLinesField = z
     `Максимум ${TECH_CARD_MAX_LINES_PER_SECTION} строк внешних потребностей`,
   );
 
+/** Фича «Параметры техкарт»: слоты шаблона (см. `./tech-card-parameters.ts`). */
+const ParametersField = z
+  .array(TechCardParameterInputSchema)
+  .max(TECH_CARD_MAX_PARAMETERS, `Максимум ${TECH_CARD_MAX_PARAMETERS} параметров`);
+
+/**
+ * Кросс-проверки параметров на уровне ВСЕЙ техкарты (одну строку/один
+ * параметр по отдельности так не провалидировать):
+ *   - ключи параметров уникальны;
+ *   - каждый биндинг строки ссылается на существующий параметр — иначе
+ *     ячейка молча осталась бы значением из шаблона, а менеджер думал бы,
+ *     что она параметризована.
+ */
+function withParameterCrossChecks<
+  T extends {
+    materialLines?: Array<{ parameterBindings?: unknown }>;
+    parameters?: Array<{ key: string }>;
+  },
+>(card: T, ctx: z.RefinementCtx): void {
+  const seen = new Set<string>();
+  (card.parameters ?? []).forEach((p, i) => {
+    if (seen.has(p.key)) {
+      ctx.addIssue({
+        path: ['parameters', i, 'key'],
+        code: z.ZodIssueCode.custom,
+        message: `Параметр «${p.key}» уже объявлен в этой техкарте`,
+      });
+    }
+    seen.add(p.key);
+  });
+
+  // Биндинги сверяем с параметрами, только когда PATCH прислал ОБЕ части.
+  // Если `parameters` не передан — в БД остаются прежние параметры, и здесь мы
+  // о них не знаем: авторитетную проверку делает сервис
+  // (`TechCardsService.assertBindingsResolvable`).
+  if (card.materialLines === undefined || card.parameters === undefined) return;
+
+  card.materialLines.forEach((line, lineIndex) => {
+    const bindings = line.parameterBindings;
+    if (!bindings || typeof bindings !== 'object') return;
+    for (const [field, key] of Object.entries(
+      bindings as Record<string, string>,
+    )) {
+      if (!seen.has(key)) {
+        ctx.addIssue({
+          path: ['materialLines', lineIndex, 'parameterBindings', field],
+          code: z.ZodIssueCode.custom,
+          message: `Ячейка привязана к параметру «${key}», которого нет в техкарте`,
+        });
+      }
+    }
+  });
+}
+
 // ---------------------------------------------------------------------------
 // Request DTO
 // ---------------------------------------------------------------------------
@@ -694,14 +764,17 @@ const PatternCategoryIdOptionalField = z
   .nullable()
   .optional();
 
-export const CreateTechCardSchema = z.object({
-  code: TechCardCodeField,
-  name: TechCardNameField,
-  isActive: z.boolean().optional().default(true),
-  patternCategoryId: PatternCategoryIdOptionalField,
-  materialLines: MaterialLinesField.default([]),
-  outsourceLines: OutsourceLinesField.default([]),
-});
+export const CreateTechCardSchema = z
+  .object({
+    code: TechCardCodeField,
+    name: TechCardNameField,
+    isActive: z.boolean().optional().default(true),
+    patternCategoryId: PatternCategoryIdOptionalField,
+    materialLines: MaterialLinesField.default([]),
+    outsourceLines: OutsourceLinesField.default([]),
+    parameters: ParametersField.default([]),
+  })
+  .superRefine(withParameterCrossChecks);
 export type CreateTechCardDto = z.infer<typeof CreateTechCardSchema>;
 
 export const UpdateTechCardSchema = z
@@ -712,7 +785,9 @@ export const UpdateTechCardSchema = z
     patternCategoryId: PatternCategoryIdOptionalField,
     materialLines: MaterialLinesField.optional(),
     outsourceLines: OutsourceLinesField.optional(),
+    parameters: ParametersField.optional(),
   })
+  .superRefine(withParameterCrossChecks)
   .refine(
     (obj) =>
       obj.code !== undefined ||
@@ -720,7 +795,8 @@ export const UpdateTechCardSchema = z
       obj.isActive !== undefined ||
       obj.patternCategoryId !== undefined ||
       obj.materialLines !== undefined ||
-      obj.outsourceLines !== undefined,
+      obj.outsourceLines !== undefined ||
+      obj.parameters !== undefined,
     'Нечего обновлять: укажите хотя бы одно поле',
   );
 export type UpdateTechCardDto = z.infer<typeof UpdateTechCardSchema>;
@@ -764,6 +840,11 @@ export interface TechCardMaterialLineDto {
   /** Decimal как строка (см. `Prisma.Decimal`). */
   qtyPerUnit: string;
   note: string | null;
+  /**
+   * Фича «Параметры техкарт»: ячейки строки, питающиеся параметрами —
+   * `{ "char:density": "main_density" }`. null — строка целиком фиксированная.
+   */
+  parameterBindings: TechCardParameterBindings | null;
   /**
    * Этап 3 «Потребности цеха» (см. `docs/recon-soft-integration.md
    * §«Этап 3»`). Все поля nullable + backward-compatible:
@@ -853,4 +934,6 @@ export interface TechCardTemplateSummaryDto {
 export interface TechCardTemplateDetailDto extends TechCardTemplateSummaryDto {
   materialLines: TechCardMaterialLineDto[];
   outsourceLines: TechCardOutsourceLineDto[];
+  /** Фича «Параметры техкарт»: слоты, значения которых вводятся в заказе. */
+  parameters: TechCardParameterDto[];
 }

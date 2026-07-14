@@ -18,6 +18,14 @@ import {
   legacyColumnsToCharacteristics,
   type MaterialCharacteristics,
 } from '@sewing/shared/material-characteristics';
+import { collectBoundParameterKeys } from '@sewing/shared/tech-card-parameters';
+import type {
+  TechCardParameterBindings,
+  TechCardParameterDto,
+  TechCardParameterInput,
+  TechCardParameterInputType,
+  TechCardParameterOwner,
+} from '@sewing/shared/tech-card-parameters';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
@@ -109,6 +117,7 @@ export class TechCardsService {
       include: {
         materialLines: { orderBy: { sortOrder: 'asc' } },
         outsourceLines: { orderBy: { sortOrder: 'asc' } },
+        parameters: { orderBy: { sortOrder: 'asc' } },
       },
     });
     if (!row) throw new TechCardNotFoundException();
@@ -149,6 +158,25 @@ export class TechCardsService {
       // Фаза 2 «Характеристики номенклатуры»: snapshot подтипа и значений.
       subtypeKey: string | null;
       characteristics: MaterialCharacteristics | null;
+      // Фича «Параметры техкарт»: какие ячейки строки питаются параметрами.
+      parameterBindings: TechCardParameterBindings | null;
+    }[];
+    /**
+     * Фича «Параметры техкарт»: слоты шаблона. `OrdersService` материализует
+     * их в `OrderTechCardParameter` на расцветку и подставляет значения в
+     * снапшот.
+     */
+    parameters: {
+      id: string;
+      key: string;
+      label: string;
+      inputType: TechCardParameterInputType;
+      options: string[] | null;
+      unit: string | null;
+      isRequired: boolean;
+      defaultValue: string | null;
+      owner: TechCardParameterOwner;
+      sortOrder: number;
     }[];
     outsourceLines: {
       id: string;
@@ -168,10 +196,12 @@ export class TechCardsService {
       include: {
         materialLines: { orderBy: { sortOrder: 'asc' } },
         outsourceLines: { orderBy: { sortOrder: 'asc' } },
+        parameters: { orderBy: { sortOrder: 'asc' } },
       },
     });
     if (!tpl) throw new TechCardNotFoundException();
     return {
+      parameters: tpl.parameters.map((p) => this.toParameterSnapshot(p)),
       materialLines: tpl.materialLines.map((l) => ({
         id: l.id,
         sortOrder: l.sortOrder,
@@ -198,6 +228,9 @@ export class TechCardsService {
         subtypeKey: l.subtypeKey,
         characteristics:
           (l.characteristics as MaterialCharacteristics | null) ?? null,
+        // Фича «Параметры техкарт».
+        parameterBindings:
+          (l.parameterBindings as TechCardParameterBindings | null) ?? null,
       })),
       outsourceLines: tpl.outsourceLines.map((l) => ({
         id: l.id,
@@ -279,6 +312,14 @@ export class TechCardsService {
             ),
           });
         }
+        if (dto.parameters.length > 0) {
+          await tx.techCardParameter.createMany({
+            data: dto.parameters.map((p, i) =>
+              this.parameterCreateData(created.id, p, i),
+            ),
+          });
+        }
+        await this.assertBindingsResolvable(tx, created.id);
         return created.id;
       });
     } catch (e) {
@@ -376,6 +417,26 @@ export class TechCardsService {
             });
           }
         }
+
+        // Фича «Параметры техкарт»: тот же full-replace, что и у строк.
+        if (dto.parameters !== undefined) {
+          await tx.techCardParameter.deleteMany({ where: { techCardId: id } });
+          if (dto.parameters.length > 0) {
+            await tx.techCardParameter.createMany({
+              data: dto.parameters.map((p, i) =>
+                this.parameterCreateData(id, p, i),
+              ),
+            });
+          }
+        }
+
+        // Авторитетная проверка «биндинг ссылается на существующий параметр»:
+        // делаем ПОСЛЕ записи обеих частей, потому что PATCH мог прислать
+        // только строки (параметры остаются прежними) или только параметры
+        // (строки остаются прежними) — и только БД знает итоговое состояние.
+        // Иначе ячейка молча осталась бы значением из шаблона, а менеджер
+        // думал бы, что она параметризована.
+        await this.assertBindingsResolvable(tx, id);
       });
     } catch (e) {
       this.translateUniqueError(e);
@@ -630,6 +691,12 @@ export class TechCardsService {
         line.materialImageOriginalFileName ?? null,
       subtypeKey: line.subtypeKey && line.subtypeKey.length ? line.subtypeKey : null,
       characteristics: characteristics ?? Prisma.DbNull,
+      // Фича «Параметры техкарт»: привязка ячеек строки к параметрам. Едет
+      // вместе со строкой через full-replace — поэтому и JSON, а не FK.
+      parameterBindings:
+        line.parameterBindings && Object.keys(line.parameterBindings).length > 0
+          ? (line.parameterBindings as Prisma.InputJsonValue)
+          : Prisma.DbNull,
     };
   }
 
@@ -656,7 +723,7 @@ export class TechCardsService {
 
   private toDetailDto(
     row: Prisma.TechCardTemplateGetPayload<{
-      include: { materialLines: true; outsourceLines: true };
+      include: { materialLines: true; outsourceLines: true; parameters: true };
     }>,
   ): TechCardTemplateDetailDto {
     const materialLines: TechCardMaterialLineDto[] = row.materialLines
@@ -689,6 +756,9 @@ export class TechCardsService {
         subtypeKey: l.subtypeKey,
         characteristics:
           (l.characteristics as MaterialCharacteristics | null) ?? null,
+        // Фича «Параметры техкарт».
+        parameterBindings:
+          (l.parameterBindings as TechCardParameterBindings | null) ?? null,
       }));
     const outsourceLines: TechCardOutsourceLineDto[] = row.outsourceLines
       .slice()
@@ -715,7 +785,108 @@ export class TechCardsService {
       updatedAt: row.updatedAt.toISOString(),
       materialLines,
       outsourceLines,
+      parameters: row.parameters
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)
+        .map((p) => this.toParameterSnapshot(p)),
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // Параметры техкарты (фича «Параметры техкарт»)
+  // -------------------------------------------------------------------------
+
+  /** Строка `TechCardParameter` → DTO/snapshot (одна форма для обоих). */
+  private toParameterSnapshot(p: {
+    id: string;
+    key: string;
+    label: string;
+    inputType: string;
+    options: Prisma.JsonValue | null;
+    unit: string | null;
+    isRequired: boolean;
+    defaultValue: string | null;
+    owner: string;
+    sortOrder: number;
+  }): TechCardParameterDto {
+    return {
+      id: p.id,
+      key: p.key,
+      label: p.label,
+      inputType: p.inputType as TechCardParameterInputType,
+      options: Array.isArray(p.options) ? (p.options as string[]) : null,
+      unit: p.unit,
+      isRequired: p.isRequired,
+      defaultValue: p.defaultValue,
+      owner: p.owner as TechCardParameterOwner,
+      sortOrder: p.sortOrder,
+    };
+  }
+
+  private parameterCreateData(
+    techCardId: string,
+    p: TechCardParameterInput,
+    index: number,
+  ): Prisma.TechCardParameterCreateManyInput {
+    return {
+      techCardId,
+      key: p.key,
+      label: p.label,
+      inputType: p.inputType,
+      options:
+        p.inputType === 'ENUM' && p.options && p.options.length > 0
+          ? (p.options as Prisma.InputJsonValue)
+          : Prisma.DbNull,
+      unit: p.unit ?? null,
+      isRequired: p.isRequired,
+      defaultValue: p.defaultValue ?? null,
+      owner: p.owner,
+      // Тот же порядок нормализации, что у строк: (i + 1) * 10.
+      sortOrder: p.sortOrder ?? (index + 1) * 10,
+    };
+  }
+
+  /**
+   * Проверить, что каждая привязка ячейки ссылается на существующий параметр
+   * ЭТОЙ техкарты. Читаем из БД, а не из DTO: PATCH мог прислать только строки
+   * (параметры остались прежними) или только параметры (строки остались
+   * прежними) — итоговое состояние знает лишь БД.
+   *
+   * Битая привязка опаснее, чем кажется: ячейка молча осталась бы значением из
+   * шаблона, и менеджер думал бы, что она параметризована.
+   */
+  private async assertBindingsResolvable(
+    tx: Prisma.TransactionClient,
+    techCardId: string,
+  ): Promise<void> {
+    const [lines, params] = await Promise.all([
+      tx.techCardMaterialLine.findMany({
+        where: { techCardId },
+        select: { name: true, parameterBindings: true },
+      }),
+      tx.techCardParameter.findMany({
+        where: { techCardId },
+        select: { key: true },
+      }),
+    ]);
+
+    const known = new Set(params.map((p) => p.key));
+    const broken: string[] = [];
+    for (const line of lines) {
+      const bindings = line.parameterBindings as TechCardParameterBindings | null;
+      for (const key of collectBoundParameterKeys(bindings)) {
+        if (!known.has(key)) broken.push(`«${line.name}» → «${key}»`);
+      }
+    }
+    if (broken.length > 0) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'TECH_CARD_PARAMETER_BINDING_UNKNOWN',
+        message:
+          `Ячейки привязаны к параметрам, которых нет в техкарте: ${broken.join(', ')}. ` +
+          'Добавьте параметр или снимите привязку.',
+      });
+    }
   }
 
   private translateUniqueError(e: unknown): void {
