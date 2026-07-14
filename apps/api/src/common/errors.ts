@@ -2837,6 +2837,26 @@ export class WorkshopNeedsAlreadyReviewedException extends BusinessException {
 }
 
 /**
+ * Пересчёт потребности заказа удаляет и пересоздаёт системные строки
+ * `WorkshopNeed` с новыми id. Если по строке уже прошли складские
+ * движения (`StockMovement` — приёмка / расход материала), удаление
+ * снесло бы каскадом (`onDelete: Cascade`) её `StockBalance` и весь
+ * журнал движений, молча обнулив физический остаток на складе (при этом
+ * документы приёмки/расхода намеренно переживают удаление — `SetNull`).
+ * Блокируем пересчёт: сначала нужно разобраться с уже принятым/выданным
+ * материалом.
+ */
+export class WorkshopNeedsHaveStockException extends BusinessException {
+  constructor() {
+    super(
+      'WORKSHOP_NEEDS_HAVE_STOCK',
+      'По потребностям этого заказа уже есть складские движения (приёмка или расход материала). Пересчёт удалил бы физический остаток на складе. Сначала обработайте принятый/выданный материал (или отмените соответствующие приёмки/расходы), затем повторите расчёт.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
  * Не из чего считать потребность заказа. Универсальный код, конкретику
  * передаём в message — менеджер сразу видит, что именно поправить:
  *   - техкарта выбрана, но пустая (нет TechCardMaterialLine-ов);
@@ -3171,6 +3191,24 @@ export class SupplierPaymentRequestFileInvalidException extends BusinessExceptio
       'SUPPLIER_PAYMENT_REQUEST_FILE_INVALID',
       message,
       HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Редактирование заявки на оплату пересоздаёт этапы целиком. Если по
+ * этапу уже создана и СОГЛАСОВАНА либо ОПЛАЧЕНА «заявка на расход»
+ * (`SupplierPayment` в статусе APPROVED/PAID), пересоздание этапов
+ * оставило бы её осиротевшей на старой сумме — казначейство оплатило бы
+ * устаревшее. Блокируем правку: сначала отмените заявку на расход.
+ * (Черновики — `DRAFT` — правка пересобирает автоматически.)
+ */
+export class SupplierPaymentRequestHandedOffException extends BusinessException {
+  constructor() {
+    super(
+      'SUPPLIER_PAYMENT_REQUEST_HANDED_OFF',
+      'Заявка уже передана в казначейство и согласована или оплачена. Отредактировать сумму или этапы нельзя — сначала отмените связанную заявку на расход.',
+      HttpStatus.CONFLICT,
     );
   }
 }
@@ -3906,6 +3944,42 @@ export class MaterialIssueNothingToReturnException extends BusinessException {
  * флаг `true`, сервис не падает — балансы могут уйти в минус, как и
  * до hardening-итерации.
  */
+/**
+ * Фича «Параметры техкарт»: в заказе есть обязательные слоты без значения.
+ *
+ * 400, как и соседи по этому переходу (`ORDER_PATTERN_REQUIRED`,
+ * `ORDER_TECH_CARD_REQUIRED`, `ORDER_ITEMS_REQUIRED`) — форма заказа уже умеет
+ * их ловить. `BusinessException` не годится: он не пропускает произвольный
+ * payload, а UI должен подсветить КОНКРЕТНЫЕ расцветки и поля.
+ */
+export class OrderSpecIncompleteException extends HttpException {
+  constructor(
+    public readonly details: {
+      variants: Array<{
+        orderVariantId: string | null;
+        color: string | null;
+        parameters: Array<{ key: string; label: string; unit: string | null }>;
+      }>;
+    },
+  ) {
+    const summary = details.variants
+      .map(
+        (v) =>
+          `${v.color ?? 'заказ'}: ${v.parameters.map((p) => p.label).join(', ')}`,
+      )
+      .join('; ');
+    super(
+      {
+        statusCode: HttpStatus.BAD_REQUEST,
+        message: `Заполните параметры техкарты — ${summary}.`,
+        code: 'ORDER_SPEC_INCOMPLETE',
+        details,
+      },
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
 export class MaterialStockInsufficientException extends HttpException {
   constructor(
     message: string,

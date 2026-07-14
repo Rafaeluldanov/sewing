@@ -61,6 +61,7 @@ import {
   OrderDeleteForbiddenException,
   OrderInvalidTransitionException,
   OrderItemsRequiredException,
+  OrderSpecIncompleteException,
   OrderLockedException,
   OrderLogisticsLineNotFoundException,
   OrderMaterialRequirementColorNotRequiredException,
@@ -2458,6 +2459,12 @@ export class OrdersService {
       });
     }
 
+    // Фича «Параметры техкарт»: гейт нужен и здесь. `start()` разрешает
+    // DRAFT → IN_PRODUCTION напрямую, минуя расчёт, — без этой проверки
+    // незаполненные параметры обходятся кнопкой «запустить» из черновика,
+    // и раскрой пойдёт по плотности из шаблона вместо заказанной.
+    await this.assertSpecComplete(id);
+
     // Этап «Конструкторское бюро»: запуск в производство требует
     // именно `ACTIVE`-pattern. `assertPatternUsable` сейчас разрешает
     // DRAFT при наличии активной `ConstructorTask` — это нужно для
@@ -2864,6 +2871,14 @@ export class OrdersService {
     await this.prisma.$transaction(async (tx) => {
       await this.rebuildMaterialRequirementsSnapshot(id, tx);
     });
+
+    // Фича «Параметры техкарт»: гейт ПОСЛЕ пересборки, а не до. У заказа,
+    // созданного до появления параметров (или сразу после смены техкарты),
+    // строк `OrderTechCardParameter` ещё не существует — гейт перед rebuild
+    // прошёл бы вхолостую и пропустил незаполненный заказ в расчёт.
+    // Rebuild идемпотентен и статус не меняет, поэтому бросок здесь оставляет
+    // заказ в DRAFT со свежим снимком.
+    await this.assertSpecComplete(id);
 
     // Сначала считаем потребности. force=false: если уже есть
     // REVIEWED/PURCHASE_PLANNED строки (что в DRAFT возможно только
@@ -4284,6 +4299,66 @@ export class OrdersService {
     if (data.length > 0) {
       await tx.orderMaterialRequirement.createMany({ data });
     }
+  }
+
+  /**
+   * Фича «Параметры техкарт»: не пустить заказ дальше, пока обязательные слоты
+   * не заполнены. Бросает `ORDER_SPEC_INCOMPLETE` со списком «расцветка →
+   * какие поля», чтобы UI подсветил именно те плитки.
+   *
+   * Вызывается ТОЛЬКО на переходах (`startCalculation`, `start`) и намеренно НЕ
+   * вызывается в `resyncColorwayDerived`: тот дёргается на каждом сохранении
+   * расцветки, и гейт там начал бы валить обычные сейвы — расцветка сохранена,
+   * а ответ 400. Ровно тот класс «сохранил, но не доехало», от которого лечимся.
+   */
+  private async assertSpecComplete(orderId: string): Promise<void> {
+    const missing = await this.prisma.orderTechCardParameter.findMany({
+      where: {
+        orderId,
+        isRequired: true,
+        OR: [{ value: null }, { value: '' }],
+      },
+      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+      select: {
+        orderVariantId: true,
+        key: true,
+        label: true,
+        unit: true,
+        orderVariant: { select: { color: true } },
+      },
+    });
+    if (missing.length === 0) return;
+
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { color: true },
+    });
+
+    const byVariant = new Map<
+      string,
+      {
+        orderVariantId: string | null;
+        color: string | null;
+        parameters: Array<{ key: string; label: string; unit: string | null }>;
+      }
+    >();
+    for (const m of missing) {
+      const gk = m.orderVariantId ?? '';
+      let group = byVariant.get(gk);
+      if (!group) {
+        group = {
+          orderVariantId: m.orderVariantId,
+          color: m.orderVariant?.color ?? order?.color ?? null,
+          parameters: [],
+        };
+        byVariant.set(gk, group);
+      }
+      group.parameters.push({ key: m.key, label: m.label, unit: m.unit });
+    }
+
+    throw new OrderSpecIncompleteException({
+      variants: Array.from(byVariant.values()),
+    });
   }
 
   /**

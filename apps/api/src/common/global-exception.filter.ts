@@ -60,6 +60,7 @@ export class GlobalExceptionFilter implements ExceptionFilter {
     code: string;
     message: string;
     issues?: unknown;
+    details?: unknown;
   } {
     if (exception instanceof HttpException) {
       const status = exception.getStatus();
@@ -73,6 +74,11 @@ export class GlobalExceptionFilter implements ExceptionFilter {
         code: (obj.code as string) ?? defaultCode(status),
         message: pickMessage(obj.message) ?? defaultMessage(status),
         ...(obj.issues ? { issues: obj.issues } : {}),
+        // Структурированный payload бизнес-ошибок (`ORDER_SPEC_INCOMPLETE` —
+        // какие расцветки и какие поля не заполнены; `MATERIAL_STOCK_
+        // INSUFFICIENT` — сколько чего не хватает). Без проброса UI знает
+        // только текст сообщения и не может подсветить конкретные плитки.
+        ...(obj.details ? { details: obj.details } : {}),
       };
     }
     if (exception instanceof Prisma.PrismaClientKnownRequestError) {
