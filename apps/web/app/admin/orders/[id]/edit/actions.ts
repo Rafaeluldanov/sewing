@@ -79,6 +79,55 @@ function extractItems(form: FormData): { sizeId: string; qtyPlan: number }[] {
   return items;
 }
 
+/**
+ * Фича «Расцветки» (FEATURE_COLORWAYS): парсим hidden `variantsJson`,
+ * который рисует edit-форма при включённом флаге, в
+ * `UpdateOrderDto['variants']`. Каждая расцветка — цвет + опциональная
+ * техкарта + поразмерный план (`{sizeId, qtyPlan}`). Зеркалит
+ * `parseVariantsJson` из `apps/web/app/orders/actions.ts` (форма
+ * создания). Мусор молча отбрасываем — финальную валидацию делает
+ * `UpdateOrderSchema.variants`. Пусто / нет поля / пустой массив →
+ * `undefined`: backend расцветки не трогает (правки только скалярных
+ * полей / статуса).
+ */
+function parseVariantsJson(form: FormData): UpdateOrderDto['variants'] {
+  const raw = form.get('variantsJson');
+  if (raw === null) return undefined;
+  const text = String(raw).trim();
+  if (text === '' || text === '[]') return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return undefined;
+  }
+  if (!Array.isArray(parsed) || parsed.length === 0) return undefined;
+
+  const out: NonNullable<UpdateOrderDto['variants']> = [];
+  for (const v of parsed) {
+    if (!v || typeof v !== 'object') continue;
+    const rec = v as Record<string, unknown>;
+    const color = typeof rec.color === 'string' ? rec.color.trim() : '';
+    if (color === '') continue;
+    const techCardId =
+      typeof rec.techCardId === 'string' && rec.techCardId.length > 0
+        ? rec.techCardId
+        : null;
+    const sizesRaw = Array.isArray(rec.sizes) ? rec.sizes : [];
+    const sizes: { sizeId: string; qtyPlan: number }[] = [];
+    for (const s of sizesRaw) {
+      if (!s || typeof s !== 'object') continue;
+      const sr = s as Record<string, unknown>;
+      const sizeId = typeof sr.sizeId === 'string' ? sr.sizeId : '';
+      const qtyPlan = Number(sr.qtyPlan);
+      if (sizeId === '' || !Number.isFinite(qtyPlan) || qtyPlan <= 0) continue;
+      sizes.push({ sizeId, qtyPlan: Math.trunc(qtyPlan) });
+    }
+    out.push({ color, techCardId, sizes });
+  }
+  return out.length > 0 ? out : undefined;
+}
+
 function parseStatus(form: FormData): OrderStatus | undefined {
   const raw = String(form.get('status') ?? '').trim();
   if (raw === '') return undefined;
@@ -103,6 +152,12 @@ function optionalString(v: FormDataEntryValue | null): string | undefined {
 
 function buildUpdateDto(form: FormData): UpdateOrderDto {
   const items = extractItems(form);
+  // Фича «Расцветки»: под флагом форма шлёт `variantsJson` ВМЕСТО
+  // размерной матрицы. Когда расцветки есть — не шлём `items`: агрегат
+  // `OrderItem` = Σ по цветам backend пересоберёт сам через
+  // `resyncColorwayDerived`, а прямая запись `items` конфликтовала бы с
+  // ресинком (обратная рассинхронизация, ровно тот баг, что чиним).
+  const variants = parseVariantsJson(form);
   // Этап «Номенклатура = Лекала»: `productId` admin-форма больше не
   // шлёт. Старая «backward-compat» ветка (`form.get('productId')`)
   // здесь сознательно не нужна: даже если случайный вызов придёт
@@ -155,7 +210,8 @@ function buildUpdateDto(form: FormData): UpdateOrderDto {
     color: optionalNullableString(form.get('color')),
     comment: optionalNullableString(form.get('comment')),
     customer: optionalNullableString(form.get('customer')),
-    items: items.length > 0 ? items : undefined,
+    items: variants ? undefined : items.length > 0 ? items : undefined,
+    variants,
     routeTemplateId: optionalNullableString(form.get('routeTemplateId')),
     techCardId: optionalNullableString(form.get('techCardId')),
     // Этап «Номенклатура = Лекала»: семантика та же — поля нет

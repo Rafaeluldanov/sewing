@@ -45,7 +45,10 @@ import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { getTechCard, listTechCards } from '@/lib/tech-cards-api';
 import { listWarehouses } from '@/lib/warehouses-api';
+import { getOrderColorways } from '@/lib/colorways-api';
+import { isColorwaysEnabled } from '@/lib/feature-flags';
 import { AdminCard, AdminPageShell } from '@/components/admin';
+import type { ColorwayDraft } from '@/app/admin/orders/new/order-create-colorways';
 import {
   AdminEditOrderForm,
   type RoutePreview,
@@ -251,6 +254,28 @@ export default async function AdminOrderEditPage({ params }: Params) {
     }
   }
 
+  // Фича «Расцветки» (FEATURE_COLORWAYS): под флагом форма редактирования
+  // показывает карточки расцветок (как форма создания и карточка заказа).
+  // Сид берём из `getOrderColorways` — тот же источник, что у карточек на
+  // странице просмотра, чтобы обе поверхности стартовали от одного
+  // состояния. `sizes` расцветки → `Record<sizeId, qtyPlan>` под редактор.
+  const colorwaysEnabled = isColorwaysEnabled();
+  let initialColorways: ColorwayDraft[] = [];
+  if (colorwaysEnabled) {
+    try {
+      const cw = await getOrderColorways(order.id);
+      initialColorways = cw.variants.map((v) => ({
+        color: v.color,
+        techCardId: v.techCardId,
+        sizes: Object.fromEntries(
+          v.sizes.map((s) => [s.sizeId, s.qtyPlan]),
+        ),
+      }));
+    } catch {
+      // graceful — форма заведёт одну пустую карточку.
+    }
+  }
+
   const today = new Date().toISOString().slice(0, 10);
 
   // Order-workspace unification (см.
@@ -288,6 +313,8 @@ export default async function AdminOrderEditPage({ params }: Params) {
         companyDivisions={companyDivisions}
         warehouses={warehouses}
         today={today}
+        colorwaysEnabled={colorwaysEnabled}
+        initialColorways={initialColorways}
       />
     </AdminPageShell>
   );

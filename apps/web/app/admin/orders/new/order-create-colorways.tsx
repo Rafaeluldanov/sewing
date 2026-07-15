@@ -86,6 +86,7 @@ export function OrderColorwaysFieldset({
   techCards,
   value,
   onChange,
+  initialExtraSizeIds,
 }: {
   /** Размеры выбранного лекала — базовые колонки. */
   availableSizes: SizeDto[];
@@ -94,9 +95,19 @@ export function OrderColorwaysFieldset({
   techCards: TechCardTemplateSummaryDto[];
   value: ColorwayDraft[];
   onChange: (next: ColorwayDraft[]) => void;
+  /**
+   * Доп. размеры (сверх лекала), которые нужно показать колонками сразу
+   * при монтировании. Нужно форме РЕДАКТИРОВАНИЯ: сид расцветок может
+   * содержать размеры вне лекала (менеджер добавил их при создании) —
+   * иначе их колонки не появились бы и введённые количества «повисли» бы
+   * в агрегате без ячейки. Форма создания prop не передаёт (пустой сид).
+   */
+  initialExtraSizeIds?: string[];
 }) {
   // Доп. размеры (сверх лекала), добавленные менеджером кнопкой «+».
-  const [extraSizeIds, setExtraSizeIds] = useState<string[]>([]);
+  const [extraSizeIds, setExtraSizeIds] = useState<string[]>(
+    () => initialExtraSizeIds ?? [],
+  );
   const [addOpen, setAddOpen] = useState(false);
 
   const patch = (idx: number, upd: Partial<ColorwayDraft>): void =>

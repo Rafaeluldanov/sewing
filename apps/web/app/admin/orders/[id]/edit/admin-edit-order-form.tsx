@@ -40,7 +40,7 @@
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
 import { useRouter } from 'next/navigation';
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import {
   AlertCircle,
   ArrowLeft,
@@ -94,6 +94,11 @@ import {
   SavedInlineProductCard,
 } from '@/app/admin/orders/new/admin-create-order-form';
 import {
+  OrderColorwaysFieldset,
+  makeEmptyColorway,
+  type ColorwayDraft,
+} from '@/app/admin/orders/new/order-create-colorways';
+import {
   attachConstructorTaskPatternToOrderAction,
   createInlineProductForEditAction,
 } from './inline-product-actions';
@@ -145,6 +150,19 @@ interface Props {
    */
   warehouses: WarehouseSummaryDto[];
   today: string;
+  /**
+   * Фича «Расцветки» (FEATURE_COLORWAYS): под флагом размерная матрица
+   * заменяется карточками расцветок (как на форме создания и на карточке
+   * заказа) — единый UX «цвет × размер × техкарта». Off → прежняя плоская
+   * матрица `AdminSizeGrid`.
+   */
+  colorwaysEnabled: boolean;
+  /**
+   * Сид расцветок заказа (из `getOrderColorways`) для редактора. Пусто =
+   * заведём одну пустую карточку. Используется только при
+   * `colorwaysEnabled`.
+   */
+  initialColorways: ColorwayDraft[];
 }
 
 const initialState: FormActionState = {};
@@ -192,6 +210,8 @@ export function AdminEditOrderForm({
   companyDivisions,
   warehouses,
   today,
+  colorwaysEnabled,
+  initialColorways,
 }: Props) {
   const router = useRouter();
   const action = updateAdminOrderAction.bind(null, order.id);
@@ -284,6 +304,91 @@ export function AdminEditOrderForm({
     [initialQty],
   );
   const [sizesTotal, setSizesTotal] = useState<number>(initialTotal);
+
+  // ── Фича «Расцветки» (FEATURE_COLORWAYS) ───────────────────────────
+  // Под флагом плоская матрица заменяется карточками расцветок (цвет +
+  // техкарта + поразмерный план) — тот же редактор, что на форме
+  // создания. Сид — из `getOrderColorways`; пусто → одна пустая карточка.
+  const [colorways, setColorways] = useState<ColorwayDraft[]>(() =>
+    initialColorways.length > 0
+      ? initialColorways.map((c) => ({ ...c, sizes: { ...c.sizes } }))
+      : [makeEmptyColorway()],
+  );
+
+  // Колонки-размеры карточек = размеры выбранного лекала. Реактивно
+  // следует за сменой лекала (как в форме создания).
+  const availableSizes = useMemo<SizeDto[]>(() => {
+    if (!selectedPattern) return [];
+    return selectedPattern.sizes.map((s) => ({
+      id: s.id,
+      code: s.code,
+      sortOrder: s.sortOrder,
+    }));
+  }, [selectedPattern]);
+
+  const allSizeIds = useMemo(
+    () => new Set(sortedSizes.map((s) => s.id)),
+    [sortedSizes],
+  );
+
+  // Доп.размеры сида (сверх лекала) — чтобы их колонки показались сразу.
+  // Считаем ОДИН раз от начального сида и начального набора размеров
+  // лекала: дальше редактор ведёт extra-размеры сам.
+  const initialExtraSizeIds = useMemo<string[]>(() => {
+    if (!colorwaysEnabled) return [];
+    const patternIds = new Set(
+      (selectedPattern?.sizes ?? []).map((s) => s.id),
+    );
+    const seen = new Set<string>();
+    const out: string[] = [];
+    for (const cw of initialColorways) {
+      for (const [sizeId, qty] of Object.entries(cw.sizes)) {
+        if (
+          qty > 0 &&
+          allSizeIds.has(sizeId) &&
+          !patternIds.has(sizeId) &&
+          !seen.has(sizeId)
+        ) {
+          seen.add(sizeId);
+          out.push(sizeId);
+        }
+      }
+    }
+    return out;
+    // Намеренно только от начальных значений — это стартовый снимок.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Расцветки → агрегат заказа. `sizesTotal` = Σ по всем цветам/размерам,
+  // цвет заказа = первый непустой. Мирроринг эффектов формы создания.
+  useEffect(() => {
+    if (!colorwaysEnabled) return;
+    let total = 0;
+    for (const cw of colorways) {
+      for (const [sizeId, qty] of Object.entries(cw.sizes)) {
+        if (allSizeIds.has(sizeId) && qty > 0) total += qty;
+      }
+    }
+    setSizesTotal(total);
+    setColor(colorways.find((c) => c.color.trim())?.color.trim() ?? '');
+  }, [colorways, colorwaysEnabled, allSizeIds]);
+
+  // Полезная нагрузка `variantsJson` — только непустые расцветки (цвет
+  // задан) и размеры с qty>0. Пусто → шлём `[]` (backend расцветки не
+  // трогает).
+  const variantsPayload = useMemo(
+    () =>
+      colorways
+        .map((cw) => ({
+          color: cw.color.trim(),
+          techCardId: cw.techCardId,
+          sizes: Object.entries(cw.sizes)
+            .filter(([sid, q]) => allSizeIds.has(sid) && q > 0)
+            .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan })),
+        }))
+        .filter((cw) => cw.color.length > 0 && cw.sizes.length > 0),
+    [colorways, allSizeIds],
+  );
 
   /**
    * Колбэк, который CreateProductInline передаёт после клика
@@ -431,6 +536,19 @@ export function AdminEditOrderForm({
   return (
     <form action={formAction} className="admin-form admin-order-form">
       <input type="hidden" name="orderDate" value={orderDateValue} />
+      {/* Фича «Расцветки»: под флагом «Цвет» и расцветки заказа сабмитятся
+          отсюда (видимые инпуты «Цвет» и общий выбор техкарты скрыты).
+          `color` = первый непустой цвет, `variantsJson` = все расцветки. */}
+      {colorwaysEnabled && (
+        <>
+          <input type="hidden" name="color" value={color} />
+          <input
+            type="hidden"
+            name="variantsJson"
+            value={JSON.stringify(variantsPayload)}
+          />
+        </>
+      )}
       <input type="hidden" name="customer" value={order.customer ?? ''} />
 
       {state.error && (
@@ -782,7 +900,8 @@ export function AdminEditOrderForm({
 
               {/* EMPTY: подсказка + опционально цвет (чтобы у менеджера
                   была возможность поменять только цвет, не трогая
-                  лекало). */}
+                  лекало). Под флагом «Расцветки» цвет задаётся в
+                  карточках расцветок — одиночное поле скрываем. */}
               {productBlockMode === 'EMPTY' && (
                 <>
                   <p className="admin-muted" style={{ margin: 0 }}>
@@ -790,23 +909,25 @@ export function AdminEditOrderForm({
                     изделие», чтобы взять существующее, или «Создать
                     изделие», чтобы завести inline.
                   </p>
-                  <div
-                    className="admin-form-grid"
-                    style={{ marginTop: '0.5rem' }}
-                  >
-                    <div className="admin-field">
-                      <label htmlFor="color">Цвет</label>
-                      <input
-                        id="color"
-                        name="color"
-                        type="text"
-                        value={color}
-                        onChange={(e) => setColor(e.target.value)}
-                        placeholder="не задан"
-                        maxLength={64}
-                      />
+                  {!colorwaysEnabled && (
+                    <div
+                      className="admin-form-grid"
+                      style={{ marginTop: '0.5rem' }}
+                    >
+                      <div className="admin-field">
+                        <label htmlFor="color">Цвет</label>
+                        <input
+                          id="color"
+                          name="color"
+                          type="text"
+                          value={color}
+                          onChange={(e) => setColor(e.target.value)}
+                          placeholder="не задан"
+                          maxLength={64}
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </>
               )}
 
@@ -866,18 +987,20 @@ export function AdminEditOrderForm({
                     )}
                   </div>
 
-                  <div className="admin-field">
-                    <label htmlFor="color">Цвет</label>
-                    <input
-                      id="color"
-                      name="color"
-                      type="text"
-                      value={color}
-                      onChange={(e) => setColor(e.target.value)}
-                      placeholder="не задан"
-                      maxLength={64}
-                    />
-                  </div>
+                  {!colorwaysEnabled && (
+                    <div className="admin-field">
+                      <label htmlFor="color">Цвет</label>
+                      <input
+                        id="color"
+                        name="color"
+                        type="text"
+                        value={color}
+                        onChange={(e) => setColor(e.target.value)}
+                        placeholder="не задан"
+                        maxLength={64}
+                      />
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -1017,23 +1140,25 @@ export function AdminEditOrderForm({
                       }}
                     />
                   )}
-                  <div
-                    className="admin-form-grid"
-                    style={{ marginTop: '0.75rem' }}
-                  >
-                    <div className="admin-field">
-                      <label htmlFor="color">Цвет</label>
-                      <input
-                        id="color"
-                        name="color"
-                        type="text"
-                        value={color}
-                        onChange={(e) => setColor(e.target.value)}
-                        placeholder="не задан"
-                        maxLength={64}
-                      />
+                  {!colorwaysEnabled && (
+                    <div
+                      className="admin-form-grid"
+                      style={{ marginTop: '0.75rem' }}
+                    >
+                      <div className="admin-field">
+                        <label htmlFor="color">Цвет</label>
+                        <input
+                          id="color"
+                          name="color"
+                          type="text"
+                          value={color}
+                          onChange={(e) => setColor(e.target.value)}
+                          placeholder="не задан"
+                          maxLength={64}
+                        />
+                      </div>
                     </div>
-                  </div>
+                  )}
                 </>
               )}
 
@@ -1092,28 +1217,34 @@ export function AdminEditOrderForm({
               </header>
 
               <div className="admin-form-grid">
-                <div className="admin-field">
-                  <label htmlFor="techCardId">Техкарта</label>
-                  <select
-                    id="techCardId"
-                    name="techCardId"
-                    value={techCardId}
-                    onChange={(e) => setTechCardId(e.target.value)}
-                    disabled={!isDraft}
-                  >
-                    <option value="">— без техкарты —</option>
-                    {showCurrentTechCardFallback && order.techCardId && (
-                      <option value={order.techCardId}>
-                        {order.techCardName ?? 'Текущая техкарта'} — неактивна
-                      </option>
-                    )}
-                    {techCards.map((tc) => (
-                      <option key={tc.id} value={tc.id}>
-                        {tc.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                {/* Фича «Расцветки»: техкарта выбирается на КАЖДЫЙ цвет в
+                    карточках расцветок, поэтому общий выбор техкарты
+                    прячем, чтобы не дублировать. Без расцветок — обычный
+                    выбор техкарты. */}
+                {!colorwaysEnabled && (
+                  <div className="admin-field">
+                    <label htmlFor="techCardId">Техкарта</label>
+                    <select
+                      id="techCardId"
+                      name="techCardId"
+                      value={techCardId}
+                      onChange={(e) => setTechCardId(e.target.value)}
+                      disabled={!isDraft}
+                    >
+                      <option value="">— без техкарты —</option>
+                      {showCurrentTechCardFallback && order.techCardId && (
+                        <option value={order.techCardId}>
+                          {order.techCardName ?? 'Текущая техкарта'} — неактивна
+                        </option>
+                      )}
+                      {techCards.map((tc) => (
+                        <option key={tc.id} value={tc.id}>
+                          {tc.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                )}
 
                 <div className="admin-field">
                   <label htmlFor="routeTemplateId">Маршрут</label>
@@ -1175,6 +1306,19 @@ export function AdminEditOrderForm({
               <p className="admin-muted" style={{ margin: 0 }}>
                 Справочник размеров пуст.
               </p>
+            ) : colorwaysEnabled ? (
+              // Фича «Расцветки»: цвет × размер × техкарта вместо плоской
+              // матрицы. Из карточек считаем агрегат (`sizesTotal`) и
+              // `variantsJson` — backend полностью заменит расцветки и
+              // пересоберёт `OrderItem` через `resyncColorwayDerived`.
+              <OrderColorwaysFieldset
+                availableSizes={availableSizes}
+                allSizes={sortedSizes}
+                techCards={techCards}
+                value={colorways}
+                onChange={setColorways}
+                initialExtraSizeIds={initialExtraSizeIds}
+              />
             ) : (
               <>
                 <AdminSizeGrid

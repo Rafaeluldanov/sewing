@@ -1278,6 +1278,27 @@ export const UpdateOrderSchema = z.object({
       }
     })
     .optional(),
+  /**
+   * Фича «Расцветки» (FEATURE_COLORWAYS): при редактировании заказа
+   * (`/admin/orders/[id]/edit`) форма шлёт полный список расцветок — цвет
+   * + своя техкарта + поразмерный план. Когда передан, backend делает
+   * ПОЛНУЮ ЗАМЕНУ `OrderVariant` / `OrderVariantSize` и пересобирает
+   * агрегат `OrderItem` = Σ по цветам через тот же `resyncColorwayDerived`,
+   * что и карточки на странице просмотра — обе поверхности сходятся на
+   * одном движке. Форма шлёт `variants` ВМЕСТО `items`, чтобы прямая
+   * запись агрегата не конфликтовала с ресинком. Разрешено в DRAFT /
+   * CALCULATION (то же окно, что у API расцветок); иначе backend отдаёт
+   * 409 `ORDER_COLORWAYS_LOCKED`. Та же форма, что в `CreateOrderSchema`.
+   */
+  variants: z
+    .array(
+      z.object({
+        color: z.string().trim().min(1, 'Укажите цвет расцветки').max(60),
+        techCardId: z.string().min(1).nullable().optional(),
+        sizes: z.array(ColorwaySizeInputSchema).default([]),
+      }),
+    )
+    .optional(),
 });
 export type UpdateOrderDto = z.infer<typeof UpdateOrderSchema>;
 

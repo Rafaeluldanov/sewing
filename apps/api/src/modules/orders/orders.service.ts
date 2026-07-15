@@ -509,26 +509,7 @@ export class OrdersService {
                 })),
               },
             ];
-      for (let ordinal = 0; ordinal < variantInputs.length; ordinal += 1) {
-        const v = variantInputs[ordinal];
-        // Схлопываем дубли размеров и выкидываем нулевые строки.
-        const bySize = new Map<string, number>();
-        for (const s of v.sizes) {
-          bySize.set(s.sizeId, (bySize.get(s.sizeId) ?? 0) + s.qtyPlan);
-        }
-        const sizeRows = [...bySize.entries()]
-          .filter(([, q]) => q > 0)
-          .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan }));
-        await tx.orderVariant.create({
-          data: {
-            orderId: created.id,
-            ordinal,
-            color: v.color,
-            techCardId: v.techCardId,
-            sizes: { create: sizeRows },
-          },
-        });
-      }
+      await this.writeOrderVariants(tx, created.id, variantInputs);
 
       // Этап 2 «План операций на заказе» (см.
       // `docs/operation-time-norms-recon.md §11`): после фиксации
@@ -1919,7 +1900,30 @@ export class OrdersService {
       wantsPatternChange ||
       wantsCompanyDivisionChange;
 
+    // Фича «Расцветки» (FEATURE_COLORWAYS): edit-форма шлёт полный список
+    // расцветок. НЕ входит в `wantsUnsafeChange` (там DRAFT-only) — у
+    // расцветок своё окно DRAFT/CALCULATION (то же, что у API карточек),
+    // и поразмерный план по цветам ещё можно править в «Расчёте».
+    const wantsVariantsChange =
+      dto.variants !== undefined && dto.variants.length > 0;
+
     const isDraft = current.status === OrderStatus.DRAFT;
+
+    if (
+      wantsVariantsChange &&
+      current.status !== OrderStatus.DRAFT &&
+      current.status !== OrderStatus.CALCULATION
+    ) {
+      // Тот же гейт и код, что у `OrderColorwaysService.assertEditableOrder`
+      // — обе поверхности правки расцветок отбивают locked-статусы
+      // одинаково.
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ORDER_COLORWAYS_LOCKED',
+        message:
+          'Расцветки можно менять только пока заказ в статусе «Черновик» или «Расчёт». После запуска расчёта/производства общий план заказа заморожен, и правка расцветки его не изменит. Чтобы редактировать — верните заказ на пересчёт.',
+      });
+    }
 
     if (wantsUnsafeChange && !isDraft) {
       // CALCULATION (этап «Расчёт»): план уже использован для
@@ -2382,6 +2386,29 @@ export class OrdersService {
         await this.rebuildMaterialRequirementsSnapshot(id, tx);
       }
     });
+
+    // Фича «Расцветки» (FEATURE_COLORWAYS): полная замена расцветок из
+    // edit-формы, затем ЕДИНЫЙ ресинк производных — тот же движок
+    // `resyncColorwayDerived`, что зовут карточки на странице просмотра.
+    // Обе поверхности сходятся на одном состоянии `OrderVariant` и одном
+    // пути пересборки агрегата `OrderItem` = Σ по цветам (+ снимок
+    // материалов, план операций, потребности). Форма шлёт `variants`
+    // ВМЕСТО `items`, поэтому прямой записи `OrderItem` в транзакции выше
+    // не было — конфликта «агрегат vs ресинк» нет. Делаем ДО перехода
+    // статуса: если тем же PATCH заказ уходит в «Расчёт», то к моменту
+    // `startCalculation` план уже пересобран из свежих расцветок.
+    if (wantsVariantsChange) {
+      const variantInputs = dto.variants!.map((v) => ({
+        color: v.color,
+        techCardId: v.techCardId ?? null,
+        sizes: v.sizes ?? [],
+      }));
+      await this.prisma.$transaction(async (tx) => {
+        await tx.orderVariant.deleteMany({ where: { orderId: id } });
+        await this.writeOrderVariants(tx, id, variantInputs);
+      });
+      await this.resyncColorwayDerived(id, actorEmployeeId);
+    }
 
     // Безопасный переход статуса. Делегируем в существующие методы
     // (`start/complete/cancel/startCalculation`), чтобы не дублировать
@@ -3862,6 +3889,47 @@ export class OrdersService {
       taskStatus === 'REWORK';
     if (p.status === 'DRAFT' && taskIsActive) return;
     throw new PatternInactiveException();
+  }
+
+  /**
+   * Фича «Расцветки» (FEATURE_COLORWAYS): записать расцветки заказа
+   * (`OrderVariant` / `OrderVariantSize`) по порядковому номеру. Общий
+   * примитив для `create()` (первичное создание) и `update()` (полная
+   * замена при редактировании) — держим один источник логики «схлопнуть
+   * дубли размеров + выкинуть нулевые строки», чтобы поверхности не
+   * разъезжались. Вызывающий отвечает за очистку прежних расцветок
+   * (`deleteMany`) перед полной заменой и за вызов `resyncColorwayDerived`
+   * после — здесь только пишем варианты в переданной транзакции.
+   */
+  private async writeOrderVariants(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    variantInputs: {
+      color: string;
+      techCardId: string | null;
+      sizes: { sizeId: string; qtyPlan: number }[];
+    }[],
+  ): Promise<void> {
+    for (let ordinal = 0; ordinal < variantInputs.length; ordinal += 1) {
+      const v = variantInputs[ordinal];
+      // Схлопываем дубли размеров и выкидываем нулевые строки.
+      const bySize = new Map<string, number>();
+      for (const s of v.sizes) {
+        bySize.set(s.sizeId, (bySize.get(s.sizeId) ?? 0) + s.qtyPlan);
+      }
+      const sizeRows = [...bySize.entries()]
+        .filter(([, q]) => q > 0)
+        .map(([sizeId, qtyPlan]) => ({ sizeId, qtyPlan }));
+      await tx.orderVariant.create({
+        data: {
+          orderId,
+          ordinal,
+          color: v.color,
+          techCardId: v.techCardId,
+          sizes: { create: sizeRows },
+        },
+      });
+    }
   }
 
   /**
