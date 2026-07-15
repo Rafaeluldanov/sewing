@@ -251,7 +251,10 @@ export class OrderTechCardService {
   ): Promise<OrderTechCardParametersDto> {
     await this.assertEditableOrder(orderId);
 
-    const variantId = dto.orderVariantId ?? null;
+    const variantId = await this.resolveSnapshotVariantId(
+      orderId,
+      dto.orderVariantId ?? null,
+    );
     const duplicate = await this.prisma.orderTechCardParameter.findFirst({
       where: { orderId, orderVariantId: variantId, key: dto.key },
       select: { id: true },
@@ -418,7 +421,10 @@ export class OrderTechCardService {
     actorEmployeeId?: string | null,
   ): Promise<OrderTechCardParametersDto> {
     await this.assertEditableOrder(orderId);
-    const variantId = dto.orderVariantId ?? null;
+    const variantId = await this.resolveSnapshotVariantId(
+      orderId,
+      dto.orderVariantId ?? null,
+    );
 
     // Порядок: ручные строки идут после шаблонных.
     const last = await this.prisma.orderMaterialRequirement.findFirst({
@@ -519,6 +525,27 @@ export class OrderTechCardService {
           'Параметры техкарты можно менять только в черновике и на этапе расчёта.',
       });
     }
+  }
+
+  /**
+   * Привести `orderVariantId` из запроса к КЛЮЧУ ГРУППЫ СНИМКА.
+   *
+   * Снимок группируется как в `listForOrder`: при ≥2 расцветках — по
+   * расцветке, при 0–1 — одна order-level группа под `orderVariantId = null`.
+   * У единственной расцветки есть реальный id, и UI мог бы прислать именно
+   * его; но снимок этой расцветки лежит под `null`. Записать по присланному
+   * id как есть — значит положить строку/параметр в группу, которую
+   * `listForOrder` не читает: пропадёт тихо (ровно баг «нет техкарты»).
+   * Нормализуем: при 0–1 расцветке ключ всегда `null`. Фронт уже шлёт
+   * правильный ключ, это защита контракта на стороне API.
+   */
+  private async resolveSnapshotVariantId(
+    orderId: string,
+    requested: string | null,
+  ): Promise<string | null> {
+    if (requested === null) return null;
+    const count = await this.prisma.orderVariant.count({ where: { orderId } });
+    return count >= 2 ? requested : null;
   }
 
   private async findParam(orderId: string, parameterId: string) {

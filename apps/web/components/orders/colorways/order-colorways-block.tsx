@@ -17,7 +17,10 @@
 
 import { useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
+import {
+  resolveVariantParamsGroup,
+  type OrderTechCardParametersDto,
+} from '@sewing/shared/order-tech-cards';
 import { ColorwayParamsWindow } from './colorway-params-window';
 import { Palette, Plus, Trash2, Save, Info, Loader2 } from 'lucide-react';
 import type { OrderColorwaysDto } from '@sewing/shared';
@@ -63,12 +66,9 @@ function paramSummary(
 ): { filled: number; total: number; missing: number } | null {
   if (!params) return null;
   // При 0–1 расцветке снимок (и параметры) живут order-level группой
-  // (`orderVariantId = null`) — та же логика, что на бэке.
-  const group =
-    params.variants.find((g) => g.orderVariantId === variantId) ??
-    (params.variants.length === 1 && params.variants[0].orderVariantId === null
-      ? params.variants[0]
-      : undefined);
+  // (`orderVariantId = null`) — резолвер знает это правило (та же логика,
+  // что на бэке в `listForOrder`).
+  const group = resolveVariantParamsGroup(params, variantId);
   if (!group) return null;
   const required = group.parameters.filter((p) => p.isRequired);
   if (required.length === 0) return null;

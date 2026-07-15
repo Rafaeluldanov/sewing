@@ -92,6 +92,32 @@ describeWithDb('integration — параметры техкарт', () => {
     return res.body.id as string;
   }
 
+  /**
+   * Заказ с ОДНОЙ расцветкой. Снимок и параметры такого заказа живут
+   * order-level группой (`orderVariantId = null`), хотя у расцветки есть
+   * реальный id — на этом расхождении и ловился баг «нет техкарты».
+   */
+  async function createOrderWithOneColorway(techCardId: string): Promise<string> {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', manager)
+      .send({
+        orderDate: '2026-07-14T00:00:00.000Z',
+        patternItemId,
+        techCardId,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        variants: [
+          {
+            color: 'Белый',
+            techCardId,
+            sizes: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+          },
+        ],
+      })
+      .expect(201);
+    return res.body.id as string;
+  }
+
   /** Заказ с двумя расцветками на одной техкарте. */
   async function createOrderWithTwoColorways(techCardId: string): Promise<string> {
     const res = await request(t.app.getHttpServer())
@@ -335,5 +361,107 @@ describeWithDb('integration — параметры техкарт', () => {
       .set('Cookie', manager)
       .expect(409);
     expect(res.body.code).toBe('ORDER_MATERIAL_LINE_FROM_TEMPLATE');
+  });
+
+  // Регресс на баг «У этой расцветки нет техкарты — выберите её в блоке
+  // Расцветки»: у заказа с ОДНОЙ расцветкой снимок группируется order-level
+  // (`orderVariantId = null`), а UI-плитка знает расцветку по реальному id и
+  // слал его в записи. Слот/строка улетали в группу, которую чтение не
+  // читает → тихо пропадали. Бэкенд нормализует ключ (`resolveSnapshotVariantId`).
+  test('одна расцветка: снимок под order-level ключом (null)', async () => {
+    const techCardId = await createParametricTechCard();
+    const orderId = await createOrderWithOneColorway(techCardId);
+
+    const params = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/tech-card-parameters`)
+      .set('Cookie', manager)
+      .expect(200);
+
+    // Ровно одна order-level группа — именно её `resolveVariantParamsGroup`
+    // отдаёт по реальному id расцветки на фронте.
+    expect(params.body.variants).toHaveLength(1);
+    expect(params.body.variants[0].orderVariantId).toBeNull();
+    expect(params.body.variants[0].color).toBe('Белый');
+    expect(params.body.variants[0].parameters).toHaveLength(1);
+  });
+
+  test('одна расцветка: запись с реальным id расцветки нормализуется в снимок', async () => {
+    const techCardId = await createParametricTechCard();
+    const orderId = await createOrderWithOneColorway(techCardId);
+
+    // Реальный id единственной расцветки — как раз его слал старый UI.
+    const variant = await t.prisma.orderVariant.findFirstOrThrow({
+      where: { orderId },
+    });
+
+    // Ад-хок параметр с id расцветки (а не null): бэкенд обязан положить его
+    // в order-level группу, иначе слот тихо исчезнет.
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/tech-card-parameters`)
+      .set('Cookie', manager)
+      .send({
+        orderVariantId: variant.id,
+        key: 'adhoc_note',
+        label: 'Примечание',
+        inputType: 'TEXT',
+        isRequired: false,
+        value: 'проверка',
+        target: null,
+      })
+      .expect(201);
+
+    // Ручная строка материала — тоже с id расцветки.
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/tech-card/lines`)
+      .set('Cookie', manager)
+      .send({
+        orderVariantId: variant.id,
+        name: 'Лента усилительная',
+        unit: 'м',
+        qtyPerUnit: '0.5',
+      })
+      .expect(201);
+
+    // Оба легли в order-level группу и ВИДНЫ при чтении (не пропали).
+    const after = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/tech-card-parameters`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(after.body.variants).toHaveLength(1);
+    const group = after.body.variants[0];
+    expect(group.orderVariantId).toBeNull();
+    expect(group.parameters.map((p: { key: string }) => p.key)).toContain(
+      'adhoc_note',
+    );
+    expect(group.lines.map((l: { name: string }) => l.name)).toContain(
+      'Лента усилительная',
+    );
+
+    // Ад-хок параметр записан под null, а не под id расцветки.
+    const stored = await t.prisma.orderTechCardParameter.findFirstOrThrow({
+      where: { orderId, key: 'adhoc_note' },
+    });
+    expect(stored.orderVariantId).toBeNull();
+  });
+
+  test('одна расцветка: «сохранить как шаблон» с id расцветки не падает пустотой', async () => {
+    const techCardId = await createParametricTechCard();
+    const orderId = await createOrderWithOneColorway(techCardId);
+    const variant = await t.prisma.orderVariant.findFirstOrThrow({
+      where: { orderId },
+    });
+
+    // Снимок лежит под null; запрос с реальным id раньше находил 0 строк и
+    // отбивался ORDER_TECH_CARD_EMPTY. Нормализация ключа это чинит.
+    const res = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/tech-card/save-as-template`)
+      .set('Cookie', manager)
+      .send({
+        orderVariantId: variant.id,
+        code: 'TC-FROM-ONE',
+        name: 'Из одноцветного заказа',
+      })
+      .expect(201);
+    expect(res.body.materialLines.length).toBeGreaterThan(0);
   });
 });

@@ -12,9 +12,10 @@
 
 import { useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
-import type {
-  OrderTechCardParametersDto,
-  OrderTechCardVariantParamsDto,
+import {
+  resolveVariantParamsGroup,
+  type OrderTechCardParametersDto,
+  type OrderTechCardVariantParamsDto,
 } from '@sewing/shared/order-tech-cards';
 import {
   TECH_CARD_PARAMETER_INPUT_TYPES,
@@ -76,9 +77,12 @@ export function ColorwayParamsWindow({
   const [newLine, setNewLine] = useState<typeof emptyLine | null>(null);
   const router = useRouter();
 
-  const group: OrderTechCardVariantParamsDto | undefined = data.variants.find(
-    (v) => v.orderVariantId === variantId,
-  );
+  // Резолвер знает правило группировки снимка: у единственной расцветки есть
+  // реальный id (он и приходит пропом `variantId`), но её группа лежит под
+  // order-level ключом `null`. Строгий поиск по id тут промахнулся бы и окно
+  // показало бы «нет техкарты» — см. `resolveVariantParamsGroup`.
+  const group: OrderTechCardVariantParamsDto | undefined =
+    resolveVariantParamsGroup(data, variantId);
   const ro = !data.editable;
 
   function apply(r: TechCardParamsActionResult): void {
@@ -111,6 +115,12 @@ export function ColorwayParamsWindow({
   }
 
   const title = `Техкарта расцветки — ${group.color ?? 'заказ'}`;
+  // Ключ ЗАПИСИ — из найденной группы, а не из пропа: у единственной
+  // расцветки проп — реальный id, а снимок (и новые строки/параметры) живёт
+  // под order-level `null`. Писать по пропу = записать в группу, которую
+  // `listForOrder` не читает → тихо пропадёт (тот же класс no-op, что чинили
+  // в аудите несостыковок). Бэкенд то же самое нормализует у себя.
+  const writeVariantId = group.orderVariantId;
 
   return (
     <Shell onClose={onClose} title={title}>
@@ -335,7 +345,7 @@ export function ColorwayParamsWindow({
                 onClick={() =>
                   startTransition(async () => {
                     const r = await createTechCardLineAction(orderId, {
-                      orderVariantId: variantId,
+                      orderVariantId: writeVariantId,
                       name: newLine.name.trim(),
                       unit: newLine.unit.trim(),
                       qtyPerUnit: newLine.qtyPerUnit.trim(),
@@ -379,7 +389,7 @@ export function ColorwayParamsWindow({
                 const [requirementId = '', field = ''] = v.target.split('|');
                 startTransition(async () => {
                   const r = await createTechCardParamAction(orderId, {
-                    orderVariantId: variantId,
+                    orderVariantId: writeVariantId,
                     // Технический ключ пользователю не показываем.
                     key: `adhoc_${Date.now().toString(36)}`,
                     label: v.label,
@@ -467,7 +477,7 @@ export function ColorwayParamsWindow({
                   startTransition(async () =>
                     apply(
                       await saveTechCardAsTemplateAction(orderId, {
-                        orderVariantId: variantId,
+                        orderVariantId: writeVariantId,
                         code: saveAs.code.trim(),
                         name: saveAs.name.trim(),
                       }),

@@ -60,6 +60,39 @@ export interface OrderTechCardParametersDto {
   variants: OrderTechCardVariantParamsDto[];
 }
 
+/**
+ * Найти группу параметров расцветки по её `orderVariantId` — ЕДИНОЕ правило
+ * сопоставления для плитки, окна и записи.
+ *
+ * Снимок группируется от числа расцветок (см. бэкенд `listForOrder`): при ≥2
+ * расцветках — по группе на расцветку (`orderVariantId = <id>`), при 0–1 —
+ * одна order-level группа под `orderVariantId = null`. У единственной
+ * расцветки есть реальный id (плитка знает его), но её группа лежит под
+ * `null`, поэтому строгий поиск по id промахивается. Без общего фолбэка это
+ * всплывало то тут, то там: окно не находило группу и показывало «нет
+ * техкарты», а запись улетала под id в группу, которую чтение не читает
+ * (тихий no-op). Резолвер держит одно правило в одном месте.
+ *
+ * @returns группа или `undefined`, если её действительно нет.
+ */
+export function resolveVariantParamsGroup(
+  params: OrderTechCardParametersDto | null | undefined,
+  variantId: string | null,
+): OrderTechCardVariantParamsDto | undefined {
+  if (!params) return undefined;
+  const exact = params.variants.find((g) => g.orderVariantId === variantId);
+  if (exact) return exact;
+  // Одна order-level группа обслуживает и «нет расцветок», и единственную
+  // расцветку: её реальный id прилетает из плитки, но группа под `null`.
+  if (
+    params.variants.length === 1 &&
+    params.variants[0].orderVariantId === null
+  ) {
+    return params.variants[0];
+  }
+  return undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Request DTO
 // ---------------------------------------------------------------------------

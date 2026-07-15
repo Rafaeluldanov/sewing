@@ -819,9 +819,19 @@ export class TechCardsService {
    */
   async createFromOrderSnapshot(
     orderId: string,
-    orderVariantId: string | null,
+    requestedVariantId: string | null,
     dto: { code: string; name: string },
   ): Promise<TechCardTemplateDetailDto> {
+    // Снимок единственной расцветки лежит под order-level ключом `null`, хотя
+    // у расцветки есть реальный id (UI мог прислать его). Ищем по нормали-
+    // зованному ключу — иначе выборка пустая и мы бы соврали «нет строк».
+    // Правило то же, что в `OrderTechCardService.resolveSnapshotVariantId`.
+    const variantCount = await this.prisma.orderVariant.count({
+      where: { orderId },
+    });
+    const orderVariantId =
+      variantCount >= 2 ? requestedVariantId : null;
+
     const [rows, params] = await Promise.all([
       this.prisma.orderMaterialRequirement.findMany({
         where: { orderId, orderVariantId },
