@@ -7,6 +7,7 @@ import {
   CUTTING_TASK_MAX_LAYS,
   CUTTING_TASK_MAX_PER_LAYER_QTY,
   CUTTING_TASK_MAX_ROLLS,
+  listCuttingCompletionProblems,
   type CuttingTaskLayDto,
   type CuttingTaskSizeRowDto,
   type CuttingTaskVariantDto,
@@ -265,12 +266,26 @@ export function CuttingForm({
   function handleComplete() {
     setError(null);
     setSavedNote(null);
+    const payload = buildPayload();
+    // Зеркало backend-гейта (`CUTTING_TASK_COMPLETION_INCOMPLETE`):
+    // завершать можно только полностью заполненный настил — раскройщик
+    // видит, что именно не заполнено, без похода на сервер.
+    const problems = listCuttingCompletionProblems(
+      payload.lays,
+      (sizeId) =>
+        selectableSizes.find((r) => r.sizeId === sizeId)?.sizeCodeSnapshot ??
+        sizeId,
+    );
+    if (problems.length > 0) {
+      setError(`Нельзя завершить раскрой: ${problems.join('; ')}.`);
+      return;
+    }
     const ok = window.confirm(
       'Завершить раскрой? После завершения задача станет недоступна для редактирования.',
     );
     if (!ok) return;
     startTransition(async () => {
-      const result = await completeCuttingTaskAction(taskId, buildPayload());
+      const result = await completeCuttingTaskAction(taskId, payload);
       if (!result.ok) setError(result.error ?? 'Не удалось завершить раскрой');
       else router.refresh();
     });

@@ -7133,7 +7133,9 @@ model ConstructorTaskFile {
 /// один или несколько раскладов (`CuttingTaskLay`): в каждом выбирает
 /// размеры с «количеством на настиле» (`CuttingTaskLaySize.perLayerQty`)
 /// и настилает рулоны (`CuttingTaskRoll`), и завершает раскрой
-/// (`complete` → `DONE`).
+/// (`complete` → `DONE`). Завершение гейтится заполненностью настила
+/// (`@sewing/shared/cutting-tasks::listCuttingCompletionProblems`):
+/// нули «на настиле» / рулоны без слоёв → CUTTING_TASK_COMPLETION_INCOMPLETE.
 ///
 /// План по размерам (`CuttingTaskSizeRow.qtyPlan`) — снимок заказа,
 /// общий для всех раскладов и read-only для раскройщика.

@@ -4117,6 +4117,24 @@ export class CuttingTaskPayloadInvalidException extends BusinessException {
   }
 }
 
+/**
+ * «Раскрой завершён» с незаполненным настилом: нет раскладов, у выбранных
+ * размеров «на настиле» = 0 или рулоны без слоёв (правила — в
+ * `@sewing/shared/cutting-tasks::listCuttingCompletionProblems`). Иначе
+ * задача уйдёт на доску помощника раскройщика пустой — выпускать паспорта
+ * не из чего (прецедент: O-20260716-0001, откат
+ * `scripts/migrations/20260716_reset_cutting_task_o20260716-0001_to_new.sql`).
+ */
+export class CuttingTaskCompletionIncompleteException extends BusinessException {
+  constructor(problems: string[]) {
+    super(
+      'CUTTING_TASK_COMPLETION_INCOMPLETE',
+      `Нельзя завершить раскрой: ${problems.join('; ')}. Заполните настил или удалите лишнее.`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Подкрой (`RecutSession`, роль CUTTER)
 // ---------------------------------------------------------------------------

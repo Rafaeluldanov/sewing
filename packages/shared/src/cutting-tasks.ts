@@ -18,7 +18,9 @@
  *      (`perLayerQty`) и настилает рулоны (номер + слои). Итоги по
  *      размеру суммируются по всем раскладам и считаются на лету.
  *   4. Когда итог приблизился к плану — жмёт «Раскрой завершён»
- *      (`complete` → `DONE`).
+ *      (`complete` → `DONE`). Завершить можно только полностью
+ *      заполненный настил (`listCuttingCompletionProblems`) — иначе
+ *      помощнику раскройщика нечего выпускать.
  *
  * Zod-схемы здесь — источник истины для валидации: backend
  * (`CuttingTasksController`) и web (server action) валидируют ими обе
@@ -214,6 +216,65 @@ export const SaveCuttingTaskProgressSchema = z.object({
 export type SaveCuttingTaskProgressDto = z.infer<
   typeof SaveCuttingTaskProgressSchema
 >;
+
+// ---------------------------------------------------------------------------
+// Готовность к завершению раскроя
+// ---------------------------------------------------------------------------
+
+/**
+ * Проверка «можно ли завершать раскрой» — общая для клиента (кнопка
+ * «Раскрой завершён» в `apps/web/app/cutter/[id]/cutting-form.tsx`) и
+ * backend (`CuttingTasksService.complete` →
+ * `CUTTING_TASK_COMPLETION_INCOMPLETE`). Автосохранение (`saveProgress`)
+ * НЕ проверяется: нули в процессе заполнения — норма.
+ *
+ * Правила: есть хотя бы один расклад, и каждый расклад заполнен целиком —
+ * выбран хотя бы один размер, у всех выбранных размеров «на настиле» > 0,
+ * есть хотя бы один рулон и у всех рулонов слои > 0. Иначе задача уходит
+ * на доску помощника раскройщика пустой: выпускать паспорта не из чего
+ * (все тройки «расклад × размер × рулон» нулевые), а раскрой выглядит
+ * завершённым.
+ *
+ * Возвращает список проблем человеческим языком (пустой = можно
+ * завершать). `sizeLabel` — подпись размера в сообщениях (код размера);
+ * по умолчанию падаем на `sizeId`.
+ */
+export function listCuttingCompletionProblems(
+  lays: CuttingTaskLayInputDto[],
+  sizeLabel: (sizeId: string) => string = (id) => id,
+): string[] {
+  if (lays.length === 0) return ['нет ни одного расклада'];
+
+  const problems: string[] = [];
+  lays.forEach((lay, i) => {
+    const n = i + 1;
+    if (lay.laySizes.length === 0) {
+      problems.push(`расклад ${n}: не выбран ни один размер`);
+    } else {
+      const zeroSizes = lay.laySizes.filter((s) => s.perLayerQty <= 0);
+      if (zeroSizes.length > 0) {
+        problems.push(
+          `расклад ${n}: не заполнено «на настиле» у размеров ${zeroSizes
+            .map((s) => sizeLabel(s.sizeId))
+            .join(', ')}`,
+        );
+      }
+    }
+    if (lay.rolls.length === 0) {
+      problems.push(`расклад ${n}: нет ни одного рулона`);
+    } else {
+      const zeroRolls = lay.rolls.filter((r) => r.layers <= 0);
+      if (zeroRolls.length > 0) {
+        problems.push(
+          `расклад ${n}: не заполнены слои у рулонов ${zeroRolls
+            .map((r) => `№${r.ordinal}`)
+            .join(', ')}`,
+        );
+      }
+    }
+  });
+  return problems;
+}
 
 // ---------------------------------------------------------------------------
 // Output DTOs

@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
   computeCuttingTotals,
+  listCuttingCompletionProblems,
   type CuttingTaskDetailDto,
   type CuttingTaskLayDto,
   type CuttingTaskSizeRowDto,
@@ -15,6 +16,7 @@ import {
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  CuttingTaskCompletionIncompleteException,
   CuttingTaskInvalidTransitionException,
   CuttingTaskNotFoundException,
   CuttingTaskNotInProgressException,
@@ -474,6 +476,20 @@ export class CuttingTasksService {
             `Расцветка ${r.variantId} не относится к этому заказу`,
           );
         }
+      }
+    }
+
+    // Гейт завершения: «Раскрой завершён» — только с полностью заполненным
+    // настилом (иначе задача уйдёт на доску помощника с нулями и выпускать
+    // паспорта будет не из чего). Автосейв (`markDone: false`) нули
+    // пропускает — это нормальное промежуточное состояние формы.
+    if (opts.markDone) {
+      const problems = listCuttingCompletionProblems(
+        dto.lays,
+        (sizeId) => sizeMeta.get(sizeId)?.sizeCodeSnapshot ?? sizeId,
+      );
+      if (problems.length > 0) {
+        throw new CuttingTaskCompletionIncompleteException(problems);
       }
     }
 
