@@ -18,6 +18,7 @@ import {
   CreateOrderTechCardParameterSchema,
   SaveOrderTechCardAsTemplateSchema,
   SetOrderTechCardParameterValueSchema,
+  UpdateOrderTechCardLineSchema,
   type OrderTechCardParametersDto,
 } from '@sewing/shared/order-tech-cards';
 
@@ -32,6 +33,7 @@ import {
   reloadOrderTechCardFromTemplate,
   saveOrderTechCardAsTemplate,
   setOrderTechCardParameterValue,
+  updateOrderTechCardLine,
 } from '@/lib/order-tech-card-api';
 
 export interface TechCardParamsActionResult {
@@ -152,6 +154,35 @@ export async function createTechCardLineAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return { ok: false, error: errorText(e, 'Не удалось добавить материал') };
+    }
+    throw e;
+  }
+}
+
+/**
+ * Правка строки материала — любой, и шаблонной, и ручной («техкарта живёт
+ * в заказе», решение 16.07). Ячейку под параметром backend отбивает 409 —
+ * UI такие ячейки ведёт через значение параметра.
+ */
+export async function updateTechCardLineAction(
+  orderId: string,
+  requirementId: string,
+  payload: unknown,
+): Promise<TechCardParamsActionResult> {
+  const parsed = UpdateOrderTechCardLineSchema.safeParse(payload);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные строки',
+    };
+  }
+  try {
+    const data = await updateOrderTechCardLine(orderId, requirementId, parsed.data);
+    revalidateOrder(orderId);
+    return { ok: true, data };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, error: errorText(e, 'Не удалось сохранить материал') };
     }
     throw e;
   }

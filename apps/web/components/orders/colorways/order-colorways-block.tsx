@@ -15,14 +15,24 @@
  * в подсказке внизу.
  */
 
-import { useMemo, useState, useTransition } from 'react';
+import { useEffect, useMemo, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   resolveVariantParamsGroup,
   type OrderTechCardParametersDto,
 } from '@sewing/shared/order-tech-cards';
-import { ColorwayParamsWindow } from './colorway-params-window';
-import { Palette, Plus, Trash2, Save, Info, Loader2 } from 'lucide-react';
+import { ColorwaySpec } from './colorway-spec';
+import {
+  Palette,
+  Plus,
+  Trash2,
+  Save,
+  Info,
+  Loader2,
+  ChevronDown,
+  ChevronRight,
+  Layers,
+} from 'lucide-react';
 import type { OrderColorwaysDto } from '@sewing/shared';
 import {
   createColorwayAction,
@@ -56,28 +66,21 @@ function toDraft(v: OrderColorwaysDto['variants'][number]): Draft {
 }
 
 /**
- * Сводка по параметрам расцветки для плитки: сколько заполнено из скольких.
- * Считаем ОБЯЗАТЕЛЬНЫЕ — именно они держат гейт `ORDER_SPEC_INCOMPLETE`.
- * null → у расцветки нет параметров (или данные не пришли), строку не рисуем.
+ * Сводка спецификации расцветки для тогла «Материалы · N». Решение 16.07:
+ * вход в спецификацию БЕЗУСЛОВНЫЙ (раньше чип рисовался только при
+ * обязательных параметрах — у техкарты без них материал было некуда
+ * добавить). null — только если данные фичи вообще не пришли.
  */
-function paramSummary(
+function specSummary(
   params: OrderTechCardParametersDto | null | undefined,
   variantId: string,
-): { filled: number; total: number; missing: number } | null {
+): { lines: number } | null {
   if (!params) return null;
-  // При 0–1 расцветке снимок (и параметры) живут order-level группой
-  // (`orderVariantId = null`) — резолвер знает это правило (та же логика,
-  // что на бэке в `listForOrder`).
+  // При 0–1 расцветке снимок живёт order-level группой (`orderVariantId =
+  // null`) — резолвер знает это правило (та же логика, что на бэке).
   const group = resolveVariantParamsGroup(params, variantId);
   if (!group) return null;
-  const required = group.parameters.filter((p) => p.isRequired);
-  if (required.length === 0) return null;
-  const missing = group.missingRequiredCount;
-  return {
-    filled: required.length - missing,
-    total: required.length,
-    missing,
-  };
+  return { lines: group.lines.length };
 }
 
 export function OrderColorwaysBlock({
@@ -110,11 +113,27 @@ export function OrderColorwaysBlock({
   );
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
-  // Какую расцветку открыли в окне параметров. undefined = окно закрыто
-  // (null — валидное значение: order-level группа при 0–1 расцветке).
-  const [paramsFor, setParamsFor] = useState<string | null | undefined>(
-    undefined,
+  // Спецификация (материалы + параметры) — единое состояние на все карточки:
+  // каждый write возвращает свежий полный DTO. После server-действий вне
+  // спецификации (смена техкарты расцветки → router.refresh) приезжает новый
+  // проп — синхронизируемся с ним, иначе таблица показала бы устаревший
+  // снимок.
+  const [params, setParams] = useState<OrderTechCardParametersDto | null>(
+    techCardParams,
   );
+  useEffect(() => setParams(techCardParams), [techCardParams]);
+  // Какие карточки раскрыты (спецификация). Одна расцветка — раскрываем
+  // сразу; несколько — свёрнуты, чтобы грид не превращался в простыню.
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    initial.variants.length === 1 ? new Set([initial.variants[0].id]) : new Set(),
+  );
+  const toggleSpec = (vid: string): void =>
+    setExpanded((prev) => {
+      const next = new Set(prev);
+      if (next.has(vid)) next.delete(vid);
+      else next.add(vid);
+      return next;
+    });
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -228,14 +247,6 @@ export function OrderColorwaysBlock({
   return (
     <section className="cwl">
       <BlockStyles />
-      {paramsFor !== undefined && techCardParams && (
-        <ColorwayParamsWindow
-          orderId={orderId}
-          initial={techCardParams}
-          variantId={paramsFor}
-          onClose={() => setParamsFor(undefined)}
-        />
-      )}
       <header className="cwl-head">
         <h2>
           <Palette size={18} strokeWidth={1.8} aria-hidden /> Расцветки
@@ -279,10 +290,12 @@ export function OrderColorwaysBlock({
           const usedSizeIds = new Set(d.sizes.map((s) => s.sizeId));
           const addable = data.sizes.filter((s) => !usedSizeIds.has(s.id));
           const busy = pending && busyId === v.id;
+          const spec = specSummary(params, v.id);
+          const isOpen = expanded.has(v.id);
           return (
             <article
               key={v.id}
-              className="cwl-card"
+              className={isOpen ? 'cwl-card cwl-card--open' : 'cwl-card'}
               style={{ ['--cwl-accent' as string]: swatchHex(d.color) }}
             >
               <div className="cwl-card__head">
@@ -307,30 +320,6 @@ export function OrderColorwaysBlock({
                   </button>
                 )}
               </div>
-
-              {paramSummary(techCardParams, v.id) && (
-                <div className="cwl-params">
-                  <span
-                    className={
-                      paramSummary(techCardParams, v.id)!.missing > 0
-                        ? 'cwl-params__stat cwl-params__stat--missing'
-                        : 'cwl-params__stat'
-                    }
-                  >
-                    Параметры {paramSummary(techCardParams, v.id)!.filled} из{' '}
-                    {paramSummary(techCardParams, v.id)!.total}
-                  </span>
-                  <button
-                    type="button"
-                    className="cwl-params__btn"
-                    onClick={() => setParamsFor(v.id)}
-                  >
-                    {paramSummary(techCardParams, v.id)!.missing > 0
-                      ? 'Заполнить'
-                      : 'Открыть'}
-                  </button>
-                </div>
-              )}
 
               <label className="cwl-field">
                 <span className="cwl-label">Техкарта материалов</span>
@@ -390,6 +379,41 @@ export function OrderColorwaysBlock({
                   )}
                 </div>
               </div>
+
+              {/* Спецификация расцветки: материалы техкарты заказа +
+                  параметры. Вход БЕЗУСЛОВНЫЙ (решение 16.07) — раньше чип
+                  «Параметры N из M» рисовался только при обязательных
+                  параметрах, и у техкарты без них материал было некуда
+                  добавить. Клик раскрывает таблицу прямо в карточке. */}
+              {spec && (
+                <button
+                  type="button"
+                  className="cwl-spec-toggle"
+                  aria-expanded={isOpen}
+                  onClick={() => toggleSpec(v.id)}
+                >
+                  {isOpen ? (
+                    <ChevronDown size={15} strokeWidth={2} aria-hidden />
+                  ) : (
+                    <ChevronRight size={15} strokeWidth={2} aria-hidden />
+                  )}
+                  <Layers size={14} strokeWidth={1.8} aria-hidden />
+                  Материалы
+                  <span className="cwl-badge">{spec.lines}</span>
+                  <span className="cwl-spec-toggle__hint">
+                    {isOpen ? 'свернуть' : 'развернуть'}
+                  </span>
+                </button>
+              )}
+              {isOpen && params && (
+                <ColorwaySpec
+                  orderId={orderId}
+                  params={params}
+                  variantId={v.id}
+                  readOnly={ro}
+                  onData={setParams}
+                />
+              )}
 
               <footer className="cwl-card__foot">
                 <span className="cwl-muted">
@@ -454,15 +478,16 @@ function BlockStyles() {
 .cwl-head h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; }
 .cwl-badge { display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px;
   padding:0 6px; border-radius:999px; background:var(--color-bg-muted); color:var(--color-fg-muted); font-size:12px; font-weight:700; }
-/* Фича «Параметры техкарт»: сводка на плитке расцветки. Незаполненное
-   подсвечиваем — именно оно держит гейт «Перевести в расчёт». */
-.cwl-params { display:flex; align-items:center; justify-content:space-between; gap:8px;
-  padding:6px 8px; margin-bottom:8px; border-radius:8px; background:var(--color-bg-muted); }
-.cwl-params__stat { font-size:12.5px; color:var(--color-fg-muted); }
-.cwl-params__stat--missing { color:var(--color-warn-fg); font-weight:700; }
-.cwl-params__btn { border:none; background:none; padding:0; cursor:pointer;
-  font-size:12.5px; font-weight:700; color:var(--color-accent-fg); }
-.cwl-params__btn:hover { text-decoration:underline; }
+/* Спецификация расцветки (решение 16.07): тогл «Материалы · N» раскрывает
+   таблицу материалов+параметров прямо в карточке; раскрытая карточка
+   занимает всю ширину грида — таблице нужно место. */
+.cwl-spec-toggle { display:flex; align-items:center; gap:7px; width:100%;
+  padding:7px 9px; border:1px dashed var(--color-border-strong); border-radius:9px;
+  background:var(--color-bg-card); color:var(--color-fg); font:inherit; font-size:13px;
+  font-weight:600; cursor:pointer; text-align:left; }
+.cwl-spec-toggle:hover { border-color:var(--color-accent); }
+.cwl-spec-toggle__hint { margin-left:auto; font-size:11.5px; font-weight:500; color:var(--color-fg-subtle); }
+.cwl-card--open { grid-column: 1 / -1; }
 .cwl-error { padding:9px 12px; border-radius:8px; background:var(--color-danger-soft); color:var(--color-danger-fg); font-size:13px; }
 .cwl-locked { display:flex; align-items:flex-start; gap:8px; padding:10px 12px; border-radius:9px;
   background:var(--color-warning-soft,var(--color-bg-muted)); color:var(--color-fg-muted);

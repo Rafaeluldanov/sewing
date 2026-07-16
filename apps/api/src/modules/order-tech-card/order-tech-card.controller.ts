@@ -3,10 +3,12 @@ import {
   CreateOrderTechCardLineSchema,
   CreateOrderTechCardParameterSchema,
   SetOrderTechCardParameterValueSchema,
+  UpdateOrderTechCardLineSchema,
   type CreateOrderTechCardLineDto,
   type CreateOrderTechCardParameterDto,
   type OrderTechCardParametersDto,
   type SetOrderTechCardParameterValueDto,
+  type UpdateOrderTechCardLineDto,
 } from '@sewing/shared/order-tech-cards';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
@@ -75,8 +77,10 @@ export class OrderTechCardController {
 }
 
 /**
- * Строки материала, добавленные прямо в заказ (усилительная лента, которой нет
- * в шаблоне). Живут в заказе и не сносятся пересборкой — шаблон о них не знает.
+ * Строки материала заказа: добавить свою, править и удалять ЛЮБУЮ (и
+ * шаблонную, и ручную) — «техкарта живёт в заказе», шаблон только сеет
+ * список (решение 16.07). Вернуть шаблонное состояние — «Обновить из
+ * шаблона».
  *
  * Отдельный контроллер, потому что префикс другой: строки — не параметры.
  */
@@ -95,6 +99,19 @@ export class OrderTechCardLinesController {
     return this.service.createManualLine(orderId, dto, user.employeeId);
   }
 
+  /** Правка полей строки (норма/ед./цвет/название/плотность). */
+  @Patch(':requirementId')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  update(
+    @Param('id') orderId: string,
+    @Param('requirementId') requirementId: string,
+    @Body(new ZodValidationPipe(UpdateOrderTechCardLineSchema))
+    dto: UpdateOrderTechCardLineDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.service.updateLine(orderId, requirementId, dto, user.employeeId);
+  }
+
   @Delete(':requirementId')
   @Roles('ADMIN', 'SHOP_MANAGER')
   remove(
@@ -102,6 +119,6 @@ export class OrderTechCardLinesController {
     @Param('requirementId') requirementId: string,
     @CurrentUser() user: AuthPrincipal,
   ): Promise<OrderTechCardParametersDto> {
-    return this.service.removeManualLine(orderId, requirementId, user.employeeId);
+    return this.service.removeLine(orderId, requirementId, user.employeeId);
   }
 }

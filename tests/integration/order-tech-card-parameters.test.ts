@@ -11,11 +11,14 @@
  *      потребности. Параметр, записавший только JSON-характеристику, был бы
  *      виден в UI и молча не влиял бы на закупку.
  *   2. Разные значения по расцветкам → разные плотности в снимке.
- *   3. Гейт `ORDER_SPEC_INCOMPLETE`: с пустым обязательным слотом заказ не
- *      уходит в расчёт, в payload — какая расцветка и какие поля.
+ *   3. Гейт полноты СНЯТ (16.07): пустой обязательный слот больше не держит
+ *      заказ — ячейка остаётся пустой, расчёт стартует.
  *   4. ФАЗА 2 «техкарта живёт в заказе»: правка шаблона НЕ протекает в заказ,
  *      но количества пересчитываются, а «Обновить из шаблона» подтягивает.
  *   5. Строка, добавленная прямо в заказ, переживает смену техкарты.
+ *   6. Решение 16.07: ЛЮБАЯ строка снимка правится (PATCH, включая шаблонные;
+ *      правки переживают ресинк; ячейка под параметром — 409) и удаляется
+ *      (кроме последней шаблонной — её воскресила бы перематериализация).
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -213,23 +216,27 @@ describeWithDb('integration — параметры техкарт', () => {
       .expect(409);
   });
 
-  test('пустой обязательный слот не пускает заказ в расчёт', async () => {
+  test('пустой обязательный слот БОЛЬШЕ НЕ держит заказ (обязательность снята 16.07)', async () => {
+    // Раньше здесь ждали 400 ORDER_SPEC_INCOMPLETE. Решение 16.07: заказ,
+    // который заводим сами, комплектуем сами — гейт полноты снят (вернётся
+    // точечно для позиций из ЕРП по `owner=ERP`, когда появится импорт).
+    // Пустой слот просто оставляет ячейку пустой: плотности в снимке нет,
+    // но заказ уходит в расчёт.
     const techCardId = await createParametricTechCard({ defaultValue: null });
     const orderId = await createOrderWithTwoColorways(techCardId);
 
-    const res = await request(t.app.getHttpServer())
+    await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/start-calculation`)
       .set('Cookie', manager)
-      .expect(400);
-
-    expect(res.body.code).toBe('ORDER_SPEC_INCOMPLETE');
-    // UI должен подсветить конкретные плитки — значит payload обязан доехать.
-    const colors = res.body.details.variants.map((v: { color: string }) => v.color);
-    expect(colors.sort()).toEqual(['Белый', 'Чёрный']);
-    expect(res.body.details.variants[0].parameters[0].label).toBe('Плотность');
+      .send({})
+      .expect(201);
 
     const order = await t.prisma.order.findUnique({ where: { id: orderId } });
-    expect(order?.status).toBe('DRAFT');
+    expect(order?.status).toBe('CALCULATION');
+    // Ячейка под незаполненным параметром остаётся пустой — а не тихо берёт
+    // значение из шаблона (семантика «ячейка принадлежит параметру» цела).
+    const rows = await snapshot(orderId);
+    for (const r of rows) expect(r.densityGsm).toBeNull();
   });
 
   test('фаза 2: правка шаблона не протекает в заказ, но количества пересчитываются', async () => {
@@ -354,13 +361,15 @@ describeWithDb('integration — параметры техкарт', () => {
     manual = blackRows.find((r) => r.isManual)!;
     expect(manual.name).toBe('Лента усилительная');
 
-    // Убрать строку из шаблона через этот эндпоинт нельзя.
+    // Решение 16.07: шаблонные строки теперь удаляются, НО не последняя —
+    // «строк из шаблона нет» = триггер перематериализации, ресинк тут же
+    // вернул бы её молча. У одно-строчной техкарты это ровно этот случай.
     const fromTemplate = blackRows.find((r) => !r.isManual)!;
     const res = await request(t.app.getHttpServer())
       .delete(`/api/orders/${orderId}/tech-card/lines/${fromTemplate.id}`)
       .set('Cookie', manager)
       .expect(409);
-    expect(res.body.code).toBe('ORDER_MATERIAL_LINE_FROM_TEMPLATE');
+    expect(res.body.code).toBe('ORDER_MATERIAL_LAST_TEMPLATE_LINE');
   });
 
   // Регресс на баг «У этой расцветки нет техкарты — выберите её в блоке
@@ -463,5 +472,152 @@ describeWithDb('integration — параметры техкарт', () => {
       })
       .expect(201);
     expect(res.body.materialLines.length).toBeGreaterThan(0);
+  });
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Решение 16.07 «техкарта живёт в заказе»: ЛЮБАЯ строка снимка (и
+  // шаблонная, и ручная) правится и удаляется прямо в заказе.
+  // ───────────────────────────────────────────────────────────────────────
+
+  test('PATCH строки: правка нормы/цвета шаблонной строки переживает ресинк; ячейка под параметром — 409', async () => {
+    const techCardId = await createParametricTechCard();
+    const orderId = await createOrderWithTwoColorways(techCardId);
+    const white = await t.prisma.orderVariant.findFirstOrThrow({
+      where: { orderId, color: 'Белый' },
+    });
+    const row = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, orderVariantId: white.id, isManual: false },
+    });
+
+    // Правим норму и цвет шаблонной строки.
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${row.id}`)
+      .set('Cookie', manager)
+      .send({ qtyPerUnit: '0.5', colorText: 'графит' })
+      .expect(200);
+
+    const edited = await t.prisma.orderMaterialRequirement.findUniqueOrThrow({
+      where: { id: row.id },
+    });
+    expect(edited.qtyPerUnit.toString()).toBe('0.5');
+    // Итог пересчитан единым ресинком: 0.5 × 60 шт Белого.
+    expect(edited.totalQty.toString()).toBe('30');
+    // Цвет запинен как FIXED_COLOR — иначе пересчёт вывел бы его из
+    // colorRule заново и правка тихо откатилась бы.
+    expect(edited.colorRule).toBe('FIXED_COLOR');
+    expect(edited.resolvedColorText).toBe('графит');
+
+    // Чужой ресинк (правка расцветки) правку НЕ затирает: ветка пересчёта
+    // читает собственные значения строки, а не шаблон (Фаза 2).
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/colorways/${white.id}`)
+      .set('Cookie', manager)
+      .send({
+        color: 'Белый',
+        techCardId,
+        sizes: [{ sizeId: seed.sizes.M, qtyPlan: 80 }],
+      })
+      .expect(200);
+    const after = await t.prisma.orderMaterialRequirement.findUniqueOrThrow({
+      where: { id: row.id },
+    });
+    expect(after.qtyPerUnit.toString()).toBe('0.5');
+    expect(after.totalQty.toString()).toBe('40'); // 0.5 × новый тираж 80
+    expect(after.resolvedColorText).toBe('графит');
+
+    // Ячейка «плотность» этой строки привязана к параметру main_density —
+    // прямая правка запрещена (два писателя в одну ячейку).
+    const res = await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${row.id}`)
+      .set('Cookie', manager)
+      .send({ densityGsm: 300 })
+      .expect(409);
+    expect(res.body.code).toBe('ORDER_TECH_CARD_CELL_TAKEN');
+  });
+
+  test('DELETE шаблонной строки: удаляется, ресинк не воскрешает; последняя — 409', async () => {
+    // Техкарта с ДВУМЯ строками — чтобы после удаления одной шаблонные
+    // строки в группе ещё оставались.
+    const tcRes = await request(t.app.getHttpServer())
+      .post('/api/tech-cards')
+      .set('Cookie', manager)
+      .send({
+        code: 'TC-TWO-LINES',
+        name: 'Две строки',
+        materialLines: [
+          {
+            name: 'Полотно',
+            unit: 'м2',
+            qtyPerUnit: '0.42',
+            materialRole: 'MAIN_FABRIC',
+            fabricType: 'кулирка',
+            colorRule: 'ORDER_COLOR',
+          },
+          {
+            name: 'Рибана',
+            unit: 'кг',
+            qtyPerUnit: '0.12',
+            materialRole: 'RIB',
+            fabricType: 'рибана',
+            colorRule: 'ORDER_COLOR',
+          },
+        ],
+      })
+      .expect(201);
+    const techCardId = tcRes.body.id as string;
+    const orderId = await createOrderWithTwoColorways(techCardId);
+    const white = await t.prisma.orderVariant.findFirstOrThrow({
+      where: { orderId, color: 'Белый' },
+    });
+    const whiteRows = await t.prisma.orderMaterialRequirement.findMany({
+      where: { orderId, orderVariantId: white.id, isManual: false },
+      orderBy: { sortOrder: 'asc' },
+    });
+    expect(whiteRows).toHaveLength(2);
+
+    // Удаляем шаблонную строку «Рибана» у Белого.
+    const ribana = whiteRows.find((r) => r.name === 'Рибана')!;
+    await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/tech-card/lines/${ribana.id}`)
+      .set('Cookie', manager)
+      .expect(200);
+
+    // Чужой ресинк НЕ воскрешает удалённую строку: в группе остались
+    // шаблонные строки → ветка ПЕРЕСЧЁТА, а не перематериализация.
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/colorways/${white.id}`)
+      .set('Cookie', manager)
+      .send({
+        color: 'Белый',
+        techCardId,
+        sizes: [{ sizeId: seed.sizes.M, qtyPlan: 70 }],
+      })
+      .expect(200);
+    const namesAfter = (
+      await t.prisma.orderMaterialRequirement.findMany({
+        where: { orderId, orderVariantId: white.id },
+      })
+    ).map((r) => r.name);
+    expect(namesAfter).toEqual(['Полотно']);
+    // У Чёрного обе строки на месте — удаление строго per-variant.
+    const black = await t.prisma.orderVariant.findFirstOrThrow({
+      where: { orderId, color: 'Чёрный' },
+    });
+    expect(
+      await t.prisma.orderMaterialRequirement.count({
+        where: { orderId, orderVariantId: black.id },
+      }),
+    ).toBe(2);
+
+    // Последняя шаблонная строка группы не удаляется: «строк из шаблона
+    // нет» = триггер перематериализации, ресинк тут же вернул бы её молча.
+    const last = await t.prisma.orderMaterialRequirement.findFirstOrThrow({
+      where: { orderId, orderVariantId: white.id, isManual: false },
+    });
+    const res = await request(t.app.getHttpServer())
+      .delete(`/api/orders/${orderId}/tech-card/lines/${last.id}`)
+      .set('Cookie', manager)
+      .expect(409);
+    expect(res.body.code).toBe('ORDER_MATERIAL_LAST_TEMPLATE_LINE');
   });
 });

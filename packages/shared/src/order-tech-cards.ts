@@ -98,8 +98,9 @@ export function resolveVariantParamsGroup(
 // ---------------------------------------------------------------------------
 
 /**
- * Значение слота. `null` / пустая строка = «не заполнено»: ячейка остаётся
- * значением из шаблона, а заказ не пустят в расчёт (`ORDER_SPEC_INCOMPLETE`).
+ * Значение слота. `null` / пустая строка = «не заполнено»: ячейка очищается
+ * (она принадлежит параметру). Гейта полноты нет — обязательность снята
+ * 16.07 (вернётся точечно для позиций из ЕРП по `owner=ERP`).
  */
 export const SetOrderTechCardParameterValueSchema = z.object({
   value: z.string().trim().max(200).nullish(),
@@ -185,8 +186,18 @@ export interface OrderTechCardLineDto {
   materialRole: string | null;
   fabricType: string | null;
   colorText: string | null;
+  /** Плотность (legacy-колонка `densityGsm`; зеркалится в characteristics). */
+  densityGsm: number | null;
   /** true — добавлена прямо в заказе; шаблон о ней не знает. */
   isManual: boolean;
+  /**
+   * Ячейки строки, занятые параметрами (`parameterBindings`): ключи вида
+   * `core:qtyPerUnit` / `char:density`. Такую ячейку UI правит через
+   * ЗНАЧЕНИЕ параметра, а не напрямую — два писателя в одну ячейку
+   * запрещены (прямую правку backend отбивает 409
+   * `ORDER_TECH_CARD_CELL_TAKEN`).
+   */
+  boundFields: string[];
 }
 
 /**
@@ -213,6 +224,54 @@ export const CreateOrderTechCardLineSchema = z.object({
 });
 export type CreateOrderTechCardLineDto = z.infer<
   typeof CreateOrderTechCardLineSchema
+>;
+
+/**
+ * Правка строки материала в заказе — ЛЮБОЙ строки, и шаблонной, и ручной.
+ * «Техкарта живёт в заказе»: шаблон только сеет список, дальше каждая
+ * строка — собственность заказа (решение 16.07, обязательность снята).
+ *
+ * Семантика полей — как в `UpdateOrderSchema`: поля нет = не трогать;
+ * `colorText: null` / пустая строка = снять цвет; `densityGsm: null` =
+ * убрать плотность. Ячейка, занятая параметром (`boundFields`), прямой
+ * правке не подлежит — backend отвечает 409 `ORDER_TECH_CARD_CELL_TAKEN`,
+ * UI правит её через значение параметра.
+ *
+ * Пересборка снимка (`resyncColorwayDerived`) правки переживает: ветка
+ * ПЕРЕСЧЁТА читает собственные значения строки, а не шаблон (Фаза 2).
+ * Правка цвета фиксируется как `FIXED_COLOR` — иначе пересчёт заново
+ * вывел бы цвет из `colorRule` и правка тихо откатилась бы.
+ */
+export const UpdateOrderTechCardLineSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Название не может быть пустым').max(200).optional(),
+    unit: z.string().trim().min(1, 'Единица не может быть пустой').max(20).optional(),
+    qtyPerUnit: z
+      .string()
+      .trim()
+      .refine((v) => Number.isFinite(Number(v)) && Number(v) > 0, {
+        message: 'Норма расхода — положительное число',
+      })
+      .optional(),
+    colorText: z.string().trim().max(120).nullish(),
+    densityGsm: z.number().int().positive().max(100_000).nullish(),
+  })
+  .superRefine((v, ctx) => {
+    if (
+      v.name === undefined &&
+      v.unit === undefined &&
+      v.qtyPerUnit === undefined &&
+      v.colorText === undefined &&
+      v.densityGsm === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Укажите хотя бы одно поле для правки',
+      });
+    }
+  });
+export type UpdateOrderTechCardLineDto = z.infer<
+  typeof UpdateOrderTechCardLineSchema
 >;
 
 export type { OrderTechCardParameterDto };

@@ -64,7 +64,6 @@ import {
   OrderDeleteForbiddenException,
   OrderInvalidTransitionException,
   OrderItemsRequiredException,
-  OrderSpecIncompleteException,
   OrderLockedException,
   OrderLogisticsLineNotFoundException,
   OrderMaterialRequirementColorNotRequiredException,
@@ -2492,11 +2491,10 @@ export class OrdersService {
       });
     }
 
-    // Фича «Параметры техкарт»: гейт нужен и здесь. `start()` разрешает
-    // DRAFT → IN_PRODUCTION напрямую, минуя расчёт, — без этой проверки
-    // незаполненные параметры обходятся кнопкой «запустить» из черновика,
-    // и раскрой пойдёт по плотности из шаблона вместо заказанной.
-    await this.assertSpecComplete(id);
+    // Фича «Параметры техкарт»: гейт полноты (`assertSpecComplete` →
+    // `ORDER_SPEC_INCOMPLETE`) здесь СНЯТ (решение 16.07: обязательность
+    // убрана — заказ, который заводим сами, комплектуем сами; вернётся
+    // точечно для позиций из ЕРП, когда появится импорт, — по `owner=ERP`).
 
     // Этап «Конструкторское бюро»: запуск в производство требует
     // именно `ACTIVE`-pattern. `assertPatternUsable` сейчас разрешает
@@ -2905,13 +2903,10 @@ export class OrdersService {
       await this.rebuildMaterialRequirementsSnapshot(id, tx);
     });
 
-    // Фича «Параметры техкарт»: гейт ПОСЛЕ пересборки, а не до. У заказа,
-    // созданного до появления параметров (или сразу после смены техкарты),
-    // строк `OrderTechCardParameter` ещё не существует — гейт перед rebuild
-    // прошёл бы вхолостую и пропустил незаполненный заказ в расчёт.
-    // Rebuild идемпотентен и статус не меняет, поэтому бросок здесь оставляет
-    // заказ в DRAFT со свежим снимком.
-    await this.assertSpecComplete(id);
+    // Фича «Параметры техкарт»: гейт полноты (`assertSpecComplete` →
+    // `ORDER_SPEC_INCOMPLETE`) СНЯТ (решение 16.07: обязательность убрана —
+    // пустой параметр просто оставляет ячейку как в шаблоне/пустой; вернётся
+    // точечно для позиций из ЕРП по `owner=ERP`, когда появится импорт).
 
     // Сначала считаем потребности. force=false: если уже есть
     // REVIEWED/PURCHASE_PLANNED строки (что в DRAFT возможно только
@@ -4581,65 +4576,12 @@ export class OrdersService {
     }
   }
 
-  /**
-   * Фича «Параметры техкарт»: не пустить заказ дальше, пока обязательные слоты
-   * не заполнены. Бросает `ORDER_SPEC_INCOMPLETE` со списком «расцветка →
-   * какие поля», чтобы UI подсветил именно те плитки.
-   *
-   * Вызывается ТОЛЬКО на переходах (`startCalculation`, `start`) и намеренно НЕ
-   * вызывается в `resyncColorwayDerived`: тот дёргается на каждом сохранении
-   * расцветки, и гейт там начал бы валить обычные сейвы — расцветка сохранена,
-   * а ответ 400. Ровно тот класс «сохранил, но не доехало», от которого лечимся.
-   */
-  private async assertSpecComplete(orderId: string): Promise<void> {
-    const missing = await this.prisma.orderTechCardParameter.findMany({
-      where: {
-        orderId,
-        isRequired: true,
-        OR: [{ value: null }, { value: '' }],
-      },
-      orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
-      select: {
-        orderVariantId: true,
-        key: true,
-        label: true,
-        unit: true,
-        orderVariant: { select: { color: true } },
-      },
-    });
-    if (missing.length === 0) return;
-
-    const order = await this.prisma.order.findUnique({
-      where: { id: orderId },
-      select: { color: true },
-    });
-
-    const byVariant = new Map<
-      string,
-      {
-        orderVariantId: string | null;
-        color: string | null;
-        parameters: Array<{ key: string; label: string; unit: string | null }>;
-      }
-    >();
-    for (const m of missing) {
-      const gk = m.orderVariantId ?? '';
-      let group = byVariant.get(gk);
-      if (!group) {
-        group = {
-          orderVariantId: m.orderVariantId,
-          color: m.orderVariant?.color ?? order?.color ?? null,
-          parameters: [],
-        };
-        byVariant.set(gk, group);
-      }
-      group.parameters.push({ key: m.key, label: m.label, unit: m.unit });
-    }
-
-    throw new OrderSpecIncompleteException({
-      variants: Array.from(byVariant.values()),
-    });
-  }
+  // Фича «Параметры техкарт»: гейт полноты `assertSpecComplete`
+  // (`ORDER_SPEC_INCOMPLETE`) удалён 16.07 — обязательность снята: заказ,
+  // который заводим сами, комплектуем сами, пустой слот просто оставляет
+  // ячейку пустой/как в шаблоне. Класс `OrderSpecIncompleteException`
+  // оставлен в `common/errors.ts`: гейт вернётся точечно для позиций из
+  // ЕРП (`owner = ERP`), когда появится импорт.
 
   /**
    * Фича «Параметры техкарт»: материализовать слоты шаблона в заказ и вернуть

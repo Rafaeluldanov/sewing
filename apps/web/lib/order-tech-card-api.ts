@@ -14,6 +14,7 @@ import type {
   OrderTechCardParametersDto,
   SaveOrderTechCardAsTemplateDto,
   SetOrderTechCardParameterValueDto,
+  UpdateOrderTechCardLineDto,
 } from '@sewing/shared/order-tech-cards';
 import type { TechCardTemplateDetailDto } from '@sewing/shared/tech-cards';
 
@@ -83,7 +84,27 @@ export function createOrderTechCardLine(
   );
 }
 
-/** Убрать строку, добавленную в заказе (шаблонную — нельзя). */
+/**
+ * Правка строки материала — ЛЮБОЙ, и шаблонной, и ручной («техкарта живёт
+ * в заказе», решение 16.07). Ячейку под параметром backend отбивает 409
+ * `ORDER_TECH_CARD_CELL_TAKEN` — её правят через значение параметра.
+ */
+export function updateOrderTechCardLine(
+  orderId: string,
+  requirementId: string,
+  body: UpdateOrderTechCardLineDto,
+): Promise<OrderTechCardParametersDto> {
+  return apiFetch<OrderTechCardParametersDto>(
+    `/orders/${encodeURIComponent(orderId)}/tech-card/lines/${encodeURIComponent(requirementId)}`,
+    { method: 'PATCH', body },
+  );
+}
+
+/**
+ * Убрать строку — любую (решение 16.07). Последнюю шаблонную backend
+ * отбивает 409 `ORDER_MATERIAL_LAST_TEMPLATE_LINE` (иначе пересборка молча
+ * воскресила бы её).
+ */
 export function deleteOrderTechCardLine(
   orderId: string,
   requirementId: string,

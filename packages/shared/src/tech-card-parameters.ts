@@ -378,8 +378,10 @@ function clearCell(cells: MaterialLineCells, field: string): void {
  * Исключение — NOT NULL-колонки (`name`, `unit`, `qtyPerUnit`): обнулить их
  * нельзя, поэтому у них сохраняется прежнее значение.
  *
- * Незаполненный ОБЯЗАТЕЛЬНЫЙ параметр попадает в `missingRequiredKeys` —
- * заказ не пустят в расчёт (гейт `ORDER_SPEC_INCOMPLETE`).
+ * Незаполненный ОБЯЗАТЕЛЬНЫЙ параметр попадает в `missingRequiredKeys`.
+ * Гейт `ORDER_SPEC_INCOMPLETE` по нему СНЯТ 16.07 (обязательность убрана;
+ * вернётся точечно для позиций из ЕРП по `owner=ERP`) — сейчас это чисто
+ * информационный список для UI.
  */
 export function applyParametersToCells(
   base: MaterialLineCells,

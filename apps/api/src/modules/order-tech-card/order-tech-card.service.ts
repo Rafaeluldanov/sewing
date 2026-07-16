@@ -8,15 +8,18 @@ import type {
   OrderTechCardTargetOptionDto,
   OrderTechCardVariantParamsDto,
   SetOrderTechCardParameterValueDto,
+  UpdateOrderTechCardLineDto,
 } from '@sewing/shared/order-tech-cards';
 import {
   getTechCardParameterTarget,
+  normalizeMaterialLineCells,
   type OrderTechCardParameterDto,
   type TechCardParameterBindings,
   type TechCardParameterInputType,
   type TechCardParameterOwner,
   type TechCardParameterValueSource,
 } from '@sewing/shared/tech-card-parameters';
+import type { MaterialCharacteristics } from '@sewing/shared/material-characteristics';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { OrdersService } from '../orders/orders.service.js';
@@ -85,6 +88,7 @@ export class OrderTechCardService {
           totalQty: true,
           materialRole: true,
           fabricType: true,
+          densityGsm: true,
           resolvedColorText: true,
           selectedColorText: true,
           isManual: true,
@@ -154,8 +158,15 @@ export class OrderTechCardService {
         totalQty: r.totalQty.toString(),
         materialRole: r.materialRole,
         fabricType: r.fabricType,
+        densityGsm: r.densityGsm,
         colorText: r.selectedColorText ?? r.resolvedColorText ?? null,
         isManual: r.isManual,
+        // Ячейки под параметром: их UI правит через значение параметра,
+        // прямую правку backend отбивает (см. `updateLine`).
+        boundFields: Object.keys(
+          ((r.parameterBindings ?? null) as TechCardParameterBindings | null) ??
+            {},
+        ),
       }));
 
       return {
@@ -467,8 +478,164 @@ export class OrderTechCardService {
     return this.listForOrder(orderId);
   }
 
-  /** Удалить можно только РУЧНУЮ строку: пришедшая из шаблона правится в шаблоне. */
-  async removeManualLine(
+  /**
+   * Править можно ЛЮБУЮ строку — и шаблонную, и ручную («техкарта живёт в
+   * заказе»: шаблон только сеет список, дальше строки — собственность
+   * заказа; решение 16.07, обязательность снята).
+   *
+   * Правки переживают пересборку: ветка ПЕРЕСЧЁТА в
+   * `rebuildMaterialRequirementsSnapshot` читает собственные значения
+   * строки, а не шаблон (Фаза 2). Исключения, о которых заботимся здесь:
+   *   - ячейка под параметром (`parameterBindings`) — прямая правка
+   *     запрещена (409 `ORDER_TECH_CARD_CELL_TAKEN`): на пересчёте её всё
+   *     равно перезаписало бы значение параметра — тихий откат. UI правит
+   *     такую ячейку через значение параметра;
+   *   - цвет — пересчёт заново выводит его из `colorRule`, поэтому правка
+   *     фиксируется как `FIXED_COLOR` (очистка — `NO_COLOR`);
+   *   - плотность — пишется через `normalizeMaterialLineCells`, чтобы
+   *     legacy-колонка `densityGsm` и `characteristics`-JSON не разошлись
+   *     (JSON в зеркале главнее — рассинхрон тихо откатил бы правку).
+   *
+   * `totalQty` не трогаем: `resyncColorwayDerived` пересчитает
+   * (qtyPerUnit × тираж) — один путь, без второго калькулятора.
+   */
+  async updateLine(
+    orderId: string,
+    requirementId: string,
+    dto: UpdateOrderTechCardLineDto,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderTechCardParametersDto> {
+    await this.assertEditableOrder(orderId);
+    const row = await this.prisma.orderMaterialRequirement.findFirst({
+      where: { id: requirementId, orderId },
+      select: {
+        id: true,
+        name: true,
+        unit: true,
+        qtyPerUnit: true,
+        note: true,
+        materialRole: true,
+        fabricType: true,
+        densityGsm: true,
+        plannedWidthCm: true,
+        hardwareSizeText: true,
+        hardwareMaterialText: true,
+        characteristics: true,
+        parameterBindings: true,
+      },
+    });
+    if (!row) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'ORDER_MATERIAL_REQUIREMENT_NOT_FOUND',
+        message: 'Строка материала не найдена в этом заказе.',
+      });
+    }
+
+    const bindings = (row.parameterBindings ??
+      null) as TechCardParameterBindings | null;
+    const assertCellFree = (fieldLabel: string, bindingKey: string): void => {
+      const taken = bindings?.[bindingKey];
+      if (!taken) return;
+      throw new ConflictException({
+        statusCode: 409,
+        code: 'ORDER_TECH_CARD_CELL_TAKEN',
+        message:
+          `«${fieldLabel}» этой строки привязана к параметру «${taken}» — ` +
+          'правьте значение параметра, а не ячейку.',
+      });
+    };
+    if (dto.name !== undefined) assertCellFree('Название', 'core:name');
+    if (dto.unit !== undefined) assertCellFree('Ед. изм.', 'core:unit');
+    if (dto.qtyPerUnit !== undefined) {
+      assertCellFree('Норма расхода', 'core:qtyPerUnit');
+    }
+    if (dto.densityGsm !== undefined) assertCellFree('Плотность', 'char:density');
+
+    // Правку плотности кладём В ОБЕ стороны зеркала (JSON главнее legacy при
+    // merge в `normalizeMaterialLineCells` — одна сторона тихо откатилась бы).
+    const chars: MaterialCharacteristics = {
+      ...((row.characteristics as MaterialCharacteristics | null) ?? {}),
+    };
+    if (dto.densityGsm !== undefined) {
+      if (dto.densityGsm === null) delete chars.density;
+      else chars.density = dto.densityGsm;
+    }
+    const cells = normalizeMaterialLineCells({
+      name: dto.name ?? row.name,
+      unit: dto.unit ?? row.unit,
+      qtyPerUnit: dto.qtyPerUnit ?? row.qtyPerUnit.toString(),
+      note: row.note,
+      materialRole: row.materialRole,
+      fabricType: row.fabricType,
+      densityGsm: dto.densityGsm !== undefined ? dto.densityGsm : row.densityGsm,
+      plannedWidthCm: row.plannedWidthCm,
+      hardwareSizeText: row.hardwareSizeText,
+      hardwareMaterialText: row.hardwareMaterialText,
+      characteristics: Object.keys(chars).length > 0 ? chars : null,
+    });
+
+    // Цвет: прямая правка = «пин» FIXED_COLOR (переживает пересчёт), пусто =
+    // снять (NO_COLOR). `selectedColorText` гасим — в DTO он главнее
+    // resolved и затенил бы новую правку.
+    const trimmedColor =
+      dto.colorText === undefined ? undefined : dto.colorText?.trim() || null;
+    const colorData =
+      trimmedColor === undefined
+        ? {}
+        : trimmedColor === null
+          ? {
+              colorRule: 'NO_COLOR',
+              fixedColorText: null,
+              resolvedColorText: null,
+              selectedColorText: null,
+              requiresColorSelection: false,
+            }
+          : {
+              colorRule: 'FIXED_COLOR',
+              fixedColorText: trimmedColor,
+              resolvedColorText: trimmedColor,
+              selectedColorText: null,
+              requiresColorSelection: false,
+            };
+
+    await this.prisma.orderMaterialRequirement.update({
+      where: { id: row.id },
+      data: {
+        name: cells.name,
+        unit: cells.unit,
+        qtyPerUnit: new Prisma.Decimal(cells.qtyPerUnit),
+        densityGsm: cells.densityGsm,
+        plannedWidthCm: cells.plannedWidthCm,
+        hardwareSizeText: cells.hardwareSizeText,
+        hardwareMaterialText: cells.hardwareMaterialText,
+        characteristics:
+          (cells.characteristics as Prisma.InputJsonValue | null) ??
+          Prisma.DbNull,
+        ...colorData,
+      },
+    });
+
+    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    this.logger.log(
+      `event=order_tech_card.line_updated order=${orderId} line=${row.id} ` +
+        `fields=${Object.keys(dto).join(',')}`,
+    );
+    return this.listForOrder(orderId);
+  }
+
+  /**
+   * Удалить строку — ЛЮБУЮ, и шаблонную, и ручную (решение 16.07: заказ
+   * владеет своей копией техкарты; вернуть шаблонные строки — «Обновить из
+   * шаблона»).
+   *
+   * Единственный запрет — ПОСЛЕДНЯЯ шаблонная строка группы: «строк из
+   * шаблона нет» — это триггер перематериализации в
+   * `rebuildMaterialRequirementsSnapshot` (так «только что выбранная
+   * техкарта» получает свои строки). Удалить последнюю = ресинк тут же
+   * молча воскресит все шаблонные строки — хуже понятной ошибки.
+   */
+  async removeLine(
     orderId: string,
     requirementId: string,
     actorEmployeeId?: string | null,
@@ -476,7 +643,7 @@ export class OrderTechCardService {
     await this.assertEditableOrder(orderId);
     const row = await this.prisma.orderMaterialRequirement.findFirst({
       where: { id: requirementId, orderId },
-      select: { id: true, isManual: true, name: true },
+      select: { id: true, isManual: true, name: true, orderVariantId: true },
     });
     if (!row) {
       throw new NotFoundException({
@@ -486,18 +653,29 @@ export class OrderTechCardService {
       });
     }
     if (!row.isManual) {
-      throw new ConflictException({
-        statusCode: 409,
-        code: 'ORDER_MATERIAL_LINE_FROM_TEMPLATE',
-        message:
-          'Эта строка пришла из шаблона техкарты — убрать её можно только в справочнике.',
+      const otherTemplateRows = await this.prisma.orderMaterialRequirement.count({
+        where: {
+          orderId,
+          orderVariantId: row.orderVariantId,
+          isManual: false,
+          id: { not: row.id },
+        },
       });
+      if (otherTemplateRows === 0) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'ORDER_MATERIAL_LAST_TEMPLATE_LINE',
+          message:
+            'Это последняя строка из шаблона — пересборка вернула бы её обратно. ' +
+            'Чтобы начать с чистого листа, смените техкарту расцветки.',
+        });
+      }
     }
 
     await this.prisma.orderMaterialRequirement.delete({ where: { id: row.id } });
     await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
     this.logger.log(
-      `event=order_tech_card.manual_line_removed order=${orderId} name=${row.name}`,
+      `event=order_tech_card.line_removed order=${orderId} name=${row.name} manual=${row.isManual}`,
     );
     return this.listForOrder(orderId);
   }
