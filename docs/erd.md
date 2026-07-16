@@ -667,9 +667,17 @@ master-action'ом, удаление, упаковка прямо из ячей�
   `quotedPrice?`, `quotedCurrency?`, `expectedDeliveryDate?`,
   `selectedSupplierId? → Supplier` (`SetNull`),
   `selectedSupplierCatalogItemId? → SupplierCatalogItem` (`SetNull`),
-  `comment?`, `calculationNote?`. Индексы: `orderId`, `status`,
+  `comment?`, `calculationNote?`,
+  `orderCalculationId? → OrderCalculation` (`SetNull`) — фича
+  «Варианты просчёта», итерация 2: потребности СОСУЩЕСТВУЮТ для
+  нескольких вариантов заказа, строка штампуется активной калькуляцией
+  при расчёте; производственно-финансовые читатели фильтруются
+  фрагментом `ACTIVE_CALCULATION_NEED_WHERE`
+  (`workshop-needs/workshop-need-scope.ts`), `null` = вне контура
+  вариантов (sample/legacy). Индексы: `orderId`, `status`,
   `materialRole`, `calculationMethod`, `selectedSupplierId`,
-  `selectedSupplierCatalogItemId`. Связи foundation-склада:
+  `selectedSupplierCatalogItemId`, `orderSampleId`, `orderVariantId`,
+  `orderCalculationId`, `isManual`. Связи foundation-склада:
   `stockBalances[]`, `stockMovements[]` (см. § 2.12b).
 - **`Supplier`** *(новый контур)* — поставщик. `name` (не uniq),
   `phone? / website? / address? / comment?`,

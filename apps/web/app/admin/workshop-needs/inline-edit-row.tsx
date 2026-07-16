@@ -413,6 +413,19 @@ export function InlineEditWorkshopNeedRow({
                 />
               )}
               <span className="wn-desc__text">{need.description}</span>
+              {/* Фича «Варианты просчёта»: строки разных вариантов
+                  сосуществуют — метка показывает, к какому варианту
+                  относится строка (неактивный дополнительно приглушён;
+                  PO под него бэкенд не даст создать). */}
+              {need.orderCalculationTitle &&
+                need.orderCalculationIsActive === false && (
+                  <span
+                    className="wn-desc__calc-badge"
+                    title="Вариант просчёта сейчас не выбран — заказ поставщику по этой строке недоступен"
+                  >
+                    {need.orderCalculationTitle}
+                  </span>
+                )}
             </div>
             {descSecondary && (
               <span className="wn-desc__meta">{descSecondary}</span>

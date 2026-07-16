@@ -496,6 +496,16 @@ export const ListWorkshopNeedsQuerySchema = z.object({
   orderCalculationStatus:
     WorkshopNeedOrderCalculationFilterSchema.optional(),
   /**
+   * Фича «Варианты просчёта»: скоуп по вариантам.
+   *   - `ACTIVE` — только строки активного варианта (+ строки вне
+   *     контура вариантов: sample/legacy). Так ходят производственно-
+   *     финансовые читатели карточки заказа («Материалы», «Сводно»,
+   *     выдачи) — иначе двойной счёт;
+   *   - `ALL` (default) — все варианты; закупочные экраны и вкладка
+   *     «Потребности» показывают их с меткой варианта.
+   */
+  calculationScope: z.enum(['ACTIVE', 'ALL']).optional(),
+  /**
    * Поиск по `description` / `sourceName` / `supplierNameText` /
    * `purchaseItemNameText` / номеру заказа (case-insensitive
    * `contains`).
@@ -853,6 +863,18 @@ export interface WorkshopNeedDto {
    */
   orderVariantId: string | null;
   variantColor: string | null;
+
+  /**
+   * Фича «Варианты просчёта» (FEATURE_ORDER_CALCULATIONS): штамп
+   * калькуляции, при которой строка рассчитана. Потребности
+   * сосуществуют для нескольких вариантов заказа; закупочные экраны
+   * показывают метку варианта (`orderCalculationTitle`), карточка
+   * заказа группирует по вариантам. `null` — строка вне контура
+   * вариантов (sample / legacy).
+   */
+  orderCalculationId: string | null;
+  orderCalculationTitle: string | null;
+  orderCalculationIsActive: boolean | null;
 
   materialRole: MaterialRole | string | null;
   sourceName: string | null;

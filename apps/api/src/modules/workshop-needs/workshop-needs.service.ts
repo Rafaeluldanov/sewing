@@ -41,6 +41,7 @@ import {
   WorkshopNeedsHaveStockException,
 } from '../../common/errors.js';
 import { assertOrderMaterialCorrectionAllowed } from '../../common/order-material-correction.js';
+import { ACTIVE_CALCULATION_NEED_WHERE } from './workshop-need-scope.js';
 
 /**
  * Реализация модуля «Потребность цеха» (Этап 4А, см.
@@ -87,6 +88,16 @@ export class WorkshopNeedsService {
     const where: Prisma.WorkshopNeedWhereInput = {};
     if (query.orderId) where.orderId = query.orderId;
     if (query.status) where.status = query.status;
+
+    // Фича «Варианты просчёта»: потребности сосуществуют для нескольких
+    // вариантов заказа. `calculationScope=ACTIVE` — только строки
+    // активного варианта (+ вне контура вариантов: sample/legacy) —
+    // так ходят производственно-финансовые читатели карточки заказа.
+    // Default (ALL) — закупочные экраны видят все варианты с меткой.
+    // Подмешиваем через AND: у фрагмента свой OR (см. workshop-need-scope).
+    if (query.calculationScope === 'ACTIVE') {
+      where.AND = [ACTIVE_CALCULATION_NEED_WHERE];
+    }
 
     // -----------------------------------------------------------------------
     // Управленческий фильтр «Статус расчёта» (см. ТЗ
@@ -432,8 +443,15 @@ export class WorkshopNeedsService {
       });
     }
 
+    // Фича «Варианты просчёта»: bulk-«принять теорию» работает только по
+    // строкам АКТИВНОГО варианта — иначе один клик пометил бы REVIEWED
+    // потребности всех вариантов сравнения.
     const pending = await this.prisma.workshopNeed.findMany({
-      where: { orderId, status: 'CALCULATED' },
+      where: {
+        orderId,
+        status: 'CALCULATED',
+        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+      },
       select: { id: true, purchaseQty: true, calculatedQty: true },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     });
@@ -511,10 +529,18 @@ export class WorkshopNeedsService {
     }
     assertOrderMaterialCorrectionAllowed(order.status);
 
+    // Фича «Варианты просчёта»: ручная строка принадлежит варианту, при
+    // котором её завели (полный набор потребностей — per вариант).
+    const activeCalculation = await this.prisma.orderCalculation.findFirst({
+      where: { orderId, isActive: true },
+      select: { id: true },
+    });
+
     const created = await this.prisma.$transaction(async (tx) => {
       const row = await tx.workshopNeed.create({
         data: {
           orderId,
+          orderCalculationId: activeCalculation?.id ?? null,
           isManual: true,
           sourceType: 'MANUAL_ADDITION',
           materialRole: dto.materialRole ?? null,
@@ -905,9 +931,23 @@ export class WorkshopNeedsService {
       throw new WorkshopNeedCalculationSourceException(message);
     }
 
-    // 3. Идемпотентность.
+    // 2.5. Фича «Варианты просчёта»: расчёт всегда ведётся для АКТИВНОГО
+    // варианта — строки штампуются его id, пересчёт удаляет/проверяет
+    // только строки своей калькуляции. Строки других вариантов
+    // сосуществуют и не затрагиваются. `null` (заказ без калькуляций —
+    // legacy до lazy-ensure) отбирает только строки с null-штампом.
+    const activeCalculation = await this.prisma.orderCalculation.findFirst({
+      where: { orderId, isActive: true },
+      select: { id: true },
+    });
+    const activeCalculationId = activeCalculation?.id ?? null;
+
+    // 3. Идемпотентность — в рамках активной калькуляции: REVIEWED-строки
+    // ДРУГОГО варианта не блокируют пересчёт этого. Sample-строки
+    // (orderCalculationId=null при activeCalculationId!=null) тоже
+    // больше не блокируют тиражный пересчёт и не удаляются им.
     const existing = await this.prisma.workshopNeed.findMany({
-      where: { orderId },
+      where: { orderId, orderCalculationId: activeCalculationId },
       select: { id: true, status: true },
     });
     const hasNonCalculated = existing.some((e) => e.status !== 'CALCULATED');
@@ -1148,9 +1188,15 @@ export class WorkshopNeedsService {
     // снесло бы физический остаток и весь журнал движений — при том что
     // документы приёмки/расхода намеренно переживают удаление (SetNull).
     // Не даём молча стереть остаток: блокируем пересчёт с адресной 409.
+    // Скоуп удаления/проверок — строки АКТИВНОЙ калькуляции (см. шаг 2.5).
     const deleteWhere = force
-      ? { orderId, isManual: false }
-      : { orderId, status: 'CALCULATED', isManual: false };
+      ? { orderId, orderCalculationId: activeCalculationId, isManual: false }
+      : {
+          orderId,
+          orderCalculationId: activeCalculationId,
+          status: 'CALCULATED',
+          isManual: false,
+        };
     const needsWithStock = await this.prisma.workshopNeed.count({
       where: { ...deleteWhere, stockMovements: { some: {} } },
     });
@@ -1166,14 +1212,23 @@ export class WorkshopNeedsService {
         // трогает даже в force-режиме: их завёл человек руками под
         // непредвиденный расход.
         await tx.workshopNeed.deleteMany({
-          where: { orderId, isManual: false },
+          where: {
+            orderId,
+            orderCalculationId: activeCalculationId,
+            isManual: false,
+          },
         });
       } else {
         // Только CALCULATED — REVIEWED/PURCHASE_PLANNED/CANCELLED не
         // трогаем (см. ADR/ТЗ Этапа 4А). Ручные строки тоже мимо
         // (они создаются в статусе REVIEWED и с `isManual = true`).
         await tx.workshopNeed.deleteMany({
-          where: { orderId, status: 'CALCULATED', isManual: false },
+          where: {
+            orderId,
+            orderCalculationId: activeCalculationId,
+            status: 'CALCULATED',
+            isManual: false,
+          },
         });
       }
 
@@ -1182,6 +1237,9 @@ export class WorkshopNeedsService {
         const row = await tx.workshopNeed.create({
           data: {
             orderId,
+            // Фича «Варианты просчёта»: штамп активной калькуляции —
+            // строка принадлежит этому варианту.
+            orderCalculationId: activeCalculationId,
             // Фича «Расцветки»: привязка строки к расцветке + snapshot
             // её цвета. null — order-level (нанесение / single-variant).
             orderVariantId: c.orderVariantId ?? null,
@@ -2574,6 +2632,9 @@ export class WorkshopNeedsService {
       orderSampleId: row.orderSampleId,
       orderVariantId: row.orderVariantId,
       variantColor: row.variantColor,
+      orderCalculationId: row.orderCalculationId,
+      orderCalculationTitle: row.orderCalculation?.title ?? null,
+      orderCalculationIsActive: row.orderCalculation?.isActive ?? null,
       materialRole: row.materialRole,
       sourceName: row.sourceName,
       description: row.description,
@@ -2642,6 +2703,11 @@ const WORKSHOP_NEED_INCLUDE = {
   // `client` — карточка из справочника `Client`; если её нет, UI
   // показывает свободный `customer` как fallback (см. resolver
   // в `toDto`).
+  // Фича «Варианты просчёта»: метка варианта для закупочных экранов и
+  // группировки на карточке заказа. Лёгкий select, тот же JOIN-паттерн.
+  orderCalculation: {
+    select: { id: true, title: true, isActive: true },
+  },
   order: {
     select: {
       id: true,

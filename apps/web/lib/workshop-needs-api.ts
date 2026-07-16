@@ -81,9 +81,20 @@ export function calculateOrderWorkshopNeeds(
 
 export function getOrderWorkshopNeeds(
   orderId: string,
+  opts?: {
+    /**
+     * Фича «Варианты просчёта»: скоуп по вариантам. Default backend —
+     * `ACTIVE` (только активный вариант; так ходят производственно-
+     * финансовые таблицы карточки — «Материалы», «Сводно», выдачи).
+     * `ALL` — все варианты с меткой (вкладка «Потребности»).
+     */
+    calculationScope?: 'ACTIVE' | 'ALL';
+  },
 ): Promise<WorkshopNeedListItemDto[]> {
+  const query =
+    opts?.calculationScope === 'ALL' ? '?calculationScope=ALL' : '';
   return apiFetch<WorkshopNeedListItemDto[]>(
-    `/orders/${encodeURIComponent(orderId)}/workshop-needs`,
+    `/orders/${encodeURIComponent(orderId)}/workshop-needs${query}`,
     { cache: 'no-store' },
   );
 }

@@ -1940,6 +1940,9 @@ model OrderCalculation {
   updatedAt DateTime @updatedAt
 
   order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  /// Потребности, рассчитанные при этом варианте (`onDelete: SetNull`
+  /// со стороны `WorkshopNeed.orderCalculationId`).
+  workshopNeeds WorkshopNeed[]
 
   @@unique([orderId, ordinal])
   @@index([orderId])
@@ -4494,6 +4497,25 @@ model WorkshopNeed {
   orderVariant   OrderVariant? @relation(fields: [orderVariantId], references: [id], onDelete: SetNull)
   variantColor   String?
 
+  /// Фича «Варианты просчёта» (FEATURE_ORDER_CALCULATIONS): потребности
+  /// СОСУЩЕСТВУЮТ для нескольких вариантов одного заказа — у каждой
+  /// строки штамп калькуляции, при которой она рассчитана
+  /// (`WorkshopNeedsService.calculateForOrder` штампует активную).
+  ///
+  ///   - производственно-финансовые читатели (смета, cut-readiness,
+  ///     авто-списание кроя, план→факт) видят только строки АКТИВНОЙ
+  ///     калькуляции — канонический фрагмент where:
+  ///     `OR: [{orderCalculationId: null}, {orderCalculation: {isActive: true}}]`
+  ///     (см. `activeCalculationNeedWhere` в workshop-needs.service);
+  ///   - закупочные экраны показывают все варианты с меткой;
+  ///   - `null` = строка вне контура вариантов: sample-строки
+  ///     (`orderSampleId != null`) и legacy до бэкфилла.
+  ///
+  /// `onDelete: SetNull` — удаление варианта просчёта не сносит
+  /// историческую потребность (инвариант `orderSampleId`/`sourceId`).
+  orderCalculationId String?
+  orderCalculation   OrderCalculation? @relation(fields: [orderCalculationId], references: [id], onDelete: SetNull)
+
   /// `TECH_CARD_MATERIAL_LINE` | `ORDER_MATERIAL_REQUIREMENT` |
   /// `MANUAL_ADDITION`. Хранится строкой ради расширяемости (см. JSDoc выше).
   sourceType String?
@@ -4706,6 +4728,7 @@ model WorkshopNeed {
   @@index([selectedSupplierCatalogItemId])
   @@index([orderSampleId])
   @@index([orderVariantId])
+  @@index([orderCalculationId])
   @@index([isManual])
 }
 

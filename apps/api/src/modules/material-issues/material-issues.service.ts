@@ -31,6 +31,7 @@ import type {
 } from './dto/create-material-issue.dto.js';
 import type { ListMaterialIssuesQuery } from './dto/list-material-issues.dto.js';
 import type { ReturnMaterialIssueDto } from './dto/return-material-issue.dto.js';
+import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /**
  * Жизненный цикл документа `MaterialIssue` (статусы хранятся как
@@ -1116,11 +1117,15 @@ export class MaterialIssuesService {
     // Исключаем нанесения (outsource) и отменённые строки. Оставляем
     // всё остальное — materialRole может быть `null` (например, у
     // PATTERN_SIZE_PARAMETER_VALUE), и это нормально.
+    // Фича «Варианты просчёта»: списываем только по строкам АКТИВНОГО
+    // варианта — иначе выдача кроя задвоила бы расход материала по
+    // потребностям вариантов сравнения.
     const needs = await tx.workshopNeed.findMany({
       where: {
         orderId: passport.orderId,
         status: { not: 'CANCELLED' },
         sourceType: { not: 'ORDER_APPLICATION' },
+        AND: [ACTIVE_CALCULATION_NEED_WHERE],
       },
       select: {
         id: true,

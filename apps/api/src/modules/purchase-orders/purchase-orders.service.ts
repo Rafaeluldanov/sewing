@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
   PURCHASE_ORDER_LINE_ACTIVE_STATUSES,
@@ -124,6 +124,9 @@ export class PurchaseOrdersService {
       where: { id: { in: ids } },
       include: {
         order: { select: { id: true, number: true } },
+        // Фича «Варианты просчёта»: PO — реальные деньги, разрешён
+        // только под АКТИВНЫЙ (выбранный) вариант заказа.
+        orderCalculation: { select: { id: true, title: true, isActive: true } },
         selectedSupplier: true,
         selectedSupplierCatalogItem: true,
         purchaseOrderLines: {
@@ -143,6 +146,20 @@ export class PurchaseOrdersService {
     for (const n of needs) {
       if (n.status === 'CANCELLED') {
         throw new PurchaseOrderNeedsRequiredException();
+      }
+      // Фича «Варианты просчёта»: строка неактивного варианта — это
+      // сравнительный просчёт, закупать под него нельзя. Адресная 409
+      // вместо тихой закупки не того материала.
+      if (n.orderCalculation && !n.orderCalculation.isActive) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'PURCHASE_ORDER_NEED_INACTIVE_CALCULATION',
+          message:
+            `Строка «${n.description}» относится к варианту просчёта ` +
+            `«${n.orderCalculation.title}», который сейчас не выбран. ` +
+            'Заказы поставщику создаются только под активный вариант — ' +
+            'переключите вариант в карточке заказа либо выберите строки активного варианта.',
+        });
       }
       if (!n.selectedSupplierId) {
         throw new PurchaseOrderNeedsSupplierRequiredException();

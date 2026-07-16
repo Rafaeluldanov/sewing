@@ -74,6 +74,8 @@ import { ManualMaterialArrivalActions } from '@/components/orders/materials/manu
 import { OrderMaterialCorrections } from '@/components/orders/materials/order-material-corrections';
 import { MaterialIssuesSection } from '@/components/orders/material-issues/material-issues-section';
 import { OrderMaterialsUnifiedTable } from '@/components/orders/materials/order-materials-unified-table';
+import { OrderCalcNeedsComparison } from '@/components/orders/calculations/order-calc-needs-comparison';
+import { isOrderCalculationsEnabled } from '@/lib/feature-flags';
 import { OrderPlannedCostSummaryCard } from '@/components/orders/order-planned-cost-summary-card';
 import { OrderOutsourceList } from '@/components/orders/view/order-outsource-list';
 
@@ -192,6 +194,17 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
               order.materialsAndHardwareCostPolicy ?? 'INCLUDE'
             }
           />
+
+          {/*
+            Фича «Варианты просчёта» (итерация 2): потребности живут per
+            вариант. Канонический вид выше — только активный вариант;
+            этот блок даёт сравнение всех вариантов (рендерится, когда
+            вариантов больше одного).
+          */}
+          {isOrderCalculationsEnabled() && (
+            <OrderCalcNeedsComparison orderId={order.id} />
+          )}
+
           <ManualMaterialArrivalActions
             orderId={order.id}
             orderStatus={order.status}

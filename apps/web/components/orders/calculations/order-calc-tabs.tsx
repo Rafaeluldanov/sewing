@@ -73,8 +73,8 @@ export function OrderCalcTabs({ orderId, initial, warnUnsavedForm }: Props) {
   const onActivate = (calcId: string, title: string) => {
     if (isPending || !dto.canSwitch || calcId === dto.activeId) return;
     const warning = warnUnsavedForm
-      ? `Переключить на «${title}»? Несохранённые правки формы будут потеряны, потребности заказа пересчитаются под выбранный вариант.`
-      : `Переключить на «${title}»? Потребности заказа будут пересчитаны под выбранный вариант.`;
+      ? `Переключить на «${title}»? Несохранённые правки формы будут потеряны. Окно заказа покажет данные этого варианта; если он ещё не рассчитан — потребности рассчитаются при переключении.`
+      : `Переключить на «${title}»? Окно заказа покажет данные этого варианта; если он ещё не рассчитан — потребности рассчитаются при переключении. Потребности других вариантов не затрагиваются.`;
     if (!window.confirm(warning)) return;
     startTransition(async () => {
       apply(await activateCalculationAction(orderId, calcId));

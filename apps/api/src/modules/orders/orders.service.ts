@@ -4066,6 +4066,16 @@ export class OrdersService {
   async resyncColorwayDerived(
     orderId: string,
     actorEmployeeId?: string | null,
+    opts?: {
+      /**
+       * Фича «Варианты просчёта»: activate() восстанавливает вариант,
+       * входы которого НЕ менялись с момента деактивации, — пересчёт
+       * потребностей там либо не нужен (строки варианта живут своей
+       * жизнью), либо выполняется отдельно с ре-линком расцветок.
+       * true — пропустить `calculateForOrder` в конце ресинка.
+       */
+      skipWorkshopNeedsRecalc?: boolean;
+    },
   ): Promise<void> {
     const order = await this.prisma.order.findUnique({
       where: { id: orderId },
@@ -4145,7 +4155,10 @@ export class OrdersService {
       await this.syncOrderRouteStepsSnapshot(orderId, tx);
     });
 
-    if (order.status === OrderStatus.CALCULATION) {
+    if (
+      order.status === OrderStatus.CALCULATION &&
+      !opts?.skipWorkshopNeedsRecalc
+    ) {
       await this.workshopNeeds.calculateForOrder(
         orderId,
         { force: false },

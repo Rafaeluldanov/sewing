@@ -17,6 +17,7 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
+import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /**
  * Сервис «Ручная отметка поступления материала».
@@ -111,8 +112,12 @@ export class OrderMaterialArrivalsService {
     this.assertCanMutate(actor);
     await this.assertOrderExists(orderId);
 
+    // Фича «Варианты просчёта»: отметка «материал поступил» работает по
+    // строкам АКТИВНОГО варианта (default-ветка ниже берёт все blocking-
+    // роли — без скоупа она пометила бы и потребности вариантов
+    // сравнения). Явные workshopNeedIds остаются адресными.
     const allNeeds = await this.prisma.workshopNeed.findMany({
-      where: { orderId },
+      where: { orderId, AND: [ACTIVE_CALCULATION_NEED_WHERE] },
       select: {
         id: true,
         status: true,

@@ -15,10 +15,11 @@ import {
   type RenameOrderCalculationDto,
   type UpdateOrderRouteOverridesDto,
 } from '@sewing/shared';
-import { WorkshopNeedsHaveStockException } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrdersService } from '../orders/orders.service.js';
+import { WorkshopNeedsService } from '../workshop-needs/workshop-needs.service.js';
+import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /** Провалидированные ссылки снимка на справочники (см.
  *  `validateSnapshotRefs`): несуществующие FK при restore зануляются. */
@@ -44,21 +45,28 @@ interface SnapshotRefs {
  * знают.
  *
  * Переключение (`activate`) — многошаговая операция:
- *   0) fail-fast гейты ДО любых мутаций (статус, закупщик, склад,
- *      валидность снимка и его FK-ссылок);
+ *   0) fail-fast гейты ДО любых мутаций (статус, валидность снимка и
+ *      его FK-ссылок);
  *   A+B) одна транзакция: capture живого состояния в старый активный →
  *      restore снимка целевого (Order-поля, расцветки, параметры
  *      техкарт, снимок материалов);
  *   C) пересборка производных СУЩЕСТВУЮЩИМ путём —
  *      `OrdersService.resyncColorwayDerived` (агрегат OrderItem, снимок
  *      материалов ФАЗА-2 recompute, операционный план, снимок шагов
- *      маршрута; в CALCULATION — пересчёт потребностей);
+ *      маршрута) — БЕЗ пересчёта потребностей (`skipWorkshopNeedsRecalc`);
  *   D) оверлей route-оверрайдов ПОСЛЕ resync: carry-механика
  *      `syncOrderRouteStepsSnapshot` переносит оверрайды ПРЕДЫДУЩЕГО
  *      варианта по operationId — поэтому всем шагам пишутся значения из
  *      снимка, а отсутствующим — явные null (сброс утечки);
- *   E) best-effort восстановление ценовых полей закупщика на свежих
- *      строках `WorkshopNeed` по match-ключу.
+ *   E) потребности варианта. Итерация 2: строки `WorkshopNeed`
+ *      СОСУЩЕСТВУЮТ per вариант (`orderCalculationId`) — переключение их
+ *      НЕ пересчитывает и не трогает работу закупщика по другим
+ *      вариантам (гейты «закупщик в работе»/склада из activate ушли).
+ *      Здесь только: ре-линк строк варианта к пересозданным расцветкам
+ *      (по `variantColor`); а если строк ещё нет и заказ в CALCULATION —
+ *      ПЕРВЫЙ расчёт варианта («отправить вариант на расчёт» =
+ *      активировать его) + legacy-восстановление цен из снимков, снятых
+ *      до пер-вариантных строк.
  *
  * Инвариант устойчивости: фазы C–E идут отдельными транзакциями. Сбой в
  * середине оставляет данные КОНСИСТЕНТНЫМИ (входы уже переключены), но
@@ -66,12 +74,10 @@ interface SnapshotRefs {
  * (no-op по входам) или любая правка расцветки самолечит производные
  * через тот же resync.
  *
- * Осознанные ограничения v1: `OrderExtraCost`, `OrderApplication`,
- * `OrderLogisticsLine` — order-level и общие для всех вариантов; статусы
- * строк потребности не восстанавливаются (остаются CALCULATED — закупщик
- * перепроверяет); ручная строка `WorkshopNeed` (isManual, создаётся сразу
- * REVIEWED) блокирует переключение так же, как проверенные строки — это
- * зеркало гейта идемпотентности `calculateForOrder`.
+ * Осознанные ограничения: `OrderExtraCost`, `OrderApplication`,
+ * `OrderLogisticsLine` — order-level и общие для всех вариантов;
+ * реальная закупка (PO) разрешена только под строки активного варианта
+ * (гейт в `PurchaseOrdersService.createFromNeeds`).
  */
 @Injectable()
 export class OrderCalculationsService {
@@ -80,6 +86,7 @@ export class OrderCalculationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
+    private readonly workshopNeeds: WorkshopNeedsService,
     private readonly audit: AuditService,
   ) {}
 
@@ -191,6 +198,19 @@ export class OrderCalculationsService {
       );
     });
 
+    // Итерация 2 (потребности per вариант): строки WorkshopNeed остались
+    // у прежнего активного варианта. Если заказ уже в CALCULATION —
+    // сразу считаем потребности клона (его входы = текущие данные,
+    // гейт идемпотентности скоуплен на новый пустой вариант и пройдёт),
+    // чтобы карточка не показывала пустые потребности после «+ Вариант».
+    if (order.status === OrderStatus.CALCULATION) {
+      await this.workshopNeeds.calculateForOrder(
+        orderId,
+        { force: false },
+        actorEmployeeId ?? null,
+      );
+    }
+
     return this.listForOrder(orderId);
   }
 
@@ -210,26 +230,10 @@ export class OrderCalculationsService {
     if (target.isActive) return this.listForOrder(orderId); // no-op
 
     // --- Фаза 0: fail-fast гейты до любых мутаций -------------------------
+    // Итерация 2 (потребности per вариант): гейты «закупщик в работе» и
+    // складской из activate УБРАНЫ — переключение больше не пересчитывает
+    // и не удаляет ничьи строки WorkshopNeed (см. фазу E).
     this.assertEditableStatus(order.status);
-
-    // ЗЕРКАЛО гейта идемпотентности `calculateForOrder` (он считает ВСЕ
-    // строки заказа, включая ручные и sample): любая строка ≠ CALCULATED
-    // означает «закупщик уже работает» — и non-force пересчёт в фазе C
-    // всё равно бросил бы 409, но уже ПОСЛЕ переключения входов.
-    // Поэтому проверяем то же условие здесь, до любых мутаций.
-    const busy = await this.prisma.workshopNeed.count({
-      where: { orderId, status: { not: 'CALCULATED' } },
-    });
-    if (busy > 0) {
-      throw this.conflict(
-        ORDER_CALCULATION_ERROR_CODES.NEEDS_IN_PROGRESS,
-        'Потребности заказа уже в работе у закупщика (есть проверенные, ручные или запланированные к закупке строки) — переключение варианта пересчитало бы их и стёрло эту работу. Сначала верните строки в статус «Рассчитано» (или удалите ручные) либо завершите заказ по текущему варианту.',
-      );
-    }
-    const withStock = await this.prisma.workshopNeed.count({
-      where: { orderId, stockMovements: { some: {} } },
-    });
-    if (withStock > 0) throw new WorkshopNeedsHaveStockException();
 
     const parsed = OrderCalculationSnapshotV1Schema.safeParse(target.snapshot);
     if (!parsed.success) {
@@ -413,17 +417,37 @@ export class OrderCalculationsService {
     });
 
     // --- Фаза C: производные существующим путём ----------------------------
-    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    // Потребности НЕ пересчитываем: строки живут per вариант (фаза E).
+    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId, {
+      skipWorkshopNeedsRecalc: true,
+    });
 
     // --- Фаза D: оверлей route-оверрайдов ПОСЛЕ resync ---------------------
     await this.overlayRouteOverrides(orderId, snap, actorEmployeeId);
 
-    // --- Фаза E: best-effort восстановление цен закупщика ------------------
-    if (
-      order.status === OrderStatus.CALCULATION &&
-      snap.workshopNeedValues.length > 0
-    ) {
-      await this.restoreWorkshopNeedValues(orderId, snap, refs);
+    // --- Фаза E: потребности варианта --------------------------------------
+    // Строки варианта сосуществуют со строками других вариантов и не
+    // менялись, пока вариант лежал снимком (неактивный вариант не
+    // редактируем). Если строки есть — только ре-линк к пересозданным
+    // расцветкам (orderVariantId ушёл в SetNull при replace расцветок).
+    // Если строк нет и заказ в CALCULATION — первый расчёт варианта:
+    // «отправить вариант на расчёт» = активировать его.
+    const needRows = await this.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: target.id },
+    });
+    if (needRows > 0) {
+      await this.relinkNeedVariants(orderId, target.id);
+    } else if (order.status === OrderStatus.CALCULATION) {
+      await this.workshopNeeds.calculateForOrder(
+        orderId,
+        { force: false },
+        actorEmployeeId ?? null,
+      );
+      // Legacy-совместимость: снимки, снятые ДО пер-вариантных строк,
+      // несут цены закупщика — восстанавливаем их на свежий расчёт.
+      if (snap.workshopNeedValues.length > 0) {
+        await this.restoreWorkshopNeedValues(orderId, snap, refs);
+      }
     }
 
     return this.listForOrder(orderId);
@@ -604,8 +628,16 @@ export class OrderCalculationsService {
     const toOrdinal = (variantId: string | null): number | null =>
       variantId == null ? null : (ordinalByVariantId.get(variantId) ?? null);
 
+    // Итерация 2: строки живут per вариант — в снимок попадают только
+    // ценовые поля строк ДЕАКТИВИРУЕМОГО (ещё активного) варианта.
+    // Используется лишь как legacy-фолбэк при первом расчёте варианта.
     const needs = await db.workshopNeed.findMany({
-      where: { orderId, isManual: false, orderSampleId: null },
+      where: {
+        orderId,
+        isManual: false,
+        orderSampleId: null,
+        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+      },
       select: {
         orderVariantId: true,
         sourceType: true,
@@ -914,8 +946,46 @@ export class OrderCalculationsService {
   }
 
   /**
-   * Фаза E: best-effort восстановление ценовых полей закупщика на свежих
-   * (пересчитанных) строках WorkshopNeed. Первичный match-ключ —
+   * Фаза E (строки варианта уже есть): ре-линк `orderVariantId` строк
+   * потребности к пересозданным расцветкам. Расцветки при restore
+   * пересоздаются с новыми id, и `WorkshopNeed.orderVariantId` строк
+   * этого варианта ушёл в SetNull — восстанавливаем привязку по
+   * `variantColor` (snapshot цвета на строке). Строки с цветом, которого
+   * больше нет среди расцветок, остаются order-level (variantColor
+   * продолжает работать как presentation-подпись).
+   */
+  private async relinkNeedVariants(
+    orderId: string,
+    calculationId: string,
+  ): Promise<void> {
+    const variants = await this.prisma.orderVariant.findMany({
+      where: { orderId },
+      orderBy: { ordinal: 'asc' },
+      select: { id: true, color: true },
+    });
+    // При дублях цвета побеждает первая расцветка (ordinal asc) — тот же
+    // принцип «первая — первичная», что у моста techCardId.
+    const idByColor = new Map<string, string>();
+    for (const v of variants) {
+      if (!idByColor.has(v.color)) idByColor.set(v.color, v.id);
+    }
+    for (const [color, variantId] of idByColor) {
+      await this.prisma.workshopNeed.updateMany({
+        where: {
+          orderId,
+          orderCalculationId: calculationId,
+          orderVariantId: null,
+          variantColor: color,
+        },
+        data: { orderVariantId: variantId },
+      });
+    }
+  }
+
+  /**
+   * Legacy-фолбэк первого расчёта варианта: восстановление ценовых полей
+   * закупщика на свежих (пересчитанных) строках WorkshopNeed из снимка,
+   * снятого ДО пер-вариантных строк. Первичный match-ключ —
    * `variantOrdinal|sourceType|sourceId|unit` (sourceId снова живой,
    * т.к. materialRequirements восстановлены с исходными id); fallback —
    * `variantOrdinal|materialRole|sourceName|unit`, применяется только
@@ -934,8 +1004,14 @@ export class OrderCalculationsService {
       variants.map((v) => [v.id, v.ordinal] as const),
     );
 
+    // Свежепосчитанные строки штампованы активным (= целевым) вариантом.
     const needs = await this.prisma.workshopNeed.findMany({
-      where: { orderId, isManual: false, orderSampleId: null },
+      where: {
+        orderId,
+        isManual: false,
+        orderSampleId: null,
+        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+      },
       select: {
         id: true,
         orderVariantId: true,

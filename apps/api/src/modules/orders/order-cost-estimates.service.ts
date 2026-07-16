@@ -20,6 +20,7 @@ import {
 } from '../../common/errors.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /**
  * Сервис «Себестоимость заказа» (см.
@@ -85,8 +86,16 @@ export class OrderCostEstimatesService {
 
     // Берём ВСЕ строки потребности (исключая CANCELLED) — это «активные»
     // потребности заказа. Стабильная сортировка по createdAt+id.
+    // Фича «Варианты просчёта»: только строки АКТИВНОГО варианта —
+    // иначе смета суммирует материалы всех вариантов сравнения
+    // (двойной счёт). Сравнение смет вариантов — через переключение
+    // вкладки + completeCalculation по каждому.
     const needs = await this.prisma.workshopNeed.findMany({
-      where: { orderId, NOT: { status: 'CANCELLED' } },
+      where: {
+        orderId,
+        NOT: { status: 'CANCELLED' },
+        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+      },
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       include: {
         selectedSupplier: { select: { id: true, name: true } },

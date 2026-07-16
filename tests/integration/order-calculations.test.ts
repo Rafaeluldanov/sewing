@@ -417,7 +417,7 @@ describeWithDb('integration — варианты просчёта заказа (
     ).toBeNull();
   });
 
-  test('CALCULATION: цены закупщика переживают переключение (restore по match-ключу)', async () => {
+  test('CALCULATION: потребности вариантов сосуществуют; строки и цены живут, ре-линк расцветок', async () => {
     const tc = await createTechCard('TC-CALC-PRICE', 'Цены');
     const orderId = await createOrder(tc);
 
@@ -426,12 +426,22 @@ describeWithDb('integration — варианты просчёта заказа (
       .set('Cookie', manager)
       .expect(201);
 
-    const needs = await t.prisma.workshopNeed.findMany({
+    const calcAId = (
+      await t.prisma.orderCalculation.findFirstOrThrow({
+        where: { orderId, isActive: true },
+        select: { id: true },
+      })
+    ).id;
+    const rowsA = await t.prisma.workshopNeed.findMany({
       where: { orderId, isManual: false },
-      select: { id: true, sourceName: true, unit: true, orderVariantId: true },
+      select: { id: true, orderCalculationId: true },
     });
-    expect(needs.length).toBeGreaterThan(0);
-    const priced = needs[0];
+    expect(rowsA.length).toBeGreaterThan(0);
+    // Все строки штампованы активной калькуляцией.
+    expect(new Set(rowsA.map((r) => r.orderCalculationId))).toEqual(
+      new Set([calcAId]),
+    );
+    const priced = rowsA[0];
     await t.prisma.workshopNeed.update({
       where: { id: priced.id },
       data: {
@@ -443,37 +453,154 @@ describeWithDb('integration — варианты просчёта заказа (
       },
     });
 
-    // Клон (A→снимок с ценами) → назад на A: потребности пересчитаны,
-    // но цены восстановлены; статус остался CALCULATED.
+    // Клон в CALCULATION: B становится активным и СРАЗУ рассчитывается —
+    // строки A остаются жить рядом (сосуществование).
     const cloneRes = await api()
       .post(`/api/orders/${orderId}/calculations`)
       .set('Cookie', manager)
       .send({})
       .expect(201);
     const calcA = cloneRes.body.items[0].id as string;
+    const calcB = cloneRes.body.items[1].id as string;
+    expect(calcA).toBe(calcAId);
 
+    const rowsB = await t.prisma.workshopNeed.findMany({
+      where: { orderId, orderCalculationId: calcB },
+      select: { id: true },
+    });
+    expect(rowsB.length).toBe(rowsA.length);
+    // Строки A живы (те же id, цены на месте).
+    const pricedAfterClone = await t.prisma.workshopNeed.findUnique({
+      where: { id: priced.id },
+    });
+    expect(pricedAfterClone).not.toBeNull();
+    expect(Number(pricedAfterClone!.quotedPrice)).toBeCloseTo(123.45, 4);
+
+    // Скоуп per-order эндпоинта: default = только активный вариант (B),
+    // ?calculationScope=ALL — все строки с меткой варианта.
+    const activeScope = await api()
+      .get(`/api/orders/${orderId}/workshop-needs`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(
+      new Set(activeScope.body.map((n: { orderCalculationId: string }) => n.orderCalculationId)),
+    ).toEqual(new Set([calcB]));
+    const allScope = await api()
+      .get(`/api/orders/${orderId}/workshop-needs?calculationScope=ALL`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(allScope.body.length).toBe(rowsA.length + rowsB.length);
+
+    // Переключение на A: строки НЕ пересчитываются (тот же id, цены на
+    // месте), а orderVariantId ре-линкуется к пересозданным расцветкам.
     await activate(orderId, calcA);
-
-    const restored = await t.prisma.workshopNeed.findFirst({
+    const pricedBack = await t.prisma.workshopNeed.findUnique({
+      where: { id: priced.id },
+    });
+    expect(pricedBack).not.toBeNull();
+    expect(Number(pricedBack!.purchaseQty)).toBe(50);
+    expect(Number(pricedBack!.quotedPrice)).toBeCloseTo(123.45, 4);
+    expect(pricedBack!.supplierNameText).toBe('ООО Ткани');
+    expect(pricedBack!.comment).toBe('скидка 5%');
+    expect(pricedBack!.status).toBe('CALCULATED');
+    // Ре-линк: строка снова привязана к живой расцветке своего цвета.
+    const relinked = await t.prisma.workshopNeed.findMany({
       where: {
         orderId,
-        isManual: false,
-        sourceName: priced.sourceName,
-        unit: priced.unit,
-        orderVariantId: { not: null },
+        orderCalculationId: calcA,
+        variantColor: { not: null },
       },
+      select: { orderVariantId: true, variantColor: true },
     });
-    // Строка после пересчёта НОВАЯ (id сменился), но ценовые поля на месте.
-    expect(restored).not.toBeNull();
-    expect(Number(restored!.purchaseQty)).toBe(50);
-    expect(Number(restored!.quotedPrice)).toBeCloseTo(123.45, 4);
-    expect(restored!.quotedCurrency).toBe('RUB');
-    expect(restored!.supplierNameText).toBe('ООО Ткани');
-    expect(restored!.comment).toBe('скидка 5%');
-    expect(restored!.status).toBe('CALCULATED');
+    const liveVariants = await t.prisma.orderVariant.findMany({
+      where: { orderId },
+      select: { id: true, color: true },
+    });
+    const variantIdByColor = new Map(
+      liveVariants.map((v) => [v.color, v.id]),
+    );
+    for (const r of relinked) {
+      expect(r.orderVariantId).toBe(variantIdByColor.get(r.variantColor!));
+    }
+    // Строки B не тронуты переключением.
+    expect(
+      await t.prisma.workshopNeed.count({
+        where: { orderId, orderCalculationId: calcB },
+      }),
+    ).toBe(rowsB.length);
   });
 
-  test('гейты: закупщик в работе → 409; ручная строка не блокирует; статус/удаление/no-op', async () => {
+  test('смета считается только по активному варианту; PO под неактивный — 409', async () => {
+    const tc = await createTechCard('TC-CALC-EST', 'Смета');
+    const orderId = await createOrder(tc);
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
+
+    // Вариант A: заполняем цены всем строкам (иначе completeCalculation
+    // отдаст ORDER_CALCULATION_INCOMPLETE).
+    const calcA = (
+      await t.prisma.orderCalculation.findFirstOrThrow({
+        where: { orderId, isActive: true },
+        select: { id: true },
+      })
+    ).id;
+    await t.prisma.workshopNeed.updateMany({
+      where: { orderId, orderCalculationId: calcA },
+      data: { purchaseQty: '10', quotedPrice: '100', quotedCurrency: 'RUB' },
+    });
+
+    // Клон B (активен, рассчитан, цены НЕ заполнены). Смета по заказу
+    // при активном A обязана видеть только строки A.
+    const cloneRes = await api()
+      .post(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const calcB = cloneRes.body.items[1].id as string;
+    await activate(orderId, calcA);
+
+    const est = await api()
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    // Σ = строки A: rowsA × 10 шт × 100 ₽; строки B без цен не мешают и
+    // не попадают в смету (иначе completeCalculation отдал бы
+    // ORDER_CALCULATION_INCOMPLETE, а сумма задвоилась бы).
+    const rowsACount = await t.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: calcA },
+    });
+    expect(Number(est.body.totalCostRub)).toBe(rowsACount * 10 * 100);
+
+    // PO-гейт: строка неактивного варианта B не уходит в закупку.
+    const supplier = await t.prisma.supplier.create({
+      data: { name: 'ООО Ткани', status: 'ACTIVE' },
+      select: { id: true },
+    });
+    const bRow = await t.prisma.workshopNeed.findFirstOrThrow({
+      where: { orderId, orderCalculationId: calcB },
+      select: { id: true },
+    });
+    await t.prisma.workshopNeed.update({
+      where: { id: bRow.id },
+      data: {
+        purchaseQty: '5',
+        quotedPrice: '100',
+        quotedCurrency: 'RUB',
+        selectedSupplierId: supplier.id,
+      },
+    });
+    const poBlocked = await api()
+      .post('/api/purchase-orders/from-needs')
+      .set('Cookie', manager)
+      .send({ workshopNeedIds: [bRow.id] })
+      .expect(409);
+    expect(poBlocked.body.code).toBe('PURCHASE_ORDER_NEED_INACTIVE_CALCULATION');
+  });
+
+  test('гейты: REVIEWED других вариантов НЕ блокируют; первый расчёт при активации; accept-calculated скоуплен; статус/удаление/no-op', async () => {
     const tc = await createTechCard('TC-CALC-GATES', 'Гейты');
     const orderId = await createOrder(tc);
     const cloneRes = await api()
@@ -484,51 +611,58 @@ describeWithDb('integration — варианты просчёта заказа (
     const calcA = cloneRes.body.items[0].id as string;
     const calcB = cloneRes.body.items[1].id as string;
 
+    // Клон в DRAFT — потребностей ещё нет. Расчёт при активном B.
     await api()
       .post(`/api/orders/${orderId}/start-calculation`)
       .set('Cookie', manager)
       .expect(201);
+    const bRows = await t.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: calcB },
+    });
+    expect(bRows).toBeGreaterThan(0);
 
-    // REVIEWED-строка блокирует переключение адресной 409.
-    const need = await t.prisma.workshopNeed.findFirstOrThrow({
-      where: { orderId, isManual: false },
+    // Итерация 2: REVIEWED-строка варианта B НЕ блокирует переключение —
+    // строки вариантов сосуществуют, activate ничего не пересчитывает у
+    // чужих. Вариант A рассчитывается ПРИ АКТИВАЦИИ (строк не было).
+    const bNeed = await t.prisma.workshopNeed.findFirstOrThrow({
+      where: { orderId, orderCalculationId: calcB },
       select: { id: true },
     });
     await t.prisma.workshopNeed.update({
-      where: { id: need.id },
+      where: { id: bNeed.id },
       data: { status: 'REVIEWED' },
     });
-    const blocked = await activate(orderId, calcA, 409);
-    expect(blocked.body.code).toBe('ORDER_CALCULATION_NEEDS_IN_PROGRESS');
-
-    // Ручная isManual-строка (создаётся сразу REVIEWED) блокирует ТАК ЖЕ —
-    // зеркало гейта идемпотентности `calculateForOrder` (он считает все
-    // строки заказа): иначе 409 прилетел бы из фазы C уже после
-    // переключения входов.
-    await t.prisma.workshopNeed.update({
-      where: { id: need.id },
-      data: { status: 'CALCULATED' },
+    await activate(orderId, calcA); // 201 — прошло, гейта больше нет
+    const aRows = await t.prisma.workshopNeed.count({
+      where: { orderId, orderCalculationId: calcA },
     });
-    const manualNeed = await t.prisma.workshopNeed.create({
-      data: {
-        orderId,
-        isManual: true,
-        sourceType: 'MANUAL_ADDITION',
-        description: 'Ручная лента',
-        calculatedQty: '5',
-        unit: 'м',
-        status: 'REVIEWED',
-      },
-      select: { id: true },
-    });
-    const blockedByManual = await activate(orderId, calcA, 409);
-    expect(blockedByManual.body.code).toBe(
-      'ORDER_CALCULATION_NEEDS_IN_PROGRESS',
-    );
+    expect(aRows).toBeGreaterThan(0); // первый расчёт варианта A
+    // Строка B осталась REVIEWED и нетронутой.
+    expect(
+      (
+        await t.prisma.workshopNeed.findUniqueOrThrow({
+          where: { id: bNeed.id },
+          select: { status: true },
+        })
+      ).status,
+    ).toBe('REVIEWED');
 
-    // Удалили ручную строку — переключение снова работает.
-    await t.prisma.workshopNeed.delete({ where: { id: manualNeed.id } });
-    await activate(orderId, calcA); // 201 — прошло
+    // accept-calculated («Принять теорию») скоуплен активным вариантом:
+    // CALCULATED-строки варианта B не трогаются.
+    await api()
+      .post(`/api/orders/${orderId}/workshop-needs/accept-calculated`)
+      .set('Cookie', manager)
+      .expect(201);
+    expect(
+      await t.prisma.workshopNeed.count({
+        where: { orderId, orderCalculationId: calcA, status: 'REVIEWED' },
+      }),
+    ).toBe(aRows);
+    expect(
+      await t.prisma.workshopNeed.count({
+        where: { orderId, orderCalculationId: calcB, status: 'CALCULATED' },
+      }),
+    ).toBe(bRows - 1); // все, кроме вручную помеченной REVIEWED
 
     // Статусный гейт: вне DRAFT/CALCULATION всё write-API отвечает 409.
     await t.prisma.order.update({

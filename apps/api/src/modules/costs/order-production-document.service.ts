@@ -9,6 +9,7 @@ import type {
 } from '@sewing/shared/order-production-document';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /** Начисления, считающиеся «фактом» на текущий момент (не отменённые). */
 const FACT_ENTRY_STATUSES: EntryStatus[] = [
@@ -322,8 +323,14 @@ export class OrderProductionDocumentService {
     };
 
     // 1. Плановые строки из потребности цеха (идентичность материала).
+    // Фича «Варианты просчёта»: план — только по строкам активного
+    // (выбранного) варианта, иначе план задваивается.
     const needs = await this.prisma.workshopNeed.findMany({
-      where: { orderId, NOT: { status: 'CANCELLED' } },
+      where: {
+        orderId,
+        NOT: { status: 'CANCELLED' },
+        AND: [ACTIVE_CALCULATION_NEED_WHERE],
+      },
       select: {
         id: true,
         description: true,

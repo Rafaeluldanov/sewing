@@ -13798,6 +13798,67 @@ body:has(.admin-layout) .app-header { display: none !important; }
   pointer-events: none;
 }
 
+/* Сравнение потребностей по вариантам просчёта (вкладка «Потребности») */
+.calc-needs-compare {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.calc-needs-compare__section {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
+.calc-needs-compare__head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.calc-needs-compare__title {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--color-fg);
+}
+
+.calc-needs-compare__badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-tint);
+  color: var(--color-warn-fg);
+}
+
+.calc-needs-compare__sum {
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.calc-needs-compare__hint {
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--color-fg-muted);
+}
+
+/* Метка неактивного варианта просчёта на строке закупочного экрана */
+.wn-desc__calc-badge {
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 0.1rem 0.5rem;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-muted);
+  color: var(--color-fg-subtle);
+  white-space: nowrap;
+}
+
 @media (max-width: 720px) {
   .order-calc-tabs__row {
     overflow-x: auto;

@@ -6,6 +6,7 @@ import {
   HttpCode,
   Param,
   Post,
+  Query,
 } from '@nestjs/common';
 import {
   CalculateWorkshopNeedsSchema,
@@ -99,11 +100,22 @@ export class WorkshopNeedsOrderController {
   @Get(':id/workshop-needs')
   listForOrder(
     @Param('id') orderId: string,
+    @Query('calculationScope') calculationScope?: string,
   ): Promise<WorkshopNeedListItemDto[]> {
     // Карточка конкретного заказа должна видеть свои потребности
     // независимо от того, идёт расчёт или уже завершён. Передаём
     // явный `orderCalculationStatus: 'ALL'` — backend default тоже
     // даст `ALL` при наличии `orderId`, но эксплицитно надёжнее.
-    return this.needs.list({ orderId, orderCalculationStatus: 'ALL' });
+    //
+    // Фича «Варианты просчёта»: default `calculationScope=ACTIVE` —
+    // производственно-финансовые читатели карточки («Материалы»,
+    // «Сводно», выдачи, план-факт) видят только активный вариант,
+    // иначе двойной счёт. Вкладка «Потребности» явно просит `ALL`
+    // и показывает все варианты с группировкой.
+    return this.needs.list({
+      orderId,
+      orderCalculationStatus: 'ALL',
+      calculationScope: calculationScope === 'ALL' ? 'ALL' : 'ACTIVE',
+    });
   }
 }

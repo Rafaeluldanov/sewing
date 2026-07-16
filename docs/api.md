@@ -550,9 +550,11 @@ DTO: `packages/shared/src/cutting-closure.ts`. ADR: 0018.
 | PATCH | `/api/workshop-needs/:id`                         | ADMIN, SHOP_MANAGER | `UpdateWorkshopNeedDto`. Закупщик правит `purchaseQty`/`quotedPrice`/`quotedCurrency`/`expectedDeliveryDate`/`selectedSupplierId`/`selectedSupplierCatalogItemId`/`comment`. |
 | POST  | `/api/workshop-needs/:id/cancel`                  | ADMIN, SHOP_MANAGER | `status → CANCELLED`. |
 | POST  | `/api/orders/:id/workshop-needs/calculate`        | ADMIN, SHOP_MANAGER | Body `CalculateWorkshopNeedsDto`. Пересчёт потребностей конкретного заказа. |
-| GET   | `/api/orders/:id/workshop-needs`                  | ADMIN, SHOP_MANAGER | Список потребностей одного заказа (фильтр `orderCalculationStatus = ALL`). |
+| GET   | `/api/orders/:id/workshop-needs`                  | ADMIN, SHOP_MANAGER | Список потребностей одного заказа (фильтр `orderCalculationStatus = ALL`). Фича «Варианты просчёта»: query `calculationScope` — default `ACTIVE` (только строки активного варианта + вне контура вариантов; так ходят производственно-финансовые таблицы карточки), `ALL` — все варианты с меткой (`orderCalculationId/Title/IsActive` в DTO; вкладка «Потребности»). |
 
-DTO: `packages/shared/src/workshop-needs.ts`.
+DTO: `packages/shared/src/workshop-needs.ts`. Bulk `accept-calculated`
+(«Принять теорию», см. строку выше в order-scoped роутере) скоуплен
+строками АКТИВНОГО варианта просчёта.
 
 ---
 
@@ -567,7 +569,7 @@ DTO: `packages/shared/src/workshop-needs.ts`.
 | ----- | ------------------------------------------------- | ------------------ | -------- |
 | GET   | `/api/purchase-orders`                            | ADMIN, SHOP_MANAGER | List `ListPurchaseOrdersQuery`. |
 | GET   | `/api/purchase-orders/:id`                        | ADMIN, SHOP_MANAGER | Карточка. |
-| POST  | `/api/purchase-orders/from-needs`                 | ADMIN, SHOP_MANAGER | 201 Created. Body `CreatePurchaseOrderFromNeedsDto`. Один PO — один поставщик; запрещено смешивать заказы покупателя. |
+| POST  | `/api/purchase-orders/from-needs`                 | ADMIN, SHOP_MANAGER | 201 Created. Body `CreatePurchaseOrderFromNeedsDto`. Один PO — один поставщик; запрещено смешивать заказы покупателя. Фича «Варианты просчёта»: 409 `PURCHASE_ORDER_NEED_INACTIVE_CALCULATION`, если строка принадлежит НЕактивному варианту (закупка — только под выбранный вариант). |
 | PATCH | `/api/purchase-orders/:id`                        | ADMIN, SHOP_MANAGER | `UpdatePurchaseOrderDto`. |
 | PATCH | `/api/purchase-orders/:id/lines/:lineId`          | ADMIN, SHOP_MANAGER | `UpdatePurchaseOrderLineDto`. |
 | POST  | `/api/purchase-orders/:id/send`                   | ADMIN, SHOP_MANAGER | `DRAFT → SENT`. Side effects: фиксирует `sentAt`, переводит активные строки в `SENT`. |
@@ -870,8 +872,8 @@ write-эндпоинты возвращают свежий `OrderCalculationsDto
 | Метод | Путь                                              | RBAC                | Описание |
 | ----- | ------------------------------------------------- | ------------------- | -------- |
 | GET   | `/api/orders/:id/calculations`                    | Any auth            | Ряд вкладок (`OrderCalculationsDto`: `activeId`, `canSwitch`, items c `costTotalRub`-ярлыком). Lazy-ensure: заказу без калькуляций заводится активная #0. 404 `ORDER_NOT_FOUND`. |
-| POST  | `/api/orders/:id/calculations`                    | ADMIN, SHOP_MANAGER | «+ Вариант просчёта»: клон активного (старый получает снимок, новый активен, живые таблицы не меняются). Body `CreateOrderCalculationSchema` (`{ title? }`). 409 `ORDER_CALCULATION_LOCKED` вне DRAFT/CALCULATION. Audit `ORDER_CALCULATION_CREATED`. |
-| POST  | `/api/orders/:id/calculations/:calcId/activate`   | ADMIN, SHOP_MANAGER | Переключение активного варианта: capture текущего → restore снимка → пересборка производных (`resyncColorwayDerived` + оверлей route-оверрайдов + best-effort восстановление цен закупщика). Гейты ДО мутаций: 409 `ORDER_CALCULATION_LOCKED` (статус), 409 `ORDER_CALCULATION_NEEDS_IN_PROGRESS` (есть строки `WorkshopNeed` ≠ CALCULATED — зеркало гейта `calculateForOrder`), 409 `WORKSHOP_NEEDS_HAVE_STOCK`, 409 `ORDER_CALCULATION_SNAPSHOT_INVALID`. No-op, если уже активен. Audit `ORDER_CALCULATION_ACTIVATED`. |
+| POST  | `/api/orders/:id/calculations`                    | ADMIN, SHOP_MANAGER | «+ Вариант просчёта»: клон активного (старый получает снимок, новый активен, живые таблицы не меняются). В CALCULATION потребности клона сразу рассчитываются (свои строки `WorkshopNeed`). Body `CreateOrderCalculationSchema` (`{ title? }`). 409 `ORDER_CALCULATION_LOCKED` вне DRAFT/CALCULATION. Audit `ORDER_CALCULATION_CREATED`. |
+| POST  | `/api/orders/:id/calculations/:calcId/activate`   | ADMIN, SHOP_MANAGER | Переключение активного варианта: capture текущего → restore снимка → пересборка производных (`resyncColorwayDerived` без пересчёта потребностей) + оверлей route-оверрайдов. Потребности живут per вариант (`WorkshopNeed.orderCalculationId`) и переключением НЕ пересчитываются: строки варианта ре-линкуются к пересозданным расцветкам, а если строк нет и заказ в CALCULATION — вариант рассчитывается впервые («отправить вариант на расчёт» = активировать его). Гейты: 409 `ORDER_CALCULATION_LOCKED` (статус), 409 `ORDER_CALCULATION_SNAPSHOT_INVALID`. No-op, если уже активен. Audit `ORDER_CALCULATION_ACTIVATED`. |
 | PATCH | `/api/orders/:id/calculations/:calcId`            | ADMIN, SHOP_MANAGER | Переименование (`RenameOrderCalculationSchema`). Разрешено в любом статусе. Audit `ORDER_CALCULATION_RENAMED`. |
 | DELETE| `/api/orders/:id/calculations/:calcId`            | ADMIN, SHOP_MANAGER | Удалить НЕактивный вариант. 409 `ORDER_CALCULATION_ACTIVE_DELETE_FORBIDDEN` / `ORDER_CALCULATION_LAST_DELETE_FORBIDDEN` / `ORDER_CALCULATION_LOCKED`. Audit `ORDER_CALCULATION_DELETED`. |
 
