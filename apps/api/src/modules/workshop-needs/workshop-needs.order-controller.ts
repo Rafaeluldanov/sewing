@@ -10,6 +10,7 @@ import {
 import {
   CalculateWorkshopNeedsSchema,
   CreateManualWorkshopNeedSchema,
+  type AcceptCalculatedWorkshopNeedsResultDto,
   type CalculateWorkshopNeedsDto,
   type CalculateWorkshopNeedsResultDto,
   type CreateManualWorkshopNeedDto,
@@ -66,6 +67,20 @@ export class WorkshopNeedsOrderController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<WorkshopNeedDto> {
     return this.needs.createManual(orderId, dto, user.employeeId);
+  }
+
+  /**
+   * Экран «Согласование закупки»: bulk «Принять теорию для
+   * непроверенных». Все `CALCULATED`-строки заказа получают
+   * `purchaseQty := purchaseQty ?? calculatedQty` + `status = REVIEWED`
+   * (см. `WorkshopNeedsService.acceptCalculatedForOrder`).
+   */
+  @Post(':id/workshop-needs/accept-calculated')
+  acceptCalculated(
+    @Param('id') orderId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<AcceptCalculatedWorkshopNeedsResultDto> {
+    return this.needs.acceptCalculatedForOrder(orderId, user.employeeId);
   }
 
   /**

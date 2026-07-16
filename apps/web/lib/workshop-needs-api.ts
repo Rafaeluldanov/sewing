@@ -9,6 +9,7 @@
  * что валидирует backend.
  */
 import type {
+  AcceptCalculatedWorkshopNeedsResultDto,
   CalculateWorkshopNeedsDto,
   CalculateWorkshopNeedsResultDto,
   CreateManualWorkshopNeedDto,
@@ -84,6 +85,20 @@ export function getOrderWorkshopNeeds(
   return apiFetch<WorkshopNeedListItemDto[]>(
     `/orders/${encodeURIComponent(orderId)}/workshop-needs`,
     { cache: 'no-store' },
+  );
+}
+
+/**
+ * Экран «Согласование закупки»: bulk «Принять теорию для
+ * непроверенных» — все `CALCULATED`-строки заказа получают
+ * `purchaseQty := purchaseQty ?? calculatedQty` + `status = REVIEWED`.
+ */
+export function acceptCalculatedWorkshopNeeds(
+  orderId: string,
+): Promise<AcceptCalculatedWorkshopNeedsResultDto> {
+  return apiFetch<AcceptCalculatedWorkshopNeedsResultDto>(
+    `/orders/${encodeURIComponent(orderId)}/workshop-needs/accept-calculated`,
+    { method: 'POST' },
   );
 }
 

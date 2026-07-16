@@ -989,6 +989,24 @@ export interface CalculateWorkshopNeedsResultDto {
   warnings: string[];
 }
 
+/**
+ * Результат `POST /api/orders/:id/workshop-needs/accept-calculated` —
+ * bulk-операции «Принять теорию для непроверенных» на экране
+ * «Согласование закупки» (`/admin/orders/[id]/purchase-validation`).
+ *
+ * Семантика «оставить как есть»: каждая строка заказа в статусе
+ * `CALCULATED` получает `purchaseQty := purchaseQty ?? calculatedQty`
+ * (теория копируется в факт ЯВНО — смета и план→факт документ видят
+ * согласованное число, а не fallback) и `status = REVIEWED`. Строки,
+ * где закупщик уже ввёл `purchaseQty`, но не сменил статус, просто
+ * помечаются `REVIEWED` — введённое число не перетирается.
+ */
+export interface AcceptCalculatedWorkshopNeedsResultDto {
+  orderId: string;
+  /** Сколько строк переведено в `REVIEWED` этой операцией. */
+  updated: number;
+}
+
 // ---------------------------------------------------------------------------
 // UI grouping: kind helper (Polish-итерация `/admin/workshop-needs`)
 // ---------------------------------------------------------------------------

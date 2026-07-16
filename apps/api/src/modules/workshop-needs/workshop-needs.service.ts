@@ -390,6 +390,94 @@ export class WorkshopNeedsService {
   }
 
   // -------------------------------------------------------------------------
+  // BULK ACCEPT (экран «Согласование закупки»)
+  // -------------------------------------------------------------------------
+
+  /**
+   * «Принять теорию для непроверенных» — bulk-операция экрана
+   * «Согласование закупки» (`/admin/orders/[id]/purchase-validation`).
+   *
+   * Менеджер обзвонил поставщиков, вручную поправил строки, где объём/
+   * цена изменились, а по остальным решил «оставить как есть». Эта
+   * операция закрывает хвост одним действием: каждая строка заказа в
+   * статусе `CALCULATED` получает
+   *   - `purchaseQty := purchaseQty ?? calculatedQty` — теория копируется
+   *     в факт ЯВНО (решение владельца: в смете и план→факт документе
+   *     должно быть видно согласованное число, а не «прочерк + fallback»);
+   *     уже введённый закупщиком `purchaseQty` НЕ перетирается;
+   *   - `status = REVIEWED` — строка засчитана как проверенная.
+   *
+   * Не трогаем: `CANCELLED` (погашена), `REVIEWED`/`PURCHASE_PLANNED`+
+   * (уже проверены/дальше по конвейеру), ручные строки (создаются сразу
+   * `REVIEWED`). Статус заказа сознательно НЕ гейтим — паритет с
+   * построчным `update()`, который тоже доступен в любом статусе заказа.
+   *
+   * На себестоимость влияет так же, как построчная правка: смета
+   * пересобирается только явным `completeCalculation` /
+   * `recalculateCostEstimate` (см. `OrderCostEstimatesService`).
+   */
+  async acceptCalculatedForOrder(
+    orderId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<{ orderId: string; updated: number }> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, status: true },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        statusCode: 404,
+        message: 'Заказ не найден',
+        code: 'ORDER_NOT_FOUND',
+      });
+    }
+
+    const pending = await this.prisma.workshopNeed.findMany({
+      where: { orderId, status: 'CALCULATED' },
+      select: { id: true, purchaseQty: true, calculatedQty: true },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    });
+    if (pending.length === 0) {
+      return { orderId, updated: 0 };
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const need of pending) {
+        await tx.workshopNeed.update({
+          where: { id: need.id },
+          data: {
+            status: 'REVIEWED',
+            purchaseQty: need.purchaseQty ?? need.calculatedQty,
+          },
+        });
+      }
+      // Одно bulk-событие вместо N построчных: операция атомарная и
+      // семантически одна («принял теорию»), а needIds в payload дают
+      // достаточно следов для разбора.
+      await this.audit.log(
+        {
+          event: 'WORKSHOP_NEEDS_ACCEPTED_CALCULATED',
+          entityType: 'ORDER',
+          entityId: orderId,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            orderId,
+            orderStatus: order.status,
+            updated: pending.length,
+            needIds: pending.map((n) => n.id),
+          },
+        },
+        tx,
+      );
+    });
+
+    this.logger.log(
+      `event=workshop_need.accept_calculated order=${orderId} updated=${pending.length}`,
+    );
+    return { orderId, updated: pending.length };
+  }
+
+  // -------------------------------------------------------------------------
   // MANUAL ADDITION / DELETE (этап «Корректировка материалов после просчёта»)
   // -------------------------------------------------------------------------
 
