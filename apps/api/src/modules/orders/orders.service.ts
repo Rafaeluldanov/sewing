@@ -510,6 +510,19 @@ export class OrdersService {
             ];
       await this.writeOrderVariants(tx, created.id, variantInputs);
 
+      // Фича «Варианты просчёта» (FEATURE_ORDER_CALCULATIONS): у заказа
+      // всегда ≥1 калькуляция — заводим активную #0 сразу при создании
+      // (бэкфилл миграции покрыл существующие заказы, lazy-ensure в
+      // `OrderCalculationsService.listForOrder` — третий рубеж).
+      await tx.orderCalculation.create({
+        data: {
+          orderId: created.id,
+          ordinal: 0,
+          title: 'Вариант 1',
+          isActive: true,
+        },
+      });
+
       // Этап 2 «План операций на заказе» (см.
       // `docs/operation-time-norms-recon.md §11`): после фиксации
       // заказа и его items в той же транзакции считаем snapshot
@@ -901,6 +914,17 @@ export class OrdersService {
                 },
               }
             : {}),
+        },
+      });
+
+      // Фича «Варианты просчёта»: активная калькуляция #0 — как в
+      // основном пути `create()` (см. комментарий там).
+      await tx.orderCalculation.create({
+        data: {
+          orderId: orderRow.id,
+          ordinal: 0,
+          title: 'Вариант 1',
+          isActive: true,
         },
       });
 

@@ -187,6 +187,17 @@
     shopfloor-фильтр (`?divisionCode=…`) — тоже по `code`.
 - **`OrderItem`** — позиция заказа `(orderId, productId, sizeId)` uniq,
   `qtyPlan: Int`. Один заказ — один `productId` (инвариант ADR-0009).
+- **`OrderCalculation`** *(фича `FEATURE_ORDER_CALCULATIONS`)* — вариант
+  просчёта заказа: `(orderId, ordinal)` uniq, `title`, `isActive`
+  (ровно один активный на заказ — partial unique index
+  `OrderCalculation_one_active_per_order`), `costTotalRub:
+  Decimal(14,2)?` (ярлык вкладки), `snapshot: Json?` (снимок входов
+  неактивного варианта, контракт
+  `@sewing/shared/order-calculations::OrderCalculationSnapshotV1Schema`;
+  `null` у активного — его состояние = живые данные заказа).
+  `onDelete: Cascade` от `Order`. НЕ путать с `OrderVariant`
+  (расцветка): расцветки живут внутри каждого варианта. См.
+  `apps/api/src/modules/order-calculations/*`.
 - **`Client`** — справочник клиентов: `name`, `phone?`, `email?`,
   `comment?`, `isActive`. Не уникален по `name`. Индексы:
   `isActive`, `name`.

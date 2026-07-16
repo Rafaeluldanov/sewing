@@ -115,6 +115,10 @@ export async function resetDatabase(prisma: {
     // подчинена `Order` через `ON DELETE CASCADE`. Truncate явный
     // ради читаемости, хотя CASCADE на `"Order"` ниже сделал бы то же.
     'WorkshopNeed',
+    // Фича «Варианты просчёта» (см. `prisma/schema.prisma::OrderCalculation`):
+    // вкладки вариантов, подчинены `Order` через `ON DELETE CASCADE`.
+    // Truncate явный ради читаемости.
+    'OrderCalculation',
     'OrderItem',
     '"Order"',
     // MVP-1 «Лекала»: справочные таблицы лекала. Truncate обязателен,

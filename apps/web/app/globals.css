@@ -13656,6 +13656,155 @@ body:has(.admin-layout) .app-header { display: none !important; }
   }
 }
 
+/* --- Варианты просчёта заказа (FEATURE_ORDER_CALCULATIONS) ---------------
+   Ряд вкладок вариантов НАД окном заказа (см.
+   `components/orders/calculations/order-calc-tabs.tsx`). Уровень выше
+   `.order-detail-tabs` — поэтому СВОЙ блок классов и свой визуальный
+   язык: активная вкладка несёт жёлтый маркер CTA (--btn-primary-*),
+   чтобы не путаться с белыми пилюлями разделов. */
+
+.order-calc-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.order-calc-tabs__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: stretch;
+  gap: 0.35rem;
+}
+
+.order-calc-tabs__tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.15rem;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-muted);
+  padding: 0 0.4rem 0 0;
+  min-width: 0;
+}
+
+.order-calc-tabs__tab--active {
+  background: var(--color-bg-card);
+  border-color: var(--btn-primary-edge);
+  box-shadow: inset 0 3px 0 var(--btn-primary-bg), var(--shadow-xs);
+}
+
+.order-calc-tabs__tab--locked {
+  opacity: 0.65;
+}
+
+.order-calc-tabs__switch {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.5rem 0.4rem 0.5rem 0.85rem;
+  border: none;
+  background: transparent;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-fg);
+  cursor: pointer;
+  min-width: 0;
+}
+
+.order-calc-tabs__switch:disabled {
+  cursor: default;
+}
+
+.order-calc-tabs__tab:not(.order-calc-tabs__tab--active)
+  .order-calc-tabs__switch:not(:disabled):hover {
+  color: var(--color-fg-strong);
+}
+
+.order-calc-tabs__title {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 16rem;
+}
+
+.order-calc-tabs__cost {
+  font-size: 0.8rem;
+  font-weight: 400;
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.order-calc-tabs__icon-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.5rem;
+  height: 1.5rem;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-fg-subtle);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.order-calc-tabs__icon-btn:not(:disabled):hover {
+  background: var(--color-bg-muted);
+  color: var(--color-fg);
+}
+
+.order-calc-tabs__add {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.5rem 0.85rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: transparent;
+  font: inherit;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+
+.order-calc-tabs__add:not(:disabled):hover {
+  border-color: var(--btn-primary-edge);
+  background: var(--color-bg-tint);
+  color: var(--color-fg);
+}
+
+.order-calc-tabs__add:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.order-calc-tabs__error {
+  font-size: 0.85rem;
+  color: var(--color-danger-fg);
+  background: var(--color-danger-soft);
+  border-radius: var(--radius-sm);
+  padding: 0.35rem 0.6rem;
+}
+
+.order-calc-tabs[data-pending] .order-calc-tabs__row {
+  opacity: 0.6;
+  pointer-events: none;
+}
+
+@media (max-width: 720px) {
+  .order-calc-tabs__row {
+    overflow-x: auto;
+    flex-wrap: nowrap;
+  }
+}
+
 /* --- Empty state for tabs without data ---------------------------------- */
 
 .order-tab-empty-state {

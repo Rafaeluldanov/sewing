@@ -37,7 +37,11 @@ import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listClients } from '@/lib/clients-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
-import { isColorwaysEnabled } from '@/lib/feature-flags';
+import {
+  isColorwaysEnabled,
+  isOrderCalculationsEnabled,
+} from '@/lib/feature-flags';
+import { OrderCalcTabsCreatePlaceholder } from '@/components/orders/calculations/order-calc-tabs';
 import { listSizes } from '@/lib/orders-api';
 import { listPatternCategories } from '@/lib/pattern-categories-api';
 import { listPatterns } from '@/lib/patterns-api';
@@ -151,6 +155,11 @@ export default async function AdminOrderNewPage() {
           </div>
         </AdminCard>
       )}
+
+      {/* Фича «Варианты просчёта»: в create-mode заказа ещё нет — единственная
+          вкладка «Вариант 1» + disabled-кнопка (по образцу disabled-вкладок
+          OrderDetailTabs). Живой ряд появится на карточке после создания. */}
+      {isOrderCalculationsEnabled() && <OrderCalcTabsCreatePlaceholder />}
 
       <AdminCreateOrderForm
         sizes={sizes}

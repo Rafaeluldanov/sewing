@@ -66,7 +66,10 @@ import { notFound } from 'next/navigation';
 import { Package } from 'lucide-react';
 import type { OrderDetailDto } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
-import type { OrderColorwaysDto } from '@sewing/shared';
+import type {
+  OrderCalculationsDto,
+  OrderColorwaysDto,
+} from '@sewing/shared';
 import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
 import { ApiRequestError } from '@/lib/api';
 import { getOrder } from '@/lib/orders-api';
@@ -74,8 +77,13 @@ import { listOrderPassports } from '@/lib/passports-api';
 import { getOrderCutIssueRules } from '@/lib/order-cut-issue-rules-api';
 import { getOrderColorways } from '@/lib/colorways-api';
 import { getOrderTechCardParameters } from '@/lib/order-tech-card-api';
-import { isColorwaysEnabled } from '@/lib/feature-flags';
+import {
+  isColorwaysEnabled,
+  isOrderCalculationsEnabled,
+} from '@/lib/feature-flags';
+import { getOrderCalculations } from '@/lib/order-calculations-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { OrderCalcTabs } from '@/components/orders/calculations/order-calc-tabs';
 import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorways-block';
 import { AdminPageShell } from '@/components/admin';
 import {
@@ -160,6 +168,18 @@ export default async function AdminOrderDetailPage({
     }
   }
 
+  // Фича «Варианты просчёта» (FEATURE_ORDER_CALCULATIONS): ряд вкладок
+  // вариантов НАД окном заказа. Ошибку запроса глушим — ряд просто не
+  // рисуется, карточка не падает (тот же приём, что у colorways).
+  let calculations: OrderCalculationsDto | null = null;
+  if (isOrderCalculationsEnabled()) {
+    try {
+      calculations = await getOrderCalculations(order.id);
+    } catch {
+      calculations = null;
+    }
+  }
+
   const clientName = order.client?.name ?? order.customer ?? null;
   const canIssuePassport = order.status === 'IN_PRODUCTION';
   // Подразделение заказа — FK на `CompanyDivision` (см.
@@ -177,6 +197,9 @@ export default async function AdminOrderDetailPage({
         mode="view"
         hero={
           <>
+            {calculations && (
+              <OrderCalcTabs orderId={order.id} initial={calculations} />
+            )}
             <OrderManagementHeader order={order} passports={passports} />
             <OrderActionCenter order={order} passports={passports} />
             {colorways && (

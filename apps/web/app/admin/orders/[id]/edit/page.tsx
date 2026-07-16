@@ -46,7 +46,13 @@ import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { getTechCard, listTechCards } from '@/lib/tech-cards-api';
 import { listWarehouses } from '@/lib/warehouses-api';
 import { getOrderColorways } from '@/lib/colorways-api';
-import { isColorwaysEnabled } from '@/lib/feature-flags';
+import {
+  isColorwaysEnabled,
+  isOrderCalculationsEnabled,
+} from '@/lib/feature-flags';
+import { getOrderCalculations } from '@/lib/order-calculations-api';
+import { OrderCalcTabs } from '@/components/orders/calculations/order-calc-tabs';
+import type { OrderCalculationsDto } from '@sewing/shared';
 import { AdminCard, AdminPageShell } from '@/components/admin';
 import type { ColorwayDraft } from '@/app/admin/orders/new/order-create-colorways';
 import {
@@ -276,6 +282,18 @@ export default async function AdminOrderEditPage({ params }: Params) {
     }
   }
 
+  // Фича «Варианты просчёта»: ряд вкладок вариантов над формой
+  // редактирования. Переключение предупреждает о несохранённых правках
+  // (`warnUnsavedForm`) — restore снимка перечитает страницу.
+  let calculations: OrderCalculationsDto | null = null;
+  if (isOrderCalculationsEnabled()) {
+    try {
+      calculations = await getOrderCalculations(order.id);
+    } catch {
+      calculations = null;
+    }
+  }
+
   const today = new Date().toISOString().slice(0, 10);
 
   // Order-workspace unification (см.
@@ -299,6 +317,14 @@ export default async function AdminOrderEditPage({ params }: Params) {
             {error}
           </div>
         </AdminCard>
+      )}
+
+      {calculations && (
+        <OrderCalcTabs
+          orderId={order.id}
+          initial={calculations}
+          warnUnsavedForm
+        />
       )}
 
       <AdminEditOrderForm

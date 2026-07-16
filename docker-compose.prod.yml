@@ -122,10 +122,12 @@ services:
       # Рантайм фиче-флаги веба (читаются server-side в `lib/feature-flags.ts`,
       # НЕ build-time NEXT_PUBLIC_*). По умолчанию `0` (OFF на проде); чтобы
       # включить — выставить в .env.prod и пересоздать web-контейнер:
-      #   FEATURE_COLORWAYS=1        — раздел «Расцветки» в заказах;
-      #   FEATURE_ERP_INTEGRATION=1  — вкладка «Интеграции» в настройках.
+      #   FEATURE_COLORWAYS=1          — раздел «Расцветки» в заказах;
+      #   FEATURE_ERP_INTEGRATION=1    — вкладка «Интеграции» в настройках;
+      #   FEATURE_ORDER_CALCULATIONS=1 — вкладки «Варианты просчёта» в заказе.
       FEATURE_COLORWAYS: ${FEATURE_COLORWAYS:-0}
       FEATURE_ERP_INTEGRATION: ${FEATURE_ERP_INTEGRATION:-0}
+      FEATURE_ORDER_CALCULATIONS: ${FEATURE_ORDER_CALCULATIONS:-0}
     depends_on:
       - api
     restart: always

@@ -16,6 +16,21 @@ export function isColorwaysEnabled(): boolean {
 }
 
 /**
+ * `FEATURE_ORDER_CALCULATIONS` — фича «Варианты просчёта заказа»
+ * (несколько альтернативных расчётов на заказ, вкладки над окном
+ * заказа; см. `@sewing/shared/order-calculations`,
+ * `apps/api/src/modules/order-calculations/*`). Как и colorways:
+ * на проде OFF по умолчанию (включается `FEATURE_ORDER_CALCULATIONS=1`),
+ * на dev — ON. Явное `=0` выключает везде.
+ */
+export function isOrderCalculationsEnabled(): boolean {
+  const raw = process.env.FEATURE_ORDER_CALCULATIONS;
+  if (raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false') return false;
+  return process.env.NODE_ENV !== 'production';
+}
+
+/**
  * `FEATURE_ERP_INTEGRATION` — раздел «Интеграции» в настройках компании
  * (связь с внешним ERP upgifts, см. `docs/upgifts-integration.md`).
  * Как и colorways: на проде OFF по умолчанию (включается

@@ -1,0 +1,575 @@
+/**
+ * Integration-тесты: «Варианты просчёта заказа»
+ * (`/api/orders/:id/calculations`, фича FEATURE_ORDER_CALCULATIONS).
+ *
+ * Дизайн «активный = живые данные»: активный вариант не хранит данных,
+ * его состояние = текущие таблицы заказа; неактивные — JSON-снимок
+ * входов. Переключение = capture → restore → пересборка производных
+ * существующими путями (см. `OrderCalculationsService.activate`).
+ *
+ * Покрытие:
+ *   1. Создание заказа (оба пути, включая inline-pattern) заводит ровно
+ *      одну активную калькуляцию #0.
+ *   2. POST /calculations клонирует активный: старый получает валидный
+ *      снимок, новый активен, живые таблицы не меняются.
+ *   3. Основной сценарий A↔B: расцветки, техкарта, route-оверрайды
+ *      (включая СБРОС утечки carry), ad-hoc параметр техкарты, ручная
+ *      строка снимка материалов (восстанавливается с исходным id).
+ *   4. Цены закупщика в CALCULATION переживают переключение
+ *      (восстановление по match-ключу; статус остаётся CALCULATED).
+ *   5. Гейты: REVIEWED-строка → 409; ручная isManual REVIEWED не
+ *      блокирует; статус вне DRAFT/CALCULATION → 409; удаление
+ *      активного → 409; activate активного → no-op 200.
+ */
+import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
+import request from 'supertest';
+
+import { loginAs, startTestApp, stopTestApp, type TestApp } from '../utils/app';
+import { describeWithDb, resetDatabase } from '../utils/db';
+import { seedMinimal, type SeedResult } from '../utils/seed';
+
+describeWithDb('integration — варианты просчёта заказа (OrderCalculation)', () => {
+  let t: TestApp;
+  let seed: SeedResult;
+  let manager: string;
+  let patternItemId: string;
+
+  beforeAll(async () => {
+    t = await startTestApp();
+  });
+  afterAll(async () => {
+    await stopTestApp(t);
+  });
+  beforeEach(async () => {
+    await resetDatabase(t.prisma);
+    seed = await seedMinimal(t.prisma);
+    manager = loginAs(t, seed.employees['shop-chief']);
+    const pattern = await t.prisma.patternItem.create({
+      data: {
+        name: 'Худи',
+        article: `ART-${Date.now().toString(36)}`,
+        status: 'ACTIVE',
+      },
+    });
+    patternItemId = pattern.id;
+  });
+
+  /** Простая техкарта с одной строкой полотна. */
+  async function createTechCard(code: string, name: string): Promise<string> {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/tech-cards')
+      .set('Cookie', manager)
+      .send({
+        code,
+        name,
+        materialLines: [
+          {
+            name: `Полотно ${name}`,
+            unit: 'м2',
+            qtyPerUnit: '0.42',
+            materialRole: 'MAIN_FABRIC',
+            fabricType: 'кулирка',
+            colorRule: 'ORDER_COLOR',
+          },
+        ],
+      })
+      .expect(201);
+    return res.body.id as string;
+  }
+
+  /** Маршрут из двух BY_SIZE-операций (ставки в seed). */
+  async function createRouteTemplate(): Promise<string> {
+    const rt = await t.prisma.routeTemplate.create({
+      data: {
+        code: `RT-CALC-${Date.now().toString(36)}`,
+        name: 'Маршрут вариантов',
+        steps: {
+          create: [
+            { index: 0, operationId: seed.operations['SEW_OVERLOCK_1'].id },
+            { index: 1, operationId: seed.operations['SEW_OVERLOCK_2'].id },
+          ],
+        },
+      },
+    });
+    return rt.id;
+  }
+
+  /** Заказ с двумя расцветками (Белый 60 / Чёрный 40 по размеру M). */
+  async function createOrder(
+    techCardId: string,
+    routeTemplateId?: string,
+  ): Promise<string> {
+    const res = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', manager)
+      .send({
+        orderDate: '2026-07-16T00:00:00.000Z',
+        patternItemId,
+        techCardId,
+        routeTemplateId,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+        variants: [
+          {
+            color: 'Белый',
+            techCardId,
+            sizes: [{ sizeId: seed.sizes.M, qtyPlan: 60 }],
+          },
+          {
+            color: 'Чёрный',
+            techCardId,
+            sizes: [{ sizeId: seed.sizes.M, qtyPlan: 40 }],
+          },
+        ],
+      })
+      .expect(201);
+    return res.body.id as string;
+  }
+
+  function api() {
+    return request(t.app.getHttpServer());
+  }
+
+  async function activate(orderId: string, calcId: string, expectStatus = 201) {
+    return api()
+      .post(`/api/orders/${orderId}/calculations/${calcId}/activate`)
+      .set('Cookie', manager)
+      .expect(expectStatus);
+  }
+
+  /** Оверрайд расценки шага по операции через PUT /route-overrides. */
+  async function setRateOverride(
+    orderId: string,
+    operationId: string,
+    rate: number | null,
+  ): Promise<void> {
+    const step = await t.prisma.orderRouteStep.findFirst({
+      where: { orderId, operationId },
+      select: { id: true },
+    });
+    expect(step).not.toBeNull();
+    await api()
+      .put(`/api/orders/${orderId}/route-overrides`)
+      .set('Cookie', manager)
+      .send({ steps: [{ stepId: step!.id, rateOverride: rate }] })
+      .expect(200);
+  }
+
+  async function rateOverrideOf(
+    orderId: string,
+    operationId: string,
+  ): Promise<number | null> {
+    const step = await t.prisma.orderRouteStep.findFirst({
+      where: { orderId, operationId },
+      select: { rateOverride: true },
+    });
+    return step?.rateOverride == null ? null : Number(step.rateOverride);
+  }
+
+  // -------------------------------------------------------------------------
+
+  test('создание заказа заводит ровно одну активную калькуляцию #0', async () => {
+    const tc = await createTechCard('TC-CALC-BASE', 'База');
+    const orderId = await createOrder(tc);
+
+    const calcs = await t.prisma.orderCalculation.findMany({
+      where: { orderId },
+    });
+    expect(calcs).toHaveLength(1);
+    expect(calcs[0]).toMatchObject({
+      ordinal: 0,
+      title: 'Вариант 1',
+      isActive: true,
+      snapshot: null,
+    });
+  });
+
+  test('inline-pattern путь создания тоже заводит калькуляцию #0', async () => {
+    const res = await api()
+      .post('/api/orders')
+      .set('Cookie', manager)
+      .send({
+        orderDate: '2026-07-16T00:00:00.000Z',
+        customer: 'Клиент-инлайн',
+        productMode: 'CREATE_FOR_CALCULATION',
+        newProductCalculation: {
+          sizes: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
+        },
+        items: [],
+      })
+      .expect(201);
+    const calcs = await t.prisma.orderCalculation.findMany({
+      where: { orderId: res.body.id as string },
+    });
+    expect(calcs).toHaveLength(1);
+    expect(calcs[0].isActive).toBe(true);
+  });
+
+  test('клонирование: старый активный получает снимок, живые данные не меняются', async () => {
+    const tc = await createTechCard('TC-CALC-CLONE', 'Клон');
+    const orderId = await createOrder(tc);
+
+    const res = await api()
+      .post(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .send({ title: 'Кулирка 190' })
+      .expect(201);
+
+    expect(res.body.items).toHaveLength(2);
+    const [first, second] = res.body.items;
+    expect(first).toMatchObject({ ordinal: 0, title: 'Вариант 1', isActive: false });
+    expect(second).toMatchObject({ ordinal: 1, title: 'Кулирка 190', isActive: true });
+    expect(res.body.activeId).toBe(second.id);
+    expect(res.body.canSwitch).toBe(true);
+
+    // Снимок старого активного валиден и несёт расцветки.
+    const stored = await t.prisma.orderCalculation.findUniqueOrThrow({
+      where: { id: first.id as string },
+    });
+    const snap = stored.snapshot as {
+      version: number;
+      variants: Array<{ color: string }>;
+    };
+    expect(snap.version).toBe(1);
+    expect(snap.variants.map((v) => v.color)).toEqual(['Белый', 'Чёрный']);
+
+    // Живые таблицы не тронуты — клон == текущие данные.
+    expect(
+      await t.prisma.orderVariant.count({ where: { orderId } }),
+    ).toBe(2);
+    const items = await t.prisma.orderItem.findMany({ where: { orderId } });
+    expect(items.map((i) => i.qtyPlan)).toEqual([100]);
+  });
+
+  test('A↔B: расцветки, техкарта, route-оверрайды (со сбросом утечки), параметр, ручная строка материалов', async () => {
+    const tc1 = await createTechCard('TC-CALC-A', 'Кулирка 160');
+    const tc2 = await createTechCard('TC-CALC-B', 'Кулирка 190');
+    const rt = await createRouteTemplate();
+    const orderId = await createOrder(tc1, rt);
+    const op1 = seed.operations['SEW_OVERLOCK_1'].id;
+    const op2 = seed.operations['SEW_OVERLOCK_2'].id;
+
+    // Состояние варианта A: оверрайд только на op1; ad-hoc параметр на
+    // расцветке #0; ручная строка снимка материалов.
+    await setRateOverride(orderId, op1, 55.5);
+    const variantA0 = await t.prisma.orderVariant.findFirstOrThrow({
+      where: { orderId, ordinal: 0 },
+      select: { id: true },
+    });
+    await t.prisma.orderTechCardParameter.create({
+      data: {
+        orderId,
+        orderVariantId: variantA0.id,
+        key: 'density',
+        label: 'Плотность',
+        inputType: 'TEXT',
+        isRequired: false,
+        sortOrder: 100,
+        sourceTechCardId: null, // ad-hoc: параметр заведён в заказе
+        value: '160',
+      },
+    });
+    // Ручная строка снимка материалов — НА РАСЦВЕТКЕ #0 (order-level
+    // группа при ≥2 расцветках «мертва», и пересборка снесла бы строку —
+    // это существующее поведение rebuild, не фичи).
+    const manualRow = await t.prisma.orderMaterialRequirement.create({
+      data: {
+        orderId,
+        orderVariantId: variantA0.id,
+        sortOrder: 900,
+        name: 'Усилительная лента A',
+        unit: 'м',
+        qtyPerUnit: '0.1',
+        totalQty: '10',
+        isManual: true,
+      },
+      select: { id: true },
+    });
+
+    // Клон → вариант B активен; меняем в нём всё.
+    const cloneRes = await api()
+      .post(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const calcA = cloneRes.body.items[0].id as string;
+    const calcB = cloneRes.body.items[1].id as string;
+
+    await api()
+      .patch(`/api/orders/${orderId}`)
+      .set('Cookie', manager)
+      .send({
+        variants: [
+          {
+            color: 'Красный',
+            techCardId: tc2,
+            sizes: [{ sizeId: seed.sizes.M, qtyPlan: 10 }],
+          },
+        ],
+      })
+      .expect(200);
+    await setRateOverride(orderId, op1, 99);
+    await setRateOverride(orderId, op2, 77);
+    // PATCH variants выше СНЁС каскадом variant-scoped параметр (полная
+    // замена OrderVariant — существующее поведение edit-формы). В B
+    // заводим свой ad-hoc параметр ORDER-LEVEL (`orderVariantId: null`):
+    // при ≤1 расцветке группа параметров живёт на уровне заказа, а
+    // variant-scoped группу materializeTechCardParameters счёл бы
+    // сиротой и снёс при resync.
+    await t.prisma.orderTechCardParameter.create({
+      data: {
+        orderId,
+        orderVariantId: null,
+        key: 'density',
+        label: 'Плотность',
+        inputType: 'TEXT',
+        isRequired: false,
+        sortOrder: 100,
+        sourceTechCardId: null,
+        value: '190',
+      },
+    });
+    await t.prisma.orderMaterialRequirement.delete({
+      where: { id: manualRow.id },
+    });
+
+    // B действительно живёт в живых таблицах.
+    expect(
+      (await t.prisma.orderItem.findMany({ where: { orderId } })).map(
+        (i) => i.qtyPlan,
+      ),
+    ).toEqual([10]);
+
+    // --- Переключаемся на A: всё состояние A восстановлено -----------------
+    await activate(orderId, calcA);
+
+    const variantsA = await t.prisma.orderVariant.findMany({
+      where: { orderId },
+      orderBy: { ordinal: 'asc' },
+      include: { sizes: true },
+    });
+    expect(variantsA.map((v) => v.color)).toEqual(['Белый', 'Чёрный']);
+    expect(variantsA.map((v) => v.sizes[0]?.qtyPlan)).toEqual([60, 40]);
+    const orderA = await t.prisma.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: { techCardId: true },
+    });
+    expect(orderA.techCardId).toBe(tc1);
+    expect(
+      (await t.prisma.orderItem.findMany({ where: { orderId } })).map(
+        (i) => i.qtyPlan,
+      ),
+    ).toEqual([100]);
+    // Оверрайды A: op1=55.5, op2 — ЯВНЫЙ null (сброс carry-утечки B).
+    expect(await rateOverrideOf(orderId, op1)).toBe(55.5);
+    expect(await rateOverrideOf(orderId, op2)).toBeNull();
+    // Ad-hoc параметр вернулся со значением A на расцветке #0.
+    const paramA = await t.prisma.orderTechCardParameter.findFirstOrThrow({
+      where: { orderId, key: 'density' },
+      select: { value: true, orderVariantId: true },
+    });
+    expect(paramA.value).toBe('160');
+    expect(paramA.orderVariantId).toBe(
+      variantsA.find((v) => v.ordinal === 0)!.id,
+    );
+    // Ручная строка материалов вернулась С ИСХОДНЫМ id и перецеплена на
+    // НОВУЮ расцветку #0 (remap по ordinal).
+    const manualBack = await t.prisma.orderMaterialRequirement.findUnique({
+      where: { id: manualRow.id },
+    });
+    expect(manualBack).not.toBeNull();
+    expect(manualBack!.isManual).toBe(true);
+    expect(manualBack!.orderVariantId).toBe(
+      variantsA.find((v) => v.ordinal === 0)!.id,
+    );
+
+    // --- И обратно на B: состояние B восстановлено --------------------------
+    await activate(orderId, calcB);
+
+    const variantsB = await t.prisma.orderVariant.findMany({
+      where: { orderId },
+      include: { sizes: true },
+    });
+    expect(variantsB.map((v) => v.color)).toEqual(['Красный']);
+    expect(variantsB[0].sizes[0]?.qtyPlan).toBe(10);
+    expect(
+      (
+        await t.prisma.order.findUniqueOrThrow({
+          where: { id: orderId },
+          select: { techCardId: true },
+        })
+      ).techCardId,
+    ).toBe(tc2);
+    expect(await rateOverrideOf(orderId, op1)).toBe(99);
+    expect(await rateOverrideOf(orderId, op2)).toBe(77);
+    expect(
+      (
+        await t.prisma.orderTechCardParameter.findFirstOrThrow({
+          where: { orderId, key: 'density' },
+          select: { value: true },
+        })
+      ).value,
+    ).toBe('190');
+    // Ручной строки A в варианте B нет — она удалена в B.
+    expect(
+      await t.prisma.orderMaterialRequirement.findUnique({
+        where: { id: manualRow.id },
+      }),
+    ).toBeNull();
+  });
+
+  test('CALCULATION: цены закупщика переживают переключение (restore по match-ключу)', async () => {
+    const tc = await createTechCard('TC-CALC-PRICE', 'Цены');
+    const orderId = await createOrder(tc);
+
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
+
+    const needs = await t.prisma.workshopNeed.findMany({
+      where: { orderId, isManual: false },
+      select: { id: true, sourceName: true, unit: true, orderVariantId: true },
+    });
+    expect(needs.length).toBeGreaterThan(0);
+    const priced = needs[0];
+    await t.prisma.workshopNeed.update({
+      where: { id: priced.id },
+      data: {
+        purchaseQty: '50',
+        quotedPrice: '123.4500',
+        quotedCurrency: 'RUB',
+        supplierNameText: 'ООО Ткани',
+        comment: 'скидка 5%',
+      },
+    });
+
+    // Клон (A→снимок с ценами) → назад на A: потребности пересчитаны,
+    // но цены восстановлены; статус остался CALCULATED.
+    const cloneRes = await api()
+      .post(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const calcA = cloneRes.body.items[0].id as string;
+
+    await activate(orderId, calcA);
+
+    const restored = await t.prisma.workshopNeed.findFirst({
+      where: {
+        orderId,
+        isManual: false,
+        sourceName: priced.sourceName,
+        unit: priced.unit,
+        orderVariantId: { not: null },
+      },
+    });
+    // Строка после пересчёта НОВАЯ (id сменился), но ценовые поля на месте.
+    expect(restored).not.toBeNull();
+    expect(Number(restored!.purchaseQty)).toBe(50);
+    expect(Number(restored!.quotedPrice)).toBeCloseTo(123.45, 4);
+    expect(restored!.quotedCurrency).toBe('RUB');
+    expect(restored!.supplierNameText).toBe('ООО Ткани');
+    expect(restored!.comment).toBe('скидка 5%');
+    expect(restored!.status).toBe('CALCULATED');
+  });
+
+  test('гейты: закупщик в работе → 409; ручная строка не блокирует; статус/удаление/no-op', async () => {
+    const tc = await createTechCard('TC-CALC-GATES', 'Гейты');
+    const orderId = await createOrder(tc);
+    const cloneRes = await api()
+      .post(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(201);
+    const calcA = cloneRes.body.items[0].id as string;
+    const calcB = cloneRes.body.items[1].id as string;
+
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
+
+    // REVIEWED-строка блокирует переключение адресной 409.
+    const need = await t.prisma.workshopNeed.findFirstOrThrow({
+      where: { orderId, isManual: false },
+      select: { id: true },
+    });
+    await t.prisma.workshopNeed.update({
+      where: { id: need.id },
+      data: { status: 'REVIEWED' },
+    });
+    const blocked = await activate(orderId, calcA, 409);
+    expect(blocked.body.code).toBe('ORDER_CALCULATION_NEEDS_IN_PROGRESS');
+
+    // Ручная isManual-строка (создаётся сразу REVIEWED) блокирует ТАК ЖЕ —
+    // зеркало гейта идемпотентности `calculateForOrder` (он считает все
+    // строки заказа): иначе 409 прилетел бы из фазы C уже после
+    // переключения входов.
+    await t.prisma.workshopNeed.update({
+      where: { id: need.id },
+      data: { status: 'CALCULATED' },
+    });
+    const manualNeed = await t.prisma.workshopNeed.create({
+      data: {
+        orderId,
+        isManual: true,
+        sourceType: 'MANUAL_ADDITION',
+        description: 'Ручная лента',
+        calculatedQty: '5',
+        unit: 'м',
+        status: 'REVIEWED',
+      },
+      select: { id: true },
+    });
+    const blockedByManual = await activate(orderId, calcA, 409);
+    expect(blockedByManual.body.code).toBe(
+      'ORDER_CALCULATION_NEEDS_IN_PROGRESS',
+    );
+
+    // Удалили ручную строку — переключение снова работает.
+    await t.prisma.workshopNeed.delete({ where: { id: manualNeed.id } });
+    await activate(orderId, calcA); // 201 — прошло
+
+    // Статусный гейт: вне DRAFT/CALCULATION всё write-API отвечает 409.
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'CALCULATION_DONE' },
+    });
+    const lockedActivate = await activate(orderId, calcB, 409);
+    expect(lockedActivate.body.code).toBe('ORDER_CALCULATION_LOCKED');
+    const lockedCreate = await api()
+      .post(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .send({})
+      .expect(409);
+    expect(lockedCreate.body.code).toBe('ORDER_CALCULATION_LOCKED');
+    // GET продолжает работать и honestly говорит canSwitch=false.
+    const listRes = await api()
+      .get(`/api/orders/${orderId}/calculations`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(listRes.body.canSwitch).toBe(false);
+
+    // Возвращаем DRAFT-подобное окно и проверяем остальные гейты.
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'CALCULATION' },
+    });
+    const delActive = await api()
+      .delete(`/api/orders/${orderId}/calculations/${calcA}`)
+      .set('Cookie', manager)
+      .expect(409);
+    expect(delActive.body.code).toBe('ORDER_CALCULATION_ACTIVE_DELETE_FORBIDDEN');
+
+    // activate уже активного — no-op 201 с тем же activeId.
+    const noop = await activate(orderId, calcA);
+    expect(noop.body.activeId).toBe(calcA);
+
+    // Удаление неактивного разрешено.
+    const afterDelete = await api()
+      .delete(`/api/orders/${orderId}/calculations/${calcB}`)
+      .set('Cookie', manager)
+      .expect(200);
+    expect(afterDelete.body.items).toHaveLength(1);
+  });
+});

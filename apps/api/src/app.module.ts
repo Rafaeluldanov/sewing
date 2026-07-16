@@ -40,6 +40,7 @@ import { TimeTrackingModule } from './modules/time-tracking/time-tracking.module
 import { CutReleasePolicyModule } from './modules/cut-release-policy/cut-release-policy.module.js';
 import { OrderCutIssueRulesModule } from './modules/order-cut-issue-rules/order-cut-issue-rules.module.js';
 import { OrderColorwaysModule } from './modules/order-colorways/order-colorways.module.js';
+import { OrderCalculationsModule } from './modules/order-calculations/order-calculations.module.js';
 import { OrderTechCardModule } from './modules/order-tech-card/order-tech-card.module.js';
 import { ClientsModule } from './modules/clients/clients.module.js';
 import { CompanySettingsModule } from './modules/company-settings/company-settings.module.js';
@@ -112,6 +113,7 @@ import { IntegrationsModule } from './modules/integrations/integrations.module.j
     CutReleasePolicyModule,
     OrderCutIssueRulesModule,
     OrderColorwaysModule,
+    OrderCalculationsModule,
     OrderTechCardModule,
     ClientsModule,
     CompanySettingsModule,

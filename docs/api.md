@@ -81,6 +81,7 @@
 - [20a. Material issues](#20a-material-issues)
 - [21. Cut release policy](#21-cut-release-policy)
 - [21a. Order cut issue rules](#21a-order-cut-issue-rules)
+- [21c. Order calculations (варианты просчёта)](#21c-order-calculations)
 - [22. Master calls](#22-master-calls)
 - [23. Master actions](#23-master-actions)
 - [24. Passports](#24-passports)
@@ -852,6 +853,31 @@ DTO: `@sewing/shared` (`BulkUpsertOrderCutIssueRulesSchema`,
 
 DTO: `@sewing/shared` (`OrderCutIssueRuleBannerDto`). Обслуживается
 `OrderCutIssueRulesService.getActiveBannerForOperation`.
+
+---
+
+<a id="21c-order-calculations"></a>
+## 21c. Order calculations (варианты просчёта)
+
+Источник: `order-calculations/order-calculations.controller.ts` (фича
+`FEATURE_ORDER_CALCULATIONS`). У заказа N альтернативных расчётов;
+активный = живые данные заказа, неактивные хранят JSON-снимок входов
+(см. `prisma/schema.prisma::OrderCalculation`,
+`@sewing/shared/order-calculations`). GET открыт любой авторизованной
+роли, write — `@Roles('ADMIN','SHOP_MANAGER')` на методах. Все
+write-эндпоинты возвращают свежий `OrderCalculationsDto`.
+
+| Метод | Путь                                              | RBAC                | Описание |
+| ----- | ------------------------------------------------- | ------------------- | -------- |
+| GET   | `/api/orders/:id/calculations`                    | Any auth            | Ряд вкладок (`OrderCalculationsDto`: `activeId`, `canSwitch`, items c `costTotalRub`-ярлыком). Lazy-ensure: заказу без калькуляций заводится активная #0. 404 `ORDER_NOT_FOUND`. |
+| POST  | `/api/orders/:id/calculations`                    | ADMIN, SHOP_MANAGER | «+ Вариант просчёта»: клон активного (старый получает снимок, новый активен, живые таблицы не меняются). Body `CreateOrderCalculationSchema` (`{ title? }`). 409 `ORDER_CALCULATION_LOCKED` вне DRAFT/CALCULATION. Audit `ORDER_CALCULATION_CREATED`. |
+| POST  | `/api/orders/:id/calculations/:calcId/activate`   | ADMIN, SHOP_MANAGER | Переключение активного варианта: capture текущего → restore снимка → пересборка производных (`resyncColorwayDerived` + оверлей route-оверрайдов + best-effort восстановление цен закупщика). Гейты ДО мутаций: 409 `ORDER_CALCULATION_LOCKED` (статус), 409 `ORDER_CALCULATION_NEEDS_IN_PROGRESS` (есть строки `WorkshopNeed` ≠ CALCULATED — зеркало гейта `calculateForOrder`), 409 `WORKSHOP_NEEDS_HAVE_STOCK`, 409 `ORDER_CALCULATION_SNAPSHOT_INVALID`. No-op, если уже активен. Audit `ORDER_CALCULATION_ACTIVATED`. |
+| PATCH | `/api/orders/:id/calculations/:calcId`            | ADMIN, SHOP_MANAGER | Переименование (`RenameOrderCalculationSchema`). Разрешено в любом статусе. Audit `ORDER_CALCULATION_RENAMED`. |
+| DELETE| `/api/orders/:id/calculations/:calcId`            | ADMIN, SHOP_MANAGER | Удалить НЕактивный вариант. 409 `ORDER_CALCULATION_ACTIVE_DELETE_FORBIDDEN` / `ORDER_CALCULATION_LAST_DELETE_FORBIDDEN` / `ORDER_CALCULATION_LOCKED`. Audit `ORDER_CALCULATION_DELETED`. |
+
+DTO/коды: `@sewing/shared/order-calculations`
+(`OrderCalculationsDto`, `OrderCalculationSnapshotV1Schema`,
+`ORDER_CALCULATION_ERROR_CODES`).
 
 ---
 

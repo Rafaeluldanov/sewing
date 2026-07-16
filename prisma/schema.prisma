@@ -1408,6 +1408,12 @@ model Order {
   /// `Order.techCardId` остаются «зеркалом первой расцветки». Пока
   /// расцветка одна — поведение системы прежнее.
   variants              OrderVariant[]
+  /// Фича «Варианты просчёта» (FEATURE_ORDER_CALCULATIONS): у заказа
+  /// N альтернативных расчётов (`OrderCalculation`), клиент выбирает
+  /// один. Активный вариант = живые данные заказа в существующих
+  /// таблицах; неактивные хранят JSON-снимок входов. НЕ путать с
+  /// `variants` (расцветки): расцветки живут ВНУТРИ каждого варианта.
+  calculations          OrderCalculation[]
   passports             Passport[]
   closureRequests       CuttingClosureRequest[]
   routeSteps            OrderRouteStep[]
@@ -1875,6 +1881,68 @@ model OrderVariantSize {
   @@unique([variantId, sizeId])
   @@index([variantId])
   @@index([sizeId])
+}
+
+/// Вариант просчёта заказа (фича FEATURE_ORDER_CALCULATIONS, см.
+/// `apps/api/src/modules/order-calculations/*`,
+/// `packages/shared/src/order-calculations.ts`).
+///
+/// Клиент часто просит посчитать заказ в нескольких вариантах (другой
+/// материал/техкарта, другие операции, другая цена) — в производство
+/// уходит ровно один. Дизайн «активный = живые данные»:
+///
+///   - у заказа всегда ≥1 калькуляция; ровно одна `isActive` (partial
+///     unique index в миграции — Prisma такое не моделирует);
+///   - АКТИВНЫЙ вариант не хранит данных здесь (`snapshot = null`) —
+///     его состояние и есть текущие данные заказа в существующих
+///     таблицах (OrderVariant/OrderRouteStep/OrderMaterialRequirement/
+///     OrderTechCardParameter/WorkshopNeed/…). Все читатели системы
+///     (страницы, производство, потребности) продолжают работать по
+///     `orderId` и ничего не знают про варианты;
+///   - НЕАКТИВНЫЙ вариант хранит `snapshot` (JSON, zod-контракт
+///     `OrderCalculationSnapshotV1Schema` в shared) — «входы», из
+///     которых расчётное поддерево полностью пересобирается;
+///   - переключение вкладки = `OrderCalculationsService.activate`:
+///     capture текущего состояния в старый активный → restore снимка
+///     целевого → пересборка производных СУЩЕСТВУЮЩИМИ путями
+///     (`OrdersService.resyncColorwayDerived` + оверлей route-оверрайдов
+///     + best-effort восстановление цен закупщика);
+///   - `costTotalRub` — ярлык вкладки: `Order.costEstimateTotalRub`
+///     на момент снятия снимка (у активной вкладки UI показывает
+///     живое значение заказа);
+///   - переключение возможно только в DRAFT|CALCULATION и пока
+///     потребности не ушли в работу закупщику (все non-manual
+///     `WorkshopNeed` в статусе CALCULATED, нет складских движений).
+///     После запуска в производство активный вариант «выбран», прочие
+///     остаются read-only историей просчёта.
+///
+/// НЕ путать с `OrderVariant` (расцветка): расцветки — часть ОДНОГО
+/// варианта просчёта и производятся все; варианты просчёта —
+/// взаимоисключающие альтернативы.
+model OrderCalculation {
+  id      String @id @default(cuid())
+  orderId String
+  /// Порядок вкладки в ряду (0-based, стабильный; дырки после
+  /// удалений допустимы). Уникален в рамках заказа.
+  ordinal Int
+  /// Человекочитаемое имя вкладки («Вариант 1», «Кулирка 190», …).
+  title   String
+  /// Ровно один активный на заказ (partial unique index
+  /// `OrderCalculation_one_active_per_order`).
+  isActive Boolean @default(false)
+  /// Снимок себестоимости для ярлыка вкладки (см. JSDoc модели).
+  costTotalRub Decimal? @db.Decimal(14, 2)
+  /// JSON-снимок входов варианта (`OrderCalculationSnapshotV1Schema`);
+  /// `null` у активного.
+  snapshot Json?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  @@unique([orderId, ordinal])
+  @@index([orderId])
 }
 
 /// Этап «Очередь выдачи кроя по размерам» (см.
