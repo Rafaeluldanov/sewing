@@ -57,6 +57,13 @@ function SubmitScanButton({ mode }: { mode: Mode }) {
 }
 
 function ResultCard({ state, mode }: { state: WorkFormState; mode: Mode }) {
+  if (state.warning) {
+    return (
+      <div className="warning-box" role="status">
+        <div className="warning-box__msg">{state.warning}</div>
+      </div>
+    );
+  }
   if (state.error) {
     return (
       <div className="error-box" role="alert">

@@ -131,6 +131,10 @@ export function SeamstressActivePanel({
   const [errorRequestId, setErrorRequestId] = useState<string | undefined>(
     undefined,
   );
+  // Мягкое предупреждение (не ошибка) — гейт «крой не размещён в
+  // ячейке»: сначала нужно разместить паспорт в ячейку. Показываем
+  // жёлтой плашкой, а не красной ошибкой (см. `WorkFormState.warning`).
+  const [warning, setWarning] = useState<string | null>(null);
   /**
    * Состояние модалки «не тот размер» — поднимается, когда после
    * успешного `lookupPassportAction` мы локально сравнили
@@ -225,6 +229,7 @@ export function SeamstressActivePanel({
     }
     setError(null);
     setErrorRequestId(undefined);
+    setWarning(null);
     setWrongSize(null);
     startTransition(async () => {
       const res = await lookupPassportAction(trimmed);
@@ -276,6 +281,13 @@ export function SeamstressActivePanel({
     if (confirmMode === 'issue') {
       startTransition(async () => {
         const res = await acceptPassportForIssueAction(confirm.id);
+        if (res.warning) {
+          // Гейт размещения — спокойное предупреждение, не ошибка.
+          setWarning(res.warning);
+          setConfirm(null);
+          setConfirmMode(null);
+          return;
+        }
         if (res.error) {
           setError(res.error);
           setErrorRequestId(res.errorRequestId);
@@ -347,6 +359,12 @@ export function SeamstressActivePanel({
           </p>
         </div>
 
+        {warning && (
+          <div className="warning-box" role="status">
+            <div className="warning-box__msg">{warning}</div>
+          </div>
+        )}
+
         {error && (
           <div className="error-box" role="alert">
             <div className="error-box__msg">{error}</div>
@@ -364,6 +382,7 @@ export function SeamstressActivePanel({
           onClick={() => {
             setError(null);
             setErrorRequestId(undefined);
+            setWarning(null);
             setScannerOpen('issue');
           }}
           disabled={isPending}

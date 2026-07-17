@@ -160,6 +160,12 @@ async function runWithPassport(
       },
     };
   } catch (e) {
+    // Гейт «крой не размещён в ячейке» — не ошибка, а ожидаемая
+    // ситуация: показываем мягкое предупреждение вместо красной
+    // плашки (см. `WorkFormState.warning`).
+    if (e instanceof ApiRequestError && e.code === 'PASSPORT_NOT_PLACED_IN_CELL') {
+      return { warning: e.message, errorRequestId: errorRequestId(e) };
+    }
     return { error: explainApiError(e), errorRequestId: errorRequestId(e) };
   }
 }

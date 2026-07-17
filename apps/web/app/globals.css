@@ -568,6 +568,21 @@ table.data-table th.num { text-align: right; }
   padding: 0 4px;
   border-radius: 3px;
 }
+/* Мягкое предупреждение (не ошибка) — например гейт «крой не размещён
+   в ячейке». Жёлтая плашка вместо красной ошибки. */
+.warning-box {
+  background: var(--color-warn-soft);
+  color: var(--color-warn-fg);
+  border: 1px solid #f0d79a;
+  border-radius: var(--radius-md);
+  padding: 0.85rem 1rem;
+  margin-bottom: 1rem;
+}
+.warning-box__msg {
+  font-weight: 600;
+  font-size: 1.05rem;
+  line-height: 1.35;
+}
 .info-box {
   background: var(--color-ok-soft);
   color: var(--color-ok-fg);
@@ -13736,6 +13751,17 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-weight: 400;
   color: var(--color-fg-muted);
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+/* Итерация 3: стадия варианта — чип «черновик» у не отправленных на расчёт */
+.order-calc-tabs__stage {
+  font-size: 0.7rem;
+  font-weight: 700;
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--status-draft-bg);
+  color: var(--status-draft-fg);
   white-space: nowrap;
 }
 
