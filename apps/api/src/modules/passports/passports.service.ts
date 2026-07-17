@@ -52,6 +52,7 @@ import {
   PassportNotInProgressException,
   PassportOperationAlreadyFinishedException,
   PassportNotPlaceableException,
+  PassportNotPlacedInCellException,
   PassportNotQcPassedException,
   PassportNotYoursException,
   PassportIssueBackwardException,
@@ -1779,6 +1780,11 @@ export class PassportsService {
     });
     if (!session) throw new ShiftSessionRequiredException();
 
+    // Гейт «размещение в ячейке обязательно перед уходом с кроя» —
+    // нельзя «получить крой», если паспорт не был размещён в ячейке
+    // (см. `assertPlacedBeforeLeavingCut`, инцидент 16.07.2026).
+    this.assertPlacedBeforeLeavingCut(passport, session.operation.category);
+
     // Операция, на которую встаёт паспорт: по умолчанию — операция смены,
     // но для возвращённого ОТК паспорта берётся операция его переделки
     // (см. `resolveOperationForPassport`). Так распошивщица «принимает»
@@ -2178,6 +2184,11 @@ export class PassportsService {
       include: { operation: { select: { category: true } } },
     });
     if (!session) throw new ShiftSessionRequiredException();
+
+    // Гейт «размещение в ячейке обязательно перед уходом с кроя» —
+    // scan-канал не должен быть лазейкой мимо ячеек (см.
+    // `assertPlacedBeforeLeavingCut`, инцидент 16.07.2026).
+    this.assertPlacedBeforeLeavingCut(passport, session.operation.category);
 
     // QC-gate для входа на ВТО (см. docs/flows.md §F6 / ADR-0013):
     // нельзя «принять» паспорт на операцию категории `IRONING`,
@@ -2997,6 +3008,48 @@ export class PassportsService {
     }
     if (status === PassportStatus.CANCELLED) {
       throw new PassportCancelledException();
+    }
+  }
+
+  /**
+   * Гейт «размещение в ячейке обязательно перед уходом с кроя».
+   *
+   * Инцидент 16.07.2026: пять паспортов (`P-20260716-0011..0015`) прошли
+   * МИМО ячеек — помощник раскройщика не выполнил `place`, а оверлокщик
+   * сразу забрал крой (`issueToEmployee`). Теперь такой обход запрещён:
+   * первый уход паспорта с кроя на производственную операцию возможен
+   * только если крой физически размещён в ячейке.
+   *
+   * Условие срабатывания (все сразу):
+   *   - `status === CREATED` — паспорт ещё «на крою» и ни разу не
+   *     выдавался/сканировался (выдача/скан переводят в `IN_PROGRESS`).
+   *     Паспорты уже в потоке НЕ перепроверяем — иначе гейт ломал бы
+   *     повторные сканы и активное производство;
+   *   - `currentCellId == null` — не размещён. У `CREATED`-паспорта это
+   *     эквивалентно «никогда не клали в ячейку»: `place` ставит
+   *     `currentCellId`, а обнуляет его только выдача (уже `IN_PROGRESS`);
+   *     `CELL_REMOVED` в коде не пишется;
+   *   - `sampleId == null` — сигнальные образцы через ячейки не идут
+   *     (создаются сразу «в работу», см. `OrderSamplesService`);
+   *   - целевая операция НЕ категории `CUTTING` — размещение стоит между
+   *     кроем/делением и первой швейной операцией, поэтому скан внутри
+   *     кроя гейт не блокирует.
+   */
+  private assertPlacedBeforeLeavingCut(
+    passport: {
+      status: PassportStatus;
+      currentCellId: string | null;
+      sampleId: string | null;
+    },
+    targetCategory: OperationCategory,
+  ): void {
+    if (
+      passport.status === PassportStatus.CREATED &&
+      passport.currentCellId == null &&
+      passport.sampleId == null &&
+      targetCategory !== OperationCategory.CUTTING
+    ) {
+      throw new PassportNotPlacedInCellException();
     }
   }
 

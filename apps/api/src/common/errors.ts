@@ -354,6 +354,18 @@ export class PassportNotPlaceableException extends BusinessException {
   }
 }
 
+export class PassportNotPlacedInCellException extends BusinessException {
+  constructor() {
+    super(
+      'PASSPORT_NOT_PLACED_IN_CELL',
+      'Крой не размещён в ячейке. Помощник раскройщика должен разместить ' +
+        'паспорт в ячейку, прежде чем его можно будет выдать или ' +
+        'отсканировать на операцию.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 export class CellNotFoundException extends BusinessException {
   constructor() {
     super('CELL_NOT_FOUND', 'Ячейка не найдена', HttpStatus.NOT_FOUND);

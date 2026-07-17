@@ -45,6 +45,10 @@ const RAW_API_ERROR_CODES = new Set([
   'ORDER_CUT_ISSUE_RULE_VIOLATION',
   'PASSPORT_SCAN_BACKWARD',
   'PASSPORT_ISSUE_BACKWARD',
+  // Гейт «крой не размещён в ячейке» — backend уже присылает готовую
+  // подсказку «Помощник раскройщика должен разместить паспорт в
+  // ячейку…», показываем её рабочему как есть.
+  'PASSPORT_NOT_PLACED_IN_CELL',
 ]);
 
 function explainApiError(e: unknown): string {
