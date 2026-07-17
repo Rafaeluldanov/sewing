@@ -49,6 +49,30 @@ function revalidateOrder(orderId: string): void {
   revalidatePath(`/admin/orders/${orderId}`);
 }
 
+/**
+ * Перечитать параметры + материалы техкарт заказа (свежий снимок).
+ * Нужен блоку расцветок: смена техкарты расцветки пересобирает
+ * спецификацию на бэке (`resyncColorwayDerived` → материалы), но
+ * `updateColorwayAction` возвращает только расцветки. Раньше материалы
+ * подтягивались лишь через `router.refresh()` → проп → useEffect, и это
+ * срабатывало ненадёжно (материалы «появлялись только после F5»).
+ * Блок вызывает этот action сразу после сохранения расцветки и
+ * обновляет спецификацию явно.
+ */
+export async function refreshTechCardParamsAction(
+  orderId: string,
+): Promise<TechCardParamsActionResult> {
+  try {
+    const data = await getOrderTechCardParameters(orderId);
+    return { ok: true, data };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return { ok: false, error: errorText(e, 'Не удалось обновить материалы') };
+    }
+    throw e;
+  }
+}
+
 export async function setTechCardParamValueAction(
   orderId: string,
   parameterId: string,

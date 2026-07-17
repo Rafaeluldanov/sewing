@@ -39,6 +39,7 @@ import {
   updateColorwayAction,
   deleteColorwayAction,
 } from '@/app/admin/orders/[id]/colorways-actions';
+import { refreshTechCardParamsAction } from '@/app/admin/orders/[id]/tech-card-params-actions';
 
 // Декоративный свотч по названию цвета (источник истины — имя-строка).
 const COLOR_HEX: Record<string, string> = {
@@ -113,6 +114,25 @@ export function OrderColorwaysBlock({
   );
   const [error, setError] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  // Фича «Варианты просчёта»: при переключении варианта бэкенд
+  // ПЕРЕСОЗДАЁТ расцветки (`OrderVariant`) с новыми id, и после
+  // `router.refresh()` в блок приезжает новый `initial` с этими id.
+  // `data`/`drafts` инициализируются из `initial` лишь при монтировании
+  // (useState), поэтому без синхронизации блок продолжал бы показывать
+  // расцветки ПРОШЛОГО варианта и сохранял бы по устаревшему id →
+  // «Расцветка не найдена» + правки «перетекали» между вариантами.
+  // Синхронизируем по НАБОРУ id расцветок: он меняется при переключении
+  // варианта / добавлении / удалении, но НЕ на каждый refresh — поэтому
+  // несохранённые правки в drafts при обычной ревалидации не сбрасываются.
+  const variantKey = initial.variants.map((v) => v.id).join(',');
+  useEffect(() => {
+    setData(initial);
+    setDrafts(
+      Object.fromEntries(initial.variants.map((v) => [v.id, toDraft(v)])),
+    );
+    setError(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [variantKey]);
   // Спецификация (материалы + параметры) — единое состояние на все карточки:
   // каждый write возвращает свежий полный DTO. После server-действий вне
   // спецификации (смена техкарты расцветки → router.refresh) приезжает новый
@@ -151,6 +171,15 @@ export function OrderColorwaysBlock({
         Object.fromEntries(r.data.variants.map((v) => [v.id, toDraft(v)])),
       );
       setError(null);
+      // Смена техкарты расцветки пересобирает СПЕЦИФИКАЦИЮ (материалы +
+      // параметры) на бэке, но `updateColorwayAction` возвращает только
+      // расцветки. Материалы раньше подтягивались лишь через
+      // `router.refresh()` → проп → useEffect, и это срабатывало
+      // ненадёжно («материалы появлялись только после F5»). Явно
+      // перечитываем спецификацию и обновляем `params` сразу.
+      void refreshTechCardParamsAction(orderId).then((pr) => {
+        if (pr.ok && pr.data) setParams(pr.data);
+      });
       // Правка расцветки на бэке пересобирает агрегат OrderItem
       // (Σ OrderVariantSize) — см. `OrdersService.resyncColorwayDerived`.
       // Но карточка заказа («План по размерам», итог qtyPlanTotal в шапке,

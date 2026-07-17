@@ -207,14 +207,18 @@ export default async function AdminOrderDetailPage({
       title="Заказы"
       subtitle={clientName ? `${divisionLabel} · ${clientName}` : divisionLabel}
     >
+      {/* Ряд вкладок вариантов — ВНЕ `key` окна: при переключении варианта
+          окно перемонтируется (свежие данные варианта), а сам ряд должен
+          оставаться стабильным, иначе его перемонтаж во время собственного
+          перехода (activate) мигает и рвёт состояние. */}
+      {calculations && (
+        <OrderCalcTabs orderId={order.id} initial={calculations} />
+      )}
       <OrderWorkspaceLayout
         key={workspaceKey}
         mode="view"
         hero={
           <>
-            {calculations && (
-              <OrderCalcTabs orderId={order.id} initial={calculations} />
-            )}
             <OrderManagementHeader
               order={order}
               passports={passports}
