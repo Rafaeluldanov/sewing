@@ -341,8 +341,13 @@ export function OrderColorwaysFieldset({
 }
 
 function Styles() {
+  // dangerouslySetInnerHTML: в CSS есть `content:''` — children `<style>`
+  // экранировал бы апострофы (`&#x27;`), браузер в `<style>` их не
+  // декодирует → hydration mismatch. __html вставляет строку как есть.
   return (
-    <style>{`
+    <style
+      dangerouslySetInnerHTML={{
+        __html: `
 .cwf { display:flex; flex-direction:column; gap:12px; }
 .cwf * { box-sizing:border-box; }
 .cwf-head { display:flex; align-items:center; justify-content:space-between; gap:10px; }
@@ -384,6 +389,8 @@ function Styles() {
 .cwf-totals { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
 .cwf-chip { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px; background:var(--color-bg-muted); font-size:12px; }
 .cwf-chip--total { background:var(--color-bg-tint); color:var(--color-fg-strong); }
-`}</style>
+`,
+      }}
+    />
   );
 }

@@ -468,8 +468,15 @@ export function OrderColorwaysBlock({
 }
 
 function BlockStyles() {
+  // dangerouslySetInnerHTML (а не children `<style>{…}`): в CSS есть
+  // `content:''` — React экранировал бы апострофы в children как
+  // `&#x27;`, но браузер внутри `<style>` не декодирует entities, из-за
+  // чего server-HTML расходился с client → hydration error. Через
+  // __html строка вставляется как есть, server === client.
   return (
-    <style>{`
+    <style
+      dangerouslySetInnerHTML={{
+        __html: `
 .cwl { display: flex; flex-direction: column; gap: 14px; background: var(--color-bg-card);
   border: 1px solid var(--color-border); border-radius: var(--admin-radius-card,12px);
   box-shadow: var(--admin-shadow-soft); padding: 16px 18px; }
@@ -530,6 +537,8 @@ function BlockStyles() {
 .cwl-note code { background:rgba(0,0,0,.06); padding:1px 5px; border-radius:5px; font-size:12px; }
 .cwl-spin { animation: cwl-rot 0.8s linear infinite; }
 @keyframes cwl-rot { to { transform: rotate(360deg); } }
-`}</style>
+`,
+      }}
+    />
   );
 }
