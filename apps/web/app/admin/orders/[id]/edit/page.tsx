@@ -328,6 +328,10 @@ export default async function AdminOrderEditPage({ params }: Params) {
       )}
 
       <AdminEditOrderForm
+        // Фича «Варианты просчёта»: форма держит расцветки/поля в
+        // useState(initial…). После переключения варианта нужен remount
+        // на данные нового варианта (иначе форма показывает прошлый).
+        key={calculations?.activeId ?? 'no-calc'}
         order={order}
         sizes={sizes}
         routeTemplates={routeTemplates}

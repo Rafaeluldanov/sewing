@@ -185,6 +185,14 @@ export default async function AdminOrderDetailPage({
     calculations != null &&
     (calculations.items.find((i) => i.isActive)?.sentToCalculationAt ==
       null);
+  // Фича «Варианты просчёта»: окно заказа зависит от АКТИВНОГО варианта.
+  // Client-компоненты внутри (блок расцветок/параметров, таблицы
+  // материалов) держат состояние в useState(initial) и своих fetch —
+  // после переключения варианта `router.refresh()` отдаёт новые
+  // серверные пропсы, но без remount client-state показывал бы данные
+  // прошлого варианта. `key` по активной калькуляции форсит перемонтаж
+  // всего поддерева на свежие данные варианта.
+  const workspaceKey = calculations?.activeId ?? 'no-calc';
 
   const clientName = order.client?.name ?? order.customer ?? null;
   const canIssuePassport = order.status === 'IN_PRODUCTION';
@@ -200,6 +208,7 @@ export default async function AdminOrderDetailPage({
       subtitle={clientName ? `${divisionLabel} · ${clientName}` : divisionLabel}
     >
       <OrderWorkspaceLayout
+        key={workspaceKey}
         mode="view"
         hero={
           <>
