@@ -140,6 +140,17 @@ export function OrderCalcTabs({ orderId, initial, warnUnsavedForm }: Props) {
                 onClick={() => onActivate(item.id, item.title)}
               >
                 <span className="order-calc-tabs__title">{item.title}</span>
+                {/* Итерация 3 «стадия per вариант»: черновик ещё не
+                    отправлен на расчёт — считается только кнопкой
+                    «Перевести в расчёт»/«Рассчитать вариант». */}
+                {item.sentToCalculationAt == null ? (
+                  <span
+                    className="order-calc-tabs__stage"
+                    title="Вариант ещё не отправлен на расчёт"
+                  >
+                    черновик
+                  </span>
+                ) : null}
                 {cost ? (
                   <span className="order-calc-tabs__cost">{cost}</span>
                 ) : null}

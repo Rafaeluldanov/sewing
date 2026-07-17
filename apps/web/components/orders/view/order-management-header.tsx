@@ -67,6 +67,13 @@ import { StartProductionButton } from '@/components/orders/start-production-butt
 interface Props {
   order: OrderDetailDto;
   passports: PassportListItemDto[];
+  /**
+   * Фича «Варианты просчёта», итерация 3 «стадия per вариант»: активный
+   * вариант — черновик (ещё не отправлен на расчёт). На заказе в
+   * CALCULATION это включает кнопку «Рассчитать вариант» (та же ручка
+   * `start-calculation`, ветка isVariantCalc — статус заказа не меняется).
+   */
+  activeCalculationDraft?: boolean;
 }
 
 /**
@@ -100,7 +107,11 @@ function HeaderField({
   );
 }
 
-export function OrderManagementHeader({ order, passports }: Props) {
+export function OrderManagementHeader({
+  order,
+  passports,
+  activeCalculationDraft,
+}: Props) {
   const status = order.status;
   const statusTone: AdminStatusTone = getOrderStatusTone(status);
   const statusLabel = formatOrderStatus(status);
@@ -129,6 +140,10 @@ export function OrderManagementHeader({ order, passports }: Props) {
   // IN_PRODUCTION     → «Завершить» + «Отменить» + «Выпустить паспорт»
   // DONE / CANCELLED  → нет действий (read-only)
   const showStartCalc = status === 'DRAFT';
+  // Итерация 3 «стадия per вариант»: активный вариант-черновик на заказе
+  // в расчёте — кнопка «Рассчитать вариант» (без смены статуса заказа).
+  const showCalcVariant =
+    status === 'CALCULATION' && activeCalculationDraft === true;
   // Полный запуск тиража доступен и из «Производства сигнального
   // образца»: образец уже в работе, менеджер запускает весь тираж
   // (backend `OrdersService.start` принимает SAMPLE_PRODUCTION).
@@ -397,6 +412,9 @@ export function OrderManagementHeader({ order, passports }: Props) {
         aria-label="Действия по заказу"
       >
         {showStartCalc && <StartCalculationButton orderId={order.id} />}
+        {showCalcVariant && (
+          <StartCalculationButton orderId={order.id} variantMode />
+        )}
         {showStartProd && <StartProductionButton orderId={order.id} />}
         {showRecalcPlan && (
           <RecalculateOperationPlanButton

@@ -1268,6 +1268,16 @@ export class WorkshopNeedsService {
         createdRows.push(row);
       }
 
+      // Итерация 3 «стадия per вариант»: успешный расчёт = вариант
+      // отправлен на расчёт. Штамп в той же tx, что и строки —
+      // инвариант «есть строки ⇔ вариант отправлен» не расходится.
+      if (activeCalculationId) {
+        await tx.orderCalculation.updateMany({
+          where: { id: activeCalculationId, sentToCalculationAt: null },
+          data: { sentToCalculationAt: new Date() },
+        });
+      }
+
       await this.audit.log(
         {
           event: 'WORKSHOP_NEEDS_CALCULATED',
@@ -2796,6 +2806,12 @@ const WORKSHOP_NEED_INCLUDE = {
 } as const satisfies Prisma.WorkshopNeedInclude;
 
 type WorkshopNeedRowWithRelations = WorkshopNeed & {
+  /** Фича «Варианты просчёта»: метка варианта (см. WORKSHOP_NEED_INCLUDE). */
+  orderCalculation?: {
+    id: string;
+    title: string;
+    isActive: boolean;
+  } | null;
   order?: {
     id: string;
     number: string;

@@ -179,6 +179,12 @@ export default async function AdminOrderDetailPage({
       calculations = null;
     }
   }
+  // Итерация 3 «стадия per вариант»: активный вариант — черновик →
+  // в шапке появляется «Рассчитать вариант» (заказ уже в CALCULATION).
+  const activeCalculationDraft =
+    calculations != null &&
+    (calculations.items.find((i) => i.isActive)?.sentToCalculationAt ==
+      null);
 
   const clientName = order.client?.name ?? order.customer ?? null;
   const canIssuePassport = order.status === 'IN_PRODUCTION';
@@ -200,7 +206,11 @@ export default async function AdminOrderDetailPage({
             {calculations && (
               <OrderCalcTabs orderId={order.id} initial={calculations} />
             )}
-            <OrderManagementHeader order={order} passports={passports} />
+            <OrderManagementHeader
+              order={order}
+              passports={passports}
+              activeCalculationDraft={activeCalculationDraft}
+            />
             <OrderActionCenter order={order} passports={passports} />
             {colorways && (
               <OrderColorwaysBlock

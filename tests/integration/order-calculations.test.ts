@@ -453,8 +453,9 @@ describeWithDb('integration — варианты просчёта заказа (
       },
     });
 
-    // Клон в CALCULATION: B становится активным и СРАЗУ рассчитывается —
-    // строки A остаются жить рядом (сосуществование).
+    // Клон в CALCULATION: B становится активным ЧЕРНОВИКОМ — итерация 3:
+    // автоматически НЕ рассчитывается (жалоба цеха «другой вариант тоже
+    // переводится в расчёт»). Строки A остаются жить рядом.
     const cloneRes = await api()
       .post(`/api/orders/${orderId}/calculations`)
       .set('Cookie', manager)
@@ -463,12 +464,39 @@ describeWithDb('integration — варианты просчёта заказа (
     const calcA = cloneRes.body.items[0].id as string;
     const calcB = cloneRes.body.items[1].id as string;
     expect(calcA).toBe(calcAId);
+    // Стадии в DTO: A отправлен на расчёт, клон B — черновик.
+    expect(cloneRes.body.items[0].sentToCalculationAt).not.toBeNull();
+    expect(cloneRes.body.items[1].sentToCalculationAt).toBeNull();
+    expect(
+      await t.prisma.workshopNeed.count({
+        where: { orderId, orderCalculationId: calcB },
+      }),
+    ).toBe(0);
 
+    // «Отправить вариант на расчёт» = та же ручка start-calculation
+    // (ветка isVariantCalc: заказ уже в CALCULATION, статус не меняется).
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
     const rowsB = await t.prisma.workshopNeed.findMany({
       where: { orderId, orderCalculationId: calcB },
       select: { id: true },
     });
     expect(rowsB.length).toBe(rowsA.length);
+    expect(
+      (
+        await t.prisma.order.findUniqueOrThrow({
+          where: { id: orderId },
+          select: { status: true },
+        })
+      ).status,
+    ).toBe('CALCULATION');
+    // Повторная отправка уже отправленного варианта — адресная ошибка.
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(409);
     // Строки A живы (те же id, цены на месте).
     const pricedAfterClone = await t.prisma.workshopNeed.findUnique({
       where: { id: priced.id },
@@ -551,14 +579,19 @@ describeWithDb('integration — варианты просчёта заказа (
       data: { purchaseQty: '10', quotedPrice: '100', quotedCurrency: 'RUB' },
     });
 
-    // Клон B (активен, рассчитан, цены НЕ заполнены). Смета по заказу
-    // при активном A обязана видеть только строки A.
+    // Клон B (активен, черновик) → явная отправка на расчёт (итерация 3),
+    // цены НЕ заполнены. Смета по заказу при активном A обязана видеть
+    // только строки A.
     const cloneRes = await api()
       .post(`/api/orders/${orderId}/calculations`)
       .set('Cookie', manager)
       .send({})
       .expect(201);
     const calcB = cloneRes.body.items[1].id as string;
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
     await activate(orderId, calcA);
 
     const est = await api()
@@ -623,7 +656,8 @@ describeWithDb('integration — варианты просчёта заказа (
 
     // Итерация 2: REVIEWED-строка варианта B НЕ блокирует переключение —
     // строки вариантов сосуществуют, activate ничего не пересчитывает у
-    // чужих. Вариант A рассчитывается ПРИ АКТИВАЦИИ (строк не было).
+    // чужих. Итерация 3: активация НЕ считает вариант — A остаётся
+    // черновиком, пока менеджер явно не нажмёт «Рассчитать вариант».
     const bNeed = await t.prisma.workshopNeed.findFirstOrThrow({
       where: { orderId, orderCalculationId: calcB },
       select: { id: true },
@@ -633,10 +667,21 @@ describeWithDb('integration — варианты просчёта заказа (
       data: { status: 'REVIEWED' },
     });
     await activate(orderId, calcA); // 201 — прошло, гейта больше нет
+    expect(
+      await t.prisma.workshopNeed.count({
+        where: { orderId, orderCalculationId: calcA },
+      }),
+    ).toBe(0); // активация НЕ рассчитала черновик (жалоба цеха закрыта)
+
+    // Явная отправка варианта A на расчёт.
+    await api()
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', manager)
+      .expect(201);
     const aRows = await t.prisma.workshopNeed.count({
       where: { orderId, orderCalculationId: calcA },
     });
-    expect(aRows).toBeGreaterThan(0); // первый расчёт варианта A
+    expect(aRows).toBeGreaterThan(0);
     // Строка B осталась REVIEWED и нетронутой.
     expect(
       (

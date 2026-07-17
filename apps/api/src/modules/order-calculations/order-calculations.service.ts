@@ -18,7 +18,6 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
 import { OrdersService } from '../orders/orders.service.js';
-import { WorkshopNeedsService } from '../workshop-needs/workshop-needs.service.js';
 import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 
 /** Провалидированные ссылки снимка на справочники (см.
@@ -62,11 +61,12 @@ interface SnapshotRefs {
  *      СОСУЩЕСТВУЮТ per вариант (`orderCalculationId`) — переключение их
  *      НЕ пересчитывает и не трогает работу закупщика по другим
  *      вариантам (гейты «закупщик в работе»/склада из activate ушли).
- *      Здесь только: ре-линк строк варианта к пересозданным расцветкам
- *      (по `variantColor`); а если строк ещё нет и заказ в CALCULATION —
- *      ПЕРВЫЙ расчёт варианта («отправить вариант на расчёт» =
- *      активировать его) + legacy-восстановление цен из снимков, снятых
- *      до пер-вариантных строк.
+ *      Итерация 3 «стадия per вариант»: активация ВООБЩЕ ничего не
+ *      считает — вариант-черновик (`sentToCalculationAt = null`)
+ *      рассчитывается только явной кнопкой («Перевести в расчёт» /
+ *      «Рассчитать вариант» → `OrdersService.startCalculation`, ветка
+ *      isVariantCalc). Здесь только ре-линк строк варианта к
+ *      пересозданным расцветкам (по `variantColor`).
  *
  * Инвариант устойчивости: фазы C–E идут отдельными транзакциями. Сбой в
  * середине оставляет данные КОНСИСТЕНТНЫМИ (входы уже переключены), но
@@ -86,7 +86,6 @@ export class OrderCalculationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly orders: OrdersService,
-    private readonly workshopNeeds: WorkshopNeedsService,
     private readonly audit: AuditService,
   ) {}
 
@@ -107,6 +106,7 @@ export class OrderCalculationsService {
         title: true,
         isActive: true,
         costTotalRub: true,
+        sentToCalculationAt: true,
         updatedAt: true,
       },
     });
@@ -126,6 +126,7 @@ export class OrderCalculationsService {
         costTotalRub: r.isActive
           ? (order.costEstimateTotalRub?.toString() ?? null)
           : (r.costTotalRub?.toString() ?? null),
+        sentToCalculationAt: r.sentToCalculationAt?.toISOString() ?? null,
         updatedAt: r.updatedAt.toISOString(),
       })),
     };
@@ -198,18 +199,12 @@ export class OrderCalculationsService {
       );
     });
 
-    // Итерация 2 (потребности per вариант): строки WorkshopNeed остались
-    // у прежнего активного варианта. Если заказ уже в CALCULATION —
-    // сразу считаем потребности клона (его входы = текущие данные,
-    // гейт идемпотентности скоуплен на новый пустой вариант и пройдёт),
-    // чтобы карточка не показывала пустые потребности после «+ Вариант».
-    if (order.status === OrderStatus.CALCULATION) {
-      await this.workshopNeeds.calculateForOrder(
-        orderId,
-        { force: false },
-        actorEmployeeId ?? null,
-      );
-    }
+    // Итерация 3 «стадия per вариант»: клон рождается ЧЕРНОВИКОМ
+    // (sentToCalculationAt = null) — его потребности НЕ считаются
+    // автоматически даже на заказе в CALCULATION. Менеджер отправляет
+    // вариант на расчёт явной кнопкой (OrdersService.startCalculation,
+    // ветка isVariantCalc). Строки WorkshopNeed остались у прежнего
+    // активного варианта и продолжают жить.
 
     return this.listForOrder(orderId);
   }
@@ -426,28 +421,17 @@ export class OrderCalculationsService {
     await this.overlayRouteOverrides(orderId, snap, actorEmployeeId);
 
     // --- Фаза E: потребности варианта --------------------------------------
-    // Строки варианта сосуществуют со строками других вариантов и не
-    // менялись, пока вариант лежал снимком (неактивный вариант не
-    // редактируем). Если строки есть — только ре-линк к пересозданным
+    // Итерация 3 «стадия per вариант»: активация НИЧЕГО не считает —
+    // вариант-черновик (sentToCalculationAt = null) остаётся черновиком,
+    // его расчёт запускается только явной кнопкой («Перевести в расчёт»/
+    // «Рассчитать вариант» → OrdersService.startCalculation). Здесь
+    // только ре-линк уже существующих строк варианта к пересозданным
     // расцветкам (orderVariantId ушёл в SetNull при replace расцветок).
-    // Если строк нет и заказ в CALCULATION — первый расчёт варианта:
-    // «отправить вариант на расчёт» = активировать его.
     const needRows = await this.prisma.workshopNeed.count({
       where: { orderId, orderCalculationId: target.id },
     });
     if (needRows > 0) {
       await this.relinkNeedVariants(orderId, target.id);
-    } else if (order.status === OrderStatus.CALCULATION) {
-      await this.workshopNeeds.calculateForOrder(
-        orderId,
-        { force: false },
-        actorEmployeeId ?? null,
-      );
-      // Legacy-совместимость: снимки, снятые ДО пер-вариантных строк,
-      // несут цены закупщика — восстанавливаем их на свежий расчёт.
-      if (snap.workshopNeedValues.length > 0) {
-        await this.restoreWorkshopNeedValues(orderId, snap, refs);
-      }
     }
 
     return this.listForOrder(orderId);
@@ -980,146 +964,6 @@ export class OrderCalculationsService {
         data: { orderVariantId: variantId },
       });
     }
-  }
-
-  /**
-   * Legacy-фолбэк первого расчёта варианта: восстановление ценовых полей
-   * закупщика на свежих (пересчитанных) строках WorkshopNeed из снимка,
-   * снятого ДО пер-вариантных строк. Первичный match-ключ —
-   * `variantOrdinal|sourceType|sourceId|unit` (sourceId снова живой,
-   * т.к. materialRequirements восстановлены с исходными id); fallback —
-   * `variantOrdinal|materialRole|sourceName|unit`, применяется только
-   * при уникальности с обеих сторон. Статус строки НЕ трогаем.
-   */
-  private async restoreWorkshopNeedValues(
-    orderId: string,
-    snap: OrderCalculationSnapshotV1,
-    refs: SnapshotRefs,
-  ): Promise<void> {
-    const variants = await this.prisma.orderVariant.findMany({
-      where: { orderId },
-      select: { id: true, ordinal: true },
-    });
-    const ordinalByVariantId = new Map(
-      variants.map((v) => [v.id, v.ordinal] as const),
-    );
-
-    // Свежепосчитанные строки штампованы активным (= целевым) вариантом.
-    const needs = await this.prisma.workshopNeed.findMany({
-      where: {
-        orderId,
-        isManual: false,
-        orderSampleId: null,
-        AND: [ACTIVE_CALCULATION_NEED_WHERE],
-      },
-      select: {
-        id: true,
-        orderVariantId: true,
-        sourceType: true,
-        sourceId: true,
-        materialRole: true,
-        sourceName: true,
-        unit: true,
-      },
-    });
-
-    const primaryKey = (v: {
-      variantOrdinal: number | null;
-      sourceType: string | null;
-      sourceId: string | null;
-      unit: string;
-    }) =>
-      v.sourceId == null
-        ? null
-        : `${v.variantOrdinal ?? 'x'}|${v.sourceType ?? ''}|${v.sourceId}|${v.unit}`;
-    const fallbackKey = (v: {
-      variantOrdinal: number | null;
-      materialRole: string | null;
-      sourceName: string | null;
-      unit: string;
-    }) =>
-      `${v.variantOrdinal ?? 'x'}|${v.materialRole ?? ''}|${v.sourceName ?? ''}|${v.unit}`;
-
-    const needView = needs.map((n) => ({
-      id: n.id,
-      variantOrdinal:
-        n.orderVariantId == null
-          ? null
-          : (ordinalByVariantId.get(n.orderVariantId) ?? null),
-      sourceType: n.sourceType,
-      sourceId: n.sourceId,
-      materialRole: n.materialRole,
-      sourceName: n.sourceName,
-      unit: n.unit,
-    }));
-
-    const byPrimary = new Map<string, string[]>();
-    const byFallback = new Map<string, string[]>();
-    for (const n of needView) {
-      const pk = primaryKey(n);
-      if (pk) byPrimary.set(pk, [...(byPrimary.get(pk) ?? []), n.id]);
-      const fk = fallbackKey(n);
-      byFallback.set(fk, [...(byFallback.get(fk) ?? []), n.id]);
-    }
-    const fallbackCounts = new Map<string, number>();
-    for (const v of snap.workshopNeedValues) {
-      const fk = fallbackKey(v);
-      fallbackCounts.set(fk, (fallbackCounts.get(fk) ?? 0) + 1);
-    }
-
-    let restored = 0;
-    for (const v of snap.workshopNeedValues) {
-      const pk = primaryKey(v);
-      let needId: string | null = null;
-      const primaryHits = pk ? (byPrimary.get(pk) ?? []) : [];
-      if (primaryHits.length === 1) {
-        needId = primaryHits[0];
-      } else {
-        const fk = fallbackKey(v);
-        const fallbackHits = byFallback.get(fk) ?? [];
-        if (fallbackHits.length === 1 && fallbackCounts.get(fk) === 1) {
-          needId = fallbackHits[0];
-        }
-      }
-      if (!needId) continue;
-
-      const supplierId =
-        v.selectedSupplierId && refs.validSupplierIds.has(v.selectedSupplierId)
-          ? v.selectedSupplierId
-          : null;
-      try {
-        await this.prisma.workshopNeed.update({
-          where: { id: needId },
-          data: {
-            purchaseQty: v.purchaseQty,
-            packSize: v.packSize,
-            quotedPrice: v.quotedPrice,
-            quotedCurrency: v.quotedCurrency,
-            supplierNameText: v.supplierNameText,
-            purchaseItemNameText: v.purchaseItemNameText,
-            selectedSupplierId: supplierId,
-            selectedSupplierCatalogItemId:
-              supplierId &&
-              v.selectedSupplierCatalogItemId &&
-              refs.validCatalogItemIds.has(v.selectedSupplierCatalogItemId)
-                ? v.selectedSupplierCatalogItemId
-                : null,
-            comment: v.comment,
-            expectedDeliveryDate: v.expectedDeliveryDate
-              ? new Date(v.expectedDeliveryDate)
-              : null,
-          },
-        });
-        restored += 1;
-      } catch (err) {
-        OrderCalculationsService.log.warn(
-          `restoreWorkshopNeedValues order=${orderId} need=${needId} failed: ${(err as Error).message}`,
-        );
-      }
-    }
-    OrderCalculationsService.log.log(
-      `event=order_calculation.prices_restored order=${orderId} restored=${restored}/${snap.workshopNeedValues.length}`,
-    );
   }
 
   // -------------------------------------------------------------------------

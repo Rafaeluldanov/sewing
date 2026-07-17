@@ -25,16 +25,25 @@ import { startCalculationOrderAction } from '@/app/orders/actions';
 
 interface Props {
   orderId: string;
+  /**
+   * Фича «Варианты просчёта», итерация 3: заказ уже в «Расчёте», а
+   * активный вариант — черновик. Та же ручка `start-calculation`
+   * (ветка isVariantCalc на бэке): считает потребности ЭТОГО варианта,
+   * статус заказа не меняется. Меняются только подпись и confirm.
+   */
+  variantMode?: boolean;
 }
 
-export function StartCalculationButton({ orderId }: Props) {
+export function StartCalculationButton({ orderId, variantMode }: Props) {
   const [pending, startTransition] = useTransition();
   const [error, setError] = useState<string | null>(null);
 
   const handleClick = () => {
     if (
       !window.confirm(
-        'Перевести заказ в статус «Расчёт»? Будут автоматически собраны строки потребности цеха по лекалу и техкарте.',
+        variantMode
+          ? 'Рассчитать этот вариант? Будут собраны строки потребности цеха для активного варианта; другие варианты не затрагиваются.'
+          : 'Перевести заказ в статус «Расчёт»? Будут автоматически собраны строки потребности цеха по лекалу и техкарте.',
       )
     )
       return;
@@ -69,7 +78,11 @@ export function StartCalculationButton({ orderId }: Props) {
         disabled={pending}
       >
         <Calculator size={16} strokeWidth={1.6} aria-hidden />
-        {pending ? 'Расчёт…' : 'Перевести в расчёт'}
+        {pending
+          ? 'Расчёт…'
+          : variantMode
+            ? 'Рассчитать вариант'
+            : 'Перевести в расчёт'}
       </button>
       {error && (
         <div className="error-box" role="alert">

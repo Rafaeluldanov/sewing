@@ -2873,7 +2873,16 @@ export class OrdersService {
   ): Promise<OrderDetailDto> {
     const order = await this.prisma.order.findUnique({
       where: { id },
-      include: { items: true, variants: { select: { techCardId: true } } },
+      include: {
+        items: true,
+        variants: { select: { techCardId: true } },
+        // Итерация 3 «стадия per вариант»: активная калькуляция — для
+        // ветки «рассчитать вариант» на заказе, уже прошедшем DRAFT.
+        calculations: {
+          where: { isActive: true },
+          select: { id: true, title: true, sentToCalculationAt: true },
+        },
+      },
     });
     if (!order) {
       throw new NotFoundException({
@@ -2881,9 +2890,20 @@ export class OrdersService {
         message: 'Заказ не найден',
       });
     }
-    if (order.status !== OrderStatus.DRAFT) {
+    // Итерация 3 «стадия per вариант»: у каждого варианта просчёта своя
+    // отправка на расчёт. Первый вариант переводит ЗАКАЗ DRAFT →
+    // CALCULATION; последующие варианты-черновики рассчитываются этой же
+    // ручкой БЕЗ смены статуса заказа (ветка `isVariantCalc`).
+    const activeCalculation = order.calculations[0] ?? null;
+    const isVariantCalc =
+      order.status === OrderStatus.CALCULATION &&
+      activeCalculation != null &&
+      activeCalculation.sentToCalculationAt == null;
+    if (order.status !== OrderStatus.DRAFT && !isVariantCalc) {
       throw new OrderInvalidStatusTransitionException(
-        `Перевести в расчёт можно только заказ в статусе «Черновик» (текущий: ${order.status}).`,
+        order.status === OrderStatus.CALCULATION
+          ? 'Активный вариант просчёта уже отправлен на расчёт.'
+          : `Перевести в расчёт можно только заказ в статусе «Черновик» (текущий: ${order.status}).`,
       );
     }
     if (!order.patternItemId) {
@@ -3011,14 +3031,18 @@ export class OrdersService {
       });
       await this.audit.log(
         {
-          event: 'ORDER_CALCULATION_STARTED',
+          event: isVariantCalc
+            ? 'ORDER_CALCULATION_VARIANT_SENT'
+            : 'ORDER_CALCULATION_STARTED',
           entityType: 'ORDER',
           entityId: id,
           employeeId: actorEmployeeId ?? null,
           payload: {
             orderId: id,
-            previousStatus: OrderStatus.DRAFT,
+            previousStatus: order.status,
             nextStatus: OrderStatus.CALCULATION,
+            calculationId: activeCalculation?.id ?? null,
+            calculationTitle: activeCalculation?.title ?? null,
             workshopNeedsCount: calc.count,
             methods: calc.methods,
             warningsCount: calc.warnings.length,
@@ -4093,6 +4117,13 @@ export class OrdersService {
             sizes: { select: { sizeId: true, qtyPlan: true } },
           },
         },
+        // Итерация 3 «стадия per вариант»: потребности пересчитываются
+        // только у варианта, ЯВНО отправленного на расчёт. Черновик
+        // (sentToCalculationAt = null) правится без побочного расчёта.
+        calculations: {
+          where: { isActive: true },
+          select: { sentToCalculationAt: true },
+        },
       },
     });
     if (!order) return;
@@ -4155,8 +4186,14 @@ export class OrdersService {
       await this.syncOrderRouteStepsSnapshot(orderId, tx);
     });
 
+    // Пересчёт потребностей: заказ в CALCULATION И активный вариант
+    // отправлен на расчёт (легаси-заказ без калькуляций = отправлен).
+    const activeCalculation = order.calculations[0];
+    const activeVariantSent =
+      !activeCalculation || activeCalculation.sentToCalculationAt != null;
     if (
       order.status === OrderStatus.CALCULATION &&
+      activeVariantSent &&
       !opts?.skipWorkshopNeedsRecalc
     ) {
       await this.workshopNeeds.calculateForOrder(

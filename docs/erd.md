@@ -191,7 +191,11 @@
   просчёта заказа: `(orderId, ordinal)` uniq, `title`, `isActive`
   (ровно один активный на заказ — partial unique index
   `OrderCalculation_one_active_per_order`), `costTotalRub:
-  Decimal(14,2)?` (ярлык вкладки), `snapshot: Json?` (снимок входов
+  Decimal(14,2)?` (ярлык вкладки),
+  `sentToCalculationAt: DateTime?` (стадия варианта: когда ЯВНО
+  отправлен на расчёт; `null` = черновик — не считается ни активацией,
+  ни клоном; ставится в `WorkshopNeedsService.calculateForOrder`),
+  `snapshot: Json?` (снимок входов
   неактивного варианта, контракт
   `@sewing/shared/order-calculations::OrderCalculationSnapshotV1Schema`;
   `null` у активного — его состояние = живые данные заказа).

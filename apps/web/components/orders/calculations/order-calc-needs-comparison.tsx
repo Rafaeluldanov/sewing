@@ -110,8 +110,8 @@ export async function OrderCalcNeedsComparison({ orderId }: Props) {
               </div>
               {rows.length === 0 ? (
                 <p className="calc-needs-compare__hint">
-                  Вариант ещё не рассчитан — переключитесь на его вкладку
-                  (потребности считаются при активации варианта).
+                  Вариант ещё не отправлен на расчёт — переключитесь на его
+                  вкладку и нажмите «Рассчитать вариант».
                 </p>
               ) : (
                 <div className="admin-table-wrap">
