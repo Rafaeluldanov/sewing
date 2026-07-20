@@ -74,10 +74,46 @@ import { ManualMaterialArrivalActions } from '@/components/orders/materials/manu
 import { OrderMaterialCorrections } from '@/components/orders/materials/order-material-corrections';
 import { MaterialIssuesSection } from '@/components/orders/material-issues/material-issues-section';
 import { OrderMaterialsUnifiedTable } from '@/components/orders/materials/order-materials-unified-table';
-import { OrderCalcNeedsComparison } from '@/components/orders/calculations/order-calc-needs-comparison';
+import { OrderNeedsCollapsible } from '@/components/orders/materials/order-needs-collapsible';
+import { getOrderCalculations } from '@/lib/order-calculations-api';
 import { isOrderCalculationsEnabled } from '@/lib/feature-flags';
 import { OrderPlannedCostSummaryCard } from '@/components/orders/order-planned-cost-summary-card';
 import { OrderOutsourceList } from '@/components/orders/view/order-outsource-list';
+
+/**
+ * Компактная сводка для верхней части сворачиваемого блока потребности:
+ * Σ материалов (RUB), сколько строк с ценой, сколько к закупке.
+ * Считается по строкам АКТИВНОГО варианта (не-CANCELLED).
+ */
+function buildNeedsSummary(
+  needs: WorkshopNeedListItemDto[],
+): Array<{ label: string; value: string }> {
+  const active = needs.filter((n) => n.status !== 'CANCELLED');
+  let totalRub = 0;
+  let priced = 0;
+  let toPurchase = 0;
+  for (const n of active) {
+    const hasPrice = n.quotedPrice != null;
+    if (hasPrice) priced += 1;
+    if (n.purchaseQty != null && Number(n.purchaseQty) > 0) toPurchase += 1;
+    if (hasPrice && (n.quotedCurrency ?? 'RUB') === 'RUB') {
+      const qty = Number(n.purchaseQty ?? n.calculatedQty);
+      const price = Number(n.quotedPrice);
+      if (Number.isFinite(qty) && Number.isFinite(price)) {
+        totalRub += qty * price;
+      }
+    }
+  }
+  return [
+    {
+      label: 'Материалы',
+      value: `${totalRub.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`,
+    },
+    { label: 'Строк', value: String(active.length) },
+    { label: 'С ценой', value: `${priced} / ${active.length}` },
+    { label: 'К закупке', value: String(toPurchase) },
+  ];
+}
 
 interface Props {
   order: OrderDetailDto;
@@ -158,6 +194,29 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
     }
   }
 
+  // Фича «Варианты просчёта»: сводка + метка активного варианта для
+  // сворачиваемого блока потребности цеха. Список — только активного
+  // варианта (default scope ACTIVE). Ошибки глушим — блок покажется без
+  // сводки/метки, но не упадёт.
+  const calcEnabled = isOrderCalculationsEnabled();
+  let activeNeeds: WorkshopNeedListItemDto[] = [];
+  try {
+    activeNeeds = await getOrderWorkshopNeeds(order.id);
+  } catch {
+    activeNeeds = [];
+  }
+  let activeVariantLabel: string | null = null;
+  if (calcEnabled) {
+    try {
+      const calcs = await getOrderCalculations(order.id);
+      const active = calcs.items.find((i) => i.isActive);
+      if (active) activeVariantLabel = `${active.title} · активный`;
+    } catch {
+      activeVariantLabel = null;
+    }
+  }
+  const needsSummary = buildNeedsSummary(activeNeeds);
+
   return (
     <div className="order-needs-tab">
       {noNeeds && order.status === 'DRAFT' ? (
@@ -187,22 +246,36 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
             cost breakdown belongs to a dedicated cost screen or
             aggregate-only totals card.
           */}
-          <OrderMaterialsUnifiedTable
-            orderId={order.id}
-            materialIssues={materialIssues}
-            materialsAndHardwareCostPolicy={
-              order.materialsAndHardwareCostPolicy ?? 'INCLUDE'
-            }
-          />
-
           {/*
-            Фича «Варианты просчёта» (итерация 2): потребности живут per
-            вариант. Канонический вид выше — только активный вариант;
-            этот блок даёт сравнение всех вариантов (рендерится, когда
-            вариантов больше одного).
+            Фича «Варианты просчёта»: список материалов — только
+            АКТИВНОГО варианта (другие варианты переключаются вкладками
+            над окном). Обёрнут в сворачиваемый блок: сверху сводка +
+            метка варианта, список под «Развернуть» (по умолчанию свёрнут).
+            Когда фича выключена — таблица как раньше, без обёртки.
           */}
-          {isOrderCalculationsEnabled() && (
-            <OrderCalcNeedsComparison orderId={order.id} />
+          {calcEnabled ? (
+            <OrderNeedsCollapsible
+              title="Потребность цеха"
+              count={activeNeeds.length}
+              variantLabel={activeVariantLabel}
+              summary={needsSummary}
+            >
+              <OrderMaterialsUnifiedTable
+                orderId={order.id}
+                materialIssues={materialIssues}
+                materialsAndHardwareCostPolicy={
+                  order.materialsAndHardwareCostPolicy ?? 'INCLUDE'
+                }
+              />
+            </OrderNeedsCollapsible>
+          ) : (
+            <OrderMaterialsUnifiedTable
+              orderId={order.id}
+              materialIssues={materialIssues}
+              materialsAndHardwareCostPolicy={
+                order.materialsAndHardwareCostPolicy ?? 'INCLUDE'
+              }
+            />
           )}
 
           <ManualMaterialArrivalActions
