@@ -11985,6 +11985,104 @@ body:has(.admin-layout) .app-header { display: none !important; }
   gap: 6px;
 }
 
+/* --- Сворачивание на экране закупщика (см. `collapse.tsx`) ----------------
+   Три уровня: страница («Свернуть все»), карточка заказа, секция.
+   Всё по умолчанию развёрнуто — экран остаётся прежним. */
+
+.wn-collapse-all {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+
+.wn-chev {
+  transition: transform 0.18s ease;
+}
+
+.wn-chev--open {
+  transform: rotate(180deg);
+}
+
+/* Шапка карточки + кнопка сворачивания в одну строку. */
+.wn-card-headline {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.5rem;
+}
+
+.wn-card-headline > :first-child {
+  flex: 1;
+  min-width: 0;
+}
+
+.wn-card-toggle {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  margin-top: 2px;
+  border: 1px solid var(--color-border-strong);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-card);
+  color: var(--color-fg-muted);
+  cursor: pointer;
+}
+
+.wn-card-toggle:hover {
+  border-color: var(--btn-primary-edge);
+  background: var(--color-bg-tint);
+  color: var(--color-fg);
+}
+
+/* Строка-сводка у свёрнутого заказа. */
+.wn-card-collapsed {
+  padding: 0.1rem 0.2rem 0.35rem;
+  font-size: 0.82rem;
+  color: var(--color-fg-subtle);
+}
+
+/* Заголовок секции становится кнопкой сворачивания. */
+.wn-section-toggle {
+  width: 100%;
+  border: none;
+  background: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: left;
+  padding: 0;
+  align-items: center;
+}
+
+.wn-section-toggle:hover .workshop-need-section__label {
+  color: var(--color-fg-strong);
+}
+
+/* Сумма по секции — прижата вправо, видна и в свёрнутом виде. */
+.wn-section-sum {
+  margin-left: auto;
+  font-size: 0.8rem;
+  font-weight: 700;
+  color: var(--color-fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* Ряд вкладок вариантов внутри карточки заказа. */
+.workshop-order-group-card__variants {
+  padding: 0 0 0.6rem;
+}
+
+.workshop-order-group-card__draft {
+  margin: 0 0 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-soft);
+  color: var(--color-fg-muted);
+  font-size: 0.85rem;
+}
+
 /* Backward-compat: старый класс `.workshop-need-section__list`
    (использовался ранее в lines-mode). Сохраняем для совместимости —
    там может ещё что-то рендериться через старый markup. */
@@ -12953,17 +13051,23 @@ body:has(.admin-layout) .app-header { display: none !important; }
   align-self: flex-end;
 }
 
+/* Кнопка сохранения строки — «галочка в кружке» в ОСНОВНОМ цвете
+   (жёлтая CTA), как остальные основные действия системы. */
 .wn-zone__body--log .wn-save {
   height: var(--wn-fh);
   min-width: 42px;
-  border: 0;
+  border: 1px solid var(--btn-primary-edge, #e7b51e);
   border-radius: 8px;
-  background: var(--admin-accent, #2f7fd1);
-  color: #fff;
+  background: var(--btn-primary-bg, #ffd23f);
+  color: var(--btn-primary-fg, #3a2f00);
   cursor: pointer;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+}
+
+.wn-zone__body--log .wn-save:hover:not(:disabled) {
+  background: var(--btn-primary-bg-hover, #ffca1f);
 }
 
 .wn-zone__body--log .wn-save:disabled {

@@ -39,6 +39,12 @@ interface Props {
    * правки формы будут потеряны.
    */
   warnUnsavedForm?: boolean;
+  /**
+   * Компактный режим (экран закупщика `/admin/workshop-needs`): только
+   * ПЕРЕКЛЮЧЕНИЕ вариантов — без «+ Вариант просчёта», переименования и
+   * удаления. Управление составом вариантов живёт в карточке заказа.
+   */
+  compact?: boolean;
 }
 
 function formatCost(value: string | null): string | null {
@@ -48,7 +54,12 @@ function formatCost(value: string | null): string | null {
   return `${num.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
 }
 
-export function OrderCalcTabs({ orderId, initial, warnUnsavedForm }: Props) {
+export function OrderCalcTabs({
+  orderId,
+  initial,
+  warnUnsavedForm,
+  compact,
+}: Props) {
   const router = useRouter();
   const [dto, setDto] = useState<OrderCalculationsDto>(initial);
   const [error, setError] = useState<string | null>(null);
@@ -155,17 +166,21 @@ export function OrderCalcTabs({ orderId, initial, warnUnsavedForm }: Props) {
                   <span className="order-calc-tabs__cost">{cost}</span>
                 ) : null}
               </button>
-              <button
-                type="button"
-                className="order-calc-tabs__icon-btn"
-                title="Переименовать вариант"
-                aria-label={`Переименовать вариант «${item.title}»`}
-                disabled={isPending}
-                onClick={() => onRename(item.id, item.title)}
-              >
-                ✎
-              </button>
-              {!isActive && dto.canSwitch ? (
+              {/* Компактный режим (экран закупщика): только переключение —
+                  состав вариантов правится в карточке заказа. */}
+              {!compact && (
+                <button
+                  type="button"
+                  className="order-calc-tabs__icon-btn"
+                  title="Переименовать вариант"
+                  aria-label={`Переименовать вариант «${item.title}»`}
+                  disabled={isPending}
+                  onClick={() => onRename(item.id, item.title)}
+                >
+                  ✎
+                </button>
+              )}
+              {!compact && !isActive && dto.canSwitch ? (
                 <button
                   type="button"
                   className="order-calc-tabs__icon-btn"
@@ -180,15 +195,17 @@ export function OrderCalcTabs({ orderId, initial, warnUnsavedForm }: Props) {
             </div>
           );
         })}
-        <button
-          type="button"
-          className="order-calc-tabs__add"
-          disabled={isPending || !dto.canSwitch}
-          title={lockHint ?? 'Скопировать активный вариант в новую вкладку'}
-          onClick={onCreate}
-        >
-          + Вариант просчёта
-        </button>
+        {!compact && (
+          <button
+            type="button"
+            className="order-calc-tabs__add"
+            disabled={isPending || !dto.canSwitch}
+            title={lockHint ?? 'Скопировать активный вариант в новую вкладку'}
+            onClick={onCreate}
+          >
+            + Вариант просчёта
+          </button>
+        )}
       </div>
       {error ? <div className="order-calc-tabs__error">{error}</div> : null}
     </div>

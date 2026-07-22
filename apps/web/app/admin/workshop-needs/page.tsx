@@ -78,6 +78,16 @@ import {
 import { BulkCreatePoProvider } from './bulk-create-po';
 import { CompleteCalculationForm } from './complete-calculation-form';
 import {
+  CollapseAllButton,
+  CollapseProvider,
+  CollapsibleOrderCard,
+  CollapsibleSection,
+} from './collapse';
+import { OrderCalcTabs } from '@/components/orders/calculations/order-calc-tabs';
+import { getOrderCalculations } from '@/lib/order-calculations-api';
+import { isOrderCalculationsEnabled } from '@/lib/feature-flags';
+import type { OrderCalculationsDto } from '@sewing/shared';
+import {
   InlineEditWorkshopNeedRow,
   type SupplierOption,
 } from './inline-edit-row';
@@ -215,6 +225,29 @@ export default async function AdminWorkshopNeedsPage({
     }
   }
 
+  // Фича «Варианты просчёта»: для каждого заказа на экране тянем его
+  // варианты — из них строится ряд вкладок в карточке. Список строк
+  // (`items`) содержит потребности ВСЕХ вариантов, поэтому карточка
+  // сама отфильтрует активный. Ошибку глушим: заказ просто останется
+  // без вкладок.
+  const calcEnabled = isOrderCalculationsEnabled();
+  const calculationsByOrder = new Map<string, OrderCalculationsDto>();
+  if (calcEnabled && items.length > 0) {
+    const orderIds = Array.from(new Set(items.map((n) => n.orderId)));
+    const loaded = await Promise.all(
+      orderIds.map(async (id) => {
+        try {
+          return [id, await getOrderCalculations(id)] as const;
+        } catch {
+          return [id, null] as const;
+        }
+      }),
+    );
+    for (const [id, dto] of loaded) {
+      if (dto) calculationsByOrder.set(id, dto);
+    }
+  }
+
   const hasNonDefaultFilter =
     Boolean(search) ||
     Boolean(orderId) ||
@@ -295,18 +328,24 @@ export default async function AdminWorkshopNeedsPage({
       </AdminCard>
 
       <AdminCard>
-        <AdminSectionHeader
-          title="Потребности"
-          hint={`Всего: ${items.length}`}
-        />
+        {/* Провайдер сворачивания оборачивает и кнопку «Свернуть все», и
+            карточки заказов — они делят одно состояние. */}
+        <CollapseProvider>
+          <AdminSectionHeader
+            title="Потребности"
+            hint={`Всего: ${items.length}`}
+            actions={<CollapseAllButton />}
+          />
 
-        <OrdersView
-          items={items}
-          orderCalculationStatus={orderCalculationStatus}
-          suppliers={supplierOptions}
-          suppliersEnabled={modules.suppliers}
-          purchaseOrdersEnabled={modules.purchaseOrders}
-        />
+          <OrdersView
+            items={items}
+            orderCalculationStatus={orderCalculationStatus}
+            suppliers={supplierOptions}
+            suppliersEnabled={modules.suppliers}
+            purchaseOrdersEnabled={modules.purchaseOrders}
+            calculationsByOrder={calculationsByOrder}
+          />
+        </CollapseProvider>
       </AdminCard>
     </AdminPageShell>
   );
@@ -353,12 +392,14 @@ function OrdersView({
   suppliers,
   suppliersEnabled,
   purchaseOrdersEnabled,
+  calculationsByOrder,
 }: {
   items: WorkshopNeedListItemDto[];
   orderCalculationStatus: WorkshopNeedOrderCalculationFilter;
   suppliers: SupplierOption[];
   suppliersEnabled: boolean;
   purchaseOrdersEnabled: boolean;
+  calculationsByOrder: Map<string, OrderCalculationsDto>;
 }) {
   if (items.length === 0) {
     return <EmptyOrdersState filter={orderCalculationStatus} />;
@@ -373,6 +414,7 @@ function OrdersView({
           suppliers={suppliers}
           suppliersEnabled={suppliersEnabled}
           bulkSelect={purchaseOrdersEnabled}
+          calculations={calculationsByOrder.get(g.orderId) ?? null}
         />
       ))}
     </div>
@@ -416,18 +458,50 @@ function EmptyOrdersState({
   );
 }
 
+/** Σ по строкам (qty × цена, только RUB) — для сумм в заголовках секций. */
+function sumRub(needs: WorkshopNeedListItemDto[]): number {
+  let total = 0;
+  for (const n of needs) {
+    if (n.status === 'CANCELLED') continue;
+    if (n.quotedPrice == null) continue;
+    if ((n.quotedCurrency ?? 'RUB').toUpperCase() !== 'RUB') continue;
+    const qty = Number(n.purchaseQty ?? n.calculatedQty);
+    const price = Number(n.quotedPrice);
+    if (Number.isFinite(qty) && Number.isFinite(price)) total += qty * price;
+  }
+  return total;
+}
+
+function formatRub(value: number): string {
+  return `${value.toLocaleString('ru-RU', { maximumFractionDigits: 0 })} ₽`;
+}
+
 function OrderNeedGroupCard({
   group,
   suppliers,
   suppliersEnabled,
   bulkSelect,
+  calculations,
 }: {
   group: OrderGroup;
   suppliers: SupplierOption[];
   suppliersEnabled: boolean;
   bulkSelect: boolean;
+  /** Варианты просчёта заказа — ряд вкладок; null, если фича выключена. */
+  calculations: OrderCalculationsDto | null;
 }) {
-  const { orderId, sample, needs } = group;
+  const { orderId, sample } = group;
+
+  // Фича «Варианты просчёта»: строки всех вариантов приходят вперемешку —
+  // карточка показывает потребности АКТИВНОГО варианта (переключение —
+  // вкладками ниже). Строки вне контура вариантов (sample/legacy,
+  // orderCalculationId = null) показываем всегда.
+  const activeCalcId = calculations?.activeId ?? null;
+  const needs = activeCalcId
+    ? group.needs.filter(
+        (n) => n.orderCalculationId == null || n.orderCalculationId === activeCalcId,
+      )
+    : group.needs;
 
   // Раскладываем строки по типу. Стабильный порядок секций — Материалы
   // → Фурнитура → Нанесение → Прочее.
@@ -467,9 +541,23 @@ function OrderNeedGroupCard({
 
   const previewAlt = sample.nomenclatureName ?? sample.orderNumber ?? 'Заказ';
 
+  const totalRub = sumRub(needs);
+  const variantsCount = calculations?.items.length ?? 0;
+  const activeVariant = calculations?.items.find((i) => i.isActive) ?? null;
+  const activeIsDraft = activeVariant?.sentToCalculationAt == null;
+
   return (
-    <article className="workshop-order-group-card">
-      <header className="workshop-order-group-card__header">
+    <CollapsibleOrderCard
+      id={orderId}
+      summary={
+        <>
+          {variantsCount > 1 ? `${variantsCount} варианта просчёта · ` : null}
+          {needs.length} строк потребности
+          {totalRub > 0 ? ` · ${formatRub(totalRub)}` : ''}
+        </>
+      }
+      head={
+        <header className="workshop-order-group-card__header">
         <div className="workshop-order-group-card__identity">
           <div className="workshop-order-group-card__preview">
             <NomenclaturePreview
@@ -537,6 +625,11 @@ function OrderNeedGroupCard({
                     </span>
                   ) : null,
               )}
+              {totalRub > 0 && (
+                <span className="workshop-order-group-card__stat">
+                  Итого: <strong>{formatRub(totalRub)}</strong>
+                </span>
+              )}
             </div>
           </div>
         </div>
@@ -556,7 +649,25 @@ function OrderNeedGroupCard({
             />
           )}
         </div>
-      </header>
+        </header>
+      }
+    >
+      {/* Фича «Варианты просчёта»: ряд вкладок вариантов заказа. Клик
+          переключает АКТИВНЫЙ вариант (та же ручка, что в карточке
+          заказа) — строки ниже показывают его потребности. compact:
+          состав вариантов правится в самом заказе. */}
+      {calculations && calculations.items.length > 0 && (
+        <div className="workshop-order-group-card__variants">
+          <OrderCalcTabs orderId={orderId} initial={calculations} compact />
+        </div>
+      )}
+
+      {needs.length === 0 && activeIsDraft && (
+        <div className="workshop-order-group-card__draft">
+          Активный вариант ещё не отправлен на расчёт — потребностей нет.
+          Откройте заказ и нажмите «Рассчитать вариант».
+        </div>
+      )}
 
       <div className="workshop-order-group-card__body">
         {(['MATERIAL', 'HARDWARE', 'APPLICATION', 'OTHER'] as const).map((k) =>
@@ -572,7 +683,7 @@ function OrderNeedGroupCard({
           ) : null,
         )}
       </div>
-    </article>
+    </CollapsibleOrderCard>
   );
 }
 
@@ -589,27 +700,24 @@ function NeedSection({
   suppliersEnabled: boolean;
   bulkSelect: boolean;
 }) {
+  // Сумма по секции — видна и в свёрнутом виде (см. согласованный макет).
+  const total = sumRub(needs);
   return (
-    <section
-      className={`workshop-need-section workshop-need-section--${kind.toLowerCase()}`}
+    <CollapsibleSection
+      kind={kind}
+      label={WORKSHOP_NEED_KIND_LABELS[kind]}
+      count={needs.length}
+      sum={total > 0 ? formatRub(total) : null}
     >
-      <header className="workshop-need-section__header">
-        <span className="workshop-need-section__label">
-          {WORKSHOP_NEED_KIND_LABELS[kind]}
-        </span>
-        <span className="workshop-need-section__count">{needs.length}</span>
-      </header>
-      <div className="workshop-need-section__rows">
-        {needs.map((n) => (
-          <InlineEditWorkshopNeedRow
-            key={n.id}
-            need={n}
-            bulkSelect={bulkSelect}
-            suppliers={suppliers}
-            suppliersEnabled={suppliersEnabled}
-          />
-        ))}
-      </div>
-    </section>
+      {needs.map((n) => (
+        <InlineEditWorkshopNeedRow
+          key={n.id}
+          need={n}
+          bulkSelect={bulkSelect}
+          suppliers={suppliers}
+          suppliersEnabled={suppliersEnabled}
+        />
+      ))}
+    </CollapsibleSection>
   );
 }

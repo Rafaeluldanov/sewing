@@ -419,7 +419,13 @@ describe('/admin/workshop-needs?view=orders — SaaS-карточка заказ
   const css = read('apps/web/app/globals.css');
 
   test('OrderNeedGroupCard рисует saas-header c identity и actions', () => {
-    expect(page).toMatch(/<article className="workshop-order-group-card">/);
+    // Фича «Варианты просчёта»: сам `<article
+    // className="workshop-order-group-card">` переехал в
+    // `collapse.tsx::CollapsibleOrderCard` (карточка сворачивается),
+    // а страница передаёт в неё шапку через проп `head`.
+    const collapse = read('apps/web/app/admin/workshop-needs/collapse.tsx');
+    expect(collapse).toMatch(/className="workshop-order-group-card"/);
+    expect(page).toMatch(/<CollapsibleOrderCard/);
     expect(page).toMatch(/workshop-order-group-card__header\b/);
     expect(page).toMatch(/workshop-order-group-card__identity\b/);
     expect(page).toMatch(/workshop-order-group-card__preview\b/);
@@ -454,10 +460,17 @@ describe('/admin/workshop-needs?view=orders — SaaS-карточка заказ
     // Bucket-логика: для каждой из 4 секций проверка `length > 0`.
     expect(page).toMatch(/buckets\[k\]\.length\s*>\s*0/);
     // Секция использует label + count, и подписан тон-modifier.
-    expect(page).toMatch(/workshop-need-section--\$\{kind\.toLowerCase\(\)\}/);
-    expect(page).toMatch(/workshop-need-section__label/);
-    expect(page).toMatch(/workshop-need-section__count/);
-    expect(page).toMatch(/workshop-need-section__rows/);
+    // Разметка секции переехала в `collapse.tsx::CollapsibleSection`
+    // (секция сворачивается и показывает сумму), страница передаёт в
+    // неё kind/label/count.
+    const collapse = read('apps/web/app/admin/workshop-needs/collapse.tsx');
+    expect(collapse).toMatch(
+      /workshop-need-section--\$\{kind\.toLowerCase\(\)\}/,
+    );
+    expect(collapse).toMatch(/workshop-need-section__label/);
+    expect(collapse).toMatch(/workshop-need-section__count/);
+    expect(collapse).toMatch(/workshop-need-section__rows/);
+    expect(page).toMatch(/<CollapsibleSection/);
   });
 
   test('строки группы рендерятся через InlineEditWorkshopNeedRow без showOrderInfo', () => {
