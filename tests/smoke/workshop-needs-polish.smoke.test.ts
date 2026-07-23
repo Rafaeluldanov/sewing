@@ -424,7 +424,10 @@ describe('/admin/workshop-needs?view=orders — SaaS-карточка заказ
     // `collapse.tsx::CollapsibleOrderCard` (карточка сворачивается),
     // а страница передаёт в неё шапку через проп `head`.
     const collapse = read('apps/web/app/admin/workshop-needs/collapse.tsx');
-    expect(collapse).toMatch(/className="workshop-order-group-card"/);
+    // Фича «Архив расчётов цеха»: базовый класс теперь склеивается с
+    // опциональным модификатором (`--archived`), поэтому строковый литерал
+    // стал шаблонной строкой `workshop-order-group-card${className ? …}`.
+    expect(collapse).toMatch(/`workshop-order-group-card\$\{/);
     expect(page).toMatch(/<CollapsibleOrderCard/);
     expect(page).toMatch(/workshop-order-group-card__header\b/);
     expect(page).toMatch(/workshop-order-group-card__identity\b/);

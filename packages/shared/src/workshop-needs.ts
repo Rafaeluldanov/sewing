@@ -467,6 +467,33 @@ export const WORKSHOP_NEED_ORDER_CALCULATION_FILTER_LABELS: Record<
 };
 
 // ---------------------------------------------------------------------------
+// Архив расчётов цеха
+// ---------------------------------------------------------------------------
+
+/**
+ * Фича «Архив расчётов цеха»: скоуп списка потребностей по признаку
+ * архивации заказа (`Order.needsArchivedAt`).
+ *   - `ACTIVE`   — только НЕ архивированные заказы (вкладка «Потребности»);
+ *   - `ARCHIVED` — только архивированные (вкладка «Архив»);
+ *   - `ALL`      — без фильтра (внутренние консьюмеры / карточка заказа).
+ *
+ * Default на backend зависит от наличия `orderId` (как и
+ * `orderCalculationStatus`): общий список — `ACTIVE`, карточка
+ * конкретного заказа — `ALL` (свои потребности видны даже у
+ * архивированного заказа).
+ */
+export const WORKSHOP_NEED_ARCHIVE_SCOPES = [
+  'ACTIVE',
+  'ARCHIVED',
+  'ALL',
+] as const;
+export type WorkshopNeedArchiveScope =
+  (typeof WORKSHOP_NEED_ARCHIVE_SCOPES)[number];
+export const WorkshopNeedArchiveScopeSchema = z.enum(
+  WORKSHOP_NEED_ARCHIVE_SCOPES,
+);
+
+// ---------------------------------------------------------------------------
 // List query DTO
 // ---------------------------------------------------------------------------
 
@@ -506,6 +533,16 @@ export const ListWorkshopNeedsQuerySchema = z.object({
    */
   calculationScope: z.enum(['ACTIVE', 'ALL']).optional(),
   /**
+   * Фича «Архив расчётов цеха»: скоуп по архивации заказа
+   * (`Order.needsArchivedAt`). См. `WORKSHOP_NEED_ARCHIVE_SCOPES`.
+   *
+   * Default (backend) зависит от наличия `orderId`:
+   *   - без `orderId` → `ACTIVE` (общий список закупщика скрывает архив);
+   *   - c `orderId`   → `ALL`    (карточка заказа видит свои потребности
+   *                               даже если заказ в архиве).
+   */
+  orderArchive: WorkshopNeedArchiveScopeSchema.optional(),
+  /**
    * Поиск по `description` / `sourceName` / `supplierNameText` /
    * `purchaseItemNameText` / номеру заказа (case-insensitive
    * `contains`).
@@ -515,6 +552,64 @@ export const ListWorkshopNeedsQuerySchema = z.object({
 export type ListWorkshopNeedsQuery = z.infer<
   typeof ListWorkshopNeedsQuerySchema
 >;
+
+// ---------------------------------------------------------------------------
+// Архив расчётов цеха: bulk archive / restore / purge
+// ---------------------------------------------------------------------------
+
+/**
+ * Тело запроса массовых операций архива (`/api/workshop-needs/archive`
+ * `…/restore` `…/purge`). Единый шейп на все три: список заказов.
+ * Точечная операция = массив из одного `orderId`; «Архивировать все» /
+ * «Очистить архив» = все видимые заказы (фронт собирает id из списка).
+ */
+export const WorkshopNeedsArchiveRequestSchema = z.object({
+  orderIds: z.array(z.string().min(1)).min(1).max(1000),
+});
+export type WorkshopNeedsArchiveRequestDto = z.infer<
+  typeof WorkshopNeedsArchiveRequestSchema
+>;
+
+/** Причина, по которой заказ пропущен массовой операцией архива. */
+export const WORKSHOP_NEED_ARCHIVE_SKIP_REASONS = [
+  /** Заказа с таким id нет. */
+  'NOT_FOUND',
+  /** Заказ не на стадии расчёта — архивировать/чистить нельзя. */
+  'NOT_ARCHIVABLE',
+  /** Заказ не в архиве — restore/purge неприменимы. */
+  'NOT_ARCHIVED',
+  /** По строкам заказа есть складские движения — безвозвратное удаление
+   *  снесло бы физический остаток; операция заблокирована. */
+  'HAS_STOCK',
+] as const;
+export type WorkshopNeedArchiveSkipReason =
+  (typeof WORKSHOP_NEED_ARCHIVE_SKIP_REASONS)[number];
+
+export const WORKSHOP_NEED_ARCHIVE_SKIP_REASON_LABELS: Record<
+  WorkshopNeedArchiveSkipReason,
+  string
+> = {
+  NOT_FOUND: 'заказ не найден',
+  NOT_ARCHIVABLE: 'заказ не на стадии расчёта — архивировать нельзя',
+  NOT_ARCHIVED: 'заказ не в архиве',
+  HAS_STOCK: 'по строкам заказа есть складские движения',
+};
+
+export interface WorkshopNeedArchiveSkipDto {
+  orderId: string;
+  reason: WorkshopNeedArchiveSkipReason;
+}
+
+/**
+ * Результат массовой операции архива. `processed` — id заказов, к
+ * которым операция реально применилась; `skipped` — пропущенные с
+ * причиной (частичный успех: несколько заказов могли не пройти гейт,
+ * остальные обработались).
+ */
+export interface WorkshopNeedsArchiveResultDto {
+  processed: string[];
+  skipped: WorkshopNeedArchiveSkipDto[];
+}
 
 // ---------------------------------------------------------------------------
 // Calculate DTO
@@ -792,6 +887,17 @@ export interface WorkshopNeedDto {
    */
   orderDueDate: string | null;
   orderColor: string | null;
+
+  /**
+   * Фича «Архив расчётов цеха»: снимок архивации заказа для карточки
+   * вкладки «Архив».
+   *   - `orderNeedsArchivedAt`     — момент архивации (ISO) или null;
+   *   - `orderNeedsArchivedByName` — имя архивировавшего (снимок) или null.
+   * Оба поля дублируются в каждой строке группы (как orderNumber /
+   * clientName) — UI берёт их из «образца» строки заказа.
+   */
+  orderNeedsArchivedAt: string | null;
+  orderNeedsArchivedByName: string | null;
 
   clientId: string | null;
   clientName: string | null;

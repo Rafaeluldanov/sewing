@@ -120,11 +120,14 @@ export function CollapsibleOrderCard({
   head,
   summary,
   children,
+  className,
 }: {
   id: string;
   head: ReactNode;
   summary?: ReactNode;
   children: ReactNode;
+  /** Доп. класс на карточку (напр. приглушённый вид архива). */
+  className?: string;
 }) {
   const ctx = useContext(Ctx);
   useEffect(() => {
@@ -136,7 +139,10 @@ export function CollapsibleOrderCard({
 
   const open = ctx ? ctx.isOpen(id) : true;
   return (
-    <article className="workshop-order-group-card" data-open={open || undefined}>
+    <article
+      className={`workshop-order-group-card${className ? ` ${className}` : ''}`}
+      data-open={open || undefined}
+    >
       <div className="wn-card-headline">
         {head}
         {ctx && (

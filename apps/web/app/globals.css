@@ -12083,6 +12083,145 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 0.85rem;
 }
 
+/* --------------------------------------------------------------------------
+   Фича «Архив расчётов цеха» (вкладка «Потребность цеха»)
+   -------------------------------------------------------------------------- */
+
+/* Вкладки «Потребности» / «Архив» над списком. Активная вкладка —
+   маркер CTA (жёлтая полоса сверху), как у вкладок вариантов просчёта. */
+.wn-tabs {
+  display: inline-flex;
+  gap: 6px;
+  padding: 4px;
+  margin: 0 0 1rem;
+  background: var(--color-bg-muted);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+}
+.wn-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0.5rem 1rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--color-fg-muted);
+  font-weight: 600;
+  font-size: 0.9rem;
+  text-decoration: none;
+  transition: background 0.12s, color 0.12s, box-shadow 0.12s;
+}
+.wn-tab:hover {
+  color: var(--color-fg-strong);
+}
+.wn-tab--active {
+  background: var(--color-bg-card);
+  color: var(--color-fg-strong);
+  border-color: var(--btn-primary-edge);
+  box-shadow: inset 0 3px 0 var(--btn-primary-bg), var(--shadow-xs);
+}
+.wn-tab__count {
+  font-size: 0.74rem;
+  font-weight: 700;
+  padding: 1px 8px;
+  border-radius: var(--radius-pill);
+  background: rgba(0, 0, 0, 0.06);
+  color: var(--color-fg-muted);
+  font-variant-numeric: tabular-nums;
+}
+.wn-tab--active .wn-tab__count {
+  background: var(--color-bg-tint);
+  color: #7a5c0c;
+}
+
+/* Кнопки в шапке списка: «Архивировать все» / «Очистить архив» +
+   «Свернуть все» в один ряд. */
+.wn-head-actions {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+/* Чекбокс выбора заказа в шапке карточки. */
+.wn-archive-check {
+  width: 18px;
+  height: 18px;
+  margin: 4px 2px 0 0;
+  flex: 0 0 auto;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+/* Чип «В архиве» рядом со статусом заказа. */
+.wn-archive-chip {
+  display: inline-block;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: var(--status-draft-bg);
+  color: var(--status-draft-fg);
+  font-size: 0.7rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+/* Подпись «Архивирован: … , Имя». */
+.wn-archive-meta {
+  color: var(--color-fg-subtle);
+  font-size: 0.8rem;
+}
+
+/* Приглушённый вид карточки в архиве. */
+.workshop-order-group-card.workshop-order-group-card--archived {
+  background: var(--color-bg-soft);
+}
+
+/* Нижний тулбар выбранных заказов (тёмная плашка, как в макете). */
+.wn-archive-bar {
+  position: sticky;
+  bottom: 14px;
+  margin-top: 14px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 12px 16px;
+  border-radius: var(--radius-lg);
+  background: var(--color-fg-strong);
+  color: #fff;
+  box-shadow: var(--shadow-sm);
+  z-index: 5;
+}
+.wn-archive-bar__count {
+  font-weight: 600;
+  font-size: 0.88rem;
+}
+.wn-archive-bar__spacer {
+  flex: 1 1 auto;
+}
+.wn-archive-bar__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 6px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.25);
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: #fff;
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+}
+.wn-archive-bar__link:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+.wn-archive-bar__link:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
 /* Backward-compat: старый класс `.workshop-need-section__list`
    (использовался ранее в lines-mode). Сохраняем для совместимости —
    там может ещё что-то рендериться через старый markup. */

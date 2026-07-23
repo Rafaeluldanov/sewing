@@ -17,6 +17,7 @@ import type {
   UpdateWorkshopNeedDto,
   WorkshopNeedDto,
   WorkshopNeedListItemDto,
+  WorkshopNeedsArchiveResultDto,
 } from '@sewing/shared/workshop-needs';
 import { apiFetch } from './api';
 
@@ -34,8 +35,48 @@ export function listWorkshopNeeds(
       // для других возможных консьюмеров.
       status: query.status,
       orderCalculationStatus: query.orderCalculationStatus,
+      // Фича «Архив расчётов цеха»: скоуп по архивации заказа
+      // (вкладки «Потребности» / «Архив»).
+      orderArchive: query.orderArchive,
       search: query.search,
     },
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Архив расчётов цеха: bulk archive / restore / purge
+// ---------------------------------------------------------------------------
+
+/** Отправить заказ(ы) в архив (скрыть из активного списка потребностей). */
+export function archiveWorkshopNeedsOrders(
+  orderIds: string[],
+): Promise<WorkshopNeedsArchiveResultDto> {
+  return apiFetch<WorkshopNeedsArchiveResultDto>('/workshop-needs/archive', {
+    method: 'POST',
+    body: { orderIds },
+  });
+}
+
+/** Вернуть заказ(ы) из архива в активный список потребностей. */
+export function restoreWorkshopNeedsOrders(
+  orderIds: string[],
+): Promise<WorkshopNeedsArchiveResultDto> {
+  return apiFetch<WorkshopNeedsArchiveResultDto>('/workshop-needs/restore', {
+    method: 'POST',
+    body: { orderIds },
+  });
+}
+
+/**
+ * Безвозвратно стереть просчёт заказа(ов) — все `OrderCalculation` +
+ * `WorkshopNeed`; сам заказ остаётся. Только из архива.
+ */
+export function purgeWorkshopNeedsOrders(
+  orderIds: string[],
+): Promise<WorkshopNeedsArchiveResultDto> {
+  return apiFetch<WorkshopNeedsArchiveResultDto>('/workshop-needs/purge', {
+    method: 'POST',
+    body: { orderIds },
   });
 }
 

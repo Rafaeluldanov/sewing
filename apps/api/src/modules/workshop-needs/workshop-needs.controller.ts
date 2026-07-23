@@ -10,10 +10,13 @@ import {
 import {
   ListWorkshopNeedsQuerySchema,
   UpdateWorkshopNeedSchema,
+  WorkshopNeedsArchiveRequestSchema,
   type ListWorkshopNeedsQuery,
   type UpdateWorkshopNeedDto,
   type WorkshopNeedDto,
   type WorkshopNeedListItemDto,
+  type WorkshopNeedsArchiveRequestDto,
+  type WorkshopNeedsArchiveResultDto,
 } from '@sewing/shared/workshop-needs';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
@@ -47,6 +50,45 @@ export class WorkshopNeedsController {
     query: ListWorkshopNeedsQuery,
   ): Promise<WorkshopNeedListItemDto[]> {
     return this.needs.list(query);
+  }
+
+  /**
+   * Фича «Архив расчётов цеха»: массовая архивация заказов из списка
+   * потребностей (скрыть в «Архив»). Точечно = один id в массиве;
+   * «Архивировать все» = все видимые id. Частичный успех — непрошедшие
+   * гейт заказы возвращаются в `skipped`.
+   */
+  @Post('archive')
+  archive(
+    @Body(new ZodValidationPipe(WorkshopNeedsArchiveRequestSchema))
+    dto: WorkshopNeedsArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<WorkshopNeedsArchiveResultDto> {
+    return this.needs.archiveOrders(dto.orderIds, user.employeeId);
+  }
+
+  /** Вернуть заказы из архива в активный список потребностей. */
+  @Post('restore')
+  restore(
+    @Body(new ZodValidationPipe(WorkshopNeedsArchiveRequestSchema))
+    dto: WorkshopNeedsArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<WorkshopNeedsArchiveResultDto> {
+    return this.needs.restoreOrders(dto.orderIds, user.employeeId);
+  }
+
+  /**
+   * Безвозвратно стереть просчёт заказов (все `OrderCalculation` +
+   * `WorkshopNeed`; сам заказ остаётся). Только из архива и только если
+   * по строкам нет складских движений (иначе `skipped: HAS_STOCK`).
+   */
+  @Post('purge')
+  purge(
+    @Body(new ZodValidationPipe(WorkshopNeedsArchiveRequestSchema))
+    dto: WorkshopNeedsArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<WorkshopNeedsArchiveResultDto> {
+    return this.needs.purgeOrders(dto.orderIds, user.employeeId);
   }
 
   @Get(':id')

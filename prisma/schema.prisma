@@ -1400,6 +1400,29 @@ model Order {
   /// превью или его удалили, заказ продолжает показывать «как было».
   patternPreviewSnapshotUrl String?
 
+  /// Фича «Архив расчётов цеха» (вкладка «Потребность цеха»,
+  /// `apps/web/app/admin/workshop-needs/*`). Мягкая архивация заказа
+  /// ЦЕЛИКОМ из списка потребностей закупщика: заказ скрывается из
+  /// активного списка и уезжает во вкладку «Архив», откуда его можно
+  /// восстановить (обнулить поле) или безвозвратно удалить просчёт
+  /// (снести `OrderCalculation` + `WorkshopNeed`; сам заказ остаётся).
+  ///
+  /// Данные при архивации НЕ трогаются — это чисто «спрятать из
+  /// рабочего списка». Nullable + null = активен (в списке
+  /// «Потребности»); не-null = в архиве. Архивировать можно только
+  /// заказы на стадии расчёта (DRAFT/CALCULATION/CALCULATION_DONE) —
+  /// ушедший в производство заказ, чьи потребности уже потребляются
+  /// кроем/сметой/закупками, заархивировать нельзя (гейт в сервисе).
+  ///
+  /// `needsArchivedById` / `needsArchivedByName` — снимок сотрудника,
+  /// который архивировал (для отображения «архивирован … , Имя» в
+  /// карточке архива). Снимок, а не FK-связь — чтобы read-путь
+  /// оставался простым select-ом без JOIN, в духе прочих snapshot-полей
+  /// заказа.
+  needsArchivedAt     DateTime?
+  needsArchivedById   String?
+  needsArchivedByName String?
+
   items                 OrderItem[]
   /// Фича «Расцветки» (colorways, FEATURE_COLORWAYS): заказ может нести
   /// несколько расцветок (`OrderVariant`), у каждой свой цвет + своя
@@ -1768,6 +1791,7 @@ model Order {
   @@index([finishedGoodsWarehouseId])
   @@index([materialsAndHardwareCostPolicy])
   @@index([productCreationMode])
+  @@index([needsArchivedAt])
 }
 
 /// Карточка клиента (управленческий справочник, см. `docs/domain.md

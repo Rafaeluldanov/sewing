@@ -10,8 +10,10 @@ import type {
   CreateManualWorkshopNeedDto,
   ListWorkshopNeedsQuery,
   UpdateWorkshopNeedDto,
+  WorkshopNeedArchiveSkipDto,
   WorkshopNeedDto,
   WorkshopNeedListItemDto,
+  WorkshopNeedsArchiveResultDto,
 } from '@sewing/shared/workshop-needs';
 import {
   ORDER_APPLICATION_STAGE_LABELS,
@@ -124,6 +126,21 @@ export class WorkshopNeedsService {
           ? 'CALCULATION'
           : 'CALCULATION_DONE';
       where.order = mergeOrderWhere(where.order, { status: orderStatus });
+    }
+
+    // Фича «Архив расчётов цеха»: скоуп по `Order.needsArchivedAt`.
+    // Default симметричен `orderCalculationStatus` — зависит от наличия
+    // `orderId`: общий список закупщика скрывает архив (`ACTIVE`),
+    // карточка конкретного заказа видит свои потребности даже если заказ
+    // архивирован (`ALL`). Явный `orderArchive` перекрывает default.
+    const effectiveArchive =
+      query.orderArchive ?? (query.orderId ? 'ALL' : 'ACTIVE');
+    if (effectiveArchive === 'ACTIVE') {
+      where.order = mergeOrderWhere(where.order, { needsArchivedAt: null });
+    } else if (effectiveArchive === 'ARCHIVED') {
+      where.order = mergeOrderWhere(where.order, {
+        needsArchivedAt: { not: null },
+      });
     }
 
     if (query.search && query.search.length > 0) {
@@ -623,6 +640,255 @@ export class WorkshopNeedsService {
       );
     });
     this.logger.log(`event=workshop_need.manual_delete id=${id}`);
+  }
+
+  // -------------------------------------------------------------------------
+  // АРХИВ РАСЧЁТОВ ЦЕХА (вкладка «Потребность цеха»)
+  // -------------------------------------------------------------------------
+  //
+  // Мягкая архивация заказа ЦЕЛИКОМ из списка потребностей закупщика.
+  //   - archiveOrders  — скрыть заказ(ы) из активного списка → «Архив»
+  //     (`needsArchivedAt := now`). Гейт: только стадия расчёта
+  //     (DRAFT/CALCULATION/CALCULATION_DONE); данные не трогаются, обратимо.
+  //   - restoreOrders  — вернуть из архива (`needsArchivedAt := null`).
+  //   - purgeOrders    — безвозвратно стереть просчёт заказа (все
+  //     `OrderCalculation` + `WorkshopNeed`), сам заказ остаётся; только
+  //     из архива и только если по строкам нет складских движений.
+  //
+  // Все три — bulk с частичным успехом: непрошедшие гейт заказы
+  // возвращаются в `skipped` с причиной, остальные обрабатываются.
+  // Точечная операция = массив из одного id; «Архивировать все» /
+  // «Очистить архив» = все видимые id (собирает фронт).
+
+  /** Статусы заказа, на которых разрешена архивация/очистка. */
+  private static readonly ARCHIVABLE_ORDER_STATUSES = [
+    'DRAFT',
+    'CALCULATION',
+    'CALCULATION_DONE',
+  ];
+
+  private async resolveActorName(
+    actorEmployeeId?: string | null,
+  ): Promise<string | null> {
+    if (!actorEmployeeId) return null;
+    const emp = await this.prisma.employee.findUnique({
+      where: { id: actorEmployeeId },
+      select: { fullName: true },
+    });
+    return emp?.fullName ?? null;
+  }
+
+  async archiveOrders(
+    orderIds: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<WorkshopNeedsArchiveResultDto> {
+    const ids = Array.from(new Set(orderIds));
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, status: true, needsArchivedAt: true },
+    });
+    const byId = new Map(orders.map((o) => [o.id, o]));
+
+    const processed: string[] = [];
+    const skipped: WorkshopNeedArchiveSkipDto[] = [];
+    const toArchive: string[] = [];
+    for (const id of ids) {
+      const order = byId.get(id);
+      if (!order) {
+        skipped.push({ orderId: id, reason: 'NOT_FOUND' });
+        continue;
+      }
+      if (order.needsArchivedAt) {
+        // Уже в архиве — идемпотентно считаем обработанным.
+        processed.push(id);
+        continue;
+      }
+      if (
+        !WorkshopNeedsService.ARCHIVABLE_ORDER_STATUSES.includes(order.status)
+      ) {
+        skipped.push({ orderId: id, reason: 'NOT_ARCHIVABLE' });
+        continue;
+      }
+      toArchive.push(id);
+    }
+
+    if (toArchive.length > 0) {
+      const actorName = await this.resolveActorName(actorEmployeeId);
+      const now = new Date();
+      await this.prisma.$transaction(async (tx) => {
+        await tx.order.updateMany({
+          where: { id: { in: toArchive }, needsArchivedAt: null },
+          data: {
+            needsArchivedAt: now,
+            needsArchivedById: actorEmployeeId ?? null,
+            needsArchivedByName: actorName,
+          },
+        });
+        await this.audit.log(
+          {
+            event: 'WORKSHOP_NEEDS_ORDERS_ARCHIVED',
+            entityType: 'ORDER',
+            entityId: toArchive[0],
+            employeeId: actorEmployeeId ?? null,
+            payload: { orderIds: toArchive },
+          },
+          tx,
+        );
+      });
+      processed.push(...toArchive);
+    }
+
+    this.logger.log(
+      `event=workshop_need.archive processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
+  }
+
+  async restoreOrders(
+    orderIds: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<WorkshopNeedsArchiveResultDto> {
+    const ids = Array.from(new Set(orderIds));
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, needsArchivedAt: true },
+    });
+    const byId = new Map(orders.map((o) => [o.id, o]));
+
+    const processed: string[] = [];
+    const skipped: WorkshopNeedArchiveSkipDto[] = [];
+    const toRestore: string[] = [];
+    for (const id of ids) {
+      const order = byId.get(id);
+      if (!order) {
+        skipped.push({ orderId: id, reason: 'NOT_FOUND' });
+        continue;
+      }
+      if (!order.needsArchivedAt) {
+        // Не в архиве — идемпотентно считаем восстановленным.
+        processed.push(id);
+        continue;
+      }
+      toRestore.push(id);
+    }
+
+    if (toRestore.length > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.order.updateMany({
+          where: { id: { in: toRestore } },
+          data: {
+            needsArchivedAt: null,
+            needsArchivedById: null,
+            needsArchivedByName: null,
+          },
+        });
+        await this.audit.log(
+          {
+            event: 'WORKSHOP_NEEDS_ORDERS_RESTORED',
+            entityType: 'ORDER',
+            entityId: toRestore[0],
+            employeeId: actorEmployeeId ?? null,
+            payload: { orderIds: toRestore },
+          },
+          tx,
+        );
+      });
+      processed.push(...toRestore);
+    }
+
+    this.logger.log(
+      `event=workshop_need.restore processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
+  }
+
+  /**
+   * Безвозвратно стереть просчёт заказа: все `OrderCalculation` + все
+   * `WorkshopNeed` заказа. Сам `Order` остаётся (это чистка потребностей,
+   * а не удаление заказа) — флаг архива обнуляется, заказ пропадает из
+   * обеих вкладок (списки строятся из строк потребности, которых больше
+   * нет). Разрешено только для архивированных заказов и только если по
+   * строкам нет складских движений (иначе каскад `onDelete: Cascade`
+   * снёс бы физический остаток — блокируем, как и пересчёт).
+   */
+  async purgeOrders(
+    orderIds: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<WorkshopNeedsArchiveResultDto> {
+    const ids = Array.from(new Set(orderIds));
+    const orders = await this.prisma.order.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, needsArchivedAt: true },
+    });
+    const byId = new Map(orders.map((o) => [o.id, o]));
+
+    const processed: string[] = [];
+    const skipped: WorkshopNeedArchiveSkipDto[] = [];
+    const toPurge: string[] = [];
+    for (const id of ids) {
+      const order = byId.get(id);
+      if (!order) {
+        skipped.push({ orderId: id, reason: 'NOT_FOUND' });
+        continue;
+      }
+      if (!order.needsArchivedAt) {
+        // Безвозвратное удаление доступно только из архива.
+        skipped.push({ orderId: id, reason: 'NOT_ARCHIVED' });
+        continue;
+      }
+      // Защита складского остатка: удаление строк с движениями каскадом
+      // снесло бы StockBalance/StockMovement (см. calculateForOrder).
+      const withStock = await this.prisma.workshopNeed.count({
+        where: { orderId: id, stockMovements: { some: {} } },
+      });
+      if (withStock > 0) {
+        skipped.push({ orderId: id, reason: 'HAS_STOCK' });
+        continue;
+      }
+      toPurge.push(id);
+    }
+
+    for (const orderId of toPurge) {
+      await this.prisma.$transaction(async (tx) => {
+        const deletedNeeds = await tx.workshopNeed.deleteMany({
+          where: { orderId },
+        });
+        const deletedCalcs = await tx.orderCalculation.deleteMany({
+          where: { orderId },
+        });
+        // Заказ покидает контур потребностей: обнуляем флаг архива, чтобы
+        // он не «висел» в архиве пустым и мог заново попасть в активный
+        // список, если по нему когда-нибудь снова посчитают потребность.
+        await tx.order.update({
+          where: { id: orderId },
+          data: {
+            needsArchivedAt: null,
+            needsArchivedById: null,
+            needsArchivedByName: null,
+          },
+        });
+        await this.audit.log(
+          {
+            event: 'WORKSHOP_NEEDS_ORDER_PURGED',
+            entityType: 'ORDER',
+            entityId: orderId,
+            employeeId: actorEmployeeId ?? null,
+            payload: {
+              orderId,
+              deletedNeeds: deletedNeeds.count,
+              deletedCalculations: deletedCalcs.count,
+            },
+          },
+          tx,
+        );
+      });
+      processed.push(orderId);
+    }
+
+    this.logger.log(
+      `event=workshop_need.purge processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
   }
 
   // -------------------------------------------------------------------------
@@ -2630,6 +2896,10 @@ export class WorkshopNeedsService {
       orderStatus: order?.status ?? null,
       orderDueDate: order?.dueDate ? order.dueDate.toISOString() : null,
       orderColor: order?.color ?? null,
+      orderNeedsArchivedAt: order?.needsArchivedAt
+        ? order.needsArchivedAt.toISOString()
+        : null,
+      orderNeedsArchivedByName: order?.needsArchivedByName ?? null,
       clientId,
       clientName,
       nomenclatureName,
@@ -2727,6 +2997,9 @@ const WORKSHOP_NEED_INCLUDE = {
       color: true,
       customer: true,
       clientId: true,
+      // Фича «Архив расчётов цеха»: снимок архивации для вкладки «Архив».
+      needsArchivedAt: true,
+      needsArchivedByName: true,
       patternNameSnapshot: true,
       patternArticleSnapshot: true,
       patternPreviewSnapshotUrl: true,
@@ -2820,6 +3093,9 @@ type WorkshopNeedRowWithRelations = WorkshopNeed & {
     color: string | null;
     customer: string | null;
     clientId: string | null;
+    /** Фича «Архив расчётов цеха» (см. WORKSHOP_NEED_INCLUDE). */
+    needsArchivedAt: Date | null;
+    needsArchivedByName: string | null;
     patternNameSnapshot: string | null;
     patternArticleSnapshot: string | null;
     patternPreviewSnapshotUrl: string | null;

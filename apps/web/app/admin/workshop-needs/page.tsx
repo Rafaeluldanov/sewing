@@ -91,6 +91,13 @@ import {
   InlineEditWorkshopNeedRow,
   type SupplierOption,
 } from './inline-edit-row';
+import {
+  OrderArchiveCheckbox,
+  OrderArchiveHeaderButton,
+  OrderArchiveProvider,
+  OrderArchiveRowActions,
+  type ArchiveMode,
+} from './order-archive';
 
 // Модули «Поставщики» / «Заказы поставщикам» гейтят inline-блоки этой
 // страницы (выбор поставщика в строках, bulk-создание PO). Под
@@ -115,6 +122,12 @@ interface SearchParams {
   status?: string;
   orderCalculationStatus?: string;
   orderId?: string;
+  /**
+   * Фича «Архив расчётов цеха»: активная вкладка списка.
+   *   - отсутствует / любое ≠ `archive` → «Потребности» (активные);
+   *   - `archive`                        → «Архив» (архивированные).
+   */
+  tab?: string;
 }
 
 function parseOrderCalculationStatus(
@@ -136,6 +149,51 @@ function parseOrderCalculationStatus(
 function formatDate(iso: string | null): string {
   if (!iso) return '—';
   return new Date(iso).toLocaleDateString('ru-RU');
+}
+
+/**
+ * Дата+время в московском поясе — фиксированный timeZone обязателен в
+ * RSC, иначе UTC-vs-Moscow ломает hydration (см. заметку
+ * feedback_hydration_timezone). Используется в подписи «архивирован …».
+ */
+function formatDateTime(iso: string | null): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleString('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    day: '2-digit',
+    month: '2-digit',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+}
+
+/** Заказ на стадии расчёта — можно архивировать (гейт зеркалит backend). */
+function isArchivableStatus(status: string | null): boolean {
+  return (
+    status === 'DRAFT' ||
+    status === 'CALCULATION' ||
+    status === 'CALCULATION_DONE'
+  );
+}
+
+/** Ссылка на вкладку списка с сохранением текущих фильтров. */
+function buildTabHref(
+  tab: ArchiveMode,
+  filters: { search?: string; orderId?: string; orderCalculationStatus?: string },
+): string {
+  const params = new URLSearchParams();
+  if (tab === 'archive') params.set('tab', 'archive');
+  if (filters.search) params.set('search', filters.search);
+  if (filters.orderId) params.set('orderId', filters.orderId);
+  if (
+    filters.orderCalculationStatus &&
+    filters.orderCalculationStatus !== 'ACTIVE'
+  ) {
+    params.set('orderCalculationStatus', filters.orderCalculationStatus);
+  }
+  const qs = params.toString();
+  return qs ? `/admin/workshop-needs?${qs}` : '/admin/workshop-needs';
 }
 
 /**
@@ -192,7 +250,17 @@ export default async function AdminWorkshopNeedsPage({
     searchParams?.orderCalculationStatus,
   );
 
+  // Фича «Архив расчётов цеха»: активная вкладка списка.
+  const tab: ArchiveMode =
+    searchParams?.tab === 'archive' ? 'archive' : 'active';
+
   const modules = await getModules();
+
+  // Скоуп текущей вкладки. Архив показываем плоско — фильтр «Статус
+  // расчёта» к нему не применяем (архивные заказы могут быть любой
+  // стадии), поэтому в archive-режиме принудительно `ALL`.
+  const orderArchive = tab === 'archive' ? 'ARCHIVED' : 'ACTIVE';
+  const effectiveCalcStatus = tab === 'archive' ? 'ALL' : orderCalculationStatus;
 
   let items: WorkshopNeedListItemDto[] = [];
   let error: string | null = null;
@@ -200,7 +268,8 @@ export default async function AdminWorkshopNeedsPage({
     items = await listWorkshopNeeds({
       search: search || undefined,
       orderId: orderId || undefined,
-      orderCalculationStatus,
+      orderCalculationStatus: effectiveCalcStatus,
+      orderArchive,
     });
   } catch (e) {
     error =
@@ -208,6 +277,34 @@ export default async function AdminWorkshopNeedsPage({
         ? errorText(e)
         : 'Не удалось загрузить потребности цеха';
   }
+
+  // Счётчик заказов противоположной вкладки для бейджа. Ошибку глушим —
+  // бейдж просто покажет 0.
+  const currentOrderCount = new Set(items.map((n) => n.orderId)).size;
+  let otherOrderCount = 0;
+  try {
+    const otherItems = await listWorkshopNeeds(
+      tab === 'archive'
+        ? {
+            search: search || undefined,
+            orderId: orderId || undefined,
+            orderCalculationStatus,
+            orderArchive: 'ACTIVE',
+          }
+        : {
+            search: search || undefined,
+            orderId: orderId || undefined,
+            orderCalculationStatus: 'ALL',
+            orderArchive: 'ARCHIVED',
+          },
+    );
+    otherOrderCount = new Set(otherItems.map((n) => n.orderId)).size;
+  } catch {
+    otherOrderCount = 0;
+  }
+  const activeTabCount = tab === 'active' ? currentOrderCount : otherOrderCount;
+  const archiveTabCount = tab === 'archive' ? currentOrderCount : otherOrderCount;
+  const allOrderIds = Array.from(new Set(items.map((n) => n.orderId)));
 
   // Справочник поставщиков для inline-выбора в строках (нужен, чтобы
   // проставить `selectedSupplierId` и создать заказ). Грузим только
@@ -230,7 +327,9 @@ export default async function AdminWorkshopNeedsPage({
   // (`items`) содержит потребности ВСЕХ вариантов, поэтому карточка
   // сама отфильтрует активный. Ошибку глушим: заказ просто останется
   // без вкладок.
-  const calcEnabled = isOrderCalculationsEnabled();
+  // В архиве вкладки вариантов не показываем (это переключатели активного
+  // варианта — для скрытого заказа не нужны), поэтому и не грузим.
+  const calcEnabled = isOrderCalculationsEnabled() && tab === 'active';
   const calculationsByOrder = new Map<string, OrderCalculationsDto>();
   if (calcEnabled && items.length > 0) {
     const orderIds = Array.from(new Set(items.map((n) => n.orderId)));
@@ -277,6 +376,10 @@ export default async function AdminWorkshopNeedsPage({
           className="admin-form-grid"
           style={{ marginTop: 4 }}
         >
+          {/* Сохраняем активную вкладку при применении фильтра. */}
+          {tab === 'archive' && (
+            <input type="hidden" name="tab" value="archive" />
+          )}
           <div className="admin-field">
             <label htmlFor="needSearch">Поиск</label>
             <input
@@ -317,7 +420,7 @@ export default async function AdminWorkshopNeedsPage({
             </button>
             {hasNonDefaultFilter && (
               <Link
-                href="/admin/workshop-needs"
+                href={tab === 'archive' ? '/admin/workshop-needs?tab=archive' : '/admin/workshop-needs'}
                 className="admin-btn admin-btn--ghost"
               >
                 Сбросить
@@ -328,24 +431,61 @@ export default async function AdminWorkshopNeedsPage({
       </AdminCard>
 
       <AdminCard>
-        {/* Провайдер сворачивания оборачивает и кнопку «Свернуть все», и
-            карточки заказов — они делят одно состояние. */}
-        <CollapseProvider>
-          <AdminSectionHeader
-            title="Потребности"
-            hint={`Всего: ${items.length}`}
-            actions={<CollapseAllButton />}
-          />
+        {/* Фича «Архив расчётов цеха»: вкладки «Потребности» / «Архив». */}
+        <nav className="wn-tabs" aria-label="Потребности и архив">
+          <Link
+            href={buildTabHref('active', {
+              search,
+              orderId,
+              orderCalculationStatus,
+            })}
+            className={`wn-tab${tab === 'active' ? ' wn-tab--active' : ''}`}
+            aria-current={tab === 'active' ? 'page' : undefined}
+          >
+            Потребности
+            <span className="wn-tab__count">{activeTabCount}</span>
+          </Link>
+          <Link
+            href={buildTabHref('archive', {
+              search,
+              orderId,
+              orderCalculationStatus,
+            })}
+            className={`wn-tab${tab === 'archive' ? ' wn-tab--active' : ''}`}
+            aria-current={tab === 'archive' ? 'page' : undefined}
+          >
+            Архив
+            <span className="wn-tab__count">{archiveTabCount}</span>
+          </Link>
+        </nav>
 
-          <OrdersView
-            items={items}
-            orderCalculationStatus={orderCalculationStatus}
-            suppliers={supplierOptions}
-            suppliersEnabled={modules.suppliers}
-            purchaseOrdersEnabled={modules.purchaseOrders}
-            calculationsByOrder={calculationsByOrder}
-          />
-        </CollapseProvider>
+        {/* Провайдер архива оборачивает шапку (кнопка «Архивировать все» /
+            «Очистить архив») и карточки (чекбоксы + нижний тулбар). Внутри
+            — провайдер сворачивания (кнопка «Свернуть все» + карточки). */}
+        <OrderArchiveProvider mode={tab} allOrderIds={allOrderIds}>
+          <CollapseProvider>
+            <AdminSectionHeader
+              title={tab === 'archive' ? 'Архив' : 'Потребности'}
+              hint={`Всего: ${items.length}`}
+              actions={
+                <div className="wn-head-actions">
+                  <OrderArchiveHeaderButton />
+                  <CollapseAllButton />
+                </div>
+              }
+            />
+
+            <OrdersView
+              items={items}
+              mode={tab}
+              orderCalculationStatus={orderCalculationStatus}
+              suppliers={supplierOptions}
+              suppliersEnabled={modules.suppliers}
+              purchaseOrdersEnabled={modules.purchaseOrders}
+              calculationsByOrder={calculationsByOrder}
+            />
+          </CollapseProvider>
+        </OrderArchiveProvider>
       </AdminCard>
     </AdminPageShell>
   );
@@ -388,6 +528,7 @@ function groupByOrder(
 
 function OrdersView({
   items,
+  mode,
   orderCalculationStatus,
   suppliers,
   suppliersEnabled,
@@ -395,6 +536,7 @@ function OrdersView({
   calculationsByOrder,
 }: {
   items: WorkshopNeedListItemDto[];
+  mode: ArchiveMode;
   orderCalculationStatus: WorkshopNeedOrderCalculationFilter;
   suppliers: SupplierOption[];
   suppliersEnabled: boolean;
@@ -402,8 +544,11 @@ function OrdersView({
   calculationsByOrder: Map<string, OrderCalculationsDto>;
 }) {
   if (items.length === 0) {
-    return <EmptyOrdersState filter={orderCalculationStatus} />;
+    return <EmptyOrdersState filter={orderCalculationStatus} mode={mode} />;
   }
+  // В архиве закупочный bulk-выбор строк не нужен (архивные заказы не
+  // заказывают у поставщика) — оставляем его только на активной вкладке.
+  const poBulk = mode === 'active' && purchaseOrdersEnabled;
   const groups = groupByOrder(items);
   const body = (
     <div className="workshop-order-group-list">
@@ -411,9 +556,10 @@ function OrdersView({
         <OrderNeedGroupCard
           key={g.orderId}
           group={g}
+          mode={mode}
           suppliers={suppliers}
           suppliersEnabled={suppliersEnabled}
-          bulkSelect={purchaseOrdersEnabled}
+          bulkSelect={poBulk}
           calculations={calculationsByOrder.get(g.orderId) ?? null}
         />
       ))}
@@ -421,7 +567,7 @@ function OrdersView({
   );
   // Bulk-создание заказа доступно и в «По заказам»: оборачиваем весь
   // список в провайдер, чтобы чекбоксы строк и нижний тулбар работали.
-  return purchaseOrdersEnabled ? (
+  return poBulk ? (
     <BulkCreatePoProvider needs={items}>{body}</BulkCreatePoProvider>
   ) : (
     body
@@ -430,9 +576,20 @@ function OrdersView({
 
 function EmptyOrdersState({
   filter,
+  mode,
 }: {
   filter: WorkshopNeedOrderCalculationFilter;
+  mode: ArchiveMode;
 }) {
+  if (mode === 'archive') {
+    return (
+      <AdminEmptyState
+        icon={<ClipboardList size={26} strokeWidth={1.6} aria-hidden />}
+        title="Архив пуст"
+        hint='Заказы, отправленные в архив со вкладки «Потребности», появятся здесь.'
+      />
+    );
+  }
   if (filter === 'ACTIVE') {
     return (
       <AdminEmptyState
@@ -478,12 +635,14 @@ function formatRub(value: number): string {
 
 function OrderNeedGroupCard({
   group,
+  mode,
   suppliers,
   suppliersEnabled,
   bulkSelect,
   calculations,
 }: {
   group: OrderGroup;
+  mode: ArchiveMode;
   suppliers: SupplierOption[];
   suppliersEnabled: boolean;
   bulkSelect: boolean;
@@ -491,6 +650,8 @@ function OrderNeedGroupCard({
   calculations: OrderCalculationsDto | null;
 }) {
   const { orderId, sample } = group;
+  const isArchive = mode === 'archive';
+  const archivable = isArchivableStatus(sample.orderStatus);
 
   // Фича «Варианты просчёта»: строки всех вариантов приходят вперемешку —
   // карточка показывает потребности АКТИВНОГО варианта (переключение —
@@ -549,6 +710,7 @@ function OrderNeedGroupCard({
   return (
     <CollapsibleOrderCard
       id={orderId}
+      className={isArchive ? 'workshop-order-group-card--archived' : undefined}
       summary={
         <>
           {variantsCount > 1 ? `${variantsCount} варианта просчёта · ` : null}
@@ -559,6 +721,7 @@ function OrderNeedGroupCard({
       head={
         <header className="workshop-order-group-card__header">
         <div className="workshop-order-group-card__identity">
+          <OrderArchiveCheckbox orderId={orderId} />
           <div className="workshop-order-group-card__preview">
             <NomenclaturePreview
               src={sample.nomenclaturePreviewImageUrl}
@@ -579,6 +742,7 @@ function OrderNeedGroupCard({
                   {formatOrderStatus(sample.orderStatus)}
                 </AdminStatusBadge>
               )}
+              {isArchive && <span className="wn-archive-chip">В архиве</span>}
             </div>
             <div className="workshop-order-group-card__meta-line">
               {sample.clientName && (
@@ -612,6 +776,14 @@ function OrderNeedGroupCard({
                 </span>
               )}
             </div>
+            {isArchive && (
+              <div className="workshop-order-group-card__meta-line wn-archive-meta">
+                Архивирован: {formatDateTime(sample.orderNeedsArchivedAt)}
+                {sample.orderNeedsArchivedByName
+                  ? `, ${sample.orderNeedsArchivedByName}`
+                  : ''}
+              </div>
+            )}
             <div className="workshop-order-group-card__stats">
               {(['MATERIAL', 'HARDWARE', 'APPLICATION', 'OTHER'] as const).map(
                 (k) =>
@@ -641,13 +813,16 @@ function OrderNeedGroupCard({
           >
             Открыть заказ
           </Link>
-          {isCalculation && (
+          {isCalculation && !isArchive && (
             <CompleteCalculationForm
               orderId={orderId}
               hasUsdLines={hasUsdLines}
               variant="compact"
             />
           )}
+          {/* Фича «Архив расчётов цеха»: active → «В архив»;
+              archive → «Восстановить» / «Удалить безвозвратно». */}
+          <OrderArchiveRowActions orderId={orderId} archivable={archivable} />
         </div>
         </header>
       }
@@ -656,13 +831,13 @@ function OrderNeedGroupCard({
           переключает АКТИВНЫЙ вариант (та же ручка, что в карточке
           заказа) — строки ниже показывают его потребности. compact:
           состав вариантов правится в самом заказе. */}
-      {calculations && calculations.items.length > 0 && (
+      {!isArchive && calculations && calculations.items.length > 0 && (
         <div className="workshop-order-group-card__variants">
           <OrderCalcTabs orderId={orderId} initial={calculations} compact />
         </div>
       )}
 
-      {needs.length === 0 && activeIsDraft && (
+      {!isArchive && needs.length === 0 && activeIsDraft && (
         <div className="workshop-order-group-card__draft">
           Активный вариант ещё не отправлен на расчёт — потребностей нет.
           Откройте заказ и нажмите «Рассчитать вариант».
