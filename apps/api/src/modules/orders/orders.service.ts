@@ -4205,6 +4205,42 @@ export class OrdersService {
   }
 
   /**
+   * Amendment-путь (правка заказа В ПРОИЗВОДСТВЕ, фича
+   * `FEATURE_ORDER_AMENDMENTS`): пересобрать снимки, производные от
+   * `OrderItem.qtyPlan` — снимок материалов (`OrderMaterialRequirement`)
+   * и плановую стоимость/время операций (`Order.operation*Plan*`) — в
+   * переданной транзакции.
+   *
+   * Отличия от `resyncColorwayDerived` (сознательно НЕ переиспользуем):
+   *   - НЕ проверяем `canTouchSnapshot`: правка легальна именно в
+   *     `IN_PRODUCTION` (гейт статуса — в `OrderAmendmentsService`);
+   *   - НЕ трогаем `OrderItem` (его пишет вызывающий — правка адресная,
+   *     по конкретным размерам, а не пересборка из расцветок);
+   *   - НЕ зовём `syncOrderRouteStepsSnapshot`: при правке количества
+   *     состав маршрута не меняется, а его ре-синк в производстве снёс бы
+   *     `OrderRouteStep`, на индексы которых ссылаются паспорта
+   *     (`Passport.currentRouteStepIndex`) — осиротил бы производство;
+   *   - потребности (`WorkshopNeed`) пересчитываются вызывающим ОТДЕЛЬНО
+   *     и best-effort (их пересчёт может упереться в стоп-гейт по стоку).
+   *
+   * `recalculateAndWrite` гейта статуса не имеет — читает live-маршрут и
+   * items, пишет плановые колонки заказа; для qty-правки это просто
+   * пересчёт стоимости под новый тираж.
+   */
+  async rebuildQtyDerivedSnapshotsInTx(
+    orderId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<void> {
+    await this.rebuildMaterialRequirementsSnapshot(orderId, tx);
+    // ПО СНИМКУ, а не по шаблону: в производстве источник истины маршрута —
+    // `OrderRouteStep`. Иначе операция, ДОБАВЛЕННАЯ в заказ amendment-ом
+    // (Фаза 3), не попала бы в план (её нет в шаблоне), а следующая правка
+    // количества затёрла бы её вклад. Для не-правленых заказов снимок ==
+    // шаблон, поэтому число не меняется.
+    await this.orderOperationPlan.recalculateAndWriteFromSnapshot(orderId, tx);
+  }
+
+  /**
    * Этап «Указать в заказе» (см. ТЗ §2): пересобрать snapshot
    * `OrderMaterialRequirement[]` по live-строкам техкарты заказа.
    *

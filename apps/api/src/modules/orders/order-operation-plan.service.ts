@@ -3,6 +3,62 @@ import { Prisma } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 
 /**
+ * Операция в форме, достаточной для расчёта плана. Один и тот же `select`
+ * используется и для шага шаблона, и для шага снимка `OrderRouteStep`.
+ */
+interface PlanOperation {
+  id: string;
+  code: string;
+  name: string;
+  pricingMode: string;
+  fixedRate: Prisma.Decimal | null;
+  timeNormMode: string;
+  timeNormSec: number | null;
+  salaryPlanRubPerShift: Prisma.Decimal | null;
+  salaryPlanShiftSeconds: number | null;
+  ratesBySize: { sizeId: string; rate: Prisma.Decimal }[];
+  timeNormsBySize: { sizeId: string; seconds: number }[];
+}
+
+/**
+ * Нормализованный шаг плана: операция + ЭФФЕКТИВНЫЕ per-order
+ * переопределения (расценка/норма/режим/поразмерные). Источник структуры
+ * — либо шаги шаблона (`calculateForOrder`), либо снимок `OrderRouteStep`
+ * (`calculateFromSnapshot`); дальше оба идут в общий `computeTotals`.
+ */
+interface NormalizedPlanStep {
+  isOptional: boolean;
+  operation: PlanOperation | null;
+  rateOverride: Prisma.Decimal | null;
+  timeNormSecOverride: number | null;
+  pricingModeOverride: string | null;
+  rateBySize: Map<string, Prisma.Decimal>;
+  secondsBySize: Map<string, number>;
+}
+
+/** Строка плана по размеру. */
+interface PlanItem {
+  sizeId: string;
+  qtyPlan: number;
+  size: { code: string } | null;
+}
+
+/** Общий `select` операции для расчёта плана. */
+const PLAN_OPERATION_SELECT = {
+  id: true,
+  code: true,
+  name: true,
+  pricingMode: true,
+  fixedRate: true,
+  timeNormMode: true,
+  timeNormSec: true,
+  salaryPlanRubPerShift: true,
+  salaryPlanShiftSeconds: true,
+  ratesBySize: { select: { sizeId: true, rate: true } },
+  timeNormsBySize: { select: { sizeId: true, seconds: true } },
+} satisfies Prisma.OperationSelect;
+
+/**
  * Сервис плана операций для заказа (см.
  * `docs/operation-time-norms-recon.md §11 «Алгоритм расчёта»`,
  * recon §14 «Этап 2 — Расчёт плана на заказе»).
@@ -201,11 +257,48 @@ export class OrderOperationPlanService {
       }),
     );
 
+    // Структура — из шаблона (как раньше), эффективные per-order правки —
+    // из снимка по operationId. Нормализуем и считаем общим `computeTotals`.
+    const normalizedSteps: NormalizedPlanStep[] =
+      order.routeTemplate.steps.map((step) => {
+        const ov = overridesByOp.get(step.operationId);
+        return {
+          isOptional: step.isOptional === true,
+          operation: step.operation,
+          // Если у операции есть строка снимка — берём её rateOverride
+          // (может быть null → упадёт на op.fixedRate ниже); иначе —
+          // расценку шаблона (дивергенция).
+          rateOverride: ov ? ov.rateOverride : step.rateOverride,
+          timeNormSecOverride: ov?.timeNormSecOverride ?? null,
+          pricingModeOverride: ov?.pricingModeOverride ?? null,
+          rateBySize: ov?.rateBySize ?? new Map<string, Prisma.Decimal>(),
+          secondsBySize: ov?.secondsBySize ?? new Map<string, number>(),
+        };
+      });
+
+    return this.computeTotals(normalizedSteps, itemsWithQty);
+  }
+
+  /**
+   * Общий расчёт плановой стоимости/времени по нормализованным шагам.
+   * Вызывается из `calculateForOrder` (структура из шаблона) и
+   * `calculateFromSnapshot` (структура из снимка `OrderRouteStep`) — вся
+   * денежно-временна́я логика по трём режимам `PricingMode` живёт здесь в
+   * одном месте.
+   */
+  private computeTotals(
+    steps: NormalizedPlanStep[],
+    itemsWithQty: PlanItem[],
+  ): {
+    totalCostRub: Prisma.Decimal | null;
+    totalTimeSec: number | null;
+    warnings: string[];
+  } {
     const warningsSet = new Set<string>();
     let totalCost = new Prisma.Decimal(0);
     let totalTimeSec = 0;
 
-    for (const step of order.routeTemplate.steps) {
+    for (const step of steps) {
       // На MVP опциональные шаги не входят в план (см. recon §11
       // «isOptional»). Если в будущем потребуется флаг
       // `includeOptional` — добавим параметр, не меняя контракт.
@@ -217,8 +310,6 @@ export class OrderOperationPlanService {
         continue;
       }
       const opLabel = op.name || op.code;
-      // Снимок per-order переопределений этой операции (если есть).
-      const ov = overridesByOp.get(op.id);
 
       const ratesBySize = new Map<string, Prisma.Decimal>();
       for (const r of op.ratesBySize) ratesBySize.set(r.sizeId, r.rate);
@@ -250,7 +341,7 @@ export class OrderOperationPlanService {
         let timeSec: number | null = null;
         if (op.timeNormMode === 'FIXED') {
           // Норма времени внутри заказа вытесняет дефолт операции.
-          const fixedTime = ov?.timeNormSecOverride ?? op.timeNormSec;
+          const fixedTime = step.timeNormSecOverride ?? op.timeNormSec;
           if (fixedTime != null) {
             timeSec = fixedTime;
           } else {
@@ -261,7 +352,7 @@ export class OrderOperationPlanService {
           }
         } else {
           // BY_SIZE: поразмерное переопределение заказа, затем дефолт.
-          const t = ov?.secondsBySize.get(item.sizeId) ??
+          const t = step.secondsBySize.get(item.sizeId) ??
             timeNormsBySize.get(item.sizeId);
           if (t != null) {
             timeSec = t;
@@ -290,7 +381,7 @@ export class OrderOperationPlanService {
         // Эффективный способ оплаты: переопределение заказа (оклад ⇄
         // сделка, `pricingModeOverride`) вытесняет дефолт операции — план
         // должен совпадать с фактическим начислением (`resolveRate`).
-        const effMode = ov?.pricingModeOverride ?? op.pricingMode;
+        const effMode = step.pricingModeOverride ?? op.pricingMode;
         let rate: Prisma.Decimal | null = null;
         if (effMode === 'SALARY_ONLY') {
           if (salaryCostPerSec === null) {
@@ -315,10 +406,8 @@ export class OrderOperationPlanService {
           // Переопределение расценки внутри заказа (snapshot маршрута,
           // `OrderRouteStep.rateOverride`) вытесняет дефолт операции —
           // план себестоимости должен совпадать с фактическим
-          // начислением (`resolveRate`). Если у операции нет строки
-          // снимка (дивергенция), берём расценку шаблона.
-          const effectiveRate =
-            (ov ? ov.rateOverride : step.rateOverride) ?? op.fixedRate;
+          // начислением (`resolveRate`).
+          const effectiveRate = step.rateOverride ?? op.fixedRate;
           if (effectiveRate != null) {
             rate = effectiveRate;
           } else {
@@ -329,7 +418,8 @@ export class OrderOperationPlanService {
           }
         } else if (effMode === 'BY_SIZE') {
           // Поразмерное переопределение заказа, затем дефолт операции.
-          const r = ov?.rateBySize.get(item.sizeId) ?? ratesBySize.get(item.sizeId);
+          const r =
+            step.rateBySize.get(item.sizeId) ?? ratesBySize.get(item.sizeId);
           if (r != null) {
             rate = r;
           } else {
@@ -359,6 +449,146 @@ export class OrderOperationPlanService {
       totalTimeSec,
       warnings: Array.from(warningsSet),
     };
+  }
+
+  /**
+   * Расчёт плана по СНИМКУ маршрута заказа (`OrderRouteStep`), а не по
+   * шаблону. Нужен amendment-пути (правка заказа в производстве): операция,
+   * добавленная только в снимок заказа, обязана попасть в план. Структуру
+   * и per-order правки берём из снимка; `isOptional` восстанавливаем
+   * кросс-ссылкой на шаблон (в снимке этого флага нет), чтобы для
+   * НЕ-правленых заказов число совпало с `calculateForOrder`.
+   *
+   * Если снимка нет (легаси / ещё не материализован) — падаем на
+   * `calculateForOrder` (шаблон), чтобы поведение осталось разумным.
+   */
+  async calculateFromSnapshot(
+    orderId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<{
+    totalCostRub: Prisma.Decimal | null;
+    totalTimeSec: number | null;
+    warnings: string[];
+  }> {
+    const order = await tx.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        routeTemplateId: true,
+        items: {
+          select: {
+            sizeId: true,
+            qtyPlan: true,
+            size: { select: { code: true } },
+          },
+        },
+      },
+    });
+    if (!order) {
+      return {
+        totalCostRub: null,
+        totalTimeSec: null,
+        warnings: ['Заказ не найден — план операций не рассчитан'],
+      };
+    }
+
+    const itemsWithQty = order.items.filter((it) => it.qtyPlan > 0);
+    if (itemsWithQty.length === 0) {
+      return {
+        totalCostRub: null,
+        totalTimeSec: null,
+        warnings: [
+          'Не заполнен план по размерам — план операций не рассчитан',
+        ],
+      };
+    }
+
+    const snapshotSteps = await tx.orderRouteStep.findMany({
+      where: { orderId },
+      orderBy: { index: 'asc' },
+      select: {
+        operationId: true,
+        rateOverride: true,
+        timeNormSecOverride: true,
+        pricingModeOverride: true,
+        sizeOverrides: { select: { sizeId: true, rate: true, seconds: true } },
+        operation: { select: PLAN_OPERATION_SELECT },
+      },
+    });
+    if (snapshotSteps.length === 0) {
+      // Снимка нет — считаем по шаблону (совместимость).
+      return this.calculateForOrder(orderId, tx);
+    }
+
+    // `isOptional` в снимке не хранится — восстанавливаем множество
+    // опциональных операций из шаблона, чтобы для не-правленых заказов
+    // результат совпал с `calculateForOrder` (опциональные шаги в план
+    // не входят). Добавленная в производстве операция шаблону неизвестна
+    // → в это множество не попадёт → в план войдёт.
+    const optionalOpIds = new Set<string>();
+    if (order.routeTemplateId) {
+      const tplSteps = await tx.routeTemplateStep.findMany({
+        where: { templateId: order.routeTemplateId, isOptional: true },
+        select: { operationId: true },
+      });
+      for (const s of tplSteps) optionalOpIds.add(s.operationId);
+    }
+
+    const normalizedSteps: NormalizedPlanStep[] = snapshotSteps.map((s) => {
+      const rateBySize = new Map<string, Prisma.Decimal>();
+      const secondsBySize = new Map<string, number>();
+      for (const o of s.sizeOverrides) {
+        if (o.rate != null) rateBySize.set(o.sizeId, o.rate);
+        if (o.seconds != null) secondsBySize.set(o.sizeId, o.seconds);
+      }
+      return {
+        isOptional: optionalOpIds.has(s.operationId),
+        operation: s.operation,
+        rateOverride: s.rateOverride,
+        timeNormSecOverride: s.timeNormSecOverride,
+        pricingModeOverride: s.pricingModeOverride,
+        rateBySize,
+        secondsBySize,
+      };
+    });
+
+    return this.computeTotals(normalizedSteps, itemsWithQty);
+  }
+
+  /**
+   * Считает план ПО СНИМКУ и пишет его в `Order` (та же транзакция).
+   * Amendment-путь (правка в производстве) зовёт именно это — чтобы
+   * добавленная операция и новый тираж отразились в плановой
+   * стоимости/времени, а не терялись при следующей правке.
+   */
+  async recalculateAndWriteFromSnapshot(
+    orderId: string,
+    tx: Prisma.TransactionClient,
+  ): Promise<{
+    totalCostRub: Prisma.Decimal | null;
+    totalTimeSec: number | null;
+    warnings: string[];
+  }> {
+    const result = await this.calculateFromSnapshot(orderId, tx);
+    await tx.order.update({
+      where: { id: orderId },
+      data: {
+        operationCostPlanRub: result.totalCostRub,
+        operationTimePlanSec: result.totalTimeSec,
+        operationPlanCalculatedAt: new Date(),
+        operationPlanWarnings:
+          result.warnings.length > 0
+            ? (result.warnings as Prisma.InputJsonValue)
+            : Prisma.JsonNull,
+      },
+    });
+    this.logger.log(
+      `event=order.operation_plan.recalculate_from_snapshot orderId=${orderId} ` +
+        `costRub=${result.totalCostRub?.toString() ?? 'null'} ` +
+        `timeSec=${result.totalTimeSec ?? 'null'} ` +
+        `warnings=${result.warnings.length}`,
+    );
+    return result;
   }
 
   /**

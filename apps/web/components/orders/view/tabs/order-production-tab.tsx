@@ -37,7 +37,12 @@ import type {
   OrderRouteStepDto,
   OrderSizeBreakdownRow,
 } from '@sewing/shared/orders';
-import type { OrderCutIssueRulesSummaryDto } from '@sewing/shared';
+import type {
+  OperationAmendmentStateDto,
+  OrderCutIssueRulesSummaryDto,
+  QuantityAmendmentStateDto,
+  SizeAmendmentStateDto,
+} from '@sewing/shared';
 import type {
   ShopfloorRowDto,
   ShopfloorStateDto,
@@ -58,6 +63,16 @@ import {
 } from '@/lib/finished-goods-api';
 import { Activity, Layers, Lock, Workflow } from 'lucide-react';
 import { CreateFinishedGoodsShipmentButton } from '@/components/orders/finished-goods/create-finished-goods-shipment-button';
+import { OrderAmendmentButton } from '@/components/orders/amendments/order-amendment-button';
+import { OrderAmendmentHistoryCard } from '@/components/orders/amendments/order-amendment-history-card';
+import {
+  getAmendmentHistory,
+  getOperationAmendmentState,
+  getQuantityAmendmentState,
+  getSizeAmendmentState,
+} from '@/lib/amendments-api';
+import { isOrderAmendmentsEnabled } from '@/lib/feature-flags';
+import type { AmendmentHistoryEntryDto } from '@sewing/shared';
 import { OrderMaterialColorsCard } from '@/components/orders/view/order-material-colors-card';
 import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
 import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
@@ -162,6 +177,67 @@ export async function OrderProductionTab({
     for (const r of shopfloor.rows) shopBySize.set(r.sizeId, r);
   }
 
+  // Правка заказа в производстве (фича FEATURE_ORDER_AMENDMENTS): вкладки
+  // «Количество» (ФАЗА 1) и «Размерность» (ФАЗА 2). Грузим состояния
+  // только когда действие реально доступно — заказ в производстве, роль
+  // управляет заказом, фича включена. При ошибке просто не показываем
+  // кнопку (не роняем вкладку).
+  let quantityState: QuantityAmendmentStateDto | null = null;
+  let sizeState: SizeAmendmentStateDto | null = null;
+  let operationState: OperationAmendmentStateDto | null = null;
+  if (
+    canManage &&
+    order.status === 'IN_PRODUCTION' &&
+    isOrderAmendmentsEnabled()
+  ) {
+    try {
+      [quantityState, sizeState, operationState] = await Promise.all([
+        getQuantityAmendmentState(order.id),
+        getSizeAmendmentState(order.id),
+        getOperationAmendmentState(order.id),
+      ]);
+    } catch {
+      quantityState = null;
+      sizeState = null;
+      operationState = null;
+    }
+  }
+  const amendmentAvailable =
+    quantityState !== null && sizeState !== null && operationState !== null;
+  const matrixActions =
+    amendmentAvailable || (canManage && shipmentBalances.length > 0) ? (
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+        {amendmentAvailable && (
+          <OrderAmendmentButton
+            orderId={order.id}
+            quantityState={quantityState!}
+            sizeState={sizeState!}
+            operationState={operationState!}
+          />
+        )}
+        {canManage && shipmentBalances.length > 0 && (
+          <CreateFinishedGoodsShipmentButton
+            orderId={order.id}
+            balances={shipmentBalances}
+          />
+        )}
+      </div>
+    ) : null;
+
+  // Журнал правок в производстве — read-only, виден и в IN_PRODUCTION, и
+  // после завершения (DONE), чтобы можно было посмотреть, что меняли.
+  let amendmentHistory: AmendmentHistoryEntryDto[] = [];
+  if (
+    isOrderAmendmentsEnabled() &&
+    (order.status === 'IN_PRODUCTION' || order.status === 'DONE')
+  ) {
+    try {
+      amendmentHistory = await getAmendmentHistory(order.id);
+    } catch {
+      amendmentHistory = [];
+    }
+  }
+
   return (
     <div className="order-prod-tab">
       <AdminCard className="admin-order-detail-card-compact">
@@ -225,14 +301,7 @@ export async function OrderProductionTab({
               ? `Цех: срез ${formatTime(shopfloor.updatedAt)}`
               : 'План и отгрузка; цех — после запуска'
           }
-          actions={
-            canManage && shipmentBalances.length > 0 ? (
-              <CreateFinishedGoodsShipmentButton
-                orderId={order.id}
-                balances={shipmentBalances}
-              />
-            ) : null
-          }
+          actions={matrixActions}
         />
         {shopfloorError && (
           <p className="order-prod-tab__shopfloor-warning">
@@ -256,6 +325,8 @@ export async function OrderProductionTab({
           />
         )}
       </AdminCard>
+
+      <OrderAmendmentHistoryCard entries={amendmentHistory} />
 
       {/*
        * Блок «Отгрузка готовой продукции» (превью остатков + журнал

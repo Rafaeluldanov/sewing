@@ -79,3 +79,4 @@ export * from './colors';
 export * from './workplace';
 export * from './colorways';
 export * from './order-calculations';
+export * from './amendments';

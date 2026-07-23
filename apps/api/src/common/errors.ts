@@ -18,6 +18,105 @@ export class OrderLockedException extends ConflictException {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Правка заказа В ПРОИЗВОДСТВЕ (order amendments, фича
+// FEATURE_ORDER_AMENDMENTS). Второй ярус редактируемости поверх заморозки
+// плана (ADR-0006): аддитивные, forward-only правки в `IN_PRODUCTION`.
+// ---------------------------------------------------------------------------
+
+/**
+ * Правка (напр. количества по размерам) запрошена для заказа не в
+ * производстве. Amendment-путь работает только в `IN_PRODUCTION`: в
+ * `DRAFT`/`CALCULATION` есть обычная свободная правка, в `DONE`/`CANCELLED`
+ * менять нечего. Отдельный код — чтобы UI показал адресный текст.
+ */
+export class OrderNotAmendableException extends ConflictException {
+  constructor(
+    message = 'Править заказ в этом режиме можно только когда он в производстве.',
+  ) {
+    super({ statusCode: 409, message, code: 'ORDER_NOT_AMENDABLE' });
+  }
+}
+
+/**
+ * Попытка опустить плановый тираж размера ниже уже раскроенного
+ * (Σ `Passport.qtyCut`). Раскрой необратим, поэтому план не может стать
+ * меньше факта кроя — иначе поехали бы остатки склада и сдельная ЗП.
+ */
+export class AmendmentBelowCutException extends ConflictException {
+  constructor(message: string) {
+    super({ statusCode: 409, message, code: 'AMENDMENT_BELOW_CUT' });
+  }
+}
+
+/**
+ * Правка количества запрошена у заказа с ≥2 расцветками. В производстве
+ * агрегатная правка размера неоднозначна (в какой цвет отнести дельту),
+ * а правка per-цвет — следующая фаза фичи. Пока отклоняем адресной 409.
+ */
+export class AmendmentMultiVariantUnsupportedException extends ConflictException {
+  constructor(
+    message = 'У заказа несколько расцветок — правка количества per-цвет пока не поддержана.',
+  ) {
+    super({
+      statusCode: 409,
+      message,
+      code: 'AMENDMENT_MULTIVARIANT_UNSUPPORTED',
+    });
+  }
+}
+
+/**
+ * Правка размерности (ФАЗА 2): попытка добавить размер, который уже есть
+ * в плане заказа. Для изменения его тиража — правка количества, не
+ * размерности.
+ */
+export class AmendmentSizeAlreadyInOrderException extends ConflictException {
+  constructor(message: string) {
+    super({ statusCode: 409, message, code: 'AMENDMENT_SIZE_ALREADY_IN_ORDER' });
+  }
+}
+
+/**
+ * Правка размерности: попытка убрать размер, по которому уже есть работа
+ * (раскрой/настилы). Раскрой необратим — размер удалить нельзя.
+ */
+export class AmendmentSizeHasWorkException extends ConflictException {
+  constructor(message: string) {
+    super({ statusCode: 409, message, code: 'AMENDMENT_SIZE_HAS_WORK' });
+  }
+}
+
+/**
+ * Правка маршрута (ФАЗА 3): добавляемая операция уже есть в маршруте
+ * заказа. Дубли операции ломают доску/подстановки (дедуп по operationId).
+ */
+export class AmendmentOperationAlreadyInRouteException extends ConflictException {
+  constructor(message: string) {
+    super({
+      statusCode: 409,
+      message,
+      code: 'AMENDMENT_OPERATION_ALREADY_IN_ROUTE',
+    });
+  }
+}
+
+/**
+ * Правка маршрута: попытка вставить операцию НЕ впереди фронта
+ * производства (какой-то паспорт уже прошёл эту позицию). Добавление
+ * операции аддитивно — только вперёд, иначе пришлось бы возвращать уже
+ * сделанную работу (это отдельный rework-флоу).
+ */
+export class AmendmentOperationBehindFrontierException extends ConflictException {
+  constructor(message: string) {
+    super({
+      statusCode: 409,
+      message,
+      code: 'AMENDMENT_OPERATION_BEHIND_FRONTIER',
+    });
+  }
+}
+
 export class OrderInvalidTransitionException extends BusinessException {
   constructor(message: string) {
     super('ORDER_INVALID_TRANSITION', message, HttpStatus.CONFLICT);

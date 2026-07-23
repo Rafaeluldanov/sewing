@@ -31,6 +31,21 @@ export function isOrderCalculationsEnabled(): boolean {
 }
 
 /**
+ * `FEATURE_ORDER_AMENDMENTS` — фича «Правка заказа в производстве»
+ * (второй ярус редактируемости поверх заморозки плана: количество по
+ * размерам, дальше — размерность и операции; см.
+ * `@sewing/shared/amendments`, `apps/api/src/modules/order-amendments/*`).
+ * Как и colorways: на проде OFF по умолчанию (включается
+ * `FEATURE_ORDER_AMENDMENTS=1`), на dev — ON. Явное `=0` выключает везде.
+ */
+export function isOrderAmendmentsEnabled(): boolean {
+  const raw = process.env.FEATURE_ORDER_AMENDMENTS;
+  if (raw === '1' || raw === 'true') return true;
+  if (raw === '0' || raw === 'false') return false;
+  return process.env.NODE_ENV !== 'production';
+}
+
+/**
  * `FEATURE_QTY_CORRECTION` — фича «Корректировка фактического количества
  * по паспорту» (ОТК на `/qc` предлагает новое количество, мастер цеха на
  * `/master` подтверждает; см. `@sewing/shared/passport-qty-corrections`,
