@@ -42,6 +42,11 @@
   --color-border: #e4e4e1;
   --color-border-strong: #d4d4d0;
 
+  /* Шеврон для кастомного <select> — нативная стрелка сброшена
+     appearance:none (см. правило `select` в блоке «Формы»), вместо неё
+     единый шеврон дизайн-системы. Цвет = вторичный текст. */
+  --select-chevron: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%238a8a86' stroke-width='2.2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+
   /* Акцент = синий ЕРП (ссылки, «Создать», выделения, focus). Первичная
      жёлтая CTA задаётся отдельными --btn-primary-* ниже. */
   --color-accent: #2f7fd1;         /* синий ЕРП */
@@ -419,6 +424,23 @@ select:focus {
   box-shadow: 0 0 0 3px rgba(47, 127, 209, 0.18);
 }
 textarea { min-height: 80px; resize: vertical; }
+
+/* Кастомный <select>: тот же бокс, что у input/textarea выше, но нативная
+   стрелка заменена на единый шеврон дизайн-системы — чтобы выпадающие списки
+   не «выделялись» на фоне обычных полей ввода. Контекстные правила ниже
+   (.admin-field, .wn-zrow, .workshop-need-line, .order-hero-card__field,
+   .admin-chip-add__select) используют background-color вместо background-
+   шортката, иначе он затирал бы этот шеврон и select остался бы без стрелки. */
+select {
+  appearance: none;
+  -webkit-appearance: none;
+  -moz-appearance: none;
+  padding-right: 2rem;
+  background-image: var(--select-chevron);
+  background-repeat: no-repeat;
+  background-position: right 0.65rem center;
+  background-size: 14px 14px;
+}
 
 /* =============================================================
    Таблицы (desktop / админ-экраны)
@@ -7821,11 +7843,16 @@ body:has(.admin-layout) .app-header { display: none !important; }
   padding: 0.6rem 0.75rem;
   border-radius: 10px;
   border: 1px solid var(--admin-border);
-  background: var(--admin-surface);
+  background-color: var(--admin-surface);
   color: var(--admin-text);
   font: inherit;
   width: 100%;
   transition: border-color 160ms ease, box-shadow 160ms ease;
+}
+
+/* Место под шеврон (padding базового `select` перебит выше). */
+.admin-field > select {
+  padding-right: 2rem;
 }
 
 .admin-field > input:focus,
@@ -8207,10 +8234,10 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 
 .admin-pagination__size select {
-  padding: 0.35rem 0.5rem;
+  padding: 0.35rem 1.7rem 0.35rem 0.5rem;
   border-radius: 8px;
   border: 1px solid var(--admin-border);
-  background: var(--admin-surface);
+  background-color: var(--admin-surface);
   color: var(--admin-text);
   font: inherit;
   font-size: 0.85rem;
@@ -8709,10 +8736,10 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 .admin-chip-add__select {
   height: 32px;
-  padding: 0 0.6rem;
+  padding: 0 1.9rem 0 0.6rem;
   border-radius: 999px;
   border: 1px solid var(--admin-border);
-  background: var(--admin-surface);
+  background-color: var(--admin-surface);
   color: var(--admin-text);
   font-size: 0.88rem;
   min-width: 220px;
@@ -12677,6 +12704,10 @@ body:has(.admin-layout) .app-header { display: none !important; }
   min-height: 30px;
   box-sizing: border-box;
 }
+/* Место под шеврон в плотной строке. */
+.workshop-need-line select {
+  padding-right: 1.7rem;
+}
 
 .workshop-need-line .admin-btn {
   font-size: 0.78rem;
@@ -13040,7 +13071,12 @@ body:has(.admin-layout) .app-header { display: none !important; }
   padding: 4px 8px;
   border-radius: 7px;
   border: 1px solid var(--admin-border, #dbe2ea);
-  background: #fff;
+  background-color: #fff;
+}
+
+/* Место под шеврон в плотной строке. */
+.wn-zrow select {
+  padding-right: 1.7rem;
 }
 
 .wn-zrow input:focus,
@@ -13052,7 +13088,7 @@ body:has(.admin-layout) .app-header { display: none !important; }
 
 .wn-zrow input:disabled,
 .wn-zrow select:disabled {
-  background: var(--admin-soft, #f1f1ef);
+  background-color: var(--admin-soft, #f1f1ef);
   color: var(--admin-muted, #8a8a86);
 }
 
@@ -13630,10 +13666,15 @@ body:has(.admin-layout) .app-header { display: none !important; }
   padding: 0.4rem 0.55rem;
   border: 1px solid var(--admin-border);
   border-radius: 8px;
-  background: var(--admin-surface);
+  background-color: var(--admin-surface);
   color: var(--admin-text);
   width: 100%;
   box-sizing: border-box;
+}
+
+/* Место под шеврон (padding базового `select` перебит выше). */
+.order-hero-card__field select {
+  padding-right: 1.9rem;
 }
 
 .order-hero-card__field textarea {
@@ -13644,7 +13685,7 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .order-hero-card__field input:disabled,
 .order-hero-card__field select:disabled,
 .order-hero-card__field textarea:disabled {
-  background: rgba(0, 0, 0, 0.03);
+  background-color: rgba(0, 0, 0, 0.03);
   color: var(--admin-muted);
   cursor: not-allowed;
 }
