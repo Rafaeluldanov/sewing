@@ -124,10 +124,14 @@ services:
       # включить — выставить в .env.prod и пересоздать web-контейнер:
       #   FEATURE_COLORWAYS=1          — раздел «Расцветки» в заказах;
       #   FEATURE_ERP_INTEGRATION=1    — вкладка «Интеграции» в настройках;
-      #   FEATURE_ORDER_CALCULATIONS=1 — вкладки «Варианты просчёта» в заказе.
+      #   FEATURE_ORDER_CALCULATIONS=1 — вкладки «Варианты просчёта» в заказе;
+      #   FEATURE_QTY_CORRECTION=1     — корректировка кол-ва по паспорту (ОТК→мастер);
+      #   FEATURE_ORDER_AMENDMENTS=1   — правка заказа в производстве.
       FEATURE_COLORWAYS: ${FEATURE_COLORWAYS:-0}
       FEATURE_ERP_INTEGRATION: ${FEATURE_ERP_INTEGRATION:-0}
       FEATURE_ORDER_CALCULATIONS: ${FEATURE_ORDER_CALCULATIONS:-0}
+      FEATURE_QTY_CORRECTION: ${FEATURE_QTY_CORRECTION:-0}
+      FEATURE_ORDER_AMENDMENTS: ${FEATURE_ORDER_AMENDMENTS:-0}
     depends_on:
       - api
     restart: always
