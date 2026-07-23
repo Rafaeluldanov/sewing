@@ -152,6 +152,11 @@ export class PrismaClientManager implements OnModuleInit, OnModuleDestroy {
       `CREATE UNIQUE INDEX IF NOT EXISTS "cutting_closure_request_approved_uniq"
          ON "CuttingClosureRequest" ("orderId", "productId", "sizeId")
          WHERE "status" = 'APPROVED'`,
+      // Одна открытая (PENDING) заявка на корректировку количества
+      // на паспорт (модуль `passport-qty-corrections`).
+      `CREATE UNIQUE INDEX IF NOT EXISTS "passport_qty_correction_pending_uniq"
+         ON "PassportQtyCorrection" ("passportId")
+         WHERE "status" = 'PENDING'`,
     ];
     for (const sql of statements) {
       try {

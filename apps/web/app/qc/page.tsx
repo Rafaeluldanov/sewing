@@ -3,6 +3,7 @@ import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listDefectTypes, listQcIncomingReworks } from '@/lib/qc-api';
 import { getCurrentShift, getShiftMeta } from '@/lib/shifts-api';
+import { isQtyCorrectionEnabled } from '@/lib/feature-flags';
 import { TerminalShell } from '@/components/terminal-shell';
 import { QcTerminal } from './qc-terminal';
 
@@ -133,6 +134,7 @@ export default async function QcPage() {
         initialShift={currentShift}
         activeOperationCategory={activeOperationCategory}
         incomingReworks={incomingReworks}
+        qtyCorrectionEnabled={isQtyCorrectionEnabled()}
       />
     </TerminalShell>
   );

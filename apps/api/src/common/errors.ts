@@ -2295,6 +2295,80 @@ export class PassportCuttingClosedException extends BusinessException {
 }
 
 // ---------------------------------------------------------------------------
+// Passport qty corrections (корректировка фактического количества ОТК → мастер,
+// см. `apps/api/src/modules/passport-qty-corrections/*`).
+// ---------------------------------------------------------------------------
+
+/**
+ * Корректировать количество можно только у паспорта «в работе»
+ * (`IN_PROGRESS`). Упакованные/отменённые — вне Фазы 1 (там пришлось бы
+ * откатывать коробки и склад готовой продукции).
+ */
+export class QtyCorrectionPassportNotEditableException extends BusinessException {
+  constructor() {
+    super(
+      'QTY_CORRECTION_PASSPORT_NOT_EDITABLE',
+      'Корректировать количество можно только у паспорта в работе (до упаковки).',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Новое количество приводит к отрицательному `qtyGood`
+ * (`qtyCut − qtyDefect < 0`). Нельзя опустить фактическое количество
+ * ниже уже зафиксированного брака.
+ */
+export class QtyCorrectionBelowDefectException extends BusinessException {
+  constructor(minQty: number) {
+    super(
+      'QTY_CORRECTION_BELOW_DEFECT',
+      `Новое количество не может быть меньше ${minQty}: по паспорту уже зафиксирован брак.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * По паспорту уже есть открытая (`PENDING`) заявка на корректировку.
+ * Двух одновременно открытых не бывает (partial unique index
+ * `passport_qty_correction_pending_uniq`).
+ */
+export class QtyCorrectionAlreadyPendingException extends BusinessException {
+  constructor() {
+    super(
+      'QTY_CORRECTION_ALREADY_PENDING',
+      'По этому паспорту уже есть корректировка на согласовании у мастера.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class QtyCorrectionNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'QTY_CORRECTION_NOT_FOUND',
+      'Заявка на корректировку количества не найдена.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Approve/reject/cancel допустим только для `PENDING`. Терминальные
+ * статусы (`APPROVED`/`REJECTED`) уже зафиксированы.
+ */
+export class QtyCorrectionNotPendingException extends BusinessException {
+  constructor() {
+    super(
+      'QTY_CORRECTION_NOT_PENDING',
+      'Заявка уже рассмотрена — решение поменять нельзя.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Passport delete blockers (см. `PassportsService.delete`,
 // `docs/domain.md §7.8 «Удаление паспорта»`).
 //

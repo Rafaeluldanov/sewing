@@ -63,7 +63,9 @@ import { SeamstressActionsMenu } from '@/app/work/seamstress-actions-menu';
 import { Icon } from '@/components/icon';
 import { QcWorkCard } from './qc-work-card';
 import {
+  cancelQtyCorrectionAction,
   completeQcAction,
+  createQtyCorrectionAction,
   lookupQcPassportAction,
   recordDefectAction,
   refreshQcPassportAction,
@@ -104,6 +106,8 @@ interface Props {
    * вернувшийся паспорт». См. `QcService.listIncomingReworks`.
    */
   incomingReworks: QcIncomingReworkDto[];
+  /** Фича «Корректировка количества» (флаг `FEATURE_QTY_CORRECTION`). */
+  qtyCorrectionEnabled: boolean;
 }
 
 interface ErrorState {
@@ -118,6 +122,7 @@ export function QcTerminal({
   initialShift,
   activeOperationCategory,
   incomingReworks,
+  qtyCorrectionEnabled,
 }: Props) {
   const isShiftActive = !!(initialShift && initialShift.active);
   const onQcShift = isShiftActive && activeOperationCategory === 'QC';
@@ -137,6 +142,7 @@ export function QcTerminal({
         <QcScanTerminal
           defectTypes={defectTypes}
           incomingReworks={incomingReworks}
+          qtyCorrectionEnabled={qtyCorrectionEnabled}
         />
       )}
     </div>
@@ -165,6 +171,7 @@ function WrongOperationCard({ operationName }: { operationName: string }) {
 interface ScanTerminalProps {
   defectTypes: DefectTypeDto[];
   incomingReworks: QcIncomingReworkDto[];
+  qtyCorrectionEnabled: boolean;
 }
 
 /**
@@ -173,7 +180,11 @@ interface ScanTerminalProps {
  * как раньше — изменилась только обвязка в `QcTerminal` (start-shift
  * gate сверху, см. JSDoc файла).
  */
-function QcScanTerminal({ defectTypes, incomingReworks }: ScanTerminalProps) {
+function QcScanTerminal({
+  defectTypes,
+  incomingReworks,
+  qtyCorrectionEnabled,
+}: ScanTerminalProps) {
   const [scannerOpen, setScannerOpen] = useState(false);
   const [manualOpen, setManualOpen] = useState(false);
   const [manualCode, setManualCode] = useState('');
@@ -339,6 +350,40 @@ function QcScanTerminal({ defectTypes, incomingReworks }: ScanTerminalProps) {
     });
   };
 
+  const handleQtyCorrectionSubmit = (
+    qtyAfter: number,
+    reason: string | undefined,
+  ) => {
+    if (!detail) return;
+    const passportId = detail.passportId;
+    startTransition(async () => {
+      const res = await createQtyCorrectionAction(passportId, qtyAfter, reason);
+      if (!res.ok) {
+        setError({ message: res.error, requestId: res.errorRequestId });
+        return;
+      }
+      setError(null);
+      setInfo('Корректировка отправлена мастеру на подтверждение');
+      playCutAcceptedSound();
+      setDetail(res.detail);
+    });
+  };
+
+  const handleQtyCorrectionCancel = (correctionId: string) => {
+    if (!detail) return;
+    const passportId = detail.passportId;
+    startTransition(async () => {
+      const res = await cancelQtyCorrectionAction(correctionId, passportId);
+      if (!res.ok) {
+        setError({ message: res.error, requestId: res.errorRequestId });
+        return;
+      }
+      setError(null);
+      setInfo('Заявка на корректировку отозвана');
+      setDetail(res.detail);
+    });
+  };
+
   const handleScanNext = () => {
     setDetail(null);
     setError(null);
@@ -368,9 +413,12 @@ function QcScanTerminal({ defectTypes, incomingReworks }: ScanTerminalProps) {
           pending={isPending}
           error={error}
           info={info}
+          qtyCorrectionEnabled={qtyCorrectionEnabled}
           onDefectSubmit={handleDefectSubmit}
           onComplete={handleComplete}
           onReturnToRework={handleReturnToRework}
+          onQtyCorrectionSubmit={handleQtyCorrectionSubmit}
+          onQtyCorrectionCancel={handleQtyCorrectionCancel}
           onScanNext={handleScanNext}
           onRefresh={refresh}
         />

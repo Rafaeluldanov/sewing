@@ -237,6 +237,13 @@ enum PassportEventType {
   // `OPERATION_FINISHED` после последнего `OPERATION_REWORK_OPENED`
   // для (passport, operation). См. docs/flows.md §F5a (rework).
   OPERATION_REWORK_OPENED
+  // ОТК скорректировал фактическое количество по паспорту, мастер цеха
+  // подтвердил (см. `model PassportQtyCorrection`, модуль
+  // `passport-qty-corrections`). `qty` = новое фактическое количество,
+  // `payload` = { correctionId, qtyBefore, qtyAfter, delta, reason,
+  // requestedByEmployeeId }. Пишется в момент approve, ДВИГАЕТ и
+  // `Passport.qtyCut`, и `qtyGood` на одну и ту же разницу.
+  QTY_CORRECTED
   PACKED
   CANCELLED
 }
@@ -303,6 +310,22 @@ enum PricingMode {
 ///   можно подать новую заявку при необходимости.
 enum CuttingClosureRequestStatus {
   REQUESTED
+  APPROVED
+  REJECTED
+}
+
+/// Статус заявки на корректировку фактического количества по паспорту
+/// (см. `model PassportQtyCorrection`, модуль `passport-qty-corrections`).
+///
+/// - `PENDING`  — ОТК предложил новое фактическое количество, ждёт
+///   мастера цеха (`SHOPFLOOR_MASTER`);
+/// - `APPROVED` — мастер подтвердил; в момент approve двигаются
+///   `Passport.qtyCut`/`qtyGood`, пересчитывается сдельная ЗП (швеи +
+///   раскройщик), пишется `PassportEvent(QTY_CORRECTED)`;
+/// - `REJECTED` — мастер отклонил; количество не меняется, можно
+///   подать новую заявку.
+enum PassportQtyCorrectionStatus {
+  PENDING
   APPROVED
   REJECTED
 }
@@ -998,6 +1021,9 @@ model Employee {
   closureRequestsCreated  CuttingClosureRequest[] @relation("ClosureRequestRequester")
   closureRequestsReviewed CuttingClosureRequest[] @relation("ClosureRequestReviewer")
   salaryEntriesEdited     SalaryEntry[]           @relation("SalaryEntryEditor")
+
+  qtyCorrectionsRequested PassportQtyCorrection[] @relation("QtyCorrectionRequester")
+  qtyCorrectionsReviewed  PassportQtyCorrection[] @relation("QtyCorrectionReviewer")
 
   /// Этап 6А «Заказы поставщикам» (см. `model PurchaseOrder` ниже,
   /// `apps/api/src/modules/purchase-orders/*`,
@@ -2149,6 +2175,10 @@ model Passport {
   boxItems BoxItem[]
   defects  PassportDefect[]
 
+  /// Заявки на корректировку фактического количества (ОТК → мастер,
+  /// см. `model PassportQtyCorrection`).
+  qtyCorrections PassportQtyCorrection[]
+
   /// Снимок фактической себестоимости паспорта (см.
   /// `model PassportCostSnapshot`, `PassportRealCostService`). Один
   /// паспорт ↔ один снимок (создаётся финализацией конца дня).
@@ -2904,6 +2934,55 @@ model CuttingClosureRequest {
   reviewedByEmployee  Employee? @relation("ClosureRequestReviewer", fields: [reviewedByEmployeeId], references: [id])
 
   @@index([orderId, productId, sizeId])
+  @@index([status, requestedAt])
+}
+
+// =========================
+// PASSPORT QTY CORRECTIONS (корректировка фактического количества ОТК → мастер)
+// =========================
+
+/// Заявка на корректировку фактического количества по паспорту.
+///
+/// Сценарий: ОТК на терминале `/qc` видит, что фактическое количество
+/// в партии отличается от паспорта (больше или меньше — пересорт,
+/// недосчёт при раскрое, порча). Он подаёт заявку с новым фактическим
+/// количеством (`qtyAfter`) и необязательной причиной. Мастер цеха
+/// (`SHOPFLOOR_MASTER`) на `/master` подтверждает или отклоняет.
+///
+/// В момент `APPROVED` (`PassportQtyCorrectionsService.approve`) в одной
+/// транзакции: двигаем `Passport.qtyCut` и `qtyGood` на одну и ту же
+/// разницу `delta = qtyAfter − qtyGoodBefore` (qtyDefect не трогаем),
+/// пишем `PassportEvent(QTY_CORRECTED)`, пересчитываем сдельную ЗП швей
+/// (`EarningsService.reconcileToQtyGood`) и раскройщика
+/// (`recomputeCutterForPassport`). Уже выплаченные строки ЗП
+/// (`PayrollPayoutLine`) не переписываются — попадают в `skipped`.
+///
+/// Одна открытая (`PENDING`) заявка на паспорт гарантируется частичным
+/// уникальным индексом `passport_qty_correction_pending_uniq`
+/// (создаётся идемпотентно в `prisma-client-manager.applyInvariants`).
+/// Сервис ловит `P2002` и переводит его в бизнес-ошибку.
+model PassportQtyCorrection {
+  id                    String                      @id @default(cuid())
+  passportId            String
+  status                PassportQtyCorrectionStatus @default(PENDING)
+  /// Снимок `Passport.qtyGood` на момент подачи заявки.
+  qtyBefore             Int
+  /// Новое фактическое количество, предложенное ОТК.
+  qtyAfter              Int
+  reason                String?
+  requestedByEmployeeId String
+  requestedAt           DateTime                    @default(now())
+  reviewedByEmployeeId  String?
+  reviewedAt            DateTime?
+  reviewerNote          String?
+  createdAt             DateTime                    @default(now())
+  updatedAt             DateTime                    @updatedAt
+
+  passport            Passport  @relation(fields: [passportId], references: [id])
+  requestedByEmployee Employee  @relation("QtyCorrectionRequester", fields: [requestedByEmployeeId], references: [id])
+  reviewedByEmployee  Employee? @relation("QtyCorrectionReviewer", fields: [reviewedByEmployeeId], references: [id])
+
+  @@index([passportId, requestedAt])
   @@index([status, requestedAt])
 }
 

@@ -28,6 +28,7 @@ import {
 } from '@sewing/shared/master-calls';
 import type { CutReleasePolicyDto, SizeDto } from '@sewing/shared';
 import type { DefectTypeDto } from '@sewing/shared/qc';
+import type { PassportQtyCorrectionDto } from '@sewing/shared/passport-qty-corrections';
 import { Icon } from '@/components/icon';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { RoleHeaderCard } from '@/components/role-header-card';
@@ -45,6 +46,12 @@ import { CutReleasePolicyCard } from './cut-release-policy-card';
 import { refreshCutReleasePolicyAction } from './cut-release-policy-actions';
 import { ProductionBoardView } from './production-board-view';
 import { EmployeeStatsView } from './employee-stats-view';
+import { QtyCorrectionsView } from './qty-corrections-view';
+import {
+  approveQtyCorrectionAction,
+  refreshPendingQtyCorrectionsAction,
+  rejectQtyCorrectionAction,
+} from './qty-corrections-actions';
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -63,6 +70,10 @@ interface Props {
   showEmployeeQr: boolean;
   /** Имя мастера для синей шапки-профиля `RoleHeaderCard`. */
   fullName: string;
+  /** Фича «Корректировка количества» (флаг `FEATURE_QTY_CORRECTION`). */
+  qtyCorrectionEnabled: boolean;
+  /** SSR-снимок очереди открытых корректировок (для вкладки/бейджа). */
+  initialQtyCorrections: PassportQtyCorrectionDto[];
 }
 
 export function MasterPageClient({
@@ -74,6 +85,8 @@ export function MasterPageClient({
   defectTypes,
   showEmployeeQr,
   fullName,
+  qtyCorrectionEnabled,
+  initialQtyCorrections,
 }: Props) {
   const [items, setItems] = useState<MasterCallDto[]>(initialItems);
   const [resolved, setResolved] =
@@ -96,9 +109,16 @@ export function MasterPageClient({
     null,
   );
   const [archiveOpen, setArchiveOpen] = useState(false);
-  // Вкладки кабинета мастера: очередь вызовов (исторический экран) и
-  // новая «Движение тиража» (доска по дате выдачи кроя).
-  const [tab, setTab] = useState<'calls' | 'board' | 'employees'>('calls');
+  // Вкладки кабинета мастера: очередь вызовов (исторический экран),
+  // «Движение тиража» (доска по дате выдачи кроя), «Сотрудники» и
+  // «Корректировки» (заявки ОТК на правку количества).
+  const [tab, setTab] = useState<
+    'calls' | 'board' | 'employees' | 'corrections'
+  >('calls');
+  const [corrections, setCorrections] = useState<PassportQtyCorrectionDto[]>(
+    initialQtyCorrections,
+  );
+  const [busyCorrectionId, setBusyCorrectionId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [now, setNow] = useState<number>(() => Date.now());
   // Stage 2 «Действия мастера»: открытый bottom-sheet ручных действий
@@ -139,7 +159,15 @@ export function MasterPageClient({
     if (polRes.ok) {
       setPolicy(polRes.policy);
     }
-  }, []);
+    // Очередь корректировок количества (если фича включена) — тем же
+    // polling'ом, чтобы бейдж вкладки и список были живыми. Soft-fail.
+    if (qtyCorrectionEnabled) {
+      const corrRes = await refreshPendingQtyCorrectionsAction();
+      if (corrRes.ok) {
+        setCorrections(corrRes.items);
+      }
+    }
+  }, [qtyCorrectionEnabled]);
 
   // Список цветов для datalist в форме ограничения. Берём из
   // currentPassports открытых вызовов мастера — это всё, что у нас
@@ -172,6 +200,60 @@ export function MasterPageClient({
     if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
     toastTimerRef.current = setTimeout(() => setToast(null), 3000);
   }, []);
+
+  const onApproveCorrection = useCallback(
+    async (id: string) => {
+      if (busyCorrectionId) return;
+      setBusyCorrectionId(id);
+      setError(null);
+      try {
+        const res = await approveQtyCorrectionAction(id);
+        if (res.ok) {
+          setCorrections((prev) => prev.filter((c) => c.id !== id));
+          const skipped = res.result.salarySkipped;
+          showToast(
+            `Корректировка применена: годных ${res.result.qtyGood}` +
+              (skipped > 0
+                ? `. ${skipped} строк ЗП уже выплачены — разберите вручную.`
+                : ''),
+          );
+        } else {
+          setError(res.error);
+        }
+      } finally {
+        setBusyCorrectionId(null);
+        void refresh();
+      }
+    },
+    [busyCorrectionId, refresh, showToast],
+  );
+
+  const onRejectCorrection = useCallback(
+    async (id: string) => {
+      if (busyCorrectionId) return;
+      if (
+        typeof window !== 'undefined' &&
+        !window.confirm('Отклонить корректировку количества?')
+      ) {
+        return;
+      }
+      setBusyCorrectionId(id);
+      setError(null);
+      try {
+        const res = await rejectQtyCorrectionAction(id);
+        if (res.ok) {
+          setCorrections((prev) => prev.filter((c) => c.id !== id));
+          showToast('Корректировка отклонена');
+        } else {
+          setError(res.error);
+        }
+      } finally {
+        setBusyCorrectionId(null);
+        void refresh();
+      }
+    },
+    [busyCorrectionId, refresh, showToast],
+  );
 
   const onOpenScanner = useCallback((callId: string) => {
     setActiveCallId(callId);
@@ -322,6 +404,20 @@ export function MasterPageClient({
         >
           Сотрудники
         </button>
+        {qtyCorrectionEnabled && (
+          <button
+            type="button"
+            role="tab"
+            aria-selected={tab === 'corrections'}
+            className={
+              'master-page__tab' + (tab === 'corrections' ? ' is-active' : '')
+            }
+            onClick={() => setTab('corrections')}
+          >
+            Корректировки
+            {corrections.length > 0 ? ` · ${corrections.length}` : ''}
+          </button>
+        )}
       </div>
 
       {error && (
@@ -339,6 +435,15 @@ export function MasterPageClient({
       {tab === 'board' && <ProductionBoardView />}
 
       {tab === 'employees' && <EmployeeStatsView />}
+
+      {tab === 'corrections' && qtyCorrectionEnabled && (
+        <QtyCorrectionsView
+          items={corrections}
+          busyId={busyCorrectionId}
+          onApprove={onApproveCorrection}
+          onReject={onRejectCorrection}
+        />
+      )}
 
       {tab === 'calls' && (
         <>

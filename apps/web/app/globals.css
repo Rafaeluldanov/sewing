@@ -18202,3 +18202,48 @@ body:has(.admin-layout) .app-header { display: none !important; }
   box-shadow: 0 8px 22px rgba(185, 28, 28, 0.35);
   cursor: pointer;
 }
+
+/* -------------------------------------------------------------------------
+   Корректировка фактического количества (ОТК → мастер).
+   Карточка заявки во вкладке «Корректировки» кабинета мастера.
+   ------------------------------------------------------------------------- */
+.qty-correction-card__delta {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  font-size: 1.15rem;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  color: var(--color-fg);
+}
+.qty-correction-card__delta-badge {
+  font-size: 0.82rem;
+  font-weight: 700;
+  border-radius: var(--radius-pill);
+  padding: 0.1rem 0.5rem;
+}
+.qty-correction-card__delta--up .qty-correction-card__delta-badge {
+  background: var(--color-ok-soft);
+  color: var(--color-ok-fg);
+}
+.qty-correction-card__delta--down .qty-correction-card__delta-badge {
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+}
+.qty-correction-card__reason {
+  margin-top: 0.6rem;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-md);
+  padding: 0.55rem 0.7rem;
+  font-size: 0.92rem;
+  line-height: 1.4;
+}
+.qty-correction-card__reason-label {
+  display: block;
+  font-size: 0.72rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 700;
+  color: var(--color-fg-subtle);
+  margin-bottom: 0.25rem;
+}

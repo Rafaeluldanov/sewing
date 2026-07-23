@@ -33,6 +33,7 @@ import {
 } from '../../common/errors.js';
 import { EarningsService } from '../earnings/earnings.service.js';
 import { PushService } from '../push/push.service.js';
+import { PassportQtyCorrectionsService } from '../passport-qty-corrections/passport-qty-corrections.service.js';
 
 /**
  * Сервис ОТК (Шаг 7).
@@ -56,6 +57,7 @@ export class QcService {
     private readonly audit: AuditService,
     private readonly earnings: EarningsService,
     private readonly push: PushService,
+    private readonly qtyCorrections: PassportQtyCorrectionsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -875,6 +877,8 @@ export class QcService {
       });
     }
     const defects = await this.loadDefects(passportId);
+    const pendingQtyCorrection =
+      await this.qtyCorrections.findPendingForPassport(passportId);
     const remainingForDefect = Math.max(r.qtyCut - r.qtyDefect, 0);
     // Самое свежее `QC_PASSED` — фиксирует «когда ОТК последний раз
     // подтвердил проверку» (см. `completeQc`).
@@ -1021,6 +1025,7 @@ export class QcService {
       reworkAssignment,
       removedFromQc,
       incomingReworkAtQc,
+      pendingQtyCorrection,
     };
   }
 

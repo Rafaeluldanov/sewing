@@ -5,9 +5,12 @@ import {
   CreatePassportDefectSchema,
   type QcPassportDetailDto,
 } from '@sewing/shared/qc';
+import { CreatePassportQtyCorrectionSchema } from '@sewing/shared/passport-qty-corrections';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
+  cancelPassportQtyCorrection,
   completeQcPassport,
+  createPassportQtyCorrection,
   getQcPassport,
   recordPassportDefect,
   returnQcPassportToRework,
@@ -226,6 +229,68 @@ export async function returnToReworkAction(
       passportId,
       targetOperationId,
     );
+    revalidateForPassport(detail);
+    return { ok: true, detail };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+export type QcQtyCorrectionResult =
+  | { ok: true; detail: QcPassportDetailDto }
+  | { ok: false; error: string; errorRequestId?: string };
+
+/**
+ * ОТК предлагает корректировку фактического количества по паспорту:
+ * `POST /api/qc/passports/:id/qty-corrections`. Создаёт `PENDING`-заявку
+ * (мастеру уходит push), сама цифра паспорта пока не меняется. После
+ * успеха перечитываем карточку — на ней появится баннер «ждёт мастера».
+ */
+export async function createQtyCorrectionAction(
+  passportId: string,
+  qtyAfter: number,
+  reason: string | undefined,
+): Promise<QcQtyCorrectionResult> {
+  const parsed = CreatePassportQtyCorrectionSchema.safeParse({
+    qtyAfter,
+    reason: reason && reason.trim() ? reason.trim() : undefined,
+  });
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные',
+    };
+  }
+  try {
+    await createPassportQtyCorrection(passportId, parsed.data);
+    const detail = await getQcPassport(passportId);
+    revalidateForPassport(detail);
+    return { ok: true, detail };
+  } catch (e) {
+    return {
+      ok: false,
+      error: explainApiError(e),
+      errorRequestId: errorRequestId(e),
+    };
+  }
+}
+
+/**
+ * ОТК отзывает свою открытую заявку на корректировку:
+ * `POST /api/qc/qty-corrections/:id/cancel`. После успеха перечитываем
+ * карточку паспорта (баннер «ждёт мастера» пропадёт).
+ */
+export async function cancelQtyCorrectionAction(
+  correctionId: string,
+  passportId: string,
+): Promise<QcQtyCorrectionResult> {
+  try {
+    await cancelPassportQtyCorrection(correctionId);
+    const detail = await getQcPassport(passportId);
     revalidateForPassport(detail);
     return { ok: true, detail };
   } catch (e) {

@@ -22,6 +22,7 @@
     "./admin": "./src/admin.ts",
     "./diagnostics": "./src/diagnostics.ts",
     "./cutting-closure": "./src/cutting-closure.ts",
+    "./passport-qty-corrections": "./src/passport-qty-corrections.ts",
     "./warehouses": "./src/warehouses.ts",
     "./operations": "./src/operations.ts",
     "./salary": "./src/salary.ts",

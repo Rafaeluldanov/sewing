@@ -18,6 +18,7 @@
  */
 
 import { z } from 'zod';
+import type { PassportQtyCorrectionDto } from './passport-qty-corrections';
 import type { PassportStatus } from './passports';
 
 // ---------------------------------------------------------------------------
@@ -252,6 +253,14 @@ export interface QcPassportDetailDto extends QcPassportListItemDto {
    *     повторную проверку», см. `apps/web/app/qc/qc-work-card.tsx`.
    */
   incomingReworkAtQc: boolean;
+  /**
+   * Открытая (`PENDING`) заявка на корректировку фактического
+   * количества по этому паспорту, если она есть. UI ОТК показывает
+   * баннер «Ждёт мастера», замораживает кнопку корректировки и даёт
+   * «Отозвать заявку». `null` — открытой заявки нет. См.
+   * `PassportQtyCorrectionDto`, модуль `passport-qty-corrections`.
+   */
+  pendingQtyCorrection: PassportQtyCorrectionDto | null;
 }
 
 // ---------------------------------------------------------------------------

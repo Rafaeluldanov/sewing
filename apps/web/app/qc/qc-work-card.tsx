@@ -44,12 +44,20 @@ interface Props {
    *  поэтому фидбек показываем прямо в карточке (над панелью). */
   error: ErrorState | null;
   info: string | null;
+  /** Фича «Корректировка фактического количества» (флаг
+   *  `FEATURE_QTY_CORRECTION`, прокинут из RSC). */
+  qtyCorrectionEnabled: boolean;
   onDefectSubmit: (form: FormData) => void;
   onComplete: () => void;
   /** «Вернуть на переделку» — отдаём паспорт обратно швее на
    *  выбранную SEW-операцию из `detail.eligibleReworkTargets`.
    *  См. `docs/flows.md §F5a`. */
   onReturnToRework: (targetOperationId: string) => void;
+  /** ОТК предлагает новое фактическое количество (→ мастеру на
+   *  согласование). См. `PassportQtyCorrectionsService`. */
+  onQtyCorrectionSubmit: (qtyAfter: number, reason: string | undefined) => void;
+  /** ОТК отзывает свою открытую заявку на корректировку. */
+  onQtyCorrectionCancel: (correctionId: string) => void;
   onScanNext: () => void;
   onRefresh: () => void;
 }
@@ -71,9 +79,12 @@ export function QcWorkCard({
   pending,
   error,
   info,
+  qtyCorrectionEnabled,
   onDefectSubmit,
   onComplete,
   onReturnToRework,
+  onQtyCorrectionSubmit,
+  onQtyCorrectionCancel,
   onScanNext,
   onRefresh,
 }: Props) {
@@ -83,6 +94,8 @@ export function QcWorkCard({
   // Закрывается «Отмена» или успешным запуском возврата.
   const [reworkPickerOpen, setReworkPickerOpen] = useState(false);
   const [reworkPicked, setReworkPicked] = useState<string | null>(null);
+  // Инлайн-форма «Корректировка количества».
+  const [qtyCorrectionOpen, setQtyCorrectionOpen] = useState(false);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -137,6 +150,25 @@ export function QcWorkCard({
     !completed && !reworkPending && detail.canRecordDefect;
   const showDefectEmpty =
     !completed && !reworkPending && !detail.canRecordDefect;
+
+  // Корректировка фактического количества: доступна, пока паспорт в
+  // работе и по нему нет открытой заявки. Если заявка уже висит —
+  // показываем баннер «ждёт мастера» с кнопкой «Отозвать».
+  const pendingCorrection = detail.pendingQtyCorrection;
+  const showQtyCorrectionButton =
+    qtyCorrectionEnabled &&
+    !completed &&
+    !reworkPending &&
+    detail.status === 'IN_PROGRESS' &&
+    !pendingCorrection;
+
+  const handleQtyCorrectionConfirm = (
+    qtyAfter: number,
+    reason: string | undefined,
+  ) => {
+    setQtyCorrectionOpen(false);
+    onQtyCorrectionSubmit(qtyAfter, reason);
+  };
 
   return (
     <section className="qc-card" aria-label="Карточка паспорта ОТК">
@@ -195,6 +227,26 @@ export function QcWorkCard({
           </strong>
         </div>
       </div>
+
+      {pendingCorrection && (
+        <div className="info-box" role="status">
+          <strong>
+            Корректировка {pendingCorrection.qtyBefore} →{' '}
+            {pendingCorrection.qtyAfter} ждёт мастера.
+          </strong>{' '}
+          Цифры обновятся после подтверждения.
+          <div style={{ marginTop: '0.5rem' }}>
+            <button
+              type="button"
+              className="btn btn-block"
+              onClick={() => onQtyCorrectionCancel(pendingCorrection.id)}
+              disabled={pending}
+            >
+              Отозвать заявку
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* «Обновить карточку» — мелкая ссылка, вне закреплённой панели. */}
       <div className="qc-card__refresh">
@@ -369,6 +421,16 @@ export function QcWorkCard({
         />
       )}
 
+      {qtyCorrectionOpen && (
+        <QtyCorrectionSheet
+          currentQtyGood={detail.qtyGood}
+          qtyCut={detail.qtyCut}
+          pending={pending}
+          onConfirm={handleQtyCorrectionConfirm}
+          onCancel={() => setQtyCorrectionOpen(false)}
+        />
+      )}
+
       <div className="qc-card__sticky-actions">
         {completed || reworkPending ? (
           <button
@@ -379,7 +441,7 @@ export function QcWorkCard({
           >
             Сканировать другой паспорт
           </button>
-        ) : reworkPickerOpen ? null : (
+        ) : reworkPickerOpen || qtyCorrectionOpen ? null : (
           <>
             {detail.canRecordDefect && (
               <button
@@ -389,6 +451,16 @@ export function QcWorkCard({
                 disabled={pending || detail.remainingForDefect === 0}
               >
                 {pending ? 'Запись…' : 'Добавить брак'}
+              </button>
+            )}
+            {showQtyCorrectionButton && (
+              <button
+                type="button"
+                className="btn btn-block"
+                onClick={() => setQtyCorrectionOpen(true)}
+                disabled={pending}
+              >
+                ✎ Корректировка количества
               </button>
             )}
             {detail.canReturnToRework && (
@@ -497,6 +569,119 @@ function ReworkPicker({
           disabled={pending || !picked}
         >
           {pending ? 'Возвращаем…' : 'Вернуть'}
+        </button>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * Инлайн-форма «Корректировка количества». ОТК вводит фактическое
+ * количество (можно и больше, и меньше текущего) и необязательную
+ * причину; по «Отправить мастеру» создаётся заявка на согласование
+ * (см. `PassportQtyCorrectionsService.create`). Сами цифры паспорта
+ * меняются только после подтверждения мастером.
+ */
+function QtyCorrectionSheet({
+  currentQtyGood,
+  qtyCut,
+  pending,
+  onConfirm,
+  onCancel,
+}: {
+  currentQtyGood: number;
+  qtyCut: number;
+  pending: boolean;
+  onConfirm: (qtyAfter: number, reason: string | undefined) => void;
+  onCancel: () => void;
+}) {
+  const [qty, setQty] = useState<string>(String(currentQtyGood));
+  const [reason, setReason] = useState<string>('');
+
+  const parsed = Number(qty);
+  const valid = Number.isInteger(parsed) && parsed >= 0;
+  const delta = valid ? parsed - currentQtyGood : 0;
+  const deltaLabel = delta > 0 ? `+${delta}` : String(delta);
+  const changed = valid && delta !== 0;
+  // Больше, чем раскроено — не запрещаем, но предупреждаем.
+  const aboveCut = valid && parsed > qtyCut;
+
+  const handleConfirm = () => {
+    if (!valid || !changed) return;
+    onConfirm(parsed, reason.trim() ? reason.trim() : undefined);
+  };
+
+  return (
+    <section
+      className="qc-card__rework-picker"
+      aria-label="Корректировка количества"
+    >
+      <h3 className="qc-card__section-title">Корректировка количества</h3>
+      <p className="hint">
+        По паспорту сейчас <strong>{currentQtyGood} шт.</strong> Укажите
+        фактическое количество в партии.
+      </p>
+      <div className="form-row">
+        <label htmlFor="qc-qty-correction">Фактическое количество, шт.</label>
+        <div>
+          <input
+            id="qc-qty-correction"
+            type="number"
+            min={0}
+            step={1}
+            value={qty}
+            onChange={(e) => setQty(e.target.value)}
+            disabled={pending}
+            autoFocus
+          />
+          <div className="hint">
+            {changed ? (
+              <>
+                Было <strong>{currentQtyGood}</strong> → станет{' '}
+                <strong>{parsed}</strong> ({deltaLabel}).
+              </>
+            ) : (
+              'Введите число, отличное от текущего.'
+            )}
+            {aboveCut && (
+              <>
+                {' '}
+                <strong>Больше, чем раскроено ({qtyCut}).</strong> Проверьте.
+              </>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="form-row">
+        <label htmlFor="qc-qty-correction-reason">Причина</label>
+        <div>
+          <textarea
+            id="qc-qty-correction-reason"
+            rows={2}
+            maxLength={280}
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Необязательно, до 280 символов"
+            disabled={pending}
+          />
+        </div>
+      </div>
+      <div className="qc-card__rework-picker-actions">
+        <button
+          type="button"
+          className="btn btn-block"
+          onClick={onCancel}
+          disabled={pending}
+        >
+          Отмена
+        </button>
+        <button
+          type="button"
+          className="btn btn-primary btn-block"
+          onClick={handleConfirm}
+          disabled={pending || !valid || !changed}
+        >
+          {pending ? 'Отправка…' : 'Отправить мастеру'}
         </button>
       </div>
     </section>

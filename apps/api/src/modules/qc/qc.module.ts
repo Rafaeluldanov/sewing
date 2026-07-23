@@ -5,6 +5,7 @@ import { DefectTypesController } from './defect-types.controller.js';
 import { PassportDefectsController } from './passport-defects.controller.js';
 import { EarningsModule } from '../earnings/earnings.module.js';
 import { PushModule } from '../push/push.module.js';
+import { PassportQtyCorrectionsModule } from '../passport-qty-corrections/passport-qty-corrections.module.js';
 
 /**
  * Модуль ОТК и фиксации брака (Шаг 7 MVP).
@@ -15,7 +16,7 @@ import { PushModule } from '../push/push.module.js';
  * (см. `docs/flows.md §F5a`, инвариант «оплата за изделие — один раз»).
  */
 @Module({
-  imports: [EarningsModule, PushModule],
+  imports: [EarningsModule, PushModule, PassportQtyCorrectionsModule],
   controllers: [
     QcController,
     DefectTypesController,

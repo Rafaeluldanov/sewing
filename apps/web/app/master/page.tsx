@@ -8,6 +8,8 @@ import {
 import { getActiveCutReleasePolicy } from '@/lib/cut-release-policy-api';
 import { listSizes } from '@/lib/orders-api';
 import { listMasterDefectTypes } from '@/lib/master-actions-api';
+import { listPendingQtyCorrections } from '@/lib/master-qty-corrections-api';
+import { isQtyCorrectionEnabled } from '@/lib/feature-flags';
 import { canSeeEmployeeQrButton, canSeeMasterPage } from '@/lib/rbac';
 import { MasterPageClient } from './master-page-client';
 
@@ -80,6 +82,21 @@ export default async function MasterPage() {
     if (!(e instanceof ApiRequestError)) throw e;
   }
 
+  // Очередь корректировок количества (фича `FEATURE_QTY_CORRECTION`).
+  // Soft-fail: пустой список, если API недоступен — вкладка мастера
+  // подтянет актуальные polling'ом.
+  const qtyCorrectionEnabled = isQtyCorrectionEnabled();
+  let initialQtyCorrections: Awaited<
+    ReturnType<typeof listPendingQtyCorrections>
+  > = [];
+  if (qtyCorrectionEnabled) {
+    try {
+      initialQtyCorrections = await listPendingQtyCorrections();
+    } catch (e) {
+      if (!(e instanceof ApiRequestError)) throw e;
+    }
+  }
+
   return (
     <MasterPageClient
       initialItems={initialItems ?? []}
@@ -90,6 +107,8 @@ export default async function MasterPage() {
       defectTypes={defectTypes}
       showEmployeeQr={canSeeEmployeeQrButton(me.user.roles ?? me.user.role)}
       fullName={me.user.fullName}
+      qtyCorrectionEnabled={qtyCorrectionEnabled}
+      initialQtyCorrections={initialQtyCorrections}
     />
   );
 }

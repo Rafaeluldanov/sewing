@@ -956,12 +956,19 @@ export class EarningsService {
 
   /**
    * Привести `OperationEntry.qty` всех сдельных начислений по паспорту к
-   * актуальному `qtyGood`. Сценарий: ОТК зафиксировал брак уже после того,
-   * как швеи/ВТО закрыли свои операции — их `OperationEntry` хранят
-   * `qty` снимком на момент завершения операции и сами не пересчитываются.
+   * актуальному `qtyGood`. Сценарии:
+   *   - ОТК зафиксировал брак уже после того, как швеи/ВТО закрыли свои
+   *     операции (`qtyGood` уменьшился) — начисления гасим вниз;
+   *   - мастер подтвердил корректировку количества «в плюс»
+   *     (`qtyGood` вырос, см. `PassportQtyCorrectionsService`) — тогда
+   *     начисления надо поднять обратно к новому `qtyGood`.
+   * `OperationEntry` хранят `qty` снимком на момент завершения операции
+   * и сами не пересчитываются — поэтому метод двунаправленный: приводит
+   * любую строку с `qty != qtyGood` к `qtyGood` (кроме исключений ниже).
    *
    * Cutter (`sourceEventType = PASSPORT_CREATED`) сознательно не трогаем —
-   * раскройщик платится за `qtyCut` независимо от брака швеи.
+   * раскройщик платится за `qtyCut`, его пересчитывает отдельный
+   * `recomputeCutterForPassport` (когда корректировка двигает и раскрой).
    *
    * Уже выплаченные строки (в `PayrollPayoutLine`) пропускаем — менять
    * сумму задним числом по закрытому выплатному документу нельзя; такие
@@ -984,7 +991,9 @@ export class EarningsService {
       where: {
         passportId,
         sourceEventType: { not: EarningSource.PASSPORT_CREATED },
-        qty: { gt: passport.qtyGood },
+        // Двунаправленно: любая строка, чей снимок разошёлся с текущим
+        // qtyGood (и вниз при браке, и вверх при корректировке «в плюс»).
+        qty: { not: passport.qtyGood },
       },
       select: { id: true, ratePerUnit: true },
     });
@@ -1013,6 +1022,62 @@ export class EarningsService {
       updated += 1;
     }
     return { updated, skipped };
+  }
+
+  /**
+   * Пересчитать immediate-начисление раскройщика по актуальному
+   * `Passport.qtyCut`. Нужно, когда корректировка количества двигает и
+   * раскрой (см. `PassportQtyCorrectionsService.approve`): раскройщик
+   * платится за `qtyCut`, поэтому `reconcileToQtyGood` его не трогает.
+   *
+   * Механика — та же delete-and-recreate, что в `PassportsService.update`
+   * на статусе `CREATED`: сносим старые `PASSPORT_CREATED`-строки и
+   * создаём заново через `createImmediateForCutter` (он сам выберет
+   * схему MARKETPLACE_FIXED / B2B_SEWING_PERCENT по новому `qtyCut`).
+   *
+   * Уже выплаченную строку (в `PayrollPayoutLine`) не трогаем: менять
+   * закрытый выплатной документ задним числом нельзя — возвращаем её в
+   * `skipped` для ручного разбора менеджером.
+   */
+  async recomputeCutterForPassport(
+    tx: Prisma.TransactionClient,
+    passportId: string,
+  ): Promise<{ updated: number; skipped: number }> {
+    const passport = await tx.passport.findUnique({
+      where: { id: passportId },
+      select: { cutterId: true, sizeId: true, productId: true, qtyCut: true },
+    });
+    if (!passport) return { updated: 0, skipped: 0 };
+
+    const cutterEntries = await tx.operationEntry.findMany({
+      where: { passportId, sourceEventType: EarningSource.PASSPORT_CREATED },
+      select: { id: true },
+    });
+
+    if (cutterEntries.length > 0) {
+      const paid = await tx.payrollPayoutLine.findMany({
+        where: { operationEntryId: { in: cutterEntries.map((c) => c.id) } },
+        select: { operationEntryId: true },
+      });
+      if (paid.length > 0) {
+        // Хотя бы одна строка раскройщика уже попала в выплату — не
+        // переписываем её задним числом.
+        return { updated: 0, skipped: cutterEntries.length };
+      }
+      await tx.operationEntry.deleteMany({
+        where: { passportId, sourceEventType: EarningSource.PASSPORT_CREATED },
+      });
+    }
+
+    await this.createImmediateForCutter(tx, {
+      passportId,
+      cutterId: passport.cutterId,
+      sizeId: passport.sizeId,
+      productId: passport.productId,
+      qty: passport.qtyCut,
+    });
+
+    return { updated: cutterEntries.length, skipped: 0 };
   }
 
   // ===========================================================================

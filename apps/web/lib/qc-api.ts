@@ -13,6 +13,10 @@ import type {
   QcPassportDetailDto,
   QcPassportListItemDto,
 } from '@sewing/shared/qc';
+import type {
+  CreatePassportQtyCorrectionDto,
+  PassportQtyCorrectionDto,
+} from '@sewing/shared/passport-qty-corrections';
 import { apiFetch } from './api';
 
 export interface QcPassportListResponse {
@@ -87,6 +91,31 @@ export function listQcIncomingReworks(): Promise<{
   items: QcIncomingReworkDto[];
 }> {
   return apiFetch<{ items: QcIncomingReworkDto[] }>('/qc/incoming-reworks');
+}
+
+/**
+ * ОТК предлагает корректировку фактического количества по паспорту.
+ * Создаёт `PENDING`-заявку, мастеру уходит push. См.
+ * `PassportQtyCorrectionsService.create`.
+ */
+export function createPassportQtyCorrection(
+  passportId: string,
+  body: CreatePassportQtyCorrectionDto,
+): Promise<PassportQtyCorrectionDto> {
+  return apiFetch<PassportQtyCorrectionDto>(
+    `/qc/passports/${encodeURIComponent(passportId)}/qty-corrections`,
+    { method: 'POST', body },
+  );
+}
+
+/** ОТК отзывает свою открытую заявку на корректировку. */
+export function cancelPassportQtyCorrection(
+  id: string,
+): Promise<PassportQtyCorrectionDto> {
+  return apiFetch<PassportQtyCorrectionDto>(
+    `/qc/qty-corrections/${encodeURIComponent(id)}/cancel`,
+    { method: 'POST', body: {} },
+  );
 }
 
 export function listDefectTypes(): Promise<DefectTypeDto[]> {
