@@ -26,6 +26,7 @@ import {
   type ProductionCostV2Query,
 } from '@sewing/shared/production-cost';
 import { SHIFT_MINUTES } from '@sewing/shared/costs';
+import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
 import { isSalaryEligible } from '../employees/compensation.js';
@@ -155,6 +156,7 @@ export class ProductionCostV2Service {
                 patternNameSnapshot: true,
                 patternArticleSnapshot: true,
                 patternPreviewSnapshotUrl: true,
+                materialsAndHardwareCostPolicy: true,
                 client: { select: { id: true, name: true } },
                 patternItem: {
                   select: {
@@ -221,6 +223,7 @@ export class ProductionCostV2Service {
                 patternNameSnapshot: true,
                 patternArticleSnapshot: true,
                 patternPreviewSnapshotUrl: true,
+                materialsAndHardwareCostPolicy: true,
                 customerUnitPrice: true,
                 customerCurrency: true,
                 client: { select: { id: true, name: true } },
@@ -295,6 +298,7 @@ export class ProductionCostV2Service {
             orderId: true,
             sourceType: true,
             calculationMethod: true,
+            materialRole: true,
             quotedPrice: true,
             quotedCurrency: true,
             purchaseQty: true,
@@ -463,6 +467,12 @@ export class ProductionCostV2Service {
       qtyPlanTotal: number;
       customerUnitPriceRub: Prisma.Decimal | null;
       customerCurrency: string | null;
+      /**
+       * Политика материалов/фурнитуры: `EXCLUDE` = давальческое сырьё
+       * заказчика, стоимость MATERIAL/HARDWARE НЕ входит в себестоимость
+       * (зеркалит `CostsService`/`OrderCostEstimatesService`).
+       */
+      materialsAndHardwareCostPolicy: string;
     };
     const orderMetaById = new Map<string, OrderMeta>();
     const upsertOrderMeta = (
@@ -486,6 +496,7 @@ export class ProductionCostV2Service {
         items?: { qtyPlan: number; productId: string }[];
         customerUnitPrice?: Prisma.Decimal | null;
         customerCurrency?: string | null;
+        materialsAndHardwareCostPolicy?: string;
       },
     ) => {
       const existing = orderMetaById.get(o.id);
@@ -508,6 +519,8 @@ export class ProductionCostV2Service {
         qtyPlanTotal,
         customerUnitPriceRub: o.customerUnitPrice ?? null,
         customerCurrency: o.customerCurrency ?? null,
+        materialsAndHardwareCostPolicy:
+          o.materialsAndHardwareCostPolicy ?? 'INCLUDE',
       };
       // Если уже было — обновим только то, что могло отсутствовать.
       if (existing) {
@@ -720,6 +733,7 @@ export class ProductionCostV2Service {
       wnByOrderId.set(wn.orderId, arr);
     }
 
+    const zeroRub = () => new Prisma.Decimal(0);
     for (const orderId of orderIds) {
       const meta = orderMetaById.get(orderId);
       const released = releasedByOrderId.get(orderId)?.releasedQty ?? 0;
@@ -728,13 +742,24 @@ export class ProductionCostV2Service {
         qtyPlan > 0
           ? new Prisma.Decimal(released).div(new Prisma.Decimal(qtyPlan))
           : new Prisma.Decimal(0);
+      // Давальческое сырьё/фурнитура: стоимость MATERIAL/HARDWARE не входит
+      // в себестоимость. Смета/WorkshopNeed по-прежнему хранят полную
+      // стоимость строк (исключение живёт только на агрегате сметы), поэтому
+      // гейтим здесь — как CostsService/passport-real-cost. APPLICATION и
+      // OTHER (нанесение/прочее) остаются: их платит цех.
+      const excludeMatHw =
+        meta?.materialsAndHardwareCostPolicy === 'EXCLUDE';
 
       const est = estimateByOrderId.get(orderId);
       if (est && ratio.greaterThan(0)) {
         const sums = sumEstimateLinesByKind(est.lines);
         orderMaterials.set(orderId, {
-          materialCostRub: round2(sums.MATERIAL.mul(ratio)),
-          hardwareCostRub: round2(sums.HARDWARE.mul(ratio)),
+          materialCostRub: excludeMatHw
+            ? zeroRub()
+            : round2(sums.MATERIAL.mul(ratio)),
+          hardwareCostRub: excludeMatHw
+            ? zeroRub()
+            : round2(sums.HARDWARE.mul(ratio)),
           applicationCostRub: round2(sums.APPLICATION.mul(ratio)),
           otherCostRub: round2(sums.OTHER.mul(ratio)),
           source: 'COST_ESTIMATE',
@@ -764,7 +789,16 @@ export class ProductionCostV2Service {
           const lineTotal = new Prisma.Decimal(purchaseQty).mul(
             new Prisma.Decimal(wn.quotedPrice),
           );
-          const kind = classifyWorkshopNeed(wn.sourceType);
+          // Каноническая классификация (роль-aware), как в смете
+          // (`OrderCostEstimatesService` через line.kind) и в документе
+          // план→факт. Прежний sourceType-only `classifyWorkshopNeed`
+          // ронял основную ткань (PATTERN_MATERIAL_AREA/…) в OTHER, и гейт
+          // EXCLUDE её не занулял (утечка давальческого материала).
+          const kind = getWorkshopNeedKind({
+            sourceType: wn.sourceType,
+            calculationMethod: wn.calculationMethod,
+            materialRole: wn.materialRole,
+          });
           if (kind === 'MATERIAL') materialRub = materialRub.add(lineTotal);
           else if (kind === 'HARDWARE')
             hardwareRub = hardwareRub.add(lineTotal);
@@ -778,8 +812,12 @@ export class ProductionCostV2Service {
           );
         }
         orderMaterials.set(orderId, {
-          materialCostRub: round2(materialRub.mul(ratio)),
-          hardwareCostRub: round2(hardwareRub.mul(ratio)),
+          materialCostRub: excludeMatHw
+            ? zeroRub()
+            : round2(materialRub.mul(ratio)),
+          hardwareCostRub: excludeMatHw
+            ? zeroRub()
+            : round2(hardwareRub.mul(ratio)),
           applicationCostRub: round2(applicationRub.mul(ratio)),
           otherCostRub: round2(otherRub.mul(ratio)),
           source: 'WORKSHOP_NEED',
@@ -1525,22 +1563,6 @@ function sumEstimateLinesByKind(lines: EstimateLineLite[]): {
     else result.OTHER = result.OTHER.add(amount);
   }
   return result;
-}
-
-function classifyWorkshopNeed(
-  sourceType: string | null,
-): 'MATERIAL' | 'HARDWARE' | 'APPLICATION' | 'OTHER' {
-  // Используем ту же классификацию, что и
-  // `getWorkshopNeedKind` в `@sewing/shared/workshop-needs`. Дублируем,
-  // чтобы не тащить shared-зависимость в hot-path.
-  if (sourceType === 'PATTERN_PARAMETER_NORM') return 'HARDWARE';
-  if (sourceType === 'ORDER_APPLICATION') return 'APPLICATION';
-  if (
-    sourceType === 'ORDER_MATERIAL_REQUIREMENT' ||
-    sourceType === 'TECH_CARD_MATERIAL_LINE'
-  )
-    return 'MATERIAL';
-  return 'OTHER';
 }
 
 function computeTotals(

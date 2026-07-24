@@ -8,6 +8,7 @@ import type {
   ProductionDocMaterialPlanSource,
 } from '@sewing/shared/order-production-document';
 import { normalizeColorOrNull } from '@sewing/shared/colors';
+import { getWorkshopNeedKind } from '@sewing/shared/workshop-needs';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
@@ -62,6 +63,7 @@ export class OrderProductionDocumentService {
         color: true,
         customerUnitPrice: true,
         customerCurrency: true,
+        materialsAndHardwareCostPolicy: true,
         patternNameSnapshot: true,
         patternArticleSnapshot: true,
         client: { select: { name: true } },
@@ -177,10 +179,17 @@ export class OrderProductionDocumentService {
       }
     }
 
+    // Давальческое сырьё/фурнитура (`EXCLUDE`): стоимость MATERIAL/HARDWARE
+    // (план и факт) не входит в себестоимость/маржу — зеркалит
+    // `CostsService`/`OrderCostEstimatesService`/`ProductionCostV2Service`.
+    // APPLICATION (нанесение) и OTHER остаются: их платит цех.
+    const excludeMatHw =
+      (order.materialsAndHardwareCostPolicy ?? 'INCLUDE') === 'EXCLUDE';
     const materials = await this.buildMaterials(
       orderId,
       estimate?.usdRateRub ?? null,
       planRubByNeed,
+      excludeMatHw,
       docWarnings,
     );
     const operations = await this.buildOperations(
@@ -307,8 +316,14 @@ export class OrderProductionDocumentService {
     orderId: string,
     usdRateRub: Prisma.Decimal | null,
     planRubByNeed: Map<string, Prisma.Decimal>,
+    excludeMatHw: boolean,
     docWarnings: Set<string>,
   ): Promise<OrderProductionMaterialRowDto[]> {
+    // Ключи строк, стоимость которых НЕ зануляется при `EXCLUDE`: строки
+    // потребности с kind APPLICATION (нанесение) / OTHER. Всё остальное —
+    // MATERIAL/HARDWARE (в т.ч. факт-списания, у которых нет своей строки
+    // потребности: MaterialIssue — это всегда ткань/фурнитура, не нанесение).
+    const preserveKeys = new Set<string>();
     // Аккумулятор строки материала.
     type Acc = {
       key: string;
@@ -369,6 +384,8 @@ export class OrderProductionDocumentService {
         id: true,
         description: true,
         sourceName: true,
+        sourceType: true,
+        calculationMethod: true,
         materialRole: true,
         unit: true,
         calculatedQty: true,
@@ -377,6 +394,16 @@ export class OrderProductionDocumentService {
       },
     });
     for (const wn of needs) {
+      // Классификация — как канонический источник истины EXCLUDE
+      // (`OrderCostEstimatesService` пишет line.kind тем же
+      // `getWorkshopNeedKind`). MATERIAL/HARDWARE → зануляем при EXCLUDE;
+      // APPLICATION/OTHER — сохраняем.
+      const kind = getWorkshopNeedKind({
+        sourceType: wn.sourceType,
+        calculationMethod: wn.calculationMethod,
+        materialRole: wn.materialRole,
+      });
+      if (kind === 'APPLICATION' || kind === 'OTHER') preserveKeys.add(wn.id);
       // Деньги плана: из сметы, иначе calculatedQty × quotedPrice (RUB).
       let planRub: Prisma.Decimal | null = null;
       let planSource: ProductionDocMaterialPlanSource = 'NONE';
@@ -501,16 +528,30 @@ export class OrderProductionDocumentService {
 
     // Материализуем строки.
     const out: OrderProductionMaterialRowDto[] = [];
+    const ZERO = new Prisma.Decimal(0);
     for (const acc of rows.values()) {
-      const issuedRub = this.m(acc.issuedRub);
-      const planRub = acc.planRub != null ? this.m(acc.planRub) : null;
+      // Давальческое: зануляем ДЕНЬГИ (план/факт/приёмка) строки, но
+      // сохраняем КОЛИЧЕСТВА (полезны для учёта расхода сырья заказчика).
+      // Нанесение/прочее не трогаем: либо ключ строки — в preserveKeys
+      // (потребность активного варианта), либо её роль классифицируется
+      // как APPLICATION (факт-строка, чья потребность отменена/в неактивном
+      // варианте и потому не попала в preserveKeys).
+      const zeroCost =
+        excludeMatHw &&
+        !preserveKeys.has(acc.key) &&
+        getWorkshopNeedKind({ materialRole: acc.materialRole }) !==
+          'APPLICATION';
+      const issuedRub = zeroCost ? ZERO : this.m(acc.issuedRub);
+      const receivedRub = zeroCost ? ZERO : this.m(acc.receivedRub);
+      const planRub =
+        acc.planRub != null ? (zeroCost ? ZERO : this.m(acc.planRub)) : null;
       const breakdown: OrderProductionBreakdownDto[] = [...acc.breakdown.values()]
         .map((b) => ({
           sizeCode: b.sizeCode,
           color: b.color,
           planQty: null,
           factQty: this.q(b.qty).toFixed(4),
-          factRub: this.m(b.rub).toFixed(2),
+          factRub: (zeroCost ? ZERO : this.m(b.rub)).toFixed(2),
         }))
         .sort((a, b) => (a.sizeCode ?? '').localeCompare(b.sizeCode ?? ''));
       out.push({
@@ -524,7 +565,7 @@ export class OrderProductionDocumentService {
         issuedQty: this.q(acc.issuedQty).toFixed(4),
         issuedRub: issuedRub.toFixed(2),
         receivedQty: this.q(acc.receivedQty).toFixed(4),
-        receivedRub: this.m(acc.receivedRub).toFixed(2),
+        receivedRub: receivedRub.toFixed(2),
         varianceRub:
           planRub != null ? this.m(issuedRub.sub(planRub)).toFixed(2) : null,
         warnings: [...acc.warnings],
