@@ -1906,6 +1906,9 @@ model OrderVariant {
   /// со стороны обеих таблиц — удаление расцветки не сносит историю.
   materialRequirements OrderMaterialRequirement[]
   workshopNeeds        WorkshopNeed[]
+  /// Паспорты, выпущенные из рулонов этой расцветки (см.
+  /// `Passport.orderVariantId`). `onDelete: SetNull` со стороны паспорта.
+  passports            Passport[]
   /// Фича «Параметры техкарт»: значения параметров принадлежат расцветке.
   techCardParameters   OrderTechCardParameter[]
 
@@ -2115,6 +2118,15 @@ model Passport {
   productId  String
   sizeId     String
   color      String
+  /// Расцветка (`OrderVariant`), из рулона которой выпущен паспорт
+  /// (`CuttingTaskRoll.variantId`). Проставляется при рулонном выпуске
+  /// (`releaseFromRolls`). `null` — одноцветный / ручной / исторический
+  /// выпуск (тогда авто-списание кроя работает по заказу целиком, как до
+  /// фичи расцветок). Нужна, чтобы авто-списание брало потребности цеха и
+  /// знаменатель ИМЕННО этой расцветки — иначе материал одной расцветки
+  /// списывается на паспорта другой (см. `WorkshopNeed.orderVariantId`).
+  /// FK `onDelete: SetNull` — снос расцветки не сносит паспорт.
+  orderVariantId String?
   rollNumber String
   cutDate    DateTime
   /// Порядковый номер рулона (`CuttingTaskRoll.ordinal`), по которому
@@ -2162,6 +2174,7 @@ model Passport {
   updatedAt DateTime @updatedAt
 
   order            Order      @relation(fields: [orderId], references: [id])
+  orderVariant     OrderVariant? @relation(fields: [orderVariantId], references: [id], onDelete: SetNull)
   product          Product    @relation(fields: [productId], references: [id])
   size             Size       @relation(fields: [sizeId], references: [id])
   currentOperation Operation? @relation("PassportCurrentOperation", fields: [currentOperationId], references: [id])
@@ -2224,6 +2237,7 @@ model Passport {
 
   @@index([status, currentOperationId])
   @@index([orderId])
+  @@index([orderVariantId])
   @@index([sizeId, status])
   @@index([createdAt])
   @@index([currentCellId])

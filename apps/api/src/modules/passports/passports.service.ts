@@ -286,6 +286,8 @@ export class PassportsService {
         productId: product.id,
         sizeId: dto.sizeId,
         color,
+        // Ручной выпуск не привязан к рулону/расцветке.
+        orderVariantId: null,
         rollNumber: dto.rollNumber,
         rollOrdinal: null,
         cuttingLayOrdinal: null,
@@ -321,6 +323,8 @@ export class PassportsService {
       productId: string;
       sizeId: string;
       color: string;
+      /** Расцветка рулона (`CuttingTaskRoll.variantId`) или `null`. */
+      orderVariantId: string | null;
       rollNumber: string;
       rollOrdinal: number | null;
       cuttingLayOrdinal: number | null;
@@ -349,6 +353,7 @@ export class PassportsService {
         productId: params.productId,
         sizeId: params.sizeId,
         color: params.color,
+        orderVariantId: params.orderVariantId,
         rollNumber: params.rollNumber,
         rollOrdinal: params.rollOrdinal,
         cuttingLayOrdinal: params.cuttingLayOrdinal,
@@ -479,7 +484,7 @@ export class PassportsService {
               select: {
                 ordinal: true,
                 layers: true,
-                variant: { select: { color: true } },
+                variant: { select: { id: true, color: true } },
               },
             },
           },
@@ -518,6 +523,11 @@ export class PassportsService {
     // общий цвет заказа (одноцветный заказ / исторические рулоны).
     const rollColorByOrdinal = new Map(
       lay.rolls.map((r) => [r.ordinal, r.variant?.color ?? null]),
+    );
+    // Ф3 «Расцветки»: id расцветки рулона → на паспорт (для авто-списания
+    // материала по расцветке). `null` у рулонов без расцветки.
+    const rollVariantIdByOrdinal = new Map(
+      lay.rolls.map((r) => [r.ordinal, r.variant?.id ?? null]),
     );
 
     // Раскройщик для начислений — тот, кто выполнил задачу. Валидируем
@@ -624,6 +634,7 @@ export class PassportsService {
           productId: product.id,
           sizeId: dto.sizeId,
           color: passportColor,
+          orderVariantId: rollVariantIdByOrdinal.get(ordinal) ?? null,
           rollNumber: `Расклад ${dto.layOrdinal} · Рулон ${ordinal}`,
           rollOrdinal: ordinal,
           cuttingLayOrdinal: dto.layOrdinal,

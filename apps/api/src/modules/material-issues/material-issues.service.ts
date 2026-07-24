@@ -32,6 +32,7 @@ import type {
 import type { ListMaterialIssuesQuery } from './dto/list-material-issues.dto.js';
 import type { ReturnMaterialIssueDto } from './dto/return-material-issue.dto.js';
 import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
+import { normalizeColor } from '@sewing/shared/colors';
 
 /**
  * Жизненный цикл документа `MaterialIssue` (статусы хранятся как
@@ -1078,7 +1079,13 @@ export class MaterialIssuesService {
 
     const passport = await tx.passport.findUnique({
       where: { id: passportId },
-      select: { id: true, orderId: true, qtyCut: true },
+      select: {
+        id: true,
+        orderId: true,
+        qtyCut: true,
+        orderVariantId: true,
+        color: true,
+      },
     });
     if (!passport) {
       // На практике issueToEmployee уже прочитал паспорт. Но в
@@ -1113,19 +1120,74 @@ export class MaterialIssuesService {
       return { skipped: true, reason: 'total_order_qty_zero' };
     }
 
+    // Фича «Расцветки» (P5): если паспорт привязан к расцветке
+    // (`orderVariantId`), списываем ТОЛЬКО потребности этой расцветки (+
+    // order-level строки без расцветки) и делим на плановое количество
+    // ИМЕННО этой расцветки (Σ OrderVariantSize.qtyPlan). Иначе (числитель
+    // по расцветке ÷ знаменатель по всему заказу + все расцветки на каждом
+    // паспорте) материал одной расцветки размазывался по паспортам другой.
+    // Паспорт без расцветки (одноцветный / ручной / исторический) → прежнее
+    // поведение: все потребности, знаменатель = весь заказ.
+    //
+    // Прямая привязка `orderVariantId` — быстрый надёжный путь. Если её нет
+    // (легаси / ручной выпуск / бэкфилл не сматчил цвет), а заказ
+    // мультирасцветочный — пробуем определить расцветку по цвету паспорта
+    // (`Passport.color = normalizeColor(variant.color)`). Однозначное
+    // совпадение → скоуп по расцветке (спасает несбэкфилленные паспорта на
+    // доске); неоднозначное/несовпавшее → легаси (весь заказ) + warning.
+    let variantId = passport.orderVariantId;
+    if (!variantId) {
+      const variants = await tx.orderVariant.findMany({
+        where: { orderId: passport.orderId },
+        select: { id: true, color: true },
+      });
+      if (variants.length >= 2) {
+        const matches = variants.filter(
+          (v) => normalizeColor(v.color) === passport.color,
+        );
+        if (matches.length === 1) {
+          variantId = matches[0].id;
+        } else {
+          this.logger.warn(
+            `event=material_issue.auto.colorway_unresolved passportId=${passportId} ` +
+              `orderId=${passport.orderId} color=${passport.color} ` +
+              `variants=${variants.length} matches=${matches.length}`,
+          );
+        }
+      }
+    }
+    let variantQtyDec: Prisma.Decimal | null = null;
+    if (variantId) {
+      const variantSizes = await tx.orderVariantSize.findMany({
+        where: { variantId },
+        select: { qtyPlan: true },
+      });
+      const variantQty = variantSizes.reduce(
+        (acc, s) => acc + (s.qtyPlan ?? 0),
+        0,
+      );
+      // Нет планового кол-ва расцветки (не должно, но предохраняемся) —
+      // падаем на общий знаменатель заказа.
+      variantQtyDec = variantQty > 0 ? new Prisma.Decimal(variantQty) : null;
+    }
+
     // Материальные потребности цеха, попадающие в автосписание.
     // Исключаем нанесения (outsource) и отменённые строки. Оставляем
     // всё остальное — materialRole может быть `null` (например, у
     // PATTERN_SIZE_PARAMETER_VALUE), и это нормально.
     // Фича «Варианты просчёта»: списываем только по строкам АКТИВНОГО
     // варианта — иначе выдача кроя задвоила бы расход материала по
-    // потребностям вариантов сравнения.
+    // потребностям вариантов сравнения. Фича «Расцветки»: при известной
+    // расцветке паспорта берём строки этой расцветки + order-level (null).
     const needs = await tx.workshopNeed.findMany({
       where: {
         orderId: passport.orderId,
         status: { not: 'CANCELLED' },
         sourceType: { not: 'ORDER_APPLICATION' },
         AND: [ACTIVE_CALCULATION_NEED_WHERE],
+        ...(variantId
+          ? { OR: [{ orderVariantId: variantId }, { orderVariantId: null }] }
+          : {}),
       },
       select: {
         id: true,
@@ -1136,6 +1198,7 @@ export class MaterialIssuesService {
         calculatedQty: true,
         quotedPrice: true,
         quotedCurrency: true,
+        orderVariantId: true,
       },
     });
     if (needs.length === 0) {
@@ -1160,12 +1223,16 @@ export class MaterialIssuesService {
     }> = [];
 
     for (const need of needs) {
-      // issuedQty = calculatedQty * qtyCut / totalOrderQty
-      // округляем до 4 знаков (совпадает с `MaterialIssueLine.issuedQty`
-      // precision — Decimal(14,4), см. schema.prisma).
-      const rawQty = need.calculatedQty
-        .mul(passportQtyCut)
-        .div(totalQtyDec);
+      // issuedQty = calculatedQty * qtyCut / denom, округляем до 4 знаков
+      // (совпадает с `MaterialIssueLine.issuedQty` precision — Decimal(14,4)).
+      // Знаменатель: строка расцветки → плановое кол-во ЭТОЙ расцветки
+      // (variantQtyDec); order-level (null) строка или паспорт без расцветки
+      // → весь заказ (totalQtyDec).
+      const denom =
+        variantQtyDec != null && need.orderVariantId != null
+          ? variantQtyDec
+          : totalQtyDec;
+      const rawQty = need.calculatedQty.mul(passportQtyCut).div(denom);
       const issuedQty = rawQty.toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
       if (issuedQty.lessThanOrEqualTo(0)) continue;
 
@@ -1244,7 +1311,13 @@ export class MaterialIssuesService {
     const calculationPayload = {
       totalOrderQty,
       passportQtyCut: passport.qtyCut,
-      formula: 'WorkshopNeed.calculatedQty * Passport.qtyCut / totalOrderQty',
+      // Расцветка (P5): строки этой расцветки делятся на её план
+      // (variantPlanQty), order-level (null) строки — на весь заказ.
+      orderVariantId: variantId ?? null,
+      variantPlanQty: variantQtyDec != null ? variantQtyDec.toNumber() : null,
+      formula: variantId
+        ? 'WorkshopNeed.calculatedQty * Passport.qtyCut / (variantPlanQty для строк расцветки, иначе totalOrderQty)'
+        : 'WorkshopNeed.calculatedQty * Passport.qtyCut / totalOrderQty',
     };
 
     await this.audit.log(
@@ -1305,6 +1378,7 @@ export class MaterialIssuesService {
 
     this.logger.log(
       `event=material_issue.auto.created materialIssueId=${issue.id} passportId=${passport.id} orderId=${passport.orderId} ` +
+        `orderVariantId=${variantId ?? '-'} variantPlanQty=${variantQtyDec != null ? variantQtyDec.toString() : '-'} ` +
         `totalOrderQty=${totalOrderQty} qtyCut=${passport.qtyCut} lines=${preparedLines.length} totalCost=${totalCost.toString()}`,
     );
 
