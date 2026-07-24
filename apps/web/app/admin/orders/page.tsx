@@ -25,7 +25,7 @@
  */
 import Link from 'next/link';
 import {
-  ArrowRight,
+  FileText,
   Package,
   Plus,
   RotateCcw,
@@ -48,11 +48,10 @@ import {
 import { ApiRequestError, errorText } from '@/lib/api';
 import { listOrders } from '@/lib/orders-api';
 import { listClients } from '@/lib/clients-api';
-import { listCompanyDivisions } from '@/lib/company-settings-api';
 import {
-  ORDER_NOMENCLATURE_SOURCE_BADGE,
-  resolveOrderNomenclature,
-} from '@/lib/order-nomenclature';
+  getCompanySettings,
+  listCompanyDivisions,
+} from '@/lib/company-settings-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import {
   AdminCard,
@@ -169,11 +168,12 @@ export default async function AdminOrdersPage({
   // Списки для селектов-фильтров «Клиент» / «Подразделение». Тянем
   // параллельно с заказами; сбой любого справочника не должен ронять
   // страницу — тогда просто показываем фильтр без опций.
-  const [ordersResult, clientsResult, divisionsResult] =
+  const [ordersResult, clientsResult, divisionsResult, settingsResult] =
     await Promise.allSettled([
       listOrders(query),
       listClients(),
       listCompanyDivisions(),
+      getCompanySettings(),
     ]);
   if (ordersResult.status === 'fulfilled') {
     items = ordersResult.value.items;
@@ -189,6 +189,15 @@ export default async function AdminOrdersPage({
     clientsResult.status === 'fulfilled' ? clientsResult.value : [];
   const divisions =
     divisionsResult.status === 'fulfilled' ? divisionsResult.value : [];
+  // «Организация» (наше юр.лицо) — singleton `CompanySettings`, одна на всю
+  // компанию. Отдельного поля в заказе нет, поэтому колонка показывает это
+  // значение во всех строках (см. решение по дизайну вкладки «Заказы»).
+  const orgName =
+    settingsResult.status === 'fulfilled'
+      ? settingsResult.value.shortName ??
+        settingsResult.value.legalName ??
+        null
+      : null;
 
   // Дефолтная управленческая сортировка: OVERDUE → AT_RISK → ON_TRACK
   // → NO_DUE_DATE → DONE; внутри бакета — ближайший dueDate выше.
@@ -340,7 +349,7 @@ export default async function AdminOrdersPage({
           </div>
         </form>
 
-        <OrdersTable items={items} />
+        <OrdersTable items={items} orgName={orgName} />
 
         <AdminPagination
           page={query.page ?? 1}
@@ -400,14 +409,36 @@ function DeadlineTabs({
   );
 }
 
-function OrdersTable({ items }: { items: OrderListItemDto[] }) {
+function OrdersTable({
+  items,
+  orgName,
+}: {
+  items: OrderListItemDto[];
+  orgName: string | null;
+}) {
   const columns: AdminTableColumn<OrderListItemDto>[] = [
     {
       key: 'number',
       header: 'Номер',
       render: (o) => (
-        <span className="admin-table__primary">{o.number}</span>
+        <Link
+          href={`/admin/orders/${o.id}`}
+          className="admin-order-number-link"
+        >
+          <FileText size={15} strokeWidth={1.6} aria-hidden />
+          {formatOrderCode(o)}
+        </Link>
       ),
+    },
+    {
+      key: 'date',
+      header: 'Дата',
+      render: (o) => formatDateRu(o.orderDate),
+    },
+    {
+      key: 'deadline',
+      header: 'Сроки',
+      render: (o) => <DeadlineCell o={o} />,
     },
     {
       key: 'client',
@@ -415,53 +446,28 @@ function OrdersTable({ items }: { items: OrderListItemDto[] }) {
       render: (o) => <ClientCell o={o} />,
     },
     {
-      key: 'division',
-      header: 'Подразд.',
-      render: (o) =>
-        o.companyDivision ? (
-          <span title={o.companyDivision.name}>{o.companyDivision.code}</span>
+      key: 'organization',
+      header: 'Организация',
+      render: () =>
+        orgName ? (
+          <span>{orgName}</span>
         ) : (
           <span className="admin-muted">—</span>
         ),
     },
     {
-      key: 'product',
-      header: 'Изделие',
-      render: (o) => {
-        // Этап «Номенклатура = Лекала»: список заказов идёт через тот
-        // же resolver, что и карточка заказа
-        // (`apps/web/lib/order-nomenclature.ts`). Раньше колонка
-        // показывала legacy `Product.name`, который сознательно НЕ
-        // синхронизируется при переименовании `PatternItem`, поэтому
-        // менеджер мог увидеть «Худи» в списке и «ХУДИ БАЗА (КЕНГУРУ)»
-        // в открытой карточке одного и того же заказа.
-        const nomenclature = resolveOrderNomenclature(o);
-        const hintParts: string[] = [];
-        if (o.color) hintParts.push(o.color);
-        if (nomenclature.article) {
-          hintParts.push(`арт. ${nomenclature.article}`);
-        }
-        return (
-          <div>
-            <span className="admin-table__primary">
-              {nomenclature.name ?? '—'}
-            </span>
-            {nomenclature.source === 'legacyProduct' && (
-              <span
-                className="admin-order-item-card__source-badge"
-                title="Историческое изделие без карточки лекала"
-              >
-                {ORDER_NOMENCLATURE_SOURCE_BADGE.legacyProduct}
-              </span>
-            )}
-            {hintParts.length > 0 && (
-              <div className="admin-table__hint">
-                {hintParts.join(' · ')}
-              </div>
-            )}
-          </div>
-        );
-      },
+      key: 'qty',
+      header: 'Кол-во',
+      align: 'right',
+      render: (o) => (
+        <strong>{o.qtyPlanTotal.toLocaleString('ru-RU')}</strong>
+      ),
+    },
+    {
+      key: 'total',
+      header: 'Сумма',
+      align: 'right',
+      render: (o) => <OrderTotalCell o={o} />,
     },
     {
       key: 'status',
@@ -501,44 +507,6 @@ function OrdersTable({ items }: { items: OrderListItemDto[] }) {
           </span>
         );
       },
-    },
-    {
-      key: 'qty',
-      header: 'Кол-во',
-      align: 'right',
-      render: (o) => (
-        <strong>{o.qtyPlanTotal.toLocaleString('ru-RU')}</strong>
-      ),
-    },
-    {
-      key: 'price',
-      header: 'Цена',
-      align: 'right',
-      render: (o) => <PriceCell o={o} />,
-    },
-    {
-      key: 'date',
-      header: 'Дата',
-      render: (o) => formatDateRu(o.orderDate),
-    },
-    {
-      key: 'deadline',
-      header: 'Срок',
-      render: (o) => <DeadlineCell o={o} />,
-    },
-    {
-      key: 'open',
-      header: '',
-      isAction: true,
-      render: (o) => (
-        <Link
-          href={`/admin/orders/${o.id}`}
-          className="admin-table__action-link"
-        >
-          Открыть
-          <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
-        </Link>
-      ),
     },
   ];
 
@@ -586,27 +554,38 @@ function ClientCell({ o }: { o: OrderListItemDto }) {
 }
 
 /**
- * Колонка «Цена» в списке заказов (этап «Цена продажи за единицу»,
- * см. ТЗ §C6). Показываем компактно: «2500 ₽ / шт» или прочерк,
- * если цена не задана. Себестоимость оставляем для карточки
- * заказа — в списке она тоже жирная и рискует разъехаться.
+ * Номер заказа в формате «КОД_ПОДРАЗДЕЛЕНИЯ-NNNNN» (например, `01-00001`).
+ * Код подразделения приходит из справочника (`o.companyDivision.code`);
+ * порядковый номер дополняем нулями до 5 знаков. Если подразделение не
+ * указано — показываем только номер.
  */
-function PriceCell({ o }: { o: OrderListItemDto }) {
-  const price = o.customerUnitPrice ?? null;
-  if (price == null || price === '' || Number(price) <= 0) {
+function formatOrderCode(o: OrderListItemDto): string {
+  const seq = String(o.number).padStart(5, '0');
+  return o.companyDivision?.code ? `${o.companyDivision.code}-${seq}` : seq;
+}
+
+/**
+ * Колонка «Сумма» — сумма заказа = цена продажи за единицу × плановое
+ * количество. Отдельного поля «итого» в заказе нет (храним цену за 1 шт
+ * в `customerUnitPrice`), поэтому считаем на лету. Прочерк, если цена не
+ * задана.
+ */
+function OrderTotalCell({ o }: { o: OrderListItemDto }) {
+  const raw = o.customerUnitPrice;
+  const price = raw == null || raw === '' ? NaN : Number(raw);
+  if (!Number.isFinite(price) || price <= 0) {
     return <span className="admin-muted">—</span>;
   }
-  const num = Number(price);
-  if (!Number.isFinite(num)) return <span className="admin-muted">—</span>;
-  const symbol =
-    (o.customerCurrency ?? 'RUB') === 'USD' ? '$' : '₽';
+  const symbol = (o.customerCurrency ?? 'RUB') === 'USD' ? '$' : '₽';
+  const total = price * o.qtyPlanTotal;
   return (
-    <div className="admin-order-price-cell">
-      <strong>
-        {num.toLocaleString('ru-RU', { maximumFractionDigits: 2 })} {symbol}
-      </strong>
-      <span className="admin-muted admin-order-price-cell__hint">/ шт</span>
-    </div>
+    <strong>
+      {total.toLocaleString('ru-RU', {
+        minimumFractionDigits: 2,
+        maximumFractionDigits: 2,
+      })}{' '}
+      {symbol}
+    </strong>
   );
 }
 

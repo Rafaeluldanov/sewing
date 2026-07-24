@@ -6795,20 +6795,22 @@ body:has(.display-screen) {
   font-size: 0.95rem;
 }
 
+/* Заголовки — светлый «ЕРП»-стиль (референс upgifts): обычный регистр,
+ * без серой заливки, только тонкая линия снизу, приглушённый цвет. */
 .admin-table thead th {
   text-align: left;
-  font-weight: 600;
-  font-size: 0.78rem;
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font-weight: 500;
+  font-size: 0.82rem;
+  letter-spacing: 0;
+  text-transform: none;
   color: var(--admin-muted);
-  padding: 0.85rem 1rem;
-  background: var(--admin-soft);
+  padding: 0.75rem 1rem;
+  background: var(--admin-surface);
   border-bottom: 1px solid var(--admin-border);
 }
 
 .admin-table tbody td {
-  padding: 0.95rem 1rem;
+  padding: 1.05rem 1rem; /* «воздушные» строки как в ЕРП */
   border-top: 1px solid var(--admin-border);
   vertical-align: middle;
   color: var(--admin-text);
@@ -6824,6 +6826,25 @@ body:has(.display-screen) {
  * как кнопка «Открыть». Ховер-подсветка уже задана правилом выше. */
 .admin-table__row--clickable {
   cursor: pointer;
+}
+
+/* Номер заказа как в ЕРП: иконка-документ (приглушённая) + синяя
+ * ссылка-номер. Вся строка всё равно кликабельна (rowHref) — ссылка
+ * даёт явную афформанс и открытие в новой вкладке. */
+.admin-order-number-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--admin-primary);
+  font-weight: 600;
+  text-decoration: none;
+}
+.admin-order-number-link svg {
+  color: var(--admin-muted);
+  flex: none;
+}
+.admin-order-number-link:hover {
+  text-decoration: underline;
 }
 
 .admin-table__primary {
