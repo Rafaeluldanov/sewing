@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useMemo, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
+import { ClickableCard } from '@/components/ui/clickable-card';
 import type {
   BatchCompleteOperationsResultDto,
   CurrentWorkPassportDto,
@@ -413,10 +414,13 @@ function ActivePassportCard({
    */
   const isRouteWip = p.currentRouteStepIndex !== null;
   return (
-    <li
+    <ClickableCard
+      as="li"
+      href={`/passports/${p.id}`}
       className={`active-passport${
         selected ? ' active-passport--selected' : ''
       }${failedReason ? ' active-passport--failed' : ''}`}
+      ariaLabel={`Открыть паспорт ${p.number}`}
     >
       <div className="active-passport__head">
         <label
@@ -544,6 +548,6 @@ function ActivePassportCard({
           )}
         </div>
       )}
-    </li>
+    </ClickableCard>
   );
 }

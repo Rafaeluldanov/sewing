@@ -547,6 +547,7 @@ function OrdersTable({ items }: { items: OrderListItemDto[] }) {
       rows={items}
       columns={columns}
       rowKey={(o) => o.id}
+      rowHref={(o) => `/admin/orders/${o.id}`}
       emptyContent={
         <AdminEmptyState
           icon={<Package size={26} strokeWidth={1.6} aria-hidden />}

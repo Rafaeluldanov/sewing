@@ -229,6 +229,7 @@ function ClientOrdersTable({ rows }: { rows: OrderListItemDto[] }) {
       rows={rows}
       columns={columns}
       rowKey={(o) => o.id}
+      rowHref={(o) => `/admin/orders/${o.id}`}
     />
   );
 }

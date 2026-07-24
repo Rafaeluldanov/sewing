@@ -123,6 +123,7 @@ export default async function AdminTechCardsListPage({
           rows={pageItems}
           columns={columns}
           rowKey={(tc) => tc.id}
+          rowHref={(tc) => `/admin/tech-cards/${tc.id}`}
           emptyContent={
             <AdminEmptyState
               icon={<ClipboardList size={26} strokeWidth={1.6} aria-hidden />}

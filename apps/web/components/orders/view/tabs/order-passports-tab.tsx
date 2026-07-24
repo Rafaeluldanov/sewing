@@ -282,6 +282,7 @@ export function OrderPassportsTab({
                 rows={filtered}
                 columns={columns}
                 rowKey={(p) => p.id}
+                rowHref={(p) => `/admin/passports/${p.id}`}
               />
             )}
           </>

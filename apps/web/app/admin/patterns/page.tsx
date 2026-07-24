@@ -397,6 +397,7 @@ export default async function AdminPatternsListPage({
           rows={pageItems}
           columns={columns}
           rowKey={(p) => p.id}
+          rowHref={(p) => `/admin/patterns/${p.id}`}
           emptyContent={
             <AdminEmptyState
               icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}

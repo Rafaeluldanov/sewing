@@ -159,6 +159,7 @@ export default async function AdminRoutesListPage({
           rows={detailedRows}
           columns={columns}
           rowKey={(tpl) => tpl.id}
+          rowHref={(tpl) => `/admin/routes/${tpl.id}`}
           emptyContent={
             <AdminEmptyState
               icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}

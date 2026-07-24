@@ -164,6 +164,7 @@ export default async function AdminPrintersPage({
           rows={pageItems}
           columns={columns}
           rowKey={(p) => p.id}
+          rowHref={(p) => `/admin/printers/${p.id}`}
           emptyContent={
             <AdminEmptyState
               icon={<Printer size={26} strokeWidth={1.6} aria-hidden />}

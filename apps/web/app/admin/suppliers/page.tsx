@@ -278,6 +278,7 @@ function SuppliersTable({
         rows={items}
         columns={columns}
         rowKey={(s) => s.id}
+        rowHref={(s) => `/admin/suppliers/${s.id}`}
         emptyContent={
           <AdminEmptyState
             icon={<Truck size={26} strokeWidth={1.6} aria-hidden />}

@@ -241,6 +241,7 @@ function EmployeesTable({
         rows={items}
         columns={columns}
         rowKey={(e) => e.id}
+        rowHref={(e) => `/admin/employees/${e.id}`}
         emptyContent={
           <AdminEmptyState
             icon={<Users size={26} strokeWidth={1.6} aria-hidden />}

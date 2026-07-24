@@ -75,6 +75,7 @@ import {
   formatOrderStatus,
   getOrderStatusTone,
 } from '@/lib/admin-labels';
+import { ClickableCard } from '@/components/ui/clickable-card';
 import { BulkCreatePoProvider } from './bulk-create-po';
 import { CompleteCalculationForm } from './complete-calculation-form';
 import {
@@ -719,6 +720,14 @@ function OrderNeedGroupCard({
         </>
       }
       head={
+        <ClickableCard
+          href={orderHref}
+          ariaLabel={
+            sample.orderNumber
+              ? `Открыть заказ ${sample.orderNumber}`
+              : 'Открыть заказ'
+          }
+        >
         <header className="workshop-order-group-card__header">
         <div className="workshop-order-group-card__identity">
           <OrderArchiveCheckbox orderId={orderId} />
@@ -825,6 +834,7 @@ function OrderNeedGroupCard({
           <OrderArchiveRowActions orderId={orderId} archivable={archivable} />
         </div>
         </header>
+        </ClickableCard>
       }
     >
       {/* Фича «Варианты просчёта»: ряд вкладок вариантов заказа. Клик

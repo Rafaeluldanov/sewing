@@ -31,6 +31,7 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
 } from '@/components/admin';
+import { ClickableCard } from '@/components/ui/clickable-card';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getOrderPurchaseOrders } from '@/lib/purchase-orders-api';
 import type { AdminStatusTone } from '@/lib/admin-labels';
@@ -124,8 +125,11 @@ export async function PurchaseOrdersCard({ orderId }: Props) {
       ) : (
         <ul className="admin-summary-list" style={{ marginTop: 8 }}>
           {visible.map((po) => (
-            <li
+            <ClickableCard
               key={po.id}
+              as="li"
+              href={`/admin/purchase-orders/${po.id}`}
+              ariaLabel={`Заказ поставщику ${po.number}`}
               style={{
                 display: 'flex',
                 alignItems: 'flex-start',
@@ -159,7 +163,7 @@ export async function PurchaseOrdersCard({ orderId }: Props) {
               <AdminStatusBadge tone={statusTone(po.status)}>
                 {formatStatus(po.status)}
               </AdminStatusBadge>
-            </li>
+            </ClickableCard>
           ))}
           {pos.length > visible.length && (
             <li

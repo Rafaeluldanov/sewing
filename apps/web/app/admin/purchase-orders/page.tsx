@@ -348,6 +348,7 @@ function PurchaseOrdersTable({ rows }: { rows: PurchaseOrderListItemDto[] }) {
       rows={rows}
       columns={columns}
       rowKey={(po) => po.id}
+      rowHref={(po) => `/admin/purchase-orders/${po.id}`}
       emptyContent={
         <AdminEmptyState
           icon={<ShoppingCart size={26} strokeWidth={1.6} aria-hidden />}

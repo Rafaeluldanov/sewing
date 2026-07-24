@@ -285,6 +285,9 @@ export default async function EmployeesTimeTrackerOverviewPage({
           rows={rows}
           columns={columns}
           rowKey={(r) => r.employeeId}
+          rowHref={(r) =>
+            `/admin/employees/${r.employeeId}/time-tracker?period=${period}`
+          }
           emptyContent={
             <AdminEmptyState
               icon={<Clock3 size={26} strokeWidth={1.6} aria-hidden />}

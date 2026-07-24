@@ -40,6 +40,7 @@ import {
   getPurchaseReceipt,
 } from '@/lib/purchase-receipts-api';
 import type { AdminStatusTone } from '@/lib/admin-labels';
+import { ClickableCard } from '@/components/ui/clickable-card';
 
 interface Props {
   orderId: string;
@@ -144,8 +145,11 @@ export async function PurchaseReceiptsCard({ orderId }: Props) {
           {visibleSummary.map((pr) => {
             const detail = detailsById.get(pr.id) ?? null;
             return (
-              <li
+              <ClickableCard
+                as="li"
                 key={pr.id}
+                href={`/admin/purchase-receipts/${pr.id}`}
+                ariaLabel={`Поступление ${pr.number}`}
                 style={{
                   padding: '8px 0',
                   borderTop: '1px solid rgba(0,0,0,0.06)',
@@ -208,7 +212,7 @@ export async function PurchaseReceiptsCard({ orderId }: Props) {
                     )}
                   </ul>
                 )}
-              </li>
+              </ClickableCard>
             );
           })}
           {prs.length > visibleSummary.length && (

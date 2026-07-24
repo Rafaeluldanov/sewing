@@ -6820,6 +6820,12 @@ body:has(.display-screen) {
   background: var(--admin-soft);
 }
 
+/* Кликабельная строка (см. AdminTable rowHref): весь ряд ведёт на detail,
+ * как кнопка «Открыть». Ховер-подсветка уже задана правилом выше. */
+.admin-table__row--clickable {
+  cursor: pointer;
+}
+
 .admin-table__primary {
   font-weight: 600;
   color: var(--admin-text);

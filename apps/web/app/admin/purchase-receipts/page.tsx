@@ -378,6 +378,7 @@ function PurchaseReceiptsTable({
       rows={rows}
       columns={columns}
       rowKey={(pr) => pr.id}
+      rowHref={(pr) => `/admin/purchase-receipts/${pr.id}`}
       emptyContent={
         <AdminEmptyState
           icon={<ClipboardCheck size={26} strokeWidth={1.6} aria-hidden />}

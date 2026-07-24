@@ -143,6 +143,7 @@ export default async function AdminConstructorTasksListPage({
           rows={pageItems}
           columns={columns}
           rowKey={(t) => t.id}
+          rowHref={(t) => `/admin/constructor-tasks/${t.id}`}
           emptyContent={
             <AdminEmptyState
               icon={<ClipboardList size={26} strokeWidth={1.6} aria-hidden />}

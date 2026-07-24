@@ -252,6 +252,7 @@ async function WarehousesListTabPage({
           rows={pageItems}
           columns={columns}
           rowKey={(w) => w.id}
+          rowHref={(w) => `/admin/warehouses/${w.id}`}
           emptyContent={
             <AdminEmptyState
               icon={<Warehouse size={26} strokeWidth={1.6} aria-hidden />}

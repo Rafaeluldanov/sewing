@@ -216,6 +216,7 @@ function MaterialsTable({ rows }: { rows: OrderActualMaterialsRowDto[] }) {
       rows={rows}
       columns={columns}
       rowKey={(r) => r.orderId}
+      rowHref={(r) => `/admin/orders/${r.orderId}`}
       emptyContent={
         <AdminEmptyState
           icon={<PackageSearch size={26} strokeWidth={1.6} aria-hidden />}

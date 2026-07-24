@@ -294,6 +294,7 @@ export default async function AdminPayrollPayoutsPage({
           rows={items}
           columns={columns}
           rowKey={(r) => r.id}
+          rowHref={(r) => `/admin/payroll/payouts/${r.id}`}
           emptyContent={
             <AdminEmptyState
               icon={

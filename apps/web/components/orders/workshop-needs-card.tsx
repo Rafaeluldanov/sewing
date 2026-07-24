@@ -47,6 +47,7 @@ import {
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getOrderWorkshopNeeds } from '@/lib/workshop-needs-api';
 import type { AdminStatusTone } from '@/lib/admin-labels';
+import { ClickableCard } from '@/components/ui/clickable-card';
 import { CalculateWorkshopNeedsForm } from './workshop-needs-calculate-form';
 
 interface Props {
@@ -195,8 +196,11 @@ export async function WorkshopNeedsCard({ orderId, orderStatus }: Props) {
       ) : (
         <ul className="admin-summary-list" style={{ marginTop: 8 }}>
           {visible.map((n) => (
-            <li
+            <ClickableCard
+              as="li"
               key={n.id}
+              href={`/admin/workshop-needs/${n.id}`}
+              ariaLabel={n.description}
               style={{
                 display: 'flex',
                 alignItems: 'flex-start',
@@ -248,7 +252,7 @@ export async function WorkshopNeedsCard({ orderId, orderStatus }: Props) {
               <AdminStatusBadge tone={statusTone(n.status)}>
                 {formatStatus(n.status)}
               </AdminStatusBadge>
-            </li>
+            </ClickableCard>
           ))}
           {needs.length > visible.length && (
             <li

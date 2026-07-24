@@ -200,6 +200,7 @@ function ClientsTable({
         rows={items}
         columns={columns}
         rowKey={(c) => c.id}
+        rowHref={(c) => `/admin/clients/${c.id}`}
         emptyContent={
           <AdminEmptyState
             icon={<Building2 size={26} strokeWidth={1.6} aria-hidden />}

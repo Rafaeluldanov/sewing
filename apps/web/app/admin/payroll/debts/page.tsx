@@ -413,6 +413,7 @@ function DebtTable({
       rows={rows}
       columns={columns}
       rowKey={(r) => r.employeeId}
+      rowHref={(r) => `/admin/payroll/employees/${r.employeeId}`}
       emptyContent={
         <AdminEmptyState
           icon={<BadgeRussianRuble size={26} strokeWidth={1.6} aria-hidden />}

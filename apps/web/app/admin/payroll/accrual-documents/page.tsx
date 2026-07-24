@@ -238,6 +238,7 @@ export default async function AdminAccrualDocumentsPage({
           rows={items}
           columns={columns}
           rowKey={(d) => d.id}
+          rowHref={(d) => `/admin/payroll/accrual-documents/${d.id}`}
           emptyContent={
             <AdminEmptyState
               icon={
