@@ -23,8 +23,10 @@ import {
 import {
   BulkUpsertOrderCutIssueRulesSchema,
   type BulkUpsertOrderCutIssueRulesDto,
+  type OrderColorwaysDto,
   type OrderCutIssueRulesSummaryDto,
 } from '@sewing/shared';
+import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
 import {
   CreateManualWorkshopNeedSchema,
   UpdateWorkshopNeedSchema,
@@ -64,6 +66,9 @@ import {
   disableOrderCutIssueRules,
   saveOrderCutIssueRules,
 } from '@/lib/order-cut-issue-rules-api';
+import { getOrderColorways } from '@/lib/colorways-api';
+import { getOrderTechCardParameters } from '@/lib/order-tech-card-api';
+import { isColorwaysEnabled } from '@/lib/feature-flags';
 
 export interface FormActionState {
   error?: string;
@@ -649,6 +654,90 @@ export async function createOrderForCalculationAction(
       return { error: explainApiError(e), missingRoleKeys: missing };
     }
     return { error: explainApiError(e) };
+  }
+}
+
+/**
+ * Этап «Редактировать техкарту сразу при создании заказа».
+ *
+ * Опт-ин из формы создания (`admin-create-order-form.tsx`, кнопка
+ * «Настроить материалы техкарты»): собираем заказ ТЕМ ЖЕ путём, что и
+ * обычная `createOrderAction` (`buildCreateDto` + `CreateOrderSchema`),
+ * но вместо `redirect()` создаём ЧЕРНОВИК и ВОЗВРАЩАЕМ его `orderId` +
+ * снимок расцветок/параметров техкарты. Клиент разворачивает
+ * существующий редактор `OrderColorwaysBlock` прямо на `/new` по этому
+ * `orderId` — снимок материалов уже материализован внутри `createOrder`
+ * (`OrdersService.create` → `rebuildMaterialRequirementsSnapshot`).
+ *
+ * Прецедент — `createOrderForCalculationAction` (создаёт DRAFT-заказ и
+ * отдаёт `orderId` без редиректа для inline-«Создать изделие»).
+ *
+ * Валидация — тот же `CreateOrderSchema`, поэтому ошибки полей приходят
+ * в идентичном `fieldErrors`-формате, который форма уже умеет рисовать.
+ */
+export interface ConfigureOrderDraftResult {
+  ok: boolean;
+  orderId?: string;
+  /** null — фича «Расцветки» выключена ИЛИ снимок не дочитался. */
+  colorways?: OrderColorwaysDto | null;
+  techCardParams?: OrderTechCardParametersDto | null;
+  error?: string;
+  fieldErrors?: Record<string, string>;
+}
+
+export async function configureOrderDraftAction(
+  form: FormData,
+): Promise<ConfigureOrderDraftResult> {
+  const raw = buildCreateDto(form);
+  const parsed = CreateOrderSchema.safeParse(raw);
+  if (!parsed.success) {
+    const fieldErrors: Record<string, string> = {};
+    for (const issue of parsed.error.issues) {
+      const path = issue.path.join('.');
+      fieldErrors[path] = issue.message;
+    }
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные',
+      fieldErrors,
+    };
+  }
+  try {
+    const created = await createOrder(parsed.data);
+    revalidatePath('/orders');
+    revalidatePath('/admin/orders');
+    revalidatePath(`/admin/orders/${created.id}`);
+    // Спецификация техкарты живёт под фичей «Расцветки». Флаг выключен —
+    // снимок не читаем: клиент просто уйдёт на карточку заказа.
+    if (!isColorwaysEnabled()) {
+      return {
+        ok: true,
+        orderId: created.id,
+        colorways: null,
+        techCardParams: null,
+      };
+    }
+    // Снимок материалов уже собран внутри createOrder. Дочитываем
+    // расцветки + параметры техкарты для инлайн-редактора; при сбое любого
+    // из чтений деградируем в null — клиент уйдёт на карточку, где тот же
+    // редактор доступен.
+    try {
+      const [colorways, techCardParams] = await Promise.all([
+        getOrderColorways(created.id),
+        getOrderTechCardParameters(created.id),
+      ]);
+      return { ok: true, orderId: created.id, colorways, techCardParams };
+    } catch {
+      return {
+        ok: true,
+        orderId: created.id,
+        colorways: null,
+        techCardParams: null,
+      };
+    }
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { ok: false, error: explainApiError(e) };
   }
 }
 

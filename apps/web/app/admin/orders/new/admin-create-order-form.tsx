@@ -45,12 +45,21 @@
 import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
 import { useRouter } from 'next/navigation';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useTransition,
+} from 'react';
 import {
   AlertCircle,
   ArrowLeft,
+  ArrowRight,
   ImageIcon,
   Info,
+  Layers,
   Plus,
   Save,
   Shirt,
@@ -103,8 +112,12 @@ import {
 import {
   createOrderAction,
   createOrderForCalculationAction,
+  configureOrderDraftAction,
   type FormActionState,
 } from '@/app/orders/actions';
+import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorways-block';
+import type { OrderColorwaysDto } from '@sewing/shared';
+import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
 import { SizePlanSelector } from './size-plan-selector';
 import {
   OrderColorwaysFieldset,
@@ -169,15 +182,18 @@ const initialState: FormActionState = {};
 
 function SubmitButton({
   label = 'Создать заказ',
+  disabled = false,
 }: {
   label?: string;
+  /** Внешняя блокировка (напр. пока идёт опт-ин «Настроить материалы»). */
+  disabled?: boolean;
 }) {
   const { pending } = useFormStatus();
   return (
     <button
       type="submit"
       className="admin-btn admin-btn--primary"
-      disabled={pending}
+      disabled={pending || disabled}
     >
       <Save size={16} strokeWidth={1.6} aria-hidden />
       {pending ? 'Сохранение…' : label}
@@ -305,8 +321,57 @@ export function AdminCreateOrderForm({
     makeEmptyColorway(),
   ]);
 
+  // ── Фаза «Настроить материалы техкарты» (редактирование спецификации
+  // СРАЗУ при создании). Опт-ин: клик по кнопке создаёт ЧЕРНОВИК заказа
+  // (`configureOrderDraftAction`, без редиректа) и разворачивает
+  // существующий редактор `OrderColorwaysBlock` инлайн по свежему
+  // `orderId`. `formRef` нужен, чтобы снять `FormData` со всей формы, не
+  // запуская её обычный submit (кнопка — `type="button"`).
+  const formRef = useRef<HTMLFormElement>(null);
+  const [draftOrderId, setDraftOrderId] = useState<string | null>(null);
+  const [draftColorways, setDraftColorways] =
+    useState<OrderColorwaysDto | null>(null);
+  const [draftTechCardParams, setDraftTechCardParams] =
+    useState<OrderTechCardParametersDto | null>(null);
+  const [configureError, setConfigureError] = useState<string | null>(null);
+  const [configureFieldErrors, setConfigureFieldErrors] = useState<
+    Record<string, string> | undefined
+  >(undefined);
+  const [isConfiguring, startConfigure] = useTransition();
+
+  const handleConfigureMaterials = useCallback((): void => {
+    const el = formRef.current;
+    if (!el) return;
+    const fd = new FormData(el);
+    setConfigureError(null);
+    setConfigureFieldErrors(undefined);
+    startConfigure(async () => {
+      const res = await configureOrderDraftAction(fd);
+      if (!res.ok || !res.orderId) {
+        setConfigureError(
+          res.error ?? 'Не удалось создать черновик заказа',
+        );
+        setConfigureFieldErrors(res.fieldErrors);
+        return;
+      }
+      // Заказ создан как черновик. Если спецификация не пришла (флаг
+      // «Расцветки» выключен или снимок не дочитался) — уводим на
+      // карточку, где тот же редактор доступен. Иначе разворачиваем
+      // редактор инлайн на этой же странице.
+      if (!res.colorways || !res.techCardParams) {
+        router.push(`/admin/orders/${res.orderId}`);
+        return;
+      }
+      setDraftColorways(res.colorways);
+      setDraftTechCardParams(res.techCardParams);
+      setDraftOrderId(res.orderId);
+    });
+  }, [router]);
+
+  // fieldErrors обычного submit (`state`) и опт-ин конфигурации живут
+  // раздельно — показываем ошибку из того, что сработало последним.
   const fieldError = (key: string): string | undefined =>
-    state.fieldErrors?.[key];
+    configureFieldErrors?.[key] ?? state.fieldErrors?.[key];
 
   const availableSizes = useMemo<SizeDto[]>(() => {
     if (!selectedPattern) return [];
@@ -402,6 +467,28 @@ export function AdminCreateOrderForm({
 
   const totalLabel = `${sizesTotal.toLocaleString('ru-RU')} шт.`;
 
+  // Хотя бы одна расцветка с техкартой — иначе снимок материалов будет
+  // пустым (строки можно добавить в редакторе вручную). Управляет только
+  // мягким hint-ом, не блокирует кнопку.
+  const anyColorwayHasTechCard = useMemo(
+    () => colorways.some((c) => (c.techCardId ?? '').length > 0),
+    [colorways],
+  );
+  // Опт-ин «Настроить материалы» доступен только в обычном пути выбора
+  // существующего лекала (SELECTING) и ВНЕ inline-«Создать изделие» /
+  // «Отправить конструктору»: так в FormData попадут нужные
+  // `qty[<sizeId>]`/`patternItemId` (рендерятся в SELECTING) и НЕ попадут
+  // `newProductCalculationJson`/`productCreationMode` (action останется в
+  // дефолтной ветке EXISTING_PATTERN). Жёсткий минимум зеркалит
+  // `CreateOrderSchema.superRefine`: лекало + непустой тираж.
+  const canConfigureMaterials =
+    colorwaysEnabled &&
+    productBlockMode === 'SELECTING' &&
+    !savedInlineProduct &&
+    !savedConstructorTask &&
+    patternItemId.trim().length > 0 &&
+    sizesTotal > 0;
+
   const selectedClient = useMemo(
     () => (clientId ? (clients.find((c) => c.id === clientId) ?? null) : null),
     [clientId, clients],
@@ -473,7 +560,17 @@ export function AdminCreateOrderForm({
   const otherTabsHints = ORDER_DETAIL_TABS.filter((t) => t.id !== 'product');
 
   return (
-    <form action={formAction} className="admin-form admin-order-form">
+    <form
+      ref={formRef}
+      action={formAction}
+      className="admin-form admin-order-form"
+      onSubmit={(e) => {
+        // Фаза CONFIGURED: черновик уже создан — глушим повторный submit
+        // (Enter в поле спецификации / случайный сабмит), иначе
+        // `createOrderAction` создал бы ВТОРОЙ заказ.
+        if (draftOrderId) e.preventDefault();
+      }}
+    >
       <input type="hidden" name="redirectTo" value="admin" />
       <input type="hidden" name="orderDate" value={today} />
       <input type="hidden" name="status" value="DRAFT" />
@@ -495,6 +592,12 @@ export function AdminCreateOrderForm({
         <div role="alert" className="admin-order-form__error">
           <AlertCircle size={18} strokeWidth={1.6} aria-hidden />
           <span>{state.error}</span>
+        </div>
+      )}
+      {configureError && (
+        <div role="alert" className="admin-order-form__error">
+          <AlertCircle size={18} strokeWidth={1.6} aria-hidden />
+          <span>{configureError}</span>
         </div>
       )}
 
@@ -547,24 +650,70 @@ export function AdminCreateOrderForm({
             }
             kpis={heroKpis}
             workflowActions={
-              <>
-                <Link
-                  href="/admin/orders"
-                  className="admin-btn admin-btn--ghost"
-                >
-                  <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />К списку
-                </Link>
-                {/* Херо-кнопка «Создать заказ» всегда видна. Она
-                    отправляет общий `<form action={createOrderAction}>`;
-                    если в `savedInlineProduct` есть сохранённое
-                    inline-изделие, его JSON лежит в hidden input
-                    `newProductCalculationJson` и обрабатывается
-                    server action-ом. В режиме CREATING без локального
-                    «Сохранить изделие» сабмит может уйти без
-                    inline-изделия — backend в этом случае отдаст 400
-                    `ORDER_PRODUCT_OR_PATTERN_REQUIRED`. */}
-                <SubmitButton />
-              </>
+              draftOrderId ? (
+                // Фаза CONFIGURED: заказ уже создан как черновик, правки
+                // спецификации сохраняются сразу. «Создать заказ» больше
+                // не показываем (иначе — дубль); ведём на карточку.
+                <>
+                  <Link
+                    href="/admin/orders"
+                    className="admin-btn admin-btn--ghost"
+                  >
+                    <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />К
+                    списку
+                  </Link>
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn--primary"
+                    onClick={() =>
+                      router.push(`/admin/orders/${draftOrderId}`)
+                    }
+                  >
+                    Открыть заказ
+                    <ArrowRight size={16} strokeWidth={1.6} aria-hidden />
+                  </button>
+                </>
+              ) : (
+                <>
+                  <Link
+                    href="/admin/orders"
+                    className="admin-btn admin-btn--ghost"
+                  >
+                    <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />К
+                    списку
+                  </Link>
+                  {/* Опт-ин «Настроить материалы техкарты»: создаёт
+                      черновик заказа (`configureOrderDraftAction`) и
+                      разворачивает редактор спецификации прямо здесь.
+                      `type="button"` — форму только читаем (`FormData`),
+                      обычный submit не запускаем. */}
+                  {canConfigureMaterials && (
+                    <button
+                      type="button"
+                      className="admin-btn admin-btn--ghost"
+                      onClick={handleConfigureMaterials}
+                      disabled={isConfiguring}
+                      title={
+                        anyColorwayHasTechCard
+                          ? 'Создаст черновик заказа и откроет редактор материалов техкарты прямо здесь'
+                          : 'Ни у одной расцветки не выбрана техкарта — снимок материалов будет пустым, строки можно добавить вручную в редакторе'
+                      }
+                    >
+                      <Layers size={16} strokeWidth={1.6} aria-hidden />
+                      {isConfiguring
+                        ? 'Создаём черновик…'
+                        : 'Настроить материалы'}
+                    </button>
+                  )}
+                  {/* Херо-кнопка «Создать заказ». Отправляет общий
+                      `<form action={createOrderAction}>`; если в
+                      `savedInlineProduct` есть сохранённое inline-изделие,
+                      его JSON лежит в hidden `newProductCalculationJson`.
+                      Блокируем, пока идёт опт-ин конфигурации, чтобы не
+                      создать заказ дважды. */}
+                  <SubmitButton disabled={isConfiguring} />
+                </>
+              )
             }
           />
         }
@@ -578,6 +727,45 @@ export function AdminCreateOrderForm({
       >
         {/* === Tab: Продукция === */}
         <div className="order-tab-panel order-product-tab">
+          {draftOrderId && draftColorways && draftTechCardParams ? (
+            // Фаза CONFIGURED: черновик создан — вместо формы продукции
+            // разворачиваем ТОТ ЖЕ редактор спецификации, что и на
+            // карточке заказа (`OrderColorwaysBlock`), по свежему orderId.
+            <div
+              className="order-draft-materials"
+              style={{ display: 'flex', flexDirection: 'column', gap: 12 }}
+            >
+              <div
+                style={{ display: 'flex', flexDirection: 'column', gap: 6 }}
+              >
+                <h2
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: 8,
+                    margin: 0,
+                    fontSize: 17,
+                  }}
+                >
+                  <Layers size={18} strokeWidth={1.8} aria-hidden /> Черновик
+                  создан · материалы техкарты
+                </h2>
+                <p className="admin-muted" style={{ margin: 0 }}>
+                  Заказ сохранён как черновик и виден в списке «Заказы».
+                  Правьте спецификацию — нормы, ед., цвет, плотность,
+                  слот-параметры, добавляйте/убирайте строки; каждое
+                  изменение сохраняется сразу. Остальное можно донастроить в
+                  карточке заказа.
+                </p>
+              </div>
+              <OrderColorwaysBlock
+                orderId={draftOrderId}
+                initial={draftColorways}
+                techCardParams={draftTechCardParams}
+                editable
+              />
+            </div>
+          ) : (
           <ProductCreateTab
             patternItemId={patternItemId}
             onPatternItemIdChange={setPatternItemId}
@@ -738,6 +926,7 @@ export function AdminCreateOrderForm({
               ) : null
             }
           />
+          )}
         </div>
 
         {/* Hidden input — `createOrderAction` парсит JSON и собирает
