@@ -70,11 +70,7 @@ import {
   CONSTRUCTOR_TASK_STATUS_LABELS,
   CONSTRUCTOR_TASK_STATUS_TONE,
 } from '@sewing/shared/constructor-tasks';
-import {
-  formatDateRu,
-  formatDaysLeft,
-  formatProgressPercent,
-} from '@/lib/date-format';
+import { formatDateRu } from '@/lib/date-format';
 
 export const dynamic = 'force-dynamic';
 
@@ -593,38 +589,32 @@ function OrderTotalCell({ o }: { o: OrderListItemDto }) {
 }
 
 /**
- * Колонка «Срок» в списке заказов. Backend уже посчитал бакет в
- * `o.deadline`; мы рендерим: дату сдачи, бейдж бакета, краткую подпись
- * «осталось / просрочено / сегодня» и компактный прогресс выпуска.
+ * Цвет текста даты срока по тону бакета контроля сроков
+ * (`o.deadline.tone`). Токены — из `globals.css` (те же `--admin-*-fg`,
+ * что у `AdminStatusBadge`), чтобы палитра была согласованной.
+ */
+const DEADLINE_TONE_COLOR: Record<AdminStatusTone, string> = {
+  danger: 'var(--admin-danger-fg)', // просрочен → красный
+  warning: 'var(--admin-warning-fg)', // в риске → янтарный
+  success: 'var(--admin-success-fg)', // в срок → зелёный
+  info: 'var(--admin-primary-fg)',
+  muted: 'var(--admin-muted)', // без срока / готов → приглушённый
+};
+
+/**
+ * Колонка «Срок» — ТОЛЬКО дата сдачи, окрашенная по статусу контроля
+ * сроков: просрочен → красный, в срок → зелёный (в риске → янтарный,
+ * без срока/готов → приглушённый). Бейдж бакета, подпись «осталось /
+ * сегодня» и прогресс выпуска убраны — нужна лаконичная цветная дата.
  */
 function DeadlineCell({ o }: { o: OrderListItemDto }) {
-  const d = o.deadline;
-  if (!d) {
+  if (!o.dueDate) {
     return <span className="admin-muted">—</span>;
   }
-  const tone = (d.tone as AdminStatusTone) ?? 'muted';
-  const showProgress = d.progressPercent !== null;
+  const tone = (o.deadline?.tone as AdminStatusTone) ?? 'muted';
   return (
-    <div className="admin-deadline-cell">
-      <div className="admin-deadline-cell__row">
-        <span className="admin-deadline-cell__date">
-          {formatDateRu(o.dueDate)}
-        </span>
-        <AdminStatusBadge tone={tone}>{d.label}</AdminStatusBadge>
-      </div>
-      {(d.daysLeft !== null || showProgress) && (
-        <div className="admin-deadline-cell__hint">
-          {d.daysLeft !== null && (
-            <span>{formatDaysLeft(d.daysLeft)}</span>
-          )}
-          {d.daysLeft !== null && showProgress && (
-            <span aria-hidden> · </span>
-          )}
-          {showProgress && (
-            <span>готово {formatProgressPercent(d.progressPercent)}</span>
-          )}
-        </div>
-      )}
-    </div>
+    <strong style={{ color: DEADLINE_TONE_COLOR[tone] }}>
+      {formatDateRu(o.dueDate)}
+    </strong>
   );
 }

@@ -247,6 +247,20 @@ function buildOrderSearchOr(rawSearch: string): Prisma.OrderWhereInput[] {
   return or;
 }
 
+/**
+ * Пытается разобрать поисковую строку как ЦЕЛОЕ положительное число —
+ * плановое количество заказа (`qtyPlanTotal`). Только чистые цифры
+ * (`100`), без разделителей. Возвращает `null`, если это не число.
+ * Матч по количеству добавляется В OR к поиску по номеру/дате, поэтому
+ * `100` найдёт и заказ №…100…, и заказ на 100 шт.
+ */
+function parseSearchQty(raw: string): number | null {
+  const q = raw.trim();
+  if (!/^\d+$/.test(q)) return null;
+  const n = Number(q);
+  return Number.isSafeInteger(n) && n > 0 ? n : null;
+}
+
 /** День+месяц без года (например, `24.07`). */
 interface SearchDayMonth {
   day: number;
@@ -1237,7 +1251,23 @@ export class OrdersService {
       // Мультиполевой «живой» поиск: номер / клиент / организация /
       // подразделение / полная дата / месяц / год. См. `buildOrderSearchOr`.
       // (Голую дату `дд.мм` сюда НЕ кладём — она обрабатывается в памяти.)
-      where.OR = buildOrderSearchOr(rawSearch);
+      const or = buildOrderSearchOr(rawSearch);
+      // Поиск по количеству (плановому). `qtyPlanTotal` — это Σ
+      // `OrderItem.qtyPlan`, агрегат, в `WHERE` напрямую не выразить.
+      // Поэтому для чисто числового запроса находим id заказов с нужной
+      // суммой через `groupBy … having _sum` и подмешиваем в OR.
+      const qty = parseSearchQty(rawSearch);
+      if (qty != null) {
+        const grouped = await this.prisma.orderItem.groupBy({
+          by: ['orderId'],
+          _sum: { qtyPlan: true },
+          having: { qtyPlan: { _sum: { equals: qty } } },
+        });
+        if (grouped.length > 0) {
+          or.push({ id: { in: grouped.map((g) => g.orderId) } });
+        }
+      }
+      where.OR = or;
     }
 
     const orderBy: Prisma.OrderOrderByWithRelationInput = ((): Prisma.OrderOrderByWithRelationInput => {
