@@ -161,21 +161,31 @@ export class SupplierPaymentService {
     if (!item) throw new CashFlowItemNotFoundException();
     if (!item.isActive) throw new CashFlowItemInactiveException();
 
-    const row = await this.prisma.supplierPayment.create({
-      data: {
-        kind: ExpensePaymentKind.SUPPLIER,
-        supplierId: input.supplierId,
-        supplierNameSnapshot: input.supplierNameSnapshot,
-        purchaseOrderId: input.purchaseOrderId,
-        purchaseOrderNumberSnapshot: input.purchaseOrderNumberSnapshot,
-        accountId: input.accountId,
-        itemId: input.itemId,
-        amount: input.amount,
-        status: SupplierPaymentStatus.DRAFT,
-        comment: input.comment,
-        createdById: input.createdById,
-      },
-      include: { account: true, item: true },
+    // Номер как у ручного create() (иначе черновики-хэндоффы висят с пустым
+    // номером в «Заявках на расход» — T3). nextNumber требует tx-клиент;
+    // UNIQUE защищает от гонки.
+    const row = await this.prisma.$transaction(async (tx) => {
+      const number = await this.expenseNumber.nextNumber(
+        tx,
+        ExpensePaymentKind.SUPPLIER,
+      );
+      return tx.supplierPayment.create({
+        data: {
+          number,
+          kind: ExpensePaymentKind.SUPPLIER,
+          supplierId: input.supplierId,
+          supplierNameSnapshot: input.supplierNameSnapshot,
+          purchaseOrderId: input.purchaseOrderId,
+          purchaseOrderNumberSnapshot: input.purchaseOrderNumberSnapshot,
+          accountId: input.accountId,
+          itemId: input.itemId,
+          amount: input.amount,
+          status: SupplierPaymentStatus.DRAFT,
+          comment: input.comment,
+          createdById: input.createdById,
+        },
+        include: { account: true, item: true },
+      });
     });
     return this.map(row);
   }

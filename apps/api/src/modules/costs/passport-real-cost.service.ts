@@ -206,9 +206,11 @@ export class PassportRealCostService {
     const passportIds = Array.from(byPassport.keys());
     if (passportIds.length === 0) return { date, finalized: 0 };
 
-    // Разнос оклада за день (полный, день закрыт) + батч сдельной/материала.
-    const [{ rubByPassport }, pwRows, issues, returns] = await Promise.all([
-      this.apportionSalary(from, to),
+    // Сдельная / материал — батчем по дню. Оклад — ПО КАЖДОМУ паспорту на
+    // ЕГО собственном окне завершения (как живой `salaryFor`), а НЕ на окне
+    // одного дня упаковки: иначе оклад за операции / ОТК / ВТО предыдущих
+    // дней теряется в FINAL-снимке (C3 — снимок занижал ЗП vs живой вид).
+    const [pwRows, issues, returns] = await Promise.all([
       this.prisma.operationEntry.groupBy({
         by: ['passportId'],
         where: { passportId: { in: passportIds }, status: EntryStatus.APPROVED },
@@ -225,6 +227,14 @@ export class PassportRealCostService {
         _sum: { totalCost: true },
       }),
     ]);
+    // Оклад по каждому паспорту на его окне завершения — совпадает с живым
+    // `getForPassport` (C3). Батч-задача конца дня, N вызовов допустимы.
+    const salaryByPassport = new Map<string, number>();
+    await Promise.all(
+      passportIds.map(async (pid) => {
+        salaryByPassport.set(pid, (await this.salaryFor(pid)).totalRub);
+      }),
+    );
     const pwByPassport = new Map<string, number>();
     for (const r of pwRows) {
       if (r.passportId) pwByPassport.set(r.passportId, decimalToNumber(r._sum.amount));
@@ -253,7 +263,7 @@ export class PassportRealCostService {
       const info = byPassport.get(pid)!;
       const material = info.excluded ? 0 : matByPassport.get(pid) ?? 0;
       const piecework = pwByPassport.get(pid) ?? 0;
-      const salaryRub = rubByPassport.get(pid) ?? 0;
+      const salaryRub = salaryByPassport.get(pid) ?? 0;
       const total = round2(material + piecework + salaryRub);
       const perUnit = info.qtyGood > 0 ? round2(total / info.qtyGood) : 0;
       const fields = {

@@ -1953,8 +1953,11 @@ export class WorkshopNeedsService {
     let calculatedQty: Prisma.Decimal;
     let unit = line.unit;
     if (line.source === 'ORDER_MATERIAL_REQUIREMENT') {
-      // У snapshot уже посчитан totalQty в момент start().
-      calculatedQty = (line.totalQty ?? new Prisma.Decimal(0))
+      // У snapshot totalQty посчитан в момент start() (в БД NOT NULL, так что
+      // ветка `??` сегодня недостижима). Defensive (M3): если инвариант когда-
+      // нибудь сломается, пересчитываем qtyPerUnit×N, как live-ветка ниже, а
+      // не зануляем молча.
+      calculatedQty = (line.totalQty ?? line.qtyPerUnit.mul(totalOrderQty))
         .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
     } else {
       // Live техкарта: qtyPerUnit × Σ qtyPlan.
