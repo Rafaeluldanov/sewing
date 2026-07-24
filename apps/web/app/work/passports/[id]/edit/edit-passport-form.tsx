@@ -4,6 +4,8 @@ import Link from 'next/link';
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
 import { AdminDateField } from '@/components/admin/admin-date-field';
+import { PrintButton } from '@/components/print-button';
+import { buildPassportPrintPath } from '@/lib/browser-api-paths';
 import {
   updateMyPassportAction,
   type UpdatePassportFormState,
@@ -103,6 +105,45 @@ export function EditPassportForm({
   // remaining уже посчитан без редактируемого паспорта (см. page.tsx),
   // поэтому максимум, который можно ввести = remaining самого размера.
   const maxQty = selected?.remaining ?? initial.qtyCut;
+
+  // После успешного «Выпустить паспорт» показываем компактную карточку
+  // с кнопкой печати вместо молчаливого возврата в список — печати
+  // помощник и ждёт после выпуска. Зеркалит `CutterAssistantSuccessCard`
+  // формы выпуска нового паспорта.
+  if (state.success) {
+    const s = state.success;
+    return (
+      <div className="card">
+        <div className="success-box">
+          <strong>Паспорт № {s.number} выпущен.</strong>
+          <div
+            className="meta-line"
+            style={{ marginTop: '0.4rem', display: 'flex', gap: '1rem', flexWrap: 'wrap' }}
+          >
+            <span>{s.productName}</span>
+            <span>цвет: <strong>{s.color}</strong></span>
+            <span>размер: <strong>{s.sizeCode}</strong></span>
+            <span>кол-во: <strong>{s.qtyCut}</strong> шт</span>
+            <span>рулон: <strong>{s.rollNumber}</strong></span>
+          </div>
+        </div>
+        <div className="actions-row">
+          <PrintButton
+            sourceType="PASSPORT_PRINT"
+            sourceId={s.id}
+            fallbackHref={buildPassportPrintPath(s.id)}
+            label="Распечатать паспорт"
+          />
+          <Link className="btn btn-ghost" href="/work/passports">
+            К списку паспортов
+          </Link>
+          <Link className="btn btn-ghost" href="/work">
+            ← На рабочее место
+          </Link>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <form action={formAction} className="card">

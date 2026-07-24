@@ -1,7 +1,6 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
-import { redirect } from 'next/navigation';
 import {
   UpdatePassportSchema,
   type UpdatePassportDto,
@@ -44,9 +43,26 @@ function isNextRedirect(e: unknown): boolean {
   );
 }
 
+/**
+ * Компактный снимок выпущенного паспорта для success-карточки на
+ * `/work/passports/[id]/edit`. Тех же полей достаточно, чтобы показать
+ * «что выпущено» и дать кнопку печати — как на форме выпуска нового
+ * паспорта (`CutterAssistantSuccessCard`).
+ */
+export interface UpdatePassportSuccess {
+  id: string;
+  number: string;
+  productName: string;
+  color: string;
+  sizeCode: string;
+  qtyCut: number;
+  rollNumber: string;
+}
+
 export interface UpdatePassportFormState {
   error?: string;
   fieldErrors?: Record<string, string>;
+  success?: UpdatePassportSuccess;
 }
 
 export async function updateMyPassportAction(
@@ -83,8 +99,9 @@ export async function updateMyPassportAction(
     };
   }
 
+  let updated;
   try {
-    await updatePassport(passportId, parsed.data);
+    updated = await updatePassport(passportId, parsed.data);
   } catch (e) {
     if (isNextRedirect(e)) throw e;
     return { error: explainApiError(e) };
@@ -98,7 +115,26 @@ export async function updateMyPassportAction(
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath(`/passports/${passportId}`);
   revalidatePath(`/admin/passports/${passportId}`);
-  redirect('/work/passports');
+
+  // Раньше здесь был `redirect('/work/passports')` — паспорт молча
+  // сохранялся и помощник возвращался в список без всякого следа. Но
+  // на рабочем месте «Выпустить паспорт» = «допечатать этикетку», и
+  // именно печати помощник ждёт после нажатия (симметрично форме
+  // ВЫПУСКА нового паспорта, где success показывает «Распечатать
+  // паспорт»). Поэтому вместо редиректа возвращаем success — форма
+  // показывает ту же карточку с кнопкой печати. См.
+  // `CutterAssistantSuccessCard` в new-passport-form.
+  return {
+    success: {
+      id: updated.id,
+      number: updated.number,
+      productName: updated.productName,
+      color: updated.color,
+      sizeCode: updated.sizeCode,
+      qtyCut: updated.qtyCut,
+      rollNumber: updated.rollNumber,
+    },
+  };
 }
 
 export interface DeleteMyPassportActionResult {

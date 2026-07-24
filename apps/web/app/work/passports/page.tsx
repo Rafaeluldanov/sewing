@@ -3,6 +3,8 @@ import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listMyRecentPassports } from '@/lib/passports-api';
 import type { MyPassportListItem } from '@sewing/shared/passports';
+import { PrintButton } from '@/components/print-button';
+import { buildPassportPrintPath } from '@/lib/browser-api-paths';
 import { DeleteMyPassportButton } from './delete-my-passport-button';
 
 export const dynamic = 'force-dynamic';
@@ -127,6 +129,22 @@ function MyPassportRow({ item }: { item: MyPassportListItem }) {
         </div>
       </div>
       <div className="my-passports-row__actions">
+        {/*
+         * Печать доступна ВСЕГДА, независимо от `editable`: перепечатать
+         * этикетку паспорта нужно и после того, как он размещён в ячейке
+         * или двинулся по операциям (правку в этих состояниях backend уже
+         * закрывает). Раньше в маршруте помощника `/work/passports` кнопки
+         * печати не было вовсе — перепечатать уже созданный паспорт было
+         * неоткуда (печать жила только на детали `/passports/[id]` и на
+         * экране выпуска). Тот же `<PrintButton>`, что и на детали.
+         */}
+        <PrintButton
+          sourceType="PASSPORT_PRINT"
+          sourceId={item.id}
+          fallbackHref={buildPassportPrintPath(item.id)}
+          className="btn"
+          label="Печать"
+        />
         {item.editable ? (
           <>
             <Link
@@ -149,7 +167,7 @@ function MyPassportRow({ item }: { item: MyPassportListItem }) {
             title={blocked ?? undefined}
             aria-hidden
           >
-            недоступно
+            недоступно для правки
           </span>
         )}
       </div>
