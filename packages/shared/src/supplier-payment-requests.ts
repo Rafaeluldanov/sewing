@@ -14,10 +14,12 @@
  *   - реквизиты копируются из `Supplier` снимком и редактируются прямо
  *     в заявке;
  *   - процент этапа — первичен, сумма этапа авто-считается на бэкенде
- *     как `round(amount × percent / 100, 2)` (клиентскую сумму не
- *     доверяем);
- *   - «Σ процентов = 100%» — мягкое предупреждение в UI, в схеме НЕ
- *     enforce-им (этапы можно сохранить с любым раскладом);
+ *     как `round(amount × percent / 100, 2)`, остаток округления —
+ *     последнему этапу, так что Σ этапов = сумме заявки (клиентскую сумму
+ *     не доверяем, см. `SupplierPaymentRequestsService.buildStagesData`);
+ *   - «Σ процентов = 100%» ENFORCE-им в схеме
+ *     (`SupplierPaymentRequestStagesField`) — этапы разбивают ровно сумму
+ *     заявки; в UI дополнительно мягкая плашка и блок сабмита;
  *   - `status` — свободная строка, валидация Zod-ом.
  *
  * Контракт типов — источник истины и для backend (ZodValidationPipe),
@@ -307,6 +309,35 @@ export type CreateSupplierPaymentRequestStageDto = z.infer<
 >;
 
 /**
+ * Набор этапов заявки. Σ процентов ОБЯЗАНА равняться 100% — этапы
+ * разбивают ровно сумму заявки, а не «часть» её. Проверка серверная (а не
+ * только мягкая плашка в UI): без неё этапы можно завести на 90% / 110% /
+ * 300%, а хэндофф в казначейство заводит по каждому этапу отдельный
+ * платёжный черновик — Σ денег со счёта разошлась бы с суммой заявки.
+ * Суммируем проценты в фикс-точке (×10000 → целые), чтобы не ловить
+ * ошибку float на дробных долях.
+ */
+export const SupplierPaymentRequestStagesField = z
+  .array(CreateSupplierPaymentRequestStageSchema)
+  .min(1, 'Нужен хотя бы один этап оплаты')
+  .max(
+    SUPPLIER_PAYMENT_REQUEST_STAGE_MAX_COUNT,
+    `Не более ${SUPPLIER_PAYMENT_REQUEST_STAGE_MAX_COUNT} этапов`,
+  )
+  .superRefine((stages, ctx) => {
+    const scaledSum = stages.reduce(
+      (acc, s) => acc + Math.round(Number(s.percent) * 10_000),
+      0,
+    );
+    if (scaledSum !== 1_000_000) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Сумма процентов этапов должна быть равна 100%',
+      });
+    }
+  });
+
+/**
  * Создание заявки на оплату. `purchaseOrderId` берётся из URL
  * (`POST /purchase-orders/:id/payment-requests`), сюда НЕ передаётся.
  * Поставщик и его имя бэкенд берёт из PO; реквизиты приходят из формы
@@ -341,13 +372,7 @@ export const CreateSupplierPaymentRequestSchema = z.object({
   bankBik: BankBikField,
   bankCorrAccount: BankCorrAccountField,
 
-  stages: z
-    .array(CreateSupplierPaymentRequestStageSchema)
-    .min(1, 'Нужен хотя бы один этап оплаты')
-    .max(
-      SUPPLIER_PAYMENT_REQUEST_STAGE_MAX_COUNT,
-      `Не более ${SUPPLIER_PAYMENT_REQUEST_STAGE_MAX_COUNT} этапов`,
-    ),
+  stages: SupplierPaymentRequestStagesField,
 });
 export type CreateSupplierPaymentRequestDto = z.infer<
   typeof CreateSupplierPaymentRequestSchema
@@ -390,13 +415,7 @@ export const UpdateSupplierPaymentRequestSchema = z.object({
   bankBik: BankBikField,
   bankCorrAccount: BankCorrAccountField,
 
-  stages: z
-    .array(CreateSupplierPaymentRequestStageSchema)
-    .min(1, 'Нужен хотя бы один этап оплаты')
-    .max(
-      SUPPLIER_PAYMENT_REQUEST_STAGE_MAX_COUNT,
-      `Не более ${SUPPLIER_PAYMENT_REQUEST_STAGE_MAX_COUNT} этапов`,
-    ),
+  stages: SupplierPaymentRequestStagesField,
 
   /** id прежних вложений, которые нужно сохранить (остальные удалить). */
   keepFileIds: z.array(z.string().min(1)).optional().default([]),

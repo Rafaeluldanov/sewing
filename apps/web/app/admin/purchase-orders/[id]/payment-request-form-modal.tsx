@@ -342,6 +342,13 @@ export function PaymentRequestFormModal({
         return;
       }
     }
+    // Σ процентов обязана быть 100% (бэкенд это тоже enforce-ит — блок здесь
+    // ради немедленной обратной связи вместо ошибки от сервера).
+    const sumPct = cleanStages.reduce((acc, s) => acc + parseNum(s.percent), 0);
+    if (Math.abs(sumPct - 100) > 0.0001) {
+      setError('Сумма процентов этапов должна быть равна 100%.');
+      return;
+    }
     if (isEdit && !requestId) {
       setError('Не удалось определить заявку для сохранения.');
       return;

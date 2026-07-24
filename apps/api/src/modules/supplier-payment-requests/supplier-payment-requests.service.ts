@@ -29,9 +29,10 @@ import { SupplierPaymentRequestsStorageService } from './supplier-payment-reques
  * Заявка выписывается ВНУТРИ `PurchaseOrder`: поставщик и его имя
  * берутся из снимка PO, реквизиты — из формы (предзаполнены из карточки
  * поставщика, редактируемы). Сумма заявки делится на этапы по проценту;
- * сумма этапа считается здесь как `round(amount × percent / 100, 2)` —
- * клиентскую сумму не доверяем. «Σ процентов = 100%» НЕ enforce-им
- * (мягкое предупреждение — на стороне UI).
+ * сумма этапа считается здесь (`buildStagesData`) как
+ * `round(amount × percent / 100, 2)`, остаток — последнему этапу, так что
+ * `Σ этапов = amount`; клиентскую сумму не доверяем. «Σ процентов = 100%»
+ * enforce-ится схемой (`SupplierPaymentRequestStagesField`).
  *
  * На MVP заявка только создаётся/читается. Передача в казначейство
  * (этап → `SupplierPayment` + проводка) — следующий шаг; крюк
@@ -124,22 +125,7 @@ export class SupplierPaymentRequestsService {
     ): string | null =>
       formValue !== undefined ? formValue : (supplierValue ?? null);
 
-    // Сумма этапа = round(amount × percent / 100, 2). sortOrder — 1..N.
-    const stagesData = dto.stages.map((stage, index) => {
-      const percent = new Prisma.Decimal(stage.percent);
-      // toDecimalPlaces без явного режима = ROUND_HALF_UP (дефолт decimal.js).
-      const stageAmount = amount.mul(percent).div(100).toDecimalPlaces(2);
-      return {
-        sortOrder: index + 1,
-        percent,
-        amount: stageAmount,
-        plannedPayDate: stage.plannedPayDate
-          ? new Date(stage.plannedPayDate)
-          : null,
-        status: 'PENDING',
-        comment: stage.comment ?? null,
-      };
-    });
+    const stagesData = this.buildStagesData(amount, dto.stages);
 
     const created = await this.prisma.$transaction(async (tx) => {
       const number = await this.numberService.nextNumber(tx);
@@ -289,21 +275,7 @@ export class SupplierPaymentRequestsService {
 
     const amount = new Prisma.Decimal(dto.amount);
 
-    // Сумма этапа = round(amount × percent / 100, 2). sortOrder — 1..N.
-    const stagesData = dto.stages.map((stage, index) => {
-      const percent = new Prisma.Decimal(stage.percent);
-      const stageAmount = amount.mul(percent).div(100).toDecimalPlaces(2);
-      return {
-        sortOrder: index + 1,
-        percent,
-        amount: stageAmount,
-        plannedPayDate: stage.plannedPayDate
-          ? new Date(stage.plannedPayDate)
-          : null,
-        status: 'PENDING',
-        comment: stage.comment ?? null,
-      };
-    });
+    const stagesData = this.buildStagesData(amount, dto.stages);
 
     const keep = new Set(dto.keepFileIds ?? []);
     const filesToRemove = existing.files.filter((f) => !keep.has(f.id));
@@ -455,6 +427,41 @@ export class SupplierPaymentRequestsService {
   // ===========================================================================
   // Helpers
   // ===========================================================================
+
+  /**
+   * Суммы этапов из процентов. Инвариант: `Σ(этапов) = amount` копейка-в-
+   * копейку — остаток округления отдаём ПОСЛЕДНЕМУ этапу
+   * (`amount − Σ предыдущих`). `Σ процентов = 100%` гарантируется схемой
+   * (`SupplierPaymentRequestStagesField`), поэтому остаток последнего
+   * этапа неотрицателен. Единый источник для create и update, чтобы суммы
+   * этапов не разъезжались между путями.
+   */
+  private buildStagesData(
+    amount: Prisma.Decimal,
+    stages: CreateSupplierPaymentRequestDto['stages'],
+  ) {
+    const lastIndex = stages.length - 1;
+    let allocated = new Prisma.Decimal(0);
+    return stages.map((stage, index) => {
+      const percent = new Prisma.Decimal(stage.percent);
+      // toDecimalPlaces без явного режима = ROUND_HALF_UP (дефолт decimal.js).
+      const stageAmount =
+        index === lastIndex
+          ? amount.minus(allocated)
+          : amount.mul(percent).div(100).toDecimalPlaces(2);
+      allocated = allocated.plus(stageAmount);
+      return {
+        sortOrder: index + 1,
+        percent,
+        amount: stageAmount,
+        plannedPayDate: stage.plannedPayDate
+          ? new Date(stage.plannedPayDate)
+          : null,
+        status: 'PENDING' as const,
+        comment: stage.comment ?? null,
+      };
+    });
+  }
 
   /**
    * Хэндофф «заявка на оплату → казначейство». По каждому этапу заявки
