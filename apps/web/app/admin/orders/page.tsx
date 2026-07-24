@@ -359,7 +359,17 @@ export default async function AdminOrdersPage({
           </div>
         </form>
 
-        <OrdersTable items={items} orgName={orgName} />
+        <OrdersTable
+          items={items}
+          orgName={orgName}
+          filtered={Boolean(
+            query.search ||
+              query.status ||
+              query.clientId ||
+              query.companyDivisionId ||
+              deadlineFilter,
+          )}
+        />
 
         <AdminPagination
           page={query.page ?? 1}
@@ -422,9 +432,12 @@ function DeadlineTabs({
 function OrdersTable({
   items,
   orgName,
+  filtered,
 }: {
   items: OrderListItemDto[];
   orgName: string | null;
+  /** Активен ли поиск/фильтр — от этого зависит текст пустого состояния. */
+  filtered: boolean;
 }) {
   const columns: AdminTableColumn<OrderListItemDto>[] = [
     {
@@ -527,11 +540,19 @@ function OrdersTable({
       rowKey={(o) => o.id}
       rowHref={(o) => `/admin/orders/${o.id}`}
       emptyContent={
-        <AdminEmptyState
-          icon={<Package size={26} strokeWidth={1.6} aria-hidden />}
-          title="Заказов пока нет"
-          hint="Создайте первый заказ, чтобы запустить производство."
-        />
+        filtered ? (
+          <AdminEmptyState
+            icon={<SearchIcon size={26} strokeWidth={1.6} aria-hidden />}
+            title="Данные не найдены"
+            hint="По заданному поиску и фильтрам заказов нет. Измените запрос или сбросьте фильтры."
+          />
+        ) : (
+          <AdminEmptyState
+            icon={<Package size={26} strokeWidth={1.6} aria-hidden />}
+            title="Заказов пока нет"
+            hint="Создайте первый заказ, чтобы запустить производство."
+          />
+        )
       }
     />
   );

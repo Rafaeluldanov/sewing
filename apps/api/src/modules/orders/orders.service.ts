@@ -1258,13 +1258,25 @@ export class OrdersService {
       // суммой через `groupBy … having _sum` и подмешиваем в OR.
       const qty = parseSearchQty(rawSearch);
       if (qty != null) {
-        const grouped = await this.prisma.orderItem.groupBy({
-          by: ['orderId'],
-          _sum: { qtyPlan: true },
-          having: { qtyPlan: { _sum: { equals: qty } } },
-        });
-        if (grouped.length > 0) {
-          or.push({ id: { in: grouped.map((g) => g.orderId) } });
+        // Доп. совпадение по количеству — «мягкое»: если агрегатный
+        // groupBy почему-то упадёт (различие движков/версий Prisma между
+        // средами и т.п.), поиск НЕ должен падать целиком. В худшем случае
+        // просто не будет матча по количеству, но номер/клиент/дата ищутся.
+        try {
+          const grouped = await this.prisma.orderItem.groupBy({
+            by: ['orderId'],
+            _sum: { qtyPlan: true },
+            having: { qtyPlan: { _sum: { equals: qty } } },
+          });
+          if (grouped.length > 0) {
+            or.push({ id: { in: grouped.map((g) => g.orderId) } });
+          }
+        } catch (err) {
+          OrdersService.log.warn(
+            `event=orders.search.qty_groupby_failed qty=${qty}: ${
+              (err as Error).message
+            }`,
+          );
         }
       }
       where.OR = or;
