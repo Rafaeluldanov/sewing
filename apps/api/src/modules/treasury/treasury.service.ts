@@ -340,37 +340,65 @@ export class TreasuryService {
     const accounts = await this.prisma.cashAccount.findMany({
       orderBy: [{ isActive: 'desc' }, { kind: 'asc' }, { name: 'asc' }],
     });
-    const grouped = await this.prisma.cashFlowEntry.groupBy({
+
+    // БАЛАНС считаем по ВСЕМ проводкам (сторно и исходная гасят друг друга —
+    // как и должно быть: остаток верен). Отдельным запросом.
+    const balanceGroup = await this.prisma.cashFlowEntry.groupBy({
       by: ['accountId', 'direction'],
       _sum: { amount: true },
     });
 
-    const sums = new Map<string, { in: Prisma.Decimal; out: Prisma.Decimal }>();
-    for (const g of grouped) {
-      const cur =
-        sums.get(g.accountId) ??
-        { in: new Prisma.Decimal(0), out: new Prisma.Decimal(0) };
-      const amt = g._sum.amount ?? new Prisma.Decimal(0);
-      if (g.direction === 'IN') cur.in = cur.in.plus(amt);
-      else cur.out = cur.out.plus(amt);
-      sums.set(g.accountId, cur);
-    }
+    // ОБОРОТ (inflow/outflow) показываем ЧИСТЫМ — без сторно-пар (T4). Иначе
+    // сторнированный расход 100 давал бы +100 в outflow (исходная) И +100 в
+    // inflow (сторно), т.е. фантомный «приход». Исключаем сами сторно-строки
+    // (isStorno) и исходные, которые кто-то сторнировал (id ∈ reversalOfId).
+    const stornos = await this.prisma.cashFlowEntry.findMany({
+      where: { isStorno: true, reversalOfId: { not: null } },
+      select: { reversalOfId: true },
+    });
+    const reversedIds = stornos
+      .map((s) => s.reversalOfId)
+      .filter((x): x is string => x !== null);
+    const turnoverGroup = await this.prisma.cashFlowEntry.groupBy({
+      by: ['accountId', 'direction'],
+      where: {
+        isStorno: false,
+        ...(reversedIds.length > 0 ? { id: { notIn: reversedIds } } : {}),
+      },
+      _sum: { amount: true },
+    });
+
+    const zero = () => ({ in: new Prisma.Decimal(0), out: new Prisma.Decimal(0) });
+    const foldByAccount = (
+      rows: { accountId: string; direction: string; _sum: { amount: Prisma.Decimal | null } }[],
+    ): Map<string, { in: Prisma.Decimal; out: Prisma.Decimal }> => {
+      const m = new Map<string, { in: Prisma.Decimal; out: Prisma.Decimal }>();
+      for (const g of rows) {
+        const cur = m.get(g.accountId) ?? zero();
+        const amt = g._sum.amount ?? new Prisma.Decimal(0);
+        if (g.direction === 'IN') cur.in = cur.in.plus(amt);
+        else cur.out = cur.out.plus(amt);
+        m.set(g.accountId, cur);
+      }
+      return m;
+    };
+    const balanceSums = foldByAccount(balanceGroup);
+    const turnoverSums = foldByAccount(turnoverGroup);
 
     let total = new Prisma.Decimal(0);
     const rows: CashAccountBalanceDto[] = accounts.map((a) => {
-      const s = sums.get(a.id) ?? {
-        in: new Prisma.Decimal(0),
-        out: new Prisma.Decimal(0),
-      };
-      const balance = s.in.minus(s.out);
+      const b = balanceSums.get(a.id) ?? zero();
+      const t = turnoverSums.get(a.id) ?? zero();
+      const balance = b.in.minus(b.out);
       if (a.currency === 'RUB') total = total.plus(balance);
       return {
         accountId: a.id,
         accountName: a.name,
         kind: a.kind,
         currency: a.currency,
-        inflow: this.money(s.in),
-        outflow: this.money(s.out),
+        // Обороты — чистые (без сторно); баланс — по всем проводкам.
+        inflow: this.money(t.in),
+        outflow: this.money(t.out),
         balance: this.money(balance),
       };
     });
