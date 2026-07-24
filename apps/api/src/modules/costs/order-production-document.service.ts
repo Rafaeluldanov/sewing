@@ -7,6 +7,7 @@ import type {
   OrderProductionOperationRowDto,
   ProductionDocMaterialPlanSource,
 } from '@sewing/shared/order-production-document';
+import { normalizeColorOrNull } from '@sewing/shared/colors';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ACTIVE_CALCULATION_NEED_WHERE } from '../workshop-needs/workshop-need-scope.js';
@@ -79,7 +80,8 @@ export class OrderProductionDocumentService {
     const docWarnings = new Set<string>();
 
     const qtyPlanTotal = order.items.reduce((s, it) => s + (it.qtyPlan ?? 0), 0);
-    // Плановое количество по размеру (для провала операций).
+    // Плановое количество по размеру (агрегат Σ по цветам — для заказов
+    // без расцветок и как фолбэк).
     const planQtyBySizeCode = new Map<string, number>();
     for (const it of order.items) {
       const code = it.size?.code ?? it.sizeId;
@@ -87,6 +89,36 @@ export class OrderProductionDocumentService {
         code,
         (planQtyBySizeCode.get(code) ?? 0) + (it.qtyPlan ?? 0),
       );
+    }
+
+    // План по (размер × цвет) из расцветок (`OrderVariantSize`). Для
+    // мультирасцветочных заказов `OrderItem` — это агрегат Σ по цветам,
+    // поэтому провал операций по конкретному цвету надо сверять с планом
+    // именно этой расцветки, а не с суммой по размеру (иначе каждый цвет
+    // ложно читается как недовыпуск). Ключ — `размер|нормализованный цвет`,
+    // цвет нормализуем тем же `normalizeColor`, что и `Passport.color`.
+    const variants = await this.prisma.orderVariant.findMany({
+      where: { orderId },
+      select: {
+        color: true,
+        sizes: {
+          select: { qtyPlan: true, size: { select: { code: true } } },
+        },
+      },
+    });
+    const hasColorways = variants.length > 0;
+    const planQtyBySizeColor = new Map<string, number>();
+    for (const v of variants) {
+      const nc = normalizeColorOrNull(v.color) ?? '';
+      for (const s of v.sizes) {
+        const code = s.size?.code;
+        if (!code) continue;
+        const key = `${code}|${nc}`;
+        planQtyBySizeColor.set(
+          key,
+          (planQtyBySizeColor.get(key) ?? 0) + s.qtyPlan,
+        );
+      }
     }
 
     // -------------------------------------------------------------------
@@ -155,6 +187,8 @@ export class OrderProductionDocumentService {
       orderId,
       order.items,
       planQtyBySizeCode,
+      planQtyBySizeColor,
+      hasColorways,
       qtyPlanTotal,
       docWarnings,
     );
@@ -514,10 +548,38 @@ export class OrderProductionDocumentService {
   // ===================================================================
   //  ОПЕРАЦИИ
   // ===================================================================
+  /**
+   * План для строки разреза операции по (размер × цвет). Для
+   * мультирасцветочных заказов берём план конкретной расцветки
+   * (`OrderVariantSize`), сверенный по нормализованному цвету; фолбэк на
+   * размерный агрегат — когда расцветок нет или цвет строки не совпал ни с
+   * одной расцветкой (данные-легаси). Иначе провал по цвету сверялся бы с
+   * суммой плана по всем цветам размера и ложно показывал недовыпуск.
+   */
+  private resolveBreakdownPlanQty(
+    sizeCode: string | null,
+    color: string | null,
+    planQtyBySizeCode: Map<string, number>,
+    planQtyBySizeColor: Map<string, number>,
+    hasColorways: boolean,
+  ): number | null {
+    if (sizeCode == null) return null;
+    if (hasColorways) {
+      const nc = normalizeColorOrNull(color);
+      if (nc != null) {
+        const perColor = planQtyBySizeColor.get(`${sizeCode}|${nc}`);
+        if (perColor != null) return perColor;
+      }
+    }
+    return planQtyBySizeCode.get(sizeCode) ?? null;
+  }
+
   private async buildOperations(
     orderId: string,
     items: { sizeId: string; qtyPlan: number; size: { code: string } | null }[],
     planQtyBySizeCode: Map<string, number>,
+    planQtyBySizeColor: Map<string, number>,
+    hasColorways: boolean,
     qtyPlanTotal: number,
     docWarnings: Set<string>,
   ): Promise<OrderProductionOperationRowDto[]> {
@@ -767,10 +829,13 @@ export class OrderProductionDocumentService {
           .map((b) => ({
             sizeCode: b.sizeCode,
             color: b.color,
-            planQty:
-              b.sizeCode != null
-                ? (planQtyBySizeCode.get(b.sizeCode) ?? null)
-                : null,
+            planQty: this.resolveBreakdownPlanQty(
+              b.sizeCode,
+              b.color,
+              planQtyBySizeCode,
+              planQtyBySizeColor,
+              hasColorways,
+            ),
             factQty: String(b.qty),
             factRub: this.m(b.rub).toFixed(2),
           }))
