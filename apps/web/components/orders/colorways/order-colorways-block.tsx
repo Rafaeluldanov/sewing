@@ -22,6 +22,7 @@ import {
   type OrderTechCardParametersDto,
 } from '@sewing/shared/order-tech-cards';
 import { ColorwaySpec } from './colorway-spec';
+import { ModalPortal } from '@/components/modal-portal';
 import {
   Palette,
   Plus,
@@ -29,8 +30,6 @@ import {
   Save,
   Info,
   Loader2,
-  ChevronDown,
-  ChevronRight,
   Layers,
 } from 'lucide-react';
 import type { OrderColorwaysDto } from '@sewing/shared';
@@ -142,18 +141,19 @@ export function OrderColorwaysBlock({
     techCardParams,
   );
   useEffect(() => setParams(techCardParams), [techCardParams]);
-  // Какие карточки раскрыты (спецификация). Одна расцветка — раскрываем
-  // сразу; несколько — свёрнуты, чтобы грид не превращался в простыню.
-  const [expanded, setExpanded] = useState<Set<string>>(() =>
-    initial.variants.length === 1 ? new Set([initial.variants[0].id]) : new Set(),
-  );
-  const toggleSpec = (vid: string): void =>
-    setExpanded((prev) => {
-      const next = new Set(prev);
-      if (next.has(vid)) next.delete(vid);
-      else next.add(vid);
-      return next;
-    });
+  // Материалы техкарты открываются в компактной модалке (а не инлайн в
+  // карточке — иначе грид расплывался в «простыню»). Храним id расцветки,
+  // чья модалка сейчас открыта (null = закрыта); открыта максимум одна.
+  const [specVariant, setSpecVariant] = useState<string | null>(null);
+  // Esc закрывает модалку (клик по фону — в разметке оверлея).
+  useEffect(() => {
+    if (!specVariant) return;
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') setSpecVariant(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [specVariant]);
   const [pending, startTransition] = useTransition();
   const router = useRouter();
 
@@ -320,11 +320,11 @@ export function OrderColorwaysBlock({
           const addable = data.sizes.filter((s) => !usedSizeIds.has(s.id));
           const busy = pending && busyId === v.id;
           const spec = specSummary(params, v.id);
-          const isOpen = expanded.has(v.id);
+          const isOpen = specVariant === v.id;
           return (
             <article
               key={v.id}
-              className={isOpen ? 'cwl-card cwl-card--open' : 'cwl-card'}
+              className="cwl-card"
               style={{ ['--cwl-accent' as string]: swatchHex(d.color) }}
             >
               <div className="cwl-card__head">
@@ -413,35 +413,21 @@ export function OrderColorwaysBlock({
                   параметры. Вход БЕЗУСЛОВНЫЙ (решение 16.07) — раньше чип
                   «Параметры N из M» рисовался только при обязательных
                   параметрах, и у техкарты без них материал было некуда
-                  добавить. Клик раскрывает таблицу прямо в карточке. */}
+                  добавить. Клик «Развернуть» открывает таблицу в компактной
+                  модалке (см. рендер оверлея ниже). */}
               {spec && (
                 <button
                   type="button"
                   className="cwl-spec-toggle"
                   aria-expanded={isOpen}
-                  onClick={() => toggleSpec(v.id)}
+                  aria-haspopup="dialog"
+                  onClick={() => setSpecVariant(v.id)}
                 >
-                  {isOpen ? (
-                    <ChevronDown size={15} strokeWidth={2} aria-hidden />
-                  ) : (
-                    <ChevronRight size={15} strokeWidth={2} aria-hidden />
-                  )}
                   <Layers size={14} strokeWidth={1.8} aria-hidden />
                   Материалы
                   <span className="cwl-badge">{spec.lines}</span>
-                  <span className="cwl-spec-toggle__hint">
-                    {isOpen ? 'свернуть' : 'развернуть'}
-                  </span>
+                  <span className="cwl-spec-toggle__hint">развернуть</span>
                 </button>
-              )}
-              {isOpen && params && (
-                <ColorwaySpec
-                  orderId={orderId}
-                  params={params}
-                  variantId={v.id}
-                  readOnly={ro}
-                  onData={setParams}
-                />
               )}
 
               <footer className="cwl-card__foot">
@@ -471,6 +457,50 @@ export function OrderColorwaysBlock({
           );
         })}
       </div>
+
+      {/* Модалка «Материалы техкарты» — компактный оверлей вместо инлайновой
+          «простыни». Тот же самодостаточный `ColorwaySpec`, что раскрывался
+          в карточке, просто помещён в диалог. Закрытие: × / клик по фону / Esc. */}
+      {specVariant && params && drafts[specVariant] && (
+        <ModalPortal>
+          <div
+            className="qr-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label={`Материалы техкарты — ${drafts[specVariant].color || 'расцветка'}`}
+            onClick={(e) => {
+              if (e.target === e.currentTarget) setSpecVariant(null);
+            }}
+          >
+            <div className="qr-modal__card cwl-spec-modal__card">
+              <div className="qr-modal__header">
+                <h3 className="qr-modal__title cwl-spec-modal__title">
+                  <Layers size={16} strokeWidth={1.8} aria-hidden />
+                  Материалы техкарты
+                  {drafts[specVariant].color
+                    ? ` · ${drafts[specVariant].color}`
+                    : ''}
+                </h3>
+                <button
+                  type="button"
+                  className="qr-modal__close"
+                  onClick={() => setSpecVariant(null)}
+                  aria-label="Закрыть"
+                >
+                  ×
+                </button>
+              </div>
+              <ColorwaySpec
+                orderId={orderId}
+                params={params}
+                variantId={specVariant}
+                readOnly={ro}
+                onData={setParams}
+              />
+            </div>
+          </div>
+        </ModalPortal>
+      )}
 
       {totalsBySize.length > 0 && (
         <div className="cwl-totals">
@@ -514,16 +544,23 @@ function BlockStyles() {
 .cwl-head h2 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 17px; }
 .cwl-badge { display:inline-flex; align-items:center; justify-content:center; min-width:22px; height:22px;
   padding:0 6px; border-radius:999px; background:var(--color-bg-muted); color:var(--color-fg-muted); font-size:12px; font-weight:700; }
-/* Спецификация расцветки (решение 16.07): тогл «Материалы · N» раскрывает
-   таблицу материалов+параметров прямо в карточке; раскрытая карточка
-   занимает всю ширину грида — таблице нужно место. */
+/* Спецификация расцветки: тогл «Материалы · N» открывает таблицу
+   материалов+параметров в компактной модалке (.cwl-spec-modal__card),
+   а не инлайн — иначе раскрытая карточка растягивалась на всю ширину грида. */
 .cwl-spec-toggle { display:flex; align-items:center; gap:7px; width:100%;
   padding:7px 9px; border:1px dashed var(--color-border-strong); border-radius:9px;
   background:var(--color-bg-card); color:var(--color-fg); font:inherit; font-size:13px;
   font-weight:600; cursor:pointer; text-align:left; }
 .cwl-spec-toggle:hover { border-color:var(--color-accent); }
 .cwl-spec-toggle__hint { margin-left:auto; font-size:11.5px; font-weight:500; color:var(--color-fg-subtle); }
-.cwl-card--open { grid-column: 1 / -1; }
+/* Компактная модалка техкарты: чуть шире базовой .qr-modal__card (520px),
+   т.к. таблица материалов многоколоночная, но заметно уже инлайн-«простыни».
+   Таблица внутри и так скроллится по горизонтали (.cws-tablewrap). */
+.cwl-spec-modal__card { width: min(100%, 760px); }
+.cwl-spec-modal__title { display:inline-flex; align-items:center; gap:7px; }
+/* Внутри модалки убираем верхний разделитель .cws — он был нужен как
+   отбивка от карточки при инлайн-раскрытии, в диалоге лишний. */
+.cwl-spec-modal__card .cws { border-top:0; padding-top:0; }
 .cwl-error { padding:9px 12px; border-radius:8px; background:var(--color-danger-soft); color:var(--color-danger-fg); font-size:13px; }
 .cwl-locked { display:flex; align-items:flex-start; gap:8px; padding:10px 12px; border-radius:9px;
   background:var(--color-warning-soft,var(--color-bg-muted)); color:var(--color-fg-muted);
