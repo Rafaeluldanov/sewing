@@ -4,6 +4,7 @@ import {
   EarningSource,
   EntryStatus,
   OperationCategory,
+  PayrollPayoutStatus,
   Prisma,
 } from '@prisma/client';
 import type {
@@ -36,6 +37,23 @@ import { isEarningsManager } from './earnings.constants.js';
  * B2B-начисления (audit warning «Не задан процент…»).
  */
 export const CUTTER_B2B_SEWING_PERCENT_ENV = 'CUTTER_B2B_SEWING_PERCENT';
+
+/**
+ * Статусы выплаты, при которых строка начисления считается «выплаченной»
+ * и не подлежит пересчёту задним числом (см. `reconcileToQtyGood`,
+ * `recomputeCutterForPassport`).
+ *
+ * `DRAFT` НЕ входит: черновик ещё не выдан, а `PayrollPayoutsService.issue`
+ * при проведении перестраивает строки из текущих начислений и подхватит
+ * скорректированную сумму. `CANCELLED` — аннулирована, тоже не блокирует.
+ * (До фикса учитывалась ЛЮБАЯ `PayrollPayoutLine`, поэтому черновик или
+ * отменённая выплата навсегда замораживали устаревшую сумму — и она затем
+ * выплачивалась.)
+ */
+const LOCKED_PAYOUT_STATUSES = [
+  PayrollPayoutStatus.ISSUED,
+  PayrollPayoutStatus.ACKNOWLEDGED,
+] as const;
 
 /**
  * Сервис сдельных начислений (Шаг 9 MVP).
@@ -970,9 +988,15 @@ export class EarningsService {
    * раскройщик платится за `qtyCut`, его пересчитывает отдельный
    * `recomputeCutterForPassport` (когда корректировка двигает и раскрой).
    *
-   * Уже выплаченные строки (в `PayrollPayoutLine`) пропускаем — менять
-   * сумму задним числом по закрытому выплатному документу нельзя; такие
-   * случаи возвращаются в `skipped[]` для разбора менеджером.
+   * Строки в ВЫДАННОЙ выплате (`LOCKED_PAYOUT_STATUSES` = ISSUED/
+   * ACKNOWLEDGED) пропускаем — менять сумму задним числом по выданному
+   * документу нельзя; они возвращаются в `skipped[]` для разбора
+   * менеджером. Черновик (DRAFT) НЕ блокирует: при проведении `issue`
+   * перестроит строки из текущих начислений.
+   *
+   * Замещающие операции (`OperationSubstitution`) пересчитываются вторым
+   * проходом с сохранением кредита (`rate×qtyGood − Σ satisfied`), иначе
+   * «в лоб» `rate×qtyGood` затёр бы кредит и переплатил.
    */
   async reconcileToQtyGood(
     tx: Prisma.TransactionClient,
@@ -987,38 +1011,108 @@ export class EarningsService {
     });
     if (!passport) return { updated: 0, skipped: [] };
 
+    const qtyGood = passport.qtyGood;
+
     const candidates = await tx.operationEntry.findMany({
       where: {
         passportId,
         sourceEventType: { not: EarningSource.PASSPORT_CREATED },
         // Двунаправленно: любая строка, чей снимок разошёлся с текущим
         // qtyGood (и вниз при браке, и вверх при корректировке «в плюс»).
-        qty: { not: passport.qtyGood },
+        qty: { not: qtyGood },
       },
-      select: { id: true, ratePerUnit: true },
+      select: {
+        id: true,
+        ratePerUnit: true,
+        operationId: true,
+        employeeId: true,
+      },
     });
     if (candidates.length === 0) return { updated: 0, skipped: [] };
 
+    // «Уже выплачено» = строка попала в ВЫДАННУЮ выплату (ISSUED/
+    // ACKNOWLEDGED). Черновик/отменённую не считаем блокирующими —
+    // см. `LOCKED_PAYOUT_STATUSES`.
     const paid = await tx.payrollPayoutLine.findMany({
-      where: { operationEntryId: { in: candidates.map((c) => c.id) } },
+      where: {
+        operationEntryId: { in: candidates.map((c) => c.id) },
+        payout: { status: { in: [...LOCKED_PAYOUT_STATUSES] } },
+      },
       select: { operationEntryId: true },
     });
     const paidIds = new Set(
       paid.map((p) => p.operationEntryId).filter((x): x is string => !!x),
     );
 
+    // Замещающие операции (`OperationSubstitution`): у них `amount` — это
+    // КРЕДИТ (`rate×qty − Σ уже оплаченных satisfied-операций`), а не
+    // `rate×qty` (см. `createPendingForCompletedOperation`). Пересчёт «в
+    // лоб» `rate×qtyGood` затирал бы кредит и переплачивал, поэтому такие
+    // строки считаем ВТОРЫМ проходом — после того как обычные (в т.ч.
+    // satisfied) приведены к qtyGood — и пересчитываем кредит по их свежим
+    // суммам тем же способом, что и create-путь.
+    const substitutionRows = await tx.operationSubstitution.findMany({
+      where: { substituteOpId: { in: candidates.map((c) => c.operationId) } },
+      select: { substituteOpId: true, satisfiesOpId: true },
+    });
+    const satisfiesBySubOp = new Map<string, string[]>();
+    for (const r of substitutionRows) {
+      const arr = satisfiesBySubOp.get(r.substituteOpId) ?? [];
+      arr.push(r.satisfiesOpId);
+      satisfiesBySubOp.set(r.substituteOpId, arr);
+    }
+
+    const zero = new Prisma.Decimal(0);
     const skipped: Array<{ id: string; reason: 'ALREADY_PAID' }> = [];
     let updated = 0;
+
+    const reconcileRegular = async (c: (typeof candidates)[number]) => {
+      await tx.operationEntry.update({
+        where: { id: c.id },
+        data: { qty: qtyGood, amount: roundMoney(c.ratePerUnit.times(qtyGood)) },
+      });
+    };
+    const reconcileSubstitute = async (c: (typeof candidates)[number]) => {
+      const baseAmount = roundMoney(c.ratePerUnit.times(qtyGood));
+      // Свежие суммы satisfied-операций того же сотрудника на этом
+      // паспорте (те же статусы, что учитывает create-путь).
+      const prior = await tx.operationEntry.findMany({
+        where: {
+          passportId,
+          employeeId: c.employeeId,
+          operationId: { in: satisfiesBySubOp.get(c.operationId) ?? [] },
+          status: { in: [EntryStatus.APPROVED, EntryStatus.PENDING_RELEASE] },
+        },
+        select: { amount: true },
+      });
+      const priorSum = prior.reduce((acc, p) => acc.plus(p.amount), zero);
+      const credited = roundMoney(baseAmount.minus(priorSum));
+      await tx.operationEntry.update({
+        where: { id: c.id },
+        // Кредит не может быть отрицательным: если satisfied-операции
+        // полностью покрыли базу — вклад замещающей строки = 0.
+        data: { qty: qtyGood, amount: credited.lte(0) ? zero : credited },
+      });
+    };
+
+    // 1-й проход — обычные и satisfied-строки (даёт свежий priorSum для 2-го).
+    // 2-й проход — замещающие, по уже пересчитанным satisfied-суммам.
     for (const c of candidates) {
+      if (satisfiesBySubOp.has(c.operationId)) continue;
       if (paidIds.has(c.id)) {
         skipped.push({ id: c.id, reason: 'ALREADY_PAID' });
         continue;
       }
-      const amount = roundMoney(c.ratePerUnit.times(passport.qtyGood));
-      await tx.operationEntry.update({
-        where: { id: c.id },
-        data: { qty: passport.qtyGood, amount },
-      });
+      await reconcileRegular(c);
+      updated += 1;
+    }
+    for (const c of candidates) {
+      if (!satisfiesBySubOp.has(c.operationId)) continue;
+      if (paidIds.has(c.id)) {
+        skipped.push({ id: c.id, reason: 'ALREADY_PAID' });
+        continue;
+      }
+      await reconcileSubstitute(c);
       updated += 1;
     }
     return { updated, skipped };
@@ -1056,12 +1150,16 @@ export class EarningsService {
 
     if (cutterEntries.length > 0) {
       const paid = await tx.payrollPayoutLine.findMany({
-        where: { operationEntryId: { in: cutterEntries.map((c) => c.id) } },
+        where: {
+          operationEntryId: { in: cutterEntries.map((c) => c.id) },
+          payout: { status: { in: [...LOCKED_PAYOUT_STATUSES] } },
+        },
         select: { operationEntryId: true },
       });
       if (paid.length > 0) {
-        // Хотя бы одна строка раскройщика уже попала в выплату — не
-        // переписываем её задним числом.
+        // Хотя бы одна строка раскройщика уже в ВЫДАННОЙ выплате (ISSUED/
+        // ACKNOWLEDGED) — не переписываем её задним числом. Черновик не
+        // блокирует: issue перестроит строки при проведении.
         return { updated: 0, skipped: cutterEntries.length };
       }
       await tx.operationEntry.deleteMany({
