@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { moscowDateParts } from '../../common/moscow-date.js';
 import type { Prisma } from '@prisma/client';
 
 /**
@@ -40,9 +41,7 @@ export class OrderNumberService {
     }
 
     // Фолбэк: суточная схема `O-YYYYMMDD-NNNN` (заказ без подразделения).
-    const yyyy = now.getUTCFullYear();
-    const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(now.getUTCDate()).padStart(2, '0');
+    const { yyyy, mm, dd } = moscowDateParts(now);
     return this.nextByPrefix(tx, `O-${yyyy}${mm}${dd}-`, 4);
   }
 

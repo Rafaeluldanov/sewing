@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { moscowDateParts } from '../../common/moscow-date.js';
 import type { Prisma } from '@prisma/client';
 
 /**
@@ -15,9 +16,7 @@ export class PassportNumberService {
     tx: Prisma.TransactionClient,
     now: Date = new Date(),
   ): Promise<string> {
-    const yyyy = now.getUTCFullYear();
-    const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
-    const dd = String(now.getUTCDate()).padStart(2, '0');
+    const { yyyy, mm, dd } = moscowDateParts(now);
     const prefix = `P-${yyyy}${mm}${dd}-`;
 
     const last = await tx.passport.findFirst({
