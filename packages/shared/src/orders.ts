@@ -530,6 +530,38 @@ export function isOrderSampleLaunchable(status: OrderStatus): boolean {
 }
 
 /**
+ * Статусы, в которых разрешена правка «плановых полей» заказа ДО запуска
+ * производства — единый источник истины и для backend-гейта
+ * (`OrdersService.update`), и для web-UI (кнопка «Редактировать», селекты
+ * формы редактирования).
+ *
+ * Окно `DRAFT → CALCULATION → CALCULATION_DONE`: до старта производства ещё
+ * нет паспортов/кроя, ссылающихся на снимок, поэтому безопасные плановые
+ * поля (**подразделение**, **маршрут**) правятся на месте; маршрут при этом
+ * дособирает план операций и снимок шагов.
+ *
+ * Осознанно НЕ покрывает:
+ *   - материалозатрагивающие правки (состав/размеры, лекало, привязка
+ *     техкарты, спецификация): на `CALCULATION_DONE` у потребностей уже
+ *     проставлены цены закупщика, а их пересчёт их сотрёт — такие правки
+ *     идут через «Вернуть на пересчёт» (`reopenCalculation` → `CALCULATION`),
+ *     где действует своё окно (см. Group A: colorways/tech-card params);
+ *   - `SAMPLE_PRODUCTION`/`IN_PRODUCTION`/`DONE`/`CANCELLED` — план заморожен
+ *     (правки в производстве — отдельный ярус amendments).
+ */
+export const ORDER_PLAN_EDITABLE_STATUSES = [
+  'DRAFT',
+  'CALCULATION',
+  'CALCULATION_DONE',
+] as const satisfies readonly OrderStatus[];
+
+export function isOrderPlanEditable(status: OrderStatus): boolean {
+  return (ORDER_PLAN_EDITABLE_STATUSES as readonly OrderStatus[]).includes(
+    status,
+  );
+}
+
+/**
  * Человекочитаемые лейблы статуса заказа. Источник истины для всех
  * UI: легаси `/orders/*`, новый `/admin/orders/*`, форма
  * редактирования. Бэкенд лейблы не отдаёт — он отдаёт raw-enum, а

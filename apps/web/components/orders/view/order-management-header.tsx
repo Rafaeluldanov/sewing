@@ -39,6 +39,7 @@ import {
   User,
 } from 'lucide-react';
 import type { OrderDetailDto } from '@sewing/shared/orders';
+import { isOrderPlanEditable } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 import { AdminStatusBadge } from '@/components/admin';
 import {
@@ -134,8 +135,8 @@ export function OrderManagementHeader({
 
   // План на запуск/завершение/отмену зависит от статуса.
   // DRAFT             → «Перевести в расчёт» + «Пересчитать план» + «Отменить» + «Редактировать»
-  // CALCULATION       → «Запустить в производство» + «Пересчитать план» + «Отменить»
-  // CALCULATION_DONE  → «Запустить в производство» + «Вернуть на пересчёт» + «Отменить»
+  // CALCULATION       → «Запустить в производство» + «Пересчитать план» + «Отменить» + «Редактировать»
+  // CALCULATION_DONE  → «Запустить в производство» + «Вернуть на пересчёт» + «Отменить» + «Редактировать»
   // SAMPLE_PRODUCTION → «Запустить в производство» (полный тираж) + «Отменить»
   // IN_PRODUCTION     → «Завершить» + «Отменить» + «Выпустить паспорт»
   // DONE / CANCELLED  → нет действий (read-only)
@@ -160,7 +161,11 @@ export function OrderManagementHeader({
     status === 'CALCULATION_DONE' ||
     status === 'SAMPLE_PRODUCTION' ||
     status === 'IN_PRODUCTION';
-  const showEdit = status === 'DRAFT';
+  // «Редактировать» доступно до запуска производства (DRAFT/CALCULATION/
+  // CALCULATION_DONE): в CALCULATION/CALCULATION_DONE форма даёт править
+  // безопасные плановые поля (подразделение, маршрут) + управленческие;
+  // материалозатрагивающие — через «Вернуть на пересчёт».
+  const showEdit = isOrderPlanEditable(status);
 
   return (
     <section
@@ -435,7 +440,11 @@ export function OrderManagementHeader({
           <Link
             href={`/admin/orders/${order.id}/edit`}
             className="admin-btn admin-btn--ghost"
-            title="Полное редактирование (доступно только в DRAFT)"
+            title={
+              status === 'DRAFT'
+                ? 'Полное редактирование заказа'
+                : 'Редактирование до запуска производства: подразделение, маршрут и управленческие поля (состав/техкарту — через «Вернуть на пересчёт»)'
+            }
           >
             <Pencil size={16} strokeWidth={1.6} aria-hidden />
             Редактировать

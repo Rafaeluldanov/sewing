@@ -62,6 +62,7 @@ import type {
 import {
   ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
   ORDER_MATERIALS_AND_HARDWARE_COST_POLICY_LABELS,
+  isOrderPlanEditable,
 } from '@sewing/shared/orders';
 import {
   MONEY_CURRENCIES,
@@ -219,6 +220,14 @@ export function AdminEditOrderForm({
 
   const isDraft = order.status === 'DRAFT';
   const isTerminal = order.status === 'DONE' || order.status === 'CANCELLED';
+  // Безопасные плановые поля (подразделение, маршрут) правятся до запуска
+  // производства (DRAFT/CALCULATION/CALCULATION_DONE) — единый хелпер.
+  const planEditable = isOrderPlanEditable(order.status);
+  // Расцветки/спецификация правятся в edit-форме только DRAFT/CALCULATION
+  // (backend отбивает `variants` вне этого окна `ORDER_COLORWAYS_LOCKED`).
+  // На CALCULATION_DONE — read-only, правка через «Вернуть на пересчёт».
+  const colorwaysEditable =
+    order.status === 'DRAFT' || order.status === 'CALCULATION';
 
   const [color, setColor] = useState<string>(order.color ?? '');
 
@@ -538,8 +547,11 @@ export function AdminEditOrderForm({
       <input type="hidden" name="orderDate" value={orderDateValue} />
       {/* Фича «Расцветки»: под флагом «Цвет» и расцветки заказа сабмитятся
           отсюда (видимые инпуты «Цвет» и общий выбор техкарты скрыты).
-          `color` = первый непустой цвет, `variantsJson` = все расцветки. */}
-      {colorwaysEnabled && (
+          `color` = первый непустой цвет, `variantsJson` = все расцветки.
+          На CALCULATION_DONE НЕ сабмитим — иначе backend отобьёт правку
+          любого поля кодом `ORDER_COLORWAYS_LOCKED` (расцветки правятся
+          только DRAFT/CALCULATION, дальше — через «Вернуть на пересчёт»). */}
+      {colorwaysEnabled && colorwaysEditable && (
         <>
           <input type="hidden" name="color" value={color} />
           <input
@@ -570,8 +582,10 @@ export function AdminEditOrderForm({
           <AlertCircle size={18} strokeWidth={1.6} aria-hidden />
           <span>
             {order.status === 'CALCULATION'
-              ? 'Заказ в статусе «Расчёт» — потребность цеха уже собрана. Менять состав, изделие, маршрут, техкарту и подразделение нельзя; правится только клиент, срок и комментарий.'
-              : 'Заказ уже не в статусе «Черновик» — менять состав, изделие, маршрут, техкарту и подразделение нельзя. Доступны клиент, срок, комментарий и безопасные переходы статуса.'}
+              ? 'Заказ в статусе «Расчёт»: доступны подразделение, маршрут, расцветки/спецификация и управленческие поля (клиент, срок, комментарий). Изделие и лекало — только в «Черновике».'
+              : order.status === 'CALCULATION_DONE'
+                ? 'Заказ в статусе «Расчёт завершён»: до запуска производства доступны подразделение, маршрут и управленческие поля. Состав, лекало, техкарту и спецификацию правьте через «Вернуть на пересчёт».'
+                : 'Заказ уже запущен в производство — план заморожен. Доступны только управленческие поля и безопасные переходы статуса.'}
           </span>
         </div>
       )}
@@ -614,7 +628,7 @@ export function AdminEditOrderForm({
                     name="companyDivisionId"
                     value={companyDivisionId}
                     onChange={(e) => setCompanyDivisionId(e.target.value)}
-                    disabled={!isDraft}
+                    disabled={!planEditable}
                   >
                     <option value="">— без подразделения —</option>
                     {/*
@@ -635,9 +649,10 @@ export function AdminEditOrderForm({
                       </option>
                     ))}
                   </select>
-                  {!isDraft && (
+                  {!planEditable && (
                     <span className="order-hero-card__field-hint">
-                      Менять подразделение можно только в DRAFT.
+                      Менять подразделение можно только до запуска
+                      производства.
                     </span>
                   )}
                 </div>
@@ -1253,7 +1268,7 @@ export function AdminEditOrderForm({
                     name="routeTemplateId"
                     value={routeTemplateId}
                     onChange={(e) => setRouteTemplateId(e.target.value)}
-                    disabled={!isDraft}
+                    disabled={!planEditable}
                   >
                     <option value="">— без маршрута —</option>
                     {showCurrentRouteFallback && order.routeTemplateId && (
@@ -1311,22 +1326,59 @@ export function AdminEditOrderForm({
               // матрицы. Из карточек считаем агрегат (`sizesTotal`) и
               // `variantsJson` — backend полностью заменит расцветки и
               // пересоберёт `OrderItem` через `resyncColorwayDerived`.
-              <OrderColorwaysFieldset
-                availableSizes={availableSizes}
-                allSizes={sortedSizes}
-                techCards={techCards}
-                value={colorways}
-                onChange={setColorways}
-                initialExtraSizeIds={initialExtraSizeIds}
-              />
+              //
+              // На CALCULATION_DONE редактор read-only (`<fieldset disabled>`
+              // гасит все контролы нативно) и `variantsJson` не сабмитится —
+              // правка расцветок/спецификации только через «Вернуть на
+              // пересчёт». В DRAFT/CALCULATION — как раньше.
+              colorwaysEditable ? (
+                <OrderColorwaysFieldset
+                  availableSizes={availableSizes}
+                  allSizes={sortedSizes}
+                  techCards={techCards}
+                  value={colorways}
+                  onChange={setColorways}
+                  initialExtraSizeIds={initialExtraSizeIds}
+                />
+              ) : (
+                <>
+                  <p className="admin-muted" style={{ margin: '0 0 10px' }}>
+                    Расцветки и спецификация заморожены после расчёта. Чтобы
+                    их изменить — «Вернуть на пересчёт» в карточке заказа.
+                  </p>
+                  <fieldset
+                    disabled
+                    style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}
+                  >
+                    <OrderColorwaysFieldset
+                      availableSizes={availableSizes}
+                      allSizes={sortedSizes}
+                      techCards={techCards}
+                      value={colorways}
+                      onChange={setColorways}
+                      initialExtraSizeIds={initialExtraSizeIds}
+                    />
+                  </fieldset>
+                </>
+              )
             ) : (
               <>
-                <AdminSizeGrid
-                  sizes={sizeGridSizes}
-                  values={initialQty}
-                  onTotalChange={setSizesTotal}
-                  readOnly={!isDraft}
-                />
+                {/* Размерная матрица (без расцветок) — состав правится
+                    только в DRAFT. `<fieldset disabled>` вне DRAFT гасит
+                    инпуты нативно, чтобы `qty[]` не сабмитились и не
+                    ловили `ORDER_LOCKED` (readOnly-инпуты, в отличие от
+                    disabled, всё равно уходят в FormData). */}
+                <fieldset
+                  disabled={!isDraft}
+                  style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}
+                >
+                  <AdminSizeGrid
+                    sizes={sizeGridSizes}
+                    values={initialQty}
+                    onTotalChange={setSizesTotal}
+                    readOnly={!isDraft}
+                  />
+                </fieldset>
                 <div className="admin-order-form__sizes-footer">
                   <div
                     className={

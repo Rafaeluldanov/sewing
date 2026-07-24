@@ -30,6 +30,7 @@ import type {
 import {
   ORDER_LOGISTICS_STATUS_LABELS,
   ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
+  isOrderPlanEditable,
 } from '@sewing/shared/orders';
 import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
 import { normalizeColorOrNull } from '@sewing/shared/colors';
@@ -2170,18 +2171,27 @@ export class OrdersService {
     const wantsCompanyDivisionChange =
       dto.companyDivisionId !== undefined &&
       (dto.companyDivisionId ?? null) !== (current.companyDivisionId ?? null);
-    const wantsUnsafeChange =
+    // Материалозатрагивающие / структурные поля — правятся только в DRAFT.
+    // На CALCULATION/CALCULATION_DONE у потребностей уже проставлены цены
+    // закупщика, а их пересчёт (delete+create) стёр бы данные — такие правки
+    // идут через «Вернуть на пересчёт» (reopenCalculation → CALCULATION).
+    const wantsDraftOnlyChange =
       wantsItemsChange ||
       wantsProductChange ||
-      wantsRouteChange ||
       wantsTechCardChange ||
-      wantsPatternChange ||
-      wantsCompanyDivisionChange;
+      wantsPatternChange;
+    // Безопасные плановые поля — маршрут и подразделение. Их можно менять до
+    // запуска производства (DRAFT/CALCULATION/CALCULATION_DONE): подразделение
+    // не имеет производных; маршрут задевает только план операций + снимок
+    // шагов (не потребности и не себестоимость — та materials-based), а до
+    // старта паспорта на снимок шагов ещё не ссылаются.
+    const wantsExtendedPlanChange =
+      wantsRouteChange || wantsCompanyDivisionChange;
 
     // Фича «Расцветки» (FEATURE_COLORWAYS): edit-форма шлёт полный список
-    // расцветок. НЕ входит в `wantsUnsafeChange` (там DRAFT-only) — у
-    // расцветок своё окно DRAFT/CALCULATION (то же, что у API карточек),
-    // и поразмерный план по цветам ещё можно править в «Расчёте».
+    // расцветок. НЕ входит в `wantsDraftOnlyChange` — у расцветок своё окно
+    // DRAFT/CALCULATION (то же, что у API карточек), и поразмерный план по
+    // цветам ещё можно править в «Расчёте».
     const wantsVariantsChange =
       dto.variants !== undefined && dto.variants.length > 0;
 
@@ -2203,16 +2213,27 @@ export class OrdersService {
       });
     }
 
-    if (wantsUnsafeChange && !isDraft) {
-      // CALCULATION (этап «Расчёт»): план уже использован для
-      // авторасчёта `WorkshopNeed`. Изменение состава / лекала /
-      // техкарты сделало бы пересчитанные потребности
-      // нерелевантными, поэтому блокируем теми же правилами, что для
-      // IN_PRODUCTION. Менеджеру предлагается сначала вернуть заказ
-      // в DRAFT (на MVP — через отмену расчёта вручную) либо
-      // дополнительный action — выходит за рамки текущего этапа.
+    if (wantsDraftOnlyChange && !isDraft) {
+      // CALCULATION+ : план уже использован для авторасчёта `WorkshopNeed`,
+      // а на CALCULATION_DONE ещё и заморожена себестоимость. Изменение
+      // состава / изделия / лекала / техкарты сделало бы потребности и
+      // цены закупщика нерелевантными (их пересчёт их СТИРАЕТ), поэтому
+      // такие правки — только в DRAFT, либо через «Вернуть на пересчёт»
+      // (reopenCalculation сохраняет данные закупщика и возвращает заказ
+      // в CALCULATION, где спецификация правится штатно).
       throw new OrderLockedException(
-        'Состав, изделие, маршрут, техкарту, лекало и подразделение можно менять только в статусе «Черновик».',
+        'Состав, изделие, техкарту и лекало можно менять только в статусе «Черновик». ' +
+          'После расчёта правьте спецификацию через «Вернуть на пересчёт».',
+      );
+    }
+
+    if (wantsExtendedPlanChange && !isOrderPlanEditable(current.status)) {
+      // Маршрут / подразделение — безопасные плановые поля: их можно менять
+      // до запуска производства (DRAFT/CALCULATION/CALCULATION_DONE). После
+      // старта план заморожен.
+      throw new OrderLockedException(
+        'Маршрут и подразделение можно менять только до запуска производства ' +
+          '(«Черновик», «Расчёт», «Расчёт завершён»).',
       );
     }
 
@@ -2253,19 +2274,17 @@ export class OrdersService {
       }
     }
 
-    // Soft-route MVP: смена/сброс шаблона маршрута допустимы только в
-    // DRAFT (общий ORDER_LOCKED guard выше это гарантировал).
+    // Soft-route MVP: смена/сброс шаблона маршрута допустимы до запуска
+    // производства (DRAFT/CALCULATION/CALCULATION_DONE) — безопасное плановое
+    // поле (общий `ORDER_LOCKED` guard выше это гарантировал через
+    // `wantsExtendedPlanChange && !isOrderPlanEditable`).
     //
     // Этап «План операций до запуска» (см. ТЗ): snapshot
-    // `OrderRouteStep[]` теперь существует уже в DRAFT, поэтому
-    // прежний `count > 0 → ORDER_ROUTE_ALREADY_STARTED` стал ложным
-    // блокером — он бы запрещал смену маршрута сразу после первой
-    // привязки. Защита от смены маршрута на запущенном заказе
-    // полностью покрывается upper-level `ORDER_LOCKED` guard
-    // (см. `wantsUnsafeChange && !isDraft`). Дополнительный
-    // status-based safety net держим явно — на случай race с
-    // параллельным `start()` (защищаемся `OrderStatus.DRAFT`-чекой
-    // внутри той же tx ниже).
+    // `OrderRouteStep[]` существует уже в DRAFT, поэтому прежний
+    // `count > 0 → ORDER_ROUTE_ALREADY_STARTED` стал ложным блокером — он бы
+    // запрещал смену маршрута сразу после первой привязки. Защита от смены
+    // маршрута на ЗАПУЩЕННОМ заказе покрывается тем же guard (после `start()`
+    // статус выходит из окна `isOrderPlanEditable`).
     if (dto.routeTemplateId !== undefined && dto.routeTemplateId !== null) {
       await this.assertRouteTemplateUsable(dto.routeTemplateId);
     }
@@ -2277,7 +2296,7 @@ export class OrdersService {
     // его наличие — норма для DRAFT-заказа и тригером запрета НЕ
     // считается. Outsource-snapshot всё ещё фиксируется только в
     // `start()` (до этого его нет ни на DRAFT, ни на CALCULATION):
-    // если он есть — заказ уже стартовал и `wantsUnsafeChange &&
+    // если он есть — заказ уже стартовал и `wantsDraftOnlyChange &&
     // !isDraft` выше отбил бы попытку изменить `techCardId` ещё до
     // нас. Доп. guard здесь — пояс поверх подтяжек.
     if (dto.techCardId !== undefined) {
@@ -2627,9 +2646,15 @@ export class OrdersService {
       // запуска производства. Helper идемпотентен: если шаблон не
       // менялся (правка только items/pattern) — реального write нет.
       // Если шаблон сброшен на null — snapshot вычищается.
+      //
+      // items/pattern меняются только в DRAFT (gate выше). Маршрут же
+      // теперь редактируем до запуска производства
+      // (DRAFT/CALCULATION/CALCULATION_DONE) — досбор плана/шагов безопасен
+      // до `start()` (паспорта на снимок шагов ещё не ссылаются), а план
+      // операций не входит в замороженную materials-based себестоимость.
       if (
-        isDraft &&
-        (wantsItemsChange || wantsRouteChange || wantsPatternChange)
+        (isDraft && (wantsItemsChange || wantsPatternChange)) ||
+        (wantsRouteChange && isOrderPlanEditable(current.status))
       ) {
         await this.orderOperationPlan.recalculateAndWrite(id, tx);
         await this.syncOrderRouteStepsSnapshot(id, tx);

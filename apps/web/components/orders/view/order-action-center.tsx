@@ -27,6 +27,7 @@ import {
   Scale,
 } from 'lucide-react';
 import type { OrderDetailDto } from '@sewing/shared/orders';
+import { isOrderPlanEditable } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 
 type AlertTone = 'danger' | 'warning' | 'info';
@@ -237,12 +238,7 @@ function buildAlerts(
   // а ссылка в edit-форму ведёт на disabled-поле и вводит в
   // заблуждение. Лучше явная информационная подсказка без CTA, чем
   // тыкающий в стенку «Открыть операции».
-  if (
-    !order.routeTemplateId &&
-    (status === 'DRAFT' ||
-      status === 'CALCULATION' ||
-      status === 'CALCULATION_DONE')
-  ) {
+  if (!order.routeTemplateId && isOrderPlanEditable(status)) {
     alerts.push({
       id: 'no-route',
       tone: status === 'DRAFT' ? 'warning' : 'danger',
@@ -251,14 +247,13 @@ function buildAlerts(
       hint:
         status === 'DRAFT'
           ? 'Выберите шаблон маршрута, чтобы система сразу подтянула операции и их стоимость.'
-          : 'Без маршрута операции и их стоимость не учитываются в себестоимости. Сменить маршрут уже нельзя — заказ заблокирован после перевода в расчёт.',
-      cta:
-        status === 'DRAFT'
-          ? {
-              label: 'Открыть редактирование',
-              href: `/admin/orders/${order.id}/edit`,
-            }
-          : null,
+          : 'Без маршрута операции и их стоимость не учитываются в себестоимости. Маршрут ещё можно выбрать — это доступно до запуска производства.',
+      // Маршрут — безопасное плановое поле, редактируем до запуска
+      // производства, поэтому CTA ведём в форму на всех трёх статусах.
+      cta: {
+        label: 'Открыть редактирование',
+        href: `/admin/orders/${order.id}/edit`,
+      },
     });
   }
 
