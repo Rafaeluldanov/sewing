@@ -6809,6 +6809,46 @@ body:has(.display-screen) {
   border-bottom: 1px solid var(--admin-border);
 }
 
+/* Кликабельный заголовок-сортировка (см. AdminTableView). Кнопка
+ * прозрачная, наследует стиль `th`; стрелка-подсказка (idle) проявляется
+ * при наведении, активная стрелка ▲/▼ видна всегда. */
+.admin-table__sort {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  max-width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: inherit;
+  letter-spacing: inherit;
+  line-height: inherit;
+  cursor: pointer;
+}
+.admin-table__sort > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.admin-table__sort:hover,
+.admin-table__sort--active {
+  color: var(--admin-text);
+}
+.admin-table__sort svg {
+  flex: none;
+}
+.admin-table__sort-idle {
+  opacity: 0;
+  color: var(--admin-muted);
+  transition: opacity 0.12s ease;
+}
+.admin-table thead th:hover .admin-table__sort-idle,
+.admin-table__sort:focus-visible .admin-table__sort-idle {
+  opacity: 0.55;
+}
+
 .admin-table tbody td {
   padding: 0.55rem 1rem; /* компактные строки как в ЕРП-референсе */
   border-top: 1px solid var(--admin-border);
@@ -7044,6 +7084,25 @@ body:has(.display-screen) {
   background: currentColor;
   display: inline-block;
 }
+
+/* «Пилюля срока» — дата сдачи, залитая мягким цветом бакета контроля
+ * сроков (как был бейдж статуса), но с ЧЁРНЫМ текстом. Просрочен →
+ * красная заливка, в риске → янтарная, в срок → зелёная, без срока/готов
+ * → серая. Фон — те же `-soft`-токены, что у `AdminStatusBadge`. */
+.admin-deadline-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.2rem 0.6rem;
+  border-radius: var(--admin-radius-pill);
+  font-weight: 600;
+  color: var(--admin-text);
+  white-space: nowrap;
+}
+.admin-deadline-pill--danger { background: var(--admin-danger-soft); }
+.admin-deadline-pill--warning { background: var(--admin-warning-soft); }
+.admin-deadline-pill--success { background: var(--admin-success-soft); }
+.admin-deadline-pill--info { background: var(--admin-primary-soft); }
+.admin-deadline-pill--muted { background: var(--admin-soft); }
 
 /* ---------------------------------------------------------------------------
    Empty state — мягкая «пустая» карточка.

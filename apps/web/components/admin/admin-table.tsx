@@ -13,10 +13,22 @@
  *   - была одна точка правды для align/width;
  *   - smoke-тест мог проверить «нет колонки `code`», просто посмотрев
  *     на исходник страницы.
+ *
+ * Сортировка. Сам `AdminTable` серверный: он лишь рендерит ячейки в
+ * готовые `<td>` и передаёт их в клиентский `AdminTableView`, который
+ * добавляет клик-сортировку по заголовкам (по умолчанию сортируемы все
+ * колонки, кроме `isAction`; отключить точечно — `sortable: false`).
+ * Так сортировка появляется во ВСЕХ списках на `AdminTable` без правки
+ * мест вызова. Тип значения (дата/число/строка) определяется по тексту
+ * ячейки — см. `admin-table-view.client.tsx`.
  */
 import type { Key, ReactNode } from 'react';
 
-import { AdminTableRow } from './admin-table-row';
+import {
+  AdminTableView,
+  type AdminTableBodyRow,
+  type AdminTableColumnMeta,
+} from './admin-table-view.client';
 
 export interface AdminTableColumn<T> {
   key: string;
@@ -26,10 +38,16 @@ export interface AdminTableColumn<T> {
   render: (row: T) => ReactNode;
   /** Выравнивание содержимого. */
   align?: 'left' | 'right' | 'center';
-  /** Ячейка действий — без `data-label` на мобильном. */
+  /** Ячейка действий — без `data-label` на мобильном и без сортировки. */
   isAction?: boolean;
   /** Подпись колонки в тексте `data-label` (по умолчанию `header`). */
   mobileLabel?: string;
+  /**
+   * Разрешить сортировку по колонке. По умолчанию сортируемы все колонки,
+   * кроме `isAction`. Передайте `false`, чтобы отключить (например, для
+   * чисто визуальной колонки), или `true`, чтобы включить у `isAction`.
+   */
+  sortable?: boolean;
 }
 
 interface AdminTableProps<T> {
@@ -60,57 +78,46 @@ export function AdminTable<T>({
   if (rows.length === 0 && emptyContent != null) {
     return <>{emptyContent}</>;
   }
+
+  const columnsMeta: AdminTableColumnMeta[] = columns.map((c) => ({
+    key: c.key,
+    header: c.header,
+    align: c.align,
+    isAction: c.isAction ?? false,
+    sortable: c.sortable ?? !c.isAction,
+  }));
+
+  const bodyRows: AdminTableBodyRow[] = rows.map((row) => {
+    const cells = columns.map((c) => {
+      const label =
+        typeof c.mobileLabel === 'string'
+          ? c.mobileLabel
+          : typeof c.header === 'string'
+            ? c.header
+            : undefined;
+      return (
+        <td
+          key={c.key}
+          data-label={c.isAction ? undefined : label}
+          className={c.isAction ? 'admin-table__actions' : undefined}
+          style={c.align ? { textAlign: c.align } : undefined}
+        >
+          {c.render(row)}
+        </td>
+      );
+    });
+    return {
+      key: String(rowKey(row)),
+      href: rowHref?.(row) ?? null,
+      cells,
+    };
+  });
+
   return (
-    <div className={['admin-table-wrap', className].filter(Boolean).join(' ')}>
-      <table className="admin-table">
-        <thead>
-          <tr>
-            {columns.map((c) => (
-              <th
-                key={c.key}
-                style={c.align ? { textAlign: c.align } : undefined}
-              >
-                {c.header}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const cells = columns.map((c) => {
-              const label =
-                typeof c.mobileLabel === 'string'
-                  ? c.mobileLabel
-                  : typeof c.header === 'string'
-                    ? c.header
-                    : undefined;
-              return (
-                <td
-                  key={c.key}
-                  data-label={c.isAction ? undefined : label}
-                  className={c.isAction ? 'admin-table__actions' : undefined}
-                  style={c.align ? { textAlign: c.align } : undefined}
-                >
-                  {c.render(row)}
-                </td>
-              );
-            });
-            const href = rowHref?.(row);
-            if (href) {
-              return (
-                <AdminTableRow
-                  key={rowKey(row)}
-                  href={href}
-                  className="admin-table__row--clickable"
-                >
-                  {cells}
-                </AdminTableRow>
-              );
-            }
-            return <tr key={rowKey(row)}>{cells}</tr>;
-          })}
-        </tbody>
-      </table>
-    </div>
+    <AdminTableView
+      columns={columnsMeta}
+      rows={bodyRows}
+      className={className}
+    />
   );
 }

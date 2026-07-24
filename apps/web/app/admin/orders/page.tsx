@@ -589,23 +589,12 @@ function OrderTotalCell({ o }: { o: OrderListItemDto }) {
 }
 
 /**
- * Цвет текста даты срока по тону бакета контроля сроков
- * (`o.deadline.tone`). Токены — из `globals.css` (те же `--admin-*-fg`,
- * что у `AdminStatusBadge`), чтобы палитра была согласованной.
- */
-const DEADLINE_TONE_COLOR: Record<AdminStatusTone, string> = {
-  danger: 'var(--admin-danger-fg)', // просрочен → красный
-  warning: 'var(--admin-warning-fg)', // в риске → янтарный
-  success: 'var(--admin-success-fg)', // в срок → зелёный
-  info: 'var(--admin-primary-fg)',
-  muted: 'var(--admin-muted)', // без срока / готов → приглушённый
-};
-
-/**
- * Колонка «Срок» — ТОЛЬКО дата сдачи, окрашенная по статусу контроля
- * сроков: просрочен → красный, в срок → зелёный (в риске → янтарный,
- * без срока/готов → приглушённый). Бейдж бакета, подпись «осталось /
- * сегодня» и прогресс выпуска убраны — нужна лаконичная цветная дата.
+ * Колонка «Срок» — ТОЛЬКО дата сдачи, но не крашеным текстом, а ЗАЛИТАЯ
+ * мягким цветом бакета контроля сроков (как раньше выглядел бейдж
+ * статуса): просрочен → красная заливка, в риске → янтарная, в срок →
+ * зелёная, без срока/готов → серая. Сам текст даты остаётся чёрным.
+ * Пилюля и токены — `admin-deadline-pill*` из `globals.css` (те же
+ * `-soft`-фоны, что у `AdminStatusBadge`).
  */
 function DeadlineCell({ o }: { o: OrderListItemDto }) {
   if (!o.dueDate) {
@@ -613,8 +602,8 @@ function DeadlineCell({ o }: { o: OrderListItemDto }) {
   }
   const tone = (o.deadline?.tone as AdminStatusTone) ?? 'muted';
   return (
-    <strong style={{ color: DEADLINE_TONE_COLOR[tone] }}>
+    <span className={`admin-deadline-pill admin-deadline-pill--${tone}`}>
       {formatDateRu(o.dueDate)}
-    </strong>
+    </span>
   );
 }
