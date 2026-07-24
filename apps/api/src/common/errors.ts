@@ -3790,6 +3790,23 @@ export class PayrollAccrualManualAdjustNotSupportedException extends BusinessExc
   }
 }
 
+/**
+ * Снимок накопительного документа устарел: живые суммы начислений
+ * (`OperationEntry`/`SalaryEntry`) разошлись с замороженными суммами строки —
+ * например, брак / корректировка количества снизили сдельное начисление ПОСЛЕ
+ * пересчёта документа. Проводка заблокирована (409), чтобы менеджер пересчитал
+ * документ и перепроверил, а не выплатил устаревшую (обычно завышенную) сумму.
+ */
+export class PayrollAccrualDocumentStaleSnapshotException extends BusinessException {
+  constructor(message: string) {
+    super(
+      'PAYROLL_ACCRUAL_DOCUMENT_STALE_SNAPSHOT',
+      message,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
 // ---------------------------------------------------------------------------
 // Material issues (Этап «Фактический расход материалов по заказу», см.
 // `apps/api/src/modules/material-issues/*`,

@@ -14,6 +14,7 @@ import type {
   PayrollPayoutPageDto,
 } from '@sewing/shared/payroll-payouts';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { lockEmployeePayrollTx } from '../../common/payroll-lock.js';
 import {
   PayrollPayoutForbiddenAckException,
   PayrollPayoutInvalidTransitionException,
@@ -586,6 +587,12 @@ export class PayrollPayoutsService {
     periodFrom: Date,
     periodTo: Date,
   ): Promise<{ piecework: Prisma.Decimal; salary: Prisma.Decimal }> {
+    // PAY4: сериализуем расчёт ЗП по сотруднику до чтения/вставки строк —
+    // закрываем окно двойной оплаты (проверка «не в активной выплате» +
+    // вставка = check-then-insert TOCTOU без DB-уникальности на READ
+    // COMMITTED). Тот же ключ берёт `PayrollAccrualDocumentsService.pay()`.
+    await lockEmployeePayrollTx(tx, employeeId);
+
     const fromTs = startOfDayUtc(periodFrom);
     const toTs = endOfDayUtc(periodTo);
     const fromDate = startOfDayUtc(periodFrom);

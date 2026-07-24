@@ -20,8 +20,10 @@ import {
   PayrollAccrualDocumentInvalidStateException,
   PayrollAccrualDocumentLineNotFoundException,
   PayrollAccrualDocumentNotFoundException,
+  PayrollAccrualDocumentStaleSnapshotException,
   PayrollAccrualLineAlreadyPaidException,
 } from '../../common/errors.js';
+import { lockEmployeePayrollTx } from '../../common/payroll-lock.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { AuditService } from '../audit/audit.service.js';
 import { TreasuryService } from '../treasury/treasury.service.js';
@@ -364,6 +366,17 @@ export class PayrollAccrualDocumentsService {
       // STEP 6.4: ADJUSTMENT lines supported — no longer blocking pay.
       // (PayrollPayoutLineKind now includes 'ADJUSTMENT'.)
 
+      // PAY4: сериализуем по сотрудникам (advisory-lock, тот же ключ, что и
+      // rebuildLines) ДО проверок/вставок — закрываем окно двойной оплаты, в
+      // т.ч. кросс-системной (accrual pay ∥ payout issue). Берём в
+      // ОТСОРТИРОВАННОМ порядке, чтобы исключить deadlock со встречной tx.
+      const lockEmployeeIds = [
+        ...new Set(doc.lines.map((l) => l.employeeId)),
+      ].sort();
+      for (const eid of lockEmployeeIds) {
+        await lockEmployeePayrollTx(tx, eid);
+      }
+
       const now = new Date();
       const accrualDate = doc.accrualDate;
       let payoutsCreated = 0;
@@ -408,6 +421,65 @@ export class PayrollAccrualDocumentsService {
                 : `SalaryEntry ${sample.salaryEntryId}`;
             throw new PayrollAccrualLineAlreadyPaidException(
               `${which} (сотрудник ${line.employeeId}) уже входит в активную выплату ${sample.payoutId}.`,
+            );
+          }
+        }
+
+        // PAY3: снимок мог устареть — брак / корректировка количества
+        // (reconcileToQtyGood) снижают OperationEntry.amount ПОСЛЕ пересчёта
+        // документа, а pay() строит выплату из замороженных сумм строки (в
+        // отличие от payout issue(), который пересобирает по живым данным).
+        // Сверяем замороженные суммы с ЖИВЫМИ начислениями (по тем записям,
+        // что реально пойдут в выплату — snapshot.operationEntries/
+        // salaryEntries); расхождение → 409, чтобы менеджер пересчитал
+        // документ и перепроверил, а не выплатил устаревшую (завышенную) сумму.
+        const snapOpEntries = Array.isArray(snapshot['operationEntries'])
+          ? (snapshot['operationEntries'] as Record<string, unknown>[])
+          : [];
+        const snapSalEntries = Array.isArray(snapshot['salaryEntries'])
+          ? (snapshot['salaryEntries'] as Record<string, unknown>[])
+          : [];
+        const checkOpIds = snapOpEntries
+          .map((oe) => String(oe['id'] ?? ''))
+          .filter(Boolean);
+        const checkSalIds = snapSalEntries
+          .map((se) => String(se['id'] ?? ''))
+          .filter(Boolean);
+        if (checkOpIds.length > 0) {
+          const liveOp = await tx.operationEntry.findMany({
+            where: { id: { in: checkOpIds } },
+            select: { amount: true },
+          });
+          const livePiecework = liveOp.reduce(
+            (s, e) => s.plus(roundMoney(e.amount)),
+            new Prisma.Decimal(0),
+          );
+          if (!livePiecework.equals(line.amountPieceworkRub)) {
+            throw new PayrollAccrualDocumentStaleSnapshotException(
+              `Сдельные начисления сотрудника ${line.employeeId} изменились ` +
+                `после пересчёта документа (снимок ` +
+                `${line.amountPieceworkRub.toString()} → факт ` +
+                `${livePiecework.toString()}). Пересчитайте документ и ` +
+                `проверьте заново перед проведением.`,
+            );
+          }
+        }
+        if (checkSalIds.length > 0) {
+          const liveSal = await tx.salaryEntry.findMany({
+            where: { id: { in: checkSalIds } },
+            select: { amount: true },
+          });
+          const liveSalary = liveSal.reduce(
+            (s, e) => s.plus(roundMoney(e.amount)),
+            new Prisma.Decimal(0),
+          );
+          if (!liveSalary.equals(line.amountSalaryRub)) {
+            throw new PayrollAccrualDocumentStaleSnapshotException(
+              `Окладные начисления сотрудника ${line.employeeId} изменились ` +
+                `после пересчёта документа (снимок ` +
+                `${line.amountSalaryRub.toString()} → факт ` +
+                `${liveSalary.toString()}). Пересчитайте документ и ` +
+                `проверьте заново перед проведением.`,
             );
           }
         }
