@@ -136,6 +136,219 @@ type OrderWithItems = Prisma.OrderGetPayload<{
 
 type ProductLite = { id: string; name: string; color: string };
 
+/**
+ * Полуоткрытый интервал `[start, end)` для date-поиска по заказам.
+ * Границы строятся в UTC-«календарных сутках»: `orderDate`/`dueDate`
+ * хранятся как дата-в-полночь (см. создание заказа), поэтому UTC-день
+ * совпадает с отображаемым. Для search-фичи этого достаточно.
+ */
+interface SearchDateRange {
+  start: Date;
+  end: Date;
+}
+
+/**
+ * Пытается разобрать поисковую строку как ДАТУ и вернуть диапазон
+ * `[start, end)`. Поддерживает частичный ввод — не только полный день,
+ * но и месяц/год целиком, чтобы «показывать уже с первых символов»:
+ *
+ *   - `24.07.2026` / `2026-07-24` → конкретный день;
+ *   - `07.2026`                   → весь месяц;
+ *   - `2026`                      → весь год (только 2000–2100, чтобы
+ *                                    не путать с номером заказа).
+ *
+ * Год-без-разделителя (`2026`) намеренно ограничен диапазоном
+ * 2000–2100: 4-значный номер заказа (например, `1024`) в дату не
+ * превращается — по нему отработает обычный подстроковый матч `number`.
+ * Возвращает `null`, если строка на дату не похожа.
+ */
+function parseSearchDateRange(raw: string): SearchDateRange | null {
+  const q = raw.trim();
+  const dayRange = (y: number, m: number, d: number): SearchDateRange | null => {
+    // Валидируем календарность: Date «переносит» некорректные дни
+    // (32.01 → 01.02), поэтому сверяем компоненты после конструирования.
+    const start = new Date(Date.UTC(y, m - 1, d));
+    if (
+      start.getUTCFullYear() !== y ||
+      start.getUTCMonth() !== m - 1 ||
+      start.getUTCDate() !== d
+    ) {
+      return null;
+    }
+    return { start, end: new Date(Date.UTC(y, m - 1, d + 1)) };
+  };
+
+  // ISO: 2026-07-24
+  let m = /^(\d{4})-(\d{1,2})-(\d{1,2})$/.exec(q);
+  if (m) return dayRange(Number(m[1]), Number(m[2]), Number(m[3]));
+
+  // Русский полный день: 24.07.2026 (также / или -)
+  m = /^(\d{1,2})[.\/-](\d{1,2})[.\/-](\d{4})$/.exec(q);
+  if (m) return dayRange(Number(m[3]), Number(m[2]), Number(m[1]));
+
+  // Месяц.год: 07.2026
+  m = /^(\d{1,2})[.\/-](\d{4})$/.exec(q);
+  if (m) {
+    const month = Number(m[1]);
+    const year = Number(m[2]);
+    if (month >= 1 && month <= 12) {
+      return {
+        start: new Date(Date.UTC(year, month - 1, 1)),
+        end: new Date(Date.UTC(year, month, 1)),
+      };
+    }
+  }
+
+  // Год целиком: 2026 (ограничено правдоподобным диапазоном)
+  m = /^(\d{4})$/.exec(q);
+  if (m) {
+    const year = Number(m[1]);
+    if (year >= 2000 && year <= 2100) {
+      return {
+        start: new Date(Date.UTC(year, 0, 1)),
+        end: new Date(Date.UTC(year + 1, 0, 1)),
+      };
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Строит OR-условие «живого» поиска по заказу. Матч —
+ * нечувствительный к регистру (`mode: 'insensitive'`) и частичный
+ * (`contains`), поэтому срабатывает уже с первого символа:
+ *
+ *   - `number`                 — номер заказа (подстрока);
+ *   - `customer`               — legacy free-text клиента/организации;
+ *   - `client.name`            — карточка клиента (например, «ИП Кулаков»);
+ *   - `companyDivision.code`   — код подразделения (префикс кода заказа);
+ *   - `companyDivision.name`   — название подразделения;
+ *   - `orderDate` / `dueDate`  — если строка распознана как дата/срок,
+ *                                добавляем диапазон по дате заказа и сроку.
+ */
+function buildOrderSearchOr(rawSearch: string): Prisma.OrderWhereInput[] {
+  const q = rawSearch.trim();
+  const like = { contains: q, mode: 'insensitive' as const };
+  const or: Prisma.OrderWhereInput[] = [
+    { number: like },
+    { customer: like },
+    { client: { is: { name: like } } },
+    { companyDivision: { is: { code: like } } },
+    { companyDivision: { is: { name: like } } },
+  ];
+  const range = parseSearchDateRange(q);
+  if (range) {
+    const within = { gte: range.start, lt: range.end };
+    or.push({ orderDate: within });
+    or.push({ dueDate: within });
+  }
+  return or;
+}
+
+/** День+месяц без года (например, `24.07`). */
+interface SearchDayMonth {
+  day: number;
+  month: number;
+}
+
+/**
+ * Пытается разобрать поисковую строку как «голую» дату `дд.мм` (без
+ * года): `24.07`, `24/07`, `24-07`, допускается хвостовой разделитель
+ * (`24.07.`). Такой запрос ищется по дню+месяцу ЛЮБОГО года (см.
+ * `matchesDayMonth`), поэтому год тут и не нужен.
+ *
+ * НЕ матчит полную дату (`24.07.2026`) и месяц.год (`07.2026`) — там
+ * второй компонент 4-значный; их разбирает `parseSearchDateRange`.
+ * Возвращает `null`, если строка не похожа на `дд.мм`.
+ */
+function parseSearchDayMonth(raw: string): SearchDayMonth | null {
+  const m = /^(\d{1,2})[.\/-](\d{1,2})[.\/-]?$/.exec(raw.trim());
+  if (!m) return null;
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  if (month < 1 || month > 12) return null;
+  // Верхняя граница дня — по «високосному» максимуму месяца, чтобы
+  // допустить 29.02. Точную валидность года проверять незачем: это
+  // поисковый паттерн, а не ввод конкретной даты.
+  const maxDay = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1];
+  if (day < 1 || day > maxDay) return null;
+  return { day, month };
+}
+
+/** Нормализация значения даты (Date из БД либо ISO-строка из DTO) в `Date`. */
+function toDateOrNull(v: Date | string | null | undefined): Date | null {
+  if (!v) return null;
+  const d = v instanceof Date ? v : new Date(v);
+  return Number.isNaN(d.getTime()) ? null : d;
+}
+
+/** Совпадает ли дата по дню+месяцу (год игнорируется). UTC-компоненты — см. хранение дат. */
+function matchesDayMonth(
+  v: Date | string | null | undefined,
+  dm: SearchDayMonth,
+): boolean {
+  const d = toDateOrNull(v);
+  if (!d) return false;
+  return d.getUTCDate() === dm.day && d.getUTCMonth() + 1 === dm.month;
+}
+
+/**
+ * «Расстояние по году» заказа для сортировки `дд.мм`-поиска: минимальный
+ * `|год − текущий|` среди `orderDate`/`dueDate`, совпавших по дню+месяцу.
+ * Текущий год → 0 (сверху). Несовпавшие/пустые → `+∞` (в хвост).
+ */
+function yearProximity(
+  item: OrderListItemDto,
+  dm: SearchDayMonth,
+  currentYear: number,
+): number {
+  let best = Number.POSITIVE_INFINITY;
+  for (const v of [item.orderDate, item.dueDate]) {
+    const d = toDateOrNull(v);
+    if (!d) continue;
+    if (d.getUTCDate() === dm.day && d.getUTCMonth() + 1 === dm.month) {
+      best = Math.min(best, Math.abs(d.getUTCFullYear() - currentYear));
+    }
+  }
+  return best;
+}
+
+/** Таймстемп совпавшей даты, ближайшей к текущему году, — вторичный ключ сортировки. */
+function matchedTime(
+  item: OrderListItemDto,
+  dm: SearchDayMonth,
+  currentYear: number,
+): number {
+  let bestDist = Number.POSITIVE_INFINITY;
+  let bestTime = Number.POSITIVE_INFINITY;
+  for (const v of [item.orderDate, item.dueDate]) {
+    const d = toDateOrNull(v);
+    if (!d) continue;
+    if (d.getUTCDate() === dm.day && d.getUTCMonth() + 1 === dm.month) {
+      const dist = Math.abs(d.getUTCFullYear() - currentYear);
+      if (dist < bestDist) {
+        bestDist = dist;
+        bestTime = d.getTime();
+      }
+    }
+  }
+  return bestTime;
+}
+
+/** Компаратор «сначала текущий год, потом другие»; тай-брейк — дата по возрастанию. */
+function compareByYearProximity(
+  a: OrderListItemDto,
+  b: OrderListItemDto,
+  dm: SearchDayMonth,
+  currentYear: number,
+): number {
+  const pa = yearProximity(a, dm, currentYear);
+  const pb = yearProximity(b, dm, currentYear);
+  if (pa !== pb) return pa - pb;
+  return matchedTime(a, dm, currentYear) - matchedTime(b, dm, currentYear);
+}
+
 @Injectable()
 export class OrdersService {
   /** Статический — в сервисе нет инстанс-логгера, а заводить его сейчас незачем. */
@@ -1000,13 +1213,22 @@ export class OrdersService {
   // -------------------------------------------------------------------------
 
   async list(query: ListOrdersQuery): Promise<Paginated<OrderListItemDto>> {
+    const rawSearch = query.search?.trim() ?? '';
+    // «Голая» дата без года — например `24.07`. Совпадение по дню+месяцу
+    // ЛЮБОГО года нельзя выразить в Prisma-`WHERE` без `EXTRACT`, поэтому
+    // такой запрос фильтруем и сортируем в памяти (ниже), а не в БД.
+    const dayMonth = rawSearch ? parseSearchDayMonth(rawSearch) : null;
+
     const where: Prisma.OrderWhereInput = {};
     if (query.status) where.status = query.status;
     if (query.clientId) where.clientId = query.clientId;
     if (query.companyDivisionId)
       where.companyDivisionId = query.companyDivisionId;
-    if (query.search && query.search.length > 0) {
-      where.number = { contains: query.search, mode: 'insensitive' };
+    if (rawSearch.length > 0 && !dayMonth) {
+      // Мультиполевой «живой» поиск: номер / клиент / организация /
+      // подразделение / полная дата / месяц / год. См. `buildOrderSearchOr`.
+      // (Голую дату `дд.мм` сюда НЕ кладём — она обрабатывается в памяти.)
+      where.OR = buildOrderSearchOr(rawSearch);
     }
 
     const orderBy: Prisma.OrderOrderByWithRelationInput = ((): Prisma.OrderOrderByWithRelationInput => {
@@ -1031,10 +1253,14 @@ export class OrdersService {
     // (тысячи заказов) это не проблема. Для остальных запросов
     // оставляем чистую БД-пагинацию.
     const useDeadlineFilter = query.deadline !== undefined;
+    // Голая дата `дд.мм` тоже уводит нас в in-memory режим: матч по
+    // дню+месяцу любого года и сортировка «сначала текущий год» считаются
+    // после выборки (та же MVP-логика, что у deadline-фильтра).
+    const useMemoryPagination = useDeadlineFilter || dayMonth != null;
     const dbRows = await this.prisma.order.findMany({
       where,
       orderBy,
-      ...(useDeadlineFilter
+      ...(useMemoryPagination
         ? {}
         : {
             skip: (query.page - 1) * query.pageSize,
@@ -1083,20 +1309,41 @@ export class OrdersService {
       },
     });
 
-    const totalPromise = useDeadlineFilter
+    const totalPromise = useMemoryPagination
       ? Promise.resolve(0) // переоценим ниже
       : this.prisma.order.count({ where });
 
-    const allItems: OrderListItemDto[] = dbRows.map((o) =>
+    // Для голой даты `дд.мм` отсеиваем непопавшие заказы ДО маппинга в DTO
+    // (в маппере считается агрегат — не гоняем его по заведомо лишним
+    // строкам). Матч по дню+месяцу любого года, регистр/год не важны.
+    const matchedRows = dayMonth
+      ? dbRows.filter(
+          (o) =>
+            matchesDayMonth(o.orderDate, dayMonth) ||
+            matchesDayMonth(o.dueDate, dayMonth),
+        )
+      : dbRows;
+
+    const allItems: OrderListItemDto[] = matchedRows.map((o) =>
       this.toListItemDto(o),
     );
 
+    // «Сначала текущий год, потом другие года»: сортируем по близости года
+    // совпавшей даты (orderDate/dueDate) к текущему. Внутри одного
+    // «расстояния» — по возрастанию самой даты.
+    if (dayMonth) {
+      const currentYear = new Date().getUTCFullYear();
+      allItems.sort((a, b) =>
+        compareByYearProximity(a, b, dayMonth, currentYear),
+      );
+    }
+
     let items = allItems;
     let total = await totalPromise;
-    if (useDeadlineFilter) {
-      const filtered = allItems.filter(
-        (i) => i.deadline?.status === query.deadline,
-      );
+    if (useMemoryPagination) {
+      const filtered = useDeadlineFilter
+        ? allItems.filter((i) => i.deadline?.status === query.deadline)
+        : allItems;
       total = filtered.length;
       const start = (query.page - 1) * query.pageSize;
       items = filtered.slice(start, start + query.pageSize);

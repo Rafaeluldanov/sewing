@@ -74,6 +74,7 @@ import {
   formatDaysLeft,
   formatProgressPercent,
 } from '@/lib/date-format';
+import { OrdersSearchInput } from './orders-search-input.client';
 
 export const dynamic = 'force-dynamic';
 
@@ -201,9 +202,12 @@ export default async function AdminOrdersPage({
 
   // Дефолтная управленческая сортировка: OVERDUE → AT_RISK → ON_TRACK
   // → NO_DUE_DATE → DONE; внутри бакета — ближайший dueDate выше.
-  // Применяем только когда пользователь не задал явный `sort`.
+  // Применяем только когда пользователь не задал явный `sort` И не идёт
+  // активный поиск: при поиске сохраняем порядок, заданный backend-ом
+  // (в частности «сначала текущий год» для запросов вида `24.07`) —
+  // deadline-сортировка нужна для обычного просмотра списка, не для выдачи.
   const userPickedSort = (searchParams?.sort ?? '').length > 0;
-  if (!userPickedSort) {
+  if (!userPickedSort && !query.search) {
     items = [...items].sort((a, b) => {
       const pa = ORDER_DEADLINE_SORT_PRIORITY[a.deadline?.status ?? 'NO_DUE_DATE'];
       const pb = ORDER_DEADLINE_SORT_PRIORITY[b.deadline?.status ?? 'NO_DUE_DATE'];
@@ -268,16 +272,24 @@ export default async function AdminOrdersPage({
           {deadlineFilter && (
             <input type="hidden" name="deadline" value={deadlineFilter} />
           )}
-          <div className="admin-field">
-            <label htmlFor="orders-search">Номер / клиент</label>
-            <input
-              id="orders-search"
-              name="search"
-              type="text"
-              placeholder="Например, 1024"
-              defaultValue={query.search ?? ''}
-            />
-          </div>
+          {/* Динамический поиск «на лету» по любому текстовому параметру
+              заказа (номер / клиент / подразделение / дата / срок). Матч —
+              нечувствительный к регистру и частичный, начиная с первой
+              буквы; мультиполевой OR делает backend (OrdersService.list).
+              Поле остаётся в форме с name="search", поэтому Enter/«Применить»
+              работают как фолбэк. */}
+          <OrdersSearchInput
+            initial={query.search ?? ''}
+            basePath="/admin/orders"
+            preserveParams={{
+              status: query.status,
+              clientId: query.clientId,
+              companyDivisionId: query.companyDivisionId,
+              deadline: query.deadline,
+              sort: userPickedSort ? query.sort : undefined,
+              pageSize: pageSize !== 50 ? String(pageSize) : undefined,
+            }}
+          />
           <div className="admin-field">
             <label htmlFor="orders-status">Статус</label>
             <select
