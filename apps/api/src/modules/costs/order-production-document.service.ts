@@ -714,6 +714,9 @@ export class OrderProductionDocumentService {
         string,
         { sizeCode: string | null; color: string | null; qty: number; rub: Prisma.Decimal }
       >;
+      /** Строка-замена (PF3): факт замещающей операции + суммарный план
+       *  замещённых ею плановых шагов. */
+      substituteFolded?: boolean;
     };
     const ops = new Map<string, OpAcc>();
 
@@ -810,6 +813,10 @@ export class OrderProductionDocumentService {
       ops.set(op.id, acc);
     }
 
+    // Множество op.id плановых шагов — фиксируем ДО того, как факт-цикл
+    // добавит строки-сироты. Нужно для сворачивания замещающих операций.
+    const planStepOpIds = new Set(ops.keys());
+
     // --- ФАКТ по начислениям (на текущий момент) ---
     const entries = await this.prisma.operationEntry.findMany({
       where: {
@@ -862,6 +869,60 @@ export class OrderProductionDocumentService {
       ops.set(e.operationId, acc);
     }
 
+    // --- Замещающие операции (PF3): свернуть факт замены в ОДНУ строку ---
+    // Факт закрывается на замещающей операции S (её operationId), а не на
+    // плановом шаге, который она замещает (`OperationSubstitution`), поэтому
+    // S уходила в «сироту» (index 9000, без плана), а плановый шаг показывал
+    // ложный «100% недовыпуск». Собираем ОДНУ строку S с СУММАРНЫМ планом
+    // замещённых шагов (у которых нет своего прямого факта) и убираем их
+    // отдельные строки. Σ planRub / Σ factRub инвариантны: план лишь
+    // переносится на строку S, а факт замены уже на ней (ЗП пишет одну
+    // нетто-запись на S, см. EarningsService).
+    const orphanIds = [...ops.keys()].filter((id) => !planStepOpIds.has(id));
+    if (orphanIds.length > 0) {
+      const subs = await this.prisma.operationSubstitution.findMany({
+        where: { substituteOpId: { in: orphanIds } },
+        select: { substituteOpId: true, satisfiesOpId: true },
+      });
+      const satisfiesBySub = new Map<string, string[]>();
+      for (const s of subs) {
+        const arr = satisfiesBySub.get(s.substituteOpId) ?? [];
+        arr.push(s.satisfiesOpId);
+        satisfiesBySub.set(s.substituteOpId, arr);
+      }
+      for (const subId of orphanIds) {
+        const subAcc = ops.get(subId);
+        if (!subAcc) continue;
+        // Замещаемые ПЛАНОВЫЕ шаги, у которых нет своего прямого факта
+        // (иначе строку шага не трогаем — по ней делали напрямую).
+        const merged = (satisfiesBySub.get(subId) ?? [])
+          .map((sid) => ops.get(sid))
+          .filter(
+            (p): p is OpAcc =>
+              p != null && planStepOpIds.has(p.key) && p.factQty === 0,
+          );
+        if (merged.length === 0) continue;
+        let planRub: Prisma.Decimal | null = null;
+        let planTimeSec: number | null = null;
+        for (const p of merged) {
+          if (p.planRub != null)
+            planRub = (planRub ?? new Prisma.Decimal(0)).add(p.planRub);
+          if (p.planTimeSec != null)
+            planTimeSec = (planTimeSec ?? 0) + p.planTimeSec;
+          ops.delete(p.key);
+        }
+        subAcc.planRub = planRub;
+        subAcc.planTimeSec = planTimeSec;
+        subAcc.planQty = qtyPlanTotal > 0 ? qtyPlanTotal : null;
+        // Встаём на место самого раннего замещённого шага (не в конец).
+        subAcc.index = Math.min(...merged.map((p) => p.index));
+        subAcc.name = `${subAcc.name} (замещает ${merged
+          .map((p) => p.code)
+          .join(', ')})`;
+        subAcc.substituteFolded = true;
+      }
+    }
+
     const out: OrderProductionOperationRowDto[] = [...ops.values()]
       .map((acc) => {
         const planRub = acc.planRub != null ? this.m(acc.planRub) : null;
@@ -894,7 +955,7 @@ export class OrderProductionDocumentService {
           factApprovedRub: this.m(acc.factApprovedRub).toFixed(2),
           varianceRub:
             planRub != null ? this.m(factRub.sub(planRub)).toFixed(2) : null,
-          warnings: [],
+          warnings: acc.substituteFolded ? ['SUBSTITUTE_FOLDED'] : [],
           breakdown,
         };
       })
