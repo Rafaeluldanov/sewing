@@ -18,7 +18,7 @@ import {
 import type { AdminStatusTone } from '@/lib/admin-labels';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
 import { formatDateRu } from '@/lib/date-format';
-import { EditClientForm } from './edit-form';
+import { ClientMainFields } from './client-main-fields';
 
 export const dynamic = 'force-dynamic';
 
@@ -31,18 +31,19 @@ function formatDateTime(iso: string): string {
 /**
  * Карточка клиента (`/admin/clients/[id]`).
  *
- * Структура — стандартный admin detail-page:
- *   - `AdminPageShell` с названием карточки и статус-бейджем;
- *   - две колонки на desktop, одна на mobile (`.admin-grid-2`):
- *       Левая: «Основное» (имя + комментарий) + «Контакты»
- *              + «Заказы клиента» (последние 5) + форма редактирования
- *       Правая: «Техническая информация» (id/createdAt/updatedAt)
+ * Упрощённая структура — ровно ДВА блока (стек в одну колонку):
+ *   1. «Основное» — имя, статус (переключатель активности), телефон,
+ *      email, комментарий. Контакты слиты сюда же; каждое поле правится
+ *      на месте по «карандашику» (см. `./client-main-fields`). Тех-инфа
+ *      (id/createdAt/updatedAt) свёрнута в disclosure внутри блока.
+ *   2. «Заказы клиента» — тонкий preview последних 5 заказов из
+ *      `GET /api/orders?clientId=…` (см. `OrdersService.list`); полный
+ *      список — на `/admin/orders` с фильтром по клиенту. Бейдж
+ *      «контроля срока» — тот же, что и в основном списке (см.
+ *      `@sewing/shared/order-deadlines`).
  *
- * «Заказы клиента»: тонкий preview из `GET /api/orders?clientId=…`
- * (см. `OrdersService.list`). Показываем только последние 5 — менеджеру
- * нужен быстрый «контекст», полный список заказов он уже видит на
- * `/admin/orders` с фильтром по клиенту. Бейдж «контроля срока» —
- * тот же, что и в основном списке (см. `@sewing/shared/order-deadlines`).
+ * Отдельной формы «Редактирование» и карточки «Контакты» больше нет —
+ * их роль взяло inline-редактирование блока «Основное».
  */
 export default async function AdminClientDetailPage({
   params,
@@ -92,72 +93,10 @@ export default async function AdminClientDetailPage({
         </>
       }
     >
-      <div className="admin-grid-2">
-        <div className="admin-stack">
-          <AdminCard>
-            <AdminSectionHeader title="Основное" />
-            <dl className="admin-deflist">
-              <dt>Название</dt>
-              <dd>{client.name}</dd>
-              <dt>Статус</dt>
-              <dd>
-                <AdminStatusBadge tone={statusTone(client.isActive)}>
-                  {formatStatus(client.isActive)}
-                </AdminStatusBadge>
-              </dd>
-              <dt>Комментарий</dt>
-              <dd>
-                {client.comment ?? <span className="admin-muted">—</span>}
-              </dd>
-            </dl>
-          </AdminCard>
-
-          <AdminCard>
-            <AdminSectionHeader title="Контакты" />
-            <dl className="admin-deflist">
-              <dt>Телефон</dt>
-              <dd>{client.phone ?? <span className="admin-muted">—</span>}</dd>
-              <dt>Email</dt>
-              <dd>{client.email ?? <span className="admin-muted">—</span>}</dd>
-            </dl>
-          </AdminCard>
-
-          <AdminCard>
-            <AdminSectionHeader
-              title="Заказы клиента"
-              hint={
-                recentOrders.length > 0
-                  ? `последние ${recentOrders.length}`
-                  : undefined
-              }
-              actions={
-                <Link
-                  href={`/admin/orders?clientId=${encodeURIComponent(client.id)}`}
-                  className="admin-table__action-link"
-                >
-                  Все заказы
-                  <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
-                </Link>
-              }
-            />
-            {recentOrders.length === 0 ? (
-              <AdminEmptyState
-                icon={<Package size={26} strokeWidth={1.6} aria-hidden />}
-                title="Заказов у клиента нет"
-                hint="Они появятся, когда менеджер заведёт заказ на этого клиента."
-              />
-            ) : (
-              <ClientOrdersTable rows={recentOrders} />
-            )}
-          </AdminCard>
-
-          <AdminCard>
-            <AdminSectionHeader title="Редактирование" />
-            <EditClientForm client={client} />
-          </AdminCard>
-        </div>
-
-        <div className="admin-stack">
+      <div className="admin-stack">
+        <AdminCard>
+          <AdminSectionHeader title="Основное" />
+          <ClientMainFields client={client} />
           <AdminTechInfo
             items={[
               { label: 'ID', value: <code>{client.id}</code> },
@@ -165,7 +104,36 @@ export default async function AdminClientDetailPage({
               { label: 'Обновлён', value: formatDateTime(client.updatedAt) },
             ]}
           />
-        </div>
+        </AdminCard>
+
+        <AdminCard>
+          <AdminSectionHeader
+            title="Заказы клиента"
+            hint={
+              recentOrders.length > 0
+                ? `последние ${recentOrders.length}`
+                : undefined
+            }
+            actions={
+              <Link
+                href={`/admin/orders?clientId=${encodeURIComponent(client.id)}`}
+                className="admin-table__action-link"
+              >
+                Все заказы
+                <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
+              </Link>
+            }
+          />
+          {recentOrders.length === 0 ? (
+            <AdminEmptyState
+              icon={<Package size={26} strokeWidth={1.6} aria-hidden />}
+              title="Заказов у клиента нет"
+              hint="Они появятся, когда менеджер заведёт заказ на этого клиента."
+            />
+          ) : (
+            <ClientOrdersTable rows={recentOrders} />
+          )}
+        </AdminCard>
       </div>
     </AdminPageShell>
   );

@@ -9032,6 +9032,147 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 0.95rem;
 }
 
+/* --- Карточка клиента: inline-редактирование блока «Основное» ----------- */
+/* Строка = «Метка | значение + карандашик»; по клику превращается в
+   input/textarea с ✓/✗. См. `app/admin/clients/[id]/client-main-fields.tsx`. */
+.client-field-list {
+  display: grid;
+  gap: 0;
+}
+.client-field {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.3fr) 1fr;
+  gap: 6px var(--admin-space-md);
+  align-items: start;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--admin-border);
+}
+.client-field:first-child {
+  padding-top: 2px;
+}
+.client-field:last-child {
+  border-bottom: none;
+}
+.client-field__label {
+  color: var(--admin-muted);
+  font-size: 0.85rem;
+  font-weight: 500;
+  padding-top: 5px;
+}
+.client-field__view {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 30px;
+  flex-wrap: wrap;
+}
+.client-field__value {
+  color: var(--admin-text);
+  font-size: 0.95rem;
+  font-weight: 500;
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+.client-field__value.admin-muted {
+  font-weight: 400;
+}
+.client-field__pencil {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 8px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--admin-muted);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.12s, background 0.12s, color 0.12s;
+}
+.client-field:hover .client-field__pencil,
+.client-field__pencil:focus-visible {
+  opacity: 1;
+}
+.client-field__pencil:hover {
+  background: var(--admin-primary-soft);
+  color: var(--admin-primary);
+}
+.client-field__edit {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.client-field__edit input,
+.client-field__edit textarea {
+  flex: 1 1 220px;
+  min-width: 0;
+  padding: 0.5rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  font: inherit;
+  font-size: 0.92rem;
+}
+.client-field__edit textarea {
+  resize: vertical;
+}
+.client-field__edit input:focus,
+.client-field__edit textarea:focus {
+  outline: none;
+  border-color: var(--admin-primary);
+}
+.client-field__actions {
+  display: inline-flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.client-field__btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 9px;
+  border: 1px solid var(--admin-border);
+  background: var(--admin-surface);
+  color: var(--admin-text);
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.client-field__btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.client-field__btn--save {
+  background: var(--btn-primary-bg);
+  border-color: var(--btn-primary-edge);
+  color: var(--btn-primary-fg);
+  font-weight: 700;
+}
+.client-field__btn--save:hover:not(:disabled) {
+  background: var(--btn-primary-bg-hover);
+}
+.client-field__btn--cancel:hover:not(:disabled) {
+  background: var(--admin-soft);
+}
+.client-field__toggle {
+  padding: 0.32rem 0.7rem;
+  font-size: 0.85rem;
+}
+.client-field__error {
+  margin: 2px 0 0;
+  flex-basis: 100%;
+  color: var(--admin-danger);
+  font-size: 0.82rem;
+}
+/* Тех-инфа (id/created/updated) свёрнута под полями внутри «Основного». */
+.client-field-list + .admin-tech-info {
+  margin-top: var(--admin-space-md);
+}
+
 /* --- Route step chain --------------------------------------------------- */
 
 .admin-route-steps {
