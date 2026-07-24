@@ -2,26 +2,59 @@ import { Injectable } from '@nestjs/common';
 import type { Prisma } from '@prisma/client';
 
 /**
- * Генерация номера заказа вида `O-YYYYMMDD-NNNN`, где NNNN — суточный
- * счётчик (дополняется нулями до 4 знаков).
+ * Генерация номера заказа.
  *
- * Реализация: ищем последний номер за сегодня по префиксу и инкрементим
- * локально. Вызывать ВНУТРИ транзакции с SERIALIZABLE/REPEATABLE READ;
- * для MVP и малого RPS хватает дефолтного уровня — вероятность коллизии
- * мала, а `Order.number` UNIQUE всё равно защитит (в случае гонки клиент
- * просто ретраит запрос).
+ * Основная схема (заказ привязан к подразделению): `КОД-NNNNN`, где `КОД`
+ * — код подразделения (`CompanyDivision.code`), а `NNNNN` — сквозной
+ * счётчик В ПРЕДЕЛАХ подразделения, дополненный нулями до 5 знаков
+ * (например, `01-00001`, `01-00002`, `02-00001`). Номер сразу говорит,
+ * какому подразделению принадлежит заказ.
+ *
+ * Фолбэк (подразделение не указано — напр. черновик из КБ): прежняя
+ * суточная схема `O-YYYYMMDD-NNNN`. Существующие заказы НЕ
+ * перенумеровываем — новая схема действует только для новых заказов.
+ *
+ * Счётчик считаем «найти максимум по префиксу + 1». Это корректно
+ * благодаря фиксированной ширине хвоста (лексикографический `desc`
+ * совпадает с числовым). Вызывать ВНУТРИ транзакции; `Order.number`
+ * UNIQUE защищает от гонки — при коллизии клиент ретраит запрос, как и в
+ * остальных `*NumberService`.
  */
 @Injectable()
 export class OrderNumberService {
   async nextNumber(
     tx: Prisma.TransactionClient,
+    companyDivisionId?: string | null,
     now: Date = new Date(),
   ): Promise<string> {
+    // Новая схема: код подразделения + счётчик per-подразделение.
+    if (companyDivisionId) {
+      const division = await tx.companyDivision.findUnique({
+        where: { id: companyDivisionId },
+        select: { code: true },
+      });
+      const code = division?.code?.trim();
+      if (code) {
+        return this.nextByPrefix(tx, `${code}-`, 5);
+      }
+    }
+
+    // Фолбэк: суточная схема `O-YYYYMMDD-NNNN` (заказ без подразделения).
     const yyyy = now.getUTCFullYear();
     const mm = String(now.getUTCMonth() + 1).padStart(2, '0');
     const dd = String(now.getUTCDate()).padStart(2, '0');
-    const prefix = `O-${yyyy}${mm}${dd}-`;
+    return this.nextByPrefix(tx, `O-${yyyy}${mm}${dd}-`, 4);
+  }
 
+  /**
+   * Найти последний `Order.number` с данным префиксом и вернуть
+   * `prefix + (N + 1)`, дополнив хвост нулями до `width` знаков.
+   */
+  private async nextByPrefix(
+    tx: Prisma.TransactionClient,
+    prefix: string,
+    width: number,
+  ): Promise<string> {
     const last = await tx.order.findFirst({
       where: { number: { startsWith: prefix } },
       orderBy: { number: 'desc' },
@@ -30,12 +63,11 @@ export class OrderNumberService {
 
     let next = 1;
     if (last?.number) {
-      const tail = last.number.slice(prefix.length);
-      const parsed = Number.parseInt(tail, 10);
+      const parsed = Number.parseInt(last.number.slice(prefix.length), 10);
       if (Number.isFinite(parsed) && parsed >= 0) {
         next = parsed + 1;
       }
     }
-    return `${prefix}${String(next).padStart(4, '0')}`;
+    return `${prefix}${String(next).padStart(width, '0')}`;
   }
 }

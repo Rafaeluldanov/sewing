@@ -549,7 +549,10 @@ export class OrdersService {
           dto.customerCurrency ?? undefined,
         );
 
-      const number = await this.numbers.nextNumber(tx);
+      const number = await this.numbers.nextNumber(
+        tx,
+        companyDivisionIdForCreate,
+      );
       // Размеры заказа — для фильтрации адресации нанесений по размерам
       // (этап «Нанесение по размерам»): создаём `OrderApplicationSize`
       // только для размеров, реально присутствующих в `dto.items`.
@@ -1028,7 +1031,17 @@ export class OrdersService {
     }
 
     const created = await this.prisma.$transaction(async (tx) => {
-      const number = await this.numbers.nextNumber(tx);
+      // Резолвим подразделение ДО генерации номера: новая схема номера
+      // `КОД-NNNNN` зависит от кода подразделения (см. OrderNumberService).
+      const companyDivisionIdForCreate =
+        await this.resolveCompanyDivisionIdForOrder(
+          tx,
+          dto.companyDivisionId,
+        );
+      const number = await this.numbers.nextNumber(
+        tx,
+        companyDivisionIdForCreate,
+      );
 
       const newPattern = await tx.patternItem.create({
         data: {
@@ -1064,11 +1077,6 @@ export class OrdersService {
         tx,
       );
 
-      const companyDivisionIdForCreate =
-        await this.resolveCompanyDivisionIdForOrder(
-          tx,
-          dto.companyDivisionId,
-        );
       const finishedGoodsWarehouseIdForCreate =
         await this.resolveFinishedGoodsWarehouseIdForOrder(
           tx,
