@@ -5,8 +5,10 @@
  * `apps/api/src/modules/stock/dto/list-stock-movements.dto.ts`,
  * `apps/api/src/modules/finished-goods/dto/list-finished-goods-movements.dto.ts`).
  *
- * Server component: чистый HTML `<form method="get">` (тот же паттерн,
- * что у `StockBalancesFilters` / `/admin/purchase-orders`).
+ * Server component с `<form method="get">` (тот же паттерн, что у
+ * `StockBalancesFilters`): селекты/даты применяются по submit, а поле
+ * поиска `q` — «живое» через общий `<AdminSearchInput>` (client,
+ * `router.replace`, сброс `offset=0`).
  *
  * UI-решение владельца проекта: вкладка «Движения» теперь показывает
  * и материалы, и готовую продукцию в одной таблице. Поэтому select
@@ -34,6 +36,7 @@
 import Link from 'next/link';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
 import type { StockMovementDirection } from '@/lib/stock-api';
+import { AdminSearchInput } from '@/components/admin';
 
 /**
  * Объединённый union типов движений для UI.
@@ -168,16 +171,23 @@ export function StockMovementsFilters({
       <input type="hidden" name="tab" value="movements" />
       <input type="hidden" name="limit" value={String(limit)} />
 
-      <div className="admin-field">
-        <label htmlFor="stockMovementsQ">Поиск</label>
-        <input
-          id="stockMovementsQ"
-          name="q"
-          type="search"
-          defaultValue={q ?? ''}
-          placeholder="Комментарий, источник, материал"
-        />
-      </div>
+      <AdminSearchInput
+        id="stockMovementsQ"
+        paramName="q"
+        placeholder="Комментарий, источник, материал"
+        initial={q ?? ''}
+        basePath="/admin/warehouses"
+        resetParams={{ offset: '0' }}
+        preserveParams={{
+          tab: 'movements',
+          limit: String(limit),
+          warehouseId,
+          type,
+          direction,
+          from,
+          to,
+        }}
+      />
 
       <div className="admin-field">
         <label htmlFor="stockMovementsWarehouse">Склад</label>

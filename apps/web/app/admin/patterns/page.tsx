@@ -15,6 +15,7 @@ import {
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSearchInput,
   AdminStatusBadge,
   AdminTable,
   paginate,
@@ -356,16 +357,13 @@ export default async function AdminPatternsListPage({
           {categoryId && (
             <input type="hidden" name="categoryId" value={categoryId} />
           )}
-          <div className="admin-field">
-            <label htmlFor="patternSearch">Поиск</label>
-            <input
-              id="patternSearch"
-              name="search"
-              type="search"
-              defaultValue={search ?? ''}
-              placeholder="Название / артикул / категория"
-            />
-          </div>
+          <AdminSearchInput
+            id="patternSearch"
+            placeholder="Название / артикул / категория"
+            initial={search ?? ''}
+            basePath="/admin/patterns"
+            preserveParams={{ status, categoryId }}
+          />
           <div className="admin-field">
             <label htmlFor="patternStatus">Статус</label>
             <select

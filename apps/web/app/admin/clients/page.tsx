@@ -8,6 +8,7 @@ import {
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
@@ -107,16 +108,16 @@ export default async function AdminClientsListPage({
 
         <form action="/admin/clients" method="get" className="admin-form-grid" style={{ marginTop: 12 }}>
           {tab === 'archived' && <input type="hidden" name="tab" value="archived" />}
-          <div className="admin-field">
-            <label htmlFor="clientSearch">Поиск по названию</label>
-            <input
-              id="clientSearch"
-              name="search"
-              type="search"
-              defaultValue={search ?? ''}
-              placeholder="Например: ИП Петров"
-            />
-          </div>
+          <AdminSearchInput
+            id="clientSearch"
+            label="Поиск по названию"
+            placeholder="Например: ИП Петров"
+            initial={search ?? ''}
+            basePath="/admin/clients"
+            preserveParams={{
+              tab: tab === 'archived' ? 'archived' : undefined,
+            }}
+          />
           <div className="admin-actions-row" style={{ alignItems: 'end' }}>
             <button type="submit" className="admin-btn">
               Найти

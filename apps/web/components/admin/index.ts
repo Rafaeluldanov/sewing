@@ -16,6 +16,7 @@ export { AdminTable, type AdminTableColumn } from './admin-table';
 export { AdminTechInfo } from './admin-tech-info';
 export { AdminPageShell } from './admin-page-shell';
 export { AdminPagination, paginate } from './admin-pagination';
+export { AdminSearchInput } from './admin-search-input.client';
 export { AdminProductionHeatmap } from './admin-production-heatmap';
 export { AdminRouteSteps, type AdminRouteStep } from './admin-route-steps';
 export { AdminDateField, type AdminDateFieldProps } from './admin-date-field';

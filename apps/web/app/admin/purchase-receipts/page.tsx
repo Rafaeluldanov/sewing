@@ -33,6 +33,7 @@ import {
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
@@ -154,16 +155,19 @@ export default async function AdminPurchaseReceiptsPage({
           className="admin-form-grid"
           style={{ marginTop: 4 }}
         >
-          <div className="admin-field">
-            <label htmlFor="prSearch">Поиск</label>
-            <input
-              id="prSearch"
-              name="search"
-              type="search"
-              defaultValue={search ?? ''}
-              placeholder="номер, поставщик, комментарий, заказ"
-            />
-          </div>
+          <AdminSearchInput
+            id="prSearch"
+            placeholder="номер, поставщик, комментарий, заказ"
+            initial={search ?? ''}
+            basePath="/admin/purchase-receipts"
+            preserveParams={{
+              status,
+              supplierId,
+              purchaseOrderId,
+              customerOrderId,
+              cellId,
+            }}
+          />
           <div className="admin-field">
             <label htmlFor="prStatus">Статус</label>
             <select id="prStatus" name="status" defaultValue={status ?? ''}>

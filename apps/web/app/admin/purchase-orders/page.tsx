@@ -36,6 +36,7 @@ import {
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
@@ -153,16 +154,13 @@ export default async function AdminPurchaseOrdersPage({
           className="admin-form-grid"
           style={{ marginTop: 4 }}
         >
-          <div className="admin-field">
-            <label htmlFor="poSearch">Поиск</label>
-            <input
-              id="poSearch"
-              name="search"
-              type="search"
-              defaultValue={search ?? ''}
-              placeholder="номер, поставщик, комментарий, заказ"
-            />
-          </div>
+          <AdminSearchInput
+            id="poSearch"
+            placeholder="номер, поставщик, комментарий, заказ"
+            initial={search ?? ''}
+            basePath="/admin/purchase-orders"
+            preserveParams={{ status, supplierId, customerOrderId }}
+          />
           <div className="admin-field">
             <label htmlFor="poStatus">Статус</label>
             <select id="poStatus" name="status" defaultValue={status ?? ''}>

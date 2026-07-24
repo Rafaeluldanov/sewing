@@ -68,6 +68,7 @@ import {
   AdminCard,
   AdminEmptyState,
   AdminPageShell,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
 } from '@/components/admin';
@@ -381,16 +382,18 @@ export default async function AdminWorkshopNeedsPage({
           {tab === 'archive' && (
             <input type="hidden" name="tab" value="archive" />
           )}
-          <div className="admin-field">
-            <label htmlFor="needSearch">Поиск</label>
-            <input
-              id="needSearch"
-              name="search"
-              type="search"
-              defaultValue={search ?? ''}
-              placeholder="описание, поставщик, номер заказа…"
-            />
-          </div>
+          <AdminSearchInput
+            id="needSearch"
+            placeholder="описание, поставщик, номер заказа…"
+            initial={search ?? ''}
+            basePath="/admin/workshop-needs"
+            resetParams={{}}
+            preserveParams={{
+              tab: tab === 'archive' ? 'archive' : undefined,
+              orderCalculationStatus,
+              orderId,
+            }}
+          />
           <div className="admin-field">
             <label htmlFor="needOrderCalculationStatus">Статус расчёта</label>
             <select

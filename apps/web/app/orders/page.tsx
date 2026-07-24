@@ -14,6 +14,7 @@ import {
 } from '@/lib/order-nomenclature';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { StatusBadge } from '@/components/status-badge';
+import { AdminSearchInput } from '@/components/admin';
 
 export const dynamic = 'force-dynamic';
 
@@ -91,11 +92,13 @@ export default async function OrdersListPage({ searchParams }: PageProps) {
       {error && <div className="error-box">{error}</div>}
 
       <form className="toolbar" method="get">
-        <input
-          type="text"
-          name="search"
+        <AdminSearchInput
+          fieldClassName={null}
+          label={null}
           placeholder="Номер заказа…"
-          defaultValue={query.search ?? ''}
+          initial={query.search ?? ''}
+          basePath="/orders"
+          preserveParams={{ status: query.status, sort: query.sort }}
         />
         <select name="status" defaultValue={query.status ?? ''}>
           <option value="">Все статусы</option>

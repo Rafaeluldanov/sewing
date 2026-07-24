@@ -32,6 +32,7 @@ import {
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
@@ -148,16 +149,15 @@ export default async function AdminSuppliersListPage({
           {tab === 'archived' && (
             <input type="hidden" name="tab" value="archived" />
           )}
-          <div className="admin-field">
-            <label htmlFor="supplierSearch">Поиск</label>
-            <input
-              id="supplierSearch"
-              name="search"
-              type="search"
-              defaultValue={search ?? ''}
-              placeholder="название, телефон, сайт"
-            />
-          </div>
+          <AdminSearchInput
+            id="supplierSearch"
+            placeholder="название, телефон, сайт"
+            initial={search ?? ''}
+            basePath="/admin/suppliers"
+            preserveParams={{
+              tab: tab === 'archived' ? 'archived' : undefined,
+            }}
+          />
           <div className="admin-actions-row" style={{ alignItems: 'end' }}>
             <button type="submit" className="admin-btn">
               Найти

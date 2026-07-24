@@ -58,6 +58,7 @@ import {
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
@@ -74,7 +75,6 @@ import {
   formatDaysLeft,
   formatProgressPercent,
 } from '@/lib/date-format';
-import { OrdersSearchInput } from './orders-search-input.client';
 
 export const dynamic = 'force-dynamic';
 
@@ -278,7 +278,9 @@ export default async function AdminOrdersPage({
               буквы; мультиполевой OR делает backend (OrdersService.list).
               Поле остаётся в форме с name="search", поэтому Enter/«Применить»
               работают как фолбэк. */}
-          <OrdersSearchInput
+          <AdminSearchInput
+            id="orders-search"
+            placeholder="Номер, клиент, подразделение, дата…"
             initial={query.search ?? ''}
             basePath="/admin/orders"
             preserveParams={{
@@ -438,7 +440,7 @@ function OrdersTable({
           className="admin-order-number-link"
         >
           <FileText size={15} strokeWidth={1.6} aria-hidden />
-          {formatOrderCode(o)}
+          {o.number}
         </Link>
       ),
     },
@@ -563,17 +565,6 @@ function ClientCell({ o }: { o: OrderListItemDto }) {
     return <span>{o.customer}</span>;
   }
   return <span className="admin-muted">—</span>;
-}
-
-/**
- * Номер заказа в формате «КОД_ПОДРАЗДЕЛЕНИЯ-NNNNN» (например, `01-00001`).
- * Код подразделения приходит из справочника (`o.companyDivision.code`);
- * порядковый номер дополняем нулями до 5 знаков. Если подразделение не
- * указано — показываем только номер.
- */
-function formatOrderCode(o: OrderListItemDto): string {
-  const seq = String(o.number).padStart(5, '0');
-  return o.companyDivision?.code ? `${o.companyDivision.code}-${seq}` : seq;
 }
 
 /**

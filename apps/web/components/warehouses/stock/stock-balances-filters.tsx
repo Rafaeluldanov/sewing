@@ -4,10 +4,13 @@
  * `apps/web/app/admin/warehouses/page.tsx`,
  * `apps/api/src/modules/stock/dto/list-stock-balances.dto.ts`).
  *
- * Server component: чистый HTML `<form method="get">`. Submit
- * отправляет браузером — RSC перерисовывает страницу со свежими
- * `searchParams`. Не используем client state / `useRouter` — тот же
- * паттерн, что у `/admin/purchase-orders`, `/admin/clients` и т.п.
+ * Server component с `<form method="get">`: submit (Enter / кнопка
+ * «Применить») отправляется браузером — RSC перерисовывает страницу со
+ * свежими `searchParams`. Селекты (`warehouseId` / `stockState`) так и
+ * работают. НО поле поиска `q` — «живое»: рендерится общим
+ * `<AdminSearchInput>` (client), который меняет URL по ходу набора через
+ * `router.replace` (сбрасывая `offset=0`). Тот же примитив живого поиска
+ * — на всех списках (`/admin/orders`, `/admin/purchase-orders` и т.п.).
  *
  * Контракт:
  *   - `q` — substring по описанию остатка / WorkshopNeed;
@@ -27,6 +30,7 @@
  */
 import Link from 'next/link';
 import type { WarehouseSummaryDto } from '@sewing/shared/warehouses';
+import { AdminSearchInput } from '@/components/admin';
 
 export type StockBalanceState = 'all' | 'positive' | 'zero' | 'negative';
 
@@ -76,16 +80,20 @@ export function StockBalancesFilters({
       <input type="hidden" name="tab" value="balances" />
       <input type="hidden" name="limit" value={String(limit)} />
 
-      <div className="admin-field">
-        <label htmlFor="stockBalancesQ">Поиск</label>
-        <input
-          id="stockBalancesQ"
-          name="q"
-          type="search"
-          defaultValue={q ?? ''}
-          placeholder="Материал, описание, заказ"
-        />
-      </div>
+      <AdminSearchInput
+        id="stockBalancesQ"
+        paramName="q"
+        placeholder="Материал, описание, заказ"
+        initial={q ?? ''}
+        basePath="/admin/warehouses"
+        resetParams={{ offset: '0' }}
+        preserveParams={{
+          tab: 'balances',
+          limit: String(limit),
+          warehouseId,
+          stockState: stockState !== 'all' ? stockState : undefined,
+        }}
+      />
 
       <div className="admin-field">
         <label htmlFor="stockBalancesWarehouse">Склад</label>

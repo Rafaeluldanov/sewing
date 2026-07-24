@@ -79,7 +79,9 @@ test('warehouses/page.tsx подключает StockMovementsFilters во вкл
 
 test('StockBalancesFilters содержит поля q / warehouseId / stockState', () => {
   const src = read(BALANCES_FILTERS);
-  expect(src).toMatch(/name="q"/);
+  // Поиск теперь «живой» — рендерится через <AdminSearchInput paramName="q">
+  // (общий примитив динамического поиска), а не сырым <input name="q">.
+  expect(src).toMatch(/paramName="q"/);
   expect(src).toMatch(/name="warehouseId"/);
   expect(src).toMatch(/name="stockState"/);
   // Hidden fields для tab / limit, чтобы submit не сбрасывал вкладку
@@ -103,7 +105,9 @@ test('StockBalancesFilters содержит поля q / warehouseId / stockStat
 
 test('StockMovementsFilters содержит поля q / warehouseId / type / direction / from / to', () => {
   const src = read(MOVEMENTS_FILTERS);
-  expect(src).toMatch(/name="q"/);
+  // Поиск теперь «живой» — рендерится через <AdminSearchInput paramName="q">
+  // (общий примитив динамического поиска), а не сырым <input name="q">.
+  expect(src).toMatch(/paramName="q"/);
   expect(src).toMatch(/name="warehouseId"/);
   expect(src).toMatch(/name="type"/);
   expect(src).toMatch(/name="direction"/);
