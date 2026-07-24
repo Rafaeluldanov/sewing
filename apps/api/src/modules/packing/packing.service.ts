@@ -6,6 +6,7 @@ import {
 import type { Prisma } from '@prisma/client';
 import {
   OperationCategory,
+  OrderStatus,
   PassportEventType,
   PassportStatus,
 } from '@prisma/client';
@@ -39,6 +40,7 @@ import {
   PassportNotQcPassedException,
   PassportNotWtoPassedException,
 } from '../../common/errors.js';
+import { isOrderCuttingFullyReleased } from '../../common/cutting-release.js';
 import { BoxNumberService } from './box-number.service.js';
 import { getApiUrl } from '../passports/qr.js';
 import { EarningsService } from '../earnings/earnings.service.js';
@@ -473,6 +475,16 @@ export class PackingService {
         actorEmployeeId,
         box.id,
       );
+      // Авто-завершение заказа: если этим паспортом заказ упакован
+      // полностью (не осталось живых паспортов в работе) — переводим
+      // заказ IN_PRODUCTION → DONE прямо здесь, атомарно с упаковкой.
+      // Триггер — терминальная упаковка последнего изделия, а не
+      // ручное действие менеджера (`OrdersService.complete()`); гейт
+      // «только из IN_PRODUCTION» тот же, поэтому семантика DONE
+      // сохраняется. См. `maybeCompleteOrderOnPack` ниже.
+      if (fresh.orderId) {
+        await this.maybeCompleteOrderOnPack(tx, fresh.orderId, actorEmployeeId);
+      }
       // Финальный апрув начислений всем участникам цепочки по этому
       // паспорту перенесён на закрытие коробки (см. `close()` ниже и
       // ADR-0005 §«Подтверждение», обновлённое в рамках scan-driven
@@ -549,6 +561,80 @@ export class PackingService {
     });
 
     return this.getOne(boxId);
+  }
+
+  // -------------------------------------------------------------------------
+  // AUTO-COMPLETE (заказ → DONE при полной упаковке)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Переводит заказ в `DONE`, когда он полностью упакован. Три условия
+   * (все должны выполняться), иначе — тихий no-op:
+   *
+   *   1. заказ в `IN_PRODUCTION` — тот же гейт, что у ручного
+   *      `OrdersService.complete()` (см. orders.service.ts). Из любого
+   *      другого статуса (уже `DONE`, `CANCELLED`, ещё в расчёте) —
+   *      выходим, статус не трогаем;
+   *   2. весь тираж ВЫПУЩЕН (`isOrderCuttingFullyReleased`) — защита от
+   *      преждевременного закрытия при инкрементальном порулонном
+   *      выпуске (см. `common/cutting-release.ts`);
+   *   3. среди паспортов заказа не осталось ни одного в `CREATED` /
+   *      `IN_PROGRESS` (`CANCELLED` игнорируем, `PACKED` — уже упакованы).
+   *      На момент вызова `fresh` в этой же транзакции уже `PACKED`,
+   *      поэтому упаковка последнего изделия попадёт под `remaining === 0`.
+   *
+   * Идемпотентно: повторный `PACKED` невозможен
+   * (`PassportAlreadyPackedException`), а уже `DONE`-заказ отсекается
+   * условием (1).
+   */
+  private async maybeCompleteOrderOnPack(
+    tx: Prisma.TransactionClient,
+    orderId: string,
+    actorEmployeeId: string,
+  ): Promise<void> {
+    const order = await tx.order.findUnique({
+      where: { id: orderId },
+      select: { id: true, status: true },
+    });
+    if (!order || order.status !== OrderStatus.IN_PRODUCTION) return;
+
+    // Гейт «весь тираж выпущен»: паспорта заказа создаются
+    // ИНКРЕМЕНТАЛЬНО (порулонно/пораскладно, см.
+    // `PassportsService.releaseFromRolls`). Без этой проверки ранняя
+    // упаковка первых рулонов, когда остаток тиража ещё не выпущен,
+    // преждевременно и НЕОБРАТИМО закрыла бы заказ: `DONE` блокирует
+    // дальнейший выпуск (create/releaseFromRolls требуют IN_PRODUCTION),
+    // и дорелизить остаток без ручного re-open стало бы нельзя.
+    // Критерий — тот же, что метка «Завершено» на доске помощника.
+    if (!(await isOrderCuttingFullyReleased(tx, orderId))) return;
+
+    const remaining = await tx.passport.count({
+      where: {
+        orderId,
+        status: { in: [PassportStatus.CREATED, PassportStatus.IN_PROGRESS] },
+      },
+    });
+    if (remaining > 0) return;
+
+    await tx.order.update({
+      where: { id: orderId },
+      data: { status: OrderStatus.DONE },
+    });
+    // Аудит: автоматический перевод статуса — из тех, что менеджер
+    // потом захочет объяснить («почему заказ стал Готов сам»).
+    await this.audit.log(
+      {
+        event: 'ORDER_AUTO_COMPLETED',
+        entityType: 'ORDER',
+        entityId: orderId,
+        employeeId: actorEmployeeId,
+        payload: { reason: 'ALL_PASSPORTS_PACKED' },
+      },
+      tx,
+    );
+    this.logger.log(
+      `event=packing.order_auto_completed orderId=${orderId} actorId=${actorEmployeeId}`,
+    );
   }
 
   // -------------------------------------------------------------------------

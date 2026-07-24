@@ -22,6 +22,7 @@ import {
   CuttingTaskNotInProgressException,
   CuttingTaskPayloadInvalidException,
 } from '../../common/errors.js';
+import { countReleasePairs } from '../../common/cutting-release.js';
 
 /**
  * Сервис «Кабинет раскройщика» (`CuttingTask`, роль `CUTTER`).
@@ -218,20 +219,10 @@ export class CuttingTasksService {
 
     return tasks.map((t) => {
       const releasedSet = releasedByOrder.get(t.orderId) ?? new Set<string>();
-      let totalPairs = 0;
-      let releasedPairs = 0;
-      for (const lay of t.lays) {
-        const sizes = lay.laySizes.filter((s) => s.sizeId && s.perLayerQty > 0);
-        const rolls = lay.rolls.filter((r) => r.layers > 0);
-        for (const s of sizes) {
-          for (const roll of rolls) {
-            totalPairs += 1;
-            if (releasedSet.has(`${lay.ordinal}:${s.sizeId}:${roll.ordinal}`)) {
-              releasedPairs += 1;
-            }
-          }
-        }
-      }
+      const { totalPairs, releasedPairs } = countReleasePairs(
+        t.lays,
+        releasedSet,
+      );
       const status: OrderReadyForReleaseDto['status'] =
         totalPairs > 0 && releasedPairs >= totalPairs ? 'DONE' : 'NEW';
       return {
