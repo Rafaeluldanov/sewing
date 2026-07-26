@@ -27,6 +27,10 @@ import {
   type OrderCutIssueRulesSummaryDto,
 } from '@sewing/shared';
 import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
+import type {
+  OrderTransitionAction,
+  OrderTransitionDto,
+} from '@sewing/shared/order-transitions';
 import {
   CreateManualWorkshopNeedSchema,
   UpdateWorkshopNeedSchema,
@@ -43,6 +47,7 @@ import {
   completeOrder,
   completeOrderCalculation,
   createOrder,
+  getOrderTransitions,
   recalculateOrderCostEstimate,
   recalculateOrderOperationPlan,
   reopenOrderCalculation,
@@ -1000,6 +1005,90 @@ export async function recalculateOrderOperationPlanAction(
   revalidatePath('/admin/orders');
   revalidatePath(`/admin/orders/${orderId}`);
   return { ok: true };
+}
+
+/**
+ * Единая точка входа для контрола «Статус заказа» (выпадающий список в
+ * шапке карточки и в строке `/admin/orders`).
+ *
+ * Никакой новой бизнес-логики: диспетчер поверх УЖЕ существующих ручек
+ * (`start-calculation` / `start` / `reopen-calculation` / `complete` /
+ * `cancel`). Смысл обёртки — один вызов с одной сигнатурой вместо пяти
+ * разных на клиенте; какие переходы вообще предлагать, решает backend
+ * через `OrderDetailDto.availableTransitions`.
+ *
+ * Возвращает `{ error }`, а не `throw`: в продовой сборке Next.js
+ * вырезает message брошенных из server-action ошибок и подменяет
+ * generic-ом с digest (см. комментарий у `startCalculationOrderAction`),
+ * из-за чего осмысленный текст не долетал бы до поповера.
+ *
+ * `COMPLETE_CALCULATION` и `START_SAMPLE` сюда НЕ приходят: расчёт
+ * фиксирует закупщик на `/admin/workshop-needs`, образец запускается
+ * формой на вкладке «Сигнальный образец» — контрол рисует такие пункты
+ * ссылками (`handledIn`), а не действиями.
+ */
+export interface ChangeOrderStatusActionState {
+  ok?: boolean;
+  error?: string;
+}
+
+export async function changeOrderStatusAction(
+  orderId: string,
+  action: OrderTransitionAction,
+  reason?: string | null,
+): Promise<ChangeOrderStatusActionState> {
+  try {
+    switch (action) {
+      case 'START_CALCULATION':
+        await startCalculationOrder(orderId);
+        break;
+      case 'START':
+        await startOrder(orderId);
+        break;
+      case 'REOPEN_CALCULATION':
+        await reopenOrderCalculation(orderId, {
+          reason: reason && reason.trim() !== '' ? reason.trim() : null,
+        });
+        break;
+      case 'COMPLETE':
+        await completeOrder(orderId);
+        break;
+      case 'CANCEL':
+        await cancelOrder(orderId);
+        break;
+      default:
+        return {
+          error:
+            'Этот переход выполняется на другом экране — откройте соответствующий раздел.',
+        };
+    }
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidatePath('/orders');
+  revalidatePath(`/orders/${orderId}`);
+  revalidatePath('/admin/orders');
+  revalidatePath(`/admin/orders/${orderId}`);
+  revalidatePath('/admin/workshop-needs');
+  return { ok: true };
+}
+
+/**
+ * Ленивый догруз переходов для контрола статуса в СТРОКЕ списка
+ * `/admin/orders`: список отдаёт только `status`, а гейты (позиции,
+ * лекало, техкарта, клиент) считаются по конкретному заказу — по
+ * открытию списка в строке, а не для всех строк сразу.
+ */
+export async function loadOrderTransitionsAction(
+  orderId: string,
+): Promise<{ transitions?: OrderTransitionDto[]; error?: string }> {
+  try {
+    return { transitions: await getOrderTransitions(orderId) };
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
 }
 
 export async function cancelOrderAction(id: string): Promise<void> {

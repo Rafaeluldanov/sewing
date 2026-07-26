@@ -21,6 +21,10 @@ import { ColorwaySizeInputSchema } from './colorways';
 import type { OrderDeadlineEvaluation, OrderDeadlineStatus } from './order-deadlines';
 import { ORDER_DEADLINE_STATUSES } from './order-deadlines';
 import type { OrderCostEstimateDto } from './order-cost-estimates';
+// Type-only импорт: `order-transitions` в свою очередь тянет
+// `OrderStatus` отсюда — цикл существует только на уровне типов и
+// стирается при компиляции.
+import type { OrderTransitionDto } from './order-transitions';
 import type {
   OrderRouteStepDto,
   OrderRouteStepSizeOverrideDto,
@@ -1865,6 +1869,24 @@ export interface OrderDetailDto
    * всегда отдаёт значение (`null` или объект).
    */
   constructorTask?: ConstructorTaskSummaryDto | null;
+
+  /**
+   * Переходы статуса заказа из текущего состояния — по одному элементу
+   * на каждый статус, кроме текущего, включая НЕДОСТУПНЫЕ (с кодом и
+   * текстом причины). Считается на бэке общим pure-helper-ом
+   * `evaluateOrderTransitions` (см. `@sewing/shared/order-transitions`),
+   * который зеркалит гейты `OrdersService`.
+   *
+   * Нужен контролу «Статус заказа» (выпадающий список в шапке карточки):
+   * список показывает весь маршрут заказа, поэтому UI обязан знать
+   * причину блокировки ДО клика. Считать её на фронте нельзя — правила
+   * разъедутся с backend-гейтами.
+   *
+   * Опционально (`?`) для backward-compat: старые потребители без
+   * пересборки shared-пакета продолжают компилироваться. Backend
+   * всегда отдаёт массив.
+   */
+  availableTransitions?: OrderTransitionDto[];
 }
 
 export interface Paginated<T> {

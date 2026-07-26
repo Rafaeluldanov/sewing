@@ -372,12 +372,11 @@ describe('/admin/orders/[id] — управленческая карточка (
     const headerSrc = read(
       'apps/web/components/orders/view/order-management-header.tsx',
     );
-    expect(headerSrc).toMatch(/StartCalculationButton/);
-    expect(headerSrc).toMatch(/StartProductionButton/);
+    // Смена статуса — контрол-список рядом с бейджем; в action-row
+    // остались только не-статусные действия.
+    expect(headerSrc).toMatch(/<OrderStatusSelect/);
     expect(headerSrc).toMatch(/RecalculateOperationPlanButton/);
-    expect(headerSrc).toMatch(/ReopenCalculationButton/);
-    expect(headerSrc).toMatch(/CompleteOrderButton/);
-    expect(headerSrc).toMatch(/CancelOrderButton/);
+    expect(headerSrc).toMatch(/DeleteOrderButton/);
     // Кнопка «Выпустить паспорт» — ссылка, как было раньше в legacy.
     expect(headerSrc).toMatch(/Выпустить паспорт/);
     expect(headerSrc).toMatch(

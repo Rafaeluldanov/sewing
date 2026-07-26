@@ -637,7 +637,10 @@ describe('Этап 2 — Frontend: блок «План операций» — UI
     expect(src).toMatch(/showRecalcPlan/);
     expect(src).toMatch(/status === 'DRAFT'/);
     expect(src).toMatch(/status === 'CALCULATION'/);
-    expect(src).toMatch(/status === 'CALCULATION_DONE'/);
+    // `CALCULATION_DONE` в шапке больше не перечисляется вручную: окно
+    // правки задаёт `isOrderPlanEditable`, а переходы статуса — контрол
+    // `OrderStatusSelect` по данным из DTO.
+    expect(src).toMatch(/isOrderPlanEditable\(status\)/);
   });
 
   test('OrderOperationsUnifiedTable показывает «Стоимость за 1 изделие» и «Время на 1 изделие»', () => {

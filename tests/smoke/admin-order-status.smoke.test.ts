@@ -145,16 +145,21 @@ describe('/admin/orders/[id] — статус заказа и management header'
     'apps/web/components/orders/view/order-management-header.tsx';
   const headerSrc = read(headerPath);
 
-  test('OrderManagementHeader использует formatOrderStatus + getOrderStatusTone', () => {
-    expect(headerSrc).toMatch(/formatOrderStatus/);
-    expect(headerSrc).toMatch(/getOrderStatusTone/);
-    expect(headerSrc).toMatch(/from '@\/lib\/admin-labels'/);
+  test('лейбл и тон статуса берутся из admin-labels — теперь внутри контрола статуса', () => {
+    // Бейдж статуса переехал в `OrderStatusSelect` (кликабельный, со
+    // списком маршрута); словари лейблов/тонов не продублированы.
+    const controlSrc = read(
+      'apps/web/components/orders/view/order-status-select.tsx',
+    );
+    expect(controlSrc).toMatch(/formatOrderStatus/);
+    expect(controlSrc).toMatch(/getOrderStatusTone/);
+    expect(controlSrc).toMatch(/from '@\/lib\/admin-labels'/);
   });
 
-  test('AdminStatusBadge присутствует в management header (статус + deadline)', () => {
-    const matches = headerSrc.match(/<AdminStatusBadge/g) ?? [];
-    // Один — для общего статуса, второй — для бейджа deadline.
-    expect(matches.length).toBeGreaterThanOrEqual(2);
+  test('в шапке — контрол статуса и отдельный бейдж срока', () => {
+    expect(headerSrc).toMatch(/<OrderStatusSelect/);
+    // Бейдж контроля срока остаётся обычным `AdminStatusBadge`.
+    expect(headerSrc).toMatch(/<AdminStatusBadge tone=\{deadlineTone\}/);
   });
 
   test('header показывает summary-поля (клиент, срок, изделие, цвет, план)', () => {

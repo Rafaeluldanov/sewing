@@ -44,6 +44,7 @@
     "./me-daily": "./src/me-daily.ts",
     "./cut-release-policy": "./src/cut-release-policy.ts",
     "./order-deadlines": "./src/order-deadlines.ts",
+    "./order-transitions": "./src/order-transitions.ts",
     "./material-roles": "./src/material-roles.ts",
     "./material-characteristics": "./src/material-characteristics.ts",
     "./tech-card-parameters": "./src/tech-card-parameters.ts",

@@ -16764,6 +16764,218 @@ body:has(.admin-layout) .app-header { display: none !important; }
   }
 }
 
+/* --- Статус заказа: бейдж-переключатель --------------------------------
+   Контрол `OrderStatusSelect`: бейдж статуса раскрывается в список всего
+   маршрута заказа (шапка карточки `/admin/orders/[id]` и строка списка
+   `/admin/orders`). Заменяет ряд workflow-кнопок; недоступные переходы
+   остаются в списке с причиной, поэтому строка двухэтажная:
+   заголовок = действие, подпись = статус либо причина блокировки. */
+
+.order-status-select {
+  position: relative;
+  display: inline-flex;
+}
+
+/* Тот же бейдж, что `AdminStatusBadge`, но кликабельный: классы
+   `admin-status-badge--*` приходят из компонента, здесь только
+   «кнопочная» часть. */
+.order-status-select__trigger {
+  font: inherit;
+  cursor: pointer;
+  border: 1px solid transparent;
+  gap: 0.35rem;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
+}
+
+.order-status-select__trigger:hover:not(:disabled) {
+  border-color: var(--color-border-strong);
+}
+
+.order-status-select__trigger[aria-expanded='true'] {
+  border-color: var(--color-border-strong);
+  box-shadow: 0 0 0 3px rgba(47, 127, 209, 0.14);
+}
+
+.order-status-select__trigger:disabled {
+  opacity: 0.65;
+  cursor: progress;
+}
+
+.order-status-select__menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 30;
+  width: min(430px, calc(100vw - 2rem));
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  padding: 0.5rem;
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: 14px;
+  box-shadow: 0 10px 32px rgba(20, 20, 20, 0.16),
+    0 2px 8px rgba(20, 20, 20, 0.08);
+  text-align: left;
+}
+
+.order-status-select__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.6rem;
+  padding: 0.25rem 0.5rem 0.5rem;
+  border-bottom: 1px solid var(--admin-border);
+  margin-bottom: 0.25rem;
+}
+
+.order-status-select__head-title {
+  font-size: var(--title-label);
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-fg-subtle);
+}
+
+.order-status-select__head-hint {
+  font-size: 0.75rem;
+  color: var(--color-fg-subtle);
+}
+
+.order-status-select__loading {
+  margin: 0;
+  padding: 0.4rem 0.6rem;
+  font-size: 0.85rem;
+  color: var(--admin-muted);
+}
+
+.order-status-select__option {
+  display: grid;
+  grid-template-columns: 18px 1fr auto;
+  align-items: start;
+  gap: 0.1rem 0.6rem;
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  border: 0;
+  border-radius: 9px;
+  background: none;
+  font: inherit;
+  color: var(--admin-text);
+  text-align: left;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.order-status-select__option:hover:not(:disabled) {
+  background: var(--admin-soft);
+}
+
+.order-status-select__option:disabled {
+  cursor: default;
+}
+
+.order-status-select__option--current,
+.order-status-select__option--current:hover {
+  background: var(--admin-primary-soft);
+  cursor: default;
+}
+
+.order-status-select__option--blocked .order-status-select__option-label,
+.order-status-select__option--blocked .order-status-select__option-note {
+  color: var(--color-fg-subtle);
+}
+
+.order-status-select__option--danger .order-status-select__option-label {
+  color: var(--admin-danger-fg);
+}
+
+.order-status-select__option--danger:hover:not(:disabled) {
+  background: var(--admin-danger-soft);
+}
+
+.order-status-select__option-mark {
+  grid-row: 1 / span 2;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 20px;
+  color: var(--color-fg-subtle);
+}
+
+.order-status-select__option-label {
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.order-status-select__option-note {
+  grid-column: 2;
+  font-size: 0.79rem;
+  line-height: 1.35;
+  color: var(--admin-muted);
+}
+
+.order-status-select__option-tag {
+  grid-row: 1;
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  padding: 0.1rem 0.42rem;
+  border-radius: var(--admin-radius-pill);
+  background: var(--admin-soft);
+  color: var(--admin-muted);
+}
+
+/* Второй шаг — подтверждение необратимого перехода. Заменяет
+   `window.confirm`: тот не умел перечислять последствия. */
+.order-status-select__confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 0.3rem 0.5rem 0.2rem;
+}
+
+.order-status-select__confirm-title {
+  margin: 0;
+  font-size: var(--title-section);
+  font-weight: 700;
+}
+
+.order-status-select__confirm-list {
+  margin: 0;
+  padding-left: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: var(--admin-muted);
+}
+
+.order-status-select__confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+}
+
+/* В строке таблицы `/admin/orders` бейдж мельче, а список открывается от
+   правого края ячейки — иначе он уезжает за границу таблицы. */
+.order-status-select--compact .order-status-select__trigger {
+  font-size: 0.74rem;
+}
+
+.order-status-select--compact .order-status-select__menu {
+  left: auto;
+  right: 0;
+}
+
+@media (max-width: 640px) {
+  .order-status-select__menu {
+    max-height: 70vh;
+    overflow-y: auto;
+  }
+}
+
 /* --- Production tab ----------------------------------------------------- */
 
 .order-prod-tab {

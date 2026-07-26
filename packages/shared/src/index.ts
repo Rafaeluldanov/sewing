@@ -51,6 +51,7 @@ export * from './me-daily';
 export * from './cut-release-policy';
 export * from './order-cut-issue-rules';
 export * from './order-deadlines';
+export * from './order-transitions';
 export * from './material-roles';
 export * from './material-characteristics';
 export * from './tech-card-parameters';

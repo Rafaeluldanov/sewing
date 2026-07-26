@@ -26,6 +26,7 @@ import type {
   ReopenOrderCalculationDto,
 } from '@sewing/shared/order-cost-estimates';
 import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
+import type { OrderTransitionDto } from '@sewing/shared/order-transitions';
 import { apiFetch } from './api';
 
 export function listOrders(query: Partial<ListOrdersQuery> = {}): Promise<
@@ -51,6 +52,23 @@ export function listOrders(query: Partial<ListOrdersQuery> = {}): Promise<
 
 export function getOrder(id: string): Promise<OrderDetailDto> {
   return apiFetch<OrderDetailDto>(`/orders/${encodeURIComponent(id)}`);
+}
+
+/**
+ * Переходы статуса заказа без сборки карточки
+ * (`GET /api/orders/:id/transitions`). Тот же массив, что в
+ * `OrderDetailDto.availableTransitions`.
+ *
+ * Нужен контролу «Статус заказа» в строке списка `/admin/orders`:
+ * список заказов НЕ отдаёт переходы по каждой строке (это N × гейты на
+ * рендер), поэтому строка догружает их лениво — по открытию списка.
+ */
+export function getOrderTransitions(
+  id: string,
+): Promise<OrderTransitionDto[]> {
+  return apiFetch<OrderTransitionDto[]>(
+    `/orders/${encodeURIComponent(id)}/transitions`,
+  );
 }
 
 export function createOrder(body: CreateOrderDto): Promise<OrderDetailDto> {

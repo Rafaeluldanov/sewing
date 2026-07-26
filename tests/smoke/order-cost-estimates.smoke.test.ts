@@ -35,10 +35,11 @@
  *                `apps/web/app/admin/orders/[id]/page.tsx`
  *                (блок «Себестоимость», workflow CALCULATION_DONE),
  *                компоненты `order-cost-estimate-card.tsx` /
- *                `reopen-calculation-button.tsx`,
+ *                `view/order-status-select.tsx` (переход «Вернуть на
+ *                пересчёт» живёт в контроле статуса),
  *                server-actions
  *                `apps/web/app/orders/actions.ts` (`completeOrderCalculationAction`,
- *                 `reopenOrderCalculationAction`).
+ *                 `changeOrderStatusAction`).
  *
  * Все проверки — source-level (как и остальные smoke-тесты).
  */
@@ -373,22 +374,26 @@ describe('Web — /admin/orders/[id] block «Себестоимость»', () =
     expect(formSrc).toMatch(/completeOrderCalculationAction/);
   });
 
-  test('Workflow: CALCULATION_DONE → «Запустить в производство» + «Вернуть на пересчёт» в OrderManagementHeader', () => {
+  test('Workflow: из CALCULATION_DONE доступны «Запустить в производство» и «Вернуть на пересчёт»', () => {
+    // Оба перехода переехали из кнопок шапки в контрол статуса —
+    // правила лежат в shared-helper-е, а не в JSX.
+    const helper = read('packages/shared/src/order-transitions.ts');
+    expect(helper).toMatch(/case 'CALCULATION_DONE'/);
+    expect(helper).toMatch(/allow\(to, 'REOPEN_CALCULATION'\)/);
     const headerSrc = read(
       'apps/web/components/orders/view/order-management-header.tsx',
     );
-    expect(headerSrc).toMatch(/CALCULATION_DONE/);
-    expect(headerSrc).toMatch(/<ReopenCalculationButton\b/);
-    expect(headerSrc).toMatch(/<StartProductionButton\b/);
+    expect(headerSrc).toMatch(/<OrderStatusSelect/);
   });
 
-  test('ReopenCalculationButton использует server-action reopenOrderCalculationAction', () => {
-    const btnPath =
-      'apps/web/components/orders/reopen-calculation-button.tsx';
-    expect(exists(btnPath)).toBe(true);
-    const btn = read(btnPath);
-    expect(btn).toMatch(/reopenOrderCalculationAction/);
-    expect(btn).toMatch(/Вернуть на пересчёт/);
+  test('«Вернуть на пересчёт» ходит в reopen-ручку через changeOrderStatusAction', () => {
+    const actions = read('apps/web/app/orders/actions.ts');
+    expect(actions).toMatch(/case 'REOPEN_CALCULATION':/);
+    expect(actions).toMatch(/reopenOrderCalculation\(orderId/);
+    const control = read(
+      'apps/web/components/orders/view/order-status-select.tsx',
+    );
+    expect(control).toMatch(/Вернуть заказ на пересчёт\?/);
   });
 });
 

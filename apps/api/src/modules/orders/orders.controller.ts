@@ -92,6 +92,22 @@ export class OrdersController {
     return this.orders.getOne(id);
   }
 
+  /**
+   * Переходы статуса заказа из текущего состояния — тот же массив, что
+   * лежит в `OrderDetailDto.availableTransitions`, но БЕЗ сборки всей
+   * карточки (узкий `select`, без items/passports/снимков).
+   *
+   * Нужен контролу «Статус заказа» в СТРОКЕ списка `/admin/orders`:
+   * считать гейты для каждой строки на рендере списка — это N заказов ×
+   * проверки позиций/лекала, поэтому web догружает переходы лениво, по
+   * открытию списка в конкретной строке.
+   */
+  @Get(':id/transitions')
+  @Roles('SHOP_MANAGER', 'CUTTER_ASSISTANT')
+  getTransitions(@Param('id') id: string) {
+    return this.orders.getTransitions(id);
+  }
+
   @Patch(':id')
   update(
     @Param('id') id: string,

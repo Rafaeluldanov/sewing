@@ -7,15 +7,16 @@
  * Состав строго ограничен summary-полями + основными действиями,
  * без таблиц и без дублирующих блоков:
  *
- *   1. Идентификация: номер заказа, бейдж статуса, колокольчик
- *      уведомлений (`OrderAlertsBell` — задачи и предупреждения по
- *      заказу со счётчиком), эйлер «Карточка заказа».
+ *   1. Идентификация: номер заказа, контрол статуса (`OrderStatusSelect`
+ *      — бейдж раскрывается в список всего маршрута заказа),
+ *      колокольчик уведомлений (`OrderAlertsBell` — задачи и
+ *      предупреждения по заказу со счётчиком), эйлер «Карточка заказа».
  *   2. Meta-grid (компактная сетка): клиент, срок (deadline-бейдж +
  *      «осталось N дн.»), номенклатура, цвет, общий план, выпущено
  *      паспортов, упаковано, прогресс выпуска.
- *   3. Action-row: workflow (Перевести в расчёт / Запустить в
- *      производство / Завершить / Отменить / Пересчитать план), плюс
- *      «Редактировать» (DRAFT) и «Выпустить паспорт» (IN_PRODUCTION).
+ *   3. Action-row: только НЕ-статусные действия — «Рассчитать вариант»,
+ *      «Пересчитать план», «Редактировать», «Удалить» (для CANCELLED),
+ *      «К списку». Все переходы статуса ушли в контрол из п.1.
  *
  * Что СОЗНАТЕЛЬНО НЕ показываем (см. ТЗ «Не перегружай шапку
  * таблицами»):
@@ -43,11 +44,7 @@ import type { OrderDetailDto } from '@sewing/shared/orders';
 import { isOrderPlanEditable } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 import { AdminStatusBadge } from '@/components/admin';
-import {
-  formatOrderStatus,
-  getOrderStatusTone,
-  type AdminStatusTone,
-} from '@/lib/admin-labels';
+import type { AdminStatusTone } from '@/lib/admin-labels';
 import {
   formatDateRu,
   formatDaysLeft,
@@ -65,13 +62,10 @@ import {
   resolveAlertsTone,
 } from './order-action-center';
 import { OrderAlertsBell } from './order-alerts-bell';
-import { CancelOrderButton } from './cancel-order-button';
 import { DeleteOrderButton } from './delete-order-button';
-import { CompleteOrderButton } from './complete-order-button';
 import { RecalculateOperationPlanButton } from '@/components/orders/recalculate-operation-plan-button';
-import { ReopenCalculationButton } from '@/components/orders/reopen-calculation-button';
 import { StartCalculationButton } from '@/components/orders/start-calculation-button';
-import { StartProductionButton } from '@/components/orders/start-production-button';
+import { OrderStatusSelect } from './order-status-select';
 
 interface Props {
   order: OrderDetailDto;
@@ -122,8 +116,6 @@ export function OrderManagementHeader({
   activeCalculationDraft,
 }: Props) {
   const status = order.status;
-  const statusTone: AdminStatusTone = getOrderStatusTone(status);
-  const statusLabel = formatOrderStatus(status);
   const nomenclature = resolveOrderNomenclature(order);
   const patternHref = resolveOrderPatternHref(order);
   const clientName = order.client?.name ?? order.customer ?? null;
@@ -148,34 +140,15 @@ export function OrderManagementHeader({
   const alertsTone = resolveAlertsTone(alerts);
   const alertsDangerCount = alerts.filter((a) => a.tone === 'danger').length;
 
-  // План на запуск/завершение/отмену зависит от статуса.
-  // DRAFT             → «Перевести в расчёт» + «Пересчитать план» + «Отменить» + «Редактировать»
-  // CALCULATION       → «Запустить в производство» + «Пересчитать план» + «Отменить» + «Редактировать»
-  // CALCULATION_DONE  → «Запустить в производство» + «Вернуть на пересчёт» + «Отменить» + «Редактировать»
-  // SAMPLE_PRODUCTION → «Запустить в производство» (полный тираж) + «Отменить»
-  // IN_PRODUCTION     → «Завершить» + «Отменить» + «Выпустить паспорт»
-  // DONE / CANCELLED  → нет действий (read-only)
-  const showStartCalc = status === 'DRAFT';
+  // Смена статуса целиком уехала в контрол «Статус заказа» рядом с
+  // бейджем (`OrderStatusSelect` + `OrderDetailDto.availableTransitions`).
+  // Здесь остались только НЕ-статусные действия:
+  //
   // Итерация 3 «стадия per вариант»: активный вариант-черновик на заказе
   // в расчёте — кнопка «Рассчитать вариант» (без смены статуса заказа).
   const showCalcVariant =
     status === 'CALCULATION' && activeCalculationDraft === true;
-  // Полный запуск тиража доступен и из «Производства сигнального
-  // образца»: образец уже в работе, менеджер запускает весь тираж
-  // (backend `OrdersService.start` принимает SAMPLE_PRODUCTION).
-  const showStartProd =
-    status === 'CALCULATION' ||
-    status === 'CALCULATION_DONE' ||
-    status === 'SAMPLE_PRODUCTION';
   const showRecalcPlan = status === 'DRAFT' || status === 'CALCULATION';
-  const showReopenCalc = status === 'CALCULATION_DONE';
-  const showComplete = status === 'IN_PRODUCTION';
-  const showCancel =
-    status === 'DRAFT' ||
-    status === 'CALCULATION' ||
-    status === 'CALCULATION_DONE' ||
-    status === 'SAMPLE_PRODUCTION' ||
-    status === 'IN_PRODUCTION';
   // «Редактировать» доступно до запуска производства (DRAFT/CALCULATION/
   // CALCULATION_DONE): в CALCULATION/CALCULATION_DONE форма даёт править
   // безопасные плановые поля (подразделение, маршрут) + управленческие;
@@ -195,7 +168,18 @@ export function OrderManagementHeader({
           <h2 className="order-hero-card__title">Заказ {order.number}</h2>
         </div>
         <div className="order-hero-card__status">
-          <AdminStatusBadge tone={statusTone}>{statusLabel}</AdminStatusBadge>
+          {/*
+            Контрол «Статус заказа»: бейдж раскрывается в список всего
+            маршрута заказа. Раньше здесь стоял статичный бейдж, а
+            переходы были разложены по кнопкам action-row — недоступные
+            просто не рендерились, и причина «почему нельзя» была видна
+            только в тексте 409-й ошибки после клика.
+          */}
+          <OrderStatusSelect
+            orderId={order.id}
+            status={status}
+            transitions={order.availableTransitions}
+          />
           <OrderAlertsBell
             count={alerts.length}
             tone={alertsTone}
@@ -446,23 +430,19 @@ export function OrderManagementHeader({
         role="group"
         aria-label="Действия по заказу"
       >
-        {showStartCalc && <StartCalculationButton orderId={order.id} />}
+        {/*
+          Кнопок смены статуса здесь больше нет — все переходы живут в
+          контроле «Статус заказа» рядом с бейджем (см. `OrderStatusSelect`).
+          В action-row остаются только НЕ-статусные действия.
+        */}
         {showCalcVariant && (
           <StartCalculationButton orderId={order.id} variantMode />
         )}
-        {showStartProd && <StartProductionButton orderId={order.id} />}
         {showRecalcPlan && (
           <RecalculateOperationPlanButton
             orderId={order.id}
             mode="secondary"
           />
-        )}
-        {showReopenCalc && <ReopenCalculationButton orderId={order.id} />}
-        {showComplete && (
-          <CompleteOrderButton orderId={order.id} status={status} />
-        )}
-        {showCancel && (
-          <CancelOrderButton orderId={order.id} status={status} />
         )}
         {/* Hard-delete: компонент сам рисует кнопку только для CANCELLED. */}
         <DeleteOrderButton orderId={order.id} status={status} />

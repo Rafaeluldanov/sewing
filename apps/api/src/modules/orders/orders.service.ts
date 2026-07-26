@@ -38,6 +38,11 @@ import {
   evaluateOrderDeadline,
   type EvaluateOrderDeadlineInput,
 } from '@sewing/shared/order-deadlines';
+import {
+  evaluateOrderTransitions,
+  type OrderTransitionContext,
+  type OrderTransitionDto,
+} from '@sewing/shared/order-transitions';
 import type {
   OutsourceTriggerType,
   TechCardMaterialColorRule,
@@ -117,6 +122,12 @@ type OrderWithItems = Prisma.OrderGetPayload<{
       };
     };
     applications: { include: { sizes: { include: { size: true } } } };
+    /**
+     * Фича «Расцветки»: техкарта может быть задана не на заказ, а на
+     * каждую расцветку. Нужна одна колонка — гейт «есть ли техкарта»
+     * для `availableTransitions` (см. `buildTransitionContext`).
+     */
+    variants: { select: { techCardId: true } };
     /**
      * PHASE 1 «CompanyDivision как master-справочник» (см.
      * `prisma/schema.prisma::Order.companyDivisionId`,
@@ -1661,6 +1672,9 @@ export class OrdersService {
         // Этап «Склад выпуска готовой продукции»: краткие реквизиты
         // выбранного склада-получателя для `OrderDetailDto`.
         finishedGoodsWarehouse: true,
+        // Только `techCardId` — нужен гейту «есть ли техкарта» для
+        // `availableTransitions` (техкарта бывает per-расцветка).
+        variants: { select: { techCardId: true } },
       },
     });
     if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND', message: 'Заказ не найден' });
@@ -2826,6 +2840,46 @@ export class OrdersService {
   // TRANSITIONS
   // -------------------------------------------------------------------------
 
+  /**
+   * Переходы статуса заказа без сборки всей карточки — для контрола
+   * «Статус заказа» в строке списка `/admin/orders` (ленивый догруз по
+   * открытию списка). Тот же helper, что и в `toDetailDto`, поэтому
+   * список и карточка не разъедутся; отличается только объём выборки:
+   * здесь узкий `select`, без снимков, паспортов и потребностей.
+   */
+  async getTransitions(id: string): Promise<OrderTransitionDto[]> {
+    const order = await this.prisma.order.findUnique({
+      where: { id },
+      select: {
+        status: true,
+        clientId: true,
+        techCardId: true,
+        patternItemId: true,
+        patternItem: { select: { status: true } },
+        items: { select: { qtyPlan: true } },
+        variants: { select: { techCardId: true } },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    return evaluateOrderTransitions({
+      status: order.status,
+      hasClient: order.clientId != null,
+      hasItems: order.items.length > 0,
+      hasPlannedQty: order.items.reduce((s, it) => s + it.qtyPlan, 0) > 0,
+      hasPattern: order.patternItemId != null,
+      patternActive:
+        order.patternItemId == null || order.patternItem?.status === 'ACTIVE',
+      hasTechCard:
+        order.techCardId != null ||
+        order.variants.some((v) => v.techCardId != null),
+    });
+  }
+
   async start(
     id: string,
     actorEmployeeId?: string | null,
@@ -3887,6 +3941,14 @@ export class OrdersService {
         .slice()
         .sort((a, b) => a.sortOrder - b.sortOrder)
         .map((l) => mapLogisticsLineToDto(l)),
+      // Контрол «Статус заказа» (выпадающий список в шапке карточки):
+      // весь маршрут заказа с причинами блокировок. Считает общий
+      // pure-helper — он же зеркалит гейты `startCalculation` / `start`,
+      // чтобы список не предлагал заведомо 409-й переход. См.
+      // `buildTransitionContext`.
+      availableTransitions: evaluateOrderTransitions(
+        buildTransitionContext(order),
+      ),
     };
   }
 
@@ -5290,6 +5352,35 @@ export class OrdersService {
  * unit-ом `tests/unit/order-deadlines.test.ts` и интеграционно
  * `tests/integration/orders-deadlines.test.ts`.
  */
+/**
+ * Собирает плоский контекст для `evaluateOrderTransitions` из загруженного
+ * заказа. Все поля читаются из уже подгруженных связей `getOne` — ни
+ * одного дополнительного запроса.
+ *
+ * Гейты, которые здесь зеркалятся (см. `@sewing/shared/order-transitions`):
+ *   - `startCalculation` → лекало / клиент / техкарта / позиции;
+ *   - `start`            → позиции + `PatternItem.status = ACTIVE`.
+ *
+ * Правило `patternActive`: если лекало у заказа не выбрано, гейт
+ * неприменим (в `start()` проверка стоит под `if (order.patternItemId)`),
+ * поэтому отдаём `true` — иначе список показал бы ложную блокировку.
+ */
+function buildTransitionContext(order: OrderWithItems): OrderTransitionContext {
+  const hasVariantTechCard = (order.variants ?? []).some(
+    (v) => v.techCardId != null,
+  );
+  return {
+    status: order.status,
+    hasClient: order.clientId != null,
+    hasItems: order.items.length > 0,
+    hasPlannedQty: order.items.reduce((s, it) => s + it.qtyPlan, 0) > 0,
+    hasPattern: order.patternItemId != null,
+    patternActive:
+      order.patternItemId == null || order.patternItem?.status === 'ACTIVE',
+    hasTechCard: order.techCardId != null || hasVariantTechCard,
+  };
+}
+
 function evaluateDeadlineForDto(
   input: EvaluateOrderDeadlineInput,
 ): OrderDeadlineDto {

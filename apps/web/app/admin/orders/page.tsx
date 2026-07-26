@@ -65,7 +65,8 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
-import { formatOrderStatus, getOrderStatusTone } from '@/lib/admin-labels';
+import { formatOrderStatus } from '@/lib/admin-labels';
+import { OrderStatusSelect } from '@/components/orders/view/order-status-select';
 import {
   CONSTRUCTOR_TASK_STATUS_LABELS,
   CONSTRUCTOR_TASK_STATUS_TONE,
@@ -362,6 +363,7 @@ export default async function AdminOrdersPage({
         <OrdersTable
           items={items}
           orgName={orgName}
+          canManage={isManager}
           filtered={Boolean(
             query.search ||
               query.status ||
@@ -433,11 +435,17 @@ function OrdersTable({
   items,
   orgName,
   filtered,
+  canManage,
 }: {
   items: OrderListItemDto[];
   orgName: string | null;
   /** Активен ли поиск/фильтр — от этого зависит текст пустого состояния. */
   filtered: boolean;
+  /**
+   * ADMIN/SHOP_MANAGER — статус в строке переключаемый; остальным
+   * (CUTTER_ASSISTANT) контрол рисуется обычным бейджем.
+   */
+  canManage: boolean;
 }) {
   const columns: AdminTableColumn<OrderListItemDto>[] = [
     {
@@ -517,9 +525,18 @@ function OrdersTable({
               flexWrap: 'wrap',
             }}
           >
-            <AdminStatusBadge tone={getOrderStatusTone(o.status)}>
-              {formatOrderStatus(o.status)}
-            </AdminStatusBadge>
+            {/*
+              Контрол «Статус заказа» прямо в строке: список переходов
+              догружается лениво по открытию (`GET /orders/:id/transitions`),
+              а не считается для всех строк на рендере — это N заказов ×
+              проверки позиций/лекала/техкарты.
+            */}
+            <OrderStatusSelect
+              orderId={o.id}
+              status={o.status}
+              compact
+              readOnly={!canManage}
+            />
             {showTaskBadge && (
               <AdminStatusBadge
                 tone={CONSTRUCTOR_TASK_STATUS_TONE[taskStatus]}

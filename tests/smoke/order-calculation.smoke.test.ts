@@ -228,13 +228,14 @@ describe('/admin/orders/[id] — кнопка «Перевести в расчё
     'apps/web/components/orders/view/order-management-header.tsx';
   const src = read(headerPath);
 
-  test('OrderManagementHeader подключает StartCalculationButton (рендерится при DRAFT)', () => {
-    expect(src).toMatch(/StartCalculationButton/);
-    // Решение «какая кнопка для какого статуса» живёт через
-    // `showStartCalc / showStartProd / ...` булевы; сами кнопки
-    // импортируются из существующих shared-компонентов.
-    expect(src).toMatch(/showStartCalc/);
-    expect(src).toMatch(/StartProductionButton/);
+  test('переход DRAFT → «Расчёт» живёт в контроле статуса, а не в кнопке шапки', () => {
+    // Кнопки смены статуса из шапки убраны: все переходы рисует
+    // `OrderStatusSelect` по `OrderDetailDto.availableTransitions`.
+    expect(src).toMatch(/<OrderStatusSelect/);
+    expect(src).toMatch(/transitions=\{order\.availableTransitions\}/);
+    expect(src).not.toMatch(/<StartProductionButton\b/);
+    // «Рассчитать вариант» остаётся кнопкой — это не смена статуса.
+    expect(src).toMatch(/<StartCalculationButton[\s\S]*?variantMode/);
   });
 
   test('OrderNeedsTab → OrderMaterialsUnifiedTable + ManualMaterialArrivalActions с orderStatus', () => {
@@ -293,36 +294,69 @@ describe('/admin/orders/[id] — workflow actions в OrderManagementHeader', () 
     expect(pageSrc).not.toMatch(/className="admin-order-detail-layout"/);
   });
 
-  test('OrderManagementHeader выбирает кнопки по статусу через showStart*/showComplete/showCancel', () => {
-    expect(src).toMatch(/showStartCalc\s*=\s*status === 'DRAFT'/);
-    expect(src).toMatch(
-      /showStartProd\s*=\s*\n?\s*status === 'CALCULATION'\s*\|\|\s*status === 'CALCULATION_DONE'/,
-    );
-    expect(src).toMatch(/showReopenCalc\s*=\s*status === 'CALCULATION_DONE'/);
-    expect(src).toMatch(/showComplete\s*=\s*status === 'IN_PRODUCTION'/);
-    expect(src).toMatch(/showCancel\s*=/);
+  test('в шапке остались только НЕ-статусные действия', () => {
+    // Статусные `show*`-флаги удалены вместе с кнопками: какой переход
+    // доступен, решает backend (`evaluateOrderTransitions`).
+    expect(src).not.toMatch(/showStartCalc/);
+    expect(src).not.toMatch(/showStartProd/);
+    expect(src).not.toMatch(/showComplete\s*=/);
+    expect(src).not.toMatch(/showCancel\s*=/);
+    // Не-статусные действия на месте.
+    expect(src).toMatch(/showRecalcPlan\s*=/);
+    expect(src).toMatch(/showEdit\s*=\s*isOrderPlanEditable\(status\)/);
+    expect(src).toMatch(/<DeleteOrderButton/);
   });
 });
 
-describe('StartProductionButton — UI-обёртка над startOrderAction (CALCULATION → IN_PRODUCTION)', () => {
-  const file = 'apps/web/components/orders/start-production-button.tsx';
+describe('OrderStatusSelect — контрол статуса поверх существующих ручек', () => {
+  const file = 'apps/web/components/orders/view/order-status-select.tsx';
 
   test('файл существует и зарегистрирован как клиентский компонент', () => {
     expect(exists(file)).toBe(true);
-    const src = read(file);
-    expect(src).toMatch(/^['"]use client['"]/);
+    expect(read(file)).toMatch(/^['"]use client['"]/);
   });
 
-  test('кнопка вызывает существующий startOrderAction без новой бизнес-логики', () => {
+  test('переход выполняется server-action-ом changeOrderStatusAction, гейты не дублируются', () => {
     const src = read(file);
-    expect(src).toMatch(
-      /import \{ startOrderAction \} from '@\/app\/orders\/actions'/,
-    );
-    expect(src).toMatch(/startOrderAction\(orderId\)/);
-    // Confirm-диалог обязателен — после старта план редактировать нельзя.
-    expect(src).toMatch(/window\.confirm/);
-    // Текст самой CTA из ТЗ.
-    expect(src).toMatch(/Запустить в производство/);
+    expect(src).toMatch(/changeOrderStatusAction/);
+    // Ленивый догруз переходов для строки списка заказов.
+    expect(src).toMatch(/loadOrderTransitionsAction/);
+    // Список рисуется по всему маршруту (`ORDER_STATUSES`), а правила
+    // приходят из DTO — своих status-условий у компонента нет.
+    expect(src).toMatch(/ORDER_STATUSES/);
+    expect(src).not.toMatch(/status === 'CALCULATION_DONE'/);
+  });
+
+  test('changeOrderStatusAction — диспетчер поверх существующих ручек, без новых эндпоинтов', () => {
+    const actions = read('apps/web/app/orders/actions.ts');
+    expect(actions).toMatch(/export async function changeOrderStatusAction/);
+    expect(actions).toMatch(/startCalculationOrder\(orderId\)/);
+    expect(actions).toMatch(/startOrder\(orderId\)/);
+    expect(actions).toMatch(/reopenOrderCalculation\(orderId/);
+    expect(actions).toMatch(/completeOrder\(orderId\)/);
+    expect(actions).toMatch(/cancelOrder\(orderId\)/);
+  });
+});
+
+describe('Переходы статуса — единый источник истины в shared', () => {
+  const file = 'packages/shared/src/order-transitions.ts';
+
+  test('pure-helper существует и не тянет prisma/react', () => {
+    expect(exists(file)).toBe(true);
+    const src = read(file);
+    expect(src).toMatch(/export function evaluateOrderTransitions/);
+    // Именно IMPORT-ы: упоминание `@prisma/client` в комментарии
+    // («модуль от него не зависит») — это документация, а не связь.
+    expect(src).not.toMatch(/from '@prisma\/client'/);
+    expect(src).not.toMatch(/from 'react'/);
+  });
+
+  test('backend отдаёт availableTransitions в DTO и отдельной ручкой для списка', () => {
+    const service = read('apps/api/src/modules/orders/orders.service.ts');
+    expect(service).toMatch(/availableTransitions:\s*evaluateOrderTransitions/);
+    expect(service).toMatch(/async getTransitions\(/);
+    const controller = read('apps/api/src/modules/orders/orders.controller.ts');
+    expect(controller).toMatch(/@Get\(':id\/transitions'\)/);
   });
 });
 
