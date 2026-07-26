@@ -179,6 +179,7 @@ export function OrderManagementHeader({
             orderId={order.id}
             status={status}
             transitions={order.availableTransitions}
+            compact
           />
           <OrderAlertsBell
             count={alerts.length}

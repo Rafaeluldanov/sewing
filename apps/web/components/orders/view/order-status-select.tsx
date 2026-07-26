@@ -59,7 +59,10 @@ interface Props {
    * рендер), компонент догрузит по открытию.
    */
   transitions?: OrderTransitionDto[];
-  /** Компактный вид для строки таблицы `/admin/orders`. */
+  /**
+   * Компактный бейдж — в строке таблицы `/admin/orders` и в шапке
+   * карточки заказа: статус там подпись к номеру, а не заголовок.
+   */
   compact?: boolean;
   /** Заказ read-only для текущей роли — рисуем статичный бейдж. */
   readOnly?: boolean;
@@ -149,6 +152,15 @@ function handledInHref(
     return `/admin/orders/${encodeURIComponent(orderId)}?tab=signalSample`;
   }
   return null;
+}
+
+/**
+ * У пункта-ссылки заголовок занят действием («Завершить расчёт»), а
+ * подпись собирается из целевого статуса и причины: «Расчёт завершён» —
+ * статус ставится на другом экране.
+ */
+function lowerFirst(s: string): string {
+  return s.charAt(0).toLowerCase() + s.slice(1);
 }
 
 function handledInLabel(transition: OrderTransitionDto): string {
@@ -413,7 +425,9 @@ export function OrderStatusSelect({
                           {handledInLabel(t)}
                         </span>
                         <span className="order-status-select__option-note">
-                          {t.reason ? `${label} — ${t.reason}` : label}
+                          {t.reason
+                            ? `«${label}» — ${lowerFirst(t.reason)}`
+                            : label}
                         </span>
                       </Link>
                     );
