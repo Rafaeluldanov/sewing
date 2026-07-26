@@ -13,7 +13,12 @@ import type {
   UpdateEmployeeDto,
 } from '@sewing/shared/employees';
 import { normalizeAssignedRoles } from '@sewing/shared/employees';
+import type {
+  BulkArchiveResultDto,
+  BulkArchiveSkipDto,
+} from '@sewing/shared/archive';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { describeBusinessError } from '../../common/bulk-archive.js';
 import {
   CashFlowItemNotFoundException,
   CompanyDivisionInactiveException,
@@ -792,6 +797,127 @@ export class EmployeesService {
     this.logger.log(
       `event=employee.delete id=${id} actor=${viewer.employeeId} login=${target.login} role=${target.role}`,
     );
+  }
+
+  // ===========================================================================
+  // АРХИВ СОТРУДНИКОВ — bulk archive / restore / purge
+  // ===========================================================================
+  //
+  // Общий контур справочников админки (`@sewing/shared/archive`) для
+  // списка `/admin/employees`. Здесь он НЕ повторяет логику, а
+  // оборачивает уже существующие одиночные `archive` / `restore` /
+  // `hardDelete`: там живут все гейты раздела (нельзя на себе, нельзя
+  // последнего админа, нельзя архивировать с открытой сменой, нельзя
+  // удалить с историей). Дублировать их — гарантированно разъехаться.
+  //
+  // Цена — цикл вместо `updateMany`: на десятках сотрудников это
+  // несущественно, а поведение остаётся ровно тем же, что и у кнопок
+  // на карточке.
+
+  /** Перевод доменного исключения раздела в причину пропуска. */
+  private toArchiveSkip(id: string, e: unknown): BulkArchiveSkipDto {
+    if (e instanceof EmployeeNotFoundException) {
+      return { id, reason: 'NOT_FOUND' };
+    }
+    if (
+      e instanceof EmployeeArchiveBlockedException ||
+      e instanceof EmployeeHasHistoryException
+    ) {
+      return { id, reason: 'IN_USE', detail: describeBusinessError(e) };
+    }
+    if (
+      e instanceof EmployeeCannotModifySelfException ||
+      e instanceof EmployeeLastAdminException ||
+      e instanceof EmployeeAdminTargetForbiddenException ||
+      e instanceof EmployeeDisplayCascadeAckRequiredException
+    ) {
+      return { id, reason: 'FORBIDDEN', detail: describeBusinessError(e) };
+    }
+    throw e;
+  }
+
+  async archiveMany(
+    ids: string[],
+    viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    const processed: string[] = [];
+    const skipped: BulkArchiveSkipDto[] = [];
+    for (const id of Array.from(new Set(ids))) {
+      try {
+        await this.archive(id, viewer);
+        processed.push(id);
+      } catch (e) {
+        skipped.push(this.toArchiveSkip(id, e));
+      }
+    }
+    this.logger.log(
+      `event=employee.archive.bulk processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
+  }
+
+  async restoreMany(
+    ids: string[],
+    viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    const processed: string[] = [];
+    const skipped: BulkArchiveSkipDto[] = [];
+    for (const id of Array.from(new Set(ids))) {
+      try {
+        await this.restore(id, viewer);
+        processed.push(id);
+      } catch (e) {
+        skipped.push(this.toArchiveSkip(id, e));
+      }
+    }
+    this.logger.log(
+      `event=employee.restore.bulk processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
+  }
+
+  /**
+   * Безвозвратное удаление учёток из архива.
+   *
+   * Дополнительно к гейтам `hardDelete` требуем, чтобы учётка была
+   * архивной: со списка легко промахнуться мимо строки, поэтому
+   * массовый путь строже одиночной кнопки на карточке (там ADMIN
+   * подтверждает удаление вводом логина).
+   *
+   * `ackDisplayCascade` НЕ проставляем: если к сотруднику привязан
+   * экран цеха, удаление снесло бы его каскадом. Такие пропускаем с
+   * пояснением — экран убирается в своём разделе.
+   */
+  async purgeMany(
+    ids: string[],
+    viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    const processed: string[] = [];
+    const skipped: BulkArchiveSkipDto[] = [];
+    for (const id of Array.from(new Set(ids))) {
+      try {
+        const target = await this.prisma.employee.findUnique({
+          where: { id },
+          select: { id: true, active: true },
+        });
+        if (!target) {
+          skipped.push({ id, reason: 'NOT_FOUND' });
+          continue;
+        }
+        if (target.active) {
+          skipped.push({ id, reason: 'NOT_ARCHIVED' });
+          continue;
+        }
+        await this.hardDelete(id, viewer);
+        processed.push(id);
+      } catch (e) {
+        skipped.push(this.toArchiveSkip(id, e));
+      }
+    }
+    this.logger.log(
+      `event=employee.purge.bulk processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
   }
 
   /**

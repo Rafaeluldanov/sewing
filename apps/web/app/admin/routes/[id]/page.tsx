@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { Activity, ArrowLeft, Trash2 } from 'lucide-react';
+import { Activity, ArrowLeft } from 'lucide-react';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getRouteTemplate } from '@/lib/routes-api';
 import { getShiftMeta } from '@/lib/shifts-api';
@@ -13,11 +13,16 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTechInfo,
+  ArchiveCardButtons,
   type AdminRouteStep,
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
 import { RouteTemplateForm } from '../route-template-form';
-import { deleteRouteTemplateAction } from '../actions';
+import {
+  archiveRoutesAction,
+  purgeRoutesAction,
+  restoreRoutesAction,
+} from '../archive-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -125,14 +130,21 @@ export default async function AdminRouteTemplateDetailPage({ params }: Params) {
       </AdminCard>
 
       <AdminCard>
-        <AdminSectionHeader title="Опасная зона" />
-        <form action={deleteRouteTemplateAction} className="admin-actions-row">
-          <input type="hidden" name="id" value={template.id} />
-          <button type="submit" className="admin-btn admin-btn--danger">
-            <Trash2 size={16} strokeWidth={1.6} aria-hidden />
-            Удалить шаблон
-          </button>
-        </form>
+        <AdminSectionHeader
+          title="Опасная зона"
+          hint="Удаление навсегда — только из архива: сначала «В архив», потом «Удалить навсегда»."
+        />
+        <ArchiveCardButtons
+          id={template.id}
+          archived={!template.isActive}
+          name={template.name}
+          listHref="/admin/routes"
+          archive={archiveRoutesAction}
+          restore={restoreRoutesAction}
+          purge={purgeRoutesAction}
+          archiveHint="Шаблон перестанет предлагаться в новых заказах; запущенные заказы идут по своему снимку маршрута."
+          purgeHint="Вместе с шаблоном пропадёт его набор операций."
+        />
       </AdminCard>
 
       <AdminTechInfo

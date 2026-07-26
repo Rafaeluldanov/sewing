@@ -19,6 +19,11 @@ import {
   type UpdateOperationDto,
   type UpdateOperationEquipmentDto,
 } from '@sewing/shared/operations';
+import {
+  BulkArchiveRequestSchema,
+  type BulkArchiveRequestDto,
+  type BulkArchiveResultDto,
+} from '@sewing/shared/archive';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
@@ -120,5 +125,42 @@ export class OperationsController {
     @CurrentUser() viewer: AuthPrincipal,
   ): Promise<void> {
     await this.operations.remove(id, viewer);
+  }
+
+  /**
+   * Массовые операции архива со списка `/admin/operations` (контракт —
+   * `@sewing/shared/archive`): `active = false` → обратно → удалить
+   * навсегда (только из архива и только если нет истории/маршрутов).
+   *
+   * `purge` оставлен `ADMIN`-only, как и одиночный `DELETE :id`:
+   * необратимая операция. `archive`/`restore` — обратимы, доступны и
+   * `SHOP_MANAGER` (класс-уровневый `@Roles`).
+   */
+  @Post('archive')
+  archiveMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.operations.archiveMany(dto.ids, viewer);
+  }
+
+  @Post('restore')
+  restoreMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.operations.restoreMany(dto.ids, viewer);
+  }
+
+  @Roles('ADMIN')
+  @Post('purge')
+  purgeMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.operations.purgeMany(dto.ids, viewer);
   }
 }

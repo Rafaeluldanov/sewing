@@ -2292,6 +2292,95 @@ override в `null` (вернуть «наследовать»). Для override-
 
 ---
 
+<a id="43-archive"></a>
+## 43. Архив справочников (archive / restore / purge)
+
+Единый контракт «сначала архив, потом безвозвратное удаление» для
+справочников админки. Контракт — `packages/shared/src/archive.ts`
+(`BulkArchiveRequestSchema`, `BulkArchiveResultDto`), общая механика на
+backend — `apps/api/src/common/bulk-archive.ts`, UI — `AdminArchiveTabs`
++ `BulkArchiveProvider` (`apps/web/components/admin`).
+
+У всех разделов одинаковые три ручки:
+
+| Метод | Путь                 | Описание |
+| ----- | -------------------- | -------- |
+| POST  | `{base}/archive`     | Мягкая архивация. Обратимо, данные сохраняются. Идемпотентно. |
+| POST  | `{base}/restore`     | Возврат из архива. Идемпотентно. |
+| POST  | `{base}/purge`       | Безвозвратное удаление. **Только из архива** + гейт раздела «используется». |
+
+Тело — `{ "ids": ["…"] }` (1..1000). Ответ — частичный успех:
+`{ "processed": ["…"], "skipped": [{ "id", "reason", "detail"? }] }`,
+где `reason` ∈ `NOT_FOUND` | `NOT_ARCHIVED` | `IN_USE` | `FORBIDDEN`.
+4xx прилетает только на невалидное тело или RBAC.
+
+| Раздел | `{base}` | Признак архива | Гейт `purge` |
+| ------ | -------- | -------------- | ------------ |
+| Номенклатура | `/api/patterns` | `status = ARCHIVED` | ссылки заказов (`Order.patternItemId`) |
+| Техкарты | `/api/tech-cards` | `isActive = false` | заказы, расцветки заказов, снимки строк в потребностях |
+| Маршруты | `/api/routes` | `isActive = false` | заказы, пробники (`OrderSample`) |
+| Операции | `/api/operations` | `active = false` | `GET :id/blockers` (история/маршруты/substitute). `purge` — `ADMIN`-only |
+| Заявки конструктору | `/api/constructor-tasks` | `archivedAt != null` | — (строки размеров и вложения уходят каскадом; лекало остаётся) |
+| Цеховой монитор | `/api/display-screens` | `isActive = false` | — (archive гасит DISPLAY-учётку, purge удаляет и её) |
+| Оборудование | `/api/equipment` | `active = false` | смены, события паспортов, вызовы мастера |
+| Принтеры | `/api/printers` | `isActive = false` | — (очередь `PrintJob` уходит каскадом) |
+| Сотрудники | `/api/employees` | `active = false` | гейты раздела (история, «нельзя на себе», последний админ, экран цеха). `purge` — `ADMIN`-only |
+| Поставщики | `/api/suppliers` | `status = INACTIVE` | заказы поставщикам |
+
+Полный список путей (для инвентаризации и `npm run docs:check`):
+
+| Метод | Путь | RBAC | Описание |
+| ----- | ---- | ---- | -------- |
+| POST | `/api/patterns/archive` | ADMIN, SHOP_MANAGER | Номенклатура: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/patterns/restore` | ADMIN, SHOP_MANAGER | Номенклатура: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/patterns/purge` | ADMIN, SHOP_MANAGER | Номенклатура: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/tech-cards/archive` | ADMIN, SHOP_MANAGER | Техкарты: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/tech-cards/restore` | ADMIN, SHOP_MANAGER | Техкарты: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/tech-cards/purge` | ADMIN, SHOP_MANAGER | Техкарты: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/routes/archive` | ADMIN, SHOP_MANAGER | Маршруты: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/routes/restore` | ADMIN, SHOP_MANAGER | Маршруты: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/routes/purge` | ADMIN, SHOP_MANAGER | Маршруты: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/operations/archive` | ADMIN, SHOP_MANAGER | Операции: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/operations/restore` | ADMIN, SHOP_MANAGER | Операции: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/operations/purge` | **ADMIN** | Операции: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/constructor-tasks/archive` | ADMIN, SHOP_MANAGER | Заявки конструктору: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/constructor-tasks/restore` | ADMIN, SHOP_MANAGER | Заявки конструктору: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/constructor-tasks/purge` | ADMIN, SHOP_MANAGER | Заявки конструктору: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/display-screens/archive` | ADMIN, SHOP_MANAGER | Цеховой монитор: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/display-screens/restore` | ADMIN, SHOP_MANAGER | Цеховой монитор: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/display-screens/purge` | ADMIN, SHOP_MANAGER | Цеховой монитор: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/equipment/archive` | ADMIN, SHOP_MANAGER | Оборудование: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/equipment/restore` | ADMIN, SHOP_MANAGER | Оборудование: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/equipment/purge` | ADMIN, SHOP_MANAGER | Оборудование: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/printers/archive` | ADMIN, SHOP_MANAGER | Принтеры: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/printers/restore` | ADMIN, SHOP_MANAGER | Принтеры: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/printers/purge` | ADMIN, SHOP_MANAGER | Принтеры: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/employees/archive` | ADMIN, SHOP_MANAGER | Сотрудники: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/employees/restore` | ADMIN, SHOP_MANAGER | Сотрудники: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/employees/purge` | **ADMIN** | Сотрудники: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/suppliers/archive` | ADMIN, SHOP_MANAGER | Поставщики: мягкая архивация. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/suppliers/restore` | ADMIN, SHOP_MANAGER | Поставщики: возврат из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/suppliers/purge` | ADMIN, SHOP_MANAGER | Поставщики: безвозвратное удаление из архива. Тело `BulkArchiveRequestDto`, ответ `BulkArchiveResultDto`. |
+| POST | `/api/employees/:id/archive` | SHOP_MANAGER, ADMIN | Одиночная архивация карточки сотрудника (была до общего контракта; bulk выше её и вызывает). |
+| POST | `/api/employees/:id/restore` | SHOP_MANAGER, ADMIN | Одиночный возврат карточки сотрудника из архива. |
+| POST | `/api/workshop-needs/archive` | ADMIN, SHOP_MANAGER | Архив расчётов цеха — предшественник этого контракта: единица операции ЗАКАЗ, тело `{ orderIds }`, свои причины пропуска (см. `@sewing/shared/workshop-needs`). |
+| POST | `/api/workshop-needs/restore` | ADMIN, SHOP_MANAGER | Вернуть заказ(ы) в список потребностей. |
+| POST | `/api/workshop-needs/purge` | ADMIN, SHOP_MANAGER | Безвозвратно стереть просчёт заказа (варианты + строки потребности); сам заказ остаётся. |
+
+Одиночные пути, где они уже были, сохранены и подчиняются той же
+политике: `DELETE /api/patterns/:id/permanent`,
+`DELETE /api/tech-cards/:id/permanent`, `DELETE /api/routes/:id`
+(теперь 409 `ROUTE_TEMPLATE_DELETE_FORBIDDEN` для активного шаблона или
+используемого заказами), `DELETE /api/printers/:id`
+(409 `PRINTER_DELETE_FORBIDDEN` для активного), `DELETE /api/operations/:id`
+и `DELETE /api/employees/:id` (`ADMIN`-only, с preflight `:id/blockers`),
+`DELETE /api/suppliers/:id`.
+
+Аудит: `<X>S_ARCHIVED` / `<X>S_RESTORED` (одно событие на пачку) и
+`<X>_DELETED` на каждую удалённую запись (`payload.bulk = true`).
+
+---
+
 ## Что отсутствует в API (умышленно или legacy)
 
 PHASE 1 явно фиксирует:

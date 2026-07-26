@@ -33,7 +33,14 @@ import {
   type SaveConstructorDraftResultDto,
 } from '@sewing/shared/constructor-tasks';
 
+import {
+  BulkArchiveRequestSchema,
+  type BulkArchiveRequestDto,
+  type BulkArchiveResultDto,
+} from '@sewing/shared/archive';
+
 import { ConstructorTaskFileInvalidException } from '../../common/errors.js';
+import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { ConstructorTasksService } from './constructor-tasks.service.js';
@@ -71,6 +78,46 @@ export class ConstructorTasksController {
   @Roles('ADMIN', 'SHOP_MANAGER')
   list(): Promise<ConstructorTaskSummaryDto[]> {
     return this.tasks.list();
+  }
+
+  /**
+   * Массовые операции архива со списка `/admin/constructor-tasks`
+   * (контракт — `@sewing/shared/archive`): `archivedAt := now` →
+   * обратно → удалить навсегда (только из архива; вместе с заявкой
+   * уходят её строки размеров и вложения, DRAFT-лекало остаётся).
+   * Ответ — частичный успех.
+   *
+   * Объявлены ДО `@Get(':id')` для читаемости; конфликта нет —
+   * одноимённого `@Post(':id')` в контроллере не существует.
+   */
+  @Post('archive')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  archiveMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.tasks.archiveMany(dto.ids, user.employeeId);
+  }
+
+  @Post('restore')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  restoreMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.tasks.restoreMany(dto.ids, user.employeeId);
+  }
+
+  @Post('purge')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  purgeMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.tasks.purgeMany(dto.ids, user.employeeId);
   }
 
   /**

@@ -28,6 +28,11 @@ import {
   type UpdateSupplierContactDto,
   type UpdateSupplierDto,
 } from '@sewing/shared/suppliers';
+import {
+  BulkArchiveRequestSchema,
+  type BulkArchiveRequestDto,
+  type BulkArchiveResultDto,
+} from '@sewing/shared/archive';
 
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Roles } from '../auth/auth.decorators.js';
@@ -118,6 +123,38 @@ export class SuppliersController {
   // ---------------------------------------------------------------------------
   // Contacts
   // ---------------------------------------------------------------------------
+
+  /**
+   * Массовые операции архива со списка `/admin/suppliers` (контракт —
+   * `@sewing/shared/archive`): `status = INACTIVE` → обратно → удалить
+   * навсегда (только из архива и только если нет заказов поставщикам).
+   */
+  @Post('archive')
+  archiveMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.suppliers.archiveMany(dto.ids, user.employeeId);
+  }
+
+  @Post('restore')
+  restoreMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.suppliers.restoreMany(dto.ids, user.employeeId);
+  }
+
+  @Post('purge')
+  purgeMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.suppliers.purgeMany(dto.ids, user.employeeId);
+  }
 
   @Post(':id/contacts')
   createContact(

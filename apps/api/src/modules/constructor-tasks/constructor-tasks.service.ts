@@ -17,7 +17,11 @@ import {
   type SaveConstructorDraftResultDto,
 } from '@sewing/shared/constructor-tasks';
 
+import type { BulkArchiveResultDto } from '@sewing/shared/archive';
+
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
 import {
   ConstructorTaskAcceptInvalidException,
   ConstructorTaskAlreadyExistsException,
@@ -65,7 +69,153 @@ export class ConstructorTasksService {
     private readonly storage: ConstructorTasksStorageService,
     private readonly patternsStorage: PatternsStorageService,
     private readonly orderNumbers: OrderNumberService,
+    private readonly audit: AuditService,
   ) {}
+
+  // ---------------------------------------------------------------------------
+  // АРХИВ ЗАЯВОК — bulk archive / restore / purge
+  // ---------------------------------------------------------------------------
+  //
+  // Общий контур справочников админки (`@sewing/shared/archive`).
+  // Признак архива — `ConstructorTask.archivedAt` (отдельное поле, а не
+  // статус: `status` описывает ход работы КБ и переписывать его ради
+  // «убрать с глаз» нельзя — см. комментарий в schema.prisma).
+  //
+  // purge удаляет саму заявку; строки размеров и вложения уходят
+  // каскадом. DRAFT-лекало (`PatternItem`), из-за которого заявка и
+  // появилась, НЕ трогаем — оно живёт своей жизнью в номенклатуре и
+  // может быть привязано к заказу. Файлы на диске остаются (как и в
+  // остальных разделах — физический GC out-of-scope).
+
+  async archiveMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.constructorTask.findMany({
+            where: { id: { in: want } },
+            select: { id: true, archivedAt: true },
+          }),
+        ),
+      alreadyDone: (row) => row.archivedAt !== null,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        const now = new Date();
+        await this.prisma.$transaction(async (tx) => {
+          await tx.constructorTask.updateMany({
+            where: { id: { in: targetIds } },
+            data: { archivedAt: now },
+          });
+          await this.audit.log(
+            {
+              event: 'CONSTRUCTOR_TASKS_ARCHIVED',
+              entityType: 'CONSTRUCTOR_TASK',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { taskIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=constructor_task.archive processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async restoreMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.constructorTask.findMany({
+            where: { id: { in: want } },
+            select: { id: true, archivedAt: true },
+          }),
+        ),
+      alreadyDone: (row) => row.archivedAt === null,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.constructorTask.updateMany({
+            where: { id: { in: targetIds } },
+            data: { archivedAt: null },
+          });
+          await this.audit.log(
+            {
+              event: 'CONSTRUCTOR_TASKS_RESTORED',
+              entityType: 'CONSTRUCTOR_TASK',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { taskIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=constructor_task.restore processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async purgeMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.constructorTask.findMany({
+            where: { id: { in: want } },
+            select: {
+              id: true,
+              status: true,
+              archivedAt: true,
+              patternItem: { select: { name: true, article: true } },
+            },
+          }),
+        ),
+      gate: (row) =>
+        row.archivedAt === null ? { reason: 'NOT_ARCHIVED' as const } : null,
+      apply: async (rows) => {
+        for (const row of rows) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.constructorTask.delete({ where: { id: row.id } });
+            await this.audit.log(
+              {
+                event: 'CONSTRUCTOR_TASK_DELETED',
+                entityType: 'CONSTRUCTOR_TASK',
+                entityId: row.id,
+                employeeId: actorEmployeeId ?? null,
+                payload: {
+                  status: row.status,
+                  patternName: row.patternItem?.name ?? null,
+                  patternArticle: row.patternItem?.article ?? null,
+                  bulk: true,
+                },
+              },
+              tx,
+            );
+          });
+        }
+      },
+    });
+    this.logger.log(
+      `event=constructor_task.purge processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
 
   // ---------------------------------------------------------------------------
   // CREATE / SAVE DRAFT

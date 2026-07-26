@@ -36,9 +36,18 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
+  BulkArchiveCheckbox,
+  BulkArchiveHeaderButton,
+  BulkArchiveProvider,
+  BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
 } from '@/components/admin';
+import {
+  archiveSuppliersAction,
+  purgeSuppliersAction,
+  restoreSuppliersAction,
+} from './archive-actions';
 import type { AdminStatusTone } from '@/lib/admin-labels';
 
 export const dynamic = 'force-dynamic';
@@ -177,7 +186,37 @@ export default async function AdminSuppliersListPage({
           </div>
         </form>
 
-        <SuppliersTable items={pageItems} muted={tab === 'archived'} />
+        {/* Этап «Архив справочников»: массовые «В архив» / «Вернуть» /
+            «Удалить навсегда». Архив поставщика — `status = INACTIVE`;
+            удаление навсегда блокируется, если есть заказы поставщикам. */}
+        <BulkArchiveProvider
+          mode={tab === 'archived' ? 'archive' : 'active'}
+          allIds={visible.map((s) => s.id)}
+          actions={{
+            archive: archiveSuppliersAction,
+            restore: restoreSuppliersAction,
+            purge: purgeSuppliersAction,
+          }}
+          labels={{
+            one: 'поставщика',
+            many: 'поставщиков',
+            archiveHint:
+              'Поставщики пропадут из активного списка и подбора в потребностях. Уже выбранные позиции останутся связанными.',
+            purgeHint:
+              'Вместе с карточкой пропадут её контакты и каталог. Поставщики с заказами будут пропущены.',
+          }}
+        >
+          <AdminSectionHeader
+            title={tab === 'archived' ? 'Архив' : 'Активные'}
+            hint={
+              tab === 'archived'
+                ? `В архиве: ${visible.length}. Удаление навсегда — только отсюда.`
+                : `${visible.length}`
+            }
+            actions={<BulkArchiveHeaderButton />}
+          />
+          <SuppliersTable items={pageItems} muted={tab === 'archived'} />
+        </BulkArchiveProvider>
 
         <AdminPagination
           page={page}
@@ -203,6 +242,12 @@ function SuppliersTable({
   muted?: boolean;
 }) {
   const columns: AdminTableColumn<SupplierListItemDto>[] = [
+    {
+      key: 'select',
+      header: '',
+      sortable: false,
+      render: (s) => <BulkArchiveCheckbox id={s.id} />,
+    },
     {
       key: 'name',
       header: 'Название',
@@ -256,6 +301,12 @@ function SuppliersTable({
           {formatStatus(s.status)}
         </AdminStatusBadge>
       ),
+    },
+    {
+      key: 'archive',
+      header: '',
+      isAction: true,
+      render: (s) => <BulkArchiveRowActions id={s.id} />,
     },
     {
       key: 'open',

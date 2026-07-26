@@ -4677,6 +4677,20 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   display: inline-block;
   letter-spacing: 0.06em;
 }
+/* Drill-in с монитора: имя sewing-операции становится ссылкой на её
+   карточку (только для ADMIN/SHOP_MANAGER, см. `Props.drillIn`).
+   Внешне не отличается от обычной шапки — витрина остаётся «только
+   цифры»; подчёркивание появляется лишь на hover, которого на TV
+   нет по определению. */
+.display-matrix__th-op--link {
+  color: inherit;
+  text-decoration: none;
+  cursor: pointer;
+}
+.display-matrix__th-op--link:hover,
+.display-matrix__th-op--link:focus-visible {
+  text-decoration: underline;
+}
 /* Вторая строка шапки (подколонки ▶/✔). Sticky должен «прилипать»
    к низу первой строки, иначе под ней просвечивают строки данных
    при скролле. `top` берётся с запасом по высоте row-1, рассчитан
@@ -5194,6 +5208,19 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   color: var(--display-fg);
   font-variant-numeric: tabular-nums;
   transition: none;
+}
+/* Drill-in с монитора (только для ADMIN/SHOP_MANAGER, см.
+   `display-board.tsx` → `Props.drillIn`): ссылка-оверлей на всю
+   плитку станка. Ничего не рисует — только перехватывает клик, чтобы
+   не ломать квадратную flex-раскладку плитки. z-index держим выше
+   индикатора «вызван мастер» (`--master-call::after`), иначе точка
+   съедала бы клик в правом верхнем углу. */
+.display-equipment-tile__link {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  border-radius: inherit;
+  cursor: pointer;
 }
 .display-equipment-tile__num {
   font-size: clamp(1rem, 1.4vw, 1.45rem);

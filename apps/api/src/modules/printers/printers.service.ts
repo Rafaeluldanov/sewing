@@ -3,6 +3,7 @@ import {
   HttpException,
   HttpStatus,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { randomBytes } from 'node:crypto';
@@ -17,8 +18,14 @@ import type {
   PrinterSummaryDto,
   UpdatePrinterDto,
 } from '@sewing/shared/printers';
+import type { BulkArchiveResultDto } from '@sewing/shared/archive';
 import { PrismaService } from '../../prisma/prisma.service.js';
-import { EquipmentNotFoundException } from '../../common/errors.js';
+import { AuditService } from '../audit/audit.service.js';
+import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
+import {
+  EquipmentNotFoundException,
+  PrinterDeleteForbiddenException,
+} from '../../common/errors.js';
 
 /**
  * Управление принтерами рабочих мест и pair-ом агентов.
@@ -35,7 +42,12 @@ import { EquipmentNotFoundException } from '../../common/errors.js';
  */
 @Injectable()
 export class PrintersService {
-  constructor(private readonly prisma: PrismaService) {}
+  private readonly logger = new Logger(PrintersService.name);
+
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   /** Сколько секунд heartbeat-а считаем «онлайн» в UI/derived-флаге. */
   private readonly ONLINE_TTL_MS = 60 * 1000;
@@ -163,10 +175,155 @@ export class PrintersService {
     return this.getOne(id);
   }
 
+  /**
+   * Hard-delete принтера.
+   *
+   * Этап «Архив справочников»: удаление стало вторым шагом — сначала
+   * принтер уходит в архив (`isActive = false`), и только оттуда его
+   * можно стереть. Задания печати (`PrintJob`) уходят каскадом: это
+   * операционная очередь, а не учётная история.
+   */
   async remove(id: string): Promise<void> {
     const existing = await this.prisma.printer.findUnique({ where: { id } });
     if (!existing) throw new PrinterNotFoundException();
+    if (existing.isActive) {
+      throw new PrinterDeleteForbiddenException(
+        'Удалить навсегда можно только архивный принтер. Как удалить: сначала отправьте его в архив, затем нажмите «Удалить навсегда».',
+      );
+    }
     await this.prisma.printer.delete({ where: { id } });
+  }
+
+  // ===========================================================================
+  // АРХИВ ПРИНТЕРОВ — bulk archive / restore / purge
+  // ===========================================================================
+  //
+  // Общий контур справочников админки (`@sewing/shared/archive`).
+  // Архив — `isActive = false`: принтер пропадает из подбора и его
+  // агент больше не сможет спариться (`pairAgent` проверяет `isActive`).
+  //
+  // Гейт purge — только «в архиве». Отдельного гейта по нагрузке нет:
+  // `PrintJob` привязан каскадом и представляет собой очередь заданий,
+  // а не учётную историю; предупреждение о том, что задания пропадут,
+  // показывает UI в тексте подтверждения.
+
+  async archiveMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.printer.findMany({
+            where: { id: { in: want } },
+            select: { id: true, isActive: true },
+          }),
+        ),
+      alreadyDone: (row) => !row.isActive,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.printer.updateMany({
+            where: { id: { in: targetIds } },
+            data: { isActive: false },
+          });
+          await this.audit.log(
+            {
+              event: 'PRINTERS_ARCHIVED',
+              entityType: 'PRINTER',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { printerIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=printer.archive processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async restoreMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.printer.findMany({
+            where: { id: { in: want } },
+            select: { id: true, isActive: true },
+          }),
+        ),
+      alreadyDone: (row) => row.isActive,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.printer.updateMany({
+            where: { id: { in: targetIds } },
+            data: { isActive: true },
+          });
+          await this.audit.log(
+            {
+              event: 'PRINTERS_RESTORED',
+              entityType: 'PRINTER',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { printerIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=printer.restore processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async purgeMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.printer.findMany({
+            where: { id: { in: want } },
+            select: { id: true, name: true, isActive: true },
+          }),
+        ),
+      gate: (row) =>
+        row.isActive ? { reason: 'NOT_ARCHIVED' as const } : null,
+      apply: async (rows) => {
+        for (const row of rows) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.printer.delete({ where: { id: row.id } });
+            await this.audit.log(
+              {
+                event: 'PRINTER_DELETED',
+                entityType: 'PRINTER',
+                entityId: row.id,
+                employeeId: actorEmployeeId ?? null,
+                payload: { name: row.name, bulk: true },
+              },
+              tx,
+            );
+          });
+        }
+      },
+    });
+    this.logger.log(
+      `event=printer.purge processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
   }
 
   // -------------------------------------------------------------------------

@@ -7270,11 +7270,23 @@ model ConstructorTask {
   /// только для отображения в карточке задачи и аудита.
   acceptedAt DateTime?
 
+  /// Этап «Архив справочников» (контракт — `@sewing/shared/archive`):
+  /// момент мягкой архивации заявки со списка
+  /// `/admin/constructor-tasks`. NULL — заявка в активном списке.
+  ///
+  /// Почему отдельное поле, а не статус: `status` описывает ход работы
+  /// КБ (`NEW → … → DONE/CANCELLED`), и «убрать с глаз» отработанную
+  /// заявку нужно, не переписывая её историю. Из архива заявку можно
+  /// вернуть (`archivedAt := null`) или удалить безвозвратно — вместе
+  /// со строками размеров и вложениями (оба уходят каскадом).
+  archivedAt DateTime?
+
   sizeRows ConstructorTaskSizeRow[]
   files    ConstructorTaskFile[]
 
   @@index([status])
   @@index([assignedToId, status])
+  @@index([archivedAt])
 }
 
 /// Одна строка таблицы «Размер / Кулирка / Кашкорсе» в задаче

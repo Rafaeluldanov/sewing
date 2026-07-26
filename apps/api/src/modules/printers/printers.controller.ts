@@ -24,8 +24,14 @@ import {
   type PrinterSummaryDto,
   type UpdatePrinterDto,
 } from '@sewing/shared/printers';
+import {
+  BulkArchiveRequestSchema,
+  type BulkArchiveRequestDto,
+  type BulkArchiveResultDto,
+} from '@sewing/shared/archive';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { PrintersService } from './printers.service.js';
 
 /**
@@ -39,6 +45,39 @@ export class PrintersController {
   private readonly logger = new Logger(PrintersController.name);
 
   constructor(private readonly printers: PrintersService) {}
+
+  /**
+   * Массовые операции архива со списка `/admin/printers` (контракт —
+   * `@sewing/shared/archive`): `isActive = false` → обратно → удалить
+   * навсегда (только из архива). Архивный принтер не спаривается с
+   * агентом; вместе с принтером уходит его очередь заданий печати.
+   */
+  @Post('archive')
+  archiveMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.printers.archiveMany(dto.ids, user.employeeId);
+  }
+
+  @Post('restore')
+  restoreMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.printers.restoreMany(dto.ids, user.employeeId);
+  }
+
+  @Post('purge')
+  purgeMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.printers.purgeMany(dto.ids, user.employeeId);
+  }
 
   @Get()
   list(): Promise<PrinterSummaryDto[]> {

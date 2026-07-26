@@ -8,11 +8,23 @@ import {
   type OperationSummaryDto,
 } from '@sewing/shared/operations';
 import {
+  AdminArchiveTabs,
   AdminCard,
   AdminEmptyState,
   AdminPageShell,
+  AdminSectionHeader,
   AdminStatusBadge,
+  AdminTableRow,
+  BulkArchiveCheckbox,
+  BulkArchiveHeaderButton,
+  BulkArchiveProvider,
+  BulkArchiveRowActions,
 } from '@/components/admin';
+import {
+  archiveOperationsAction,
+  purgeOperationsAction,
+  restoreOperationsAction,
+} from './archive-actions';
 import {
   formatPricingMode,
   formatStatus,
@@ -131,17 +143,30 @@ function formatTimeNorm(op: OperationSummaryDto): React.ReactNode {
  * Пагинация отключена сознательно: на одной экранной форме менеджеру
  * удобнее видеть весь каталог сгруппированным, чем перелистывать.
  */
-export default async function AdminOperationsListPage() {
-  let items: OperationSummaryDto[] = [];
+export default async function AdminOperationsListPage({
+  searchParams,
+}: {
+  searchParams?: { tab?: string };
+}) {
+  // Этап «Архив справочников»: вкладка «Архив» показывает операции с
+  // `isActive = false` (тот же флаг, что тумблер «Активна» на карточке).
+  const tab: 'active' | 'archive' =
+    searchParams?.tab === 'archive' ? 'archive' : 'active';
+
+  let all: OperationSummaryDto[] = [];
   let error: string | null = null;
   try {
-    items = await listOperations();
+    all = await listOperations();
   } catch (e) {
     error =
       e instanceof ApiRequestError
         ? errorText(e)
         : 'Не удалось загрузить список операций';
   }
+
+  const activeItems = all.filter((op) => op.isActive);
+  const archivedItems = all.filter((op) => !op.isActive);
+  const items = tab === 'archive' ? archivedItems : activeItems;
 
   const sortedItems = [...items].sort((a, b) => {
     if (a.sortOrder !== b.sortOrder) return a.sortOrder - b.sortOrder;
@@ -153,7 +178,7 @@ export default async function AdminOperationsListPage() {
     <AdminPageShell
       icon={<Scissors size={22} strokeWidth={1.6} aria-hidden />}
       title="Операции"
-      subtitle={`Всего: ${items.length}`}
+      subtitle={`Активных: ${activeItems.length} · Архив: ${archivedItems.length}`}
       actions={
         <Link
           href="/admin/operations/new"
@@ -170,34 +195,79 @@ export default async function AdminOperationsListPage() {
         </div>
       )}
 
-      {groups.length === 0 ? (
+      <AdminCard>
+        <AdminArchiveTabs
+          basePath="/admin/operations"
+          tab={tab}
+          activeCount={activeItems.length}
+          archiveCount={archivedItems.length}
+        />
+      </AdminCard>
+
+      <BulkArchiveProvider
+        mode={tab}
+        allIds={items.map((op) => op.id)}
+        actions={{
+          archive: archiveOperationsAction,
+          restore: restoreOperationsAction,
+          purge: purgeOperationsAction,
+        }}
+        labels={{
+          one: 'операцию',
+          many: 'операций',
+          archiveHint:
+            'Операции пропадут из рабочих списков и подбора в маршрутах. История, ставки и нормы сохранятся.',
+          purgeHint:
+            'Вместе с операцией пропадут её ставки, нормы времени и привязка к станкам. Операции с историей или в маршрутах будут пропущены.',
+        }}
+      >
+        {groups.length === 0 ? (
         <AdminCard>
-          <AdminEmptyState
-            icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
-            title="Операций пока нет"
-            actions={
-              <Link
-                href="/admin/operations/new"
-                className="admin-btn admin-btn--primary"
-              >
-                <Plus size={16} strokeWidth={1.6} aria-hidden />
-                Добавить операцию
-              </Link>
-            }
-          />
+          {tab === 'archive' ? (
+            <AdminEmptyState
+              icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+              title="Архив пуст"
+              hint="Сюда попадают операции, отправленные в архив. Из архива их можно вернуть или удалить навсегда."
+            />
+          ) : (
+            <AdminEmptyState
+              icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+              title="Операций пока нет"
+              actions={
+                <Link
+                  href="/admin/operations/new"
+                  className="admin-btn admin-btn--primary"
+                >
+                  <Plus size={16} strokeWidth={1.6} aria-hidden />
+                  Добавить операцию
+                </Link>
+              }
+            />
+          )}
         </AdminCard>
       ) : (
         <AdminCard className="admin-compact-grouped-card admin-operations-compact-card">
+          <AdminSectionHeader
+            title={tab === 'archive' ? 'Архив' : 'Активные'}
+            hint={
+              tab === 'archive'
+                ? `В архиве: ${items.length}. Удаление навсегда — только отсюда.`
+                : `Всего: ${items.length}`
+            }
+            actions={<BulkArchiveHeaderButton />}
+          />
           <div className="admin-compact-table-wrap">
             <table className="admin-table admin-compact-grouped-table admin-operations-compact-table">
               <thead>
                 <tr>
+                  <th aria-label="Выбор" />
                   <th>Название</th>
                   <th>Тариф</th>
                   <th>Ставка</th>
                   <th>Норма времени</th>
                   <th>За 8 часов</th>
                   <th>Статус</th>
+                  <th aria-label="Архив" />
                   <th aria-label="Действия" />
                 </tr>
               </thead>
@@ -208,7 +278,7 @@ export default async function AdminOperationsListPage() {
                       className="admin-compact-group-row admin-operations-group-row"
                       data-category={group.category}
                     >
-                      <td colSpan={7}>
+                      <td colSpan={9}>
                         <div className="admin-compact-group-row__inner">
                           <span data-category-title={group.category}>
                             {group.label}
@@ -220,10 +290,20 @@ export default async function AdminOperationsListPage() {
                       </td>
                     </tr>
                     {group.operations.map((op) => (
-                      <tr
+                      /*
+                        Кликабельная строка (drill-in): весь ряд ведёт туда же,
+                        куда ссылка «Открыть» справа — на карточку операции.
+                        Клики по чекбоксу bulk-архива, кнопкам и самой ссылке
+                        не перехватываются (см. `AdminTableRow`).
+                      */
+                      <AdminTableRow
                         key={op.id}
-                        className="admin-compact-row admin-operations-row"
+                        href={`/admin/operations/${op.id}`}
+                        className="admin-compact-row admin-operations-row admin-table__row--clickable"
                       >
+                        <td>
+                          <BulkArchiveCheckbox id={op.id} />
+                        </td>
                         <td data-label="Название">
                           <span className="admin-table__primary">{op.name}</span>
                           {op.producesFinishedGoods && (
@@ -253,6 +333,9 @@ export default async function AdminOperationsListPage() {
                           </AdminStatusBadge>
                         </td>
                         <td className="admin-table__actions admin-compact-row__actions">
+                          <BulkArchiveRowActions id={op.id} />
+                        </td>
+                        <td className="admin-table__actions admin-compact-row__actions">
                           <Link
                             href={`/admin/operations/${op.id}`}
                             className="admin-table__action-link"
@@ -261,7 +344,7 @@ export default async function AdminOperationsListPage() {
                             <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
                           </Link>
                         </td>
-                      </tr>
+                      </AdminTableRow>
                     ))}
                   </Fragment>
                 ))}
@@ -269,7 +352,8 @@ export default async function AdminOperationsListPage() {
             </table>
           </div>
         </AdminCard>
-      )}
+        )}
+      </BulkArchiveProvider>
     </AdminPageShell>
   );
 }

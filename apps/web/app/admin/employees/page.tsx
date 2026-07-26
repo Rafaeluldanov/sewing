@@ -4,7 +4,11 @@ import { ApiRequestError, errorText } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listEmployees } from '@/lib/employees-api';
 import type { EmployeeListItemDto } from '@sewing/shared/employees';
-import { EmployeeRowActions } from './row-actions';
+import {
+  archiveEmployeesAction,
+  purgeEmployeesAction,
+  restoreEmployeesAction,
+} from './archive-actions';
 import {
   AdminCard,
   AdminEmptyState,
@@ -13,6 +17,10 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
+  BulkArchiveCheckbox,
+  BulkArchiveHeaderButton,
+  BulkArchiveProvider,
+  BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
 } from '@/components/admin';
@@ -111,32 +119,62 @@ export default async function AdminEmployeesListPage({
       )}
 
       <AdminCard>
-        <AdminSectionHeader
-          title={tab === 'archived' ? 'Архив' : 'Активные'}
-          hint={`${visible.length}`}
-        />
-
+        {/* Вкладки этого раздела появились раньше общего
+            `AdminArchiveTabs` и живут на `?tab=archived` — ссылки из
+            писем/закладок не ломаем, поэтому оставляем как есть. */}
         <div className="admin-tabs" style={{ marginTop: -8 }}>
           <Link
             href="/admin/employees"
             className={`admin-tab ${tab === 'active' ? 'admin-tab--active' : ''}`}
           >
-            Активные
+            Активные ({active.length})
           </Link>
           <Link
             href="/admin/employees?tab=archived"
             className={`admin-tab ${tab === 'archived' ? 'admin-tab--active' : ''}`}
           >
-            Архив
+            Архив ({archived.length})
           </Link>
         </div>
 
-        <EmployeesTable
-          items={pageItems}
-          muted={tab === 'archived'}
-          viewerId={viewer?.user.id ?? null}
-          viewerRole={viewer?.user.role ?? ''}
-        />
+        {/* Этап «Архив справочников»: массовые «В архив» / «Вернуть» /
+            «Удалить навсегда». Гейты раздела (открытая смена, история,
+            «нельзя на себе», последний админ) считает backend и
+            возвращает причину по каждой пропущенной строке. */}
+        <BulkArchiveProvider
+          mode={tab === 'archived' ? 'archive' : 'active'}
+          allIds={visible.map((e) => e.id)}
+          actions={{
+            archive: archiveEmployeesAction,
+            restore: restoreEmployeesAction,
+            purge: purgeEmployeesAction,
+          }}
+          labels={{
+            one: 'сотрудника',
+            many: 'сотрудников',
+            archiveHint:
+              'Учётки перестанут пускать в систему. История, смены и начисления сохранятся.',
+            purgeHint:
+              'Карточка пропадёт из БД (в аудите останется снимок). Сотрудники с историей будут пропущены.',
+          }}
+        >
+          <AdminSectionHeader
+            title={tab === 'archived' ? 'Архив' : 'Активные'}
+            hint={
+              tab === 'archived'
+                ? `В архиве: ${visible.length}. Удаление навсегда — только отсюда.`
+                : `${visible.length}`
+            }
+            actions={<BulkArchiveHeaderButton />}
+          />
+
+          <EmployeesTable
+            items={pageItems}
+            muted={tab === 'archived'}
+            viewerId={viewer?.user.id ?? null}
+            viewerRole={viewer?.user.role ?? ''}
+          />
+        </BulkArchiveProvider>
 
         <AdminPagination
           page={page}
@@ -163,6 +201,12 @@ function EmployeesTable({
   viewerRole: string;
 }) {
   const columns: AdminTableColumn<EmployeeListItemDto>[] = [
+    {
+      key: 'select',
+      header: '',
+      sortable: false,
+      render: (e) => <BulkArchiveCheckbox id={e.id} />,
+    },
     {
       key: 'name',
       header: 'ФИО',
@@ -219,6 +263,14 @@ function EmployeesTable({
       isAction: true,
       render: (e) => (
         <div className="employee-row-actions">
+          {/* «В архив» (активные) / «Вернуть» + «Удалить» (архив) —
+              общий компонент разделов; сам себя архивировать нельзя,
+              поэтому строку viewer-а гасим сразу. */}
+          <BulkArchiveRowActions
+            id={e.id}
+            disabled={viewerId === e.id}
+            disabledHint="Нельзя выполнять это действие на своей учётке"
+          />
           <Link
             href={`/admin/employees/${e.id}`}
             className="admin-table__action-link"
@@ -226,11 +278,6 @@ function EmployeesTable({
             Открыть
             <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
           </Link>
-          <EmployeeRowActions
-            employee={e}
-            viewerId={viewerId}
-            viewerRole={viewerRole}
-          />
         </div>
       ),
     },

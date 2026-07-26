@@ -20,8 +20,15 @@ import {
   type UpdateRouteTemplateDto,
 } from '@sewing/shared/routes';
 
+import {
+  BulkArchiveRequestSchema,
+  type BulkArchiveRequestDto,
+  type BulkArchiveResultDto,
+} from '@sewing/shared/archive';
+
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { RoutesService } from './routes.service.js';
 
 /**
@@ -73,6 +80,42 @@ export class RoutesController {
     dto: UpdateRouteTemplateDto,
   ): Promise<RouteTemplateDetailDto> {
     return this.routes.update(id, dto);
+  }
+
+  /**
+   * Массовые операции архива со списка `/admin/routes` (контракт —
+   * `@sewing/shared/archive`): `isActive = false` → обратно → удалить
+   * навсегда (только из архива и только если на шаблон не ссылаются
+   * заказы/пробники). Ответ — частичный успех.
+   */
+  @Post('archive')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  archiveMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.routes.archiveMany(dto.ids, user.employeeId);
+  }
+
+  @Post('restore')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  restoreMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.routes.restoreMany(dto.ids, user.employeeId);
+  }
+
+  @Post('purge')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  purgeMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.routes.purgeMany(dto.ids, user.employeeId);
   }
 
   @Delete(':id')

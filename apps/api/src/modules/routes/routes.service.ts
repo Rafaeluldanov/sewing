@@ -10,10 +10,15 @@ import type {
   UpdateRouteTemplateDto,
 } from '@sewing/shared/routes';
 
+import type { BulkArchiveResultDto } from '@sewing/shared/archive';
+
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
 import {
   OperationNotFoundException,
   RouteTemplateCodeTakenException,
+  RouteTemplateDeleteForbiddenException,
   RouteTemplateNotFoundException,
 } from '../../common/errors.js';
 
@@ -37,7 +42,10 @@ import {
 export class RoutesService {
   private readonly logger = new Logger(RoutesService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // -------------------------------------------------------------------------
   // LIST
@@ -244,18 +252,191 @@ export class RoutesService {
   // DELETE
   // -------------------------------------------------------------------------
 
+  /**
+   * Hard-delete шаблона маршрута.
+   *
+   * Этап «Архив справочников»: удаление стало вторым шагом, а не
+   * первым — сначала шаблон уходит в архив (`isActive = false`), и
+   * только оттуда его можно стереть. Плюс гейт по ссылкам: заказ и
+   * пробник держат `routeTemplateId` с FK `RESTRICT`, и раньше такое
+   * удаление падало сырой ошибкой БД — теперь отвечаем понятным 409.
+   *
+   * Cascade удалит `RouteTemplateStep`. На запущенных заказах
+   * `OrderRouteStep` остаётся (FK на `Operation`, не на template) —
+   * snapshot самодостаточный и не зависит от существования шаблона.
+   */
   async remove(id: string): Promise<void> {
     const existing = await this.prisma.routeTemplate.findUnique({
       where: { id },
-      select: { id: true },
+      select: { id: true, code: true, isActive: true },
     });
     if (!existing) throw new RouteTemplateNotFoundException();
+    if (existing.isActive) {
+      throw new RouteTemplateDeleteForbiddenException(
+        'Удалить навсегда можно только архивный шаблон маршрута. Как удалить: сначала отправьте его в архив, затем нажмите «Удалить навсегда».',
+      );
+    }
+    const usage = await this.describeUsage(id);
+    if (usage) {
+      throw new RouteTemplateDeleteForbiddenException(
+        `Этот шаблон маршрута удалить навсегда нельзя: его используют ${usage}. Оставьте шаблон в архиве — в новые заказы архивные не предлагаются.`,
+      );
+    }
 
-    // Cascade удалит RouteTemplateStep. На запущенных заказах
-    // OrderRouteStep остаётся (FK на Operation, не на template) —
-    // snapshot самодостаточный и не зависит от существования шаблона.
     await this.prisma.routeTemplate.delete({ where: { id } });
     this.logger.log(`event=route_template.delete id=${id}`);
+  }
+
+  /**
+   * Кто держит шаблон: заказы (`Order.routeTemplateId`) и пробники
+   * (`OrderSample.routeTemplateId`) — оба FK `RESTRICT`. `null` —
+   * ссылок нет, удалять можно. Общий гейт для одиночного `remove()`
+   * и массового `purgeMany()`.
+   */
+  private async describeUsage(id: string): Promise<string | null> {
+    const [orderCount, sampleCount] = await Promise.all([
+      this.prisma.order.count({ where: { routeTemplateId: id } }),
+      this.prisma.orderSample.count({ where: { routeTemplateId: id } }),
+    ]);
+    const parts: string[] = [];
+    if (orderCount > 0) parts.push(`заказов: ${orderCount}`);
+    if (sampleCount > 0) parts.push(`пробников: ${sampleCount}`);
+    return parts.length > 0 ? parts.join(', ') : null;
+  }
+
+  // ===========================================================================
+  // АРХИВ ШАБЛОНОВ МАРШРУТА — bulk archive / restore / purge
+  // ===========================================================================
+  //
+  // Общий контур справочников админки (`@sewing/shared/archive`).
+  // Архив физически — `isActive = false`: то же поле, которым шаблон
+  // уже выключался из подбора в заказах, отдельной миграции не нужно.
+
+  async archiveMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.routeTemplate.findMany({
+            where: { id: { in: want } },
+            select: { id: true, isActive: true },
+          }),
+        ),
+      alreadyDone: (row) => !row.isActive,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.routeTemplate.updateMany({
+            where: { id: { in: targetIds } },
+            data: { isActive: false },
+          });
+          await this.audit.log(
+            {
+              event: 'ROUTE_TEMPLATES_ARCHIVED',
+              entityType: 'ROUTE_TEMPLATE',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { routeTemplateIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=route_template.archive processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async restoreMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.routeTemplate.findMany({
+            where: { id: { in: want } },
+            select: { id: true, isActive: true },
+          }),
+        ),
+      alreadyDone: (row) => row.isActive,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.routeTemplate.updateMany({
+            where: { id: { in: targetIds } },
+            data: { isActive: true },
+          });
+          await this.audit.log(
+            {
+              event: 'ROUTE_TEMPLATES_RESTORED',
+              entityType: 'ROUTE_TEMPLATE',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { routeTemplateIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=route_template.restore processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async purgeMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.routeTemplate.findMany({
+            where: { id: { in: want } },
+            select: { id: true, code: true, name: true, isActive: true },
+          }),
+        ),
+      gate: async (row) => {
+        if (row.isActive) return { reason: 'NOT_ARCHIVED' as const };
+        const usage = await this.describeUsage(row.id);
+        return usage
+          ? {
+              reason: 'IN_USE' as const,
+              detail: `маршрут «${row.code}» используют ${usage}`,
+            }
+          : null;
+      },
+      apply: async (rows) => {
+        for (const row of rows) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.routeTemplate.delete({ where: { id: row.id } });
+            await this.audit.log(
+              {
+                event: 'ROUTE_TEMPLATE_DELETED',
+                entityType: 'ROUTE_TEMPLATE',
+                entityId: row.id,
+                employeeId: actorEmployeeId ?? null,
+                payload: { code: row.code, name: row.name, bulk: true },
+              },
+              tx,
+            );
+          });
+        }
+      },
+    });
+    this.logger.log(
+      `event=route_template.purge processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
   }
 
   // -------------------------------------------------------------------------

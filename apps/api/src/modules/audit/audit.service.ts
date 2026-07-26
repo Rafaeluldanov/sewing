@@ -550,8 +550,37 @@ export type AuditEntityType =
    * уже удалённой строки, по тому же принципу, что и `EMPLOYEE_DELETED`.
    * Мягкое «удаление» (`active = false`) идёт через обычный `update`
    * и отдельного аудит-события не имеет.
+   *
+   * Массовые операции архива со списка `/admin/operations` пишут
+   * `OPERATIONS_ARCHIVED` / `OPERATIONS_RESTORED` (одно событие на
+   * пачку, список id — в payload) и `OPERATION_DELETED` на каждую
+   * удалённую строку (`payload.bulk = true`).
    */
-  | 'OPERATION';
+  | 'OPERATION'
+  /**
+   * Справочники админки с контуром «архив → удалить навсегда» (см.
+   * `@sewing/shared/archive`, `common/bulk-archive.ts`). У всех один
+   * набор событий:
+   *   - `<X>S_ARCHIVED` / `<X>S_RESTORED` — массовая мягкая
+   *     архивация/возврат со списка. Одно событие на пачку:
+   *     `entityId` — первая запись, полный список id — в payload;
+   *   - `<X>_DELETED` — безвозвратное удаление, по событию на запись,
+   *     в payload снимок ключевых полей (+ `bulk: true`, если пришло
+   *     из массовой операции).
+   *
+   * `TECH_CARD` — `TechCardTemplate.id` (архив = `isActive = false`);
+   * `ROUTE_TEMPLATE` — `RouteTemplate.id` (`isActive`);
+   * `CONSTRUCTOR_TASK` — `ConstructorTask.id` (`archivedAt`);
+   * `DISPLAY_SCREEN` — `DisplayScreenConfig.id` (`isActive`);
+   * `EQUIPMENT` — `Equipment.id` (`active`);
+   * `PRINTER` — `Printer.id` (`isActive`).
+   */
+  | 'TECH_CARD'
+  | 'ROUTE_TEMPLATE'
+  | 'CONSTRUCTOR_TASK'
+  | 'DISPLAY_SCREEN'
+  | 'EQUIPMENT'
+  | 'PRINTER';
 
 /**
  * Минимальный полезный ввод для одного события аудита. `payload` —

@@ -9,12 +9,24 @@ import {
   groupEquipmentByOperationCategory,
 } from '@sewing/shared/operations';
 import {
+  AdminArchiveTabs,
   AdminCard,
   AdminEmptyState,
   AdminPageShell,
+  AdminSectionHeader,
   AdminStatusBadge,
+  AdminTableRow,
+  BulkArchiveCheckbox,
+  BulkArchiveHeaderButton,
+  BulkArchiveProvider,
+  BulkArchiveRowActions,
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
+import {
+  archiveEquipmentAction,
+  purgeEquipmentAction,
+  restoreEquipmentAction,
+} from './archive-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -47,17 +59,31 @@ export const dynamic = 'force-dynamic';
  * внутри AdminTechInfo. Здесь — №, название, chip-категории, число
  * операций, статус.
  */
-export default async function AdminEquipmentListPage() {
-  let items: EquipmentSummaryDto[] = [];
+export default async function AdminEquipmentListPage({
+  searchParams,
+}: {
+  searchParams?: { tab?: string };
+}) {
+  // Этап «Архив справочников»: вкладка «Архив» показывает станки с
+  // `active = false` — они пропадают из подбора рабочего места, но
+  // история смен и событий по ним остаётся.
+  const tab: 'active' | 'archive' =
+    searchParams?.tab === 'archive' ? 'archive' : 'active';
+
+  let all: EquipmentSummaryDto[] = [];
   let error: string | null = null;
   try {
-    items = await listEquipment();
+    all = await listEquipment();
   } catch (e) {
     error =
       e instanceof ApiRequestError
         ? errorText(e)
         : 'Не удалось загрузить список оборудования';
   }
+
+  const activeItems = all.filter((eq) => eq.active);
+  const archivedItems = all.filter((eq) => !eq.active);
+  const items = tab === 'archive' ? archivedItems : activeItems;
 
   const sortedItems = [...items].sort((a, b) => {
     const an = a.displayNumber ?? '';
@@ -82,7 +108,7 @@ export default async function AdminEquipmentListPage() {
     <AdminPageShell
       icon={<Factory size={22} strokeWidth={1.6} aria-hidden />}
       title="Оборудование"
-      subtitle={`Всего: ${items.length}`}
+      subtitle={`Активных: ${activeItems.length} · Архив: ${archivedItems.length}`}
       actions={
         <Link
           href="/admin/equipment/new"
@@ -99,34 +125,79 @@ export default async function AdminEquipmentListPage() {
         </div>
       )}
 
+      <AdminCard>
+        <AdminArchiveTabs
+          basePath="/admin/equipment"
+          tab={tab}
+          activeCount={activeItems.length}
+          archiveCount={archivedItems.length}
+        />
+      </AdminCard>
+
+      <BulkArchiveProvider
+        mode={tab}
+        allIds={items.map((eq) => eq.id)}
+        actions={{
+          archive: archiveEquipmentAction,
+          restore: restoreEquipmentAction,
+          purge: purgeEquipmentAction,
+        }}
+        labels={{
+          one: 'станок',
+          many: 'станков',
+          archiveHint:
+            'Станки пропадут из подбора рабочего места. История смен и событий сохранится.',
+          purgeHint:
+            'Вместе со станком пропадут его разрешённые операции. Станки с историей (смены, события, вызовы мастера) будут пропущены.',
+        }}
+      >
       {groups.length === 0 ? (
         <AdminCard>
-          <AdminEmptyState
-            icon={<Factory size={26} strokeWidth={1.6} aria-hidden />}
-            title="Оборудования пока нет"
-            hint="Добавьте первый станок — это займёт меньше минуты."
-            actions={
-              <Link
-                href="/admin/equipment/new"
-                className="admin-btn admin-btn--primary"
-              >
-                <Plus size={16} strokeWidth={1.6} aria-hidden />
-                Добавить оборудование
-              </Link>
-            }
-          />
+          {tab === 'archive' ? (
+            <AdminEmptyState
+              icon={<Factory size={26} strokeWidth={1.6} aria-hidden />}
+              title="Архив пуст"
+              hint="Сюда попадают станки, отправленные в архив. Из архива их можно вернуть или удалить навсегда."
+            />
+          ) : (
+            <AdminEmptyState
+              icon={<Factory size={26} strokeWidth={1.6} aria-hidden />}
+              title="Оборудования пока нет"
+              hint="Добавьте первый станок — это займёт меньше минуты."
+              actions={
+                <Link
+                  href="/admin/equipment/new"
+                  className="admin-btn admin-btn--primary"
+                >
+                  <Plus size={16} strokeWidth={1.6} aria-hidden />
+                  Добавить оборудование
+                </Link>
+              }
+            />
+          )}
         </AdminCard>
       ) : (
         <AdminCard className="admin-compact-grouped-card admin-equipment-compact-card">
+          <AdminSectionHeader
+            title={tab === 'archive' ? 'Архив' : 'Активные'}
+            hint={
+              tab === 'archive'
+                ? `В архиве: ${items.length}. Удаление навсегда — только отсюда.`
+                : `Всего: ${items.length}`
+            }
+            actions={<BulkArchiveHeaderButton />}
+          />
           <div className="admin-compact-table-wrap">
             <table className="admin-table admin-compact-grouped-table admin-equipment-compact-table">
               <thead>
                 <tr>
+                  <th aria-label="Выбор" />
                   <th>№</th>
                   <th>Название</th>
                   <th>Категории</th>
                   <th>Операций</th>
                   <th>Статус</th>
+                  <th aria-label="Архив" />
                   <th aria-label="Действия" />
                 </tr>
               </thead>
@@ -137,7 +208,7 @@ export default async function AdminEquipmentListPage() {
                       className="admin-compact-group-row admin-equipment-group-row"
                       data-category={group.category}
                     >
-                      <td colSpan={6}>
+                      <td colSpan={8}>
                         <div className="admin-compact-group-row__inner">
                           <span data-category-title={group.category}>
                             {group.label}
@@ -149,10 +220,20 @@ export default async function AdminEquipmentListPage() {
                       </td>
                     </tr>
                     {group.equipment.map((eq) => (
-                      <tr
+                      /*
+                        Кликабельная строка (drill-in): весь ряд ведёт туда же,
+                        куда ссылка «Настроить» справа — на карточку станка.
+                        Клики по чекбоксу bulk-архива, кнопкам и самой ссылке
+                        не перехватываются (см. `AdminTableRow`).
+                      */
+                      <AdminTableRow
                         key={eq.id}
-                        className="admin-compact-row admin-equipment-row"
+                        href={`/admin/equipment/${eq.id}`}
+                        className="admin-compact-row admin-equipment-row admin-table__row--clickable"
                       >
+                        <td>
+                          <BulkArchiveCheckbox id={eq.id} />
+                        </td>
                         <td data-label="№">
                           {eq.displayNumber ? (
                             <strong className="admin-equipment-display-number">
@@ -200,6 +281,9 @@ export default async function AdminEquipmentListPage() {
                           </AdminStatusBadge>
                         </td>
                         <td className="admin-table__actions admin-compact-row__actions">
+                          <BulkArchiveRowActions id={eq.id} />
+                        </td>
+                        <td className="admin-table__actions admin-compact-row__actions">
                           <Link
                             href={`/admin/equipment/${eq.id}`}
                             className="admin-table__action-link"
@@ -208,7 +292,7 @@ export default async function AdminEquipmentListPage() {
                             <ArrowRight size={14} strokeWidth={1.6} aria-hidden />
                           </Link>
                         </td>
-                      </tr>
+                      </AdminTableRow>
                     ))}
                   </Fragment>
                 ))}
@@ -217,6 +301,7 @@ export default async function AdminEquipmentListPage() {
           </div>
         </AdminCard>
       )}
+      </BulkArchiveProvider>
     </AdminPageShell>
   );
 }

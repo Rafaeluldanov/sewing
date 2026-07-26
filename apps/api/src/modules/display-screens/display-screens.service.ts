@@ -6,7 +6,10 @@ import type {
   DisplayScreenDetailDto,
   DisplayScreenListItemDto,
 } from '@sewing/shared/display-screens';
+import type { BulkArchiveResultDto } from '@sewing/shared/archive';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
 import { DisplayLoginTakenException } from '../../common/errors.js';
 
 /**
@@ -34,7 +37,10 @@ const PIN_HASH_COST = 10;
 export class DisplayScreensService {
   private readonly logger = new Logger(DisplayScreensService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // ===========================================================================
   // READ
@@ -205,6 +211,177 @@ export class DisplayScreensService {
       }
       throw e;
     }
+  }
+
+  // ===========================================================================
+  // АРХИВ ЭКРАНОВ — bulk archive / restore / purge
+  // ===========================================================================
+  //
+  // Общий контур справочников админки (`@sewing/shared/archive`).
+  // Архив экрана — `isActive = false`. Важная особенность раздела:
+  // экран = пара `(DisplayScreenConfig, Employee role=DISPLAY)`, поэтому
+  // архивация ГАСИТ и учётку монитора (`employee.active = false`) —
+  // иначе «отключённый» экран продолжал бы логиниться. Восстановление
+  // зажигает обратно.
+  //
+  // purge удаляет конфиг и пытается удалить саму DISPLAY-учётку
+  // (её login занимает уникальный индекс — иначе новый экран с тем же
+  // логином не заведёшь). Если на учётку успели повеситься ссылки
+  // (событие паспорта, смена), delete упадёт по FK — тогда оставляем
+  // её деактивированной: чистка справочника не должна ломать историю.
+
+  async archiveMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.displayScreenConfig.findMany({
+            where: { id: { in: want } },
+            select: { id: true, isActive: true, employeeId: true },
+          }),
+        ),
+      alreadyDone: (row) => !row.isActive,
+      gate: () => null,
+      apply: async (rows, targetIds) => {
+        const employeeIds = rows.map((r) => r.employeeId);
+        await this.prisma.$transaction(async (tx) => {
+          await tx.displayScreenConfig.updateMany({
+            where: { id: { in: targetIds } },
+            data: { isActive: false },
+          });
+          await tx.employee.updateMany({
+            where: { id: { in: employeeIds } },
+            data: { active: false },
+          });
+          await this.audit.log(
+            {
+              event: 'DISPLAY_SCREENS_ARCHIVED',
+              entityType: 'DISPLAY_SCREEN',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { screenIds: targetIds, employeeIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=display_screen.archive processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async restoreMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.displayScreenConfig.findMany({
+            where: { id: { in: want } },
+            select: { id: true, isActive: true, employeeId: true },
+          }),
+        ),
+      alreadyDone: (row) => row.isActive,
+      gate: () => null,
+      apply: async (rows, targetIds) => {
+        const employeeIds = rows.map((r) => r.employeeId);
+        await this.prisma.$transaction(async (tx) => {
+          await tx.displayScreenConfig.updateMany({
+            where: { id: { in: targetIds } },
+            data: { isActive: true },
+          });
+          await tx.employee.updateMany({
+            where: { id: { in: employeeIds } },
+            data: { active: true },
+          });
+          await this.audit.log(
+            {
+              event: 'DISPLAY_SCREENS_RESTORED',
+              entityType: 'DISPLAY_SCREEN',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { screenIds: targetIds, employeeIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=display_screen.restore processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async purgeMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.displayScreenConfig.findMany({
+            where: { id: { in: want } },
+            select: {
+              id: true,
+              name: true,
+              isActive: true,
+              employeeId: true,
+              employee: { select: { login: true } },
+            },
+          }),
+        ),
+      gate: (row) =>
+        row.isActive ? { reason: 'NOT_ARCHIVED' as const } : null,
+      apply: async (rows) => {
+        for (const row of rows) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.displayScreenConfig.delete({ where: { id: row.id } });
+            await this.audit.log(
+              {
+                event: 'DISPLAY_SCREEN_DELETED',
+                entityType: 'DISPLAY_SCREEN',
+                entityId: row.id,
+                employeeId: actorEmployeeId ?? null,
+                payload: {
+                  name: row.name,
+                  employeeId: row.employeeId,
+                  employeeLogin: row.employee.login,
+                  bulk: true,
+                },
+              },
+              tx,
+            );
+          });
+          // Учётку монитора чистим ОТДЕЛЬНОЙ операцией, а не внутри той
+          // же транзакции: если у неё внезапно есть история, delete
+          // упадёт по FK и откатил бы удаление конфига вместе с собой.
+          try {
+            await this.prisma.employee.delete({ where: { id: row.employeeId } });
+          } catch {
+            await this.prisma.employee.update({
+              where: { id: row.employeeId },
+              data: { active: false },
+            });
+            this.logger.warn(
+              `event=display_screen.purge.employee_kept id=${row.employeeId} login=${row.employee.login} reason=has_refs`,
+            );
+          }
+        }
+      },
+    });
+    this.logger.log(
+      `event=display_screen.purge processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
   }
 }
 

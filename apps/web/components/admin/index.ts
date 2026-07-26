@@ -13,6 +13,7 @@ export { GroupedEquipmentSelect } from './grouped-equipment-select';
 export { AdminStatusBadge } from './admin-status-badge';
 export { AdminEmptyState } from './admin-empty-state';
 export { AdminTable, type AdminTableColumn } from './admin-table';
+export { AdminTableRow } from './admin-table-row';
 export { AdminTechInfo } from './admin-tech-info';
 export { AdminPageShell } from './admin-page-shell';
 export { AdminPagination, paginate } from './admin-pagination';
@@ -26,3 +27,21 @@ export {
   type AdminSizeGridSize,
 } from './admin-size-grid';
 export { PatternHeroPreview } from './pattern-hero-preview';
+export {
+  AdminArchiveTabs,
+  type AdminArchiveTabsProps,
+} from './admin-archive-tabs';
+export {
+  ArchiveCardButtons,
+  type ArchiveCardButtonsProps,
+} from './archive-card-buttons.client';
+export {
+  BulkArchiveProvider,
+  BulkArchiveCheckbox,
+  BulkArchiveRowActions,
+  BulkArchiveHeaderButton,
+  type BulkArchiveActionResult,
+  type BulkArchiveActions,
+  type BulkArchiveLabels,
+  type BulkArchiveMode,
+} from './bulk-archive.client';

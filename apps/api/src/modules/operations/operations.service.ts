@@ -9,8 +9,10 @@ import type {
   TimeNormMode,
   UpdateOperationDto,
 } from '@sewing/shared/operations';
+import type { BulkArchiveResultDto } from '@sewing/shared/archive';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import {
   EquipmentNotFoundException,
@@ -599,6 +601,162 @@ export class OperationsService {
       hardDeleteAllowed: blockers.length === 0,
       blockers,
     };
+  }
+
+  // -------------------------------------------------------------------------
+  // АРХИВ ОПЕРАЦИЙ — bulk archive / restore / purge
+  // -------------------------------------------------------------------------
+  //
+  // Общий контур справочников админки (`@sewing/shared/archive`,
+  // `common/bulk-archive.ts`) для списка `/admin/operations`. Архив
+  // физически — `active = false`, тот же флаг, что и тумблер «Активна»
+  // на карточке; отдельного поля/миграции не нужно.
+  //
+  // Гейт purge = «в архиве» + `getBlockers().hardDeleteAllowed`. Карточка
+  // операции (`OperationDangerZone`) остаётся строже и по-своему:
+  // ADMIN-only + подтверждение вводом кода, без требования архива —
+  // это осознанно оставленный «экспертный» путь для операции, созданной
+  // по ошибке. Массовая кнопка в списке требует сначала архив, потому
+  // что там легко промахнуться мимо строки.
+
+  async archiveMany(
+    ids: string[],
+    viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.operation.findMany({
+            where: { id: { in: want } },
+            select: { id: true, active: true },
+          }),
+        ),
+      alreadyDone: (row) => !row.active,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.operation.updateMany({
+            where: { id: { in: targetIds } },
+            data: { active: false },
+          });
+          await this.audit.log(
+            {
+              event: 'OPERATIONS_ARCHIVED',
+              entityType: 'OPERATION',
+              entityId: targetIds[0],
+              employeeId: viewer.employeeId,
+              payload: { operationIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=operation.archive processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async restoreMany(
+    ids: string[],
+    viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.operation.findMany({
+            where: { id: { in: want } },
+            select: { id: true, active: true },
+          }),
+        ),
+      alreadyDone: (row) => row.active,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.operation.updateMany({
+            where: { id: { in: targetIds } },
+            data: { active: true },
+          });
+          await this.audit.log(
+            {
+              event: 'OPERATIONS_RESTORED',
+              entityType: 'OPERATION',
+              entityId: targetIds[0],
+              employeeId: viewer.employeeId,
+              payload: { operationIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=operation.restore processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async purgeMany(
+    ids: string[],
+    viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.operation.findMany({
+            where: { id: { in: want } },
+            select: {
+              id: true,
+              code: true,
+              name: true,
+              category: true,
+              active: true,
+            },
+          }),
+        ),
+      gate: async (row) => {
+        if (row.active) return { reason: 'NOT_ARCHIVED' as const };
+        const { hardDeleteAllowed, blockers } = await this.getBlockers(row.id);
+        if (hardDeleteAllowed) return null;
+        const total = blockers.reduce((sum, b) => sum + b.count, 0);
+        return {
+          reason: 'IN_USE' as const,
+          detail: `у операции «${row.code}» есть история/маршруты (ссылок: ${total})`,
+        };
+      },
+      apply: async (rows) => {
+        for (const row of rows) {
+          await this.prisma.$transaction(async (tx) => {
+            await this.audit.log(
+              {
+                event: 'OPERATION_DELETED',
+                entityType: 'OPERATION',
+                entityId: row.id,
+                employeeId: viewer.employeeId,
+                payload: {
+                  targetSnapshot: {
+                    code: row.code,
+                    name: row.name,
+                    category: row.category,
+                  },
+                  bulk: true,
+                },
+              },
+              tx,
+            );
+            await tx.operation.delete({ where: { id: row.id } });
+          });
+        }
+      },
+    });
+    this.logger.log(
+      `event=operation.purge processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
   }
 
   // -------------------------------------------------------------------------

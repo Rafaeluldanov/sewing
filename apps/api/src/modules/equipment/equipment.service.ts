@@ -11,7 +11,10 @@ import {
   type OperationCategory,
 } from '@sewing/shared/operations';
 import { Prisma, type Role } from '@prisma/client';
+import type { BulkArchiveResultDto } from '@sewing/shared/archive';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
 import {
   EquipmentCodeTakenException,
   EquipmentNotFoundException,
@@ -34,7 +37,10 @@ import {
 export class EquipmentService {
   private readonly logger = new Logger(EquipmentService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly audit: AuditService,
+  ) {}
 
   // -------------------------------------------------------------------------
   // LIST
@@ -410,6 +416,164 @@ export class EquipmentService {
     // Запас в 1000 заведомо хватает; если когда-нибудь упрёмся —
     // явная ошибка лучше тихой коллизии.
     throw new EquipmentCodeTakenException();
+  }
+
+  // ===========================================================================
+  // АРХИВ ОБОРУДОВАНИЯ — bulk archive / restore / purge
+  // ===========================================================================
+  //
+  // Общий контур справочников админки (`@sewing/shared/archive`).
+  // Архив станка — `active = false`: он пропадает из подбора рабочего
+  // места и из списков `/work`, но история смен и событий остаётся.
+  //
+  // Гейт purge: смены (`ShiftSession`), события паспортов
+  // (`PassportEvent`), вызовы мастера (`MasterCall`) — все три FK
+  // `RESTRICT`, БД и так не даст удалить, но 409 без пояснения хуже,
+  // чем понятное «используется». Подкрой (`RecutSession`) и принтеры
+  // ссылаются с `SET NULL` — они удалению не мешают. Разрешения на
+  // операции (`EquipmentOperation`) уходят каскадом: это часть станка.
+  //
+  // На практике станок с историей удалить нельзя — и это правильно:
+  // для него есть архив.
+
+  private async describeUsage(id: string): Promise<string | null> {
+    const [shifts, events, masterCalls] = await Promise.all([
+      this.prisma.shiftSession.count({ where: { equipmentId: id } }),
+      this.prisma.passportEvent.count({ where: { equipmentId: id } }),
+      this.prisma.masterCall.count({ where: { equipmentId: id } }),
+    ]);
+    const parts: string[] = [];
+    if (shifts > 0) parts.push(`смен: ${shifts}`);
+    if (events > 0) parts.push(`событий паспортов: ${events}`);
+    if (masterCalls > 0) parts.push(`вызовов мастера: ${masterCalls}`);
+    return parts.length > 0 ? parts.join(', ') : null;
+  }
+
+  async archiveMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.equipment.findMany({
+            where: { id: { in: want } },
+            select: { id: true, active: true },
+          }),
+        ),
+      alreadyDone: (row) => !row.active,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.equipment.updateMany({
+            where: { id: { in: targetIds } },
+            data: { active: false },
+          });
+          await this.audit.log(
+            {
+              event: 'EQUIPMENTS_ARCHIVED',
+              entityType: 'EQUIPMENT',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { equipmentIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=equipment.archive processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async restoreMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.equipment.findMany({
+            where: { id: { in: want } },
+            select: { id: true, active: true },
+          }),
+        ),
+      alreadyDone: (row) => row.active,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.equipment.updateMany({
+            where: { id: { in: targetIds } },
+            data: { active: true },
+          });
+          await this.audit.log(
+            {
+              event: 'EQUIPMENTS_RESTORED',
+              entityType: 'EQUIPMENT',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { equipmentIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=equipment.restore processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async purgeMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.equipment.findMany({
+            where: { id: { in: want } },
+            select: { id: true, code: true, name: true, active: true },
+          }),
+        ),
+      gate: async (row) => {
+        if (row.active) return { reason: 'NOT_ARCHIVED' as const };
+        const usage = await this.describeUsage(row.id);
+        return usage
+          ? {
+              reason: 'IN_USE' as const,
+              detail: `у станка «${row.code}» есть история (${usage})`,
+            }
+          : null;
+      },
+      apply: async (rows) => {
+        for (const row of rows) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.equipment.delete({ where: { id: row.id } });
+            await this.audit.log(
+              {
+                event: 'EQUIPMENT_DELETED',
+                entityType: 'EQUIPMENT',
+                entityId: row.id,
+                employeeId: actorEmployeeId ?? null,
+                payload: { code: row.code, name: row.name, bulk: true },
+              },
+              tx,
+            );
+          });
+        }
+      },
+    });
+    this.logger.log(
+      `event=equipment.purge processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
   }
 
   private translateUniqueError(e: unknown): void {

@@ -24,8 +24,15 @@ import {
   type UpdateTechCardDto,
 } from '@sewing/shared/tech-cards';
 
+import {
+  BulkArchiveRequestSchema,
+  type BulkArchiveRequestDto,
+  type BulkArchiveResultDto,
+} from '@sewing/shared/archive';
+
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { TechCardsService } from './tech-cards.service.js';
 import type { UploadedFileLike } from '../patterns/patterns-storage.service.js';
 
@@ -74,6 +81,45 @@ export class TechCardsController {
     dto: UpdateTechCardDto,
   ): Promise<TechCardTemplateDetailDto> {
     return this.techCards.update(id, dto);
+  }
+
+  /**
+   * Массовые операции архива со списка `/admin/tech-cards` (контракт —
+   * `@sewing/shared/archive`, тот же в девяти справочниках):
+   *   archive — `isActive = false` (обратимо);
+   *   restore — обратно в активные;
+   *   purge   — удалить навсегда, только из архива и только если карту
+   *             не держат заказы/расцветки/снимки потребностей.
+   * Ответ — частичный успех (`processed` / `skipped` с причиной).
+   */
+  @Post('archive')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  archiveMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.techCards.archiveMany(dto.ids, user.employeeId);
+  }
+
+  @Post('restore')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  restoreMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.techCards.restoreMany(dto.ids, user.employeeId);
+  }
+
+  @Post('purge')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  purgeMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.techCards.purgeMany(dto.ids, user.employeeId);
   }
 
   /**

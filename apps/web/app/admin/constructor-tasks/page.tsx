@@ -8,21 +8,33 @@ import {
   CONSTRUCTOR_TASK_STATUS_TONE,
 } from '@sewing/shared/constructor-tasks';
 import {
+  AdminArchiveTabs,
   AdminCard,
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
+  BulkArchiveCheckbox,
+  BulkArchiveHeaderButton,
+  BulkArchiveProvider,
+  BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
 } from '@/components/admin';
+import {
+  archiveConstructorTasksAction,
+  purgeConstructorTasksAction,
+  restoreConstructorTasksAction,
+} from './archive-actions';
 
 export const dynamic = 'force-dynamic';
 
 interface SearchParams {
   page?: string;
   pageSize?: string;
+  tab?: string;
 }
 
 /**
@@ -41,10 +53,15 @@ export default async function AdminConstructorTasksListPage({
 }: {
   searchParams?: SearchParams;
 }) {
-  let items: ConstructorTaskSummaryDto[] = [];
+  // Этап «Архив справочников»: активные заявки и архив
+  // (`ConstructorTask.archivedAt`) — две вкладки над одной выдачей.
+  const tab: 'active' | 'archive' =
+    searchParams?.tab === 'archive' ? 'archive' : 'active';
+
+  let all: ConstructorTaskSummaryDto[] = [];
   let error: string | null = null;
   try {
-    items = await listConstructorTasks();
+    all = await listConstructorTasks();
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -52,9 +69,19 @@ export default async function AdminConstructorTasksListPage({
         : 'Не удалось загрузить список заявок конструктору';
   }
 
+  const archivedItems = all.filter((t) => Boolean(t.archivedAt));
+  const activeItems = all.filter((t) => !t.archivedAt);
+  const items = tab === 'archive' ? archivedItems : activeItems;
+
   const { pageItems, page, pageSize, total } = paginate(items, searchParams);
 
   const columns: AdminTableColumn<ConstructorTaskSummaryDto>[] = [
+    {
+      key: 'select',
+      header: '',
+      sortable: false,
+      render: (t) => <BulkArchiveCheckbox id={t.id} />,
+    },
     {
       key: 'patternName',
       header: 'Изделие',
@@ -111,6 +138,12 @@ export default async function AdminConstructorTasksListPage({
       ),
     },
     {
+      key: 'archive',
+      header: '',
+      isAction: true,
+      render: (t) => <BulkArchiveRowActions id={t.id} />,
+    },
+    {
       key: 'open',
       header: '',
       isAction: true,
@@ -130,7 +163,7 @@ export default async function AdminConstructorTasksListPage({
     <AdminPageShell
       icon={<ClipboardList size={22} strokeWidth={1.6} aria-hidden />}
       title="Заявки конструктору"
-      subtitle={`Всего: ${items.length}`}
+      subtitle={`Активных: ${activeItems.length} · Архив: ${archivedItems.length}`}
     >
       {error && (
         <div className="error-box" role="alert">
@@ -139,25 +172,73 @@ export default async function AdminConstructorTasksListPage({
       )}
 
       <AdminCard>
-        <AdminTable
-          rows={pageItems}
-          columns={columns}
-          rowKey={(t) => t.id}
-          rowHref={(t) => `/admin/constructor-tasks/${t.id}`}
-          emptyContent={
-            <AdminEmptyState
-              icon={<ClipboardList size={26} strokeWidth={1.6} aria-hidden />}
-              title="Заявок конструктору пока нет"
-              hint="Они появляются автоматически после клика «Сохранить изделие» на вкладке «Отправить конструктору» в форме создания заказа."
-            />
-          }
+        <AdminArchiveTabs
+          basePath="/admin/constructor-tasks"
+          tab={tab}
+          activeCount={activeItems.length}
+          archiveCount={archivedItems.length}
         />
+
+        <BulkArchiveProvider
+          mode={tab}
+          allIds={items.map((t) => t.id)}
+          actions={{
+            archive: archiveConstructorTasksAction,
+            restore: restoreConstructorTasksAction,
+            purge: purgeConstructorTasksAction,
+          }}
+          labels={{
+            one: 'заявку',
+            many: 'заявок',
+            archiveHint:
+              'Заявки пропадут из активного списка. История и вложения сохранятся, статус не меняется.',
+            purgeHint:
+              'Вместе с заявкой пропадут её строки размеров и вложения. Лекало (номенклатура) останется.',
+          }}
+        >
+          <AdminSectionHeader
+            title={tab === 'archive' ? 'Архив' : 'Активные'}
+            hint={
+              tab === 'archive'
+                ? `В архиве: ${items.length}. Удаление навсегда — только отсюда.`
+                : `Всего: ${items.length}`
+            }
+            actions={<BulkArchiveHeaderButton />}
+          />
+
+          <AdminTable
+            rows={pageItems}
+            columns={columns}
+            rowKey={(t) => t.id}
+            rowHref={(t) => `/admin/constructor-tasks/${t.id}`}
+            emptyContent={
+              tab === 'archive' ? (
+                <AdminEmptyState
+                  icon={
+                    <ClipboardList size={26} strokeWidth={1.6} aria-hidden />
+                  }
+                  title="Архив пуст"
+                  hint="Сюда попадают заявки, отправленные в архив. Из архива их можно вернуть или удалить навсегда."
+                />
+              ) : (
+                <AdminEmptyState
+                  icon={
+                    <ClipboardList size={26} strokeWidth={1.6} aria-hidden />
+                  }
+                  title="Заявок конструктору пока нет"
+                  hint="Они появляются автоматически после клика «Сохранить изделие» на вкладке «Отправить конструктору» в форме создания заказа."
+                />
+              )
+            }
+          />
+        </BulkArchiveProvider>
 
         <AdminPagination
           page={page}
           pageSize={pageSize}
           total={total}
           basePath="/admin/constructor-tasks"
+          preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
           label="заявок"
         />
       </AdminCard>

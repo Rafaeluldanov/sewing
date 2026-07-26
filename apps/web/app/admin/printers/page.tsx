@@ -5,15 +5,26 @@ import { listPrinters } from '@/lib/printers-api';
 import type { PrinterSummaryDto } from '@sewing/shared/printers';
 import { formatRole } from '@/lib/admin-labels';
 import {
+  AdminArchiveTabs,
   AdminCard,
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
+  BulkArchiveCheckbox,
+  BulkArchiveHeaderButton,
+  BulkArchiveProvider,
+  BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
 } from '@/components/admin';
+import {
+  archivePrintersAction,
+  purgePrintersAction,
+  restorePrintersAction,
+} from './archive-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -30,6 +41,7 @@ function formatPrinterType(type: string): string {
 interface SearchParams {
   page?: string;
   pageSize?: string;
+  tab?: string;
 }
 
 /**
@@ -50,6 +62,9 @@ export default async function AdminPrintersPage({
 }: {
   searchParams?: SearchParams;
 }) {
+  const tab: 'active' | 'archive' =
+    searchParams?.tab === 'archive' ? 'archive' : 'active';
+
   let items: PrinterSummaryDto[] = [];
   let error: string | null = null;
   try {
@@ -61,9 +76,21 @@ export default async function AdminPrintersPage({
         : 'Не удалось загрузить список принтеров';
   }
 
-  const { pageItems, page, pageSize, total } = paginate(items, searchParams);
+  // Этап «Архив справочников»: архив принтера — `isActive = false`
+  // (агент такого принтера уже не спарится).
+  const activeItems = items.filter((p) => p.isActive);
+  const archivedItems = items.filter((p) => !p.isActive);
+  const visible = tab === 'archive' ? archivedItems : activeItems;
+
+  const { pageItems, page, pageSize, total } = paginate(visible, searchParams);
 
   const columns: AdminTableColumn<PrinterSummaryDto>[] = [
+    {
+      key: 'select',
+      header: '',
+      sortable: false,
+      render: (p) => <BulkArchiveCheckbox id={p.id} />,
+    },
     {
       key: 'name',
       header: 'Название',
@@ -76,9 +103,7 @@ export default async function AdminPrintersPage({
           >
             {p.name}
           </Link>
-          {!p.isActive && (
-            <div className="admin-table__hint">Деактивирован</div>
-          )}
+          {!p.isActive && <div className="admin-table__hint">В архиве</div>}
         </div>
       ),
     },
@@ -123,6 +148,12 @@ export default async function AdminPrintersPage({
         ),
     },
     {
+      key: 'archive',
+      header: '',
+      isAction: true,
+      render: (p) => <BulkArchiveRowActions id={p.id} />,
+    },
+    {
       key: 'open',
       header: '',
       isAction: true,
@@ -142,7 +173,7 @@ export default async function AdminPrintersPage({
     <AdminPageShell
       icon={<Printer size={22} strokeWidth={1.6} aria-hidden />}
       title="Принтеры"
-      subtitle={`Всего: ${items.length}`}
+      subtitle={`Активных: ${activeItems.length} · Архив: ${archivedItems.length}`}
       actions={
         <Link
           href="/admin/printers/new"
@@ -160,33 +191,76 @@ export default async function AdminPrintersPage({
       )}
 
       <AdminCard>
-        <AdminTable
-          rows={pageItems}
-          columns={columns}
-          rowKey={(p) => p.id}
-          rowHref={(p) => `/admin/printers/${p.id}`}
-          emptyContent={
-            <AdminEmptyState
-              icon={<Printer size={26} strokeWidth={1.6} aria-hidden />}
-              title="Принтеров ещё нет"
-              actions={
-                <Link
-                  href="/admin/printers/new"
-                  className="admin-btn admin-btn--primary"
-                >
-                  <Plus size={16} strokeWidth={1.6} aria-hidden />
-                  Добавить принтер
-                </Link>
-              }
-            />
-          }
+        <AdminArchiveTabs
+          basePath="/admin/printers"
+          tab={tab}
+          activeCount={activeItems.length}
+          archiveCount={archivedItems.length}
         />
+
+        <BulkArchiveProvider
+          mode={tab}
+          allIds={visible.map((p) => p.id)}
+          actions={{
+            archive: archivePrintersAction,
+            restore: restorePrintersAction,
+            purge: purgePrintersAction,
+          }}
+          labels={{
+            one: 'принтер',
+            many: 'принтеров',
+            archiveHint:
+              'Принтеры пропадут из активного списка, их агенты перестанут спариваться.',
+            purgeHint: 'Вместе с принтером пропадёт его очередь заданий печати.',
+          }}
+        >
+          <AdminSectionHeader
+            title={tab === 'archive' ? 'Архив' : 'Активные'}
+            hint={
+              tab === 'archive'
+                ? `В архиве: ${visible.length}. Удаление навсегда — только отсюда.`
+                : `Всего: ${visible.length}`
+            }
+            actions={<BulkArchiveHeaderButton />}
+          />
+
+          <AdminTable
+            rows={pageItems}
+            columns={columns}
+            rowKey={(p) => p.id}
+            rowHref={(p) => `/admin/printers/${p.id}`}
+            emptyContent={
+              tab === 'archive' ? (
+                <AdminEmptyState
+                  icon={<Printer size={26} strokeWidth={1.6} aria-hidden />}
+                  title="Архив пуст"
+                  hint="Сюда попадают принтеры, отправленные в архив. Из архива их можно вернуть или удалить навсегда."
+                />
+              ) : (
+                <AdminEmptyState
+                  icon={<Printer size={26} strokeWidth={1.6} aria-hidden />}
+                  title="Принтеров ещё нет"
+                  actions={
+                    <Link
+                      href="/admin/printers/new"
+                      className="admin-btn admin-btn--primary"
+                    >
+                      <Plus size={16} strokeWidth={1.6} aria-hidden />
+                      Добавить принтер
+                    </Link>
+                  }
+                />
+              )
+            }
+          />
+        </BulkArchiveProvider>
 
         <AdminPagination
           page={page}
           pageSize={pageSize}
           total={total}
           basePath="/admin/printers"
+          preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
           label="принтеров"
         />
       </AdminCard>

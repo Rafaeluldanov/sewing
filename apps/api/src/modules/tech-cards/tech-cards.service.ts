@@ -28,7 +28,11 @@ import type {
   TechCardParameterOwner,
 } from '@sewing/shared/tech-card-parameters';
 
+import type { BulkArchiveResultDto } from '@sewing/shared/archive';
+
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { AuditService } from '../audit/audit.service.js';
+import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
 import {
   PatternCategoryInactiveException,
   PatternCategoryNotFoundException,
@@ -68,6 +72,7 @@ export class TechCardsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly storage: TechCardsStorageService,
+    private readonly audit: AuditService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -479,30 +484,183 @@ export class TechCardsService {
       );
     }
 
-    const [orderCount, matReqCount, outReqCount] = await Promise.all([
-      this.prisma.order.count({ where: { techCardId: id } }),
-      this.prisma.orderMaterialRequirement.count({
-        where: { sourceTechCardLine: { techCardId: id } },
-      }),
-      this.prisma.orderOutsourceRequirement.count({
-        where: { sourceTechCardLine: { techCardId: id } },
-      }),
-    ]);
-    const snapshotRefs = matReqCount + outReqCount;
-    if (orderCount > 0 || snapshotRefs > 0) {
-      const parts: string[] = [];
-      if (orderCount > 0) parts.push(`заказов: ${orderCount}`);
-      if (snapshotRefs > 0)
-        parts.push(`строк в потребностях заказов: ${snapshotRefs}`);
+    const usage = await this.describeUsage(id);
+    if (usage) {
       throw new TechCardDeleteForbiddenException(
-        `Эту техкарту удалить навсегда нельзя: её используют ${parts.join(
-          ', ',
-        )}. Заказы хранят её snapshot, поэтому удалить карту можно только после удаления этих заказов. Если они нужны — просто оставьте карту в архиве: в новые заказы неактивные не предлагаются.`,
+        `Эту техкарту удалить навсегда нельзя: её используют ${usage}. Заказы хранят её snapshot, поэтому удалить карту можно только после удаления этих заказов. Если они нужны — просто оставьте карту в архиве: в новые заказы неактивные не предлагаются.`,
       );
     }
 
     await this.prisma.techCardTemplate.delete({ where: { id } });
     this.logger.log(`event=tech_card.delete id=${id} code=${tpl.code}`);
+  }
+
+  /**
+   * Кто держит техкарту: заказ целиком (`Order.techCardId`), расцветка
+   * заказа (`OrderVariant.techCardId` — своя техкарта на цвет, этап
+   * «Расцветки») или снимок строк в потребностях заказа. `null` —
+   * ссылок нет, удалять можно.
+   *
+   * Общий источник истины для одиночного `remove()` и массового
+   * `purgeMany()`: гейт должен быть один, иначе массовая операция
+   * превратилась бы в обходной путь мимо политики.
+   */
+  private async describeUsage(id: string): Promise<string | null> {
+    const [orderCount, variantCount, matReqCount, outReqCount] =
+      await Promise.all([
+        this.prisma.order.count({ where: { techCardId: id } }),
+        this.prisma.orderVariant.count({ where: { techCardId: id } }),
+        this.prisma.orderMaterialRequirement.count({
+          where: { sourceTechCardLine: { techCardId: id } },
+        }),
+        this.prisma.orderOutsourceRequirement.count({
+          where: { sourceTechCardLine: { techCardId: id } },
+        }),
+      ]);
+    const snapshotRefs = matReqCount + outReqCount;
+    const parts: string[] = [];
+    if (orderCount > 0) parts.push(`заказов: ${orderCount}`);
+    if (variantCount > 0) parts.push(`расцветок заказов: ${variantCount}`);
+    if (snapshotRefs > 0)
+      parts.push(`строк в потребностях заказов: ${snapshotRefs}`);
+    return parts.length > 0 ? parts.join(', ') : null;
+  }
+
+  // ===========================================================================
+  // АРХИВ ТЕХКАРТ — bulk archive / restore / purge
+  // ===========================================================================
+  //
+  // Контур «сначала архив, потом навсегда» — общий для справочников
+  // админки (см. `@sewing/shared/archive`, `common/bulk-archive.ts`).
+  // Архив техкарты физически — это `isActive = false`: то же состояние,
+  // в которое её переводит кнопка «Архивировать» на карточке, поэтому
+  // отдельного поля/миграции не нужно.
+
+  async archiveMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.techCardTemplate.findMany({
+            where: { id: { in: want } },
+            select: { id: true, isActive: true },
+          }),
+        ),
+      alreadyDone: (row) => !row.isActive,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.techCardTemplate.updateMany({
+            where: { id: { in: targetIds } },
+            data: { isActive: false },
+          });
+          await this.audit.log(
+            {
+              event: 'TECH_CARDS_ARCHIVED',
+              entityType: 'TECH_CARD',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { techCardIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=tech_card.archive processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async restoreMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.techCardTemplate.findMany({
+            where: { id: { in: want } },
+            select: { id: true, isActive: true },
+          }),
+        ),
+      alreadyDone: (row) => row.isActive,
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.techCardTemplate.updateMany({
+            where: { id: { in: targetIds } },
+            data: { isActive: true },
+          });
+          await this.audit.log(
+            {
+              event: 'TECH_CARDS_RESTORED',
+              entityType: 'TECH_CARD',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { techCardIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=tech_card.restore processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async purgeMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.techCardTemplate.findMany({
+            where: { id: { in: want } },
+            select: { id: true, code: true, name: true, isActive: true },
+          }),
+        ),
+      gate: async (row) => {
+        if (row.isActive) return { reason: 'NOT_ARCHIVED' as const };
+        const usage = await this.describeUsage(row.id);
+        return usage
+          ? {
+              reason: 'IN_USE' as const,
+              detail: `техкарту «${row.code}» используют ${usage}`,
+            }
+          : null;
+      },
+      apply: async (rows) => {
+        for (const row of rows) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.techCardTemplate.delete({ where: { id: row.id } });
+            await this.audit.log(
+              {
+                event: 'TECH_CARD_DELETED',
+                entityType: 'TECH_CARD',
+                entityId: row.id,
+                employeeId: actorEmployeeId ?? null,
+                payload: { code: row.code, name: row.name, bulk: true },
+              },
+              tx,
+            );
+          });
+        }
+      },
+    });
+    this.logger.log(
+      `event=tech_card.purge processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
   }
 
   // -------------------------------------------------------------------------

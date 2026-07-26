@@ -15,8 +15,10 @@ import type {
   UpdateSupplierDto,
 } from '@sewing/shared/suppliers';
 
+import type { BulkArchiveResultDto } from '@sewing/shared/archive';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
 import {
   CashFlowItemNotFoundException,
   SupplierCatalogItemNotFoundException,
@@ -240,6 +242,151 @@ export class SuppliersService {
       },
       employeeId: actorEmployeeId ?? null,
     });
+  }
+
+  // ===========================================================================
+  // АРХИВ ПОСТАВЩИКОВ — bulk archive / restore / purge
+  // ===========================================================================
+  //
+  // Общий контур справочников админки (`@sewing/shared/archive`).
+  // Архив поставщика — `status = INACTIVE`: карточка пропадает из
+  // активного списка и подбора, но уже выбранные `WorkshopNeed`
+  // остаются связанными (UI помечает «Неактивен»).
+  //
+  // Гейт purge повторяет одиночный `delete()`: только из архива и
+  // только если на поставщика не ссылаются заказы поставщикам.
+  // Контакты и позиции каталога уходят каскадом — это части карточки.
+
+  async archiveMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.supplier.findMany({
+            where: { id: { in: want } },
+            select: { id: true, status: true },
+          }),
+        ),
+      alreadyDone: (row) => row.status !== 'ACTIVE',
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.supplier.updateMany({
+            where: { id: { in: targetIds } },
+            data: { status: 'INACTIVE' },
+          });
+          await this.audit.log(
+            {
+              event: 'SUPPLIERS_ARCHIVED',
+              entityType: 'SUPPLIER',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { supplierIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=supplier.archive processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async restoreMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.supplier.findMany({
+            where: { id: { in: want } },
+            select: { id: true, status: true },
+          }),
+        ),
+      alreadyDone: (row) => row.status === 'ACTIVE',
+      gate: () => null,
+      apply: async (_rows, targetIds) => {
+        await this.prisma.$transaction(async (tx) => {
+          await tx.supplier.updateMany({
+            where: { id: { in: targetIds } },
+            data: { status: 'ACTIVE' },
+          });
+          await this.audit.log(
+            {
+              event: 'SUPPLIERS_RESTORED',
+              entityType: 'SUPPLIER',
+              entityId: targetIds[0],
+              employeeId: actorEmployeeId ?? null,
+              payload: { supplierIds: targetIds },
+            },
+            tx,
+          );
+        });
+      },
+    });
+    this.logger.log(
+      `event=supplier.restore processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
+  }
+
+  async purgeMany(
+    ids: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<BulkArchiveResultDto> {
+    const res = await runBulkArchive({
+      ids,
+      load: async (want) =>
+        indexById(
+          await this.prisma.supplier.findMany({
+            where: { id: { in: want } },
+            select: {
+              id: true,
+              name: true,
+              status: true,
+              _count: { select: { purchaseOrders: true } },
+            },
+          }),
+        ),
+      gate: (row) => {
+        if (row.status === 'ACTIVE') return { reason: 'NOT_ARCHIVED' as const };
+        if (row._count.purchaseOrders > 0) {
+          return {
+            reason: 'IN_USE' as const,
+            detail: `у поставщика «${row.name}» есть заказы поставщикам: ${row._count.purchaseOrders}`,
+          };
+        }
+        return null;
+      },
+      apply: async (rows) => {
+        for (const row of rows) {
+          await this.prisma.$transaction(async (tx) => {
+            await tx.supplier.delete({ where: { id: row.id } });
+            await this.audit.log(
+              {
+                event: 'SUPPLIER_DELETED',
+                entityType: 'SUPPLIER',
+                entityId: row.id,
+                employeeId: actorEmployeeId ?? null,
+                payload: { name: row.name, status: row.status, bulk: true },
+              },
+              tx,
+            );
+          });
+        }
+      },
+    });
+    this.logger.log(
+      `event=supplier.purge processed=${res.processed.length} skipped=${res.skipped.length}`,
+    );
+    return res;
   }
 
   // ===========================================================================

@@ -4432,6 +4432,34 @@ export class TechCardDeleteForbiddenException extends BusinessException {
   }
 }
 
+/**
+ * Этап «Архив справочников»: безвозвратно удалить шаблон маршрута
+ * можно только из архива и только если на него не ссылаются заказы /
+ * пробники (FK `RESTRICT` — раньше такое удаление падало сырой
+ * ошибкой БД). См. `RoutesService.remove`.
+ */
+export class RouteTemplateDeleteForbiddenException extends BusinessException {
+  constructor(message: string) {
+    super('ROUTE_TEMPLATE_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
+  }
+}
+
+/**
+ * Тот же контур для цехового монитора (`DisplayScreenConfig`) и
+ * принтеров: удаление навсегда — только из архива.
+ */
+export class DisplayScreenDeleteForbiddenException extends BusinessException {
+  constructor(message: string) {
+    super('DISPLAY_SCREEN_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
+  }
+}
+
+export class PrinterDeleteForbiddenException extends BusinessException {
+  constructor(message: string) {
+    super('PRINTER_DELETE_FORBIDDEN', message, HttpStatus.CONFLICT);
+  }
+}
+
 export class CutReleasePolicyNotFoundException extends BusinessException {
   constructor() {
     super(

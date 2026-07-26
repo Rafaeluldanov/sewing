@@ -7,6 +7,7 @@
   "types": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./archive": "./src/archive.ts",
     "./auth": "./src/auth.ts",
     "./orders": "./src/orders.ts",
     "./passports": "./src/passports.ts",

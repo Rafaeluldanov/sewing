@@ -20,8 +20,14 @@ import {
   type UpdateEquipmentOperationsDto,
 } from '@sewing/shared/equipment';
 import * as QRCode from 'qrcode';
+import {
+  BulkArchiveRequestSchema,
+  type BulkArchiveRequestDto,
+  type BulkArchiveResultDto,
+} from '@sewing/shared/archive';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
-import { Public, Roles } from '../auth/auth.decorators.js';
+import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
+import type { AuthPrincipal } from '../auth/auth.types.js';
 import { EquipmentService } from './equipment.service.js';
 import { renderEquipmentPrintHtml } from './equipment-print.js';
 
@@ -68,6 +74,45 @@ export class EquipmentController {
     @Body(new ZodValidationPipe(CreateEquipmentSchema)) dto: CreateEquipmentDto,
   ): Promise<EquipmentDetailDto> {
     return this.equipment.create(dto);
+  }
+
+  /**
+   * Массовые операции архива со списка `/admin/equipment` (контракт —
+   * `@sewing/shared/archive`): `active = false` → обратно → удалить
+   * навсегда (только из архива и только если у станка нет истории —
+   * смен, событий паспортов, вызовов мастера).
+   *
+   * Объявлены ДО `@Get(':id')` для читаемости; конфликта нет —
+   * одноимённого `@Post(':id')` в контроллере не существует.
+   */
+  @Post('archive')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  archiveMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.equipment.archiveMany(dto.ids, user.employeeId);
+  }
+
+  @Post('restore')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  restoreMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.equipment.restoreMany(dto.ids, user.employeeId);
+  }
+
+  @Post('purge')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  purgeMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.equipment.purgeMany(dto.ids, user.employeeId);
   }
 
   @Get(':id')

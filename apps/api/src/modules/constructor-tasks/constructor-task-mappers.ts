@@ -21,6 +21,8 @@ export function mapConstructorTaskSummary(t: {
   updatedAt: Date;
   submittedAt: Date | null;
   acceptedAt: Date | null;
+  /** Этап «Архив справочников». Опционально — не все include его тянут. */
+  archivedAt?: Date | null;
   createdBy: { fullName: string } | null;
   assignedTo: { fullName: string } | null;
   _count: { files: number; sizeRows: number };
@@ -37,6 +39,7 @@ export function mapConstructorTaskSummary(t: {
     updatedAt: t.updatedAt.toISOString(),
     submittedAt: t.submittedAt ? t.submittedAt.toISOString() : null,
     acceptedAt: t.acceptedAt ? t.acceptedAt.toISOString() : null,
+    archivedAt: t.archivedAt ? t.archivedAt.toISOString() : null,
     createdByName: t.createdBy?.fullName ?? null,
     assignedToName: t.assignedTo?.fullName ?? null,
     filesCount: t._count.files,

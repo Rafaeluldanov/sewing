@@ -337,6 +337,13 @@ export interface ConstructorTaskSummaryDto {
   assignedToName: string | null;
   filesCount: number;
   sizeRowsCount: number;
+  /**
+   * Этап «Архив справочников»: момент мягкой архивации заявки (ISO)
+   * или `null`, если заявка в активном списке. Опционально (`?`),
+   * чтобы старые потребители без пересборки shared компилировались;
+   * backend всегда отдаёт значение.
+   */
+  archivedAt?: string | null;
 }
 
 export interface ConstructorTaskDetailDto extends ConstructorTaskSummaryDto {

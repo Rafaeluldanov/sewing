@@ -21,6 +21,11 @@ import {
   type UpdateEmployeeDto,
 } from '@sewing/shared/employees';
 import { EMPLOYEE_QR_PREFIX } from '@sewing/shared/master-calls';
+import {
+  BulkArchiveRequestSchema,
+  type BulkArchiveRequestDto,
+  type BulkArchiveResultDto,
+} from '@sewing/shared/archive';
 import * as QRCode from 'qrcode';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { CurrentUser, Public, Roles } from '../auth/auth.decorators.js';
@@ -125,6 +130,44 @@ export class EmployeesController {
   @Post(':id/archive')
   archive(@Param('id') id: string, @CurrentUser() viewer: AuthPrincipal) {
     return this.employees.archive(id, viewer);
+  }
+
+  /**
+   * Массовые операции архива со списка `/admin/employees` (контракт —
+   * `@sewing/shared/archive`). Оборачивают одиночные `archive` /
+   * `restore` / `hardDelete` со всеми их гейтами; не прошедшие
+   * возвращаются в `skipped` с человекочитаемой причиной раздела
+   * («нельзя на себе», «последний администратор», «есть история»).
+   *
+   * `purge` — `ADMIN`-only, как и одиночный `DELETE :id`, и требует,
+   * чтобы карточка была в архиве.
+   */
+  @Post('archive')
+  archiveMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.employees.archiveMany(dto.ids, viewer);
+  }
+
+  @Post('restore')
+  restoreMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.employees.restoreMany(dto.ids, viewer);
+  }
+
+  @Roles('ADMIN')
+  @Post('purge')
+  purgeMany(
+    @Body(new ZodValidationPipe(BulkArchiveRequestSchema))
+    dto: BulkArchiveRequestDto,
+    @CurrentUser() viewer: AuthPrincipal,
+  ): Promise<BulkArchiveResultDto> {
+    return this.employees.purgeMany(dto.ids, viewer);
   }
 
   /**
