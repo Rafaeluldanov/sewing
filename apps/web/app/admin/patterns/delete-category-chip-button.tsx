@@ -10,24 +10,33 @@
  * `.pattern-category-filter__actions`), как и кнопка-карандаш
  * редактирования — чтобы строка фильтра оставалась чистой.
  *
- * Backend блокирует удаление, если категорию используют
- * лекала/техкарты — текст 409 показываем через `window.alert`
- * (inline-место в плотном ряду чипов нет), сама категория при этом
- * остаётся на месте (action откатывает транзитный архив).
+ * ПРЕДУПРЕЖДЕНИЕ ОБЯЗАТЕЛЬНО: удаление группы каскадом уводит ВСЮ её
+ * номенклатуру в архив, поэтому в `window.confirm` показываем счётчик
+ * карточек (`patternsCount` приходит из серверного списка категорий) —
+ * см. `buildCategoryDeleteConfirmText`.
+ *
+ * Backend блокирует удаление, если категорию используют техкарты, —
+ * текст 409 показываем через `window.alert` (inline-место в плотном
+ * ряду чипов нет), сама категория при этом остаётся на месте (action
+ * откатывает транзитный архив).
  */
 import { Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useTransition } from 'react';
+import { buildCategoryDeleteConfirmText } from '@/lib/pattern-category-delete-confirm';
 import { deleteCategoryFromPatternsAction } from './actions';
 
 interface Props {
   categoryId: string;
   categoryName: string;
+  /** Сколько номенклатуры уедет в архив вместе с группой. */
+  patternsCount: number;
 }
 
 export function DeleteCategoryChipButton({
   categoryId,
   categoryName,
+  patternsCount,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -35,9 +44,7 @@ export function DeleteCategoryChipButton({
   const handleClick = () => {
     if (
       !window.confirm(
-        `Удалить категорию «${categoryName}»? ` +
-          'Если её используют лекала или техкарты — удаление не пройдёт, ' +
-          'категория останется на месте.',
+        buildCategoryDeleteConfirmText(categoryName, patternsCount),
       )
     ) {
       return;

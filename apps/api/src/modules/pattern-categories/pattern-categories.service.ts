@@ -369,19 +369,32 @@ export class PatternCategoriesService {
    * Политика «блокировать, если используется»
    * (`PatternCategoryDeleteForbiddenException`):
    *   1) удалять можно ТОЛЬКО архивную категорию (`status = ARCHIVED`);
-   *   2) блокируем, если на категорию ссылаются лекала
-   *      (`PatternItem.categoryId`) или техкарты
-   *      (`TechCardTemplate.patternCategoryId`). Оба FK — `SET NULL`,
-   *      т.е. БД молча обнулила бы привязку; мы этого не хотим.
+   *   2) блокируем, если на категорию ссылаются техкарты
+   *      (`TechCardTemplate.patternCategoryId`) — FK `SET NULL`, т.е. БД
+   *      молча обнулила бы привязку; мы этого не хотим;
+   *   3) номенклатура категории (`PatternItem.categoryId`) по умолчанию
+   *      тоже блокирует удаление, но вызывающий может явно попросить
+   *      каскад (`options.archivePatterns`) — тогда вся номенклатура
+   *      группы УХОДИТ В АРХИВ (`status = ARCHIVED`, как в
+   *      `PatternsService.archiveMany`), а не удаляется: её видно на
+   *      вкладке «Архив» и можно восстановить. Опция намеренно opt-in —
+   *      UI включает её только после предупреждения менеджеру, а слепой
+   *      вызов API остаётся неразрушающим.
+   *
+   * Привязку `PatternItem.categoryId` обнуляет сама БД (`SET NULL`)
+   * при удалении строки категории — восстанавливать номенклатуру из
+   * архива менеджер будет уже без группы (группы больше нет).
    *
    * Параметры категории (`PatternCategoryParameter`) уходят каскадом, а
    * вместе с ними — и зависящие от них нормы/значения лекал
-   * (`categoryParameterId` тоже `Cascade`); но раз лекал у категории
-   * уже нет (проверка выше), таких норм и не существует.
+   * (`categoryParameterId` тоже `Cascade`). Это и есть цена каскада:
+   * площади/нормы по параметрам ИМЕННО ЭТОЙ группы пропадут — текст
+   * предупреждения в UI обязан это проговаривать.
    */
   async remove(
     id: string,
     actorEmployeeId?: string | null,
+    options?: { archivePatterns?: boolean },
   ): Promise<void> {
     const current = await this.prisma.patternCategory.findUnique({
       where: { id },
@@ -394,31 +407,75 @@ export class PatternCategoriesService {
       );
     }
 
-    const [patternCount, techCardCount] = await Promise.all([
-      this.prisma.patternItem.count({ where: { categoryId: id } }),
-      this.prisma.techCardTemplate.count({ where: { patternCategoryId: id } }),
-    ]);
-    if (patternCount > 0 || techCardCount > 0) {
-      const parts: string[] = [];
-      if (patternCount > 0) parts.push(`номенклатур: ${patternCount}`);
-      if (techCardCount > 0) parts.push(`техкарт: ${techCardCount}`);
+    // Техкарты проверяем ПЕРВЫМИ и всегда: их каскад не предусмотрен,
+    // и падать на них уже после архивации номенклатуры нельзя.
+    const techCardCount = await this.prisma.techCardTemplate.count({
+      where: { patternCategoryId: id },
+    });
+    if (techCardCount > 0) {
       throw new PatternCategoryDeleteForbiddenException(
-        `Эту категорию удалить навсегда нельзя: к ней привязаны ${parts.join(
-          ', ',
-        )}. Как удалить: откройте каждую такую номенклатуру/техкарту и выберите ей другую категорию (или удалите её), после этого категория удалится. Если они нужны — оставьте категорию в архиве.`,
+        `Эту категорию удалить навсегда нельзя: к ней привязаны техкарт: ${techCardCount}. Как удалить: откройте каждую такую техкарту и выберите ей другую категорию (или удалите её), после этого категория удалится. Если они нужны — оставьте категорию в архиве.`,
       );
     }
 
-    await this.prisma.patternCategory.delete({ where: { id } });
-
-    this.logger.log(`event=pattern_category.delete id=${id}`);
-    await this.audit.log({
-      event: 'PATTERN_CATEGORY_DELETED',
-      entityType: 'PATTERN_CATEGORY',
-      entityId: id,
-      payload: { name: current.name, slug: current.slug },
-      employeeId: actorEmployeeId ?? null,
+    const patterns = await this.prisma.patternItem.findMany({
+      where: { categoryId: id },
+      select: { id: true, status: true },
     });
+    if (patterns.length > 0 && !options?.archivePatterns) {
+      throw new PatternCategoryDeleteForbiddenException(
+        `Эту категорию удалить навсегда нельзя: к ней привязаны номенклатур: ${patterns.length}. Как удалить: подтвердите удаление вместе с номенклатурой (она уйдёт в архив) или откройте каждую карточку и выберите ей другую категорию. Если группа нужна — оставьте её в архиве.`,
+      );
+    }
+    const toArchive = patterns
+      .filter((p) => p.status !== 'ARCHIVED')
+      .map((p) => p.id);
+
+    await this.prisma.$transaction(async (tx) => {
+      if (toArchive.length > 0) {
+        await tx.patternItem.updateMany({
+          where: { id: { in: toArchive } },
+          data: { status: 'ARCHIVED' },
+        });
+        // Тот же event, что и у обычной архивации номенклатуры, — чтобы
+        // в журнале карточки было видно, откуда она уехала в архив.
+        await this.audit.log(
+          {
+            event: 'PATTERNS_ARCHIVED',
+            entityType: 'PATTERN',
+            entityId: toArchive[0] as string,
+            payload: {
+              patternIds: toArchive,
+              reason: 'PATTERN_CATEGORY_DELETED',
+              categoryId: id,
+              categoryName: current.name,
+            },
+            employeeId: actorEmployeeId ?? null,
+          },
+          tx,
+        );
+      }
+      await tx.patternCategory.delete({ where: { id } });
+      await this.audit.log(
+        {
+          event: 'PATTERN_CATEGORY_DELETED',
+          entityType: 'PATTERN_CATEGORY',
+          entityId: id,
+          payload: {
+            name: current.name,
+            slug: current.slug,
+            archivedPatternIds: toArchive,
+            detachedPatternsCount: patterns.length,
+          },
+          employeeId: actorEmployeeId ?? null,
+        },
+        tx,
+      );
+    });
+
+    this.logger.log(
+      `event=pattern_category.delete id=${id} patterns=${patterns.length} archived=${toArchive.length}`,
+    );
   }
 
   // ===========================================================================

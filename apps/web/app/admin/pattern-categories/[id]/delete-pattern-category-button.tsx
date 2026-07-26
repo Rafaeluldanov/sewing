@@ -6,27 +6,39 @@
  * soft-архива (`status=ARCHIVED`).
  *
  * Видна ТОЛЬКО для архивной категории (`status === 'ARCHIVED'`).
- * Backend блокирует удаление, если на категорию ссылаются
- * лекала/техкарты (`PATTERN_CATEGORY_DELETE_FORBIDDEN`) — текст ошибки
- * показываем inline.
+ * Backend блокирует удаление, если на категорию ссылаются техкарты
+ * (`PATTERN_CATEGORY_DELETE_FORBIDDEN`) — текст ошибки показываем
+ * inline.
+ *
+ * Номенклатура группы удаление НЕ блокирует: она каскадом уезжает в
+ * архив. Про это обязательно предупреждаем в `window.confirm` со
+ * счётчиком карточек (`patternsCount`) — формулировка общая с чипом на
+ * `/admin/patterns` (`buildCategoryDeleteConfirmText`).
  *
  * После успеха карточки больше нет — уводим на список (`router.push`).
  */
-import { Trash2 } from 'lucide-react';
+import { AlertTriangle, Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
+import {
+  buildCategoryDeleteConfirmText,
+  pluralPatterns,
+} from '@/lib/pattern-category-delete-confirm';
 import { deletePatternCategoryPageAction } from './actions';
 
 interface Props {
   categoryId: string;
   categoryName: string;
   status: string;
+  /** Сколько номенклатуры уедет в архив вместе с группой. */
+  patternsCount: number;
 }
 
 export function DeletePatternCategoryButton({
   categoryId,
   categoryName,
   status,
+  patternsCount,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -38,7 +50,7 @@ export function DeletePatternCategoryButton({
   const handleClick = () => {
     if (
       !window.confirm(
-        `Удалить категорию «${categoryName}» НАВСЕГДА? Действие необратимо: пропадут параметры категории.`,
+        buildCategoryDeleteConfirmText(categoryName, patternsCount),
       )
     ) {
       return;
@@ -66,6 +78,21 @@ export function DeletePatternCategoryButton({
         marginTop: 12,
       }}
     >
+      {/* Предупреждение видно ДО клика — на карточке есть место, в
+          отличие от плотного ряда чипов на /admin/patterns. */}
+      {patternsCount > 0 && (
+        <div className="admin-muted" style={{ fontSize: '0.85rem' }}>
+          <AlertTriangle
+            size={14}
+            strokeWidth={1.7}
+            aria-hidden
+            style={{ verticalAlign: '-2px', marginRight: 6 }}
+          />
+          Внутри группы {patternsCount} {pluralPatterns(patternsCount)} — при
+          удалении группы вся она уйдёт в архив «Номенклатуры», а заданные по
+          параметрам группы площади и нормы пропадут.
+        </div>
+      )}
       <button
         type="button"
         className="admin-btn admin-btn--danger"

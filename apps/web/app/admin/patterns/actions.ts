@@ -288,17 +288,22 @@ export async function restorePatternAction(patternId: string): Promise<void> {
  * `/admin/patterns` (чип-фильтр).
  *
  * Backend разрешает hard-delete только для архивной категории
- * (`status = ARCHIVED`) и блокирует, если на неё ссылаются
- * лекала/техкарты (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`). Чтобы у
- * менеджера была одна понятная кнопка «Удалить», оркеструем тут:
+ * (`status = ARCHIVED`) и блокирует, если на неё ссылаются техкарты
+ * (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`). Чтобы у менеджера была
+ * одна понятная кнопка «Удалить», оркеструем тут:
  *
  *   1) узнаём текущий статус (`GET /pattern-categories/:id`);
  *   2) если категория активна — архивируем
  *      (`DELETE /pattern-categories/:id`, soft);
- *   3) удаляем навсегда (`DELETE /pattern-categories/:id/permanent`).
+ *   3) удаляем навсегда
+ *      (`DELETE /pattern-categories/:id/permanent?archivePatterns=1`).
  *
- * Если шаг 3 заблокирован (категорию используют лекала/техкарты), а мы
- * только что её архивировали на шаге 2 — возвращаем статус обратно в
+ * Флаг `archivePatterns` включён всегда: кнопка вызывает action только
+ * после `window.confirm` с предупреждением, сколько номенклатуры уедет
+ * в архив (см. `delete-category-chip-button.tsx`).
+ *
+ * Если шаг 3 заблокирован (категорию используют техкарты), а мы только
+ * что её архивировали на шаге 2 — возвращаем статус обратно в
  * `ACTIVE`, чтобы категория не «исчезла» из активного фильтра, и
  * пробрасываем человекочитаемый текст 409. Так инвариант сохраняется:
  * категория либо удалена, либо осталась ровно в том статусе, что была.
@@ -313,7 +318,7 @@ export async function deleteCategoryFromPatternsAction(
       wasActive = true;
       await archivePatternCategory(categoryId);
     }
-    await deletePatternCategory(categoryId);
+    await deletePatternCategory(categoryId, { archivePatterns: true });
   } catch (e) {
     // Откатываем транзитный архив, чтобы активная категория не пропала.
     if (wasActive) {
@@ -333,6 +338,10 @@ export async function deleteCategoryFromPatternsAction(
     );
   }
   revalidatePath('/admin/patterns');
+  // Каскад мог увезти карточки номенклатуры в архив — их страницы тоже
+  // устарели (бейдж статуса, группа). Ревалидируем весь динамический
+  // сегмент: id-шников заархивированных карточек action не знает.
+  revalidatePath('/admin/patterns/[id]', 'page');
 }
 
 /**

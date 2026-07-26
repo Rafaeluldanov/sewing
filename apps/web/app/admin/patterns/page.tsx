@@ -333,6 +333,7 @@ export default async function AdminPatternsListPage({
               editAriaLabel={`Редактировать категорию: ${c.name}`}
               deleteCategoryId={c.id}
               deleteCategoryName={c.name}
+              deleteCategoryPatternsCount={c.patternsCount}
             >
               <CategoryChipIcon
                 iconImageUrl={c.iconImageUrl}
@@ -387,6 +388,7 @@ export default async function AdminPatternsListPage({
                   editAriaLabel={`Открыть категорию: ${c.name}`}
                   deleteCategoryId={c.id}
                   deleteCategoryName={c.name}
+                  deleteCategoryPatternsCount={c.patternsCount}
                 >
                   <CategoryChipIcon
                     iconImageUrl={c.iconImageUrl}
@@ -612,6 +614,7 @@ function CategoryFilterChip({
   editAriaLabel,
   deleteCategoryId,
   deleteCategoryName,
+  deleteCategoryPatternsCount,
 }: {
   href: string;
   active: boolean;
@@ -622,6 +625,11 @@ function CategoryFilterChip({
   editAriaLabel?: string;
   deleteCategoryId?: string;
   deleteCategoryName?: string;
+  /**
+   * Сколько номенклатуры привязано к группе — кнопка удаления
+   * предупреждает, что вся она уедет в архив.
+   */
+  deleteCategoryPatternsCount?: number;
 }) {
   const filterLink = (
     <Link
@@ -662,6 +670,7 @@ function CategoryFilterChip({
           <DeleteCategoryChipButton
             categoryId={deleteCategoryId}
             categoryName={deleteCategoryName}
+            patternsCount={deleteCategoryPatternsCount ?? 0}
           />
         )}
       </span>

@@ -142,12 +142,20 @@ export class PatternCategoriesController {
    * с `DELETE :id` (soft-archive). Сервис блокирует удаление, если
    * категория не `ARCHIVED` или на неё ссылаются лекала/техкарты
    * (`PATTERN_CATEGORY_DELETE_FORBIDDEN`).
+   *
+   * `?archivePatterns=1` — явное согласие на каскад: номенклатура
+   * группы уходит В АРХИВ, и категория удаляется. Флаг opt-in, потому
+   * что UI показывает предупреждение со счётчиком ПЕРЕД вызовом; без
+   * флага поведение прежнее (409 с объяснением).
    */
   @Delete(':id/permanent')
   remove(
     @Param('id') id: string,
     @CurrentUser() user: AuthPrincipal,
+    @Query('archivePatterns') archivePatterns?: string,
   ): Promise<void> {
-    return this.service.remove(id, user.employeeId);
+    return this.service.remove(id, user.employeeId, {
+      archivePatterns: archivePatterns === '1' || archivePatterns === 'true',
+    });
   }
 }

@@ -812,6 +812,7 @@ export function EditPatternCategoryForm({ category }: Props) {
         categoryId={category.id}
         categoryName={category.name}
         status={category.status}
+        patternsCount={category.patternsCount}
       />
     </>
   );

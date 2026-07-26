@@ -239,11 +239,15 @@ export async function archivePatternCategoryPageAction(
 
 /**
  * Hard-delete архивной категории
- * (`DELETE /api/pattern-categories/:id/permanent`). Зовётся из кнопки
- * «Удалить навсегда» на карточке (видна только для `status =
- * ARCHIVED`). Backend блокирует удаление, если на категорию ссылаются
- * лекала/техкарты (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`) —
+ * (`DELETE /api/pattern-categories/:id/permanent?archivePatterns=1`).
+ * Зовётся из кнопки «Удалить навсегда» на карточке (видна только для
+ * `status = ARCHIVED`). Backend блокирует удаление, если на категорию
+ * ссылаются техкарты (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`) —
  * пробрасываем текст `Error`-ом, кнопка покажет его inline.
+ *
+ * Флаг `archivePatterns` — согласие на каскад: номенклатура группы
+ * уезжает в архив (кнопка предупреждает об этом в `window.confirm` со
+ * счётчиком карточек).
  *
  * Без `redirect`: карточки категории после удаления нет, навигацию на
  * список делает client-кнопка (`router.push`) после успешного `await`.
@@ -252,7 +256,7 @@ export async function deletePatternCategoryPageAction(
   id: string,
 ): Promise<void> {
   try {
-    await deletePatternCategory(id);
+    await deletePatternCategory(id, { archivePatterns: true });
   } catch (e) {
     // Только человекочитаемый текст из 409 (без технического кода) —
     // backend сам объясняет «почему нельзя и как удалить правильно».
@@ -263,4 +267,7 @@ export async function deletePatternCategoryPageAction(
     );
   }
   revalidatePath('/admin/patterns');
+  // Каскад увёз номенклатуру группы в архив — карточки номенклатуры
+  // тоже устарели (статус + пропавшая группа).
+  revalidatePath('/admin/patterns/[id]', 'page');
 }

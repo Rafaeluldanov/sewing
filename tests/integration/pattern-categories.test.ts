@@ -17,6 +17,9 @@
  *      на create-pattern; soft-archive не трогает уже привязанные.
  *   8. Лекало без `categoryId` (legacy fallback) принимает любой
  *      `materialRole` из `MATERIAL_ROLES`.
+ *   9. Hard-delete группы: без `?archivePatterns` блокируется своей
+ *      номенклатурой, с флагом — уводит её в архив; техкарты блокируют
+ *      удаление всегда и до каскада.
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -666,5 +669,95 @@ describeWithDb('integration — pattern-categories', () => {
     expect(detail.body.category?.iconImageUrl).toMatch(
       /\/uploads\/pattern-categories\//,
     );
+  });
+
+  // -------------------------------------------------------------------------
+  // 9. Hard-delete группы: каскад «номенклатура → архив»
+  // -------------------------------------------------------------------------
+
+  test('hard-delete группы без ?archivePatterns блокируется, если внутри есть номенклатура', async () => {
+    const cat = await createHoodieCategory();
+    await createPattern({ article: 'HOODIE-DEL-001', categoryId: cat.id });
+    // Удалять навсегда можно только архивную группу.
+    await request(t.app.getHttpServer())
+      .delete(`/api/pattern-categories/${cat.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+
+    const r = await request(t.app.getHttpServer())
+      .delete(`/api/pattern-categories/${cat.id}/permanent`)
+      .set('Cookie', t.adminCookie)
+      .expect(409);
+    expect(r.body.code).toBe('PATTERN_CATEGORY_DELETE_FORBIDDEN');
+
+    // Группа на месте — блокировка не «съела» её.
+    await request(t.app.getHttpServer())
+      .get(`/api/pattern-categories/${cat.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+  });
+
+  test('hard-delete группы с ?archivePatterns=1 уводит её номенклатуру в архив', async () => {
+    const cat = await createHoodieCategory();
+    const patternId = await createPattern({
+      article: 'HOODIE-DEL-002',
+      categoryId: cat.id,
+    });
+    await request(t.app.getHttpServer())
+      .delete(`/api/pattern-categories/${cat.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+
+    await request(t.app.getHttpServer())
+      .delete(`/api/pattern-categories/${cat.id}/permanent?archivePatterns=1`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+
+    // Группы больше нет...
+    await request(t.app.getHttpServer())
+      .get(`/api/pattern-categories/${cat.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(404);
+
+    // ...а номенклатура жива и лежит в архиве без привязки к группе
+    // (FK `SET NULL` — группы, на которую ссылаться, уже нет).
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/patterns/${patternId}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+    expect(detail.body.status).toBe('ARCHIVED');
+    expect(detail.body.categoryId).toBeNull();
+  });
+
+  test('hard-delete группы блокируется техкартой даже с ?archivePatterns=1 (номенклатура не архивируется)', async () => {
+    const cat = await createHoodieCategory();
+    const patternId = await createPattern({
+      article: 'HOODIE-DEL-003',
+      categoryId: cat.id,
+    });
+    await t.prisma.techCardTemplate.create({
+      data: {
+        code: 'TC-CAT-DEL',
+        name: 'Техкарта группы',
+        patternCategoryId: cat.id,
+      },
+    });
+    await request(t.app.getHttpServer())
+      .delete(`/api/pattern-categories/${cat.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+
+    const r = await request(t.app.getHttpServer())
+      .delete(`/api/pattern-categories/${cat.id}/permanent?archivePatterns=1`)
+      .set('Cookie', t.adminCookie)
+      .expect(409);
+    expect(r.body.code).toBe('PATTERN_CATEGORY_DELETE_FORBIDDEN');
+
+    // Номенклатура НЕ уехала в архив: техкарты проверяются до каскада.
+    const detail = await request(t.app.getHttpServer())
+      .get(`/api/patterns/${patternId}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+    expect(detail.body.status).not.toBe('ARCHIVED');
   });
 });
