@@ -1,8 +1,9 @@
 import { ConflictException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
 import type {
   CreateOrderTechCardLineDto,
   CreateOrderTechCardParameterDto,
+  OrderTechCardEditMode,
   OrderTechCardLineDto,
   OrderTechCardParametersDto,
   OrderTechCardTargetOptionDto,
@@ -25,17 +26,45 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import { OrdersService } from '../orders/orders.service.js';
 
 /**
- * Параметры техкарты внутри заказа: значения по расцветкам + ad-hoc слоты.
+ * Спецификация техкарты внутри заказа: строки материалов + значения
+ * параметров по расцветкам + ad-hoc слоты.
  *
  * Устройство скопировано с `OrderColorwaysService` (см. соседний модуль):
- * правка только в DRAFT/CALCULATION, каждый write заканчивается
- * `OrdersService.resyncColorwayDerived` и возвращает свежий полный DTO.
+ * каждый write заканчивается пересборкой производных и возвращает свежий
+ * полный DTO.
  *
  * Почему именно resync, а не точечный UPDATE снимка: у проекта уже дважды
  * горело на том, что производные (снимок → потребность → план) собирались в
  * обход единого пути. Значение параметра меняет ячейку строки → меняет
  * потребность цеха, поэтому идём тем же путём, что и правка расцветки.
+ *
+ * ОКНО ПРАВКИ (шире, чем у расцветок). Расцветки правятся только пока план
+ * не заморожен (`DRAFT`/`CALCULATION`) — иначе правка не поднялась бы в
+ * агрегат `OrderItem`. Спецификация же от тиража не зависит: технолог
+ * уточняет материал и норму и после расчёта, и в производстве. Поэтому
+ * правка открыта вплоть до `IN_PRODUCTION`, но за окном планирования идёт
+ * amendment-путём — `OrdersService.resyncTechCardDerived` пересобирает
+ * только снимок материалов и план операций, пишет событие в журнал правок
+ * и пересчитывает потребности best-effort. Закрыты только `DONE`/
+ * `CANCELLED` (`ORDER_TECH_CARD_LOCKED`).
  */
+/**
+ * Что правка спецификации сделает с производными данными в этом статусе.
+ * Единственное место, где живёт правило (бэкенд отдаёт его фронту полем
+ * `editMode`, чтобы окно не переизобретало гейт у себя).
+ */
+export function techCardEditMode(
+  status: OrderStatus | string,
+): OrderTechCardEditMode {
+  if (status === OrderStatus.DRAFT || status === OrderStatus.CALCULATION) {
+    return 'PLAN';
+  }
+  if (status === OrderStatus.DONE || status === OrderStatus.CANCELLED) {
+    return 'LOCKED';
+  }
+  return 'AMENDMENT';
+}
+
 @Injectable()
 export class OrderTechCardService {
   private readonly logger = new Logger(OrderTechCardService.name);
@@ -183,9 +212,11 @@ export class OrderTechCardService {
       };
     });
 
+    const editMode = techCardEditMode(order.status);
     return {
       orderId: order.id,
-      editable: order.status === 'DRAFT' || order.status === 'CALCULATION',
+      editable: editMode !== 'LOCKED',
+      editMode,
       variants,
     };
   }
@@ -217,7 +248,10 @@ export class OrderTechCardService {
       },
     });
 
-    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
+      summary: `Параметр «${param.label}»: ${param.value ?? '—'} → ${raw || '—'}`,
+      details: { parameterKey: param.key, from: param.value, to: raw || null },
+    });
     this.logger.log(
       `event=order_tech_card.value_set order=${orderId} key=${param.key} value=${raw || '∅'}`,
     );
@@ -247,7 +281,10 @@ export class OrderTechCardService {
       },
     });
 
-    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
+      summary: `Параметр «${param.label}» = ${param.value ?? '—'} применён ко всем расцветкам (${count})`,
+      details: { parameterKey: param.key, value: param.value, affected: count },
+    });
     this.logger.log(
       `event=order_tech_card.apply_to_all order=${orderId} key=${param.key} affected=${count}`,
     );
@@ -354,7 +391,16 @@ export class OrderTechCardService {
       }
     });
 
-    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
+      summary: `Добавлен параметр «${dto.label}»${
+        dto.value ? ` = ${dto.value}` : ''
+      }`,
+      details: {
+        parameterKey: dto.key,
+        target: dto.target?.field ?? null,
+        value: dto.value ?? null,
+      },
+    });
     this.logger.log(
       `event=order_tech_card.adhoc_created order=${orderId} key=${dto.key} ` +
         `target=${dto.target?.field ?? 'нет'}`,
@@ -408,7 +454,10 @@ export class OrderTechCardService {
       }
     });
 
-    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
+      summary: `Убран параметр «${param.label}»`,
+      details: { parameterKey: param.key },
+    });
     this.logger.log(
       `event=order_tech_card.adhoc_removed order=${orderId} key=${param.key}`,
     );
@@ -423,7 +472,7 @@ export class OrderTechCardService {
    * техкарты: шаблон о ней не знает, значит и заменить её собой не может.
    * Это и есть «что меняем внутри заказа, внутри заказа и остаётся».
    *
-   * `totalQty` считаем не здесь: `resyncColorwayDerived` сразу пересоберёт
+   * `totalQty` считаем не здесь: `resyncTechCardDerived` сразу пересоберёт
    * производные и проставит тираж — один путь, без второго калькулятора.
    */
   async createManualLine(
@@ -471,7 +520,15 @@ export class OrderTechCardService {
       },
     });
 
-    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
+      summary: `Добавлен материал «${dto.name}» — ${dto.qtyPerUnit} ${dto.unit}/шт`,
+      details: {
+        name: dto.name,
+        unit: dto.unit,
+        qtyPerUnit: dto.qtyPerUnit,
+        colorText,
+      },
+    });
     this.logger.log(
       `event=order_tech_card.manual_line_created order=${orderId} name=${dto.name}`,
     );
@@ -496,7 +553,7 @@ export class OrderTechCardService {
    *     legacy-колонка `densityGsm` и `characteristics`-JSON не разошлись
    *     (JSON в зеркале главнее — рассинхрон тихо откатил бы правку).
    *
-   * `totalQty` не трогаем: `resyncColorwayDerived` пересчитает
+   * `totalQty` не трогаем: `resyncTechCardDerived` пересчитает
    * (qtyPerUnit × тираж) — один путь, без второго калькулятора.
    */
   async updateLine(
@@ -616,7 +673,32 @@ export class OrderTechCardService {
       },
     });
 
-    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    // Сводка для журнала — только реально пришедшие поля, «было → стало».
+    const changed: string[] = [];
+    if (dto.name !== undefined && cells.name !== row.name) {
+      changed.push(`название ${row.name} → ${cells.name}`);
+    }
+    if (
+      dto.qtyPerUnit !== undefined &&
+      cells.qtyPerUnit !== row.qtyPerUnit.toString()
+    ) {
+      changed.push(`норма ${row.qtyPerUnit.toString()} → ${cells.qtyPerUnit}`);
+    }
+    if (dto.unit !== undefined && cells.unit !== row.unit) {
+      changed.push(`ед. ${row.unit} → ${cells.unit}`);
+    }
+    if (dto.densityGsm !== undefined && cells.densityGsm !== row.densityGsm) {
+      changed.push(`плотность ${row.densityGsm ?? '—'} → ${cells.densityGsm ?? '—'}`);
+    }
+    if (trimmedColor !== undefined) {
+      changed.push(`цвет → ${trimmedColor ?? '—'}`);
+    }
+    await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
+      summary: `Материал «${row.name}»: ${
+        changed.length > 0 ? changed.join(', ') : 'правка без изменений'
+      }`,
+      details: { requirementId: row.id, fields: Object.keys(dto) },
+    });
     this.logger.log(
       `event=order_tech_card.line_updated order=${orderId} line=${row.id} ` +
         `fields=${Object.keys(dto).join(',')}`,
@@ -673,7 +755,10 @@ export class OrderTechCardService {
     }
 
     await this.prisma.orderMaterialRequirement.delete({ where: { id: row.id } });
-    await this.orders.resyncColorwayDerived(orderId, actorEmployeeId);
+    await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
+      summary: `Убран материал «${row.name}»`,
+      details: { requirementId: row.id, isManual: row.isManual },
+    });
     this.logger.log(
       `event=order_tech_card.line_removed order=${orderId} name=${row.name} manual=${row.isManual}`,
     );
@@ -685,9 +770,10 @@ export class OrderTechCardService {
   // -------------------------------------------------------------------------
 
   /**
-   * Правка параметров разрешена там же, где правка расцветок: DRAFT и
-   * CALCULATION. Дальше снимок заморожен (см. `resyncColorwayDerived`), и
-   * тихий no-op вместо ошибки был бы худшим из вариантов.
+   * Спецификацию можно править везде, кроме закрытых заказов: `DONE`
+   * (тираж выпущен — менять план задним числом нечестно к план-факту) и
+   * `CANCELLED`. В остальных статусах правка легальна, но за окном
+   * планирования идёт amendment-путём — см. `techCardEditMode`.
    */
   private async assertEditableOrder(orderId: string): Promise<void> {
     const order = await this.prisma.order.findUnique({
@@ -695,12 +781,14 @@ export class OrderTechCardService {
       select: { status: true },
     });
     if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND' });
-    if (order.status !== 'DRAFT' && order.status !== 'CALCULATION') {
+    if (techCardEditMode(order.status) === 'LOCKED') {
       throw new ConflictException({
         statusCode: 409,
         code: 'ORDER_TECH_CARD_LOCKED',
         message:
-          'Параметры техкарты можно менять только в черновике и на этапе расчёта.',
+          order.status === 'CANCELLED'
+            ? 'Заказ отменён — спецификацию техкарты менять нельзя.'
+            : 'Заказ завершён — спецификацию техкарты менять нельзя.',
       });
     }
   }

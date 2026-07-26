@@ -8,8 +8,10 @@
  * истины). От повторного ввода спасает `apply-to-all-variants` — разовое
  * копирование, а не связь.
  *
- * Модуль — зеркало `./colorways.ts`: те же правила (правка только в
- * DRAFT/CALCULATION, каждый write возвращает свежий полный DTO).
+ * Модуль — зеркало `./colorways.ts`: каждый write возвращает свежий полный
+ * DTO. Окно правки ШИРЕ, чем у расцветок: расцветки правятся только пока
+ * план не заморожен (`DRAFT`/`CALCULATION`), а спецификация техкарты —
+ * вплоть до `IN_PRODUCTION` (см. `OrderTechCardEditMode`).
  */
 
 import { z } from 'zod';
@@ -53,10 +55,33 @@ export interface OrderTechCardVariantParamsDto {
   lines: OrderTechCardLineDto[];
 }
 
+/**
+ * Режим окна правки спецификации техкарты внутри заказа.
+ *
+ *   - `PLAN`      — `DRAFT`/`CALCULATION`: план заказа ещё не заморожен,
+ *     правка пересобирает всё производное обычным путём
+ *     (`OrdersService.resyncColorwayDerived`): агрегат `OrderItem`, снимок
+ *     материалов, план операций, снимок маршрута, потребности цеха.
+ *   - `AMENDMENT` — `CALCULATION_DONE`/`SAMPLE_PRODUCTION`/`IN_PRODUCTION`:
+ *     правка РАЗРЕШЕНА, но идёт тем же контуром, что правки заказа в
+ *     производстве: пересобираются только снимок материалов и плановая
+ *     стоимость операций, маршрут и паспорта не трогаются, потребности
+ *     пересчитываются best-effort, событие пишется в журнал правок.
+ *     Уже выданные/закупленные материалы правка не отменяет — расхождение
+ *     видно в план-факте.
+ *   - `LOCKED`    — `DONE`/`CANCELLED`: заказ закрыт, правка запрещена.
+ */
+export type OrderTechCardEditMode = 'PLAN' | 'AMENDMENT' | 'LOCKED';
+
 export interface OrderTechCardParametersDto {
   orderId: string;
-  /** Правка разрешена только в DRAFT/CALCULATION (см. `ORDER_TECH_CARD_LOCKED`). */
+  /**
+   * Можно ли сейчас править спецификацию (`editMode !== 'LOCKED'`).
+   * Оставлено отдельным полем ради обратной совместимости фронта.
+   */
   editable: boolean;
+  /** Чем правка обернётся для производных данных — см. `OrderTechCardEditMode`. */
+  editMode: OrderTechCardEditMode;
   variants: OrderTechCardVariantParamsDto[];
 }
 

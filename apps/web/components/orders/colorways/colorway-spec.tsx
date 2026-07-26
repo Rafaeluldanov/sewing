@@ -14,6 +14,11 @@
  * ПРЯМО в строке материала (это самый частый случай); прочие параметры —
  * компактным списком ниже.
  *
+ * Окно правки шире, чем у расцветок: спецификация правится и после расчёта,
+ * и в производстве (`params.editMode === 'AMENDMENT'` — с предупреждением и
+ * записью в журнал правок), закрыта только на `DONE`/`CANCELLED`. Право
+ * даёт бэкенд, компонент его не переизобретает.
+ *
  * Состояние наверху: каждый write возвращает свежий полный DTO, компонент
  * поднимает его в блок через `onData` — все карточки видят одно состояние.
  */
@@ -49,7 +54,6 @@ interface Props {
   params: OrderTechCardParametersDto;
   /** Чья карточка (null = order-level группа при 0–1 расцветке). */
   variantId: string | null;
-  readOnly: boolean;
   /** Поднять свежий DTO в блок — единое состояние для всех карточек. */
   onData: (data: OrderTechCardParametersDto) => void;
 }
@@ -69,7 +73,6 @@ export function ColorwaySpec({
   orderId,
   params,
   variantId,
-  readOnly,
   onData,
 }: Props) {
   const [error, setError] = useState<string | null>(null);
@@ -84,7 +87,14 @@ export function ColorwaySpec({
 
   const group: OrderTechCardVariantParamsDto | undefined =
     resolveVariantParamsGroup(params, variantId);
-  const ro = readOnly || !params.editable;
+  // Право на правку — целиком с бэкенда (`editMode`), а не от родителя:
+  // расцветка замораживается вместе с планом заказа, а спецификация живёт
+  // дольше (см. `OrderTechCardEditMode`).
+  const ro = !params.editable;
+  // За окном планирования правка идёт amendment-путём: снимок материалов и
+  // план операций пересобираются, маршрут и паспорта — нет, потребности
+  // пересчитываются best-effort, событие уходит в журнал правок.
+  const amendment = params.editMode === 'AMENDMENT';
 
   function apply(r: TechCardParamsActionResult): void {
     if (!r.ok) {
@@ -197,6 +207,20 @@ export function ColorwaySpec({
         <p className="cws-muted cws-tpl">
           Из шаблона: <strong>{group.techCardName}</strong> — дальше список
           живёт в заказе, правки шаблона сюда не протекают.
+        </p>
+      )}
+      {amendment && (
+        <p className="cws-warn">
+          Заказ уже прошёл расчёт. Правка пересчитает потребности цеха и
+          плановую себестоимость, но <strong>не отменит</strong> уже
+          выданные и закупленные материалы — разница останется видна в
+          план-факте. Каждая правка попадёт в журнал правок заказа.
+        </p>
+      )}
+      {ro && (
+        <p className="cws-warn">
+          Заказ закрыт (завершён или отменён) — спецификация только для
+          просмотра.
         </p>
       )}
       {error && <p className="cws-error">{error}</p>}
@@ -552,26 +576,33 @@ export function ColorwaySpec({
             />
           )}
 
-          <button
-            type="button"
-            className="admin-btn admin-btn--ghost"
-            disabled={pending}
-            title="Перечитать шаблон: структура строк заказа будет перезаписана"
-            onClick={() => {
-              const ok = window.confirm(
-                'Перечитать техкарту из шаблона?\n\n' +
-                  'Строки из шаблона будут заменены на актуальные, ваши правки ' +
-                  'шаблонных строк сбросятся. Материалы, добавленные в заказе, ' +
-                  'и значения параметров сохранятся.',
-              );
-              if (!ok) return;
-              startTransition(async () =>
-                apply(await reloadTechCardFromTemplateAction(orderId)),
-              );
-            }}
-          >
-            Обновить из шаблона
-          </button>
+          {/* «Обновить из шаблона» — только в окне планирования. Действие
+              пересоздаёт строки снимка (новые id), а после расчёта на них
+              уже ссылаются строки потребностей (`WorkshopNeed.sourceId`) —
+              связь порвалась бы молча. Бэкенд это же окно и держит
+              (`ORDER_TECH_CARD_LOCKED`), кнопку просто не показываем. */}
+          {!amendment && (
+            <button
+              type="button"
+              className="admin-btn admin-btn--ghost"
+              disabled={pending}
+              title="Перечитать шаблон: структура строк заказа будет перезаписана"
+              onClick={() => {
+                const ok = window.confirm(
+                  'Перечитать техкарту из шаблона?\n\n' +
+                    'Строки из шаблона будут заменены на актуальные, ваши правки ' +
+                    'шаблонных строк сбросятся. Материалы, добавленные в заказе, ' +
+                    'и значения параметров сохранятся.',
+                );
+                if (!ok) return;
+                startTransition(async () =>
+                  apply(await reloadTechCardFromTemplateAction(orderId)),
+                );
+              }}
+            >
+              Обновить из шаблона
+            </button>
+          )}
 
           {saveAs === null ? (
             <button
@@ -742,6 +773,8 @@ function SpecStyles() {
 .cws-tpl { margin:0; }
 .cws-error { margin:0; padding:8px 11px; border-radius:8px; background:var(--color-danger-soft); color:var(--color-danger-fg); font-size:13px; }
 .cws-notice { margin:0; padding:8px 11px; border-radius:8px; background:var(--color-bg-tint); color:var(--color-fg-strong); font-size:13px; }
+.cws-warn { margin:0; padding:8px 11px; border-radius:8px; border:1px solid var(--color-border);
+  background:var(--color-warning-soft,var(--color-bg-muted)); color:var(--color-fg-muted); font-size:12.5px; line-height:1.45; }
 .cws-tablewrap { overflow-x:auto; border:1px solid var(--color-border); border-radius:10px; }
 .cws-table { width:100%; border-collapse:collapse; font-size:13px; }
 .cws-table th { text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em;

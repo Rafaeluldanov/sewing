@@ -4563,6 +4563,94 @@ export class OrdersService {
   }
 
   /**
+   * Правка СПЕЦИФИКАЦИИ ТЕХКАРТЫ внутри заказа: пересобрать производные
+   * данные под новое окно правки (см. `OrderTechCardEditMode` в
+   * `@sewing/shared/order-tech-cards`). Единственная точка, через которую
+   * `OrderTechCardService` трогает производные, — чтобы правило «что
+   * пересобирается в каком статусе» жило в одном месте.
+   *
+   *   - `DRAFT`/`CALCULATION` — окно планирования: обычный
+   *     `resyncColorwayDerived` (агрегат `OrderItem`, снимок материалов,
+   *     план операций, снимок маршрута, потребности цеха). Поведение
+   *     байт-в-байт как раньше.
+   *   - `CALCULATION_DONE`/`SAMPLE_PRODUCTION`/`IN_PRODUCTION` — amendment-
+   *     путь, тот же контур, что у правок заказа в производстве:
+   *     пересобираем ТОЛЬКО снимок материалов и плановую стоимость
+   *     операций (`rebuildQtyDerivedSnapshotsInTx`). Маршрут
+   *     (`OrderRouteStep`) и `OrderItem` не трогаем: на индексы шагов
+   *     ссылаются паспорта, а тираж этой правкой не меняется.
+   *     Потребности пересчитываем best-effort ПОСЛЕ коммита — стоп-гейт по
+   *     стоку не должен откатывать уже применённую правку. Событие уходит
+   *     в журнал правок заказа (`ORDER_TECH_CARD_AMENDED`).
+   *   - `DONE`/`CANCELLED` сюда не доходят: их отбивает
+   *     `OrderTechCardService.assertEditableOrder`.
+   *
+   * Важно: уже выданные (`MaterialIssue`) и закупленные материалы правка
+   * НЕ отменяет — меняется план, факт остаётся фактом, расхождение видно
+   * в план-факте. `WorkshopNeed.sourceId` ссылается на строку снимка без
+   * FK, а recompute-ветка `rebuildMaterialRequirementsSnapshot` правит
+   * строки UPDATE-ом (id сохраняются), поэтому связь не рвётся.
+   */
+  async resyncTechCardDerived(
+    orderId: string,
+    actorEmployeeId: string | null | undefined,
+    change: { summary: string; details?: Prisma.InputJsonValue },
+  ): Promise<void> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: { status: true },
+    });
+    if (!order) return;
+
+    if (
+      order.status === OrderStatus.DRAFT ||
+      order.status === OrderStatus.CALCULATION
+    ) {
+      await this.resyncColorwayDerived(orderId, actorEmployeeId);
+      return;
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await this.rebuildQtyDerivedSnapshotsInTx(orderId, tx);
+      await this.audit.log(
+        {
+          event: 'ORDER_TECH_CARD_AMENDED',
+          entityType: 'ORDER',
+          entityId: orderId,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            status: order.status,
+            summary: change.summary,
+            ...(change.details ? { details: change.details } : {}),
+          },
+        },
+        tx,
+      );
+    });
+
+    // Best-effort, вне транзакции: пересчёт потребностей может упереться в
+    // стоп-гейт по стоку (`WorkshopNeedsHaveStockException`) или в отсутствие
+    // активной калькуляции — это не повод откатывать правку спецификации.
+    try {
+      await this.workshopNeeds.calculateForOrder(
+        orderId,
+        { force: false },
+        actorEmployeeId ?? null,
+      );
+    } catch (err) {
+      OrdersService.log.warn(
+        `event=order.tech_card_amended_needs_skipped order=${orderId} ` +
+          `reason=${err instanceof Error ? err.message : 'unknown'}`,
+      );
+    }
+
+    OrdersService.log.log(
+      `event=order.tech_card_amended order=${orderId} status=${order.status} ` +
+        `change=${change.summary}`,
+    );
+  }
+
+  /**
    * Этап «Указать в заказе» (см. ТЗ §2): пересобрать snapshot
    * `OrderMaterialRequirement[]` по live-строкам техкарты заказа.
    *

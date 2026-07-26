@@ -253,12 +253,18 @@ export async function OrderProductionTab({
       </div>
     ) : null;
 
-  // Журнал правок в производстве — read-only, виден и в IN_PRODUCTION, и
-  // после завершения (DONE), чтобы можно было посмотреть, что меняли.
+  // Журнал правок — read-only. Виден со статуса «Расчёт завершён» и дальше:
+  // с этого момента правка спецификации техкарты идёт amendment-путём и
+  // пишет `ORDER_TECH_CARD_AMENDED`, а после завершения (DONE) журнал нужен,
+  // чтобы посмотреть, что меняли. Карточка сама возвращает null, если
+  // записей нет, — на «чистых» заказах ничего не появится.
   let amendmentHistory: AmendmentHistoryEntryDto[] = [];
   if (
     isOrderAmendmentsEnabled() &&
-    (order.status === 'IN_PRODUCTION' || order.status === 'DONE')
+    (order.status === 'CALCULATION_DONE' ||
+      order.status === 'SAMPLE_PRODUCTION' ||
+      order.status === 'IN_PRODUCTION' ||
+      order.status === 'DONE')
   ) {
     try {
       amendmentHistory = await getAmendmentHistory(order.id);

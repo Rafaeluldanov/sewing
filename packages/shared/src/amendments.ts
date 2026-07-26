@@ -219,7 +219,8 @@ export interface OperationAmendmentResultDto {
 
 // ---------------------------------------------------------------------------
 // Журнал правок в производстве (аудит ORDER_QTY_AMENDED / ORDER_SIZE_AMENDED
-// / ORDER_OPERATION_ADDED). Read-only, для карточки заказа.
+// / ORDER_OPERATION_ADDED / ORDER_TECH_CARD_AMENDED). Read-only, для карточки
+// заказа.
 // ---------------------------------------------------------------------------
 
 /** Одна запись журнала правок. `summary` уже человекочитаемый (собран на backend). */
@@ -229,7 +230,12 @@ export interface AmendmentHistoryEntryDto {
   occurredAt: string;
   /** Кто применил правку (`null` — актор не сохранён). */
   actorName: string | null;
-  kind: 'quantity' | 'size' | 'operation';
+  /**
+   * `materials` — правка спецификации техкарты заказа (норма, единица, цвет,
+   * значение параметра, добавленный/убранный материал). Пишется, когда
+   * технолог правит материалы уже после расчёта / в производстве.
+   */
+  kind: 'quantity' | 'size' | 'operation' | 'materials';
   /** Причина, указанная менеджером. */
   reason: string | null;
   /** Готовая строка «что изменилось» (коды размеров/имя операции уже подставлены). */

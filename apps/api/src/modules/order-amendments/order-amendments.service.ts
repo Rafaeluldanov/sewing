@@ -702,9 +702,15 @@ export class OrderAmendmentsService {
 
   /**
    * Журнал правок заказа в производстве: события `ORDER_QTY_AMENDED` /
-   * `ORDER_SIZE_AMENDED` / `ORDER_OPERATION_ADDED` из `AuditLog`, с уже
-   * собранным человекочитаемым `summary` (коды размеров и имя операции
-   * подставлены) и именем автора. Сортировка — свежие сверху.
+   * `ORDER_SIZE_AMENDED` / `ORDER_OPERATION_ADDED` /
+   * `ORDER_TECH_CARD_AMENDED` из `AuditLog`, с уже собранным
+   * человекочитаемым `summary` (коды размеров и имя операции подставлены) и
+   * именем автора. Сортировка — свежие сверху.
+   *
+   * `ORDER_TECH_CARD_AMENDED` пишет не этот модуль, а
+   * `OrdersService.resyncTechCardDerived` — правка спецификации техкарты
+   * идёт своим эндпоинтом, но для менеджера это такая же правка заказа
+   * после расчёта, и жить ей место в одном журнале.
    */
   async getHistory(orderId: string): Promise<AmendmentHistoryEntryDto[]> {
     const logs = await this.prisma.auditLog.findMany({
@@ -716,6 +722,7 @@ export class OrderAmendmentsService {
             'ORDER_QTY_AMENDED',
             'ORDER_SIZE_AMENDED',
             'ORDER_OPERATION_ADDED',
+            'ORDER_TECH_CARD_AMENDED',
           ],
         },
       },
@@ -796,6 +803,11 @@ export class OrderAmendmentsService {
           (s) => `−${codeById.get(s) ?? '?'}`,
         );
         summary = 'Размерность: ' + [...adds, ...rems].join(', ');
+      } else if (l.event === 'ORDER_TECH_CARD_AMENDED') {
+        kind = 'materials';
+        // `summary` собран на месте правки (там известны имена материалов
+        // и параметров) — здесь только префикс раздела.
+        summary = 'Материалы: ' + ((p.summary as string) ?? 'правка спецификации');
       } else {
         kind = 'operation';
         const opName = (p.operationName as string) ?? '?';

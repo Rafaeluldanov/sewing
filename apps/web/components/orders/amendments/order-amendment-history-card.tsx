@@ -1,8 +1,9 @@
 /**
- * `OrderAmendmentHistoryCard` — read-only «Журнал правок в производстве»
+ * `OrderAmendmentHistoryCard` — read-only «Журнал правок после расчёта»
  * на вкладке «Производство» карточки заказа. Показывает применённые
  * amendment-события (`ORDER_QTY_AMENDED` / `ORDER_SIZE_AMENDED` /
- * `ORDER_OPERATION_ADDED`): когда, кто, что и почему.
+ * `ORDER_OPERATION_ADDED` / `ORDER_TECH_CARD_AMENDED`): когда, кто, что
+ * и почему.
  *
  * Presentation-слой: `summary` уже собран на backend (коды размеров и имя
  * операции подставлены). Рендерится только когда есть записи — иначе
@@ -23,6 +24,7 @@ const KIND_LABEL: Record<AmendmentHistoryEntryDto['kind'], string> = {
   quantity: 'Количество',
   size: 'Размерность',
   operation: 'Операция',
+  materials: 'Материалы',
 };
 
 function formatMoscow(iso: string): string {
@@ -47,7 +49,7 @@ export function OrderAmendmentHistoryCard({ entries }: Props) {
     <AdminCard>
       <AdminSectionHeader
         icon={<History size={18} strokeWidth={1.7} aria-hidden />}
-        title="Журнал правок в производстве"
+        title="Журнал правок после расчёта"
         hint={`${entries.length} ${pluralEntries(entries.length)}`}
       />
       <div style={{ overflowX: 'auto' }}>
