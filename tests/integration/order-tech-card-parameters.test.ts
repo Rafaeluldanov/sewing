@@ -106,6 +106,7 @@ describeWithDb('integration — параметры техкарт', () => {
       .set('Cookie', manager)
       .send({
         orderDate: '2026-07-14T00:00:00.000Z',
+        clientId: seed.client.id,
         patternItemId,
         techCardId,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
@@ -128,6 +129,7 @@ describeWithDb('integration — параметры техкарт', () => {
       .set('Cookie', manager)
       .send({
         orderDate: '2026-07-14T00:00:00.000Z',
+        clientId: seed.client.id,
         patternItemId,
         techCardId,
         items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],

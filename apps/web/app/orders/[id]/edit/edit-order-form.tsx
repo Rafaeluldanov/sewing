@@ -129,16 +129,23 @@ export function EditOrderForm({
         </div>
       </div>
 
+      {/*
+        Этап «Клиент — обязательный атрибут заказа»: селект `required`,
+        варианта «без клиента» нет. Пустое значение отбивает
+        `updateOrderAction`, backend — `ORDER_CLIENT_REQUIRED`.
+      */}
       {showClientSelect && (
         <div className="form-row">
-          <label htmlFor="clientId">Клиент</label>
+          <label htmlFor="clientId">Клиент *</label>
           <div>
             <select
               id="clientId"
               name="clientId"
               defaultValue={currentClient?.id ?? ''}
+              required
+              aria-required="true"
             >
-              <option value="">— без клиента —</option>
+              <option value="">— выберите клиента —</option>
               {/*
                 Если у заказа уже привязан клиент, которого нет в
                 списке активных (архивирован), всё равно показываем
@@ -159,9 +166,9 @@ export function EditOrderForm({
               ))}
             </select>
             <div className="hint">
-              Поле опциональное. Если клиент не выбран, в карточке
-              заказа отображается «свободный» заказчик из
-              `customer`.
+              Обязательное поле — заказ всегда принадлежит клиенту.
+              Свободный текст `customer` остался только для
+              совместимости со старым flow.
             </div>
           </div>
         </div>

@@ -7,8 +7,10 @@
  *      возвращает их в `OrderDetailDto`.
  *   2. GET /api/orders (list) и GET /api/orders/:id отдают `client.{id,name}`
  *      и `dueDate` в ISO.
- *   3. PATCH /api/orders/:id меняет `clientId` (включая сброс в null)
- *      и `dueDate`.
+ *   3. PATCH /api/orders/:id меняет `clientId` и `dueDate`; `dueDate`
+ *      можно снять (`null`), `clientId` — НЕТ (этап «Клиент —
+ *      обязательный атрибут заказа», 400 `ORDER_CLIENT_REQUIRED`, см.
+ *      `orders-client-required.test.ts`).
  *   4. clientId, указывающий на несуществующего клиента → 404 CLIENT_NOT_FOUND.
  *   5. clientId, указывающий на деактивированного клиента → 400 CLIENT_INACTIVE.
  *   6. ON DELETE SET NULL: удаление карточки клиента в БД оставляет
@@ -145,7 +147,7 @@ describeWithDb('integration — orders × client × dueDate', () => {
   // 3. PATCH
   // ---------------------------------------------------------------------------
 
-  test('PATCH /api/orders/:id меняет clientId и dueDate; null сбрасывает', async () => {
+  test('PATCH /api/orders/:id меняет clientId и dueDate; dueDate=null сбрасывает, clientId=null — нет', async () => {
     const c1 = await makeClient({ name: 'Первый' });
     const c2 = await makeClient({ name: 'Второй' });
 
@@ -169,14 +171,28 @@ describeWithDb('integration — orders × client × dueDate', () => {
     expect(swap.body.clientId).toBe(c2.id);
     expect(swap.body.dueDate.slice(0, 10)).toBe('2026-07-15');
 
-    const reset = await request(t.app.getHttpServer())
+    // Этап «Клиент — обязательный атрибут заказа»: срок сдачи снять
+    // можно, клиента — нельзя (400 `ORDER_CLIENT_REQUIRED`).
+    const resetClient = await request(t.app.getHttpServer())
       .patch(`/api/orders/${created.body.id}`)
       .set('Cookie', cookie)
-      .send({ clientId: null, dueDate: null });
-    expect(reset.status).toBe(200);
-    expect(reset.body.clientId).toBeNull();
-    expect(reset.body.client).toBeNull();
-    expect(reset.body.dueDate).toBeNull();
+      .send({ clientId: null });
+    expect(resetClient.status).toBe(400);
+    expect(resetClient.body.code).toBe('ORDER_CLIENT_REQUIRED');
+
+    // Отказ атомарен: привязка осталась прежней.
+    const afterFailedReset = await t.prisma.order.findUnique({
+      where: { id: created.body.id },
+    });
+    expect(afterFailedReset?.clientId).toBe(c2.id);
+
+    const resetDue = await request(t.app.getHttpServer())
+      .patch(`/api/orders/${created.body.id}`)
+      .set('Cookie', cookie)
+      .send({ dueDate: null });
+    expect(resetDue.status).toBe(200);
+    expect(resetDue.body.clientId).toBe(c2.id);
+    expect(resetDue.body.dueDate).toBeNull();
   });
 
   // ---------------------------------------------------------------------------

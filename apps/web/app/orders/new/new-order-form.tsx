@@ -2,6 +2,7 @@
 
 import { useFormState, useFormStatus } from 'react-dom';
 import { useMemo, useState } from 'react';
+import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { ProductDto, SizeDto } from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
@@ -32,6 +33,15 @@ interface Props {
    * без привязки.
    */
   companyDivisions: CompanyDivisionDto[];
+  /**
+   * Этап «Клиент — обязательный атрибут заказа»: активные карточки
+   * `Client` для обязательного селекта «Клиент». Если справочник пуст
+   * (новая инсталляция) — селект показываем всё равно, с подсказкой
+   * «добавьте клиента в разделе «Клиенты»»: создать заказ без клиента
+   * всё равно нельзя, и лучше сказать об этом прямо в форме, чем
+   * молча спрятать поле.
+   */
+  clients: ClientDto[];
   today: string;
 }
 
@@ -52,6 +62,7 @@ export function NewOrderForm({
   routeTemplates,
   techCards,
   companyDivisions,
+  clients,
   today,
 }: Props) {
   const [state, formAction] = useFormState(createOrderAction, initialState);
@@ -108,6 +119,31 @@ export function NewOrderForm({
               </option>
             ))}
           </select>
+        </div>
+      </div>
+
+      {/*
+        Этап «Клиент — обязательный атрибут заказа»: тот же контракт, что
+        в admin-форме `/admin/orders/new` — `required`-селект без варианта
+        «без клиента». Пустое значение отбивает `createOrderAction`,
+        backend — `ORDER_CLIENT_REQUIRED` на «Перевести в расчёт».
+      */}
+      <div className="form-row">
+        <label htmlFor="clientId">Клиент *</label>
+        <div>
+          <select id="clientId" name="clientId" required aria-required="true">
+            <option value="">— выберите клиента —</option>
+            {clients.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+          <div className="hint">
+            {clients.length === 0
+              ? 'Список клиентов пуст — добавьте клиента в разделе «Клиенты».'
+              : 'Обязательное поле — заказ всегда принадлежит клиенту.'}
+          </div>
         </div>
       </div>
 

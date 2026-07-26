@@ -36,6 +36,7 @@ import {
   UpdateOrderExtraCostSchema,
 } from '@sewing/shared/order-extra-costs';
 import { ApiRequestError, errorText } from '@/lib/api';
+import { clientRequiredError } from '@/lib/order-client-required';
 import {
   cancelOrder,
   deleteOrder,
@@ -269,9 +270,13 @@ function buildCreateDto(form: FormData): CreateOrderDto {
   // Семантика идентична techCardId/routeTemplateId.
   const patternItemId =
     String(form.get('patternItemId') ?? '').trim() || undefined;
-  // Client ref MVP: select клиента может отсутствовать в форме (легаси
-  // `/orders/new`) — тогда поля просто нет, FormData вернёт null, и DTO
-  // не подставит значение. Пустая строка = «без клиента».
+  // Client ref MVP: select клиента может отсутствовать в форме (прямой
+  // POST / CUTTER_ASSISTANT-flow) — тогда поля просто нет, FormData
+  // вернёт null, и DTO не подставит значение.
+  //
+  // Этап «Клиент — обязательный атрибут заказа»: пустое значение сюда
+  // уже не долетает — `clientRequiredError` (`@/lib/order-client-required`)
+  // отбивает FormData с пустым селектом ДО сборки DTO.
   const clientRaw = form.get('clientId');
   const clientId =
     clientRaw === null
@@ -688,6 +693,17 @@ export interface ConfigureOrderDraftResult {
 export async function configureOrderDraftAction(
   form: FormData,
 ): Promise<ConfigureOrderDraftResult> {
+  // Этап «Клиент — обязательный атрибут заказа»: эта кнопка создаёт
+  // РЕАЛЬНЫЙ черновик заказа, но обычный submit формы (а с ним и
+  // нативную `required`-валидацию) не запускает — проверяем сами.
+  const clientMissing = clientRequiredError(form);
+  if (clientMissing) {
+    return {
+      ok: false,
+      error: clientMissing.error,
+      fieldErrors: clientMissing.fieldErrors,
+    };
+  }
   const raw = buildCreateDto(form);
   const parsed = CreateOrderSchema.safeParse(raw);
   if (!parsed.success) {
@@ -745,6 +761,10 @@ export async function createOrderAction(
   _prev: FormActionState,
   form: FormData,
 ): Promise<FormActionState> {
+  // Этап «Клиент — обязательный атрибут заказа» (второй контур поверх
+  // `required`-селекта в формах).
+  const clientMissing = clientRequiredError(form);
+  if (clientMissing) return clientMissing;
   const raw = buildCreateDto(form);
   const parsed = CreateOrderSchema.safeParse(raw);
   if (!parsed.success) {
@@ -795,6 +815,11 @@ export async function updateOrderAction(
   _prev: FormActionState,
   form: FormData,
 ): Promise<FormActionState> {
+  // Этап «Клиент — обязательный атрибут заказа»: пустой селект в форме
+  // правки означал бы «снять клиента» — backend отбивает это как
+  // `ORDER_CLIENT_REQUIRED`, ловим на шаг раньше и адресно.
+  const clientMissing = clientRequiredError(form);
+  if (clientMissing) return clientMissing;
   const raw = buildUpdateDto(form);
   const parsed = UpdateOrderSchema.safeParse(raw);
   if (!parsed.success) {

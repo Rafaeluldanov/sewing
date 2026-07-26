@@ -176,6 +176,36 @@ export class OrderTechCardRequiredException extends BusinessException {
   }
 }
 
+/**
+ * Этап «Клиент — обязательный атрибут заказа».
+ *
+ * Заказ без `Order.clientId` не может уйти дальше `DRAFT`: клиент —
+ * управленческий владелец заказа (себестоимость / отгрузки / балансы
+ * готовой продукции ведутся по нему, см. `FinishedGoodsService`,
+ * `ProductionCostV2Service`), и заказ «без клиента» ломает всю
+ * управленческую аналитику ниже по потоку.
+ *
+ * Где бросается:
+ *   - `OrdersService.startCalculation` — гейт перевода DRAFT → CALCULATION
+ *     (в одном ряду с `ORDER_PATTERN_REQUIRED` / `ORDER_TECH_CARD_REQUIRED`
+ *     / `ORDER_ITEMS_REQUIRED`);
+ *   - `OrdersService.update` — попытка СНЯТЬ привязку (`clientId: null`)
+ *     у заказа: обязательное поле нельзя очистить, только заменить.
+ *
+ * Сознательно НЕ бросается в `create`: `POST /api/orders` остаётся
+ * backward-compatible (легаси-flow `/orders/new`, CUTTER_ASSISTANT,
+ * DRAFT-заказ из КБ-задачи `ConstructorTasksService`), а требование
+ * добивается формами (`required`-селект «Клиент») и этим гейтом.
+ */
+export class OrderClientRequiredException extends BusinessException {
+  constructor(message?: string) {
+    super(
+      'ORDER_CLIENT_REQUIRED',
+      message ?? 'Чтобы перевести заказ в расчёт, нужно выбрать клиента.',
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
 
 /**
  * У заказа нет ни одной размерной строки с `qtyPlan > 0` — без

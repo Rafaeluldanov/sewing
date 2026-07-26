@@ -733,15 +733,30 @@ export function AdminEditOrderForm({
                   />
                 </div>
 
+                {/* Этап «Клиент — обязательный атрибут заказа»: селект
+                    `required`, варианта «без клиента» нет. Пустой селект
+                    отбивает `updateAdminOrderAction`, а backend —
+                    `ORDER_CLIENT_REQUIRED` (снять клиента нельзя). */}
                 <div className="order-hero-card__field">
-                  <label htmlFor="clientId">Клиент</label>
+                  <label htmlFor="clientId">
+                    Клиент{' '}
+                    <span
+                      className="order-hero-card__required"
+                      aria-label="обязательное поле"
+                      title="обязательное поле"
+                    >
+                      *
+                    </span>
+                  </label>
                   <select
                     id="clientId"
                     name="clientId"
                     value={clientId}
                     onChange={(e) => setClientId(e.target.value)}
+                    required
+                    aria-required="true"
                   >
-                    <option value="">— без клиента —</option>
+                    <option value="">— выберите клиента —</option>
                     {showCurrentClientArchivedOption && currentClient && (
                       <option value={currentClient.id}>
                         {currentClient.name} — архивный
@@ -754,6 +769,11 @@ export function AdminEditOrderForm({
                       </option>
                     ))}
                   </select>
+                  {fieldError('clientId') && (
+                    <span className="order-hero-card__field-error">
+                      {fieldError('clientId')}
+                    </span>
+                  )}
                 </div>
 
                 <div className="order-hero-card__field order-hero-card__field--price">

@@ -162,6 +162,7 @@ describeWithDb('integration — pattern item parameter norms', () => {
       .set('Cookie', t.adminCookie)
       .send({
         orderDate: '2026-04-15T00:00:00.000Z',
+        clientId: seed.client.id,
         productId: seed.product.id,
         items: [{ sizeId: seed.sizes.M, qtyPlan: opts.qtyPlan }],
         techCardId: opts.techCardId,

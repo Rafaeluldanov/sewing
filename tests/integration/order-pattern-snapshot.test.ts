@@ -93,6 +93,7 @@ describeWithDb('integration — order × pattern snapshot', () => {
       .set('Cookie', cookie)
       .send({
         orderDate: new Date().toISOString(),
+        clientId: seed.client.id,
         patternItemId: opts.patternItemId ?? undefined,
         productId: opts.productId,
         techCardId: opts.techCardId ?? undefined,

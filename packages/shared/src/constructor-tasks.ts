@@ -239,6 +239,18 @@ function refineConstructorTaskSizeRows(
 
 export const SaveConstructorDraftSchema = z.object({
   calcPayload: CreateOrderNewProductCalculationSchema,
+  /**
+   * Этап «Клиент — обязательный атрибут заказа»: клиент, выбранный в
+   * блоке «Основное» формы создания заказа. Нужен ТОЛЬКО в связке с
+   * `?createDraftOrder=1` — иначе DRAFT-заказ, который заводит
+   * `ConstructorTasksService.saveDraft`, терял бы уже заполненного
+   * менеджером клиента и упирался в `ORDER_CLIENT_REQUIRED` на
+   * «Перевести в расчёт».
+   *
+   * Опционально: flow «Отправить конструктору» без создания заказа
+   * (`/admin/patterns`) клиента не знает.
+   */
+  clientId: z.string().min(1).optional(),
   comment: z
     .string()
     .max(4000, 'Комментарий слишком длинный (макс. 4000 символов)')

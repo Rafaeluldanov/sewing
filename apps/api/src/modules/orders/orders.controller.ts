@@ -130,8 +130,9 @@ export class OrdersController {
    *
    * Результат: обновлённая карточка заказа в `CALCULATION` с
    * созданными `WorkshopNeed`-строками. Ошибки расчёта /
-   * валидации (отсутствует лекало/техкарта/размеры) приходят как
-   * `ORDER_PATTERN_REQUIRED` / `ORDER_TECH_CARD_REQUIRED` /
+   * валидации (отсутствует лекало/клиент/техкарта/размеры) приходят как
+   * `ORDER_PATTERN_REQUIRED` / `ORDER_CLIENT_REQUIRED` /
+   * `ORDER_TECH_CARD_REQUIRED` /
    * `ORDER_ITEMS_REQUIRED` (400), запуск из не-DRAFT —
    * `ORDER_INVALID_STATUS_TRANSITION` (409). См.
    * `apps/api/src/common/errors.ts`.

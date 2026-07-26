@@ -33,6 +33,8 @@ import {
   ConstructorTaskNotInProgressException,
   ConstructorTaskReworkInvalidException,
   ConstructorTaskSizeNotFoundException,
+  ClientInactiveException,
+  ClientNotFoundException,
   PatternNotFoundException,
 } from '../../common/errors.js';
 import { ConstructorTasksStorageService } from './constructor-tasks-storage.service.js';
@@ -271,6 +273,20 @@ export class ConstructorTasksService {
       }
     }
 
+    // Этап «Клиент — обязательный атрибут заказа»: клиент из блока
+    // «Основное» формы создания заказа долетает сюда, только когда мы
+    // заводим DRAFT-заказ (`createDraftOrder`). Валидируем до открытия
+    // транзакции — адресная ошибка вместо FK-сбоя, как в
+    // `OrdersService.assertClientUsable`.
+    if (createDraftOrder && dto.clientId) {
+      const client = await this.prisma.client.findUnique({
+        where: { id: dto.clientId },
+        select: { id: true, isActive: true },
+      });
+      if (!client) throw new ClientNotFoundException();
+      if (!client.isActive) throw new ClientInactiveException();
+    }
+
     const draftName = generateDraftPatternName(category?.name ?? null);
     const draftArticle = generateDraftPatternArticle();
 
@@ -384,6 +400,11 @@ export class ConstructorTasksService {
             // получал `ORDER_TECH_CARD_REQUIRED` — потерянная привязка
             // на старте flow.
             techCardId: dto.calcPayload.techCardId ?? null,
+            // Этап «Клиент — обязательный атрибут заказа»: тем же
+            // рассуждением, что и техкарта выше, — клиент выбран в блоке
+            // «Основное» той же формы, и если его здесь потерять, заказ
+            // упрётся в `ORDER_CLIENT_REQUIRED` на «Перевести в расчёт».
+            clientId: dto.clientId ?? null,
             productCreationMode: 'SEND_TO_CONSTRUCTOR',
             // Стоимость разработки лекала + чекбокс «входит в
             // себестоимость» протягиваем из calc-вкладки так же, как

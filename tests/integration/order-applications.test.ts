@@ -433,6 +433,7 @@ describeWithDb('integration — order applications', () => {
       .set('Cookie', cookies.manager)
       .send({
         orderDate: '2026-04-15T00:00:00.000Z',
+        clientId: seed.client.id,
         productId: seed.product.id,
         items: [{ sizeId: seed.sizes.S, qtyPlan: 4 }],
         applications: [
@@ -490,6 +491,7 @@ describeWithDb('integration — order applications', () => {
       .set('Cookie', cookies.manager)
       .send({
         orderDate: '2026-04-15T00:00:00.000Z',
+        clientId: seed.client.id,
         productId: seed.product.id,
         items: [{ sizeId: seed.sizes.S, qtyPlan: 3 }],
       })
@@ -556,6 +558,7 @@ async function createOrder(
     .set('Cookie', cookie)
     .send({
       orderDate: '2026-04-15T00:00:00.000Z',
+      clientId: seed.client.id,
       productId: seed.product.id,
       items: options.items,
       techCardId: options.techCardId ?? undefined,

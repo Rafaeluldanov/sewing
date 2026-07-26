@@ -26,7 +26,23 @@ export interface SeedResult {
    * findUnique.
    */
   companyDivisions: Record<'MARKETPLACE' | 'OTHER', { id: string; code: string }>;
+  /**
+   * Этап «Клиент — обязательный атрибут заказа»: базовая карточка
+   * клиента. Клиент обязателен для перевода заказа в расчёт
+   * (`OrdersService.startCalculation` → 400 `ORDER_CLIENT_REQUIRED`),
+   * поэтому тесты, ведущие заказ дальше `DRAFT`, шлют
+   * `clientId: seed.client.id` в `POST /api/orders` и не заводят своего
+   * клиента.
+   */
+  client: { id: string; name: string };
 }
+
+/**
+ * Имя базовой карточки клиента (см. `SeedResult.client`). Вынесено в
+ * константу, чтобы повторный `seedMinimal` без `resetDatabase` не
+ * плодил дубли.
+ */
+const SEED_CLIENT_NAME = 'ООО «Тестовый клиент»';
 
 const SIZE_CODES: Array<{ code: string; sortOrder: number }> = [
   { code: 'S', sortOrder: 10 },
@@ -328,6 +344,21 @@ export async function seedMinimal(prisma: PrismaClient): Promise<SeedResult> {
     update: { name: 'B2B', sortOrder: 20, isActive: true },
   });
 
+  // Этап «Клиент — обязательный атрибут заказа»: карточка клиента,
+  // которую тесты вешают на заказ, чтобы он мог уйти в расчёт.
+  // `Client.name` НЕ unique → идемпотентность через findFirst + create
+  // (upsert-а по имени тут не бывает).
+  const existingClient = await prisma.client.findFirst({
+    where: { name: SEED_CLIENT_NAME },
+    select: { id: true, name: true },
+  });
+  const client =
+    existingClient ??
+    (await prisma.client.create({
+      data: { name: SEED_CLIENT_NAME, isActive: true },
+      select: { id: true, name: true },
+    }));
+
   return {
     sizes,
     product: { id: product.id, name: product.name, color: product.color },
@@ -343,6 +374,7 @@ export async function seedMinimal(prisma: PrismaClient): Promise<SeedResult> {
       },
       OTHER: { id: otherDivision.id, code: otherDivision.code },
     },
+    client,
   };
 }
 

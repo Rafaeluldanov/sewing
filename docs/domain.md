@@ -195,7 +195,8 @@ Product, который автоматически создаётся под л�
 Ключевые поля:
 
 - `number` (uniq, формат `O-YYYYMMDD-NNNN`),
-- `clientId? → Client`, `customer` (legacy свободный текст),
+- `clientId? → Client` — **обязательный атрибут заказа** (см. ниже),
+  `customer` (legacy свободный текст),
 - `orderDate`, `dueDate?`, `color?`, `comment?`,
 - `companyDivisionId? → CompanyDivision` (master-справочник
   подразделений заказа, см. §12.3);
@@ -220,6 +221,32 @@ Product, который автоматически создаётся под л�
 `(orderId, productId, sizeId)` UNIQUE, `qtyPlan: Int` (план в
 штуках). Один заказ — один `productId` (валидируется в
 `OrdersService.create/update`, инвариант ADR-0009).
+
+**Клиент — обязательный атрибут заказа.** Заказ всегда принадлежит
+карточке `Client`: по клиенту ведутся себестоимость, отгрузки и балансы
+готовой продукции, поэтому заказ «без клиента» ломает управленческую
+аналитику ниже по потоку. Обязательность держат три контура:
+
+- формы заказа (создание `/admin/orders/new` и легаси `/orders/new`,
+  правка `/admin/orders/[id]/edit`, блок «Основное» в карточке) —
+  `required`-селект «Клиент», варианта «без клиента» нет;
+- server actions web-а — общий гейт
+  `apps/web/lib/order-client-required.ts::clientRequiredError`
+  (`fieldErrors.clientId`); он же ловит пути, где нативной валидации
+  формы нет (опт-ин «Настроить материалы» собирает `FormData` сам);
+- backend — `OrdersService.startCalculation` не выпускает заказ без
+  клиента из `DRAFT` (400 `ORDER_CLIENT_REQUIRED`), а
+  `OrdersService.update` тем же кодом отбивает `clientId: null`:
+  клиента можно заменить, но не снять.
+
+Колонка `Order.clientId` при этом остаётся nullable — сознательно, без
+миграции на NOT NULL: (1) исторические заказы, созданные до требования,
+живут с `null` и дозаполняются при первой правке «Основного»; (2)
+`onDelete: SetNull` — заказ всегда переживает карточку клиента и
+остаётся доступен в журналах; (3) `POST /api/orders` остаётся
+backward-compatible (легаси-flow, CUTTER_ASSISTANT, DRAFT-заказ из
+КБ-задачи `ConstructorTasksService.saveDraft` — последний протягивает
+клиента из формы создания, если менеджер его выбрал).
 
 ### 1.2 `OrderStatus`
 

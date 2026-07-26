@@ -15,7 +15,9 @@
  * `AdminEditOrderForm` (см. соседний файл):
  *   - `orderDate`        (date, required)
  *   - `dueDate`          (date, optional, пусто = снять)
- *   - `clientId`         (string, optional, пусто = снять)
+ *   - `clientId`         (string, REQUIRED — этап «Клиент —
+ *                         обязательный атрибут заказа»: пусто = ошибка
+ *                         поля, снять клиента нельзя)
  *   - `patternItemId`    (string, optional, пусто = снять — главная
  *                         номенклатура; этап «Номенклатура = Лекала»)
  *   - `companyDivisionId` (string, optional, пусто = снять — FK на
@@ -58,6 +60,9 @@ import {
 } from '@sewing/shared/orders';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { updateOrder } from '@/lib/orders-api';
+// Этап «Клиент — обязательный атрибут заказа»: единый текст ошибки и
+// гейт на все формы заказа.
+import { clientRequiredError } from '@/lib/order-client-required';
 
 export interface FormActionState {
   error?: string;
@@ -270,6 +275,11 @@ export async function updateAdminOrderAction(
   _prev: FormActionState,
   form: FormData,
 ): Promise<FormActionState> {
+  // Этап «Клиент — обязательный атрибут заказа»: пустой селект = попытка
+  // снять клиента, backend отбил бы это как `ORDER_CLIENT_REQUIRED`.
+  // Ловим на шаг раньше и адресно — на поле.
+  const clientMissing = clientRequiredError(form);
+  if (clientMissing) return clientMissing;
   const raw = buildUpdateDto(form);
   const parsed = UpdateOrderSchema.safeParse(raw);
   if (!parsed.success) {

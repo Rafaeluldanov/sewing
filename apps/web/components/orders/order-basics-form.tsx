@@ -7,7 +7,10 @@
  * Содержит редактируемые управленческие поля заказа:
  *   - подразделение (`companyDivisionId` → `CompanyDivision`);
  *   - срок сдачи (`dueDate`);
- *   - клиент (`clientId`);
+ *   - клиент (`clientId`) — ОБЯЗАТЕЛЬНОЕ поле (этап «Клиент —
+ *     обязательный атрибут заказа»): `required`-селект без варианта «без
+ *     клиента». Исторический заказ без клиента дозаполняется здесь при
+ *     первой же правке «Основного»;
  *   - заказчик free-text (`customer`) — для совместимости со старым flow;
  *   - цена за 1 изделие (`customerUnitPrice`);
  *   - валюта продажи (`customerCurrency`);
@@ -197,16 +200,32 @@ export function OrderBasicsForm({
           />
         </div>
 
+        {/* Этап «Клиент — обязательный атрибут заказа»: селект `required`,
+            варианта «без клиента» нет. Историческому заказу с
+            `clientId = null` селект открывается пустым — сохранить блок
+            «Основное», не выбрав клиента, нельзя (гейт
+            `updateOrderBasicsAction` + backend `ORDER_CLIENT_REQUIRED`). */}
         <div className="order-hero-card__field">
-          <label htmlFor="basics-clientId">Клиент</label>
+          <label htmlFor="basics-clientId">
+            Клиент{' '}
+            <span
+              className="order-hero-card__required"
+              aria-label="обязательное поле"
+              title="обязательное поле"
+            >
+              *
+            </span>
+          </label>
           <select
             id="basics-clientId"
             name="clientId"
             value={clientId}
             onChange={(e) => setClientId(e.target.value)}
             disabled={isTerminal}
+            required
+            aria-required="true"
           >
-            <option value="">— без клиента —</option>
+            <option value="">— выберите клиента —</option>
             {showCurrentClientArchivedOption && initial.clientId && (
               <option value={initial.clientId}>— архивный клиент —</option>
             )}
@@ -217,6 +236,11 @@ export function OrderBasicsForm({
               </option>
             ))}
           </select>
+          {fieldError('clientId') && (
+            <span className="order-hero-card__field-error">
+              {fieldError('clientId')}
+            </span>
+          )}
         </div>
 
         <div className="order-hero-card__field order-hero-card__field--price">

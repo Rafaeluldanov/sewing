@@ -934,10 +934,21 @@ export const CreateOrderSchema = z.object({
   customer: z.string().max(200).optional(),
   /**
    * Управленческая привязка заказа к карточке клиента из справочника
-   * `Client`. Опционально и nullable: `null`/пусто = заказ без явной
-   * связи (старый flow `customer`-free-text всё ещё работает).
-   * Backend дополнительно проверяет, что клиент существует и активен —
-   * иначе 400 `CLIENT_NOT_FOUND` / `CLIENT_INACTIVE`.
+   * `Client`. Backend дополнительно проверяет, что клиент существует и
+   * активен — иначе 400 `CLIENT_NOT_FOUND` / `CLIENT_INACTIVE`.
+   *
+   * Этап «Клиент — обязательный атрибут заказа»: на уровне DTO поле
+   * ОСТАЁТСЯ опциональным — `POST /api/orders` держит обратную
+   * совместимость (легаси `/orders/new`, CUTTER_ASSISTANT, прямой POST,
+   * DRAFT-заказ из КБ-задачи). Обязательность обеспечивают:
+   *   - формы web-а: `required`-селект «Клиент» + гейты server actions
+   *     (`createOrderAction` / `configureOrderDraftAction` отдают
+   *     `fieldErrors.clientId`, если поле есть в FormData и пустое);
+   *   - бизнес-гейт `OrdersService.startCalculation` → 400
+   *     `ORDER_CLIENT_REQUIRED`: заказ без клиента не уедет дальше
+   *     `DRAFT`.
+   * `null`/пусто = «клиент не выбран», такой заказ можно только
+   * дозаполнить.
    */
   clientId: z.string().min(1).nullable().optional(),
   dueDate: DateStringSchema.nullable().optional(),
@@ -1194,6 +1205,9 @@ export type CreateOrderItemDto = z.infer<typeof CreateOrderItemSchema>;
  *     в `DRAFT`; на не-DRAFT заказе backend отвечает 409 `ORDER_LOCKED`.
  *
  * Дополнительные инварианты остаются:
+ *   - `clientId` можно переставить, но не снять: `null` → 400
+ *     `ORDER_CLIENT_REQUIRED` (этап «Клиент — обязательный атрибут
+ *     заказа»);
  *   - смена `routeTemplateId` блокируется, если уже зафиксирован
  *     snapshot маршрута (`OrderRouteStep[]`) → 409
  *     `ORDER_ROUTE_ALREADY_STARTED`;
@@ -1232,8 +1246,15 @@ export const UpdateOrderSchema = z.object({
   status: OrderStatusSchema.optional(),
   /**
    * Управленческая привязка заказа к карточке клиента (см.
-   * `CreateOrderSchema.clientId`). Меняется только пока заказ в
-   * `DRAFT`; передача `null` сбрасывает связь.
+   * `CreateOrderSchema.clientId`). «Безопасное» поле: клиента можно
+   * переставить на любом статусе заказа.
+   *
+   * Этап «Клиент — обязательный атрибут заказа»: СНЯТЬ привязку нельзя
+   * — `clientId: null` отбивается в `OrdersService.update` как 400
+   * `ORDER_CLIENT_REQUIRED`. `null` в типе остаётся только потому, что
+   * web-формы собирают DTO по правилу «поля нет = не трогать, поле есть
+   * и пустое = null»: пустой селект должен долетать до адресной ошибки,
+   * а не молча выпадать из PATCH.
    */
   clientId: z.string().min(1).nullable().optional(),
   dueDate: DateStringSchema.nullable().optional(),

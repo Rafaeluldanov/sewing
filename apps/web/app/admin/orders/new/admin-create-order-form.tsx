@@ -40,6 +40,19 @@
  *     сразу через `createOrderForCalculationAction` и редиректит на
  *     `/admin/orders/[id]/edit`, чтобы изделие не терялось при перезагрузке
  *     (см. проп `onSaveCalculateAsync` у `CreateProductInline`).
+ *
+ * Этап «Клиент — обязательный атрибут заказа»: селект «Клиент» —
+ * `required`, варианта «без клиента» нет. Все три пути создания заказа
+ * с этой страницы проверяют клиента:
+ *   - «Создать заказ» — нативная валидация формы + гейт
+ *     `createOrderAction` (`fieldErrors.clientId`);
+ *   - «Настроить материалы» / «Сохранить изделие» / «Отправить
+ *     конструктору» — сабмит формы не запускается, поэтому клиент
+ *     проверяется явно (гейт `configureOrderDraftAction` и локальные
+ *     проверки перед `createOrderForCalculationAction` /
+ *     `saveConstructorDraftAction`).
+ * Ниже по потоку требование добивает backend: `startCalculation`
+ * отдаёт 400 `ORDER_CLIENT_REQUIRED`.
  */
 
 import Link from 'next/link';
@@ -826,6 +839,10 @@ export function AdminCreateOrderForm({
                   // транзакции, чтобы избежать orphan-task без
                   // привязки к заказу.
                   createDraftOrderOnConstructor
+                  // Этап «Клиент — обязательный атрибут заказа»: клиент
+                  // из блока «Основное» уходит вместе с заявкой КБ,
+                  // чтобы DRAFT-заказ не потерял обязательное поле.
+                  orderClientId={clientId || undefined}
                   // Этап «Сохранить изделие = создать DRAFT-заказ»:
                   // вместо локального state создаём реальный заказ
                   // (productMode = CREATE_FOR_CALCULATION) с уже
@@ -834,6 +851,17 @@ export function AdminCreateOrderForm({
                   // — переживает перезагрузку и виден в `/admin/orders`
                   // как «Черновик».
                   onSaveCalculateAsync={async (payload) => {
+                    // Этап «Клиент — обязательный атрибут заказа»: эта
+                    // кнопка создаёт РЕАЛЬНЫЙ DRAFT-заказ, а селект
+                    // «Клиент» живёт вне модалки — нативная валидация
+                    // формы тут не срабатывает, проверяем сами.
+                    if (!clientId) {
+                      return {
+                        ok: false,
+                        error:
+                          'Сначала выберите клиента в блоке «Основное» — это обязательное поле заказа.',
+                      };
+                    }
                     const dto = {
                       orderDate: today,
                       productMode: 'CREATE_FOR_CALCULATION' as const,
@@ -1155,9 +1183,24 @@ function BasicsCreateFields({
         />
       </div>
 
+      {/* Этап «Клиент — обязательный атрибут заказа»: селект `required`,
+          пустого варианта «без клиента» больше нет. Backend добивает
+          требование гейтом `ORDER_CLIENT_REQUIRED` на «Перевести в
+          расчёт», а server action — `fieldErrors.clientId` (опт-ин
+          «Настроить материалы» сабмит формы не запускает, поэтому
+          нативной валидации там недостаточно). */}
       <div className="order-hero-card__field">
         <div className="order-hero-card__field-head">
-          <label htmlFor="clientId">Клиент</label>
+          <label htmlFor="clientId">
+            Клиент{' '}
+            <span
+              className="order-hero-card__required"
+              aria-label="обязательное поле"
+              title="обязательное поле"
+            >
+              *
+            </span>
+          </label>
           {clients.length === 0 && (
             <FieldInfo text="Список клиентов пуст — добавьте клиента в разделе «Клиенты»." />
           )}
@@ -1167,14 +1210,21 @@ function BasicsCreateFields({
           name="clientId"
           value={clientId}
           onChange={(e) => onClientIdChange(e.target.value)}
+          required
+          aria-required="true"
         >
-          <option value="">— без клиента —</option>
+          <option value="">— выберите клиента —</option>
           {clients.map((c) => (
             <option key={c.id} value={c.id}>
               {c.name}
             </option>
           ))}
         </select>
+        {fieldError('clientId') && (
+          <span className="order-hero-card__field-error">
+            {fieldError('clientId')}
+          </span>
+        )}
       </div>
 
       <div className="order-hero-card__field order-hero-card__field--price">

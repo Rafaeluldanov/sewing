@@ -629,6 +629,7 @@ async function createOrderWithPatternAndTechCard(
     .set('Cookie', cookie)
     .send({
       orderDate: '2026-04-15T00:00:00.000Z',
+      clientId: seed.client.id,
       productId: seed.product.id,
       items: options.items,
       techCardId: options.techCardId,

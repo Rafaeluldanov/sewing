@@ -343,6 +343,7 @@ async function prepareDraftReady(
     .set('Cookie', cookie)
     .send({
       orderDate: '2026-04-15T00:00:00.000Z',
+      clientId: seed.client.id,
       productId: seed.product.id,
       items: [{ sizeId: seed.sizes.M, qtyPlan: 4 }],
       techCardId: tc.body.id,

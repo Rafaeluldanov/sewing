@@ -179,6 +179,16 @@ interface Props {
    */
   createDraftOrderOnConstructor?: boolean;
   /**
+   * Этап «Клиент — обязательный атрибут заказа»: клиент, выбранный в
+   * блоке «Основное» формы создания заказа. Нужен только в связке с
+   * `createDraftOrderOnConstructor` — тогда DRAFT-заказ, который заводит
+   * backend вместе с заявкой КБ, сохраняет уже выбранного клиента.
+   * Пусто/`undefined` при `createDraftOrderOnConstructor` = менеджер
+   * ещё не выбрал клиента: submit constructor-таба блокируется с
+   * подсказкой (см. `handleConstructorSubmit`).
+   */
+  orderClientId?: string;
+  /**
    * Этап «Сохранить изделие = создать DRAFT-заказ» (см.
    * `admin-create-order-form.tsx`). Если проп передан, кнопка
    * «Сохранить изделие» на вкладке «Сделать расчёт» НЕ кладёт
@@ -230,6 +240,7 @@ export function CreateProductInline({
   initialPatterns = [],
   initialTab = 'calculate',
   createDraftOrderOnConstructor = false,
+  orderClientId,
   onSaveCalculateAsync,
 }: Props) {
   const [tab, setTab] = useState<TabId>(initialTab);
@@ -536,6 +547,17 @@ export function CreateProductInline({
       return;
     }
 
+    // Этап «Клиент — обязательный атрибут заказа»: этот submit заводит
+    // не только заявку КБ, но и DRAFT-заказ. Селект «Клиент» живёт в
+    // блоке «Основное» ВНЕ модалки, поэтому нативная `required`-валидация
+    // формы здесь не срабатывает — проверяем сами.
+    if (createDraftOrderOnConstructor && !orderClientId) {
+      setConstructorError(
+        'Сначала выберите клиента в блоке «Основное» — это обязательное поле заказа.',
+      );
+      return;
+    }
+
     // Валидация перед отправкой — backend всё равно перепроверит,
     // но менеджер увидит ошибку быстрее.
     const cleanRows = constructorRows.filter((r) => r.sizeId.trim() !== '');
@@ -593,6 +615,11 @@ export function CreateProductInline({
         'payload',
         JSON.stringify({
           calcPayload,
+          // Клиент долетает до backend-а только в связке с
+          // `createDraftOrder` — см. `SaveConstructorDraftSchema.clientId`.
+          ...(createDraftOrderOnConstructor && orderClientId
+            ? { clientId: orderClientId }
+            : {}),
           comment: constructorComment.trim(),
           sizeRows: cleanRows.map((r) => ({
             sizeId: r.sizeId,

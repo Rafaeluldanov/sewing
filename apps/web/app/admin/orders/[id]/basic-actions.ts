@@ -22,7 +22,9 @@
  * Контракт FormData (см. UI hero-формы в `order-hero-card.tsx`):
  *   - `companyDivisionId`  — id карточки `CompanyDivision` либо пусто (= без подразделения);
  *   - `dueDate`            — ISO `YYYY-MM-DD` или пусто (= снять);
- *   - `clientId`           — `ulid` либо пусто (= без клиента);
+ *   - `clientId`           — `ulid`, ОБЯЗАТЕЛЬНО (этап «Клиент —
+ *                            обязательный атрибут заказа»: пусто =
+ *                            ошибка поля, снять клиента нельзя);
  *   - `customer`           — free-text заказчик (для совместимости со
  *                            старым `customer`-полем; пусто = снять);
  *   - `customerUnitPrice`  — цена за 1 изделие (decimal-string),
@@ -48,6 +50,9 @@ import {
   type UpdateOrderDto,
 } from '@sewing/shared/orders';
 import { ApiRequestError, errorText } from '@/lib/api';
+// Этап «Клиент — обязательный атрибут заказа»: единый текст ошибки и
+// гейт на все формы заказа.
+import { clientRequiredError } from '@/lib/order-client-required';
 import { setOrderRouteMode, updateOrder } from '@/lib/orders-api';
 
 export interface UpdateOrderBasicsActionState {
@@ -120,6 +125,13 @@ export async function updateOrderBasicsAction(
   _prev: UpdateOrderBasicsActionState,
   form: FormData,
 ): Promise<UpdateOrderBasicsActionState> {
+  // Этап «Клиент — обязательный атрибут заказа»: пустой селект = попытка
+  // снять клиента (backend отбил бы это как `ORDER_CLIENT_REQUIRED`).
+  // Историческим заказам без клиента это и означает «дозаполнить при
+  // следующей правке»: сохранить блок «Основное», не выбрав клиента,
+  // нельзя.
+  const clientMissing = clientRequiredError(form);
+  if (clientMissing) return clientMissing;
   const raw = buildBasicsDto(form);
   const parsed = UpdateOrderSchema.safeParse(raw);
   if (!parsed.success) {

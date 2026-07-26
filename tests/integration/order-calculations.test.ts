@@ -104,6 +104,7 @@ describeWithDb('integration — варианты просчёта заказа (
       .set('Cookie', manager)
       .send({
         orderDate: '2026-07-16T00:00:00.000Z',
+        clientId: seed.client.id,
         patternItemId,
         techCardId,
         routeTemplateId,
@@ -189,6 +190,7 @@ describeWithDb('integration — варианты просчёта заказа (
       .set('Cookie', manager)
       .send({
         orderDate: '2026-07-16T00:00:00.000Z',
+        clientId: seed.client.id,
         customer: 'Клиент-инлайн',
         productMode: 'CREATE_FOR_CALCULATION',
         newProductCalculation: {

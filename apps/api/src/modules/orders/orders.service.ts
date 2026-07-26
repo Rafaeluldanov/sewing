@@ -61,6 +61,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
 import {
   ClientInactiveException,
   ClientNotFoundException,
+  OrderClientRequiredException,
   OrderInvalidStatusTransitionException,
   OrderDeleteForbiddenException,
   OrderInvalidTransitionException,
@@ -502,6 +503,14 @@ export class OrdersService {
     // активность клиента до открытия транзакции — по тем же причинам,
     // что и `routeTemplateId`/`techCardId` (UI-адресная ошибка вместо
     // FK-сбоя).
+    //
+    // Этап «Клиент — обязательный атрибут заказа»: здесь клиент
+    // сознательно НЕ требуется — `POST /api/orders` остаётся
+    // backward-compatible (легаси `/orders/new`, CUTTER_ASSISTANT,
+    // DRAFT-заказ из КБ-задачи). Требование держат формы
+    // (`required`-селект «Клиент» + гейты server actions) и бизнес-гейт
+    // `startCalculation` → `ORDER_CLIENT_REQUIRED`: заказ без клиента
+    // не уедет дальше DRAFT.
     if (dto.clientId) {
       await this.assertClientUsable(dto.clientId);
     }
@@ -2161,6 +2170,11 @@ export class OrdersService {
    *     `ORDER_LOCKED`. Это сохраняет инвариант ADR-0006 «после
    *     запуска план иммутабелен».
    *
+   * Этап «Клиент — обязательный атрибут заказа»: `clientId` остаётся
+   * «безопасным» полем (менеджер может переставить клиента на любом
+   * статусе), но СНЯТЬ привязку нельзя — `clientId: null` отдаёт 400
+   * `ORDER_CLIENT_REQUIRED`.
+   *
    * Смена `status` обрабатывается отдельно после применения остальных
    * полей: это делегируется в существующие `start()/complete()/cancel()`,
    * чтобы не дублировать логику snapshot-ов и аудита запуска. Через
@@ -2361,7 +2375,18 @@ export class OrdersService {
       await this.assertPatternUsable(dto.patternItemId);
     }
 
-    if (dto.clientId !== undefined && dto.clientId !== null) {
+    // Этап «Клиент — обязательный атрибут заказа»: заменить клиента
+    // можно, СНЯТЬ — нельзя. `clientId: null` в DTO (в web-формах это
+    // «поле есть и пустое») отбиваем адресной 400-кой, чтобы менеджер
+    // не мог случайным сохранением формы обнулить владельца заказа.
+    // Поля нет в DTO (`undefined`) — колонку не трогаем, это по-прежнему
+    // валидный PATCH.
+    if (dto.clientId === null) {
+      throw new OrderClientRequiredException(
+        'Клиент — обязательное поле заказа: снять привязку нельзя, можно только выбрать другого клиента.',
+      );
+    }
+    if (dto.clientId !== undefined) {
       await this.assertClientUsable(dto.clientId);
     }
 
@@ -3162,6 +3187,8 @@ export class OrdersService {
    *   1. Загружаем заказ + проверяем все требования к расчёту:
    *      - status = `DRAFT` (иначе `ORDER_INVALID_STATUS_TRANSITION`);
    *      - есть `patternItemId` (иначе `ORDER_PATTERN_REQUIRED`);
+   *      - есть `clientId`     (иначе `ORDER_CLIENT_REQUIRED` — этап
+   *        «Клиент — обязательный атрибут заказа»);
    *      - есть `techCardId`   (иначе `ORDER_TECH_CARD_REQUIRED`);
    *      - есть хотя бы один `OrderItem` с `qtyPlan > 0`
    *        (иначе `ORDER_ITEMS_REQUIRED`).
@@ -3230,6 +3257,15 @@ export class OrdersService {
     }
     if (!order.patternItemId) {
       throw new OrderPatternRequiredException();
+    }
+    // Этап «Клиент — обязательный атрибут заказа»: заказ без карточки
+    // клиента дальше DRAFT не уезжает. Формы создания/правки требуют
+    // клиента `required`-селектом, а здесь стоит бизнес-гейт — он
+    // закрывает и исторические заказы (созданные до этого требования),
+    // и заказы, заведённые в обход UI (легаси `/orders/new`, прямой
+    // POST, DRAFT из КБ-задачи). См. `OrderClientRequiredException`.
+    if (!order.clientId) {
+      throw new OrderClientRequiredException();
     }
     // Сознательно НЕ блокируем переход в расчёт на DRAFT-pattern с
     // активной ConstructorTask: расчёт — управленческий этап

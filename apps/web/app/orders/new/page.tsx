@@ -1,8 +1,10 @@
 import { redirect } from 'next/navigation';
+import type { ClientDto } from '@sewing/shared/clients';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
 import type { ProductDto, SizeDto } from '@sewing/shared/orders';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
+import { listClients } from '@/lib/clients-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
 import { listProducts, listSizes } from '@/lib/orders-api';
 import { listRouteTemplates } from '@/lib/routes-api';
@@ -26,6 +28,11 @@ export default async function NewOrderPage() {
   let routeTemplates: RouteTemplateSummaryDto[] = [];
   let techCards: TechCardTemplateSummaryDto[] = [];
   let companyDivisions: CompanyDivisionDto[] = [];
+  // Этап «Клиент — обязательный атрибут заказа»: легаси-форма тоже
+  // требует клиента, поэтому подгружаем активные карточки. Как и
+  // остальные опциональные справочники — через `allSettled`: недоступный
+  // модуль клиентов не должен валить форму создания заказа целиком.
+  let clients: ClientDto[] = [];
   let error: string | null = null;
   try {
     // routes/tech-cards идут через `Promise.allSettled` отдельными
@@ -36,12 +43,13 @@ export default async function NewOrderPage() {
     // PHASE 1 «CompanyDivision как master-справочник»: подгружаем
     // активные карточки подразделений; пустой список → форма
     // fallback-ит на legacy enum-select (см. NewOrderForm).
-    const [sz, pr, rt, tc, cd] = await Promise.allSettled([
+    const [sz, pr, rt, tc, cd, cl] = await Promise.allSettled([
       listSizes(),
       listProducts(),
       listRouteTemplates({ isActive: true }),
       listTechCards({ isActive: true }),
       listCompanyDivisions(),
+      listClients({ includeInactive: false }),
     ]);
     if (sz.status === 'fulfilled') sizes = sz.value;
     else throw sz.reason;
@@ -50,6 +58,7 @@ export default async function NewOrderPage() {
     routeTemplates = rt.status === 'fulfilled' ? rt.value : [];
     techCards = tc.status === 'fulfilled' ? tc.value : [];
     companyDivisions = cd.status === 'fulfilled' ? cd.value : [];
+    clients = cl.status === 'fulfilled' ? cl.value : [];
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -70,6 +79,7 @@ export default async function NewOrderPage() {
         routeTemplates={routeTemplates}
         techCards={techCards}
         companyDivisions={companyDivisions}
+        clients={clients}
         today={today}
       />
     </div>
