@@ -90,3 +90,27 @@ export function OrderTabEmptyState({ title, hint, action }: EmptyStateProps) {
     </div>
   );
 }
+
+/**
+ * `OrderTabLoadingState` — скелет тела вкладки карточки заказа.
+ *
+ * Используется как `fallback` у `<Suspense>` вокруг активной вкладки
+ * `/admin/orders/[id]`: вкладки — тяжёлые async server-компоненты
+ * (`OrderProductionTab` тянет shopfloor-состояние, `OrderNeedsTab` —
+ * потребности/выдачи/закупки), и без границы Suspense шапка с
+ * линейкой вкладок не показывалась бы, пока не доедет вся вкладка
+ * целиком. Высота задана намеренно (`min-height`), чтобы при
+ * переключении вкладки страница не «схлопывалась» под коротким
+ * скелетом — прокрутку мы сознательно не сбрасываем.
+ */
+export function OrderTabLoadingState() {
+  return (
+    <div className="order-tab-loading" role="status" aria-live="polite">
+      <span className="order-tab-loading__label">Загружаем раздел…</span>
+      <div className="order-tab-loading__bar order-tab-loading__bar--title" />
+      <div className="order-tab-loading__bar" />
+      <div className="order-tab-loading__bar order-tab-loading__bar--short" />
+      <div className="order-tab-loading__block" />
+    </div>
+  );
+}

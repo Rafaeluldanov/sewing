@@ -14172,6 +14172,11 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: flex;
   flex-wrap: wrap;
   gap: 0.25rem;
+  /* Переключение вкладки не сбрасывает прокрутку (см. `OrderViewTabs`);
+     если линейку увели за верх экрана — её подтягивают
+     `scrollIntoView`, и вот этот отступ не даёт ей прилипнуть
+     вплотную к краю вьюпорта. */
+  scroll-margin-top: 0.75rem;
   padding: 0.35rem;
   background: var(--admin-soft, #f1f1ef);
   border: 1px solid var(--admin-border);
@@ -14216,6 +14221,36 @@ body:has(.admin-layout) .app-header { display: none !important; }
   color: var(--admin-muted);
   cursor: not-allowed;
   opacity: 0.7;
+}
+
+/* Оптимистичная вкладка карточки заказа: подсветка встаёт сразу по
+   клику (см. `OrderViewTabs`), а пульсирующая точка показывает, что
+   содержимое ещё едет с сервера. */
+.order-detail-tabs__link--pending::after {
+  content: '';
+  width: 0.35rem;
+  height: 0.35rem;
+  margin-left: 0.1rem;
+  border-radius: 50%;
+  background: currentColor;
+  animation: order-detail-tabs-pending 900ms ease-in-out infinite;
+}
+
+@keyframes order-detail-tabs-pending {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 0.85;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .order-detail-tabs__link--pending::after {
+    animation: none;
+    opacity: 0.6;
+  }
 }
 
 .order-detail-tabs__icon {
@@ -14525,6 +14560,71 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 
 /* --- Empty state for tabs without data ---------------------------------- */
+
+/* Скелет тела вкладки карточки заказа (`OrderTabLoadingState`) — то,
+   что видно, пока стримится активная вкладка `/admin/orders/[id]`. */
+.order-tab-loading {
+  display: flex;
+  flex-direction: column;
+  gap: 0.7rem;
+  padding: 1.25rem;
+  background: var(--admin-surface);
+  border: 1px solid var(--admin-border);
+  border-radius: 16px;
+  width: 100%;
+  min-width: 0;
+  min-height: 320px;
+  box-sizing: border-box;
+}
+
+.order-tab-loading__label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--admin-muted);
+}
+
+.order-tab-loading__bar,
+.order-tab-loading__block {
+  border-radius: 8px;
+  background: var(--admin-soft, #f1f1ef);
+  animation: order-tab-loading-pulse 1.2s ease-in-out infinite;
+}
+
+.order-tab-loading__bar {
+  height: 0.9rem;
+  width: 100%;
+}
+
+.order-tab-loading__bar--title {
+  height: 1.25rem;
+  width: 40%;
+}
+
+.order-tab-loading__bar--short {
+  width: 65%;
+}
+
+.order-tab-loading__block {
+  flex: 1 1 auto;
+  min-height: 160px;
+}
+
+@keyframes order-tab-loading-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .order-tab-loading__bar,
+  .order-tab-loading__block {
+    animation: none;
+  }
+}
 
 .order-tab-empty-state {
   display: flex;

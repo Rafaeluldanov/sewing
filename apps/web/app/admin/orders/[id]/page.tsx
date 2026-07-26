@@ -65,6 +65,7 @@
  *
  * Backend / DTO / Prisma не задействованы — это presentation-слой.
  */
+import { Suspense } from 'react';
 import { notFound } from 'next/navigation';
 import { Package } from 'lucide-react';
 import type { OrderDetailDto } from '@sewing/shared/orders';
@@ -91,6 +92,7 @@ import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorwa
 import { AdminPageShell } from '@/components/admin';
 import {
   OrderTabEmptyState,
+  OrderTabLoadingState,
   OrderWorkspaceLayout,
 } from '@/components/orders/order-workspace-layout';
 import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
@@ -129,58 +131,60 @@ export default async function AdminOrderDetailPage({
     throw e;
   }
 
-  let passports: PassportListItemDto[] = [];
-  try {
-    passports = await listOrderPassports(order.id);
-  } catch {
-    // Не валим карточку, если по какой-то причине запрос паспортов
-    // упал (например, временный 5xx). Шапка / алерты по факту 0
-    // паспортов всё равно работают.
-    passports = [];
-  }
+  // Всё, что нужно шапке карточки, тянем ОДНОЙ пачкой параллельно.
+  // Раньше это были пять последовательных `await` — на переключении
+  // вкладки (это обычная навигация по `?tab=…`) их задержки
+  // складывались, и шапка появлялась заметно позже клика.
+  const [passports, me, cutIssueRulesSummary, colorwayData, calculations] =
+    await Promise.all([
+      // Не валим карточку, если по какой-то причине запрос паспортов
+      // упал (например, временный 5xx). Шапка / алерты по факту 0
+      // паспортов всё равно работают.
+      listOrderPassports(order.id).catch(() => [] as PassportListItemDto[]),
+      getCurrentUserOrNull(),
+      // «Очередь выдачи кроя по размерам» — отдельная карточка во вкладке
+      // «Производство» (см. `OrderCutIssueRulesCard` /
+      // `apps/api/src/modules/order-cut-issue-rules/*`). Тянем сводку
+      // тут, чтобы tab-компонент остался синхронным.
+      getOrderCutIssueRules(order.id),
+      // Фича «Расцветки» (FEATURE_COLORWAYS): аддитивный блок в шапке
+      // карточки. Флаг OFF на проде по умолчанию, ON на dev. Ошибку
+      // запроса глушим — блок просто не рисуется, карточка не падает.
+      // Вместе с ним — фича «Параметры техкарт»: слоты и их значения по
+      // расцветкам живут в том же блоке (плитка расцветки показывает,
+      // сколько ещё не заполнено).
+      isColorwaysEnabled()
+        ? Promise.all([
+            getOrderColorways(order.id),
+            getOrderTechCardParameters(order.id),
+          ]).catch(
+            () =>
+              [null, null] as [
+                OrderColorwaysDto | null,
+                OrderTechCardParametersDto | null,
+              ],
+          )
+        : Promise.resolve([null, null] as [
+            OrderColorwaysDto | null,
+            OrderTechCardParametersDto | null,
+          ]),
+      // Фича «Варианты просчёта» (FEATURE_ORDER_CALCULATIONS): ряд вкладок
+      // вариантов НАД окном заказа. Ошибку запроса глушим — ряд просто не
+      // рисуется, карточка не падает (тот же приём, что у colorways).
+      isOrderCalculationsEnabled()
+        ? getOrderCalculations(order.id).catch(
+            () => null as OrderCalculationsDto | null,
+          )
+        : Promise.resolve(null as OrderCalculationsDto | null),
+    ]);
 
-  const me = await getCurrentUserOrNull();
+  const [colorways, techCardParams] = colorwayData;
+
   // Layout `/admin/*` уже пустил только ADMIN / SHOP_MANAGER, но мы
   // явно вычисляем флаг — на нём завязаны управленческие кнопки в
   // outsource-блоке (mark ordered / received).
   const role = me?.user.role;
   const isManager = role === 'ADMIN' || role === 'SHOP_MANAGER';
-  // «Очередь выдачи кроя по размерам» — отдельная карточка во вкладке
-  // «План» (см. `OrderCutIssueRulesCard` /
-  // `apps/api/src/modules/order-cut-issue-rules/*`). Тянем сводку
-  // тут, чтобы tab-компонент остался синхронным.
-  const cutIssueRulesSummary = await getOrderCutIssueRules(order.id);
-
-  // Фича «Расцветки» (FEATURE_COLORWAYS): аддитивный блок в шапке
-  // карточки. Флаг OFF на проде по умолчанию, ON на dev. Ошибку
-  // запроса глушим — блок просто не рисуется, карточка не падает.
-  let colorways: OrderColorwaysDto | null = null;
-  // Фича «Параметры техкарт»: слоты и их значения по расцветкам. Живут в том
-  // же блоке (плитка расцветки показывает, сколько ещё не заполнено).
-  let techCardParams: OrderTechCardParametersDto | null = null;
-  if (isColorwaysEnabled()) {
-    try {
-      [colorways, techCardParams] = await Promise.all([
-        getOrderColorways(order.id),
-        getOrderTechCardParameters(order.id),
-      ]);
-    } catch {
-      colorways = null;
-      techCardParams = null;
-    }
-  }
-
-  // Фича «Варианты просчёта» (FEATURE_ORDER_CALCULATIONS): ряд вкладок
-  // вариантов НАД окном заказа. Ошибку запроса глушим — ряд просто не
-  // рисуется, карточка не падает (тот же приём, что у colorways).
-  let calculations: OrderCalculationsDto | null = null;
-  if (isOrderCalculationsEnabled()) {
-    try {
-      calculations = await getOrderCalculations(order.id);
-    } catch {
-      calculations = null;
-    }
-  }
   // Итерация 3 «стадия per вариант»: активный вариант — черновик →
   // в шапке появляется «Рассчитать вариант» (заказ уже в CALCULATION).
   const activeCalculationDraft =
@@ -248,31 +252,42 @@ export default async function AdminOrderDetailPage({
         }
         tabs={<OrderViewTabs orderId={order.id} activeTab={activeTab} />}
       >
-        {activeTab === 'production' && (
-          <div className="order-tab-panel">
-            <OrderProductionTab
-              order={order}
-              canManage={isManager}
-              cutIssueRulesSummary={cutIssueRulesSummary}
-            />
-          </div>
-        )}
+        {/*
+          Тело вкладки — за границей Suspense. Вкладки это тяжёлые async
+          server-компоненты (shopfloor-состояние, потребности, выдачи,
+          закупки), и без границы браузер не показал бы НИЧЕГО, пока не
+          доедет вся вкладка целиком: клик по вкладке выглядел как
+          «зависание». Теперь шапка и линейка вкладок появляются сразу,
+          а тело стримится следом под скелетом. `key` по активной
+          вкладке — чтобы при переключении показывался скелет новой
+          вкладки, а не «залипшее» тело прошлой.
+        */}
+        <Suspense key={activeTab} fallback={<OrderTabLoadingState />}>
+          {activeTab === 'production' && (
+            <div className="order-tab-panel">
+              <OrderProductionTab
+                order={order}
+                canManage={isManager}
+                cutIssueRulesSummary={cutIssueRulesSummary}
+              />
+            </div>
+          )}
 
-        {activeTab === 'passports' && (
-          <div className="order-tab-panel">
-            <OrderPassportsTab
-              orderId={order.id}
-              passports={passports}
-              routeSteps={order.routeSteps}
-              canIssuePassport={canIssuePassport}
-              canDelete={isManager}
-            />
-          </div>
-        )}
+          {activeTab === 'passports' && (
+            <div className="order-tab-panel">
+              <OrderPassportsTab
+                orderId={order.id}
+                passports={passports}
+                routeSteps={order.routeSteps}
+                canIssuePassport={canIssuePassport}
+                canDelete={isManager}
+              />
+            </div>
+          )}
 
-        {activeTab === 'operations' && (
-          <div className="order-tab-panel">
-            {/*
+          {activeTab === 'operations' && (
+            <div className="order-tab-panel">
+              {/*
               Профильный компонент операций (`OrderOperationsTab` →
               `OrderOperationsUnifiedTable`). СОЗНАТЕЛЬНО НЕ возвращаем
               операции через `OrderSummaryUnifiedTable` — это itemized
@@ -280,13 +295,13 @@ export default async function AdminOrderDetailPage({
               заказу», а не в «Операциях» и не в «Потребностях»
               (см. JSDoc `OrderNeedsTab`).
             */}
-            <OrderOperationsTab order={order} passports={passports} />
-          </div>
-        )}
+              <OrderOperationsTab order={order} passports={passports} />
+            </div>
+          )}
 
-        {activeTab === 'costSummary' && (
-          <div className="order-tab-panel order-summary-tab">
-            {/*
+          {activeTab === 'costSummary' && (
+            <div className="order-tab-panel order-summary-tab">
+              {/*
               Финансовая вкладка «Сводно по заказу» — dedicated cost
               deep-dive: расходы (материалы / фурнитура / операции /
               нанесение / прочее) одной таблицей,
@@ -301,23 +316,23 @@ export default async function AdminOrderDetailPage({
               id вкладки — `costSummary`, чтобы явно отделить новую
               финансовую вкладку от старого generic `summary`.
             */}
-            <OrderSummaryTab order={order} passports={passports} />
-          </div>
-        )}
+              <OrderSummaryTab order={order} passports={passports} />
+            </div>
+          )}
 
-        {activeTab === 'needs' && (
-          <div className="order-tab-panel">
-            <OrderNeedsTab
-              order={order}
-              passports={passports}
-              canManage={isManager}
-            />
-          </div>
-        )}
+          {activeTab === 'needs' && (
+            <div className="order-tab-panel">
+              <OrderNeedsTab
+                order={order}
+                passports={passports}
+                canManage={isManager}
+              />
+            </div>
+          )}
 
-        {activeTab === 'signalSample' && (
-          <div className="order-tab-panel">
-            {/*
+          {activeTab === 'signalSample' && (
+            <div className="order-tab-panel">
+              {/*
               Вкладка «Сигнальный образец» (MVP, см.
               `docs/order-signal-sample-flow.md`,
               `docs/order-signal-sample-recon.md`).
@@ -326,38 +341,39 @@ export default async function AdminOrderDetailPage({
               отображение эффекта на тираж. backend модуль —
               `apps/api/src/modules/order-samples/*`.
             */}
-            <OrderSignalSampleTab order={order} canManage={isManager} />
-          </div>
-        )}
+              <OrderSignalSampleTab order={order} canManage={isManager} />
+            </div>
+          )}
 
-        {activeTab === 'history' && (
-          <div className="order-tab-panel">
-            {/*
+          {activeTab === 'history' && (
+            <div className="order-tab-panel">
+              {/*
               History сознательно идёт без props: пока нет публичного
               audit-log API, мы не хотим пробрасывать `order` /
               `passports` и плодить искушение собрать псевдо-таймлайн
               из текущих полей. См. TODO в `order-history-tab.tsx`.
             */}
-            <OrderHistoryTab />
-          </div>
-        )}
+              <OrderHistoryTab />
+            </div>
+          )}
 
-        {/* Защита от случайного `?tab=что-то-неизвестное`: parseOrderViewTab
+          {/* Защита от случайного `?tab=что-то-неизвестное`: parseOrderViewTab
             всегда вернёт известный id, но мы держим fallback empty-state
             здесь, чтобы tsx-компилятор был доволен exhaustive-проверкой
             и UI не оказался пустым в случае будущей рассинхронизации. */}
-        {activeTab !== 'production' &&
-          activeTab !== 'passports' &&
-          activeTab !== 'operations' &&
-          activeTab !== 'costSummary' &&
-          activeTab !== 'needs' &&
-          activeTab !== 'signalSample' &&
-          activeTab !== 'history' && (
-            <OrderTabEmptyState
-              title="Раздел не найден"
-              hint="Откройте «Производство» — это default-вкладка карточки заказа."
-            />
-          )}
+          {activeTab !== 'production' &&
+            activeTab !== 'passports' &&
+            activeTab !== 'operations' &&
+            activeTab !== 'costSummary' &&
+            activeTab !== 'needs' &&
+            activeTab !== 'signalSample' &&
+            activeTab !== 'history' && (
+              <OrderTabEmptyState
+                title="Раздел не найден"
+                hint="Откройте «Производство» — это default-вкладка карточки заказа."
+              />
+            )}
+        </Suspense>
       </OrderWorkspaceLayout>
     </AdminPageShell>
   );
