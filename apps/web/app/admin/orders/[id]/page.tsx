@@ -5,15 +5,20 @@
  *
  *   1. Постоянная компактная шапка `OrderManagementHeader` —
  *      summary заказа + основные workflow-actions (видна на всех
- *      вкладках).
+ *      вкладках). Это ЕДИНСТВЕННОЕ содержимое hero-слота: линейка
+ *      вкладок должна идти сразу под шапкой, поэтому блоки во всю
+ *      ширину сюда больше не добавляем (26.07 «Расцветки» и «Заявки в
+ *      КБ» уехали из hero во вкладку «Производство»).
  *   2. Задачи и предупреждения по заказу — в колокольчике самой шапки
  *      (`OrderAlertsBell` + правила `buildAlerts` из
  *      `order-action-center.tsx`): счётчик у бейджа статуса, список со
  *      ссылками в нужную вкладку — в поповере. Отдельным блоком во всю
  *      ширину над вкладками они больше не рисуются.
  *   3. Линейка вкладок `OrderViewTabs`:
- *        - Производство     — KPI стадий, размерный breakdown,
- *          текущие stage buckets из `/api/shopfloor/state`;
+ *        - Производство     — расцветки заказа (`OrderColorwaysBlock`,
+ *          `FEATURE_COLORWAYS`) и «Заявки в КБ», затем KPI стадий,
+ *          размерный breakdown, текущие stage buckets из
+ *          `/api/shopfloor/state`;
  *        - Паспорта         — список паспортов + фильтры (только
  *          эта вкладка показывает паспорта);
  *        - План             — продукт / лекало / цвет / план по
@@ -88,14 +93,12 @@ import {
 import { getOrderCalculations } from '@/lib/order-calculations-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { OrderCalcTabs } from '@/components/orders/calculations/order-calc-tabs';
-import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorways-block';
 import { AdminPageShell } from '@/components/admin';
 import {
   OrderTabEmptyState,
   OrderTabLoadingState,
   OrderWorkspaceLayout,
 } from '@/components/orders/order-workspace-layout';
-import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 import { OrderManagementHeader } from '@/components/orders/view/order-management-header';
 import { OrderViewTabs } from '@/components/orders/view/order-view-tabs';
 import {
@@ -224,31 +227,19 @@ export default async function AdminOrderDetailPage({
         key={workspaceKey}
         mode="view"
         hero={
-          <>
-            <OrderManagementHeader
-              order={order}
-              passports={passports}
-              activeCalculationDraft={activeCalculationDraft}
-            />
-            {colorways && (
-              <OrderColorwaysBlock
-                orderId={order.id}
-                initial={colorways}
-                techCardParams={techCardParams}
-                // Расцветки редактируемы только пока план не заморожен
-                // (DRAFT/CALCULATION) — то же окно, что и бэкенд-гайд
-                // `ORDER_COLORWAYS_LOCKED`. Иначе блок показываем read-only,
-                // чтобы форма не «сохраняла» правки, которые не поднимутся в
-                // общий план заказа.
-                editable={
-                  order.status === 'DRAFT' || order.status === 'CALCULATION'
-                }
-              />
-            )}
-            {order.constructorTask && (
-              <OrderConstructorTaskCard task={order.constructorTask} />
-            )}
-          </>
+          /*
+            В hero — ТОЛЬКО постоянная шапка заказа. Блоки «Расцветки» и
+            «Заявки в КБ» стояли здесь же и отодвигали линейку вкладок
+            вниз, хотя относятся к плану заказа, а не к разделу: они
+            переехали в начало вкладки «Производство» (см. JSDoc
+            `OrderProductionTab`). Добавлять сюда новые блоки во всю
+            ширину не нужно — вкладки должны начинаться сразу под шапкой.
+          */
+          <OrderManagementHeader
+            order={order}
+            passports={passports}
+            activeCalculationDraft={activeCalculationDraft}
+          />
         }
         tabs={<OrderViewTabs orderId={order.id} activeTab={activeTab} />}
       >
@@ -269,6 +260,8 @@ export default async function AdminOrderDetailPage({
                 order={order}
                 canManage={isManager}
                 cutIssueRulesSummary={cutIssueRulesSummary}
+                colorways={colorways}
+                techCardParams={techCardParams}
               />
             </div>
           )}

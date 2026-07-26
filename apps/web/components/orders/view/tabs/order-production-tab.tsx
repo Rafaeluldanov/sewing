@@ -29,6 +29,16 @@
  *   - список паспортов (вкладка «Паспорта»), материалы (вкладка
  *     «Потребности»), hero-метрики (шапка).
  *
+ * 26.07 «вкладки под шапку». Раньше между постоянной шапкой заказа и
+ * линейкой вкладок стояли ещё два блока во всю ширину — «Расцветки»
+ * (`OrderColorwaysBlock`) и «Заявки в КБ» (`OrderConstructorTaskCard`):
+ * они висели над ВСЕМИ вкладками и отодвигали линейку вниз, хотя
+ * относятся к плану заказа, а не к разделу. Оба переехали сюда, в
+ * начало «Производства» — к настроечным блокам («Цвета по строкам
+ * техкарты», «Очередь выдачи кроя»), которые уже жили в этой вкладке.
+ * В hero остался только `OrderManagementHeader`, поэтому вкладки
+ * теперь идут сразу под шапкой.
+ *
  * Backend / DTO / Prisma здесь не задействованы — это presentation-
  * слой, склейка трёх готовых read-only проекций по `sizeId`.
  */
@@ -39,10 +49,12 @@ import type {
 } from '@sewing/shared/orders';
 import type {
   OperationAmendmentStateDto,
+  OrderColorwaysDto,
   OrderCutIssueRulesSummaryDto,
   QuantityAmendmentStateDto,
   SizeAmendmentStateDto,
 } from '@sewing/shared';
+import type { OrderTechCardParametersDto } from '@sewing/shared/order-tech-cards';
 import type {
   ShopfloorRowDto,
   ShopfloorStateDto,
@@ -76,6 +88,8 @@ import type { AmendmentHistoryEntryDto } from '@sewing/shared';
 import { OrderMaterialColorsCard } from '@/components/orders/view/order-material-colors-card';
 import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rules-card';
 import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
+import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorways-block';
+import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 
 interface Props {
   order: OrderDetailDto;
@@ -96,12 +110,27 @@ interface Props {
    * жил во вкладке «План».
    */
   cutIssueRulesSummary: OrderCutIssueRulesSummaryDto;
+  /**
+   * Фича «Расцветки» (`FEATURE_COLORWAYS`): расцветки заказа + их
+   * поразмерный план. Приходят готовыми из `/admin/orders/[id]` — тянуть
+   * их внутри вкладки незачем, страница уже грузит их одной пачкой для
+   * всей карточки. `null` — флаг выключен или запрос не удался: блок
+   * просто не рисуется (вкладка из-за этого не падает).
+   */
+  colorways: OrderColorwaysDto | null;
+  /**
+   * Фича «Параметры техкарт»: слоты и их значения по расцветкам. Живут в
+   * том же блоке (плитка расцветки открывает спецификацию материалов).
+   */
+  techCardParams: OrderTechCardParametersDto | null;
 }
 
 export async function OrderProductionTab({
   order,
   canManage,
   cutIssueRulesSummary,
+  colorways,
+  techCardParams,
 }: Props) {
   // Stage buckets имеют смысл только когда заказ реально едет в
   // производстве: до запуска (DRAFT/CALCULATION/CALCULATION_DONE)
@@ -240,6 +269,29 @@ export async function OrderProductionTab({
 
   return (
     <div className="order-prod-tab">
+      {/*
+        Расцветки — первым блоком вкладки: до 26.07 они стояли над
+        линейкой вкладок и были видны на любой из них. Правка расцветки
+        поднимается в агрегат `OrderItem` только пока план не заморожен
+        (`DRAFT`/`CALCULATION`) — то же окно, что и бэкенд-гайд
+        `ORDER_COLORWAYS_LOCKED`. Вне его блок read-only, иначе форма
+        «сохраняла» бы правки, которые не изменят общий план заказа.
+      */}
+      {colorways && (
+        <OrderColorwaysBlock
+          orderId={order.id}
+          initial={colorways}
+          techCardParams={techCardParams}
+          editable={
+            order.status === 'DRAFT' || order.status === 'CALCULATION'
+          }
+        />
+      )}
+
+      {/* «Заявки в КБ» — переехала сюда из hero вместе с расцветками.
+          Компонент сам возвращает null, если задачи у заказа нет. */}
+      <OrderConstructorTaskCard task={order.constructorTask} />
+
       <AdminCard className="admin-order-detail-card-compact">
         <AdminSectionHeader
           icon={<Workflow size={18} strokeWidth={1.7} aria-hidden />}
