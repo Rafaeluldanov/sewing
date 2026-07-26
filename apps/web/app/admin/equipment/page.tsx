@@ -19,6 +19,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
@@ -191,7 +192,9 @@ export default async function AdminEquipmentListPage({
             <table className="admin-table admin-compact-grouped-table admin-equipment-compact-table">
               <thead>
                 <tr>
-                  <th aria-label="Выбор" />
+                  <th>
+                    <BulkArchiveSelectAll ids={sortedItems.map((eq) => eq.id)} />
+                  </th>
                   <th>№</th>
                   <th>Название</th>
                   <th>Категории</th>

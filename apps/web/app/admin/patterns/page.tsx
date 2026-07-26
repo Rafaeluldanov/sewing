@@ -19,17 +19,21 @@ import {
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
+  BulkArchiveCheckbox,
+  BulkArchiveHeaderButton,
+  BulkArchiveProvider,
+  BulkArchiveRowActions,
+  BulkArchiveSelectAll,
   paginate,
   type AdminTableColumn,
 } from '@/components/admin';
 import { statusTone } from '@/lib/admin-labels';
 import { DeleteCategoryChipButton } from './delete-category-chip-button';
 import {
-  PatternArchiveCheckbox,
-  PatternArchiveHeaderButton,
-  PatternArchiveProvider,
-  PatternArchiveRowActions,
-} from './pattern-archive';
+  archivePatternsAction,
+  purgePatternsAction,
+  restorePatternsAction,
+} from './archive-actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -129,9 +133,9 @@ export default async function AdminPatternsListPage({
       // Чекбокс массовых операций архива. `sortable: false` — сортировать
       // по нему нечего (`AdminTableView` читает textContent ячейки).
       key: 'select',
-      header: '',
+      header: <BulkArchiveSelectAll ids={pageItems.map((p) => p.id)} />,
       sortable: false,
-      render: (p) => <PatternArchiveCheckbox patternId={p.id} />,
+      render: (p) => <BulkArchiveCheckbox id={p.id} />,
     },
     {
       key: 'preview',
@@ -231,7 +235,7 @@ export default async function AdminPatternsListPage({
       key: 'archive',
       header: '',
       isAction: true,
-      render: (p) => <PatternArchiveRowActions patternId={p.id} />,
+      render: (p) => <BulkArchiveRowActions id={p.id} />,
     },
     {
       key: 'open',
@@ -490,9 +494,22 @@ export default async function AdminPatternsListPage({
         {/* «Очистить архив» бьёт по ВСЕЙ текущей выдаче вкладки (все
             страницы клиентской пагинации), а не только по видимой
             странице — количество показываем в confirm перед операцией. */}
-        <PatternArchiveProvider
+        <BulkArchiveProvider
           mode={tab}
-          allPatternIds={items.map((p) => p.id)}
+          allIds={items.map((p) => p.id)}
+          actions={{
+            archive: archivePatternsAction,
+            restore: restorePatternsAction,
+            purge: purgePatternsAction,
+          }}
+          labels={{
+            one: 'номенклатуру',
+            many: 'номенклатур',
+            archiveHint:
+              'Карточки пропадут из активного справочника и перестанут предлагаться в заказах и техкартах.',
+            purgeHint:
+              'Вместе с карточкой пропадут её размеры, файлы лекал, площади, нормы и связанная задача конструктора.',
+          }}
         >
           <AdminSectionHeader
             title={tab === 'archive' ? 'Архив' : 'Номенклатура'}
@@ -501,7 +518,7 @@ export default async function AdminPatternsListPage({
                 ? `В архиве: ${items.length}. Удаление навсегда — только отсюда.`
                 : `Всего: ${items.length}`
             }
-            actions={<PatternArchiveHeaderButton />}
+            actions={<BulkArchiveHeaderButton />}
           />
 
           <AdminTable
@@ -534,7 +551,7 @@ export default async function AdminPatternsListPage({
               )
             }
           />
-        </PatternArchiveProvider>
+        </BulkArchiveProvider>
 
         <AdminPagination
           page={page}

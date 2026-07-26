@@ -39,6 +39,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
@@ -244,7 +245,7 @@ function SuppliersTable({
   const columns: AdminTableColumn<SupplierListItemDto>[] = [
     {
       key: 'select',
-      header: '',
+      header: <BulkArchiveSelectAll ids={items.map((s) => s.id)} />,
       sortable: false,
       render: (s) => <BulkArchiveCheckbox id={s.id} />,
     },

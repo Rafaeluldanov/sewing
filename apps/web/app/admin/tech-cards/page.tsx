@@ -15,6 +15,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
@@ -71,7 +72,7 @@ export default async function AdminTechCardsListPage({
   const columns: AdminTableColumn<TechCardTemplateSummaryDto>[] = [
     {
       key: 'select',
-      header: '',
+      header: <BulkArchiveSelectAll ids={pageItems.map((tc) => tc.id)} />,
       sortable: false,
       render: (tc) => <BulkArchiveCheckbox id={tc.id} />,
     },

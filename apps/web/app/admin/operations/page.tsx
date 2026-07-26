@@ -18,6 +18,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
 } from '@/components/admin';
 import {
@@ -260,7 +261,9 @@ export default async function AdminOperationsListPage({
             <table className="admin-table admin-compact-grouped-table admin-operations-compact-table">
               <thead>
                 <tr>
-                  <th aria-label="Выбор" />
+                  <th>
+                    <BulkArchiveSelectAll ids={sortedItems.map((op) => op.id)} />
+                  </th>
                   <th>Название</th>
                   <th>Тариф</th>
                   <th>Ставка</th>

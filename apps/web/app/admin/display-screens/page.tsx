@@ -14,6 +14,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
   type AdminTableColumn,
 } from '@/components/admin';
@@ -147,7 +148,7 @@ function DisplayScreensTable({
   const columns: AdminTableColumn<DisplayScreenListItemDto>[] = [
     {
       key: 'select',
-      header: '',
+      header: <BulkArchiveSelectAll ids={items.map((s) => s.id)} />,
       sortable: false,
       render: (s) => <BulkArchiveCheckbox id={s.id} />,
     },

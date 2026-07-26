@@ -38,6 +38,7 @@ export {
 export {
   BulkArchiveProvider,
   BulkArchiveCheckbox,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
   BulkArchiveHeaderButton,
   type BulkArchiveActionResult,

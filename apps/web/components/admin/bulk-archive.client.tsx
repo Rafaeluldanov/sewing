@@ -4,7 +4,7 @@
  * Механика «архив → удалить навсегда» для любого списка на `AdminTable`.
  *
  * Обобщение того, что сначала было сделано точечно для номенклатуры
- * (`app/admin/patterns/pattern-archive.tsx`) и для потребностей цеха
+ * и для потребностей цеха
  * (`app/admin/workshop-needs/order-archive.tsx`). Разделов девять
  * (техкарты, маршруты, операции, заявки конструктору, цеховой монитор,
  * оборудование, принтеры, сотрудники, поставщики), и переписывать один
@@ -33,7 +33,9 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
+  useRef,
   useState,
   useTransition,
   type ReactNode,
@@ -115,6 +117,8 @@ interface BulkArchiveContextShape {
   selected: ReadonlySet<string>;
   pending: boolean;
   toggle: (id: string) => void;
+  /** Отметить/снять сразу пачку — «выделить все» в шапке колонки. */
+  setMany: (ids: string[], checked: boolean) => void;
   clear: () => void;
   run: (kind: OpKind, ids: string[]) => void;
   allIds: string[];
@@ -151,6 +155,17 @@ export function BulkArchiveProvider({
     });
   }, []);
 
+  const setMany = useCallback((ids: string[], checked: boolean) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      for (const id of ids) {
+        if (checked) next.add(id);
+        else next.delete(id);
+      }
+      return next;
+    });
+  }, []);
+
   const clear = useCallback(() => setSelected(new Set()), []);
 
   const run = useCallback(
@@ -175,8 +190,18 @@ export function BulkArchiveProvider({
   );
 
   const value = useMemo<BulkArchiveContextShape>(
-    () => ({ mode, selected, pending, toggle, clear, run, allIds, labels }),
-    [mode, selected, pending, toggle, clear, run, allIds, labels],
+    () => ({
+      mode,
+      selected,
+      pending,
+      toggle,
+      setMany,
+      clear,
+      run,
+      allIds,
+      labels,
+    }),
+    [mode, selected, pending, toggle, setMany, clear, run, allIds, labels],
   );
 
   return (
@@ -203,6 +228,51 @@ export function BulkArchiveCheckbox({ id }: { id: string }) {
       checked={checked}
       disabled={ctx.pending}
       onChange={() => ctx.toggle(id)}
+    />
+  );
+}
+
+// ---------------------------------------------------------------------------
+// «Выделить все» — чекбокс в шапке колонки выбора
+// ---------------------------------------------------------------------------
+
+/**
+ * Отмечает/снимает СТРОКИ ТЕКУЩЕЙ СТРАНИЦЫ (`ids` приходят из того же
+ * `pageItems`, что и таблица) — то, что менеджер видит перед собой.
+ * Работа со всей выдачей целиком уже есть отдельной кнопкой
+ * «Очистить архив» в шапке списка, и смешивать эти два смысла в одной
+ * галочке значило бы выделять невидимое.
+ *
+ * Промежуточное состояние (часть строк отмечена) показываем нативным
+ * `indeterminate` — его нельзя задать через JSX-атрибут, только через
+ * DOM-свойство, отсюда `ref` + эффект.
+ */
+export function BulkArchiveSelectAll({ ids }: { ids: string[] }) {
+  const ctx = useContext(Ctx);
+  const ref = useRef<HTMLInputElement>(null);
+
+  const selectedCount = ctx
+    ? ids.reduce((n, id) => (ctx.selected.has(id) ? n + 1 : n), 0)
+    : 0;
+  const allChecked = ids.length > 0 && selectedCount === ids.length;
+  const partial = selectedCount > 0 && !allChecked;
+
+  useEffect(() => {
+    if (ref.current) ref.current.indeterminate = partial;
+  }, [partial]);
+
+  if (!ctx || ids.length === 0) return null;
+
+  return (
+    <input
+      ref={ref}
+      type="checkbox"
+      className="admin-bulk-check"
+      aria-label={allChecked ? 'Снять выбор со всех' : 'Выбрать все на странице'}
+      title={allChecked ? 'Снять выбор со всех' : 'Выбрать все на странице'}
+      checked={allChecked}
+      disabled={ctx.pending}
+      onChange={(e) => ctx.setMany(ids, e.target.checked)}
     />
   );
 }

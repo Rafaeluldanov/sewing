@@ -16,6 +16,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
@@ -87,7 +88,7 @@ export default async function AdminPrintersPage({
   const columns: AdminTableColumn<PrinterSummaryDto>[] = [
     {
       key: 'select',
-      header: '',
+      header: <BulkArchiveSelectAll ids={pageItems.map((p) => p.id)} />,
       sortable: false,
       render: (p) => <BulkArchiveCheckbox id={p.id} />,
     },

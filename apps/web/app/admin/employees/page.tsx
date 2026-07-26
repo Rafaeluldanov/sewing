@@ -20,6 +20,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
@@ -203,7 +204,7 @@ function EmployeesTable({
   const columns: AdminTableColumn<EmployeeListItemDto>[] = [
     {
       key: 'select',
-      header: '',
+      header: <BulkArchiveSelectAll ids={items.map((e) => e.id)} />,
       sortable: false,
       render: (e) => <BulkArchiveCheckbox id={e.id} />,
     },

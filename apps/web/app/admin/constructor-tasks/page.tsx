@@ -19,6 +19,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
   paginate,
   type AdminTableColumn,
@@ -78,7 +79,7 @@ export default async function AdminConstructorTasksListPage({
   const columns: AdminTableColumn<ConstructorTaskSummaryDto>[] = [
     {
       key: 'select',
-      header: '',
+      header: <BulkArchiveSelectAll ids={pageItems.map((t) => t.id)} />,
       sortable: false,
       render: (t) => <BulkArchiveCheckbox id={t.id} />,
     },

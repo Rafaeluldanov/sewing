@@ -17,6 +17,7 @@ import {
   BulkArchiveCheckbox,
   BulkArchiveHeaderButton,
   BulkArchiveProvider,
+  BulkArchiveSelectAll,
   BulkArchiveRowActions,
   paginate,
   type AdminRouteStep,
@@ -111,7 +112,7 @@ export default async function AdminRoutesListPage({
   const columns: AdminTableColumn<RouteRow>[] = [
     {
       key: 'select',
-      header: '',
+      header: <BulkArchiveSelectAll ids={detailedRows.map((tpl) => tpl.id)} />,
       sortable: false,
       render: (tpl) => <BulkArchiveCheckbox id={tpl.id} />,
     },
