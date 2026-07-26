@@ -1,11 +1,18 @@
 /**
- * `OrderActionCenter` — компактный блок задач/предупреждений под
- * управленческой шапкой `/admin/orders/[id]`.
+ * Action center заказа `/admin/orders/[id]` — правила алертов + рендер
+ * их списка.
  *
  * Цель (см. ТЗ «Action center»): одним взглядом дать менеджеру список
  * проблем по заказу + быстрые ссылки в нужную вкладку. Никаких таблиц
  * и метрик внутри — только короткое текстовое алерт-сообщение и
  * action-link «открыть нужную вкладку / выполнить действие».
+ *
+ * Где это видно. Раньше файл экспортировал одноимённый блок во всю
+ * ширину окна над линейкой вкладок. Теперь список живёт в колокольчике
+ * шапки (`OrderAlertsBell` → `OrderManagementHeader`), а здесь остались
+ * правила (`buildAlerts`), рендер списка (`OrderAlertsList`) и подсчёт
+ * тона счётчика (`resolveAlertsTone`). Имя файла сохранено намеренно —
+ * ТЗ и smoke-тесты ссылаются на «action center» по этому пути.
  *
  * Все алерты считаются на сервере **из существующих DTO** заказа:
  * `OrderDetailDto`, `PassportListItemDto[]`. Никаких новых API мы не
@@ -30,9 +37,9 @@ import type { OrderDetailDto } from '@sewing/shared/orders';
 import { isOrderPlanEditable } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 
-type AlertTone = 'danger' | 'warning' | 'info';
+export type AlertTone = 'danger' | 'warning' | 'info';
 
-interface Alert {
+export interface Alert {
   id: string;
   tone: AlertTone;
   icon: React.ReactNode;
@@ -42,16 +49,11 @@ interface Alert {
   cta?: { label: string; href: string } | null;
 }
 
-interface Props {
-  order: OrderDetailDto;
-  passports: PassportListItemDto[];
-}
-
 /**
  * Собираем алерты строго от состояния заказа. Порядок важен — самые
  * критичные (`danger`) выводим первыми.
  */
-function buildAlerts(
+export function buildAlerts(
   order: OrderDetailDto,
   passports: PassportListItemDto[],
 ): Alert[] {
@@ -292,68 +294,63 @@ function buildAlerts(
   return alerts;
 }
 
-export function OrderActionCenter({ order, passports }: Props) {
-  const alerts = buildAlerts(order, passports);
-  const isEmpty = alerts.length === 0;
+/**
+ * Самый тяжёлый тон в списке — им красим счётчик колокольчика:
+ * danger → warning → info. `null`, если задач нет.
+ *
+ * Порядок внутри `buildAlerts` не гарантирует, что первый алерт самый
+ * тяжёлый (danger-правила разбросаны по статусам), поэтому считаем
+ * явно, а не берём `alerts[0].tone`.
+ */
+export function resolveAlertsTone(alerts: Alert[]): AlertTone | null {
+  if (alerts.length === 0) return null;
+  if (alerts.some((a) => a.tone === 'danger')) return 'danger';
+  if (alerts.some((a) => a.tone === 'warning')) return 'warning';
+  return 'info';
+}
 
+/**
+ * Список алертов. Живёт внутри поповера колокольчика, поэтому CTA
+ * стоит под текстом (в узкой колонке ссылка справа ломала бы строку),
+ * а классы `order-action-center__*` переиспользуются как были.
+ */
+export function OrderAlertsList({ alerts }: { alerts: Alert[] }) {
   return (
-    <section
-      className="order-action-center"
-      aria-label="Задачи и предупреждения по заказу"
-    >
-      <header className="order-action-center__head">
-        <h3 className="order-action-center__title">Задачи и предупреждения</h3>
-        <span className="order-action-center__count">
-          {isEmpty
-            ? 'нет открытых задач'
-            : `${alerts.length} ${pluralAlerts(alerts.length)}`}
-        </span>
-      </header>
-
-      {isEmpty ? (
-        <p className="order-action-center__empty">
-          Сейчас по заказу нет открытых проблем — производство идёт штатно.
-        </p>
-      ) : (
-        <ul className="order-action-center__list" role="list">
-          {alerts.map((a) => (
-            <li
-              key={a.id}
-              className={`order-action-center__item order-action-center__item--${a.tone}`}
-            >
-              <div className="order-action-center__item-icon" aria-hidden>
-                {a.icon}
-              </div>
-              <div className="order-action-center__item-body">
-                <strong className="order-action-center__item-title">
-                  {a.title}
-                </strong>
-                {a.hint && (
-                  <span className="order-action-center__item-hint">
-                    {a.hint}
-                  </span>
-                )}
-              </div>
-              {a.cta && (
-                <Link
-                  href={a.cta.href}
-                  className="order-action-center__item-cta"
-                  prefetch={false}
-                >
-                  {a.cta.label}
-                  <ArrowRight size={14} strokeWidth={1.7} aria-hidden />
-                </Link>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
-    </section>
+    <ul className="order-action-center__list" role="list">
+      {alerts.map((a) => (
+        <li
+          key={a.id}
+          className={`order-action-center__item order-action-center__item--${a.tone}`}
+        >
+          <div className="order-action-center__item-icon" aria-hidden>
+            {a.icon}
+          </div>
+          <div className="order-action-center__item-body">
+            <strong className="order-action-center__item-title">
+              {a.title}
+            </strong>
+            {a.hint && (
+              <span className="order-action-center__item-hint">{a.hint}</span>
+            )}
+            {a.cta && (
+              <Link
+                href={a.cta.href}
+                className="order-action-center__item-cta"
+                prefetch={false}
+              >
+                {a.cta.label}
+                <ArrowRight size={14} strokeWidth={1.7} aria-hidden />
+              </Link>
+            )}
+          </div>
+        </li>
+      ))}
+    </ul>
   );
 }
 
 /** Плюрализация «1 задача / 3 задачи / 5 задач». Минимум, без icu. */
-function pluralAlerts(n: number): string {
+export function pluralAlerts(n: number): string {
   const abs = Math.abs(n) % 100;
   const tail = abs % 10;
   if (abs >= 11 && abs <= 14) return 'задач';

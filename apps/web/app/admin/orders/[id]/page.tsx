@@ -6,8 +6,11 @@
  *   1. Постоянная компактная шапка `OrderManagementHeader` —
  *      summary заказа + основные workflow-actions (видна на всех
  *      вкладках).
- *   2. `OrderActionCenter` — короткие задачи / предупреждения с
- *      ссылками в нужную вкладку (без таблиц / метрик).
+ *   2. Задачи и предупреждения по заказу — в колокольчике самой шапки
+ *      (`OrderAlertsBell` + правила `buildAlerts` из
+ *      `order-action-center.tsx`): счётчик у бейджа статуса, список со
+ *      ссылками в нужную вкладку — в поповере. Отдельным блоком во всю
+ *      ширину над вкладками они больше не рисуются.
  *   3. Линейка вкладок `OrderViewTabs`:
  *        - Производство     — KPI стадий, размерный breakdown,
  *          текущие stage buckets из `/api/shopfloor/state`;
@@ -52,7 +55,7 @@
  *   - вкладки «Логистика» как самостоятельной нет — закупки и приёмки
  *     уже включены в `OrderMaterialsUnifiedTable`;
  *   - вкладки «Рекомендации» как самостоятельной нет — алерты живут в
- *     `OrderActionCenter`.
+ *     колокольчике шапки (`OrderAlertsBell`).
  *
  * RBAC. Layout `/admin/*` уже пускает только `ADMIN`/`SHOP_MANAGER`
  * (см. `apps/web/app/admin/layout.tsx`), поэтому мы здесь не дублируем
@@ -90,7 +93,6 @@ import {
   OrderTabEmptyState,
   OrderWorkspaceLayout,
 } from '@/components/orders/order-workspace-layout';
-import { OrderActionCenter } from '@/components/orders/view/order-action-center';
 import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
 import { OrderManagementHeader } from '@/components/orders/view/order-management-header';
 import { OrderViewTabs } from '@/components/orders/view/order-view-tabs';
@@ -224,7 +226,6 @@ export default async function AdminOrderDetailPage({
               passports={passports}
               activeCalculationDraft={activeCalculationDraft}
             />
-            <OrderActionCenter order={order} passports={passports} />
             {colorways && (
               <OrderColorwaysBlock
                 orderId={order.id}

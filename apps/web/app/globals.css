@@ -16187,21 +16187,13 @@ body:has(.admin-layout) .app-header { display: none !important; }
   color: var(--admin-muted);
 }
 
-/* На узком экране поповер не уезжает за край: раскрываем во всю ширину
-   шапки, привязываясь к её левому краю. */
+/* На узком экране поповер прижат к правому краю шапки, а ширина
+   `min(430px, 100vw - 2rem)` не даёт ему уехать за левый край. Длинный
+   список при этом прокручиваем внутри, а не растим карточку заказа. */
 @media (max-width: 640px) {
   .order-alerts-popover {
-    position: fixed;
-    left: 0.75rem;
-    right: 0.75rem;
-    top: auto;
-    width: auto;
     max-height: 70vh;
     overflow-y: auto;
-  }
-
-  .order-alerts-popover::before {
-    display: none;
   }
 }
 

@@ -7,7 +7,9 @@
  * Состав строго ограничен summary-полями + основными действиями,
  * без таблиц и без дублирующих блоков:
  *
- *   1. Идентификация: номер заказа, бейдж статуса, эйлер «Карточка заказа».
+ *   1. Идентификация: номер заказа, бейдж статуса, колокольчик
+ *      уведомлений (`OrderAlertsBell` — задачи и предупреждения по
+ *      заказу со счётчиком), эйлер «Карточка заказа».
  *   2. Meta-grid (компактная сетка): клиент, срок (deadline-бейдж +
  *      «осталось N дн.»), номенклатура, цвет, общий план, выпущено
  *      паспортов, упаковано, прогресс выпуска.
@@ -29,7 +31,6 @@
  */
 import Link from 'next/link';
 import {
-  AlertTriangle,
   ArrowLeft,
   Calendar,
   CheckCircle2,
@@ -57,6 +58,13 @@ import {
   resolveOrderNomenclature,
   resolveOrderPatternHref,
 } from '@/lib/order-nomenclature';
+import {
+  buildAlerts,
+  OrderAlertsList,
+  pluralAlerts,
+  resolveAlertsTone,
+} from './order-action-center';
+import { OrderAlertsBell } from './order-alerts-bell';
 import { CancelOrderButton } from './cancel-order-button';
 import { DeleteOrderButton } from './delete-order-button';
 import { CompleteOrderButton } from './complete-order-button';
@@ -133,6 +141,13 @@ export function OrderManagementHeader({
     (p) => p.status === 'PACKED',
   ).length;
 
+  // Алерты заказа: те же правила, что раньше рисовал блок
+  // «Задачи и предупреждения» над вкладками, теперь свёрнуты в
+  // колокольчик рядом с бейджем статуса.
+  const alerts = buildAlerts(order, passports);
+  const alertsTone = resolveAlertsTone(alerts);
+  const alertsDangerCount = alerts.filter((a) => a.tone === 'danger').length;
+
   // План на запуск/завершение/отмену зависит от статуса.
   // DRAFT             → «Перевести в расчёт» + «Пересчитать план» + «Отменить» + «Редактировать»
   // CALCULATION       → «Запустить в производство» + «Пересчитать план» + «Отменить» + «Редактировать»
@@ -181,6 +196,28 @@ export function OrderManagementHeader({
         </div>
         <div className="order-hero-card__status">
           <AdminStatusBadge tone={statusTone}>{statusLabel}</AdminStatusBadge>
+          <OrderAlertsBell
+            count={alerts.length}
+            tone={alertsTone}
+            dangerCount={alertsDangerCount}
+          >
+            <header className="order-alerts-popover__head">
+              <h3 className="order-alerts-popover__title">Уведомления</h3>
+              <span className="order-action-center__count">
+                {alerts.length === 0
+                  ? 'нет открытых задач'
+                  : `${alerts.length} ${pluralAlerts(alerts.length)}`}
+              </span>
+            </header>
+            {alerts.length === 0 ? (
+              <p className="order-alerts-popover__empty">
+                Сейчас по заказу нет открытых проблем — производство идёт
+                штатно.
+              </p>
+            ) : (
+              <OrderAlertsList alerts={alerts} />
+            )}
+          </OrderAlertsBell>
         </div>
       </header>
 
@@ -398,17 +435,10 @@ export function OrderManagementHeader({
         )}
       </div>
 
-      {/* Stale-warning для плана операций — короткая плашка,
-          подробности — в вкладке «План». */}
-      {order.operationPlanIsStale && (
-        <div className="order-mgmt-header__warning">
-          <AlertTriangle size={14} strokeWidth={1.7} aria-hidden />
-          <span>
-            План операций устарел.{' '}
-            {order.operationPlanStaleReason ?? 'Требуется пересчёт.'}
-          </span>
-        </div>
-      )}
+      {/* Stale-warning плана операций отдельной плашкой больше не
+          рисуем: это ровно тот же алерт `operation-plan-stale`, что
+          лежит в колокольчике выше (со ссылкой во вкладку «Операции»).
+          Две плашки об одном событии в одной шапке — шум. */}
 
       {/* Action-row */}
       <div

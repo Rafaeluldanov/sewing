@@ -78,14 +78,16 @@ describe('Admin Legacy Cleanup — order detail 2.0', () => {
   test('/admin/orders/[id]/page.tsx существует и использует новые компоненты', () => {
     const src = readSrc('apps/web/app/admin/orders/[id]/page.tsx');
     // Order management redesign: страница теперь строит карточку через
-    // компактную `OrderManagementHeader` + `OrderActionCenter` + 5
-    // тематических вкладок (`OrderViewTabs`). `AdminPageShell` всё
-    // ещё на месте, deep-tech (`AdminTechInfo`) сознательно не
-    // используется (никогда и не использовался).
+    // компактную `OrderManagementHeader` + тематические вкладки
+    // (`OrderViewTabs`). Алерты заказа живут в колокольчике шапки
+    // (`OrderAlertsBell`), отдельным блоком над вкладками их больше
+    // нет. `AdminPageShell` всё ещё на месте, deep-tech
+    // (`AdminTechInfo`) сознательно не используется (никогда и не
+    // использовался).
     expect(src).toMatch(/AdminPageShell/);
     expect(src).toMatch(/OrderWorkspaceLayout/);
     expect(src).toMatch(/OrderManagementHeader/);
-    expect(src).toMatch(/OrderActionCenter/);
+    expect(src).not.toMatch(/<OrderActionCenter\b/);
     expect(src).toMatch(/OrderViewTabs/);
     expect(src).not.toMatch(/<AdminTechInfo\b/);
   });

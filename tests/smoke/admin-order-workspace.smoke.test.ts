@@ -250,7 +250,10 @@ describe('/admin/orders/[id] — управленческая карточка (
       /from '@\/components\/orders\/order-workspace-layout'/,
     );
     expect(pageSrc).toMatch(/OrderManagementHeader/);
-    expect(pageSrc).toMatch(/OrderActionCenter/);
+    // Алерты заказа переехали из отдельного блока над вкладками в
+    // колокольчик шапки (`OrderAlertsBell` внутри
+    // `OrderManagementHeader`), поэтому страница их больше не рендерит.
+    expect(pageSrc).not.toMatch(/<OrderActionCenter\b/);
     expect(pageSrc).toMatch(/OrderViewTabs/);
     expect(pageSrc).toMatch(
       /from '@\/components\/orders\/view\/order-view-tabs-config'/,
@@ -386,6 +389,59 @@ describe('/admin/orders/[id] — управленческая карточка (
     );
     expect(acSrc).toMatch(/order-action-center/);
     expect(acSrc).toMatch(/buildAlerts/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3b. Колокольчик уведомлений в шапке заказа
+// ---------------------------------------------------------------------------
+
+describe('OrderAlertsBell — задачи и предупреждения свёрнуты в колокольчик', () => {
+  const bellSrc = read(
+    'apps/web/components/orders/view/order-alerts-bell.tsx',
+  );
+  const headerSrc = read(
+    'apps/web/components/orders/view/order-management-header.tsx',
+  );
+  const acSrc = read('apps/web/components/orders/view/order-action-center.tsx');
+
+  test('колокольчик — клиентский компонент с toggle, Esc и клик-вне', () => {
+    expect(bellSrc).toMatch(/^'use client';/m);
+    expect(bellSrc).toMatch(/aria-expanded=\{open\}/);
+    expect(bellSrc).toMatch(/aria-controls=\{popoverId\}/);
+    expect(bellSrc).toMatch(/'Escape'/);
+    expect(bellSrc).toMatch(/mousedown/);
+    // Счётчик обрезаем на 9+, чтобы не разрывать кружок.
+    expect(bellSrc).toMatch(/count > 9 \? '9\+'/);
+    // Подпись для screen-reader расшифровывает цифру.
+    expect(bellSrc).toMatch(/Уведомления по заказу/);
+  });
+
+  test('шапка рендерит колокольчик рядом с бейджем статуса и больше не дублирует stale-плашку', () => {
+    expect(headerSrc).toMatch(/<OrderAlertsBell/);
+    expect(headerSrc).toMatch(/buildAlerts\(order, passports\)/);
+    expect(headerSrc).toMatch(/resolveAlertsTone/);
+    // Плашка «План операций устарел» в шапке снята — это тот же алерт
+    // `operation-plan-stale`, что лежит в колокольчике.
+    expect(headerSrc).not.toMatch(/order-mgmt-header__warning/);
+  });
+
+  test('правила алертов и рендер списка остались в order-action-center', () => {
+    expect(acSrc).toMatch(/export function buildAlerts/);
+    expect(acSrc).toMatch(/export function OrderAlertsList/);
+    expect(acSrc).toMatch(/export function resolveAlertsTone/);
+    // Тон счётчика — самый тяжёлый в списке, а не первый по порядку.
+    expect(acSrc).toMatch(/a\.tone === 'danger'/);
+    // Классы списка переиспользуются как были.
+    expect(acSrc).toMatch(/order-action-center__item--\$\{a\.tone\}/);
+  });
+
+  test('стили колокольчика и поповера есть в globals.css', () => {
+    const css = read('apps/web/app/globals.css');
+    expect(css).toMatch(/\.order-alerts-bell__button\b/);
+    expect(css).toMatch(/\.order-alerts-bell__count--danger\b/);
+    expect(css).toMatch(/\.order-alerts-bell__count--warning\b/);
+    expect(css).toMatch(/\.order-alerts-popover\b/);
   });
 });
 
