@@ -23,7 +23,11 @@
  *     кнопка-toggle с индикатором; по клику раскрывается textarea.
  *   - в подвале же ссылка «Подробности» → полная карточка
  *     `/admin/workshop-needs/[id]` (связь со справочником
- *     поставщиков, история, аудит).
+ *     поставщиков, история, аудит). Туда же ведёт клик по зоне
+ *     «Расчёт» (drill-in, `ClickableCard`) — зоны ввода
+ *     «Закупка»/«Логистика» намеренно НЕ кликабельны, чтобы
+ *     случайный клик мимо инпута не увёл со страницы с
+ *     несохранённой правкой.
  *   - bulk-чекбокс PO привязан к `bulkSelect` (feature-flag
  *     `purchase-orders`, см. `page.tsx`).
  *
@@ -50,6 +54,7 @@ import {
   type WorkshopNeedListItemDto,
   type WorkshopNeedStatus,
 } from '@sewing/shared/workshop-needs';
+import { ClickableCard } from '@/components/ui/clickable-card';
 import { BulkCreatePoCheckbox } from './bulk-create-po';
 import { updateWorkshopNeedAction } from './actions';
 import { initialUpdateWorkshopNeedState } from './form-state';
@@ -397,8 +402,23 @@ export function InlineEditWorkshopNeedRow({
       data-need-id={need.id}
       data-variant="orders"
     >
-      {/* === ЗОНА: Расчёт (read-only вывод системы) === */}
-      <section className="wn-zone wn-zone--calc">
+      {/*
+        === ЗОНА: Расчёт (read-only вывод системы) ===
+
+        Drill-in: клик по этой зоне ведёт туда же, куда ссылка
+        «Подробности» в подвале — на карточку `/admin/workshop-needs/[id]`.
+        Кликабельна ИМЕННО зона «Расчёт» (read-only вывод + название
+        материала), а не вся строка: зоны «Закупка»/«Логистика» — это
+        поля ввода закупщика, и случайный уход со страницы по клику
+        мимо инпута потерял бы несохранённую правку. Клики по чекбоксу
+        bulk-PO внутри зоны не перехватываются (см. `ClickableCard`).
+      */}
+      <ClickableCard
+        as="section"
+        className="wn-zone wn-zone--calc"
+        href={detailHref}
+        ariaLabel={`Подробности потребности: ${need.description}`}
+      >
         <div className="wn-zone__cap">Расчёт</div>
         <div className="wn-zone__body wn-zone__body--calc">
           <div className="wn-desc">
@@ -453,7 +473,7 @@ export function InlineEditWorkshopNeedRow({
             </div>
           </div>
         </div>
-      </section>
+      </ClickableCard>
 
       {/* === ЗОНА: Закупка (ввод закупщика + итог) === */}
       <section className="wn-zone wn-zone--buy">

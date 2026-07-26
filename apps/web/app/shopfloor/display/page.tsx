@@ -1,4 +1,6 @@
 import { errorText } from '@/lib/api';
+import { getCurrentUserOrNull } from '@/lib/auth-api';
+import { canSeeAdmin } from '@/lib/rbac';
 import { getShopfloorDisplaySummary } from '@/lib/shopfloor-api';
 import { ShopfloorDisplayBoard } from './display-board';
 
@@ -58,6 +60,13 @@ export default async function ShopfloorDisplayPage({
     pickQueryString(searchParams?.divisionCode) ??
     pickQueryString(searchParams?.division);
 
+  // Drill-in (проваливание в операцию / станок) включаем ТОЛЬКО
+  // менеджеру, открывшему монитор со своего устройства. Учётка
+  // `DISPLAY` доступа к `/admin/*` не имеет — для неё экран остаётся
+  // read-only витриной без единой ссылки (см. `Props.drillIn`).
+  const me = await getCurrentUserOrNull();
+  const drillIn = canSeeAdmin(me?.user.roles ?? me?.user.role);
+
   let initialSummary = null;
   let initialError: string | null = null;
   try {
@@ -73,6 +82,7 @@ export default async function ShopfloorDisplayPage({
       initialSummary={initialSummary}
       initialError={initialError}
       divisionCode={divisionCode}
+      drillIn={drillIn}
     />
   );
 }

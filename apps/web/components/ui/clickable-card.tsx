@@ -36,8 +36,12 @@ export function ClickableCard({
   className?: string;
   style?: CSSProperties;
   ariaLabel?: string;
-  /** Тег-обёртка. По умолчанию `div`; для списка можно `li`. */
-  as?: 'div' | 'li';
+  /**
+   * Тег-обёртка. По умолчанию `div`; для списка можно `li`, для
+   * смысловой зоны внутри формы — `section` (см. drill-in строки
+   * потребности на `/admin/workshop-needs`).
+   */
+  as?: 'div' | 'li' | 'section';
 }) {
   const router = useRouter();
   const Tag = as;

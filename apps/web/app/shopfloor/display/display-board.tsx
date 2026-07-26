@@ -8,6 +8,7 @@ import {
   useRef,
   useState,
 } from 'react';
+import Link from 'next/link';
 import { LogOut, Package, Scissors, Search, type LucideIcon } from 'lucide-react';
 import {
   SHOPFLOOR_DISPLAY_MATRIX_STAGES,
@@ -37,6 +38,20 @@ interface Props {
    * чтобы выборка считалась на backend, а не на клиенте.
    */
   divisionCode?: string | null;
+  /**
+   * Разрешён ли drill-in (проваливание) с монитора в админку.
+   *
+   * Экран висит в зале под учёткой `DISPLAY` и по дизайну остаётся
+   * read-only витриной — для неё `false`: у роли `DISPLAY` нет доступа
+   * к `/admin/*`, ссылка вела бы в редирект. Менеджер (`ADMIN` /
+   * `SHOP_MANAGER`), открывший тот же экран со своего устройства,
+   * получает `true` — и может провалиться из шапки sewing-операции
+   * в карточку операции, а из плитки станка в карточку оборудования.
+   *
+   * Считается на сервере (`page.tsx` → `canSeeAdmin`), а не на
+   * клиенте: роль в клиентский бандл не тащим.
+   */
+  drillIn?: boolean;
 }
 
 /**
@@ -286,6 +301,7 @@ export function ShopfloorDisplayBoard({
   initialSummary,
   initialError,
   divisionCode = null,
+  drillIn = false,
 }: Props) {
   // ВАЖНО: `lastSuccessAt` намеренно инициализируется нулём, даже если
   // `initialSummary` уже есть. Если бы мы поставили сюда `Date.now()`,
@@ -769,13 +785,14 @@ export function ShopfloorDisplayBoard({
             totals={totals}
             sewingRoute={sewingRoute}
             changedCellKeys={changedCellKeys}
+            drillIn={drillIn}
           />
         </section>
         <aside
           className="display-board__equipment"
           data-testid="display-equipment-panel"
         >
-          <EquipmentPanel items={equipment} />
+          <EquipmentPanel items={equipment} drillIn={drillIn} />
           <OrphanMasterCalls items={orphanMasterCalls} now={now} />
         </aside>
       </div>
@@ -919,6 +936,14 @@ interface ProcessSplit {
   /** Тип блока — нужен для тонов и testid'ов. */
   kind: ProcessSplitKind;
   /**
+   * `Operation.id` для sewing-блока — по нему шапка умеет провалиться
+   * в карточку операции (`/admin/operations/[id]`, только при
+   * `drillIn`, см. `Props.drillIn`). У процессных блоков ОТК/ВТО
+   * отдельной `Operation` нет — поле остаётся `undefined`, и шапка
+   * рисуется обычным текстом.
+   */
+  operationId?: string;
+  /**
    * Префикс для `cellKey` колонок ▶/✔ этого блока в diff-flatten:
    * `sewroute:<opId>` для sewing (исторический формат, не ломаем
    * существующие diff-тесты), `proc:qc` / `proc:wto` для процессных.
@@ -978,6 +1003,7 @@ function buildProcessSplits(
       key: `sew:${op.operationId}`,
       label: op.operationName,
       kind: 'sew',
+      operationId: op.operationId,
       cellPrefix: `sewroute:${op.operationId}`,
       isFlowStart: false,
       inProgressForRow: (row, colorKey) => routeQty(lookup, colorKey, row.sizeCode, 'in'),
@@ -1239,11 +1265,14 @@ function ProductionFlowMatrix({
   totals,
   sewingRoute,
   changedCellKeys,
+  drillIn = false,
 }: {
   colors: ShopfloorDisplayColorBlock[];
   totals: ShopfloorDisplayMatrixSummary;
   sewingRoute: ShopfloorDisplayRouteOperationDto[];
   changedCellKeys: ReadonlySet<string>;
+  /** См. `Props.drillIn` — шапка sewing-операции становится ссылкой. */
+  drillIn?: boolean;
 }) {
   const stages = SHOPFLOOR_DISPLAY_MATRIX_STAGES;
   const { before, after } = splitStagesAroundSewing(stages);
@@ -1334,7 +1363,22 @@ function ProductionFlowMatrix({
                       <span className="display-matrix__th-icon" aria-hidden="true">
                         <SplitHeadIcon kind={sp.kind} />
                       </span>
-                      <span className="display-matrix__th-op">{sp.label}</span>
+                      {/*
+                        Drill-in по имени операции: менеджер, открывший
+                        монитор со своего устройства, проваливается в
+                        карточку операции. На TV (`drillIn = false`) —
+                        обычный `span`, витрина остаётся без интерактива.
+                      */}
+                      {drillIn && sp.operationId ? (
+                        <Link
+                          href={`/admin/operations/${sp.operationId}`}
+                          className="display-matrix__th-op display-matrix__th-op--link"
+                        >
+                          {sp.label}
+                        </Link>
+                      ) : (
+                        <span className="display-matrix__th-op">{sp.label}</span>
+                      )}
                       {isBottleneck ? (
                         <span
                           className="display-matrix__bottleneck-mark"
@@ -1897,7 +1941,14 @@ function summaryQty(s: ShopfloorSummaryDto, stage: ShopfloorStage): number {
  * Под сеткой — компактный итог-чип с количеством станков по статусам,
  * тоже только цветом + цифрой.
  */
-function EquipmentPanel({ items }: { items: ShopfloorEquipmentStatusDto[] }) {
+function EquipmentPanel({
+  items,
+  drillIn = false,
+}: {
+  items: ShopfloorEquipmentStatusDto[];
+  /** См. `Props.drillIn` — плитка станка становится ссылкой. */
+  drillIn?: boolean;
+}) {
   const counts = useMemo(() => countByStatus(items), [items]);
   const sorted = useMemo(() => {
     const order: Record<ShopfloorEquipmentStatus, number> = {
@@ -1950,6 +2001,23 @@ function EquipmentPanel({ items }: { items: ShopfloorEquipmentStatusDto[] }) {
                     : eq.code
               }
             >
+              {/*
+                Drill-in по плитке станка → карточка оборудования.
+                Ссылка-оверлей (`inset: 0`), а не обёртка вокруг
+                содержимого: плитка — квадратный flex-контейнер с
+                aspect-ratio, и вложенный блок сломал бы её раскладку.
+                На TV (`drillIn = false`) ссылки нет вообще — витрина
+                остаётся без интерактива.
+              */}
+              {drillIn ? (
+                <Link
+                  href={`/admin/equipment/${eq.id}`}
+                  className="display-equipment-tile__link"
+                  aria-label={`Открыть карточку станка ${
+                    eq.displayNumber ? `№${eq.displayNumber}` : eq.code
+                  }`}
+                />
+              ) : null}
               <span className="display-equipment-tile__num">
                 <EquipmentKindIcon kind={eq.kind} />
                 {eq.displayNumber ?? '·'}
