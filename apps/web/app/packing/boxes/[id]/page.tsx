@@ -126,9 +126,7 @@ export default async function BoxDetailPage({
           )}
 
           <div className="card" style={{ marginBottom: '1rem' }}>
-            <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.1rem' }}>
-              Добавить паспорт
-            </h2>
+            <h2 style={{ margin: '0 0 0.5rem' }}>Добавить паспорт</h2>
             <p className="meta-line" style={{ margin: '0 0 0.75rem' }}>
               Отсканируйте QR паспорта или введите номер
               <code> P-…</code>. Однородность коробки
@@ -141,9 +139,7 @@ export default async function BoxDetailPage({
           </div>
 
           <div className="card" style={{ marginBottom: '1rem' }}>
-            <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.1rem' }}>
-              Закрыть коробку
-            </h2>
+            <h2 style={{ margin: '0 0 0.5rem' }}>Закрыть коробку</h2>
             <p className="meta-line" style={{ margin: '0 0 0.75rem' }}>
               После закрытия добавлять паспорта в эту коробку нельзя.
               Сами паспорта уже выпущены при добавлении (статус
@@ -162,9 +158,7 @@ export default async function BoxDetailPage({
         </div>
       )}
 
-      <h2 style={{ margin: '1rem 0 0.5rem', fontSize: '1.15rem' }}>
-        Содержимое
-      </h2>
+      <h2 style={{ margin: '1rem 0 0.5rem' }}>Содержимое</h2>
       {box.items.length === 0 ? (
         <div className="card empty">
           В коробке пока нет паспортов. Отсканируйте первый — это

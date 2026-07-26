@@ -744,7 +744,6 @@ export function AdminCreateOrderForm({
                     alignItems: 'center',
                     gap: 8,
                     margin: 0,
-                    fontSize: 17,
                   }}
                 >
                   <Layers size={18} strokeWidth={1.8} aria-hidden /> Черновик

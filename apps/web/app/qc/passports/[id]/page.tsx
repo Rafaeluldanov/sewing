@@ -122,7 +122,7 @@ export default async function QcPassportDetailPage({
         </div>
       </div>
 
-      <h2 style={{ margin: '1rem 0 0.5rem', fontSize: '1.15rem' }}>
+      <h2 style={{ margin: '1rem 0 0.5rem' }}>
         Зафиксировать брак
       </h2>
       {passport.canRecordDefect ? (
@@ -139,7 +139,7 @@ export default async function QcPassportDetailPage({
         </div>
       )}
 
-      <h2 style={{ margin: '1.5rem 0 0.5rem', fontSize: '1.15rem' }}>
+      <h2 style={{ margin: '1.5rem 0 0.5rem' }}>
         История дефектов
       </h2>
       {passport.defects.length === 0 ? (

@@ -192,7 +192,7 @@ export default async function EmployeePayoutDetailPage({
 
       {/* Детали */}
       <div className="card">
-        <h2 style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 600 }}>
+        <h2 style={{ margin: '0 0 0.75rem', fontWeight: 600 }}>
           Детали
         </h2>
         <dl
@@ -232,7 +232,7 @@ export default async function EmployeePayoutDetailPage({
       {payout.lines && payout.lines.length > 0 && (
         <div className="card">
           <h2
-            style={{ margin: '0 0 0.75rem', fontSize: '1rem', fontWeight: 600 }}
+            style={{ margin: '0 0 0.75rem', fontWeight: 600 }}
           >
             Строки выплаты
           </h2>
@@ -284,7 +284,7 @@ export default async function EmployeePayoutDetailPage({
       {payout.status === 'ISSUED' && (
         <div className="card">
           <h2
-            style={{ margin: '0 0 0.5rem', fontSize: '1rem', fontWeight: 600 }}
+            style={{ margin: '0 0 0.5rem', fontWeight: 600 }}
           >
             Подтверждение получения
           </h2>

@@ -70,7 +70,7 @@ export function CatalogSection({
           marginTop: 8,
         }}
       >
-        <h4 style={{ fontSize: '0.85rem', margin: '0 0 8px' }}>
+        <h4 style={{ margin: '0 0 8px' }}>
           Добавить позицию
         </h4>
         <CatalogCreateForm supplierId={supplierId} />

@@ -202,9 +202,7 @@ export default async function PackingPage({
       )}
 
       <div className="card" style={{ marginBottom: '1rem' }}>
-        <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.1rem' }}>
-          Новая коробка
-        </h2>
+        <h2 style={{ margin: '0 0 0.5rem' }}>Новая коробка</h2>
         <p className="meta-line" style={{ margin: '0 0 0.75rem' }}>
           Рекомендуемая вместимость — 100 шт.; коробка должна быть
           однородной по изделию, цвету и размеру. Лимит можно задать

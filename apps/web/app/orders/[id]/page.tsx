@@ -220,7 +220,7 @@ export default async function OrderDetailPage({
 
       {isManager && <OrderActions id={order.id} status={order.status} />}
 
-      <h2 style={{ margin: '1rem 0 0.5rem', fontSize: '1.15rem' }}>Сводка</h2>
+      <h2 style={{ margin: '1rem 0 0.5rem' }}>Сводка</h2>
       <div className="summary-grid">
         {cards.map((c) => (
           <div
@@ -246,7 +246,7 @@ export default async function OrderDetailPage({
         ))}
       </div>
 
-      <h2 style={{ margin: '1.25rem 0 0.5rem', fontSize: '1.15rem' }}>
+      <h2 style={{ margin: '1.25rem 0 0.5rem' }}>
         По размерам
       </h2>
       {order.sizeBreakdown.length === 0 ? (
@@ -273,7 +273,7 @@ export default async function OrderDetailPage({
         className="page-header"
         style={{ marginTop: '1.5rem', marginBottom: '0.5rem' }}
       >
-        <h2 style={{ margin: 0, fontSize: '1.15rem' }}>
+        <h2 style={{ margin: 0 }}>
           Паспорта изделия ({passports.length})
         </h2>
         <div className="actions-row" style={{ margin: 0 }}>
@@ -324,7 +324,7 @@ function ClosureRequestsBanner({
   }
   return (
     <div className="card" style={{ marginTop: '1.25rem' }}>
-      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>
+      <h2 style={{ margin: '0 0 0.5rem' }}>
         Закрытие раскроя по размерам
       </h2>
       {pending.length > 0 && (
@@ -414,7 +414,7 @@ function MaterialsSnapshotCard({
       orderStatus === 'CALCULATION_DONE');
   return (
     <div className="card" style={{ marginBottom: '1rem' }}>
-      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>Материалы</h2>
+      <h2 style={{ margin: '0 0 0.5rem' }}>Материалы</h2>
       {items.length === 0 ? (
         <div className="meta-line">
           Материалы для заказа не зафиксированы
@@ -582,7 +582,7 @@ function OutsourceSnapshotCard({
   );
   return (
     <div className="card" style={{ marginBottom: '1rem' }}>
-      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>
+      <h2 style={{ margin: '0 0 0.5rem' }}>
         Внешние потребности
       </h2>
       {hasCutReadyAwaiting && (
@@ -683,7 +683,7 @@ function RouteSnapshotCard({ steps }: { steps: OrderRouteStepDto[] }) {
   // Шаги уже отсортированы бэкендом по `index ASC`.
   return (
     <div className="card" style={{ marginBottom: '1rem' }}>
-      <h2 style={{ margin: '0 0 0.5rem', fontSize: '1.05rem' }}>
+      <h2 style={{ margin: '0 0 0.5rem' }}>
         Маршрут производства
       </h2>
       {steps.length === 0 ? (

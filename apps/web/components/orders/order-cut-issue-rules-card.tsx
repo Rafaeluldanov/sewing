@@ -324,7 +324,7 @@ export function OrderCutIssueRulesCard({
           marginBottom: '0.5rem',
         }}
       >
-        <h2 style={{ margin: 0, fontSize: '1.05rem' }}>
+        <h2 style={{ margin: 0 }}>
           Очередь выдачи кроя
         </h2>
         <span
@@ -447,7 +447,7 @@ export function OrderCutIssueRulesCard({
           data-testid={`order-cut-issue-queue-${editing.queueIndex}-new`}
           style={{ marginTop: '0.75rem' }}
         >
-          <h3 style={{ margin: '0 0 0.25rem 0', fontSize: '0.95rem' }}>
+          <h3 style={{ margin: '0 0 0.25rem 0' }}>
             Очередь №{editing.queueIndex} (новая)
           </h3>
           <EditQueueForm
@@ -493,7 +493,7 @@ function QueueHeader({ queue }: { queue: OrderCutIssueQueueDto }) {
         marginBottom: '0.25rem',
       }}
     >
-      <h3 style={{ margin: 0, fontSize: '0.95rem' }}>
+      <h3 style={{ margin: 0 }}>
         Очередь №{queue.queueIndex}
       </h3>
       <span
