@@ -87,6 +87,13 @@ export function AdminTable<T>({
     sortable: c.sortable ?? !c.isAction,
   }));
 
+  // Ключи строк должны быть уникальны: при сортировке React переставляет
+  // строки по ключу, и дубль (например, `rowKey` по `operationId`, который
+  // повторяется в маршруте) даёт битую перестановку — строки задваиваются
+  // или пропадают. Дубли разводим суффиксом по порядку в исходной выдаче:
+  // он стабилен и не зависит от текущего порядка отображения.
+  const seenKeys = new Map<string, number>();
+
   const bodyRows: AdminTableBodyRow[] = rows.map((row) => {
     const cells = columns.map((c) => {
       const label =
@@ -106,8 +113,11 @@ export function AdminTable<T>({
         </td>
       );
     });
+    const baseKey = String(rowKey(row));
+    const seen = seenKeys.get(baseKey) ?? 0;
+    seenKeys.set(baseKey, seen + 1);
     return {
-      key: String(rowKey(row)),
+      key: seen === 0 ? baseKey : `${baseKey}#${seen}`,
       href: rowHref?.(row) ?? null,
       cells,
     };

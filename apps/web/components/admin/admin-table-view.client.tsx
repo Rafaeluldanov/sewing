@@ -15,12 +15,18 @@
  *     массив исходных индексов. React владеет порядком (ключи строк
  *     стабильны), поэтому DOM не рассинхронизируется при ре-рендере.
  *
+ * Порядок хранится ВМЕСТЕ с отпечатком `rows` (`ViewState.rowsKey`): как
+ * только сервер (или клиентский фильтр родителя) отдаёт другую выдачу,
+ * порядок и сортировка сбрасываются прямо в рендере — иначе индексы от
+ * прошлой выдачи применились бы к новой, более короткой, и страница
+ * падала бы целиком.
+ *
  * Тип значения определяется автоматически: `дд.мм.гггг` → дата, ru-число
  * (пробелы-разделители, запятая-десятичная, валюта обрезается) → число,
  * иначе — строковое `localeCompare('ru', { numeric })`. Пустые ячейки
  * («—») всегда падают вниз. Колонки `isAction` не сортируются.
  */
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useMemo, useRef, useState } from 'react';
 import type { CSSProperties, ReactNode } from 'react';
 import { ArrowDown, ArrowUp, ChevronsUpDown } from 'lucide-react';
 
@@ -45,6 +51,15 @@ interface SortState {
   dir: 'asc' | 'desc';
 }
 
+/** Порядок отображения + активная сортировка, привязанные к набору строк. */
+interface ViewState {
+  /** Отпечаток `rows`, для которого посчитан `order`. */
+  rowsKey: string;
+  /** Исходные индексы строк в порядке отображения. */
+  order: number[];
+  sort: SortState | null;
+}
+
 export function AdminTableView({
   columns,
   rows,
@@ -54,19 +69,31 @@ export function AdminTableView({
   rows: AdminTableBodyRow[];
   className?: string;
 }) {
-  const [sort, setSort] = useState<SortState | null>(null);
-  const [order, setOrder] = useState<number[]>(() => rows.map((_, i) => i));
   const tbodyRef = useRef<HTMLTableSectionElement>(null);
 
-  // Выдача с сервера сменилась (пагинация / фильтр / поиск) — сбрасываем
-  // сортировку и порядок к исходному. Ключ строим из ключей строк: он
-  // меняется вместе с данными, но не при пустых ре-рендерах.
-  const rowsKey = useMemo(() => rows.map((r) => r.key).join('|'), [rows]);
-  useEffect(() => {
-    setOrder(rows.map((_, i) => i));
-    setSort(null);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rowsKey]);
+  // Отпечаток выдачи: меняется вместе с данными (пагинация / фильтр /
+  // поиск / клиентские фильтры вкладки), но не при пустых ре-рендерах.
+  // Длина в ключе — чтобы `|` внутри ключей строк не давал коллизий.
+  const rowsKey = useMemo(
+    () => `${rows.length}:${rows.map((r) => r.key).join('|')}`,
+    [rows],
+  );
+  const [state, setState] = useState<ViewState>(() => ({
+    rowsKey,
+    order: rows.map((_, i) => i),
+    sort: null,
+  }));
+
+  // ВАЖНО: сброс порядка при смене выдачи считаем ПРЯМО В РЕНДЕРЕ, а не в
+  // эффекте. Эффект выполняется ПОСЛЕ рендера, поэтому первый же рендер с
+  // более коротким `rows` (поиск/фильтр/последняя страница) успевал упасть
+  // на `rows[i]` от старого порядка — `Cannot read properties of undefined
+  // (reading 'href')`, то есть «Application error» на весь экран.
+  const view: ViewState =
+    state.rowsKey === rowsKey
+      ? state
+      : { rowsKey, order: rows.map((_, i) => i), sort: null };
+  const { order, sort } = view;
 
   function handleSort(colIndex: number) {
     const tbody = tbodyRef.current;
@@ -88,8 +115,7 @@ export function AdminTableView({
       dir = 'asc';
     }
     if (dir === null) {
-      setOrder(rows.map((_, i) => i));
-      setSort(null);
+      setState({ rowsKey, order: rows.map((_, i) => i), sort: null });
       return;
     }
 
@@ -103,8 +129,11 @@ export function AdminTableView({
       if (eb) return -1;
       return compareCells(a.v, b.v) * mul;
     });
-    setOrder(pairs.map((p) => p.origIdx));
-    setSort({ col: colIndex, dir });
+    setState({
+      rowsKey,
+      order: pairs.map((p) => p.origIdx),
+      sort: { col: colIndex, dir },
+    });
   }
 
   return (
@@ -159,6 +188,10 @@ export function AdminTableView({
         <tbody ref={tbodyRef}>
           {order.map((i) => {
             const r = rows[i];
+            // Страховка: порядок всегда пересчитан под текущий `rows`
+            // (см. `view` выше), но лишний рендер пустой строки лучше,
+            // чем падение всего экрана.
+            if (!r) return null;
             if (r.href) {
               return (
                 <AdminTableRow
