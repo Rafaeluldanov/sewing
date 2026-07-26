@@ -9,6 +9,7 @@ import {
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
@@ -21,6 +22,7 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
+import { formatDateRu } from '@/lib/date-format';
 import {
   archiveTechCardsAction,
   purgeTechCardsAction,
@@ -33,6 +35,7 @@ interface SearchParams {
   page?: string;
   pageSize?: string;
   tab?: string;
+  search?: string;
 }
 
 /**
@@ -51,11 +54,14 @@ export default async function AdminTechCardsListPage({
 }) {
   const tab: 'active' | 'archive' =
     searchParams?.tab === 'archive' ? 'archive' : 'active';
+  const search = searchParams?.search?.trim() || undefined;
 
   let all: TechCardTemplateSummaryDto[] = [];
   let error: string | null = null;
   try {
-    all = await listTechCards();
+    // Поиск — на бэке (по коду и названию, регистронезависимо);
+    // вкладки «Активные»/«Архив» и пагинация остаются клиентскими.
+    all = await listTechCards({ search });
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -96,9 +102,12 @@ export default async function AdminTechCardsListPage({
     {
       key: 'updatedAt',
       header: 'Обновлена',
+      // Голая дата `ДД.ММ.ГГГГ` (без времени) — чтобы клик по заголовку
+      // сортировал хронологически (детектор даты в AdminTable понимает
+      // именно этот формат).
       render: (tc) => (
         <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
-          {new Date(tc.updatedAt).toLocaleString('ru-RU')}
+          {formatDateRu(tc.updatedAt)}
         </span>
       ),
     },
@@ -162,6 +171,19 @@ export default async function AdminTechCardsListPage({
           archiveCount={archivedItems.length}
         />
 
+        <form method="get" className="admin-form-grid" role="search">
+          {tab === 'archive' && (
+            <input type="hidden" name="tab" value="archive" />
+          )}
+          <AdminSearchInput
+            id="tech-cards-search"
+            placeholder="Код или название техкарты"
+            initial={search ?? ''}
+            basePath="/admin/tech-cards"
+            preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
+          />
+        </form>
+
         <BulkArchiveProvider
           mode={tab}
           allIds={items.map((tc) => tc.id)}
@@ -195,7 +217,15 @@ export default async function AdminTechCardsListPage({
             rowKey={(tc) => tc.id}
             rowHref={(tc) => `/admin/tech-cards/${tc.id}`}
             emptyContent={
-              tab === 'archive' ? (
+              search ? (
+                <AdminEmptyState
+                  icon={
+                    <ClipboardList size={26} strokeWidth={1.6} aria-hidden />
+                  }
+                  title="Данные не найдены"
+                  hint="По заданному поиску техкарт нет. Измените запрос или очистите поиск."
+                />
+              ) : tab === 'archive' ? (
                 <AdminEmptyState
                   icon={
                     <ClipboardList size={26} strokeWidth={1.6} aria-hidden />
@@ -230,7 +260,10 @@ export default async function AdminTechCardsListPage({
           pageSize={pageSize}
           total={total}
           basePath="/admin/tech-cards"
-          preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
+          preserveParams={{
+            tab: tab === 'archive' ? 'archive' : undefined,
+            search,
+          }}
           label="техкарт"
         />
       </AdminCard>

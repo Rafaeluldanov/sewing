@@ -62,8 +62,22 @@ export class OperationsService {
   // LIST
   // -------------------------------------------------------------------------
 
-  async list(): Promise<OperationSummaryDto[]> {
+  async list(search?: string): Promise<OperationSummaryDto[]> {
+    // Поиск операции — регистронезависимый частичный матч по коду и
+    // названию. Группировка по категориям и сортировка выполняются на
+    // вебе поверх отфильтрованного набора.
+    const q = search?.trim();
+    const where: Prisma.OperationWhereInput =
+      q && q.length > 0
+        ? {
+            OR: [
+              { code: { contains: q, mode: 'insensitive' } },
+              { name: { contains: q, mode: 'insensitive' } },
+            ],
+          }
+        : {};
     const rows = await this.prisma.operation.findMany({
+      where,
       orderBy: [{ active: 'desc' }, { sortOrder: 'asc' }],
       include: {
         _count: {

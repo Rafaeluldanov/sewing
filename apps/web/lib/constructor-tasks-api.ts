@@ -15,8 +15,12 @@ import { apiFetch, apiFetchMultipart } from './api';
  *   - RSC-страницами `/admin/constructor-tasks` (список / деталь).
  */
 
-export function listConstructorTasks(): Promise<ConstructorTaskSummaryDto[]> {
-  return apiFetch<ConstructorTaskSummaryDto[]>('/constructor-tasks');
+export function listConstructorTasks(
+  search?: string,
+): Promise<ConstructorTaskSummaryDto[]> {
+  const q = search?.trim();
+  const qs = q ? `?search=${encodeURIComponent(q)}` : '';
+  return apiFetch<ConstructorTaskSummaryDto[]>(`/constructor-tasks${qs}`);
 }
 
 export function getConstructorTask(

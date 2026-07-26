@@ -13,6 +13,7 @@ import {
   AdminEmptyState,
   AdminPageShell,
   AdminPagination,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
@@ -24,6 +25,7 @@ import {
   paginate,
   type AdminTableColumn,
 } from '@/components/admin';
+import { formatDateRu } from '@/lib/date-format';
 import {
   archiveConstructorTasksAction,
   purgeConstructorTasksAction,
@@ -36,6 +38,7 @@ interface SearchParams {
   page?: string;
   pageSize?: string;
   tab?: string;
+  search?: string;
 }
 
 /**
@@ -58,11 +61,14 @@ export default async function AdminConstructorTasksListPage({
   // (`ConstructorTask.archivedAt`) — две вкладки над одной выдачей.
   const tab: 'active' | 'archive' =
     searchParams?.tab === 'archive' ? 'archive' : 'active';
+  const search = searchParams?.search?.trim() || undefined;
 
   let all: ConstructorTaskSummaryDto[] = [];
   let error: string | null = null;
   try {
-    all = await listConstructorTasks();
+    // Поиск — на бэке (по изделию/артикулу лекала и автору заявки);
+    // вкладки и пагинация остаются клиентскими.
+    all = await listConstructorTasks(search);
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -123,9 +129,11 @@ export default async function AdminConstructorTasksListPage({
     {
       key: 'createdAt',
       header: 'Создана',
+      // Голая дата `ДД.ММ.ГГГГ` — чтобы клик по заголовку сортировал
+      // хронологически (детектор даты в AdminTable понимает этот формат).
       render: (t) => (
         <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
-          {new Date(t.createdAt).toLocaleString('ru-RU')}
+          {formatDateRu(t.createdAt)}
         </span>
       ),
     },
@@ -180,6 +188,19 @@ export default async function AdminConstructorTasksListPage({
           archiveCount={archivedItems.length}
         />
 
+        <form method="get" className="admin-form-grid" role="search">
+          {tab === 'archive' && (
+            <input type="hidden" name="tab" value="archive" />
+          )}
+          <AdminSearchInput
+            id="constructor-tasks-search"
+            placeholder="Изделие, артикул или автор заявки"
+            initial={search ?? ''}
+            basePath="/admin/constructor-tasks"
+            preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
+          />
+        </form>
+
         <BulkArchiveProvider
           mode={tab}
           allIds={items.map((t) => t.id)}
@@ -213,7 +234,15 @@ export default async function AdminConstructorTasksListPage({
             rowKey={(t) => t.id}
             rowHref={(t) => `/admin/constructor-tasks/${t.id}`}
             emptyContent={
-              tab === 'archive' ? (
+              search ? (
+                <AdminEmptyState
+                  icon={
+                    <ClipboardList size={26} strokeWidth={1.6} aria-hidden />
+                  }
+                  title="Данные не найдены"
+                  hint="По заданному поиску заявок нет. Измените запрос или очистите поиск."
+                />
+              ) : tab === 'archive' ? (
                 <AdminEmptyState
                   icon={
                     <ClipboardList size={26} strokeWidth={1.6} aria-hidden />
@@ -239,7 +268,10 @@ export default async function AdminConstructorTasksListPage({
           pageSize={pageSize}
           total={total}
           basePath="/admin/constructor-tasks"
-          preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
+          preserveParams={{
+            tab: tab === 'archive' ? 'archive' : undefined,
+            search,
+          }}
           label="заявок"
         />
       </AdminCard>

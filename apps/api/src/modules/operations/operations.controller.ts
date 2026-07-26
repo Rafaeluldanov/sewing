@@ -7,6 +7,7 @@ import {
   Param,
   Patch,
   Post,
+  Query,
 } from '@nestjs/common';
 import {
   CreateOperationSchema,
@@ -48,8 +49,8 @@ export class OperationsController {
   constructor(private readonly operations: OperationsService) {}
 
   @Get()
-  list(): Promise<OperationSummaryDto[]> {
-    return this.operations.list();
+  list(@Query('search') search?: string): Promise<OperationSummaryDto[]> {
+    return this.operations.list(search);
   }
 
   @Post()

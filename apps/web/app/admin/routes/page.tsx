@@ -11,6 +11,7 @@ import {
   AdminPageShell,
   AdminPagination,
   AdminRouteSteps,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
@@ -24,6 +25,7 @@ import {
   type AdminTableColumn,
 } from '@/components/admin';
 import { formatStatus, statusTone } from '@/lib/admin-labels';
+import { formatDateRu } from '@/lib/date-format';
 import {
   archiveRoutesAction,
   purgeRoutesAction,
@@ -36,6 +38,7 @@ interface SearchParams {
   page?: string;
   pageSize?: string;
   tab?: string;
+  search?: string;
 }
 
 interface RouteRow extends RouteTemplateSummaryDto {
@@ -59,11 +62,14 @@ export default async function AdminRoutesListPage({
 }) {
   const tab: 'active' | 'archive' =
     searchParams?.tab === 'archive' ? 'archive' : 'active';
+  const search = searchParams?.search?.trim() || undefined;
 
   let all: RouteTemplateSummaryDto[] = [];
   let error: string | null = null;
   try {
-    all = await listRouteTemplates();
+    // Поиск — на бэке (по коду и названию, регистронезависимо);
+    // вкладки и пагинация остаются клиентскими.
+    all = await listRouteTemplates({ search });
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -134,9 +140,11 @@ export default async function AdminRoutesListPage({
     {
       key: 'updatedAt',
       header: 'Обновлён',
+      // Голая дата `ДД.ММ.ГГГГ` — чтобы клик по заголовку сортировал
+      // хронологически (детектор даты в AdminTable понимает этот формат).
       render: (tpl) => (
         <span className="admin-muted" style={{ fontSize: '0.85rem' }}>
-          {new Date(tpl.updatedAt).toLocaleString('ru-RU')}
+          {formatDateRu(tpl.updatedAt)}
         </span>
       ),
     },
@@ -197,6 +205,19 @@ export default async function AdminRoutesListPage({
           archiveCount={archivedItems.length}
         />
 
+        <form method="get" className="admin-form-grid" role="search">
+          {tab === 'archive' && (
+            <input type="hidden" name="tab" value="archive" />
+          )}
+          <AdminSearchInput
+            id="routes-search"
+            placeholder="Код или название маршрута"
+            initial={search ?? ''}
+            basePath="/admin/routes"
+            preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
+          />
+        </form>
+
         <BulkArchiveProvider
           mode={tab}
           allIds={items.map((tpl) => tpl.id)}
@@ -229,7 +250,13 @@ export default async function AdminRoutesListPage({
             rowKey={(tpl) => tpl.id}
             rowHref={(tpl) => `/admin/routes/${tpl.id}`}
             emptyContent={
-              tab === 'archive' ? (
+              search ? (
+                <AdminEmptyState
+                  icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}
+                  title="Данные не найдены"
+                  hint="По заданному поиску маршрутов нет. Измените запрос или очистите поиск."
+                />
+              ) : tab === 'archive' ? (
                 <AdminEmptyState
                   icon={<Activity size={26} strokeWidth={1.6} aria-hidden />}
                   title="Архив пуст"
@@ -259,7 +286,10 @@ export default async function AdminRoutesListPage({
           pageSize={pageSize}
           total={total}
           basePath="/admin/routes"
-          preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
+          preserveParams={{
+            tab: tab === 'archive' ? 'archive' : undefined,
+            search,
+          }}
           label="шаблонов"
         />
       </AdminCard>

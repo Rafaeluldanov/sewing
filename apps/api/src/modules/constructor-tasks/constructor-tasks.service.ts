@@ -592,8 +592,23 @@ export class ConstructorTasksService {
   // READ (admin pages)
   // ---------------------------------------------------------------------------
 
-  async list(): Promise<ConstructorTaskSummaryDto[]> {
+  async list(search?: string): Promise<ConstructorTaskSummaryDto[]> {
+    // Поиск по заявке КБ — регистронезависимый частичный матч по
+    // изделию (имя/артикул лекала) и автору заявки. Сами эти поля лежат
+    // на связях (`patternItem`, `createdBy`), поэтому фильтруем через них.
+    const q = search?.trim();
+    const where: Prisma.ConstructorTaskWhereInput =
+      q && q.length > 0
+        ? {
+            OR: [
+              { patternItem: { is: { name: { contains: q, mode: 'insensitive' } } } },
+              { patternItem: { is: { article: { contains: q, mode: 'insensitive' } } } },
+              { createdBy: { is: { fullName: { contains: q, mode: 'insensitive' } } } },
+            ],
+          }
+        : {};
     const tasks = await this.prisma.constructorTask.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
       include: {
         patternItem: { select: { name: true, article: true } },

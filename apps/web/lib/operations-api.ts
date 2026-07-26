@@ -13,8 +13,12 @@ import type {
 } from '@sewing/shared/operations';
 import { apiFetch } from './api';
 
-export function listOperations(): Promise<OperationSummaryDto[]> {
-  return apiFetch<OperationSummaryDto[]>('/operations', {
+export function listOperations(
+  search?: string,
+): Promise<OperationSummaryDto[]> {
+  const q = search?.trim();
+  const path = q ? `/operations?search=${encodeURIComponent(q)}` : '/operations';
+  return apiFetch<OperationSummaryDto[]>(path, {
     cache: 'no-store',
   });
 }

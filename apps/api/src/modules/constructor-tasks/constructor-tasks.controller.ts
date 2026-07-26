@@ -76,8 +76,10 @@ export class ConstructorTasksController {
 
   @Get()
   @Roles('ADMIN', 'SHOP_MANAGER')
-  list(): Promise<ConstructorTaskSummaryDto[]> {
-    return this.tasks.list();
+  list(
+    @Query('search') search?: string,
+  ): Promise<ConstructorTaskSummaryDto[]> {
+    return this.tasks.list(search);
   }
 
   /**

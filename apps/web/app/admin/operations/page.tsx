@@ -12,6 +12,7 @@ import {
   AdminCard,
   AdminEmptyState,
   AdminPageShell,
+  AdminSearchInput,
   AdminSectionHeader,
   AdminStatusBadge,
   AdminTableRow,
@@ -147,17 +148,20 @@ function formatTimeNorm(op: OperationSummaryDto): React.ReactNode {
 export default async function AdminOperationsListPage({
   searchParams,
 }: {
-  searchParams?: { tab?: string };
+  searchParams?: { tab?: string; search?: string };
 }) {
   // Этап «Архив справочников»: вкладка «Архив» показывает операции с
   // `isActive = false` (тот же флаг, что тумблер «Активна» на карточке).
   const tab: 'active' | 'archive' =
     searchParams?.tab === 'archive' ? 'archive' : 'active';
+  const search = searchParams?.search?.trim() || undefined;
 
   let all: OperationSummaryDto[] = [];
   let error: string | null = null;
   try {
-    all = await listOperations();
+    // Поиск — на бэке (по коду и названию); группировка по категориям
+    // и вкладки active/archive считаются поверх отфильтрованного набора.
+    all = await listOperations(search);
   } catch (e) {
     error =
       e instanceof ApiRequestError
@@ -203,6 +207,20 @@ export default async function AdminOperationsListPage({
           activeCount={activeItems.length}
           archiveCount={archivedItems.length}
         />
+
+        <form method="get" className="admin-form-grid" role="search">
+          {tab === 'archive' && (
+            <input type="hidden" name="tab" value="archive" />
+          )}
+          <AdminSearchInput
+            id="operations-search"
+            placeholder="Код или название операции"
+            initial={search ?? ''}
+            basePath="/admin/operations"
+            resetParams={{}}
+            preserveParams={{ tab: tab === 'archive' ? 'archive' : undefined }}
+          />
+        </form>
       </AdminCard>
 
       <BulkArchiveProvider
@@ -224,7 +242,13 @@ export default async function AdminOperationsListPage({
       >
         {groups.length === 0 ? (
         <AdminCard>
-          {tab === 'archive' ? (
+          {search ? (
+            <AdminEmptyState
+              icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+              title="Данные не найдены"
+              hint="По заданному поиску операций нет. Измените запрос или очистите поиск."
+            />
+          ) : tab === 'archive' ? (
             <AdminEmptyState
               icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
               title="Архив пуст"
