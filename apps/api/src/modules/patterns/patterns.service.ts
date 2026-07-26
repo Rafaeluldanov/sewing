@@ -8,6 +8,8 @@ import type {
   ClonePatternDto,
   CreatePatternDto,
   ListPatternsQuery,
+  PatternArchiveSkipDto,
+  PatternsArchiveResultDto,
   PatternDetailDto,
   PatternItemParameterNormDto,
   PatternItemSizeParameterValueDto,
@@ -398,6 +400,242 @@ export class PatternsService {
       },
       employeeId: actorEmployeeId ?? null,
     });
+  }
+
+  // ===========================================================================
+  // АРХИВ НОМЕНКЛАТУРЫ — bulk archive / restore / purge
+  // ===========================================================================
+  //
+  // Тот же двухшаговый сценарий, что и в «Архиве расчётов цеха»
+  // (`WorkshopNeedsService.archiveOrders/restoreOrders/purgeOrders`):
+  // сначала мягкая архивация (обратимо), потом — безвозвратное удаление
+  // из архива. Разница в носителе признака: у заказа это дата
+  // `needsArchivedAt`, у номенклатуры — `status = ARCHIVED` (так уже
+  // работает карточка `/admin/patterns/[id]`, отдельного поля в схеме
+  // нет и заводить его ради списка не нужно).
+  //
+  // Все три операции — bulk с ЧАСТИЧНЫМ УСПЕХОМ: карточка, не прошедшая
+  // гейт, попадает в `skipped` с причиной, остальные обрабатываются.
+  // Точечная кнопка в строке = массив из одного id.
+  //
+  // Гейты `purgeMany` намеренно повторяют одиночный `remove()` (только
+  // из архива; блок, если ссылаются заказы) — иначе массовая операция
+  // стала бы обходным путём мимо политики «блокировать, если
+  // используется».
+
+  /**
+   * Мягкая архивация: `status := ARCHIVED`. Обратимо (`restoreMany`),
+   * данные не трогаются. Архивная номенклатура пропадает из активного
+   * справочника и не предлагается в новых заказах/техкартах.
+   *
+   * Идемпотентно: уже архивная карточка считается обработанной.
+   */
+  async archiveMany(
+    patternIds: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<PatternsArchiveResultDto> {
+    const ids = Array.from(new Set(patternIds));
+    const rows = await this.prisma.patternItem.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, status: true },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    const processed: string[] = [];
+    const skipped: PatternArchiveSkipDto[] = [];
+    const toArchive: string[] = [];
+    for (const id of ids) {
+      const row = byId.get(id);
+      if (!row) {
+        skipped.push({ patternId: id, reason: 'NOT_FOUND' });
+        continue;
+      }
+      if (row.status === 'ARCHIVED') {
+        processed.push(id);
+        continue;
+      }
+      toArchive.push(id);
+    }
+
+    if (toArchive.length > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.patternItem.updateMany({
+          where: { id: { in: toArchive } },
+          data: { status: 'ARCHIVED' },
+        });
+        await this.audit.log(
+          {
+            event: 'PATTERNS_ARCHIVED',
+            entityType: 'PATTERN',
+            entityId: toArchive[0],
+            employeeId: actorEmployeeId ?? null,
+            payload: { patternIds: toArchive },
+          },
+          tx,
+        );
+      });
+      processed.push(...toArchive);
+    }
+
+    this.logger.log(
+      `event=pattern.archive processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
+  }
+
+  /**
+   * Вернуть из архива. Куда именно возвращать, решаем по связанной
+   * задаче конструктора: если она есть и ещё не закрыта
+   * (`DONE`/`CANCELLED`), карточка была черновиком КБ — возвращаем в
+   * `DRAFT`, чтобы недоделанное лекало не начало предлагаться в
+   * заказах. Во всех остальных случаях — `ACTIVE`.
+   *
+   * Идемпотентно: не архивная карточка считается обработанной.
+   */
+  async restoreMany(
+    patternIds: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<PatternsArchiveResultDto> {
+    const ids = Array.from(new Set(patternIds));
+    const rows = await this.prisma.patternItem.findMany({
+      where: { id: { in: ids } },
+      select: {
+        id: true,
+        status: true,
+        constructorTask: { select: { status: true } },
+      },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    const processed: string[] = [];
+    const skipped: PatternArchiveSkipDto[] = [];
+    const toActive: string[] = [];
+    const toDraft: string[] = [];
+    for (const id of ids) {
+      const row = byId.get(id);
+      if (!row) {
+        skipped.push({ patternId: id, reason: 'NOT_FOUND' });
+        continue;
+      }
+      if (row.status !== 'ARCHIVED') {
+        processed.push(id);
+        continue;
+      }
+      const task = row.constructorTask;
+      if (task && task.status !== 'DONE' && task.status !== 'CANCELLED') {
+        toDraft.push(id);
+      } else {
+        toActive.push(id);
+      }
+    }
+
+    if (toActive.length > 0 || toDraft.length > 0) {
+      await this.prisma.$transaction(async (tx) => {
+        if (toActive.length > 0) {
+          await tx.patternItem.updateMany({
+            where: { id: { in: toActive } },
+            data: { status: 'ACTIVE' },
+          });
+        }
+        if (toDraft.length > 0) {
+          await tx.patternItem.updateMany({
+            where: { id: { in: toDraft } },
+            data: { status: 'DRAFT' },
+          });
+        }
+        await this.audit.log(
+          {
+            event: 'PATTERNS_RESTORED',
+            entityType: 'PATTERN',
+            entityId: (toActive[0] ?? toDraft[0]) as string,
+            employeeId: actorEmployeeId ?? null,
+            payload: { restoredToActive: toActive, restoredToDraft: toDraft },
+          },
+          tx,
+        );
+      });
+      processed.push(...toActive, ...toDraft);
+    }
+
+    this.logger.log(
+      `event=pattern.restore processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
+  }
+
+  /**
+   * Безвозвратное удаление архивной номенклатуры (bulk-версия
+   * `remove()`): карточка + её owned-дети (размеры/файлы/площади/нормы/
+   * задача конструктора) уходят каскадом.
+   *
+   * Гейты те же, что у одиночного удаления, только вместо 409 —
+   * пропуск с причиной:
+   *   - не в архиве                → `NOT_ARCHIVED`;
+   *   - на карточку ссылается заказ → `USED_BY_ORDERS`.
+   *
+   * DXF/превью на диске не удаляем — как и в `remove()` (физический GC
+   * out-of-scope, см. комментарий к классу).
+   */
+  async purgeMany(
+    patternIds: string[],
+    actorEmployeeId?: string | null,
+  ): Promise<PatternsArchiveResultDto> {
+    const ids = Array.from(new Set(patternIds));
+    const rows = await this.prisma.patternItem.findMany({
+      where: { id: { in: ids } },
+      select: { id: true, name: true, article: true, status: true },
+    });
+    const byId = new Map(rows.map((r) => [r.id, r]));
+
+    const processed: string[] = [];
+    const skipped: PatternArchiveSkipDto[] = [];
+    const toPurge: typeof rows = [];
+    for (const id of ids) {
+      const row = byId.get(id);
+      if (!row) {
+        skipped.push({ patternId: id, reason: 'NOT_FOUND' });
+        continue;
+      }
+      if (row.status !== 'ARCHIVED') {
+        skipped.push({ patternId: id, reason: 'NOT_ARCHIVED' });
+        continue;
+      }
+      const orderCount = await this.prisma.order.count({
+        where: { patternItemId: id },
+      });
+      if (orderCount > 0) {
+        skipped.push({ patternId: id, reason: 'USED_BY_ORDERS' });
+        continue;
+      }
+      toPurge.push(row);
+    }
+
+    for (const row of toPurge) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.patternItem.delete({ where: { id: row.id } });
+        await this.audit.log(
+          {
+            event: 'PATTERN_DELETED',
+            entityType: 'PATTERN',
+            entityId: row.id,
+            employeeId: actorEmployeeId ?? null,
+            payload: {
+              name: row.name,
+              article: row.article,
+              previousStatus: row.status,
+              bulk: true,
+            },
+          },
+          tx,
+        );
+      });
+      processed.push(row.id);
+    }
+
+    this.logger.log(
+      `event=pattern.purge processed=${processed.length} skipped=${skipped.length}`,
+    );
+    return { processed, skipped };
   }
 
   // ===========================================================================

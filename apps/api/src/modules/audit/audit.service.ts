@@ -73,7 +73,15 @@ export type AuditEntityType =
    *     операции с DXF-файлами, `entityId = PatternItem.id`
    *     (id файла в payload);
    *   - `PATTERN_MATERIAL_AREAS_REPLACED` — bulk-replace площадей,
-   *     `entityId = PatternItem.id`.
+   *     `entityId = PatternItem.id`;
+   *   - `PATTERNS_ARCHIVED` / `PATTERNS_RESTORED` — массовые операции
+   *     архива со списка `/admin/patterns` (`POST /api/patterns/archive`
+   *     `…/restore`). Одно событие на пачку: `entityId` — первая
+   *     карточка, полный список id — в payload;
+   *   - `PATTERN_DELETED` — безвозвратное удаление архивной карточки
+   *     (`DELETE /api/patterns/:id/permanent` либо bulk
+   *     `POST /api/patterns/purge`, тогда в payload `bulk: true`);
+   *     одно событие на карточку, `entityId = PatternItem.id`.
    */
   | 'PATTERN'
   /**

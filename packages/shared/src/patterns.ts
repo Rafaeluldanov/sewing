@@ -650,6 +650,67 @@ export const ClonePatternSchema = z.object({
 export type ClonePatternDto = z.infer<typeof ClonePatternSchema>;
 
 // ---------------------------------------------------------------------------
+// Архив номенклатуры: bulk archive / restore / purge
+// ---------------------------------------------------------------------------
+//
+// Контракт повторяет «Архив расчётов цеха» (`@sewing/shared/workshop-needs`,
+// `WorkshopNeedsArchiveRequestSchema`): один шейп запроса на три операции,
+// частичный успех в ответе. Разница только в единице операции — здесь это
+// карточка номенклатуры (`PatternItem`), а признак архива — не отдельное
+// поле-дата, а `status = ARCHIVED` (так уже работает карточка
+// `/admin/patterns/[id]`, отдельного `archivedAt` в схеме нет).
+
+/**
+ * Тело запроса массовых операций архива номенклатуры
+ * (`POST /api/patterns/archive` `…/restore` `…/purge`). Точечная
+ * операция = массив из одного `patternId`; «Очистить архив» = все
+ * видимые id (собирает фронт).
+ */
+export const PatternsArchiveRequestSchema = z.object({
+  patternIds: z.array(z.string().min(1)).min(1).max(1000),
+});
+export type PatternsArchiveRequestDto = z.infer<
+  typeof PatternsArchiveRequestSchema
+>;
+
+/** Причина, по которой номенклатура пропущена массовой операцией. */
+export const PATTERN_ARCHIVE_SKIP_REASONS = [
+  /** Карточки с таким id нет. */
+  'NOT_FOUND',
+  /** Номенклатура не в архиве — безвозвратное удаление недоступно. */
+  'NOT_ARCHIVED',
+  /** На номенклатуру ссылаются заказы — удалять навсегда нельзя
+   *  (`Order.patternItemId`; заказы хранят по ней историю). */
+  'USED_BY_ORDERS',
+] as const;
+export type PatternArchiveSkipReason =
+  (typeof PATTERN_ARCHIVE_SKIP_REASONS)[number];
+
+export const PATTERN_ARCHIVE_SKIP_REASON_LABELS: Record<
+  PatternArchiveSkipReason,
+  string
+> = {
+  NOT_FOUND: 'номенклатура не найдена',
+  NOT_ARCHIVED: 'номенклатура не в архиве',
+  USED_BY_ORDERS: 'номенклатуру используют заказы',
+};
+
+export interface PatternArchiveSkipDto {
+  patternId: string;
+  reason: PatternArchiveSkipReason;
+}
+
+/**
+ * Результат массовой операции. `processed` — id, к которым операция
+ * реально применилась (в т.ч. идемпотентно: архивация уже архивной
+ * карточки считается успехом); `skipped` — пропущенные с причиной.
+ */
+export interface PatternsArchiveResultDto {
+  processed: string[];
+  skipped: PatternArchiveSkipDto[];
+}
+
+// ---------------------------------------------------------------------------
 // List query DTO
 // ---------------------------------------------------------------------------
 

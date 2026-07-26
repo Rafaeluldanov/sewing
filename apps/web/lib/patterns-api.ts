@@ -16,6 +16,8 @@ import type {
   ListPatternsQuery,
   PatternDetailDto,
   PatternListItemDto,
+  PatternsArchiveRequestDto,
+  PatternsArchiveResultDto,
   ReplacePatternItemParameterNormInputDto,
   ReplacePatternItemParameterNormsDto,
   ReplacePatternItemSizeParameterValueInputDto,
@@ -128,6 +130,39 @@ export function deletePattern(id: string): Promise<void> {
     `/patterns/${encodeURIComponent(id)}/permanent`,
     { method: 'DELETE' },
   );
+}
+
+/**
+ * Массовые операции архива номенклатуры (`POST /patterns/archive`
+ * `…/restore` `…/purge`, этап «Архив номенклатуры»). Ответ —
+ * частичный успех: `processed` + `skipped` с причиной; 4xx прилетает
+ * только на невалидное тело / отсутствие прав.
+ */
+export function archivePatterns(
+  patternIds: string[],
+): Promise<PatternsArchiveResultDto> {
+  return apiFetch<PatternsArchiveResultDto>('/patterns/archive', {
+    method: 'POST',
+    body: { patternIds } satisfies PatternsArchiveRequestDto,
+  });
+}
+
+export function restorePatterns(
+  patternIds: string[],
+): Promise<PatternsArchiveResultDto> {
+  return apiFetch<PatternsArchiveResultDto>('/patterns/restore', {
+    method: 'POST',
+    body: { patternIds } satisfies PatternsArchiveRequestDto,
+  });
+}
+
+export function purgePatterns(
+  patternIds: string[],
+): Promise<PatternsArchiveResultDto> {
+  return apiFetch<PatternsArchiveResultDto>('/patterns/purge', {
+    method: 'POST',
+    body: { patternIds } satisfies PatternsArchiveRequestDto,
+  });
 }
 
 export function archivePatternSizeFile(

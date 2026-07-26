@@ -324,12 +324,20 @@ DTO: `packages/shared/src/tech-cards.ts`. ADR: 0022.
 | POST   | `/api/patterns/:id/preview`                           | ADMIN, SHOP_MANAGER | multipart `file` (превью изображение). Лимит `PATTERN_FILE_MAX_SIZE_BYTES`. |
 | POST   | `/api/patterns/:id/sizes/:sizeId/file`                | ADMIN, SHOP_MANAGER | multipart `file` (DXF). Создаёт новую версию `PatternSizeFile`. |
 | DELETE | `/api/patterns/:id/sizes/:sizeId/file/:fileId`        | ADMIN, SHOP_MANAGER | Soft-archive (`PatternSizeFile.status = ARCHIVED`). Файл с диска не удаляется. |
+| POST   | `/api/patterns/:id/sizes/:sizeId/file/:fileId/restore` | ADMIN, SHOP_MANAGER | Вернуть файл размера из архива (`status = ACTIVE`). |
+| DELETE | `/api/patterns/:id/sizes/:sizeId/file/:fileId/permanent` | ADMIN, SHOP_MANAGER | Hard-delete архивного файла размера (запись + файл на диске). |
 | PUT    | `/api/patterns/:id/material-areas`                    | ADMIN, SHOP_MANAGER | Bulk-replace `PatternMaterialArea[]`. |
 | PUT    | `/api/patterns/:id/parameter-norms`                   | ADMIN, SHOP_MANAGER | Bulk-replace `PatternItemParameterNorm[]` (для `inputType = QTY_PER_ITEM`). |
 | PUT    | `/api/patterns/:id/size-parameter-values`             | ADMIN, SHOP_MANAGER | Bulk-replace `PatternItemSizeParameterValue[]` (для `inputType = LINEAR_M_BY_SIZE`). |
 | POST   | `/api/patterns/:id/clone`                             | ADMIN, SHOP_MANAGER | Body `ClonePatternDto` (опционален: `name`/`article` подбираются backend-ом). Этап «Создать номенклатуру по готовому лекалу» — см. `PatternsService.clone`. Возвращает `PatternDetailDto`. |
+| DELETE | `/api/patterns/:id/permanent`                         | ADMIN, SHOP_MANAGER | Hard-delete одной архивной карточки. 409 `PATTERN_DELETE_FORBIDDEN`, если статус ≠ `ARCHIVED` или на лекало ссылаются заказы. |
+| POST   | `/api/patterns/archive`                               | ADMIN, SHOP_MANAGER | Bulk soft-archive (`status = ARCHIVED`). Body `PatternsArchiveRequestDto` (`patternIds[]`), ответ `PatternsArchiveResultDto`. |
+| POST   | `/api/patterns/restore`                               | ADMIN, SHOP_MANAGER | Bulk возврат из архива → `ACTIVE` (или `DRAFT`, если задача конструктора ещё не закрыта). |
+| POST   | `/api/patterns/purge`                                 | ADMIN, SHOP_MANAGER | Bulk hard-delete архивных карточек. Пропускает с причиной: `NOT_FOUND` / `NOT_ARCHIVED` / `USED_BY_ORDERS` (частичный успех вместо 409). |
 
-DTO: `packages/shared/src/patterns.ts` (`ClonePatternSchema`). Audit: `PATTERN_*`.
+DTO: `packages/shared/src/patterns.ts` (`ClonePatternSchema`,
+`PatternsArchiveRequestSchema`). Audit: `PATTERN_*` (`PATTERNS_ARCHIVED` /
+`PATTERNS_RESTORED` / `PATTERN_DELETED`).
 
 ---
 

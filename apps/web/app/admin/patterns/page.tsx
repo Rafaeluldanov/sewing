@@ -16,6 +16,7 @@ import {
   AdminPageShell,
   AdminPagination,
   AdminSearchInput,
+  AdminSectionHeader,
   AdminStatusBadge,
   AdminTable,
   paginate,
@@ -23,6 +24,12 @@ import {
 } from '@/components/admin';
 import { statusTone } from '@/lib/admin-labels';
 import { DeleteCategoryChipButton } from './delete-category-chip-button';
+import {
+  PatternArchiveCheckbox,
+  PatternArchiveHeaderButton,
+  PatternArchiveProvider,
+  PatternArchiveRowActions,
+} from './pattern-archive';
 
 export const dynamic = 'force-dynamic';
 
@@ -32,6 +39,7 @@ interface SearchParams {
   search?: string;
   status?: string;
   categoryId?: string;
+  tab?: string;
 }
 
 function formatStatusLabel(status: string): string {
@@ -44,8 +52,17 @@ function formatStatusLabel(status: string): string {
  * категориям номенклатуры.
  *
  * Backend `GET /api/patterns` возвращает все статусы, фильтры на
- * сервере (`search`, `status`, `categoryId`). Пагинация — клиентская
+ * сервере (`search`, `categoryId`). Пагинация — клиентская
  * через `paginate()`, как в `/admin/tech-cards` / `/admin/clients`.
+ *
+ * Этап «Архив номенклатуры» (по аналогии с архивом расчётов цеха):
+ * список разложен по двум вкладкам — «Номенклатура» (ACTIVE/DRAFT) и
+ * «Архив» (ARCHIVED). Поэтому статус НЕ передаём в backend-фильтр, а
+ * фетчим одну выдачу и режем локально: так у обеих вкладок есть
+ * счётчики за один round-trip (тот же приём, что в `/admin/suppliers`).
+ * Селект «Статус» остаётся только на активной вкладке и сужает
+ * ACTIVE/DRAFT; выбор `status=ARCHIVED` из старой ссылки/закладки
+ * трактуем как переход на вкладку «Архив».
  */
 export default async function AdminPatternsListPage({
   searchParams,
@@ -53,19 +70,26 @@ export default async function AdminPatternsListPage({
   searchParams?: SearchParams;
 }) {
   const search = searchParams?.search?.trim();
-  const status = (searchParams?.status?.trim() || undefined) as
+  const statusParam = (searchParams?.status?.trim() || undefined) as
     | PatternItemStatus
     | undefined;
   const categoryId = searchParams?.categoryId?.trim() || undefined;
+  const tab: 'active' | 'archive' =
+    searchParams?.tab === 'archive' || statusParam === 'ARCHIVED'
+      ? 'archive'
+      : 'active';
+  // На вкладке «Архив» селекта статуса нет — фильтр не применяем.
+  const status = tab === 'archive' ? undefined : statusParam;
+  /** `tab` для ссылок/форм: на активной вкладке параметр не нужен. */
+  const tabParam = tab === 'archive' ? 'archive' : undefined;
 
-  let items: PatternListItemDto[] = [];
+  let allItems: PatternListItemDto[] = [];
   let categories: PatternCategoryListItemDto[] = [];
   let archivedCategories: PatternCategoryListItemDto[] = [];
   let error: string | null = null;
   try {
-    items = await listPatterns({
+    allItems = await listPatterns({
       search: search || undefined,
-      status,
       categoryId,
     });
   } catch (e) {
@@ -89,9 +113,26 @@ export default async function AdminPatternsListPage({
     archivedCategories = [];
   }
 
+  const archivedItems = allItems.filter((p) => p.status === 'ARCHIVED');
+  const activeItems = allItems.filter((p) => p.status !== 'ARCHIVED');
+  const items =
+    tab === 'archive'
+      ? archivedItems
+      : status
+        ? activeItems.filter((p) => p.status === status)
+        : activeItems;
+
   const { pageItems, page, pageSize, total } = paginate(items, searchParams);
 
   const columns: AdminTableColumn<PatternListItemDto>[] = [
+    {
+      // Чекбокс массовых операций архива. `sortable: false` — сортировать
+      // по нему нечего (`AdminTableView` читает textContent ячейки).
+      key: 'select',
+      header: '',
+      sortable: false,
+      render: (p) => <PatternArchiveCheckbox patternId={p.id} />,
+    },
     {
       key: 'preview',
       header: '',
@@ -185,6 +226,14 @@ export default async function AdminPatternsListPage({
       ),
     },
     {
+      // Архив: «В архив» на активной вкладке, «Вернуть» / «Удалить» — в
+      // архиве. Кнопки клиентские, поэтому клик не уводит по `rowHref`.
+      key: 'archive',
+      header: '',
+      isAction: true,
+      render: (p) => <PatternArchiveRowActions patternId={p.id} />,
+    },
+    {
       key: 'open',
       header: '',
       isAction: true,
@@ -204,7 +253,7 @@ export default async function AdminPatternsListPage({
     <AdminPageShell
       icon={<Scissors size={22} strokeWidth={1.6} aria-hidden />}
       title="Номенклатура"
-      subtitle={`Всего: ${items.length}`}
+      subtitle={`Активных: ${activeItems.length} · Архив: ${archivedItems.length}`}
       actions={
         <>
           {/* Этап «Загружаемая JPEG-иконка категории»: модалка
@@ -258,6 +307,7 @@ export default async function AdminPatternsListPage({
             href={buildHref('/admin/patterns', {
               search: search || undefined,
               status: status || undefined,
+              tab: tabParam,
             })}
             active={!categoryId}
             ariaLabel="Фильтр: все категории"
@@ -270,6 +320,7 @@ export default async function AdminPatternsListPage({
               href={buildHref('/admin/patterns', {
                 search: search || undefined,
                 status: status || undefined,
+                tab: tabParam,
                 categoryId: c.id,
               })}
               active={categoryId === c.id}
@@ -322,6 +373,7 @@ export default async function AdminPatternsListPage({
                   href={buildHref('/admin/patterns', {
                     search: search || undefined,
                     status: status || undefined,
+                    tab: tabParam,
                     categoryId: c.id,
                   })}
                   active={categoryId === c.id}
@@ -349,6 +401,32 @@ export default async function AdminPatternsListPage({
       </AdminCard>
 
       <AdminCard>
+        {/* Этап «Архив номенклатуры»: вкладки «Номенклатура» / «Архив». */}
+        <div className="admin-tabs">
+          <Link
+            href={buildHref('/admin/patterns', {
+              search: search || undefined,
+              status: status || undefined,
+              categoryId: categoryId || undefined,
+            })}
+            className={`admin-tab ${tab === 'active' ? 'admin-tab--active' : ''}`}
+            aria-current={tab === 'active' ? 'page' : undefined}
+          >
+            Номенклатура ({activeItems.length})
+          </Link>
+          <Link
+            href={buildHref('/admin/patterns', {
+              search: search || undefined,
+              categoryId: categoryId || undefined,
+              tab: 'archive',
+            })}
+            className={`admin-tab ${tab === 'archive' ? 'admin-tab--active' : ''}`}
+            aria-current={tab === 'archive' ? 'page' : undefined}
+          >
+            Архив ({archivedItems.length})
+          </Link>
+        </div>
+
         <form
           action="/admin/patterns"
           method="get"
@@ -357,62 +435,106 @@ export default async function AdminPatternsListPage({
           {categoryId && (
             <input type="hidden" name="categoryId" value={categoryId} />
           )}
+          {tab === 'archive' && <input type="hidden" name="tab" value="archive" />}
           <AdminSearchInput
             id="patternSearch"
             placeholder="Название / артикул / категория"
             initial={search ?? ''}
             basePath="/admin/patterns"
-            preserveParams={{ status, categoryId }}
+            preserveParams={{ status, categoryId, tab: tabParam }}
           />
-          <div className="admin-field">
-            <label htmlFor="patternStatus">Статус</label>
-            <select
-              id="patternStatus"
-              name="status"
-              defaultValue={status ?? ''}
-            >
-              <option value="">Все</option>
-              {Object.entries(PATTERN_ITEM_STATUS_LABELS).map(([code, label]) => (
-                <option key={code} value={code}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/* Селект статуса — только на активной вкладке: в архиве статус
+              заведомо один (`ARCHIVED`), фильтровать нечего. */}
+          {tab === 'active' && (
+            <div className="admin-field">
+              <label htmlFor="patternStatus">Статус</label>
+              <select
+                id="patternStatus"
+                name="status"
+                defaultValue={status ?? ''}
+              >
+                <option value="">Все</option>
+                {Object.entries(PATTERN_ITEM_STATUS_LABELS)
+                  // `ARCHIVED` живёт во вкладке «Архив» — из селекта убран,
+                  // чтобы не было двух путей к одному и тому же списку.
+                  .filter(([code]) => code !== 'ARCHIVED')
+                  .map(([code, label]) => (
+                    <option key={code} value={code}>
+                      {label}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
           <div className="admin-actions-row" style={{ alignItems: 'end' }}>
             <button type="submit" className="admin-btn">
               Применить
             </button>
             {(search || status || categoryId) && (
-              <Link href="/admin/patterns" className="admin-btn admin-btn--ghost">
+              <Link
+                href={
+                  tab === 'archive'
+                    ? '/admin/patterns?tab=archive'
+                    : '/admin/patterns'
+                }
+                className="admin-btn admin-btn--ghost"
+              >
                 Сбросить
               </Link>
             )}
           </div>
         </form>
 
-        <AdminTable
-          rows={pageItems}
-          columns={columns}
-          rowKey={(p) => p.id}
-          rowHref={(p) => `/admin/patterns/${p.id}`}
-          emptyContent={
-            <AdminEmptyState
-              icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
-              title="Лекала ещё не заведены"
-              hint="Создайте первое лекало — например, «Футболка-классика»."
-              actions={
-                <Link
-                  href="/admin/patterns/new"
-                  className="admin-btn admin-btn--primary"
-                >
-                  <Plus size={16} strokeWidth={1.6} aria-hidden />
-                  Создать номенклатуру
-                </Link>
-              }
-            />
-          }
-        />
+        {/* Провайдер архива оборачивает шапку (кнопка «Очистить архив»),
+            таблицу (чекбоксы + кнопки в строках) и нижний тулбар выбора. */}
+        {/* «Очистить архив» бьёт по ВСЕЙ текущей выдаче вкладки (все
+            страницы клиентской пагинации), а не только по видимой
+            странице — количество показываем в confirm перед операцией. */}
+        <PatternArchiveProvider
+          mode={tab}
+          allPatternIds={items.map((p) => p.id)}
+        >
+          <AdminSectionHeader
+            title={tab === 'archive' ? 'Архив' : 'Номенклатура'}
+            hint={
+              tab === 'archive'
+                ? `В архиве: ${items.length}. Удаление навсегда — только отсюда.`
+                : `Всего: ${items.length}`
+            }
+            actions={<PatternArchiveHeaderButton />}
+          />
+
+          <AdminTable
+            rows={pageItems}
+            columns={columns}
+            rowKey={(p) => p.id}
+            rowHref={(p) => `/admin/patterns/${p.id}`}
+            emptyContent={
+              tab === 'archive' ? (
+                <AdminEmptyState
+                  icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+                  title="Архив пуст"
+                  hint="Сюда попадает номенклатура, отправленная в архив кнопкой «В архив». Из архива её можно вернуть или удалить навсегда."
+                />
+              ) : (
+                <AdminEmptyState
+                  icon={<Scissors size={26} strokeWidth={1.6} aria-hidden />}
+                  title="Лекала ещё не заведены"
+                  hint="Создайте первое лекало — например, «Футболка-классика»."
+                  actions={
+                    <Link
+                      href="/admin/patterns/new"
+                      className="admin-btn admin-btn--primary"
+                    >
+                      <Plus size={16} strokeWidth={1.6} aria-hidden />
+                      Создать номенклатуру
+                    </Link>
+                  }
+                />
+              )
+            }
+          />
+        </PatternArchiveProvider>
 
         <AdminPagination
           page={page}
@@ -423,6 +545,7 @@ export default async function AdminPatternsListPage({
             search: search || undefined,
             status: status || undefined,
             categoryId: categoryId || undefined,
+            tab: tabParam,
           }}
           label="лекал"
         />

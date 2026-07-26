@@ -18,6 +18,7 @@ import {
   CreatePatternSchema,
   ListPatternsQuerySchema,
   PATTERN_FILE_MAX_SIZE_BYTES,
+  PatternsArchiveRequestSchema,
   ReplacePatternItemParameterNormsSchema,
   ReplacePatternItemSizeParameterValuesSchema,
   ReplacePatternMaterialAreasSchema,
@@ -27,6 +28,8 @@ import {
   type ListPatternsQuery,
   type PatternDetailDto,
   type PatternListItemDto,
+  type PatternsArchiveRequestDto,
+  type PatternsArchiveResultDto,
   type ReplacePatternItemParameterNormsDto,
   type ReplacePatternItemSizeParameterValuesDto,
   type ReplacePatternMaterialAreasDto,
@@ -45,6 +48,10 @@ import type { UploadedFileLike } from './patterns-storage.service.js';
  *   GET    /api/patterns/:id                                       — карточка
  *   POST   /api/patterns                                           — создать
  *   PATCH  /api/patterns/:id                                       — править
+ *   POST   /api/patterns/archive                                   — bulk в архив
+ *   POST   /api/patterns/restore                                   — bulk из архива
+ *   POST   /api/patterns/purge                                     — bulk удалить навсегда
+ *   DELETE /api/patterns/:id/permanent                             — удалить навсегда (одну)
  *   POST   /api/patterns/:id/preview                               — загрузить превью
  *   POST   /api/patterns/:id/sizes/:sizeId/file                    — загрузить DXF (новая версия)
  *   DELETE /api/patterns/:id/sizes/:sizeId/file/:fileId            — архивировать DXF
@@ -78,6 +85,50 @@ export class PatternsController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<PatternDetailDto> {
     return this.patterns.create(body, user.employeeId);
+  }
+
+  /**
+   * Массовые операции архива номенклатуры (этап «Архив номенклатуры»,
+   * по аналогии с `/api/workshop-needs/archive|restore|purge`):
+   *
+   *   POST /api/patterns/archive — мягко скрыть в архив (обратимо);
+   *   POST /api/patterns/restore — вернуть из архива;
+   *   POST /api/patterns/purge   — удалить безвозвратно (только из
+   *                                архива, блок если есть заказы).
+   *
+   * Ответ — частичный успех (`processed` / `skipped` с причиной), а не
+   * 409 на первую же непрошедшую карточку: список массовый, менеджеру
+   * важно обработать остальные.
+   *
+   * ВАЖНО: объявлены ДО `@Get(':id')`/`@Post(':id/clone')` только для
+   * читаемости — конфликта нет (одноимённого `@Post(':id')` в
+   * контроллере не существует).
+   */
+  @Post('archive')
+  archiveMany(
+    @Body(new ZodValidationPipe(PatternsArchiveRequestSchema))
+    body: PatternsArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<PatternsArchiveResultDto> {
+    return this.patterns.archiveMany(body.patternIds, user.employeeId);
+  }
+
+  @Post('restore')
+  restoreMany(
+    @Body(new ZodValidationPipe(PatternsArchiveRequestSchema))
+    body: PatternsArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<PatternsArchiveResultDto> {
+    return this.patterns.restoreMany(body.patternIds, user.employeeId);
+  }
+
+  @Post('purge')
+  purgeMany(
+    @Body(new ZodValidationPipe(PatternsArchiveRequestSchema))
+    body: PatternsArchiveRequestDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<PatternsArchiveResultDto> {
+    return this.patterns.purgeMany(body.patternIds, user.employeeId);
   }
 
   @Get(':id')

@@ -47,6 +47,7 @@ import {
   createPattern,
   deletePattern,
   deletePatternSizeFile,
+  restorePatterns,
   restorePatternSizeFile,
   replacePatternItemParameterNorms,
   replacePatternItemSizeParameterValues,
@@ -256,6 +257,25 @@ export async function updatePatternAction(
 export async function archivePatternAction(patternId: string): Promise<void> {
   try {
     await updatePattern(patternId, { status: 'ARCHIVED' });
+  } catch (e) {
+    throw new Error(explainApiError(e).error);
+  }
+  revalidatePath('/admin/patterns');
+  revalidatePath(`/admin/patterns/${patternId}`);
+}
+
+/**
+ * Вернуть номенклатуру из архива с карточки (обратная операция к
+ * `archivePatternAction`). Идём через `POST /api/patterns/restore`, а не
+ * через `PATCH status = ACTIVE`, чтобы правило «куда возвращать» жило в
+ * одном месте на backend: карточка с незакрытой задачей конструктора
+ * возвращается в `DRAFT`, остальные — в `ACTIVE` (см.
+ * `PatternsService.restoreMany`). Та же кнопка есть во вкладке «Архив»
+ * списка `/admin/patterns`.
+ */
+export async function restorePatternAction(patternId: string): Promise<void> {
+  try {
+    await restorePatterns([patternId]);
   } catch (e) {
     throw new Error(explainApiError(e).error);
   }
