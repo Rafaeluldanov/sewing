@@ -4914,6 +4914,11 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .display-matrix__th--first {
   text-align: left;
   padding-left: 1rem;
+  /* «Угловая» ячейка шапки: липнет сразу по двум осям (top: 0 наследует
+     от `.display-matrix__th`), поэтому z-index должен быть выше и
+     sticky-шапки (2), и липкой колонки размеров (1). */
+  left: 0;
+  z-index: 5;
 }
 .display-matrix__th-icon {
   display: inline-flex;
@@ -5108,6 +5113,22 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   color: var(--display-fg-muted);
   border-bottom: 1px solid var(--display-border);
   white-space: nowrap;
+  /* Колонка «Размер» липнет к левому краю при ГОРИЗОНТАЛЬНОМ скролле
+     матрицы (вторая ось sticky к уже существующему `top: 0` у шапки).
+     Матрица шире экрана почти всегда: 1 + КРОЙ + N×2 sewing-подколонок
+     + ОТК/ВТО/УПАКОВКА/ГОТОВО/БРАК. Без липкой первой колонки цифры
+     теряют «адрес» (какой это размер) — на телефоне/планшете сразу,
+     на TV при маршруте из 8+ операций. Фон обязателен и непрозрачен
+     (иначе под меткой просвечивают уезжающие ячейки); total-строки
+     перебивают его своими более специфичными правилами ниже.
+     z-index: 1 — выше обычных ячеек (`position: relative`), но НИЖЕ
+     sticky-шапки (z-index: 2), иначе метка налезала бы на заголовок
+     при вертикальном скролле. */
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  background: var(--display-bg-card);
+  background-clip: padding-box;
 }
 .display-matrix__row:hover .display-matrix__cell,
 .display-matrix__row:hover .display-matrix__row-label {
@@ -5124,6 +5145,18 @@ button.current-work__head--toggle:focus-visible .current-work__title {
   background: var(--display-bg-soft);
   border-top: 1px solid var(--display-border-strong);
   border-bottom: 1px solid var(--display-border);
+}
+/* Заголовок цветовой группы растянут на всю ширину таблицы (colSpan),
+   поэтому sticky на самой ячейке бесполезен — сдвигаться внутри своего
+   containing block ей некуда. Липнет ВНУТРЕННИЙ span: при горизонтальном
+   скролле название цвета остаётся у левого края, ровно над липкой
+   колонкой размеров. `left: 1rem` совпадает с padding-left ячейки, так
+   что в исходном положении (scrollLeft = 0) ничего не сдвигается. */
+.display-matrix__color-label-inner {
+  position: sticky;
+  left: 1rem;
+  display: inline-flex;
+  align-items: center;
 }
 .display-matrix__color-swatch {
   display: inline-block;
@@ -6638,6 +6671,361 @@ body:has(.display-screen) {
   }
   .display-equipment-tile__sizes {
     font-size: 1.1rem;
+  }
+}
+
+/* ============================================================================
+   Адаптив монитора — «под тот экран, на котором его открыли»
+   ----------------------------------------------------------------------------
+   Один и тот же URL `/shopfloor/display` открывают с очень разных
+   устройств, и базовые правила выше рассчитаны только на часть из них:
+
+     A. Телефон (≤ 767px) — мастер/начальник смотрит витрину на ходу;
+     B. Планшет и узкий ноутбук (≤ 1199px при высоте < 1400px) —
+        «компактный» режим, устройство в руках, а не на стене;
+     C. Ноутбук/десктоп 1200–1599px — базовые правила, без изменений;
+     D. TV 1080p / 4K — слои `min-width: 1600px` и `min-width: 2400px`
+        выше (апскейл шрифтов, board остаётся двухколоночным);
+     E. Портретный киоск — TV, повешенный вертикально (портрет при
+        высоте ≥ 1400px): 1080×1920 и 2160×3840;
+     F. Низкий экран (высота ≤ 560px) — телефон в ландшафте либо узкая
+        промышленная панель над станком.
+
+   Два принципиально разных режима поведения:
+
+     • КИОСК (C, D, E) — экран НИКОГДА не скроллится целиком: геометрия
+       остаётся `fixed; inset: 0`, скроллятся только матрица и сетка
+       оборудования (цепочка `min-height: 0`, см. docs/display-board.md §9.1);
+
+     • РУЧНОЙ (A, B, F) — контент выше вьюпорта разрешено проскроллить
+       ВНУТРИ `.display-screen`. Это чинит реальную поломку: под
+       `max-width: 1199px` board схлопывается в одну колонку, обе
+       строки грида получают content-height, а внешний `overflow: hidden`
+       обрезал всё, что не влезло — панель оборудования была НЕДОСТУПНА
+       (ни скролла страницы — `body:has(.display-screen){overflow:hidden}`,
+       ни скролла блока).
+
+   Ничего не прячем: на любом экране видны те же KPI, та же матрица и
+   то же оборудование — меняются только плотность и порядок блоков.
+   ============================================================================ */
+
+/* B. Компактный режим: планшет / узкий ноутбук / телефон ------------------- */
+@media (max-width: 1199px) and (max-height: 1399px) {
+  .display-screen {
+    /* Строки строго по содержимому + собственный вертикальный скролл
+       вместо обрезки. Именно `max-content`, а не `auto`: у грида с
+       определённой высотой (100dvh) `auto`-строки ужимаются до
+       min-content, и матрица — у которой по всей цепочке стоит
+       `min-height: 0` — схлопывалась в 16px вместо того, чтобы
+       переполнить экран и дать себя проскроллить.
+       `overflow-x` остаётся hidden — горизонтально ездит только
+       матрица внутри своей зоны. */
+    grid-template-rows: max-content max-content max-content;
+    align-content: start;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+    gap: 0.75rem;
+    padding: 0.85rem 0.9rem calc(1rem + env(safe-area-inset-bottom, 0px));
+  }
+  .display-block {
+    padding: 0.8rem 0.85rem;
+    gap: 0.6rem;
+    border-radius: 0.75rem;
+  }
+  .display-block__title {
+    flex-wrap: wrap;
+    gap: 0.35rem 0.6rem;
+  }
+  .display-kpi {
+    gap: 0.5rem;
+  }
+  .display-kpi__card {
+    padding: 0.55rem 0.65rem;
+    border-radius: 0.7rem;
+  }
+  .display-kpi__value {
+    font-size: clamp(1.3rem, 4.2vw, 1.9rem);
+  }
+  .display-kpi__label {
+    font-size: 0.62rem;
+    letter-spacing: 0.05em;
+    /* Длинные подписи («Выпущено сегодня») в колонке ~80px должны
+       переноситься по словам. `break-word`, а не `anywhere`: рвать
+       слово посреди («УПАКОВК/А») хуже, чем строка чуть уже. */
+    overflow-wrap: break-word;
+  }
+  /* Матрица сохраняет СВОЙ скролл (иначе теряются sticky-шапки), но
+     ограничена долей экрана: под ней обязана остаться зона, за которую
+     палец «зацепит» внешний скролл и доберётся до оборудования. */
+  .display-matrix__scroll {
+    flex: 0 1 auto;
+    max-height: 60vh;
+    max-height: 60dvh;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+  /* Оборудование в стопке показываем целиком: вложенный вертикальный
+     скролл на тач-экране конфликтует с внешним. */
+  .display-equipment-grid {
+    flex: 0 0 auto;
+    overflow-y: visible;
+    grid-template-columns: repeat(auto-fill, minmax(52px, 1fr));
+  }
+  .display-matrix__th {
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    padding: 0.45rem 0.4rem;
+  }
+  /* Первая строка шапки стала ниже (0.72rem + padding 0.45rem) — sticky
+     подколонок ▶/✔ прилипает к её новому низу. */
+  .display-matrix__th--sub {
+    top: 1.95rem;
+    font-size: 0.85rem;
+    padding: 0.25rem 0.3rem;
+  }
+  .display-matrix__th--sub .display-matrix__th-dir {
+    font-size: 0.95rem;
+  }
+  .display-matrix__th--sew-in,
+  .display-matrix__th--sew-done {
+    min-width: 2.1rem;
+    width: 2.1rem;
+  }
+  .display-matrix__th--first {
+    padding-left: 0.6rem;
+  }
+  .display-matrix__cell {
+    font-size: clamp(1rem, 3vw, 1.25rem);
+    padding: 0.4rem 0.35rem;
+  }
+  .display-matrix__row-label {
+    font-size: 0.9rem;
+    padding: 0.4rem 0.4rem 0.4rem 0.6rem;
+  }
+  .display-matrix__color-row .display-matrix__color-label {
+    font-size: 0.8rem;
+    letter-spacing: 0.08em;
+    padding: 0.45rem 0.5rem 0.4rem 0.6rem;
+  }
+  .display-matrix__color-label-inner {
+    left: 0.6rem;
+  }
+  .display-matrix__total-row--grand .display-matrix__cell,
+  .display-matrix__total-row--grand .display-matrix__row-label {
+    font-size: 1.1rem;
+  }
+}
+
+/* A. Телефон: шапка в две строки, максимально плотные плитки ---------------- */
+@media (max-width: 767px) {
+  /* `1fr auto | meta` вместо трёхколоночного `1fr auto 1fr`: бренд и часы
+     в первой строке, статус/«обновлено»/«Выйти» — во второй на всю
+     ширину. Иначе шапка распирала экран по горизонтали (все три блока
+     `white-space: nowrap`). */
+  .display-screen__header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas:
+      'brand clock'
+      'meta meta';
+    gap: 0.3rem 0.6rem;
+    padding: 0;
+  }
+  .display-screen__brand {
+    grid-area: brand;
+    font-size: 0.95rem;
+    letter-spacing: 0.1em;
+    gap: 0.4rem;
+    min-width: 0;
+  }
+  .display-screen__clock {
+    grid-area: clock;
+    font-size: 1.6rem;
+    text-align: right;
+  }
+  .display-screen__meta {
+    grid-area: meta;
+    justify-content: space-between;
+    gap: 0.5rem;
+    font-size: 0.7rem;
+  }
+  .display-status {
+    letter-spacing: 0.06em;
+  }
+  /* Самое длинное слово подписи («ВЫПУЩЕНО») на 4 колонках телефона
+     занимает ~60px — карточке нужно ≥ 62px под текст, иначе перенос
+     рвёт слово пополам («ВЫПУЩЕН/О»). Отсюда и мелкий шрифт, и
+     срезанный горизонтальный padding. */
+  .display-kpi__card {
+    padding: 0.5rem 0.45rem;
+  }
+  .display-kpi__label {
+    font-size: 0.55rem;
+    letter-spacing: 0.02em;
+  }
+  .display-screen__logout {
+    padding: 0.25rem 0.55rem;
+    font-size: 0.7rem;
+  }
+  .display-equipment-grid {
+    grid-template-columns: repeat(auto-fill, minmax(46px, 1fr));
+    gap: 0.3rem;
+  }
+  .display-equipment-tile {
+    border-radius: 0.4rem;
+    padding: 0.2rem 0.15rem;
+  }
+  .display-orphan-calls {
+    padding: 0.5rem 0.6rem;
+  }
+  .display-orphan-calls__item {
+    font-size: 0.8rem;
+  }
+}
+
+/* Место под нижнюю `.mobile-nav` (fixed, z-index 25 — выше витрины).
+   Она видна у ADMIN/SHOP_MANAGER, открывших монитор с телефона, и это
+   их единственный способ уйти со страницы: глобальный header на
+   `/shopfloor/display` скрыт для всех ролей (см. `app-header.tsx`).
+   У учётки DISPLAY меню не рендерится вовсе — `:has()` не даст лишний
+   отступ на маленьком зальном киоске. */
+@media (max-width: 900px) {
+  body:has(.mobile-nav) .display-screen {
+    /* 120px = две строки пунктов: у ADMIN/SHOP_MANAGER в меню 6 ссылок
+       при сетке в 4 колонки (`.mobile-nav__list`), т.е. панель вдвое
+       выше «стандартных» 96px из `.app-main`. */
+    padding-bottom: calc(120px + env(safe-area-inset-bottom, 0px));
+  }
+}
+
+/* F. Низкий экран: телефон в ландшафте, узкая панель над станком ----------- */
+@media (max-height: 560px) {
+  .display-screen {
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem calc(0.6rem + env(safe-area-inset-bottom, 0px));
+  }
+  .display-screen__header {
+    padding: 0;
+  }
+  .display-screen__clock {
+    font-size: 1.5rem;
+  }
+  .display-kpi {
+    gap: 0.4rem;
+  }
+  .display-kpi__card {
+    padding: 0.4rem 0.5rem;
+    gap: 0.1rem;
+  }
+  .display-kpi__value {
+    font-size: 1.25rem;
+  }
+  .display-kpi__label {
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+  }
+  .display-block {
+    padding: 0.6rem 0.7rem;
+    gap: 0.45rem;
+  }
+  /* Шапка и KPI ужаты — отдаём матрице больше от и без того низкого
+     экрана (60dvh ландшафтного телефона это ~230px, читать нечего). */
+  .display-matrix__scroll {
+    max-height: 72vh;
+    max-height: 72dvh;
+  }
+}
+
+/* Низкий, но широкий экран (телефон в ландшафте, панель-«полоса» над
+   станком): 8 KPI-карточек в один ряд экономят целую строку по
+   вертикали — она здесь дороже, чем ширина колонки. */
+@media (max-height: 560px) and (min-width: 720px) {
+  .display-kpi {
+    grid-template-columns: repeat(8, minmax(0, 1fr));
+  }
+}
+
+/* E. Портретный киоск: TV, повешенный вертикально --------------------------- */
+/* Отличаем от планшета по высоте вьюпорта: 1080×1920 и 2160×3840 дают
+   ≥ 1400px, ни один планшет/телефон в портрете столько не выдаёт. Режим
+   остаётся киоском (никакого внешнего скролла — до экрана на стене
+   никто не дотянется), но board стоит стопкой, а не 2/3 + 1/3: на узкой
+   и очень высокой панели горизонтальное деление съедает матрицу. */
+@media (orientation: portrait) and (min-height: 1400px) {
+  .display-screen {
+    grid-template-rows: auto auto minmax(0, 1fr);
+    overflow: hidden;
+    padding: 1.5rem 1.5rem 1.75rem;
+    gap: 1.25rem;
+  }
+  .display-board {
+    grid-template-columns: minmax(0, 1fr);
+    /* Матрица забирает ~60% остатка, оборудование ~40%; оба блока
+       скроллятся внутри себя. */
+    grid-template-rows: minmax(0, 1.5fr) minmax(0, 1fr);
+    gap: 1rem;
+  }
+  .display-matrix__scroll {
+    flex: 1 1 auto;
+    max-height: none;
+  }
+  .display-equipment-grid {
+    flex: 1 1 auto;
+    overflow-y: auto;
+    grid-template-columns: repeat(auto-fill, minmax(80px, 1fr));
+    gap: 0.5rem;
+  }
+  /* Портретный 1080×1920 по ширине не дотягивает до TV-слоя (≥1600px),
+     хотя физически это тот же большой монитор в зале — апскейл шрифтов
+     повторяем здесь. */
+  .display-screen__brand {
+    font-size: 1.6rem;
+  }
+  .display-screen__clock {
+    font-size: 3.2rem;
+  }
+  .display-screen__meta {
+    font-size: 1rem;
+  }
+  .display-kpi {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 0.9rem;
+  }
+  .display-kpi__value {
+    font-size: 2.6rem;
+  }
+  .display-kpi__label {
+    font-size: 0.9rem;
+  }
+  .display-block__title {
+    font-size: 1.3rem;
+  }
+  .display-matrix__th {
+    font-size: 0.95rem;
+    padding: 0.8rem 0.65rem;
+  }
+  .display-matrix__th--sub {
+    top: 2.75rem;
+    font-size: 1.05rem;
+    padding: 0.4rem 0.45rem;
+  }
+  .display-matrix__cell {
+    font-size: 1.55rem;
+    padding: 0.65rem 0.6rem;
+  }
+  .display-matrix__row-label {
+    font-size: 1.2rem;
+    padding: 0.65rem 0.65rem 0.65rem 1rem;
+  }
+  .display-matrix__total-row--grand .display-matrix__cell,
+  .display-matrix__total-row--grand .display-matrix__row-label {
+    font-size: 1.75rem;
+  }
+  .display-equipment-tile__num {
+    font-size: 1.6rem;
+  }
+  .display-equipment-tile__sizes {
+    font-size: 1rem;
   }
 }
 
@@ -13976,6 +14364,14 @@ body:has(.admin-layout) .app-header { display: none !important; }
 .order-hero-card__field-error {
   font-size: 0.75rem;
   color: var(--admin-danger-fg, #991b1b);
+}
+
+/* Этап «Клиент — обязательный атрибут заказа»: звёздочка обязательного
+   поля в подписи блока «Основное» (тот же красный, что у ошибок полей и
+   у `.master-actions-sheet__required`). */
+.order-hero-card__required {
+  color: var(--admin-danger-fg, #991b1b);
+  font-weight: 700;
 }
 
 /* Иконка-инфо рядом с подписью поля + тултип (заменяет текстовые

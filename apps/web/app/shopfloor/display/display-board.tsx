@@ -220,6 +220,25 @@ function dlog(payload: Record<string, unknown>): void {
   console.log('[DISPLAY]', payload);
 }
 
+/**
+ * Зеркало адаптивных слоёв `globals.css` (секция «Адаптив монитора») —
+ * ТОЛЬКО для диагностического лога `kind: 'viewport'`. Раскладку
+ * определяет CSS, здесь мы лишь называем режим словом, чтобы по логу с
+ * реального TV/планшета сразу было видно, в какой слой попал экран,
+ * а не гадать по `width × height`.
+ *
+ * Если правишь брейкпоинты в CSS — поправь и здесь (иначе лог начнёт
+ * врать; на саму отрисовку это не влияет).
+ */
+function viewportTier(width: number, height: number): string {
+  if (height >= 1400 && height > width) return 'portrait-kiosk';
+  if (width >= 2400) return 'tv-4k';
+  if (width >= 1600) return 'tv';
+  if (width <= 767) return 'phone';
+  if (width <= 1199) return 'compact';
+  return 'desktop';
+}
+
 function clientApiBase(): string {
   return getApiBaseUrl();
 }
@@ -503,16 +522,18 @@ export function ShopfloorDisplayBoard({
     // клиентский render) видели одинаковый stable placeholder.
     setMounted(true);
     // Один лог на mount про геометрию viewport — нужен, чтобы по
-    // удалённому DevTools-логу с реального TV сразу увидеть, не
-    // попал ли экран в mobile-брейкпоинт (`max-width: 1199px` в
-    // globals.css схлопывает board в одну колонку). На 1080p TV
-    // это не должно срабатывать, но разные WebView-надстройки
-    // (наложенный chrome, custom DPR) иногда занижают innerWidth.
+    // удалённому DevTools-логу с реального TV сразу увидеть, в какой
+    // адаптивный слой попал экран (`tier`, см. `viewportTier` и
+    // секцию «Адаптив монитора» в globals.css). На 1080p TV ждём
+    // `tv`, а не `compact`: разные WebView-надстройки (наложенный
+    // chrome, custom DPR) иногда занижают innerWidth и роняют экран
+    // в компактный режим — по этому полю видно сразу.
     dlog({
       kind: 'viewport',
       width: window.innerWidth,
       height: window.innerHeight,
       dpr: window.devicePixelRatio,
+      tier: viewportTier(window.innerWidth, window.innerHeight),
     });
     // Если SSR уже принёс валидный снимок — фиксируем «время первого
     // успеха» здесь, на клиенте, чтобы оно было детерминированным
@@ -1692,11 +1713,20 @@ function ColorBlockRows({
           scope="colgroup"
           className={`display-matrix__color-label display-matrix__color-label--${block.colorKey}`}
         >
-          <span
-            className={`display-matrix__color-swatch display-matrix__color-swatch--${block.colorKey}`}
-            aria-hidden="true"
-          />
-          {block.colorLabel}
+          {/*
+            Содержимое обёрнуто в отдельный span, потому что липнуть при
+            горизонтальном скролле матрицы должно именно оно: сама ячейка
+            растянута colSpan'ом на всю ширину таблицы, и sticky на ней
+            бессмысленен — сдвигаться внутри своего containing block ей
+            некуда. Стиль — `.display-matrix__color-label-inner`.
+          */}
+          <span className="display-matrix__color-label-inner">
+            <span
+              className={`display-matrix__color-swatch display-matrix__color-swatch--${block.colorKey}`}
+              aria-hidden="true"
+            />
+            {block.colorLabel}
+          </span>
         </th>
       </tr>
       {block.rows.map((row) => (

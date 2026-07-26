@@ -1644,6 +1644,102 @@ describe('UI layout: fullscreen / TV geometry на /shopfloor/display', () => {
     );
   });
 
+  // -------------------------------------------------------------------
+  // Адаптив «под каждый экран» (globals.css → секция «Адаптив монитора»,
+  // docs/display-board.md §9.4). Слоёв шесть, и у каждого своя роль;
+  // самое хрупкое — что «ручные» слои (телефон/планшет) НЕ должны
+  // обрезать контент, а киоск-слои НЕ должны включать внешний скролл.
+  // -------------------------------------------------------------------
+
+  test('Компактный слой (планшет/телефон) даёт витрине внутренний скролл', () => {
+    // До этого слоя при схлопывании board'а в одну колонку панель
+    // оборудования уезжала под `overflow: hidden` и была недостижима:
+    // ни скролла страницы (`body:has(.display-screen){overflow:hidden}`),
+    // ни скролла блока.
+    const compact =
+      css.match(
+        /@media\s*\(max-width:\s*1199px\)\s*and\s*\(max-height:\s*1399px\)\s*\{[\s\S]*?\n\}/,
+      )?.[0] ?? '';
+    expect(compact).not.toBe('');
+    expect(compact).toMatch(/\.display-screen\s*\{[\s\S]*?overflow-y:\s*auto/);
+    // `max-content`, а не `auto`: у грида с определённой высотой
+    // auto-строка ужимается до min-content (а он = 0 из-за цепочки
+    // `min-height: 0`) и матрица схлопывается в несколько пикселей.
+    expect(compact).toMatch(
+      /\.display-screen\s*\{[\s\S]*?grid-template-rows:\s*max-content\s+max-content\s+max-content/,
+    );
+    // Матрица сохраняет СВОЙ скролл (иначе теряются sticky-шапки),
+    // но ограничена долей экрана.
+    expect(compact).toMatch(
+      /\.display-matrix__scroll\s*\{[\s\S]*?max-height:\s*\d+dvh/,
+    );
+  });
+
+  test('Портретный киоск (TV вертикально) остаётся киоском, board — стопкой', () => {
+    // Отличаем от планшета по высоте вьюпорта: 1080×1920 / 2160×3840
+    // дают >= 1400px, ни один планшет столько в портрете не выдаёт.
+    const portrait =
+      css.match(
+        /@media\s*\(orientation:\s*portrait\)\s*and\s*\(min-height:\s*1400px\)\s*\{[\s\S]*?\n\}/,
+      )?.[0] ?? '';
+    expect(portrait).not.toBe('');
+    // Никакого внешнего скролла: до экрана на стене никто не дотянется.
+    expect(portrait).toMatch(/\.display-screen\s*\{[\s\S]*?overflow:\s*hidden/);
+    // Матрица сверху, оборудование под ней — обе зоны со своим скроллом.
+    expect(portrait).toMatch(
+      /\.display-board\s*\{[\s\S]*?grid-template-rows:\s*minmax\(0,\s*[\d.]+fr\)\s+minmax\(0,\s*1fr\)/,
+    );
+    expect(portrait).toMatch(
+      /\.display-equipment-grid\s*\{[\s\S]*?overflow-y:\s*auto/,
+    );
+  });
+
+  test('Липкая колонка «Размер» — вторая ось sticky у матрицы', () => {
+    // При горизонтальном скролле матрицы (на телефоне — всегда, на TV —
+    // при маршруте из 8+ операций) цифры не должны терять «адрес».
+    expect(css).toMatch(
+      /\.display-matrix__row-label\s*\{[\s\S]*?position:\s*sticky[\s\S]*?left:\s*0/,
+    );
+    // Фон обязателен и непрозрачен — иначе под меткой просвечивают
+    // уезжающие ячейки.
+    expect(css).toMatch(
+      /\.display-matrix__row-label\s*\{[\s\S]*?background:\s*var\(--display-bg-card\)/,
+    );
+    // Угловая ячейка липнет по двум осям и лежит выше sticky-шапки (2).
+    expect(css).toMatch(
+      /\.display-matrix__th--first\s*\{[\s\S]*?left:\s*0[\s\S]*?z-index:\s*5/,
+    );
+    // Заголовок цветовой группы растянут colSpan'ом на всю таблицу,
+    // поэтому липнет вложенный span, а не сама ячейка.
+    expect(board).toMatch(/display-matrix__color-label-inner/);
+    expect(css).toMatch(
+      /\.display-matrix__color-label-inner\s*\{[\s\S]*?position:\s*sticky/,
+    );
+  });
+
+  test('Мобильное меню не перекрывает низ витрины', () => {
+    // `.mobile-nav` — fixed, z-index 25 (выше витрины) и на
+    // `/shopfloor/display` единственный способ уйти со страницы у
+    // ADMIN/SHOP_MANAGER с телефона: глобальный header тут скрыт.
+    // Отступ вешаем через `:has()`, чтобы у учётки DISPLAY (меню не
+    // рендерится) на зальном киоске не было пустой полосы снизу.
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*900px\)\s*\{[\s\S]*?body:has\(\.mobile-nav\)\s+\.display-screen\s*\{[\s\S]*?padding-bottom/,
+    );
+  });
+
+  test('viewportTier в display-board.tsx зеркалит css-слои', () => {
+    // Поле `tier` в mount-логе — единственный способ понять с реального
+    // TV/планшета, в какой слой попал экран. Значения должны совпадать
+    // с брейкпоинтами globals.css (см. docs/display-board.md §9.4).
+    expect(board).toMatch(/function viewportTier\(/);
+    expect(board).toMatch(/'portrait-kiosk'/);
+    expect(board).toMatch(/width\s*>=\s*1600\s*\)\s*return\s*'tv'/);
+    expect(board).toMatch(/width\s*<=\s*767\s*\)\s*return\s*'phone'/);
+    expect(board).toMatch(/width\s*<=\s*1199\s*\)\s*return\s*'compact'/);
+    expect(board).toMatch(/kind:\s*'viewport'[\s\S]{0,220}tier:\s*viewportTier\(/);
+  });
+
   test('body:has(.display-screen) изолирует страницу от глобального layout', () => {
     // На странице display-board глобальный `.app-main` не должен
     // оставлять padding/min-height: иначе под fixed-обёрткой может
