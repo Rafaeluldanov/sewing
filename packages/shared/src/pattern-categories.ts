@@ -844,6 +844,15 @@ export interface PatternCategoryListItemDto {
   description: string | null;
   parametersCount: number;
   patternsCount: number;
+  /**
+   * Сколько техкарт привязано к группе (`TechCardTemplate.patternCategoryId`).
+   *
+   * Нужен кнопкам удаления группы: удаление каскадом уводит
+   * номенклатуру в архив, а техкарты ОТВЯЗЫВАЕТ (FK `SET NULL`, сами
+   * техкарты остаются) — предупреждение обязано назвать оба числа
+   * ДО клика, см. `apps/web/lib/pattern-category-delete-confirm.ts`.
+   */
+  techCardsCount: number;
   createdAt: string;
   updatedAt: string;
 }

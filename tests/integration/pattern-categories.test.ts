@@ -17,9 +17,9 @@
  *      на create-pattern; soft-archive не трогает уже привязанные.
  *   8. Лекало без `categoryId` (legacy fallback) принимает любой
  *      `materialRole` из `MATERIAL_ROLES`.
- *   9. Hard-delete группы: без `?archivePatterns` блокируется своей
- *      номенклатурой, с флагом — уводит её в архив; техкарты блокируют
- *      удаление всегда и до каскада.
+ *   9. Hard-delete группы: без `?cascade` блокируется своим содержимым,
+ *      с флагом — уводит номенклатуру в архив и отвязывает техкарты
+ *      (сами техкарты остаются).
  */
 import { afterAll, beforeAll, beforeEach, expect, test } from 'vitest';
 import request from 'supertest';
@@ -675,7 +675,7 @@ describeWithDb('integration — pattern-categories', () => {
   // 9. Hard-delete группы: каскад «номенклатура → архив»
   // -------------------------------------------------------------------------
 
-  test('hard-delete группы без ?archivePatterns блокируется, если внутри есть номенклатура', async () => {
+  test('hard-delete группы без ?cascade блокируется, если внутри есть номенклатура', async () => {
     const cat = await createHoodieCategory();
     await createPattern({ article: 'HOODIE-DEL-001', categoryId: cat.id });
     // Удалять навсегда можно только архивную группу.
@@ -697,7 +697,7 @@ describeWithDb('integration — pattern-categories', () => {
       .expect(200);
   });
 
-  test('hard-delete группы с ?archivePatterns=1 уводит её номенклатуру в архив', async () => {
+  test('hard-delete группы с ?cascade=1 уводит её номенклатуру в архив', async () => {
     const cat = await createHoodieCategory();
     const patternId = await createPattern({
       article: 'HOODIE-DEL-002',
@@ -709,7 +709,7 @@ describeWithDb('integration — pattern-categories', () => {
       .expect(200);
 
     await request(t.app.getHttpServer())
-      .delete(`/api/pattern-categories/${cat.id}/permanent?archivePatterns=1`)
+      .delete(`/api/pattern-categories/${cat.id}/permanent?cascade=1`)
       .set('Cookie', t.adminCookie)
       .expect(200);
 
@@ -729,15 +729,43 @@ describeWithDb('integration — pattern-categories', () => {
     expect(detail.body.categoryId).toBeNull();
   });
 
-  test('hard-delete группы блокируется техкартой даже с ?archivePatterns=1 (номенклатура не архивируется)', async () => {
+  test('hard-delete группы с ?cascade=1 отвязывает техкарты, но их не удаляет', async () => {
     const cat = await createHoodieCategory();
-    const patternId = await createPattern({
-      article: 'HOODIE-DEL-003',
-      categoryId: cat.id,
-    });
-    await t.prisma.techCardTemplate.create({
+    const tc = await t.prisma.techCardTemplate.create({
       data: {
         code: 'TC-CAT-DEL',
+        name: 'Техкарта группы',
+        patternCategoryId: cat.id,
+      },
+    });
+    // Счётчик техкарт виден в DTO — на нём строится предупреждение UI.
+    const before = await request(t.app.getHttpServer())
+      .get(`/api/pattern-categories/${cat.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+    expect(before.body.techCardsCount).toBe(1);
+
+    await request(t.app.getHttpServer())
+      .delete(`/api/pattern-categories/${cat.id}`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+    await request(t.app.getHttpServer())
+      .delete(`/api/pattern-categories/${cat.id}/permanent?cascade=1`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+
+    const after = await t.prisma.techCardTemplate.findUnique({
+      where: { id: tc.id },
+    });
+    expect(after).not.toBeNull();
+    expect(after?.patternCategoryId).toBeNull();
+  });
+
+  test('hard-delete группы без ?cascade блокируется техкартой', async () => {
+    const cat = await createHoodieCategory();
+    await t.prisma.techCardTemplate.create({
+      data: {
+        code: 'TC-CAT-BLOCK',
         name: 'Техкарта группы',
         patternCategoryId: cat.id,
       },
@@ -748,16 +776,10 @@ describeWithDb('integration — pattern-categories', () => {
       .expect(200);
 
     const r = await request(t.app.getHttpServer())
-      .delete(`/api/pattern-categories/${cat.id}/permanent?archivePatterns=1`)
+      .delete(`/api/pattern-categories/${cat.id}/permanent`)
       .set('Cookie', t.adminCookie)
       .expect(409);
     expect(r.body.code).toBe('PATTERN_CATEGORY_DELETE_FORBIDDEN');
-
-    // Номенклатура НЕ уехала в архив: техкарты проверяются до каскада.
-    const detail = await request(t.app.getHttpServer())
-      .get(`/api/patterns/${patternId}`)
-      .set('Cookie', t.adminCookie)
-      .expect(200);
-    expect(detail.body.status).not.toBe('ARCHIVED');
+    expect(r.body.error ?? r.body.message).toMatch(/техкарт/);
   });
 });

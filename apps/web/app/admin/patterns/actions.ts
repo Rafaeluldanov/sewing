@@ -40,6 +40,7 @@ import {
 } from '@sewing/shared/pattern-categories';
 import { CreateSizeSchema } from '@sewing/shared/sizes';
 import { createSize } from '@/lib/orders-api';
+import type { ActionResult } from '@/lib/action-result';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   archivePatternSizeFile,
@@ -288,29 +289,35 @@ export async function restorePatternAction(patternId: string): Promise<void> {
  * `/admin/patterns` (чип-фильтр).
  *
  * Backend разрешает hard-delete только для архивной категории
- * (`status = ARCHIVED`) и блокирует, если на неё ссылаются техкарты
- * (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`). Чтобы у менеджера была
- * одна понятная кнопка «Удалить», оркеструем тут:
+ * (`status = ARCHIVED`). Чтобы у менеджера была одна понятная кнопка
+ * «Удалить», оркеструем тут:
  *
  *   1) узнаём текущий статус (`GET /pattern-categories/:id`);
  *   2) если категория активна — архивируем
  *      (`DELETE /pattern-categories/:id`, soft);
  *   3) удаляем навсегда
- *      (`DELETE /pattern-categories/:id/permanent?archivePatterns=1`).
+ *      (`DELETE /pattern-categories/:id/permanent?cascade=1`).
  *
- * Флаг `archivePatterns` включён всегда: кнопка вызывает action только
- * после `window.confirm` с предупреждением, сколько номенклатуры уедет
- * в архив (см. `delete-category-chip-button.tsx`).
+ * Флаг `cascade` включён всегда: кнопка вызывает action только после
+ * `window.confirm` с предупреждением, сколько номенклатуры уедет в
+ * архив и сколько техкарт останется без группы (см.
+ * `delete-category-chip-button.tsx`).
  *
- * Если шаг 3 заблокирован (категорию используют техкарты), а мы только
- * что её архивировали на шаге 2 — возвращаем статус обратно в
- * `ACTIVE`, чтобы категория не «исчезла» из активного фильтра, и
- * пробрасываем человекочитаемый текст 409. Так инвариант сохраняется:
- * категория либо удалена, либо осталась ровно в том статусе, что была.
+ * Если шаг 3 всё же заблокирован, а мы только что архивировали
+ * категорию на шаге 2 — возвращаем статус обратно в `ACTIVE`, чтобы
+ * категория не «исчезла» из активного фильтра. Так инвариант
+ * сохраняется: категория либо удалена, либо осталась ровно в том
+ * статусе, что была.
+ *
+ * ВОЗВРАЩАЕМ ошибку, а не бросаем: в production-сборке Next.js
+ * подменяет текст исключения из server action на «An error occurred in
+ * the Server Components render…» с одним лишь digest — менеджер вместо
+ * «к группе привязаны техкарты» видел бы техническую заглушку.
+ * Возвращённое значение не редактируется.
  */
 export async function deleteCategoryFromPatternsAction(
   categoryId: string,
-): Promise<void> {
+): Promise<ActionResult> {
   let wasActive = false;
   try {
     const before = await getPatternCategory(categoryId);
@@ -318,7 +325,7 @@ export async function deleteCategoryFromPatternsAction(
       wasActive = true;
       await archivePatternCategory(categoryId);
     }
-    await deletePatternCategory(categoryId, { archivePatterns: true });
+    await deletePatternCategory(categoryId, { cascade: true });
   } catch (e) {
     // Откатываем транзитный архив, чтобы активная категория не пропала.
     if (wasActive) {
@@ -331,42 +338,54 @@ export async function deleteCategoryFromPatternsAction(
     }
     // Только человекочитаемый текст из 409 (без технического кода) —
     // backend сам объясняет «почему нельзя и как удалить правильно».
-    throw new Error(
-      e instanceof ApiRequestError
-        ? e.message
-        : 'Не удалось удалить категорию. Попробуйте обновить страницу и повторить.',
-    );
+    return {
+      ok: false,
+      error:
+        e instanceof ApiRequestError
+          ? e.message
+          : 'Не удалось удалить категорию. Попробуйте обновить страницу и повторить.',
+    };
   }
   revalidatePath('/admin/patterns');
   // Каскад мог увезти карточки номенклатуры в архив — их страницы тоже
   // устарели (бейдж статуса, группа). Ревалидируем весь динамический
   // сегмент: id-шников заархивированных карточек action не знает.
   revalidatePath('/admin/patterns/[id]', 'page');
+  return { ok: true };
 }
 
 /**
  * Hard-delete архивной номенклатуры (`DELETE /api/patterns/:id/permanent`).
  * Зовётся из кнопки «Удалить навсегда» на карточке (видна только для
  * `status = ARCHIVED`). Backend блокирует удаление, если на лекало
- * ссылаются заказы (409 `PATTERN_DELETE_FORBIDDEN`) — пробрасываем
- * текст `Error`-ом, кнопка покажет его inline.
+ * ссылаются заказы (409 `PATTERN_DELETE_FORBIDDEN`) — текст возвращаем
+ * в `ActionResult`, кнопка покажет его inline.
+ *
+ * Почему не `throw`: см. комментарий к
+ * `deleteCategoryFromPatternsAction` — в prod-сборке Next.js прячет
+ * текст брошенного исключения за digest-заглушкой.
  *
  * Без `redirect`: карточки лекала после удаления нет, навигацию на
  * список делает client-кнопка (`router.push`) после успешного `await`.
  */
-export async function deletePatternAction(patternId: string): Promise<void> {
+export async function deletePatternAction(
+  patternId: string,
+): Promise<ActionResult> {
   try {
     await deletePattern(patternId);
   } catch (e) {
     // Только человекочитаемый текст из 409 (без технического кода) —
     // backend сам объясняет «почему нельзя и как удалить правильно».
-    throw new Error(
-      e instanceof ApiRequestError
-        ? e.message
-        : 'Не удалось удалить номенклатуру. Попробуйте обновить страницу и повторить.',
-    );
+    return {
+      ok: false,
+      error:
+        e instanceof ApiRequestError
+          ? e.message
+          : 'Не удалось удалить номенклатуру. Попробуйте обновить страницу и повторить.',
+    };
   }
   revalidatePath('/admin/patterns');
+  return { ok: true };
 }
 
 /**

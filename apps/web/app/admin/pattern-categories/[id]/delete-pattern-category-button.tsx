@@ -6,14 +6,16 @@
  * soft-архива (`status=ARCHIVED`).
  *
  * Видна ТОЛЬКО для архивной категории (`status === 'ARCHIVED'`).
- * Backend блокирует удаление, если на категорию ссылаются техкарты
- * (`PATTERN_CATEGORY_DELETE_FORBIDDEN`) — текст ошибки показываем
- * inline.
  *
- * Номенклатура группы удаление НЕ блокирует: она каскадом уезжает в
- * архив. Про это обязательно предупреждаем в `window.confirm` со
- * счётчиком карточек (`patternsCount`) — формулировка общая с чипом на
- * `/admin/patterns` (`buildCategoryDeleteConfirmText`).
+ * Содержимое группы удаление НЕ блокирует: номенклатура каскадом
+ * уезжает в архив, техкарты остаются без группы. Про это обязательно
+ * предупреждаем — и в `window.confirm`, и inline над кнопкой
+ * (формулировка общая с чипом на `/admin/patterns`, см.
+ * `buildCategoryDeleteConfirmText` / `describeCategoryContents`).
+ *
+ * Причину отказа backend отдаёт ЗНАЧЕНИЕМ (`ActionResult.error`), а не
+ * исключением: prod-сборка Next.js подменяет текст брошенной из server
+ * action ошибки на digest-заглушку. Показываем inline.
  *
  * После успеха карточки больше нет — уводим на список (`router.push`).
  */
@@ -22,7 +24,7 @@ import { useRouter } from 'next/navigation';
 import { useState, useTransition } from 'react';
 import {
   buildCategoryDeleteConfirmText,
-  pluralPatterns,
+  describeCategoryContents,
 } from '@/lib/pattern-category-delete-confirm';
 import { deletePatternCategoryPageAction } from './actions';
 
@@ -32,6 +34,8 @@ interface Props {
   status: string;
   /** Сколько номенклатуры уедет в архив вместе с группой. */
   patternsCount: number;
+  /** Сколько техкарт останется без группы. */
+  techCardsCount: number;
 }
 
 export function DeletePatternCategoryButton({
@@ -39,6 +43,7 @@ export function DeletePatternCategoryButton({
   categoryName,
   status,
   patternsCount,
+  techCardsCount,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -47,25 +52,29 @@ export function DeletePatternCategoryButton({
   // Удалять навсегда можно только архивную категорию.
   if (status !== 'ARCHIVED') return null;
 
+  const contents = describeCategoryContents(patternsCount, techCardsCount);
+
   const handleClick = () => {
     if (
       !window.confirm(
-        buildCategoryDeleteConfirmText(categoryName, patternsCount),
+        buildCategoryDeleteConfirmText(
+          categoryName,
+          patternsCount,
+          techCardsCount,
+        ),
       )
     ) {
       return;
     }
     setError(null);
     startTransition(async () => {
-      try {
-        await deletePatternCategoryPageAction(categoryId);
-        router.push('/admin/patterns');
-        router.refresh();
-      } catch (e) {
-        setError(
-          e instanceof Error ? e.message : 'Не удалось удалить категорию',
-        );
+      const res = await deletePatternCategoryPageAction(categoryId);
+      if (!res.ok) {
+        setError(res.error ?? 'Не удалось удалить категорию');
+        return;
       }
+      router.push('/admin/patterns');
+      router.refresh();
     });
   };
 
@@ -80,7 +89,7 @@ export function DeletePatternCategoryButton({
     >
       {/* Предупреждение видно ДО клика — на карточке есть место, в
           отличие от плотного ряда чипов на /admin/patterns. */}
-      {patternsCount > 0 && (
+      {contents && (
         <div className="admin-muted" style={{ fontSize: '0.85rem' }}>
           <AlertTriangle
             size={14}
@@ -88,9 +97,8 @@ export function DeletePatternCategoryButton({
             aria-hidden
             style={{ verticalAlign: '-2px', marginRight: 6 }}
           />
-          Внутри группы {patternsCount} {pluralPatterns(patternsCount)} — при
-          удалении группы вся она уйдёт в архив «Номенклатуры», а заданные по
-          параметрам группы площади и нормы пропадут.
+          При удалении группы: {contents}. Заданные по параметрам группы
+          площади и нормы пропадут.
         </div>
       )}
       <button

@@ -31,6 +31,7 @@ import {
   type ReplacePatternCategoryParametersDto,
   type UpdatePatternCategoryDto,
 } from '@sewing/shared/pattern-categories';
+import type { ActionResult } from '@/lib/action-result';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   archivePatternCategory,
@@ -239,35 +240,41 @@ export async function archivePatternCategoryPageAction(
 
 /**
  * Hard-delete архивной категории
- * (`DELETE /api/pattern-categories/:id/permanent?archivePatterns=1`).
- * Зовётся из кнопки «Удалить навсегда» на карточке (видна только для
- * `status = ARCHIVED`). Backend блокирует удаление, если на категорию
- * ссылаются техкарты (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`) —
- * пробрасываем текст `Error`-ом, кнопка покажет его inline.
+ * (`DELETE /api/pattern-categories/:id/permanent?cascade=1`). Зовётся
+ * из кнопки «Удалить навсегда» на карточке (видна только для
+ * `status = ARCHIVED`).
  *
- * Флаг `archivePatterns` — согласие на каскад: номенклатура группы
- * уезжает в архив (кнопка предупреждает об этом в `window.confirm` со
- * счётчиком карточек).
+ * Флаг `cascade` — согласие на каскад по содержимому: номенклатура
+ * группы уезжает в архив, техкарты остаются без группы (кнопка
+ * предупреждает об этом в `window.confirm` со счётчиками).
+ *
+ * Ошибку ВОЗВРАЩАЕМ, а не бросаем: в prod-сборке Next.js подменяет
+ * текст исключения из server action на digest-заглушку «An error
+ * occurred in the Server Components render…», и причина отказа до
+ * менеджера не доезжает (см. `@/lib/action-result`).
  *
  * Без `redirect`: карточки категории после удаления нет, навигацию на
  * список делает client-кнопка (`router.push`) после успешного `await`.
  */
 export async function deletePatternCategoryPageAction(
   id: string,
-): Promise<void> {
+): Promise<ActionResult> {
   try {
-    await deletePatternCategory(id, { archivePatterns: true });
+    await deletePatternCategory(id, { cascade: true });
   } catch (e) {
     // Только человекочитаемый текст из 409 (без технического кода) —
     // backend сам объясняет «почему нельзя и как удалить правильно».
-    throw new Error(
-      e instanceof ApiRequestError
-        ? e.message
-        : 'Не удалось удалить категорию. Попробуйте обновить страницу и повторить.',
-    );
+    return {
+      ok: false,
+      error:
+        e instanceof ApiRequestError
+          ? e.message
+          : 'Не удалось удалить категорию. Попробуйте обновить страницу и повторить.',
+    };
   }
   revalidatePath('/admin/patterns');
   // Каскад увёз номенклатуру группы в архив — карточки номенклатуры
   // тоже устарели (статус + пропавшая группа).
   revalidatePath('/admin/patterns/[id]', 'page');
+  return { ok: true };
 }

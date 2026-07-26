@@ -8,8 +8,10 @@
  * Видна ТОЛЬКО для архивной номенклатуры (`status === 'ARCHIVED'`) —
  * двойной барьер: сначала архивируем, потом, если точно не нужна,
  * удаляем навсегда. Backend дополнительно блокирует удаление, если на
- * лекало ссылаются заказы (`PATTERN_DELETE_FORBIDDEN`) — текст ошибки
- * показываем inline.
+ * лекало ссылаются заказы (`PATTERN_DELETE_FORBIDDEN`) — причина
+ * приходит ЗНАЧЕНИЕМ (`ActionResult.error`), показываем inline.
+ * Бросать её из server action нельзя: prod-сборка Next.js подменяет
+ * текст исключения на digest-заглушку.
  *
  * После успеха карточки больше нет — уводим на список (`router.push`).
  */
@@ -42,15 +44,13 @@ export function DeletePatternButton({ patternId, patternName, status }: Props) {
     }
     setError(null);
     startTransition(async () => {
-      try {
-        await deletePatternAction(patternId);
-        router.push('/admin/patterns');
-        router.refresh();
-      } catch (e) {
-        setError(
-          e instanceof Error ? e.message : 'Не удалось удалить номенклатуру',
-        );
+      const res = await deletePatternAction(patternId);
+      if (!res.ok) {
+        setError(res.error ?? 'Не удалось удалить номенклатуру');
+        return;
       }
+      router.push('/admin/patterns');
+      router.refresh();
     });
   };
 

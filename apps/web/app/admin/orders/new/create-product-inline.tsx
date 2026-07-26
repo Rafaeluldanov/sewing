@@ -1369,7 +1369,10 @@ export function CreateProductInline({
                 status: cat.status,
                 description: cat.description,
                 parametersCount: cat.parameters.length,
+                // Группа только что создана — ни номенклатуры, ни техкарт
+                // к ней ещё не привязано.
                 patternsCount: 0,
+                techCardsCount: 0,
                 createdAt: cat.createdAt,
                 updatedAt: cat.updatedAt,
               },

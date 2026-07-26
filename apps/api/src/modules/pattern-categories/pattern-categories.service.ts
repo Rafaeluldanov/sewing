@@ -79,7 +79,7 @@ export class PatternCategoriesService {
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
       include: {
         _count: {
-          select: { parameters: true, patterns: true },
+          select: { parameters: true, patterns: true, techCards: true },
         },
       },
     });
@@ -95,6 +95,7 @@ export class PatternCategoriesService {
       description: row.description,
       parametersCount: row._count.parameters,
       patternsCount: row._count.patterns,
+      techCardsCount: row._count.techCards,
       createdAt: row.createdAt.toISOString(),
       updatedAt: row.updatedAt.toISOString(),
     }));
@@ -108,7 +109,7 @@ export class PatternCategoriesService {
           orderBy: [{ sortOrder: 'asc' }, { label: 'asc' }],
         },
         _count: {
-          select: { parameters: true, patterns: true },
+          select: { parameters: true, patterns: true, techCards: true },
         },
       },
     });
@@ -366,24 +367,26 @@ export class PatternCategoriesService {
    * Hard-delete категории номенклатуры (этап «Удалить архивную запись
    * навсегда»).
    *
-   * Политика «блокировать, если используется»
-   * (`PatternCategoryDeleteForbiddenException`):
+   * Политика:
    *   1) удалять можно ТОЛЬКО архивную категорию (`status = ARCHIVED`);
-   *   2) блокируем, если на категорию ссылаются техкарты
-   *      (`TechCardTemplate.patternCategoryId`) — FK `SET NULL`, т.е. БД
-   *      молча обнулила бы привязку; мы этого не хотим;
-   *   3) номенклатура категории (`PatternItem.categoryId`) по умолчанию
-   *      тоже блокирует удаление, но вызывающий может явно попросить
-   *      каскад (`options.archivePatterns`) — тогда вся номенклатура
-   *      группы УХОДИТ В АРХИВ (`status = ARCHIVED`, как в
-   *      `PatternsService.archiveMany`), а не удаляется: её видно на
-   *      вкладке «Архив» и можно восстановить. Опция намеренно opt-in —
-   *      UI включает её только после предупреждения менеджеру, а слепой
-   *      вызов API остаётся неразрушающим.
+   *   2) содержимое группы удаление НЕ блокирует, если вызывающий явно
+   *      согласился на каскад (`options.cascade`):
+   *        - номенклатура (`PatternItem.categoryId`) УХОДИТ В АРХИВ
+   *          (`status = ARCHIVED`, как в `PatternsService.archiveMany`),
+   *          а не удаляется: её видно на вкладке «Архив» и можно вернуть;
+   *        - техкарты (`TechCardTemplate.patternCategoryId`)
+   *          ОТВЯЗЫВАЮТСЯ (`null`) и остаются целыми — привязка к группе
+   *          у них опциональна и влияет только на фильтр/подсказки;
+   *   3) без `cascade` непустая группа по-прежнему даёт 409
+   *      (`PatternCategoryDeleteForbiddenException`). Опция намеренно
+   *      opt-in: UI включает её только после предупреждения менеджеру со
+   *      счётчиками, а слепой вызов API остаётся неразрушающим.
    *
-   * Привязку `PatternItem.categoryId` обнуляет сама БД (`SET NULL`)
-   * при удалении строки категории — восстанавливать номенклатуру из
-   * архива менеджер будет уже без группы (группы больше нет).
+   * Привязку `PatternItem.categoryId` обнуляет сама БД (`SET NULL`) при
+   * удалении строки категории — восстанавливать номенклатуру из архива
+   * менеджер будет уже без группы (группы больше нет). Техкарты
+   * отвязываем ЯВНО, до удаления: полагаться на `SET NULL` можно, но
+   * тогда в аудите не осталось бы следа, каких техкарт это коснулось.
    *
    * Параметры категории (`PatternCategoryParameter`) уходят каскадом, а
    * вместе с ними — и зависящие от них нормы/значения лекал
@@ -394,7 +397,7 @@ export class PatternCategoriesService {
   async remove(
     id: string,
     actorEmployeeId?: string | null,
-    options?: { archivePatterns?: boolean },
+    options?: { cascade?: boolean },
   ): Promise<void> {
     const current = await this.prisma.patternCategory.findUnique({
       where: { id },
@@ -407,31 +410,38 @@ export class PatternCategoriesService {
       );
     }
 
-    // Техкарты проверяем ПЕРВЫМИ и всегда: их каскад не предусмотрен,
-    // и падать на них уже после архивации номенклатуры нельзя.
-    const techCardCount = await this.prisma.techCardTemplate.count({
-      where: { patternCategoryId: id },
-    });
-    if (techCardCount > 0) {
+    const [patterns, techCards] = await Promise.all([
+      this.prisma.patternItem.findMany({
+        where: { categoryId: id },
+        select: { id: true, status: true },
+      }),
+      this.prisma.techCardTemplate.findMany({
+        where: { patternCategoryId: id },
+        select: { id: true },
+      }),
+    ]);
+    if ((patterns.length > 0 || techCards.length > 0) && !options?.cascade) {
+      const parts: string[] = [];
+      if (patterns.length > 0) parts.push(`номенклатур: ${patterns.length}`);
+      if (techCards.length > 0) parts.push(`техкарт: ${techCards.length}`);
       throw new PatternCategoryDeleteForbiddenException(
-        `Эту категорию удалить навсегда нельзя: к ней привязаны техкарт: ${techCardCount}. Как удалить: откройте каждую такую техкарту и выберите ей другую категорию (или удалите её), после этого категория удалится. Если они нужны — оставьте категорию в архиве.`,
-      );
-    }
-
-    const patterns = await this.prisma.patternItem.findMany({
-      where: { categoryId: id },
-      select: { id: true, status: true },
-    });
-    if (patterns.length > 0 && !options?.archivePatterns) {
-      throw new PatternCategoryDeleteForbiddenException(
-        `Эту категорию удалить навсегда нельзя: к ней привязаны номенклатур: ${patterns.length}. Как удалить: подтвердите удаление вместе с номенклатурой (она уйдёт в архив) или откройте каждую карточку и выберите ей другую категорию. Если группа нужна — оставьте её в архиве.`,
+        `Эту категорию удалить навсегда нельзя: к ней привязаны ${parts.join(
+          ', ',
+        )}. Как удалить: подтвердите удаление вместе с содержимым (номенклатура уйдёт в архив, техкарты останутся без группы) или перевесьте их на другую группу вручную. Если группа нужна — оставьте её в архиве.`,
       );
     }
     const toArchive = patterns
       .filter((p) => p.status !== 'ARCHIVED')
       .map((p) => p.id);
+    const toDetach = techCards.map((t) => t.id);
 
     await this.prisma.$transaction(async (tx) => {
+      if (toDetach.length > 0) {
+        await tx.techCardTemplate.updateMany({
+          where: { id: { in: toDetach } },
+          data: { patternCategoryId: null },
+        });
+      }
       if (toArchive.length > 0) {
         await tx.patternItem.updateMany({
           where: { id: { in: toArchive } },
@@ -466,6 +476,7 @@ export class PatternCategoriesService {
             slug: current.slug,
             archivedPatternIds: toArchive,
             detachedPatternsCount: patterns.length,
+            detachedTechCardIds: toDetach,
           },
           employeeId: actorEmployeeId ?? null,
         },
@@ -474,7 +485,8 @@ export class PatternCategoriesService {
     });
 
     this.logger.log(
-      `event=pattern_category.delete id=${id} patterns=${patterns.length} archived=${toArchive.length}`,
+      `event=pattern_category.delete id=${id} patterns=${patterns.length} ` +
+        `archived=${toArchive.length} techCardsDetached=${toDetach.length}`,
     );
   }
 
@@ -626,7 +638,7 @@ export class PatternCategoriesService {
 type CategoryWithIncludes = Prisma.PatternCategoryGetPayload<{
   include: {
     parameters: true;
-    _count: { select: { parameters: true; patterns: true } };
+    _count: { select: { parameters: true; patterns: true; techCards: true } };
   };
 }>;
 
@@ -658,6 +670,7 @@ function toDetailDto(row: CategoryWithIncludes): PatternCategoryDto {
     description: row.description,
     parametersCount: row._count.parameters,
     patternsCount: row._count.patterns,
+    techCardsCount: row._count.techCards,
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     parameters,

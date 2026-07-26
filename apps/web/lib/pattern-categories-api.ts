@@ -76,20 +76,20 @@ export function archivePatternCategory(
 /**
  * Hard-delete архивной категории
  * (`DELETE /pattern-categories/:id/permanent`). Backend блокирует
- * удаление, если категория не `ARCHIVED` или на неё ссылаются
- * техкарты (409 `PATTERN_CATEGORY_DELETE_FORBIDDEN`). Ответ пустой.
+ * удаление, если категория не `ARCHIVED` (409
+ * `PATTERN_CATEGORY_DELETE_FORBIDDEN`). Ответ пустой.
  *
- * `archivePatterns` — явное согласие на каскад по номенклатуре группы:
- * карточки не удаляются, а уходят в архив (`?archivePatterns=1`). Без
- * флага backend отвечает 409, если в группе есть номенклатура, — так
- * случайный вызов API не может «увезти» карточки в архив мимо
+ * `cascade` — явное согласие на каскад по содержимому группы:
+ * номенклатура уходит в архив, техкарты остаются без группы
+ * (`?cascade=1`). Без флага backend отвечает 409, если группа не
+ * пустая, — так случайный вызов API не может «разобрать» группу мимо
  * предупреждения в UI.
  */
 export function deletePatternCategory(
   id: string,
-  options?: { archivePatterns?: boolean },
+  options?: { cascade?: boolean },
 ): Promise<void> {
-  const qs = options?.archivePatterns ? '?archivePatterns=1' : '';
+  const qs = options?.cascade ? '?cascade=1' : '';
   return apiFetch<void>(
     `/pattern-categories/${encodeURIComponent(id)}/permanent${qs}`,
     { method: 'DELETE' },

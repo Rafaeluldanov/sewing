@@ -11,14 +11,16 @@
  * редактирования — чтобы строка фильтра оставалась чистой.
  *
  * ПРЕДУПРЕЖДЕНИЕ ОБЯЗАТЕЛЬНО: удаление группы каскадом уводит ВСЮ её
- * номенклатуру в архив, поэтому в `window.confirm` показываем счётчик
- * карточек (`patternsCount` приходит из серверного списка категорий) —
- * см. `buildCategoryDeleteConfirmText`.
+ * номенклатуру в архив и отвязывает техкарты, поэтому в
+ * `window.confirm` показываем оба счётчика (приходят из серверного
+ * списка категорий) — см. `buildCategoryDeleteConfirmText`.
  *
- * Backend блокирует удаление, если категорию используют техкарты, —
- * текст 409 показываем через `window.alert` (inline-место в плотном
- * ряду чипов нет), сама категория при этом остаётся на месте (action
- * откатывает транзитный архив).
+ * Если backend всё же отказал (например, категория уже не архивная),
+ * текст причины приходит ЗНАЧЕНИЕМ (`ActionResult.error`), а не
+ * исключением: prod-сборка Next.js подменяет текст брошенной ошибки на
+ * digest-заглушку. Показываем через `window.alert` — inline-места в
+ * плотном ряду чипов нет; сама категория при этом остаётся на месте
+ * (action откатывает транзитный архив).
  */
 import { Trash2 } from 'lucide-react';
 import { useRouter } from 'next/navigation';
@@ -31,12 +33,15 @@ interface Props {
   categoryName: string;
   /** Сколько номенклатуры уедет в архив вместе с группой. */
   patternsCount: number;
+  /** Сколько техкарт останется без группы. */
+  techCardsCount: number;
 }
 
 export function DeleteCategoryChipButton({
   categoryId,
   categoryName,
   patternsCount,
+  techCardsCount,
 }: Props) {
   const router = useRouter();
   const [pending, startTransition] = useTransition();
@@ -44,20 +49,22 @@ export function DeleteCategoryChipButton({
   const handleClick = () => {
     if (
       !window.confirm(
-        buildCategoryDeleteConfirmText(categoryName, patternsCount),
+        buildCategoryDeleteConfirmText(
+          categoryName,
+          patternsCount,
+          techCardsCount,
+        ),
       )
     ) {
       return;
     }
     startTransition(async () => {
-      try {
-        await deleteCategoryFromPatternsAction(categoryId);
-        router.refresh();
-      } catch (e) {
-        window.alert(
-          e instanceof Error ? e.message : 'Не удалось удалить категорию',
-        );
+      const res = await deleteCategoryFromPatternsAction(categoryId);
+      if (!res.ok) {
+        window.alert(res.error ?? 'Не удалось удалить категорию');
+        return;
       }
+      router.refresh();
     });
   };
 
