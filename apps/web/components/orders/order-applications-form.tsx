@@ -2,9 +2,10 @@
 
 /**
  * `OrderApplicationsForm` — форма редактирования списка нанесений
- * в DRAFT-карточке заказа (`/admin/orders/[id]`).
+ * в карточке заказа (`/admin/orders/[id]`, вкладка «Производство»).
  *
- * Используется только когда заказ в `DRAFT` (см. backend-инвариант
+ * Используется, пока расчёт заказа не завершён — `DRAFT` /
+ * `CALCULATION` (см. `isOrderApplicationsEditable` и backend-инвариант
  * `ORDER_APPLICATION_ORDER_LOCKED`). Семантика — full replace списка
  * через `PUT /api/orders/:id/applications`.
  *

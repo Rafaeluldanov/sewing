@@ -1,6 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { OrderStatus, Prisma } from '@prisma/client';
 import {
+  isOrderApplicationsEditable,
   ORDER_APPLICATION_STAGE_LABELS,
   ORDER_APPLICATION_STATUS_LABELS,
   ORDER_APPLICATION_TYPE_LABELS,
@@ -13,6 +14,7 @@ import {
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { WorkshopNeedsService } from '../workshop-needs/workshop-needs.service.js';
 import { OrderApplicationOrderLockedException } from '../../common/errors.js';
 
 /**
@@ -28,10 +30,18 @@ import { OrderApplicationOrderLockedException } from '../../common/errors.js';
  *     одна строка `ORDER_APPLICATIONS_REPLACED` в `AuditLog`.
  *
  * Замок по статусу (`ORDER_APPLICATION_ORDER_LOCKED`):
- *   - менять можно только в `DRAFT`. На `CALCULATION` /
- *     `IN_PRODUCTION` / `DONE` / `CANCELLED` — 409 (см. ТЗ
- *     §«Правила»). Чтение разрешено всегда — UI карточки заказа
- *     показывает read-only список после расчёта.
+ *   - менять можно, ПОКА РАСЧЁТ НЕ ЗАВЕРШЁН: `DRAFT` и `CALCULATION`
+ *     (единый список — `ORDER_APPLICATION_EDITABLE_ORDER_STATUSES` в
+ *     shared). На `CALCULATION_DONE` / `SAMPLE_PRODUCTION` /
+ *     `IN_PRODUCTION` / `DONE` / `CANCELLED` — 409: там уже
+ *     зафиксированы себестоимость и потребность, правка идёт через
+ *     «Вернуть на пересчёт». Чтение разрешено всегда — UI показывает
+ *     read-only список.
+ *   - правка на `CALCULATION` пересобирает потребность цеха: строки
+ *     `WorkshopNeed` с `sourceType = ORDER_APPLICATION` считаются из
+ *     нанесений, поэтому после успешного replace сервис зовёт
+ *     `WorkshopNeedsService.calculateForOrder`. Ровно тот же приём,
+ *     что у расцветок (`resyncColorwayDerived`).
  *
  * Аудит:
  *   - `ORDER_APPLICATIONS_REPLACED` — событие на каждый успешный
@@ -42,9 +52,12 @@ import { OrderApplicationOrderLockedException } from '../../common/errors.js';
  */
 @Injectable()
 export class OrderApplicationsService {
+  private static readonly log = new Logger(OrderApplicationsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly workshopNeeds: WorkshopNeedsService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -99,6 +112,13 @@ export class OrderApplicationsService {
         // только на реально существующие в заказе размеры (защита от
         // рассинхрона UI и FK-ошибок).
         items: { select: { sizeId: true } },
+        // Фича «Варианты просчёта»: потребность пересчитываем только у
+        // варианта, ЯВНО отправленного на расчёт (тот же guard, что в
+        // `OrdersService.resyncColorwayDerived`).
+        calculations: {
+          where: { isActive: true },
+          select: { sentToCalculationAt: true },
+        },
       },
     });
     if (!order) {
@@ -107,7 +127,7 @@ export class OrderApplicationsService {
         message: 'Заказ не найден',
       });
     }
-    if (order.status !== OrderStatus.DRAFT) {
+    if (!isOrderApplicationsEditable(order.status)) {
       throw new OrderApplicationOrderLockedException();
     }
 
@@ -189,6 +209,37 @@ export class OrderApplicationsService {
         tx,
       );
     });
+
+    // Потребность цеха: строки `WorkshopNeed` с
+    // `sourceType = ORDER_APPLICATION` — производные от нанесений.
+    // В `DRAFT` их ещё нет (расчёт не запускали), а на `CALCULATION`
+    // они уже посчитаны и после правки устарели бы — пересобираем.
+    //
+    // Best-effort и осознанно: сами нанесения (источник истины) уже
+    // сохранены, а пересчёт может быть законно заблокирован — строки
+    // потребности уже проверены/заказаны
+    // (`WORKSHOP_NEEDS_ALREADY_REVIEWED`) или по ним есть складские
+    // движения (`WORKSHOP_NEEDS_HAVE_STOCK`). Ронять из-за этого
+    // сохранение нанесений нельзя — иначе «разблокировали правку», а
+    // она падает 409. Пишем warn: менеджер пересчитает потребность
+    // руками (кнопка «Пересчитать» умеет force).
+    const activeCalculation = order.calculations[0];
+    const activeVariantSent =
+      !activeCalculation || activeCalculation.sentToCalculationAt != null;
+    if (order.status === OrderStatus.CALCULATION && activeVariantSent) {
+      try {
+        await this.workshopNeeds.calculateForOrder(
+          orderId,
+          { force: false },
+          actorEmployeeId ?? null,
+        );
+      } catch (e) {
+        OrderApplicationsService.log.warn(
+          `event=order_applications.needs_recalc_skipped order=${orderId} ` +
+            `reason=${e instanceof Error ? e.message : String(e)}`,
+        );
+      }
+    }
 
     return this.listForOrder(orderId);
   }

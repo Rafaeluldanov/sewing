@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { OrderApplicationsController } from './order-applications.controller.js';
 import { OrderApplicationsService } from './order-applications.service.js';
+import { WorkshopNeedsModule } from '../workshop-needs/workshop-needs.module.js';
 
 /**
  * Модуль «Нанесение на заказе покупателя».
@@ -18,8 +19,16 @@ import { OrderApplicationsService } from './order-applications.service.js';
  * читать нанесения через типизированный API. На MVP оба используют
  * `PrismaService` напрямую — это симметрично остальным модулям и не
  * порождает циркулярных зависимостей.
+ *
+ * `WorkshopNeedsModule` импортируем ради обратного направления:
+ * правка нанесений на заказе в статусе «Расчёт» пересобирает строки
+ * `WorkshopNeed` с `sourceType = ORDER_APPLICATION` (см.
+ * `OrderApplicationsService.replaceForOrder`). Цикла нет —
+ * `WorkshopNeedsModule` ничего не импортирует и читает нанесения через
+ * `PrismaService`.
  */
 @Module({
+  imports: [WorkshopNeedsModule],
   controllers: [OrderApplicationsController],
   providers: [OrderApplicationsService],
   exports: [OrderApplicationsService],

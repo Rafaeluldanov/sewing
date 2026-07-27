@@ -301,10 +301,11 @@ export async function OrderProductionTab({
 
       {/*
         «Нанесение» — рядом с расцветками: это такой же атрибут плана
-        заказа. В DRAFT карточка рендерит форму (full-replace через
-        `PUT /orders/:id/applications`), дальше — read-only список со
-        статусом каждой строки (backend-инвариант
-        `ORDER_APPLICATION_ORDER_LOCKED`). Размеры для адресации
+        заказа, и окно правки у них общее — пока расчёт не завершён
+        (DRAFT/CALCULATION). В нём карточка рендерит форму (full-replace
+        через `PUT /orders/:id/applications`, backend сам пересобирает
+        потребность цеха), дальше — read-only список со статусом каждой
+        строки (`ORDER_APPLICATION_ORDER_LOCKED`). Размеры для адресации
         «на выбранные размеры» берём из планового среза заказа.
       */}
       <AdminCard className="admin-order-detail-card-compact">

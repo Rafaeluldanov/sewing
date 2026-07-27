@@ -203,8 +203,29 @@ describe('Backend module order-applications', () => {
     // адресацию по размерам (`OrderApplicationSize`).
     expect(src).toMatch(/orderApplication\.create\(/);
     expect(src).toMatch(/ORDER_APPLICATIONS_REPLACED/);
-    // ORDER_APPLICATION_ORDER_LOCKED при не-DRAFT.
+    // Окно правки — «пока расчёт не завершён» (DRAFT/CALCULATION):
+    // единый список статусов в shared, дальше 409.
+    expect(src).toMatch(/isOrderApplicationsEditable\(order\.status\)/);
     expect(src).toMatch(/OrderApplicationOrderLockedException/);
+    // Правка на CALCULATION пересобирает строки WorkshopNeed с
+    // sourceType = ORDER_APPLICATION — иначе потребность цеха осталась
+    // бы от старого списка нанесений.
+    expect(src).toMatch(/workshopNeeds\.calculateForOrder/);
+  });
+
+  test('shared держит окно правки нанесений одним списком статусов', () => {
+    const src = read('packages/shared/src/order-applications.ts');
+    expect(src).toMatch(/ORDER_APPLICATION_EDITABLE_ORDER_STATUSES/);
+    expect(src).toMatch(/export function isOrderApplicationsEditable/);
+    // Окно — до завершения расчёта: черновик + идущий расчёт.
+    const block = src.match(
+      /ORDER_APPLICATION_EDITABLE_ORDER_STATUSES = \[[\s\S]*?\]/,
+    );
+    expect(block).not.toBeNull();
+    expect(block![0]).toMatch(/'DRAFT'/);
+    expect(block![0]).toMatch(/'CALCULATION'/);
+    expect(block![0]).not.toMatch(/CALCULATION_DONE/);
+    expect(block![0]).not.toMatch(/IN_PRODUCTION/);
   });
 
   test('Module зарегистрирован в AppModule', () => {

@@ -11,9 +11,10 @@
  * `WorkshopNeedsCard` / `CutReadinessCard`).
  *
  * UX по статусу заказа:
- *   - `DRAFT`        — рендерим интерактивную форму редактирования
- *     (`OrderApplicationsForm`). Менеджер может добавить/удалить
- *     строки и сохранить.
+ *   - `DRAFT` / `CALCULATION` (пока расчёт не завершён) — рендерим
+ *     интерактивную форму редактирования (`OrderApplicationsForm`).
+ *     Менеджер может добавить/удалить строки и сохранить; на
+ *     `CALCULATION` backend сам пересобирает потребность цеха.
  *   - все остальные  — read-only список карточек нанесения.
  *
  * Backend / DTO / API не меняем — это чистая presentation-обёртка.
@@ -21,6 +22,7 @@
 import { Stamp } from 'lucide-react';
 import {
   describeApplicationScope,
+  isOrderApplicationsEditable,
   type OrderApplicationDto,
 } from '@sewing/shared/order-applications';
 import type { OrderStatus } from '@sewing/shared/orders';
@@ -39,7 +41,8 @@ interface Props {
   orderId: string;
   /**
    * Статус родительского заказа управляет режимом блока:
-   *   - `DRAFT`         — форма редактирования (full-replace через PUT).
+   *   - `DRAFT` / `CALCULATION` — форма редактирования (full-replace
+   *     через PUT), см. `isOrderApplicationsEditable`.
    *   - всё остальное   — read-only список (см. backend-инвариант
    *     `ORDER_APPLICATION_ORDER_LOCKED`).
    */
@@ -84,7 +87,9 @@ export async function OrderApplicationsCard({
         : 'Не удалось загрузить нанесения';
   }
 
-  const isDraft = orderStatus === 'DRAFT';
+  // Окно правки — «пока расчёт не завершён» (DRAFT / CALCULATION),
+  // единый список статусов живёт в shared рядом с backend-гейтом.
+  const editable = isOrderApplicationsEditable(orderStatus);
 
   return (
     <div className="admin-order-item-card__section admin-order-applications">
@@ -111,7 +116,7 @@ export async function OrderApplicationsCard({
         </div>
       )}
 
-      {isDraft ? (
+      {editable ? (
         <OrderApplicationsForm
           orderId={orderId}
           initial={applications}
@@ -134,7 +139,7 @@ function ReadOnlyList({
       <AdminEmptyState
         icon={<Stamp size={26} strokeWidth={1.6} aria-hidden />}
         title="Нанесений нет"
-        hint="Менеджер не добавил нанесения, пока заказ был в черновике."
+        hint="Менеджер не добавил нанесения, пока расчёт заказа не был завершён."
       />
     );
   }

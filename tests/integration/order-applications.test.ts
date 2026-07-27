@@ -18,7 +18,9 @@
  *   7. WorkshopNeed: после `start-calculation` создаётся строка
  *      с `sourceType = ORDER_APPLICATION` и
  *      `materialRole = APPLICATION`;
- *   8. После CALCULATION PUT /applications отбивается 409
+ *   8. Окно правки «пока расчёт не завершён»: на CALCULATION PUT
+ *      /applications ещё проходит (и пересобирает потребность цеха), а
+ *      после `complete-calculation` отбивается 409
  *      `ORDER_APPLICATION_ORDER_LOCKED`;
  *   9. RBAC: рабочая роль (QC) → 403 на PUT.
  */
@@ -390,10 +392,10 @@ describeWithDb('integration — order applications', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // 7. После CALCULATION PUT /applications → 409 ORDER_APPLICATION_ORDER_LOCKED
+  // 7. Окно правки: CALCULATION — можно, CALCULATION_DONE — 409
   // ---------------------------------------------------------------------------
 
-  test('После CALCULATION PUT /applications → 409 ORDER_APPLICATION_ORDER_LOCKED', async () => {
+  test('На CALCULATION PUT /applications проходит и пересобирает потребность', async () => {
     const orderId = await prepareReadyOrder(t, seed, cookies.manager);
     await request(t.app.getHttpServer())
       .put(`/api/orders/${orderId}/applications`)
@@ -407,6 +409,59 @@ describeWithDb('integration — order applications', () => {
       .post(`/api/orders/${orderId}/start-calculation`)
       .set('Cookie', cookies.manager)
       .send({})
+      .expect(201);
+
+    // Пока расчёт идёт — правка разрешена (менеджер добавляет принт,
+    // о котором вспомнили уже после отправки заказа на расчёт).
+    const r = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({
+        applications: [{ type: 'DTF', stage: 'CUT_PARTS', placement: 'грудь' }],
+      });
+    expect(r.status).toBe(200);
+    expect(r.body).toHaveLength(1);
+    expect(r.body[0].type).toBe('DTF');
+
+    // Потребность цеха пересобрана под новый список нанесений:
+    // строка APPLICATION одна и она про DTF, а не про старое «Другое».
+    const needs = await t.prisma.workshopNeed.findMany({
+      where: { orderId, sourceType: 'ORDER_APPLICATION' },
+    });
+    expect(needs).toHaveLength(1);
+    expect(needs[0].description).toMatch(/DTF/);
+  });
+
+  test('После завершения расчёта PUT /applications → 409 ORDER_APPLICATION_ORDER_LOCKED', async () => {
+    const orderId = await prepareReadyOrder(t, seed, cookies.manager);
+    await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/applications`)
+      .set('Cookie', cookies.manager)
+      .send({
+        applications: [{ type: 'OTHER', stage: 'CUT_PARTS', placement: 'спина' }],
+      })
+      .expect(200);
+
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/start-calculation`)
+      .set('Cookie', cookies.manager)
+      .send({})
+      .expect(201);
+    // Завершить расчёт можно только когда у КАЖДОЙ строки потребности
+    // есть закупочное количество, цена и валюта — иначе 422
+    // `ORDER_CALCULATION_INCOMPLETE` (см. `order-cost-estimates.test.ts`).
+    const needs = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    for (const n of needs) {
+      await request(t.app.getHttpServer())
+        .patch(`/api/workshop-needs/${n.id}`)
+        .set('Cookie', cookies.manager)
+        .send({ purchaseQty: '5', quotedPrice: '10', quotedCurrency: 'RUB' })
+        .expect(200);
+    }
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', cookies.manager)
+      .send({ usdRateRub: '95' })
       .expect(201);
 
     const r = await request(t.app.getHttpServer())

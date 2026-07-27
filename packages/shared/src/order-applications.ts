@@ -353,6 +353,44 @@ export interface OrderApplicationDto {
   updatedAt: string;
 }
 
+// ---------------------------------------------------------------------------
+// Окно редактирования
+// ---------------------------------------------------------------------------
+
+/**
+ * Статусы заказа, в которых список нанесений можно менять, —
+ * ЕДИНЫЙ источник правды для backend-гейта
+ * (`OrderApplicationsService.replaceForOrder` → 409
+ * `ORDER_APPLICATION_ORDER_LOCKED`) и для UI (карточка «Нанесение» в
+ * форме правки заказа и во вкладке «Производство»).
+ *
+ * Окно — «пока расчёт не завершён»: черновик и идущий расчёт. На
+ * `CALCULATION` правка нанесений тянет за собой пересчёт потребности
+ * цеха (строки `WorkshopNeed` с `sourceType = ORDER_APPLICATION`),
+ * поэтому сервис после сохранения сам зовёт пересчёт — ровно то же
+ * окно и та же механика, что у расцветок (`ORDER_COLORWAYS_LOCKED` +
+ * `resyncColorwayDerived`).
+ *
+ * С `CALCULATION_DONE` и дальше себестоимость и потребность
+ * зафиксированы — список read-only, менять через «Вернуть на
+ * пересчёт».
+ */
+export const ORDER_APPLICATION_EDITABLE_ORDER_STATUSES = [
+  'DRAFT',
+  'CALCULATION',
+] as const;
+
+/**
+ * Можно ли править нанесения на заказе в этом статусе. Строка, а не
+ * `OrderStatus`, — чтобы не тянуть сюда `orders.ts` (он сам импортирует
+ * этот модуль ради `OrderDetailDto.applications`).
+ */
+export function isOrderApplicationsEditable(status: string): boolean {
+  return (ORDER_APPLICATION_EDITABLE_ORDER_STATUSES as readonly string[]).includes(
+    status,
+  );
+}
+
 /**
  * Человекочитаемое описание «области применения» нанесения — для
  * read-only карточки заказа, описания потребности цеха и т.п.

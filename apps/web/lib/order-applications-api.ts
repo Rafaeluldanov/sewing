@@ -31,10 +31,12 @@ export function getOrderApplications(
 
 /**
  * Полная замена списка нанесений по заказу. Backend в одной
- * транзакции удаляет существующие и создаёт переданные. Менять
- * можно только в `DRAFT` (см.
- * `OrderApplicationsService.replaceForOrder`); на других статусах
- * приходит 409 `ORDER_APPLICATION_ORDER_LOCKED`.
+ * транзакции удаляет существующие и создаёт переданные. Менять можно,
+ * пока расчёт не завершён — `DRAFT` / `CALCULATION` (см.
+ * `isOrderApplicationsEditable`,
+ * `OrderApplicationsService.replaceForOrder`); дальше приходит 409
+ * `ORDER_APPLICATION_ORDER_LOCKED`. На `CALCULATION` backend после
+ * сохранения сам пересобирает потребность цеха.
  */
 export function replaceOrderApplications(
   orderId: string,

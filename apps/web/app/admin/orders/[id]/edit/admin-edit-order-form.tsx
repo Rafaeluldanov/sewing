@@ -70,7 +70,10 @@ import {
   MONEY_CURRENCY_LABELS,
   type MoneyCurrency,
 } from '@sewing/shared/money';
-import type { OrderApplicationDto } from '@sewing/shared/order-applications';
+import {
+  isOrderApplicationsEditable,
+  type OrderApplicationDto,
+} from '@sewing/shared/order-applications';
 import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
@@ -172,8 +175,9 @@ interface Props {
   initialColorways: ColorwayDraft[];
   /**
    * Нанесения заказа (из `getOrderApplications`) для карточки
-   * «Нанесение». Правятся только в DRAFT (backend-инвариант
-   * `ORDER_APPLICATION_ORDER_LOCKED`), вне его карточка read-only.
+   * «Нанесение». Правятся, пока расчёт не завершён — DRAFT /
+   * CALCULATION (backend-инвариант
+   * `ORDER_APPLICATION_ORDER_LOCKED`), дальше карточка read-only.
    */
   initialApplications: OrderApplicationDto[];
 }
@@ -241,6 +245,10 @@ export function AdminEditOrderForm({
   // На CALCULATION_DONE — read-only, правка через «Вернуть на пересчёт».
   const colorwaysEditable =
     order.status === 'DRAFT' || order.status === 'CALCULATION';
+  // Нанесения правятся в том же окне «пока расчёт не завершён»
+  // (DRAFT/CALCULATION) — список статусов держит shared рядом с
+  // backend-гейтом `ORDER_APPLICATION_ORDER_LOCKED`.
+  const applicationsEditable = isOrderApplicationsEditable(order.status);
 
   const [color, setColor] = useState<string>(order.color ?? '');
 
@@ -1458,9 +1466,10 @@ export function AdminEditOrderForm({
               созданный через «Создать изделие», сразу уезжает на эту
               страницу, и другого места ввести нанесение у менеджера нет.
 
-              Правка разрешена только в DRAFT — backend отбивает
-              `PUT /orders/:id/applications` вне черновика
-              (`ORDER_APPLICATION_ORDER_LOCKED`). Вне DRAFT редактор
+              Правка разрешена, пока расчёт не завершён (DRAFT /
+              CALCULATION — `isOrderApplicationsEditable`, тот же список
+              статусов, что у backend-гейта
+              `ORDER_APPLICATION_ORDER_LOCKED`). Вне окна редактор
               оборачиваем `<fieldset disabled>`: он гасит контролы
               нативно, вместе со скрытым `applicationsJson`, поэтому
               server action его не увидит и PUT не пошлёт (тот же приём,
@@ -1476,12 +1485,12 @@ export function AdminEditOrderForm({
               className="admin-muted"
               style={{ marginTop: 0, fontSize: '0.85rem' }}
             >
-              {isDraft
+              {applicationsEditable
                 ? 'Параметры нанесения хранятся в заказе и сохраняются вместе с формой. На крое блокируется раскладка, пока параметры не заполнены.'
-                : 'Нанесение правится только в черновике — после перевода в расчёт список заморожен.'}
+                : 'Нанесение правится, пока расчёт не завершён. Сейчас список заморожен — чтобы изменить, верните заказ на пересчёт.'}
             </p>
             <fieldset
-              disabled={!isDraft}
+              disabled={!applicationsEditable}
               style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}
             >
               <OrderApplicationsEditor
