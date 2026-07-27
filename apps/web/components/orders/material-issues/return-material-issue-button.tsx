@@ -36,10 +36,8 @@ import type {
   MaterialIssueAggregateReturnStatus,
   MaterialIssueLineDto,
 } from '@sewing/shared/material-issues';
-import {
-  initialMaterialIssueFormState,
-  returnMaterialIssueAction,
-} from '@/app/admin/orders/[id]/material-issues-actions';
+import { returnMaterialIssueAction } from '@/app/admin/orders/[id]/material-issues-actions';
+import { initialMaterialIssueFormState } from '@/app/admin/orders/[id]/material-issues-form-state';
 
 interface Props {
   orderId: string;

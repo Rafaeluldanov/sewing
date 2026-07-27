@@ -30,18 +30,9 @@ import {
   createOrderFinishedGoodsShipment,
   type CreateFinishedGoodsShipmentDto,
 } from '@/lib/finished-goods-api';
-
-export interface FinishedGoodsShipmentFormState {
-  ok?: boolean;
-  error?: string;
-  successMessage?: string;
-  /** Id только что созданного документа — UI может показать ссылку. */
-  createdId?: string;
-  createdNumber?: string;
-}
-
-export const initialFinishedGoodsShipmentFormState: FinishedGoodsShipmentFormState =
-  {};
+// Тип и initial state живут в отдельном модуле: `'use server'` файл
+// может экспортировать только async-функции.
+import type { FinishedGoodsShipmentFormState } from './finished-goods-shipments-form-state';
 
 function explainApiError(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {

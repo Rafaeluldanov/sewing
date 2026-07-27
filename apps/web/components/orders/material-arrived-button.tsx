@@ -31,10 +31,8 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { CheckCircle, PackageOpen, XCircle } from 'lucide-react';
 import { useState } from 'react';
-import {
-  initialOrderMaterialArrivalsFormState,
-  markOrderMaterialArrivedAction,
-} from '@/app/admin/orders/[id]/material-arrivals-actions';
+import { markOrderMaterialArrivedAction } from '@/app/admin/orders/[id]/material-arrivals-actions';
+import { initialOrderMaterialArrivalsFormState } from '@/app/admin/orders/[id]/material-arrivals-form-state';
 
 interface Props {
   orderId: string;

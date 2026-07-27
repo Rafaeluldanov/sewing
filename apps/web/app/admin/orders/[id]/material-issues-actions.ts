@@ -44,21 +44,9 @@ import {
   postMaterialIssue,
   returnMaterialIssue,
 } from '@/lib/material-issues-api';
-
-export interface MaterialIssueFormState {
-  ok?: boolean;
-  error?: string;
-  fieldErrors?: Record<string, string>;
-  successMessage?: string;
-  /**
-   * Id только что созданного документа — удобно для UI, чтобы
-   * автоматически раскрыть его preview-строку или сразу показать
-   * подтверждение с номером.
-   */
-  createdId?: string;
-}
-
-export const initialMaterialIssueFormState: MaterialIssueFormState = {};
+// Тип и initial state живут в отдельном модуле: `'use server'` файл
+// может экспортировать только async-функции.
+import type { MaterialIssueFormState } from './material-issues-form-state';
 
 function explainApiError(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {

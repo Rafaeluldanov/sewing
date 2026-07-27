@@ -3,6 +3,9 @@
 import { revalidatePath } from 'next/cache';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { updateSalaryEntry } from '@/lib/salary-api';
+// Тип и initial state живут в отдельном модуле: `'use server'` файл
+// может экспортировать только async-функции.
+import type { UpdateSalaryEntryState } from './form-state';
 
 /**
  * Server action ручной правки окладной записи (см. `docs/api.md §10a`,
@@ -12,15 +15,6 @@ import { updateSalaryEntry } from '@/lib/salary-api';
  * Передаём `amount`/`managerComment`/`reset` — pristine, без подмены
  * `employeeId/date/source` (этих полей нет в DTO).
  */
-export interface UpdateSalaryEntryState {
-  ok?: boolean;
-  successMessage?: string;
-  error?: string;
-  errorRequestId?: string;
-}
-
-export const initialUpdateSalaryEntryState: UpdateSalaryEntryState = {};
-
 export async function updateSalaryEntryAction(
   entryId: string,
   _prev: UpdateSalaryEntryState,

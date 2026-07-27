@@ -16,10 +16,8 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { Undo2, XCircle } from 'lucide-react';
 import { useState } from 'react';
-import {
-  cancelMaterialIssueAction,
-  initialMaterialIssueFormState,
-} from '@/app/admin/orders/[id]/material-issues-actions';
+import { cancelMaterialIssueAction } from '@/app/admin/orders/[id]/material-issues-actions';
+import { initialMaterialIssueFormState } from '@/app/admin/orders/[id]/material-issues-form-state';
 
 interface Props {
   orderId: string;

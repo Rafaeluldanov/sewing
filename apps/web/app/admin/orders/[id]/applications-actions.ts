@@ -42,15 +42,9 @@ import {
 } from '@sewing/shared/order-applications';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { replaceOrderApplications } from '@/lib/order-applications-api';
-
-export interface OrderApplicationsFormState {
-  ok?: boolean;
-  error?: string;
-  fieldErrors?: Record<string, string>;
-  successMessage?: string;
-}
-
-export const initialOrderApplicationsFormState: OrderApplicationsFormState = {};
+// Тип и initial state живут в отдельном модуле: `'use server'` файл
+// может экспортировать только async-функции.
+import type { OrderApplicationsFormState } from './applications-form-state';
 
 function parseApplicationsJson(form: FormData): unknown {
   const raw = form.get('applicationsJson');

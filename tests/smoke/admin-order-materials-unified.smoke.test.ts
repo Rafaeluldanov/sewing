@@ -509,7 +509,15 @@ describe('Existing actions preserved', () => {
     expect(src).toMatch(
       /export\s+async\s+function\s+revokeOrderMaterialArrivalOverrideAction/,
     );
-    expect(src).toMatch(/initialOrderMaterialArrivalsFormState/);
+    // `'use server'` файл экспортирует ТОЛЬКО async-функции — иначе
+    // Next.js роняет рендер страницы целиком («A "use server" file can
+    // only export async functions, found object»). Initial state живёт
+    // в соседнем модуле без директивы.
+    expect(src).not.toMatch(/^export\s+(const|let|var|class|enum)\s/m);
+    const formState = read(
+      'apps/web/app/admin/orders/[id]/material-arrivals-form-state.ts',
+    );
+    expect(formState).toMatch(/initialOrderMaterialArrivalsFormState/);
   });
 
   test('MaterialArrivedButton всё ещё зовёт markOrderMaterialArrivedAction', () => {

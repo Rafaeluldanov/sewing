@@ -31,10 +31,8 @@ import { useFormState, useFormStatus } from 'react-dom';
 import { CheckCircle, Truck, X, XCircle } from 'lucide-react';
 import type { FinishedGoodsBalanceListItem } from '@/lib/finished-goods-api';
 import { ModalPortal } from '@/components/modal-portal';
-import {
-  createFinishedGoodsShipmentAction,
-  initialFinishedGoodsShipmentFormState,
-} from '@/app/admin/orders/[id]/finished-goods-shipments-actions';
+import { createFinishedGoodsShipmentAction } from '@/app/admin/orders/[id]/finished-goods-shipments-actions';
+import { initialFinishedGoodsShipmentFormState } from '@/app/admin/orders/[id]/finished-goods-shipments-form-state';
 
 interface Props {
   orderId: string;

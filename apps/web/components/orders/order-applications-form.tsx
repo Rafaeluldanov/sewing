@@ -38,11 +38,11 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { CheckCircle, Save, XCircle } from 'lucide-react';
 import type { OrderApplicationDto } from '@sewing/shared/order-applications';
+import { saveOrderApplicationsAction } from '@/app/admin/orders/[id]/applications-actions';
 import {
-  saveOrderApplicationsAction,
   initialOrderApplicationsFormState,
   type OrderApplicationsFormState,
-} from '@/app/admin/orders/[id]/applications-actions';
+} from '@/app/admin/orders/[id]/applications-form-state';
 import {
   OrderApplicationsEditor,
   applicationRowFromDto,

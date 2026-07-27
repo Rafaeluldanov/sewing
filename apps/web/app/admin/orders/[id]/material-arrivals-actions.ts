@@ -33,16 +33,9 @@ import {
   markOrderMaterialArrived,
   revokeOrderMaterialArrivalOverride,
 } from '@/lib/order-material-arrivals-api';
-
-export interface OrderMaterialArrivalsFormState {
-  ok?: boolean;
-  error?: string;
-  fieldErrors?: Record<string, string>;
-  successMessage?: string;
-}
-
-export const initialOrderMaterialArrivalsFormState: OrderMaterialArrivalsFormState =
-  {};
+// Тип и initial state живут в отдельном модуле: `'use server'` файл
+// может экспортировать только async-функции.
+import type { OrderMaterialArrivalsFormState } from './material-arrivals-form-state';
 
 function explainApiError(e: unknown, fallback: string): string {
   if (e instanceof ApiRequestError) {

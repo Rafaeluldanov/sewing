@@ -18,10 +18,8 @@
 import { useEffect, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { Ban, CheckCircle, XCircle } from 'lucide-react';
-import {
-  cancelFinishedGoodsShipmentAction,
-  initialFinishedGoodsShipmentFormState,
-} from '@/app/admin/orders/[id]/finished-goods-shipments-actions';
+import { cancelFinishedGoodsShipmentAction } from '@/app/admin/orders/[id]/finished-goods-shipments-actions';
+import { initialFinishedGoodsShipmentFormState } from '@/app/admin/orders/[id]/finished-goods-shipments-form-state';
 
 interface Props {
   orderId: string;

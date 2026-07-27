@@ -48,10 +48,8 @@ import {
 } from 'lucide-react';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 import type { WorkshopNeedListItemDto } from '@sewing/shared/workshop-needs';
-import {
-  createMaterialIssueAction,
-  initialMaterialIssueFormState,
-} from '@/app/admin/orders/[id]/material-issues-actions';
+import { createMaterialIssueAction } from '@/app/admin/orders/[id]/material-issues-actions';
+import { initialMaterialIssueFormState } from '@/app/admin/orders/[id]/material-issues-form-state';
 
 interface Props {
   orderId: string;

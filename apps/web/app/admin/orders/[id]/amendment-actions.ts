@@ -19,10 +19,6 @@ import {
   ApplyQuantityAmendmentSchema,
   ApplyRouteAmendmentSchema,
   ApplySizeAmendmentSchema,
-  type OperationAmendmentResultDto,
-  type QuantityAmendmentResultDto,
-  type RouteAmendmentResultDto,
-  type SizeAmendmentResultDto,
 } from '@sewing/shared';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
@@ -31,18 +27,14 @@ import {
   applyRouteAmendment,
   applySizeAmendment,
 } from '@/lib/amendments-api';
-
-export interface QuantityAmendmentFormState {
-  ok: boolean;
-  error?: string | null;
-  result?: QuantityAmendmentResultDto | null;
-  /** Меняется на каждый успешный submit — триггер эффектов на клиенте. */
-  doneToken?: string;
-}
-
-export const initialQuantityAmendmentFormState: QuantityAmendmentFormState = {
-  ok: false,
-};
+// Типы и initial state живут в отдельном модуле: `'use server'` файл
+// может экспортировать только async-функции.
+import type {
+  OperationAmendmentFormState,
+  QuantityAmendmentFormState,
+  RouteAmendmentFormState,
+  SizeAmendmentFormState,
+} from './amendment-form-state';
 
 export async function applyQuantityAmendmentAction(
   orderId: string,
@@ -82,17 +74,6 @@ export async function applyQuantityAmendmentAction(
   }
 }
 
-export interface SizeAmendmentFormState {
-  ok: boolean;
-  error?: string | null;
-  result?: SizeAmendmentResultDto | null;
-  doneToken?: string;
-}
-
-export const initialSizeAmendmentFormState: SizeAmendmentFormState = {
-  ok: false,
-};
-
 export async function applySizeAmendmentAction(
   orderId: string,
   _prev: SizeAmendmentFormState,
@@ -130,17 +111,6 @@ export async function applySizeAmendmentAction(
     };
   }
 }
-
-export interface OperationAmendmentFormState {
-  ok: boolean;
-  error?: string | null;
-  result?: OperationAmendmentResultDto | null;
-  doneToken?: string;
-}
-
-export const initialOperationAmendmentFormState: OperationAmendmentFormState = {
-  ok: false,
-};
 
 export async function applyOperationAmendmentAction(
   orderId: string,
@@ -185,17 +155,6 @@ export async function applyOperationAmendmentAction(
  * `payload` — весь целевой маршрут (`ApplyRouteAmendmentSchema`), дельту
  * считает бэкенд: он же стережёт замороженный префикс до фронта.
  */
-export interface RouteAmendmentFormState {
-  ok: boolean;
-  error?: string | null;
-  result?: RouteAmendmentResultDto | null;
-  doneToken?: string;
-}
-
-export const initialRouteAmendmentFormState: RouteAmendmentFormState = {
-  ok: false,
-};
-
 export async function applyRouteAmendmentAction(
   orderId: string,
   _prev: RouteAmendmentFormState,

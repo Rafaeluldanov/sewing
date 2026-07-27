@@ -12,10 +12,8 @@
  */
 import { useFormState, useFormStatus } from 'react-dom';
 import { CheckCircle, XCircle } from 'lucide-react';
-import {
-  initialMaterialIssueFormState,
-  postMaterialIssueAction,
-} from '@/app/admin/orders/[id]/material-issues-actions';
+import { postMaterialIssueAction } from '@/app/admin/orders/[id]/material-issues-actions';
+import { initialMaterialIssueFormState } from '@/app/admin/orders/[id]/material-issues-form-state';
 
 interface Props {
   orderId: string;

@@ -18,10 +18,8 @@
 import { useFormState, useFormStatus } from 'react-dom';
 import { Undo2, XCircle } from 'lucide-react';
 import { useState } from 'react';
-import {
-  initialOrderMaterialArrivalsFormState,
-  revokeOrderMaterialArrivalOverrideAction,
-} from '@/app/admin/orders/[id]/material-arrivals-actions';
+import { revokeOrderMaterialArrivalOverrideAction } from '@/app/admin/orders/[id]/material-arrivals-actions';
+import { initialOrderMaterialArrivalsFormState } from '@/app/admin/orders/[id]/material-arrivals-form-state';
 
 interface Props {
   orderId: string;

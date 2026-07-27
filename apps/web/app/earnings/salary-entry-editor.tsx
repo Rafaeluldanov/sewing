@@ -3,11 +3,11 @@
 import { useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import type { SalaryEntryDto } from '@sewing/shared/salary';
+import { updateSalaryEntryAction } from './actions';
 import {
   initialUpdateSalaryEntryState,
-  updateSalaryEntryAction,
   type UpdateSalaryEntryState,
-} from './actions';
+} from './form-state';
 
 /**
  * Inline-редактор окладной записи (см. `docs/screens.md §11a`).

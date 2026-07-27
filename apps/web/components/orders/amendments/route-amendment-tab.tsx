@@ -48,10 +48,8 @@ import {
   OPERATION_CATEGORY_ORDER,
 } from '@sewing/shared/operations';
 import { routeStepIcon, routeStepTone } from '@/components/admin/admin-route-steps';
-import {
-  applyRouteAmendmentAction,
-  initialRouteAmendmentFormState,
-} from '@/app/admin/orders/[id]/amendment-actions';
+import { applyRouteAmendmentAction } from '@/app/admin/orders/[id]/amendment-actions';
+import { initialRouteAmendmentFormState } from '@/app/admin/orders/[id]/amendment-form-state';
 
 interface Props {
   orderId: string;

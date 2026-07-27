@@ -24,10 +24,8 @@ import {
   XCircle,
 } from 'lucide-react';
 import type { SizeAmendmentStateDto } from '@sewing/shared';
-import {
-  applySizeAmendmentAction,
-  initialSizeAmendmentFormState,
-} from '@/app/admin/orders/[id]/amendment-actions';
+import { applySizeAmendmentAction } from '@/app/admin/orders/[id]/amendment-actions';
+import { initialSizeAmendmentFormState } from '@/app/admin/orders/[id]/amendment-form-state';
 
 interface Props {
   orderId: string;

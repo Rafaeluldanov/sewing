@@ -15,10 +15,8 @@ import { useEffect, useMemo, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { AlertTriangle, CheckCircle, Info, XCircle } from 'lucide-react';
 import type { QuantityAmendmentStateDto } from '@sewing/shared';
-import {
-  applyQuantityAmendmentAction,
-  initialQuantityAmendmentFormState,
-} from '@/app/admin/orders/[id]/amendment-actions';
+import { applyQuantityAmendmentAction } from '@/app/admin/orders/[id]/amendment-actions';
+import { initialQuantityAmendmentFormState } from '@/app/admin/orders/[id]/amendment-form-state';
 
 interface Props {
   orderId: string;
