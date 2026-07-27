@@ -21,8 +21,21 @@ import {
   type TechCardParameterValueSource,
 } from '@sewing/shared/tech-card-parameters';
 import type { MaterialCharacteristics } from '@sewing/shared/material-characteristics';
+import {
+  getMaterialCharacteristic,
+  getMaterialSubtype,
+  isKnownMaterialSubtype,
+  MATERIAL_CHARACTERISTICS,
+} from '@sewing/shared/material-characteristics';
+import {
+  derivePatternNormPerUnit,
+  describePatternNormSource,
+  matchPatternNormSources,
+} from '@sewing/shared/pattern-norms';
+import type { PatternNormSource } from '@sewing/shared/pattern-norms';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { collectPatternNormSources } from '../orders/pattern-norm-sources.js';
 import { OrdersService } from '../orders/orders.service.js';
 
 /**
@@ -87,6 +100,15 @@ export class OrderTechCardService {
         color: true,
         techCardId: true,
         techCard: { select: { name: true } },
+        // Поразмерный план нужен, чтобы показать, ИЗ ЧЕГО сложилась норма
+        // из номенклатуры (погонные метры / площади задаются по размерам).
+        items: {
+          select: {
+            sizeId: true,
+            qtyPlan: true,
+            size: { select: { code: true, sortOrder: true } },
+          },
+        },
         variants: {
           orderBy: { ordinal: 'asc' },
           select: {
@@ -94,11 +116,53 @@ export class OrderTechCardService {
             color: true,
             techCardId: true,
             techCard: { select: { name: true } },
+            sizes: {
+              select: {
+                sizeId: true,
+                qtyPlan: true,
+                size: { select: { code: true, sortOrder: true } },
+              },
+            },
+          },
+        },
+        patternItem: {
+          select: {
+            parameterNorms: {
+              select: {
+                id: true,
+                roleKey: true,
+                labelSnapshot: true,
+                inputTypeSnapshot: true,
+                unit: true,
+                qtyPerItem: true,
+              },
+            },
+            sizeParameterValues: {
+              select: {
+                categoryParameterId: true,
+                roleKey: true,
+                labelSnapshot: true,
+                inputTypeSnapshot: true,
+                unit: true,
+                sizeId: true,
+                value: true,
+              },
+            },
+            materialAreas: {
+              select: { materialRole: true, sizeId: true, areaM2: true },
+            },
           },
         },
       },
     });
     if (!order) throw new NotFoundException({ code: 'ORDER_NOT_FOUND' });
+
+    const normSources = collectPatternNormSources(order.patternItem);
+    const sizeLabelById = new Map<string, string>();
+    for (const it of order.items) sizeLabelById.set(it.sizeId, it.size.code);
+    for (const v of order.variants) {
+      for (const sz of v.sizes) sizeLabelById.set(sz.sizeId, sz.size.code);
+    }
 
     const [params, requirements] = await Promise.all([
       this.prisma.orderTechCardParameter.findMany({
@@ -122,6 +186,9 @@ export class OrderTechCardService {
           selectedColorText: true,
           isManual: true,
           parameterBindings: true,
+          subtypeKey: true,
+          characteristics: true,
+          qtySource: true,
         },
       }),
     ]);
@@ -156,6 +223,46 @@ export class OrderTechCardService {
       const gk = vk(g.orderVariantId);
       const rows = requirements.filter((r) => vk(r.orderVariantId) === gk);
 
+      // План по размерам ЭТОЙ группы — им подписывается норма из номенклатуры.
+      // ≥2 расцветок → план расцветки, иначе order-level позиции заказа.
+      const variantRow =
+        g.orderVariantId != null
+          ? order.variants.find((v) => v.id === g.orderVariantId)
+          : (order.variants[0] ?? null);
+      const sizePlan =
+        order.variants.length >= 2 && variantRow
+          ? variantRow.sizes.map((sz) => ({
+              sizeId: sz.sizeId,
+              qtyPlan: sz.qtyPlan,
+              sortOrder: sz.size.sortOrder,
+            }))
+          : order.items.map((it) => ({
+              sizeId: it.sizeId,
+              qtyPlan: it.qtyPlan,
+              sortOrder: it.size.sortOrder,
+            }));
+      const sortOrderBySize = new Map(
+        sizePlan.map((p) => [p.sizeId, p.sortOrder] as const),
+      );
+      // Источник нормы ищем ТОЛЬКО для строк, которые её оттуда и получили:
+      // иначе подпись обещала бы связь, которой в снимке нет.
+      const nomenclatureRows = rows.filter(
+        (r) => r.qtySource === 'NOMENCLATURE',
+      );
+      const normByLine =
+        nomenclatureRows.length > 0
+          ? matchPatternNormSources(
+              nomenclatureRows.map((r) => ({
+                key: r.id,
+                materialRole: r.materialRole,
+                name: r.name,
+                fabricType: r.fabricType,
+                unit: r.unit,
+              })),
+              normSources,
+            )
+          : new Map<string, PatternNormSource>();
+
       // Кто какую ячейку уже занял — чтобы UI не предлагал привязать второй
       // параметр в ту же ячейку (два писателя = молчаливый баг).
       const targets: OrderTechCardTargetOptionDto[] = [];
@@ -179,24 +286,51 @@ export class OrderTechCardService {
         .filter((p) => vk(p.orderVariantId) === gk)
         .map((p) => this.toParamDto(p, rows));
 
-      const lines: OrderTechCardLineDto[] = rows.map((r) => ({
-        id: r.id,
-        name: r.name,
-        unit: r.unit,
-        qtyPerUnit: r.qtyPerUnit.toString(),
-        totalQty: r.totalQty.toString(),
-        materialRole: r.materialRole,
-        fabricType: r.fabricType,
-        densityGsm: r.densityGsm,
-        colorText: r.selectedColorText ?? r.resolvedColorText ?? null,
-        isManual: r.isManual,
-        // Ячейки под параметром: их UI правит через значение параметра,
-        // прямую правку backend отбивает (см. `updateLine`).
-        boundFields: Object.keys(
-          ((r.parameterBindings ?? null) as TechCardParameterBindings | null) ??
-            {},
-        ),
-      }));
+      const lines: OrderTechCardLineDto[] = rows.map((r) => {
+        const normSource = normByLine.get(r.id) ?? null;
+        const derived = normSource
+          ? derivePatternNormPerUnit(normSource, sizePlan)
+          : null;
+        return {
+          id: r.id,
+          name: r.name,
+          unit: r.unit,
+          qtyPerUnit: r.qtyPerUnit.toString(),
+          totalQty: r.totalQty.toString(),
+          materialRole: r.materialRole,
+          fabricType: r.fabricType,
+          densityGsm: r.densityGsm,
+          colorText: r.selectedColorText ?? r.resolvedColorText ?? null,
+          isManual: r.isManual,
+          subtypeKey: r.subtypeKey,
+          characteristics:
+            (r.characteristics as MaterialCharacteristics | null) ?? null,
+          qtySource:
+            (r.qtySource as OrderTechCardLineDto['qtySource']) ?? null,
+          qtySourceLabel: normSource
+            ? describePatternNormSource(normSource)
+            : null,
+          // Разбивка только у поразмерных норм — плоскую расписывать нечем.
+          qtyBySize: (derived?.bySize ?? [])
+            .map((b) => ({
+              sizeId: b.sizeId,
+              sizeCode: sizeLabelById.get(b.sizeId) ?? '—',
+              value: String(b.value),
+              qtyPlan: b.qtyPlan,
+            }))
+            .sort(
+              (a, b) =>
+                (sortOrderBySize.get(a.sizeId) ?? 0) -
+                (sortOrderBySize.get(b.sizeId) ?? 0),
+            ),
+          // Ячейки под параметром: их UI правит через значение параметра,
+          // прямую правку backend отбивает (см. `updateLine`).
+          boundFields: Object.keys(
+            ((r.parameterBindings ??
+              null) as TechCardParameterBindings | null) ?? {},
+          ),
+        };
+      });
 
       return {
         orderVariantId: g.orderVariantId,
@@ -517,6 +651,9 @@ export class OrderTechCardService {
         fixedColorText: colorText,
         resolvedColorText: colorText,
         requiresColorSelection: false,
+        // Норму ввели прямо здесь — в номенклатуре этой строки нет, брать
+        // число неоткуда, пересчёт её не переписывает.
+        qtySource: 'ORDER',
       },
     });
 
@@ -579,6 +716,8 @@ export class OrderTechCardService {
         hardwareMaterialText: true,
         characteristics: true,
         parameterBindings: true,
+        subtypeKey: true,
+        qtySource: true,
       },
     });
     if (!row) {
@@ -614,10 +753,99 @@ export class OrderTechCardService {
     const chars: MaterialCharacteristics = {
       ...((row.characteristics as MaterialCharacteristics | null) ?? {}),
     };
+    // Legacy-колонки правим синхронно с JSON: у характеристик density /
+    // rollWidth / size / material есть колонка, и очистка ТОЛЬКО в JSON
+    // тихо откатилась бы обратно при merge в `normalizeMaterialLineCells`.
+    const legacy = {
+      densityGsm: row.densityGsm,
+      plannedWidthCm: row.plannedWidthCm,
+      hardwareSizeText: row.hardwareSizeText,
+      hardwareMaterialText: row.hardwareMaterialText,
+    };
+    const clearLegacyFor = (charKey: string): void => {
+      const def = getMaterialCharacteristic(charKey);
+      if (!def?.legacyColumn) return;
+      if (def.legacyColumn === 'densityGsm') legacy.densityGsm = null;
+      if (def.legacyColumn === 'plannedWidthCm') legacy.plannedWidthCm = null;
+      if (def.legacyColumn === 'hardwareSizeText') legacy.hardwareSizeText = null;
+      if (def.legacyColumn === 'hardwareMaterialText') {
+        legacy.hardwareMaterialText = null;
+      }
+    };
+
     if (dto.densityGsm !== undefined) {
-      if (dto.densityGsm === null) delete chars.density;
-      else chars.density = dto.densityGsm;
+      if (dto.densityGsm === null) {
+        delete chars.density;
+        legacy.densityGsm = null;
+      } else {
+        chars.density = dto.densityGsm;
+        legacy.densityGsm = dto.densityGsm;
+      }
     }
+
+    // Подтип задаёт НАБОР характеристик: сменили подтип — значения, которых у
+    // нового набора нет, уносим. Иначе в строке остался бы «размер молнии» на
+    // кулирке — невидимый мусор, который поедет в описание потребности.
+    let nextSubtypeKey = row.subtypeKey;
+    if (dto.subtypeKey !== undefined) {
+      const raw = dto.subtypeKey?.trim() || null;
+      if (raw !== null && !isKnownMaterialSubtype(raw)) {
+        throw new ConflictException({
+          statusCode: 409,
+          code: 'ORDER_TECH_CARD_UNKNOWN_SUBTYPE',
+          message: `Неизвестный подтип материала «${raw}».`,
+        });
+      }
+      if (raw !== row.subtypeKey) {
+        const allowed = new Set(
+          raw ? (getMaterialSubtype(raw)?.characteristics ?? []).map((c) => c.key) : [],
+        );
+        for (const key of Object.keys(chars)) {
+          if (allowed.has(key)) continue;
+          delete chars[key];
+          clearLegacyFor(key);
+        }
+      }
+      nextSubtypeKey = raw;
+    }
+
+    // Характеристики: пришедший ключ пишем, `null`/пусто — очищаем (вместе с
+    // legacy-колонкой). Ячейка под слот-параметром правке не подлежит.
+    const charKeys = new Set(MATERIAL_CHARACTERISTICS.map((c) => c.key));
+    if (dto.characteristics !== undefined) {
+      for (const [key, raw] of Object.entries(dto.characteristics)) {
+        if (!charKeys.has(key)) {
+          throw new ConflictException({
+            statusCode: 409,
+            code: 'ORDER_TECH_CARD_UNKNOWN_CHARACTERISTIC',
+            message: `Неизвестная характеристика «${key}».`,
+          });
+        }
+        const def = getMaterialCharacteristic(key);
+        assertCellFree(def?.label ?? key, `char:${key}`);
+        const isEmpty =
+          raw === null || (typeof raw === 'string' && raw.trim() === '');
+        if (isEmpty) {
+          delete chars[key];
+          clearLegacyFor(key);
+          continue;
+        }
+        if (def?.valueType === 'number') {
+          const num = Number(String(raw).replace(',', '.'));
+          if (!Number.isFinite(num) || num <= 0) {
+            throw new ConflictException({
+              statusCode: 409,
+              code: 'ORDER_TECH_CARD_CHARACTERISTIC_INVALID',
+              message: `«${def.label}» — положительное число.`,
+            });
+          }
+          chars[key] = num;
+        } else {
+          chars[key] = String(raw).trim();
+        }
+      }
+    }
+
     const cells = normalizeMaterialLineCells({
       name: dto.name ?? row.name,
       unit: dto.unit ?? row.unit,
@@ -625,10 +853,10 @@ export class OrderTechCardService {
       note: row.note,
       materialRole: row.materialRole,
       fabricType: row.fabricType,
-      densityGsm: dto.densityGsm !== undefined ? dto.densityGsm : row.densityGsm,
-      plannedWidthCm: row.plannedWidthCm,
-      hardwareSizeText: row.hardwareSizeText,
-      hardwareMaterialText: row.hardwareMaterialText,
+      densityGsm: legacy.densityGsm,
+      plannedWidthCm: legacy.plannedWidthCm,
+      hardwareSizeText: legacy.hardwareSizeText,
+      hardwareMaterialText: legacy.hardwareMaterialText,
       characteristics: Object.keys(chars).length > 0 ? chars : null,
     });
 
@@ -656,6 +884,13 @@ export class OrderTechCardService {
               requiresColorSelection: false,
             };
 
+    // Норму правили руками → она главнее номенклатуры и переживает пересчёт
+    // (`rebuildMaterialRequirementsSnapshot` освежает из номенклатуры только
+    // строки с `qtySource = NOMENCLATURE`). Сбрасывается «Обновить нормы».
+    const qtyEdited =
+      dto.qtyPerUnit !== undefined &&
+      cells.qtyPerUnit !== row.qtyPerUnit.toString();
+
     await this.prisma.orderMaterialRequirement.update({
       where: { id: row.id },
       data: {
@@ -669,6 +904,8 @@ export class OrderTechCardService {
         characteristics:
           (cells.characteristics as Prisma.InputJsonValue | null) ??
           Prisma.DbNull,
+        subtypeKey: nextSubtypeKey,
+        ...(qtyEdited ? { qtySource: 'ORDER' } : {}),
         ...colorData,
       },
     });
@@ -689,6 +926,23 @@ export class OrderTechCardService {
     }
     if (dto.densityGsm !== undefined && cells.densityGsm !== row.densityGsm) {
       changed.push(`плотность ${row.densityGsm ?? '—'} → ${cells.densityGsm ?? '—'}`);
+    }
+    if (dto.subtypeKey !== undefined && nextSubtypeKey !== row.subtypeKey) {
+      const label = nextSubtypeKey
+        ? (getMaterialSubtype(nextSubtypeKey)?.label ?? nextSubtypeKey)
+        : '—';
+      changed.push(`подтип → ${label}`);
+    }
+    if (dto.characteristics !== undefined) {
+      const before =
+        (row.characteristics as MaterialCharacteristics | null) ?? {};
+      for (const key of Object.keys(dto.characteristics)) {
+        const was = before[key];
+        const now = (cells.characteristics ?? {})[key];
+        if (String(was ?? '') === String(now ?? '')) continue;
+        const def = getMaterialCharacteristic(key);
+        changed.push(`${def?.label ?? key} ${was ?? '—'} → ${now ?? '—'}`);
+      }
     }
     if (trimmedColor !== undefined) {
       changed.push(`цвет → ${trimmedColor ?? '—'}`);
@@ -791,6 +1045,38 @@ export class OrderTechCardService {
             : 'Заказ завершён — спецификацию техкарты менять нельзя.',
       });
     }
+  }
+
+  /**
+   * «Обновить нормы из номенклатуры» — снять с шаблонных строк отметку
+   * «правлено в заказе» и перечитать числа из карточки номенклатуры.
+   *
+   * Действие мягкое (в отличие от «Обновить из шаблона»): структура строк,
+   * параметры, характеристики и цвета остаются, меняются только нормы. Ручные
+   * строки не трогаем никогда — их число ввели вручную, в номенклатуре его
+   * нет и брать неоткуда.
+   *
+   * Само число подставляет пересборка снимка: она же понижает источник до
+   * `TEMPLATE`, если параметра в номенклатуре не нашлось (строка честно
+   * скажет «из шаблона», а не будет обещать связь).
+   */
+  async resetNormsFromNomenclature(
+    orderId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<OrderTechCardParametersDto> {
+    await this.assertEditableOrder(orderId);
+    const { count } = await this.prisma.orderMaterialRequirement.updateMany({
+      where: { orderId, isManual: false },
+      data: { qtySource: 'NOMENCLATURE' },
+    });
+    await this.orders.resyncTechCardDerived(orderId, actorEmployeeId, {
+      summary: `Нормы перечитаны из номенклатуры (строк: ${count})`,
+      details: { lines: count },
+    });
+    this.logger.log(
+      `event=order_tech_card.norms_reloaded order=${orderId} lines=${count}`,
+    );
+    return this.listForOrder(orderId);
   }
 
   /**

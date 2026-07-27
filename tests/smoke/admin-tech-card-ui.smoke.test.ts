@@ -327,9 +327,24 @@ describe('tech-card UI — «Подтянуть из номенклатуры»'
   test('action группирует sizeParameterValues по categoryParameterId с проверкой value > 0', () => {
     // Группа создаётся один раз на categoryParameterId; критерий
     // прохождения — наличие хотя бы одного value > 0 по любому
-    // активному размеру (hasNonZero).
+    // активному размеру. Раньше признак назывался `hasNonZero`; теперь
+    // группа копит сами значения (`values`) — из них считается норма,
+    // а пустой массив и означает «тянуть нечего».
     expect(actions).toMatch(/linearGroups/);
-    expect(actions).toMatch(/hasNonZero/);
+    expect(actions).toMatch(/values\.length === 0/);
+  });
+
+  test('ЧИСЛА ПЕРЕНОСЯТСЯ: шаблон строки несёт норму (иначе в заказ уедет «1»)', () => {
+    // Раньше pull приносил только структуру, а норму ставил заглушкой
+    // `qtyPerUnit: '1'` — эта единица доезжала до заказа, где менеджер
+    // видел «норму 1» при том, что закупка считалась по номенклатуре.
+    expect(actions).toMatch(/qtyPerUnit:\s*string \| null/);
+    expect(actions).toMatch(/qtyPerUnit:\s*String\(numeric\)/);
+    // Погонные метры: в шаблон едет среднее по заполненным размерам.
+    expect(actions).toMatch(/qtyPerUnit:\s*String\(Math\.round\(avg/);
+    // Форма больше не ставит жёсткую единицу, а читает норму источника.
+    expect(src).not.toMatch(/qtyPerUnit:\s*'1',/);
+    expect(src).toMatch(/line\.qtyPerUnit/);
   });
 
   test('action возвращает шаблон с roleKey / labelSnapshot / unit / sourceType / sourceId', () => {

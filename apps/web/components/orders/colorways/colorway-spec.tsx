@@ -23,10 +23,11 @@
  * поднимает его в блок через `onData` — все карточки видят одно состояние.
  */
 
-import { useState, useTransition } from 'react';
+import { Fragment, useState, useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import {
   resolveVariantParamsGroup,
+  type OrderTechCardLineDto,
   type OrderTechCardParametersDto,
   type OrderTechCardVariantParamsDto,
 } from '@sewing/shared/order-tech-cards';
@@ -35,6 +36,11 @@ import {
   TECH_CARD_PARAMETER_INPUT_TYPES,
   TECH_CARD_PARAMETER_INPUT_TYPE_LABELS,
 } from '@sewing/shared/tech-card-parameters';
+import {
+  getMaterialCharacteristic,
+  getMaterialSubtype,
+  getMaterialSubtypesByGroup,
+} from '@sewing/shared/material-characteristics';
 
 import {
   applyTechCardParamToAllAction,
@@ -43,6 +49,7 @@ import {
   deleteTechCardLineAction,
   deleteTechCardParamAction,
   reloadTechCardFromTemplateAction,
+  reloadTechCardNormsAction,
   saveTechCardAsTemplateAction,
   setTechCardParamValueAction,
   updateTechCardLineAction,
@@ -59,6 +66,42 @@ interface Props {
 }
 
 const emptyLine = { name: '', unit: '', qtyPerUnit: '', colorText: '' };
+
+/**
+ * Подпись источника нормы. Норма живёт в номенклатуре, поэтому строка обязана
+ * говорить, откуда взято число: иначе менеджер не отличит «подтянулось» от
+ * «стоит заглушка» — ровно та жалоба, из-за которой источник и появился.
+ */
+const QTY_SOURCE_LABEL: Record<string, string> = {
+  NOMENCLATURE: 'из номенклатуры',
+  TEMPLATE: 'из шаблона',
+  ORDER: 'правлено в заказе',
+};
+
+/**
+ * Характеристики, которые показываем в панели строки.
+ *
+ * Набор задаёт ПОДТИП (`getMaterialSubtype`) — тот же источник, что в
+ * редакторе шаблона, чтобы «параметры» в заказе и в справочнике значили одно
+ * и то же. Подтип не выбран (старые строки) — показываем то, что уже
+ * заполнено, плюс базовую пару для роли, иначе панель была бы пустой и
+ * править было бы нечего.
+ */
+function characteristicKeysForLine(line: OrderTechCardLineDto): string[] {
+  const subtype = line.subtypeKey ? getMaterialSubtype(line.subtypeKey) : null;
+  const keys = subtype ? subtype.characteristics.map((c) => c.key) : [];
+  if (keys.length === 0) {
+    keys.push(
+      ...(line.materialRole === 'PACKAGING'
+        ? ['size', 'material', 'type', 'length']
+        : ['density', 'rollWidth']),
+    );
+  }
+  for (const k of Object.keys(line.characteristics ?? {})) {
+    if (!keys.includes(k)) keys.push(k);
+  }
+  return keys;
+}
 
 const emptyAdHoc = {
   label: '',
@@ -83,6 +126,8 @@ export function ColorwaySpec({
   const [saveAs, setSaveAs] = useState<{ code: string; name: string } | null>(
     null,
   );
+  /** Строка, у которой раскрыта панель параметров (одна за раз). */
+  const [openLine, setOpenLine] = useState<string | null>(null);
   const router = useRouter();
 
   const group: OrderTechCardVariantParamsDto | undefined =
@@ -150,7 +195,10 @@ export function ColorwaySpec({
 
   function saveLine(
     lineId: string,
-    patch: Record<string, string | number | null>,
+    patch: Record<
+      string,
+      string | number | null | Record<string, string | number | null>
+    >,
   ): void {
     startTransition(async () =>
       apply(await updateTechCardLineAction(orderId, lineId, patch)),
@@ -231,6 +279,7 @@ export function ColorwaySpec({
           <thead>
             <tr>
               <th>Материал</th>
+              <th>Параметры</th>
               <th className="num">Норма/шт</th>
               <th>Ед.</th>
               <th>Цвет</th>
@@ -241,7 +290,7 @@ export function ColorwaySpec({
           <tbody>
             {group.lines.length === 0 && (
               <tr>
-                <td colSpan={6} className="cws-muted">
+                <td colSpan={7} className="cws-muted">
                   Пока пусто: выберите техкарту расцветки — материалы придут из
                   шаблона, — или добавьте материал вручную.
                 </td>
@@ -256,76 +305,113 @@ export function ColorwaySpec({
               const qtyBound = l.boundFields.includes('core:qtyPerUnit');
               const boundTitle =
                 'Ячейка привязана к параметру — правьте значение параметра';
+              const open = openLine === l.id;
+              const chips = characteristicKeysForLine(l)
+                .map((key) => ({
+                  key,
+                  def: getMaterialCharacteristic(key),
+                  value: (l.characteristics ?? {})[key],
+                }))
+                .filter((c) => c.value !== undefined && c.value !== '');
+              const subtypeLabel = l.subtypeKey
+                ? (getMaterialSubtype(l.subtypeKey)?.label ?? l.subtypeKey)
+                : null;
               return (
-                <tr
-                  key={`${l.id}:${l.name}:${l.qtyPerUnit}:${l.unit}:${l.colorText ?? ''}:${l.densityGsm ?? ''}`}
+                <Fragment
+                  key={`${l.id}:${l.name}:${l.qtyPerUnit}:${l.unit}:${l.colorText ?? ''}:${l.densityGsm ?? ''}:${l.subtypeKey ?? ''}:${JSON.stringify(l.characteristics ?? {})}`}
                 >
+                <tr>
                   <td>
-                    <input
-                      className="cws-cell cws-cell--name"
-                      defaultValue={l.name}
-                      disabled={ro || pending || nameBound}
-                      title={nameBound ? boundTitle : undefined}
-                      onBlur={(e) => {
-                        const next = e.target.value.trim();
-                        if (next && next !== l.name) saveLine(l.id, { name: next });
-                      }}
-                    />
+                    <div className="cws-nameline">
+                      <button
+                        type="button"
+                        className={`cws-caret${open ? ' is-open' : ''}`}
+                        aria-expanded={open}
+                        aria-label={`Параметры материала «${l.name}»`}
+                        onClick={() => setOpenLine(open ? null : l.id)}
+                      >
+                        {open ? '⌄' : '›'}
+                      </button>
+                      <input
+                        className="cws-cell cws-cell--name"
+                        defaultValue={l.name}
+                        disabled={ro || pending || nameBound}
+                        title={nameBound ? boundTitle : undefined}
+                        onBlur={(e) => {
+                          const next = e.target.value.trim();
+                          if (next && next !== l.name) saveLine(l.id, { name: next });
+                        }}
+                      />
+                    </div>
                     <span className="cws-flags">
                       {l.isManual && (
                         <span className="cws-pill">добавлена в заказе</span>
                       )}
-                      {(dParam || l.densityGsm != null) && (
+                      {dParam && (
                         <span className="cws-density">
-                          {dParam ? `${dParam.label}:` : 'плотность:'}
-                          {dParam ? (
-                            <>
-                              {paramEditor(dParam, true)}
-                              {!ro && params.variants.length > 1 && (
-                                <button
-                                  type="button"
-                                  className="cws-linkbtn"
-                                  disabled={pending}
-                                  title="Применить это значение ко всем расцветкам (разовое копирование)"
-                                  onClick={() =>
-                                    startTransition(async () =>
-                                      apply(
-                                        await applyTechCardParamToAllAction(
-                                          orderId,
-                                          dParam.id,
-                                        ),
-                                      ),
-                                    )
-                                  }
-                                >
-                                  → все расцветки
-                                </button>
-                              )}
-                            </>
-                          ) : (
-                            <input
-                              className="cws-cell cws-cell--sm"
-                              type="number"
-                              min={1}
-                              defaultValue={l.densityGsm ?? ''}
-                              disabled={ro || pending}
-                              onBlur={(e) => {
-                                const raw = e.target.value.trim();
-                                const next = raw === '' ? null : Math.trunc(+raw);
-                                if (next === l.densityGsm) return;
-                                if (next !== null && (!Number.isFinite(next) || next <= 0)) return;
-                                saveLine(l.id, { densityGsm: next });
-                              }}
-                            />
+                          {`${dParam.label}:`}
+                          {paramEditor(dParam, true)}
+                          {!ro && params.variants.length > 1 && (
+                            <button
+                              type="button"
+                              className="cws-linkbtn"
+                              disabled={pending}
+                              title="Применить это значение ко всем расцветкам (разовое копирование)"
+                              onClick={() =>
+                                startTransition(async () =>
+                                  apply(
+                                    await applyTechCardParamToAllAction(
+                                      orderId,
+                                      dParam.id,
+                                    ),
+                                  ),
+                                )
+                              }
+                            >
+                              → все расцветки
+                            </button>
                           )}
-                          {dParam?.unit ? (
+                          {dParam.unit && (
                             <span className="cws-muted">{dParam.unit}</span>
-                          ) : (
-                            !dParam && <span className="cws-muted">г/м²</span>
                           )}
                         </span>
                       )}
                     </span>
+                  </td>
+                  {/* Параметры материала: чипами — то, что заполнено. Вход в
+                      правку БЕЗУСЛОВНЫЙ (пустая строка показывает «+ параметр»),
+                      иначе у строки без характеристик их негде было бы завести. */}
+                  <td>
+                    <button
+                      type="button"
+                      className="cws-chips"
+                      onClick={() => setOpenLine(open ? null : l.id)}
+                      title="Открыть параметры материала"
+                    >
+                      {subtypeLabel && (
+                        <span className="cws-chip cws-chip--subtype">
+                          {subtypeLabel}
+                        </span>
+                      )}
+                      {chips.map((c) => (
+                        <span
+                          key={c.key}
+                          className={`cws-chip${
+                            l.boundFields.includes(`char:${c.key}`)
+                              ? ' cws-chip--slot'
+                              : ''
+                          }`}
+                        >
+                          {c.def?.label ?? c.key} <b>{String(c.value)}</b>
+                          {c.def?.unit ? ` ${c.def.unit}` : ''}
+                        </span>
+                      ))}
+                      {chips.length === 0 && !subtypeLabel && (
+                        <span className="cws-chip cws-chip--empty">
+                          + параметр
+                        </span>
+                      )}
+                    </button>
                   </td>
                   <td className="num">
                     <input
@@ -341,6 +427,22 @@ export function ColorwaySpec({
                         saveLine(l.id, { qtyPerUnit: next });
                       }}
                     />
+                    {/* Источник нормы: без него не отличить «подтянулось из
+                        номенклатуры» от «стоит заглушка шаблона». */}
+                    {l.qtySource && (
+                      <span
+                        className={`cws-src cws-src--${l.qtySource.toLowerCase()}`}
+                        title={
+                          l.qtySourceLabel
+                            ? `Источник: ${l.qtySourceLabel}`
+                            : l.qtySource === 'ORDER'
+                              ? 'Норма правлена в заказе — пересчёт её не переписывает'
+                              : 'Норма из шаблона техкарты'
+                        }
+                      >
+                        {QTY_SOURCE_LABEL[l.qtySource] ?? l.qtySource}
+                      </span>
+                    )}
                   </td>
                   <td>
                     <input
@@ -388,6 +490,19 @@ export function ColorwaySpec({
                     )}
                   </td>
                 </tr>
+                {open && (
+                  <tr className="cws-exp">
+                    <td colSpan={7}>
+                      <LineParams
+                        line={l}
+                        readOnly={ro}
+                        pending={pending}
+                        onSave={(patch) => saveLine(l.id, patch)}
+                      />
+                    </td>
+                  </tr>
+                )}
+                </Fragment>
               );
             })}
           </tbody>
@@ -576,6 +691,29 @@ export function ColorwaySpec({
             />
           )}
 
+          {/* «Обновить нормы из номенклатуры» — мягкое действие, доступно в
+              любом окне правки: структуру строк не трогает, только числа. */}
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            disabled={pending}
+            title="Перечитать нормы расхода из карточки номенклатуры (правки норм в заказе сбросятся)"
+            onClick={() => {
+              const ok = window.confirm(
+                'Обновить нормы из номенклатуры?\n\n' +
+                  'Нормы шаблонных строк будут перечитаны из карточки ' +
+                  'номенклатуры. Ваши правки норм в заказе сбросятся. ' +
+                  'Структура строк, параметры и характеристики останутся.',
+              );
+              if (!ok) return;
+              startTransition(async () =>
+                apply(await reloadTechCardNormsAction(orderId)),
+              );
+            }}
+          >
+            Обновить нормы из номенклатуры
+          </button>
+
           {/* «Обновить из шаблона» — только в окне планирования. Действие
               пересоздаёт строки снимка (новые id), а после расчёта на них
               уже ссылаются строки потребностей (`WorkshopNeed.sourceId`) —
@@ -662,6 +800,140 @@ export function ColorwaySpec({
             </div>
           )}
         </div>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Панель параметров строки материала: подтип + характеристики + расшифровка
+ * нормы, если она пришла из номенклатуры поразмерно.
+ *
+ * Раньше этих полей в заказе не было вовсе — характеристики правились только в
+ * справочнике техкарт, а в заказе строка показывала одну норму. Набор полей
+ * берём из подтипа (`MATERIAL_SUBTYPES`), чтобы «параметры» здесь и в шаблоне
+ * означали одно и то же.
+ *
+ * Ячейка под слот-параметром (`boundFields`) — read-only с замком: два
+ * писателя в одну ячейку запрещены, backend такую правку отбивает 409.
+ */
+function LineParams({
+  line,
+  readOnly,
+  pending,
+  onSave,
+}: {
+  line: OrderTechCardLineDto;
+  readOnly: boolean;
+  pending: boolean;
+  onSave: (
+    patch: Record<
+      string,
+      string | number | null | Record<string, string | number | null>
+    >,
+  ) => void;
+}) {
+  const subtypes = getMaterialSubtypesByGroup(line.materialRole ?? '');
+  const keys = characteristicKeysForLine(line);
+  const values = line.characteristics ?? {};
+  const disabled = readOnly || pending;
+
+  return (
+    <div className="cws-params-panel">
+      <div className="cws-params-panel__head">
+        <span className="cws-grouplabel">Параметры материала</span>
+        {line.materialRole && (
+          <span className="cws-chip">роль: {line.materialRole}</span>
+        )}
+      </div>
+
+      <div className="cws-fields">
+        {subtypes.length > 0 && (
+          <label className="cws-field">
+            <span>Подтип</span>
+            <select
+              className="cws-cell"
+              value={line.subtypeKey ?? ''}
+              disabled={disabled}
+              onChange={(e) => onSave({ subtypeKey: e.target.value || null })}
+            >
+              <option value="">— не задан —</option>
+              {subtypes.map((s) => (
+                <option key={s.subtypeKey} value={s.subtypeKey}>
+                  {s.label}
+                </option>
+              ))}
+              {line.subtypeKey &&
+                !subtypes.some((s) => s.subtypeKey === line.subtypeKey) && (
+                  <option value={line.subtypeKey}>
+                    {line.subtypeKey} (legacy)
+                  </option>
+                )}
+            </select>
+          </label>
+        )}
+
+        {keys.map((key) => {
+          const def = getMaterialCharacteristic(key);
+          const bound = line.boundFields.includes(`char:${key}`);
+          const raw = values[key];
+          return (
+            <label className="cws-field" key={key}>
+              <span>
+                {def?.label ?? key}
+                {def?.unit ? `, ${def.unit}` : ''}
+                {bound ? ' 🔒' : ''}
+              </span>
+              <input
+                key={`${key}:${String(raw ?? '')}`}
+                className="cws-cell"
+                type={def?.valueType === 'number' ? 'number' : 'text'}
+                defaultValue={raw != null ? String(raw) : ''}
+                placeholder="—"
+                disabled={disabled || bound}
+                title={
+                  bound
+                    ? 'Ячейка привязана к параметру техкарты — правьте значение параметра'
+                    : undefined
+                }
+                onBlur={(e) => {
+                  const next = e.target.value.trim();
+                  if (next === (raw != null ? String(raw) : '')) return;
+                  onSave({ characteristics: { [key]: next === '' ? null : next } });
+                }}
+              />
+            </label>
+          );
+        })}
+      </div>
+
+      {line.qtyBySize.length > 0 && (
+        <div className="cws-bysize">
+          <span className="cws-grouplabel">Норма по размерам · из номенклатуры</span>
+          <div className="cws-bysize__row">
+            {line.qtyBySize.map((b) => (
+              <span className="cws-bysize__cell" key={b.sizeId}>
+                <span>
+                  {b.sizeCode} · {b.qtyPlan} шт
+                </span>
+                <b>{b.value}</b>
+              </span>
+            ))}
+          </div>
+          <p className="cws-muted">
+            В заказе хранится одна норма на изделие — средневзвешенная по этому
+            плану ({line.qtyPerUnit} {line.unit}/шт). Правка нормы в строке
+            заменит её целиком: строка перейдёт в «правлено в заказе», и
+            пересчёт больше не будет её трогать.
+          </p>
+        </div>
+      )}
+
+      {line.qtySource === 'ORDER' && !line.isManual && (
+        <p className="cws-muted">
+          Норма правлена в заказе — номенклатура её больше не перезаписывает.
+          Вернуть число из номенклатуры: «Обновить нормы из номенклатуры».
+        </p>
       )}
     </div>
   );
@@ -815,6 +1087,37 @@ function SpecStyles() {
 .cws-linkbtn:hover { text-decoration:underline; }
 .cws-linkbtn--danger { color:var(--color-danger); }
 .cws-foot { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start; }
+.cws-nameline { display:flex; align-items:flex-start; gap:6px; }
+.cws-caret { flex:none; width:22px; height:26px; display:inline-flex; align-items:center; justify-content:center;
+  border:1px solid var(--color-border-strong); border-radius:7px; background:var(--color-bg-card);
+  color:var(--color-fg-muted); font:inherit; font-size:12px; cursor:pointer; }
+.cws-caret:hover { border-color:var(--color-accent); color:var(--color-fg); }
+.cws-caret.is-open { background:var(--color-bg-tint); border-color:var(--color-accent); color:var(--color-fg-strong); }
+.cws-chips { display:flex; flex-wrap:wrap; gap:4px; align-items:center; max-width:270px;
+  border:none; background:none; padding:0; font:inherit; text-align:left; cursor:pointer; }
+.cws-chip { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px;
+  background:var(--color-bg-muted); color:var(--color-fg); font-size:11.5px; }
+.cws-chip--subtype { font-weight:700; }
+.cws-chip--slot { background:var(--color-accent-soft,var(--color-bg-tint)); color:var(--color-accent-fg); font-weight:700; }
+.cws-chip--empty { background:var(--color-bg-card); border:1px dashed var(--color-border-strong); color:var(--color-fg-subtle); }
+.cws-src { display:inline-flex; align-items:center; margin-top:4px; padding:1px 7px; border-radius:999px;
+  font-size:10px; font-weight:700; white-space:nowrap; }
+.cws-src--nomenclature { background:var(--color-ok-soft,var(--color-bg-tint)); color:var(--color-ok-fg,var(--color-fg-strong)); }
+.cws-src--template { background:var(--color-bg-muted); color:var(--color-fg-muted); }
+.cws-src--order { background:var(--color-bg-tint); color:var(--color-warn-fg,var(--color-fg-strong)); }
+.cws-exp > td { background:var(--color-bg-muted); }
+.cws-params-panel { display:flex; flex-direction:column; gap:10px; padding:10px; border:1px solid var(--color-border-strong);
+  border-radius:10px; background:var(--color-bg-card); }
+.cws-params-panel__head { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+.cws-params-panel__head .cws-grouplabel { margin-bottom:0; }
+.cws-fields { display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:8px; }
+.cws-field { display:flex; flex-direction:column; gap:3px; }
+.cws-field > span { font-size:10.5px; font-weight:700; color:var(--color-fg-muted); }
+.cws-bysize { display:flex; flex-direction:column; gap:6px; }
+.cws-bysize__row { display:flex; flex-wrap:wrap; gap:6px; }
+.cws-bysize__cell { display:inline-flex; flex-direction:column; align-items:center; gap:2px; padding:4px 8px;
+  border:1px solid var(--color-border); border-radius:8px; background:var(--color-bg-muted); font-size:12px; }
+.cws-bysize__cell > span { font-size:10px; font-weight:700; color:var(--color-fg-muted); }
 `}</style>
   );
 }

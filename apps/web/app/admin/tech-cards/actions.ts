@@ -367,13 +367,17 @@ export type PulledMaterialLineSourceType =
  *     `inputTypeSnapshot === 'LINEAR_M_BY_SIZE'` и хотя бы одним
  *     значением `value > 0` по любому размеру (блок «Погонные метры»).
  *
- * Сами числовые значения нормы / погонных метров В ТЕХКАРТУ НЕ
- * ПЕРЕНОСЯТСЯ — они хранятся в номенклатуре и используются для
- * расчёта потребности (`WorkshopNeed`). В техкарте нужна только сама
- * строка материала: какая роль, как называется характеристика
- * полотна / фурнитуры, плотность, ширина, правило цвета, изображение
- * (см. ТЗ §1 «В техкарте не нужно переносить сами значения 1.2 / 1 /
- * 0.2»).
+ * ЧИСЛА ПЕРЕНОСЯТСЯ (изменение от первоначального ТЗ). Раньше в
+ * техкарту ехала только структура строки, а норма ставилась заглушкой
+ * `1` — и эта единица уезжала в заказ, где менеджер видел «норму 1» при
+ * том, что закупка считалась по номенклатуре. Теперь шаблон получает
+ * реальное число: для `PARAMETER_NORM` — `qtyPerItem`, для
+ * `SIZE_PARAMETER_VALUE` — среднее по заполненным размерам (в шаблоне
+ * нет размерности, а в заказе норма всё равно берётся из номенклатуры
+ * по размерному плану — см. `@sewing/shared/pattern-norms`).
+ *
+ * Истина по норме остаётся у НОМЕНКЛАТУРЫ: шаблон — «сеялка»,
+ * заказ подтягивает число сам.
  */
 export interface PulledMaterialLineTemplate {
   /** Snapshot `PatternCategoryParameter.roleKey` (например, PACKAGING / MAIN_FABRIC). */
@@ -390,6 +394,11 @@ export interface PulledMaterialLineTemplate {
    * `PatternItemSizeParameterValue.unit`).
    */
   unit: string;
+  /**
+   * Норма на изделие в единице параметра (строкой, как её примет форма).
+   * `null` — числа в источнике нет (такие параметры и не подтягиваются).
+   */
+  qtyPerUnit: string | null;
   /** Тип источника, см. {@link PulledMaterialLineSourceType}. */
   sourceType: PulledMaterialLineSourceType;
   /**
@@ -461,6 +470,7 @@ export async function pullMaterialLinesFromPatternAction(
         roleKey: norm.roleKey,
         labelSnapshot: norm.labelSnapshot,
         unit: norm.unit,
+        qtyPerUnit: String(numeric),
         sourceType: 'PARAMETER_NORM',
         sourceId: norm.id,
       });
@@ -474,41 +484,44 @@ export async function pullMaterialLinesFromPatternAction(
     // в техкарту попадает ОДНА строка на параметр, а не строка на
     // каждый размер (см. сценарий 3 в §8).
     //
-    // Сами числа `1.2 / 1 / 0.2` мы НЕ переносим: они уже хранятся в
-    // номенклатуре и используются `WorkshopNeed`-ом. В техкарту едет
-    // только описание материала (роль / характеристика полотна /
-    // плотность / ширина / правило цвета / изображение).
+    // Норма в шаблон — СРЕДНЯЯ по заполненным размерам: у шаблона нет
+    // размерности, а взвесить по тиражу здесь нечем (заказа ещё нет).
+    // В заказе норма всё равно выводится из номенклатуры по размерному
+    // плану расцветки (`derivePatternNormPerUnit`), так что среднее в
+    // шаблоне — разумный старт, а не источник истины.
     const linearGroups = new Map<
       string,
       {
         roleKey: string;
         labelSnapshot: string;
         unit: string;
-        hasNonZero: boolean;
+        values: number[];
       }
     >();
     for (const v of pattern.sizeParameterValues) {
       if (v.inputTypeSnapshot !== 'LINEAR_M_BY_SIZE') continue;
       const numeric = Number(v.value);
-      const isNonZero = Number.isFinite(numeric) && numeric > 0;
       const existing = linearGroups.get(v.categoryParameterId);
       if (existing) {
-        if (isNonZero) existing.hasNonZero = true;
+        if (Number.isFinite(numeric) && numeric > 0) existing.values.push(numeric);
         continue;
       }
       linearGroups.set(v.categoryParameterId, {
         roleKey: v.roleKey,
         labelSnapshot: v.labelSnapshot,
         unit: v.unit,
-        hasNonZero: isNonZero,
+        values: Number.isFinite(numeric) && numeric > 0 ? [numeric] : [],
       });
     }
     for (const [categoryParameterId, group] of linearGroups) {
-      if (!group.hasNonZero) continue;
+      if (group.values.length === 0) continue;
+      const avg =
+        group.values.reduce((sum, v) => sum + v, 0) / group.values.length;
       lines.push({
         roleKey: group.roleKey,
         labelSnapshot: group.labelSnapshot,
         unit: group.unit,
+        qtyPerUnit: String(Math.round(avg * 10_000) / 10_000),
         sourceType: 'SIZE_PARAMETER_VALUE',
         sourceId: categoryParameterId,
       });
@@ -570,6 +583,9 @@ export async function pullMaterialLinesFromCategoryAction(
         roleKey: p.roleKey,
         labelSnapshot: p.label,
         unit: p.unit,
+        // Группа описывает ТОЛЬКО определения параметров: чисел в ней нет,
+        // норму заполнит заказ из конкретной номенклатуры.
+        qtyPerUnit: null,
         sourceType,
         sourceId: p.id,
       });

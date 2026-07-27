@@ -570,10 +570,13 @@ function BlockStyles() {
   font-weight:600; cursor:pointer; text-align:left; }
 .cwl-spec-toggle:hover { border-color:var(--color-accent); }
 .cwl-spec-toggle__hint { margin-left:auto; font-size:11.5px; font-weight:500; color:var(--color-fg-subtle); }
-/* Компактная модалка техкарты: чуть шире базовой .qr-modal__card (520px),
+/* Модалка техкарты шире базовой .qr-modal__card (520px): в таблице
+   спецификации семь колонок — материал, параметры, норма, ед., цвет,
+   итого, удаление; на 760px «Итого» уезжало за край окна.
+   (историческая заметка ниже — про первую, компактную версию)
    т.к. таблица материалов многоколоночная, но заметно уже инлайн-«простыни».
    Таблица внутри и так скроллится по горизонтали (.cws-tablewrap). */
-.cwl-spec-modal__card { width: min(100%, 760px); }
+.cwl-spec-modal__card { width: min(100%, 1080px); }
 .cwl-spec-modal__title { display:inline-flex; align-items:center; gap:7px; }
 /* Внутри модалки убираем верхний разделитель .cws — он был нужен как
    отбивка от карточки при инлайн-раскрытии, в диалоге лишний. */

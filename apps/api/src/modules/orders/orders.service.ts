@@ -54,6 +54,15 @@ import type {
   TechCardParameterValue,
 } from '@sewing/shared/tech-card-parameters';
 import {
+  derivePatternNormPerUnit,
+  matchPatternNormSources,
+} from '@sewing/shared/pattern-norms';
+import type {
+  PatternNormSource,
+  SizePlanEntry,
+} from '@sewing/shared/pattern-norms';
+import { collectPatternNormSources } from './pattern-norm-sources.js';
+import {
   ORDER_APPLICATION_STAGE_LABELS,
   ORDER_APPLICATION_STATUS_LABELS,
   ORDER_APPLICATION_TYPE_LABELS,
@@ -4798,7 +4807,7 @@ export class OrdersService {
         id: true,
         color: true,
         techCardId: true,
-        items: { select: { qtyPlan: true } },
+        items: { select: { sizeId: true, qtyPlan: true } },
         // Фича «Расцветки» (FEATURE_COLORWAYS): снимок строится ПО
         // КАЖДОЙ расцветке — своя техкарта × поразмерный план цвета.
         variants: {
@@ -4807,12 +4816,48 @@ export class OrdersService {
             id: true,
             color: true,
             techCardId: true,
-            sizes: { select: { qtyPlan: true } },
+            sizes: { select: { sizeId: true, qtyPlan: true } },
+          },
+        },
+        // Нормы расхода живут в НОМЕНКЛАТУРЕ: «Фурнитура и нормы»,
+        // «Погонные метры по размерам», площади. Снимок берёт число оттуда —
+        // иначе в спецификации стоит заглушка `1` из шаблона, а закупка
+        // считается по номенклатуре (два числа про один материал).
+        patternItem: {
+          select: {
+            parameterNorms: {
+              select: {
+                id: true,
+                roleKey: true,
+                labelSnapshot: true,
+                inputTypeSnapshot: true,
+                unit: true,
+                qtyPerItem: true,
+              },
+            },
+            sizeParameterValues: {
+              select: {
+                categoryParameterId: true,
+                roleKey: true,
+                labelSnapshot: true,
+                inputTypeSnapshot: true,
+                unit: true,
+                sizeId: true,
+                value: true,
+              },
+            },
+            materialAreas: {
+              select: { materialRole: true, sizeId: true, areaM2: true },
+            },
           },
         },
       },
     });
     if (!order) return;
+
+    // Источники норм номенклатуры — общие для всех расцветок (лекало одно на
+    // заказ), поэтому собираем один раз.
+    const normSources = collectPatternNormSources(order.patternItem);
 
     const existing = await tx.orderMaterialRequirement.findMany({
       where: { orderId },
@@ -4842,6 +4887,12 @@ export class OrdersService {
         densityGsm: true,
         plannedWidthCm: true,
         characteristics: true,
+        subtypeKey: true,
+        // Откуда взята норма: `ORDER` — правлена в заказе и главнее
+        // номенклатуры, `NOMENCLATURE` — освежается пересчётом, `null`
+        // (строки старше признака) не трогаем вовсе.
+        qtySource: true,
+        qtySourceRef: true,
       },
     });
 
@@ -4859,6 +4910,8 @@ export class OrdersService {
       color: string | null;
       techCardId: string | null;
       qty: number;
+      /** План по размерам группы — по нему выводится норма из номенклатуры. */
+      sizePlan: SizePlanEntry[];
     };
     const groups: SnapshotGroup[] =
       order.variants.length <= 1
@@ -4869,6 +4922,10 @@ export class OrdersService {
               color: order.color,
               techCardId: order.techCardId,
               qty: order.items.reduce((s, it) => s + it.qtyPlan, 0),
+              sizePlan: order.items.map((it) => ({
+                sizeId: it.sizeId,
+                qtyPlan: it.qtyPlan,
+              })),
             },
           ]
         : order.variants.map((v) => ({
@@ -4877,6 +4934,10 @@ export class OrdersService {
             color: v.color,
             techCardId: v.techCardId ?? order.techCardId,
             qty: v.sizes.reduce((s, sz) => s + sz.qtyPlan, 0),
+            sizePlan: v.sizes.map((sz) => ({
+              sizeId: sz.sizeId,
+              qtyPlan: sz.qtyPlan,
+            })),
           }));
     const effectiveGroups = groups.filter((g) => g.techCardId && g.qty > 0);
 
@@ -5020,14 +5081,44 @@ export class OrdersService {
       const baseDecimal = new Prisma.Decimal(g.qty);
       const paramValues =
         valuesByGroup.get(gk) ?? new Map<string, TechCardParameterValue>();
+      // Норму из номенклатуры освежаем ТОЛЬКО у строк, которые её оттуда и
+      // получили (`qtySource = NOMENCLATURE`): размерный план мог поменяться,
+      // а средневзвешенная норма от него зависит. Правку в заказе (`ORDER`) и
+      // строки старше признака (`null`) не трогаем — иначе живой заказ тихо
+      // поменял бы норму сам.
+      const nomenclatureRows = rows.filter(
+        (r) => r.qtySource === 'NOMENCLATURE',
+      );
+      const refreshedNorms =
+        nomenclatureRows.length > 0
+          ? matchPatternNormSources(
+              nomenclatureRows.map((r) => ({
+                key: r.id,
+                materialRole: r.materialRole,
+                name: r.name,
+                fabricType: r.fabricType,
+                unit: r.unit,
+              })),
+              normSources,
+            )
+          : new Map<string, PatternNormSource>();
       for (const r of rows) {
         const bindings = (r.parameterBindings ??
           null) as TechCardParameterBindings | null;
+        // Норма может быть ячейкой под слот-параметром — тогда её ставит
+        // `applyParametersToCells`, номенклатура в эту ячейку не пишет.
+        const refreshed =
+          bindings?.['core:qtyPerUnit'] == null
+            ? refreshedNorms.get(r.id)
+            : undefined;
+        const derivedNorm = refreshed
+          ? derivePatternNormPerUnit(refreshed, g.sizePlan)
+          : null;
         const { cells } = applyParametersToCells(
           {
             name: r.name,
             unit: r.unit,
-            qtyPerUnit: r.qtyPerUnit.toString(),
+            qtyPerUnit: (derivedNorm?.qtyPerUnit ?? r.qtyPerUnit).toString(),
             note: r.note,
             materialRole: r.materialRole,
             fabricType: r.fabricType,
@@ -5048,6 +5139,15 @@ export class OrdersService {
             variantColor: g.variantColor,
             qtyPerUnit,
             totalQty: qtyPerUnit.mul(baseDecimal),
+            // Строка потеряла источник в номенклатуре (параметр убрали /
+            // переименовали) — честно переводим её в «из шаблона», иначе UI
+            // обещал бы связь, которой уже нет.
+            ...(r.qtySource === 'NOMENCLATURE'
+              ? {
+                  qtySource: refreshed ? 'NOMENCLATURE' : 'TEMPLATE',
+                  qtySourceRef: refreshed ? refreshed.sourceId : null,
+                }
+              : {}),
             // Цвет расцветки мог измениться — правило то же, что при
             // материализации: `ORDER_SELECTED_COLOR` держит введённый вручную
             // цвет, остальные правила резолвятся от цвета группы.
@@ -5079,6 +5179,19 @@ export class OrdersService {
       const paramValues =
         valuesByGroup.get(vk(g.variantId)) ??
         new Map<string, TechCardParameterValue>();
+      // Строка шаблона ищет свой источник нормы в номенклатуре — иначе в
+      // заказ уехала бы заглушка «1», которую ставит «Подтянуть из
+      // номенклатуры» в редакторе техкарты.
+      const normsByLine = matchPatternNormSources(
+        lines.materialLines.map((l) => ({
+          key: l.id,
+          materialRole: l.materialRole,
+          name: l.name,
+          fabricType: l.fabricType,
+          unit: l.unit,
+        })),
+        normSources,
+      );
       for (const l of lines.materialLines) {
         const compositeKey = `${vk(g.variantId)}|${
           composeMaterialMatchKey(
@@ -5105,6 +5218,16 @@ export class OrdersService {
           l.parameterBindings ??
           null;
 
+        // Норма: сначала номенклатура (если строка нашла там свой параметр и
+        // ячейка нормы не занята слот-параметром), иначе — число шаблона.
+        const normSource =
+          bindings?.['core:qtyPerUnit'] == null
+            ? normsByLine.get(l.id)
+            : undefined;
+        const derivedNorm = normSource
+          ? derivePatternNormPerUnit(normSource, g.sizePlan)
+          : null;
+
         // Подстановка значений в ячейки. `applyParametersToCells` сама
         // зеркалит characteristics ↔ legacy-колонки — без этого плотность
         // из параметра не доехала бы до расчёта потребности.
@@ -5112,7 +5235,7 @@ export class OrdersService {
           {
             name: l.name,
             unit: l.unit,
-            qtyPerUnit: l.qtyPerUnit.toString(),
+            qtyPerUnit: (derivedNorm?.qtyPerUnit ?? l.qtyPerUnit).toString(),
             note: l.note,
             materialRole: l.materialRole,
             fabricType: l.fabricType,
@@ -5160,6 +5283,8 @@ export class OrdersService {
             ? (bindings as Prisma.InputJsonValue)
             : Prisma.DbNull,
           sourceTechCardId: g.techCardId,
+          qtySource: derivedNorm ? 'NOMENCLATURE' : 'TEMPLATE',
+          qtySourceRef: derivedNorm ? (normSource?.sourceId ?? null) : null,
         });
       }
     }

@@ -16,6 +16,7 @@
 
 import { z } from 'zod';
 
+import type { MaterialCharacteristics } from './material-characteristics';
 import {
   TechCardParameterInputTypeSchema,
   TechCardParameterKeySchema,
@@ -199,6 +200,31 @@ export type SaveOrderTechCardAsTemplateDto = z.infer<
 // Ручные строки материала (добавленные прямо в заказе)
 // ---------------------------------------------------------------------------
 
+/**
+ * Откуда взялась норма расхода строки (`OrderMaterialRequirement.qtySource`):
+ *
+ *   - `NOMENCLATURE` — из карточки номенклатуры (нормы фурнитуры, погонные
+ *     метры по размерам, площади). Пересчёт заказа освежает её при смене
+ *     размерного плана — это и есть «одно число в спецификации и в закупке»;
+ *   - `TEMPLATE`     — из шаблона техкарты (в номенклатуре источника не нашлось);
+ *   - `ORDER`        — норму правили прямо в заказе; она главнее номенклатуры
+ *     и переживает пересчёт, сбрасывает её только «Обновить нормы».
+ *
+ * `null` — строки, созданные до появления признака: показываем как «из
+ * шаблона», пересчёт их из номенклатуры не переписывает.
+ */
+export type OrderMaterialQtySource = 'NOMENCLATURE' | 'TEMPLATE' | 'ORDER';
+
+/** Норма из номенклатуры в разрезе размеров (погонные метры / площади). */
+export interface OrderTechCardLineSizeNormDto {
+  sizeId: string;
+  sizeCode: string;
+  /** Норма на изделие этого размера (Decimal строкой). */
+  value: string;
+  /** План по размеру у этой расцветки — по нему считается средневзвешенная. */
+  qtyPlan: number;
+}
+
 /** Строка материала расцветки: из шаблона или добавленная в заказе. */
 export interface OrderTechCardLineDto {
   /** `OrderMaterialRequirement.id`. */
@@ -215,6 +241,20 @@ export interface OrderTechCardLineDto {
   densityGsm: number | null;
   /** true — добавлена прямо в заказе; шаблон о ней не знает. */
   isManual: boolean;
+  /** Подтип материала (Молния / Кулирка / …) — задаёт набор характеристик. */
+  subtypeKey: string | null;
+  /** Значения характеристик подтипа: `{ density: 190, rollWidth: 180, … }`. */
+  characteristics: MaterialCharacteristics | null;
+  /** Откуда взята норма — см. {@link OrderMaterialQtySource}. */
+  qtySource: OrderMaterialQtySource | null;
+  /** Человекочитаемый источник нормы («Молния» из номенклатуры и т.п.). */
+  qtySourceLabel: string | null;
+  /**
+   * Разбивка нормы по размерам, если в номенклатуре она задана поразмерно.
+   * Пустой массив — норма плоская. Правится в заказе ОДНИМ числом: снимок
+   * хранит одну норму на штуку, поразмерная разбивка — только показ источника.
+   */
+  qtyBySize: OrderTechCardLineSizeNormDto[];
   /**
    * Ячейки строки, занятые параметрами (`parameterBindings`): ключи вида
    * `core:qtyPerUnit` / `char:density`. Такую ячейку UI правит через
@@ -280,6 +320,22 @@ export const UpdateOrderTechCardLineSchema = z
       .optional(),
     colorText: z.string().trim().max(120).nullish(),
     densityGsm: z.number().int().positive().max(100_000).nullish(),
+    /**
+     * Подтип материала. Он задаёт НАБОР характеристик, поэтому смена подтипа
+     * — событие того же уровня, что смена роли: сервис чистит значения,
+     * которых у нового подтипа нет. `null` — снять подтип.
+     */
+    subtypeKey: z.string().trim().max(60).nullish(),
+    /**
+     * Значения характеристик подтипа: `{ density: 190, rollWidth: '180' }`.
+     * Ключ с `null`/пустой строкой = ОЧИСТИТЬ характеристику (вместе с её
+     * legacy-колонкой — иначе зеркало тихо восстановит старое значение).
+     * Ячейка под слот-параметром правке не подлежит: 409
+     * `ORDER_TECH_CARD_CELL_TAKEN`.
+     */
+    characteristics: z
+      .record(z.string(), z.union([z.string(), z.number(), z.null()]))
+      .optional(),
   })
   .superRefine((v, ctx) => {
     if (
@@ -287,7 +343,9 @@ export const UpdateOrderTechCardLineSchema = z
       v.unit === undefined &&
       v.qtyPerUnit === undefined &&
       v.colorText === undefined &&
-      v.densityGsm === undefined
+      v.densityGsm === undefined &&
+      v.subtypeKey === undefined &&
+      v.characteristics === undefined
     ) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,

@@ -1028,6 +1028,10 @@ export class WorkshopNeedsService {
         materialImageUrl: r.materialImageUrl,
         selectedColorText: r.selectedColorText,
         requiresColorSelection: r.requiresColorSelection,
+        // Норму правили в заказе → она главнее номенклатуры (см. ниже
+        // `overrideFromLine`): иначе спецификация показывала бы одно число,
+        // а закупка считалась по другому.
+        qtySource: r.qtySource,
       }));
     const mapTechCardLines = (
       lines: NonNullable<typeof order.techCard>['materialLines'],
@@ -1058,6 +1062,8 @@ export class WorkshopNeedsService {
         // выводим из `colorRule = ORDER_SELECTED_COLOR`.
         selectedColorText: null,
         requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
+        // Live-техкарта — не заказ: правки нормы в заказе тут быть не может.
+        qtySource: null,
       }));
 
     // -----------------------------------------------------------------------
@@ -2146,7 +2152,9 @@ export class WorkshopNeedsService {
     matchedLine: SourceLine | null,
     orderColor: string | null,
   ): ComputedNeed {
-    const calculatedQty = norm.qtyPerItem
+    // Норма из заказа главнее номенклатуры (см. `orderEditedNormPerUnit`).
+    const editedPerItem = orderEditedNormPerUnit(matchedLine, 'qty');
+    const calculatedQty = (editedPerItem ?? norm.qtyPerItem)
       .mul(totalOrderQty)
       .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
 
@@ -2175,9 +2183,15 @@ export class WorkshopNeedsService {
     // под description как secondary-warning.
     const colorMissing =
       matchedLine?.colorRule === 'ORDER_SELECTED_COLOR' && !resolvedColor;
-    const calculationNote = colorMissing
-      ? 'Цвет нужно указать в заказе'
-      : null;
+    const noteParts: string[] = [];
+    if (editedPerItem) {
+      noteParts.push(
+        `Норма правлена в заказе: ${editedPerItem.toString()} ${norm.unit}/шт ` +
+          `(в номенклатуре ${norm.qtyPerItem.toString()}).`,
+      );
+    }
+    if (colorMissing) noteParts.push('Цвет нужно указать в заказе');
+    const calculationNote = noteParts.length > 0 ? noteParts.join(' ') : null;
 
     return {
       sourceType: 'PATTERN_PARAMETER_NORM',
@@ -2237,8 +2251,10 @@ export class WorkshopNeedsService {
     let totalAreaM2 = new Prisma.Decimal(0);
     let coveredAtLeastOne = false;
     const missingSizes: string[] = [];
+    let planQty = 0;
     for (const it of items) {
       const a = areasBySize.get(it.sizeId);
+      if (it.qtyPlan > 0) planQty += it.qtyPlan;
       if (!a) {
         if (it.qtyPlan > 0) missingSizes.push(it.size.code);
         continue;
@@ -2255,6 +2271,31 @@ export class WorkshopNeedsService {
     }
 
     const noteParts: string[] = [];
+
+    // Норма правлена в заказе (м²/шт) — считаем по ней, а не по площадям
+    // лекала. Правка в других единицах (полотно в «м») площадь заменить не
+    // может — тогда честно говорим об этом в примечании, а не делаем вид,
+    // что закупка пошла по правке.
+    const editedAreaPerUnit = orderEditedNormPerUnit(matchedLine, 'area');
+    if (editedAreaPerUnit && planQty > 0) {
+      const fromPattern = totalAreaM2;
+      totalAreaM2 = editedAreaPerUnit
+        .mul(planQty)
+        .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+      noteParts.push(
+        `Норма правлена в заказе: ${editedAreaPerUnit.toString()} м²/шт ` +
+          `(по лекалу ${fromPattern
+            .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP)
+            .toString()} м² на тираж).`,
+      );
+    } else if (
+      matchedLine?.qtySource === 'ORDER' &&
+      !editedAreaPerUnit
+    ) {
+      const w = `Норма строки «${matchedLine.name}» правлена в заказе в «${matchedLine.unit}», а потребность по роли «${role}» считается по площади лекала (м²) — правка в расчёт не вошла.`;
+      noteParts.push(w);
+      warnings.push(w);
+    }
     if (missingSizes.length > 0) {
       const m = `Нет площади для размеров: ${missingSizes.join(', ')} по роли ${role}. Считается только по тем размерам, где площадь задана.`;
       noteParts.push(m);
@@ -2385,9 +2426,22 @@ export class WorkshopNeedsService {
             return c;
           }
         }
+        // Имя параметра — НАЧАЛО названия строки: «Молния» ↔ «Молния
+        // разъёмная 60 см». Так пишут техкарты, собранные руками, и без
+        // этого прохода такая строка оставалась без обогащения (описание
+        // без размера/материала/цвета), а правка её нормы в заказе не
+        // доезжала до закупки. Границу слова требуем обязательно, иначе
+        // «Шнур» цеплял бы «Шнуровку»; берём пару, только если она
+        // единственная — угадывать по-прежнему не хотим.
+        const byPrefix = candidates.filter((c) => {
+          const startsWith = (v: string) =>
+            v === target || v.startsWith(`${target} `);
+          return startsWith(normalized(c.name)) || startsWith(normalized(c.fabricType));
+        });
+        if (byPrefix.length === 1) return byPrefix[0]!;
       }
     }
-    // Несколько строк под одну роль и нет точного совпадения —
+    // Несколько строк под одну роль и нет однозначного совпадения —
     // не угадываем (см. ТЗ §4 «иначе не матчить, fallback на
     // labelSnapshot»).
     return null;
@@ -2518,12 +2572,38 @@ export class WorkshopNeedsService {
     const outputUnitRaw = (head.unit ?? '').trim();
     const outputUnit = outputUnitRaw === '' ? 'м пог.' : outputUnitRaw;
 
+    // Норма правлена в заказе (м пог./шт) — Σ считаем по ней. Правка в
+    // других единицах погонные метры не заменяет: предупреждаем явно.
+    const editedLinearPerUnit = orderEditedNormPerUnit(matchedLine, 'linear');
+    const planQty = items.reduce(
+      (sum, it) => sum + (it.qtyPlan > 0 ? it.qtyPlan : 0),
+      0,
+    );
+    const rawFromPattern = rawLinearM;
+    if (editedLinearPerUnit && planQty > 0) {
+      rawLinearM = editedLinearPerUnit
+        .mul(planQty)
+        .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+    }
+
     const noteParts: string[] = [];
     noteParts.push(
       `Σ погонных метров: ${rawLinearM
         .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP)
         .toString()} м пог.`,
     );
+    if (editedLinearPerUnit && planQty > 0) {
+      noteParts.push(
+        `Норма правлена в заказе: ${editedLinearPerUnit.toString()} м пог./шт ` +
+          `(по номенклатуре ${rawFromPattern
+            .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP)
+            .toString()} м пог. на тираж).`,
+      );
+    } else if (matchedLine?.qtySource === 'ORDER' && !editedLinearPerUnit) {
+      const w = `Норма строки «${matchedLine.name}» правлена в заказе в «${matchedLine.unit}», а параметр «${head.labelSnapshot}» считается в погонных метрах — правка в расчёт не вошла.`;
+      noteParts.push(w);
+      warnings.push(w);
+    }
     if (missingSizes.length > 0) {
       const m = `Не заполнены погонные метры для размеров: ${missingSizes.join(', ')}. Считается только по тем размерам, где значение задано.`;
       noteParts.push(m);
@@ -3183,6 +3263,38 @@ const EMPTY_ENRICHMENT: ResolvedEnrichment = {
  * на стороне чтения DTO. Маленькая утилита, чтобы оба места ходили
  * по одному правилу.
  */
+/**
+ * Норма, ПРАВЛЕННАЯ В ЗАКАЗЕ, — главнее числа из номенклатуры.
+ *
+ * Спецификация техкарты в заказе разрешает править норму расхода (окно
+ * «Материалы техкарты»). Пока потребность считала строго по номенклатуре,
+ * правка была видна на экране и не доезжала до закупки — два числа про один
+ * материал. Здесь единственное место, где приоритет проверяется.
+ *
+ * Единицы. Норма заказа осмысленна только в своей единице, поэтому вызывающий
+ * передаёт `expect`: `qty` — штучная норма (совпадение с единицей параметра
+ * проверять не нужно, там уже «шт»), `linear` — «м»/«м пог.», `area` — «м²».
+ * Не сошлось — правку НЕ применяем и возвращаем `null`: закупку считаем по
+ * номенклатуре, а расхождение показываем предупреждением (см. вызовы).
+ */
+function orderEditedNormPerUnit(
+  line: SourceLine | null,
+  expect: 'qty' | 'linear' | 'area',
+): Prisma.Decimal | null {
+  if (!line || line.qtySource !== 'ORDER') return null;
+  if (line.qtyPerUnit == null || line.qtyPerUnit.lte(0)) return null;
+  const unit = (line.unit ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[.\s]/g, '')
+    .replace(/²/g, '2');
+  if (expect === 'linear' && !(unit === 'м' || unit === 'мпог' || unit === 'мп')) {
+    return null;
+  }
+  if (expect === 'area' && unit !== 'м2') return null;
+  return line.qtyPerUnit;
+}
+
 function normalizeMatchKey(s: string | null | undefined): string {
   return (s ?? '')
     .trim()
@@ -3257,6 +3369,18 @@ function resolveWorkshopNeedEnrichment(
     if (reqMatches.length === 1) {
       return enrichmentFromRequirement(reqMatches[0]!);
     }
+    // Тот же проход «имя параметра — начало названия строки», что и в
+    // `findEnrichmentLine` на стороне расчёта: правила чтения и расчёта
+    // обязаны совпадать, иначе UI покажет одно обогащение, а посчитано
+    // будет по другому.
+    const startsWithTarget = (v: string | null | undefined): boolean => {
+      const n = normalizeMatchKey(v);
+      return target.length > 0 && (n === target || n.startsWith(`${target} `));
+    };
+    const reqPrefix = reqMatches.filter(
+      (r) => startsWithTarget(r.name) || startsWithTarget(r.fabricType),
+    );
+    if (reqPrefix.length === 1) return enrichmentFromRequirement(reqPrefix[0]!);
 
     const tlMatches = techLines.filter((l) => l.materialRole === role);
     const tlExact = tlMatches.find(
@@ -3269,6 +3393,10 @@ function resolveWorkshopNeedEnrichment(
     if (tlMatches.length === 1) {
       return enrichmentFromTechCardLine(tlMatches[0]!);
     }
+    const tlPrefix = tlMatches.filter(
+      (l) => startsWithTarget(l.name) || startsWithTarget(l.fabricType),
+    );
+    if (tlPrefix.length === 1) return enrichmentFromTechCardLine(tlPrefix[0]!);
   }
 
   return EMPTY_ENRICHMENT;
@@ -3363,6 +3491,14 @@ interface SourceLine {
    * толщина/ширина/кол-во проколов). null — старые строки.
    */
   characteristics: MaterialCharacteristics | null;
+  /**
+   * `OrderMaterialRequirement.qtySource`: `ORDER` — норму правили прямо в
+   * заказе, и она главнее числа из номенклатуры. Без этого приоритета
+   * спецификация показывала бы одно число, а закупка считалась по другому —
+   * ровно тот разрыв, из-за которого норму и разрешили править в заказе.
+   * `null` на live-техкарте (там правок заказа нет по определению).
+   */
+  qtySource?: string | null;
 }
 
 /**

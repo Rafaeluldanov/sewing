@@ -1,6 +1,7 @@
 import { Body, Controller, Param, Post } from '@nestjs/common';
 import {
   SaveOrderTechCardAsTemplateSchema,
+  type OrderTechCardParametersDto,
   type SaveOrderTechCardAsTemplateDto,
 } from '@sewing/shared/order-tech-cards';
 import type { TechCardTemplateDetailDto } from '@sewing/shared/tech-cards';
@@ -10,6 +11,7 @@ import { CurrentUser, Roles } from '../auth/auth.decorators.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
 import { OrdersService } from '../orders/orders.service.js';
 import { TechCardsService } from '../tech-cards/tech-cards.service.js';
+import { OrderTechCardService } from './order-tech-card.service.js';
 
 /**
  * «Сохранить как новый шаблон» — единственный мостик из заказа в справочник.
@@ -24,7 +26,26 @@ export class OrderTechCardTemplateController {
   constructor(
     private readonly techCards: TechCardsService,
     private readonly orders: OrdersService,
+    private readonly orderTechCard: OrderTechCardService,
   ) {}
+
+  /**
+   * «Обновить нормы из номенклатуры» — мягкий брат «Обновить из шаблона».
+   * Структуру строк не трогает: снимает отметку «норма правлена в заказе» и
+   * перечитывает числа из карточки номенклатуры (нормы фурнитуры, погонные
+   * метры, площади). Ручные строки остаются со своими числами.
+   */
+  @Post('reload-norms')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  reloadNorms(
+    @Param('id') orderId: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<OrderTechCardParametersDto> {
+    return this.orderTechCard.resetNormsFromNomenclature(
+      orderId,
+      user.employeeId,
+    );
+  }
 
   /**
    * «Обновить из шаблона» — обратный клапан к принципу «шаблон читается один

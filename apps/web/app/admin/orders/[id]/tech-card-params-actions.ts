@@ -31,6 +31,7 @@ import {
   deleteOrderTechCardParameter,
   getOrderTechCardParameters,
   reloadOrderTechCardFromTemplate,
+  reloadOrderTechCardNorms,
   saveOrderTechCardAsTemplate,
   setOrderTechCardParameterValue,
   updateOrderTechCardLine,
@@ -245,6 +246,30 @@ export async function reloadTechCardFromTemplateAction(
   } catch (e) {
     if (e instanceof ApiRequestError) {
       return { ok: false, error: errorText(e, 'Не удалось обновить из шаблона') };
+    }
+    throw e;
+  }
+}
+
+/**
+ * «Обновить нормы из номенклатуры»: перечитать числа норм из карточки
+ * номенклатуры. Структуру строк, параметры и характеристики не трогает —
+ * в отличие от «Обновить из шаблона». Ручные строки остаются со своими
+ * числами: в номенклатуре их нет.
+ */
+export async function reloadTechCardNormsAction(
+  orderId: string,
+): Promise<TechCardParamsActionResult> {
+  try {
+    const data = await reloadOrderTechCardNorms(orderId);
+    revalidateOrder(orderId);
+    return { ok: true, data };
+  } catch (e) {
+    if (e instanceof ApiRequestError) {
+      return {
+        ok: false,
+        error: errorText(e, 'Не удалось обновить нормы из номенклатуры'),
+      };
     }
     throw e;
   }

@@ -129,6 +129,20 @@ export function reloadOrderTechCardFromTemplate(
   );
 }
 
+/**
+ * «Обновить нормы из номенклатуры» — мягкий брат «Обновить из шаблона»:
+ * структуру строк не трогает, только перечитывает числа норм из карточки
+ * номенклатуры и снимает отметку «правлено в заказе» (кроме ручных строк).
+ */
+export function reloadOrderTechCardNorms(
+  orderId: string,
+): Promise<OrderTechCardParametersDto> {
+  return apiFetch<OrderTechCardParametersDto>(
+    `/orders/${encodeURIComponent(orderId)}/tech-card/reload-norms`,
+    { method: 'POST' },
+  );
+}
+
 /** Вынести техкарту расцветки в справочник как новый шаблон. */
 export function saveOrderTechCardAsTemplate(
   orderId: string,

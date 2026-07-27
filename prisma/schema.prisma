@@ -3663,6 +3663,22 @@ model OrderMaterialRequirement {
   /// `sourceTechCardLineId` для этого не годится: у строки из шаблона он тоже
   /// станет NULL, если строку шаблона удалить (onDelete: SetNull).
   isManual                      Boolean  @default(false)
+  /// ОТКУДА ВЗЯЛАСЬ НОРМА расхода этой строки:
+  ///   - `NOMENCLATURE` — из карточки номенклатуры (`PatternItemParameterNorm`
+  ///     / `PatternItemSizeParameterValue` / `PatternMaterialArea`), пересчёт
+  ///     заказа освежает её при смене размерного плана;
+  ///   - `TEMPLATE` — из шаблона техкарты (в номенклатуре источника не нашлось);
+  ///   - `ORDER` — норму правили ПРЯМО В ЗАКАЗЕ, она главнее номенклатуры и
+  ///     переживает любой пересчёт (сбрасывается только «Обновить нормы»).
+  ///
+  /// `null` — строки, созданные до появления признака: ведут себя как
+  /// `TEMPLATE`, но пересчёт их НЕ переписывает из номенклатуры. Это осознанно:
+  /// у живых заказов норма не должна поменяться сама от выката фичи.
+  qtySource                     String?
+  /// Трассировка нормы: id источника в номенклатуре (`PatternItemParameterNorm.id`
+  /// / `PatternCategoryParameter.id` для погонных метров / `materialRole` для
+  /// площадей). Без FK — номенклатуру могут править, снимок обязан пережить.
+  qtySourceRef                  String?
   createdAt                     DateTime @default(now())
 
   order              Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)

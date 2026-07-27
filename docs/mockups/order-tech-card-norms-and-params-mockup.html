@@ -1,0 +1,774 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Техкарта в заказе: норма из номенклатуры + параметры материала</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --shadow-lg:0 18px 48px rgba(20,20,20,.18);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 80px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1240px; margin:0 auto; padding:0 20px; }
+
+  .topnav{ position:sticky; top:0; z-index:40; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1240px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:700; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:88ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:1.25rem; margin:0 0 .3rem; }
+  .sect > h2 small{ font-weight:400; color:var(--color-fg-muted); font-size:.78rem; font-family:ui-monospace,Menlo,monospace; margin-left:.5rem; }
+  .sect > p{ margin:0 0 1.1rem; color:var(--color-fg-muted); max-width:88ch; }
+
+  .shots{ display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start; }
+  .shot{ flex:1 1 460px; min-width:340px; }
+  .shot--wide{ flex:1 1 100%; }
+  .shot__cap{ font-size:.85rem; font-weight:700; margin:0 0 .5rem; display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; }
+  .shot__cap small{ display:block; font-weight:400; color:var(--color-fg-muted); }
+  .tag{ display:inline-flex; align-items:center; padding:1px 8px; border-radius:var(--radius-pill); font-size:.72rem; font-weight:700; }
+  .tag--bad{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .tag--good{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .tag--new{ background:var(--btn-primary-bg); color:var(--btn-primary-fg); border:1px solid var(--btn-primary-edge); }
+
+  /* ---------- модалка «Материалы техкарты» ---------- */
+  .modal{ background:rgba(20,20,20,.28); border-radius:var(--radius-lg); padding:18px 14px; }
+  .modal__card{ background:var(--color-bg-card); border:1px solid var(--color-border); border-radius:var(--radius-lg); box-shadow:var(--shadow-lg); overflow:hidden; }
+  .modal__head{ display:flex; align-items:center; gap:.5rem; padding:.7rem .85rem; border-bottom:1px solid var(--color-border); }
+  .modal__title{ font-size:var(--title-modal); font-weight:700; margin:0; display:flex; align-items:center; gap:.4rem; }
+  .modal__x{ margin-left:auto; color:var(--color-fg-subtle); font-size:1.1rem; }
+  .modal__body{ padding:.85rem; display:flex; flex-direction:column; gap:.7rem; }
+
+  .cws-tpl{ margin:0; font-size:.8rem; color:var(--color-fg-muted); display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; }
+  .cws-tpl b{ color:var(--color-fg-strong); }
+
+  /* ---------- таблица спецификации ---------- */
+  .spec{ border:1px solid var(--color-border); border-radius:var(--radius-md); overflow:hidden; }
+  table.spec__t{ width:100%; border-collapse:collapse; font-size:.84rem; }
+  table.spec__t th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); font-weight:700; padding:7px 10px; border-bottom:1px solid var(--color-border); background:var(--color-bg-muted); }
+  table.spec__t th.num, table.spec__t td.num{ text-align:right; white-space:nowrap; }
+  table.spec__t td{ padding:7px 10px; border-bottom:1px solid var(--color-border); vertical-align:top; }
+  table.spec__t tr:last-child td{ border-bottom:none; }
+  .cell{ display:inline-flex; align-items:center; min-height:29px; padding:4px 8px; border:1px solid var(--color-border-strong); border-radius:7px; background:#fff; font-size:.84rem; }
+  .cell--name{ font-weight:700; min-width:160px; }
+  .cell--num{ min-width:76px; justify-content:flex-end; font-variant-numeric:tabular-nums; }
+  .cell--sm{ min-width:58px; }
+  .cell--lock{ background:var(--color-bg-muted); color:var(--color-fg-muted); }
+  .cell--focus{ border-color:var(--color-accent); box-shadow:0 0 0 3px var(--color-accent-soft); }
+  .rowsum{ font-variant-numeric:tabular-nums; font-weight:700; color:var(--color-fg-strong); }
+  .x{ color:var(--color-fg-subtle); font-size:1.05rem; line-height:1; }
+
+  /* чипы параметров в строке */
+  .pchips{ display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; max-width:340px; }
+  .pchip{ display:inline-flex; align-items:center; gap:.25rem; padding:2px 8px; border-radius:var(--radius-pill); background:var(--color-bg-muted); font-size:.75rem; color:var(--color-fg); }
+  .pchip b{ font-weight:700; }
+  .pchip--empty{ background:#fff; border:1px dashed var(--color-border-strong); color:var(--color-fg-subtle); }
+  .pchip--slot{ background:var(--color-accent-soft); color:var(--color-accent-fg); font-weight:700; }
+  .pchip--more{ background:#fff; border:1px solid var(--color-border-strong); color:var(--color-fg-muted); font-weight:700; }
+  .flags{ display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; margin-top:.3rem; }
+  .pill{ font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.03em; padding:2px 7px; border-radius:var(--radius-pill); background:var(--color-bg-tint); color:var(--color-fg-strong); }
+  .src{ display:inline-flex; align-items:center; gap:.25rem; font-size:.7rem; font-weight:700; padding:1px 7px; border-radius:var(--radius-pill); }
+  .src--nom{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .src--tpl{ background:var(--color-bg-muted); color:var(--color-fg-muted); }
+  .src--order{ background:var(--color-bg-tint); color:var(--color-warn-fg); }
+  .linkbtn{ font-size:.75rem; font-weight:700; color:var(--color-accent-fg); }
+  .caret{ display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:var(--radius-sm); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg-muted); font-size:.7rem; flex:none; }
+  .caret.is-open{ background:var(--color-bg-tint); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .nameline{ display:flex; align-items:flex-start; gap:.4rem; }
+
+  /* раскрытая панель параметров строки */
+  tr.exp > td{ background:var(--color-bg-soft); border-bottom:1px solid var(--color-border); }
+  .params{ border:1px solid var(--color-border-strong); border-radius:var(--radius-md); background:#fff; padding:.65rem .7rem; display:flex; flex-direction:column; gap:.6rem; }
+  .params__head{ display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; font-size:.8rem; }
+  .params__head b{ font-size:var(--title-label); text-transform:uppercase; letter-spacing:.05em; color:var(--color-fg-muted); }
+  .fields{ display:grid; grid-template-columns:repeat(auto-fill,minmax(168px,1fr)); gap:.5rem; }
+  .fld{ display:flex; flex-direction:column; gap:2px; }
+  .fld > span{ font-size:10.5px; font-weight:700; color:var(--color-fg-muted); display:flex; align-items:center; gap:.25rem; }
+  .fld .ctl{ padding:.35rem .5rem; border:1px solid var(--color-border-strong); border-radius:7px; background:#fff; font-size:.84rem; min-height:31px; display:flex; align-items:center; gap:.3rem; }
+  .fld .ctl--sel::after{ content:'⌄'; margin-left:auto; color:var(--color-fg-subtle); font-size:.9rem; line-height:0; padding-bottom:.3rem; }
+  .fld .ctl--ph{ color:var(--color-fg-subtle); }
+  .fld .ctl--lock{ background:var(--color-bg-muted); color:var(--color-fg-muted); }
+  .fld .ctl--num{ justify-content:flex-end; font-variant-numeric:tabular-nums; }
+  .req{ color:var(--color-danger); }
+  .params__foot{ display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; font-size:.78rem; color:var(--color-fg-muted); }
+
+  /* норма по размерам */
+  .bysize{ display:flex; flex-wrap:wrap; gap:.35rem; align-items:flex-end; }
+  .bysize__c{ display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .bysize__c > span{ font-size:10.5px; font-weight:700; color:var(--color-fg-muted); }
+  .bysize__c .cell{ width:62px; justify-content:flex-end; }
+
+  /* секция слот-параметров */
+  .slots{ display:flex; flex-direction:column; gap:.45rem; }
+  .slots__label{ font-size:10.5px; font-weight:800; text-transform:uppercase; letter-spacing:.05em; color:var(--color-fg-muted); }
+  .slot{ display:flex; align-items:center; flex-wrap:wrap; gap:.5rem; font-size:.84rem; }
+  .slot__name{ font-weight:700; }
+  .slot__meta{ color:var(--color-fg-muted); font-size:.78rem; display:inline-flex; align-items:center; gap:.5rem; }
+
+  /* ---------- кнопки ---------- */
+  .btn{ display:inline-flex; align-items:center; gap:.35rem; font:inherit; font-size:.82rem; font-weight:700; padding:.35rem .7rem; border-radius:var(--radius-md); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg); cursor:default; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--ghost{ background:#fff; color:var(--color-fg-muted); }
+  .btn--dash{ border-style:dashed; color:var(--color-fg-muted); }
+  .foot{ display:flex; flex-wrap:wrap; gap:.4rem; }
+
+  /* аннотации */
+  .note{ margin:.55rem 0 0; font-size:.82rem; color:var(--color-fg-muted); border-left:3px solid var(--color-border-strong); padding-left:.6rem; }
+  .note--bad{ border-color:var(--color-danger); }
+  .note--good{ border-color:var(--color-ok); }
+  .note--warn{ border-color:var(--color-warn); }
+  .note b{ color:var(--color-fg); }
+  .note code, code{ font-family:ui-monospace,Menlo,monospace; font-size:.85em; background:var(--color-bg-muted); border-radius:4px; padding:0 .25em; }
+
+  /* цепочка источников */
+  .flow{ display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:.7rem; }
+  .flow__col{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.75rem .85rem; }
+  .flow__col h3{ margin:0 0 .5rem; font-size:var(--title-subsection); display:flex; align-items:center; gap:.4rem; }
+  .step{ display:flex; align-items:center; gap:.45rem; font-size:.83rem; padding:.3rem 0; border-bottom:1px dashed var(--color-border); }
+  .step:last-child{ border-bottom:none; }
+  .step__n{ width:20px; height:20px; border-radius:50%; background:var(--color-bg-muted); color:var(--color-fg-muted); font-size:.72rem; font-weight:700; display:inline-flex; align-items:center; justify-content:center; flex:none; }
+  .step__mark{ margin-left:auto; font-size:.74rem; font-weight:700; white-space:nowrap; }
+  .step__mark--no{ color:var(--color-danger-fg); }
+  .step__mark--yes{ color:var(--color-ok-fg); }
+
+  /* таблица правок */
+  table.files{ width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); overflow:hidden; font-size:.84rem; }
+  table.files th, table.files td{ text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--color-border); vertical-align:top; }
+  table.files th{ background:var(--color-bg-muted); font-size:.78rem; }
+  table.files tr:last-child td{ border-bottom:none; }
+  .q{ background:#fff; border:1px solid var(--color-border); border-left:3px solid var(--btn-primary-edge); border-radius:var(--radius-md); padding:.65rem .8rem; font-size:.86rem; margin-bottom:.55rem; }
+  .q b{ display:block; margin-bottom:.15rem; }
+  .q span{ color:var(--color-fg-muted); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__in">
+    <span class="topnav__brand">Макет · техкарта в заказе</span>
+    <a href="#now">1. Как сейчас</a>
+    <a href="#next">2. Как предлагается</a>
+    <a href="#params">3. Панель параметров</a>
+    <a href="#bysize">4. Норма по размерам</a>
+    <a href="#chain">5. Откуда берётся норма</a>
+    <a href="#files">6. Что правим</a>
+    <a href="#open">7. Вопросы</a>
+  </div>
+</nav>
+
+<div class="doc">
+
+  <section class="intro">
+    <h1>Техкарта внутри заказа: норма приходит из номенклатуры, параметры правятся на месте</h1>
+    <p>
+      Симптом от менеджера: <b>«подтянули техкарту из номенклатуры — нормы не подтянулись; и параметров для
+      редактирования нет, есть только нормы»</b>. Оба симптома — про одно окно: <b>«Материалы техкарты»</b>
+      в карточке заказа (тот же компонент разворачивается и в форме создания, кнопка «Настроить материалы»).
+    </p>
+    <p>
+      Что нашлось в коде: (1) кнопка «Подтянуть из номенклатуры» в шаблоне техкарты сознательно
+      <b>не переносит числа</b> — строка создаётся с заглушкой <code>qtyPerUnit: '1'</code>, и в заказ приезжает
+      ровно эта единица; (2) окно заказа умеет править <b>только</b> название, норму, ед., цвет и плотность —
+      подтип и остальные характеристики (ширина рулона, размер, тип, длина, толщина, материал) в контракт
+      заказа <b>вообще не выведены</b>. То есть менеджер видит не баг отображения, а две дырки в контракте.
+    </p>
+    <div class="principles">
+      <div class="principle"><b>Норма — число, а не «1»</b><span>Норма живёт в номенклатуре («Фурнитура и нормы», «Погонные метры по размерам»). Заказ показывает её и подписывает источник.</span></div>
+      <div class="principle"><b>Параметры рядом с нормой</b><span>Подтип + характеристики правятся в той же строке, а не только в справочнике техкарт.</span></div>
+      <div class="principle"><b>Правка остаётся в заказе</b><span>Ничего не уезжает в шаблон и в номенклатуру. Источник значения виден бейджем: номенклатура / шаблон / правлено в заказе.</span></div>
+      <div class="principle"><b>Один писатель на ячейку</b><span>Ячейка под слот-параметром не правится напрямую — только через значение параметра (правило уже есть, 409 <code>ORDER_TECH_CARD_CELL_TAKEN</code>).</span></div>
+    </div>
+  </section>
+
+  <!-- ================= 1. КАК СЕЙЧАС ================= -->
+  <section class="sect" id="now">
+    <h2>1. Как сейчас <small>apps/web/components/orders/colorways/colorway-spec.tsx</small></h2>
+    <p>
+      Заказ на 100 шт, расцветка «Чёрный», техкарта подтянута из номенклатуры «Худи классический».
+      Все нормы = 1.0000 (заглушка подтягивания), характеристик нет ни одной — их негде даже посмотреть.
+    </p>
+
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--bad">сейчас</span> Материалы техкарты · Чёрный</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__head">
+              <h3 class="modal__title">▤ Материалы техкарты · Чёрный</h3>
+              <span class="modal__x">×</span>
+            </div>
+            <div class="modal__body">
+              <p class="cws-tpl">Из шаблона: <b>ТК-ХУДИ-КЛАССИК</b> — дальше список живёт в заказе, правки шаблона сюда не протекают.</p>
+              <div class="spec">
+                <table class="spec__t">
+                  <thead>
+                    <tr><th>Материал</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th><th class="num">Итого</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><span class="cell cell--name">Основное полотно</span></td>
+                      <td class="num"><span class="cell cell--num">1</span></td>
+                      <td><span class="cell cell--sm">м</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">100 м</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><span class="cell cell--name">Молния</span></td>
+                      <td class="num"><span class="cell cell--num">1</span></td>
+                      <td><span class="cell cell--sm">шт</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">100 шт</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><span class="cell cell--name">Шнур плоский</span></td>
+                      <td class="num"><span class="cell cell--num">1</span></td>
+                      <td><span class="cell cell--sm">м пог.</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">100 м пог.</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><span class="cell cell--name">Нитки</span></td>
+                      <td class="num"><span class="cell cell--num">1</span></td>
+                      <td><span class="cell cell--sm">кат.</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">100 кат.</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <div class="foot">
+                <span class="btn btn--dash">+ Добавить материал</span>
+                <span class="btn btn--ghost">+ Добавить параметр</span>
+                <span class="btn btn--ghost">Обновить из шаблона</span>
+                <span class="btn btn--ghost">Сохранить как новый шаблон</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note note--bad">
+          <b>Дырка 1 — норма.</b> <code>tech-card-form.tsx::rowFromPulledLine</code> создаёт строку с
+          <code>qtyPerUnit: '1'</code>, а <code>pullMaterialLinesFromPatternAction</code> по старому ТЗ возвращает
+          только роль/подтип/единицу («сами числовые значения в техкарту не переносятся»). В шаблоне поле нормы
+          вообще скрыто как legacy — исправить единицу можно только здесь, в заказе, вручную по каждой строке.
+        </p>
+        <p class="note note--bad">
+          <b>Дырка 2 — параметры.</b> В контракте заказа (<code>OrderTechCardLineDto</code>) есть только
+          <code>densityGsm</code>; <code>subtypeKey</code> и <code>characteristics</code> не отдаются и не
+          принимаются (<code>UpdateOrderTechCardLineSchema</code>: name / unit / qtyPerUnit / colorText /
+          densityGsm). Секция «Параметры» показывается только при слот-параметрах техкарты — у обычной
+          техкарты их нет, поэтому окно выглядит как «одни нормы».
+        </p>
+        <p class="note note--warn">
+          <b>Важно:</b> закупка при этом считается <i>правильно</i> — <code>WorkshopNeedsService</code> берёт нормы
+          прямо из номенклатуры (<code>PATTERN_PARAMETER_NORM</code>, <code>LINEAR_M_BY_SIZE</code>). Расходятся
+          не расчёты, а то, что менеджер видит в спецификации. Это и есть самое неприятное: цифра на экране
+          не совпадает с цифрой, по которой закупают.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. КАК ПРЕДЛАГАЕТСЯ ================= -->
+  <section class="sect" id="next">
+    <h2>2. Как предлагается <small>то же окно, две новые вещи: источник нормы + колонка «Параметры»</small></h2>
+    <p>
+      Колонка «Параметры» показывает заполненные характеристики строки чипами, каретка слева раскрывает панель
+      правки. Под нормой — бейдж источника: <span class="src src--nom">из номенклатуры</span>
+      <span class="src src--tpl">из шаблона</span> <span class="src src--order">правлено в заказе</span>.
+    </p>
+
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--good">стало</span> Материалы техкарты · Чёрный <span class="tag tag--new">делта</span></p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__head">
+              <h3 class="modal__title">▤ Материалы техкарты · Чёрный</h3>
+              <span class="modal__x">×</span>
+            </div>
+            <div class="modal__body">
+              <p class="cws-tpl">
+                Из шаблона: <b>ТК-ХУДИ-КЛАССИК</b> · нормы из номенклатуры <b>Худи классический</b> (арт. HD-001)
+                <span class="linkbtn">обновить нормы из номенклатуры</span>
+              </p>
+
+              <div class="spec">
+                <table class="spec__t">
+                  <thead>
+                    <tr><th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th><th class="num">Итого</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <!-- строка 1 -->
+                    <tr>
+                      <td>
+                        <div class="nameline">
+                          <span class="caret">›</span>
+                          <span class="cell cell--name">Основное полотно</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="pchips">
+                          <span class="pchip">Кулирка</span>
+                          <span class="pchip">Плотность <b>190</b> г/м²</span>
+                          <span class="pchip">Ширина рулона <b>180</b> см</span>
+                          <span class="pchip pchip--more">+2</span>
+                        </div>
+                      </td>
+                      <td class="num">
+                        <span class="cell cell--num">0.42</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">м²</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">42 м²</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <!-- строка 2 -->
+                    <tr>
+                      <td>
+                        <div class="nameline">
+                          <span class="caret">›</span>
+                          <span class="cell cell--name">Молния</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="pchips">
+                          <span class="pchip">Разъёмная</span>
+                          <span class="pchip">Размер <b>60</b> см</span>
+                          <span class="pchip">Материал <b>металл</b></span>
+                        </div>
+                      </td>
+                      <td class="num">
+                        <span class="cell cell--num">1</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">шт</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">100 шт</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <!-- строка 3: норма по размерам -->
+                    <tr>
+                      <td>
+                        <div class="nameline">
+                          <span class="caret">›</span>
+                          <span class="cell cell--name">Шнур плоский</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="pchips">
+                          <span class="pchip">Ширина <b>8</b> мм</span>
+                          <span class="pchip pchip--empty">+ параметр</span>
+                        </div>
+                      </td>
+                      <td class="num">
+                        <span class="cell cell--num cell--lock">по размерам ⌄</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">м пог.</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">124 м пог.</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <!-- строка 4 -->
+                    <tr>
+                      <td>
+                        <div class="nameline">
+                          <span class="caret">›</span>
+                          <span class="cell cell--name">Нитки</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="pchips">
+                          <span class="pchip">Толщина <b>50/2</b></span>
+                          <span class="pchip pchip--empty">+ параметр</span>
+                        </div>
+                      </td>
+                      <td class="num">
+                        <span class="cell cell--num">0.04</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--tpl">из шаблона</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">кат.</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">4 кат.</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <!-- строка 5: ручная -->
+                    <tr>
+                      <td>
+                        <div class="nameline">
+                          <span class="caret">›</span>
+                          <span>
+                            <span class="cell cell--name">Лента усилительная</span>
+                            <span class="flags"><span class="pill">добавлена в заказе</span></span>
+                          </span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="pchips">
+                          <span class="pchip">Ширина <b>15</b> мм</span>
+                        </div>
+                      </td>
+                      <td class="num">
+                        <span class="cell cell--num">0.90</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--order">правлено в заказе</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">м</span></td>
+                      <td><span class="cell">белый</span></td>
+                      <td class="num"><span class="rowsum">90 м</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="foot">
+                <span class="btn btn--dash">+ Добавить материал</span>
+                <span class="btn btn--ghost">+ Добавить параметр техкарты</span>
+                <span class="btn btn--ghost">Обновить из шаблона</span>
+                <span class="btn btn--ghost">Сохранить как новый шаблон</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note note--good">
+          <b>Норма.</b> При сборке снимка строка ищет свой источник в номенклатуре по паре
+          <code>роль + подтип/характеристика</code>: нашла — берёт число оттуда (<code>PatternItemParameterNorm.qtyPerItem</code>
+          или погонные метры по размерам), не нашла — остаётся значение шаблона. Ручная правка в заказе всегда
+          главнее и переживает пересчёт — ровно как сегодня переживает правка нормы (ветка recompute
+          в <code>rebuildMaterialRequirementsSnapshot</code>).
+        </p>
+        <p class="note note--good">
+          <b>Параметры.</b> Чипы = заполненные характеристики строки. Пустая строка показывает
+          <span class="pchip pchip--empty">+ параметр</span> — вход в панель одинаковый и когда параметры есть,
+          и когда их нет (та же логика, что уже применили к «Материалы · N»: вход должен быть безусловным,
+          иначе нечем начать).
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 3. ПАНЕЛЬ ПАРАМЕТРОВ ================= -->
+  <section class="sect" id="params">
+    <h2>3. Раскрытая строка — панель параметров <small>подтип + характеристики из MATERIAL_CHARACTERISTICS</small></h2>
+    <p>
+      Набор полей — не свободный: он выводится из подтипа (<code>getMaterialSubtypesByGroup</code> →
+      <code>subtype.characteristics</code>), ровно как в редакторе шаблона. Значит «параметры» в заказе и в
+      справочнике — это одни и те же поля, а не второй словарь.
+    </p>
+
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--new">новое</span> Строка «Основное полотно» раскрыта</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__body">
+              <div class="spec">
+                <table class="spec__t">
+                  <thead>
+                    <tr><th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th>Цвет</th><th class="num">Итого</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td>
+                        <div class="nameline">
+                          <span class="caret is-open">⌄</span>
+                          <span class="cell cell--name cell--focus">Основное полотно</span>
+                        </div>
+                      </td>
+                      <td>
+                        <div class="pchips">
+                          <span class="pchip">Кулирка</span>
+                          <span class="pchip pchip--slot">Плотность <b>190</b> г/м² 🔒</span>
+                          <span class="pchip">Ширина рулона <b>180</b> см</span>
+                          <span class="pchip pchip--more">+2</span>
+                        </div>
+                      </td>
+                      <td class="num">
+                        <span class="cell cell--num">0.42</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">м²</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">42 м²</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr class="exp">
+                      <td colspan="7">
+                        <div class="params">
+                          <div class="params__head">
+                            <b>Параметры материала</b>
+                            <span class="pchip">роль: Основное полотно</span>
+                            <span class="linkbtn" style="margin-left:auto">→ применить параметры ко всем расцветкам</span>
+                          </div>
+                          <div class="fields">
+                            <label class="fld"><span>Подтип</span><span class="ctl ctl--sel">Кулирка</span></label>
+                            <label class="fld">
+                              <span>Плотность, г/м² 🔒</span>
+                              <span class="ctl ctl--num ctl--lock">190</span>
+                            </label>
+                            <label class="fld"><span>Ширина рулона, см</span><span class="ctl ctl--num">180</span></label>
+                            <label class="fld"><span>Состав / тип</span><span class="ctl">100% хлопок</span></label>
+                            <label class="fld"><span>Характеристика полотна</span><span class="ctl">кулирка с лайкрой</span></label>
+                            <label class="fld"><span>Ширина, мм</span><span class="ctl ctl--ph">—</span></label>
+                            <label class="fld"><span>Толщина</span><span class="ctl ctl--ph">—</span></label>
+                          </div>
+                          <div class="params__foot">
+                            🔒 <b style="color:var(--color-fg)">Плотность</b> занята слот-параметром техкарты
+                            «Плотность полотна» — правится ниже, в блоке «Параметры техкарты»
+                            <span class="linkbtn">перейти</span>
+                            <span style="margin-left:auto"></span>
+                            <span class="btn btn--ghost">Сбросить параметры к шаблону</span>
+                          </div>
+                        </div>
+                      </td>
+                    </tr>
+                    <tr>
+                      <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Молния</span></div></td>
+                      <td><div class="pchips"><span class="pchip">Разъёмная</span><span class="pchip">Размер <b>60</b> см</span><span class="pchip">Материал <b>металл</b></span></div></td>
+                      <td class="num"><span class="cell cell--num">1</span><div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры</span></div></td>
+                      <td><span class="cell cell--sm">шт</span></td>
+                      <td><span class="cell">чёрный</span></td>
+                      <td class="num"><span class="rowsum">100 шт</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+
+              <div class="slots">
+                <div class="slots__label">Параметры техкарты</div>
+                <div class="slot">
+                  <span class="slot__name">Плотность полотна<span style="color:var(--color-fg-muted)">, г/м²</span></span>
+                  <span class="cell cell--sm cell--focus">190</span>
+                  <span class="slot__meta">
+                    → Основное полотно: Плотность
+                    <span class="linkbtn">→ все расцветки</span>
+                  </span>
+                </div>
+                <div class="slot">
+                  <span class="slot__name">Бирка<span style="color:var(--color-fg-muted)">, текст</span></span>
+                  <span class="cell cell--sm">размерная</span>
+                  <span class="slot__meta">запись в спецификации <span class="linkbtn">→ все расцветки</span></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note note--good">
+          <b>Два писателя в одну ячейку по-прежнему запрещены.</b> Ячейка под слот-параметром показана
+          замком и read-only — как сегодня отбивается на бэке (<code>ORDER_TECH_CARD_CELL_TAKEN</code>).
+          Новое здесь только одно: раньше замок было <i>не на чем</i> показать, потому что самой ячейки в окне не было.
+        </p>
+        <p class="note">
+          <b>Зеркало обязательно.</b> Запись характеристики должна идти через
+          <code>normalizeMaterialLineCells</code> / <code>applyParametersToCells</code>: <code>density</code> →
+          <code>densityGsm</code>, <code>rollWidth</code> → <code>plannedWidthCm</code>, <code>size</code> →
+          <code>hardwareSizeText</code>, <code>material</code> → <code>hardwareMaterialText</code>. Запись только
+          в JSON тихо откатится ближайшим пересчётом и не доедет до закупки — это уже ловили на параметрах техкарт.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 4. НОРМА ПО РАЗМЕРАМ ================= -->
+  <section class="sect" id="bysize">
+    <h2>4. Норма по размерам <small>PatternItemSizeParameterValue · LINEAR_M_BY_SIZE</small></h2>
+    <p>
+      В номенклатуре погонные метры заданы <b>по каждому размеру</b>, а строка снимка хранит одну норму на штуку.
+      Прятать это за средним числом нельзя — менеджер не поймёт, откуда «1.24». Поэтому строка честно говорит
+      «по размерам» и раскрывается.
+    </p>
+    <div class="shots">
+      <div class="shot">
+        <p class="shot__cap"><span class="tag tag--new">новое</span> Раскрытая норма «Шнур плоский»</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__body">
+              <div class="params">
+                <div class="params__head"><b>Норма по размерам</b><span class="src src--nom">из номенклатуры</span></div>
+                <div class="bysize">
+                  <div class="bysize__c"><span>S · 20 шт</span><span class="cell">1.10</span></div>
+                  <div class="bysize__c"><span>M · 35 шт</span><span class="cell">1.20</span></div>
+                  <div class="bysize__c"><span>L · 30 шт</span><span class="cell">1.35</span></div>
+                  <div class="bysize__c"><span>XL · 15 шт</span><span class="cell">1.45</span></div>
+                </div>
+                <div class="params__foot">
+                  Итого <b style="color:var(--color-fg)">124.00 м пог.</b> на 100 шт · средняя 1.24 м пог./шт
+                  <span style="margin-left:auto"></span>
+                  <span class="btn btn--ghost">Задать одну норму на все размеры</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          Правка любой ячейки размера → строка становится <span class="src src--order">правлено в заказе</span>
+          и больше не перечитывается из номенклатуры (пока не нажали «обновить нормы»).
+        </p>
+      </div>
+      <div class="shot">
+        <p class="shot__cap">Что при этом происходит с потребностью</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__body">
+              <div class="flow" style="grid-template-columns:1fr">
+                <div class="flow__col">
+                  <h3>Правило одного числа</h3>
+                  <div class="step"><span class="step__n">1</span> Норма не правлена в заказе<span class="step__mark step__mark--yes">считаем из номенклатуры</span></div>
+                  <div class="step"><span class="step__n">2</span> Норма правлена в заказе<span class="step__mark step__mark--yes">считаем из заказа</span></div>
+                  <div class="step"><span class="step__n">3</span> Спецификация и закупка<span class="step__mark step__mark--yes">одно и то же число</span></div>
+                </div>
+              </div>
+              <p class="note note--warn">
+                Сейчас <code>WorkshopNeedsService</code> для таких строк считает по номенклатуре и <b>игнорирует</b>
+                строку снимка. Если разрешаем править норму в заказе — потребность обязана слушать заказ,
+                иначе получим второй молчаливый источник истины. Это главная не-UI часть задачи.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 5. ЦЕПОЧКА ================= -->
+  <section class="sect" id="chain">
+    <h2>5. Откуда берётся норма — где она терялась</h2>
+    <div class="flow">
+      <div class="flow__col">
+        <h3>Номенклатура (лекало)</h3>
+        <div class="step"><span class="step__n">1</span> Фурнитура и нормы: Молния 1 шт<span class="step__mark step__mark--yes">есть число</span></div>
+        <div class="step"><span class="step__n">2</span> Погонные метры по размерам<span class="step__mark step__mark--yes">есть числа</span></div>
+        <div class="step"><span class="step__n">3</span> Площади по размерам (м²)<span class="step__mark step__mark--yes">есть числа</span></div>
+      </div>
+      <div class="flow__col">
+        <h3>Шаблон техкарты</h3>
+        <div class="step"><span class="step__n">4</span> «Подтянуть из номенклатуры»<span class="step__mark step__mark--no">число не переносится</span></div>
+        <div class="step"><span class="step__n">5</span> Строка создана с нормой 1<span class="step__mark step__mark--no">заглушка</span></div>
+        <div class="step"><span class="step__n">6</span> Поле нормы в форме<span class="step__mark step__mark--no">скрыто (legacy)</span></div>
+      </div>
+      <div class="flow__col">
+        <h3>Заказ</h3>
+        <div class="step"><span class="step__n">7</span> Снимок материалов<span class="step__mark step__mark--no">берёт 1 из шаблона</span></div>
+        <div class="step"><span class="step__n">8</span> Окно «Материалы техкарты»<span class="step__mark step__mark--no">показывает 1</span></div>
+        <div class="step"><span class="step__n">9</span> Потребность цеха<span class="step__mark step__mark--yes">считает по номенклатуре</span></div>
+      </div>
+    </div>
+    <p class="note note--bad">
+      Шаг 8 и шаг 9 расходятся — это и есть жалоба. Чинить надо в шаге 7 (снимок читает норму из номенклатуры),
+      а не «дорисовать красиво» в шаге 8.
+    </p>
+  </section>
+
+  <!-- ================= 6. ЧТО ПРАВИМ ================= -->
+  <section class="sect" id="files">
+    <h2>6. Что правим</h2>
+    <table class="files">
+      <thead><tr><th style="width:38%">Файл</th><th>Правка</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>packages/shared/src/order-tech-cards.ts</code></td>
+          <td><code>OrderTechCardLineDto</code>: + <code>subtypeKey</code>, <code>characteristics</code>,
+            <code>qtySource</code> (<code>NOMENCLATURE</code>|<code>TEMPLATE</code>|<code>ORDER</code>),
+            <code>qtyBySize[]</code>. <code>UpdateOrderTechCardLineSchema</code>: + <code>subtypeKey</code>,
+            <code>characteristics</code>, <code>qtyBySize</code>.</td>
+        </tr>
+        <tr>
+          <td><code>apps/api/.../orders.service.ts</code><br /><span style="color:var(--color-fg-muted)">rebuildMaterialRequirementsSnapshot</span></td>
+          <td>При материализации искать норму в номенклатуре заказа (<code>PatternItemParameterNorm</code> /
+            <code>PatternItemSizeParameterValue</code>) по роли+подтипу; заполнять <code>qtyPerUnit</code> и
+            <code>qtySource</code>. Правка в заказе фиксирует <code>ORDER</code> и переживает пересчёт.</td>
+        </tr>
+        <tr>
+          <td><code>apps/api/.../order-tech-card.service.ts</code><br /><span style="color:var(--color-fg-muted)">updateLine</span></td>
+          <td>Принимать подтип и характеристики; писать через <code>normalizeMaterialLineCells</code> (зеркало
+            JSON ↔ legacy-колонки); ячейку под слот-параметром по-прежнему отбивать 409.</td>
+        </tr>
+        <tr>
+          <td><code>apps/api/.../workshop-needs.service.ts</code></td>
+          <td>Для строк с <code>qtySource = ORDER</code> считать по снимку заказа, а не по номенклатуре —
+            иначе два источника истины.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/components/orders/colorways/colorway-spec.tsx</code></td>
+          <td>Колонка «Параметры» (чипы), каретка + панель параметров строки, бейдж источника нормы,
+            раскрытие нормы по размерам, «обновить нормы из номенклатуры».</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/app/admin/tech-cards/tech-card-form.tsx</code> + <code>actions.ts</code></td>
+          <td><code>pullMaterialLinesFromPatternAction</code> возвращает и числа; <code>rowFromPulledLine</code>
+            ставит реальную норму вместо <code>'1'</code>. Шаблон при этом остаётся «сеялкой» — истина в номенклатуре.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note">
+      Правок схемы БД, скорее всего, не нужно: <code>characteristics</code>/<code>subtypeKey</code> уже есть на
+      <code>OrderMaterialRequirement</code>. Отдельное поле под <code>qtySource</code> — единственный кандидат
+      на миграцию (можно вывести и без него: «норма ≠ норме источника» = правлено, но явное поле честнее).
+    </p>
+  </section>
+
+  <!-- ================= 7. ВОПРОСЫ ================= -->
+  <section class="sect" id="open">
+    <h2>7. Что нужно решить до кода</h2>
+    <div class="q">
+      <b>1. Кто главный по норме — номенклатура или заказ?</b>
+      <span>Предлагаю: номенклатура — источник, заказ — переопределение с бейджем. Альтернатива «заказ всегда
+      копия шаблона» оставляет сегодняшнюю дырку.</span>
+    </div>
+    <div class="q">
+      <b>2. Нормы по размерам — правим по размерам или одной цифрой?</b>
+      <span>Предлагаю показывать по размерам (как в номенклатуре) + кнопку «одна норма на все». Хранение в
+      снимке остаётся одной нормой/шт, если правят одной цифрой.</span>
+    </div>
+    <div class="q">
+      <b>3. Что делает «Подтянуть из номенклатуры» в шаблоне?</b>
+      <span>Предлагаю переносить числа как стартовое значение (сегодня строка молча получает 1). Но истина всё
+      равно у номенклатуры, шаблон — структура.</span>
+    </div>
+    <div class="q">
+      <b>4. Правка параметров в производстве (AMENDMENT)?</b>
+      <span>Предлагаю разрешить наравне с нормой: то же предупреждение, та же запись в журнал правок заказа.</span>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>

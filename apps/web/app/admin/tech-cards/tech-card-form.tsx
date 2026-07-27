@@ -266,13 +266,22 @@ function rowFromPulledLine(line: {
   roleKey: string;
   labelSnapshot: string;
   unit: string;
+  qtyPerUnit?: string | null;
 }): MaterialRow {
   const isPackaging = line.roleKey === 'PACKAGING';
+  // Норма из номенклатуры, если она там есть. Раньше здесь стояла жёсткая
+  // единица — и эта заглушка уезжала в заказ: менеджер видел «норма 1», а
+  // закупка считалась по номенклатуре. Числа нет (подтягивание из ГРУППЫ,
+  // где только определения параметров) — остаётся «1» как безопасный
+  // sentinel: `TechCardMaterialLineInputSchema` требует число > 0.
+  const pulled = (line.qtyPerUnit ?? '').trim();
+  const numeric = Number(pulled);
   return emptyMaterialRow({
     materialRole: line.roleKey,
     fabricType: line.labelSnapshot,
     unit: line.unit,
-    qtyPerUnit: '1',
+    qtyPerUnit:
+      pulled !== '' && Number.isFinite(numeric) && numeric > 0 ? pulled : '1',
     colorRule: isPackaging ? 'ORDER_SELECTED_COLOR' : 'ORDER_COLOR',
   });
 }
@@ -297,7 +306,7 @@ const MATERIAL_REQUIREMENTS_HINT =
  * (так же названы блоки в карточке номенклатуры).
  */
 const PULL_FROM_NOMENCLATURE_HINT =
-  'Подтягивает из выбранной номенклатуры заполненные нормы фурнитуры и заполненные параметры погонных метров. Пустые параметры не добавляются.';
+  'Подтягивает из выбранной номенклатуры заполненные нормы фурнитуры и заполненные параметры погонных метров ВМЕСТЕ С ЧИСЛАМИ. Пустые параметры не добавляются.';
 
 /**
  * Сообщение, когда action отработал, но в номенклатуре по обоим
@@ -551,8 +560,10 @@ export function TechCardForm({
    * группы PACKAGING с разным `fabricType` остаётся как несколько
    * строк — ключ их различает).
    *
-   * Числовые значения нормы / погонных метров В ТЕХКАРТУ НЕ ПЕРЕНОСЯТСЯ
-   * — они хранятся в номенклатуре и используются `WorkshopNeed`-ом.
+   * Числа ПЕРЕНОСЯТСЯ: норма фурнитуры — как есть, погонные метры —
+   * средним по заполненным размерам. Истина по норме остаётся у
+   * номенклатуры: заказ выводит её заново по своему размерному плану
+   * (`@sewing/shared/pattern-norms`), шаблон только сеет разумный старт.
    *
    * Работает и в режиме `create`, и в `edit`: никакого `techCardId` не
    * нужно — action ходит в номенклатуру по её id.

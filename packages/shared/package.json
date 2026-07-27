@@ -49,6 +49,7 @@
     "./material-characteristics": "./src/material-characteristics.ts",
     "./tech-card-parameters": "./src/tech-card-parameters.ts",
     "./order-tech-cards": "./src/order-tech-cards.ts",
+    "./pattern-norms": "./src/pattern-norms.ts",
     "./patterns": "./src/patterns.ts",
     "./pattern-categories": "./src/pattern-categories.ts",
     "./workshop-needs": "./src/workshop-needs.ts",

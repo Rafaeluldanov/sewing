@@ -56,6 +56,7 @@ export * from './material-roles';
 export * from './material-characteristics';
 export * from './tech-card-parameters';
 export * from './order-tech-cards';
+export * from './pattern-norms';
 export * from './patterns';
 export * from './pattern-categories';
 export * from './workshop-needs';
