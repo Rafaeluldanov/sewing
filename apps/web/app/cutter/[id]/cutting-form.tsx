@@ -8,13 +8,16 @@ import {
   CUTTING_TASK_MAX_PER_LAYER_QTY,
   CUTTING_TASK_MAX_ROLLS,
   listCuttingCompletionProblems,
+  listLayCompletionProblems,
   type CuttingTaskLayDto,
   type CuttingTaskSizeRowDto,
   type CuttingTaskVariantDto,
   type SaveCuttingTaskProgressDto,
 } from '@sewing/shared/cutting-tasks';
 import {
+  completeCuttingLayAction,
   completeCuttingTaskAction,
+  reopenCuttingLayAction,
   saveCuttingProgressAction,
 } from '../actions';
 
@@ -44,6 +47,24 @@ interface RollDraft {
 
 interface LayDraft {
   key: string;
+  /**
+   * Номер расклада на сервере (`CuttingTaskLay.ordinal`). `null` — расклад
+   * ещё не сохранён (создан кнопкой «+ Добавить расклад»), номер выдаст
+   * backend.
+   *
+   * Обязателен в payload для существующих раскладов: сохранение — merge по
+   * `ordinal`, а не replace. Без него каждый автосейв пересоздавал бы
+   * расклады с новыми номерами, а `Passport.cuttingLayOrdinal` выпущенных
+   * паспортов указывал бы на чужой настил.
+   */
+  ordinal: number | null;
+  /** Частичное завершение: момент «Расклад готов» (ISO) или `null`. */
+  completedAt: string | null;
+  /** Кто закрыл расклад — подпись в шапке закрытого расклада. */
+  completedByName: string | null;
+  /** Сколько паспортов по раскладу уже выпущено / ожидается. */
+  releasedPassports: number;
+  totalPassports: number;
   /** Выбранные размеры: `sizeId → perLayerQty` строкой. Наличие = выбран. */
   sizes: Record<string, string>;
   rolls: RollDraft[];
@@ -70,6 +91,19 @@ function clampInt(raw: string, max: number): number {
   return Math.min(n, max);
 }
 
+/**
+ * Поля нового (ещё не сохранённого) расклада: номера нет — его выдаст
+ * backend при первом сохранении (append-only, max+1); закрытым он,
+ * очевидно, тоже быть не может.
+ */
+const NEW_LAY_META = {
+  ordinal: null,
+  completedAt: null,
+  completedByName: null,
+  releasedPassports: 0,
+  totalPassports: 0,
+} as const;
+
 function layFromDto(dto: CuttingTaskLayDto): LayDraft {
   const sizes: Record<string, string> = {};
   for (const s of dto.sizes) {
@@ -77,6 +111,11 @@ function layFromDto(dto: CuttingTaskLayDto): LayDraft {
   }
   return {
     key: `lay-${dto.id}`,
+    ordinal: dto.ordinal,
+    completedAt: dto.completedAt,
+    completedByName: dto.completedByName,
+    releasedPassports: dto.releasedPassports,
+    totalPassports: dto.totalPassports,
     sizes,
     rolls: dto.rolls.map((r) => ({
       key: `roll-${r.id}`,
@@ -126,7 +165,7 @@ export function CuttingForm({
   const [layDrafts, setLayDrafts] = useState<LayDraft[]>(() => {
     if (lays.length > 0) return lays.map(layFromDto);
     if (readOnly) return [];
-    return [{ key: 'lay-init-1', sizes: {}, rolls: [] }];
+    return [{ key: 'lay-init-1', ...NEW_LAY_META, sizes: {}, rolls: [] }];
   });
 
   // --- Расчёты -------------------------------------------------------------
@@ -162,7 +201,10 @@ export function CuttingForm({
     setLayDrafts((prev) =>
       prev.length >= CUTTING_TASK_MAX_LAYS
         ? prev
-        : [...prev, { key: nextKey('lay'), sizes: {}, rolls: [] }],
+        : [
+            ...prev,
+            { key: nextKey('lay'), ...NEW_LAY_META, sizes: {}, rolls: [] },
+          ],
     );
     touched();
   }
@@ -236,17 +278,24 @@ export function CuttingForm({
   // --- Сборка payload + сабмит ---------------------------------------------
   function buildPayload(): SaveCuttingTaskProgressDto {
     return {
-      lays: layDrafts.map((lay) => ({
-        laySizes: Object.entries(lay.sizes).map(([sizeId, v]) => ({
-          sizeId,
-          perLayerQty: clampInt(v, CUTTING_TASK_MAX_PER_LAYER_QTY),
+      // ЗАКРЫТЫЕ расклады в payload не отправляем: backend их не принимает
+      // (`CUTTING_LAY_LOCKED`) и их отсутствие для него — норма. Открытые
+      // идут со своим `ordinal`, чтобы сохранение обновило их, а не
+      // создало копии; новые — без `ordinal` (номер выдаст backend).
+      lays: layDrafts
+        .filter((lay) => !lay.completedAt)
+        .map((lay) => ({
+          ...(lay.ordinal != null ? { ordinal: lay.ordinal } : {}),
+          laySizes: Object.entries(lay.sizes).map(([sizeId, v]) => ({
+            sizeId,
+            perLayerQty: clampInt(v, CUTTING_TASK_MAX_PER_LAYER_QTY),
+          })),
+          rolls: lay.rolls.map((r) => ({
+            ordinal: r.ordinal,
+            layers: clampInt(r.layers, CUTTING_TASK_MAX_LAYERS),
+            variantId: r.variantId,
+          })),
         })),
-        rolls: lay.rolls.map((r) => ({
-          ordinal: r.ordinal,
-          layers: clampInt(r.layers, CUTTING_TASK_MAX_LAYERS),
-          variantId: r.variantId,
-        })),
-      })),
     };
   }
 
@@ -291,6 +340,103 @@ export function CuttingForm({
     });
   }
 
+  // --- Частичное завершение раскроя ----------------------------------------
+
+  /**
+   * Что мешает закрыть расклад — зеркало backend-гейта
+   * (`CUTTING_LAY_COMPLETION_INCOMPLETE`), те же формулировки. Пустой
+   * список = кнопка «Расклад готов» активна.
+   */
+  function layProblems(lay: LayDraft): string[] {
+    return listLayCompletionProblems(
+      {
+        laySizes: Object.entries(lay.sizes).map(([sizeId, v]) => ({
+          sizeId,
+          perLayerQty: clampInt(v, CUTTING_TASK_MAX_PER_LAYER_QTY),
+        })),
+        rolls: lay.rolls.map((r) => ({
+          ordinal: r.ordinal,
+          layers: clampInt(r.layers, CUTTING_TASK_MAX_LAYERS),
+          variantId: r.variantId,
+        })),
+      },
+      (sizeId) =>
+        selectableSizes.find((r) => r.sizeId === sizeId)?.sizeCodeSnapshot ??
+        sizeId,
+    );
+  }
+
+  /**
+   * «Расклад готов» — закрыть один расклад, не завершая раскрой заказа.
+   * Сначала сохраняем прогресс (backend закрывает то, что лежит в БД),
+   * потом закрываем. Для нового, ещё не сохранённого расклада номер
+   * приходит только после сохранения — поэтому просим сохранить и повторить.
+   */
+  function handleCompleteLay(lay: LayDraft) {
+    setError(null);
+    setSavedNote(null);
+    const problems = layProblems(lay);
+    if (problems.length > 0) {
+      setError(`Нельзя закрыть расклад: ${problems.join('; ')}.`);
+      return;
+    }
+    const total = lay.rolls.reduce(
+      (n, r) => n + (clampInt(r.layers, CUTTING_TASK_MAX_LAYERS) > 0 ? 1 : 0),
+      0,
+    ) * Object.keys(lay.sizes).length;
+    const ok = window.confirm(
+      `Закрыть расклад? Появится ${total} паспорт(ов) к выпуску. ` +
+        'После закрытия настил нельзя править — открыть расклад можно, ' +
+        'пока по нему не выпущен ни один паспорт.',
+    );
+    if (!ok) return;
+    startTransition(async () => {
+      // Сохраняем текущее состояние формы: закрытие проверяет БД.
+      const saved = await saveCuttingProgressAction(taskId, buildPayload());
+      if (!saved.ok) {
+        setError(saved.error ?? 'Не удалось сохранить');
+        return;
+      }
+      const ordinal = lay.ordinal ?? saved.ordinals?.[laySlotIndex(lay)] ?? null;
+      if (ordinal == null) {
+        setError('Расклад сохранён — нажмите «Расклад готов» ещё раз.');
+        router.refresh();
+        return;
+      }
+      const result = await completeCuttingLayAction(taskId, ordinal);
+      if (!result.ok) setError(result.error ?? 'Не удалось закрыть расклад');
+      else router.refresh();
+    });
+  }
+
+  /** Индекс расклада среди отправленных (открытых) — для сопоставления с ответом. */
+  function laySlotIndex(lay: LayDraft): number {
+    return layDrafts.filter((l) => !l.completedAt).findIndex((l) => l.key === lay.key);
+  }
+
+  /** «Открыть расклад» — снять закрытие, если по нему нет паспортов. */
+  function handleReopenLay(lay: LayDraft) {
+    setError(null);
+    if (lay.ordinal == null) return;
+    if (lay.releasedPassports > 0) {
+      setError(
+        `По раскладу уже выпущено паспортов: ${lay.releasedPassports}. ` +
+          'Сначала удалите их в «Выпущенных паспортах».',
+      );
+      return;
+    }
+    const ok = window.confirm(
+      'Открыть расклад для правок? Выпуск паспортов по нему станет недоступен, ' +
+        'пока вы не закроете его снова.',
+    );
+    if (!ok) return;
+    startTransition(async () => {
+      const result = await reopenCuttingLayAction(taskId, lay.ordinal as number);
+      if (!result.ok) setError(result.error ?? 'Не удалось открыть расклад');
+      else router.refresh();
+    });
+  }
+
   // --- Render --------------------------------------------------------------
   return (
     <div className="cutter-form">
@@ -303,9 +449,19 @@ export function CuttingForm({
           <LayBlock
             key={lay.key}
             lay={lay}
-            ordinal={idx + 1}
-            readOnly={readOnly}
-            canRemove={!readOnly && layDrafts.length > 1}
+            // Номер — серверный (`CuttingTaskLay.ordinal`), а не индекс:
+            // после закрытия/удаления раскладов индекс расходится с тем,
+            // что записано в паспортах (`Расклад N · Рулон M`).
+            ordinal={lay.ordinal ?? idx + 1}
+            readOnly={readOnly || !!lay.completedAt}
+            canRemove={
+              !readOnly &&
+              !lay.completedAt &&
+              layDrafts.filter((l) => !l.completedAt).length > 1
+            }
+            problems={lay.completedAt ? [] : layProblems(lay)}
+            onCompleteLay={() => handleCompleteLay(lay)}
+            onReopenLay={() => handleReopenLay(lay)}
             selectableSizes={selectableSizes}
             planBySize={planBySize}
             layLayers={layLayers(lay)}
@@ -414,6 +570,13 @@ interface LayBlockProps {
   ordinal: number;
   readOnly: boolean;
   canRemove: boolean;
+  /**
+   * Частичное завершение: что мешает закрыть этот расклад (пусто = можно).
+   * Для уже закрытого расклада всегда пусто.
+   */
+  problems: string[];
+  onCompleteLay: () => void;
+  onReopenLay: () => void;
   selectableSizes: CuttingTaskSizeRowDto[];
   planBySize: Map<string, number>;
   layLayers: number;
@@ -435,6 +598,9 @@ function LayBlock({
   ordinal,
   readOnly,
   canRemove,
+  problems,
+  onCompleteLay,
+  onReopenLay,
   selectableSizes,
   planBySize,
   layLayers,
@@ -455,9 +621,19 @@ function LayBlock({
   const readonlySizeIds = Object.keys(lay.sizes);
 
   return (
-    <section className="constructor-card-block cutter-lay">
+    <section
+      className={
+        'constructor-card-block cutter-lay' +
+        (lay.completedAt ? ' cutter-lay--closed' : '')
+      }
+    >
       <div className="constructor-card-block__head cutter-lay__head">
         <h2 className="constructor-card-block__title">Расклад {ordinal}</h2>
+        {lay.completedAt ? (
+          <span className="constructor-status constructor-status--done">
+            Закрыт
+          </span>
+        ) : null}
         {canRemove && (
           <button
             type="button"
@@ -629,16 +805,76 @@ function LayBlock({
       </table>
       <p className="cutter-layers-total">
         Всего слоёв: <strong>{layLayers}</strong>
+        {lay.completedAt ? (
+          <>
+            {' · паспорта: '}
+            <strong>
+              {lay.releasedPassports} из {lay.totalPassports}
+            </strong>
+          </>
+        ) : null}
       </p>
-      {!readOnly && (
-        <button
-          type="button"
-          className="constructor-btn constructor-btn--ghost"
-          onClick={onAddRoll}
-          disabled={disabled}
-        >
-          + Добавить рулон
-        </button>
+
+      {/*
+       * Частичное завершение раскроя. Открытый расклад: «Расклад готов»
+       * (гаснет, пока настил не заполнен — причины показываем рядом теми же
+       * словами, что и backend). Закрытый: подпись «кто закрыл» + «Открыть
+       * расклад», доступный пока по раскладу нет выпущенных паспортов.
+       */}
+      {lay.completedAt ? (
+        <div className="cutter-lay__foot">
+          <p className="cutter-lay__closed-note">
+            Настил закрыт
+            {lay.completedByName ? `, закрыл ${lay.completedByName}` : ''} — правки
+            недоступны.{' '}
+            {lay.releasedPassports > 0
+              ? `По раскладу выпущено паспортов: ${lay.releasedPassports}, открыть его можно только после их удаления.`
+              : 'Паспортов по нему ещё нет — расклад можно открыть.'}
+          </p>
+          <button
+            type="button"
+            className="constructor-btn constructor-btn--ghost"
+            onClick={onReopenLay}
+            disabled={disabled || lay.releasedPassports > 0}
+          >
+            Открыть расклад
+          </button>
+        </div>
+      ) : (
+        <>
+          {!readOnly && (
+            <button
+              type="button"
+              className="constructor-btn constructor-btn--ghost"
+              onClick={onAddRoll}
+              disabled={disabled}
+            >
+              + Добавить рулон
+            </button>
+          )}
+          {!readOnly && (
+            <div className="cutter-lay__foot">
+              <button
+                type="button"
+                className="constructor-btn constructor-btn--primary"
+                onClick={onCompleteLay}
+                disabled={disabled || problems.length > 0}
+                title={
+                  problems.length > 0
+                    ? `Нельзя закрыть: ${problems.join('; ')}`
+                    : 'Закрыть расклад — по нему можно будет выпускать паспорта'
+                }
+              >
+                Расклад готов
+              </button>
+              {problems.length > 0 && (
+                <p className="cutter-lay__problems">
+                  Закрыть нельзя: {problems.join('; ')}.
+                </p>
+              )}
+            </div>
+          )}
+        </>
       )}
     </section>
   );

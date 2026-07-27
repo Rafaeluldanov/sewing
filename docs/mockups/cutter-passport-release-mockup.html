@@ -1,0 +1,1501 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Раскройщик: раскрой + выпуск паспортов (прототип v2)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+    --tap-min:48px;
+  }
+  *{ box-sizing:border-box; }
+  html{ scroll-behavior:smooth; }
+  @media (prefers-reduced-motion: reduce){ html{ scroll-behavior:auto; } }
+  body{
+    margin:0; padding:0 0 80px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1320px; margin:0 auto; padding:0 20px; }
+
+  /* ---------- липкая навигация документа ---------- */
+  .topnav{ position:sticky; top:0; z-index:40; background:rgba(236,236,235,.92); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1320px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:600; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+  .topnav a.is-active{ background:var(--btn-primary-bg); color:var(--btn-primary-fg); border-color:var(--btn-primary-edge); }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:1.5rem; margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:82ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.2rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:1.25rem; margin:0 0 .3rem; }
+  .sect > h2 small{ font-weight:400; color:var(--color-fg-muted); font-size:.8rem; font-family:ui-monospace,Menlo,monospace; margin-left:.5rem; }
+  .sect > p{ margin:0 0 1.1rem; color:var(--color-fg-muted); max-width:82ch; }
+  .shots{ display:flex; flex-wrap:wrap; gap:26px; align-items:flex-start; }
+  .shot{ flex:0 1 392px; }
+  .shot__cap{ font-size:.85rem; font-weight:700; margin:0 0 .5rem; }
+  .shot__cap small{ display:block; font-weight:400; color:var(--color-fg-muted); }
+  .phone{ border:9px solid #1e293b; border-radius:34px; background:#1e293b; box-shadow:var(--shadow-md); }
+  .phone__inner{ border-radius:26px; overflow:hidden; background:var(--color-bg-soft); }
+  .work{ padding:1rem .9rem 1.6rem; display:flex; flex-direction:column; gap:.9rem; }
+
+  /* ---------- компоненты кабинета ---------- */
+  .role-header{ background:#1f6bc0; color:#fff; border-radius:var(--radius-xl); padding:1rem 1.1rem; display:flex; flex-direction:column; gap:.7rem; position:relative; overflow:hidden; }
+  .role-header::after{ content:''; position:absolute; right:-40px; top:-40px; width:160px; height:160px; border-radius:50%; background:rgba(255,255,255,.06); }
+  .role-header__top{ display:flex; justify-content:space-between; align-items:flex-start; gap:.75rem; position:relative; z-index:1; }
+  .role-header__brand{ font-size:.7rem; text-transform:uppercase; letter-spacing:.12em; color:rgba(255,255,255,.7); font-weight:700; }
+  .role-header__name{ margin:.1rem 0 0; font-size:var(--title-hero); font-weight:700; }
+  .role-header__role{ display:inline-flex; background:rgba(255,255,255,.16); padding:.3rem .7rem; border-radius:var(--radius-pill); font-size:.78rem; font-weight:600; }
+  .role-header__status{ font-size:.82rem; color:rgba(255,255,255,.85); position:relative; z-index:1; }
+  .kebab{ position:absolute; right:.55rem; top:.5rem; z-index:3; color:#fff; font-size:1.3rem; line-height:1; opacity:.8; }
+
+  h1.page-title{ font-size:var(--title-page); font-weight:600; margin:0; }
+  .toolbar{ display:grid; grid-template-columns:1fr 1fr; gap:.5rem; }
+  .toolbtn{ display:flex; flex-direction:column; align-items:flex-start; gap:.15rem; padding:.6rem .8rem; background:#fff; border:1px solid var(--color-border-strong); border-radius:var(--radius-lg); font:inherit; cursor:pointer; text-align:left; }
+  .toolbtn b{ font-size:.95rem; }
+  .toolbtn span{ font-size:.75rem; color:var(--color-fg-muted); }
+  .toolbtn--live{ border-color:var(--color-ok); background:var(--color-ok-soft); }
+  .toolbtn--live span{ color:var(--color-ok-fg); }
+
+  .section{ margin:0; }
+  .section__title{ font-size:var(--title-section); font-weight:600; margin:0 0 .5rem; display:flex; align-items:baseline; gap:.4rem; }
+  .section__title .count{ color:var(--color-fg-muted); font-weight:400; }
+  .list{ list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:.5rem; }
+  .card{ display:block; padding:.75rem .9rem; background:#fff; border:1px solid var(--color-border); border-radius:10px; text-decoration:none; color:inherit; box-shadow:inset 4px 0 0 0 transparent; }
+  .card--new{ box-shadow:inset 4px 0 0 0 var(--color-warn-fg); }
+  .card--in_progress{ box-shadow:inset 4px 0 0 0 var(--color-accent-fg); }
+  .card--done{ box-shadow:inset 4px 0 0 0 var(--color-ok-fg); }
+  .card__head{ display:flex; justify-content:space-between; gap:.5rem; align-items:baseline; margin-bottom:.35rem; }
+  .card__name{ font-size:var(--title-item); font-weight:700; }
+  .card__sub{ font-size:.85rem; color:var(--color-fg-muted); margin:0 0 .5rem; }
+  .status{ font-size:.75rem; font-weight:700; padding:.15rem .5rem; border-radius:var(--radius-pill); white-space:nowrap; }
+  .status--new{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+  .status--in_progress{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .status--done{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+
+  /* прогресс двух треков в карточке заказа */
+  .tracks{ display:flex; flex-direction:column; gap:.35rem; margin:0 0 .55rem; }
+  .track{ display:grid; grid-template-columns:5.4rem 1fr auto; gap:.5rem; align-items:center; font-size:.8rem; color:var(--color-fg-muted); font-variant-numeric:tabular-nums; }
+  .track__bar{ height:6px; border-radius:999px; background:var(--color-bg-muted); overflow:hidden; }
+  .track__fill{ height:100%; border-radius:999px; background:var(--color-accent); }
+  .track__fill--release{ background:var(--color-ok); }
+  .track b{ color:var(--color-fg); }
+  .next{ display:flex; align-items:center; justify-content:space-between; gap:.5rem; margin-top:.1rem; padding:.5rem .7rem; border-radius:var(--radius-md); background:var(--color-bg-tint); border:1px solid var(--btn-primary-edge); font-size:.88rem; font-weight:700; color:var(--btn-primary-fg); }
+  .next--quiet{ background:var(--color-bg-muted); border-color:var(--color-border); color:var(--color-fg-muted); font-weight:600; }
+
+  .btn{ display:inline-flex; align-items:center; justify-content:center; gap:.4rem; min-height:var(--tap-min); padding:.55rem 1rem; border-radius:var(--radius-md); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg); font:inherit; font-weight:600; text-decoration:none; cursor:pointer; }
+  .btn--block{ width:100%; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); font-weight:700; }
+  .btn--lg{ min-height:60px; font-size:1.05rem; }
+  .btn--sm{ min-height:36px; padding:.3rem .7rem; font-size:.85rem; }
+  .btn--danger{ color:var(--color-danger); border-color:#f3c9c6; }
+  .btn--ghost{ border-color:transparent; background:transparent; color:var(--color-accent-fg); }
+
+  .sub-head{ display:flex; align-items:center; gap:.6rem; }
+  .sub-head .back{ width:40px; height:40px; border-radius:var(--radius-md); border:1px solid var(--color-border-strong); background:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:1.2rem; text-decoration:none; color:var(--color-fg); flex:0 0 auto; }
+  .sub-head h2{ margin:0; font-size:1.25rem; font-weight:600; line-height:1.2; }
+  .sub-head p{ margin:.1rem 0 0; font-size:.8rem; color:var(--color-fg-muted); }
+
+  .tabs{ display:flex; gap:.25rem; padding:.2rem; background:var(--color-bg-muted); border-radius:var(--radius-pill); }
+  .tabs button{ flex:1; min-height:40px; border:0; background:transparent; border-radius:var(--radius-pill); font:inherit; font-size:.9rem; font-weight:600; color:var(--color-fg-muted); cursor:pointer; }
+  .tabs button.is-on{ background:#fff; color:var(--color-fg); box-shadow:var(--shadow-sm); }
+  .tabs button .n{ display:inline-block; min-width:1.3em; padding:0 .3em; margin-left:.25em; border-radius:999px; background:var(--color-danger-soft); color:var(--color-danger-fg); font-size:.72rem; font-weight:700; }
+
+  .banner{ border-radius:var(--radius-lg); padding:.65rem .85rem; font-size:.85rem; display:flex; gap:.55rem; align-items:flex-start; }
+  .banner--info{ background:var(--color-accent-soft); color:#14406f; }
+  .banner--ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .banner--warn{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+  .banner strong{ display:block; }
+  .banner .chev{ margin-left:auto; align-self:center; opacity:.6; }
+
+  .scan-card{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-xl); padding:1rem 1.05rem; box-shadow:var(--shadow-sm); display:flex; flex-direction:column; gap:.8rem; }
+  .scan-card__title{ margin:0; font-size:var(--title-item); font-weight:700; }
+  .scan-card__hint{ margin:.2rem 0 0; font-size:.85rem; color:var(--color-fg-muted); }
+
+  .lay{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .9rem; display:flex; flex-direction:column; gap:.6rem; box-shadow:inset 4px 0 0 0 transparent; }
+  .lay--locked{ box-shadow:inset 4px 0 0 0 var(--color-ok); }
+  .lay--open{ box-shadow:inset 4px 0 0 0 var(--color-warn-fg); }
+  .lay__head{ display:flex; justify-content:space-between; align-items:baseline; gap:.5rem; }
+  .lay__title{ margin:0; font-size:var(--title-item); font-weight:700; }
+  .lay__sum{ font-size:.85rem; color:var(--color-fg-muted); margin:0; }
+  .lay__sum b{ color:var(--color-fg); }
+  .lay__foot{ display:flex; flex-wrap:wrap; gap:.4rem; padding-top:.55rem; border-top:1px solid var(--color-border); }
+  .tbl{ width:100%; border-collapse:collapse; font-size:.88rem; }
+  .tbl th{ text-align:left; font-weight:400; color:var(--color-fg-muted); font-size:.73rem; text-transform:uppercase; letter-spacing:.04em; padding:0 .35rem .3rem 0; }
+  .tbl td{ padding:.26rem .35rem .26rem 0; border-top:1px solid var(--color-border); font-variant-numeric:tabular-nums; }
+  .tbl td.num, .tbl th.num{ text-align:right; }
+  .tbl input{ width:56px; font:inherit; font-size:.88rem; padding:.2rem .35rem; border:1px solid var(--color-border-strong); border-radius:var(--radius-sm); text-align:right; }
+
+  .field{ display:flex; flex-direction:column; gap:.4rem; }
+  .field > label{ font-size:var(--title-label); font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:var(--color-fg-muted); }
+  .chips{ display:flex; flex-wrap:wrap; gap:.45rem; }
+  .chip{ min-height:44px; padding:.4rem .85rem; border-radius:var(--radius-pill); border:1.5px solid var(--color-border-strong); background:#fff; font-size:.95rem; display:inline-flex; align-items:center; gap:.35rem; cursor:pointer; font-family:inherit; }
+  .chip.is-on{ border-color:var(--btn-primary-edge); background:var(--color-bg-tint); font-weight:700; }
+  .chip.is-off{ opacity:.55; background:var(--color-bg-muted); border-style:dashed; cursor:default; }
+  .chip small{ color:var(--color-fg-muted); font-size:.78rem; }
+  .rolls{ display:grid; grid-template-columns:repeat(3,1fr); gap:.5rem; }
+  .roll{ border:1.5px solid var(--color-border-strong); border-radius:var(--radius-md); background:#fff; padding:.5rem .5rem; text-align:center; cursor:pointer; }
+  .roll.is-on{ border-color:var(--btn-primary-edge); background:var(--color-bg-tint); }
+  .roll.is-off{ opacity:.55; background:var(--color-bg-muted); cursor:default; }
+  .roll b{ display:block; font-size:1.05rem; }
+  .roll span{ font-size:.75rem; color:var(--color-fg-muted); }
+  .total{ display:flex; justify-content:space-between; align-items:center; padding:.65rem .85rem; background:var(--color-bg-muted); border-radius:var(--radius-md); font-size:.95rem; }
+  .total b{ font-size:1.1rem; }
+
+  .sheet-wrap{ position:relative; }
+  .scrim{ display:flex; flex-direction:column; background:rgba(20,20,20,.45); }
+  .sheet{ margin-top:auto; background:#fff; border-radius:var(--radius-xl) var(--radius-xl) 0 0; padding:1.05rem 1.1rem 1.2rem; display:flex; flex-direction:column; gap:.75rem; box-shadow:0 -10px 30px rgba(20,20,20,.18); }
+  .sheet h3{ margin:0; font-size:var(--title-modal); }
+  .sheet__body{ font-size:.9rem; color:var(--color-fg-muted); display:flex; flex-direction:column; gap:.4rem; }
+  .sheet__body b{ color:var(--color-fg); }
+
+  .success{ border:1px solid var(--color-ok); background:var(--color-ok-soft); border-radius:var(--radius-xl); padding:.9rem 1rem; display:flex; flex-direction:column; gap:.6rem; }
+  .success h3{ margin:0; font-size:var(--title-modal); color:var(--color-ok-fg); }
+  .success ul{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.3rem; }
+  .success li{ background:#fff; border-radius:var(--radius-md); padding:.45rem .65rem; font-size:.9rem; display:flex; justify-content:space-between; gap:.5rem; }
+
+  .rows{ list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:.55rem; }
+  .row{ background:#fff; border:1px solid var(--color-border); border-radius:12px; padding:.7rem .85rem; display:flex; gap:.6rem; justify-content:space-between; align-items:center; }
+  .row__main{ display:flex; flex-direction:column; gap:.15rem; min-width:0; }
+  .row__num{ font-size:1.05rem; font-weight:700; }
+  .row__meta{ font-size:.85rem; color:var(--color-fg-muted); }
+  .who{ font-size:.75rem; color:var(--color-fg-subtle); }
+  .row__actions{ display:flex; gap:.35rem; flex:0 0 auto; }
+
+  .checks{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.35rem; }
+  .checks li{ display:flex; gap:.5rem; align-items:flex-start; font-size:.86rem; padding:.4rem .55rem; border-radius:var(--radius-md); background:var(--color-bg-muted); }
+  .checks li b{ display:block; font-weight:700; }
+  .checks li span.msg{ color:var(--color-fg-muted); font-size:.8rem; }
+  .checks li.ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .checks li.warn{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+  .mark{ flex:0 0 1rem; font-weight:700; }
+  .req{ display:flex; gap:.5rem; align-items:center; justify-content:space-between; padding:.5rem .7rem; border-radius:var(--radius-md); font-size:.85rem; }
+  .req--pending{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+  .req--approved{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .req--rejected{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .kv{ display:grid; grid-template-columns:1fr auto; gap:.2rem .75rem; font-size:.9rem; font-variant-numeric:tabular-nums; margin:0; }
+  .kv dt{ color:var(--color-fg-muted); }
+  .kv dd{ margin:0; text-align:right; font-weight:700; }
+  .lock-note{ font-size:.8rem; color:var(--color-fg-muted); margin:0; }
+  .cam{ height:170px; border-radius:var(--radius-lg); background:#111; color:#9aa; display:flex; align-items:center; justify-content:center; font-size:.85rem; position:relative; overflow:hidden; }
+  .cam::after{ content:''; position:absolute; width:130px; height:130px; border:3px solid rgba(255,255,255,.6); border-radius:14px; }
+  .cell-badge{ display:inline-flex; align-items:center; gap:.5rem; align-self:flex-start; background:var(--color-ok-soft); color:var(--color-ok-fg); font-weight:700; padding:.35rem .8rem; border-radius:var(--radius-pill); }
+  .feed{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:.35rem; }
+  .feed li{ display:flex; justify-content:space-between; gap:.5rem; background:#fff; border:1px solid var(--color-border); border-left:4px solid var(--color-ok); border-radius:var(--radius-md); padding:.45rem .65rem; font-size:.88rem; }
+  .feed li span{ color:var(--color-fg-muted); font-size:.78rem; }
+  .badge-dot{ display:inline-flex; align-items:center; gap:.35rem; background:#fbe3e0; color:#991b1b; font-size:.78rem; font-weight:700; padding:.2rem .55rem; border-radius:999px; white-space:nowrap; }
+  .badge-dot i{ width:.5rem; height:.5rem; border-radius:50%; background:#d23b3b; }
+  .doc code{ background:#fff; border:1px solid var(--color-border-strong); border-radius:4px; padding:0 .25rem; font-size:.85em; }
+  .work code{ background:transparent; border:0; padding:0; font-size:inherit; }
+
+  /* ---------- «Как сейчас»: точные классы прода (constructor-* / cutter-*) ---------- */
+  .k-title{ font-size:1.6rem; font-weight:600; margin:0; }
+  .k-sec__title{ font-size:1rem; font-weight:600; margin:0 0 .5rem; display:flex; align-items:baseline; gap:.4rem; }
+  .k-count{ color:#5f5f5c; font-weight:400; }
+  .k-empty{ color:#5f5f5c; font-size:.9rem; margin:0; padding:.75rem; border:1px dashed #c7c7c2; border-radius:6px; background:#fff; }
+  .k-list{ list-style:none; padding:0; margin:0; display:flex; flex-direction:column; gap:.5rem; }
+  .k-card{ display:block; padding:.75rem .9rem; background:#fff; border:1px solid #e4e4e1; border-radius:8px; text-decoration:none; color:inherit; box-shadow:inset 4px 0 0 0 transparent; }
+  .k-card--new{ box-shadow:inset 4px 0 0 0 #9a6f1e; }
+  .k-card--inp{ box-shadow:inset 4px 0 0 0 #1f6bc0; }
+  .k-card--done{ box-shadow:inset 4px 0 0 0 #2f7d4e; }
+  .k-card__head{ display:flex; justify-content:space-between; gap:.5rem; align-items:baseline; margin-bottom:.4rem; }
+  .k-card__name{ font-size:1.05rem; }
+  .k-badge{ font-size:.78rem; font-weight:600; padding:.2rem .65rem; border-radius:999px; letter-spacing:.02em; white-space:nowrap; border:1px solid currentColor; }
+  .k-badge--new{ background:#fcecc9; color:#9a6f1e; }
+  .k-badge--inp{ background:#d9e8fb; color:#1f6bc0; }
+  .k-badge--done{ background:#e4f4e6; color:#2f7d4e; }
+  .k-badge--plain{ background:#f1f1ef; color:#5f5f5c; }
+  .k-meta{ display:grid; grid-template-columns:repeat(2,1fr); gap:.25rem .75rem; margin:0; font-size:.85rem; }
+  .k-meta > div{ display:flex; gap:4px; }
+  .k-meta dt{ color:#5f5f5c; }
+  .k-meta dd{ margin:0; }
+  .k-comment{ margin:.5rem 0 0; padding-top:.5rem; border-top:1px solid #e4e4e1; font-size:.85rem; color:#3f3f3c; }
+  .k-block{ background:#fff; border:1px solid #e4e4e1; border-radius:8px; padding:.85rem 1rem; }
+  .k-block + .k-block{ margin-top:0; }
+  .k-block__title{ margin:0 0 .5rem; font-size:1rem; font-weight:600; }
+  .k-lay{ border-left:4px solid #2f7fd1; display:flex; flex-direction:column; gap:.5rem; }
+  .k-lay--closed{ border-left-color:#2e9e4a; }
+  .k-lay--closed .k-tbl th, .k-lay--closed .k-tbl td{ color:#3f3f3c; }
+  .k-lay__foot{ display:flex; flex-wrap:wrap; gap:.5rem; align-items:center; padding-top:.55rem; border-top:1px solid #e4e4e1; }
+  .k-note{ font-size:.8rem; color:#5f5f5c; margin:0; }
+  .k-problems{ margin:0; padding:.55rem .7rem; background:#fcecc9; color:#9a6f1e; border-radius:6px; font-size:.82rem; }
+  .k-problems ul{ margin:.25rem 0 0; padding-left:1.1rem; }
+  .k-modal{ position:absolute; inset:0; background:rgba(20,20,20,.45); display:flex; align-items:center; padding:1rem; z-index:20; }
+  .k-modal__card{ background:#fff; border-radius:12px; padding:1.1rem 1.15rem; display:flex; flex-direction:column; gap:.7rem; width:100%; box-shadow:0 20px 60px rgba(20,20,20,.3); }
+  .k-modal__card h3{ margin:0; font-size:1.1rem; }
+  .k-modal__card p{ margin:0; font-size:.9rem; color:#5f5f5c; }
+  .k-modal__card p b{ color:#1b1b1b; }
+  .sw{ width:.85rem; height:.85rem; border-radius:50%; display:inline-block; vertical-align:-1px; border:1px solid #d4d4d0; margin-right:.3rem; }
+  .sw--white{ background:#fff; }
+  .sw--black{ background:#1b1b1b; }
+  select.k-input{ width:auto; padding-right:1.4rem; background:#fff; }
+  .k-lay__head{ display:flex; align-items:center; justify-content:space-between; gap:.6rem; flex-wrap:wrap; }
+  .k-lay__head .k-block__title{ margin:0; }
+  .k-remove{ background:transparent; border:1px solid transparent; color:#991b1b; font:inherit; font-size:.85rem; font-weight:600; padding:.25rem .6rem; border-radius:6px; cursor:pointer; }
+  .k-tbl{ width:100%; border-collapse:collapse; font-size:.9rem; }
+  .k-tbl th{ color:#5f5f5c; font-weight:500; font-size:.78rem; text-transform:uppercase; letter-spacing:.04em; text-align:left; padding:.45rem .6rem; border-bottom:1px solid #e4e4e1; }
+  .k-tbl td{ padding:.45rem .6rem; text-align:left; border-bottom:1px solid #e4e4e1; font-variant-numeric:tabular-nums; }
+  .k-tbl tbody tr:last-child td{ border-bottom:0; }
+  .k-tbl tfoot td{ border-top:2px solid #c7c7c2; border-bottom:0; font-weight:600; color:#1b1b1b; }
+  .k-total{ text-align:right; font-variant-numeric:tabular-nums; font-weight:600; }
+  .k-total--reached{ color:#2e9e4a; }
+  .k-off{ color:#8a8a86; }
+  .k-off strong{ font-weight:400; }
+  .k-input{ width:5.5rem; max-width:100%; padding:.35rem .5rem; border:1px solid #c7c7c2; border-radius:6px; font:inherit; font-size:.95rem; }
+  .k-layers{ margin:.1rem 0 0; font-size:1rem; color:#1b1b1b; }
+  .k-layers strong{ font-size:1.15rem; font-variant-numeric:tabular-nums; }
+  .k-actions{ display:flex; flex-direction:row; flex-wrap:wrap; gap:.6rem; align-items:center; }
+  .k-btn{ display:inline-flex; align-items:center; justify-content:center; gap:.4rem; padding:.55rem 1rem; border-radius:6px; border:1px solid transparent; cursor:pointer; font:inherit; font-weight:600; font-size:.9rem; background:#f1f1ef; color:#1b1b1b; }
+  .k-btn--primary{ background:#ffd23f; color:#3a2f00; font-weight:700; }
+  .k-btn--ghost{ background:#fff; color:#1b1b1b; border-color:#c7c7c2; }
+  .k-err{ color:#991b1b; font-size:.85rem; margin:0; }
+  .k-saved{ color:#2f7d4e; font-size:.85rem; margin:0; }
+  .k-muted{ color:#5f5f5c; font-size:.9rem; margin:0; }
+  .k-back{ font-size:.85rem; color:#2f7fd1; text-decoration:none; align-self:flex-start; }
+  .k-dhead{ display:flex; justify-content:space-between; gap:1rem; align-items:flex-start; }
+  .k-dtitle{ margin:0; font-size:1.6rem; font-weight:600; }
+  .k-dart{ color:#5f5f5c; font-size:.85rem; margin-top:2px; }
+  .k-metagrid{ display:grid; grid-template-columns:repeat(2,1fr); gap:.35rem .75rem; margin:0; font-size:.9rem; }
+  .k-metagrid dt{ color:#5f5f5c; }
+  .k-metagrid dd{ margin:0; font-weight:600; }
+  .k-timer{ font-size:2rem; font-variant-numeric:tabular-nums; margin:.5rem 0; }
+  /* шапка роли: поля смены + статус-точка (как в проде) */
+  .rh-shift{ display:grid; gap:.5rem 1rem; grid-template-columns:repeat(auto-fit,minmax(140px,1fr)); position:relative; z-index:1; }
+  .rh-shift > div{ display:flex; flex-direction:column; }
+  .rh-l{ font-size:.7rem; letter-spacing:.1em; text-transform:uppercase; color:rgba(255,255,255,.7); margin-bottom:.1rem; font-weight:600; }
+  .rh-v{ font-size:1rem; font-weight:600; color:#fff; line-height:1.25; }
+  .rh-m{ font-size:.78rem; color:rgba(255,255,255,.7); font-family:ui-monospace,Menlo,monospace; }
+  .rh-status{ display:inline-flex; align-items:center; gap:.45rem; font-size:.85rem; color:rgba(255,255,255,.85); position:relative; z-index:1; }
+  .rh-dot{ width:.55rem; height:.55rem; border-radius:50%; background:#8a8a86; flex:0 0 auto; }
+  .rh-dot--on{ background:#2e9e4a; box-shadow:0 0 0 3px rgba(52,211,153,.25); }
+  /* плавающий столбик справа (employee-toolbar) */
+  .k-float{ position:absolute; right:.6rem; top:150px; display:flex; flex-direction:column; align-items:flex-end; gap:.5rem; z-index:5; }
+  .k-chip{ display:inline-flex; align-items:center; gap:.45rem; background:#2f2f2c; color:#fff; border:0; border-radius:999px; padding:.5rem .85rem; font:inherit; font-size:.85rem; font-weight:700; box-shadow:0 4px 12px rgba(20,20,20,.28); cursor:pointer; }
+  .k-chip i{ font-style:normal; display:inline-flex; align-items:center; justify-content:center; width:1.3rem; height:1.3rem; border-radius:50%; background:rgba(255,255,255,.18); font-size:.8rem; }
+  .k-fab{ width:40px; height:40px; border-radius:50%; border:1px solid #d4d4d0; background:#fff; display:inline-flex; align-items:center; justify-content:center; font-size:.95rem; cursor:pointer; box-shadow:var(--shadow-sm); }
+  .k-fab--master{ background:#4f46e5; color:#fff; border-color:#4f46e5; font-weight:700; }
+  .phone__inner{ position:relative; }
+  /* старт смены (scan-card + seamstress-start) */
+  .k-scan{ background:#fff; border:1px solid #e4e4e1; border-radius:16px; padding:1.25rem 1.15rem; box-shadow:var(--shadow-sm); display:flex; flex-direction:column; gap:1rem; }
+  .k-scan__title{ margin:0; font-size:1.35rem; font-weight:700; letter-spacing:-.005em; }
+  .k-scan__hint{ margin:.25rem 0 0; font-size:.88rem; color:#5f5f5c; line-height:1.45; }
+  .k-cta{ min-height:64px; font-size:1.1rem; width:100%; border-radius:9px; border:1px solid #e7b51e; background:#ffd23f; color:#3a2f00; font-weight:700; font-family:inherit; cursor:pointer; }
+  .k-link{ background:transparent; border:0; padding:.4rem .5rem; font:inherit; font-size:.95rem; font-weight:600; color:#2f7fd1; text-decoration:underline; text-underline-offset:3px; align-self:center; cursor:pointer; }
+  .k-equip{ display:flex; flex-direction:column; gap:.15rem; padding:.75rem .95rem; background:#fdf3da; border:1px solid #c5d8ff; border-radius:9px; }
+  .k-equip b{ font-size:1.1rem; }
+  .k-equip .lbl{ font-size:.7rem; text-transform:uppercase; letter-spacing:.08em; font-weight:700; color:#1f6bc0; }
+  .k-equip .meta{ font-size:.8rem; color:#5f5f5c; font-family:ui-monospace,Menlo,monospace; }
+  .k-ops{ display:flex; flex-direction:column; gap:.5rem; }
+  .k-op{ display:grid; grid-template-columns:auto 1fr auto; align-items:center; gap:.65rem; padding:.85rem 1rem; border:1.5px solid #d4d4d0; border-radius:9px; background:#fff; min-height:56px; cursor:pointer; }
+  .k-op.is-active{ border-color:#2f7fd1; background:#fdf3da; box-shadow:0 6px 16px -10px rgba(47,127,209,.45); }
+  .k-op .r{ width:22px; height:22px; border:2px solid #c7c7c2; border-radius:50%; }
+  .k-op.is-active .r{ border-color:#2f7fd1; background:radial-gradient(circle, #2f7fd1 0 45%, transparent 50%); }
+  .k-op .nm{ font-weight:600; font-size:1rem; }
+  .k-op .cd{ font-size:.75rem; color:#5f5f5c; font-family:ui-monospace,Menlo,monospace; }
+  .k-errorbox{ background:#fbe3e0; color:#991b1b; border:1px solid #f3c9c6; border-radius:9px; padding:.85rem 1rem; }
+  .k-errorbox b{ font-weight:600; font-size:1.05rem; line-height:1.35; }
+  .k-secondary{ width:100%; min-height:44px; border-radius:9px; border:1px solid #d4d4d0; background:#fff; color:#1b1b1b; font:inherit; font-weight:600; font-size:.95rem; cursor:pointer; }
+  .k-scaninput{ display:flex; flex-direction:column; gap:.4rem; }
+  .k-scaninput .lbl{ font-size:.78rem; font-weight:700; text-transform:uppercase; letter-spacing:.06em; color:#5f5f5c; }
+  .k-scaninput input{ font-size:1.15rem; padding:1rem 1.1rem; border-radius:9px; background:#f7f7f6; border:1.5px dashed #d4d4d0; font-family:ui-monospace,Menlo,monospace; width:100%; }
+</style>
+</head>
+<body>
+
+<nav class="topnav"><div class="topnav__in">
+  <span class="topnav__brand">✂️ Раскройщик v2</span>
+  <a href="#s-current" class="is-active">Как сейчас</a>
+  <a href="#s-partial">Окно раскладов</a>
+  <a href="#s-colors">Расцветки</a>
+  <a href="#s-board">Раскрой</a>
+  <a href="#s-release">Выпуск</a>
+  <a href="#s-shelf">Стеллаж</a>
+  <a href="#s-assistant">Помощник</a>
+</div></nav>
+
+<div class="doc">
+
+  <header class="intro">
+    <h1>Раскройщик: раскрой + выпуск паспортов в одном кабинете</h1>
+    <p>
+      Структура по решению владельца: <b>три вкладки верхнего уровня — Раскрой · Выпуск · Стеллаж</b>.
+      Это режимы работы за столом, а не блоки на одной простыне: кроим в первой, печатаем паспорта
+      по закрытым раскладам во второй, размещаем крой в третьей.
+    </p>
+    <div class="principles">
+      <div class="principle"><b>Раскрой</b><span>Подкрой и очередь задач как сейчас; в окне раскладов появляется «Расклад готов» — частичное завершение по заказу</span></div>
+      <div class="principle"><b>Выпуск</b><span>очередь заказов с закрытыми раскладами: видно частичное завершение, паспорта печатаются по раскладу</span></div>
+      <div class="principle"><b>Стеллаж</b><span>размещение в ячейку — без изменений; ячейка липкая до конца смены</span></div>
+      <div class="principle"><b>Счётчик на «Выпуске»</b><span>каждый «Расклад готов» сразу увеличивает бейдж вкладки — видно, что накопилось к печати</span></div>
+    </div>
+    <p style="margin-top:1rem">
+      Сквозной пример на всех экранах: заказ <b>01-00040 · Футболка Classic · белый</b>, план S 60 · M 160 · L 80 · XL 30.
+      Расклад 1 закрыт (M×2, L×1; рулоны 20/18/22/16 слоёв → 8 паспортов), расклад 2 закрыт (S×2, XL×1; 14/14 → 4 паспорта),
+      расклад 3 настилается. Выпущено 2 паспорта из 12.
+    </p>
+  </header>
+
+  <!-- ============================================================= -->
+  <section class="sect" id="s-current">
+    <h2>Как сейчас: фактические экраны кабинета <small>/cutter · срисовано с кода, не концепт</small></h2>
+    <p>
+      Базлайн, поверх которого строится всё ниже. Источники: <code>cutter/page.tsx</code>,
+      <code>cutter-board.tsx</code>, <code>recut-panel.tsx</code>, <code>[id]/cutting-form.tsx</code>,
+      <code>seamstress-shift-start.tsx</code>, <code>cutter/layout.tsx</code>. Тексты кнопок, подсказок,
+      пустых состояний и порядок блоков — дословно из кода, включая шероховатости
+      (узкое поле поиска в «Подкрое» — это реальный <code>.cutter-input</code> шириной 5.5rem).
+    </p>
+    <div class="shots">
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">A · До смены: старт сканом стола<small>reuse SeamstressShiftStart; доска закрыта без смены</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="kebab" style="color:#5f5f5c">⋯</div>
+            <div class="role-header">
+              <div class="role-header__top">
+                <div><div class="role-header__brand">Sewing</div><p class="role-header__name">Иванов И. И.</p></div>
+                <span class="role-header__role">Раскройщик</span>
+              </div>
+              <span class="rh-status"><span class="rh-dot"></span>Смена не начата — отсканируйте QR раскройного стола</span>
+            </div>
+            <div class="k-scan" aria-label="Начать смену — сканировать оборудование">
+              <div>
+                <h3 class="k-scan__title">Начать смену</h3>
+                <p class="k-scan__hint">Сканируйте QR-код вашего станка — система покажет, какие операции на нём можно выполнять.</p>
+              </div>
+              <button class="k-cta">Начать смену</button>
+              <button class="k-link">Ввести код вручную</button>
+              <p class="k-scan__hint" style="margin-bottom:0">Сотрудник: <strong style="color:#1b1b1b">Иванов И. И.</strong></p>
+            </div>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">B · Выбор операции после скана<small>первая операция предвыбрана, подтверждение — та же форма</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="k-scan" aria-label="Подтвердить смену">
+              <div>
+                <h3 class="k-scan__title">Выберите операцию</h3>
+                <p class="k-scan__hint">Доступные операции для вашего оборудования.</p>
+              </div>
+              <div class="k-equip" role="status">
+                <span class="lbl">Оборудование</span>
+                <b>Стол раскроя №1</b>
+                <span class="meta">cut-table-01</span>
+              </div>
+              <div class="k-ops" role="radiogroup" aria-label="Доступные операции">
+                <label class="k-op is-active"><span class="r"></span><span class="nm">Раскрой</span><span class="cd">CUT_CUT</span></label>
+                <label class="k-op"><span class="r"></span><span class="nm">Подкрой</span><span class="cd">CUT_RECUT</span></label>
+              </div>
+              <button class="k-cta" style="min-height:56px">Подтвердить смену</button>
+              <button class="k-link">Сменить оборудование</button>
+            </div>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">C · Доска при активной смене<small>«Подкрой» с поиском заказа + три секции задач; справа плавающий тулбар</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="k-float">
+            <button class="k-chip"><i>₽</i>36шт · 720₽</button>
+            <button class="k-fab" aria-label="Открыть мой QR-код">▦</button>
+            <button class="k-fab k-fab--master" aria-label="Вызвать мастера">!</button>
+          </div>
+          <div class="work">
+            <div class="kebab" style="color:#5f5f5c">⋯</div>
+            <div class="role-header">
+              <div class="role-header__top">
+                <div><div class="role-header__brand">Sewing</div><p class="role-header__name">Иванов И. И.</p></div>
+                <span class="role-header__role">Раскройщик</span>
+              </div>
+              <div class="rh-shift">
+                <div><span class="rh-l">Операция</span><span class="rh-v">Раскрой</span><span class="rh-m">CUT_CUT</span></div>
+                <div><span class="rh-l">Оборудование</span><span class="rh-v">Стол раскроя №1</span><span class="rh-m">cut-table-01</span></div>
+              </div>
+              <span class="rh-status"><span class="rh-dot rh-dot--on"></span>Смена с 08:12</span>
+            </div>
+
+            <h1 class="k-title">Раскрой</h1>
+
+            <section>
+              <h2 class="k-sec__title">Подкрой</h2>
+              <p class="k-empty" style="margin-top:0">Найдите заказ по номеру — подкрой можно начать даже по завершённому.</p>
+              <input type="search" class="k-input" style="margin-top:.5rem" placeholder="Номер заказа, напр. O-20260708-0001" aria-label="Поиск заказа по номеру" />
+            </section>
+
+            <section>
+              <h2 class="k-sec__title">В работе <span class="k-count">(1)</span></h2>
+              <ul class="k-list"><li>
+                <a class="k-card k-card--inp" href="#" aria-label="Открыть раскрой заказа 01-00040">
+                  <div class="k-card__head"><strong class="k-card__name">Заказ 01-00040</strong><span class="k-badge k-badge--inp">В работе</span></div>
+                  <dl class="k-meta">
+                    <div><dt>Цвет</dt><dd>белый</dd></div><div><dt>Размеров</dt><dd>4</dd></div>
+                    <div><dt>Рулонов</dt><dd>7</dd></div><div><dt>Всего слоёв</dt><dd>116</dd></div>
+                  </dl>
+                  <p class="k-comment">Раскройщик: Иванов И. И.</p>
+                </a>
+              </li></ul>
+            </section>
+
+            <section>
+              <h2 class="k-sec__title">Новые задания <span class="k-count">(2)</span></h2>
+              <ul class="k-list">
+                <li><a class="k-card k-card--new" href="#">
+                  <div class="k-card__head"><strong class="k-card__name">Заказ 01-00045</strong><span class="k-badge k-badge--new">Новая</span></div>
+                  <dl class="k-meta">
+                    <div><dt>Цвет</dt><dd>чёрный</dd></div><div><dt>Размеров</dt><dd>4</dd></div>
+                    <div><dt>Рулонов</dt><dd>0</dd></div><div><dt>Всего слоёв</dt><dd>0</dd></div>
+                  </dl>
+                </a></li>
+                <li><a class="k-card k-card--new" href="#">
+                  <div class="k-card__head"><strong class="k-card__name">Заказ 01-00046</strong><span class="k-badge k-badge--new">Новая</span></div>
+                  <dl class="k-meta">
+                    <div><dt>Цвет</dt><dd>синий</dd></div><div><dt>Размеров</dt><dd>3</dd></div>
+                    <div><dt>Рулонов</dt><dd>0</dd></div><div><dt>Всего слоёв</dt><dd>0</dd></div>
+                  </dl>
+                </a></li>
+              </ul>
+            </section>
+
+            <section>
+              <h2 class="k-sec__title">Завершённые <span class="k-count">(1)</span></h2>
+              <ul class="k-list"><li>
+                <a class="k-card k-card--done" href="#">
+                  <div class="k-card__head"><strong class="k-card__name">Заказ 01-00039</strong><span class="k-badge k-badge--done">Завершена</span></div>
+                  <dl class="k-meta">
+                    <div><dt>Цвет</dt><dd>белый</dd></div><div><dt>Размеров</dt><dd>3</dd></div>
+                    <div><dt>Рулонов</dt><dd>4</dd></div><div><dt>Всего слоёв</dt><dd>60</dd></div>
+                  </dl>
+                  <p class="k-comment">Раскройщик: Иванов И. И.</p>
+                </a>
+              </li></ul>
+            </section>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">D · Подкрой идёт<small>таймер 2rem tabular-nums; карточка со статусом «Идёт»</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <h1 class="k-title">Раскрой</h1>
+            <section>
+              <h2 class="k-sec__title">Подкрой</h2>
+              <div class="k-card k-card--inp">
+                <div class="k-card__head"><strong class="k-card__name">Подкрой · заказ 01-00038</strong><span class="k-badge k-badge--inp">Идёт</span></div>
+                <p class="k-timer" aria-label="Время подкроя">00:42:17</p>
+                <div class="k-actions">
+                  <button class="k-btn k-btn--primary">Завершить подкрой</button>
+                  <button class="k-btn k-btn--ghost">Отменить</button>
+                </div>
+              </div>
+            </section>
+            <section>
+              <h2 class="k-sec__title">В работе <span class="k-count">(0)</span></h2>
+              <p class="k-empty">Сейчас нет задач в работе. Примите новое задание из списка ниже.</p>
+            </section>
+            <section>
+              <h2 class="k-sec__title">Новые задания <span class="k-count">(0)</span></h2>
+              <p class="k-empty">Новых заданий нет. Они появятся, когда заказ запустят в производство.</p>
+            </section>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">E · Задача NEW: принять задание<small>/cutter/[id] · изделие на странице не выводится — только номер, цвет, клиент</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <a class="k-back" href="#">← К списку задач</a>
+            <div class="k-dhead">
+              <div>
+                <h2 class="k-dtitle">Заказ 01-00045</h2>
+                <div class="k-dart">чёрный</div>
+              </div>
+              <span class="k-badge k-badge--new">Новая</span>
+            </div>
+            <section class="k-block">
+              <h3 class="k-block__title">Параметры задачи</h3>
+              <dl class="k-metagrid">
+                <div style="display:contents"><dt>Заказ</dt><dd>01-00045</dd></div>
+                <div style="display:contents"><dt>Клиент</dt><dd>ООО «Мода»</dd></div>
+                <div style="display:contents"><dt>Раскройщик</dt><dd><span class="k-muted">не назначен</span></dd></div>
+                <div style="display:contents"><dt>Размеров</dt><dd>4</dd></div>
+              </dl>
+            </section>
+            <section class="k-block">
+              <h3 class="k-block__title">Задание по размерам</h3>
+              <table class="k-tbl">
+                <thead><tr><th>Размер</th><th>План, шт</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>S</strong></td><td>60</td></tr>
+                  <tr><td><strong>M</strong></td><td>160</td></tr>
+                  <tr><td><strong>L</strong></td><td>80</td></tr>
+                  <tr><td><strong>XL</strong></td><td>30</td></tr>
+                </tbody>
+              </table>
+            </section>
+            <section class="k-block">
+              <p class="k-muted" style="margin-bottom:.5rem">Примите задание, чтобы ввести раскладку и настелить рулоны.</p>
+              <div class="k-actions">
+                <button class="k-btn k-btn--primary">Принять задание</button>
+              </div>
+            </section>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">F · Задача IN_PROGRESS: форма раскроя<small>расклады с чекбоксами размеров и рулонами; «Раскрой завершён» — только целиком</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <a class="k-back" href="#">← К списку задач</a>
+            <div class="k-dhead">
+              <div>
+                <h2 class="k-dtitle">Заказ 01-00040</h2>
+                <div class="k-dart">белый</div>
+              </div>
+              <span class="k-badge k-badge--inp">В работе</span>
+            </div>
+            <section class="k-block">
+              <h3 class="k-block__title">Параметры задачи</h3>
+              <dl class="k-metagrid">
+                <div style="display:contents"><dt>Заказ</dt><dd>01-00040</dd></div>
+                <div style="display:contents"><dt>Клиент</dt><dd>ООО «Мода»</dd></div>
+                <div style="display:contents"><dt>Раскройщик</dt><dd>Иванов И. И.</dd></div>
+                <div style="display:contents"><dt>Размеров</dt><dd>4</dd></div>
+              </dl>
+            </section>
+
+            <section class="k-block k-lay">
+              <div class="k-lay__head">
+                <h3 class="k-block__title">Расклад 1</h3>
+                <button class="k-remove" aria-label="Удалить расклад 1">✕ Удалить расклад</button>
+              </div>
+              <table class="k-tbl">
+                <thead><tr><th aria-label="Выбор"></th><th>Размер</th><th>На настиле</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr class="k-off"><td>☐</td><td><strong>S</strong></td><td><span class="k-muted">—</span></td><td>60</td><td class="k-total">0</td></tr>
+                  <tr><td>☑</td><td><strong>M</strong></td><td><input class="k-input" style="width:3.6rem" value="2" /></td><td>160</td><td class="k-total">152</td></tr>
+                  <tr><td>☑</td><td><strong>L</strong></td><td><input class="k-input" style="width:3.6rem" value="1" /></td><td>80</td><td class="k-total">76</td></tr>
+                  <tr class="k-off"><td>☐</td><td><strong>XL</strong></td><td><span class="k-muted">—</span></td><td>30</td><td class="k-total">0</td></tr>
+                </tbody>
+              </table>
+              <table class="k-tbl">
+                <thead><tr><th>Рулон</th><th>Слоёв</th><th aria-label="Удалить"></th></tr></thead>
+                <tbody>
+                  <tr><td>Рулон 1</td><td><input class="k-input" style="width:3.6rem" value="20" /></td><td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td></tr>
+                  <tr><td>Рулон 2</td><td><input class="k-input" style="width:3.6rem" value="18" /></td><td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td></tr>
+                  <tr><td>Рулон 3</td><td><input class="k-input" style="width:3.6rem" value="22" /></td><td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td></tr>
+                  <tr><td>Рулон 4</td><td><input class="k-input" style="width:3.6rem" value="16" /></td><td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td></tr>
+                </tbody>
+              </table>
+              <p class="k-layers">Всего слоёв: <strong>76</strong></p>
+              <button class="k-btn k-btn--ghost" style="align-self:flex-start">+ Добавить рулон</button>
+            </section>
+
+            <section class="k-block">
+              <h3 class="k-block__title">Итог по заказу</h3>
+              <table class="k-tbl">
+                <thead><tr><th>Размер</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>S</strong></td><td>60</td><td class="k-total k-total--reached">56</td></tr>
+                  <tr><td><strong>M</strong></td><td>160</td><td class="k-total">152</td></tr>
+                  <tr><td><strong>L</strong></td><td>80</td><td class="k-total">76</td></tr>
+                  <tr><td><strong>XL</strong></td><td>30</td><td class="k-total">28</td></tr>
+                </tbody>
+                <tfoot><tr><td colspan="2">Итого, шт</td><td class="k-total">312</td></tfoot>
+              </table>
+            </section>
+
+            <p class="k-saved">Сохранено</p>
+            <div class="k-actions">
+              <button class="k-btn k-btn--ghost">+ Добавить расклад</button>
+              <button class="k-btn">Сохранить</button>
+              <button class="k-btn k-btn--primary">Раскрой завершён</button>
+            </div>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">G · Задача DONE: read-only<small>чекбоксов и кнопок нет; показываются только выбранные размеры</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <a class="k-back" href="#">← К списку задач</a>
+            <div class="k-dhead">
+              <div>
+                <h2 class="k-dtitle">Заказ 01-00039</h2>
+                <div class="k-dart">белый</div>
+              </div>
+              <span class="k-badge k-badge--done">Завершена</span>
+            </div>
+            <section class="k-block">
+              <p class="k-muted">Раскрой завершён. Данные переданы дальше по производству.</p>
+            </section>
+            <section class="k-block k-lay">
+              <div class="k-lay__head"><h3 class="k-block__title">Расклад 1</h3></div>
+              <table class="k-tbl">
+                <thead><tr><th>Размер</th><th>На настиле</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>M</strong></td><td>2</td><td>90</td><td class="k-total k-total--reached">90</td></tr>
+                  <tr><td><strong>L</strong></td><td>1</td><td>45</td><td class="k-total k-total--reached">45</td></tr>
+                </tbody>
+              </table>
+              <table class="k-tbl">
+                <thead><tr><th>Рулон</th><th>Слоёв</th></tr></thead>
+                <tbody>
+                  <tr><td>Рулон 1</td><td>15</td></tr>
+                  <tr><td>Рулон 2</td><td>16</td></tr>
+                  <tr><td>Рулон 3</td><td>14</td></tr>
+                </tbody>
+              </table>
+              <p class="k-layers">Всего слоёв: <strong>45</strong></p>
+            </section>
+            <section class="k-block">
+              <h3 class="k-block__title">Итог по заказу</h3>
+              <table class="k-tbl">
+                <thead><tr><th>Размер</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>M</strong></td><td>90</td><td class="k-total k-total--reached">90</td></tr>
+                  <tr><td><strong>L</strong></td><td>45</td><td class="k-total k-total--reached">45</td></tr>
+                </tbody>
+                <tfoot><tr><td colspan="2">Итого, шт</td><td class="k-total">135</td></tfoot>
+              </table>
+            </section>
+          </div>
+        </div></div>
+      </figure>
+
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section class="sect" id="s-partial">
+    <h2>Частичное завершение раскроя — в текущем окне раскладов <small>/cutter/[id] · открывается из вкладки «Раскрой»</small></h2>
+    <p>
+      То же окно, что на экране F, — добавляется одна кнопка <b>«Расклад готов»</b> в каждый расклад.
+      Закрытый расклад зеленеет, становится read-only и сразу даёт выпускать по нему паспорта,
+      пока следующий настилается. «Раскрой завершён» внизу остаётся — закрывает всё, что ещё открыто.
+    </p>
+    <div class="shots">
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">H · Форма раскладов с «Расклад готов»<small>закрыт · готов к закрытию · не заполнен — три состояния</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <a class="k-back" href="#">← К списку задач</a>
+            <div class="k-dhead">
+              <div>
+                <h2 class="k-dtitle">Заказ 01-00040</h2>
+                <div class="k-dart">белый</div>
+              </div>
+              <span class="k-badge k-badge--inp">В работе</span>
+            </div>
+
+            <section class="k-block k-lay k-lay--closed">
+              <div class="k-lay__head">
+                <h3 class="k-block__title">Расклад 1</h3>
+                <span class="k-badge k-badge--done">Закрыт 12:40</span>
+              </div>
+              <table class="k-tbl">
+                <thead><tr><th>Размер</th><th>На настиле</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>M</strong></td><td>2</td><td>160</td><td class="k-total">152</td></tr>
+                  <tr><td><strong>L</strong></td><td>1</td><td>80</td><td class="k-total">76</td></tr>
+                </tbody>
+              </table>
+              <table class="k-tbl">
+                <thead><tr><th>Рулон</th><th>Слоёв</th></tr></thead>
+                <tbody>
+                  <tr><td>Рулон 1</td><td>20</td></tr>
+                  <tr><td>Рулон 2</td><td>18</td></tr>
+                  <tr><td>Рулон 3</td><td>22</td></tr>
+                  <tr><td>Рулон 4</td><td>16</td></tr>
+                </tbody>
+              </table>
+              <p class="k-layers">Всего слоёв: <strong>76</strong></p>
+              <div class="k-lay__foot">
+                <button class="k-btn k-btn--primary">Выпустить паспорта · 6 из 8</button>
+                <button class="k-btn k-btn--ghost">Открыть расклад</button>
+              </div>
+              <p class="k-note">Закрытый расклад не редактируется. Открыть обратно можно, пока по нему нет паспортов — сейчас выпущено 2, сначала удалите их в «Паспортах».</p>
+            </section>
+
+            <section class="k-block k-lay">
+              <div class="k-lay__head">
+                <h3 class="k-block__title">Расклад 2</h3>
+                <button class="k-remove" aria-label="Удалить расклад 2">✕ Удалить расклад</button>
+              </div>
+              <table class="k-tbl">
+                <thead><tr><th aria-label="Выбор"></th><th>Размер</th><th>На настиле</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td>☑</td><td><strong>S</strong></td><td><input class="k-input" style="width:3.6rem" value="2" /></td><td>60</td><td class="k-total">56</td></tr>
+                  <tr><td>☑</td><td><strong>XL</strong></td><td><input class="k-input" style="width:3.6rem" value="1" /></td><td>30</td><td class="k-total">28</td></tr>
+                  <tr class="k-off"><td>☐</td><td><strong>M</strong></td><td><span class="k-muted">—</span></td><td>160</td><td class="k-total">0</td></tr>
+                </tbody>
+              </table>
+              <table class="k-tbl">
+                <thead><tr><th>Рулон</th><th>Слоёв</th><th aria-label="Удалить"></th></tr></thead>
+                <tbody>
+                  <tr><td>Рулон 1</td><td><input class="k-input" style="width:3.6rem" value="14" /></td><td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td></tr>
+                  <tr><td>Рулон 2</td><td><input class="k-input" style="width:3.6rem" value="14" /></td><td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td></tr>
+                </tbody>
+              </table>
+              <p class="k-layers">Всего слоёв: <strong>28</strong></p>
+              <div class="k-lay__foot">
+                <button class="k-btn k-btn--ghost">+ Добавить рулон</button>
+                <button class="k-btn k-btn--primary">Расклад готов</button>
+              </div>
+              <p class="k-note">Закрытие даст 4 паспорта · 84 шт — их можно выпускать, пока настилается расклад 3.</p>
+            </section>
+
+            <section class="k-block k-lay">
+              <div class="k-lay__head">
+                <h3 class="k-block__title">Расклад 3</h3>
+                <button class="k-remove" aria-label="Удалить расклад 3">✕ Удалить расклад</button>
+              </div>
+              <table class="k-tbl">
+                <thead><tr><th>Рулон</th><th>Слоёв</th><th aria-label="Удалить"></th></tr></thead>
+                <tbody>
+                  <tr><td>Рулон 1</td><td><input class="k-input" style="width:3.6rem" placeholder="" /></td><td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td></tr>
+                </tbody>
+              </table>
+              <div class="k-problems">Закрыть нельзя:
+                <ul><li>не выбран ни один размер</li><li>не заполнены слои у рулона №1</li></ul>
+              </div>
+              <div class="k-lay__foot">
+                <button class="k-btn" disabled style="opacity:.6;cursor:not-allowed">Расклад готов</button>
+              </div>
+            </section>
+
+            <p class="k-saved">Сохранено</p>
+            <div class="k-actions">
+              <button class="k-btn k-btn--ghost">+ Добавить расклад</button>
+              <button class="k-btn">Сохранить</button>
+              <button class="k-btn k-btn--primary">Раскрой завершён</button>
+            </div>
+            <p class="k-note">«Раскрой завершён» закроет расклады 2 и 3 и снимет задачу с доски. Расклад 3 не заполнен — доведите его или удалите.</p>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">I · Подтверждение «Расклад готов»<small>точка невозврата для правок — поэтому не window.confirm, а модалка с цифрами</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work" style="filter:blur(1px);opacity:.55">
+            <a class="k-back" href="#">← К списку задач</a>
+            <div class="k-dhead">
+              <div><h2 class="k-dtitle">Заказ 01-00040</h2><div class="k-dart">белый</div></div>
+              <span class="k-badge k-badge--inp">В работе</span>
+            </div>
+            <section class="k-block k-lay">
+              <div class="k-lay__head"><h3 class="k-block__title">Расклад 2</h3></div>
+              <p class="k-layers">Всего слоёв: <strong>28</strong></p>
+            </section>
+            <section class="k-block k-lay">
+              <div class="k-lay__head"><h3 class="k-block__title">Расклад 3</h3></div>
+            </section>
+          </div>
+          <div class="k-modal">
+            <div class="k-modal__card">
+              <h3>Закрыть расклад 2?</h3>
+              <p>Размеры: <b>S · 2 на настиле</b>, <b>XL · 1 на настиле</b></p>
+              <p>Рулоны: <b>2 шт · 28 слоёв</b> → <b>84 шт = 4 паспорта</b></p>
+              <p>После закрытия расклад <b>нельзя править</b> — его цифры станут базой паспортов. Открыть обратно можно, пока по нему нет ни одного паспорта.</p>
+              <button class="k-cta" style="min-height:52px;font-size:1rem">Закрыть и выпустить паспорта</button>
+              <button class="k-secondary">Закрыть, выпущу позже</button>
+              <button class="k-link" style="align-self:center">Отмена</button>
+            </div>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">J · После закрытия: выпуск открыт, раскрой продолжается<small>задача остаётся «В работе»; выпуск по закрытому — параллельно</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <a class="k-back" href="#">← К списку задач</a>
+            <div class="k-dhead">
+              <div><h2 class="k-dtitle">Заказ 01-00040</h2><div class="k-dart">белый</div></div>
+              <span class="k-badge k-badge--inp">В работе</span>
+            </div>
+
+            <section class="k-block k-lay k-lay--closed">
+              <div class="k-lay__head">
+                <h3 class="k-block__title">Расклад 2</h3>
+                <span class="k-badge k-badge--done">Закрыт 14:05</span>
+              </div>
+              <p class="k-layers">28 слоёв · <strong>84 шт</strong> · паспортов выпущено 0 из 4</p>
+              <div class="k-lay__foot">
+                <button class="k-btn k-btn--primary">Выпустить паспорта · 4</button>
+                <button class="k-btn k-btn--ghost">Открыть расклад</button>
+              </div>
+            </section>
+
+            <section class="k-block k-lay">
+              <div class="k-lay__head">
+                <h3 class="k-block__title">Расклад 3</h3>
+                <button class="k-remove">✕ Удалить расклад</button>
+              </div>
+              <table class="k-tbl">
+                <thead><tr><th aria-label="Выбор"></th><th>Размер</th><th>На настиле</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td>☑</td><td><strong>M</strong></td><td><input class="k-input" style="width:3.6rem" value="1" /></td><td>160</td><td class="k-total">12</td></tr>
+                </tbody>
+              </table>
+              <table class="k-tbl">
+                <thead><tr><th>Рулон</th><th>Слоёв</th><th aria-label="Удалить"></th></tr></thead>
+                <tbody>
+                  <tr><td>Рулон 1</td><td><input class="k-input" style="width:3.6rem" value="12" /></td><td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td></tr>
+                </tbody>
+              </table>
+              <p class="k-layers">Всего слоёв: <strong>12</strong></p>
+              <div class="k-lay__foot">
+                <button class="k-btn k-btn--ghost">+ Добавить рулон</button>
+                <button class="k-btn k-btn--primary">Расклад готов</button>
+              </div>
+            </section>
+
+            <section class="k-block">
+              <h3 class="k-block__title">Итог по заказу</h3>
+              <table class="k-tbl">
+                <thead><tr><th>Размер</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>S</strong></td><td>60</td><td class="k-total">56</td></tr>
+                  <tr><td><strong>M</strong></td><td>160</td><td class="k-total">164</td></tr>
+                  <tr><td><strong>L</strong></td><td>80</td><td class="k-total">76</td></tr>
+                  <tr><td><strong>XL</strong></td><td>30</td><td class="k-total">28</td></tr>
+                </tbody>
+                <tfoot><tr><td colspan="2">Итого, шт</td><td class="k-total">324</td></tfoot>
+              </table>
+            </section>
+
+            <div class="k-actions">
+              <button class="k-btn k-btn--ghost">+ Добавить расклад</button>
+              <button class="k-btn">Сохранить</button>
+              <button class="k-btn k-btn--primary">Раскрой завершён</button>
+            </div>
+          </div>
+        </div></div>
+      </figure>
+
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section class="sect" id="s-colors">
+    <h2>Несколько расцветок в заказе <small>Ф3 colorways · настил многоцветный, каждый рулон = один цвет</small></h2>
+    <p>
+      Механика уже есть в проде: при 2+ расцветках у рулона появляется колонка <b>«Цвет»</b>
+      (селект по расцветкам заказа), «на настиле» остаётся общим на настил — маркер по цвету не делится.
+      Паспорт красится в цвет своего рулона; рулон без расцветки падает на базовый цвет заказа.
+      Частичное завершение ничего в этом не меняет — цвет просто едет через закрытый расклад в выпуск.
+    </p>
+    <div class="shots">
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">K · Окно раскладов при 2 расцветках<small>селект цвета у открытого рулона; в закрытом раскладе цвет — текстом</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <a class="k-back" href="#">← К списку задач</a>
+            <div class="k-dhead">
+              <div>
+                <h2 class="k-dtitle">Заказ 01-00040</h2>
+                <div class="k-dart">расцветки: <span class="sw sw--white"></span>белый · <span class="sw sw--black"></span>чёрный</div>
+              </div>
+              <span class="k-badge k-badge--inp">В работе</span>
+            </div>
+
+            <section class="k-block k-lay k-lay--closed">
+              <div class="k-lay__head">
+                <h3 class="k-block__title">Расклад 1</h3>
+                <span class="k-badge k-badge--done">Закрыт 12:40</span>
+              </div>
+              <table class="k-tbl">
+                <thead><tr><th>Размер</th><th>На настиле</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td><strong>M</strong></td><td>2</td><td>160</td><td class="k-total">152</td></tr>
+                  <tr><td><strong>L</strong></td><td>1</td><td>80</td><td class="k-total">76</td></tr>
+                </tbody>
+              </table>
+              <table class="k-tbl">
+                <thead><tr><th>Рулон</th><th>Слоёв</th><th>Цвет</th></tr></thead>
+                <tbody>
+                  <tr><td>Рулон 1</td><td>20</td><td><span class="sw sw--white"></span>белый</td></tr>
+                  <tr><td>Рулон 2</td><td>18</td><td><span class="sw sw--white"></span>белый</td></tr>
+                  <tr><td>Рулон 3</td><td>22</td><td><span class="sw sw--black"></span>чёрный</td></tr>
+                  <tr><td>Рулон 4</td><td>16</td><td><span class="sw sw--black"></span>чёрный</td></tr>
+                </tbody>
+              </table>
+              <p class="k-layers">Всего слоёв: <strong>76</strong></p>
+              <div class="k-lay__foot">
+                <button class="k-btn k-btn--primary">Выпустить паспорта · 6 из 8</button>
+                <button class="k-btn k-btn--ghost">Открыть расклад</button>
+              </div>
+            </section>
+
+            <section class="k-block k-lay">
+              <div class="k-lay__head">
+                <h3 class="k-block__title">Расклад 2</h3>
+                <button class="k-remove">✕ Удалить расклад</button>
+              </div>
+              <table class="k-tbl">
+                <thead><tr><th aria-label="Выбор"></th><th>Размер</th><th>На настиле</th><th>План, шт</th><th>Итог, шт</th></tr></thead>
+                <tbody>
+                  <tr><td>☑</td><td><strong>S</strong></td><td><input class="k-input" style="width:3.4rem" value="2" /></td><td>60</td><td class="k-total">56</td></tr>
+                  <tr><td>☑</td><td><strong>XL</strong></td><td><input class="k-input" style="width:3.4rem" value="1" /></td><td>30</td><td class="k-total">28</td></tr>
+                </tbody>
+              </table>
+              <table class="k-tbl">
+                <thead><tr><th>Рулон</th><th>Слоёв</th><th>Цвет</th><th aria-label="Удалить"></th></tr></thead>
+                <tbody>
+                  <tr>
+                    <td>Рулон 1</td>
+                    <td><input class="k-input" style="width:3.4rem" value="14" /></td>
+                    <td><select class="k-input"><option>белый</option><option selected>чёрный</option></select></td>
+                    <td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td>
+                  </tr>
+                  <tr>
+                    <td>Рулон 2</td>
+                    <td><input class="k-input" style="width:3.4rem" value="14" /></td>
+                    <td><select class="k-input"><option selected>белый</option><option>чёрный</option></select></td>
+                    <td><button class="k-remove" style="padding:.2rem .55rem">✕</button></td>
+                  </tr>
+                </tbody>
+              </table>
+              <p class="k-layers">Всего слоёв: <strong>28</strong></p>
+              <p class="k-note">«На настиле» — общее на настил: маркер один, режутся оба рулона вместе. Цвет влияет только на то, в какую расцветку покрасятся паспорта этого рулона.</p>
+              <div class="k-lay__foot">
+                <button class="k-btn k-btn--ghost">+ Добавить рулон</button>
+                <button class="k-btn k-btn--primary">Расклад готов</button>
+              </div>
+            </section>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">L · Выпуск: цвет виден на рулоне и на паспорте<small>один выпуск может смешивать цвета — паспорта окрасятся порулонно</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="sub-head">
+              <a class="back" href="#">←</a>
+              <div><h2>01-00040 · Футболка Classic</h2><p>расцветки: <span class="sw sw--white"></span>белый · <span class="sw sw--black"></span>чёрный · выпущено 2 из 12</p></div>
+            </div>
+            <div class="tabs">
+              <button>Раскрой</button>
+              <button class="is-on">Выпуск<span class="n">10</span></button>
+              <button>Стеллаж</button>
+            </div>
+
+            <div class="field"><label>Расклад</label>
+              <div class="chips">
+                <button class="chip is-on">1 <small>закрыт · 2 цвета</small></button>
+                <button class="chip">2 <small>закрыт · 2 цвета</small></button>
+                <button class="chip is-off">3 <small>настилается</small></button>
+              </div>
+            </div>
+            <div class="field"><label>Размер</label>
+              <div class="chips">
+                <button class="chip is-on">M <small>76/160</small></button>
+                <button class="chip">L <small>0/80</small></button>
+              </div>
+            </div>
+            <div class="field"><label>Рулоны · M по 2 шт/слой</label>
+              <div class="rolls">
+                <div class="roll is-off"><b><span class="sw sw--white"></span>1</b><span>выпущен · белый</span></div>
+                <div class="roll is-off"><b><span class="sw sw--white"></span>2</b><span>выпущен · белый</span></div>
+                <div class="roll is-on"><b><span class="sw sw--black"></span>3</b><span>22 сл · 44 шт · чёрный</span></div>
+                <div class="roll is-on"><b><span class="sw sw--black"></span>4</b><span>16 сл · 32 шт · чёрный</span></div>
+              </div>
+            </div>
+            <div class="total"><span>2 паспорта · M · чёрный</span><b>76 шт</b></div>
+            <button class="btn btn--primary btn--lg btn--block">Выпустить и напечатать</button>
+
+            <div class="success">
+              <h3>2 паспорта → печать</h3>
+              <ul>
+                <li><strong>П-000481</strong><span>рулон 3 · M · 44 шт · <span class="sw sw--black"></span>чёрный</span></li>
+                <li><strong>П-000482</strong><span>рулон 4 · M · 32 шт · <span class="sw sw--black"></span>чёрный</span></li>
+              </ul>
+            </div>
+            <p class="lock-note">Цвет паспорта = цвет рулона (расцветка Ф3). Рулон без расцветки — базовый цвет заказа. План/факт по размеру общий, по цвету не делится — как в проде.</p>
+          </div>
+        </div></div>
+      </figure>
+
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section class="sect" id="s-board">
+    <h2>Вкладка «Раскрой» <small>/cutter · первая из трёх вкладок кабинета</small></h2>
+    <p>
+      В «Раскрое» только кроим: Подкрой и очередь задач — как в проде. Тап по задаче открывает
+      окно раскладов с «Расклад готов» (раздел «Окно раскладов» выше). Каждый закрытый расклад
+      сразу увеличивает счётчик на вкладке «Выпуск».
+    </p>
+    <div class="shots">
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">1 · Вкладка «Раскрой»<small>всё как сейчас; новое — только счётчик готового к печати на соседней вкладке</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="kebab" style="color:#5f5f5c">⋯</div>
+            <div class="role-header">
+              <div class="role-header__top">
+                <div><div class="role-header__brand">Sewing</div><p class="role-header__name">Иванов И. И.</p></div>
+                <span class="role-header__role">Раскройщик</span>
+              </div>
+              <div class="rh-shift">
+                <div><span class="rh-l">Операция</span><span class="rh-v">Раскрой</span><span class="rh-m">CUT_CUT</span></div>
+                <div><span class="rh-l">Оборудование</span><span class="rh-v">Стол раскроя №1</span><span class="rh-m">cut-table-01</span></div>
+              </div>
+              <span class="rh-status"><span class="rh-dot rh-dot--on"></span>Смена с 08:12</span>
+            </div>
+
+            <div class="tabs">
+              <button class="is-on">Раскрой</button>
+              <button>Выпуск<span class="n">10</span></button>
+              <button>Стеллаж</button>
+            </div>
+
+            <section>
+              <h2 class="k-sec__title">Подкрой</h2>
+              <p class="k-empty" style="margin-top:0">Найдите заказ по номеру — подкрой можно начать даже по завершённому.</p>
+              <input type="search" class="k-input" style="margin-top:.5rem" placeholder="Номер заказа, напр. O-20260708-0001" aria-label="Поиск заказа по номеру" />
+            </section>
+
+            <section>
+              <h2 class="k-sec__title">В работе <span class="k-count">(1)</span></h2>
+              <ul class="k-list"><li>
+                <a class="k-card k-card--inp" href="#s-partial">
+                  <div class="k-card__head"><strong class="k-card__name">Заказ 01-00040</strong><span class="k-badge k-badge--inp">В работе</span></div>
+                  <dl class="k-meta">
+                    <div><dt>Цвет</dt><dd>белый</dd></div><div><dt>Размеров</dt><dd>4</dd></div>
+                    <div><dt>Рулонов</dt><dd>7</dd></div><div><dt>Всего слоёв</dt><dd>116</dd></div>
+                  </dl>
+                  <p class="k-comment">Закрыты расклады 1–2 · расклад 3 настилается</p>
+                </a>
+              </li></ul>
+            </section>
+
+            <section>
+              <h2 class="k-sec__title">Новые задания <span class="k-count">(1)</span></h2>
+              <ul class="k-list"><li>
+                <a class="k-card k-card--new" href="#">
+                  <div class="k-card__head"><strong class="k-card__name">Заказ 01-00045</strong><span class="k-badge k-badge--new">Новая</span></div>
+                  <dl class="k-meta">
+                    <div><dt>Цвет</dt><dd>чёрный</dd></div><div><dt>Размеров</dt><dd>4</dd></div>
+                    <div><dt>Рулонов</dt><dd>0</dd></div><div><dt>Всего слоёв</dt><dd>0</dd></div>
+                  </dl>
+                </a>
+              </li></ul>
+            </section>
+
+            <section>
+              <h2 class="k-sec__title">Завершённые <span class="k-count">(1)</span></h2>
+              <ul class="k-list"><li>
+                <a class="k-card k-card--done" href="#">
+                  <div class="k-card__head"><strong class="k-card__name">Заказ 01-00039</strong><span class="k-badge k-badge--done">Завершена</span></div>
+                  <dl class="k-meta">
+                    <div><dt>Цвет</dt><dd>белый</dd></div><div><dt>Размеров</dt><dd>3</dd></div>
+                    <div><dt>Рулонов</dt><dd>4</dd></div><div><dt>Всего слоёв</dt><dd>60</dd></div>
+                  </dl>
+                </a>
+              </li></ul>
+            </section>
+          </div>
+        </div></div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section class="sect" id="s-release">
+    <h2>Вкладка «Выпуск» <small>очередь закрытых раскладов → печать паспортов по раскладу</small></h2>
+    <p>
+      Заказ появляется здесь по первому закрытому раскладу — в карточке видно, что раскрой частичный
+      и по каким раскладам уже можно печатать. Тап по заказу — форма выпуска: закрытые расклады
+      выбираются, открытые ждут пунктиром. Выпущенные паспорта и план-факт — по ссылке внутри заказа.
+    </p>
+    <div class="shots">
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">2 · Очередь выпуска<small>частичное завершение видно прямо в карточке заказа</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="tabs">
+              <button>Раскрой</button>
+              <button class="is-on">Выпуск<span class="n">13</span></button>
+              <button>Стеллаж</button>
+            </div>
+            <ul class="k-list">
+              <li><a class="k-card k-card--new" href="#">
+                <div class="k-card__head"><strong class="k-card__name">Футболка Classic · белый</strong><span class="badge-dot"><i></i>10 паспортов</span></div>
+                <dl class="k-meta">
+                  <div><dt>Заказ</dt><dd>01-00040</dd></div><div><dt>Выпущено</dt><dd>2 / 12</dd></div>
+                </dl>
+                <p class="k-comment">Раскрой идёт · закрыты расклады 1–2, расклад 3 настилается</p>
+              </a></li>
+              <li><a class="k-card k-card--new" href="#">
+                <div class="k-card__head"><strong class="k-card__name">Свитшот Oversize · серый</strong><span class="badge-dot"><i></i>3 паспорта</span></div>
+                <dl class="k-meta">
+                  <div><dt>Заказ</dt><dd>01-00043</dd></div><div><dt>Выпущено</dt><dd>0 / 3</dd></div>
+                </dl>
+                <p class="k-comment">Раскрой завершён · все расклады закрыты</p>
+              </a></li>
+              <li><a class="k-card k-card--inp" href="#">
+                <div class="k-card__head"><strong class="k-card__name">Худи Basic · чёрный</strong><span class="k-badge k-badge--inp">Ждём расклад</span></div>
+                <dl class="k-meta">
+                  <div><dt>Заказ</dt><dd>01-00038</dd></div><div><dt>Выпущено</dt><dd>5 / 5 по закрытым</dd></div>
+                </dl>
+                <p class="k-comment">Расклад 2 настилается — заказ вернётся в очередь сам</p>
+              </a></li>
+              <li><a class="k-card k-card--done" href="#">
+                <div class="k-card__head"><strong class="k-card__name">Лонгслив Sport · синий</strong><span class="k-badge k-badge--done">Завершено</span></div>
+                <dl class="k-meta">
+                  <div><dt>Заказ</dt><dd>01-00036</dd></div><div><dt>Выпущено</dt><dd>8 / 8</dd></div>
+                </dl>
+              </a></li>
+            </ul>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">3 · Выпуск по заказу: печать по раскладу<small>закрытые расклады выбираются, открытый ждёт пунктиром</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="sub-head">
+              <a class="back" href="#">←</a>
+              <div><h2>01-00040 · Футболка Classic</h2><p>белый · выпущено 2 из 12 паспортов</p></div>
+            </div>
+
+            <div class="banner banner--info">
+              <div><strong>Раскрой идёт: закрыты расклады 1 и 2</strong>расклад 3 появится здесь, когда раскройщик нажмёт «Расклад готов»</div>
+            </div>
+
+            <div class="field"><label>Расклад</label>
+              <div class="chips">
+                <button class="chip is-on">1 <small>6 свободных</small></button>
+                <button class="chip">2 <small>4 свободных</small></button>
+                <button class="chip is-off">3 <small>настилается</small></button>
+              </div>
+            </div>
+            <div class="field"><label>Размер</label>
+              <div class="chips">
+                <button class="chip is-on">M <small>76/160</small></button>
+                <button class="chip">L <small>0/80</small></button>
+              </div>
+            </div>
+            <div class="field"><label>Рулоны · M по 2 шт/слой</label>
+              <div class="rolls">
+                <div class="roll is-off"><b>1</b><span>выпущен</span></div>
+                <div class="roll is-off"><b>2</b><span>выпущен</span></div>
+                <div class="roll is-on"><b>3</b><span>22 сл · 44 шт</span></div>
+                <div class="roll is-on"><b>4</b><span>16 сл · 32 шт</span></div>
+              </div>
+            </div>
+            <div class="total"><span>2 паспорта · размер M</span><b>76 шт</b></div>
+            <button class="btn btn--primary btn--lg btn--block">Выпустить и напечатать</button>
+            <a class="btn btn--block" href="#">Выпущенные по заказу · план-факт</a>
+            <p class="lock-note">Печать — на принтер стола из активной смены, сканировать ничего не нужно.</p>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">4 · Напечатано — серия не прерывается<small>следующий размер предвыбран; «Напечатать ещё раз» — если принтер завис</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="sub-head">
+              <a class="back" href="#">←</a>
+              <div><h2>01-00040 · Футболка Classic</h2><p>белый · выпущено 4 из 12 паспортов</p></div>
+            </div>
+            <div class="success">
+              <h3>2 паспорта → печать</h3>
+              <ul>
+                <li><strong>П-000481</strong><span>расклад 1 · рулон 3 · M · 44 шт</span></li>
+                <li><strong>П-000482</strong><span>расклад 1 · рулон 4 · M · 32 шт</span></li>
+              </ul>
+              <button class="btn btn--sm">Напечатать ещё раз</button>
+            </div>
+            <div class="field"><label>Дальше · размер L</label>
+              <div class="rolls">
+                <div class="roll is-on"><b>1</b><span>20 сл · 20 шт</span></div>
+                <div class="roll is-on"><b>2</b><span>18 сл · 18 шт</span></div>
+                <div class="roll is-on"><b>3</b><span>22 сл · 22 шт</span></div>
+                <div class="roll is-on"><b>4</b><span>16 сл · 16 шт</span></div>
+              </div>
+            </div>
+            <button class="btn btn--primary btn--block">Выпустить L · 4 паспорта · 76 шт</button>
+            <a class="btn btn--ghost btn--block" href="#">← К очереди выпуска</a>
+          </div>
+        </div></div>
+      </figure>
+
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section class="sect" id="s-shelf">
+    <h2>Вкладка «Стеллаж» <small>третья вкладка · без изменений</small></h2>
+    <p>
+      Полный поток за смену: первый вход во вкладку — скан ячейки камерой → подтверждение (код + что уже лежит внутри) →
+      сессия «сканируй паспорта один за другим». Ячейка липкая: живёт до конца смены, повторный вход во вкладку продолжает сессию без скана. Ошибка одного паспорта сессию не рвёт. Backend тот же, что у помощника:
+      <code>/cells/by-code</code> → <code>/passports/by-code</code> → <code>/passports/:id/place</code>.
+    </p>
+    <div class="shots">
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">9a · Первый вход: скан ячейки<small>вход во вкладку без активной сессии сразу открывает камеру</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="tabs">
+              <button>Раскрой</button>
+              <button>Выпуск<span class="n">10</span></button>
+              <button class="is-on">Стеллаж</button>
+            </div>
+            <div class="scan-card">
+              <div>
+                <h3 class="scan-card__title">Разместить крой на стеллаж</h3>
+                <p class="scan-card__hint">Сначала отсканируйте QR ячейки — потом паспорта один за другим.</p>
+              </div>
+              <div class="cam">камера · наведите на QR ячейки</div>
+              <button class="btn btn--block">Ввести код ячейки вручную</button>
+              <button class="btn btn--ghost btn--block">Отмена</button>
+            </div>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">9b · Подтверждение ячейки<small>код + срез содержимого — защита от «не туда отсканировал»</small></p>
+        <div class="phone"><div class="phone__inner scrim">
+          <div class="work" style="filter:blur(1px);opacity:.5;flex:1">
+            <div class="scan-card"><h3 class="scan-card__title">Разместить крой на стеллаж</h3></div>
+          </div>
+          <div class="sheet">
+            <h3>Ячейка A-12 · стеллаж «Крой А»</h3>
+            <div class="sheet__body">
+              <div>Сейчас в ячейке — <b>3 паспорта</b>:</div>
+              <div style="display:flex;flex-direction:column;gap:.3rem">
+                <span>П-000479 · S · 28 шт · 01-00040</span>
+                <span>П-000475 · M · 30 шт · 01-00039</span>
+                <span>П-000474 · M · 30 шт · 01-00039</span>
+              </div>
+              <div>Все паспорта, которые вы отсканируете дальше, лягут в <b>A-12</b>. Ячейка останется активной до конца смены.</div>
+            </div>
+            <button class="btn btn--primary btn--lg btn--block">Подтвердить ячейку</button>
+            <button class="btn btn--ghost btn--block">Сканировать другую</button>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">9c · Сессия размещения<small>сканируются только паспорта; смена ячейки — отдельной кнопкой</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="scan-card">
+              <span class="cell-badge">Ячейка A-12 · стеллаж «Крой А»</span>
+              <div class="cam">камера · наведите на QR паспорта</div>
+              <div style="display:flex;gap:.5rem">
+                <button class="btn" style="flex:1">Сменить ячейку</button>
+                <button class="btn btn--primary" style="flex:1">Готово</button>
+              </div>
+            </div>
+            <div class="section">
+              <h2 class="section__title">Размещено в сессии <span class="count">(3)</span></h2>
+              <ul class="feed">
+                <li><strong>П-000482 · M · 32 шт</strong><span>13:05</span></li>
+                <li><strong>П-000481 · M · 44 шт</strong><span>13:05</span></li>
+                <li><strong>П-000479 · S · 28 шт</strong><span>13:04</span></li>
+              </ul>
+            </div>
+            <div class="banner banner--warn">
+              <div><strong>Паспорт уже в ячейке B-03</strong>перемещение пока недоступно — сканируйте следующий, сессия активна</div>
+            </div>
+          </div>
+        </div></div>
+      </figure>
+    </div>
+  </section>
+
+  <!-- ============================================================= -->
+  <section class="sect" id="s-assistant">
+    <h2>Помощник раскройщика: закрыт ровно расклад 1 <small>/work · тот же read-model, другая оболочка</small></h2>
+    <p>
+      Момент времени: раскройщик нажал «Расклад готов» на раскладе 1 (M×2, L×1 · рулоны 20/18/22/16 слоёв),
+      расклады 2 и 3 ещё настилаются, паспортов не выпущено ни одного. Помощник в этот момент видит заказ
+      впервые — раньше он ждал бы «Раскрой завершён» по всему заказу. Его экраны не перестраиваются:
+      данные те же (<code>ready-for-release</code> + <code>release-state</code>), меняется только условие
+      попадания в очередь и набор выбираемых раскладов.
+    </p>
+    <div class="shots">
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">M · Было до закрытия<small>пустая очередь; текст подсказки в проде придётся поправить</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="sub-head"><a class="back" href="#">←</a><div><h2>Выберите заказ</h2></div></div>
+            <div class="scan-card" style="text-align:center;border-style:dashed">
+              <strong style="font-size:1.05rem">Нет заказов на выпуск</strong>
+              <p class="scan-card__hint" style="margin:0">Когда раскройщик закроет первый расклад по заказу, он появится здесь.</p>
+              <a class="btn btn--block" href="#">Назад</a>
+            </div>
+            <p class="lock-note">В проде здесь написано «Когда раскройщик завершит раскрой по заказу…» — формулировку меняем на «закроет первый расклад», иначе помощник будет ждать не того события.</p>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">N · Рабочее место помощника<small>бейдж существующий и считает ЗАКАЗЫ, а не паспорта</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="role-header">
+              <div class="kebab">⋯</div>
+              <div class="role-header__top">
+                <div><div class="role-header__brand">Sewing</div><p class="role-header__name">Петрова А. С.</p></div>
+                <span class="role-header__role">Помощник раскройщика</span>
+              </div>
+              <div class="rh-shift">
+                <div><span class="rh-l">Операция</span><span class="rh-v">Комплектация</span><span class="rh-m">CUT_DIVISION</span></div>
+                <div><span class="rh-l">Оборудование</span><span class="rh-v">Стол раскроя №1</span><span class="rh-m">cut-table-01</span></div>
+              </div>
+              <span class="rh-status"><span class="rh-dot rh-dot--on"></span>Смена с 08:30</span>
+            </div>
+
+            <div class="scan-card" style="border-color:#f3c9c6;box-shadow:0 0 0 1px #f3c9c6,var(--shadow-sm)">
+              <div style="display:flex;justify-content:space-between;gap:.6rem;align-items:flex-start">
+                <div>
+                  <h3 class="scan-card__title" style="font-size:1.35rem">Выпустить паспорт</h3>
+                  <p class="scan-card__hint">Серийный выпуск по закрытым раскладам — раскрой заказа может ещё идти.</p>
+                </div>
+                <span class="badge-dot"><i></i>1 заказ</span>
+              </div>
+              <button class="btn btn--primary btn--lg btn--block">Выпустить паспорт</button>
+              <a class="btn btn--block" href="#">Выпущенные паспорта</a>
+            </div>
+
+            <div class="scan-card">
+              <div>
+                <h3 class="scan-card__title" style="font-size:1.35rem">Разместить крой на стеллаж</h3>
+                <p class="scan-card__hint">Сканируйте ячейку, подтвердите её — затем сканируйте паспорта один за другим.</p>
+              </div>
+              <button class="btn btn--primary btn--lg btn--block">Разместить на стеллаж</button>
+            </div>
+            <p class="lock-note">Экран серверный (force-dynamic), пуша нет: бейдж и очередь обновятся при следующем открытии /work или тапе по кнопке. Если нужен мгновенный отклик — добавим лёгкий поллинг.</p>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">O · Очередь: заказ пришёл с одним закрытым раскладом<small>единственный заказ → прод редиректит сразу в форму, список не показывается</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="sub-head"><a class="back" href="#">←</a><div><h2>Выберите заказ</h2></div></div>
+            <ul class="k-list"><li>
+              <a class="k-card k-card--new" href="#">
+                <div class="k-card__head"><strong class="k-card__name">Футболка Classic · белый</strong><span class="badge-dot"><i></i>8 паспортов</span></div>
+                <dl class="k-meta">
+                  <div><dt>Заказ</dt><dd>01-00040</dd></div><div><dt>Выпущено</dt><dd>0 / 8</dd></div>
+                </dl>
+                <p class="k-comment">Раскрой идёт · закрыт расклад 1 из 3 · закрыл Иванов И. И. в 12:40</p>
+              </a>
+            </li></ul>
+            <p class="lock-note">Осторожно с существующим авто-редиректом: если это единственный заказ в очереди, <code>/work/cut-orders</code> сразу открывает форму выпуска. Правило оставляем, но состояние «Ждём расклад» из-под него надо исключить — иначе помощник провалится в экран, где нечего печатать.</p>
+          </div>
+        </div></div>
+      </figure>
+
+      <figure class="shot" style="margin:0">
+        <p class="shot__cap">P · Форма выпуска: доступен только расклад 1<small>размеры S и XL не показываются — они в раскладе 2, он ещё открыт</small></p>
+        <div class="phone"><div class="phone__inner">
+          <div class="work">
+            <div class="sub-head">
+              <a class="back" href="#">←</a>
+              <div><h2>Выпуск по заказу 01-00040</h2><p>Футболка Classic · белый · выпущено 0 из 8</p></div>
+            </div>
+
+            <div class="banner banner--info">
+              <div><strong>Раскрой идёт: закрыт расклад 1</strong>расклады 2 и 3 появятся здесь, как только раскройщик их закроет</div>
+            </div>
+
+            <div class="field"><label>Расклад</label>
+              <div class="chips">
+                <button class="chip is-on">1 <small>4 рулона · закрыт</small></button>
+                <button class="chip is-off">2 <small>настилается</small></button>
+                <button class="chip is-off">3 <small>настилается</small></button>
+              </div>
+            </div>
+            <div class="field"><label>Размер · только из закрытого расклада</label>
+              <div class="chips">
+                <button class="chip is-on">M <small>0/160 · 2 шт/слой</small></button>
+                <button class="chip">L <small>0/80 · 1 шт/слой</small></button>
+              </div>
+              <p class="lock-note">S и XL в этом заказе есть, но они настилаются в раскладе 2 — пока он открыт, выпускать по ним нечего.</p>
+            </div>
+            <div class="field"><label>Рулоны · M по 2 шт/слой</label>
+              <div class="rolls">
+                <div class="roll is-on"><b>1</b><span>20 сл · 40 шт</span></div>
+                <div class="roll is-on"><b>2</b><span>18 сл · 36 шт</span></div>
+                <div class="roll is-on"><b>3</b><span>22 сл · 44 шт</span></div>
+                <div class="roll is-on"><b>4</b><span>16 сл · 32 шт</span></div>
+              </div>
+            </div>
+            <div class="total"><span>4 паспорта · размер M</span><b>152 шт</b></div>
+            <button class="btn btn--primary btn--lg btn--block">Выпустить и напечатать</button>
+            <p class="lock-note">Печать помощника идёт на принтер раскройного стола: у роли CUTTER_ASSISTANT нет своего принтера, срабатывает существующий fallback «делит принтер с CUTTER».</p>
+          </div>
+        </div></div>
+      </figure>
+
+    </div>
+  </section>
+</div>
+
+<script>
+  // Подсветка активного раздела в липкой навигации.
+  (function(){
+    var links = Array.prototype.slice.call(document.querySelectorAll('.topnav a'));
+    var sections = links.map(function(a){ return document.querySelector(a.getAttribute('href')); });
+    function onScroll(){
+      var y = window.scrollY + 90, active = 0;
+      sections.forEach(function(s, i){ if (s && s.offsetTop <= y) active = i; });
+      links.forEach(function(a, i){ a.classList.toggle('is-active', i === active); });
+    }
+    window.addEventListener('scroll', onScroll, {passive:true});
+    onScroll();
+  })();
+</script>
+</body>
+</html>

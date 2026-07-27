@@ -51,8 +51,38 @@ export function completeCuttingTask(
 }
 
 /**
- * Доска помощника раскройщика `/work/cut-orders`: заказы с завершённым
- * раскроем, готовые к рулонному выпуску паспортов.
+ * «Расклад готов» — частичное завершение раскроя: закрыть ОДИН расклад,
+ * не завершая раскрой заказа. По закрытому раскладу сразу разрешён выпуск
+ * паспортов.
+ */
+export function completeCuttingLay(
+  id: string,
+  ordinal: number,
+): Promise<CuttingTaskDetailDto> {
+  return apiFetch<CuttingTaskDetailDto>(
+    `/cutting-tasks/${encodeURIComponent(id)}/lays/${ordinal}/complete`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * «Открыть расклад» — снять закрытие для правок. Backend откажет, если по
+ * раскладу уже выпущены паспорта (`CUTTING_LAY_HAS_PASSPORTS`).
+ */
+export function reopenCuttingLay(
+  id: string,
+  ordinal: number,
+): Promise<CuttingTaskDetailDto> {
+  return apiFetch<CuttingTaskDetailDto>(
+    `/cutting-tasks/${encodeURIComponent(id)}/lays/${ordinal}/reopen`,
+    { method: 'POST' },
+  );
+}
+
+/**
+ * Очередь выпуска паспортов: заказы, по которым закрыт хотя бы один
+ * расклад (вкладка «Выпуск» кабинета раскройщика и доска помощника
+ * `/work/cut-orders`).
  */
 export function listOrdersReadyForRelease(): Promise<OrderReadyForReleaseDto[]> {
   return apiFetch<OrderReadyForReleaseDto[]>('/cutting-tasks/ready-for-release');

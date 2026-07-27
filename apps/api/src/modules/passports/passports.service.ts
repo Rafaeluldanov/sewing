@@ -498,19 +498,24 @@ export class PassportsService {
         message: 'Для заказа нет задачи раскроя.',
       });
     }
-    if (task.status !== 'DONE') {
-      throw new BadRequestException({
-        statusCode: 400,
-        code: 'CUTTING_TASK_NOT_DONE',
-        message: 'Раскрой по заказу ещё не завершён — выпуск недоступен.',
-      });
-    }
     const lay = task.lays[0];
     if (!lay) {
       throw new BadRequestException({
         statusCode: 400,
         code: 'CUTTING_LAY_NOT_FOUND',
         message: `Расклад №${dto.layOrdinal} не относится к этой задаче раскроя.`,
+      });
+    }
+    // Частичное завершение раскроя: готовность считается по РАСКЛАДУ, а не
+    // по всей задаче. Достаточно, чтобы был закрыт этот расклад — остальные
+    // могут ещё настилаться. `task.status === 'DONE'` оставлен для задач,
+    // завершённых до появления фичи (у их раскладов `completedAt` пустой,
+    // backfill не делали).
+    if (!lay.completedAt && task.status !== 'DONE') {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'CUTTING_LAY_NOT_DONE',
+        message: `Расклад №${dto.layOrdinal} ещё не закрыт — выпуск паспортов по нему недоступен.`,
       });
     }
     const laySize = lay.laySizes.find((r) => r.sizeId === dto.sizeId);

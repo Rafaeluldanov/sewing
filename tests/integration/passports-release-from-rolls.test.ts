@@ -95,7 +95,18 @@ describeWithDb('integration — release passports from rolls', () => {
     qtyPlan: number;
     perLayerQty: number;
     rolls: Array<{ ordinal: number; layers: number }>;
+    /**
+     * Частичное завершение раскроя. По умолчанию — штатный новый путь:
+     * задача ещё `IN_PROGRESS`, но расклад ЗАКРЫТ («Расклад готов»), и
+     * выпуск по нему разрешён. `taskStatus: 'DONE'` + `layClosed: false`
+     * воспроизводят legacy-данные (задачи, завершённые до фичи: у их
+     * раскладов `completedAt` пустой, backfill не делали).
+     */
+    taskStatus?: 'IN_PROGRESS' | 'DONE';
+    layClosed?: boolean;
   }): Promise<void> {
+    const taskStatus = opts.taskStatus ?? 'IN_PROGRESS';
+    const layClosed = opts.layClosed ?? true;
     const order = await t.prisma.order.create({
       data: {
         number: `O-ROLL-${Math.random().toString(36).slice(2, 8)}`,
@@ -116,10 +127,10 @@ describeWithDb('integration — release passports from rolls', () => {
     await t.prisma.cuttingTask.create({
       data: {
         orderId: order.id,
-        status: 'DONE',
+        status: taskStatus,
         assignedToId: seed.employees['cutter'].id,
         startedAt: new Date(),
-        completedAt: new Date(),
+        completedAt: taskStatus === 'DONE' ? new Date() : null,
         sizeRows: {
           create: {
             sortOrder: 10,
@@ -131,6 +142,8 @@ describeWithDb('integration — release passports from rolls', () => {
         lays: {
           create: {
             ordinal: 1,
+            completedAt: layClosed ? new Date() : null,
+            completedById: layClosed ? seed.employees['cutter'].id : null,
             laySizes: {
               create: {
                 sizeId,
@@ -301,9 +314,12 @@ describeWithDb('integration — release passports from rolls', () => {
       .get(`/api/cutting-tasks/by-order/${orderId}/release-state`)
       .set('Cookie', cookies.assistant);
     expect(state0.status).toBe(200);
-    expect(state0.body.cuttingTaskStatus).toBe('DONE');
+    // Частичное завершение: задача ещё в работе, но расклад закрыт —
+    // выпуск по нему разрешён.
+    expect(state0.body.cuttingTaskStatus).toBe('IN_PROGRESS');
     expect(state0.body.lays).toHaveLength(1);
     expect(state0.body.lays[0].ordinal).toBe(1);
+    expect(state0.body.lays[0].completedAt).not.toBeNull();
     expect(state0.body.lays[0].sizes).toEqual([
       expect.objectContaining({ sizeId, perLayerQty: 2, qtyPlan: 100 }),
     ]);
@@ -316,7 +332,7 @@ describeWithDb('integration — release passports from rolls', () => {
     const row0 = ready0.body.find(
       (o: { orderId: string }) => o.orderId === orderId,
     );
-    expect(row0).toMatchObject({ status: 'NEW', totalPairs: 2, releasedPairs: 0 });
+    expect(row0).toMatchObject({ status: 'NEW', totalPassports: 2, releasedPassports: 0 });
 
     // Выпускаем оба рулона.
     await request(t.app.getHttpServer())
@@ -336,7 +352,17 @@ describeWithDb('integration — release passports from rolls', () => {
     const row1 = ready1.body.find(
       (o: { orderId: string }) => o.orderId === orderId,
     );
-    expect(row1).toMatchObject({ status: 'DONE', totalPairs: 2, releasedPairs: 2 });
+    // Всё по закрытым раскладам выпущено, но раскрой заказа продолжается →
+    // WAITING, а не DONE: заказ не добит, помощник вернётся, когда
+    // раскройщик закроет следующий расклад.
+    expect(row1).toMatchObject({
+      status: 'WAITING',
+      totalPassports: 2,
+      releasedPassports: 2,
+      cuttingInProgress: true,
+      laysClosed: 1,
+      laysTotal: 1,
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -388,6 +414,87 @@ describeWithDb('integration — release passports from rolls', () => {
   // ---------------------------------------------------------------------------
   // 6. RBAC: раскройщик больше не выпускает паспорта
   // ---------------------------------------------------------------------------
+
+  // ---------------------------------------------------------------------------
+  // 5. Частичное завершение раскроя по раскладу
+  // ---------------------------------------------------------------------------
+
+  test('выпуск по ОТКРЫТОМУ раскладу запрещён (CUTTING_LAY_NOT_DONE)', async () => {
+    await setupOrderWithCuttingTask({
+      qtyPlan: 100,
+      perLayerQty: 2,
+      rolls: [{ ordinal: 1, layers: 10 }],
+      layClosed: false,
+    });
+
+    const r = await request(t.app.getHttpServer())
+      .post('/api/passports/release-from-rolls')
+      .set('Cookie', cookies.assistant)
+      .send(releaseBody([1]));
+    expect(r.status).toBe(400);
+    expect(r.body.code).toBe('CUTTING_LAY_NOT_DONE');
+
+    // Заказ с одними открытыми раскладами в очередь выпуска не попадает.
+    const ready = await request(t.app.getHttpServer())
+      .get('/api/cutting-tasks/ready-for-release')
+      .set('Cookie', cookies.assistant);
+    expect(
+      ready.body.find((o: { orderId: string }) => o.orderId === orderId),
+    ).toBeUndefined();
+  });
+
+  test('legacy: задача DONE с раскладом без completedAt — выпуск разрешён', async () => {
+    // Данные, созданные до фичи (backfill не делали): готовность несёт
+    // сама задача. Без этого фолбэка на проде мгновенно сломался бы
+    // выпуск по всем ранее завершённым задачам.
+    await setupOrderWithCuttingTask({
+      qtyPlan: 100,
+      perLayerQty: 2,
+      rolls: [{ ordinal: 1, layers: 10 }],
+      taskStatus: 'DONE',
+      layClosed: false,
+    });
+
+    const r = await request(t.app.getHttpServer())
+      .post('/api/passports/release-from-rolls')
+      .set('Cookie', cookies.assistant)
+      .send(releaseBody([1]));
+    expect(r.status).toBe(201);
+    expect(r.body.created).toHaveLength(1);
+
+    const ready = await request(t.app.getHttpServer())
+      .get('/api/cutting-tasks/ready-for-release')
+      .set('Cookie', cookies.assistant);
+    const row = ready.body.find(
+      (o: { orderId: string }) => o.orderId === orderId,
+    );
+    // Раскрой завершён целиком и всё выпущено → DONE (не WAITING).
+    expect(row).toMatchObject({ status: 'DONE', cuttingInProgress: false });
+  });
+
+  test('CUTTER сам выпускает паспорта по закрытому раскладу', async () => {
+    // Фича «раскройщик выпускает паспорта сам»: в цехах без отдельного
+    // помощника печатает тот, кто кроил. Сдельное за раскрой всё равно
+    // уходит `CuttingTask.assignedToId`.
+    await setupOrderWithCuttingTask({
+      qtyPlan: 100,
+      perLayerQty: 2,
+      rolls: [{ ordinal: 1, layers: 10 }],
+    });
+
+    const r = await request(t.app.getHttpServer())
+      .post('/api/passports/release-from-rolls')
+      .set('Cookie', cookies.cutter)
+      .send(releaseBody([1]));
+    expect(r.status).toBe(201);
+    expect(r.body.created).toHaveLength(1);
+
+    // И очередь выпуска ему тоже доступна.
+    const ready = await request(t.app.getHttpServer())
+      .get('/api/cutting-tasks/ready-for-release')
+      .set('Cookie', cookies.cutter);
+    expect(ready.status).toBe(200);
+  });
 
   test('CUTTER получает 403 на POST /api/passports', async () => {
     await setupOrderWithCuttingTask({

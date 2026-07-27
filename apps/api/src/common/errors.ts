@@ -117,6 +117,39 @@ export class AmendmentOperationBehindFrontierException extends ConflictException
   }
 }
 
+/**
+ * Правка маршрута целиком (вкладка «Маршрут» drawer-а): клиент прислал
+ * маршрут, у которого изменился замороженный префикс — шаги, которые
+ * паспорта уже прошли или проходят прямо сейчас. Обычно это гонка: пока
+ * менеджер собирал маршрут, фронт производства уехал вперёд. UI по этому
+ * коду просит обновить страницу и повторить правку.
+ */
+export class AmendmentRouteFrontierChangedException extends ConflictException {
+  constructor(message: string) {
+    super({
+      statusCode: 409,
+      message,
+      code: 'AMENDMENT_ROUTE_FRONTIER_CHANGED',
+    });
+  }
+}
+
+/**
+ * Правка маршрута: попытка убрать шаг, по операции которого в заказе уже
+ * есть выработка (`OperationEntry`). Формально шаг может стоять впереди
+ * фронта (например, работу засчитали подстановкой), но удаление осиротило
+ * бы сдельные начисления — отклоняем адресной 409.
+ */
+export class AmendmentRouteStepHasWorkException extends ConflictException {
+  constructor(message: string) {
+    super({
+      statusCode: 409,
+      message,
+      code: 'AMENDMENT_ROUTE_STEP_HAS_WORK',
+    });
+  }
+}
+
 export class OrderInvalidTransitionException extends BusinessException {
   constructor(message: string) {
     super('ORDER_INVALID_TRANSITION', message, HttpStatus.CONFLICT);
@@ -4362,6 +4395,82 @@ export class CuttingTaskCompletionIncompleteException extends BusinessException 
     super(
       'CUTTING_TASK_COMPLETION_INCOMPLETE',
       `Нельзя завершить раскрой: ${problems.join('; ')}. Заполните настил или удалите лишнее.`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Частичное завершение раскроя по раскладу («Расклад готов»)
+// ---------------------------------------------------------------------------
+
+/** Расклада с таким `ordinal` в задаче нет. */
+export class CuttingLayNotFoundException extends BusinessException {
+  constructor(ordinal: number) {
+    super(
+      'CUTTING_LAY_NOT_FOUND',
+      `Расклад №${ordinal} не относится к этой задаче раскроя`,
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
+ * Попытка изменить (или удалить) уже закрытый расклад. Закрытый расклад —
+ * источник количеств в выпущенных паспортах (`qtyCut = слои × «на
+ * настиле»`), поэтому он read-only: сначала «Открыть расклад».
+ */
+export class CuttingLayLockedException extends BusinessException {
+  constructor(ordinal: number) {
+    super(
+      'CUTTING_LAY_LOCKED',
+      `Расклад №${ordinal} закрыт — правки недоступны. Откройте расклад, если нужно изменить настил.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * «Расклад готов» с незаполненным настилом. Правила те же, что у
+ * завершения всего раскроя, но по одному раскладу — см.
+ * `@sewing/shared/cutting-tasks::listLayCompletionProblems`.
+ */
+export class CuttingLayCompletionIncompleteException extends BusinessException {
+  constructor(ordinal: number, problems: string[]) {
+    super(
+      'CUTTING_LAY_COMPLETION_INCOMPLETE',
+      `Нельзя закрыть расклад №${ordinal}: ${problems.join('; ')}. Заполните настил или удалите лишнее.`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Переоткрытие расклада, по которому уже выпущены паспорта. Иначе
+ * раскройщик изменил бы слои/«на настиле» под уже напечатанными
+ * паспортами — их `qtyCut` разошёлся бы с настилом. Сначала удалить
+ * паспорта (пока они `CREATED`, без ячейки и событий).
+ */
+export class CuttingLayHasPassportsException extends BusinessException {
+  constructor(ordinal: number, count: number) {
+    super(
+      'CUTTING_LAY_HAS_PASSPORTS',
+      `По раскладу №${ordinal} уже выпущено паспортов: ${count}. Сначала удалите их, потом открывайте расклад.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * Выпуск паспортов по раскладу, который ещё настилается. Заменил
+ * `CUTTING_TASK_NOT_DONE` в рулонном выпуске: теперь готовность считается
+ * по раскладу, а не по всей задаче.
+ */
+export class CuttingLayNotDoneException extends BusinessException {
+  constructor(ordinal: number) {
+    super(
+      'CUTTING_LAY_NOT_DONE',
+      `Расклад №${ordinal} ещё не закрыт — выпуск паспортов по нему недоступен.`,
       HttpStatus.BAD_REQUEST,
     );
   }

@@ -79,7 +79,7 @@ export class PassportsController {
    * `PassportsService.releaseFromRolls`.
    */
   @Post('release-from-rolls')
-  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
   releaseFromRolls(
     @Body(new ZodValidationPipe(ReleaseFromRollsSchema)) dto: ReleaseFromRollsDto,
     @CurrentUser() user: AuthPrincipal,
@@ -200,7 +200,7 @@ export class PassportsController {
    * проверяется `creatorId === me`.
    */
   @Patch(':id')
-  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
   update(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(UpdatePassportSchema)) dto: UpdatePassportDto,
@@ -223,7 +223,7 @@ export class PassportsController {
    * «Удаление паспорта»`.
    */
   @Delete(':id')
-  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
   @HttpCode(204)
   async delete(
     @Param('id') id: string,
@@ -233,7 +233,7 @@ export class PassportsController {
   }
 
   @Post(':id/place')
-  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER')
   place(
     @Param('id') id: string,
     @Body(new ZodValidationPipe(PlacePassportSchema)) dto: PlacePassportDto,

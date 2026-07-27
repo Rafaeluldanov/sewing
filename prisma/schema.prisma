@@ -1118,6 +1118,9 @@ model Employee {
   /// будущей передачи данных помощнику раскройщика. `onDelete: SetNull`
   /// со стороны задачи — удаление учётки не сносит историю раскроя.
   cuttingTasksAssigned     CuttingTask[]     @relation("CuttingTaskAssignedTo")
+  /// Расклады, которые сотрудник закрыл кнопкой «Расклад готов»
+  /// (частичное завершение раскроя, см. `model CuttingTaskLay`).
+  cuttingLaysCompleted     CuttingTaskLay[]  @relation("CuttingTaskLayCompletedBy")
 
   /// Web Push: устройства/браузеры, на которые этот сотрудник
   /// подписался получать фоновые уведомления (например, «пришёл
@@ -7462,7 +7465,36 @@ model CuttingTaskLay {
   /// Порядковый номер расклада в рамках задачи (1-based). Уникален в
   /// пределах задачи; используется как `Passport.cuttingLayOrdinal` при
   /// выпуске паспортов помощником.
+  ///
+  /// ВАЖНО (частичное завершение раскроя): номер append-only и НЕ
+  /// переиспользуется. Сохранение прогресса — merge по `ordinal`, а не
+  /// полный replace: закрытый расклад нельзя ни удалить, ни
+  /// перенумеровать, иначе выпущенные паспорта (`cuttingLayOrdinal`)
+  /// потеряют привязку к своему настилу.
   ordinal Int
+
+  /// Частичное завершение раскроя («Расклад готов»): момент закрытия
+  /// расклада. `null` — расклад ещё настилается.
+  ///
+  /// Единица готовности переехала с задачи на расклад: пока
+  /// `CuttingTask.status = IN_PROGRESS`, по ЗАКРЫТЫМ раскладам уже можно
+  /// выпускать паспорта (см. `PassportsService.releaseFromRolls`,
+  /// `CuttingTasksService.listReadyForRelease`). «Раскрой завершён»
+  /// закрывает все оставшиеся расклады и переводит задачу в `DONE`.
+  ///
+  /// Закрытый расклад read-only. Переоткрыть можно, только пока по нему
+  /// нет ни одного non-CANCELLED паспорта (`CUTTING_LAY_HAS_PASSPORTS`).
+  ///
+  /// У задач, завершённых ДО появления фичи, поле пустое, а задача уже
+  /// `DONE` — выпуск по таким раскладам разрешён по статусу задачи
+  /// (обратная совместимость, без backfill).
+  completedAt DateTime?
+
+  /// FK на `Employee.id` — кто нажал «Расклад готов». Nullable: у
+  /// исторических раскладов автора нет; `onDelete: SetNull` — удаление
+  /// учётки не сносит расклад.
+  completedById String?
+  completedBy   Employee? @relation("CuttingTaskLayCompletedBy", fields: [completedById], references: [id], onDelete: SetNull)
 
   createdAt DateTime @default(now())
 
@@ -7471,6 +7503,7 @@ model CuttingTaskLay {
 
   @@unique([taskId, ordinal], name: "CuttingTaskLay_task_ordinal_uniq")
   @@index([taskId, ordinal])
+  @@index([completedById])
 }
 
 /// Выбранный в раскладе размер с «количеством на настиле». Раскройщик

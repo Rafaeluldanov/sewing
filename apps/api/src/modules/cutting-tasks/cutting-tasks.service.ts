@@ -3,12 +3,15 @@ import { Prisma } from '@prisma/client';
 import {
   computeCuttingTotals,
   listCuttingCompletionProblems,
+  listLayCompletionProblems,
   type CuttingTaskDetailDto,
   type CuttingTaskLayDto,
+  type CuttingTaskLayInputDto,
   type CuttingTaskSizeRowDto,
   type CuttingTaskStatus,
   type CuttingTaskSummaryDto,
   type OrderReadyForReleaseDto,
+  type OrderReleaseQueueStatus,
   type OrderReleaseStateDto,
   type ReleaseLayDto,
   type SaveCuttingTaskProgressDto,
@@ -16,6 +19,10 @@ import {
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
+  CuttingLayCompletionIncompleteException,
+  CuttingLayHasPassportsException,
+  CuttingLayLockedException,
+  CuttingLayNotFoundException,
   CuttingTaskCompletionIncompleteException,
   CuttingTaskInvalidTransitionException,
   CuttingTaskNotFoundException,
@@ -106,12 +113,31 @@ export class CuttingTasksService {
               orderBy: { ordinal: 'asc' },
               include: { variant: { select: { color: true } } },
             },
+            completedBy: { select: { fullName: true } },
           },
         },
         _count: { select: { sizeRows: true, lays: true } },
       },
     });
     if (!task) throw new CuttingTaskNotFoundException();
+
+    // Частичное завершение: сколько паспортов уже выпущено по каждому
+    // раскладу. Нужно для подписи «выпущено 2 из 8» и для гейта «Открыть
+    // расклад» (кнопка гаснет, если по раскладу есть паспорта).
+    const releasedPassports = await this.prisma.passport.findMany({
+      where: {
+        orderId: task.orderId,
+        status: { not: 'CANCELLED' },
+        cuttingLayOrdinal: { not: null },
+        rollOrdinal: { not: null },
+      },
+      select: { sizeId: true, rollOrdinal: true, cuttingLayOrdinal: true },
+    });
+    const releasedSet = new Set(
+      releasedPassports.map(
+        (p) => `${p.cuttingLayOrdinal}:${p.sizeId}:${p.rollOrdinal}`,
+      ),
+    );
 
     const sizeRows: CuttingTaskSizeRowDto[] = task.sizeRows.map((r) => ({
       id: r.id,
@@ -120,23 +146,44 @@ export class CuttingTasksService {
       sizeCodeSnapshot: r.sizeCodeSnapshot,
       qtyPlan: r.qtyPlan,
     }));
-    const lays: CuttingTaskLayDto[] = task.lays.map((l) => ({
-      id: l.id,
-      ordinal: l.ordinal,
-      sizes: l.laySizes.map((s) => ({
-        sizeId: s.sizeId,
-        sizeCodeSnapshot: s.sizeCodeSnapshot,
-        sortOrder: s.sortOrder,
-        perLayerQty: s.perLayerQty,
-      })),
-      rolls: l.rolls.map((r) => ({
-        id: r.id,
-        ordinal: r.ordinal,
-        layers: r.layers,
-        variantId: r.variantId,
-        variantColor: r.variant?.color ?? null,
-      })),
-    }));
+    const lays: CuttingTaskLayDto[] = task.lays.map((l) => {
+      // Единица счёта — паспорт: тройка «расклад × размер × рулон» с qty > 0
+      // даёт ровно один паспорт (тот же алгоритм, что в очереди выпуска).
+      const { totalPairs, releasedPairs } = countReleasePairs(
+        [
+          {
+            ordinal: l.ordinal,
+            laySizes: l.laySizes.map((s) => ({
+              sizeId: s.sizeId,
+              perLayerQty: s.perLayerQty,
+            })),
+            rolls: l.rolls.map((r) => ({ ordinal: r.ordinal, layers: r.layers })),
+          },
+        ],
+        releasedSet,
+      );
+      return {
+        id: l.id,
+        ordinal: l.ordinal,
+        sizes: l.laySizes.map((s) => ({
+          sizeId: s.sizeId,
+          sizeCodeSnapshot: s.sizeCodeSnapshot,
+          sortOrder: s.sortOrder,
+          perLayerQty: s.perLayerQty,
+        })),
+        rolls: l.rolls.map((r) => ({
+          id: r.id,
+          ordinal: r.ordinal,
+          layers: r.layers,
+          variantId: r.variantId,
+          variantColor: r.variant?.color ?? null,
+        })),
+        completedAt: l.completedAt ? l.completedAt.toISOString() : null,
+        completedByName: l.completedBy?.fullName ?? null,
+        totalPassports: totalPairs,
+        releasedPassports: releasedPairs,
+      };
+    });
 
     return {
       ...this.toSummary(task),
@@ -168,8 +215,20 @@ export class CuttingTasksService {
    */
   async listReadyForRelease(): Promise<OrderReadyForReleaseDto[]> {
     const tasks = await this.prisma.cuttingTask.findMany({
-      where: { status: 'DONE' },
-      orderBy: { completedAt: 'desc' },
+      // Частичное завершение: в очередь попадает заказ, у которого закрыт
+      // ХОТЯ БЫ ОДИН расклад — не дожидаясь `status = DONE` по всей задаче.
+      // Плюс задачи, завершённые ДО фичи: у их раскладов `completedAt`
+      // пустой, готовность несёт сама задача (обратная совместимость).
+      where: {
+        OR: [
+          { status: 'DONE' },
+          {
+            status: { notIn: ['CANCELLED'] },
+            lays: { some: { completedAt: { not: null } } },
+          },
+        ],
+      },
+      orderBy: [{ completedAt: 'desc' }, { updatedAt: 'desc' }],
       take: 200,
       include: {
         order: {
@@ -185,6 +244,7 @@ export class CuttingTasksService {
         lays: {
           select: {
             ordinal: true,
+            completedAt: true,
             laySizes: { select: { sizeId: true, perLayerQty: true } },
             rolls: { select: { ordinal: true, layers: true } },
           },
@@ -219,19 +279,38 @@ export class CuttingTasksService {
 
     return tasks.map((t) => {
       const releasedSet = releasedByOrder.get(t.orderId) ?? new Set<string>();
+      const cuttingDone = t.status === 'DONE';
+      // Считаем только по ЗАКРЫТЫМ раскладам: открытый ещё может измениться,
+      // обещать по нему паспорта нельзя. У задач, завершённых до фичи,
+      // `completedAt` пустой — там источник готовности сама задача.
+      const countableLays = cuttingDone
+        ? t.lays
+        : t.lays.filter((l) => l.completedAt);
       const { totalPairs, releasedPairs } = countReleasePairs(
-        t.lays,
+        countableLays,
         releasedSet,
       );
-      const status: OrderReadyForReleaseDto['status'] =
-        totalPairs > 0 && releasedPairs >= totalPairs ? 'DONE' : 'NEW';
+      const laysClosed = t.lays.filter((l) => l.completedAt).length;
+      const allReleased = totalPairs > 0 && releasedPairs >= totalPairs;
+      // NEW — есть что печатать; WAITING — по закрытым всё выпущено, но
+      // раскрой продолжается (заказ вернётся сам); DONE — раскрой завершён
+      // и выпущено всё. Без WAITING заказ с настилающимся раскладом
+      // помечался бы зелёным «Завершено» и выпадал из внимания.
+      const status: OrderReleaseQueueStatus = allReleased
+        ? cuttingDone
+          ? 'DONE'
+          : 'WAITING'
+        : 'NEW';
       return {
         orderId: t.orderId,
         orderNumber: t.order?.number ?? '—',
         productName: t.order?.items[0]?.product?.name ?? '—',
         color: t.order?.color ?? '—',
-        totalPairs,
-        releasedPairs,
+        totalPassports: totalPairs,
+        releasedPassports: releasedPairs,
+        laysTotal: t.lays.length,
+        laysClosed: cuttingDone ? t.lays.length : laysClosed,
+        cuttingInProgress: !cuttingDone,
         status,
       };
     });
@@ -271,6 +350,7 @@ export class CuttingTasksService {
       },
     });
     if (!task) throw new CuttingTaskNotFoundException();
+    const cuttingDone = task.status === 'DONE';
 
     // План по размеру — общий для всех раскладов (снимок заказа).
     const planBySize = new Map<string, number>();
@@ -313,6 +393,15 @@ export class CuttingTasksService {
           variantId: r.variantId,
           variantColor: r.variant?.color ?? null,
         })),
+      // Частичное завершение: форма выпуска гасит расклады, которые ещё
+      // настилаются. Для задач, завершённых до фичи, `completedAt` пустой —
+      // подставляем момент завершения задачи, иначе UI счёл бы их открытыми
+      // и выпуск по историческим заказам стал бы недоступен.
+      completedAt: l.completedAt
+        ? l.completedAt.toISOString()
+        : cuttingDone && task.completedAt
+          ? task.completedAt.toISOString()
+          : null,
     }));
 
     return {
@@ -386,34 +475,60 @@ export class CuttingTasksService {
   }
 
   /**
-   * «Раскрой завершён» — сохранить финальный прогресс и перевести
-   * `IN_PROGRESS` → `DONE` (+ `completedAt`). На этом этапе паспорта НЕ
-   * трогаем: данные дальше пойдут в кабинет помощника раскройщика
-   * отдельным шагом.
+   * «Раскрой завершён» — сохранить финальный прогресс, закрыть все ещё
+   * открытые расклады и перевести `IN_PROGRESS` → `DONE` (+ `completedAt`).
+   * На этом этапе паспорта НЕ трогаем: выпуск — отдельный шаг (и он мог
+   * уже частично пройти по закрытым раскладам).
    */
   async complete(
     id: string,
     dto: SaveCuttingTaskProgressDto,
+    employeeId?: string | null,
   ): Promise<CuttingTaskDetailDto> {
     await this.persistProgress(id, dto, {
       requireInProgress: true,
       markDone: true,
+      employeeId: employeeId ?? null,
     });
     this.logger.log(`event=cutting-task.completed taskId=${id}`);
     return this.getOne(id);
   }
 
   /**
-   * Общая запись прогресса. Полностью заменяет набор раскладов (replace,
-   * не diff): индекс расклада в `dto.lays` → `ordinal` (1-based).
-   * `markDone` дополнительно переводит задачу в `DONE`. Всё в одной
-   * транзакции: либо прогресс сохранён целиком (и, если просили, статус
-   * сменён), либо ничего.
+   * Общая запись прогресса — **merge по `ordinal`**, а не replace.
+   *
+   * Почему не replace (как было): раньше сохранение делало `deleteMany` по
+   * всем раскладам и создавало их заново с `ordinal = индекс + 1`. С
+   * появлением частичного завершения так нельзя — `Passport.cuttingLayOrdinal`
+   * ссылается на номер расклада, и любой автосейв (а он идёт по таймеру)
+   * пересоздал бы расклады: закрытый настил либо исчез бы, либо сменил
+   * номер, а выпущенные по нему паспорта указывали бы на чужой расклад.
+   *
+   * Правила merge:
+   *   - элемент payload с `ordinal` существующего расклада → обновляем
+   *     этот расклад (его размеры и рулоны переписываются целиком);
+   *   - элемент без `ordinal` → НОВЫЙ расклад, номер = max(ordinal) + 1
+   *     (append-only, номера никогда не переиспользуются);
+   *   - открытый расклад, которого нет в payload → удаляется (раскройщик
+   *     нажал «Удалить расклад»);
+   *   - ЗАКРЫТЫЙ расклад (`completedAt != null`) неприкосновенен: его
+   *     нельзя ни изменить, ни удалить — `CUTTING_LAY_LOCKED`. Отсутствие
+   *     закрытого расклада в payload игнорируем (форма могла его вообще
+   *     не присылать, т.к. рисует read-only).
+   *
+   * `markDone` дополнительно закрывает все ещё открытые расклады и
+   * переводит задачу в `DONE`. Всё в одной транзакции: либо прогресс
+   * сохранён целиком (и, если просили, статус сменён), либо ничего.
    */
   private async persistProgress(
     id: string,
     dto: SaveCuttingTaskProgressDto,
-    opts: { requireInProgress: boolean; markDone?: boolean },
+    opts: {
+      requireInProgress: boolean;
+      markDone?: boolean;
+      /** Кто нажал «Раскрой завершён» — уходит в `completedById` раскладов. */
+      employeeId?: string | null;
+    },
   ): Promise<void> {
     const task = await this.prisma.cuttingTask.findUnique({
       where: { id },
@@ -423,6 +538,9 @@ export class CuttingTasksService {
         sizeRows: {
           select: { sizeId: true, sizeCodeSnapshot: true, sortOrder: true },
         },
+        // Частичное завершение: закрытые расклады защищаем от перезаписи,
+        // а `ordinal` новых считаем от максимума (append-only).
+        lays: { select: { id: true, ordinal: true, completedAt: true } },
         // Ф3 «Расцветки»: допустимые расцветки заказа — whitelist для
         // `roll.variantId` (защита от подделки чужого id).
         order: { select: { variants: { select: { id: true } } } },
@@ -432,6 +550,37 @@ export class CuttingTasksService {
     if (opts.requireInProgress && task.status !== 'IN_PROGRESS') {
       throw new CuttingTaskNotInProgressException();
     }
+
+    const layByOrdinal = new Map(task.lays.map((l) => [l.ordinal, l]));
+    // Разбираем payload на «обновить существующий» / «создать новый» и
+    // сразу режем попытки тронуть закрытый расклад.
+    const updates: Array<{ layId: string; ordinal: number; lay: CuttingTaskLayInputDto }> = [];
+    const creates: CuttingTaskLayInputDto[] = [];
+    for (const lay of dto.lays) {
+      if (lay.ordinal == null) {
+        creates.push(lay);
+        continue;
+      }
+      const existing = layByOrdinal.get(lay.ordinal);
+      if (!existing) {
+        // Клиент прислал номер, которого в задаче нет. Не создаём «дырку»
+        // с чужим номером — считаем это новым раскладом в конце.
+        creates.push(lay);
+        continue;
+      }
+      if (existing.completedAt) {
+        throw new CuttingLayLockedException(lay.ordinal);
+      }
+      updates.push({ layId: existing.id, ordinal: lay.ordinal, lay });
+    }
+    // Открытые расклады, которых в payload нет → удалить. Закрытые в
+    // расчёт не берём: их отсутствие в payload — норма.
+    const keptOrdinals = new Set(updates.map((u) => u.ordinal));
+    const layIdsToDelete = task.lays
+      .filter((l) => !l.completedAt && !keptOrdinals.has(l.ordinal))
+      .map((l) => l.id);
+    let nextOrdinal =
+      task.lays.reduce((max, l) => Math.max(max, l.ordinal), 0) + 1;
 
     const variantIdSet = new Set(
       (task.order?.variants ?? []).map((v) => v.id),
@@ -474,59 +623,237 @@ export class CuttingTasksService {
     // настилом (иначе задача уйдёт на доску помощника с нулями и выпускать
     // паспорта будет не из чего). Автосейв (`markDone: false`) нули
     // пропускает — это нормальное промежуточное состояние формы.
+    //
+    // Частичное завершение: проверяем ТОЛЬКО то, что придёт в payload —
+    // уже закрытые расклады свою проверку прошли при закрытии, а форма
+    // может их вообще не присылать.
     if (opts.markDone) {
       const problems = listCuttingCompletionProblems(
         dto.lays,
         (sizeId) => sizeMeta.get(sizeId)?.sizeCodeSnapshot ?? sizeId,
       );
-      if (problems.length > 0) {
+      // Пустой payload при уже закрытых раскладах — валидный кейс
+      // «остались только закрытые, добивать нечего».
+      const onlyClosedLeft =
+        dto.lays.length === 0 && task.lays.some((l) => l.completedAt);
+      if (problems.length > 0 && !onlyClosedLeft) {
         throw new CuttingTaskCompletionIncompleteException(problems);
       }
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      // Полная замена раскладов: каскад снесёт laySizes и rolls.
-      await tx.cuttingTaskLay.deleteMany({ where: { taskId: id } });
+    const layData = (lay: CuttingTaskLayInputDto) => ({
+      laySizes: {
+        createMany: {
+          data: lay.laySizes.map((ls) => {
+            const meta = sizeMeta.get(ls.sizeId)!;
+            return {
+              sizeId: ls.sizeId,
+              sizeCodeSnapshot: meta.sizeCodeSnapshot,
+              sortOrder: meta.sortOrder,
+              perLayerQty: ls.perLayerQty,
+            };
+          }),
+        },
+      },
+      rolls: {
+        createMany: {
+          data: lay.rolls.map((r) => ({
+            ordinal: r.ordinal,
+            layers: r.layers,
+            variantId: r.variantId ?? null,
+          })),
+        },
+      },
+    });
 
-      for (let i = 0; i < dto.lays.length; i += 1) {
-        const lay = dto.lays[i]!;
+    await this.prisma.$transaction(async (tx) => {
+      // 1. Удалить открытые расклады, которых больше нет в payload
+      //    (каскад снесёт их laySizes и rolls). Закрытые не трогаем.
+      if (layIdsToDelete.length > 0) {
+        await tx.cuttingTaskLay.deleteMany({
+          where: { id: { in: layIdsToDelete } },
+        });
+      }
+
+      // 2. Обновить существующие открытые расклады: содержимое (размеры +
+      //    рулоны) переписываем целиком, сам расклад и его `ordinal`
+      //    сохраняем — иначе `Passport.cuttingLayOrdinal` поедет.
+      for (const u of updates) {
+        await tx.cuttingTaskLaySize.deleteMany({ where: { layId: u.layId } });
+        await tx.cuttingTaskRoll.deleteMany({ where: { layId: u.layId } });
+        await tx.cuttingTaskLay.update({
+          where: { id: u.layId },
+          data: layData(u.lay),
+        });
+      }
+
+      // 3. Создать новые расклады — номера append-only от максимума.
+      for (const lay of creates) {
         await tx.cuttingTaskLay.create({
           data: {
             taskId: id,
-            ordinal: i + 1,
-            laySizes: {
-              createMany: {
-                data: lay.laySizes.map((ls) => {
-                  const meta = sizeMeta.get(ls.sizeId)!;
-                  return {
-                    sizeId: ls.sizeId,
-                    sizeCodeSnapshot: meta.sizeCodeSnapshot,
-                    sortOrder: meta.sortOrder,
-                    perLayerQty: ls.perLayerQty,
-                  };
-                }),
-              },
-            },
-            rolls: {
-              createMany: {
-                data: lay.rolls.map((r) => ({
-                  ordinal: r.ordinal,
-                  layers: r.layers,
-                  variantId: r.variantId ?? null,
-                })),
-              },
-            },
+            ordinal: nextOrdinal,
+            ...layData(lay),
           },
         });
+        nextOrdinal += 1;
       }
 
       if (opts.markDone) {
+        // «Раскрой завершён» = закрыть всё, что ещё открыто, и перевести
+        // задачу в DONE. Закрытые расклады сохраняют свой `completedAt`
+        // (кто и когда закрыл — не переписываем).
+        const now = new Date();
+        await tx.cuttingTaskLay.updateMany({
+          where: { taskId: id, completedAt: null },
+          data: { completedAt: now, completedById: opts.employeeId ?? null },
+        });
         await tx.cuttingTask.update({
           where: { id },
-          data: { status: 'DONE', completedAt: new Date() },
+          data: { status: 'DONE', completedAt: now },
         });
       }
     });
+  }
+
+  // ---------------------------------------------------------------------------
+  // ЧАСТИЧНОЕ ЗАВЕРШЕНИЕ РАСКРОЯ ПО РАСКЛАДУ
+  // ---------------------------------------------------------------------------
+
+  /**
+   * «Расклад готов» — закрыть ОДИН расклад, не завершая раскрой заказа.
+   *
+   * Что даёт: по закрытому раскладу сразу можно выпускать паспорта
+   * (`PassportsService.releaseFromRolls`), пока остальные расклады
+   * настилаются; заказ появляется в очереди выпуска
+   * (`listReadyForRelease`) с `cuttingInProgress = true`.
+   *
+   * Гейты:
+   *   - задача в работе (`IN_PROGRESS`) — иначе нечего закрывать;
+   *   - расклад существует и ещё не закрыт (повтор — идемпотентно, просто
+   *     возвращаем карточку);
+   *   - настил заполнен целиком (`listLayCompletionProblems`), иначе
+   *     `CUTTING_LAY_COMPLETION_INCOMPLETE` — те же формулировки, что у
+   *     «Раскрой завершён».
+   *
+   * Прогресс формы НЕ сохраняем здесь: клиент сначала делает
+   * `PATCH /cutting-tasks/:id` (или автосейв), потом закрывает расклад —
+   * так закрытие проверяет ровно то, что уже лежит в БД.
+   */
+  async completeLay(
+    id: string,
+    ordinal: number,
+    employeeId: string | null,
+  ): Promise<CuttingTaskDetailDto> {
+    const task = await this.prisma.cuttingTask.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        status: true,
+        lays: {
+          where: { ordinal },
+          select: {
+            id: true,
+            completedAt: true,
+            laySizes: { select: { sizeId: true, sizeCodeSnapshot: true, perLayerQty: true } },
+            rolls: { select: { ordinal: true, layers: true } },
+          },
+        },
+      },
+    });
+    if (!task) throw new CuttingTaskNotFoundException();
+    if (task.status !== 'IN_PROGRESS') {
+      throw new CuttingTaskNotInProgressException();
+    }
+    const lay = task.lays[0];
+    if (!lay) throw new CuttingLayNotFoundException(ordinal);
+    // Идемпотентность: закрытый расклад повторно не закрываем и не ругаемся
+    // (двойной тап по кнопке на планшете — обычное дело).
+    if (lay.completedAt) return this.getOne(id);
+
+    const labels = new Map(
+      lay.laySizes
+        .filter((s) => s.sizeId)
+        .map((s) => [s.sizeId as string, s.sizeCodeSnapshot]),
+    );
+    const problems = listLayCompletionProblems(
+      {
+        laySizes: lay.laySizes
+          .filter((s) => s.sizeId)
+          .map((s) => ({ sizeId: s.sizeId as string, perLayerQty: s.perLayerQty })),
+        rolls: lay.rolls.map((r) => ({ ordinal: r.ordinal, layers: r.layers })),
+      },
+      (sizeId) => labels.get(sizeId) ?? sizeId,
+    );
+    if (problems.length > 0) {
+      throw new CuttingLayCompletionIncompleteException(ordinal, problems);
+    }
+
+    await this.prisma.cuttingTaskLay.update({
+      where: { id: lay.id },
+      data: { completedAt: new Date(), completedById: employeeId ?? null },
+    });
+    this.logger.log(
+      `event=cutting-lay.completed taskId=${id} ordinal=${ordinal} employeeId=${employeeId ?? '—'}`,
+    );
+    return this.getOne(id);
+  }
+
+  /**
+   * «Открыть расклад» — снять закрытие, чтобы поправить настил.
+   *
+   * Разрешено, только пока по раскладу нет ни одного живого паспорта:
+   * иначе правка слоёв/«на настиле» разошлась бы с `qtyCut` уже
+   * напечатанных паспортов (`CUTTING_LAY_HAS_PASSPORTS` — сначала удалить
+   * их на «Выпущенных паспортах»).
+   *
+   * Работает и для задачи в статусе `DONE`: тогда задача возвращается в
+   * `IN_PROGRESS` (раскрой снова идёт) — иначе расклад открыт, а форма
+   * read-only.
+   */
+  async reopenLay(id: string, ordinal: number): Promise<CuttingTaskDetailDto> {
+    const task = await this.prisma.cuttingTask.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        orderId: true,
+        status: true,
+        lays: { where: { ordinal }, select: { id: true, completedAt: true } },
+      },
+    });
+    if (!task) throw new CuttingTaskNotFoundException();
+    const lay = task.lays[0];
+    if (!lay) throw new CuttingLayNotFoundException(ordinal);
+    // Уже открыт — идемпотентно.
+    if (!lay.completedAt) return this.getOne(id);
+
+    const released = await this.prisma.passport.count({
+      where: {
+        orderId: task.orderId,
+        cuttingLayOrdinal: ordinal,
+        status: { not: 'CANCELLED' },
+      },
+    });
+    if (released > 0) {
+      throw new CuttingLayHasPassportsException(ordinal, released);
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.cuttingTaskLay.update({
+        where: { id: lay.id },
+        data: { completedAt: null, completedById: null },
+      });
+      if (task.status === 'DONE') {
+        await tx.cuttingTask.update({
+          where: { id },
+          data: { status: 'IN_PROGRESS', completedAt: null },
+        });
+      }
+    });
+    this.logger.log(
+      `event=cutting-lay.reopened taskId=${id} ordinal=${ordinal} taskWasDone=${task.status === 'DONE'}`,
+    );
+    return this.getOne(id);
   }
 
   // ---------------------------------------------------------------------------

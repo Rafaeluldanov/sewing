@@ -17918,6 +17918,38 @@ body:has(.admin-layout) .app-header { display: none !important; }
   line-height: 1;
   color: #991b1b;
 }
+/* Частичное завершение раскроя: закрытый расклад («Расклад готов»).
+   Зелёная полоса слева вместо синей — расклад больше не редактируется и
+   по нему уже можно выпускать паспорта. Тон совпадает с бейджем
+   `constructor-status--done`, чтобы «закрыто» читалось одинаково. */
+.cutter-lay--closed {
+  border-left-color: var(--color-ok);
+  background: #fcfdfc;
+}
+/* Подвал расклада: кнопка «Расклад готов» / «Открыть расклад» + причины,
+   почему закрыть нельзя. Отделён линией, как остальные блоки формы. */
+.cutter-lay__foot {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.6rem;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px solid #e4e4e1;
+}
+.cutter-lay__problems {
+  margin: 0;
+  flex: 1 1 100%;
+  font-size: 0.82rem;
+  color: var(--color-warn-fg);
+}
+.cutter-lay__closed-note {
+  margin: 0;
+  flex: 1 1 100%;
+  font-size: 0.82rem;
+  color: #5f5f5c;
+}
+
 .cutter-row--off {
   color: #8a8a86;
 }

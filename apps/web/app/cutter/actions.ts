@@ -11,7 +11,9 @@
 import { revalidatePath } from 'next/cache';
 import { ApiRequestError } from '@/lib/api';
 import {
+  completeCuttingLay,
   completeCuttingTask,
+  reopenCuttingLay,
   saveCuttingTaskProgress,
   startCuttingTask,
 } from '@/lib/cutting-tasks-api';
@@ -30,6 +32,13 @@ import type {
 export interface CutterActionResult {
   ok: boolean;
   error?: string;
+  /**
+   * Номера открытых раскладов после сохранения прогресса (см.
+   * `saveCuttingProgressAction`). Форма сопоставляет их со своими
+   * черновиками, чтобы закрыть только что созданный расклад без
+   * повторного тапа.
+   */
+  ordinals?: number[];
 }
 
 function explainError(e: unknown, fallback: string): string {
@@ -62,9 +71,16 @@ export async function saveCuttingProgressAction(
     return { ok: false, error: 'Неверный id задачи' };
   }
   try {
-    await saveCuttingTaskProgress(taskId, payload);
+    const task = await saveCuttingTaskProgress(taskId, payload);
     revalidatePath(`/cutter/${taskId}`);
-    return { ok: true };
+    // Номера ОТКРЫТЫХ раскладов после merge, в порядке, в котором они
+    // лежат в задаче. Нужны форме, чтобы сразу после сохранения закрыть
+    // только что созданный расклад («Расклад готов» без второго тапа):
+    // новый расклад уходит на сервер без `ordinal`, номер выдаёт backend.
+    const ordinals = task.lays
+      .filter((l) => !l.completedAt)
+      .map((l) => l.ordinal);
+    return { ok: true, ordinals };
   } catch (e) {
     return { ok: false, error: explainError(e, 'Не удалось сохранить раскрой') };
   }
@@ -84,6 +100,59 @@ export async function completeCuttingTaskAction(
     return { ok: true };
   } catch (e) {
     return { ok: false, error: explainError(e, 'Не удалось завершить раскрой') };
+  }
+}
+
+/**
+ * «Расклад готов» — частичное завершение раскроя: закрыть один расклад,
+ * не завершая раскрой заказа. По закрытому раскладу сразу можно выпускать
+ * паспорта (см. `docs/flows.md`, вкладка «Выпуск» кабинета раскройщика).
+ *
+ * Прогресс формы сохраняется ОТДЕЛЬНЫМ вызовом до этого действия:
+ * backend закрывает то, что уже лежит в БД.
+ */
+export async function completeCuttingLayAction(
+  taskId: string,
+  ordinal: number,
+): Promise<CutterActionResult> {
+  if (!taskId || typeof taskId !== 'string') {
+    return { ok: false, error: 'Неверный id задачи' };
+  }
+  if (!Number.isInteger(ordinal) || ordinal < 1) {
+    return { ok: false, error: 'Неверный номер расклада' };
+  }
+  try {
+    await completeCuttingLay(taskId, ordinal);
+    revalidatePath('/cutter');
+    revalidatePath(`/cutter/${taskId}`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: explainError(e, 'Не удалось закрыть расклад') };
+  }
+}
+
+/**
+ * «Открыть расклад» — снять закрытие, чтобы поправить настил. Backend
+ * пускает, только пока по раскладу нет живых паспортов
+ * (`CUTTING_LAY_HAS_PASSPORTS`).
+ */
+export async function reopenCuttingLayAction(
+  taskId: string,
+  ordinal: number,
+): Promise<CutterActionResult> {
+  if (!taskId || typeof taskId !== 'string') {
+    return { ok: false, error: 'Неверный id задачи' };
+  }
+  if (!Number.isInteger(ordinal) || ordinal < 1) {
+    return { ok: false, error: 'Неверный номер расклада' };
+  }
+  try {
+    await reopenCuttingLay(taskId, ordinal);
+    revalidatePath('/cutter');
+    revalidatePath(`/cutter/${taskId}`);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: explainError(e, 'Не удалось открыть расклад') };
   }
 }
 

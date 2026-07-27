@@ -605,7 +605,13 @@ export class PackingService {
     // преждевременно и НЕОБРАТИМО закрыла бы заказ: `DONE` блокирует
     // дальнейший выпуск (create/releaseFromRolls требуют IN_PRODUCTION),
     // и дорелизить остаток без ручного re-open стало бы нельзя.
-    // Критерий — тот же, что метка «Завершено» на доске помощника.
+    //
+    // Критерий СТРОЖЕ, чем метка «Завершено» в очереди выпуска: после
+    // появления частичного завершения раскроя доска считает полноту по
+    // ЗАКРЫТЫМ раскладам (`CuttingTasksService.listReadyForRelease`), а
+    // здесь требуется завершённая задача целиком (`CuttingTask = DONE`,
+    // см. `isOrderCuttingFullyReleased`). Иначе заказ закрылся бы, пока
+    // раскройщик настилает следующий расклад того же заказа.
     if (!(await isOrderCuttingFullyReleased(tx, orderId))) return;
 
     const remaining = await tx.passport.count({

@@ -99,6 +99,13 @@ describeWithDb('integration — авто-DONE заказа при полной �
     orderId: string,
     rollCount: number,
     status: 'IN_PROGRESS' | 'DONE' = 'DONE',
+    /**
+     * Частичное завершение раскроя: закрыт ли расклад («Расклад готов»).
+     * Нужен, чтобы зафиксировать осознанное решение — авто-завершение
+     * заказа при упаковке смотрит на статус ЗАДАЧИ, а не на закрытые
+     * расклады (см. кейс 3b и `isOrderCuttingFullyReleased`).
+     */
+    layClosed = false,
   ): Promise<void> {
     await t.prisma.cuttingTask.create({
       data: {
@@ -109,6 +116,7 @@ describeWithDb('integration — авто-DONE заказа при полной �
           create: [
             {
               ordinal: 1,
+              completedAt: layClosed || status === 'DONE' ? new Date() : null,
               laySizes: {
                 create: [
                   {
@@ -255,6 +263,30 @@ describeWithDb('integration — авто-DONE заказа при полной �
   test('задача раскроя IN_PROGRESS: упаковка не закрывает заказ', async () => {
     const orderId = await createOrder();
     await createCuttingTask(orderId, 1, 'IN_PROGRESS');
+    const passportId = await releasePassport(orderId, 1);
+    const boxId = await createBox();
+
+    await packPassport(boxId, passportId);
+
+    expect(await orderStatus(orderId)).toBe('IN_PRODUCTION');
+    expect(await autoCompleteAuditCount(orderId)).toBe(0);
+  });
+
+  /**
+   * 3b. Частичное завершение раскроя: расклад ЗАКРЫТ, весь тираж по нему
+   * выпущен и упакован, но раскройщик ещё не нажал «Раскрой завершён».
+   *
+   * Заказ СОЗНАТЕЛЬНО не закрывается: пока задача `IN_PROGRESS`,
+   * раскройщик может добавить ещё расклад, и авто-`DONE` заблокировал бы
+   * дальнейший выпуск (`create`/`releaseFromRolls` требуют
+   * `IN_PRODUCTION`). Очередь выпуска при этом считает полноту по закрытым
+   * раскладам и покажет строку `WAITING` — это разные критерии, и так и
+   * задумано (см. `isOrderCuttingFullyReleased`,
+   * `CuttingTasksService.listReadyForRelease`).
+   */
+  test('закрытый расклад при задаче IN_PROGRESS: заказ всё равно не закрывается', async () => {
+    const orderId = await createOrder();
+    await createCuttingTask(orderId, 1, 'IN_PROGRESS', true);
     const passportId = await releasePassport(orderId, 1);
     const boxId = await createBox();
 

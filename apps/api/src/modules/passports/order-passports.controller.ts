@@ -16,7 +16,7 @@ import { Roles } from '../auth/auth.decorators.js';
  * выпуске нового), `ADMIN` через `RolesGuard`.
  */
 @Controller('orders')
-@Roles('SHOP_MANAGER', 'CUTTER_ASSISTANT')
+@Roles('SHOP_MANAGER', 'CUTTER_ASSISTANT', 'CUTTER')
 export class OrderPassportsController {
   constructor(private readonly passports: PassportsService) {}
 

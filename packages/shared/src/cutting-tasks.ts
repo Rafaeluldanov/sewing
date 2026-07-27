@@ -159,6 +159,25 @@ export type CuttingTaskRollInputDto = z.infer<typeof CuttingTaskRollInputSchema>
  * настелить.
  */
 export const CuttingTaskLayInputSchema = z.object({
+  /**
+   * Частичное завершение раскроя: `ordinal` существующего расклада —
+   * идентичность строки при merge-сохранении (`persistProgress`).
+   *
+   * Было (до фичи): идентичность позиционная — индекс в массиве `lays`
+   * становился `ordinal`, а сохранение делало полный replace
+   * (`deleteMany` + create). После появления закрытых раскладов так
+   * нельзя: `Passport.cuttingLayOrdinal` ссылается на номер расклада,
+   * и любой автосейв пересоздал бы расклады, оторвав выпущенные
+   * паспорта от их настила.
+   *
+   * Не задан — это НОВЫЙ расклад, backend выдаст ему следующий
+   * свободный `ordinal` (append-only, номера не переиспользуются).
+   */
+  ordinal: z
+    .number({ invalid_type_error: 'Номер расклада должен быть числом' })
+    .int('Номер расклада — целое')
+    .min(1, 'Номер расклада начинается с 1')
+    .optional(),
   laySizes: z
     .array(CuttingTaskLaySizeInputSchema)
     .max(CUTTING_TASK_MAX_SIZE_ROWS, 'Слишком много размеров в раскладе')
@@ -247,32 +266,53 @@ export function listCuttingCompletionProblems(
 
   const problems: string[] = [];
   lays.forEach((lay, i) => {
-    const n = i + 1;
-    if (lay.laySizes.length === 0) {
-      problems.push(`расклад ${n}: не выбран ни один размер`);
-    } else {
-      const zeroSizes = lay.laySizes.filter((s) => s.perLayerQty <= 0);
-      if (zeroSizes.length > 0) {
-        problems.push(
-          `расклад ${n}: не заполнено «на настиле» у размеров ${zeroSizes
-            .map((s) => sizeLabel(s.sizeId))
-            .join(', ')}`,
-        );
-      }
-    }
-    if (lay.rolls.length === 0) {
-      problems.push(`расклад ${n}: нет ни одного рулона`);
-    } else {
-      const zeroRolls = lay.rolls.filter((r) => r.layers <= 0);
-      if (zeroRolls.length > 0) {
-        problems.push(
-          `расклад ${n}: не заполнены слои у рулонов ${zeroRolls
-            .map((r) => `№${r.ordinal}`)
-            .join(', ')}`,
-        );
-      }
+    const n = lay.ordinal ?? i + 1;
+    for (const p of listLayCompletionProblems(lay, sizeLabel)) {
+      problems.push(`расклад ${n}: ${p}`);
     }
   });
+  return problems;
+}
+
+/**
+ * Те же правила заполненности, но для ОДНОГО расклада — гейт кнопки
+ * «Расклад готов» (частичное завершение раскроя, см.
+ * `CuttingTasksService.completeLay` → `CUTTING_LAY_COMPLETION_INCOMPLETE`).
+ *
+ * Сообщения возвращаются БЕЗ префикса «расклад N:» — префикс добавляет
+ * `listCuttingCompletionProblems`, когда проверяет всю задачу целиком.
+ * Формулировки специально те же: раскройщик видит одинаковый текст,
+ * закрывает он один расклад или весь раскрой.
+ */
+export function listLayCompletionProblems(
+  lay: CuttingTaskLayInputDto,
+  sizeLabel: (sizeId: string) => string = (id) => id,
+): string[] {
+  const problems: string[] = [];
+  if (lay.laySizes.length === 0) {
+    problems.push('не выбран ни один размер');
+  } else {
+    const zeroSizes = lay.laySizes.filter((s) => s.perLayerQty <= 0);
+    if (zeroSizes.length > 0) {
+      problems.push(
+        `не заполнено «на настиле» у размеров ${zeroSizes
+          .map((s) => sizeLabel(s.sizeId))
+          .join(', ')}`,
+      );
+    }
+  }
+  if (lay.rolls.length === 0) {
+    problems.push('нет ни одного рулона');
+  } else {
+    const zeroRolls = lay.rolls.filter((r) => r.layers <= 0);
+    if (zeroRolls.length > 0) {
+      problems.push(
+        `не заполнены слои у рулонов ${zeroRolls
+          .map((r) => `№${r.ordinal}`)
+          .join(', ')}`,
+      );
+    }
+  }
   return problems;
 }
 
@@ -326,6 +366,22 @@ export interface CuttingTaskLayDto {
   ordinal: number;
   sizes: CuttingTaskLaySizeDto[];
   rolls: CuttingTaskRollDto[];
+  /**
+   * Частичное завершение раскроя: момент «Расклад готов» (ISO) или `null`,
+   * если расклад ещё настилается. Закрытый расклад read-only и по нему
+   * разрешён выпуск паспортов, пока остальные расклады в работе.
+   */
+  completedAt: string | null;
+  /** Кто закрыл расклад (для подписи «закрыл Иванов И. И.»). */
+  completedByName: string | null;
+  /**
+   * Сколько паспортов уже выпущено по этому раскладу и сколько ожидается
+   * (тройки «размер × рулон» с qty > 0). Нужно и для подписи «выпущено
+   * 2 из 8», и для гейта «Открыть расклад» (переоткрыть можно, только
+   * пока `releasedPassports === 0`).
+   */
+  totalPassports: number;
+  releasedPassports: number;
 }
 
 export interface CuttingTaskSummaryDto {
@@ -394,6 +450,17 @@ export interface ReleaseLayDto {
   ordinal: number;
   sizes: ReleaseLaySizeDto[];
   rolls: ReleaseLayRollDto[];
+  /**
+   * Частичное завершение раскроя: `null` — расклад ещё настилается, выпуск
+   * по нему запрещён (`CUTTING_LAY_NOT_DONE`). Форма выпуска рисует такой
+   * расклад пунктиром «настилается» и не даёт выбрать.
+   *
+   * Для задач, закрытых ДО появления фичи, у раскладов `completedAt`
+   * пустой, но сама задача `DONE` — выпуск по ним разрешён (см.
+   * `OrderReleaseStateDto.cuttingTaskStatus` и гейт в
+   * `PassportsService.releaseFromRolls`).
+   */
+  completedAt: string | null;
 }
 
 /** Уже выпущенный рулон — тройка `(layOrdinal, sizeId, ordinal)` + сам паспорт. */
@@ -427,25 +494,45 @@ export interface OrderReleaseStateDto {
 }
 
 /**
- * Строка доски помощника `/work/cut-orders` — заказ, у которого раскрой
- * завершён (`CuttingTask = DONE`) и можно выпускать паспорта.
+ * Статус строки очереди выпуска (`/work/cut-orders`, вкладка «Выпуск»
+ * кабинета раскройщика):
+ *   - `NEW`     — есть невыпущенные паспорта по ЗАКРЫТЫМ раскладам («выпускай»);
+ *   - `WAITING` — по закрытым раскладам выпущено всё, но раскрой заказа
+ *     ещё идёт: сейчас печатать нечего, заказ вернётся сам, когда
+ *     раскройщик закроет следующий расклад;
+ *   - `DONE`    — раскрой завершён целиком И выпущены все паспорта.
  *
- * `status`:
- *   - `NEW`  — есть невыпущенные пары `(размер, рулон)` (подсветка «новый»);
- *   - `DONE` — все пары выпущены (метка «Завершено»).
- * Совпадает с подмножеством `CuttingTaskStatus`, чтобы переиспользовать
- * `CUTTING_TASK_STATUS_LABELS` и CSS `constructor-card--status-*`.
+ * `WAITING` появился вместе с частичным завершением раскроя: без него
+ * «выпущено всё по закрытым раскладам» отдавало `DONE`, и помощник
+ * считал заказ добитым, хотя настилался следующий расклад.
+ */
+export type OrderReleaseQueueStatus = 'NEW' | 'WAITING' | 'DONE';
+
+/**
+ * Строка очереди выпуска — заказ, по которому закрыт хотя бы один расклад
+ * (раньше требовался `CuttingTask = DONE` целиком).
+ *
+ * Единица счёта — ПАСПОРТ: одна тройка «расклад × размер × рулон» с
+ * qty > 0 даёт ровно один паспорт (`PassportsService.releaseFromRolls`).
+ * Считается только по закрытым раскладам — открытый расклад ещё может
+ * измениться.
  */
 export interface OrderReadyForReleaseDto {
   orderId: string;
   orderNumber: string;
   productName: string;
   color: string;
-  /** Ожидаемых троек `(расклад, размер, рулон)` с qty > 0. */
-  totalPairs: number;
-  /** Уже выпущенных троек. */
-  releasedPairs: number;
-  status: Extract<CuttingTaskStatus, 'NEW' | 'DONE'>;
+  /** Ожидаемых паспортов по закрытым раскладам. */
+  totalPassports: number;
+  /** Уже выпущенных паспортов по закрытым раскладам. */
+  releasedPassports: number;
+  /** Всего раскладов в задаче раскроя. */
+  laysTotal: number;
+  /** Из них закрытых («Расклад готов»). */
+  laysClosed: number;
+  /** Раскрой ещё идёт (`CuttingTask.status !== 'DONE'`). */
+  cuttingInProgress: boolean;
+  status: OrderReleaseQueueStatus;
 }
 
 // ---------------------------------------------------------------------------

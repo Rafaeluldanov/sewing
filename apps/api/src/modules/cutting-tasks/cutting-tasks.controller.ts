@@ -43,23 +43,27 @@ export class CuttingTasksController {
   }
 
   /**
-   * Доска помощника раскройщика `/work/cut-orders`: заказы с завершённым
-   * раскроем, готовые к выпуску паспортов (со статусом «новый»/«завершено»).
-   * Объявлен ДО `@Get(':id')`, чтобы роутер не разрешил `ready-for-release`
-   * как `id`.
+   * Очередь выпуска — заказы, по которым закрыт хотя бы один расклад
+   * (вкладка «Выпуск» кабинета раскройщика и доска помощника
+   * `/work/cut-orders`). Объявлен ДО `@Get(':id')`, чтобы роутер не
+   * разрешил `ready-for-release` как `id`.
+   *
+   * `CUTTER` в матрице с фичи «раскройщик выпускает паспорта сам»: в
+   * цехах без отдельного помощника печатает тот, кто кроил.
    */
   @Get('ready-for-release')
-  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
   listReadyForRelease(): Promise<OrderReadyForReleaseDto[]> {
     return this.tasks.listReadyForRelease();
   }
 
   /**
-   * Данные заказа для рулонного выпуска помощником: размеры (с раскладкой
-   * `на настиле`), рулоны и карта уже выпущенных пар `(размер, рулон)`.
+   * Данные заказа для рулонного выпуска: размеры (с раскладкой «на
+   * настиле»), рулоны, признак закрытия каждого расклада и карта уже
+   * выпущенных троек `(расклад, размер, рулон)`.
    */
   @Get('by-order/:orderId/release-state')
-  @Roles('CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
+  @Roles('CUTTER', 'CUTTER_ASSISTANT', 'SHOP_MANAGER', 'ADMIN')
   getReleaseState(
     @Param('orderId') orderId: string,
   ): Promise<OrderReleaseStateDto> {
@@ -91,9 +95,12 @@ export class CuttingTasksController {
   }
 
   /**
-   * Автосохранение прогресса: полная замена набора раскладов задачи
+   * Автосохранение прогресса: merge раскладов задачи по `ordinal`
    * (размеры с «на настиле» + рулоны). Тело валидируется
    * `SaveCuttingTaskProgressSchema`.
+   *
+   * Уже ЗАКРЫТЫЕ расклады неприкосновенны: попытка их изменить —
+   * `CUTTING_LAY_LOCKED` (см. `CuttingTasksService.persistProgress`).
    */
   @Patch(':id')
   @Roles('CUTTER', 'SHOP_MANAGER', 'ADMIN')
@@ -105,15 +112,66 @@ export class CuttingTasksController {
   }
 
   /**
-   * «Раскрой завершён» — финальное сохранение + `IN_PROGRESS` → `DONE`.
+   * «Раскрой завершён» — финальное сохранение, закрытие всех оставшихся
+   * раскладов + `IN_PROGRESS` → `DONE`.
    */
   @Post(':id/complete')
   @Roles('CUTTER', 'SHOP_MANAGER', 'ADMIN')
   complete(
     @Param('id') id: string,
     @Body() body: unknown,
+    @CurrentUser() user: AuthPrincipal,
   ): Promise<CuttingTaskDetailDto> {
-    return this.tasks.complete(id, this.parseBody(body));
+    return this.tasks.complete(id, this.parseBody(body), user.employeeId);
+  }
+
+  /**
+   * «Расклад готов» — частичное завершение раскроя: закрыть ОДИН расклад,
+   * не завершая раскрой заказа. По закрытому раскладу сразу можно
+   * выпускать паспорта, пока остальные настилаются.
+   *
+   * Идемпотентно (повторный вызов на закрытом раскладе просто возвращает
+   * карточку). Ошибки: 404 `CUTTING_LAY_NOT_FOUND`,
+   * 409 `CUTTING_TASK_NOT_IN_PROGRESS`,
+   * 400 `CUTTING_LAY_COMPLETION_INCOMPLETE`.
+   */
+  @Post(':id/lays/:ordinal/complete')
+  @Roles('CUTTER', 'SHOP_MANAGER', 'ADMIN')
+  completeLay(
+    @Param('id') id: string,
+    @Param('ordinal') ordinal: string,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<CuttingTaskDetailDto> {
+    return this.tasks.completeLay(
+      id,
+      this.parseOrdinal(ordinal),
+      user.employeeId,
+    );
+  }
+
+  /**
+   * «Открыть расклад» — снять закрытие, чтобы поправить настил. Разрешено,
+   * только пока по раскладу нет живых паспортов
+   * (409 `CUTTING_LAY_HAS_PASSPORTS`). Если задача была `DONE`, она
+   * возвращается в `IN_PROGRESS`.
+   */
+  @Post(':id/lays/:ordinal/reopen')
+  @Roles('CUTTER', 'SHOP_MANAGER', 'ADMIN')
+  reopenLay(
+    @Param('id') id: string,
+    @Param('ordinal') ordinal: string,
+  ): Promise<CuttingTaskDetailDto> {
+    return this.tasks.reopenLay(id, this.parseOrdinal(ordinal));
+  }
+
+  private parseOrdinal(raw: string): number {
+    const n = Number(raw);
+    if (!Number.isInteger(n) || n < 1) {
+      throw new CuttingTaskPayloadInvalidException(
+        `Номер расклада должен быть целым числом от 1, получено «${raw}».`,
+      );
+    }
+    return n;
   }
 
   private parseBody(body: unknown) {
