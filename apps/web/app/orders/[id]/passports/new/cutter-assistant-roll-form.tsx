@@ -40,6 +40,12 @@ interface Props {
   released: ReleasedRollDto[];
   today: string;
   disabled: boolean;
+  /**
+   * Куда ведёт «← К выбору заказа» и возврат после выпуска. У помощника —
+   * `/work/cut-orders`, у раскройщика — `/cutter/release` (его кабинет
+   * заперт на префикс `/cutter`, см. `apps/web/middleware.ts`).
+   */
+  backHref?: string;
 }
 
 interface SuccessState {
@@ -73,6 +79,7 @@ export function CutterAssistantRollForm({
   released,
   today,
   disabled,
+  backHref = '/work/cut-orders',
 }: Props) {
   const router = useRouter();
   const sortedLays = useMemo(
@@ -80,12 +87,22 @@ export function CutterAssistantRollForm({
     [lays],
   );
 
+  // Частичное завершение раскроя: выпускать можно только по ЗАКРЫТЫМ
+  // раскладам («Расклад готов»). Открытый ещё настилается — его слои и
+  // «на настиле» могут измениться, поэтому backend такой выпуск отвергает
+  // (`CUTTING_LAY_NOT_DONE`). Показываем его в списке, но не даём выбрать:
+  // раскройщику/помощнику важно видеть, что расклад существует и ждёт.
+  const releasableLays = useMemo(
+    () => sortedLays.filter((l) => l.completedAt),
+    [sortedLays],
+  );
   const [layOrdinal, setLayOrdinal] = useState<number>(
-    () => sortedLays[0]?.ordinal ?? 0,
+    () => releasableLays[0]?.ordinal ?? 0,
   );
   const selectedLay = useMemo(
-    () => sortedLays.find((l) => l.ordinal === layOrdinal) ?? sortedLays[0],
-    [sortedLays, layOrdinal],
+    () =>
+      releasableLays.find((l) => l.ordinal === layOrdinal) ?? releasableLays[0],
+    [releasableLays, layOrdinal],
   );
 
   const sortedSizes = useMemo(
@@ -101,16 +118,19 @@ export function CutterAssistantRollForm({
   // реально несколько цветов (иначе одноцветный заказ — колонка лишняя).
   const multiColor = useMemo(() => {
     const colors = new Set<string>();
-    for (const l of lays) {
+    for (const l of releasableLays) {
       for (const r of l.rolls) {
         if (r.variantColor) colors.add(r.variantColor);
       }
     }
     return colors.size > 1;
-  }, [lays]);
+  }, [releasableLays]);
 
   const [sizeId, setSizeId] = useState<string>(
-    () => sortedLays[0]?.sizes.slice().sort((a, b) => a.sortOrder - b.sortOrder)[0]?.sizeId ?? '',
+    () =>
+      releasableLays[0]?.sizes
+        .slice()
+        .sort((a, b) => a.sortOrder - b.sortOrder)[0]?.sizeId ?? '',
   );
   const [selected, setSelected] = useState<Set<number>>(new Set());
   const [error, setError] = useState<string | null>(null);
@@ -457,7 +477,7 @@ export function CutterAssistantRollForm({
           >
             Продолжить выпуск
           </button>
-          <Link href="/work/cut-orders" className="btn btn-ghost">
+          <Link href={backHref} className="btn btn-ghost">
             ← К выбору заказа
           </Link>
         </div>
@@ -482,6 +502,13 @@ export function CutterAssistantRollForm({
 
       {sortedLays.length === 0 ? (
         <div className="hint">— в задаче раскроя нет раскладов —</div>
+      ) : releasableLays.length === 0 ? (
+        <div className="warning-box" role="status">
+          <div className="warning-box__msg">
+            Ни один расклад ещё не закрыт — выпускать нечего. Раскройщик
+            нажмёт «Расклад готов», и расклад появится здесь.
+          </div>
+        </div>
       ) : (
         <>
           {sortedLays.length > 1 && (
@@ -494,11 +521,21 @@ export function CutterAssistantRollForm({
               >
                 {sortedLays.map((l) => {
                   const isActive = l.ordinal === layOrdinal;
+                  // Открытый расклад: виден, но не выбирается — иначе
+                  // выпуск упадёт в 400 `CUTTING_LAY_NOT_DONE`.
+                  const isOpen = !l.completedAt;
                   return (
                     <label
                       key={l.ordinal}
                       className={
-                        'size-picker__option' + (isActive ? ' is-active' : '')
+                        'size-picker__option' +
+                        (isActive ? ' is-active' : '') +
+                        (isOpen ? ' is-disabled' : '')
+                      }
+                      title={
+                        isOpen
+                          ? 'Расклад ещё настилается — закройте его кнопкой «Расклад готов»'
+                          : undefined
                       }
                     >
                       <input
@@ -506,12 +543,13 @@ export function CutterAssistantRollForm({
                         name="release-lay"
                         value={l.ordinal}
                         checked={isActive}
+                        disabled={isOpen}
                         onChange={() => setLayOrdinal(l.ordinal)}
                         className="size-picker__input"
                       />
                       <span className="size-picker__code">Расклад {l.ordinal}</span>
                       <span className="size-picker__meta">
-                        размеров: {l.sizes.length}
+                        {isOpen ? 'настилается' : `размеров: ${l.sizes.length}`}
                       </span>
                     </label>
                   );
@@ -690,7 +728,7 @@ export function CutterAssistantRollForm({
               ? 'Выпускаем…'
               : 'Выпустить паспорт'}
         </button>
-        <Link href="/work/cut-orders" className="btn btn-ghost">
+        <Link href={backHref} className="btn btn-ghost">
           Отмена
         </Link>
       </div>

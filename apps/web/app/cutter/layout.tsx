@@ -3,10 +3,12 @@ import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { canSeeCutter, canSeeEmployeeQrButton } from '@/lib/rbac';
 import { getCurrentShift } from '@/lib/shifts-api';
+import { listOrdersReadyForRelease } from '@/lib/cutting-tasks-api';
 import { CallMasterButton } from '@/components/call-master-button';
 import { EmployeeQrButton } from '@/components/employees/employee-qr-button';
 import { DailyEarningsChip } from '@/components/me/daily-earnings-chip';
 import { TerminalShell } from '@/components/terminal-shell';
+import { CutterTabs } from './cutter-tabs';
 
 /** Подписи ролей для синей шапки-профиля. */
 const ROLE_LABELS: Record<string, string> = {
@@ -42,6 +44,17 @@ function formatTime(iso: string): string {
  *   - чип «Мой день», «Мой QR-код» и «Вызов мастера» — боковой столбик
  *     `.employee-toolbar` (раскройщику нужен полный набор, как швее/ОТК).
  *
+ * Вкладки «Раскрой · Выпуск · Стеллаж» (`CutterTabs`) живут тоже здесь:
+ * они общие для всех экранов кабинета, а счётчик заказов к выпуску нужно
+ * держать одинаковым на любой вкладке. Показываем их ТОЛЬКО при активной
+ * смене — без смены `page.tsx` рисует форму старта (сканируй QR стола), и
+ * переключаться там некуда.
+ *
+ * Активную вкладку определяет сам `CutterTabs` по `usePathname()` (layout
+ * в App Router текущий путь не знает): `/cutter/release*` → «Выпуск»,
+ * `/cutter/shelf` → «Стеллаж», всё остальное (включая `/cutter/[id]`) →
+ * «Раскрой», потому что карточка задачи — это продолжение раскроя.
+ *
  * Текущую смену тянем здесь (а не только в `page.tsx`), потому что
  * `TerminalShell` с шапкой и меню живёт на уровне layout и оборачивает
  * также `/cutter/[id]`. fail-soft на `ApiRequestError`: временный сбой
@@ -68,6 +81,21 @@ export default async function CutterSectionLayout({
     if (!(e instanceof ApiRequestError)) throw e;
   }
   const isShiftActive = !!(currentShift && currentShift.active);
+
+  // Счётчик на вкладке «Выпуск»: сколько заказов реально ждут печати
+  // (строки очереди со `status = 'NEW'`; `WAITING` — «раскрой ещё идёт,
+  // выпускать нечего» — в счётчик не берём). fail-soft: сбой API не должен
+  // ронять весь кабинет, просто не покажем бейдж.
+  let releaseCount = 0;
+  if (isShiftActive) {
+    try {
+      const ready = await listOrdersReadyForRelease();
+      releaseCount = ready.filter((o) => o.status === 'NEW').length;
+    } catch (e) {
+      if (!(e instanceof ApiRequestError)) throw e;
+    }
+  }
+
   const headerFields = isShiftActive
     ? [
         {
@@ -97,6 +125,9 @@ export default async function CutterSectionLayout({
         }
         showActionsMenu
       >
+        {isShiftActive ? (
+          <CutterTabs releaseCount={releaseCount} />
+        ) : null}
         {children}
       </TerminalShell>
       <div className="employee-toolbar">

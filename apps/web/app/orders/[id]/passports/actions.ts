@@ -348,6 +348,13 @@ export async function releaseFromRollsAction(
   }
   revalidatePath(`/orders/${orderId}`);
   revalidatePath('/work/cut-orders');
+  // Ту же форму переиспользует вкладка «Выпуск» кабинета раскройщика
+  // (`/cutter/release/<orderId>`): после выпуска нужно освежить и её
+  // страницу (рулоны становятся «выпущено»), и очередь `/cutter/release`
+  // вместе со счётчиком на вкладках — он считается в `cutter/layout.tsx`.
+  revalidatePath(`/cutter/release/${orderId}`);
+  revalidatePath('/cutter/release');
+  revalidatePath('/cutter');
   return {
     created: result.created,
     skipped: result.skipped,

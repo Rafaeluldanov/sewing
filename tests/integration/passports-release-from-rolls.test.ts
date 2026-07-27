@@ -455,6 +455,15 @@ describeWithDb('integration — release passports from rolls', () => {
       layClosed: false,
     });
 
+    // release-state обязан показать такой расклад ЗАКРЫТЫМ: иначе UI
+    // (он фильтрует расклады по `completedAt`) спрячет его, и выпуск по
+    // историческим заказам сломается только в интерфейсе, хотя API пускает.
+    const state = await request(t.app.getHttpServer())
+      .get(`/api/cutting-tasks/by-order/${orderId}/release-state`)
+      .set('Cookie', cookies.assistant)
+      .expect(200);
+    expect(state.body.lays[0].completedAt).toEqual(expect.any(String));
+
     const r = await request(t.app.getHttpServer())
       .post('/api/passports/release-from-rolls')
       .set('Cookie', cookies.assistant)

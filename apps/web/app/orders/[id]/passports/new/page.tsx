@@ -4,6 +4,7 @@ import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listActiveCutters } from '@/lib/employees-api';
 import { getOrderReleaseState } from '@/lib/cutting-tasks-api';
+import { moscowToday } from '@/lib/time-tracker-period';
 import { getOrder } from '@/lib/orders-api';
 import { listOrderPassports } from '@/lib/passports-api';
 import { NewPassportForm } from './new-passport-form';
@@ -21,9 +22,19 @@ export default async function NewPassportPage({
   const isCutter = me?.user.role === 'CUTTER';
 
   // -------------------------------------------------------------------------
-  // Помощник раскройщика: рулонный выпуск. Размеры и рулоны берём из
-  // завершённой задачи раскройщика (`CuttingTask`), помощник ничего не
-  // вводит руками — выбирает размер и рулоны и жмёт «Выпустить паспорт».
+  // Помощник раскройщика: рулонный выпуск. Размеры и рулоны берём из задачи
+  // раскройщика (`CuttingTask`), помощник ничего не вводит руками — выбирает
+  // расклад, размер и рулоны и жмёт «Выпустить паспорт».
+  //
+  // Частичное завершение раскроя (коммит 3b1669c): раньше выпуск был заперт
+  // до `cuttingTaskStatus === 'DONE'` («Раскрой завершён» по всему заказу).
+  // Теперь единица готовности — РАСКЛАД: раскройщик закрывает его кнопкой
+  // «Расклад готов» (`CuttingTaskLay.completedAt`), и по этому раскладу можно
+  // печатать паспорта, пока остальные ещё настилаются. Поэтому гейт экрана
+  // считается по раскладам, а не по статусу задачи, и «раскрой ещё идёт» —
+  // это НЕ ошибка, а нормальное состояние (синяя справка, не красная плашка).
+  // Backend держит тот же инвариант: выпуск по открытому раскладу отвергается
+  // с 400 `CUTTING_LAY_NOT_DONE`.
   // -------------------------------------------------------------------------
   if (isCutterAssistant) {
     let release;
@@ -41,7 +52,7 @@ export default async function NewPassportPage({
             </div>
             <div className="error-box">
               По этому заказу ещё нет задачи раскроя. Заказ появится здесь,
-              когда раскройщик завершит раскрой.
+              когда по нему закроют первый расклад кнопкой «Расклад готов».
             </div>
           </div>
         );
@@ -49,8 +60,26 @@ export default async function NewPassportPage({
       throw e;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    const cuttingDone = release.cuttingTaskStatus === 'DONE';
+    // Дата раскроя — по Москве, а не по UTC: в ночные часы
+    // `toISOString()` отдаёт вчерашний день, и паспорта помощника
+    // получали бы `cutDate` на сутки раньше, чем у раскройщика на
+    // `/cutter/release/[orderId]` (там уже `moscowToday()`).
+    const today = moscowToday();
+
+    // Гейт экрана = закрытые расклады. Ровно тот же признак, по которому
+    // фильтрует расклады сама форма (`CutterAssistantRollForm`): открытый
+    // расклад виден, но не выбирается. Нет ни одного закрытого — выпускать
+    // физически нечего, форму отдаём `disabled`.
+    const sortedLays = [...release.lays].sort((a, b) => a.ordinal - b.ordinal);
+    const closedLays = sortedLays.filter((l) => l.completedAt);
+    const openLays = sortedLays.filter((l) => !l.completedAt);
+    const nothingToRelease = closedLays.length === 0;
+
+    // Согласование числа руками: «закрыт расклад 1» / «закрыты расклады 1, 2».
+    const closedText =
+      closedLays.length === 1
+        ? `закрыт расклад ${closedLays[0].ordinal}`
+        : `закрыты расклады ${closedLays.map((l) => l.ordinal).join(', ')}`;
 
     return (
       <div>
@@ -60,12 +89,25 @@ export default async function NewPassportPage({
             ← К выбору заказа
           </Link>
         </div>
-        {!cuttingDone && (
-          <div className="error-box">
-            Раскрой по заказу ещё не завершён — выпуск паспортов станет
-            доступен, когда раскройщик отметит «Раскрой завершён».
+        {nothingToRelease ? (
+          // Ждём первый закрытый расклад. Тон нейтральный (жёлтый), а не
+          // danger: помощник ничего не сломал, просто ещё рано.
+          <div className="warning-box" role="status">
+            <div className="warning-box__msg">
+              Ни один расклад ещё не закрыт — выпуск станет доступен, когда
+              раскройщик нажмёт «Расклад готов» по первому раскладу.
+            </div>
           </div>
-        )}
+        ) : openLays.length > 0 ? (
+          // Печатать уже можно, но не по всему заказу. Это справка, а НЕ
+          // ошибка — красной плашкой помощник читал бы штатный ход раскроя
+          // как поломку (тот же `.cutter-release-note`, что в кабинете
+          // раскройщика на `/cutter/release/<orderId>`).
+          <div className="cutter-release-note" role="status">
+            <strong>Раскрой ещё идёт: {closedText}.</strong>
+            Остальные расклады появятся здесь по мере закрытия.
+          </div>
+        ) : null}
         <CutterAssistantRollForm
           orderId={release.orderId}
           orderNumber={release.orderNumber}
@@ -74,7 +116,7 @@ export default async function NewPassportPage({
           lays={release.lays}
           released={release.released}
           today={today}
-          disabled={!cuttingDone}
+          disabled={nothingToRelease}
         />
       </div>
     );

@@ -216,15 +216,20 @@ export function ActiveShiftPanel({ shift }: Props) {
  * Упрощённый /work для помощника раскройщика. Два action-card одного
  * визуального уровня:
  *
- *   1. **«Выпустить паспорт»** — переход к упрощённому выбору заказа
- *      на раскрое (`/work/cut-orders?mode=demo`). Этот server-route
- *      сам решает, что показать дальше:
- *        - один заказ в `IN_PRODUCTION` → сразу `redirect` на
- *          `/orders/:id/passports/new-demo` (серийный выпуск: размер +
- *          сетка по рулонам; помощник не выбирает заказ руками);
+ *   1. **«Выпустить паспорт»** — переход к выбору заказа из очереди
+ *      выпуска (`/work/cut-orders`). Этот server-route сам решает, что
+ *      показать дальше:
+ *        - ровно один заказ, по которому есть что выпускать → сразу
+ *          `redirect` на рулонный выпуск `/orders/:id/passports/new`
+ *          (расклад → размер → сетка рулонов; помощник не выбирает заказ
+ *          руками);
  *        - несколько заказов → короткий список карточек по названию
  *          позиции;
- *        - ни одного → empty state «Нет заказов на раскрое».
+ *        - ни одного → empty state «Нет заказов на выпуск».
+ *
+ *      Заказ попадает в очередь, как только раскройщик закрыл ХОТЯ БЫ
+ *      ОДИН расклад («Расклад готов», частичное завершение раскроя) —
+ *      дожидаться конца раскроя больше не нужно.
  *      В том же блоке вторичная ссылка «Выпущенные паспорта»
  *      (`/work/passports`). Одиночный выпуск
  *      (`/orders/:id/passports/new`) остаётся в коде, но из этой
@@ -273,13 +278,13 @@ export function CutterAssistantWorkPanel({
   return (
     <div className="seamstress-work cutter-assistant-work">
       {/*
-       * Единственный блок выпуска: серийный выпуск паспортов (выбор
-       * размера, сетка по рулонам, одна кнопка). Ведёт на выбор заказа
-       * с `mode=demo` — `/work/cut-orders` отрешает на
-       * `/orders/:id/passports/new-demo`. Одиночный выпуск
-       * (`/orders/:id/passports/new`) остаётся в коде, но из панели
-       * помощника на него ссылки больше нет — сознательное UI-решение
-       * владельца (см. `docs/cutter-assistant-passport-release-recon.md`).
+       * Единственный блок выпуска: рулонный выпуск паспортов (расклад,
+       * размер, сетка по рулонам, одна кнопка). Ведёт на очередь
+       * `/work/cut-orders`, а она — на `/orders/:id/passports/new`.
+       * Ручной одиночный выпуск (`POST /passports`) остаётся в коде для
+       * менеджера, но из панели помощника на него ссылки нет —
+       * сознательное UI-решение владельца (см.
+       * `docs/cutter-assistant-passport-release-recon.md`).
        */}
       <div
         className={
@@ -291,7 +296,8 @@ export function CutterAssistantWorkPanel({
           <div>
             <h2 className="scan-card__title">Выпустить паспорт</h2>
             <p className="scan-card__hint">
-              Серийный выпуск: выбор размера, сетка по рулонам, одна кнопка.
+              Выпуск по закрытым раскладам: размер, сетка по рулонам, одна
+              кнопка. Раскрой заказа может ещё идти.
             </p>
           </div>
           {hasPending ? (
@@ -306,7 +312,7 @@ export function CutterAssistantWorkPanel({
         </div>
         <Link
           className="btn btn-primary btn-lg btn-block"
-          href="/work/cut-orders?mode=demo"
+          href="/work/cut-orders"
           prefetch={false}
         >
           Выпустить паспорт

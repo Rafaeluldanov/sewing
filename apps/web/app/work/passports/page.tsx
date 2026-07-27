@@ -2,10 +2,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listMyRecentPassports } from '@/lib/passports-api';
-import type { MyPassportListItem } from '@sewing/shared/passports';
-import { PrintButton } from '@/components/print-button';
-import { buildPassportPrintPath } from '@/lib/browser-api-paths';
-import { DeleteMyPassportButton } from './delete-my-passport-button';
+import { MyPassportRow } from './my-passport-row';
 
 export const dynamic = 'force-dynamic';
 
@@ -17,6 +14,12 @@ export const dynamic = 'force-dynamic';
  * паспортов, выпущенных самим actor-ом). Контракт `editable` /
  * `editableBlockReason` приходит уже посчитанным с backend, фронт
  * только переводит код в подсказку и гасит кнопки.
+ *
+ * Разметка строки живёт в `./my-passport-row` — тот же компонент
+ * рендерит список раскройщика `/cutter/passports` (у чистой учётки
+ * `CUTTER` свой префикс, см. `apps/web/middleware.ts`). Дублировать
+ * строку было нельзя: правила «что показываем / когда гасим кнопки»
+ * должны меняться в одном месте.
  *
  * Навигация (как в ТЗ):
  *   - «← На рабочее место» — возврат на /work (тот же стиль кнопки
@@ -69,108 +72,5 @@ export default async function WorkMyPassportsPage() {
         </ul>
       )}
     </div>
-  );
-}
-
-function blockHint(item: MyPassportListItem): string | null {
-  switch (item.editableBlockReason) {
-    case null:
-      return null;
-    case 'STATUS_NOT_CREATED':
-      return 'Паспорт уже двинулся по операциям — править его нельзя.';
-    case 'PLACED_IN_CELL':
-      return `Паспорт размещён в ячейке ${item.currentCell?.code ?? '—'} — править нельзя.`;
-    case 'HAS_EVENTS_BEYOND_CREATED':
-      return 'По паспорту уже есть скан/выдача — править нельзя.';
-    default:
-      return 'Паспорт нельзя редактировать.';
-  }
-}
-
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString('ru-RU', {
-    year: 'numeric',
-    month: '2-digit',
-    day: '2-digit',
-  });
-}
-
-function MyPassportRow({ item }: { item: MyPassportListItem }) {
-  const blocked = blockHint(item);
-  const editHref = `/work/passports/${item.id}/edit`;
-  return (
-    <li className={'my-passports-row' + (blocked ? ' is-blocked' : '')}>
-      <div className="my-passports-row__main">
-        {item.editable ? (
-          <Link
-            className="my-passports-row__number"
-            href={editHref}
-            prefetch={false}
-          >
-            {item.number}
-          </Link>
-        ) : (
-          <span className="my-passports-row__number">{item.number}</span>
-        )}
-        <div className="my-passports-row__meta">
-          <span>
-            <strong>{item.productName ?? '—'}</strong>
-            {' · '}
-            размер <strong>{item.sizeCode}</strong>
-            {' · '}
-            <strong>{item.qtyCut}</strong> шт
-          </span>
-          <span className="my-passports-row__sub">
-            заказ {item.orderNumber} · рулон {item.rollNumber} · {formatDate(item.cutDate)}
-          </span>
-          {blocked ? (
-            <span className="my-passports-row__blocked-hint">{blocked}</span>
-          ) : null}
-        </div>
-      </div>
-      <div className="my-passports-row__actions">
-        {/*
-         * Печать доступна ВСЕГДА, независимо от `editable`: перепечатать
-         * этикетку паспорта нужно и после того, как он размещён в ячейке
-         * или двинулся по операциям (правку в этих состояниях backend уже
-         * закрывает). Раньше в маршруте помощника `/work/passports` кнопки
-         * печати не было вовсе — перепечатать уже созданный паспорт было
-         * неоткуда (печать жила только на детали `/passports/[id]` и на
-         * экране выпуска). Тот же `<PrintButton>`, что и на детали.
-         */}
-        <PrintButton
-          sourceType="PASSPORT_PRINT"
-          sourceId={item.id}
-          fallbackHref={buildPassportPrintPath(item.id)}
-          className="btn"
-          label="Печать"
-        />
-        {item.editable ? (
-          <>
-            <Link
-              className="btn"
-              href={editHref}
-              prefetch={false}
-              aria-label={`Редактировать паспорт ${item.number}`}
-            >
-              Редактировать
-            </Link>
-            <DeleteMyPassportButton
-              passportId={item.id}
-              orderId={item.orderId}
-              passportNumber={item.number}
-            />
-          </>
-        ) : (
-          <span
-            className="hint"
-            title={blocked ?? undefined}
-            aria-hidden
-          >
-            недоступно для правки
-          </span>
-        )}
-      </div>
-    </li>
   );
 }

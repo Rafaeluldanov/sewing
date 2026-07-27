@@ -10,9 +10,14 @@
  *     расширенный `DELETE /api/passports/:id` (CUTTER, CUTTER_ASSISTANT)
  *     с self-cancel веткой,
  *   - frontend lib: `listMyRecentPassports`, `updatePassport`,
+ *     `loadPassportEditData`,
  *   - server actions: `updateMyPassportAction`, `deleteMyPassportAction`,
  *   - страницы: `/work/passports`, `/work/passports/[id]/edit`,
- *   - кнопка «Выпущенные паспорта» в `CutterAssistantWorkPanel`.
+ *   - кнопка «Выпущенные паспорта» в `CutterAssistantWorkPanel`,
+ *   - те же экраны в кабинете раскройщика: `/cutter/passports`,
+ *     `/cutter/passports/[id]/edit` (переиспользуют строку списка,
+ *     форму правки и server actions помощника — щит следит, чтобы вместо
+ *     переиспользования не появилась копия).
  *
  * Реальный happy-path (PATCH меняет qtyCut, immediate-начисление
  * пересчитывается) покрывается integration-тестом на следующем шаге;
@@ -223,27 +228,50 @@ describe('UI — CutterAssistantWorkPanel: кнопка «Выпущенные �
 });
 
 describe('UI — /work/passports (список) + /work/passports/[id]/edit', () => {
-  test('list-страница SSR-загружает listMyRecentPassports и рендерит DeleteMyPassportButton', () => {
+  test('list-страница SSR-загружает listMyRecentPassports и рендерит общую строку MyPassportRow', () => {
     const src = readSrc('apps/web/app/work/passports/page.tsx');
     expect(src).toMatch(/export const dynamic\s*=\s*['"]force-dynamic['"]/);
     expect(src).toMatch(/await listMyRecentPassports\(\)/);
-    expect(src).toMatch(/DeleteMyPassportButton/);
+    // Разметка строки вынесена в `./my-passport-row`, потому что тот же
+    // компонент рендерит список раскройщика `/cutter/passports`.
+    expect(src).toMatch(/import \{ MyPassportRow \} from '\.\/my-passport-row'/);
+    expect(src).toMatch(/<MyPassportRow key=\{p\.id\} item=\{p\} \/>/);
     // «← На рабочее место» — стандартная back-стрелка под заголовком.
     expect(src).toMatch(/href=['"]\/work['"]/);
-    expect(src).toMatch(/Редактировать/);
   });
 
-  test('list скрывает edit/delete на не-editable паспортах', () => {
-    const src = readSrc('apps/web/app/work/passports/page.tsx');
+  test('строка списка печатает/редактирует/удаляет и гасит кнопки на не-editable', () => {
+    const src = readSrc('apps/web/app/work/passports/my-passport-row.tsx');
+    expect(src).toMatch(/export function MyPassportRow/);
+    // Печать доступна всегда, правка/удаление — только пока editable.
+    expect(src).toMatch(/PrintButton/);
+    expect(src).toMatch(/DeleteMyPassportButton/);
+    expect(src).toMatch(/Редактировать/);
     expect(src).toMatch(/item\.editable/);
     expect(src).toMatch(/editableBlockReason/);
+    // `basePath` — единственное различие двух кабинетов; дефолт =
+    // маршрут помощника.
+    expect(src).toMatch(/basePath = '\/work\/passports'/);
+    expect(src).toMatch(/\$\{basePath\}\/\$\{item\.id\}\/edit/);
   });
 
-  test('edit-страница вызывает getPassport, listOrderPassports, listActiveCutters', () => {
+  test('данные формы правки грузит общий loadPassportEditData (остаток без самого паспорта)', () => {
+    const lib = readSrc('apps/web/lib/passport-edit-data.ts');
+    expect(lib).toMatch(/export async function loadPassportEditData/);
+    expect(lib).toMatch(/getPassport\(passportId\)/);
+    expect(lib).toMatch(/listOrderPassports\(passport\.orderId\)/);
+    expect(lib).toMatch(/listActiveCutters\(\)/);
+    // Остаток по размеру считается БЕЗ редактируемого паспорта, иначе
+    // сохранение того же qtyCut упирается в собственное прежнее значение.
+    expect(lib).toMatch(/if \(p\.id === passport\.id\) continue;/);
+    // Паспорт уже двинулся → форму не рисуем (страница редиректит).
+    expect(lib).toMatch(/kind: 'not-editable'/);
+  });
+
+  test('edit-страница помощника переводит результат загрузчика в свою навигацию', () => {
     const src = readSrc('apps/web/app/work/passports/[id]/edit/page.tsx');
-    expect(src).toMatch(/getPassport\(params\.id\)/);
-    expect(src).toMatch(/listOrderPassports\(passport\.orderId\)/);
-    expect(src).toMatch(/listActiveCutters\(\)/);
+    expect(src).toMatch(/loadPassportEditData\(params\.id,\s*me\.user\.role\)/);
+    expect(src).toMatch(/notFound\(\)/);
     // Если паспорт уже двинулся, отправляем обратно в список.
     expect(src).toMatch(/redirect\(['"]\/work\/passports['"]\)/);
   });
@@ -256,7 +284,53 @@ describe('UI — /work/passports (список) + /work/passports/[id]/edit', ()
     // ТЗ: «после окончания редактирования выпустить паспорт» —
     // primary CTA называется «Выпустить паспорт» (а не «Сохранить»).
     expect(src).toMatch(/Выпустить паспорт/);
-    // «← К списку выпущенных паспортов» — кнопка отмены/возврата.
-    expect(src).toMatch(/href=['"]\/work\/passports['"]/);
+    // Навигация вокруг формы параметризована (`backHref`/`homeHref`),
+    // дефолты сохраняют маршрут помощника: «Отмена» и «К списку
+    // паспортов» ведут на /work/passports.
+    expect(src).toMatch(/backHref = '\/work\/passports'/);
+    expect(src).toMatch(/homeHref = '\/work'/);
+    expect(src).toMatch(/href=\{backHref\}/);
+    expect(src).toMatch(/href=\{homeHref\}/);
+  });
+});
+
+describe('UI — те же экраны в кабинете раскройщика (/cutter/passports)', () => {
+  test('список раскройщика переиспользует MyPassportRow с basePath=/cutter/passports', () => {
+    const src = readSrc('apps/web/app/cutter/passports/page.tsx');
+    expect(src).toMatch(/export const dynamic\s*=\s*['"]force-dynamic['"]/);
+    expect(src).toMatch(/await listMyRecentPassports\(\)/);
+    expect(src).toMatch(
+      /import \{ MyPassportRow \} from '@\/app\/work\/passports\/my-passport-row'/,
+    );
+    expect(src).toMatch(/basePath="\/cutter\/passports"/);
+    // Экран-ребёнок вкладки «Выпуск» → возврат в очередь выпуска.
+    expect(src).toMatch(/href="\/cutter\/release"/);
+    expect(src).toMatch(/Пока нет выпущенных паспортов/);
+  });
+
+  test('edit-страница раскройщика переиспользует EditPassportForm и общий загрузчик', () => {
+    const src = readSrc('apps/web/app/cutter/passports/[id]/edit/page.tsx');
+    expect(src).toMatch(
+      /import \{ EditPassportForm \} from '@\/app\/work\/passports\/\[id\]\/edit\/edit-passport-form'/,
+    );
+    expect(src).toMatch(/loadPassportEditData\(params\.id,\s*me\.user\.role\)/);
+    expect(src).toMatch(/backHref="\/cutter\/passports"/);
+    expect(src).toMatch(/homeHref="\/cutter"/);
+    expect(src).toMatch(/redirect\(['"]\/cutter\/passports['"]\)/);
+  });
+
+  test('server actions ревалидируют ОБА списка — помощника и раскройщика', () => {
+    const src = readSrc('apps/web/app/work/passports/actions.ts');
+    expect(src).toMatch(/revalidatePath\(['"]\/cutter\/passports['"]\)/);
+    // В обоих экшенах: правка и удаление видны в обоих кабинетах.
+    const hits = src.match(/revalidatePath\(['"]\/cutter\/passports['"]\)/g);
+    expect(hits?.length).toBe(2);
+  });
+
+  test('GET /orders/:id открыт раскройщику — форме правки нужна размерная матрица', () => {
+    const src = readSrc('apps/api/src/modules/orders/orders.controller.ts');
+    expect(src).toMatch(
+      /@Get\(['"]:id['"]\)\s*\n\s*@Roles\(['"]SHOP_MANAGER['"],\s*['"]CUTTER_ASSISTANT['"],\s*['"]CUTTER['"]\)/,
+    );
   });
 });

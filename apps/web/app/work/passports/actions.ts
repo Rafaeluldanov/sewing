@@ -9,8 +9,10 @@ import { ApiRequestError, errorText } from '@/lib/api';
 import { deletePassport, updatePassport } from '@/lib/passports-api';
 
 /**
- * Server actions страницы «Выпущенные паспорта» помощника
- * раскройщика (`/work/passports`, `/work/passports/[id]/edit`).
+ * Server actions страниц «Выпущенные паспорта»: помощника раскройщика
+ * (`/work/passports`, `/work/passports/[id]/edit`) И раскройщика
+ * (`/cutter/passports`, `/cutter/passports/[id]/edit`) — экшены общие,
+ * различие кабинетов только в навигации и в ревалидируемых путях.
  *
  * Контракт BFF-обёрток:
  *   - `updateMyPassportAction` — PATCH полей паспорта; на success
@@ -107,10 +109,15 @@ export async function updateMyPassportAction(
     return { error: explainApiError(e) };
   }
 
-  // Обновляем все срезы, в которых паспорт может быть виден: список
-  // помощника на /work/passports, карточки заказа (legacy + admin),
-  // карточки самого паспорта (legacy + admin).
+  // Обновляем все срезы, в которых паспорт может быть виден: списки
+  // выпущенных паспортов (помощник /work/passports И раскройщик
+  // /cutter/passports — экраны разные, компоненты и этот экшен общие),
+  // карточки заказа (legacy + admin), карточки самого паспорта
+  // (legacy + admin). Ревалидируем оба списка безусловно: путь, который
+  // сейчас не открыт, ничего не стоит, а условный аргумент «откуда
+  // пришли» лишний раз ломался бы при новом кабинете.
   revalidatePath('/work/passports');
+  revalidatePath('/cutter/passports');
   revalidatePath(`/orders/${orderId}`);
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath(`/passports/${passportId}`);
@@ -151,7 +158,10 @@ export async function deleteMyPassportAction(
   } catch (e) {
     return { error: explainApiError(e) };
   }
+  // Оба списка выпущенных паспортов — помощника и раскройщика
+  // (см. комментарий в `updateMyPassportAction`).
   revalidatePath('/work/passports');
+  revalidatePath('/cutter/passports');
   revalidatePath(`/orders/${orderId}`);
   revalidatePath(`/admin/orders/${orderId}`);
   revalidatePath(`/passports/${passportId}`);

@@ -17780,6 +17780,146 @@ body:has(.admin-layout) .app-header { display: none !important; }
    `TerminalShell` (обёртка `.work .work--seamstress`, как у ОТК), ниже —
    только классы самих досок задач.
    ========================================================================== */
+/* Вкладки верхнего уровня кабинета раскройщика: Раскрой · Выпуск ·
+   Стеллаж (`apps/web/app/cutter/cutter-tabs.tsx`). Пилюли-ссылки под
+   синей шапкой роли: активная — жёлтая CTA (тот же акцент, что у
+   primary-кнопок), остальные — спокойная плашка. Тап-таргет 44px:
+   переключают их пальцем в цеху. */
+.cutter-tabs {
+  display: flex;
+  gap: 0.35rem;
+  padding: 0.25rem;
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-pill);
+}
+.cutter-tabs__tab {
+  flex: 1;
+  min-height: 44px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  border-radius: var(--radius-pill);
+  text-decoration: none;
+  color: var(--color-fg-muted);
+  font-weight: 600;
+  font-size: 0.95rem;
+}
+.cutter-tabs__tab:hover {
+  background: #fff;
+  color: var(--color-fg);
+}
+.cutter-tabs__tab.is-active {
+  background: var(--btn-primary-bg);
+  color: var(--btn-primary-fg);
+  font-weight: 700;
+  box-shadow: var(--shadow-sm);
+}
+/* Счётчик заказов к выпуску — тревожный тон: это незакрытая работа,
+   а не украшение (тот же тон, что `scan-card__task-badge` у помощника). */
+.cutter-tabs__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.35rem;
+  height: 1.35rem;
+  padding: 0 0.3rem;
+  border-radius: 999px;
+  background: var(--color-danger-soft);
+  color: var(--color-danger-fg);
+  font-size: 0.75rem;
+  font-weight: 700;
+}
+
+/* Синий info-баннер «раскрой ещё идёт» на форме выпуска
+   (`apps/web/app/cutter/release/[orderId]/page.tsx`). Раньше на этом месте
+   стоял красный `.error-box` «Раскрой по заказу ещё не завершён» — с
+   частичным завершением раскроя это НЕ ошибка: по закрытым раскладам
+   печатать можно уже сейчас, остальные подтянутся после «Расклад готов».
+   Поэтому тон акцентный (синий ЕРП), а не danger — иначе раскройщик
+   читает нормальное состояние как поломку. */
+.cutter-release-note {
+  background: var(--color-accent-soft);
+  color: var(--color-accent-fg);
+  border: 1px solid var(--color-accent);
+  border-radius: var(--radius-md);
+  padding: 0.7rem 0.9rem;
+  margin-bottom: 0.9rem;
+  font-size: 0.92rem;
+  line-height: 1.35;
+}
+.cutter-release-note strong {
+  display: block;
+  font-weight: 700;
+}
+
+/* Очередь выпуска — вкладка «Выпуск» (`apps/web/app/cutter/release/page.tsx`).
+   Сама карточка переиспользует `.cut-orders__card` (тот же визуальный язык,
+   что доска помощника `/work/cut-orders`), ниже — только дельта.
+
+   Шапка строки: название заказа слева, бейдж справа («N паспортов» /
+   «Ждём расклад» / «Завершено»). Отдельная строка-флекс, а не отступ
+   inline-стилем: счётчик паспортов должен прижиматься к правому краю, чтобы
+   в очереди из десятка заказов числа читались одной колонкой. */
+.cutter-release-queue__card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+/* Строка `WAITING` («Ждём расклад») — единственная НЕкликабельная: печатать
+   по ней нечего. Рисуется <div>, а не <a>, поэтому гасим hover-подсветку
+   `.cut-orders__card:hover` — иначе строка выглядит нажимаемой и раскройщик
+   тычет в неё. Блок обязан идти ПОСЛЕ `.cut-orders__card:hover` в файле:
+   специфичность равная, спор решает порядок. */
+.cutter-release-queue__card--locked {
+  cursor: default;
+}
+.cutter-release-queue__card--locked:hover,
+.cutter-release-queue__card--locked:focus-visible {
+  border-color: var(--color-border-strong);
+  background: #fff;
+}
+
+/* Вкладка «Стеллаж» кабинета раскройщика (`apps/web/app/cutter/shelf/`).
+   Своей вёрстки у экрана нет — всю работу ведёт переиспользованная
+   панель размещения помощника (`.shelf-placement`), поэтому нужен ровно
+   один класс: отбивка подсказки под заголовком (у `.scan-card__hint`
+   `margin: 0`, а панель/скан-карта начинается сразу под ней). Тот же
+   класс носит read-out «возвращаемся к раскрою» после «Готово». */
+.cutter-shelf__hint {
+  margin-bottom: 1rem;
+}
+
+/* Список «Выпущенные паспорта» кабинета раскройщика
+   (`apps/web/app/cutter/passports/page.tsx`) — экран-ребёнок вкладки
+   «Выпуск». Разметка строк переиспользована у помощника целиком
+   (`.my-passports-*` + компонент `MyPassportRow`), но список помощника
+   исторически рисуется ТЁМНОЙ карточкой (`var(--surface-2, #1f2330)` —
+   токен в проекте не определён, работает фолбэк), а кабинет раскройщика
+   светлый: белые карточки + жёлтая CTA (ср. `.cut-orders__card`).
+   Поэтому здесь ТОЛЬКО палитра, и через класс-модификатор на `<ul>`, —
+   чтобы не менять внешний вид `/work/passports`. */
+.cutter-passports .my-passports-row {
+  background: #fff;
+  border: 1.5px solid var(--color-border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-sm, 0 1px 2px rgba(20, 20, 20, 0.04));
+}
+.cutter-passports .my-passports-row__number,
+.cutter-passports .my-passports-row__meta {
+  color: var(--color-fg);
+}
+.cutter-passports .my-passports-row__sub {
+  color: var(--color-fg-muted);
+}
+/* Причина блокировки правки — не украшение и не «жёлтое предупреждение»:
+   это запрет («паспорт в ячейке», «уже есть скан»). Тон тот же, что у
+   остальных запретов интерфейса. */
+.cutter-passports .my-passports-row__blocked-hint {
+  color: var(--color-danger-fg);
+}
+
 .constructor-page__title {
   font-size: var(--title-page);
   margin: 0 0 1rem;

@@ -399,8 +399,15 @@ export class CuttingTasksService {
       // и выпуск по историческим заказам стал бы недоступен.
       completedAt: l.completedAt
         ? l.completedAt.toISOString()
-        : cuttingDone && task.completedAt
-          ? task.completedAt.toISOString()
+        : cuttingDone
+          ? // Legacy: у задач, завершённых ДО фичи, у раскладов
+            // `completedAt` пустой (backfill не делали), а гейт выпуска на
+            // backend их пропускает по `task.status = DONE`. Если бы DTO
+            // отдал здесь `null`, UI счёл бы такой расклад открытым и
+            // спрятал бы его — выпуск по всем историческим заказам
+            // «сломался» бы только в интерфейсе. `updatedAt` — страховка
+            // на случай `DONE` без `completedAt` в старых данных.
+            (task.completedAt ?? task.updatedAt).toISOString()
           : null,
     }));
 

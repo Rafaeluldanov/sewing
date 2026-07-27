@@ -46,6 +46,17 @@ interface Props {
   creatorIsCutter: boolean;
   cutterOptions: CutterOption[];
   initial: InitialValues;
+  /**
+   * Список выпущенных паспортов, из которого пришли: `/work/passports` у
+   * помощника (дефолт — историческое поведение) или `/cutter/passports` у
+   * раскройщика. Сюда ведут «Отмена» и «К списку паспортов».
+   */
+  backHref?: string;
+  /**
+   * Рабочее место кабинета для ссылки «← На рабочее место» в
+   * success-карточке: `/work` у помощника, `/cutter` у раскройщика.
+   */
+  homeHref?: string;
 }
 
 const initialState: UpdatePassportFormState = {};
@@ -74,7 +85,11 @@ function SubmitButton() {
  *    `/passports/[id]`;
  *  - у select-а размера/количества те же остатки, что и у формы
  *    выпуска, но с исключением самого редактируемого паспорта (см.
- *    `page.tsx`).
+ *    `lib/passport-edit-data.ts`).
+ *
+ * Форму переиспользует кабинет раскройщика (`/cutter/passports/[id]/edit`):
+ * логика правки одна, различается только навигация вокруг — её задают
+ * необязательные `backHref` / `homeHref` (дефолты = маршрут помощника).
  */
 export function EditPassportForm({
   passportId,
@@ -87,6 +102,8 @@ export function EditPassportForm({
   creatorIsCutter,
   cutterOptions,
   initial,
+  backHref = '/work/passports',
+  homeHref = '/work',
 }: Props) {
   const action = updateMyPassportAction.bind(null, passportId, orderId);
   const [state, formAction] = useFormState(action, initialState);
@@ -134,10 +151,10 @@ export function EditPassportForm({
             fallbackHref={buildPassportPrintPath(s.id)}
             label="Распечатать паспорт"
           />
-          <Link className="btn btn-ghost" href="/work/passports">
+          <Link className="btn btn-ghost" href={backHref}>
             К списку паспортов
           </Link>
-          <Link className="btn btn-ghost" href="/work">
+          <Link className="btn btn-ghost" href={homeHref}>
             ← На рабочее место
           </Link>
         </div>
@@ -311,7 +328,7 @@ export function EditPassportForm({
 
       <div className="actions-row">
         <SubmitButton />
-        <Link className="btn btn-ghost" href="/work/passports">
+        <Link className="btn btn-ghost" href={backHref}>
           Отмена
         </Link>
       </div>
