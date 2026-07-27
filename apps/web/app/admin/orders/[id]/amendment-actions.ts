@@ -17,15 +17,18 @@ import { revalidatePath } from 'next/cache';
 import {
   ApplyOperationAmendmentSchema,
   ApplyQuantityAmendmentSchema,
+  ApplyRouteAmendmentSchema,
   ApplySizeAmendmentSchema,
   type OperationAmendmentResultDto,
   type QuantityAmendmentResultDto,
+  type RouteAmendmentResultDto,
   type SizeAmendmentResultDto,
 } from '@sewing/shared';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   applyOperationAmendment,
   applyQuantityAmendment,
+  applyRouteAmendment,
   applySizeAmendment,
 } from '@/lib/amendments-api';
 
@@ -173,6 +176,60 @@ export async function applyOperationAmendmentAction(
         e instanceof ApiRequestError
           ? errorText(e)
           : 'Не удалось добавить операцию',
+    };
+  }
+}
+
+/**
+ * ФАЗА 3.1 — правка маршрута целиком (вкладка «Маршрут» drawer-а).
+ * `payload` — весь целевой маршрут (`ApplyRouteAmendmentSchema`), дельту
+ * считает бэкенд: он же стережёт замороженный префикс до фронта.
+ */
+export interface RouteAmendmentFormState {
+  ok: boolean;
+  error?: string | null;
+  result?: RouteAmendmentResultDto | null;
+  doneToken?: string;
+}
+
+export const initialRouteAmendmentFormState: RouteAmendmentFormState = {
+  ok: false,
+};
+
+export async function applyRouteAmendmentAction(
+  orderId: string,
+  _prev: RouteAmendmentFormState,
+  form: FormData,
+): Promise<RouteAmendmentFormState> {
+  const raw = form.get('payload');
+  let json: unknown = null;
+  try {
+    json = raw ? JSON.parse(String(raw)) : null;
+  } catch {
+    json = null;
+  }
+
+  const parsed = ApplyRouteAmendmentSchema.safeParse(json);
+  if (!parsed.success) {
+    return {
+      ok: false,
+      error: parsed.error.issues[0]?.message ?? 'Невалидные данные',
+    };
+  }
+
+  try {
+    const result = await applyRouteAmendment(orderId, parsed.data);
+    revalidatePath('/admin/orders');
+    revalidatePath(`/admin/orders/${orderId}`);
+    revalidatePath(`/orders/${orderId}`);
+    return { ok: true, result, doneToken: `saved:${Date.now()}` };
+  } catch (e) {
+    return {
+      ok: false,
+      error:
+        e instanceof ApiRequestError
+          ? errorText(e)
+          : 'Не удалось сохранить маршрут',
     };
   }
 }

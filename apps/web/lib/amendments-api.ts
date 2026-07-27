@@ -11,11 +11,13 @@ import type {
   AmendmentHistoryEntryDto,
   ApplyOperationAmendmentDto,
   ApplyQuantityAmendmentDto,
+  ApplyRouteAmendmentDto,
   ApplySizeAmendmentDto,
   OperationAmendmentResultDto,
   OperationAmendmentStateDto,
   QuantityAmendmentResultDto,
   QuantityAmendmentStateDto,
+  RouteAmendmentResultDto,
   SizeAmendmentResultDto,
   SizeAmendmentStateDto,
 } from '@sewing/shared';
@@ -84,5 +86,19 @@ export function applyOperationAmendment(
   return apiFetch<OperationAmendmentResultDto>(
     `/orders/${encodeURIComponent(orderId)}/amendments/operations`,
     { method: 'POST', body },
+  );
+}
+
+/**
+ * Правка маршрута целиком (вкладка «Маршрут» drawer-а): в теле — весь
+ * целевой маршрут, дельту считает бэкенд.
+ */
+export function applyRouteAmendment(
+  orderId: string,
+  body: ApplyRouteAmendmentDto,
+): Promise<RouteAmendmentResultDto> {
+  return apiFetch<RouteAmendmentResultDto>(
+    `/orders/${encodeURIComponent(orderId)}/amendments/route`,
+    { method: 'PUT', body },
   );
 }

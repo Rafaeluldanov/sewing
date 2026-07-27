@@ -424,6 +424,228 @@ describeWithDb('integration — order amendments (quantity)', () => {
     expect(res.body.code).toBe('AMENDMENT_OPERATION_ALREADY_IN_ROUTE');
   });
 
+  // ---- ФАЗА 3.1: правка маршрута целиком (вкладка «Маршрут») -----------
+
+  test('состояние маршрута отдаёт фронт, флаги правки и данные для чипов', async () => {
+    const orderId = await createStartedOrder();
+    await cutPassport(orderId, 5); // паспорт на шаге 0 → фронт = 0
+
+    const res = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/amendments/operations`)
+      .set('Cookie', manager)
+      .expect(200);
+
+    expect(res.body.frontierIndex).toBe(0);
+    const steps = res.body.steps as {
+      index: number;
+      operationCode: string;
+      operationCategory: string | null;
+      movable: boolean;
+      removable: boolean;
+    }[];
+    // Шаг 0 держит паспорт — заморожен; хвост свободен.
+    expect(steps.map((s) => s.movable)).toEqual([false, true, true]);
+    expect(steps.map((s) => s.removable)).toEqual([false, true, true]);
+    expect(steps[0].operationCode).toBe('CUT_DIVISION');
+    expect(steps[0].operationCategory).toBeTruthy();
+    // Палитра отдаёт категорию — по ней UI группирует и красит чипы.
+    expect(res.body.availableOperations.length).toBeGreaterThan(0);
+    expect(res.body.availableOperations[0]).toHaveProperty('category');
+  });
+
+  test('маршрут целиком: вставка + перестановка за один сабмит', async () => {
+    const orderId = await createStartedOrder(); // CUT, SEW, QC
+    await cutPassport(orderId, 5); // фронт = 0 (шаг CUT заморожен)
+
+    const res = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/amendments/route`)
+      .set('Cookie', manager)
+      .send({
+        steps: [
+          { operationId: seed.operations.CUT_DIVISION.id },
+          { operationId: seed.operations.PACKING.id },
+          { operationId: seed.operations.QC.id },
+          { operationId: seed.operations.SEW_OVERLOCK_1.id },
+        ],
+        reason: 'добавили упаковку, ОТК перед пошивом',
+      })
+      .expect(200);
+
+    expect(res.body.applied).toBe(true);
+    expect(res.body.addedCount).toBe(1);
+    expect(res.body.removedCount).toBe(0);
+    // Переставлены оба выживших шага: их относительный порядок сменился.
+    // Сдвиг индексов из-за вставки перестановкой НЕ считается.
+    expect(res.body.movedCount).toBe(2);
+
+    const steps = await t.prisma.orderRouteStep.findMany({
+      where: { orderId },
+      orderBy: { index: 'asc' },
+    });
+    expect(steps.map((s) => s.operationId)).toEqual([
+      seed.operations.CUT_DIVISION.id,
+      seed.operations.PACKING.id,
+      seed.operations.QC.id,
+      seed.operations.SEW_OVERLOCK_1.id,
+    ]);
+    expect(steps.map((s) => s.index)).toEqual([0, 1, 2, 3]);
+
+    // Паспорт остался на своём шаге — правка хвоста его не трогает.
+    const passport = await t.prisma.passport.findFirst({ where: { orderId } });
+    expect(passport?.currentRouteStepIndex).toBe(0);
+
+    const audit = await t.prisma.auditLog.findFirst({
+      where: {
+        entityType: 'ORDER',
+        entityId: orderId,
+        event: 'ORDER_ROUTE_AMENDED',
+      },
+    });
+    expect(audit).toBeTruthy();
+  });
+
+  test('маршрут целиком: удаление шага впереди фронта', async () => {
+    const orderId = await createStartedOrder(); // CUT, SEW, QC
+    await cutPassport(orderId, 5); // фронт = 0
+
+    const res = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/amendments/route`)
+      .set('Cookie', manager)
+      .send({
+        steps: [
+          { operationId: seed.operations.CUT_DIVISION.id },
+          { operationId: seed.operations.SEW_OVERLOCK_1.id },
+        ],
+        reason: 'ОТК не нужен на этом тираже',
+      })
+      .expect(200);
+    expect(res.body.removedCount).toBe(1);
+    expect(res.body.summary).toContain('−');
+
+    const steps = await t.prisma.orderRouteStep.findMany({
+      where: { orderId },
+      orderBy: { index: 'asc' },
+    });
+    expect(steps.map((s) => s.operationId)).toEqual([
+      seed.operations.CUT_DIVISION.id,
+      seed.operations.SEW_OVERLOCK_1.id,
+    ]);
+    expect(steps.map((s) => s.index)).toEqual([0, 1]);
+  });
+
+  test('маршрут целиком: параллельная группа проставляется обоим шагам', async () => {
+    const orderId = await createStartedOrder();
+
+    await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/amendments/route`)
+      .set('Cookie', manager)
+      .send({
+        steps: [
+          { operationId: seed.operations.CUT_DIVISION.id },
+          { operationId: seed.operations.SEW_OVERLOCK_1.id, parallelGroup: 1 },
+          { operationId: seed.operations.QC.id, parallelGroup: 1 },
+        ],
+        reason: 'пошив и ОТК параллельно',
+      })
+      .expect(200);
+
+    const steps = await t.prisma.orderRouteStep.findMany({
+      where: { orderId },
+      orderBy: { index: 'asc' },
+    });
+    expect(steps.map((s) => s.parallelGroup)).toEqual([null, 1, 1]);
+  });
+
+  test('правка замороженного префикса → 409 ROUTE_FRONTIER_CHANGED', async () => {
+    const orderId = await createStartedOrder();
+    await cutPassport(orderId, 5);
+    // Паспорт продвинулся до шага 1 → индексы 0..1 заморожены.
+    await t.prisma.passport.updateMany({
+      where: { orderId },
+      data: { currentRouteStepIndex: 1 },
+    });
+
+    const res = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/amendments/route`)
+      .set('Cookie', manager)
+      .send({
+        steps: [
+          { operationId: seed.operations.SEW_OVERLOCK_1.id },
+          { operationId: seed.operations.CUT_DIVISION.id },
+          { operationId: seed.operations.QC.id },
+        ],
+        reason: 'попытка переставить пройденное',
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('AMENDMENT_ROUTE_FRONTIER_CHANGED');
+
+    // Снимок не тронут.
+    const steps = await t.prisma.orderRouteStep.findMany({
+      where: { orderId },
+      orderBy: { index: 'asc' },
+    });
+    expect(steps.map((s) => s.operationId)).toEqual([
+      seed.operations.CUT_DIVISION.id,
+      seed.operations.SEW_OVERLOCK_1.id,
+      seed.operations.QC.id,
+    ]);
+  });
+
+  test('маршрут без изменений → applied=false, аудита нет', async () => {
+    const orderId = await createStartedOrder();
+
+    const res = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderId}/amendments/route`)
+      .set('Cookie', manager)
+      .send({
+        steps: [
+          { operationId: seed.operations.CUT_DIVISION.id },
+          { operationId: seed.operations.SEW_OVERLOCK_1.id },
+          { operationId: seed.operations.QC.id },
+        ],
+        reason: 'ничего не поменяли',
+      })
+      .expect(200);
+    expect(res.body.applied).toBe(false);
+
+    const audit = await t.prisma.auditLog.count({
+      where: { entityId: orderId, event: 'ORDER_ROUTE_AMENDED' },
+    });
+    expect(audit).toBe(0);
+  });
+
+  test('правка маршрута не в производстве → 409 ORDER_NOT_AMENDABLE', async () => {
+    const tpl = await t.prisma.routeTemplate.create({
+      data: {
+        code: `TPL-AMEND-DRAFT-${Date.now()}`,
+        name: 'Amendment draft route',
+        steps: {
+          create: [{ index: 0, operationId: seed.operations.QC.id }],
+        },
+      },
+    });
+    const orderRes = await request(t.app.getHttpServer())
+      .post('/api/orders')
+      .set('Cookie', manager)
+      .send({
+        orderDate: '2026-04-15T00:00:00.000Z',
+        productId: seed.product.id,
+        routeTemplateId: tpl.id,
+        items: [{ sizeId: seed.sizes.M, qtyPlan: 5 }],
+      })
+      .expect(201);
+
+    const res = await request(t.app.getHttpServer())
+      .put(`/api/orders/${orderRes.body.id}/amendments/route`)
+      .set('Cookie', manager)
+      .send({
+        steps: [{ operationId: seed.operations.PACKING.id }],
+        reason: 'правка черновика',
+      });
+    expect(res.status).toBe(409);
+    expect(res.body.code).toBe('ORDER_NOT_AMENDABLE');
+  });
+
   // ---- Журнал правок ---------------------------------------------------
 
   test('журнал правок возвращает применённые события с summary и причиной', async () => {

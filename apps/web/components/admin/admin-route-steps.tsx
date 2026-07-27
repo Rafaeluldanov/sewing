@@ -54,7 +54,13 @@ interface AdminRouteStepsProps {
   ariaLabel?: string;
 }
 
-const CATEGORY_ICON: Record<string, LucideIcon> = {
+/**
+ * Иконка и тон чипа по категории операции. Экспортируются, чтобы
+ * редактируемая цепочка (вкладка «Маршрут» drawer-а правки в
+ * производстве) рисовала ТЕ ЖЕ чипы, что справочник маршрутов, а не
+ * заводила вторую таблицу соответствий.
+ */
+export const ROUTE_STEP_CATEGORY_ICON: Record<string, LucideIcon> = {
   CUTTING: Scissors,
   SEWING: Activity,
   QC: CheckCircle2,
@@ -62,13 +68,26 @@ const CATEGORY_ICON: Record<string, LucideIcon> = {
   PACKING: Package,
 };
 
-const CATEGORY_TONE: Record<string, string> = {
+export const ROUTE_STEP_CATEGORY_TONE: Record<string, string> = {
   CUTTING: 'admin-route-step--orange',
   SEWING: 'admin-route-step--blue',
   QC: 'admin-route-step--green',
   IRONING: 'admin-route-step--coral',
   PACKING: 'admin-route-step--purple',
 };
+
+/** Иконка категории с дефолтом — единая точка для чипов маршрута. */
+export function routeStepIcon(category?: string | null): LucideIcon {
+  return ROUTE_STEP_CATEGORY_ICON[(category ?? '').toUpperCase()] ?? Activity;
+}
+
+/** CSS-модификатор тона категории («» — нейтральный чип). */
+export function routeStepTone(category?: string | null): string {
+  return ROUTE_STEP_CATEGORY_TONE[(category ?? '').toUpperCase()] ?? '';
+}
+
+const CATEGORY_ICON = ROUTE_STEP_CATEGORY_ICON;
+const CATEGORY_TONE = ROUTE_STEP_CATEGORY_TONE;
 
 export function AdminRouteSteps({
   steps,

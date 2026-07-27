@@ -1,16 +1,19 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Put } from '@nestjs/common';
 import {
   ApplyOperationAmendmentSchema,
   ApplyQuantityAmendmentSchema,
+  ApplyRouteAmendmentSchema,
   ApplySizeAmendmentSchema,
   type AmendmentHistoryEntryDto,
   type ApplyOperationAmendmentDto,
   type ApplyQuantityAmendmentDto,
+  type ApplyRouteAmendmentDto,
   type ApplySizeAmendmentDto,
   type OperationAmendmentResultDto,
   type OperationAmendmentStateDto,
   type QuantityAmendmentResultDto,
   type QuantityAmendmentStateDto,
+  type RouteAmendmentResultDto,
   type SizeAmendmentResultDto,
   type SizeAmendmentStateDto,
 } from '@sewing/shared';
@@ -87,6 +90,22 @@ export class OrderAmendmentsController {
     @CurrentUser() user: AuthPrincipal,
   ): Promise<OperationAmendmentResultDto> {
     return this.service.applyOperation(orderId, dto, user.employeeId);
+  }
+
+  /**
+   * Применить правку маршрута целиком (вкладка «Маршрут»): состав,
+   * порядок и параллельные группы впереди фронта производства. Тело —
+   * ВЕСЬ целевой маршрут, дельту считает бэкенд.
+   */
+  @Put('route')
+  @Roles('ADMIN', 'SHOP_MANAGER')
+  applyRoute(
+    @Param('id') orderId: string,
+    @Body(new ZodValidationPipe(ApplyRouteAmendmentSchema))
+    dto: ApplyRouteAmendmentDto,
+    @CurrentUser() user: AuthPrincipal,
+  ): Promise<RouteAmendmentResultDto> {
+    return this.service.applyRoute(orderId, dto, user.employeeId);
   }
 
   /** Журнал правок заказа в производстве (read-only). */

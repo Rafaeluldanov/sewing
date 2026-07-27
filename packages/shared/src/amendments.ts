@@ -185,6 +185,31 @@ export interface OperationAmendmentStepDto {
    * возврата уже сделанной работы).
    */
   ahead: boolean;
+  /** Код операции — для `data-`атрибутов и smoke-тестов, в UI не печатаем. */
+  operationCode: string;
+  /** Категория операции (CUTTING/SEWING/QC/IRONING/PACKING) — цвет чипа. */
+  operationCategory: string | null;
+  /** Снимок `parallelGroup`: соседи с одинаковым значением взаимозаменяемы. */
+  parallelGroup: number | null;
+  /**
+   * Эффективная сдельная расценка шага (`rateOverride ?? Operation.fixedRate`)
+   * или `null`, если операция окладная / поразмерная. Нужна только для
+   * локальной оценки Δ плана в drawer-е; истина — пересчёт на бэкенде.
+   */
+  rateRub: number | null;
+  /** Эффективная норма времени, сек/шт (`FIXED`), либо `null`. */
+  timeNormSec: number | null;
+  /**
+   * Шаг можно двигать/убирать: он строго впереди фронта
+   * (`index > frontierIndex`), т.е. ни один паспорт до него не дошёл.
+   */
+  movable: boolean;
+  /**
+   * Шаг можно убрать: `movable` И по операции в этом заказе нет ни одной
+   * записи выработки (`OperationEntry`). Иначе удаление стёрло бы шаг,
+   * за который уже начислены деньги.
+   */
+  removable: boolean;
 }
 
 /** Операция каталога, доступная для добавления. */
@@ -192,6 +217,12 @@ export interface OperationAmendmentOptionDto {
   id: string;
   code: string;
   name: string;
+  /** Категория — группировка палитры и цвет чипа. */
+  category: string | null;
+  /** Сдельная расценка по справочнику (`FIXED`), иначе `null`. */
+  rateRub: number | null;
+  /** Норма времени по справочнику (`FIXED`), иначе `null`. */
+  timeNormSec: number | null;
 }
 
 /** Ответ GET-состояния добавления операции. */
@@ -215,6 +246,202 @@ export interface OperationAmendmentResultDto {
   /** Индекс, на который встала новая операция. */
   insertedIndex: number;
   warnings: string[];
+}
+
+// ---------------------------------------------------------------------------
+// ФАЗА 3.1 — правка маршрута целиком (drawer «Изменить в производстве» →
+// вкладка «Маршрут»): состав, порядок и параллельные группы ВПЕРЕДИ фронта.
+// ---------------------------------------------------------------------------
+
+/** Один шаг целевого маршрута. Порядок в массиве = порядок шагов. */
+export const RouteAmendmentStepSchema = z.object({
+  operationId: z.string().min(1),
+  /**
+   * Номер параллельной (взаимозаменяемой) группы. Соседние шаги с
+   * одинаковым ненулевым значением — один этап, порядок внутри любой.
+   */
+  parallelGroup: z.number().int().min(1).nullable().optional(),
+});
+export type RouteAmendmentStep = z.infer<typeof RouteAmendmentStepSchema>;
+
+/**
+ * Тело правки маршрута: клиент присылает **весь целевой маршрут**, а не
+ * дельту. Так холст остаётся источником истины «как должно быть», а
+ * бэкенд сам считает, что добавлено/убрано/переставлено, и проверяет,
+ * что замороженный префикс (шаги до фронта включительно) не тронут.
+ */
+export const ApplyRouteAmendmentSchema = z.object({
+  steps: z.array(RouteAmendmentStepSchema).min(1, 'Маршрут не может быть пустым'),
+  reason: z.string().trim().min(1, 'Укажите причину правки').max(500),
+});
+export type ApplyRouteAmendmentDto = z.infer<typeof ApplyRouteAmendmentSchema>;
+
+/** Результат правки маршрута. `summary` — то же, что уйдёт в журнал. */
+export interface RouteAmendmentResultDto {
+  orderId: string;
+  applied: boolean;
+  addedCount: number;
+  removedCount: number;
+  movedCount: number;
+  /** Человекочитаемая сводка правки («+ Киперка после Распошив; − ВТО»). */
+  summary: string;
+  warnings: string[];
+}
+
+/** Текущий шаг снимка для планировщика (минимум полей). */
+export interface RoutePlanCurrentStep {
+  index: number;
+  operationId: string;
+  parallelGroup: number | null;
+}
+
+/** Целевой шаг для планировщика. */
+export interface RoutePlanTargetStep {
+  operationId: string;
+  parallelGroup: number | null;
+}
+
+/** Что делать с одной позицией целевого маршрута. */
+export interface RoutePlanPlacement {
+  /** Новый index шага. */
+  index: number;
+  operationId: string;
+  parallelGroup: number | null;
+  /** Прежний index этого шага в снимке; `null` — шаг новый. */
+  fromIndex: number | null;
+}
+
+export interface RouteAmendmentPlan {
+  placements: RoutePlanPlacement[];
+  /** Прежние index'ы шагов, которых нет в целевом маршруте. */
+  removedIndexes: number[];
+  /** operationId добавленных шагов. */
+  addedOperationIds: string[];
+  /** operationId убранных шагов. */
+  removedOperationIds: string[];
+  /** Шаги, сменившие позицию (без учёта добавленных/убранных). */
+  movedOperationIds: string[];
+  /** Правка ничего не меняет — сохранять нечего. */
+  noop: boolean;
+}
+
+export type RouteAmendmentViolation =
+  /** В целевом маршруте одна операция встречается дважды. */
+  | { code: 'DUPLICATE_OPERATION'; operationId: string }
+  /**
+   * Тронут замороженный префикс: шаги с `index <= frontierIndex` обязаны
+   * остаться теми же и в том же порядке (их уже проходят паспорта).
+   */
+  | { code: 'FRONTIER_CHANGED'; index: number }
+  /** Шаг впереди фронта убран, но по его операции уже есть выработка. */
+  | { code: 'STEP_HAS_WORK'; operationId: string };
+
+export type RouteAmendmentPlanResult =
+  | { ok: true; plan: RouteAmendmentPlan }
+  | { ok: false; violation: RouteAmendmentViolation };
+
+/**
+ * Чистое планирование правки маршрута: из текущего снимка и целевого
+ * маршрута считает перестановки и проверяет инварианты. Ни Prisma, ни
+ * побочных эффектов — вся арифметика индексов живёт здесь и покрыта
+ * unit-тестом (`tests/unit/route-amendment-plan.test.ts`).
+ *
+ * `frontierIndex` — максимальный `Passport.currentRouteStepIndex`
+ * (−1, если паспортов нет). Шаги `0..frontierIndex` заморожены: паспорта
+ * их прошли или проходят прямо сейчас. Менять можно только хвост.
+ *
+ * `operationIdsWithWork` — операции этого заказа, по которым уже есть
+ * записи выработки: убирать такой шаг нельзя, даже если он впереди фронта
+ * (сдельные начисления ссылаются на операцию).
+ */
+export function planRouteAmendment(
+  current: readonly RoutePlanCurrentStep[],
+  target: readonly RoutePlanTargetStep[],
+  frontierIndex: number,
+  operationIdsWithWork: ReadonlySet<string> = new Set(),
+): RouteAmendmentPlanResult {
+  const ordered = [...current].sort((a, b) => a.index - b.index);
+
+  const seen = new Set<string>();
+  for (const t of target) {
+    if (seen.has(t.operationId)) {
+      return {
+        ok: false,
+        violation: { code: 'DUPLICATE_OPERATION', operationId: t.operationId },
+      };
+    }
+    seen.add(t.operationId);
+  }
+
+  // Замороженный префикс: 0..frontierIndex включительно — один в один.
+  const frozenCount = Math.max(0, Math.min(frontierIndex + 1, ordered.length));
+  for (let i = 0; i < frozenCount; i += 1) {
+    const cur = ordered[i];
+    const tgt = target[i];
+    if (
+      !tgt ||
+      tgt.operationId !== cur.operationId ||
+      (tgt.parallelGroup ?? null) !== (cur.parallelGroup ?? null)
+    ) {
+      return { ok: false, violation: { code: 'FRONTIER_CHANGED', index: i } };
+    }
+  }
+
+  const byOperationId = new Map(ordered.map((s) => [s.operationId, s]));
+  const targetIds = new Set(target.map((t) => t.operationId));
+
+  const removed = ordered.filter((s) => !targetIds.has(s.operationId));
+  for (const s of removed) {
+    if (operationIdsWithWork.has(s.operationId)) {
+      return {
+        ok: false,
+        violation: { code: 'STEP_HAS_WORK', operationId: s.operationId },
+      };
+    }
+  }
+
+  const placements: RoutePlanPlacement[] = target.map((t, i) => {
+    const prev = byOperationId.get(t.operationId);
+    return {
+      index: i,
+      operationId: t.operationId,
+      parallelGroup: t.parallelGroup ?? null,
+      fromIndex: prev ? prev.index : null,
+    };
+  });
+
+  const added = placements.filter((p) => p.fromIndex === null);
+
+  // «Переставлен» — сменился ОТНОСИТЕЛЬНЫЙ порядок среди выживших шагов, а
+  // не абсолютный index: вставка операции в начало сдвигает весь хвост, но
+  // это не перестановка, и в сводке правки такой шум не нужен.
+  const survivedBefore = ordered
+    .filter((s) => targetIds.has(s.operationId))
+    .map((s) => s.operationId);
+  const survivedAfter = target
+    .filter((t) => byOperationId.has(t.operationId))
+    .map((t) => t.operationId);
+  const moved = placements.filter(
+    (p) =>
+      p.fromIndex !== null &&
+      (survivedBefore.indexOf(p.operationId) !==
+        survivedAfter.indexOf(p.operationId) ||
+        (byOperationId.get(p.operationId)?.parallelGroup ?? null) !==
+          p.parallelGroup),
+  );
+
+  return {
+    ok: true,
+    plan: {
+      placements,
+      removedIndexes: removed.map((s) => s.index),
+      addedOperationIds: added.map((p) => p.operationId),
+      removedOperationIds: removed.map((s) => s.operationId),
+      movedOperationIds: moved.map((p) => p.operationId),
+      noop:
+        added.length === 0 && removed.length === 0 && moved.length === 0,
+    },
+  };
 }
 
 // ---------------------------------------------------------------------------

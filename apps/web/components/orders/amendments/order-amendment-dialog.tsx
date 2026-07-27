@@ -5,11 +5,17 @@
  * производстве» (фича `FEATURE_ORDER_AMENDMENTS`). Одна точка входа с
  * вкладками:
  *   - «Количество» (ФАЗА 1) — правка планового тиража по размерам;
- *   - «Размерность» (ФАЗА 2) — добавить/убрать размер.
+ *   - «Размерность» (ФАЗА 2) — добавить/убрать размер;
+ *   - «Маршрут» (ФАЗА 3.1) — состав и порядок операций впереди фронта.
  *
  * Оболочка (overlay/шапка/переключатель вкладок/CSS) — здесь; логика
- * форм — в `QuantityAmendmentTab` / `SizeAmendmentTab`. Паттерн окна — как
+ * форм — в `QuantityAmendmentTab` / `SizeAmendmentTab` /
+ * `RouteAmendmentTab`. Паттерн окна — как
  * `create-finished-goods-shipment-dialog`.
+ *
+ * Вкладке «Маршрут» нужен холст с цепочкой и палитрой операций, поэтому
+ * на ней окно расширяется (`amend-window--wide`); остальные вкладки
+ * остаются узкими.
  */
 
 import { useState } from 'react';
@@ -22,7 +28,7 @@ import type {
 import { ModalPortal } from '@/components/modal-portal';
 import { QuantityAmendmentTab } from './quantity-amendment-tab';
 import { SizeAmendmentTab } from './size-amendment-tab';
-import { OperationAmendmentTab } from './operation-amendment-tab';
+import { RouteAmendmentTab } from './route-amendment-tab';
 
 interface Props {
   orderId: string;
@@ -32,7 +38,7 @@ interface Props {
   onClose: () => void;
 }
 
-type TabKey = 'qty' | 'sizes' | 'ops';
+type TabKey = 'qty' | 'sizes' | 'route';
 
 export function OrderAmendmentDialog({
   orderId,
@@ -52,7 +58,10 @@ export function OrderAmendmentDialog({
         className="amend-overlay"
         onClick={onClose}
       >
-        <div className="amend-window" onClick={(e) => e.stopPropagation()}>
+        <div
+          className={`amend-window${tab === 'route' ? ' amend-window--wide' : ''}`}
+          onClick={(e) => e.stopPropagation()}
+        >
           <header className="amend-header">
             <h2>
               <SlidersHorizontal size={18} strokeWidth={1.7} aria-hidden />{' '}
@@ -90,11 +99,12 @@ export function OrderAmendmentDialog({
             <button
               type="button"
               role="tab"
-              aria-selected={tab === 'ops'}
-              className={`amend-tab${tab === 'ops' ? ' amend-tab--active' : ''}`}
-              onClick={() => setTab('ops')}
+              aria-selected={tab === 'route'}
+              className={`amend-tab${tab === 'route' ? ' amend-tab--active' : ''}`}
+              onClick={() => setTab('route')}
+              data-testid="amend-tab-route"
             >
-              Операция
+              Маршрут
             </button>
           </div>
 
@@ -113,8 +123,8 @@ export function OrderAmendmentDialog({
                 onClose={onClose}
               />
             )}
-            {tab === 'ops' && (
-              <OperationAmendmentTab
+            {tab === 'route' && (
+              <RouteAmendmentTab
                 orderId={orderId}
                 state={operationState}
                 onClose={onClose}
@@ -136,6 +146,8 @@ export function OrderAmendmentDialog({
           box-shadow: 0 20px 50px rgba(15, 23, 42, 0.25);
           display: flex; flex-direction: column;
         }
+        /* Вкладка «Маршрут»: цепочка + палитра операций рядом. */
+        .amend-window--wide { max-width: 1040px; }
         .amend-header {
           display: flex; justify-content: space-between; align-items: center;
           padding: 14px 16px; border-bottom: 1px solid #e2e8f0;

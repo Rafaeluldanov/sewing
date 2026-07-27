@@ -1,22 +1,27 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, type Prisma } from '@prisma/client';
 import type {
   AmendmentHistoryEntryDto,
   ApplyOperationAmendmentDto,
   ApplyQuantityAmendmentDto,
+  ApplyRouteAmendmentDto,
   ApplySizeAmendmentDto,
   OperationAmendmentResultDto,
   OperationAmendmentStateDto,
   QuantityAmendmentResultDto,
   QuantityAmendmentStateDto,
+  RouteAmendmentResultDto,
   SizeAmendmentResultDto,
   SizeAmendmentStateDto,
 } from '@sewing/shared';
+import { planRouteAmendment } from '@sewing/shared';
 import {
   AmendmentBelowCutException,
   AmendmentMultiVariantUnsupportedException,
   AmendmentOperationAlreadyInRouteException,
   AmendmentOperationBehindFrontierException,
+  AmendmentRouteFrontierChangedException,
+  AmendmentRouteStepHasWorkException,
   AmendmentSizeAlreadyInOrderException,
   AmendmentSizeHasWorkException,
   OrderNotAmendableException,
@@ -536,7 +541,21 @@ export class OrderAmendmentsService {
           select: {
             index: true,
             operationId: true,
-            operation: { select: { name: true, code: true } },
+            parallelGroup: true,
+            rateOverride: true,
+            timeNormSecOverride: true,
+            pricingModeOverride: true,
+            operation: {
+              select: {
+                name: true,
+                code: true,
+                category: true,
+                pricingMode: true,
+                fixedRate: true,
+                timeNormMode: true,
+                timeNormSec: true,
+              },
+            },
           },
         },
       },
@@ -550,24 +569,61 @@ export class OrderAmendmentsService {
     }
 
     const frontierIndex = await this.frontierIndex(orderId);
+    const workedOpIds = await this.operationIdsWithWork(orderId);
     const usedOpIds = new Set(order.routeSteps.map((s) => s.operationId));
     const available = await this.prisma.operation.findMany({
-      where: { id: { notIn: [...usedOpIds] } },
-      orderBy: { name: 'asc' },
-      select: { id: true, code: true, name: true },
+      where: { id: { notIn: [...usedOpIds] }, active: true },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        category: true,
+        pricingMode: true,
+        fixedRate: true,
+        timeNormMode: true,
+        timeNormSec: true,
+      },
     });
 
     return {
       orderId,
       editable: order.status === OrderStatus.IN_PRODUCTION,
       frontierIndex,
-      steps: order.routeSteps.map((s) => ({
-        index: s.index,
-        operationId: s.operationId,
-        operationName: s.operation?.name ?? s.operation?.code ?? '—',
-        ahead: s.index >= frontierIndex,
+      steps: order.routeSteps.map((s) => {
+        // Шаг СТРОГО впереди фронта: на `frontierIndex` стоит самый
+        // дальний паспорт — этот шаг сейчас в работе, его не трогаем.
+        const movable = s.index > frontierIndex;
+        const pricingMode = s.pricingModeOverride ?? s.operation?.pricingMode;
+        return {
+          index: s.index,
+          operationId: s.operationId,
+          operationName: s.operation?.name ?? s.operation?.code ?? '—',
+          ahead: s.index >= frontierIndex,
+          operationCode: s.operation?.code ?? '',
+          operationCategory: s.operation?.category ?? null,
+          parallelGroup: s.parallelGroup ?? null,
+          rateRub:
+            pricingMode === 'FIXED'
+              ? decimalToNumber(s.rateOverride ?? s.operation?.fixedRate)
+              : null,
+          timeNormSec:
+            s.operation?.timeNormMode === 'FIXED'
+              ? s.timeNormSecOverride ?? s.operation?.timeNormSec ?? null
+              : null,
+          movable,
+          removable: movable && !workedOpIds.has(s.operationId),
+        };
+      }),
+      availableOperations: available.map((op) => ({
+        id: op.id,
+        code: op.code,
+        name: op.name,
+        category: op.category ?? null,
+        rateRub:
+          op.pricingMode === 'FIXED' ? decimalToNumber(op.fixedRate) : null,
+        timeNormSec: op.timeNormMode === 'FIXED' ? op.timeNormSec ?? null : null,
       })),
-      availableOperations: available,
     };
   }
 
@@ -696,6 +752,244 @@ export class OrderAmendmentsService {
     return { orderId, applied: true, insertedIndex: insertIndex, warnings: [] };
   }
 
+  /**
+   * Правка маршрута целиком (drawer «Изменить в производстве» → вкладка
+   * «Маршрут»): состав, порядок и параллельные группы ВПЕРЕДИ фронта.
+   *
+   * Клиент присылает весь целевой маршрут; что добавлено/убрано/
+   * переставлено, считает чистый `planRouteAmendment` — он же стережёт
+   * инварианты:
+   *   - замороженный префикс (`index <= frontierIndex`) обязан совпасть
+   *     один в один: эти шаги паспорта прошли или проходят сейчас;
+   *   - убрать шаг можно только если по его операции в заказе нет ни одной
+   *     записи выработки (`OperationEntry`);
+   *   - дубли операции в маршруте запрещены (доска и подстановки дедуплят
+   *     по `operationId`).
+   *
+   * `Passport.currentRouteStepIndex` НЕ трогаем: по построению ни один
+   * паспорт не стоит на индексе больше `frontierIndex`, а меняем мы только
+   * хвост за ним.
+   */
+  async applyRoute(
+    orderId: string,
+    dto: ApplyRouteAmendmentDto,
+    actorEmployeeId?: string | null,
+  ): Promise<RouteAmendmentResultDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: orderId },
+      select: {
+        id: true,
+        status: true,
+        routeSteps: {
+          orderBy: { index: 'asc' },
+          select: {
+            id: true,
+            index: true,
+            operationId: true,
+            parallelGroup: true,
+          },
+        },
+      },
+    });
+    if (!order) {
+      throw new NotFoundException({
+        statusCode: 404,
+        code: 'ORDER_NOT_FOUND',
+        message: 'Заказ не найден',
+      });
+    }
+    if (order.status !== OrderStatus.IN_PRODUCTION) {
+      throw new OrderNotAmendableException();
+    }
+
+    const targetIds = dto.steps.map((s) => s.operationId);
+    // Имена нужны и для убираемых шагов (их нет в целевом маршруте) —
+    // читаем объединение, чтобы сводка собиралась без доп. запросов.
+    const operations = await this.prisma.operation.findMany({
+      where: {
+        id: { in: [...new Set([...targetIds, ...order.routeSteps.map((s) => s.operationId)])] },
+      },
+      select: { id: true, name: true, code: true, active: true },
+    });
+    const opById = new Map(operations.map((o) => [o.id, o]));
+    const unknown = targetIds.find((id) => !opById.has(id));
+    if (unknown) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'AMENDMENT_OPERATION_NOT_FOUND',
+        message: 'Операция не найдена в справочнике.',
+      });
+    }
+    const currentIds = new Set(order.routeSteps.map((s) => s.operationId));
+    const inactiveNew = targetIds.find(
+      (id) => !currentIds.has(id) && !opById.get(id)?.active,
+    );
+    if (inactiveNew) {
+      const op = opById.get(inactiveNew)!;
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'AMENDMENT_OPERATION_INACTIVE',
+        message: `Операция «${op.name || op.code}» архивная — добавить её в маршрут нельзя.`,
+      });
+    }
+
+    const frontier = await this.frontierIndex(orderId);
+    const workedOpIds = await this.operationIdsWithWork(orderId);
+
+    const planned = planRouteAmendment(
+      order.routeSteps,
+      dto.steps.map((s) => ({
+        operationId: s.operationId,
+        parallelGroup: s.parallelGroup ?? null,
+      })),
+      frontier,
+      workedOpIds,
+    );
+    if (!planned.ok) {
+      const v = planned.violation;
+      if (v.code === 'DUPLICATE_OPERATION') {
+        const op = opById.get(v.operationId);
+        throw new AmendmentOperationAlreadyInRouteException(
+          `Операция «${op?.name || op?.code || '?'}» встречается в маршруте дважды.`,
+        );
+      }
+      if (v.code === 'STEP_HAS_WORK') {
+        const op = opById.get(v.operationId);
+        throw new AmendmentRouteStepHasWorkException(
+          `По операции «${op?.name || op?.code || '?'}» уже есть выработка — убрать её из маршрута нельзя.`,
+        );
+      }
+      throw new AmendmentRouteFrontierChangedException(
+        `Шаг ${v.index + 1} уже проходят паспорта — менять его порядок или убирать нельзя. Обновите страницу и повторите правку.`,
+      );
+    }
+
+    const plan = planned.plan;
+    const nameOf = (id: string) => {
+      const op = opById.get(id);
+      return op?.name || op?.code || '?';
+    };
+
+    const summaryParts: string[] = [];
+    for (const p of plan.placements) {
+      if (p.fromIndex !== null) continue;
+      const prev = plan.placements[p.index - 1];
+      summaryParts.push(
+        `+ «${nameOf(p.operationId)}» ${
+          prev ? `после «${nameOf(prev.operationId)}»` : 'в начало'
+        }`,
+      );
+    }
+    for (const id of plan.removedOperationIds) {
+      summaryParts.push(`− «${nameOf(id)}»`);
+    }
+    for (const id of plan.movedOperationIds) {
+      const to = plan.placements.find((p) => p.operationId === id);
+      summaryParts.push(`«${nameOf(id)}» → шаг ${(to?.index ?? 0) + 1}`);
+    }
+    const summary = summaryParts.join('; ');
+
+    if (plan.noop) {
+      return {
+        orderId,
+        applied: false,
+        addedCount: 0,
+        removedCount: 0,
+        movedCount: 0,
+        summary: 'Изменений нет',
+        warnings: ['Маршрут не изменился — сохранять нечего.'],
+      };
+    }
+
+    const stepById = new Map(order.routeSteps.map((s) => [s.operationId, s]));
+    const removedStepIds = order.routeSteps
+      .filter((s) => plan.removedIndexes.includes(s.index))
+      .map((s) => s.id);
+
+    await this.prisma.$transaction(async (tx) => {
+      // Фронт мог уехать вперёд, пока менеджер собирал маршрут: перечи-
+      // тываем его ВНУТРИ транзакции и отказываем, если сдвинулся. Иначе
+      // перекладка индексов задела бы шаг, на который уже встал паспорт.
+      const agg = await tx.passport.aggregate({
+        where: { orderId, status: { not: 'CANCELLED' } },
+        _max: { currentRouteStepIndex: true },
+      });
+      if ((agg._max.currentRouteStepIndex ?? -1) !== frontier) {
+        throw new AmendmentRouteFrontierChangedException(
+          'Фронт производства сдвинулся, пока вы правили маршрут. Обновите страницу и повторите правку.',
+        );
+      }
+
+      // Хвост за фронтом паркуем в отрицательные индексы: иначе
+      // перестановка ловит промежуточную коллизию @@unique([orderId, index]).
+      for (const s of order.routeSteps) {
+        if (s.index <= frontier) continue;
+        await tx.orderRouteStep.update({
+          where: { id: s.id },
+          data: { index: -(s.index + 1) },
+        });
+      }
+
+      if (removedStepIds.length > 0) {
+        await tx.orderRouteStep.deleteMany({
+          where: { id: { in: removedStepIds } },
+        });
+      }
+
+      for (const p of plan.placements) {
+        if (p.index <= frontier) continue; // замороженный префикс не трогаем
+        const existing = stepById.get(p.operationId);
+        if (existing) {
+          await tx.orderRouteStep.update({
+            where: { id: existing.id },
+            data: { index: p.index, parallelGroup: p.parallelGroup },
+          });
+        } else {
+          await tx.orderRouteStep.create({
+            data: {
+              orderId,
+              index: p.index,
+              operationId: p.operationId,
+              parallelGroup: p.parallelGroup,
+            },
+          });
+        }
+      }
+
+      // План стоимости/времени считается ПО СНИМКУ — после перекладки
+      // индексов достраиваем производные (как и при вставке операции).
+      await this.orders.rebuildQtyDerivedSnapshotsInTx(orderId, tx);
+
+      await this.audit.log(
+        {
+          event: 'ORDER_ROUTE_AMENDED',
+          entityType: 'ORDER',
+          entityId: orderId,
+          employeeId: actorEmployeeId ?? null,
+          payload: {
+            reason: dto.reason,
+            summary,
+            added: plan.addedOperationIds,
+            removed: plan.removedOperationIds,
+            moved: plan.movedOperationIds,
+            frontierIndex: frontier,
+          },
+        },
+        tx,
+      );
+    });
+
+    return {
+      orderId,
+      applied: true,
+      addedCount: plan.addedOperationIds.length,
+      removedCount: plan.removedOperationIds.length,
+      movedCount: plan.movedOperationIds.length,
+      summary,
+      warnings: [],
+    };
+  }
+
   // -------------------------------------------------------------------------
   // READ — журнал правок (read-only, для карточки заказа)
   // -------------------------------------------------------------------------
@@ -722,6 +1016,7 @@ export class OrderAmendmentsService {
             'ORDER_QTY_AMENDED',
             'ORDER_SIZE_AMENDED',
             'ORDER_OPERATION_ADDED',
+            'ORDER_ROUTE_AMENDED',
             'ORDER_TECH_CARD_AMENDED',
           ],
         },
@@ -803,6 +1098,10 @@ export class OrderAmendmentsService {
           (s) => `−${codeById.get(s) ?? '?'}`,
         );
         summary = 'Размерность: ' + [...adds, ...rems].join(', ');
+      } else if (l.event === 'ORDER_ROUTE_AMENDED') {
+        kind = 'operation';
+        // `summary` собран при правке (имена операций уже подставлены).
+        summary = 'Маршрут: ' + ((p.summary as string) ?? 'правка маршрута');
       } else if (l.event === 'ORDER_TECH_CARD_AMENDED') {
         kind = 'materials';
         // `summary` собран на месте правки (там известны имена материалов
@@ -840,6 +1139,21 @@ export class OrderAmendmentsService {
       _max: { currentRouteStepIndex: true },
     });
     return agg._max.currentRouteStepIndex ?? -1;
+  }
+
+  /**
+   * Операции этого заказа, по которым уже есть записи выработки
+   * (`OperationEntry` через паспорта заказа). Такой шаг нельзя убрать из
+   * маршрута, даже если он формально впереди фронта: на операцию
+   * ссылаются сдельные начисления.
+   */
+  private async operationIdsWithWork(orderId: string): Promise<Set<string>> {
+    const rows = await this.prisma.operationEntry.findMany({
+      where: { passport: { orderId } },
+      select: { operationId: true },
+      distinct: ['operationId'],
+    });
+    return new Set(rows.map((r) => r.operationId));
   }
 
   /**
@@ -923,4 +1237,15 @@ export class OrderAmendmentsService {
     });
     return count > 0;
   }
+}
+
+/**
+ * `Prisma.Decimal` → number. `null`/`undefined` пробрасываем как `null`:
+ * в DTO drawer-а это значит «расценки нет» (окладная или поразмерная
+ * операция), а не «ноль рублей».
+ */
+function decimalToNumber(
+  value: Prisma.Decimal | null | undefined,
+): number | null {
+  return value != null ? value.toNumber() : null;
 }

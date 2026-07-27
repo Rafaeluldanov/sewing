@@ -1,0 +1,963 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Изменить в производстве → Маршрут (прототип)</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+
+    /* Категорийные акценты операций — блок Admin Analytics в globals.css */
+    --admin-blue:#2f7fd1;   --admin-blue-soft:#d9e8fb;   --admin-blue-fg:#1f6bc0;
+    --admin-green:#2e9e4a;  --admin-green-soft:#e4f4e6;  --admin-green-fg:#2f7d4e;
+    --admin-orange:#f97316; --admin-orange-soft:#ffedd5; --admin-orange-fg:#9a3412;
+    --admin-purple:#7c3aed; --admin-purple-soft:#ede9fe; --admin-purple-fg:#5b21b6;
+    --admin-coral:#fb7185;  --admin-coral-soft:#ffe4e6;  --admin-coral-fg:#9f1239;
+    --admin-border:#e4e4e1; --admin-soft:#f1f1ef; --admin-surface:#fff;
+    --admin-muted:#5f5f5c; --admin-text:#1b1b1b; --admin-primary:#2f7fd1;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 90px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1320px; margin:0 auto; padding:0 20px; }
+
+  /* ---------- навигация документа ---------- */
+  .topnav{ position:sticky; top:0; z-index:60; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1320px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:600; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:86ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:var(--title-hero); margin:0 0 .3rem; }
+  .sect > h2 small{ font-weight:400; color:var(--color-fg-muted); font-size:.8rem; font-family:ui-monospace,Menlo,monospace; margin-left:.5rem; }
+  .sect > p{ margin:0 0 1.1rem; color:var(--color-fg-muted); max-width:86ch; }
+
+  /* ---------- «окно» экрана ---------- */
+  .frame{ background:#fff; border:1px solid var(--color-border-strong); border-radius:var(--radius-xl); box-shadow:var(--shadow-md); overflow:hidden; }
+  .frame__bar{ display:flex; align-items:center; gap:.5rem; padding:.5rem .9rem; background:var(--color-bg-soft); border-bottom:1px solid var(--color-border); font-size:.78rem; color:var(--color-fg-muted); }
+  .frame__dots{ display:flex; gap:5px; }
+  .frame__dots i{ width:9px; height:9px; border-radius:50%; background:var(--color-border-strong); display:block; }
+  .frame__url{ font-family:ui-monospace,Menlo,monospace; }
+  .frame__body{ padding:1.1rem 1.2rem 1.3rem; }
+
+  .ohead{ display:flex; align-items:center; gap:.7rem; flex-wrap:wrap; margin-bottom:.9rem; }
+  .ohead h3{ margin:0; font-size:var(--title-item); }
+  .ohead .muted{ color:var(--color-fg-muted); font-size:.85rem; }
+  .tabs{ display:flex; gap:.15rem; border-bottom:1px solid var(--color-border); margin-bottom:1rem; overflow-x:auto; }
+  .tabs span{ padding:.45rem .8rem; font-size:.85rem; color:var(--color-fg-muted); white-space:nowrap; border-bottom:2px solid transparent; }
+  .tabs span.is-active{ color:var(--color-fg); font-weight:700; border-bottom-color:var(--btn-primary-edge); }
+
+  .badge{ display:inline-flex; align-items:center; gap:.3rem; font-size:.72rem; font-weight:700; padding:.15rem .5rem; border-radius:var(--radius-pill); }
+  .badge--info{ background:var(--admin-blue-soft); color:var(--admin-blue-fg); }
+  .badge--ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .badge--warn{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+  .badge--muted{ background:var(--color-bg-muted); color:var(--color-fg-muted); }
+  .badge--danger{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+
+  .btn{ display:inline-flex; align-items:center; gap:.4rem; font:inherit; font-size:.85rem; font-weight:700;
+        padding:.4rem .8rem; border-radius:var(--radius-md); border:1px solid var(--color-border-strong);
+        background:#fff; color:var(--color-fg); cursor:pointer; }
+  .btn:hover{ background:var(--color-bg-soft); }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--primary:hover{ background:var(--btn-primary-bg-hover); }
+  .btn--ghost{ border-color:transparent; background:transparent; color:var(--color-fg-muted); }
+  .btn--ghost:hover{ background:var(--color-bg-muted); color:var(--color-fg); }
+  .btn[disabled]{ opacity:.45; cursor:not-allowed; }
+
+  /* =====================================================================
+     Цепочка маршрута — классы-близнецы .admin-route-step* из globals.css
+     ===================================================================== */
+  .chain{ list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; align-items:center; gap:6px 4px; }
+  .chain__sep{ color:var(--admin-muted); font-size:.85rem; padding:0 2px; user-select:none; }
+  .chain__sep--par{ display:inline-flex; align-items:center; color:var(--admin-primary); font-weight:700; }
+  .step{ display:inline-flex; align-items:center; gap:6px; height:28px; padding:0 10px 0 6px; border-radius:999px;
+         background:var(--admin-soft); color:var(--admin-text); font-size:.85rem; line-height:1;
+         border:1px solid var(--admin-border); white-space:nowrap; }
+  .step__num{ display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:18px; padding:0 5px;
+              border-radius:999px; background:var(--admin-surface); color:var(--admin-muted); font-size:.72rem; font-weight:700;
+              border:1px solid var(--admin-border); }
+  .step__icon{ display:inline-flex; align-items:center; color:var(--admin-muted); }
+  .step__name{ font-weight:700; }
+  .step--CUTTING{ background:var(--admin-orange-soft); color:var(--admin-orange-fg); border-color:transparent; }
+  .step--SEWING { background:var(--admin-blue-soft);   color:var(--admin-blue-fg);   border-color:transparent; }
+  .step--QC     { background:var(--admin-green-soft);  color:var(--admin-green-fg);  border-color:transparent; }
+  .step--IRONING{ background:#fde2e2;                  color:#9b1c1c;                border-color:transparent; }
+  .step--PACKING{ background:var(--admin-purple-soft); color:var(--admin-purple-fg); border-color:transparent; }
+  .step--CUTTING .step__icon,.step--SEWING .step__icon,.step--QC .step__icon,
+  .step--IRONING .step__icon,.step--PACKING .step__icon{ color:currentColor; }
+
+  .step--edit{ padding-left:2px; cursor:grab; }
+  .step--edit:active{ cursor:grabbing; }
+  .step__grip{ display:inline-flex; align-items:center; color:currentColor; opacity:.4; padding:0 1px 0 4px; }
+  .step--edit:hover .step__grip{ opacity:.9; }
+  .step__meta{ font-size:.7rem; opacity:.75; font-weight:400; font-variant-numeric:tabular-nums; }
+  .step__act{ display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border-radius:50%;
+              border:none; background:transparent; color:currentColor; opacity:.5; cursor:pointer; padding:0; font-size:.8rem; }
+  .step__act:hover{ opacity:1; background:rgba(255,255,255,.75); }
+  .step__act--on{ opacity:1; background:rgba(255,255,255,.9); color:var(--admin-primary); }
+  .step.is-ghost{ opacity:.32; }
+  .step.is-locked{ background:var(--color-bg-muted); color:var(--color-fg-subtle); border-color:var(--color-border); cursor:default; }
+  .step.is-locked .step__icon,.step.is-locked .step__name{ color:var(--color-fg-subtle); }
+  .step.is-new{ box-shadow:0 0 0 2px var(--btn-primary-bg); }
+  .step:focus-visible{ outline:2px solid var(--admin-blue); outline-offset:2px; }
+  .step__tag{ font-size:.62rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+              padding:.05rem .3rem; border-radius:var(--radius-sm); background:rgba(255,255,255,.75); }
+
+  /* ---------- холст + слоты ---------- */
+  .canvas{ min-height:110px; border-radius:var(--radius-md); background:var(--color-bg-soft);
+           border:1px dashed var(--color-border-strong); padding:.75rem .65rem; }
+  .lane{ display:flex; flex-wrap:wrap; align-items:center; gap:8px 2px; }
+  .slot{ display:inline-flex; align-items:center; justify-content:center; min-width:18px; height:28px;
+         color:var(--admin-muted); font-size:.85rem; user-select:none; border-radius:var(--radius-pill);
+         transition:min-width .14s ease, background .14s ease, color .14s; }
+  .slot__plus{ display:none; font-size:.72rem; font-weight:700; padding:0 .5rem; }
+  body.is-dragging .lane .slot{ min-width:46px; background:repeating-linear-gradient(45deg,#eef4fb,#eef4fb 6px,#e2ecf8 6px,#e2ecf8 12px);
+                                border:1px dashed var(--admin-blue); color:var(--admin-blue-fg); }
+  body.is-dragging .lane .slot .slot__arrow{ opacity:.35; }
+  .slot.is-over{ min-width:104px; background:var(--admin-blue); border-color:var(--admin-blue); color:#fff; box-shadow:var(--shadow-sm); }
+  .slot.is-over .slot__arrow{ display:none; }
+  .slot.is-over .slot__plus{ display:inline; }
+  body.is-dragging .lane .slot.is-locked{ background:repeating-linear-gradient(45deg,#fbe3e0,#fbe3e0 6px,#f7d4d0 6px,#f7d4d0 12px);
+                                          border-color:var(--color-danger); color:var(--color-danger-fg); cursor:not-allowed; }
+  .slot.is-locked.is-over{ background:var(--color-danger); border-color:var(--color-danger); color:#fff; }
+
+  .front{ display:inline-flex; align-items:center; gap:.35rem; height:28px; padding:0 .55rem; border-radius:var(--radius-pill);
+          background:var(--color-warn-soft); color:var(--color-warn-fg); font-size:.7rem; font-weight:700;
+          border:1px dashed var(--color-warn); white-space:nowrap; }
+
+  /* =====================================================================
+     Drawer «Изменить в производстве» — стили-близнецы .amend-* из
+     order-amendment-dialog.tsx
+     ===================================================================== */
+  .amend-stage{ position:relative; background:#f3f4f6; padding:22px 16px; }
+  .amend-stage::before{ content:''; position:absolute; inset:0; background:rgba(15,23,42,.45); }
+  .amend-window{ position:relative; background:#fff; border-radius:10px; width:100%;
+                 box-shadow:0 20px 50px rgba(15,23,42,.25); display:flex; flex-direction:column; margin:0 auto; }
+  .amend-window--narrow{ max-width:640px; }
+  .amend-window--wide{ max-width:1040px; }
+  .amend-header{ display:flex; justify-content:space-between; align-items:center; padding:14px 16px; border-bottom:1px solid #e2e8f0; }
+  .amend-header h2{ margin:0; font-size:1.05rem; color:#0f172a; display:flex; align-items:center; gap:.45rem; }
+  .amend-icon-btn{ background:transparent; border:none; cursor:pointer; padding:4px; border-radius:4px; color:#475569; font-size:1rem; }
+  .amend-icon-btn:hover{ background:#f1f5f9; }
+  .amend-tabs{ display:flex; gap:4px; padding:8px 16px 0; border-bottom:1px solid #e2e8f0; }
+  .amend-tab{ background:transparent; border:none; cursor:pointer; padding:8px 12px; font:inherit; font-size:.92rem; color:#475569;
+              border-bottom:2px solid transparent; border-radius:4px 4px 0 0; }
+  .amend-tab:hover{ background:#f8fafc; }
+  .amend-tab--active{ color:#0f172a; font-weight:700; border-bottom-color:#ffd23f; }
+  .amend-tab--new::after{ content:'новая'; margin-left:.4rem; font-size:.6rem; font-weight:700; text-transform:uppercase;
+                          letter-spacing:.04em; background:var(--color-ok-soft); color:var(--color-ok-fg);
+                          padding:.05rem .3rem; border-radius:var(--radius-sm); vertical-align:1px; }
+  .amend-body{ padding:16px; }
+  .amend-note{ display:flex; gap:6px; align-items:flex-start; font-size:.88rem; padding:8px 10px; border-radius:6px; margin-bottom:10px; }
+  .amend-note--info{ background:#eff6ff; color:#1e40af; }
+  .amend-note--warn{ background:#fffbeb; color:#92400e; }
+  .amend-note--bad{ background:#fef2f2; color:#b91c1c; }
+  .amend-foot{ margin-left:auto; font-size:.82rem; max-width:300px; text-align:right; color:var(--color-fg-muted); }
+
+  /* раскладка вкладки «Маршрут» внутри окна */
+  .builder{ display:grid; grid-template-columns:minmax(0,1fr) 272px; gap:14px; align-items:start; }
+  .builder--stacked{ grid-template-columns:minmax(0,1fr); }
+  @media (max-width:1000px){ .builder{ grid-template-columns:minmax(0,1fr); } }
+
+  .panel{ border:1px solid var(--color-border); border-radius:var(--radius-lg); background:#fff; }
+  .panel__head{ display:flex; align-items:center; justify-content:space-between; gap:.6rem; flex-wrap:wrap;
+                padding:.5rem .7rem; border-bottom:1px solid var(--color-border); }
+  .panel__title{ font-size:var(--title-subsection); font-weight:700; }
+  .panel__hint{ font-size:.76rem; color:var(--color-fg-muted); }
+  .panel__body{ padding:.75rem .7rem; }
+
+  .pool__search{ width:100%; font:inherit; font-size:.85rem; padding:.35rem .55rem; border:1px solid var(--color-border-strong);
+                 border-radius:var(--radius-sm); margin-bottom:.55rem; }
+  .pool__group{ margin-bottom:.6rem; }
+  .pool__group h4{ margin:0 0 .3rem; font-size:.72rem; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+                   color:var(--color-fg-subtle); display:flex; justify-content:space-between; }
+  .pool__items{ display:flex; flex-wrap:wrap; gap:5px; }
+  .pool .step{ cursor:grab; }
+  .pool .step:active{ cursor:grabbing; }
+  .pool.is-over{ outline:2px dashed var(--color-danger); outline-offset:4px; border-radius:var(--radius-md); }
+  .pool__drophint{ display:none; margin-top:.5rem; font-size:.76rem; color:var(--color-danger-fg); font-weight:700; }
+  body.is-dragging-route .pool__drophint{ display:block; }
+
+  .foot{ display:flex; align-items:center; gap:.7rem; flex-wrap:wrap; margin-top:.85rem; padding-top:.75rem;
+         border-top:1px solid var(--color-border); }
+  .totals{ display:flex; gap:1rem; flex-wrap:wrap; font-size:.82rem; }
+  .totals b{ font-variant-numeric:tabular-nums; }
+  .delta{ font-size:.72rem; font-weight:700; padding:.1rem .45rem; border-radius:var(--radius-pill);
+          background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .delta--up{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+  .foot__spacer{ flex:1 1 auto; }
+
+  .field{ display:flex; flex-direction:column; gap:.25rem; margin-top:.7rem; }
+  .field label{ font-size:var(--title-label); font-weight:700; }
+  .field input[type=text]{ font:inherit; font-size:.85rem; padding:.4rem .55rem; border:1px solid var(--color-border-strong);
+                           border-radius:var(--radius-sm); }
+
+  .changes{ margin-top:.8rem; border:1px solid var(--color-border); border-radius:var(--radius-md); background:var(--color-bg-soft); }
+  .changes h5{ margin:0; padding:.45rem .65rem; font-size:.75rem; text-transform:uppercase; letter-spacing:.04em;
+               color:var(--color-fg-subtle); border-bottom:1px solid var(--color-border); }
+  .changes ul{ list-style:none; margin:0; padding:.45rem .65rem; display:flex; flex-direction:column; gap:.3rem; font-size:.83rem; }
+  .changes li{ display:flex; align-items:center; gap:.4rem; }
+  .changes li .badge{ flex:0 0 auto; }
+  .changes__empty{ padding:.55rem .65rem; font-size:.83rem; color:var(--color-fg-subtle); }
+
+  .toast{ position:fixed; left:50%; bottom:26px; transform:translate(-50%,14px); z-index:80;
+          background:var(--color-danger); color:#fff; font-size:.85rem; font-weight:700; padding:.55rem .9rem;
+          border-radius:var(--radius-pill); box-shadow:var(--shadow-md); opacity:0; pointer-events:none; transition:.18s; }
+  .toast.is-on{ opacity:1; transform:translate(-50%,0); }
+
+  .grid2{ display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px; }
+  .card{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.9rem 1rem; }
+  .card h4{ margin:0 0 .5rem; font-size:var(--title-section); }
+  .card p{ margin:0 0 .5rem; font-size:.85rem; color:var(--color-fg-muted); }
+  .kv{ display:grid; grid-template-columns:auto 1fr; gap:.35rem .7rem; font-size:.83rem; align-items:center; }
+  .kv dt{ color:var(--color-fg-muted); }
+  .kv dd{ margin:0; }
+  kbd{ font-family:ui-monospace,Menlo,monospace; font-size:.75rem; background:var(--color-bg-muted);
+       border:1px solid var(--color-border-strong); border-bottom-width:2px; border-radius:var(--radius-sm); padding:.05rem .3rem; }
+  code{ font-family:ui-monospace,Menlo,monospace; font-size:.8rem; background:var(--color-bg-muted); padding:.05rem .3rem; border-radius:var(--radius-sm); }
+  .list{ margin:.2rem 0 0; padding-left:1.1rem; font-size:.85rem; color:var(--color-fg-muted); }
+  .list li{ margin-bottom:.35rem; }
+  .list b{ color:var(--color-fg); }
+
+  table.mini{ width:100%; border-collapse:collapse; font-size:.83rem; }
+  table.mini th{ text-align:left; color:var(--color-fg-muted); font-size:.7rem; font-weight:700; padding:.3rem 6px; }
+  table.mini td{ padding:.3rem 6px; border-top:1px solid var(--color-border); }
+  table.mini .num{ text-align:right; font-variant-numeric:tabular-nums; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__in">
+    <span class="topnav__brand">Изменить в производстве → Маршрут</span>
+    <a href="#s1">Разделение ролей</a>
+    <a href="#s2">Вход</a>
+    <a href="#s3">Конструктор</a>
+    <a href="#s4">Узкое окно</a>
+    <a href="#s5">Правила</a>
+    <a href="#s6">Состояния</a>
+    <a href="#s7">Дельта по коду</a>
+  </div>
+</nav>
+
+<div class="doc">
+
+  <section class="intro">
+    <h1>Маршрут правится там же, где количество и размерность</h1>
+    <p>Вкладка <b>«Операции»</b> в карточке заказа остаётся ведомостью: расценки, нормы времени, план/факт по каждой
+      операции — нормирование и оценка. Её не трогаем.</p>
+    <p>Состав и порядок маршрута переезжают в drawer <b>«Изменить в производстве»</b> — туда же, где уже живут
+      «Количество» и «Размерность». Вкладка <b>«Операция»</b> с двумя селектами («какую» + «после шага N») заменяется
+      вкладкой <b>«Маршрут»</b> с живой цепочкой: операции перетаскиваются из палитры, переставляются внутри цепочки
+      и выбрасываются обратно. Цепочка рисуется тем же компонентом, что на <code>/admin/routes</code>.</p>
+
+    <div class="principles">
+      <div class="principle"><b>Одна дверь на все правки</b><span>Количество, размерность, маршрут — один drawer, одна причина правки, одна запись в журнале.</span></div>
+      <div class="principle"><b>Операции не трогаем</b><span>Ведомость с ценами и нормами остаётся как есть: там считают деньги и время, а не двигают шаги.</span></div>
+      <div class="principle"><b>Позиция — это место</b><span>Куда бросил, туда и встало. Слот вставки подсвечивается прямо между чипами, вместо «после шага 4» в селекте.</span></div>
+      <div class="principle"><b>Фронт видно глазами</b><span>Пройденное — серое с замком, слева от фронта drop не принимается. Гейт в холсте, а не в тексте 409-й ошибки.</span></div>
+    </div>
+  </section>
+
+  <!-- ================= 1. разделение ролей ================= -->
+  <section class="sect" id="s1">
+    <h2>1. Что где живёт</h2>
+    <p>Два экрана — две разные задачи. Раньше они были перепутаны: порядок шагов нельзя было изменить нигде, а добавление
+      операции жило отдельно от всего остального.</p>
+    <div class="grid2">
+      <div class="card">
+        <h4>Вкладка «Операции» — нормирование и оценка <span class="badge badge--muted">без изменений</span></h4>
+        <p>Сколько стоит, сколько времени, сколько сделано. Правится способ оплаты, расценка, норма — как сейчас.</p>
+        <table class="mini">
+          <thead><tr><th>№</th><th>Операция</th><th>Статус</th><th class="num">План</th><th class="num">Цена</th><th class="num">Норма</th></tr></thead>
+          <tbody id="ops-rows"></tbody>
+        </table>
+        <p style="margin:.6rem 0 0; font-size:.8rem;">Кнопка «Редактировать маршрут заказа» здесь остаётся — но правит
+          только цены и нормы, поэтому её честнее назвать <b>«Редактировать расценки и нормы»</b>.</p>
+      </div>
+      <div class="card">
+        <h4>Drawer «Изменить в производстве» → «Маршрут» <span class="badge badge--ok">новое</span></h4>
+        <p>Какие операции и в каком порядке. Всё, что меняет форму маршрута, — здесь.</p>
+        <ul class="list">
+          <li><b>Количество</b> — плановый тираж по размерам <span class="badge badge--muted">есть</span></li>
+          <li><b>Размерность</b> — добавить/убрать размер <span class="badge badge--muted">есть</span></li>
+          <li><b>Маршрут</b> — состав и порядок операций <span class="badge badge--ok">вместо вкладки «Операция»</span></li>
+        </ul>
+        <p style="margin:.7rem 0 0;">Общее для всех трёх вкладок: обязательная причина, пересчёт плана, запись в журнал
+          правок заказа.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. вход ================= -->
+  <section class="sect" id="s2">
+    <h2>2. Вход — там же, где и был <small>вкладка «Производство» карточки заказа</small></h2>
+    <p>Точка входа не меняется: кнопка «Изменить в производстве» в шапке карточки «Производство по размерам».</p>
+    <div class="frame">
+      <div class="frame__bar"><span class="frame__dots"><i></i><i></i><i></i></span><span class="frame__url">/admin/orders/01-00042 · вкладка «Производство»</span></div>
+      <div class="frame__body">
+        <div class="ohead">
+          <h3>Заказ 01-00042</h3><span class="badge badge--ok">В производстве</span>
+          <span class="muted">Футболка базовая · 240 шт · ООО «Ромашка»</span>
+        </div>
+        <div class="tabs"><span>Основное</span><span>Операции</span><span>Материалы</span><span>Паспорта</span><span class="is-active">Производство</span><span>История</span></div>
+        <div class="panel">
+          <div class="panel__head">
+            <span class="panel__title">Производство по размерам</span>
+            <button class="btn" onclick="document.getElementById('s3').scrollIntoView({behavior:'smooth'})">⚙ Изменить в производстве</button>
+          </div>
+          <div class="panel__body">
+            <ol class="chain" id="prod-chain"></ol>
+            <p class="panel__hint" style="margin:.7rem 0 0;">Маршрут заказа · 7 операций · пройдено 96 из 240 шт</p>
+          </div>
+        </div>
+        <p style="margin:.9rem 0 0; font-size:.82rem; color:var(--color-fg-muted);">
+          Здесь же полезно показать цепочку read-only — тот же <code>AdminRouteSteps</code>, что и в справочнике маршрутов:
+          менеджер видит форму маршрута до того, как открыл окно правки.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 3. конструктор ================= -->
+  <section class="sect" id="s3">
+    <h2>3. Drawer, вкладка «Маршрут» <small>окно расширяется до 1040px на этой вкладке</small></h2>
+    <p><b>Макет живой.</b> Тащите чипы: из палитры справа — в цепочку, внутри цепочки — для перестановки, обратно в
+      палитру — чтобы убрать. Серые шаги с замком — пройденные, они не двигаются; слоты левее фронта не принимают drop.</p>
+
+    <div class="frame">
+      <div class="frame__bar"><span class="frame__dots"><i></i><i></i><i></i></span><span class="frame__url">/admin/orders/01-00042 · Производство → Изменить в производстве</span></div>
+      <div class="amend-stage">
+        <div class="amend-window amend-window--wide">
+          <header class="amend-header">
+            <h2>⚙ Изменить заказ в производстве</h2>
+            <button class="amend-icon-btn" aria-label="Закрыть">✕</button>
+          </header>
+          <div class="amend-tabs" role="tablist">
+            <button class="amend-tab" role="tab">Количество</button>
+            <button class="amend-tab" role="tab">Размерность</button>
+            <button class="amend-tab amend-tab--active amend-tab--new" role="tab" aria-selected="true">Маршрут</button>
+          </div>
+          <div class="amend-body">
+            <div class="amend-note amend-note--warn">
+              <span>⚠️</span><span>Маршрут меняется <b>только впереди фронта производства</b>: шаги, которые уже прошёл или
+              проходит хотя бы один паспорт, заморожены. Уже сделанную работу правка не трогает.</span>
+            </div>
+
+            <div class="builder" data-builder="wide">
+              <div class="panel">
+                <div class="panel__head">
+                  <span class="panel__title">Маршрут заказа</span>
+                  <span class="panel__hint">перетащите операцию в нужное место цепочки</span>
+                </div>
+                <div class="panel__body">
+                  <div class="canvas"><div class="lane" data-lane="wide"></div></div>
+
+                  <div class="changes" data-changes="wide"></div>
+
+                  <div class="field">
+                    <label for="reason-wide">Причина правки *</label>
+                    <input id="reason-wide" type="text" placeholder="Например: клиент попросил добавить ОТК перед упаковкой" />
+                  </div>
+
+                  <div class="foot">
+                    <div class="totals">
+                      <span>Операций: <b data-total="count">7</b></span>
+                      <span>План: <b data-total="rate">34,50 ₽/шт</b> <span class="delta" data-total="rateDelta" hidden></span></span>
+                      <span>Время: <b data-total="time">12 мин 30 с</b> <span class="delta" data-total="timeDelta" hidden></span></span>
+                    </div>
+                    <span class="foot__spacer"></span>
+                    <button class="btn btn--ghost" data-act="reset">Вернуть как было</button>
+                    <button class="btn btn--ghost">Отмена</button>
+                    <button class="btn btn--primary">Сохранить маршрут</button>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel pool" data-pool="wide">
+                <div class="panel__head"><span class="panel__title">Операции справочника</span><span class="panel__hint" data-pool-count>8</span></div>
+                <div class="panel__body">
+                  <input class="pool__search" type="search" placeholder="Поиск операции…" data-search="wide" />
+                  <div data-pool-groups="wide"></div>
+                  <div class="pool__drophint">⤺ Бросьте сюда, чтобы убрать операцию из маршрута</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid2" style="margin-top:14px;">
+      <div class="card">
+        <h4>Что происходит при перетаскивании</h4>
+        <ul class="list">
+          <li><b>Стрелка → превращается в слот.</b> В покое между чипами обычная стрелка цепочки. Как только операцию захватили, каждая стрелка становится приёмником, а под курсором раскрывается в синюю пилюлю «вставить сюда».</li>
+          <li><b>Чип едет как есть.</b> Перетаскиваемый шаг остаётся на месте призраком — видно, откуда он уходит.</li>
+          <li><b>Удаление = вернуть в палитру.</b> Пока тащим шаг из цепочки, палитра обводится красным пунктиром: «бросьте, чтобы убрать». Дублирующий способ — крестик на чипе.</li>
+          <li><b>Параллельные.</b> Кнопка ⇄ связывает шаг с предыдущим: разделитель между ними меняется с → на ⇄, порядок внутри группы любой.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Сводка правки — то, что уйдёт в журнал</h4>
+        <p>Под цепочкой копится человекочитаемый список изменений: он же станет текстом записи в журнале правок и телом
+          запроса на сервер. Менеджер видит, что именно он сохранит, до нажатия кнопки.</p>
+        <dl class="kv">
+          <dt>Добавлено</dt><dd>«Киперка» после «Распошив»</dd>
+          <dt>Убрано</dt><dd>«ВТО» — ни один паспорт до неё не дошёл</dd>
+          <dt>Переставлено</dt><dd>«ОТК» — шаг 5 → шаг 6</dd>
+          <dt>Причина</dt><dd>обязательна, как и в остальных вкладках drawer-а</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 4. узкое окно ================= -->
+  <section class="sect" id="s4">
+    <h2>4. Узкое окно и планшет <small>640px — текущая ширина drawer-а</small></h2>
+    <p>Если расширять окно не хочется (или экран узкий), палитра уезжает под цепочку в раскрывающийся блок, а
+      перетаскивание дублируется стрелками — как в форме шаблона маршрута. Этот вариант тоже живой.</p>
+
+    <div class="frame">
+      <div class="frame__bar"><span class="frame__dots"><i></i><i></i><i></i></span><span class="frame__url">то же окно, ширина 640px</span></div>
+      <div class="amend-stage">
+        <div class="amend-window amend-window--narrow">
+          <header class="amend-header">
+            <h2>⚙ Изменить заказ в производстве</h2>
+            <button class="amend-icon-btn" aria-label="Закрыть">✕</button>
+          </header>
+          <div class="amend-tabs" role="tablist">
+            <button class="amend-tab" role="tab">Количество</button>
+            <button class="amend-tab" role="tab">Размерность</button>
+            <button class="amend-tab amend-tab--active" role="tab" aria-selected="true">Маршрут</button>
+          </div>
+          <div class="amend-body">
+            <div class="builder builder--stacked" data-builder="narrow">
+              <div class="panel">
+                <div class="panel__head">
+                  <span class="panel__title">Маршрут заказа</span>
+                  <span class="panel__hint">🔒 3 шага заморожены</span>
+                </div>
+                <div class="panel__body">
+                  <div class="canvas"><div class="lane" data-lane="narrow"></div></div>
+                  <div class="changes" data-changes="narrow"></div>
+                  <div class="foot">
+                    <div class="totals">
+                      <span>План: <b data-total="rate">34,50 ₽/шт</b> <span class="delta" data-total="rateDelta" hidden></span></span>
+                      <span>Время: <b data-total="time">12 мин 30 с</b> <span class="delta" data-total="timeDelta" hidden></span></span>
+                      <span hidden><b data-total="count"></b></span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div class="panel pool" data-pool="narrow">
+                <div class="panel__head"><span class="panel__title">＋ Добавить операцию</span><span class="panel__hint" data-pool-count>8</span></div>
+                <div class="panel__body">
+                  <input class="pool__search" type="search" placeholder="Поиск операции…" data-search="narrow" />
+                  <div data-pool-groups="narrow"></div>
+                  <div class="pool__drophint">⤺ Бросьте сюда, чтобы убрать операцию из маршрута</div>
+                </div>
+              </div>
+            </div>
+
+            <div class="field">
+              <label for="reason-narrow">Причина правки *</label>
+              <input id="reason-narrow" type="text" placeholder="Например: клиент попросил добавить ОТК перед упаковкой" />
+            </div>
+            <div class="foot">
+              <button class="btn btn--primary">Сохранить маршрут</button>
+              <button class="btn btn--ghost" data-act="reset">Вернуть как было</button>
+              <span class="amend-foot">Пересчитает плановую стоимость и время. Расценку новой операции можно уточнить во вкладке «Операции».</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 5. правила ================= -->
+  <section class="sect" id="s5">
+    <h2>5. Правила фронта — что можно, что нельзя</h2>
+    <div class="grid2">
+      <div class="card">
+        <h4>Заморожено</h4>
+        <ul class="list">
+          <li><b>Шаг прошёл хотя бы один паспорт</b> — серый чип с замком: не двигается, не удаляется, вставить перед ним нельзя.</li>
+          <li><b>Текущий шаг фронта</b> — там, где сейчас работают. Вставка допускается только после него.</li>
+          <li>Попытка бросить левее фронта — красный слот и короткий тост «Сюда нельзя: шаг уже проходят паспорта». Ошибку видно <b>до</b> действия, а не из ответа сервера.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Разрешено впереди фронта</h4>
+        <ul class="list">
+          <li><b>Вставить операцию</b> <span class="badge badge--ok">сделано</span> — <code>PUT /orders/:id/amendments/route</code>.</li>
+          <li><b>Переставить шаг</b> <span class="badge badge--ok">сделано</span> — только среди шагов, которых никто не достиг.</li>
+          <li><b>Убрать шаг</b> <span class="badge badge--ok">сделано</span> — только если по операции нет ни одной записи выработки (иначе 409 <code>AMENDMENT_ROUTE_STEP_HAS_WORK</code>).</li>
+          <li><b>Связать в параллельную группу</b> <span class="badge badge--ok">сделано</span> — <code>parallelGroup</code> проставляется обоим шагам пары.</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 6. состояния ================= -->
+  <section class="sect" id="s6">
+    <h2>6. Состояния чипа и слота</h2>
+    <div class="grid2">
+      <div class="card">
+        <h4>Чип операции</h4>
+        <div style="display:flex; flex-direction:column; gap:.55rem; margin-top:.4rem;">
+          <div style="display:flex; align-items:center; gap:.6rem;"><span id="st-lock"></span><span class="panel__hint">заморожен: паспорта прошли или проходят</span></div>
+          <div style="display:flex; align-items:center; gap:.6rem;"><span id="st-edit"></span><span class="panel__hint">впереди фронта: ручка + ⇄ + ✕</span></div>
+          <div style="display:flex; align-items:center; gap:.6rem;"><span id="st-ghost"></span><span class="panel__hint">призрак: этот шаг сейчас тащат</span></div>
+          <div style="display:flex; align-items:center; gap:.6rem;"><span id="st-new"></span><span class="panel__hint">добавлен, ещё не сохранён</span></div>
+          <div style="display:flex; align-items:center; gap:.6rem;"><span id="st-plain"></span><span class="panel__hint">просмотр (цепочка read-only)</span></div>
+        </div>
+      </div>
+      <div class="card">
+        <h4>Слот вставки</h4>
+        <div style="display:flex; flex-direction:column; gap:.7rem; margin-top:.4rem;">
+          <div style="display:flex; align-items:center; gap:.6rem;"><span class="slot" style="min-width:18px;"><span class="slot__arrow">→</span></span><span class="panel__hint">покой — обычный разделитель цепочки</span></div>
+          <div style="display:flex; align-items:center; gap:.6rem;"><span class="slot" style="min-width:46px; background:repeating-linear-gradient(45deg,#eef4fb,#eef4fb 6px,#e2ecf8 6px,#e2ecf8 12px); border:1px dashed var(--admin-blue); color:var(--admin-blue-fg);"><span class="slot__arrow" style="opacity:.35">→</span></span><span class="panel__hint">идёт перетаскивание — слот доступен</span></div>
+          <div style="display:flex; align-items:center; gap:.6rem;"><span class="slot is-over" style="min-width:104px;"><span class="slot__plus" style="display:inline;">вставить сюда</span></span><span class="panel__hint">курсор над слотом</span></div>
+          <div style="display:flex; align-items:center; gap:.6rem;"><span class="slot" style="min-width:46px; background:repeating-linear-gradient(45deg,#fbe3e0,#fbe3e0 6px,#f7d4d0 6px,#f7d4d0 12px); border:1px dashed var(--color-danger); color:var(--color-danger-fg);"><span class="slot__arrow">✕</span></span><span class="panel__hint">запрещено: позиция за фронтом</span></div>
+          <div style="display:flex; align-items:center; gap:.6rem;"><span class="front">▌фронт производства</span><span class="panel__hint">граница: левее — история, правее — план</span></div>
+        </div>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <h4>Клавиатура (работает в макетах выше)</h4>
+      <dl class="kv" style="grid-template-columns:auto auto 1fr; column-gap:1.2rem;">
+        <dt><kbd>Tab</kbd></dt><dd>перейти к чипу впереди фронта</dd><dd></dd>
+        <dt><kbd>Alt</kbd> + <kbd>←</kbd>/<kbd>→</kbd></dt><dd>переставить шаг</dd><dd></dd>
+        <dt><kbd>Alt</kbd> + <kbd>P</kbd></dt><dd>связать/развязать с предыдущим</dd><dd></dd>
+        <dt><kbd>Delete</kbd></dt><dd>убрать шаг</dd><dd></dd>
+        <dt><kbd>Enter</kbd> в палитре</dt><dd>добавить операцию в конец</dd><dd></dd>
+      </dl>
+      <p style="margin-top:.6rem;">Каждое действие озвучивается в <code>aria-live</code>: «Киперка — шаг 5 из 8».</p>
+    </div>
+  </section>
+
+  <!-- ================= 7. дельта по коду ================= -->
+  <section class="sect" id="s7">
+    <h2>7. Что это значит по коду</h2>
+    <div class="grid2">
+      <div class="card">
+        <h4>Переиспользуем как есть</h4>
+        <ul class="list">
+          <li><b>Оболочка drawer-а</b> — <code>order-amendment-dialog.tsx</code>: overlay, шапка, вкладки, причина. Меняется вкладка <code>'ops'</code>: «Операция» → «Маршрут», содержимое — новый холст вместо двух селектов.</li>
+          <li><b>Цепочка</b> — <code>AdminRouteSteps</code> и CSS <code>.admin-route-step*</code>: номер, иконка и цвет категории, → и ⇄.</li>
+          <li><b>Палитра</b> — <code>groupOperationsByCategory</code> из <code>@sewing/shared/operations</code> плюс <code>availableOperations</code>, который уже приходит в <code>OperationAmendmentStateDto</code>.</li>
+          <li><b>Фронт</b> — флаг <code>ahead</code> у шагов в том же DTO: он уже считается, просто рисуем его вместо того, чтобы фильтровать им список в селекте.</li>
+          <li><b>Вкладка «Операции»</b> — не трогаем вовсе.</li>
+        </ul>
+      </div>
+      <div class="card">
+        <h4>Что дописали <span class="badge badge--ok">реализовано</span></h4>
+        <ul class="list">
+          <li><b>Компонент</b> <code>route-amendment-tab.tsx</code> вместо <code>operation-amendment-tab.tsx</code>: холст + DnD + клавиатура + локальный пересчёт Δ.</li>
+          <li><b>Ширина окна</b>: <code>.amend-window--wide</code> (640 → 1040px) включается только на вкладке «Маршрут»; на узком экране раскладка складывается сама (см. §4).</li>
+          <li><b>Батч-ручка</b> <code>PUT /orders/:id/amendments/route</code>: тело — весь целевой маршрут, дельту и инварианты считает чистый <code>planRouteAmendment</code> в shared (13 unit-тестов).</li>
+          <li><b>Одна причина на пакет правок</b> + одна запись в журнале (<code>ORDER_ROUTE_AMENDED</code>) с готовой сводкой.</li>
+          <li><b>Фронт перечитывается внутри транзакции</b>: если он уехал, пока собирали маршрут, — 409 <code>AMENDMENT_ROUTE_FRONTIER_CHANGED</code> вместо порчи индексов.</li>
+        </ul>
+      </div>
+    </div>
+    <div class="card" style="margin-top:14px;">
+      <h4>Открытый вопрос</h4>
+      <p style="margin:0;">Drawer монтируется только в <code>IN_PRODUCTION</code>. До запуска производства состав маршрута
+        по-прежнему задаётся выбором шаблона — отдельного места, где менеджер соберёт маршрут заказа «с нуля», не появится.
+        Если это нужно, тот же холст ставится во вкладку «Основное» карточки на статусах DRAFT/CALCULATION — компонент
+        один, отличаются только права (нет фронта, можно всё).</p>
+    </div>
+  </section>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ------------------------------------------------------------------ данные */
+const CAT_LABEL = { CUTTING:'Раскрой', SEWING:'Пошив', QC:'ОТК', IRONING:'ВТО', PACKING:'Упаковка' };
+const CAT_ORDER = ['CUTTING','SEWING','QC','IRONING','PACKING'];
+
+/* контуры иконок — как в AdminRouteSteps (lucide) */
+const ICON = {
+  CUTTING:'<circle cx="6" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><line x1="20" y1="4" x2="8.12" y2="15.88"/><line x1="14.47" y1="14.48" x2="20" y2="20"/><line x1="8.12" y1="8.12" x2="12" y2="12"/>',
+  SEWING:'<polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/>',
+  QC:'<path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/>',
+  IRONING:'<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.07-2.14-.22-4.05 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.15.43-2.29 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+  PACKING:'<path d="m7.5 4.27 9 5.15"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/>'
+};
+const svg = (cat) => `<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${ICON[cat]||ICON.SEWING}</svg>`;
+
+/* операции — из apps/api/src/modules/bootstrap/reference-data.ts */
+const OPS = [
+  { code:'CUT_PATTERN_PRINT', name:'Печать лекал',      cat:'CUTTING', rate:0,    sec:0   },
+  { code:'CUT_SPREADING',     name:'Настил',            cat:'CUTTING', rate:0,    sec:45  },
+  { code:'CUT_CUT',           name:'Раскрой',           cat:'CUTTING', rate:12,   sec:120 },
+  { code:'CUT_RECUT',         name:'Подкрой',           cat:'CUTTING', rate:0,    sec:60  },
+  { code:'CUT_DIVISION',      name:'Деление кроя',      cat:'CUTTING', rate:0,    sec:30  },
+  { code:'CUT_BASE_PREP',     name:'Подготовка основы', cat:'CUTTING', rate:0,    sec:40  },
+  { code:'CUT_RIBANA_PREP',   name:'Подготовка рибаны', cat:'CUTTING', rate:0,    sec:35  },
+  { code:'CUT_ISSUE',         name:'Выдача кроя',       cat:'SEWING',  rate:0,    sec:20  },
+  { code:'SEW_OVERLOCK_1',    name:'Оверлок 1',         cat:'SEWING',  rate:8,    sec:150 },
+  { code:'SEW_OVERLOCK_2',    name:'Оверлок 2',         cat:'SEWING',  rate:7.5,  sec:140 },
+  { code:'SEW_BINDING',       name:'Киперка',           cat:'SEWING',  rate:9,    sec:110 },
+  { code:'SEW_COVERSTITCH',   name:'Распошив',          cat:'SEWING',  rate:13.5, sec:180 },
+  { code:'QC',                name:'ОТК',               cat:'QC',      rate:1.5,  sec:60  },
+  { code:'WTO',               name:'ВТО',               cat:'IRONING', rate:0,    sec:50  },
+  { code:'PACKING',           name:'Упаковка',          cat:'PACKING', rate:0,    sec:45  },
+];
+const byCode = Object.fromEntries(OPS.map(o => [o.code, o]));
+
+const BASE_ROUTE = [
+  { code:'CUT_CUT' }, { code:'CUT_ISSUE' }, { code:'SEW_OVERLOCK_1' },
+  { code:'SEW_COVERSTITCH' }, { code:'QC' }, { code:'WTO' }, { code:'PACKING' },
+];
+/* сколько шагов заморожено фронтом: индексы 0..FROZEN-1 */
+const FROZEN = 3;
+
+/* статусы для ведомости «Операции» */
+const OPS_STATUS = ['Выполнено','Выполнено','В работе','Ожидает','Ожидает','Ожидает','Ожидает'];
+
+/* ------------------------------------------------------- вспомогательное UI */
+const clone = (a) => a.map(s => ({ ...s }));
+const fmtRub = (v) => v.toLocaleString('ru-RU',{minimumFractionDigits:2, maximumFractionDigits:2}) + ' ₽/шт';
+const fmtSec = (s) => s >= 60 ? `${Math.floor(s/60)} мин ${s%60 ? (s%60)+' с' : ''}`.trim() : `${s} с`;
+
+let toastTimer = null;
+function toast(text, bad = true){
+  const el = document.getElementById('toast');
+  el.textContent = text;
+  el.style.background = bad ? 'var(--color-danger)' : 'var(--color-fg-strong)';
+  el.classList.add('is-on');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => el.classList.remove('is-on'), 1900);
+}
+
+function chipHtml(op, num, opts = {}){
+  const cls = ['step','step--' + op.cat];
+  if (opts.edit) cls.push('step--edit');
+  if (opts.locked) cls.push('is-locked');
+  if (opts.ghost) cls.push('is-ghost');
+  if (opts.isNew) cls.push('is-new');
+  const grip = opts.edit ? '<span class="step__grip">⠿</span>' : '';
+  const lock = opts.locked ? '<span class="step__icon" title="Шаг прошли или проходят паспорта — изменение недоступно">🔒</span>' : '';
+  const meta = opts.meta && op.rate ? `<span class="step__meta">${op.rate} ₽</span>` : '';
+  const tag  = opts.isNew ? '<span class="step__tag">новая</span>' : '';
+  const acts = opts.edit
+    ? `<button class="step__act${opts.par ? ' step__act--on' : ''}" data-act="par" title="Параллельно с предыдущим шагом">⇄</button>
+       <button class="step__act" data-act="del" title="Убрать из маршрута">✕</button>` : '';
+  return `<span class="${cls.join(' ')}" ${opts.edit ? 'draggable="true" tabindex="0"' : ''}>
+    ${grip}<span class="step__num">${num}</span>${lock}
+    <span class="step__icon">${svg(op.cat)}</span>
+    <span class="step__name">${op.name}</span>${meta}${tag}${acts}</span>`;
+}
+
+function renderStaticChain(elId, route, opts = {}){
+  const el = document.getElementById(elId);
+  if (!el) return;
+  el.innerHTML = route.map((s, i) => {
+    const op = byCode[s.code];
+    const sep = i < route.length - 1
+      ? (route[i+1].par ? '<span class="chain__sep chain__sep--par">⇄</span>' : '<span class="chain__sep">→</span>')
+      : '';
+    return `<li style="display:inline-flex; align-items:center; gap:4px;">${chipHtml(op, i+1, opts)}${sep}</li>`;
+  }).join('');
+}
+
+/* =====================================================================
+   Конструктор маршрута внутри drawer-а
+   ===================================================================== */
+class RouteBuilder {
+  constructor(key){
+    this.key = key;
+    this.route = clone(BASE_ROUTE);
+    this.base = clone(BASE_ROUTE);
+    this.lane = document.querySelector(`[data-lane="${key}"]`);
+    this.pool = document.querySelector(`[data-pool="${key}"]`);
+    this.poolGroups = document.querySelector(`[data-pool-groups="${key}"]`);
+    this.search = document.querySelector(`[data-search="${key}"]`);
+    this.changes = document.querySelector(`[data-changes="${key}"]`);
+    this.builderEl = document.querySelector(`[data-builder="${key}"]`);
+    this.drag = null;
+    this.query = '';
+    this.bind();
+    this.render();
+  }
+
+  /* левее этого индекса вставлять нельзя — там фронт производства */
+  get minSlot(){ return FROZEN; }
+  isFrozen(i){ return i < FROZEN; }
+
+  bind(){
+    this.search.addEventListener('input', (e) => { this.query = e.target.value.trim().toLowerCase(); this.renderPool(); });
+    const reset = this.builderEl.parentElement.querySelector('[data-act="reset"]');
+    if (reset) reset.addEventListener('click', () => { this.route = clone(this.base); this.render(); toast('Маршрут возвращён к сохранённому', false); });
+
+    this.pool.addEventListener('dragover', (e) => {
+      if (!this.drag || this.drag.source !== 'route') return;
+      e.preventDefault(); this.pool.classList.add('is-over');
+    });
+    this.pool.addEventListener('dragleave', () => this.pool.classList.remove('is-over'));
+    this.pool.addEventListener('drop', (e) => {
+      this.pool.classList.remove('is-over');
+      if (!this.drag || this.drag.source !== 'route') return;
+      e.preventDefault();
+      this.removeAt(this.drag.index);
+    });
+  }
+
+  render(){ this.renderLane(); this.renderPool(); this.renderTotals(); this.renderChanges(); }
+
+  renderLane(){
+    const frag = [];
+    frag.push(this.slotHtml(0));
+    this.route.forEach((s, i) => {
+      const op = byCode[s.code];
+      const frozen = this.isFrozen(i);
+      frag.push(chipHtml(op, i + 1, {
+        edit: !frozen, locked: frozen, par: !!s.par, isNew: !!s.isNew, meta: true,
+      }).replace('<span class="step ', `<span data-index="${i}" class="step `));
+      if (i === FROZEN - 1){
+        frag.push('<span class="front" title="Фронт производства: сюда уже дошли паспорта">▌фронт</span>');
+      }
+      const parNext = this.route[i+1] && this.route[i+1].par;
+      frag.push(parNext ? `<span class="chain__sep chain__sep--par" title="Параллельные операции: порядок любой">⇄</span>`
+                        : this.slotHtml(i + 1));
+    });
+    this.lane.innerHTML = frag.join('');
+
+    this.lane.querySelectorAll('.step[data-index]').forEach((el) => {
+      const i = Number(el.dataset.index);
+      el.addEventListener('dragstart', (e) => {
+        this.drag = { source:'route', code:this.route[i].code, index:i };
+        document.body.classList.add('is-dragging','is-dragging-route');
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', this.route[i].code);
+        setTimeout(() => el.classList.add('is-ghost'), 0);
+      });
+      el.addEventListener('dragend', () => this.endDrag());
+      el.addEventListener('keydown', (e) => this.onKey(e, i));
+      el.querySelectorAll('[data-act]').forEach((btn) => {
+        btn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          if (btn.dataset.act === 'del') this.removeAt(i); else this.toggleParallel(i);
+        });
+      });
+    });
+
+    this.lane.querySelectorAll('.slot').forEach((el) => {
+      const at = Number(el.dataset.at);
+      el.addEventListener('dragover', (e) => {
+        if (!this.drag) return;
+        if (at < this.minSlot){ el.classList.add('is-over'); e.dataTransfer.dropEffect = 'none'; return; }
+        e.preventDefault(); el.classList.add('is-over');
+        e.dataTransfer.dropEffect = this.drag.source === 'pool' ? 'copy' : 'move';
+      });
+      el.addEventListener('dragleave', () => el.classList.remove('is-over'));
+      el.addEventListener('drop', (e) => {
+        el.classList.remove('is-over');
+        if (!this.drag) return;
+        e.preventDefault();
+        if (at < this.minSlot){ toast('Сюда нельзя: шаг уже проходят паспорта'); return; }
+        this.dropAt(at);
+      });
+    });
+  }
+
+  slotHtml(at){
+    const locked = at < this.minSlot;
+    return `<span class="slot${locked ? ' is-locked' : ''}" data-at="${at}">
+      <span class="slot__arrow">${locked ? '✕' : (at === this.route.length ? '＋' : '→')}</span>
+      <span class="slot__plus">${locked ? 'нельзя' : 'вставить сюда'}</span></span>`;
+  }
+
+  renderPool(){
+    const used = new Set(this.route.map(s => s.code));
+    const pool = OPS.filter(o => !used.has(o.code))
+                    .filter(o => !this.query || o.name.toLowerCase().includes(this.query));
+    this.builderEl.querySelector('[data-pool-count]').textContent = pool.length;
+    const groups = CAT_ORDER.map(cat => ({ cat, items: pool.filter(o => o.cat === cat) })).filter(g => g.items.length);
+    this.poolGroups.innerHTML = groups.length ? groups.map(g => `
+      <div class="pool__group">
+        <h4><span>${CAT_LABEL[g.cat]}</span><span>${g.items.length}</span></h4>
+        <div class="pool__items">${g.items.map(o =>
+          chipHtml(o, '＋', { meta:true }).replace('<span class="step ', `<span draggable="true" tabindex="0" data-code="${o.code}" class="step `)
+        ).join('')}</div>
+      </div>`).join('')
+      : `<p class="panel__hint">Все операции справочника уже в маршруте.</p>`;
+
+    this.poolGroups.querySelectorAll('.step[data-code]').forEach((el) => {
+      el.addEventListener('dragstart', (e) => {
+        this.drag = { source:'pool', code:el.dataset.code };
+        document.body.classList.add('is-dragging');
+        e.dataTransfer.effectAllowed = 'copyMove';
+        e.dataTransfer.setData('text/plain', el.dataset.code);
+        setTimeout(() => el.classList.add('is-ghost'), 0);
+      });
+      el.addEventListener('dragend', () => this.endDrag());
+      el.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter'){ this.drag = { source:'pool', code:el.dataset.code }; this.dropAt(this.route.length); }
+      });
+    });
+  }
+
+  renderTotals(){
+    const sum = (arr, f) => arr.reduce((a, s) => a + f(byCode[s.code]), 0);
+    const rate = sum(this.route, o => o.rate), sec = sum(this.route, o => o.sec);
+    const rate0 = sum(this.base, o => o.rate), sec0 = sum(this.base, o => o.sec);
+    const q = (k) => this.builderEl.querySelector(`[data-total="${k}"]`);
+    q('count').textContent = this.route.length;
+    q('rate').textContent = fmtRub(rate);
+    q('time').textContent = fmtSec(sec);
+    const setDelta = (el, diff, fmt) => {
+      if (Math.abs(diff) < 0.001){ el.hidden = true; return; }
+      el.hidden = false;
+      el.textContent = (diff > 0 ? '+' : '−') + fmt(Math.abs(diff));
+      el.classList.toggle('delta--up', diff > 0);
+    };
+    setDelta(q('rateDelta'), rate - rate0, (v) => v.toLocaleString('ru-RU',{maximumFractionDigits:2}) + ' ₽');
+    setDelta(q('timeDelta'), sec - sec0, (v) => fmtSec(v));
+  }
+
+  /* человекочитаемая сводка — она же уйдёт в журнал правок */
+  renderChanges(){
+    const now = this.route.map(s => s.code), was = this.base.map(s => s.code);
+    const added = now.filter(c => !was.includes(c));
+    const removed = was.filter(c => !now.includes(c));
+    const moved = now.filter((c, i) => was.includes(c) && was.filter(x => now.includes(x)).indexOf(c) !== now.filter(x => was.includes(x)).indexOf(c));
+    const items = [];
+    added.forEach(c => {
+      const at = now.indexOf(c);
+      const after = at > 0 ? byCode[now[at-1]].name : 'начало';
+      items.push(['ok','Добавлено', `«${byCode[c].name}» после «${after}»`]);
+    });
+    removed.forEach(c => items.push(['danger','Убрано', `«${byCode[c].name}»`]));
+    [...new Set(moved)].forEach(c => {
+      items.push(['info','Переставлено', `«${byCode[c].name}» — шаг ${was.indexOf(c)+1} → шаг ${now.indexOf(c)+1}`]);
+    });
+    this.route.forEach((s, i) => { if (s.par) items.push(['info','Параллельно', `«${byCode[s.code].name}» с «${byCode[this.route[i-1].code].name}»`]); });
+
+    this.changes.innerHTML = items.length
+      ? `<h5>Что будет сохранено</h5><ul>${items.map(([tone,label,text]) =>
+          `<li><span class="badge badge--${tone}">${label}</span> ${text}</li>`).join('')}</ul>`
+      : `<div class="changes__empty">Изменений пока нет — перетащите операцию из списка справа.</div>`;
+  }
+
+  /* ----------------------------------------------------------- действия */
+  endDrag(){
+    this.drag = null;
+    document.body.classList.remove('is-dragging','is-dragging-route');
+    document.querySelectorAll('.is-ghost').forEach(el => el.classList.remove('is-ghost'));
+    document.querySelectorAll('.slot.is-over').forEach(el => el.classList.remove('is-over'));
+    this.pool.classList.remove('is-over');
+  }
+
+  dropAt(at){
+    const d = this.drag;
+    if (!d) return;
+    if (d.source === 'pool'){
+      this.route.splice(at, 0, { code:d.code, par:false, isNew:true });
+      toast(`«${byCode[d.code].name}» — шаг ${at + 1} из ${this.route.length}`, false);
+    } else {
+      const [item] = this.route.splice(d.index, 1);
+      const idx = at > d.index ? at - 1 : at;
+      this.route.splice(idx, 0, item);
+      toast(`«${byCode[item.code].name}» — шаг ${idx + 1} из ${this.route.length}`, false);
+    }
+    if (this.route[FROZEN]) this.route[FROZEN].par = false;
+    this.endDrag(); this.render();
+  }
+
+  removeAt(i){
+    if (this.isFrozen(i)){ toast('Шаг уже прошли паспорта — убрать нельзя'); this.endDrag(); return; }
+    const [item] = this.route.splice(i, 1);
+    if (this.route[FROZEN]) this.route[FROZEN].par = false;
+    toast(`«${byCode[item.code].name}» убрана из маршрута`, false);
+    this.endDrag(); this.render();
+  }
+
+  toggleParallel(i){
+    if (i <= FROZEN){ toast('Связывать можно только шаги впереди фронта'); return; }
+    this.route[i].par = !this.route[i].par;
+    this.render();
+  }
+
+  onKey(e, i){
+    if (e.key === 'Delete'){ e.preventDefault(); this.removeAt(i); return; }
+    if (e.altKey && (e.key === 'ArrowLeft' || e.key === 'ArrowRight')){
+      e.preventDefault();
+      const to = i + (e.key === 'ArrowLeft' ? -1 : 1);
+      if (to < 0 || to >= this.route.length) return;
+      if (to < this.minSlot){ toast('Сюда нельзя: шаг уже проходят паспорта'); return; }
+      const [item] = this.route.splice(i, 1);
+      this.route.splice(to, 0, item);
+      this.render();
+      const el = this.lane.querySelector(`.step[data-index="${to}"]`);
+      if (el) el.focus();
+      toast(`«${byCode[item.code].name}» — шаг ${to + 1} из ${this.route.length}`, false);
+    }
+    if (e.altKey && (e.key === 'p' || e.key === 'з')){ e.preventDefault(); this.toggleParallel(i); }
+  }
+}
+
+/* ------------------------------------------------------------- сборка стр. */
+renderStaticChain('prod-chain', BASE_ROUTE, {});
+
+/* ведомость «Операции» — как есть сегодня */
+document.getElementById('ops-rows').innerHTML = BASE_ROUTE.map((s, i) => {
+  const op = byCode[s.code];
+  const tone = OPS_STATUS[i] === 'Выполнено' ? 'ok' : OPS_STATUS[i] === 'В работе' ? 'info' : 'muted';
+  return `<tr>
+    <td class="num">${i+1}</td>
+    <td>${op.name}</td>
+    <td><span class="badge badge--${tone}">${OPS_STATUS[i]}</span></td>
+    <td class="num">240</td>
+    <td class="num">${op.rate ? op.rate.toLocaleString('ru-RU',{minimumFractionDigits:2}) : '—'}</td>
+    <td class="num">${op.sec ? op.sec + ' с' : '—'}</td>
+  </tr>`;
+}).join('');
+
+/* легенда состояний */
+document.getElementById('st-lock').innerHTML  = chipHtml(byCode.CUT_CUT, 1, { locked:true });
+document.getElementById('st-edit').innerHTML  = chipHtml(byCode.SEW_COVERSTITCH, 4, { edit:true, meta:true });
+document.getElementById('st-ghost').innerHTML = chipHtml(byCode.SEW_COVERSTITCH, 4, { edit:true, ghost:true, meta:true });
+document.getElementById('st-new').innerHTML   = chipHtml(byCode.SEW_BINDING, 5, { edit:true, isNew:true, meta:true });
+document.getElementById('st-plain').innerHTML = chipHtml(byCode.QC, 6, {});
+
+/* конструкторы: широкое окно и узкое */
+const wide = new RouteBuilder('wide');
+const narrow = new RouteBuilder('narrow');
+</script>
+</body>
+</html>

@@ -2384,6 +2384,84 @@ backend — `apps/api/src/common/bulk-archive.ts`, UI — `AdminArchiveTabs`
 
 ---
 
+## 44. Правка заказа в производстве (order amendments)
+
+Второй, узкий ярус редактируемости заказа: после `start()` план заморожен
+(ADR-0006), но аддитивные forward-only правки разрешены. Фича под флагом
+`FEATURE_ORDER_AMENDMENTS`. Контракт — `packages/shared/src/amendments.ts`,
+backend — `order-amendments/order-amendments.controller.ts`, UI — drawer
+«Изменить в производстве» (`components/orders/amendments/*`).
+
+Все write-ручки требуют `reason` и пишут запись в журнал правок
+(`GET .../history`). Работают только когда заказ в `IN_PRODUCTION`, иначе
+409 `ORDER_NOT_AMENDABLE`.
+
+| Метод | Путь                                    | RBAC                | Описание |
+| ----- | --------------------------------------- | ------------------- | -------- |
+| GET   | `/api/orders/:id/amendments/quantities` | любая авторизованная| План и уже раскроенное по размерам. |
+| POST  | `/api/orders/:id/amendments/quantities` | ADMIN, SHOP_MANAGER | Правка планового тиража. 409 `AMENDMENT_BELOW_CUT` ниже раскроя. |
+| GET   | `/api/orders/:id/amendments/sizes`      | любая авторизованная| Текущая и доступная размерность. |
+| POST  | `/api/orders/:id/amendments/sizes`      | ADMIN, SHOP_MANAGER | Добавить / убрать размеры. 409 `AMENDMENT_SIZE_HAS_WORK`. |
+| GET   | `/api/orders/:id/amendments/operations` | любая авторизованная| Снимок маршрута + фронт производства + палитра операций. |
+| POST  | `/api/orders/:id/amendments/operations` | ADMIN, SHOP_MANAGER | Вставить одну операцию (`afterIndex`). Legacy-путь. |
+| PUT   | `/api/orders/:id/amendments/route`      | ADMIN, SHOP_MANAGER | Правка маршрута целиком: состав, порядок, параллельные группы. |
+| GET   | `/api/orders/:id/amendments/history`    | любая авторизованная| Журнал правок с готовым `summary`. |
+
+### 44.1 `PUT /api/orders/:id/amendments/route`
+
+Тело — **весь целевой маршрут**, а не дельта: холст вкладки «Маршрут»
+остаётся источником истины «как должно быть», а что добавлено / убрано /
+переставлено, считает бэкенд (`planRouteAmendment`, чистая функция в
+shared, покрыта `tests/unit/route-amendment-plan.test.ts`).
+
+```json
+{
+  "steps": [
+    { "operationId": "…", "parallelGroup": null },
+    { "operationId": "…", "parallelGroup": 1 },
+    { "operationId": "…", "parallelGroup": 1 }
+  ],
+  "reason": "клиент попросил ОТК перед упаковкой"
+}
+```
+
+Инварианты (проверяются до записи):
+
+- **Замороженный префикс.** Шаги с `index <= frontierIndex`
+  (`frontierIndex` = максимальный `Passport.currentRouteStepIndex`) обязаны
+  прийти теми же и в том же порядке, включая `parallelGroup`. Иначе 409
+  `AMENDMENT_ROUTE_FRONTIER_CHANGED` — как правило, это гонка: пока
+  менеджер собирал маршрут, фронт уехал вперёд.
+- **Удаление** шага допустимо только впереди фронта И когда по его
+  операции в заказе нет ни одной записи выработки (`OperationEntry`),
+  иначе 409 `AMENDMENT_ROUTE_STEP_HAS_WORK`.
+- **Дубли** операции в маршруте запрещены (409
+  `AMENDMENT_OPERATION_ALREADY_IN_ROUTE`): доска и подстановки дедуплят по
+  `operationId`.
+- Новая операция должна быть активной в справочнике (400
+  `AMENDMENT_OPERATION_INACTIVE`).
+
+`Passport.currentRouteStepIndex` не трогается: по построению ни один
+паспорт не стоит правее фронта, а меняется только хвост за ним. После
+перекладки индексов вызывается `rebuildQtyDerivedSnapshotsInTx` —
+плановая стоимость и время пересчитываются по снимку. Аудит —
+`ORDER_ROUTE_AMENDED` с человекочитаемым `summary`.
+
+Ответ:
+
+```json
+{
+  "orderId": "…", "applied": true,
+  "addedCount": 1, "removedCount": 0, "movedCount": 2,
+  "summary": "+ «Упаковка» после «Раскрой»; «ОТК» → шаг 3",
+  "warnings": []
+}
+```
+
+`applied: false` + предупреждение — маршрут не изменился (no-op, аудита нет).
+
+---
+
 ## Что отсутствует в API (умышленно или legacy)
 
 PHASE 1 явно фиксирует:
