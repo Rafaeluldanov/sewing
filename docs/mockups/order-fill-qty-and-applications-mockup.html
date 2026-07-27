@@ -1,0 +1,671 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Заполнение заказа: количество без нуля + «Нанесение» на всём пути</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 80px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1240px; margin:0 auto; padding:0 20px; }
+
+  .topnav{ position:sticky; top:0; z-index:40; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1240px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:700; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:84ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:1.25rem; margin:0 0 .3rem; }
+  .sect > h2 small{ font-weight:400; color:var(--color-fg-muted); font-size:.78rem; font-family:ui-monospace,Menlo,monospace; margin-left:.5rem; }
+  .sect > p{ margin:0 0 1.1rem; color:var(--color-fg-muted); max-width:84ch; }
+
+  .shots{ display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start; }
+  .shot{ flex:1 1 420px; min-width:340px; }
+  .shot--wide{ flex:1 1 100%; }
+  .shot__cap{ font-size:.85rem; font-weight:700; margin:0 0 .5rem; display:flex; align-items:center; gap:.45rem; }
+  .shot__cap small{ display:block; font-weight:400; color:var(--color-fg-muted); }
+  .tag{ display:inline-flex; align-items:center; padding:1px 8px; border-radius:var(--radius-pill); font-size:.72rem; font-weight:700; }
+  .tag--bad{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .tag--good{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .tag--new{ background:var(--btn-primary-bg); color:var(--btn-primary-fg); border:1px solid var(--btn-primary-edge); }
+
+  /* ---------- окно приложения ---------- */
+  .win{ background:var(--color-bg-soft); border:1px solid var(--color-border-strong); border-radius:var(--radius-lg); box-shadow:var(--shadow-md); overflow:hidden; }
+  .win__bar{ display:flex; align-items:center; gap:.5rem; padding:.5rem .8rem; background:#fff; border-bottom:1px solid var(--color-border); font-size:.78rem; color:var(--color-fg-muted); }
+  .win__dot{ width:9px; height:9px; border-radius:50%; background:var(--color-border-strong); }
+  .win__url{ font-family:ui-monospace,Menlo,monospace; font-size:.72rem; background:var(--color-bg-muted); border-radius:var(--radius-pill); padding:.15rem .6rem; }
+  .win__body{ padding:.9rem; display:flex; flex-direction:column; gap:.8rem; }
+
+  /* ---------- вкладки карточки заказа ---------- */
+  .tabs{ display:flex; gap:.3rem; flex-wrap:wrap; border-bottom:1px solid var(--color-border); padding-bottom:.4rem; }
+  .tabs span{ font-size:.8rem; font-weight:700; color:var(--color-fg-muted); padding:.3rem .7rem; border-radius:var(--radius-pill); }
+  .tabs span.is-active{ background:var(--color-bg-tint); color:var(--color-fg-strong); }
+
+  /* ---------- admin-card ---------- */
+  .card{ background:var(--color-bg-card); border:1px solid var(--color-border); border-radius:var(--radius-lg); box-shadow:var(--shadow-sm); padding:.85rem .9rem; display:flex; flex-direction:column; gap:.7rem; }
+  .card--ghost{ opacity:.5; }
+  .card--accent{ border-color:var(--btn-primary-edge); box-shadow:0 0 0 3px rgba(255,210,63,.22); }
+  .card__head{ display:flex; align-items:center; gap:.55rem; }
+  .card__icon{ width:30px; height:30px; border-radius:var(--radius-md); display:inline-flex; align-items:center; justify-content:center; flex:none; }
+  .card__icon--violet{ background:#efe7fb; color:#6d3fc4; }
+  .card__icon--blue{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .card__icon--green{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .card__title{ font-size:var(--title-section); font-weight:700; margin:0; }
+  .card__badge{ display:inline-flex; align-items:center; justify-content:center; min-width:20px; height:20px; padding:0 6px; border-radius:var(--radius-pill); background:var(--color-bg-muted); color:var(--color-fg-muted); font-size:11px; font-weight:700; }
+  .card__meta{ margin-left:auto; font-size:.78rem; color:var(--color-fg-muted); }
+  .card__meta b{ color:var(--color-fg-strong); }
+  .card__hint{ margin:0; font-size:.82rem; color:var(--color-fg-muted); }
+
+  /* ---------- расцветки (cwf) ---------- */
+  .cwf{ display:flex; flex-direction:column; gap:.6rem; }
+  .cwf-head{ display:flex; align-items:center; justify-content:space-between; gap:.6rem; }
+  .cwf-title{ display:inline-flex; align-items:center; gap:.4rem; font-weight:700; font-size:.92rem; }
+  .cwf-cards{ display:grid; grid-template-columns:repeat(auto-fill,minmax(290px,1fr)); gap:.6rem; }
+  .cwf-card{ position:relative; border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.6rem .6rem .5rem; display:flex; flex-direction:column; gap:.55rem; background:var(--color-bg-card); overflow:hidden; }
+  .cwf-card::before{ content:''; position:absolute; left:0; top:0; bottom:0; width:4px; background:var(--cwf-accent,#b7c3d0); }
+  .cwf-card__head{ display:flex; align-items:center; gap:.5rem; }
+  .cwf-swatch{ width:24px; height:24px; border-radius:var(--radius-sm); border:1px solid rgba(0,0,0,.15); flex:none; }
+  .cwf-name{ font-weight:700; font-size:.9rem; padding:.35rem .5rem; border:1px solid var(--color-border-strong); border-radius:7px; flex:1; }
+  .cwf-tech{ font-size:.78rem; color:var(--color-fg-muted); padding:.35rem .5rem; border:1px solid var(--color-border-strong); border-radius:7px; background:#fff; }
+  .cwf-sizes{ display:flex; flex-wrap:wrap; gap:.35rem; align-items:flex-end; }
+  .cwf-size{ display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .cwf-size > span{ font-size:10.5px; font-weight:700; color:var(--color-fg-muted); }
+  .cwf-size input{ width:46px; padding:5px 6px; text-align:center; border:1px solid var(--color-border-strong); border-radius:var(--radius-sm); font:inherit; font-size:.88rem; background:#fff; color:var(--color-fg); }
+  .cwf-size input:focus{ outline:none; border-color:var(--color-accent); box-shadow:0 0 0 3px var(--color-accent-soft); }
+  .cwf-size input::-webkit-outer-spin-button,.cwf-size input::-webkit-inner-spin-button{ -webkit-appearance:none; margin:0; }
+  .cwf-size input[type=number]{ -moz-appearance:textfield; appearance:textfield; }
+  .cwf-size input::placeholder{ color:var(--color-fg-subtle); opacity:1; font-weight:400; }
+  .cwf-size input.is-zero{ color:var(--color-fg); }              /* «было»: настоящий 0 в поле */
+  .cwf-rowtotal{ align-self:center; margin-left:.2rem; font-size:.78rem; font-weight:700; color:var(--color-fg-strong); }
+  .cwf-totals{ display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; font-size:.8rem; }
+  .cwf-chip{ display:inline-flex; align-items:center; gap:.25rem; padding:2px 8px; border-radius:var(--radius-pill); background:var(--color-bg-muted); font-size:.78rem; }
+  .cwf-chip--total{ background:var(--color-bg-tint); color:var(--color-fg-strong); }
+
+  /* аннотации */
+  .note{ margin:.55rem 0 0; font-size:.82rem; color:var(--color-fg-muted); border-left:3px solid var(--color-border-strong); padding-left:.6rem; }
+  .note--bad{ border-color:var(--color-danger); }
+  .note--good{ border-color:var(--color-ok); }
+  .note b{ color:var(--color-fg); }
+  kbd{ font-family:ui-monospace,Menlo,monospace; font-size:.78em; background:var(--color-bg-muted); border:1px solid var(--color-border-strong); border-bottom-width:2px; border-radius:4px; padding:0 .3em; }
+
+  /* ---------- кнопки ---------- */
+  .btn{ display:inline-flex; align-items:center; gap:.35rem; font:inherit; font-size:.82rem; font-weight:700; padding:.35rem .7rem; border-radius:var(--radius-md); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg); cursor:default; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--ghost{ background:#fff; color:var(--color-fg-muted); }
+
+  /* ---------- редактор нанесений ---------- */
+  .app-row{ border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.6rem; display:flex; flex-direction:column; gap:.55rem; background:#fff; }
+  .app-kit{ border:1px solid var(--color-border-strong); border-radius:var(--radius-md); padding:.6rem; display:flex; flex-direction:column; gap:.55rem; background:var(--color-bg-soft); }
+  .app-kit__head{ display:flex; align-items:center; gap:.5rem; }
+  .app-kit__name{ flex:1; font-weight:700; font-size:.88rem; padding:.35rem .5rem; border:1px solid var(--color-border-strong); border-radius:7px; background:#fff; }
+  .app-fields{ display:grid; grid-template-columns:repeat(auto-fill,minmax(150px,1fr)); gap:.45rem; }
+  .fld{ display:flex; flex-direction:column; gap:2px; }
+  .fld > span{ font-size:10.5px; font-weight:700; color:var(--color-fg-muted); text-transform:none; }
+  .fld > .ctl{ padding:.35rem .5rem; border:1px solid var(--color-border-strong); border-radius:7px; background:#fff; font-size:.84rem; min-height:31px; display:flex; align-items:center; }
+  .fld > .ctl--sel::after{ content:'⌄'; margin-left:auto; color:var(--color-fg-subtle); font-size:.9rem; line-height:0; padding-bottom:.3rem; }
+  .fld > .ctl--ph{ color:var(--color-fg-subtle); }
+  .fld--full{ grid-column:1/-1; }
+  .scope{ display:flex; align-items:center; gap:.6rem; flex-wrap:wrap; font-size:.82rem; background:var(--color-bg-muted); border-radius:var(--radius-md); padding:.4rem .55rem; }
+  .radio{ display:inline-flex; align-items:center; gap:.3rem; font-weight:700; }
+  .radio i{ width:13px; height:13px; border-radius:50%; border:2px solid var(--color-border-strong); display:inline-block; }
+  .radio.is-on i{ border-color:var(--color-accent); box-shadow:inset 0 0 0 2.5px #fff, inset 0 0 0 8px var(--color-accent); }
+  .sizechips{ display:flex; gap:.3rem; flex-wrap:wrap; }
+  .sizechip{ display:inline-flex; align-items:center; gap:.25rem; padding:2px 8px; border-radius:var(--radius-pill); border:1px solid var(--color-border-strong); background:#fff; font-size:.76rem; font-weight:700; color:var(--color-fg-muted); }
+  .sizechip.is-on{ border-color:var(--color-accent); background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .app-actions{ display:flex; gap:.4rem; flex-wrap:wrap; }
+
+  /* read-only список нанесений */
+  .app-view{ border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.55rem .65rem; display:flex; align-items:flex-start; gap:.6rem; background:#fff; }
+  .app-view__main{ flex:1; }
+  .app-view__title{ font-weight:700; font-size:.88rem; }
+  .app-view__sub{ font-size:.8rem; color:var(--color-fg-muted); }
+  .badge{ display:inline-flex; align-items:center; padding:1px 8px; border-radius:var(--radius-pill); font-size:.72rem; font-weight:700; }
+  .badge--info{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .badge--ok{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .badge--warn{ background:var(--color-warn-soft); color:var(--color-warn-fg); }
+
+  /* ---------- карта потоков ---------- */
+  .flow{ display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:.7rem; }
+  .flow__col{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.75rem .85rem; }
+  .flow__col h3{ margin:0 0 .5rem; font-size:var(--title-subsection); }
+  .step{ display:flex; align-items:center; gap:.45rem; font-size:.83rem; padding:.3rem 0; }
+  .step__n{ width:20px; height:20px; border-radius:50%; background:var(--color-bg-muted); color:var(--color-fg-muted); font-size:.72rem; font-weight:700; display:inline-flex; align-items:center; justify-content:center; flex:none; }
+  .step__mark{ margin-left:auto; font-size:.74rem; font-weight:700; }
+  .step__mark--no{ color:var(--color-danger-fg); }
+  .step__mark--yes{ color:var(--color-ok-fg); }
+
+  /* ---------- таблица правок ---------- */
+  table.files{ width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); overflow:hidden; font-size:.84rem; }
+  table.files th, table.files td{ text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--color-border); vertical-align:top; }
+  table.files th{ background:var(--color-bg-muted); font-size:.78rem; }
+  table.files tr:last-child td{ border-bottom:none; }
+  table.files code{ font-family:ui-monospace,Menlo,monospace; font-size:.8em; }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__in">
+    <span class="topnav__brand">Заполнение заказа · макет</span>
+    <a href="#qty">1. Количество без нуля</a>
+    <a href="#apps">2. «Нанесение» на всём пути</a>
+    <a href="#where">3. Где сейчас разрыв</a>
+    <a href="#code">4. Что правим</a>
+  </div>
+</nav>
+
+<div class="doc">
+
+  <section class="intro">
+    <h1>Заполнение заказа: количество без нуля + «Нанесение» на всём пути</h1>
+    <p>
+      Две правки в форме заказа. <b>Первая</b> — ячейки количества в расцветках стартуют с настоящего
+      <b>0</b> в поле, и чтобы ввести 12, менеджер сначала стирает ноль (а если не стёр — получает
+      «012»). <b>Вторая</b> — блок «Нанесение» есть только на одном экране из трёх: если заказ пошёл
+      через «Создать изделие» → черновик → <code>/admin/orders/[id]/edit</code>, нанесения ввести негде.
+    </p>
+    <div class="principles">
+      <div class="principle"><b>Пустая ячейка = 0</b><span>Не показываем ноль как значение: бледный placeholder «0», ввод начинается с чистого поля. Итоги считают пусто как 0 — арифметика не меняется.</span></div>
+      <div class="principle"><b>Уже есть в системе</b><span>Так работает размерная матрица без расцветок (<code>size-plan-selector</code>) — переносим тот же приём в расцветки, а не изобретаем новое.</span></div>
+      <div class="principle"><b>Нанесение = атрибут заказа</b><span>Значит, доступно всюду, где заказ ещё заполняется: мастер создания, страница правки черновика, карточка заказа.</span></div>
+      <div class="principle"><b>Минимальная дельта</b><span>Компоненты <code>OrderApplicationsEditor</code> и <code>OrderApplicationsCard</code> уже написаны — второй просто нигде не подключён. Новых экранов не рисуем.</span></div>
+    </div>
+  </section>
+
+  <!-- ======================================================= 1 -->
+  <section class="sect" id="qty">
+    <h2>1. Количество: ноль не мешает вводу <small>order-create-colorways.tsx · order-colorways-block.tsx</small></h2>
+    <p>
+      Поля ниже — живые: можно кликнуть и попробовать. Слева — как сейчас, справа — как будет.
+    </p>
+
+    <div class="shots">
+      <div class="shot">
+        <p class="shot__cap"><span class="tag tag--bad">Сейчас</span> в поле стоит значение 0</p>
+        <div class="win">
+          <div class="win__bar"><span class="win__dot"></span><span class="win__url">/admin/orders/new</span></div>
+          <div class="win__body">
+            <div class="card">
+              <div class="card__head">
+                <span class="card__icon card__icon--violet">▦</span>
+                <h2 class="card__title">План по размерам</h2>
+                <span class="card__meta">Итого: <b>0 шт</b></span>
+              </div>
+              <div class="cwf">
+                <div class="cwf-head">
+                  <span class="cwf-title">◒ Расцветки <span class="card__badge">1</span></span>
+                  <span class="btn btn--ghost">+ Добавить цвет</span>
+                </div>
+                <div class="cwf-cards">
+                  <div class="cwf-card" style="--cwf-accent:#d23b3b">
+                    <div class="cwf-card__head">
+                      <span class="cwf-swatch" style="background:#d23b3b"></span>
+                      <span class="cwf-name">красный</span>
+                    </div>
+                    <div class="cwf-tech">Техкарта: Футболка 160 г/м²</div>
+                    <div class="cwf-sizes">
+                      <label class="cwf-size"><span>44</span><input class="is-zero" type="number" value="0" /></label>
+                      <label class="cwf-size"><span>46</span><input class="is-zero" type="number" value="0" /></label>
+                      <label class="cwf-size"><span>48</span><input class="is-zero" type="number" value="0" /></label>
+                      <label class="cwf-size"><span>50</span><input class="is-zero" type="number" value="0" /></label>
+                      <label class="cwf-size"><span>52</span><input class="is-zero" type="number" value="0" /></label>
+                      <span class="cwf-rowtotal">Σ 0</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="cwf-totals">
+                  <span style="color:var(--color-fg-muted)">Итого по размерам:</span>
+                  <span class="cwf-chip cwf-chip--total">Всего <b>0</b></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note note--bad">
+          Чтобы ввести <b>12</b>, надо: кликнуть → <kbd>Backspace</kbd> → набрать. Забыл стереть — в поле
+          «012» и лишний шаг на каждую ячейку. На 5 размерах × 4 цвета это 20 лишних стираний.
+        </p>
+      </div>
+
+      <div class="shot">
+        <p class="shot__cap"><span class="tag tag--good">Станет</span> пустая ячейка с бледным «0»</p>
+        <div class="win">
+          <div class="win__bar"><span class="win__dot"></span><span class="win__url">/admin/orders/new</span></div>
+          <div class="win__body">
+            <div class="card">
+              <div class="card__head">
+                <span class="card__icon card__icon--violet">▦</span>
+                <h2 class="card__title">План по размерам</h2>
+                <span class="card__meta">Итого: <b><span data-grand>60</span> шт</b></span>
+              </div>
+              <div class="cwf">
+                <div class="cwf-head">
+                  <span class="cwf-title">◒ Расцветки <span class="card__badge">1</span></span>
+                  <span class="btn btn--ghost">+ Добавить цвет</span>
+                </div>
+                <div class="cwf-cards">
+                  <div class="cwf-card" style="--cwf-accent:#d23b3b">
+                    <div class="cwf-card__head">
+                      <span class="cwf-swatch" style="background:#d23b3b"></span>
+                      <span class="cwf-name">красный</span>
+                    </div>
+                    <div class="cwf-tech">Техкарта: Футболка 160 г/м²</div>
+                    <div class="cwf-sizes" data-live>
+                      <label class="cwf-size"><span>44</span><input type="number" placeholder="0" value="" /></label>
+                      <label class="cwf-size"><span>46</span><input type="number" placeholder="0" value="20" /></label>
+                      <label class="cwf-size"><span>48</span><input type="number" placeholder="0" value="25" /></label>
+                      <label class="cwf-size"><span>50</span><input type="number" placeholder="0" value="15" /></label>
+                      <label class="cwf-size"><span>52</span><input type="number" placeholder="0" value="" /></label>
+                      <span class="cwf-rowtotal" data-rowtotal>Σ 60</span>
+                    </div>
+                  </div>
+                </div>
+                <div class="cwf-totals" data-chips>
+                  <span style="color:var(--color-fg-muted)">Итого по размерам:</span>
+                  <span class="cwf-chip">46 <b>20</b></span>
+                  <span class="cwf-chip">48 <b>25</b></span>
+                  <span class="cwf-chip">50 <b>15</b></span>
+                  <span class="cwf-chip cwf-chip--total">Всего <b>60</b></span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note note--good">
+          Пусто — значит 0: серый placeholder видно, но стирать нечего, набор сразу даёт «12».
+          В заполненную ячейку клик <b>выделяет значение целиком</b> — новая цифра заменяет старую,
+          не дописывается. Итоги «Σ» и «Итого по размерам» считают пустое как 0 — как и раньше.
+        </p>
+      </div>
+    </div>
+
+    <div class="shots" style="margin-top:1.4rem">
+      <div class="shot shot--wide">
+        <p class="shot__cap">Тот же приём — во втором месте: блок «Расцветки» в карточке заказа <small>вкладка «Производство», <code>OrderColorwaysBlock</code></small></p>
+        <div class="win">
+          <div class="win__bar"><span class="win__dot"></span><span class="win__url">/admin/orders/01-00042</span></div>
+          <div class="win__body">
+            <div class="tabs">
+              <span class="is-active">Производство</span><span>Паспорта</span><span>Операции</span><span>Сводно по заказу</span><span>Потребности</span><span>История</span>
+            </div>
+            <div class="card">
+              <div class="card__head">
+                <span class="card__icon card__icon--green">◒</span>
+                <h2 class="card__title">Расцветки</h2>
+                <span class="card__badge">2</span>
+                <span class="card__meta">План: <b>140 шт</b></span>
+              </div>
+              <div style="display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:.6rem">
+                <div class="cwf-card" style="--cwf-accent:#222">
+                  <div class="cwf-card__head"><span class="cwf-swatch" style="background:#222"></span><span class="cwf-name">чёрный</span></div>
+                  <div class="fld"><span>План по размерам, шт</span></div>
+                  <div class="cwf-sizes" data-live>
+                    <label class="cwf-size"><span>44</span><input type="number" placeholder="0" value="" /></label>
+                    <label class="cwf-size"><span>46</span><input type="number" placeholder="0" value="30" /></label>
+                    <label class="cwf-size"><span>48</span><input type="number" placeholder="0" value="40" /></label>
+                    <label class="cwf-size"><span>50</span><input type="number" placeholder="0" value="10" /></label>
+                    <span class="cwf-rowtotal" data-rowtotal>Σ 80</span>
+                  </div>
+                </div>
+                <div class="cwf-card" style="--cwf-accent:#f2f2f0">
+                  <div class="cwf-card__head"><span class="cwf-swatch" style="background:#f2f2f0"></span><span class="cwf-name">белый</span></div>
+                  <div class="fld"><span>План по размерам, шт</span></div>
+                  <div class="cwf-sizes" data-live>
+                    <label class="cwf-size"><span>44</span><input type="number" placeholder="0" value="20" /></label>
+                    <label class="cwf-size"><span>46</span><input type="number" placeholder="0" value="20" /></label>
+                    <label class="cwf-size"><span>48</span><input type="number" placeholder="0" value="20" /></label>
+                    <label class="cwf-size"><span>50</span><input type="number" placeholder="0" value="" /></label>
+                    <span class="cwf-rowtotal" data-rowtotal>Σ 60</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          Правило одно на всё приложение: <b>ячейка количества никогда не показывает 0 как значение</b>.
+          Ноль — это placeholder. Read-only режимы (после расчёта) по-прежнему печатают настоящий 0,
+          потому что там это факт, а не поле ввода.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= 2 -->
+  <section class="sect" id="apps">
+    <h2>2. «Нанесение» на всём пути заполнения <small>OrderApplicationsEditor · OrderApplicationsCard</small></h2>
+    <p>
+      Блок не новый — он уже есть на <code>/admin/orders/new</code>, но только в ветке «Выбрать изделие».
+      Добавляем его в два места, где менеджер реально дозаполняет заказ, и снимаем условие, которое
+      прячет карточку в ветке «Создать изделие».
+    </p>
+
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--new">Новое место 1</span> страница правки черновика — вкладка «Продукция»</p>
+        <div class="win">
+          <div class="win__bar"><span class="win__dot"></span><span class="win__url">/admin/orders/01-00042/edit</span></div>
+          <div class="win__body">
+            <div class="tabs"><span class="is-active">Продукция</span><span>Материалы</span><span>Операции</span><span>Логистика</span><span>Сводка</span></div>
+
+            <div style="display:grid; grid-template-columns:1fr 1fr; gap:.7rem">
+              <div class="card card--ghost">
+                <div class="card__head"><span class="card__icon card__icon--blue">◫</span><h2 class="card__title">Изделие</h2></div>
+                <p class="card__hint">Футболка классик · арт. 1001 · чёрный</p>
+              </div>
+              <div class="card card--ghost">
+                <div class="card__head"><span class="card__icon card__icon--blue">⇄</span><h2 class="card__title">Производство</h2></div>
+                <p class="card__hint">Маршрут 01 · Техкарта: по расцветкам</p>
+              </div>
+            </div>
+
+            <div class="card card--ghost">
+              <div class="card__head"><span class="card__icon card__icon--violet">▦</span><h2 class="card__title">План по размерам</h2><span class="card__meta">Итого: <b>140 шт</b></span></div>
+              <p class="card__hint">Расцветки: чёрный 80 · белый 60</p>
+            </div>
+
+            <!-- НОВАЯ КАРТОЧКА -->
+            <div class="card card--accent">
+              <div class="card__head">
+                <span class="card__icon card__icon--violet">✦</span>
+                <h2 class="card__title">Нанесение</h2>
+                <span class="card__badge">2</span>
+                <span class="card__meta">сохраняется вместе с формой</span>
+              </div>
+              <p class="card__hint">Параметры нанесения хранятся в заказе. На крое блокируется раскладка, пока параметры не заполнены.</p>
+
+              <div class="app-kit">
+                <div class="app-kit__head">
+                  <span class="app-kit__name">Перёд + спина</span>
+                  <span class="btn btn--ghost">🗑 Удалить комплект</span>
+                </div>
+                <div class="scope">
+                  <span style="color:var(--color-fg-muted); font-weight:700">Применить к:</span>
+                  <span class="radio is-on"><i></i> весь тираж</span>
+                  <span class="radio"><i></i> выбранным размерам</span>
+                  <span class="sizechips"><span class="sizechip">44</span><span class="sizechip">46</span><span class="sizechip">48</span><span class="sizechip">50</span></span>
+                </div>
+
+                <div class="app-row">
+                  <div class="app-fields">
+                    <label class="fld"><span>Тип</span><span class="ctl ctl--sel">Шелкография</span></label>
+                    <label class="fld"><span>Когда выполняется</span><span class="ctl ctl--sel">На крое</span></label>
+                    <label class="fld"><span>Статус</span><span class="ctl ctl--sel">Запланировано</span></label>
+                    <label class="fld"><span>Место</span><span class="ctl">грудь</span></label>
+                    <label class="fld"><span>Ширина, мм</span><span class="ctl">240</span></label>
+                    <label class="fld"><span>Высота, мм</span><span class="ctl">180</span></label>
+                    <label class="fld"><span>Кол-во цветов</span><span class="ctl">3</span></label>
+                    <label class="fld"><span>Цвет / описание</span><span class="ctl ctl--ph">белый, PMS 185 C, …</span></label>
+                    <label class="fld fld--full"><span>Описание</span><span class="ctl">Логотип «TeeOn», центр груди</span></label>
+                  </div>
+                </div>
+
+                <div class="app-row">
+                  <div class="app-fields">
+                    <label class="fld"><span>Тип</span><span class="ctl ctl--sel">DTF</span></label>
+                    <label class="fld"><span>Когда выполняется</span><span class="ctl ctl--sel">На готовом изделии</span></label>
+                    <label class="fld"><span>Статус</span><span class="ctl ctl--sel">Запланировано</span></label>
+                    <label class="fld"><span>Место</span><span class="ctl">спина</span></label>
+                    <label class="fld"><span>Ширина, мм</span><span class="ctl">300</span></label>
+                    <label class="fld"><span>Высота, мм</span><span class="ctl">400</span></label>
+                    <label class="fld"><span>Кол-во цветов</span><span class="ctl ctl--ph">—</span></label>
+                    <label class="fld"><span>Цвет / описание</span><span class="ctl">полноцвет</span></label>
+                  </div>
+                </div>
+
+                <div class="app-actions">
+                  <span class="btn btn--ghost">+ Нанесение в комплект</span>
+                  <span class="btn btn--ghost">⧉ Дублировать комплект</span>
+                </div>
+              </div>
+
+              <div class="app-actions">
+                <span class="btn btn--ghost">+ Добавить нанесение</span>
+                <span class="btn btn--ghost">+ Новый комплект</span>
+              </div>
+            </div>
+
+            <div style="display:flex; gap:.5rem; justify-content:flex-end">
+              <span class="btn btn--ghost">← Отмена</span>
+              <span class="btn btn--primary">Сохранить</span>
+            </div>
+          </div>
+        </div>
+        <p class="note note--good">
+          Тот же <code>OrderApplicationsEditor</code>, что и в мастере: пишет скрытый
+          <code>applicationsJson</code>, который забирает server action страницы правки —
+          отдельной кнопки «Сохранить нанесение» не появляется, всё уходит с общей формой.
+          Размеры для режима «выбранным размерам» берём из размеров заказа.
+        </p>
+      </div>
+    </div>
+
+    <div class="shots" style="margin-top:1.4rem">
+      <div class="shot">
+        <p class="shot__cap"><span class="tag tag--new">Новое место 2</span> карточка заказа, вкладка «Производство»</p>
+        <div class="win">
+          <div class="win__bar"><span class="win__dot"></span><span class="win__url">/admin/orders/01-00042</span></div>
+          <div class="win__body">
+            <div class="tabs"><span class="is-active">Производство</span><span>Паспорта</span><span>Операции</span><span>Потребности</span></div>
+            <div class="card card--ghost">
+              <div class="card__head"><span class="card__icon card__icon--green">◒</span><h2 class="card__title">Расцветки</h2><span class="card__badge">2</span></div>
+              <p class="card__hint">чёрный 80 · белый 60</p>
+            </div>
+            <div class="card card--accent">
+              <div class="card__head">
+                <span class="card__icon card__icon--violet">✦</span>
+                <h2 class="card__title">Нанесение</h2>
+                <span class="card__badge">2</span>
+                <span class="card__meta">заказ в производстве → только просмотр</span>
+              </div>
+              <div class="app-view">
+                <div class="app-view__main">
+                  <div class="app-view__title">Шелкография · грудь · 240×180 мм · 3 цв.</div>
+                  <div class="app-view__sub">На крое · весь тираж · комплект «Перёд + спина»</div>
+                </div>
+                <span class="badge badge--ok">Выполнено</span>
+              </div>
+              <div class="app-view">
+                <div class="app-view__main">
+                  <div class="app-view__title">DTF · спина · 300×400 мм</div>
+                  <div class="app-view__sub">На готовом изделии · весь тираж · комплект «Перёд + спина»</div>
+                </div>
+                <span class="badge badge--info">Отправлено</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <p class="note">
+          В <b>черновике</b> здесь та же форма, что на странице правки (сохранение отдельной кнопкой,
+          full-replace). Со статуса «Расчёт» и дальше — read-only список с бейджем статуса каждой
+          строки. Компонент <code>OrderApplicationsCard</code> это уже умеет — его надо просто
+          подключить во вкладку.
+        </p>
+      </div>
+
+      <div class="shot">
+        <p class="shot__cap"><span class="tag tag--new">Правка</span> мастер создания — карточка больше не прячется</p>
+        <div class="win">
+          <div class="win__bar"><span class="win__dot"></span><span class="win__url">/admin/orders/new · «Создать изделие»</span></div>
+          <div class="win__body">
+            <div class="card card--ghost">
+              <div class="card__head"><span class="card__icon card__icon--blue">◫</span><h2 class="card__title">Изделие</h2><span class="badge badge--warn" style="margin-left:auto">Изделие №1 сохранено</span></div>
+              <p class="card__hint">Категория «Футболки» · техкарта «Футболка 160 г/м²» · 140 шт</p>
+            </div>
+            <div class="card card--accent">
+              <div class="card__head">
+                <span class="card__icon card__icon--violet">✦</span>
+                <h2 class="card__title">Нанесение</h2>
+                <span class="card__badge">0</span>
+              </div>
+              <p class="card__hint">Нанесение не добавлено.</p>
+              <div class="app-actions">
+                <span class="btn btn--ghost">+ Добавить нанесение</span>
+                <span class="btn btn--ghost">+ Новый комплект</span>
+              </div>
+            </div>
+            <div style="display:flex; gap:.5rem; justify-content:flex-end">
+              <span class="btn btn--primary">Создать заказ</span>
+            </div>
+          </div>
+        </div>
+        <p class="note note--good">
+          Сейчас нижние карточки (в том числе «Нанесение») рисуются только в режиме
+          <code>SELECTING</code>. В режимах «Создаю изделие» / «Изделие сохранено» карточка
+          «Нанесение» остаётся — она не зависит от того, выбрано лекало из справочника или создаётся
+          новое.
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ======================================================= 3 -->
+  <section class="sect" id="where">
+    <h2>3. Где сейчас разрыв</h2>
+    <p>Три пути заполнения заказа. Нанесение доступно только в одном.</p>
+    <div class="flow">
+      <div class="flow__col">
+        <h3>Путь A · «Выбрать изделие»</h3>
+        <div class="step"><span class="step__n">1</span> /orders/new — шапка<span class="step__mark step__mark--yes">—</span></div>
+        <div class="step"><span class="step__n">2</span> выбор лекала из справочника<span class="step__mark step__mark--yes">—</span></div>
+        <div class="step"><span class="step__n">3</span> план по размерам<span class="step__mark step__mark--yes">—</span></div>
+        <div class="step"><span class="step__n">4</span> <b>Нанесение</b><span class="step__mark step__mark--yes">есть</span></div>
+        <div class="step"><span class="step__n">5</span> «Создать заказ»<span class="step__mark step__mark--yes">—</span></div>
+      </div>
+      <div class="flow__col">
+        <h3>Путь B · «Создать изделие»</h3>
+        <div class="step"><span class="step__n">1</span> /orders/new — шапка<span class="step__mark step__mark--yes">—</span></div>
+        <div class="step"><span class="step__n">2</span> изделие заводится инлайн<span class="step__mark step__mark--no">нет</span></div>
+        <div class="step"><span class="step__n">3</span> «Сохранить изделие» → черновик<span class="step__mark step__mark--no">нет</span></div>
+        <div class="step"><span class="step__n">4</span> редирект на <code>/[id]/edit</code><span class="step__mark step__mark--no">нет</span></div>
+        <div class="step"><span class="step__n">5</span> карточка заказа<span class="step__mark step__mark--no">нет</span></div>
+      </div>
+      <div class="flow__col">
+        <h3>Путь C · заявка в КБ</h3>
+        <div class="step"><span class="step__n">1</span> /orders/new — шапка<span class="step__mark step__mark--yes">—</span></div>
+        <div class="step"><span class="step__n">2</span> «Отправить конструктору»<span class="step__mark step__mark--no">нет</span></div>
+        <div class="step"><span class="step__n">3</span> черновик + задача КБ<span class="step__mark step__mark--no">нет</span></div>
+        <div class="step"><span class="step__n">4</span> дозаполнение на <code>/[id]/edit</code><span class="step__mark step__mark--no">нет</span></div>
+        <div class="step"><span class="step__n">5</span> карточка заказа<span class="step__mark step__mark--no">нет</span></div>
+      </div>
+    </div>
+    <p class="note" style="margin-top:1rem">
+      Формально данные не теряются: API <code>PUT /api/orders/:id/applications</code> и форма
+      <code>OrderApplicationsForm</code> существуют — просто ни один экран их не рендерит. После правки
+      все три пути ведут в одно и то же место ввода.
+    </p>
+  </section>
+
+  <!-- ======================================================= 4 -->
+  <section class="sect" id="code">
+    <h2>4. Что правим</h2>
+    <table class="files">
+      <thead>
+        <tr><th style="width:34%">Файл</th><th style="width:20%">Что</th><th>Как</th></tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td><code>apps/web/app/admin/orders/new/order-create-colorways.tsx</code></td>
+          <td>Ячейка количества</td>
+          <td>Вместо <code>value={qty}</code> — пустая строка при 0 + <code>placeholder="0"</code>, выделение значения по фокусу. Используется и мастером, и страницей правки.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/components/orders/colorways/order-colorways-block.tsx</code></td>
+          <td>Ячейка количества</td>
+          <td>То же самое в блоке расцветок карточки заказа — чтобы поведение не разъезжалось между экранами.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/app/admin/orders/new/admin-create-order-form.tsx</code></td>
+          <td>Карточка «Нанесение»</td>
+          <td>Вынести из-под условия «только режим SELECTING» — карточка нужна и когда изделие создаётся инлайн.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/app/admin/orders/[id]/edit/admin-edit-order-form.tsx</code> + <code>actions.ts</code></td>
+          <td>Новая карточка</td>
+          <td>Добавить <code>OrderApplicationsEditor</code> под «План по размерам», прочитать <code>applicationsJson</code> в server action и сохранить полной заменой.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/components/orders/view/tabs/order-production-tab.tsx</code></td>
+          <td>Новая карточка</td>
+          <td>Подключить готовый <code>OrderApplicationsCard</code> (черновик — форма, дальше — read-only). Сам компонент менять не нужно.</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="note" style="margin-top:1rem">
+      Backend, DTO и Prisma не трогаем: <code>POST /api/orders</code> уже принимает
+      <code>applications</code>, <code>PUT /api/orders/:id/applications</code> уже делает full-replace
+      и запрещает правку вне черновика (<code>ORDER_APPLICATION_ORDER_LOCKED</code>).
+    </p>
+  </section>
+
+</div>
+
+<script>
+  // Живая демонстрация «пусто = 0»: пересчёт Σ и чипов + выделение значения по фокусу.
+  document.querySelectorAll('.cwf-size input').forEach(function (i) {
+    i.addEventListener('focus', function () { i.select(); });
+  });
+  function recalc() {
+    document.querySelectorAll('[data-live]').forEach(function (row) {
+      var sum = 0;
+      row.querySelectorAll('input').forEach(function (i) { sum += parseInt(i.value, 10) || 0; });
+      var t = row.querySelector('[data-rowtotal]');
+      if (t) t.textContent = 'Σ ' + sum;
+    });
+    var chips = document.querySelector('[data-chips]');
+    if (!chips) return;
+    var row = document.querySelector('[data-live]');
+    var parts = [];
+    var grand = 0;
+    row.querySelectorAll('.cwf-size').forEach(function (cell) {
+      var v = parseInt(cell.querySelector('input').value, 10) || 0;
+      grand += v;
+      if (v > 0) parts.push('<span class="cwf-chip">' + cell.querySelector('span').textContent + ' <b>' + v + '</b></span>');
+    });
+    chips.innerHTML =
+      '<span style="color:var(--color-fg-muted)">Итого по размерам:</span>' +
+      parts.join('') +
+      '<span class="cwf-chip cwf-chip--total">Всего <b>' + grand + '</b></span>';
+    var g = document.querySelector('[data-grand]');
+    if (g) g.textContent = grand;
+  }
+  document.querySelectorAll('[data-live] input').forEach(function (i) {
+    i.addEventListener('input', recalc);
+  });
+</script>
+
+</body>
+</html>

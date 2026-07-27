@@ -1570,11 +1570,12 @@ function ProductCreateTab({
         </AdminCard>
       </div>
 
-      {/* Нижние карточки (Производство, Нанесение, План по размерам)
-          актуальны только в режиме «Выбрать изделие» — там менеджер
-          вручную выбирает техкарту/маршрут/размеры. В режимах CREATING
-          / CREATED / EMPTY скрываем — данные либо заполняются внутри
-          inline-формы, либо ещё не нужны. */}
+      {/* Нижние карточки «План по размерам» и «Производство» актуальны
+          только в режиме «Выбрать изделие» — там менеджер вручную
+          выбирает техкарту/маршрут/размеры. В режимах CREATING /
+          CREATED / EMPTY скрываем: эти данные заполняются внутри
+          inline-формы изделия. Карточка «Нанесение» из этого гейта
+          вынесена ниже — она к способу заведения изделия не привязана. */}
       {isSelecting && (<>
       <AdminCard className="admin-order-card admin-order-card--sizes">
         <header className="admin-order-card__header admin-order-card__header--with-meta">
@@ -1707,26 +1708,38 @@ function ProductCreateTab({
         )}
       </AdminCard>
 
-      <AdminCard className="admin-order-card admin-order-card--applications">
-        <header className="admin-order-card__header">
-          <span className="admin-order-card__icon admin-order-card__icon--violet">
-            <Stamp size={18} strokeWidth={1.7} aria-hidden />
-          </span>
-          <h2 className="admin-order-card__title">Нанесение</h2>
-        </header>
-        <p className="admin-muted" style={{ marginTop: 0, fontSize: '0.85rem' }}>
-          Параметры нанесения хранятся в заказе. На крое блокируется
-          раскладка, пока параметры не заполнены.
-        </p>
-        <OrderApplicationsEditor
-          availableSizes={availableSizes.map((s) => ({
-            id: s.id,
-            code: s.code,
-          }))}
-        />
-      </AdminCard>
-
       </>)}
+
+      {/* «Нанесение» — атрибут ЗАКАЗА, а не способа завести изделие,
+          поэтому карточка живёт вне гейта `isSelecting`: она нужна и
+          когда изделие создаётся инлайн и уже сохранено (`CREATED`).
+          В режиме `CREATING` открыта модалка изделия — нижние блоки
+          скрыты целиком; там нанесение вводится позже, на странице
+          правки созданного черновика (`/admin/orders/[id]/edit`), где
+          такая же карточка. */}
+      {(isSelecting || isCreated) && (
+        <AdminCard className="admin-order-card admin-order-card--applications">
+          <header className="admin-order-card__header">
+            <span className="admin-order-card__icon admin-order-card__icon--violet">
+              <Stamp size={18} strokeWidth={1.7} aria-hidden />
+            </span>
+            <h2 className="admin-order-card__title">Нанесение</h2>
+          </header>
+          <p
+            className="admin-muted"
+            style={{ marginTop: 0, fontSize: '0.85rem' }}
+          >
+            Параметры нанесения хранятся в заказе. На крое блокируется
+            раскладка, пока параметры не заполнены.
+          </p>
+          <OrderApplicationsEditor
+            availableSizes={availableSizes.map((s) => ({
+              id: s.id,
+              code: s.code,
+            }))}
+          />
+        </AdminCard>
+      )}
     </>
   );
 }

@@ -70,7 +70,10 @@ function swatchHex(name: string): string {
   return DEFAULT_SWATCH;
 }
 
-/** Ширина ячейки количества под число, чтобы цифры не обрезались. */
+/**
+ * Ширина ячейки количества под число, чтобы цифры не обрезались.
+ * Пустая ячейка (qty = 0) считается по плейсхолдеру «0».
+ */
 function qtyWidth(n: number): string {
   const digits = Math.max(2, String(n).length);
   return `${digits + 1.5}ch`;
@@ -301,8 +304,17 @@ export function OrderColorwaysFieldset({
                             type="number"
                             min={0}
                             inputMode="numeric"
-                            value={qty}
+                            // Ноль показываем ПЛЕЙСХОЛДЕРОМ, а не значением:
+                            // иначе перед вводом менеджеру приходится стирать
+                            // «0» в каждой ячейке (а если не стёр — набирается
+                            // «012»). Тот же приём уже применён в размерной
+                            // матрице без расцветок (`size-plan-selector`).
+                            placeholder="0"
+                            value={qty === 0 ? '' : String(qty)}
                             style={{ width: qtyWidth(qty) }}
+                            // Клик в заполненную ячейку выделяет число целиком —
+                            // следующая цифра ЗАМЕНЯЕТ значение, а не дописывается.
+                            onFocus={(e) => e.currentTarget.select()}
                             onChange={(e) =>
                               setQty(
                                 idx,

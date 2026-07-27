@@ -90,6 +90,7 @@ import { OrderCutIssueRulesCard } from '@/components/orders/order-cut-issue-rule
 import { RouteModeToggle } from '@/components/orders/view/route-mode-toggle';
 import { OrderColorwaysBlock } from '@/components/orders/colorways/order-colorways-block';
 import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
+import { OrderApplicationsCard } from '@/components/orders/order-applications-card';
 
 interface Props {
   order: OrderDetailDto;
@@ -297,6 +298,25 @@ export async function OrderProductionTab({
       {/* «Заявки в КБ» — переехала сюда из hero вместе с расцветками.
           Компонент сам возвращает null, если задачи у заказа нет. */}
       <OrderConstructorTaskCard task={order.constructorTask} />
+
+      {/*
+        «Нанесение» — рядом с расцветками: это такой же атрибут плана
+        заказа. В DRAFT карточка рендерит форму (full-replace через
+        `PUT /orders/:id/applications`), дальше — read-only список со
+        статусом каждой строки (backend-инвариант
+        `ORDER_APPLICATION_ORDER_LOCKED`). Размеры для адресации
+        «на выбранные размеры» берём из планового среза заказа.
+      */}
+      <AdminCard className="admin-order-detail-card-compact">
+        <OrderApplicationsCard
+          orderId={order.id}
+          orderStatus={order.status}
+          sizes={order.sizeBreakdown.map((r) => ({
+            id: r.sizeId,
+            code: r.sizeCode,
+          }))}
+        />
+      </AdminCard>
 
       <AdminCard className="admin-order-detail-card-compact">
         <AdminSectionHeader

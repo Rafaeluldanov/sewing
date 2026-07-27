@@ -48,6 +48,7 @@ import {
   Plus,
   Save,
   Shirt,
+  Stamp,
   Workflow,
 } from 'lucide-react';
 import type { ClientDto } from '@sewing/shared/clients';
@@ -69,6 +70,7 @@ import {
   MONEY_CURRENCY_LABELS,
   type MoneyCurrency,
 } from '@sewing/shared/money';
+import type { OrderApplicationDto } from '@sewing/shared/order-applications';
 import type { PatternListItemDto } from '@sewing/shared/patterns';
 import type { RouteTemplateSummaryDto } from '@sewing/shared/routes';
 import type { TechCardTemplateSummaryDto } from '@sewing/shared/tech-cards';
@@ -110,6 +112,10 @@ import {
 import { OrderDetailTabs } from '@/components/orders/order-detail-tabs';
 import { OrderWorkspaceLayout } from '@/components/orders/order-workspace-layout';
 import { OrderConstructorTaskCard } from '@/components/orders/order-constructor-task-card';
+import {
+  OrderApplicationsEditor,
+  applicationRowFromDto,
+} from '@/components/orders/order-applications-editor';
 import {
   updateAdminOrderAction,
   type FormActionState,
@@ -164,6 +170,12 @@ interface Props {
    * `colorwaysEnabled`.
    */
   initialColorways: ColorwayDraft[];
+  /**
+   * Нанесения заказа (из `getOrderApplications`) для карточки
+   * «Нанесение». Правятся только в DRAFT (backend-инвариант
+   * `ORDER_APPLICATION_ORDER_LOCKED`), вне его карточка read-only.
+   */
+  initialApplications: OrderApplicationDto[];
 }
 
 const initialState: FormActionState = {};
@@ -213,6 +225,7 @@ export function AdminEditOrderForm({
   today,
   colorwaysEnabled,
   initialColorways,
+  initialApplications,
 }: Props) {
   const router = useRouter();
   const action = updateAdminOrderAction.bind(null, order.id);
@@ -339,6 +352,23 @@ export function AdminEditOrderForm({
     () => new Set(sortedSizes.map((s) => s.id)),
     [sortedSizes],
   );
+
+  // Размеры для адресации нанесения «на выбранные размеры». Берём
+  // фактические размеры заказа (строки `OrderItem`); у пустого черновика
+  // их ещё нет — тогда падаем на размеры выбранного лекала, как это
+  // делает форма создания.
+  const applicationSizes = useMemo<{ id: string; code: string }[]>(() => {
+    const codeById = new Map(sortedSizes.map((s) => [s.id, s.code]));
+    const seen = new Set<string>();
+    const out: { id: string; code: string }[] = [];
+    for (const it of order.items) {
+      if (seen.has(it.sizeId)) continue;
+      seen.add(it.sizeId);
+      out.push({ id: it.sizeId, code: codeById.get(it.sizeId) ?? it.sizeId });
+    }
+    if (out.length > 0) return out;
+    return availableSizes.map((s) => ({ id: s.id, code: s.code }));
+  }, [order.items, sortedSizes, availableSizes]);
 
   // Доп.размеры сида (сверх лекала) — чтобы их колонки показались сразу.
   // Считаем ОДИН раз от начального сида и начального набора размеров
@@ -1421,6 +1451,44 @@ export function AdminEditOrderForm({
                 </div>
               </>
             )}
+          </AdminCard>
+
+          {/* «Нанесение» — та же карточка, что в мастере создания
+              (`/admin/orders/new`). Здесь она обязательна: заказ,
+              созданный через «Создать изделие», сразу уезжает на эту
+              страницу, и другого места ввести нанесение у менеджера нет.
+
+              Правка разрешена только в DRAFT — backend отбивает
+              `PUT /orders/:id/applications` вне черновика
+              (`ORDER_APPLICATION_ORDER_LOCKED`). Вне DRAFT редактор
+              оборачиваем `<fieldset disabled>`: он гасит контролы
+              нативно, вместе со скрытым `applicationsJson`, поэтому
+              server action его не увидит и PUT не пошлёт (тот же приём,
+              что у расцветок выше). */}
+          <AdminCard className="admin-order-card admin-order-card--applications">
+            <header className="admin-order-card__header">
+              <span className="admin-order-card__icon admin-order-card__icon--violet">
+                <Stamp size={18} strokeWidth={1.7} aria-hidden />
+              </span>
+              <h2 className="admin-order-card__title">Нанесение</h2>
+            </header>
+            <p
+              className="admin-muted"
+              style={{ marginTop: 0, fontSize: '0.85rem' }}
+            >
+              {isDraft
+                ? 'Параметры нанесения хранятся в заказе и сохраняются вместе с формой. На крое блокируется раскладка, пока параметры не заполнены.'
+                : 'Нанесение правится только в черновике — после перевода в расчёт список заморожен.'}
+            </p>
+            <fieldset
+              disabled={!isDraft}
+              style={{ border: 0, padding: 0, margin: 0, minInlineSize: 0 }}
+            >
+              <OrderApplicationsEditor
+                initial={initialApplications.map(applicationRowFromDto)}
+                availableSizes={applicationSizes}
+              />
+            </fieldset>
           </AdminCard>
         </div>
 

@@ -46,6 +46,8 @@ import { getRouteTemplate, listRouteTemplates } from '@/lib/routes-api';
 import { getTechCard, listTechCards } from '@/lib/tech-cards-api';
 import { listWarehouses } from '@/lib/warehouses-api';
 import { getOrderColorways } from '@/lib/colorways-api';
+import { getOrderApplications } from '@/lib/order-applications-api';
+import type { OrderApplicationDto } from '@sewing/shared/order-applications';
 import {
   isColorwaysEnabled,
   isOrderCalculationsEnabled,
@@ -282,6 +284,17 @@ export default async function AdminOrderEditPage({ params }: Params) {
     }
   }
 
+  // Нанесения заказа — сид для карточки «Нанесение» в форме правки.
+  // Это единственное место ввода нанесений для заказов, созданных через
+  // «Создать изделие» (мастер сразу уводит сюда). Читаем всегда: вне
+  // DRAFT карточка покажет их read-only.
+  let initialApplications: OrderApplicationDto[] = [];
+  try {
+    initialApplications = await getOrderApplications(order.id);
+  } catch {
+    // graceful — карточка откроется пустой, форма заказа не падает.
+  }
+
   // Фича «Варианты просчёта»: ряд вкладок вариантов над формой
   // редактирования. Переключение предупреждает о несохранённых правках
   // (`warnUnsavedForm`) — restore снимка перечитает страницу.
@@ -345,6 +358,7 @@ export default async function AdminOrderEditPage({ params }: Params) {
         today={today}
         colorwaysEnabled={colorwaysEnabled}
         initialColorways={initialColorways}
+        initialApplications={initialApplications}
       />
     </AdminPageShell>
   );

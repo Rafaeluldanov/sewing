@@ -28,6 +28,10 @@
  *   - `techCardId`       (string, optional, пусто = снять)
  *   - `status`           (`DRAFT | IN_PRODUCTION | DONE | CANCELLED`)
  *   - `qty[<sizeId>]`    (number, только > 0 идут в `items`)
+ *   - `applicationsJson` (JSON-массив нанесений из
+ *                         `OrderApplicationsEditor`; поля нет = не
+ *                         трогать, есть = full-replace вторым запросом
+ *                         `PUT /orders/:id/applications`)
  *
  * Поле `productId` admin-форма больше НЕ шлёт — backend сам
  * пересинхронизирует `OrderItem.productId` со скрытым legacy Product
@@ -58,8 +62,13 @@ import {
   type OrderStatus,
   type UpdateOrderDto,
 } from '@sewing/shared/orders';
+import {
+  ReplaceOrderApplicationsSchema,
+  type ReplaceOrderApplicationsDto,
+} from '@sewing/shared/order-applications';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { updateOrder } from '@/lib/orders-api';
+import { replaceOrderApplications } from '@/lib/order-applications-api';
 // Этап «Клиент — обязательный атрибут заказа»: единый текст ошибки и
 // гейт на все формы заказа.
 import { clientRequiredError } from '@/lib/order-client-required';
@@ -131,6 +140,37 @@ function parseVariantsJson(form: FormData): UpdateOrderDto['variants'] {
     out.push({ color, techCardId, sizes });
   }
   return out.length > 0 ? out : undefined;
+}
+
+/**
+ * Нанесения заказа (карточка «Нанесение» в форме правки): редактор
+ * `OrderApplicationsEditor` пишет скрытый `applicationsJson` тем же
+ * контрактом, что в мастере создания и в DRAFT-карточке заказа.
+ *
+ * Поля НЕТ (`null`) = карточка была read-only (вне DRAFT редактор
+ * обёрнут в `<fieldset disabled>` — браузер не отправляет его контролы)
+ * → нанесения не трогаем вовсе. Поле есть = full-replace, включая
+ * пустой массив (менеджер удалил все строки).
+ */
+function parseApplications(
+  form: FormData,
+): ReplaceOrderApplicationsDto | null | 'INVALID' {
+  const raw = form.get('applicationsJson');
+  if (raw === null) return null;
+  const text = String(raw).trim();
+  let payload: unknown;
+  if (text === '') {
+    payload = { applications: [] };
+  } else {
+    try {
+      const parsed: unknown = JSON.parse(text);
+      payload = Array.isArray(parsed) ? { applications: parsed } : parsed;
+    } catch {
+      return 'INVALID';
+    }
+  }
+  const parsed = ReplaceOrderApplicationsSchema.safeParse(payload);
+  return parsed.success ? parsed.data : 'INVALID';
 }
 
 function parseStatus(form: FormData): OrderStatus | undefined {
@@ -280,6 +320,12 @@ export async function updateAdminOrderAction(
   // Ловим на шаг раньше и адресно — на поле.
   const clientMissing = clientRequiredError(form);
   if (clientMissing) return clientMissing;
+  // Нанесения валидируем ДО записи заказа — чтобы не сохранить половину
+  // формы и упасть на второй половине.
+  const applications = parseApplications(form);
+  if (applications === 'INVALID') {
+    return { error: 'Невалидные данные нанесения' };
+  }
   const raw = buildUpdateDto(form);
   const parsed = UpdateOrderSchema.safeParse(raw);
   if (!parsed.success) {
@@ -296,6 +342,20 @@ export async function updateAdminOrderAction(
 
   try {
     await updateOrder(orderId, parsed.data);
+    // Нанесения живут в отдельном ресурсе (`PUT /orders/:id/applications`,
+    // full-replace) — шлём вторым запросом после успешной записи заказа.
+    // Если он упадёт (например, статус успел уехать из DRAFT и backend
+    // ответил `ORDER_APPLICATION_ORDER_LOCKED`), поля заказа уже
+    // сохранены — сообщаем об этом явно, без редиректа.
+    if (applications !== null) {
+      try {
+        await replaceOrderApplications(orderId, applications);
+      } catch (e) {
+        return {
+          error: `Заказ сохранён, но нанесения — нет: ${explainApiError(e)}`,
+        };
+      }
+    }
     // Инвалидируем оба варианта карточки (новая admin + легаси), а
     // также списки — чтобы изменения были видны сразу.
     revalidatePath('/admin/orders');

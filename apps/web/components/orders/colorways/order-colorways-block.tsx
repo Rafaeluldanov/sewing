@@ -383,7 +383,12 @@ export function OrderColorwaysBlock({
                       <input
                         type="number"
                         min={0}
-                        value={s.qtyPlan}
+                        // Ноль — плейсхолдер, а не значение: ячейку не нужно
+                        // сначала стирать, чтобы ввести число (см. тот же
+                        // приём в `order-create-colorways.tsx`).
+                        placeholder="0"
+                        value={s.qtyPlan === 0 ? '' : String(s.qtyPlan)}
+                        onFocus={(e) => e.currentTarget.select()}
                         onChange={(e) =>
                           setQty(v.id, s.sizeId, Math.max(0, +e.target.value || 0))
                         }
