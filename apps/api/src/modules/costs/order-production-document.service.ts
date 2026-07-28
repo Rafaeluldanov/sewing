@@ -955,7 +955,17 @@ export class OrderProductionDocumentService {
           factApprovedRub: this.m(acc.factApprovedRub).toFixed(2),
           varianceRub:
             planRub != null ? this.m(factRub.sub(planRub)).toFixed(2) : null,
-          warnings: acc.substituteFolded ? ['SUBSTITUTE_FOLDED'] : [],
+          // Факт без плана и без легальной замены = работа мимо
+          // маршрута заказа. Считаем ЗДЕСЬ, а не на месте `index: 9000`:
+          // там в «сиротах» лежат и замещающие операции, которые сворачиваются
+          // законно чуть ниже (PF3), и пометить их как нарушение было бы
+          // ложной тревогой.
+          warnings: [
+            ...(acc.substituteFolded ? ['SUBSTITUTE_FOLDED'] : []),
+            ...(!planStepOpIds.has(acc.key) && !acc.substituteFolded
+              ? ['WORK_OUTSIDE_ROUTE']
+              : []),
+          ],
           breakdown,
         };
       })

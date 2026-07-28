@@ -293,6 +293,19 @@ function OperationsTable({ rows }: { rows: OrderProductionOperationRowDto[] }) {
                     >
                       {r.operationCode}
                     </span>
+                    {/* Пометки строки читала только таблица материалов —
+                        из-за этого «факт без плана» в операциях был
+                        неотличим от законно свёрнутой замены. */}
+                    {r.warnings.length > 0 && (
+                      <span
+                        title={r.warnings
+                          .map((w) => PRODUCTION_DOC_WARNING_LABELS[w] ?? w)
+                          .join('; ')}
+                        style={{ marginLeft: 6, fontSize: 12 }}
+                      >
+                        {r.warnings.includes('WORK_OUTSIDE_ROUTE') ? '🚫' : '⚠'}
+                      </span>
+                    )}
                   </td>
                   <td style={{ textAlign: 'right' }}>
                     {r.planQty != null ? fmtInt(r.planQty) : '—'}
