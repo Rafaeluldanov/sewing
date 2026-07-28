@@ -246,6 +246,15 @@ function parseSearchDateRange(raw: string): SearchDateRange | null {
  *   - `client.name`            — карточка клиента (например, «ИП Кулаков»);
  *   - `companyDivision.code`   — код подразделения (префикс кода заказа);
  *   - `companyDivision.name`   — название подразделения;
+ *   - название изделия         — по всем трём источникам, из которых
+ *                                колонка «Изделие» берёт имя (см.
+ *                                `ProductCell` в `/admin/orders`):
+ *                                `patternNameSnapshot` (запущенный заказ),
+ *                                `patternItem.name` (живая карточка лекала),
+ *                                `items[].product.name` (исторические
+ *                                заказы без лекала). Иначе поиск «Худи»
+ *                                не находил бы заказ, который на экране
+ *                                подписан «Худи оверсайз»;
  *   - `orderDate` / `dueDate`  — если строка распознана как дата/срок,
  *                                добавляем диапазон по дате заказа и сроку.
  */
@@ -258,6 +267,9 @@ function buildOrderSearchOr(rawSearch: string): Prisma.OrderWhereInput[] {
     { client: { is: { name: like } } },
     { companyDivision: { is: { code: like } } },
     { companyDivision: { is: { name: like } } },
+    { patternNameSnapshot: like },
+    { patternItem: { is: { name: like } } },
+    { items: { some: { product: { is: { name: like } } } } },
   ];
   const range = parseSearchDateRange(q);
   if (range) {

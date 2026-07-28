@@ -271,14 +271,18 @@ export default async function AdminOrdersPage({
             <input type="hidden" name="deadline" value={deadlineFilter} />
           )}
           {/* Динамический поиск «на лету» по любому текстовому параметру
-              заказа (номер / клиент / подразделение / дата / срок). Матч —
-              нечувствительный к регистру и частичный, начиная с первой
-              буквы; мультиполевой OR делает backend (OrdersService.list).
+              заказа (номер / изделие / клиент / подразделение / дата /
+              срок). Матч — нечувствительный к регистру и частичный, начиная
+              с первой буквы; мультиполевой OR делает backend
+              (OrdersService.list → buildOrderSearchOr). Изделие ищется по
+              тем же трём источникам имени, что показывает колонка
+              «Изделие»: snapshot заказа, живая карточка лекала, legacy
+              `product.name`.
               Поле остаётся в форме с name="search", поэтому Enter/«Применить»
               работают как фолбэк. */}
           <AdminSearchInput
             id="orders-search"
-            placeholder="Номер, клиент, подразделение, дата…"
+            placeholder="Номер, изделие, клиент, подразделение, дата…"
             initial={query.search ?? ''}
             basePath="/admin/orders"
             preserveParams={{
@@ -487,7 +491,14 @@ function OrdersTable({
       header: 'Организация',
       render: () =>
         orgName ? (
-          <span>{orgName}</span>
+          <div
+            className="admin-cell-marquee"
+            style={{ '--admin-marquee-w': '9rem' } as CSSProperties}
+          >
+            <span className="admin-cell-marquee__text" title={orgName}>
+              {orgName}
+            </span>
+          </div>
         ) : (
           <span className="admin-muted">—</span>
         ),
@@ -528,7 +539,9 @@ function OrdersTable({
               display: 'inline-flex',
               gap: '0.35rem',
               alignItems: 'center',
-              flexWrap: 'wrap',
+              // Строка списка — ровно в одну строку: бейдж КБ уезжает
+              // вправо вместе со статусом, а не переносится под него.
+              flexWrap: 'nowrap',
             }}
           >
             {/*
@@ -556,12 +569,16 @@ function OrdersTable({
     },
   ];
 
+  // `admin-table--oneline`: ряд списка — ровно в одну строку. Ни одна
+  // ячейка не переносится, длинный текст обрезается троеточием (полный —
+  // в `title` и бегущей строкой на ховере). См. `globals.css`.
   return (
     <AdminTable
       rows={items}
       columns={columns}
       rowKey={(o) => o.id}
       rowHref={(o) => `/admin/orders/${o.id}`}
+      className="admin-table--oneline"
       emptyContent={
         filtered ? (
           <AdminEmptyState
@@ -590,8 +607,9 @@ function OrdersTable({
  * привязки к лекалу. Иначе список и карточка называли бы одно и то же
  * изделие по-разному после правки номенклатуры.
  *
- * Артикул показываем хинтом второй строкой — как в справочнике лекал
- * (`/admin/patterns`).
+ * В колонке ТОЛЬКО название: артикул из списка убран (ряд держим ровно
+ * в одну строку, а по артикулу список не сканируют — он есть в карточке
+ * заказа и в справочнике лекал).
  *
  * Ширина колонки фиксирована (`--admin-marquee-w`), иначе длинное имя
  * изделия растягивает колонку и перекраивает всю таблицу. Не влезающий
@@ -602,14 +620,13 @@ function OrdersTable({
 function ProductCell({ o }: { o: OrderListItemDto }) {
   const name =
     o.patternNameSnapshot ?? o.patternName ?? o.productName ?? null;
-  const article = o.patternArticleSnapshot ?? o.patternArticle ?? null;
   if (!name) {
     return <span className="admin-muted">—</span>;
   }
   return (
     <div
       className="admin-cell-marquee"
-      style={{ '--admin-marquee-w': '15rem' } as CSSProperties}
+      style={{ '--admin-marquee-w': '16rem' } as CSSProperties}
     >
       <span
         className="admin-cell-marquee__text admin-table__primary"
@@ -617,14 +634,6 @@ function ProductCell({ o }: { o: OrderListItemDto }) {
       >
         {name}
       </span>
-      {article && (
-        <span
-          className="admin-cell-marquee__text admin-table__hint"
-          title={article}
-        >
-          Артикул: {article}
-        </span>
-      )}
     </div>
   );
 }
@@ -637,22 +646,32 @@ function ProductCell({ o }: { o: OrderListItemDto }) {
  * Если заказ привязан к карточке клиента (`o.client`), имя кликабельно
  * и ведёт в `/admin/clients/[id]`. Старый free-text `o.customer`
  * (заказы без привязки к справочнику) показываем как простой текст.
+ *
+ * Ширина фиксирована так же, как у «Изделия»: юрлица в справочнике
+ * длинные («АКЦИОНЕРНОЕ ОБЩЕСТВО …»), и без ограничения такое имя
+ * переносилось на 2-3 строки и задирало высоту всего ряда.
  */
 function ClientCell({ o }: { o: OrderListItemDto }) {
-  if (o.client) {
-    return (
-      <Link
-        href={`/admin/clients/${o.client.id}`}
-        className="admin-link"
-      >
-        {o.client.name}
-      </Link>
-    );
+  const name = o.client?.name ?? o.customer ?? null;
+  if (!name) {
+    return <span className="admin-muted">—</span>;
   }
-  if (o.customer) {
-    return <span>{o.customer}</span>;
-  }
-  return <span className="admin-muted">—</span>;
+  return (
+    <div
+      className="admin-cell-marquee"
+      style={{ '--admin-marquee-w': '12rem' } as CSSProperties}
+    >
+      <span className="admin-cell-marquee__text" title={name}>
+        {o.client ? (
+          <Link href={`/admin/clients/${o.client.id}`} className="admin-link">
+            {name}
+          </Link>
+        ) : (
+          name
+        )}
+      </span>
+    </div>
+  );
 }
 
 /**

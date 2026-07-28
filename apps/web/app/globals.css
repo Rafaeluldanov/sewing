@@ -7417,6 +7417,32 @@ body:has(.display-screen) {
   }
 }
 
+/* Ряд «ровно в одну строку» — `AdminTable className="admin-table--oneline"`
+   (класс уезжает на `.admin-table-wrap`).
+   ----------------------------------------------------------------------------
+   Список сканируют глазом сверху вниз, и ряды разной высоты («у этого
+   заказа артикул есть, у того нет», «у этого клиент — АО с длинным
+   названием») сбивают ритм. Здесь ячейка не переносится вовсе; текст,
+   который может быть длинным (изделие, клиент, организация), страница
+   заворачивает в `.admin-cell-marquee` фиксированной ширины — там он
+   обрезается троеточием, а целиком виден в `title` и бегущей строкой на
+   ховере.
+
+   Обрезку (`overflow: hidden`) на саму `td` НЕ вешаем: в строке живёт
+   раскрывающийся список статуса (`.order-status-select__menu`,
+   `position: absolute`), и обрезка по ячейке съела бы его меню. */
+.admin-table--oneline .admin-table tbody td {
+  white-space: nowrap;
+}
+/* Сумма колонок в одну строку шире, чем при переносах, и на узком экране
+   может не влезть. База `.admin-table-wrap` — `overflow: hidden` (под
+   border-radius), то есть правая колонка просто отрезалась бы; здесь
+   вместо этого появляется горизонтальный скролл. */
+.admin-table--oneline {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
 .admin-table__actions {
   text-align: right;
   white-space: nowrap;
@@ -7910,6 +7936,15 @@ body:has(.display-screen) {
      а бегущая строка на тач-экране без ховера бессмысленна. */
   .admin-cell-marquee {
     width: auto;
+  }
+  /* «Одна строка на ряд» — правило десктопной таблицы. В карточке строк
+     как таковых нет: каждое поле идёт своей строкой, и `nowrap` только
+     вытолкнул бы длинное значение за край карточки. */
+  .admin-table--oneline {
+    overflow-x: hidden;
+  }
+  .admin-table--oneline .admin-table tbody td {
+    white-space: normal;
   }
   .admin-table tbody tr:hover .admin-cell-marquee__text,
   .admin-cell-marquee:hover .admin-cell-marquee__text {
