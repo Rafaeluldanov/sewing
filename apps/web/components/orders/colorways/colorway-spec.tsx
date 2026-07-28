@@ -68,14 +68,27 @@ interface Props {
 const emptyLine = { name: '', unit: '', qtyPerUnit: '', colorText: '' };
 
 /**
- * Подпись источника нормы. Норма живёт в номенклатуре, поэтому строка обязана
- * говорить, откуда взято число: иначе менеджер не отличит «подтянулось» от
- * «стоит заглушка» — ровно та жалоба, из-за которой источник и появился.
+ * Источник нормы — КОМПАКТНЫЙ индикатор: буква + цвет, расшифровка по
+ * наведению. Текстовые бейджи («из номенклатуры» / «из шаблона») занимали
+ * половину колонки и перетягивали внимание с самого числа, хотя нужны лишь
+ * тогда, когда норма вызывает вопрос.
  */
-const QTY_SOURCE_LABEL: Record<string, string> = {
-  NOMENCLATURE: 'из номенклатуры',
-  TEMPLATE: 'из шаблона',
-  ORDER: 'правлено в заказе',
+const QTY_SOURCE_BADGE: Record<string, { letter: string; title: string }> = {
+  NOMENCLATURE: {
+    letter: 'Н',
+    title:
+      'Норма из номенклатуры — пересчёт заказа освежает её по размерному плану',
+  },
+  TEMPLATE: {
+    letter: 'Ш',
+    title:
+      'Норма из шаблона техкарты — в номенклатуре подходящего параметра не нашлось',
+  },
+  ORDER: {
+    letter: 'З',
+    title:
+      'Норма правлена в заказе — она главнее номенклатуры и переживает пересчёт',
+  },
 };
 
 /**
@@ -414,6 +427,7 @@ export function ColorwaySpec({
                     </button>
                   </td>
                   <td className="num">
+                    <span className="cws-qty">
                     <input
                       className="cws-cell cws-cell--num"
                       inputMode="decimal"
@@ -427,22 +441,23 @@ export function ColorwaySpec({
                         saveLine(l.id, { qtyPerUnit: next });
                       }}
                     />
-                    {/* Источник нормы: без него не отличить «подтянулось из
+                    {/* Источник нормы: буква + цвет, расшифровка по наведению.
+                        Без индикатора не отличить «подтянулось из
                         номенклатуры» от «стоит заглушка шаблона». */}
-                    {l.qtySource && (
+                    {l.qtySource && QTY_SOURCE_BADGE[l.qtySource] && (
                       <span
                         className={`cws-src cws-src--${l.qtySource.toLowerCase()}`}
                         title={
                           l.qtySourceLabel
-                            ? `Источник: ${l.qtySourceLabel}`
-                            : l.qtySource === 'ORDER'
-                              ? 'Норма правлена в заказе — пересчёт её не переписывает'
-                              : 'Норма из шаблона техкарты'
+                            ? `${QTY_SOURCE_BADGE[l.qtySource]!.title}. Источник: ${l.qtySourceLabel}`
+                            : QTY_SOURCE_BADGE[l.qtySource]!.title
                         }
+                        aria-label={QTY_SOURCE_BADGE[l.qtySource]!.title}
                       >
-                        {QTY_SOURCE_LABEL[l.qtySource] ?? l.qtySource}
+                        {QTY_SOURCE_BADGE[l.qtySource]!.letter}
                       </span>
                     )}
+                    </span>
                   </td>
                   <td>
                     <input
@@ -513,7 +528,7 @@ export function ColorwaySpec({
         (newLine === null ? (
           <button
             type="button"
-            className="cws-add"
+            className="cws-btn cws-btn--dash"
             onClick={() => setNewLine({ ...emptyLine })}
           >
             + Добавить материал
@@ -554,7 +569,7 @@ export function ColorwaySpec({
             />
             <button
               type="button"
-              className="admin-btn admin-btn--primary"
+              className="cws-btn cws-btn--primary"
               disabled={
                 pending ||
                 !newLine.name.trim() ||
@@ -579,7 +594,7 @@ export function ColorwaySpec({
             </button>
             <button
               type="button"
-              className="admin-btn admin-btn--ghost"
+              className="cws-btn"
               onClick={() => setNewLine(null)}
             >
               Отмена
@@ -651,7 +666,7 @@ export function ColorwaySpec({
           {adHoc === null ? (
             <button
               type="button"
-              className="admin-btn admin-btn--ghost"
+              className="cws-btn"
               onClick={() => setAdHoc({ ...emptyAdHoc })}
             >
               + Добавить параметр
@@ -695,7 +710,7 @@ export function ColorwaySpec({
               любом окне правки: структуру строк не трогает, только числа. */}
           <button
             type="button"
-            className="admin-btn admin-btn--ghost"
+            className="cws-btn"
             disabled={pending}
             title="Перечитать нормы расхода из карточки номенклатуры (правки норм в заказе сбросятся)"
             onClick={() => {
@@ -722,7 +737,7 @@ export function ColorwaySpec({
           {!amendment && (
             <button
               type="button"
-              className="admin-btn admin-btn--ghost"
+              className="cws-btn"
               disabled={pending}
               title="Перечитать шаблон: структура строк заказа будет перезаписана"
               onClick={() => {
@@ -745,7 +760,7 @@ export function ColorwaySpec({
           {saveAs === null ? (
             <button
               type="button"
-              className="admin-btn admin-btn--ghost"
+              className="cws-btn"
               onClick={() => setSaveAs({ code: '', name: '' })}
             >
               Сохранить как новый шаблон
@@ -774,7 +789,7 @@ export function ColorwaySpec({
               />
               <button
                 type="button"
-                className="admin-btn admin-btn--primary"
+                className="cws-btn cws-btn--primary"
                 disabled={pending || !saveAs.code.trim() || !saveAs.name.trim()}
                 onClick={() =>
                   startTransition(async () =>
@@ -792,7 +807,7 @@ export function ColorwaySpec({
               </button>
               <button
                 type="button"
-                className="admin-btn admin-btn--ghost"
+                className="cws-btn"
                 onClick={() => setSaveAs(null)}
               >
                 Отмена
@@ -1023,13 +1038,13 @@ function AdHocForm({
       />
       <button
         type="button"
-        className="admin-btn admin-btn--primary"
+        className="cws-btn cws-btn--primary"
         disabled={pending || v.label.trim() === ''}
         onClick={() => onSubmit(v)}
       >
         Добавить
       </button>
-      <button type="button" className="admin-btn admin-btn--ghost" onClick={onCancel}>
+      <button type="button" className="cws-btn" onClick={onCancel}>
         Отмена
       </button>
     </div>
@@ -1039,7 +1054,11 @@ function AdHocForm({
 function SpecStyles() {
   return (
     <style>{`
-.cws { display:flex; flex-direction:column; gap:12px; border-top:1px dashed var(--color-border); padding-top:11px; }
+.cws { display:flex; flex-direction:column; gap:12px; border-top:1px dashed var(--color-border); padding-top:11px;
+  /* ОДНА высота на все контролы окна: поля таблицы, поля панели параметров,
+     селекты, кнопки. Раньше каждый блок задавал свой padding, и строки
+     «прыгали» по высоте — это читалось как разные элементы разных экранов. */
+  --cws-h:32px; --cws-r:8px; }
 .cws * { box-sizing:border-box; }
 .cws-muted { font-size:12.5px; color:var(--color-fg-muted); }
 .cws-tpl { margin:0; }
@@ -1052,17 +1071,18 @@ function SpecStyles() {
 .cws-table th { text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em;
   color:var(--color-fg-muted); font-weight:700; padding:7px 10px; border-bottom:1px solid var(--color-border); background:var(--color-bg-muted); }
 .cws-table th.num { text-align:right; }
-.cws-table td { padding:7px 10px; border-bottom:1px solid var(--color-border); vertical-align:top; }
+.cws-table td { padding:6px 10px; border-bottom:1px solid var(--color-border); vertical-align:middle; }
 .cws-table tr:last-child td { border-bottom:0; }
 .cws-table td.num { text-align:right; white-space:nowrap; }
-.cws-total { font-variant-numeric:tabular-nums; color:var(--color-fg-strong); font-weight:600; padding-top:12px !important; }
-.cws-cell { width:100%; min-width:70px; padding:5px 8px; border:1px solid var(--color-border-strong); border-radius:7px;
-  font:inherit; font-size:13px; background:var(--color-bg-card); color:var(--color-fg); }
+.cws-total { font-variant-numeric:tabular-nums; color:var(--color-fg-strong); font-weight:600; }
+.cws-cell { width:100%; min-width:70px; height:var(--cws-h); padding:0 8px; border:1px solid var(--color-border-strong);
+  border-radius:var(--cws-r); font:inherit; font-size:13px; background:var(--color-bg-card); color:var(--color-fg); }
+select.cws-cell { padding-right:22px; }
 .cws-cell:focus { outline:none; border-color:var(--color-accent); }
 .cws-cell:disabled { opacity:.65; cursor:not-allowed; background:var(--color-bg-muted); }
 .cws-cell--name { min-width:170px; font-weight:600; }
 .cws-cell--num { min-width:76px; max-width:96px; text-align:right; }
-.cws-cell--sm { min-width:64px; max-width:110px; width:auto; padding:3px 6px; font-size:12.5px; }
+.cws-cell--sm { min-width:64px; max-width:110px; width:auto; padding:0 6px; font-size:12.5px; }
 .cws-flags { display:flex; align-items:center; flex-wrap:wrap; gap:8px; margin-top:5px; }
 .cws-pill { font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.03em;
   padding:2px 7px; border-radius:999px; background:var(--color-bg-tint); color:var(--color-fg-strong); }
@@ -1070,12 +1090,18 @@ function SpecStyles() {
 .cws-x { border:none; background:none; color:var(--color-fg-subtle); cursor:pointer; font-size:17px; line-height:1; padding:4px 6px; border-radius:6px; }
 .cws-x:hover:not(:disabled) { color:var(--color-danger); background:var(--color-danger-soft); }
 .cws-x:disabled { opacity:.4; cursor:not-allowed; }
-.cws-add { align-self:flex-start; border:1px dashed var(--color-border-strong); background:var(--color-bg-card);
-  color:var(--color-fg-muted); border-radius:8px; padding:6px 12px; font:inherit; font-size:13px; font-weight:600; cursor:pointer; }
-.cws-add:hover { border-color:var(--color-accent); color:var(--color-fg); }
+.cws-btn { display:inline-flex; align-items:center; justify-content:center; align-self:flex-start; height:var(--cws-h);
+  padding:0 12px; border:1px solid var(--color-border-strong); border-radius:var(--cws-r); background:var(--color-bg-card);
+  color:var(--color-fg-muted); font:inherit; font-size:13px; font-weight:600; cursor:pointer; white-space:nowrap; }
+.cws-btn:hover:not(:disabled) { border-color:var(--color-accent); color:var(--color-fg); }
+.cws-btn:disabled { opacity:.55; cursor:not-allowed; }
+.cws-btn--dash { border-style:dashed; }
+.cws-btn--primary { background:var(--btn-primary-bg,var(--color-accent)); border-color:var(--btn-primary-edge,var(--color-accent));
+  color:var(--btn-primary-fg,#fff); }
+.cws-btn--primary:hover:not(:disabled) { color:var(--btn-primary-fg,#fff); }
 .cws-form { display:flex; flex-wrap:wrap; gap:8px; align-items:center; padding:10px; border:1px dashed var(--color-border-strong); border-radius:10px; }
-.cws-form input, .cws-form select { padding:6px 9px; border:1px solid var(--color-border-strong); border-radius:7px; font:inherit; font-size:13px;
-  background:var(--color-bg-card); color:var(--color-fg); }
+.cws-form input, .cws-form select { height:var(--cws-h); padding:0 9px; border:1px solid var(--color-border-strong);
+  border-radius:var(--cws-r); font:inherit; font-size:13px; background:var(--color-bg-card); color:var(--color-fg); }
 .cws-form input:focus, .cws-form select:focus { outline:none; border-color:var(--color-accent); }
 .cws-form--saveas p { width:100%; margin:0; }
 .cws-params ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; }
@@ -1088,7 +1114,7 @@ function SpecStyles() {
 .cws-linkbtn--danger { color:var(--color-danger); }
 .cws-foot { display:flex; flex-wrap:wrap; gap:8px; align-items:flex-start; }
 .cws-nameline { display:flex; align-items:flex-start; gap:6px; }
-.cws-caret { flex:none; width:22px; height:26px; display:inline-flex; align-items:center; justify-content:center;
+.cws-caret { flex:none; width:24px; height:var(--cws-h); display:inline-flex; align-items:center; justify-content:center;
   border:1px solid var(--color-border-strong); border-radius:7px; background:var(--color-bg-card);
   color:var(--color-fg-muted); font:inherit; font-size:12px; cursor:pointer; }
 .cws-caret:hover { border-color:var(--color-accent); color:var(--color-fg); }
@@ -1100,8 +1126,9 @@ function SpecStyles() {
 .cws-chip--subtype { font-weight:700; }
 .cws-chip--slot { background:var(--color-accent-soft,var(--color-bg-tint)); color:var(--color-accent-fg); font-weight:700; }
 .cws-chip--empty { background:var(--color-bg-card); border:1px dashed var(--color-border-strong); color:var(--color-fg-subtle); }
-.cws-src { display:inline-flex; align-items:center; margin-top:4px; padding:1px 7px; border-radius:999px;
-  font-size:10px; font-weight:700; white-space:nowrap; }
+.cws-qty { display:inline-flex; align-items:center; gap:6px; justify-content:flex-end; }
+.cws-src { flex:none; display:inline-flex; align-items:center; justify-content:center; width:19px; height:19px;
+  border-radius:999px; font-size:11px; font-weight:800; cursor:help; user-select:none; }
 .cws-src--nomenclature { background:var(--color-ok-soft,var(--color-bg-tint)); color:var(--color-ok-fg,var(--color-fg-strong)); }
 .cws-src--template { background:var(--color-bg-muted); color:var(--color-fg-muted); }
 .cws-src--order { background:var(--color-bg-tint); color:var(--color-warn-fg,var(--color-fg-strong)); }
