@@ -19,7 +19,7 @@
  *
  * Backend / DTO / API не меняем — это чистая presentation-обёртка.
  */
-import { Stamp } from 'lucide-react';
+import { ChevronDown, Stamp } from 'lucide-react';
 import {
   describeApplicationScope,
   isOrderApplicationsEditable,
@@ -199,6 +199,12 @@ function ReadOnlyList({
   );
 }
 
+/**
+ * Read-only строка нанесения. Свёрнута по умолчанию: видна шапка (тип +
+ * этап + статус + место/размер), детали — под разворотом. Реализовано
+ * через `<details>`, чтобы карточка осталась серверной (тот же приём,
+ * что в `AdminTechInfo`).
+ */
 function ApplicationItem({
   app,
   hideScope = false,
@@ -206,71 +212,89 @@ function ApplicationItem({
   app: OrderApplicationDto;
   hideScope?: boolean;
 }) {
+  const brief = [
+    app.placement,
+    app.widthMm != null && app.heightMm != null
+      ? `${app.widthMm}×${app.heightMm} мм`
+      : null,
+    hideScope ? null : describeApplicationScope(app),
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
     <li className="admin-order-applications__item">
-          <div className="admin-order-applications__item-head">
-            <strong>{app.typeLabel}</strong>
-            <AdminStatusBadge tone="muted">{app.stageLabel}</AdminStatusBadge>
-            <AdminStatusBadge tone={statusTone(app.status)}>
-              {app.statusLabel}
-            </AdminStatusBadge>
-          </div>
-          <dl className="admin-deflist admin-deflist--compact">
-            {app.placement && (
-              <>
-                <dt>Место</dt>
-                <dd>{app.placement}</dd>
-              </>
-            )}
-            {(app.widthMm != null || app.heightMm != null) && (
-              <>
-                <dt>Размер</dt>
-                <dd>
-                  {(app.widthMm ?? '—') + ' × ' + (app.heightMm ?? '—')} мм
-                </dd>
-              </>
-            )}
-            {app.colorsCount != null && (
-              <>
-                <dt>Цветов</dt>
-                <dd>{app.colorsCount}</dd>
-              </>
-            )}
-            {!hideScope && (
-              <>
-                <dt>Применить к</dt>
-                <dd>{describeApplicationScope(app)}</dd>
-              </>
-            )}
-            {app.colorText && (
-              <>
-                <dt>Цвет / описание</dt>
-                <dd>{app.colorText}</dd>
-              </>
-            )}
-            {app.description && (
-              <>
-                <dt>Описание</dt>
-                <dd>{app.description}</dd>
-              </>
-            )}
-            {app.comment && (
-              <>
-                <dt>Комментарий</dt>
-                <dd>{app.comment}</dd>
-              </>
-            )}
-            {app.fileUrl && (
-              <>
-                <dt>Файл макета</dt>
-                <dd>
-                  <a href={app.fileUrl} target="_blank" rel="noreferrer">
-                    {app.fileUrl}
-                  </a>
-                </dd>
-              </>
-            )}
-          </dl>
+      <details className="admin-order-applications__item-details">
+        <summary className="admin-order-applications__item-head">
+          <ChevronDown
+            size={15}
+            strokeWidth={2}
+            aria-hidden
+            className="admin-order-applications__chev"
+          />
+          <strong>{app.typeLabel}</strong>
+          <AdminStatusBadge tone="muted">{app.stageLabel}</AdminStatusBadge>
+          <AdminStatusBadge tone={statusTone(app.status)}>
+            {app.statusLabel}
+          </AdminStatusBadge>
+          {brief && (
+            <span className="admin-order-applications__row-sub">{brief}</span>
+          )}
+        </summary>
+        <dl className="admin-deflist admin-deflist--compact">
+          {app.placement && (
+            <>
+              <dt>Место</dt>
+              <dd>{app.placement}</dd>
+            </>
+          )}
+          {(app.widthMm != null || app.heightMm != null) && (
+            <>
+              <dt>Размер</dt>
+              <dd>{(app.widthMm ?? '—') + ' × ' + (app.heightMm ?? '—')} мм</dd>
+            </>
+          )}
+          {app.colorsCount != null && (
+            <>
+              <dt>Цветов</dt>
+              <dd>{app.colorsCount}</dd>
+            </>
+          )}
+          {!hideScope && (
+            <>
+              <dt>Применить к</dt>
+              <dd>{describeApplicationScope(app)}</dd>
+            </>
+          )}
+          {app.colorText && (
+            <>
+              <dt>Цвет / описание</dt>
+              <dd>{app.colorText}</dd>
+            </>
+          )}
+          {app.description && (
+            <>
+              <dt>Описание</dt>
+              <dd>{app.description}</dd>
+            </>
+          )}
+          {app.comment && (
+            <>
+              <dt>Комментарий</dt>
+              <dd>{app.comment}</dd>
+            </>
+          )}
+          {app.fileUrl && (
+            <>
+              <dt>Файл макета</dt>
+              <dd>
+                <a href={app.fileUrl} target="_blank" rel="noreferrer">
+                  {app.fileUrl}
+                </a>
+              </dd>
+            </>
+          )}
+        </dl>
+      </details>
     </li>
   );
 }

@@ -32,12 +32,22 @@
  *   - одиночные нанесения (вне комплекта) живут как раньше, со своей
  *     персональной «Применить к».
  *
+ * Сворачивание (этап «Нанесение не простынёй»):
+ *   - каждое нанесение и каждый комплект сворачиваются в строку-шапку
+ *     «тип · место · размер · применить к»; поля прячутся. Иначе на
+ *     карточке заказа три-четыре нанесения занимали весь экран.
+ *   - существующие строки (из DTO) открываются свёрнутыми, только что
+ *     добавленные — развёрнутыми (их пришли заполнять).
+ *   - свёрнутые поля не размонтируют данные: источник правды — `rows`
+ *     в state, hidden input сериализует его целиком независимо от того,
+ *     что показано на экране.
+ *
  * Источник правды для словарей типа/stage/статуса —
  * `@sewing/shared/order-applications`, чтобы UI-форма и backend
  * Zod-схема не разъезжались.
  */
 
-import { Copy, Plus, Trash2 } from 'lucide-react';
+import { ChevronDown, Copy, Plus, Trash2 } from 'lucide-react';
 import { useMemo, useState } from 'react';
 import {
   ORDER_APPLICATION_STAGES,
@@ -256,11 +266,48 @@ export function OrderApplicationsEditor({
   availableSizes = [],
 }: Props) {
   const [rows, setRows] = useState<ApplicationRow[]>(() => [...initial]);
+  /**
+   * Развёрнутые блоки: ключ строки (`row.key`) для одиночного нанесения
+   * и участника комплекта, `groupKey` — для комплекта целиком. Пусто на
+   * старте: пришедшие из DTO нанесения показываем свёрнутыми, а всё,
+   * что добавили здесь и сейчас, раскрываем явно (см. `addSolo` и др.).
+   */
+  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
 
   const serialized = useMemo(
     () => JSON.stringify(rows.map(rowToInput)),
     [rows],
   );
+
+  /** Все ключи сворачивания — для «Развернуть всё / Свернуть всё». */
+  const allKeys = useMemo(() => {
+    const keys = new Set<string>();
+    rows.forEach((r) => {
+      keys.add(r.key);
+      if (r.groupKey) keys.add(r.groupKey);
+    });
+    return [...keys];
+  }, [rows]);
+  const anyOpen = allKeys.some((k) => expanded.has(k));
+
+  function isOpen(key: string): boolean {
+    return expanded.has(key);
+  }
+  function toggleOpen(key: string): void {
+    setExpanded((curr) => {
+      const next = new Set(curr);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
+  }
+  function openKeys(...keys: string[]): void {
+    setExpanded((curr) => {
+      const next = new Set(curr);
+      keys.forEach((k) => next.add(k));
+      return next;
+    });
+  }
 
   // -------------------------------------------------------------------------
   // Группировка строк в блоки для рендера: комплект (kit) или одиночное
@@ -309,7 +356,11 @@ export function OrderApplicationsEditor({
     );
   }
   function addSolo(): void {
-    setRows((curr) => [...curr, blankApplicationRow()]);
+    // Строку создаём вне updater-а: её ключ нужен, чтобы сразу раскрыть
+    // новое нанесение (в updater-е React мог бы вызвать фабрику дважды).
+    const row = blankApplicationRow();
+    setRows((curr) => [...curr, row]);
+    openKeys(row.key);
   }
 
   // -------------------------------------------------------------------------
@@ -338,9 +389,9 @@ export function OrderApplicationsEditor({
   }
   /** Добавить нанесение в комплект — наследует область применения. */
   function addToKit(key: string): void {
+    const base = blankApplicationRow();
     setRows((curr) => {
       const first = curr.find((r) => r.groupKey === key);
-      const base = blankApplicationRow();
       const next: ApplicationRow = first
         ? {
             ...base,
@@ -357,13 +408,14 @@ export function OrderApplicationsEditor({
       copy.splice(lastIdx + 1, 0, next);
       return copy;
     });
+    openKeys(key, base.key);
   }
   /** Дублировать весь комплект (новый groupKey, копии всех нанесений). */
   function duplicateKit(key: string): void {
+    const newKey = genGroupKey();
     setRows((curr) => {
       const members = curr.filter((r) => r.groupKey === key);
       if (members.length === 0) return curr;
-      const newKey = genGroupKey();
       const label = `${members[0].groupLabel || 'Комплект'} (копия)`;
       const copies = members.map((m) => ({
         ...m,
@@ -378,12 +430,16 @@ export function OrderApplicationsEditor({
       copy.splice(at, 0, ...copies);
       return copy;
     });
+    // Копию раскрываем на уровне комплекта: её нанесения — копии уже
+    // заполненных, их шапок достаточно.
+    openKeys(newKey);
   }
   function removeKit(key: string): void {
     setRows((curr) => curr.filter((r) => r.groupKey !== key));
   }
   function addKit(): void {
     const newKey = genGroupKey();
+    const base = blankApplicationRow();
     setRows((curr) => {
       const kitCount = new Set(
         curr.filter((r) => r.groupKey).map((r) => r.groupKey),
@@ -391,12 +447,13 @@ export function OrderApplicationsEditor({
       return [
         ...curr,
         {
-          ...blankApplicationRow(),
+          ...base,
           groupKey: newKey,
           groupLabel: `Комплект ${kitCount + 1}`,
         },
       ];
     });
+    openKeys(newKey, base.key);
   }
 
   return (
@@ -419,30 +476,59 @@ export function OrderApplicationsEditor({
         if (block.kind === 'solo') {
           const idx = block.idx;
           const row = rows[idx];
+          const open = isOpen(row.key);
           return (
-            <div key={row.key} className="admin-order-applications__row">
-              {renderRowHeader(row, idx, false)}
-              <ScopeControls
-                radioName={`app-scope-${row.key}`}
-                scope={row.scope}
-                quantity={row.quantity}
-                sizes={row.sizes}
-                availableSizes={availableSizes}
-                onScope={(s) => updateRow(idx, { scope: s })}
-                onQuantity={(v) => updateRow(idx, { quantity: v })}
-                onToggleSize={(sizeId, on) => toggleSize(idx, sizeId, on)}
-                onSizeQty={(sizeId, v) => setSizeQty(idx, sizeId, v)}
-              />
-              {renderRowGrid(row, idx)}
+            <div
+              key={row.key}
+              className="admin-order-applications__row"
+              data-open={open || undefined}
+            >
+              {renderRowHead(row, idx, false, open, true)}
+              {open && (
+                <>
+                  {renderRowSelects(row, idx)}
+                  <ScopeControls
+                    radioName={`app-scope-${row.key}`}
+                    scope={row.scope}
+                    quantity={row.quantity}
+                    sizes={row.sizes}
+                    availableSizes={availableSizes}
+                    onScope={(s) => updateRow(idx, { scope: s })}
+                    onQuantity={(v) => updateRow(idx, { quantity: v })}
+                    onToggleSize={(sizeId, on) => toggleSize(idx, sizeId, on)}
+                    onSizeQty={(sizeId, v) => setSizeQty(idx, sizeId, v)}
+                  />
+                  {renderRowGrid(row, idx)}
+                </>
+              )}
             </div>
           );
         }
 
         // kit
         const first = rows[block.idxs[0]];
+        const kitOpen = isOpen(block.key);
         return (
-          <div key={block.key} className="admin-order-applications__kit">
+          <div
+            key={block.key}
+            className="admin-order-applications__kit"
+            data-open={kitOpen || undefined}
+          >
             <div className="admin-order-applications__kit-head">
+              <button
+                type="button"
+                className="admin-order-applications__chev-btn"
+                aria-expanded={kitOpen}
+                onClick={() => toggleOpen(block.key)}
+                title={kitOpen ? 'Свернуть комплект' : 'Развернуть комплект'}
+              >
+                <ChevronDown
+                  size={16}
+                  strokeWidth={2}
+                  aria-hidden
+                  className="admin-order-applications__chev"
+                />
+              </button>
               <input
                 type="text"
                 className="admin-order-applications__kit-name"
@@ -450,6 +536,12 @@ export function OrderApplicationsEditor({
                 onChange={(e) => setKitLabel(block.key, e.target.value)}
                 placeholder="Название комплекта (например: Перёд + спина)"
               />
+              {!kitOpen && (
+                <span className="admin-order-applications__row-sub">
+                  Нанесений: {block.idxs.length} ·{' '}
+                  {describeRowScope(first, availableSizes)}
+                </span>
+              )}
               <button
                 type="button"
                 className="admin-btn admin-btn--ghost"
@@ -462,55 +554,66 @@ export function OrderApplicationsEditor({
               </button>
             </div>
 
-            <ScopeControls
-              radioName={`kit-scope-${block.key}`}
-              scope={first.scope}
-              quantity={first.quantity}
-              sizes={first.sizes}
-              availableSizes={availableSizes}
-              onScope={(s) => setKitScope(block.key, s)}
-              onQuantity={(v) => setKitQuantity(block.key, v)}
-              onToggleSize={(sizeId, on) =>
-                kitToggleSize(block.key, sizeId, on)
-              }
-              onSizeQty={(sizeId, v) => kitSetSizeQty(block.key, sizeId, v)}
-            />
+            {kitOpen && (
+              <>
+                <ScopeControls
+                  radioName={`kit-scope-${block.key}`}
+                  scope={first.scope}
+                  quantity={first.quantity}
+                  sizes={first.sizes}
+                  availableSizes={availableSizes}
+                  onScope={(s) => setKitScope(block.key, s)}
+                  onQuantity={(v) => setKitQuantity(block.key, v)}
+                  onToggleSize={(sizeId, on) =>
+                    kitToggleSize(block.key, sizeId, on)
+                  }
+                  onSizeQty={(sizeId, v) => kitSetSizeQty(block.key, sizeId, v)}
+                />
 
-            <div className="admin-order-applications__kit-members">
-              {block.idxs.map((idx) => {
-                const row = rows[idx];
-                return (
-                  <div
-                    key={row.key}
-                    className="admin-order-applications__kit-member"
+                <div className="admin-order-applications__kit-members">
+                  {block.idxs.map((idx) => {
+                    const row = rows[idx];
+                    const open = isOpen(row.key);
+                    return (
+                      <div
+                        key={row.key}
+                        className="admin-order-applications__kit-member"
+                        data-open={open || undefined}
+                      >
+                        {renderRowHead(row, idx, true, open, false)}
+                        {open && (
+                          <>
+                            {renderRowSelects(row, idx)}
+                            {renderRowGrid(row, idx)}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                <div className="admin-order-applications__kit-actions">
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn--ghost"
+                    onClick={() => addToKit(block.key)}
+                    disabled={disabled}
                   >
-                    {renderRowHeader(row, idx, true)}
-                    {renderRowGrid(row, idx)}
-                  </div>
-                );
-              })}
-            </div>
-
-            <div className="admin-order-applications__kit-actions">
-              <button
-                type="button"
-                className="admin-btn admin-btn--ghost"
-                onClick={() => addToKit(block.key)}
-                disabled={disabled}
-              >
-                <Plus size={14} strokeWidth={1.6} aria-hidden /> Нанесение в
-                комплект
-              </button>
-              <button
-                type="button"
-                className="admin-btn admin-btn--ghost"
-                onClick={() => duplicateKit(block.key)}
-                disabled={disabled}
-              >
-                <Copy size={14} strokeWidth={1.6} aria-hidden /> Дублировать
-                комплект
-              </button>
-            </div>
+                    <Plus size={14} strokeWidth={1.6} aria-hidden /> Нанесение в
+                    комплект
+                  </button>
+                  <button
+                    type="button"
+                    className="admin-btn admin-btn--ghost"
+                    onClick={() => duplicateKit(block.key)}
+                    disabled={disabled}
+                  >
+                    <Copy size={14} strokeWidth={1.6} aria-hidden /> Дублировать
+                    комплект
+                  </button>
+                </div>
+              </>
+            )}
           </div>
         );
       })}
@@ -539,18 +642,84 @@ export function OrderApplicationsEditor({
         >
           <Plus size={14} strokeWidth={1.6} aria-hidden /> Новый комплект
         </button>
+        {allKeys.length > 1 && (
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            onClick={() =>
+              setExpanded(anyOpen ? new Set() : new Set(allKeys))
+            }
+          >
+            <ChevronDown
+              size={14}
+              strokeWidth={1.6}
+              aria-hidden
+              className="admin-order-applications__chev"
+              style={{ transform: anyOpen ? 'rotate(0deg)' : 'rotate(-90deg)' }}
+            />{' '}
+            {anyOpen ? 'Свернуть всё' : 'Развернуть всё'}
+          </button>
+        )}
       </div>
     </div>
   );
 
   // -------------------------------------------------------------------------
-  // Рендер полей одного нанесения (без блока «Применить к»).
+  // Шапка одного нанесения: шеврон + сводка (видна всегда) + удалить.
+  // Свёрнутая шапка — единственное, что остаётся от нанесения на экране,
+  // поэтому в ней тип и краткое описание строки.
   // -------------------------------------------------------------------------
-  function renderRowHeader(
+  function renderRowHead(
     row: ApplicationRow,
     idx: number,
     inKit: boolean,
+    open: boolean,
+    withScope: boolean,
   ): JSX.Element {
+    return (
+      <div className="admin-order-applications__row-head">
+        <button
+          type="button"
+          className="admin-order-applications__toggle"
+          aria-expanded={open}
+          onClick={() => toggleOpen(row.key)}
+          title={open ? 'Свернуть нанесение' : 'Развернуть нанесение'}
+        >
+          <ChevronDown
+            size={16}
+            strokeWidth={2}
+            aria-hidden
+            className="admin-order-applications__chev"
+          />
+          <span className="admin-order-applications__row-title">
+            {ORDER_APPLICATION_TYPE_LABELS[row.type]}
+          </span>
+          <span className="admin-order-applications__row-sub">
+            {summarizeRow(row, availableSizes, withScope)}
+          </span>
+        </button>
+        <div className="admin-order-applications__row-actions">
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            onClick={() => removeRow(idx)}
+            title={
+              inKit ? 'Убрать нанесение из комплекта' : 'Удалить нанесение'
+            }
+            disabled={disabled}
+          >
+            <Trash2 size={14} strokeWidth={1.6} aria-hidden />{' '}
+            {inKit ? 'Убрать' : 'Удалить'}
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // -------------------------------------------------------------------------
+  // Рендер полей одного нанесения (без блока «Применить к»).
+  // -------------------------------------------------------------------------
+  function renderRowSelects(row: ApplicationRow, idx: number): JSX.Element {
     return (
       <div className="admin-order-applications__grid">
         <label className={FIELD_W2}>
@@ -585,7 +754,7 @@ export function OrderApplicationsEditor({
           </select>
         </label>
 
-        <label className={FIELD}>
+        <label className={FIELD_W2}>
           <span>Статус</span>
           <select
             value={row.status}
@@ -602,21 +771,6 @@ export function OrderApplicationsEditor({
             ))}
           </select>
         </label>
-
-        <div className="admin-order-applications__row-actions">
-          <button
-            type="button"
-            className="admin-btn admin-btn--ghost"
-            onClick={() => removeRow(idx)}
-            title={
-              inKit ? 'Убрать нанесение из комплекта' : 'Удалить нанесение'
-            }
-            disabled={disabled}
-          >
-            <Trash2 size={14} strokeWidth={1.6} aria-hidden />{' '}
-            {inKit ? 'Убрать' : 'Удалить'}
-          </button>
-        </div>
       </div>
     );
   }
@@ -737,6 +891,49 @@ function withSizeQty(
     ...r,
     sizes: r.sizes.map((s) => (s.sizeId === sizeId ? { ...s, quantity } : s)),
   };
+}
+
+/**
+ * Область применения строки словами — для свёрнутой шапки. Аналог
+ * `describeApplicationScope` из shared, но по UI-строке: у неё нет
+ * `sizeCode`, только `sizeId`, поэтому коды берём из списка размеров
+ * заказа.
+ */
+function describeRowScope(
+  row: ApplicationRow,
+  availableSizes: SizeOption[],
+): string {
+  if (row.scope === 'SIZES') {
+    const codes = row.sizes
+      .map((s) => availableSizes.find((a) => a.id === s.sizeId)?.code)
+      .filter((c): c is string => Boolean(c));
+    return codes.length > 0
+      ? `размеры: ${codes.join(', ')}`
+      : 'размеры не выбраны';
+  }
+  const qty = row.quantity.trim();
+  return qty ? `${qty} ${row.unit.trim() || 'шт'} из тиража` : 'весь тираж';
+}
+
+/**
+ * Однострочная сводка нанесения для свёрнутой шапки: место, размер
+ * макета, описание и (для одиночных) область применения. У участника
+ * комплекта область общая — её показывает шапка комплекта, поэтому
+ * `withScope = false`.
+ */
+function summarizeRow(
+  row: ApplicationRow,
+  availableSizes: SizeOption[],
+  withScope: boolean,
+): string {
+  const parts: string[] = [];
+  if (row.placement.trim()) parts.push(row.placement.trim());
+  if (row.widthMm.trim() && row.heightMm.trim()) {
+    parts.push(`${row.widthMm.trim()}×${row.heightMm.trim()} мм`);
+  }
+  if (row.description.trim()) parts.push(row.description.trim());
+  if (withScope) parts.push(describeRowScope(row, availableSizes));
+  return parts.join(' · ');
 }
 
 function lastIndexOfGroup(rows: ApplicationRow[], key: string): number {

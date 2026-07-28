@@ -11901,12 +11901,33 @@ body:has(.admin-layout) .app-header { display: none !important; }
   gap: 0.4rem;
 }
 
+/* Read-only строка нанесения свёрнута через `<details>`: шапка =
+   `<summary>` (тип + этап + статус + краткое описание), детали внутри. */
+.admin-order-applications__item-details {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+}
+
 .admin-order-applications__item-head {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.5rem;
   font-size: 0.92rem;
+  cursor: pointer;
+  list-style: none;
+}
+
+/* Свой шеврон вместо системного треугольника. */
+.admin-order-applications__item-head::-webkit-details-marker {
+  display: none;
+}
+
+.admin-order-applications__item-details[open]
+  > .admin-order-applications__item-head
+  .admin-order-applications__chev {
+  transform: rotate(0deg);
 }
 
 .admin-deflist--compact dt {
@@ -12008,6 +12029,90 @@ body:has(.admin-layout) .app-header { display: none !important; }
   gap: 8px;
 }
 
+/* Свёрнутое нанесение — одна строка-шапка, поля скрыты: три-четыре
+   нанесения не должны занимать весь экран карточки заказа. */
+.admin-order-applications__row:not([data-open]),
+.admin-order-applications__kit-member:not([data-open]) {
+  padding: 6px 10px;
+}
+
+/* Шапка нанесения: шеврон + тип + сводка (кнопка на всю ширину), справа
+   «Удалить». Видна в обоих состояниях. */
+.admin-order-applications__row-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.admin-order-applications__toggle {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+/* Шеврон-кнопка в шапке комплекта: там на всю ширину растянуто поле
+   названия, поэтому переключатель — только шеврон. */
+.admin-order-applications__chev-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+/* Свёрнуто — шеврон смотрит вправо, развёрнуто — вниз. */
+.admin-order-applications__chev {
+  flex: none;
+  transform: rotate(-90deg);
+  transition: transform 0.15s ease;
+}
+
+.admin-order-applications__row[data-open]
+  > .admin-order-applications__row-head
+  .admin-order-applications__chev,
+.admin-order-applications__kit-member[data-open]
+  > .admin-order-applications__row-head
+  .admin-order-applications__chev,
+.admin-order-applications__kit[data-open]
+  > .admin-order-applications__kit-head
+  .admin-order-applications__chev {
+  transform: rotate(0deg);
+}
+
+.admin-order-applications__row-title {
+  flex: none;
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+
+/* Сводка свёрнутой строки: место · размер · описание · применить к.
+   Одной строкой с многоточием — шапка не должна расти в высоту. */
+.admin-order-applications__row-sub {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 0.82rem;
+  color: var(--admin-muted, #5f5f5c);
+}
+
 /* Сетка полей одного нанесения.
 
    Раньше строка была `flex-wrap` (шапка) + `auto-fill minmax(180px,1fr)`
@@ -12017,7 +12122,7 @@ body:has(.admin-layout) .app-header { display: none !important; }
    Теперь сетка фиксирована — 6 колонок, каждое поле занимает известное
    число колонок, ряды всегда заполняются целиком:
 
-     Тип(2)  Когда(2)  Статус(1)  [Удалить](1)
+     Тип(2)  Когда(2)  Статус(2)
      Место(2)  Ширина  Высота  Кол-во цветов  Единица
      Цвет / описание(2)  Описание(4)
      Комментарий(6)
@@ -12073,8 +12178,10 @@ body:has(.admin-layout) .app-header { display: none !important; }
   grid-column: 1 / -1;
 }
 
-/* Кнопка «Удалить» — последняя колонка шапки, прижата вправо. */
+/* Кнопка «Удалить» — правый край шапки нанесения (`__row-head`, flex),
+   раньше была последней колонкой сетки полей. */
 .admin-order-applications__row-actions {
+  flex: none;
   display: flex;
   justify-content: flex-end;
   align-items: center;
@@ -12086,10 +12193,6 @@ body:has(.admin-layout) .app-header { display: none !important; }
   }
 
   .admin-order-applications__field--w4 {
-    grid-column: 1 / -1;
-  }
-
-  .admin-order-applications__row-actions {
     grid-column: 1 / -1;
   }
 }
@@ -12130,6 +12233,16 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 0.95rem;
   height: var(--aap-h, 34px);
   padding: 0 0.6rem;
+}
+
+/* Сводка свёрнутого комплекта не должна отбирать ширину у названия. */
+.admin-order-applications__kit-head > .admin-order-applications__row-sub {
+  flex: 0 1 auto;
+}
+
+/* Свёрнутый комплект — только шапка. */
+.admin-order-applications__kit:not([data-open]) {
+  padding: 8px 10px;
 }
 
 .admin-order-applications__kit-members {
