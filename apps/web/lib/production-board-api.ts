@@ -9,6 +9,7 @@ import type {
   ProductionBoardDrillDto,
   ProductionBoardDrillQuery,
   ProductionBoardDto,
+  RouteDivergencesDto,
 } from '@sewing/shared';
 import { apiFetch } from './api';
 
@@ -30,4 +31,16 @@ export function getProductionBoardDrill(
       ...(query.employeeId ? { employeeId: query.employeeId } : {}),
     },
   });
+}
+
+/**
+ * Вкладка «Расхождения»: работа, закрытая мимо маршрута заказа.
+ * Параметров нет — окно фиксировано на сервере (см.
+ * `ProductionBoardService.getRouteDivergences`).
+ */
+export function getRouteDivergences(): Promise<RouteDivergencesDto> {
+  return apiFetch<RouteDivergencesDto>(
+    '/master/production-board/divergences',
+    { cache: 'no-store' },
+  );
 }

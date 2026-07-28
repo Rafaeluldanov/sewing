@@ -45,6 +45,7 @@ import { PassportActionsSheet } from './passport-actions-sheet';
 import { CutReleasePolicyCard } from './cut-release-policy-card';
 import { refreshCutReleasePolicyAction } from './cut-release-policy-actions';
 import { ProductionBoardView } from './production-board-view';
+import { DivergencesView } from './divergences-view';
 import { EmployeeStatsView } from './employee-stats-view';
 import { QtyCorrectionsView } from './qty-corrections-view';
 import {
@@ -110,10 +111,11 @@ export function MasterPageClient({
   );
   const [archiveOpen, setArchiveOpen] = useState(false);
   // Вкладки кабинета мастера: очередь вызовов (исторический экран),
-  // «Движение тиража» (доска по дате выдачи кроя), «Сотрудники» и
-  // «Корректировки» (заявки ОТК на правку количества).
+  // «Движение тиража» (доска по дате выдачи кроя), «Расхождения»
+  // (работа мимо маршрута заказа — экран утренней пятиминутки),
+  // «Сотрудники» и «Корректировки» (заявки ОТК на правку количества).
   const [tab, setTab] = useState<
-    'calls' | 'board' | 'employees' | 'corrections'
+    'calls' | 'board' | 'divergences' | 'employees' | 'corrections'
   >('calls');
   const [corrections, setCorrections] = useState<PassportQtyCorrectionDto[]>(
     initialQtyCorrections,
@@ -396,6 +398,17 @@ export function MasterPageClient({
         <button
           type="button"
           role="tab"
+          aria-selected={tab === 'divergences'}
+          className={
+            'master-page__tab' + (tab === 'divergences' ? ' is-active' : '')
+          }
+          onClick={() => setTab('divergences')}
+        >
+          Расхождения
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === 'employees'}
           className={
             'master-page__tab' + (tab === 'employees' ? ' is-active' : '')
@@ -433,6 +446,8 @@ export function MasterPageClient({
       )}
 
       {tab === 'board' && <ProductionBoardView />}
+
+      {tab === 'divergences' && <DivergencesView />}
 
       {tab === 'employees' && <EmployeeStatsView />}
 

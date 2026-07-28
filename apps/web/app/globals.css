@@ -20301,3 +20301,87 @@ body:has(.admin-layout) .app-header { display: none !important; }
   color: var(--color-fg-subtle);
   margin-bottom: 0.25rem;
 }
+
+
+/* ===================================================================
+   Вкладка «Расхождения» кабинета мастера (divergences-view.tsx)
+   Работа, закрытая мимо маршрута заказа. Экран утренней пятиминутки:
+   пусто — работаем, есть строка — разбор в тот же день.
+   =================================================================== */
+.divergences { display: flex; flex-direction: column; gap: 0.75rem; }
+.divergences__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+.divergences__head .muted { margin: 0; }
+
+/* Пустое состояние — не серая заглушка, а внятное «всё в порядке»:
+   мастер должен уходить с экрана с уверенностью, а не с сомнением,
+   загрузилось ли вообще. */
+.divergences__empty {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 1.1rem 1rem;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #f4faf4;
+  color: #2f5d33;
+}
+.divergences__empty strong { font-size: var(--title-4); }
+
+.divergences__lead {
+  margin: 0;
+  padding: 0.6rem 0.7rem;
+  border-radius: 8px;
+  border: 1px solid #e0928f;
+  border-left: 4px solid #c0392b;
+  background: #fdecec;
+  color: #7d211a;
+  line-height: 1.35;
+}
+
+.divergences__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+.divergence-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid #c0392b;
+  border-radius: 8px;
+  background: var(--surface);
+}
+.divergence-row__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.divergence-row__order { font-weight: 700; font-size: var(--title-5); }
+/* «Сколько дней идёт» — главный признак срочности, поэтому вынесен
+   вправо и читается раньше подробностей. */
+.divergence-row__age {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: #7d211a;
+  white-space: nowrap;
+}
+.divergence-row__op { line-height: 1.35; }
+.divergence-row__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.9rem;
+  font-size: 0.85rem;
+  color: var(--muted);
+}

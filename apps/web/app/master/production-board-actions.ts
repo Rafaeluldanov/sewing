@@ -12,11 +12,13 @@ import type {
   ProductionBoardDrillDto,
   ProductionBoardDrillQuery,
   ProductionBoardDto,
+  RouteDivergencesDto,
 } from '@sewing/shared';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getProductionBoard,
   getProductionBoardDrill,
+  getRouteDivergences,
 } from '@/lib/production-board-api';
 
 function explain(e: unknown): string {
@@ -49,6 +51,23 @@ export async function loadProductionBoardDrillAction(
 ): Promise<LoadDrillResult> {
   try {
     return { ok: true, data: await getProductionBoardDrill(query) };
+  } catch (e) {
+    return { ok: false, error: explain(e) };
+  }
+}
+
+export type LoadDivergencesResult =
+  | { ok: true; data: RouteDivergencesDto }
+  | { ok: false; error: string };
+
+/**
+ * Вкладка «Расхождения». Отдельное действие, а не часть доски: мастер
+ * открывает её утром на пять минут, и она не должна ждать тяжёлый
+ * запрос доски за 30 дней.
+ */
+export async function loadRouteDivergencesAction(): Promise<LoadDivergencesResult> {
+  try {
+    return { ok: true, data: await getRouteDivergences() };
   } catch (e) {
     return { ok: false, error: explain(e) };
   }

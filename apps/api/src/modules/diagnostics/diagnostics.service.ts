@@ -10,6 +10,7 @@ import type {
   DiagnosticSeverity,
 } from '@sewing/shared/diagnostics';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { computeRouteDivergences } from '../production-board/route-divergence.js';
 
 /**
  * Жёсткий потолок строк на одну проверку. Защита от deg-режима:
@@ -53,6 +54,30 @@ const POST_ROUTE_CATEGORIES: ReadonlySet<OperationCategory> = new Set([
 const OFF_ROUTE_WINDOW_DAYS = 30;
 
 /**
+ * Заказ в производстве, по которому столько дней нет НИ ОДНОГО события,
+ * считается замершим. Проверка W (`ORDER_STALLED_IN_PRODUCTION`).
+ *
+ * Она дешевле маршрутной (не нужны ни снимок, ни правила замен) и ловит
+ * ЛЮБУЮ причину остановки, а не только работу мимо маршрута: сломанный
+ * станок, заархивированную операцию, потерянную пачку. На проде 28.07
+ * под неё подпадали 4 заказа, самый старый молчал 71 день — и ни об
+ * одном никто не знал.
+ */
+const STALLED_ORDER_DAYS = 14;
+
+/**
+ * Окно проверки X (`PASSPORT_WORK_FINISHED_WITHOUT_EARNING`).
+ *
+ * Сознательно короткое: до 2026 года прод накопил 13 закрытий без
+ * начисления, и все они — законные артефакты прошлых SQL-патчей
+ * (событие вписывалось напрямую, чтобы пройти гейт, а работа уже была
+ * оплачена по другой операции — см. `scripts/migrations/20260529_*`).
+ * Тянуть их в отчёт вечно значит завести постоянный «фоновый долг», к
+ * которому все привыкнут. Проверка — тревожная кнопка для НОВЫХ случаев.
+ */
+const UNPAID_WORK_WINDOW_DAYS = 30;
+
+/**
  * Diagnostic consistency report — единый сервис всех read-only
  * проверок «невозможных» состояний домена.
  *
@@ -78,6 +103,8 @@ export class DiagnosticsService {
     await this.checkPassportIssues(issues);
     await this.checkRouteIssues(issues);
     await this.checkOffRouteWorkIssues(issues);
+    await this.checkStalledOrderIssues(issues);
+    await this.checkUnpaidWorkIssues(issues);
     await this.checkShiftEquipmentIssues(issues);
     await this.checkOrderIssues(issues);
     await this.checkStorageIssues(issues);
@@ -979,71 +1006,263 @@ export class DiagnosticsService {
       }
       set.add(r.operationId);
     }
-    const substitutions = await this.loadSubstitutesBySatisfied();
+    const substitutions = await this.prisma.operationSubstitution.findMany({
+      select: { satisfiesOpId: true, substituteOpId: true },
+    });
 
-    // Сворачиваем в пары (заказ, операция).
-    const groups = new Map<
-      string,
-      {
-        orderId: string;
-        orderNumber: string;
-        operationId: string;
-        operationLabel: string;
-        passportIds: Set<string>;
-        employees: Set<string>;
-        firstAt: Date;
-        lastAt: Date;
-      }
-    >();
-    for (const e of events) {
-      const opId = e.operationId;
-      if (!opId) continue;
-      const route = routeByOrder.get(e.passport.orderId);
-      // Нет снимка маршрута — сравнивать не с чем (это отдельная
-      // находка H, здесь дублировать её нельзя).
-      if (!route || route.size === 0) continue;
-      if (route.has(opId)) continue;
-      if (isSatisfiedBySubstitute(opId, route, substitutions)) continue;
+    // Правила «что считать расхождением» живут в ОДНОМ месте —
+    // `production-board/route-divergence.ts`, — потому что тот же расчёт
+    // нужен вкладке «Расхождения» в кабинете мастера. Две копии
+    // разъехались бы, и экраны начали бы противоречить друг другу:
+    // администраторский отчёт сказал бы «чисто», а мастер видел бы
+    // находку. Доверия не было бы ни к одному.
+    const groups = computeRouteDivergences(
+      events.flatMap((e) =>
+        e.operationId
+          ? [
+              {
+                passportId: e.passportId,
+                passportNumber: '',
+                orderId: e.passport.orderId,
+                orderNumber: e.passport.order?.number ?? e.passport.orderId,
+                operationId: e.operationId,
+                operationCode: e.operation?.code ?? '?',
+                operationName: e.operation?.name ?? '',
+                employeeName: e.employee?.fullName ?? null,
+                createdAt: e.createdAt,
+              },
+            ]
+          : [],
+      ),
+      routeByOrder,
+      substitutions,
+    );
 
-      const key = `${e.passport.orderId} ${opId}`;
-      const existing = groups.get(key);
-      if (existing) {
-        existing.passportIds.add(e.passportId);
-        if (e.employee?.fullName) existing.employees.add(e.employee.fullName);
-        if (e.createdAt < existing.firstAt) existing.firstAt = e.createdAt;
-        if (e.createdAt > existing.lastAt) existing.lastAt = e.createdAt;
-        continue;
-      }
-      groups.set(key, {
-        orderId: e.passport.orderId,
-        orderNumber: e.passport.order?.number ?? e.passport.orderId,
-        operationId: opId,
-        operationLabel: `${e.operation?.code ?? '?'} ${e.operation?.name ?? ''}`.trim(),
-        passportIds: new Set([e.passportId]),
-        employees: new Set(e.employee?.fullName ? [e.employee.fullName] : []),
-        firstAt: e.createdAt,
-        lastAt: e.createdAt,
-      });
-    }
-
-    const sorted = [...groups.values()]
-      .sort((a, b) => a.firstAt.getTime() - b.firstAt.getTime())
-      .slice(0, LIMIT_PER_CHECK);
-    for (const g of sorted) {
+    for (const g of groups.slice(0, LIMIT_PER_CHECK)) {
+      const label = `${g.operationCode} ${g.operationName}`.trim();
       out.push({
         code: 'ORDER_WORK_OUTSIDE_ROUTE',
         severity: 'CRITICAL',
         entityType: 'ORDER',
         entityId: g.orderId,
-        message: `По заказу ${g.orderNumber} закрывают операцию «${g.operationLabel}», которой нет в его маршруте: паспортов — ${g.passportIds.size}, с ${formatDay(g.firstAt)}.`,
+        message: `По заказу ${g.orderNumber} закрывают операцию «${label}», которой нет в его маршруте: паспортов — ${g.passportCount}, с ${formatDay(g.firstAt)}.`,
         context: {
           orderNumber: g.orderNumber,
           operationId: g.operationId,
-          operation: g.operationLabel,
-          passportCount: g.passportIds.size,
+          operation: label,
+          passportCount: g.passportCount,
           firstAt: g.firstAt.toISOString(),
           lastAt: g.lastAt.toISOString(),
-          employees: [...g.employees],
+          employees: g.employees,
+        },
+      });
+    }
+  }
+
+  /**
+   * W. ORDER_STALLED_IN_PRODUCTION — заказ в производстве, по которому
+   * `STALLED_ORDER_DAYS` дней нет ни одного события.
+   *
+   * Самая дешёвая из всех проверок и самая широкая по охвату: не требует
+   * ни снимка маршрута, ни правил замен, и ловит любую причину простоя.
+   * Заказ O-20260615-0004 стоял 28 дней с заархивированными операциями
+   * маршрута, и заметили это только при разборе другого инцидента.
+   */
+  private async checkStalledOrderIssues(
+    out: DiagnosticIssueDto[],
+  ): Promise<void> {
+    const orders = await this.prisma.order.findMany({
+      where: {
+        status: OrderStatus.IN_PRODUCTION,
+        passports: {
+          some: {
+            status: {
+              notIn: [PassportStatus.PACKED, PassportStatus.CANCELLED],
+            },
+          },
+        },
+      },
+      select: {
+        id: true,
+        number: true,
+        passports: {
+          where: {
+            status: {
+              notIn: [PassportStatus.PACKED, PassportStatus.CANCELLED],
+            },
+          },
+          select: { id: true },
+        },
+      },
+      take: LIMIT_PER_CHECK,
+    });
+    if (orders.length === 0) return;
+
+    const passportIds = orders.flatMap((o) => o.passports.map((p) => p.id));
+    if (passportIds.length === 0) return;
+    // Один groupBy вместо запроса на каждый заказ.
+    const lastEvents = await this.prisma.passportEvent.groupBy({
+      by: ['passportId'],
+      where: { passportId: { in: passportIds } },
+      _max: { createdAt: true },
+    });
+    const lastByPassport = new Map<string, Date>();
+    for (const row of lastEvents) {
+      if (row._max.createdAt) {
+        lastByPassport.set(row.passportId, row._max.createdAt);
+      }
+    }
+
+    const threshold = new Date(
+      Date.now() - STALLED_ORDER_DAYS * 24 * 60 * 60 * 1000,
+    );
+    for (const o of orders) {
+      let last: Date | null = null;
+      for (const p of o.passports) {
+        const d = lastByPassport.get(p.id);
+        if (d && (last === null || d > last)) last = d;
+      }
+      if (last !== null && last >= threshold) continue;
+      const days =
+        last === null
+          ? null
+          : Math.floor((Date.now() - last.getTime()) / (24 * 60 * 60 * 1000));
+      out.push({
+        code: 'ORDER_STALLED_IN_PRODUCTION',
+        severity: 'WARNING',
+        entityType: 'ORDER',
+        entityId: o.id,
+        message:
+          last === null
+            ? `Заказ ${o.number} в производстве, но по нему нет ни одного события: паспортов в работе — ${o.passports.length}.`
+            : `Заказ ${o.number} стоит ${days} дн. без единого события: паспортов в работе — ${o.passports.length}, последнее движение ${formatDay(last)}.`,
+        context: {
+          orderNumber: o.number,
+          livePassportCount: o.passports.length,
+          lastEventAt: last ? last.toISOString() : null,
+          idleDays: days,
+        },
+      });
+    }
+  }
+
+  /**
+   * X. PASSPORT_WORK_FINISHED_WITHOUT_EARNING — работа закрыта, а денег
+   * швее не начислено.
+   *
+   * Зачем. `EarningsService.createPendingForCompletedOperation` при
+   * отсутствии расценки молча выходит (`if (!rate) return;`), а
+   * `OperationEntry` — снимок: появление ставки задним числом прошлые
+   * закрытия НЕ пересчитывает. Именно так у операции «11 ОКАНТОВКА»,
+   * заведённой без расценки, 131 закрытие (1 944 изделия, 37 383 ₽)
+   * провисело 20 дней, и заметили это только при разборе постороннего
+   * инцидента. Это был самый ранний сигнал из всех возможных — доступный
+   * уже в первый расчётный день.
+   *
+   * Исключения — ровно те, при которых сервис НЕ создаёт начисление
+   * законно: не сдельщик, неактивный сотрудник, `SALARY_ONLY`-операция,
+   * `CUT_CUT` (покрыт immediate-веткой при выпуске) и полное покрытие
+   * заместителем (`creditedAmount <= 0`).
+   */
+  private async checkUnpaidWorkIssues(
+    out: DiagnosticIssueDto[],
+  ): Promise<void> {
+    const since = new Date(
+      Date.now() - UNPAID_WORK_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const events = await this.prisma.passportEvent.findMany({
+      where: {
+        type: 'OPERATION_FINISHED',
+        createdAt: { gte: since },
+        operationId: { not: null },
+        employeeId: { not: null },
+        employee: { compensationType: 'PIECEWORK', active: true },
+        operation: {
+          pricingMode: { not: 'SALARY_ONLY' },
+          code: { not: 'CUT_CUT' },
+        },
+        passport: {
+          order: {
+            status: { notIn: [OrderStatus.DONE, OrderStatus.CANCELLED] },
+          },
+        },
+      },
+      select: {
+        createdAt: true,
+        operationId: true,
+        passportId: true,
+        employeeId: true,
+        operation: { select: { code: true, name: true } },
+        employee: { select: { fullName: true } },
+        passport: {
+          select: { number: true, qtyGood: true },
+        },
+      },
+      orderBy: { createdAt: 'asc' },
+    });
+    if (events.length === 0) return;
+
+    const passportIds = Array.from(new Set(events.map((e) => e.passportId)));
+    const entries = await this.prisma.operationEntry.findMany({
+      where: { passportId: { in: passportIds } },
+      select: {
+        passportId: true,
+        operationId: true,
+        employeeId: true,
+        amount: true,
+        status: true,
+      },
+    });
+    const paidKeys = new Set(
+      entries.map((x) => `${x.passportId} ${x.operationId}`),
+    );
+    const substitutions = await this.loadSubstitutesBySatisfied();
+    // Обратная карта: заместитель → кого он замещает.
+    const satisfiedBySubstitute = new Map<string, Set<string>>();
+    for (const [satisfies, subs] of substitutions) {
+      for (const sub of subs) {
+        const set = satisfiedBySubstitute.get(sub) ?? new Set<string>();
+        set.add(satisfies);
+        satisfiedBySubstitute.set(sub, set);
+      }
+    }
+
+    let count = 0;
+    for (const e of events) {
+      const opId = e.operationId;
+      const empId = e.employeeId;
+      if (!opId || !empId) continue;
+      if (paidKeys.has(`${e.passportId} ${opId}`)) continue;
+      // Полностью покрыто заместителем: сотруднику уже начислено по
+      // операциям, которые эта закрывает. Начисления сервис в таком
+      // случае не создаёт сознательно — это не долг.
+      const satisfied = satisfiedBySubstitute.get(opId);
+      if (satisfied && satisfied.size > 0) {
+        const prior = entries.filter(
+          (x) =>
+            x.passportId === e.passportId &&
+            x.employeeId === empId &&
+            satisfied.has(x.operationId) &&
+            (x.status === 'APPROVED' || x.status === 'PENDING_RELEASE'),
+        );
+        if (prior.length > 0) continue;
+      }
+      if (count >= LIMIT_PER_CHECK) break;
+      count += 1;
+      out.push({
+        code: 'PASSPORT_WORK_FINISHED_WITHOUT_EARNING',
+        severity: 'CRITICAL',
+        entityType: 'PASSPORT',
+        entityId: e.passportId,
+        message: `Паспорт ${e.passport.number}: работа по операции «${e.operation?.code ?? '?'} ${e.operation?.name ?? ''}» закрыта ${formatDay(e.createdAt)}, но сделка не начислена (${e.employee?.fullName ?? 'исполнитель не указан'}).`,
+        context: {
+          passportNumber: e.passport.number,
+          operationId: opId,
+          operation: `${e.operation?.code ?? '?'} ${e.operation?.name ?? ''}`.trim(),
+          employeeId: empId,
+          employee: e.employee?.fullName ?? null,
+          qtyGood: e.passport.qtyGood,
+          finishedAt: e.createdAt.toISOString(),
         },
       });
     }

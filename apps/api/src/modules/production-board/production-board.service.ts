@@ -15,8 +15,20 @@ import {
   type ProductionBoardPassportRowDto,
   type ProductionBoardQuery,
   type ProductionBoardStageBucketDto,
+  type RouteDivergenceDto,
+  type RouteDivergencesDto,
 } from '@sewing/shared';
+import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { computeRouteDivergences } from './route-divergence.js';
+
+/**
+ * Глубина окна вкладки «Расхождения». Совпадает с окном проверки
+ * `ORDER_WORK_OUTSIDE_ROUTE` в диагностике и со скриптом
+ * `scripts/ops/off-route-work-check.sql` — три места должны показывать
+ * одно и то же, иначе мастер и администратор увидят разные картины.
+ */
+const DIVERGENCE_WINDOW_DAYS = 30;
 
 /**
  * «Доска движения тиража» для кабинета мастера.
@@ -1076,6 +1088,134 @@ export class ProductionBoardService {
       totalQty: groupList.reduce((s, g) => s + g.qty, 0),
       totalDefects: groupList.reduce((s, g) => s + g.defects, 0),
       groups: groupList,
+    };
+  }
+
+  // -------------------------------------------------------------------------
+  // Вкладка «Расхождения»
+  // -------------------------------------------------------------------------
+
+  /**
+   * Работа, закрытая мимо маршрута заказа, за последние
+   * `DIVERGENCE_WINDOW_DAYS` дней.
+   *
+   * Это ровно тот экран, которого не хватило 01.07.2026: швеи начали
+   * закрывать «ОКАНТОВКУ» на заказах, чей маршрут требует «КИПЕРКУ»,
+   * и до 28.07 этого никто не видел, потому что упирается такая работа
+   * только в AND-гейт перед ОТК — недели спустя и сразу пачкой. На
+   * истории прода запрос, запущенный утром 02.07, показал бы одну
+   * строку: 21 паспорт в трёх заказах, «со вчера».
+   *
+   * Окно скользящее и сознательно короткое: у `OrderRouteStep` нет ни
+   * `createdAt`, ни `updatedAt`, поэтому отличить «работали мимо
+   * маршрута» от «маршрут переписали ПОСЛЕ работы» невозможно, и без
+   * окна экран накопил бы вечный исторический хвост, к которому все
+   * привыкнут.
+   *
+   * Правила расхождения — в `computeRouteDivergences` (общие с проверкой
+   * `ORDER_WORK_OUTSIDE_ROUTE` отчёта диагностики), чтобы два экрана не
+   * могли начать противоречить друг другу.
+   */
+  async getRouteDivergences(): Promise<RouteDivergencesDto> {
+    const since = new Date(
+      Date.now() - DIVERGENCE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const events = await this.prisma.passportEvent.findMany({
+      where: {
+        type: PassportEventType.OPERATION_FINISHED,
+        createdAt: { gte: since },
+        operationId: { not: null },
+        // Только пошив: крой закрывается при выпуске, а ОТК/ВТО/упаковка
+        // в снимке маршрута отсутствуют штатно и имеют собственные гейты.
+        operation: { category: OperationCategory.SEWING },
+        passport: {
+          order: {
+            status: { notIn: [OrderStatus.DONE, OrderStatus.CANCELLED] },
+          },
+        },
+      },
+      select: {
+        createdAt: true,
+        operationId: true,
+        passportId: true,
+        operation: { select: { code: true, name: true } },
+        employee: { select: { fullName: true } },
+        passport: {
+          select: {
+            number: true,
+            orderId: true,
+            order: { select: { number: true } },
+          },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (events.length === 0) {
+      return {
+        generatedAt: new Date().toISOString(),
+        windowDays: DIVERGENCE_WINDOW_DAYS,
+        items: [],
+      };
+    }
+
+    const orderIds = Array.from(
+      new Set(events.map((e) => e.passport.orderId)),
+    );
+    const [routeRows, substitutions] = await Promise.all([
+      this.prisma.orderRouteStep.findMany({
+        where: { orderId: { in: orderIds } },
+        select: { orderId: true, operationId: true },
+      }),
+      this.prisma.operationSubstitution.findMany({
+        select: { satisfiesOpId: true, substituteOpId: true },
+      }),
+    ]);
+    const routeByOrder = new Map<string, Set<string>>();
+    for (const r of routeRows) {
+      const set = routeByOrder.get(r.orderId) ?? new Set<string>();
+      set.add(r.operationId);
+      routeByOrder.set(r.orderId, set);
+    }
+
+    const groups = computeRouteDivergences(
+      events.flatMap((e) =>
+        e.operationId
+          ? [
+              {
+                passportId: e.passportId,
+                passportNumber: e.passport.number,
+                orderId: e.passport.orderId,
+                orderNumber: e.passport.order?.number ?? e.passport.orderId,
+                operationId: e.operationId,
+                operationCode: e.operation?.code ?? '?',
+                operationName: e.operation?.name ?? '',
+                employeeName: e.employee?.fullName ?? null,
+                createdAt: e.createdAt,
+              },
+            ]
+          : [],
+      ),
+      routeByOrder,
+      substitutions,
+    );
+
+    const items: RouteDivergenceDto[] = groups.map((g) => ({
+      orderId: g.orderId,
+      orderNumber: g.orderNumber,
+      operationId: g.operationId,
+      operationCode: g.operationCode,
+      operationName: g.operationName,
+      passportCount: g.passportCount,
+      employees: g.employees,
+      firstAt: g.firstAt.toISOString(),
+      lastAt: g.lastAt.toISOString(),
+    }));
+
+    return {
+      generatedAt: new Date().toISOString(),
+      windowDays: DIVERGENCE_WINDOW_DAYS,
+      items,
     };
   }
 }

@@ -6,6 +6,7 @@ import {
   type ProductionBoardDrillDto,
   type ProductionBoardDto,
   type ProductionBoardQuery,
+  type RouteDivergencesDto,
 } from '@sewing/shared';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
 import { Roles } from '../auth/auth.decorators.js';
@@ -17,6 +18,7 @@ import { ProductionBoardService } from './production-board.service.js';
  *
  *   GET /api/master/production-board?days=7|14|30
  *   GET /api/master/production-board/drill?issueDate&stage[&employeeId]
+ *   GET /api/master/production-board/divergences
  *
  * RBAC: `SHOPFLOOR_MASTER`, `SHOP_MANAGER`, `ADMIN` — тот же доступ,
  * что у экрана `/master` (`canSeeMasterPage`). Read-only: контроллер
@@ -41,5 +43,19 @@ export class ProductionBoardController {
     query: ProductionBoardDrillQuery,
   ): Promise<ProductionBoardDrillDto> {
     return this.service.getDrill(query);
+  }
+
+  /**
+   * Вкладка «Расхождения»: работа, закрытая мимо маршрута заказа.
+   *
+   * Параметров нет сознательно — окно фиксировано (см.
+   * `DIVERGENCE_WINDOW_DAYS`). Экран должен отвечать на один вопрос
+   * утренней пятиминутки мастера: «есть ли сегодня то, что надо
+   * разобрать». Настройки глубины превратили бы его в аналитический
+   * инструмент, в который перестанут заходить.
+   */
+  @Get('divergences')
+  divergences(): Promise<RouteDivergencesDto> {
+    return this.service.getRouteDivergences();
   }
 }
