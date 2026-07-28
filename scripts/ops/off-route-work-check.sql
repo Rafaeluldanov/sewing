@@ -29,6 +29,10 @@
 --      (prisma/schema.prisma), поэтому отличить «работали мимо маршрута» от
 --      «маршрут переписали после работы» нельзя — скользящее окно ограничивает
 --      исторический хвост.
+--   4. Только живые заказы. По `DONE`/`CANCELLED` разбирать нечего, а висеть в
+--      сводке они будут все 30 дней окна и приучат к тому, что «там всегда что-то
+--      горит» — ровно тот механизм привыкания, из-за которого не сработало
+--      жёлтое предупреждение швее.
 --
 -- ВНИМАНИЕ, мультитенантность: скрипт видит ровно ОДНУ базу. При нескольких
 -- тенантах его нужно гонять по каждой базе отдельно (см. control_plane).
@@ -51,6 +55,7 @@ WITH offroute AS (
   WHERE e.type IN ('ISSUED_TO_EMPLOYEE', 'OPERATION_FINISHED')  -- выдача ловит раньше завершения
     AND e."createdAt" >= now() - interval '30 days'
     AND op.category = 'SEWING'
+    AND o.status NOT IN ('DONE', 'CANCELLED')
     AND EXISTS (SELECT 1 FROM "OrderRouteStep" s WHERE s."orderId" = p."orderId")
     AND NOT EXISTS (
       SELECT 1 FROM "OrderRouteStep" s
