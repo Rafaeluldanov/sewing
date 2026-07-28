@@ -787,7 +787,7 @@ export class QcService {
         index: true,
         operationId: true,
         parallelGroup: true,
-        operation: { select: { category: true } },
+        operation: { select: { category: true, name: true } },
       },
     });
     if (steps.length === 0) return;
@@ -848,11 +848,23 @@ export class QcService {
       if (!subs) return false;
       return subs.some((sub) => finishedSet.has(sub));
     };
+    // Называем в ошибке РЕАЛЬНО незакрытые операции (с учётом
+    // заместителей), а не пример из документации: инцидент 28.07.2026 —
+    // мастер по статичному тексту «КИПЕРКА и РАСПОШИВ» искал незакрытый
+    // распошив, хотя тот был закрыт через заместителя (04), а не хватало
+    // одной киперки. См. `PassportParallelGroupIncompleteException`.
+    const missing: string[] = [];
     for (const g of groupsBefore) {
       const ops = groupOps.get(g) ?? [];
-      if (!ops.every(isSatisfied)) {
-        throw new PassportParallelGroupIncompleteException();
+      for (const op of ops) {
+        if (isSatisfied(op)) continue;
+        missing.push(
+          steps.find((s) => s.operationId === op)?.operation.name ?? op,
+        );
       }
+    }
+    if (missing.length > 0) {
+      throw new PassportParallelGroupIncompleteException(missing);
     }
   }
 

@@ -2239,12 +2239,22 @@ export class PassportIssueBackwardException extends BusinessException {
  * пары любой). Бросается из `PassportsService.issueToEmployee` /
  * `scanOnOperation`. Внутри самой группы порядок свободный — это НЕ
  * откат назад (`PASSPORT_*_BACKWARD`).
+ *
+ * `missing` — названия реально незакрытых операций группы (с учётом
+ * `OperationSubstitution`: закрытие заместителя засчитывает замещаемую).
+ * Раньше текст был статичным примером «например, КИПЕРКА и РАСПОШИВ», и
+ * это стабильно уводило разбор в сторону: инцидент 28.07.2026 (заказ
+ * O-20260510-0001) — не хватало ОДНОЙ киперки, а мастер по тексту искал
+ * ещё и распошив, который на самом деле был закрыт через заместителя.
+ * Пустой список (не смогли назвать) → прежняя формулировка.
  */
 export class PassportParallelGroupIncompleteException extends BusinessException {
-  constructor() {
+  constructor(missing: readonly string[] = []) {
     super(
       'PASSPORT_PARALLEL_GROUP_INCOMPLETE',
-      'Нельзя перейти на следующую операцию: не завершены все взаимозаменяемые операции предыдущего этапа (например, КИПЕРКА и РАСПОШИВ).',
+      missing.length > 0
+        ? `Нельзя перейти на следующую операцию: на предыдущем этапе не завершено — ${missing.join(', ')}.`
+        : 'Нельзя перейти на следующую операцию: не завершены все взаимозаменяемые операции предыдущего этапа (например, КИПЕРКА и РАСПОШИВ).',
       HttpStatus.CONFLICT,
     );
   }
@@ -2264,12 +2274,18 @@ export class PassportParallelGroupIncompleteException extends BusinessException 
  * из `PassportsService.issueToEmployee` / `scanOnOperation`; к `complete`
  * НЕ применяется (завершить саму операцию всегда допустимо). Откат назад
  * остаётся прерогативой мастера (`set-route-step`).
+ *
+ * `missing` — названия незакрытых швейных шагов (см. коммент к
+ * `PassportParallelGroupIncompleteException`: называем то, что реально
+ * мешает, а не пример из документации).
  */
 export class PassportPrecedingStepIncompleteException extends BusinessException {
-  constructor() {
+  constructor(missing: readonly string[] = []) {
     super(
       'PASSPORT_PRECEDING_STEP_INCOMPLETE',
-      'Нельзя перейти на эту операцию: по маршруту раньше стоит незавершённая швейная операция (например, ОВР/ФУЛ перед КИПЕРКОЙ). Сначала закройте её.',
+      missing.length > 0
+        ? `Нельзя перейти на эту операцию: по маршруту раньше не завершено — ${missing.join(', ')}. Сначала закройте её.`
+        : 'Нельзя перейти на эту операцию: по маршруту раньше стоит незавершённая швейная операция (например, ОВР/ФУЛ перед КИПЕРКОЙ). Сначала закройте её.',
       HttpStatus.CONFLICT,
     );
   }

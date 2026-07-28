@@ -1453,12 +1453,17 @@ export class PassportsService {
     backward: boolean;
     groupIncomplete: boolean;
     sequentialIncomplete: boolean;
+    /** Названия незакрытых операций — для текста ошибки (см. errors.ts). */
+    missingGroupOps: string[];
+    missingSequentialOps: string[];
   }> {
     const none = {
       targetIndex: null,
       backward: false,
       groupIncomplete: false,
       sequentialIncomplete: false,
+      missingGroupOps: [],
+      missingSequentialOps: [],
     };
     if (!passport.orderId) return none;
     const steps = await this.prisma.orderRouteStep.findMany({
@@ -1467,7 +1472,7 @@ export class PassportsService {
         index: true,
         operationId: true,
         parallelGroup: true,
-        operation: { select: { category: true } },
+        operation: { select: { category: true, name: true } },
       },
     });
     if (steps.length === 0) return none;
@@ -1568,6 +1573,8 @@ export class PassportsService {
 
     let groupIncomplete = false;
     let sequentialIncomplete = false;
+    const missingGroupOps: string[] = [];
+    const missingSequentialOps: string[] = [];
     // Запрос завершённых операций — только если есть что проверять
     // (обычный линейный маршрут без пропусков групп/швейных шагов —
     // пропускаем оба SELECT-а).
@@ -1605,19 +1612,35 @@ export class PassportsService {
         if (!subs) return false;
         return subs.some((sub) => finishedSet.has(sub));
       };
+      // Название операции по id — для текста ошибки. Берём из снимка
+      // маршрута (там же, где считали группы), чтобы не ходить в БД ещё раз.
+      const nameOf = (opId: string): string =>
+        steps.find((s) => s.operationId === opId)?.operation.name ?? opId;
       for (const g of groupsBefore) {
         const ops = groupOps.get(g) ?? [];
-        if (!ops.every(isSatisfied)) {
+        const unmet = ops.filter((op) => !isSatisfied(op));
+        if (unmet.length > 0) {
           groupIncomplete = true;
-          break;
+          missingGroupOps.push(...unmet.map(nameOf));
         }
       }
-      if (!sequentialBefore.every((s) => isSatisfied(s.operationId))) {
+      const unmetSeq = sequentialBefore.filter(
+        (s) => !isSatisfied(s.operationId),
+      );
+      if (unmetSeq.length > 0) {
         sequentialIncomplete = true;
+        missingSequentialOps.push(...unmetSeq.map((s) => s.operation.name));
       }
     }
 
-    return { targetIndex, backward, groupIncomplete, sequentialIncomplete };
+    return {
+      targetIndex,
+      backward,
+      groupIncomplete,
+      sequentialIncomplete,
+      missingGroupOps,
+      missingSequentialOps,
+    };
   }
 
   /**
@@ -1839,10 +1862,14 @@ export class PassportsService {
     );
     if (issueOrder.backward) throw new PassportIssueBackwardException();
     if (issueOrder.groupIncomplete) {
-      throw new PassportParallelGroupIncompleteException();
+      throw new PassportParallelGroupIncompleteException(
+        issueOrder.missingGroupOps,
+      );
     }
     if (issueOrder.sequentialIncomplete) {
-      throw new PassportPrecedingStepIncompleteException();
+      throw new PassportPrecedingStepIncompleteException(
+        issueOrder.missingSequentialOps,
+      );
     }
     const issueTargetIndex = issueOrder.targetIndex;
 
@@ -2293,10 +2320,14 @@ export class PassportsService {
     );
     if (scanOrder.backward) throw new PassportScanBackwardException();
     if (scanOrder.groupIncomplete) {
-      throw new PassportParallelGroupIncompleteException();
+      throw new PassportParallelGroupIncompleteException(
+        scanOrder.missingGroupOps,
+      );
     }
     if (scanOrder.sequentialIncomplete) {
-      throw new PassportPrecedingStepIncompleteException();
+      throw new PassportPrecedingStepIncompleteException(
+        scanOrder.missingSequentialOps,
+      );
     }
 
     const nextRouteStepIndex =
