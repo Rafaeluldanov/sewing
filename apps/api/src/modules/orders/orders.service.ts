@@ -2986,6 +2986,14 @@ export class OrdersService {
       rateOverride: Prisma.Decimal | null;
     }[] = [];
     if (order.routeTemplateId) {
+      // Точка невозврата: дальше снимок маршрута становится immutable
+      // (ADR-0006). Если в шаблоне есть архивные ШВЕЙНЫЕ операции или
+      // архивен сам шаблон — заказ уйдёт в производство уже мёртвым:
+      // швея не сможет выбрать такой шаг из списка станка, заказ молча
+      // встанет. Именно так умерли O-20260615-0004 и -0005.
+      await this.routes.assertTemplateUsableForProduction(
+        order.routeTemplateId,
+      );
       snapshotSteps = await this.routes.getActiveStepsForSnapshot(
         order.routeTemplateId,
       );

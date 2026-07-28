@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { OperationCategory, Prisma } from '@prisma/client';
 import type {
   CreateRouteTemplateDto,
   ListRouteTemplatesQuery,
@@ -17,6 +17,9 @@ import { AuditService } from '../audit/audit.service.js';
 import { indexById, runBulkArchive } from '../../common/bulk-archive.js';
 import {
   OperationNotFoundException,
+  OrderRouteTemplateArchivedException,
+  OrderRouteTemplateHasArchivedOperationsException,
+  RouteTemplateStepOperationArchivedException,
   RouteTemplateCodeTakenException,
   RouteTemplateDeleteForbiddenException,
   RouteTemplateNotFoundException,
@@ -145,6 +148,10 @@ export class RoutesService {
   async create(dto: CreateRouteTemplateDto): Promise<RouteTemplateDetailDto> {
     if (dto.steps.length > 0) {
       await this.assertOperationsExist(dto.steps.map((s) => s.operationId));
+      await this.assertNoNewArchivedOperations(
+        null,
+        dto.steps.map((s) => s.operationId),
+      );
     }
 
     let createdId: string;
@@ -199,6 +206,13 @@ export class RoutesService {
 
     if (dto.steps && dto.steps.length > 0) {
       await this.assertOperationsExist(dto.steps.map((s) => s.operationId));
+      // Передаём id шаблона: проверяются только ДОБАВЛЯЕМЫЕ операции,
+      // иначе унаследованные архивные шаги сделали бы шаблон
+      // несохраняемым (см. `assertNoNewArchivedOperations`).
+      await this.assertNoNewArchivedOperations(
+        id,
+        dto.steps.map((s) => s.operationId),
+      );
     }
 
     try {
@@ -505,6 +519,97 @@ export class RoutesService {
     });
     if (found.length !== uniqueIds.length) {
       throw new OperationNotFoundException();
+    }
+  }
+
+  /**
+   * Нельзя ДОБАВИТЬ в шаблон операцию из архива.
+   *
+   * Проверяем только ДОБАВЛЯЕМЫЕ операции, а не весь список шагов, и это
+   * принципиально. Форма админки всегда шлёт шаблон целиком
+   * (`code/name/isActive/steps`), а на проде 14 из 20 активных шаблонов
+   * УЖЕ содержат архивные операции — наследство прошлых чисток
+   * справочника. Проверка «все шаги активны» сделала бы несохраняемыми
+   * почти все шаблоны, включая основные 01 и 02, и её бы просто убрали.
+   *
+   * Правило поэтому такое: старое не трогаем, новое не пускаем. Разбор
+   * накопленного — отдельная задача владельца маршрутов.
+   */
+  private async assertNoNewArchivedOperations(
+    templateId: string | null,
+    nextOperationIds: string[],
+  ): Promise<void> {
+    const wanted = Array.from(new Set(nextOperationIds));
+    if (wanted.length === 0) return;
+
+    const alreadyInTemplate = templateId
+      ? new Set(
+          (
+            await this.prisma.routeTemplateStep.findMany({
+              where: { templateId },
+              select: { operationId: true },
+            })
+          ).map((s) => s.operationId),
+        )
+      : new Set<string>();
+
+    const added = wanted.filter((id) => !alreadyInTemplate.has(id));
+    if (added.length === 0) return;
+
+    const archived = await this.prisma.operation.findMany({
+      where: { id: { in: added }, active: false },
+      select: { code: true, name: true },
+    });
+    if (archived.length === 0) return;
+    throw new RouteTemplateStepOperationArchivedException(
+      archived.map((o) => `${o.code} ${o.name}`.trim()),
+    );
+  }
+
+  /**
+   * Гейт запуска заказа в производство: шаблон маршрута обязан быть
+   * пригоден к работе.
+   *
+   * Ловит два состояния, каждое из которых означает «заказ родится
+   * мёртвым» (подробный разбор — в доккомментах исключений):
+   *   - шаблон в архиве;
+   *   - в шаблоне есть архивные ШВЕЙНЫЕ операции — швея физически не
+   *     сможет их выбрать из списка станка.
+   *
+   * Категории кроме `SEWING` не считаем сознательно: крой/ОТК/ВТО/
+   * упаковка закрываются на собственных гейтах, и архивная кроевая
+   * операция безвредна — шаблоны 01 и 02 работают с архивным «Делением
+   * кроя» и ни один заказ на этом не встал.
+   *
+   * Вызывается ТОЛЬКО из `OrdersService.start()`. На создании и правке
+   * заказа не блокируем: заказ ещё планируется, шаблон можно починить.
+   */
+  async assertTemplateUsableForProduction(templateId: string): Promise<void> {
+    const template = await this.prisma.routeTemplate.findUnique({
+      where: { id: templateId },
+      select: {
+        name: true,
+        isActive: true,
+        steps: {
+          select: {
+            operation: { select: { code: true, name: true, active: true, category: true } },
+          },
+        },
+      },
+    });
+    if (!template) throw new RouteTemplateNotFoundException();
+    if (!template.isActive) {
+      throw new OrderRouteTemplateArchivedException(template.name);
+    }
+    const archivedSewing = template.steps
+      .map((s) => s.operation)
+      .filter((op) => !op.active && op.category === OperationCategory.SEWING)
+      .map((op) => `${op.code} ${op.name}`.trim());
+    if (archivedSewing.length > 0) {
+      throw new OrderRouteTemplateHasArchivedOperationsException(
+        template.name,
+        Array.from(new Set(archivedSewing)),
+      );
     }
   }
 
