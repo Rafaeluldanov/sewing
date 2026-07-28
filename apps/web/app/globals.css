@@ -7364,6 +7364,59 @@ body:has(.display-screen) {
   margin-top: 0.15rem;
 }
 
+/* Ячейка фиксированной ширины с «бегущей строкой».
+   ----------------------------------------------------------------------------
+   Зачем: длинное название изделия раздувало колонку и ломало ширины всей
+   таблицы. Теперь ячейка занимает ровно `--admin-marquee-w` (переопределяется
+   инлайном на конкретной колонке), а не влезающий текст:
+     - в покое   — обрезан троеточием;
+     - на ховере строки — уезжает влево и возвращается обратно, как бегущая
+       строка, так что имя можно дочитать не открывая заказ.
+
+   Почему без JS: ширина `max-content` + `min-width: 100%` делает внутренний
+   span ровно шириной ячейки, когда текст помещается. Тогда сдвиг
+   `calc(100% - <ширина ячейки>)` == 0 и анимация визуально не работает —
+   короткие имена не дёргаются, мерить `scrollWidth` не нужно. */
+.admin-cell-marquee {
+  width: var(--admin-marquee-w, 14rem);
+  overflow: hidden;
+}
+.admin-cell-marquee__text {
+  display: block;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.admin-table tbody tr:hover .admin-cell-marquee__text,
+.admin-cell-marquee:hover .admin-cell-marquee__text {
+  width: max-content;
+  min-width: 100%;
+  overflow: visible;
+  text-overflow: clip;
+  animation: admin-cell-marquee 6s ease-in-out 0.4s infinite alternate;
+}
+
+@keyframes admin-cell-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    /* Сдвиг ровно на «хвост», который не поместился в ячейку. */
+    transform: translateX(calc(var(--admin-marquee-w, 14rem) - 100%));
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .admin-table tbody tr:hover .admin-cell-marquee__text,
+  .admin-cell-marquee:hover .admin-cell-marquee__text {
+    width: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    animation: none;
+  }
+}
+
 .admin-table__actions {
   text-align: right;
   white-space: nowrap;
@@ -7852,6 +7905,19 @@ body:has(.display-screen) {
   .admin-table__actions {
     text-align: left;
     margin-top: 0.5rem;
+  }
+  /* В карточном режиме ширину не фиксируем: ячейка и так во всю карточку,
+     а бегущая строка на тач-экране без ховера бессмысленна. */
+  .admin-cell-marquee {
+    width: auto;
+  }
+  .admin-table tbody tr:hover .admin-cell-marquee__text,
+  .admin-cell-marquee:hover .admin-cell-marquee__text {
+    width: auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    animation: none;
   }
   .admin-home-grid {
     grid-template-columns: 1fr;

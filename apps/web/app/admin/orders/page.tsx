@@ -23,6 +23,7 @@
  * этом шаге слишком рискованно (там форма выпуска паспорта и
  * перевод статусов).
  */
+import type { CSSProperties } from 'react';
 import Link from 'next/link';
 import {
   FileText,
@@ -472,6 +473,11 @@ function OrdersTable({
       render: (o) => <DeadlineCell o={o} />,
     },
     {
+      key: 'product',
+      header: 'Изделие',
+      render: (o) => <ProductCell o={o} />,
+    },
+    {
       key: 'client',
       header: 'Клиент',
       render: (o) => <ClientCell o={o} />,
@@ -572,6 +578,54 @@ function OrdersTable({
         )
       }
     />
+  );
+}
+
+/**
+ * Колонка «Изделие» — что именно шьём по этому заказу.
+ *
+ * Имя берём по тому же правилу, что и hero-карточка заказа
+ * (`pickHeroNomenclature`): snapshot заказа главнее live-карточки
+ * лекала, а `productName` — фолбэк для исторических заказов без
+ * привязки к лекалу. Иначе список и карточка называли бы одно и то же
+ * изделие по-разному после правки номенклатуры.
+ *
+ * Артикул показываем хинтом второй строкой — как в справочнике лекал
+ * (`/admin/patterns`).
+ *
+ * Ширина колонки фиксирована (`--admin-marquee-w`), иначе длинное имя
+ * изделия растягивает колонку и перекраивает всю таблицу. Не влезающий
+ * текст обрезается троеточием, а на ховере строки едет бегущей строкой
+ * (см. `.admin-cell-marquee` в `globals.css`). `title` оставляем как
+ * доступный фолбэк — нативная подсказка покажет имя целиком.
+ */
+function ProductCell({ o }: { o: OrderListItemDto }) {
+  const name =
+    o.patternNameSnapshot ?? o.patternName ?? o.productName ?? null;
+  const article = o.patternArticleSnapshot ?? o.patternArticle ?? null;
+  if (!name) {
+    return <span className="admin-muted">—</span>;
+  }
+  return (
+    <div
+      className="admin-cell-marquee"
+      style={{ '--admin-marquee-w': '15rem' } as CSSProperties}
+    >
+      <span
+        className="admin-cell-marquee__text admin-table__primary"
+        title={name}
+      >
+        {name}
+      </span>
+      {article && (
+        <span
+          className="admin-cell-marquee__text admin-table__hint"
+          title={article}
+        >
+          Артикул: {article}
+        </span>
+      )}
+    </div>
   );
 }
 
