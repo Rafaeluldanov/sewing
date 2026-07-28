@@ -3940,6 +3940,26 @@ button.current-work__head--toggle:focus-visible .current-work__title {
 .active-passport__route-warn strong { font-weight: 700; }
 .active-passport__route-warn em { font-style: normal; font-weight: 600; }
 
+/* Операции нет в маршруте заказа ВООБЩЕ (routeMismatchKind = OFF_ROUTE).
+   Отдельный, заметно более громкий уровень: жёлтый `route-warn` рядом
+   означает «не та по очереди» и встречается часто, а этот — «работа не
+   засчитается, заказ встанет на ОТК» и должен быть редким. Если сделать
+   их одинаковыми, красный утонет в жёлтом — ровно так и потерялся
+   инцидент 01.07.2026. */
+.active-passport__route-alert {
+  margin: 0.2rem 0 0;
+  padding: 0.5rem 0.6rem;
+  background: #fdecec;
+  border: 1px solid #e0928f;
+  border-left: 4px solid #c0392b;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  color: #7d211a;
+  line-height: 1.35;
+}
+.active-passport__route-alert strong { font-weight: 700; display: block; }
+.active-passport__route-alert em { font-style: normal; font-weight: 600; }
+
 /* Модалка проверки паспорта (PassportConfirmModal) */
 .passport-confirm__card { gap: 0.85rem; padding: 1.1rem 1.1rem 1.2rem; }
 .passport-confirm__number {

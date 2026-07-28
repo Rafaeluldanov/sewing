@@ -26,12 +26,31 @@ const LIMIT_PER_CHECK = 200;
  * `PASSPORT_CURRENT_OPERATION_NOT_IN_ORDER_ROUTE`: если паспорт
  * сейчас на одной из этих категорий, отсутствие операции в маршруте
  * — норма, а не находка.
+ *
+ * `CUTTING` здесь по той же причине, по которой маршрутные гейты в
+ * `PassportsService` ограничены `SEWING`: крой закрывается при выпуске
+ * паспорта, а не через `OPERATION_FINISHED`, и каждый паспорт рождается
+ * на «Делении кроя» независимо от того, стоит ли эта операция в снимке
+ * маршрута. Без этого исключения проверка G выдавала на проде 333
+ * находки «Деление кроя / статус СОЗДАН» из 394 — 85% чистого шума, в
+ * котором тонули реальные 61. Именно поэтому она не поймала НИ ОДИН из
+ * шести инцидентов «работа мимо маршрута» (13.05-28.07.2026).
  */
 const POST_ROUTE_CATEGORIES: ReadonlySet<OperationCategory> = new Set([
   OperationCategory.QC,
   OperationCategory.IRONING,
   OperationCategory.PACKING,
+  OperationCategory.CUTTING,
 ]);
+
+/**
+ * Окно проверки V (`ORDER_WORK_OUTSIDE_ROUTE`). У `OrderRouteStep` нет
+ * ни `createdAt`, ни `updatedAt`, поэтому отличить «работали мимо
+ * маршрута» от «маршрут переписали ПОСЛЕ работы» невозможно —
+ * скользящее окно ограничивает исторический хвост тем, что ещё можно
+ * разобрать по горячим следам.
+ */
+const OFF_ROUTE_WINDOW_DAYS = 30;
 
 /**
  * Diagnostic consistency report — единый сервис всех read-only
@@ -58,6 +77,7 @@ export class DiagnosticsService {
 
     await this.checkPassportIssues(issues);
     await this.checkRouteIssues(issues);
+    await this.checkOffRouteWorkIssues(issues);
     await this.checkShiftEquipmentIssues(issues);
     await this.checkOrderIssues(issues);
     await this.checkStorageIssues(issues);
@@ -295,9 +315,15 @@ export class DiagnosticsService {
         id: true,
         number: true,
         orderId: true,
+        status: true,
         currentRouteStepIndex: true,
         currentOperationId: true,
       },
+      // Срез обязан быть детерминированным: без `orderBy` БД вольна
+      // вернуть любые `take` строк, и отчёт «прыгал» бы от запуска к
+      // запуску, показывая то одни находки, то другие. Свежие сверху —
+      // по ним ещё можно что-то сделать.
+      orderBy: { createdAt: 'desc' },
       take: LIMIT_PER_CHECK * 4, // до 4-х проверок по этому набору
     });
 
@@ -346,6 +372,21 @@ export class DiagnosticsService {
         for (const op of opRows) opCategoryById.set(op.id, op.category);
       }
 
+      // Правила взаимозаменяемости (`OperationSubstitution`) и статусы
+      // заказов — исключения для G. Закрытие заместителя засчитывает
+      // замещаемую операцию (см. `PassportsService.evaluateRouteOrder`),
+      // поэтому паспорт на «полном РАСПОШИВЕ» при сплит-маршруте — это
+      // норма, а не находка. По `DONE`/`CANCELLED` заказам разбирать
+      // нечего: находка провисит в отчёте вечно и приучит к тому, что
+      // «там всегда что-то горит».
+      const substitutions = await this.loadSubstitutesBySatisfied();
+      const orderStatusById = new Map<string, OrderStatus>();
+      const orderRows = await this.prisma.order.findMany({
+        where: { id: { in: orderIds } },
+        select: { id: true, status: true },
+      });
+      for (const o of orderRows) orderStatusById.set(o.id, o.status);
+
       let fCount = 0;
       let gCount = 0;
       for (const p of passportsWithRoute) {
@@ -382,10 +423,17 @@ export class DiagnosticsService {
         // G. PASSPORT_CURRENT_OPERATION_NOT_IN_ORDER_ROUTE
         //
         // Текущая операция паспорта не входит в snapshot маршрута.
-        // Если это терминальная категория (QC/IRONING/PACKING) — это
-        // норма (маршрут MVP охватывает только пошив), пропускаем.
-        // Если у заказа вообще нет snapshot-а — пропускаем (паспорт
-        // живёт без маршрута, F/G здесь нерелевантны).
+        // Пропускаем, если это норма, а не находка:
+        //   - терминальная/кроевая категория (см. POST_ROUTE_CATEGORIES);
+        //   - у заказа вообще нет snapshot-а (F/G нерелевантны);
+        //   - паспорт ещё `CREATED` — он не в работе, его операция это
+        //     артефакт выпуска, а не факт цеха;
+        //   - заказ уже закрыт (`DONE`/`CANCELLED`) — разбирать нечего;
+        //   - операция ЗАМЕЩАЕТ шаг маршрута по `OperationSubstitution`.
+        //
+        // Severity `CRITICAL`, а не `WARNING`: это не «странность в
+        // данных», а работа, которая не засчитается на гейте перед ОТК —
+        // партия встанет через недели, сразу десятками паспортов.
         if (
           p.currentOperationId !== null &&
           gCount < LIMIT_PER_CHECK &&
@@ -395,12 +443,29 @@ export class DiagnosticsService {
         ) {
           const cat = opCategoryById.get(p.currentOperationId);
           if (cat && POST_ROUTE_CATEGORIES.has(cat)) continue;
+          if (p.status === PassportStatus.CREATED) continue;
+          const orderStatus = orderStatusById.get(p.orderId);
+          if (
+            orderStatus === OrderStatus.DONE ||
+            orderStatus === OrderStatus.CANCELLED
+          ) {
+            continue;
+          }
+          if (
+            isSatisfiedBySubstitute(
+              p.currentOperationId,
+              route.operationIds,
+              substitutions,
+            )
+          ) {
+            continue;
+          }
           out.push({
             code: 'PASSPORT_CURRENT_OPERATION_NOT_IN_ORDER_ROUTE',
-            severity: 'WARNING',
+            severity: 'CRITICAL',
             entityType: 'PASSPORT',
             entityId: p.id,
-            message: `Текущая операция паспорта ${p.number} не входит в snapshot маршрута заказа.`,
+            message: `Текущая операция паспорта ${p.number} не входит в маршрут заказа — эта работа не засчитается на гейте перед ОТК.`,
             context: {
               number: p.number,
               orderId: p.orderId,
@@ -845,6 +910,193 @@ export class DiagnosticsService {
       });
     }
   }
+
+  /**
+   * V. ORDER_WORK_OUTSIDE_ROUTE — работа, закрытая мимо маршрута заказа.
+   *
+   * Чем отличается от G. G смотрит на ТЕКУЩУЮ позицию паспорта и потому
+   * слепа к главному сценарию: швея закрыла чужую операцию и уехала
+   * дальше — `currentOperationId` уже другой, находки нет, а работа
+   * мимо плана осталась. V смотрит на ИСТОРИЮ `OPERATION_FINISHED` и
+   * ловит ровно тот класс, который шесть раз с 13.05.2026 всплывал
+   * только на AND-гейте перед ОТК, недели спустя, сразу десятками
+   * паспортов (инцидент 28.07: 70 паспортов в 8 заказах, лаг 27 дней).
+   *
+   * Единица находки — ПАРА (заказ, операция), а не паспорт: мастеру
+   * нужно одно решение на всю пачку («так и должно быть» / «делают не
+   * то»), а не 70 одинаковых строк.
+   *
+   * Зеркалит `scripts/ops/off-route-work-check.sql` — тот же набор
+   * исключений (только `SEWING`, живые заказы, легальные замены),
+   * проверенный на истории прода: запущенный 02.07.2026 показал бы
+   * инцидент в первый же день.
+   */
+  private async checkOffRouteWorkIssues(
+    out: DiagnosticIssueDto[],
+  ): Promise<void> {
+    const since = new Date(
+      Date.now() - OFF_ROUTE_WINDOW_DAYS * 24 * 60 * 60 * 1000,
+    );
+    const events = await this.prisma.passportEvent.findMany({
+      where: {
+        type: 'OPERATION_FINISHED',
+        createdAt: { gte: since },
+        operationId: { not: null },
+        operation: { category: OperationCategory.SEWING },
+        passport: {
+          order: {
+            status: { notIn: [OrderStatus.DONE, OrderStatus.CANCELLED] },
+          },
+        },
+      },
+      select: {
+        createdAt: true,
+        operationId: true,
+        passportId: true,
+        operation: { select: { code: true, name: true } },
+        employee: { select: { fullName: true } },
+        passport: {
+          select: { orderId: true, order: { select: { number: true } } },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (events.length === 0) return;
+
+    const orderIds = Array.from(
+      new Set(events.map((e) => e.passport.orderId)),
+    );
+    const routeRows = await this.prisma.orderRouteStep.findMany({
+      where: { orderId: { in: orderIds } },
+      select: { orderId: true, operationId: true },
+    });
+    const routeByOrder = new Map<string, Set<string>>();
+    for (const r of routeRows) {
+      let set = routeByOrder.get(r.orderId);
+      if (!set) {
+        set = new Set<string>();
+        routeByOrder.set(r.orderId, set);
+      }
+      set.add(r.operationId);
+    }
+    const substitutions = await this.loadSubstitutesBySatisfied();
+
+    // Сворачиваем в пары (заказ, операция).
+    const groups = new Map<
+      string,
+      {
+        orderId: string;
+        orderNumber: string;
+        operationId: string;
+        operationLabel: string;
+        passportIds: Set<string>;
+        employees: Set<string>;
+        firstAt: Date;
+        lastAt: Date;
+      }
+    >();
+    for (const e of events) {
+      const opId = e.operationId;
+      if (!opId) continue;
+      const route = routeByOrder.get(e.passport.orderId);
+      // Нет снимка маршрута — сравнивать не с чем (это отдельная
+      // находка H, здесь дублировать её нельзя).
+      if (!route || route.size === 0) continue;
+      if (route.has(opId)) continue;
+      if (isSatisfiedBySubstitute(opId, route, substitutions)) continue;
+
+      const key = `${e.passport.orderId} ${opId}`;
+      const existing = groups.get(key);
+      if (existing) {
+        existing.passportIds.add(e.passportId);
+        if (e.employee?.fullName) existing.employees.add(e.employee.fullName);
+        if (e.createdAt < existing.firstAt) existing.firstAt = e.createdAt;
+        if (e.createdAt > existing.lastAt) existing.lastAt = e.createdAt;
+        continue;
+      }
+      groups.set(key, {
+        orderId: e.passport.orderId,
+        orderNumber: e.passport.order?.number ?? e.passport.orderId,
+        operationId: opId,
+        operationLabel: `${e.operation?.code ?? '?'} ${e.operation?.name ?? ''}`.trim(),
+        passportIds: new Set([e.passportId]),
+        employees: new Set(e.employee?.fullName ? [e.employee.fullName] : []),
+        firstAt: e.createdAt,
+        lastAt: e.createdAt,
+      });
+    }
+
+    const sorted = [...groups.values()]
+      .sort((a, b) => a.firstAt.getTime() - b.firstAt.getTime())
+      .slice(0, LIMIT_PER_CHECK);
+    for (const g of sorted) {
+      out.push({
+        code: 'ORDER_WORK_OUTSIDE_ROUTE',
+        severity: 'CRITICAL',
+        entityType: 'ORDER',
+        entityId: g.orderId,
+        message: `По заказу ${g.orderNumber} закрывают операцию «${g.operationLabel}», которой нет в его маршруте: паспортов — ${g.passportIds.size}, с ${formatDay(g.firstAt)}.`,
+        context: {
+          orderNumber: g.orderNumber,
+          operationId: g.operationId,
+          operation: g.operationLabel,
+          passportCount: g.passportIds.size,
+          firstAt: g.firstAt.toISOString(),
+          lastAt: g.lastAt.toISOString(),
+          employees: [...g.employees],
+        },
+      });
+    }
+  }
+
+  /**
+   * Карта «замещаемая операция → её заместители» из
+   * `OperationSubstitution`. Таблица маленькая (единицы строк) и
+   * читается целиком — дешевле, чем точечные запросы на каждую находку.
+   */
+  private async loadSubstitutesBySatisfied(): Promise<
+    Map<string, Set<string>>
+  > {
+    const rows = await this.prisma.operationSubstitution.findMany({
+      select: { satisfiesOpId: true, substituteOpId: true },
+    });
+    const bySatisfied = new Map<string, Set<string>>();
+    for (const r of rows) {
+      let set = bySatisfied.get(r.satisfiesOpId);
+      if (!set) {
+        set = new Set<string>();
+        bySatisfied.set(r.satisfiesOpId, set);
+      }
+      set.add(r.substituteOpId);
+    }
+    return bySatisfied;
+  }
+}
+
+/**
+ * Закрывает ли `operationId` какой-нибудь шаг маршрута легально —
+ * то есть является ли он заместителем (`OperationSubstitution`) для
+ * операции, которая в маршруте есть. Зеркалит `isSatisfied` в
+ * `PassportsService.evaluateRouteOrder` и `QcService`.
+ */
+function isSatisfiedBySubstitute(
+  operationId: string,
+  routeOperationIds: ReadonlySet<string>,
+  substitutesBySatisfied: ReadonlyMap<string, ReadonlySet<string>>,
+): boolean {
+  for (const routeOpId of routeOperationIds) {
+    if (substitutesBySatisfied.get(routeOpId)?.has(operationId)) return true;
+  }
+  return false;
+}
+
+/** `дд.мм` в московской зоне — для человекочитаемого текста находки. */
+function formatDay(d: Date): string {
+  return d.toLocaleDateString('ru-RU', {
+    timeZone: 'Europe/Moscow',
+    day: '2-digit',
+    month: '2-digit',
+  });
 }
 
 function itemKey(orderId: string, productId: string, sizeId: string): string {

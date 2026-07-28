@@ -362,6 +362,7 @@ export class ShiftsService {
               operationName: currentStep.operation.name,
             }
           : null,
+        routeOperationIds: steps.map((s) => s.operation.id),
         routeNextStep: nextStep
           ? {
               index: nextStep.index,

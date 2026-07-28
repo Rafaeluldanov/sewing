@@ -24,6 +24,7 @@ import {
   type PassportListItemDto,
   type PassportPlacementResultDto,
   type PassportRouteHintDto,
+  type PassportRouteMismatchKind,
   type PassportRouteStepLiteDto,
   type PlacePassportDto,
   type ReleaseFromRollsDto,
@@ -3273,10 +3274,13 @@ export class PassportsService {
    *   - если `currentRouteStepIndex` вне диапазона snapshot
    *     (например, маршрут укоротили) → возвращаем «пустой» hint без
    *     warning, чтобы не падать;
-   *   - `expectedOperation = currentRouteStep.operation` — единое
-   *     правило с `current-work-card.tsx` (см. STEP 8 ТЗ);
-   *   - `routeMismatchWithActiveShift = true` только когда у швеи
-   *     есть активная смена И её `operationId` ≠ expected.
+   *   - `expectedOperation` = ПЕРВЫЙ НЕЗАКРЫТЫЙ шаг маршрута (см.
+   *     подробный разбор в `PassportRouteHintDto`). Раньше это был шаг
+   *     под `currentRouteStepIndex`, то есть уже ЗАКРЫТАЯ операция, —
+   *     из-за чего подсказка срабатывала на штатной передаче паспорта
+   *     и к ней привыкли;
+   *   - `routeMismatchKind` различает норму (параллельная группа,
+   *     легальная замена) и реальное отклонение (`OFF_ROUTE`).
    *
    * Безопасность: метод НИКОГДА не кидает — любые ошибки чтения
    * маршрута/смены превращаются в null/false. Hint должен оставаться
@@ -3288,6 +3292,7 @@ export class PassportsService {
   ): Promise<PassportRouteHintDto | null> {
     let steps: Array<{
       index: number;
+      parallelGroup: number | null;
       operation: { id: string; code: string; name: string };
     }>;
     try {
@@ -3296,6 +3301,7 @@ export class PassportsService {
         orderBy: { index: 'asc' },
         select: {
           index: true,
+          parallelGroup: true,
           operation: { select: { id: true, code: true, name: true } },
         },
       });
@@ -3345,15 +3351,80 @@ export class PassportsService {
       }
     }
 
-    const expectedOperationId = currentStep ? currentStep.operation.id : null;
-    const expectedOperationName = currentStep
-      ? currentStep.operation.name
+    // Закрытые операции паспорта — с учётом заместителей. Нужны, чтобы
+    // «ожидаемым» стал первый НЕЗАКРЫТЫЙ шаг, а не тот, который швея
+    // только что сдала. Fail-soft: не смогли прочитать — считаем, что
+    // закрытого нет, и откатываемся к прежнему поведению.
+    let finishedOpIds = new Set<string>();
+    let substitutesBySatisfied = new Map<string, Set<string>>();
+    try {
+      const [finished, subs] = await Promise.all([
+        this.prisma.passportEvent.findMany({
+          where: {
+            passportId: row.id,
+            type: PassportEventType.OPERATION_FINISHED,
+            operationId: { not: null },
+          },
+          select: { operationId: true },
+        }),
+        this.prisma.operationSubstitution.findMany({
+          select: { satisfiesOpId: true, substituteOpId: true },
+        }),
+      ]);
+      finishedOpIds = new Set(
+        finished
+          .map((e) => e.operationId)
+          .filter((v): v is string => v !== null),
+      );
+      substitutesBySatisfied = new Map();
+      for (const s of subs) {
+        const set = substitutesBySatisfied.get(s.satisfiesOpId) ?? new Set();
+        set.add(s.substituteOpId);
+        substitutesBySatisfied.set(s.satisfiesOpId, set);
+      }
+    } catch {
+      // fail-soft: подсказка необязательна
+    }
+    const isDone = (opId: string): boolean =>
+      finishedOpIds.has(opId) ||
+      [...(substitutesBySatisfied.get(opId) ?? [])].some((sub) =>
+        finishedOpIds.has(sub),
+      );
+
+    // Ожидаемая операция = первый шаг маршрута, который ещё не закрыт.
+    const expectedStep = steps.find((s) => !isDone(s.operation.id)) ?? null;
+    const expectedOperationId = expectedStep
+      ? expectedStep.operation.id
+      : null;
+    const expectedOperationName = expectedStep
+      ? expectedStep.operation.name
       : null;
 
-    const routeMismatchWithActiveShift =
-      !!expectedOperationId &&
-      !!activeShiftOperationId &&
-      expectedOperationId !== activeShiftOperationId;
+    // Степень расхождения. Порядок проверок = от самого безобидного к
+    // самому тревожному, чтобы `OFF_ROUTE` оставался редким и потому
+    // заметным (см. `PassportRouteMismatchKind`).
+    let routeMismatchKind: PassportRouteMismatchKind = 'NONE';
+    if (
+      expectedOperationId &&
+      activeShiftOperationId &&
+      expectedOperationId !== activeShiftOperationId
+    ) {
+      const shiftStep = steps.find(
+        (s) => s.operation.id === activeShiftOperationId,
+      );
+      const sameParallelGroup =
+        !!shiftStep &&
+        !!expectedStep &&
+        shiftStep.parallelGroup !== null &&
+        shiftStep.parallelGroup === expectedStep.parallelGroup;
+      const substitutesExpected = substitutesBySatisfied
+        .get(expectedOperationId)
+        ?.has(activeShiftOperationId);
+      if (sameParallelGroup) routeMismatchKind = 'PARALLEL';
+      else if (substitutesExpected) routeMismatchKind = 'SUBSTITUTE';
+      else if (!shiftStep) routeMismatchKind = 'OFF_ROUTE';
+      else routeMismatchKind = 'WRONG_STEP';
+    }
 
     return {
       currentRouteStep: currentStep ? toLite(currentStep) : null,
@@ -3362,7 +3433,8 @@ export class PassportsService {
       expectedOperationName,
       activeShiftOperationId,
       activeShiftOperationName,
-      routeMismatchWithActiveShift,
+      routeMismatchWithActiveShift: routeMismatchKind !== 'NONE',
+      routeMismatchKind,
     };
   }
 

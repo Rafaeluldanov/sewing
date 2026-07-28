@@ -232,16 +232,29 @@ export function PassportConfirmModal({
  *   - текущий шаг (`hint.currentRouteStep`);
  *   - следующий шаг (`hint.nextRouteStep`) или «последний шаг», если
  *     маршрут уже на конце;
- *   - предупреждение, если активная смена сотрудника не совпадает с
- *     ожидаемым шагом маршрута (`hint.routeMismatchWithActiveShift`).
+ *   - предупреждение о расхождении со сменой — РАЗНОЙ громкости в
+ *     зависимости от `hint.routeMismatchKind`.
+ *
+ * Про громкость. Раньше здесь был один жёлтый баннер на любое
+ * несовпадение, и он горел почти всегда: «ожидаемой» считалась операция,
+ * которую швея только что закрыла, поэтому на штатной передаче паспорта
+ * следующей швее баннер срабатывал гарантированно (на проде 28.07 — у
+ * 33% живых паспортов). К нему привыкли, и когда 01.07 он загорелся
+ * по делу — окантовка вместо киперки, — его не отличили от фона; партию
+ * нашли только 28.07, когда встал ОТК. Теперь:
+ *   - `PARALLEL` / `SUBSTITUTE` — молчим: порядок внутри параллельной
+ *     группы свободный, а заместитель законно закрывает шаг;
+ *   - `WRONG_STEP` — спокойная строка: операция в маршруте есть, просто
+ *     не та по очереди;
+ *   - `OFF_ROUTE` — громко: операции нет в маршруте ВООБЩЕ, эта работа
+ *     не засчитается на гейте перед ОТК и партия встанет.
  *
  * Все надписи — read-only, никаких блокировок и disabled-кнопок.
  * Стили — общие с `current-work-card.tsx`, чтобы оператор видел один
  * и тот же визуальный язык что в карточке активного кроя, что в модалке.
  */
 function PassportRouteHintBlock({ hint }: { hint: PassportRouteHintDto }) {
-  const { currentRouteStep, nextRouteStep, routeMismatchWithActiveShift } =
-    hint;
+  const { currentRouteStep, nextRouteStep, routeMismatchKind } = hint;
   return (
     <div className="active-passport__route" aria-label="Маршрут заказа">
       <div className="active-passport__route-row">
@@ -276,12 +289,20 @@ function PassportRouteHintBlock({ hint }: { hint: PassportRouteHintDto }) {
           )}
         </span>
       </div>
-      {routeMismatchWithActiveShift && (
+      {routeMismatchKind === 'WRONG_STEP' && (
         <p className="active-passport__route-warn" role="status">
-          <strong>Внимание:</strong> ваша смена идёт на операции{' '}
-          <em>{hint.activeShiftOperationName ?? '—'}</em>, а маршрут заказа
-          ожидает <em>{hint.expectedOperationName ?? '—'}</em>. Это
+          Ваша смена идёт на операции{' '}
+          <em>{hint.activeShiftOperationName ?? '—'}</em>, а по очереди
+          маршрута сейчас <em>{hint.expectedOperationName ?? '—'}</em>. Это
           подсказка, паспорт не блокируется.
+        </p>
+      )}
+      {routeMismatchKind === 'OFF_ROUTE' && (
+        <p className="active-passport__route-alert" role="alert">
+          <strong>Операции нет в маршруте этого заказа.</strong> Ваша смена
+          идёт на <em>{hint.activeShiftOperationName ?? '—'}</em>, но такого
+          шага у заказа нет — эта работа не засчитается, и заказ встанет
+          на ОТК. Позовите мастера.
         </p>
       )}
     </div>

@@ -400,11 +400,21 @@ function ActivePassportCard({
    * Soft-route warning: маршрут есть и текущий шаг != операции смены.
    * Не блокируем — это исключительно UI-подсказка для швеи (см. ТЗ
    * `STEP 8` и `docs/domain.md §«Маршруты производства»`).
+   *
+   * Разводим два уровня (28.07.2026, см. `passport-confirm-modal.tsx`):
+   * если операции смены в маршруте заказа НЕТ ВООБЩЕ — это не «не тот
+   * шаг», а работа, которая не засчитается на гейте перед ОТК; такой
+   * случай должен выглядеть иначе, иначе тонет в потоке штатных
+   * несовпадений.
    */
   const routeMismatch =
     !!p.routeCurrentStep &&
     !!shiftOperationId &&
     p.routeCurrentStep.operationId !== shiftOperationId;
+  const shiftOperationOffRoute =
+    routeMismatch &&
+    p.routeOperationIds.length > 0 &&
+    !p.routeOperationIds.includes(shiftOperationId as string);
   /**
    * Route-WIP UI критерий — единый для всех мест /work (см.
    * `passport-confirm-modal.tsx`, `state.ts`). Симметричен серверному
@@ -538,12 +548,18 @@ function ActivePassportCard({
               )}
             </span>
           </div>
-          {routeMismatch && (
+          {routeMismatch && !shiftOperationOffRoute && (
             <p className="active-passport__route-warn" role="status">
-              <strong>Внимание:</strong> ваша смена идёт на другой операции —
-              маршрут заказа сейчас на шаге{' '}
-              <em>{p.routeCurrentStep?.operationName}</em>. Вы можете
+              Ваша смена идёт на другой операции — маршрут заказа сейчас на
+              шаге <em>{p.routeCurrentStep?.operationName}</em>. Вы можете
               продолжать работу, паспорт не блокируется.
+            </p>
+          )}
+          {shiftOperationOffRoute && (
+            <p className="active-passport__route-alert" role="alert">
+              <strong>Операции нет в маршруте этого заказа.</strong> Эта
+              работа не засчитается, и заказ встанет на ОТК. Позовите
+              мастера.
             </p>
           )}
         </div>

@@ -274,21 +274,47 @@ export interface PassportRouteStepLiteDto {
  * Поля заполняются при наличии у заказа snapshot маршрута
  * (`OrderRouteStep[]`). Если snapshot пустой — `routeHint = null`.
  *
- * Семантика «expected» (зафиксировано в STEP 8 ТЗ MVP, см. также
- * `docs/flows.md §F4` и `docs/domain.md §18`):
- *   `expectedOperation = currentRouteStep.operation`. То же правило
- *   уже используется в `current-work-card.tsx` и оставлено единым,
- *   чтобы UI везде давал одну и ту же подсказку.
+ * Семантика «expected» (пересмотрена 28.07.2026, было — STEP 8 ТЗ MVP):
+ *   `expectedOperation` = ПЕРВЫЙ НЕЗАКРЫТЫЙ шаг маршрута, а не шаг под
+ *   `currentRouteStepIndex`.
  *
- * `routeMismatchWithActiveShift` = `true` тогда и только тогда, когда:
- *   - есть `currentRouteStep` (паспорт реально стоит на каком-то шаге);
- *   - есть `activeShiftOperationId` (у сотрудника открыта смена);
- *   - они не совпадают.
+ *   Почему поменяли. `currentRouteStepIndex` — это шаг, который швея
+ *   УЖЕ ЗАКРЫЛА (его выставляет scan/issue при взятии операции). Поэтому
+ *   следующая швея по цепочке всегда видела «маршрут ожидает <предыдущая
+ *   операция>» — на совершенно штатной передаче паспорта. На проде 28.07
+ *   у 199 из 604 живых паспортов (33%) `expected` указывал на уже
+ *   закрытую работу. Баннер горел почти всегда, к нему привыкли, и когда
+ *   01.07 он загорелся по-настоящему (окантовка вместо киперки), его
+ *   никто не отличил от фона: инцидент нашли только 28.07 на гейте ОТК.
+ *
+ * `routeMismatchKind` — степень расхождения, чтобы UI не кричал там, где
+ * всё в порядке:
+ *   - `NONE`         — совпало, либо считать нечего (нет смены/шага);
+ *   - `PARALLEL`     — операция смены в той же ПАРАЛЛЕЛЬНОЙ ГРУППЕ, что и
+ *                      ожидаемая (порядок внутри группы свободный) —
+ *                      норма, показывать спокойно или не показывать;
+ *   - `SUBSTITUTE`   — операция смены ЗАМЕЩАЕТ ожидаемую по
+ *                      `OperationSubstitution` — норма;
+ *   - `OFF_ROUTE`    — операции смены нет в маршруте заказа ВООБЩЕ. Это
+ *                      единственный случай, который стоит красного
+ *                      экрана: именно он шесть раз с 13.05.2026
+ *                      заканчивался вставшей партией на гейте ОТК;
+ *   - `WRONG_STEP`   — операция в маршруте есть, но это не тот шаг.
+ *
+ * `routeMismatchWithActiveShift` сохранён для обратной совместимости и
+ * равен `routeMismatchKind !== 'NONE'`.
  *
  * Backend НИКОГДА не использует `routeHint` для блокировок —
  * это исключительно read-only подсказка для оператора (без 409,
  * без disable-кнопок). См. ТЗ MVP §STEP 8.
  */
+export type PassportRouteMismatchKind =
+  | 'NONE'
+  | 'PARALLEL'
+  | 'SUBSTITUTE'
+  | 'OFF_ROUTE'
+  | 'WRONG_STEP';
+
 export interface PassportRouteHintDto {
   currentRouteStep: PassportRouteStepLiteDto | null;
   nextRouteStep: PassportRouteStepLiteDto | null;
@@ -297,6 +323,7 @@ export interface PassportRouteHintDto {
   activeShiftOperationId: string | null;
   activeShiftOperationName: string | null;
   routeMismatchWithActiveShift: boolean;
+  routeMismatchKind: PassportRouteMismatchKind;
 }
 
 export interface PassportDetailDto extends PassportListItemDto {

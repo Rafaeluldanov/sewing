@@ -173,6 +173,16 @@ export class MasterActionsService {
     let nextOperationId: string | null = passport.currentOperationId ?? null;
     let nextRouteStepIndex: number | null =
       passport.currentRouteStepIndex ?? null;
+    // Смена получателя стоит на операции ВНЕ маршрута заказа. Поведение
+    // остаётся прежним (передаём владельца, шаг не двигаем) — блокировать
+    // здесь нельзя: передать паспорт швее, у которой сейчас открыта смена
+    // на другой операции, законно. Но раньше этот случай не оставлял ВООБЩЕ
+    // никакого следа — ни ошибки, ни события, ни записи в журнале, — и
+    // мастер узнавал о расхождении только когда партия вставала на гейте
+    // перед ОТК. Поэтому фиксируем факт в аудите и в логе: см. проверку
+    // `ORDER_WORK_OUTSIDE_ROUTE` в `DiagnosticsService` и вкладку
+    // «Расхождения» у мастера.
+    let offRouteShiftOperationId: string | null = null;
     if (targetShift) {
       const matched = await this.prisma.orderRouteStep.findFirst({
         where: {
@@ -184,6 +194,8 @@ export class MasterActionsService {
       if (matched) {
         nextOperationId = matched.operationId;
         nextRouteStepIndex = matched.index;
+      } else {
+        offRouteShiftOperationId = targetShift.operationId;
       }
     }
 
@@ -213,6 +225,7 @@ export class MasterActionsService {
             before,
             after: this.snapshot(next),
             targetEmployeeId,
+            offRouteShiftOperationId,
           }),
         },
         tx,
@@ -221,7 +234,10 @@ export class MasterActionsService {
     });
 
     this.logger.log(
-      `event=master.transfer passportId=${passportId} actor=${actor.employeeId} targetEmployeeId=${targetEmployeeId} reason=${dto.reason}`,
+      `event=master.transfer passportId=${passportId} actor=${actor.employeeId} targetEmployeeId=${targetEmployeeId} reason=${dto.reason}` +
+        (offRouteShiftOperationId
+          ? ` offRouteShiftOperationId=${offRouteShiftOperationId}`
+          : ''),
     );
     return {
       passport: this.snapshot(updated),
@@ -812,6 +828,12 @@ export class MasterActionsService {
     placement?: 'CELL' | 'EMPLOYEE' | null;
     reopenedFinishedTarget?: boolean;
     previousFinisherEmployeeId?: string;
+    /**
+     * Передали паспорт швее, чья активная смена стоит на операции ВНЕ
+     * маршрута заказа. Шаг паспорта при этом не двигали. Раньше такой
+     * случай не оставлял следа вообще (см. `transferToEmployee`).
+     */
+    offRouteShiftOperationId?: string | null;
   }): Prisma.InputJsonValue {
     const compact = (s: MasterActionPassportSnapshotDto) => ({
       currentEmployeeId: s.currentEmployeeId,
@@ -843,6 +865,9 @@ export class MasterActionsService {
     }
     if (input.previousFinisherEmployeeId) {
       payload.previousFinisherEmployeeId = input.previousFinisherEmployeeId;
+    }
+    if (input.offRouteShiftOperationId) {
+      payload.offRouteShiftOperationId = input.offRouteShiftOperationId;
     }
     return payload as Prisma.InputJsonValue;
   }
