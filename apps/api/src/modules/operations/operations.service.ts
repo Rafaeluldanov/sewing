@@ -1,5 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { Prisma, type PricingMode } from '@prisma/client';
+import { OrderStatus, Prisma, type PricingMode } from '@prisma/client';
 import type {
   CreateOperationDto,
   OperationBlockersResponse,
@@ -633,10 +633,87 @@ export class OperationsService {
   // по ошибке. Массовая кнопка в списке требует сначала архив, потому
   // что там легко промахнуться мимо строки.
 
+  /**
+   * Кто мешает отправить операцию в архив: живые заказы, в снимке
+   * маршрута которых она стоит, и активные шаблоны маршрутов.
+   *
+   * Зачем гейт. Архив операции физически — `active = false`, а список
+   * операций станка (`EquipmentOperation`) отдаёт швее только активные.
+   * Значит архивация операции, которая стоит в маршруте живого заказа,
+   * делает этот шаг НЕВЫПОЛНИМЫМ: швея физически не может её выбрать,
+   * заказ встаёт намертво и молчит, пока кто-нибудь случайно не
+   * заметит. Ровно так умерли O-20260615-0004 (188 паспортов, 3 500 шт,
+   * простоял 28 дней) и O-20260615-0005 — у обоих ВСЕ швейные операции
+   * маршрута оказались заархивированы, а работу закрывали на мусорных
+   * дублях по 1 ₽. Раньше на этом месте стояла заглушка `gate: () => null`.
+   *
+   * Активные шаблоны считаем по той же логике, только на шаг раньше:
+   * шаблон с архивной операцией штампует новые заказы с невыполнимым
+   * шагом. Это тот же отказ, просто отложенный до следующего запуска.
+   *
+   * Правило разбора для оператора: сначала закрыть или отменить заказ
+   * (убрать шаблон из активных) — потом архивировать операцию.
+   *
+   * Один запрос на всю пачку, а не на строку: `gate` в `runBulkArchive`
+   * вызывается для каждой записи, и точечные счётчики дали бы N+1.
+   */
+  private async loadArchiveBlockers(
+    operationIds: string[],
+  ): Promise<Map<string, { orders: string[]; templates: string[] }>> {
+    const out = new Map<string, { orders: string[]; templates: string[] }>();
+    if (operationIds.length === 0) return out;
+
+    const [routeSteps, templateSteps] = await Promise.all([
+      this.prisma.orderRouteStep.findMany({
+        where: {
+          operationId: { in: operationIds },
+          order: {
+            status: { notIn: [OrderStatus.DONE, OrderStatus.CANCELLED] },
+          },
+        },
+        select: {
+          operationId: true,
+          order: { select: { number: true } },
+        },
+      }),
+      this.prisma.routeTemplateStep.findMany({
+        where: {
+          operationId: { in: operationIds },
+          template: { isActive: true },
+        },
+        select: {
+          operationId: true,
+          template: { select: { name: true } },
+        },
+      }),
+    ]);
+
+    const ensure = (id: string) => {
+      let e = out.get(id);
+      if (!e) {
+        e = { orders: [], templates: [] };
+        out.set(id, e);
+      }
+      return e;
+    };
+    for (const r of routeSteps) {
+      const e = ensure(r.operationId);
+      if (!e.orders.includes(r.order.number)) e.orders.push(r.order.number);
+    }
+    for (const t of templateSteps) {
+      const e = ensure(t.operationId);
+      if (!e.templates.includes(t.template.name)) {
+        e.templates.push(t.template.name);
+      }
+    }
+    return out;
+  }
+
   async archiveMany(
     ids: string[],
     viewer: AuthPrincipal,
   ): Promise<BulkArchiveResultDto> {
+    const blockersByOp = await this.loadArchiveBlockers(ids);
     const res = await runBulkArchive({
       ids,
       load: async (want) =>
@@ -647,7 +724,26 @@ export class OperationsService {
           }),
         ),
       alreadyDone: (row) => !row.active,
-      gate: () => null,
+      // Не архивируем операцию, пока ею пользуются живые заказы или
+      // активные шаблоны — см. `loadArchiveBlockers`. Текст причины
+      // НАЗЫВАЕТ конкретные заказы: оператору нужно знать, с чем именно
+      // разбираться, а не «используется где-то».
+      gate: (row) => {
+        const b = blockersByOp.get(row.id);
+        if (!b) return null;
+        const parts: string[] = [];
+        if (b.orders.length > 0) {
+          parts.push(`незакрытые заказы: ${formatUsageList(b.orders)}`);
+        }
+        if (b.templates.length > 0) {
+          parts.push(`активные шаблоны маршрутов: ${formatUsageList(b.templates)}`);
+        }
+        if (parts.length === 0) return null;
+        return {
+          reason: 'IN_USE' as const,
+          detail: `${parts.join('; ')}. Сначала закройте или отмените заказ (уберите шаблон из активных) — иначе шаг маршрута станет невыполнимым и заказ встанет.`,
+        };
+      },
       apply: async (_rows, targetIds) => {
         await this.prisma.$transaction(async (tx) => {
           await tx.operation.updateMany({
@@ -1181,4 +1277,15 @@ function resolveSalaryPlanShiftSeconds(
   // dtoValue === undefined: оставляем default БД, но если ставка
   // указана — лучше явно проставить 28800, чтобы UI не путался.
   return hasRate ? 28800 : null;
+}
+
+
+/**
+ * Список названий для текста причины: первые три + «и ещё N».
+ * Простыня из 20 номеров заказов в тосте нечитаема.
+ */
+function formatUsageList(items: readonly string[]): string {
+  const head = items.slice(0, 3).join(', ');
+  const rest = items.length - 3;
+  return rest > 0 ? `${head} и ещё ${rest}` : head;
 }
