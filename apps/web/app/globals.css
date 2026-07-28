@@ -9842,7 +9842,9 @@ body:has(.admin-layout) .app-header { display: none !important; }
 
 .rb {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 272px;
+  /* Палитре — не меньше 300 px: в 272 px под имя оставалось ~190 px, и
+     обычное название операции ложилось в три строки. */
+  grid-template-columns: minmax(0, 1fr) 300px;
   gap: 14px;
   align-items: start;
 }
@@ -9943,6 +9945,27 @@ body:has(.admin-layout) .app-header { display: none !important; }
 }
 
 /* Чип в режиме правки: ручка, кнопки ⇄ и ✕, метка «новая». */
+
+/* Длинное название операции переносится по словам, а не выпирает за край
+   окна: в справочнике цепочка живёт на всю ширину страницы и `nowrap`
+   безобиден, а здесь чип зажат в колонке палитры (300 px) — с `nowrap` он
+   не мог ужаться и вылезал за рамку панели вместе с именем. Высота чипа
+   при этом остаётся прежней (28 px) для всех имён в одну строку. */
+.rb .admin-route-step {
+  max-width: 100%;
+  height: auto;
+  min-height: 28px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+  white-space: normal;
+}
+/* `anywhere`, а не `break-word`: только он уменьшает min-content чипа,
+   иначе одно длинное слово по-прежнему распирало бы колонку. */
+.rb .admin-route-step__name {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  line-height: 1.25;
+}
 .admin-route-step--draggable { cursor: grab; padding-left: 3px; }
 .admin-route-step--draggable:active { cursor: grabbing; }
 .admin-route-step__grip {
@@ -9956,6 +9979,8 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 0.7rem;
   opacity: 0.75;
   font-variant-numeric: tabular-nums;
+  /* «12 ₽» не разрывается, когда имя рядом переносится по словам. */
+  white-space: nowrap;
 }
 .admin-route-step__tag {
   font-size: 0.62rem;
