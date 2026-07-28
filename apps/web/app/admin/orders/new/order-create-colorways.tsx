@@ -70,15 +70,6 @@ function swatchHex(name: string): string {
   return DEFAULT_SWATCH;
 }
 
-/**
- * Ширина ячейки количества под число, чтобы цифры не обрезались.
- * Пустая ячейка (qty = 0) считается по плейсхолдеру «0».
- */
-function qtyWidth(n: number): string {
-  const digits = Math.max(2, String(n).length);
-  return `${digits + 1.5}ch`;
-}
-
 export function makeEmptyColorway(): ColorwayDraft {
   return { color: '', techCardId: null, sizes: {} };
 }
@@ -311,7 +302,6 @@ export function OrderColorwaysFieldset({
                             // матрице без расцветок (`size-plan-selector`).
                             placeholder="0"
                             value={qty === 0 ? '' : String(qty)}
-                            style={{ width: qtyWidth(qty) }}
                             // Клик в заполненную ячейку выделяет число целиком —
                             // следующая цифра ЗАМЕНЯЕТ значение, а не дописывается.
                             onFocus={(e) => e.currentTarget.select()}
@@ -326,6 +316,13 @@ export function OrderColorwaysFieldset({
                         </label>
                       );
                     })}
+                  </div>
+
+                  {/* Итог по расцветке — отдельной строкой под сеткой.
+                      Раньше он стоял последним элементом самой сетки и
+                      «прилипал» сбоку к последнему размеру, съезжая вместе
+                      с ним при переносе. */}
+                  <div className="cwf-card__foot">
                     <span className="cwf-rowtotal">Σ {rowTotal}</span>
                   </div>
                 </div>
@@ -390,14 +387,19 @@ function Styles() {
 .cwf-tech { font-size:12.5px; color:var(--color-fg-muted); }
 .cwf-icon { flex:none; margin-left:auto; display:inline-flex; padding:6px; border-radius:6px; border:1px solid transparent; background:none; color:var(--color-fg-subtle); cursor:pointer; }
 .cwf-icon:hover { color:var(--color-danger); background:var(--color-danger-soft); }
-.cwf-sizes { display:flex; flex-wrap:wrap; gap:6px; align-items:flex-end; }
-.cwf-size { display:flex; flex-direction:column; align-items:center; gap:2px; }
-.cwf-size span { font-size:10.5px; font-weight:700; color:var(--color-fg-muted); }
-.cwf-size input { min-width:38px; max-width:96px; padding:5px 6px; text-align:center; border:1px solid var(--color-border-strong); border-radius:6px; font:inherit; background:var(--color-bg-card); color:var(--color-fg); }
+/* Сетка ячеек количества. Колонки одинаковой ширины и одинаковые во всех
+   карточках расцветок: раньше ячейка была flex-элементом с шириной по числу
+   цифр (2 цифры → 3.5ch, 3 → 4.5ch), поэтому ввод «120» раздвигал строку,
+   размеры уезжали в сторону и переставали совпадать с соседней карточкой. */
+.cwf-sizes { display:grid; grid-template-columns:repeat(auto-fill,minmax(46px,1fr)); gap:6px; align-items:end; }
+.cwf-size { display:flex; flex-direction:column; gap:2px; min-width:0; }
+.cwf-size span { font-size:10.5px; font-weight:700; color:var(--color-fg-muted); text-align:center; }
+.cwf-size input { width:100%; min-width:0; padding:5px 4px; text-align:center; border:1px solid var(--color-border-strong); border-radius:6px; font:inherit; font-size:14px; background:var(--color-bg-card); color:var(--color-fg); }
 .cwf-size input:focus { outline:none; border-color:var(--color-accent); }
 .cwf-size input::-webkit-outer-spin-button, .cwf-size input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
 .cwf-size input[type=number] { -moz-appearance:textfield; appearance:textfield; }
-.cwf-rowtotal { align-self:center; margin-left:4px; font-size:12px; font-weight:700; color:var(--color-fg-strong); }
+.cwf-card__foot { display:flex; justify-content:flex-end; }
+.cwf-rowtotal { font-size:12px; font-weight:700; color:var(--color-fg-strong); }
 .cwf-totals { display:flex; align-items:center; gap:7px; flex-wrap:wrap; }
 .cwf-chip { display:inline-flex; align-items:center; gap:4px; padding:2px 8px; border-radius:999px; background:var(--color-bg-muted); font-size:12px; }
 .cwf-chip--total { background:var(--color-bg-tint); color:var(--color-fg-strong); }

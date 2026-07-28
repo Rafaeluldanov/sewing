@@ -552,15 +552,8 @@ export function OrderApplicationsEditor({
     inKit: boolean,
   ): JSX.Element {
     return (
-      <div
-        style={{
-          display: 'flex',
-          gap: 8,
-          flexWrap: 'wrap',
-          alignItems: 'flex-end',
-        }}
-      >
-        <label style={fieldStyle}>
+      <div className="admin-order-applications__grid">
+        <label className={FIELD_W2}>
           <span>Тип</span>
           <select
             value={row.type}
@@ -576,7 +569,7 @@ export function OrderApplicationsEditor({
           </select>
         </label>
 
-        <label style={fieldStyle}>
+        <label className={FIELD_W2}>
           <span>Когда выполняется</span>
           <select
             value={row.stage}
@@ -592,7 +585,7 @@ export function OrderApplicationsEditor({
           </select>
         </label>
 
-        <label style={fieldStyle}>
+        <label className={FIELD}>
           <span>Статус</span>
           <select
             value={row.status}
@@ -610,31 +603,28 @@ export function OrderApplicationsEditor({
           </select>
         </label>
 
-        <button
-          type="button"
-          className="admin-btn admin-btn--ghost"
-          onClick={() => removeRow(idx)}
-          title={inKit ? 'Убрать нанесение из комплекта' : 'Удалить нанесение'}
-          disabled={disabled}
-          style={{ marginLeft: 'auto' }}
-        >
-          <Trash2 size={14} strokeWidth={1.6} aria-hidden />{' '}
-          {inKit ? 'Убрать' : 'Удалить'}
-        </button>
+        <div className="admin-order-applications__row-actions">
+          <button
+            type="button"
+            className="admin-btn admin-btn--ghost"
+            onClick={() => removeRow(idx)}
+            title={
+              inKit ? 'Убрать нанесение из комплекта' : 'Удалить нанесение'
+            }
+            disabled={disabled}
+          >
+            <Trash2 size={14} strokeWidth={1.6} aria-hidden />{' '}
+            {inKit ? 'Убрать' : 'Удалить'}
+          </button>
+        </div>
       </div>
     );
   }
 
   function renderRowGrid(row: ApplicationRow, idx: number): JSX.Element {
     return (
-      <div
-        style={{
-          display: 'grid',
-          gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))',
-          gap: 8,
-        }}
-      >
-        <label style={fieldStyle}>
+      <div className="admin-order-applications__grid">
+        <label className={FIELD_W2}>
           <span>Место</span>
           <input
             type="text"
@@ -643,7 +633,7 @@ export function OrderApplicationsEditor({
             placeholder="Например: грудь"
           />
         </label>
-        <label style={fieldStyle}>
+        <label className={FIELD}>
           <span>Ширина, мм</span>
           <input
             type="number"
@@ -653,7 +643,7 @@ export function OrderApplicationsEditor({
             onChange={(e) => updateRow(idx, { widthMm: e.target.value })}
           />
         </label>
-        <label style={fieldStyle}>
+        <label className={FIELD}>
           <span>Высота, мм</span>
           <input
             type="number"
@@ -663,7 +653,7 @@ export function OrderApplicationsEditor({
             onChange={(e) => updateRow(idx, { heightMm: e.target.value })}
           />
         </label>
-        <label style={fieldStyle}>
+        <label className={FIELD}>
           <span>Кол-во цветов</span>
           <input
             type="number"
@@ -673,7 +663,7 @@ export function OrderApplicationsEditor({
             onChange={(e) => updateRow(idx, { colorsCount: e.target.value })}
           />
         </label>
-        <label style={fieldStyle}>
+        <label className={FIELD}>
           <span>Единица</span>
           <input
             type="text"
@@ -681,7 +671,7 @@ export function OrderApplicationsEditor({
             onChange={(e) => updateRow(idx, { unit: e.target.value })}
           />
         </label>
-        <label style={fieldStyle}>
+        <label className={FIELD_W2}>
           <span>Цвет / описание</span>
           <input
             type="text"
@@ -690,7 +680,7 @@ export function OrderApplicationsEditor({
             placeholder="белый, PMS 185 C, …"
           />
         </label>
-        <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
+        <label className={FIELD_W4}>
           <span>Описание</span>
           <input
             type="text"
@@ -699,7 +689,7 @@ export function OrderApplicationsEditor({
             placeholder="Текст принта / описание макета"
           />
         </label>
-        <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
+        <label className={FIELD_FULL}>
           <span>Комментарий</span>
           <input
             type="text"
@@ -707,7 +697,7 @@ export function OrderApplicationsEditor({
             onChange={(e) => updateRow(idx, { comment: e.target.value })}
           />
         </label>
-        <label style={{ ...fieldStyle, gridColumn: '1 / -1' }}>
+        <label className={FIELD_FULL}>
           <span>Ссылка на файл макета</span>
           <input
             type="url"
@@ -814,10 +804,7 @@ function ScopeControls({
       </div>
 
       {scope === 'ORDER' ? (
-        <label
-          style={{ ...fieldStyle, maxWidth: 220 }}
-          className="admin-order-applications__scope-qty"
-        >
+        <label className={`${FIELD} admin-order-applications__scope-qty`}>
           <span>Количество из тиража</span>
           <input
             type="number"
@@ -874,9 +861,15 @@ function ScopeControls({
   );
 }
 
-const fieldStyle: React.CSSProperties = {
-  display: 'flex',
-  flexDirection: 'column',
-  fontSize: '0.85rem',
-  gap: 2,
-};
+// ---------------------------------------------------------------------------
+// Классы полей строки нанесения. Сетка строки — фиксированные 6 колонок
+// (`.admin-order-applications__grid` в `globals.css`), поле объявляет,
+// сколько колонок занимает. Раньше это были inline-стили + `auto-fill`,
+// из-за чего число колонок зависело от ширины контейнера: поля
+// переносились по одному, справа оставалась дыра, а шапка (Тип / Когда /
+// Статус) не совпадала по колонкам с полями под ней.
+// ---------------------------------------------------------------------------
+const FIELD = 'admin-order-applications__field';
+const FIELD_W2 = `${FIELD} admin-order-applications__field--w2`;
+const FIELD_W4 = `${FIELD} admin-order-applications__field--w4`;
+const FIELD_FULL = `${FIELD} admin-order-applications__field--full`;

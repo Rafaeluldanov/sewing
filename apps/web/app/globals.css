@@ -442,6 +442,13 @@ input[type="text"],
 input[type="number"],
 input[type="search"],
 input[type="password"],
+/* url / email / tel — те же поля ввода, что и text: без них браузер рисует
+   нативный инпут (другой бордер, высота и радиус), и строка формы «плывёт»
+   рядом с соседними полями. Контекстные правила (.admin-field и т.п.) ниже
+   специфичнее и по-прежнему выигрывают. */
+input[type="url"],
+input[type="email"],
+input[type="tel"],
 textarea,
 select {
   width: 100%;
@@ -11879,6 +11886,12 @@ body:has(.admin-layout) .app-header { display: none !important; }
   cursor: pointer;
 }
 
+/* «Количество из тиража» — узкое поле, но с той же высотой, что и
+   остальные контролы строки (см. `__field` ниже). */
+.admin-order-applications__scope-qty {
+  max-width: 220px;
+}
+
 .admin-order-applications__sizes {
   display: flex;
   flex-wrap: wrap;
@@ -11908,10 +11921,15 @@ body:has(.admin-layout) .app-header { display: none !important; }
   cursor: pointer;
 }
 
-.admin-order-applications__size-qty {
+/* Поразмерное количество внутри чипа. Селектор с элементом обязателен:
+   базовое `input[type="number"] { width: 100% }` специфичнее одиночного
+   класса, и без этого поле растягивалось на всю ширину строки, раздувая
+   чип размера. */
+.admin-order-applications__size-chip > input.admin-order-applications__size-qty {
   width: 4.5rem;
+  height: 26px;
   font-size: 0.8rem;
-  padding: 0.1rem 0.35rem;
+  padding: 0 0.35rem;
 }
 
 /* Карточка одиночного нанесения в редакторе (раньше — inline-border). */
@@ -11922,6 +11940,102 @@ body:has(.admin-layout) .app-header { display: none !important; }
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+/* Сетка полей одного нанесения.
+
+   Раньше строка была `flex-wrap` (шапка) + `auto-fill minmax(180px,1fr)`
+   (поля): число колонок зависело от ширины контейнера, поэтому «Единица»
+   и «Цвет / описание» переносились по одному, справа оставалась дыра, а
+   шапка (Тип / Когда / Статус) не совпадала по колонкам с полями под ней.
+   Теперь сетка фиксирована — 6 колонок, каждое поле занимает известное
+   число колонок, ряды всегда заполняются целиком:
+
+     Тип(2)  Когда(2)  Статус(1)  [Удалить](1)
+     Место(2)  Ширина  Высота  Кол-во цветов  Единица
+     Цвет / описание(2)  Описание(4)
+     Комментарий(6)
+     Ссылка на файл макета(6)
+
+   На узких экранах — 3 и 2 колонки, те же правила спанов. */
+.admin-order-applications__grid {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 8px 10px;
+  align-items: end;
+}
+
+.admin-order-applications__field {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.admin-order-applications__field > span {
+  font-size: 0.78rem;
+  color: var(--admin-muted, #5f5f5c);
+}
+
+/* Одна высота на все контролы строки — иначе соседние поля и селекты
+   стоят на разных базовых линиях. `input[type]` вместо `input`: базовое
+   правило полей — `input[type="text"]` и т.п., а это та же специфичность,
+   и победитель зависел бы от порядка правил в файле. */
+.admin-order-applications__field > input[type],
+.admin-order-applications__field > select {
+  width: 100%;
+  height: var(--aap-h, 34px);
+  padding: 0 0.6rem;
+  font-size: 0.9rem;
+  border-radius: 6px;
+}
+
+/* Место под шеврон select-а (базовое правило задаёт его фоном). */
+.admin-order-applications__field > select {
+  padding-right: 2rem;
+}
+
+.admin-order-applications__field--w2 {
+  grid-column: span 2;
+}
+
+.admin-order-applications__field--w4 {
+  grid-column: span 4;
+}
+
+.admin-order-applications__field--full {
+  grid-column: 1 / -1;
+}
+
+/* Кнопка «Удалить» — последняя колонка шапки, прижата вправо. */
+.admin-order-applications__row-actions {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+}
+
+@media (max-width: 1100px) {
+  .admin-order-applications__grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .admin-order-applications__field--w4 {
+    grid-column: 1 / -1;
+  }
+
+  .admin-order-applications__row-actions {
+    grid-column: 1 / -1;
+  }
+}
+
+@media (max-width: 640px) {
+  .admin-order-applications__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .admin-order-applications__field--w2 {
+    grid-column: 1 / -1;
+  }
 }
 
 /* Этап «Комплекты нанесений»: карточка комплекта в редакторе. */
@@ -11942,11 +12056,14 @@ body:has(.admin-layout) .app-header { display: none !important; }
   flex-wrap: wrap;
 }
 
-.admin-order-applications__kit-name {
+/* Название комплекта — та же высота, что и кнопка рядом. Элемент в
+   селекторе — по той же причине, что и у `__size-qty` выше. */
+.admin-order-applications__kit-head > input.admin-order-applications__kit-name {
   flex: 1 1 240px;
   font-weight: 600;
   font-size: 0.95rem;
-  padding: 0.3rem 0.5rem;
+  height: var(--aap-h, 34px);
+  padding: 0 0.6rem;
 }
 
 .admin-order-applications__kit-members {
