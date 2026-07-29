@@ -25,6 +25,10 @@ import {
   getMaterialCharacteristic,
   type MaterialCharacteristics,
 } from '@sewing/shared/material-characteristics';
+import {
+  computeNormPurchase,
+  needsPurchaseConversion,
+} from '@sewing/shared/norm-purchase';
 
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -1007,6 +1011,7 @@ export class WorkshopNeedsService {
         id: r.id,
         name: r.name,
         unit: r.unit,
+        normUnit: r.normUnit,
         qtyPerUnit: r.qtyPerUnit,
         totalQty: r.totalQty,
         materialRole: r.materialRole,
@@ -1032,6 +1037,9 @@ export class WorkshopNeedsService {
         // `overrideFromLine`): иначе спецификация показывала бы одно число,
         // а закупка считалась по другому.
         qtySource: r.qtySource,
+        // Явная привязка к норме номенклатуры — по ней `isNormRemovedFromSpec`
+        // отличает «материал есть в заказе» от «материал из заказа убрали».
+        qtySourceRef: r.qtySourceRef,
       }));
     const mapTechCardLines = (
       lines: NonNullable<typeof order.techCard>['materialLines'],
@@ -1041,6 +1049,7 @@ export class WorkshopNeedsService {
         id: l.id,
         name: l.name,
         unit: l.unit,
+        normUnit: l.normUnit,
         qtyPerUnit: l.qtyPerUnit,
         totalQty: null,
         materialRole: l.materialRole,
@@ -1064,6 +1073,7 @@ export class WorkshopNeedsService {
         requiresColorSelection: l.colorRule === 'ORDER_SELECTED_COLOR',
         // Live-техкарта — не заказ: правки нормы в заказе тут быть не может.
         qtySource: null,
+        qtySourceRef: null,
       }));
 
     // -----------------------------------------------------------------------
@@ -1374,6 +1384,19 @@ export class WorkshopNeedsService {
           labelSnapshot: norm.labelSnapshot,
           sourceLines: g.sourceLines,
         });
+        // Материал убрали из спецификации заказа → потребности по нему нет.
+        // Норма живёт в номенклатуре и одна на все заказы, поэтому без этой
+        // проверки удалённая в заказе строка возвращалась в потребность на
+        // ближайшем пересчёте (и менеджер видел «удалил, а оно тут»).
+        if (
+          this.isNormRemovedFromSpec({
+            norm,
+            sourceLines: g.sourceLines,
+            matchedLine,
+          })
+        ) {
+          continue;
+        }
         const computedNorm = this.computeParameterNorm(
           norm,
           g.totalQty,
@@ -1715,6 +1738,7 @@ export class WorkshopNeedsService {
           id: r.id,
           name: r.name,
           unit: r.unit,
+          normUnit: r.normUnit,
           qtyPerUnit: r.qtyPerUnit,
           totalQty: null,
           materialRole: r.materialRole,
@@ -1737,6 +1761,7 @@ export class WorkshopNeedsService {
           id: l.id,
           name: l.name,
           unit: l.unit,
+          normUnit: l.normUnit,
           qtyPerUnit: l.qtyPerUnit,
           totalQty: null,
           materialRole: l.materialRole,
@@ -1958,6 +1983,8 @@ export class WorkshopNeedsService {
     // Fallback QTY_PER_UNIT.
     let calculatedQty: Prisma.Decimal;
     let unit = line.unit;
+    /** Почему потребность осталась в единице нормы, а не в закупочной. */
+    let conversionNote: string | null = null;
     if (line.source === 'ORDER_MATERIAL_REQUIREMENT') {
       // У snapshot totalQty посчитан в момент start() (в БД NOT NULL, так что
       // ветка `??` сегодня недостижима). Defensive (M3): если инвариант когда-
@@ -1965,6 +1992,30 @@ export class WorkshopNeedsService {
       // не зануляем молча.
       calculatedQty = (line.totalQty ?? line.qtyPerUnit.mul(totalOrderQty))
         .toDecimalPlaces(4, Prisma.Decimal.ROUND_HALF_UP);
+    } else if (needsPurchaseConversion(line.normUnit, line.unit)) {
+      // Строка развела норму и закупку: `qtyPerUnit` в погонных метрах, а
+      // потребность обязана выйти в закупочной единице. Считаем той же
+      // формулой, что и спецификация (`computeNormPurchase` в shared), —
+      // иначе экран и закупка снова разойдутся в числах.
+      const converted = computeNormPurchase({
+        normPerUnit: Number(line.qtyPerUnit.toString()),
+        normUnit: line.normUnit,
+        qty: totalOrderQty,
+        purchaseUnit: line.unit,
+        widthCm: line.plannedWidthCm,
+        densityGsm: line.densityGsm,
+      });
+      if (converted.ok) {
+        calculatedQty = new Prisma.Decimal(converted.purchaseQty);
+      } else {
+        // Пересчёт невозможен (нет ширины / плотности). Показываем расход в
+        // единице НОРМЫ и говорим об этом: молчаливый ноль читается как
+        // «материал не нужен», а расход в кг-подписи выдал бы длину за вес.
+        calculatedQty = new Prisma.Decimal(converted.totalNorm);
+        unit = normUnitOf(line);
+        conversionNote = converted.message;
+        warnings.push(`«${line.name}»: ${converted.message}`);
+      }
     } else {
       // Live техкарта: qtyPerUnit × Σ qtyPlan.
       calculatedQty = line.qtyPerUnit
@@ -1992,7 +2043,7 @@ export class WorkshopNeedsService {
       calculatedQty,
       unit,
       calculationMethod: 'QTY_PER_UNIT',
-      calculationNote: null,
+      calculationNote: conversionNote,
     };
   }
 
@@ -2292,7 +2343,7 @@ export class WorkshopNeedsService {
       matchedLine?.qtySource === 'ORDER' &&
       !editedAreaPerUnit
     ) {
-      const w = `Норма строки «${matchedLine.name}» правлена в заказе в «${matchedLine.unit}», а потребность по роли «${role}» считается по площади лекала (м²) — правка в расчёт не вошла.`;
+      const w = `Норма строки «${matchedLine.name}» правлена в заказе в «${normUnitOf(matchedLine)}», а потребность по роли «${role}» считается по площади лекала (м²) — правка в расчёт не вошла.`;
       noteParts.push(w);
       warnings.push(w);
     }
@@ -2397,6 +2448,64 @@ export class WorkshopNeedsService {
    * хватает для русского нейминга ткани / фурнитуры (Молния = молния
    * = МОЛНИЯ; Дюспа = дюспа; Тёплый = теплый).
    */
+  /**
+   * «Материал убрали из спецификации заказа» — норму номенклатуры не
+   * превращаем в строку потребности.
+   *
+   * Зачем: количество для category-driven заказа берётся из номенклатуры
+   * (`PatternItemParameterNorm`), а номенклатура одна на все заказы. Удаление
+   * строки в конкретном заказе живёт только в его снимке
+   * (`OrderMaterialRequirement`), поэтому цикл по нормам обязан спрашивать
+   * снимок: иначе «Киперная лента», убранная из заказа, возвращается в
+   * потребность на первом же пересчёте.
+   *
+   * Считаем норму УБРАННОЙ, только когда в снимке нет НИ ОДНОГО следа:
+   *   1. снимок вообще есть и он привязка-совместимый — хотя бы одна строка
+   *      несёт `qtySourceRef` (собран билдером, который проставляет привязки).
+   *      Для legacy-снимков без привязок поведение остаётся прежним: там
+   *      «нет привязки» не означает «убрали», и молча терять потребности
+   *      старых заказов нельзя;
+   *   2. ни одна строка не привязана к этой норме (`qtySourceRef = norm.id`);
+   *   3. обогащающая строка не нашлась (`findEnrichmentLine` — по роли, имени
+   *      и префиксу имени: то же правило, по которому норма и матчится);
+   *   4. и ни одна строка не названа как сам параметр — страховка на случай,
+   *      когда привязка не проставилась (например, из-за расхождения единиц),
+   *      а роль в снимке неоднозначная.
+   */
+  private isNormRemovedFromSpec(input: {
+    norm: { id: string; labelSnapshot: string };
+    sourceLines: SourceLine[];
+    matchedLine: SourceLine | null;
+  }): boolean {
+    const { norm, sourceLines, matchedLine } = input;
+    if (matchedLine) return false;
+
+    const fromSnapshot = sourceLines.filter(
+      (l) => l.source === 'ORDER_MATERIAL_REQUIREMENT',
+    );
+    if (fromSnapshot.length === 0) return false;
+    if (!fromSnapshot.some((l) => l.qtySourceRef)) return false;
+    if (fromSnapshot.some((l) => l.qtySourceRef === norm.id)) return false;
+
+    const normalized = (s: string | null | undefined): string =>
+      (s ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, ' ')
+        .replace(/ё/g, 'е');
+    const target = normalized(norm.labelSnapshot);
+    if (target.length > 0) {
+      const startsWith = (v: string): boolean =>
+        v === target || v.startsWith(`${target} `);
+      const namedLikeParam = fromSnapshot.some(
+        (l) => startsWith(normalized(l.name)) || startsWith(normalized(l.fabricType)),
+      );
+      if (namedLikeParam) return false;
+    }
+
+    return true;
+  }
+
   private findEnrichmentLine(input: {
     roleKey: string | null;
     labelSnapshot: string | null;
@@ -2600,7 +2709,7 @@ export class WorkshopNeedsService {
             .toString()} м пог. на тираж).`,
       );
     } else if (matchedLine?.qtySource === 'ORDER' && !editedLinearPerUnit) {
-      const w = `Норма строки «${matchedLine.name}» правлена в заказе в «${matchedLine.unit}», а параметр «${head.labelSnapshot}» считается в погонных метрах — правка в расчёт не вошла.`;
+      const w = `Норма строки «${matchedLine.name}» правлена в заказе в «${normUnitOf(matchedLine)}», а параметр «${head.labelSnapshot}» считается в погонных метрах — правка в расчёт не вошла.`;
       noteParts.push(w);
       warnings.push(w);
     }
@@ -3276,14 +3385,30 @@ const EMPTY_ENRICHMENT: ResolvedEnrichment = {
  * проверять не нужно, там уже «шт»), `linear` — «м»/«м пог.», `area` — «м²».
  * Не сошлось — правку НЕ применяем и возвращаем `null`: закупку считаем по
  * номенклатуре, а расхождение показываем предупреждением (см. вызовы).
+ *
+ * Сверяемся с единицей НОРМЫ (`normUnit`), а не с закупочной. Это и есть та
+ * развилка, из-за которой правка нормы полотна раньше никуда не доезжала:
+ * строка трикотажа ведётся в «кг» (так её покупают), а норма в ней — погонные
+ * метры, и сравнение с `unit` отбрасывало правку молча. У нерасщеплённых строк
+ * `normUnit = null`, и поведение остаётся прежним — сверка по `unit`.
  */
+/**
+ * Единица, в которой ведётся норма строки: своя, если строка развела расход и
+ * закупку, иначе закупочная. Одно место на все сверки — иначе легко получить
+ * расчёт, где одна ветка спросила `normUnit`, а соседняя `unit`.
+ */
+function normUnitOf(line: SourceLine): string {
+  const norm = (line.normUnit ?? '').trim();
+  return norm === '' ? line.unit : norm;
+}
+
 function orderEditedNormPerUnit(
   line: SourceLine | null,
   expect: 'qty' | 'linear' | 'area',
 ): Prisma.Decimal | null {
   if (!line || line.qtySource !== 'ORDER') return null;
   if (line.qtyPerUnit == null || line.qtyPerUnit.lte(0)) return null;
-  const unit = (line.unit ?? '')
+  const unit = (normUnitOf(line) ?? '')
     .trim()
     .toLowerCase()
     .replace(/[.\s]/g, '')
@@ -3461,7 +3586,16 @@ interface SourceLine {
   source: 'TECH_CARD_MATERIAL_LINE' | 'ORDER_MATERIAL_REQUIREMENT';
   id: string;
   name: string;
+  /** Единица ЗАКУПКИ — в ней же лежит `totalQty` и считается смета. */
   unit: string;
+  /**
+   * Единица НОРМЫ, если строка развела расход и закупку («м пог.» при закупке
+   * в «кг»). `null` — не расщеплена, норма в `unit` (все строки до появления
+   * поля). Из-за этой развилки `qtyPerUnit` и `totalQty` живут в РАЗНЫХ
+   * единицах, и сравнивать `qtyPerUnit` с `unit` больше нельзя.
+   */
+  normUnit: string | null;
+  /** Норма на изделие в `normUnit ?? unit`. */
   qtyPerUnit: Prisma.Decimal;
   totalQty: Prisma.Decimal | null;
   materialRole: string | null;
@@ -3499,6 +3633,16 @@ interface SourceLine {
    * `null` на live-техкарте (там правок заказа нет по определению).
    */
   qtySource?: string | null;
+  /**
+   * `OrderMaterialRequirement.qtySourceRef`: id нормы номенклатуры
+   * (`PatternItemParameterNorm`), из которой строка снимка взяла число.
+   * Это ЯВНАЯ привязка «строка спецификации ↔ норма»: по ней расчёт
+   * понимает, что норма в заказе представлена, даже если название строки
+   * не совпадает с названием параметра.
+   * `null` — строка не привязана к номенклатуре (TEMPLATE/ORDER) либо
+   * снимок собран до появления привязок; `undefined` — live-техкарта.
+   */
+  qtySourceRef?: string | null;
 }
 
 /**
