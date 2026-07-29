@@ -12,10 +12,9 @@ import {
 } from '@/lib/employees-api';
 import {
   COMPENSATION_TYPES,
-  EMPLOYEE_ROLES,
+  RoleCodeRefSchema,
   type CompensationType,
   type CreateEmployeeDto,
-  type EmployeeRole,
   type UpdateEmployeeDto,
 } from '@sewing/shared/employees';
 import type {
@@ -38,8 +37,18 @@ function isCompensationType(v: string): v is CompensationType {
   return (COMPENSATION_TYPES as readonly string[]).includes(v);
 }
 
-function isEmployeeRole(v: string): v is EmployeeRole {
-  return (EMPLOYEE_ROLES as readonly string[]).includes(v);
+/**
+ * Роль — ССЫЛКА на справочник (`AppRole.code`), а не enum: роли заводят
+ * из `/admin/roles`, и сверка с зашитым `EMPLOYEE_ROLES` отвергала бы
+ * любую новую роль сообщением «Выберите роль».
+ *
+ * Здесь проверяем только ФОРМУ кода (та же `RoleCodeRefSchema`, что и в
+ * DTO) и нормализуем регистр. Существование кода проверяет backend
+ * (`EmployeesService.assertRolesExist` → `EMPLOYEE_ROLE_UNKNOWN`).
+ */
+function parseRoleCode(v: string): string | null {
+  const parsed = RoleCodeRefSchema.safeParse(v);
+  return parsed.success ? parsed.data : null;
 }
 
 /**
@@ -82,7 +91,8 @@ export async function createEmployeeAction(
   if (pin.length < 4) {
     return { error: 'PIN должен быть не короче 4 символов' };
   }
-  if (!isEmployeeRole(roleRaw)) return { error: 'Выберите роль' };
+  const role = parseRoleCode(roleRaw);
+  if (role === null) return { error: 'Выберите роль' };
   if (!isCompensationType(compensationRaw)) {
     return { error: 'Выберите тип компенсации' };
   }
@@ -91,7 +101,7 @@ export async function createEmployeeAction(
     fullName,
     login,
     pin,
-    role: roleRaw,
+    role,
     compensationType: compensationRaw,
     active,
   };
@@ -119,7 +129,7 @@ export async function createEmployeeAction(
   //     показывает; на бэке колонка имеет смысл только для CUTTER —
   //     EarningsService её и так читает только для роли CUTTER);
   //   - CUTTER + валидное число → отправляем как есть.
-  if (cutterB2bRaw !== '' && roleRaw === 'CUTTER') {
+  if (cutterB2bRaw !== '' && role === 'CUTTER') {
     const num = Number(cutterB2bRaw.replace(',', '.'));
     if (!Number.isFinite(num) || num < 0 || num > 100) {
       return {
@@ -289,22 +299,25 @@ export async function updateEmployeeRolesAction(
   _prev: UpdateEmployeeState,
   form: FormData,
 ): Promise<UpdateEmployeeState> {
-  const rolesRaw = form
+  // Коды ролей приходят из справочника — фильтровать их зашитым
+  // перечнем нельзя: кастомная роль молча выпала бы из набора, а
+  // «основная» превратилась бы в «Выберите основную роль».
+  const roles = form
     .getAll('roles')
-    .map((v) => String(v))
-    .filter((v): v is EmployeeRole => isEmployeeRole(v));
-  const primaryRaw = String(form.get('primaryRole') ?? '').trim();
-  if (rolesRaw.length === 0) {
+    .map((v) => parseRoleCode(String(v)))
+    .filter((v): v is string => v !== null);
+  const primary = parseRoleCode(String(form.get('primaryRole') ?? ''));
+  if (roles.length === 0) {
     return { error: 'Выберите хотя бы одну роль' };
   }
-  if (!isEmployeeRole(primaryRaw)) {
+  if (primary === null) {
     return { error: 'Выберите основную роль' };
   }
-  if (!rolesRaw.includes(primaryRaw)) {
+  if (!roles.includes(primary)) {
     return { error: 'Основная роль должна быть среди выбранных' };
   }
 
-  const dto: UpdateEmployeeDto = { role: primaryRaw, roles: rolesRaw };
+  const dto: UpdateEmployeeDto = { role: primary, roles };
   try {
     await updateEmployee(employeeId, dto);
     revalidatePath('/admin/company-settings');
