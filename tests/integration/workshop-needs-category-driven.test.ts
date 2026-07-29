@@ -627,4 +627,133 @@ describeWithDb('integration — workshop needs category-driven', () => {
     expect(needs[0]!.sourceType).toBe('ORDER_MATERIAL_REQUIREMENT');
     expect(needs[0]!.sourceName).toBe('Нитки');
   });
+
+  // -------------------------------------------------------------------------
+  // Scenario G: правка нормы полотна в заказе доезжает до потребности
+  // -------------------------------------------------------------------------
+
+  /**
+   * Регрессия на боевую жалобу «пересчитать потребность не работает после
+   * изменений материала в заказе» (заказы 02-00001 / 02-00002, 29.07.2026).
+   *
+   * Трикотаж покупают на вес, поэтому строка спецификации ведётся в «кг», а
+   * норма расхода в ней — погонные метры. Пока потребность сверяла правку с
+   * ЗАКУПОЧНОЙ единицей строки, правка нормы полотна отбрасывалась молча:
+   * менеджер правил число, жал «Пересчитать потребность» и видел прежние
+   * килограммы, посчитанные по лекалу.
+   *
+   * Проверяем обе стороны развилки: что базовый расчёт идёт по номенклатуре
+   * и что после правки он идёт по заказу. Один assert на второе состояние
+   * прошёл бы и на сломанном коде, если бы числа случайно совпали.
+   */
+  test('правка нормы полотна в заказе перебивает номенклатуру в потребности', async () => {
+    // Категория как на проде: единица параметра — ЗАКУПОЧНАЯ («кг»), а
+    // значения по размерам всё равно вводятся в погонных метрах (см.
+    // `isNormUnitCompatible`). Именно на этой паре расчёт и разъезжался.
+    catCounter += 1;
+    const catRes = await request(t.app.getHttpServer())
+      .post('/api/pattern-categories')
+      .set('Cookie', t.adminCookie)
+      .send({
+        name: `Футболка норма-правка ${catCounter}`,
+        iconKey: 'HOODIE',
+        parameters: [
+          {
+            roleKey: 'MAIN_FABRIC',
+            label: 'Кулирка',
+            inputType: 'LINEAR_M_BY_SIZE',
+            unit: 'кг',
+          },
+        ],
+      })
+      .expect(201);
+    const cat: CategoryWithParams = {
+      id: catRes.body.id,
+      parameters: catRes.body.parameters,
+    };
+    const main = findParam(cat, 'Кулирка');
+    const patternId = await createPattern({
+      categoryId: cat.id,
+      article: 'P-NORM-EDIT',
+    });
+    await request(t.app.getHttpServer())
+      .put(`/api/patterns/${patternId}/size-parameter-values`)
+      .set('Cookie', t.adminCookie)
+      .send({
+        values: [
+          { categoryParameterId: main.id, sizeId: seed.sizes.M, value: '0.8' },
+        ],
+      })
+      .expect(200);
+
+    // Строка ведётся в закупочной «кг»: ширина и плотность на ней и есть
+    // мост из погонных метров в вес.
+    const tcId = await createTechCard({
+      name: 'TC norm edit',
+      materialLines: [
+        {
+          name: 'Кулирка',
+          unit: 'кг',
+          qtyPerUnit: '1',
+          materialRole: 'MAIN_FABRIC',
+          fabricType: 'Кулирка',
+          densityGsm: 180,
+          plannedWidthCm: 185,
+        },
+      ],
+    });
+    const orderId = await createOrder({
+      techCardId: tcId,
+      patternItemId: patternId,
+      items: [{ sizeId: seed.sizes.M, qtyPlan: 100 }],
+    });
+
+    // 1. Базовый расчёт — по номенклатуре: 0.8 × 100 = 80 м пог.,
+    //    80 × 185 / 100 × 180 / 1000 = 26.64 кг.
+    const before = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    const fabricBefore = (
+      before.body.needs as Array<{ materialRole: string | null; calculatedQty: string; unit: string }>
+    ).find((n) => n.materialRole === 'MAIN_FABRIC');
+    expect(fabricBefore).toBeDefined();
+    expect(fabricBefore!.unit).toBe('кг');
+    expect(Number(fabricBefore!.calculatedQty)).toBeCloseTo(26.64, 4);
+
+    // 2. Менеджер разводит единицы и правит норму прямо в заказе.
+    const lines = await request(t.app.getHttpServer())
+      .get(`/api/orders/${orderId}/tech-card-parameters`)
+      .set('Cookie', t.adminCookie)
+      .expect(200);
+    const groups = lines.body.variants as Array<{
+      lines: Array<{ id: string; name: string }>;
+    }>;
+    const fabricLine = groups
+      .flatMap((g) => g.lines)
+      .find((l) => l.name === 'Кулирка');
+    expect(fabricLine).toBeDefined();
+
+    await request(t.app.getHttpServer())
+      .patch(`/api/orders/${orderId}/tech-card/lines/${fabricLine!.id}`)
+      .set('Cookie', t.adminCookie)
+      .send({ normUnit: 'м пог.', qtyPerUnit: '1.2' })
+      .expect(200);
+
+    // 3. Пересчёт обязан пойти по правке: 1.2 × 100 = 120 м пог.,
+    //    120 × 185 / 100 × 180 / 1000 = 39.96 кг. Единица потребности
+    //    остаётся закупочной — правка меняет расход, а не то, чем покупаем.
+    const after = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', t.adminCookie)
+      .send({})
+      .expect(201);
+    const fabricAfter = (
+      after.body.needs as Array<{ materialRole: string | null; calculatedQty: string; unit: string }>
+    ).find((n) => n.materialRole === 'MAIN_FABRIC');
+    expect(fabricAfter).toBeDefined();
+    expect(fabricAfter!.unit).toBe('кг');
+    expect(Number(fabricAfter!.calculatedQty)).toBeCloseTo(39.96, 4);
+  });
 });
