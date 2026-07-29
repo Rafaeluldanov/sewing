@@ -1,3 +1,4 @@
+import type { OffRouteWorkPolicy } from '@prisma/client';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
@@ -132,6 +133,43 @@ export class CompanySettingsService {
       select: { allowNegativeMaterialStock: true },
     });
     return row?.allowNegativeMaterialStock ?? true;
+  }
+
+  /**
+   * Строгость гейта «работа мимо маршрута» (см.
+   * `prisma/schema.prisma::CompanySettings.offRouteWorkPolicy`).
+   *
+   * Читается в горячем flow (issue / scan / complete по каждому
+   * паспорту), поэтому — как и соседние hardening-геттеры — НЕ ходит
+   * через `getOrCreate()` и не пишет audit.
+   *
+   * Fallback `WARN` совпадает с SQL-default колонки: на свежей БД, где
+   * строки настроек ещё нет, гейт фиксирует нарушения, но никого не
+   * блокирует. Возвращать здесь `BLOCK` нельзя — необслуженная БД
+   * положила бы цех; возвращать `OFF` тоже нельзя — тогда на новой
+   * инсталляции проблема снова станет невидимой.
+   */
+  async getOffRouteWorkPolicy(): Promise<OffRouteWorkPolicy> {
+    try {
+      const row = await this.prisma.companySettings.findUnique({
+        where: { id: COMPANY_SETTINGS_SINGLETON_ID },
+        select: { offRouteWorkPolicy: true },
+      });
+      return row?.offRouteWorkPolicy ?? 'WARN';
+    } catch (e) {
+      // Fail-soft по колонке, которой может ещё не быть: `deploy-prod.sh`
+      // поднимает контейнеры (шаг 3) РАНЬШЕ `prisma migrate deploy`
+      // (шаг 4), то есть новый код какое-то время работает на старой
+      // схеме. Уронить здесь issue/scan швеи — цена несопоставимо выше,
+      // чем пропустить проверку на пару минут после деплоя.
+      // `WARN` вместо `OFF`: даже в этом окне случай попадёт в лог.
+      this.logger.warn(
+        `event=companySettings.offRouteWorkPolicy.unavailable reason=${
+          e instanceof Error ? e.message : String(e)
+        }`,
+      );
+      return 'WARN';
+    }
   }
 
   // ===========================================================================

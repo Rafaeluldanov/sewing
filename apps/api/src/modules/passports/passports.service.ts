@@ -57,6 +57,7 @@ import {
   PassportNotQcPassedException,
   PassportNotYoursException,
   PassportIssueBackwardException,
+  PassportOperationNotInOrderRouteException,
   PassportParallelGroupIncompleteException,
   PassportPrecedingStepIncompleteException,
   PassportReworkOperationNotAllowedForShiftException,
@@ -1457,7 +1458,26 @@ export class PassportsService {
     /** Названия незакрытых операций — для текста ошибки (см. errors.ts). */
     missingGroupOps: string[];
     missingSequentialOps: string[];
+    /**
+     * Операции НЕТ в маршруте заказа и она не является заместителем.
+     *
+     * Это и есть перевёрнутое умолчание. Раньше здесь просто стоял
+     * `return none`, то есть «проверять нечего» — и проверка молча
+     * отключалась ЦЕЛИКОМ. Получалось вывернутое наизнанку правило:
+     * взять операцию на шаг раньше — отказ, перепрыгнуть незакрытый
+     * шаг — отказ, а взять операцию, которой в маршруте нет вовсе, —
+     * «всё в порядке». Чем сильнее расхождение с планом, тем меньше
+     * контроля. Отсюда все шесть инцидентов с 13.05.2026.
+     *
+     * Теперь этот случай ОТЛИЧИМ от «сравнивать не с чем» (нет заказа /
+     * нет снимка маршрута — те по-прежнему `false`, это не нарушение).
+     * Что с ним делать, решает вызывающий по
+     * `CompanySettings.offRouteWorkPolicy`.
+     */
+    offRoute: boolean;
   }> {
+    // `none` — «проверять нечего»: у паспорта нет заказа или у заказа нет
+    // снимка маршрута. Это НЕ нарушение, поэтому `offRoute: false`.
     const none = {
       targetIndex: null,
       backward: false,
@@ -1465,6 +1485,7 @@ export class PassportsService {
       sequentialIncomplete: false,
       missingGroupOps: [],
       missingSequentialOps: [],
+      offRoute: false,
     };
     if (!passport.orderId) return none;
     const steps = await this.prisma.orderRouteStep.findMany({
@@ -1514,7 +1535,11 @@ export class PassportsService {
       });
       const satisfies = new Set(subs.map((s) => s.satisfiesOpId));
       const merged = steps.filter((s) => satisfies.has(s.operationId));
-      if (merged.length === 0) return none; // не в маршруте и не заместитель
+      // ВОТ ОНА — операция не в маршруте и не заместитель. Раньше здесь
+      // был `return none`, и проверка отключалась целиком. Теперь
+      // возвращаем явный признак: решение принимает вызывающий по
+      // политике компании (`offRouteWorkPolicy`).
+      if (merged.length === 0) return { ...none, offRoute: true };
       // Виртуальный целевой шаг = самый поздний из закрываемых (паспорт
       // прошёл весь распошив целиком). Параллельная группа — их общая.
       targetStep = merged.reduce((a, b) => (b.index > a.index ? b : a));
@@ -1641,7 +1666,123 @@ export class PassportsService {
       sequentialIncomplete,
       missingGroupOps,
       missingSequentialOps,
+      offRoute: false,
     };
+  }
+
+  /**
+   * Применяет политику компании к признаку «операция вне маршрута»
+   * (`evaluateRouteOrder(...).offRoute`).
+   *
+   * Единственная точка, где решается судьба такого случая, — чтобы три
+   * канала (выдача / скан / завершение) не разъехались в трактовке.
+   *
+   * Режимы (`CompanySettings.offRouteWorkPolicy`):
+   *   - `OFF`   — поведение до 28.07.2026, молча пропускаем;
+   *   - `WARN`  — пропускаем, но пишем структурный лог и `AuditLog`.
+   *     Это не «ничего не делаем»: именно отсюда берётся статистика
+   *     «сколько раз в неделю», по которой владелец решает, пора ли
+   *     включать `BLOCK`;
+   *   - `BLOCK` — 409 `PASSPORT_OPERATION_NOT_IN_ORDER_ROUTE`.
+   *
+   * Три исключения, без которых гейт останавливает цех:
+   *
+   *   1. **Только `SEWING`.** Крой закрывается при выпуске паспорта,
+   *      ОТК/ВТО/упаковка — на собственных гейтах, и в снимке маршрута
+   *      их штатно нет. Без этого сужения гейт положил бы четыре
+   *      участка из пяти в первый же час.
+   *   2. **Открытая переделка.** Операция переделки берётся из истории
+   *      САМОГО паспорта (см. `resolveOperationForPassport`) и вполне
+   *      может оказаться вне маршрута — если её заблокировать, паспорт
+   *      с браком некуда будет вернуть, он залипнет навсегда.
+   *   3. **Уже выданное** (`allowIfAlreadyIssued`, канал `complete`).
+   *      В момент переключения на `BLOCK` у швей на руках лежат
+   *      физически прошитые паспорта. Запретить их ЗАВЕРШИТЬ — значит
+   *      обнулить сделанную работу и гарантированно получить требование
+   *      выключить фичу. Взять новый паспорт нельзя, доделать
+   *      начатое — можно.
+   */
+  private async enforceOffRoutePolicy(
+    passport: { id: string; orderId: string | null },
+    targetOperationId: string,
+    opts?: { allowIfAlreadyIssued?: boolean },
+  ): Promise<void> {
+    const policy = await this.companySettings.getOffRouteWorkPolicy();
+    if (policy === 'OFF') return;
+
+    const operation = await this.prisma.operation.findUnique({
+      where: { id: targetOperationId },
+      select: { name: true, code: true, category: true },
+    });
+    // Только пошив — см. п. 1 в доккомменте.
+    if (!operation || operation.category !== OperationCategory.SEWING) return;
+
+    // Открытая переделка по этой операции — см. п. 2.
+    const rework = await this.prisma.passportEvent.findFirst({
+      where: {
+        passportId: passport.id,
+        operationId: targetOperationId,
+        type: PassportEventType.OPERATION_REWORK_OPENED,
+      },
+      orderBy: { createdAt: 'desc' },
+      select: { createdAt: true },
+    });
+    if (rework) {
+      const finished = await this.prisma.passportEvent.findFirst({
+        where: {
+          passportId: passport.id,
+          operationId: targetOperationId,
+          type: PassportEventType.OPERATION_FINISHED,
+          createdAt: { gt: rework.createdAt },
+        },
+        select: { id: true },
+      });
+      if (!finished) return; // переделка открыта — пропускаем
+    }
+
+    // Паспорт уже выдан на эту операцию — см. п. 3.
+    if (opts?.allowIfAlreadyIssued) {
+      const issued = await this.prisma.passportEvent.findFirst({
+        where: {
+          passportId: passport.id,
+          operationId: targetOperationId,
+          type: PassportEventType.ISSUED_TO_EMPLOYEE,
+        },
+        select: { id: true },
+      });
+      if (issued) return;
+    }
+
+    const order = passport.orderId
+      ? await this.prisma.order.findUnique({
+          where: { id: passport.orderId },
+          select: { number: true },
+        })
+      : null;
+    const label = `${operation.code} ${operation.name}`.trim();
+
+    this.logger.warn(
+      `event=passport.offRoute policy=${policy} passportId=${passport.id} orderId=${passport.orderId ?? '-'} operationId=${targetOperationId}`,
+    );
+    await this.audit.log({
+      event: 'PASSPORT_WORK_OUTSIDE_ROUTE',
+      entityType: 'PASSPORT',
+      entityId: passport.id,
+      payload: {
+        policy,
+        orderId: passport.orderId,
+        orderNumber: order?.number ?? null,
+        operationId: targetOperationId,
+        operation: label,
+      },
+    });
+
+    if (policy === 'BLOCK') {
+      throw new PassportOperationNotInOrderRouteException(
+        order?.number ?? null,
+        label,
+      );
+    }
   }
 
   /**
@@ -1861,6 +2002,11 @@ export class PassportsService {
       passport,
       targetOperationId,
     );
+    // Гейт «операции нет в маршруте заказа» — корневой для всей истории
+    // работы мимо маршрута. Строгость задаёт `offRouteWorkPolicy`.
+    if (issueOrder.offRoute) {
+      await this.enforceOffRoutePolicy(passport, targetOperationId);
+    }
     if (issueOrder.backward) throw new PassportIssueBackwardException();
     if (issueOrder.groupIncomplete) {
       throw new PassportParallelGroupIncompleteException(
@@ -2319,6 +2465,9 @@ export class PassportsService {
       passport,
       session.operationId,
     );
+    if (scanOrder.offRoute) {
+      await this.enforceOffRoutePolicy(passport, session.operationId);
+    }
     if (scanOrder.backward) throw new PassportScanBackwardException();
     if (scanOrder.groupIncomplete) {
       throw new PassportParallelGroupIncompleteException(
@@ -2521,6 +2670,15 @@ export class PassportsService {
       passport,
       completedOperationId,
     );
+    if (completeOrder.offRoute) {
+      // `allowIfAlreadyIssued`: паспорт, который швея физически взяла в
+      // работу ДО включения блокировки, обязан дать себя завершить —
+      // иначе переключение обнулит сделанную работу и фичу потребуют
+      // выключить. Взять новый нельзя, доделать начатое — можно.
+      await this.enforceOffRoutePolicy(passport, completedOperationId, {
+        allowIfAlreadyIssued: true,
+      });
+    }
     if (completeOrder.backward) {
       throw new PassportCompleteBackwardException();
     }
