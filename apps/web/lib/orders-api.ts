@@ -10,10 +10,9 @@ import type {
   CreateOrderLogisticsLineDto,
   ListOrdersQuery,
   OrderDetailDto,
-  OrderListItemDto,
+  OrderListResponse,
   OrderOutsourceExecutionStatus,
   OrderStatus,
-  Paginated,
   ProductDto,
   SetOrderRouteModeDto,
   SizeDto,
@@ -29,10 +28,10 @@ import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
 import type { OrderTransitionDto } from '@sewing/shared/order-transitions';
 import { apiFetch } from './api';
 
-export function listOrders(query: Partial<ListOrdersQuery> = {}): Promise<
-  Paginated<OrderListItemDto>
-> {
-  return apiFetch<Paginated<OrderListItemDto>>('/orders', {
+export function listOrders(
+  query: Partial<ListOrdersQuery> = {},
+): Promise<OrderListResponse> {
+  return apiFetch<OrderListResponse>('/orders', {
     searchParams: {
       search: query.search,
       status: query.status,
@@ -43,6 +42,10 @@ export function listOrders(query: Partial<ListOrdersQuery> = {}): Promise<
       deadline: query.deadline,
       clientId: query.clientId,
       companyDivisionId: query.companyDivisionId,
+      // Вкладка «Активные» / «Архив» списка `/admin/orders`. Без
+      // параметра ручка отдаёт заказы всех статусов — на это
+      // рассчитывают дашборд и блок «Заказы клиента».
+      tab: query.tab,
       page: query.page,
       pageSize: query.pageSize,
       sort: query.sort,

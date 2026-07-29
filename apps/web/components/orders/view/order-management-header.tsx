@@ -41,7 +41,7 @@ import {
   User,
 } from 'lucide-react';
 import type { OrderDetailDto } from '@sewing/shared/orders';
-import { isOrderPlanEditable } from '@sewing/shared/orders';
+import { isOrderArchived, isOrderPlanEditable } from '@sewing/shared/orders';
 import type { PassportListItemDto } from '@sewing/shared/passports';
 import { AdminStatusBadge } from '@/components/admin';
 import type { AdminStatusTone } from '@/lib/admin-labels';
@@ -461,8 +461,13 @@ export function OrderManagementHeader({
             Редактировать
           </Link>
         )}
+        {/*
+          Отменённый заказ живёт на вкладке «Архив» списка
+          (см. `ORDER_ARCHIVED_STATUSES`) — возвращаем именно туда,
+          иначе «К списку» уводило бы в активные, где этого заказа нет.
+        */}
         <Link
-          href="/admin/orders"
+          href={isOrderArchived(status) ? '/admin/orders?tab=archive' : '/admin/orders'}
           className="admin-btn admin-btn--ghost"
           aria-label="Вернуться к списку заказов"
         >

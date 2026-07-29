@@ -20,16 +20,19 @@ import type {
   OrderDetailDto,
   OrderListItemDto,
   OrderLogisticsLineDto,
+  OrderListResponse,
+  OrderListTabCounts,
   OrderMaterialsAndHardwareCostPolicy,
   OrderOutsourceDisplayStatus,
-  Paginated,
   RouteModeOverride,
   UpdateOrderDto,
   UpdateOrderLogisticsLineDto,
 } from '@sewing/shared/orders';
 import {
+  ORDER_ARCHIVED_STATUSES,
   ORDER_LOGISTICS_STATUS_LABELS,
   ORDER_MATERIALS_AND_HARDWARE_COST_POLICIES,
+  isOrderArchived,
   isOrderPlanEditable,
 } from '@sewing/shared/orders';
 import type { UpdateOrderRouteOverridesDto } from '@sewing/shared/routes';
@@ -1276,15 +1279,24 @@ export class OrdersService {
   // LIST
   // -------------------------------------------------------------------------
 
-  async list(query: ListOrdersQuery): Promise<Paginated<OrderListItemDto>> {
+  async list(query: ListOrdersQuery): Promise<OrderListResponse> {
     const rawSearch = query.search?.trim() ?? '';
     // «Голая» дата без года — например `24.07`. Совпадение по дню+месяцу
     // ЛЮБОГО года нельзя выразить в Prisma-`WHERE` без `EXTRACT`, поэтому
     // такой запрос фильтруем и сортируем в памяти (ниже), а не в БД.
     const dayMonth = rawSearch ? parseSearchDayMonth(rawSearch) : null;
 
+    // `where` — «счётная база»: фильтры, которые переживают переключение
+    // вкладки «Активные» ⇄ «Архив» (клиент / подразделение / поиск).
+    // Именно по ней считаются `tabCounts`, поэтому цифра на неактивной
+    // вкладке — ровно то, что пользователь там увидит.
+    //
+    // `status` и `deadline` в базу НЕ входят: оба имеют смысл только на
+    // активной вкладке (в архиве все заказы одного статуса, а бакет
+    // срока у отменённого заказа всегда `DONE`), и UI их при переходе
+    // на другую вкладку сбрасывает. Считай мы счётчики вместе с ними —
+    // «Архив (0)» открывал бы непустой архив.
     const where: Prisma.OrderWhereInput = {};
-    if (query.status) where.status = query.status;
     if (query.clientId) where.clientId = query.clientId;
     if (query.companyDivisionId)
       where.companyDivisionId = query.companyDivisionId;
@@ -1349,8 +1361,30 @@ export class OrdersService {
     // дню+месяцу любого года и сортировка «сначала текущий год» считаются
     // после выборки (та же MVP-логика, что у deadline-фильтра).
     const useMemoryPagination = useDeadlineFilter || dayMonth != null;
+    // Фильтр вкладки «Активные» / «Архив». В БД-режиме он уходит в
+    // `WHERE` (пагинация честная), в in-memory режиме выборка берётся
+    // без него и разделение на вкладки происходит после расчёта
+    // deadline — так из одной выборки получаем и срез вкладки, и оба
+    // счётчика.
+    const archivedStatuses: OrderStatus[] = [...ORDER_ARCHIVED_STATUSES];
+    const tabWhere: Prisma.OrderWhereInput | null =
+      query.tab === 'archive'
+        ? { status: { in: archivedStatuses } }
+        : query.tab === 'active'
+          ? { status: { notIn: archivedStatuses } }
+          : null;
+    // `listWhere` = счётная база + фильтры выдачи (`status`, вкладка).
+    // В in-memory режиме оба применяются после выборки — из одной
+    // выборки получаем и срез вкладки, и оба счётчика.
+    const listFilters: Prisma.OrderWhereInput[] = [where];
+    if (!useMemoryPagination) {
+      if (query.status) listFilters.push({ status: query.status });
+      if (tabWhere) listFilters.push(tabWhere);
+    }
+    const listWhere: Prisma.OrderWhereInput =
+      listFilters.length === 1 ? where : { AND: listFilters };
     const dbRows = await this.prisma.order.findMany({
-      where,
+      where: listWhere,
       orderBy,
       ...(useMemoryPagination
         ? {}
@@ -1403,7 +1437,21 @@ export class OrdersService {
 
     const totalPromise = useMemoryPagination
       ? Promise.resolve(0) // переоценим ниже
-      : this.prisma.order.count({ where });
+      : this.prisma.order.count({ where: listWhere });
+
+    // Счётчики вкладок в БД-режиме: два `count` по счётной базе `where`
+    // — общий и архивный, активный = разница. Считаем ТОЛЬКО когда
+    // клиент попросил вкладку: легаси-потребители (`/admin` дашборд,
+    // «Заказы клиента») не должны платить за лишние запросы.
+    const tabCountsPromise: Promise<OrderListTabCounts | undefined> =
+      query.tab && !useMemoryPagination
+        ? Promise.all([
+            this.prisma.order.count({ where }),
+            this.prisma.order.count({
+              where: { AND: [where, { status: { in: archivedStatuses } }] },
+            }),
+          ]).then(([all, archive]) => ({ active: all - archive, archive }))
+        : Promise.resolve(undefined);
 
     // Для голой даты `дд.мм` отсеиваем непопавшие заказы ДО маппинга в DTO
     // (в маппере считается агрегат — не гоняем его по заведомо лишним
@@ -1432,16 +1480,40 @@ export class OrdersService {
 
     let items = allItems;
     let total = await totalPromise;
+    let tabCounts = await tabCountsPromise;
     if (useMemoryPagination) {
-      const filtered = useDeadlineFilter
-        ? allItems.filter((i) => i.deadline?.status === query.deadline)
+      // Счётчики вкладок — по `allItems`, то есть по счётной базе
+      // (клиент / подразделение / поиск) ДО фильтров активной вкладки
+      // (`status`, `deadline`). Ровно то же правило, что у БД-ветки выше.
+      if (query.tab) {
+        const archive = allItems.filter((i) => isOrderArchived(i.status)).length;
+        tabCounts = { active: allItems.length - archive, archive };
+      }
+      // Выборка в этом режиме шла без `status`/вкладки — применяем их
+      // здесь, вместе с deadline-бакетом.
+      let filtered = query.status
+        ? allItems.filter((i) => i.status === query.status)
         : allItems;
+      if (useDeadlineFilter) {
+        filtered = filtered.filter((i) => i.deadline?.status === query.deadline);
+      }
+      if (query.tab) {
+        filtered = filtered.filter(
+          (i) => isOrderArchived(i.status) === (query.tab === 'archive'),
+        );
+      }
       total = filtered.length;
       const start = (query.page - 1) * query.pageSize;
       items = filtered.slice(start, start + query.pageSize);
     }
 
-    return { items, total, page: query.page, pageSize: query.pageSize };
+    return {
+      items,
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      ...(tabCounts ? { tabCounts } : {}),
+    };
   }
 
   /**

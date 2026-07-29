@@ -534,6 +534,36 @@ export function isOrderSampleLaunchable(status: OrderStatus): boolean {
 }
 
 /**
+ * Статусы, при которых заказ считается «в архиве» — то есть уезжает из
+ * рабочего списка `/admin/orders` на вкладку «Архив».
+ *
+ * Пока это только `CANCELLED`: отменённый заказ уже никогда не вернётся
+ * в работу (`evaluateOrderTransitions` считает `CANCELLED` терминальным
+ * и блокирует ВСЕ переходы из него), но и удалять его нельзя — за ним
+ * висят паспорта, начисления и история. Такому заказу не место в
+ * ежедневном списке, но он должен оставаться доступен для просмотра.
+ *
+ * `DONE` в архив сознательно НЕ уводим: завершённый заказ — это нормальный
+ * управленческий срез (выработка, себестоимость, сроки), его смотрят
+ * постоянно и фильтруют статусом.
+ *
+ * Отдельного поля `archivedAt` у заказа нет и не заводится: архивность
+ * заказа — ПРОИЗВОДНАЯ от статуса, а не самостоятельный флаг. Иначе
+ * появилось бы второе состояние, которое надо синхронизировать с
+ * отменой (и оно бы разъехалось). Ср. с 9 справочниками админки, где
+ * архив — именно поле `archivedAt` (см. `shared/archive.ts`): там нет
+ * статуса, который бы это выражал.
+ */
+export const ORDER_ARCHIVED_STATUSES = [
+  'CANCELLED',
+] as const satisfies readonly OrderStatus[];
+
+/** Уехал ли заказ с таким статусом на вкладку «Архив». */
+export function isOrderArchived(status: OrderStatus): boolean {
+  return (ORDER_ARCHIVED_STATUSES as readonly OrderStatus[]).includes(status);
+}
+
+/**
  * Статусы, в которых разрешена правка «плановых полей» заказа ДО запуска
  * производства — единый источник истины и для backend-гейта
  * (`OrdersService.update`), и для web-UI (кнопка «Редактировать», селекты
@@ -1394,6 +1424,16 @@ export type OrderSort = z.infer<typeof OrderSortSchema>;
  */
 export const OrderDeadlineStatusSchema = z.enum(ORDER_DEADLINE_STATUSES);
 
+/**
+ * Вкладка списка заказов: рабочие («Активные») или архивные
+ * («Архив» = `ORDER_ARCHIVED_STATUSES`). Договорённость по URL та же,
+ * что у справочников админки (см. `AdminArchiveTabs`): активная
+ * вкладка — БЕЗ параметра, архив — `?tab=archive`.
+ */
+export const ORDER_LIST_TABS = ['active', 'archive'] as const;
+export const OrderListTabSchema = z.enum(ORDER_LIST_TABS);
+export type OrderListTab = z.infer<typeof OrderListTabSchema>;
+
 export const ListOrdersQuerySchema = z.object({
   search: z.string().trim().max(100).optional(),
   status: OrderStatusSchema.optional(),
@@ -1419,6 +1459,20 @@ export const ListOrdersQuerySchema = z.object({
    * `OrdersService.list`.
    */
   deadline: OrderDeadlineStatusSchema.optional(),
+  /**
+   * Вкладка списка: `active` — рабочие заказы (всё, кроме
+   * `ORDER_ARCHIVED_STATUSES`), `archive` — только архивные
+   * (отменённые). Параметр НЕ обязателен и НЕ имеет default-а: без него
+   * ручка отдаёт список как раньше — все заказы разом. Так старые
+   * потребители (`/admin` дашборд, блок «Заказы клиента») не теряют
+   * отменённые заказы молча; вкладку выбирает только `/admin/orders`.
+   *
+   * Когда `tab` передан, ответ дополнительно содержит `tabCounts` —
+   * счётчики обеих вкладок под ТЕМИ ЖЕ фильтрами (поиск / клиент /
+   * подразделение / срок), чтобы цифра на вкладке совпадала с тем, что
+   * пользователь увидит после переключения.
+   */
+  tab: OrderListTabSchema.optional(),
   page: z.coerce.number().int().positive().default(1),
   pageSize: z.coerce.number().int().positive().max(200).default(50),
   sort: OrderSortSchema.default('createdAt_desc'),
@@ -1894,6 +1948,26 @@ export interface Paginated<T> {
   total: number;
   page: number;
   pageSize: number;
+}
+
+/**
+ * Счётчики вкладок «Активные» / «Архив» списка заказов. Считаются под
+ * теми же фильтрами, что и сама выдача (поиск / клиент / подразделение /
+ * бакет срока), но БЕЗ фильтра вкладки — иначе цифра на неактивной
+ * вкладке всегда была бы нулём.
+ */
+export interface OrderListTabCounts {
+  active: number;
+  archive: number;
+}
+
+/**
+ * Ответ `GET /orders`. Это `Paginated<OrderListItemDto>` плюс
+ * опциональные счётчики вкладок — они приходят, только если в запросе
+ * был `tab` (см. `ListOrdersQuerySchema.tab`).
+ */
+export interface OrderListResponse extends Paginated<OrderListItemDto> {
+  tabCounts?: OrderListTabCounts;
 }
 
 // ---------------------------------------------------------------------------

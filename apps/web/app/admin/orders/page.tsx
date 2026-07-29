@@ -9,6 +9,14 @@
  * существующий `listOrders` (backend не меняем) и приводит его к
  * новому visual-стандарту.
  *
+ * Вкладки «Активные» / «Архив» (`?tab=archive`) — тот же контур, что в
+ * справочниках админки, но архивность заказа НЕ отдельный флаг, а
+ * производная от статуса: в архив уезжают заказы в
+ * `ORDER_ARCHIVED_STATUSES` (сейчас — только `CANCELLED`). Отменённый
+ * заказ терминален (`evaluateOrderTransitions`), вернуть его в работу
+ * нельзя — архив только для просмотра. Фильтрует и считает обе вкладки
+ * backend (`OrdersService.list`, параметр `tab` → `tabCounts`).
+ *
  * Колонка «Срок» и фильтр `?deadline=…` — управленческий слой
  * «Контроль сроков заказа». Бакет считается на бэке через общий
  * helper `evaluateOrderDeadline` и приходит в `OrderListItemDto.deadline`
@@ -35,9 +43,12 @@ import {
 import {
   ORDER_STATUSES,
   ORDER_SORTS,
+  isOrderArchived,
   type ListOrdersQuery,
   type OrderDeadlineStatus,
   type OrderListItemDto,
+  type OrderListTab,
+  type OrderListTabCounts,
   type OrderSort,
   type OrderStatus,
 } from '@sewing/shared/orders';
@@ -55,6 +66,7 @@ import {
 } from '@/lib/company-settings-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import {
+  AdminArchiveTabs,
   AdminCard,
   AdminEmptyState,
   AdminPageShell,
@@ -82,6 +94,8 @@ interface SearchParams {
   clientId?: string;
   companyDivisionId?: string;
   deadline?: string;
+  /** Вкладка списка: без параметра — «Активные», `archive` — «Архив». */
+  tab?: string;
   sort?: string;
   page?: string;
   pageSize?: string;
@@ -124,6 +138,20 @@ function parseDeadline(s: string | undefined): OrderDeadlineStatus | undefined {
     : undefined;
 }
 
+/**
+ * Вкладка списка. По умолчанию — «Активные»: рабочий список без
+ * отменённых заказов.
+ *
+ * Отдельный случай — старая ссылка/закладка вида `?status=CANCELLED`:
+ * такой статус живёт теперь только в архиве, поэтому запрос сам
+ * переключает вкладку (иначе пользователь получил бы пустой экран).
+ */
+function parseTab(sp: SearchParams | undefined): OrderListTab {
+  if (sp?.tab === 'archive') return 'archive';
+  const status = parseStatus(sp?.status);
+  return status && isOrderArchived(status) ? 'archive' : 'active';
+}
+
 function parseSort(s: string | undefined): OrderSort {
   if (!s) return 'createdAt_desc';
   return (ORDER_SORTS as readonly string[]).includes(s)
@@ -149,13 +177,24 @@ export default async function AdminOrdersPage({
   const isManager = role === 'ADMIN' || role === 'SHOP_MANAGER';
 
   const pageSize = clampPageSize(searchParams?.pageSize);
-  const deadlineFilter = parseDeadline(searchParams?.deadline);
+  const tab = parseTab(searchParams);
+  const isArchive = tab === 'archive';
+  // В архиве лежат заказы ровно одного статуса (`CANCELLED`), поэтому
+  // ни селект статуса, ни бакеты контроля сроков там не имеют смысла —
+  // не показываем их и не пробрасываем в запрос.
+  const deadlineFilter = isArchive
+    ? undefined
+    : parseDeadline(searchParams?.deadline);
+  const statusFilter = isArchive
+    ? undefined
+    : parseStatus(searchParams?.status);
   const query: ListOrdersQuery = {
     search: searchParams?.search?.trim() || undefined,
-    status: parseStatus(searchParams?.status),
+    status: statusFilter,
     clientId: searchParams?.clientId?.trim() || undefined,
     companyDivisionId: searchParams?.companyDivisionId?.trim() || undefined,
     deadline: deadlineFilter,
+    tab,
     sort: parseSort(searchParams?.sort),
     page: Math.max(1, Number(searchParams?.page ?? 1) || 1),
     pageSize,
@@ -163,6 +202,7 @@ export default async function AdminOrdersPage({
 
   let items: OrderListItemDto[] = [];
   let total = 0;
+  let tabCounts: OrderListTabCounts | null = null;
   let error: string | null = null;
   // Списки для селектов-фильтров «Клиент» / «Подразделение». Тянем
   // параллельно с заказами; сбой любого справочника не должен ронять
@@ -177,6 +217,7 @@ export default async function AdminOrdersPage({
   if (ordersResult.status === 'fulfilled') {
     items = ordersResult.value.items;
     total = ordersResult.value.total;
+    tabCounts = ordersResult.value.tabCounts ?? null;
   } else {
     const e = ordersResult.reason;
     error =
@@ -216,20 +257,30 @@ export default async function AdminOrdersPage({
     });
   }
 
+  // `tab` держим во всех переходах внутри страницы (пагинация, поиск,
+  // бакеты сроков), иначе любой клик выкидывал бы из архива в активные.
+  const tabParam = isArchive ? 'archive' : undefined;
   const preserveParams: Record<string, string | undefined> = {
     search: query.search,
     status: query.status,
     clientId: query.clientId,
     companyDivisionId: query.companyDivisionId,
     deadline: query.deadline,
+    tab: tabParam,
     sort: query.sort,
   };
+  /** Ссылка «Сбросить» — чистый список ТЕКУЩЕЙ вкладки. */
+  const resetHref = isArchive ? '/admin/orders?tab=archive' : '/admin/orders';
 
   return (
     <AdminPageShell
       icon={<Package size={22} strokeWidth={1.6} aria-hidden />}
       title="Заказы"
-      subtitle="Заказы в производстве и подготовке"
+      subtitle={
+        isArchive
+          ? 'Отменённые заказы — только просмотр'
+          : 'Заказы в производстве и подготовке'
+      }
       actions={
         isManager ? (
           <Link
@@ -254,22 +305,47 @@ export default async function AdminOrdersPage({
           hint={total > 0 ? `Всего: ${total.toLocaleString('ru-RU')}` : undefined}
         />
 
-        <DeadlineTabs
-          active={deadlineFilter ?? null}
-          preserve={{
+        {/*
+          Вкладки «Активные» / «Архив» — тот же контур, что в справочниках
+          админки. Архив заказа — производная от статуса (`CANCELLED`),
+          отдельного `archivedAt` у заказа нет: см. `ORDER_ARCHIVED_STATUSES`.
+          Счётчики считает backend под теми же фильтрами, что и выдачу;
+          если ручка их не вернула (ошибка запроса) — показываем то, что
+          знаем про текущую вкладку, и 0 про соседнюю.
+        */}
+        <AdminArchiveTabs
+          basePath="/admin/orders"
+          tab={tab}
+          activeCount={tabCounts?.active ?? (isArchive ? 0 : total)}
+          archiveCount={tabCounts?.archive ?? (isArchive ? total : 0)}
+          preserveParams={{
             search: query.search,
-            status: query.status,
             clientId: query.clientId,
             companyDivisionId: query.companyDivisionId,
-            sort: query.sort,
+            sort: userPickedSort ? query.sort : undefined,
           }}
         />
+
+        {!isArchive && (
+          <DeadlineTabs
+            active={deadlineFilter ?? null}
+            preserve={{
+              search: query.search,
+              status: query.status,
+              clientId: query.clientId,
+              companyDivisionId: query.companyDivisionId,
+              sort: query.sort,
+            }}
+          />
+        )}
 
         <form method="get" className="admin-form-grid" role="search">
           {/* Сохраняем активный deadline-таб при submit-е формы поиска */}
           {deadlineFilter && (
             <input type="hidden" name="deadline" value={deadlineFilter} />
           )}
+          {/* …и саму вкладку: submit формы не должен уводить из архива */}
+          {isArchive && <input type="hidden" name="tab" value="archive" />}
           {/* Динамический поиск «на лету» по любому текстовому параметру
               заказа (номер / изделие / клиент / подразделение / дата /
               срок). Матч — нечувствительный к регистру и частичный, начиная
@@ -290,25 +366,33 @@ export default async function AdminOrdersPage({
               clientId: query.clientId,
               companyDivisionId: query.companyDivisionId,
               deadline: query.deadline,
+              tab: tabParam,
               sort: userPickedSort ? query.sort : undefined,
               pageSize: pageSize !== 50 ? String(pageSize) : undefined,
             }}
           />
-          <div className="admin-field">
-            <label htmlFor="orders-status">Статус</label>
-            <select
-              id="orders-status"
-              name="status"
-              defaultValue={query.status ?? ''}
-            >
-              <option value="">Все статусы</option>
-              {ORDER_STATUSES.map((s) => (
-                <option key={s} value={s}>
-                  {formatOrderStatus(s)}
-                </option>
-              ))}
-            </select>
-          </div>
+          {/*
+            Селект статуса — только на вкладке «Активные». В архиве все
+            заказы одного статуса («Отменён»), фильтровать нечего; сам
+            «Отменён» из списка опций убран — он теперь живёт в архиве.
+          */}
+          {!isArchive && (
+            <div className="admin-field">
+              <label htmlFor="orders-status">Статус</label>
+              <select
+                id="orders-status"
+                name="status"
+                defaultValue={query.status ?? ''}
+              >
+                <option value="">Все статусы</option>
+                {ORDER_STATUSES.filter((s) => !isOrderArchived(s)).map((s) => (
+                  <option key={s} value={s}>
+                    {formatOrderStatus(s)}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
           <div className="admin-field">
             <label htmlFor="orders-client">Клиент</label>
             <select
@@ -358,7 +442,7 @@ export default async function AdminOrdersPage({
               <SearchIcon size={14} strokeWidth={1.6} aria-hidden />
               Применить
             </button>
-            <Link href="/admin/orders" className="admin-btn admin-btn--ghost">
+            <Link href={resetHref} className="admin-btn admin-btn--ghost">
               <RotateCcw size={14} strokeWidth={1.6} aria-hidden />
               Сбросить
             </Link>
@@ -369,6 +453,7 @@ export default async function AdminOrdersPage({
           items={items}
           orgName={orgName}
           canManage={isManager}
+          isArchive={isArchive}
           filtered={Boolean(
             query.search ||
               query.status ||
@@ -441,6 +526,7 @@ function OrdersTable({
   orgName,
   filtered,
   canManage,
+  isArchive,
 }: {
   items: OrderListItemDto[];
   orgName: string | null;
@@ -451,6 +537,8 @@ function OrdersTable({
    * (CUTTER_ASSISTANT) контрол рисуется обычным бейджем.
    */
   canManage: boolean;
+  /** Вкладка «Архив» — меняет только пустое состояние таблицы. */
+  isArchive: boolean;
 }) {
   const columns: AdminTableColumn<OrderListItemDto>[] = [
     {
@@ -585,6 +673,12 @@ function OrdersTable({
             icon={<SearchIcon size={26} strokeWidth={1.6} aria-hidden />}
             title="Данные не найдены"
             hint="По заданному поиску и фильтрам заказов нет. Измените запрос или сбросьте фильтры."
+          />
+        ) : isArchive ? (
+          <AdminEmptyState
+            icon={<Package size={26} strokeWidth={1.6} aria-hidden />}
+            title="Архив пуст"
+            hint="Сюда попадают отменённые заказы — их не удаляют, но и в рабочем списке они не мешают."
           />
         ) : (
           <AdminEmptyState
