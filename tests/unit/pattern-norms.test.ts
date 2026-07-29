@@ -44,6 +44,24 @@ const cordLinear: PatternNormSource = {
   ],
 };
 
+/**
+ * Как норма полотна заведена в боевой номенклатуре: поразмерные значения, но
+ * единица — «кг». Именно эта пара («кг» у источника, «кг» у строки) раньше
+ * отсекалась правилом «строка должна быть в метрах».
+ */
+const fabricLinearKg: PatternNormSource = {
+  sourceId: 'param-kashkorse',
+  kind: 'LINEAR_M_BY_SIZE',
+  roleKey: 'RIB',
+  label: 'Кашкорсе',
+  unit: 'кг',
+  bySize: [
+    { sizeId: 's', value: 0.03 },
+    { sizeId: 'm', value: 0.04 },
+    { sizeId: 'l', value: 0.05 },
+  ],
+};
+
 const fabricArea: PatternNormSource = {
   sourceId: 'MAIN_FABRIC',
   kind: 'AREA_M2_BY_SIZE',
@@ -182,6 +200,49 @@ describe('matchPatternNormSources', () => {
     expect(map.size).toBe(0);
   });
 
+  test('боевой случай: «Кашкорсе» в кг — имя совпало, но строка не метровая', () => {
+    // Так заведён прод: параметр «Кашкорсе» с единицей потребности «кг» и
+    // строка спецификации тоже в «кг». Имена совпадают точно, но число в
+    // ячейках — метры, поэтому пару НЕ берём: иначе длина уедет в поле веса.
+    // Чтобы норма сюда доехала, строку надо вести в «м пог.», а «кг» держать
+    // отдельной единицей закупки.
+    const kgLine = matchPatternNormSources(
+      [line('l1', 'RIB', 'Кашкорсе', 'кг', 'Кашкорсе')],
+      [fabricLinearKg],
+    );
+    expect(kgLine.size).toBe(0);
+
+    // Та же строка, ведённая в метрах, норму получает.
+    const mLine = matchPatternNormSources(
+      [line('l1', 'RIB', 'Кашкорсе', 'м пог.', 'Кашкорсе')],
+      [fabricLinearKg],
+    );
+    expect(mLine.get('l1')?.sourceId).toBe('param-kashkorse');
+  });
+
+  test('«м» и «м пог.» в одной роли — пара неоднозначна, не матчим', () => {
+    // Канонизация свела оба написания к одной единице, поэтому обе строки
+    // теперь кандидаты и шаг 3 честно отказывается выбирать. Раньше разное
+    // написание случайно оставляло одного кандидата — это была не логика, а
+    // совпадение, и полагаться на него нельзя.
+    const cordQty: PatternNormSource = {
+      sourceId: 'norm-cord',
+      kind: 'QTY_PER_ITEM',
+      roleKey: 'PACKAGING',
+      label: 'Шнур',
+      unit: 'м пог.',
+      qtyPerItem: 1.2,
+    };
+    const map = matchPatternNormSources(
+      [
+        line('l1', 'PACKAGING', 'Тесьма отделочная', 'м пог.'),
+        line('l2', 'PACKAGING', 'Кант', 'м'),
+      ],
+      [cordQty],
+    );
+    expect(map.size).toBe(0);
+  });
+
   test('строка без роли источника не получает', () => {
     const map = matchPatternNormSources(
       [{ key: 'l1', materialRole: null, name: 'Молния', fabricType: null, unit: 'шт' }],
@@ -209,6 +270,48 @@ describe('isNormUnitCompatible', () => {
     expect(isNormUnitCompatible('кат.', zipperNorm)).toBe(false);
     // Единица у источника не задана — не придираемся.
     expect(isNormUnitCompatible('шт', { ...zipperNorm, unit: null })).toBe(true);
+  });
+
+  // ГЛАВНОЕ ПРО ПОРАЗМЕРНЫЕ НОРМЫ. `unit` у них — единица ПОТРЕБНОСТИ (в чём
+  // материал уйдёт в закупку), а в ячейках всегда погонные метры. Значит
+  // единицу источника с единицей строки сравнивать нельзя: строка принимает
+  // число как есть и обязана быть метровой.
+  test('поразмерная норма с единицей потребности «кг» идёт в МЕТРОВУЮ строку', () => {
+    expect(isNormUnitCompatible('м пог.', fabricLinearKg)).toBe(true);
+    expect(isNormUnitCompatible('м', fabricLinearKg)).toBe(true);
+  });
+
+  test('поразмерная норма в строку в «кг» НЕ идёт, даже если у параметра «кг»', () => {
+    // Иначе в килограммовое поле ляжет длина: на боевом заказе это давало
+    // 808 вместо 343,8 кг. Перевод метров в вес требует ширины и плотности —
+    // это работа расчёта потребности, а не спецификации.
+    expect(isNormUnitCompatible('кг', fabricLinearKg)).toBe(false);
+  });
+
+  test('вид нормы решает, а не единица источника', () => {
+    // Сторож против «сравним единицы у всех видов»: площадь с единицей
+    // потребности «кг» в килограммовую строку не идёт, а поразмерная норма с
+    // «м²» не идёт в строку в м² — там сырые метры, а не площадь.
+    expect(isNormUnitCompatible('кг', { ...fabricArea, unit: 'кг' })).toBe(false);
+    expect(
+      isNormUnitCompatible('м2', { ...cordLinear, unit: 'м²' }),
+    ).toBe(false);
+  });
+
+  test('у ШТУЧНОЙ нормы «м» и «м пог.» — одна единица', () => {
+    // Здесь unit описывает само число, поэтому сравнение работает; канонизация
+    // нужна, чтобы «Киперная лента, 0.35 м пог.» нашла строку в «м».
+    expect(
+      isNormUnitCompatible('м', { ...zipperNorm, unit: 'м пог.' }),
+    ).toBe(true);
+    expect(
+      isNormUnitCompatible('м пог.', { ...zipperNorm, unit: 'м' }),
+    ).toBe(true);
+  });
+
+  test('«кв.м» канонизируется в м²', () => {
+    expect(isNormUnitCompatible('кв.м', fabricArea)).toBe(true);
+    expect(isNormUnitCompatible('кв м', fabricArea)).toBe(true);
   });
 });
 

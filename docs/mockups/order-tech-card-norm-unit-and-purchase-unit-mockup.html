@@ -1,0 +1,666 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Техкарта в заказе: норма/шт в единице техкарты + единица закупки</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link href="https://fonts.googleapis.com/css2?family=PT+Sans:wght@400;700&display=swap" rel="stylesheet" />
+<style>
+  /* Токены 1:1 из apps/web/app/globals.css */
+  :root{
+    --color-bg:#fff; --color-bg-soft:#f7f7f6; --color-bg-card:#fff;
+    --color-bg-muted:#f1f1ef; --color-bg-tint:#fdf3da;
+    --color-fg:#1b1b1b; --color-fg-strong:#0f0f0f; --color-fg-muted:#5f5f5c; --color-fg-subtle:#8a8a86;
+    --color-border:#e4e4e1; --color-border-strong:#d4d4d0;
+    --color-accent:#2f7fd1; --color-accent-hover:#1f6bc0; --color-accent-soft:#d9e8fb; --color-accent-fg:#1f6bc0;
+    --btn-primary-bg:#ffd23f; --btn-primary-bg-hover:#ffca1f; --btn-primary-edge:#e7b51e; --btn-primary-fg:#3a2f00;
+    --color-ok:#2e9e4a; --color-ok-soft:#e4f4e6; --color-ok-fg:#2f7d4e;
+    --color-warn:#9a6f1e; --color-warn-soft:#fcecc9; --color-warn-fg:#9a6f1e;
+    --color-danger:#d23b3b; --color-danger-soft:#fbe3e0; --color-danger-fg:#991b1b;
+    --radius-sm:6px; --radius-md:9px; --radius-lg:12px; --radius-xl:16px; --radius-pill:999px;
+    --shadow-sm:0 1px 2px rgba(20,20,20,.05),0 1px 3px rgba(20,20,20,.04);
+    --shadow-md:0 6px 18px rgba(20,20,20,.08);
+    --shadow-lg:0 18px 48px rgba(20,20,20,.18);
+    --title-page:1.6rem; --title-hero:1.35rem; --title-modal:1.1rem; --title-item:1.05rem;
+    --title-section:1rem; --title-subsection:.9rem; --title-label:.78rem;
+  }
+  *{ box-sizing:border-box; }
+  body{
+    margin:0; padding:0 0 80px;
+    font-family:'PT Sans',system-ui,-apple-system,'Segoe UI',Roboto,sans-serif;
+    background:#ececeb; color:var(--color-fg); font-size:16px; line-height:1.45;
+  }
+  .doc{ max-width:1240px; margin:0 auto; padding:0 20px; }
+
+  .topnav{ position:sticky; top:0; z-index:40; background:rgba(236,236,235,.93); backdrop-filter:blur(6px); border-bottom:1px solid var(--color-border-strong); }
+  .topnav__in{ max-width:1240px; margin:0 auto; padding:.6rem 20px; display:flex; gap:.4rem; align-items:center; overflow-x:auto; }
+  .topnav__brand{ font-weight:700; font-size:.9rem; margin-right:.5rem; white-space:nowrap; }
+  .topnav a{ white-space:nowrap; text-decoration:none; color:var(--color-fg-muted); font-size:.85rem; font-weight:700; padding:.35rem .75rem; border-radius:var(--radius-pill); border:1px solid transparent; }
+  .topnav a:hover{ background:#fff; }
+
+  .intro{ padding:2rem 0 .5rem; }
+  .intro h1{ font-size:var(--title-page); margin:0 0 .5rem; }
+  .intro p{ margin:0 0 .75rem; color:var(--color-fg-muted); max-width:88ch; }
+  .intro b{ color:var(--color-fg); }
+  .principles{ display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:.6rem; margin:1rem 0 0; }
+  .principle{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.8rem .95rem; font-size:.88rem; }
+  .principle b{ display:block; margin-bottom:.2rem; }
+  .principle span{ color:var(--color-fg-muted); }
+
+  .sect{ padding:2.4rem 0 .6rem; scroll-margin-top:64px; }
+  .sect > h2{ font-size:1.25rem; margin:0 0 .3rem; }
+  .sect > h2 small{ font-weight:400; color:var(--color-fg-muted); font-size:.78rem; font-family:ui-monospace,Menlo,monospace; margin-left:.5rem; }
+  .sect > p{ margin:0 0 1.1rem; color:var(--color-fg-muted); max-width:88ch; }
+
+  .shots{ display:flex; flex-wrap:wrap; gap:22px; align-items:flex-start; }
+  .shot{ flex:1 1 460px; min-width:340px; }
+  .shot--wide{ flex:1 1 100%; min-width:0; }
+  .shot__cap{ font-size:.85rem; font-weight:700; margin:0 0 .5rem; display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; }
+  .shot__cap small{ display:block; font-weight:400; color:var(--color-fg-muted); }
+  .tag{ display:inline-flex; align-items:center; padding:1px 8px; border-radius:var(--radius-pill); font-size:.72rem; font-weight:700; }
+  .tag--bad{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .tag--good{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .tag--new{ background:var(--btn-primary-bg); color:var(--btn-primary-fg); border:1px solid var(--btn-primary-edge); }
+
+  /* модалка «Материалы техкарты» */
+  .modal{ background:rgba(20,20,20,.28); border-radius:var(--radius-lg); padding:18px 14px; }
+  .modal__card{ background:var(--color-bg-card); border:1px solid var(--color-border); border-radius:var(--radius-lg); box-shadow:var(--shadow-lg); overflow:hidden; }
+  .modal__head{ display:flex; align-items:center; gap:.5rem; padding:.7rem .85rem; border-bottom:1px solid var(--color-border); }
+  .modal__title{ font-size:var(--title-modal); font-weight:700; margin:0; display:flex; align-items:center; gap:.4rem; }
+  .modal__x{ margin-left:auto; color:var(--color-fg-subtle); font-size:1.1rem; }
+  .modal__body{ padding:.85rem; display:flex; flex-direction:column; gap:.7rem; }
+
+  .cws-tpl{ margin:0; font-size:.8rem; color:var(--color-fg-muted); display:flex; align-items:center; gap:.4rem; flex-wrap:wrap; }
+  .cws-tpl b{ color:var(--color-fg-strong); }
+
+  /* таблица спецификации */
+  .spec{ border:1px solid var(--color-border); border-radius:var(--radius-md); overflow-x:auto; }
+  table.spec__t{ width:100%; border-collapse:collapse; font-size:.84rem; }
+  table.spec__t th{ text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.04em; color:var(--color-fg-muted); font-weight:700; padding:7px 10px; border-bottom:1px solid var(--color-border); background:var(--color-bg-muted); white-space:nowrap; }
+  table.spec__t th.num, table.spec__t td.num{ text-align:right; white-space:nowrap; }
+  table.spec__t td{ padding:7px 10px; border-bottom:1px solid var(--color-border); vertical-align:top; }
+  table.spec__t tr:last-child td{ border-bottom:none; }
+  /* группировка шапки: блок нормы / блок закупки */
+  th.grp{ text-align:center; font-size:10px; border-bottom:none; padding-bottom:3px; }
+  th.grp--norm{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  th.grp--buy{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  td.zone--buy, th.zone--buy{ background:rgba(217,232,251,.34); }
+  .cell{ display:inline-flex; align-items:center; min-height:29px; padding:4px 8px; border:1px solid var(--color-border-strong); border-radius:7px; background:#fff; font-size:.84rem; }
+  .cell--name{ font-weight:700; min-width:150px; }
+  .cell--num{ min-width:76px; justify-content:flex-end; font-variant-numeric:tabular-nums; }
+  .cell--sm{ min-width:58px; }
+  .cell--lock{ background:var(--color-bg-muted); color:var(--color-fg-muted); }
+  .cell--calc{ background:var(--color-bg-muted); color:var(--color-fg-muted); border-style:dashed; }
+  .rowsum{ font-variant-numeric:tabular-nums; font-weight:700; color:var(--color-fg-strong); }
+  .x{ color:var(--color-fg-subtle); font-size:1.05rem; line-height:1; }
+  .arrow{ color:var(--color-accent-fg); font-weight:700; }
+
+  .pchips{ display:flex; flex-wrap:wrap; gap:.3rem; align-items:center; max-width:300px; }
+  .pchip{ display:inline-flex; align-items:center; gap:.25rem; padding:2px 8px; border-radius:var(--radius-pill); background:var(--color-bg-muted); font-size:.75rem; color:var(--color-fg); }
+  .pchip b{ font-weight:700; }
+  .pchip--empty{ background:#fff; border:1px dashed var(--color-border-strong); color:var(--color-fg-subtle); }
+  .flags{ display:flex; align-items:center; flex-wrap:wrap; gap:.4rem; margin-top:.3rem; }
+  .src{ display:inline-flex; align-items:center; gap:.25rem; font-size:.7rem; font-weight:700; padding:1px 7px; border-radius:var(--radius-pill); }
+  .src--nom{ background:var(--color-ok-soft); color:var(--color-ok-fg); }
+  .src--tpl{ background:var(--color-bg-muted); color:var(--color-fg-muted); }
+  .src--order{ background:var(--color-bg-tint); color:var(--color-warn-fg); }
+  .src--calc{ background:var(--color-accent-soft); color:var(--color-accent-fg); }
+  .src--bad{ background:var(--color-danger-soft); color:var(--color-danger-fg); }
+  .linkbtn{ font-size:.75rem; font-weight:700; color:var(--color-accent-fg); }
+  .caret{ display:inline-flex; align-items:center; justify-content:center; width:20px; height:20px; border-radius:var(--radius-sm); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg-muted); font-size:.7rem; flex:none; }
+  .caret.is-open{ background:var(--color-bg-tint); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .nameline{ display:flex; align-items:flex-start; gap:.4rem; }
+
+  tr.exp > td{ background:var(--color-bg-soft); border-bottom:1px solid var(--color-border); }
+  .params{ border:1px solid var(--color-border-strong); border-radius:var(--radius-md); background:#fff; padding:.65rem .7rem; display:flex; flex-direction:column; gap:.6rem; }
+  .params__head{ display:flex; align-items:center; gap:.45rem; flex-wrap:wrap; font-size:.8rem; }
+  .params__head b{ font-size:var(--title-label); text-transform:uppercase; letter-spacing:.05em; color:var(--color-fg-muted); }
+  .params__foot{ display:flex; align-items:center; gap:.5rem; flex-wrap:wrap; font-size:.78rem; color:var(--color-fg-muted); }
+
+  /* норма по размерам */
+  .bysize{ display:flex; flex-wrap:wrap; gap:.35rem; align-items:flex-end; }
+  .bysize__c{ display:flex; flex-direction:column; align-items:center; gap:2px; }
+  .bysize__c > span{ font-size:10.5px; font-weight:700; color:var(--color-fg-muted); }
+  .bysize__c .cell{ width:66px; justify-content:flex-end; }
+  .bysize__c--sum .cell{ background:var(--color-ok-soft); border-color:var(--color-ok); font-weight:700; }
+  .bysize__c--gap .cell{ background:var(--color-bg-muted); border-style:dashed; color:var(--color-fg-subtle); }
+
+  /* формула пересчёта */
+  .chain{ display:flex; flex-wrap:wrap; align-items:stretch; gap:.5rem; }
+  .chain__step{ flex:1 1 190px; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-md); padding:.6rem .7rem; min-width:170px; }
+  .chain__step b{ display:block; font-size:10.5px; text-transform:uppercase; letter-spacing:.05em; color:var(--color-fg-muted); margin-bottom:.25rem; }
+  .chain__v{ font-size:1.05rem; font-weight:700; font-variant-numeric:tabular-nums; }
+  .chain__f{ font-size:.75rem; color:var(--color-fg-muted); font-family:ui-monospace,Menlo,monospace; margin-top:.2rem; }
+  .chain__step--out{ border-color:var(--color-accent); background:var(--color-accent-soft); }
+  .chain__step--out .chain__v{ color:var(--color-accent-fg); }
+  .chain__gt{ align-self:center; color:var(--color-fg-subtle); font-weight:700; }
+
+  .flow{ display:grid; grid-template-columns:repeat(auto-fit,minmax(270px,1fr)); gap:.7rem; }
+  .flow__col{ background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); padding:.75rem .85rem; }
+  .flow__col h3{ margin:0 0 .5rem; font-size:var(--title-subsection); display:flex; align-items:center; gap:.4rem; }
+  .step{ display:flex; align-items:center; gap:.45rem; font-size:.83rem; padding:.3rem 0; border-bottom:1px dashed var(--color-border); }
+  .step:last-child{ border-bottom:none; }
+  .step__n{ width:20px; height:20px; border-radius:50%; background:var(--color-bg-muted); color:var(--color-fg-muted); font-size:.72rem; font-weight:700; display:inline-flex; align-items:center; justify-content:center; flex:none; }
+  .step__mark{ margin-left:auto; font-size:.74rem; font-weight:700; white-space:nowrap; }
+  .step__mark--no{ color:var(--color-danger-fg); }
+  .step__mark--yes{ color:var(--color-ok-fg); }
+
+  .btn{ display:inline-flex; align-items:center; gap:.35rem; font:inherit; font-size:.82rem; font-weight:700; padding:.35rem .7rem; border-radius:var(--radius-md); border:1px solid var(--color-border-strong); background:#fff; color:var(--color-fg); cursor:default; }
+  .btn--primary{ background:var(--btn-primary-bg); border-color:var(--btn-primary-edge); color:var(--btn-primary-fg); }
+  .btn--ghost{ background:#fff; color:var(--color-fg-muted); }
+
+  .note{ margin:.55rem 0 0; font-size:.82rem; color:var(--color-fg-muted); border-left:3px solid var(--color-border-strong); padding-left:.6rem; }
+  .note--bad{ border-color:var(--color-danger); }
+  .note--good{ border-color:var(--color-ok); }
+  .note--warn{ border-color:var(--color-warn); }
+  .note b{ color:var(--color-fg); }
+  .note code, code{ font-family:ui-monospace,Menlo,monospace; font-size:.85em; background:var(--color-bg-muted); border-radius:4px; padding:0 .25em; }
+
+  table.files{ width:100%; border-collapse:collapse; background:#fff; border:1px solid var(--color-border); border-radius:var(--radius-lg); overflow:hidden; font-size:.84rem; }
+  table.files th, table.files td{ text-align:left; padding:.5rem .7rem; border-bottom:1px solid var(--color-border); vertical-align:top; }
+  table.files th{ background:var(--color-bg-muted); font-size:.78rem; }
+  table.files tr:last-child td{ border-bottom:none; }
+  .q{ background:#fff; border:1px solid var(--color-border); border-left:3px solid var(--btn-primary-edge); border-radius:var(--radius-md); padding:.65rem .8rem; font-size:.86rem; margin-bottom:.55rem; }
+  .q b{ display:block; margin-bottom:.15rem; }
+  .q span{ color:var(--color-fg-muted); }
+</style>
+</head>
+<body>
+
+<nav class="topnav">
+  <div class="topnav__in">
+    <span class="topnav__brand">Макет · норма и единица закупки</span>
+    <a href="#now">1. Как сейчас</a>
+    <a href="#next">2. Как надо</a>
+    <a href="#bysize">3. Средневзвешенная</a>
+    <a href="#buy">4. Пересчёт в закупку</a>
+    <a href="#chain">5. Кто чем владеет</a>
+    <a href="#fix">6. Что правим</a>
+    <a href="#open">7. Решить до кода</a>
+  </div>
+</nav>
+
+<div class="doc">
+
+  <section class="intro">
+    <h1>Техкарта в заказе: норма/шт — в единице техкарты, закупка — отдельно</h1>
+    <p>
+      Одна строка материала несёт <b>два разных числа в двух разных единицах</b>, и сейчас они слиплись в одно поле.
+      Норма расхода — это <b>сколько материала уходит на изделие</b>, она приходит из номенклатуры поразмерно и
+      живёт в единице техкарты (длина). Закупка — это <b>сколько купить</b>, она считается из нормы через
+      плотность и ширину рулона и живёт в своей единице (кг).
+    </p>
+    <p>
+      Всё на этом макете — реальные числа боевого заказа <b>O-20260617-0001</b> (тираж 1000, кулирка 195&nbsp;г/м²,
+      ширина рулона 185&nbsp;см). Сейчас в его строках стоит норма <b>1.0000</b> — заглушка.
+    </p>
+    <div class="principles">
+      <div class="principle"><b>Норма/шт — средневзвешенная</b><span>Σ(норма размера × кол-во в размере) ÷ общее количество. Тираж из 250 L и 4 4XL обязан тянуть к норме L.</span></div>
+      <div class="principle"><b>Единица нормы = единица техкарты</b><span>Что записано в строке техкарты, в том и показываем. Никаких пересчётов в колонке нормы.</span></div>
+      <div class="principle"><b>Единица закупки — своя колонка</b><span>кг получается из длины: × ширина рулона → м², × плотность → кг. Это уже не норма, а потребность.</span></div>
+      <div class="principle"><b>Одно поле — один смысл</b><span>Сегодня в «Ед.» пишут кг, имея в виду единицу закупки, а число в поле — длина. Отсюда норма 1.0000 и расхождение с закупкой.</span></div>
+    </div>
+  </section>
+
+  <!-- ================= 1. КАК СЕЙЧАС ================= -->
+  <section class="sect" id="now">
+    <h2>1. Как сейчас <small>заказ O-20260617-0001, вкладка «Материалы техкарты»</small></h2>
+    <p>
+      Одна колонка единицы на строку. В неё записали <b>единицу закупки</b> («кг»), потому что другого поля нет.
+      Норма из номенклатуры при этом не подтягивается: её источник «Кулирка» заведён в номенклатуре тоже в «кг»,
+      а правило сопоставления для поразмерных норм жёстко требует метров — пара отсекается, и в строке остаётся
+      заглушка <b>1.0000</b>.
+    </p>
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--bad">сейчас</span> Материалы техкарты · заказ O-20260617-0001</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__head">
+              <h3 class="modal__title">▤ Материалы техкарты</h3>
+              <span class="modal__x">×</span>
+            </div>
+            <div class="modal__body">
+              <p class="cws-tpl">Тираж <b>1000 шт</b> · номенклатура <b>Футболка классическая</b></p>
+              <div class="spec">
+                <table class="spec__t">
+                  <thead>
+                    <tr><th>Материал</th><th>Параметры</th><th class="num">Норма/шт</th><th>Ед.</th><th class="num">Итого</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Кулирка</span></div></td>
+                      <td><div class="pchips"><span class="pchip">Плотность <b>195</b> г/м²</span><span class="pchip">Ширина <b>185</b> см</span></div></td>
+                      <td class="num">
+                        <span class="cell cell--num">1.0000</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--bad">заглушка</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">кг</span></td>
+                      <td class="num"><span class="rowsum">1000 кг</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Кашкорсе</span></div></td>
+                      <td><div class="pchips"><span class="pchip">Плотность <b>220</b> г/м²</span><span class="pchip">Ширина <b>166</b> см</span></div></td>
+                      <td class="num">
+                        <span class="cell cell--num">1.0000</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--bad">заглушка</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">кг</span></td>
+                      <td class="num"><span class="rowsum">1000 кг</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Нитки</span></div></td>
+                      <td><div class="pchips"><span class="pchip pchip--empty">нет параметров</span></div></td>
+                      <td class="num"><span class="cell cell--num">1.0000</span><div class="flags" style="justify-content:flex-end"><span class="src src--bad">заглушка</span></div></td>
+                      <td><span class="cell cell--sm">м</span></td>
+                      <td class="num"><span class="rowsum">1000 м</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Размерник</span></div></td>
+                      <td><div class="pchips"><span class="pchip pchip--empty">нет параметров</span></div></td>
+                      <td class="num"><span class="cell cell--num">1.0000</span><div class="flags" style="justify-content:flex-end"><span class="src src--tpl">из шаблона</span></div></td>
+                      <td><span class="cell cell--sm">шт</span></td>
+                      <td class="num"><span class="rowsum">1000 шт</span></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="note note--bad">
+                <b>1000 кг кулирки на 1000 футболок.</b> Это тонна ткани вместо ~297 кг. Число никто не смотрит,
+                потому что всем известно, что «там единица» — но именно оно уезжает в потребность и в закупку.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 2. КАК НАДО ================= -->
+  <section class="sect" id="next">
+    <h2>2. Как надо <small>то же окно, единица расщеплена на две: норма и закупка</small></h2>
+    <p>
+      Колонка «Норма/шт» получает средневзвешенное число из номенклатуры и <b>единицу техкарты</b> — длину.
+      Справа отдельный блок закупки: своя единица и посчитанное количество. Между ними — стрелка: это не два
+      независимых поля, а одно, пересчитанное по параметрам материала.
+    </p>
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--good">стало</span> Материалы техкарты · заказ O-20260617-0001 <span class="tag tag--new">делта</span></p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__head">
+              <h3 class="modal__title">▤ Материалы техкарты</h3>
+              <span class="modal__x">×</span>
+            </div>
+            <div class="modal__body">
+              <p class="cws-tpl">
+                Тираж <b>1000 шт</b> · нормы из номенклатуры <b>Футболка классическая</b>
+                <span class="linkbtn">обновить нормы из номенклатуры</span>
+              </p>
+              <div class="spec">
+                <table class="spec__t">
+                  <thead>
+                    <tr>
+                      <th rowspan="2">Материал</th>
+                      <th rowspan="2">Параметры</th>
+                      <th class="grp grp--norm" colspan="3">Расход — единица техкарты</th>
+                      <th rowspan="2"></th>
+                      <th class="grp grp--buy zone--buy" colspan="2">Закупка</th>
+                      <th rowspan="2"></th>
+                    </tr>
+                    <tr>
+                      <th class="num">Норма/шт</th><th>Ед.</th><th class="num">Итого</th>
+                      <th class="zone--buy">Ед.</th><th class="num zone--buy">К закупке</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr>
+                      <td><div class="nameline"><span class="caret is-open">⌄</span><span class="cell cell--name">Кулирка</span></div></td>
+                      <td><div class="pchips"><span class="pchip">Плотность <b>195</b> г/м²</span><span class="pchip">Ширина <b>185</b> см</span></div></td>
+                      <td class="num">
+                        <span class="cell cell--num">0.8232</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры · по размерам</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">м пог.</span></td>
+                      <td class="num"><span class="rowsum">823.20</span></td>
+                      <td class="num"><span class="arrow">→</span></td>
+                      <td class="zone--buy"><span class="cell cell--sm">кг</span></td>
+                      <td class="num zone--buy">
+                        <span class="rowsum">296.97</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--calc">посчитано</span></div>
+                      </td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Кашкорсе</span></div></td>
+                      <td><div class="pchips"><span class="pchip">Плотность <b>220</b> г/м²</span><span class="pchip">Ширина <b>166</b> см</span></div></td>
+                      <td class="num">
+                        <span class="cell cell--num">0.0300</span>
+                        <div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры</span><span class="src src--order">1 размер из 7</span></div>
+                      </td>
+                      <td><span class="cell cell--sm">м пог.</span></td>
+                      <td class="num"><span class="rowsum">30.00</span></td>
+                      <td class="num"><span class="arrow">→</span></td>
+                      <td class="zone--buy"><span class="cell cell--sm">кг</span></td>
+                      <td class="num zone--buy"><span class="rowsum">10.96</span><div class="flags" style="justify-content:flex-end"><span class="src src--calc">посчитано</span></div></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Нитки</span></div></td>
+                      <td><div class="pchips"><span class="pchip pchip--empty">нет параметров</span></div></td>
+                      <td class="num"><span class="cell cell--num">100.00</span><div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры</span></div></td>
+                      <td><span class="cell cell--sm">м</span></td>
+                      <td class="num"><span class="rowsum">100 000</span></td>
+                      <td class="num"><span class="arrow">→</span></td>
+                      <td class="zone--buy"><span class="cell cell--sm cell--lock">м</span></td>
+                      <td class="num zone--buy"><span class="rowsum">100 000</span><div class="flags" style="justify-content:flex-end"><span class="src src--tpl">та же единица</span></div></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                    <tr>
+                      <td><div class="nameline"><span class="caret">›</span><span class="cell cell--name">Размерник</span></div></td>
+                      <td><div class="pchips"><span class="pchip pchip--empty">нет параметров</span></div></td>
+                      <td class="num"><span class="cell cell--num">1.0000</span><div class="flags" style="justify-content:flex-end"><span class="src src--nom">из номенклатуры</span></div></td>
+                      <td><span class="cell cell--sm">шт</span></td>
+                      <td class="num"><span class="rowsum">1000</span></td>
+                      <td class="num"><span class="arrow">→</span></td>
+                      <td class="zone--buy"><span class="cell cell--sm cell--lock">шт</span></td>
+                      <td class="num zone--buy"><span class="rowsum">1000</span><div class="flags" style="justify-content:flex-end"><span class="src src--tpl">та же единица</span></div></td>
+                      <td class="num"><span class="x">×</span></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p class="note note--good">
+                <b>Единица закупки совпадает с единицей нормы</b> — для ниток, фурнитуры, бирок. Тогда колонка
+                «К закупке» просто повторяет «Итого», а поле единицы серое: пересчитывать нечего. Расщепление
+                видно только там, где оно есть на самом деле — у полотна.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 3. СРЕДНЕВЗВЕШЕННАЯ ================= -->
+  <section class="sect" id="bysize">
+    <h2>3. Раскрытая норма — как получилось 0.8232 <small>PatternItemSizeParameterValue · нормы по размерам</small></h2>
+    <p>
+      Норма в номенклатуре задана по каждому размеру. Прятать это за одним числом нельзя — менеджер не поймёт,
+      откуда «0.8232». Строка раскрывается и показывает всю арифметику: норма размера × количество в размере,
+      сумма, деление на тираж.
+    </p>
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--new">новое</span> Строка «Кулирка» раскрыта</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__body">
+              <div class="params">
+                <div class="params__head"><b>Норма по размерам</b><span class="src src--nom">из номенклатуры · «Кулирка»</span></div>
+                <div class="bysize">
+                  <div class="bysize__c"><span>S · 76 шт</span><span class="cell">0.70</span></div>
+                  <div class="bysize__c"><span>M · 200 шт</span><span class="cell">0.75</span></div>
+                  <div class="bysize__c"><span>L · 250 шт</span><span class="cell">0.80</span></div>
+                  <div class="bysize__c"><span>XL · 250 шт</span><span class="cell">0.85</span></div>
+                  <div class="bysize__c"><span>2XL · 110 шт</span><span class="cell">0.90</span></div>
+                  <div class="bysize__c"><span>3XL · 110 шт</span><span class="cell">0.95</span></div>
+                  <div class="bysize__c"><span>4XL · 4 шт</span><span class="cell">1.00</span></div>
+                  <div class="bysize__c bysize__c--sum"><span>средневзвеш.</span><span class="cell">0.8232</span></div>
+                </div>
+                <div class="params__foot">
+                  Σ(норма × кол-во) = <b style="color:var(--color-fg)">823.20 м пог.</b> ÷ 1000 шт =
+                  <b style="color:var(--color-fg)">0.8232 м пог./шт</b>
+                  <span style="margin-left:auto"></span>
+                  <span class="btn btn--ghost">Задать одну норму на все размеры</span>
+                </div>
+              </div>
+              <p class="note">
+                Простое среднее по семи размерам дало бы <b>0.85</b> — на 3% больше. Разница в том, что 250 XL
+                весят в тираже больше, чем 4 шт 4XL. Поэтому именно <b>средневзвешенная по количествам</b>.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="shots" style="margin-top:1.2rem">
+      <div class="shot">
+        <p class="shot__cap"><span class="tag tag--new">случай</span> Размер без нормы в номенклатуре</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__body">
+              <div class="params">
+                <div class="params__head"><b>Норма по размерам</b><span class="src src--nom">из номенклатуры · «Кашкорсе»</span><span class="src src--order">1 размер из 7</span></div>
+                <div class="bysize">
+                  <div class="bysize__c"><span>S · 76 шт</span><span class="cell">0.03</span></div>
+                  <div class="bysize__c bysize__c--gap"><span>M · 200 шт</span><span class="cell">—</span></div>
+                  <div class="bysize__c bysize__c--gap"><span>L · 250 шт</span><span class="cell">—</span></div>
+                  <div class="bysize__c bysize__c--gap"><span>XL · 250 шт</span><span class="cell">—</span></div>
+                  <div class="bysize__c bysize__c--sum"><span>средневзвеш.</span><span class="cell">0.0300</span></div>
+                </div>
+                <div class="params__foot">Считаем только по заполненным размерам: 2.28 ÷ 76 = 0.0300</div>
+              </div>
+              <p class="note note--warn">
+                Незаполненные размеры <b>не идут в знаменатель</b> — иначе один пропуск занизил бы норму на весь
+                тираж. Но строка честно говорит «1 размер из 7», чтобы дырка в номенклатуре была видна.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="shot">
+        <p class="shot__cap">Правило одного числа</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__body">
+              <div class="flow" style="grid-template-columns:1fr">
+                <div class="flow__col">
+                  <h3>Кто главнее</h3>
+                  <div class="step"><span class="step__n">1</span> Норма не правлена в заказе<span class="step__mark step__mark--yes">из номенклатуры</span></div>
+                  <div class="step"><span class="step__n">2</span> Норма правлена руками<span class="step__mark step__mark--yes">из заказа, номенклатура молчит</span></div>
+                  <div class="step"><span class="step__n">3</span> Размерный план изменился<span class="step__mark step__mark--yes">средневзвешенная пересчитывается</span></div>
+                  <div class="step"><span class="step__n">4</span> Спецификация и закупка<span class="step__mark step__mark--yes">одно и то же число</span></div>
+                </div>
+              </div>
+              <p class="note">
+                Правка нормы или любой ячейки размера → строка становится
+                <span class="src src--order">правлено в заказе</span> и больше не перечитывается из номенклатуры,
+                пока не нажали «обновить нормы».
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 4. ПЕРЕСЧЁТ В ЗАКУПКУ ================= -->
+  <section class="sect" id="buy">
+    <h2>4. Пересчёт в закупочную единицу <small>норма → м² → кг</small></h2>
+    <p>
+      Из нормы в погонных метрах закупка получается в два умножения. Оба множителя уже лежат в строке:
+      ширина рулона и плотность. Это ровно та же арифметика, которую делает расчёт потребности
+      (<code>WorkshopNeedsService</code>) — просто теперь она видна в самой техкарте.
+    </p>
+    <div class="shots">
+      <div class="shot shot--wide">
+        <p class="shot__cap"><span class="tag tag--new">новое</span> Раскрытая строка «Кулирка» → блок закупки</p>
+        <div class="modal">
+          <div class="modal__card">
+            <div class="modal__body">
+              <div class="params">
+                <div class="params__head"><b>Пересчёт в закупку</b><span class="src src--calc">считается, руками не правится</span></div>
+                <div class="chain">
+                  <div class="chain__step">
+                    <b>Норма/шт</b>
+                    <div class="chain__v">0.8232 м пог.</div>
+                    <div class="chain__f">средневзвеш. по размерам</div>
+                  </div>
+                  <span class="chain__gt">×</span>
+                  <div class="chain__step">
+                    <b>Тираж</b>
+                    <div class="chain__v">1000 шт</div>
+                    <div class="chain__f">= 823.20 м пог.</div>
+                  </div>
+                  <span class="chain__gt">×</span>
+                  <div class="chain__step">
+                    <b>Ширина рулона</b>
+                    <div class="chain__v">185 см</div>
+                    <div class="chain__f">823.20 × 1.85 = 1522.92 м²</div>
+                  </div>
+                  <span class="chain__gt">×</span>
+                  <div class="chain__step">
+                    <b>Плотность</b>
+                    <div class="chain__v">195 г/м²</div>
+                    <div class="chain__f">1522.92 × 0.195</div>
+                  </div>
+                  <span class="chain__gt">=</span>
+                  <div class="chain__step chain__step--out">
+                    <b>К закупке</b>
+                    <div class="chain__v">296.97 кг</div>
+                    <div class="chain__f">0.297 кг на изделие</div>
+                  </div>
+                </div>
+                <div class="params__foot">
+                  Единица закупки: <span class="cell cell--sm" style="min-height:24px">кг ⌄</span>
+                  <span style="color:var(--color-fg-subtle)">м пог. · м² · кг</span>
+                  <span style="margin-left:auto"></span>
+                  <span class="btn btn--ghost">Показать формулу в примечании к строке</span>
+                </div>
+              </div>
+              <p class="note note--good">
+                <b>296.97 кг вместо 1000 кг.</b> Это и есть цена вопроса: сейчас закупка на этом заказе завышена
+                втрое с лишним, и ровно потому, что норма стоит заглушкой.
+              </p>
+              <p class="note note--warn">
+                Нет ширины или плотности → пересчёт невозможен. Показываем в колонке «К закупке» прочерк и
+                предупреждение «заполните ширину рулона», а не тихий ноль и не то же число в другой единице.
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= 5. КТО ЧЕМ ВЛАДЕЕТ ================= -->
+  <section class="sect" id="chain">
+    <h2>5. Кто чем владеет</h2>
+    <p>Три хранилища, и у каждого своя зона ответственности. Сейчас границы размыты — отсюда и заглушка.</p>
+    <div class="flow">
+      <div class="flow__col">
+        <h3>Номенклатура (лекало)</h3>
+        <div class="step"><span class="step__n">1</span> Норма по размерам<span class="step__mark step__mark--yes">источник истины</span></div>
+        <div class="step"><span class="step__n">2</span> Единица нормы (длина)<span class="step__mark step__mark--yes">источник истины</span></div>
+        <div class="step"><span class="step__n">3</span> Единица закупки<span class="step__mark step__mark--no">не её дело</span></div>
+      </div>
+      <div class="flow__col">
+        <h3>Техкарта / строка заказа</h3>
+        <div class="step"><span class="step__n">1</span> Средневзвешенная норма<span class="step__mark step__mark--yes">выводится</span></div>
+        <div class="step"><span class="step__n">2</span> Плотность, ширина рулона<span class="step__mark step__mark--yes">источник истины</span></div>
+        <div class="step"><span class="step__n">3</span> Единица закупки<span class="step__mark step__mark--yes">источник истины</span></div>
+        <div class="step"><span class="step__n">4</span> Ручная правка нормы<span class="step__mark step__mark--yes">перебивает номенклатуру</span></div>
+      </div>
+      <div class="flow__col">
+        <h3>Потребность и закупка</h3>
+        <div class="step"><span class="step__n">1</span> Количество к закупке<span class="step__mark step__mark--yes">считает</span></div>
+        <div class="step"><span class="step__n">2</span> Своя норма<span class="step__mark step__mark--no">не заводит</span></div>
+        <div class="step"><span class="step__n">3</span> Расхождение с техкартой<span class="step__mark step__mark--no">невозможно по построению</span></div>
+      </div>
+    </div>
+    <p class="note note--warn" style="max-width:88ch">
+      <b>Главная не-UI часть задачи.</b> Сейчас <code>WorkshopNeedsService</code> для таких строк считает по
+      номенклатуре и игнорирует строку снимка. Если норму можно править в заказе — потребность обязана слушать
+      заказ, иначе получим второй молчаливый источник истины.
+    </p>
+  </section>
+
+  <!-- ================= 6. ЧТО ПРАВИМ ================= -->
+  <section class="sect" id="fix">
+    <h2>6. Что правим</h2>
+    <table class="files">
+      <thead><tr><th style="width:38%">Файл</th><th>Правка</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>packages/shared/src/pattern-norms.ts</code></td>
+          <td>
+            <b>Корень бага.</b> <code>isNormUnitCompatible</code> для <code>LINEAR_M_BY_SIZE</code> смотрит только
+            на единицу строки и жёстко требует метров, игнорируя <code>source.unit</code>. Пара «кг ↔ кг»
+            отсекается — норма не доезжает ни до одной строки полотна. Сравнивать единицу источника с единицей
+            строки (м ≡ м пог.).
+          </td>
+        </tr>
+        <tr>
+          <td><code>prisma/schema.prisma</code></td>
+          <td>Новое поле единицы закупки на строке (<code>purchaseUnit</code>) + миграция. Пусто = совпадает с единицей нормы.</td>
+        </tr>
+        <tr>
+          <td><code>apps/api/src/modules/orders/orders.service.ts</code></td>
+          <td>Пересборка снимка: строки с <code>qtySource = TEMPLATE / null</code> сейчас никогда не освежаются из номенклатуры — из-за этого ~390 боевых строк останутся с заглушкой даже после фикса правила.</td>
+        </tr>
+        <tr>
+          <td><code>apps/api/src/modules/order-tech-card/order-tech-card.service.ts</code></td>
+          <td>DTO строки: отдать единицу закупки, посчитанное количество к закупке и разбивку по размерам.</td>
+        </tr>
+        <tr>
+          <td><code>apps/web/…/colorway-spec.tsx</code></td>
+          <td>Расщеплённая шапка таблицы, блок закупки, раскрытие с арифметикой средневзвешенной.</td>
+        </tr>
+        <tr>
+          <td><code>apps/api/…/workshop-needs.service.ts</code></td>
+          <td>Слушать норму из строки заказа, если она правлена, а не считать свою по номенклатуре.</td>
+        </tr>
+        <tr>
+          <td><code>tests/unit/pattern-norms.test.ts</code></td>
+          <td>Ассерт «площадь принимает только м²/м2» и «погонные метры принимают м/м пог.» переписать на сравнение единиц; добавить кейсы кг↔кг (матчится) и кг↔м (отсекается).</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <!-- ================= 7. РЕШИТЬ ДО КОДА ================= -->
+  <section class="sect" id="open">
+    <h2>7. Что решить до кода</h2>
+    <div class="q">
+      <b>1. Что делать с боевыми данными, где норма заведена в «кг», а по смыслу это длина</b>
+      <span>
+        «Кулирка» 0.65–1.14 при плотности 195 г/м² может быть только погонными метрами: как вес это 4 м² ткани на
+        футболку. Переименовать единицу параметра в номенклатуре на «м пог.» (SQL-патч, 219 строк) — или считать,
+        что число верное, а единица — это уже единица закупки?
+      </span>
+    </div>
+    <div class="q">
+      <b>2. Пересчитывать ли живые заказы</b>
+      <span>
+        ~390 строк стоят с заглушкой 1.0000 и <code>qtySource = null</code>. Пересчёт молча изменит числа в
+        запущенных заказах (у кулирки — втрое). Делать кнопкой «обновить нормы» вручную по заказу или разовым
+        SQL-патчем по всем незапущенным?
+      </span>
+    </div>
+    <div class="q">
+      <b>3. Единица закупки — на строке или на материале</b>
+      <span>
+        Полотно всегда покупают в кг, нитки в метрах. Это свойство материала, а не конкретного заказа —
+        может, единице закупки место в справочнике материалов, а в строке только переопределение?
+      </span>
+    </div>
+    <div class="q">
+      <b>4. Две ткани в одной роли</b>
+      <span>
+        Если в заказе две строки <code>MAIN_FABRIC</code>, а в номенклатуре параметр один — кому отдать норму?
+        Сейчас правило не угадывает и не отдаёт никому. В проде имена совпадают точно («Кулирка» ↔ «Кулирка»),
+        так что вопрос всплывёт только на новых техкартах.
+      </span>
+    </div>
+  </section>
+
+</div>
+</body>
+</html>
