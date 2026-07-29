@@ -281,6 +281,20 @@ export interface RouteDivergenceDto {
   /** ISO. С какого дня идёт: чем дольше, тем дороже разбор. */
   firstAt: string;
   lastAt: string;
+  /**
+   * Швейные шаги маршрута этого заказа — кандидаты на «какой шаг
+   * закрывает эта работа» при выдаче наряда-допуска.
+   *
+   * Едут вместе со строкой, а не отдельным запросом: мастер решает
+   * прямо здесь, и лишний round-trip на открытие формы — это лишняя
+   * секунда у станка. Только `SEWING`: закрывать кроем или упаковкой
+   * швейный шаг бессмысленно.
+   */
+  routeSewingSteps: {
+    operationId: string;
+    operationCode: string;
+    operationName: string;
+  }[];
 }
 
 export interface RouteDivergencesDto {

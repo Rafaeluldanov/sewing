@@ -93,4 +93,25 @@ describe('наряд-допуск мастера', () => {
     // её делали прямыми SQL-патчами по боевой базе.
     expect(ctrl).toMatch(/SHOPFLOOR_MASTER/);
   });
+
+  test('UI: допуск выдаётся из строки «Расхождений», а не с отдельного экрана', () => {
+    const view = read('apps/web/app/master/divergences-view.tsx');
+    expect(view).toMatch(/PermitForm/);
+    expect(view).toMatch(/Так и должно быть — выдать допуск/);
+    // Действующие допуски видны там же: мастер должен видеть, что сам
+    // разрешил, иначе завтра выдаст второй такой же.
+    expect(view).toMatch(/PermitsSection/);
+    expect(view).toMatch(/Отозвать/);
+  });
+
+  test('UI: «какой шаг закрывает» — обязательное поле формы', () => {
+    const form = read('apps/web/app/master/permit-form.tsx');
+    expect(form).toMatch(/Какой шаг маршрута закрывает эта работа/);
+    // Кнопка неактивна, пока шаг не выбран и не указана причина.
+    expect(form).toMatch(
+      /satisfiesStepOperationId\.length > 0 &&\s*reason\.trim\(\)\.length >= 3/,
+    );
+    // Кандидаты — только швейные шаги маршрута этого заказа.
+    expect(form).toMatch(/item\.routeSewingSteps\.map/);
+  });
 });

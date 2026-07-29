@@ -1189,6 +1189,35 @@ export class ProductionBoardService {
       routeByOrder.set(r.orderId, set);
     }
 
+    // Швейные шаги маршрута — кандидаты на «какой шаг закрывает эта
+    // работа» в форме наряда-допуска. Тянем сразу, чтобы мастер не ждал
+    // отдельного запроса при открытии формы у станка.
+    const sewingSteps = await this.prisma.orderRouteStep.findMany({
+      where: {
+        orderId: { in: orderIds },
+        operation: { category: OperationCategory.SEWING },
+      },
+      select: {
+        orderId: true,
+        index: true,
+        operation: { select: { id: true, code: true, name: true } },
+      },
+      orderBy: { index: 'asc' },
+    });
+    const sewingByOrder = new Map<
+      string,
+      { operationId: string; operationCode: string; operationName: string }[]
+    >();
+    for (const s of sewingSteps) {
+      const arr = sewingByOrder.get(s.orderId) ?? [];
+      arr.push({
+        operationId: s.operation.id,
+        operationCode: s.operation.code,
+        operationName: s.operation.name,
+      });
+      sewingByOrder.set(s.orderId, arr);
+    }
+
     const groups = computeRouteDivergences(
       events.flatMap((e) =>
         e.operationId
@@ -1221,6 +1250,7 @@ export class ProductionBoardService {
       employees: g.employees,
       firstAt: g.firstAt.toISOString(),
       lastAt: g.lastAt.toISOString(),
+      routeSewingSteps: sewingByOrder.get(g.orderId) ?? [],
     }));
 
     return {

@@ -8,6 +8,9 @@
  */
 
 import type {
+  CreateRouteWorkPermitDto,
+  RevokeRouteWorkPermitDto,
+  RouteWorkPermitDto,
   FindMasterPassportByCodeResultDto,
   MasterActionResultDto,
   ReturnPassportToCellDto,
@@ -108,5 +111,37 @@ export function returnMasterPassportToRework(
   return apiFetch<QcPassportDetailDto>(
     `/master-actions/passports/${encodeURIComponent(passportId)}/return-to-rework`,
     { method: 'POST', body: { targetOperationId } },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Наряд-допуск (RouteWorkPermit)
+// ---------------------------------------------------------------------------
+
+export function createRouteWorkPermit(
+  body: CreateRouteWorkPermitDto,
+): Promise<RouteWorkPermitDto> {
+  return apiFetch<RouteWorkPermitDto>('/master-actions/route-work-permits', {
+    method: 'POST',
+    body,
+  });
+}
+
+export function listRouteWorkPermits(
+  orderId?: string,
+): Promise<RouteWorkPermitDto[]> {
+  return apiFetch<RouteWorkPermitDto[]>('/master-actions/route-work-permits', {
+    cache: 'no-store',
+    ...(orderId ? { searchParams: { orderId } } : {}),
+  });
+}
+
+export function revokeRouteWorkPermit(
+  id: string,
+  body: RevokeRouteWorkPermitDto,
+): Promise<RouteWorkPermitDto> {
+  return apiFetch<RouteWorkPermitDto>(
+    `/master-actions/route-work-permits/${encodeURIComponent(id)}/revoke`,
+    { method: 'POST', body },
   );
 }

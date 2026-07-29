@@ -9,6 +9,8 @@
  */
 
 import type {
+  CreateRouteWorkPermitDto,
+  RouteWorkPermitDto,
   ProductionBoardDrillDto,
   ProductionBoardDrillQuery,
   ProductionBoardDto,
@@ -20,6 +22,11 @@ import {
   getProductionBoardDrill,
   getRouteDivergences,
 } from '@/lib/production-board-api';
+import {
+  createRouteWorkPermit,
+  listRouteWorkPermits,
+  revokeRouteWorkPermit,
+} from '@/lib/master-actions-api';
 
 function explain(e: unknown): string {
   if (e instanceof ApiRequestError) {
@@ -68,6 +75,48 @@ export type LoadDivergencesResult =
 export async function loadRouteDivergencesAction(): Promise<LoadDivergencesResult> {
   try {
     return { ok: true, data: await getRouteDivergences() };
+  } catch (e) {
+    return { ok: false, error: explain(e) };
+  }
+}
+
+export type PermitResult =
+  | { ok: true; data: RouteWorkPermitDto }
+  | { ok: false; error: string };
+
+/**
+ * Выдать наряд-допуск прямо из строки «Расхождений». Строка — это ровно
+ * пара «заказ × операция», то есть готовый допуск; мастеру остаётся
+ * указать, какой шаг маршрута эта работа закрывает.
+ */
+export async function issueRouteWorkPermitAction(
+  dto: CreateRouteWorkPermitDto,
+): Promise<PermitResult> {
+  try {
+    return { ok: true, data: await createRouteWorkPermit(dto) };
+  } catch (e) {
+    return { ok: false, error: explain(e) };
+  }
+}
+
+export type PermitListResult =
+  | { ok: true; items: RouteWorkPermitDto[] }
+  | { ok: false; error: string };
+
+export async function loadRouteWorkPermitsAction(): Promise<PermitListResult> {
+  try {
+    return { ok: true, items: await listRouteWorkPermits() };
+  } catch (e) {
+    return { ok: false, error: explain(e) };
+  }
+}
+
+export async function revokeRouteWorkPermitAction(
+  id: string,
+  reason: string,
+): Promise<PermitResult> {
+  try {
+    return { ok: true, data: await revokeRouteWorkPermit(id, { reason }) };
   } catch (e) {
     return { ok: false, error: explain(e) };
   }

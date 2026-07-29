@@ -20385,3 +20385,65 @@ body:has(.admin-layout) .app-header { display: none !important; }
   font-size: 0.85rem;
   color: var(--muted);
 }
+
+
+/* Наряд-допуск: форма выдачи в строке расхождения и список действующих.
+   Живёт внутри карточки расхождения, поэтому визуально «вложен» —
+   отступ слева и своя рамка, чтобы не путался со строкой-родителем. */
+.divergence-row__actions { display: flex; gap: 0.5rem; margin-top: 0.15rem; }
+
+.permit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  margin-top: 0.4rem;
+  padding: 0.75rem;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface-muted, #fafafa);
+}
+.permit-form__row { display: flex; flex-direction: column; gap: 0.25rem; }
+.permit-form__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(11rem, 1fr));
+  gap: 0.6rem;
+}
+.permit-form__label { font-size: 0.85rem; font-weight: 600; }
+/* Элемент указан явно: базовое правило полей в globals.css — селектор
+   по атрибуту (0,1,1), и одиночный класс ему проигрывает. */
+input.permit-form__control,
+select.permit-form__control {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  font: inherit;
+}
+.permit-form__hint { margin: 0; font-size: 0.8rem; color: var(--muted); line-height: 1.3; }
+.permit-form__actions { display: flex; gap: 0.5rem; }
+
+.divergences__permits { margin-top: 1rem; }
+.divergences__permits-title { margin: 0 0 0.5rem; font-size: var(--title-5); }
+/* Допуск — разрешённое состояние, поэтому спокойный зелёный, а не
+   красный, как у строки расхождения: мастер не должен путать «надо
+   разобраться» и «уже разобрались». */
+.permit-row {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border);
+  border-left: 4px solid #2f8132;
+  border-radius: 8px;
+  background: var(--surface);
+}
+.permit-row__until { font-size: 0.85rem; font-weight: 600; color: #2f5d33; white-space: nowrap; }
+
+.divergences__toast {
+  margin: 0;
+  padding: 0.5rem 0.6rem;
+  border-radius: 8px;
+  border: 1px solid #a8cfa8;
+  background: #f1f8f1;
+  color: #2f5d33;
+}

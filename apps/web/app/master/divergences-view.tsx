@@ -17,16 +17,30 @@
  * На истории прода этот же запрос, запущенный утром 02.07, показал бы
  * одну строку — «O-20260530-0001 · ОКАНТОВКА · 21 паспорт · со вчера».
  *
- * Сознательно НЕ сделано: кнопок «так и должно быть» / «делают не то».
- * Решение по расхождению принимает владелец маршрутов (роль
- * `SHOP_MANAGER`), а он в системе пока не назначен — кнопка без
- * адресата превратилась бы в «прочитано» и вернула бы тот же эффект
- * привыкания, из-за которого не сработало жёлтое предупреждение швее.
+ * Решение принимается ЗДЕСЬ же. Строка расхождения — это готовая пара
+ * «заказ × операция», то есть тело наряда-допуска; мастеру остаётся
+ * ответить на единственный вопрос, который система за него решить не
+ * может: какой шаг маршрута эта работа закрывает. Отправлять его за
+ * этим на отдельный экран — значит гарантировать, что он туда не пойдёт
+ * и вместо допуска попросит «выключить эту вашу проверку».
+ *
+ * Кнопки «делают не то» сознательно нет: остановка работы — это разговор
+ * со швеёй у станка, а не нажатие в интерфейсе. Система тут может только
+ * показать факт, что она и делает.
  */
 
 import { useCallback, useEffect, useState } from 'react';
-import type { RouteDivergenceDto, RouteDivergencesDto } from '@sewing/shared';
-import { loadRouteDivergencesAction } from './production-board-actions';
+import type {
+  RouteDivergenceDto,
+  RouteDivergencesDto,
+  RouteWorkPermitDto,
+} from '@sewing/shared';
+import {
+  loadRouteDivergencesAction,
+  loadRouteWorkPermitsAction,
+  revokeRouteWorkPermitAction,
+} from './production-board-actions';
+import { PermitForm } from './permit-form';
 
 /** `дд.мм` в московской зоне — иначе RSC/клиент разъедутся при гидрации. */
 function formatDay(iso: string): string {
@@ -43,7 +57,14 @@ function daysSince(iso: string): number {
   return Math.max(0, Math.floor(ms / (24 * 60 * 60 * 1000)));
 }
 
-function DivergenceRow({ item }: { item: RouteDivergenceDto }) {
+function DivergenceRow({
+  item,
+  onPermitIssued,
+}: {
+  item: RouteDivergenceDto;
+  onPermitIssued: (message: string) => void;
+}) {
+  const [formOpen, setFormOpen] = useState(false);
   const age = daysSince(item.firstAt);
   return (
     <li className="divergence-row">
@@ -65,26 +86,139 @@ function DivergenceRow({ item }: { item: RouteDivergenceDto }) {
         <span>с {formatDay(item.firstAt)}</span>
         {item.employees.length > 0 && <span>{item.employees.join(', ')}</span>}
       </div>
+      {/* Решение мастера прямо здесь: строка расхождения — это уже
+          готовая пара «заказ × операция», то есть тело допуска. */}
+      {!formOpen ? (
+        <div className="divergence-row__actions">
+          <button
+            type="button"
+            className="btn btn-secondary btn-sm"
+            onClick={() => setFormOpen(true)}
+            disabled={item.routeSewingSteps.length === 0}
+            title={
+              item.routeSewingSteps.length === 0
+                ? 'У заказа нет швейных шагов маршрута — закрывать нечего'
+                : undefined
+            }
+          >
+            Так и должно быть — выдать допуск
+          </button>
+        </div>
+      ) : (
+        <PermitForm
+          item={item}
+          onCancel={() => setFormOpen(false)}
+          onDone={(msg) => {
+            setFormOpen(false);
+            onPermitIssued(msg);
+          }}
+        />
+      )}
     </li>
+  );
+}
+
+/** Действующие допуски: мастер должен видеть, что сам разрешил. */
+function PermitsSection({
+  permits,
+  onChanged,
+}: {
+  permits: RouteWorkPermitDto[];
+  onChanged: (message: string) => void;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const active = permits.filter((p) => p.active);
+  if (active.length === 0) return null;
+
+  async function revoke(p: RouteWorkPermitDto) {
+    setBusyId(p.id);
+    const res = await revokeRouteWorkPermitAction(
+      p.id,
+      'Отозван мастером из вкладки «Расхождения»',
+    );
+    setBusyId(null);
+    if (res.ok) onChanged('Допуск отозван.');
+  }
+
+  return (
+    <div className="divergences__permits">
+      <h3 className="divergences__permits-title">Действующие допуски</h3>
+      <ul className="divergences__list">
+        {active.map((p) => (
+          <li key={p.id} className="permit-row">
+            <div className="divergence-row__head">
+              <span className="divergence-row__order">{p.orderNumber}</span>
+              <span className="permit-row__until">
+                до {formatDay(p.expiresAt)}
+              </span>
+            </div>
+            <div className="divergence-row__op">
+              <strong>
+                {p.operationCode} {p.operationName}
+              </strong>{' '}
+              закрывает{' '}
+              <strong>
+                {p.satisfiesStepOperationCode} {p.satisfiesStepOperationName}
+              </strong>
+            </div>
+            <div className="divergence-row__meta">
+              <span>{p.reason}</span>
+              <span>
+                {p.qtyLimit != null
+                  ? `${p.qtyUsed} из ${p.qtyLimit} шт`
+                  : `${p.qtyUsed} шт, без лимита`}
+              </span>
+              <span>выдал: {p.createdByName}</span>
+            </div>
+            <div className="divergence-row__actions">
+              <button
+                type="button"
+                className="btn btn-secondary btn-sm"
+                disabled={busyId === p.id}
+                onClick={() => revoke(p)}
+              >
+                {busyId === p.id ? 'Отзываем…' : 'Отозвать'}
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 
 export function DivergencesView() {
   const [data, setData] = useState<RouteDivergencesDto | null>(null);
+  const [permits, setPermits] = useState<RouteWorkPermitDto[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [toast, setToast] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
-    const res = await loadRouteDivergencesAction();
+    const [res, permitsRes] = await Promise.all([
+      loadRouteDivergencesAction(),
+      loadRouteWorkPermitsAction(),
+    ]);
     if (res.ok) {
       setData(res.data);
       setError(null);
     } else {
       setError(res.error);
     }
+    // Допуски — вспомогательный блок: их недоступность не должна
+    // прятать главное, ради чего мастер открыл вкладку.
+    if (permitsRes.ok) setPermits(permitsRes.items);
     setLoading(false);
   }, []);
+
+  const afterChange = useCallback(
+    (message: string) => {
+      setToast(message);
+      void load();
+    },
+    [load],
+  );
 
   useEffect(() => {
     void load();
@@ -118,6 +252,12 @@ export function DivergencesView() {
         </button>
       </div>
 
+      {toast && (
+        <p className="divergences__toast" role="status" aria-live="polite">
+          {toast}
+        </p>
+      )}
+
       {items.length === 0 ? (
         <div className="divergences__empty">
           <strong>Расхождений нет.</strong>
@@ -138,11 +278,14 @@ export function DivergencesView() {
               <DivergenceRow
                 key={`${it.orderId}:${it.operationId}`}
                 item={it}
+                onPermitIssued={afterChange}
               />
             ))}
           </ul>
         </>
       )}
+
+      <PermitsSection permits={permits} onChanged={afterChange} />
     </div>
   );
 }
