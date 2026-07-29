@@ -17,6 +17,7 @@ import type {
   ReturnToReworkDto,
 } from '@sewing/shared/qc';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
 import { AuditService } from '../audit/audit.service.js';
 import {
   DefectExceedsRemainingException,
@@ -835,9 +836,17 @@ export class QcService {
         select: { satisfiesOpId: true, substituteOpId: true },
       }),
     ]);
+    // Наряд-допуск мастера засчитывается наравне со справочными
+    // правилами замены: работа, разрешённая допуском, обязана закрывать
+    // замещаемый шаг, иначе AND-гейт перед ОТК всё равно уронит партию —
+    // ровно инцидент 28.07.2026, только с разрешением на руках.
+    const permitSubs = await loadActivePermitSubstitutions(
+      this.prisma,
+      orderId,
+    );
     const finishedSet = new Set(finished.map((e) => e.operationId));
     const substitutesFor = new Map<string, string[]>();
-    for (const s of substitutes) {
+    for (const s of [...substitutes, ...permitSubs]) {
       const arr = substitutesFor.get(s.satisfiesOpId) ?? [];
       arr.push(s.substituteOpId);
       substitutesFor.set(s.satisfiesOpId, arr);

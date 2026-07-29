@@ -2101,6 +2101,31 @@ export class MasterTargetEmployeeInactiveException extends BusinessException {
 }
 
 /**
+ * Наряд-допуск выдаётся на операцию, которая УЖЕ есть в маршруте
+ * заказа. Такой допуск бессмыслен (работа и так разрешена) и почти
+ * наверняка означает, что мастер промахнулся строкой в списке.
+ */
+export class RouteWorkPermitOperationAlreadyInRouteException extends BusinessException {
+  constructor() {
+    super(
+      'ROUTE_WORK_PERMIT_OPERATION_ALREADY_IN_ROUTE',
+      'Эта операция уже есть в маршруте заказа — допуск не нужен. Проверьте, ту ли операцию выбрали.',
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+export class RouteWorkPermitNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'ROUTE_WORK_PERMIT_NOT_FOUND',
+      'Наряд-допуск не найден.',
+      HttpStatus.NOT_FOUND,
+    );
+  }
+}
+
+/**
  * Швея берёт/сканирует/закрывает паспорт на операции, которой НЕТ в
  * маршруте его заказа (и которая не является заместителем ни одного
  * шага). Бросается из `PassportsService` при

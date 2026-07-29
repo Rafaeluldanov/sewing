@@ -34,6 +34,7 @@ import {
 import type { BatchCompleteOperationsResultDto } from '@sewing/shared/shifts';
 import { normalizeColor } from '@sewing/shared/colors';
 import { PrismaService } from '../../prisma/prisma.service.js';
+import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
 import {
   CellInactiveException,
   CellNotFoundException,
@@ -1533,7 +1534,21 @@ export class PassportsService {
         where: { substituteOpId: targetOperationId },
         select: { satisfiesOpId: true },
       });
-      const satisfies = new Set(subs.map((s) => s.satisfiesOpId));
+      // Наряд-допуск мастера — это правило замены, ограниченное этим
+      // заказом и сроком (см. `route-work-permits.ts`). Подмешиваем его
+      // к справочным правилам, иначе разрешённая работа всё равно
+      // считалась бы «вне маршрута» и паспорт не встал бы на замещаемый
+      // шаг — допуск был бы бумажкой.
+      const permitSubs = await loadActivePermitSubstitutions(
+        this.prisma,
+        passport.orderId,
+      );
+      const satisfies = new Set([
+        ...subs.map((s) => s.satisfiesOpId),
+        ...permitSubs
+          .filter((p) => p.substituteOpId === targetOperationId)
+          .map((p) => p.satisfiesOpId),
+      ]);
       const merged = steps.filter((s) => satisfies.has(s.operationId));
       // ВОТ ОНА — операция не в маршруте и не заместитель. Раньше здесь
       // был `return none`, и проверка отключалась целиком. Теперь
@@ -1625,9 +1640,14 @@ export class PassportsService {
           select: { satisfiesOpId: true, substituteOpId: true },
         }),
       ]);
+      // Те же допуски засчитываются и в AND-гейте параллельной группы:
+      // работа, сделанная под допуском, обязана закрывать замещаемый шаг.
+      const permitSubsForGate = (
+        await loadActivePermitSubstitutions(this.prisma, passport.orderId)
+      ).filter((p) => opsToCheck.includes(p.satisfiesOpId));
       const finishedSet = new Set(finished.map((e) => e.operationId));
       const substitutesFor = new Map<string, string[]>();
-      for (const s of substitutes) {
+      for (const s of [...substitutes, ...permitSubsForGate]) {
         const arr = substitutesFor.get(s.satisfiesOpId) ?? [];
         arr.push(s.substituteOpId);
         substitutesFor.set(s.satisfiesOpId, arr);

@@ -791,6 +791,8 @@ model Operation {
   @@index([sortOrder])
   @@index([category])
   @@index([pricingMode])
+  permitsAsOperation RouteWorkPermit[] @relation("PermitOperation")
+  permitsAsSatisfies RouteWorkPermit[] @relation("PermitSatisfies")
 }
 
 /// Substitute-правило для AND-гейта параллельной группы маршрута.
@@ -1145,6 +1147,8 @@ model Employee {
   /// и payroll-агрегаторе.
   @@index([companyDivisionId])
   @@index([salaryCashFlowItemId])
+  routeWorkPermitsCreated RouteWorkPermit[] @relation("PermitCreatedBy")
+  routeWorkPermitsRevoked RouteWorkPermit[] @relation("PermitRevokedBy")
 }
 
 /// Web Push-подписка одного браузера/устройства сотрудника
@@ -1831,6 +1835,7 @@ model Order {
   @@index([materialsAndHardwareCostPolicy])
   @@index([productCreationMode])
   @@index([needsArchivedAt])
+  routeWorkPermits RouteWorkPermit[]
 }
 
 /// Карточка клиента (управленческий справочник, см. `docs/domain.md
@@ -6102,6 +6107,75 @@ model OrderMaterialArrivalOverride {
 // `entityType = COMPANY_SETTINGS`, `entityId = "default"`.
 // ---------------------------------------------------------------------------
 
+
+/// Наряд-допуск мастера: разрешение делать по конкретному заказу
+/// операцию, которой нет в его маршруте.
+///
+/// Зачем. Гейт `offRouteWorkPolicy = BLOCK` отказывает в работе мимо
+/// маршрута — и это правильно, но без легального обхода первая же
+/// нештатная ситуация (сломался станок, срочный перекрой, цех перешёл
+/// на другую технологию посреди партии) означает простой рабочего
+/// места. Простой = требование выключить гейт, а выключенный гейт
+/// второй раз никто не включит. Допуск даёт мастеру закрыть вопрос за
+/// 30 секунд у станка, оставив след, вместо тикета разработчику на
+/// неделю.
+///
+/// ⚠️ `satisfiesStepOperationId` ОБЯЗАТЕЛЕН, и это главное поле модели.
+/// Допуск без указания «какой шаг маршрута закрывает эта работа» —
+/// это ровно инцидент 28.07.2026, только с бумажкой: швея бы дошила,
+/// а паспорт всё равно не закрыл бы шаг «03 КИПЕРКА», и AND-гейт перед
+/// ОТК всё равно бы упал — просто на неделю позже и с формальным
+/// разрешением на руках. Поэтому допуск читается ВЕЗДЕ, где читается
+/// `OperationSubstitution`: в маршрутном гейте, в гейте ОТК и в расчёте
+/// расхождений.
+///
+/// Почему отдельная таблица, а не `orderId` в `OperationSubstitution`.
+/// Та таблица — СПРАВОЧНИК: её строки структурно читают адаптивный
+/// режим сплит-распошива (`route-mode.ts`) и сворачивание группы
+/// (`findCollapsibleGroup`), и появление там временных строк с
+/// областью действия сломало бы им логику. Допуск же по природе —
+/// разовый документ со сроком, автором и отзывом.
+model RouteWorkPermit {
+  id String @id @default(cuid())
+
+  /// Заказ, на который выдан допуск. Область действия всегда один
+  /// заказ: «разрешить вообще везде» — это правило замены в справочнике,
+  /// а не допуск.
+  orderId String
+  order   Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+
+  /// Операция, которую разрешено делать (её нет в маршруте заказа).
+  operationId String
+  operation   Operation @relation("PermitOperation", fields: [operationId], references: [id], onDelete: Restrict)
+
+  /// Какой ШАГ МАРШРУТА засчитывает эта работа. Обязателен — см. выше.
+  satisfiesStepOperationId String
+  satisfiesStepOperation   Operation @relation("PermitSatisfies", fields: [satisfiesStepOperationId], references: [id], onDelete: Restrict)
+
+  /// Причина — свободный текст, обязательна. Разбор инцидента через
+  /// месяц упирается именно в неё.
+  reason String
+
+  /// Лимит штук: `null` — без лимита. Считается по `Passport.qtyGood`
+  /// закрытых под допуском паспортов.
+  qtyLimit Int?
+
+  /// Срок действия. Допуск, доживший до второй смены, закрывается
+  /// правкой маршрута, а не продлением.
+  expiresAt DateTime
+
+  createdById String
+  createdBy   Employee @relation("PermitCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  createdAt   DateTime @default(now())
+
+  /// Отзыв: мастер закрыл допуск раньше срока.
+  revokedAt   DateTime?
+  revokedById String?
+  revokedBy   Employee? @relation("PermitRevokedBy", fields: [revokedById], references: [id], onDelete: SetNull)
+
+  @@index([orderId, operationId])
+  @@index([expiresAt])
+}
 
 /// Строгость гейта «работа мимо маршрута» — см.
 /// `CompanySettings.offRouteWorkPolicy`.

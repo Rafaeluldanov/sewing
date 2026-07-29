@@ -21,6 +21,7 @@ import {
 import { OrderStatus } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { computeRouteDivergences } from './route-divergence.js';
+import { loadActivePermitSubstitutions } from '../routes/route-work-permits.js';
 
 /**
  * Глубина окна вкладки «Расхождения». Совпадает с окном проверки
@@ -1171,6 +1172,16 @@ export class ProductionBoardService {
         select: { satisfiesOpId: true, substituteOpId: true },
       }),
     ]);
+    // Работа под действующим нарядом-допуском — не расхождение: мастер
+    // её разрешил осознанно и указал, какой шаг маршрута она закрывает.
+    // Если её сюда не подмешать, экран мастера будет каждое утро
+    // показывать то, что он сам вчера и разрешил, — и к нему перестанут
+    // относиться серьёзно.
+    const permitSubs = (
+      await Promise.all(
+        orderIds.map((id) => loadActivePermitSubstitutions(this.prisma, id)),
+      )
+    ).flat();
     const routeByOrder = new Map<string, Set<string>>();
     for (const r of routeRows) {
       const set = routeByOrder.get(r.orderId) ?? new Set<string>();
@@ -1197,7 +1208,7 @@ export class ProductionBoardService {
           : [],
       ),
       routeByOrder,
-      substitutions,
+      [...substitutions, ...permitSubs],
     );
 
     const items: RouteDivergenceDto[] = groups.map((g) => ({

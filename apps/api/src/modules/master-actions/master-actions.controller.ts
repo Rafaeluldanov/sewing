@@ -1,5 +1,7 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import {
+  CreateRouteWorkPermitSchema,
+  RevokeRouteWorkPermitSchema,
   FindMasterPassportByCodeSchema,
   ReturnPassportToCellSchema,
   SetRouteStepSchema,
@@ -12,6 +14,9 @@ import {
   type SetRouteStepDto,
   type TransferPassportDto,
   type UnassignPassportDto,
+  type CreateRouteWorkPermitDto,
+  type RevokeRouteWorkPermitDto,
+  type RouteWorkPermitDto,
 } from '@sewing/shared';
 import {
   CreatePassportDefectSchema,
@@ -193,5 +198,48 @@ export class MasterActionsController {
     dto: ReturnToReworkDto,
   ): Promise<QcPassportDetailDto> {
     return this.qc.returnToRework(id, dto, user.employeeId);
+  }
+
+  // -------------------------------------------------------------------------
+  // Наряд-допуск: легальный обход гейта «работа мимо маршрута»
+  // -------------------------------------------------------------------------
+
+  /**
+   * Выдать допуск на работу вне маршрута по конкретному заказу.
+   *
+   * Ручка живёт здесь, а не в диагностике или справочниках, потому что
+   * это ДЕЙСТВИЕ МАСТЕРА у станка: разблокировка цеха — его право, а не
+   * разработчика. За 3 месяца до этого её приходилось делать прямыми
+   * SQL-патчами по боевой базе (20 раз).
+   */
+  @Post('route-work-permits')
+  createRouteWorkPermit(
+    @CurrentUser() actor: AuthPrincipal,
+    @Body(new ZodValidationPipe(CreateRouteWorkPermitSchema))
+    dto: CreateRouteWorkPermitDto,
+  ): Promise<RouteWorkPermitDto> {
+    return this.service.createRouteWorkPermit(actor, dto);
+  }
+
+  /** Допуски заказа (или последние выданные, если заказ не указан). */
+  @Get('route-work-permits')
+  listRouteWorkPermits(
+    @Query('orderId') orderId?: string,
+  ): Promise<RouteWorkPermitDto[]> {
+    return this.service.listRouteWorkPermits(orderId);
+  }
+
+  /**
+   * Отозвать допуск раньше срока. Идемпотентно: повторный отзыв не
+   * ошибка — мастер не должен гадать, нажалась ли кнопка.
+   */
+  @Post('route-work-permits/:id/revoke')
+  revokeRouteWorkPermit(
+    @CurrentUser() actor: AuthPrincipal,
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(RevokeRouteWorkPermitSchema))
+    dto: RevokeRouteWorkPermitDto,
+  ): Promise<RouteWorkPermitDto> {
+    return this.service.revokeRouteWorkPermit(actor, id, dto);
   }
 }

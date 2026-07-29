@@ -19,6 +19,9 @@ import {
   type SetRouteStepDto,
   type TransferPassportDto,
   type UnassignPassportDto,
+  type CreateRouteWorkPermitDto,
+  type RevokeRouteWorkPermitDto,
+  type RouteWorkPermitDto,
 } from '@sewing/shared';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
@@ -33,6 +36,8 @@ import {
   MasterTargetEmployeeInactiveException,
   MasterTargetEmployeeNotFoundException,
   MasterTargetOperationAlreadyFinishedException,
+  RouteWorkPermitNotFoundException,
+  RouteWorkPermitOperationAlreadyInRouteException,
   PassportTerminalForMasterException,
 } from '../../common/errors.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
@@ -623,6 +628,204 @@ export class MasterActionsService {
   // 5. FIND BY CODE — поиск паспорта для кнопки «Сканировать паспорт»
   // -------------------------------------------------------------------------
 
+
+  // -------------------------------------------------------------------------
+  // НАРЯД-ДОПУСК (RouteWorkPermit)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Выдать наряд-допуск: разрешить по заказу операцию, которой нет в
+   * его маршруте.
+   *
+   * Легальный обход гейта `offRouteWorkPolicy = BLOCK`. Без него первая
+   * же нештатная ситуация (сломался станок, срочный перекрой, цех
+   * перешёл на другую технологию посреди партии) означает простой
+   * рабочего места — а простой заканчивается требованием выключить
+   * гейт, и второй раз его никто не включит.
+   *
+   * Три проверки, которые делают допуск осмысленным:
+   *   1. `satisfiesStepOperationId` обязан РЕАЛЬНО стоять в снимке
+   *      маршрута заказа. Иначе допуск ничего не закрывает: швея
+   *      дошьёт, а AND-гейт перед ОТК всё равно уронит партию — ровно
+   *      инцидент 28.07.2026, только с разрешением на руках.
+   *   2. Разрешаемой операции НЕ должно быть в маршруте — иначе допуск
+   *      не нужен и, скорее всего, мастер ошибся строкой.
+   *   3. Заказ должен существовать и быть живым.
+   */
+  async createRouteWorkPermit(
+    actor: AuthPrincipal,
+    dto: CreateRouteWorkPermitDto,
+  ): Promise<RouteWorkPermitDto> {
+    const order = await this.prisma.order.findUnique({
+      where: { id: dto.orderId },
+      select: { id: true, number: true, status: true },
+    });
+    if (!order) throw new MasterOrderHasNoRouteSnapshotException();
+
+    const steps = await this.prisma.orderRouteStep.findMany({
+      where: { orderId: dto.orderId },
+      select: { operationId: true },
+    });
+    if (steps.length === 0) {
+      throw new MasterOrderHasNoRouteSnapshotException();
+    }
+    const routeOps = new Set(steps.map((s) => s.operationId));
+    if (!routeOps.has(dto.satisfiesStepOperationId)) {
+      // Закрываемый шаг обязан быть в маршруте — см. п. 1.
+      throw new MasterRouteStepNotInSnapshotException();
+    }
+    if (routeOps.has(dto.operationId)) {
+      throw new RouteWorkPermitOperationAlreadyInRouteException();
+    }
+
+    const expiresAt = new Date(Date.now() + dto.hours * 60 * 60 * 1000);
+    const created = await this.prisma.$transaction(async (tx) => {
+      const row = await tx.routeWorkPermit.create({
+        data: {
+          orderId: dto.orderId,
+          operationId: dto.operationId,
+          satisfiesStepOperationId: dto.satisfiesStepOperationId,
+          reason: dto.reason,
+          qtyLimit: dto.qtyLimit ?? null,
+          expiresAt,
+          createdById: actor.employeeId,
+        },
+        include: permitInclude,
+      });
+      await this.audit.log(
+        {
+          event: 'MASTER_ROUTE_WORK_PERMIT_ISSUED',
+          entityType: 'ORDER',
+          entityId: dto.orderId,
+          employeeId: actor.employeeId,
+          payload: {
+            permitId: row.id,
+            operationId: dto.operationId,
+            satisfiesStepOperationId: dto.satisfiesStepOperationId,
+            reason: dto.reason,
+            qtyLimit: dto.qtyLimit ?? null,
+            expiresAt: expiresAt.toISOString(),
+          },
+        },
+        tx,
+      );
+      return row;
+    });
+    this.logger.log(
+      `event=master.permit.issued permitId=${created.id} orderId=${dto.orderId} operationId=${dto.operationId} satisfies=${dto.satisfiesStepOperationId} actor=${actor.employeeId}`,
+    );
+    return this.toPermitDto(created, 0);
+  }
+
+  /** Отозвать допуск раньше срока. */
+  async revokeRouteWorkPermit(
+    actor: AuthPrincipal,
+    permitId: string,
+    dto: RevokeRouteWorkPermitDto,
+  ): Promise<RouteWorkPermitDto> {
+    const existing = await this.prisma.routeWorkPermit.findUnique({
+      where: { id: permitId },
+      select: { id: true, revokedAt: true, orderId: true },
+    });
+    if (!existing) throw new RouteWorkPermitNotFoundException();
+    if (existing.revokedAt) {
+      // Идемпотентно: повторный отзыв не ошибка, просто ничего не меняем.
+      return this.getPermitDto(permitId);
+    }
+    await this.prisma.$transaction(async (tx) => {
+      await tx.routeWorkPermit.update({
+        where: { id: permitId },
+        data: { revokedAt: new Date(), revokedById: actor.employeeId },
+      });
+      await this.audit.log(
+        {
+          event: 'MASTER_ROUTE_WORK_PERMIT_REVOKED',
+          entityType: 'ORDER',
+          entityId: existing.orderId,
+          employeeId: actor.employeeId,
+          payload: { permitId, reason: dto.reason },
+        },
+        tx,
+      );
+    });
+    this.logger.log(
+      `event=master.permit.revoked permitId=${permitId} actor=${actor.employeeId}`,
+    );
+    return this.getPermitDto(permitId);
+  }
+
+  /** Допуски заказа (или все действующие, если заказ не указан). */
+  async listRouteWorkPermits(orderId?: string): Promise<RouteWorkPermitDto[]> {
+    const rows = await this.prisma.routeWorkPermit.findMany({
+      where: orderId ? { orderId } : {},
+      include: permitInclude,
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+    return Promise.all(
+      rows.map(async (r) => this.toPermitDto(r, await this.permitUsedQty(r))),
+    );
+  }
+
+  private async getPermitDto(permitId: string): Promise<RouteWorkPermitDto> {
+    const row = await this.prisma.routeWorkPermit.findUnique({
+      where: { id: permitId },
+      include: permitInclude,
+    });
+    if (!row) throw new RouteWorkPermitNotFoundException();
+    return this.toPermitDto(row, await this.permitUsedQty(row));
+  }
+
+  /**
+   * Сколько изделий уже закрыто под допуском — по фактическим
+   * `OPERATION_FINISHED` на разрешённой операции ПОСЛЕ его выдачи.
+   * Без этого «лимит 50 штук» был бы декорацией.
+   */
+  private async permitUsedQty(row: {
+    orderId: string;
+    operationId: string;
+    createdAt: Date;
+  }): Promise<number> {
+    const events = await this.prisma.passportEvent.findMany({
+      where: {
+        type: PassportEventType.OPERATION_FINISHED,
+        operationId: row.operationId,
+        createdAt: { gte: row.createdAt },
+        passport: { orderId: row.orderId },
+      },
+      select: { passport: { select: { qtyGood: true } } },
+    });
+    return events.reduce((s, e) => s + (e.passport?.qtyGood ?? 0), 0);
+  }
+
+  private toPermitDto(
+    row: Prisma.RouteWorkPermitGetPayload<{ include: typeof permitInclude }>,
+    qtyUsed: number,
+  ): RouteWorkPermitDto {
+    const exhausted = row.qtyLimit != null && qtyUsed >= row.qtyLimit;
+    return {
+      id: row.id,
+      orderId: row.orderId,
+      orderNumber: row.order.number,
+      operationId: row.operationId,
+      operationCode: row.operation.code,
+      operationName: row.operation.name,
+      satisfiesStepOperationId: row.satisfiesStepOperationId,
+      satisfiesStepOperationCode: row.satisfiesStepOperation.code,
+      satisfiesStepOperationName: row.satisfiesStepOperation.name,
+      reason: row.reason,
+      qtyLimit: row.qtyLimit,
+      qtyUsed,
+      expiresAt: row.expiresAt.toISOString(),
+      createdAt: row.createdAt.toISOString(),
+      createdByName: row.createdBy.fullName,
+      revokedAt: row.revokedAt ? row.revokedAt.toISOString() : null,
+      revokedByName: row.revokedBy?.fullName ?? null,
+      active:
+        row.revokedAt === null && row.expiresAt > new Date() && !exhausted,
+    };
+  }
+
   /**
    * Найти паспорт по произвольному коду (`passport:<id>`, `P-…`, голый
    * id) и вернуть его в shape, совместимом с
@@ -888,3 +1091,12 @@ const passportInclude = {
 type PassportRow = Prisma.PassportGetPayload<{
   include: typeof passportInclude;
 }>;
+
+/** Полный include для DTO допуска. */
+const permitInclude = {
+  order: { select: { number: true } },
+  operation: { select: { code: true, name: true } },
+  satisfiesStepOperation: { select: { code: true, name: true } },
+  createdBy: { select: { fullName: true } },
+  revokedBy: { select: { fullName: true } },
+} as const;

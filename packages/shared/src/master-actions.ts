@@ -313,3 +313,67 @@ export interface FindMasterPassportByCodeResultDto {
   passport: MasterCallPassportDto;
   ownerFullName: string | null;
 }
+
+// ---------------------------------------------------------------------------
+// Наряд-допуск мастера (`RouteWorkPermit`)
+// ---------------------------------------------------------------------------
+
+/**
+ * Выдача наряда-допуска: разрешить по заказу операцию, которой нет в
+ * его маршруте.
+ *
+ * `satisfiesStepOperationId` ОБЯЗАТЕЛЕН — это главное поле. Допуск без
+ * указания «какой шаг маршрута закрывает эта работа» = инцидент
+ * 28.07.2026 с бумажкой: швея дошьёт, а паспорт всё равно не закроет
+ * шаг, и AND-гейт перед ОТК всё равно уронит партию.
+ */
+export const CreateRouteWorkPermitSchema = z.object({
+  orderId: z.string().min(1),
+  /** Операция, которую разрешаем (её нет в маршруте заказа). */
+  operationId: z.string().min(1),
+  /** Шаг маршрута, который эта работа засчитывает. */
+  satisfiesStepOperationId: z.string().min(1),
+  /** Причина — обязательна: разбор через месяц упирается именно в неё. */
+  reason: z.string().min(3).max(500),
+  /** Лимит изделий; `null`/отсутствие — без лимита. */
+  qtyLimit: z.number().int().positive().nullable().optional(),
+  /**
+   * Срок действия в часах. По умолчанию 12 — одна смена: допуск,
+   * доживший до второй смены, закрывается правкой маршрута, а не
+   * продлением.
+   */
+  hours: z.number().int().min(1).max(72).default(12),
+});
+export type CreateRouteWorkPermitDto = z.infer<
+  typeof CreateRouteWorkPermitSchema
+>;
+
+export const RevokeRouteWorkPermitSchema = z.object({
+  reason: z.string().min(3).max(500),
+});
+export type RevokeRouteWorkPermitDto = z.infer<
+  typeof RevokeRouteWorkPermitSchema
+>;
+
+export interface RouteWorkPermitDto {
+  id: string;
+  orderId: string;
+  orderNumber: string;
+  operationId: string;
+  operationCode: string;
+  operationName: string;
+  satisfiesStepOperationId: string;
+  satisfiesStepOperationCode: string;
+  satisfiesStepOperationName: string;
+  reason: string;
+  qtyLimit: number | null;
+  /** Сколько изделий уже закрыто под этим допуском. */
+  qtyUsed: number;
+  expiresAt: string;
+  createdAt: string;
+  createdByName: string;
+  revokedAt: string | null;
+  revokedByName: string | null;
+  /** Действует прямо сейчас: не отозван, не просрочен, не исчерпан. */
+  active: boolean;
+}
