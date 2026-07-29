@@ -48,3 +48,13 @@ export interface UpdateCompanyDivisionOverridesState {
 
 export const initialUpdateCompanyDivisionOverridesState: UpdateCompanyDivisionOverridesState =
   {};
+
+/** State секции «Работа мимо маршрута» (строгость гейта). */
+export interface UpdateOffRoutePolicyState {
+  ok?: boolean;
+  successMessage?: string;
+  error?: string;
+  errorRequestId?: string;
+}
+
+export const initialUpdateOffRoutePolicyState: UpdateOffRoutePolicyState = {};

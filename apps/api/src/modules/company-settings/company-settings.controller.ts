@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Patch } from '@nestjs/common';
 import {
   UpdateCompanySettingsSchema,
+  type OffRouteReadinessDto,
   type UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
 import { ZodValidationPipe } from '../../common/zod-validation.pipe.js';
@@ -12,9 +13,9 @@ import { CompanySettingsService } from './company-settings.service.js';
  * Контроллер блока «Настройки компании» (singleton-реквизиты
  * организации).
  *
- *   GET   /api/company-settings   — текущие реквизиты (idemp-create)
- *   PATCH /api/company-settings   — частичное обновление (любое
- *                                    подмножество полей)
+ *   GET   /api/company-settings                     — текущие реквизиты
+ *   GET   /api/company-settings/off-route-readiness — готовность к BLOCK
+ *   PATCH /api/company-settings                     — частичное обновление
  *
  * RBAC — `SHOP_MANAGER` / `ADMIN`. Ровно как у других управленческих
  * справочников; рабочим ролям эта информация не нужна.
@@ -27,6 +28,18 @@ export class CompanySettingsController {
   @Get()
   get() {
     return this.settings.get();
+  }
+
+  /**
+   * Готовность к включению `BLOCK` — счётчик срабатываний гейта за
+   * неделю и список блокеров. Отдельная ручка, а не поле в
+   * `GET /company-settings`: это read-модель поверх `AuditLog` и
+   * шаблонов маршрутов, и тянуть её на каждом открытии настроек
+   * (там же реквизиты, банк, подразделения) незачем.
+   */
+  @Get('off-route-readiness')
+  offRouteReadiness(): Promise<OffRouteReadinessDto> {
+    return this.settings.getOffRouteReadiness();
   }
 
   @Patch()

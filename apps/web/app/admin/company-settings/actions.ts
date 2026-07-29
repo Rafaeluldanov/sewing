@@ -12,6 +12,8 @@
 
 import { revalidatePath } from 'next/cache';
 import {
+  OFF_ROUTE_WORK_POLICIES,
+  OFF_ROUTE_WORK_POLICY_LABELS,
   UpdateCompanySettingsSchema,
   type UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
@@ -28,6 +30,7 @@ import {
   updateCompanySettings,
 } from '@/lib/company-settings-api';
 import type {
+  UpdateOffRoutePolicyState,
   CreateCompanyDivisionState,
   UpdateCompanyDivisionOverridesState,
   UpdateCompanyDivisionState,
@@ -293,4 +296,36 @@ export async function toggleCompanyDivisionActiveAction(
     // редактирования есть `EditDivisionForm` со своим error-box.
   }
   revalidatePath(ADMIN_PATH);
+}
+
+/**
+ * Server action секции «Работа мимо маршрута»: меняет строгость гейта
+ * (`CompanySettings.offRouteWorkPolicy`) через тот же
+ * `PATCH /api/company-settings`, что и остальные настройки.
+ *
+ * Блокеры (шаблоны с архивной швейной операцией) переключение НЕ
+ * запрещают — решение владельца: предупредить, но пустить. Жёсткий
+ * запрет в настройках раздражает больше, чем помогает, а владелец может
+ * знать контекст, которого система не видит.
+ */
+export async function updateOffRoutePolicyAction(
+  _prev: UpdateOffRoutePolicyState,
+  form: FormData,
+): Promise<UpdateOffRoutePolicyState> {
+  const raw = String(form.get('offRouteWorkPolicy') ?? '');
+  const policy = OFF_ROUTE_WORK_POLICIES.find((p) => p === raw);
+  if (!policy) {
+    return { error: 'Не выбран режим строгости' };
+  }
+  try {
+    await updateCompanySettings({ offRouteWorkPolicy: policy });
+    revalidatePath(ADMIN_PATH);
+    return {
+      ok: true,
+      successMessage: `Строгость сохранена: ${OFF_ROUTE_WORK_POLICY_LABELS[policy]}.`,
+    };
+  } catch (e) {
+    const x = explainApiError(e);
+    return { error: x.error, errorRequestId: x.requestId };
+  }
 }

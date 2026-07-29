@@ -99,4 +99,42 @@ describe('гейт «операции нет в маршруте заказа»'
     // Fallback на отсутствующей строке настроек — тоже WARN.
     expect(settings).toMatch(/offRouteWorkPolicy \?\? 'WARN'/);
   });
+
+  test('рубильник управляется из UI, а не только SQL-ом', () => {
+    const shared = read('packages/shared/src/company-settings.ts');
+    // Поле принимается PATCH-ом и отдаётся в DTO.
+    expect(shared).toMatch(/offRouteWorkPolicy: OffRouteWorkPolicyField/);
+    expect(shared).toMatch(/offRouteWorkPolicy: OffRouteWorkPolicyValue/);
+    const section = read(
+      'apps/web/app/admin/company-settings/off-route-policy-section.tsx',
+    );
+    // Три состояния ⇒ select, а не тумблер.
+    expect(section).toMatch(/<select/);
+    expect(section).toMatch(/OFF_ROUTE_WORK_POLICIES\.map/);
+  });
+
+  test('секция показывает готовность, а не голый выпадающий список', () => {
+    const section = read(
+      'apps/web/app/admin/company-settings/off-route-policy-section.tsx',
+    );
+    // Счётчик срабатываний за окно — по нему принимается решение.
+    expect(section).toMatch(/incidentsInWindow/);
+    // И блокеры: заказы и шаблоны с архивной швейной операцией.
+    expect(section).toMatch(/ordersBlockedFromStart/);
+    expect(section).toMatch(/templatesWithArchivedSewing/);
+    const svc = read(
+      'apps/api/src/modules/company-settings/company-settings.service.ts',
+    );
+    // Источник счётчика — событие, которое пишет сам гейт в режиме WARN.
+    expect(svc).toMatch(/PASSPORT_WORK_OUTSIDE_ROUTE/);
+  });
+
+  test('блокеры НЕ запрещают переключение (решение владельца)', () => {
+    const section = read(
+      'apps/web/app/admin/company-settings/off-route-policy-section.tsx',
+    );
+    // У селектора нет disabled по блокерам: предупреждаем, но пускаем.
+    expect(section).not.toMatch(/disabled=\{[^}]*badTemplates/);
+    expect(section).not.toMatch(/disabled=\{[^}]*readiness/);
+  });
 });

@@ -199,6 +199,23 @@ const CorrespondentAccountField = optionalDigitsField({
 const AutoIssueMaterialsOnCutReleaseField = z.boolean().optional();
 const AllowNegativeMaterialStockField = z.boolean().optional();
 
+/**
+ * Строгость гейта «работа мимо маршрута». Три состояния, поэтому в UI
+ * это выпадающий список, а не тумблер — у тумблера третьего состояния
+ * нет (тот же аргумент, что в секции division-overrides).
+ */
+export const OFF_ROUTE_WORK_POLICIES = ['OFF', 'WARN', 'BLOCK'] as const;
+export type OffRouteWorkPolicyValue = (typeof OFF_ROUTE_WORK_POLICIES)[number];
+export const OFF_ROUTE_WORK_POLICY_LABELS: Record<
+  OffRouteWorkPolicyValue,
+  string
+> = {
+  OFF: 'Выключено',
+  WARN: 'Предупреждать',
+  BLOCK: 'Блокировать',
+};
+const OffRouteWorkPolicyField = z.enum(OFF_ROUTE_WORK_POLICIES).optional();
+
 // ---------------------------------------------------------------------------
 // Update DTO
 // ---------------------------------------------------------------------------
@@ -223,6 +240,7 @@ export const UpdateCompanySettingsSchema = z
     settlementAccount: SettlementAccountField,
     autoIssueMaterialsOnCutRelease: AutoIssueMaterialsOnCutReleaseField,
     allowNegativeMaterialStock: AllowNegativeMaterialStockField,
+    offRouteWorkPolicy: OffRouteWorkPolicyField,
   })
   .refine(
     (obj) => Object.values(obj).some((v) => v !== undefined),
@@ -256,6 +274,12 @@ export interface CompanySettingsDto {
   correspondentAccount: string | null;
   settlementAccount: string | null;
   /**
+   * Строгость гейта «работа мимо маршрута»
+   * (`prisma/schema.prisma::CompanySettings.offRouteWorkPolicy`).
+   * Если singleton-строки ещё нет — backend отдаёт `WARN`, как SQL-default.
+   */
+  offRouteWorkPolicy: OffRouteWorkPolicyValue;
+  /**
    * Блок «Материалы и склад» / UI `/admin/company-settings`.
    * Если singleton-строки ещё нет, backend отдаёт дефолт
    * (см. `CompanySettingsService.get` fallback):
@@ -266,4 +290,39 @@ export interface CompanySettingsDto {
   allowNegativeMaterialStock: boolean;
   createdAt: string; // ISO
   updatedAt: string; // ISO
+}
+
+// ---------------------------------------------------------------------------
+// Готовность к включению блокировки
+// ---------------------------------------------------------------------------
+
+/**
+ * Сводка «можно ли включать `BLOCK`» для секции настроек.
+ *
+ * Зачем отдельная read-модель. Голый выпадающий список здесь — ловушка:
+ * переключение в «Блокировать» с неразобранными шаблонами останавливает
+ * цех, а остановка заканчивается требованием выключить проверку
+ * насовсем. Весь смысл режима «Предупреждать» в том, чтобы решение
+ * принималось ПО ЦИФРАМ — а цифры лежат в `AuditLog` и никому не видны.
+ * Поэтому секция показывает, сколько раз гейт сработал и что мешает.
+ *
+ * Блокеры НЕ запрещают переключение (решение владельца 29.07.2026):
+ * жёсткий запрет в настройках раздражает больше, чем помогает, а
+ * владелец может знать контекст, которого система не видит — например,
+ * что шаблон всё равно не будет использоваться.
+ */
+export interface OffRouteReadinessDto {
+  /** Сколько раз гейт сработал за окно (событие `PASSPORT_WORK_OUTSIDE_ROUTE`). */
+  incidentsInWindow: number;
+  windowDays: number;
+  /** ISO последнего срабатывания или `null`. */
+  lastIncidentAt: string | null;
+  /** Заказы, которые не смогут стартовать (архивная швейная операция в шаблоне). */
+  ordersBlockedFromStart: number;
+  /** Активные шаблоны с архивной швейной операцией — их и надо разобрать. */
+  templatesWithArchivedSewing: {
+    code: string;
+    name: string;
+    operations: string[];
+  }[];
 }

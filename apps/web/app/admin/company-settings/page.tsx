@@ -1,18 +1,30 @@
 import Link from 'next/link';
-import { Building2, Layers, Plug, Settings, ShieldCheck } from 'lucide-react';
+import {
+  Building2,
+  Factory,
+  Layers,
+  Plug,
+  Settings,
+  ShieldCheck,
+} from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { CompanyDivisionDto } from '@sewing/shared/company-divisions';
-import type { CompanySettingsDto } from '@sewing/shared/company-settings';
+import type {
+  CompanySettingsDto,
+  OffRouteReadinessDto,
+} from '@sewing/shared/company-settings';
 import type { EmployeeListItemDto } from '@sewing/shared/employees';
 import type { IntegrationSettingsDto } from '@sewing/shared/integration';
 import { ApiRequestError, errorText } from '@/lib/api';
 import {
   getCompanySettings,
+  getOffRouteReadiness,
   listCompanyDivisions,
 } from '@/lib/company-settings-api';
 import { getIntegrationSettings } from '@/lib/integration-api';
 import { isErpIntegrationEnabled } from '@/lib/feature-flags';
 import { listEmployees } from '@/lib/employees-api';
+import { listAppRolesSafe } from '@/lib/app-roles-api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { AdminCard, AdminPageShell } from '@/components/admin';
 import {
@@ -21,6 +33,7 @@ import {
 } from './settings-form';
 import { DivisionsSection } from './divisions-section';
 import { MaterialStockDivisionOverridesSection } from './material-stock-division-overrides-section';
+import { OffRoutePolicySection } from './off-route-policy-section';
 import { EmployeeRolesSection } from './employee-roles-section';
 import { IntegrationsSection } from './integrations-section';
 
@@ -36,6 +49,11 @@ export const dynamic = 'force-dynamic';
  *                      «Материалы и склад», справочник подразделений и
  *                      переопределения флагов по цехам (одна связка —
  *                      дефолт → цеха → исключения);
+ *   - `production`   — Производство: строгость гейта «работа мимо
+ *                      маршрута». Отдельная вкладка, а не подпункт
+ *                      «Подразделений и склада»: это правило
+ *                      производственного потока, к материалам оно
+ *                      отношения не имеет;
  *   - `access`       — Доступ: роли сотрудников;
  *   - `integrations` — Интеграции: ERP upgifts (только под флагом
  *                      FEATURE_ERP_INTEGRATION, иначе вкладки нет).
@@ -48,7 +66,12 @@ export const dynamic = 'force-dynamic';
  * редиректит остальных пользователей.
  */
 
-type TabKey = 'org' | 'divisions' | 'access' | 'integrations';
+type TabKey =
+  | 'org'
+  | 'divisions'
+  | 'production'
+  | 'access'
+  | 'integrations';
 
 function TabLink({
   active,
@@ -97,9 +120,19 @@ export default async function AdminCompanySettingsPage({
   // Список сотрудников + права текущего пользователя для секции «Роли
   // сотрудников». Падение этих запросов не должно ронять страницу
   // настроек — деградируем до пустого списка / без права на ADMIN.
-  const [employees, viewer] = await Promise.all([
+  // Справочник ролей (`/admin/roles`) — источник и списка ролей для
+  // чипов, и их названий: роли заводятся из админки, захардкоженного
+  // перечня больше нет.
+  // Готовность к блокировке — вспомогательная read-модель поверх
+  // AuditLog. Её падение не должно ронять страницу настроек: секция
+  // просто покажется без блока цифр.
+  const offRouteReadiness: OffRouteReadinessDto | null =
+    await getOffRouteReadiness().catch(() => null);
+
+  const [employees, viewer, appRoles] = await Promise.all([
     listEmployees().catch((): EmployeeListItemDto[] => []),
     getCurrentUserOrNull().catch(() => null),
+    listAppRolesSafe(),
   ]);
   const canAssignAdmin = (viewer?.user.roles ?? [viewer?.user.role]).includes(
     'ADMIN',
@@ -118,6 +151,7 @@ export default async function AdminCompanySettingsPage({
   const requestedTab = searchParams?.tab;
   const tab: TabKey =
     requestedTab === 'divisions' ||
+    requestedTab === 'production' ||
     requestedTab === 'access' ||
     (requestedTab === 'integrations' && integrationsAvailable)
       ? (requestedTab as TabKey)
@@ -148,6 +182,12 @@ export default async function AdminCompanySettingsPage({
             href="/admin/company-settings?tab=divisions"
             Icon={Layers}
             label="Подразделения и склад"
+          />
+          <TabLink
+            active={tab === 'production'}
+            href="/admin/company-settings?tab=production"
+            Icon={Factory}
+            label="Производство"
           />
           <TabLink
             active={tab === 'access'}
@@ -181,10 +221,18 @@ export default async function AdminCompanySettingsPage({
         </>
       )}
 
+      {tab === 'production' && settings && (
+        <OffRoutePolicySection
+          settings={settings}
+          readiness={offRouteReadiness}
+        />
+      )}
+
       {tab === 'access' && (
         <EmployeeRolesSection
           employees={employees}
           canAssignAdmin={canAssignAdmin}
+          roleOptions={appRoles}
         />
       )}
 

@@ -10,6 +10,7 @@
  */
 import type {
   CompanySettingsDto,
+  OffRouteReadinessDto,
   UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
 import type {
@@ -79,5 +80,17 @@ export function updateCompanyDivision(
   return apiFetch<CompanyDivisionDto>(
     `/company-divisions/${encodeURIComponent(id)}`,
     { method: 'PATCH', body },
+  );
+}
+
+/**
+ * Готовность к включению `BLOCK` (счётчик срабатываний гейта +
+ * блокеры). Отдельная ручка: read-модель поверх `AuditLog` и шаблонов
+ * маршрутов, тянуть её вместе с реквизитами незачем.
+ */
+export function getOffRouteReadiness(): Promise<OffRouteReadinessDto> {
+  return apiFetch<OffRouteReadinessDto>(
+    '/company-settings/off-route-readiness',
+    { cache: 'no-store' },
   );
 }

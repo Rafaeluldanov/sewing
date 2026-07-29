@@ -1,9 +1,11 @@
 import type { OffRouteWorkPolicy } from '@prisma/client';
+import { OperationCategory, OrderStatus } from '@prisma/client';
 import { Injectable, Logger } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import {
   COMPANY_SETTINGS_SINGLETON_ID,
   type CompanySettingsDto,
+  type OffRouteReadinessDto,
   type UpdateCompanySettingsDto,
 } from '@sewing/shared/company-settings';
 import { PrismaService } from '../../prisma/prisma.service.js';
@@ -29,6 +31,9 @@ import { AuditService } from '../audit/audit.service.js';
  * Аналогично `ClientsService` — без транзакции (одна строка),
  * `audit.log` идёт fail-soft.
  */
+/** Событие, которое гейт пишет в режиме WARN и BLOCK. */
+const OFF_ROUTE_AUDIT_EVENT = 'PASSPORT_WORK_OUTSIDE_ROUTE';
+
 @Injectable()
 export class CompanySettingsService {
   private readonly logger = new Logger(CompanySettingsService.name);
@@ -332,6 +337,18 @@ export class CompanySettingsService {
       (data as Record<string, boolean>)[key] = after;
       changed[key] = { before, after };
     }
+    // Строгость гейта «работа мимо маршрута» — единственное enum-поле
+    // настроек, поэтому обрабатывается отдельно от строк и boolean-ов.
+    if (
+      dto.offRouteWorkPolicy !== undefined &&
+      dto.offRouteWorkPolicy !== current.offRouteWorkPolicy
+    ) {
+      data.offRouteWorkPolicy = dto.offRouteWorkPolicy;
+      changed.offRouteWorkPolicy = {
+        before: current.offRouteWorkPolicy,
+        after: dto.offRouteWorkPolicy,
+      };
+    }
 
     if (Object.keys(changed).length === 0) {
       // Нечего менять — лишний UPDATE и аудит-строку не пишем.
@@ -353,6 +370,91 @@ export class CompanySettingsService {
       employeeId: actorEmployeeId ?? null,
     });
     return toDto(updated);
+  }
+
+
+  /**
+   * Готовность к включению `BLOCK` для секции настроек.
+   *
+   * Отдаёт две вещи, без которых переключатель становится рулеткой:
+   * сколько раз гейт реально сработал в режиме `WARN` (по
+   * `AuditLog.PASSPORT_WORK_OUTSIDE_ROUTE`) и что помешает включить
+   * блокировку — активные шаблоны с архивной ШВЕЙНОЙ операцией и заказы,
+   * которые из-за них не смогут стартовать.
+   *
+   * Блокеры НЕ запрещают переключение: решение владельца — предупредить,
+   * но пустить. Жёсткий запрет в настройках раздражает больше, чем
+   * помогает, а владелец может знать контекст, которого система не видит.
+   */
+  async getOffRouteReadiness(
+    windowDays = 7,
+  ): Promise<OffRouteReadinessDto> {
+    const since = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000);
+    const [incidentsInWindow, last, badTemplates] = await Promise.all([
+      this.prisma.auditLog.count({
+        where: { event: OFF_ROUTE_AUDIT_EVENT, createdAt: { gte: since } },
+      }),
+      this.prisma.auditLog.findFirst({
+        where: { event: OFF_ROUTE_AUDIT_EVENT },
+        orderBy: { createdAt: 'desc' },
+        select: { createdAt: true },
+      }),
+      this.prisma.routeTemplate.findMany({
+        where: {
+          isActive: true,
+          steps: {
+            some: {
+              operation: { active: false, category: OperationCategory.SEWING },
+            },
+          },
+        },
+        select: {
+          id: true,
+          code: true,
+          name: true,
+          steps: {
+            where: {
+              operation: { active: false, category: OperationCategory.SEWING },
+            },
+            select: { operation: { select: { code: true, name: true } } },
+          },
+        },
+      }),
+    ]);
+
+    const ordersBlockedFromStart =
+      badTemplates.length === 0
+        ? 0
+        : await this.prisma.order.count({
+            where: {
+              status: {
+                in: [
+                  OrderStatus.DRAFT,
+                  OrderStatus.CALCULATION,
+                  OrderStatus.CALCULATION_DONE,
+                ],
+              },
+              routeTemplateId: { in: badTemplates.map((t) => t.id) },
+            },
+          });
+
+    return {
+      incidentsInWindow,
+      windowDays,
+      lastIncidentAt: last?.createdAt.toISOString() ?? null,
+      ordersBlockedFromStart,
+      templatesWithArchivedSewing: badTemplates.map((t) => ({
+        code: t.code,
+        name: t.name,
+        operations: Array.from(
+          new Set(
+            t.steps.map((s) =>
+              `${s.operation.code} ${s.operation.name}`.trim(),
+            ),
+          ),
+        ),
+      })),
+    };
   }
 
   // ===========================================================================
@@ -465,6 +567,7 @@ function toDto(c: CompanySettingsRow): CompanySettingsDto {
     settlementAccount: c.settlementAccount,
     autoIssueMaterialsOnCutRelease: c.autoIssueMaterialsOnCutRelease,
     allowNegativeMaterialStock: c.allowNegativeMaterialStock,
+    offRouteWorkPolicy: c.offRouteWorkPolicy,
     createdAt: c.createdAt.toISOString(),
     updatedAt: c.updatedAt.toISOString(),
   };
