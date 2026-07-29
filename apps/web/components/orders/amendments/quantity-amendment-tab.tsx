@@ -7,8 +7,11 @@
  *
  * Контракт: по каждому размеру input «новый план, шт» с нижней границей
  * `max(qtyCut, 1)` (backend отдаст 409 `AMENDMENT_BELOW_CUT` при заниже);
- * на backend уходят только реально изменившиеся строки; обязательна
- * «Причина». ≥2 расцветок (`multiVariant`) — блок с пояснением.
+ * граница проверяется только у ИЗМЕНЁННЫХ строк — раскрой бывает с запасом,
+ * и нетронутая строка с планом ниже своего раскроя не должна блокировать
+ * правку соседнего размера. На backend уходят только реально изменившиеся
+ * строки; обязательна «Причина». ≥2 расцветок (`multiVariant`) — блок с
+ * пояснением.
  */
 
 import { useEffect, useMemo, useState } from 'react';
@@ -74,10 +77,16 @@ export function QuantityAmendmentTab({ orderId, state, onClose }: Props) {
       .filter((c): c is { sizeId: string; newQtyPlan: number } => Boolean(c));
   }, [state.rows, qtyBySize]);
 
-  const anyBelowFloor = state.rows.some((r) => {
+  // Нижняя граница проверяется ТОЛЬКО у изменённых строк — ровно как на
+  // backend (он валидирует dto.changes). Раскрой бывает с запасом, и строка
+  // может уже стоять ниже своего раскроя (план 130 при раскрое 138); такая
+  // строка не трогается этой правкой и не должна блокировать соседний размер.
+  const isRowBelowFloor = (r: QuantityAmendmentStateDto['rows'][number]) => {
     const n = parse(qtyBySize[r.sizeId] ?? '');
-    return n !== null && n < floorOf(r.qtyCut);
-  });
+    return n !== null && n !== r.currentQtyPlan && n < floorOf(r.qtyCut);
+  };
+
+  const anyBelowFloor = state.rows.some(isRowBelowFloor);
 
   const totalBefore = state.rows.reduce((s, r) => s + r.currentQtyPlan, 0);
   const totalAfter = state.rows.reduce((s, r) => {
@@ -153,9 +162,13 @@ export function QuantityAmendmentTab({ orderId, state, onClose }: Props) {
         <tbody>
           {state.rows.map((r) => {
             const raw = qtyBySize[r.sizeId] ?? '';
-            const n = parse(raw);
             const floor = floorOf(r.qtyCut);
-            const isBad = n !== null && n < floor;
+            const isBad = isRowBelowFloor(r);
+            // HTML-валидация не умеет «>= floor ИЛИ = текущий план», а
+            // текущий план обязан оставаться допустимым (иначе строка с
+            // раскроем сверх плана делает форму невалидной и не даёт
+            // отправить правку по другому размеру).
+            const inputMin = Math.min(floor, r.currentQtyPlan);
             return (
               <tr key={r.sizeId} data-size-id={r.sizeId}>
                 <th scope="row">{r.sizeCode}</th>
@@ -168,7 +181,7 @@ export function QuantityAmendmentTab({ orderId, state, onClose }: Props) {
                 <td style={{ textAlign: 'right' }}>
                   <input
                     type="number"
-                    min={floor}
+                    min={inputMin}
                     step={1}
                     value={raw}
                     disabled={state.multiVariant}
