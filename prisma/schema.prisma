@@ -784,15 +784,15 @@ model Operation {
   /// `OperationSubstitution`). Список «эта операция засчитывается как
   /// substitute для других операций»: e.g. РАСПОШИВ (full) заместитель
   /// для Подгиб низа и Распошив рукав.
-  substitutesFor      OperationSubstitution[]   @relation("SubstSubstitute")
+  substitutesFor     OperationSubstitution[] @relation("SubstSubstitute")
   /// И обратное: «эти заместители засчитывают мою OPERATION_FINISHED».
-  substitutedBy       OperationSubstitution[]   @relation("SubstSatisfies")
+  substitutedBy      OperationSubstitution[] @relation("SubstSatisfies")
+  permitsAsOperation RouteWorkPermit[]       @relation("PermitOperation")
+  permitsAsSatisfies RouteWorkPermit[]       @relation("PermitSatisfies")
 
   @@index([sortOrder])
   @@index([category])
   @@index([pricingMode])
-  permitsAsOperation RouteWorkPermit[] @relation("PermitOperation")
-  permitsAsSatisfies RouteWorkPermit[] @relation("PermitSatisfies")
 }
 
 /// Substitute-правило для AND-гейта параллельной группы маршрута.
@@ -813,9 +813,9 @@ model Operation {
 /// начисление. Правила применяются только при чтении (route-gate),
 /// данные сдельной не трогаем.
 model OperationSubstitution {
-  id              String   @id @default(cuid())
-  satisfiesOpId   String
-  substituteOpId  String
+  id                 String   @id @default(cuid())
+  satisfiesOpId      String
+  substituteOpId     String
   /// Сворачивание сплит-маршрута распошива (см. `PassportsService`
   /// `shouldCollapseSplitRoute`/`collapseSplitRoute`). Помечает, что
   /// `satisfiesOpId` — «принимающая» операция параллельной группы (рукав),
@@ -823,8 +823,8 @@ model OperationSubstitution {
   /// другой операции группы (низ). Когда весь низ заказа закрывается на
   /// рукавном станке, пара {рукав, низ} сворачивается в `substituteOpId`
   /// (полный распошив). Для пары (16←04, 0001←04) флаг стоит у 16.
-  isReceivingStation Boolean @default(false)
-  createdAt       DateTime @default(now())
+  isReceivingStation Boolean  @default(false)
+  createdAt          DateTime @default(now())
 
   satisfiesOp  Operation @relation("SubstSatisfies", fields: [satisfiesOpId], references: [id], onDelete: Cascade)
   substituteOp Operation @relation("SubstSubstitute", fields: [substituteOpId], references: [id], onDelete: Cascade)
@@ -1119,10 +1119,10 @@ model Employee {
   /// общая, но мы фиксируем, кто фактически раскроил — для аудита и
   /// будущей передачи данных помощнику раскройщика. `onDelete: SetNull`
   /// со стороны задачи — удаление учётки не сносит историю раскроя.
-  cuttingTasksAssigned     CuttingTask[]     @relation("CuttingTaskAssignedTo")
+  cuttingTasksAssigned CuttingTask[]    @relation("CuttingTaskAssignedTo")
   /// Расклады, которые сотрудник закрыл кнопкой «Расклад готов»
   /// (частичное завершение раскроя, см. `model CuttingTaskLay`).
-  cuttingLaysCompleted     CuttingTaskLay[]  @relation("CuttingTaskLayCompletedBy")
+  cuttingLaysCompleted CuttingTaskLay[] @relation("CuttingTaskLayCompletedBy")
 
   /// Web Push: устройства/браузеры, на которые этот сотрудник
   /// подписался получать фоновые уведомления (например, «пришёл
@@ -1147,8 +1147,6 @@ model Employee {
   /// и payroll-агрегаторе.
   @@index([companyDivisionId])
   @@index([salaryCashFlowItemId])
-  routeWorkPermitsCreated RouteWorkPermit[] @relation("PermitCreatedBy")
-  routeWorkPermitsRevoked RouteWorkPermit[] @relation("PermitRevokedBy")
 }
 
 /// Web Push-подписка одного браузера/устройства сотрудника
@@ -1327,13 +1325,13 @@ model RecutSession {
 // =========================
 
 model Order {
-  id        String      @id @default(cuid())
-  number    String      @unique
+  id             String      @id @default(cuid())
+  number         String      @unique
   /// Историческое поле «свободный текст клиента» — оставлено как есть
   /// для backward compatibility со старым flow создания заказа
   /// (`/orders/new`, легаси-API). На новом UI его место занимает
   /// связь `clientId` ниже.
-  customer  String?
+  customer       String?
   /// Управленческая привязка заказа к карточке клиента из справочника
   /// `Client` (см. `model Client` ниже).
   ///
@@ -1350,18 +1348,18 @@ model Order {
   /// доступен в журналах; (3) DRAFT-заказ из КБ-задачи
   /// (`ConstructorTasksService`) и легаси-flow создаются без клиента и
   /// добирают его до расчёта.
-  clientId  String?
-  client    Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
-  orderDate DateTime
+  clientId       String?
+  client         Client?     @relation(fields: [clientId], references: [id], onDelete: SetNull)
+  orderDate      DateTime
   /// Срок сдачи заказа (управленческое поле — UI «Срок сдачи»). Nullable
   /// — backward-compat для исторических заказов и для случаев, когда
   /// менеджер не хочет фиксировать срок.
-  dueDate   DateTime?
-  color     String?
-  comment   String?
-  status    OrderStatus @default(DRAFT)
-  createdAt DateTime    @default(now())
-  updatedAt DateTime    @updatedAt
+  dueDate        DateTime?
+  color          String?
+  comment        String?
+  status         OrderStatus @default(DRAFT)
+  createdAt      DateTime    @default(now())
+  updatedAt      DateTime    @updatedAt
   /// Момент перехода заказа в производство (… → IN_PRODUCTION).
   /// Проставляется один раз в `OrdersService.start()` при смене
   /// статуса. Nullable: для заказов, ещё не запущенных в производство,
@@ -1809,10 +1807,10 @@ model Order {
   ///     create-заказа автоматически создаёт `PatternItem` +
   ///     `PatternMaterialArea[]` + technical Product;
   ///   - `SEND_TO_CONSTRUCTOR`      — зарезервировано (UI-заглушка).
-  productCreationMode       String   @default("EXISTING_PATTERN")
+  productCreationMode               String            @default("EXISTING_PATTERN")
   /// Стоимость разработки лекала из inline-сценария «Сделать расчёт»
   /// (см. `productCreationMode = CREATE_FOR_CALCULATION`).
-  patternDevelopmentCostRub Decimal? @db.Decimal(12, 2)
+  patternDevelopmentCostRub         Decimal?          @db.Decimal(12, 2)
   /// Включать ли `patternDevelopmentCostRub` в себестоимость заказа.
   /// Управляется чекбоксом «входит в текущий расчёт себестоимости»
   /// рядом с полем стоимости разработки (по умолчанию включён). Если
@@ -1820,7 +1818,8 @@ model Order {
   /// добавляет отдельную строку `OrderCostEstimateLine` (kind=OTHER,
   /// sourceType=PATTERN_DEVELOPMENT) и сумма входит в `totalCostRub`.
   /// `WorkshopNeed` / складские движения не затрагиваются.
-  patternDevelopmentCostInCostPrice Boolean @default(true)
+  patternDevelopmentCostInCostPrice Boolean           @default(true)
+  routeWorkPermits                  RouteWorkPermit[]
 
   @@index([status])
   @@index([orderDate])
@@ -1835,7 +1834,6 @@ model Order {
   @@index([materialsAndHardwareCostPolicy])
   @@index([productCreationMode])
   @@index([needsArchivedAt])
-  routeWorkPermits RouteWorkPermit[]
 }
 
 /// Карточка клиента (управленческий справочник, см. `docs/domain.md
@@ -1896,14 +1894,14 @@ model OrderItem {
 /// поразмерного плана по цветам в производственный контур — поздняя
 /// фаза. Откат = выключить флаг; новые таблицы просто не читаются.
 model OrderVariant {
-  id      String @id @default(cuid())
-  orderId String
+  id         String  @id @default(cuid())
+  orderId    String
   /// Порядок расцветки в заказе (0-based). `#0` — «первичная» (зеркало
   /// `Order.color` / `Order.techCardId`). Уникален в рамках заказа.
-  ordinal Int
+  ordinal    Int
   /// Цвет расцветки (свободная строка). Источник цвета паспортов этой
   /// расцветки в поздней фазе; сейчас — presentation + план.
-  color   String
+  color      String
   /// Своя техкарта материалов расцветки. `null` — наследуется
   /// `Order.techCardId` (зеркало первичной расцветки).
   techCardId String?
@@ -1911,13 +1909,13 @@ model OrderVariant {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  order    Order             @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  techCard TechCardTemplate? @relation(fields: [techCardId], references: [id])
-  sizes    OrderVariantSize[]
+  order                Order                      @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  techCard             TechCardTemplate?          @relation(fields: [techCardId], references: [id])
+  sizes                OrderVariantSize[]
   /// Ф3 «Расцветки в раскрое»: рулоны настила, привязанные к этой
   /// расцветке (`CuttingTaskRoll.variant`). Паспорта из них красятся в
   /// `color` этой расцветки.
-  cuttingRolls CuttingTaskRoll[]
+  cuttingRolls         CuttingTaskRoll[]
   /// Расчёт потребности по расцветкам: snapshot материалов и строки
   /// потребности цеха, посчитанные для этой расцветки (см.
   /// `WorkshopNeedsService.calculateForOrder`). `onDelete: SetNull`
@@ -1991,18 +1989,18 @@ model OrderVariantSize {
 /// варианта просчёта и производятся все; варианты просчёта —
 /// взаимоисключающие альтернативы.
 model OrderCalculation {
-  id      String @id @default(cuid())
-  orderId String
+  id                  String    @id @default(cuid())
+  orderId             String
   /// Порядок вкладки в ряду (0-based, стабильный; дырки после
   /// удалений допустимы). Уникален в рамках заказа.
-  ordinal Int
+  ordinal             Int
   /// Человекочитаемое имя вкладки («Вариант 1», «Кулирка 190», …).
-  title   String
+  title               String
   /// Ровно один активный на заказ (partial unique index
   /// `OrderCalculation_one_active_per_order`).
-  isActive Boolean @default(false)
+  isActive            Boolean   @default(false)
   /// Снимок себестоимости для ярлыка вкладки (см. JSDoc модели).
-  costTotalRub Decimal? @db.Decimal(14, 2)
+  costTotalRub        Decimal?  @db.Decimal(14, 2)
   /// Стадия варианта: когда вариант ОТПРАВЛЕН НА РАСЧЁТ (менеджер нажал
   /// «Перевести в расчёт» / «Рассчитать вариант» — потребности варианта
   /// посчитаны). `null` = вариант-черновик: его потребности НЕ считаются
@@ -2015,12 +2013,12 @@ model OrderCalculation {
   sentToCalculationAt DateTime?
   /// JSON-снимок входов варианта (`OrderCalculationSnapshotV1Schema`);
   /// `null` у активного.
-  snapshot Json?
+  snapshot            Json?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  order Order @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  order         Order          @relation(fields: [orderId], references: [id], onDelete: Cascade)
   /// Потребности, рассчитанные при этом варианте (`onDelete: SetNull`
   /// со стороны `WorkshopNeed.orderCalculationId`).
   workshopNeeds WorkshopNeed[]
@@ -2132,10 +2130,10 @@ model Passport {
   number String @unique
   qrCode String @unique
 
-  orderId    String
-  productId  String
-  sizeId     String
-  color      String
+  orderId           String
+  productId         String
+  sizeId            String
+  color             String
   /// Расцветка (`OrderVariant`), из рулона которой выпущен паспорт
   /// (`CuttingTaskRoll.variantId`). Проставляется при рулонном выпуске
   /// (`releaseFromRolls`). `null` — одноцветный / ручной / исторический
@@ -2144,9 +2142,9 @@ model Passport {
   /// знаменатель ИМЕННО этой расцветки — иначе материал одной расцветки
   /// списывается на паспорта другой (см. `WorkshopNeed.orderVariantId`).
   /// FK `onDelete: SetNull` — снос расцветки не сносит паспорт.
-  orderVariantId String?
-  rollNumber String
-  cutDate    DateTime
+  orderVariantId    String?
+  rollNumber        String
+  cutDate           DateTime
   /// Порядковый номер рулона (`CuttingTaskRoll.ordinal`), по которому
   /// помощник раскройщика выпустил этот паспорт через рулонный выпуск
   /// (`POST /api/passports/release-from-rolls`). По тройке
@@ -2157,7 +2155,7 @@ model Passport {
   /// FK на `CuttingTaskRoll` сознательно НЕ ставим: строки рулонов
   /// пересоздаются при каждом сохранении задачи раскройщика, а `ordinal`
   /// стабилен после `DONE`.
-  rollOrdinal Int?
+  rollOrdinal       Int?
   /// Номер расклада (`CuttingTaskLay.ordinal`), из которого выпущен рулон.
   /// Номера рулонов уникальны лишь в пределах расклада, поэтому рулонная
   /// идентичность паспорта — тройка `(sizeId, cuttingLayOrdinal,
@@ -2165,11 +2163,11 @@ model Passport {
   /// (миграция бэкфиллит `1` выпущенным паспортам — старый единственный
   /// расклад). FK не ставим по той же причине, что у `rollOrdinal`.
   cuttingLayOrdinal Int?
-  qtyPlan    Int
-  qtyCut     Int
-  qtyDefect  Int            @default(0)
-  qtyGood    Int
-  status     PassportStatus @default(CREATED)
+  qtyPlan           Int
+  qtyCut            Int
+  qtyDefect         Int            @default(0)
+  qtyGood           Int
+  status            PassportStatus @default(CREATED)
 
   currentOperationId    String?
   currentEmployeeId     String?
@@ -2191,15 +2189,15 @@ model Passport {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  order            Order      @relation(fields: [orderId], references: [id])
+  order            Order         @relation(fields: [orderId], references: [id])
   orderVariant     OrderVariant? @relation(fields: [orderVariantId], references: [id], onDelete: SetNull)
-  product          Product    @relation(fields: [productId], references: [id])
-  size             Size       @relation(fields: [sizeId], references: [id])
-  currentOperation Operation? @relation("PassportCurrentOperation", fields: [currentOperationId], references: [id])
-  currentEmployee  Employee?  @relation("PassportCurrentEmployee", fields: [currentEmployeeId], references: [id])
-  currentCell      Cell?      @relation("PassportCurrentCell", fields: [currentCellId], references: [id])
-  cutter           Employee   @relation("PassportCutter", fields: [cutterId], references: [id])
-  creator          Employee   @relation("PassportCreator", fields: [creatorId], references: [id])
+  product          Product       @relation(fields: [productId], references: [id])
+  size             Size          @relation(fields: [sizeId], references: [id])
+  currentOperation Operation?    @relation("PassportCurrentOperation", fields: [currentOperationId], references: [id])
+  currentEmployee  Employee?     @relation("PassportCurrentEmployee", fields: [currentEmployeeId], references: [id])
+  currentCell      Cell?         @relation("PassportCurrentCell", fields: [currentCellId], references: [id])
+  cutter           Employee      @relation("PassportCutter", fields: [cutterId], references: [id])
+  creator          Employee      @relation("PassportCreator", fields: [creatorId], references: [id])
 
   events   PassportEvent[]
   entries  OperationEntry[]
@@ -3125,31 +3123,31 @@ model Printer {
 /// отправляем агента туда же, куда раньше открывалась вкладка
 /// браузера (см. ADR-0010).
 model PrintJob {
-  id           String         @id @default(cuid())
-  printerId    String
-  sourceType   PrintJobSource
+  id             String         @id @default(cuid())
+  printerId      String
+  sourceType     PrintJobSource
   /// Идентификатор объекта-источника (`Passport.id`, `Box.id`,
   /// `Cell.id`). Хранится строкой, чтобы не плодить FK на каждый
   /// тип. Для `TEST` может быть пустым.
-  sourceId     String?
-  payloadUrl   String
-  status       PrintJobStatus @default(PENDING)
-  errorMessage String?
+  sourceId       String?
+  payloadUrl     String
+  status         PrintJobStatus @default(PENDING)
+  errorMessage   String?
   /// Идемпотентный ключ клиента: если два одинаковых `POST /print-jobs`
   /// придут с одним ключом (двойная доставка/ретрай транспорта), второй
   /// не создаст новый job, а вернёт существующий. `null` = ключ не
   /// передан (bulk-батчи, TEST, старые клиенты) — тогда каждый вызов
   /// создаёт новую строку, как раньше. Уникален глобально; NULL-ы в
   /// Postgres не конфликтуют между собой.
-  idempotencyKey String? @unique
-  createdAt    DateTime       @default(now())
+  idempotencyKey String?        @unique
+  createdAt      DateTime       @default(now())
   /// Когда агент атомарно захватил job (PENDING → SENT). Нужен, чтобы
   /// свипер нашёл «зависшие» SENT (агент умер, не подтвердив результат).
-  sentAt       DateTime?
+  sentAt         DateTime?
   /// Когда job закрыт (PRINTED/FAILED). Для PENDING/SENT — null.
   /// Хранится отдельно от `createdAt`, чтобы UI мог показать «висит
   /// давно» без подсчёта.
-  completedAt  DateTime?
+  completedAt    DateTime?
 
   printer Printer @relation(fields: [printerId], references: [id], onDelete: Cascade)
 
@@ -3197,15 +3195,15 @@ model RouteTemplate {
 }
 
 model RouteTemplateStep {
-  id          String  @id @default(cuid())
-  templateId  String
+  id            String   @id @default(cuid())
+  templateId    String
   /// Позиция шага в маршруте (0-based). Уникальна в рамках шаблона —
   /// см. `@@unique([templateId, index])`.
-  index       Int
-  operationId String
+  index         Int
+  operationId   String
   /// На MVP не используется в enforcement, но фиксируется в данных,
   /// чтобы потом можно было реализовать «можно пропустить шаг».
-  isOptional  Boolean @default(false)
+  isOptional    Boolean  @default(false)
   /// Метка параллельной (взаимозаменяемой) группы. Соседние шаги одного
   /// шаблона с одинаковым ненулевым `parallelGroup` образуют один этап:
   /// внутри порядок любой, выход на следующий этап — только когда все
@@ -3236,15 +3234,15 @@ model RouteTemplateStep {
 /// После snapshot-а заказ перестаёт зависеть от того, что менеджер
 /// сделает с шаблоном дальше (правка / удаление шагов / деактивация).
 model OrderRouteStep {
-  id          String @id @default(cuid())
-  orderId     String
-  index       Int
-  operationId String
+  id                  String       @id @default(cuid())
+  orderId             String
+  index               Int
+  operationId         String
   /// Снимок `RouteTemplateStep.parallelGroup` на момент старта заказа.
   /// Шаги заказа с одинаковым ненулевым значением — взаимозаменяемый
   /// этап (см. enforcement в `PassportsService`). `null` —
   /// последовательный шаг.
-  parallelGroup Int?
+  parallelGroup       Int?
   /// Снимок `RouteTemplateStep.rateOverride` на момент старта заказа:
   /// сдельная расценка операции (`pricingMode = FIXED`), переопределённая
   /// **для этого заказа**. `null` — расценка по дефолту операции
@@ -3254,7 +3252,7 @@ model OrderRouteStep {
   /// (блок «Операции», `PUT /api/orders/:id/route-overrides`). Читается
   /// в `OperationsService.resolveRate` (через `orderId`), в расчёте
   /// B2B-базы закройщика и в плане себестоимости (`OrderOperationPlanService`).
-  rateOverride  Decimal? @db.Decimal(12, 2)
+  rateOverride        Decimal?     @db.Decimal(12, 2)
   /// Переопределение **нормы времени** операции (`timeNormMode = FIXED`)
   /// в секундах **для этого заказа**. `null` — норма по дефолту операции
   /// (`Operation.timeNormSec`). Это плановый контур: норму времени читают
@@ -3273,8 +3271,8 @@ model OrderRouteStep {
   /// `rateOverride` обязателен), в `BY_SIZE` — из `OrderRouteStepSizeOverride`.
   pricingModeOverride PricingMode?
 
-  order     Order     @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  operation Operation @relation(fields: [operationId], references: [id])
+  order         Order                        @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  operation     Operation                    @relation(fields: [operationId], references: [id])
   /// Поразмерные переопределения расценки/нормы для операций с
   /// `pricingMode = BY_SIZE` / `timeNormMode = BY_SIZE` (см.
   /// `OrderRouteStepSizeOverride`).
@@ -3341,12 +3339,12 @@ model OrderRouteStepSizeOverride {
 // ---------------------------------------------------------------------------
 
 model TechCardTemplate {
-  id        String   @id @default(cuid())
+  id                String           @id @default(cuid())
   /// Человекочитаемый код техкарты (например, "TSHIRT-MAT"). Уникален
   /// глобально — это управленческий идентификатор, как `RouteTemplate.code`.
-  code      String   @unique
-  name      String
-  isActive  Boolean  @default(true)
+  code              String           @unique
+  name              String
+  isActive          Boolean          @default(true)
   /// Soft-привязка техкарты к группе номенклатуры (`PatternCategory`).
   /// Этап «Inline-создание изделия из формы заказа»: модалка «Создать
   /// изделие» предзаполняет materialLines по AREA_M2_BY_SIZE параметрам
@@ -3354,8 +3352,8 @@ model TechCardTemplate {
   /// `onDelete: SetNull` — архивация/удаление категории не сносит техкарту.
   patternCategoryId String?
   patternCategory   PatternCategory? @relation(fields: [patternCategoryId], references: [id], onDelete: SetNull)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
+  createdAt         DateTime         @default(now())
+  updatedAt         DateTime         @updatedAt
 
   materialLines  TechCardMaterialLine[]
   outsourceLines TechCardOutsourceLine[]
@@ -3563,7 +3561,7 @@ model TechCardOutsourceLine {
 /// `sourceTechCardLineId` имеет `onDelete: SetNull`, поэтому snapshot
 /// никогда не удаляется вместе с источником.
 model OrderMaterialRequirement {
-  id                            String   @id @default(cuid())
+  id                            String        @id @default(cuid())
   orderId                       String
   /// Фича «Расцветки» (FEATURE_COLORWAYS): snapshot строится ПО КАЖДОЙ
   /// расцветке (`OrderVariant`) — своя техкарта × поразмерный план
@@ -3616,7 +3614,7 @@ model OrderMaterialRequirement {
   /// и action «Сохранить цвет». Дефолт `false` обеспечивает
   /// backward-compat: старые snapshot-строки приходят как
   /// `requiresColorSelection = false`.
-  requiresColorSelection        Boolean  @default(false)
+  requiresColorSelection        Boolean       @default(false)
   /// Этап «Указать в заказе»: значение, которое менеджер ввёл для
   /// конкретной строки заказа. Меняется через
   /// `PATCH /api/orders/:id/material-requirements/:requirementId/color`
@@ -3667,7 +3665,7 @@ model OrderMaterialRequirement {
   ///
   /// `sourceTechCardLineId` для этого не годится: у строки из шаблона он тоже
   /// станет NULL, если строку шаблона удалить (onDelete: SetNull).
-  isManual                      Boolean  @default(false)
+  isManual                      Boolean       @default(false)
   /// ОТКУДА ВЗЯЛАСЬ НОРМА расхода этой строки:
   ///   - `NOMENCLATURE` — из карточки номенклатуры (`PatternItemParameterNorm`
   ///     / `PatternItemSizeParameterValue` / `PatternMaterialArea`), пересчёт
@@ -3684,7 +3682,7 @@ model OrderMaterialRequirement {
   /// / `PatternCategoryParameter.id` для погонных метров / `materialRole` для
   /// площадей). Без FK — номенклатуру могут править, снимок обязан пережить.
   qtySourceRef                  String?
-  createdAt                     DateTime @default(now())
+  createdAt                     DateTime      @default(now())
 
   order              Order                 @relation(fields: [orderId], references: [id], onDelete: Cascade)
   sourceTechCardLine TechCardMaterialLine? @relation(fields: [sourceTechCardLineId], references: [id], onDelete: SetNull)
@@ -4924,14 +4922,14 @@ model WorkshopNeed {
 // ---------------------------------------------------------------------------
 
 model Supplier {
-  id        String   @id @default(cuid())
+  id      String  @id @default(cuid())
   /// Человекочитаемое название поставщика (в UI первично). Не уникально:
   /// у двух разных юр-лиц вполне может быть одно и то же бытовое имя.
-  name      String
-  phone     String?
-  website   String?
-  address   String?
-  comment   String?
+  name    String
+  phone   String?
+  website String?
+  address String?
+  comment String?
 
   /// Банковские/платёжные реквизиты поставщика (этап «Заявки на оплату
   /// поставщику», см. `model SupplierPaymentRequest`). Все nullable —
@@ -6106,7 +6104,6 @@ model OrderMaterialArrivalOverride {
 // Audit: события `COMPANY_SETTINGS_UPDATED` пишутся `AuditService`-ом с
 // `entityType = COMPANY_SETTINGS`, `entityId = "default"`.
 // ---------------------------------------------------------------------------
-
 
 /// Наряд-допуск мастера: разрешение делать по конкретному заказу
 /// операцию, которой нет в его маршруте.
@@ -7412,7 +7409,7 @@ model ConstructorTask {
   /// До accept-а остаётся `null`. При rework-е сбрасывается в `null`,
   /// чтобы следующая приёмка перезаписала актуальной датой. Используется
   /// только для отображения в карточке задачи и аудита.
-  acceptedAt DateTime?
+  acceptedAt  DateTime?
 
   /// Этап «Архив справочников» (контракт — `@sewing/shared/archive`):
   /// момент мягкой архивации заявки со списка
@@ -7459,7 +7456,7 @@ model ConstructorTaskSizeRow {
 
   /// Расход «Кулирки» (основное полотно) — м пог. на одно изделие.
   /// Nullable: менеджер может оставить пустым.
-  kulirkaMeters Decimal? @db.Decimal(10, 4)
+  kulirkaMeters   Decimal? @db.Decimal(10, 4)
   /// Расход «Кашкорсе» (рибана для манжет/пояса/горловины) — м пог.
   /// на одно изделие. Nullable.
   kashkorseMeters Decimal? @db.Decimal(10, 4)
@@ -7858,31 +7855,31 @@ model CashAccount {
 /// в UI (`null` = статья применима к обоим направлениям); проводку он НЕ
 /// ограничивает.
 model CashFlowItem {
-  id        String             @id @default(cuid())
-  name      String
+  id         String             @id @default(cuid())
+  name       String
   /// Необязательный короткий код для интеграций/отчётов.
-  code      String?
+  code       String?
   /// Намёк направления (для UI/группировки), НЕ enforce.
-  direction CashFlowDirection?
-  isActive  Boolean            @default(true)
+  direction  CashFlowDirection?
+  isActive   Boolean            @default(true)
   /// Признак «накладные расходы» (аренда, свет, и т.п.). OUT-проводки по
   /// таким статьям распределяются на заказы в фактической себестоимости
   /// (Себестоимость, Фаза 2, срез 3). По умолчанию false.
-  isOverhead Boolean           @default(false)
-  comment   String?
-  createdAt DateTime           @default(now())
-  updatedAt DateTime           @updatedAt
+  isOverhead Boolean            @default(false)
+  comment    String?
+  createdAt  DateTime           @default(now())
+  updatedAt  DateTime           @updatedAt
 
-  entries          CashFlowEntry[]
-  supplierPayments SupplierPayment[]
+  entries             CashFlowEntry[]
+  supplierPayments    SupplierPayment[]
   /// Поставщики, для которых эта статья выбрана дефолтной (см.
   /// `Supplier.defaultCashFlowItemId`). `onDelete: SetNull` со стороны
   /// `Supplier` — удаление статьи лишь обнуляет дефолт у карточек.
-  defaultForSuppliers Supplier[] @relation("SupplierDefaultCashFlowItem")
+  defaultForSuppliers Supplier[]        @relation("SupplierDefaultCashFlowItem")
   /// Сотрудники, для которых эта статья выбрана для выплат зарплаты
   /// (см. `Employee.salaryCashFlowItemId`). `onDelete: SetNull` со
   /// стороны `Employee` — удаление статьи лишь обнуляет привязку.
-  salaryEmployees     Employee[] @relation("EmployeeSalaryCashFlowItem")
+  salaryEmployees     Employee[]        @relation("EmployeeSalaryCashFlowItem")
 
   @@index([isActive])
 }
@@ -7922,7 +7919,7 @@ model CashFlowEntry {
 
   /// Сторно-флаг (INV-7). Сторно создаётся отдельной строкой с обратным
   /// `direction`, тем же `registrar*` и `isStorno = true`.
-  isStorno     Boolean        @default(false)
+  isStorno     Boolean         @default(false)
   /// Ссылка на исходную проводку, которую сторнирует эта строка.
   reversalOfId String?
   reversalOf   CashFlowEntry?  @relation("CashFlowEntryStorno", fields: [reversalOfId], references: [id], onDelete: Restrict)
