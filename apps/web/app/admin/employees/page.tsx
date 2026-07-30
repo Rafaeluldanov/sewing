@@ -254,10 +254,24 @@ function EmployeesTable({
       render: (e) => formatCompensation(e.compensationType),
     },
     {
+      // Одна колонка на две ставки (29.07.2026): у почасовика тут
+      // ₽/час, у месячника — ₽/мес. Две отдельные колонки в списке
+      // из 10+ столбцов означали бы, что в каждой строке одна из них
+      // пустая, а взгляд всё равно ищет «сколько платим».
       key: 'rate',
-      header: 'Ставка, ₽/час',
+      header: 'Ставка',
       align: 'right',
-      render: (e) => formatMoney(e.salaryPerHour),
+      render: (e) => {
+        const monthly = (e.salaryRateMode ?? 'HOURLY') === 'MONTHLY';
+        const value = monthly ? e.salaryPerMonth ?? null : e.salaryPerHour;
+        if (value === null || value === 0) return formatMoney(null);
+        return (
+          <>
+            {formatMoney(value)}
+            <span className="admin-muted">{monthly ? ' /мес' : ' /час'}</span>
+          </>
+        );
+      },
     },
     {
       key: 'status',

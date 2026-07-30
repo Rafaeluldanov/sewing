@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ArrowRight,
   Building2,
+  CalendarDays,
   Scissors,
   Settings as SettingsIcon,
   Users,
@@ -18,29 +19,29 @@ export const dynamic = 'force-dynamic';
 /**
  * Настройки модуля «Зарплата» (PHASE 1, MVP).
  *
- * PHASE 1 сознательно НЕ заводит новых настроек: payroll API —
- * read-only агрегатор поверх уже существующих сущностей. Все «ручки»
- * управления уже живут в других разделах админки:
+ * Экран — навигационный hub: сам он ничего не хранит, все «ручки»
+ * управления живут в профильных разделах админки. Исключение одно —
+ * производственный календарь (29.07.2026): он появился вместе с
+ * месячным окладом и не относится ни к операциям, ни к сотрудникам,
+ * поэтому живёт своим экраном внутри «Зарплаты».
  *
  *   - ставки операций (`Operation.fixedRate` / `OperationRateBySize`,
  *     ADR-0020) — `/admin/operations`;
- *   - почасовая окладная ставка (`Employee.salaryPerHour`,
- *     ADR-0021) — `/admin/employees`;
+ *   - окладная ставка сотрудника — вид (часовой / месячный) и сама
+ *     сумма (`Employee.salaryRateMode` + `salaryPerHour` /
+ *     `salaryPerMonth`, ADR-0021) — `/admin/employees`;
+ *   - норма дней/часов месяца (`PayrollCalendarMonth`) —
+ *     `/admin/payroll/calendar`;
  *   - подразделения для группировок и UI-фильтров —
  *     `/admin/company-settings` (см. `docs/domain.md
  *     §«Подразделения заказа»`).
- *
- * Этот экран — навигационный hub на эти три секции, чтобы менеджеру
- * было одно место «настройки зарплаты», без новых полей и без
- * дублирования форм. PHASE 2 при необходимости заменит его на
- * полноценные payroll-настройки (ledger, lock, manual entries).
  */
 export default function AdminPayrollSettingsPage() {
   return (
     <AdminPageShell
       icon={<SettingsIcon size={22} strokeWidth={1.6} aria-hidden />}
       title="Настройки зарплаты"
-      subtitle="PHASE 1 — все ставки и тарифы живут в существующих разделах"
+      subtitle="Ставки и тарифы — в профильных разделах, календарь — здесь"
       actions={
         <Link href="/admin/payroll" className="admin-btn admin-btn--ghost">
           <ArrowLeft size={16} strokeWidth={1.6} aria-hidden />
@@ -51,10 +52,9 @@ export default function AdminPayrollSettingsPage() {
       <AdminCard>
         <AdminSectionHeader title="Где править" />
         <p className="admin-muted" style={{ marginBottom: '0.75rem' }}>
-          В PHASE 1 модуль «Зарплата» работает только на чтение и
-          агрегирует данные из уже существующих контуров. Никаких
-          новых настроек на этой странице сознательно не заводим — это
-          избавит от дублей форм и расхождений значений.
+          Ведомость зарплаты работает на чтение и агрегирует данные из
+          существующих контуров, поэтому формы ставок не дублируем —
+          ссылки ведут в разделы, где эти значения ведутся.
         </p>
         <ul className="admin-deflist">
           <li>
@@ -70,7 +70,15 @@ export default function AdminPayrollSettingsPage() {
               icon={<Users size={18} strokeWidth={1.6} aria-hidden />}
               href="/admin/employees"
               title="Ставки сотрудников"
-              hint="Почасовая ставка (Employee.salaryPerHour) и compensationType (ADR-0021)"
+              hint="Вид оклада (часовой / месячный), ставка и compensationType (ADR-0021)"
+            />
+          </li>
+          <li>
+            <SettingsLink
+              icon={<CalendarDays size={18} strokeWidth={1.6} aria-hidden />}
+              href="/admin/payroll/calendar"
+              title="Производственный календарь"
+              hint="Норма дней и часов месяца — знаменатель ставки ₽/час у месячного оклада"
             />
           </li>
           <li>

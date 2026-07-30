@@ -21,6 +21,56 @@ export const CompensationTypeSchema = z.enum(COMPENSATION_TYPES);
 export type CompensationType = z.infer<typeof CompensationTypeSchema>;
 
 /**
+ * Вид окладной ставки (`Employee.salaryRateMode`, 29.07.2026) —
+ * зеркало Prisma `enum SalaryRateMode`.
+ *
+ * `CompensationType` отвечает «получает ли человек оклад вообще»,
+ * `SalaryRateMode` — «в каких единицах ставка назначена»:
+ *   - `HOURLY`  — `salaryPerHour`, дневное начисление по часам смены
+ *                 (`SalaryEntry.source = SHIFT_DAY`), поведение до
+ *                 появления enum-а;
+ *   - `MONTHLY` — `salaryPerMonth`, ОДНА строка на месяц целиком
+ *                 (`source = MONTH_SALARY`), без пропорции по дням.
+ *
+ * Имеет смысл только для `compensationType ∈ { SALARY, MIXED }`.
+ */
+export const SALARY_RATE_MODES = ['HOURLY', 'MONTHLY'] as const;
+export const SalaryRateModeSchema = z.enum(SALARY_RATE_MODES);
+export type SalaryRateMode = z.infer<typeof SalaryRateModeSchema>;
+
+/** Подписи режимов ставки для UI (форма сотрудника, карточка). */
+export const SALARY_RATE_MODE_LABELS: Record<SalaryRateMode, string> = {
+  HOURLY: 'Часовой',
+  MONTHLY: 'Месячный',
+};
+
+/**
+ * Нужна ли этому сотруднику ПОЧАСОВАЯ ставка (`salaryPerHour > 0`)?
+ *
+ * Правило одно на весь проект (форма создания, форма правки, backend-
+ * инвариант в `EmployeesService`): почасовая ставка обязательна ровно
+ * тогда, когда человек получает оклад И режим ставки `HOURLY`.
+ * Держим здесь, а не в трёх местах, чтобы UI и сервер не разъехались.
+ */
+export function requiresHourlySalaryRate(
+  type: CompensationType,
+  mode: SalaryRateMode,
+): boolean {
+  return (type === 'SALARY' || type === 'MIXED') && mode === 'HOURLY';
+}
+
+/**
+ * Нужен ли этому сотруднику МЕСЯЧНЫЙ оклад (`salaryPerMonth > 0`)?
+ * Зеркало `requiresHourlySalaryRate` для режима `MONTHLY`.
+ */
+export function requiresMonthlySalaryRate(
+  type: CompensationType,
+  mode: SalaryRateMode,
+): boolean {
+  return (type === 'SALARY' || type === 'MIXED') && mode === 'MONTHLY';
+}
+
+/**
  * Роли, которые менеджер может выбрать при создании сотрудника через
  * `/admin/employees/new`. Подмножество `enum Role` из Prisma-схемы:
  * сюда сознательно НЕ входит `DISPLAY` — это служебная учётка под
@@ -251,8 +301,19 @@ const SalaryCashFlowItemIdField = z.preprocess(
 export const UpdateEmployeeSchema = z
   .object({
     compensationType: CompensationTypeSchema.optional(),
-    /** Почасовая ставка (₽/час). Обязательна для SALARY/MIXED. */
+    /**
+     * Вид окладной ставки (`Employee.salaryRateMode`). `undefined` —
+     * не трогаем колонку. Итоговая пара `(compensationType,
+     * salaryRateMode)` после применения patch решает, какая из двух
+     * ставок обязана быть положительной — проверяет
+     * `EmployeesService.update` (шире, чем zod: ему нужны текущие
+     * значения из БД).
+     */
+    salaryRateMode: SalaryRateModeSchema.optional(),
+    /** Почасовая ставка (₽/час). Обязательна для SALARY/MIXED + HOURLY. */
     salaryPerHour: SalaryRateField.optional(),
+    /** Месячный оклад (₽/мес). Обязателен для SALARY/MIXED + MONTHLY. */
+    salaryPerMonth: SalaryRateField.optional(),
     /** LEGACY «за смену»: в расчёте не участвует, форма не редактирует. */
     salaryPerShift: SalaryRateField.optional(),
     active: z.boolean().optional(),
@@ -305,7 +366,9 @@ export const UpdateEmployeeSchema = z
   .refine(
     (obj) =>
       obj.compensationType !== undefined ||
+      obj.salaryRateMode !== undefined ||
       obj.salaryPerHour !== undefined ||
+      obj.salaryPerMonth !== undefined ||
       obj.salaryPerShift !== undefined ||
       obj.active !== undefined ||
       obj.role !== undefined ||
@@ -313,7 +376,7 @@ export const UpdateEmployeeSchema = z
       obj.cutterB2bSewingPercent !== undefined ||
       obj.companyDivisionId !== undefined ||
       obj.salaryCashFlowItemId !== undefined,
-    'Нечего обновлять: укажите compensationType, salaryPerHour, active, role, roles, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
+    'Нечего обновлять: укажите compensationType, salaryRateMode, salaryPerHour, salaryPerMonth, active, role, roles, cutterB2bSewingPercent, companyDivisionId или salaryCashFlowItemId',
   );
 export type UpdateEmployeeDto = z.infer<typeof UpdateEmployeeSchema>;
 
@@ -375,17 +438,24 @@ export const CreateEmployeeSchema = z
     fullName: FullNameField,
     login: LoginField,
     pin: PinField,
-    role: EmployeeRoleSchema,
+    role: RoleCodeRefSchema,
     /**
      * Фича «несколько ролей»: дополнительный доступ при создании.
      * `undefined` — сотрудник создаётся с набором из одной основной
      * роли (`roles = [role]`). Backend всё равно прогоняет через
      * `normalizeAssignedRoles`, гарантируя присутствие `role`.
      */
-    roles: z.array(EmployeeRoleSchema).min(1).optional(),
+    roles: z.array(RoleCodeRefSchema).min(1).optional(),
     compensationType: CompensationTypeSchema.default('PIECEWORK'),
-    /** Почасовая ставка (₽/час). Обязательна для SALARY/MIXED. */
+    /**
+     * Вид окладной ставки (`Employee.salaryRateMode`). Дефолт
+     * `HOURLY` — как было до появления месячного оклада.
+     */
+    salaryRateMode: SalaryRateModeSchema.default('HOURLY'),
+    /** Почасовая ставка (₽/час). Обязательна для SALARY/MIXED + HOURLY. */
     salaryPerHour: SalaryRateField.optional(),
+    /** Месячный оклад (₽/мес). Обязателен для SALARY/MIXED + MONTHLY. */
+    salaryPerMonth: SalaryRateField.optional(),
     /** LEGACY «за смену»: в расчёте не участвует, форма не редактирует. */
     salaryPerShift: SalaryRateField.optional(),
     active: z.boolean().optional(),
@@ -415,8 +485,12 @@ export const CreateEmployeeSchema = z
     salaryCashFlowItemId: SalaryCashFlowItemIdField,
   })
   .superRefine((obj, ctx) => {
+    // Обязательна ровно ОДНА ставка — та, что соответствует режиму.
+    // Требовать обе было бы враньём в форме: месячнику почасовая
+    // ставка не назначается, она производная от нормы часов
+    // (см. `PayrollCalendarMonth`).
     if (
-      (obj.compensationType === 'SALARY' || obj.compensationType === 'MIXED') &&
+      requiresHourlySalaryRate(obj.compensationType, obj.salaryRateMode) &&
       (obj.salaryPerHour === null ||
         obj.salaryPerHour === undefined ||
         obj.salaryPerHour <= 0)
@@ -425,7 +499,20 @@ export const CreateEmployeeSchema = z
         code: z.ZodIssueCode.custom,
         path: ['salaryPerHour'],
         message:
-          'Для SALARY/MIXED обязательно укажите положительную почасовую ставку',
+          'Для SALARY/MIXED с часовым окладом обязательно укажите положительную почасовую ставку',
+      });
+    }
+    if (
+      requiresMonthlySalaryRate(obj.compensationType, obj.salaryRateMode) &&
+      (obj.salaryPerMonth === null ||
+        obj.salaryPerMonth === undefined ||
+        obj.salaryPerMonth <= 0)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['salaryPerMonth'],
+        message:
+          'Для SALARY/MIXED с месячным окладом обязательно укажите положительную сумму оклада',
       });
     }
   });
@@ -454,8 +541,21 @@ export interface EmployeeListItemDto {
    */
   activeRole?: string | null;
   compensationType: CompensationType;
+  /**
+   * Вид окладной ставки (`Employee.salaryRateMode`). Опционально на
+   * уровне типа (`?`) ради backward-compat со старыми потребителями
+   * shared-пакета — backend всегда отдаёт ключ (для PIECEWORK там
+   * лежит дефолтный `HOURLY` и он ничего не значит).
+   */
+  salaryRateMode?: SalaryRateMode;
   /** Почасовая ставка (₽/час). `null` для PIECEWORK / не заданной. */
   salaryPerHour: number | null;
+  /**
+   * Месячный оклад (₽/мес) для `salaryRateMode = MONTHLY`. `null`,
+   * если режим часовой или оклад не задан. Опционально на уровне типа
+   * ради backward-compat, backend всегда отдаёт ключ.
+   */
+  salaryPerMonth?: number | null;
   /** LEGACY «за смену»: больше не участвует в расчёте зарплаты. */
   salaryPerShift: number | null;
   active: boolean;

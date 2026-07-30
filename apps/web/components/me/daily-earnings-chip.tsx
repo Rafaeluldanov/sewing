@@ -113,6 +113,11 @@ function formatChip(data: MeDailyDto): string {
 
   if (data.compensationType === 'SALARY') {
     if (!sal) return '0₽';
+    // Месячник: дневной суммы нет, показываем начисленное за месяц с
+    // пометкой — иначе чип у него вечно показывал бы «0₽».
+    if (sal.rateMode === 'MONTHLY') {
+      return `${formatMoney(sal.monthlyAmount ?? 0)}/мес`;
+    }
     return formatMoney(sal.amount);
   }
 

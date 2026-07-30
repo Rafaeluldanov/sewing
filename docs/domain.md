@@ -1841,14 +1841,93 @@ createdAt, updatedAt`. Уникальность —
   смены физически не было». UNKNOWN/TODO: в `SalaryService` нет
   явного create-пути под `source = MANUAL`
   (`docs/production-flow.md §12.1`).
+- `RECUT` — почасовая доплата за подкрой сверх смены
+  (`RecutSession`), отдельной строкой того же дня.
+- `MONTH_SALARY` — месячный оклад: ОДНА строка на календарный месяц,
+  `date` = 1-е число (29.07.2026, см. §10.3a).
+
+#### 10.3a Вид окладной ставки (`SalaryRateMode`)
+
+С 29.07.2026 у окладного контура две оси:
+
+| ось | вопрос | значения |
+| --- | ------ | -------- |
+| `Employee.compensationType` | получает ли человек оклад вообще | `PIECEWORK` / `SALARY` / `MIXED` |
+| `Employee.salaryRateMode`   | в каких единицах назначена ставка | `HOURLY` / `MONTHLY` |
+
+- `HOURLY` (дефолт, поведение до появления поля) — ставка
+  `Employee.salaryPerHour`, начисление ДНЕВНОЕ:
+  `SalaryEntry(source = SHIFT_DAY)` за каждый день с закрытой сменой,
+  `amount = отработанные часы × ставка`.
+- `MONTHLY` — ставка `Employee.salaryPerMonth`, начисление МЕСЯЧНОЕ и
+  ПОЛНОЕ: `SalaryEntry(source = MONTH_SALARY, date = 1-е число,
+  amount = salaryPerMonth)`, без деления на отработанные дни.
+  `workedSeconds` в строке — часы закрытых смен за месяц, справочно.
+
+**Инвариант:** дневные и месячные строки взаимоисключающи. Для
+`MONTHLY` `SHIFT_DAY`-строки не создаются вовсе — иначе человек
+получил бы и оклад, и повременку за одни и те же часы. Правило живёт
+в `isDailySalaryEligible` / `isMonthlySalaryEligible`
+(`apps/api/src/modules/employees/compensation.ts`).
+
+**Почему полная сумма, а не пропорция по табелю.** Автоматическая
+пропорция требует знать отпуска, больничные и отгулы, которых в
+системе нет: «умный» расчёт молча занижал бы оклад за законно
+нерабочие дни. Пропуски менеджер вычитает руками через
+`PATCH /api/salary/:id` — после чего `editedManually = true` защищает
+правку от перезаписи.
+
+**Ведомость за период.** Месячная строка стоит на 1-м числе, поэтому в
+выборку `dateFrom…dateTo` она попадает только если 1-е число внутри
+окна. Это прямое следствие «одна строка на месяц»: половина месяца в
+оплате оклада не существует как величина. Для расчётов за часть месяца
+менеджер либо берёт окно с 1-го числа, либо правит сумму руками.
+
+**Обязательность ставки.** Для `SALARY`/`MIXED` обязательна ровно та
+ставка, что соответствует режиму: `salaryPerHour > 0` при `HOURLY`,
+`salaryPerMonth > 0` при `MONTHLY`
+(`requiresHourlyRate` / `requiresMonthlyRate`, нарушение →
+`EMPLOYEE_SALARY_RATE_REQUIRED`). Вторая ставка при этом не стирается:
+переключение режима туда-обратно не должно терять заведённые числа.
+
+#### 10.3b Производный ₽/час и `PayrollCalendarMonth`
+
+Месячному окладнику всё равно нужно уметь считать стоимость часа —
+доплата за подкрой почасовая по природе, и на минуты простоя оклад
+разносится тоже по часам. Курс:
+
+```
+ставка ₽/час (MONTHLY) = salaryPerMonth / normHours(месяц даты)
+```
+
+`normHours` — из справочника `PayrollCalendarMonth` (норма рабочих
+дней и часов на месяц, экран `/admin/payroll/calendar`, API
+`docs/api.md §31a`). Норма зависит от переносов праздников и из даты
+не выводится, поэтому её ведёт менеджер. Строки на месяц нет → расчёт
+падает на `DEFAULT_MONTH_NORM_HOURS = 168` (21 × 8), а экран календаря
+подсвечивает пропуск: приблизительная ставка лучше нулевой, но
+приближение не должно оставаться незамеченным.
+
+На СУММУ месячного оклада норма не влияет — он начисляется целиком.
+
+Единая точка — `apps/api/src/modules/salary/salary-rate.ts`
+(`resolveEffectiveHourlyRate` / `effectiveHourlyRateWithNorm`); ею
+пользуются `SalaryService.syncDailyRecut`, `RecutService`,
+`DashboardService.roleLoad`, `CostsService` и `MeService.getDaily`.
 
 #### `syncDailySalary(employeeId, date, tx?)`
 
 Создаёт/обновляет ровно одну `SalaryEntry` на пару `(employeeId,
 date)` для `source = SHIFT_DAY`. Повременная оплата (ревизия 2026-06,
-см. ADR-0021). Безопасно вызывать любое количество раз. Алгоритм:
+см. ADR-0021). Безопасно вызывать любое количество раз.
 
-1. Грузит `Employee.compensationType`/`salaryPerHour`/`active`.
+С 29.07.2026 метод — ещё и ДИСПЕТЧЕР по `salaryRateMode`: для
+`MONTHLY` он делегирует в `syncMonthlySalary` (см. ниже) и дневную
+строку не создаёт. Точка входа осталась одна, чтобы
+`ShiftsService.start/stop` не знал про виды ставок. Алгоритм ветки
+`HOURLY`:
+
+1. Грузит `Employee.compensationType`/`salaryRateMode`/`salaryPerHour`/`active`.
    `PIECEWORK`, `!active` или `salaryPerHour === null` → return null.
 2. Суммирует длительности ЗАКРЫТЫХ `ShiftSession` за сутки
    (`workedSeconds`, открытые `endedAt = null` игнорируются). `0` →
@@ -1864,15 +1943,30 @@ date)` для `source = SHIFT_DAY`. Повременная оплата (рев�
 `safeSyncSalary` (fail-soft логер: ошибка sync **не валит** сам
 shift).
 
+#### `syncMonthlySalary(employeeId, date, tx?)`
+
+Ветка `salaryRateMode = MONTHLY`. Поддерживает ОДНУ строку
+`(employeeId, 1-е число месяца, MONTH_SALARY)`:
+
+1. `PIECEWORK`, `!active` или `salaryPerMonth ≤ 0` → return null.
+2. Считает часы ЗАКРЫТЫХ смен за месяц. `0` → return null: оклад не
+   должен появляться у человека, который в этом месяце ещё не выходил
+   (например, sync на открытии первой смены).
+3. `amount = salaryPerMonth` целиком, `workedSeconds` — часы месяца
+   (справочно).
+4. `upsert` с теми же правилами, что дневной sync: `editedManually`
+   и locked-строки не трогаются, P2002-гонка перечитывается.
+
 #### Ручная корректировка
 
 `PATCH /api/salary/:id` (RBAC `SHOP_MANAGER` / `ADMIN`):
 
 - `amount` (опц.) — новая сумма;
 - `managerComment` (опц., `null` = очистить);
-- `reset = true` — снять ручную правку, вернуть запись под
-  `syncDailySalary` (`amount = employee.salaryPerShift`; если
-  ставка не задана — 422 `SALARY_RATE_MISSING`).
+- `reset = true` — снять ручную правку и пересчитать сумму ТОЙ ЖЕ
+  формулой, которой строку создавал sync: для `MONTH_SALARY` — полный
+  `salaryPerMonth`, для остальных источников — часы дня × ставка
+  ₽/час. Если нужной ставки нет — 422 `SALARY_RATE_MISSING`.
 
 Любая правка ставит `editedManually = true` и `editedByEmployeeId
 = viewer.employeeId`. `employeeId`/`date`/`source` менять через

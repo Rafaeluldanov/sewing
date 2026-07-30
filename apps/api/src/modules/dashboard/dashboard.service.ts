@@ -6,6 +6,7 @@ import {
   PassportStatus,
   Prisma,
   Role,
+  SalaryRateMode,
 } from '@prisma/client';
 import {
   PRODUCTION_DASHBOARD_ROLE_LABELS,
@@ -29,6 +30,10 @@ import {
 import { CostsService } from '../costs/costs.service.js';
 import { PassportDurationsService } from '../costs/passport-durations.service.js';
 import { isSalaryEligible } from '../employees/compensation.js';
+import {
+  effectiveHourlyRateWithNorm,
+  resolveMonthNormHours,
+} from '../salary/salary-rate.js';
 
 /**
  * Сервис управленческого дашборда «Дашборд начальника производства»
@@ -350,15 +355,37 @@ export class DashboardService {
     // 1) Все стадии за день.
     const stages = await this.durations.listForPeriod(dayStart, dayEnd);
 
-    // 2) Сотрудники с SalaryEntry за день (источник «человек был на смене»).
-    const salaryEntries = await this.prisma.salaryEntry.findMany({
-      where: { date: { gte: dayStart, lte: dayEnd } },
-      select: { employeeId: true },
-    });
+    // 2) Кто в этот день был на смене. Признак «человек оплачен за этот
+    // день» — `SalaryEntry` за день, как и раньше.
+    //
+    // Исключение — месячный оклад (29.07.2026): дневных строк у него
+    // нет вовсе, единственная строка `MONTH_SALARY` стоит на 1-м числе
+    // месяца. По старому признаку весь окладной цех на месячной ставке
+    // выпал бы из загрузки ролей во все дни, кроме первого. Поэтому для
+    // НИХ (и только для них) присутствие берём из самих смен.
+    // Расширять это правило на почасовиков нельзя: у них смена без
+    // `SalaryEntry` — это ещё не закрытая смена, и считать по ней
+    // простой значило бы менять смысл показателя.
+    const [salaryEntries, shiftEmployees] = await Promise.all([
+      this.prisma.salaryEntry.findMany({
+        where: { date: { gte: dayStart, lte: dayEnd } },
+        select: { employeeId: true },
+      }),
+      this.prisma.shiftSession.findMany({
+        where: { startedAt: { gte: dayStart, lte: dayEnd } },
+        select: { employeeId: true },
+        distinct: ['employeeId'],
+      }),
+    ]);
+    const salaryEntryEmployeeIds = new Set(
+      salaryEntries.map((s) => s.employeeId),
+    );
+    const shiftEmployeeIds = new Set(shiftEmployees.map((s) => s.employeeId));
 
     const employeeIds = new Set<string>();
     for (const s of stages) employeeIds.add(s.employeeId);
-    for (const s of salaryEntries) employeeIds.add(s.employeeId);
+    for (const id of salaryEntryEmployeeIds) employeeIds.add(id);
+    for (const id of shiftEmployeeIds) employeeIds.add(id);
 
     if (employeeIds.size === 0) {
       return PRODUCTION_DASHBOARD_ROLE_KEYS.map((role) => ({
@@ -378,10 +405,17 @@ export class DashboardService {
         id: true,
         role: true,
         compensationType: true,
+        salaryRateMode: true,
         salaryPerHour: true,
+        salaryPerMonth: true,
       },
     });
     const employeeById = new Map(employees.map((e) => [e.id, e]));
+
+    // Норма часов месяца — знаменатель производной ставки месячного
+    // окладника. Берём один раз на весь день, а не в цикле по людям:
+    // день целиком лежит внутри одного месяца.
+    const normHours = await resolveMonthNormHours(this.prisma, dayStart);
 
     // 3) Подготовка агрегатов по ролям.
     const acc = new Map<
@@ -395,8 +429,16 @@ export class DashboardService {
       acc.set(role, { salariedEmps: new Set(), trackedByEmployee: new Map() });
     }
 
-    for (const s of salaryEntries) {
-      const emp = employeeById.get(s.employeeId);
+    const presentEmployeeIds = new Set<string>(salaryEntryEmployeeIds);
+    for (const id of shiftEmployeeIds) {
+      const emp = employeeById.get(id);
+      if (emp?.salaryRateMode === SalaryRateMode.MONTHLY) {
+        presentEmployeeIds.add(id);
+      }
+    }
+
+    for (const employeeId of presentEmployeeIds) {
+      const emp = employeeById.get(employeeId);
       if (!emp) continue;
       const role = mapEmployeeRoleToDashboardRole(emp.role);
       if (!role) continue;
@@ -430,7 +472,9 @@ export class DashboardService {
       for (const m of a.trackedByEmployee.values()) trackedMinutes += m;
       for (const empId of a.salariedEmps) {
         const emp = employeeById.get(empId)!;
-        const minute = computeMinuteRate(emp.salaryPerHour);
+        const minute = computeMinuteRate(
+          effectiveHourlyRateWithNorm(emp, normHours),
+        );
         if (minute <= 0) continue;
         const tracked = a.trackedByEmployee.get(empId) ?? 0;
         const idle = Math.max(0, SHIFT_MINUTES - tracked);
@@ -638,9 +682,10 @@ function mapEmployeeRoleToDashboardRole(
 }
 
 /**
- * ₽/минуту для разноса оклада на минуты простоя. Источник —
- * `Employee.salaryPerHour` (повременная оплата): минута = ставка/час
- * ÷ 60. Раньше считалось от legacy `salaryPerShift` / SHIFT_MINUTES;
+ * ₽/минуту для разноса оклада на минуты простоя. Источник — ставка
+ * ₽/час: у почасовика `Employee.salaryPerHour`, у месячника
+ * производная `salaryPerMonth / нормаЧасов(месяц)`
+ * (`effectiveHourlyRateWithNorm`). Минута = ставка/час ÷ 60. Раньше считалось от legacy `salaryPerShift` / SHIFT_MINUTES;
  * при бэкфилле `salaryPerHour = salaryPerShift / 8` (SHIFT_MINUTES =
  * 480) результат для существующих сотрудников не меняется, а новые
  * окладники (без legacy `salaryPerShift`) больше не выпадают из разноса.

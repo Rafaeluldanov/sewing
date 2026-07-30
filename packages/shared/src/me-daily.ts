@@ -18,9 +18,9 @@
  */
 
 import { z } from 'zod';
-import type { CompensationType } from './employees';
+import type { CompensationType, SalaryRateMode } from './employees';
 
-export type { CompensationType };
+export type { CompensationType, SalaryRateMode };
 
 // ---------------------------------------------------------------------------
 // GET /api/me/daily — нет query, ответ — `MeDailyDto`
@@ -71,10 +71,27 @@ export interface MeDailySalaryDto {
   shiftOpen: boolean;
   /** ISO-метка начала смены, если она открыта. Иначе `null`. */
   shiftStartedAt: string | null;
-  /** Почасовая ставка `Employee.salaryPerHour` (₽/час, подсказка в UI). */
+  /**
+   * Ставка ₽/час — подсказка в UI. У почасовика это
+   * `Employee.salaryPerHour`, у месячника — производная
+   * `salaryPerMonth / нормаЧасов(месяц)`: рабочему полезно видеть
+   * цену часа независимо от того, в каких единицах ему назначили
+   * оклад.
+   */
   salaryPerHour: number | null;
   /** `true`, если запись `SalaryEntry` за сегодня уже есть. */
   hasEntryToday: boolean;
+  /**
+   * Вид ставки (29.07.2026). Для `MONTHLY` дневного начисления не
+   * бывает вовсе: `amount = 0`, а реальные деньги месяца лежат в
+   * `monthlyAmount`. Опционально ради backward-compat.
+   */
+  rateMode?: SalaryRateMode;
+  /**
+   * Начислено за ТЕКУЩИЙ месяц по строке `MONTH_SALARY` (₽). `null`
+   * для почасовика — у него оклад дневной и живёт в `amount`.
+   */
+  monthlyAmount?: number | null;
 }
 
 /**

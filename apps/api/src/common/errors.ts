@@ -1642,15 +1642,33 @@ export class SalaryEntryNotFoundException extends BusinessException {
 
 /**
  * Менеджер запросил `reset = true` для `SalaryEntry`, но у сотрудника
- * не задана `salaryPerShift`. Возвращать к чему — непонятно: нужно
- * сначала проставить ставку в карточке сотрудника.
+ * не задана ставка, по которой запись пересчитывается: почасовая для
+ * дневных/подкройных строк, месячный оклад — для `MONTH_SALARY`.
+ * Возвращать к чему — непонятно: нужно сначала проставить ставку в
+ * карточке сотрудника.
  */
 export class SalaryReentryWithoutRateException extends BusinessException {
   constructor() {
     super(
       'SALARY_RATE_MISSING',
-      'У сотрудника не задана ставка за смену — сначала укажите её в карточке.',
+      'У сотрудника не задана ставка — сначала укажите её в карточке.',
       HttpStatus.UNPROCESSABLE_ENTITY,
+    );
+  }
+}
+
+/**
+ * Строка производственного календаря (`PayrollCalendarMonth`) не
+ * найдена. Бросается из `PayrollCalendarService.remove`, когда
+ * менеджер удаляет месяц, которого уже нет (двойной клик, старая
+ * вкладка).
+ */
+export class PayrollCalendarMonthNotFoundException extends BusinessException {
+  constructor() {
+    super(
+      'PAYROLL_CALENDAR_MONTH_NOT_FOUND',
+      'Месяц производственного календаря не найден',
+      HttpStatus.NOT_FOUND,
     );
   }
 }

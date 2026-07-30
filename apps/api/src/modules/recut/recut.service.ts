@@ -19,6 +19,7 @@ import {
   RecutOrderNotFoundException,
 } from '../../common/errors.js';
 import { SalaryService } from '../salary/salary.service.js';
+import { resolveEffectiveHourlyRate } from '../salary/salary-rate.js';
 
 const recutSessionInclude = {
   order: { select: { number: true } },
@@ -196,12 +197,20 @@ export class RecutService {
 
     // Снимок часовой ставки на момент завершения (для аудита/показа).
     // Платёжный источник истины — агрегат `syncDailyRecut`; здесь снимок
-    // считаем той же ставкой, чтобы строка сессии и ведомость сходились.
+    // считаем ТОЙ ЖЕ ставкой, чтобы строка сессии и ведомость сходились —
+    // включая месячного окладника, у которого `salaryPerHour` пуст, а
+    // ₽/час производные от нормы часов месяца (см. `salary-rate.ts`).
     const employee = await this.prisma.employee.findUnique({
       where: { id: employeeId },
-      select: { salaryPerHour: true },
+      select: {
+        salaryRateMode: true,
+        salaryPerHour: true,
+        salaryPerMonth: true,
+      },
     });
-    const ratePerHour = employee?.salaryPerHour ?? null;
+    const ratePerHour = employee
+      ? await resolveEffectiveHourlyRate(this.prisma, employee, endedAt)
+      : null;
     const amount =
       ratePerHour !== null
         ? new Prisma.Decimal(ratePerHour)

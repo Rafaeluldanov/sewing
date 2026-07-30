@@ -47,7 +47,7 @@ import { PrismaService } from '../../prisma/prisma.service.js';
  *     `SalaryService.syncDailySalary`.
  *
  * Связанные документы:
- *   - `docs/api.md §10c`, `docs/domain.md §10.6`,
+ *   - `docs/api.md §31a`, `docs/domain.md §10.6`,
  *     `docs/screens.md §12a`.
  */
 @Injectable()
@@ -700,7 +700,9 @@ export class PayrollService {
         login: true,
         role: true,
         compensationType: true,
+        salaryRateMode: true,
         salaryPerHour: true,
+        salaryPerMonth: true,
         active: true,
         companyDivision: { select: { id: true, code: true, name: true } },
       },
@@ -828,8 +830,12 @@ export class PayrollService {
         login: employee.login,
         role: employee.role,
         compensationType: employee.compensationType,
+        salaryRateMode: employee.salaryRateMode,
         salaryPerHour: employee.salaryPerHour
           ? Number(employee.salaryPerHour)
+          : null,
+        salaryPerMonth: employee.salaryPerMonth
+          ? Number(employee.salaryPerMonth)
           : null,
         active: employee.active,
         companyDivisionId: employee.companyDivision?.id ?? null,

@@ -23,7 +23,7 @@ import { PayrollService } from './payroll.service.js';
 /**
  * Контроллер модуля Payroll (PHASE 1, read-only).
  *
- * Контракт — `docs/api.md §10c`. Бизнес-правила —
+ * Контракт — `docs/api.md §31a`. Бизнес-правила —
  * `docs/domain.md §10.6`. Экранов — `docs/screens.md §12a`.
  *
  * Endpoints:

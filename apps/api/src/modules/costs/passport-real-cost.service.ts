@@ -15,6 +15,10 @@ import {
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { isSalaryEligible } from '../employees/compensation.js';
 import {
+  effectiveHourlyRateWithNorm,
+  resolveMonthNormHours,
+} from '../salary/salary-rate.js';
+import {
   apportionEmployeeTime,
 } from './time-apportionment.js';
 import { buildWorkIntervals, type WorkEvent } from './work-intervals.js';
@@ -364,14 +368,19 @@ export class PassportRealCostService {
         id: true,
         fullName: true,
         compensationType: true,
+        salaryRateMode: true,
         salaryPerHour: true,
+        salaryPerMonth: true,
       },
     });
+    // Норма часов месяца — знаменатель ₽/час у месячного окладника
+    // (29.07.2026); одна на окно расчёта.
+    const normHours = await resolveMonthNormHours(this.prisma, from);
     const rateByEmployee = new Map<string, number>();
     const nameByEmployee = new Map<string, string>();
     for (const e of employees) {
       nameByEmployee.set(e.id, e.fullName);
-      const minute = computeMinuteRate(e.salaryPerHour);
+      const minute = computeMinuteRate(effectiveHourlyRateWithNorm(e, normHours));
       if (minute > 0 && isSalaryEligible(e.compensationType)) {
         rateByEmployee.set(e.id, minute);
       }

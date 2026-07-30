@@ -356,9 +356,10 @@ FINISHED_GOODS_MOVEMENT |
 FINISHED_GOODS_SHIPMENT |
 SIZE |
 COMPANY_SETTINGS | COMPANY_DIVISION |
-SALARY_ENTRY | PAYROLL_PAYOUT |
+SALARY_ENTRY | PAYROLL_CALENDAR_MONTH | PAYROLL_PAYOUT |
 PAYROLL_ACCRUAL_DOCUMENT |
-ORDER_SAMPLE | EMPLOYEE | OPERATION
+ORDER_SAMPLE | EMPLOYEE | OPERATION |
+APP_ROLE
 ```
 
 - `EMPLOYEE` — событие `EMPLOYEE_DELETED` (физическое удаление пустой
@@ -753,9 +754,10 @@ audit-событий не существует.
   - `SALARY_ENTRY_RESET` — менеджер прислал `reset = true`.
     Запись возвращается под автоматический sync
     (`editedManually = false`, `managerComment = null`,
-    `editedByEmployeeId = null`,
-    `amount = employee.salaryPerShift`). Payload — тот же набор
-    полей с `reset: true` и сброшенными `after.*`.
+    `editedByEmployeeId = null`, `amount` пересчитан той же формулой,
+    что у sync: полный `salaryPerMonth` для строки `MONTH_SALARY`,
+    часы дня × ставку ₽/час — для остальных источников). Payload —
+    тот же набор полей с `reset: true` и сброшенными `after.*`.
 
   `entityId = SalaryEntry.id`. Автоматический `syncDailySalary`
   (вызывается на `start/stop shift` из `ShiftsService`) аудит
@@ -763,6 +765,21 @@ audit-событий не существует.
   `SalaryService.updateManually` и ТЗ STEP 4 «не зашумлять журнал»).
   Никаких новых таблиц истории не заводим — `SalaryEntry` модель
   не меняется.
+- `PAYROLL_CALENDAR_MONTH` (29.07.2026) — производственный календарь
+  (`apps/api/src/modules/payroll-calendar/payroll-calendar.service.ts`,
+  `prisma/schema.prisma::PayrollCalendarMonth`):
+  - `PAYROLL_CALENDAR_MONTH_UPSERTED` — менеджер сохранил норму месяца
+    (`PUT /api/payroll-calendar`). Payload —
+    `{ year, month, before: { normDays, normHours, comment } | null,
+       after: { normDays, normHours, comment } }`.
+  - `PAYROLL_CALENDAR_MONTH_DELETED` — норма месяца убрана
+    (`DELETE /api/payroll-calendar/:year/:month`), payload — снимок
+    удалённой строки.
+
+  `entityId = PayrollCalendarMonth.id`. В аудите справочник не ради
+  порядка: через `normHours` считается производная ставка ₽/час
+  месячного окладника, то есть правка нормы двигает реальные деньги в
+  доплате за подкрой и в себестоимости.
 - `CUT_RELEASE_POLICY_CONSUMED` — пишется в транзакции
   `PassportsService.issueToEmployee` (через
   `consumeCutReleasePolicyInTx`, `passports.service.ts:1223`) при

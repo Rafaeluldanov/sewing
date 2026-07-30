@@ -298,6 +298,19 @@ export type AuditEntityType =
    */
   | 'SALARY_ENTRY'
   /**
+   * Производственный календарь — норма дней/часов на месяц (см.
+   * `apps/api/src/modules/payroll-calendar/*`,
+   * `prisma/schema.prisma::PayrollCalendarMonth`). События —
+   * `PAYROLL_CALENDAR_MONTH_UPSERTED`, `PAYROLL_CALENDAR_MONTH_DELETED`,
+   * `entityId = PayrollCalendarMonth.id`.
+   *
+   * Норма попала в аудит не как справочная величина: через неё
+   * считается производная ставка ₽/час месячного окладника
+   * (`salaryPerMonth / normHours`), то есть правка нормы двигает
+   * реальные деньги в доплате за подкрой и в себестоимости.
+   */
+  | 'PAYROLL_CALENDAR_MONTH'
+  /**
    * Выплаты зарплаты (PHASE 3, см.
    * `apps/api/src/modules/payroll-payouts/*`,
    * `prisma/schema.prisma::PayrollPayout` / `PayrollPayoutLine`,

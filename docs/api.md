@@ -96,6 +96,7 @@
 - [30. Earnings](#30-earnings)
 - [30a. Payroll (PHASE 1, read-only)](#30a-payroll)
 - [31. Salary](#31-salary)
+- [31a. Payroll calendar (производственный календарь)](#31a-payroll-calendar)
 - [32. Shopfloor](#32-shopfloor)
 - [33. Display screens](#33-display-screens)
 - [34. Dashboard](#34-dashboard)
@@ -2062,6 +2063,33 @@ ADJUSTMENT-строки не закрывают `OperationEntry` / `SalaryEntry`
 | PATCH | `/api/salary/:id`          | SHOP_MANAGER, ADMIN | Body `UpdateSalaryEntryDto`. Ручная корректировка суммы / комментария / `reset = true` (вернуть под автоматику). PHASE 2 STEP 4 — каждая успешная правка пишет ровно одно событие в `AuditLog`: `SALARY_ENTRY_UPDATED` (обычный PATCH) или `SALARY_ENTRY_RESET` (`reset = true`). Payload содержит `before` / `after`-снимки `amount`/`managerComment`/`editedManually` + `salaryEntryId`/`employeeId`/`date`/`reset`/`editedByEmployeeId`. См. `docs/events.md §3.3 «SALARY_ENTRY»`. Автоматический `syncDailySalary` (на `start/stop shift`) аудит сознательно НЕ пишет. **PHASE 3 STEP 3 lock-by-line:** если эта `SalaryEntry` уже включена в `PayrollPayoutLine` выплаты со статусом `ISSUED` или `ACKNOWLEDGED`, любой PATCH (включая `reset = true`) отдаёт `409 PAYROLL_LOCKED`. `DRAFT` и `CANCELLED` не блокируют. См. §«Payroll payouts». |
 
 DTO: `packages/shared/src/salary.ts`. ADR: 0021.
+
+---
+
+<a id="31a-payroll-calendar"></a>
+## 31a. Payroll calendar (производственный календарь)
+
+Источник: `payroll-calendar/payroll-calendar.controller.ts`.
+Класс-уровень `@Roles('SHOP_MANAGER', 'ADMIN')` — норма часов участвует
+в расчёте денег (производная ставка ₽/час месячного окладника),
+поэтому доступ тот же, что у ручной правки начислений.
+
+| Метод  | Путь                                | RBAC                | Описание |
+| ------ | ----------------------------------- | ------------------- | -------- |
+| GET    | `/api/payroll-calendar`             | SHOP_MANAGER, ADMIN | Query `{ year? }`. Нормы месяцев, сортировка `(year, month) ASC`. Без `year` — все года. |
+| PUT    | `/api/payroll-calendar`             | SHOP_MANAGER, ADMIN | Body `UpsertPayrollCalendarMonthDto` (`year`, `month` 1..12, `normDays` 0..31, `normHours > 0`, `comment?`). Идемпотентный upsert по естественному ключу `(year, month)` — отдельных POST/PATCH нет сознательно. Пишет `PAYROLL_CALENDAR_MONTH_UPSERTED` в `AuditLog`. |
+| DELETE | `/api/payroll-calendar/:year/:month` | SHOP_MANAGER, ADMIN | Убрать норму месяца. Нет строки — `404 PAYROLL_CALENDAR_MONTH_NOT_FOUND`. Пишет `PAYROLL_CALENDAR_MONTH_DELETED`. |
+
+Зачем: `normHours` — знаменатель ставки ₽/час у сотрудника с месячным
+окладом (`salaryPerMonth / normHours`), по которой считаются доплата за
+подкрой, ₽/минуту простоя в дашборде и разнос оклада на себестоимость.
+На саму сумму месячного оклада норма НЕ влияет — он начисляется за
+месяц целиком. Незаполненный месяц не ломает расчёт: он падает на
+`DEFAULT_MONTH_NORM_HOURS = 168` (21 × 8), экран
+`/admin/payroll/calendar` подсвечивает пропуск.
+
+DTO: `packages/shared/src/payroll-calendar.ts`. Домен:
+`docs/domain.md §10.3a–10.3b`.
 
 ---
 

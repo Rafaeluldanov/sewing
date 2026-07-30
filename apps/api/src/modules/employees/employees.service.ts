@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import bcrypt from 'bcryptjs';
-import { CompensationType, Prisma, Role } from '@prisma/client';
+import { CompensationType, Prisma, Role, SalaryRateMode } from '@prisma/client';
 import type {
   ActiveCutterListItemDto,
   CreateEmployeeDto,
@@ -40,7 +40,7 @@ import {
 } from '../../common/errors.js';
 import { AuditService } from '../audit/audit.service.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
-import { requiresSalaryRate } from './compensation.js';
+import { requiresHourlyRate, requiresMonthlyRate } from './compensation.js';
 
 /**
  * Сервис управления сотрудниками (post-Шаг 18 / Шаг 19, ADR-0021,
@@ -158,9 +158,10 @@ export class EmployeesService {
    * Инварианты:
    *   - `login` уникален (`Employee.login @unique`); конфликт
    *     транслируется в `EMPLOYEE_LOGIN_TAKEN` (409);
-   *   - окладная пара `(compensationType, salaryPerHour)` валидируется
-   *     тем же правилом, что и в `update`: для `SALARY`/`MIXED`
-   *     обязателен положительный `salaryPerHour`. Это уже зеркалит
+   *   - окладная тройка `(compensationType, salaryRateMode, ставка)`
+   *     валидируется тем же правилом, что и в `update`: для
+   *     `SALARY`/`MIXED` обязательна положительная ставка — почасовая
+   *     при `HOURLY`, месячный оклад при `MONTHLY`. Это уже зеркалит
    *     `CreateEmployeeSchema.superRefine`, но мы дублируем guard на
    *     сервисе, чтобы не зависеть от того, что наружу однажды появится
    *     ещё один путь записи (например, импорт).
@@ -170,11 +171,27 @@ export class EmployeesService {
    * сотрудника логин работал ровно так же, как у seed-аккаунтов.
    */
   async create(dto: CreateEmployeeDto): Promise<EmployeeDetailDto> {
+    const createRateMode = (dto.salaryRateMode ??
+      SalaryRateMode.HOURLY) as SalaryRateMode;
     if (
-      requiresSalaryRate(dto.compensationType as CompensationType) &&
+      requiresHourlyRate(
+        dto.compensationType as CompensationType,
+        createRateMode,
+      ) &&
       (dto.salaryPerHour === null ||
         dto.salaryPerHour === undefined ||
         dto.salaryPerHour <= 0)
+    ) {
+      throw new EmployeeSalaryRateRequiredException();
+    }
+    if (
+      requiresMonthlyRate(
+        dto.compensationType as CompensationType,
+        createRateMode,
+      ) &&
+      (dto.salaryPerMonth === null ||
+        dto.salaryPerMonth === undefined ||
+        dto.salaryPerMonth <= 0)
     ) {
       throw new EmployeeSalaryRateRequiredException();
     }
@@ -213,11 +230,18 @@ export class EmployeesService {
           // прислал доп. роли — получаем `[role]`, поведение прежнее.
           roles: normalizeAssignedRoles(dto.role, dto.roles) as Role[],
           compensationType: dto.compensationType as CompensationType,
-          // Повременная оплата: основная ставка — почасовая.
+          // Вид окладной ставки: часовая (по умолчанию) или месячная.
+          salaryRateMode: createRateMode,
+          // Повременная оплата: ставка режима `HOURLY`.
           salaryPerHour:
             dto.salaryPerHour === undefined || dto.salaryPerHour === null
               ? null
               : new Prisma.Decimal(dto.salaryPerHour.toFixed(2)),
+          // Месячный оклад: ставка режима `MONTHLY`.
+          salaryPerMonth:
+            dto.salaryPerMonth === undefined || dto.salaryPerMonth === null
+              ? null
+              : new Prisma.Decimal(dto.salaryPerMonth.toFixed(2)),
           // LEGACY «за смену»: больше не участвует в расчёте, но если
           // значение всё же пришло (импорт/совместимость) — сохраняем.
           salaryPerShift:
@@ -340,18 +364,36 @@ export class EmployeesService {
 
     const next = {
       compensationType: dto.compensationType ?? current.compensationType,
+      salaryRateMode: dto.salaryRateMode ?? current.salaryRateMode,
       salaryPerHour:
         dto.salaryPerHour !== undefined
           ? dto.salaryPerHour
           : current.salaryPerHour !== null
           ? Number(current.salaryPerHour)
           : null,
+      salaryPerMonth:
+        dto.salaryPerMonth !== undefined
+          ? dto.salaryPerMonth
+          : current.salaryPerMonth !== null
+          ? Number(current.salaryPerMonth)
+          : null,
       active: dto.active ?? current.active,
     };
 
+    // Инвариант проверяем по ИТОГОВОЙ паре «тип компенсации + режим
+    // ставки»: переключение режима — самый частый способ его сломать
+    // (менеджер выбрал «месячный», а сумму оклада не ввёл, при этом
+    // старая почасовая ставка в колонке ещё лежит и создаёт иллюзию
+    // заполненности).
     if (
-      requiresSalaryRate(next.compensationType) &&
+      requiresHourlyRate(next.compensationType, next.salaryRateMode) &&
       (next.salaryPerHour === null || next.salaryPerHour <= 0)
+    ) {
+      throw new EmployeeSalaryRateRequiredException();
+    }
+    if (
+      requiresMonthlyRate(next.compensationType, next.salaryRateMode) &&
+      (next.salaryPerMonth === null || next.salaryPerMonth <= 0)
     ) {
       throw new EmployeeSalaryRateRequiredException();
     }
@@ -389,11 +431,20 @@ export class EmployeesService {
     if (dto.compensationType !== undefined) {
       data.compensationType = dto.compensationType as CompensationType;
     }
+    if (dto.salaryRateMode !== undefined) {
+      data.salaryRateMode = dto.salaryRateMode as SalaryRateMode;
+    }
     if (dto.salaryPerHour !== undefined) {
       data.salaryPerHour =
         dto.salaryPerHour === null
           ? null
           : new Prisma.Decimal(dto.salaryPerHour.toFixed(2));
+    }
+    if (dto.salaryPerMonth !== undefined) {
+      data.salaryPerMonth =
+        dto.salaryPerMonth === null
+          ? null
+          : new Prisma.Decimal(dto.salaryPerMonth.toFixed(2));
     }
     if (dto.salaryPerShift !== undefined) {
       // LEGACY: форма больше не шлёт это поле, но если пришло —
@@ -1125,7 +1176,9 @@ function toListDto(e: EmployeeRow): EmployeeListItemDto {
     roles: e.roles && e.roles.length > 0 ? e.roles : [e.role],
     activeRole: e.activeRole ?? null,
     compensationType: e.compensationType,
+    salaryRateMode: e.salaryRateMode,
     salaryPerHour: e.salaryPerHour === null ? null : Number(e.salaryPerHour),
+    salaryPerMonth: e.salaryPerMonth === null ? null : Number(e.salaryPerMonth),
     salaryPerShift: e.salaryPerShift === null ? null : Number(e.salaryPerShift),
     active: e.active,
     createdAt: e.createdAt.toISOString(),

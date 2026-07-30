@@ -1,4 +1,4 @@
-import { CompensationType } from '@prisma/client';
+import { CompensationType, SalaryRateMode } from '@prisma/client';
 
 /**
  * Доменные правила payroll-eligibility (ADR-0021 + post-задача
@@ -57,14 +57,57 @@ export function isSalaryEligible(type: CompensationType): boolean {
 }
 
 /**
- * Должен ли быть задан `Employee.salaryPerHour > 0` для этого типа?
+ * Должен ли быть задан `Employee.salaryPerHour > 0`?
  *
- * Тождественно `isSalaryEligible`: почасовую ставку требуем ровно
- * тогда, когда сотрудник получает оклад. Заведено отдельным именем,
- * чтобы guard в `EmployeesService.create/update` читался как
- * «требуется ставка», а не как «получает оклад» — это два разных
- * вопроса с одним ответом на сегодня, и они могут разъехаться.
+ * С появлением месячного оклада (29.07.2026) ответ зависит уже от
+ * ДВУХ полей: человек получает оклад (`isSalaryEligible`) И ставка
+ * назначена в часах (`salaryRateMode = HOURLY`). У месячника
+ * `salaryPerHour` пустой законно — его ₽/час производные от нормы
+ * часов месяца (`salary-rate.ts`).
  */
-export function requiresSalaryRate(type: CompensationType): boolean {
-  return isSalaryEligible(type);
+export function requiresHourlyRate(
+  type: CompensationType,
+  mode: SalaryRateMode,
+): boolean {
+  return isSalaryEligible(type) && mode === SalaryRateMode.HOURLY;
+}
+
+/**
+ * Должен ли быть задан `Employee.salaryPerMonth > 0`? Зеркало
+ * `requiresHourlyRate` для режима `MONTHLY`.
+ */
+export function requiresMonthlyRate(
+  type: CompensationType,
+  mode: SalaryRateMode,
+): boolean {
+  return isSalaryEligible(type) && mode === SalaryRateMode.MONTHLY;
+}
+
+/**
+ * Получает ли сотрудник ДНЕВНЫЕ окладные строки
+ * (`SalaryEntrySource.SHIFT_DAY`)?
+ *
+ * Ровно почасовые окладники. Месячник получает одну строку
+ * `MONTH_SALARY` на месяц, и дневные строки ему создавать нельзя —
+ * это было бы двойной оплатой тех же часов. Правило вынесено сюда,
+ * чтобы у `SalaryService.syncDailySalary` и у любых будущих
+ * пересчётов ведомости был один источник истины.
+ */
+export function isDailySalaryEligible(
+  type: CompensationType,
+  mode: SalaryRateMode,
+): boolean {
+  return isSalaryEligible(type) && mode === SalaryRateMode.HOURLY;
+}
+
+/**
+ * Получает ли сотрудник МЕСЯЧНУЮ окладную строку
+ * (`SalaryEntrySource.MONTH_SALARY`)? Зеркало
+ * `isDailySalaryEligible`.
+ */
+export function isMonthlySalaryEligible(
+  type: CompensationType,
+  mode: SalaryRateMode,
+): boolean {
+  return isSalaryEligible(type) && mode === SalaryRateMode.MONTHLY;
 }

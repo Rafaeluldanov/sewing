@@ -31,13 +31,18 @@
  * экраны не получали лишних агрегатов.
  *
  * Связанные документы:
- *   - `docs/api.md §10c`, `docs/domain.md §10.6`, `docs/screens.md §12a`,
+ *   - `docs/api.md §31a`, `docs/domain.md §10.6`, `docs/screens.md §12a`,
  *     `docs/erd.md §2.9`, `docs/events.md §3.3` (read-only, AuditLog
  *     не пишется).
  */
 
 import { z } from 'zod';
-import { CompensationTypeSchema, type CompensationType } from './employees';
+import {
+  CompensationTypeSchema,
+  type CompensationType,
+  type SalaryRateMode,
+} from './employees';
+import type { SalaryEntrySource } from './salary';
 import {
   EarningStatusSchema,
   type EarningStatus,
@@ -297,8 +302,15 @@ export interface PayrollEmployeeDetailEmployeeDto {
   login: string;
   role: string;
   compensationType: CompensationType;
+  /**
+   * Вид окладной ставки (`Employee.salaryRateMode`, 29.07.2026).
+   * Опционально ради backward-compat; backend всегда отдаёт ключ.
+   */
+  salaryRateMode?: SalaryRateMode;
   /** Почасовая ставка `Employee.salaryPerHour` (₽/час). */
   salaryPerHour: number | null;
+  /** Месячный оклад `Employee.salaryPerMonth` (₽/мес). */
+  salaryPerMonth?: number | null;
   active: boolean;
   /**
    * PHASE 2 STEP 2: подразделение, к которому привязан сотрудник
@@ -348,9 +360,13 @@ export interface PayrollEmployeeSalaryEntryDto {
   id: string;
   date: string;
   amount: number;
-  /** Отработанные секунды за день (закрытые смены). `null` — историч./MANUAL. */
+  /**
+   * Отработанные секунды. Для `SHIFT_DAY`/`RECUT` — за день, для
+   * `MONTH_SALARY` — за весь месяц (справочно, сумма от них не
+   * зависит). `null` — историч./MANUAL.
+   */
   workedSeconds: number | null;
-  source: 'SHIFT_DAY' | 'MANUAL' | 'RECUT';
+  source: SalaryEntrySource;
   editedManually: boolean;
   managerComment: string | null;
   editedByEmployeeId: string | null;

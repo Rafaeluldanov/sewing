@@ -28,6 +28,7 @@
     "./warehouses": "./src/warehouses.ts",
     "./operations": "./src/operations.ts",
     "./salary": "./src/salary.ts",
+    "./payroll-calendar": "./src/payroll-calendar.ts",
     "./employees": "./src/employees.ts",
     "./clients": "./src/clients.ts",
     "./company-settings": "./src/company-settings.ts",

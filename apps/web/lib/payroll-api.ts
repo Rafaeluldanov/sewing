@@ -1,6 +1,6 @@
 /**
  * Серверные обёртки над `/api/payroll/*` (PHASE 1 read-only,
- * см. `docs/api.md §10c`, `docs/screens.md §12a`).
+ * см. `docs/api.md §31a`, `docs/screens.md §12a`).
  *
  * Используются только из RSC `/admin/payroll/*` под ролями
  * `SHOP_MANAGER` / `ADMIN`. Backend в любом случае закрывает

@@ -19,6 +19,7 @@ export const SALARY_SOURCE_LABELS: Record<SalaryEntryDto['source'], string> = {
   SHIFT_DAY: 'Оклад за день',
   MANUAL: 'Ручное начисление',
   RECUT: 'Подкрой (доплата)',
+  MONTH_SALARY: 'Оклад за месяц',
 };
 
 /**

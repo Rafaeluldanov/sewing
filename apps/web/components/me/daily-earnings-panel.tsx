@@ -157,14 +157,31 @@ function SalaryBlock({ data }: { data: MeDailyDto }) {
           </span>
         )}
       </div>
-      <div className="my-day-panel__salary-amount">
-        Начислено за день: <strong>{formatRub(sal.amount)}</strong>
-        {sal.amount === 0 && sal.salaryPerHour !== null ? (
-          <span className="my-day-panel__salary-hint">
-            (ставка: {formatRub(sal.salaryPerHour)}/час)
-          </span>
-        ) : null}
-      </div>
+      {/*
+        Месячный оклад (29.07.2026) начисляется одной строкой за месяц,
+        дневной суммы у него не существует. Показывать «начислено за
+        день: 0 ₽» окладнику-месячнику — прямой путь к вопросу «почему
+        мне ничего не начислили», поэтому для него другая формулировка.
+      */}
+      {sal.rateMode === 'MONTHLY' ? (
+        <div className="my-day-panel__salary-amount">
+          Оклад за месяц: <strong>{formatRub(sal.monthlyAmount ?? 0)}</strong>
+          {sal.salaryPerHour !== null ? (
+            <span className="my-day-panel__salary-hint">
+              (≈ {formatRub(sal.salaryPerHour)}/час)
+            </span>
+          ) : null}
+        </div>
+      ) : (
+        <div className="my-day-panel__salary-amount">
+          Начислено за день: <strong>{formatRub(sal.amount)}</strong>
+          {sal.amount === 0 && sal.salaryPerHour !== null ? (
+            <span className="my-day-panel__salary-hint">
+              (ставка: {formatRub(sal.salaryPerHour)}/час)
+            </span>
+          ) : null}
+        </div>
+      )}
     </section>
   );
 }

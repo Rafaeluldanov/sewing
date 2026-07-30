@@ -71,7 +71,8 @@
 | `PrintJobStatus` | `PENDING`, `PRINTED`, `FAILED` | `prisma/schema.prisma::enum PrintJobStatus` |
 | `PrinterType` | `PASSPORT`, `QR`, `LABEL`, `DEFAULT` | `prisma/schema.prisma::enum PrinterType` |
 | `Role` | `SHOP_MANAGER`, `CUTTER`, `CUTTER_ASSISTANT`, `SEAMSTRESS`, `QC`, `IRONING`, `PACKING`, `ADMIN`, `DISPLAY`, `SHOPFLOOR_MASTER` | `prisma/schema.prisma::enum Role` |
-| `SalaryEntrySource` | `SHIFT_DAY`, `MANUAL` | `prisma/schema.prisma::enum SalaryEntrySource` |
+| `SalaryEntrySource` | `SHIFT_DAY`, `MANUAL`, `RECUT`, `MONTH_SALARY` | `prisma/schema.prisma::enum SalaryEntrySource` |
+| `SalaryRateMode` | `HOURLY`, `MONTHLY` | `prisma/schema.prisma::enum SalaryRateMode` |
 
 > **Free-form статусы.** В части моделей жизненный цикл хранится **строкой**
 > (а не Prisma enum-ом) ради расширяемости без миграции. Источник истины
@@ -102,9 +103,32 @@
 <a id="21-users--auth--employees"></a>
 ### 2.1 Users / auth / employees
 
+- **`AppRole`** — справочник ролей (`/admin/roles`, 28.07.2026).
+  `id` (cuid), `code` (uniq, UPPER_SNAKE), `name`,
+  `system: Boolean @default(false)`, `inherits: String[]` (коды
+  ролей-доноров), `workspace: String @default("/")`,
+  `singleWorkspace: Boolean`, `lockToWorkspace: Boolean`,
+  `active: Boolean @default(true)`, `sortOrder: Int`. Индекс: `active`.
+  - Роль перестала быть значением enum-а: новую заводят из админки, без
+    миграции и деплоя. 12 системных ролей (`system = true`) сидируются
+    миграцией `20261001100000_app_roles_registry`, их коды зашиты в
+    `@Roles(...)` и терминалах — удалять и переименовывать по коду
+    нельзя.
+  - Права — НАСЛЕДОВАНИЕ (`inherits`): `AuthGuard` раскрывает набор
+    ролей сотрудника транзитивно (`expandRoleCodes`) и только потом
+    сверяет с декоратором. Циклы отбиваются валидацией.
+  - FK со стороны `Employee` сознательно НЕТ: удаление роли не должно
+    каскадом сносить людей, гейт `IN_USE` живёт в `purgeMany`.
 - **`Employee`** — `id` (cuid), `fullName`, `login` (uniq), `pinHash`,
-  `role: Role`, `compensationType: CompensationType @default(PIECEWORK)`,
-  `salaryPerShift: Decimal?` (для `SALARY`/`MIXED`),
+  `role: String` (код роли → `AppRole.code`; до 28.07.2026 — enum `Role`),
+  `roles: String[]` (набор доступа БЕЗ раскрытия наследования),
+  `activeRole: String?`,
+  `compensationType: CompensationType @default(PIECEWORK)`,
+  `salaryRateMode: SalaryRateMode @default(HOURLY)` (вид окладной
+  ставки, 29.07.2026),
+  `salaryPerHour: Decimal?` (ставка режима `HOURLY`),
+  `salaryPerMonth: Decimal?` (оклад режима `MONTHLY`),
+  `salaryPerShift: Decimal?` (LEGACY, в расчёте не участвует),
   `cutterB2bSewingPercent: Decimal(5,2)?` (B2B-процент закройщика),
   `companyDivisionId: String? → CompanyDivision` (`onDelete: SetNull`,
   PHASE 2 STEP 2 — основная привязка сотрудника к подразделению,
@@ -112,7 +136,10 @@
   `active: Boolean @default(true)`. Индексы: `role`, `compensationType`,
   `companyDivisionId`.
   - Сессии: `pinHash` хранит `bcrypt(password)`.
-  - Источник истины «как платим» — `compensationType` (см. ADR-0021).
+  - Источник истины «как платим» — `compensationType` (см. ADR-0021);
+    «в каких единицах» — `salaryRateMode` (`docs/domain.md §10.3a`).
+    Обязательна ровно одна ставка: `salaryPerHour` при `HOURLY`,
+    `salaryPerMonth` при `MONTHLY`.
   - PHASE 2 STEP 1: историческая колонка `salaryBase` удалена (см.
     ADR-0020 §«PHASE 2 — drop legacy»). Реальная оплата считается
     через `compensationType` + `salaryPerShift`.
@@ -527,7 +554,17 @@ master-action'ом, удаление, упаковка прямо из ячей�
   @default(SHIFT_DAY)`, `editedManually @default(false)`,
   `managerComment?`, `editedByEmployeeId? → Employee` (Editor).
   `(employeeId, date, source)` uniq (`SalaryEntry_employee_date_source_uniq`),
-  ADR-0021.
+  ADR-0021. Для `source = MONTH_SALARY` (месячный оклад, 29.07.2026)
+  `date` = 1-е число месяца: одна строка на месяц вместо дневных.
+- **`PayrollCalendarMonth`** *(29.07.2026)* — производственный
+  календарь: `year`, `month` (1..12), `normDays: Int`,
+  `normHours: Decimal(7,2)`, `comment?`. `(year, month)` uniq
+  (`PayrollCalendarMonth_year_month_uniq`), индекс `year`. Норма часов
+  — знаменатель производной ставки ₽/час у сотрудника с
+  `Employee.salaryRateMode = MONTHLY` (`salaryPerMonth / normHours`).
+  FK ни на кого не ставит: справочник самостоятельный, удаление строки
+  лишь возвращает расчёт к дефолту `168 ч`. См.
+  `docs/domain.md §10.3b`.
 - **`PayrollPayout`** *(PHASE 3 STEP 1)* — управленческий документ
   «выплата зарплаты сотруднику за период». `employeeId → Employee`,
   `periodFrom: Date`, `periodTo: Date`, `status: PayrollPayoutStatus

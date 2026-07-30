@@ -17,7 +17,19 @@ import { z } from 'zod';
 // Enums (зеркало Prisma)
 // ---------------------------------------------------------------------------
 
-export const SALARY_ENTRY_SOURCES = ['SHIFT_DAY', 'MANUAL', 'RECUT'] as const;
+/**
+ * `MONTH_SALARY` (29.07.2026) — месячный оклад
+ * (`Employee.salaryRateMode = MONTHLY`): ОДНА строка на календарный
+ * месяц, `date` = 1-е число, `amount` = `salaryPerMonth` целиком.
+ * У таких сотрудников дневных `SHIFT_DAY`-строк не бывает вовсе —
+ * иначе за одни и те же часы платили бы дважды.
+ */
+export const SALARY_ENTRY_SOURCES = [
+  'SHIFT_DAY',
+  'MANUAL',
+  'RECUT',
+  'MONTH_SALARY',
+] as const;
 export const SalaryEntrySourceSchema = z.enum(SALARY_ENTRY_SOURCES);
 export type SalaryEntrySource = z.infer<typeof SalaryEntrySourceSchema>;
 

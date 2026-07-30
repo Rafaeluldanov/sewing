@@ -14,9 +14,14 @@ import {
   SalaryEntryNotFoundException,
   SalaryReentryWithoutRateException,
 } from '../../common/errors.js';
+import { startOfMonthUtc } from '@sewing/shared/payroll-calendar';
 import type { AuthPrincipal } from '../auth/auth.types.js';
-import { isSalaryEligible } from '../employees/compensation.js';
+import {
+  isMonthlySalaryEligible,
+  isSalaryEligible,
+} from '../employees/compensation.js';
 import { isSalaryManager } from './salary.constants.js';
+import { resolveEffectiveHourlyRate } from './salary-rate.js';
 import { AuditService } from '../audit/audit.service.js';
 
 /**
@@ -109,14 +114,25 @@ export class SalaryService {
         id: true,
         active: true,
         compensationType: true,
+        salaryRateMode: true,
         salaryPerHour: true,
+        salaryPerMonth: true,
       },
     });
     if (!employee || !employee.active) return null;
     if (!isSalaryEligible(employee.compensationType)) return null;
+    // Развилка по виду ставки (29.07.2026). Метод остаётся ЕДИНОЙ
+    // точкой входа для `ShiftsService.start/stop` — вызывающему
+    // незачем знать, в каких единицах назначен оклад. Месячнику
+    // дневные строки не создаются вовсе (иначе он получил бы и
+    // оклад, и повременку за те же часы), вместо этого поддерживаем
+    // одну строку `MONTH_SALARY` на месяц.
+    if (isMonthlySalaryEligible(employee.compensationType, employee.salaryRateMode)) {
+      return this.syncMonthlySalary(employeeId, date, tx);
+    }
     if (employee.salaryPerHour === null) {
       // SALARY/MIXED без почасовой ставки — на момент sync это аномалия
-      // (инвариант `requiresSalaryRate` её запрещает), но ронять
+      // (инвариант `requiresHourlyRate` её запрещает), но ронять
       // `start/stop shift` нельзя. Просто ничего не делаем.
       return null;
     }
@@ -214,6 +230,137 @@ export class SalaryService {
   }
 
   /**
+   * Месячный оклад (`SalaryEntrySource.MONTH_SALARY`, 29.07.2026):
+   * ОДНА строка ведомости на календарный месяц.
+   *
+   *   `date`   = 1-е число месяца (канонический ключ, см.
+   *              `startOfMonthUtc` в `@sewing/shared/payroll-calendar`);
+   *   `amount` = `Employee.salaryPerMonth` ЦЕЛИКОМ, без деления на
+   *              отработанные дни.
+   *
+   * Почему полная сумма, а не пропорция по табелю: автоматическая
+   * пропорция требует знать отпуска, больничные и отгулы, а их в
+   * системе нет — «умный» расчёт молча занижал бы оклад за законно
+   * нерабочие дни. Пропуски менеджер вычитает руками через
+   * `PATCH /api/salary/:id` (после чего `editedManually = true`
+   * защищает правку от перезаписи).
+   *
+   * `workedSeconds` пишем справочно (часы закрытых смен за месяц) —
+   * это то, на что менеджер смотрит, решая, надо ли резать сумму.
+   *
+   * Идемпотентен и вызывается из того же места, что дневной sync
+   * (`ShiftsService.start/stop` через `syncDailySalary`): первая
+   * закрытая смена месяца создаёт строку, последующие лишь обновляют
+   * `workedSeconds`. Уважает `editedManually` и lock-by-line ровно
+   * так же, как дневной расчёт.
+   */
+  async syncMonthlySalary(
+    employeeId: string,
+    date: Date,
+    tx: Prisma.TransactionClient | PrismaService = this.prisma,
+  ): Promise<SalaryEntryDto | null> {
+    const monthStart = startOfMonthUtc(date.getFullYear(), date.getMonth() + 1);
+
+    const employee = await tx.employee.findUnique({
+      where: { id: employeeId },
+      select: {
+        id: true,
+        active: true,
+        compensationType: true,
+        salaryRateMode: true,
+        salaryPerMonth: true,
+      },
+    });
+    if (!employee || !employee.active) return null;
+    if (
+      !isMonthlySalaryEligible(
+        employee.compensationType,
+        employee.salaryRateMode,
+      )
+    ) {
+      return null;
+    }
+    if (
+      employee.salaryPerMonth === null ||
+      employee.salaryPerMonth.lessThanOrEqualTo(0)
+    ) {
+      // Аномалия (инвариант `requiresMonthlyRate` её запрещает), но
+      // ронять start/stop shift нельзя — просто не начисляем.
+      return null;
+    }
+
+    // Часы за месяц — справочные, поэтому в отличие от дневного
+    // расчёта НЕ являются условием создания строки: оклад начисляется
+    // за месяц, а не за конкретные часы. Но если в месяце нет ни одной
+    // ЗАКРЫТОЙ смены, строку не создаём — иначе оклад появлялся бы у
+    // человека, который в этом месяце ещё не выходил (например, sync
+    // на открытии первой смены).
+    const worked = await computeWorkedSeconds(
+      tx,
+      employeeId,
+      monthStart,
+      endOfMonth(monthStart),
+    );
+    if (worked <= 0) return null;
+
+    const amount = roundMoney(employee.salaryPerMonth);
+
+    const existing = await tx.salaryEntry.findUnique({
+      where: {
+        SalaryEntry_employee_date_source_uniq: {
+          employeeId,
+          date: monthStart,
+          source: SalaryEntrySource.MONTH_SALARY,
+        },
+      },
+      include: salaryInclude,
+    });
+
+    if (existing) {
+      if (existing.editedManually) return toDto(existing);
+      if (await isSalaryEntryLocked(tx, existing.id)) return toDto(existing);
+      const updated = await tx.salaryEntry.update({
+        where: { id: existing.id },
+        data: { amount, workedSeconds: worked },
+        include: salaryInclude,
+      });
+      return toDto(updated);
+    }
+
+    try {
+      const created = await tx.salaryEntry.create({
+        data: {
+          employeeId,
+          date: monthStart,
+          amount,
+          workedSeconds: worked,
+          source: SalaryEntrySource.MONTH_SALARY,
+        },
+        include: salaryInclude,
+      });
+      return toDto(created);
+    } catch (err) {
+      if (
+        err instanceof Prisma.PrismaClientKnownRequestError &&
+        err.code === 'P2002'
+      ) {
+        const row = await tx.salaryEntry.findUnique({
+          where: {
+            SalaryEntry_employee_date_source_uniq: {
+              employeeId,
+              date: monthStart,
+              source: SalaryEntrySource.MONTH_SALARY,
+            },
+          },
+          include: salaryInclude,
+        });
+        return row ? toDto(row) : null;
+      }
+      throw err;
+    }
+  }
+
+  /**
    * «Подкрой» (`SalaryEntrySource.RECUT`): почасовая ДОПЛАТА сверх смены
    * за завершённые подкрои сотрудника за день (`model RecutSession`).
    *
@@ -222,7 +369,14 @@ export class SalaryService {
    * часов смены: подкрой идёт внутри смены, но оплачивается доплатой
    * сверху (сознательное решение, см. `RecutService`). Сумма =
    * `Σ(workedSeconds завершённых подкроев за день) / 3600 ×
-   * Employee.salaryPerHour`.
+   * ставка ₽/час`.
+   *
+   * Ставка берётся через `resolveEffectiveHourlyRate` (29.07.2026):
+   * у почасовика это `salaryPerHour`, у месячника — производная
+   * `salaryPerMonth / нормаЧасов(месяц)` из производственного
+   * календаря. Иначе месячник, вышедший на подкрой, не получал бы
+   * доплату вовсе — а подкрой оплачивается сверх оклада именно
+   * потому, что это работа сверх смены.
    *
    * Полностью зеркалит `syncDailySalary` (та же эксплуатация
    * `editedManually` / lock-by-line / P2002-гонки), меняется лишь
@@ -242,16 +396,19 @@ export class SalaryService {
         id: true,
         active: true,
         compensationType: true,
+        salaryRateMode: true,
         salaryPerHour: true,
+        salaryPerMonth: true,
       },
     });
     if (!employee || !employee.active) return null;
     // Оплата подкроя — почасовая, поэтому нужна та же почасовая
     // eligibility, что и у смены: SALARY/MIXED со ставкой. Чистому
-    // PIECEWORK без `salaryPerHour` строку не создаём (подкрой всё равно
+    // PIECEWORK без ставки строку не создаём (подкрой всё равно
     // залогирован в `RecutSession`, но денег без часовой ставки нет).
     if (!isSalaryEligible(employee.compensationType)) return null;
-    if (employee.salaryPerHour === null) return null;
+    const ratePerHour = await resolveEffectiveHourlyRate(tx, employee, date);
+    if (ratePerHour === null) return null;
 
     const worked = await computeRecutSeconds(
       tx,
@@ -266,7 +423,7 @@ export class SalaryService {
       return null;
     }
 
-    const amount = hourlyAmount(employee.salaryPerHour, worked);
+    const amount = hourlyAmount(ratePerHour, worked);
 
     const existing = await tx.salaryEntry.findUnique({
       where: {
@@ -431,6 +588,7 @@ export class SalaryService {
         employeeId: true,
         date: true,
         amount: true,
+        source: true,
         managerComment: true,
         editedManually: true,
       },
@@ -450,20 +608,57 @@ export class SalaryService {
     if (dto.reset) {
       const employee = await this.prisma.employee.findUnique({
         where: { id: entry.employeeId },
-        select: { salaryPerHour: true },
+        select: {
+          salaryRateMode: true,
+          salaryPerHour: true,
+          salaryPerMonth: true,
+        },
       });
-      if (!employee || employee.salaryPerHour === null) {
-        throw new SalaryReentryWithoutRateException();
+      if (!employee) throw new SalaryReentryWithoutRateException();
+
+      // Возврат под автоматику = пересчёт ровно по той формуле,
+      // которой строку создавал sync. Для месячной строки это полный
+      // оклад за месяц, для остальных — часы × ставка за тот же день.
+      // Считать месячную строку по дню (или дневную по месяцу) —
+      // тихо испорченная ведомость: сумма выглядит правдоподобно, но
+      // взята не из того периода.
+      let newAmount: Prisma.Decimal;
+      let worked: number;
+      if (entry.source === SalaryEntrySource.MONTH_SALARY) {
+        if (
+          employee.salaryPerMonth === null ||
+          employee.salaryPerMonth.lessThanOrEqualTo(0)
+        ) {
+          throw new SalaryReentryWithoutRateException();
+        }
+        const monthStart = startOfMonthUtc(
+          entry.date.getUTCFullYear(),
+          entry.date.getUTCMonth() + 1,
+        );
+        worked = await computeWorkedSeconds(
+          this.prisma,
+          entry.employeeId,
+          monthStart,
+          endOfMonth(monthStart),
+        );
+        newAmount = roundMoney(employee.salaryPerMonth);
+      } else {
+        const ratePerHour = await resolveEffectiveHourlyRate(
+          this.prisma,
+          employee,
+          entry.date,
+        );
+        if (ratePerHour === null) {
+          throw new SalaryReentryWithoutRateException();
+        }
+        worked = await computeWorkedSeconds(
+          this.prisma,
+          entry.employeeId,
+          startOfDay(entry.date),
+          endOfDay(entry.date),
+        );
+        newAmount = hourlyAmount(ratePerHour, worked);
       }
-      // Возврат под автоматику = пересчёт по почасовой ставке за тот же
-      // день (по закрытым сменам), а не «плоская ставка за смену».
-      const worked = await computeWorkedSeconds(
-        this.prisma,
-        entry.employeeId,
-        startOfDay(entry.date),
-        endOfDay(entry.date),
-      );
-      const newAmount = hourlyAmount(employee.salaryPerHour, worked);
       const updated = await this.prisma.$transaction(async (tx) => {
         const row = await tx.salaryEntry.update({
           where: { id },
@@ -668,6 +863,26 @@ function endOfDay(d: Date): Date {
   const out = new Date(d);
   out.setHours(23, 59, 59, 999);
   return out;
+}
+
+/**
+ * Последний миг месяца, начало которого передано (`startOfMonthUtc`).
+ * Считаем в UTC — той же шкале, в которой Prisma мапит `@db.Date`,
+ * иначе на границе месяца окно поиска смен уехало бы на часовой пояс
+ * сервера и последний вечер месяца попал бы в следующий.
+ */
+function endOfMonth(monthStart: Date): Date {
+  return new Date(
+    Date.UTC(
+      monthStart.getUTCFullYear(),
+      monthStart.getUTCMonth() + 1,
+      0,
+      23,
+      59,
+      59,
+      999,
+    ),
+  );
 }
 
 function toDateOnly(d: Date): string {

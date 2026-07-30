@@ -5,8 +5,13 @@ import { useFormState, useFormStatus } from 'react-dom';
 import { Save } from 'lucide-react';
 import {
   COMPENSATION_TYPES,
+  SALARY_RATE_MODES,
+  SALARY_RATE_MODE_LABELS,
+  requiresHourlySalaryRate,
+  requiresMonthlySalaryRate,
   type CompensationType,
   type EmployeeDetailDto,
+  type SalaryRateMode,
 } from '@sewing/shared/employees';
 import {
   CASH_FLOW_DIRECTION_LABELS,
@@ -20,7 +25,7 @@ import {
 
 const COMPENSATION_LABEL: Record<CompensationType, string> = {
   PIECEWORK: 'Сдельная',
-  SALARY: 'Оклад (почасовой)',
+  SALARY: 'Оклад',
   MIXED: 'Оклад + сдельная',
 };
 
@@ -88,9 +93,19 @@ export function EmployeeEditForm({
   const [compensationType, setCompensationType] = useState<CompensationType>(
     employee.compensationType,
   );
+  // Вид окладной ставки (29.07.2026). Дефолт `HOURLY` — и колонка
+  // такая же, и старые карточки без поля читаются одинаково.
+  const [salaryRateMode, setSalaryRateMode] = useState<SalaryRateMode>(
+    employee.salaryRateMode ?? 'HOURLY',
+  );
   const [salaryPerHour, setSalaryPerHour] = useState<string>(
     employee.salaryPerHour !== null
       ? employee.salaryPerHour.toString()
+      : '',
+  );
+  const [salaryPerMonth, setSalaryPerMonth] = useState<string>(
+    employee.salaryPerMonth !== null && employee.salaryPerMonth !== undefined
+      ? employee.salaryPerMonth.toString()
       : '',
   );
   // B2B-процент закройщика. См.
@@ -133,8 +148,20 @@ export function EmployeeEditForm({
     initialUpdateEmployeeState,
   );
 
-  const requiresRate =
+  // Оклад вообще vs. конкретная ставка: переключатель «часовой /
+  // месячный» показываем всем окладникам, а поле ставки — только то,
+  // которое соответствует выбранному режиму (правило общее с backend,
+  // живёт в shared).
+  const isSalaried =
     compensationType === 'SALARY' || compensationType === 'MIXED';
+  const requiresHourly = requiresHourlySalaryRate(
+    compensationType,
+    salaryRateMode,
+  );
+  const requiresMonthly = requiresMonthlySalaryRate(
+    compensationType,
+    salaryRateMode,
+  );
 
   // Если у сотрудника уже привязана статья ДДС, которой нет в активном
   // списке (например, её деактивировали) — добавим её отдельной опцией,
@@ -179,7 +206,36 @@ export function EmployeeEditForm({
           появится; обязательность гарантирует backend — без ставки
           PATCH вернёт `EMPLOYEE_SALARY_RATE_REQUIRED`.
         */}
-        {requiresRate && (
+        {isSalaried && (
+          <div className="admin-field">
+            <label htmlFor="emp-salary-rate-mode">Вид оклада</label>
+            <select
+              id="emp-salary-rate-mode"
+              name="salaryRateMode"
+              value={salaryRateMode}
+              onChange={(e) =>
+                setSalaryRateMode(e.target.value as SalaryRateMode)
+              }
+              aria-describedby="emp-salary-rate-mode-hint"
+            >
+              {SALARY_RATE_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {SALARY_RATE_MODE_LABELS[m]}
+                </option>
+              ))}
+            </select>
+            <span
+              id="emp-salary-rate-mode-hint"
+              className="admin-field__hint admin-muted"
+            >
+              {salaryRateMode === 'MONTHLY'
+                ? 'Оклад начисляется одной строкой за месяц целиком. Пропуски вычитаются вручную в ведомости.'
+                : 'Начисление за каждый день со сменой: отработанные часы × ставка.'}
+            </span>
+          </div>
+        )}
+
+        {requiresHourly && (
           <div className="admin-field">
             <label htmlFor="emp-salary-per-hour">Ставка, ₽/час</label>
             <input
@@ -193,6 +249,32 @@ export function EmployeeEditForm({
               required
               autoComplete="off"
             />
+          </div>
+        )}
+
+        {requiresMonthly && (
+          <div className="admin-field">
+            <label htmlFor="emp-salary-per-month">Оклад, ₽/мес</label>
+            <input
+              id="emp-salary-per-month"
+              name="salaryPerMonth"
+              type="text"
+              inputMode="decimal"
+              value={salaryPerMonth}
+              onChange={(e) => setSalaryPerMonth(e.target.value)}
+              placeholder="обязательно"
+              required
+              autoComplete="off"
+              aria-describedby="emp-salary-per-month-hint"
+            />
+            <span
+              id="emp-salary-per-month-hint"
+              className="admin-field__hint admin-muted"
+            >
+              Часовая стоимость для доплат (подкрой) считается как оклад ÷
+              норма часов месяца — норма ведётся в производственном
+              календаре.
+            </span>
           </div>
         )}
       </div>

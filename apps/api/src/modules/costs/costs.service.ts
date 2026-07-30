@@ -9,6 +9,10 @@ import {
 } from '@sewing/shared/costs';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { isSalaryEligible } from '../employees/compensation.js';
+import {
+  effectiveHourlyRateWithNorm,
+  resolveMonthNormHours,
+} from '../salary/salary-rate.js';
 import { PassportRealCostService } from './passport-real-cost.service.js';
 
 /**
@@ -112,12 +116,18 @@ export class CostsService {
       select: {
         id: true,
         compensationType: true,
+        salaryRateMode: true,
         salaryPerHour: true,
+        salaryPerMonth: true,
       },
     });
+    // Норма часов месяца — знаменатель ₽/час у месячного окладника
+    // (29.07.2026). Берём по началу окна: период отчёта по себестоимости
+    // — это день или месяц, разъезд по норме внутри окна пренебрежим.
+    const normHours = await resolveMonthNormHours(this.prisma, from);
     const employeeRate = new Map<string, number>();
     for (const e of employees) {
-      const minute = computeMinuteRate(e.salaryPerHour);
+      const minute = computeMinuteRate(effectiveHourlyRateWithNorm(e, normHours));
       if (minute > 0 && isSalaryEligible(e.compensationType)) {
         employeeRate.set(e.id, minute);
       } else {

@@ -92,12 +92,25 @@ interface Props {
  * action редиректит на карточку нового сотрудника, чтобы менеджер
  * сразу мог проверить и при необходимости подправить окладные поля.
  */
-export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
-  const [role, setRole] = useState<EmployeeRole>('SEAMSTRESS');
+export function CreateEmployeeForm({
+  divisionOptions = [],
+  roleOptions = [],
+}: Props) {
+  const roles = roleOptions.length > 0 ? roleOptions : FALLBACK_ROLE_OPTIONS;
+  // Дефолт «Швея» — самая частая роль; если её в справочнике нет
+  // (переименовали код руками), берём первую доступную.
+  const [role, setRole] = useState<string>(
+    () => roles.find((r) => r.code === 'SEAMSTRESS')?.code ?? roles[0]?.code ?? '',
+  );
   const [compensationType, setCompensationType] = useState<CompensationType>(
     'PIECEWORK',
   );
+  // Вид окладной ставки (29.07.2026): часовой (как было) или
+  // месячный оклад целиком.
+  const [salaryRateMode, setSalaryRateMode] =
+    useState<SalaryRateMode>('HOURLY');
   const [salaryPerHour, setSalaryPerHour] = useState<string>('');
+  const [salaryPerMonth, setSalaryPerMonth] = useState<string>('');
   // B2B-процент закройщика. Поле имеет смысл только для роли
   // CUTTER (см. `docs/payroll-cutter-compensation-recon.md`); UI
   // прячет его для всех остальных ролей.
@@ -111,8 +124,16 @@ export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
     initialCreateEmployeeState,
   );
 
-  const requiresRate =
+  const isSalaried =
     compensationType === 'SALARY' || compensationType === 'MIXED';
+  const requiresHourly = requiresHourlySalaryRate(
+    compensationType,
+    salaryRateMode,
+  );
+  const requiresMonthly = requiresMonthlySalaryRate(
+    compensationType,
+    salaryRateMode,
+  );
   const isCutter = role === CUTTER_ROLE;
 
   return (
@@ -202,7 +223,27 @@ export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
           оплата). Для PIECEWORK поле не рендерится — FormData чистая,
           backend получит `salaryPerHour = null` и сохранит без ставки.
         */}
-        {requiresRate && (
+        {isSalaried && (
+          <div className="admin-field">
+            <label htmlFor="emp-salary-rate-mode">Вид оклада</label>
+            <select
+              id="emp-salary-rate-mode"
+              name="salaryRateMode"
+              value={salaryRateMode}
+              onChange={(e) =>
+                setSalaryRateMode(e.target.value as SalaryRateMode)
+              }
+            >
+              {SALARY_RATE_MODES.map((m) => (
+                <option key={m} value={m}>
+                  {SALARY_RATE_MODE_LABELS[m]}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+
+        {requiresHourly && (
           <div className="admin-field">
             <label htmlFor="emp-salary-per-hour">Ставка, ₽/час</label>
             <input
@@ -212,6 +253,23 @@ export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
               inputMode="decimal"
               value={salaryPerHour}
               onChange={(e) => setSalaryPerHour(e.target.value)}
+              placeholder="обязательно"
+              required
+              autoComplete="off"
+            />
+          </div>
+        )}
+
+        {requiresMonthly && (
+          <div className="admin-field">
+            <label htmlFor="emp-salary-per-month">Оклад, ₽/мес</label>
+            <input
+              id="emp-salary-per-month"
+              name="salaryPerMonth"
+              type="text"
+              inputMode="decimal"
+              value={salaryPerMonth}
+              onChange={(e) => setSalaryPerMonth(e.target.value)}
               placeholder="обязательно"
               required
               autoComplete="off"

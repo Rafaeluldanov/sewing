@@ -24,6 +24,7 @@ import {
   Prisma,
   type Role,
   SalaryEntrySource,
+  SalaryRateMode,
 } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import {
@@ -41,6 +42,8 @@ import {
   verifyEmployeeQrToken,
 } from '../auth/employee-qr-token.js';
 import type { AuthPrincipal } from '../auth/auth.types.js';
+import { startOfMonthUtc } from '@sewing/shared/payroll-calendar';
+import { resolveEffectiveHourlyRate } from '../salary/salary-rate.js';
 
 /**
  * Сервис личного кабинета сотрудника (`GET /api/me/*`).
@@ -268,7 +271,9 @@ export class MeService {
         id: true,
         active: true,
         compensationType: true,
+        salaryRateMode: true,
         salaryPerHour: true,
+        salaryPerMonth: true,
       },
     });
     if (!employee || !employee.active) {
@@ -278,6 +283,14 @@ export class MeService {
     const compType = toSharedCompType(employee.compensationType);
     const needsPiecework = compType === 'PIECEWORK' || compType === 'MIXED';
     const needsSalary = compType === 'SALARY' || compType === 'MIXED';
+    // Месячник (29.07.2026): дневных строк `SHIFT_DAY` у него нет, всё
+    // начисление месяца — одна строка `MONTH_SALARY` на 1-м числе.
+    // Ищем именно её, иначе рабочий видел бы вечный ноль.
+    const isMonthly = employee.salaryRateMode === SalaryRateMode.MONTHLY;
+    const monthStartUtc = startOfMonthUtc(
+      dayDateUtc.getUTCFullYear(),
+      dayDateUtc.getUTCMonth() + 1,
+    );
 
     const [pieceworkRows, salaryRow, openShift] = await Promise.all([
       needsPiecework
@@ -301,8 +314,10 @@ export class MeService {
             where: {
               SalaryEntry_employee_date_source_uniq: {
                 employeeId: employee.id,
-                date: dayDateUtc,
-                source: SalaryEntrySource.SHIFT_DAY,
+                date: isMonthly ? monthStartUtc : dayDateUtc,
+                source: isMonthly
+                  ? SalaryEntrySource.MONTH_SALARY
+                  : SalaryEntrySource.SHIFT_DAY,
               },
             },
             select: { amount: true },
@@ -320,13 +335,27 @@ export class MeService {
     const piecework = needsPiecework
       ? aggregatePieceworkRows(pieceworkRows)
       : null;
+    // Ставка ₽/час для подсказки: у месячника она производная от
+    // нормы часов месяца (см. `salary-rate.ts`), у почасовика — своя.
+    const ratePerHour = needsSalary
+      ? await resolveEffectiveHourlyRate(this.prisma, employee, now)
+      : null;
     const salary: MeDailyDto['salary'] = needsSalary
       ? {
-          amount: decimalToNumber(salaryRow?.amount ?? null),
+          // Дневная сумма: у месячника её не существует — оклад
+          // начислен за месяц целиком и лежит в `monthlyAmount`.
+          // Складывать его в дневной итог нельзя: рабочий увидел бы
+          // «заработано сегодня» размером в месячную зарплату.
+          amount: isMonthly ? 0 : decimalToNumber(salaryRow?.amount ?? null),
           shiftOpen: !!openShift,
           shiftStartedAt: openShift?.startedAt.toISOString() ?? null,
-          salaryPerHour: decimalToNumberOrNull(employee.salaryPerHour),
-          hasEntryToday: !!salaryRow,
+          salaryPerHour:
+            ratePerHour === null ? null : Number(ratePerHour.toFixed(2)),
+          hasEntryToday: !isMonthly && !!salaryRow,
+          rateMode: isMonthly ? 'MONTHLY' : 'HOURLY',
+          monthlyAmount: isMonthly
+            ? decimalToNumber(salaryRow?.amount ?? null)
+            : null,
         }
       : null;
 

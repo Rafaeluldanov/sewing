@@ -13,8 +13,12 @@ import {
 import {
   COMPENSATION_TYPES,
   RoleCodeRefSchema,
+  SALARY_RATE_MODES,
+  requiresHourlySalaryRate,
+  requiresMonthlySalaryRate,
   type CompensationType,
   type CreateEmployeeDto,
+  type SalaryRateMode,
   type UpdateEmployeeDto,
 } from '@sewing/shared/employees';
 import type {
@@ -36,6 +40,45 @@ import type {
 function isCompensationType(v: string): v is CompensationType {
   return (COMPENSATION_TYPES as readonly string[]).includes(v);
 }
+
+function isSalaryRateMode(v: string): v is SalaryRateMode {
+  return (SALARY_RATE_MODES as readonly string[]).includes(v);
+}
+
+/**
+ * Разбор денежного поля ставки из FormData.
+ *
+ * Возвращает либо число, либо `null` («поле пустое»), либо текст
+ * ошибки. Заведено одной функцией, потому что правил три (валидное
+ * число / не отрицательное / не ноль, если ставка обязательна), а мест
+ * применения — четыре: часовая и месячная ставка в create и в update.
+ */
+function parseRateField(
+  raw: string,
+  required: boolean,
+  labels: { missing: string; invalid: string; zero: string },
+): { value: number | null } | { error: string } {
+  if (raw === '') {
+    if (required) return { error: labels.missing };
+    return { value: null };
+  }
+  const num = Number(raw.replace(',', '.'));
+  if (!Number.isFinite(num) || num < 0) return { error: labels.invalid };
+  if (num === 0 && required) return { error: labels.zero };
+  return { value: num };
+}
+
+const HOURLY_RATE_LABELS = {
+  missing: 'Для часового оклада укажите ставку ₽/час',
+  invalid: 'Введите валидную почасовую ставку',
+  zero: 'Почасовая ставка должна быть больше нуля',
+};
+
+const MONTHLY_RATE_LABELS = {
+  missing: 'Для месячного оклада укажите сумму ₽/мес',
+  invalid: 'Введите валидную сумму месячного оклада',
+  zero: 'Месячный оклад должен быть больше нуля',
+};
 
 /**
  * Роль — ССЫЛКА на справочник (`AppRole.code`), а не enum: роли заводят
@@ -71,7 +114,14 @@ export async function createEmployeeAction(
   const pin = String(form.get('pin') ?? '');
   const roleRaw = String(form.get('role') ?? '').trim();
   const compensationRaw = String(form.get('compensationType') ?? '').trim();
+  // Вид окладной ставки. Ключа может не быть (форма не показала
+  // переключатель для PIECEWORK) — тогда считаем `HOURLY`, это же
+  // дефолт колонки.
+  const rateModeRaw = String(
+    form.get('salaryRateMode') ?? 'HOURLY',
+  ).trim();
   const salaryRaw = String(form.get('salaryPerHour') ?? '').trim();
+  const salaryMonthRaw = String(form.get('salaryPerMonth') ?? '').trim();
   const cutterB2bRaw = String(
     form.get('cutterB2bSewingPercent') ?? '',
   ).trim();
@@ -96,6 +146,9 @@ export async function createEmployeeAction(
   if (!isCompensationType(compensationRaw)) {
     return { error: 'Выберите тип компенсации' };
   }
+  if (!isSalaryRateMode(rateModeRaw)) {
+    return { error: 'Выберите вид оклада: часовой или месячный' };
+  }
 
   const dto: CreateEmployeeDto = {
     fullName,
@@ -103,24 +156,28 @@ export async function createEmployeeAction(
     pin,
     role,
     compensationType: compensationRaw,
+    salaryRateMode: rateModeRaw,
     active,
   };
 
-  if (salaryRaw === '') {
-    if (compensationRaw !== 'PIECEWORK') {
-      return { error: 'Для SALARY/MIXED обязательно укажите почасовую ставку' };
-    }
-    dto.salaryPerHour = null;
-  } else {
-    const num = Number(salaryRaw.replace(',', '.'));
-    if (!Number.isFinite(num) || num < 0) {
-      return { error: 'Введите валидную почасовую ставку' };
-    }
-    if (num === 0 && compensationRaw !== 'PIECEWORK') {
-      return { error: 'Для SALARY/MIXED ставка должна быть больше нуля' };
-    }
-    dto.salaryPerHour = num;
-  }
+  // Обязательна ровно одна ставка — та, что соответствует режиму
+  // (см. `requiresHourlySalaryRate` / `requiresMonthlySalaryRate` в
+  // shared: то же правило проверяет backend).
+  const hourly = parseRateField(
+    salaryRaw,
+    requiresHourlySalaryRate(compensationRaw, rateModeRaw),
+    HOURLY_RATE_LABELS,
+  );
+  if ('error' in hourly) return { error: hourly.error };
+  dto.salaryPerHour = hourly.value;
+
+  const monthly = parseRateField(
+    salaryMonthRaw,
+    requiresMonthlySalaryRate(compensationRaw, rateModeRaw),
+    MONTHLY_RATE_LABELS,
+  );
+  if ('error' in monthly) return { error: monthly.error };
+  dto.salaryPerMonth = monthly.value;
 
   // Процент B2B-начисления закройщика. См.
   // `docs/payroll-cutter-compensation-recon.md`. Поле опционально:
@@ -177,7 +234,11 @@ export async function updateEmployeeAction(
   form: FormData,
 ): Promise<UpdateEmployeeState> {
   const compensationRaw = String(form.get('compensationType') ?? '').trim();
+  const rateModeRaw = String(
+    form.get('salaryRateMode') ?? 'HOURLY',
+  ).trim();
   const salaryRaw = String(form.get('salaryPerHour') ?? '').trim();
+  const salaryMonthRaw = String(form.get('salaryPerMonth') ?? '').trim();
   const active = form.get('active') === 'on';
   // FormData может НЕ содержать ключ `cutterB2bSewingPercent`
   // (для не-CUTTER ролей UI поле не рендерит). `form.get(...)`
@@ -205,26 +266,37 @@ export async function updateEmployeeAction(
   if (!isCompensationType(compensationRaw)) {
     return { error: 'Выберите тип компенсации' };
   }
+  if (!isSalaryRateMode(rateModeRaw)) {
+    return { error: 'Выберите вид оклада: часовой или месячный' };
+  }
 
   const dto: UpdateEmployeeDto = {
     compensationType: compensationRaw,
+    salaryRateMode: rateModeRaw,
     active,
   };
 
-  if (salaryRaw === '') {
-    if (compensationRaw !== 'PIECEWORK') {
-      return { error: 'Для SALARY/MIXED обязательно укажите почасовую ставку' };
-    }
-    dto.salaryPerHour = null;
-  } else {
-    const num = Number(salaryRaw.replace(',', '.'));
-    if (!Number.isFinite(num) || num < 0) {
-      return { error: 'Введите валидную почасовую ставку' };
-    }
-    if (num === 0 && compensationRaw !== 'PIECEWORK') {
-      return { error: 'Для SALARY/MIXED ставка должна быть больше нуля' };
-    }
-    dto.salaryPerHour = num;
+  // Ставку, не соответствующую режиму, НЕ стираем: менеджер может
+  // временно переключить человека на месячный оклад и вернуть обратно,
+  // и потерять при этом заведённую почасовую ставку — обидно.
+  const hourly = parseRateField(
+    salaryRaw,
+    requiresHourlySalaryRate(compensationRaw, rateModeRaw),
+    HOURLY_RATE_LABELS,
+  );
+  if ('error' in hourly) return { error: hourly.error };
+  if (hourly.value !== null || rateModeRaw === 'HOURLY') {
+    dto.salaryPerHour = hourly.value;
+  }
+
+  const monthly = parseRateField(
+    salaryMonthRaw,
+    requiresMonthlySalaryRate(compensationRaw, rateModeRaw),
+    MONTHLY_RATE_LABELS,
+  );
+  if ('error' in monthly) return { error: monthly.error };
+  if (monthly.value !== null || rateModeRaw === 'MONTHLY') {
+    dto.salaryPerMonth = monthly.value;
   }
 
   // Процент B2B-начисления закройщика — см.

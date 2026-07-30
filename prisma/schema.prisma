@@ -97,6 +97,30 @@ enum CompensationType {
   MIXED
 }
 
+/// Вид окладной ставки — ВТОРАЯ ось окладного контура (29.07.2026).
+/// `CompensationType` отвечает на вопрос «получает ли человек оклад
+/// вообще», а `SalaryRateMode` — «в каких единицах он назначен».
+///
+/// - `HOURLY`  — почасовая ставка `Employee.salaryPerHour`. Начисление
+///   дневное: `SalaryEntry { source = SHIFT_DAY }` за каждый день с
+///   закрытой сменой, `amount = отработанные часы × ставка`. Это
+///   ровно то поведение, которое было до появления enum-а, поэтому
+///   `HOURLY` — дефолт и бэкфилл существующих сотрудников.
+/// - `MONTHLY` — месячный оклад `Employee.salaryPerMonth`. Начисление
+///   МЕСЯЧНОЕ и ПОЛНОЕ: одна `SalaryEntry { source = MONTH_SALARY,
+///   date = 1-е число месяца, amount = salaryPerMonth }`, без деления
+///   на дни. Пропуски и недоработки менеджер вычитает руками через
+///   `PATCH /api/salary/:id` (сознательное решение, см.
+///   `docs/domain.md §9a`): автоматическая пропорция по табелю
+///   требует учёта отпусков/больничных, которых в системе нет.
+///
+/// Для `MONTHLY` дневные `SHIFT_DAY`-строки НЕ создаются — иначе
+/// человек получил бы и оклад, и повременку за те же часы.
+enum SalaryRateMode {
+  HOURLY
+  MONTHLY
+}
+
 /// Источник окладного начисления `SalaryEntry`. На MVP используется
 /// единственный — «в этот день была хотя бы одна смена». Enum
 /// введён сразу, чтобы будущие источники (ручное начисление за
@@ -111,6 +135,15 @@ enum SalaryEntrySource {
   /// 3600 × `Employee.salaryPerHour`. Время подкроя при этом остаётся
   /// и в `SHIFT_DAY` (сознательная доплата, не вычитается из смены).
   RECUT
+  /// Месячный оклад (`Employee.salaryRateMode = MONTHLY`): ОДНА строка
+  /// на календарный месяц, `date` = 1-е число месяца, `amount` =
+  /// `Employee.salaryPerMonth` целиком. Создаётся при первой закрытой
+  /// смене месяца (`SalaryService.syncMonthlySalary`) и дальше только
+  /// поддерживается в актуальном состоянии. `workedSeconds` — часы
+  /// закрытых смен за месяц; хранятся справочно, чтобы менеджер видел
+  /// «отработано N ч при норме M ч» и мог решить, надо ли резать
+  /// сумму руками.
+  MONTH_SALARY
 }
 
 /// Жизненный цикл вызова мастера цеха (`MasterCall`, MVP).
@@ -1040,8 +1073,30 @@ model Employee {
   /// salaryPerHour`. Незакрытые смены (`endedAt = null`) в расчёт не
   /// идут. Для `PIECEWORK` хранится `null` и игнорируется.
   /// Обязательность для SALARY/MIXED валидируется в
-  /// `EmployeesService.create/update` (`requiresSalaryRate`).
+  /// `EmployeesService.create/update` (`requiresHourlyRate`).
+  /// Читается только при `salaryRateMode = HOURLY`.
   salaryPerHour          Decimal?         @db.Decimal(12, 2)
+  /// Вид окладной ставки (29.07.2026, см. `enum SalaryRateMode`):
+  /// `HOURLY` — платим по `salaryPerHour` за фактические часы,
+  /// `MONTHLY` — платим `salaryPerMonth` целиком за месяц.
+  /// Имеет смысл только для `compensationType ∈ { SALARY, MIXED }`;
+  /// у `PIECEWORK` лежит дефолтный `HOURLY` и не читается.
+  /// Дефолт `HOURLY` = поведение до появления поля (бэкфилл
+  /// существующих сотрудников — тот же `HOURLY`).
+  salaryRateMode         SalaryRateMode   @default(HOURLY)
+  /// Месячный оклад (₽/мес) — ставка режима `salaryRateMode = MONTHLY`.
+  /// `SalaryService.syncMonthlySalary` кладёт её ЦЕЛИКОМ в одну
+  /// `SalaryEntry { source = MONTH_SALARY }` за месяц.
+  ///
+  /// Производная почасовая ставка (для доплаты за подкрой, ₽/минуту
+  /// простоя в дашборде и себестоимости) считается как
+  /// `salaryPerMonth / нормаЧасов(месяц)` из производственного
+  /// календаря `PayrollCalendarMonth` — см.
+  /// `apps/api/src/modules/salary/salary-rate.ts`.
+  ///
+  /// Обязательность для `SALARY`/`MIXED` + `MONTHLY` валидируется в
+  /// `EmployeesService.create/update` (`requiresMonthlyRate`).
+  salaryPerMonth         Decimal?         @db.Decimal(12, 2)
   /// Процент начисления закройщика для B2B-заказов (см.
   /// `docs/payroll-cutter-compensation-recon.md §«Настраиваемый
   /// процент»`, `packages/shared/src/cutter-compensation.ts`).
@@ -2490,6 +2545,52 @@ model SalaryEntry {
   @@unique([employeeId, date, source], name: "SalaryEntry_employee_date_source_uniq")
   @@index([employeeId, date])
   @@index([date])
+}
+
+/// Производственный календарь: норма рабочих дней и часов на месяц
+/// (29.07.2026, вместе с `SalaryRateMode.MONTHLY`).
+///
+/// Зачем нужен. Месячный оклад назначен «за месяц целиком», но система
+/// всё равно обязана уметь превращать его в ₽/час:
+///   - доплата за подкрой (`SalaryEntrySource.RECUT`) — почасовая
+///     ДОПЛАТА сверх смены, и окладник-месячник должен получать её по
+///     той же логике, что почасовик;
+///   - ₽/минуту простоя в производственном дашборде и разнос оклада
+///     на себестоимость (`CostsService`).
+/// Курс перевода — `salaryPerMonth / normHours`, и норму надо где-то
+/// хранить: она разная у каждого месяца (23 дня в июле, 21 в августе)
+/// и зависит от переносов праздников, которых из даты не вывести.
+///
+/// Справочник ведёт менеджер (`/admin/payroll/calendar`, RBAC
+/// `SHOP_MANAGER`/`ADMIN`). Если строки на месяц нет — производная
+/// ставка считается от `DEFAULT_MONTH_NORM_HOURS`
+/// (`apps/api/src/modules/salary/salary-rate.ts`), а экран календаря
+/// подсвечивает пропуск. Fallback сознательный: молча потерять
+/// доплату за подкрой хуже, чем посчитать её по норме «21 × 8».
+///
+/// На сумму месячного оклада норма НЕ влияет — `MONTH_SALARY`
+/// начисляется целиком (см. `SalaryRateMode`).
+model PayrollCalendarMonth {
+  id        String   @id @default(cuid())
+  /// Год (4 цифры). Пара `(year, month)` уникальна.
+  year      Int
+  /// Месяц 1..12 (январь = 1). Валидируется на shared-уровне.
+  month     Int
+  /// Норма рабочих дней месяца (по производственному календарю РФ или
+  /// внутреннему графику цеха). Справочная величина для ведомости и
+  /// для будущей пропорции по табелю.
+  normDays  Int
+  /// Норма рабочих часов месяца — знаменатель производной почасовой
+  /// ставки месячника. `Decimal(7,2)`: бывают «167.4» из-за
+  /// предпраздничных сокращённых дней.
+  normHours Decimal  @db.Decimal(7, 2)
+  /// Свободный комментарий менеджера («перенос с 8 марта» и т.п.).
+  comment   String?  @db.Text
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([year, month], name: "PayrollCalendarMonth_year_month_uniq")
+  @@index([year])
 }
 
 /// Снимок фактической себестоимости единицы паспорта (см.

@@ -166,22 +166,60 @@ export default async function AdminEmployeeDetailPage({
               {(employee.compensationType === 'SALARY' ||
                 employee.compensationType === 'MIXED') && (
                 <>
-                  <dt>Ставка, ₽/час</dt>
+                  <dt>Вид оклада</dt>
                   <dd>
-                    {employee.salaryPerHour !== null ? (
-                      <>
-                        {employee.salaryPerHour.toLocaleString('ru-RU', {
-                          minimumFractionDigits: 2,
-                          maximumFractionDigits: 2,
-                        })}{' '}
-                        ₽/час
-                      </>
-                    ) : (
-                      <span className="admin-muted">
-                        — не задана (требуется для оклада) —
-                      </span>
-                    )}
+                    {
+                      SALARY_RATE_MODE_LABELS[
+                        employee.salaryRateMode ?? 'HOURLY'
+                      ]
+                    }
                   </dd>
+                  {/*
+                   * Показываем ровно ту ставку, которая работает при
+                   * выбранном режиме. Показать обе — значит однажды
+                   * увидеть в карточке старую почасовую ставку рядом с
+                   * месячным окладом и решить, что платят по ней.
+                   */}
+                  {(employee.salaryRateMode ?? 'HOURLY') === 'MONTHLY' ? (
+                    <>
+                      <dt>Оклад, ₽/мес</dt>
+                      <dd>
+                        {employee.salaryPerMonth !== null &&
+                        employee.salaryPerMonth !== undefined ? (
+                          <>
+                            {employee.salaryPerMonth.toLocaleString('ru-RU', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}{' '}
+                            ₽/мес
+                          </>
+                        ) : (
+                          <span className="admin-muted">
+                            — не задан (требуется для оклада) —
+                          </span>
+                        )}
+                      </dd>
+                    </>
+                  ) : (
+                    <>
+                      <dt>Ставка, ₽/час</dt>
+                      <dd>
+                        {employee.salaryPerHour !== null ? (
+                          <>
+                            {employee.salaryPerHour.toLocaleString('ru-RU', {
+                              minimumFractionDigits: 2,
+                              maximumFractionDigits: 2,
+                            })}{' '}
+                            ₽/час
+                          </>
+                        ) : (
+                          <span className="admin-muted">
+                            — не задана (требуется для оклада) —
+                          </span>
+                        )}
+                      </dd>
+                    </>
+                  )}
                 </>
               )}
               {employee.role === 'CUTTER' && (

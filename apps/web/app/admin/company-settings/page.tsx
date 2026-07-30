@@ -161,7 +161,7 @@ export default async function AdminCompanySettingsPage({
     <AdminPageShell
       icon={<Settings size={22} strokeWidth={1.6} aria-hidden />}
       title="Настройки компании"
-      subtitle="Реквизиты, подразделения и склад, доступ, интеграции"
+      subtitle="Реквизиты, подразделения и склад, производство, доступ, интеграции"
     >
       {error && (
         <div className="error-box" role="alert">
