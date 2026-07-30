@@ -101,6 +101,7 @@ import {
   RouteTemplateInactiveException,
   RouteTemplateNotFoundException,
   TechCardNotCompatibleWithCategoryException,
+  WorkshopNeedsAlreadyReviewedException,
 } from '../../common/errors.js';
 import { aggregateOrder } from './order-aggregator.js';
 import { mapConstructorTaskSummary } from '../constructor-tasks/constructor-task-mappers.js';
@@ -4713,15 +4714,21 @@ export class OrdersService {
     const activeCalculation = order.calculations[0];
     const activeVariantSent =
       !activeCalculation || activeCalculation.sentToCalculationAt != null;
-    if (
-      order.status === OrderStatus.CALCULATION &&
-      activeVariantSent &&
-      !opts?.skipWorkshopNeedsRecalc
-    ) {
-      await this.workshopNeeds.calculateForOrder(
+    if (opts?.skipWorkshopNeedsRecalc) return;
+
+    if (order.status === OrderStatus.CALCULATION && activeVariantSent) {
+      await this.recalcNeedsAndMarkStale(orderId, actorEmployeeId ?? null);
+      return;
+    }
+
+    // Пересчёт не положен по статусу. В черновике потребности ещё нет — и это
+    // нормально, отмечать нечего. А вот «на расчёте, но вариант не отправлен»
+    // — уже расхождение: потребность посчитана по прежней спецификации.
+    if (order.status === OrderStatus.CALCULATION && !activeVariantSent) {
+      await this.recalcNeedsAndMarkStale(
         orderId,
-        { force: false },
         actorEmployeeId ?? null,
+        'Вариант расчёта не отправлен на расчёт — потребность считалась по прежней спецификации.',
       );
     }
   }
@@ -4791,6 +4798,58 @@ export class OrdersService {
    * FK, а recompute-ветка `rebuildMaterialRequirementsSnapshot` правит
    * строки UPDATE-ом (id сохраняются), поэтому связь не рвётся.
    */
+  /**
+   * Пересчитать потребность и отметить результат на заказе.
+   *
+   * Пересчёт — единственное место, где спецификация встречается с закупкой,
+   * и он законно НЕ проходит: закупщик уже мог тронуть строки, и `force:false`
+   * защищает его цену и статус. Раньше отказ уходил в лог, и менеджер видел
+   * удалённый из техкарты материал живым в закупке.
+   *
+   * Теперь отказ остаётся на заказе отметкой `needsStaleAt` — плашка во
+   * вкладке «Потребность» покажет её и предложит пересчитать явно. Успех
+   * отметку снимает.
+   */
+  private async recalcNeedsAndMarkStale(
+    orderId: string,
+    actorEmployeeId: string | null,
+    skipReason?: string,
+  ): Promise<void> {
+    if (skipReason) {
+      await this.markNeedsStale(orderId, skipReason);
+      return;
+    }
+    try {
+      await this.workshopNeeds.calculateForOrder(
+        orderId,
+        { force: false },
+        actorEmployeeId,
+      );
+      await this.prisma.order.update({
+        where: { id: orderId },
+        data: { needsStaleAt: null, needsStaleReason: null },
+      });
+    } catch (err) {
+      const reason =
+        err instanceof WorkshopNeedsAlreadyReviewedException
+          ? 'Строки потребности уже в работе у закупщика — пересчёт затёр бы цену и статус.'
+          : err instanceof Error
+            ? err.message
+            : 'Пересчёт потребности не выполнен.';
+      await this.markNeedsStale(orderId, reason);
+      OrdersService.log.warn(
+        `event=order.needs_stale order=${orderId} reason=${reason}`,
+      );
+    }
+  }
+
+  private async markNeedsStale(orderId: string, reason: string): Promise<void> {
+    await this.prisma.order.update({
+      where: { id: orderId },
+      data: { needsStaleAt: new Date(), needsStaleReason: reason },
+    });
+  }
+
   async resyncTechCardDerived(
     orderId: string,
     actorEmployeeId: string | null | undefined,
@@ -4831,18 +4890,8 @@ export class OrdersService {
     // Best-effort, вне транзакции: пересчёт потребностей может упереться в
     // стоп-гейт по стоку (`WorkshopNeedsHaveStockException`) или в отсутствие
     // активной калькуляции — это не повод откатывать правку спецификации.
-    try {
-      await this.workshopNeeds.calculateForOrder(
-        orderId,
-        { force: false },
-        actorEmployeeId ?? null,
-      );
-    } catch (err) {
-      OrdersService.log.warn(
-        `event=order.tech_card_amended_needs_skipped order=${orderId} ` +
-          `reason=${err instanceof Error ? err.message : 'unknown'}`,
-      );
-    }
+    // Но и молчать нельзя: неудача остаётся отметкой на заказе.
+    await this.recalcNeedsAndMarkStale(orderId, actorEmployeeId ?? null);
 
     OrdersService.log.log(
       `event=order.tech_card_amended order=${orderId} status=${order.status} ` +

@@ -79,6 +79,7 @@ import { getOrderCalculations } from '@/lib/order-calculations-api';
 import { isOrderCalculationsEnabled } from '@/lib/feature-flags';
 import { OrderPlannedCostSummaryCard } from '@/components/orders/order-planned-cost-summary-card';
 import { OrderOutsourceList } from '@/components/orders/view/order-outsource-list';
+import { RecalcNeedsButton } from '@/components/orders/view/tabs/recalc-needs-button';
 
 /**
  * Компактная сводка для верхней части сворачиваемого блока потребности:
@@ -216,9 +217,40 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
     }
   }
   const needsSummary = buildNeedsSummary(activeNeeds);
+  // Спецификация правилась после расчёта, а пересчёт не прошёл — цифры ниже
+  // устарели. Отметку ставит бэкенд там же, где ловит отказ пересчёта
+  // (`OrdersService.recalcNeedsAndMarkStale`); поле продублировано в каждой
+  // строке, поэтому берём из первой.
+  const stale = activeNeeds.find((n) => n.orderNeedsStaleAt) ?? null;
 
   return (
     <div className="order-needs-tab">
+      {stale && (
+        <AdminCard>
+          <div className="needs-stale">
+            <div className="needs-stale__body">
+              <b className="needs-stale__title">
+                Спецификация изменилась — потребность устарела
+              </b>
+              <p className="needs-stale__text">
+                {stale.orderNeedsStaleReason ??
+                  'Пересчёт потребности после правки спецификации не выполнен.'}
+              </p>
+              <p className="needs-stale__hint">
+                Цифры ниже посчитаны по прежнему составу материалов.
+              </p>
+            </div>
+            {canManage && (
+              <RecalcNeedsButton
+                orderId={order.id}
+                reviewedCount={
+                  activeNeeds.filter((n) => n.status !== 'CALCULATED').length
+                }
+              />
+            )}
+          </div>
+        </AdminCard>
+      )}
       {noNeeds && order.status === 'DRAFT' ? (
         <AdminCard>
           <AdminSectionHeader

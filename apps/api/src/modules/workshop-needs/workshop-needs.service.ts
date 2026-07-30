@@ -1602,6 +1602,14 @@ export class WorkshopNeedsService {
         tx,
       );
 
+      // Пересчёт прошёл — потребность снова совпадает со спецификацией,
+      // значит отметка «устарела» снимается. В той же транзакции, что и сами
+      // строки: иначе отметка и цифры разъехались бы при откате.
+      await tx.order.update({
+        where: { id: orderId },
+        data: { needsStaleAt: null, needsStaleReason: null },
+      });
+
       return createdRows;
     });
 
@@ -3111,6 +3119,10 @@ export class WorkshopNeedsService {
         ? order.needsArchivedAt.toISOString()
         : null,
       orderNeedsArchivedByName: order?.needsArchivedByName ?? null,
+      orderNeedsStaleAt: order?.needsStaleAt
+        ? order.needsStaleAt.toISOString()
+        : null,
+      orderNeedsStaleReason: order?.needsStaleReason ?? null,
       clientId,
       clientName,
       nomenclatureName,
@@ -3211,6 +3223,8 @@ const WORKSHOP_NEED_INCLUDE = {
       // Фича «Архив расчётов цеха»: снимок архивации для вкладки «Архив».
       needsArchivedAt: true,
       needsArchivedByName: true,
+      needsStaleAt: true,
+      needsStaleReason: true,
       patternNameSnapshot: true,
       patternArticleSnapshot: true,
       patternPreviewSnapshotUrl: true,
@@ -3307,6 +3321,9 @@ type WorkshopNeedRowWithRelations = WorkshopNeed & {
     /** Фича «Архив расчётов цеха» (см. WORKSHOP_NEED_INCLUDE). */
     needsArchivedAt: Date | null;
     needsArchivedByName: string | null;
+    /** Отметка «спецификация изменилась, пересчёт не прошёл». */
+    needsStaleAt: Date | null;
+    needsStaleReason: string | null;
     patternNameSnapshot: string | null;
     patternArticleSnapshot: string | null;
     patternPreviewSnapshotUrl: string | null;
