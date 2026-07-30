@@ -130,6 +130,20 @@ export type AuditEntityType =
    */
   | 'SUPPLIER'
   /**
+   * Справочник ролей (см. `apps/api/src/modules/app-roles/*`,
+   * `prisma/schema.prisma::AppRole`). События:
+   *   - `APP_ROLE_CREATE` / `APP_ROLE_UPDATE` — заведение и правка
+   *     роли, `entityId = AppRole.id` (код и наследование в payload);
+   *   - `APP_ROLE_ARCHIVE` / `APP_ROLE_RESTORE` / `APP_ROLE_PURGE` —
+   *     массовые операции архива, одно событие на пачку,
+   *     `entityId` — id через запятую.
+   *
+   * Пишем в аудит все операции: правка наследования роли меняет права
+   * сразу всем её носителям, и «кто и когда это сделал» — первый
+   * вопрос при разборе инцидента с доступом.
+   */
+  | 'APP_ROLE'
+  /**
    * Заказы поставщикам (Этап 6А, см.
    * `apps/api/src/modules/purchase-orders/*`,
    * `prisma/schema.prisma::PurchaseOrder`). События:

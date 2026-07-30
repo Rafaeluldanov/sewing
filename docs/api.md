@@ -206,6 +206,55 @@ sync-логику окладной (`SalaryService.syncDailyForEmployee`) при
 
 ---
 
+<a id="3c-app-roles"></a>
+## 3c. App roles (справочник ролей)
+
+Источник: `app-roles/app-roles.controller.ts`. Класс-уровень
+`@Roles('ADMIN')`; `GET`-и расширены до `SHOP_MANAGER` (ему нужен
+список ролей для селектов в карточке сотрудника).
+
+Роль перестала быть значением Prisma-enum `Role`: с миграции
+`20261001100000_app_roles_registry` роли живут в таблице `AppRole`, а
+`Employee.role/roles/activeRole` — `String` с `AppRole.code`. Enum
+`Role` остался только у `Equipment.role` и `Printer.role`.
+
+Модель прав — **наследование**: роль перечисляет в `inherits` коды
+ролей-доноров и получает их права целиком и транзитивно. `AuthGuard`
+раскрывает набор ролей сотрудника (`AppRolesService.expand` →
+`expandRoleCodes`) ДО сверки с `@Roles(...)`, поэтому все существующие
+декораторы остались написаны на системных кодах и не менялись.
+
+| Метод | Путь                      | RBAC                | Описание |
+| ----- | ------------------------- | ------------------- | -------- |
+| GET   | `/api/app-roles`          | SHOP_MANAGER, ADMIN | Весь справочник (активные + архив), `AppRoleDto[]` с `employeeCount`. |
+| GET   | `/api/app-roles/:id`      | SHOP_MANAGER, ADMIN | Одна роль. 404 `APP_ROLE_NOT_FOUND`. |
+| POST  | `/api/app-roles`          | ADMIN               | Body `CreateAppRoleDto`. 409 `APP_ROLE_CODE_TAKEN`, 400 `APP_ROLE_UNKNOWN_PARENT` / `APP_ROLE_INHERITANCE_CYCLE`. |
+| PATCH | `/api/app-roles/:id`      | ADMIN               | Body `UpdateAppRoleDto`. `code` не меняется никогда; у системной роли правится только `name` — иначе 409 `APP_ROLE_SYSTEM_IMMUTABLE`. |
+| POST  | `/api/app-roles/archive`  | ADMIN               | Bulk-архив (`@sewing/shared/archive`). Системные — `skipped: FORBIDDEN`. |
+| POST  | `/api/app-roles/restore`  | ADMIN               | Возврат из архива. |
+| POST  | `/api/app-roles/purge`    | ADMIN               | Удалить навсегда. Только из архива (`NOT_ARCHIVED`), только если роль никому не выдана и её никто не наследует (`IN_USE`). |
+
+DTO: `packages/shared/src/app-roles.ts`. UI: `apps/web/app/admin/roles`.
+Audit: `APP_ROLE_CREATE`, `APP_ROLE_UPDATE`, `APP_ROLE_ARCHIVE`,
+`APP_ROLE_RESTORE`, `APP_ROLE_PURGE` (`entityType = APP_ROLE`).
+
+Смежные эффекты:
+
+- `GET /api/auth/me` теперь отдаёт `roles` как **эффективный** набор (с
+  раскрытым наследованием), плюс `assignedRoles` (что выдано в карточке),
+  `workspace`, `singleWorkspace`, `lockToWorkspace` — рабочий экран
+  считает сервер, веб больше не держит свою копию матрицы «роль → экран».
+- session-cookie получила поля `ws` / `lock` — по ним web-middleware
+  запирает роль на её экране без обращения к БД. Токены без этих полей
+  (выпущенные до миграции) обрабатываются legacy-веткой по системным
+  ролям — поведение то же.
+- `POST/PATCH /api/employees` больше не валидируют роль enum-ом: код
+  проверяется по справочнику, неизвестный → 400 `EMPLOYEE_ROLE_UNKNOWN`.
+  Архивная роль в наборе допускается (иначе правку карточки сотрудника
+  заблокировало бы архивирование одной из его ролей).
+
+---
+
 <a id="4-equipment"></a>
 ## 4. Equipment
 

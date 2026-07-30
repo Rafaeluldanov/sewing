@@ -11,6 +11,7 @@ import {
 import { ApiRequestError } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { getEmployee, getEmployeeBlockers } from '@/lib/employees-api';
+import { listAppRolesSafe } from '@/lib/app-roles-api';
 import { listCompanyDivisions } from '@/lib/company-settings-api';
 import { listCashFlowItems } from '@/lib/treasury-api';
 import { EmployeeDangerZone } from './danger-zone';
@@ -27,10 +28,12 @@ import {
 } from '@/lib/browser-api-paths';
 import {
   formatCompensation,
+  buildRoleLabels,
   formatRole,
   formatStatus,
   statusTone,
 } from '@/lib/admin-labels';
+import { SALARY_RATE_MODE_LABELS } from '@sewing/shared/employees';
 import { EmployeeEditForm } from './edit-form';
 
 export const dynamic = 'force-dynamic';
@@ -76,6 +79,7 @@ export default async function AdminEmployeeDetailPage({
   // показываем «опасную зону» в безопасном дефолте (всё запрещено),
   // чтобы менеджер случайно не нажал «удалить» без preflight.
   const viewer = await getCurrentUserOrNull();
+  const roleLabels = buildRoleLabels(await listAppRolesSafe());
   const blockers = await getEmployeeBlockers(params.id).catch(() => ({
     archiveAllowed: false,
     hardDeleteAllowed: false,
@@ -111,7 +115,7 @@ export default async function AdminEmployeeDetailPage({
     <AdminPageShell
       icon={<Users size={22} strokeWidth={1.6} aria-hidden />}
       title={employee.fullName}
-      subtitle={formatRole(employee.role)}
+      subtitle={formatRole(employee.role, roleLabels)}
       actions={
         <>
           <Link
@@ -144,7 +148,7 @@ export default async function AdminEmployeeDetailPage({
               <dt>ФИО</dt>
               <dd>{employee.fullName}</dd>
               <dt>Роль</dt>
-              <dd>{formatRole(employee.role)}</dd>
+              <dd>{formatRole(employee.role, roleLabels)}</dd>
               <dt>Тип оплаты</dt>
               <dd>{formatCompensation(employee.compensationType)}</dd>
               {/*

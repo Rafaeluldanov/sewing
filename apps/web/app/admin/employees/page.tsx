@@ -3,6 +3,7 @@ import { ArrowRight, Clock3, Plus, Users } from 'lucide-react';
 import { ApiRequestError, errorText } from '@/lib/api';
 import { getCurrentUserOrNull } from '@/lib/auth-api';
 import { listEmployees } from '@/lib/employees-api';
+import { listAppRolesSafe } from '@/lib/app-roles-api';
 import type { EmployeeListItemDto } from '@sewing/shared/employees';
 import {
   archiveEmployeesAction,
@@ -27,7 +28,9 @@ import {
 } from '@/components/admin';
 import {
   formatCompensation,
+  buildRoleLabels,
   formatRole,
+  type RoleLabelMap,
   formatStatus,
   statusTone,
 } from '@/lib/admin-labels';
@@ -81,6 +84,9 @@ export default async function AdminEmployeesListPage({
   // Текущий пользователь нужен на каждый ряд: чтобы скрыть «Архивировать» /
   // «Удалить» на собственной карточке и спрятать hard-delete у не-ADMIN'а.
   const viewer = await getCurrentUserOrNull();
+  // Названия ролей — из справочника (`/admin/roles`): роли заводятся из
+  // админки, и без словаря кастомная роль показалась бы кодом.
+  const roleLabels = buildRoleLabels(await listAppRolesSafe());
 
   const tab = searchParams?.tab === 'archived' ? 'archived' : 'active';
   const active = items.filter((e) => e.active);
@@ -174,6 +180,7 @@ export default async function AdminEmployeesListPage({
             muted={tab === 'archived'}
             viewerId={viewer?.user.id ?? null}
             viewerRole={viewer?.user.role ?? ''}
+            roleLabels={roleLabels}
           />
         </BulkArchiveProvider>
 
@@ -195,11 +202,14 @@ function EmployeesTable({
   muted = false,
   viewerId,
   viewerRole,
+  roleLabels,
 }: {
   items: EmployeeListItemDto[];
   muted?: boolean;
   viewerId: string | null;
   viewerRole: string;
+  /** Словарь «код роли → название» из справочника `/admin/roles`. */
+  roleLabels: RoleLabelMap;
 }) {
   const columns: AdminTableColumn<EmployeeListItemDto>[] = [
     {
@@ -230,7 +240,7 @@ function EmployeesTable({
                   style={r === e.role ? { fontWeight: 600 } : undefined}
                   title={r === e.role ? 'Основная роль' : undefined}
                 >
-                  {formatRole(r)}
+                  {formatRole(r, roleLabels)}
                 </span>
               </span>
             ))}

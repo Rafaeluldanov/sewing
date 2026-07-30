@@ -41,7 +41,9 @@ describe('PassportsController — DELETE /:id (manager + self-cancel cutter)', (
   test('PassportsService.delete блокирует BoxItem / POSTED MaterialIssue для всех + APPROVED earnings только для менеджеров', () => {
     const src = readSrc('apps/api/src/modules/passports/passports.service.ts');
     expect(src).toMatch(
-      /async delete\(\s*id:\s*string,\s*deleterEmployeeId:\s*string,\s*actorRole\?:\s*Role,?\s*\)/,
+      // Роль актора — строка (`AppRole.code`): роли заводятся из
+      // `/admin/roles`, Prisma-enum `Role` тут больше не при чём.
+      /async delete\(\s*id:\s*string,\s*deleterEmployeeId:\s*string,\s*actorRole\?:\s*string,?\s*\)/,
     );
     // Импорт всех блокер-классов + новых для self-cancel ветки
     expect(src).toMatch(/PassportPackedDeleteException/);

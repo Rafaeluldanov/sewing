@@ -38,7 +38,17 @@ export const PRINTER_ROLE_FALLBACKS: Partial<Record<Role, readonly Role[]>> = {
  * роли), но `Array.from(new Set(...))` страхует на случай ошибки в
  * конфигурации карты.
  */
-export function resolveCandidateRoles(role: Role): readonly Role[] {
-  const fallbacks = PRINTER_ROLE_FALLBACKS[role] ?? [];
-  return Array.from(new Set<Role>([role, ...fallbacks]));
+export function resolveCandidateRoles(
+  // Роль СОТРУДНИКА — строка (`AppRole.code`), роли заводятся из
+  // админки. Привязка принтера (`Printer.role`) осталась enum-ом, так
+  // что на выходе по-прежнему `Role[]`: кастомная роль просто не
+  // совпадёт ни с одним значением и даст пустой список кандидатов —
+  // печать уйдёт в общий fallback (`PRINTER_NOT_CONFIGURED_FOR_ROLE`).
+  role: string,
+): readonly Role[] {
+  const known = (Object.values(Role) as string[]).includes(role)
+    ? [role as Role]
+    : [];
+  const fallbacks = PRINTER_ROLE_FALLBACKS[role as Role] ?? [];
+  return Array.from(new Set<Role>([...known, ...fallbacks]));
 }

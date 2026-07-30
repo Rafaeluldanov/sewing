@@ -58,7 +58,11 @@ export class AuthController {
         fullName: user.fullName,
         role: user.role,
         roles: user.roles,
+        assignedRoles: user.assignedRoles,
         activeRole: user.activeRole,
+        workspace: user.workspace,
+        singleWorkspace: user.singleWorkspace,
+        lockToWorkspace: user.lockToWorkspace,
       },
     };
   }
@@ -87,8 +91,16 @@ export class AuthController {
         login: principal.login,
         fullName: principal.fullName,
         role: principal.role,
+        // ЭФФЕКТИВНЫЙ набор (с раскрытым наследованием) — на него
+        // смотрят web-RBAC и навигация; назначенный набор едет рядом.
         roles: principal.roles,
+        assignedRoles: principal.assignedRoles,
         activeRole: principal.activeRole,
+        // Рабочий экран считает сервер по справочнику ролей — веб
+        // больше не держит собственную матрицу «роль → экран».
+        workspace: principal.workspace,
+        singleWorkspace: principal.singleWorkspace,
+        lockToWorkspace: principal.lockToWorkspace,
       },
       // Runtime-набор модулей тенанта (не зашит в web-билд). Источник —
       // control-plane TenantModule или env (single-tenant). См.

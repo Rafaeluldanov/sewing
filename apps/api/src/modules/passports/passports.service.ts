@@ -920,7 +920,7 @@ export class PassportsService {
   async update(
     id: string,
     dto: UpdatePassportDto,
-    actor: { employeeId: string; role: Role },
+    actor: { employeeId: string; role: string },
   ): Promise<PassportDetailDto> {
     const passport = await this.prisma.passport.findUnique({
       where: { id },
@@ -1155,7 +1155,7 @@ export class PassportsService {
   async delete(
     id: string,
     deleterEmployeeId: string,
-    actorRole?: Role,
+    actorRole?: string,
   ): Promise<void> {
     const passport = await this.prisma.passport.findUnique({
       where: { id },
@@ -3176,7 +3176,7 @@ export class PassportsService {
    */
   private async resolveCutter(
     cutterId: string | undefined,
-    creator: { id: string; role: Role; active: boolean },
+    creator: { id: string; role: string; active: boolean },
   ): Promise<{ id: string }> {
     if (cutterId) {
       const explicit = await this.prisma.employee.findUnique({

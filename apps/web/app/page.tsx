@@ -17,5 +17,14 @@ export default async function HomePage(): Promise<never> {
   }
   // Фича «несколько ролей»: лендинг по активной роли (последнее
   // сканированное рабочее место), иначе — по основной.
-  redirect(getDefaultRouteForRole(me.user.activeRole ?? me.user.role));
+  //
+  // `workspace` приходит с сервера (`AuthUserDto.workspace`, посчитан по
+  // справочнику `AppRole`) — без него роль, заведённая в `/admin/roles`,
+  // не нашлась бы в захардкоженной матрице и уехала бы на `/login`.
+  redirect(
+    getDefaultRouteForRole(
+      me.user.activeRole ?? me.user.role,
+      me.user.workspace,
+    ),
+  );
 }

@@ -1,5 +1,6 @@
 import { Global, Module } from '@nestjs/common';
 import { APP_GUARD } from '@nestjs/core';
+import { AppRolesModule } from '../app-roles/app-roles.module.js';
 import { AuthService } from './auth.service.js';
 import { AuthController } from './auth.controller.js';
 import { AuthGuard } from './auth.guard.js';
@@ -17,6 +18,10 @@ import { FeatureModulesService } from './feature-modules.service.js';
  */
 @Global()
 @Module({
+  // Справочник ролей нужен `AuthService.resolvePrincipal` на КАЖДОМ
+  // запросе (раскрытие наследования до проверки `@Roles(...)`).
+  // Зависимость односторонняя: `AppRolesModule` про auth не знает.
+  imports: [AppRolesModule],
   controllers: [AuthController],
   providers: [
     AuthService,

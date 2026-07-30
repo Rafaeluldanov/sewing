@@ -99,6 +99,20 @@ export function middleware(req: NextRequest): NextResponse {
   // редиректит, а доступ к конкретным экранам режет API-AuthGuard и
   // web-RBAC по полному набору ролей. DISPLAY всегда единственная роль
   // служебной учётки, поэтому остаётся запертым.
+  // Справочник ролей (28.07.2026): сервер кладёт в session-cookie
+  // рабочий экран учётки (`ws`) и признак «запереть на нём» (`lock`).
+  // Если поля есть — решаем по ним, и кастомная роль из `/admin/roles`
+  // запирается на своём терминале без правки этого файла.
+  const payload = decodeCookiePayload(cookie.value);
+  if (payload?.lock && payload.ws) {
+    return isUnder(pathname, payload.ws)
+      ? NextResponse.next()
+      : redirectTo(req, payload.ws);
+  }
+
+  // LEGACY-ветка: токены, выпущенные до этой миграции, полей `ws`/`lock`
+  // не имеют. Для системных ролей результат совпадает — их дефолты в
+  // `SYSTEM_ROLE_DEFAULTS` списаны ровно с этих четырёх проверок.
   const roles = readRolesFromCookie(cookie.value);
   const lockRole = roles.length === 1 ? roles[0] : null;
 
@@ -143,6 +157,21 @@ export function middleware(req: NextRequest): NextResponse {
   }
 
   return NextResponse.next();
+}
+
+/** Путь принадлежит рабочему экрану (он сам или что-то под ним). */
+function isUnder(pathname: string, workspace: string): boolean {
+  // Корневой `/` — это «полная навигация»: под него попадает всё,
+  // поэтому запирать на нём бессмысленно и мы не редиректим.
+  if (workspace === '/') return true;
+  return pathname === workspace || pathname.startsWith(`${workspace}/`);
+}
+
+function redirectTo(req: NextRequest, pathname: string): NextResponse {
+  const url = req.nextUrl.clone();
+  url.pathname = pathname;
+  url.search = '';
+  return NextResponse.redirect(url);
 }
 
 function isDisplayPath(pathname: string): boolean {
@@ -207,7 +236,7 @@ function readRolesFromCookie(token: string): string[] {
  */
 function decodeCookiePayload(
   token: string,
-): { role?: string; roles?: unknown[] } | null {
+): { role?: string; roles?: unknown[]; ws?: string; lock?: boolean } | null {
   if (!token || typeof token !== 'string') return null;
   const dot = token.indexOf('.');
   if (dot <= 0) return null;
@@ -222,6 +251,8 @@ function decodeCookiePayload(
       return {
         role: typeof obj.role === 'string' ? obj.role : undefined,
         roles: Array.isArray(obj.roles) ? obj.roles : undefined,
+        ws: typeof obj.ws === 'string' ? obj.ws : undefined,
+        lock: obj.lock === true,
       };
     }
     return null;

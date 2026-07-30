@@ -17,6 +17,8 @@
  * можно было звать и из server-, и из client-компонентов без оверхеда.
  */
 
+import { SYSTEM_ROLE_LABELS } from '@sewing/shared/app-roles';
+import type { AppRoleDto } from '@sewing/shared/app-roles';
 import type { CompensationType, EmployeeRole } from '@sewing/shared/employees';
 import {
   getOperationCategoryLabel,
@@ -29,27 +31,40 @@ import type { ShopfloorEquipmentKind } from '@sewing/shared/shopfloor';
 /** Подмножество ролей, которое может появиться в admin UI. */
 export type AdminVisibleRole = EmployeeRole;
 
-const ROLE_LABELS: Record<AdminVisibleRole, string> = {
-  ADMIN: 'Администратор',
-  SHOP_MANAGER: 'Начальник цеха',
-  SHOPFLOOR_MASTER: 'Мастер цеха',
-  CUTTER: 'Раскройщик',
-  CUTTER_ASSISTANT: 'Помощник раскройщика',
-  SEAMSTRESS: 'Швея',
-  QC: 'ОТК',
-  IRONING: 'ВТО',
-  PACKING: 'Упаковка',
-  CONSTRUCTOR: 'Конструктор',
-};
+/**
+ * Словарь «код роли → название». Роли заводятся из админки
+ * (`/admin/roles`, `AppRole`), поэтому названия живут в БД. Здесь —
+ * только fallback для 12 системных кодов: он нужен клиентским
+ * компонентам и тем экранам, куда справочник не прокинут.
+ */
+export type RoleLabelMap = Readonly<Record<string, string>>;
 
 /**
- * Понятное название роли для админки. Если на вход прилетела роль,
- * которой нет в `EMPLOYEE_ROLES` (например, легаси `DISPLAY`), —
- * возвращаем строку без транслитерации, чтобы UI не рухнул.
+ * Собрать словарь названий из справочника ролей. Страница делает
+ * `listAppRolesSafe()` и передаёт результат сюда, а дальше в
+ * `formatRole` — так кастомная роль показывается «Технолог», а не
+ * `TECHNOLOGIST`.
  */
-export function formatRole(role: string | null | undefined): string {
+export function buildRoleLabels(roles: readonly AppRoleDto[]): RoleLabelMap {
+  const map: Record<string, string> = { ...SYSTEM_ROLE_LABELS };
+  for (const r of roles) map[r.code] = r.name;
+  return map;
+}
+
+/**
+ * Понятное название роли для админки.
+ *
+ * `labels` — словарь из справочника (`buildRoleLabels`). Без него
+ * работают только системные коды: для кастомной роли вернётся её код —
+ * некрасиво, но безопасно, UI не рухнет. Поэтому экраны, где роли
+ * видны пользователю, словарь передают.
+ */
+export function formatRole(
+  role: string | null | undefined,
+  labels: RoleLabelMap = SYSTEM_ROLE_LABELS,
+): string {
   if (!role) return '—';
-  return ROLE_LABELS[role as AdminVisibleRole] ?? role;
+  return labels[role] ?? role;
 }
 
 /**

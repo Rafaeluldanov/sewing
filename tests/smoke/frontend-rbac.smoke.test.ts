@@ -343,9 +343,17 @@ describe('legacy /work disabled for QC / IRONING / PACKING', () => {
       /CUTTER_ASSISTANT:\s*'Помощник раскройщика'/,
     );
     expect(labelsBlock).not.toMatch(/закройщик/);
-    // Канонический словарь должен совпадать по этой роли.
-    const canon = readSrc('apps/web/lib/admin-labels.ts');
-    expect(canon).toMatch(/CUTTER_ASSISTANT:\s*'Помощник раскройщика'/);
+    // Канонический словарь должен совпадать по этой роли. Справочник
+    // ролей (28.07.2026): названия системных ролей переехали из
+    // `apps/web/lib/admin-labels.ts` в `@sewing/shared/app-roles`
+    // (`SYSTEM_ROLE_DEFAULTS`) — оттуда же их сидирует миграция.
+    const canon = readSrc('packages/shared/src/app-roles.ts');
+    const block = canon.slice(
+      canon.indexOf('CUTTER_ASSISTANT: {'),
+      canon.indexOf('SEAMSTRESS: {'),
+    );
+    expect(block).toMatch(/name:\s*'Помощник раскройщика'/);
+    expect(block).not.toMatch(/закройщик/);
   });
 
   test('ActiveShiftPanel.Props больше не принимает role (legacy QC-ветка удалена)', () => {

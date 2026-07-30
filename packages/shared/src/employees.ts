@@ -51,6 +51,23 @@ export const EmployeeRoleSchema = z.enum(EMPLOYEE_ROLES);
 export type EmployeeRole = z.infer<typeof EmployeeRoleSchema>;
 
 /**
+ * Роль в DTO сотрудника — ССЫЛКА на `AppRole.code`, а не enum
+ * (справочник ролей, 28.07.2026): роли заводятся из `/admin/roles`, и
+ * зашитый список здесь отверг бы любую новую роль на входе.
+ *
+ * Существование кода проверяет backend (`EmployeesService` сверяется со
+ * справочником и отвечает `EMPLOYEE_ROLE_UNKNOWN`) — Zod проверяет
+ * только форму строки. `EMPLOYEE_ROLES` выше остаётся как fallback для
+ * UI, когда справочник недоступен.
+ */
+export const RoleCodeRefSchema = z
+  .string()
+  .trim()
+  .min(2, 'Код роли слишком короткий')
+  .max(40, 'Код роли слишком длинный')
+  .transform((v) => v.toUpperCase());
+
+/**
  * Нормализует набор ролей доступа сотрудника (фича «несколько ролей»,
  * см. `Employee.roles`). Гарантирует ИНВАРИАНТ «основная роль входит в
  * набор» и дедуплицирует значения с сохранением порядка (основная —
@@ -247,7 +264,7 @@ export const UpdateEmployeeSchema = z
      * `undefined` — основную роль не меняем. Backend проверяет, что
      * она входит в итоговый `roles` (инвариант).
      */
-    role: EmployeeRoleSchema.optional(),
+    role: RoleCodeRefSchema.optional(),
     /**
      * Полный набор ролей ДОСТУПА (`Employee.roles`). Чекбоксы в форме
      * «Доступ». ИНВАРИАНТ: набор всегда содержит основную роль —
@@ -255,7 +272,10 @@ export const UpdateEmployeeSchema = z
      * даже если UI её не прислал. `undefined` — набор не трогаем.
      * RBAC: SHOP_MANAGER не может добавить/снять `ADMIN`.
      */
-    roles: z.array(EmployeeRoleSchema).min(1, 'Нужна хотя бы одна роль').optional(),
+    roles: z
+      .array(RoleCodeRefSchema)
+      .min(1, 'Нужна хотя бы одна роль')
+      .optional(),
     /**
      * Процент B2B-начисления закройщика. Опционально на уровне DTO:
      * `undefined` — backend не трогает колонку; `null` или пустая

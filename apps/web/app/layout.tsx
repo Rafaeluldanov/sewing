@@ -98,7 +98,15 @@ export default async function RootLayout({
   const showShopfloor = canSeeShopfloorMenu(roles);
   const showProductionCost = canSeeProductionCost(roles);
   const showAdmin = canSeeAdmin(roles);
-  const singleWorkspace = isSingleWorkspaceRole(roles);
+  // «Одно рабочее окно» считает СЕРВЕР по справочнику ролей
+  // (`AppRole.singleWorkspace`, приходит в `/api/auth/me`) — иначе
+  // кастомная роль ломала бы правило: `me.user.roles` теперь ЭФФЕКТИВНЫЙ
+  // набор с раскрытым наследованием, и роль «Швея-бригадир» выглядела бы
+  // как совместитель с двумя ролями. `isSingleWorkspaceRole` остаётся
+  // fallback-ом для старых сессий, где поля ещё нет.
+  const singleWorkspace =
+    me?.user.singleWorkspace ??
+    isSingleWorkspaceRole(me?.user.assignedRoles ?? roles);
   return (
     <html lang="ru">
       <body>

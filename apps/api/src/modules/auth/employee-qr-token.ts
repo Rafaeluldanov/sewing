@@ -25,7 +25,6 @@
  */
 
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import type { Role } from '@prisma/client';
 import {
   EMPLOYEE_QR_TOKEN_TYPE,
   type EmployeeQrTokenPayload,
@@ -38,7 +37,12 @@ const PAYLOAD_VERSION = 1 as const;
 export interface SignEmployeeQrInput {
   employeeId: string;
   userId: string;
-  role: Role;
+  /**
+   * `Employee.role` — строка (`AppRole.code`): роли заводятся из
+   * админки, см. `@sewing/shared/app-roles`. Shared-схема payload
+   * (`EmployeeQrTokenPayloadSchema`) и так принимает `z.string()`.
+   */
+  role: string;
 }
 
 export interface EmployeeQrSignOptions {

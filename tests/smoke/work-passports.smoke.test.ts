@@ -117,7 +117,9 @@ describe('Backend — passports.service.ts: listMineRecent + update + editable h
 
   test('update() пересоздаёт immediate earning раскройщика и пишет AuditLog', () => {
     expect(src).toMatch(
-      /async update\(\s*id:\s*string,\s*dto:\s*UpdatePassportDto,\s*actor:\s*\{[^}]*employeeId:\s*string;\s*role:\s*Role;?\s*\}/,
+      // `role` — строка (`AppRole.code`), а не Prisma-enum: роли
+      // заводятся из справочника `/admin/roles`.
+      /async update\(\s*id:\s*string,\s*dto:\s*UpdatePassportDto,\s*actor:\s*\{[^}]*employeeId:\s*string;\s*role:\s*string;?\s*\}/,
     );
     // Чистим immediate-cutter entries (sourceEventType=PASSPORT_CREATED)
     // и пересоздаём через EarningsService — атомарно в одной транзакции.

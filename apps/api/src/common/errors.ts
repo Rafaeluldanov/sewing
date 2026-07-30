@@ -888,6 +888,82 @@ export class DisplayLoginTakenException extends BusinessException {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Справочник ролей (`/admin/roles`, `AppRolesService`)
+// ---------------------------------------------------------------------------
+
+export class AppRoleNotFoundException extends BusinessException {
+  constructor() {
+    super('APP_ROLE_NOT_FOUND', 'Роль не найдена', HttpStatus.NOT_FOUND);
+  }
+}
+
+export class AppRoleCodeTakenException extends BusinessException {
+  constructor(code: string) {
+    super(
+      'APP_ROLE_CODE_TAKEN',
+      `Роль с кодом «${code}» уже существует — выберите другой код.`,
+      HttpStatus.CONFLICT,
+    );
+  }
+}
+
+/**
+ * В `inherits` указан код, которого нет в справочнике. Молча
+ * проглатывать нельзя: роль выглядела бы настроенной, а прав не давала.
+ */
+export class AppRoleUnknownParentException extends BusinessException {
+  constructor(codes: string[]) {
+    super(
+      'APP_ROLE_UNKNOWN_PARENT',
+      `Неизвестные роли в списке наследования: ${codes.join(', ')}`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * «A наследует B, B наследует A». Раскрытие такое переживает
+ * (`expandRoleCodes` защищён от циклов), но в справочнике это всегда
+ * ошибка ввода — понять права такой роли невозможно.
+ */
+export class AppRoleInheritanceCycleException extends BusinessException {
+  constructor(cycle: string[]) {
+    super(
+      'APP_ROLE_INHERITANCE_CYCLE',
+      `Циклическое наследование ролей: ${cycle.join(' → ')}`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+/**
+ * Попытка изменить структурные поля системной роли или удалить её.
+ * Системные коды зашиты в декораторах `@Roles(...)` и терминалах —
+ * их правка ломает доступ по всему приложению.
+ */
+/**
+ * Сотруднику назначают роль, которой нет в справочнике. Раньше это
+ * ловил Zod-enum на входе; теперь роли — данные, и проверка ушла в
+ * сервис. Молча создавать сотрудника с несуществующим кодом нельзя:
+ * он бы получил ровно ноль прав, а причина осталась бы невидимой.
+ */
+export class EmployeeRoleUnknownException extends BusinessException {
+  constructor(codes: string[]) {
+    super(
+      'EMPLOYEE_ROLE_UNKNOWN',
+      `Неизвестные роли: ${codes.join(', ')}. Заведите роль в разделе «Роли» или выберите существующую.`,
+      HttpStatus.BAD_REQUEST,
+    );
+  }
+}
+
+export class AppRoleSystemImmutableException extends BusinessException {
+  constructor(message = 'Системную роль изменить нельзя') {
+    super('APP_ROLE_SYSTEM_IMMUTABLE', message, HttpStatus.CONFLICT);
+  }
+}
+
 export class EquipmentNotFoundException extends BusinessException {
   constructor() {
     super('EQUIPMENT_NOT_FOUND', 'Оборудование не найдено', HttpStatus.NOT_FOUND);

@@ -3,7 +3,7 @@ import {
   createParamDecorator,
   ExecutionContext,
 } from '@nestjs/common';
-import type { Role } from '@prisma/client';
+import type { SystemRoleCode } from '@sewing/shared/app-roles';
 import type { AuthPrincipal, RequestWithAuth } from './auth.types.js';
 
 /**
@@ -23,10 +23,15 @@ export const Public = (): MethodDecorator & ClassDecorator =>
 /**
  * Декоратор `@Roles(...)` ограничивает маршрут заданным набором ролей.
  * Без декоратора маршрут доступен любому авторизованному пользователю.
- * `ADMIN` всегда имеет доступ — это запекается в `RolesGuard`.
+ * `ADMIN` всегда имеет доступ — это запекается в `AuthGuard`.
+ *
+ * Здесь перечисляются СИСТЕМНЫЕ коды (`SystemRoleCode`) — те, что зашиты
+ * в приложении. Кастомные роли из `/admin/roles` в декораторах не
+ * упоминаются никогда: они получают доступ наследованием, `AuthGuard`
+ * раскрывает их набор до сравнения (см. `AppRolesService.expand`).
  */
 export const Roles = (
-  ...roles: Role[]
+  ...roles: SystemRoleCode[]
 ): MethodDecorator & ClassDecorator => SetMetadata(ROLES_KEY, roles);
 
 /**

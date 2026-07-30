@@ -40,5 +40,8 @@ export async function loginAction(
     return { error: result.message, code: result.code };
   }
   const next = String(form.get('next') ?? '');
-  redirect(safeReturnTo(next, result.user.role));
+  // `workspace` — рабочий экран из ответа логина (посчитан сервером
+  // по справочнику `AppRole`): без него роль из `/admin/roles` не
+  // нашлась бы в захардкоженной матрице и вход бы не завершился.
+  redirect(safeReturnTo(next, result.user.role, result.user.workspace));
 }

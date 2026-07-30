@@ -367,6 +367,14 @@ ORDER_SAMPLE | EMPLOYEE | OPERATION
   нигде не использованной операции; `payload.targetSnapshot =
   { code, name, category }`). Мягкое «удаление» (`active = false`)
   идёт через обычный `update` и отдельного аудит-события не имеет.
+- `APP_ROLE` — справочник ролей (`/admin/roles`, `AppRolesService`).
+  События `APP_ROLE_CREATE` / `APP_ROLE_UPDATE` (`entityId = AppRole.id`,
+  в payload `code`, `name`, `inherits`) и массовые
+  `APP_ROLE_ARCHIVE` / `APP_ROLE_RESTORE` / `APP_ROLE_PURGE` (одно
+  событие на пачку, `entityId` — id через запятую, полный список в
+  `payload.ids`). Пишем ВСЕ операции: правка `inherits` меняет права
+  сразу всем носителям роли, и «кто и когда» — первый вопрос при
+  разборе инцидента с доступом.
 
 <a id="33-salary-entry"></a>
 

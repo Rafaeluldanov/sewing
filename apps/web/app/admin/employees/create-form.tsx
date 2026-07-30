@@ -3,11 +3,17 @@
 import { useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { Plus, XCircle } from 'lucide-react';
+import { SYSTEM_ROLE_LABELS } from '@sewing/shared/app-roles';
 import {
   COMPENSATION_TYPES,
   EMPLOYEE_ROLES,
+  SALARY_RATE_MODES,
+  SALARY_RATE_MODE_LABELS,
+  requiresHourlySalaryRate,
+  requiresMonthlySalaryRate,
   type CompensationType,
   type EmployeeRole,
+  type SalaryRateMode,
 } from '@sewing/shared/employees';
 import { createEmployeeAction } from './actions';
 import {
@@ -22,22 +28,25 @@ import {
  */
 const CUTTER_ROLE: EmployeeRole = 'CUTTER';
 
-const ROLE_LABELS: Record<EmployeeRole, string> = {
-  ADMIN: 'Администратор',
-  SHOP_MANAGER: 'Начальник цеха',
-  CUTTER: 'Раскройщик',
-  CUTTER_ASSISTANT: 'Помощник раскройщика',
-  SEAMSTRESS: 'Швея',
-  QC: 'ОТК',
-  IRONING: 'ВТО',
-  PACKING: 'Упаковка',
-  SHOPFLOOR_MASTER: 'Мастер цеха',
-  CONSTRUCTOR: 'Конструктор',
-};
+/**
+ * Роль назначается из справочника (`/admin/roles`), список приходит
+ * пропом `roleOptions`. Зашитый набор `EMPLOYEE_ROLES` остаётся как
+ * fallback: если справочник не отдался, форма создания сотрудника
+ * обязана продолжать работать.
+ */
+interface RoleOption {
+  code: string;
+  name: string;
+}
+
+const FALLBACK_ROLE_OPTIONS: RoleOption[] = EMPLOYEE_ROLES.map((code) => ({
+  code,
+  name: SYSTEM_ROLE_LABELS[code] ?? code,
+}));
 
 const COMPENSATION_LABEL: Record<CompensationType, string> = {
   PIECEWORK: 'Сдельная',
-  SALARY: 'Оклад (почасовой)',
+  SALARY: 'Оклад',
   MIXED: 'Оклад + сдельная',
 };
 
@@ -69,6 +78,11 @@ interface DivisionOption {
 
 interface Props {
   divisionOptions?: DivisionOption[];
+  /**
+   * Активные роли из справочника (`/admin/roles`). Пусто — работаем на
+   * зашитом `FALLBACK_ROLE_OPTIONS`.
+   */
+  roleOptions?: RoleOption[];
 }
 
 /**
@@ -154,12 +168,12 @@ export function CreateEmployeeForm({ divisionOptions = [] }: Props) {
             id="emp-role"
             name="role"
             value={role}
-            onChange={(e) => setRole(e.target.value as EmployeeRole)}
+            onChange={(e) => setRole(e.target.value)}
             required
           >
-            {EMPLOYEE_ROLES.map((r) => (
-              <option key={r} value={r}>
-                {ROLE_LABELS[r]}
+            {roles.map((r) => (
+              <option key={r.code} value={r.code}>
+                {r.name}
               </option>
             ))}
           </select>

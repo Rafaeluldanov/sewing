@@ -23,7 +23,9 @@ interface LoginPageProps {
 export default async function LoginPage({ searchParams }: LoginPageProps) {
   const me = await getCurrentUserOrNull();
   if (me) {
-    redirect(safeReturnTo(searchParams.next, me.user.role));
+    redirect(
+      safeReturnTo(searchParams.next, me.user.role, me.user.workspace),
+    );
   }
   // Для анонима `safeReturnTo` без роли вернул бы `/login` (fallback),
   // что нам не подходит — здесь нам нужен «честный» relative-путь либо

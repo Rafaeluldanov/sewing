@@ -22,9 +22,11 @@ import type { Role } from '@prisma/client';
  */
 export const EARNINGS_MANAGER_ROLES = ['SHOP_MANAGER', 'ADMIN'] as const;
 
-export function isEarningsManager(role: Role | undefined | null): boolean {
+export function isEarningsManager(
+  role: string | undefined | null,
+): boolean {
   if (!role) return false;
-  return (EARNINGS_MANAGER_ROLES as readonly Role[]).includes(role);
+  return (EARNINGS_MANAGER_ROLES as readonly string[]).includes(role);
 }
 
 /**

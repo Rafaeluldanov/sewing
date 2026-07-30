@@ -94,7 +94,7 @@ export class OrderSamplesService {
     orderId: string,
     dto: StartOrderSampleDto,
     actorEmployeeId: string,
-    _actorRole: Role,
+    _actorRole: string,
   ): Promise<OrderSampleDto> {
     // 1. Грузим заказ + items + действующие samples + snapshot маршрута.
     const order = await this.prisma.order.findUnique({

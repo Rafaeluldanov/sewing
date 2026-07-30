@@ -620,7 +620,10 @@ const STAGE_LABELS: Record<ProductionDashboardStage, string> = {
 };
 
 function mapEmployeeRoleToDashboardRole(
-  role: Role,
+  // `Employee.role` — строка (`AppRole.code`), а не enum: роли
+  // заводятся из админки. Неизвестный код просто не попадёт ни в одну
+  // ветку switch и вернёт `null` — «в дашборде не участвует».
+  role: string,
 ): ProductionDashboardRole | null {
   switch (role) {
     case Role.QC:

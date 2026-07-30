@@ -6,7 +6,6 @@ import {
   Injectable,
 } from '@nestjs/common';
 import { Reflector } from '@nestjs/core';
-import type { Role } from '@prisma/client';
 import { UnauthenticatedException } from '../../common/errors.js';
 import { AuthService } from './auth.service.js';
 import { readSessionCookie } from './auth.controller.js';
@@ -49,14 +48,19 @@ export class AuthGuard implements CanActivate {
     if (!principal) throw new UnauthenticatedException();
     req.auth = principal;
 
-    const required = this.reflector.getAllAndOverride<Role[] | undefined>(
+    const required = this.reflector.getAllAndOverride<string[] | undefined>(
       ROLES_KEY,
       [context.getHandler(), context.getClass()],
     );
     if (required && required.length > 0) {
       // Фича «несколько ролей»: доступ есть, если ЛЮБАЯ из ролей
-      // сотрудника (`principal.roles`, инвариант — содержит `role`)
-      // входит в требуемый список. ADMIN по-прежнему проходит везде.
+      // сотрудника входит в требуемый список. ADMIN проходит везде.
+      //
+      // `principal.roles` — ЭФФЕКТИВНЫЙ набор: назначенные роли плюс
+      // всё, что они наследуют (раскрывает `resolvePrincipal` через
+      // `AppRolesService`). Поэтому кастомная роль из `/admin/roles`
+      // проходит те же декораторы, что и её донор, а сами декораторы
+      // остаются написаны на системных кодах.
       const roles = principal.roles;
       const allowed =
         roles.includes('ADMIN') || required.some((r) => roles.includes(r));

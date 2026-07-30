@@ -8,6 +8,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./archive": "./src/archive.ts",
+    "./app-roles": "./src/app-roles.ts",
     "./auth": "./src/auth.ts",
     "./orders": "./src/orders.ts",
     "./passports": "./src/passports.ts",

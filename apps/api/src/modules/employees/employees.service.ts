@@ -12,6 +12,10 @@ import type {
   ListEmployeesQuery,
   UpdateEmployeeDto,
 } from '@sewing/shared/employees';
+import {
+  areAllSystemRoles,
+  expandRoleCodes,
+} from '@sewing/shared/app-roles';
 import { normalizeAssignedRoles } from '@sewing/shared/employees';
 import type {
   BulkArchiveResultDto,
@@ -26,6 +30,7 @@ import {
   EmployeeAdminTargetForbiddenException,
   EmployeeArchiveBlockedException,
   EmployeeCannotModifySelfException,
+  EmployeeRoleUnknownException,
   EmployeeDisplayCascadeAckRequiredException,
   EmployeeHasHistoryException,
   EmployeeLastAdminException,
@@ -189,6 +194,10 @@ export class EmployeesService {
       await this.assertCashFlowItemExists(dto.salaryCashFlowItemId);
     }
 
+    // Роль — ссылка на справочник (`AppRole.code`), а не enum: код
+    // должен существовать, иначе сотрудник получит ноль прав молча.
+    await this.assertRolesExist(normalizeAssignedRoles(dto.role, dto.roles));
+
     const pinHash = await bcrypt.hash(dto.pin, PIN_HASH_COST);
 
     let created;
@@ -289,6 +298,7 @@ export class EmployeesService {
         nextPrimary,
         dto.roles ?? (current.roles as Role[]),
       ) as Role[];
+      await this.assertRolesExist(nextRoles);
 
       const currentRoles =
         current.roles && current.roles.length > 0
@@ -302,9 +312,16 @@ export class EmployeesService {
         nextPrimary !== current.role || !sameRoleSet(nextRoles, currentRoles);
 
       if (roleChanged) {
+        // Справочник ролей: «админ» — это не только код ADMIN в наборе,
+        // но и любая роль, которая ADMIN НАСЛЕДУЕТ. Иначе начальник цеха
+        // выдал бы кастомную роль с `inherits: ['ADMIN']` и обошёл бы
+        // запрет эскалации ниже. `viewer.roles` уже раскрыт `AuthGuard`-ом,
+        // наборы сотрудника раскрываем здесь.
         const viewerIsAdmin = viewer.roles.includes(Role.ADMIN);
-        const targetIsAdmin = currentRoles.includes(Role.ADMIN);
-        const willBeAdmin = nextRoles.includes(Role.ADMIN);
+        const [targetIsAdmin, willBeAdmin] = await Promise.all([
+          this.grantsAdmin(currentRoles),
+          this.grantsAdmin(nextRoles),
+        ]);
 
         // RBAC: только ADMIN управляет ADMIN-доступом — не-админ не может
         // ни трогать роли админа, ни выдать роль ADMIN кому-либо (защита
@@ -608,9 +625,9 @@ export class EmployeesService {
     if (!target) throw new EmployeeNotFoundException();
     if (!target.active) return toDetailDto(target);
 
-    this.assertCanModifyTarget(target, viewer);
+    await this.assertCanModifyTarget(target, viewer);
 
-    if (isAdminEmployee(target)) {
+    if (await this.grantsAdmin(rolesOf(target))) {
       await this.assertNotLastActiveAdmin(target.id);
     }
 
@@ -670,7 +687,7 @@ export class EmployeesService {
     if (target.active) return toDetailDto(target);
 
     // Управление ADMIN-учётками — только из-под ADMIN'а, как и archive.
-    this.assertCanModifyTarget(target, viewer);
+    await this.assertCanModifyTarget(target, viewer);
 
     let updated;
     try {
@@ -756,7 +773,7 @@ export class EmployeesService {
     if (viewer.employeeId === target.id) {
       throw new EmployeeCannotModifySelfException();
     }
-    if (isAdminEmployee(target)) {
+    if (await this.grantsAdmin(rolesOf(target))) {
       await this.assertNotLastActiveAdmin(target.id);
     }
 
@@ -929,38 +946,78 @@ export class EmployeesService {
    * проверка делается на уровне контроллера (`@Roles('ADMIN')` на
    * методе), а не здесь — `EmployeesController` уже знает viewer.role.
    */
-  private assertCanModifyTarget(
-    target: { id: string; role: Role; roles?: Role[] },
+  private async assertCanModifyTarget(
+    target: { id: string; role: string; roles?: string[] },
     viewer: AuthPrincipal,
-  ): void {
+  ): Promise<void> {
     if (viewer.employeeId === target.id) {
       throw new EmployeeCannotModifySelfException();
     }
     // Фича «несколько ролей»: «админ» — это любой, у кого ADMIN в
     // наборе ролей (а не только основная роль). И viewer тоже «админ»,
     // если ADMIN среди его ролей.
-    if (isAdminEmployee(target) && !viewer.roles.includes(Role.ADMIN)) {
+    //
+    // Справочник ролей: набор сотрудника раскрываем — админом делает и
+    // кастомная роль, которая ADMIN наследует.
+    const targetRoles =
+      target.roles && target.roles.length > 0 ? target.roles : [target.role];
+    if (
+      (await this.grantsAdmin(targetRoles)) &&
+      !viewer.roles.includes(Role.ADMIN)
+    ) {
       throw new EmployeeAdminTargetForbiddenException();
     }
   }
 
   /**
+   * Даёт ли набор ролей права ADMIN — с учётом наследования
+   * (`AppRole.inherits`). Прямой код ADMIN отвечает без запроса; набор
+   * только из системных ролей тоже: системные роли ничего не наследуют.
+   */
+  private async grantsAdmin(codes: readonly string[]): Promise<boolean> {
+    if (codes.includes(Role.ADMIN)) return true;
+    if (areAllSystemRoles(codes)) return false;
+    const catalog = await this.prisma.appRole.findMany({
+      select: { code: true, inherits: true },
+    });
+    return expandRoleCodes(codes, catalog).includes(Role.ADMIN);
+  }
+
+  /**
    * Запрещает архивирование / удаление / снятие роли у последнего
-   * активного ADMIN. «Админ» считается по наличию ADMIN в `roles`
-   * (фича «несколько ролей»). Передаём `excludeId` — чтобы при операции
-   * над текущим ADMIN-ом считать «остальных» (без него).
+   * активного ADMIN. Передаём `excludeId` — чтобы при операции над
+   * текущим ADMIN-ом считать «остальных» (без него).
+   *
+   * «Админ» считается по ЭФФЕКТИВНОМУ набору: и прямой код ADMIN в
+   * `roles`, и кастомная роль, которая ADMIN наследует. Иначе счёт
+   * занижался бы, и последний фактический админ ушёл бы в архив без
+   * возражений — систему стало бы некому администрировать.
+   *
+   * Считаем в памяти: `roles` — Postgres-массив кодов, и «раскрой
+   * наследование» в SQL не выразить. Активных сотрудников сотни,
+   * а метод срабатывает только при операции над админом.
    */
   private async assertNotLastActiveAdmin(excludeId: string): Promise<void> {
-    const otherActive = await this.prisma.employee.count({
-      where: {
-        roles: { has: Role.ADMIN },
-        active: true,
-        NOT: { id: excludeId },
-      },
+    const others = await this.prisma.employee.findMany({
+      where: { active: true, NOT: { id: excludeId } },
+      select: { role: true, roles: true },
     });
-    if (otherActive === 0) {
-      throw new EmployeeLastAdminException();
+    // Быстрый путь: прямой ADMIN нашёлся — раскрывать нечего.
+    const codes = others.map((e) => (e.roles.length > 0 ? e.roles : [e.role]));
+    if (codes.some((set) => set.includes(Role.ADMIN))) return;
+
+    const custom = codes.filter((set) => !areAllSystemRoles(set));
+    if (custom.length > 0) {
+      const catalog = await this.prisma.appRole.findMany({
+        select: { code: true, inherits: true },
+      });
+      if (
+        custom.some((set) => expandRoleCodes(set, catalog).includes(Role.ADMIN))
+      ) {
+        return;
+      }
     }
+    throw new EmployeeLastAdminException();
   }
 
   // ===========================================================================
@@ -993,6 +1050,27 @@ export class EmployeesService {
    * Снять привязку (`null`) всегда можно — этот метод вызывается только
    * для непустого id.
    */
+  /**
+   * Все коды ролей существуют в справочнике (`AppRole`).
+   *
+   * АРХИВНЫЕ роли проходят проверку сознательно: `update` присылает
+   * ВЕСЬ набор сотрудника, и если одну из его ролей успели убрать в
+   * архив, отказ заблокировал бы правку зарплаты или подразделения —
+   * менеджер оказался бы в тупике. Не предлагать архивную роль для
+   * НОВОГО назначения — задача UI (селекты фильтруют `active`).
+   */
+  private async assertRolesExist(codes: readonly string[]): Promise<void> {
+    const wanted = Array.from(new Set(codes.filter((c) => c)));
+    if (wanted.length === 0) return;
+    const known = await this.prisma.appRole.findMany({
+      where: { code: { in: wanted } },
+      select: { code: true },
+    });
+    const knownSet = new Set(known.map((r) => r.code));
+    const unknown = wanted.filter((c) => !knownSet.has(c));
+    if (unknown.length > 0) throw new EmployeeRoleUnknownException(unknown);
+  }
+
   private async assertCashFlowItemExists(itemId: string): Promise<void> {
     const row = await this.prisma.cashFlowItem.findUnique({
       where: { id: itemId },
@@ -1016,18 +1094,23 @@ type EmployeeRow = Prisma.EmployeeGetPayload<{
  * Учитываем оба места (с fallback на основную роль, если набор пуст —
  * старые строки).
  */
-function isAdminEmployee(e: {
-  role: Role;
-  roles?: Role[] | null;
-}): boolean {
-  if (e.roles && e.roles.length > 0) return e.roles.includes(Role.ADMIN);
-  return e.role === Role.ADMIN;
+/**
+ * Роли сотрудника как набор кодов. ИНВАРИАНТ «roles содержит role»
+ * держит `normalizeAssignedRoles`, но на старых строках `roles` мог
+ * остаться пустым — тогда единственная роль лежит в `role`.
+ *
+ * Раскрытие наследования здесь НЕ делается: это чистая функция, а
+ * каталог живёт в БД. Кому нужен эффективный набор — зовёт
+ * `EmployeesService.grantsAdmin` / `AppRolesService.expand`.
+ */
+function rolesOf(e: { role: string; roles?: string[] | null }): string[] {
+  return e.roles && e.roles.length > 0 ? e.roles : [e.role];
 }
 
 /** Сравнение двух наборов ролей как множеств (порядок не важен). */
-function sameRoleSet(a: Role[], b: Role[]): boolean {
+function sameRoleSet(a: string[], b: string[]): boolean {
   if (a.length !== b.length) return false;
-  const sb = new Set<Role>(b);
+  const sb = new Set<string>(b);
   return a.every((r) => sb.has(r));
 }
 

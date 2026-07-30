@@ -3,11 +3,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useFormState, useFormStatus } from 'react-dom';
 import { Pencil, Save, Search, ShieldCheck, Star, X, XCircle } from 'lucide-react';
-import {
-  EMPLOYEE_ROLES,
-  type EmployeeListItemDto,
-} from '@sewing/shared/employees';
-import { formatRole } from '@/lib/admin-labels';
+import type { AppRoleDto } from '@sewing/shared/app-roles';
+import { EMPLOYEE_ROLES, type EmployeeListItemDto } from '@sewing/shared/employees';
+import { buildRoleLabels, formatRole } from '@/lib/admin-labels';
 import { AdminCard, AdminSectionHeader } from '@/components/admin';
 import { updateEmployeeRolesAction } from '../employees/actions';
 import {
@@ -23,6 +21,36 @@ interface Props {
    * режет эскалацию привилегий).
    */
   canAssignAdmin: boolean;
+  /**
+   * Справочник ролей (`/admin/roles`) — и системные, и заведённые из
+   * админки. Пустой список = справочник не отдался: откатываемся на
+   * зашитые `EMPLOYEE_ROLES`, чтобы вкладка «Доступ» осталась рабочей.
+   */
+  roleOptions?: AppRoleDto[];
+}
+
+/**
+ * Коды ролей, которые можно НАЗНАЧАТЬ. Архивные из справочника
+ * отбрасываем: роль в архиве выведена из обращения, новые назначения
+ * ей делать не надо (у тех, кому уже выдана, доступ сохраняется —
+ * см. `AppRolesService.expand`).
+ *
+ * `DISPLAY`/`SUPERADMIN` в списке не появляются: у первой учётку
+ * заводит раздел «Цеховой монитор», вторая — кросс-тенантная и
+ * назначается только через control-plane. В справочнике они системные
+ * и активные, поэтому фильтруем явно — как это делал `EMPLOYEE_ROLES`.
+ */
+const NOT_ASSIGNABLE = new Set(['DISPLAY', 'SUPERADMIN']);
+
+function assignableRoles(
+  roleOptions: AppRoleDto[] | undefined,
+): { code: string; name: string }[] {
+  if (!roleOptions || roleOptions.length === 0) {
+    return EMPLOYEE_ROLES.map((code) => ({ code, name: formatRole(code) }));
+  }
+  return roleOptions
+    .filter((r) => r.active && !NOT_ASSIGNABLE.has(r.code))
+    .map((r) => ({ code: r.code, name: r.name }));
 }
 
 /** Роли сотрудника в порядке «основная → остальные» (без дублей). */
@@ -35,7 +63,13 @@ function orderedRoles(employee: EmployeeListItemDto): string[] {
 }
 
 /** Read-only чипы ролей: основная — с ★ и акцентом. */
-function RoleChipsReadonly({ employee }: { employee: EmployeeListItemDto }) {
+function RoleChipsReadonly({
+  employee,
+  labels,
+}: {
+  employee: EmployeeListItemDto;
+  labels: Readonly<Record<string, string>>;
+}) {
   return (
     <div className="admin-chip-list">
       {orderedRoles(employee).map((r) => {
@@ -54,7 +88,7 @@ function RoleChipsReadonly({ employee }: { employee: EmployeeListItemDto }) {
                 aria-hidden
               />
             )}
-            {formatRole(r)}
+            {formatRole(r, labels)}
           </span>
         );
       })}
@@ -86,10 +120,12 @@ function SaveButton() {
 function EmployeeRolesEditor({
   employee,
   canAssignAdmin,
+  options,
   onDone,
 }: {
   employee: EmployeeListItemDto;
   canAssignAdmin: boolean;
+  options: { code: string; name: string }[];
   onDone: () => void;
 }) {
   const [selected, setSelected] = useState<Set<string>>(
@@ -133,7 +169,8 @@ function EmployeeRolesEditor({
   return (
     <form action={formAction} className="admin-stack" style={{ gap: 10 }}>
       <div className="admin-role-chips">
-        {EMPLOYEE_ROLES.map((r) => {
+        {options.map((option) => {
+          const r = option.code;
           const on = selected.has(r);
           const isPrimary = on && primary === r;
           const adminLocked = r === 'ADMIN' && !canAssignAdmin;
@@ -153,7 +190,7 @@ function EmployeeRolesEditor({
                 aria-pressed={on}
                 onClick={() => toggle(r)}
               >
-                {formatRole(r)}
+                {option.name}
               </button>
               {on && (
                 <button
@@ -229,7 +266,17 @@ function EmployeeRolesEditor({
  * `PATCH /api/employees/:id` (`role`/`roles`); RBAC (SHOP_MANAGER/ADMIN,
  * запрет эскалации ADMIN, защита последнего админа) — на сервере.
  */
-export function EmployeeRolesSection({ employees, canAssignAdmin }: Props) {
+export function EmployeeRolesSection({
+  employees,
+  canAssignAdmin,
+  roleOptions,
+}: Props) {
+  const options = useMemo(() => assignableRoles(roleOptions), [roleOptions]);
+  const labels = useMemo(
+    () => buildRoleLabels(roleOptions ?? []),
+    [roleOptions],
+  );
+
   const active = useMemo(
     () =>
       employees
@@ -293,10 +340,11 @@ export function EmployeeRolesSection({ employees, canAssignAdmin }: Props) {
                     <EmployeeRolesEditor
                       employee={e}
                       canAssignAdmin={canAssignAdmin}
+                      options={options}
                       onDone={stopEditing}
                     />
                   ) : (
-                    <RoleChipsReadonly employee={e} />
+                    <RoleChipsReadonly employee={e} labels={labels} />
                   )}
                 </div>
                 {!editing && (

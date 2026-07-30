@@ -59,6 +59,7 @@ import {
   Scissors,
   Search,
   Settings,
+  ShieldCheck,
   ShoppingCart,
   Truck,
   Users,
@@ -157,6 +158,9 @@ function buildGroups(modules: ModuleFlags): NavGroup[] {
       label: 'Персонал',
       items: [
         { href: '/admin/employees', label: 'Сотрудники', Icon: Users },
+        // Справочник ролей: новую роль заводят здесь, а не правкой кода
+        // (см. `apps/web/app/admin/roles`, `prisma/schema.prisma::AppRole`).
+        { href: '/admin/roles', label: 'Роли', Icon: ShieldCheck },
         { href: '/admin/payroll', label: 'Зарплата', Icon: BadgeRussianRuble },
       ],
     },

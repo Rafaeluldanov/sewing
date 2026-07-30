@@ -155,12 +155,21 @@ describe('Admin UI Polish — label helpers', () => {
   });
 
   test('formatRole превращает SEAMSTRESS → Швея', () => {
+    // Справочник ролей (28.07.2026): названия ролей переехали в
+    // `@sewing/shared/app-roles` (`SYSTEM_ROLE_DEFAULTS`) — оттуда их
+    // берут и сид миграции, и fallback фронта. `admin-labels.ts` теперь
+    // только собирает словарь и подмешивает кастомные роли из БД.
+    const shared = readSrc('packages/shared/src/app-roles.ts');
+    expect(shared).toMatch(/name:\s*'Швея'/);
+    expect(shared).toMatch(/name:\s*'Мастер цеха'/);
+    expect(shared).toMatch(/name:\s*'ВТО'/);
+    expect(shared).toMatch(/name:\s*'ОТК'/);
+    expect(shared).toMatch(/name:\s*'Упаковка'/);
+
     const src = readSrc('apps/web/lib/admin-labels.ts');
-    expect(src).toMatch(/SEAMSTRESS:\s*'Швея'/);
-    expect(src).toMatch(/SHOPFLOOR_MASTER:\s*'Мастер цеха'/);
-    expect(src).toMatch(/IRONING:\s*'ВТО'/);
-    expect(src).toMatch(/QC:\s*'ОТК'/);
-    expect(src).toMatch(/PACKING:\s*'Упаковка'/);
+    expect(src).toContain('export function formatRole');
+    expect(src).toContain('export function buildRoleLabels');
+    expect(src).toContain('SYSTEM_ROLE_LABELS');
     // Лейблы категорий операций теперь живут в shared (см. ТЗ
     // «Единая группировка»), `admin-labels.ts` их только реэкспортирует
     // через `getOperationCategoryLabel`. Защищаем источник истины.

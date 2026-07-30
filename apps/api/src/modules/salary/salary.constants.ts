@@ -18,7 +18,9 @@ import type { Role } from '@prisma/client';
  */
 export const SALARY_MANAGER_ROLES = ['SHOP_MANAGER', 'ADMIN'] as const;
 
-export function isSalaryManager(role: Role | undefined | null): boolean {
+export function isSalaryManager(
+  role: string | undefined | null,
+): boolean {
   if (!role) return false;
-  return (SALARY_MANAGER_ROLES as readonly Role[]).includes(role);
+  return (SALARY_MANAGER_ROLES as readonly string[]).includes(role);
 }

@@ -1,11 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import bcrypt from 'bcryptjs';
-import type { Employee, Role } from '@prisma/client';
+import type { Employee } from '@prisma/client';
+import type { RoleWorkspaceResolution } from '@sewing/shared/app-roles';
 import {
   EmployeeInactiveException,
   InvalidCredentialsException,
 } from '../../common/errors.js';
+import { AppRolesService } from '../app-roles/app-roles.service.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { ControlPlaneService } from '../../prisma/control-plane.service.js';
 import { TenantContext } from '../../prisma/tenant-context.js';
@@ -31,6 +33,8 @@ export class AuthService {
     @Inject(TenantContext) private readonly tenantContext: TenantContext,
     @Inject(ControlPlaneService)
     private readonly controlPlane: ControlPlaneService,
+    @Inject(AppRolesService)
+    private readonly appRoles: AppRolesService,
   ) {
     const secret = config.get<string>('JWT_SECRET') ?? '';
     if (!secret || secret === 'change-me-in-prod') {
@@ -69,18 +73,31 @@ export class AuthService {
     this.logger.log(
       `event=auth.login employeeId=${employee.id} login=${employee.login} role=${employee.role}`,
     );
-    return this.issueSession(employee);
+    // Рабочий экран считаем ЗДЕСЬ (login асинхронный), чтобы `ws`/`lock`
+    // попали в cookie и web-middleware мог запереть кастомную роль на её
+    // терминале без обращения к БД. `issueSession` остаётся синхронным —
+    // им пользуются тесты (`tests/utils/app.ts`).
+    const assigned =
+      employee.roles.length > 0 ? employee.roles : [employee.role];
+    const workspace = await this.appRoles.resolveWorkspace(assigned);
+    return this.issueSession(employee, workspace);
   }
 
   /**
    * Создаёт session-cookie для сотрудника. Используется при логине,
    * а в тестах — для прямого получения cookie без формы.
+   *
+   * `workspace` опционален: без него токен выпускается без `ws`/`lock`,
+   * и web-middleware откатывается на legacy-логику по системным ролям
+   * (для них результат тот же). Так тестовые хелперы остаются
+   * синхронными и не тянут за собой справочник ролей.
    */
   issueSession(
     employee: Pick<
       Employee,
       'id' | 'role' | 'login' | 'fullName'
-    > & { roles?: Role[]; activeRole?: Role | null },
+    > & { roles?: string[]; activeRole?: string | null },
+    workspace?: RoleWorkspaceResolution,
   ): {
     user: AuthPrincipal;
     cookie: { name: string; value: string; attrs: CookieAttributes };
@@ -97,7 +114,15 @@ export class AuthService {
     // single-tenant токен выпускается без `tid`, и проверка не применяется.
     const tid = this.tenantContext.getStore()?.tenantId;
     const { token, expiresAt } = signSession(
-      { sub: employee.id, role: employee.role, roles, ...(tid ? { tid } : {}) },
+      {
+        sub: employee.id,
+        role: employee.role,
+        roles,
+        ...(tid ? { tid } : {}),
+        ...(workspace
+          ? { ws: workspace.workspace, lock: workspace.lockToWorkspace }
+          : {}),
+      },
       { secret: this.secret, ttlSeconds: this.ttlSeconds },
     );
     const attrs = buildSessionCookieAttributes({
@@ -107,9 +132,16 @@ export class AuthService {
     });
     const user: AuthPrincipal = {
       employeeId: employee.id,
+      // На выпуске токена наследование не раскрываем: `issueSession`
+      // синхронный, а ответу логина эффективный набор не нужен — веб
+      // сразу после входа идёт за `/api/auth/me`, где он уже посчитан.
       role: employee.role,
       roles,
+      assignedRoles: roles,
       activeRole,
+      workspace: workspace?.workspace ?? '/',
+      singleWorkspace: workspace?.singleWorkspace ?? false,
+      lockToWorkspace: workspace?.lockToWorkspace ?? false,
       login: employee.login,
       fullName: employee.fullName,
     };
@@ -179,15 +211,25 @@ export class AuthService {
     // Свежий набор ролей из БД (не из payload) — чтобы смена ролей в
     // админке вступала в силу сразу, до перевыпуска токена. Fallback
     // `[role]` поддерживает инвариант для старых строк.
-    const roles =
+    const assignedRoles =
       employee.roles && employee.roles.length > 0
-        ? (employee.roles as Role[])
-        : [employee.role as Role];
+        ? employee.roles
+        : [employee.role];
+    // Раскрытие наследования — тоже на лету, а не из токена: правка
+    // `AppRole.inherits` в админке должна догонять уже вошедших
+    // сотрудников, не дожидаясь перелогина. Для учёток только с
+    // системными ролями запроса в БД не будет (см. `resolveAccess`).
+    const { effective, workspace } =
+      await this.appRoles.resolveAccess(assignedRoles);
     return {
       employeeId: employee.id,
-      role: employee.role as Role,
-      roles,
-      activeRole: (employee.activeRole as Role | null) ?? null,
+      role: employee.role,
+      roles: effective,
+      assignedRoles,
+      activeRole: employee.activeRole ?? null,
+      workspace: workspace.workspace,
+      singleWorkspace: workspace.singleWorkspace,
+      lockToWorkspace: workspace.lockToWorkspace,
       login: employee.login,
       fullName: employee.fullName,
     };

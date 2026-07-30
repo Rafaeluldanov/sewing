@@ -27,8 +27,14 @@ import { getDefaultRouteForRole } from './role-redirect';
 export function safeReturnTo(
   returnTo: string | null | undefined,
   role: string | null | undefined,
+  /**
+   * Рабочий экран из `/api/auth/me` (`AuthUserDto.workspace`). Нужен,
+   * чтобы fallback для роли из справочника (`/admin/roles`) вёл на её
+   * экран, а не на `/login`.
+   */
+  workspace?: string | null,
 ): string {
-  const fallback = getDefaultRouteForRole(role);
+  const fallback = getDefaultRouteForRole(role, workspace);
   if (typeof returnTo !== 'string') return fallback;
   const trimmed = returnTo.trim();
   if (!trimmed) return fallback;

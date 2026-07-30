@@ -41,7 +41,12 @@ describe('PRINTER_ROLE_FALLBACKS — карта «помощник делит п
     expect(src).toMatch(
       /export const PRINTER_ROLE_FALLBACKS:\s*Partial<Record<Role,\s*readonly Role\[\]>>/,
     );
-    expect(src).toMatch(/export function resolveCandidateRoles\(role:\s*Role\)/);
+    // Справочник ролей (28.07.2026): на ВХОДЕ роль сотрудника — строка
+    // (`AppRole.code`, роли заводятся из `/admin/roles`), на ВЫХОДЕ
+    // по-прежнему `Role[]` — привязка принтера осталась enum-ом.
+    expect(src).toMatch(
+      /export function resolveCandidateRoles\([\s\S]*?role:\s*string,\s*\):\s*readonly Role\[\]/,
+    );
   });
 
   test('CUTTER_ASSISTANT в карте имеет fallback на CUTTER (один раскройный стол)', () => {
@@ -59,10 +64,11 @@ describe('PRINTER_ROLE_FALLBACKS — карта «помощник делит п
     const src = readSrc(
       'apps/api/src/modules/printers/printer-role-resolution.ts',
     );
-    // Через `Set([role, ...fallbacks])` — это то самое свойство
+    // Через `Set([...known, ...fallbacks])` — это то самое свойство
     // «своя роль идёт первой». Если кто-то начнёт перевёртывать
-    // порядок, тест поймает.
-    expect(src).toMatch(/new Set<Role>\(\[role,\s*\.\.\.fallbacks\]\)/);
+    // порядок, тест поймает. `known` — своя роль, отфильтрованная по
+    // enum-у: кастомная роль из справочника принтеру не соответствует.
+    expect(src).toMatch(/new Set<Role>\(\[\.\.\.known,\s*\.\.\.fallbacks\]\)/);
   });
 });
 
