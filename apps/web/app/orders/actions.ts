@@ -58,6 +58,7 @@ import {
   updateOrderOutsourceRequirementStatus,
 } from '@/lib/orders-api';
 import {
+  cancelWorkshopNeed,
   createManualWorkshopNeed,
   deleteManualWorkshopNeed,
   updateWorkshopNeed,
@@ -1376,11 +1377,15 @@ export async function createManualWorkshopNeedAction(
 }
 
 /**
- * Изменить ручную строку потребности (состав: описание / ед. / кол-во /
- * роль / цена). Backend отбивает попытку править системные snapshot-
- * строки (409 `WORKSHOP_NEED_NOT_MANUAL`).
+ * Изменить строку потребности — ЛЮБУЮ, включая системную из техкарты
+ * (фича «Правка потребности на любой стадии»): описание / ед. / роль /
+ * чистое количество / «к закупке» / цена / комментарий.
+ *
+ * Backend гейтит только статус заказа (`CALCULATION` … `DONE`), помечает
+ * правку (`manualEditAt`) и сразу пересчитывает себестоимость — второй
+ * клик «Пересчитать» не нужен.
  */
-export async function updateManualWorkshopNeedAction(
+export async function updateOrderNeedAction(
   orderId: string,
   needId: string,
   input: unknown,
@@ -1399,13 +1404,37 @@ export async function updateManualWorkshopNeedAction(
   return { ok: true };
 }
 
-/** Удалить ручную строку потребности. */
-export async function deleteManualWorkshopNeedAction(
+/**
+ * Удалить строку потребности. Физически удаляются только ручные строки;
+ * системную backend отобьёт 409 `WORKSHOP_NEED_NOT_MANUAL` — её гасят
+ * через `cancelOrderNeedAction` (на неё могут ссылаться закупки,
+ * приёмки и строки смет).
+ */
+export async function deleteOrderNeedAction(
   orderId: string,
   needId: string,
 ): Promise<MaterialCorrectionActionState> {
   try {
     await deleteManualWorkshopNeed(orderId, needId);
+  } catch (e) {
+    if (isNextRedirect(e)) throw e;
+    return { error: explainApiError(e) };
+  }
+  revalidateOrderPaths(orderId);
+  return { ok: true };
+}
+
+/**
+ * Погасить строку потребности (`status = CANCELLED`). Штатный способ
+ * убрать из заказа СИСТЕМНУЮ строку: сама строка остаётся ради ссылок
+ * закупок / приёмок / смет, но из потребности и себестоимости уходит.
+ */
+export async function cancelOrderNeedAction(
+  orderId: string,
+  needId: string,
+): Promise<MaterialCorrectionActionState> {
+  try {
+    await cancelWorkshopNeed(needId);
   } catch (e) {
     if (isNextRedirect(e)) throw e;
     return { error: explainApiError(e) };

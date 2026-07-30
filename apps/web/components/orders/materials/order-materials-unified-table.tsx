@@ -29,10 +29,13 @@
  *     «Себестоимость» / «Готовность к крою» — они объединены здесь
  *     или живут в других вкладках («Сводно», «Логистика»).
  *
- * Inline-edit MVP-минимум: таблица показывает значения как есть,
- * редактирование `purchaseQty` / `quotedPrice` / поставщика идёт
- * через ссылку «Открыть в потребности цеха». Полноценный inline-
- * edit можно добавить позже, не меняя backend.
+ * Правка строк (фича «Правка потребности на любой стадии»): при
+ * `canEdit` в sticky-колонке «Описание» появляется карандаш, а в шапке
+ * — «Добавить строку». Обе кнопки открывают `OrderNeedEditor`, который
+ * правит ЛЮБУЮ строку (в т.ч. системную из техкарты) и сразу тянет за
+ * собой пересчёт себестоимости на бэкенде. Ссылка «Открыть в
+ * потребности цеха» остаётся — там рабочее место закупщика с
+ * поставщиками, датами поставки и bulk-созданием заказов поставщикам.
  */
 import Link from 'next/link';
 import {
@@ -65,6 +68,7 @@ import {
   getPurchaseReceipt,
 } from '@/lib/purchase-receipts-api';
 import { getOrderWorkshopNeeds } from '@/lib/workshop-needs-api';
+import { OrderNeedEditor } from './order-need-editor';
 import {
   buildOrderMaterialRows,
   summariseOrderMaterialRows,
@@ -121,6 +125,13 @@ interface Props {
    * (старая логика без изменений).
    */
   materialsAndHardwareCostPolicy?: 'INCLUDE' | 'EXCLUDE';
+  /**
+   * Фича «Правка потребности на любой стадии»: показывать ли карандаш
+   * правки в строке и кнопку «Добавить строку». Считает вкладка
+   * (`OrderNeedsTab`): менеджер + статус заказа от «Расчёт» до
+   * «Выпущен». Read-only читатели видят таблицу как раньше.
+   */
+  canEdit?: boolean;
 }
 
 const RUB_FORMATTER = new Intl.NumberFormat('ru-RU', {
@@ -248,9 +259,11 @@ function PurchaseQtyCell({ row }: { row: OrderMaterialTableRow }) {
 function DescriptionCell({
   row,
   orderId,
+  canEdit,
 }: {
   row: OrderMaterialTableRow;
   orderId: string;
+  canEdit: boolean;
 }) {
   // CTA «Указать цвет» (см. ТЗ §C «Needs UI»): рядом с warning
   // даём ссылку на вкладку «Производство» к блоку выбора цвета
@@ -287,6 +300,26 @@ function DescriptionCell({
       <div className="order-materials-table__description-body">
         <div className="order-materials-table__description-main">
           {row.description}
+          {/* Фича «Правка потребности на любой стадии»: карандаш живёт в
+              sticky-колонке «Описание» — так он виден без горизонтального
+              скролла и не требует 15-й колонки в и без того широкой
+              таблице. */}
+          {canEdit && (
+            <OrderNeedEditor orderId={orderId} need={row.originalNeed} mode="edit" />
+          )}
+          {row.originalNeed.manualEditAt && (
+            <span
+              className="order-materials-table__manual-badge"
+              title={
+                row.originalNeed.calculatedQtyOriginal
+                  ? `Строку правили вручную. Система считала: ${row.originalNeed.calculatedQtyOriginal} ${row.originalNeed.unit}`
+                  : 'Строку правили вручную'
+              }
+              data-testid="order-materials-manual-edit-badge"
+            >
+              правлено
+            </span>
+          )}
         </div>
         {row.metaText && (
           <div className="order-materials-table__description-meta">
@@ -497,6 +530,7 @@ export async function OrderMaterialsUnifiedTable({
   orderId,
   materialIssues,
   materialsAndHardwareCostPolicy = 'INCLUDE',
+  canEdit = false,
 }: Props) {
   const data = await loadData(orderId);
   const rows = buildOrderMaterialRows({
@@ -525,7 +559,9 @@ export async function OrderMaterialsUnifiedTable({
     {
       key: 'description',
       header: 'Описание',
-      render: (row) => <DescriptionCell row={row} orderId={orderId} />,
+      render: (row) => (
+        <DescriptionCell row={row} orderId={orderId} canEdit={canEdit} />
+      ),
     },
     {
       key: 'calculatedQty',
@@ -639,6 +675,7 @@ export async function OrderMaterialsUnifiedTable({
             </>
           )}
         </div>
+        {canEdit && <OrderNeedEditor orderId={orderId} mode="create" />}
         <Link
           href={`/admin/workshop-needs?orderId=${encodeURIComponent(orderId)}`}
           className="admin-table__action-link order-materials-table-card__edit-link"

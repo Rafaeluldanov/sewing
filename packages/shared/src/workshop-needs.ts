@@ -792,11 +792,20 @@ const SelectedSupplierCatalogItemIdField = SelectedSupplierIdField;
 export const UpdateWorkshopNeedSchema = z
   .object({
     /**
-     * Этап «Корректировка материалов после просчёта»: поля
-     * `description` / `unit` / `materialRole` / `calculatedQty`
-     * редактируются ТОЛЬКО для ручных строк (`isManual = true`). Для
-     * системных snapshot-строк backend вернёт 409 — их состав менять
-     * нельзя (см. `WorkshopNeedsService.update`).
+     * Состав строки — `description` / `unit` / `materialRole` /
+     * `calculatedQty`.
+     *
+     * Фича «Правка потребности на любой стадии»: правится у ЛЮБОЙ
+     * строки, включая системные snapshot-строки из техкарты (раньше
+     * backend отвечал 409 `WORKSHOP_NEED_NOT_MANUAL`). Смысл — чинить
+     * ошибку расчёта там, где её видно, не перезапуская весь просчёт.
+     *
+     * Что осталось от гейтов (см. `WorkshopNeedsService.update`):
+     *   - гейт по статусу заказа: правка разрешена от `CALCULATION` до
+     *     `DONE` включительно, в `DRAFT` состав ведётся редактированием
+     *     самого заказа, в `CANCELLED` заказ закрыт;
+     *   - правка состава помечает строку `manualEditAt` — пересчёт
+     *     потребности без `force` такую строку затирать не будет.
      */
     description: z
       .string()
@@ -922,6 +931,28 @@ export interface WorkshopNeedDto {
   orderNeedsArchivedAt: string | null;
   orderNeedsArchivedByName: string | null;
 
+  /**
+   * Спецификация заказа изменилась, а пересчёт потребности после этого не
+   * прошёл — цифры ниже устарели (`Order.needsStaleAt` / `needsStaleReason`).
+   *
+   * Дублируется в каждой строке заказа, как `orderNumber`: UI берёт из
+   * «образца» строки группы и рисует плашку с кнопкой «Пересчитать».
+   * `null` — потребность совпадает со спецификацией.
+   */
+  orderNeedsStaleAt: string | null;
+  orderNeedsStaleReason: string | null;
+
+  /**
+   * Фича «Правка потребности на любой стадии»: потребность правили, а
+   * автопересчёт себестоимости не прошёл (`Order.costEstimateStaleAt` /
+   * `costEstimateStaleReason`). Дублируется в каждой строке заказа —
+   * вкладка «Потребности» берёт из «образца» строки и рисует плашку
+   * «Себестоимость устарела» с кнопкой «Пересчитать» (там же вводится
+   * курс USD, если он и был причиной отказа).
+   */
+  orderCostEstimateStaleAt: string | null;
+  orderCostEstimateStaleReason: string | null;
+
   clientId: string | null;
   clientName: string | null;
 
@@ -961,10 +992,33 @@ export interface WorkshopNeedDto {
   /**
    * Этап «Корректировка материалов после просчёта»: `true` — строку
    * добавил человек руками (sourceType=`MANUAL_ADDITION`). UI рисует
-   * для неё кнопки «редактировать» / «удалить» и плашку «ручная»;
-   * системные строки остаются read-only snapshot'ом.
+   * для неё плашку «ручная» и кнопку «удалить» (системные строки
+   * физически не удаляются — только `cancel`, иначе оборвались бы
+   * ссылки закупок / приёмок / смет).
+   *
+   * Правку состава это поле больше НЕ ограничивает: с фичи «Правка
+   * потребности на любой стадии» описание / единица / роль / чистое
+   * количество правятся и у системных строк (см. `manualEditAt`).
    */
   isManual: boolean;
+
+  /**
+   * Фича «Правка потребности на любой стадии» (см.
+   * `prisma/schema.prisma::WorkshopNeed.manualEditAt`,
+   * `WorkshopNeedsService.update`).
+   *
+   * Когда строку правили руками (ISO) — или `null`, если строка такая,
+   * какой её посчитала система. UI рисует бейдж «правлено вручную», а
+   * пересчёт потребности считает такую строку «тронутой»: без `force`
+   * он не имеет права её затереть.
+   */
+  manualEditAt: string | null;
+  /**
+   * Что система посчитала ДО первой ручной правки количества. Пишется
+   * один раз; UI показывает «было X <unit>» рядом с новым значением.
+   * `null` — количество не правили.
+   */
+  calculatedQtyOriginal: string | null;
 
   /**
    * Сигнальный образец (MVP, см.

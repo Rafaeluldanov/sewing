@@ -48,6 +48,7 @@ import {
   WorkshopNeedsHaveStockException,
 } from '../../common/errors.js';
 import { assertOrderMaterialCorrectionAllowed } from '../../common/order-material-correction.js';
+import { OrderCostEstimatesService } from '../orders/order-cost-estimates.service.js';
 import { ACTIVE_CALCULATION_NEED_WHERE } from './workshop-need-scope.js';
 
 /**
@@ -83,6 +84,12 @@ export class WorkshopNeedsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    // Фича «Правка потребности на любой стадии»: любая правка строки
+    // сразу тянет за собой пересчёт себестоимости (см.
+    // `OrderCostEstimatesService.syncAfterNeedsChange`). Сервис приходит
+    // из `OrderCostEstimatesModule` — отдельного модуля без `imports`,
+    // чтобы не образовался цикл с `OrdersModule`.
+    private readonly costEstimates: OrderCostEstimatesService,
   ) {}
 
   // -------------------------------------------------------------------------
@@ -196,40 +203,76 @@ export class WorkshopNeedsService {
   ): Promise<WorkshopNeedDto> {
     const existing = await this.prisma.workshopNeed.findUnique({
       where: { id },
+      include: { order: { select: { status: true } } },
     });
     if (!existing) throw new WorkshopNeedNotFoundException();
 
-    // Этап «Корректировка материалов после просчёта»: состав строки
-    // (description / unit / materialRole / calculatedQty) можно менять
-    // ТОЛЬКО у ручных строк. Для системных snapshot-строк из техкарты
-    // эти поля неизменяемы — закупщик правит лишь purchaseQty / цену /
-    // поставщика / статус.
-    const wantsCompositionChange =
-      dto.description !== undefined ||
-      dto.unit !== undefined ||
-      dto.materialRole !== undefined ||
-      dto.calculatedQty !== undefined;
-    if (wantsCompositionChange && !existing.isManual) {
-      throw new WorkshopNeedNotManualException();
+    // Фича «Правка потребности на любой стадии»: состав строки
+    // (description / unit / materialRole / calculatedQty) правится у
+    // ЛЮБОЙ строки, включая системную из техкарты — ошибку расчёта чинят
+    // там, где её видно, а не перезапуском всего просчёта.
+    //
+    // Единственный гейт — статус заказа (`CALCULATION` … `DONE`), и он
+    // навешен ТОЛЬКО на состав. Закупочные поля (purchaseQty / цена /
+    // поставщик / статус / комментарий) как работали без гейта, так и
+    // работают: рабочее место закупщика `/admin/workshop-needs` правит
+    // строки в любом состоянии заказа, включая sample-строки DRAFT-а.
+    //
+    // Сравниваем ПО ФАКТУ, а не по «поле пришло»: окно правки во вкладке
+    // «Потребности» отправляет весь набор полей разом, и правка одной
+    // только цены иначе метила бы строку как «правлено вручную» — и
+    // заодно блокировала бы пересчёт потребности без `force`.
+    const qtyChanged =
+      dto.calculatedQty !== undefined &&
+      !new Prisma.Decimal(dto.calculatedQty).equals(existing.calculatedQty);
+    const compositionChanged = {
+      description:
+        dto.description !== undefined && dto.description !== existing.description,
+      unit: dto.unit !== undefined && dto.unit !== existing.unit,
+      materialRole:
+        dto.materialRole !== undefined &&
+        (dto.materialRole ?? null) !== (existing.materialRole ?? null),
+      calculatedQty: qtyChanged,
+    };
+    const wantsCompositionChange = Object.values(compositionChanged).some(
+      Boolean,
+    );
+    if (wantsCompositionChange) {
+      assertOrderMaterialCorrectionAllowed(existing.order.status);
     }
 
     const data: Prisma.WorkshopNeedUpdateInput = {};
     const changedFields: string[] = [];
 
-    if (dto.description !== undefined) {
+    if (wantsCompositionChange) {
+      // Отметка «правлено вручную». Она же — защита от молчаливого
+      // затирания: пересчёт потребности без `force` такую строку не
+      // трогает (см. шаг 3 в `calculateForOrder`).
+      data.manualEditAt = new Date();
+      data.manualEditById = actorEmployeeId ?? null;
+      // «Было» фиксируем один раз — при первой правке количества.
+      if (qtyChanged && existing.calculatedQtyOriginal == null) {
+        data.calculatedQtyOriginal = existing.calculatedQty;
+      }
+    }
+
+    // Пишем только то, что реально поменялось: иначе `changedFields` в
+    // аудите превращается в «все поля каждый раз» и по журналу нельзя
+    // понять, что именно правил человек.
+    if (compositionChanged.description) {
       data.description = dto.description;
       changedFields.push('description');
     }
-    if (dto.unit !== undefined) {
+    if (compositionChanged.unit) {
       data.unit = dto.unit;
       changedFields.push('unit');
     }
-    if (dto.materialRole !== undefined) {
+    if (compositionChanged.materialRole) {
       data.materialRole = dto.materialRole;
       changedFields.push('materialRole');
     }
-    if (dto.calculatedQty !== undefined) {
-      data.calculatedQty = new Prisma.Decimal(dto.calculatedQty);
+    if (compositionChanged.calculatedQty) {
+      data.calculatedQty = new Prisma.Decimal(dto.calculatedQty!);
       changedFields.push('calculatedQty');
     }
 
@@ -382,8 +425,23 @@ export class WorkshopNeedsService {
     });
 
     this.logger.log(
-      `event=workshop_need.update id=${id} fields=${changedFields.join(',')}`,
+      `event=workshop_need.update id=${id} fields=${changedFields.join(',')}` +
+        (wantsCompositionChange ? ' manualEdit=1' : ''),
     );
+
+    // Фича «Правка потребности на любой стадии»: себестоимость обязана
+    // догнать правку без второго клика. Синхронизация best-effort и
+    // никогда не бросает — если пересчёт невозможен (нет курса USD, нет
+    // цены), заказ получает отметку «себестоимость устарела», а UI —
+    // плашку с кнопкой «Пересчитать».
+    //
+    // Зовём на ЛЮБУЮ правку, а не только на правку состава: цена и
+    // «К закупке» тоже прямо формируют сумму сметы.
+    await this.costEstimates.syncAfterNeedsChange(
+      existing.orderId,
+      actorEmployeeId,
+    );
+
     return this.getOne(id);
   }
 
@@ -420,6 +478,13 @@ export class WorkshopNeedsService {
         tx,
       );
     });
+
+    // Гашение строки убирает её из сметы (`assembleEstimatePlan`
+    // исключает CANCELLED) — себестоимость обязана это отразить сразу.
+    await this.costEstimates.syncAfterNeedsChange(
+      existing.orderId,
+      actorEmployeeId,
+    );
     return this.getOne(id);
   }
 
@@ -524,15 +589,14 @@ export class WorkshopNeedsService {
 
   /**
    * Ручное добавление строки потребности (непредвиденный расход
-   * материала). Разрешено только когда заказ уже на просчёте или в
-   * производстве (`CALCULATION` / `CALCULATION_DONE` / `IN_PRODUCTION`) —
-   * до этого состав ведётся обычным редактированием заказа, после
-   * `DONE`/`CANCELLED` заказ закрыт.
+   * материала либо позиция, которой не оказалось в расчёте). Разрешено
+   * от `CALCULATION` до `DONE` включительно (см.
+   * `assertOrderMaterialCorrectionAllowed`): в `DRAFT` состав ведётся
+   * обычным редактированием заказа, в `CANCELLED` заказ закрыт.
    *
    * Строка создаётся с `isManual = true`, `sourceType = MANUAL_ADDITION`,
-   * статусом `REVIEWED` (её завёл человек — она сразу «проверена»). На
-   * себестоимость влияет только после `completeCalculation` /
-   * `recalculateCostEstimate`.
+   * статусом `REVIEWED` (её завёл человек — она сразу «проверена»).
+   * Себестоимость догоняет сразу — `syncAfterNeedsChange` в конце.
    */
   async createManual(
     orderId: string,
@@ -608,6 +672,7 @@ export class WorkshopNeedsService {
     this.logger.log(
       `event=workshop_need.manual_create id=${created.id} order=${orderId}`,
     );
+    await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
     return this.getOne(created.id);
   }
 
@@ -646,6 +711,10 @@ export class WorkshopNeedsService {
       );
     });
     this.logger.log(`event=workshop_need.manual_delete id=${id}`);
+    await this.costEstimates.syncAfterNeedsChange(
+      existing.orderId,
+      actorEmployeeId,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1232,10 +1301,17 @@ export class WorkshopNeedsService {
     // больше не блокируют тиражный пересчёт и не удаляются им.
     const existing = await this.prisma.workshopNeed.findMany({
       where: { orderId, orderCalculationId: activeCalculationId },
-      select: { id: true, status: true },
+      select: { id: true, status: true, manualEditAt: true },
     });
-    const hasNonCalculated = existing.some((e) => e.status !== 'CALCULATED');
-    if (hasNonCalculated && !force) {
+    // Фича «Правка потребности на любой стадии»: правленная руками
+    // строка — такая же «тронутая», как строка со статусом ≠ CALCULATED.
+    // Пересчёт без `force` пересобирает состав из техкарты и затёр бы
+    // исправленную человеком норму молча; вместо этого отбиваемся 409, а
+    // UI спрашивает подтверждение и показывает, сколько строк потеряется.
+    const hasTouched = existing.some(
+      (e) => e.status !== 'CALCULATED' || e.manualEditAt != null,
+    );
+    if (hasTouched && !force) {
       throw new WorkshopNeedsAlreadyReviewedException();
     }
 
@@ -3125,6 +3201,10 @@ export class WorkshopNeedsService {
         ? order.needsStaleAt.toISOString()
         : null,
       orderNeedsStaleReason: order?.needsStaleReason ?? null,
+      orderCostEstimateStaleAt: order?.costEstimateStaleAt
+        ? order.costEstimateStaleAt.toISOString()
+        : null,
+      orderCostEstimateStaleReason: order?.costEstimateStaleReason ?? null,
       clientId,
       clientName,
       nomenclatureName,
@@ -3134,6 +3214,12 @@ export class WorkshopNeedsService {
       sourceType: row.sourceType,
       sourceId: row.sourceId,
       isManual: row.isManual,
+      // Фича «Правка потребности на любой стадии»: отметка ручной правки
+      // строки + «как считала система» до первой правки количества.
+      manualEditAt: row.manualEditAt ? row.manualEditAt.toISOString() : null,
+      calculatedQtyOriginal: row.calculatedQtyOriginal
+        ? row.calculatedQtyOriginal.toString()
+        : null,
       orderSampleId: row.orderSampleId,
       orderVariantId: row.orderVariantId,
       variantColor: row.variantColor,
@@ -3227,6 +3313,10 @@ const WORKSHOP_NEED_INCLUDE = {
       needsArchivedByName: true,
       needsStaleAt: true,
       needsStaleReason: true,
+      // Фича «Правка потребности на любой стадии»: отметка «смета не
+      // догнала правку» — вкладка «Потребности» рисует по ней плашку.
+      costEstimateStaleAt: true,
+      costEstimateStaleReason: true,
       patternNameSnapshot: true,
       patternArticleSnapshot: true,
       patternPreviewSnapshotUrl: true,
@@ -3326,6 +3416,9 @@ type WorkshopNeedRowWithRelations = WorkshopNeed & {
     /** Отметка «спецификация изменилась, пересчёт не прошёл». */
     needsStaleAt: Date | null;
     needsStaleReason: string | null;
+    /** Отметка «потребность правили, а смета не пересчиталась». */
+    costEstimateStaleAt: Date | null;
+    costEstimateStaleReason: string | null;
     patternNameSnapshot: string | null;
     patternArticleSnapshot: string | null;
     patternPreviewSnapshotUrl: string | null;

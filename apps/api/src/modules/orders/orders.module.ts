@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { OrderCostEstimatesService } from './order-cost-estimates.service.js';
+import { OrderCostEstimatesModule } from './order-cost-estimates.module.js';
 import { OrderOperationPlanService } from './order-operation-plan.service.js';
 import { OrderProductionBalanceService } from './order-production-balance.service.js';
 import { OrdersController } from './orders.controller';
@@ -24,11 +24,18 @@ import { WorkshopNeedsModule } from '../workshop-needs/workshop-needs.module.js'
   // работает только с PrismaService/AuditService и не дёргает
   // `OrdersService`, поэтому циркула не образуется.
   //
-  // Этап «Себестоимость заказа»: `OrderCostEstimatesService` живёт
-  // в этом же модуле — он работает только с `Order` /
-  // `OrderCostEstimate` / `WorkshopNeed` (через PrismaService) и
-  // `AuditService`, никаких новых внешних модулей не требует.
-  imports: [RoutesModule, TechCardsModule, WorkshopNeedsModule],
+  // Этап «Себестоимость заказа»: `OrderCostEstimatesService` вынесен в
+  // собственный `OrderCostEstimatesModule` — его теперь зовёт ещё и
+  // `WorkshopNeedsService` (автопересчёт сметы после правки строки
+  // потребности), а прямой провайдер здесь дал бы цикл модулей
+  // (`OrdersModule` → `WorkshopNeedsModule` → `OrdersModule`).
+  // Модуль без `imports`, поэтому цикла не образуется.
+  imports: [
+    RoutesModule,
+    TechCardsModule,
+    WorkshopNeedsModule,
+    OrderCostEstimatesModule,
+  ],
   controllers: [OrdersController],
   // Этап 2 «План операций на заказе»: `OrderOperationPlanService` живёт
   // в этом же модуле — он работает только с PrismaService и читает
@@ -46,10 +53,9 @@ import { WorkshopNeedsModule } from '../workshop-needs/workshop-needs.module.js'
   providers: [
     OrdersService,
     OrderNumberService,
-    OrderCostEstimatesService,
     OrderOperationPlanService,
     OrderProductionBalanceService,
   ],
-  exports: [OrdersService, OrderCostEstimatesService, OrderNumberService],
+  exports: [OrdersService, OrderCostEstimatesModule, OrderNumberService],
 })
 export class OrdersModule {}

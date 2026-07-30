@@ -10,6 +10,7 @@ import { OrderExtraCostNotFoundException } from '../../common/errors.js';
 import { assertOrderMaterialCorrectionAllowed } from '../../common/order-material-correction.js';
 import { PrismaService } from '../../prisma/prisma.service.js';
 import { AuditService } from '../audit/audit.service.js';
+import { OrderCostEstimatesService } from '../orders/order-cost-estimates.service.js';
 
 /**
  * Модуль «Прочие / непредвиденные расходы заказа» (этап «Корректировка
@@ -22,14 +23,20 @@ import { AuditService } from '../audit/audit.service.js';
  * заказа на просчёт (логистика, аутсорс, штрафы и т.п.), когда состав и
  * материалы из техкарты править нельзя. Это управленческая строка, НЕ
  * складская операция — WorkshopNeed / остатки / движения не
- * затрагиваются. На себестоимость влияет только после
- * `completeCalculation` / `recalculateCostEstimate`
- * (см. `OrderCostEstimatesService`), которые читают активные
- * `OrderExtraCost` с `includeInCostPrice = true`.
+ * затрагиваются. В себестоимость расход попадает строкой сметы
+ * (kind=OTHER, sourceType=EXTRA_COST) — её собирают
+ * `completeCalculation` / `recalculateCostEstimate` (см.
+ * `OrderCostEstimatesService`) по активным `OrderExtraCost` с
+ * `includeInCostPrice = true`.
  *
- * CRUD разрешён в тех же статусах, что и ручные строки потребности
- * (`CALCULATION` / `CALCULATION_DONE` / `IN_PRODUCTION`, см.
- * `assertOrderMaterialCorrectionAllowed`).
+ * Фича «Правка потребности на любой стадии»: после каждого CRUD зовём
+ * `syncAfterNeedsChange` — расход меняет ту же смету, что и строка
+ * потребности, и «₽ за изделие» обязано догнать правку без второго
+ * клика. Если пересчёт невозможен (нет курса USD и т.п.) — заказ
+ * получает отметку «себестоимость устарела», а UI рисует плашку.
+ *
+ * CRUD разрешён в тех же статусах, что и правка потребности
+ * (`CALCULATION` … `DONE`, см. `assertOrderMaterialCorrectionAllowed`).
  */
 @Injectable()
 export class OrderExtraCostsService {
@@ -38,6 +45,7 @@ export class OrderExtraCostsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly costEstimates: OrderCostEstimatesService,
   ) {}
 
   async listForOrder(orderId: string): Promise<OrderExtraCostDto[]> {
@@ -103,6 +111,7 @@ export class OrderExtraCostsService {
     this.logger.log(
       `event=order_extra_cost.create id=${created.id} order=${orderId}`,
     );
+    await this.costEstimates.syncAfterNeedsChange(orderId, actorEmployeeId);
     return this.getOne(created.id);
   }
 
@@ -158,6 +167,10 @@ export class OrderExtraCostsService {
     this.logger.log(
       `event=order_extra_cost.update id=${costId} fields=${changedFields.join(',')}`,
     );
+    await this.costEstimates.syncAfterNeedsChange(
+      existing.orderId,
+      actorEmployeeId,
+    );
     return this.getOne(costId);
   }
 
@@ -189,6 +202,10 @@ export class OrderExtraCostsService {
       );
     });
     this.logger.log(`event=order_extra_cost.delete id=${costId}`);
+    await this.costEstimates.syncAfterNeedsChange(
+      existing.orderId,
+      actorEmployeeId,
+    );
   }
 
   private async getOne(id: string): Promise<OrderExtraCostDto> {

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { OrderCostEstimatesModule } from '../orders/order-cost-estimates.module.js';
 import { WorkshopNeedsController } from './workshop-needs.controller.js';
 import { WorkshopNeedsOrderController } from './workshop-needs.order-controller.js';
 import { WorkshopNeedsService } from './workshop-needs.service.js';
@@ -27,6 +28,12 @@ import { WorkshopNeedsService } from './workshop-needs.service.js';
  * зависимостей не вводим.
  */
 @Module({
+  // Фича «Правка потребности на любой стадии»: после правки строки
+  // сервис зовёт `OrderCostEstimatesService.syncAfterNeedsChange`
+  // (автопересчёт себестоимости). Импортируем модуль сметы, а не
+  // `OrdersModule` — иначе цикл: `OrdersModule` уже импортирует этот
+  // модуль ради `calculateForOrder`.
+  imports: [OrderCostEstimatesModule],
   controllers: [WorkshopNeedsController, WorkshopNeedsOrderController],
   providers: [WorkshopNeedsService],
   exports: [WorkshopNeedsService],

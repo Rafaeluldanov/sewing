@@ -31,10 +31,10 @@ import { AdminCard, AdminSectionHeader } from '@/components/admin';
 import {
   createManualWorkshopNeedAction,
   createOrderExtraCostAction,
-  deleteManualWorkshopNeedAction,
+  deleteOrderNeedAction,
   deleteOrderExtraCostAction,
   recalculateOrderCostEstimateAction,
-  updateManualWorkshopNeedAction,
+  updateOrderNeedAction,
   updateOrderExtraCostAction,
 } from '@/app/orders/actions';
 
@@ -163,7 +163,7 @@ export function OrderMaterialCorrections({
                     onCancel={() => setEditingNeedId(null)}
                     onSubmit={(payload) =>
                       run(
-                        () => updateManualWorkshopNeedAction(orderId, n.id, payload),
+                        () => updateOrderNeedAction(orderId, n.id, payload),
                         () => setEditingNeedId(null),
                       )
                     }
@@ -199,7 +199,7 @@ export function OrderMaterialCorrections({
                         title="Удалить материал"
                         onClick={() => {
                           if (!window.confirm(`Удалить «${n.description}»?`)) return;
-                          run(() => deleteManualWorkshopNeedAction(orderId, n.id));
+                          run(() => deleteOrderNeedAction(orderId, n.id));
                         }}
                       >
                         <Trash2 size={15} strokeWidth={1.6} aria-hidden />

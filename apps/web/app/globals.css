@@ -20660,3 +20660,126 @@ input.mcbx__input:disabled {
 .needs-stale__actions { display: flex; gap: 0.5rem; flex-wrap: wrap; align-items: center; }
 .needs-stale__confirm { flex: 1 1 100%; display: flex; flex-direction: column; gap: 0.5rem; }
 .needs-stale__error { margin: 0; font-size: 0.82rem; color: var(--color-danger-fg); }
+
+/* ── Плашка «себестоимость устарела» ──────────────────────────────────────
+   Правка потребности сама зовёт пересчёт сметы; плашка появляется только
+   когда он объективно не смог (в строках USD без курса, нет цены). Тот же
+   визуальный вес, что и у «потребность устарела» — это предупреждение,
+   а не ошибка. */
+.needs-stale--cost {
+  border-left-color: var(--color-accent, var(--color-warn));
+}
+.needs-stale__actions .needs-stale__error,
+.needs-stale__actions .error-box {
+  flex: 1 1 100%;
+}
+/* Поле курса USD: базовое правило полей задано селектором по атрибуту
+   (`input[type='text']`), поэтому ширину тоже задаём с элементом —
+   одиночный класс проиграл бы по специфичности. */
+.needs-stale__actions input[type='text'] {
+  width: 10rem;
+  max-width: 10rem;
+}
+
+/* ── Правка строки потребности внутри заказа ──────────────────────────────
+   Фича «Правка потребности на любой стадии»: карандаш в sticky-колонке
+   «Описание» + модальное окно правки. Окно фиксированное, потому что сама
+   таблица широкая (14 колонок, min-width 1380px) и скроллится по
+   горизонтали — инлайн-форма уезжала бы за край. */
+.order-need-editor__pencil {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 0.35rem;
+  padding: 0.1rem;
+  border: 0;
+  border-radius: var(--radius-sm, 6px);
+  background: transparent;
+  color: var(--color-fg-subtle);
+  cursor: pointer;
+  vertical-align: middle;
+}
+.order-need-editor__pencil:hover {
+  background: var(--color-bg-muted);
+  color: var(--color-fg);
+}
+.order-need-editor__add {
+  margin-left: auto;
+}
+
+.order-materials-table__manual-badge {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0 0.3rem;
+  border-radius: var(--radius-sm, 6px);
+  background: var(--color-bg-tint);
+  color: var(--color-warn-fg);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.02em;
+  vertical-align: middle;
+}
+
+.order-need-editor__overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 4vh 1rem;
+  background: rgba(20, 20, 20, 0.38);
+  overflow-y: auto;
+}
+.order-need-editor__panel {
+  width: min(640px, 100%);
+  padding: 1rem 1.1rem 1.1rem;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-card);
+  box-shadow: var(--shadow-md);
+}
+.order-need-editor__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+.order-need-editor__title { font-size: var(--title-subsection); }
+.order-need-editor__close {
+  border: 0;
+  background: transparent;
+  color: var(--color-fg-muted);
+  cursor: pointer;
+  padding: 0.15rem;
+}
+.order-need-editor__hint { margin: 0.25rem 0 0.5rem; font-size: 0.82rem; }
+.order-need-editor__was {
+  margin: 0 0 0.5rem;
+  font-size: 0.82rem;
+  color: var(--color-warn-fg);
+}
+.order-need-editor__form {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 0.6rem;
+  margin-top: 0.5rem;
+}
+.order-need-editor__field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.order-need-editor__field--wide { grid-column: 1 / -1; }
+.order-need-editor__lab {
+  font-size: 0.76rem;
+  color: var(--color-fg-muted);
+}
+.order-need-editor__actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 0.5rem;
+  flex-wrap: wrap;
+  margin-top: 0.35rem;
+}
+.order-need-editor__danger { margin-left: auto; color: var(--color-danger-fg); }

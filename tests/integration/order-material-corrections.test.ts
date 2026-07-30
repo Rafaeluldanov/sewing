@@ -6,7 +6,10 @@
  * Покрытие:
  *   1. Ручная строка: create → isManual/MANUAL_ADDITION, видна в списке;
  *      edit состава → обновилось; delete → исчезла.
- *   2. Системную строку нельзя править/удалять → 409 WORKSHOP_NEED_NOT_MANUAL.
+ *   2. Системную строку МОЖНО править (фича «Правка потребности на любой
+ *      стадии»): состав меняется, правка помечается `manualEditAt` +
+ *      `calculatedQtyOriginal` и блокирует пересчёт без force; физическое
+ *      удаление системной строки по-прежнему 409 WORKSHOP_NEED_NOT_MANUAL.
  *   3. Прочие расходы: create/list/update/delete.
  *   4. Корректировка в DRAFT → 409 ORDER_MATERIAL_CORRECTION_INVALID_STATUS.
  *   5. Ручной материал + прочий расход попадают в completeCalculation
@@ -96,29 +99,45 @@ describeWithDb('integration — order material corrections', () => {
   // 2. Системную строку нельзя править / удалять
   // -------------------------------------------------------------------------
 
-  test('системную строку нельзя править/удалять → 409 WORKSHOP_NEED_NOT_MANUAL', async () => {
+  test('системную строку можно править (правка помечается), но не удалять', async () => {
     const orderId = await prepareCalculationOrder(t, seed, cookie);
     const sys = await t.prisma.workshopNeed.findFirst({
       where: { orderId, isManual: false },
     });
     expect(sys).not.toBeNull();
+    const originalQty = Number(sys!.calculatedQty);
 
-    // PATCH состава системной строки.
+    // Фича «Правка потребности на любой стадии»: состав системной строки
+    // теперь правится — ошибку расчёта чинят там, где её видно.
     const patch = await request(t.app.getHttpServer())
       .patch(`/api/workshop-needs/${sys!.id}`)
       .set('Cookie', cookie)
-      .send({ description: 'пытаемся переименовать' });
-    expect(patch.status).toBe(409);
-    expect(patch.body.code).toBe('WORKSHOP_NEED_NOT_MANUAL');
+      .send({ description: 'Кулирка (уточнено)', calculatedQty: '77' });
+    expect(patch.status).toBe(200);
+    expect(patch.body.description).toBe('Кулирка (уточнено)');
+    expect(Number(patch.body.calculatedQty)).toBe(77);
+    // Правка помечена, «как считала система» сохранено.
+    expect(patch.body.manualEditAt).not.toBeNull();
+    expect(Number(patch.body.calculatedQtyOriginal)).toBe(originalQty);
 
-    // Но purchaseQty/цену у системной строки править по-прежнему можно.
+    // Правленная руками строка блокирует пересчёт без force — иначе он
+    // молча вернул бы расчётную норму на место.
+    const recalc = await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/workshop-needs/calculate`)
+      .set('Cookie', cookie)
+      .send({});
+    expect(recalc.status).toBe(409);
+    expect(recalc.body.code).toBe('WORKSHOP_NEEDS_ALREADY_REVIEWED');
+
+    // purchaseQty/цену у системной строки править по-прежнему можно.
     await request(t.app.getHttpServer())
       .patch(`/api/workshop-needs/${sys!.id}`)
       .set('Cookie', cookie)
       .send({ purchaseQty: '5', quotedPrice: '10', quotedCurrency: 'RUB' })
       .expect(200);
 
-    // DELETE системной строки запрещён.
+    // DELETE системной строки по-прежнему запрещён: на неё ссылаются
+    // закупки / приёмки / строки смет. Гасят её через `cancel`.
     const del = await request(t.app.getHttpServer())
       .delete(`/api/orders/${orderId}/workshop-needs/${sys!.id}`)
       .set('Cookie', cookie);
@@ -265,37 +284,48 @@ describeWithDb('integration — order material corrections', () => {
 
     const baseTotal = 100 * sysNeeds.length;
 
-    // Уже после фиксации добавляем непредвиденный расход.
+    // Уже после фиксации добавляем непредвиденный расход. Фича «Правка
+    // потребности на любой стадии»: расход меняет ту же смету, поэтому
+    // пересчёт происходит сам — версия 2 появляется без явной кнопки.
     await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/extra-costs`)
       .set('Cookie', cookie)
       .send({ description: 'Штраф за срыв срока', amount: '3000', currency: 'RUB' })
       .expect(201);
+    const afterAuto = await t.prisma.order.findUnique({ where: { id: orderId } });
+    expect(afterAuto?.costEstimateVersion).toBe(2);
+    expect(Number(afterAuto?.costEstimateTotalRub)).toBeCloseTo(
+      baseTotal + 3000,
+      2,
+    );
 
+    // Явная кнопка «Пересчитать» остаётся и всегда фиксирует новую
+    // версию (это осознанное действие пользователя, в т.ч. чтобы задать
+    // курс USD).
     const r = await request(t.app.getHttpServer())
       .post(`/api/orders/${orderId}/recalculate-cost-estimate`)
       .set('Cookie', cookie)
       .send({});
     expect(r.status).toBe(201);
-    expect(r.body.version).toBe(2);
+    expect(r.body.version).toBe(3);
     expect(Number(r.body.totalCostRub)).toBeCloseTo(baseTotal + 3000, 2);
 
     // Статус заказа НЕ изменился.
     const order = await t.prisma.order.findUnique({ where: { id: orderId } });
     expect(order?.status).toBe('CALCULATION_DONE');
-    expect(order?.costEstimateVersion).toBe(2);
+    expect(order?.costEstimateVersion).toBe(3);
 
-    // Прошлая версия помечена REVOKED, активна только новая.
+    // Активна только последняя версия, прошлые — REVOKED.
     const completed = await t.prisma.orderCostEstimate.findMany({
       where: { orderId, status: 'COMPLETED' },
     });
     expect(completed.length).toBe(1);
-    expect(completed[0].version).toBe(2);
+    expect(completed[0].version).toBe(3);
     const revoked = await t.prisma.orderCostEstimate.findMany({
       where: { orderId, status: 'REVOKED' },
+      orderBy: { version: 'asc' },
     });
-    expect(revoked.length).toBe(1);
-    expect(revoked[0].version).toBe(1);
+    expect(revoked.map((e) => e.version)).toEqual([1, 2]);
   });
 
   // -------------------------------------------------------------------------
@@ -310,6 +340,90 @@ describeWithDb('integration — order material corrections', () => {
       .send({});
     expect(r.status).toBe(409);
     expect(r.body.code).toBe('ORDER_CALCULATION_INVALID_STATUS');
+  });
+
+  // -------------------------------------------------------------------------
+  // 8. Фича «Правка потребности на любой стадии»: автопересчёт сметы
+  // -------------------------------------------------------------------------
+
+  test('правка строки после фиксации сметы сама пересчитывает себестоимость', async () => {
+    const orderId = await prepareCalculationOrder(t, seed, cookie);
+    const sysNeeds = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    for (const n of sysNeeds) {
+      await request(t.app.getHttpServer())
+        .patch(`/api/workshop-needs/${n.id}`)
+        .set('Cookie', cookie)
+        .send({ purchaseQty: '1', quotedPrice: '100', quotedCurrency: 'RUB' })
+        .expect(200);
+    }
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+    const baseTotal = 100 * sysNeeds.length;
+
+    // Ошиблись в цене — правим прямо в строке потребности. Второго клика
+    // «Пересчитать» быть не должно.
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${sysNeeds[0].id}`)
+      .set('Cookie', cookie)
+      .send({ quotedPrice: '150' })
+      .expect(200);
+
+    const order = await t.prisma.order.findUnique({ where: { id: orderId } });
+    expect(order?.status).toBe('CALCULATION_DONE');
+    expect(order?.costEstimateVersion).toBe(2);
+    expect(Number(order?.costEstimateTotalRub)).toBeCloseTo(baseTotal + 50, 2);
+    expect(order?.costEstimateStaleAt).toBeNull();
+
+    // Правка, не касающаяся денег (комментарий), новую версию не плодит.
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${sysNeeds[0].id}`)
+      .set('Cookie', cookie)
+      .send({ comment: 'звонил поставщику' })
+      .expect(200);
+    const after = await t.prisma.order.findUnique({ where: { id: orderId } });
+    expect(after?.costEstimateVersion).toBe(2);
+  });
+
+  test('правку и пересчёт пускаем и на выпущенном заказе (DONE)', async () => {
+    const orderId = await prepareCalculationOrder(t, seed, cookie);
+    const sysNeeds = await t.prisma.workshopNeed.findMany({ where: { orderId } });
+    for (const n of sysNeeds) {
+      await request(t.app.getHttpServer())
+        .patch(`/api/workshop-needs/${n.id}`)
+        .set('Cookie', cookie)
+        .send({ purchaseQty: '1', quotedPrice: '100', quotedCurrency: 'RUB' })
+        .expect(200);
+    }
+    await request(t.app.getHttpServer())
+      .post(`/api/orders/${orderId}/complete-calculation`)
+      .set('Cookie', cookie)
+      .send({})
+      .expect(201);
+
+    // Заказ выпущен: статус двигаем напрямую — маршрут производства для
+    // этого теста не нужен, проверяем только гейты правки и сметы.
+    await t.prisma.order.update({
+      where: { id: orderId },
+      data: { status: 'DONE' },
+    });
+
+    // Ошибка в норме нашлась постфактум — правим состав системной строки.
+    await request(t.app.getHttpServer())
+      .patch(`/api/workshop-needs/${sysNeeds[0].id}`)
+      .set('Cookie', cookie)
+      .send({ calculatedQty: '3', purchaseQty: '3' })
+      .expect(200);
+
+    const order = await t.prisma.order.findUnique({ where: { id: orderId } });
+    expect(order?.status).toBe('DONE');
+    expect(order?.costEstimateVersion).toBe(2);
+    expect(Number(order?.costEstimateTotalRub)).toBeCloseTo(
+      100 * sysNeeds.length + 200,
+      2,
+    );
   });
 });
 

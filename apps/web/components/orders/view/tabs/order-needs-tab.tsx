@@ -79,6 +79,7 @@ import { getOrderCalculations } from '@/lib/order-calculations-api';
 import { isOrderCalculationsEnabled } from '@/lib/feature-flags';
 import { OrderPlannedCostSummaryCard } from '@/components/orders/order-planned-cost-summary-card';
 import { OrderOutsourceList } from '@/components/orders/view/order-outsource-list';
+import { RecalcCostButton } from '@/components/orders/view/tabs/recalc-cost-button';
 import { RecalcNeedsButton } from '@/components/orders/view/tabs/recalc-needs-button';
 
 /**
@@ -169,16 +170,18 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
     .map(([, d]) => d)
     .filter((d): d is MaterialIssueDetailDto => d !== undefined);
 
-  // Этап «Корректировка материалов после просчёта»: ручные строки
-  // потребности + прочие расходы. Грузим только для менеджеров и только
-  // в статусах, где корректировка разрешена (см.
-  // `assertOrderMaterialCorrectionAllowed` на бэке) — на DRAFT/DONE/
-  // CANCELLED блок не нужен. Падение fetch-а не валит вкладку.
+  // Этап «Корректировка материалов после просчёта» + фича «Правка
+  // потребности на любой стадии»: ручные строки потребности + прочие
+  // расходы. Грузим только для менеджеров и только в статусах, где
+  // правка разрешена (см. `assertOrderMaterialCorrectionAllowed` на
+  // бэке — `CALCULATION` … `DONE`; в `DRAFT` потребности ещё нет, в
+  // `CANCELLED` заказ закрыт). Падение fetch-а не валит вкладку.
   const correctionAllowed =
     canManage &&
     (order.status === 'CALCULATION' ||
       order.status === 'CALCULATION_DONE' ||
-      order.status === 'IN_PRODUCTION');
+      order.status === 'IN_PRODUCTION' ||
+      order.status === 'DONE');
   let manualNeeds: WorkshopNeedListItemDto[] = [];
   let extraCosts: OrderExtraCostDto[] = [];
   if (correctionAllowed) {
@@ -222,6 +225,11 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
   // (`OrdersService.recalcNeedsAndMarkStale`); поле продублировано в каждой
   // строке, поэтому берём из первой.
   const stale = activeNeeds.find((n) => n.orderNeedsStaleAt) ?? null;
+  // Фича «Правка потребности на любой стадии»: правка строки сама зовёт
+  // пересчёт себестоимости. Если он не прошёл (в строках USD без курса,
+  // нет цены / «к закупке»), бэкенд ставит `Order.costEstimateStaleAt` —
+  // показываем плашку с кнопкой «Пересчитать», где вводится курс.
+  const costStale = activeNeeds.find((n) => n.orderCostEstimateStaleAt) ?? null;
 
   return (
     <div className="order-needs-tab">
@@ -248,6 +256,30 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
                 }
               />
             )}
+          </div>
+        </AdminCard>
+      )}
+      {costStale && canManage && (
+        <AdminCard>
+          <div className="needs-stale needs-stale--cost">
+            <div className="needs-stale__body">
+              <b className="needs-stale__title">
+                Себестоимость устарела — автопересчёт не прошёл
+              </b>
+              <p className="needs-stale__text">
+                {costStale.orderCostEstimateStaleReason ??
+                  'Потребность изменилась, но пересчитать смету автоматически не удалось.'}
+              </p>
+              <p className="needs-stale__hint">
+                «₽ за изделие» ниже посчитано по прежним материалам.
+              </p>
+            </div>
+            <RecalcCostButton
+              orderId={order.id}
+              needsUsdRate={(
+                costStale.orderCostEstimateStaleReason ?? ''
+              ).toLowerCase().includes('usd')}
+            />
           </div>
         </AdminCard>
       )}
@@ -298,6 +330,7 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
                 materialsAndHardwareCostPolicy={
                   order.materialsAndHardwareCostPolicy ?? 'INCLUDE'
                 }
+                canEdit={correctionAllowed}
               />
             </OrderNeedsCollapsible>
           ) : (
@@ -307,6 +340,7 @@ export async function OrderNeedsTab({ order, passports, canManage }: Props) {
               materialsAndHardwareCostPolicy={
                 order.materialsAndHardwareCostPolicy ?? 'INCLUDE'
               }
+              canEdit={correctionAllowed}
             />
           )}
 

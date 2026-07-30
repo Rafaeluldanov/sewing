@@ -424,6 +424,11 @@ export class OrderCostEstimatesService {
           costEstimateTotalRub: estimate.totalCostRub,
           costEstimateCompletedAt: estimate.completedAt,
           costEstimateVersion: estimate.version,
+          // Смета собрана по актуальным строкам — отметка «себестоимость
+          // устарела» (фича «Правка потребности на любой стадии») больше
+          // не про что. Снимаем в той же tx, что и сумму.
+          costEstimateStaleAt: null,
+          costEstimateStaleReason: null,
         },
       });
 
@@ -594,9 +599,11 @@ export class OrderCostEstimatesService {
    * себестоимости — в том числе когда заказ в `IN_PRODUCTION` (reopen
    * там запрещён, т.к. от себестоимости зависят production-данные).
    *
-   * Разрешён из `CALCULATION_DONE` и `IN_PRODUCTION`. Для заказа без
-   * активного расчёта (например, в `CALCULATION`) — пользоваться
-   * `completeCalculation`.
+   * Разрешён из `CALCULATION_DONE`, `IN_PRODUCTION` и `DONE` (фича
+   * «Правка потребности на любой стадии»: ошибку в расчёте чинят и
+   * после выпуска — себестоимость выпущенного заказа обязана сойтись с
+   * тем, что реально ушло в изделие). Для заказа без активного расчёта
+   * (например, в `CALCULATION`) — пользоваться `completeCalculation`.
    */
   async recalculateCostEstimate(
     orderId: string,
@@ -614,10 +621,11 @@ export class OrderCostEstimatesService {
     }
     if (
       order.status !== OrderStatus.CALCULATION_DONE &&
-      order.status !== OrderStatus.IN_PRODUCTION
+      order.status !== OrderStatus.IN_PRODUCTION &&
+      order.status !== OrderStatus.DONE
     ) {
       throw new OrderCalculationInvalidStatusException(
-        `Пересчитать себестоимость можно только для заказа в статусе «Расчёт завершён» или «В производстве» (текущий: ${order.status}).`,
+        `Пересчитать себестоимость можно только для заказа в статусе «Расчёт завершён», «В производстве» или «Выпущен» (текущий: ${order.status}).`,
       );
     }
 
@@ -665,13 +673,17 @@ export class OrderCostEstimatesService {
       });
 
       // Обновляем ТОЛЬКО snapshot-поля себестоимости — статус заказа
-      // НЕ трогаем (заказ остаётся в CALCULATION_DONE / IN_PRODUCTION).
+      // НЕ трогаем (заказ остаётся в CALCULATION_DONE / IN_PRODUCTION /
+      // DONE). Отметку «себестоимость устарела» снимаем: строки сметы
+      // только что пересобраны по актуальным потребностям.
       await tx.order.update({
         where: { id: orderId },
         data: {
           costEstimateTotalRub: estimate.totalCostRub,
           costEstimateCompletedAt: estimate.completedAt,
           costEstimateVersion: estimate.version,
+          costEstimateStaleAt: null,
+          costEstimateStaleReason: null,
         },
       });
 
@@ -705,6 +717,126 @@ export class OrderCostEstimatesService {
     );
 
     return this.toEstimateDto(result);
+  }
+
+  /**
+   * Автопересчёт себестоимости после правки материалов заказа (фича
+   * «Правка потребности на любой стадии»).
+   *
+   * Зовётся из `WorkshopNeedsService` сразу после того, как строка
+   * потребности изменилась (правка / ручное добавление / удаление /
+   * отмена). Требование владельца: «после изменения у нас должна
+   * пересчитаться себестоимость за изделие» — без второго клика.
+   *
+   * Best-effort по устройству: пересчёт может быть объективно невозможен
+   * (в строках USD, а курса нет; у строки нет «К закупке» или цены;
+   * сметы ещё нет — заказ в `CALCULATION`). Молча оставлять старую сумму
+   * нельзя: «₽ за изделие» уже не соответствует материалам. Поэтому
+   * отказ становится ВИДИМЫМ — `Order.costEstimateStaleAt` + причина,
+   * которую вкладка «Потребности» рисует плашкой с кнопкой
+   * «Пересчитать» (там же вводится курс USD).
+   *
+   * Курс USD берём из отзываемой сметы: пересчёт «по тому же курсу, что
+   * и в прошлый раз» — единственное решение, которое можно принять без
+   * человека. Нет курса и появились USD-строки → плашка.
+   *
+   * Никогда не бросает: правка потребности не должна отваливаться из-за
+   * сметы.
+   */
+  async syncAfterNeedsChange(
+    orderId: string,
+    actorEmployeeId?: string | null,
+  ): Promise<{ recalculated: boolean; staleReason: string | null }> {
+    const order = await this.prisma.order.findUnique({ where: { id: orderId } });
+    if (!order) return { recalculated: false, staleReason: null };
+
+    const active = await this.prisma.orderCostEstimate.findFirst({
+      where: { orderId, status: 'COMPLETED' },
+      orderBy: { version: 'desc' },
+      include: { lines: { orderBy: { createdAt: 'asc' } } },
+    });
+
+    // Сметы нет — пересчитывать нечего. Это норма для `CALCULATION`:
+    // сводка себестоимости там считается «живьём» по строкам
+    // потребности, и правка видна сразу, без версий сметы.
+    if (!active) {
+      await this.clearStale(orderId);
+      return { recalculated: false, staleReason: null };
+    }
+
+    if (
+      order.status !== OrderStatus.CALCULATION_DONE &&
+      order.status !== OrderStatus.IN_PRODUCTION &&
+      order.status !== OrderStatus.DONE
+    ) {
+      const reason = `Себестоимость не пересчитана автоматически: статус заказа «${order.status}» не допускает пересчёт сметы.`;
+      await this.markStale(orderId, reason);
+      return { recalculated: false, staleReason: reason };
+    }
+
+    const usdRateRub = active.usdRateRub ? active.usdRateRub.toString() : null;
+    try {
+      // Сначала собираем план и сверяем со сметой: правка могла не
+      // затронуть деньги (закупщик сохранил строку, поменяв только
+      // статус или комментарий). Плодить версию сметы на такое нельзя —
+      // история расчётов должна читаться как «что реально менялось».
+      const plan = await this.assembleEstimatePlan(order, usdRateRub);
+      if (samePlanAsEstimate(plan.lineCreates, plan.totalCostRub, active)) {
+        await this.clearStale(orderId);
+        return { recalculated: false, staleReason: null };
+      }
+
+      await this.recalculateCostEstimate(
+        orderId,
+        {
+          usdRateRub,
+          comment: 'Автопересчёт после правки потребности',
+        },
+        actorEmployeeId,
+      );
+      return { recalculated: true, staleReason: null };
+    } catch (e) {
+      // Ожидаемые отказы: нет курса USD (`..._USD_RATE_REQUIRED`) и
+      // неполные строки (`..._INCOMPLETE` — нет «К закупке» / цены).
+      // Оба чинятся человеком, поэтому текст исключения и есть текст
+      // плашки. Неожиданные ошибки тоже не роняют правку — они уходят
+      // в лог и в ту же плашку общим текстом.
+      const reason =
+        e instanceof OrderCalculationUsdRateRequiredException ||
+        e instanceof OrderCalculationIncompleteException
+          ? (e.message ?? 'Себестоимость не пересчитана.')
+          : 'Себестоимость не пересчитана автоматически — пересчитайте вручную.';
+      this.logger.warn(
+        `event=order.cost_estimate.autosync_failed orderId=${orderId} ` +
+          `reason=${e instanceof Error ? e.message : String(e)}`,
+      );
+      await this.markStale(orderId, reason);
+      return { recalculated: false, staleReason: reason };
+    }
+  }
+
+  /** Поставить отметку «себестоимость устарела» (best-effort). */
+  private async markStale(orderId: string, reason: string): Promise<void> {
+    try {
+      await this.prisma.order.update({
+        where: { id: orderId },
+        data: { costEstimateStaleAt: new Date(), costEstimateStaleReason: reason },
+      });
+    } catch {
+      // Заказ мог исчезнуть между чтением и записью — не роняем правку.
+    }
+  }
+
+  /** Снять отметку «себестоимость устарела» (best-effort). */
+  private async clearStale(orderId: string): Promise<void> {
+    try {
+      await this.prisma.order.updateMany({
+        where: { id: orderId, costEstimateStaleAt: { not: null } },
+        data: { costEstimateStaleAt: null, costEstimateStaleReason: null },
+      });
+    } catch {
+      // См. `markStale`.
+    }
   }
 
   /**
@@ -783,6 +915,60 @@ export class OrderCostEstimatesService {
 // Helper: keeps `_KIND_LABELS` referenced so that TS/treeshake don't
 // complain when downstream UI imports the same module.
 void ORDER_COST_ESTIMATE_LINE_KIND_LABELS;
+
+/**
+ * Совпадает ли только что собранный план сметы с уже зафиксированной
+ * версией (фича «Правка потребности на любой стадии»,
+ * `syncAfterNeedsChange`).
+ *
+ * Нужно, чтобы автопересчёт не плодил версии на правках, которые денег
+ * не касаются: закупщик сохранил строку, поменяв статус или
+ * комментарий, — сумма и состав сметы те же, новая версия только
+ * замусорит историю.
+ *
+ * Сравниваем итог и построчную подпись (что именно, сколько, почём) —
+ * `id`/`createdAt` в подпись не входят, они у новых строк всегда другие.
+ */
+function samePlanAsEstimate(
+  lineCreates: Prisma.OrderCostEstimateLineUncheckedCreateWithoutEstimateInput[],
+  totalCostRub: Prisma.Decimal,
+  active: { totalCostRub: Prisma.Decimal; lines: EstimateLine[] },
+): boolean {
+  if (!totalCostRub.equals(active.totalCostRub)) return false;
+  if (lineCreates.length !== active.lines.length) return false;
+
+  const planKeys = lineCreates.map((l) =>
+    [
+      l.workshopNeedId ?? '',
+      l.sourceType ?? '',
+      l.sourceId ?? '',
+      l.kind ?? '',
+      l.description ?? '',
+      l.unit ?? '',
+      String(l.purchaseQty ?? ''),
+      String(l.quotedPrice ?? ''),
+      l.quotedCurrency ?? '',
+      String(l.lineTotalRub ?? ''),
+    ].join('|'),
+  );
+  const activeKeys = active.lines.map((l) =>
+    [
+      l.workshopNeedId ?? '',
+      l.sourceType ?? '',
+      l.sourceId ?? '',
+      l.kind ?? '',
+      l.description ?? '',
+      l.unit ?? '',
+      l.purchaseQty.toString(),
+      l.quotedPrice.toString(),
+      l.quotedCurrency ?? '',
+      l.lineTotalRub.toString(),
+    ].join('|'),
+  );
+  planKeys.sort();
+  activeKeys.sort();
+  return planKeys.every((k, i) => k === activeKeys[i]);
+}
 
 type EstimateWithLines = Prisma.OrderCostEstimateGetPayload<{
   include: {
